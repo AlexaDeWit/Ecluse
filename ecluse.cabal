@@ -47,6 +47,7 @@ library
     Ecluse.Package
     Ecluse.Rules
     Ecluse.Rules.Types
+    Ecluse.Server.Route
     Ecluse.Version
 
   build-depends:
@@ -70,6 +71,7 @@ test-suite ecluse-unit
   other-modules:
     Ecluse.PackageSpec
     Ecluse.RulesSpec
+    Ecluse.Server.RouteSpec
     Ecluse.VersionOrderingSpec
     Ecluse.VersionSpec
 
