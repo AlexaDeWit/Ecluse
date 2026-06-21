@@ -77,7 +77,7 @@ observability, and the GCP backends.
 | **M2** | Web front door | The raw-WAI `Application`: pure router, error/denial model, meta-routes, middleware, bounded-memory streaming, conditional-GET/ETag, metadata cache, and the capability manifest (`/openapi.json`). |
 | **M3** | Request pipeline (**walking skeleton**) | The thin end-to-end path: multi-upstream packument merge, credential forward/strip, packument + tarball serving, demand-driven mirror enqueue (against in-memory cloud doubles). |
 | **M4** | AWS cloud backends & worker | `CredentialProvider` (CodeArtifact / static), SQS `MirrorQueue`, the mirror worker, the AWS composition root. **AWS launch-ready.** |
-| **M5** | Effectful rules & CVE | The effectful tier (timeout / retry / circuit-breaker, `Unavailable`), the OSV local-sync in-memory advisory index, `DenyIfCVE`. |
+| **M5** | Effectful rules & CVE | The effectful tier (timeout / retry / circuit-breaker, `Unavailable`), the OSV local-sync in-memory advisory index, and the CVE rules — `DenyIfCVE` (block affected) and `AllowIfRemediatesCve` (fast-track fixes past the quarantine). |
 | **M6** | Observability | Opt-in, vendor-neutral OpenTelemetry/OTLP: tracing, the `ecluse.*` metrics catalog, JSONL `dd` log correlation. |
 | **M7** | GCP backends | The Pub/Sub de-risking spike → Pub/Sub `MirrorQueue`, the ADC credential leaf, GCP wiring. **Scheduled after AWS launch.** |
 | **M8** | Release hardening | SLSA build provenance + SBOM attestation; the launch docs & deployment runbook. |
@@ -96,7 +96,7 @@ be **merged** before it can start. Tier = the test suite(s) it owes
 |----|-------|------------|------|
 | [S01](slices/S01-app-env-scaffold.md) | App/Env scaffold + composition root | S02 | U |
 | [S02](slices/S02-seam-interfaces.md) | Seam interfaces + in-memory doubles | — | U |
-| [S03](slices/S03-config-loader.md) | Config model & fail-fast loader | S02 | U |
+| [S03](slices/S03-config-loader.md) | Config model & fail-fast loader | S02, S05 | U |
 | [S04](slices/S04-logging-katip.md) | `katip` logging scaffold (json/console) | S01 | U |
 | [S05](slices/S05-rules-precedence.md) | Rules precedence alignment | — | U |
 | [S36](slices/S36-security-guards.md) | Outbound SSRF + input-validation + response-bound guards — _security gate ([issue #11](https://github.com/AlexaDeWit/Ecluse/issues/11))_ | — | U, I |
@@ -145,7 +145,7 @@ be **merged** before it can start. Tier = the test suite(s) it owes
 |----|-------|------------|------|
 | [S21](slices/S21-effectful-tier.md) | Effectful rule tier (`Unavailable`, timeout/retry/breaker) | S05, S14 | U |
 | [S22](slices/S22-cve-sync.md) | `CVELookup` seam + OSV local-sync index | S01, S21 | U, I |
-| [S23](slices/S23-deny-if-cve.md) | `DenyIfCVE` rule | S03, S22 | U |
+| [S23](slices/S23-deny-if-cve.md) | CVE rules — `DenyIfCVE` + `AllowIfRemediatesCve` | S03, S22 | U |
 
 ### M6 — Observability
 
@@ -189,8 +189,9 @@ parallel, then converge at M3:
 - **Wave 2:** `S01` (Env, needs S02), `S07` (npm projection, needs S06), `S11`
   (responses, needs S05/S10).
 - **Wave 3:** `S03` + `S04` (config/logging), `S08` (npm fetch/publish), `S12`
-  (WAI app). `S16` (credential wrapper) can pull in here — it depends only on the
-  seam (S02) and de-risks M4 early.
+  (WAI app). `S03` also depends on `S05` (the rule model its default-policy merge
+  layers over), which lands in Wave 1–2. `S16` (credential wrapper) can pull in
+  here — it depends only on the seam (S02) and de-risks M4 early.
 - **Converge:** `S09` → `S13`, with `S33` (pure cross-upstream merge, needs only
   `S07`) → `S14` (**walking skeleton closes**) → `S15`.
 - **Then:** M4 (AWS) and M5 (CVE) layer on; M6/M8 run as independent parallel

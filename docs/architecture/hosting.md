@@ -22,7 +22,10 @@ A **mount** binds a path prefix to:
   [Registry Abstraction](registry-model.md#registry-abstraction));
 - a **three-registry tuple** — its own private upstream, public upstream, and
   mirror target (see [Three-Registry Model](registry-model.md#three-registry-model));
-- a **rule set**.
+- optionally, a **per-mount rule refinement** — a named map that merges over the
+  shared [rule policy](configuration.md#rule-policy) (itself layered on the built-in
+  default), for running several mounts under different policies. Omitted, the mount
+  uses the shared policy unchanged.
 
 Mounts are independent, so one process can host several mounts of the *same*
 ecosystem under different policies (e.g. `/npm-prod` vs `/npm-canary`), not
