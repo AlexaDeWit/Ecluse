@@ -73,6 +73,7 @@ test-suite ecluse-unit
   main-is:            Spec.hs
   hs-source-dirs:     test/unit
   other-modules:
+    EcluseSpec
     Ecluse.CredentialSpec
     Ecluse.PackageSpec
     Ecluse.QueueSpec

@@ -53,4 +53,37 @@ hpc-codecov "${mix_args[@]}" \
   -o "$out" \
   "$tix"
 
+# Completeness guard. HPC only emits a module that was linked into the suite's
+# .tix, so a library module the suite never imports is silently *absent* from the
+# report (not reported as 0%), which quietly inflates the percentage. Fail loudly
+# when a src/ module is missing, so a dropped module is caught here rather than
+# hidden: the fix is a test that exercises it (so it links), or — for a module
+# with genuinely nothing to cover yet — an entry in `unscoped` below. See
+# CONTRIBUTING.md -> "Coverage".
+#
+# Intentionally unscoped: pure seams/types with no executable logic yet. Each
+# entry states why and when it returns, so this stays a reviewed decision and not
+# a silent escape hatch. Paths use the ./src/... form the report emits.
+unscoped=(
+  # pure protocol seam (#16): the RegistryClient record + error newtypes, no
+  # logic. Remove when S06 (npm-wire) adds real fetch/parse code and tests that
+  # link it.
+  ./src/Ecluse/Registry.hs
+)
+
+expected="$(find src -name '*.hs' | sed 's#^#./#' | sort)"
+if [ ${#unscoped[@]} -gt 0 ]; then
+  expected="$(comm -23 <(echo "$expected") <(printf '%s\n' "${unscoped[@]}" | sort))"
+fi
+present="$(grep -oE '"\./src/[^"]+\.hs"' "$out" | tr -d '"' | sort -u || true)"
+missing="$(comm -23 <(echo "$expected") <(echo "$present"))"
+if [ -n "$missing" ]; then
+  {
+    echo "coverage: library modules absent from $out (not linked by $suite):"
+    echo "$missing" | sed 's/^/  /'
+    echo "Add a test that exercises the module, or list it in scripts/coverage.sh 'unscoped'."
+  } >&2
+  exit 1
+fi
+
 echo "coverage: wrote $out"
