@@ -4,13 +4,31 @@
 
 ## Configuration
 
-Runtime configuration is provided entirely via environment variables. Rule sets
-and other structured config are supplied as JSON strings.
+Configuration has two layers: a small set of **environment variables** for
+process-level and secret values, and **structured config** describing the
+mount(s).
 
-The variables below configure a **single mount**. A multi-mount deployment (see
-[Multi-Ecosystem Hosting](hosting.md#multi-ecosystem-hosting)) supplies the
-equivalent set per mount via structured config, keyed by path prefix; the
-single-mount variables are the one-entry degenerate form.
+The **mount map** — each mount's prefix, externally-visible base URL,
+three-registry endpoints with their credential providers, queue backend, and rule
+set — is supplied as structured config in one of two forms:
+
+- a **config file** (JSON) — the source of truth: reviewable, diffable, and the
+  expected form as the mount count grows; or
+- a **JSON blob in an env var** (e.g. `PROXY_CONFIG`) — the same schema, an
+  alternate for consumers who want an env-only deployment with no mounted file.
+
+JSON keeps one schema across both forms with no extra dependency; a YAML reader
+over the same schema may be added later for comments/ergonomics.
+
+The **single-mount environment variables** below are a **shorthand** that desugars
+to a one-entry mount map — the common case at launch (one npm mount). Multi-mount
+deployments (see [Multi-Ecosystem Hosting](hosting.md#multi-ecosystem-hosting))
+use the file or JSON-blob form.
+
+**Secrets never live in the structured config.** Tokens (`PROXY_AUTH_TOKEN`,
+per-endpoint registry tokens) are always environment variables; cloud-managed
+registries derive short-lived tokens from ambient cloud credentials (see
+[Outbound Registry Credentials](#outbound-registry-credentials)).
 
 | Variable | Required | Description |
 |----------|----------|-------------|
