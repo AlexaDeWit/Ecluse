@@ -43,15 +43,19 @@ library
   hs-source-dirs:  src
   exposed-modules:
     Ecluse
+    Ecluse.Credential
     Ecluse.Ecosystem
     Ecluse.Package
+    Ecluse.Queue
+    Ecluse.Registry
     Ecluse.Rules
     Ecluse.Rules.Types
     Ecluse.Version
 
   build-depends:
-    , text  ^>=2.0
-    , time  ^>=1.12
+    , containers  ^>=0.6
+    , text        ^>=2.0
+    , time        ^>=1.12
 
 executable ecluse
   import:         shared
@@ -68,7 +72,9 @@ test-suite ecluse-unit
   main-is:            Spec.hs
   hs-source-dirs:     test/unit
   other-modules:
+    Ecluse.CredentialSpec
     Ecluse.PackageSpec
+    Ecluse.QueueSpec
     Ecluse.RulesSpec
     Ecluse.VersionOrderingSpec
     Ecluse.VersionSpec
