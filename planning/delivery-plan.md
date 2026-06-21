@@ -99,6 +99,7 @@ be **merged** before it can start. Tier = the test suite(s) it owes
 | [S03](slices/S03-config-loader.md) | Config model & fail-fast loader | S02 | U |
 | [S04](slices/S04-logging-katip.md) | `katip` logging scaffold (json/console) | S01 | U |
 | [S05](slices/S05-rules-precedence.md) | Rules precedence alignment | — | U |
+| [S36](slices/S36-security-guards.md) | Outbound SSRF + input-validation + response-bound guards — _security gate ([issue #11](https://github.com/AlexaDeWit/Ecluse/issues/11))_ | — | U, I |
 
 ### M1 — npm protocol adapter
 
