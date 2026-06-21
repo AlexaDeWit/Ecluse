@@ -38,6 +38,9 @@ module Ecluse.Server.Route (
 
     -- * Classification
     classify,
+
+    -- * Component safety
+    isSafeComponent,
 ) where
 
 import Data.Char (isControl)
