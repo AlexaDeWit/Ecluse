@@ -13,7 +13,7 @@
 app/       — executable entry point (Main.hs only; keep thin)
 src/       — library code (all business logic lives here)
 test/      — unit and integration tests (mirror src/ module structure)
-docs/      — architecture decision records and design documents
+docs/      — architecture and design documents
 ```
 
 ## Code Conventions

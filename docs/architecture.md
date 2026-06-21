@@ -20,7 +20,7 @@ goal is resilience — mitigating the blast radius of a bad publish — rather t
 malware detection.
 
 The proxy is not a registry. It delegates storage to whatever backend the
-operator chooses (e.g. AWS CodeArtifact), and enforces a configurable policy on
+operator chooses (e.g. AWS CodeArtifact or GCP Artifact Registry), and enforces a configurable policy on
 what may be fetched and mirrored from the public registry.
 
 ---
@@ -61,12 +61,19 @@ adapter is responsible for projecting its wire format into these types.
 
 **Supported implementations at launch:** npm registry protocol only. The
 `RegistryClient` abstraction exists from day one to make future backends
-(PyPI, etc.) additive rather than structural changes.
+(PyPI, RubyGems, …) additive rather than structural changes.
 
-**CodeArtifact** is a first-class backend for the private upstream and mirror
-target. It speaks the npm protocol but requires IAM-based authentication rather
-than a static credential. The npm `RegistryClient` implementation will include a
-CodeArtifact variant that handles token refresh via the AWS SDK (`amazonka`).
+`RegistryClient` is the **ecosystem (protocol) seam** — fetch, publish, and parse
+— and nothing more. It deliberately does **not** carry authentication, because
+protocol and auth are **orthogonal axes**: AWS **CodeArtifact**, GCP **Artifact
+Registry**, and a self-hosted Verdaccio/Nexus all speak the *same* npm protocol
+and differ only in how a bearer token is obtained. Folding "CodeArtifact-ness"
+into the npm adapter would force a near-duplicate adapter per cloud; instead the
+npm `RegistryClient` is used **unchanged** and paired with a
+[`CredentialProvider`](#credential-provider) that mints the token. The backend
+matrix is therefore *ecosystem × credential provider*, and the cells compose
+freely (npm-on-CodeArtifact, npm-on-Artifact-Registry, pypi-on-static, …). See
+[Cloud Backends](#cloud-backends).
 
 ---
 
@@ -198,7 +205,7 @@ Client request
             └─ Allowed
                 │
                 ▼
-            [5] Enqueue mirror job (SQS) — non-blocking
+            [5] Enqueue mirror job — non-blocking
                 │
                 ▼
             [6] Serve response to client immediately
@@ -250,7 +257,8 @@ The single most important split in the HTTP code:
 - **Data plane** — streaming artifacts and fetching metadata — goes through
   `http-client`.
 - **Control plane** — SQS (mirror queue), STS, and CodeArtifact's
-  `GetAuthorizationToken` — goes through `amazonka`.
+  `GetAuthorizationToken` (the AWS [`CredentialProvider`](#credential-provider)'s
+  `mintToken`) — goes through `amazonka`.
 
 This matters most for CodeArtifact. Its npm repository is a **standard HTTPS npm
 endpoint**: obtain a bearer token from `GetAuthorizationToken` (control plane,
@@ -258,6 +266,10 @@ endpoint**: obtain a bearer token from `GetAuthorizationToken` (control plane,
 plane). The streaming path therefore never touches `amazonka`'s
 conduit/`ResourceT` machinery — which is exactly where naive
 streaming-through-a-proxy goes wrong.
+
+The same split holds on GCP — Pub/Sub and the Artifact Registry token are
+control-plane work, while the npm data plane is unchanged `http-client` (see
+[Cloud Backends](#cloud-backends)).
 
 ### Streaming and resource lifetime
 
@@ -400,20 +412,189 @@ phases.
 
 When a package passes rules, the proxy:
 
-1. Enqueues a mirror job to **SQS** (the mirror target URL, package ID, version,
-   and artifact location).
+1. Enqueues a mirror job (the mirror target URL, package ID, version, and
+   artifact location) to the configured **mirror queue**.
 2. Returns the response to the client **immediately** — no blocking on mirror
    completion.
 
-The SQS consumer (a separate worker process) reads jobs from the queue, fetches
-the artifact from the public upstream, and publishes it to the mirror target via
-`publishArtifact`. Failed jobs are retried with SQS's built-in retry and
-dead-letter queue support.
+The queue is a cloud-agnostic seam with backends for AWS SQS and GCP Pub/Sub
+(see [Cloud Backends](#cloud-backends)). A consumer (a separate worker process)
+receives jobs, fetches the artifact from the public upstream, publishes it to the
+mirror target via `publishArtifact`, and acknowledges the job. The worker thus
+touches both cloud seams — [`MirrorQueue`](#queue-abstraction) to receive and
+[`CredentialProvider`](#credential-provider) to authenticate the write — while the
+publish itself is **plain npm protocol plus a bearer token**: pushing to a managed
+registry is no different from pushing to any npm registry, so there is no
+per-cloud publish path. Both backends give at-least-once delivery with retry and a
+dead-letter path for jobs that keep failing — the semantics the worker needs,
+regardless of cloud. At-least-once is safe here because the worker is idempotent: a
+redelivered job re-runs the deterministic rules and re-publishes the same artifact.
 
 This means there is a window between a package being approved and it appearing
 in the private upstream. Subsequent requests for the same package during this
 window will fall through to the public upstream again and re-run rules — this is
 acceptable; the rules are deterministic for a given package version.
+
+---
+
+## Cloud Backends
+
+Écluse couples to a cloud provider in exactly **two seams**, both records of
+functions (the Handle pattern — see [Seams](#seams-records-of-functions)) so that
+a provider is an additive backend rather than a structural change, the same
+posture as [`RegistryClient`](#registry-abstraction):
+
+1. **`MirrorQueue`** — the durable hand-off from the request path to the mirror
+   worker (see [Mirror Queue](#mirror-queue)).
+2. **`CredentialProvider`** — mints the short-lived bearer token for any registry
+   endpoint (private upstream or mirror target) that is a cloud-managed registry
+   rather than a static-credential one (see
+   [Credential Provider](#credential-provider)).
+
+These two are the **cloud axis**. The **ecosystem axis** is
+[`RegistryClient`](#registry-abstraction), which is cloud-agnostic — so the npm
+protocol/data plane, **including publish**, is written once and reused across
+every cloud (a managed registry is just an npm endpoint plus a token; there is no
+per-cloud publish path and no object-store seam). Everything else — the proxy
+core, rules engine, web layer, CVE subsystem — is cloud-agnostic too. **AWS and
+GCP are both first-class targets**; the design admits a third provider by adding
+backends behind these two seams.
+
+### Seams: records of functions
+
+Every seam — `RegistryClient`, `MirrorQueue`, `CredentialProvider` — is a
+**record whose fields are functions** (the *Handle pattern*), constructed by a
+per-backend smart constructor (`newSqsQueue :: SqsConfig -> IO MirrorQueue`). This
+is Haskell's idiomatic equivalent of an interface with swappable implementations:
+the record type is the interface, a smart constructor is a concrete
+implementation, and the closure it returns captures that backend's private state
+(an `amazonka` env, an HTTP manager) exactly as an object's fields would.
+
+Backend choice is **runtime, config-driven, single-binary**: all adapters are
+compiled in, and one **composition root** reads the configured provider, calls the
+matching smart constructor, and stores the resulting record in `Env`. Nothing
+downstream knows which backend it holds — it just applies the field. This keeps
+the cloud SDKs' selection in one place rather than smeared across the code, and
+leaves the door open to split adapters into separate libraries later without
+disturbing the seam.
+
+*Alternatives considered.* A **free monad** (operations reified as data, AWS/GCP
+as interpreters) and **tagless-final** both abstract the backend too, but they buy
+*program-as-data* / compile-time dispatch we do not need: selection here is at
+runtime by config, the per-op work lives in the interpreter either way, and both
+would mean a heavier dependency than the `ReaderT Env IO` baseline. Records of
+functions give the same swappability and trivial test doubles (an in-memory
+record) with none of that. The free monad would earn its keep only if we needed to
+inspect/rewrite mirror programs (e.g. batch enqueues) — and that has a contained
+answer behind the existing seam if it ever arises.
+
+### Service mapping
+
+| Concern | AWS | GCP |
+|---------|-----|-----|
+| Mirror queue | SQS | Cloud Pub/Sub |
+| Managed npm registry | CodeArtifact | Artifact Registry |
+| Workload identity / token source | STS / instance role | Workload Identity / ADC |
+| Local emulator (tests) | `ministack` (LocalStack-style) | Google's official Pub/Sub emulator |
+
+Both managed registries speak the **npm protocol over HTTPS** and differ only in
+how the bearer token is obtained and refreshed, so they sit behind the
+[`CredentialProvider`](#credential-provider) seam while the `RegistryClient`
+protocol/data plane (`http-client`) is identical across them (see
+[Web Layer](#web-layer)).
+
+### Credential Provider
+
+Outbound auth (proxy → registry) is its own seam, separate from
+[`RegistryClient`](#registry-abstraction). A `CredentialProvider` yields the
+current bearer token for a registry endpoint, refreshing it before expiry:
+
+```haskell
+newtype CredentialProvider = CredentialProvider
+  { currentToken :: IO AuthToken }            -- refreshes-before-expiry internally
+
+data AuthToken = AuthToken { secret :: Secret, expiresAt :: Maybe UTCTime }
+```
+
+A provider attaches **per registry endpoint**, not globally: the three-registry
+tuple (private upstream, public upstream, mirror target) may need up to three,
+though they commonly collapse — the private upstream and mirror target are often
+the same CodeArtifact repo behind one provider, and the public upstream is usually
+anonymous.
+
+**The sub-seam that matters.** The interesting logic is the refresh / cache /
+expiry / concurrency policy, *not* the cloud call. So a single generic wrapper
+holds that policy, parameterised over a tiny per-cloud `mintToken` leaf:
+
+```
+CredentialProvider
+  └─ generic refresh/cache wrapper      -- deterministic: injected clock + fake mint
+       └─ mintToken :: IO AuthToken     -- the only per-cloud, un-emulable part
+```
+
+Adapters supply only the leaf: `static` (a fixed token, no expiry), **CodeArtifact**
+(`GetAuthorizationToken` via `amazonka`, TTL up to 12h), **ADC** (an OAuth2 access
+token, TTL ~1h). The wide TTL spread is exactly why the wrapper refreshes off the
+token's own `expiresAt` rather than a fixed interval — the same policy then fits
+either cloud, and each cloud contributes ~10 lines. This isolation also bounds the
+test gap (see [Testing](#testing)): everything but `mintToken` is unit-testable.
+
+### Queue abstraction
+
+The queue is the one piece with materially different APIs per cloud, so it is its
+own seam — a `MirrorQueue` with `enqueue` / `receive` / `ack` operations. SQS
+(`SendMessage` / `ReceiveMessage` + visibility timeout / `DeleteMessage`) and
+Pub/Sub (`Publish` / `Pull` + ack deadline / `Acknowledge`) both fit this
+receive → process → ack shape; the differences (visibility timeout vs ack
+deadline, dead-letter configuration) stay behind the seam. The provider is chosen
+by configuration (see [Configuration](#configuration)).
+
+### Haskell client maturity — a design risk to retire early
+
+This is the one place GCP is **not** a free addition. `amazonka` is comprehensive
+and well-maintained; the GCP side is weaker, and the design names that risk
+rather than assuming it away:
+
+- **`gogol`** (the amazonka-equivalent GCP SDK, by the same author) covers
+  Pub/Sub but has historically trailed `amazonka` in coverage and release
+  cadence — its current state must be verified before it is relied on.
+- `gogol` is **REST/JSON**-generated, whereas the official Pub/Sub **emulator is
+  gRPC-first**, so "does our chosen client work against the emulator?" is not a
+  given. Native Haskell gRPC (`grpc-haskell`) is itself immature and is avoided.
+- The hedge that fits our philosophy — adopt for big infrastructure, hand-roll
+  the small domain surface (see [Web Layer](#web-layer)) — is a thin REST client:
+  Pub/Sub's `publish` / `pull` / `acknowledge` is a handful of JSON-over-HTTPS
+  calls, and we already run `http-client` + `aeson` + a bearer-token pattern. A
+  small client behind the `MirrorQueue` seam keeps us off a possibly-stale SDK,
+  **provided** the emulator serves those REST calls.
+
+**Design requirement.** GCP is *designed for* from day one (the two seams above),
+but shipping it is **gated on a de-risking spike**: stand up the Pub/Sub emulator
+via `testcontainers` and prove one client path can `publish → pull → ack` against
+it. That single experiment resolves both the client-maturity and
+emulator-compatibility questions before GCP is committed to a release. AWS
+(`amazonka` + `ministack`) carries no such risk and ships first.
+
+### Testing
+
+`testcontainers` is a generic container manager, not an AWS-specific one — it
+runs `ministack` today and the Pub/Sub emulator the same way. Each cloud's queue
+backend is exercised in the integration tier against its own emulator (no real
+cloud account or credentials; the Pub/Sub emulator ignores auth entirely), so the
+`MirrorQueue` seam is verified per provider.
+
+The managed-registry backends need no emulator — neither CodeArtifact nor
+Artifact Registry has a usable one — and the seam split is what makes that a
+non-problem. The npm **protocol** is just HTTPS+JSON, so it is exercised **once**
+against a real npm-speaking registry (e.g. Verdaccio) or an in-process WAI stub,
+and that single suite covers every managed registry because they share the
+protocol. The only genuinely un-emulable surface is the per-cloud token *mint*,
+isolated in the [`CredentialProvider`](#credential-provider)'s `mintToken` leaf:
+the refresh/cache/expiry policy around it is unit-tested deterministically with an
+injected clock and a fake mint, and the real cloud mint runs end-to-end only in
+the (non-gating) smoke tier. The split shrinks the un-testable surface to one
+small function per cloud — an explicit, accepted residual risk, consistent with
+how `ecluse-smoke` is already treated.
 
 ---
 
@@ -452,12 +633,26 @@ variables are the one-entry degenerate form.
 | `PRIVATE_UPSTREAM_URL` | Yes | URL of the private upstream registry. |
 | `PUBLIC_UPSTREAM_URL` | No (default: `https://registry.npmjs.org`) | URL of the public upstream. |
 | `MIRROR_TARGET_URL` | Yes | URL of the registry to mirror approved packages to. |
-| `MIRROR_QUEUE_URL` | Yes | SQS queue URL for mirror jobs. |
-| `AWS_REGION` | CodeArtifact only | AWS region for CodeArtifact and SQS. |
+| `MIRROR_QUEUE_PROVIDER` | No (default: `sqs`) | Mirror-queue backend: `sqs` (AWS) or `pubsub` (GCP). See [Cloud Backends](#cloud-backends). |
+| `MIRROR_QUEUE_URL` | Yes | Queue identifier for mirror jobs: an SQS queue URL, or a Pub/Sub `projects/<project>/topics/<topic>` resource, per provider. |
+| `AWS_REGION` | AWS backends only | Region for SQS and CodeArtifact. |
+| `GOOGLE_CLOUD_PROJECT` | GCP backends only | Project for Pub/Sub and Artifact Registry. Credentials come from Application Default Credentials (ADC). |
 | `PROXY_AUTH_TOKEN` | No | If set, clients must supply this token as `Bearer` or `_authToken`. Omit for open/network-secured deployments. |
 | `PROXY_RULES` | Yes | JSON array of rule objects defining the allow policy (see below). |
 | `PROXY_HELP_MESSAGE` | No | Custom string appended to all denial messages (e.g. `"Contact #platform-eng on Slack for assistance."`). |
 | `CVE_CACHE_TTL_SECONDS` | No (default: 3600) | How long to cache advisory lookup results. |
+
+### Outbound Registry Credentials
+
+Each registry endpoint selects a [`CredentialProvider`](#credential-provider). A
+**cloud-managed** endpoint (its URL host identifies CodeArtifact or Artifact
+Registry) derives its token from the ambient cloud credentials already configured
+above (`AWS_REGION` / instance role, or ADC / `GOOGLE_CLOUD_PROJECT`) — no secret
+is placed in Écluse's own config. A **plain** registry takes an optional static
+token per endpoint (e.g. `PRIVATE_UPSTREAM_TOKEN`, `MIRROR_TARGET_TOKEN`); absent
+one, the endpoint is treated as anonymous. The public upstream is anonymous by
+default. This keeps long-lived registry secrets out of config wherever a cloud
+identity can mint a short-lived token instead.
 
 ### Rule Configuration Format
 
@@ -477,6 +672,10 @@ the package is denied by default.
 
 ## Client Authentication
 
+This section covers **inbound** auth (client → proxy). **Outbound** auth
+(proxy → registry) is a separate concern, handled by the
+[`CredentialProvider`](#credential-provider) seam.
+
 Authentication to the proxy is **optional**. Three modes:
 
 1. **Open** — `PROXY_AUTH_TOKEN` is unset. Any client can reach the proxy.
@@ -485,9 +684,10 @@ Authentication to the proxy is **optional**. Three modes:
 2. **Static token** — `PROXY_AUTH_TOKEN` is set. Clients must include it as
    `Bearer <token>` in the `Authorization` header or as `_authToken` in
    `.npmrc`. Standard npm tooling supports this out of the box.
-3. **AWS IAM (future)** — Validating AWS identity at the proxy edge is deferred
-   as a gateway concern. CodeArtifact can be used as the mirror target with IAM
-   controlling writes independently.
+3. **Cloud IAM (future)** — Validating cloud identity (AWS IAM / GCP IAM) at the
+   proxy edge is deferred as a gateway concern. A managed registry (CodeArtifact /
+   Artifact Registry) can be the mirror target with cloud IAM controlling writes
+   independently.
 
 ---
 
@@ -515,9 +715,10 @@ When a request is denied (no allow rule matched, or a deny rule fired):
 | Prelude | `relude` | Safer defaults: `Text` over `String`, partial functions hidden, re-exports `containers`/`text`/`bytestring`/`stm`. Wired in as the implicit prelude (see below). |
 | Effect style | `ReaderT Env IO` (+ `unliftio`) | Simple, standard, testable without exotic dependencies. `unliftio` lifts `bracket`/`async` into the reader for the worker/service layer; request handlers stay in plain `IO` taking `Env`. See [Web Layer](#web-layer). |
 | HTTP server | `warp` + `wai` (+ `wai-extra`) | Fast, battle-tested. Raw WAI routing rather than a framework — see [Web Layer](#web-layer). `wai-extra` supplies cross-cutting middleware (size limits, real-IP, timeouts). |
-| HTTP client | `http-client` + `http-client-tls` | The data plane: streams artifacts and fetches metadata, including from CodeArtifact's npm endpoint. Kept off `amazonka`'s `ResourceT` streaming path — see [Web Layer](#web-layer). |
-| JSON | `aeson` | Metadata parsing, rule config, SQS payloads, denial bodies. |
-| AWS | `amazonka` | Split packages: `amazonka-sqs` (mirror queue), `amazonka-codeartifact` (npm auth token), `amazonka-sts` (IAM). |
+| HTTP client | `http-client` + `http-client-tls` | The data plane: streams artifacts and fetches metadata, including the CodeArtifact / Artifact Registry npm endpoints. Kept off `amazonka`'s `ResourceT` streaming path — see [Web Layer](#web-layer). |
+| JSON | `aeson` | Metadata parsing, rule config, queue payloads, denial bodies. |
+| Cloud — AWS | `amazonka` | Split packages: `amazonka-sqs` (mirror queue), `amazonka-codeartifact` (registry token), `amazonka-sts` (workload identity). Mature and comprehensive. |
+| Cloud — GCP | `gogol` *or* a hand-rolled REST client (TBD) | Pub/Sub mirror queue + Artifact Registry token. GCP's Haskell story is weaker than AWS's, so the choice is gated on a spike — see [Cloud Backends](#cloud-backends). |
 | Logging | `katip` | Structured, contextual JSON logging. Denials are an audit trail — package/version/rule context attaches to every event. |
 | Config | `envparse` | Applicative env-var parser; aggregates all missing/invalid vars into one error rather than failing on the first. |
 | Caching | `cache` | STM-backed TTL cache for advisory lookups; handles expiry/eviction for us. |
@@ -526,7 +727,7 @@ When a request is denied (no allow rule matched, or a deny rule fired):
 | Unit tests | `hspec` (+ `hspec-wai`) | `hspec-wai` drives the proxy `Application` end-to-end. |
 | Property tests | `hedgehog` (+ `hspec-hedgehog`) | Integrated shrinking; used heavily against the pure rules engine. |
 | Integration tests | `testcontainers` | Launches ephemeral Docker containers from the test suite (lifecycle + readiness). GHC 9.6-compatible, actively maintained. |
-| AWS emulation (tests) | `ministack` | Local AWS emulator (image `ministackorg/ministack`, port 4566) for SQS/STS in integration tests — no real AWS or credentials. |
+| Cloud emulation (tests) | `ministack` · Pub/Sub emulator | AWS via `ministack` (image `ministackorg/ministack`, port 4566, SQS/STS); GCP via Google's official Pub/Sub emulator. Both run as containers through `testcontainers` — no real cloud or credentials. |
 | Dev environment | Nix flakes + `direnv` | Fully reproducible; all tooling from `nix develop`. |
 | Build | Cabal | Natural Nix pairing; `flake.lock` provides reproducibility. |
 
@@ -560,10 +761,17 @@ in [Web Layer](#web-layer).
 ## Out of Scope (for now)
 
 - Package hosting / storage (delegated to the configured registries).
+- Mirroring to raw object storage (S3 / GCS). The mirror target is a registry and
+  writes go through `publishArtifact`, so no blob-store seam is introduced;
+  revisit only if a non-registry mirror target is ever wanted.
 - Web UI or admin API.
 - PyPI and other non-npm **adapters** — the hosting model and `RegistryClient`
   seam are designed to accommodate them (see
   [Multi-Ecosystem Hosting](#multi-ecosystem-hosting)), but only the npm adapter
   ships at launch.
-- AWS IAM validation at the proxy edge (gateway concern).
-- Local on-disk caching of artifacts (the SQS retry window is acceptable).
+- Cloud IAM validation at the proxy edge (gateway concern).
+- Local on-disk caching of artifacts (the mirror retry window is acceptable).
+- **GCP backends at launch** — the cloud seams (mirror queue, managed-registry
+  token) are designed for GCP from day one, but shipping a GCP backend is gated on
+  the client-viability spike; AWS ships first (see
+  [Cloud Backends](#cloud-backends)).

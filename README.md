@@ -73,5 +73,5 @@ for details.
 | `app/` | Executable entry point — thin wiring only |
 | `src/` | Library — all business logic |
 | `test/` | Unit and integration tests |
-| `docs/` | Architecture decision records and design documents |
+| `docs/` | Architecture and design documents |
 | `flake.nix` | Nix dev shell (GHC 9.6, cabal, HLS, ghcid) **and** the package build (`nix build`) + hermetic checks (`nix flake check`) |
