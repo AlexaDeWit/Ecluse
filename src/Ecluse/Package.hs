@@ -63,6 +63,9 @@ module Ecluse.Package (
 
     -- * Per-version details
     PackageDetails (..),
+
+    -- * Packument-level view
+    PackageInfo (..),
 ) where
 
 import Data.Text qualified as T
@@ -342,5 +345,28 @@ data PackageDetails = PackageDetails
     -- ^ The package's maintainers (distinct from the per-version publisher).
     , pkgDependencies :: [Dependency]
     -- ^ Declared dependencies, constraints kept raw.
+    }
+    deriving stock (Eq, Show)
+
+{- | The packument-level view of a package: the whole-package metadata document
+('PackageDetails' is the per-/version/ snapshot embedded within it). A registry
+adapter projects a registry's packument (the npm full-metadata document) into
+this; the proxy core reasons over it without ever seeing the wire format.
+-}
+data PackageInfo = PackageInfo
+    { infoName :: PackageName
+    -- ^ The package identity this document describes.
+    , infoVersions :: Map Text PackageDetails
+    -- ^ Every published version, keyed by its __raw version string__ (the
+    -- packument's own key). Each 'PackageDetails' still carries its parsed
+    -- 'Version'; the map is keyed by 'Text' because a 'Version' has no 'Ord'
+    -- (ordering goes through 'Ecluse.Version.compareVersions', never a derived
+    -- instance) — see "Ecluse.Version".
+    , infoDistTags :: Map Text Version
+    -- ^ Distribution tags (e.g. @"latest"@, @"next"@) to the 'Version' they
+    -- point at.
+    , infoPublishedAt :: Map Text UTCTime
+    -- ^ Per-version publish times (the npm @time@ object), keyed by raw version
+    -- string, when known.
     }
     deriving stock (Eq, Show)
