@@ -193,7 +193,9 @@ format for Codecov to ingest. See [`scripts/coverage.sh`](scripts/coverage.sh).
 
 The gate itself is Codecov's two commit statuses: `codecov/project` (no
 regression versus the PR base, within a 1% threshold) and `codecov/patch`
-(new/changed lines ≥ 80%). Both knobs live in [`codecov.yml`](codecov.yml).
+(new/changed lines ≥ 95% — the coverage standard for all newly introduced work;
+the project status stays on no-regression so the baseline ratchets up as
+well-covered changes land). Both knobs live in [`codecov.yml`](codecov.yml).
 
 **References:** [testcontainers](https://hackage.haskell.org/package/testcontainers) (Haskell, GHC 9.6-compatible) · [ministack](https://github.com/ministackorg/ministack) (local AWS emulator, image `ministackorg/ministack`, port 4566) · [Pub/Sub emulator](https://cloud.google.com/pubsub/docs/emulator) (local GCP emulator, default port 8085).
 

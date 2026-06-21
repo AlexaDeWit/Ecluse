@@ -107,9 +107,13 @@ The implementer's own "it works" does not count; evidence does.
 - **Stage B — quality & security.** Idiomatic Haskell per
   [`../STYLE.md`](../STYLE.md); totality; `-Werror`-clean; no unsafe/partial
   functions; a **security review** appropriate to a supply-chain tool (input
-  parsing, deny-by-default invariants, injection-free workflows); and **test
+  parsing, deny-by-default invariants, injection-free workflows); **test
   quality** — properties present where required (e.g. rules-engine
-  deny-precedence), not tautological assertions.
+  deny-precedence), not tautological assertions, with **new/changed lines ≥ 95%
+  covered** (`codecov/patch`); and **comment appropriateness** — Haddock documents
+  the timeless contract and the *why*, never project / roadmap / slice narration
+  ([`../STYLE.md`](../STYLE.md) §5.6). Completeness is not enough: a comment can be
+  present, and the wrong kind.
 
 Critical findings block and bounce to the implementer (resumed so context is
 kept), then are re-verified.
@@ -141,6 +145,12 @@ make check && make test-integration && make docs-site && make nix-check
 *flakes only see git-tracked files* trap, so new modules must be `git add`-ed
 (and listed in the `.cabal` file) **before** the Nix checks run.
 
+`make coverage` reproduces the patch-coverage check: Codecov's `codecov/patch`
+requires **≥ 95%** on new/changed lines (the documented server-side exception to
+the single-`gate` rule). Inspect the generated `coverage/<suite>.json` for any
+0-hit changed lines before pushing, and close them — coverage is a quality bar on
+the work, not an afterthought.
+
 Hard stops: **Semgrep reports zero findings** before any push (no new ignores
 without the architect's approval); commits are **GPG-signed** and use
 [Conventional Commits](https://www.conventionalcommits.org/); any workflow change
@@ -155,6 +165,8 @@ A PR reaches the architect only when **all** hold:
 - [ ] All acceptance criteria met, each with passing test evidence
 - [ ] Independent review (Stage A + B) passed; no open critical issues
 - [ ] Local gate green: `make check && make test-integration && make docs-site && make nix-check`
+- [ ] New/changed lines ≥ 95% covered (`codecov/patch` green; reproduce via `make coverage`)
+- [ ] Comments are contract + why only — no roadmap / slice / PR references (STYLE §5.6)
 - [ ] Semgrep clean (no new ignores)
 - [ ] CI `gate` (and every job it needs) green on the PR
 - [ ] Docs updated in the same PR; only fenced files touched

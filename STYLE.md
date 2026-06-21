@@ -387,6 +387,27 @@ describing the mechanics.
   sparingly.
 - `-- * Heading` for export-list sections (§4).
 
+**Rule 5.6 — Document the code, not the project.** Haddock is the durable
+contract and the *why*, read out of context long after any PR — so it must not
+carry project / PR-management narration:
+
+- __No status or roadmap__ — drop "for now", "currently", "at launch", "added
+  later", "minimal for now", "a later slice will…". Describe what *is*, in the
+  present tense; when a later change extends a type, that change updates the
+  Haddock.
+- __No slice / PR / issue references__ — "(see S07)", "added in #42",
+  "TODO(after the spike)" belong in git history and the
+  [delivery plan](planning/delivery-plan.md), not the source. The only sanctioned
+  cross-references are to *other code and the architecture docs* (Rule 5.5), never
+  to process artifacts.
+- __No implementation-plan or test-plumbing narration__ — don't write "this
+  module also ships an in-memory double the tests use"; document the double where
+  it is defined, by what it does.
+
+The test: if a sentence would read as false or pointless a year on — once the
+"later" work has landed — it is project narration; cut it. The model, the
+decisions, and the security *why* (Rule 5.4) stay.
+
 ---
 
 ## 6. Naming and domain types
