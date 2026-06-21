@@ -5,30 +5,57 @@ synopsis:      Defense-in-depth proxy for the npm registry
 license:       MIT
 build-type:    Simple
 
+-- Shared settings for every component. relude replaces the default prelude via
+-- cabal mixins (see docs/architecture.md "relude as the implicit prelude").
 common shared
-  ghc-options:      -Wall -Wunused-packages
-  default-language: GHC2021
+  ghc-options:        -Wall
+  default-language:   GHC2021
+  default-extensions:
+    DerivingStrategies
+    LambdaCase
+    OverloadedStrings
+
+  build-depends:
+    , base    ^>=4.18
+    , relude  ^>=1.2
+
+  mixins:
+    base hiding (Prelude),
+    relude (Relude as Prelude)
 
 library
   import:          shared
   hs-source-dirs:  src
-  exposed-modules: NpmSecureProxy
-  build-depends:   base ^>=4.18
+  exposed-modules:
+    NpmSecureProxy
+    NpmSecureProxy.Package
+    NpmSecureProxy.Rules
+    NpmSecureProxy.Rules.Types
+
+  build-depends:
+    , text  ^>=2.0
+    , time  ^>=1.12
 
 executable npm-secure-proxy
-  import:        shared
-  main-is:       Main.hs
+  import:         shared
+  main-is:        Main.hs
   hs-source-dirs: app
-  build-depends:
-    base              ^>=4.18,
-    npm-secure-proxy
+  build-depends:  npm-secure-proxy
 
 test-suite npm-secure-proxy-test
-  import:        shared
-  type:          exitcode-stdio-1.0
-  main-is:       Spec.hs
-  hs-source-dirs: test
+  import:             shared
+  type:               exitcode-stdio-1.0
+  main-is:            Spec.hs
+  hs-source-dirs:     test
+  other-modules:
+    NpmSecureProxy.PackageSpec
+    NpmSecureProxy.RulesSpec
+
+  build-tool-depends: hspec-discover:hspec-discover ^>=2.11
   build-depends:
-    base             ^>=4.18,
-    hspec            ^>=2.11,
-    npm-secure-proxy
+    , containers       ^>=0.6
+    , hedgehog         ^>=1.4
+    , hspec            ^>=2.11
+    , hspec-hedgehog   ^>=0.1
+    , npm-secure-proxy
+    , time             ^>=1.12

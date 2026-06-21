@@ -1,4 +1,4 @@
 module NpmSecureProxy (run) where
 
 run :: IO ()
-run = putStrLn "npm-secure-proxy starting..."
+run = putTextLn "npm-secure-proxy starting..."
