@@ -32,34 +32,38 @@ ruleName = \case
 -- | Evaluate a single rule against a single package version. Pure and total.
 evalRule :: EvalContext -> Rule -> PackageDetails -> RuleOutcome
 evalRule _ (AllowScope scope) pd =
-    case packageScope (pkgName pd) of
+    case pkgNamespace (pkgName pd) of
         Just s
             | s == scope ->
                 Allow ("scope " <> renderScope scope <> " is allow-listed")
         _ ->
             Abstain ("scope is not the allow-listed " <> renderScope scope)
 evalRule ctx (AllowIfPublishedBefore minAge) pd =
-    let age = diffUTCTime (ctxNow ctx) (pkgPublishedAt pd)
-     in if age >= minAge
-            then
-                Allow
-                    ( "published "
-                        <> renderDuration age
-                        <> " ago (at least "
-                        <> renderDuration minAge
-                        <> " old)"
-                    )
-            else
-                Abstain
-                    ( "published only "
-                        <> renderDuration age
-                        <> " ago, minimum age is "
-                        <> renderDuration minAge
-                    )
+    case pkgPublishedAt pd of
+        Nothing -> Abstain "publish time is unknown"
+        Just publishedAt ->
+            let age = diffUTCTime (ctxNow ctx) publishedAt
+             in if age >= minAge
+                    then
+                        Allow
+                            ( "published "
+                                <> renderDuration age
+                                <> " ago (at least "
+                                <> renderDuration minAge
+                                <> " old)"
+                            )
+                    else
+                        Abstain
+                            ( "published only "
+                                <> renderDuration age
+                                <> " ago, minimum age is "
+                                <> renderDuration minAge
+                            )
 evalRule _ DenyHasInstallScripts pd =
-    if pkgHasInstallScripts pd
-        then Deny "package runs install scripts"
-        else Abstain "package has no install scripts"
+    case pkgInstallCode pd of
+        RunsCodeOnInstall how -> Deny ("runs code on install: " <> how)
+        NoCodeOnInstall -> Abstain "no install-time code execution"
+        CodeExecUnknown -> Abstain "install-time code execution not yet determined"
 
 {- | Evaluate a package version against a rule set.
 

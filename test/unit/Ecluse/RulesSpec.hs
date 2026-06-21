@@ -1,6 +1,5 @@
 module Ecluse.RulesSpec (spec) where
 
-import Data.Map.Strict qualified as Map
 import Data.Time (UTCTime (..), addUTCTime, fromGregorian, nominalDay)
 import Hedgehog (Gen, forAll, (===))
 import Hedgehog.Gen qualified as Gen
@@ -19,25 +18,38 @@ now = UTCTime (fromGregorian 2026 6 20) 0
 ctx :: EvalContext
 ctx = EvalContext now
 
-{- | A package version under an optional scope, published @ageDays@ days before
-'now'. Other fields are fixed; rules under test only read scope and age.
+-- | A single inert artifact; the rules under test do not inspect artifacts.
+sampleArtifact :: Artifact
+sampleArtifact =
+    Artifact
+        { artFilename = "thing-1.0.0.tgz"
+        , artUrl = "https://example.test/thing-1.0.0.tgz"
+        , artKind = Tarball
+        , artHashes = []
+        , artSize = Nothing
+        , artInterpreter = Nothing
+        , artYanked = False
+        , artProvenance = Nothing
+        }
+
+{- | A package version under an optional npm scope, published @ageDays@ days
+before 'now'. Other fields are fixed; the rules under test read only the scope,
+the publish age, and the install-code signal.
 -}
 pkg :: Maybe Text -> Integer -> PackageDetails
 pkg mScope ageDays =
     PackageDetails
-        { pkgName =
-            PackageName
-                { packageScope = mkScope <$> mScope
-                , packageBaseName = "thing"
-                }
+        { pkgName = mkPackageName Npm (mkScope <$> mScope) "thing"
         , pkgVersion = mkVersion "1.0.0"
-        , pkgPublishedAt = addUTCTime (negate (fromInteger ageDays * nominalDay)) now
-        , pkgHasInstallScripts = False
-        , pkgDeprecated = Nothing
-        , pkgDist = Dist "https://example.test/thing-1.0.0.tgz" Nothing Nothing
-        , pkgLicense = Just "MIT"
+        , pkgPublishedAt = Just (addUTCTime (negate (fromInteger ageDays * nominalDay)) now)
+        , pkgInstallCode = NoCodeOnInstall
+        , pkgTrust = Untrusted
+        , pkgAvailability = Available
+        , pkgArtifacts = sampleArtifact :| []
+        , pkgLicenses = ["MIT"]
+        , pkgPublisher = Nothing
         , pkgMaintainers = []
-        , pkgDependencies = Map.empty
+        , pkgDependencies = []
         }
 
 isAllow :: RuleOutcome -> Bool
@@ -60,9 +72,9 @@ deniedBy :: Decision -> Maybe Rule
 deniedBy (Denied r _) = Just r
 deniedBy _ = Nothing
 
--- | Turn on install scripts, for the deny-rule tests.
+-- | Mark the version as running code on install, for the deny-rule tests.
 withInstallScripts :: PackageDetails -> PackageDetails
-withInstallScripts pd = pd{pkgHasInstallScripts = True}
+withInstallScripts pd = pd{pkgInstallCode = RunsCodeOnInstall "postinstall hook"}
 
 genScope :: Gen Text
 genScope = Gen.text (Range.linear 1 12) Gen.alpha
