@@ -352,11 +352,6 @@ data PackageDetails = PackageDetails
 ('PackageDetails' is the per-/version/ snapshot embedded within it). A registry
 adapter projects a registry's packument (the npm full-metadata document) into
 this; the proxy core reasons over it without ever seeing the wire format.
-
-__Minimal for now.__ This is the stable shape the 'Ecluse.Registry.RegistryClient'
-seam needs to be typed against; a later slice (S07) enriches it (e.g. with
-README\/homepage\/repository metadata and richer dist-tag handling) without
-changing the fields below.
 -}
 data PackageInfo = PackageInfo
     { infoName :: PackageName

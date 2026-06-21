@@ -19,10 +19,8 @@ adapter closes over its own backend state (an @amazonka@ env, an HTTP manager)
 and never imports the proxy's @Env@\/@App@, so backends stay decoupled from the
 core (see @docs\/architecture\/technology-stack.md@ → "Key Decisions").
 
-This module provides the seam, its payload types, and the in-memory
-'staticProvider' double (a fixed token, no expiry). The per-cloud minting
-adapters and the generic refresh\/cache\/expiry wrapper around them are layered
-on later behind this same 'CredentialProvider' record.
+This module provides the seam and its payload types. 'staticProvider' is the
+in-memory implementation: a fixed token with no expiry.
 -}
 module Ecluse.Credential (
     -- * Provider seam

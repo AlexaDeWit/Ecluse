@@ -37,10 +37,9 @@ seam's contract reflects that:
   past the visibility window. It is an /optimization/, not correctness-critical,
   since idempotency already makes redelivery harmless.
 
-This module provides the seam, its payload types, and an STM-backed in-memory
-double ('newInMemoryQueue') that honours the receive → ack \/ redeliver-on-no-ack
-semantics, so it is the substrate downstream slices test against. The real SQS
-and Pub\/Sub backends are added later behind this same 'MirrorQueue' record.
+This module provides the seam and its payload types. 'newInMemoryQueue' is an
+STM-backed in-memory implementation honouring the receive → ack \/
+redeliver-on-no-ack semantics above.
 -}
 module Ecluse.Queue (
     -- * Queue seam

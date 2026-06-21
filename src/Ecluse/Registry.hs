@@ -27,10 +27,9 @@ Two design points are load-bearing:
   "Ecluse.Credential" seam. So one npm 'RegistryClient' is reused across every
   cloud rather than near-duplicated per provider.
 
-At launch the only implementation is the npm registry protocol; the abstraction
-exists from day one so further backends (PyPI, RubyGems) are additive rather than
-structural. The concrete adapters and in-memory\/fixture doubles are layered on
-later behind this same record.
+The abstraction is the sole interface, so a new ecosystem backend (PyPI,
+RubyGems, …) is an additive constructor behind this record rather than a
+structural change.
 -}
 module Ecluse.Registry (
     -- * Protocol seam
