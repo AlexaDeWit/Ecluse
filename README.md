@@ -4,9 +4,15 @@ A defense-in-depth proxy for the npm registry, written in Haskell.
 
 ## Overview
 
-`npm-secure-proxy` sits between your development environment (or CI) and the npm registry, providing layered security controls to detect and block supply chain attacks before malicious packages reach your build.
+`npm-secure-proxy` sits between your development environment (or CI) and the npm
+registry, enforcing a configurable security policy before any package reaches a
+build. It proxies requests through a private upstream first, falls back to the
+public npm registry with rules applied, and mirrors approved packages
+asynchronously — without hosting packages itself.
 
-Architecture and feature design is in progress — this document will be updated as requirements are defined.
+See [`docs/architecture.md`](docs/architecture.md) for the full design:
+three-registry model, deny-by-default rules engine, mirror queue, and
+configuration reference.
 
 ## Development
 
