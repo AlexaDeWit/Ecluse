@@ -569,7 +569,10 @@ data HashAlg
 -- | An integrity digest of an artifact.
 data Hash = Hash
     { hashAlg :: HashAlg
+    -- ^ The algorithm the digest was computed with.
     , hashValue :: Text
+    -- ^ The digest itself, in the algorithm's wire encoding (e.g. hex, or the
+    -- whole @sha512-…@ string for 'SRI').
     }
     deriving stock (Eq, Show)
 
@@ -628,6 +631,7 @@ data Dependency = Dependency
     , depConstraint :: Text
     -- ^ The raw version constraint, as declared.
     , depKind :: DepKind
+    -- ^ The role the dependency plays (runtime, dev, optional, peer).
     , depMarker :: Maybe Text
     -- ^ A raw environment marker \/ extras qualifier (PEP 508), if any.
     }
@@ -636,8 +640,11 @@ data Dependency = Dependency
 -- | A person associated with a package (author, maintainer, or publisher).
 data Person = Person
     { personName :: Text
+    -- ^ The person's name, as declared by the package.
     , personEmail :: Maybe Text
+    -- ^ Their email address, if given.
     , personUrl :: Maybe Text
+    -- ^ A homepage / profile URL, if given.
     }
     deriving stock (Eq, Ord, Show)
 
@@ -647,7 +654,9 @@ the rules engine never sees anything else, and never branches on the ecosystem.
 -}
 data PackageDetails = PackageDetails
     { pkgName :: PackageName
+    -- ^ The package identity this snapshot belongs to.
     , pkgVersion :: Version
+    -- ^ The specific version this snapshot describes.
     , pkgPublishedAt :: Maybe UTCTime
     -- ^ When this version was published, if known (absent from some cheap
     -- metadata views).
@@ -664,6 +673,7 @@ data PackageDetails = PackageDetails
     , pkgPublisher :: Maybe Person
     -- ^ Who published __this__ version, if known (provenance).
     , pkgMaintainers :: [Person]
+    -- ^ The package's maintainers (distinct from the per-version publisher).
     , pkgDependencies :: [Dependency]
     -- ^ Declared dependencies, constraints kept raw.
     }
