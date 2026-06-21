@@ -43,7 +43,7 @@ registries derive short-lived tokens from ambient cloud credentials (see
 | `PROXY_AUTH_TOKEN` | No | If set, clients must supply this token as `Bearer` or `_authToken`. Omit for open/network-secured deployments. |
 | `PROXY_RULES` | Yes | JSON array of rule objects defining the allow policy (see below). |
 | `PROXY_HELP_MESSAGE` | No | Custom string appended to all denial messages (e.g. `"Contact #platform-eng on Slack for assistance."`). |
-| `CVE_CACHE_TTL_SECONDS` | No (default: 3600) | How long to cache advisory lookup results. |
+| `CVE_SYNC_INTERVAL_SECONDS` | No (default: 3600) | How often to refresh the in-memory advisory index from OSV (see [CVE Subsystem](rules-engine.md#cve-subsystem)). |
 
 ### Outbound Registry Credentials
 

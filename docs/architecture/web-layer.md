@@ -131,7 +131,7 @@ verify** before publishing to the sanitized home (see
 Resolving a package re-fetches its public-upstream packument, parses it, and
 evaluates rules. To avoid repeating that, the parsed **packument metadata** (all
 versions' `PackageDetails`) is held in a **short-TTL, size-bounded in-memory
-cache** keyed by package — the STM `cache` already used for advisories. Both paths
+cache** keyed by package — an STM-backed TTL cache (the `cache` library). Both paths
 share it: a packument request and the
 [tarball-gating](../architecture.md#request-lifecycle) fetches that follow reuse a
 single fetch+parse instead of repeating it, and concurrent resolutions of a
