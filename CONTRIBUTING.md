@@ -190,6 +190,55 @@ when every upstream job has succeeded.
 
 ---
 
+## Releases & container image
+
+Écluse ships as a lean OCI image built **by Nix**
+(`dockerTools.buildLayeredImage`, see [`flake.nix`](flake.nix)), not a Dockerfile.
+The image is the stripped binary's runtime closure plus CA certificates and
+nothing else — no shell, no package manager, runs **non-root** (uid 65532), and
+is **bit-for-bit reproducible** (a fitting property for a supply-chain tool).
+Build it locally with `make docker-build` (→ `./result`, a `docker-archive`).
+
+> The image is ~23 MB. A residual chunk (`curl`/`openssl`/`krb5`) rides in via
+> the GHC runtime's `libdw` (elfutils) backtrace support, not our code; excising
+> it needs a static-musl build (with its own TLS caveats) and is a deliberate
+> later trim, not a launch blocker.
+
+Publishing is a separate, tag-triggered workflow
+([`.github/workflows/release.yml`](.github/workflows/release.yml)) — **not** part
+of the PR `gate`. Pushing a `vX.Y.Z` tag builds the image, pushes it
+(`make docker-push`), and signs it (`make docker-sign`).
+
+**Immutable tags — no `latest`.** The target repo
+([`alexadewit/ecluse`](https://hub.docker.com/r/alexadewit/ecluse)) enforces
+immutable tags, so every push is a fresh, never-reused tag: the release publishes
+`ecluse:X.Y.Z` (from the git tag) and nothing else. There is deliberately no
+moving pointer — **pin deployments by digest** (`alexadewit/ecluse@sha256:…`),
+which is the stronger supply-chain posture regardless.
+
+**Authentication (Docker Hub).** Docker Hub has no OIDC keyless login, so the push
+needs a long-lived token — kept as weak and contained as possible:
+
+- **Per-repo token scoping is not available on a personal account** — only
+  account-wide access tokens (choose the *Read & Write* permission level; `Delete`
+  is not needed for immutable-tag pushes). True per-repository scoping requires an
+  **Organization Access Token**, which needs a Docker org on a paid plan. The
+  pragmatic mitigation without paying: put the image under a dedicated **machine
+  account** that can reach *only* this repo, so its account-wide token is
+  effectively repo-scoped.
+- Store it as `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` on a **protected `release`
+  GitHub Environment** (required reviewers), so only an approved release job can
+  read it. The token is fed via `--password-stdin`, never argv or `echo`.
+- Images are **signed with cosign keyless** via GitHub OIDC (`id-token: write`) —
+  no signing key is stored — giving verifiable provenance that offsets the
+  static-token weakness. Verify with `cosign verify`.
+
+> Until the `release` environment and its `DOCKERHUB_*` secrets exist, the publish
+> workflow is expected to fail at the push step — by design. The build, tagging,
+> and signing wiring are complete; only the credential is outstanding.
+
+---
+
 ## Repository requirements
 
 - **Workflows stay injection-free.** Never interpolate untrusted

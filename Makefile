@@ -12,9 +12,13 @@ NIX := $(if $(IN_NIX_SHELL),,nix develop --command)
 # Tracked Haskell sources, for the formatter and linter.
 HS := $(shell git ls-files '*.hs')
 
+# Published image repository. Override for forks/mirrors: `make docker-push IMAGE=…`.
+IMAGE ?= docker.io/alexadewit/ecluse
+
 .DEFAULT_GOAL := help
 .PHONY: help update build test test-integration test-smoke test-all \
-        format format-check lint sast check run nix-build nix-check clean
+        format format-check lint sast check run nix-build nix-check \
+        docker-build docker-push docker-sign clean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -59,6 +63,22 @@ nix-build: ## Build the release artifact via Nix (hermetic)
 
 nix-check: ## Run the hermetic flake checks
 	nix flake check
+
+docker-build: ## Build the lean OCI image via Nix → ./result (a docker-archive)
+	nix build .#dockerImage
+
+# Push/sign read DOCKERHUB_USERNAME / DOCKERHUB_TOKEN from the environment and
+# require TAG (immutable tags: no `latest`). The token is piped via stdin, never
+# placed on the command line, and the login line is not echoed.
+docker-push: ## Push ./result to $(IMAGE):$(TAG) (needs TAG + DOCKERHUB_USERNAME/TOKEN)
+	@test -n "$(TAG)" || { echo "set TAG, e.g. make docker-push TAG=0.1.0"; exit 1; }
+	@printf '%s' "$$DOCKERHUB_TOKEN" | $(NIX) skopeo login docker.io -u "$$DOCKERHUB_USERNAME" --password-stdin
+	$(NIX) skopeo copy docker-archive:./result "docker://$(IMAGE):$(TAG)"
+
+docker-sign: ## Sign $(IMAGE):$(TAG) with cosign (keyless; needs OIDC + creds)
+	@test -n "$(TAG)" || { echo "set TAG, e.g. make docker-sign TAG=0.1.0"; exit 1; }
+	@printf '%s' "$$DOCKERHUB_TOKEN" | $(NIX) cosign login docker.io -u "$$DOCKERHUB_USERNAME" --password-stdin
+	$(NIX) cosign sign --yes "$(IMAGE):$(TAG)"
 
 clean: ## Remove build artifacts
 	rm -rf dist-newstyle result

@@ -1,0 +1,72 @@
+name: Release
+
+# Publishing is a separate lifecycle from the PR `gate` in ci.yml: it runs only
+# when a version tag is pushed (or dispatched manually), builds the Nix image,
+# pushes it under an immutable `X.Y.Z` tag, and signs it with cosign. It is never
+# a gate dependency.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Image tag to publish (e.g. 0.1.0)"
+        required: true
+
+# Never cancel an in-flight release.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Build, push & sign image
+    runs-on: ubuntu-latest
+    # The token lives on a protected environment (required reviewers), so only an
+    # approved release can read it. Configure DOCKERHUB_USERNAME / DOCKERHUB_TOKEN
+    # there — until then this job fails at the push step, by design.
+    environment: release
+    permissions:
+      contents: read
+      id-token: write # GitHub OIDC for cosign keyless signing (no stored key)
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+
+      # Untrusted refs flow through env, never interpolated into the run script.
+      - name: Resolve image tag
+        id: tag
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          if [ -n "$INPUT_TAG" ]; then
+            tag="$INPUT_TAG"
+          else
+            tag="${REF_NAME#v}"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Build image
+        run: nix develop --command make docker-build
+
+      - name: Push image
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: nix develop --command make docker-push TAG="$TAG"
+
+      - name: Sign image (cosign keyless)
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: nix develop --command make docker-sign TAG="$TAG"

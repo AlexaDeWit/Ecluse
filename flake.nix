@@ -26,6 +26,12 @@
         # belong in a hermetic build.
         ecluse = hlib.dontCheck ecluseRaw;
 
+        # The executable alone, stripped and with its reference to the full
+        # Haskell library closure removed (justStaticExecutables). A plain dynamic
+        # build drags that whole closure in and bloats the image to ~500 MB; this
+        # keeps only the binary + its system C deps for the container image.
+        ecluseBin = hlib.justStaticExecutables (hlib.dontCheck ecluseRaw);
+
         # Sources for the format/lint checks: the .hs files plus the cabal files,
         # so fourmolu can read default-language / default-extensions (GHC2021 →
         # ImportQualifiedPost) and parse postpositive `qualified` imports. Without
@@ -35,6 +41,40 @@
         packages = {
           default = ecluse;
           ecluse = ecluse;
+
+          # Lean, reproducible OCI image, built straight from the binary's Nix
+          # closure — no Dockerfile, no base distro. It contains only the runtime
+          # closure plus CA certificates: no shell, no package manager, runs
+          # non-root. `buildLayeredImage` splits the closure into cache-friendly
+          # layers, and the build is bit-for-bit reproducible (a fitting property
+          # for a supply-chain tool). `tag = null` derives a unique content-hash
+          # tag for local use; releases retag at push time because the target
+          # repo enforces immutable tags (see CONTRIBUTING.md "Releases").
+          # Push/sign via `make docker-push` / `make docker-sign`.
+          dockerImage = pkgs.dockerTools.buildLayeredImage {
+            name = "ecluse";
+            tag = null;
+            contents = [ ecluseBin pkgs.cacert ];
+            config = {
+              Entrypoint = [ "${ecluseBin}/bin/ecluse" ];
+              ExposedPorts = { "4873/tcp" = { }; }; # default PROXY_PORT
+              User = "65532:65532"; # nonroot, distroless convention
+              Env = [
+                # A distroless image has no system trust store, so tls/x509-system
+                # finds no CAs and every outbound HTTPS fetch fails. cacert is in
+                # the closure via `contents` above; point GHC's TLS stack at it.
+                "SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
+              ];
+              Labels = {
+                "org.opencontainers.image.title" = "ecluse";
+                "org.opencontainers.image.description" =
+                  "Supply-chain resilience proxy for package registries";
+                "org.opencontainers.image.source" =
+                  "https://github.com/AlexaDeWit/Ecluse";
+                "org.opencontainers.image.licenses" = "MIT";
+              };
+            };
+          };
         };
 
         checks = {
@@ -81,6 +121,10 @@
             pkgs.semgrep
             pkgs.zlib
             pkgs.pkg-config
+            # Container image publishing: skopeo pushes the Nix-built image to a
+            # registry (no Docker daemon needed), cosign signs it keylessly.
+            pkgs.skopeo
+            pkgs.cosign
           ];
         };
       });
