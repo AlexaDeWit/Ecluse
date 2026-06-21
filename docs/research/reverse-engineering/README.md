@@ -20,7 +20,7 @@ by the rules engine, and re-encoded faithfully.
 | Ecosystem | Document | Status |
 |-----------|----------|--------|
 | npm       | [`npm.md`](npm.md) | Complete — read path, version resolution, auth (theory), type model |
-| pip / PyPI | _planned (`ip` in the project shorthand)_ | Not started |
+| pip / PyPI | [`pypi.md`](pypi.md) | Complete — Simple + JSON APIs, version resolution, auth (theory), type model. Includes an npm↔PyPI correspondence table. |
 
 ## Method
 
