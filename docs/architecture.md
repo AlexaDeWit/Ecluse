@@ -341,6 +341,23 @@ Rules are evaluated in two tiers:
    checks). Only evaluated if no pure rule has produced a decision. A later
    phase, layered on top of the pure tier.
 
+**A rule's tier is determined by where its signal lives, not only by whether it
+"feels" like IO.** Many inputs are already present in the metadata an adapter
+fetches for resolution — publish age, declared scope, npm's `hasInstallScript`,
+a PyPI file's `packagetype == sdist` — and support **pure** rules. Others are
+*not* exposed in any metadata response and must be fetched and parsed per
+version. RubyGems is the motivating case: a gem's native `extensions` — its
+install-time code-execution signal, the analog of npm's install scripts — appears
+only in the gemspec inside the `.gem` (or the legacy `quick` Marshal spec), never
+in the Compact Index or the JSON API (see
+[`research/reverse-engineering/rubygems.md`](research/reverse-engineering/rubygems.md)).
+A rule over such a signal is necessarily **effectful**, even though it is
+conceptually a simple per-version predicate. Guidance: `parseVersionDetails`
+populates `PackageDetails` from the cheap metadata path; a signal that needs an
+extra fetch belongs in the effectful tier alongside advisory lookups, and the
+same logical rule (e.g. `DenyHasInstallScript`) may therefore land in different
+tiers for different ecosystems.
+
 ### Evaluation model
 
 Each rule, applied to a `PackageDetails`, yields a `RuleOutcome`:
