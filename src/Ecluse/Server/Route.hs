@@ -41,6 +41,7 @@ module Ecluse.Server.Route (
     classify,
 ) where
 
+import Data.Char (isControl)
 import Data.Text qualified as T
 
 import Ecluse.Ecosystem (Ecosystem (Npm))
@@ -100,7 +101,7 @@ classifyPackage segments =
   where
     dispatch name = \case
         [] -> Packument name
-        ["-", file] | isTarballFile file -> Tarball name file
+        ["-", file] | isTarballFile file && isSafeComponent file -> Tarball name file
         _ -> Unsupported
 
 {- | Peel the leading package unit off a path, returning its 'PackageName' and
@@ -110,16 +111,17 @@ the remaining segments. Handles both wire encodings of a scoped name:
 * two segments, @\@scope@ then @pkg@ — consume both.
 
 Returns 'Nothing' (so the caller denies it) for anything without a usable
-package: an empty path, an empty leading segment, or a __degenerate scoped
-name__ — one whose scope is empty (@\@\/pkg@), whose base name is empty
-(@\@scope\/@, reachable from @\/\@scope%2F@), or whose base name still contains a
-@\'\/\'@ (@\@scope\/a\/b@). 'mkScope'\/'mkPackageName' do no validation, so this
-boundary is where such names are rejected rather than passed downstream.
+package: an empty path, or a name with an __unsafe component__ — a scope or base
+name that 'isSafeComponent' rejects (empty, @"."@\/@".."@, or carrying a
+@\'\/\'@, @\'\\\\\'@, or control character). This covers the degenerate scoped
+names (@\@\/pkg@, @\@scope\/@ reachable from @\/\@scope%2F@, @\@scope\/a\/b@) and
+the hostile unscoped names (@\/foo%2Fbar@ → @"foo\/bar"@, @".."@, @"."@) alike.
+'mkScope'\/'mkPackageName' do no validation, so this boundary is where such names
+are rejected rather than passed downstream into an interpolated upstream URL.
 -}
 takePackage :: [Text] -> Maybe (PackageName, [Text])
 takePackage [] = Nothing
 takePackage (seg : rest)
-    | T.null seg = Nothing
     | "@" <- T.take 1 seg =
         case T.breakOn "/" (T.drop 1 seg) of
             -- One decoded segment "@scope/pkg": scope before the '/', base after.
@@ -131,21 +133,44 @@ takePackage (seg : rest)
             _ -> case rest of
                 (base : more) -> (,more) <$> scopedName (T.drop 1 seg) base
                 _ -> Nothing
-    | otherwise = Just (mkPackageName Npm Nothing seg, rest)
+    | isSafeComponent seg = Just (mkPackageName Npm Nothing seg, rest)
+    | otherwise = Nothing
   where
-    -- A scoped name is usable only when both halves are non-empty and the base
-    -- carries no further '/' — an npm name never contains '/' beyond the scope
-    -- separator. The leading '@' is already stripped from both arguments, so a
-    -- degenerate name ('@/pkg', '@scope/', '@scope/a/b') is rejected here rather
-    -- than passed to the no-op 'mkScope'/'mkPackageName'.
+    -- A scoped name is usable only when both halves are safe components. The
+    -- leading '@' is already stripped from both arguments, so a degenerate or
+    -- hostile name ('@/pkg', '@scope/', '@scope/a/b', '@../pkg') is rejected here
+    -- rather than passed to the no-op 'mkScope'/'mkPackageName'.
     scopedName :: Text -> Text -> Maybe PackageName
     scopedName scope base
-        | T.null scope || T.null base || T.isInfixOf "/" base = Nothing
-        | otherwise = Just (mkPackageName Npm (Just (mkScope scope)) base)
+        | isSafeComponent scope && isSafeComponent base =
+            Just (mkPackageName Npm (Just (mkScope scope)) base)
+        | otherwise = Nothing
+
+{- | Whether a single decoded path component is __safe to interpolate__ into a
+downstream upstream URL — the one deny-by-default gate the router applies to
+every component it accepts (scope, base name, and tarball filename).
+
+WAI percent-decodes @pathInfo@, so a single segment can carry a @\'\/\'@, a
+@\'\\\\\'@, a control character, or be @"."@\/@".."@; any of these enables path
+traversal or request smuggling once the name reaches the upstream URL. A
+component is UNSAFE iff it is empty, is exactly @"."@ or @".."@, or contains a
+@\'\/\'@, a @\'\\\\\'@, or any 'isControl' character. Everything else is
+accepted: this is a security boundary, __not__ an npm-policy validator, so
+ordinary names with interior dots (@lodash.merge@, @is.odd@), hyphens,
+underscores, digits, or uppercase all pass.
+-}
+isSafeComponent :: Text -> Bool
+isSafeComponent c =
+    not (T.null c)
+        && c /= "."
+        && c /= ".."
+        && T.all safeChar c
+  where
+    safeChar ch = ch /= '/' && ch /= '\\' && not (isControl ch)
 
 {- | Whether a tarball-slot filename is an npm tarball — a non-empty name ending
-in @.tgz@. Guards the 'Tarball' route so a non-artifact file under @\/-\/@ falls
-through to 'Unsupported'.
+in @.tgz@. Guards the 'Tarball' route (alongside 'isSafeComponent') so a
+non-artifact file under @\/-\/@ falls through to 'Unsupported'.
 -}
 isTarballFile :: Text -> Bool
 isTarballFile file = T.isSuffixOf ".tgz" file && T.length file > T.length ".tgz"
