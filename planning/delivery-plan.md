@@ -186,12 +186,19 @@ parallel, then converge at M3:
 - **Wave 1 — independent roots (no deps):** `S02` (seams), `S06` (npm decoders),
   `S10` (router). _S05 (rules precedence) is also dependency-free and is the
   natural next pull as a slot frees._
-- **Wave 2:** `S01` (Env, needs S02), `S07` (npm projection, needs S06), `S11`
-  (responses, needs S05/S10).
-- **Wave 3:** `S03` + `S04` (config/logging), `S08` (npm fetch/publish), `S12`
-  (WAI app). `S03` also depends on `S05` (the rule model its default-policy merge
-  layers over), which lands in Wave 1–2. `S16` (credential wrapper) can pull in
-  here — it depends only on the seam (S02) and de-risks M4 early.
+- **Wave 2 (in flight):** `S01` (Env, needs S02), `S05` (rules precedence, root),
+  `S07` (npm projection, needs S06). _`S11` (responses) moves to Wave 3 — it needs
+  `S05`, which is pulled forward into Wave 2._
+- **Between waves — quality & alignment pass.** Once a wave's PRs are all merged,
+  and before the next wave is dispatched, run the codebase-wide
+  [quality & alignment pass](orchestration-strategy.md#inter-wave-quality--alignment-pass)
+  (structural / Haddock / performance — e.g. needless `String`↔`Text`↔`ByteString`
+  conversions). **Wave 3 does not start until Wave 2 (S01, S05, S07) is merged and
+  this pass is done.**
+- **Wave 3:** `S03` + `S04` (config/logging), `S08` (npm fetch/publish), `S11`
+  (responses), `S12` (WAI app). `S03` also depends on `S05` (the rule model its
+  default-policy merge layers over). `S16` (credential wrapper) can pull in here —
+  it depends only on the seam (S02) and de-risks M4 early.
 - **Converge:** `S09` → `S13`, with `S33` (pure cross-upstream merge, needs only
   `S07`) → `S14` (**walking skeleton closes**) → `S15`.
 - **Then:** M4 (AWS) and M5 (CVE) layer on; M6/M8 run as independent parallel
@@ -210,8 +217,9 @@ parallel, then converge at M3:
 
 ## In flight
 
-_Nothing yet — awaiting architect sign-off on this plan. Once approved, Wave 1
-(S02, S06, S10) is dispatched, one worktree per slice._
+_Wave 1 (S02, S06, S10) merged. **Wave 2 in flight:** S01, S05, S07 (one worktree
+per slice). The inter-wave [quality & alignment pass](orchestration-strategy.md#inter-wave-quality--alignment-pass)
+runs once all three merge, before Wave 3 dispatches._
 
 ---
 
