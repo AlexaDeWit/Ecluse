@@ -36,6 +36,13 @@ cabal test
 cabal run npm-secure-proxy
 ```
 
+### Continuous integration
+
+Every push and pull request runs [`.github/workflows/ci.yml`](.github/workflows/ci.yml),
+which builds the library, executable, and tests and runs the test suite. CI uses
+the same Nix dev shell as local development (pinned by `flake.lock`), so it
+validates against the exact same toolchain.
+
 ## Project Structure
 
 | Path | Purpose |

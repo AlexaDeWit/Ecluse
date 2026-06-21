@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+# Cancel in-progress runs for the same ref when a new commit is pushed.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build & test
+    runs-on: ubuntu-latest
+    env:
+      # Pin the cabal store to a deterministic, cacheable location.
+      CABAL_DIR: ${{ github.workspace }}/.cabal
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Reproducible toolchain: CI uses the exact same dev shell as developers,
+      # pinned by flake.lock. GHC/cabal come prebuilt from cache.nixos.org.
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+
+      - name: Cache cabal store & build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ github.workspace }}/.cabal
+            dist-newstyle
+          key: ${{ runner.os }}-cabal-${{ hashFiles('flake.lock', '**/*.cabal', 'cabal.project') }}
+          restore-keys: |
+            ${{ runner.os }}-cabal-
+
+      - name: Update package index
+        run: nix develop --command cabal update
+
+      - name: Build (library, executable, tests)
+        run: nix develop --command cabal build all --enable-tests
+
+      - name: Test
+        run: nix develop --command cabal test all --test-show-details=direct
