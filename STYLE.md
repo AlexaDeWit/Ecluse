@@ -378,14 +378,63 @@ supply-chain resilience tool; a comment that explains the threat a rule defends
 against (as `AllowIfPublishedBefore` does above) is worth more than one
 describing the mechanics.
 
-**Rule 5.5 — Use Haddock markup consistently:**
-- `'identifier'` links to a function or type — `produces a 'Decision'`.
-- `"Module.Name"` links to a module — `see "Ecluse.Rules.Types"`.
-- `@code@` for inline code/literals — `@"1.2.3"@`; escape special characters
-  (`@\@scope\/name@`).
-- `__bold__` for load-bearing emphasis (`__deny by default__`); `/italic/`
-  sparingly.
-- `-- * Heading` for export-list sections (§4).
+**Rule 5.5 — Use Haddock markup, and use it consistently.** The same intent must
+be expressed the same way in every module — inconsistent markup is what makes a
+generated API page look untrustworthy. This is the whole vocabulary we use:
+
+| Want | Write | Renders as |
+|------|-------|-----------|
+| Link an identifier | `'mkScope'` | a link to `mkScope` |
+| Link a module | `"Ecluse.Rules.Types"` | a link to the module |
+| Inline code / a literal | `@"1.2.3"@` | `"1.2.3"` in monospace |
+| Load-bearing emphasis | `__deny by default__` | **deny by default** |
+| Italic (sparingly) | `/why/` | *why* |
+| Export-list section | `-- * Scopes` | a doc section (§4.7) |
+| Header subsection | `== Conventions` | a section heading (Rule 5.7) |
+
+Two facts about this markup are the source of almost every mess, so internalise
+them:
+
+- **Only `'name'` wrapped tightly around a real identifier is a link.** An
+  apostrophe in ordinary prose is just an apostrophe: write possessives and
+  contractions **bare** — `npm's`, `aeson's`, `the package's name`. **Never**
+  backslash-escape a prose apostrophe (`npm\'s`) — it renders identically and is
+  pure noise. (Half our modules escaped every apostrophe and half escaped none,
+  for zero rendered difference; the bare form is the standard.) A `'` needs a
+  `\'` escape only in the rare case where it would otherwise be misread as an
+  identifier link.
+- **The active characters are `@`, `<`, `>` (and `'`).** `@` toggles inline
+  code; `<…>` is a hyperlink. To show one of these *literally*, escape it: `\@`,
+  `\<`, `\>`. Escape **nothing else** — backslashes in front of `-`, `.`, `/` in
+  prose, or apostrophes are the noise to delete.
+
+**Inline literals — wrap them in `@…@`, and escape the delimiter inside.** A code
+span shows text verbatim, but a literal `@` inside one would *close* it early, so
+escape it as `\@` (and `/` as `\/` where it could read as path markup). This is
+how a scoped name's at-sign and slash are shown:
+
+```haskell
+-- A literal "@scope/name":
+@\@scope\/name@                       -- renders: @scope/name
+```
+
+**The code-span-quote pitfall — never write `@\'@\'@`.** A neat idiom for a
+*quoted* character is `@\'X\'@`, which renders `'X'` — but it breaks silently
+when `X` is the `@` delimiter itself. In `@\'@\'@` the middle `@` *closes* the
+span: the at-sign disappears, and the now-unbalanced `@` bleeds into whatever
+follows. Escape the inner `@`:
+
+```haskell
+-- WRONG — renders an empty '' and leaks `@.` into the next declaration's name:
+-- | The bare scope text, without the leading @\'@\'@.
+
+-- RIGHT — renders '@':
+-- | The bare scope text, without the leading @\'\@\'@.
+```
+
+This guide gained this rule the hard way: that exact construct shipped in
+`Ecluse.Package`, so every `Scope` accessor rendered `''@.` and the stray `@`
+corrupted the section heading next to it.
 
 **Rule 5.6 — Document the code, not the project.** Haddock is the durable
 contract and the *why*, read out of context long after any PR — so it must not
@@ -407,6 +456,35 @@ carry project / PR-management narration:
 The test: if a sentence would read as false or pointless a year on — once the
 "later" work has landed — it is project narration; cut it. The model, the
 decisions, and the security *why* (Rule 5.4) stay.
+
+**Rule 5.7 — Structure a long module header; keep a short one flat.** A header
+that covers several distinct points reads far better with Haddock *subsection
+headings* (`==`, and `===` below it) than as one wall of prose — they render as
+real sections with their own quick-jump entries. Use them when the header earns
+them (`Ecluse.Queue`'s `== Conventions`, `Ecluse.Registry.Npm.Wire`'s
+`== Lenient on input` / `== Faithful on the rule-decisive fields`). A short
+header stays a lead paragraph, optionally followed by a `*` bullet list (as in
+`Ecluse.Package`). Pick one shape per header and don't leave three different
+styles scattered across sibling modules.
+
+**Rule 5.8 — Don't over-escape; match the nearest module.** Reach for markup
+only where it changes the render, and before adding any, glance at a sibling
+module and copy how it does it. When two modules document the same kind of thing
+two different ways — one escaping every apostrophe, one escaping none — the
+reader pays for the inconsistency even though both "work". The bare, minimal form
+wins (Rule 5.5).
+
+**Rule 5.9 — Read the rendered page, not just the source.** A markup bug is
+invisible in the source — `@\'@\'@` looks deliberate until you see the `''` it
+produces. Build the docs and *look* at the module you touched:
+
+```sh
+make docs        # build hyperlinked, searchable Haddock and open it
+```
+
+A new or reworked header is not done until its rendered page is clean: every
+`'identifier'`/`"Module"` link resolves, code spans are closed, no stray `@` or
+backslashes leak into prose, and headings nest as intended.
 
 ---
 
@@ -645,6 +723,8 @@ three-tier strategy are in `CONTRIBUTING.md`; this is style.)
       tests, fourmolu, hlint, Semgrep).
 - [ ] Every new module has a Haddock header; every exported type and function
       has a Haddock comment; record fields and sum constructors are documented.
+      Markup follows §5.5 (bare prose apostrophes, no over-escaping) and the
+      rendered page was checked (`make docs`, Rule 5.9).
 - [ ] New domain values are newtypes; opaque ones expose `mk*`/`un*`/`render*`
       as appropriate.
 - [ ] No partial functions; no `error`/`undefined`/`unsafePerformIO` (a

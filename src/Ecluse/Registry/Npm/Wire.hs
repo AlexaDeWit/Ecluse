@@ -20,15 +20,15 @@ endpoints, so every decoder here is forgiving in three specific ways, matching
 the documented reality:
 
 * __Unknown keys are ignored.__ Manifests carry arbitrary author keys
-  (@gitHead@, @exports@, tool-config blocks like @is-odd@\'s @verb@) and
+  (@gitHead@, @exports@, tool-config blocks like @is-odd@'s @verb@) and
   registry bookkeeping (@_npmOperationalInternal@); a decoder must not choke on
-  them. aeson\'s record decoders already ignore extra keys, so this falls out of
+  them. aeson's record decoders already ignore extra keys, so this falls out of
   using @(.:?)@\/@(.:)@ rather than enumerating the whole object.
 * __String-or-object scalars.__ @license@, @bugs@, @repository@, and the
   @author@\/maintainer person fields each arrive as /either/ a bare string /or/
-  an object, depending on the package\'s age and tooling. Each corresponding
+  an object, depending on the package's age and tooling. Each corresponding
   type ('License', 'Bugs', 'Repository', 'Person') therefore parses both shapes.
-* __The bare-string error body.__ npm\'s per-version 404 is a bare JSON
+* __The bare-string error body.__ npm's per-version 404 is a bare JSON
   __string__ (@"version not found: ^3.0.0"@), not the documented
   @{error|message}@ object. 'ErrorResponse' tolerates both.
 
@@ -36,10 +36,10 @@ the documented reality:
 
 The fields the rules engine and the serving path actually need are captured
 precisely: the abbreviated-only 'vmHasInstallScript' flag, the 'vmDeprecated'
-notice, the whole 'vmScripts' map (so the full form\'s install-script presence
+notice, the whole 'vmScripts' map (so the full form's install-script presence
 can be /derived/ — the full manifest has no @hasInstallScript@ key), the
 'Dist' integrity triple (@tarball@\/@shasum@\/@integrity@), and the full
-packument\'s 'pkmtTime' map (the source of truth for publish age, which the
+packument's 'pkmtTime' map (the source of truth for publish age, which the
 abbreviated form drops).
 
 Only the decode path (@FromJSON@) is modelled here.
@@ -89,12 +89,12 @@ a single packed string of the conventional form
 @"Name \<email\> (url)"@. The packed form is captured __verbatim__ in
 'personName' (with 'personEmail'\/'personUrl' left 'Nothing'); this wire layer
 does not attempt to split it, leaving that to the domain projection if it is ever
-needed. Distinct from "Ecluse.Package"\'s domain @Person@ — this is the raw wire
+needed. Distinct from "Ecluse.Package"'s domain @Person@ — this is the raw wire
 shape.
 -}
 data Person = Person
     { personName :: Text
-    -- ^ The person\'s name. For the packed-string form, the entire string as
+    -- ^ The person's name. For the packed-string form, the entire string as
     -- sent (e.g. @"Mikeal Rogers \<mikeal\@example.com\>"@).
     , personEmail :: Maybe Text
     -- ^ Their email address, if given as an object field.
@@ -186,7 +186,7 @@ instance FromJSON License where
 -- ── the dist object ──────────────────────────────────────────────────────────
 
 {- | One registry signature over a published artifact: an ECDSA signature and
-the id of the key that produced it. Verifiable against npm\'s published public
+the id of the key that produced it. Verifiable against npm's published public
 keys (@GET \/-\/npm\/v1\/keys@) — the basis of @npm audit signatures@.
 -}
 data Signature = Signature
@@ -217,7 +217,7 @@ data Dist = Dist
     { distTarball :: Text
     -- ^ Absolute URL of the @.tgz@ artifact. Always present.
     , distShasum :: Maybe Text
-    -- ^ The tarball\'s SHA-1, hex-encoded (legacy integrity).
+    -- ^ The tarball's SHA-1, hex-encoded (legacy integrity).
     , distIntegrity :: Maybe Text
     -- ^ The Subresource-Integrity string (@"\<alg\>-\<base64\>"@, e.g.
     -- @"sha512-…"@). The modern integrity check; prefer it over the shasum.
@@ -242,13 +242,13 @@ instance FromJSON Dist where
 
 -- ── version manifest ─────────────────────────────────────────────────────────
 
-{- | A single version\'s manifest — the per-version object that is essentially
-the package\'s @package.json@ at publish time plus registry-injected fields. It
+{- | A single version's manifest — the per-version object that is essentially
+the package's @package.json@ at publish time plus registry-injected fields. It
 appears three ways on the wire and this one type decodes all of them: embedded in
 a full 'Packument' (@versions[v]@), embedded in an 'AbbreviatedPackument' (a
 trimmed subset of the same shape), and standalone (@GET \/{pkg}\/{version}@).
 
-Only the fields Écluse\'s rules and serving need are modelled; everything else is
+Only the fields Écluse's rules and serving need are modelled; everything else is
 ignored (see the module header). The two rule-decisive optionals deserve note:
 
 * 'vmHasInstallScript' is __abbreviated-only__ — the registry sets it when the
@@ -257,9 +257,9 @@ ignored (see the module header). The two rule-decisive optionals deserve note:
 * 'vmScripts' is therefore captured whole so that, when only the full form is
   available, install-script presence can be /derived/
   (@scripts@ has any of @preinstall@\/@install@\/@postinstall@). That derivation
-  is a domain-projection concern, not this layer\'s.
+  is a domain-projection concern, not this layer's.
 
-The publish timestamp is __not__ here — it lives in the packument\'s
+The publish timestamp is __not__ here — it lives in the packument's
 'pkmtTime' map, not the manifest (see §8 of the protocol reference).
 -}
 data VersionManifest = VersionManifest
@@ -282,7 +282,7 @@ data VersionManifest = VersionManifest
     , vmLicense :: Maybe License
     -- ^ The declared license, if any (string or legacy object; see 'License').
     , vmMaintainers :: [Person]
-    -- ^ The package\'s maintainers as carried on this manifest; empty when
+    -- ^ The package's maintainers as carried on this manifest; empty when
     -- absent.
     , vmDependencies :: Map Text Text
     -- ^ Runtime dependencies (name to semver __range__), empty when absent. The
@@ -384,7 +384,7 @@ data AbbreviatedPackument = AbbreviatedPackument
     { apkmtName :: Text
     -- ^ The package name.
     , apkmtModified :: UTCTime
-    -- ^ Equivalent to the full form\'s @time.modified@; the only timestamp the
+    -- ^ Equivalent to the full form's @time.modified@; the only timestamp the
     -- abbreviated form carries.
     , apkmtDistTags :: Map Text Text
     -- ^ The @dist-tags@ map (tag to version), as in the full form.
@@ -412,16 +412,16 @@ inconsistent — its per-version 404 is a bare JSON __string__
 (@"version not found: ^3.0.0"@), not an object. This type tolerates both: the
 object form keeps its fields in an 'ErrorBody', and a bare string is captured
 whole as 'ErrorString'. Read the human-facing reason via 'errorMessage', which
-applies npm\'s "@message@, then @error@" precedence across both shapes.
+applies npm's "@message@, then @error@" precedence across both shapes.
 -}
 data ErrorResponse
     = -- | The documented object form @{ message?, error? }@.
       ErrorObject ErrorBody
-    | -- | A bare JSON string body (npm\'s per-version 404), captured whole.
+    | -- | A bare JSON string body (npm's per-version 404), captured whole.
       ErrorString Text
     deriving stock (Eq, Show)
 
-{- | The fields of npm\'s object-form error body. A product type (not inline
+{- | The fields of npm's object-form error body. A product type (not inline
 constructor fields on 'ErrorResponse') so its selectors are __total__ — there is
 no @ErrorString@ case for them to be partial over.
 -}
@@ -443,7 +443,7 @@ instance FromJSON ErrorResponse where
                     <*> o .:? "error"
         other -> typeMismatchOneOf "ErrorResponse (object or string)" other
 
-{- | The human-facing reason carried by an error body, applying npm\'s documented
+{- | The human-facing reason carried by an error body, applying npm's documented
 precedence: prefer @message@, then @error@, and for the bare-string form the
 string itself. 'Nothing' only when an object form carried neither field. Total.
 -}
@@ -462,7 +462,7 @@ typeMismatchOneOf :: String -> Value -> Parser a
 typeMismatchOneOf expected actual =
     fail ("expected " <> expected <> ", but encountered " <> valueKind actual)
 
--- | A short, human description of a JSON value\'s kind, for parse-error messages.
+-- | A short, human description of a JSON value's kind, for parse-error messages.
 valueKind :: Value -> String
 valueKind = \case
     Object{} -> "an object"
