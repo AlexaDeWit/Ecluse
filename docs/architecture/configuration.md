@@ -74,6 +74,29 @@ position** (allow or deny); at equal precedence, deny wins; if every rule
 abstains, the package is denied by default. See
 [Rules Engine → Evaluation model](rules-engine.md#evaluation-model).
 
+### Validation: fail fast, reject the unknown
+
+Config is **validated in full at startup, and the process refuses to start on any
+problem** — it never runs in a degraded or partially-applied state. Errors are
+**aggregated** (as `envparse` does for env vars) so one run reports every issue,
+not just the first.
+
+Crucially, **unknown is an error, not a silent skip**:
+
+- An unknown rule `type` is **rejected, not ignored**. Silently dropping a
+  misspelled rule is a security hole: a typo'd **deny** rule
+  (`DenyHasInstallScript` vs `DenyHasInstallScripts`) would vanish and stop
+  blocking, and a typo'd **allow** rule would over-deny. Deny-by-default only
+  protects you if the policy you wrote is the policy that loaded.
+- **Unknown fields/keys are rejected** too — config is operator-authored
+  alongside the binary, so forward-compat tolerance buys little and costs
+  typo-catching; the decoders are strict rather than aeson's permissive default.
+- **Malformed values** (bad URL, non-integer precedence, unparseable JSON) fail
+  the same way.
+
+A bad config is thus a loud, immediate startup failure an operator sees and fixes,
+never a quietly mis-enforced policy.
+
 ## Client Authentication
 
 This section covers **inbound** auth (client → proxy). **Outbound** auth
