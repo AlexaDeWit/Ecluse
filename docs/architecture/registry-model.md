@@ -19,9 +19,9 @@ interface between the proxy logic and any specific registry protocol:
 
 ```haskell
 data RegistryClient = RegistryClient
-  { fetchMetadata    :: PackageId -> IO RegistryResponse
-  , fetchArtifact    :: PackageId -> Version -> IO RegistryResponse
-  , publishArtifact  :: PackageId -> Version -> ByteString -> IO (Either PublishError ())
+  { fetchMetadata    :: PackageName -> IO RegistryResponse
+  , fetchArtifact    :: PackageName -> Version -> IO RegistryResponse
+  , publishArtifact  :: PackageName -> Version -> ByteString -> IO (Either PublishError ())
   , parsePackageInfo :: RegistryResponse -> Either ParseError PackageInfo
   , parseVersionDetails :: RegistryResponse -> Version -> Either ParseError PackageDetails
   , parseVersionList :: RegistryResponse -> Either ParseError [Version]

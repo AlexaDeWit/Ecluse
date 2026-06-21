@@ -7,7 +7,7 @@
 Mirroring is **demand-driven**: when a client pulls an *artifact* whose version
 passes the rules (the tarball path on a private-upstream miss), the proxy:
 
-1. Enqueues a mirror job (the mirror target URL, package ID, version, and
+1. Enqueues a mirror job (the mirror target URL, package name, version, and
    artifact location) to the configured **mirror queue**.
 2. Returns the artifact to the client **immediately** — no blocking on mirror
    completion.
