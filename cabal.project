@@ -1,5 +1,14 @@
 packages: .
 
+-- Enable the test suites in the solver for *every* command, so a bare
+-- `cabal test <suite>` (as `make test` runs) resolves a tests-inclusive plan
+-- instead of failing with Cabal-7043. Without this, `cabal test` does not pass
+-- `--enable-tests` to the solver and can pick a tests-disabled plan once the
+-- library gains a non-trivial dependency closure (e.g. aeson) — even though
+-- `cabal build --enable-tests` succeeds. Keeping it here makes `make build` and
+-- `make test` resolve identically.
+tests: True
+
 -- Warnings are errors for our own package, in CI and locally. GHC is pinned by
 -- flake.lock, so there is no "new compiler surfaces new warnings" surprise to
 -- guard against. Scoped to `ecluse` so dependencies (which we do not control)

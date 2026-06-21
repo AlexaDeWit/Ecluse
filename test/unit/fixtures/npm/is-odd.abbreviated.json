@@ -1,0 +1,22 @@
+{
+  "dist-tags": { "latest": "3.0.1" },
+  "modified": "2026-04-14T14:26:11.557Z",
+  "name": "is-odd",
+  "versions": {
+    "3.0.1": {
+      "name": "is-odd",
+      "version": "3.0.1",
+      "dependencies": { "is-number": "^6.0.0" },
+      "devDependencies": { "mocha": "^3.5.3", "gulp-format-md": "^1.0.0" },
+      "engines": { "node": ">=4" },
+      "dist": {
+        "shasum": "65101baf3727d728b66fa62f50cda7f2d3989601",
+        "tarball": "https://registry.npmjs.org/is-odd/-/is-odd-3.0.1.tgz",
+        "integrity": "sha512-CQpnWPrDwmP1+SMHXZhtLtJv90yiyVfluGsX5iNCVkrhQtU3TQHsUWPG9wkdk9Lgd5yNpAg9jQEo90CBaXgWMA==",
+        "fileCount": 4,
+        "unpackedSize": 6510,
+        "signatures": [ { "sig": "MEUCIQ", "keyid": "SHA256:jl3bwswu80" } ]
+      }
+    }
+  }
+}

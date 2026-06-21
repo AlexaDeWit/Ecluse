@@ -1,0 +1,22 @@
+{
+  "_id": "core-js@3.49.0",
+  "name": "core-js",
+  "version": "3.49.0",
+  "description": "Standard library",
+  "license": "MIT",
+  "scripts": {
+    "postinstall": "node -e \"try{require('./postinstall')}catch(e){}\""
+  },
+  "_npmUser": { "name": "zloirock", "email": "zloirock@zloirock.ru" },
+  "_npmVersion": "10.2.4",
+  "_nodeVersion": "20.11.0",
+  "_npmOperationalInternal": { "host": "s3://npm-registry-packages", "tmp": "tmp/core-js" },
+  "dist": {
+    "shasum": "aaaabbbbccccddddeeeeffff0000111122223333",
+    "tarball": "https://registry.npmjs.org/core-js/-/core-js-3.49.0.tgz",
+    "integrity": "sha512-AAAABBBBCCCCDDDDEEEEFFFF00001111222233334444555566667777888899==",
+    "fileCount": 1455,
+    "unpackedSize": 6789012,
+    "signatures": [ { "sig": "MEQCIH", "keyid": "SHA256:jl3bwswu80" } ]
+  }
+}
