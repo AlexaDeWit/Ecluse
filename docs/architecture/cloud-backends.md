@@ -188,12 +188,42 @@ unit-tested deterministically.
 ### Queue abstraction
 
 The queue is the one piece with materially different APIs per cloud, so it is its
-own seam — a `MirrorQueue` with `enqueue` / `receive` / `ack` operations. SQS
-(`SendMessage` / `ReceiveMessage` + visibility timeout / `DeleteMessage`) and
-Pub/Sub (`Publish` / `Pull` + ack deadline / `Acknowledge`) both fit this
-receive → process → ack shape; the differences (visibility timeout vs ack
-deadline, dead-letter configuration) stay behind the seam. The provider is chosen
-by configuration (see [Configuration](configuration.md#configuration)).
+own seam. The record returns `IO` (per the
+[effect model](technology-stack.md#key-decisions)):
+
+```haskell
+data MirrorQueue = MirrorQueue
+  { enqueue          :: MirrorJob -> IO ()        -- producer; best-effort (see below)
+  , receive          :: IO [QueueMessage]         -- consumer; one long-poll, [] on timeout
+  , ack              :: ReceiptHandle -> IO ()
+  , extendVisibility :: ReceiptHandle -> Seconds -> IO ()
+  }
+
+data QueueMessage     = QueueMessage { job :: MirrorJob, receipt :: ReceiptHandle }
+newtype ReceiptHandle = ReceiptHandle Text        -- opaque: SQS receipt handle | Pub/Sub ackId
+```
+
+SQS (`SendMessage` / `ReceiveMessage`+visibility-timeout / `DeleteMessage`) and
+Pub/Sub (`Publish` / `Pull`+ack-deadline / `Acknowledge`) both fit this
+receive → process → ack shape; their differences (visibility timeout vs ack
+deadline, batch limits, dead-letter wiring) stay behind the seam, and
+`ReceiptHandle` is opaque so neither leaks. Conventions:
+
+- **`enqueue` is best-effort.** It runs on the request hot path (enqueue, then
+  serve immediately), so a failure is logged/metered and **never fails the client
+  response** — the artifact is already served, and a later pull re-enqueues.
+- **Retry is "don't ack."** A job that fails processing is simply not acked; the
+  visibility timeout / ack deadline redelivers it, and the backend's native
+  **dead-letter** path (max-receive-count) catches the persistently failing ones.
+  There is no explicit `nack`. Redelivery is safe because publishing is idempotent
+  (see [Mirror Queue](#mirror-queue)).
+- **`extendVisibility`** lets the worker hold a long publish (a large artifact)
+  past the visibility window; it is an optimization, not correctness-critical,
+  since idempotency already makes redelivery harmless.
+- **Batch size, long-poll window, and visibility timeout are configuration**
+  (per provider, with sane defaults).
+
+The provider is chosen by [configuration](configuration.md#configuration).
 
 ### Haskell client maturity — a design risk to retire early
 
