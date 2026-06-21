@@ -27,41 +27,17 @@ configurable policy on what may be fetched and mirrored from the public registry
 
 ## Request Lifecycle
 
-```
-Client request
-    │
-    ▼
-[1] Fetch from private upstream
-    │
-    ├─ 2xx ──────────────────────────────────────────► Serve to client. Done.
-    │
-    └─ non-2xx (miss)
-        │
-        ▼
-    [2] Fetch from public upstream
-        │
-        ├─ non-2xx ──────────────────────────────────► Forward error to client.
-        │
-        └─ 2xx
-            │
-            ▼
-        [3] Parse into PackageInfo / PackageDetails
-            │
-            ▼
-        [4] Evaluate RuleSet (deny by default)
-            │
-            ├─ Pure rules first (no IO, fast)
-            ├─ Effectful rules if undecided (CVE lookups, etc.)
-            │
-            ├─ Denied ──────────────────────────────► 403 + denial message. Done.
-            │
-            └─ Allowed
-                │
-                ▼
-            [5] Enqueue mirror job — non-blocking
-                │
-                ▼
-            [6] Serve response to client immediately
+```mermaid
+flowchart TD
+    C(["Client request"]) --> P1["1. Fetch from private upstream"]
+    P1 -->|"2xx"| SV(["Serve to client. Done."])
+    P1 -->|"non-2xx (miss)"| P2["2. Fetch from public upstream"]
+    P2 -->|"non-2xx"| ERR(["Forward error to client."])
+    P2 -->|"2xx"| P3["3. Parse into PackageInfo / PackageDetails"]
+    P3 --> P4{"4. Evaluate RuleSet (deny by default)<br/>pure rules first; effectful if undecided"}
+    P4 -->|"Denied"| D(["403 + denial message. Done."])
+    P4 -->|"Allowed"| P5["5. Enqueue mirror job (non-blocking)"]
+    P5 --> P6(["6. Serve response to client immediately"])
 ```
 
 A **tarball/artifact** request is gated for *that one version*: a private-upstream
@@ -84,6 +60,7 @@ versions** (denied versions removed, `latest` repointed to the newest survivor,
 
 | Document | Covers |
 |---|---|
+| [Diagrams](architecture/diagrams.md) | **Visual companion (Mermaid):** system overview, packument / tarball / worker sequences, and the rules-engine and credential lifecycles. |
 | [Registry Model](architecture/registry-model.md) | The three-registry model and the `RegistryClient` protocol seam. |
 | [Internal Domain Model](architecture/domain-model.md) | `PackageDetails` and the ecosystem-agnostic signal vocabulary the rules engine consumes. |
 | [Multi-Ecosystem Hosting](architecture/hosting.md) | Mounting ecosystems under path prefixes, URL rewriting, and dispatch. |
