@@ -99,7 +99,7 @@ govern it:
 | Concern | Representation | Why |
 |---|---|---|
 | **Identity** | `PackageName`: ecosystem tag + optional namespace (npm scope) + a normalised `canonical` key + a `display` form; equality is on the canonical key only. | npm is case-sensitive with scopes, PyPI normalises (PEP 503), RubyGems is verbatim — matching must use one canonical key while rendering stays faithful. |
-| **Version** | opaque text, **no derived `Ord`**; ordering is `compareVersion ecosystem` (semver / PEP 440 / `Gem::Version`). | Lexicographic ordering is wrong for every grammar (`"10.0.0" < "9.0.0"`). |
+| **Version** | opaque; holds the raw text (round-trip) **plus** a `Maybe VersionKey` parsed at construction. `parseVersionKey :: Ecosystem -> Text -> Either VersionError VersionKey` is the only way to obtain a `VersionKey`, and `compareVersions` is defined *only* on keys — so non-canonical text cannot reach the comparator (parse, don't validate). Unparseable ⇒ no key ⇒ ordering rules abstain, but the version is still served. | Lexicographic ordering is wrong for every grammar (`"10.0.0" < "9.0.0"`); and a proxy must keep serving a version even when our hand-rolled parser can't order it. |
 | **Install-time code execution** | `CodeExecSignal = NoCodeOnInstall \| RunsCodeOnInstall reason \| CodeExecUnknown`. | Unifies npm install scripts, PyPI sdist builds, and RubyGems native extensions; `Unknown` carries the gemspec-fetch case. |
 | **Trust / provenance** | `Trust = Trusted (NonEmpty TrustEvidence) \| Untrusted \| TrustUnknown`; `TrustEvidence = Signed \| Attested \| MfaPublished \| OtherEvidence text`. | Signing/attestation/MFA differ per ecosystem but reduce to one signal; the evidence captures the *how* without leaking the ecosystem. |
 | **Availability** | `Availability = Available \| Deprecated msg \| Yanked (Maybe reason)`, plus a per-artifact `artYanked`. | npm deprecates (advisory) and RubyGems yanks whole versions; PyPI yanks individual *files* — the per-file flag preserves PyPI's "listed-but-yanked" so exact pins still resolve. |
@@ -113,8 +113,13 @@ time):
 
 1. **Yank/availability granularity** — version-level `Availability` **and** a
    per-artifact `artYanked` flag (faithful to all three ecosystems).
-2. **Version ordering** — implemented now, per-ecosystem (`compareVersion`),
-   rather than deferred; `Version`'s misleading derived `Ord` was dropped.
+2. **Version ordering** — built now, per-ecosystem, and made *parse, don't
+   validate*: an ecosystem-aware parser (`parseVersionKey`) yields an opaque,
+   canonical `VersionKey`, and comparison is defined only on keys.  `Version`
+   keeps the raw text for round-trip plus a `Maybe VersionKey`, so an
+   unparseable version is still served but causes ordering rules to abstain
+   (the same Unknown→abstain pattern as the other signals). The misleading
+   derived `Ord` is gone.
 3. **Ecosystem-specific signals** — folded into ecosystem-blind normalised
    signals (notably `Trust`, with a `TrustEvidence` vocabulary and an
    `OtherEvidence` escape hatch) rather than an ecosystem-tagged sum. Raw residue

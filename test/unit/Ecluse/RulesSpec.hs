@@ -40,7 +40,7 @@ pkg :: Maybe Text -> Integer -> PackageDetails
 pkg mScope ageDays =
     PackageDetails
         { pkgName = mkPackageName Npm (mkScope <$> mScope) "thing"
-        , pkgVersion = mkVersion "1.0.0"
+        , pkgVersion = mkVersion Npm "1.0.0"
         , pkgPublishedAt = Just (addUTCTime (negate (fromInteger ageDays * nominalDay)) now)
         , pkgInstallCode = NoCodeOnInstall
         , pkgTrust = Untrusted

@@ -41,10 +41,14 @@ module Ecluse.Package (
 
     -- * Versions
     Version,
+    versionKey,
     mkVersion,
     unVersion,
     renderVersion,
-    compareVersion,
+    compareVersions,
+    VersionKey,
+    parseVersionKey,
+    VersionError (..),
 
     -- * Normalised signals
     CodeExecSignal (..),
@@ -69,7 +73,7 @@ module Ecluse.Package (
     PackageDetails (..),
 ) where
 
-import Data.Char (isAlpha, isDigit)
+import Data.Char (isAlphaNum, isDigit)
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 
@@ -174,53 +178,86 @@ normalisePyPI = T.toLower . T.pack . collapse . toString
 renderPackageName :: PackageName -> Text
 renderPackageName = pkgDisplay
 
-{- | A package version string (e.g. @"1.2.3"@). Kept opaque: the raw text is
-stored verbatim and __no__ 'Ord' is derived, because lexicographic ordering is
-wrong for every version grammar (@"10.0.0" < "9.0.0"@). Use 'compareVersion',
-which knows the ecosystem's grammar.
+{- | A package version.
+
+The raw text is kept verbatim for faithful round-trip (version strings are
+embedded in artifact URLs and re-served), while a parsed, canonical
+'VersionKey' — present only when the raw text parses for its ecosystem — is what
+ordering uses. Build with 'mkVersion' (total: an unparseable version is still
+represented, just with no key, so a proxy never drops a version over a parser
+gap) or 'parseVersionKey' when you want the parse error.
+
+There is deliberately __no__ 'Ord' on 'Version': comparison goes through
+'compareVersions', which is defined only on parsed keys, so non-canonical text
+can never reach the comparator.
 -}
-newtype Version = Version Text
+data Version = Version
+    { versionRaw :: Text
+    -- ^ The version as published — used for rendering and round-tripping only,
+    -- never for ordering decisions.
+    , versionKey :: Maybe VersionKey
+    -- ^ The parsed, canonical ordering key; 'Nothing' if the raw text could not
+    -- be parsed for its ecosystem (ordering rules then abstain).
+    }
     deriving stock (Eq, Show)
 
--- | Wrap raw version text. No parsing or validation is performed.
-mkVersion :: Text -> Version
-mkVersion = Version
+{- | Build a 'Version', parsing the raw text into a canonical key when possible.
+Total: a version that does not parse is still represented (with no key) rather
+than rejected, so a proxy never drops a version over a parser gap.
+-}
+mkVersion :: Ecosystem -> Text -> Version
+mkVersion eco raw = Version raw (rightToMaybe (parseVersionKey eco raw))
 
 -- | The raw version text.
 unVersion :: Version -> Text
-unVersion (Version v) = v
+unVersion = versionRaw
 
 -- | Render a version in wire form (the raw text).
 renderVersion :: Version -> Text
-renderVersion = unVersion
+renderVersion = versionRaw
 
-{- | Compare two versions using the ordering rules of the given ecosystem:
-semver (npm), PEP 440 (PyPI), or @Gem::Version@ (RubyGems). Total: malformed
-input is parsed leniently (non-numeric segments default to zero) rather than
-failing. The PEP 440 parser assumes the registry-normalised form PyPI serves
-(e.g. @"1.0a1"@, @"1.0.post1"@, @"1.0.dev1"@).
+{- | Compare two versions by their canonical keys. 'Nothing' if either version
+did not parse (its key is absent) — an ordering-based rule should then abstain,
+mirroring the other "unknown signal" cases ('CodeExecUnknown', 'TrustUnknown').
 -}
-compareVersion :: Ecosystem -> Version -> Version -> Ordering
-compareVersion eco (Version a) (Version b) = case eco of
-    Npm -> compareSemver a b
-    PyPI -> comparePep440 a b
-    RubyGems -> compareGem a b
+compareVersions :: Version -> Version -> Maybe Ordering
+compareVersions a b = compare <$> versionKey a <*> versionKey b
 
--- | Parse a text segment as a non-negative integer, defaulting to @0@.
-parseInt :: Text -> Integer
-parseInt t = fromMaybe 0 (readMaybe (toString t))
+-- | Why a version string failed to parse.
+newtype VersionError = VersionError
+    { versionErrorMessage :: Text
+    }
+    deriving stock (Eq, Show)
 
--- | Compare two integer lists element-wise, zero-padding the shorter.
-compareInts :: [Integer] -> [Integer] -> Ordering
-compareInts [] [] = EQ
-compareInts (x : xs) (y : ys) = compare x y <> compareInts xs ys
-compareInts (x : xs) [] = compare x 0 <> compareInts xs []
-compareInts [] (y : ys) = compare 0 y <> compareInts [] ys
+{- | The parsed, canonical, comparable form of a version. __Opaque__: the only
+way to obtain one is 'parseVersionKey', so a 'VersionKey' always holds a
+well-formed, normalised version — the comparator structurally cannot see
+non-canonical input (parse, don't validate). Its 'Ord' is meaningful only within
+a single ecosystem, which is the only case that ever arises (one compares
+versions of one package).
+-}
+data VersionKey
+    = NpmKey SemverKey
+    | PyPIKey Pep440Key
+    | RubyGemsKey GemKey
+    deriving stock (Eq, Ord, Show)
 
-{- | A version token: a numeric run or a textual run. Its 'Ord' is the
-RubyGems\/PEP 440 local rule — numeric tokens outrank textual ones, numerics
-compare numerically, text compares lexically. (Semver prerelease ordering is the
-opposite and is handled separately in 'compareSemver'.)
+{- | Parse raw version text into a canonical 'VersionKey' for its ecosystem, or
+report why it could not be parsed. This is the parsing boundary: downstream code
+holds a 'VersionKey' and relies on it being valid.
+-}
+parseVersionKey :: Ecosystem -> Text -> Either VersionError VersionKey
+parseVersionKey eco raw = case eco of
+    Npm -> note (NpmKey <$> parseSemver raw)
+    PyPI -> note (PyPIKey <$> parsePep440 raw)
+    RubyGems -> note (RubyGemsKey <$> parseGem raw)
+  where
+    note = maybe (Left (VersionError ("unparseable version: " <> raw))) Right
+
+{- | A version token: a numeric run or a textual run. Its 'Ord' is the RubyGems
+\/ PEP 440-local rule — numeric tokens outrank textual ones, numerics compare
+numerically, text compares lexically. (Semver prerelease ordering is the
+opposite and is handled in 'parseSemver'.)
 -}
 data VToken = VNum Integer | VStr Text
     deriving stock (Eq, Show)
@@ -231,125 +268,219 @@ instance Ord VToken where
     compare (VNum _) (VStr _) = GT
     compare (VStr _) (VNum _) = LT
 
--- | Compare semver versions (npm).
-compareSemver :: Text -> Text -> Ordering
-compareSemver a b =
-    compareInts (coreOf a) (coreOf b) <> comparePre (preOf a) (preOf b)
-  where
-    -- Drop build metadata (after '+'), then split core from prerelease on '-'.
-    noBuild = T.takeWhile (/= '+')
-    coreText t = T.takeWhile (/= '-') (noBuild t)
-    preText t = T.drop 1 (T.dropWhile (/= '-') (noBuild t))
-    coreOf t = map parseInt (T.splitOn "." (coreText t))
-    preOf t = let p = preText t in if T.null p then [] else T.splitOn "." p
+-- | Parse a non-empty, all-digit segment as an integer.
+parseNumSeg :: Text -> Maybe Integer
+parseNumSeg t
+    | not (T.null t) && T.all isDigit t = readMaybe (toString t)
+    | otherwise = Nothing
 
-{- | Compare semver prerelease identifier lists. An empty list (no prerelease)
-outranks a non-empty one; among prereleases, fewer identifiers rank lower and
-numeric identifiers rank below alphanumeric ones (semver §11).
+-- | Read an all-digit (already validated) run as an integer, defaulting to 0.
+numOr0 :: Text -> Integer
+numOr0 t = if T.null t then 0 else fromMaybe 0 (readMaybe (toString t))
+
+-- | The first non-'Nothing' result of applying @f@ across the list.
+firstJust :: (a -> Maybe b) -> [a] -> Maybe b
+firstJust f = asum . map f
+
+-- ── semver (npm) ───────────────────────────────────────────────────────────
+
+{- | A semver prerelease identifier; numeric identifiers rank below alphanumeric
+ones (semver §11), encoded by the constructor order.
 -}
-comparePre :: [Text] -> [Text] -> Ordering
-comparePre a b = case (null a, null b) of
-    (True, True) -> EQ
-    (True, False) -> GT
-    (False, True) -> LT
-    (False, False) -> idents a b
-  where
-    idents [] [] = EQ
-    idents [] (_ : _) = LT
-    idents (_ : _) [] = GT
-    idents (x : xs) (y : ys) = ident x y <> idents xs ys
-    ident x y = case (asNum x, asNum y) of
-        (Just nx, Just ny) -> compare nx ny
-        (Just _, Nothing) -> LT
-        (Nothing, Just _) -> GT
-        (Nothing, Nothing) -> compare x y
-    asNum t =
-        if not (T.null t) && T.all isDigit t
-            then readMaybe (toString t) :: Maybe Integer
-            else Nothing
+data SemverPreId = SemverNum Integer | SemverText Text
+    deriving stock (Eq, Ord, Show)
 
--- | Compare @Gem::Version@ versions (RubyGems).
-compareGem :: Text -> Text -> Ordering
-compareGem a b = go (gemTokens a) (gemTokens b)
-  where
-    go [] [] = EQ
-    go (x : xs) (y : ys) = compare x y <> go xs ys
-    go (x : xs) [] = compare x (VNum 0) <> go xs []
-    go [] (y : ys) = compare (VNum 0) y <> go [] ys
-
-{- | Tokenise a gem version: split on @\'.\'@, then split each segment into
-maximal digit and non-digit runs.
+{- | A semver prerelease: an actual prerelease ranks below the final release, so
+'SemverPre' is ordered before 'SemverFinal'.
 -}
-gemTokens :: Text -> [VToken]
-gemTokens = concatMap segTokens . T.splitOn "."
+data SemverPre = SemverPre [SemverPreId] | SemverFinal
+    deriving stock (Eq, Ord, Show)
+
+-- | A parsed semver version: numeric core, then prerelease.
+data SemverKey = SemverKey [Integer] SemverPre
+    deriving stock (Eq, Ord, Show)
+
+{- | Parse a semver version (numeric core, optional @-prerelease@, ignoring
+@+build@ metadata). Fails on a non-numeric core or malformed identifiers.
+-}
+parseSemver :: Text -> Maybe SemverKey
+parseSemver raw = do
+    let core0 = T.takeWhile (/= '+') raw
+        (coreText, preRest) = T.break (== '-') core0
+        preText = T.drop 1 preRest
+    core <- traverse parseNumSeg (T.splitOn "." coreText)
+    guard (not (null core))
+    pre <-
+        if T.null preText
+            then pure SemverFinal
+            else SemverPre <$> traverse parsePreId (T.splitOn "." preText)
+    pure (SemverKey core pre)
   where
+    parsePreId t
+        | T.null t = Nothing
+        | T.all isDigit t = SemverNum <$> readMaybe (toString t)
+        | T.all isIdentChar t = Just (SemverText t)
+        | otherwise = Nothing
+    isIdentChar c = isAlphaNum c || c == '-'
+
+-- ── Gem::Version (RubyGems) ──────────────────────────────────────────────────
+
+{- | A parsed @Gem::Version@: a flat token list compared with zero-padding, with
+numeric tokens outranking textual ones (see 'VToken').
+-}
+newtype GemKey = GemKey [VToken]
+    deriving stock (Eq, Show)
+
+instance Ord GemKey where
+    compare (GemKey a) (GemKey b) = compareGemTokens a b
+
+-- | Compare gem token lists, zero-padding the shorter side.
+compareGemTokens :: [VToken] -> [VToken] -> Ordering
+compareGemTokens [] [] = EQ
+compareGemTokens (x : xs) (y : ys) = compare x y <> compareGemTokens xs ys
+compareGemTokens (x : xs) [] = compare x (VNum 0) <> compareGemTokens xs []
+compareGemTokens [] (y : ys) = compare (VNum 0) y <> compareGemTokens [] ys
+
+{- | Parse a @Gem::Version@: dot-separated alphanumeric segments, each split into
+maximal digit and letter runs. Fails on empty or non-alphanumeric segments.
+-}
+parseGem :: Text -> Maybe GemKey
+parseGem raw = do
+    let trimmed = T.strip raw
+        segs = T.splitOn "." trimmed
+    guard (not (T.null trimmed))
+    guard (all validSeg segs)
+    let toks = concatMap segTokens segs
+    guard (not (null toks))
+    pure (GemKey toks)
+  where
+    validSeg s = not (T.null s) && T.all isAlphaNum s
     segTokens = map classify . T.groupBy (\c1 c2 -> isDigit c1 == isDigit c2)
-    classify g = if not (T.null g) && T.all isDigit g then VNum (parseInt g) else VStr g
+    classify g = if T.all isDigit g then VNum (numOr0 g) else VStr g
 
--- | Compare PEP 440 versions (PyPI) via the canonical sort key.
-comparePep440 :: Text -> Text -> Ordering
-comparePep440 a b = compare (pep440Key a) (pep440Key b)
+-- ── PEP 440 (PyPI) ───────────────────────────────────────────────────────────
 
-{- | The PEP 440 ordering key:
+{- | A parsed PEP 440 version as its canonical ordering key:
 @(epoch, release, pre, post, dev, local)@. Release has trailing zeros stripped
-(@1.0 == 1.0.0@). The @pre@\/@post@\/@dev@ ranks encode PEP 440's None-handling:
-a final release outranks any prerelease, a post-release outranks a final, and a
+(@1.0 == 1.0.0@). The pre\/post\/dev ranks encode PEP 440's None-handling — a
+final release outranks any prerelease, a post-release outranks a final, and a
 dev release ranks below its non-dev sibling.
 -}
-pep440Key ::
-    Text ->
-    (Integer, [Integer], (Int, Integer), (Int, Integer), (Int, Integer), [VToken])
-pep440Key raw =
-    (epoch, release, pre, post, dev, localTokens)
-  where
-    normalised = fromMaybe lowered (T.stripPrefix "v" lowered)
-    lowered = T.toLower (T.strip raw)
+data Pep440Key = Pep440Key
+    { p440Epoch :: Integer
+    , p440Release :: [Integer]
+    , p440Pre :: (Int, Integer)
+    , p440Post :: (Int, Integer)
+    , p440Dev :: (Int, Integer)
+    , p440Local :: [VToken]
+    }
+    deriving stock (Eq, Ord, Show)
 
-    (mainPart, localPart) = T.breakOn "+" normalised
-    localTokens =
-        if T.null localPart
-            then []
-            else map localTok (T.split (`elem` ['.', '-', '_']) (T.drop 1 localPart))
-    localTok seg =
-        if not (T.null seg) && T.all isDigit seg then VNum (parseInt seg) else VStr seg
-
-    (epoch, afterEpoch) = case T.breakOn "!" mainPart of
-        (e, rest)
-            | T.null rest -> (0, mainPart)
-            | otherwise -> (parseInt e, T.drop 1 rest)
-
-    releaseText = T.takeWhile (\c -> isDigit c || c == '.') afterEpoch
-    suffix = T.drop (T.length releaseText) afterEpoch
-    release =
-        stripTrailingZeros
-            (map parseInt (filter (not . T.null) (T.splitOn "." releaseText)))
-
-    (afterDev, dev) = case T.breakOn "dev" suffix of
-        (before, rest)
-            | T.null rest -> (suffix, (1, 0))
-            | otherwise -> (before, (0, parseInt (T.takeWhile isDigit (T.drop 3 rest))))
-    (afterPost, post) = case T.breakOn "post" afterDev of
-        (before, rest)
-            | T.null rest -> (afterDev, (0, 0))
-            | otherwise -> (before, (1, parseInt (T.takeWhile isDigit (T.drop 4 rest))))
-    pre = parsePre afterPost
-
-    stripTrailingZeros = reverse . dropWhile (== 0) . reverse
-
-{- | Parse a PEP 440 prerelease label into a @(stageRank, number)@ key. A final
-release (no prerelease) is @(3, 0)@ so it outranks @a@ (0), @b@ (1), @rc@ (2).
+{- | Parse a PEP 440 version, canonicalising non-normalised spellings
+(@1.0ALPHA1@, @1.0-1@, trailing zeros, …). Fails if the string is not a valid
+PEP 440 version (e.g. no release, or unrecognised trailing text).
 -}
-parsePre :: Text -> (Int, Integer)
-parsePre s0 =
-    let s = T.dropWhile (\c -> not (isDigit c) && not (isAlpha c)) s0
-        label = T.takeWhile isAlpha s
-        num = parseInt (T.takeWhile isDigit (T.dropWhile isAlpha s))
-     in if T.null label then (3, 0) else (rankOf label, num)
+parsePep440 :: Text -> Maybe Pep440Key
+parsePep440 raw = do
+    let lowered = T.toLower (T.strip raw)
+        noV = fromMaybe lowered (T.stripPrefix "v" lowered)
+        (mainPart, localRaw) = T.breakOn "+" noV
+    guard (T.all isMainChar mainPart)
+    let (epochText, afterEpoch) = case T.breakOn "!" mainPart of
+            (e, rest)
+                | T.null rest -> ("", mainPart)
+                | otherwise -> (e, T.drop 1 rest)
+    epoch <- if T.null epochText then pure 0 else parseNumSeg epochText
+    let releaseText = T.takeWhile (\c -> isDigit c || c == '.') afterEpoch
+        suffix = T.drop (T.length releaseText) afterEpoch
+    release <- traverse parseNumSeg (filter (not . T.null) (T.splitOn "." releaseText))
+    guard (not (null release))
+    (pre, post, dev) <- parsePep440Suffix suffix
+    localToks <- parseLocal localRaw
+    pure
+        Pep440Key
+            { p440Epoch = epoch
+            , p440Release = stripTrailingZeros release
+            , p440Pre = pre
+            , p440Post = post
+            , p440Dev = dev
+            , p440Local = localToks
+            }
   where
-    rankOf l
-        | l == "a" || l == "alpha" = 0
-        | l == "b" || l == "beta" = 1
-        | otherwise = 2 -- "rc", "c", "pre", "preview"
+    isMainChar c = isAlphaNum c || c == '.' || c == '!' || c == '-' || c == '_'
+    stripTrailingZeros = reverse . dropWhile (== 0) . reverse
+    parseLocal lr
+        | T.null lr = Just []
+        | otherwise =
+            let segs = T.split (`elem` ['.', '-', '_']) (T.drop 1 lr)
+             in if all (\s -> not (T.null s) && T.all isAlphaNum s) segs
+                    then Just (map localTok segs)
+                    else Nothing
+    localTok s = if T.all isDigit s then VNum (numOr0 s) else VStr s
+
+{- | Consume a PEP 440 suffix into @(pre, post, dev)@ keys, failing if any text
+is left unconsumed (so trailing garbage is rejected).
+-}
+parsePep440Suffix :: Text -> Maybe ((Int, Integer), (Int, Integer), (Int, Integer))
+parsePep440Suffix s0 =
+    let (pre, s1) = consumePre s0
+        (post, s2) = consumePost s1
+        (dev, s3) = consumeDev s2
+     in if T.null s3 then Just (pre, post, dev) else Nothing
+
+-- | Drop one optional separator (@.@\/@-@\/@_@) from the front.
+dropSep :: Text -> Text
+dropSep s = case T.uncons s of
+    Just (c, rest) | c == '.' || c == '-' || c == '_' -> rest
+    _ -> s
+
+-- | Consume an optional prerelease label; @(3, 0)@ (final) if none.
+consumePre :: Text -> ((Int, Integer), Text)
+consumePre s =
+    case firstJust (\(lbl, rk) -> (,) rk <$> T.stripPrefix lbl (dropSep s)) preLabels of
+        Nothing -> ((3, 0), s)
+        Just (rk, afterLabel) ->
+            let (digits, rest) = T.span isDigit (dropSep afterLabel)
+             in ((rk, numOr0 digits), rest)
+  where
+    preLabels =
+        [ ("alpha", 0)
+        , ("beta", 1)
+        , ("preview", 2)
+        , ("pre", 2)
+        , ("rc", 2)
+        , ("a", 0)
+        , ("b", 1)
+        , ("c", 2)
+        ]
+
+{- | Consume an optional post-release (@.postN@, @.revN@, or @-N@); @(0, 0)@ if
+none, so a final release sorts below any post-release.
+-}
+consumePost :: Text -> ((Int, Integer), Text)
+consumePost s =
+    case firstJust (\lbl -> T.stripPrefix lbl (dropSep s)) ["post", "rev"] of
+        Just afterLabel ->
+            let (digits, rest) = T.span isDigit (dropSep afterLabel)
+             in ((1, numOr0 digits), rest)
+        Nothing -> case T.stripPrefix "-" s of
+            Just afterDash ->
+                let (digits, rest) = T.span isDigit afterDash
+                 in if T.null digits then ((0, 0), s) else ((1, numOr0 digits), rest)
+            Nothing -> ((0, 0), s)
+
+{- | Consume an optional dev-release (@.devN@); @(1, 0)@ if none, so a dev
+release sorts below its non-dev sibling.
+-}
+consumeDev :: Text -> ((Int, Integer), Text)
+consumeDev s =
+    case T.stripPrefix "dev" (dropSep s) of
+        Just afterLabel ->
+            let (digits, rest) = T.span isDigit (dropSep afterLabel)
+             in ((0, numOr0 digits), rest)
+        Nothing -> ((1, 0), s)
+
+-- ── normalised signals ───────────────────────────────────────────────────────
 
 {- | Whether installing a version executes code (the cross-ecosystem unification
 of npm install scripts, PyPI sdist builds, and RubyGems native extensions).
@@ -401,6 +532,8 @@ data Availability
       -- removes it). Carries the reason, if given.
       Yanked (Maybe Text)
     deriving stock (Eq, Show)
+
+-- ── artifacts ────────────────────────────────────────────────────────────────
 
 -- | A hash algorithm an integrity digest is computed with.
 data HashAlg
@@ -455,6 +588,8 @@ data Artifact = Artifact
     -- ^ URL of a provenance\/attestation bundle, if any.
     }
     deriving stock (Eq, Show)
+
+-- ── dependencies ─────────────────────────────────────────────────────────────
 
 -- | The role a dependency plays.
 data DepKind

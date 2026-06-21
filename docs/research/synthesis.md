@@ -267,9 +267,13 @@ These were worked through one at a time and are now **implemented** in
    (`Available | Deprecated Text | Yanked (Maybe Text)`) **plus** a per-artifact
    `artYanked :: Bool`. Faithful to npm deprecation, RubyGems version-yank, and
    PyPI per-file yank.
-2. **Version ordering** → built now, per-ecosystem (`compareVersion ::
-   Ecosystem -> Version -> Version -> Ordering`; semver / PEP 440 /
-   `Gem::Version`); `Version`'s derived `Ord` dropped.
+2. **Version ordering** → built now, per-ecosystem, and made *parse, don't
+   validate*: `parseVersionKey :: Ecosystem -> Text -> Either VersionError
+   VersionKey` yields an opaque, canonical key and `compareVersions :: Version
+   -> Version -> Maybe Ordering` works only on keys, so non-canonical text
+   cannot reach the comparator. `Version` keeps the raw text (round-trip) plus a
+   `Maybe VersionKey`; an unparseable version is still served but ordering rules
+   abstain. `Version`'s derived `Ord` dropped.
 3. **Ecosystem-specific signals** → folded into ecosystem-blind normalised
    signals rather than an `EcosystemMeta` sum. Trust is
    `Trusted (NonEmpty TrustEvidence) | Untrusted | TrustUnknown` with

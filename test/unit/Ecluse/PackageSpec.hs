@@ -36,35 +36,47 @@ spec = do
         it "treats PyPI names equal up to normalisation" $
             mkPackageName PyPI Nothing "Flask" `shouldBe` mkPackageName PyPI Nothing "flask"
 
-    describe "Version" $
-        it "round-trips through mkVersion / unVersion" $
+    describe "mkVersion / parseVersionKey" $ do
+        it "round-trips the raw text through unVersion" $
             hedgehog $ do
                 v <- forAll (Gen.text (Range.linear 1 12) Gen.ascii)
-                unVersion (mkVersion v) === v
+                unVersion (mkVersion Npm v) === v
+        it "keeps the raw text even when unparseable (proxy fidelity)" $
+            unVersion (mkVersion PyPI "totally bogus") `shouldBe` "totally bogus"
+        it "has no key for unparseable input" $
+            versionKey (mkVersion PyPI "totally bogus") `shouldBe` Nothing
+        it "parses a valid version into a key" $
+            versionKey (mkVersion Npm "1.2.3") `shouldSatisfy` isJust
+        it "parseVersionKey reports an error for invalid input" $
+            parseVersionKey Npm "nope" `shouldSatisfy` isLeft
 
-    describe "compareVersion" $ do
-        let v = mkVersion
+    describe "compareVersions" $ do
+        let cmp eco a b = compareVersions (mkVersion eco a) (mkVersion eco b)
         it "npm orders release numbers numerically (10 > 9)" $
-            compareVersion Npm (v "1.10.0") (v "1.9.0") `shouldBe` GT
+            cmp Npm "1.10.0" "1.9.0" `shouldBe` Just GT
         it "npm ranks a prerelease below its release" $
-            compareVersion Npm (v "1.0.0-rc.1") (v "1.0.0") `shouldBe` LT
+            cmp Npm "1.0.0-rc.1" "1.0.0" `shouldBe` Just LT
         it "npm ranks a numeric prerelease id below an alphanumeric one" $
-            compareVersion Npm (v "1.0.0-1") (v "1.0.0-alpha") `shouldBe` LT
+            cmp Npm "1.0.0-1" "1.0.0-alpha" `shouldBe` Just LT
         it "npm ranks more prerelease fields above fewer" $
-            compareVersion Npm (v "1.0.0-alpha") (v "1.0.0-alpha.1") `shouldBe` LT
+            cmp Npm "1.0.0-alpha" "1.0.0-alpha.1" `shouldBe` Just LT
         it "PyPI treats trailing zeros as equal (1.0 == 1.0.0)" $
-            compareVersion PyPI (v "1.0") (v "1.0.0") `shouldBe` EQ
+            cmp PyPI "1.0" "1.0.0" `shouldBe` Just EQ
         it "PyPI ranks a dev release below the final" $
-            compareVersion PyPI (v "1.0.dev1") (v "1.0") `shouldBe` LT
+            cmp PyPI "1.0.dev1" "1.0" `shouldBe` Just LT
         it "PyPI ranks a prerelease below the final" $
-            compareVersion PyPI (v "1.0a1") (v "1.0") `shouldBe` LT
+            cmp PyPI "1.0a1" "1.0" `shouldBe` Just LT
         it "PyPI ranks a post-release above the final" $
-            compareVersion PyPI (v "1.0.post1") (v "1.0") `shouldBe` GT
+            cmp PyPI "1.0.post1" "1.0" `shouldBe` Just GT
+        it "PyPI canonicalises a non-normalised spelling (1.0ALPHA1 == 1.0a1)" $
+            cmp PyPI "1.0ALPHA1" "1.0a1" `shouldBe` Just EQ
         it "RubyGems ranks a letter (prerelease) segment below the release" $
-            compareVersion RubyGems (v "1.0.0.beta1") (v "1.0.0") `shouldBe` LT
+            cmp RubyGems "1.0.0.beta1" "1.0.0" `shouldBe` Just LT
         it "RubyGems orders numeric segments numerically" $
-            compareVersion RubyGems (v "1.10.0") (v "1.9.0") `shouldBe` GT
-        it "is reflexive for every ecosystem" $
+            cmp RubyGems "1.10.0" "1.9.0" `shouldBe` Just GT
+        it "is Nothing when a version cannot be parsed" $
+            cmp Npm "not a version" "1.0.0" `shouldBe` Nothing
+        it "is reflexive — EQ when parseable, Nothing otherwise" $
             hedgehog $ do
                 eco <- forAll (Gen.element [Npm, PyPI, RubyGems])
                 ver <-
@@ -73,4 +85,5 @@ spec = do
                             (Range.linear 1 12)
                             (Gen.element ('.' : '-' : ['0' .. '9'] <> "abrcdevpost"))
                         )
-                compareVersion eco (mkVersion ver) (mkVersion ver) === EQ
+                let x = mkVersion eco ver
+                compareVersions x x === (EQ <$ versionKey x)
