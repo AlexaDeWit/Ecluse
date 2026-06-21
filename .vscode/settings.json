@@ -1,0 +1,18 @@
+{
+  // Use the system bash for integrated terminals instead of whatever bash
+  // happens to be first on PATH (the Nix dev shell exposes a minimal bash
+  // without programmable completion, which spams `complete: command not found`).
+  // The direnv hook in ~/.bashrc handles load/unload on its own, so this
+  // behaves like a normal shell that enters/leaves the dev environment by cwd.
+  "terminal.integrated.defaultProfile.linux": "bash",
+  "terminal.integrated.profiles.linux": {
+    "bash": {
+      "path": "/usr/bin/bash"
+    }
+  },
+
+  // Use the haskell-language-server provided by the Nix dev shell (on PATH via
+  // direnv) instead of letting the extension download/manage its own via GHCup.
+  // The flake pins HLS to the project's GHC, so versions always stay in sync.
+  "haskell.manageHLS": "PATH"
+}

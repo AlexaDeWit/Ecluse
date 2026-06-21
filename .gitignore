@@ -5,4 +5,5 @@ result-*
 .hie/
 *.hi
 *.o
-.vscode/
+.vscode/*
+!.vscode/settings.json
