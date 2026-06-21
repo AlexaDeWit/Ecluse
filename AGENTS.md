@@ -7,6 +7,12 @@
 - **Keep documentation up to date.** Any change that affects behavior, architecture, public interfaces, or configuration must be reflected in `README.md` and any relevant `docs/` file in the same PR/commit. Do not defer documentation updates.
 - When adding a new module or significantly changing an existing one, update the architecture section of `README.md` to describe its role.
 
+## Implementation Coordination
+
+Implementation is run as a coordinated multi-agent effort: the repo owner is the **principal architect** (owns design and requirements) and the lead agent acts as **team lead** (decomposes the work, dispatches implementation subagents in isolated worktrees, evaluates their output, reproduces the CI gate, and hands review-ready PRs back for approval). The governing rule is **escalate, don't guess** — any agent that is stuck, unsure, or facing ambiguous/missing/contradictory spec stops and surfaces it rather than inventing a way past it.
+
+The full strategy — decomposition, the per-PR build → evaluate → gate → handoff loop, the escalation contract, and how the CI gate is reproduced — is in [`planning/orchestration-strategy.md`](planning/orchestration-strategy.md). The concrete delivery plan (the dependency-ordered PR DAG, written once the architecture is finalized) will also live under [`planning/`](planning/).
+
 ## Project Structure
 
 ```

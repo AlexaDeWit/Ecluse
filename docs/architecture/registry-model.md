@@ -12,6 +12,28 @@ The proxy is configured with three registry endpoints:
 | **Public upstream** | Fallback. Queried only when the private upstream does not have the package. Security rules are applied to all responses from here. |
 | **Mirror target** | Where approved public packages are written after passing rules. May be the same registry as the private upstream (most common) or a different one (e.g. separate internal/public stores). |
 
+### Credential flow and authority
+
+Écluse is **not** an access-granting authority. Read access is decided entirely by
+the upstreams; Écluse holds a credential only to *write* mirrored packages. Each
+role has a distinct credential behaviour:
+
+- **Private upstream (read)** — Écluse **forwards the client's own credential**
+  (`Authorization` / `_authToken`) verbatim, and the private upstream authorizes.
+  The upstream is the authority for who may read what; Écluse adjudicates nothing
+  on reads and never substitutes its own identity.
+- **Public upstream (read/fallback)** — queried **anonymously**. The client's
+  credential is **never** forwarded here; sending an internal token to the public
+  registry would be a credential disclosure. (If a public mirror itself needs
+  auth, that is Écluse's *own* configured credential — never the client's.)
+- **Mirror target (write)** — the **only** place Écluse uses its own credential:
+  the [`CredentialProvider`](cloud-backends.md#credential-provider) mints the token
+  to publish approved packages. Often the same registry as the private upstream,
+  but a different identity on it: the *client* reads it, *Écluse* writes it.
+
+The non-negotiable invariant: **the client's credential reaches the private
+upstream and nothing else — and never the public upstream.**
+
 ## Registry Abstraction
 
 The proxy core is registry-agnostic. The `RegistryClient` record is the sole
