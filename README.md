@@ -6,6 +6,8 @@ A supply-chain resilience proxy for package registries, written in Haskell. The
 name is French for a canal lock — the controlled passage every dependency clears
 before it reaches your build.
 
+**API documentation:** [Haddock for the library](https://alexadewit.github.io/Ecluse/), auto-published from `main`.
+
 ## Overview
 
 `ecluse` sits between your development environment (or CI) and the npm
