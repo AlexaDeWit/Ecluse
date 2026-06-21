@@ -2,7 +2,7 @@
 id: S06
 title: npm wire types + lenient decoders
 milestone: M1 — npm protocol adapter
-status: in-progress
+status: merged
 depends-on: []
 test-tier: [unit, smoke]
 arch-refs:
@@ -10,7 +10,7 @@ arch-refs:
   - docs/research/reverse-engineering/npm.md#4-package-metadata--the-packument-full
   - docs/research/reverse-engineering/npm.md#5-abbreviated-packument
   - docs/research/reverse-engineering/npm.md#7-the-dist-object
-pr: null
+pr: 18
 ---
 
 # S06 — npm wire types + lenient decoders
@@ -50,3 +50,13 @@ rules and serving need.
 separate so the lenient/faithful boundary is clean (parse, don't validate; the
 adapter is the boundary). `hasInstallScript` is abbreviated-only; record the
 `scripts` map too so S07 can derive it when only the full form is present.
+
+**Revised requirement (PR #23) — lossless served round-trip.** When these wire forms
+are re-served (S09 filter / S33 merge / S14 serve), **unmodeled fields must
+round-trip unchanged** — the synthesized-packument `additionalProperties: true`
+passthrough; an npm-added field must not vanish through the gate. S06 is
+**decode-only** (`ToJSON` deferred), so this is *not* S06 rework — it is a forward
+constraint on the serving slices, satisfied either by a `KeyMap Value` remainder on
+the wire types or by filtering structurally over the raw `Value`. Serving must not
+rebuild the body from a lossy typed model. See
+[api-surface.md](../../docs/architecture/api-surface.md#the-synthesized-packument-schema--the-trust-boundary).

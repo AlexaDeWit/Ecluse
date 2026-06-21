@@ -35,6 +35,12 @@ verdicts across all versions (the deny-by-default filtered projection).
   maps; status selection is S11/S14. — _rules-engine.md#applying-verdicts-to-a-packument_
 - [ ] Coherence preserved: `dist-tags.latest` is always a key of `versions`; `time`
   has an entry for every surviving version. — _npm.md#8-version--availability-resolution_
+- [ ] **Lossless passthrough of unmodeled fields** (PR #23). Filtering/rewriting must
+  not drop wire keys Écluse does not model (the synthesized-packument
+  `additionalProperties: true` passthrough): operate **structurally over the raw
+  `Value`** (or carry a `KeyMap Value` remainder), removing denied versions and
+  rewriting `dist.tarball` in place — never rebuild the served body from a lossy typed
+  model. — _api-surface.md#the-synthesized-packument-schema--the-trust-boundary_
 
 **File fence.**
 - `src/Ecluse/Registry/Npm/Filter.hs` — `rewriteTarballUrls`, `filterPackument` (verdict application), result type for the no-survivors case.

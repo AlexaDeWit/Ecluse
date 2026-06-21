@@ -2,7 +2,7 @@
 id: S02
 title: Seam interfaces + in-memory doubles
 milestone: M0 — Shell, seams & foundations
-status: in-progress
+status: merged
 depends-on: []
 test-tier: [unit]
 arch-refs:
