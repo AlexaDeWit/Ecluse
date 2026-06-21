@@ -58,7 +58,7 @@ library
     Ecluse.Version
 
   build-depends:
-    , aeson       ^>=2.3
+    , aeson       ^>=2.1
     , containers  ^>=0.6
     , text        ^>=2.0
     , time        ^>=1.12
@@ -89,7 +89,7 @@ test-suite ecluse-unit
 
   build-tool-depends: hspec-discover:hspec-discover ^>=2.11
   build-depends:
-    , aeson            ^>=2.3
+    , aeson            ^>=2.1
     , containers       ^>=0.6
     , hedgehog         ^>=1.4
     , hspec            ^>=2.11
@@ -129,7 +129,7 @@ test-suite ecluse-smoke
 
   build-tool-depends: hspec-discover:hspec-discover ^>=2.11
   build-depends:
-    , aeson      ^>=2.3
+    , aeson      ^>=2.1
     , containers ^>=0.6
     , directory  ^>=1.3
     , ecluse
