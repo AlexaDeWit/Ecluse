@@ -91,6 +91,7 @@ versions** (denied versions removed, `latest` repointed to the newest survivor,
 | [Rules Engine & Responses](architecture/rules-engine.md) | Deny-by-default evaluation, the rule tiers, the CVE subsystem, and denial responses. |
 | [Cloud Backends & Mirroring](architecture/cloud-backends.md) | The mirror queue and the two cloud seams (`MirrorQueue`, `CredentialProvider`); AWS & GCP. |
 | [Configuration & Authentication](architecture/configuration.md) | Environment configuration, outbound registry credentials, and inbound client authentication. |
+| [Observability](architecture/observability.md) | Opt-in, vendor-neutral OpenTelemetry/OTLP tracing & metrics; Datadog as a first-class but optional target. |
 | [Technology Stack](architecture/technology-stack.md) | Library choices and the key cross-cutting decisions. |
 
 ## Out of Scope (for now)
