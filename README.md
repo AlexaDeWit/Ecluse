@@ -26,29 +26,35 @@ quick start follows.
 
 ### Prerequisites
 
-[Nix](https://nixos.org/) with flakes enabled provides all build tooling via the
-dev shell. A running Docker daemon is required only for the integration test
-suite (which spins up ephemeral containers via `testcontainers` / `ministack`);
-unit and property tests need nothing beyond the dev shell.
+**[Nix](https://nixos.org/) with flakes enabled is a hard dependency.** The whole
+toolchain — GHC 9.6, Cabal, fourmolu, hlint, Semgrep — comes from the dev shell,
+pinned by `flake.lock`. There is no supported system-level build: without Nix
+you're on your own to reproduce the exact toolchain by hand, which is a long crawl
+through the desert. Just install Nix.
+
+A running Docker daemon is required only for the integration test suite (ephemeral
+containers via `testcontainers` / `ministack`); the unit suite needs nothing
+beyond the dev shell.
 
 ### Getting started
 
-Every task runs through `make`, and the tools come from the Nix dev shell
-automatically — each target wraps itself in `nix develop` when you're not already
-inside it, so this works straight from a bare terminal:
+Enter the dev shell, then drive everything through `make` (run `make help` for
+the full list):
 
 ```bash
-make build      # build library, executable, and tests
-make test       # fast, gating unit suite
-make check      # build + test + format + lint + sast (what the CI gate runs)
-make run        # run the proxy
-make help       # list every target
+nix develop        # enter the Nix dev shell — direnv does this automatically
+
+make build         # build library, executable, and tests
+make test          # fast, gating unit suite
+make check         # build + test + format + lint + sast (what the CI gate runs)
+make run           # run the proxy
 ```
 
-Prefer an interactive shell? `nix develop` (or direnv) drops you in, and the same
-`make` targets then run the tools directly. For a hermetic, reproducible
-build/checks — sandboxed, what you'd ship — use `make nix-build` and
-`make nix-check`.
+Run `make` **from inside** the dev shell (`nix develop` / direnv). Targets also
+work from a bare terminal — each wraps itself in `nix develop --command` — but
+that re-enters the shell once per target, so it's only meant for the occasional
+one-off. For a hermetic, reproducible build/checks — sandboxed, what you'd ship —
+use `make nix-build` and `make nix-check`.
 
 ### Continuous integration
 

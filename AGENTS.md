@@ -25,8 +25,8 @@ docs/      — architecture decision records and design documents
 
 ## Build & Tooling
 
-- All tooling comes from the Nix dev shell — run `nix develop` (or rely on `direnv`) before building. Do not assume a system-level GHC/Cabal.
-- Build with **Cabal** (`cabal build all`, `cabal test`), not Stack: Nix provides reproducibility and `flake.lock` pins nixpkgs (GHC 9.6).
+- **Nix (with flakes) is a hard dependency.** All tooling comes from the dev shell (`nix develop`, or `direnv`), pinned by `flake.lock` (GHC 9.6); there is no supported system-level GHC/Cabal.
+- Run every task through **`make`** — the unified runner shared with CI (`make build`, `make test`, `make check`, `make sast`, …; `make help` for the list), which wraps Cabal/fourmolu/hlint/Semgrep from the dev shell. Run `make` **inside** `nix develop` (it auto-wraps in `nix develop --command` otherwise, but re-enters the shell per target). Cabal (not Stack) remains the underlying build tool.
 - The dependency set and rationale (relude as the prelude via cabal mixins, aeson, amazonka, warp/wai, http-client-tls, katip, envparse, cache, hedgehog) live in [`docs/architecture.md`](docs/architecture.md) → "Technology Stack"; the **testing strategy** (pure `hspec`+`hedgehog` tests; integration tests via `testcontainers` + `ministack` over Docker) lives in [`CONTRIBUTING.md`](CONTRIBUTING.md). Read them before adding dependencies or tests.
 
 ## CI & Security
@@ -35,6 +35,6 @@ docs/      — architecture decision records and design documents
 - **Pin every GitHub Action to a full commit SHA** (never a tag/branch), with the version in a trailing comment. Dependabot bumps them.
 - Keep workflows injection-free — never interpolate untrusted `${{ github.event.* }}` / `${{ github.head_ref }}` values directly into `run:` shell blocks; pass them via `env:` or intermediate files instead.
 - **Semgrep** runs `--config auto`, failing on ERROR/WARNING findings, from the Nix dev shell, so CI and local use the same pinned binary.
-- **Before pushing, verify Semgrep is clean locally:** inside `nix develop`, `semgrep scan --config auto --severity ERROR --severity WARNING --error .` must report zero findings. Do not push with outstanding findings.
+- **Before pushing, verify Semgrep is clean locally:** inside `nix develop`, `make sast` (Semgrep `--config auto`, failing on ERROR/WARNING) must report zero findings. Do not push with outstanding findings.
 - **Semgrep ignores require the repo owner's approval.** Do not add `.semgrepignore` entries or `nosemgrep` comments unilaterally.
 - Commits are GPG-signed; keep history verifiable.

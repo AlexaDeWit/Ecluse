@@ -8,11 +8,15 @@ in [`AGENTS.md`](AGENTS.md).
 
 ## Local development
 
-All tooling comes from the Nix dev shell (pinned by `flake.lock`); do not assume
-a system-level GHC/Cabal. Every task runs through **`make`** — the single entry
-point shared by local development and CI. Targets work whether or not you have
-entered the shell (each wraps itself in `nix develop --command` when needed), so
-`nix develop` / `direnv` is convenient but not required.
+**Nix (with flakes) is a hard dependency.** The whole toolchain — GHC 9.6, Cabal,
+fourmolu, hlint, Semgrep — comes from the dev shell, pinned by `flake.lock`; there
+is no supported system-level build. Enter the shell with `nix develop` (or let
+`direnv` do it), then run everything through **`make`**, the single entry point
+shared by local development and CI.
+
+Run `make` **inside** the dev shell. Targets also work from a bare terminal (each
+wraps itself in `nix develop --command`), but that re-enters the shell per target,
+so reserve it for one-offs.
 
 | Task | Command |
 |------|---------|
