@@ -25,7 +25,9 @@ configuration reference.
 Every published image carries **provenance** and **SBOM** attestations — keyless
 (Sigstore), recorded in the public Rekor transparency log, and stored as
 **immutable OCI referrers** on the image (write-once; they can't be overwritten).
-Verify them by **digest** with the GitHub CLI:
+Each version's digest is published in its
+[GitHub Release](https://github.com/AlexaDeWit/Ecluse/releases). Verify by
+**digest** with the GitHub CLI:
 
 ```bash
 IMAGE=alexadewit/ecluse@sha256:…   # pin by digest

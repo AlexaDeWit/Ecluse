@@ -2,8 +2,9 @@ name: Release
 
 # Publishing is a separate lifecycle from the PR `gate` in ci.yml: it runs only
 # when a version tag is pushed (or dispatched manually), builds the Nix image,
-# pushes it under an immutable `X.Y.Z` tag, and attaches keyless provenance + SBOM
-# attestations. It is never a gate dependency.
+# pushes it under an immutable `X.Y.Z` tag, attaches keyless provenance + SBOM
+# attestations, and (on a real tag) publishes a GitHub Release pinning the digest.
+# It is never a gate dependency.
 on:
   push:
     tags:
@@ -31,7 +32,7 @@ jobs:
     # there — until then this job fails at the push step, by design.
     environment: release
     permissions:
-      contents: read
+      contents: write # create the GitHub Release (digest pin + verify recipe + notes)
       id-token: write # OIDC: keyless signing of the attestations (Fulcio/Rekor)
       attestations: write # record the provenance/SBOM attestations
     env:
@@ -105,3 +106,18 @@ jobs:
           subject-digest: ${{ steps.digest.outputs.digest }}
           sbom-path: sbom/ecluse.spdx.json
           push-to-registry: true
+
+      # On a real version tag (not an rc dispatch), publish a GitHub Release that
+      # pins the digest, gives the `gh attestation verify` recipe, and carries the
+      # auto-generated changelog — the canonical place to discover the digest.
+      # Untrusted refs flow through env, never into the run script directly.
+      - name: Publish GitHub Release
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          DIGEST: ${{ steps.digest.outputs.digest }}
+        run: |
+          bash scripts/release-notes.sh "$TAG" "$IMAGE" "$DIGEST" > "$RUNNER_TEMP/notes.md"
+          pre=""; case "$TAG" in *-*) pre="--prerelease" ;; esac
+          gh release create "$TAG" --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md" --verify-tag $pre
