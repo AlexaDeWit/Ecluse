@@ -26,6 +26,33 @@ check`, `hlint`, and Semgrep (zero findings). The CI `gate` enforces the same
 set, so a clean local run predicts a green gate. The smoke suite
 (`ecluse-smoke`) is allowed to fail and never gates (see Testing Strategy).
 
+### Reproducible build & checks (Nix)
+
+The `cabal` commands above are the incremental inner loop. For a reproducible,
+**hermetic** build and check run — sandboxed, with every dependency pinned by
+`flake.lock` — drive Nix directly:
+
+| Task | Command |
+|------|---------|
+| Build the `ecluse` binary | `nix build` → `./result/bin/ecluse` |
+| Run the hermetic checks | `nix flake check` |
+
+`nix flake check` builds the package and runs the pure tier: the `ecluse-unit`
+suite (`checks.unit`), `fourmolu --mode check` (`checks.format`), and `hlint`
+(`checks.lint`). Deliberately **excluded** — they cannot run in a hermetic
+sandbox: `ecluse-integration` (needs a Docker daemon), `ecluse-smoke` (live
+network), and Semgrep (`--config auto` fetches rules over the network). Those
+stay dev-shell / CI steps.
+
+> **Flakes only see git-tracked files.** `git add` new sources before
+> `nix build` / `nix flake check`, or they are invisible to the build — and a
+> build that references them (e.g. via the cabal file) will fail on the missing
+> modules.
+
+Reach for Nix to reproduce CI exactly or to produce the release artifact; reach
+for `cabal` for day-to-day iteration (Nix rebuilds the whole package on any
+change, so it is poor for edit-compile cycles).
+
 ---
 
 ## Codebase Layout

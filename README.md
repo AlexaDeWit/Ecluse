@@ -45,6 +45,14 @@ cabal test ecluse-unit
 cabal run ecluse
 ```
 
+`cabal` is the fast inner loop. For a **reproducible, hermetic** build and checks
+— what CI relies on — drive Nix directly (no dev shell needed):
+
+```bash
+nix build         # build the ecluse binary → ./result/bin/ecluse
+nix flake check   # hermetic checks: package build, unit tests, fourmolu, hlint
+```
+
 ### Continuous integration
 
 Every push and pull request runs [`.github/workflows/ci.yml`](.github/workflows/ci.yml):
@@ -63,4 +71,4 @@ for details.
 | `src/` | Library — all business logic |
 | `test/` | Unit and integration tests |
 | `docs/` | Architecture decision records and design documents |
-| `flake.nix` | Nix dev environment (GHC 9.6, cabal, HLS, ghcid) |
+| `flake.nix` | Nix dev shell (GHC 9.6, cabal, HLS, ghcid) **and** the package build (`nix build`) + hermetic checks (`nix flake check`) |
