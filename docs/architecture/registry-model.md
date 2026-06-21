@@ -34,6 +34,12 @@ role has a distinct credential behaviour:
 The non-negotiable invariant: **the client's credential reaches the private
 upstream and nothing else — and never the public upstream.**
 
+Outbound requests are further constrained by the
+[security invariants](security.md): an **outbound host allowlist**,
+**internal-range blocking**, **identifier canonicalisation**, and **bounded
+responses**, so a crafted identifier or a hostile upstream can neither steer a
+fetch to an unintended target nor exhaust the proxy (issue #11).
+
 ## Packument merge across upstreams
 
 A **packument** (package metadata) is not served by first-hit short-circuit the
