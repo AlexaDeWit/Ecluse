@@ -42,6 +42,26 @@ in the private upstream. Subsequent requests for the same package during this
 window will fall through to the public upstream again and re-run rules — this is
 acceptable; the rules are deterministic for a given package version.
 
+### Process model
+
+At launch the worker runs **in the proxy process as a supervised concurrent
+thread** (`async` / `unliftio`), not a separate service: worker load is
+front-loaded — a cold mirror back-fills heavily for the first few days — then
+settles to a modest steady state, so an extra deployable is not yet worth it.
+Transient failures are handled in the loop (retry/backoff/DLQ, above); a sustained
+failure surfaces through the worker's health signal.
+
+The split is kept **trivial for later**. The server and worker are each a
+self-contained entry function over the shared, seam-based `Env` —
+`runServer :: Env -> IO ()` and `runWorker :: Env -> IO ()` — and the
+single-process `Main` simply runs both concurrently. Splitting into two binaries
+is then two thin `Main`s calling the same functions, no rearchitecting, because
+neither depends on the other — only on the seams in `Env`. The worker carries its
+**own health/liveness surface** (a consume-loop heartbeat / last-successful-poll),
+distinct from the server's HTTP readiness, so that the single process's health
+reflects a stalled worker today and a future standalone worker binary has its own
+liveness/readiness probe.
+
 ## Cloud Backends
 
 Écluse couples to a cloud provider in exactly **two seams**, both records of
