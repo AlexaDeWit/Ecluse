@@ -15,6 +15,7 @@
         devShells.default = pkgs.mkShell {
           name = "npm-secure-proxy";
           buildInputs = [
+            pkgs.bashInteractive
             hpkgs.ghc
             hpkgs.cabal-install
             hpkgs.haskell-language-server
