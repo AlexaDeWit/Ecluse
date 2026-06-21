@@ -87,7 +87,7 @@ project-specific pattern below.
   MirrorQueue`). Adding a backend means adding a constructor behind the *existing*
   record and wiring it into the single, config-driven composition root — never
   smearing SDK or provider selection across call sites. See
-  [Cloud Backends → Seams](docs/architecture.md#seams-records-of-functions).
+  [Cloud Backends → Seams](docs/architecture/cloud-backends.md#seams-records-of-functions).
 
 Current layout:
 
@@ -131,7 +131,7 @@ container manager, not an AWS-specific one):
 - **GCP** — Google's official **Pub/Sub emulator** container; the client is
   pointed at it via `PUBSUB_EMULATOR_HOST` (the emulator ignores auth). GCP's
   backend — and this test — land once the client-viability spike clears (see
-  architecture's [Cloud Backends](docs/architecture.md#cloud-backends)).
+  architecture's [Cloud Backends](docs/architecture/cloud-backends.md#cloud-backends)).
 
 Both are hermetic and reproducible — no real cloud account or credentials. They
 require a running Docker daemon: CI's `ubuntu-latest` provides one; locally,

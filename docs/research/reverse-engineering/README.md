@@ -7,7 +7,7 @@ implement *both halves* of the proxy:
 
 - **Client behaviour** — Écluse fetching from upstream registries
   (`fetchMetadata`, `fetchArtifact`, the `parse*` functions of
-  [`RegistryClient`](../../architecture.md#registry-abstraction)).
+  [`RegistryClient`](../../architecture/registry-model.md#registry-abstraction)).
 - **Server behaviour** — Écluse answering an npm/pip client well enough that
   the client believes it is talking to a real registry.
 

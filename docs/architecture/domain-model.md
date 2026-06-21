@@ -1,0 +1,54 @@
+# Internal Domain Model
+
+> Part of the [Écluse architecture overview](../architecture.md).
+
+`PackageDetails` ([`src/Ecluse/Package.hs`](../../src/Ecluse/Package.hs)) is the
+ecosystem-agnostic per-version snapshot every adapter produces and the rules
+engine consumes. Its shape is the synthesis of the npm/PyPI/RubyGems protocol
+studies ([`research/synthesis.md`](../research/synthesis.md)); two principles
+govern it:
+
+- **The rules engine is ecosystem-blind.** It never branches on npm vs PyPI vs
+  RubyGems. Adapters project each ecosystem's wire format into *normalised
+  signals*; a rule sees `CodeExecSignal`, `Trust`, `Availability` — never
+  `hasInstallScript`, `packagetype`, or `extensions`.
+- **Signal availability is explicit.** A signal the adapter has not (or cannot
+  cheaply) determined is represented as such (`CodeExecUnknown`, `TrustUnknown`,
+  `Nothing`), so a pure rule abstains rather than guessing and the effectful tier
+  can resolve it later (see [Rules Engine](rules-engine.md#rules-engine)).
+
+## The shared vocabulary
+
+| Concern | Representation | Why |
+|---|---|---|
+| **Identity** | `PackageName`: ecosystem tag + optional namespace (npm scope) + a normalised `canonical` key + a `display` form; equality is on the canonical key only. | npm is case-sensitive with scopes, PyPI normalises (PEP 503), RubyGems is verbatim — matching must use one canonical key while rendering stays faithful. |
+| **Version** | opaque; holds the raw text (round-trip) **plus** a `Maybe VersionKey` parsed at construction. `parseVersionKey :: Ecosystem -> Text -> Either VersionError VersionKey` is the only way to obtain a `VersionKey`, and `compareVersions` is defined *only* on keys — so non-canonical text cannot reach the comparator (parse, don't validate). Unparseable ⇒ no key ⇒ ordering rules abstain, but the version is still served. | Lexicographic ordering is wrong for every grammar (`"10.0.0" < "9.0.0"`); and a proxy must keep serving a version even when our hand-rolled parser can't order it. |
+| **Install-time code execution** | `CodeExecSignal = NoCodeOnInstall \| RunsCodeOnInstall reason \| CodeExecUnknown`. | Unifies npm install scripts, PyPI sdist builds, and RubyGems native extensions; `Unknown` carries the gemspec-fetch case. |
+| **Trust / provenance** | `Trust = Trusted (NonEmpty TrustEvidence) \| Untrusted \| TrustUnknown`; `TrustEvidence = Signed \| Attested \| MfaPublished \| OtherEvidence text`. | Signing/attestation/MFA differ per ecosystem but reduce to one signal; the evidence captures the *how* without leaking the ecosystem. |
+| **Availability** | `Availability = Available \| Deprecated msg \| Yanked (Maybe reason)`, plus a per-artifact `artYanked`. | npm deprecates (advisory) and RubyGems yanks whole versions; PyPI yanks individual *files* — the per-file flag preserves PyPI's "listed-but-yanked" so exact pins still resolve. |
+| **Artifacts** | a version owns `NonEmpty Artifact`; each carries algorithm-tagged `Hash`es, kind/platform, size, interpreter constraint, and a provenance URL. | npm has one tarball; PyPI has an sdist + many wheels; RubyGems has one gem per platform. |
+| **Dependencies** | `[Dependency]` with the constraint kept as **raw text** + kind + optional marker. | Lossless and agnostic across semver / PEP 508 / `Gem::Requirement`; parsed only when a rule needs to compare. |
+
+## Decisions captured
+
+The model resolves the open questions from the synthesis (worked through one at a
+time):
+
+1. **Yank/availability granularity** — version-level `Availability` **and** a
+   per-artifact `artYanked` flag (faithful to all three ecosystems).
+2. **Version ordering** — built now, per-ecosystem, and made *parse, don't
+   validate*: an ecosystem-aware parser (`parseVersionKey`) yields an opaque,
+   canonical `VersionKey`, and comparison is defined only on keys.  `Version`
+   keeps the raw text for round-trip plus a `Maybe VersionKey`, so an
+   unparseable version is still served but causes ordering rules to abstain
+   (the same Unknown→abstain pattern as the other signals). The misleading
+   derived `Ord` is gone.
+3. **Ecosystem-specific signals** — folded into ecosystem-blind normalised
+   signals (notably `Trust`, with a `TrustEvidence` vocabulary and an
+   `OtherEvidence` escape hatch) rather than an ecosystem-tagged sum. Raw residue
+   needed only for faithful *serving* stays in the adapter, below the rules
+   layer.
+4. **Dependencies** — a lossless structured list with raw constraints (no
+   constraint parsing yet).
+5. **Rollout** — landed as one coherent revision of `Ecluse.Package` and the
+   rule inputs; the `evalRules` fold is unchanged.
