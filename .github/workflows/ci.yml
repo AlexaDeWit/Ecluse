@@ -5,10 +5,11 @@ on:
   pull_request:
   workflow_dispatch:
 
-# Cancel in-progress runs for the same ref when a new commit is pushed.
+# Cancel superseded runs for the same ref on PRs/branches, but never on main —
+# keep the complete, accurate build history of every commit that lands there.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 # All checks are jobs in this one graph and feed the terminal `gate` job, which
 # is the single Required status check in branch protection. Every action is
@@ -40,15 +41,15 @@ jobs:
             ${{ runner.os }}-cabal-
 
       - name: Update package index
-        run: nix develop --command cabal update
+        run: nix develop --command make update
 
       # Build everything (all three test suites included) so a broken
       # integration/smoke suite fails the gate even when it isn't run here.
       - name: Build (library, executable, all test suites)
-        run: nix develop --command cabal build all --enable-tests
+        run: nix develop --command make build
 
       - name: Unit tests
-        run: nix develop --command cabal test ecluse-unit --test-show-details=direct
+        run: nix develop --command make test
 
   integration:
     name: Integration tests (ministack)
@@ -74,10 +75,10 @@ jobs:
             ${{ runner.os }}-cabal-
 
       - name: Update package index
-        run: nix develop --command cabal update
+        run: nix develop --command make update
 
       - name: Integration tests
-        run: nix develop --command cabal test ecluse-integration --test-show-details=direct
+        run: nix develop --command make test-integration
 
   smoke:
     name: Smoke tests (live registries — allowed to fail)
@@ -106,10 +107,10 @@ jobs:
             ${{ runner.os }}-cabal-
 
       - name: Update package index
-        run: nix develop --command cabal update
+        run: nix develop --command make update
 
       - name: Smoke tests
-        run: nix develop --command cabal test ecluse-smoke --test-show-details=direct
+        run: nix develop --command make test-smoke
 
   lint:
     name: Format & lint
@@ -122,10 +123,10 @@ jobs:
         uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
 
       - name: fourmolu (format check)
-        run: nix develop --command bash -c "git ls-files -z '*.hs' | xargs -0 -r fourmolu --mode check"
+        run: nix develop --command make format-check
 
       - name: hlint
-        run: nix develop --command bash -c "git ls-files -z '*.hs' | xargs -0 -r hlint"
+        run: nix develop --command make lint
 
   semgrep:
     name: Static analysis (Semgrep)
@@ -138,17 +139,10 @@ jobs:
         uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
 
       - name: Semgrep scan
-        # Auto config fetches rules relevant to this repo from the public
-        # Registry (no SEMGREP_APP_TOKEN; anonymous). Semgrep is the same Nix-
-        # pinned binary developers use. Fail on ERROR/WARNING findings.
-        run: >
-          nix develop --command
-          semgrep scan
-          --config auto
-          --severity ERROR
-          --severity WARNING
-          --error
-          .
+        # `make sast` runs the same Nix-pinned Semgrep developers use, with
+        # --config auto (anonymous; rules fetched from the public Registry),
+        # failing on ERROR/WARNING findings.
+        run: nix develop --command make sast
 
   gate:
     name: CI gate
