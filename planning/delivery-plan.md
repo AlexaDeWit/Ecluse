@@ -1,0 +1,253 @@
+# Écluse Delivery Plan
+
+The dependency-ordered DAG of PR-sized slices that takes **Écluse** from its
+current state — the pure functional core — to a launch-ready, releasable proxy
+and through its designed fast-follows.
+
+This is **Phase 0** of [`orchestration-strategy.md`](orchestration-strategy.md):
+the architecture is frozen ([`../docs/architecture.md`](../docs/architecture.md)),
+and this plan decomposes it into reviewable work. The architect signs off on this
+breakdown **before any code is written**.
+
+This file is the **index**. The authoritative, mutable detail for each slice —
+including its live status — lives in one file per slice under [`slices/`](slices/).
+Per-slice files are deliberate: parallel agents (and their status updates) touch
+**disjoint files**, so concurrent work never collides on a shared table.
+
+---
+
+## How to read and use this plan
+
+- **One slice = one PR.** Each slice is a single coherent, reviewable-in-a-sitting
+  capability with a file-scope fence, the test tier(s) it owes, acceptance
+  criteria traced to architecture sections, and explicit dependencies.
+- **Status lives in the slice file.** Each [`slices/`](slices/)`SNN-*.md` carries a
+  `status:` field in its frontmatter — `not-started → in-progress → in-review →
+  merged` — advanced by a small `docs(planning)` commit when the slice moves. The
+  git history of those files *is* the milestone log. This index deliberately does
+  **not** duplicate per-slice status (that would reintroduce the merge conflict
+  the per-slice split avoids); the [**In flight**](#in-flight) section below is the
+  single-writer (team-lead) pointer to what is being worked right now.
+- **Depth is proximity-proportional.** Near-term slices (M0–M3) are detailed to
+  implementation depth now. Later slices (M4–M8) carry goal / criteria / fence /
+  deps and are deepened as their dependencies land and their worktrees are rebased
+  onto the new base — integration drift is surfaced then, not at PR time.
+- **Definition of done** for every slice is the checklist in
+  [`orchestration-strategy.md`](orchestration-strategy.md#definition-of-done): all
+  acceptance criteria met with test evidence, independent review (Stage A + B)
+  passed, the local gate green, Semgrep clean, the CI `gate` green on the PR, docs
+  updated in the same PR, GPG-signed Conventional Commits.
+
+---
+
+## Current state (the baseline this plan builds on)
+
+**Built and tested — the pure functional core:**
+
+- `Ecluse.Ecosystem` — the ecosystem tag.
+- `Ecluse.Version` — version identity + per-ecosystem ordering (semver / PEP 440 /
+  `Gem::Version`), parse-don't-validate.
+- `Ecluse.Package` — the full ecosystem-agnostic domain model (`PackageName`,
+  `CodeExecSignal`, `Trust`, `Availability`, `Artifact`, `Dependency`, `Person`,
+  `PackageDetails`).
+- `Ecluse.Rules` + `Ecluse.Rules.Types` — the **pure** rule tier (the three
+  launch rules), deny-by-default.
+- Mature CI/release infrastructure: the unified `gate`, coverage → Codecov,
+  Nix-store cache, lean CI shell, reproducible OCI image + cosign keyless signing.
+
+**Design-only (no code yet) — what this plan delivers:** the imperative shell
+(`Env`/`App`), the three seams (`RegistryClient`, `MirrorQueue`,
+`CredentialProvider`), the config loader, the npm adapter, the web layer, the
+request pipeline, the AWS backends + mirror worker, the effectful/CVE tier,
+observability, and the GCP backends.
+
+> **One alignment item folded in:** `Ecluse.Rules.evalRules` currently selects by
+> *list order* (deny short-circuits, first allow wins). The architecture specifies
+> *precedence-field*-based, order-independent selection plus an `Unavailable`
+> fourth outcome. Slice **S05** brings the code to the end-state design.
+
+---
+
+## Milestones
+
+| # | Theme | Outcome |
+|---|---|---|
+| **M0** | Shell, seams & foundations | The imperative shell + the three seam interfaces with in-memory doubles; config loader; logging; rules-precedence alignment. Unblocks every downstream track. |
+| **M1** | npm protocol adapter | The npm `RegistryClient`: wire decoders, projection to the domain model, data-plane fetch/publish, URL rewrite + packument filtering. |
+| **M2** | Web front door | The raw-WAI `Application`: pure router, error/denial model, meta-routes, middleware, bounded-memory streaming, conditional-GET/ETag, metadata cache. |
+| **M3** | Request pipeline (**walking skeleton**) | The thin end-to-end path: three-registry fetch, credential forward/strip, packument + tarball serving, demand-driven mirror enqueue (against in-memory cloud doubles). |
+| **M4** | AWS cloud backends & worker | `CredentialProvider` (CodeArtifact / static), SQS `MirrorQueue`, the mirror worker, the AWS composition root. **AWS launch-ready.** |
+| **M5** | Effectful rules & CVE | The effectful tier (timeout / retry / circuit-breaker, `Unavailable`), the OSV local-sync in-memory advisory index, `DenyIfCVE`. |
+| **M6** | Observability | Opt-in, vendor-neutral OpenTelemetry/OTLP: tracing, the `ecluse.*` metrics catalog, JSONL `dd` log correlation. |
+| **M7** | GCP backends | The Pub/Sub de-risking spike → Pub/Sub `MirrorQueue`, the ADC credential leaf, GCP wiring. **Scheduled after AWS launch.** |
+| **M8** | Release hardening | SLSA build provenance + SBOM attestation; the launch docs & deployment runbook. |
+
+---
+
+## The DAG (slice index)
+
+Every slice links to its detail file. **Depends on** lists the slice IDs that must
+be **merged** before it can start. Tier = the test suite(s) it owes
+(`U`=unit, `I`=integration, `S`=smoke).
+
+### M0 — Shell, seams & foundations
+
+| ID | Slice | Depends on | Tier |
+|----|-------|------------|------|
+| [S01](slices/S01-app-env-scaffold.md) | App/Env scaffold + composition root | S02 | U |
+| [S02](slices/S02-seam-interfaces.md) | Seam interfaces + in-memory doubles | — | U |
+| [S03](slices/S03-config-loader.md) | Config model & fail-fast loader | S02 | U |
+| [S04](slices/S04-logging-katip.md) | `katip` logging scaffold (json/console) | S01 | U |
+| [S05](slices/S05-rules-precedence.md) | Rules precedence alignment | — | U |
+
+### M1 — npm protocol adapter
+
+| ID | Slice | Depends on | Tier |
+|----|-------|------------|------|
+| [S06](slices/S06-npm-wire-decoders.md) | npm wire types + lenient decoders | — | U, S |
+| [S07](slices/S07-npm-projection.md) | npm projection → domain (`PackageInfo`/`PackageDetails`) | S06 | U |
+| [S08](slices/S08-npm-data-plane.md) | npm data plane: fetch + publish | S02, S07 | U, S |
+| [S09](slices/S09-npm-rewrite-filter.md) | URL rewrite + packument filtering | S05, S07 | U |
+
+### M2 — Web front door
+
+| ID | Slice | Depends on | Tier |
+|----|-------|------------|------|
+| [S10](slices/S10-router.md) | Pure router (`classify`/`Route`) | — | U |
+| [S11](slices/S11-response-model.md) | Error model + denial responses | S05, S10 | U |
+| [S12](slices/S12-wai-app-middleware.md) | WAI app + meta-routes + middleware + dispatch | S01, S10, S11 | U |
+| [S13](slices/S13-streaming-cache.md) | Streaming + conditional-GET/ETag + metadata cache | S12 | U |
+
+### M3 — Request pipeline (walking skeleton)
+
+| ID | Slice | Depends on | Tier |
+|----|-------|------------|------|
+| [S14](slices/S14-packument-path.md) | Packument path end-to-end (**skeleton closes**) | S08, S09, S13 | U |
+| [S15](slices/S15-tarball-path.md) | Tarball path + demand-driven mirror enqueue | S14 | U |
+
+### M4 — AWS cloud backends & worker
+
+| ID | Slice | Depends on | Tier |
+|----|-------|------------|------|
+| [S16](slices/S16-credential-wrapper.md) | `CredentialProvider` generic wrapper + static leaf | S02 | U |
+| [S17](slices/S17-codeartifact-leaf.md) | CodeArtifact `mintToken` leaf | S16 | S |
+| [S18](slices/S18-sqs-queue.md) | SQS `MirrorQueue` backend | S02 | I |
+| [S19](slices/S19-mirror-worker.md) | Mirror worker (fetch → verify → publish → ack) | S08, S16, S18 | U, I |
+| [S20](slices/S20-aws-composition.md) | AWS composition root + config wiring (**launch-ready**) | S03, S15, S17, S18, S19 | I |
+
+### M5 — Effectful rules & CVE
+
+| ID | Slice | Depends on | Tier |
+|----|-------|------------|------|
+| [S21](slices/S21-effectful-tier.md) | Effectful rule tier (`Unavailable`, timeout/retry/breaker) | S05, S14 | U |
+| [S22](slices/S22-cve-sync.md) | `CVELookup` seam + OSV local-sync index | S01, S21 | U, I |
+| [S23](slices/S23-deny-if-cve.md) | `DenyIfCVE` rule | S03, S22 | U |
+
+### M6 — Observability
+
+| ID | Slice | Depends on | Tier |
+|----|-------|------------|------|
+| [S24](slices/S24-otel-substrate.md) | OTel substrate + telemetry config (off by default) | S01, S03 | U |
+| [S25](slices/S25-tracing-spans.md) | WAI/http-client + domain spans | S12, S19, S24 | U, I |
+| [S26](slices/S26-metrics-logs.md) | `ecluse.*` metrics + JSONL `dd` correlation | S04, S24 | U, I |
+
+### M7 — GCP backends (after AWS launch)
+
+| ID | Slice | Depends on | Tier |
+|----|-------|------------|------|
+| [S27](slices/S27-gcp-spike.md) | Pub/Sub de-risking spike (decision gate) | S18 | I |
+| [S28](slices/S28-pubsub-queue.md) | Pub/Sub `MirrorQueue` backend | S02, S27 | I |
+| [S29](slices/S29-adc-credential.md) | Artifact Registry / ADC credential leaf | S16 | S |
+| [S30](slices/S30-gcp-composition.md) | GCP composition wiring | S03, S28, S29 | I |
+
+### M8 — Release hardening
+
+| ID | Slice | Depends on | Tier |
+|----|-------|------------|------|
+| [S31](slices/S31-provenance-sbom.md) | SLSA provenance + SBOM attestation | — | — |
+| [S32](slices/S32-launch-docs.md) | Launch docs & deployment runbook | S20 | — |
+
+---
+
+## Parallelization — ~3 slices in flight
+
+Concurrency is capped at **2–3 slices** so evaluation quality stays high
+([orchestration-strategy → Subagents and isolation](orchestration-strategy.md#subagents-and-isolation)).
+After every merge the team lead rebases the dependent worktrees onto the new base
+and re-runs their gate.
+
+The three vertical tracks (foundations, adapter, web) run against the seams in
+parallel, then converge at M3:
+
+- **Wave 1 — independent roots (no deps):** `S02` (seams), `S06` (npm decoders),
+  `S10` (router). _S05 (rules precedence) is also dependency-free and is the
+  natural next pull as a slot frees._
+- **Wave 2:** `S01` (Env, needs S02), `S07` (npm projection, needs S06), `S11`
+  (responses, needs S05/S10).
+- **Wave 3:** `S03` + `S04` (config/logging), `S08` (npm fetch/publish), `S12`
+  (WAI app). `S16` (credential wrapper) can pull in here — it depends only on the
+  seam (S02) and de-risks M4 early.
+- **Converge:** `S09` → `S13` → `S14` (**walking skeleton closes**) → `S15`.
+- **Then:** M4 (AWS) and M5 (CVE) layer on; M6/M8 run as independent parallel
+  tracks; **M7 (GCP) is scheduled after the AWS launch** (S20) — its spike (S27)
+  is the gate on committing the GCP backends.
+
+### Critical path to AWS launch
+
+`S02 → S01 → S12 → S13 → S14 → S15 → S20`, with `S06→S07→S08→S09` and
+`S16→{S17,S18}→S19` feeding the join at S20.
+
+---
+
+## In flight
+
+_Nothing yet — awaiting architect sign-off on this plan. Once approved, Wave 1
+(S02, S06, S10) is dispatched, one worktree per slice._
+
+---
+
+## Operating cadence (summary)
+
+Full contract in [`orchestration-strategy.md`](orchestration-strategy.md). In
+brief:
+
+- **Roles.** The repo owner is the **principal architect** (owns design, reviews
+  and merges every PR). The lead agent is the **team lead**: decomposes, dispatches
+  implementation subagents, evaluates, reproduces the gate, hands review-ready PRs
+  back. **The team lead never merges and never pushes to `main`.**
+- **One worktree per agent**, each on its own branch, is a hard rule — including
+  for this planning work. Implementer agents touch only files inside their slice's
+  fence.
+- **The per-PR loop:** BUILD (implementer, TDD, self-runs the local gate) →
+  EVALUATE (a fresh reviewer agent: Stage A requirements/traceability, Stage B
+  quality/security/test-quality) → GATE (reproduce CI locally, push, confirm the
+  real `gate` green) → HAND OFF to the architect.
+- **Escalate, don't guess.** Any agent that is stuck, unsure, or facing
+  ambiguous / missing / contradictory spec stops and surfaces it. No fabricated
+  values or API behaviour, no silently-weakened tests, no `.semgrepignore` without
+  the architect's approval, no scope-creep past the fence, no leftover
+  `TODO`/`undefined`/stub passed off as done.
+- **Reproduce the gate before handoff:**
+  `make check && make test-integration && make docs-site && make nix-check`;
+  Semgrep clean; GPG-signed Conventional Commits; SHA-pinned, injection-free
+  workflows.
+
+---
+
+## Explicitly out of scope (this plan and the launch)
+
+Tracked here so reviewers see the boundaries; each is an architecture decision
+([architecture → Out of Scope](../docs/architecture.md#out-of-scope-for-now)),
+not an omission:
+
+- Package **hosting/storage** (delegated to the configured registries); mirroring
+  to raw object storage (writes go through `publishArtifact`, no blob seam).
+- **PyPI / RubyGems adapters** — the domain model, `RegistryClient`, and hosting
+  model are built to accommodate them, but only the **npm** adapter ships.
+- **Search** (`/-/v1/search`) — returns `501` at launch.
+- **On-disk artifact caching** (the mirror retry window is acceptable).
+- **Cloud IAM validation at the proxy edge** (a gateway concern).
+- **Post-mirror CVE re-scan** of already-mirrored versions — CVE gating is
+  point-in-time at ingestion; the re-scan is a deferred follow-on
+  ([rules-engine → Point-in-time gating](../docs/architecture/rules-engine.md#point-in-time-gating--a-known-limitation)).
+- **Web UI / admin API.**
