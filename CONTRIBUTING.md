@@ -74,19 +74,12 @@ change, so it is poor for edit-compile cycles).
 
 ## Codebase Layout
 
-Modules are fit-to-purpose and follow idiomatic Haskell structure: each area of
-the application gets its own namespace directly under `Ecluse`, and types
-are split from implementation where that split earns its keep.
+The *principles* of module organization and namespacing — vertical organization
+(types live with their functions), one `Ecluse.<Area>` namespace per area, and
+when a `.Types` split is justified — live in [`STYLE.md`](STYLE.md) → "Module
+organization". This section records the *current* concrete layout and the one
+project-specific pattern below.
 
-- **One namespace per area.** Each concern lives under its own
-  `Ecluse.<Area>` namespace (`Rules` today; `Registry`, `Queue`, `Credential`,
-  `Config`, `Server`, … later) rather than being appended to a grab-bag module.
-- **Types split from implementation — when it helps.** Where an area carries
-  non-trivial logic, its data types live in a `.Types` leaf module and the
-  functions live in the sibling module (e.g. `Ecluse.Rules.Types` +
-  `Ecluse.Rules`). Where an area is essentially a cohesive set of types
-  with their constructors and renderers (the package model), a single module is
-  clearer than a forced split.
 - **Seams are records of functions, selected at one composition root.** A
   swappable backend — registry protocol, mirror queue, credential provider — is
   modelled as a record whose fields are functions (the *Handle pattern*), built by

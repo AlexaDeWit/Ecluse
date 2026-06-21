@@ -22,7 +22,7 @@ docs/      — architecture and design documents
 - Separate concerns: application wiring in `app/`, logic in `src/`, tests in `test/`.
 - Tests mirror the library module hierarchy (e.g. `src/Foo/Bar.hs` → `test/Foo/BarSpec.hs`).
 - Keep `app/Main.hs` thin — it should only parse config and call into the library.
-- **Keep modules fit-to-purpose with idiomatic namespacing.** Give each area its own `Ecluse.<Area>` namespace; where an area has non-trivial logic, split its data types into a `.Types` leaf module and keep the functions in the sibling module (e.g. `Ecluse.Rules.Types` + `Ecluse.Rules`) — but don't force the split where a cohesive type module is clearer. See [`CONTRIBUTING.md`](CONTRIBUTING.md) → "Codebase Layout".
+- **Keep modules fit-to-purpose with idiomatic namespacing.** Organize vertically (a type lives with the functions on it), one `Ecluse.<Area>` namespace per area, and split a `.Types` module only when it earns it. The full principles are in [`STYLE.md`](STYLE.md) → "Module organization"; the current concrete layout is in [`CONTRIBUTING.md`](CONTRIBUTING.md) → "Codebase Layout".
 
 ## Build & Tooling
 

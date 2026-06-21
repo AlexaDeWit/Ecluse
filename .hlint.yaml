@@ -15,6 +15,7 @@
 # --- Partial functions: banned everywhere -----------------------------------
 - functions:
     - {name: undefined, within: [], message: "Partial: replace with a real value or a total error path."}
+    - {name: error, within: [], message: "Don't crash the service: return Either/Maybe or encode the impossibility in the types. For a genuinely unreachable branch, see STYLE.md section 10 (the per-declaration HLint-ignore escape hatch)."}
     - {name: Prelude.head, within: [], message: "Partial on []: use 'viaNonEmpty head', pattern match, or 'listToMaybe'."}
     - {name: Prelude.tail, within: [], message: "Partial on []: pattern match or use 'drop 1'."}
     - {name: Prelude.init, within: [], message: "Partial on []: pattern match instead."}

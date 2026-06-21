@@ -46,6 +46,47 @@ both work, the boring one wins.
 
 ---
 
+## Guiding principle: Parse, don't validate
+
+Écluse ingests untrusted input from many registries, so it leans hard on Alexis
+King's [**"Parse, don't validate"**](https://lexi-lambda.github.io/blog/2019/11/05/parse-don-t-validate/).
+The distinction: a *parser* turns less-structured input into more-structured
+output and *may fail*, capturing what it learned **in the type**; a *validator*
+only checks and returns `()`/`Bool`, throwing that knowledge away so the rest of
+the code must re-check the invariant or assume it. We parse.
+
+Concretely:
+
+- **Make illegal states unrepresentable.** Reach for a type that cannot hold the
+  bad case — `NonEmpty a` instead of "a list I checked wasn't empty", a sum type
+  instead of a `Bool` plus a convention. The type becomes the proof, so the check
+  can't be forgotten.
+- **Parse once, at the boundary; carry the refined type inward.** "Push the
+  burden of proof upward as far as possible, but no further" — get input into its
+  most precise representation as early as possible (the registry adapter, the
+  config loader, the request handler) so nothing downstream re-validates or trips
+  over a case that was already ruled out. This is the registry seam in action:
+  adapters project wire formats into `Ecluse.Package` types and nothing above
+  them sees raw wire data (see §4.4 and `docs/architecture.md`).
+- **No shotgun parsing.** Don't scatter input checks through processing logic —
+  that LangSec anti-pattern lets malformed input get partially processed before
+  it's rejected, leaving state hard to reason about. Keep a clean parse phase,
+  then an execution phase that can trust its inputs.
+- **Smart constructors are parsers.** When a type can't *structurally* exclude
+  the bad case, make it opaque and expose a smart constructor that returns
+  `Maybe`/`Either` of the refined type (§6). A constructor that can reject input
+  returns `Either Err T`, never `Bool`; `mkScope`/`mkVersion` are the
+  total/normalizing form of the same pattern.
+- **Distrust `m ()` and `Bool`-returning "checks".** If a function's job is to
+  assert something, have it *return the evidence* (the refined value) so call
+  sites cannot skip it. "Let your datatypes inform your code, not the other way
+  around."
+
+This is the same instinct as §10 (totality): the partial-function bans exist
+because a parsed, precise type removes the case that would otherwise crash.
+
+---
+
 ## 1. Formatting is mechanical — never do it by hand
 
 Layout (indentation, commas, line breaks, import alignment) is owned entirely by
@@ -132,6 +173,16 @@ Enabled on top of `-Wall`, each reinforcing a rule in this guide:
 | `-Wpartial-fields` | Partial record selectors on sum types. |
 | `-Wredundant-constraints` | Constraints a signature does not use. |
 
+**`-Werror` makes _every_ warning fatal — not only the eight above.** That
+includes the full `-Wall` set (unused imports and bindings, incomplete and
+overlapping patterns, missing top-level type signatures, type defaulting, …)
+*and* relude's own `WARNING` pragmas. In particular **`undefined` and the
+`trace*` debugging functions fail to compile** in committed code, via relude's
+warnings under `-Werror` — at build time, before the `.hlint.yaml` ban (§10)
+even runs. So a `trace` you drop in to debug will break `make build`; remove it
+(use `katip` for real logging). `error` is the one relude deliberately leaves
+warning-free — see §10 for its policy.
+
 Deliberately **not** enabled: `-Wunused-packages` (the relude mixin defeats its
 attribution), `-Wmissing-import-lists` (we use open imports for internal
 modules, §8), and `-Wmissing-local-signatures` (`where`-helpers may rely on
@@ -144,9 +195,88 @@ weakening the committed flags.
 
 ---
 
-## 4. Modules and exports
+## 4. Module organization, namespacing, and exports
 
-Module *layout* is covered in `CONTRIBUTING.md`. Two style points belong here:
+This section is the durable how-to for *structuring* modules. The *current*
+concrete module list lives in `CONTRIBUTING.md` → "Codebase Layout"; the
+principles below are what decide where new code goes.
+
+### 4.1 Organize vertically — a type lives with the functions on it
+
+Group each area's types **and** the functions that operate on them in the same
+module or namespace ("vertical" organization). Resist starting a project-wide
+`Types` module, a `Constants` module, or a `Util`/`Misc` grab-bag: those
+"horizontal" buckets pull related code apart and rot into dumping grounds.
+(This is the central recommendation of Gabriella González's widely-cited module-
+organization guide.)
+
+So `Ecluse.Package` deliberately keeps the `Scope`/`PackageName`/`Version`/…
+types *together* with their smart constructors and renderers — one cohesive
+vocabulary module — rather than scattering them across type/function modules.
+
+### 4.2 One namespace per area; module name = file path
+
+- Each area of the system gets its own `Ecluse.<Area>` namespace (`Rules` today;
+  `Registry`, `Queue`, `Config`, `Server`, … later). Organize by *feature* (what
+  the code is about), not by *layer* (type vs class vs handler).
+- GHC requires the module name to match the file path — PascalCase and
+  hierarchical: `Ecluse.Rules.Types` ⇄ `src/Ecluse/Rules/Types.hs`. The compiler
+  enforces this; tests mirror it (`test/unit/Ecluse/RulesSpec.hs`, see §11).
+- Prefer a few cohesive modules over many tiny ones. A module per single
+  function is over-splitting; a 1,000-line module spanning three concerns is
+  under-splitting. Aim for one clear responsibility per module.
+
+### 4.3 Split a `.Types` module only when it earns it
+
+Because vertical organization (4.1) is the default, a separate
+`Ecluse.<Area>.Types` module is the *exception*, justified by one of:
+
+1. **Breaking a cyclic import.** Haskell forbids module import cycles (short of
+   `.hs-boot` files, which we avoid). When two modules would otherwise need each
+   other, extract the shared data types into a `.Types` module they both import.
+   This is the canonical reason a types module exists.
+2. **A shared vocabulary** — the types are a stable contract imported by several
+   modules, while the functions over them are many and varied.
+3. **Size** — the implementation has grown enough that separating the data
+   declarations genuinely aids navigation.
+
+`Ecluse.Rules.Types` (the `Rule`/`Decision`/… types) is split from `Ecluse.Rules`
+(the evaluation functions) on grounds (2)/(3): the types are the engine's
+contract, shared with the tests and the future effectful rule tiers. When none of
+the three applies — as with `Ecluse.Package` — keep types and functions together.
+
+### 4.4 Functional core, effects at the edges
+
+Let the module layout mirror the system's "functional core, imperative shell"
+shape (cf. Matt Parsons' *Three Layer Haskell Cake*):
+
+- **Domain/leaf modules are pure** — the rules engine, parsers, renderers
+  (`Ecluse.Rules`, `Ecluse.Package`). No `IO`; trivially testable.
+- **Effects live at the boundary** — `app/Main.hs`, the server, and the worker
+  layer, which run in `ReaderT Env IO` (see `docs/architecture.md`). Swappable
+  effectful backends (registry, queue, credentials) are records of functions
+  chosen at a single composition root — the *seam* pattern (`CONTRIBUTING.md` /
+  architecture).
+- **Keep the dependency arrow pointing inward:** pure modules must never import
+  the effectful shell.
+
+### 4.5 Put instances with the type or the class — no orphans
+
+Define a typeclass instance in the module that defines the data type, or the one
+that defines the class. *Orphan instances* (in a third module) are a maintenance
+hazard: they can be silently overlapped and make import order matter. If you need
+an instance for a type and a class you don't own, wrap the type in a `newtype`.
+
+### 4.6 Internal modules expose innards without widening the public API
+
+Our domain types are deliberately opaque (e.g. `Scope`'s constructor is hidden;
+§6). When a test or an advanced caller genuinely needs the guts, do **not** widen
+the public export list. Instead add an `Ecluse.<Area>.Internal` module that
+exports everything, and have the public module re-export only the curated, stable
+surface. Importing `.Internal` is, by convention, opting out of our stability
+promises — the same pattern the `text` and `bytestring` libraries use.
+
+### 4.7 Exports
 
 **Every module has an explicit export list** (enforced by
 `-Wmissing-export-lists`). The list is the module's public contract; everything
@@ -174,7 +304,7 @@ module Ecluse.Package (
 Export an abstract type as `Scope` (constructor hidden — callers must use the
 smart constructor) or as `PackageName (..)` (constructors and fields exposed)
 deliberately; the choice encodes whether the type has invariants to protect
-(see §6).
+(see §6), and pairs with the `.Internal` escape hatch in 4.6.
 
 ---
 
@@ -255,7 +385,10 @@ describing the mechanics.
 
 **Rule 6.1 — Wrap domain values in newtypes; keep them opaque when they have an
 invariant.** A `Scope` is not just `Text`; making it its own type stops it being
-mixed up with a package name and gives one place to enforce normalisation.
+mixed up with a package name and gives one place to enforce normalisation. This
+is "parse, don't validate" in practice (see the guiding principle): the opaque
+type plus its smart constructor *is* the parser, and downstream code receives a
+value that already carries its invariant.
 
 **Rule 6.2 — Give an opaque type the `mk*` / `un*` / `render*` trio:**
 
@@ -403,6 +536,48 @@ and let the caller decide — see `Decision`/`RuleOutcome`, which carry a human
 reason for every branch precisely so failures are explainable rather than
 thrown.
 
+### `error` and the unreachable-branch escape hatch
+
+`error` is banned along with the rest. "This branch is impossible" is a claim
+about *today's* code; a later refactor can quietly make it reachable, turning a
+dead branch into a live crash in a service that is supposed to stay up. (Note
+`undefined` and the `trace*` functions are stopped even earlier — at compile
+time, by relude's warnings under `-Werror`; see §3.)
+
+So **first try to make the impossible case un-representable** instead of
+asserting it away:
+- use `NonEmpty` instead of `[]` so there is no empty case to handle;
+- return the value from the function that established the invariant, rather than
+  re-deriving it and handling a "can't happen" `Nothing`;
+- restructure the guards or patterns so the leftover branch disappears.
+
+For the rare branch that is *genuinely* unreachable and cannot be designed away,
+use a **per-declaration HLint ignore paired with a comment explaining why**:
+
+```haskell
+-- Exhaustive over Int, but GHC's checker can't prove it, so the final branch
+-- is required yet unreachable. (Illustrative: this one is better fixed by
+-- dropping the redundant `n > 0` guard — shown only for the annotation's form.)
+{- HLINT ignore classify "Avoid restricted function" -}
+classify :: Int -> Text
+classify n
+    | n < 0 = "negative"
+    | n == 0 = "zero"
+    | n > 0 = "positive"
+    | otherwise = error "unreachable: an Int is < 0, == 0, or > 0"
+```
+
+Rules for the escape hatch:
+- The annotation **names the single declaration** it applies to (`classify`
+  above) and sits directly above it. `"Avoid restricted function"` is HLint's
+  fixed name for this hint — use it verbatim.
+- Keep that declaration **small**: the ignore unblocks *every* restricted
+  function inside it, not just `error`, so a tiny scope limits the blast radius.
+- The justifying comment is **mandatory** — "why this cannot happen" is the
+  whole point of the exception.
+- Reach for it sparingly, like a Semgrep ignore: a reviewer should be able to
+  agree the branch is genuinely dead.
+
 ---
 
 ## 11. Tests
@@ -443,7 +618,8 @@ three-tier strategy are in `CONTRIBUTING.md`; this is style.)
       has a Haddock comment; record fields and sum constructors are documented.
 - [ ] New domain values are newtypes; opaque ones expose `mk*`/`un*`/`render*`
       as appropriate.
-- [ ] No partial functions; no `error`/`undefined`/`unsafePerformIO`.
+- [ ] No partial functions; no `error`/`undefined`/`unsafePerformIO` (a
+      genuinely-unreachable `error` needs the §10 ignore + justifying comment).
 - [ ] Functions are small and composed; logic is pure where it can be.
 - [ ] Docs that the change affects (`README.md`, `docs/`, this file) are updated
       in the same commit.
