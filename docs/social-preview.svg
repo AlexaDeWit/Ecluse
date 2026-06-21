@@ -2,19 +2,22 @@
 <!--
   Écluse — GitHub social preview (1280×640).
   Original hand-authored vector. No third-party, stock, or copyrighted assets.
-  A draughtsman's-page treatment (ink on drafting paper, line-art) of a *real*
-  scene in gentle perspective: standing at the foot of a canal lock, looking up
-  the chamber at the closed mitre gates with their heavy balance beams splayed
-  out over the coping. The resemblance to a particular flight of locks is left
-  for those who would recognise it — nothing in the artwork names it. Only the
-  package wordmark and tagline appear as text.
+  A draughtsman's-page treatment (ink on drafting paper, line-art): a side
+  section of a canal lock — a package (a wooden crate, the trademark-free emblem
+  of a shipped dependency) waiting in the low chamber while the closed mitre
+  gate, with its heavy balance beam over the coping, holds back the higher water
+  of the pound beyond. The step in the water surface across the gate is the thing
+  that reads, at a glance, as a lock: a controlled chamber every package is
+  raised or lowered through before it is admitted. The resemblance to a
+  particular flight of locks is left for those who would recognise it — nothing
+  names it. Only the package wordmark and tagline appear as text.
     Wordmark : "EB Garamond" (OFL) → Georgia fallback
 -->
 <svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640"
      viewBox="0 0 1280 640" role="img"
      aria-label="Écluse — supply-chain resilience proxy for package registries">
   <title>Écluse</title>
-  <desc>Looking up a canal lock at the closed gates and their balance beams.</desc>
+  <desc>A package crate in the low chamber of a canal lock; the closed gate holds back the higher pound beyond.</desc>
 
   <defs>
     <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
@@ -27,68 +30,67 @@
   <rect x="24" y="24" width="1232" height="592" fill="url(#grid)"/>
   <rect x="24" y="24" width="1232" height="592" fill="none" stroke="#211F1C" stroke-width="1.6"/>
 
-  <!-- ════════ THE LOCK, looking up the chamber (gentle perspective) ════════ -->
+  <!-- ════════ THE LOCK, in section: package in the low chamber, gate holding the pound ════════ -->
   <g fill="none" stroke="#211F1C" stroke-linejoin="round">
 
-    <!-- chamber walls converging toward the gates (the perspective cue) -->
-    <g stroke-width="2">
-      <line x1="190" y1="372" x2="345" y2="278"/>
-      <line x1="1090" y1="372" x2="935" y2="278"/>
+    <!-- ground the walls are set into (a whisper) -->
+    <g stroke-width="1.4" stroke-opacity="0.55">
+      <line x1="150" y1="140" x2="196" y2="140"/>
+      <line x1="1104" y1="140" x2="1130" y2="140"/>
     </g>
 
-    <!-- water: front edge, banks, a couple of still reflections -->
+    <!-- chamber: far wall, floor, end wall (the section) -->
+    <g stroke-width="2.4">
+      <line x1="196" y1="140" x2="196" y2="372"/>
+      <line x1="196" y1="372" x2="1104" y2="372"/>
+      <line x1="1104" y1="140" x2="1104" y2="372"/>
+    </g>
+
+    <!-- the gate: a braced timber leaf, closed, from coping to floor -->
+    <g stroke-width="2.4">
+      <line x1="694" y1="140" x2="694" y2="372"/>
+      <line x1="706" y1="140" x2="706" y2="372"/>
+      <line x1="694" y1="140" x2="706" y2="140"/>
+    </g>
     <g stroke-width="1.4">
-      <line x1="208" y1="375" x2="1072" y2="375"/>
-      <line x1="208" y1="375" x2="350" y2="283"/>
-      <line x1="1072" y1="375" x2="930" y2="283"/>
+      <line x1="694" y1="222" x2="706" y2="222"/>
+      <line x1="694" y1="286" x2="706" y2="286"/>
+      <line x1="694" y1="344" x2="706" y2="344"/>
+      <line x1="694" y1="366" x2="706" y2="210"/>   <!-- diagonal brace -->
+    </g>
+
+    <!-- balance beam: the heavy timber lever lying out over the coping -->
+    <line x1="700" y1="141" x2="556" y2="129" stroke-width="6" stroke-linecap="round"/>
+
+    <!-- water: the step is the tell — low in the chamber, high in the pound -->
+    <g stroke-width="1.8">
+      <line x1="706" y1="192" x2="1104" y2="192"/>   <!-- pound (high) -->
+      <line x1="196" y1="306" x2="330" y2="306"/>    <!-- chamber (low), split -->
+      <line x1="510" y1="306" x2="694" y2="306"/>    <!-- around the crate -->
     </g>
     <g stroke-width="1" stroke-opacity="0.4">
-      <line x1="380" y1="345" x2="900" y2="345"/>
-      <line x1="450" y1="322" x2="830" y2="322"/>
-      <line x1="640" y1="286" x2="640" y2="352"/>
+      <line x1="760" y1="210" x2="1056" y2="210"/>
+      <line x1="820" y1="226" x2="1000" y2="226"/>
+      <line x1="212" y1="322" x2="296" y2="322"/>
+      <line x1="576" y1="322" x2="680" y2="322"/>
     </g>
 
-    <!-- closed mitre gates: two leaves meeting on the centreline -->
-    <g stroke-width="2.4">
-      <line x1="345" y1="112" x2="345" y2="278"/>   <!-- left heel post -->
-      <line x1="935" y1="112" x2="935" y2="278"/>   <!-- right heel post -->
-      <line x1="640" y1="92"  x2="640" y2="284"/>   <!-- centre mitre post -->
-    </g>
-    <!-- top & bottom rails (slight rise toward the centre = depth) -->
+    <!-- a package in transit through the lock: a wooden crate afloat in the chamber -->
     <g stroke-width="2">
-      <line x1="345" y1="112" x2="640" y2="92"/>
-      <line x1="935" y1="112" x2="640" y2="92"/>
-      <line x1="345" y1="278" x2="640" y2="284"/>
-      <line x1="935" y1="278" x2="640" y2="284"/>
+      <path d="M330 218 L470 218 L510 192 L370 192 Z"/>   <!-- lid (top face) -->
+      <path d="M470 218 L510 192 L510 294 L470 320 Z"/>   <!-- right side face -->
+      <path d="M330 218 L470 218 L470 320 L330 320 Z"/>   <!-- front face -->
     </g>
-    <!-- timber boarding -->
-    <g stroke-width="1.2" stroke-opacity="0.8">
-      <line x1="345" y1="153" x2="640" y2="140"/>
-      <line x1="345" y1="195" x2="640" y2="188"/>
-      <line x1="345" y1="236" x2="640" y2="236"/>
-      <line x1="935" y1="153" x2="640" y2="140"/>
-      <line x1="935" y1="195" x2="640" y2="188"/>
-      <line x1="935" y1="236" x2="640" y2="236"/>
+    <g stroke-width="1.4">
+      <line x1="330" y1="320" x2="470" y2="218"/>   <!-- diagonal brace (rhymes with the gate) -->
+      <line x1="330" y1="269" x2="470" y2="269"/>   <!-- plank seam -->
+      <line x1="377" y1="218" x2="417" y2="192"/>   <!-- lid slats -->
+      <line x1="424" y1="218" x2="464" y2="192"/>
+      <line x1="470" y1="250" x2="510" y2="224"/>   <!-- side slats -->
+      <line x1="470" y1="288" x2="510" y2="262"/>
     </g>
-    <!-- diagonal braces (heel-foot → mitre-head) -->
-    <g stroke-width="1.6">
-      <line x1="345" y1="278" x2="636" y2="104"/>
-      <line x1="935" y1="278" x2="644" y2="104"/>
-    </g>
-
-    <!-- balance beams: heavy timber arms splayed out over the coping -->
-    <g stroke-width="5" stroke-linecap="round">
-      <line x1="345" y1="112" x2="150" y2="156"/>
-      <line x1="935" y1="112" x2="1130" y2="156"/>
-    </g>
-    <g stroke-width="2.2" stroke-linecap="round">
-      <line x1="145" y1="149" x2="156" y2="164"/>   <!-- beam-end handles -->
-      <line x1="1135" y1="149" x2="1124" y2="164"/>
-    </g>
+    <rect x="344" y="230" width="40" height="24" stroke-width="1.2"/>   <!-- shipping label -->
   </g>
-
-  <!-- still water of the pound beyond the gates (a whisper) -->
-  <line x1="505" y1="80" x2="775" y2="80" stroke="#211F1C" stroke-width="1" stroke-opacity="0.4"/>
 
   <!-- ════════ wordmark + tagline (the only text) ════════ -->
   <text x="640" y="492" text-anchor="middle"
