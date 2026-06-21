@@ -61,10 +61,24 @@ spec = do
             classify [""] `shouldBe` Unsupported
         it "routes a non-.tgz artifact-shaped path to Unsupported" $
             classify ["is-odd", "-", "is-odd-3.0.1.zip"] `shouldBe` Unsupported
+        it "routes a bare \".tgz\" (no name before the suffix) to Unsupported" $
+            -- Pins the isTarballFile length guard: the file must be longer than
+            -- @.tgz@, so the exact suffix alone is not a tarball.
+            classify ["is-odd", "-", ".tgz"] `shouldBe` Unsupported
         it "routes a version-manifest request to Unsupported (not modelled yet)" $
             -- @GET /{pkg}/{version}@ is a later slice; today it is not a packument.
             classify ["is-odd", "3.0.1"] `shouldBe` Unsupported
         it "routes a scope with no package name to Unsupported" $
             classify ["@babel"] `shouldBe` Unsupported
+        it "routes a scope with an empty trailing name to Unsupported" $
+            -- Reachable from @\/\@scope%2F@: WAI decodes @%2F@ to one segment
+            -- @"\@babel\/"@, whose base name is empty — a degenerate scoped name.
+            classify ["@babel/"] `shouldBe` Unsupported
+        it "routes an empty scope (\"@\" then name) to Unsupported" $
+            -- @mkScope "@"@ strips to @""@, which would render as @\/code-frame@.
+            classify ["@", "code-frame"] `shouldBe` Unsupported
+        it "routes a scoped name whose base still contains a slash to Unsupported" $
+            -- An npm name never contains @\'\/\'@ beyond the scope separator.
+            classify ["@babel/code/frame"] `shouldBe` Unsupported
         it "routes trailing junk after a package to Unsupported" $
             classify ["is-odd", "extra", "junk"] `shouldBe` Unsupported

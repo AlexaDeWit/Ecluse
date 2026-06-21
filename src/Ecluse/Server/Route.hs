@@ -1,3 +1,7 @@
+-- TupleSections: local convenience for pairing a parsed name with its trailing
+-- segments in 'takePackage' ((,rest) / (,more)); see STYLE.md §2.
+{-# LANGUAGE TupleSections #-}
+
 {- | The pure request router for the npm front door.
 
 'classify' turns an ecosystem-native request path — the already-mount-stripped,
@@ -105,8 +109,12 @@ the remaining segments. Handles both wire encodings of a scoped name:
 * one decoded segment, @\@scope\/pkg@ — split on the first @\'\/\'@;
 * two segments, @\@scope@ then @pkg@ — consume both.
 
-Returns 'Nothing' when there is no usable package (an empty path, an empty
-leading segment, or a scope with no following name), so the caller can deny it.
+Returns 'Nothing' (so the caller denies it) for anything without a usable
+package: an empty path, an empty leading segment, or a __degenerate scoped
+name__ — one whose scope is empty (@\@\/pkg@), whose base name is empty
+(@\@scope\/@, reachable from @\/\@scope%2F@), or whose base name still contains a
+@\'\/\'@ (@\@scope\/a\/b@). 'mkScope'\/'mkPackageName' do no validation, so this
+boundary is where such names are rejected rather than passed downstream.
 -}
 takePackage :: [Text] -> Maybe (PackageName, [Text])
 takePackage [] = Nothing
@@ -115,16 +123,25 @@ takePackage (seg : rest)
     | "@" <- T.take 1 seg =
         case T.breakOn "/" (T.drop 1 seg) of
             -- One decoded segment "@scope/pkg": scope before the '/', base after.
+            -- 'scopedName' may reject it, propagating 'Nothing' through (,rest).
             (scope, base)
                 | not (T.null base) ->
-                    Just (npmName (Just scope) (T.drop 1 base), rest)
+                    (,rest) <$> scopedName scope (T.drop 1 base)
             -- Bare scope "@scope": the package name is the next segment.
             _ -> case rest of
-                (base : more) | not (T.null base) -> Just (npmName (Just seg) base, more)
+                (base : more) -> (,more) <$> scopedName (T.drop 1 seg) base
                 _ -> Nothing
-    | otherwise = Just (npmName Nothing seg, rest)
+    | otherwise = Just (mkPackageName Npm Nothing seg, rest)
   where
-    npmName mScope = mkPackageName Npm (mkScope <$> mScope)
+    -- A scoped name is usable only when both halves are non-empty and the base
+    -- carries no further '/' — an npm name never contains '/' beyond the scope
+    -- separator. The leading '@' is already stripped from both arguments, so a
+    -- degenerate name ('@/pkg', '@scope/', '@scope/a/b') is rejected here rather
+    -- than passed to the no-op 'mkScope'/'mkPackageName'.
+    scopedName :: Text -> Text -> Maybe PackageName
+    scopedName scope base
+        | T.null scope || T.null base || T.isInfixOf "/" base = Nothing
+        | otherwise = Just (mkPackageName Npm (Just (mkScope scope)) base)
 
 {- | Whether a tarball-slot filename is an npm tarball — a non-empty name ending
 in @.tgz@. Guards the 'Tarball' route so a non-artifact file under @\/-\/@ falls
