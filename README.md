@@ -20,6 +20,45 @@ See [`docs/architecture.md`](docs/architecture.md) for the full design:
 three-registry model, deny-by-default rules engine, mirror queue, and
 configuration reference.
 
+## Verifying the image
+
+Every published image is **signed** and carries **provenance** and **SBOM**
+attestations — all keyless (Sigstore), bound to the image digest, and verifiable
+with [cosign](https://github.com/sigstore/cosign) alone. Pin by digest in
+production (`alexadewit/ecluse@sha256:…`); a tag is used below for brevity.
+
+```bash
+IMAGE=alexadewit/ecluse:0.1.0
+ISSUER=https://token.actions.githubusercontent.com
+IDENTITY='https://github.com/AlexaDeWit/Ecluse/.github/workflows/release.yml@.*'
+
+# 1. Signature — published by the official release workflow
+cosign verify "$IMAGE" \
+  --certificate-oidc-issuer "$ISSUER" \
+  --certificate-identity-regexp "$IDENTITY"
+
+# 2. Provenance — how & where it was built (SLSA v1.0)
+cosign verify-attestation "$IMAGE" --type slsaprovenance1 \
+  --certificate-oidc-issuer "$ISSUER" \
+  --certificate-identity-regexp "$IDENTITY"
+
+# 3. SBOM — what's inside (SPDX); pipe through jq to read the document
+cosign verify-attestation "$IMAGE" --type spdxjson \
+  --certificate-oidc-issuer "$ISSUER" \
+  --certificate-identity-regexp "$IDENTITY" \
+  | jq -r '.payload | @base64d | fromjson | .predicate' > ecluse.spdx.json
+```
+
+Strongest of all, the image is **bit-for-bit reproducible** — rather than trust
+anyone, rebuild it from the pinned source and compare to what you pulled:
+
+```bash
+nix build github:AlexaDeWit/Ecluse/v0.1.0#dockerImage   # → ./result (a docker-archive)
+```
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md#supply-chain-attestations) for how the
+attestations are produced.
+
 ## Development
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full contributor guide —

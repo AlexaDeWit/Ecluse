@@ -259,7 +259,8 @@ Build it locally with `make docker-build` (→ `./result`, a `docker-archive`).
 Publishing is a separate, tag-triggered workflow
 ([`.github/workflows/release.yml`](.github/workflows/release.yml)) — **not** part
 of the PR `gate`. Pushing a `vX.Y.Z` tag builds the image, pushes it
-(`make docker-push`), and signs it (`make docker-sign`).
+(`make docker-push`), signs it (`make docker-sign`), and attests an SBOM + SLSA
+provenance (`make sbom` + `make attest`).
 
 **Immutable tags — no `latest`.** The target repo
 ([`alexadewit/ecluse`](https://hub.docker.com/r/alexadewit/ecluse)) enforces
@@ -267,6 +268,31 @@ immutable tags, so every push is a fresh, never-reused tag: the release publishe
 `ecluse:X.Y.Z` (from the git tag) and nothing else. There is deliberately no
 moving pointer — **pin deployments by digest** (`alexadewit/ecluse@sha256:…`),
 which is the stronger supply-chain posture regardless.
+
+### Supply-chain attestations
+
+Beyond the signature, each release attaches two **keyless** (Sigstore/OIDC, no
+stored key) attestations, bound to the image **digest** and stored under cosign's
+own tags — no registry referrers API needed, so Docker Hub works:
+
+- **SBOM** (`make sbom` → `cosign attest --type spdxjson`). Generated with
+  [`sbomnix`](https://github.com/tiiuae/sbomnix) from the **Nix closure of the
+  exact binary the image ships** (`.#ecluse-bin`, stripped/static) — not a scan
+  of the image, which couldn't see the statically-linked Haskell deps. So it
+  lists the real contents (~23 components: the `ecluse` binary plus its C
+  closure — glibc, zlib, and the curl/openssl/krb5 chunk that rides in via the
+  GHC runtime's `libdw`) with no dynamic-build noise to trip CVE scanners. SPDX
+  **and** CycloneDX are emitted. The Haskell dependencies are compiled into the
+  `ecluse` component; they are pinned by `flake.lock` and, because the image is
+  bit-for-bit reproducible, independently derivable.
+- **Provenance** (`make attest` → `cosign attest --type slsaprovenance1`). A
+  SLSA v1.0 predicate ([`scripts/gen-provenance.sh`](scripts/gen-provenance.sh))
+  recording the source repo + commit, the release workflow, and the run — the
+  *how/where*. The cryptographic "who built it" guarantee is the keyless signing
+  identity (the release workflow's OIDC cert), not the predicate body.
+
+It's cosign end-to-end, so consumers verify signature, provenance, and SBOM with
+one tool; the recipe lives in the [README](README.md#verifying-the-image).
 
 **Authentication (Docker Hub).** Docker Hub has no OIDC keyless login, so the push
 needs a long-lived token — kept as weak and contained as possible:
@@ -287,7 +313,7 @@ needs a long-lived token — kept as weak and contained as possible:
 
 > Until the `release` environment and its `DOCKERHUB_*` secrets exist, the publish
 > workflow is expected to fail at the push step — by design. The build, tagging,
-> and signing wiring are complete; only the credential is outstanding.
+> signing, and attestation wiring are complete; only the credential is outstanding.
 
 ---
 

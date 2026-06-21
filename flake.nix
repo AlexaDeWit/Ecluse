@@ -89,11 +89,24 @@
         # Release tooling: skopeo pushes the Nix-built image to a registry (no
         # Docker daemon needed), cosign signs it keylessly. Used via the default
         # shell by release.yml / `make docker-{push,sign}`.
-        releaseInputs = [ pkgs.skopeo pkgs.cosign ];
+        releaseInputs = [
+          pkgs.skopeo
+          pkgs.cosign
+          # Nix-native SBOM generation from the actual build closure (more
+          # accurate than scanning a distroless image, whose static Haskell deps
+          # a scanner can't see). See CONTRIBUTING.md → "Supply-chain attestations".
+          pkgs.sbomnix
+        ];
       in {
         packages = {
           default = ecluse;
           ecluse = ecluse;
+
+          # The exact stripped, static binary that ships inside the image
+          # (`justStaticExecutables`, no Haskell-library closure). Exposed so the
+          # SBOM and any verifier can target precisely what the image contains —
+          # `nix build .#ecluse-bin` — rather than the noisier dynamic package.
+          ecluse-bin = ecluseBin;
 
           # Lean, reproducible OCI image, built straight from the binary's Nix
           # closure — no Dockerfile, no base distro. It contains only the runtime

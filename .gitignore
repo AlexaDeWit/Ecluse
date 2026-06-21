@@ -7,6 +7,8 @@ dist-coverage/
 _site/
 result
 result-*
+/sbom/
+provenance.predicate.json
 .hie/
 *.hi
 *.o
