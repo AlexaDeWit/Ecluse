@@ -2,7 +2,7 @@
   description = "ecluse: supply-chain resilience proxy for package registries";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-24.11";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
     # A second, newer nixpkgs used *only* for vulnix: 24.11's vulnix (1.10.1) is
     # broken against NVD's retired 1.1 feeds. grype (the scan authority) and
     # everything else stay on the pinned set. See CONTRIBUTING.md →
