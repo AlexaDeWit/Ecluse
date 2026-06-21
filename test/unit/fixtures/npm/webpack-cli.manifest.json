@@ -1,0 +1,26 @@
+{
+  "_id": "webpack-cli@5.1.4",
+  "name": "webpack-cli",
+  "version": "5.1.4",
+  "description": "CLI for webpack & friends",
+  "license": "MIT",
+  "dependencies": {
+    "commander": "^10.0.1",
+    "colorette": "^2.0.14"
+  },
+  "devDependencies": {
+    "jest": "^29.4.3",
+    "typescript": "^5.0.2"
+  },
+  "peerDependencies": {
+    "webpack": "5.x.x"
+  },
+  "optionalDependencies": {
+    "fsevents": "~2.3.2"
+  },
+  "dist": {
+    "shasum": "1111222233334444555566667777888899990000",
+    "tarball": "https://registry.npmjs.org/webpack-cli/-/webpack-cli-5.1.4.tgz",
+    "integrity": "sha512-p0000111122223333444455556666777788889999AAAABBBBCCCCDDDDEEEEFF=="
+  }
+}
