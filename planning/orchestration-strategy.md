@@ -118,6 +118,40 @@ The implementer's own "it works" does not count; evidence does.
 Critical findings block and bounce to the implementer (resumed so context is
 kept), then are re-verified.
 
+## Inter-wave quality & alignment pass
+
+Per-PR review judges each slice **in isolation**; it cannot see the whole that
+parallel slices compose into. Slices built concurrently against the seams drift —
+divergent idioms, duplicated helpers, inconsistent Haddock, and type-conversion
+churn at the boundaries (bouncing a value through `String` / `Text` /
+`ByteString`) — and none of that fails a single-slice review. So **between waves**,
+once a wave's PRs are all merged and before the next wave is dispatched, the team
+lead runs a codebase-wide **quality & alignment pass**.
+
+A dedicated agent audits the integrated tree (fresh context, read-and-verify) for:
+
+- **Structural improvements** — cross-slice duplication, misplaced or mis-sized
+  modules, abstractions that should be shared or split, leaky seams, and
+  error/idiom patterns that diverged across the slices that just landed.
+- **Haddock cleanup** — gaps, drift, and STYLE §5.6 violations (roadmap / slice
+  narration that crept in); consistent voice and cross-references across modules.
+- **Performance problems likely to surface** — needless type conversions (the
+  `String`↔`Text`↔`ByteString` bounce), avoidable re-parsing / re-allocation,
+  lazy/strict mismatches, accidentally-quadratic patterns — caught structurally
+  now, before later slices build on them.
+
+The audit produces a **categorized findings report**; the team lead triages it:
+
+- **Safe, in-scope, behaviour-preserving fixes** (rename, dedupe, Haddock, a
+  localized conversion) land together as one reviewed, gated `refactor` / `docs`
+  PR — the same BUILD → EVALUATE → GATE loop.
+- **Design-level or far-reaching findings** are **escalated to the architect** as
+  new slices / issues rather than silently absorbed — they may reshape later waves.
+
+The pass **gates the next wave**: the integrated base a wave builds on is made
+coherent first. It is recorded in the
+[delivery plan](delivery-plan.md#parallelization--3-slices-in-flight)'s wave sequence.
+
 ## Reproducing the CI gate
 
 Because every CI job just calls `make`, the team lead reproduces the **entire
