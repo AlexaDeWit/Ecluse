@@ -120,4 +120,8 @@ when every upstream job has succeeded.
   shell blocks; pass them via `env:` or intermediate files instead.
 - **Semgrep ignores require the repo owner's approval.** Do not add
   `.semgrepignore` entries or `nosemgrep` comments unilaterally.
+- **Use [Conventional Commits](https://www.conventionalcommits.org/).** Write
+  commit subjects as `type(scope): summary`, where `type` is one of `feat`,
+  `fix`, `docs`, `chore`, `ci`, `refactor`, `test`, `build`, or `perf` (scope
+  optional). Keep the summary short and imperative; put detail in the body.
 - **Commits are GPG-signed.** Keep history verifiable.
