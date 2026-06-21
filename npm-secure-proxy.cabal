@@ -1,0 +1,34 @@
+cabal-version: 3.0
+name:          npm-secure-proxy
+version:       0.1.0.0
+synopsis:      Defense-in-depth proxy for the npm registry
+license:       MIT
+build-type:    Simple
+
+common shared
+  ghc-options:      -Wall -Wunused-packages
+  default-language: GHC2021
+
+library
+  import:          shared
+  hs-source-dirs:  src
+  exposed-modules: NpmSecureProxy
+  build-depends:   base ^>=4.18
+
+executable npm-secure-proxy
+  import:        shared
+  main-is:       Main.hs
+  hs-source-dirs: app
+  build-depends:
+    base              ^>=4.18,
+    npm-secure-proxy
+
+test-suite npm-secure-proxy-test
+  import:        shared
+  type:          exitcode-stdio-1.0
+  main-is:       Spec.hs
+  hs-source-dirs: test
+  build-depends:
+    base             ^>=4.18,
+    hspec            ^>=2.11,
+    npm-secure-proxy
