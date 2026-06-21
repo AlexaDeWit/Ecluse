@@ -54,14 +54,17 @@ library
     Ecluse.Registry.Npm.Wire
     Ecluse.Rules
     Ecluse.Rules.Types
+    Ecluse.Security
     Ecluse.Server.Route
     Ecluse.Version
 
   build-depends:
     , aeson       ^>=2.1
+    , bytestring  ^>=0.11
     , containers  ^>=0.6
     , text        ^>=2.0
     , time        ^>=1.12
+    , vector      ^>=0.13
 
 executable ecluse
   import:         shared
@@ -84,6 +87,7 @@ test-suite ecluse-unit
     Ecluse.QueueSpec
     Ecluse.Registry.Npm.WireSpec
     Ecluse.RulesSpec
+    Ecluse.SecuritySpec
     Ecluse.Server.RouteSpec
     Ecluse.VersionOrderingSpec
     Ecluse.VersionSpec
@@ -91,6 +95,7 @@ test-suite ecluse-unit
   build-tool-depends: hspec-discover:hspec-discover ^>=2.11
   build-depends:
     , aeson            ^>=2.1
+    , bytestring       ^>=0.11
     , containers       ^>=0.6
     , hedgehog         ^>=1.4
     , hspec            ^>=2.11
@@ -98,6 +103,7 @@ test-suite ecluse-unit
     , ecluse
     , text             ^>=2.0
     , time             ^>=1.12
+    , vector           ^>=0.13
 
 -- Integration tests: exercise AWS-backed code against a ministack container
 -- (via testcontainers). Hermetic and gating; require a Docker daemon. The deps
