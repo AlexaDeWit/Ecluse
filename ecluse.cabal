@@ -51,6 +51,7 @@ library
     Ecluse.Package
     Ecluse.Queue
     Ecluse.Registry
+    Ecluse.Registry.Npm.Project
     Ecluse.Registry.Npm.Wire
     Ecluse.Rules
     Ecluse.Rules.Types
@@ -85,6 +86,7 @@ test-suite ecluse-unit
     Ecluse.CredentialSpec
     Ecluse.PackageSpec
     Ecluse.QueueSpec
+    Ecluse.Registry.Npm.ProjectSpec
     Ecluse.Registry.Npm.WireSpec
     Ecluse.RulesSpec
     Ecluse.SecuritySpec
