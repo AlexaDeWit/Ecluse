@@ -15,10 +15,14 @@ HS := $(shell git ls-files '*.hs')
 # Published image repository. Override for forks/mirrors: `make docker-push IMAGE=…`.
 IMAGE ?= docker.io/alexadewit/ecluse
 
+# Haddock flags shared by the local `docs` target and the Pages `docs-site`
+# target: hyperlinked source (clickable identifiers) + the quick-jump overlay.
+HADDOCK_FLAGS := --haddock-hyperlink-source --haddock-quickjump
+
 .DEFAULT_GOAL := help
 .PHONY: help update build test test-integration test-smoke test-all \
         gen-version-fixtures format format-check lint sast check run docs \
-        nix-build nix-check docker-build docker-push docker-sign clean
+        docs-site nix-build nix-check docker-build docker-push docker-sign clean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -67,10 +71,19 @@ run: ## Run the proxy
 # xdg-open when present, and always print the path so the target stays usable in
 # headless/CI contexts.
 docs: ## Build hyperlinked, searchable Haddock HTML for the library and open it
-	$(NIX) cabal haddock lib:ecluse --haddock-hyperlink-source --haddock-quickjump
+	$(NIX) cabal haddock lib:ecluse $(HADDOCK_FLAGS)
 	@html=$$(find dist-newstyle -path '*/doc/html/ecluse/index.html' | head -n1); \
 	  echo "Haddock: $$html"; \
 	  command -v xdg-open >/dev/null 2>&1 && xdg-open "$$html" >/dev/null 2>&1 &
+
+# Same docs, staged into ./_site for the GitHub Pages workflow to upload. The
+# Haddock output path embeds the arch + GHC version, so we locate it rather than
+# hard-code it. .nojekyll keeps Pages from touching the static assets.
+docs-site: ## Build Haddock and stage it into ./_site for GitHub Pages
+	$(NIX) cabal haddock lib:ecluse $(HADDOCK_FLAGS)
+	@src=$$(find dist-newstyle -path '*/doc/html/ecluse' -type d | head -n1); \
+	  rm -rf _site && mkdir -p _site && cp -R "$$src"/. _site/ && touch _site/.nojekyll; \
+	  echo "Staged Haddock into ./_site"
 
 nix-build: ## Build the release artifact via Nix (hermetic)
 	nix build

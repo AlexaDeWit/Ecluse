@@ -1,0 +1,75 @@
+name: Docs
+
+# Publish the library's Haddock API docs to GitHub Pages so they always track
+# the code on main. Runs on every push to main and on demand. This is a separate
+# lifecycle from the PR `gate` in ci.yml — a docs-deploy failure must never block
+# a merge — and, like every workflow here, each action is pinned to a full commit
+# SHA (Dependabot keeps them current).
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# One Pages deploy at a time; let an in-flight publish finish rather than
+# cancelling it (a half-applied deploy is worse than a slightly stale one).
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+# Least privilege: read the repo, write the Pages artifact + deployment, and mint
+# the OIDC token the deploy step exchanges with the Pages service.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  deploy:
+    name: Build & deploy Haddock
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    env:
+      # Pin the cabal store to a deterministic, cacheable location (as in ci.yml).
+      CABAL_DIR: ${{ github.workspace }}/.cabal
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      # Same reproducible dev shell as ci.yml and developers, pinned by flake.lock.
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+
+      - name: Cache cabal store & build artifacts
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ${{ github.workspace }}/.cabal
+            dist-newstyle
+          key: ${{ runner.os }}-cabal-${{ hashFiles('flake.lock', '**/*.cabal', 'cabal.project') }}
+          restore-keys: |
+            ${{ runner.os }}-cabal-
+
+      - name: Update package index
+        run: nix develop --command make update
+
+      # Builds the library's Haddock and stages it (with .nojekyll) into ./_site.
+      - name: Build Haddock into ./_site
+        run: nix develop --command make docs-site
+
+      # enablement: true turns Pages on via the API on first run, so no manual
+      # repo-settings step is needed to bootstrap this.
+      - name: Configure Pages
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+        with:
+          enablement: true
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: _site
+
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0

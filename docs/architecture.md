@@ -66,6 +66,11 @@ Client request
 
 Tarball/artifact requests follow the same lifecycle via `fetchArtifact`.
 
+On the public-upstream path, the served packument is **filtered to admitted
+versions** (denied versions removed, `latest` repointed to the newest survivor,
+403 if none survive) before step [6] — see
+[Rules Engine → Applying verdicts to a packument](architecture/rules-engine.md#applying-verdicts-to-a-packument).
+
 ## Document Map
 
 | Document | Covers |

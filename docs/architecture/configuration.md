@@ -44,15 +44,17 @@ identity can mint a short-lived token instead.
 
 ```json
 [
-  { "type": "AllowScope",              "scope": "@myorg" },
-  { "type": "AllowIfPublishedBefore",  "ageSeconds": 604800 },
-  { "type": "DenyHasInstallScripts" }
+  { "type": "AllowScope",             "scope": "@myorg",    "precedence": 300 },
+  { "type": "DenyHasInstallScripts",                        "precedence": 200 },
+  { "type": "AllowIfPublishedBefore", "ageSeconds": 604800, "precedence": 100 }
 ]
 ```
 
-The whole set is evaluated with deny precedence: any matching deny rule blocks
-the package, otherwise the first matching allow rule wins; if none is decisive,
-the package is denied by default.
+Each rule may set an integer `precedence` (higher wins); omit it to use the rule
+type's default. Evaluation picks the **highest-precedence rule that takes a
+position** (allow or deny); at equal precedence, deny wins; if every rule
+abstains, the package is denied by default. See
+[Rules Engine → Evaluation model](rules-engine.md#evaluation-model).
 
 ## Client Authentication
 

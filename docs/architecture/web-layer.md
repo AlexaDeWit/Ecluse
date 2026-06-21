@@ -86,6 +86,54 @@ send buffer, so we pull from upstream only as fast as the client drains —
 **constant memory regardless of artifact size**, with backpressure for free. No
 `ResourceT`, no conduit on the hot path.
 
+## Error model
+
+Every served response is the rendering of one **serve outcome**. A small, nuanced
+type keeps client-facing errors intuitive and maps each to the right status,
+rather than collapsing everything into a generic 403/500:
+
+```haskell
+data ServeDecision = Admit | Reject Rejection
+
+data Rejection = Rejection
+  { reason  :: RejectReason
+  , message :: Text            -- intuitive, client-facing
+  }
+
+data RejectReason
+  = ByPolicy RuleName          -- a rule denied it (incl. deny-by-default)
+  | Unavailable Transience     -- could not be decided (see Rules Engine)
+
+data Transience
+  = WillResolve (Maybe Seconds)  -- transient: upstream 5xx/429, advisory source down
+  | WontResolve                  -- not expected to self-heal (internal/parse error)
+```
+
+For a **concrete artifact** request (one specific version) the decision renders
+directly:
+
+| Outcome | Status |
+|---|---|
+| `Admit` | `200` (streamed) |
+| `Reject (ByPolicy …)` | `403` + denial body |
+| `Reject (Unavailable (WillResolve ra))` | `503` + `Retry-After` |
+| `Reject (Unavailable WontResolve)` | `500` |
+| upstream miss | `404` (forwarded) |
+
+The rule: **`503` only when we believe it will resolve** (a transient upstream or
+advisory condition); otherwise `500` — retrying a permanent/internal inability to
+decide cannot help, so we do not invite it.
+
+For a **packument** request there is no single status — instead each `Reject`
+version is filtered out (see
+[Rules Engine → Applying verdicts](rules-engine.md#applying-verdicts-to-a-packument)),
+and a status is chosen only when *nothing* survives: `503` if any rejection was
+`WillResolve`, else `403`.
+
+The denial-body shape and `PROXY_HELP_MESSAGE` handling are in
+[Rules Engine → Denial Responses](rules-engine.md#denial-responses). This type
+lives in `Ecluse.Server.Response`.
+
 ## Middleware and helper libraries
 
 The dividing principle: **adopt libraries for cross-cutting infrastructure that

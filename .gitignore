@@ -1,5 +1,6 @@
 dist-newstyle/
 .direnv/
+_site/
 result
 result-*
 .hie/
