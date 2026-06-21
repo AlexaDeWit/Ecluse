@@ -1,1 +1,13 @@
 packages: .
+
+-- Warnings are errors for our own package, in CI and locally. GHC is pinned by
+-- flake.lock, so there is no "new compiler surfaces new warnings" surprise to
+-- guard against. Scoped to `ecluse` so dependencies (which we do not control)
+-- are never built with -Werror. The warning set itself lives in the cabal
+-- `common` stanza; see STYLE.md → "Compiler flags".
+--
+-- To relax this during a noisy refactor, create cabal.project.local (untracked):
+--     package ecluse
+--       ghc-options: -Wwarn
+package ecluse
+  ghc-options: -Werror

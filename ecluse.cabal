@@ -8,7 +8,17 @@ build-type:    Simple
 -- Shared settings for every component. relude replaces the default prelude via
 -- cabal mixins (see docs/architecture.md "relude as the implicit prelude").
 common shared
-  ghc-options:        -Wall
+  -- Warning set. -Wall plus extra warnings chosen to reinforce the conventions
+  -- in STYLE.md; warnings are promoted to errors for our package in
+  -- cabal.project. Deliberately omitted: -Wunused-packages (the relude mixin
+  -- defeats its attribution; see docs/architecture.md), -Wmissing-import-lists
+  -- (we use open imports for internal modules), and -Wmissing-local-signatures
+  -- (where-helpers are allowed to be inferred).
+  ghc-options:
+    -Wall -Wcompat -Widentities -Wincomplete-record-updates
+    -Wincomplete-uni-patterns -Wmissing-deriving-strategies
+    -Wmissing-export-lists -Wpartial-fields -Wredundant-constraints
+
   default-language:   GHC2021
   default-extensions:
     DerivingStrategies
@@ -45,6 +55,8 @@ executable ecluse
 -- Unit tests: pure, fast, deterministic. Gating.
 test-suite ecluse-unit
   import:             shared
+  -- hspec-discover generates a Main without an export list.
+  ghc-options:        -Wno-missing-export-lists
   type:               exitcode-stdio-1.0
   main-is:            Spec.hs
   hs-source-dirs:     test/unit
@@ -66,6 +78,8 @@ test-suite ecluse-unit
 -- (testcontainers, amazonka-*) are added with the first real case.
 test-suite ecluse-integration
   import:             shared
+  -- hspec-discover generates a Main without an export list.
+  ghc-options:        -Wno-missing-export-lists
   type:               exitcode-stdio-1.0
   main-is:            Spec.hs
   hs-source-dirs:     test/integration
@@ -79,6 +93,8 @@ test-suite ecluse-integration
 -- with the first real case.
 test-suite ecluse-smoke
   import:             shared
+  -- hspec-discover generates a Main without an export list.
+  ghc-options:        -Wno-missing-export-lists
   type:               exitcode-stdio-1.0
   main-is:            Spec.hs
   hs-source-dirs:     test/smoke

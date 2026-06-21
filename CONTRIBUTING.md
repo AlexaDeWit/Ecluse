@@ -2,9 +2,12 @@
 
 This guide covers how we work on **Écluse** (package `ecluse`): local development, codebase
 conventions, testing, and CI / repository requirements. For the systems design
-— the three-registry model, rules engine, mirror queue, and configuration — see
-[`docs/architecture.md`](docs/architecture.md). Agent-specific instructions live
-in [`AGENTS.md`](AGENTS.md).
+— the three-registry model, rules engine, the seams (registry, queue, credential
+provider) and cloud backends, and configuration — see
+[`docs/architecture.md`](docs/architecture.md). Haskell coding style —
+formatting, Haddock, naming, totality, and the compiler-flag set — has its own
+reference in [`STYLE.md`](STYLE.md). Agent-specific instructions live in
+[`AGENTS.md`](AGENTS.md).
 
 ## Local development
 
@@ -31,8 +34,9 @@ Run `make help` for the full list (the integration/smoke suites, `nix-build`,
 `nix-check`, …). The underlying commands live in the [`Makefile`](Makefile), so
 local and CI never drift.
 
-**Before you push,** run `make check` — it must be clean: build (no warnings),
-the unit suite, `fourmolu --mode check`, `hlint`, and Semgrep (zero findings).
+**Before you push,** run `make check` — it must be clean: build (warnings are
+errors via `-Werror`; see [`STYLE.md`](STYLE.md) → "Compiler flags"), the unit
+suite, `fourmolu --mode check`, `hlint`, and Semgrep (zero findings).
 Add `make test-integration` (needs Docker) for the other gating suite. The CI
 `gate` enforces the same set, so a clean local run predicts a green gate. The
 smoke suite (`make test-smoke`) is allowed to fail and never gates (see Testing
@@ -75,14 +79,22 @@ the application gets its own namespace directly under `Ecluse`, and types
 are split from implementation where that split earns its keep.
 
 - **One namespace per area.** Each concern lives under its own
-  `Ecluse.<Area>` namespace (`Rules` today; `Registry`, `Config`,
-  `Server`, … later) rather than being appended to a grab-bag module.
+  `Ecluse.<Area>` namespace (`Rules` today; `Registry`, `Queue`, `Credential`,
+  `Config`, `Server`, … later) rather than being appended to a grab-bag module.
 - **Types split from implementation — when it helps.** Where an area carries
   non-trivial logic, its data types live in a `.Types` leaf module and the
   functions live in the sibling module (e.g. `Ecluse.Rules.Types` +
   `Ecluse.Rules`). Where an area is essentially a cohesive set of types
   with their constructors and renderers (the package model), a single module is
   clearer than a forced split.
+- **Seams are records of functions, selected at one composition root.** A
+  swappable backend — registry protocol, mirror queue, credential provider — is
+  modelled as a record whose fields are functions (the *Handle pattern*), built by
+  a per-backend smart constructor (e.g. `newSqsQueue :: SqsConfig -> IO
+  MirrorQueue`). Adding a backend means adding a constructor behind the *existing*
+  record and wiring it into the single, config-driven composition root — never
+  smearing SDK or provider selection across call sites. See
+  [Cloud Backends → Seams](docs/architecture.md#seams-records-of-functions).
 
 Current layout:
 
@@ -107,27 +119,42 @@ two gate merges; the third is allowed to fail by design.
 Pure, fast, deterministic `hspec` + `hedgehog` tests covering all pure logic: the
 rules engine, parsers, and configuration. No IO, no Docker; they run on every
 push and locally in milliseconds. The rules engine is exercised with properties
-(deny-by-default invariants, first-decisive-wins ordering, per-rule predicates).
-Proxy request-lifecycle tests run against an in-process WAI stub standing in for
-the private/public upstreams, so the full fetch → parse → rules → mirror path can
-be asserted without a network. Run: `cabal test ecluse-unit`.
+(deny-by-default invariants, deny-precedence over allows, per-rule predicates).
+The credential-provider refresh/cache/expiry policy is unit-tested here too, with
+an injected clock and a fake `mintToken`, so only the per-cloud token call itself
+is left to integration (see below). Proxy request-lifecycle tests run against an
+in-process WAI stub standing in for the private/public upstreams, so the full
+fetch → parse → rules → mirror path can be asserted without a network. Run:
+`cabal test ecluse-unit`.
 
 ### Integration tests — `ecluse-integration` (gating)
 
-Exercise AWS-backed code (the mirror queue, STS token flow) against a real
-endpoint by spinning up a **ministack** container (a lightweight LocalStack
-alternative) via `testcontainers`. `amazonka` is pointed at
-`http://<container>:4566` with throwaway credentials, so the tests are hermetic
-and reproducible — no real AWS or credentials. They require a running Docker
-daemon: CI's `ubuntu-latest` provides one; locally, install Docker (Nix provides
-the toolchain but not the daemon, a host concern). Run:
-`cabal test ecluse-integration`.
+Exercise cloud-backed code — the `MirrorQueue` and `CredentialProvider` seams —
+against a **real emulator per cloud**, all driven by `testcontainers` (a generic
+container manager, not an AWS-specific one):
 
-> **CodeArtifact caveat.** `ministack` emulates SQS and STS but not the
-> CodeArtifact API (`GetAuthorizationToken`). CodeArtifact's npm-protocol surface
-> is covered through the `RegistryClient` seam (a stub registry), and the
-> token-refresh call is mocked at that same seam — a deliberate benefit of the
-> registry abstraction.
+- **AWS** — a **ministack** container (a lightweight LocalStack alternative);
+  `amazonka` is pointed at `http://<container>:4566` with throwaway credentials.
+- **GCP** — Google's official **Pub/Sub emulator** container; the client is
+  pointed at it via `PUBSUB_EMULATOR_HOST` (the emulator ignores auth). GCP's
+  backend — and this test — land once the client-viability spike clears (see
+  architecture's [Cloud Backends](docs/architecture.md#cloud-backends)).
+
+Both are hermetic and reproducible — no real cloud account or credentials. They
+require a running Docker daemon: CI's `ubuntu-latest` provides one; locally,
+install Docker (Nix provides the toolchain but not the daemon, a host concern).
+Run: `cabal test ecluse-integration` (or `make test-integration`).
+
+> **Token-mint caveat.** No emulator covers the managed-registry token APIs
+> (CodeArtifact's `GetAuthorizationToken`, or GCP's OAuth2 token endpoint). That
+> is by design: the only un-emulable part is the per-cloud `mintToken` leaf of the
+> `CredentialProvider`, so it is mocked at that seam here, while the generic
+> refresh/cache/expiry policy around it is unit-tested with an injected clock; the
+> *real* cloud mint runs end-to-end only in the (non-gating) smoke tier. The
+> managed registry's npm protocol is just HTTPS+JSON, so it is covered once —
+> against a real npm-speaking registry (e.g. Verdaccio) or an in-process WAI stub
+> through the `RegistryClient` seam — a deliberate benefit of keeping protocol,
+> queue, and credentials as separate seams.
 
 ### Smoke tests — `ecluse-smoke` (allowed to fail, non-gating)
 
@@ -138,7 +165,13 @@ design** and never block a merge — the CI `gate` does not depend on them. Trea
 smoke failure as a prompt to investigate (did the upstream protocol drift, or is
 it just flakiness?), not an automatic blocker. Run: `cabal test ecluse-smoke`.
 
-**References:** [testcontainers](https://hackage.haskell.org/package/testcontainers) (Haskell, GHC 9.6-compatible) · [ministack](https://github.com/ministackorg/ministack) (local AWS emulator, image `ministackorg/ministack`, port 4566).
+This tier is also where the one un-emulable cloud surface is checked end-to-end:
+the real per-cloud token *mint* (`CredentialProvider`'s `mintToken`) against the
+live cloud. Like the registry calls it needs real external access (here, cloud
+credentials), so it is allowed to fail and stays isolated to one small function
+per cloud — an accepted residual risk, consistent with the rest of this tier.
+
+**References:** [testcontainers](https://hackage.haskell.org/package/testcontainers) (Haskell, GHC 9.6-compatible) · [ministack](https://github.com/ministackorg/ministack) (local AWS emulator, image `ministackorg/ministack`, port 4566) · [Pub/Sub emulator](https://cloud.google.com/pubsub/docs/emulator) (local GCP emulator, default port 8085).
 
 ---
 
