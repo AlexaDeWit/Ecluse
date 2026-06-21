@@ -1,0 +1,51 @@
+---
+id: S09
+title: URL rewrite + packument filtering
+milestone: M1 — npm protocol adapter
+status: not-started
+depends-on: [S05, S07]
+test-tier: [unit]
+arch-refs:
+  - docs/architecture/rules-engine.md#applying-verdicts-to-a-packument
+  - docs/architecture/hosting.md#the-load-bearing-requirement-url-rewriting
+  - docs/research/reverse-engineering/npm.md#8-version--availability-resolution
+pr: null
+---
+
+# S09 — URL rewrite + packument filtering
+
+> Milestone **M1** · depends on: [S05](S05-rules-precedence.md), [S07](S07-npm-projection.md) · tier: unit
+
+**Goal.** The two pure transforms a public-upstream packument needs before it is
+served: rewrite embedded artifact URLs under the mount's prefix, and apply rule
+verdicts across all versions (the deny-by-default filtered projection).
+
+**Acceptance criteria.**
+- [ ] **URL rewriting**: `dist.tarball` rewritten to `{mount-base}/{pkg}/-/{file}`
+  so artifacts flow through the proxy (and same-host auth is preserved). The mount's
+  external base URL is supplied (config, S03). — _hosting.md#the-load-bearing-requirement-url-rewriting_
+- [ ] **Filter `versions`**: every version evaluated; denied (and, later,
+  undecidable — S21) versions removed from `versions` **and** `time`. —
+  _rules-engine.md#applying-verdicts-to-a-packument_
+- [ ] **Repoint `dist-tags`**: `latest` → highest *surviving* version (using
+  `compareVersions`); other tags pointing at a removed version are **dropped**, not
+  repointed. — _rules-engine.md#applying-verdicts-to-a-packument_
+- [ ] **No survivors** → signal the caller to return `403` (all by-policy) or, once
+  S21 lands, `503` (any transient). This slice returns a result type the serve layer
+  maps; status selection is S11/S14. — _rules-engine.md#applying-verdicts-to-a-packument_
+- [ ] Coherence preserved: `dist-tags.latest` is always a key of `versions`; `time`
+  has an entry for every surviving version. — _npm.md#8-version--availability-resolution_
+
+**File fence.**
+- `src/Ecluse/Registry/Npm/Filter.hs` — `rewriteTarballUrls`, `filterPackument` (verdict application), result type for the no-survivors case.
+- `test/unit/Ecluse/Registry/Npm/FilterSpec.hs` — filtering (drop denied, repoint latest, drop stale tags, no-survivors), rewriting, coherence properties.
+
+**Test tier.** Unit — properties: filtered packument never references a denied
+version; `latest` always present-and-surviving; rewriting is idempotent and
+prefix-correct.
+
+**Notes / risks.** Repointing `latest` to an older surviving version is the intended
+resilience downgrade — document it. Because the served body differs from upstream,
+the **own-ETag** computation is the web layer's job (S13) — do not relay upstream's
+validator for a filtered body. Keep the `Unavailable` filtering path stubbed to the
+deny path until S21 lands (note it explicitly; do not fake the transient status).
