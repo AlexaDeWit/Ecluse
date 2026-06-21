@@ -21,6 +21,7 @@ by the rules engine, and re-encoded faithfully.
 |-----------|----------|--------|
 | npm       | [`npm.md`](npm.md) | Complete — read path, version resolution, auth (theory), type model |
 | pip / PyPI | [`pypi.md`](pypi.md) | Complete — Simple + JSON APIs, version resolution, auth (theory), type model. Includes an npm↔PyPI correspondence table. |
+| RubyGems (Ruby) | [`rubygems.md`](rubygems.md) | Complete — Compact Index + JSON APIs, `.gem` anatomy, version resolution, auth (theory), type model. Extends the correspondence table to npm↔PyPI↔RubyGems. |
 
 ## Method
 
