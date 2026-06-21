@@ -28,6 +28,7 @@ so reserve it for one-offs.
 | Format (write) | `make format` |
 | Lint | `make lint` |
 | Static analysis (SAST) | `make sast` |
+| Coverage (unit → Codecov JSON) | `make coverage` |
 | Everything the gate runs | `make check` |
 
 Run `make help` for the full list (the integration/smoke suites, `nix-build`,
@@ -164,6 +165,32 @@ live cloud. Like the registry calls it needs real external access (here, cloud
 credentials), so it is allowed to fail and stays isolated to one small function
 per cloud — an accepted residual risk, consistent with the rest of this tier.
 
+### Coverage — Codecov (gating)
+
+Coverage is measured per **gating** suite and reported to
+[Codecov](https://about.codecov.io/). Generation is local and tool-agnostic —
+Codecov is only the consumer, so the reporter can be swapped without touching the
+build. `make coverage` builds a suite instrumented (HPC, in an isolated
+`dist-coverage/` so the normal build cache is untouched), then converts the
+`.tix`/`.mix` output to Codecov's native JSON with
+[`hpc-codecov`](https://hackage.haskell.org/package/hpc-codecov) — the leanest
+format for Codecov to ingest. See [`scripts/coverage.sh`](scripts/coverage.sh).
+
+- **Per-suite flags.** Each tier uploads under its own Codecov *flag*, so one
+  combined gate spans the suites while each stays visible. `unit` uploads today;
+  `integration` is wired identically (commented in `ci.yml`) and turns on when
+  that suite gains real cases. The **smoke** tier is excluded — non-gating and
+  network-bound, like everywhere else.
+- **Tokenless upload.** CI uploads via GitHub **OIDC** (`use_oidc: true`), so
+  there is no `CODECOV_TOKEN` secret to store or leak — the same keyless posture
+  as the release image signing.
+- **What's measured.** Library code only; `app/` (the thin entry point) and
+  `test/` are ignored (see [`codecov.yml`](codecov.yml)).
+
+The gate itself is Codecov's two commit statuses: `codecov/project` (no
+regression versus the PR base, within a 1% threshold) and `codecov/patch`
+(new/changed lines ≥ 80%). Both knobs live in [`codecov.yml`](codecov.yml).
+
 **References:** [testcontainers](https://hackage.haskell.org/package/testcontainers) (Haskell, GHC 9.6-compatible) · [ministack](https://github.com/ministackorg/ministack) (local AWS emulator, image `ministackorg/ministack`, port 4566) · [Pub/Sub emulator](https://cloud.google.com/pubsub/docs/emulator) (local GCP emulator, default port 8085).
 
 ---
@@ -175,9 +202,15 @@ Every check is a job in that one graph — build & test, format & lint, and Semg
 static analysis — and they all feed a terminal **gate** job that succeeds only
 when every upstream job has succeeded.
 
-- **One required check.** Branch-protection rulesets mark only the `gate` job as
-  `Required`. Adding or removing checks never means editing the ruleset: a new
-  job simply becomes another dependency of the gate.
+- **One required check, with one documented exception.** Branch-protection
+  rulesets mark only the `gate` job as `Required`; adding or removing an
+  *in-workflow* check never means editing the ruleset — a new job simply becomes
+  another dependency of the gate. The lone exception is **Codecov**: its
+  `project`/`patch` verdicts are computed server-side and surface as their own
+  `codecov/project` and `codecov/patch` commit statuses, which cannot be
+  expressed as jobs in this graph, so those two are additionally marked
+  `Required` (see "Coverage"). Every check that *can* be a job still routes
+  through `gate`.
 - **SHA-pinned actions.** Every `uses:` reference is pinned to a full commit SHA
   (never a tag or branch), with the human-readable version in a trailing
   comment. Dependabot keeps the SHAs current. This stops a re-tagged or

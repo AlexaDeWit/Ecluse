@@ -42,7 +42,8 @@ docs/      — architecture and design documents
 
 ## CI & Security
 
-- CI is a **single unified workflow** (`.github/workflows/ci.yml`): the build/test, format/lint, and Semgrep jobs all feed a terminal **`gate`** job. Only `gate` is marked `Required` in branch protection — wire any new check in as a `gate` dependency, never as another required check. See [`CONTRIBUTING.md`](CONTRIBUTING.md) → "Continuous Integration".
+- CI is a **single unified workflow** (`.github/workflows/ci.yml`): the build/test, format/lint, and Semgrep jobs all feed a terminal **`gate`** job. Only `gate` is marked `Required` in branch protection — wire any new check in as a `gate` dependency, never as another required check. The one documented exception is Codecov's server-side `codecov/project` / `codecov/patch` statuses. See [`CONTRIBUTING.md`](CONTRIBUTING.md) → "Continuous Integration".
+- **Coverage** is generated per gating suite (HPC → `hpc-codecov` → Codecov JSON, via `make coverage`) and uploaded under per-suite flags using tokenless GitHub OIDC — no stored token. Thresholds live in [`codecov.yml`](codecov.yml); details in [`CONTRIBUTING.md`](CONTRIBUTING.md) → "Coverage".
 - **Pin every GitHub Action to a full commit SHA** (never a tag/branch), with the version in a trailing comment. Dependabot bumps them.
 - Keep workflows injection-free — never interpolate untrusted `${{ github.event.* }}` / `${{ github.head_ref }}` values directly into `run:` shell blocks; pass them via `env:` or intermediate files instead.
 - **Semgrep** runs `--config auto`, failing on ERROR/WARNING findings, from the Nix dev shell, so CI and local use the same pinned binary.

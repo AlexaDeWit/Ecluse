@@ -18,6 +18,9 @@ jobs:
   build-and-test:
     name: Build & unit tests
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # OIDC for tokenless Codecov upload (no stored token)
     env:
       # Pin the cabal store to a deterministic, cacheable location.
       CABAL_DIR: ${{ github.workspace }}/.cabal
@@ -51,6 +54,20 @@ jobs:
       - name: Unit tests
         run: nix develop --command make test
 
+      # Instrumented re-run of the unit suite in a separate build dir, emitting
+      # Codecov-native JSON. Only our small package recompiles (-fhpc); deps come
+      # from the cached cabal store, so this is cheap.
+      - name: Coverage (unit)
+        run: nix develop --command make coverage
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        with:
+          use_oidc: true # tokenless upload via GitHub OIDC; no CODECOV_TOKEN secret
+          files: coverage/ecluse-unit.json
+          flags: unit
+          fail_ci_if_error: true # a lost upload must not silently skip the gate
+
   integration:
     name: Integration tests (ministack)
     runs-on: ubuntu-latest
@@ -79,6 +96,20 @@ jobs:
 
       - name: Integration tests
         run: nix develop --command make test-integration
+
+      # Integration-tier coverage uploads under its own Codecov flag, wired
+      # exactly like the unit job. Enable once ecluse-integration has real cases
+      # (today it is a stub, so an empty flag adds no signal). Enabling also needs
+      # `permissions: { contents: read, id-token: write }` on this job.
+      # - name: Coverage (integration)
+      #   run: nix develop --command make coverage SUITE=ecluse-integration
+      # - name: Upload coverage to Codecov
+      #   uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+      #   with:
+      #     use_oidc: true
+      #     files: coverage/ecluse-integration.json
+      #     flags: integration
+      #     fail_ci_if_error: true
 
   smoke:
     name: Smoke tests (live registries — allowed to fail)

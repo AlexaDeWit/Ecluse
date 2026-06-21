@@ -1,0 +1,38 @@
+# Codecov configuration. See CONTRIBUTING.md -> "Coverage".
+#
+# Coverage is generated per gating test suite (HPC -> hpc-codecov, native Codecov
+# JSON) and uploaded under a flag, so Codecov merges the tiers into one project
+# total while still tracking each. `unit` uploads today; `integration` wires in
+# identically once its suite has real cases. The smoke tier is excluded
+# (non-gating, network-bound).
+
+coverage:
+  status:
+    project:
+      default:
+        target: auto # no regression versus the PR base
+        threshold: 1% # absorb rounding/noise; block real drops
+    patch:
+      default:
+        target: 80% # new/changed lines must be >=80% covered (primary knob)
+
+# Flags let one combined gate span multiple suites. carryforward keeps a suite's
+# last-known coverage on runs that don't re-upload it (e.g. a job that skipped).
+flags:
+  unit:
+    paths:
+      - src/
+    carryforward: true
+  integration:
+    paths:
+      - src/
+    carryforward: true
+
+# Out of scope for coverage: the thin executable entry point and the tests.
+ignore:
+  - "app/**"
+  - "test/**"
+
+comment:
+  layout: "reach, diff, flags, files"
+  require_changes: true

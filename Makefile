@@ -20,7 +20,7 @@ IMAGE ?= docker.io/alexadewit/ecluse
 HADDOCK_FLAGS := --haddock-hyperlink-source --haddock-quickjump
 
 .DEFAULT_GOAL := help
-.PHONY: help update build test test-integration test-smoke test-all \
+.PHONY: help update build test test-integration test-smoke test-all coverage \
         gen-version-fixtures format format-check lint sast check run docs \
         docs-site nix-build nix-check docker-build docker-push docker-sign clean
 
@@ -44,6 +44,13 @@ test-smoke: ## Run the smoke suite (live registries; non-gating)
 	$(NIX) cabal test ecluse-smoke --test-show-details=direct
 
 test-all: test test-integration test-smoke ## Run every test suite
+
+# Suite to measure for `coverage`; override to cover another gating tier, e.g.
+# `make coverage SUITE=ecluse-integration` (needs Docker, like the suite itself).
+SUITE ?= ecluse-unit
+
+coverage: ## Generate $(SUITE) coverage as Codecov JSON under coverage/
+	$(NIX) bash scripts/coverage.sh $(SUITE)
 
 gen-version-fixtures: ## Regenerate version-ordering fixtures from the reference tools (node-semver / packaging / Gem::Version)
 	$(NIX) bash scripts/gen-version-fixtures.sh

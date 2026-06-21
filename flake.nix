@@ -122,6 +122,9 @@
             hpkgs.cabal-plan
             hpkgs.fourmolu
             hpkgs.hlint
+            # Convert HPC coverage output (.tix/.mix) to an lcov report for the
+            # `coverage` target / Codecov upload (see CONTRIBUTING.md "Coverage").
+            hpkgs.hpc-codecov
             pkgs.semgrep
             pkgs.zlib
             pkgs.pkg-config
