@@ -5,6 +5,11 @@ synopsis:      Supply-chain resilience proxy for package registries
 license:       MIT
 build-type:    Simple
 
+-- Differential-test fixtures: reference-oracle version orderings consumed by the
+-- pure unit suite. Regenerate with `make gen-version-fixtures`.
+extra-source-files:
+  test/unit/fixtures/version-ordering.txt
+
 -- Shared settings for every component. relude replaces the default prelude via
 -- cabal mixins (see docs/architecture.md "relude as the implicit prelude").
 common shared
@@ -63,6 +68,7 @@ test-suite ecluse-unit
   other-modules:
     Ecluse.PackageSpec
     Ecluse.RulesSpec
+    Ecluse.VersionOrderingSpec
 
   build-tool-depends: hspec-discover:hspec-discover ^>=2.11
   build-depends:
@@ -71,6 +77,7 @@ test-suite ecluse-unit
     , hspec            ^>=2.11
     , hspec-hedgehog   ^>=0.1
     , ecluse
+    , text             ^>=2.0
     , time             ^>=1.12
 
 -- Integration tests: exercise AWS-backed code against a ministack container

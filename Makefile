@@ -17,8 +17,8 @@ IMAGE ?= docker.io/alexadewit/ecluse
 
 .DEFAULT_GOAL := help
 .PHONY: help update build test test-integration test-smoke test-all \
-        format format-check lint sast check run nix-build nix-check \
-        docker-build docker-push docker-sign clean
+        gen-version-fixtures format format-check lint sast check run \
+        nix-build nix-check docker-build docker-push docker-sign clean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -40,6 +40,9 @@ test-smoke: ## Run the smoke suite (live registries; non-gating)
 	$(NIX) cabal test ecluse-smoke --test-show-details=direct
 
 test-all: test test-integration test-smoke ## Run every test suite
+
+gen-version-fixtures: ## Regenerate version-ordering fixtures from the reference tools (node-semver / packaging / Gem::Version)
+	$(NIX) bash scripts/gen-version-fixtures.sh
 
 format: ## Reformat Haskell sources in place
 	$(NIX) fourmolu --mode inplace $(HS)

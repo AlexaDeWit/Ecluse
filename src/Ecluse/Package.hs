@@ -362,14 +362,20 @@ parseGem raw = do
 
 {- | A parsed PEP 440 version as its canonical ordering key:
 @(epoch, release, pre, post, dev, local)@. Release has trailing zeros stripped
-(@1.0 == 1.0.0@). The pre\/post\/dev ranks encode PEP 440's None-handling — a
-final release outranks any prerelease, a post-release outranks a final, and a
-dev release ranks below its non-dev sibling.
+(@1.0 == 1.0.0@). The rank tuples encode PEP 440's None-handling:
+
+* @p440Pre@ is @(band, stage, n)@ where @band@ is __0__ for a dev release with
+  no prerelease and no post (it sorts /before/ all prereleases, e.g.
+  @1.0.dev1 < 1.0a1@), __1__ for an actual prerelease (with @stage@ a\/b\/rc and
+  its number), and __2__ for a final or post release (sorts after prereleases).
+* @p440Post@ is @(0,0)@ when absent, so a final sorts below any post-release.
+* @p440Dev@ is @(0,n)@ when present and @(1,0)@ when absent, so a dev release
+  sorts below its non-dev sibling.
 -}
 data Pep440Key = Pep440Key
     { p440Epoch :: Integer
     , p440Release :: [Integer]
-    , p440Pre :: (Int, Integer)
+    , p440Pre :: (Int, Int, Integer)
     , p440Post :: (Int, Integer)
     , p440Dev :: (Int, Integer)
     , p440Local :: [VToken]
@@ -395,8 +401,19 @@ parsePep440 raw = do
         suffix = T.drop (T.length releaseText) afterEpoch
     release <- traverse parseNumSeg (filter (not . T.null) (T.splitOn "." releaseText))
     guard (not (null release))
-    (pre, post, dev) <- parsePep440Suffix suffix
+    (mPre, mPost, mDev) <- parsePep440Suffix suffix
     localToks <- parseLocal localRaw
+    let pre = case mPre of
+            Just (stage, n) -> (1, stage, n)
+            Nothing
+                | isJust mDev && isNothing mPost -> (0, 0, 0)
+                | otherwise -> (2, 0, 0)
+        post = case mPost of
+            Nothing -> (0, 0)
+            Just n -> (1, n)
+        dev = case mDev of
+            Nothing -> (1, 0)
+            Just n -> (0, n)
     pure
         Pep440Key
             { p440Epoch = epoch
@@ -418,10 +435,12 @@ parsePep440 raw = do
                     else Nothing
     localTok s = if T.all isDigit s then VNum (numOr0 s) else VStr s
 
-{- | Consume a PEP 440 suffix into @(pre, post, dev)@ keys, failing if any text
-is left unconsumed (so trailing garbage is rejected).
+{- | Consume a PEP 440 suffix into its prerelease\/post\/dev parts (each absent
+or present), failing if any text is left unconsumed (so trailing garbage is
+rejected). The banding into a sort key happens in 'parsePep440'.
 -}
-parsePep440Suffix :: Text -> Maybe ((Int, Integer), (Int, Integer), (Int, Integer))
+parsePep440Suffix ::
+    Text -> Maybe (Maybe (Int, Integer), Maybe Integer, Maybe Integer)
 parsePep440Suffix s0 =
     let (pre, s1) = consumePre s0
         (post, s2) = consumePost s1
@@ -434,14 +453,16 @@ dropSep s = case T.uncons s of
     Just (c, rest) | c == '.' || c == '-' || c == '_' -> rest
     _ -> s
 
--- | Consume an optional prerelease label; @(3, 0)@ (final) if none.
-consumePre :: Text -> ((Int, Integer), Text)
+{- | Consume an optional prerelease label into @Just (stage, n)@ (stage 0\/1\/2
+for a\/b\/rc); 'Nothing' if absent.
+-}
+consumePre :: Text -> (Maybe (Int, Integer), Text)
 consumePre s =
     case firstJust (\(lbl, rk) -> (,) rk <$> T.stripPrefix lbl (dropSep s)) preLabels of
-        Nothing -> ((3, 0), s)
+        Nothing -> (Nothing, s)
         Just (rk, afterLabel) ->
             let (digits, rest) = T.span isDigit (dropSep afterLabel)
-             in ((rk, numOr0 digits), rest)
+             in (Just (rk, numOr0 digits), rest)
   where
     preLabels =
         [ ("alpha", 0)
@@ -454,31 +475,29 @@ consumePre s =
         , ("c", 2)
         ]
 
-{- | Consume an optional post-release (@.postN@, @.revN@, or @-N@); @(0, 0)@ if
-none, so a final release sorts below any post-release.
+{- | Consume an optional post-release (@.postN@, @.revN@, or @-N@) into @Just n@;
+'Nothing' if absent.
 -}
-consumePost :: Text -> ((Int, Integer), Text)
+consumePost :: Text -> (Maybe Integer, Text)
 consumePost s =
     case firstJust (\lbl -> T.stripPrefix lbl (dropSep s)) ["post", "rev"] of
         Just afterLabel ->
             let (digits, rest) = T.span isDigit (dropSep afterLabel)
-             in ((1, numOr0 digits), rest)
+             in (Just (numOr0 digits), rest)
         Nothing -> case T.stripPrefix "-" s of
             Just afterDash ->
                 let (digits, rest) = T.span isDigit afterDash
-                 in if T.null digits then ((0, 0), s) else ((1, numOr0 digits), rest)
-            Nothing -> ((0, 0), s)
+                 in if T.null digits then (Nothing, s) else (Just (numOr0 digits), rest)
+            Nothing -> (Nothing, s)
 
-{- | Consume an optional dev-release (@.devN@); @(1, 0)@ if none, so a dev
-release sorts below its non-dev sibling.
--}
-consumeDev :: Text -> ((Int, Integer), Text)
+-- | Consume an optional dev-release (@.devN@) into @Just n@; 'Nothing' if absent.
+consumeDev :: Text -> (Maybe Integer, Text)
 consumeDev s =
     case T.stripPrefix "dev" (dropSep s) of
         Just afterLabel ->
             let (digits, rest) = T.span isDigit (dropSep afterLabel)
-             in ((0, numOr0 digits), rest)
-        Nothing -> ((1, 0), s)
+             in (Just (numOr0 digits), rest)
+        Nothing -> (Nothing, s)
 
 -- ── normalised signals ───────────────────────────────────────────────────────
 
