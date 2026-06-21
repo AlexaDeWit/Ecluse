@@ -93,12 +93,16 @@ Current layout:
 
 | Module | Holds |
 |--------|-------|
-| `Ecluse.Package` | The ecosystem-agnostic package vocabulary: `Scope`, `PackageName`, `Version`, `Dist`, `Maintainer`, `PackageDetails`, with their smart constructors and renderers. |
+| `Ecluse.Ecosystem` | The ecosystem tag (`Ecosystem`), shared by the package vocabulary, the version engine, and (later) the registry adapters. It lives alone to break the `Package`↔`Version` import cycle (STYLE.md §4.3). |
+| `Ecluse.Version` | Version identity and ordering: `Version`, `VersionKey`, `mkVersion` / `compareVersions` / `parseVersionKey`, and the (private) per-ecosystem parsers — semver, PEP 440, `Gem::Version`. |
+| `Ecluse.Package` | The ecosystem-agnostic package vocabulary: `Scope`, `PackageName`, the normalised signals (`CodeExecSignal`, `Trust`, `Availability`), `Artifact`, `Person`, `Dependency`, and `PackageDetails` (which embeds a `Version`), with their smart constructors and renderers. |
 | `Ecluse.Rules.Types` | Rule data types: `Rule`, `EvalContext`, `RuleOutcome`, `Decision`. |
 | `Ecluse.Rules` | Rule evaluation and decision rendering: `evalRule`, `evalRules`, `renderDecision`, `renderDuration`. |
 
-Tests mirror this hierarchy within each suite's source dir (e.g. the unit spec
-for `Ecluse.Rules` is `test/unit/Ecluse/RulesSpec.hs`).
+Tests mirror this hierarchy within each suite's source dir (e.g. the unit specs
+for `Ecluse.Rules` and `Ecluse.Version` are `test/unit/Ecluse/RulesSpec.hs` and
+`test/unit/Ecluse/VersionSpec.hs`; version ordering additionally has a
+differential suite, `Ecluse.VersionOrderingSpec`, against reference oracles).
 
 ---
 

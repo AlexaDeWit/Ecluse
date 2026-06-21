@@ -7,9 +7,11 @@ import Hedgehog.Range qualified as Range
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
+import Ecluse.Ecosystem (Ecosystem (..))
 import Ecluse.Package
 import Ecluse.Rules
 import Ecluse.Rules.Types
+import Ecluse.Version (mkVersion)
 
 -- | A fixed "now" so age-based tests are deterministic.
 now :: UTCTime
