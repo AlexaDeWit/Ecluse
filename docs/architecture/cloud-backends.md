@@ -51,6 +51,12 @@ settles to a modest steady state, so an extra deployable is not yet worth it.
 Transient failures are handled in the loop (retry/backoff/DLQ, above); a sustained
 failure surfaces through the worker's health signal.
 
+A second in-process background task — the **advisory-dataset sync** (see
+[CVE Subsystem](rules-engine.md#cve-subsystem)) — refreshes the in-memory advisory
+index the request-path rules read; it is supervised the same way and, because
+rules run on the request path, travels with the server when the worker is split
+out.
+
 The split is kept **trivial for later**. The server and worker are each a
 self-contained entry function over the shared, seam-based `Env` —
 `runServer :: Env -> IO ()` and `runWorker :: Env -> IO ()` — and the

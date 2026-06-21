@@ -150,20 +150,61 @@ phases.
 
 ## CVE Subsystem
 
-The CVE subsystem provides an interface for effectful rules to query advisory
-databases. The `CVELookup` abstraction allows handlers to be backed by different
-sources or caching layers.
+Effectful rules (e.g. `DenyIfCVE`) check a package version against known
+advisories. Rather than call an advisory API per evaluation, Écluse **syncs a
+local copy of the dataset and queries it in memory**: the `CVELookup` seam reads a
+local index, never the network, on the hot path.
 
-**Recommended sources at launch:**
+### Local sync, in memory
 
-- **npm security advisory endpoint** (`registry.npmjs.org/-/npm/v1/security/advisories/bulk`)
-  — the most direct source for npm, no API key required, returns advisories for
-  requested packages in bulk.
-- **OSV.dev API** — secondary source; broader coverage, also free, useful for
-  cross-referencing.
+A supervised in-process background task periodically pulls **OSV's per-ecosystem
+advisory exports** (`gs://osv-vulnerabilities/<ecosystem>/all.zip`) — one dataset
+per supported ecosystem, under one schema — and parses each into a compact
+in-memory index (package → affected version-ranges + advisory IDs), which is
+**atomically swapped** in. The download is transient (stream-unzipped, or a temp
+file deleted immediately), so there is **no persistent writable-disk requirement**
+— the footprint is RAM: tens of MB per ecosystem, the index smaller than the raw
+export. OSV is chosen as the aggregator — it covers npm/PyPI/RubyGems under one
+schema and ships dumps built for mirroring, so a single mechanism serves every
+ecosystem. The task feeds request-path rule evaluation, so it travels with the
+server (see [Process model](cloud-backends.md#process-model)).
 
-Results should be cached locally in memory (with a configurable TTL) to avoid
-per-request latency on advisory lookups.
+Syncing rather than looking up on demand removes the **one external dependency
+that would otherwise sit under the deliberately fail-closed gate** (see
+[Effectful-rule failure](#effectful-rule-failure)): an advisory-source outage
+becomes **sync lag** — the last-good index keeps serving, with an alarm — instead
+of per-package blocking. Lookups also leave the hot path entirely; and the cold
+path is already rare, since a version is checked only *before* it is mirrored,
+after which it is served rule-free, so lookup volume tracks first-time-seen
+versions, not requests.
+
+- **Cold start** — until the first sync lands the index is empty, so
+  [readiness](web-layer.md#meta-routes-ping-health-and-search) gates on
+  *first-sync-complete*: the proxy is not marked ready until advisories are loaded.
+- **Sync failure** — keep the last-good index and alarm; never drop to an empty
+  index on a failed refresh.
+- **Version matching** — owned locally: a version is tested against an advisory's
+  affected ranges using the same per-ecosystem ordering as
+  [`compareVersions`](domain-model.md). (Owned whichever source is used — every
+  source returns ranges.)
+
+### Point-in-time gating — a known limitation
+
+CVE gating happens **at ingestion**: a version is checked once, before it enters
+the mirror. A CVE disclosed *after* a version is mirrored is **not** caught — the
+private upstream serves it rule-free thereafter. Catching post-mirror disclosures
+needs **periodically re-scanning the mirror** (quarantine/remove affected
+versions) against the same local dataset; that is its own feature and is
+**deferred**. Holding the dataset locally makes it straightforward to add later.
+
+### Testing
+
+Because the index is in memory and refreshed on a schedule, tests assert a
+**bounded, self-cleaning footprint**: memory stays bounded across repeated syncs
+(the old index is released — no growth or leak), the swap is atomic (no torn reads
+mid-refresh), a failed sync retains the last-good index (and alarms), readiness
+gates on first sync, and any transient download scratch is cleaned up. (A future
+on-disk cache would instead add rotation / bounded-disk tests.)
 
 ## Denial Responses
 

@@ -14,7 +14,7 @@
 | Cloud — GCP | `gogol` *or* a hand-rolled REST client (TBD) | Pub/Sub mirror queue + Artifact Registry token. GCP's Haskell story is weaker than AWS's, so the choice is gated on a spike — see [Cloud Backends](cloud-backends.md#cloud-backends). |
 | Logging | `katip` | Structured, contextual JSON logging. Denials are an audit trail — package/version/rule context attaches to every event. |
 | Config | `envparse` | Applicative env-var parser; aggregates all missing/invalid vars into one error rather than failing on the first. |
-| Caching | `cache` | STM-backed TTL cache for advisory lookups; handles expiry/eviction for us. |
+| Caching | `cache` | STM-backed TTL cache for the short-TTL packument metadata cache; handles expiry/eviction. (Advisory data is a synced in-memory index, not a TTL cache — see [CVE Subsystem](rules-engine.md#cve-subsystem).) |
 | Concurrency | `async` + `stm` | Non-blocking mirror enqueue; shared cache/state. |
 | Time | `time` | `AllowIfPublishedBefore` age calculations. |
 | Unit tests | `hspec` (+ `hspec-wai`) | `hspec-wai` drives the proxy `Application` end-to-end. |
