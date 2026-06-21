@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Écluse — social media card / Open Graph image (1200×630, 1.91:1).
+  The 1200×630 sibling of docs/social-preview.svg (which is 1280×640 for
+  GitHub's repo social-preview slot). Same hand-authored line drawing, re-fitted
+  to the OG/Twitter/LinkedIn aspect ratio with a symmetric sheet frame. No
+  third-party or stock assets.
+    Wordmark : "EB Garamond" (OFL) → Georgia fallback
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630"
+     role="img" aria-label="Écluse — supply-chain resilience proxy for package registries">
+  <title>Écluse</title>
+  <desc>Looking up a canal lock at the closed gates and their balance beams.</desc>
+
+  <defs>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M40 0 H0 V40" fill="none" stroke="#211F1C" stroke-opacity="0.035" stroke-width="1"/>
+    </pattern>
+  </defs>
+
+  <!-- drafting paper + faint grid + sheet edge (fitted to 1200×630) -->
+  <rect width="1200" height="630" fill="#F4EFE3"/>
+  <rect x="24" y="24" width="1152" height="582" fill="url(#grid)"/>
+  <rect x="24" y="24" width="1152" height="582" fill="none" stroke="#211F1C" stroke-width="1.6"/>
+
+  <!-- artwork re-centred for the 1200-wide canvas (x640→x600, nudged up 5) -->
+  <g transform="translate(-40,-5)">
+    <g fill="none" stroke="#211F1C" stroke-linejoin="round">
+
+      <!-- chamber walls converging toward the gates -->
+      <g stroke-width="2">
+        <line x1="190" y1="372" x2="345" y2="278"/>
+        <line x1="1090" y1="372" x2="935" y2="278"/>
+      </g>
+
+      <!-- water: front edge, banks, still reflections -->
+      <g stroke-width="1.4">
+        <line x1="208" y1="375" x2="1072" y2="375"/>
+        <line x1="208" y1="375" x2="350" y2="283"/>
+        <line x1="1072" y1="375" x2="930" y2="283"/>
+      </g>
+      <g stroke-width="1" stroke-opacity="0.4">
+        <line x1="380" y1="345" x2="900" y2="345"/>
+        <line x1="450" y1="322" x2="830" y2="322"/>
+        <line x1="640" y1="286" x2="640" y2="352"/>
+      </g>
+
+      <!-- closed mitre gates -->
+      <g stroke-width="2.4">
+        <line x1="345" y1="112" x2="345" y2="278"/>
+        <line x1="935" y1="112" x2="935" y2="278"/>
+        <line x1="640" y1="92"  x2="640" y2="284"/>
+      </g>
+      <g stroke-width="2">
+        <line x1="345" y1="112" x2="640" y2="92"/>
+        <line x1="935" y1="112" x2="640" y2="92"/>
+        <line x1="345" y1="278" x2="640" y2="284"/>
+        <line x1="935" y1="278" x2="640" y2="284"/>
+      </g>
+      <g stroke-width="1.2" stroke-opacity="0.8">
+        <line x1="345" y1="153" x2="640" y2="140"/>
+        <line x1="345" y1="195" x2="640" y2="188"/>
+        <line x1="345" y1="236" x2="640" y2="236"/>
+        <line x1="935" y1="153" x2="640" y2="140"/>
+        <line x1="935" y1="195" x2="640" y2="188"/>
+        <line x1="935" y1="236" x2="640" y2="236"/>
+      </g>
+      <g stroke-width="1.6">
+        <line x1="345" y1="278" x2="636" y2="104"/>
+        <line x1="935" y1="278" x2="644" y2="104"/>
+      </g>
+
+      <!-- balance beams + end handles -->
+      <g stroke-width="5" stroke-linecap="round">
+        <line x1="345" y1="112" x2="150" y2="156"/>
+        <line x1="935" y1="112" x2="1130" y2="156"/>
+      </g>
+      <g stroke-width="2.2" stroke-linecap="round">
+        <line x1="145" y1="149" x2="156" y2="164"/>
+        <line x1="1135" y1="149" x2="1124" y2="164"/>
+      </g>
+    </g>
+
+    <!-- still water of the pound beyond the gates (a whisper) -->
+    <line x1="505" y1="80" x2="775" y2="80" stroke="#211F1C" stroke-width="1" stroke-opacity="0.4"/>
+
+    <!-- wordmark + tagline (the only text) -->
+    <text x="640" y="492" text-anchor="middle"
+          font-family="'EB Garamond','Cormorant Garamond',Georgia,'Times New Roman',serif"
+          font-size="82" font-weight="600" letter-spacing="1" fill="#211F1C">Écluse</text>
+    <text x="640" y="530" text-anchor="middle"
+          font-family="'Inter','Helvetica Neue',Arial,sans-serif"
+          font-size="16" letter-spacing="2" fill="#5A564E">SUPPLY-CHAIN RESILIENCE PROXY FOR PACKAGE REGISTRIES</text>
+  </g>
+</svg>
