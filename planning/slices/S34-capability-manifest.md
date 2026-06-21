@@ -3,7 +3,7 @@ id: S34
 title: Capability manifest (OpenAPI) + /openapi.json + docs render
 milestone: M2 — Web front door
 status: not-started
-depends-on: [S11, S12, S09, S33]
+depends-on: [S03, S12, S14]
 test-tier: [unit]
 arch-refs:
   - docs/architecture/api-surface.md
@@ -14,7 +14,7 @@ pr: null
 
 # S34 — Capability manifest (OpenAPI) + `/openapi.json` + docs render
 
-> Milestone **M2** · depends on: [S11](S11-response-model.md), [S12](S12-wai-app-middleware.md), [S09](S09-npm-rewrite-filter.md), [S33](S33-packument-merge.md) · tier: unit
+> Milestone **M2** · depends on: [S03](S03-config-loader.md), [S12](S12-wai-app-middleware.md), [S14](S14-packument-path.md) · tier: unit
 >
 > **Not on the AWS-launch critical path.** A discoverability artifact; it can land
 > any time after its dependencies. It does **not** gate M3/M4.
@@ -26,9 +26,10 @@ supported* — serve it at `GET /openapi.json`, and render browsable docs in CI.
 (capability manifest, **not** a client-integration contract).
 
 **Acceptance criteria.**
-- [ ] **Owned schemas via `autodocodec`.** The error/denial envelope (S11), the
-  **synthesized packument** (the merged-and-filtered view — S09/S33), and the
-  config model define their JSON via `autodocodec`, deriving `aeson` instances and
+- [ ] **Owned schemas via `autodocodec`.** The error/denial envelope (S11, via
+  S12), the **synthesized packument** (the served merged-and-filtered view — S14,
+  over the S06 wire type), and the config model (S03) define their JSON via
+  `autodocodec`, deriving `aeson` instances and
   the OpenAPI/JSON-Schema from one codec (no drift). The synthesized packument is a
   **partial** schema: modelled known/transformed fields + `additionalProperties:
   true` with the "relayed from upstream, private wins" note. — _api-surface.md#the-synthesized-packument-schema--the-trust-boundary_
@@ -57,6 +58,14 @@ supported* — serve it at `GET /openapi.json`, and render browsable docs in CI.
 
 **Test tier.** Unit — manifest assembly + codec round-trips. The Redoc render is a
 CI artifact step, not a test tier.
+
+**Dependency rationale.** S34 depends on **S14** (not the S09/S33 transforms
+directly) so the published packument schema describes a body the server can
+actually serve — documenting it before the packument path closes would be
+drift-at-birth. S14 transitively brings the wire type (S06), the filter (S09), and
+the merge (S33); **S12** (the WAI app + `Route` × mount enumeration) is implied by
+S14 but kept explicit because `/openapi.json` mounts into that app; **S03** supplies
+the config model for config-as-JSON-Schema.
 
 **Notes / risks.** New deps: `autodocodec` (+ `autodocodec-openapi3`) and
 `openapi3` — record them in [technology-stack.md](../../docs/architecture/technology-stack.md#technology-stack).
