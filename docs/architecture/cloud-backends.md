@@ -165,6 +165,22 @@ token's own `expiresAt` rather than a fixed interval — the same policy then fi
 either cloud, and each cloud contributes ~10 lines. This isolation also bounds the
 test gap (see [Testing](#testing)): everything but `mintToken` is unit-testable.
 
+**Refresh policy.** The wrapper refreshes **proactively in the background** when a
+token passes ~80% of its lifetime (configurable, with jitter to desynchronise
+instances) plus a hard floor near expiry; because the current token stays valid
+during refresh, the request hot path **never blocks on a mint** in the common
+case. Refresh is **single-flight** per provider (an STM flag / `TMVar`): at most
+one mint is ever in flight, so a cohort of requests never stampedes the cloud
+token API. On mint failure the wrapper keeps serving the still-valid token,
+**retries with backoff behind a circuit breaker** (the same machinery as the
+effectful tier — see
+[Rules Engine → Effectful-rule failure](rules-engine.md#effectful-rule-failure)),
+and alarms; only if the token has actually **expired *and* mint still fails** does
+the dependent fetch become transiently unavailable, surfacing through the serve
+[error model](web-layer.md#error-model) (`503`). The `static` provider has no
+expiry and never refreshes. The clock is injected, so the whole policy is
+unit-tested deterministically.
+
 ### Queue abstraction
 
 The queue is the one piece with materially different APIs per cloud, so it is its
