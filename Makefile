@@ -22,7 +22,8 @@ HADDOCK_FLAGS := --haddock-hyperlink-source --haddock-quickjump
 .DEFAULT_GOAL := help
 .PHONY: help update build test test-integration test-smoke test-all coverage \
         gen-version-fixtures format format-check lint sast check run docs \
-        docs-site nix-build nix-check docker-build docker-push sbom clean
+        docs-site nix-build nix-check docker-build docker-push sbom scan \
+        scan-vulnix clean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -118,5 +119,19 @@ sbom: ## Generate the image SBOM (SPDX + CycloneDX) under sbom/
 	@mkdir -p sbom
 	$(NIX) sbomnix --spdx sbom/ecluse.spdx.json --cdx sbom/ecluse.cdx.json --csv sbom/ecluse.csv .#ecluse-bin
 
+# Scan the image's dependency closure for known CVEs. `scan` is the authority:
+# sbomnix builds the SBOM of the shipped binary, grype scans it against its
+# maintained DB → severity-rated table + grype.json. `scan-vulnix` is the
+# secondary Nix-native cross-check (more comprehensive and patch-aware, but no
+# severity grades). Both are report-only. See CONTRIBUTING.md → "Vulnerability
+# scanning".
+scan: ## Scan the image closure for CVEs (grype over the SBOM → grype.json)
+	@mkdir -p sbom
+	$(NIX) sbomnix --cdx sbom/ecluse.cdx.json .#ecluse-bin
+	$(NIX) grype sbom:sbom/ecluse.cdx.json -o table -o json=grype.json
+
+scan-vulnix: ## Secondary Nix-native cross-check (vulnix; comprehensive, no severity)
+	-$(NIX) bash -c 'vulnix -C "$$(nix build .#ecluse-bin --no-link --print-out-paths)"'
+
 clean: ## Remove build artifacts
-	rm -rf dist-newstyle result sbom
+	rm -rf dist-newstyle result sbom grype.json

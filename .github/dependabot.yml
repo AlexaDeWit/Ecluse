@@ -7,3 +7,15 @@ updates:
       interval: "weekly"
     commit-message:
       prefix: "ci"
+
+  # Keep the Nix flake inputs (nixpkgs, nixpkgs-unstable, flake-utils) current so
+  # the image's C-library closure picks up upstream security fixes. This is the
+  # freshness arm of the supply-chain posture (Dependabot now supports the Nix
+  # ecosystem); the grype scan is the detection arm. See CONTRIBUTING.md →
+  # "Vulnerability scanning".
+  - package-ecosystem: "nix"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "build"
