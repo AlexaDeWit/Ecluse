@@ -15,6 +15,12 @@ The end goal is a precise **JSON type model** (see each document's "Type model"
 section) that both directions share, so a request can be decoded once, evaluated
 by the rules engine, and re-encoded faithfully.
 
+**Capstone:** [`../synthesis.md`](../synthesis.md) folds these three studies into
+the cross-ecosystem patterns (invariants vs. variabilities), the central
+"rules consume normalized signals" idea, and an assessment + proposed revision of
+the internal `Ecluse.Package` types. Read the protocol docs for the *what*; read
+the synthesis for *how it shapes our types*.
+
 ## Documents
 
 | Ecosystem | Document | Status |
