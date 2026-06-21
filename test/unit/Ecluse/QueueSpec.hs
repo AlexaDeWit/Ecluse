@@ -41,6 +41,20 @@ spec = do
             msgs <- receive q
             map msgJob msgs `shouldBe` [sampleJob]
 
+        it "carries every job field through unchanged from enqueue to receive" $ do
+            -- The queue is a transparent carrier: each field the producer set must
+            -- arrive on the consumer side byte-for-byte. Assert field-by-field
+            -- (via the 'MirrorJob' selectors) rather than on the whole record, so a
+            -- regression that mangled a single field is pinpointed.
+            q <- newInMemoryQueue
+            enqueue q sampleJob
+            [msg] <- receive q
+            let job = msgJob msg
+            jobPackage job `shouldBe` jobPackage sampleJob
+            jobVersion job `shouldBe` jobVersion sampleJob
+            jobArtifactUrl job `shouldBe` jobArtifactUrl sampleJob
+            jobMirrorTarget job `shouldBe` jobMirrorTarget sampleJob
+
         it "delivers jobs in FIFO order" $ do
             q <- newInMemoryQueue
             enqueue q sampleJob
@@ -75,6 +89,19 @@ spec = do
             afterAck <- receive q
             map msgJob afterAck `shouldBe` []
 
+        it "gives each delivery of the same job a distinct message (fresh receipt)" $ do
+            -- A job that is received but not acked is redelivered, and each delivery
+            -- must be a *distinct* 'QueueMessage' — same job, but a fresh receipt —
+            -- so acking one delivery cannot be confused with another. This pins the
+            -- receipt-per-delivery invariant via 'QueueMessage' equality.
+            q <- newInMemoryQueue
+            enqueue q sampleJob
+            [firstDelivery] <- receive q
+            [secondDelivery] <- receive q
+            msgJob firstDelivery `shouldBe` msgJob secondDelivery
+            firstDelivery `shouldNotBe` secondDelivery
+            msgReceipt firstDelivery `shouldNotBe` msgReceipt secondDelivery
+
         it "extendVisibility keeps an in-flight job from redelivering immediately" $ do
             -- extendVisibility is an optimisation, not correctness-critical; for
             -- the in-memory double it simply leaves the in-flight job in flight,
@@ -82,7 +109,12 @@ spec = do
             q <- newInMemoryQueue
             enqueue q sampleJob
             [msg] <- receive q
-            extendVisibility q (msgReceipt msg) (Seconds 30)
+            let hold = Seconds 30
+            -- The window is a typed duration, not a bare Int: the held value is the
+            -- one we pass through, and Seconds are ordered (a longer hold is larger).
+            hold `shouldBe` Seconds 30
+            hold `shouldSatisfy` (> Seconds 0)
+            extendVisibility q (msgReceipt msg) hold
             afterHold <- receive q
             map msgJob afterHold `shouldBe` []
   where

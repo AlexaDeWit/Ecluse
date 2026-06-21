@@ -1,5 +1,7 @@
 module Ecluse.PackageSpec (spec) where
 
+import Data.Map.Strict qualified as Map
+import Data.Time (UTCTime (..), fromGregorian)
 import Hedgehog (forAll, (===))
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
@@ -8,6 +10,41 @@ import Test.Hspec.Hedgehog (hedgehog)
 
 import Ecluse.Ecosystem (Ecosystem (..))
 import Ecluse.Package
+import Ecluse.Version (Version, mkVersion)
+
+-- | A single inert artifact; the packument-level tests do not inspect artifacts.
+sampleArtifact :: Artifact
+sampleArtifact =
+    Artifact
+        { artFilename = "thing-1.0.0.tgz"
+        , artUrl = "https://example.test/thing-1.0.0.tgz"
+        , artKind = Tarball
+        , artHashes = []
+        , artSize = Nothing
+        , artInterpreter = Nothing
+        , artYanked = False
+        , artProvenance = Nothing
+        }
+
+{- | A minimal per-version snapshot for a given name and version. Only the fields
+a 'PackageInfo' threads through (the name and version) are meaningful here; the
+rest are inert defaults, since these tests are about the packument-level view.
+-}
+details :: PackageName -> Version -> PackageDetails
+details name version =
+    PackageDetails
+        { pkgName = name
+        , pkgVersion = version
+        , pkgPublishedAt = Nothing
+        , pkgInstallCode = NoCodeOnInstall
+        , pkgTrust = Untrusted
+        , pkgAvailability = Available
+        , pkgArtifacts = sampleArtifact :| []
+        , pkgLicenses = ["MIT"]
+        , pkgPublisher = Nothing
+        , pkgMaintainers = []
+        , pkgDependencies = []
+        }
 
 spec :: Spec
 spec = do
@@ -36,3 +73,34 @@ spec = do
                 `shouldBe` "flask-thing-x"
         it "treats PyPI names equal up to normalisation" $
             mkPackageName PyPI Nothing "Flask" `shouldBe` mkPackageName PyPI Nothing "flask"
+
+    describe "PackageInfo" $ do
+        -- A packument-level fixture: one package, one published version "1.0.0"
+        -- tagged "latest", with a known publish time. The map is keyed by the raw
+        -- version string, as the type documents.
+        let name = mkPackageName Npm Nothing "thing"
+            version = mkVersion Npm "1.0.0"
+            publishedAt = UTCTime (fromGregorian 2026 6 21) 0
+            info =
+                PackageInfo
+                    { infoName = name
+                    , infoVersions = Map.singleton "1.0.0" (details name version)
+                    , infoDistTags = Map.singleton "latest" version
+                    , infoPublishedAt = Map.singleton "1.0.0" publishedAt
+                    }
+        it "round-trips the package identity through infoName" $
+            infoName info `shouldBe` name
+        it "retrieves a version's details by its raw version-string key" $
+            -- The version put in under "1.0.0" is the one that comes back out, and
+            -- it still carries its own parsed 'Version' (the map key is just Text).
+            (pkgVersion <$> Map.lookup "1.0.0" (infoVersions info)) `shouldBe` Just version
+        it "resolves a dist-tag to the version it points at" $
+            Map.lookup "latest" (infoDistTags info) `shouldBe` Just version
+        it "records the per-version publish time under the raw version-string key" $
+            Map.lookup "1.0.0" (infoPublishedAt info) `shouldBe` Just publishedAt
+        it "is equal exactly when every field agrees" $ do
+            -- Equality is structural over all four fields: an identically-built
+            -- document is equal, and changing a single field (here the version a
+            -- dist-tag resolves to) makes it unequal.
+            info `shouldBe` info{infoDistTags = Map.singleton "latest" version}
+            info `shouldNotBe` info{infoDistTags = Map.singleton "latest" (mkVersion Npm "2.0.0")}

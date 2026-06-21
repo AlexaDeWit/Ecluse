@@ -27,6 +27,13 @@ spec = do
             -- Redaction is a display concern only; the value must remain usable.
             unSecret (mkSecret "the-token") `shouldBe` "the-token"
 
+        it "compares equal exactly when the underlying token text is equal" $ do
+            -- The redacted 'Show' is identical for every secret, so equality must
+            -- come from the wrapped text, not the rendered form: two secrets are
+            -- equal iff their tokens are, and differ when the tokens differ.
+            mkSecret "x" `shouldBe` mkSecret "x"
+            mkSecret "x" `shouldNotBe` mkSecret "y"
+
         it "never leaks the secret even when embedded in an AuthToken's Show" $ do
             let tok = AuthToken{authSecret = mkSecret "leak-me", authExpiresAt = Just anExpiry}
             T.pack (show tok) `shouldSatisfy` (not . T.isInfixOf "leak-me")
