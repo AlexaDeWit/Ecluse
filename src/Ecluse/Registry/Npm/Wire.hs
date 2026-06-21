@@ -5,8 +5,8 @@ actually sends and parses it with deliberately forgiving 'FromJSON' instances.
 It is the raw-wire layer of "parse, don't validate" — it captures /what the
 registry said/ as faithfully as the rules and serving need, and __nothing
 more__. Projecting these wire types into the ecosystem-agnostic domain model
-("Ecluse.Package": @PackageDetails@ et al.) is a separate concern and a separate
-slice; keeping the two apart is what keeps the lenient\/faithful seam clean.
+("Ecluse.Package": @PackageDetails@ et al.) is a separate concern; keeping the
+two apart is what keeps the lenient\/faithful seam clean.
 
 The shapes here are reverse-engineered from live captures of
 @registry.npmjs.org@; the authoritative reference (with real bodies) is
@@ -37,15 +37,12 @@ the documented reality:
 The fields the rules engine and the serving path actually need are captured
 precisely: the abbreviated-only 'vmHasInstallScript' flag, the 'vmDeprecated'
 notice, the whole 'vmScripts' map (so the full form\'s install-script presence
-can be /derived/ later — the full manifest has no @hasInstallScript@ key), the
+can be /derived/ — the full manifest has no @hasInstallScript@ key), the
 'Dist' integrity triple (@tarball@\/@shasum@\/@integrity@), and the full
 packument\'s 'pkmtTime' map (the source of truth for publish age, which the
 abbreviated form drops).
 
-Only 'FromJSON' lives here for now: Écluse reads far more than it writes, and the
-server-output (@ToJSON@) side is a later slice. See
-@docs\/research\/reverse-engineering\/npm.md@ §11 ("Encoding rules") for the
-output contract when that lands.
+Only the decode path (@FromJSON@) is modelled here.
 -}
 module Ecluse.Registry.Npm.Wire (
     -- * Shared scalars
@@ -260,7 +257,7 @@ ignored (see the module header). The two rule-decisive optionals deserve note:
 * 'vmScripts' is therefore captured whole so that, when only the full form is
   available, install-script presence can be /derived/
   (@scripts@ has any of @preinstall@\/@install@\/@postinstall@). That derivation
-  is a domain-projection concern (a later slice), not this layer\'s.
+  is a domain-projection concern, not this layer\'s.
 
 The publish timestamp is __not__ here — it lives in the packument\'s
 'pkmtTime' map, not the manifest (see §8 of the protocol reference).
