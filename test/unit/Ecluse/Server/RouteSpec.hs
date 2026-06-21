@@ -65,7 +65,7 @@ spec = do
             classify ["-", "v1", "search"] `shouldBe` Search
         it "treats an unknown /-/… meta-route as Unsupported, never a package" $
             classify ["-", "whoami"] `shouldBe` Unsupported
-        it "treats the dist-tags meta-route as Unsupported (not modelled yet)" $
+        it "treats the dist-tags meta-route as Unsupported" $
             classify ["-", "package", "is-odd", "dist-tags"] `shouldBe` Unsupported
 
     describe "classify — unrecognised paths deny by default" $ do
@@ -79,8 +79,9 @@ spec = do
             -- Pins the isTarballFile length guard: the file must be longer than
             -- @.tgz@, so the exact suffix alone is not a tarball.
             classify ["is-odd", "-", ".tgz"] `shouldBe` Unsupported
-        it "routes a version-manifest request to Unsupported (not modelled yet)" $
-            -- @GET /{pkg}/{version}@ is a later slice; today it is not a packument.
+        it "routes a version-manifest request to Unsupported" $
+            -- @GET /{pkg}/{version}@ is not a packument: a bare package is, but a
+            -- trailing version segment is not recognised.
             classify ["is-odd", "3.0.1"] `shouldBe` Unsupported
         it "routes a scope with no package name to Unsupported" $
             classify ["@babel"] `shouldBe` Unsupported

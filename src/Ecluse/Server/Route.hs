@@ -28,10 +28,9 @@ npm-specific facts shape the matching, all from the protocol research (see
   scoped package the basename drops the scope (@\@babel\/code-frame@ →
   @code-frame-7.0.0.tgz@), which 'classify' carries through verbatim as the file.
 
-Mount dispatch / prefix-stripping and the liveness\/readiness routes are a
-separate, later concern (see @docs\/architecture\/web-layer.md@); 'classify' only
-ever sees the ecosystem-native path and so models exactly the five 'Route's
-below.
+Mount dispatch / prefix-stripping and the liveness\/readiness routes are handled
+elsewhere (see @docs\/architecture\/web-layer.md@); 'classify' only ever sees the
+ecosystem-native path, so it models exactly the five 'Route's below.
 -}
 module Ecluse.Server.Route (
     -- * Routes
@@ -59,7 +58,7 @@ data Route
       Tarball PackageName Text
     | -- | @GET \/-\/ping@ — a registry liveness probe, answered locally.
       Ping
-    | -- | @GET \/-\/v1\/search@ — package search (not supported at launch).
+    | -- | @GET \/-\/v1\/search@ — package search (unsupported).
       Search
     | -- | Anything unrecognised. Renders as a @404@ — deny by default at the
       -- routing layer.
