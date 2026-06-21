@@ -125,6 +125,7 @@ spec = do
     hostAllowlistSpec
     internalRangeSpec
     hostAddressSpec
+    ssrfGateSpec
     upstreamUrlSpec
     boundedReadSpec
     versionCountSpec
@@ -250,6 +251,10 @@ internalRangeSpec = describe "isBlockedTarget" $ do
             isBlockedTarget (Set.singleton "10.0.0.5") "10.0.0.5" `shouldBe` False
         it "still blocks an internal address that is not the opted-in one" $
             isBlockedTarget (Set.singleton "10.0.0.5") "10.0.0.6" `shouldBe` True
+        it "honours an opt-in written in a different case (matched case-insensitively)" $
+            -- The opt-in is normalised like the host allowlist, so 'FE80::1' opts in
+            -- 'fe80::1' rather than over-blocking it on a case mismatch.
+            isBlockedTarget (Set.singleton "FE80::1") "fe80::1" `shouldBe` False
 
 -- ── host extraction ──────────────────────────────────────────────────────────
 
@@ -285,6 +290,35 @@ hostAddressSpec = describe "hostAddress" $ do
         let h = hostAddress "http://169.254.169.254/latest/meta-data/"
          in (isBlockedTarget Set.empty h, isAllowedUpstreamHost upstreams h)
                 `shouldBe` (True, False)
+
+-- ── composed SSRF gate ───────────────────────────────────────────────────────
+
+{- | The actual outbound-fetch guarantee is the __conjunction__: a target is
+fetched only if it is on the host allowlist /and/ not an internal address. The two
+halves are exercised above; this pins the composition the data plane relies on, so
+neither half can be silently weakened.
+-}
+ssrfGateSpec :: Spec
+ssrfGateSpec = describe "composed SSRF gate (allowlist AND not-blocked)" $ do
+    let passesGate h = isAllowedUpstreamHost upstreams h && not (isBlockedTarget Set.empty h)
+
+    it "admits a configured public upstream" $
+        passesGate "registry.npmjs.org" `shouldBe` True
+    it "vetoes an allowlisted host that is an internal literal (block beats allowlist)" $
+        -- Even if an operator allowlists an internal address, the internal-range
+        -- block still rejects it: the guarantee is the conjunction, not either half.
+        let allowed = Set.insert "169.254.169.254" upstreams
+         in ( isAllowedUpstreamHost allowed "169.254.169.254"
+                && not (isBlockedTarget Set.empty "169.254.169.254")
+            )
+                `shouldBe` False
+    it "refuses an IPv4-mapped IPv6 metadata literal (kept out by the allowlist half)" $
+        -- '::ffff:a9fe:a9fe' is 169.254.169.254 in mapped form. The internal block
+        -- deliberately does not decode it (documented out-of-scope), but the
+        -- allowlist half keeps it out, so the composed gate still refuses it.
+        passesGate "::ffff:a9fe:a9fe" `shouldBe` False
+    it "refuses a metadata host extracted from a URL" $
+        passesGate (hostAddress "http://169.254.169.254/latest/meta-data/") `shouldBe` False
 
 -- ── identifier → URL safety ──────────────────────────────────────────────────
 

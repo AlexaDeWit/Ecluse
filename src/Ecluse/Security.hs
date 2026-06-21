@@ -97,8 +97,9 @@ against:
 * __loopback__ @127.0.0.0\/8@ and IPv6 @::1@;
 * __RFC1918 private__ @10.0.0.0\/8@, @172.16.0.0\/12@, and @192.168.0.0\/16@.
 
-A host in @allowedInternal@ is __never__ blocked — the deliberate opt-in for a
-private upstream that genuinely lives on an internal address. A @host@ that is not
+A host in @allowedInternal@ is __never__ blocked (matched case-insensitively, as
+DNS and the host allowlist are) — the deliberate opt-in for a private upstream that
+genuinely lives on an internal address. A @host@ that is not
 an IP literal (a DNS name) is __not__ blocked here: name-based targets are
 constrained by the 'isAllowedUpstreamHost' allowlist instead, and post-resolution
 IP filtering belongs to the resolving fetch layer, not this pure check. Both
@@ -107,7 +108,7 @@ caught when its address is tested here.
 -}
 isBlockedTarget :: Set Text -> Text -> Bool
 isBlockedTarget allowedInternal host =
-    not (host `Set.member` allowedInternal)
+    not (T.toLower host `Set.member` Set.map T.toLower allowedInternal)
         && maybe False isInternalAddress (parseIpLiteral host)
 
 {- | An IP literal, parsed from a host for internal-range testing. Internal to

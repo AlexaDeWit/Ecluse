@@ -75,3 +75,11 @@ pipeline advances ([issue #11](https://github.com/AlexaDeWit/Ecluse/issues/11)).
 their fences). The bounded reader lives at the `http-client` boundary (S08); this
 slice provides the limit logic + config it consumes. Escalate if address parsing
 genuinely needs a dependency rather than a small CIDR check.
+
+**Deferred (defence-in-depth, fail-safe — out of scope here).** The internal-range
+block does not decode IPv4-mapped IPv6 (`::ffff:…`) or octal-form octets; both are
+still kept out by the host allowlist under the composed gate (`isAllowedUpstreamHost`
+∧ ¬`isBlockedTarget`), which a unit test pins. Revisit only if the block guard is
+ever used standalone or an internal IPv6 upstream is allowlisted. Post-resolution IP
+filtering — a DNS name that *resolves* to an internal address — belongs to the S08
+fetch layer (this pure layer cannot resolve names).
