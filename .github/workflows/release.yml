@@ -70,3 +70,16 @@ jobs:
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
           TAG: ${{ steps.tag.outputs.tag }}
         run: nix develop --command make docker-sign TAG="$TAG"
+
+      # SBOM from the Nix closure of the exact shipped binary (.#ecluse-bin).
+      - name: Generate SBOM
+        run: nix develop --command make sbom
+
+      # Attach keyless SBOM + SLSA provenance attestations, bound to the digest.
+      # Provenance fields come from the ambient GITHUB_* run context.
+      - name: Attest SBOM & provenance (cosign keyless)
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: nix develop --command make attest TAG="$TAG"

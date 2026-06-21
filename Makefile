@@ -22,7 +22,8 @@ HADDOCK_FLAGS := --haddock-hyperlink-source --haddock-quickjump
 .DEFAULT_GOAL := help
 .PHONY: help update build test test-integration test-smoke test-all coverage \
         gen-version-fixtures format format-check lint sast check run docs \
-        docs-site nix-build nix-check docker-build docker-push docker-sign clean
+        docs-site nix-build nix-check docker-build docker-push docker-sign \
+        sbom attest clean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -114,5 +115,25 @@ docker-sign: ## Sign $(IMAGE):$(TAG) with cosign (keyless; needs OIDC + creds)
 	@printf '%s' "$$DOCKERHUB_TOKEN" | $(NIX) cosign login docker.io -u "$$DOCKERHUB_USERNAME" --password-stdin
 	$(NIX) cosign sign --yes "$(IMAGE):$(TAG)"
 
+# SBOM of exactly the binary the image ships — the runtime closure of
+# `.#ecluse-bin` (stripped, static), so it lists what is really in the image
+# (incl. the curl/openssl/krb5 chunk) without a scanner's dynamic-build noise.
+# The Haskell deps are statically inside the `ecluse` component, pinned by
+# flake.lock. SPDX + CycloneDX. See CONTRIBUTING.md → "Supply-chain attestations".
+sbom: ## Generate the image SBOM (SPDX + CycloneDX) under sbom/
+	@mkdir -p sbom
+	$(NIX) sbomnix --spdx sbom/ecluse.spdx.json --cdx sbom/ecluse.cdx.json --csv sbom/ecluse.csv .#ecluse-bin
+
+# Attest the SBOM and SLSA provenance to $(IMAGE):$(TAG), keyless. cosign
+# resolves the tag to its digest, so both attestations bind to the digest (and
+# land under cosign's `.att`/`.sbom` tags — no registry referrers API needed).
+attest: ## Attest SBOM + SLSA provenance to $(IMAGE):$(TAG) (cosign keyless; needs OIDC + creds)
+	@test -n "$(TAG)" || { echo "set TAG, e.g. make attest TAG=0.1.0"; exit 1; }
+	@test -f sbom/ecluse.spdx.json || { echo "run 'make sbom' first"; exit 1; }
+	TAG="$(TAG)" $(NIX) bash scripts/gen-provenance.sh provenance.predicate.json
+	@printf '%s' "$$DOCKERHUB_TOKEN" | $(NIX) cosign login docker.io -u "$$DOCKERHUB_USERNAME" --password-stdin
+	$(NIX) cosign attest --yes --type spdxjson --predicate sbom/ecluse.spdx.json "$(IMAGE):$(TAG)"
+	$(NIX) cosign attest --yes --type slsaprovenance1 --predicate provenance.predicate.json "$(IMAGE):$(TAG)"
+
 clean: ## Remove build artifacts
-	rm -rf dist-newstyle result
+	rm -rf dist-newstyle result sbom provenance.predicate.json
