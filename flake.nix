@@ -37,6 +37,59 @@
         # ImportQualifiedPost) and parse postpositive `qualified` imports. Without
         # the cabal in scope, fourmolu's parser rejects them.
         hsSrc = pkgs.lib.sourceFilesBySuffices ./. [ ".hs" ".cabal" "cabal.project" ];
+
+        # ---- Dev-shell composition -------------------------------------------
+        # Env shared by every shell: a UTF-8 locale (so hspec's '✔' and other
+        # Unicode output encode regardless of host locale) and the NODE_PATH that
+        # makes `require("semver")` resolve for the npm version oracle (fixture
+        # generator + smoke suite).
+        shellEnv = {
+          LANG = "C.UTF-8";
+          LC_ALL = "C.UTF-8";
+          NODE_PATH = "${pkgs.nodePackages.semver}/lib/node_modules";
+        };
+
+        # Everything CI drives through `make`, across every gate job — this is the
+        # `.#ci` shell. Kept deliberately lean: it omits the IDE tooling (HLS,
+        # ghcid, hoogle, cabal-plan) and release tooling, which is the heaviest,
+        # flakiest part of the closure to substitute. That shrinks the Nix store
+        # each CI job realizes and caches. See CONTRIBUTING.md → "Continuous
+        # Integration".
+        ciInputs = [
+          pkgs.bashInteractive
+          hpkgs.ghc
+          hpkgs.cabal-install
+          hpkgs.fourmolu
+          hpkgs.hlint
+          # Convert HPC coverage output (.tix/.mix) to Codecov JSON for the
+          # `coverage` target (see CONTRIBUTING.md → "Coverage").
+          hpkgs.hpc-codecov
+          pkgs.semgrep
+          pkgs.zlib
+          pkgs.pkg-config
+          # Reference version-ordering oracles for the differential smoke suite
+          # and `make gen-version-fixtures`: node-semver (npm), Python packaging
+          # (PyPI), and Ruby Gem::Version (built into ruby).
+          pkgs.nodejs
+          pkgs.nodePackages.semver
+          (pkgs.python3.withPackages (ps: [ ps.packaging ]))
+          pkgs.ruby
+        ];
+
+        # Interactive-only tooling: in the default (human) shell, never needed by
+        # CI. HLS/ghcid for live feedback; hoogle/cabal-plan for API & build-plan
+        # search (see AGENTS.md).
+        ideInputs = [
+          hpkgs.haskell-language-server
+          hpkgs.ghcid
+          hpkgs.hoogle
+          hpkgs.cabal-plan
+        ];
+
+        # Release tooling: skopeo pushes the Nix-built image to a registry (no
+        # Docker daemon needed), cosign signs it keylessly. Used via the default
+        # shell by release.yml / `make docker-{push,sign}`.
+        releaseInputs = [ pkgs.skopeo pkgs.cosign ];
       in {
         packages = {
           default = ecluse;
@@ -99,47 +152,19 @@
           '';
         };
 
-        devShells.default = pkgs.mkShell {
+        # Full shell for humans: lean CI set + IDE + release tooling.
+        devShells.default = pkgs.mkShell (shellEnv // {
           name = "ecluse";
+          buildInputs = ciInputs ++ ideInputs ++ releaseInputs;
+        });
 
-          # Force a UTF-8 locale so test runners (hspec prints '✔') and any
-          # other Unicode output encode correctly regardless of the host locale.
-          LANG = "C.UTF-8";
-          LC_ALL = "C.UTF-8";
-
-          # Make `require("semver")` resolvable for the npm version-ordering
-          # oracle (used by the version-fixture generator and the smoke suite).
-          NODE_PATH = "${pkgs.nodePackages.semver}/lib/node_modules";
-
-          buildInputs = [
-            pkgs.bashInteractive
-            hpkgs.ghc
-            hpkgs.cabal-install
-            hpkgs.haskell-language-server
-            hpkgs.ghcid
-            # Haskell API search & build-plan inspection (see AGENTS.md).
-            hpkgs.hoogle
-            hpkgs.cabal-plan
-            hpkgs.fourmolu
-            hpkgs.hlint
-            # Convert HPC coverage output (.tix/.mix) to an lcov report for the
-            # `coverage` target / Codecov upload (see CONTRIBUTING.md "Coverage").
-            hpkgs.hpc-codecov
-            pkgs.semgrep
-            pkgs.zlib
-            pkgs.pkg-config
-            # Reference version-ordering oracles for the differential smoke
-            # suite and `make gen-version-fixtures`: node-semver (npm), Python
-            # packaging (PyPI), and Ruby Gem::Version (built into ruby).
-            pkgs.nodejs
-            pkgs.nodePackages.semver
-            (pkgs.python3.withPackages (ps: [ ps.packaging ]))
-            pkgs.ruby
-            # Container image publishing: skopeo pushes the Nix-built image to a
-            # registry (no Docker daemon needed), cosign signs it keylessly.
-            pkgs.skopeo
-            pkgs.cosign
-          ];
-        };
+        # Lean shell for CI: only what the gate jobs invoke through `make`. CI
+        # enters it explicitly with `nix develop .#ci`; humans get the full shell
+        # above. Keeping CI's closure small makes the Nix-store cache fast and
+        # shrinks the surface exposed to cache.nixos.org flakiness.
+        devShells.ci = pkgs.mkShell (shellEnv // {
+          name = "ecluse-ci";
+          buildInputs = ciInputs;
+        });
       });
 }

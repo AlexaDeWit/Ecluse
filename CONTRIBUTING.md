@@ -206,6 +206,11 @@ Every check is a job in that one graph — build & test, format & lint, and Semg
 static analysis — and they all feed a terminal **gate** job that succeeds only
 when every upstream job has succeeded.
 
+- **Triggers & least-privilege token.** CI runs on pushes to `main`, on every
+  PR, and on manual dispatch — a feature-branch push no longer double-runs
+  alongside its PR. The workflow's default `GITHUB_TOKEN` is `contents: read`;
+  only the build/test job widens it (`id-token: write`) for the tokenless
+  Codecov upload.
 - **One required check, with one documented exception.** Branch-protection
   rulesets mark only the `gate` job as `Required`; adding or removing an
   *in-workflow* check never means editing the ruleset — a new job simply becomes
@@ -215,11 +220,21 @@ when every upstream job has succeeded.
   expressed as jobs in this graph, so those two are additionally marked
   `Required` (see "Coverage"). Every check that *can* be a job still routes
   through `gate`.
-- **SHA-pinned actions.** Every `uses:` reference is pinned to a full commit SHA
-  (never a tag or branch), with the human-readable version in a trailing
-  comment. Dependabot keeps the SHAs current. This stops a re-tagged or
-  compromised action from silently entering CI — directly relevant for a
-  supply-chain security tool.
+- **Shared, SHA-pinned setup.** Toolchain setup — install Nix, restore the Nix
+  store and cabal caches — lives once in the
+  [`setup-toolchain`](.github/actions/setup-toolchain/action.yml) composite
+  action, so every job shares one definition and the setup actions are pinned
+  (and Dependabot-bumped) in one place. Every `uses:` is a full commit SHA with
+  the version in a trailing comment; a re-tagged or compromised action can't
+  silently enter CI — directly relevant for a supply-chain tool.
+- **Lean CI shell + Nix-store cache.** CI enters a slimmed `nix develop .#ci`
+  shell (GHC, cabal, the formatter/linter, Semgrep, the version oracles — no IDE
+  or release tooling), not the full developer shell. The realized Nix store is
+  cached across runs ([`cache-nix-action`](https://github.com/nix-community/cache-nix-action),
+  keyed on `flake.nix`/`flake.lock`), so warm runs restore the toolchain from
+  the GitHub cache instead of `cache.nixos.org` — faster, and immune to that
+  substituter's transient flakiness. `nix.conf` retry knobs (`connect-timeout`,
+  `download-attempts`) harden the cold path.
 - **Semgrep via Nix.** Semgrep runs from the pinned Nix dev shell
   (`nix develop --command semgrep ...`), exactly as developers run it locally,
   rather than from a third-party container image — one fewer unpinned

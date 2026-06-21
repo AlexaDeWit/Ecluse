@@ -1,0 +1,53 @@
+name: Set up toolchain
+description: >-
+  Install the flake-pinned Nix, restore the Nix store from the GitHub Actions
+  cache, and (optionally) the cabal store. Centralises the SHA-pinned setup
+  actions and cache config so every CI job shares one definition. Pins are
+  bumped by Dependabot here, in one place. See CONTRIBUTING.md → "Continuous
+  Integration".
+
+inputs:
+  cabal-cache:
+    description: >-
+      Also restore/save the cabal store + dist-newstyle. Enable for jobs that
+      build Haskell (build/test, integration, smoke, docs); leave off for the
+      fourmolu/hlint and Semgrep jobs, which don't.
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    # Reproducible toolchain: the exact flake-pinned dev shell developers use.
+    # extra-conf hardens substitution against transient cache.nixos.org hiccups
+    # — the cold path; warm runs restore the store from the cache below and skip
+    # the upstream substituter entirely.
+    - name: Install Nix
+      uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+      with:
+        extra-conf: |
+          connect-timeout = 10
+          download-attempts = 5
+
+    # Restore /nix/store from the GitHub Actions cache, keyed on the flake, so
+    # warm runs are fast and immune to cache.nixos.org flakiness. Every gate job
+    # realizes the same `.#ci` shell, so one shared key serves them all. No
+    # explicit purge: GitHub evicts caches by LRU / 7-day disuse, so this needs
+    # no `actions: write` and stays within the workflow's read-only token.
+    - name: Cache Nix store
+      uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7.0.2
+      with:
+        primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.nix', 'flake.lock') }}
+        restore-prefixes-first-match: nix-${{ runner.os }}-
+
+    # Hackage deps are built by cabal into CABAL_DIR / dist-newstyle, outside
+    # /nix/store, so they need their own cache.
+    - name: Cache cabal store & build artifacts
+      if: inputs.cabal-cache == 'true'
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: |
+          ${{ github.workspace }}/.cabal
+          dist-newstyle
+        key: ${{ runner.os }}-cabal-${{ hashFiles('flake.lock', '**/*.cabal', 'cabal.project') }}
+        restore-keys: |
+          ${{ runner.os }}-cabal-

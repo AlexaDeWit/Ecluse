@@ -1,7 +1,12 @@
 name: CI
 
+# Run on pushes to main (post-merge verification) and on every PR; a
+# feature-branch push no longer double-runs alongside its PR. Manual dispatch is
+# kept for re-runs. Push runs therefore always use main's workflow definition;
+# PR runs use the PR head's, by GitHub's design.
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -11,13 +16,21 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
+# Least privilege by default: a read-only token. Jobs that need more (the
+# coverage upload's OIDC) widen it at the job level.
+permissions:
+  contents: read
+
 # All checks are jobs in this one graph and feed the terminal `gate` job, which
-# is the single Required status check in branch protection. Every action is
-# pinned to a full commit SHA (Dependabot keeps them current).
+# is the single Required status check in branch protection (plus Codecov's
+# server-side statuses; see CONTRIBUTING.md → "Coverage"). Setup actions are
+# SHA-pinned once in .github/actions/setup-toolchain; CI enters the lean `.#ci`
+# dev shell.
 jobs:
   build-and-test:
     name: Build & unit tests
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
       id-token: write # OIDC for tokenless Codecov upload (no stored token)
@@ -28,37 +41,27 @@ jobs:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
-      # Reproducible toolchain: CI uses the exact same dev shell as developers,
-      # pinned by flake.lock. GHC/cabal come prebuilt from cache.nixos.org.
-      - name: Install Nix
-        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
-
-      - name: Cache cabal store & build artifacts
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      - name: Set up toolchain
+        uses: ./.github/actions/setup-toolchain
         with:
-          path: |
-            ${{ github.workspace }}/.cabal
-            dist-newstyle
-          key: ${{ runner.os }}-cabal-${{ hashFiles('flake.lock', '**/*.cabal', 'cabal.project') }}
-          restore-keys: |
-            ${{ runner.os }}-cabal-
+          cabal-cache: "true"
 
       - name: Update package index
-        run: nix develop --command make update
+        run: nix develop .#ci --command make update
 
       # Build everything (all three test suites included) so a broken
       # integration/smoke suite fails the gate even when it isn't run here.
       - name: Build (library, executable, all test suites)
-        run: nix develop --command make build
+        run: nix develop .#ci --command make build
 
       - name: Unit tests
-        run: nix develop --command make test
+        run: nix develop .#ci --command make test
 
       # Instrumented re-run of the unit suite in a separate build dir, emitting
       # Codecov-native JSON. Only our small package recompiles (-fhpc); deps come
       # from the cached cabal store, so this is cheap.
       - name: Coverage (unit)
-        run: nix develop --command make coverage
+        run: nix develop .#ci --command make coverage
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
@@ -71,6 +74,7 @@ jobs:
   integration:
     name: Integration tests (ministack)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     # ubuntu-latest ships a Docker daemon, which testcontainers/ministack use.
     env:
       CABAL_DIR: ${{ github.workspace }}/.cabal
@@ -78,31 +82,23 @@ jobs:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
-      - name: Install Nix
-        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
-
-      - name: Cache cabal store & build artifacts
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      - name: Set up toolchain
+        uses: ./.github/actions/setup-toolchain
         with:
-          path: |
-            ${{ github.workspace }}/.cabal
-            dist-newstyle
-          key: ${{ runner.os }}-cabal-${{ hashFiles('flake.lock', '**/*.cabal', 'cabal.project') }}
-          restore-keys: |
-            ${{ runner.os }}-cabal-
+          cabal-cache: "true"
 
       - name: Update package index
-        run: nix develop --command make update
+        run: nix develop .#ci --command make update
 
       - name: Integration tests
-        run: nix develop --command make test-integration
+        run: nix develop .#ci --command make test-integration
 
       # Integration-tier coverage uploads under its own Codecov flag, wired
       # exactly like the unit job. Enable once ecluse-integration has real cases
       # (today it is a stub, so an empty flag adds no signal). Enabling also needs
       # `permissions: { contents: read, id-token: write }` on this job.
       # - name: Coverage (integration)
-      #   run: nix develop --command make coverage SUITE=ecluse-integration
+      #   run: nix develop .#ci --command make coverage SUITE=ecluse-integration
       # - name: Upload coverage to Codecov
       #   uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
       #   with:
@@ -114,6 +110,7 @@ jobs:
   smoke:
     name: Smoke tests (live registries — allowed to fail)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     # Hits public npm/PyPI; flaky by design. NOT a `gate` dependency, and
     # continue-on-error so a live-registry failure surfaces protocol drift
     # without ever reddening the run or blocking a merge.
@@ -124,60 +121,55 @@ jobs:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
-      - name: Install Nix
-        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
-
-      - name: Cache cabal store & build artifacts
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      - name: Set up toolchain
+        uses: ./.github/actions/setup-toolchain
         with:
-          path: |
-            ${{ github.workspace }}/.cabal
-            dist-newstyle
-          key: ${{ runner.os }}-cabal-${{ hashFiles('flake.lock', '**/*.cabal', 'cabal.project') }}
-          restore-keys: |
-            ${{ runner.os }}-cabal-
+          cabal-cache: "true"
 
       - name: Update package index
-        run: nix develop --command make update
+        run: nix develop .#ci --command make update
 
       - name: Smoke tests
-        run: nix develop --command make test-smoke
+        run: nix develop .#ci --command make test-smoke
 
   lint:
     name: Format & lint
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
-      - name: Install Nix
-        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+      - name: Set up toolchain
+        uses: ./.github/actions/setup-toolchain
 
       - name: fourmolu (format check)
-        run: nix develop --command make format-check
+        run: nix develop .#ci --command make format-check
 
       - name: hlint
-        run: nix develop --command make lint
+        run: nix develop .#ci --command make lint
 
   semgrep:
     name: Static analysis (Semgrep)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
-      - name: Install Nix
-        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+      - name: Set up toolchain
+        uses: ./.github/actions/setup-toolchain
 
       - name: Semgrep scan
         # `make sast` runs the same Nix-pinned Semgrep developers use, with
         # --config auto (anonymous; rules fetched from the public Registry),
         # failing on ERROR/WARNING findings.
-        run: nix develop --command make sast
+        run: nix develop .#ci --command make sast
 
   docs:
     name: Haddock builds
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     # Gates on the exact target the Pages workflow deploys (`make docs-site`), so
     # a green gate proves the published docs will build — broken doc comments are
     # caught on the PR, not after merge when the Pages deploy fails.
@@ -187,24 +179,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
-      - name: Install Nix
-        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
-
-      - name: Cache cabal store & build artifacts
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      - name: Set up toolchain
+        uses: ./.github/actions/setup-toolchain
         with:
-          path: |
-            ${{ github.workspace }}/.cabal
-            dist-newstyle
-          key: ${{ runner.os }}-cabal-${{ hashFiles('flake.lock', '**/*.cabal', 'cabal.project') }}
-          restore-keys: |
-            ${{ runner.os }}-cabal-
+          cabal-cache: "true"
 
       - name: Update package index
-        run: nix develop --command make update
+        run: nix develop .#ci --command make update
 
       - name: Build Haddock
-        run: nix develop --command make docs-site
+        run: nix develop .#ci --command make docs-site
 
   gate:
     name: CI gate
@@ -215,6 +199,7 @@ jobs:
     needs: [build-and-test, integration, lint, semgrep, docs]
     if: always()
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Fail if any dependency did not succeed
         if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped') }}
