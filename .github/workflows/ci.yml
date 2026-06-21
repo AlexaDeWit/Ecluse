@@ -9,6 +9,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# All checks are jobs in this one graph and feed the terminal `gate` job, which
+# is the single Required status check in branch protection. Every action is
+# pinned to a full commit SHA (Dependabot keeps them current).
 jobs:
   build-and-test:
     name: Build & test
@@ -18,15 +21,15 @@ jobs:
       CABAL_DIR: ${{ github.workspace }}/.cabal
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
       # Reproducible toolchain: CI uses the exact same dev shell as developers,
       # pinned by flake.lock. GHC/cabal come prebuilt from cache.nixos.org.
       - name: Install Nix
-        uses: DeterminateSystems/nix-installer-action@main
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
 
       - name: Cache cabal store & build artifacts
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             ${{ github.workspace }}/.cabal
@@ -49,13 +52,52 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
       - name: Install Nix
-        uses: DeterminateSystems/nix-installer-action@main
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
 
       - name: fourmolu (format check)
-        run: nix develop --command fourmolu --mode check $(git ls-files '*.hs')
+        run: nix develop --command bash -c "git ls-files -z '*.hs' | xargs -0 -r fourmolu --mode check"
 
       - name: hlint
-        run: nix develop --command hlint $(git ls-files '*.hs')
+        run: nix develop --command bash -c "git ls-files -z '*.hs' | xargs -0 -r hlint"
+
+  semgrep:
+    name: Static analysis (Semgrep)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+
+      - name: Semgrep scan
+        # Auto config fetches rules relevant to this repo from the public
+        # Registry (no SEMGREP_APP_TOKEN; anonymous). Semgrep is the same Nix-
+        # pinned binary developers use. Fail on ERROR/WARNING findings.
+        run: >
+          nix develop --command
+          semgrep scan
+          --config auto
+          --severity ERROR
+          --severity WARNING
+          --error
+          .
+
+  gate:
+    name: CI gate
+    # The single Required check. Runs after every other job regardless of their
+    # result, and fails unless all of them succeeded. Wire new checks in by
+    # adding them to `needs` here — never as additional required checks.
+    needs: [build-and-test, lint, semgrep]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail if any dependency did not succeed
+        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped') }}
+        run: exit 1
+
+      - name: All checks passed
+        run: echo "All required checks passed."
