@@ -5,25 +5,28 @@
 ## Configuration
 
 Configuration has two layers: a small set of **environment variables** for
-process-level and secret values, and **structured config** describing the
-mount(s).
+process-level and secret values, and a **structured config document** carrying the
+two things too expressive for flat env vars — the **rule policy** and the **mount
+map**.
 
-The **mount map** — each mount's prefix, externally-visible base URL,
-three-registry endpoints with their credential providers, queue backend, and rule
-set — is supplied as structured config in one of two forms:
+Of the two, the **rule policy is what earns the document its keep**: a set of rules
+with per-rule precedence and value overrides, layered over a built-in default (see
+[Rule policy](#rule-policy)). **Mounts are comparatively flat** — a prefix, a base
+URL, three registry endpoints, a queue backend — so the **single-mount environment
+variables (below) desugar to a one-entry mount map**, and the common launch case
+(one npm mount on the default policy) needs no document at all. Multi-mount
+deployments (see [Multi-Ecosystem Hosting](hosting.md#multi-ecosystem-hosting))
+name their mounts in the document.
 
-- a **config file** (JSON) — the source of truth: reviewable, diffable, and the
-  expected form as the mount count grows; or
+The document is supplied in one of two forms:
+
+- a **config file** (JSON) — the source of truth: reviewable, diffable, the
+  expected form once the rule policy is non-trivial; or
 - a **JSON blob in an env var** (e.g. `PROXY_CONFIG`) — the same schema, an
-  alternate for consumers who want an env-only deployment with no mounted file.
+  alternate for an env-only deployment with no mounted file.
 
 JSON keeps one schema across both forms with no extra dependency; a YAML reader
 over the same schema may be added later for comments/ergonomics.
-
-The **single-mount environment variables** below are a **shorthand** that desugars
-to a one-entry mount map — the common case at launch (one npm mount). Multi-mount
-deployments (see [Multi-Ecosystem Hosting](hosting.md#multi-ecosystem-hosting))
-use the file or JSON-blob form.
 
 **Secrets never live in the structured config.** Tokens (`PROXY_AUTH_TOKEN`,
 per-endpoint registry tokens) are always environment variables; cloud-managed
@@ -41,7 +44,6 @@ registries derive short-lived tokens from ambient cloud credentials (see
 | `AWS_REGION` | AWS backends only | Region for SQS and CodeArtifact. |
 | `GOOGLE_CLOUD_PROJECT` | GCP backends only | Project for Pub/Sub and Artifact Registry. Credentials come from Application Default Credentials (ADC). |
 | `PROXY_AUTH_TOKEN` | No | If set, clients must supply this token as `Bearer` or `_authToken`. Omit for open/network-secured deployments. |
-| `PROXY_RULES` | Yes | JSON array of rule objects defining the allow policy (see below). |
 | `PROXY_HELP_MESSAGE` | No | Custom string appended to all denial messages (e.g. `"Contact #platform-eng on Slack for assistance."`). |
 | `CVE_SYNC_INTERVAL_SECONDS` | No (default: 3600) | How often to refresh the in-memory advisory index from OSV (see [CVE Subsystem](rules-engine.md#cve-subsystem)). |
 
@@ -75,21 +77,54 @@ upstream is queried anonymously with the client's token **stripped** — see
 Écluse's own, never the client's.) Minting the mirror-write credential from a
 cloud identity also keeps long-lived secrets out of config.
 
-### Rule Configuration Format
+### Rule policy
+
+The rule policy is a **named map** of rules layered over a **built-in default
+policy** that ships with the binary. An entry whose name the default already
+defines is a **patch** onto it (override precedence and/or values); an entry with a
+**new** name must carry a full `type` (it **adds** a rule); and any entry may set
+`"enabled": false` to **suppress** a default rule. With no rule config supplied at
+all, the default policy applies unchanged. This top-level policy applies to **every
+mount**; a multi-mount deployment may additionally give an individual mount its own
+[refinement](hosting.md#mounts) that merges over it (the `/npm-prod` vs
+`/npm-canary` case).
 
 ```json
-[
-  { "type": "AllowScope",             "scope": "@myorg",    "precedence": 300 },
-  { "type": "DenyHasInstallScripts",                        "precedence": 200 },
-  { "type": "AllowIfPublishedBefore", "ageSeconds": 604800, "precedence": 100 }
-]
+{
+  "rules": {
+    "min-age":      { "ageSeconds": 1209600 },
+    "deny-scripts": { "type": "DenyHasInstallScripts", "precedence": 200 }
+  }
+}
 ```
+
+- `min-age` names a **default** rule, so this **overrides** its value (a 14-day
+  window instead of 7); unspecified fields keep the default.
+- `deny-scripts` is a new name carrying a `type`, so it **adds** a rule (here,
+  opting into the install-script deny that is *not* on by default).
+- a `"<name>": { "enabled": false }` entry **suppresses** the named default rule.
 
 Each rule may set an integer `precedence` (higher wins); omit it to use the rule
 type's default. Evaluation picks the **highest-precedence rule that takes a
 position** (allow or deny); at equal precedence, deny wins; if every rule
 abstains, the package is denied by default. See
 [Rules Engine → Evaluation model](rules-engine.md#evaluation-model).
+
+#### The default policy
+
+The shipped default is deliberately small and **opinionated toward resilience, not
+blanket bans** — a floor to extend, not a wall:
+
+| Default rule (name) | Rule | Status | Why |
+|---|---|---|---|
+| `min-age` | `AllowIfPublishedBefore` (7 days) | **On at launch** | Admit public versions that have survived a quarantine window — the core defence against race-to-publish typosquatting and dependency confusion. |
+| `remediation-fast-track` | `AllowIfRemediatesCve` | **On once the [CVE tier](rules-engine.md#cve-subsystem) lands** | Ranked **above** `min-age` so a release that fixes a known CVE is admitted **immediately** — a quarantine must never delay a security patch (see [Rules Engine](rules-engine.md#allowifremediatescve--remediation-fast-track)). |
+
+Deliberately **not** in the default: `DenyHasInstallScripts` (plenty of legitimate
+packages ship install scripts — a blanket ban is too blunt for a default) and
+`DenyIfCVE` (blanket-denying every advisory-affected version can break installs of
+widely-used packages over low-severity advisories). Both remain **available rules**
+an operator opts into by name.
 
 ### Validation: fail fast, reject the unknown
 
@@ -110,6 +145,11 @@ Crucially, **unknown is an error, not a silent skip**:
   typo-catching; the decoders are strict rather than aeson's permissive default.
 - **Malformed values** (bad URL, non-integer precedence, unparseable JSON) fail
   the same way.
+- **Merge references must resolve.** A `rules` entry that neither names a known
+  default nor supplies a complete new rule — a typo'd default name, an
+  `"enabled": false` against a rule that does not exist, a patch missing the `type`
+  it would need to stand alone — is **rejected**. You cannot silently suppress or
+  mistype a rule out of existence.
 
 A bad config is thus a loud, immediate startup failure an operator sees and fixes,
 never a quietly mis-enforced policy.

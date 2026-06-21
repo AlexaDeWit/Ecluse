@@ -152,16 +152,49 @@ rather than relaying upstream's (see [Web Layer](web-layer.md#web-layer)).
 | `AllowScope scope` | Pure | Unconditionally allows all packages under a given npm scope (e.g. `@myorg`). Use for internal scopes that bypass public-registry rules. |
 | `DenyHasInstallScripts` | Pure | Denies any version whose metadata flags install scripts (npm's `hasInstallScript`) — a common arbitrary-code-execution vector at install time. Abstains otherwise. As a deny rule it overrides any allow. |
 
-Further rules — e.g. `DenyIfCVE`, or effectful per-version checks like RubyGems
-native `extensions` (see [above](#rules-engine)) — are added as subsequent
-phases.
+Further rules are added as later phases — the **effectful** CVE rules
+[`DenyIfCVE` and `AllowIfRemediatesCve`](#cve-subsystem), and effectful per-version
+checks like RubyGems native `extensions` (see [above](#rules-engine)).
+
+Which rules ship **enabled by default** is a policy choice documented with the
+[default policy](configuration.md#the-default-policy): at launch only the pure
+`AllowIfPublishedBefore` quarantine is on; `AllowIfRemediatesCve` joins the default
+when the CVE tier lands; the install-script and CVE *denies* stay available but
+opt-in.
 
 ## CVE Subsystem
 
-Effectful rules (e.g. `DenyIfCVE`) check a package version against known
-advisories. Rather than call an advisory API per evaluation, Écluse **syncs a
-local copy of the dataset and queries it in memory**: the `CVELookup` seam reads a
-local index, never the network, on the hot path.
+Effectful rules read the **same synced advisory data in two directions**: a
+**deny** direction — `DenyIfCVE` blocks a version that *is* affected by a known
+advisory — and an **allow** direction — `AllowIfRemediatesCve` *fast-tracks* a
+version that **fixes** one. Rather than call an advisory API per evaluation, Écluse
+**syncs a local copy of the dataset and queries it in memory**: the `CVELookup`
+seam reads a local index, never the network, on the hot path.
+
+### `AllowIfRemediatesCve` — remediation fast-track
+
+A publish-age quarantine (`AllowIfPublishedBefore`) has one perverse failure mode:
+left alone it would also hold back the **security patch** that fixes an in-the-wild
+vulnerability, delaying remediation by exactly the window meant to catch
+typosquats. `AllowIfRemediatesCve` removes that tension. For version *V* of package
+*P* it consults `CVELookup` and takes a position:
+
+- **`Allow`** when an advisory affects an **earlier** version of *P* and *V* falls
+  **outside** that advisory's affected range — i.e. *V* is the fix. The reason
+  names the remediated advisory IDs (audit trail).
+- **`Abstain`** otherwise — **including when the lookup itself fails.** This is the
+  deliberate inverse of `DenyIfCVE`'s failure mode: a deny that cannot confirm
+  *safety* fails **closed** (`Unavailable`, [below](#effectful-rule-failure)), but
+  an allow that cannot confirm a *remediation* simply **does not fire** — the
+  version falls back to the normal quarantine path rather than being admitted on an
+  unverified claim. A CVE-source outage thus costs security patches their fast lane
+  (they wait out `min-age`) but never admits anything it could not vouch for.
+
+It is ranked **above** the quarantine allow so the fix is admitted **immediately**.
+Both this rule and `DenyIfCVE` are decided locally against the synced advisory
+ranges using the same per-ecosystem ordering as
+[`compareVersions`](domain-model.md) — the allow direction just asks "is *V* past
+the fix boundary?" instead of "is *V* inside the affected range?".
 
 ### Local sync, in memory
 

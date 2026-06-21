@@ -8,7 +8,7 @@ test-tier: [unit]
 arch-refs:
   - docs/architecture/rules-engine.md#rules-engine
   - docs/architecture/rules-engine.md#evaluation-model
-  - docs/architecture/configuration.md#rule-configuration-format
+  - docs/architecture/configuration.md#rule-policy
 pr: null
 ---
 
@@ -34,8 +34,10 @@ one current/end-state gap.
 - [ ] Built-in **deny rules default to higher precedence than allow rules** (so
   "any deny overrides any allow" holds out of the box), but an operator can rank a
   specific allow above a specific deny. — _rules-engine.md#rules-engine_
-- [ ] Default precedences match the documented example (AllowScope 300,
-  DenyHasInstallScripts 200, AllowIfPublishedBefore 100). — _configuration.md#rule-configuration-format_
+- [ ] **Per-type default precedences** are defined (e.g. AllowScope 300,
+  DenyHasInstallScripts 200, AllowIfPublishedBefore 100) — each rule *type's*
+  default when `precedence` is omitted, independent of **which** rules ship enabled
+  (that is the default policy — S03's concern). — _configuration.md#rule-policy_
 - [ ] **Properties (hedgehog):** deny-by-default holds; deny-precedence over allows
   at equal precedence; **order-independence** (shuffling the rule list does not
   change the decision, modulo the audit-reason order); an operator-elevated allow
@@ -51,6 +53,8 @@ one current/end-state gap.
 strengthens those invariants.
 
 **Notes / risks.** Pure and independent — a strong Wave-1/early pull. Keep the
-`Decision`/`RuleOutcome` types stable so S09 (filtering), S11 (responses), and S21
-(effectful tier `Unavailable`) layer on cleanly. Do not add the `Unavailable`
-outcome here — that is S21 (it needs the effectful tier). This slice is pure-tier only.
+`Decision`/`RuleOutcome` types stable so S09 (filtering), S11 (responses), and the
+effectful CVE rules (S21 `Unavailable`; S23 `DenyIfCVE` / `AllowIfRemediatesCve`,
+the high-precedence remediation allow) layer on cleanly. Do not add the
+`Unavailable` outcome here — that is S21 (it needs the effectful tier). This slice
+is pure-tier only.
