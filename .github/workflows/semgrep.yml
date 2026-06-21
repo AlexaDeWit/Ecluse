@@ -12,7 +12,7 @@ jobs:
       image: semgrep/semgrep
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Semgrep scan
         # Auto config: Semgrep fetches rules relevant to this repo from the public
