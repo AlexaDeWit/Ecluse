@@ -1,0 +1,276 @@
+# Architecture Diagrams
+
+> Part of the [Écluse architecture overview](../architecture.md).
+
+A visual companion to the prose specifications under [`architecture/`](.). Like
+the rest of these documents, the diagrams describe the **target design** (the
+specification being implemented), not necessarily the current state of the code.
+Each section links to the document that specifies it in full.
+
+All diagrams are [Mermaid](https://mermaid.js.org/), which GitHub renders inline.
+
+## Contents
+
+1. [System overview](#1-system-overview)
+2. [Packument (metadata) request](#2-packument-metadata-request)
+3. [Tarball (artifact) request](#3-tarball-artifact-request)
+4. [Mirror worker](#4-mirror-worker)
+5. [Rules-engine decision flow](#5-rules-engine-decision-flow)
+6. [Credential token lifecycle](#6-credential-token-lifecycle)
+7. [Credential authority across the three registries](#7-credential-authority-across-the-three-registries)
+
+---
+
+## 1. System overview
+
+A single Écluse binary runs the HTTP server and an in-process mirror worker over a
+shared, seam-based `Env`. The **data plane** (metadata + artifact bytes) is
+`http-client`; the **control plane** (queue, token mint) sits behind the
+[`MirrorQueue`](cloud-backends.md#queue-abstraction) and
+[`CredentialProvider`](cloud-backends.md#credential-provider) seams. Solid edges
+are request-path / synchronous; dotted edges are best-effort / asynchronous. See
+[Registry Model](registry-model.md) and [Cloud Backends](cloud-backends.md).
+
+```mermaid
+flowchart LR
+    DEV["Developer / CI<br/>(npm, npm ci)"]
+
+    subgraph ecluse["Écluse (single binary)"]
+        direction TB
+        WEB["Web layer<br/>router, streaming, middleware"]
+        RULES["Rules engine<br/>deny-by-default"]
+        CACHE["Metadata cache<br/>short-TTL, in-memory"]
+        SYNC["Advisory sync<br/>in-memory OSV index"]
+        WORKER["Mirror worker<br/>in-process, supervised"]
+    end
+
+    subgraph registries["Registries (npm protocol)"]
+        PRIV["Private upstream<br/>e.g. CodeArtifact"]
+        PUB["Public upstream<br/>registry.npmjs.org"]
+        MIRROR["Mirror target<br/>managed npm registry"]
+    end
+
+    subgraph seams["Cloud seams"]
+        QUEUE["MirrorQueue<br/>SQS / Pub/Sub"]
+        CRED["CredentialProvider<br/>mint + refresh token"]
+    end
+
+    OSV["OSV advisory exports"]
+
+    DEV -->|"packument / tarball"| WEB
+    WEB --> RULES
+    WEB --> CACHE
+    WEB -->|"read: client token forwarded"| PRIV
+    WEB -->|"read: anonymous"| PUB
+    WEB -.->|"enqueue (best-effort)"| QUEUE
+    RULES -.->|"reads index"| SYNC
+    SYNC -->|"periodic pull"| OSV
+    WORKER -->|"receive / ack"| QUEUE
+    WORKER -->|"fetch artifact"| PUB
+    WORKER -->|"token"| CRED
+    WORKER -->|"publish (write)"| MIRROR
+```
+
+## 2. Packument (metadata) request
+
+Resolving a package: the private upstream is tried first (served **unfiltered**
+when hit, as already vetted); on a miss the public upstream is queried with rules
+applied across **every** version, and the packument is filtered to admitted
+versions. Metadata requests **filter but never mirror**. See [Web Layer](web-layer.md)
+and [Rules Engine → Applying verdicts to a packument](rules-engine.md#applying-verdicts-to-a-packument).
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Client
+    participant E as Écluse
+    participant Cache as Metadata cache
+    participant Priv as Private upstream
+    participant Pub as Public upstream
+    participant Rules as Rules engine
+
+    Client->>E: GET packument
+    E->>Priv: fetch (client token forwarded)
+    alt private hit (2xx)
+        Priv-->>E: 200 packument
+        E-->>Client: serve unfiltered (already vetted)
+    else private miss
+        E->>Cache: lookup parsed metadata
+        alt cache miss
+            E->>Pub: fetch (anonymous; token stripped)
+            Pub-->>E: 200 packument
+            E->>Cache: store parsed metadata (short TTL)
+        end
+        E->>Rules: evaluate every version
+        Rules-->>E: verdicts (allow / deny / unavailable)
+        Note over E: filter versions, repoint latest tag, recompute ETag over filtered body
+        alt no survivors
+            E-->>Client: 403 policy / 503 transient
+        else some admitted
+            E-->>Client: filtered packument
+        end
+    end
+    Note over E,Pub: packument requests filter but never mirror
+```
+
+## 3. Tarball (artifact) request
+
+A tarball is gated for that one version. A private hit is streamed unfiltered; a
+private miss fetches the version's metadata, runs the rules, and on acceptance
+streams from public **and** enqueues a demand-driven mirror job — non-blocking, so
+the client is served immediately. See
+[Web Layer → Streaming](web-layer.md#streaming-and-resource-lifetime) and
+[Cloud Backends → Mirror Queue](cloud-backends.md#mirror-queue).
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Client
+    participant E as Écluse
+    participant Priv as Private upstream
+    participant Pub as Public upstream
+    participant Rules as Rules engine
+    participant Queue as Mirror queue
+
+    Client->>E: GET tarball (e.g. npm ci, direct)
+    E->>Priv: fetch (client token forwarded)
+    alt private hit (2xx)
+        Priv-->>E: tarball stream
+        E-->>Client: stream unfiltered (already vetted)
+    else private miss
+        E->>Pub: fetch version metadata (anonymous)
+        E->>Rules: evaluate that one version
+        alt denied
+            E-->>Client: 403 + denial message
+        else unavailable
+            E-->>Client: 503 Retry-After or 500
+        else admitted
+            E->>Pub: stream artifact bytes
+            E-->>Client: stream (constant memory, backpressure)
+            E-)Queue: enqueue mirror job (best-effort)
+        end
+    end
+    Note over E,Queue: demand-driven — enqueue only when a tarball is accepted
+```
+
+## 4. Mirror worker
+
+The worker consumes the queue, fetches each accepted artifact from the public
+upstream, **verifies its bytes against the version's integrity hash**, and
+publishes to the mirror target via the credential seam. Retry is "don't ack";
+at-least-once delivery is safe because publishing is idempotent. See
+[Cloud Backends → Mirror Queue](cloud-backends.md#mirror-queue).
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant W as Mirror worker
+    participant Queue as Mirror queue
+    participant Pub as Public upstream
+    participant Cred as CredentialProvider
+    participant Mirror as Mirror target
+
+    loop consume loop
+        W->>Queue: receive (long-poll)
+        alt no message
+            Queue-->>W: empty batch (timeout)
+        else job delivered
+            Queue-->>W: mirror job
+            W->>Pub: fetch artifact
+            Pub-->>W: bytes
+            Note over W: verify bytes against dist.integrity
+            alt hash mismatch
+                W-->>Queue: do not ack (retry / DLQ) + alarm
+            else verified
+                W->>Cred: currentToken
+                Cred-->>W: bearer token
+                W->>Mirror: publishArtifact (npm protocol + token)
+                alt published or already-exists
+                    W->>Queue: ack
+                else publish failed
+                    W-->>Queue: do not ack (retry / DLQ)
+                end
+            end
+        end
+    end
+    Note over W,Mirror: at-least-once delivery + idempotent publish
+```
+
+## 5. Rules-engine decision flow
+
+Each version is evaluated against the rule set. The two tiers are a **performance
+ordering, not a precedence ordering**: pure rules run first because they are cheap,
+then effectful rules run only where they could still change the winner — and
+**precedence decides** (highest-precedence non-abstaining rule wins; deny beats
+allow at a tie; all-abstain is denied by default). A needed-but-undecidable rule
+yields `Unavailable` and fails closed. See [Rules Engine](rules-engine.md).
+
+```mermaid
+flowchart TD
+    IN["PackageDetails (one version)"] --> PURE["Pure tier — evaluate rules<br/>(no IO): allow / deny / abstain"]
+    PURE --> EFF["Effectful tier — only where it could<br/>still change the winner<br/>(CVE, extra fetch; timeout, retry, breaker)"]
+    EFF --> SEL{"highest-precedence<br/>non-abstaining rule"}
+    EFF -->|"needed rule cannot decide"| UNAV["Unavailable<br/>(fail-closed)"]
+    SEL -->|"allow"| APP["Approved"]
+    SEL -->|"deny (or deny beats allow at a tie)"| DEN["Denied"]
+    SEL -->|"all abstain"| DBD["DeniedByDefault"]
+
+    AP{{"apply verdict to the request"}}
+    APP --> AP
+    DEN --> AP
+    DBD --> AP
+    UNAV --> AP
+    AP -->|"packument"| FILT["version filtered out;<br/>latest repointed to newest survivor"]
+    AP -->|"artifact"| CODE["allow = 200 stream, deny = 403,<br/>unavailable = 503 or 500"]
+```
+
+## 6. Credential token lifecycle
+
+A `CredentialProvider` refreshes a registry token off its own `expiresAt`,
+proactively and single-flight, so the request hot path never blocks on a mint in
+the common case. Because credentials are **mirror-write only**, even a fully failed
+refresh never touches the client serve path — only the mirror publish. See
+[Cloud Backends → Credential Provider](cloud-backends.md#credential-provider).
+
+```mermaid
+stateDiagram-v2
+    [*] --> Valid: first mint
+    Valid --> Refreshing: nearing expiry (proactive, single-flight)
+    Refreshing --> Valid: mint succeeds
+    Refreshing --> Valid: mint fails, token still valid (backoff + breaker, alarm)
+    Valid --> Expired: TTL elapsed before a successful mint
+    Expired --> Valid: mint succeeds
+    Expired --> PublishFails: expired and mint still failing
+    PublishFails --> Valid: mint recovers
+    note right of PublishFails
+        Only the mirror publish fails: the job is left
+        un-acked and retries / dead-letters. The client
+        serve path is never affected (credentials are
+        mirror-write only).
+    end note
+```
+
+## 7. Credential authority across the three registries
+
+Écluse is **not** a read-access authority. The non-negotiable invariant: the
+client's credential reaches the **private upstream and nothing else** — and never
+the public upstream. Écluse uses its own credential for exactly one thing, the
+mirror-target write. See
+[Registry Model → Credential flow and authority](registry-model.md#credential-flow-and-authority).
+
+```mermaid
+flowchart LR
+    Client["Client (dev / CI)"]
+    subgraph E["Écluse"]
+        SRV["Server — reads"]
+        WK["Worker — writes"]
+    end
+    Priv["Private upstream<br/>e.g. CodeArtifact"]
+    Pub["Public upstream"]
+    Mirror["Mirror target"]
+
+    Client -->|"client credential"| SRV
+    SRV -->|"forwards the client credential"| Priv
+    SRV -->|"anonymous — client token stripped"| Pub
+    WK -->|"Écluse's own token (CredentialProvider)"| Mirror
+```

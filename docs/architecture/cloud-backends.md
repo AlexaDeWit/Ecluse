@@ -161,10 +161,10 @@ that target is the same registry as the private upstream: the client reads it,
 expiry / concurrency policy, *not* the cloud call. So a single generic wrapper
 holds that policy, parameterised over a tiny per-cloud `mintToken` leaf:
 
-```
-CredentialProvider
-  └─ generic refresh/cache wrapper      -- deterministic: injected clock + fake mint
-       └─ mintToken :: IO AuthToken     -- the only per-cloud, un-emulable part
+```mermaid
+flowchart TD
+    CP["CredentialProvider"] --> W["generic refresh / cache wrapper<br/>(deterministic: injected clock + fake mint)"]
+    W --> M["mintToken :: IO AuthToken<br/>(the only per-cloud, un-emulable part)"]
 ```
 
 Adapters supply only the leaf: `static` (a fixed token, no expiry), **CodeArtifact**
