@@ -118,6 +118,7 @@ be **merged** before it can start. Tier = the test suite(s) it owes
 | [S12](slices/S12-wai-app-middleware.md) | WAI app + meta-routes + middleware + dispatch | S01, S10, S11 | U |
 | [S13](slices/S13-streaming-cache.md) | Streaming + conditional-GET/ETag + metadata cache | S12 | U |
 | [S34](slices/S34-capability-manifest.md) | Capability manifest (OpenAPI) + `/openapi.json` + docs render — _not on the launch critical path_ | S11, S12, S09, S33 | U |
+| [S35](slices/S35-openapi-drift-controls.md) | OpenAPI contract drift controls (`validateToJSON`, route↔op exhaustiveness, golden snapshot) — _enhancement; fast-follow after S34_ | S34 | U |
 
 ### M3 — Request pipeline (walking skeleton)
 
@@ -194,7 +195,9 @@ parallel, then converge at M3:
 - **Then:** M4 (AWS) and M5 (CVE) layer on; M6/M8 run as independent parallel
   tracks; **M7 (GCP) is scheduled after the AWS launch** (S20) — its spike (S27)
   is the gate on committing the GCP backends. `S34` (capability manifest) is a
-  **fast-follow** off `S11`/`S12`/`S09`/`S33` and does not gate the launch path.
+  **fast-follow** off `S11`/`S12`/`S09`/`S33` and does not gate the launch path;
+  `S35` (manifest drift controls) is a further enhancement layered on `S34`, also
+  off the launch path.
 
 ### Critical path to AWS launch
 
