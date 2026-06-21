@@ -1,5 +1,9 @@
 # Architecture & Requirements
 
+This document captures the **systems design**: how the proxy is structured and
+why. Development practices — codebase layout, testing strategy, and CI / repo
+requirements — live in [`../CONTRIBUTING.md`](../CONTRIBUTING.md).
+
 ## Vision
 
 Supply chain attacks through malicious or hijacked package publications are an
@@ -33,17 +37,20 @@ interface between the proxy logic and any specific registry protocol:
 
 ```haskell
 data RegistryClient = RegistryClient
-  { fetchMetadata   :: PackageId -> App RegistryResponse
-  , fetchArtifact   :: PackageId -> Version -> App RegistryResponse
-  , publishArtifact :: PackageId -> Version -> ByteString -> App (Either PublishError ())
+  { fetchMetadata    :: PackageId -> App RegistryResponse
+  , fetchArtifact    :: PackageId -> Version -> App RegistryResponse
+  , publishArtifact  :: PackageId -> Version -> ByteString -> App (Either PublishError ())
   , parsePackageInfo :: RegistryResponse -> Either ParseError PackageInfo
-  , parseVersionInfo :: RegistryResponse -> Version -> Either ParseError VersionInfo
+  , parseVersionDetails :: RegistryResponse -> Version -> Either ParseError PackageDetails
   , parseVersionList :: RegistryResponse -> Either ParseError [Version]
   }
 ```
 
 Nothing above the registry layer imports registry-specific types. The proxy core
-operates only on `PackageInfo` and `VersionInfo`.
+operates only on `PackageInfo` (the packument-level view) and `PackageDetails`
+(the per-version snapshot the rules engine evaluates — see
+[`src/NpmSecureProxy/Package.hs`](../src/NpmSecureProxy/Package.hs)). A registry
+adapter is responsible for projecting its wire format into these types.
 
 **Supported implementations at launch:** npm registry protocol only. The
 `RegistryClient` abstraction exists from day one to make future backends
@@ -104,14 +111,37 @@ Tarball/artifact requests follow the same lifecycle via `fetchArtifact`.
 **Deny by default.** A package is blocked unless at least one rule explicitly
 allows it.
 
+Rules evaluate a single `PackageDetails` snapshot — the ecosystem-agnostic
+per-version view produced by a registry adapter. A rule never sees registry wire
+formats.
+
 Rules are evaluated in two tiers:
 
-1. **Pure rules** — evaluated against `PackageInfo` / `VersionInfo` with no IO.
-   Fast and deterministic. Evaluated first.
+1. **Pure rules** — evaluated against `PackageDetails` with no IO. Fast and
+   deterministic. Evaluated first. This is the tier implemented today
+   ([`src/NpmSecureProxy/Rules.hs`](../src/NpmSecureProxy/Rules.hs)).
 2. **Effectful rules** — may perform IO (advisory lookups, external policy
-   checks). Only evaluated if no pure rule has produced a decision.
+   checks). Only evaluated if no pure rule has produced a decision. A later
+   phase, layered on top of the pure tier.
 
-First decisive rule wins. If no rule matches, the package is denied.
+### Evaluation model
+
+Each rule, applied to a `PackageDetails`, yields a `RuleOutcome`:
+
+- **`Allow reason`** — the rule explicitly allows the package.
+- **`Deny reason`** — the rule explicitly denies it (reserved for future deny
+  rules; the initial allow-rules never deny).
+- **`Abstain reason`** — the rule has no opinion. The reason is retained for the
+  audit trail.
+
+`evalRules` folds a rule set in order: the **first decisive outcome** (`Allow` or
+`Deny`) wins, producing `Approved rule reason` or `Denied rule reason`. If every
+rule abstains, the result is `DeniedByDefault reasons` — deny-by-default, with
+each rule's reason collected (in order) so the denial response can explain what
+was considered.
+
+Crucially, an allow-rule that does not match **abstains rather than denies**, so
+that a later rule still gets the chance to allow the package.
 
 ### Initial Rule Set
 
@@ -264,46 +294,16 @@ mixins:
   , relude (Relude as Prelude)
 ```
 
+Note: this rules out `-Wunused-packages`. GHC cannot attribute prelude usage
+through the mixin rename, so it reports `base` and `relude` as unused in every
+component — a false positive. The flag is therefore omitted; reach for `weeder`
+if dependency-hygiene checking is wanted later.
+
 **Raw WAI routing, not servant.** npm registry paths are dynamic and contain
 URL-encoded slashes (`/@scope%2Fpkg`, `/pkg/-/pkg-1.0.0.tgz`,
 `/-/npm/v1/security/advisories/bulk`). A proxy is fundamentally a passthrough, so
 matching on `pathInfo` in a raw WAI `Application` is simpler and more flexible
 than encoding npm's URL shape at the type level.
-
----
-
-## Testing Strategy
-
-Tests are layered so the fast, deterministic majority run everywhere with no
-external dependencies, and the heavier integration tests stay hermetic and
-reproducible.
-
-1. **Unit & property tests** (`hspec` + `hedgehog`). Cover all pure logic — the
-   rules engine, response parsers, and configuration parsing. No IO, no Docker;
-   they run on every push and locally in milliseconds. The rules engine in
-   particular is exercised with property tests: deny-by-default invariants,
-   first-decisive-wins ordering, and per-rule predicates.
-2. **Integration tests** (`hspec` + `testcontainers` + `ministack`). The mirror
-   queue and other AWS-backed code are tested against a real endpoint by spinning
-   up `ministack` (a lightweight LocalStack alternative) in an ephemeral
-   container. `amazonka` is pointed at `http://<container>:4566` with throwaway
-   credentials; SQS enqueue/consume and STS token flows are validated end to end
-   without touching real AWS.
-3. **Stub upstream registries.** Proxy request-lifecycle tests run against an
-   in-process WAI stub (or a container) standing in for the private/public
-   upstreams, so the full fetch → parse → rules → mirror path can be asserted.
-
-**CodeArtifact caveat.** `ministack` emulates SQS and STS but not the
-CodeArtifact API (`GetAuthorizationToken`). CodeArtifact's npm-protocol surface
-is covered through the `RegistryClient` seam (a stub registry), and the
-token-refresh call is covered by mocking at that same seam — a deliberate benefit
-of the registry abstraction.
-
-**Prerequisite.** Integration tests require a running Docker daemon. CI
-(GitHub Actions `ubuntu-latest`) provides one; locally, developers need Docker
-installed. Nix provides the toolchain but not the Docker daemon (a host concern).
-
-**References:** [testcontainers](https://hackage.haskell.org/package/testcontainers) (Haskell, GHC 9.6-compatible) · [ministack](https://github.com/ministackorg/ministack) (local AWS emulator, image `ministackorg/ministack`, port 4566).
 
 ---
 

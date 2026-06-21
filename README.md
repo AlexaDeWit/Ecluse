@@ -16,6 +16,10 @@ configuration reference.
 
 ## Development
 
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full contributor guide —
+codebase conventions, testing strategy, and CI / repository requirements. A
+quick start follows.
+
 ### Prerequisites
 
 [Nix](https://nixos.org/) with flakes enabled provides all build tooling via the
@@ -41,10 +45,11 @@ cabal run npm-secure-proxy
 
 ### Continuous integration
 
-Every push and pull request runs [`.github/workflows/ci.yml`](.github/workflows/ci.yml),
-which builds the library, executable, and tests and runs the test suite. CI uses
-the same Nix dev shell as local development (pinned by `flake.lock`), so it
-validates against the exact same toolchain.
+Every push and pull request runs [`.github/workflows/ci.yml`](.github/workflows/ci.yml):
+build & test, format & lint, and Semgrep static analysis, all feeding a single
+`gate` job (the one required status check). CI uses the same Nix dev shell as
+local development (pinned by `flake.lock`), so it validates against the exact
+same toolchain. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for details.
 
 ## Project Structure
 
