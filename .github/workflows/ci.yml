@@ -144,13 +144,44 @@ jobs:
         # failing on ERROR/WARNING findings.
         run: nix develop --command make sast
 
+  docs:
+    name: Haddock builds
+    runs-on: ubuntu-latest
+    # Gates on the exact target the Pages workflow deploys (`make docs-site`), so
+    # a green gate proves the published docs will build — broken doc comments are
+    # caught on the PR, not after merge when the Pages deploy fails.
+    env:
+      CABAL_DIR: ${{ github.workspace }}/.cabal
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+
+      - name: Cache cabal store & build artifacts
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ${{ github.workspace }}/.cabal
+            dist-newstyle
+          key: ${{ runner.os }}-cabal-${{ hashFiles('flake.lock', '**/*.cabal', 'cabal.project') }}
+          restore-keys: |
+            ${{ runner.os }}-cabal-
+
+      - name: Update package index
+        run: nix develop --command make update
+
+      - name: Build Haddock
+        run: nix develop --command make docs-site
+
   gate:
     name: CI gate
     # The single Required check. Runs after every other gating job regardless of
     # result, and fails unless all of them succeeded. Wire new required checks in
     # by adding them to `needs` here — never as additional required checks. The
     # smoke job is intentionally absent: it is allowed to fail.
-    needs: [build-and-test, integration, lint, semgrep]
+    needs: [build-and-test, integration, lint, semgrep, docs]
     if: always()
     runs-on: ubuntu-latest
     steps:
