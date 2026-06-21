@@ -1,0 +1,52 @@
+name: Security
+
+# Vulnerability scan of the image's dependency closure — **report-only**, never
+# gates a PR: the closure is fixed by a flake.lock bump (which Dependabot opens
+# weekly), not by an in-PR change. On a PR it runs only when the flake changes;
+# on a daily schedule it scans main and opens/updates a tracking issue when grype
+# reports CVEs, so CVEs disclosed after release still surface. See CONTRIBUTING.md
+# → "Vulnerability scanning".
+on:
+  pull_request:
+    paths: ["flake.lock", "flake.nix"]
+  schedule:
+    - cron: "27 6 * * *" # daily, off-peak minute
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    name: Vulnerability scan (grype)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      issues: write # the scheduled run opens/updates a tracking issue
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Set up toolchain
+        uses: ./.github/actions/setup-toolchain
+
+      # grype scans the sbomnix SBOM of .#ecluse-bin → grype.json (+ a table).
+      - name: Scan image closure (grype)
+        run: nix develop .#scan --command make scan
+
+      - name: Report to job summary
+        if: always()
+        run: bash scripts/vuln-report.sh grype.json >> "$GITHUB_STEP_SUMMARY"
+
+      # Only on the daily scan, and only if the scan succeeded: keep a single
+      # tracking issue in sync (open/update on findings, close when clean).
+      - name: Open/update tracking issue
+        if: github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/vuln-issue.sh

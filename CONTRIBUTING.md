@@ -331,6 +331,42 @@ needs a long-lived token — kept as weak and contained as possible:
 
 ---
 
+## Vulnerability scanning & dependency freshness
+
+Two arms keep the image's dependency closure honest over time — **detection** and
+**freshness**.
+
+**Detection — `grype` (the authority).** `make scan` builds the sbomnix SBOM of
+`.#ecluse-bin` (the exact shipped binary) and scans it with
+[grype](https://github.com/anchore/grype) against its maintained DB →
+severity-rated, low-noise findings in `grype.json` (plus a table). `make
+scan-vulnix` is a secondary [vulnix](https://github.com/flyingcircusio/vulnix)
+cross-check — more comprehensive and Nix-patch-aware, but un-graded, so *not* the
+authority. (A naive closure scan with distro-advisory matchers reports ~1000
+mostly-irrelevant CVEs — ancient or Debian/Ubuntu advisories that don't apply to
+a Nix build; grype-over-SBOM is the curated view.) Note: the pinned nixpkgs'
+`vulnix` (1.10.1) is broken against NVD's retired 1.1 feeds, so a working `vulnix`
+comes from a second, newer nixpkgs input used *only* for that tool.
+
+The [`security.yml`](.github/workflows/security.yml) workflow is **report-only** —
+it never gates a PR, because the closure is fixed by a `flake.lock` bump, not an
+in-PR change. On a PR it runs only when the flake changes; on a **daily schedule**
+it scans `main` and opens/updates a single tracking issue (label
+`security:vuln-scan`) when grype reports CVEs, closing it when clean — so CVEs
+disclosed *after* a release still surface.
+
+**Freshness — Dependabot (Nix).** [`dependabot.yml`](.github/dependabot.yml)
+monitors the **flake inputs** (`nix` ecosystem) and opens weekly PRs bumping
+`flake.lock`, so the C-library closure picks up upstream security fixes; the gate
+validates each bump and the scan re-runs on it. This is the remediation arm —
+fixing a finding is usually just merging the Dependabot PR.
+
+**Haskell advisories** (`cabal-audit` / the HSEC database) are a deferred
+follow-up: `cabal-audit` is marked broken in the pinned nixpkgs, and the
+statically-linked Haskell deps are a lower-risk surface than the C libs.
+
+---
+
 ## Repository requirements
 
 - **Workflows stay injection-free.** Never interpolate untrusted

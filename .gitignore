@@ -8,6 +8,11 @@ _site/
 result
 result-*
 /sbom/
+/grype.json
+http_cache.sqlite
+/sbom.csv
+/sbom.cdx.json
+/sbom.spdx.json
 .hie/
 *.hi
 *.o

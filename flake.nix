@@ -3,13 +3,20 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-24.11";
+    # A second, newer nixpkgs used *only* for vulnix: 24.11's vulnix (1.10.1) is
+    # broken against NVD's retired 1.1 feeds. grype (the scan authority) and
+    # everything else stay on the pinned set. See CONTRIBUTING.md →
+    # "Vulnerability scanning".
+    nixpkgs-unstable.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
   };
 
-  outputs = { self, nixpkgs, flake-utils }:
+  outputs = { self, nixpkgs, nixpkgs-unstable, flake-utils }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
+        # vulnix only (see inputs); everything else comes from the pinned pkgs.
+        unstable = nixpkgs-unstable.legacyPackages.${system};
         hlib = pkgs.haskell.lib;
         hpkgs = pkgs.haskell.packages.ghc96;
 
@@ -97,6 +104,20 @@
           pkgs.skopeo
           pkgs.sbomnix
         ];
+
+        # Vulnerability scanning. grype is the authority (`make scan`): it scans
+        # the sbomnix SBOM of the image's C closure (openssl/curl/glibc/…) against
+        # its maintained DB and gives severity-rated, low-noise findings. vulnix
+        # (from the newer nixpkgs — 24.11's is broken) is a secondary, Nix-native
+        # cross-check (`make scan-vulnix`): more comprehensive and patch-aware but
+        # un-graded, so not the authority. Haskell-advisory coverage (cabal-audit
+        # / HSEC) is a deferred follow-up — cabal-audit is broken in the pin, and
+        # the static Haskell deps are a lower-risk surface. See CONTRIBUTING.md →
+        # "Vulnerability scanning".
+        scanInputs = [
+          pkgs.grype
+          unstable.vulnix
+        ];
       in {
         packages = {
           default = ecluse;
@@ -169,7 +190,7 @@
         # Full shell for humans: lean CI set + IDE + release tooling.
         devShells.default = pkgs.mkShell (shellEnv // {
           name = "ecluse";
-          buildInputs = ciInputs ++ ideInputs ++ releaseInputs;
+          buildInputs = ciInputs ++ ideInputs ++ releaseInputs ++ scanInputs;
         });
 
         # Lean shell for CI: only what the gate jobs invoke through `make`. CI
@@ -179,6 +200,13 @@
         devShells.ci = pkgs.mkShell (shellEnv // {
           name = "ecluse-ci";
           buildInputs = ciInputs;
+        });
+
+        # Lean shell for the security workflow: the vuln scanners only. CI enters
+        # it with `nix develop .#scan`.
+        devShells.scan = pkgs.mkShell (shellEnv // {
+          name = "ecluse-scan";
+          buildInputs = [ pkgs.bashInteractive pkgs.sbomnix ] ++ scanInputs;
         });
       });
 }
