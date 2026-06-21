@@ -2,13 +2,13 @@
 id: S31
 title: SLSA provenance + SBOM attestation
 milestone: M8 — Release hardening
-status: not-started
+status: in-review
 depends-on: []
 test-tier: []
 arch-refs:
   - CONTRIBUTING.md#releases--container-image
   - AGENTS.md
-pr: null
+pr: 21
 ---
 
 # S31 — SLSA provenance + SBOM attestation
@@ -17,26 +17,30 @@ pr: null
 
 **Goal.** Complete the release supply-chain posture (CI roadmap slice 3): add SLSA
 build provenance and an SBOM attestation to the tag-triggered release workflow,
-complementing the existing cosign keyless image signing.
+stored as **immutable OCI referrers**. No separate cosign image signature: cosign
+can't store attestations immutably (only `sign` has a referrer mode), and the
+provenance attestation already binds the digest to the builder identity.
 
 **Acceptance criteria.**
-- [ ] SLSA build provenance via `actions/attest-build-provenance` for the released
+- [x] SLSA build provenance via `actions/attest-build-provenance` for the released
   image; verifiable with `gh attestation verify`. — _CONTRIBUTING.md#releases--container-image_
-- [ ] An SBOM is generated and attested for the image.
-- [ ] All actions SHA-pinned (Dependabot-bumped); the release workflow stays
+- [x] An SBOM (`sbomnix` over `.#ecluse-bin`) is generated and attested via
+  `actions/attest-sbom`.
+- [x] All actions SHA-pinned (Dependabot-bumped); the release workflow stays
   injection-free; provenance/SBOM run in the tag-triggered `release.yml`, **not** the
   PR gate. — _AGENTS.md (CI & Security)_
-- [ ] Docs updated (CONTRIBUTING → Releases) describing how to verify provenance + SBOM.
+- [x] Docs updated (CONTRIBUTING → Releases) describing how to verify provenance + SBOM.
 
 **File fence.**
-- `.github/workflows/release.yml` — provenance + SBOM steps (additive).
-- `CONTRIBUTING.md` — verification docs.
-- (note: a `worktree-provenance` worktree already exists on `worktree-provenance` — coordinate so this slice and that branch don't diverge.)
+- `.github/workflows/release.yml` — digest resolve, registry login, provenance + SBOM attest steps.
+- `Makefile` / `flake.nix` — keep `make sbom` (sbomnix); drop the cosign sign/attest path.
+- `README.md` / `CONTRIBUTING.md` / `AGENTS.md` — `gh attestation verify` recipe + how it's produced.
 
 **Test tier.** None (workflow) — validated by a dry-run / next tagged release; the PR
 gate is unaffected.
 
-**Notes / risks.** Independent of the product code — can run as a parallel track at
-any point. Coordinate with the **existing `worktree-provenance` worktree** (it may
-already hold WIP for this); reconcile before opening the PR rather than duplicating.
-Keep it off the PR gate (release-only), matching the cosign signing posture.
+**Notes / risks.** Independent of the product code; release-only, off the PR gate.
+First shipped via cosign (PR #9), then reworked to the GitHub attest-actions because
+cosign can't store attestations as immutable referrers and the repo enforces
+immutable tags. Unproven in CI until a tagged/dispatched run — validate with an `rc`
+dispatch before the first real `vX.Y.Z`.
