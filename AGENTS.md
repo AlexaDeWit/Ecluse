@@ -27,6 +27,10 @@ docs/      — architecture decision records and design documents
 
 - **Nix (with flakes) is a hard dependency.** All tooling comes from the dev shell (`nix develop`, or `direnv`), pinned by `flake.lock` (GHC 9.6); there is no supported system-level GHC/Cabal.
 - Run every task through **`make`** — the unified runner shared with CI (`make build`, `make test`, `make check`, `make sast`, …; `make help` for the list), which wraps Cabal/fourmolu/hlint/Semgrep from the dev shell. Run `make` **inside** `nix develop` (it auto-wraps in `nix develop --command` otherwise, but re-enters the shell per target). Cabal (not Stack) remains the underlying build tool.
+- **Haskell search & exploration tools are in the dev shell** — use them to confirm signatures and discover functions instead of guessing:
+  - `hoogle` — search by name or type signature. Run `hoogle generate` once (downloads the Hackage database; needs network) to build the index, then e.g. `hoogle 'Text -> ByteString'`, `hoogle Data.Map.insert`, or `hoogle --info <name>` for docs; `hoogle server --local --port 8080` gives a browsable UI.
+  - `cabal-plan` — inspect the resolved build plan and dependency versions (`cabal-plan list-bins`, `cabal-plan dot`); run after a `make build`.
+  - `haskell-language-server` and `ghcid` — live type/error feedback; Haddock for the project builds via `cabal haddock`.
 - The dependency set and rationale (relude as the prelude via cabal mixins, aeson, amazonka, warp/wai, http-client-tls, katip, envparse, cache, hedgehog) live in [`docs/architecture.md`](docs/architecture.md) → "Technology Stack"; the **testing strategy** (pure `hspec`+`hedgehog` tests; integration tests via `testcontainers` + `ministack` over Docker) lives in [`CONTRIBUTING.md`](CONTRIBUTING.md). Read them before adding dependencies or tests.
 
 ## CI & Security

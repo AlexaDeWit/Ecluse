@@ -73,6 +73,9 @@
             hpkgs.cabal-install
             hpkgs.haskell-language-server
             hpkgs.ghcid
+            # Haskell API search & build-plan inspection (see AGENTS.md).
+            hpkgs.hoogle
+            hpkgs.cabal-plan
             hpkgs.fourmolu
             hpkgs.hlint
             pkgs.semgrep
