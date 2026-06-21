@@ -47,16 +47,20 @@ registries derive short-lived tokens from ambient cloud credentials (see
 
 ### Outbound Registry Credentials
 
-Each registry endpoint selects a
-[`CredentialProvider`](cloud-backends.md#credential-provider). A
-**cloud-managed** endpoint (its URL host identifies CodeArtifact or Artifact
-Registry) derives its token from the ambient cloud credentials already configured
-above (`AWS_REGION` / instance role, or ADC / `GOOGLE_CLOUD_PROJECT`) — no secret
-is placed in Écluse's own config. A **plain** registry takes an optional static
-token per endpoint (e.g. `PRIVATE_UPSTREAM_TOKEN`, `MIRROR_TARGET_TOKEN`); absent
-one, the endpoint is treated as anonymous. The public upstream is anonymous by
-default. This keeps long-lived registry secrets out of config wherever a cloud
-identity can mint a short-lived token instead.
+Écluse holds a credential for exactly **one** thing: writing to the **mirror
+target**. That endpoint selects a
+[`CredentialProvider`](cloud-backends.md#credential-provider) — **cloud-managed**
+(CodeArtifact / Artifact Registry, token derived from the ambient cloud
+credentials above: `AWS_REGION` / instance role, or ADC / `GOOGLE_CLOUD_PROJECT`)
+or a static `MIRROR_TARGET_TOKEN`.
+
+**Reads carry no Écluse credential.** The private upstream receives the
+**client's** forwarded token (it is the authority for reads), and the public
+upstream is queried anonymously with the client's token **stripped** — see
+[Credential flow and authority](registry-model.md#credential-flow-and-authority).
+(If a public mirror itself requires auth, set a separate `PUBLIC_UPSTREAM_TOKEN` —
+Écluse's own, never the client's.) Minting the mirror-write credential from a
+cloud identity also keeps long-lived secrets out of config.
 
 ### Rule Configuration Format
 
@@ -99,9 +103,12 @@ never a quietly mis-enforced policy.
 
 ## Client Authentication
 
-This section covers **inbound** auth (client → proxy). **Outbound** auth
-(proxy → registry) is a separate concern, handled by the
-[`CredentialProvider`](cloud-backends.md#credential-provider) seam.
+This section covers **inbound** auth (client → proxy). Outbound credentials differ
+by direction: the client's credential is **forwarded to the private upstream** (the
+authority for reads) and **never to the public upstream**, while Écluse's own
+[`CredentialProvider`](cloud-backends.md#credential-provider) is used **only** to
+write to the mirror target — see
+[Credential flow and authority](registry-model.md#credential-flow-and-authority).
 
 Authentication to the proxy is **optional**. Three modes:
 

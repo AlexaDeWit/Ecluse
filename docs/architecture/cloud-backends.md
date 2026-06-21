@@ -142,11 +142,14 @@ newtype CredentialProvider = CredentialProvider
 data AuthToken = AuthToken { secret :: Secret, expiresAt :: Maybe UTCTime }
 ```
 
-A provider attaches **per registry endpoint**, not globally: the three-registry
-tuple (private upstream, public upstream, mirror target) may need up to three,
-though they commonly collapse — the private upstream and mirror target are often
-the same CodeArtifact repo behind one provider, and the public upstream is usually
-anonymous.
+A `CredentialProvider` is used **only for the mirror-target write** (publishing
+approved packages) — *never* to read on a user's behalf. Private-upstream reads
+forward the **client's** own credential and public reads are anonymous (Écluse is
+not a read-access authority; see
+[Credential flow and authority](registry-model.md#credential-flow-and-authority)).
+So a deployment configures **one** provider — for the mirror target — even when
+that target is the same registry as the private upstream: the client reads it,
+Écluse writes it.
 
 **The sub-seam that matters.** The interesting logic is the refresh / cache /
 expiry / concurrency policy, *not* the cloud call. So a single generic wrapper
@@ -176,8 +179,9 @@ token API. On mint failure the wrapper keeps serving the still-valid token,
 effectful tier — see
 [Rules Engine → Effectful-rule failure](rules-engine.md#effectful-rule-failure)),
 and alarms; only if the token has actually **expired *and* mint still fails** does
-the dependent fetch become transiently unavailable, surfacing through the serve
-[error model](web-layer.md#error-model) (`503`). The `static` provider has no
+the **mirror publish** fail — the job is left un-acked and retries / dead-letters
+(see [Mirror Queue](#mirror-queue)); because credentials are mirror-write only,
+this never touches the client-facing serve path. The `static` provider has no
 expiry and never refreshes. The clock is injected, so the whole policy is
 unit-tested deterministically.
 

@@ -81,6 +81,13 @@ The same split holds on GCP — Pub/Sub and the Artifact Registry token are
 control-plane work, while the npm data plane is unchanged `http-client` (see
 [Cloud Backends](cloud-backends.md#cloud-backends)).
 
+On the data plane, credential handling follows the
+[authority model](registry-model.md#credential-flow-and-authority): the client's
+`Authorization` is **forwarded to the private upstream** and **stripped before any
+public-upstream fetch** — an internal token must never leave for the public
+registry. Écluse's own [`CredentialProvider`](cloud-backends.md#credential-provider)
+is used only by the worker to write the mirror, never to read on a client's behalf.
+
 ## Streaming and resource lifetime
 
 A WAI streaming response body **runs after the handler returns** — Warp
