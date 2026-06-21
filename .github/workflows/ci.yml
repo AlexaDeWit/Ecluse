@@ -43,3 +43,19 @@ jobs:
 
       - name: Test
         run: nix develop --command cabal test all --test-show-details=direct
+
+  lint:
+    name: Format & lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+
+      - name: fourmolu (format check)
+        run: nix develop --command fourmolu --mode check $(git ls-files '*.hs')
+
+      - name: hlint
+        run: nix develop --command hlint $(git ls-files '*.hs')

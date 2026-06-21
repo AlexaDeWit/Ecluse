@@ -20,6 +20,8 @@
             hpkgs.cabal-install
             hpkgs.haskell-language-server
             hpkgs.ghcid
+            hpkgs.fourmolu
+            hpkgs.hlint
             pkgs.zlib
             pkgs.pkg-config
           ];
