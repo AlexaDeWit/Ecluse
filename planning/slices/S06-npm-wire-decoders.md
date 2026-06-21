@@ -2,7 +2,7 @@
 id: S06
 title: npm wire types + lenient decoders
 milestone: M1 — npm protocol adapter
-status: not-started
+status: in-progress
 depends-on: []
 test-tier: [unit, smoke]
 arch-refs:

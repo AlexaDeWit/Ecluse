@@ -1,0 +1,476 @@
+{- | The npm registry __wire__ JSON types and their lenient decoders.
+
+This module is the npm protocol __boundary__: it models the JSON the registry
+actually sends and parses it with deliberately forgiving 'FromJSON' instances.
+It is the raw-wire layer of "parse, don't validate" — it captures /what the
+registry said/ as faithfully as the rules and serving need, and __nothing
+more__. Projecting these wire types into the ecosystem-agnostic domain model
+("Ecluse.Package": @PackageDetails@ et al.) is a separate concern and a separate
+slice; keeping the two apart is what keeps the lenient\/faithful seam clean.
+
+The shapes here are reverse-engineered from live captures of
+@registry.npmjs.org@; the authoritative reference (with real bodies) is
+@docs\/research\/reverse-engineering\/npm.md@ (§4 full packument, §5 abbreviated,
+§7 @dist@, §11 type model, §3 errors).
+
+== Lenient on input
+
+The public registry has drifted from its own spec and is inconsistent across
+endpoints, so every decoder here is forgiving in three specific ways, matching
+the documented reality:
+
+* __Unknown keys are ignored.__ Manifests carry arbitrary author keys
+  (@gitHead@, @exports@, tool-config blocks like @is-odd@\'s @verb@) and
+  registry bookkeeping (@_npmOperationalInternal@); a decoder must not choke on
+  them. aeson\'s record decoders already ignore extra keys, so this falls out of
+  using @(.:?)@\/@(.:)@ rather than enumerating the whole object.
+* __String-or-object scalars.__ @license@, @bugs@, @repository@, and the
+  @author@\/maintainer person fields each arrive as /either/ a bare string /or/
+  an object, depending on the package\'s age and tooling. Each corresponding
+  type ('License', 'Bugs', 'Repository', 'Person') therefore parses both shapes.
+* __The bare-string error body.__ npm\'s per-version 404 is a bare JSON
+  __string__ (@"version not found: ^3.0.0"@), not the documented
+  @{error|message}@ object. 'ErrorResponse' tolerates both.
+
+== Faithful on the rule-decisive fields
+
+The fields the rules engine and the serving path actually need are captured
+precisely: the abbreviated-only 'vmHasInstallScript' flag, the 'vmDeprecated'
+notice, the whole 'vmScripts' map (so the full form\'s install-script presence
+can be /derived/ later — the full manifest has no @hasInstallScript@ key), the
+'Dist' integrity triple (@tarball@\/@shasum@\/@integrity@), and the full
+packument\'s 'pkmtTime' map (the source of truth for publish age, which the
+abbreviated form drops).
+
+Only 'FromJSON' lives here for now: Écluse reads far more than it writes, and the
+server-output (@ToJSON@) side is a later slice. See
+@docs\/research\/reverse-engineering\/npm.md@ §11 ("Encoding rules") for the
+output contract when that lands.
+-}
+module Ecluse.Registry.Npm.Wire (
+    -- * Shared scalars
+    Person (..),
+    Repository (..),
+    Bugs (..),
+    License (..),
+
+    -- * The @dist@ object
+    Dist (..),
+    Signature (..),
+
+    -- * Per-version manifest
+    VersionManifest (..),
+
+    -- * Packuments
+    Packument (..),
+    AbbreviatedPackument (..),
+
+    -- * Errors
+    ErrorResponse (..),
+    ErrorBody (..),
+    errorMessage,
+) where
+
+import Data.Aeson (
+    FromJSON (parseJSON),
+    Value (Array, Bool, Null, Number, Object, String),
+    withObject,
+    (.!=),
+    (.:),
+    (.:?),
+ )
+import Data.Aeson.Types (Parser)
+import Data.Time (UTCTime)
+
+-- ── shared scalars ───────────────────────────────────────────────────────────
+
+{- | A person associated with a package — an author, maintainer, contributor, or
+the per-version publisher (@_npmUser@).
+
+__Lenient:__ npm sends a person as /either/ an object @{name, email?, url?}@ /or/
+a single packed string of the conventional form
+@"Name \<email\> (url)"@. The packed form is captured __verbatim__ in
+'personName' (with 'personEmail'\/'personUrl' left 'Nothing'); this wire layer
+does not attempt to split it, leaving that to the domain projection if it is ever
+needed. Distinct from "Ecluse.Package"\'s domain @Person@ — this is the raw wire
+shape.
+-}
+data Person = Person
+    { personName :: Text
+    -- ^ The person\'s name. For the packed-string form, the entire string as
+    -- sent (e.g. @"Mikeal Rogers \<mikeal\@example.com\>"@).
+    , personEmail :: Maybe Text
+    -- ^ Their email address, if given as an object field.
+    , personUrl :: Maybe Text
+    -- ^ A homepage \/ profile URL, if given as an object field.
+    }
+    deriving stock (Eq, Ord, Show)
+
+instance FromJSON Person where
+    parseJSON = \case
+        String name -> pure (Person name Nothing Nothing)
+        Object o ->
+            Person
+                <$> o .:? "name" .!= ""
+                <*> o .:? "email"
+                <*> o .:? "url"
+        other -> typeMismatchOneOf "Person (object or string)" other
+
+{- | An SCM location for a package.
+
+__Lenient:__ npm sends @repository@ as /either/ an object @{type?, url}@ /or/ a
+bare string (a shorthand URL such as @"github:user\/repo"@). Both are captured;
+the bare-string form fills 'repoUrl' and leaves 'repoType' 'Nothing'.
+-}
+data Repository = Repository
+    { repoType :: Maybe Text
+    -- ^ The SCM type (e.g. @"git"@), if given.
+    , repoUrl :: Text
+    -- ^ The repository URL, as sent.
+    }
+    deriving stock (Eq, Ord, Show)
+
+instance FromJSON Repository where
+    parseJSON = \case
+        String url -> pure (Repository Nothing url)
+        Object o ->
+            Repository
+                <$> o .:? "type"
+                <*> o .:? "url" .!= ""
+        other -> typeMismatchOneOf "Repository (object or string)" other
+
+{- | The issue tracker for a package.
+
+__Lenient:__ npm sends @bugs@ as /either/ an object @{url?, email?}@ /or/ a bare
+string (just the tracker URL). The bare-string form fills 'bugsUrl'.
+-}
+data Bugs = Bugs
+    { bugsUrl :: Maybe Text
+    -- ^ The issue-tracker URL, if given.
+    , bugsEmail :: Maybe Text
+    -- ^ A contact email, if given as an object field.
+    }
+    deriving stock (Eq, Ord, Show)
+
+instance FromJSON Bugs where
+    parseJSON = \case
+        String url -> pure (Bugs (Just url) Nothing)
+        Object o ->
+            Bugs
+                <$> o .:? "url"
+                <*> o .:? "email"
+        other -> typeMismatchOneOf "Bugs (object or string)" other
+
+{- | A declared license.
+
+__Lenient:__ modern packages send a bare SPDX __string__ (@"MIT"@); legacy
+packages send an object @{type, url?}@. Both are preserved as a sum so the
+distinction is not lost: 'LicenseSpdx' for the string, 'LicenseObject' for the
+legacy object.
+-}
+data License
+    = -- | An SPDX expression or identifier, sent as a bare string (@"MIT"@,
+      -- @"Apache-2.0"@, @"(MIT OR Apache-2.0)"@). The modern form.
+      LicenseSpdx Text
+    | -- | The legacy object form @{type, url?}@: a license name plus an optional
+      -- URL to the license text.
+      LicenseObject Text (Maybe Text)
+    deriving stock (Eq, Ord, Show)
+
+instance FromJSON License where
+    parseJSON = \case
+        String spdx -> pure (LicenseSpdx spdx)
+        Object o ->
+            LicenseObject
+                <$> o .:? "type" .!= ""
+                <*> o .:? "url"
+        other -> typeMismatchOneOf "License (object or string)" other
+
+-- ── the dist object ──────────────────────────────────────────────────────────
+
+{- | One registry signature over a published artifact: an ECDSA signature and
+the id of the key that produced it. Verifiable against npm\'s published public
+keys (@GET \/-\/npm\/v1\/keys@) — the basis of @npm audit signatures@.
+-}
+data Signature = Signature
+    { sigSig :: Text
+    -- ^ The base64-encoded signature value.
+    , sigKeyid :: Text
+    -- ^ The id of the signing key (e.g. @"SHA256:jl3bwswu80…"@).
+    }
+    deriving stock (Eq, Ord, Show)
+
+instance FromJSON Signature where
+    parseJSON = withObject "Signature" $ \o ->
+        Signature
+            <$> o .: "sig"
+            <*> o .: "keyid"
+
+{- | The @dist@ object: the artifact descriptor carried by every version
+manifest (full and abbreviated). It is the gateway to the tarball bytes and the
+integrity guarantee.
+
+The integrity triple ('distTarball', 'distShasum', 'distIntegrity') is
+rule-decisive and serving-decisive — a client __fails the install__ if the
+downloaded bytes do not match @integrity@\/@shasum@, so any mirror or URL rewrite
+must preserve these byte-for-byte. Prefer 'distIntegrity' (SRI) over the legacy
+SHA-1 'distShasum'.
+-}
+data Dist = Dist
+    { distTarball :: Text
+    -- ^ Absolute URL of the @.tgz@ artifact. Always present.
+    , distShasum :: Maybe Text
+    -- ^ The tarball\'s SHA-1, hex-encoded (legacy integrity).
+    , distIntegrity :: Maybe Text
+    -- ^ The Subresource-Integrity string (@"\<alg\>-\<base64\>"@, e.g.
+    -- @"sha512-…"@). The modern integrity check; prefer it over the shasum.
+    , distFileCount :: Maybe Int
+    -- ^ Number of files in the tarball, if reported.
+    , distUnpackedSize :: Maybe Int
+    -- ^ Unpacked size in bytes, if reported.
+    , distSignatures :: [Signature]
+    -- ^ Registry ECDSA signatures; empty when none are present.
+    }
+    deriving stock (Eq, Ord, Show)
+
+instance FromJSON Dist where
+    parseJSON = withObject "Dist" $ \o ->
+        Dist
+            <$> o .: "tarball"
+            <*> o .:? "shasum"
+            <*> o .:? "integrity"
+            <*> o .:? "fileCount"
+            <*> o .:? "unpackedSize"
+            <*> o .:? "signatures" .!= []
+
+-- ── version manifest ─────────────────────────────────────────────────────────
+
+{- | A single version\'s manifest — the per-version object that is essentially
+the package\'s @package.json@ at publish time plus registry-injected fields. It
+appears three ways on the wire and this one type decodes all of them: embedded in
+a full 'Packument' (@versions[v]@), embedded in an 'AbbreviatedPackument' (a
+trimmed subset of the same shape), and standalone (@GET \/{pkg}\/{version}@).
+
+Only the fields Écluse\'s rules and serving need are modelled; everything else is
+ignored (see the module header). The two rule-decisive optionals deserve note:
+
+* 'vmHasInstallScript' is __abbreviated-only__ — the registry sets it when the
+  version declares @preinstall@\/@install@\/@postinstall@ scripts. It is the
+  cleanest install-script signal, but it is __absent from the full manifest__.
+* 'vmScripts' is therefore captured whole so that, when only the full form is
+  available, install-script presence can be /derived/
+  (@scripts@ has any of @preinstall@\/@install@\/@postinstall@). That derivation
+  is a domain-projection concern (a later slice), not this layer\'s.
+
+The publish timestamp is __not__ here — it lives in the packument\'s
+'pkmtTime' map, not the manifest (see §8 of the protocol reference).
+-}
+data VersionManifest = VersionManifest
+    { vmName :: Text
+    -- ^ The package name, possibly scoped (@"\@scope\/name"@), verbatim.
+    , vmVersion :: Text
+    -- ^ The exact version string (e.g. @"1.2.3"@), kept opaque at this layer.
+    , vmDist :: Dist
+    -- ^ The artifact descriptor (always present).
+    , vmDeprecated :: Maybe Text
+    -- ^ A deprecation notice, present only when the version is deprecated. The
+    -- @deprecated@ field is a string message (npm sets it by re-publishing).
+    , vmHasInstallScript :: Maybe Bool
+    -- ^ Whether the version declares install scripts. Present in the
+    -- __abbreviated__ form only; 'Nothing' in the full form (derive from
+    -- 'vmScripts' there).
+    , vmScripts :: Map Text Text
+    -- ^ The @scripts@ map (lifecycle name to command), empty when absent. The
+    -- source for deriving install-script presence from the full form.
+    , vmLicense :: Maybe License
+    -- ^ The declared license, if any (string or legacy object; see 'License').
+    , vmMaintainers :: [Person]
+    -- ^ The package\'s maintainers as carried on this manifest; empty when
+    -- absent.
+    , vmDependencies :: Map Text Text
+    -- ^ Runtime dependencies (name to semver __range__), empty when absent. The
+    -- ranges are never resolved server-side.
+    , vmDevDependencies :: Map Text Text
+    -- ^ Development dependencies, empty when absent.
+    , vmPeerDependencies :: Map Text Text
+    -- ^ Peer dependencies, empty when absent.
+    , vmOptionalDependencies :: Map Text Text
+    -- ^ Optional dependencies, empty when absent.
+    }
+    deriving stock (Eq, Show)
+
+instance FromJSON VersionManifest where
+    parseJSON = withObject "VersionManifest" $ \o ->
+        VersionManifest
+            <$> o .: "name"
+            <*> o .: "version"
+            <*> o .: "dist"
+            <*> o .:? "deprecated"
+            <*> o .:? "hasInstallScript"
+            <*> o .:? "scripts" .!= mempty
+            <*> o .:? "license"
+            <*> o .:? "maintainers" .!= []
+            <*> o .:? "dependencies" .!= mempty
+            <*> o .:? "devDependencies" .!= mempty
+            <*> o .:? "peerDependencies" .!= mempty
+            <*> o .:? "optionalDependencies" .!= mempty
+
+-- ── packuments ───────────────────────────────────────────────────────────────
+
+{- | The __full__ packument: @GET \/{pkg}@ with @Accept: application\/json@ (or
+no @Accept@). One document describing the package and __every__ published
+version.
+
+The field that earns the full form its place in the pipeline is 'pkmtTime': the
+map of publish timestamps (@created@, @modified@, and one per version), the
+source of truth for publish age that age-based rules need. The abbreviated form
+(§5) drops it, keeping only a top-level @modified@. Package-level
+@description@\/@license@\/@author@ are hoisted from the @latest@ version for
+convenience; the authoritative copy is the per-version one in 'pkmtVersions'.
+
+@_attachments@ is intentionally not modelled — it is populated only on the
+publish document, not on reads.
+-}
+data Packument = Packument
+    { pkmtName :: Text
+    -- ^ The package name (may be @"\@scope\/name"@).
+    , pkmtDistTags :: Map Text Text
+    -- ^ The @dist-tags@ map (tag to version); __always__ includes @"latest"@.
+    , pkmtVersions :: Map Text VersionManifest
+    -- ^ Every published version, keyed by its exact version string.
+    , pkmtTime :: Map Text UTCTime
+    -- ^ Publish timestamps: @"created"@, @"modified"@, and one entry per
+    -- version key. The source of truth for publish age.
+    , pkmtMaintainers :: [Person]
+    -- ^ Current package maintainers; empty when absent.
+    , pkmtDescription :: Maybe Text
+    -- ^ Package description (hoisted from @latest@).
+    , pkmtHomepage :: Maybe Text
+    -- ^ Homepage URL, if given.
+    , pkmtRepository :: Maybe Repository
+    -- ^ SCM location, if given (string or object; see 'Repository').
+    , pkmtBugs :: Maybe Bugs
+    -- ^ Issue tracker, if given (string or object; see 'Bugs').
+    , pkmtLicense :: Maybe License
+    -- ^ Package-level license, if given (string or object; see 'License').
+    , pkmtKeywords :: [Text]
+    -- ^ Search keywords; empty when absent.
+    }
+    deriving stock (Eq, Show)
+
+instance FromJSON Packument where
+    parseJSON = withObject "Packument" $ \o ->
+        Packument
+            <$> o .: "name"
+            <*> o .:? "dist-tags" .!= mempty
+            <*> o .:? "versions" .!= mempty
+            <*> o .:? "time" .!= mempty
+            <*> o .:? "maintainers" .!= []
+            <*> o .:? "description"
+            <*> o .:? "homepage"
+            <*> o .:? "repository"
+            <*> o .:? "bugs"
+            <*> o .:? "license"
+            <*> o .:? "keywords" .!= []
+
+{- | The __abbreviated__ packument: @GET \/{pkg}@ with
+@Accept: application\/vnd.npm.install-v1+json@. The install-optimised view and
+the one the proxy treats as primary.
+
+It carries exactly four top-level fields. Notably the full @time@ map is dropped
+(only a top-level 'apkmtModified' remains), so publish-age rules need the full
+'Packument'. Its 'apkmtVersions' manifests are the trimmed subset of
+'VersionManifest' — the same type, with the install-only fields populated
+(including the abbreviated-only 'vmHasInstallScript').
+-}
+data AbbreviatedPackument = AbbreviatedPackument
+    { apkmtName :: Text
+    -- ^ The package name.
+    , apkmtModified :: UTCTime
+    -- ^ Equivalent to the full form\'s @time.modified@; the only timestamp the
+    -- abbreviated form carries.
+    , apkmtDistTags :: Map Text Text
+    -- ^ The @dist-tags@ map (tag to version), as in the full form.
+    , apkmtVersions :: Map Text VersionManifest
+    -- ^ Every published version (abbreviated subset of fields), keyed by exact
+    -- version string.
+    }
+    deriving stock (Eq, Show)
+
+instance FromJSON AbbreviatedPackument where
+    parseJSON = withObject "AbbreviatedPackument" $ \o ->
+        AbbreviatedPackument
+            <$> o .: "name"
+            <*> o .: "modified"
+            <*> o .:? "dist-tags" .!= mempty
+            <*> o .:? "versions" .!= mempty
+
+-- ── errors ───────────────────────────────────────────────────────────────────
+
+{- | An npm error body.
+
+__Lenient:__ the documented shape is an object @{ message?, error?, ok?: false
+}@ and clients "should check for @message@, then @error@". But the registry is
+inconsistent — its per-version 404 is a bare JSON __string__
+(@"version not found: ^3.0.0"@), not an object. This type tolerates both: the
+object form keeps its fields in an 'ErrorBody', and a bare string is captured
+whole as 'ErrorString'. Read the human-facing reason via 'errorMessage', which
+applies npm\'s "@message@, then @error@" precedence across both shapes.
+-}
+data ErrorResponse
+    = -- | The documented object form @{ message?, error? }@.
+      ErrorObject ErrorBody
+    | -- | A bare JSON string body (npm\'s per-version 404), captured whole.
+      ErrorString Text
+    deriving stock (Eq, Show)
+
+{- | The fields of npm\'s object-form error body. A product type (not inline
+constructor fields on 'ErrorResponse') so its selectors are __total__ — there is
+no @ErrorString@ case for them to be partial over.
+-}
+data ErrorBody = ErrorBody
+    { errMessage :: Maybe Text
+    -- ^ The @message@ field — the preferred human-facing reason.
+    , errError :: Maybe Text
+    -- ^ The @error@ field — the fallback reason.
+    }
+    deriving stock (Eq, Show)
+
+instance FromJSON ErrorResponse where
+    parseJSON = \case
+        String msg -> pure (ErrorString msg)
+        Object o ->
+            fmap ErrorObject $
+                ErrorBody
+                    <$> o .:? "message"
+                    <*> o .:? "error"
+        other -> typeMismatchOneOf "ErrorResponse (object or string)" other
+
+{- | The human-facing reason carried by an error body, applying npm\'s documented
+precedence: prefer @message@, then @error@, and for the bare-string form the
+string itself. 'Nothing' only when an object form carried neither field. Total.
+-}
+errorMessage :: ErrorResponse -> Maybe Text
+errorMessage = \case
+    ErrorString msg -> Just msg
+    ErrorObject body -> errMessage body <|> errError body
+
+-- ── helpers ──────────────────────────────────────────────────────────────────
+
+{- | Fail a lenient string-or-object decoder with a descriptive message,
+naming the accepted shapes and reporting what was actually found. A small wrapper
+that keeps the @other ->@ branch of each tolerant instance to one readable line.
+-}
+typeMismatchOneOf :: String -> Value -> Parser a
+typeMismatchOneOf expected actual =
+    fail ("expected " <> expected <> ", but encountered " <> valueKind actual)
+
+-- | A short, human description of a JSON value\'s kind, for parse-error messages.
+valueKind :: Value -> String
+valueKind = \case
+    Object{} -> "an object"
+    String{} -> "a string"
+    Array{} -> "an array"
+    Number{} -> "a number"
+    Bool{} -> "a boolean"
+    Null -> "null"

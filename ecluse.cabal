@@ -5,9 +5,12 @@ synopsis:      Supply-chain resilience proxy for package registries
 license:       MIT
 build-type:    Simple
 
--- Differential-test fixtures: reference-oracle version orderings consumed by the
--- pure unit suite. Regenerate with `make gen-version-fixtures`.
+-- Test fixtures read at runtime by the pure unit suite. The version-ordering
+-- file is reference-oracle output (regenerate with `make gen-version-fixtures`);
+-- the npm/*.json bodies are captures derived from
+-- docs/research/reverse-engineering/npm.md, decoded by Ecluse.Registry.Npm.Wire.
 extra-source-files:
+  test/unit/fixtures/npm/*.json
   test/unit/fixtures/version-ordering.txt
 
 -- Shared settings for every component. relude replaces the default prelude via
@@ -48,12 +51,14 @@ library
     Ecluse.Package
     Ecluse.Queue
     Ecluse.Registry
+    Ecluse.Registry.Npm.Wire
     Ecluse.Rules
     Ecluse.Rules.Types
     Ecluse.Server.Route
     Ecluse.Version
 
   build-depends:
+    , aeson       ^>=2.3
     , containers  ^>=0.6
     , text        ^>=2.0
     , time        ^>=1.12
@@ -76,6 +81,7 @@ test-suite ecluse-unit
     Ecluse.CredentialSpec
     Ecluse.PackageSpec
     Ecluse.QueueSpec
+    Ecluse.Registry.Npm.WireSpec
     Ecluse.RulesSpec
     Ecluse.Server.RouteSpec
     Ecluse.VersionOrderingSpec
@@ -83,6 +89,7 @@ test-suite ecluse-unit
 
   build-tool-depends: hspec-discover:hspec-discover ^>=2.11
   build-depends:
+    , aeson            ^>=2.3
     , containers       ^>=0.6
     , hedgehog         ^>=1.4
     , hspec            ^>=2.11
@@ -122,6 +129,9 @@ test-suite ecluse-smoke
 
   build-tool-depends: hspec-discover:hspec-discover ^>=2.11
   build-depends:
+    , aeson      ^>=2.3
+    , containers ^>=0.6
     , directory  ^>=1.3
+    , ecluse
     , hspec      ^>=2.11
     , process    ^>=1.6

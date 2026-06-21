@@ -1,0 +1,38 @@
+{
+  "_id": "is-odd",
+  "_rev": "17-b1f96ea3c62e53b66584e3743a1945a3",
+  "name": "is-odd",
+  "dist-tags": { "latest": "3.0.1" },
+  "time": {
+    "created": "2015-02-24T05:53:13.392Z",
+    "modified": "2026-04-14T14:26:11.557Z",
+    "3.0.1": "2018-05-31T20:04:53.306Z"
+  },
+  "versions": {
+    "3.0.1": {
+      "_id": "is-odd@3.0.1",
+      "name": "is-odd",
+      "version": "3.0.1",
+      "description": "Returns true if the given number is odd.",
+      "license": "MIT",
+      "scripts": { "test": "mocha" },
+      "dependencies": { "is-number": "^6.0.0" },
+      "devDependencies": { "mocha": "^3.5.3", "gulp-format-md": "^1.0.0" },
+      "engines": { "node": ">=4" },
+      "gitHead": "0fe1f4f12d2c0a6f3e2b1a1b3c4d5e6f7a8b9c0d",
+      "verb": { "toc": false, "layout": "default" },
+      "_npmUser": { "name": "jonschlinkert", "email": "github@sellside.com" },
+      "dist": {
+        "shasum": "65101baf3727d728b66fa62f50cda7f2d3989601",
+        "tarball": "https://registry.npmjs.org/is-odd/-/is-odd-3.0.1.tgz",
+        "integrity": "sha512-CQpnWPrDwmP1+SMHXZhtLtJv90yiyVfluGsX5iNCVkrhQtU3TQHsUWPG9wkdk9Lgd5yNpAg9jQEo90CBaXgWMA=="
+      }
+    }
+  },
+  "maintainers": [ { "name": "jonschlinkert", "email": "github@sellside.com" } ],
+  "license": "MIT",
+  "description": "Returns true if the given number is odd.",
+  "readme": "# is-odd\n\nReturns true if the given number is odd.",
+  "readmeFilename": "README.md",
+  "keywords": [ "is", "number", "odd" ]
+}

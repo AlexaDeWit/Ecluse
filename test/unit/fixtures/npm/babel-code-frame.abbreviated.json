@@ -1,0 +1,17 @@
+{
+  "dist-tags": { "latest": "7.0.0" },
+  "modified": "2026-03-10T08:15:00.000Z",
+  "name": "@babel/code-frame",
+  "versions": {
+    "7.0.0": {
+      "name": "@babel/code-frame",
+      "version": "7.0.0",
+      "dependencies": { "@babel/highlight": "^7.0.0" },
+      "dist": {
+        "shasum": "06e2ab19bdb535385559aabb5ba59729482800f8",
+        "tarball": "https://registry.npmjs.org/@babel/code-frame/-/code-frame-7.0.0.tgz",
+        "integrity": "sha512-OfC2uemaknXr87bdLUkWog7nYuliM9Ij5HUcajsVcMCpQrcLmtxRbVFTIqmcSkSeYRBFBRxs2FiUqFJDLdiebA=="
+      }
+    }
+  }
+}
