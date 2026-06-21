@@ -74,22 +74,22 @@ import Data.Time (UTCTime)
 import Ecluse.Ecosystem (Ecosystem (..))
 import Ecluse.Version (Version)
 
-{- | An npm scope, stored without its leading @\'@\'@ (the scope of
+{- | An npm scope, stored without its leading @\'\@\'@ (the scope of
 @\@myorg\/pkg@ is @"myorg"@). Construct via 'mkScope', which normalises away
-a leading @\'@\'@ so equality is independent of how the scope was written.
+a leading @\'\@\'@ so equality is independent of how the scope was written.
 -}
 newtype Scope = Scope Text
     deriving stock (Eq, Ord, Show)
 
--- | Build a 'Scope', tolerating an optional leading @\'@\'@.
+-- | Build a 'Scope', tolerating an optional leading @\'\@\'@.
 mkScope :: Text -> Scope
 mkScope raw = Scope (fromMaybe raw (T.stripPrefix "@" raw))
 
--- | The bare scope text, without the leading @\'@\'@.
+-- | The bare scope text, without the leading @\'\@\'@.
 unScope :: Scope -> Text
 unScope (Scope s) = s
 
--- | Render a scope in npm wire form, with the leading @\'@\'@.
+-- | Render a scope in npm wire form, with the leading @\'\@\'@.
 renderScope :: Scope -> Text
 renderScope (Scope s) = "@" <> s
 
