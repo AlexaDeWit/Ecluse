@@ -52,3 +52,8 @@ referenced by S02's seam and S09/S14) — prefer defining it in `Ecluse.Package`
 alongside `PackageDetails` to keep the import graph acyclic; **escalate** if that
 forces an awkward cycle. The `hasInstallScript` derivation must match npm.md exactly
 (`scripts` ∋ {preinstall, install, postinstall}).
+
+**Integrity feeds divergence (PR #23).** Carry __both__ `dist.shasum` and
+`dist.integrity` into the `Artifact` hashes: the cross-upstream merge ([S33](S33-packument-merge.md))
+flags a same-version integrity **divergence** between the private and public
+upstreams as a supply-chain signal, so neither hash may be dropped in projection.

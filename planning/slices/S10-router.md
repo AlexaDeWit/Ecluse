@@ -2,7 +2,7 @@
 id: S10
 title: Pure router (classify/Route)
 milestone: M2 — Web front door
-status: in-progress
+status: merged
 depends-on: []
 test-tier: [unit]
 arch-refs:

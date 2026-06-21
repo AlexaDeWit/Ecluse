@@ -65,3 +65,11 @@ npm adapter. Divergence detection compares `Artifact` integrity hashes already i
 `PackageDetails`; do not fetch. Whether a divergent version is *dropped*
 (fail-closed) or *served with private winning* is a policy call — surface the
 divergence in `MergeResult` and let S14 apply policy, so this slice stays pure.
+
+**Served output is lossless (PR #23).** This slice decides — over the domain model —
+*which* versions/tags survive and *which* integrity divergences exist; the **served**
+document must still relay unmodeled upstream fields unchanged
+(`additionalProperties` passthrough), so S14 applies these decisions structurally to
+the raw upstream `Value`(s) rather than re-serialising a lossy typed model (see
+[S09](S09-npm-rewrite-filter.md) and
+[api-surface.md](../../docs/architecture/api-surface.md#the-synthesized-packument-schema--the-trust-boundary)).
