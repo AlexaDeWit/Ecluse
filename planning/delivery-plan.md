@@ -53,7 +53,7 @@ Per-slice files are deliberate: parallel agents (and their status updates) touch
 - `Ecluse.Rules` + `Ecluse.Rules.Types` — the **pure** rule tier (the three
   launch rules), deny-by-default.
 - Mature CI/release infrastructure: the unified `gate`, coverage → Codecov,
-  Nix-store cache, lean CI shell, reproducible OCI image + cosign keyless signing.
+  Nix-store cache, lean CI shell, reproducible OCI image + keyless provenance/SBOM attestations.
 
 **Design-only (no code yet) — what this plan delivers:** the imperative shell
 (`Env`/`App`), the three seams (`RegistryClient`, `MirrorQueue`,

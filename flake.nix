@@ -87,14 +87,14 @@
         ];
 
         # Release tooling: skopeo pushes the Nix-built image to a registry (no
-        # Docker daemon needed), cosign signs it keylessly. Used via the default
-        # shell by release.yml / `make docker-{push,sign}`.
+        # Docker daemon needed) via `make docker-push`, and sbomnix generates the
+        # Nix-native SBOM (`make sbom`) — more accurate than scanning a distroless
+        # image, whose static Haskell deps a scanner can't see. The provenance and
+        # SBOM attestations themselves are produced in CI by the GitHub
+        # attest-actions (immutable OCI referrers); see CONTRIBUTING.md →
+        # "Supply-chain attestations".
         releaseInputs = [
           pkgs.skopeo
-          pkgs.cosign
-          # Nix-native SBOM generation from the actual build closure (more
-          # accurate than scanning a distroless image, whose static Haskell deps
-          # a scanner can't see). See CONTRIBUTING.md → "Supply-chain attestations".
           pkgs.sbomnix
         ];
       in {
@@ -116,7 +116,8 @@
           # for a supply-chain tool). `tag = null` derives a unique content-hash
           # tag for local use; releases retag at push time because the target
           # repo enforces immutable tags (see CONTRIBUTING.md "Releases").
-          # Push/sign via `make docker-push` / `make docker-sign`.
+          # Push via `make docker-push`; provenance + SBOM attestations are
+          # attached in CI by release.yml (the GitHub attest-actions).
           dockerImage = pkgs.dockerTools.buildLayeredImage {
             name = "ecluse";
             tag = null;

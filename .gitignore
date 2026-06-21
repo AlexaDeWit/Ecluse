@@ -8,7 +8,6 @@ _site/
 result
 result-*
 /sbom/
-provenance.predicate.json
 .hie/
 *.hi
 *.o

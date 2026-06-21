@@ -2,8 +2,8 @@ name: Release
 
 # Publishing is a separate lifecycle from the PR `gate` in ci.yml: it runs only
 # when a version tag is pushed (or dispatched manually), builds the Nix image,
-# pushes it under an immutable `X.Y.Z` tag, and signs it with cosign. It is never
-# a gate dependency.
+# pushes it under an immutable `X.Y.Z` tag, and attaches keyless provenance + SBOM
+# attestations. It is never a gate dependency.
 on:
   push:
     tags:
@@ -24,7 +24,7 @@ permissions:
 
 jobs:
   publish:
-    name: Build, push & sign image
+    name: Build, push & attest image
     runs-on: ubuntu-latest
     # The token lives on a protected environment (required reviewers), so only an
     # approved release can read it. Configure DOCKERHUB_USERNAME / DOCKERHUB_TOKEN
@@ -32,7 +32,10 @@ jobs:
     environment: release
     permissions:
       contents: read
-      id-token: write # GitHub OIDC for cosign keyless signing (no stored key)
+      id-token: write # OIDC: keyless signing of the attestations (Fulcio/Rekor)
+      attestations: write # record the provenance/SBOM attestations
+    env:
+      IMAGE: docker.io/alexadewit/ecluse
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -64,22 +67,41 @@ jobs:
           TAG: ${{ steps.tag.outputs.tag }}
         run: nix develop --command make docker-push TAG="$TAG"
 
-      - name: Sign image (cosign keyless)
+      # Attestations bind to the image *digest*, not the tag; resolve it from the
+      # registry (public read, no auth needed).
+      - name: Resolve pushed digest
+        id: digest
         env:
-          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
           TAG: ${{ steps.tag.outputs.tag }}
-        run: nix develop --command make docker-sign TAG="$TAG"
+        run: |
+          digest=$(nix develop --command skopeo inspect "docker://$IMAGE:$TAG" --format '{{.Digest}}')
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
       # SBOM from the Nix closure of the exact shipped binary (.#ecluse-bin).
       - name: Generate SBOM
         run: nix develop --command make sbom
 
-      # Attach keyless SBOM + SLSA provenance attestations, bound to the digest.
-      # Provenance fields come from the ambient GITHUB_* run context.
-      - name: Attest SBOM & provenance (cosign keyless)
-        env:
-          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-          TAG: ${{ steps.tag.outputs.tag }}
-        run: nix develop --command make attest TAG="$TAG"
+      # Authenticate so the attest actions can push referrers to Docker Hub.
+      - name: Log in to Docker Hub
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # SLSA provenance, keyless (OIDC → Fulcio/Rekor), stored as an immutable OCI
+      # referrer on the image — compatible with the repo's immutable tags.
+      - name: Attest provenance
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.digest.outputs.digest }}
+          push-to-registry: true
+
+      # SBOM (sbomnix SPDX) as a second immutable OCI referrer (+ Rekor).
+      - name: Attest SBOM
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.digest.outputs.digest }}
+          sbom-path: sbom/ecluse.spdx.json
+          push-to-registry: true

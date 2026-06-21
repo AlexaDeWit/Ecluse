@@ -22,32 +22,25 @@ configuration reference.
 
 ## Verifying the image
 
-Every published image is **signed** and carries **provenance** and **SBOM**
-attestations — all keyless (Sigstore), bound to the image digest, and verifiable
-with [cosign](https://github.com/sigstore/cosign) alone. Pin by digest in
-production (`alexadewit/ecluse@sha256:…`); a tag is used below for brevity.
+Every published image carries **provenance** and **SBOM** attestations — keyless
+(Sigstore), recorded in the public Rekor transparency log, and stored as
+**immutable OCI referrers** on the image (write-once; they can't be overwritten).
+Verify them by **digest** with the GitHub CLI:
 
 ```bash
-IMAGE=alexadewit/ecluse:0.1.0
-ISSUER=https://token.actions.githubusercontent.com
-IDENTITY='https://github.com/AlexaDeWit/Ecluse/.github/workflows/release.yml@.*'
+IMAGE=alexadewit/ecluse@sha256:…   # pin by digest
 
-# 1. Signature — published by the official release workflow
-cosign verify "$IMAGE" \
-  --certificate-oidc-issuer "$ISSUER" \
-  --certificate-identity-regexp "$IDENTITY"
+# Verify every attestation (provenance + SBOM) against the release identity + Rekor:
+gh attestation verify "oci://$IMAGE" --repo AlexaDeWit/Ecluse
 
-# 2. Provenance — how & where it was built (SLSA v1.0)
-cosign verify-attestation "$IMAGE" --type slsaprovenance1 \
-  --certificate-oidc-issuer "$ISSUER" \
-  --certificate-identity-regexp "$IDENTITY"
-
-# 3. SBOM — what's inside (SPDX); pipe through jq to read the document
-cosign verify-attestation "$IMAGE" --type spdxjson \
-  --certificate-oidc-issuer "$ISSUER" \
-  --certificate-identity-regexp "$IDENTITY" \
-  | jq -r '.payload | @base64d | fromjson | .predicate' > ecluse.spdx.json
+# …or just one, by predicate type:
+gh attestation verify "oci://$IMAGE" --repo AlexaDeWit/Ecluse \
+  --predicate-type https://slsa.dev/provenance/v1
 ```
+
+`gh attestation verify` checks each attestation's signature against the release
+workflow's identity and the Rekor log, and that its subject matches the digest
+you pulled. Add `--format json` to extract the documents (e.g. the SPDX SBOM).
 
 Strongest of all, the image is **bit-for-bit reproducible** — rather than trust
 anyone, rebuild it from the pinned source and compare to what you pulled:

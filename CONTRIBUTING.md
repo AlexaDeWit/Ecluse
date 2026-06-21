@@ -259,8 +259,8 @@ Build it locally with `make docker-build` (→ `./result`, a `docker-archive`).
 Publishing is a separate, tag-triggered workflow
 ([`.github/workflows/release.yml`](.github/workflows/release.yml)) — **not** part
 of the PR `gate`. Pushing a `vX.Y.Z` tag builds the image, pushes it
-(`make docker-push`), signs it (`make docker-sign`), and attests an SBOM + SLSA
-provenance (`make sbom` + `make attest`).
+(`make docker-push`), and attaches keyless provenance + SBOM attestations as
+immutable OCI referrers (the GitHub attest-actions; SBOM content from `make sbom`).
 
 **Immutable tags — no `latest`.** The target repo
 ([`alexadewit/ecluse`](https://hub.docker.com/r/alexadewit/ecluse)) enforces
@@ -271,28 +271,38 @@ which is the stronger supply-chain posture regardless.
 
 ### Supply-chain attestations
 
-Beyond the signature, each release attaches two **keyless** (Sigstore/OIDC, no
-stored key) attestations, bound to the image **digest** and stored under cosign's
-own tags — no registry referrers API needed, so Docker Hub works:
+Each release attaches two **keyless** (Sigstore/OIDC, no stored key) attestations
+to the image, bound to its **digest**, recorded in the public **Rekor**
+transparency log, and stored as **immutable OCI referrers** — each a
+content-addressed, write-once artifact that is never updated, so it can't be
+tampered with and it coexists with the repo's immutable tags. Both are produced
+in CI by GitHub's [attest-actions](https://github.com/actions/attest-build-provenance):
 
-- **SBOM** (`make sbom` → `cosign attest --type spdxjson`). Generated with
+- **Provenance** (`actions/attest-build-provenance`). SLSA provenance generated
+  from the run context — the source repo + commit, the release workflow, and the
+  run (the *how/where*). The cryptographic "who built it" guarantee is the
+  keyless signing identity (the release workflow's OIDC cert).
+- **SBOM** (`actions/attest-sbom`, content from `make sbom`). Generated with
   [`sbomnix`](https://github.com/tiiuae/sbomnix) from the **Nix closure of the
   exact binary the image ships** (`.#ecluse-bin`, stripped/static) — not a scan
   of the image, which couldn't see the statically-linked Haskell deps. So it
-  lists the real contents (~23 components: the `ecluse` binary plus its C
-  closure — glibc, zlib, and the curl/openssl/krb5 chunk that rides in via the
-  GHC runtime's `libdw`) with no dynamic-build noise to trip CVE scanners. SPDX
-  **and** CycloneDX are emitted. The Haskell dependencies are compiled into the
-  `ecluse` component; they are pinned by `flake.lock` and, because the image is
-  bit-for-bit reproducible, independently derivable.
-- **Provenance** (`make attest` → `cosign attest --type slsaprovenance1`). A
-  SLSA v1.0 predicate ([`scripts/gen-provenance.sh`](scripts/gen-provenance.sh))
-  recording the source repo + commit, the release workflow, and the run — the
-  *how/where*. The cryptographic "who built it" guarantee is the keyless signing
-  identity (the release workflow's OIDC cert), not the predicate body.
+  lists the real contents (~23 components: the `ecluse` binary plus its C closure
+  — glibc, zlib, and the curl/openssl/krb5 chunk that rides in via the GHC
+  runtime's `libdw`) with no dynamic-build noise to trip CVE scanners. The
+  Haskell deps are compiled into the `ecluse` component; they are pinned by
+  `flake.lock` and, because the image is bit-for-bit reproducible, independently
+  derivable.
 
-It's cosign end-to-end, so consumers verify signature, provenance, and SBOM with
-one tool; the recipe lives in the [README](README.md#verifying-the-image).
+> **Why the GitHub attest-actions, not cosign?** cosign stores attestations under
+> a single mutable `.att` tag (a second attestation must *update* it), which the
+> repo's immutable tags forbid — and cosign has no referrer mode for attestations
+> at any version (only for signatures). The attest-actions store each attestation
+> as its own immutable referrer, so the storage is immutable too. A separate
+> image signature is unnecessary: the provenance attestation already binds the
+> digest to the builder identity.
+
+Consumers verify by digest with `gh attestation verify`; the recipe lives in the
+[README](README.md#verifying-the-image).
 
 **Authentication (Docker Hub).** Docker Hub has no OIDC keyless login, so the push
 needs a long-lived token — kept as weak and contained as possible:
@@ -307,13 +317,15 @@ needs a long-lived token — kept as weak and contained as possible:
 - Store it as `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` on a **protected `release`
   GitHub Environment** (required reviewers), so only an approved release job can
   read it. The token is fed via `--password-stdin`, never argv or `echo`.
-- Images are **signed with cosign keyless** via GitHub OIDC (`id-token: write`) —
-  no signing key is stored — giving verifiable provenance that offsets the
-  static-token weakness. Verify with `cosign verify`.
+- Each image carries **keyless provenance + SBOM attestations** via GitHub OIDC
+  (`id-token: write` + `attestations: write`) — immutable OCI referrers + the
+  Rekor log, no stored key — giving verifiable provenance and contents that
+  offset the static-token weakness. Verify with `gh attestation verify` (see
+  [README](README.md#verifying-the-image)).
 
-> Until the `release` environment and its `DOCKERHUB_*` secrets exist, the publish
-> workflow is expected to fail at the push step — by design. The build, tagging,
-> signing, and attestation wiring are complete; only the credential is outstanding.
+> The `release` environment and its `DOCKERHUB_*` secrets are configured, so a
+> `vX.Y.Z` tag (or a `workflow_dispatch`) runs the full build → push → attest
+> chain, gated by the environment's required reviewer.
 
 ---
 
