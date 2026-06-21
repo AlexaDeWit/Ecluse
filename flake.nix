@@ -14,6 +14,12 @@
       in {
         devShells.default = pkgs.mkShell {
           name = "npm-secure-proxy";
+
+          # Force a UTF-8 locale so test runners (hspec prints '✔') and any
+          # other Unicode output encode correctly regardless of the host locale.
+          LANG = "C.UTF-8";
+          LC_ALL = "C.UTF-8";
+
           buildInputs = [
             pkgs.bashInteractive
             hpkgs.ghc
@@ -22,6 +28,7 @@
             hpkgs.ghcid
             hpkgs.fourmolu
             hpkgs.hlint
+            pkgs.semgrep
             pkgs.zlib
             pkgs.pkg-config
           ];
