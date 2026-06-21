@@ -21,6 +21,7 @@ import Data.Text qualified as T
 import Data.Time (NominalDiffTime, diffUTCTime)
 import Ecluse.Package
 import Ecluse.Rules.Types
+import Ecluse.Version (renderVersion)
 
 -- | A stable, human-facing name for a rule (for logs and denial messages).
 ruleName :: Rule -> Text

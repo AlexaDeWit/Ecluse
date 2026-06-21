@@ -22,7 +22,7 @@ govern it:
 | Concern | Representation | Why |
 |---|---|---|
 | **Identity** | `PackageName`: ecosystem tag + optional namespace (npm scope) + a normalised `canonical` key + a `display` form; equality is on the canonical key only. | npm is case-sensitive with scopes, PyPI normalises (PEP 503), RubyGems is verbatim — matching must use one canonical key while rendering stays faithful. |
-| **Version** | opaque; holds the raw text (round-trip) **plus** a `Maybe VersionKey` parsed at construction. `parseVersionKey :: Ecosystem -> Text -> Either VersionError VersionKey` is the only way to obtain a `VersionKey`, and `compareVersions` is defined *only* on keys — so non-canonical text cannot reach the comparator (parse, don't validate). Unparseable ⇒ no key ⇒ ordering rules abstain, but the version is still served. | Lexicographic ordering is wrong for every grammar (`"10.0.0" < "9.0.0"`); and a proxy must keep serving a version even when our hand-rolled parser can't order it. |
+| **Version** | (in [`Ecluse.Version`](../../src/Ecluse/Version.hs)) opaque; holds the raw text (round-trip) **plus** a `Maybe VersionKey` parsed at construction. `parseVersionKey :: Ecosystem -> Text -> Either VersionError VersionKey` is the only way to obtain a `VersionKey`, and `compareVersions` is defined *only* on keys — so non-canonical text cannot reach the comparator (parse, don't validate). Unparseable ⇒ no key ⇒ ordering rules abstain, but the version is still served. | Lexicographic ordering is wrong for every grammar (`"10.0.0" < "9.0.0"`); and a proxy must keep serving a version even when our hand-rolled parser can't order it. |
 | **Install-time code execution** | `CodeExecSignal = NoCodeOnInstall \| RunsCodeOnInstall reason \| CodeExecUnknown`. | Unifies npm install scripts, PyPI sdist builds, and RubyGems native extensions; `Unknown` carries the gemspec-fetch case. |
 | **Trust / provenance** | `Trust = Trusted (NonEmpty TrustEvidence) \| Untrusted \| TrustUnknown`; `TrustEvidence = Signed \| Attested \| MfaPublished \| OtherEvidence text`. | Signing/attestation/MFA differ per ecosystem but reduce to one signal; the evidence captures the *how* without leaking the ecosystem. |
 | **Availability** | `Availability = Available \| Deprecated msg \| Yanked (Maybe reason)`, plus a per-artifact `artYanked`. | npm deprecates (advisory) and RubyGems yanks whole versions; PyPI yanks individual *files* — the per-file flag preserves PyPI's "listed-but-yanked" so exact pins still resolve. |
@@ -50,5 +50,12 @@ time):
    layer.
 4. **Dependencies** — a lossless structured list with raw constraints (no
    constraint parsing yet).
-5. **Rollout** — landed as one coherent revision of `Ecluse.Package` and the
-   rule inputs; the `evalRules` fold is unchanged.
+5. **Module layout** — the version model and its three per-ecosystem parsers
+   live in their own module, [`Ecluse.Version`](../../src/Ecluse/Version.hs), and
+   the shared `Ecosystem` tag in
+   [`Ecluse.Ecosystem`](../../src/Ecluse/Ecosystem.hs);
+   [`Ecluse.Package`](../../src/Ecluse/Package.hs) holds the rest of the
+   vocabulary (identity, signals, artifacts, dependencies, `PackageDetails`) and
+   embeds a `Version`. The split keeps each module to a single responsibility and
+   breaks the `Package`↔`Version` import cycle (the shared tag is the seam). The
+   `evalRules` fold and the rule inputs are unchanged.

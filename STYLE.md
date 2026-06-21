@@ -210,9 +210,11 @@ module or namespace ("vertical" organization). Resist starting a project-wide
 (This is the central recommendation of Gabriella González's widely-cited module-
 organization guide.)
 
-So `Ecluse.Package` deliberately keeps the `Scope`/`PackageName`/`Version`/…
-types *together* with their smart constructors and renderers — one cohesive
-vocabulary module — rather than scattering them across type/function modules.
+So `Ecluse.Package` deliberately keeps `Scope`/`PackageName`/… *together* with
+their smart constructors and renderers — one cohesive vocabulary module — rather
+than scattering them across type/function modules. Likewise `Ecluse.Version`
+keeps the `Version` type with its parsers and comparator: each module is a
+vertical slice of one area, not a horizontal type-vs-function split.
 
 ### 4.2 One namespace per area; module name = file path
 
@@ -224,7 +226,9 @@ vocabulary module — rather than scattering them across type/function modules.
   enforces this; tests mirror it (`test/unit/Ecluse/RulesSpec.hs`, see §11).
 - Prefer a few cohesive modules over many tiny ones. A module per single
   function is over-splitting; a 1,000-line module spanning three concerns is
-  under-splitting. Aim for one clear responsibility per module.
+  under-splitting. Aim for one clear responsibility per module. (`Ecluse.Version`
+  was split out of `Ecluse.Package` on this basis: the package vocabulary and the
+  three version-grammar parsers are two responsibilities, not one.)
 
 ### 4.3 Split a `.Types` module only when it earns it
 
@@ -251,7 +255,8 @@ Let the module layout mirror the system's "functional core, imperative shell"
 shape (cf. Matt Parsons' *Three Layer Haskell Cake*):
 
 - **Domain/leaf modules are pure** — the rules engine, parsers, renderers
-  (`Ecluse.Rules`, `Ecluse.Package`). No `IO`; trivially testable.
+  (`Ecluse.Rules`, `Ecluse.Version`, `Ecluse.Package`). No `IO`; trivially
+  testable.
 - **Effects live at the boundary** — `app/Main.hs`, the server, and the worker
   layer, which run in `ReaderT Env IO` (see `docs/architecture.md`). Swappable
   effectful backends (registry, queue, credentials) are records of functions
@@ -295,16 +300,19 @@ module Ecluse.Package (
     renderScope,
 
     -- * Package identity
-    PackageName (..),
+    PackageName,
+    mkPackageName,
+    pkgEcosystem,
     renderPackageName,
     -- ...
 ) where
 ```
 
-Export an abstract type as `Scope` (constructor hidden — callers must use the
-smart constructor) or as `PackageName (..)` (constructors and fields exposed)
-deliberately; the choice encodes whether the type has invariants to protect
-(see §6), and pairs with the `.Internal` escape hatch in 4.6.
+Export an abstract type with its constructor hidden — `Scope`, or `PackageName`
+(callers build it with `mkPackageName` and read it through the exposed
+accessors) — or with its constructors and fields exposed, as `PackageDetails
+(..)`, deliberately; the choice encodes whether the type has invariants to
+protect (see §6), and pairs with the `.Internal` escape hatch in 4.6.
 
 ---
 

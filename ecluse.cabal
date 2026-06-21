@@ -43,9 +43,11 @@ library
   hs-source-dirs:  src
   exposed-modules:
     Ecluse
+    Ecluse.Ecosystem
     Ecluse.Package
     Ecluse.Rules
     Ecluse.Rules.Types
+    Ecluse.Version
 
   build-depends:
     , text  ^>=2.0
@@ -69,6 +71,7 @@ test-suite ecluse-unit
     Ecluse.PackageSpec
     Ecluse.RulesSpec
     Ecluse.VersionOrderingSpec
+    Ecluse.VersionSpec
 
   build-tool-depends: hspec-discover:hspec-discover ^>=2.11
   build-depends:
