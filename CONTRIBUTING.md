@@ -261,15 +261,21 @@ Build it locally with `make docker-build` (→ `./result`, a `docker-archive`).
 Publishing is a separate, tag-triggered workflow
 ([`.github/workflows/release.yml`](.github/workflows/release.yml)) — **not** part
 of the PR `gate`. Pushing a `vX.Y.Z` tag builds the image, pushes it
-(`make docker-push`), and attaches keyless provenance + SBOM attestations as
-immutable OCI referrers (the GitHub attest-actions; SBOM content from `make sbom`).
+(`make docker-push`), attaches keyless provenance + SBOM attestations as immutable
+OCI referrers (the GitHub attest-actions; SBOM content from `make sbom`), and
+publishes a **GitHub Release** carrying the image digest, the `gh attestation
+verify` recipe, and the auto-generated changelog
+([`scripts/release-notes.sh`](scripts/release-notes.sh)). A pre-release tag
+(`vX.Y.Z-rc.N`) is flagged as a prerelease; an `rc` smoke test via
+`workflow_dispatch` publishes the image but no Release.
 
 **Immutable tags — no `latest`.** The target repo
 ([`alexadewit/ecluse`](https://hub.docker.com/r/alexadewit/ecluse)) enforces
 immutable tags, so every push is a fresh, never-reused tag: the release publishes
 `ecluse:X.Y.Z` (from the git tag) and nothing else. There is deliberately no
 moving pointer — **pin deployments by digest** (`alexadewit/ecluse@sha256:…`),
-which is the stronger supply-chain posture regardless.
+which is the stronger supply-chain posture regardless; the digest for each version
+is published in its GitHub Release.
 
 ### Supply-chain attestations
 
