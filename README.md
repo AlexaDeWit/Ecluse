@@ -33,27 +33,22 @@ unit and property tests need nothing beyond the dev shell.
 
 ### Getting started
 
-```bash
-# Enter the dev shell (direnv will do this automatically if configured)
-nix develop
-
-# Build
-cabal build all
-
-# Run the fast unit tests (see CONTRIBUTING.md for the integration/smoke suites)
-cabal test ecluse-unit
-
-# Run the proxy
-cabal run ecluse
-```
-
-`cabal` is the fast inner loop. For a **reproducible, hermetic** build and checks
-— what CI relies on — drive Nix directly (no dev shell needed):
+Every task runs through `make`, and the tools come from the Nix dev shell
+automatically — each target wraps itself in `nix develop` when you're not already
+inside it, so this works straight from a bare terminal:
 
 ```bash
-nix build         # build the ecluse binary → ./result/bin/ecluse
-nix flake check   # hermetic checks: package build, unit tests, fourmolu, hlint
+make build      # build library, executable, and tests
+make test       # fast, gating unit suite
+make check      # build + test + format + lint + sast (what the CI gate runs)
+make run        # run the proxy
+make help       # list every target
 ```
+
+Prefer an interactive shell? `nix develop` (or direnv) drops you in, and the same
+`make` targets then run the tools directly. For a hermetic, reproducible
+build/checks — sandboxed, what you'd ship — use `make nix-build` and
+`make nix-check`.
 
 ### Continuous integration
 

@@ -8,34 +8,43 @@ in [`AGENTS.md`](AGENTS.md).
 
 ## Local development
 
-All tooling comes from the Nix dev shell — run `nix develop` (or `direnv allow`)
-before anything else; do not assume a system-level GHC/Cabal. Builds use
-**Cabal** (not Stack); Nix and `flake.lock` provide reproducibility.
-
-| Task | Command (inside `nix develop`) |
-|------|--------------------------------|
-| Build | `cabal build all --enable-tests` |
-| Test (fast loop) | `cabal test ecluse-unit --test-show-details=direct` |
-| Format | `fourmolu --mode inplace $(git ls-files '*.hs')` |
-| Lint | `hlint $(git ls-files '*.hs')` |
-| Static analysis | `semgrep scan --config auto --severity ERROR --severity WARNING --error .` |
-
-**Before you push,** these must be clean: build (no warnings), the unit and
-integration suites (`ecluse-unit`, `ecluse-integration`), `fourmolu --mode
-check`, `hlint`, and Semgrep (zero findings). The CI `gate` enforces the same
-set, so a clean local run predicts a green gate. The smoke suite
-(`ecluse-smoke`) is allowed to fail and never gates (see Testing Strategy).
-
-### Reproducible build & checks (Nix)
-
-The `cabal` commands above are the incremental inner loop. For a reproducible,
-**hermetic** build and check run — sandboxed, with every dependency pinned by
-`flake.lock` — drive Nix directly:
+All tooling comes from the Nix dev shell (pinned by `flake.lock`); do not assume
+a system-level GHC/Cabal. Every task runs through **`make`** — the single entry
+point shared by local development and CI. Targets work whether or not you have
+entered the shell (each wraps itself in `nix develop --command` when needed), so
+`nix develop` / `direnv` is convenient but not required.
 
 | Task | Command |
 |------|---------|
-| Build the `ecluse` binary | `nix build` → `./result/bin/ecluse` |
-| Run the hermetic checks | `nix flake check` |
+| Build | `make build` |
+| Test (fast loop) | `make test` |
+| Format (write) | `make format` |
+| Lint | `make lint` |
+| Static analysis (SAST) | `make sast` |
+| Everything the gate runs | `make check` |
+
+Run `make help` for the full list (the integration/smoke suites, `nix-build`,
+`nix-check`, …). The underlying commands live in the [`Makefile`](Makefile), so
+local and CI never drift.
+
+**Before you push,** run `make check` — it must be clean: build (no warnings),
+the unit suite, `fourmolu --mode check`, `hlint`, and Semgrep (zero findings).
+Add `make test-integration` (needs Docker) for the other gating suite. The CI
+`gate` enforces the same set, so a clean local run predicts a green gate. The
+smoke suite (`make test-smoke`) is allowed to fail and never gates (see Testing
+Strategy).
+
+### Reproducible build & checks (Nix)
+
+The `make build` / `make test` targets above wrap `cabal`, the incremental inner
+loop. For a reproducible, **hermetic** build and check run — sandboxed, with
+every dependency pinned by `flake.lock` — use the Nix outputs (also exposed as
+make targets):
+
+| Task | Command |
+|------|---------|
+| Build the `ecluse` binary | `make nix-build` (`nix build`) → `./result/bin/ecluse` |
+| Run the hermetic checks | `make nix-check` (`nix flake check`) |
 
 `nix flake check` builds the package and runs the pure tier: the `ecluse-unit`
 suite (`checks.unit`), `fourmolu --mode check` (`checks.format`), and `hlint`
