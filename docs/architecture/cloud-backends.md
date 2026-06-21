@@ -18,16 +18,24 @@ package anyone browses.
 
 The queue is a cloud-agnostic seam with backends for AWS SQS and GCP Pub/Sub
 (see [Cloud Backends](#cloud-backends)). A consumer (a separate worker process)
-receives jobs, fetches the artifact from the public upstream, publishes it to the
-mirror target via `publishArtifact`, and acknowledges the job. The worker thus
+receives jobs, fetches the artifact from the public upstream, **verifies its bytes
+against the version's integrity hash** (npm `dist.integrity`), publishes it to the
+mirror target via `publishArtifact`, and acknowledges the job. A hash mismatch
+fails the job (no publish — it routes to retry/DLQ) and alarms, so a corrupt or
+tampered artifact never enters the private upstream, which is later served without
+rules. The worker thus
 touches both cloud seams — [`MirrorQueue`](#queue-abstraction) to receive and
 [`CredentialProvider`](#credential-provider) to authenticate the write — while the
 publish itself is **plain npm protocol plus a bearer token**: pushing to a managed
 registry is no different from pushing to any npm registry, so there is no
 per-cloud publish path. Both backends give at-least-once delivery with retry and a
 dead-letter path for jobs that keep failing — the semantics the worker needs,
-regardless of cloud. At-least-once is safe here because the worker is idempotent: a
-redelivered job re-runs the deterministic rules and re-publishes the same artifact.
+regardless of cloud. At-least-once is safe here because **publishing is idempotent**: registries treat
+versions as immutable, so a redelivered job's publish finds the version already
+present and is treated as success. The worker does **not** re-run the rules — the
+artifact was gated at serve time when the job was enqueued; the enqueue→process
+window is too short for meaningful policy drift, and anything mirrored is in any
+case later served without rules.
 
 This means there is a window between a package being approved and it appearing
 in the private upstream. Subsequent requests for the same package during this

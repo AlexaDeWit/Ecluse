@@ -86,6 +86,15 @@ send buffer, so we pull from upstream only as fast as the client drains —
 **constant memory regardless of artifact size**, with backpressure for free. No
 `ResourceT`, no conduit on the hot path.
 
+**Integrity on the serve path.** The proxy streams artifacts through without
+hashing them, relying on the client's own integrity check — the packument's
+`dist.integrity`, which the proxy preserves unaltered when
+[filtering](rules-engine.md#applying-verdicts-to-a-packument) (npm always verifies
+it). Proxy-side serve verification is deferred; revisit it when a weakly-verifying
+ecosystem (e.g. PyPI) or a non-verifying client lands. The mirror **worker does
+verify** before publishing to the sanitized home (see
+[Cloud Backends → Mirror Queue](cloud-backends.md#mirror-queue)).
+
 ## Error model
 
 Every served response is the rendering of one **serve outcome**. A small, nuanced
@@ -167,6 +176,7 @@ wire contract.**
   small pure `classify` gets right.
 - **Defer** — `http-reverse-proxy` (revisit only if the hand-rolled core starts
   reinventing it; our need to intercept and *synthesize* denial responses argues
-  against a transparent proxy), metrics middleware (`wai-middleware-prometheus`
-  or `katip` + `ekg`, when observability lands), and `warp-tls` (only if TLS is
-  not terminated upstream).
+  against a transparent proxy), the tracing/metrics middleware (now specified in
+  [Observability](observability.md) — OpenTelemetry WAI instrumentation —
+  deferred until it lands), and `warp-tls` (only if TLS is not terminated
+  upstream).
