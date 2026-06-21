@@ -126,6 +126,26 @@ ecosystem (e.g. PyPI) or a non-verifying client lands. The mirror **worker does
 verify** before publishing to the sanitized home (see
 [Cloud Backends → Mirror Queue](cloud-backends.md#mirror-queue)).
 
+## Metadata cache
+
+Resolving a package re-fetches its public-upstream packument, parses it, and
+evaluates rules. To avoid repeating that, the parsed **packument metadata** (all
+versions' `PackageDetails`) is held in a **short-TTL, size-bounded in-memory
+cache** keyed by package — the STM `cache` already used for advisories. Both paths
+share it: a packument request and the
+[tarball-gating](../architecture.md#request-lifecycle) fetches that follow reuse a
+single fetch+parse instead of repeating it, and concurrent resolutions of a
+popular package collapse to one upstream call.
+
+What is cached is the **metadata, not the verdict**: rules are re-evaluated on the
+cached metadata each request, so time-sensitive rules (`AllowIfPublishedBefore`)
+and the separately-cached advisory tier stay correct — only the upstream
+fetch+parse is memoised. The TTL is short and **conditional-GET revalidates** on
+expiry (see [Middleware](#middleware-and-helper-libraries)); brief staleness is
+benign and even aligned with the resilience posture — a brand-new publish need not
+appear instantly. This is **in-memory metadata only**; on-disk artifact caching
+stays out of scope, and the mirror remains the durable store.
+
 ## Error model
 
 Every served response is the rendering of one **serve outcome**. A small, nuanced
