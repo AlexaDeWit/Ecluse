@@ -111,23 +111,31 @@ where availability must beat safety.
 ### Applying verdicts to a packument
 
 `evalRules` decides a single version, but a metadata request returns a whole
-**packument** with many versions, so verdicts are applied across it — on the
-**public-upstream path only** (a private-upstream hit is served unfiltered, as
-already vetted):
+**packument** with many versions, so verdicts are applied across it. A packument is
+**merged across upstreams** (see
+[Registry Model → Packument merge](registry-model.md#packument-merge-across-upstreams)),
+and verdicts apply **by provenance**: **gated (public-upstream)** versions are
+filtered here, while **trusted (private-upstream)** versions are admitted
+unfiltered, as already vetted. Filtering thus runs on the public set *before* the
+merge unions it with the trusted set:
 
-- **Filter the `versions` map.** Every version is evaluated; versions that are
-  denied **or [undecidable](#effectful-rule-failure)** are removed from `versions`
-  and from the `time` map, so a client's resolver only ever sees admitted versions.
-- **Repoint `dist-tags`.** `latest` is repointed to the highest *surviving*
-  version, so `npm install <pkg>` keeps resolving to the last good release. Other
-  tags (`next`, `beta`, …) that point at a denied or undecidable version are
+- **Filter the gated `versions`.** Every public-provenance version is evaluated;
+  versions that are denied **or [undecidable](#effectful-rule-failure)** are removed
+  from `versions` and from the `time` map, so a client's resolver only ever sees
+  admitted versions. Trusted private versions skip this step.
+- **Repoint `dist-tags` over the merged union.** `latest` is repointed to the
+  highest *surviving* version across the whole merged document (trusted private +
+  admitted public), so `npm install <pkg>` keeps resolving to the last good
+  release. Other tags (`next`, `beta`, …) that point at a removed version are
   **dropped** rather than repointed — aiming `beta` at a stable release would
   misrepresent it.
-- **No survivors → 403 or 503.** If no version is admitted, the status follows the
-  cause: **403** with the collected denial reasons when every rejection is by
-  policy; **503** (+`Retry-After`) when any rejection was transient/undecidable (it
-  may resolve on retry). Never 404 — the package exists; its versions were
-  withheld. See the serve [Error model](web-layer.md#error-model).
+- **No survivors → 403 or 503.** If **nothing survives in the merged document** —
+  no trusted private versions, and every gated public version was rejected — the
+  status follows the cause: **403** with the collected denial reasons when every
+  rejection is by policy; **503** (+`Retry-After`) when any rejection was
+  transient/undecidable, **or when an upstream the merge needed was itself
+  unavailable** (it may resolve on retry). Never 404 — the package exists; its
+  versions were withheld. See the serve [Error model](web-layer.md#error-model).
 
 Repointing `latest` to an older surviving version is a deliberate downgrade, and
 it is the resilience posture — a brand-new, not-yet-cleared (or actively bad)

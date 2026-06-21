@@ -27,34 +27,48 @@ configurable policy on what may be fetched and mirrored from the public registry
 
 ## Request Lifecycle
 
+The two request shapes diverge in how they use the upstreams — a tarball
+*falls back*, a packument *merges*:
+
 ```mermaid
 flowchart TD
-    C(["Client request"]) --> P1["1. Fetch from private upstream"]
-    P1 -->|"2xx"| SV(["Serve to client. Done."])
-    P1 -->|"non-2xx (miss)"| P2["2. Fetch from public upstream"]
-    P2 -->|"non-2xx"| ERR(["Forward error to client."])
-    P2 -->|"2xx"| P3["3. Parse into PackageInfo / PackageDetails"]
-    P3 --> P4{"4. Evaluate RuleSet (deny by default)<br/>pure rules first; effectful if undecided"}
-    P4 -->|"Denied"| D(["403 + denial message. Done."])
-    P4 -->|"Allowed"| P5["5. Enqueue mirror job (non-blocking)"]
-    P5 --> P6(["6. Serve response to client immediately"])
+    C(["Client request"]) --> K{"packument or tarball?"}
+
+    K -->|"tarball"| T1["Fetch from private upstream"]
+    T1 -->|"2xx hit"| TSV(["Stream unfiltered. Done."])
+    T1 -->|"miss"| T2["Fetch version metadata from public<br/>+ evaluate rules (deny by default)"]
+    T2 -->|"Denied / Unavailable"| TD(["403 / 503 / 500. Done."])
+    T2 -->|"Admitted"| T3["Stream from public + enqueue mirror job<br/>(non-blocking)"]
+    T3 --> TSV2(["Serve immediately. Done."])
+
+    K -->|"packument"| P1["Fetch private + public in parallel"]
+    P1 --> P2["Trust private versions;<br/>gate public versions (rules, deny by default)"]
+    P2 --> P3["Merge (private wins; flag divergence),<br/>filter, repoint latest"]
+    P3 -->|"survivors"| PSV(["Serve merged packument. Done."])
+    P3 -->|"none survive"| PD(["403 / 503. Done."])
 ```
 
 A **tarball/artifact** request is gated for *that one version*: a private-upstream
 hit is streamed unfiltered (already vetted); on a private miss the proxy fetches
-the version's metadata from the public upstream, runs the rules, and either
-streams it from public **and enqueues a mirror job** (step [5]) or returns the
-serve [error model](architecture/web-layer.md#error-model) (403 / 503 / 500).
-Lockfile installs (`npm ci`) hit tarball URLs directly, often with no preceding
-packument request, so the artifact path gates on its own. **Mirroring is
-demand-driven** — a job is enqueued when an artifact is *accepted on the tarball
-path*, not when a packument is filtered — so only versions actually pulled are
-mirrored.
+the version's metadata from the public upstream, runs the rules, and either streams
+it from public **and enqueues a mirror job** or returns the serve
+[error model](architecture/web-layer.md#error-model) (403 / 503 / 500). Lockfile
+installs (`npm ci`) hit tarball URLs directly, often with no preceding packument
+request, so the artifact path gates on its own. **Mirroring is demand-driven** — a
+job is enqueued when an artifact is *accepted on the tarball path*, not when a
+packument is filtered — so only versions actually pulled are mirrored.
 
-On the public-upstream path, the served packument is **filtered to admitted
-versions** (denied versions removed, `latest` repointed to the newest survivor,
-403 if none survive) before step [6] — see
-[Rules Engine → Applying verdicts to a packument](architecture/rules-engine.md#applying-verdicts-to-a-packument).
+A **packument** request is not a private-then-public fallback but a **merge**: the
+private and public upstreams are fetched in parallel, public versions are filtered
+by the rules (denied / undecidable removed) while private versions are trusted, and
+the two are combined into one document — private wins on a version collision, an
+integrity divergence between the two is flagged as a supply-chain signal, `latest`
+is repointed to the newest survivor across the union, and a 403/503 is returned
+only if nothing survives. Merging — rather than short-circuiting on a private hit —
+is what keeps not-yet-mirrored public versions **visible**, so demand-driven
+mirroring can fire for them. See
+[Registry Model → Packument merge](architecture/registry-model.md#packument-merge-across-upstreams)
+and [Rules Engine → Applying verdicts to a packument](architecture/rules-engine.md#applying-verdicts-to-a-packument).
 
 ## Document Map
 
@@ -65,6 +79,7 @@ versions** (denied versions removed, `latest` repointed to the newest survivor,
 | [Internal Domain Model](architecture/domain-model.md) | `PackageDetails` and the ecosystem-agnostic signal vocabulary the rules engine consumes. |
 | [Multi-Ecosystem Hosting](architecture/hosting.md) | Mounting ecosystems under path prefixes, URL rewriting, and dispatch. |
 | [Web Layer](architecture/web-layer.md) | The raw-WAI front door: routing, the control/data-plane split, streaming, middleware. |
+| [API Surface & Capability Manifest](architecture/api-surface.md) | The OpenAPI **capability manifest** — which protocols Écluse speaks and what is / isn't supported — generated from the route enumeration × mounts; the synthesized-packument schema. |
 | [Rules Engine & Responses](architecture/rules-engine.md) | Deny-by-default evaluation, the rule tiers, the CVE subsystem, and denial responses. |
 | [Cloud Backends & Mirroring](architecture/cloud-backends.md) | The mirror queue and the two cloud seams (`MirrorQueue`, `CredentialProvider`); AWS & GCP. |
 | [Configuration & Authentication](architecture/configuration.md) | Environment configuration, outbound registry credentials, and inbound client authentication. |
@@ -78,6 +93,10 @@ versions** (denied versions removed, `latest` repointed to the newest survivor,
   writes go through `publishArtifact`, so no blob-store seam is introduced;
   revisit only if a non-registry mirror target is ever wanted.
 - Web UI or admin API.
+- **Re-specifying upstream registry protocols** in the
+  [capability manifest](architecture/api-surface.md). Écluse documents *its
+  coverage* of each protocol — and what is unsupported — not npm's full
+  packument / registry contract: clients hardcode that, and it is npm's to specify.
 - PyPI and other non-npm **adapters** — the hosting model and `RegistryClient`
   seam are designed to accommodate them (see
   [Multi-Ecosystem Hosting](architecture/hosting.md#multi-ecosystem-hosting)), but

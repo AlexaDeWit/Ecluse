@@ -73,10 +73,13 @@ flowchart LR
 
 ## 2. Packument (metadata) request
 
-Resolving a package: the private upstream is tried first (served **unfiltered**
-when hit, as already vetted); on a miss the public upstream is queried with rules
-applied across **every** version, and the packument is filtered to admitted
-versions. Metadata requests **filter but never mirror**. See [Web Layer](web-layer.md)
+Resolving a package **merges** the upstreams rather than short-circuiting: the
+private and public upstreams are fetched in parallel; public versions are gated by
+the rules and private versions are trusted, and the two are merged into one
+document (private wins on collision; integrity divergence is flagged). This is what
+keeps not-yet-mirrored public versions visible so demand-driven mirroring can fire.
+Metadata requests **filter but never mirror**. See
+[Registry Model → Packument merge](registry-model.md#packument-merge-across-upstreams)
 and [Rules Engine → Applying verdicts to a packument](rules-engine.md#applying-verdicts-to-a-packument).
 
 ```mermaid
@@ -90,25 +93,24 @@ sequenceDiagram
     participant Rules as Rules engine
 
     Client->>E: GET packument
-    E->>Priv: fetch (client token forwarded)
-    alt private hit (2xx)
-        Priv-->>E: 200 packument
-        E-->>Client: serve unfiltered (already vetted)
-    else private miss
-        E->>Cache: lookup parsed metadata
+    par fetch upstreams in parallel
+        E->>Priv: fetch (client token forwarded)
+        Priv-->>E: packument (or miss)
+    and
+        E->>Cache: lookup parsed public metadata
         alt cache miss
             E->>Pub: fetch (anonymous; token stripped)
-            Pub-->>E: 200 packument
+            Pub-->>E: packument (or miss)
             E->>Cache: store parsed metadata (short TTL)
         end
-        E->>Rules: evaluate every version
-        Rules-->>E: verdicts (allow / deny / unavailable)
-        Note over E: filter versions, repoint latest tag, recompute ETag over filtered body
-        alt no survivors
-            E-->>Client: 403 policy / 503 transient
-        else some admitted
-            E-->>Client: filtered packument
-        end
+    end
+    E->>Rules: evaluate every public version
+    Rules-->>E: verdicts (allow / deny / unavailable)
+    Note over E: filter gated (public) versions; trust private;<br/>merge (private wins; flag integrity divergence);<br/>repoint latest; recompute ETag over merged body
+    alt no survivors in merge
+        E-->>Client: 403 policy / 503 transient or upstream-unavailable
+    else some admitted
+        E-->>Client: merged + filtered packument
     end
     Note over E,Pub: packument requests filter but never mirror
 ```

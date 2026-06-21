@@ -9,7 +9,8 @@
 | Effect style | `ReaderT Env IO` (+ `unliftio`) | Simple, standard, testable without exotic dependencies. `unliftio` lifts `bracket`/`async` into the reader for the worker/service layer; request handlers stay in plain `IO` taking `Env`. See [Web Layer](web-layer.md#web-layer). |
 | HTTP server | `warp` + `wai` (+ `wai-extra`) | Fast, battle-tested. Raw WAI routing rather than a framework — see [Web Layer](web-layer.md#web-layer). `wai-extra` supplies cross-cutting middleware (size limits, real-IP, timeouts). |
 | HTTP client | `http-client` + `http-client-tls` | The data plane: streams artifacts and fetches metadata, including the CodeArtifact / Artifact Registry npm endpoints. Kept off `amazonka`'s `ResourceT` streaming path — see [Web Layer](web-layer.md#web-layer). |
-| JSON | `aeson` | Metadata parsing, rule config, queue payloads, denial bodies. |
+| JSON | `aeson` | Metadata parsing (lenient **inbound** wire decoding), rule config, queue payloads, denial bodies. |
+| API manifest / schemas | `autodocodec` + `openapi3` | The [capability manifest](api-surface.md) and config JSON Schema: **owned** types (error envelope, synthesized packument, config) derive their `aeson` codec **and** the OpenAPI / JSON-Schema from one `autodocodec` codec — no drift; `openapi3` assembles the document. Inbound npm wire decoding stays lenient `aeson`. |
 | Cloud — AWS | `amazonka` | Split packages: `amazonka-sqs` (mirror queue), `amazonka-codeartifact` (registry token), `amazonka-sts` (workload identity). Mature and comprehensive. |
 | Cloud — GCP | `gogol` *or* a hand-rolled REST client (TBD) | Pub/Sub mirror queue + Artifact Registry token. GCP's Haskell story is weaker than AWS's, so the choice is gated on a spike — see [Cloud Backends](cloud-backends.md#cloud-backends). |
 | Logging | `katip` | Structured, contextual JSON logging. Denials are an audit trail — package/version/rule context attaches to every event. |
@@ -59,3 +60,13 @@ core's `Env`/`App`, so backends stay decoupled (no import cycle, and no recursiv
 reference from `Env` holding seams whose methods would need `Env`). App-level code
 calls a seam through a single `liftIO`. `Env` is the composition-root record
 holding the seams plus the shared HTTP manager, caches, and logger.
+
+**Capability manifest, not a client contract.** Écluse speaks registry protocols,
+not a bespoke API, so its OpenAPI document is a *capability manifest* — generated
+from the closed `Route` enumeration × the configured mounts. Owned / synthesized
+responses (the error envelope and the merged-and-filtered packument) are modelled
+**code-first via `autodocodec`** so the schema cannot drift from the wire format;
+opaque pass-through bodies (tarballs) are linked out rather than re-specified; and
+unsupported routes (`Search`) are documented as `501`. Full rationale, schema
+strategy, and node-free CI rendering in
+[API Surface & Capability Manifest](api-surface.md).

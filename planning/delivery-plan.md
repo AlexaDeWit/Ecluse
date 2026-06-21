@@ -74,8 +74,8 @@ observability, and the GCP backends.
 |---|---|---|
 | **M0** | Shell, seams & foundations | The imperative shell + the three seam interfaces with in-memory doubles; config loader; logging; rules-precedence alignment. Unblocks every downstream track. |
 | **M1** | npm protocol adapter | The npm `RegistryClient`: wire decoders, projection to the domain model, data-plane fetch/publish, URL rewrite + packument filtering. |
-| **M2** | Web front door | The raw-WAI `Application`: pure router, error/denial model, meta-routes, middleware, bounded-memory streaming, conditional-GET/ETag, metadata cache. |
-| **M3** | Request pipeline (**walking skeleton**) | The thin end-to-end path: three-registry fetch, credential forward/strip, packument + tarball serving, demand-driven mirror enqueue (against in-memory cloud doubles). |
+| **M2** | Web front door | The raw-WAI `Application`: pure router, error/denial model, meta-routes, middleware, bounded-memory streaming, conditional-GET/ETag, metadata cache, and the capability manifest (`/openapi.json`). |
+| **M3** | Request pipeline (**walking skeleton**) | The thin end-to-end path: multi-upstream packument merge, credential forward/strip, packument + tarball serving, demand-driven mirror enqueue (against in-memory cloud doubles). |
 | **M4** | AWS cloud backends & worker | `CredentialProvider` (CodeArtifact / static), SQS `MirrorQueue`, the mirror worker, the AWS composition root. **AWS launch-ready.** |
 | **M5** | Effectful rules & CVE | The effectful tier (timeout / retry / circuit-breaker, `Unavailable`), the OSV local-sync in-memory advisory index, `DenyIfCVE`. |
 | **M6** | Observability | Opt-in, vendor-neutral OpenTelemetry/OTLP: tracing, the `ecluse.*` metrics catalog, JSONL `dd` log correlation. |
@@ -117,12 +117,14 @@ be **merged** before it can start. Tier = the test suite(s) it owes
 | [S11](slices/S11-response-model.md) | Error model + denial responses | S05, S10 | U |
 | [S12](slices/S12-wai-app-middleware.md) | WAI app + meta-routes + middleware + dispatch | S01, S10, S11 | U |
 | [S13](slices/S13-streaming-cache.md) | Streaming + conditional-GET/ETag + metadata cache | S12 | U |
+| [S34](slices/S34-capability-manifest.md) | Capability manifest (OpenAPI) + `/openapi.json` + docs render — _not on the launch critical path_ | S11, S12, S09, S33 | U |
 
 ### M3 — Request pipeline (walking skeleton)
 
 | ID | Slice | Depends on | Tier |
 |----|-------|------------|------|
-| [S14](slices/S14-packument-path.md) | Packument path end-to-end (**skeleton closes**) | S08, S09, S13 | U |
+| [S33](slices/S33-packument-merge.md) | Packument merge across upstreams (core, pure) | S07 | U |
+| [S14](slices/S14-packument-path.md) | Packument path end-to-end (**skeleton closes**) | S08, S09, S13, S33 | U |
 | [S15](slices/S15-tarball-path.md) | Tarball path + demand-driven mirror enqueue | S14 | U |
 
 ### M4 — AWS cloud backends & worker
@@ -187,14 +189,16 @@ parallel, then converge at M3:
 - **Wave 3:** `S03` + `S04` (config/logging), `S08` (npm fetch/publish), `S12`
   (WAI app). `S16` (credential wrapper) can pull in here — it depends only on the
   seam (S02) and de-risks M4 early.
-- **Converge:** `S09` → `S13` → `S14` (**walking skeleton closes**) → `S15`.
+- **Converge:** `S09` → `S13`, with `S33` (pure cross-upstream merge, needs only
+  `S07`) → `S14` (**walking skeleton closes**) → `S15`.
 - **Then:** M4 (AWS) and M5 (CVE) layer on; M6/M8 run as independent parallel
   tracks; **M7 (GCP) is scheduled after the AWS launch** (S20) — its spike (S27)
-  is the gate on committing the GCP backends.
+  is the gate on committing the GCP backends. `S34` (capability manifest) is a
+  **fast-follow** off `S11`/`S12`/`S09`/`S33` and does not gate the launch path.
 
 ### Critical path to AWS launch
 
-`S02 → S01 → S12 → S13 → S14 → S15 → S20`, with `S06→S07→S08→S09` and
+`S02 → S01 → S12 → S13 → S14 → S15 → S20`, with `S06→S07→S08→S09`, `S07→S33`, and
 `S16→{S17,S18}→S19` feeding the join at S20.
 
 ---
@@ -244,7 +248,11 @@ not an omission:
   to raw object storage (writes go through `publishArtifact`, no blob seam).
 - **PyPI / RubyGems adapters** — the domain model, `RegistryClient`, and hosting
   model are built to accommodate them, but only the **npm** adapter ships.
-- **Search** (`/-/v1/search`) — returns `501` at launch.
+- **Search** (`/-/v1/search`) — returns `501` at launch (documented as such in the
+  [capability manifest](../docs/architecture/api-surface.md)).
+- **Re-specifying upstream registry protocols** in the capability manifest — Écluse
+  documents *its coverage* (and what is unsupported), not npm's full
+  packument / registry contract.
 - **On-disk artifact caching** (the mirror retry window is acceptable).
 - **Cloud IAM validation at the proxy edge** (a gateway concern).
 - **Post-mirror CVE re-scan** of already-mirrored versions — CVE gating is
