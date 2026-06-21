@@ -45,6 +45,19 @@ registries derive short-lived tokens from ambient cloud credentials (see
 | `PROXY_HELP_MESSAGE` | No | Custom string appended to all denial messages (e.g. `"Contact #platform-eng on Slack for assistance."`). |
 | `CVE_SYNC_INTERVAL_SECONDS` | No (default: 3600) | How often to refresh the in-memory advisory index from OSV (see [CVE Subsystem](rules-engine.md#cve-subsystem)). |
 
+### Upstream composition (optional)
+
+`PRIVATE_UPSTREAM_URL` may point at a single registry **or** at one that itself
+aggregates others — e.g. an AWS CodeArtifact repository with upstream
+relationships to a mirror-target repo and a first-party "published-by-us" repo, so
+one fetch returns the whole trusted set. This is a supported topology but **never
+required**: Écluse
+[merges packuments across upstreams](registry-model.md#packument-merge-across-upstreams)
+itself, so registry-level composition is an optimization, not a precondition. The
+one rule that keeps it safe — the aggregator must **not** add a direct external
+connection to the public registry (that would route unvetted packages around the
+gate); the public upstream is always fetched and gated by Écluse.
+
 ### Outbound Registry Credentials
 
 Écluse holds a credential for exactly **one** thing: writing to the **mirror

@@ -82,6 +82,18 @@ learns to fan out. A mount prefix should be accepted with or without a trailing
 slash, since the base-URL join behaviour differs subtly between clients — an area
 to validate against the real `npm` and `pip` clients during implementation.
 
+## Capability manifest
+
+Because dispatch is a fan-out over a fixed set of mounts and each mount classifies
+into the same closed [`Route`](web-layer.md#raw-wai-not-a-web-framework) set, the
+mounts double as the source for Écluse's **capability manifest**: enumerate the
+`Route` constructors across the configured mounts and you have the full supported
+surface, per ecosystem, with no hand-authored duplication. Each mount's adapter
+contributes its per-ecosystem path template and support status (e.g. `Search` →
+`501`), and the rendered docs **tag operations by ecosystem** so one document reads
+as "one server, these protocols." See
+[API Surface & Capability Manifest](api-surface.md).
+
 ## Alternative: host-based routing
 
 The same single process could instead distinguish ecosystems by **hostname**

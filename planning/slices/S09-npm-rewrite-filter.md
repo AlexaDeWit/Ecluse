@@ -49,3 +49,10 @@ resilience downgrade — document it. Because the served body differs from upstr
 the **own-ETag** computation is the web layer's job (S13) — do not relay upstream's
 validator for a filtered body. Keep the `Unavailable` filtering path stubbed to the
 deny path until S21 lands (note it explicitly; do not fake the transient status).
+
+**Scope boundary.** This slice filters/rewrites a **single (public) packument** —
+the gated set. Combining that filtered set with the **trusted private** set is the
+cross-upstream **merge**, a separate ecosystem-agnostic core slice
+([S33](S33-packument-merge.md)); do **not** fold merging in here. `latest`-repointing
+within the public set still happens here; the final `latest` over the merged union
+is S33's.

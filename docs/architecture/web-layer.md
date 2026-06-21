@@ -59,6 +59,20 @@ Beyond packuments and artifacts, a few non-package routes:
 Everything else unrecognized stays `Unsupported` → `404` (deny-by-default at the
 routing layer).
 
+## Capability manifest
+
+Beyond the per-request routes, Écluse serves a **capability manifest** — an
+OpenAPI 3 document stating which registry protocols this server speaks and what is
+/ isn't supported — at `GET /openapi.json`, a **control-plane meta-route** (not
+under any mount). It is generated from the closed `Route` enumeration above × the
+configured [mounts](hosting.md#capability-manifest), so it cannot drift from what
+the server actually routes (`Search` shows as `501`, tarballs as opaque streamed
+media), and the rendered docs group operations by ecosystem. The synthesized
+(merged + filtered) packument is an **owned** schema. The full rationale, the
+schema strategy (`autodocodec` + `openapi3`), and CI rendering (static Redoc on
+GitHub Pages, node-free at runtime) are in
+[API Surface & Capability Manifest](api-surface.md).
+
 ## Control plane vs. data plane
 
 The single most important split in the HTTP code:
@@ -128,7 +142,7 @@ verify** before publishing to the sanitized home (see
 
 ## Metadata cache
 
-Resolving a package re-fetches its public-upstream packument, parses it, and
+Resolving a package re-fetches its upstream packument(s), parses them, and
 evaluates rules. To avoid repeating that, the parsed **packument metadata** (all
 versions' `PackageDetails`) is held in a **short-TTL, size-bounded in-memory
 cache** keyed by package — an STM-backed TTL cache (the `cache` library). Both paths
@@ -139,8 +153,11 @@ popular package collapse to one upstream call.
 
 What is cached is the **metadata, not the verdict**: rules are re-evaluated on the
 cached metadata each request, so time-sensitive rules (`AllowIfPublishedBefore`)
-and the separately-cached advisory tier stay correct — only the upstream
-fetch+parse is memoised. The TTL is short and **conditional-GET revalidates** on
+and the separately-cached advisory tier stay correct — only each upstream's
+fetch+parse is memoised (per source, since a packument is
+[merged across upstreams](registry-model.md#packument-merge-across-upstreams)); the
+pure merge, filter, and `latest` repoint are recomputed each request. The TTL is
+short and **conditional-GET revalidates** on
 expiry (see [Middleware](#middleware-and-helper-libraries)); brief staleness is
 benign and even aligned with the resilience posture — a brand-new publish need not
 appear instantly. This is **in-memory metadata only**; on-disk artifact caching
@@ -184,11 +201,13 @@ The rule: **`503` only when we believe it will resolve** (a transient upstream o
 advisory condition); otherwise `500` — retrying a permanent/internal inability to
 decide cannot help, so we do not invite it.
 
-For a **packument** request there is no single status — instead each `Reject`
-version is filtered out (see
+For a **packument** request there is no single status — the document is
+[merged across upstreams](registry-model.md#packument-merge-across-upstreams) and
+each `Reject` (gated, public-provenance) version is filtered out (see
 [Rules Engine → Applying verdicts](rules-engine.md#applying-verdicts-to-a-packument)),
-and a status is chosen only when *nothing* survives: `503` if any rejection was
-`WillResolve`, else `403`.
+while trusted private versions are admitted unfiltered. A status is chosen only
+when *nothing* survives the merge: `503` if any rejection was `WillResolve` **or a
+needed upstream was unavailable**, else `403`.
 
 The denial-body shape and `PROXY_HELP_MESSAGE` handling are in
 [Rules Engine → Denial Responses](rules-engine.md#denial-responses). This type
@@ -216,12 +235,14 @@ wire contract.**
   `{"error": …}` shape lives in an `Ecluse.Server.Response` module, grown as
   repetition surfaces), a thin `katip` logging middleware (so request logs join
   the same structured stream as everything else, rather than `wai-extra`'s stock
-  logger), and conditional-GET / ETag handling: for **pass-through** bodies (artifacts, and
-  unfiltered private-upstream metadata) the client's validators are relayed
-  upstream and `304`s passed back unchanged; for **transformed** bodies (filtered
-  packuments) the served body differs from upstream's, so we compute our **own**
-  `ETag` over what we serve and answer conditional requests against that —
-  relaying the upstream validator there would cache or validate the wrong bytes.
+  logger), and conditional-GET / ETag handling: for **pass-through** bodies
+  (artifacts — including a private-upstream tarball, served unfiltered) the
+  client's validators are relayed upstream and `304`s passed back unchanged; for
+  **transformed** bodies (every packument — now always
+  [merged across upstreams](registry-model.md#packument-merge-across-upstreams) and
+  filtered) the served body differs from any single upstream's, so we compute our
+  **own** `ETag` over what we serve and answer conditional requests against that —
+  relaying an upstream validator there would cache or validate the wrong bytes.
 - **Decline** — routing libraries (`wai-routes`, `wai-routing`, …): largely
   dormant and segment-based, so they fight the encoded-slash handling that a
   small pure `classify` gets right.
