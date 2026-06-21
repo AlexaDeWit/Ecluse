@@ -19,14 +19,19 @@ interface between the proxy logic and any specific registry protocol:
 
 ```haskell
 data RegistryClient = RegistryClient
-  { fetchMetadata    :: PackageId -> App RegistryResponse
-  , fetchArtifact    :: PackageId -> Version -> App RegistryResponse
-  , publishArtifact  :: PackageId -> Version -> ByteString -> App (Either PublishError ())
+  { fetchMetadata    :: PackageId -> IO RegistryResponse
+  , fetchArtifact    :: PackageId -> Version -> IO RegistryResponse
+  , publishArtifact  :: PackageId -> Version -> ByteString -> IO (Either PublishError ())
   , parsePackageInfo :: RegistryResponse -> Either ParseError PackageInfo
   , parseVersionDetails :: RegistryResponse -> Version -> Either ParseError PackageDetails
   , parseVersionList :: RegistryResponse -> Either ParseError [Version]
   }
 ```
+
+The effectful fields return plain `IO`, not `App`: an adapter closes over its own
+state (HTTP manager, credentials) and never imports the proxy's `Env`/`App`, so
+backends stay decoupled from the core. The `parse*` fields are pure. See
+[Technology Stack → the effect model](technology-stack.md#key-decisions).
 
 Nothing above the registry layer imports registry-specific types. The proxy core
 operates only on `PackageInfo` (the packument-level view) and `PackageDetails`

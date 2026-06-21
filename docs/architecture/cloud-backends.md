@@ -4,12 +4,17 @@
 
 ## Mirror Queue
 
-When a package passes rules, the proxy:
+Mirroring is **demand-driven**: when a client pulls an *artifact* whose version
+passes the rules (the tarball path on a private-upstream miss), the proxy:
 
 1. Enqueues a mirror job (the mirror target URL, package ID, version, and
    artifact location) to the configured **mirror queue**.
-2. Returns the response to the client **immediately** — no blocking on mirror
+2. Returns the artifact to the client **immediately** — no blocking on mirror
    completion.
+
+Metadata (packument) requests filter but do **not** mirror — only versions a
+client actually fetches are mirrored, rather than every admitted version of every
+package anyone browses.
 
 The queue is a cloud-agnostic seam with backends for AWS SQS and GCP Pub/Sub
 (see [Cloud Backends](#cloud-backends)). A consumer (a separate worker process)

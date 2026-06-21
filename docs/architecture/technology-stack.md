@@ -48,3 +48,14 @@ streaming needs direct control over the response body's lifetime. Both point awa
 from servant/Scotty/Yesod and toward a raw `Application`. The full rationale —
 routing, the control/data-plane split, streaming, and the middleware stance — is
 in [Web Layer](web-layer.md#web-layer).
+
+**The effect model: `IO` seams, `App` orchestration.** `App = ReaderT Env IO`
+(with `unliftio`) is the orchestration monad for the worker/service layer;
+request handlers run in plain `IO` taking `Env`, so the hot path carries no
+transformer lifting (see [Web Layer](web-layer.md#web-layer)). The seam records
+— `RegistryClient`, `MirrorQueue`, `CredentialProvider` — return **`IO`, not
+`App`**: each adapter closes over its own backend state and never imports the
+core's `Env`/`App`, so backends stay decoupled (no import cycle, and no recursive
+reference from `Env` holding seams whose methods would need `Env`). App-level code
+calls a seam through a single `liftIO`. `Env` is the composition-root record
+holding the seams plus the shared HTTP manager, caches, and logger.

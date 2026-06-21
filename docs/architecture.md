@@ -64,7 +64,16 @@ Client request
             [6] Serve response to client immediately
 ```
 
-Tarball/artifact requests follow the same lifecycle via `fetchArtifact`.
+A **tarball/artifact** request is gated for *that one version*: a private-upstream
+hit is streamed unfiltered (already vetted); on a private miss the proxy fetches
+the version's metadata from the public upstream, runs the rules, and either
+streams it from public **and enqueues a mirror job** (step [5]) or returns the
+serve [error model](architecture/web-layer.md#error-model) (403 / 503 / 500).
+Lockfile installs (`npm ci`) hit tarball URLs directly, often with no preceding
+packument request, so the artifact path gates on its own. **Mirroring is
+demand-driven** — a job is enqueued when an artifact is *accepted on the tarball
+path*, not when a packument is filtered — so only versions actually pulled are
+mirrored.
 
 On the public-upstream path, the served packument is **filtered to admitted
 versions** (denied versions removed, `latest` repointed to the newest survivor,

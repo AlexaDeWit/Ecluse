@@ -156,8 +156,12 @@ wire contract.**
   `{"error": …}` shape lives in an `Ecluse.Server.Response` module, grown as
   repetition surfaces), a thin `katip` logging middleware (so request logs join
   the same structured stream as everything else, rather than `wai-extra`'s stock
-  logger), and conditional-GET / ETag relay (forwarding the client's validators
-  upstream and relaying `304`s is domain behaviour).
+  logger), and conditional-GET / ETag handling: for **pass-through** bodies (artifacts, and
+  unfiltered private-upstream metadata) the client's validators are relayed
+  upstream and `304`s passed back unchanged; for **transformed** bodies (filtered
+  packuments) the served body differs from upstream's, so we compute our **own**
+  `ETag` over what we serve and answer conditional requests against that —
+  relaying the upstream validator there would cache or validate the wrong bytes.
 - **Decline** — routing libraries (`wai-routes`, `wai-routing`, …): largely
   dormant and segment-based, so they fight the encoded-slash handling that a
   small pure `classify` gets right.
