@@ -14,7 +14,11 @@ coverage:
         threshold: 1% # absorb rounding/noise; block real drops
     patch:
       default:
-        target: 80% # new/changed lines must be >=80% covered (primary knob)
+        # New/changed lines must be >=95% covered: the standard for all newly
+        # introduced work. The project status above stays on no-regression, so
+        # the codebase baseline ratchets up as well-covered changes land rather
+        # than gating the whole tree to an absolute number it is not yet at.
+        target: 95%
 
 # Flags let one combined gate span multiple suites. carryforward keeps a suite's
 # last-known coverage on runs that don't re-upload it (e.g. a job that skipped).
