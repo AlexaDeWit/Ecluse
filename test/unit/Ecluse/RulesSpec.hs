@@ -1,4 +1,4 @@
-module NpmSecureProxy.RulesSpec (spec) where
+module Ecluse.RulesSpec (spec) where
 
 import Data.Map.Strict qualified as Map
 import Data.Time (UTCTime (..), addUTCTime, fromGregorian, nominalDay)
@@ -8,9 +8,9 @@ import Hedgehog.Range qualified as Range
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
-import NpmSecureProxy.Package
-import NpmSecureProxy.Rules
-import NpmSecureProxy.Rules.Types
+import Ecluse.Package
+import Ecluse.Rules
+import Ecluse.Rules.Types
 
 -- | A fixed "now" so age-based tests are deterministic.
 now :: UTCTime

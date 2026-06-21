@@ -6,9 +6,9 @@ rule explicitly allows it, and the __first decisive rule wins__.
 
 The initial rule set is pure (no IO). Effectful rules (CVE lookups, etc.) are a
 later tier layered on top of this one; see @docs\/architecture.md@. The rule
-data types live in "NpmSecureProxy.Rules.Types".
+data types live in "Ecluse.Rules.Types".
 -}
-module NpmSecureProxy.Rules (
+module Ecluse.Rules (
     ruleName,
     evalRule,
     evalRules,
@@ -18,8 +18,8 @@ module NpmSecureProxy.Rules (
 
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, diffUTCTime)
-import NpmSecureProxy.Package
-import NpmSecureProxy.Rules.Types
+import Ecluse.Package
+import Ecluse.Rules.Types
 
 -- | A stable, human-facing name for a rule (for logs and denial messages).
 ruleName :: Rule -> Text

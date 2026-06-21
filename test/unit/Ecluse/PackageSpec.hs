@@ -1,4 +1,4 @@
-module NpmSecureProxy.PackageSpec (spec) where
+module Ecluse.PackageSpec (spec) where
 
 import Hedgehog (forAll, (===))
 import Hedgehog.Gen qualified as Gen
@@ -6,7 +6,7 @@ import Hedgehog.Range qualified as Range
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
-import NpmSecureProxy.Package
+import Ecluse.Package
 
 spec :: Spec
 spec = do

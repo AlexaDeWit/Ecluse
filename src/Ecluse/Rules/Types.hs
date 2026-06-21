@@ -1,9 +1,9 @@
 {- | Data types for the policy rules engine.
 
-The evaluation model lives in "NpmSecureProxy.Rules"; this module holds only the
+The evaluation model lives in "Ecluse.Rules"; this module holds only the
 types it operates on.
 -}
-module NpmSecureProxy.Rules.Types (
+module Ecluse.Rules.Types (
     Rule (..),
     EvalContext (..),
     RuleOutcome (..),
@@ -11,7 +11,7 @@ module NpmSecureProxy.Rules.Types (
 ) where
 
 import Data.Time (NominalDiffTime, UTCTime)
-import NpmSecureProxy.Package (Scope)
+import Ecluse.Package (Scope)
 
 {- | A single policy rule.
 

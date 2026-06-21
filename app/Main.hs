@@ -1,6 +1,6 @@
 module Main (main) where
 
-import NpmSecureProxy (run)
+import Ecluse (run)
 
 main :: IO ()
 main = run

@@ -7,7 +7,7 @@ adapters (npm today, others later) are responsible for projecting their
 responses into these types; nothing above the registry layer sees
 registry-specific structures.
 -}
-module NpmSecureProxy.Package (
+module Ecluse.Package (
     -- * Scopes
     Scope,
     mkScope,

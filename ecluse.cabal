@@ -1,0 +1,87 @@
+cabal-version: 3.0
+name:          ecluse
+version:       0.1.0.0
+synopsis:      Supply-chain resilience proxy for package registries
+license:       MIT
+build-type:    Simple
+
+-- Shared settings for every component. relude replaces the default prelude via
+-- cabal mixins (see docs/architecture.md "relude as the implicit prelude").
+common shared
+  ghc-options:        -Wall
+  default-language:   GHC2021
+  default-extensions:
+    DerivingStrategies
+    LambdaCase
+    OverloadedStrings
+
+  build-depends:
+    , base    ^>=4.18
+    , relude  ^>=1.2
+
+  mixins:
+    base hiding (Prelude),
+    relude (Relude as Prelude)
+
+library
+  import:          shared
+  hs-source-dirs:  src
+  exposed-modules:
+    Ecluse
+    Ecluse.Package
+    Ecluse.Rules
+    Ecluse.Rules.Types
+
+  build-depends:
+    , text  ^>=2.0
+    , time  ^>=1.12
+
+executable ecluse
+  import:         shared
+  main-is:        Main.hs
+  hs-source-dirs: app
+  build-depends:  ecluse
+
+-- Unit tests: pure, fast, deterministic. Gating.
+test-suite ecluse-unit
+  import:             shared
+  type:               exitcode-stdio-1.0
+  main-is:            Spec.hs
+  hs-source-dirs:     test/unit
+  other-modules:
+    Ecluse.PackageSpec
+    Ecluse.RulesSpec
+
+  build-tool-depends: hspec-discover:hspec-discover ^>=2.11
+  build-depends:
+    , containers       ^>=0.6
+    , hedgehog         ^>=1.4
+    , hspec            ^>=2.11
+    , hspec-hedgehog   ^>=0.1
+    , ecluse
+    , time             ^>=1.12
+
+-- Integration tests: exercise AWS-backed code against a ministack container
+-- (via testcontainers). Hermetic and gating; require a Docker daemon. The deps
+-- (testcontainers, amazonka-*) are added with the first real case.
+test-suite ecluse-integration
+  import:             shared
+  type:               exitcode-stdio-1.0
+  main-is:            Spec.hs
+  hs-source-dirs:     test/integration
+  other-modules:      Ecluse.MirrorQueueSpec
+  build-tool-depends: hspec-discover:hspec-discover ^>=2.11
+  build-depends:      hspec ^>=2.11
+
+-- Smoke tests: live calls to public registries (npm/PyPI) to validate our JSON
+-- and protocol handling. ALLOWED TO FAIL by design (non-gating) — they depend on
+-- uncontrolled external services. The deps (http-client-tls, aeson) are added
+-- with the first real case.
+test-suite ecluse-smoke
+  import:             shared
+  type:               exitcode-stdio-1.0
+  main-is:            Spec.hs
+  hs-source-dirs:     test/smoke
+  other-modules:      Ecluse.RegistryProtocolSpec
+  build-tool-depends: hspec-discover:hspec-discover ^>=2.11
+  build-depends:      hspec ^>=2.11

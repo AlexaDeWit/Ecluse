@@ -1,5 +1,5 @@
 {
-  description = "npm-secure-proxy: defense-in-depth npm registry proxy";
+  description = "ecluse: supply-chain resilience proxy for package registries";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-24.11";
@@ -13,7 +13,7 @@
         hpkgs = pkgs.haskell.packages.ghc96;
       in {
         devShells.default = pkgs.mkShell {
-          name = "npm-secure-proxy";
+          name = "ecluse";
 
           # Force a UTF-8 locale so test runners (hspec prints '✔') and any
           # other Unicode output encode correctly regardless of the host locale.

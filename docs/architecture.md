@@ -7,10 +7,17 @@ requirements — live in [`../CONTRIBUTING.md`](../CONTRIBUTING.md).
 ## Vision
 
 Supply chain attacks through malicious or hijacked package publications are an
-increasing threat in high-volume ecosystems like npm. `npm-secure-proxy` is a
-lightweight proxy that sits between consumers (developers, CI) and the npm
-registry, applying security rules before any package reaches a build — without
-taking on the cost or complexity of hosting packages itself.
+increasing threat in high-volume ecosystems like npm. **Écluse** (package
+`ecluse`) is a lightweight proxy that sits between consumers (developers, CI)
+and the npm registry, applying a configurable resilience policy before any
+package reaches a build — without taking on the cost or complexity of hosting
+packages itself.
+
+The name is French for a canal lock — a chamber whose gates never open at once.
+That is the posture: not a wall that blocks, but a controlled passage every
+dependency is held in and cleared through before it is admitted to a build. The
+goal is resilience — mitigating the blast radius of a bad publish — rather than
+malware detection.
 
 The proxy is not a registry. It delegates storage to whatever backend the
 operator chooses (e.g. AWS CodeArtifact), and enforces a configurable policy on
@@ -49,7 +56,7 @@ data RegistryClient = RegistryClient
 Nothing above the registry layer imports registry-specific types. The proxy core
 operates only on `PackageInfo` (the packument-level view) and `PackageDetails`
 (the per-version snapshot the rules engine evaluates — see
-[`src/NpmSecureProxy/Package.hs`](../src/NpmSecureProxy/Package.hs)). A registry
+[`src/Ecluse/Package.hs`](../src/Ecluse/Package.hs)). A registry
 adapter is responsible for projecting its wire format into these types.
 
 **Supported implementations at launch:** npm registry protocol only. The
@@ -83,7 +90,7 @@ Client request
         └─ 2xx
             │
             ▼
-        [3] Parse into PackageInfo / VersionInfo
+        [3] Parse into PackageInfo / PackageDetails
             │
             ▼
         [4] Evaluate RuleSet (deny by default)
@@ -119,7 +126,7 @@ Rules are evaluated in two tiers:
 
 1. **Pure rules** — evaluated against `PackageDetails` with no IO. Fast and
    deterministic. Evaluated first. This is the tier implemented today
-   ([`src/NpmSecureProxy/Rules.hs`](../src/NpmSecureProxy/Rules.hs)).
+   ([`src/Ecluse/Rules.hs`](../src/Ecluse/Rules.hs)).
 2. **Effectful rules** — may perform IO (advisory lookups, external policy
    checks). Only evaluated if no pure rule has produced a decision. A later
    phase, layered on top of the pure tier.

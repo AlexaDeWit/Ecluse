@@ -3,6 +3,7 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 # Cancel in-progress runs for the same ref when a new commit is pushed.
 concurrency:
@@ -14,7 +15,7 @@ concurrency:
 # pinned to a full commit SHA (Dependabot keeps them current).
 jobs:
   build-and-test:
-    name: Build & test
+    name: Build & unit tests
     runs-on: ubuntu-latest
     env:
       # Pin the cabal store to a deterministic, cacheable location.
@@ -41,11 +42,46 @@ jobs:
       - name: Update package index
         run: nix develop --command cabal update
 
-      - name: Build (library, executable, tests)
+      # Build everything (all three test suites included) so a broken
+      # integration/smoke suite fails the gate even when it isn't run here.
+      - name: Build (library, executable, all test suites)
         run: nix develop --command cabal build all --enable-tests
 
-      - name: Test
-        run: nix develop --command cabal test all --test-show-details=direct
+      - name: Unit tests
+        run: nix develop --command cabal test ecluse-unit --test-show-details=direct
+
+  integration:
+    name: Integration tests (ministack)
+    runs-on: ubuntu-latest
+    # ubuntu-latest ships a Docker daemon, which testcontainers/ministack use.
+    env:
+      CABAL_DIR: ${{ github.workspace }}/.cabal
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+
+      - name: Integration tests
+        run: nix develop --command cabal test ecluse-integration --test-show-details=direct
+
+  smoke:
+    name: Smoke tests (live registries — allowed to fail)
+    runs-on: ubuntu-latest
+    # Hits public npm/PyPI; flaky by design. NOT a `gate` dependency, so a
+    # failure here surfaces protocol drift without ever blocking a merge.
+    env:
+      CABAL_DIR: ${{ github.workspace }}/.cabal
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+
+      - name: Smoke tests
+        run: nix develop --command cabal test ecluse-smoke --test-show-details=direct
 
   lint:
     name: Format & lint
@@ -88,10 +124,11 @@ jobs:
 
   gate:
     name: CI gate
-    # The single Required check. Runs after every other job regardless of their
-    # result, and fails unless all of them succeeded. Wire new checks in by
-    # adding them to `needs` here — never as additional required checks.
-    needs: [build-and-test, lint, semgrep]
+    # The single Required check. Runs after every other gating job regardless of
+    # result, and fails unless all of them succeeded. Wire new required checks in
+    # by adding them to `needs` here — never as additional required checks. The
+    # smoke job is intentionally absent: it is allowed to fail.
+    needs: [build-and-test, integration, lint, semgrep]
     if: always()
     runs-on: ubuntu-latest
     steps:

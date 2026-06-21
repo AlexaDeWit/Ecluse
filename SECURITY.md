@@ -1,7 +1,8 @@
 # Security Policy
 
-`npm-secure-proxy` is a defense-in-depth tool against supply-chain attacks, so
-security reports are taken seriously and handled with priority.
+**Écluse** (package `ecluse`) is a supply-chain resilience tool against
+malicious-package attacks, so security reports are taken seriously and handled
+with priority.
 
 ## Reporting a Vulnerability
 

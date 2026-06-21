@@ -1,11 +1,13 @@
-# npm-secure-proxy
+# Écluse
 
-A defense-in-depth proxy for the npm registry, written in Haskell.
+A supply-chain resilience proxy for package registries, written in Haskell. The
+name is French for a canal lock — the controlled passage every dependency clears
+before it reaches your build.
 
 ## Overview
 
-`npm-secure-proxy` sits between your development environment (or CI) and the npm
-registry, enforcing a configurable security policy before any package reaches a
+`ecluse` sits between your development environment (or CI) and the npm
+registry, enforcing a configurable resilience policy before any package reaches a
 build. It proxies requests through a private upstream first, falls back to the
 public npm registry with rules applied, and mirrors approved packages
 asynchronously — without hosting packages itself.
@@ -36,20 +38,22 @@ nix develop
 # Build
 cabal build all
 
-# Run tests
-cabal test
+# Run the fast unit tests (see CONTRIBUTING.md for the integration/smoke suites)
+cabal test ecluse-unit
 
 # Run the proxy
-cabal run npm-secure-proxy
+cabal run ecluse
 ```
 
 ### Continuous integration
 
 Every push and pull request runs [`.github/workflows/ci.yml`](.github/workflows/ci.yml):
-build & test, format & lint, and Semgrep static analysis, all feeding a single
-`gate` job (the one required status check). CI uses the same Nix dev shell as
-local development (pinned by `flake.lock`), so it validates against the exact
-same toolchain. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for details.
+build, unit and integration tests, format & lint, and Semgrep static analysis,
+all feeding a single `gate` job (the one required status check). The smoke suite
+(live-registry checks) also runs but is allowed to fail and does not gate. CI
+uses the same Nix dev shell as local development (pinned by `flake.lock`), so it
+validates against the exact same toolchain. See [`CONTRIBUTING.md`](CONTRIBUTING.md)
+for details.
 
 ## Project Structure
 
