@@ -246,6 +246,8 @@ When a request is denied (no allow rule matched, or a deny rule fired):
 | Time | `time` | `AllowIfPublishedBefore` age calculations. |
 | Unit tests | `hspec` (+ `hspec-wai`) | `hspec-wai` drives the proxy `Application` end-to-end. |
 | Property tests | `hedgehog` (+ `hspec-hedgehog`) | Integrated shrinking; used heavily against the pure rules engine. |
+| Integration tests | `testcontainers` | Launches ephemeral Docker containers from the test suite (lifecycle + readiness). GHC 9.6-compatible, actively maintained. |
+| AWS emulation (tests) | `ministack` | Local AWS emulator (image `ministackorg/ministack`, port 4566) for SQS/STS in integration tests — no real AWS or credentials. |
 | Dev environment | Nix flakes + `direnv` | Fully reproducible; all tooling from `nix develop`. |
 | Build | Cabal | Natural Nix pairing; `flake.lock` provides reproducibility. |
 
@@ -267,6 +269,41 @@ URL-encoded slashes (`/@scope%2Fpkg`, `/pkg/-/pkg-1.0.0.tgz`,
 `/-/npm/v1/security/advisories/bulk`). A proxy is fundamentally a passthrough, so
 matching on `pathInfo` in a raw WAI `Application` is simpler and more flexible
 than encoding npm's URL shape at the type level.
+
+---
+
+## Testing Strategy
+
+Tests are layered so the fast, deterministic majority run everywhere with no
+external dependencies, and the heavier integration tests stay hermetic and
+reproducible.
+
+1. **Unit & property tests** (`hspec` + `hedgehog`). Cover all pure logic — the
+   rules engine, response parsers, and configuration parsing. No IO, no Docker;
+   they run on every push and locally in milliseconds. The rules engine in
+   particular is exercised with property tests: deny-by-default invariants,
+   first-decisive-wins ordering, and per-rule predicates.
+2. **Integration tests** (`hspec` + `testcontainers` + `ministack`). The mirror
+   queue and other AWS-backed code are tested against a real endpoint by spinning
+   up `ministack` (a lightweight LocalStack alternative) in an ephemeral
+   container. `amazonka` is pointed at `http://<container>:4566` with throwaway
+   credentials; SQS enqueue/consume and STS token flows are validated end to end
+   without touching real AWS.
+3. **Stub upstream registries.** Proxy request-lifecycle tests run against an
+   in-process WAI stub (or a container) standing in for the private/public
+   upstreams, so the full fetch → parse → rules → mirror path can be asserted.
+
+**CodeArtifact caveat.** `ministack` emulates SQS and STS but not the
+CodeArtifact API (`GetAuthorizationToken`). CodeArtifact's npm-protocol surface
+is covered through the `RegistryClient` seam (a stub registry), and the
+token-refresh call is covered by mocking at that same seam — a deliberate benefit
+of the registry abstraction.
+
+**Prerequisite.** Integration tests require a running Docker daemon. CI
+(GitHub Actions `ubuntu-latest`) provides one; locally, developers need Docker
+installed. Nix provides the toolchain but not the Docker daemon (a host concern).
+
+**References:** [testcontainers](https://hackage.haskell.org/package/testcontainers) (Haskell, GHC 9.6-compatible) · [ministack](https://github.com/ministackorg/ministack) (local AWS emulator, image `ministackorg/ministack`, port 4566).
 
 ---
 

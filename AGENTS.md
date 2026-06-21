@@ -21,3 +21,16 @@ docs/      — architecture decision records and design documents
 - Separate concerns: application wiring in `app/`, logic in `src/`, tests in `test/`.
 - Tests mirror the library module hierarchy (e.g. `src/Foo/Bar.hs` → `test/Foo/BarSpec.hs`).
 - Keep `app/Main.hs` thin — it should only parse config and call into the library.
+
+## Build & Tooling
+
+- All tooling comes from the Nix dev shell — run `nix develop` (or rely on `direnv`) before building. Do not assume a system-level GHC/Cabal.
+- Build with **Cabal** (`cabal build all`, `cabal test`), not Stack: Nix provides reproducibility and `flake.lock` pins nixpkgs (GHC 9.6).
+- The dependency set and rationale (relude as the prelude via cabal mixins, aeson, amazonka, warp/wai, http-client-tls, katip, envparse, cache, hedgehog) and the **testing strategy** (pure `hspec`+`hedgehog` tests; integration tests via `testcontainers` + `ministack` over Docker) live in [`docs/architecture.md`](docs/architecture.md). Read it before adding dependencies or tests.
+
+## CI & Security
+
+- Every push runs the build + test workflow and **Semgrep** (`--config auto`, failing on ERROR/WARNING findings). Keep workflows injection-free — never interpolate untrusted `${{ github.event.* }}` / `${{ github.head_ref }}` values directly into `run:` shell blocks; pass them via `env:` or intermediate files instead.
+- **Before pushing, verify Semgrep is clean locally:** `semgrep scan --config auto --severity ERROR --severity WARNING --error .` must report zero findings. Do not push with outstanding findings.
+- **Semgrep ignores require the repo owner's approval.** Do not add `.semgrepignore` entries or `nosemgrep` comments unilaterally.
+- Commits are GPG-signed; keep history verifiable.

@@ -1,0 +1,9 @@
+version: 2
+updates:
+  # Keep pinned GitHub Actions versions current (supply-chain hygiene).
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "ci"

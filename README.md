@@ -18,7 +18,10 @@ configuration reference.
 
 ### Prerequisites
 
-[Nix](https://nixos.org/) with flakes enabled. All tooling is provided by the Nix dev shell.
+[Nix](https://nixos.org/) with flakes enabled provides all build tooling via the
+dev shell. A running Docker daemon is required only for the integration test
+suite (which spins up ephemeral containers via `testcontainers` / `ministack`);
+unit and property tests need nothing beyond the dev shell.
 
 ### Getting started
 
