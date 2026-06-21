@@ -1,5 +1,7 @@
 # Écluse
 
+![Écluse — a supply-chain resilience proxy for package registries](docs/social-preview.png)
+
 A supply-chain resilience proxy for package registries, written in Haskell. The
 name is French for a canal lock — the controlled passage every dependency clears
 before it reaches your build.
