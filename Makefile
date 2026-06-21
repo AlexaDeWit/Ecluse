@@ -17,7 +17,7 @@ IMAGE ?= docker.io/alexadewit/ecluse
 
 .DEFAULT_GOAL := help
 .PHONY: help update build test test-integration test-smoke test-all \
-        gen-version-fixtures format format-check lint sast check run \
+        gen-version-fixtures format format-check lint sast check run docs \
         nix-build nix-check docker-build docker-push docker-sign clean
 
 help: ## Show this help
@@ -60,6 +60,17 @@ check: build test format-check lint sast ## Run everything the CI gate requires
 
 run: ## Run the proxy
 	$(NIX) cabal run ecluse
+
+# Hyperlinked source (clickable identifiers jump straight to the code) plus the
+# quick-jump fuzzy-search overlay make the API docs pleasant to read locally.
+# Output lands under dist-newstyle (git-ignored). We open it in the browser via
+# xdg-open when present, and always print the path so the target stays usable in
+# headless/CI contexts.
+docs: ## Build hyperlinked, searchable Haddock HTML for the library and open it
+	$(NIX) cabal haddock lib:ecluse --haddock-hyperlink-source --haddock-quickjump
+	@html=$$(find dist-newstyle -path '*/doc/html/ecluse/index.html' | head -n1); \
+	  echo "Haddock: $$html"; \
+	  command -v xdg-open >/dev/null 2>&1 && xdg-open "$$html" >/dev/null 2>&1 &
 
 nix-build: ## Build the release artifact via Nix (hermetic)
 	nix build
