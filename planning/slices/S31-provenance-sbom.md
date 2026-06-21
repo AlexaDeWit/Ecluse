@@ -8,7 +8,7 @@ test-tier: []
 arch-refs:
   - CONTRIBUTING.md#releases--container-image
   - AGENTS.md
-pr: null
+pr: 21
 ---
 
 # S31 — SLSA provenance + SBOM attestation
