@@ -2,7 +2,8 @@
 
 A rule set is evaluated against a single 'PackageDetails' snapshot to produce a
 'Decision'. The model is __deny by default__: a package is allowed only if some
-rule explicitly allows it, and the __first decisive rule wins__.
+rule explicitly allows it __and no rule denies it__. A single matching deny rule
+takes precedence over every allow.
 
 The initial rule set is pure (no IO). Effectful rules (CVE lookups, etc.) are a
 later tier layered on top of this one; see @docs\/architecture.md@. The rule
@@ -26,6 +27,7 @@ ruleName :: Rule -> Text
 ruleName = \case
     AllowScope{} -> "AllowScope"
     AllowIfPublishedBefore{} -> "AllowIfPublishedBefore"
+    DenyHasInstallScripts -> "DenyHasInstallScripts"
 
 -- | Evaluate a single rule against a single package version. Pure and total.
 evalRule :: EvalContext -> Rule -> PackageDetails -> RuleOutcome
@@ -54,22 +56,31 @@ evalRule ctx (AllowIfPublishedBefore minAge) pd =
                         <> " ago, minimum age is "
                         <> renderDuration minAge
                     )
+evalRule _ DenyHasInstallScripts pd =
+    if pkgHasInstallScripts pd
+        then Deny "package runs install scripts"
+        else Abstain "package has no install scripts"
 
-{- | Evaluate a package version against an ordered rule set.
+{- | Evaluate a package version against a rule set.
 
-The first rule to produce a decisive outcome ('Allow' or 'Deny') wins. If every
-rule abstains the package is denied by default, and all abstain reasons are
-collected (in rule order) for the audit trail and denial message.
+__Deny takes precedence.__ A single matching deny rule denies the package
+outright, overriding any allow — so the first 'Deny' encountered wins and ends
+evaluation. With no deny, the first 'Allow' wins. If no rule is decisive the
+package is denied by default, and every abstain reason is collected (in rule
+order) for the audit trail and denial message.
 -}
 evalRules :: EvalContext -> [Rule] -> PackageDetails -> Decision
-evalRules ctx rules pd = go rules []
+evalRules ctx rules pd = go rules Nothing []
   where
-    go [] reasons = DeniedByDefault (reverse reasons)
-    go (r : rs) reasons =
+    go [] firstAllow reasons =
+        case firstAllow of
+            Just (r, reason) -> Approved r reason
+            Nothing -> DeniedByDefault (reverse reasons)
+    go (r : rs) firstAllow reasons =
         case evalRule ctx r pd of
-            Allow reason -> Approved r reason
             Deny reason -> Denied r reason
-            Abstain reason -> go rs (reason : reasons)
+            Allow reason -> go rs (firstAllow <|> Just (r, reason)) reasons
+            Abstain reason -> go rs firstAllow (reason : reasons)
 
 {- | A human-readable summary of a decision, suitable for logs and the
 (eventual) denial response body.

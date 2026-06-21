@@ -325,8 +325,9 @@ wire contract.**
 
 ## Rules Engine
 
-**Deny by default.** A package is blocked unless at least one rule explicitly
-allows it.
+**Deny by default, and deny wins.** A package is admitted only if some rule
+explicitly allows it *and* no rule denies it. A single matching deny rule
+overrides every allow.
 
 Rules evaluate a single `PackageDetails` snapshot — the ecosystem-agnostic
 per-version view produced by a registry adapter. A rule never sees registry wire
@@ -355,7 +356,7 @@ A rule over such a signal is necessarily **effectful**, even though it is
 conceptually a simple per-version predicate. Guidance: `parseVersionDetails`
 populates `PackageDetails` from the cheap metadata path; a signal that needs an
 extra fetch belongs in the effectful tier alongside advisory lookups, and the
-same logical rule (e.g. `DenyHasInstallScript`) may therefore land in different
+same logical rule (e.g. `DenyHasInstallScripts`) may therefore land in different
 tiers for different ecosystems.
 
 ### Evaluation model
@@ -363,19 +364,23 @@ tiers for different ecosystems.
 Each rule, applied to a `PackageDetails`, yields a `RuleOutcome`:
 
 - **`Allow reason`** — the rule explicitly allows the package.
-- **`Deny reason`** — the rule explicitly denies it (reserved for future deny
-  rules; the initial allow-rules never deny).
+- **`Deny reason`** — the rule explicitly denies it. A single `Deny` overrides
+  any `Allow`.
 - **`Abstain reason`** — the rule has no opinion. The reason is retained for the
   audit trail.
 
-`evalRules` folds a rule set in order: the **first decisive outcome** (`Allow` or
-`Deny`) wins, producing `Approved rule reason` or `Denied rule reason`. If every
-rule abstains, the result is `DeniedByDefault reasons` — deny-by-default, with
-each rule's reason collected (in order) so the denial response can explain what
-was considered.
+`evalRules` evaluates the whole rule set with **deny precedence**: the first rule
+to `Deny` wins outright — producing `Denied rule reason` even if an earlier rule
+allowed — and ends evaluation. Absent any deny, the **first `Allow`** wins,
+producing `Approved rule reason`. If no rule is decisive, the result is
+`DeniedByDefault reasons` — deny-by-default, with each abstaining rule's reason
+collected (in order) so the denial response can explain what was considered.
 
-Crucially, an allow-rule that does not match **abstains rather than denies**, so
-that a later rule still gets the chance to allow the package.
+Crucially, a rule that does not fire **abstains rather than deciding**: an
+allow-rule that does not match abstains (so a later rule may still allow), and a
+deny-rule whose condition is absent abstains (so it never forces a denial on its
+own). Only an actual `Deny` blocks — and it does so regardless of its position in
+the set.
 
 ### Initial Rule Set
 
@@ -383,9 +388,11 @@ that a later rule still gets the chance to allow the package.
 |------|------|-------------|
 | `AllowIfPublishedBefore ageSeconds` | Pure | Allows a package version if it was published more than `ageSeconds` seconds ago. Default: 604800 (7 days). Guards against typosquatting and dependency confusion attacks where attackers race to publish before detection. |
 | `AllowScope scope` | Pure | Unconditionally allows all packages under a given npm scope (e.g. `@myorg`). Use for internal scopes that bypass public-registry rules. |
+| `DenyHasInstallScripts` | Pure | Denies any version whose metadata flags install scripts (npm's `hasInstallScript`) — a common arbitrary-code-execution vector at install time. Abstains otherwise. As a deny rule it overrides any allow. |
 
-Additional rules (e.g. `DenyHasInstallScript`, `DenyIfCVE`) are added as
-subsequent phases.
+Further rules — e.g. `DenyIfCVE`, or effectful per-version checks like RubyGems
+native `extensions` (see [above](#rules-engine)) — are added as subsequent
+phases.
 
 ---
 
@@ -457,11 +464,14 @@ variables are the one-entry degenerate form.
 ```json
 [
   { "type": "AllowScope",              "scope": "@myorg" },
-  { "type": "AllowIfPublishedBefore",  "ageSeconds": 604800 }
+  { "type": "AllowIfPublishedBefore",  "ageSeconds": 604800 },
+  { "type": "DenyHasInstallScripts" }
 ]
 ```
 
-Rules are evaluated in order; first match wins.
+The whole set is evaluated with deny precedence: any matching deny rule blocks
+the package, otherwise the first matching allow rule wins; if none is decisive,
+the package is denied by default.
 
 ---
 

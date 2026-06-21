@@ -48,9 +48,21 @@ isAbstain :: RuleOutcome -> Bool
 isAbstain (Abstain _) = True
 isAbstain _ = False
 
+isDeny :: RuleOutcome -> Bool
+isDeny (Deny _) = True
+isDeny _ = False
+
 approvedBy :: Decision -> Maybe Rule
 approvedBy (Approved r _) = Just r
 approvedBy _ = Nothing
+
+deniedBy :: Decision -> Maybe Rule
+deniedBy (Denied r _) = Just r
+deniedBy _ = Nothing
+
+-- | Turn on install scripts, for the deny-rule tests.
+withInstallScripts :: PackageDetails -> PackageDetails
+withInstallScripts pd = pd{pkgHasInstallScripts = True}
 
 genScope :: Gen Text
 genScope = Gen.text (Range.linear 1 12) Gen.alpha
@@ -76,6 +88,12 @@ spec = do
         it "AllowIfPublishedBefore abstains on a too-young version" $
             evalRule ctx (AllowIfPublishedBefore (7 * nominalDay)) (pkg Nothing 1)
                 `shouldSatisfy` isAbstain
+        it "DenyHasInstallScripts denies a package that runs install scripts" $
+            evalRule ctx DenyHasInstallScripts (withInstallScripts (pkg Nothing 99))
+                `shouldSatisfy` isDeny
+        it "DenyHasInstallScripts abstains when there are no install scripts" $
+            evalRule ctx DenyHasInstallScripts (pkg Nothing 99)
+                `shouldSatisfy` isAbstain
 
     describe "evalRules" $ do
         it "denies by default with no rules" $
@@ -83,7 +101,7 @@ spec = do
         it "approves via the first rule that allows" $
             approvedBy (evalRules ctx [AllowScope (mkScope "myorg")] (pkg (Just "myorg") 0))
                 `shouldBe` Just (AllowScope (mkScope "myorg"))
-        it "the first decisive rule wins" $
+        it "the first allowing rule wins when nothing denies" $
             -- The version is too young for the age rule, but the (earlier) scope
             -- rule matches, so the scope rule decides.
             approvedBy
@@ -93,6 +111,23 @@ spec = do
                     (pkg (Just "myorg") 0)
                 )
                 `shouldBe` Just (AllowScope (mkScope "myorg"))
+        it "a matching deny rule overrides an allow, whatever the order" $ do
+            -- allow first, deny second
+            deniedBy
+                ( evalRules
+                    ctx
+                    [AllowScope (mkScope "myorg"), DenyHasInstallScripts]
+                    (withInstallScripts (pkg (Just "myorg") 99))
+                )
+                `shouldBe` Just DenyHasInstallScripts
+            -- deny first, allow second
+            deniedBy
+                ( evalRules
+                    ctx
+                    [DenyHasInstallScripts, AllowScope (mkScope "myorg")]
+                    (withInstallScripts (pkg (Just "myorg") 99))
+                )
+                `shouldBe` Just DenyHasInstallScripts
         it "denies by default when every rule abstains" $
             case evalRules
                 ctx
@@ -115,3 +150,12 @@ spec = do
                 let s = mkScope scopeTxt
                 approvedBy (evalRules ctx [AllowScope s] (pkg (Just scopeTxt) ageDays))
                     === Just (AllowScope s)
+
+        it "a matching deny rule always wins, whatever else would allow" $
+            hedgehog $ do
+                scopeTxt <- forAll genScope
+                ageDays <- forAll genAgeDays
+                let s = mkScope scopeTxt
+                    rules = [AllowScope s, DenyHasInstallScripts]
+                    p = withInstallScripts (pkg (Just scopeTxt) ageDays)
+                deniedBy (evalRules ctx rules p) === Just DenyHasInstallScripts

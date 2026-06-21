@@ -15,9 +15,10 @@ import Ecluse.Package (Scope)
 
 {- | A single policy rule.
 
-The current rules are /allow/ rules: they either allow a package or abstain
-(they never deny), so that a later rule still gets the chance to allow.
-'RuleOutcome' carries a 'Deny' case for future deny rules.
+Rules come in two flavours. /Allow/ rules either allow a package or abstain
+(they never deny), so that a later rule still gets the chance to allow. /Deny/
+rules either deny a package or abstain. A single matching deny rule overrides
+every allow — see 'Ecluse.Rules.evalRules'.
 -}
 data Rule
     = -- | Unconditionally allow every package under the given scope.
@@ -26,6 +27,9 @@ data Rule
       -- Guards against race-to-publish supply-chain attacks where an attacker
       -- publishes a malicious version and hopes it is consumed before takedown.
       AllowIfPublishedBefore NominalDiffTime
+    | -- | Deny any package version that runs install scripts (a common vector
+      -- for arbitrary code execution at install time). Abstains otherwise.
+      DenyHasInstallScripts
     deriving stock (Eq, Show)
 
 {- | Ambient information a rule may need that is not part of the package itself
@@ -40,7 +44,8 @@ newtype EvalContext = EvalContext
 data RuleOutcome
     = -- | This rule explicitly allows the package (with a human reason).
       Allow Text
-    | -- | This rule explicitly denies the package (with a human reason).
+    | -- | This rule explicitly denies the package (with a human reason). A
+      -- single 'Deny' overrides any 'Allow' in the rule set.
       Deny Text
     | -- | This rule has no opinion; the reason is kept for the audit trail.
       Abstain Text
