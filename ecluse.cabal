@@ -105,6 +105,12 @@ test-suite ecluse-smoke
   type:               exitcode-stdio-1.0
   main-is:            Spec.hs
   hs-source-dirs:     test/smoke
-  other-modules:      Ecluse.RegistryProtocolSpec
+  other-modules:
+    Ecluse.RegistryProtocolSpec
+    Ecluse.VersionOraclesSpec
+
   build-tool-depends: hspec-discover:hspec-discover ^>=2.11
-  build-depends:      hspec ^>=2.11
+  build-depends:
+    , directory  ^>=1.3
+    , hspec      ^>=2.11
+    , process    ^>=1.6

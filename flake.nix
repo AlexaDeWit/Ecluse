@@ -107,6 +107,10 @@
           LANG = "C.UTF-8";
           LC_ALL = "C.UTF-8";
 
+          # Make `require("semver")` resolvable for the npm version-ordering
+          # oracle (used by the version-fixture generator and the smoke suite).
+          NODE_PATH = "${pkgs.nodePackages.semver}/lib/node_modules";
+
           buildInputs = [
             pkgs.bashInteractive
             hpkgs.ghc
@@ -121,6 +125,13 @@
             pkgs.semgrep
             pkgs.zlib
             pkgs.pkg-config
+            # Reference version-ordering oracles for the differential smoke
+            # suite and `make gen-version-fixtures`: node-semver (npm), Python
+            # packaging (PyPI), and Ruby Gem::Version (built into ruby).
+            pkgs.nodejs
+            pkgs.nodePackages.semver
+            (pkgs.python3.withPackages (ps: [ ps.packaging ]))
+            pkgs.ruby
             # Container image publishing: skopeo pushes the Nix-built image to a
             # registry (no Docker daemon needed), cosign signs it keylessly.
             pkgs.skopeo
