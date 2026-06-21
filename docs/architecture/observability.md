@@ -15,9 +15,10 @@ maintainer runs, so it gets a documented, tested deployment path — but it is
 switching backends is a configuration change, not a code change; and Écluse runs
 perfectly with telemetry switched **off entirely, which is the default**. This is
 a FOSS project: the maintainer's choice of backend must not become every
-consumer's obligation. The Datadog-specific pieces below (the Agent deployment
-recipe, the DogStatsD socket, the Datadog propagator) are all clearly marked as
-optional add-ons on top of the neutral OTLP baseline.
+consumer's obligation. The Datadog-specific pieces below (the Operator deployment
+recipe, the Datadog trace propagator, the `dd.*` log fields, and the Agent-side
+sampling) are all clearly marked as optional add-ons on top of the neutral OTLP
+baseline.
 
 This is designed but not yet built — the web layer's middleware stack leaves a
 slot for it (see
@@ -30,16 +31,21 @@ vendor-neutral wire protocol, so one set of instrumentation feeds any backend an
 the choice of vendor collapses to an endpoint. (It also happens to be the only
 realistic route for Haskell — there is no first-party Datadog tracing library —
 but the neutrality is the point, not a consolation.) We build on
-[`hs-opentelemetry`](https://github.com/iand675/hs-opentelemetry) (traces/metrics/
-logs marked *Stable*; OTLP exporter at 1.0). It gives us exactly the seams our
-architecture already has, as middleware rather than hand-rolled spans:
+[`hs-opentelemetry`](https://github.com/iand675/hs-opentelemetry) **1.0** (May
+2026), which — after years of "coming soon" — now ships **metrics and logs
+alongside tracing**, with OTLP export *and* a built-in scrapable Prometheus
+exporter. That maturity is what lets **metrics ride the same OTLP pipeline as
+traces** (no separate metrics transport). The packages, all wired in the
+composition root:
 
 | Package | Role for Écluse |
 |---|---|
-| `hs-opentelemetry-sdk` | Tracer provider, batching, lifecycle (wired in the composition root). |
+| `hs-opentelemetry-sdk` | Tracer **and meter** provider, batching, lifecycle. |
 | `hs-opentelemetry-instrumentation-wai` | One server span per request — slots into the raw-WAI [middleware stack](web-layer.md#middleware-and-helper-libraries). |
 | `hs-opentelemetry-instrumentation-http-client` | Child spans + context propagation on the **data plane** (`http-client`) — the upstream fetches that *are* the proxy's work (see [Control plane vs. data plane](web-layer.md#control-plane-vs-data-plane)). |
-| `hs-opentelemetry-exporter-otlp` | OTLP export — **HTTP/protobuf by default**; gRPC is behind a cabal flag (pulls in `grapesy`) and we do not need it. |
+| `hs-opentelemetry-exporter-otlp` | OTLP export for **traces and metrics** — **HTTP/protobuf by default**; gRPC is behind a cabal flag (pulls in `grapesy`) and we do not need it. |
+| the library's **Prometheus exporter** | Optional pull alternative — a scrapable `/metrics` endpoint for Prometheus/Grafana stacks. |
+| the **GHC runtime-metrics** instrumentation (new in 1.0) | GC pauses, heap live/allocated — GC pauses directly drive an inline proxy's tail latency. |
 | `hs-opentelemetry-propagator-datadog` | **Optional, Datadog-only.** Reads/writes Datadog's `x-datadog-*` trace headers so traces join up with services already running `dd-trace`. Every other backend uses the default W3C TraceContext propagator. |
 
 Only the last row is vendor-specific, and it is optional; everything above it is
@@ -50,146 +56,219 @@ backend-agnostic. The pins live with the rest of the dependency choices in
 
 The instrumentation maps onto the [Request Lifecycle](../architecture.md#request-lifecycle):
 a server span from the WAI middleware, with child spans for each upstream fetch
-(private then public) from the http-client instrumentation. Two domain spans are
-worth adding by hand because they carry the decisions an operator cares about:
+(private then public) from the http-client instrumentation. Domain spans added by
+hand because they carry the decisions an operator cares about:
 
 - **rule evaluation** — attributes for the verdict and, on denial, the
   `RuleName` and `RejectReason` (mirrors the [error model](web-layer.md#error-model)),
   so a 403 is explainable from the trace alone.
 - **mirror enqueue** — links the synchronous request to the asynchronous mirror
   job (see [Cloud Backends](cloud-backends.md#cloud-backends)).
+- **mirror worker job** — the async fetch→verify→publish, linked from the enqueue
+  span, so background work is not invisible.
+- **advisory sync** — one span per [advisory-dataset sync](rules-engine.md#cve-subsystem)
+  run.
 
-Structured logs already flow through `katip`; the integration point is injecting
-`trace_id`/`span_id` into log lines (log–trace correlation — a standard OTel
-concept that Datadog, Grafana, and others all consume), via the
-`hs-opentelemetry` katip bridge. Logs themselves keep going out as structured
-JSON for whatever log collector is deployed — we do not route logs over OTLP.
+### Sampling
 
-## Datadog deployment: OTLP is TCP; UDS is for metrics
+Note the traffic shape: the **high-volume path is boring** (private-mirror hits,
+served fast and rule-free) and the **low-volume path is the interesting one**
+(public fallback → rules → denial/mirror). The ideal — "keep every error/denial,
+downsample the boring" — is **tail sampling**, which needs a collector and so is a
+**fast-follow**, not a launch item.
 
-For any plain OTLP backend the deployment is trivial — point
-`OTEL_EXPORTER_OTLP_ENDPOINT` at the receiver and you are done. Everything from
-here on is the **Datadog-target recipe**, which is more involved only because of
-one Datadog-specific fact; consumers on other backends can skip it.
+For launch, sampling is **head-based and lives in two places**:
 
-That fact: **the Datadog Agent's OTLP receiver is TCP-only** (gRPC `:4317` / HTTP
-`:4318`). Unix sockets are a first-class Datadog transport — but only for two
-other intakes, and neither speaks OTLP:
+- **SDK (Écluse): always-on by default.** When telemetry is enabled, every trace
+  is emitted, so the rare-but-important denial/error traces are never missed. The
+  standard `OTEL_TRACES_SAMPLER` / `OTEL_TRACES_SAMPLER_ARG` env vars (read
+  directly by `hs-opentelemetry`) let a high-volume deployment dial in a
+  parent-based ratio without a code change — the right lever for a non-Datadog
+  OTLP backend that has no sampling stage of its own.
+- **Datadog Agent: the actual sampler.** With the Datadog target, *send everything
+  to the node-local Agent and let it sample* — it derives accurate APM/span
+  metrics from the full stream, its **error sampler keeps error/denial traces**,
+  and only a sampled percentage is forwarded to the paid backend. Always-on at the
+  SDK is therefore correct, not wasteful: the in-cluster hop is cheap and the
+  Agent is the sampling stage (see [Datadog deployment](#datadog-deployment-operator)).
 
-| Provided socket | Speaks | For |
-|---|---|---|
-| `/var/run/datadog/dsd.socket` | DogStatsD **datagrams** (not HTTP) | metrics |
-| `/var/run/datadog/apm.socket` | HTTP-over-UDS, **native DD trace API** (`/v0.4/traces`, msgpack) | traces, in DD's own format |
-| OTLP receiver | OTLP (gRPC/HTTP) — **TCP only, no socket** | traces + metrics |
+## Metrics
 
-So "send our OTLP exporter at the provided Datadog socket" does not work: pointing
-a UDS-dialing OTLP/HTTP client at `apm.socket` connects fine and is then rejected
-at the application layer, because that endpoint wants native msgpack, not OTLP.
-**Transport and protocol must both match** — swapping the transport to UDS is the
-easy half; nothing DD provides accepts OTLP over a socket. Re-implementing DD's
-native trace wire format to use `apm.socket` is the only way to put *traces* on
-the provided socket, and it is not worth it (it discards the OTLP/OTel ecosystem
-to save one TCP hop). We therefore split the two signals by transport.
+**Emit only what Écluse uniquely knows.** Queue *backlog* and *DLQ depth* are
+already first-class **cloud-native** metrics (CloudWatch for SQS, Cloud Monitoring
+for Pub/Sub); having Écluse poll the queue API to re-emit them is duplicative, so
+we rely on cloud-native for those. Names follow **OTel semantic conventions** for
+HTTP (`http.server.*`, `http.client.*`) and a custom **`ecluse.*`** namespace for
+domain signals. The catalog:
 
-## Reaching the Agent (Kubernetes daemonset)
+- **Serving** — `http.server.request.duration` (histogram); `ecluse.serve.decision`
+  (counter; admit/deny/unavailable).
+- **Gate** — `ecluse.rule.denials` (counter; rule, reason-class); `ecluse.rule.eval.duration`
+  (histogram; tier); `ecluse.rule.effectful.failures` (counter; rule, cause);
+  `ecluse.rule.breaker.state` (gauge; source).
+- **Advisory sync (CVE)** — `ecluse.advisory.sync.age.seconds` (gauge) ← the
+  staleness alarm; `ecluse.advisory.sync.failures` (counter);
+  `ecluse.advisory.serving_last_good` (gauge 0/1).
+- **Upstream (data plane)** — `ecluse.upstream.fetch.duration` (histogram;
+  upstream, status-class); `ecluse.upstream.fetch.errors` (counter).
+- **Metadata cache** — `ecluse.metadata_cache.requests` (counter; result hit/miss)
+  → hit rate; `ecluse.metadata_cache.entries` (gauge).
+- **Mirror** (what we know, not queue depth) — `ecluse.mirror.enqueued`,
+  `ecluse.mirror.enqueue.failures`, `ecluse.mirror.jobs.processed`
+  (result published/already-exists/failed), `ecluse.mirror.publish.duration`.
+- **Credentials** — `ecluse.credential.refresh` (counter; result, provider);
+  `ecluse.credential.token.ttl.seconds` (gauge) ← alarms a stuck refresh.
+- **Runtime** — the GHC runtime-metrics instrumentation (GC pauses, heap).
 
-- **Traces → OTLP/HTTP over TCP to the node-local Agent.** Inject the node IP
-  with the Downward API and target `:4318`; the Agent must enable its OTLP
-  receiver bound to `0.0.0.0`:
+**Transport.** Metrics export over **OTLP** (the same pipeline as traces) by
+default; the built-in **Prometheus scrape** endpoint is config-selectable
+(`OTEL_METRICS_EXPORTER=prometheus`) for pull-based stacks.
 
-  ```yaml
-  env:
-    - name: DD_AGENT_HOST
-      valueFrom: { fieldRef: { fieldPath: status.hostIP } }
-    - name: OTEL_EXPORTER_OTLP_ENDPOINT
-      value: "http://$(DD_AGENT_HOST):4318"
-  ```
+### Cardinality and attributes
 
-- **Metrics → DogStatsD over the Unix socket** (`hostPath` mount of
-  `/var/run/datadog`). This is a datagram write, not HTTP — no manager, no
-  framing:
+An inline proxy sees thousands of distinct packages, so the failure mode is a
+**metric-series explosion**. The discipline:
 
-  ```haskell
-  sock <- S.socket S.AF_UNIX S.Datagram S.defaultProtocol
-  S.connect sock (S.SockAddrUnix "/var/run/datadog/dsd.socket")
-  SBS.sendAll sock "ecluse.tarball.bytes:12345|c|#route:tarball\n"
-  ```
+- **High-cardinality identifiers live on spans and logs, never on metric labels.**
+  `package`, `version`, `scope`, and the full denial *message* go on the rule-eval
+  **span** and the structured **log line** — that is where you debug a specific
+  decision — and must never become metric labels.
+- **Metric labels are a closed set of bounded enums only:** `rule`, `decision`,
+  `reason_class`, `ecosystem`, `mount`, `upstream`, `status_class`, `result`,
+  `provider`, `cause`/`error_class`, breaker `source`, `tier`. Every one has a
+  small, fixed domain. (Any PR adding a label whose domain is not obviously finite
+  is rejected.)
+- **Secrets/PII never appear in any signal** — no tokens, no `Authorization`,
+  anywhere. In particular the **forwarded client token** (see
+  [Credential flow](registry-model.md#credential-flow-and-authority)) must be
+  scrubbed from anything the WAI / http-client instrumentation might capture.
+- **Exemplars** (trace-ID samples attached to metric buckets, for dashboard→trace
+  drill-down without high-cardinality labels) are the intended bridge between
+  bounded metrics and high-cardinality traces, but are **deferred**: they depend
+  on sampling being wired and on confirming the brand-new 1.0 metrics SDK emits
+  them.
 
-The Haskell DogStatsD libraries (`datadog`, latest 0.3.0.0 / 2022) are UDP-first
-and stale, and DogStatsD is a trivial line protocol, so a ~30-line UDS datagram
-sender is the durable choice over taking a dependency. If we would rather run a
-single pipeline and forgo the socket, metrics can instead ride **OTLP over the
-same TCP path** as traces — simpler operationally, at the cost of not using UDS.
+## Logs
 
-**Escape hatch — UDS for traces, if a network policy ever forbids the TCP hop:**
-the transport bridge is mechanically simple — `http-client` will dial `AF_UNIX`
-through a custom `Manager`:
+Logs stay structured JSON via `katip`, shipped on the existing log pipeline —
+**not** routed over OTLP (1.0 *can* do OTLP logs, but logs already have a working
+home and re-plumbing buys nothing). They are stitched to traces by **trace-ID
+injection**.
 
-```haskell
-unixManagerSettings :: FilePath -> ManagerSettings
-unixManagerSettings sockPath = defaultManagerSettings
-  { managerRawConnection = pure $ \_host _ _port -> do
-      sock <- S.socket S.AF_UNIX S.Stream S.defaultProtocol
-      S.connect sock (S.SockAddrUnix sockPath)
-      makeConnection (SBS.recv sock 8192) (SBS.sendAll sock) (S.close sock)
-  }
+The production format is **one compact JSON object per line to stdout** (JSONL):
+the whole line *is* the JSON — no pretty-printing, no level/timestamp prefix
+outside the object, embedded newlines escaped as `\n` so a record never spans
+physical lines. This is exactly what the Datadog Agent's stdout/stderr
+autodiscovery JSON parsing consumes. Each line carries a populated **`dd` object**
+for correlation and unified service tagging:
+
+```json
+{"level":"warn","msg":"denied","dd":{"trace_id":"…","span_id":"…","service":"ecluse","env":"prod","version":"1.4.2"},"package":"@evil/pkg","version":"1.0.0","rule":"DenyHasInstallScripts"}
 ```
 
-But because no *provided* socket accepts OTLP, the only sound use of this is a
-**sidecar OpenTelemetry Collector** whose OTLP receiver is bound to a socket on a
-shared `emptyDir`; the Collector then forwards to Datadog. Both ends speak OTLP,
-so the bridge is sufficient — but it adds a sidecar and is *our* socket, not the
-daemonset's. We do not adopt it unless forced.
+`dd.service`/`dd.env`/`dd.version` are sourced from the **same** config as the
+traces (`OTEL_SERVICE_NAME` / `OTEL_RESOURCE_ATTRIBUTES`, or `DD_SERVICE`/`DD_ENV`/
+`DD_VERSION`) so logs and traces share one identity.
+
+The format is switchable: **`PROXY_LOG_FORMAT=json`** (the JSONL above, the
+in-container default) or **`console`** (human-readable, for the dev ecosystem).
+
+> **Correlation gotcha (implementation).** `dd.trace_id`/`dd.span_id` must be in
+> the **id format Datadog expects** for the OTLP-ingested traces to line up —
+> historically the low-64-bits-as-decimal, full 128-bit hex where enabled. Verify
+> against the Agent's trace-id handling; it is the one fiddly correlation detail.
+
+## Datadog deployment (Operator)
+
+Deployment is via the **Datadog Operator** — a `DatadogAgent` custom resource
+(`datadoghq.com/v2alpha1`) that manages the node Agent. There is **no UDS/hostPath
+socket machinery**: traces *and* metrics go OTLP over TCP to the node-local Agent,
+and logs are scraped from stdout.
+
+1. **Enable the Agent's OTLP receiver** in the CR — traces and metrics are on by
+   default once OTLP is configured:
+
+   ```yaml
+   apiVersion: datadoghq.com/v2alpha1
+   kind: DatadogAgent
+   spec:
+     features:
+       otlp:
+         receiver:
+           protocols:
+             http: { enabled: true }   # :4318
+     override:
+       nodeAgent:
+         env:                          # Agent-side sampling (the sampler lives here)
+           - { name: DD_APM_PROBABILISTIC_SAMPLER_ENABLED, value: "true" }
+           - { name: DD_APM_PROBABILISTIC_SAMPLER_SAMPLING_PERCENTAGE, value: "20" }
+   ```
+
+   The probabilistic sampler needs Agent **v7.70+**; the error sampler is already
+   on, the rare sampler optional.
+
+2. **Point Écluse at the node-local Agent** using the Downward API for the host IP
+   — one OTLP endpoint for both traces and metrics:
+
+   ```yaml
+   env:
+     - name: HOST_IP
+       valueFrom: { fieldRef: { fieldPath: status.hostIP } }
+     - name: OTEL_EXPORTER_OTLP_ENDPOINT
+       value: "http://$(HOST_IP):4318"
+     - name: OTEL_EXPORTER_OTLP_PROTOCOL
+       value: "http/protobuf"
+   ```
+
+3. **Logs** need no extra wiring: Écluse writes JSONL to stdout and the Agent's
+   container log collection picks it up.
 
 ## Configuration
 
-Following the existing `OTEL_*` (read directly by `hs-opentelemetry`) and
-`PROXY_*` conventions; see [Configuration](configuration.md). The `OTEL_*`
-variables are the **standard, backend-agnostic** set — they are all a non-Datadog
-consumer ever needs; only `PROXY_DOGSTATSD_SOCKET` is Datadog-specific. With
-`PROXY_TELEMETRY` unset, none of this is touched and no telemetry is emitted.
+Telemetry uses the **standard `OTEL_*` variables** (read directly by
+`hs-opentelemetry`) plus a few `PROXY_*` ones; see
+[Configuration](configuration.md). With `PROXY_TELEMETRY` unset nothing is wired
+and no telemetry is emitted.
 
 | Variable | Purpose |
 |---|---|
 | `PROXY_TELEMETRY` | Master switch (`off` by default — telemetry is opt-in). |
-| `OTEL_SERVICE_NAME` | Service name in any APM/trace backend (e.g. `ecluse`). |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | Any OTLP receiver — a Collector, Jaeger, the Datadog Agent (`http://$(DD_AGENT_HOST):4318`), etc. |
-| `OTEL_EXPORTER_OTLP_PROTOCOL` | `http/protobuf` (default; avoids the gRPC/grapesy build flag). |
-| `OTEL_RESOURCE_ATTRIBUTES` | `deployment.environment`, `service.version`, etc. |
-| `PROXY_DOGSTATSD_SOCKET` | *(Datadog-only, optional)* DogStatsD UDS path; unset → metrics disabled (or routed via OTLP to any backend). |
+| `OTEL_SERVICE_NAME` | Service identity (`ecluse`); also `dd.service`. |
+| `OTEL_RESOURCE_ATTRIBUTES` | `deployment.environment`, `service.version`, … (feed `dd.env`/`dd.version`). |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | Any OTLP receiver — a Collector, Jaeger, the Datadog Agent (`http://$(HOST_IP):4318`). |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` | `http/protobuf` (default; avoids the gRPC/`grapesy` flag). |
+| `OTEL_TRACES_SAMPLER` / `…_ARG` | SDK sampler — default always-on; ratio lever for non-Datadog backends. |
+| `OTEL_METRICS_EXPORTER` | `otlp` (default) or `prometheus` (scrape). |
+| `OTEL_EXPORTER_PROMETHEUS_HOST` / `…_PORT` | Bind address for the Prometheus scrape endpoint, when selected. |
+| `PROXY_LOG_FORMAT` | `json` (one-line JSONL to stdout, default) or `console` (human-readable, dev). |
 
 ## Verifying it — smoke-test plan
 
 The goal is *full confidence that a span and a metric emitted by Écluse actually
 arrive*, not just that the code compiles. It layers onto the existing three-tier
-[testing strategy](../../CONTRIBUTING.md), so each concern is proven at the
-cheapest tier that can prove it. Tier 1 and the Collector variant of tier 2 are
-**backend-agnostic** — they prove the OTLP path any consumer relies on; the
-Datadog Agent and live-API checks are the Datadog target carrying its own weight,
-not a baseline requirement:
+[testing strategy](../../CONTRIBUTING.md), proving each concern at the cheapest
+tier that can. Tiers 1–2 are **backend-agnostic** (they prove the OTLP path any
+consumer relies on); the live Datadog check is the Datadog target carrying its own
+weight, not a baseline requirement:
 
-1. **Unit (pure, gating).** The pieces that are pure functions:
-   - DogStatsD line formatting — `Metric -> ByteString` must produce the exact
-     `name:value|type|#tags` bytes (table-driven).
+1. **Unit (pure, gating).**
    - Telemetry config parsing from the env vars above (present/absent/malformed).
    - Span-attribute mapping for a denial (verdict + `RuleName` → attributes).
+   - The **JSONL log scribe**: a record serialises to exactly one line, with a
+     populated `dd` object and embedded newlines escaped (table-driven).
+   - Metric naming/labels stay within the bounded-enum set (a label-domain guard).
 
-2. **Integration (Dockerised, `testcontainers`/ministack, the same tier as the
-   mirror-queue tests).** Prove the wires carry bytes, with no dependency on the
-   Datadog SaaS:
-   - **UDS datagram round-trip.** Bind an `AF_UNIX` `SOCK_DGRAM` listener on a
-     temp path, run the metrics sender, assert the exact datagram is received.
-     This is the highest-risk custom code, and it needs no container at all.
-   - **Traces to a real Agent.** Run the **Datadog Agent** container with OTLP
-     enabled and a *dummy* API key (intake is accepted locally even though
-     forwarding to DD fails). Drive one request through an in-process Écluse,
-     then assert the Agent *accepted* the spans via its own diagnostics
-     (`agent status` OTLP-receiver counters / `DD_DOGSTATSD_STATS_ENABLE` for the
-     metric). This exercises our real exporter → real intake end of the chain
-     deterministically and offline.
-   - *(Optional)* the sidecar-Collector UDS path: a Collector container with an
-     OTLP receiver on a shared-volume socket + a `debug` exporter; point the
-     UDS manager at it and assert spans are logged.
+2. **Integration (Dockerised, `testcontainers`, the same tier as the mirror-queue
+   tests).** Prove the wires carry bytes, with no dependency on the Datadog SaaS:
+   - **Traces + metrics to a real Agent.** Run the **Datadog Agent** container with
+     OTLP enabled and a *dummy* API key (intake is accepted locally even though
+     forwarding to DD fails). Drive a request through an in-process Écluse, then
+     assert the Agent *accepted* the spans and metrics via its own diagnostics
+     (`agent status` OTLP-receiver counters).
+   - **Prometheus endpoint.** With `OTEL_METRICS_EXPORTER=prometheus`, scrape
+     `/metrics` and assert the expected series/labels appear.
+   - *(Optional, vendor-neutral)* an OTLP **Collector** container with a `debug`
+     exporter, asserting spans/metrics are received.
 
 3. **Smoke (live, non-gating, scheduled, secret-gated — like the live-registry
    oracle check).** True end-to-end including the Datadog backend: emit a span and
