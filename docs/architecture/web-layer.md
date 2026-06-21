@@ -35,6 +35,30 @@ name (`/@scope%2Fpkg`) arrives as a single segment; and reserved meta-routes
 Anything unrecognized is `Unsupported` → 404, so deny-by-default holds at the
 routing layer too.
 
+## Meta-routes: ping, health, and search
+
+Beyond packuments and artifacts, a few non-package routes:
+
+- **`/-/ping`** — answered **locally** with `200` (`{}`). `npm ping` checks that the
+  registry endpoint it talks to — the proxy — is up, so there is no reason to
+  round-trip upstream.
+- **Liveness / readiness** (for orchestration, e.g. `/livez`, `/readyz`) — kept
+  distinct. *Liveness* is "the process is responsive," and in single-process mode
+  also reflects the mirror worker's consume-loop heartbeat (a stalled worker fails
+  liveness; see [Process model](cloud-backends.md#process-model)). *Readiness* is
+  "config loaded and the listener is serving"; it is deliberately **lenient about
+  public-upstream reachability** — the proxy still serves private-upstream hits
+  when public is down, so readiness must not flap on an upstream blip and pull a
+  healthy pod from rotation.
+- **Search (`/-/v1/search`)** — **not supported at launch.** It is a discovery
+  convenience, not an install path, so rather than scope-creep a filtered or
+  passthrough search now, the route returns `501 Not Implemented` with a short
+  message pointing users to the public registry's website. Revisit only if demand
+  warrants.
+
+Everything else unrecognized stays `Unsupported` → `404` (deny-by-default at the
+routing layer).
+
 ## Control plane vs. data plane
 
 The single most important split in the HTTP code:
