@@ -257,21 +257,30 @@ reasons. The revision touches inputs, not the fold:
 
 ---
 
-## 7. Open decisions
+## 7. Decisions (resolved)
 
-These need a human call before implementation:
+These were worked through one at a time and are now **implemented** in
+`Ecluse.Package` / `Ecluse.Rules` (and captured in
+[`../architecture.md`](../architecture.md) → "Internal Domain Model"):
 
-1. **Extension mechanism** — sum type (`EcosystemMeta`, proposed) vs an open
-   annotations bag. Sum = type safety now, edit-on-new-ecosystem later.
-2. **Version ordering** — introduce ecosystem-aware comparison now, or defer until
-   a rule needs it (and just drop the misleading derived `Ord` in the meantime)?
-3. **Artifact granularity** — is `NonEmpty Artifact` on `PackageDetails` the right
-   grain, or do some rules want to act per-artifact (e.g. yank one wheel but not
-   the version)? PyPI yanks at file granularity; RubyGems at version.
-4. **How much dependency structure now** — keep the raw-preserving list (proposed)
-   or stay with the current `Map` until graph rules exist?
-5. **Scope of the first change** — land the identity + artifact-list +
-   tri-state-signal revisions together (they unlock the most), or stage them?
+1. **Yank/availability granularity** → version-level `Availability`
+   (`Available | Deprecated Text | Yanked (Maybe Text)`) **plus** a per-artifact
+   `artYanked :: Bool`. Faithful to npm deprecation, RubyGems version-yank, and
+   PyPI per-file yank.
+2. **Version ordering** → built now, per-ecosystem (`compareVersion ::
+   Ecosystem -> Version -> Version -> Ordering`; semver / PEP 440 /
+   `Gem::Version`); `Version`'s derived `Ord` dropped.
+3. **Ecosystem-specific signals** → folded into ecosystem-blind normalised
+   signals rather than an `EcosystemMeta` sum. Trust is
+   `Trusted (NonEmpty TrustEvidence) | Untrusted | TrustUnknown` with
+   `TrustEvidence = Signed | Attested | MfaPublished | OtherEvidence Text` (the
+   escape hatch). Raw residue needed only for faithful *serving* stays in the
+   adapter, below the rules layer; nothing ecosystem-tagged reaches a rule.
+4. **Dependency structure** → a lossless `[Dependency]` (raw constraint + kind +
+   optional marker); no constraint parsing yet.
+5. **Rollout** → landed as one coherent revision (the parallel rules work having
+   settled); the `evalRules` fold is unchanged — only rule *inputs* and the
+   adapter projection moved.
 
 ---
 
