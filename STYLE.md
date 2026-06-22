@@ -441,9 +441,15 @@ the middle out.
 
 **Rule 9.2 — Prefer pure and total.** Keep the core logic (the rules engine,
 parsers, rendering) pure; push `IO` to the edges (`app/Main.hs`, the server and
-worker layers). Annotate guarantees you rely on (`-- … Pure and total.`). The
-effect style for the parts that *are* effectful is `ReaderT Env IO`
-(architecture doc) — handlers take `Env` and run in plain `IO`.
+worker layers). Annotate a purity/totality guarantee **only where it is
+surprising or load-bearing** — a boundary parser a reader would expect to throw,
+or a totality that carries domain meaning (`mkVersion` never dropping a version;
+`evalRule` never crashing the gate on hostile metadata). Do **not** tag
+`-- … Pure and total.` reflexively: in a module whose header already says it is
+pure, or on a signature with no `IO` and a total return type, the tag only
+restates the header and the type ([`HADDOCK.md`](HADDOCK.md) §3). The effect
+style for the parts that *are* effectful is `ReaderT Env IO` (architecture doc) —
+handlers take `Env` and run in plain `IO`.
 
 **Rule 9.3 — Use local `where` helpers** to name sub-steps and keep the main
 equation readable. Top-level bindings always have a signature; `where`-helpers

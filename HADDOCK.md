@@ -163,10 +163,13 @@ single lead paragraph (optionally a `*` bullet list). Pick one shape per header.
 ## 6. Documenting declarations
 
 **Functions, with per-argument docs.** Annotate the contract the signature can't
-state — here, totality:
+state — here, totality that is *load-bearing* (a crash would take down the gate),
+not a reflexive "pure and total" tag (STYLE.md §9.2):
 
 ```haskell
--- | Evaluate a single rule against a single package version. Pure and total.
+-- | Evaluate a single rule against a single package version. Total — a
+-- malformed rule or package yields an outcome, never an exception, so hostile
+-- metadata cannot crash the gate.
 evalRule
     :: EvalContext     -- ^ Ambient inputs (the current time, …)
     -> Rule            -- ^ The rule to apply

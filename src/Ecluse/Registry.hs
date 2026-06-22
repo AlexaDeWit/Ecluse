@@ -91,11 +91,10 @@ data RegistryClient = RegistryClient
     -- job's re-publish is safe.
     , parsePackageInfo :: RegistryResponse -> Either ParseError PackageInfo
     -- ^ Project a fetched metadata response into the packument-level
-    -- 'PackageInfo'. Pure and total.
+    -- 'PackageInfo'.
     , parseVersionDetails :: RegistryResponse -> Version -> Either ParseError PackageDetails
     -- ^ Project a fetched metadata response into the per-version
-    -- 'PackageDetails' for a specific version. Pure and total.
+    -- 'PackageDetails' for a specific version.
     , parseVersionList :: RegistryResponse -> Either ParseError [Version]
     -- ^ Extract the list of available versions from a fetched metadata response.
-    -- Pure and total.
     }

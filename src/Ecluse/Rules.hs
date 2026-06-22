@@ -36,7 +36,9 @@ ruleName = \case
     AllowIfPublishedBefore{} -> "AllowIfPublishedBefore"
     DenyHasInstallScripts -> "DenyHasInstallScripts"
 
--- | Evaluate a single rule against a single package version. Pure and total.
+-- | Evaluate a single rule against a single package version. Total — a malformed
+-- rule or package yields an outcome, never an exception, so hostile metadata
+-- cannot crash the gate.
 evalRule :: EvalContext -> Rule -> PackageDetails -> RuleOutcome
 evalRule _ (AllowScope scope) pd =
     case pkgNamespace (pkgName pd) of
