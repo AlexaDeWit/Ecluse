@@ -1,6 +1,7 @@
 # Écluse
 
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/AlexaDeWit/Ecluse/badge)](https://scorecard.dev/viewer/?uri=github.com/AlexaDeWit/Ecluse)
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/13335/badge)](https://www.bestpractices.dev/projects/13335)
 
 ![Écluse — a supply-chain resilience proxy for package registries](docs/social-preview.png)
 
@@ -108,10 +109,10 @@ for details.
 
 ## Project Structure
 
-| Path | Purpose |
-|------|---------|
-| `app/` | Executable entry point — thin wiring only |
-| `src/` | Library — all business logic |
-| `test/` | Unit and integration tests |
-| `docs/` | Architecture and design documents |
+| Path        | Purpose                                                                                                                  |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `app/`      | Executable entry point — thin wiring only                                                                                |
+| `src/`      | Library — all business logic                                                                                             |
+| `test/`     | Unit and integration tests                                                                                               |
+| `docs/`     | Architecture and design documents                                                                                        |
 | `flake.nix` | Nix dev shell (GHC 9.6, cabal, HLS, ghcid) **and** the package build (`nix build`) + hermetic checks (`nix flake check`) |
