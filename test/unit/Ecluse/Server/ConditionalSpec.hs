@@ -1,7 +1,7 @@
 module Ecluse.Server.ConditionalSpec (spec) where
 
 import Data.Text qualified as T
-import Network.HTTP.Types (hIfModifiedSince, hIfNoneMatch, status200, status304, status404)
+import Network.HTTP.Types (HeaderName, status200, status304, status404)
 import Test.Hspec
 
 import Ecluse.Server.Conditional (
@@ -13,6 +13,12 @@ import Ecluse.Server.Conditional (
     ownETag,
     renderETag,
  )
+
+-- The conditional header names, defined locally because the http-types the
+-- hermetic build resolves does not export hIfNoneMatch (see Ecluse.Server.Conditional).
+hIfNoneMatch, hIfModifiedSince :: HeaderName
+hIfNoneMatch = "If-None-Match"
+hIfModifiedSince = "If-Modified-Since"
 
 -- | Two distinct served bodies, for asserting the ETag tracks the bytes.
 bodyA, bodyB :: LByteString
