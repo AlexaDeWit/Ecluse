@@ -116,6 +116,20 @@ worktrees onto the new base and re-runs their gate, so integration drift surface
 immediately rather than at PR time. Slices that genuinely cannot be split become
 **stacked PRs**; otherwise they stay small and independent.
 
+**Invoke the toolchain through the current flake, never the ambient shell.** A
+long-lived agent session enters a `nix develop` once and holds it for the whole
+session; if a flake upgrade merges _mid-session_ (a new GHC, fourmolu, or
+dependency pin), that ambient shell goes stale while the code on disk moves on.
+The Makefile trusts `IN_NIX_SHELL` and runs tools directly when it is set — which
+is silently wrong for a stale agent shell (e.g. a 0.14 fourmolu reflowing a 0.19
+codebase's Haddock). So agents and the team lead run every build/format/gate
+command as `env -u IN_NIX_SHELL nix develop --command make <target>`, which
+rebuilds the shell from the on-disk flake and uses its pinned tools regardless of
+session age. This is an **agent-workflow rule, not a repo one**: CI enters the
+shell fresh per run and humans' direnv re-evaluates on pull, so neither is ever
+stale — the Makefile is deliberately left as-is rather than taxing every consumer
+to compensate for an environment defect unique to long-lived agent sessions.
+
 ## Evaluation — two independent passes
 
 The implementer's own "it works" does not count; evidence does.
