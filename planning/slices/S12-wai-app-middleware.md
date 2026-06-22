@@ -2,7 +2,7 @@
 id: S12
 title: WAI app + meta-routes + middleware + dispatch
 milestone: M2 — Web front door
-status: not-started
+status: merged
 depends-on: [S01, S10, S11]
 test-tier: [unit]
 arch-refs:
@@ -53,3 +53,39 @@ meta-routes, and middleware (no upstream network).
 public-upstream blip (the proxy still serves private hits). Keep the package-route
 handler an explicit "wired in S14" path; do **not** return a placeholder success.
 The streaming/ETag/cache concerns are S13 — this slice is routing + meta + middleware.
+
+**As-built notes.**
+
+- **Server config is local, not `Ecluse.Config`.** S12 does not depend on S03 and
+  `Env` (S01) carries no port/mounts (its growth stays additive — caches in S13,
+  composition-root config wiring in S20). So `Ecluse.Server` introduces a small
+  local `ServerConfig` (port + `[Mount]` + `RequestSizeLimit`); `application ::
+  ServerConfig -> Env -> Application` is the testable seam, and `runServer :: Env
+  -> IO ()` uses `defaultServerConfig` (port **4873** — the documented
+  `PROXY_PORT` default — and a single root mount). S20 supplies the real port and
+  resolved `MountMap` at the composition root without changing this signature.
+- **Mount dispatch** matches the request's leading path segment(s) to a `Mount`
+  prefix, strips it (accepting a bare-prefix trailing slash), and hands the
+  remainder to S10's `classify`; an unmatched mount classifies as-is and so denies
+  by default (404). Root mount = empty prefix.
+- **Meta-routes split by layer:** `/livez` and `/readyz` are control-plane probes
+  matched at the top level (above any mount), each `200` and deliberately distinct
+  (liveness will consult the worker heartbeat once S19 carries one; readiness stays
+  lenient about public-upstream reachability). `/-/ping` (`200 {}`) and
+  `/-/v1/search` (`501`) are ecosystem-native and matched by `classify` after
+  mount-strip. `Packument`/`Tarball` return an explicit `501` "not yet served"
+  (honest stub; the real pipeline is S14/S15), never a fake `200`.
+- **Middleware** = `RequestSizeLimit` (25 MiB default) ∘ `RealIp` ∘ `Timeout`
+  (60 s); `Autohead`/`Gzip` deliberately excluded (documented in
+  `serverMiddleware`). The size-limit middleware rejects only once a handler reads
+  the body, which no S12 handler does, so the size-limit test drives a body-reading
+  app via `Network.Wai.Test` with a `ChunkedBody` request (hspec-wai's `request`
+  fixes `requestBodyLength` at a known zero and cannot reach the check).
+- **Out-of-scope test follow-through (flagged for review).** Making `runServer`
+  start `warp` (and `run` run it concurrently) means both now **block** rather than
+  return, which invalidated two pre-existing S01 assertions that asserted they
+  return (`EnvSpec` "runServer … returns", `EcluseSpec` `run`). Those two specs
+  (outside this slice's stated file scope) were updated to assert the server
+  *starts and keeps serving under a short timeout* — the correct test for a
+  blocking listener. The routing/meta/middleware behaviour itself is covered
+  socket-free in `Ecluse.ServerSpec`.

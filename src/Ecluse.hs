@@ -95,6 +95,7 @@ import Ecluse.Registry (
     ParseError (..),
     RegistryClient (..),
  )
+import Ecluse.Server (runServer)
 
 {- | Start Écluse: the entry point the @ecluse@ executable runs (see "Main").
 
@@ -118,12 +119,6 @@ separate binaries later is two thin entry points calling 'runServer' \/
 -}
 runServices :: Env -> IO ()
 runServices env = concurrently_ (runServer env) (runWorker env)
-
-{- | Serve the proxy's HTTP front door over the composition-root 'Env'. Request
-handlers read the 'Env' in plain 'IO'.
--}
-runServer :: Env -> IO ()
-runServer _env = pass
 
 {- | Run the supervised mirror worker over the composition-root 'Env': the
 consume → fetch → verify → publish → ack loop against the queue and credential

@@ -60,6 +60,7 @@ library
     Ecluse.Rules
     Ecluse.Rules.Types
     Ecluse.Security
+    Ecluse.Server
     Ecluse.Server.Response
     Ecluse.Server.Route
     Ecluse.Version
@@ -76,6 +77,9 @@ library
     , time             ^>=1.12
     , unliftio         ^>=0.2.25
     , vector           ^>=0.13
+    , wai              ^>=3.2
+    , wai-extra        ^>=3.1
+    , warp             ^>=3.3
 
 executable ecluse
   import:         shared
@@ -103,6 +107,7 @@ test-suite ecluse-unit
     Ecluse.Registry.Npm.WireSpec
     Ecluse.RulesSpec
     Ecluse.SecuritySpec
+    Ecluse.ServerSpec
     Ecluse.Server.ResponseSpec
     Ecluse.Server.RouteSpec
     Ecluse.VersionOrderingSpec
@@ -118,6 +123,7 @@ test-suite ecluse-unit
     , hedgehog          ^>=1.4
     , hspec             ^>=2.11
     , hspec-hedgehog    ^>=0.1
+    , hspec-wai         ^>=0.11
     , http-client       ^>=0.7
     , http-client-tls   ^>=0.3.6
     , http-types        ^>=0.12
@@ -127,6 +133,7 @@ test-suite ecluse-unit
     , unliftio          ^>=0.2.25
     , vector            ^>=0.13
     , wai               ^>=3.2
+    , wai-extra         ^>=3.1
     , warp              ^>=3.3
 
 -- Integration tests: exercise AWS-backed code against a ministack container
