@@ -123,12 +123,17 @@ merge unions it with the trusted set:
   versions that are denied **or [undecidable](#effectful-rule-failure)** are removed
   from `versions` and from the `time` map, so a client's resolver only ever sees
   admitted versions. Trusted private versions skip this step.
-- **Repoint `dist-tags` over the merged union.** `latest` is repointed to the
-  highest *surviving* version across the whole merged document (trusted private +
-  admitted public), so `npm install <pkg>` keeps resolving to the last good
-  release. Other tags (`next`, `beta`, …) that point at a removed version are
-  **dropped** rather than repointed — aiming `beta` at a stable release would
-  misrepresent it.
+- **Resolve `dist-tags.latest` — keep unless denied, prefer stable.** `latest` is
+  **kept as the precedence-winning source published it** as long as that version
+  survives, so `npm install <pkg>` resolves to the maintainer's chosen release,
+  unchanged. Only when the chosen `latest` is itself denied or removed is it
+  repointed — to the highest *stable* surviving version, falling back to the highest
+  *prerelease* survivor only if no stable version survives. "Stable vs prerelease"
+  is ecosystem-specific (`Ecluse.Version.isStable`: semver prerelease tags, PEP 440
+  pre/dev segments, RubyGems letter segments), so the packument core stays
+  ecosystem-agnostic by calling the predicate. Other tags (`next`, `beta`, …) that
+  point at a removed version are **dropped** rather than repointed — aiming `beta`
+  at a stable release would misrepresent it.
 - **No survivors → 403 or 503.** If **nothing survives in the merged document** —
   no trusted private versions, and every gated public version was rejected — the
   status follows the cause: **403** with the collected denial reasons when every
@@ -137,12 +142,16 @@ merge unions it with the trusted set:
   unavailable** (it may resolve on retry). Never 404 — the package exists; its
   versions were withheld. See the serve [Error model](web-layer.md#error-model).
 
-Repointing `latest` to an older surviving version is a deliberate downgrade, and
-it is the resilience posture — a brand-new, not-yet-cleared (or actively bad)
-release does not silently become the default install while older, admitted
-versions remain available. Because the filtered body differs from upstream's, the
-proxy computes its **own** response validators (`ETag`) over the filtered body
-rather than relaying upstream's (see [Web Layer](web-layer.md#web-layer)).
+Repointing `latest` downward when its target is denied is a deliberate downgrade,
+and it is the resilience posture — a not-yet-cleared (or actively bad) release does
+not silently remain the default install once it has been withheld. The rule never
+*promotes*, though: a higher prerelease is not elevated over a maintainer's chosen
+stable `latest` (npm keeps `latest` on the last stable release even when a higher
+prerelease exists), and a surviving `latest` is left exactly as published — so the
+single-source case is the identity. Because the filtered body differs from
+upstream's, the proxy computes its **own** response validators (`ETag`) over the
+filtered body rather than relaying upstream's (see
+[Web Layer](web-layer.md#web-layer)).
 
 ### Initial Rule Set
 

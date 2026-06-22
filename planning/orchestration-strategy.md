@@ -57,6 +57,19 @@ design into a **dependency-ordered DAG of PR-sized slices**, recorded in
 
 The architect signs off on this breakdown **before any code is written**.
 
+## Convergence slices: contract before construction
+
+The DAG encodes *ordering* (`depends-on`) but not the **shape** of what crosses
+each edge. Where several producer slices converge on one consumer — e.g.
+`S09 + S33 → S14` (the packument pipeline) or `S15/S17/S18/S19 → S20` (launch
+composition) — specify the **consumer's interface, the types that flow across the
+boundary, before building the producers**. Producers then build *to* a known
+contract instead of the consumer reverse-engineering whatever they happened to
+emit. A convergence slice's interface is a deliverable of **this planning pass**,
+not a discovery of the build pass. (Skipping it is how the packument pipeline's
+typed-decision-vs-served-`Value` contract surfaced late — see
+[Registry Model → decision vs served surface](../docs/architecture/registry-model.md#decision-surface-vs-served-surface).)
+
 ## The per-PR loop
 
 ```
@@ -71,8 +84,8 @@ The architect signs off on this breakdown **before any code is written**.
    │ EVALUATE  fresh reviewer agent(s), two stages:      │
    │   A. spec / requirements compliance + traceability  │
    │   B. code quality + security + test quality         │
-   │   team lead reads the diff; critical issues bounce   │
-   │   back to the implementer (resumed, context intact)  │
+   │   team lead reads the diff; fixes are routed by the  │
+   │   team lead (agents can't be resumed in this harness)│
    └────┬───────────────────────────────────────────────┘
    ┌────▼──────────────────────────────────────────────┐
    │ GATE      reproduce CI locally → push branch →      │
@@ -81,6 +94,13 @@ The architect signs off on this breakdown **before any code is written**.
         ▼
    HAND OFF to the architect (only if everything above is green)
 ```
+
+**Fix routing.** A reviewer's "changes required" does **not** resume the original
+implementer — in this harness a running or rested agent cannot be redirected or
+continued. Small, reviewer-specified fixes the team lead applies **directly** (then
+re-runs the gate); a larger rework is dispatched as a **fresh** build agent briefed
+with the review. Either way the fix lands as a distinct, separately-reviewable
+commit.
 
 ## Subagents and isolation
 
@@ -260,6 +280,16 @@ Escalations arrive **decision-ready**:
 - Generated artifacts (e.g. version-ordering fixtures via
   `make gen-version-fixtures`) are regenerated with their tooling, never
   hand-edited.
+- **Cross-cutting invariants live in one helper.** When the same invariant is
+  enforced by more than one slice (`latest` resolution in the npm filter and the
+  packument merge; lossless `Value` passthrough across filter/merge/serve), extract
+  it into a single shared helper the slices call — duplicated invariant logic drifts
+  and gets fixed N times.
+- **"Seam" is retired.** The records-of-functions abstraction (`RegistryClient`,
+  `MirrorQueue`, `CredentialProvider`) is **the Handle pattern**. Don't reintroduce
+  "seam" — not even in the generic "integration boundary" sense, which re-muddies the
+  rename. Say **"the Handle pattern"** for the abstraction and **"integration
+  boundary" / "interface contract"** for where components meet.
 
 ## What lives under `planning/`
 
