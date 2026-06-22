@@ -1,0 +1,712 @@
+module Ecluse.ConfigSpec (spec) where
+
+import Data.Map.Strict qualified as Map
+import Data.Text qualified as T
+import Data.Time (NominalDiffTime)
+import Env qualified
+import System.Environment (setEnv, unsetEnv)
+import Test.Hspec
+
+import Ecluse.Config
+import Ecluse.Package (mkScope)
+import Ecluse.Rules.Types (
+    PrecededRule (..),
+    Rule (..),
+    defaultAllowIfPublishedBeforePrecedence,
+    defaultDenyHasInstallScriptsPrecedence,
+ )
+
+{- | Tests for the configuration boundary. They exercise the three promises of the
+loader: the environment layer aggregates all errors at once (present \/ absent \/
+malformed), the JSON document decoders are strict and fail loud (unknown keys,
+unknown \/ effectful rule types, secrets), and the rule-policy merge resolves
+add \/ override \/ suppress over the default while rejecting every unresolvable
+reference. Pure and offline.
+-}
+spec :: Spec
+spec = do
+    backendSpec
+    envLayerSpec
+    documentDecodeSpec
+    rulePolicySpec
+    desugarSpec
+    secretsSpec
+    instancesSpec
+
+-- ── derived instances & accessors ────────────────────────────────────────────
+
+{- | Force the derived 'Eq' and 'Show' across the config types, and the opaque
+accessors, on whole values — the determinism\/representation checks the rest of
+the suite reaches through a single field.
+-}
+instancesSpec :: Spec
+instancesSpec = describe "derived instances and accessors" $ do
+    it "decodes equal documents from equal bytes (whole-record Eq)" $ do
+        a <- expectDoc singleMountDoc
+        b <- expectDoc singleMountDoc
+        a `shouldBe` b
+
+    it "parses equal env layers from equal inputs (whole-record Eq)" $ do
+        a <- expectEnv fullEnv
+        b <- expectEnv fullEnv
+        a `shouldBe` b
+
+    it "assembles equal configs from equal inputs (whole-record Eq)" $ do
+        env <- expectEnv minimalEnv
+        loadConfig env Nothing `shouldBe` loadConfig env Nothing
+
+    it "shows a config document, mount, and rule entry without erroring" $ do
+        doc <- expectDoc singleMountDoc
+        -- Exercise Show on the document and its nested mount/registry/entry types.
+        showText doc `shouldSatisfy` ("MountDoc" `isInfix`)
+
+    it "shows the resolved config (env layer, mounts, mirror target)" $ do
+        env <- expectEnv minimalEnv
+        case loadConfig env Nothing of
+            Left errs -> expectationFailure ("unexpected policy errors: " <> show errs)
+            Right cfg -> do
+                showText (configEnv cfg) `shouldSatisfy` ("EnvConfig" `isInfix`)
+                showText cfg `shouldSatisfy` ("MirrorTarget" `isInfix`)
+
+    it "shows a policy error and the default policy" $ do
+        showText (UnknownRuleType "n" "T") `shouldSatisfy` ("UnknownRuleType" `isInfix`)
+        showText defaultPolicy `shouldSatisfy` ("AllowIfPublishedBefore" `isInfix`)
+
+    it "round-trips a mount prefix through mk/un" $ do
+        unMountPrefix (mkMountPrefix "npm/") `shouldBe` "/npm"
+        unMountPrefix (mkMountPrefix "/") `shouldBe` "/"
+
+-- ── backend enums & renderers ────────────────────────────────────────────────
+
+backendSpec :: Spec
+backendSpec = describe "backend selection" $ do
+    describe "QueueBackend" $ do
+        it "round-trips each backend through parse/render" $ do
+            parseQueueBackend "sqs" `shouldBe` Right SqsQueue
+            parseQueueBackend "pubsub" `shouldBe` Right PubSubQueue
+            renderQueueBackend SqsQueue `shouldBe` "sqs"
+            renderQueueBackend PubSubQueue `shouldBe` "pubsub"
+        it "rejects an unknown name, naming the accepted set" $
+            parseQueueBackend "kafka"
+                `shouldBe` Left "unknown queue provider \"kafka\" (expected one of: sqs, pubsub)"
+
+    describe "CredentialBackend" $ do
+        it "round-trips each backend through parse/render" $ do
+            parseCredentialBackend "codeartifact" `shouldBe` Right CodeArtifactCredential
+            parseCredentialBackend "static" `shouldBe` Right StaticCredential
+            parseCredentialBackend "adc" `shouldBe` Right AdcCredential
+            renderCredentialBackend CodeArtifactCredential `shouldBe` "codeartifact"
+            renderCredentialBackend StaticCredential `shouldBe` "static"
+            renderCredentialBackend AdcCredential `shouldBe` "adc"
+        it "rejects an unknown name, naming the accepted set" $
+            parseCredentialBackend "vault"
+                `shouldBe` Left "unknown credential provider \"vault\" (expected one of: codeartifact, static, adc)"
+
+    describe "Url" $ do
+        it "trims surrounding whitespace and round-trips" $
+            (unUrl <$> mkUrl "  https://x  ") `shouldBe` Right "https://x"
+        it "rejects an all-whitespace value" $
+            mkUrl "   " `shouldBe` Left "expected a non-empty URL"
+
+    describe "renderPolicyError" $
+        -- Each constructor renders a distinct, operator-facing line.
+        it "renders every policy-error kind" $ do
+            renderPolicyError (MissingRuleType "x") `shouldSatisfy` isInfix "missing"
+            renderPolicyError (UnknownRuleType "x" "Y") `shouldSatisfy` isInfix "unknown type"
+            renderPolicyError (MalformedRule "x" "bad") `shouldSatisfy` isInfix "bad"
+            renderPolicyError (SuppressUnknownRule "x") `shouldSatisfy` isInfix "disables"
+
+-- ── environment layer ────────────────────────────────────────────────────────
+
+{- | A complete, valid environment: the three required URLs plus a value for the
+defaulted variables, so a test can drop or corrupt one axis at a time.
+-}
+fullEnv :: [(String, String)]
+fullEnv =
+    [ ("PROXY_PORT", "8080")
+    , ("PRIVATE_UPSTREAM_URL", "https://private.example.test")
+    , ("PUBLIC_UPSTREAM_URL", "https://public.example.test")
+    , ("MIRROR_TARGET_URL", "https://mirror.example.test")
+    , ("MIRROR_QUEUE_PROVIDER", "pubsub")
+    , ("MIRROR_QUEUE_URL", "projects/p/topics/t")
+    , ("AWS_REGION", "eu-west-1")
+    , ("PROXY_AUTH_TOKEN", "s3cr3t")
+    , ("PROXY_HELP_MESSAGE", "ask #platform")
+    , ("CVE_SYNC_INTERVAL_SECONDS", "60")
+    ]
+
+-- The minimum valid environment: only the three required URLs, everything else
+-- defaulted.
+minimalEnv :: [(String, String)]
+minimalEnv =
+    [ ("PRIVATE_UPSTREAM_URL", "https://private.example.test")
+    , ("MIRROR_TARGET_URL", "https://mirror.example.test")
+    , ("MIRROR_QUEUE_URL", "https://sqs.example.test/q")
+    ]
+
+-- The names that failed to parse, regardless of their error kind.
+failedNames :: Either [(String, Env.Error)] a -> [String]
+failedNames = either (map fst) (const [])
+
+envLayerSpec :: Spec
+envLayerSpec = describe "parseEnvPure" $ do
+    it "parses a fully-populated environment" $ do
+        case parseEnvPure fullEnv of
+            Left errs -> expectationFailure ("unexpected errors: " <> show errs)
+            Right cfg -> do
+                cfgPort cfg `shouldBe` 8080
+                unUrl (cfgPrivateUpstream cfg) `shouldBe` "https://private.example.test"
+                unUrl (cfgPublicUpstream cfg) `shouldBe` "https://public.example.test"
+                unUrl (cfgMirrorTarget cfg) `shouldBe` "https://mirror.example.test"
+                cfgQueueBackend cfg `shouldBe` PubSubQueue
+                unUrl (cfgQueueUrl cfg) `shouldBe` "projects/p/topics/t"
+                cfgAwsRegion cfg `shouldBe` Just "eu-west-1"
+                cfgGoogleProject cfg `shouldBe` Nothing
+                cfgAuthToken cfg `shouldBe` Just "s3cr3t"
+                cfgHelpMessage cfg `shouldBe` Just "ask #platform"
+                cfgCveSyncInterval cfg `shouldBe` (60 :: NominalDiffTime)
+
+    it "applies the documented defaults for the optional variables" $ do
+        case parseEnvPure minimalEnv of
+            Left errs -> expectationFailure ("unexpected errors: " <> show errs)
+            Right cfg -> do
+                cfgPort cfg `shouldBe` 4873
+                unUrl (cfgPublicUpstream cfg) `shouldBe` "https://registry.npmjs.org"
+                cfgQueueBackend cfg `shouldBe` SqsQueue
+                cfgCveSyncInterval cfg `shouldBe` (3600 :: NominalDiffTime)
+                cfgAwsRegion cfg `shouldBe` Nothing
+                cfgAuthToken cfg `shouldBe` Nothing
+                cfgHelpMessage cfg `shouldBe` Nothing
+
+    it "reports a single missing required variable against its own name" $
+        failedNames (parseEnvPure (without "PRIVATE_UPSTREAM_URL" minimalEnv))
+            `shouldBe` ["PRIVATE_UPSTREAM_URL"]
+
+    it "aggregates every missing required variable in one run (not fail-fast)" $
+        -- The whole point of the env layer: all three required-but-absent
+        -- variables surface at once, so an operator fixes them in a single pass.
+        failedNames (parseEnvPure [])
+            `shouldMatchList` ["PRIVATE_UPSTREAM_URL", "MIRROR_TARGET_URL", "MIRROR_QUEUE_URL"]
+
+    it "aggregates malformed values alongside missing ones" $
+        -- A non-integer port and an unknown queue provider both fail, together
+        -- with the still-missing required URLs — every problem in one report.
+        failedNames
+            ( parseEnvPure
+                [ ("PROXY_PORT", "not-a-number")
+                , ("MIRROR_QUEUE_PROVIDER", "kafka")
+                , ("PRIVATE_UPSTREAM_URL", "https://private.example.test")
+                ]
+            )
+            `shouldMatchList` [ "PROXY_PORT"
+                              , "MIRROR_QUEUE_PROVIDER"
+                              , "MIRROR_TARGET_URL"
+                              , "MIRROR_QUEUE_URL"
+                              ]
+
+    it "rejects an empty required URL rather than accepting a blank" $
+        failedNames (parseEnvPure (set "PRIVATE_UPSTREAM_URL" "   " minimalEnv))
+            `shouldBe` ["PRIVATE_UPSTREAM_URL"]
+
+    it "rejects a negative CVE sync interval" $
+        failedNames (parseEnvPure (set "CVE_SYNC_INTERVAL_SECONDS" "-5" minimalEnv))
+            `shouldBe` ["CVE_SYNC_INTERVAL_SECONDS"]
+
+    it "renders every aggregated error in the failure block" $ do
+        -- The rendered block names each offending variable, so a launch failure
+        -- is actionable from the logs alone.
+        let rendered = either renderEnvErrors (const "") (parseEnvPure [])
+        rendered `shouldSatisfy` ("PRIVATE_UPSTREAM_URL" `isInfix`)
+        rendered `shouldSatisfy` ("MIRROR_TARGET_URL" `isInfix`)
+        rendered `shouldSatisfy` ("MIRROR_QUEUE_URL" `isInfix`)
+
+    it "renders each error kind (unset, empty, unread) with its own phrasing" $ do
+        -- The renderer maps every envparse Error constructor to a distinct line,
+        -- so the cause is legible regardless of how a variable went wrong.
+        let rendered =
+                renderEnvErrors
+                    [ ("A", Env.UnsetError)
+                    , ("B", Env.EmptyError)
+                    , ("C", Env.UnreadError "boom")
+                    ]
+        rendered `shouldSatisfy` ("A: is required but unset" `isInfix`)
+        rendered `shouldSatisfy` ("B: is set but empty" `isInfix`)
+        rendered `shouldSatisfy` ("C: boom" `isInfix`)
+
+    it "reads the live process environment via the IO entry point" $ do
+        -- 'parseEnv' is the thin IO seam over the pure parser; set the required
+        -- variables in-process, parse, and clean up so other examples are unaffected.
+        traverse_ (uncurry setEnv) minimalEnv
+        result <- parseEnv
+        traverse_ (unsetEnv . fst) minimalEnv
+        case result of
+            Left errs -> expectationFailure ("unexpected env errors: " <> show errs)
+            Right cfg -> unUrl (cfgPrivateUpstream cfg) `shouldBe` "https://private.example.test"
+
+-- ── document decoding ────────────────────────────────────────────────────────
+
+documentDecodeSpec :: Spec
+documentDecodeSpec = describe "decodeDocument" $ do
+    it "decodes a document with one mount and a rule patch" $
+        case decodeDocument singleMountDoc of
+            Left e -> expectationFailure ("unexpected decode error: " <> toString e)
+            Right doc -> Map.keys (docMounts doc) `shouldBe` [mkMountPrefix "/npm"]
+
+    it "decodes a document carrying only a rule policy (no mounts)" $
+        case decodeDocument "{\"rules\":{\"min-age\":{\"ageSeconds\":1209600}}}" of
+            Left e -> expectationFailure ("unexpected decode error: " <> toString e)
+            Right doc -> docMounts doc `shouldBe` mempty
+
+    it "normalises a mount prefix written with a trailing slash" $
+        -- A client may write the base URL with or without a trailing slash; both
+        -- collapse to one mount key.
+        case decodeDocument (mountDocWithPrefix "/npm/") of
+            Left e -> expectationFailure ("unexpected decode error: " <> toString e)
+            Right doc -> Map.keys (docMounts doc) `shouldBe` [mkMountPrefix "/npm"]
+
+    it "rejects an unparseable JSON body" $
+        decodeDocument "{not json" `shouldSatisfy` isLeft
+
+    it "rejects an unknown top-level key, naming it (strict, not silently dropped)" $
+        decodeDocument "{\"mountz\":{}}" `shouldSatisfy` decodeErrorMentions "mountz"
+
+    it "rejects an unknown key inside a mount, naming it" $
+        decodeDocument (mountDocWithExtraKey "baseURL") `shouldSatisfy` decodeErrorMentions "baseURL"
+
+    it "rejects an unknown key inside the mirror target, naming it" $
+        decodeDocument mirrorTargetWithExtraKey `shouldSatisfy` decodeErrorMentions "token"
+
+    it "rejects an unknown key inside a rule entry, naming it" $
+        decodeDocument "{\"rules\":{\"min-age\":{\"agSeconds\":10}}}"
+            `shouldSatisfy` decodeErrorMentions "agSeconds"
+
+    it "rejects an unknown queue backend in a mount" $
+        decodeDocument (mountWithQueue "kafka") `shouldSatisfy` isLeft
+
+    it "rejects an unknown credential backend in a mount" $
+        decodeDocument (mountWithCredential "vault") `shouldSatisfy` isLeft
+
+    it "rejects an empty mirror-target URL" $
+        decodeDocument (mountWithMirrorUrl "") `shouldSatisfy` isLeft
+
+    it "decodes the adc credential backend in a mount" $
+        case decodeDocument (mountWithCredential "adc") of
+            Left e -> expectationFailure ("unexpected decode error: " <> toString e)
+            Right doc -> case Map.lookup (mkMountPrefix "/npm") (docMounts doc) of
+                Nothing -> expectationFailure "expected the /npm mount"
+                Just mdoc -> mtCredential (regMirrorTarget (mdocRegistries mdoc)) `shouldBe` AdcCredential
+
+    it "rejects a non-string where a URL string is expected, naming the number kind" $
+        -- A URL field given a number (not a string) is a typed decode failure,
+        -- not a coerced value.
+        decodeDocument
+            "{\"mounts\":{\"/npm\":{\"privateUpstream\":42,\"publicUpstream\":\"https://b\",\
+            \\"mirrorTarget\":{\"url\":\"https://c\",\"credential\":\"static\",\"queue\":\"sqs\"}}}}"
+            `shouldSatisfy` decodeErrorMentions "a number"
+
+    it "rejects each non-string JSON kind in a string-valued field, naming the kind" $ do
+        -- Spread the JSON kinds (array, object, boolean, null) across the
+        -- string-valued fields so the error reports what was actually found.
+        decodeDocument (mountWithCredential' "[\"static\"]")
+            `shouldSatisfy` decodeErrorMentions "an array"
+        decodeDocument (mountWithCredential' "{\"a\":1}")
+            `shouldSatisfy` decodeErrorMentions "an object"
+        decodeDocument (mountWithCredential' "true")
+            `shouldSatisfy` decodeErrorMentions "a boolean"
+        decodeDocument (mountWithCredential' "null")
+            `shouldSatisfy` decodeErrorMentions "null"
+
+    it "decodes the mount registry tuple and backends faithfully" $
+        case decodeDocument singleMountDoc of
+            Left e -> expectationFailure ("unexpected decode error: " <> toString e)
+            Right doc -> case Map.lookup (mkMountPrefix "/npm") (docMounts doc) of
+                Nothing -> expectationFailure "expected the /npm mount"
+                Just mdoc -> do
+                    let reg = mdocRegistries mdoc
+                    unUrl (regPrivateUpstream reg) `shouldBe` "https://private.example.test"
+                    unUrl (regPublicUpstream reg) `shouldBe` "https://registry.npmjs.org"
+                    let target = regMirrorTarget reg
+                    unUrl (mtUrl target) `shouldBe` "https://mirror.example.test"
+                    mtCredential target `shouldBe` CodeArtifactCredential
+                    mtQueue target `shouldBe` SqsQueue
+
+-- ── rule policy merge ────────────────────────────────────────────────────────
+
+-- Resolve a JSON rules patch over the built-in default policy, returning the
+-- resolved rules sorted by precedence for a stable comparison.
+resolveJson :: ByteString -> Either [PolicyError] [PrecededRule]
+resolveJson = resolveJsonOver defaultPolicy
+
+-- Resolve a JSON rules patch over an arbitrary base policy. A per-mount
+-- refinement merges over a shared policy that may carry any rule, so this
+-- exercises the merge against bases beyond the single-rule default.
+resolveJsonOver :: RulePolicy -> ByteString -> Either [PolicyError] [PrecededRule]
+resolveJsonOver base body = case decodeDocument body of
+    Left e -> Left [MalformedRule "<decode>" e]
+    Right doc -> sortOn rulePrecedence . Map.elems . policyRules <$> resolvePolicy base (docRules doc)
+
+-- A base policy carrying one of each rule kind by name, so a patch can override
+-- or restate any of them (the multi-rule shared-policy case).
+mixedBase :: RulePolicy
+mixedBase =
+    RulePolicy
+        ( Map.fromList
+            [ ("min-age", PrecededRule 100 (AllowIfPublishedBefore (7 * 86400)))
+            , ("trusted", PrecededRule 200 (AllowScope (mkScope "myorg")))
+            , ("deny-scripts", PrecededRule 300 DenyHasInstallScripts)
+            ]
+        )
+
+rulePolicySpec :: Spec
+rulePolicySpec = describe "resolvePolicy" $ do
+    it "applies the default policy unchanged with an empty patch" $
+        sortOn rulePrecedence (Map.elems (policyRules defaultPolicy))
+            `shouldBe` [PrecededRule defaultAllowIfPublishedBeforePrecedence (AllowIfPublishedBefore (7 * 86400))]
+
+    it "overrides a default rule's value, keeping its precedence (a partial patch)" $
+        -- `min-age` names the default, so {ageSeconds} widens its window to 14
+        -- days while leaving its precedence untouched.
+        resolveJson "{\"rules\":{\"min-age\":{\"ageSeconds\":1209600}}}"
+            `shouldBe` Right [PrecededRule defaultAllowIfPublishedBeforePrecedence (AllowIfPublishedBefore 1209600)]
+
+    it "overrides a default rule's precedence" $
+        resolveJson "{\"rules\":{\"min-age\":{\"precedence\":150}}}"
+            `shouldBe` Right [PrecededRule 150 (AllowIfPublishedBefore (7 * 86400))]
+
+    it "adds a new rule that carries a full type at its type's default precedence" $
+        resolveJson "{\"rules\":{\"deny-scripts\":{\"type\":\"DenyHasInstallScripts\"}}}"
+            `shouldBe` Right
+                [ PrecededRule defaultAllowIfPublishedBeforePrecedence (AllowIfPublishedBefore (7 * 86400))
+                , PrecededRule defaultDenyHasInstallScriptsPrecedence DenyHasInstallScripts
+                ]
+
+    it "adds a new rule with an explicit precedence" $
+        resolveJson "{\"rules\":{\"deny-scripts\":{\"type\":\"DenyHasInstallScripts\",\"precedence\":250}}}"
+            `shouldBe` Right
+                [ PrecededRule defaultAllowIfPublishedBeforePrecedence (AllowIfPublishedBefore (7 * 86400))
+                , PrecededRule 250 DenyHasInstallScripts
+                ]
+
+    it "suppresses a default rule with enabled:false" $
+        resolveJson "{\"rules\":{\"min-age\":{\"enabled\":false}}}"
+            `shouldBe` Right []
+
+    it "adds an AllowScope rule from a scope field" $
+        resolveJson "{\"rules\":{\"trusted\":{\"type\":\"AllowScope\",\"scope\":\"myorg\"}}}"
+            `shouldSatisfy` containsAllowScope
+
+    it "accepts a restated type on a patch that matches the default's kind" $
+        -- Naming the default's own type alongside an override is allowed; it must
+        -- match the rule it patches.
+        resolveJson "{\"rules\":{\"min-age\":{\"type\":\"AllowIfPublishedBefore\",\"ageSeconds\":100}}}"
+            `shouldBe` Right [PrecededRule defaultAllowIfPublishedBeforePrecedence (AllowIfPublishedBefore 100)]
+
+    it "rejects a restated type on a patch that changes the default's kind" $
+        -- Re-typing min-age to a different known rule is a loud error, not a
+        -- silent identity swap.
+        resolveJson "{\"rules\":{\"min-age\":{\"type\":\"DenyHasInstallScripts\"}}}"
+            `shouldBe` Left [MalformedRule "min-age" "\"type\" \"DenyHasInstallScripts\" does not match the default rule it patches"]
+
+    it "rejects a restated unknown type on a patch" $
+        resolveJson "{\"rules\":{\"min-age\":{\"type\":\"Bogus\"}}}"
+            `shouldBe` Left [UnknownRuleType "min-age" "Bogus"]
+
+    it "rejects a negative ageSeconds when adding a rule" $
+        resolveJson "{\"rules\":{\"young\":{\"type\":\"AllowIfPublishedBefore\",\"ageSeconds\":-1}}}"
+            `shouldBe` Left [MalformedRule "young" "\"ageSeconds\" must be non-negative"]
+
+    it "rejects a negative ageSeconds when patching the default" $
+        resolveJson "{\"rules\":{\"min-age\":{\"ageSeconds\":-1}}}"
+            `shouldBe` Left [MalformedRule "min-age" "\"ageSeconds\" must be non-negative"]
+
+    it "rejects adding an AllowIfPublishedBefore without ageSeconds" $
+        resolveJson "{\"rules\":{\"young\":{\"type\":\"AllowIfPublishedBefore\"}}}"
+            `shouldBe` Left [MalformedRule "young" "\"AllowIfPublishedBefore\" requires \"ageSeconds\""]
+
+    describe "merging over a multi-rule shared policy" $ do
+        -- A per-mount refinement merges over a shared policy that may hold any
+        -- rule kind, so the patch must override, suppress, and restate each.
+        it "overrides an AllowScope default's scope and precedence" $
+            resolveJsonOver mixedBase "{\"rules\":{\"trusted\":{\"scope\":\"other\",\"precedence\":205}}}"
+                `shouldSatisfy` hasRuleAtPrec 205 (AllowScope (mkScope "other"))
+
+        it "keeps an AllowScope default's scope when only its precedence changes" $
+            resolveJsonOver mixedBase "{\"rules\":{\"trusted\":{\"precedence\":210}}}"
+                `shouldSatisfy` hasRuleAtPrec 210 (AllowScope (mkScope "myorg"))
+
+        it "patches a DenyHasInstallScripts default's precedence" $
+            resolveJsonOver mixedBase "{\"rules\":{\"deny-scripts\":{\"precedence\":350}}}"
+                `shouldSatisfy` hasRuleAtPrec 350 DenyHasInstallScripts
+
+        it "accepts a restated matching type on an AllowScope default" $
+            resolveJsonOver mixedBase "{\"rules\":{\"trusted\":{\"type\":\"AllowScope\",\"scope\":\"acme\"}}}"
+                `shouldSatisfy` hasRuleAtPrec 200 (AllowScope (mkScope "acme"))
+
+        it "accepts a restated matching type on a DenyHasInstallScripts default" $
+            resolveJsonOver mixedBase "{\"rules\":{\"deny-scripts\":{\"type\":\"DenyHasInstallScripts\"}}}"
+                `shouldSatisfy` hasRuleAtPrec 300 DenyHasInstallScripts
+
+        it "rejects a restated mismatching type on a DenyHasInstallScripts default" $
+            resolveJsonOver mixedBase "{\"rules\":{\"deny-scripts\":{\"type\":\"AllowScope\"}}}"
+                `shouldBe` Left [MalformedRule "deny-scripts" "\"type\" \"AllowScope\" does not match the default rule it patches"]
+
+        it "suppresses one rule from a multi-rule base, keeping the rest" $
+            resolveJsonOver mixedBase "{\"rules\":{\"trusted\":{\"enabled\":false}}}"
+                `shouldBe` Right
+                    [ PrecededRule 100 (AllowIfPublishedBefore (7 * 86400))
+                    , PrecededRule 300 DenyHasInstallScripts
+                    ]
+
+    describe "fail-loud merge references" $ do
+        -- Each invalid patch is rejected with the specific error it should
+        -- produce; the table makes the full set of rejected references visible.
+        let cases :: [(String, ByteString, [PolicyError])]
+            cases =
+                [
+                    ( "an unknown rule type (a typo'd deny must not vanish)"
+                    , "{\"rules\":{\"deny-scripts\":{\"type\":\"DenyHasInstallScript\"}}}"
+                    , [UnknownRuleType "deny-scripts" "DenyHasInstallScript"]
+                    )
+                ,
+                    ( "the effectful AllowIfRemediatesCve type (unknown here, not a crash)"
+                    , "{\"rules\":{\"cve\":{\"type\":\"AllowIfRemediatesCve\"}}}"
+                    , [UnknownRuleType "cve" "AllowIfRemediatesCve"]
+                    )
+                ,
+                    ( "a new name missing its type"
+                    , "{\"rules\":{\"mystery\":{\"precedence\":120}}}"
+                    , [MissingRuleType "mystery"]
+                    )
+                ,
+                    ( "a suppression of a rule no default defines"
+                    , "{\"rules\":{\"min-aeg\":{\"enabled\":false}}}"
+                    , [SuppressUnknownRule "min-aeg"]
+                    )
+                ,
+                    ( "an AllowScope add missing its scope value"
+                    , "{\"rules\":{\"trusted\":{\"type\":\"AllowScope\"}}}"
+                    , [MalformedRule "trusted" "\"AllowScope\" requires \"scope\""]
+                    )
+                ]
+        for_ cases $ \(label, body, expected) ->
+            it ("rejects " <> label) $
+                resolveJson body `shouldBe` Left expected
+
+    it "aggregates every merge error in one run (not fail-on-first)" $ do
+        -- Two independent bad references in one patch; both must surface.
+        let body =
+                "{\"rules\":{\"bad-type\":{\"type\":\"Nope\"},\"ghost\":{\"enabled\":false}}}"
+        case resolveJson body of
+            Left errs ->
+                errs
+                    `shouldMatchList` [UnknownRuleType "bad-type" "Nope", SuppressUnknownRule "ghost"]
+            Right rs -> expectationFailure ("expected aggregated errors, got " <> show rs)
+
+-- ── single-mount desugaring & assembly ───────────────────────────────────────
+
+desugarSpec :: Spec
+desugarSpec = describe "loadConfig" $ do
+    it "desugars the env single-mount onto the default policy with no document" $ do
+        env <- expectEnv minimalEnv
+        case loadConfig env Nothing of
+            Left errs -> expectationFailure ("unexpected policy errors: " <> show errs)
+            Right cfg -> do
+                Map.keys (configMounts cfg) `shouldBe` [mkMountPrefix "/"]
+                case Map.lookup (mkMountPrefix "/") (configMounts cfg) of
+                    Nothing -> expectationFailure "expected the root mount"
+                    Just mount -> do
+                        mountPolicy mount
+                            `shouldBe` [PrecededRule defaultAllowIfPublishedBeforePrecedence (AllowIfPublishedBefore (7 * 86400))]
+                        let reg = mountRegistries mount
+                        unUrl (regPrivateUpstream reg) `shouldBe` "https://private.example.test"
+                        mtCredential (regMirrorTarget reg) `shouldBe` StaticCredential
+                        mtQueue (regMirrorTarget reg) `shouldBe` SqsQueue
+
+    it "desugars the env single-mount onto a document-only policy patch" $ do
+        -- A document with a rule policy but no mounts still produces the env
+        -- single-mount, now running on the merged policy.
+        env <- expectEnv minimalEnv
+        doc <- expectDoc "{\"rules\":{\"min-age\":{\"enabled\":false}}}"
+        case loadConfig env (Just doc) of
+            Left errs -> expectationFailure ("unexpected policy errors: " <> show errs)
+            Right cfg -> case Map.lookup (mkMountPrefix "/") (configMounts cfg) of
+                Nothing -> expectationFailure "expected the root mount"
+                Just mount -> mountPolicy mount `shouldBe` []
+
+    it "uses the document's declared mounts when present" $ do
+        env <- expectEnv minimalEnv
+        doc <- expectDoc singleMountDoc
+        case loadConfig env (Just doc) of
+            Left errs -> expectationFailure ("unexpected policy errors: " <> show errs)
+            Right cfg -> Map.keys (configMounts cfg) `shouldBe` [mkMountPrefix "/npm"]
+
+    it "applies a per-mount rule refinement over the shared policy" $ do
+        -- The shared policy adds deny-scripts; the mount suppresses min-age, so
+        -- the mount's resolved policy is the deny alone.
+        env <- expectEnv minimalEnv
+        doc <- expectDoc refinedMountDoc
+        case loadConfig env (Just doc) of
+            Left errs -> expectationFailure ("unexpected policy errors: " <> show errs)
+            Right cfg -> case Map.lookup (mkMountPrefix "/npm") (configMounts cfg) of
+                Nothing -> expectationFailure "expected the /npm mount"
+                Just mount ->
+                    mountPolicy mount `shouldBe` [PrecededRule defaultDenyHasInstallScriptsPrecedence DenyHasInstallScripts]
+
+    it "surfaces a bad per-mount refinement as a policy error" $ do
+        env <- expectEnv minimalEnv
+        doc <- expectDoc badRefinementDoc
+        loadConfig env (Just doc) `shouldBe` Left [UnknownRuleType "oops" "NoSuchRule"]
+
+-- ── secrets ──────────────────────────────────────────────────────────────────
+
+secretsSpec :: Spec
+secretsSpec = describe "secrets are environment-only" $ do
+    it "rejects a token field inside a rule entry, pointing to environment variables" $
+        -- A secret must never live in the reviewable document; the decoder
+        -- refuses it (naming the offending key) rather than carrying it.
+        decodeDocument "{\"rules\":{\"min-age\":{\"token\":\"abc\"}}}"
+            `shouldSatisfy` decodeErrorMentions "environment variables"
+
+    it "rejects an authToken field inside a rule entry" $
+        decodeDocument "{\"rules\":{\"min-age\":{\"authToken\":\"abc\"}}}" `shouldSatisfy` isLeft
+
+-- ── fixtures & helpers ───────────────────────────────────────────────────────
+
+-- A document with a single /npm mount and a min-age override.
+singleMountDoc :: ByteString
+singleMountDoc =
+    "{\"mounts\":{\"/npm\":{\
+    \\"privateUpstream\":\"https://private.example.test\",\
+    \\"publicUpstream\":\"https://registry.npmjs.org\",\
+    \\"mirrorTarget\":{\"url\":\"https://mirror.example.test\",\"credential\":\"codeartifact\",\"queue\":\"sqs\"}}},\
+    \\"rules\":{\"min-age\":{\"ageSeconds\":1209600}}}"
+
+-- A document whose top-level policy adds deny-scripts and whose mount suppresses
+-- min-age, so the mount resolves to the deny alone.
+refinedMountDoc :: ByteString
+refinedMountDoc =
+    "{\"mounts\":{\"/npm\":{\
+    \\"privateUpstream\":\"https://private.example.test\",\
+    \\"publicUpstream\":\"https://registry.npmjs.org\",\
+    \\"mirrorTarget\":{\"url\":\"https://mirror.example.test\",\"credential\":\"static\",\"queue\":\"sqs\"},\
+    \\"rules\":{\"min-age\":{\"enabled\":false}}}},\
+    \\"rules\":{\"deny-scripts\":{\"type\":\"DenyHasInstallScripts\"}}}"
+
+-- A document whose mount refinement names an unknown rule type.
+badRefinementDoc :: ByteString
+badRefinementDoc =
+    "{\"mounts\":{\"/npm\":{\
+    \\"privateUpstream\":\"https://private.example.test\",\
+    \\"publicUpstream\":\"https://registry.npmjs.org\",\
+    \\"mirrorTarget\":{\"url\":\"https://mirror.example.test\",\"credential\":\"static\",\"queue\":\"sqs\"},\
+    \\"rules\":{\"oops\":{\"type\":\"NoSuchRule\"}}}}}"
+
+-- A bare single-mount document with the given prefix.
+mountDocWithPrefix :: Text -> ByteString
+mountDocWithPrefix prefix =
+    encodeUtf8
+        ( "{\"mounts\":{\""
+            <> prefix
+            <> "\":{\"privateUpstream\":\"https://a\",\"publicUpstream\":\"https://b\",\
+               \\"mirrorTarget\":{\"url\":\"https://c\",\"credential\":\"static\",\"queue\":\"sqs\"}}}}"
+        )
+
+-- A single-mount document carrying an extra, unexpected key alongside the mount.
+mountDocWithExtraKey :: Text -> ByteString
+mountDocWithExtraKey extra =
+    encodeUtf8
+        ( "{\"mounts\":{\"/npm\":{\"privateUpstream\":\"https://a\",\"publicUpstream\":\"https://b\",\
+          \\"mirrorTarget\":{\"url\":\"https://c\",\"credential\":\"static\",\"queue\":\"sqs\"},\""
+            <> extra
+            <> "\":\"x\"}}}"
+        )
+
+-- A mount whose mirror target carries an unexpected key.
+mirrorTargetWithExtraKey :: ByteString
+mirrorTargetWithExtraKey =
+    "{\"mounts\":{\"/npm\":{\"privateUpstream\":\"https://a\",\"publicUpstream\":\"https://b\",\
+    \\"mirrorTarget\":{\"url\":\"https://c\",\"credential\":\"static\",\"queue\":\"sqs\",\"token\":\"x\"}}}}"
+
+-- A mount whose mirror target names the given queue backend.
+mountWithQueue :: Text -> ByteString
+mountWithQueue q =
+    encodeUtf8
+        ( "{\"mounts\":{\"/npm\":{\"privateUpstream\":\"https://a\",\"publicUpstream\":\"https://b\",\
+          \\"mirrorTarget\":{\"url\":\"https://c\",\"credential\":\"static\",\"queue\":\""
+            <> q
+            <> "\"}}}}"
+        )
+
+-- A mount whose mirror target names the given credential backend.
+mountWithCredential :: Text -> ByteString
+mountWithCredential c =
+    encodeUtf8
+        ( "{\"mounts\":{\"/npm\":{\"privateUpstream\":\"https://a\",\"publicUpstream\":\"https://b\",\
+          \\"mirrorTarget\":{\"url\":\"https://c\",\"credential\":\""
+            <> c
+            <> "\",\"queue\":\"sqs\"}}}}"
+        )
+
+-- A mount whose mirror-target @credential@ holds the given raw JSON value (no
+-- automatic quoting), so a non-string value can be exercised.
+mountWithCredential' :: Text -> ByteString
+mountWithCredential' rawJson =
+    encodeUtf8
+        ( "{\"mounts\":{\"/npm\":{\"privateUpstream\":\"https://a\",\"publicUpstream\":\"https://b\",\
+          \\"mirrorTarget\":{\"url\":\"https://c\",\"credential\":"
+            <> rawJson
+            <> ",\"queue\":\"sqs\"}}}}"
+        )
+
+-- A mount whose mirror target has the given URL.
+mountWithMirrorUrl :: Text -> ByteString
+mountWithMirrorUrl u =
+    encodeUtf8
+        ( "{\"mounts\":{\"/npm\":{\"privateUpstream\":\"https://a\",\"publicUpstream\":\"https://b\",\
+          \\"mirrorTarget\":{\"url\":\""
+            <> u
+            <> "\",\"credential\":\"static\",\"queue\":\"sqs\"}}}}"
+        )
+
+-- Whether the resolved rule set contains an AllowScope for "myorg".
+containsAllowScope :: Either [PolicyError] [PrecededRule] -> Bool
+containsAllowScope (Right rs) = any isAllowScope rs
+  where
+    isAllowScope (PrecededRule _ (AllowScope _)) = True
+    isAllowScope _ = False
+containsAllowScope _ = False
+
+-- Whether the resolved rule set contains exactly the given rule at the given
+-- precedence.
+hasRuleAtPrec :: Int -> Rule -> Either [PolicyError] [PrecededRule] -> Bool
+hasRuleAtPrec prec rule (Right rs) = PrecededRule prec rule `elem` rs
+hasRuleAtPrec _ _ _ = False
+
+-- Parse an environment, failing the example on an unexpected error.
+expectEnv :: [(String, String)] -> IO EnvConfig
+expectEnv = either (\errs -> fail ("env parse failed: " <> show errs)) pure . parseEnvPure
+
+-- Decode a document, failing the example on a decode error.
+expectDoc :: ByteString -> IO ConfigDoc
+expectDoc = either (\e -> fail ("document decode failed: " <> toString e)) pure . decodeDocument
+
+-- Drop a variable from an environment list.
+without :: String -> [(String, String)] -> [(String, String)]
+without name = filter ((/= name) . fst)
+
+-- Set (replacing) a variable in an environment list.
+set :: String -> String -> [(String, String)] -> [(String, String)]
+set name value env = (name, value) : without name env
+
+-- Whether the needle occurs in the haystack 'Text'.
+isInfix :: Text -> Text -> Bool
+isInfix = T.isInfixOf
+
+-- Whether a document decode failed with a message mentioning the given phrase.
+decodeErrorMentions :: Text -> Either Text a -> Bool
+decodeErrorMentions phrase (Left e) = phrase `isInfix` e
+decodeErrorMentions _ (Right _) = False
+
+-- 'show' a value as 'Text' (forcing its derived 'Show').
+showText :: (Show a) => a -> Text
+showText = show
