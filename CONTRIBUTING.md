@@ -2,7 +2,7 @@
 
 This guide covers how we work on **Écluse** (package `ecluse`): local development, codebase
 conventions, testing, and CI / repository requirements. For the systems design
-— the three-registry model, rules engine, the seams (registry, queue, credential
+— the three-registry model, rules engine, the handles (registry, queue, credential
 provider) and cloud backends, and configuration — see
 [`docs/architecture.md`](docs/architecture.md). Haskell coding style —
 formatting, naming, totality, and the compiler-flag set — has its own reference
@@ -83,14 +83,14 @@ when a `.Types` split is justified — live in [`STYLE.md`](STYLE.md) → "Modul
 organization". This section records the *current* concrete layout and the one
 project-specific pattern below.
 
-- **Seams are records of functions, selected at one composition root.** A
+- **Handles are records of functions, selected at one composition root.** A
   swappable backend — registry protocol, mirror queue, credential provider — is
   modelled as a record whose fields are functions (the *Handle pattern*), built by
   a per-backend smart constructor (e.g. `newSqsQueue :: SqsConfig -> IO
   MirrorQueue`). Adding a backend means adding a constructor behind the *existing*
   record and wiring it into the single, config-driven composition root — never
   smearing SDK or provider selection across call sites. See
-  [Cloud Backends → Seams](docs/architecture/cloud-backends.md#seams-records-of-functions).
+  [Cloud Backends → Handles](docs/architecture/cloud-backends.md#handles-records-of-functions).
 
 For the **current module list**, read the module index of the
 [published Haddock](https://alexadewit.github.io/Ecluse/) — each module's one-line
@@ -126,7 +126,7 @@ fetch → parse → rules → mirror path can be asserted without a network. Run
 
 ### Integration tests — `ecluse-integration` (gating)
 
-Exercise cloud-backed code — the `MirrorQueue` and `CredentialProvider` seams —
+Exercise cloud-backed code — the `MirrorQueue` and `CredentialProvider` handles —
 against a **real emulator per cloud**, all driven by `testcontainers` (a generic
 container manager, not an AWS-specific one):
 
@@ -145,13 +145,13 @@ Run: `cabal test ecluse-integration` (or `make test-integration`).
 > **Token-mint caveat.** No emulator covers the managed-registry token APIs
 > (CodeArtifact's `GetAuthorizationToken`, or GCP's OAuth2 token endpoint). That
 > is by design: the only un-emulable part is the per-cloud `mintToken` leaf of the
-> `CredentialProvider`, so it is mocked at that seam here, while the generic
+> `CredentialProvider`, so it is mocked at that handle here, while the generic
 > refresh/cache/expiry policy around it is unit-tested with an injected clock; the
 > *real* cloud mint runs end-to-end only in the (non-gating) smoke tier. The
 > managed registry's npm protocol is just HTTPS+JSON, so it is covered once —
 > against a real npm-speaking registry (e.g. Verdaccio) or an in-process WAI stub
-> through the `RegistryClient` seam — a deliberate benefit of keeping protocol,
-> queue, and credentials as separate seams.
+> through the `RegistryClient` handle — a deliberate benefit of keeping protocol,
+> queue, and credentials as separate handles.
 
 ### Smoke tests — `ecluse-smoke` (allowed to fail, non-gating)
 

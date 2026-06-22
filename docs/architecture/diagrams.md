@@ -24,10 +24,10 @@ All diagrams are [Mermaid](https://mermaid.js.org/), which GitHub renders inline
 ## 1. System overview
 
 A single Écluse binary runs the HTTP server and an in-process mirror worker over a
-shared, seam-based `Env`. The **data plane** (metadata + artifact bytes) is
+shared, handle-based `Env`. The **data plane** (metadata + artifact bytes) is
 `http-client`; the **control plane** (queue, token mint) sits behind the
 [`MirrorQueue`](cloud-backends.md#queue-abstraction) and
-[`CredentialProvider`](cloud-backends.md#credential-provider) seams. Solid edges
+[`CredentialProvider`](cloud-backends.md#credential-provider) handles. Solid edges
 are request-path / synchronous; dotted edges are best-effort / asynchronous. See
 [Registry Model](registry-model.md) and [Cloud Backends](cloud-backends.md).
 
@@ -50,7 +50,7 @@ flowchart LR
         MIRROR["Mirror target<br/>managed npm registry"]
     end
 
-    subgraph seams["Cloud seams"]
+    subgraph handles["Cloud handles"]
         QUEUE["MirrorQueue<br/>SQS / Pub/Sub"]
         CRED["CredentialProvider<br/>mint + refresh token"]
     end
@@ -159,7 +159,7 @@ sequenceDiagram
 
 The worker consumes the queue, fetches each accepted artifact from the public
 upstream, **verifies its bytes against the version's integrity hash**, and
-publishes to the mirror target via the credential seam. Retry is "don't ack";
+publishes to the mirror target via the credential handle. Retry is "don't ack";
 at-least-once delivery is safe because publishing is idempotent. See
 [Cloud Backends → Mirror Queue](cloud-backends.md#mirror-queue).
 

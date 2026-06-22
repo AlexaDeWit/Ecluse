@@ -1,4 +1,4 @@
-{- | The mirror-queue seam: the durable hand-off from the request path to the
+{- | The mirror-queue handle: the durable hand-off from the request path to the
 mirror worker.
 
 Mirroring is __demand-driven__: when a client fetches an artifact whose version
@@ -9,13 +9,13 @@ the job (see @docs\/architecture\/cloud-backends.md@ → "Mirror Queue").
 
 The queue is the one cloud surface with materially different APIs per provider
 (AWS SQS @SendMessage@\/@ReceiveMessage@+visibility-timeout\/@DeleteMessage@; GCP
-Pub\/Sub @Publish@\/@Pull@+ack-deadline\/@Acknowledge@), so it is its own seam —
+Pub\/Sub @Publish@\/@Pull@+ack-deadline\/@Acknowledge@), so it is its own handle —
 a __record of functions__ (the Handle pattern). Both providers fit the same
 receive → process → ack shape; their differences (visibility timeout vs ack
-deadline, batch limits, dead-letter wiring) stay behind the seam, and
+deadline, batch limits, dead-letter wiring) stay behind the handle, and
 'ReceiptHandle' is opaque so neither leaks.
 
-Like the other seams, the effectful fields return __'IO', not @App@__, so an
+Like the other handles, the effectful fields return __'IO', not @App@__, so an
 adapter stays decoupled from the proxy's @Env@\/@App@ (see
 @docs\/architecture\/technology-stack.md@ → "Key Decisions").
 
@@ -23,7 +23,7 @@ adapter stays decoupled from the proxy's @Env@\/@App@ (see
 
 The two cloud backends both give __at-least-once delivery__, which is safe here
 because publishing is idempotent (a registry treats versions as immutable). The
-seam's contract reflects that:
+handle's contract reflects that:
 
 * __'enqueue' is best-effort.__ It runs on the request hot path (enqueue, then
   serve immediately), so a failure must be logged\/metered and __never fail the
@@ -37,12 +37,12 @@ seam's contract reflects that:
   past the visibility window. It is an /optimization/, not correctness-critical,
   since idempotency already makes redelivery harmless.
 
-This module provides the seam and its payload types. 'newInMemoryQueue' is an
+This module provides the handle and its payload types. 'newInMemoryQueue' is an
 STM-backed in-memory implementation honouring the receive → ack \/
 redeliver-on-no-ack semantics above.
 -}
 module Ecluse.Queue (
-    -- * Queue seam
+    -- * Queue handle
     MirrorQueue (..),
 
     -- * Payloads
@@ -108,7 +108,7 @@ data QueueMessage = QueueMessage
 newtype Seconds = Seconds Int
     deriving stock (Eq, Ord, Show)
 
-{- | The mirror-queue seam — a record of functions over a backend whose private
+{- | The mirror-queue handle — a record of functions over a backend whose private
 state the closures capture. See the module header for the @enqueue@ /
 don't-@ack@-to-retry / no-@nack@ conventions; all fields are 'IO'.
 -}
@@ -162,7 +162,7 @@ data InFlight = InFlight
 
 {- | Build a fresh STM-backed in-memory 'MirrorQueue'.
 
-Honours the seam's contract: 'enqueue' appends (FIFO), 'receive' delivers all
+Honours the handle's contract: 'enqueue' appends (FIFO), 'receive' delivers all
 currently-visible jobs and moves them in-flight, 'ack' removes an in-flight job,
 and an in-flight job that is never acked is __redelivered__ on the next 'receive'
 ("retry is don't ack"). 'extendVisibility' holds a job in-flight across one such

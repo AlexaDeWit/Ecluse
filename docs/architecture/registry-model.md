@@ -84,8 +84,8 @@ the degenerate identity:
   [serve error model](web-layer.md#error-model)).
 
 **Where the merge lives.** Above the [`RegistryClient`](#registry-abstraction)
-seam, as a **pure, ecosystem-agnostic** operation over `PackageInfo` — *not* inside
-an adapter. The seam stays single-registry (`fetchMetadata` fetches one registry;
+handle, as a **pure, ecosystem-agnostic** operation over `PackageInfo` — *not* inside
+an adapter. The handle stays single-registry (`fetchMetadata` fetches one registry;
 `parsePackageInfo` parses one document); the core fans out across the configured
 upstreams, parses each, and folds the results. So a new ecosystem's adapter does
 not re-implement merging, and the merge is unit-tested over hand-built
@@ -141,7 +141,7 @@ adapter is responsible for projecting its wire format into these types.
 `RegistryClient` abstraction exists from day one to make future backends
 (PyPI, RubyGems, …) additive rather than structural changes.
 
-`RegistryClient` is the **ecosystem (protocol) seam** — fetch, publish, and parse
+`RegistryClient` is the **ecosystem (protocol) handle** — fetch, publish, and parse
 — and nothing more. It deliberately does **not** carry authentication, because
 protocol and auth are **orthogonal axes**: AWS **CodeArtifact**, GCP **Artifact
 Registry**, and a self-hosted Verdaccio/Nexus all speak the *same* npm protocol

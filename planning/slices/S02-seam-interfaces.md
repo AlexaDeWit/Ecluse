@@ -6,7 +6,7 @@ status: merged
 depends-on: []
 test-tier: [unit]
 arch-refs:
-  - docs/architecture/cloud-backends.md#seams-records-of-functions
+  - docs/architecture/cloud-backends.md#handles-records-of-functions
   - docs/architecture/registry-model.md#registry-abstraction
   - docs/architecture/cloud-backends.md#queue-abstraction
   - docs/architecture/cloud-backends.md#credential-provider

@@ -6,7 +6,7 @@ status: not-started
 depends-on: [S03, S15, S17, S18, S19]
 test-tier: [integration]
 arch-refs:
-  - docs/architecture/cloud-backends.md#seams-records-of-functions
+  - docs/architecture/cloud-backends.md#handles-records-of-functions
   - docs/architecture/configuration.md#outbound-registry-credentials
   - docs/architecture/cloud-backends.md#service-mapping
 pr: null
@@ -26,7 +26,7 @@ npm proxy.
   `MIRROR_QUEUE_PROVIDER=sqs` → `newSqsQueue`; mirror-target credential →
   `newCodeArtifactProvider` or `static` (`MIRROR_TARGET_TOKEN`) — storing the
   resulting seam records in `Env`. Nothing downstream knows which backend it holds. —
-  _cloud-backends.md#seams-records-of-functions, configuration.md#outbound-registry-credentials_
+  _cloud-backends.md#handles-records-of-functions, configuration.md#outbound-registry-credentials_
 - [ ] **One provider configured** (mirror-target write only); reads forward the
   client token / are anonymous (no Écluse read credential). — _configuration.md#outbound-registry-credentials_
 - [ ] End-to-end integration test: a request through an in-process Écluse with a

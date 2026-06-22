@@ -65,7 +65,7 @@ Concretely:
   burden of proof upward as far as possible, but no further" — get input into its
   most precise representation as early as possible (the registry adapter, the
   config loader, the request handler) so nothing downstream re-validates or trips
-  over a case that was already ruled out. This is the registry seam in action:
+  over a case that was already ruled out. This is the registry handle in action:
   adapters project wire formats into `Ecluse.Package` types and nothing above
   them sees raw wire data (see §4.4 and `docs/architecture.md`).
 - **No shotgun parsing.** Don't scatter input checks through processing logic —
@@ -262,7 +262,7 @@ shape (cf. Matt Parsons' *Three Layer Haskell Cake*):
 - **Effects live at the boundary** — `app/Main.hs`, the server, and the worker
   layer, which run in `ReaderT Env IO` (see `docs/architecture.md`). Swappable
   effectful backends (registry, queue, credentials) are records of functions
-  chosen at a single composition root — the *seam* pattern (`CONTRIBUTING.md` /
+  chosen at a single composition root — the Handle pattern (`CONTRIBUTING.md` /
   architecture).
 - **Keep the dependency arrow pointing inward:** pure modules must never import
   the effectful shell.
