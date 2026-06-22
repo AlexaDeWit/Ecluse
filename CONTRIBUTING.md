@@ -134,8 +134,13 @@ differential suite, `Ecluse.VersionOrderingSpec`, against reference oracles).
 
 ## Testing Strategy
 
-The suite is split into three Cabal components by cost and determinism. The first
-two gate merges; the third is allowed to fail by design.
+The suite is split into three Cabal components by **what external collaborator the
+code under test needs** — and so by determinism: **unit** (none — pure logic or
+in-process doubles), **integration** (an *emulable* service, via a container),
+**smoke** (an *un-emulable* live service). The first two are hermetic and **gate**
+merges; the third makes live calls and is **allowed to fail by design**. One rule
+spans all three — see *What gates, and what doesn't* below — so read that before
+choosing a new test's tier.
 
 ### Unit tests — `ecluse-unit` (gating)
 
@@ -193,6 +198,39 @@ the real per-cloud token *mint* (`CredentialProvider`'s `mintToken`) against the
 live cloud. Like the registry calls it needs real external access (here, cloud
 credentials), so it is allowed to fail and stays isolated to one small function
 per cloud — an accepted residual risk, consistent with the rest of this tier.
+
+### What gates, and what doesn't
+
+Two things about the split are easy to get backwards, so state them plainly:
+
+- **The integration tier is not "the tier for thorough tests."** What sends a test
+  to integration is a collaborator that can only be a *real* (emulated) service — a
+  cloud queue, a token mint — not how comprehensive the test is. A cross-component
+  test that needs no live external is a **unit** test even when it wires the whole
+  pipeline together: the proxy request-lifecycle (fetch → parse → rules → mirror)
+  runs against an in-process WAI stub and lives in `ecluse-unit`. Determinism and
+  breadth are orthogonal to the tier — put a test wherever its subject can be
+  exercised *deterministically*, which is the unit tier far more often than not.
+
+- **The smoke tier is a drift _detector_, never a correctness _guarantee_.** Because
+  it depends on uncontrolled external services it cannot gate, so nothing we rely on
+  for correctness may live *only* there. Every load-bearing behaviour owes a
+  **deterministic, gating mirror** in the unit or integration tier; a smoke test,
+  where one exists, only confirms the deterministic model still matches the live
+  world. Two cases already follow this shape and are the template to copy:
+  - **Version ordering** is gated offline against a committed fixture
+    (`Ecluse.VersionOrderingSpec` vs `test/unit/fixtures/version-ordering.txt`); the
+    smoke suite (`Ecluse.VersionOraclesSpec`) *additionally* regenerates that fixture
+    from the live oracles and runs a generative differential — a check *on* the
+    fixture, not the only check.
+  - **Credential acquisition** has its refresh/cache/expiry policy unit-tested with
+    an injected clock and a fake mint; only the one un-emulable leaf — the real
+    per-cloud token mint — runs live in smoke.
+
+  So a slice never discharges an acceptance criterion with a smoke test alone. The
+  lone standing case where a behaviour can *only* be observed against a live service
+  (the token mint) is an explicitly-accepted residual risk, called out in the slice
+  — not the default.
 
 ### Coverage — Codecov (gating)
 

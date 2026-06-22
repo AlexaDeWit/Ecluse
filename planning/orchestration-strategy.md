@@ -135,7 +135,10 @@ to compensate for an environment defect unique to long-lived agent sessions.
 The implementer's own "it works" does not count; evidence does.
 
 - **Stage A — requirements.** Every acceptance criterion is met *and backed by a
-  test*; nothing in the slice's architecture scope is silently dropped; **limited scope** (changes stay within the slice's files; touching others needs strong justification); documentation is updated in the *same* PR
+  deterministic, gating test* (unit or integration) — a non-gating smoke test
+  detects drift but never stands in for a criterion (CONTRIBUTING → Testing
+  Strategy → *What gates, and what doesn't*); nothing in the slice's architecture
+  scope is silently dropped; **limited scope** (changes stay within the slice's files; touching others needs strong justification); documentation is updated in the *same* PR
   (per [`../AGENTS.md`](../AGENTS.md) → Documentation Policy).
 - **Stage B — quality & security.** Idiomatic Haskell per
   [`../STYLE.md`](../STYLE.md); totality; `-Werror`-clean; no unsafe/partial
@@ -244,7 +247,7 @@ result, not the prediction. A red gate is root-caused, not patched over.
 
 A PR reaches the architect only when **all** hold:
 
-- [ ] All acceptance criteria met, each with passing test evidence
+- [ ] All acceptance criteria met, each with passing **deterministic, gating** (unit/integration) test evidence — a non-gating smoke test never stands in for a criterion
 - [ ] Independent review (Stage A + B) passed; no open critical issues
 - [ ] Local gate green: `make check && make test-integration && make docs-site && make nix-check`
 - [ ] New/changed lines ≥ 95% covered (`codecov/patch` green; reproduce via `make coverage`)
