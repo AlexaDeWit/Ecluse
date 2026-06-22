@@ -35,7 +35,7 @@ npm proxy.
 - [ ] `make nix-build` produces the runnable binary; the OCI image runs it (the
   release wiring already exists).
 
-**File fence.**
+**File scope.**
 - `src/Ecluse.hs` / `src/Ecluse/Env.hs` — config-driven `newEnv` (backend selection).
 - `app/Main.hs` — parse config → build Env → run (still thin).
 - `test/integration/Ecluse/AwsEndToEndSpec.hs` — the full AWS-backed path.

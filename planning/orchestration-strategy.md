@@ -31,7 +31,7 @@ not paper over uncertainty. Specifically, an implementation agent must never:
 - silently weaken, skip, or `xfail` a test to reach green;
 - add a `.semgrepignore` entry or `nosemgrep` comment (those require the
   architect's approval, always);
-- scope-creep outside the slice's file fence to route around a blocker;
+- sprawling beyond the slice's file scope to route around a blocker (rather than staying in scope or justifying the exception);
 - leave a `TODO` / `undefined` / stub and call the work done.
 
 A leftover stub or a quietly-relaxed test **is a blocker, not a delivery** — the
@@ -53,7 +53,7 @@ design into a **dependency-ordered DAG of PR-sized slices**, recorded in
   downstream slices can be built in parallel against them.
 - **Each slice is one coherent, reviewable-in-a-sitting capability**, with
   acceptance criteria traced to specific architecture sections, the test tier(s)
-  it owes, a **file-scope fence**, and its dependencies.
+  it owes, a **limited file scope**, and its dependencies.
 
 The architect signs off on this breakdown **before any code is written**.
 
@@ -101,8 +101,7 @@ immediately rather than at PR time. Slices that genuinely cannot be split become
 The implementer's own "it works" does not count; evidence does.
 
 - **Stage A — requirements.** Every acceptance criterion is met *and backed by a
-  test*; nothing in the slice's architecture scope is silently dropped; **no scope
-  creep** (only fenced files touched); documentation is updated in the *same* PR
+  test*; nothing in the slice's architecture scope is silently dropped; **limited scope** (changes stay within the slice's files; touching others needs strong justification); documentation is updated in the *same* PR
   (per [`../AGENTS.md`](../AGENTS.md) → Documentation Policy).
 - **Stage B — quality & security.** Idiomatic Haskell per
   [`../STYLE.md`](../STYLE.md); totality; `-Werror`-clean; no unsafe/partial
@@ -207,7 +206,7 @@ A PR reaches the architect only when **all** hold:
 - [ ] Comments are contract + why only — no roadmap / slice / PR references (HADDOCK.md §11)
 - [ ] Semgrep clean (no new ignores)
 - [ ] CI `gate` (and every job it needs) green on the PR
-- [ ] Docs updated in the same PR; only fenced files touched
+- [ ] Docs updated in the same PR; changes limited to the slice's file scope (other files only with strong justification)
 - [ ] Commits GPG-signed + Conventional Commits
 
 ## Escalation
@@ -241,7 +240,7 @@ Escalations arrive **decision-ready**:
 
 - Implementation work lands via **PRs only**; the team lead never merges and never
   pushes to `main`.
-- **One worktree per agent**; agents touch only files inside their slice's fence.
+- **One worktree per agent**; agents keep changes within their slice's file scope, touching other files only with strong justification.
 - **GPG-signed** commits, **Conventional Commits** (`type(scope): summary`).
 - **Semgrep clean** before every push; ignores need the architect's approval.
 - GitHub Actions **SHA-pinned**; workflows kept **injection-free**.

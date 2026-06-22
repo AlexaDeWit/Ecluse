@@ -47,7 +47,7 @@ breaks demand-driven mirroring of partially-mirrored packages).
   `PackageDetails` field; if threaded through for observability, keep it out of
   equality/identity. (Decide in implementation; note the choice.) — _domain-model.md_
 
-**File fence.**
+**File scope.**
 - `src/Ecluse/Package/Merge.hs` — `Provenance`, `MergeResult` (merged
   `PackageInfo` + detected divergences), `mergePackuments`.
 - `test/unit/Ecluse/Package/MergeSpec.hs` — properties: union completeness; private

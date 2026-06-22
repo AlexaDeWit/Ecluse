@@ -30,7 +30,7 @@ S20.
   registry) mirrors the AWS end-to-end (S20). — _cloud-backends.md#testing_
 - [ ] Config docs updated (the GCP rows already exist; mark them functional).
 
-**File fence.**
+**File scope.**
 - `src/Ecluse.hs` / `src/Ecluse/Env.hs` — GCP backend selection (additive to S20).
 - `test/integration/Ecluse/GcpEndToEndSpec.hs` — full GCP-backed path.
 - `README.md` / `docs/` — mark GCP functional.

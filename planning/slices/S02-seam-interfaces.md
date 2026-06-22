@@ -44,7 +44,7 @@ against stable interfaces.
   driven by fixtures — usable by every downstream slice's tests.
 - [ ] Every type/field has Haddock; handles carry the `IO`-not-`App` rationale.
 
-**File fence.**
+**File scope.**
 - `src/Ecluse/Registry.hs` — `RegistryClient`, `RegistryResponse`, `ParseError`, `PublishError`.
 - `src/Ecluse/Queue.hs` — `MirrorQueue`, `MirrorJob`, `QueueMessage`, `ReceiptHandle`, `Seconds`, `newInMemoryQueue`.
 - `src/Ecluse/Credential.hs` — `CredentialProvider`, `AuthToken`, `Secret`, in-memory provider.

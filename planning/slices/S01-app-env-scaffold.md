@@ -38,7 +38,7 @@ layer runs in `App`.
   in `src/Ecluse.hs` is replaced by genuine composition-root wiring.
 - [ ] `app/Main.hs` stays thin (parse-and-delegate only).
 
-**File fence.**
+**File scope.**
 - `src/Ecluse/App.hs` — `App`, `runApp`/`withEnv` helpers.
 - `src/Ecluse/Env.hs` — `Env` record + `newEnv`/`withEnv` constructor.
 - `src/Ecluse.hs` — `run` becomes the composition-root skeleton (declares `runServer`/`runWorker`).

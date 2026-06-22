@@ -33,7 +33,7 @@ pr: null
   4566) via `testcontainers`: enqueue→receive→ack round-trip; no-ack→redeliver. —
   _CONTRIBUTING.md#integration-tests--ecluse-integration-gating_
 
-**File fence.**
+**File scope.**
 - `src/Ecluse/Queue/Sqs.hs` — `newSqsQueue`.
 - `ecluse.cabal` — add `amazonka-sqs` (and `testcontainers` to the integration suite).
 - `test/integration/Ecluse/MirrorQueueSpec.hs` — fill the existing stub with the ministack round-trip.

@@ -45,7 +45,7 @@ supported* — serve it at `GET /openapi.json`, and render browsable docs in CI.
   **Redoc** HTML alongside the Haddock for GitHub Pages; the renderer is pinned in
   the dev shell / vendored — never a runtime dependency.
 
-**File fence.**
+**File scope.**
 - `src/Ecluse/Server/Manifest.hs` — assemble the `openapi3` document (owned schemas
   + `Route`×mount path fold) and the `/openapi.json` handler.
 - `src/Ecluse/Server/Response.hs`, config model, npm filter — *additive*

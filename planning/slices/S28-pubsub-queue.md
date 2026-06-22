@@ -29,7 +29,7 @@ against the Pub/Sub emulator.
 - [ ] Integration test against the Pub/Sub emulator: enqueue→receive→ack;
   no-ack→redeliver. — _cloud-backends.md#testing_
 
-**File fence.**
+**File scope.**
 - `src/Ecluse/Queue/PubSub.hs` — `newPubSubQueue` (client per S27 decision).
 - `ecluse.cabal` — add the client dep decided in S27.
 - `test/integration/Ecluse/PubSubQueueSpec.hs` — emulator round-trip.

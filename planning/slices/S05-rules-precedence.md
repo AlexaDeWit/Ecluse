@@ -43,7 +43,7 @@ one current/end-state gap.
   change the decision, modulo the audit-reason order); an operator-elevated allow
   can outrank a lower deny.
 
-**File fence.**
+**File scope.**
 - `src/Ecluse/Rules/Types.hs` — add the precedence representation.
 - `src/Ecluse/Rules.hs` — precedence-based `evalRules`; keep `evalRule` pure/total.
 - `test/unit/Ecluse/RulesSpec.hs` — extend properties (the existing suite is the model).

@@ -40,7 +40,7 @@ version that *fixes* one past the publish-age quarantine.
   (the `Unavailable` / abstain-on-failure paths cover an empty/unloaded index
   pre-first-sync, already guarded by readiness). — _rules-engine.md#cve-subsystem_
 
-**File fence.**
+**File scope.**
 - `src/Ecluse/Rules/Types.hs`, `src/Ecluse/Rules.hs` — add `DenyIfCVE` and
   `AllowIfRemediatesCve` (constructors + `evalRule` arms over the effectful context).
 - `src/Ecluse/Config.hs` — decode both rule types + their default precedences (additive).

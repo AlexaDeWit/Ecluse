@@ -54,7 +54,7 @@ fast and reject the unknown — including unresolvable merge references.
 - [ ] **Secrets never in structured config** — tokens only via env; assert the
   decoder rejects a token field inside the document.
 
-**File fence.**
+**File scope.**
 - `src/Ecluse/Config.hs` — config types, env parser, JSON schema + strict decoders, validation aggregation.
 - `ecluse.cabal` — add `aeson`, `envparse`.
 - `test/unit/Ecluse/ConfigSpec.hs` — present/absent/malformed env; strict-decode rejections; single-mount desugaring; error aggregation.

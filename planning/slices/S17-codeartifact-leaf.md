@@ -31,7 +31,7 @@ policy. ~10 lines of cloud-specific code behind the generic wrapper.
   `GetAuthorizationToken`); the policy around it is already unit-tested (S16). —
   _cloud-backends.md#testing_
 
-**File fence.**
+**File scope.**
 - `src/Ecluse/Credential/CodeArtifact.hs` — the leaf + smart constructor.
 - `ecluse.cabal` — add `amazonka`, `amazonka-codeartifact`, `amazonka-sts`.
 - `test/smoke/Ecluse/Credential/CodeArtifactSpec.hs` — real mint against a sandbox account (secret-gated, non-gating).

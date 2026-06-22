@@ -51,7 +51,7 @@ pipeline advances ([issue #11](https://github.com/AlexaDeWit/Ecluse/issues/11)).
   Unit now; **exercised through the real request path** once S08/S14/S15 wire the
   guards (integration). — _issue #11_
 
-**File fence.**
+**File scope.**
 - `src/Ecluse/Security.hs` — the pure guards (`isAllowedUpstreamHost`,
   `isBlockedTarget`, identifier/URL-construction helpers) and the `Limits` config +
   bounded-reader / bounded-decode helpers.
@@ -72,7 +72,7 @@ pipeline advances ([issue #11](https://github.com/AlexaDeWit/Ecluse/issues/11)).
 
 **Notes / risks.** The pure primitives are buildable and independently testable
 **now**; the **wiring** is the hard requirement on S08/S03/S14/S15 (reflected in
-their fences). The bounded reader lives at the `http-client` boundary (S08); this
+their file scopes). The bounded reader lives at the `http-client` boundary (S08); this
 slice provides the limit logic + config it consumes. Escalate if address parsing
 genuinely needs a dependency rather than a small CIDR check.
 

@@ -28,7 +28,7 @@ can `publish → pull → ack` against it. This experiment resolves both client-
   thin hand-rolled REST client over `http-client`+`aeson`, with the evidence
   (coverage, emulator compatibility). — _cloud-backends.md#haskell-client-maturity, technology-stack.md_
 
-**File fence.**
+**File scope.**
 - `test/integration/Ecluse/PubSubSpikeSpec.hs` — the spike (may live as an explicitly-marked exploratory suite).
 - `ecluse.cabal` — add the candidate client dep (`gogol-pubsub` or none if hand-rolled).
 - this slice file — record the outcome decision.

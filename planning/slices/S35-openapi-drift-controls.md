@@ -45,7 +45,7 @@ server without a test failing — across **both** drift axes (schema; path/opera
 - [ ] _(Optional)_ an `openapi-diff` CI step classifying breaking vs additive
   changes against the committed golden; note explicitly if deferred.
 
-**File fence.**
+**File scope.**
 - `test/unit/Ecluse/Server/ManifestDriftSpec.hs` — the `validateToJSON` properties,
   the `Route` / operation exhaustiveness test, and the `hspec-wai` status contract.
 - `test/golden/openapi.json` — the canonical-config spec snapshot, plus a small

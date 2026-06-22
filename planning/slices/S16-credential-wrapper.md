@@ -33,7 +33,7 @@ leaf. Everything but `mintToken` is unit-testable deterministically.
 - [ ] Deterministic unit tests with the injected clock + a fake mint cover: refresh
   timing, single-flight, serve-stale-on-failure, breaker trip/half-open.
 
-**File fence.**
+**File scope.**
 - `src/Ecluse/Credential.hs` — the wrapper + `static` (additive to S02; the handle type is already there).
 - `src/Ecluse/Credential/Refresh.hs` — refresh/cache/breaker policy (if it earns its own module).
 - `test/unit/Ecluse/CredentialSpec.hs` — clock-driven policy tests.

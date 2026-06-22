@@ -40,7 +40,7 @@ real pipeline.
   body is deferred to S14/S15 (honest stub returning a clear "not yet wired" path
   for package routes, **not** a fake 200).
 
-**File fence.**
+**File scope.**
 - `src/Ecluse/Server.hs` — the `Application`, dispatch, meta-routes, middleware, `runServer`.
 - `src/Ecluse.hs` — wire `runServer` into `run` (additive to S01).
 - `ecluse.cabal` — add `warp`, `wai`, `wai-extra`.

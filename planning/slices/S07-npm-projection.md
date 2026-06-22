@@ -38,7 +38,7 @@ view above `PackageDetails`). Nothing above the adapter sees npm wire data.
 - [ ] Unknown/unfetched signals map to the explicit-unknown cases
   (`CodeExecUnknown`/`TrustUnknown`/`Nothing`) rather than fabricated values.
 
-**File fence.**
+**File scope.**
 - `src/Ecluse/Package.hs` (or new `src/Ecluse/Packument.hs`) — `PackageInfo` type (+ exports).
 - `src/Ecluse/Registry/Npm/Project.hs` — the three `parse*` functions.
 - `ecluse.cabal` — register module(s).

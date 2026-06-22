@@ -33,7 +33,7 @@ contract, the Datadog Operator recipe (optional), and the `release` environment 
   _docs/architecture/release-supply-chain.md#releases--container-image_
 - [ ] `README.md` updated to reflect launch status.
 
-**File fence.**
+**File scope.**
 - `README.md`, `CONTRIBUTING.md` — deployment + release-secret docs.
 - `docs/` — a deployment/runbook doc if it earns its own page.
 

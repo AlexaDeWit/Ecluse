@@ -31,7 +31,7 @@ provenance attestation already binds the digest to the builder identity.
   PR gate. — _AGENTS.md (CI & Security)_
 - [x] Docs updated (CONTRIBUTING → Releases) describing how to verify provenance + SBOM.
 
-**File fence.**
+**File scope.**
 - `.github/workflows/release.yml` — digest resolve, registry login, provenance + SBOM attest steps.
 - `Makefile` / `flake.nix` — keep `make sbom` (sbomnix); drop the cosign sign/attest path.
 - `README.md` / `CONTRIBUTING.md` / `AGENTS.md` — `gh attestation verify` recipe + how it's produced.

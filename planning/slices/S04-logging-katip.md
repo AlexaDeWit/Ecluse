@@ -31,7 +31,7 @@ attaches context to; trace-ID/`dd`-object correlation is added in M6 (S26).
 - [ ] The JSONL scribe is unit-tested table-driven: a record serialises to one line
   with the expected keys and escaped newlines.
 
-**File fence.**
+**File scope.**
 - `src/Ecluse/Log.hs` — scribe construction, format switch, context helpers.
 - `src/Ecluse/Env.hs` — fill the logger field (additive).
 - `src/Ecluse/Config.hs` — `PROXY_LOG_FORMAT` (additive; coordinate with S03).

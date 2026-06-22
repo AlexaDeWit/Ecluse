@@ -47,7 +47,7 @@ the S02 in-memory doubles; real AWS backends arrive in M4.
 - [ ] Optional inbound `PROXY_AUTH_TOKEN` validated at the edge before proxying (S03).
 - [ ] Uses the metadata cache (S13) so the fetch+parse is shared/collapsed.
 
-**File fence.**
+**File scope.**
 - `src/Ecluse/Server/Pipeline.hs` — the packument handler: fetch orchestration, credential forward/strip, rules+filter+serve.
 - `src/Ecluse/Server.hs` — wire the packument route to the pipeline (replace the S12 "wired in S14" stub).
 - `test/unit/Ecluse/Server/PipelineSpec.hs` — `hspec-wai` with in-process upstream doubles: private+public merged, public-gated/private-trusted, collision→private-wins + divergence flagged, credential forward/strip, partial-upstream union, no-survivors 403.

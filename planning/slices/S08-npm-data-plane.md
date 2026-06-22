@@ -40,7 +40,7 @@ optional bearer token.
   (which token, by leg, is the request pipeline's job in S14 — here the client
   accepts an injected token and never originates credential policy). — _web-layer.md#control-plane-vs-data-plane_
 
-**File fence.**
+**File scope.**
 - `src/Ecluse/Registry/Npm.hs` — `newNpmClient`, the effectful fields, request building.
 - `ecluse.cabal` — `http-client`, `http-client-tls` (added in S01 if not already), `zlib`/gzip handling as needed.
 - `test/unit/Ecluse/Registry/NpmSpec.hs` — request shaping against an in-process WAI/`http-client` stub (Accept/encoding headers, scoped `%2F`, idempotent publish on 409).

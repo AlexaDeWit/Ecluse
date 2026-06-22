@@ -19,7 +19,7 @@ Per-slice files are deliberate: parallel agents (and their status updates) touch
 ## How to read and use this plan
 
 - **One slice = one PR.** Each slice is a single coherent, reviewable-in-a-sitting
-  capability with a file-scope fence, the test tier(s) it owes, acceptance
+  capability with a limited file scope, the test tier(s) it owes, acceptance
   criteria traced to architecture sections, and explicit dependencies.
 - **Status lives in the slice file.** Each [`slices/`](slices/)`SNN-*.md` carries a
   `status:` field in its frontmatter — `not-started → in-progress → in-review →
@@ -29,7 +29,7 @@ Per-slice files are deliberate: parallel agents (and their status updates) touch
   the per-slice split avoids); the [**In flight**](#in-flight) section below is the
   single-writer (team-lead) pointer to what is being worked right now.
 - **Depth is proximity-proportional.** Near-term slices (M0–M3) are detailed to
-  implementation depth now. Later slices (M4–M8) carry goal / criteria / fence /
+  implementation depth now. Later slices (M4–M8) carry goal / criteria / scope /
   deps and are deepened as their dependencies land and their worktrees are rebased
   onto the new base — integration drift is surfaced then, not at PR time.
 - **Definition of done** for every slice is the checklist in
@@ -248,8 +248,8 @@ brief:
   implementation subagents, evaluates, reproduces the gate, hands review-ready PRs
   back. **The team lead never merges and never pushes to `main`.**
 - **One worktree per agent**, each on its own branch, is a hard rule — including
-  for this planning work. Implementer agents touch only files inside their slice's
-  fence.
+  for this planning work. Implementer agents keep changes within their slice's file scope,
+  touching other files only with strong justification.
 - **The per-PR loop:** BUILD (implementer, TDD, self-runs the local gate) →
   EVALUATE (a fresh reviewer agent: Stage A requirements/traceability, Stage B
   quality/security/test-quality) → GATE (reproduce CI locally, push, confirm the
@@ -257,7 +257,7 @@ brief:
 - **Escalate, don't guess.** Any agent that is stuck, unsure, or facing
   ambiguous / missing / contradictory spec stops and surfaces it. No fabricated
   values or API behaviour, no silently-weakened tests, no `.semgrepignore` without
-  the architect's approval, no scope-creep past the fence, no leftover
+  the architect's approval, no sprawl beyond the slice's file scope without strong justification, no leftover
   `TODO`/`undefined`/stub passed off as done.
 - **Reproduce the gate before handoff:**
   `make check && make test-integration && make docs-site && make nix-check`;

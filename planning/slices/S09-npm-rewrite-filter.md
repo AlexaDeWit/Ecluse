@@ -42,7 +42,7 @@ verdicts across all versions (the deny-by-default filtered projection).
   rewriting `dist.tarball` in place — never rebuild the served body from a lossy typed
   model. — _api-surface.md#the-synthesized-packument-schema--the-trust-boundary_
 
-**File fence.**
+**File scope.**
 - `src/Ecluse/Registry/Npm/Filter.hs` — `rewriteTarballUrls`, `filterPackument` (verdict application), result type for the no-survivors case.
 - `test/unit/Ecluse/Registry/Npm/FilterSpec.hs` — filtering (drop denied, repoint latest, drop stale tags, no-survivors), rewriting, coherence properties.
 

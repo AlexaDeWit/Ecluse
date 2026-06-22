@@ -33,7 +33,7 @@ client-facing error maps to the right status and an intuitive body — not a gen
 - [ ] Renders a `Decision` (from S05) into a `Rejection` message via the existing
   `renderDecision`/`renderDuration`.
 
-**File fence.**
+**File scope.**
 - `src/Ecluse/Server/Response.hs` — the types, status mapping, npm error-body encoder, help-message append.
 - `ecluse.cabal` — register module (`aeson` already present from S03/S06).
 - `test/unit/Ecluse/Server/ResponseSpec.hs` — outcome→status table; denial-body shape; help-message appending.

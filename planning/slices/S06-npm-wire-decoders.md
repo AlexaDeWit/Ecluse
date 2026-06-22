@@ -36,7 +36,7 @@ rules and serving need.
 - [ ] Round-trips representative real bodies (fixtures captured from the npm.md
   probes: `is-odd`, `core-js`, a scoped `@babel/...`, `request` (deprecated)).
 
-**File fence.**
+**File scope.**
 - `src/Ecluse/Registry/Npm/Wire.hs` — wire types + `FromJSON` (+ `ToJSON` where serving needs it; output is S09/S14).
 - `ecluse.cabal` — add `aeson`; register the module; add fixtures to `extra-source-files` if used by unit tests.
 - `test/unit/Ecluse/Registry/Npm/WireSpec.hs` — decode fixtures; lenient-form and bare-string-404 cases.

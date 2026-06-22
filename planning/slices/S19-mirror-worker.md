@@ -38,7 +38,7 @@ a supervised concurrent thread, split-ready.
   unliftio), each a self-contained entry over the shared `Env` (split-ready). —
   _cloud-backends.md#process-model_
 
-**File fence.**
+**File scope.**
 - `src/Ecluse/Worker.hs` — `runWorker`, the consume loop, integrity verification, heartbeat.
 - `src/Ecluse/Env.hs` — worker heartbeat handle (additive).
 - `src/Ecluse.hs` — run server+worker concurrently (additive to S12).

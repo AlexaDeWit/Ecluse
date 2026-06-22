@@ -34,7 +34,7 @@ logs to traces via trace-ID injection into the JSONL `dd` object.
   (`trace_id`/`span_id`/`service`/`env`/`version`) in the id format Datadog expects;
   one compact line per record. — _observability.md#logs_
 
-**File fence.**
+**File scope.**
 - `src/Ecluse/Telemetry/Metrics.hs` — instrument definitions + the bounded-label types.
 - `src/Ecluse/Log.hs` — `dd`-object injection (additive to S04).
 - call sites (pipeline/worker/cve/credential) — emit metrics (additive).
