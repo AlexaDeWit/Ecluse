@@ -190,7 +190,9 @@ test-suite ecluse-smoke
     , containers       ^>=0.6
     , directory        ^>=1.3
     , ecluse
+    , hedgehog         ^>=1.4
     , hspec            ^>=2.11
+    , hspec-hedgehog   ^>=0.1
     , http-client      ^>=0.7
     , http-client-tls  ^>=0.3.6
     , process          ^>=1.6
