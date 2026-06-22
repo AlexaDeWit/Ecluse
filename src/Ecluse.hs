@@ -69,8 +69,101 @@ request lifecycle, and a map to the per-concern design documents. @CONTRIBUTING.
 covers the codebase layout and testing strategy, and @STYLE.md@ the coding and
 documentation conventions.
 -}
-module Ecluse (run) where
+module Ecluse (
+    -- * Entry point
+    run,
 
--- | Start Écluse: the entry point the @ecluse@ executable runs (see "Main").
+    -- * Split-ready services
+    runServer,
+    runWorker,
+
+    -- * Default seams
+    unconfiguredRegistry,
+    unconfiguredCredentials,
+) where
+
+import Network.HTTP.Client qualified as HTTP
+import Network.HTTP.Client.TLS (tlsManagerSettings)
+import System.IO.Error (userError)
+import UnliftIO (concurrently_, throwIO)
+
+import Ecluse.Credential (AuthToken (..), CredentialProvider, mkSecret, staticProvider)
+import Ecluse.Env (Env, withEnv)
+import Ecluse.Queue (newInMemoryQueue)
+import Ecluse.Registry (
+    ParseError (..),
+    RegistryClient (..),
+ )
+
+{- | Start Écluse: the entry point the @ecluse@ executable runs (see "Main").
+
+It assembles the composition root — the seams plus a shared HTTP @Manager@ — into
+an 'Env', then runs the server and the mirror worker __concurrently__ over that
+single 'Env' ('runServer' and 'runWorker'). Bracketing the 'Env' for the
+lifetime of both means their shared resources are torn down along every exit
+path.
+-}
 run :: IO ()
-run = putTextLn "écluse starting..."
+run = do
+    manager <- HTTP.newManager tlsManagerSettings
+    queue <- newInMemoryQueue
+    withEnv unconfiguredRegistry queue unconfiguredCredentials manager runServices
+
+{- | Run the server and the mirror worker concurrently over one composition-root
+'Env', the shape the single-process program uses. The two are independent (each
+depends only on the seams in 'Env', not on each other), so splitting into
+separate binaries later is two thin entry points calling 'runServer' \/
+'runWorker' — no rearchitecting.
+-}
+runServices :: Env -> IO ()
+runServices env = concurrently_ (runServer env) (runWorker env)
+
+{- | Serve the proxy's HTTP front door over the composition-root 'Env'. Request
+handlers read the 'Env' in plain 'IO'.
+
+The WAI @Application@, routing, and Warp listener are not yet wired here; this
+is a minimal stub.
+-}
+runServer :: Env -> IO ()
+runServer _env = pass
+
+{- | Run the supervised mirror worker over the composition-root 'Env': the
+consume → fetch → verify → publish → ack loop against the queue and credential
+seams, in the @App@ orchestration monad.
+
+The consume loop and its health signal are not yet wired here; this is a
+minimal stub.
+-}
+runWorker :: Env -> IO ()
+runWorker _env = pass
+
+{- | A registry seam with no backend behind it: every effectful field __refuses
+loudly__ ('throwIO') and every pure @parse*@ field returns 'Left', so an
+unconfigured fetch\/publish or parse fails explicitly rather than silently
+returning a fabricated success. It holds the seam slot in the composition root
+where a configured backend is selected elsewhere.
+-}
+unconfiguredRegistry :: RegistryClient
+unconfiguredRegistry =
+    RegistryClient
+        { fetchMetadata = const refuse
+        , fetchArtifact = \_ _ -> refuse
+        , publishArtifact = \_ _ _ -> refuse
+        , parsePackageInfo = const (Left notConfigured)
+        , parseVersionDetails = \_ _ -> Left notConfigured
+        , parseVersionList = const (Left notConfigured)
+        }
+  where
+    refuse :: IO a
+    refuse = throwIO (userError "registry: no backend configured")
+
+    notConfigured :: ParseError
+    notConfigured = ParseError{parseErrorMessage = "no registry backend configured"}
+
+{- | A credential seam with no backend behind it: a static, non-expiring empty
+secret. Credentials are mirror-write only and never read on the serve path, so
+this holds the seam slot in the composition root without minting a live token.
+-}
+unconfiguredCredentials :: CredentialProvider
+unconfiguredCredentials =
+    staticProvider AuthToken{authSecret = mkSecret "", authExpiresAt = Nothing}

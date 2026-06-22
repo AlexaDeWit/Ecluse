@@ -46,8 +46,10 @@ library
   hs-source-dirs:  src
   exposed-modules:
     Ecluse
+    Ecluse.App
     Ecluse.Credential
     Ecluse.Ecosystem
+    Ecluse.Env
     Ecluse.Package
     Ecluse.Queue
     Ecluse.Registry
@@ -60,12 +62,15 @@ library
     Ecluse.Version
 
   build-depends:
-    , aeson       ^>=2.1
-    , bytestring  ^>=0.11
-    , containers  ^>=0.6
-    , text        ^>=2.0
-    , time        ^>=1.12
-    , vector      ^>=0.13
+    , aeson            ^>=2.1
+    , bytestring       ^>=0.11
+    , containers       ^>=0.6
+    , http-client      ^>=0.7
+    , http-client-tls  ^>=0.3.6
+    , text             ^>=2.0
+    , time             ^>=1.12
+    , unliftio         ^>=0.2.25
+    , vector           ^>=0.13
 
 executable ecluse
   import:         shared
@@ -84,6 +89,7 @@ test-suite ecluse-unit
   other-modules:
     EcluseSpec
     Ecluse.CredentialSpec
+    Ecluse.EnvSpec
     Ecluse.PackageSpec
     Ecluse.QueueSpec
     Ecluse.Registry.Npm.ProjectSpec
@@ -102,9 +108,12 @@ test-suite ecluse-unit
     , hedgehog         ^>=1.4
     , hspec            ^>=2.11
     , hspec-hedgehog   ^>=0.1
+    , http-client      ^>=0.7
+    , http-client-tls  ^>=0.3.6
     , ecluse
     , text             ^>=2.0
     , time             ^>=1.12
+    , unliftio         ^>=0.2.25
     , vector           ^>=0.13
 
 -- Integration tests: exercise AWS-backed code against a ministack container
