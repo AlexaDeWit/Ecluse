@@ -83,6 +83,7 @@ module Ecluse (
     unconfiguredCredentials,
 ) where
 
+import Katip (Environment (Environment))
 import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 import System.IO.Error (userError)
@@ -90,6 +91,7 @@ import UnliftIO (concurrently_, throwIO)
 
 import Ecluse.Credential (AuthToken (..), CredentialProvider, mkSecret, staticProvider)
 import Ecluse.Env (Env, withEnv)
+import Ecluse.Log (LogFormat (JsonLog), newLogEnv)
 import Ecluse.Queue (newInMemoryQueue)
 import Ecluse.Registry (
     ParseError (..),
@@ -109,7 +111,8 @@ run :: IO ()
 run = do
     manager <- HTTP.newManager tlsManagerSettings
     queue <- newInMemoryQueue
-    withEnv unconfiguredRegistry queue unconfiguredCredentials manager runServices
+    logEnv <- newLogEnv JsonLog (Environment "production")
+    withEnv unconfiguredRegistry queue unconfiguredCredentials manager logEnv runServices
 
 {- | Run the server and the mirror worker concurrently over one composition-root
 'Env', the shape the single-process program uses. The two are independent (each

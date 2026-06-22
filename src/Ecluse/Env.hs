@@ -35,6 +35,7 @@ module Ecluse.Env (
     withEnv,
 ) where
 
+import Katip (LogEnv)
 import Network.HTTP.Client (Manager)
 import UnliftIO (MonadUnliftIO, bracket)
 
@@ -60,25 +61,31 @@ data Env = Env
     -- ^ The shared @http-client@ 'Manager' for the data plane (metadata fetch and
     -- artifact streaming), so connection pooling and TLS are established once and
     -- reused across requests.
+    , envLogEnv :: LogEnv
+    -- ^ The @katip@ logging environment (see "Ecluse.Log"): the structured-log
+    -- stream every layer attaches context to, with its stdout scribe and format
+    -- chosen at startup.
     }
 
 {- | Assemble an 'Env' from its constructed handles and a shared HTTP 'Manager'.
 
-The 'Manager' is taken as an argument rather than built here: a 'Manager' owns a
-connection pool whose lifetime should be bracketed by the caller that also owns
-teardown (see 'withEnv'), and injecting it keeps 'Env' assembly pure of network
-setup — so it can be exercised in tests against in-memory handle doubles with no
-sockets opened. Backend selection happens in the handle smart constructors that
-produce the arguments; this only gathers them.
+The 'Manager' and 'LogEnv' are taken as arguments rather than built here: a
+'Manager' owns a connection pool whose lifetime should be bracketed by the caller
+that also owns teardown (see 'withEnv'), and injecting both keeps 'Env' assembly
+pure of network and logging setup — so it can be exercised in tests against
+in-memory handle doubles with no sockets opened and no scribe attached to stdout.
+Backend selection happens in the handle smart constructors that produce the
+arguments; this only gathers them.
 -}
-newEnv :: RegistryClient -> MirrorQueue -> CredentialProvider -> Manager -> IO Env
-newEnv registry queue credentials manager =
+newEnv :: RegistryClient -> MirrorQueue -> CredentialProvider -> Manager -> LogEnv -> IO Env
+newEnv registry queue credentials manager logEnv =
     pure
         Env
             { envRegistry = registry
             , envQueue = queue
             , envCredentials = credentials
             , envManager = manager
+            , envLogEnv = logEnv
             }
 
 {- | Build an 'Env', run an action against it, and tear it down — even on
@@ -92,11 +99,12 @@ withEnv ::
     MirrorQueue ->
     CredentialProvider ->
     Manager ->
+    LogEnv ->
     (Env -> m a) ->
     m a
-withEnv registry queue credentials manager =
+withEnv registry queue credentials manager logEnv =
     bracket
-        (liftIO (newEnv registry queue credentials manager))
+        (liftIO (newEnv registry queue credentials manager logEnv))
         teardown
   where
     -- The connection pool behind the 'Manager' is owned and released by whoever

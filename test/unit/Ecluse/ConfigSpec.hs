@@ -8,6 +8,7 @@ import System.Environment (setEnv, unsetEnv)
 import Test.Hspec
 
 import Ecluse.Config
+import Ecluse.Log (LogFormat (..))
 import Ecluse.Package (mkScope)
 import Ecluse.Rules.Types (
     PrecededRule (..),
@@ -133,6 +134,7 @@ fullEnv =
     , ("PROXY_AUTH_TOKEN", "s3cr3t")
     , ("PROXY_HELP_MESSAGE", "ask #platform")
     , ("CVE_SYNC_INTERVAL_SECONDS", "60")
+    , ("PROXY_LOG_FORMAT", "console")
     ]
 
 -- The minimum valid environment: only the three required URLs, everything else
@@ -165,6 +167,7 @@ envLayerSpec = describe "parseEnvPure" $ do
                 cfgAuthToken cfg `shouldBe` Just "s3cr3t"
                 cfgHelpMessage cfg `shouldBe` Just "ask #platform"
                 cfgCveSyncInterval cfg `shouldBe` (60 :: NominalDiffTime)
+                cfgLogFormat cfg `shouldBe` ConsoleLog
 
     it "applies the documented defaults for the optional variables" $ do
         case parseEnvPure minimalEnv of
@@ -177,6 +180,7 @@ envLayerSpec = describe "parseEnvPure" $ do
                 cfgAwsRegion cfg `shouldBe` Nothing
                 cfgAuthToken cfg `shouldBe` Nothing
                 cfgHelpMessage cfg `shouldBe` Nothing
+                cfgLogFormat cfg `shouldBe` JsonLog
 
     it "reports a single missing required variable against its own name" $
         failedNames (parseEnvPure (without "PRIVATE_UPSTREAM_URL" minimalEnv))
@@ -211,6 +215,10 @@ envLayerSpec = describe "parseEnvPure" $ do
     it "rejects a negative CVE sync interval" $
         failedNames (parseEnvPure (set "CVE_SYNC_INTERVAL_SECONDS" "-5" minimalEnv))
             `shouldBe` ["CVE_SYNC_INTERVAL_SECONDS"]
+
+    it "rejects an unknown log format against its own name" $
+        failedNames (parseEnvPure (set "PROXY_LOG_FORMAT" "yaml" minimalEnv))
+            `shouldBe` ["PROXY_LOG_FORMAT"]
 
     it "renders every aggregated error in the failure block" $ do
         -- The rendered block names each offending variable, so a launch failure
