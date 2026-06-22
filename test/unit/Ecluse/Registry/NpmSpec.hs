@@ -106,7 +106,7 @@ data Captured = Captured
     deriving stock (Eq, Show)
 
 {- | A running stub: the ephemeral 'Port' it listens on and the slot holding the
-most recent 'Captured' request (the seam talks to @127.0.0.1:port@).
+most recent 'Captured' request (the handle talks to @127.0.0.1:port@).
 -}
 data Stub = Stub
     { stubPort :: Port
@@ -166,7 +166,7 @@ requestShapingSpec :: Spec
 requestShapingSpec =
     around (withStub status200 "{}") $
         describe "fetchMetadata request shaping" $ do
-            it "the seam's fetchMetadata requests the abbreviated form with gzip" $ \stub -> do
+            it "the handle's fetchMetadata requests the abbreviated form with gzip" $ \stub -> do
                 config <- stubConfig stub
                 client <- newNpmClient config
                 _ <- fetchMetadata client isOdd
@@ -268,7 +268,7 @@ artifactSpec = describe "fetchArtifact / artifactRequest" $ do
             cap <- lastCaptured stub
             capPath cap `shouldBe` "/@babel%2Fcode-frame/-/code-frame-1.0.0.tgz"
 
-        it "returns the upstream artifact bytes (buffered seam field)" $ \stub -> do
+        it "returns the upstream artifact bytes (buffered handle field)" $ \stub -> do
             config <- stubConfig stub
             client <- newNpmClient config
             resp <- fetchArtifact client isOdd v1
@@ -379,10 +379,10 @@ urlFailureSpec = describe "URL-formation failures" $ do
         -- A trailing slash on the base must not double the join.
         metadataRequest config Abbreviated noValidators isOdd `shouldNotSatisfy` isLeft
 
--- ── config and seam wiring ───────────────────────────────────────────────────
+-- ── config and handle wiring ─────────────────────────────────────────────────
 
 configAndWiringSpec :: Spec
-configAndWiringSpec = describe "config and seam wiring" $ do
+configAndWiringSpec = describe "config and handle wiring" $ do
     it "defaultNpmConfig targets the public registry anonymously over the given manager" $ do
         manager <- newManager defaultManagerSettings
         let config = defaultNpmConfig manager
@@ -399,11 +399,11 @@ configAndWiringSpec = describe "config and seam wiring" $ do
         show Full `shouldBe` ("Full" :: Text)
         noValidators `shouldBe` Validators{validatorIfNoneMatch = Nothing, validatorIfModifiedSince = Nothing}
 
-    it "wires S07's parse* projections into the seam's pure fields" $ do
+    it "wires the parse* projections into the handle's pure fields" $ do
         manager <- newManager defaultManagerSettings
         client <- newNpmClient (defaultNpmConfig manager)
         -- A minimal packument projects through the fields the client installed,
-        -- proving each pure projection is reachable via the assembled seam.
+        -- proving each pure projection is reachable via the assembled handle.
         let resp = RegistryResponse "{\"name\":\"is-odd\"}"
         case parsePackageInfo client resp of
             Left err -> fail ("expected a successful projection, got: " <> show err)

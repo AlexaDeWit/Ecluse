@@ -45,3 +45,31 @@ no-survivors packument case (S09→S14). Keep the `Unavailable`/`Transience` arm
 present from the start even though it only becomes reachable when S21 (effectful
 tier) lands — it is part of the error model now, not a stub. Packument requests have
 no single status (S14 chooses 403-vs-503 over the filtered set).
+
+**As-built notes (PR #47).**
+- **HTTP status modelled as a domain sum type, not `http-types`.** The
+  concrete-artifact status is its own total sum `ArtifactStatus = Ok | Forbidden |
+  Unavailable' (Maybe RetryAfter) | ServerError | NotFound`, with
+  `artifactStatus :: ServeDecision -> ArtifactStatus` and `artifactStatusCode ::
+  ArtifactStatus -> Int` (200/403/503/500/404). Modelling the status as a closed
+  domain type — rather than a raw `http-types` `Status` — keeps the outcome→status
+  mapping exhaustive and lets the WAI layer read off a finite set. (`NotFound`/404 is
+  carried for completeness but is not produced by `artifactStatus`: an upstream miss
+  is a forwarded status, not a serve *decision*.)
+- **`Seconds` realised as a `RetryAfter` newtype.** The architecture sketch's
+  `WillResolve (Maybe Seconds)` shipped as `WillResolve (Maybe RetryAfter)`, where
+  `newtype RetryAfter = RetryAfter Int` (whole seconds) keeps a raw retry count from
+  being confused with any other integer when it becomes the `Retry-After` header.
+  (`Seconds` from S02/`Ecluse.Queue` is a queue-visibility unit; the response model
+  uses its own newtype rather than borrowing it.)
+- **`RuleName` and `HelpMessage` newtypes.** `RejectReason`'s `ByPolicy` carries a
+  `newtype RuleName = RuleName Text` (over `Ecluse.Rules.ruleName`), not a bare
+  `Text`. The denial body's operator help message is a `newtype HelpMessage` with a
+  `mkHelpMessage` smart constructor that trims surrounding whitespace, so a blank or
+  all-space `PROXY_HELP_MESSAGE` contributes nothing rather than appending an empty
+  span.
+- **`Rejection` field names.** The record fields are `rejectionReason` /
+  `rejectionMessage` (type-tagged per STYLE.md §6.3), and a rules `Decision` is
+  projected to a `ServeDecision` via `serveDecisionOf` reusing `renderDecision` for
+  the message. The `Unavailable`/`Transience` arm is present from the start (only
+  reachable once S21 lands), exactly as the note above requires.
