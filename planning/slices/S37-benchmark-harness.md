@@ -62,7 +62,7 @@ which can then *measure* the regressions it currently eyeballs.
   allocations-vs-time, **never-gates**, how to read the dashboard, and how to run
   `make bench` locally.
 
-**File fence.**
+**File scope.**
 - `bench/Main.hs` (+ `bench/Ecluse/*Bench.hs`) — the `tasty-bench` suite.
 - `ecluse.cabal` — `benchmark ecluse-bench` stanza (adds `tasty-bench` + `tasty`,
   benchmark-component-only; never in the library's dependency closure).

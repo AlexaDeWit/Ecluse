@@ -68,8 +68,7 @@ data Route
       Unsupported
     deriving stock (Eq, Show)
 
-{- | Classify an ecosystem-native request path into a 'Route'. __Pure and
-total.__
+{- | Classify an ecosystem-native request path into a 'Route'.
 
 Matching order is significant: reserved meta-routes (a leading @"-"@ segment)
 are tried first, since a real package name can never begin with @\'-\'@; only

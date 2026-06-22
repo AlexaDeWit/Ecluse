@@ -18,9 +18,9 @@ pr: null
 > Milestone **M9** · depends on: [S14](S14-packument-path.md), [S33](S33-packument-merge.md), [S37](S37-benchmark-harness.md) · tier: bench
 
 **Goal.** Extend the harness from pure functions to the **whole request pipeline
-through the WAI `Application`, over the in-memory seam doubles** — hermetic and
+through the WAI `Application`, over the in-memory handle doubles** — hermetic and
 deterministic (no network, no Docker), exactly the payoff of the
-record-of-functions seams. Benchmarks the packument path end to end:
+record-of-functions handles. Benchmarks the packument path end to end:
 decode → rule-filter → cross-upstream merge → re-serialise → ETag. Like S37 it is
 **informational and non-gating** — it feeds the same trend and wires into no `gate`.
 
@@ -39,7 +39,7 @@ decode → rule-filter → cross-upstream merge → re-serialise → ETag. Like 
 - [ ] Results feed the **informational** dashboard from S37; **no gate** wiring,
   `fail-on-alert: false`.
 
-**File fence.**
+**File scope.**
 - `bench/Ecluse/PipelineBench.hs`, `bench/Ecluse/MergeBench.hs` — additive to the
   S37 suite.
 - `ecluse.cabal` — benchmark-component deps (`wai`; reuse the library's in-memory
@@ -48,7 +48,7 @@ decode → rule-filter → cross-upstream merge → re-serialise → ETag. Like 
 
 **Test tier.** Bench — informational, non-gating.
 
-**Notes / risks.** Reuse the existing in-memory seam doubles so the pipeline bench
+**Notes / risks.** Reuse the existing in-memory handle doubles so the pipeline bench
 opens no sockets. Keep bench inputs in fixtures (extend `test/unit/fixtures/npm/`,
 or a `bench/fixtures/` if large). Blocked on the walking skeleton (S14) and the
 pure merge (S33) existing. **Never wire into `gate`.**

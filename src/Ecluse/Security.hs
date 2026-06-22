@@ -145,8 +145,7 @@ data IpAddr
     | -- | An IPv6 address, normalised to its eight 16-bit groups.
       IPv6 [Word16]
 
-{- | Extract the bare host from a URI or @host[:port]@ authority. __Pure and
-total.__
+{- | Extract the bare host from a URI or @host[:port]@ authority.
 
 A convenience for the SSRF gate: an outbound target is usually a full URL or an
 authority, but 'isAllowedUpstreamHost' and 'isBlockedTarget' compare the bare

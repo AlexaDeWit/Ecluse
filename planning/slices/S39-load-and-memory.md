@@ -38,7 +38,7 @@ Host-sensitive, so it runs on a **schedule / manual dispatch**, never per-PR, an
 - [ ] Runs on **schedule / `workflow_dispatch`** (not per-PR), publishes to the
   informational trend; **never gates**.
 
-**File fence.**
+**File scope.**
 - `bench/load/` — load scenarios + the `oha` / `wrk2` driver script.
 - `Makefile` — `bench-load` target.
 - `flake.nix` — `oha` (or `wrk2`) in the dev shell.
