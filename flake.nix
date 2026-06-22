@@ -68,6 +68,11 @@
           hpkgs.cabal-install
           hpkgs.fourmolu
           hpkgs.hlint
+          # Run the >>> examples in Haddock comments as tests (`make doctest`),
+          # via `cabal repl --with-ghc=doctest`. Must come from the same GHC 9.6
+          # set as the compiler it stands in for. See HADDOCK.md → "Examples that
+          # run".
+          hpkgs.doctest
           # Convert HPC coverage output (.tix/.mix) to Codecov JSON for the
           # `coverage` target (see CONTRIBUTING.md → "Coverage").
           hpkgs.hpc-codecov

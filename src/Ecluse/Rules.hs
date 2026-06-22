@@ -138,7 +138,13 @@ renderDecision pd decision =
                         else ": " <> T.intercalate "; " reasons
 
 {- | Render a duration as an approximate, human-friendly string for use in
-decision messages (e.g. @"7 days"@, @"3 hours"@). Always non-negative.
+decision messages. Always non-negative.
+
+>>> renderDuration 604800
+"7 days"
+
+>>> renderDuration 90
+"1 minute"
 -}
 renderDuration :: NominalDiffTime -> Text
 renderDuration d =

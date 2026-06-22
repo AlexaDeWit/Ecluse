@@ -20,8 +20,8 @@ IMAGE ?= docker.io/alexadewit/ecluse
 HADDOCK_FLAGS := --haddock-hyperlink-source --haddock-quickjump
 
 .DEFAULT_GOAL := help
-.PHONY: help update build test test-integration test-smoke test-all coverage \
-        gen-version-fixtures format format-check lint sast check run docs \
+.PHONY: help update build test test-integration test-smoke test-all doctest \
+        coverage gen-version-fixtures format format-check lint sast check run docs \
         docs-site nix-build nix-check docker-build docker-push sbom scan \
         scan-vulnix clean
 
@@ -46,6 +46,15 @@ test-smoke: ## Run the smoke suite (live registries; non-gating)
 
 test-all: test test-integration test-smoke ## Run every test suite
 
+# doctest runs the >>> examples embedded in Haddock comments as tests, so the
+# documentation cannot drift from the code. It runs via
+# `cabal repl --with-ghc=doctest`, which inherits the package's exact build
+# configuration — most importantly the relude prelude (a cabal mixin) — instead
+# of re-deriving GHC flags by hand. -Wno-error: enforcing warnings is
+# `make build`'s job (-Werror); doctest only checks each example's result.
+doctest: ## Run the Haddock >>> examples as tests (doctest)
+	$(NIX) cabal repl --with-ghc=doctest --repl-options=-Wno-error lib:ecluse
+
 # Suite to measure for `coverage`; override to cover another gating tier, e.g.
 # `make coverage SUITE=ecluse-integration` (needs Docker, like the suite itself).
 SUITE ?= ecluse-unit
@@ -68,7 +77,7 @@ lint: ## Run hlint
 sast: ## Static analysis (Semgrep, registry rules)
 	$(NIX) semgrep scan --config auto --severity ERROR --severity WARNING --error .
 
-check: build test format-check lint sast ## Run everything the CI gate requires
+check: build test doctest format-check lint sast ## Run everything the CI gate requires
 
 run: ## Run the proxy
 	$(NIX) cabal run ecluse
