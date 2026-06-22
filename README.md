@@ -84,7 +84,7 @@ nix develop        # enter the Nix dev shell — direnv does this automatically
 
 make build         # build library, executable, and tests
 make test          # fast, gating unit suite
-make check         # build + test + format + lint + sast (what the CI gate runs)
+make check         # build + test + doctest + format + lint + sast (what the CI gate runs)
 make run           # run the proxy
 ```
 
