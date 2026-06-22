@@ -1,0 +1,55 @@
+name: Bug report
+description: Something in Écluse behaves incorrectly.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. **Do not report security vulnerabilities here** —
+        use private reporting (see [`SECURITY.md`](../blob/main/SECURITY.md)).
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you expected, and what happened instead.
+      placeholder: I expected … but ecluse …
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps. Include the relevant config/policy and any logs.
+      placeholder: |
+        1. Configure …
+        2. Request package …
+        3. See …
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version / commit
+      description: Image digest (`alexadewit/ecluse@sha256:…`), release tag, or git SHA.
+    validations:
+      required: true
+  - type: dropdown
+    id: how
+    attributes:
+      label: How are you running it?
+      options:
+        - Container image
+        - nix build / nix run
+        - Built from source (cabal)
+        - Other (describe above)
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and this is not a duplicate.
+          required: true
+        - label: If I used an AI tool to help write this report, I have verified the details myself (see CONTRIBUTING.md → AI-assisted contributions).
+          required: true

@@ -373,6 +373,25 @@ statically-linked Haskell deps are a lower-risk surface than the C libs.
 
 ---
 
+## AI-assisted contributions
+
+AI-assisted work is welcome, but the bar does not change: **you are the author,
+you must understand and be able to explain every line, and the contribution must
+be worth more than the time it takes to review.** Low-effort, unreviewed AI
+output ("slop") will be closed.
+
+- **Disclose non-trivial AI use.** Editor autocomplete needs no disclosure;
+  AI-generated or substantially AI-shaped code, prose, or commits do. Add an
+  `Assisted-by:` git trailer naming the tool — e.g.
+  `Assisted-by: Claude (Anthropic)` — and mention it in the PR description. This
+  records a tool that *helped*; you remain the sole author, so it is **not**
+  `Co-authored-by:`.
+- **Verify before you file.** Never open an issue — and especially never a
+  vulnerability report — that an AI produced and you have not reproduced and
+  confirmed yourself (see [`SECURITY.md`](SECURITY.md)).
+
+---
+
 ## Repository requirements
 
 - **Workflows stay injection-free.** Never interpolate untrusted
@@ -385,3 +404,5 @@ statically-linked Haskell deps are a lower-risk surface than the C libs.
   `fix`, `docs`, `chore`, `ci`, `refactor`, `test`, `build`, or `perf` (scope
   optional). Keep the summary short and imperative; put detail in the body.
 - **Commits are GPG-signed.** Keep history verifiable.
+- **Disclose AI assistance.** Mark non-trivial AI-assisted commits with an
+  `Assisted-by:` trailer — see [AI-assisted contributions](#ai-assisted-contributions).

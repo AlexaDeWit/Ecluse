@@ -57,8 +57,10 @@ attestations are produced.
 ## Development
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full contributor guide —
-codebase conventions, testing strategy, and CI / repository requirements. A
-quick start follows.
+codebase conventions, testing strategy, CI / repository requirements, and the
+[AI-assisted contribution](CONTRIBUTING.md#ai-assisted-contributions) policy; all
+participation is governed by our [Code of Conduct](CODE_OF_CONDUCT.md). A quick
+start follows.
 
 ### Prerequisites
 
