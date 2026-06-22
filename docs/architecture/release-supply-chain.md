@@ -135,9 +135,22 @@ up upstream security fixes; the gate validates each bump and the scan re-runs on
 it. This is the remediation arm — fixing a finding is usually just merging the
 Renovate PR.
 
-**Haskell advisories** (`cabal-audit` / the HSEC database) are a deferred
-follow-up: `cabal-audit` is marked broken in the pinned nixpkgs, and the
-statically-linked Haskell deps are a lower-risk surface than the C libs.
+**Haskell advisories — Renovate's OSV alerting.** HSEC advisories (the
+[Haskell Security Response Team](https://github.com/haskell/security-advisories)
+database) are exported to [OSV.dev](https://osv.dev), and Renovate maps the
+`hackage` datasource it extracts from `ecluse.cabal` to the OSV `Hackage`
+ecosystem — so `osvVulnerabilityAlerts: true` (set in
+[`renovate.json5`](../../.github/renovate.json5)) raises a fix-PR when an advisory
+affects one of our cabal deps. It must be the OSV-based opt-in: the default
+platform `vulnerabilityAlerts` (the GitHub Advisory Database) has no Hackage
+ecosystem, so the OSV flag is what brings HSEC coverage. This alerts on the
+**declared** cabal deps; a deeper audit of the full resolved install plan —
+transitive deps and GHC-boot libraries (`base`, `process`, …), with SARIF output
+— via `cabal-audit` remains an optional future enhancement. (`cabal-audit` and
+the modern `hsec-tools` 0.5.x build cleanly on the current GHC 9.10 toolchain;
+the earlier "broken in nixpkgs" blocker applied to the pre-26.05 / GHC-9.6 set.)
+It stays deferred because the statically-linked Haskell deps are a lower-risk
+surface than the C libs grype already watches.
 
 ## Posture scoring — OpenSSF Scorecard
 
