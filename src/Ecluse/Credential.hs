@@ -20,7 +20,8 @@ and never imports the proxy's @Env@\/@App@, so backends stay decoupled from the
 core (see @docs\/architecture\/technology-stack.md@ → "Key Decisions").
 
 This module provides the handle and its payload types. 'staticProvider' is the
-in-memory implementation: a fixed token with no expiry.
+in-memory leaf: a fixed token with no expiry. The generic refresh\/cache\/expiry
+policy that wraps a per-cloud token mint lives in "Ecluse.Credential.Refresh".
 -}
 module Ecluse.Credential (
     -- * Provider handle
