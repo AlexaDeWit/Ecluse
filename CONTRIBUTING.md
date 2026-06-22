@@ -10,6 +10,18 @@ in [`STYLE.md`](STYLE.md), and the documentation/Haddock conventions are in
 [`HADDOCK.md`](HADDOCK.md). Agent-specific instructions live in
 [`AGENTS.md`](AGENTS.md).
 
+## Working language
+
+Issues and discussion are in **English**, so the whole community — and any future
+maintainer — can search, find, and help with them. You don't need perfect English:
+rough English, or your own language run through a translator like Google Translate,
+is genuinely welcome, and it keeps your report findable for the next person with the
+same problem. If English is a real barrier, the maintainer also reads **French** and
+**Swedish** — write in one of those and they'll manage; including a translated version
+alongside helps everyone else follow along.
+
+Source code, identifiers, comments, and commit messages stay in English.
+
 ## Local development
 
 **Nix (with flakes) is a hard dependency.** The whole toolchain — GHC 9.10, Cabal,
