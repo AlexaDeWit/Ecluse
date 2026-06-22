@@ -237,10 +237,9 @@ notFound = jsonResponse status404 (denialBody Nothing "not found")
 
 -- ── health probes ────────────────────────────────────────────────────────────
 
-{- | Liveness (@\/livez@): the process is responsive. In single-process mode it
-also reflects the mirror worker's consume-loop heartbeat — a stalled worker fails
-liveness (see @docs\/architecture\/cloud-backends.md@ → "Process model"). The
-worker heartbeat is consulted once the worker layer carries one.
+{- | Liveness (@\/livez@): @200@ while the process is responsive. The architecture
+folds the mirror worker's consume-loop heartbeat into single-process liveness so a
+stalled worker fails it (see @docs\/architecture\/cloud-backends.md@ → "Process model").
 -}
 liveness :: Env -> Response
 liveness _env = jsonResponse status200 "{\"status\":\"live\"}"

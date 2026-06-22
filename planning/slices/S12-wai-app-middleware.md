@@ -60,7 +60,7 @@ The streaming/ETag/cache concerns are S13 — this slice is routing + meta + mid
   `Env` (S01) carries no port/mounts (its growth stays additive — caches in S13,
   composition-root config wiring in S20). So `Ecluse.Server` introduces a small
   local `ServerConfig` (port + `[Mount]` + `RequestSizeLimit`); `application ::
-  ServerConfig -> Env -> Application` is the testable seam, and `runServer :: Env
+  ServerConfig -> Env -> Application` is the testable entry point, and `runServer :: Env
   -> IO ()` uses `defaultServerConfig` (port **4873** — the documented
   `PROXY_PORT` default — and a single root mount). S20 supplies the real port and
   resolved `MountMap` at the composition root without changing this signature.
