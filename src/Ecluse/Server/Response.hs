@@ -232,7 +232,7 @@ denialBody :: Maybe HelpMessage -> Text -> LByteString
 denialBody help message =
     Aeson.encode (object ["error" .= appendHelp help message])
 
--- | Append a non-blank help message to the denial text, separated by one space.
+-- Append a non-blank help message to the denial text, separated by one space.
 appendHelp :: Maybe HelpMessage -> Text -> Text
 appendHelp help message =
     case help of
