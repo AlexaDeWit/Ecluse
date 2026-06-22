@@ -2,12 +2,16 @@ name: CI
 
 # Run on pushes to main (post-merge verification) and on every PR; a
 # feature-branch push no longer double-runs alongside its PR. Manual dispatch is
-# kept for re-runs. Push runs therefore always use main's workflow definition;
-# PR runs use the PR head's, by GitHub's design.
+# kept for re-runs. The nightly schedule re-runs the workflow on main as a health
+# check — most valuably the smoke tier, which catches live-registry protocol drift
+# that lands independent of our commits. Push runs therefore always use main's
+# workflow definition; PR runs use the PR head's, by GitHub's design.
 on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    - cron: "17 4 * * *" # nightly health check (most valuably the smoke tier)
   workflow_dispatch:
 
 # Cancel superseded runs for the same ref on PRs/branches, but never on main —
@@ -21,14 +25,28 @@ concurrency:
 permissions:
   contents: read
 
-# All checks are jobs in this one graph and feed the terminal `gate` job, which
-# is the single Required status check in branch protection (plus Codecov's
+# All gating checks are jobs in this one graph and feed the terminal `gate` job,
+# which is the single Required status check in branch protection (plus Codecov's
 # server-side statuses; see CONTRIBUTING.md → "Coverage"). Setup actions are
 # SHA-pinned once in .github/actions/setup-toolchain; CI enters the lean `.#ci`
 # dev shell.
+#
+# Caching is restore-everywhere / SAVE-ONLY-ON-main: the heavy compiled-dependency
+# store is built once on main and reused by every PR (which never write their own
+# copies). build-test is the single writer. See CONTRIBUTING.md → "Cache
+# management" and the setup-toolchain action.
 jobs:
-  build-and-test:
-    name: Build & unit tests
+  build-test:
+    name: Build & tests (unit + integration)
+    # One job builds the project ONCE (library, executable, all three test
+    # suites) and then runs every Haskell test tier against those same on-disk
+    # artifacts — unit, integration, doctest, coverage. Previously build-and-test
+    # and integration were separate jobs on separate runners, so the ~8-minute
+    # dependency build ran twice per PR (and raced each other to populate one
+    # shared, first-writer-wins cabal cache that ended up incomplete for the
+    # widest plan). Building once, in one workspace, removes that whole class of
+    # waste. Runs on ubuntu-latest, which ships the Docker daemon ministack /
+    # testcontainers need for the integration tier.
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -51,13 +69,20 @@ jobs:
       - name: Update package index
         run: nix develop .#ci --command make update
 
-      # Build everything (all three test suites included) so a broken
-      # integration/smoke suite fails the gate even when it isn't run here.
+      # The single heavy step: build everything (all three test suites included),
+      # so a broken integration/smoke suite fails the gate, and so the cabal store
+      # this job caches covers the WIDEST dependency plan — every other Haskell
+      # job (docs, smoke, weeder) resolves a subset and is fully served by it.
       - name: Build (library, executable, all test suites)
         run: nix develop .#ci --command make build
 
       - name: Unit tests
         run: nix develop .#ci --command make test
+
+      # Same warm build dir, so the integration tier costs only its own (small)
+      # test-suite link + the ministack containers — not another dependency build.
+      - name: Integration tests (ministack)
+        run: nix develop .#ci --command make test-integration
 
       # Run the >>> examples in Haddock comments as tests (doctest), reusing the
       # warm build above so documented examples can't drift from the code. Gates
@@ -79,51 +104,43 @@ jobs:
           flags: unit
           fail_ci_if_error: true # a lost upload must not silently skip the gate
 
-  integration:
-    name: Integration tests (ministack)
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    # ubuntu-latest ships a Docker daemon, which testcontainers/ministack use.
-    env:
-      CABAL_DIR: ${{ github.workspace }}/.cabal
-    steps:
-      - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      # ---- Cache writes: main only, single writer ---------------------------
+      # This job is the sole writer of the cabal store + dist-newstyle caches, and
+      # only from main. PRs restore these (from main's entries) but never save, so
+      # they don't each leave a branch-scoped copy and blow the 10 GB quota.
+      # !cancelled() so a warm store is still saved when a later tier (e.g.
+      # integration) fails — the deps built fine and are worth caching. The store
+      # is saved from the widest plan above, so the entry is complete. Keys match
+      # the restore keys in setup-toolchain exactly. actions/cache/save no-ops when
+      # the key already exists, so a dependency epoch is written once and then
+      # reused untouched. See CONTRIBUTING.md → "Cache management".
+      - name: Save cabal store (main)
+        if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
-          persist-credentials: false
+          path: ${{ github.workspace }}/.cabal
+          key: cabal-store-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}
 
-      - name: Set up toolchain
-        uses: ./.github/actions/setup-toolchain
+      - name: Save dist-newstyle (main)
+        if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
-          cabal-cache: "true"
-
-      - name: Update package index
-        run: nix develop .#ci --command make update
-
-      - name: Integration tests
-        run: nix develop .#ci --command make test-integration
-
-      # Integration-tier coverage uploads under its own Codecov flag, wired
-      # exactly like the unit job. Enable once ecluse-integration has real cases
-      # (today it is a stub, so an empty flag adds no signal). Enabling also needs
-      # `permissions: { contents: read, id-token: write }` on this job.
-      # - name: Coverage (integration)
-      #   run: nix develop .#ci --command make coverage SUITE=ecluse-integration
-      # - name: Upload coverage to Codecov
-      #   uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
-      #   with:
-      #     use_oidc: true
-      #     files: coverage/ecluse-integration.json
-      #     flags: integration
-      #     fail_ci_if_error: true
+          path: dist-newstyle
+          key: dist-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}
 
   smoke:
-    name: Smoke tests (live registries — allowed to fail)
+    name: Smoke tests (live registries — non-gating)
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # Hits public npm/PyPI; flaky by design. NOT a `gate` dependency, and
-    # continue-on-error so a live-registry failure surfaces protocol drift
-    # without ever reddening the run or blocking a merge.
+    # Hits public npm/PyPI to catch protocol drift when those registries change
+    # their wire behaviour — a correctness signal we want visible on EVERY PR. NOT a
+    # `gate` dependency and continue-on-error, so a transient live-registry blip
+    # never reddens a run or blocks a merge, while a real drift still shows red on
+    # the PR. Also runs post-merge on main and nightly (schedule). Now that the
+    # dependency store is warm on PRs (restored from main), this no longer pays a
+    # full dependency build — only the smoke suite's incremental compile + the live
+    # calls. On promoting this to a required gate, see CONTRIBUTING.md →
+    # "Continuous Integration".
     continue-on-error: true
     env:
       CABAL_DIR: ${{ github.workspace }}/.cabal
@@ -237,9 +254,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # INFORMATIONAL ONLY: not a `gate` dependency and never fails the run. weeder
-    # reports library code not yet reachable from the application entry point —
-    # deliberate scaffolding for upcoming slices — so this surfaces it (in the run
-    # summary) without ever blocking a merge.
+    # reports library code not reachable from the application entry point, rendered
+    # into the run summary. Runs on EVERY PR so a newly-introduced unreachable
+    # definition is surfaced on the PR that adds it — where it's actionable — as well
+    # as post-merge on main. Warm deps (restored from main) keep it cheap.
     env:
       CABAL_DIR: ${{ github.workspace }}/.cabal
     steps:
@@ -252,6 +270,18 @@ jobs:
         uses: ./.github/actions/setup-toolchain
         with:
           cabal-cache: "true"
+
+      # weeder builds the -fwrite-ide-info .hie variant into its own dist-weeder,
+      # which the shared dist-newstyle doesn't cover. Restore-only on PRs (no per-PR
+      # copies); the matching save below runs on main only — same single-writer
+      # policy as every other cache. Keyed on the dependency plan.
+      - name: Restore weeder build (dist-weeder)
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: dist-weeder
+          key: dist-weeder-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}
+          restore-keys: |
+            dist-weeder-${{ runner.os }}-
 
       - name: Update package index
         run: nix develop .#weeder --command make update
@@ -271,13 +301,21 @@ jobs:
             echo '```';
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Save weeder build (dist-weeder, main)
+        if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: dist-weeder
+          key: dist-weeder-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}
+
   gate:
     name: CI gate
     # The single Required check. Runs after every other gating job regardless of
     # result, and fails unless all of them succeeded. Wire new required checks in
-    # by adding them to `needs` here — never as additional required checks. The
-    # smoke job is intentionally absent: it is allowed to fail.
-    needs: [build-and-test, integration, static-checks, docs]
+    # by adding them to `needs` here — never as additional required checks. smoke
+    # and weeder are intentionally absent: they run on PRs for visibility but are
+    # non-gating, so the gate never waits on (or fails because of) them.
+    needs: [build-test, static-checks, docs]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
