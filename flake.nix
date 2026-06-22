@@ -96,6 +96,15 @@
           hpkgs.ghcid
           hpkgs.hoogle
           hpkgs.cabal-plan
+          # The Spec.hs entry points carry `-pgmF hspec-discover`, a source
+          # preprocessor GHC shells out to. cabal supplies it during a build via
+          # build-tool-depends, but HLS runs the same preprocessor when it loads
+          # those modules and does not reproduce cabal's build-tool PATH — so it
+          # reports "could not execute: hspec-discover". Put it on the shell PATH
+          # for HLS; from the same GHC 9.6 set, matching the build-tool-depends
+          # version. CI never needs it here (cabal provides it), so it stays out
+          # of ciInputs.
+          hpkgs.hspec-discover
         ];
 
         # Release tooling: skopeo pushes the Nix-built image to a registry (no
