@@ -2,7 +2,17 @@ cabal-version: 3.0
 name:          ecluse
 version:       0.1.0.0
 synopsis:      Supply-chain resilience proxy for package registries
+description:
+  Écluse is a controlled passage in front of package registries (npm, PyPI, …):
+  every dependency clears resilience and policy checks — version and age gates
+  and rule-based allow/deny — before it reaches your build. See the README for
+  the architecture and configuration.
+homepage:      https://github.com/AlexaDeWit/Ecluse
 license:       MIT
+license-file:  LICENSE
+author:        Alexandra DeWit
+maintainer:    https://github.com/AlexaDeWit
+category:      Network, Security
 build-type:    Simple
 
 -- Test fixtures read at runtime by the pure unit suite. The version-ordering
@@ -12,6 +22,10 @@ build-type:    Simple
 extra-source-files:
   test/unit/fixtures/npm/*.json
   test/unit/fixtures/version-ordering.txt
+
+source-repository head
+  type:     git
+  location: https://github.com/AlexaDeWit/Ecluse.git
 
 -- Shared settings for every component. relude replaces the default prelude via
 -- cabal mixins (see docs/architecture.md "relude as the implicit prelude").

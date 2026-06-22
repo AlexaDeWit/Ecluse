@@ -163,6 +163,9 @@ jobs:
       - name: hlint
         run: nix develop .#ci --command make lint
 
+      - name: cabal check (package metadata)
+        run: nix develop .#ci --command make cabal-check
+
   semgrep:
     name: Static analysis (Semgrep)
     runs-on: ubuntu-latest
