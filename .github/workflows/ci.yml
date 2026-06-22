@@ -144,32 +144,15 @@ jobs:
       - name: Smoke tests
         run: nix develop .#ci --command make test-smoke
 
-  lint:
-    name: Format & lint
+  static-checks:
+    name: Static checks (format, lint, Semgrep, workflows)
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    steps:
-      - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-
-      - name: Set up toolchain
-        uses: ./.github/actions/setup-toolchain
-
-      - name: fourmolu (format check)
-        run: nix develop .#ci --command make format-check
-
-      - name: hlint
-        run: nix develop .#ci --command make lint
-
-      - name: cabal check (package metadata)
-        run: nix develop .#ci --command make cabal-check
-
-  semgrep:
-    name: Static analysis (Semgrep)
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Formerly four jobs (format/lint, cabal-check, Semgrep, workflow-lint). None
+    # build Haskell, so each paid a full ~35s toolchain setup for a sub-minute
+    # check. Merged so that setup is paid once. Each check runs even if an earlier
+    # one failed (`if: !cancelled()`), so one run still reports them all; the job
+    # fails if any check fails — identical gate semantics to the separate jobs.
     permissions:
       contents: read
       security-events: write # upload the Semgrep SARIF to code scanning
@@ -182,7 +165,20 @@ jobs:
       - name: Set up toolchain
         uses: ./.github/actions/setup-toolchain
 
+      - name: fourmolu (format check)
+        if: ${{ !cancelled() }}
+        run: nix develop .#ci --command make format-check
+
+      - name: hlint
+        if: ${{ !cancelled() }}
+        run: nix develop .#ci --command make lint
+
+      - name: cabal check (package metadata)
+        if: ${{ !cancelled() }}
+        run: nix develop .#ci --command make cabal-check
+
       - name: Semgrep scan
+        if: ${{ !cancelled() }}
         # `make sast` runs the same Nix-pinned Semgrep developers use, with
         # --config auto (anonymous; rules fetched from the public Registry),
         # failing on ERROR/WARNING findings. It also writes semgrep.sarif.
@@ -190,21 +186,33 @@ jobs:
 
       - name: Upload Semgrep SARIF to code scanning
         # Surface findings in the Security tab. always() so findings that failed
-        # the gate above still upload; skipped on fork PRs, whose read-only token
-        # can't write security events.
+        # the Semgrep step above still upload; skipped on fork PRs, whose read-only
+        # token can't write security events.
         if: ${{ always() && github.event.pull_request.head.repo.fork != true }}
         uses: github/codeql-action/upload-sarif@dd903d2e4f5405488e5ef1422510ee31c8b32357 # v3
         with:
           sarif_file: semgrep.sarif
           category: semgrep
 
+      - name: Lint workflows (actionlint + zizmor)
+        if: ${{ !cancelled() }}
+        # actionlint (correctness) + zizmor (security). GH_TOKEN lets zizmor run
+        # its online audits with the job's own read-only token; no secret needed.
+        # Runs in the lean .#workflow-lint shell rather than .#ci.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: nix develop .#workflow-lint --command make lint-workflows
+
   docs:
     name: Haddock builds
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    # Gates on the exact target the Pages workflow deploys (`make docs-site`), so
-    # a green gate proves the published docs will build — broken doc comments are
-    # caught on the PR, not after merge when the Pages deploy fails.
+    # Builds the library Haddock (`make docs-check`) so broken doc comments / missing
+    # modules are caught on the PR, not after merge when the Pages deploy fails. This
+    # drops the expensive --haddock-hyperlink-source pass (the dominant cost) — the
+    # full source-linked styling is built only by the Pages publish (`make docs-site`)
+    # on main, whose deploy is non-gating. The compile + doc-comment validation here
+    # is identical, so a green gate still predicts a successful publish.
     env:
       CABAL_DIR: ${{ github.workspace }}/.cabal
     steps:
@@ -222,27 +230,7 @@ jobs:
         run: nix develop .#ci --command make update
 
       - name: Build Haddock
-        run: nix develop .#ci --command make docs-site
-
-  workflow-lint:
-    name: Workflow lint (actionlint + zizmor)
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-
-      - name: Set up toolchain
-        uses: ./.github/actions/setup-toolchain
-
-      - name: Lint workflows
-        # actionlint (correctness) + zizmor (security). GH_TOKEN lets zizmor run
-        # its online audits with the job's own read-only token; no secret needed.
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: nix develop .#workflow-lint --command make lint-workflows
+        run: nix develop .#ci --command make docs-check
 
   weeder:
     name: Dead-code report (weeder — informational)
@@ -289,7 +277,7 @@ jobs:
     # result, and fails unless all of them succeeded. Wire new required checks in
     # by adding them to `needs` here — never as additional required checks. The
     # smoke job is intentionally absent: it is allowed to fail.
-    needs: [build-and-test, integration, lint, semgrep, docs, workflow-lint]
+    needs: [build-and-test, integration, static-checks, docs]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
