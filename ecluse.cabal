@@ -71,6 +71,7 @@ library
     Ecluse.Queue
     Ecluse.Registry
     Ecluse.Registry.Npm
+    Ecluse.Registry.Npm.Filter
     Ecluse.Registry.Npm.Project
     Ecluse.Registry.Npm.Wire
     Ecluse.Rules
@@ -122,6 +123,7 @@ test-suite ecluse-unit
     Ecluse.PackageSpec
     Ecluse.QueueSpec
     Ecluse.Registry.NpmSpec
+    Ecluse.Registry.Npm.FilterSpec
     Ecluse.Registry.Npm.ProjectSpec
     Ecluse.Registry.Npm.WireSpec
     Ecluse.RulesSpec
