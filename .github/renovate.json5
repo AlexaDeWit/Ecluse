@@ -26,7 +26,7 @@
 
   labels: ["dependencies"],
 
-  // Refresh flake.lock. The inputs track *branches* (e.g. nixos-24.11), which
+  // Refresh flake.lock. The inputs track *branches* (e.g. nixos-26.05), which
   // carry no version for Renovate to bump — a lock refresh is how nixpkgs /
   // flake-utils move forward and the image's C-library closure picks up
   // upstream security fixes. This is the freshness arm of the supply-chain
@@ -43,19 +43,27 @@
       semanticCommitType: "build",
     },
 
+    // npm — the lone package.json (test/oracles) pinning the node-semver
+    // reference oracle, built into node_modules by importNpmLock in flake.nix.
+    // → build(deps), same as the other dependency arms.
+    {
+      matchManagers: ["npm"],
+      semanticCommitType: "build",
+    },
+
     // Haskell library bounds → build(deps).
     {
       matchManagers: ["haskell-cabal"],
       semanticCommitType: "build",
       // The shipped artifact resolves its Haskell deps from the *nixpkgs* GHC
-      // 9.6 set pinned by flake.lock (callCabal2nix), while `cabal build` in CI
+      // 9.10 set pinned by flake.lock (callCabal2nix), while `cabal build` in CI
       // resolves from Hackage. "widen" only raises UPPER bounds, so a new
       // Hackage release is *allowed* without forcing a lower bound the (laggier)
       // nixpkgs set can't satisfy — which would otherwise break the Nix build.
       rangeStrategy: "widen",
     },
 
-    // GHC-boot libraries ship *with the compiler* (GHC 9.6, pinned by
+    // GHC-boot libraries ship *with the compiler* (GHC 9.10, pinned by
     // flake.lock), so their version is not independently choosable. Their cabal
     // bounds should move only when GHC moves (a flake/nixpkgs bump), never on a
     // standalone Hackage release — a bumped bound just reddens CI and stalls.

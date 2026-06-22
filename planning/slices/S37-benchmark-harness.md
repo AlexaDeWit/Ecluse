@@ -34,7 +34,7 @@ which can then *measure* the regressions it currently eyeballs.
 - [ ] **`ecluse-bench` component.** A cabal `benchmark` stanza (`import: shared` +
   the relude mixin, like the test suites) using
   [`tasty-bench`](https://hackage.haskell.org/package/tasty-bench) — featherweight
-  (one module, only `tasty`), GHC 9.6, CPU-time by default — builds `-Werror`-clean
+  (one module, only `tasty`), GHC 9.10, CPU-time by default — builds `-Werror`-clean
   and runs via `make bench` from the Nix shell. `criterion` is **rejected** (50+
   transitive deps) per the lean-dependency posture. — _technology-stack.md#key-decisions_
 - [ ] **Micro-benches over the pure hot paths**, each on a realistic input (reuse
