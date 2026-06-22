@@ -54,6 +54,7 @@ library
     Ecluse.Package
     Ecluse.Queue
     Ecluse.Registry
+    Ecluse.Registry.Npm
     Ecluse.Registry.Npm.Project
     Ecluse.Registry.Npm.Wire
     Ecluse.Rules
@@ -70,6 +71,7 @@ library
     , envparse         >=0.5 && <0.7
     , http-client      ^>=0.7
     , http-client-tls  ^>=0.3.6
+    , http-types       ^>=0.12
     , text             ^>=2.0
     , time             ^>=1.12
     , unliftio         ^>=0.2.25
@@ -96,6 +98,7 @@ test-suite ecluse-unit
     Ecluse.EnvSpec
     Ecluse.PackageSpec
     Ecluse.QueueSpec
+    Ecluse.Registry.NpmSpec
     Ecluse.Registry.Npm.ProjectSpec
     Ecluse.Registry.Npm.WireSpec
     Ecluse.RulesSpec
@@ -107,20 +110,24 @@ test-suite ecluse-unit
 
   build-tool-depends: hspec-discover:hspec-discover ^>=2.11
   build-depends:
-    , aeson            ^>=2.1
-    , bytestring       ^>=0.11
-    , containers       ^>=0.6
-    , envparse         >=0.5 && <0.7
-    , hedgehog         ^>=1.4
-    , hspec            ^>=2.11
-    , hspec-hedgehog   ^>=0.1
-    , http-client      ^>=0.7
-    , http-client-tls  ^>=0.3.6
+    , aeson             ^>=2.1
+    , bytestring        ^>=0.11
+    , case-insensitive  ^>=1.2
+    , containers        ^>=0.6
+    , envparse          >=0.5 && <0.7
+    , hedgehog          ^>=1.4
+    , hspec             ^>=2.11
+    , hspec-hedgehog    ^>=0.1
+    , http-client       ^>=0.7
+    , http-client-tls   ^>=0.3.6
+    , http-types        ^>=0.12
     , ecluse
-    , text             ^>=2.0
-    , time             ^>=1.12
-    , unliftio         ^>=0.2.25
-    , vector           ^>=0.13
+    , text              ^>=2.0
+    , time              ^>=1.12
+    , unliftio          ^>=0.2.25
+    , vector            ^>=0.13
+    , wai               ^>=3.2
+    , warp              ^>=3.3
 
 -- Integration tests: exercise AWS-backed code against a ministack container
 -- (via testcontainers). Hermetic and gating; require a Docker daemon. The deps
@@ -138,8 +145,7 @@ test-suite ecluse-integration
 
 -- Smoke tests: live calls to public registries (npm/PyPI) to validate our JSON
 -- and protocol handling. ALLOWED TO FAIL by design (non-gating) — they depend on
--- uncontrolled external services. The deps (http-client-tls, aeson) are added
--- with the first real case.
+-- uncontrolled external services.
 test-suite ecluse-smoke
   import:             shared
   -- hspec-discover generates a Main without an export list.
@@ -153,9 +159,12 @@ test-suite ecluse-smoke
 
   build-tool-depends: hspec-discover:hspec-discover ^>=2.11
   build-depends:
-    , aeson      ^>=2.1
-    , containers ^>=0.6
-    , directory  ^>=1.3
+    , aeson            ^>=2.1
+    , containers       ^>=0.6
+    , directory        ^>=1.3
     , ecluse
-    , hspec      ^>=2.11
-    , process    ^>=1.6
+    , hspec            ^>=2.11
+    , http-client      ^>=0.7
+    , http-client-tls  ^>=0.3.6
+    , process          ^>=1.6
+    , text             ^>=2.0
