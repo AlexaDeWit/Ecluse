@@ -50,10 +50,14 @@ test-all: test test-integration test-smoke ## Run every test suite
 # documentation cannot drift from the code. It runs via
 # `cabal repl --with-ghc=doctest`, which inherits the package's exact build
 # configuration — most importantly the relude prelude (a cabal mixin) — instead
-# of re-deriving GHC flags by hand. -Wno-error: enforcing warnings is
-# `make build`'s job (-Werror); doctest only checks each example's result.
+# of re-deriving GHC flags by hand. The repl-options relax two of the package's
+# warnings for the doctest session only: -Wwarn undoes the package -Werror
+# (enforcing warnings is `make build`'s job; doctest only checks each example's
+# result), and -Wno-missing-export-lists silences the synthetic Ghci wrapper
+# modules doctest generates, which have no export list (the same exemption the
+# test suites already take in the cabal file).
 doctest: ## Run the Haddock >>> examples as tests (doctest)
-	$(NIX) cabal repl --with-ghc=doctest --repl-options=-Wno-error lib:ecluse
+	$(NIX) cabal repl --with-ghc=doctest --repl-options="-Wwarn -Wno-missing-export-lists" lib:ecluse
 
 # Suite to measure for `coverage`; override to cover another gating tier, e.g.
 # `make coverage SUITE=ecluse-integration` (needs Docker, like the suite itself).
