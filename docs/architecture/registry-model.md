@@ -71,11 +71,16 @@ the degenerate identity:
   that divergence is exactly the supply-chain tampering Écluse exists to catch: it
   is **detected, logged, and metered** (and may fail-closed on that version), never
   silently reconciled.
-- **Reconcile over the union.** `dist-tags.latest` is repointed to the highest
-  *surviving* version across **all** sources; tags pointing at an absent version
-  are dropped; `time` is the union restricted to surviving versions. The
-  cross-field coherence this requires (every `dist-tags` target is a present
-  `versions` key) is an invariant held by tests, not the type.
+- **Reconcile over the union.** `dist-tags.latest` follows the **keep-unless-denied,
+  stable-preferring** rule (see
+  [Applying verdicts to a packument](rules-engine.md#applying-verdicts-to-a-packument)):
+  kept as the precedence-winning source published it when it survives, else
+  repointed to the highest stable survivor. Tags pointing at an absent version are
+  dropped; `time` is the union restricted to surviving versions but **retains
+  non-version bookkeeping keys** (`created`/`modified`). Precedence — for versions,
+  tags, and `time` alike — is resolved **by provenance (trusted wins), not input
+  order**. The cross-field coherence this requires (every `dist-tags` target is a
+  present `versions` key) is an invariant held by tests, not the type.
 - **Partial-upstream availability.** If one upstream fails while another succeeds,
   the merge serves the **best-effort union** of what resolved, with a degraded
   signal — readiness stays
@@ -92,6 +97,32 @@ not re-implement merging, and the merge is unit-tested over hand-built
 `PackageInfo` with no network. The merged document is something **no single
 upstream produces** — Écluse authors it — which is why its served schema is owned
 (see [API Surface](api-surface.md#the-synthesized-packument-schema--the-trust-boundary)).
+
+### Decision surface vs served surface
+
+The merge reasons over the **typed** `PackageInfo` domain model, but the document
+Écluse **serves** is the raw upstream JSON (`Value`), edited in place. These are two
+distinct surfaces, and the boundary between them is load-bearing:
+
+- The **typed `PackageInfo`** is the *decision* surface — which versions survive,
+  which source wins a collision, what `latest` resolves to, which integrity
+  divergences exist.
+- The **raw `Value`** is the *served* surface. Those decisions are computed on the
+  typed model but **applied structurally to the raw bytes** — denied versions
+  removed, tarball URLs rewritten, `latest` repointed — so every unmodeled wire key
+  is relayed unchanged. The served body is **never re-serialised from the lossy
+  typed model** (see
+  [API Surface → synthesized-packument schema](api-surface.md#the-synthesized-packument-schema--the-trust-boundary)).
+
+So the merge is a **producer→consumer pipeline** across slices: the adapter filters
+and rewrites a single public packument (deciding over `PackageInfo`, editing the
+`Value`); the ecosystem-agnostic core merges; the serve layer applies the outcome
+to the raw `Value`(s). The merge stage therefore emits a **merge plan** — the
+surviving set, the per-version precedence winner, the resolved `latest`, and the
+detected divergences — that the serve layer **replays onto the raw bytes**, rather
+than a finished typed document the serve layer would have to re-encode (which would
+drop unmodeled fields). Each stage carries its raw `Value` alongside the typed view
+so losslessness survives the whole pipeline.
 
 ### Registry-level composition (optional, never required)
 
