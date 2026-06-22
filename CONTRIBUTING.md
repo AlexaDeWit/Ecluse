@@ -73,6 +73,32 @@ Reach for Nix to reproduce CI exactly or to produce the release artifact; reach
 for `cabal` for day-to-day iteration (Nix rebuilds the whole package on any
 change, so it is poor for edit-compile cycles).
 
+### Dependency locking
+
+Two build paths means two locks, one per resolver, pinned **independently**:
+
+| Path | Resolver | Lock |
+|------|----------|------|
+| Nix / hermetic build (the **shipped** artifact) | nixpkgs GHC 9.6 set | `flake.lock` |
+| `cabal` (dev shell + the CI gate) | Hackage | `index-state:` in `cabal.project` + `cabal.project.freeze` |
+
+`callCabal2nix` does **not** read `cabal.project` / `cabal.project.freeze`, so the
+two are genuinely separate locks. The `index-state` caps the Hackage snapshot the
+solver may see, and the freeze pins exact versions — so `cabal build` / `cabal test`
+(and therefore the gate) resolve a **reproducible** plan: a fresh Hackage upload can
+no longer flip the gate with no source change. Today's caret bounds keep the frozen
+versions close to the nixpkgs ones, so the gate tests roughly what ships.
+
+Move the pins **deliberately**:
+
+- **cabal path** — `make freeze`: advances `index-state` to the latest index and
+  rewrites `cabal.project.freeze`. Commit both. (Renovate widens the *bounds* in
+  `ecluse.cabal`; moving the *pinned versions* is this manual, reviewed step.)
+- **Nix path** — `nix flake update`, or Renovate's weekly `flake.lock` refresh.
+
+A flake bump that shifts the nixpkgs package set is a good prompt to `make freeze`,
+so both paths keep tracking the same versions.
+
 ---
 
 ## Codebase Layout

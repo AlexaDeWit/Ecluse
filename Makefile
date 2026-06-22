@@ -21,7 +21,7 @@ HADDOCK_FLAGS := --haddock-hyperlink-source --haddock-quickjump
 
 .DEFAULT_GOAL := help
 .PHONY: help update build test test-integration test-smoke test-all doctest \
-        coverage gen-version-fixtures format format-check lint sast check run docs \
+        coverage freeze gen-version-fixtures format format-check lint sast check run docs \
         docs-site nix-build nix-check docker-build docker-push sbom scan \
         scan-vulnix clean
 
@@ -31,6 +31,17 @@ help: ## Show this help
 
 update: ## Refresh the cabal package index
 	$(NIX) cabal update
+
+# Regenerate the cabal lockfile. Advances index-state in cabal.project to the
+# latest fetched index, then re-solves and rewrites cabal.project.freeze with
+# exact versions. This is a deliberate, reviewable dependency bump for the cabal
+# path; commit both files together. (The Nix path is bumped separately via
+# `nix flake update`.) See CONTRIBUTING → "Dependency locking".
+freeze: ## Regenerate cabal.project.freeze at the latest index-state
+	$(NIX) cabal update
+	$(NIX) bash -c 'ts=$$(cabal update 2>&1 | sed -n "s/.*index-state is set to \(.*\)\.$$/\1/p" | tail -1); \
+	  [ -n "$$ts" ] && sed -i "s/^index-state:.*/index-state: $$ts/" cabal.project; \
+	  cabal freeze'
 
 build: ## Build library, executable, and all test suites
 	$(NIX) cabal build all --enable-tests
