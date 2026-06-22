@@ -178,6 +178,7 @@ be **merged** before it can start. Tier = the test suite(s) it owes
 |----|-------|------------|------|
 | [S31](slices/S31-provenance-sbom.md) | SLSA provenance + SBOM attestation | — | — |
 | [S32](slices/S32-launch-docs.md) | Launch docs & deployment runbook | S20 | — |
+| [S41](slices/S41-image-runtime-smoke.md) | Image runtime smoke — distroless `docker run` + real proxied fetch (`dlopen`/NSS verification) — _defence-in-depth; low priority_ | S20 | — |
 
 ### M9 — Performance benchmarking (informational; never gates)
 
