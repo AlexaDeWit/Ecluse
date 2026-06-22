@@ -1,7 +1,7 @@
 module Ecluse.VersionSpec (spec) where
 
 import Data.Text qualified as T
-import Hedgehog (Gen, forAll, (===))
+import Hedgehog (Gen, assert, forAll, (===))
 import Hedgehog qualified as H
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
@@ -113,6 +113,104 @@ spec = do
                         H.cover 1 "x > y" (not (le x y))
                         when (le x y && le y z) (H.assert (le x z))
 
+    describe "isStable" $ do
+        -- isStable is defined on the parsed key; stableOf parses a known-good
+        -- version then applies the predicate (Just True / Just False, never
+        -- Nothing for these fixtures, which all parse).
+        let stableOf eco raw = fmap isStable (rightToMaybe (parseVersionKey eco raw))
+
+        describe "semver (npm)" $ do
+            it "a final release is stable" $
+                stableOf Npm "1.0.0" `shouldBe` Just True
+            it "an -rc prerelease is not stable" $
+                stableOf Npm "1.0.0-rc.1" `shouldBe` Just False
+            it "a -beta prerelease is not stable" $
+                stableOf Npm "2.0.0-beta" `shouldBe` Just False
+            it "a numeric prerelease id is not stable" $
+                stableOf Npm "1.0.0-1" `shouldBe` Just False
+
+        describe "PEP 440 (PyPI)" $ do
+            it "a final release is stable" $
+                stableOf PyPI "1.0" `shouldBe` Just True
+            it "a post-release is stable (post is not a prerelease)" $
+                stableOf PyPI "1.0.post1" `shouldBe` Just True
+            it "an alpha pre-release is not stable" $
+                stableOf PyPI "1.0a1" `shouldBe` Just False
+            it "an rc pre-release is not stable" $
+                stableOf PyPI "1.0rc1" `shouldBe` Just False
+            it "a dev release is not stable" $
+                stableOf PyPI "1.0.dev1" `shouldBe` Just False
+            it "a pre+dev release is not stable" $
+                stableOf PyPI "1.0a1.dev2" `shouldBe` Just False
+            it "a post+dev release is not stable (dev disqualifies)" $
+                stableOf PyPI "1.0.post1.dev2" `shouldBe` Just False
+
+        describe "RubyGems" $ do
+            it "an all-numeric version is stable" $
+                stableOf RubyGems "1.0.0" `shouldBe` Just True
+            it "a .pre letter segment is not stable" $
+                stableOf RubyGems "1.0.0.pre" `shouldBe` Just False
+            it "a .rc1 letter segment is not stable" $
+                stableOf RubyGems "1.2.0.rc1" `shouldBe` Just False
+
+    describe "selectLatest" $ do
+        -- All survivors here are npm versions; selectLatest is ecosystem-agnostic
+        -- and just calls compareVersions / isStable on the keys. selRaw resolves
+        -- and reports the chosen tag's raw text, the value the caller uses.
+        let v = mkVersion Npm
+            raws = map unVersion
+            selRaw :: Maybe Text -> [Text] -> Maybe Text
+            selRaw chosen survivors =
+                unVersion <$> selectLatest (v <$> chosen) (map v survivors)
+
+        it "returns Nothing when there are no survivors" $
+            selRaw (Just "1.0.0") [] `shouldBe` Nothing
+
+        it "keeps the chosen latest when it survives" $
+            selRaw (Just "1.2.0") ["1.0.0", "1.2.0", "1.3.0"] `shouldBe` Just "1.2.0"
+
+        it "keeps a stable chosen latest even when a higher prerelease survives" $
+            -- Never promotes: npm keeps latest on the last stable release.
+            selRaw (Just "1.2.0") ["1.2.0", "2.0.0-rc.1"] `shouldBe` Just "1.2.0"
+
+        it "keeps a surviving prerelease chosen latest (no demotion to a higher stable)" $
+            -- Keep is unconditional on survival: a maintainer who tags a prerelease
+            -- as latest keeps it, even though a higher stable version survives.
+            selRaw (Just "2.0.0-rc.1") ["1.2.0", "2.0.0-rc.1"] `shouldBe` Just "2.0.0-rc.1"
+
+        it "is the identity on a single-version packument" $
+            selRaw (Just "1.0.0") ["1.0.0"] `shouldBe` Just "1.0.0"
+
+        it "repoints to the highest stable survivor when the chosen latest is gone" $
+            selRaw (Just "2.0.0") ["1.0.0", "1.5.0", "1.3.0"] `shouldBe` Just "1.5.0"
+
+        it "repoints with no chosen latest at all" $
+            selRaw Nothing ["1.0.0", "1.5.0", "1.3.0"] `shouldBe` Just "1.5.0"
+
+        it "prefers a stable survivor over a higher prerelease when repointing" $
+            selRaw (Just "9.9.9") ["1.0.0", "2.0.0-rc.1"] `shouldBe` Just "1.0.0"
+
+        it "repoints to the highest prerelease only when no stable survives" $
+            selRaw (Just "9.9.9") ["2.0.0-rc.1", "2.0.0-rc.2", "1.0.0-beta"]
+                `shouldBe` Just "2.0.0-rc.2"
+
+        it "never lets an unparseable version beat a parseable one" $
+            -- "garbage" has no key; the parseable 1.0.0 must win.
+            selRaw (Just "9.9.9") ["garbage", "1.0.0"] `shouldBe` Just "1.0.0"
+
+        it "falls back to the lexicographically-smallest survivor when none parse" $
+            selRaw (Just "9.9.9") ["zeta", "alpha", "mid"] `shouldBe` Just "alpha"
+
+        it "always returns one of the survivors it was given" $
+            hedgehog $ do
+                chosenRaw <- forAll (Gen.maybe genRaw)
+                survivorRaws <- forAll (Gen.list (Range.linear 0 6) genRaw)
+                let survivors = map v survivorRaws
+                    result = selectLatest (v <$> chosenRaw) survivors
+                case result of
+                    Nothing -> survivorRaws === []
+                    Just r -> assert (unVersion r `elem` raws survivors)
+
 -- | Flip an 'Ordering' (the antisymmetry witness): @LT@↔@GT@, @EQ@ fixed.
 invertOrdering :: Ordering -> Ordering
 invertOrdering = \case
@@ -180,3 +278,20 @@ genGem = do
     nums <- Gen.list (Range.linear 1 4) genNum
     pre <- Gen.maybe (Gen.element ["alpha", "beta1", "pre", "rc2"])
     pure (T.intercalate "." (nums <> maybeToList pre))
+
+{- | A short raw version string, mixing parseable and unparseable shapes so
+'selectLatest' is exercised on both keyed and key-less survivors.
+-}
+genRaw :: Gen Text
+genRaw =
+    Gen.element
+        [ "1.0.0"
+        , "1.2.0"
+        , "1.3.0"
+        , "2.0.0"
+        , "2.0.0-rc.1"
+        , "2.0.0-rc.2"
+        , "0.9.0"
+        , "garbage"
+        , "also bad"
+        ]

@@ -29,9 +29,15 @@ module Ecluse.Version (
     VersionKey,
     parseVersionKey,
     VersionError (..),
+    isStable,
+
+    -- * Resolving @dist-tags.latest@
+    selectLatest,
 ) where
 
 import Data.Char (isAlphaNum, isDigit)
+import Data.Foldable (maximumBy)
+import Data.List.NonEmpty qualified as NE
 import Data.Text qualified as T
 
 import Ecluse.Ecosystem (Ecosystem (..))
@@ -81,6 +87,92 @@ mirroring the other "unknown signal" cases (@CodeExecUnknown@, @TrustUnknown@).
 -}
 compareVersions :: Version -> Version -> Maybe Ordering
 compareVersions a b = compare <$> versionKey a <*> versionKey b
+
+{- | Whether a parsed version is a __stable__ (final, non-prerelease) release.
+The notion is ecosystem-specific, dispatched on the key's constructor:
+
+* __semver (npm)__ — stable iff there is no @-prerelease@ component (the
+  prerelease is 'SemverFinal'). So @1.0.0@ is stable; @1.0.0-rc.1@ and
+  @2.0.0-beta@ are not.
+* __PEP 440 (PyPI)__ — stable iff it is neither a pre-release (@a@\/@b@\/@rc@)
+  nor a dev release. Post-releases /are/ stable. So @1.0@ and @1.0.post1@ are
+  stable; @1.0a1@, @1.0rc1@, @1.0.dev1@ and @1.0a1.dev2@ are not.
+* __RubyGems__ — stable iff no segment contains a letter (the version is
+  all-numeric). So @1.0.0@ is stable; @1.0.0.pre@ and @1.2.0.rc1@ are not.
+
+Used by 'selectLatest' to prefer a stable release when @dist-tags.latest@ must
+be repointed.
+
+>>> isStable <$> parseVersionKey Npm "1.0.0"
+Right True
+>>> isStable <$> parseVersionKey Npm "1.0.0-rc.1"
+Right False
+>>> isStable <$> parseVersionKey PyPI "1.0.post1"
+Right True
+>>> isStable <$> parseVersionKey PyPI "1.0a1.dev2"
+Right False
+>>> isStable <$> parseVersionKey RubyGems "1.0.0.pre"
+Right False
+-}
+isStable :: VersionKey -> Bool
+isStable = \case
+    NpmKey (SemverKey _ pre) -> pre == SemverFinal
+    -- PEP 440 final/post: no prerelease band (1) and no dev band (0). The field
+    -- semantics are documented on 'Pep440Key'; post-releases stay stable.
+    PyPIKey k -> noPep440Pre k && noPep440Dev k
+    -- A gem is stable iff every token is numeric (no letter segment).
+    RubyGemsKey (GemKey toks) -> all isNumToken toks
+  where
+    noPep440Pre k = case p440Pre k of (band, _, _) -> band /= 1
+    noPep440Dev k = case p440Dev k of (band, _) -> band /= 0
+    isNumToken = \case
+        VNum _ -> True
+        VStr _ -> False
+
+{- | Resolve @dist-tags.latest@ for a packument after denied\/undecidable
+versions have been filtered out — the __keep-unless-denied, stable-preferring__
+rule from @docs\/architecture\/rules-engine.md@ ("Applying verdicts to a
+packument"). @chosen@ is the source's currently-tagged @latest@ (if any);
+@survivors@ is the surviving versions. The result, when present, is always one
+of @survivors@, so the caller can use its 'unVersion' as the tag string.
+
+The resolution, in order:
+
+* If @survivors@ is empty, there is nothing to point at — 'Nothing'.
+* __Keep:__ if @chosen@ survives (by raw text), return it unchanged. This is the
+  identity on a single-input packument and never /promotes/ a prerelease over a
+  maintainer's chosen stable @latest@.
+* __Repoint__ (only when the chosen @latest@ did not survive): among survivors
+  with a parseable key, prefer the maximum __stable__ one; if none are stable,
+  the maximum __prerelease__ one. (Within one ecosystem parseable keys are
+  totally ordered, so 'compareVersions' is total over them.)
+* __No parseable survivor:__ to keep the result naming a present version, fall
+  back to the lexicographically-smallest survivor by 'unVersion'. An unparseable
+  version never outranks a parseable one.
+-}
+selectLatest :: Maybe Version -> [Version] -> Maybe Version
+selectLatest chosen survivors = case nonEmpty survivors of
+    Nothing -> Nothing
+    Just survivors1
+        | Just v <- chosen, survives v -> Just v
+        | otherwise -> Just (repoint survivors1)
+  where
+    survives v = any ((== unVersion v) . unVersion) survivors
+
+    repoint :: NonEmpty Version -> Version
+    repoint ne =
+        let keyed = [(v, k) | v <- toList ne, Just k <- [versionKey v]]
+            stable = [vk | vk@(_, k) <- keyed, isStable k]
+         in case nonEmpty stable of
+                Just s -> fst (maxByKey s)
+                Nothing -> case nonEmpty keyed of
+                    Just ks -> fst (maxByKey ks)
+                    -- No parseable survivor: deterministic, present fallback.
+                    Nothing -> NE.head (NE.sortWith unVersion ne)
+
+    -- Greatest by canonical key; total because every element carries a key.
+    maxByKey :: NonEmpty (Version, VersionKey) -> (Version, VersionKey)
+    maxByKey = maximumBy (comparing snd)
 
 -- | Why a version string failed to parse.
 newtype VersionError = VersionError
