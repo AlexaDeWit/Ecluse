@@ -1,9 +1,14 @@
 {- | The policy rules engine.
 
 A rule set is evaluated against a single 'PackageDetails' snapshot to produce a
-'Decision'. The model is __deny by default__: a package is allowed only if some
-rule explicitly allows it __and no rule denies it__. A single matching deny rule
-takes precedence over every allow.
+'Decision'. The model is __deny by default; precedence decides__: each rule
+carries an integer precedence ('PrecededRule'), and the highest-precedence rule
+that does not abstain wins. At equal precedence a deny beats an allow, and the
+built-in deny defaults sit strictly above the allow defaults
+('defaultPrecedence'), so "any deny overrides any allow" holds out of the box.
+If every rule abstains the package is denied by default. Because precedence —
+not list order — decides, the rule set is order-independent except for the
+equal-precedence deny tiebreak and the order abstain reasons are gathered.
 
 The initial rule set is pure (no IO). Effectful rules (CVE lookups, etc.) are a
 later tier layered on top of this one; see @docs\/architecture.md@. The rule
@@ -17,6 +22,7 @@ module Ecluse.Rules (
     renderDuration,
 ) where
 
+import Data.Foldable (maximumBy)
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, diffUTCTime)
 import Ecluse.Package
@@ -68,24 +74,50 @@ evalRule _ DenyHasInstallScripts pd =
 
 {- | Evaluate a package version against a rule set.
 
-__Deny takes precedence.__ A single matching deny rule denies the package
-outright, overriding any allow — so the first 'Deny' encountered wins and ends
-evaluation. With no deny, the first 'Allow' wins. If no rule is decisive the
-package is denied by default, and every abstain reason is collected (in rule
-order) for the audit trail and denial message.
+__Precedence decides.__ Every rule that does not abstain is a candidate, and the
+__highest-precedence candidate wins__; at equal precedence a 'Deny' beats an
+'Allow'. The winner yields 'Approved' or 'Denied'. If no rule takes a position —
+every rule abstains, including the empty rule set — the package is
+'DeniedByDefault', with every abstain reason collected in list order for the
+audit trail and denial message. Only that reason order, and which of two equally
+ranked rules is reported, depend on list order; the decision itself does not.
 -}
-evalRules :: EvalContext -> [Rule] -> PackageDetails -> Decision
-evalRules ctx rules pd = go rules Nothing []
+evalRules :: EvalContext -> [PrecededRule] -> PackageDetails -> Decision
+evalRules ctx rules pd =
+    case nonEmpty candidates of
+        Nothing -> DeniedByDefault abstainReasons
+        Just cands -> winningDecision (maximumBy (comparing sortKey) cands)
   where
-    go [] firstAllow reasons =
-        case firstAllow of
-            Just (r, reason) -> Approved r reason
-            Nothing -> DeniedByDefault (reverse reasons)
-    go (r : rs) firstAllow reasons =
-        case evalRule ctx r pd of
-            Deny reason -> Denied r reason
-            Allow reason -> go rs (firstAllow <|> Just (r, reason)) reasons
-            Abstain reason -> go rs firstAllow (reason : reasons)
+    -- One pass: each rule is either an abstain (its reason, kept in order for
+    -- the audit trail) or a candidate that took a position.
+    (abstainReasons, candidates) = partitionEithers (map classify rules)
+
+    classify :: PrecededRule -> Either Text Candidate
+    classify (PrecededRule prec r) = case evalRule ctx r pd of
+        Abstain reason -> Left reason
+        Allow reason -> Right (Candidate prec False r reason)
+        Deny reason -> Right (Candidate prec True r reason)
+
+    -- Highest precedence wins; at equal precedence a deny (rank 'True') outranks
+    -- an allow (rank 'False'), since 'maximumBy' takes the greatest key.
+    sortKey :: Candidate -> (Int, Bool)
+    sortKey c = (candPrecedence c, candIsDeny c)
+
+    winningDecision :: Candidate -> Decision
+    winningDecision c =
+        if candIsDeny c
+            then Denied (candRule c) (candReason c)
+            else Approved (candRule c) (candReason c)
+
+{- | A rule that took a position against the package, carried with the inputs the
+winner selection and the resulting 'Decision' need.
+-}
+data Candidate = Candidate
+    { candPrecedence :: Int
+    , candIsDeny :: Bool
+    , candRule :: Rule
+    , candReason :: Text
+    }
 
 {- | A human-readable summary of a decision, suitable for logs and the
 (eventual) denial response body.
