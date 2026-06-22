@@ -1,7 +1,7 @@
 ---
 id: S05
 title: Rules precedence alignment
-milestone: M0 — Shell, seams & foundations
+milestone: M0 — Shell, handles & foundations
 status: not-started
 depends-on: []
 test-tier: [unit]
@@ -43,7 +43,7 @@ one current/end-state gap.
   change the decision, modulo the audit-reason order); an operator-elevated allow
   can outrank a lower deny.
 
-**File fence.**
+**File scope.**
 - `src/Ecluse/Rules/Types.hs` — add the precedence representation.
 - `src/Ecluse/Rules.hs` — precedence-based `evalRules`; keep `evalRule` pure/total.
 - `test/unit/Ecluse/RulesSpec.hs` — extend properties (the existing suite is the model).

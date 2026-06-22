@@ -15,7 +15,7 @@ design). Design lives in `docs/`; process lives here.
   (team-lead) entry point and does not carry per-slice status.
 - **[slices/](slices/)** — one markdown file per slice (`SNN-*.md`), each the
   authoritative detail for its slice: goal, acceptance criteria traced to the
-  architecture, file-scope fence, test tier(s), dependencies, and a `status:`
+  architecture, file scope, test tier(s), dependencies, and a `status:`
   field in its frontmatter. **Status lives here, one file per slice**, so
   parallel agents and their status updates touch disjoint files and never collide
   on a shared table; the git history of these files is the milestone log.

@@ -39,7 +39,7 @@ paths.
   re-evaluate on cached metadata each request. — _web-layer.md#metadata-cache_
 - [ ] Cache lives in `Env` (filling the S01 slot); TTL/size are configurable (S03).
 
-**File fence.**
+**File scope.**
 - `src/Ecluse/Server/Stream.hs` — the streaming helper.
 - `src/Ecluse/Server/Conditional.hs` — ETag/If-None-Match handling (own vs relayed).
 - `src/Ecluse/Server/Cache.hs` — the TTL metadata cache + accessors.

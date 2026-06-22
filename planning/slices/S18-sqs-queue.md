@@ -16,7 +16,7 @@ pr: null
 
 > Milestone **M4** · depends on: [S02](S02-seam-interfaces.md) · tier: integration
 
-**Goal.** The AWS queue backend behind the `MirrorQueue` seam:
+**Goal.** The AWS queue backend behind the `MirrorQueue` handle:
 `SendMessage`/`ReceiveMessage`(+visibility timeout)/`DeleteMessage` over
 `amazonka-sqs`, verified against a `ministack` container.
 
@@ -33,7 +33,7 @@ pr: null
   4566) via `testcontainers`: enqueue→receive→ack round-trip; no-ack→redeliver. —
   _CONTRIBUTING.md#integration-tests--ecluse-integration-gating_
 
-**File fence.**
+**File scope.**
 - `src/Ecluse/Queue/Sqs.hs` — `newSqsQueue`.
 - `ecluse.cabal` — add `amazonka-sqs` (and `testcontainers` to the integration suite).
 - `test/integration/Ecluse/MirrorQueueSpec.hs` — fill the existing stub with the ministack round-trip.
@@ -43,5 +43,5 @@ the integration Codecov flag (commented in `ci.yml`) once this lands with real c
 
 **Notes / risks.** This is the first real integration suite — wiring it green also
 flips on the integration coverage flag. Keep provider differences (vs Pub/Sub, S28)
-behind the seam; `ReceiptHandle` opacity is what lets both clouds share the worker
+behind the handle; `ReceiptHandle` opacity is what lets both clouds share the worker
 (S19). Coordinate the amazonka footprint with S17.

@@ -752,7 +752,7 @@ Vulnerability = {               -- OSV, inline in the JSON API
 `parsePackageInfo`→`SimpleIndex`/`ProjectJson` ·
 `parseVersionDetails`→`CoreMetadata`(+`File.uploadTime`) ·
 `parseVersionList`→`SimpleIndex.versions` + per-file `yanked`/tags (§8) ·
-`publishArtifact`→§10. The seam is the same; only the wire projection differs —
+`publishArtifact`→§10. The handle is the same; only the wire projection differs —
 which is exactly the point of the abstraction (architecture.md → Registry
 Abstraction).
 

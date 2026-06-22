@@ -20,7 +20,7 @@ pr: null
 packuments into the one document Écluse serves: a fold over
 `[(Provenance, PackageInfo)]` producing a single merged `PackageInfo` plus the
 divergences it detected. This is **core domain logic over `PackageInfo`**, above
-the `RegistryClient` seam — *not* npm-adapter code — so it is written once and
+the `RegistryClient` handle — *not* npm-adapter code — so it is written once and
 reused by every ecosystem. The packument lifecycle is now a **merge**, not a
 private-hit short-circuit (see
 [registry-model.md#packument-merge-across-upstreams](../../docs/architecture/registry-model.md#packument-merge-across-upstreams)
@@ -47,7 +47,7 @@ breaks demand-driven mirroring of partially-mirrored packages).
   `PackageDetails` field; if threaded through for observability, keep it out of
   equality/identity. (Decide in implementation; note the choice.) — _domain-model.md_
 
-**File fence.**
+**File scope.**
 - `src/Ecluse/Package/Merge.hs` — `Provenance`, `MergeResult` (merged
   `PackageInfo` + detected divergences), `mergePackuments`.
 - `test/unit/Ecluse/Package/MergeSpec.hs` — properties: union completeness; private

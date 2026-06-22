@@ -5,7 +5,7 @@ This module is the second half of the npm protocol boundary. Where
 types, this module turns those into the domain vocabulary of "Ecluse.Package" —
 'PackageInfo' (the packument-level view) and 'PackageDetails' (the per-version
 snapshot the rules engine evaluates). Together they realise the @parse*@ fields
-of the "Ecluse.Registry" seam: nothing above the adapter ever sees npm wire
+of the "Ecluse.Registry" handle: nothing above the adapter ever sees npm wire
 data.
 
 The projection is __pure and total__ (it returns 'Either' 'ParseError', never

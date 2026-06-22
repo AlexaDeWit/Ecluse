@@ -38,7 +38,7 @@ view above `PackageDetails`). Nothing above the adapter sees npm wire data.
 - [ ] Unknown/unfetched signals map to the explicit-unknown cases
   (`CodeExecUnknown`/`TrustUnknown`/`Nothing`) rather than fabricated values.
 
-**File fence.**
+**File scope.**
 - `src/Ecluse/Package.hs` (or new `src/Ecluse/Packument.hs`) — `PackageInfo` type (+ exports).
 - `src/Ecluse/Registry/Npm/Project.hs` — the three `parse*` functions.
 - `ecluse.cabal` — register module(s).
@@ -48,7 +48,7 @@ view above `PackageDetails`). Nothing above the adapter sees npm wire data.
 names, deprecated, install-script, missing-time).
 
 **Notes / risks.** `PackageInfo` placement is the one design choice to settle (it is
-referenced by S02's seam and S09/S14) — prefer defining it in `Ecluse.Package`
+referenced by S02's handle and S09/S14) — prefer defining it in `Ecluse.Package`
 alongside `PackageDetails` to keep the import graph acyclic; **escalate** if that
 forces an awkward cycle. The `hasInstallScript` derivation must match npm.md exactly
 (`scripts` ∋ {preinstall, install, postinstall}).

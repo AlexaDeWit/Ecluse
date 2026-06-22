@@ -16,7 +16,7 @@ Metadata (packument) requests filter but do **not** mirror — only versions a
 client actually fetches are mirrored, rather than every admitted version of every
 package anyone browses.
 
-The queue is a cloud-agnostic seam with backends for AWS SQS and GCP Pub/Sub
+The queue is a cloud-agnostic handle with backends for AWS SQS and GCP Pub/Sub
 (see [Cloud Backends](#cloud-backends)). A consumer (a separate worker process)
 receives jobs, fetches the artifact from the public upstream, **verifies its bytes
 against the version's integrity hash** (npm `dist.integrity`), publishes it to the
@@ -24,7 +24,7 @@ mirror target via `publishArtifact`, and acknowledges the job. A hash mismatch
 fails the job (no publish — it routes to retry/DLQ) and alarms, so a corrupt or
 tampered artifact never enters the private upstream, which is later served without
 rules. The worker thus
-touches both cloud seams — [`MirrorQueue`](#queue-abstraction) to receive and
+touches both cloud handles — [`MirrorQueue`](#queue-abstraction) to receive and
 [`CredentialProvider`](#credential-provider) to authenticate the write — while the
 publish itself is **plain npm protocol plus a bearer token**: pushing to a managed
 registry is no different from pushing to any npm registry, so there is no
@@ -58,11 +58,11 @@ rules run on the request path, travels with the server when the worker is split
 out.
 
 The split is kept **trivial for later**. The server and worker are each a
-self-contained entry function over the shared, seam-based `Env` —
+self-contained entry function over the shared, handle-based `Env` —
 `runServer :: Env -> IO ()` and `runWorker :: Env -> IO ()` — and the
 single-process `Main` simply runs both concurrently. Splitting into two binaries
 is then two thin `Main`s calling the same functions, no rearchitecting, because
-neither depends on the other — only on the seams in `Env`. The worker carries its
+neither depends on the other — only on the handles in `Env`. The worker carries its
 **own health/liveness surface** (a consume-loop heartbeat / last-successful-poll),
 distinct from the server's HTTP readiness, so that the single process's health
 reflects a stalled worker today and a future standalone worker binary has its own
@@ -70,8 +70,8 @@ liveness/readiness probe.
 
 ## Cloud Backends
 
-Écluse couples to a cloud provider in exactly **two seams**, both records of
-functions (the Handle pattern — see [Seams](#seams-records-of-functions)) so that
+Écluse couples to a cloud provider in exactly **two handles**, both records of
+functions (the Handle pattern — see [Handles](#handles-records-of-functions)) so that
 a provider is an additive backend rather than a structural change, the same
 posture as [`RegistryClient`](registry-model.md#registry-abstraction):
 
@@ -86,14 +86,14 @@ These two are the **cloud axis**. The **ecosystem axis** is
 [`RegistryClient`](registry-model.md#registry-abstraction), which is
 cloud-agnostic — so the npm protocol/data plane, **including publish**, is written
 once and reused across every cloud (a managed registry is just an npm endpoint
-plus a token; there is no per-cloud publish path and no object-store seam).
+plus a token; there is no per-cloud publish path and no object-store handle).
 Everything else — the proxy core, rules engine, web layer, CVE subsystem — is
 cloud-agnostic too. **AWS and GCP are both first-class targets**; the design
-admits a third provider by adding backends behind these two seams.
+admits a third provider by adding backends behind these two handles.
 
-### Seams: records of functions
+### Handles: records of functions
 
-Every seam — `RegistryClient`, `MirrorQueue`, `CredentialProvider` — is a
+Every handle — `RegistryClient`, `MirrorQueue`, `CredentialProvider` — is a
 **record whose fields are functions** (the *Handle pattern*), constructed by a
 per-backend smart constructor (`newSqsQueue :: SqsConfig -> IO MirrorQueue`). This
 is Haskell's idiomatic equivalent of an interface with swappable implementations:
@@ -107,7 +107,7 @@ matching smart constructor, and stores the resulting record in `Env`. Nothing
 downstream knows which backend it holds — it just applies the field. This keeps
 the cloud SDKs' selection in one place rather than smeared across the code, and
 leaves the door open to split adapters into separate libraries later without
-disturbing the seam.
+disturbing the handle.
 
 *Alternatives considered.* A **free monad** (operations reified as data, AWS/GCP
 as interpreters) and **tagless-final** both abstract the backend too, but they buy
@@ -117,7 +117,7 @@ would mean a heavier dependency than the `ReaderT Env IO` baseline. Records of
 functions give the same swappability and trivial test doubles (an in-memory
 record) with none of that. The free monad would earn its keep only if we needed to
 inspect/rewrite mirror programs (e.g. batch enqueues) — and that has a contained
-answer behind the existing seam if it ever arises.
+answer behind the existing handle if it ever arises.
 
 ### Service mapping
 
@@ -130,13 +130,13 @@ answer behind the existing seam if it ever arises.
 
 Both managed registries speak the **npm protocol over HTTPS** and differ only in
 how the bearer token is obtained and refreshed, so they sit behind the
-[`CredentialProvider`](#credential-provider) seam while the `RegistryClient`
+[`CredentialProvider`](#credential-provider) handle while the `RegistryClient`
 protocol/data plane (`http-client`) is identical across them (see
 [Web Layer](web-layer.md#web-layer)).
 
 ### Credential Provider
 
-Outbound auth (proxy → registry) is its own seam, separate from
+Outbound auth (proxy → registry) is its own handle, separate from
 [`RegistryClient`](registry-model.md#registry-abstraction). A `CredentialProvider`
 yields the current bearer token for a registry endpoint, refreshing it before
 expiry:
@@ -157,7 +157,7 @@ So a deployment configures **one** provider — for the mirror target — even w
 that target is the same registry as the private upstream: the client reads it,
 Écluse writes it.
 
-**The sub-seam that matters.** The interesting logic is the refresh / cache /
+**The sub-handle that matters.** The interesting logic is the refresh / cache /
 expiry / concurrency policy, *not* the cloud call. So a single generic wrapper
 holds that policy, parameterised over a tiny per-cloud `mintToken` leaf:
 
@@ -194,7 +194,7 @@ unit-tested deterministically.
 ### Queue abstraction
 
 The queue is the one piece with materially different APIs per cloud, so it is its
-own seam. The record returns `IO` (per the
+own handle. The record returns `IO` (per the
 [effect model](technology-stack.md#key-decisions)):
 
 ```haskell
@@ -212,7 +212,7 @@ newtype ReceiptHandle = ReceiptHandle Text        -- opaque: SQS receipt handle 
 SQS (`SendMessage` / `ReceiveMessage`+visibility-timeout / `DeleteMessage`) and
 Pub/Sub (`Publish` / `Pull`+ack-deadline / `Acknowledge`) both fit this
 receive → process → ack shape; their differences (visibility timeout vs ack
-deadline, batch limits, dead-letter wiring) stay behind the seam, and
+deadline, batch limits, dead-letter wiring) stay behind the handle, and
 `ReceiptHandle` is opaque so neither leaks. Conventions:
 
 - **`enqueue` is best-effort.** It runs on the request hot path (enqueue, then
@@ -247,10 +247,10 @@ rather than assuming it away:
   the small domain surface (see [Web Layer](web-layer.md#web-layer)) — is a thin
   REST client: Pub/Sub's `publish` / `pull` / `acknowledge` is a handful of
   JSON-over-HTTPS calls, and we already run `http-client` + `aeson` + a
-  bearer-token pattern. A small client behind the `MirrorQueue` seam keeps us off
+  bearer-token pattern. A small client behind the `MirrorQueue` handle keeps us off
   a possibly-stale SDK, **provided** the emulator serves those REST calls.
 
-**Design requirement.** GCP is *designed for* from day one (the two seams above),
+**Design requirement.** GCP is *designed for* from day one (the two handles above),
 but shipping it is **gated on a de-risking spike**: stand up the Pub/Sub emulator
 via `testcontainers` and prove one client path can `publish → pull → ack` against
 it. That single experiment resolves both the client-maturity and
@@ -263,10 +263,10 @@ emulator-compatibility questions before GCP is committed to a release. AWS
 runs `ministack` today and the Pub/Sub emulator the same way. Each cloud's queue
 backend is exercised in the integration tier against its own emulator (no real
 cloud account or credentials; the Pub/Sub emulator ignores auth entirely), so the
-`MirrorQueue` seam is verified per provider.
+`MirrorQueue` handle is verified per provider.
 
 The managed-registry backends need no emulator — neither CodeArtifact nor
-Artifact Registry has a usable one — and the seam split is what makes that a
+Artifact Registry has a usable one — and the handle split is what makes that a
 non-problem. The npm **protocol** is just HTTPS+JSON, so it is exercised **once**
 against a real npm-speaking registry (e.g. Verdaccio) or an in-process WAI stub,
 and that single suite covers every managed registry because they share the

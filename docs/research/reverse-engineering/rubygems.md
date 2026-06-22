@@ -696,7 +696,7 @@ GemJsonVersion  = GemJsonLatest-shaped, one version -- GET /api/v2/rubygems/{n}/
 `parsePackageInfo`→`CompactVersions`/`GemJsonLatest` ·
 `parseVersionDetails`→`GemVersionDetails` (from `/info` + gemspec for
 `extensions`) · `parseVersionList`→`/info` versions + `yanked`/platform (§8) ·
-`publishArtifact`→§10. Same seam as npm/PyPI; the wire projection differs most
+`publishArtifact`→§10. Same handle as npm/PyPI; the wire projection differs most
 here (plain-text, Range-incremental, Ruby-serialized gemspec), which is exactly
 what the adapter abstraction absorbs (architecture.md → Registry Abstraction).
 

@@ -65,7 +65,7 @@ Concretely:
   burden of proof upward as far as possible, but no further" — get input into its
   most precise representation as early as possible (the registry adapter, the
   config loader, the request handler) so nothing downstream re-validates or trips
-  over a case that was already ruled out. This is the registry seam in action:
+  over a case that was already ruled out. This is the registry handle in action:
   adapters project wire formats into `Ecluse.Package` types and nothing above
   them sees raw wire data (see §4.4 and `docs/architecture.md`).
 - **No shotgun parsing.** Don't scatter input checks through processing logic —
@@ -198,8 +198,10 @@ weakening the committed flags.
 ## 4. Module organization, namespacing, and exports
 
 This section is the durable how-to for *structuring* modules. The *current*
-concrete module list lives in `CONTRIBUTING.md` → "Codebase Layout"; the
-principles below are what decide where new code goes.
+concrete module list is the module index of the published Haddock (and the root
+`Ecluse` synopsis); `CONTRIBUTING.md` → "Codebase Layout" records the
+project-specific layout patterns. The principles below are what decide where new
+code goes.
 
 ### 4.1 Organize vertically — a type lives with the functions on it
 
@@ -260,7 +262,7 @@ shape (cf. Matt Parsons' *Three Layer Haskell Cake*):
 - **Effects live at the boundary** — `app/Main.hs`, the server, and the worker
   layer, which run in `ReaderT Env IO` (see `docs/architecture.md`). Swappable
   effectful backends (registry, queue, credentials) are records of functions
-  chosen at a single composition root — the *seam* pattern (`CONTRIBUTING.md` /
+  chosen at a single composition root — the Handle pattern (`CONTRIBUTING.md` /
   architecture).
 - **Keep the dependency arrow pointing inward:** pure modules must never import
   the effectful shell.
@@ -439,9 +441,15 @@ the middle out.
 
 **Rule 9.2 — Prefer pure and total.** Keep the core logic (the rules engine,
 parsers, rendering) pure; push `IO` to the edges (`app/Main.hs`, the server and
-worker layers). Annotate guarantees you rely on (`-- … Pure and total.`). The
-effect style for the parts that *are* effectful is `ReaderT Env IO`
-(architecture doc) — handlers take `Env` and run in plain `IO`.
+worker layers). Annotate a purity/totality guarantee **only where it is
+surprising or load-bearing** — a boundary parser a reader would expect to throw,
+or a totality that carries domain meaning (`mkVersion` never dropping a version;
+`evalRule` never crashing the gate on hostile metadata). Do **not** tag
+`-- … Pure and total.` reflexively: in a module whose header already says it is
+pure, or on a signature with no `IO` and a total return type, the tag only
+restates the header and the type ([`HADDOCK.md`](HADDOCK.md) §3). The effect
+style for the parts that *are* effectful is `ReaderT Env IO` (architecture doc) —
+handlers take `Env` and run in plain `IO`.
 
 **Rule 9.3 — Use local `where` helpers** to name sub-steps and keep the main
 equation readable. Top-level bindings always have a signature; `where`-helpers

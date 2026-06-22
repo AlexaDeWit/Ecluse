@@ -1,8 +1,8 @@
-{- | The outbound-credential seam: minting the bearer token Écluse uses to
+{- | The outbound-credential handle: minting the bearer token Écluse uses to
 __write__ approved packages to the mirror target.
 
-This is one of the two cloud seams (the other is "Ecluse.Queue"); it is separate
-from the protocol seam "Ecluse.Registry" because protocol and authentication are
+This is one of the two cloud handles (the other is "Ecluse.Queue"); it is separate
+from the protocol handle "Ecluse.Registry" because protocol and authentication are
 orthogonal axes — every managed npm registry (AWS CodeArtifact, GCP Artifact
 Registry, a self-hosted Verdaccio) speaks the same npm protocol and differs only
 in how its bearer token is obtained (see
@@ -14,16 +14,16 @@ credential and public reads are anonymous (see
 @docs\/architecture\/registry-model.md@ → "Credential flow and authority"). So a
 deployment configures exactly one provider.
 
-Like the other seams, the effectful field returns __'IO', not @App@__: an
+Like the other handles, the effectful field returns __'IO', not @App@__: an
 adapter closes over its own backend state (an @amazonka@ env, an HTTP manager)
 and never imports the proxy's @Env@\/@App@, so backends stay decoupled from the
 core (see @docs\/architecture\/technology-stack.md@ → "Key Decisions").
 
-This module provides the seam and its payload types. 'staticProvider' is the
+This module provides the handle and its payload types. 'staticProvider' is the
 in-memory implementation: a fixed token with no expiry.
 -}
 module Ecluse.Credential (
-    -- * Provider seam
+    -- * Provider handle
     CredentialProvider (..),
 
     -- * Tokens
@@ -91,7 +91,7 @@ data AuthToken = AuthToken
     }
     deriving stock (Eq, Show)
 
-{- | The credential seam: yields the bearer token currently valid for the mirror
+{- | The credential handle: yields the bearer token currently valid for the mirror
 target, refreshing it before expiry __internally__ (a caller never sees a stale
 token in the common case, and never blocks on a mint on the request hot path).
 

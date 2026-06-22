@@ -305,5 +305,5 @@ Adopt the three high-value revisions first, since they remove the genuine
 `Availability`, `[Text]` licenses, `[Dependency]`, `pkgPublisher`, and
 `EcosystemMeta` are lower-risk additions that can follow. The rules-engine fold
 is untouched throughout; only rule *inputs* and the adapter projection change —
-which is exactly the seam the architecture was built around.
+which is exactly the handle the architecture was built around.
 ```

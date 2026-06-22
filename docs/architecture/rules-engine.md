@@ -169,7 +169,7 @@ Effectful rules read the **same synced advisory data in two directions**: a
 advisory — and an **allow** direction — `AllowIfRemediatesCve` *fast-tracks* a
 version that **fixes** one. Rather than call an advisory API per evaluation, Écluse
 **syncs a local copy of the dataset and queries it in memory**: the `CVELookup`
-seam reads a local index, never the network, on the hot path.
+handle reads a local index, never the network, on the hot path.
 
 ### `AllowIfRemediatesCve` — remediation fast-track
 

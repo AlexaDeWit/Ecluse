@@ -30,7 +30,7 @@ unit-testable with no server.
   begin with `-`); the tarball path `/{pkg}/-/{file}.tgz` distinguished from
   packument; anything unrecognised → `Unsupported`. — _web-layer.md#raw-wai-not-a-web-framework_
 
-**File fence.**
+**File scope.**
 - `src/Ecluse/Server/Route.hs` — `Route`, `classify`, name normalisation.
 - `ecluse.cabal` — register module (no new deps).
 - `test/unit/Ecluse/Server/RouteSpec.hs` — table of `pathInfo` → `Route` (scoped both encodings, tarball, meta-routes, junk → Unsupported).

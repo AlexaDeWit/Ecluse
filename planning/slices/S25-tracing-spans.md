@@ -36,7 +36,7 @@ domain spans carrying the decisions an operator cares about — with secrets scr
 - [ ] Integration: drive a request through an in-process Écluse into a real Agent /
   OTLP Collector container and assert spans were accepted. — _observability.md#verifying-it--smoke-test-plan_
 
-**File fence.**
+**File scope.**
 - `src/Ecluse/Telemetry/Tracing.hs` — domain-span helpers + attribute mapping.
 - `src/Ecluse/Server.hs`, `src/Ecluse/Server/Pipeline.hs`, `src/Ecluse/Worker.hs`, `src/Ecluse/Cve/Sync.hs` — add spans (additive).
 - `ecluse.cabal` — add `hs-opentelemetry-instrumentation-wai`, `-http-client`.

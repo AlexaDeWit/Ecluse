@@ -88,7 +88,7 @@ configuration regardless of how either was spelled.
 lowerCaseHosts :: Set Text -> LoweredHostSet
 lowerCaseHosts = LoweredHostSet . Set.map T.toLower
 
-{- | Whether @host@ is one of the configured upstream hosts. __Pure and total.__
+{- | Whether @host@ is one of the configured upstream hosts.
 
 The first guard on every outbound fetch: the proxy talks to its configured
 private\/public upstreams and mirror target, and __nothing else__ — so a target
@@ -108,7 +108,7 @@ isAllowedUpstreamHost (LoweredHostSet allowed) host =
 -- ── internal-range block ─────────────────────────────────────────────────────
 
 {- | Whether @host@ is an internal address the proxy must not fetch, /unless/ it
-is explicitly opted in. __Pure and total.__
+is explicitly opted in.
 
 A proxy sits in a privileged network position, so an attacker who can steer a
 fetch (see the module header) aims it at addresses only the proxy can reach: the
@@ -145,8 +145,7 @@ data IpAddr
     | -- | An IPv6 address, normalised to its eight 16-bit groups.
       IPv6 [Word16]
 
-{- | Extract the bare host from a URI or @host[:port]@ authority. __Pure and
-total.__
+{- | Extract the bare host from a URI or @host[:port]@ authority.
 
 A convenience for the SSRF gate: an outbound target is usually a full URL or an
 authority, but 'isAllowedUpstreamHost' and 'isBlockedTarget' compare the bare
@@ -323,7 +322,7 @@ data UrlError
     deriving stock (Eq, Show)
 
 {- | Build an upstream URL for a package from a configured base URL and an
-__already-parsed__ 'PackageName'. __Pure and total.__
+__already-parsed__ 'PackageName'.
 
 This is the only sanctioned way to derive an upstream URL for a package: the
 target is @{baseUrl}\/{name}@, where @name@ is the package's rendered identifier
@@ -444,7 +443,7 @@ boundedRead limits readChunk = go 0 []
                         else go seen' (chunk : acc)
 
 {- | Reject a parsed packument carrying more than 'maxVersionCount' versions,
-returning it unchanged when within budget. __Pure and total.__
+returning it unchanged when within budget.
 
 Applied after a document is projected to 'Ecluse.Package.PackageInfo' but before
 per-version rule evaluation, so the cost of evaluating rules over every version is
@@ -463,7 +462,7 @@ checkVersionCount limits info =
     count = Map.size (infoVersions info)
 
 {- | Reject a decoded JSON document nested deeper than 'maxNestingDepth',
-returning it unchanged when within budget. __Pure and total.__
+returning it unchanged when within budget.
 
 Run at the JSON-decode boundary, before projecting a document to domain types, so
 a pathologically nested payload is refused before any deep traversal. Depth counts

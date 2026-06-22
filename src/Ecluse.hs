@@ -41,9 +41,9 @@ and never on the request's critical path.
 
 Écluse is a __functional core with effects at the edges__: the policy and
 protocol logic is pure and trivially testable, and @IO@ is confined to a thin
-shell. Swappable backends sit behind /seams/ — records of functions chosen at a
+shell. Swappable backends sit behind /handles/ — records of functions chosen at a
 single composition root — so a new cloud or a new ecosystem is an added
-implementation behind an existing seam, not a structural change.
+implementation behind an existing handle, not a structural change.
 
 The library's vocabulary, roughly from the pure core outward:
 
@@ -52,10 +52,11 @@ The library's vocabulary, roughly from the pure core outward:
   ordering), and "Ecluse.Ecosystem" (the ecosystem tag the rest dispatches on).
 * __Policy__ — "Ecluse.Rules" (deny-by-default evaluation) over the rule types
   in "Ecluse.Rules.Types".
-* __Protocol boundary__ — "Ecluse.Registry" (the registry-protocol seam),
-  "Ecluse.Registry.Npm.Wire" (the lenient npm wire decoders that project onto
-  the domain model), and "Ecluse.Server.Route" (the pure npm request router).
-* __Cloud seams__ — "Ecluse.Credential" (minting the mirror-target write token)
+* __Protocol boundary__ — "Ecluse.Registry" (the registry-protocol handle),
+  "Ecluse.Registry.Npm.Wire" and "Ecluse.Registry.Npm.Project" (the lenient npm
+  wire decoders and their projection onto the domain model), and
+  "Ecluse.Server.Route" (the pure npm request router).
+* __Cloud handles__ — "Ecluse.Credential" (minting the mirror-target write token)
   and "Ecluse.Queue" (the durable mirror-job hand-off to the worker).
 
 'run' is the entry point the @ecluse@ executable invokes (see "Main"). It lives
@@ -77,7 +78,7 @@ module Ecluse (
     runServer,
     runWorker,
 
-    -- * Default seams
+    -- * Default handles
     unconfiguredRegistry,
     unconfiguredCredentials,
 ) where
@@ -97,7 +98,7 @@ import Ecluse.Registry (
 
 {- | Start Écluse: the entry point the @ecluse@ executable runs (see "Main").
 
-It assembles the composition root — the seams plus a shared HTTP @Manager@ — into
+It assembles the composition root — the handles plus a shared HTTP @Manager@ — into
 an 'Env', then runs the server and the mirror worker __concurrently__ over that
 single 'Env' ('runServer' and 'runWorker'). Bracketing the 'Env' for the
 lifetime of both means their shared resources are torn down along every exit
@@ -111,7 +112,7 @@ run = do
 
 {- | Run the server and the mirror worker concurrently over one composition-root
 'Env', the shape the single-process program uses. The two are independent (each
-depends only on the seams in 'Env', not on each other), so splitting into
+depends only on the handles in 'Env', not on each other), so splitting into
 separate binaries later is two thin entry points calling 'runServer' \/
 'runWorker' — no rearchitecting.
 -}
@@ -126,15 +127,15 @@ runServer _env = pass
 
 {- | Run the supervised mirror worker over the composition-root 'Env': the
 consume → fetch → verify → publish → ack loop against the queue and credential
-seams, in the @App@ orchestration monad.
+handles, in the @App@ orchestration monad.
 -}
 runWorker :: Env -> IO ()
 runWorker _env = pass
 
-{- | A registry seam with no backend behind it: every effectful field __refuses
+{- | A registry handle with no backend behind it: every effectful field __refuses
 loudly__ ('throwIO') and every pure @parse*@ field returns 'Left', so an
 unconfigured fetch\/publish or parse fails explicitly rather than silently
-returning a fabricated success. It holds the seam slot in the composition root
+returning a fabricated success. It holds the handle slot in the composition root
 where a configured backend is selected elsewhere.
 -}
 unconfiguredRegistry :: RegistryClient
@@ -154,9 +155,9 @@ unconfiguredRegistry =
     notConfigured :: ParseError
     notConfigured = ParseError{parseErrorMessage = "no registry backend configured"}
 
-{- | A credential seam with no backend behind it: a static, non-expiring empty
+{- | A credential handle with no backend behind it: a static, non-expiring empty
 secret. Credentials are mirror-write only and never read on the serve path, so
-this holds the seam slot in the composition root without minting a live token.
+this holds the handle slot in the composition root without minting a live token.
 -}
 unconfiguredCredentials :: CredentialProvider
 unconfiguredCredentials =

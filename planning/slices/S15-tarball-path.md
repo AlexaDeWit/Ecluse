@@ -36,7 +36,7 @@ miss gates *that one version* against the public upstream and, on admit, streams
 - [ ] Lockfile installs (`npm ci`) hitting tarball URLs with no preceding packument
   request are gated correctly on this path alone.
 
-**File fence.**
+**File scope.**
 - `src/Ecluse/Server/Pipeline.hs` — add the tarball handler (additive to S14).
 - `src/Ecluse/Server.hs` — wire the tarball route (replace the S12 stub).
 - `test/unit/Ecluse/Server/PipelineSpec.hs` — extend: private-hit stream, private-miss gate+stream+enqueue (assert the in-memory queue received the job), reject mapping, enqueue-failure-doesn't-fail-serve.
@@ -44,7 +44,7 @@ miss gates *that one version* against the public upstream and, on admit, streams
 **Test tier.** Unit — `hspec-wai` + in-process upstream + the S02 in-memory queue
 double (assert the enqueued job); no network, no cloud.
 
-**Notes / risks.** Enqueue uses the `MirrorQueue` seam (in-memory double here; real
+**Notes / risks.** Enqueue uses the `MirrorQueue` handle (in-memory double here; real
 SQS in S18, the consuming worker in S19). Keep the serve-then-enqueue ordering — the
 client must never wait on the queue. The integrity hash travels in the job for the
 worker to verify (S19); this slice does **not** verify on the serve path (it relies

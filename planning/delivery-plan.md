@@ -19,7 +19,7 @@ Per-slice files are deliberate: parallel agents (and their status updates) touch
 ## How to read and use this plan
 
 - **One slice = one PR.** Each slice is a single coherent, reviewable-in-a-sitting
-  capability with a file-scope fence, the test tier(s) it owes, acceptance
+  capability with a limited file scope, the test tier(s) it owes, acceptance
   criteria traced to architecture sections, and explicit dependencies.
 - **Status lives in the slice file.** Each [`slices/`](slices/)`SNN-*.md` carries a
   `status:` field in its frontmatter — `not-started → in-progress → in-review →
@@ -29,7 +29,7 @@ Per-slice files are deliberate: parallel agents (and their status updates) touch
   the per-slice split avoids); the [**In flight**](#in-flight) section below is the
   single-writer (team-lead) pointer to what is being worked right now.
 - **Depth is proximity-proportional.** Near-term slices (M0–M3) are detailed to
-  implementation depth now. Later slices (M4–M8) carry goal / criteria / fence /
+  implementation depth now. Later slices (M4–M8) carry goal / criteria / scope /
   deps and are deepened as their dependencies land and their worktrees are rebased
   onto the new base — integration drift is surfaced then, not at PR time.
 - **Definition of done** for every slice is the checklist in
@@ -56,7 +56,7 @@ Per-slice files are deliberate: parallel agents (and their status updates) touch
   Nix-store cache, lean CI shell, reproducible OCI image + keyless provenance/SBOM attestations.
 
 **Design-only (no code yet) — what this plan delivers:** the imperative shell
-(`Env`/`App`), the three seams (`RegistryClient`, `MirrorQueue`,
+(`Env`/`App`), the three handles (`RegistryClient`, `MirrorQueue`,
 `CredentialProvider`), the config loader, the npm adapter, the web layer, the
 request pipeline, the AWS backends + mirror worker, the effectful/CVE tier,
 observability, and the GCP backends.
@@ -72,7 +72,7 @@ observability, and the GCP backends.
 
 | # | Theme | Outcome |
 |---|---|---|
-| **M0** | Shell, seams & foundations | The imperative shell + the three seam interfaces with in-memory doubles; config loader; logging; rules-precedence alignment. Unblocks every downstream track. |
+| **M0** | Shell, handles & foundations | The imperative shell + the three handle interfaces with in-memory doubles; config loader; logging; rules-precedence alignment. Unblocks every downstream track. |
 | **M1** | npm protocol adapter | The npm `RegistryClient`: wire decoders, projection to the domain model, data-plane fetch/publish, URL rewrite + packument filtering. |
 | **M2** | Web front door | The raw-WAI `Application`: pure router, error/denial model, meta-routes, middleware, bounded-memory streaming, conditional-GET/ETag, metadata cache, and the capability manifest (`/openapi.json`). |
 | **M3** | Request pipeline (**walking skeleton**) | The thin end-to-end path: multi-upstream packument merge, credential forward/strip, packument + tarball serving, demand-driven mirror enqueue (against in-memory cloud doubles). |
@@ -91,12 +91,12 @@ Every slice links to its detail file. **Depends on** lists the slice IDs that mu
 be **merged** before it can start. Tier = the test suite(s) it owes
 (`U`=unit, `I`=integration, `S`=smoke, `B`=bench — informational, non-gating).
 
-### M0 — Shell, seams & foundations
+### M0 — Shell, handles & foundations
 
 | ID | Slice | Depends on | Tier |
 |----|-------|------------|------|
 | [S01](slices/S01-app-env-scaffold.md) | App/Env scaffold + composition root | S02 | U |
-| [S02](slices/S02-seam-interfaces.md) | Seam interfaces + in-memory doubles | — | U |
+| [S02](slices/S02-seam-interfaces.md) | Handle interfaces + in-memory doubles | — | U |
 | [S03](slices/S03-config-loader.md) | Config model & fail-fast loader | S02, S05 | U |
 | [S04](slices/S04-logging-katip.md) | `katip` logging scaffold (json/console) | S01 | U |
 | [S05](slices/S05-rules-precedence.md) | Rules precedence alignment | — | U |
@@ -145,7 +145,7 @@ be **merged** before it can start. Tier = the test suite(s) it owes
 | ID | Slice | Depends on | Tier |
 |----|-------|------------|------|
 | [S21](slices/S21-effectful-tier.md) | Effectful rule tier (`Unavailable`, timeout/retry/breaker) | S05, S14 | U |
-| [S22](slices/S22-cve-sync.md) | `CVELookup` seam + OSV local-sync index | S01, S21 | U, I |
+| [S22](slices/S22-cve-sync.md) | `CVELookup` handle + OSV local-sync index | S01, S21 | U, I |
 | [S23](slices/S23-deny-if-cve.md) | CVE rules — `DenyIfCVE` + `AllowIfRemediatesCve` | S03, S22 | U |
 
 ### M6 — Observability
@@ -189,10 +189,10 @@ Concurrency is capped at **2–3 slices** so evaluation quality stays high
 After every merge the team lead rebases the dependent worktrees onto the new base
 and re-runs their gate.
 
-The three vertical tracks (foundations, adapter, web) run against the seams in
+The three vertical tracks (foundations, adapter, web) run against the handles in
 parallel, then converge at M3:
 
-- **Wave 1 — independent roots (no deps):** `S02` (seams), `S06` (npm decoders),
+- **Wave 1 — independent roots (no deps):** `S02` (handles), `S06` (npm decoders),
   `S10` (router). _S05 (rules precedence) is also dependency-free and is the
   natural next pull as a slot frees._
 - **Wave 2 (in flight):** `S01` (Env, needs S02), `S05` (rules precedence, root),
@@ -207,7 +207,7 @@ parallel, then converge at M3:
 - **Wave 3:** `S03` + `S04` (config/logging), `S08` (npm fetch/publish), `S11`
   (responses), `S12` (WAI app). `S03` also depends on `S05` (the rule model its
   default-policy merge layers over). `S16` (credential wrapper) can pull in here —
-  it depends only on the seam (S02) and de-risks M4 early.
+  it depends only on the handle (S02) and de-risks M4 early.
 - **Converge:** `S09` → `S13`, with `S33` (pure cross-upstream merge, needs only
   `S07`) → `S14` (**walking skeleton closes**) → `S15`.
 - **Then:** M4 (AWS) and M5 (CVE) layer on; M6/M8 run as independent parallel
@@ -248,8 +248,8 @@ brief:
   implementation subagents, evaluates, reproduces the gate, hands review-ready PRs
   back. **The team lead never merges and never pushes to `main`.**
 - **One worktree per agent**, each on its own branch, is a hard rule — including
-  for this planning work. Implementer agents touch only files inside their slice's
-  fence.
+  for this planning work. Implementer agents keep changes within their slice's file scope,
+  touching other files only with strong justification.
 - **The per-PR loop:** BUILD (implementer, TDD, self-runs the local gate) →
   EVALUATE (a fresh reviewer agent: Stage A requirements/traceability, Stage B
   quality/security/test-quality) → GATE (reproduce CI locally, push, confirm the
@@ -257,7 +257,7 @@ brief:
 - **Escalate, don't guess.** Any agent that is stuck, unsure, or facing
   ambiguous / missing / contradictory spec stops and surfaces it. No fabricated
   values or API behaviour, no silently-weakened tests, no `.semgrepignore` without
-  the architect's approval, no scope-creep past the fence, no leftover
+  the architect's approval, no sprawl beyond the slice's file scope without strong justification, no leftover
   `TODO`/`undefined`/stub passed off as done.
 - **Reproduce the gate before handoff:**
   `make check && make test-integration && make docs-site && make nix-check`;
@@ -273,7 +273,7 @@ Tracked here so reviewers see the boundaries; each is an architecture decision
 not an omission:
 
 - Package **hosting/storage** (delegated to the configured registries); mirroring
-  to raw object storage (writes go through `publishArtifact`, no blob seam).
+  to raw object storage (writes go through `publishArtifact`, no blob handle).
 - **PyPI / RubyGems adapters** — the domain model, `RegistryClient`, and hosting
   model are built to accommodate them, but only the **npm** adapter ships.
 - **Search** (`/-/v1/search`) — returns `501` at launch (documented as such in the

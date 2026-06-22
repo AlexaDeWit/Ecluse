@@ -23,7 +23,7 @@ import Ecluse.Queue (MirrorJob (..), enqueue, msgJob, newInMemoryQueue, receive)
 import Ecluse.Registry (ParseError (..), RegistryClient (..), RegistryResponse (..))
 import Ecluse.Version (Version, mkVersion)
 
-{- | A registry-seam double: the @parse*@ fields return fixed pure results and
+{- | A registry-handle double: the @parse*@ fields return fixed pure results and
 the effectful fields are never invoked by these tests, so they refuse loudly if
 they ever are. This lets an 'Env' be assembled without a real backend or any
 network.
@@ -45,7 +45,7 @@ fakeRegistry =
     parseStub :: ParseError
     parseStub = ParseError "fake"
 
--- | A credential-seam double: a fixed, non-expiring token.
+-- | A credential-handle double: a fixed, non-expiring token.
 fakeCredentials :: CredentialProvider
 fakeCredentials = staticProvider AuthToken{authSecret = mkSecret "env-spec-token", authExpiresAt = Nothing}
 
@@ -62,7 +62,7 @@ newTestEnv = do
     manager <- newTestManager
     newEnv fakeRegistry queue fakeCredentials manager
 
--- | A sample job for round-tripping the queue seam held in an 'Env'.
+-- | A sample job for round-tripping the queue handle held in an 'Env'.
 sampleJob :: MirrorJob
 sampleJob =
     MirrorJob
@@ -72,7 +72,7 @@ sampleJob =
         , jobMirrorTarget = "https://mirror.test/thing/-/thing-1.0.0.tgz"
         }
 
--- | A sample package name and version, for the registry-seam assertions.
+-- | A sample package name and version, for the registry-handle assertions.
 pkg :: PackageName
 pkg = mkPackageName Npm Nothing "thing"
 
@@ -82,27 +82,27 @@ ver = mkVersion Npm "1.0.0"
 spec :: Spec
 spec = do
     describe "newEnv" $ do
-        it "assembles an Env from injected seam doubles, with no network" $ do
-            -- Construction must not touch the network: it only gathers the seams
+        it "assembles an Env from injected handle doubles, with no network" $ do
+            -- Construction must not touch the network: it only gathers the handles
             -- and the manager. A clean return is the assertion.
             env <- newTestEnv
             currentTok <- currentToken' env
             currentTok `shouldBe` "env-spec-token"
 
-        it "wires the credential seam through unchanged" $ do
+        it "wires the credential handle through unchanged" $ do
             env <- newTestEnv
             tok <- currentTokenSecret env
             unSecret (authSecret tok) `shouldBe` "env-spec-token"
 
-        it "wires the registry seam through unchanged (a pure parse field round-trips)" $ do
+        it "wires the registry handle through unchanged (a pure parse field round-trips)" $ do
             -- The registry double's 'parseVersionList' echoes the response body as
             -- the parse error, so reaching it through 'envRegistry' proves the
-            -- exact seam we injected is the one stored.
+            -- exact handle we injected is the one stored.
             env <- newTestEnv
             let result = parseVersionList (envRegistry env) (RegistryResponse "echo-me")
             result `shouldBe` Left (ParseError "echo-me")
 
-        it "wires the queue seam through (a job enqueued via Env is received via Env)" $ do
+        it "wires the queue handle through (a job enqueued via Env is received via Env)" $ do
             env <- newTestEnv
             enqueue (envQueue env) sampleJob
             msgs <- receive (envQueue env)
@@ -147,7 +147,7 @@ spec = do
     describe "App / runApp" $ do
         it "reads the Env through the reader and runs effects in IO" $ do
             -- A round-trip through the orchestration monad: the action reaches a
-            -- seam via the reader ('asks') and uses it in 'IO' ('liftIO'), then
+            -- handle via the reader ('asks') and uses it in 'IO' ('liftIO'), then
             -- 'runApp' discharges it against the composition root.
             env <- newTestEnv
             result <- runApp env readToken
@@ -172,7 +172,7 @@ spec = do
 
     describe "unconfiguredRegistry" $ do
         it "refuses every effectful call loudly rather than fabricating a result" $ do
-            -- A no-backend seam must not silently return a fake success: every
+            -- A no-backend handle must not silently return a fake success: every
             -- effectful op throws, so a misconfiguration fails fast instead of
             -- serving phantom data or reporting a publish that never happened.
             shouldRefuse (fetchMetadata unconfiguredRegistry pkg)
@@ -199,7 +199,7 @@ spec = do
     currentTokenSecret :: Env -> IO AuthToken
     currentTokenSecret env = currentToken (envCredentials env)
 
-    -- An 'App' action that reaches the credential seam through the reader and
+    -- An 'App' action that reaches the credential handle through the reader and
     -- uses it in IO, exercising the monad's MonadReader + MonadIO instances.
     readToken :: App Text
     readToken = do
@@ -207,10 +207,10 @@ spec = do
         tok <- liftIO (currentToken provider)
         pure (unSecret (authSecret tok))
 
-    -- Assert an effectful seam call throws rather than returning a value.
+    -- Assert an effectful handle call throws rather than returning a value.
     shouldRefuse :: IO a -> Expectation
     shouldRefuse act = do
         outcome <- try act
         case outcome of
             Left (_ :: SomeException) -> pure ()
-            Right _ -> expectationFailure "expected the unconfigured seam to refuse"
+            Right _ -> expectationFailure "expected the unconfigured handle to refuse"

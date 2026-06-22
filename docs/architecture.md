@@ -75,23 +75,24 @@ and [Rules Engine → Applying verdicts to a packument](architecture/rules-engin
 | Document | Covers |
 |---|---|
 | [Diagrams](architecture/diagrams.md) | **Visual companion (Mermaid):** system overview, packument / tarball / worker sequences, and the rules-engine and credential lifecycles. |
-| [Registry Model](architecture/registry-model.md) | The three-registry model and the `RegistryClient` protocol seam. |
+| [Registry Model](architecture/registry-model.md) | The three-registry model and the `RegistryClient` protocol handle. |
 | [Internal Domain Model](architecture/domain-model.md) | `PackageDetails` and the ecosystem-agnostic signal vocabulary the rules engine consumes. |
 | [Multi-Ecosystem Hosting](architecture/hosting.md) | Mounting ecosystems under path prefixes, URL rewriting, and dispatch. |
 | [Web Layer](architecture/web-layer.md) | The raw-WAI front door: routing, the control/data-plane split, streaming, middleware. |
 | [API Surface & Capability Manifest](architecture/api-surface.md) | The OpenAPI **capability manifest** — which protocols Écluse speaks and what is / isn't supported — generated from the route enumeration × mounts; the synthesized-packument schema. |
 | [Rules Engine & Responses](architecture/rules-engine.md) | Deny-by-default evaluation, the rule tiers, the CVE subsystem, and denial responses. |
-| [Cloud Backends & Mirroring](architecture/cloud-backends.md) | The mirror queue and the two cloud seams (`MirrorQueue`, `CredentialProvider`); AWS & GCP. |
+| [Cloud Backends & Mirroring](architecture/cloud-backends.md) | The mirror queue and the two cloud handles (`MirrorQueue`, `CredentialProvider`); AWS & GCP. |
 | [Configuration & Authentication](architecture/configuration.md) | Environment configuration, outbound registry credentials, and inbound client authentication. |
 | [Security Invariants](architecture/security.md) | Outbound-request & input-validation defences — identifier canonicalisation, the outbound host allowlist, internal-range blocking, and response bounds (issue #11). |
 | [Observability](architecture/observability.md) | Opt-in, vendor-neutral OpenTelemetry/OTLP tracing & metrics; Datadog as a first-class but optional target. |
 | [Technology Stack](architecture/technology-stack.md) | Library choices and the key cross-cutting decisions. |
+| [Release & Supply-Chain Operations](architecture/release-supply-chain.md) | The reproducible OCI image, the publish/attest chain (keyless provenance + SBOM), Docker Hub token handling, and CVE scanning + dependency freshness. |
 
 ## Out of Scope (for now)
 
 - Package hosting / storage (delegated to the configured registries).
 - Mirroring to raw object storage (S3 / GCS). The mirror target is a registry and
-  writes go through `publishArtifact`, so no blob-store seam is introduced;
+  writes go through `publishArtifact`, so no blob-store handle is introduced;
   revisit only if a non-registry mirror target is ever wanted.
 - Web UI or admin API.
 - **Re-specifying upstream registry protocols** in the
@@ -99,12 +100,12 @@ and [Rules Engine → Applying verdicts to a packument](architecture/rules-engin
   coverage* of each protocol — and what is unsupported — not npm's full
   packument / registry contract: clients hardcode that, and it is npm's to specify.
 - PyPI and other non-npm **adapters** — the hosting model and `RegistryClient`
-  seam are designed to accommodate them (see
+  handle are designed to accommodate them (see
   [Multi-Ecosystem Hosting](architecture/hosting.md#multi-ecosystem-hosting)), but
   only the npm adapter ships at launch.
 - Cloud IAM validation at the proxy edge (gateway concern).
 - Local on-disk caching of artifacts (the mirror retry window is acceptable).
-- **GCP backends at launch** — the cloud seams (mirror queue, managed-registry
+- **GCP backends at launch** — the cloud handles (mirror queue, managed-registry
   token) are designed for GCP from day one, but shipping a GCP backend is gated on
   the client-viability spike; AWS ships first (see
   [Cloud Backends](architecture/cloud-backends.md#cloud-backends)).

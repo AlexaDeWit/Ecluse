@@ -31,7 +31,7 @@ and nothing is emitted when unset.
 - [ ] Telemetry config parsing unit-tested (present/absent/malformed); the provider
   lifecycle is bracketed in `Env`.
 
-**File fence.**
+**File scope.**
 - `src/Ecluse/Telemetry.hs` — provider construction/lifecycle, config plumbing.
 - `src/Ecluse/Env.hs`, `src/Ecluse/Config.hs` — telemetry handle + `PROXY_TELEMETRY` (additive).
 - `ecluse.cabal` — add `hs-opentelemetry-sdk`, `hs-opentelemetry-exporter-otlp`.

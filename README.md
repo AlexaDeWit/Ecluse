@@ -51,8 +51,8 @@ anyone, rebuild it from the pinned source and compare to what you pulled:
 nix build github:AlexaDeWit/Ecluse/v0.1.0#dockerImage   # → ./result (a docker-archive)
 ```
 
-See [`CONTRIBUTING.md`](CONTRIBUTING.md#supply-chain-attestations) for how the
-attestations are produced.
+See [Release & Supply-Chain Operations](docs/architecture/release-supply-chain.md#supply-chain-attestations)
+for how the attestations are produced.
 
 ## Development
 
@@ -84,7 +84,7 @@ nix develop        # enter the Nix dev shell — direnv does this automatically
 
 make build         # build library, executable, and tests
 make test          # fast, gating unit suite
-make check         # build + test + format + lint + sast (what the CI gate runs)
+make check         # build + test + doctest + format + lint + sast (what the CI gate runs)
 make run           # run the proxy
 ```
 

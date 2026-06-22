@@ -28,12 +28,12 @@ the GCP analog of the CodeArtifact leaf (S17).
 - [ ] Real mint exercised in **smoke** only (no emulator for the OAuth2 token
   endpoint). — _cloud-backends.md#testing_
 
-**File fence.**
+**File scope.**
 - `src/Ecluse/Credential/Adc.hs` — the leaf + smart constructor.
 - `ecluse.cabal` — add the ADC/OAuth2 client dep (per S27's gogol-vs-hand-rolled outcome, reused if applicable).
 - `test/smoke/Ecluse/Credential/AdcSpec.hs` — real mint against a sandbox project (secret-gated, non-gating).
 
 **Test tier.** Smoke — un-emulable token mint; allowed to fail, secret-gated.
 
-**Notes / risks.** Mirrors S17 exactly in shape — the seam split is what makes GCP an
+**Notes / risks.** Mirrors S17 exactly in shape — the handle split is what makes GCP an
 additive leaf, not a structural change. Keep it tiny.

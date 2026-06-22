@@ -1,4 +1,4 @@
-{- | The registry-protocol seam: the sole interface between the proxy core and
+{- | The registry-protocol handle: the sole interface between the proxy core and
 any specific registry's wire protocol.
 
 This is the __ecosystem (protocol) axis__ — fetch, publish, and parse — and
@@ -24,7 +24,7 @@ Two design points are load-bearing:
   are orthogonal axes: every managed npm registry (AWS CodeArtifact, GCP Artifact
   Registry, a self-hosted Verdaccio) speaks the same npm protocol and differs
   only in how a bearer token is minted, which lives behind the separate
-  "Ecluse.Credential" seam. So one npm 'RegistryClient' is reused across every
+  "Ecluse.Credential" handle. So one npm 'RegistryClient' is reused across every
   cloud rather than near-duplicated per provider.
 
 The abstraction is the sole interface, so a new ecosystem backend (PyPI,
@@ -32,7 +32,7 @@ RubyGems, …) is an additive constructor behind this record rather than a
 structural change.
 -}
 module Ecluse.Registry (
-    -- * Protocol seam
+    -- * Protocol handle
     RegistryClient (..),
 
     -- * Fetch payload
@@ -76,7 +76,7 @@ newtype PublishError = PublishError
     }
     deriving stock (Eq, Show)
 
-{- | The registry-protocol seam — a record of functions over a backend whose
+{- | The registry-protocol handle — a record of functions over a backend whose
 private state the closures capture. The effectful fields return 'IO' (decoupled
 from the core); the @parse*@ fields are pure. See the module header.
 -}
@@ -91,11 +91,10 @@ data RegistryClient = RegistryClient
     -- job's re-publish is safe.
     , parsePackageInfo :: RegistryResponse -> Either ParseError PackageInfo
     -- ^ Project a fetched metadata response into the packument-level
-    -- 'PackageInfo'. Pure and total.
+    -- 'PackageInfo'.
     , parseVersionDetails :: RegistryResponse -> Version -> Either ParseError PackageDetails
     -- ^ Project a fetched metadata response into the per-version
-    -- 'PackageDetails' for a specific version. Pure and total.
+    -- 'PackageDetails' for a specific version.
     , parseVersionList :: RegistryResponse -> Either ParseError [Version]
     -- ^ Extract the list of available versions from a fetched metadata response.
-    -- Pure and total.
     }

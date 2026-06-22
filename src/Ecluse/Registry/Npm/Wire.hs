@@ -6,7 +6,7 @@ It is the raw-wire layer of "parse, don't validate" — it captures /what the
 registry said/ as faithfully as the rules and serving need, and __nothing
 more__. Projecting these wire types into the ecosystem-agnostic domain model
 ("Ecluse.Package": @PackageDetails@ et al.) is a separate concern; keeping the
-two apart is what keeps the lenient\/faithful seam clean.
+two apart is what keeps the lenient\/faithful handle clean.
 
 The shapes here are reverse-engineered from live captures of
 @registry.npmjs.org@; the authoritative reference (with real bodies) is

@@ -37,7 +37,7 @@ resilience (timeout budget, bounded retry/backoff, circuit breaker), fail-closed
 - [ ] Every `Unavailable`/breaker trip emits an ERROR log + metric (metric in M6).
 - [ ] `EvalContext` extended with the fetchers/lookups the effectful tier needs.
 
-**File fence.**
+**File scope.**
 - `src/Ecluse/Rules/Types.hs`, `src/Ecluse/Rules.hs` — `Unavailable`, two-tier eval, `EvalContext` extension.
 - `src/Ecluse/Rules/Effectful.hs` — the effectful-rule interface + breaker/retry/timeout harness (if it earns a module).
 - `src/Ecluse/Server/Pipeline.hs`, `src/Ecluse/Registry/Npm/Filter.hs` — wire `Unavailable` into serve + filter (replacing the S09/S14 "deny-only until S21" stubs).
