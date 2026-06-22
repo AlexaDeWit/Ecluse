@@ -1,102 +1,70 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
   Écluse — GitHub social preview (1280×640).
-  Original hand-authored vector. No third-party, stock, or copyrighted assets.
-  A draughtsman's-page treatment (ink on drafting paper, line-art): a side
-  section of a canal lock — a package (a wooden crate, the trademark-free emblem
-  of a shipped dependency) waiting in the low chamber while the closed mitre
-  gate, with its heavy balance beam over the coping, holds back the higher water
-  of the pound beyond. The step in the water surface across the gate is the thing
-  that reads, at a glance, as a lock: a controlled chamber every package is
-  raised or lowered through before it is admitted. The resemblance to a
-  particular flight of locks is left for those who would recognise it — nothing
-  names it. Only the package wordmark and tagline appear as text.
-    Wordmark : "EB Garamond" (OFL) → Georgia fallback
+  Original vector; no third-party, stock, or copyrighted assets.
+
+  A draughtsman's section of a single canal lock: a barge of orderly-stacked
+  shipping containers — the trademark-free emblem of shipped dependencies — waits
+  in the low chamber while the closed gate holds back the higher pound beyond. The
+  step in the water surface across the gate is what reads, at a glance, as a lock:
+  a controlled chamber every package is raised or lowered through before it is
+  admitted. Dimension arrows and still-water datum triangles keep the
+  drawing-board character; only the wordmark and tagline are set as text.
+
+  Wordmark: "EB Garamond" (OFL) -> Georgia -> serif fallback. The committed PNG is
+  rendered with a serif fallback where EB Garamond is unavailable.
 -->
-<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640"
-     viewBox="0 0 1280 640" role="img"
-     aria-label="Écluse — supply-chain resilience proxy for package registries">
-  <title>Écluse</title>
-  <desc>A package crate in the low chamber of a canal lock; the closed gate holds back the higher pound beyond.</desc>
-
-  <defs>
-    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
-      <path d="M40 0 H0 V40" fill="none" stroke="#211F1C" stroke-opacity="0.035" stroke-width="1"/>
-    </pattern>
-  </defs>
-
-  <!-- drafting paper + faint grid + sheet edge -->
-  <rect width="1280" height="640" fill="#F4EFE3"/>
-  <rect x="24" y="24" width="1232" height="592" fill="url(#grid)"/>
-  <rect x="24" y="24" width="1232" height="592" fill="none" stroke="#211F1C" stroke-width="1.6"/>
-
-  <!-- ════════ THE LOCK, in section: package in the low chamber, gate holding the pound ════════ -->
-  <g fill="none" stroke="#211F1C" stroke-linejoin="round">
-
-    <!-- ground the walls are set into (a whisper) -->
-    <g stroke-width="1.4" stroke-opacity="0.55">
-      <line x1="150" y1="140" x2="196" y2="140"/>
-      <line x1="1104" y1="140" x2="1130" y2="140"/>
-    </g>
-
-    <!-- chamber: far wall, floor, end wall (the section) -->
-    <g stroke-width="2.4">
-      <line x1="196" y1="140" x2="196" y2="372"/>
-      <line x1="196" y1="372" x2="1104" y2="372"/>
-      <line x1="1104" y1="140" x2="1104" y2="372"/>
-    </g>
-
-    <!-- the gate: a braced timber leaf, closed, from coping to floor -->
-    <g stroke-width="2.4">
-      <line x1="694" y1="140" x2="694" y2="372"/>
-      <line x1="706" y1="140" x2="706" y2="372"/>
-      <line x1="694" y1="140" x2="706" y2="140"/>
-    </g>
-    <g stroke-width="1.4">
-      <line x1="694" y1="222" x2="706" y2="222"/>
-      <line x1="694" y1="286" x2="706" y2="286"/>
-      <line x1="694" y1="344" x2="706" y2="344"/>
-      <line x1="694" y1="366" x2="706" y2="210"/>   <!-- diagonal brace -->
-    </g>
-
-    <!-- balance beam: the heavy timber lever lying out over the coping -->
-    <line x1="700" y1="141" x2="556" y2="129" stroke-width="6" stroke-linecap="round"/>
-
-    <!-- water: the step is the tell — low in the chamber, high in the pound -->
-    <g stroke-width="1.8">
-      <line x1="706" y1="192" x2="1104" y2="192"/>   <!-- pound (high) -->
-      <line x1="196" y1="306" x2="330" y2="306"/>    <!-- chamber (low), split -->
-      <line x1="510" y1="306" x2="694" y2="306"/>    <!-- around the crate -->
-    </g>
-    <g stroke-width="1" stroke-opacity="0.4">
-      <line x1="760" y1="210" x2="1056" y2="210"/>
-      <line x1="820" y1="226" x2="1000" y2="226"/>
-      <line x1="212" y1="322" x2="296" y2="322"/>
-      <line x1="576" y1="322" x2="680" y2="322"/>
-    </g>
-
-    <!-- a package in transit through the lock: a wooden crate afloat in the chamber -->
-    <g stroke-width="2">
-      <path d="M330 218 L470 218 L510 192 L370 192 Z"/>   <!-- lid (top face) -->
-      <path d="M470 218 L510 192 L510 294 L470 320 Z"/>   <!-- right side face -->
-      <path d="M330 218 L470 218 L470 320 L330 320 Z"/>   <!-- front face -->
-    </g>
-    <g stroke-width="1.4">
-      <line x1="330" y1="320" x2="470" y2="218"/>   <!-- diagonal brace (rhymes with the gate) -->
-      <line x1="330" y1="269" x2="470" y2="269"/>   <!-- plank seam -->
-      <line x1="377" y1="218" x2="417" y2="192"/>   <!-- lid slats -->
-      <line x1="424" y1="218" x2="464" y2="192"/>
-      <line x1="470" y1="250" x2="510" y2="224"/>   <!-- side slats -->
-      <line x1="470" y1="288" x2="510" y2="262"/>
-    </g>
-    <rect x="344" y="230" width="40" height="24" stroke-width="1.2"/>   <!-- shipping label -->
-  </g>
-
-  <!-- ════════ wordmark + tagline (the only text) ════════ -->
-  <text x="640" y="492" text-anchor="middle"
-        font-family="'EB Garamond','Cormorant Garamond',Georgia,'Times New Roman',serif"
-        font-size="82" font-weight="600" letter-spacing="1" fill="#211F1C">Écluse</text>
-  <text x="640" y="530" text-anchor="middle"
-        font-family="'Inter','Helvetica Neue',Arial,sans-serif"
-        font-size="16" letter-spacing="2" fill="#5A564E">SUPPLY-CHAIN RESILIENCE PROXY FOR PACKAGE REGISTRIES</text>
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-label="Écluse">
+<defs><pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M40 0 H0 V40" fill="none" stroke="#211F1C" stroke-opacity="0.035" stroke-width="1"/></pattern><linearGradient id="wb" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#CBD6D2" stop-opacity="0.55"/><stop offset="1" stop-color="#A6B8B2" stop-opacity="0.78"/></linearGradient><pattern id="hatch" width="9" height="9" patternUnits="userSpaceOnUse"><line x1="0" y1="9" x2="9" y2="0" stroke="#211F1C" stroke-opacity="0.13" stroke-width="1.1"/></pattern></defs>
+<rect width="1280" height="640" fill="#F4EFE3"/>
+<rect x="24" y="24" width="1232" height="592" fill="url(#grid)"/>
+<rect x="24" y="24" width="1232" height="592" fill="none" stroke="#211F1C" stroke-width="1.6"/>
+<g transform="translate(0,0)">
+<rect x="708" y="192" width="396" height="180" fill="url(#wb)"/>
+<rect x="196" y="306" width="496" height="66" fill="url(#wb)"/>
+<g fill="none" stroke="#211F1C" stroke-linejoin="round">
+<g stroke-width="1.4" stroke-opacity="0.55"><line x1="150" y1="140" x2="196" y2="140"/><line x1="1104" y1="140" x2="1130" y2="140"/></g>
+<g stroke-width="2.4"><line x1="196" y1="140" x2="196" y2="372"/><line x1="196" y1="372" x2="1104" y2="372"/><line x1="1104" y1="140" x2="1104" y2="372"/></g>
+<g stroke-width="1.6" stroke-opacity="0.8"><line x1="196" y1="140" x2="668" y2="140"/><line x1="732" y1="140" x2="1104" y2="140"/></g>
+<g stroke-width="2.4"><line x1="692" y1="140" x2="692" y2="372"/><line x1="708" y1="140" x2="708" y2="372"/><line x1="692" y1="140" x2="708" y2="140"/></g>
+<g stroke-width="1.3"><line x1="696" y1="146" x2="696" y2="372"/><line x1="700" y1="146" x2="700" y2="372"/><line x1="704" y1="146" x2="704" y2="372"/><line x1="692" y1="206" x2="708" y2="206"/><line x1="692" y1="286" x2="708" y2="286"/><line x1="692" y1="344" x2="708" y2="344"/></g>
+<g stroke-width="1.8"><line x1="708" y1="192" x2="1104" y2="192"/><line x1="196" y1="306" x2="296" y2="306"/><line x1="560" y1="306" x2="692" y2="306"/></g>
+<g stroke="#8AA09B" stroke-width="1.2" stroke-opacity="0.7"><line x1="760" y1="208" x2="1056" y2="208"/><line x1="820" y1="224" x2="1000" y2="224"/><line x1="600" y1="320" x2="676" y2="320"/></g>
+</g>
+<ellipse cx="426" cy="346" rx="150" ry="9" fill="#8AA09B" fill-opacity="0.35"/>
+<path d="M296 300 L556 300 L544 340 L308 340 Z" fill="#F4EFE3" stroke="#211F1C" stroke-width="2"/>
+<line x1="300" y1="306" x2="552" y2="306" stroke="#211F1C" stroke-width="1.2" stroke-opacity="0.6"/>
+<rect x="296" y="296" width="260" height="6" fill="#ECE4D2" stroke="#211F1C" stroke-width="1.4"/>
+<g stroke="#211F1C" stroke-width="1.5">
+<rect x="302" y="273" width="46" height="27" fill="#DDD3BB"/>
+<rect x="302" y="246" width="46" height="27" fill="#ECE4D2"/>
+<rect x="352" y="273" width="46" height="27" fill="#DDD3BB"/>
+<rect x="352" y="246" width="46" height="27" fill="#ECE4D2"/>
+<rect x="352" y="219" width="46" height="27" fill="#F4EFE3"/>
+<rect x="402" y="273" width="46" height="27" fill="#DDD3BB"/>
+<rect x="402" y="246" width="46" height="27" fill="#ECE4D2"/>
+<rect x="402" y="219" width="46" height="27" fill="#F4EFE3"/>
+<rect x="452" y="273" width="46" height="27" fill="#DDD3BB"/>
+<rect x="452" y="246" width="46" height="27" fill="#ECE4D2"/>
+<rect x="502" y="273" width="46" height="27" fill="#DDD3BB"/>
+<rect x="502" y="246" width="46" height="27" fill="#ECE4D2"/>
+</g>
+<g stroke="#211F1C" stroke-width="0.9" stroke-opacity="0.5">
+<line x1="325" y1="246" x2="325" y2="300"/>
+<line x1="375" y1="219" x2="375" y2="300"/>
+<line x1="425" y1="219" x2="425" y2="300"/>
+<line x1="475" y1="246" x2="475" y2="300"/>
+<line x1="525" y1="246" x2="525" y2="300"/>
+</g>
+<g stroke="#211F1C" stroke-width="1" fill="none">
+<line x1="196" y1="140" x2="120" y2="140"/><line x1="196" y1="372" x2="120" y2="372"/><line x1="128" y1="144" x2="128" y2="368"/>
+<line x1="708" y1="192" x2="772" y2="192"/><line x1="708" y1="306" x2="772" y2="306"/><line x1="764" y1="196" x2="764" y2="302"/>
+<line x1="196" y1="372" x2="196" y2="416"/><line x1="1104" y1="372" x2="1104" y2="416"/><line x1="200" y1="408" x2="1100" y2="408"/>
+</g>
+<g><polygon points="128,144 123,155 133,155" fill="#211F1C" stroke="none"/><polygon points="128,368 123,357 133,357" fill="#211F1C" stroke="none"/><polygon points="764,196 759,207 769,207" fill="#211F1C" stroke="none"/><polygon points="764,302 759,291 769,291" fill="#211F1C" stroke="none"/><polygon points="200,408 211,403 211,413" fill="#211F1C" stroke="none"/><polygon points="1100,408 1089,403 1089,413" fill="#211F1C" stroke="none"/></g>
+<g stroke="#211F1C" stroke-width="1.2" fill="none"><polygon points="892,180 908,180 900,192" fill="#F4EFE3"/><line x1="890" y1="195" x2="910" y2="195"/><line x1="894" y1="198" x2="906" y2="198"/></g>
+<g stroke="#211F1C" stroke-width="1.2" fill="none"><polygon points="242,294 258,294 250,306" fill="#F4EFE3"/><line x1="240" y1="309" x2="260" y2="309"/><line x1="244" y1="312" x2="256" y2="312"/></g>
+<text x="640" y="492" text-anchor="middle" font-family="'EB Garamond','Cormorant Garamond',Georgia,serif" font-size="82" font-weight="600" letter-spacing="1" fill="#211F1C">Écluse</text>
+<text x="640" y="530" text-anchor="middle" font-family="Inter,Helvetica,Arial,sans-serif" font-size="16" font-weight="600" letter-spacing="2" fill="#4F4B43">SUPPLY-CHAIN RESILIENCE PROXY FOR PACKAGE REGISTRIES</text>
+</g>
 </svg>
