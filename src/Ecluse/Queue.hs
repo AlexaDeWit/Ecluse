@@ -60,6 +60,7 @@ module Ecluse.Queue (
 ) where
 
 import Data.Map.Strict qualified as Map
+import Data.Sequence qualified as Seq
 
 import Ecluse.Package (PackageName)
 import Ecluse.Version (Version)
@@ -138,8 +139,9 @@ in-flight job becomes visible again — redelivered — on a subsequent 'receive
 data QueueState = QueueState
     { qsNextReceipt :: Word64
     -- ^ A monotonic counter giving each delivery a unique 'ReceiptHandle'.
-    , qsVisible :: [MirrorJob]
-    -- ^ Jobs waiting to be delivered, oldest first (FIFO).
+    , qsVisible :: Seq MirrorJob
+    -- ^ Jobs waiting to be delivered, oldest first (FIFO). 'Seq' gives
+    -- O(1) amortised snoc so enqueue cost does not grow with queue depth.
     , qsInFlight :: Map ReceiptHandle InFlight
     -- ^ Delivered-but-unacked jobs, keyed by the handle used to 'ack' them.
     }
@@ -169,7 +171,7 @@ redelivery pass. This is a test double — there is no long-poll blocking; an em
 -}
 newInMemoryQueue :: IO MirrorQueue
 newInMemoryQueue = do
-    stateVar <- newTVarIO (QueueState 0 [] mempty)
+    stateVar <- newTVarIO (QueueState 0 Seq.empty mempty)
     let modifyState :: (QueueState -> QueueState) -> IO ()
         modifyState = atomically . modifyTVar' stateVar
     pure
@@ -184,9 +186,9 @@ newInMemoryQueue = do
             , extendVisibility = \handle _seconds -> modifyState (holdJob handle)
             }
   where
-    -- Append a job to the back of the visible queue (FIFO).
+    -- Append a job to the back of the visible queue (FIFO). O(1) amortised.
     enqueueJob :: MirrorJob -> QueueState -> QueueState
-    enqueueJob job qs = qs{qsVisible = qsVisible qs <> [job]}
+    enqueueJob job qs = qs{qsVisible = qsVisible qs <> Seq.singleton job}
 
     -- Drop an acked in-flight job; a handle that is unknown (already acked, or
     -- never issued) is a harmless no-op.
@@ -206,13 +208,13 @@ newInMemoryQueue = do
     deliver :: QueueState -> ([QueueMessage], QueueState)
     deliver qs =
         let (reclaimed, stillHeld) = reclaim (Map.toList (qsInFlight qs))
-            toDeliver = reclaimed <> qsVisible qs
+            toDeliver = Seq.fromList reclaimed <> qsVisible qs
             (messages, nextReceipt, delivered) =
-                assignReceipts (qsNextReceipt qs) toDeliver
+                assignReceipts (qsNextReceipt qs) (toList toDeliver)
          in ( messages
             , QueueState
                 { qsNextReceipt = nextReceipt
-                , qsVisible = []
+                , qsVisible = Seq.empty
                 , qsInFlight = Map.fromList stillHeld <> delivered
                 }
             )

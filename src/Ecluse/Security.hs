@@ -36,6 +36,7 @@ model these guards answer is recorded there too.
 module Ecluse.Security (
     -- * Outbound host allowlist
     isAllowedUpstreamHost,
+    lowerCaseHosts,
 
     -- * Internal-range block
     isBlockedTarget,
@@ -67,6 +68,14 @@ import Ecluse.Server.Route (isSafeComponent)
 
 -- ── outbound host allowlist ──────────────────────────────────────────────────
 
+{- | Pre-lower a set of host strings for use with 'isAllowedUpstreamHost' and
+'isBlockedTarget'. Call once when building your configuration, not on every
+request; passing a pre-lowered set avoids repeating 'Set.map T.toLower' per
+check.
+-}
+lowerCaseHosts :: Set Text -> Set Text
+lowerCaseHosts = Set.map T.toLower
+
 {- | Whether @host@ is one of the configured upstream hosts. __Pure and total.__
 
 The first guard on every outbound fetch: the proxy talks to its configured
@@ -76,6 +85,9 @@ if it appears in @allowed@. The match is exact on the bare host (no port, no
 scheme — extract it with 'hostAddress' first) and __case-insensitive__, since
 DNS hostnames are; an empty @host@ is never allowed. This is the allowlist half
 of the SSRF gate; pair it with 'isBlockedTarget' for the internal-range half.
+
+Pass the result of 'lowerCaseHosts' as @allowed@ to avoid repeating
+'Set.map T.toLower' on every call.
 -}
 isAllowedUpstreamHost :: Set Text -> Text -> Bool
 isAllowedUpstreamHost allowed host =
@@ -165,22 +177,41 @@ isInternalAddress = \case
             || (a == 192 && b == 168) -- RFC1918 192.168.0.0/16
     IPv6 groups -> isInternalV6 groups
 
-{- | Whether 16-bit IPv6 groups are loopback (@::1@) or link-local
-(@fe80::\/10@). Other v6 ranges (ULA @fc00::\/7@, mapped v4) are out of scope for
-this minimal hand-rolled check; the allowlist remains the primary v6 constraint.
+{- | Whether 16-bit IPv6 groups are loopback (@::1@), link-local
+(@fe80::\/10@), or IPv4-mapped (@::ffff:0:0\/96@). The mapped range lets an
+attacker embed an internal IPv4 literal (e.g. @::ffff:169.254.169.254@) in an
+IPv6 form that the per-IPv4-range checks would otherwise miss; decoding the
+embedded address and re-running 'isInternalAddress' on the IPv4 result closes
+the gap. Both spellings of a mapped address reach here as the same eight groups
+— the hex form (@::ffff:a9fe:a9fe@) and the canonical dotted form
+(@::ffff:169.254.169.254@), which 'parseIPv6' expands. ULA (@fc00::\/7@) and
+NAT64 (@64:ff9b::\/96@) are out of scope.
 -}
 isInternalV6 :: [Word16] -> Bool
 isInternalV6 groups =
     groups == [0, 0, 0, 0, 0, 0, 0, 1] -- ::1 loopback
         || any linkLocal (take 1 groups) -- fe80::/10 link-local (first group)
+        || isIpv4Mapped groups -- ::ffff:0:0/96 (IPv4-mapped)
   where
     linkLocal g0 = g0 >= 0xFE80 && g0 <= 0xFEBF
+    -- Perform Word16 arithmetic before narrowing to Word8 so the high-byte
+    -- extraction is not corrupted by premature truncation.
+    isIpv4Mapped [0, 0, 0, 0, 0, 0xFFFF, hi, lo] =
+        isInternalAddress
+            ( IPv4
+                (fromIntegral (hi `div` 256))
+                (fromIntegral (hi `mod` 256))
+                (fromIntegral (lo `div` 256))
+                (fromIntegral (lo `mod` 256))
+            )
+    isIpv4Mapped _ = False
 
 {- | Parse a host as an IP literal, or 'Nothing' for a DNS name. Handles dotted-
-quad IPv4 and the IPv6 forms a host realistically carries — full eight-group form
-and @::@-compressed forms (including @::1@) — which is enough to recognise the
-loopback and link-local addresses 'isInternalAddress' blocks. It is deliberately
-__not__ a complete IPv6 parser (no zone ids, no embedded IPv4); an unrecognised
+quad IPv4 and the IPv6 forms a host realistically carries — full eight-group form,
+@::@-compressed forms (including @::1@), and a trailing embedded IPv4 (the
+@a.b.c.d@ in @::ffff:a.b.c.d@) — which is enough to recognise the loopback,
+link-local, and IPv4-mapped addresses 'isInternalAddress' blocks. It is
+deliberately __not__ a complete IPv6 parser (no zone ids); an unrecognised
 literal is treated as a name, which the host allowlist still constrains.
 -}
 parseIpLiteral :: Text -> Maybe IpAddr
@@ -202,8 +233,9 @@ parseIPv4 host = case T.splitOn "." host of
         if n <= 255 then Just (fromInteger n) else Nothing
 
 {- | Parse an IPv6 literal — either the full eight-group form or a @::@-compressed
-form (at most one @::@) — into its eight 16-bit groups. Enough to recognise the
-@::1@ and @fe80::\/10@ addresses we block; rejects anything malformed.
+form (at most one @::@), optionally ending in an embedded dotted-quad IPv4 — into
+its eight 16-bit groups. Enough to recognise the @::1@, @fe80::\/10@, and
+@::ffff:0:0\/96@ addresses we block; rejects anything malformed.
 -}
 parseIPv6 :: Text -> Maybe IpAddr
 parseIPv6 host =
@@ -220,12 +252,31 @@ parseIPv6 host =
                 else Nothing
         _ -> Nothing -- more than one "::" is illegal
   where
-    -- The colon-separated 16-bit groups of one side; "" → no groups.
+    -- The colon-separated groups of one side; "" → no groups. The final token
+    -- may be a dotted-quad IPv4 (RFC 4291 §2.2.3, e.g. the @169.254.169.254@ in
+    -- @::ffff:169.254.169.254@), which expands to its two 16-bit groups so an
+    -- IPv4-mapped literal in its canonical dotted form is decoded rather than
+    -- mistaken for a name. Only the last token may be dotted; an interior dotted
+    -- token fails 'group16' (no hex '.') and the whole parse is rejected.
     groupsOf :: Text -> Maybe [Word16]
-    groupsOf t =
-        if T.null t
-            then Just []
-            else traverse group16 (T.splitOn ":" t)
+    groupsOf t
+        | T.null t = Just []
+        | otherwise = groups (T.splitOn ":" t)
+
+    groups :: [Text] -> Maybe [Word16]
+    groups [] = Just []
+    groups [tok]
+        | T.any (== '.') tok = embeddedV4 tok
+        | otherwise = (: []) <$> group16 tok
+    groups (tok : rest) = (:) <$> group16 tok <*> groups rest
+
+    -- A trailing dotted-quad IPv4 as its two 16-bit groups (high pair, low pair).
+    embeddedV4 :: Text -> Maybe [Word16]
+    embeddedV4 t = case parseIPv4 t of
+        Just (IPv4 a b c d) -> Just [pair a b, pair c d]
+        _ -> Nothing
+      where
+        pair hi lo = fromIntegral hi * 256 + fromIntegral lo
 
     -- A group is a non-empty all-hex run that fits in 16 bits. The hex check
     -- keeps 'readMaybe' from accepting signs, so a parsed value is >= 0.

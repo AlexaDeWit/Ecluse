@@ -38,6 +38,7 @@ import Ecluse.Security (
     hostAddress,
     isAllowedUpstreamHost,
     isBlockedTarget,
+    lowerCaseHosts,
     upstreamUrlFor,
  )
 import Ecluse.Version (Version, mkVersion)
@@ -131,6 +132,7 @@ spec = do
     versionCountSpec
     nestingDepthSpec
     showInstancesSpec
+    lowerCaseHostsSpec
     propertiesSpec
 
 {- | The error\/config types derive 'Show' for diagnostics and test output; assert
@@ -203,6 +205,29 @@ internalRangeSpec = describe "isBlockedTarget" $ do
             isBlockedTarget noOptIn "febf::1" `shouldBe` True
         it "blocks fully-expanded IPv6 loopback" $
             isBlockedTarget noOptIn "0:0:0:0:0:0:0:1" `shouldBe` True
+
+    describe "blocks IPv4-mapped IPv6 (::ffff:0:0/96)" $ do
+        it "blocks the cloud instance-metadata address in mapped form (::ffff:169.254.169.254)" $
+            isBlockedTarget noOptIn "::ffff:a9fe:a9fe" `shouldBe` True
+        it "blocks mapped loopback (::ffff:127.0.0.1)" $
+            isBlockedTarget noOptIn "::ffff:7f00:1" `shouldBe` True
+        it "blocks mapped RFC1918 10/8 (::ffff:10.0.0.1)" $
+            isBlockedTarget noOptIn "::ffff:a00:1" `shouldBe` True
+        it "does not block a mapped public address (::ffff:1.1.1.1)" $
+            isBlockedTarget noOptIn "::ffff:101:101" `shouldBe` False
+
+    describe "blocks IPv4-mapped IPv6 in canonical dotted form (RFC 4291 §2.2.3)" $ do
+        -- The dotted spelling is what a tool or attacker actually emits; it must
+        -- be decoded too, not just the all-hex spelling above. This is the form
+        -- that previously slipped past the internal-range block.
+        it "blocks the instance-metadata address (::ffff:169.254.169.254)" $
+            isBlockedTarget noOptIn "::ffff:169.254.169.254" `shouldBe` True
+        it "blocks mapped loopback (::ffff:127.0.0.1)" $
+            isBlockedTarget noOptIn "::ffff:127.0.0.1" `shouldBe` True
+        it "blocks the fully-expanded mapped loopback (0:0:0:0:0:ffff:127.0.0.1)" $
+            isBlockedTarget noOptIn "0:0:0:0:0:ffff:127.0.0.1" `shouldBe` True
+        it "does not block a mapped public address (::ffff:1.1.1.1)" $
+            isBlockedTarget noOptIn "::ffff:1.1.1.1" `shouldBe` False
 
     describe "treats malformed IPv6 literals as names (not blocked)" $ do
         -- Each malformed form must fail to parse as an IP, so it is not mistaken
@@ -312,10 +337,10 @@ ssrfGateSpec = describe "composed SSRF gate (allowlist AND not-blocked)" $ do
                 && not (isBlockedTarget Set.empty "169.254.169.254")
             )
                 `shouldBe` False
-    it "refuses an IPv4-mapped IPv6 metadata literal (kept out by the allowlist half)" $
-        -- '::ffff:a9fe:a9fe' is 169.254.169.254 in mapped form. The internal block
-        -- deliberately does not decode it (documented out-of-scope), but the
-        -- allowlist half keeps it out, so the composed gate still refuses it.
+    it "refuses an IPv4-mapped IPv6 metadata literal (blocked by both halves)" $
+        -- '::ffff:a9fe:a9fe' is 169.254.169.254 in IPv4-mapped form. The internal
+        -- block now decodes the embedded IPv4 address and catches it directly, so
+        -- the gate refuses it even if someone were to allowlist this literal form.
         passesGate "::ffff:a9fe:a9fe" `shouldBe` False
     it "refuses a metadata host extracted from a URL" $
         passesGate (hostAddress "http://169.254.169.254/latest/meta-data/") `shouldBe` False
@@ -498,6 +523,21 @@ nestingDepthSpec = describe "checkNestingDepth" $ do
                         ]
                     )
          in checkNestingDepth defaultLimits doc `shouldBe` Right doc
+
+-- ── lowerCaseHosts helper ────────────────────────────────────────────────────
+
+lowerCaseHostsSpec :: Spec
+lowerCaseHostsSpec = describe "lowerCaseHosts" $ do
+    it "lower-cases all hosts in the set" $
+        lowerCaseHosts (Set.fromList ["Registry.NPMjs.ORG", "Private.Example.COM"])
+            `shouldBe` Set.fromList ["registry.npmjs.org", "private.example.com"]
+    it "a pre-lowered set gives the same result as repeated case-folding" $
+        -- Passing a pre-lowered set to isAllowedUpstreamHost is equivalent to
+        -- passing the original mixed-case set; both accept the same hosts.
+        let mixed = upstreams
+            lowered = lowerCaseHosts mixed
+         in isAllowedUpstreamHost lowered "registry.npmjs.org"
+                `shouldBe` isAllowedUpstreamHost mixed "registry.npmjs.org"
 
 -- ── properties ───────────────────────────────────────────────────────────────
 

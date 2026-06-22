@@ -156,13 +156,11 @@ canonicalise = \case
 @\'-\'@\/@\'_\'@\/@\'.\'@ to a single @\'-\'@.
 -}
 normalisePyPI :: Text -> Text
-normalisePyPI = T.toLower . T.pack . collapse . toString
-  where
-    collapse [] = []
-    collapse (c : cs)
-        | isSep c = '-' : collapse (dropWhile isSep cs)
-        | otherwise = c : collapse cs
-    isSep c = c == '-' || c == '_' || c == '.'
+normalisePyPI t =
+    T.intercalate "-"
+        . filter (not . T.null)
+        . T.splitOn "-"
+        $ T.map (\c -> if c == '_' || c == '.' then '-' else c) (T.toLower t)
 
 -- | Render a package name in its native wire form (the display name).
 renderPackageName :: PackageName -> Text
