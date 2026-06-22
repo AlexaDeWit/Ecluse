@@ -81,6 +81,7 @@ observability, and the GCP backends.
 | **M6** | Observability | Opt-in, vendor-neutral OpenTelemetry/OTLP: tracing, the `ecluse.*` metrics catalog, JSONL `dd` log correlation. |
 | **M7** | GCP backends | The Pub/Sub de-risking spike → Pub/Sub `MirrorQueue`, the ADC credential leaf, GCP wiring. **Scheduled after AWS launch.** |
 | **M8** | Release hardening | SLSA build provenance + SBOM attestation; the launch docs & deployment runbook. |
+| **M9** | Performance benchmarking | The benchmark harness + micro / pipeline / load benchmarks, wired into CI as an **informational, non-gating** trend compared against prior baselines. **Never blocks a merge** — a correctness change may knowingly accept a regression. Off the launch critical path. |
 
 ---
 
@@ -88,7 +89,7 @@ observability, and the GCP backends.
 
 Every slice links to its detail file. **Depends on** lists the slice IDs that must
 be **merged** before it can start. Tier = the test suite(s) it owes
-(`U`=unit, `I`=integration, `S`=smoke).
+(`U`=unit, `I`=integration, `S`=smoke, `B`=bench — informational, non-gating).
 
 ### M0 — Shell, seams & foundations
 
@@ -171,6 +172,14 @@ be **merged** before it can start. Tier = the test suite(s) it owes
 | [S31](slices/S31-provenance-sbom.md) | SLSA provenance + SBOM attestation | — | — |
 | [S32](slices/S32-launch-docs.md) | Launch docs & deployment runbook | S20 | — |
 
+### M9 — Performance benchmarking (informational; never gates)
+
+| ID | Slice | Depends on | Tier |
+|----|-------|------------|------|
+| [S37](slices/S37-benchmark-harness.md) | Benchmark harness + pure-core micro-benchmarks | — | B |
+| [S38](slices/S38-pipeline-benchmarks.md) | End-to-end pipeline benchmarks (in-process) | S14, S33, S37 | B |
+| [S39](slices/S39-load-and-memory.md) | Macro load + bounded-memory streaming observations | S15, S37 | B |
+
 ---
 
 ## Parallelization — ~3 slices in flight
@@ -207,6 +216,12 @@ parallel, then converge at M3:
   **fast-follow** after `S14` (so it documents a packument the server actually
   serves) and does not gate the launch path; `S35` (manifest drift controls) is a
   further enhancement layered on `S34`, also off the launch path.
+- **Performance benchmarking (M9) is an independent, informational track, off the
+  critical path.** `S37` depends on nothing pending — it runs against the
+  already-merged pure core and is the natural companion to the inter-wave quality
+  pass (which then *measures* regressions instead of eyeballing them); `S38` joins
+  once the walking skeleton (`S14` / `S33`) lands, `S39` once the tarball path
+  (`S15`) is up. **None gate** — they inform.
 
 ### Critical path to AWS launch
 
@@ -272,3 +287,7 @@ not an omission:
   point-in-time at ingestion; the re-scan is a deferred follow-on
   ([rules-engine → Point-in-time gating](../docs/architecture/rules-engine.md#point-in-time-gating--a-known-limitation)).
 - **Web UI / admin API.**
+- **Performance *gating*.** The benchmarks (M9) are informational only — they
+  trend allocations / time / latency against prior baselines and comment on
+  regressions, but **never block a merge**: correctness may knowingly cost
+  performance. Actual optimization is driven by what they reveal, not promised here.
