@@ -10,6 +10,7 @@ import Network.HTTP.Client (
     defaultManagerSettings,
     newManager,
  )
+import Network.HTTP.Client qualified as Client
 import Network.HTTP.Types.Status (
     Status,
     status200,
@@ -278,11 +279,15 @@ artifactSpec = describe "fetchArtifact / artifactRequest" $ do
         let config = NpmClientConfig{npmBaseUrl = "https://reg.test", npmManager = manager, npmToken = Nothing}
         case artifactRequest config isOdd v1 of
             Left err -> fail ("artifactRequest failed: " <> show err)
-            Right req ->
+            Right req -> do
                 -- 'decompress' is the predicate http-client consults per MIME
                 -- type; a tarball must never be gunzipped, so it must be False
                 -- for every type.
                 decompress req "application/gzip" `shouldBe` False
+                -- ...and it advertises no Accept-Encoding: requesting a transport
+                -- encoding we refuse to decode could yield a doubly-gzipped body
+                -- that breaks the tarball's dist.integrity.
+                Client.requestHeaders req `shouldNotSatisfy` any ((== "accept-encoding") . fst)
 
 -- ── publish ─────────────────────────────────────────────────────────────────────
 

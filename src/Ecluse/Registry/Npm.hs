@@ -262,9 +262,12 @@ artifactRequest config name version = do
         . withToken (npmToken config)
         $ base
             { -- A tarball must never be gunzipped in flight: it is opaque binary
-              -- whose integrity the client verifies, so stream the raw bytes.
+              -- whose integrity the client verifies, so stream the raw bytes. We
+              -- deliberately advertise no @Accept-Encoding@ here: a @.tgz@ is
+              -- already-compressed application data, and requesting a transport
+              -- encoding we then refuse to decode ('decompress' is 'False') would
+              -- risk a doubly-gzipped body that fails its @dist.integrity@.
               decompress = const False
-            , requestHeaders = (hAcceptEncoding, "gzip") : requestHeaders base
             }
 
 {- | Build the publish @PUT \/{pkg}@ request: the body is the npm publish
