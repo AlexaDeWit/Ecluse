@@ -98,6 +98,7 @@ import Ecluse.Registry (
     RegistryClient (..),
  )
 import Ecluse.Server (runServer)
+import Ecluse.Server.Cache (defaultCacheConfig, newMetadataCache)
 
 {- | Start Écluse: the entry point the @ecluse@ executable runs (see "Main").
 
@@ -111,8 +112,9 @@ run :: IO ()
 run = do
     manager <- HTTP.newManager tlsManagerSettings
     queue <- newInMemoryQueue
+    metadataCache <- newMetadataCache defaultCacheConfig
     logEnv <- newLogEnv JsonLog (Environment "production")
-    withEnv unconfiguredRegistry queue unconfiguredCredentials manager logEnv runServices
+    withEnv unconfiguredRegistry queue unconfiguredCredentials manager metadataCache logEnv runServices
 
 {- Run the server and the mirror worker concurrently over one composition-root
 'Env', the shape the single-process program uses. The two are independent (each

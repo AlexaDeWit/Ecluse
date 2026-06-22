@@ -42,10 +42,11 @@ import UnliftIO (MonadUnliftIO, bracket)
 import Ecluse.Credential (CredentialProvider)
 import Ecluse.Queue (MirrorQueue)
 import Ecluse.Registry (RegistryClient)
+import Ecluse.Server.Cache (MetadataCache)
 
-{- | The composition-root record: the handles plus the shared HTTP manager, from
-which the whole effectful shell is reached. See the module header for the
-no-SDK and sole-composition-root invariants it upholds.
+{- | The composition-root record: the handles plus the shared HTTP manager and the
+metadata cache, from which the whole effectful shell is reached. See the module
+header for the no-SDK and sole-composition-root invariants it upholds.
 -}
 data Env = Env
     { envRegistry :: RegistryClient
@@ -65,6 +66,12 @@ data Env = Env
     artifact streaming), so connection pooling and TLS are established once and
     reused across requests.
     -}
+    , envMetadataCache :: MetadataCache
+    {- ^ The short-TTL, size-bounded metadata cache (see "Ecluse.Server.Cache")
+    shared by the serve paths: one parsed packument is reused across the packument
+    and tarball-gating fetches, and concurrent resolutions of a hot package
+    collapse to a single upstream call.
+    -}
     , envLogEnv :: LogEnv
     {- ^ The @katip@ logging environment (see "Ecluse.Log"): the structured-log
     stream every layer attaches context to, with its stdout scribe and format
@@ -74,22 +81,23 @@ data Env = Env
 
 {- | Assemble an 'Env' from its constructed handles and a shared HTTP 'Manager'.
 
-The 'Manager' and 'LogEnv' are taken as arguments rather than built here: a
-'Manager' owns a connection pool whose lifetime should be bracketed by the caller
-that also owns teardown (see 'withEnv'), and injecting both keeps 'Env' assembly
-pure of network and logging setup — so it can be exercised in tests against
-in-memory handle doubles with no sockets opened and no scribe attached to stdout.
-Backend selection happens in the handle smart constructors that produce the
-arguments; this only gathers them.
+The 'Manager', 'MetadataCache', and 'LogEnv' are taken as arguments rather than
+built here: a 'Manager' owns a connection pool whose lifetime should be bracketed
+by the caller that also owns teardown (see 'withEnv'), and injecting them keeps
+'Env' assembly pure of network and logging setup — so it can be exercised in tests
+against in-memory handle doubles with no sockets opened and no scribe attached to
+stdout. Backend selection happens in the handle smart constructors that produce
+the arguments; this only gathers them.
 -}
-newEnv :: RegistryClient -> MirrorQueue -> CredentialProvider -> Manager -> LogEnv -> IO Env
-newEnv registry queue credentials manager logEnv =
+newEnv :: RegistryClient -> MirrorQueue -> CredentialProvider -> Manager -> MetadataCache -> LogEnv -> IO Env
+newEnv registry queue credentials manager metadataCache logEnv =
     pure
         Env
             { envRegistry = registry
             , envQueue = queue
             , envCredentials = credentials
             , envManager = manager
+            , envMetadataCache = metadataCache
             , envLogEnv = logEnv
             }
 
@@ -104,12 +112,13 @@ withEnv ::
     MirrorQueue ->
     CredentialProvider ->
     Manager ->
+    MetadataCache ->
     LogEnv ->
     (Env -> m a) ->
     m a
-withEnv registry queue credentials manager logEnv =
+withEnv registry queue credentials manager metadataCache logEnv =
     bracket
-        (liftIO (newEnv registry queue credentials manager logEnv))
+        (liftIO (newEnv registry queue credentials manager metadataCache logEnv))
         teardown
   where
     -- The connection pool behind the 'Manager' is owned and released by whoever

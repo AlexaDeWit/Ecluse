@@ -22,6 +22,7 @@ import Ecluse.Env (Env (..), newEnv, withEnv)
 import Ecluse.Package (PackageName, mkPackageName)
 import Ecluse.Queue (MirrorJob (..), enqueue, msgJob, newInMemoryQueue, receive)
 import Ecluse.Registry (ParseError (..), RegistryClient (..), RegistryResponse (..))
+import Ecluse.Server.Cache (MetadataCache, defaultCacheConfig, newMetadataCache)
 import Ecluse.Version (Version, mkVersion)
 
 {- | A registry-handle double: the @parse*@ fields return fixed pure results and
@@ -62,15 +63,20 @@ so assembling an 'Env' opens no handle and writes nothing to stdout.
 newTestLogEnv :: IO LogEnv
 newTestLogEnv = initLogEnv (Namespace ["ecluse"]) (Environment "test")
 
-{- | Assemble an 'Env' from the doubles above, a no-network manager, and a
-scribe-free 'LogEnv'.
+-- | A metadata cache on the default config (touches no network).
+newTestCache :: IO MetadataCache
+newTestCache = newMetadataCache defaultCacheConfig
+
+{- | Assemble an 'Env' from the doubles above, a no-network manager, a metadata
+cache, and a scribe-free 'LogEnv'.
 -}
 newTestEnv :: IO Env
 newTestEnv = do
     queue <- newInMemoryQueue
     manager <- newTestManager
+    metadataCache <- newTestCache
     logEnv <- newTestLogEnv
-    newEnv fakeRegistry queue fakeCredentials manager logEnv
+    newEnv fakeRegistry queue fakeCredentials manager metadataCache logEnv
 
 -- | A sample job for round-tripping the queue handle held in an 'Env'.
 sampleJob :: MirrorJob
@@ -139,18 +145,20 @@ spec = do
         it "runs the body against the assembled Env and returns its result" $ do
             queue <- newInMemoryQueue
             manager <- newTestManager
+            metadataCache <- newTestCache
             logEnv <- newTestLogEnv
-            result <- withEnv fakeRegistry queue fakeCredentials manager logEnv $ \env ->
+            result <- withEnv fakeRegistry queue fakeCredentials manager metadataCache logEnv $ \env ->
                 currentToken' env
             result `shouldBe` "env-spec-token"
 
         it "propagates an exception thrown in the body (bracketed teardown re-raises)" $ do
             queue <- newInMemoryQueue
             manager <- newTestManager
+            metadataCache <- newTestCache
             logEnv <- newTestLogEnv
             let body :: Env -> IO ()
                 body _ = throwString "boom"
-            outcome <- try (withEnv fakeRegistry queue fakeCredentials manager logEnv body)
+            outcome <- try (withEnv fakeRegistry queue fakeCredentials manager metadataCache logEnv body)
             case outcome of
                 Left (_ :: StringException) -> pure ()
                 Right () -> expectationFailure "expected the body's exception to propagate"
