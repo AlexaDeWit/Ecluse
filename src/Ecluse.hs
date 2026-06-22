@@ -121,7 +121,8 @@ runServices env = concurrently_ (runServer env) (runWorker env)
 {- | Serve the proxy's HTTP front door over the composition-root 'Env'. Request
 handlers read the 'Env' in plain 'IO'.
 
-The WAI @Application@, routing, and Warp listener are wired in S12.
+The WAI @Application@, routing, and Warp listener are not yet wired here; this
+is a minimal stub.
 -}
 runServer :: Env -> IO ()
 runServer _env = pass
@@ -130,7 +131,8 @@ runServer _env = pass
 consume → fetch → verify → publish → ack loop against the queue and credential
 seams, in the @App@ orchestration monad.
 
-The consume loop and its health signal are wired in S19.
+The consume loop and its health signal are not yet wired here; this is a
+minimal stub.
 -}
 runWorker :: Env -> IO ()
 runWorker _env = pass
