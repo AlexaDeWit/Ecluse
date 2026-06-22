@@ -1,0 +1,55 @@
+name: Scorecard
+
+# OpenSSF Scorecard — automated supply-chain posture scoring. For a project whose
+# thesis *is* supply-chain resilience, this is dogfooding: it grades branch
+# protection, pinned dependencies, signed/attested releases, SAST, token
+# permissions, and dangerous workflow patterns, then publishes a public score +
+# README badge. Report-only — it never gates a PR; findings surface in the
+# Security tab (code scanning) and at scorecard.dev.
+on:
+  # Re-evaluate when branch-protection / ruleset changes (a Scorecard input).
+  branch_protection_rule:
+  # Weekly drift check, offset from security.yml's daily scan.
+  schedule:
+    - cron: "30 1 * * 1"
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Least privilege by default; the job widens only what it needs.
+permissions: read-all
+
+jobs:
+  analysis:
+    name: Scorecard analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      security-events: write # upload the SARIF to code scanning (Security tab)
+      id-token: write # OIDC to publish results to the OpenSSF API (badge)
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false # Scorecard flags a credential-persisting checkout
+
+      - name: Run Scorecard analysis
+        uses: ossf/scorecard-action@99c09fe975337306107572b4fdf4db224cf8e2f2 # v2.4.3
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          # Publish to the public OpenSSF API so the README badge resolves. Only
+          # non-sensitive, already-public posture signals are published.
+          publish_results: true
+
+      - name: Upload SARIF artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: scorecard-sarif
+          path: results.sarif
+          retention-days: 5
+
+      - name: Upload SARIF to code scanning
+        uses: github/codeql-action/upload-sarif@b0c4fd77f6c559021d78430ec4d0d169ae74a4eb # v3
+        with:
+          sarif_file: results.sarif

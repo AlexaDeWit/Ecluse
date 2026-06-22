@@ -1,5 +1,7 @@
 # Écluse
 
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/AlexaDeWit/Ecluse/badge)](https://scorecard.dev/viewer/?uri=github.com/AlexaDeWit/Ecluse)
+
 ![Écluse — a supply-chain resilience proxy for package registries](docs/social-preview.png)
 
 A supply-chain resilience proxy for package registries, written in Haskell. The
