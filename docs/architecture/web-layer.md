@@ -209,8 +209,12 @@ For a **packument** request there is no single status — the document is
 each `Reject` (gated, public-provenance) version is filtered out (see
 [Rules Engine → Applying verdicts](rules-engine.md#applying-verdicts-to-a-packument)),
 while trusted private versions are admitted unfiltered. A status is chosen only
-when *nothing* survives the merge: `503` if any rejection was `WillResolve` **or a
-needed upstream was unavailable**, else `403`.
+when *nothing* survives the merge, following the most recoverable cause: `503` if
+any rejection was `WillResolve` **or a needed upstream was unavailable** (a retry
+may yield survivors); `500` if none is retryable but an exclusion is a permanent
+inability (`WontResolve`); else `403`. Never `404` — the versions existed and were
+withheld; a genuinely absent package is a separate upstream miss. (`packumentStatus`
+in `Ecluse.Server.Response` is the code-level counterpart of `artifactStatus`.)
 
 The denial-body shape and `PROXY_HELP_MESSAGE` handling are in
 [Rules Engine → Denial Responses](rules-engine.md#denial-responses). This type

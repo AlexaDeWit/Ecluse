@@ -26,6 +26,7 @@ import Ecluse.Rules.Types (
  )
 import Ecluse.Server.Response (
     ArtifactStatus (..),
+    PackumentStatus (..),
     RejectReason (..),
     Rejection (..),
     RetryAfter (..),
@@ -36,6 +37,8 @@ import Ecluse.Server.Response (
     artifactStatusCode,
     denialBody,
     mkHelpMessage,
+    packumentStatus,
+    packumentStatusCode,
     serveDecisionOf,
     unHelpMessage,
  )
@@ -130,6 +133,38 @@ spec = do
                 `shouldBe` 503
             artifactStatusCode (artifactStatus (Reject (Rejection (Unavailable WontResolve) "x")))
                 `shouldBe` 500
+
+    describe "packumentStatus — status over the merged survivor set" $ do
+        let denied = Reject (Rejection (ByPolicy (RuleName "DenyHasInstallScripts")) "no")
+            transient d = Reject (Rejection (Unavailable (WillResolve d)) "down")
+            broken = Reject (Rejection (Unavailable WontResolve) "broken")
+        it "serves (200) when any version survives, whatever else was excluded" $ do
+            packumentStatus [Admit] `shouldBe` PackumentOk
+            packumentStatus [denied, Admit, broken] `shouldBe` PackumentOk
+        it "is 403 when no survivor and every exclusion is by policy" $
+            packumentStatus [denied, denied] `shouldBe` PackumentForbidden
+        it "is 403 (deny-by-default) for an empty decision set" $
+            packumentStatus [] `shouldBe` PackumentForbidden
+        it "is 503 when any exclusion may self-heal — a retry may yield survivors" $
+            packumentStatus [denied, transient Nothing] `shouldBe` PackumentUnavailable Nothing
+        it "prefers 503 over 500: a will-resolve cause outranks a wont-resolve one" $
+            packumentStatus [broken, transient Nothing] `shouldBe` PackumentUnavailable Nothing
+        it "suggests the longest Retry-After among the transient causes" $
+            packumentStatus [transient (Just (RetryAfter 5)), transient (Just (RetryAfter 30))]
+                `shouldBe` PackumentUnavailable (Just (RetryAfter 30))
+        it "carries a delay even when only some transient causes suggested one" $
+            packumentStatus [transient Nothing, transient (Just (RetryAfter 10))]
+                `shouldBe` PackumentUnavailable (Just (RetryAfter 10))
+        it "is 500 when an exclusion is a permanent inability and none is retryable" $
+            packumentStatus [denied, broken] `shouldBe` PackumentServerError
+
+    describe "packumentStatusCode — numeric HTTP codes (never 404)" $
+        it "maps Ok/Forbidden/Unavailable/ServerError to 200/403/503/500" $ do
+            packumentStatusCode PackumentOk `shouldBe` 200
+            packumentStatusCode PackumentForbidden `shouldBe` 403
+            packumentStatusCode (PackumentUnavailable Nothing) `shouldBe` 503
+            packumentStatusCode (PackumentUnavailable (Just (RetryAfter 30))) `shouldBe` 503
+            packumentStatusCode PackumentServerError `shouldBe` 500
 
     describe "denialBody — the npm {\"error\": …} shape" $ do
         it "is a JSON object with a string error field carrying the message" $
