@@ -60,7 +60,6 @@ module Ecluse.Queue (
 ) where
 
 import Data.Map.Strict qualified as Map
-import Data.Sequence (Seq)
 import Data.Sequence qualified as Seq
 
 import Ecluse.Package (PackageName)
