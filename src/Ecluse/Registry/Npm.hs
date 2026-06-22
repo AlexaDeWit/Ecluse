@@ -343,14 +343,14 @@ fetchMetadataForm config form validators name = do
     response <- httpLbs request (npmManager config)
     pure (RegistryResponse (toStrict (responseBody response)))
 
--- | Fetch and __buffer__ a version's artifact bytes (the handle's 'fetchArtifact').
+-- Fetch and __buffer__ a version's artifact bytes (the handle's 'fetchArtifact').
 fetchArtifact' :: NpmClientConfig -> PackageName -> Version -> IO RegistryResponse
 fetchArtifact' config name version = do
     request <- orThrow (artifactRequest config name version)
     response <- httpLbs request (npmManager config)
     pure (RegistryResponse (toStrict (responseBody response)))
 
-{- | Publish a version's artifact, treating a @409 Conflict@ (the version is
+{- Publish a version's artifact, treating a @409 Conflict@ (the version is
 already present) as idempotent success.
 
 A published @name\@version@ is immutable, so a conflict means the bytes are
@@ -375,7 +375,7 @@ publishArtifact' config name _version document = do
     let code = statusCode (responseStatus response)
     pure (classifyPublish code)
 
-{- | Map a publish response status onto success or a 'PublishError'. A 2xx or a
+{- Map a publish response status onto success or a 'PublishError'. A 2xx or a
 @409@ (already present, immutable) is success; anything else is reported so the
 job is retried.
 -}
@@ -388,14 +388,14 @@ classifyPublish code
 
 -- ── helpers ───────────────────────────────────────────────────────────────────
 
-{- | The metadata\/publish URL for a package: @{baseUrl}\/{encoded-name}@, with
+{- The metadata\/publish URL for a package: @{baseUrl}\/{encoded-name}@, with
 the scoped-name separator percent-encoded (@\@scope\/name@ → @\@scope%2Fname@).
 -}
 packageUrl :: Text -> PackageName -> Either UrlFormationError Text
 packageUrl baseUrl name =
     joinPath baseUrl (encodePackagePath name)
 
-{- | The artifact (tarball) URL for one version:
+{- The artifact (tarball) URL for one version:
 @{baseUrl}\/{encoded-name}\/-\/{tarball-file}@. npm serves a version's tarball
 under the package's @\/-\/@ path; the filename is @{base}-{version}.tgz@ (scope
 dropped from the file segment, as npm names it).
@@ -404,7 +404,7 @@ artifactUrl :: Text -> PackageName -> Version -> Either UrlFormationError Text
 artifactUrl baseUrl name version =
     joinPath baseUrl (encodePackagePath name <> "/-/" <> tarballFile name version)
 
-{- | Join a base URL and an already-encoded path, tolerating one trailing slash
+{- Join a base URL and an already-encoded path, tolerating one trailing slash
 on the base so the join never doubles it. An empty base URL is refused with a
 'UrlFormationError' — the read- and write-path builders share this report, so an
 unformable URL is never mislabelled as a publish failure.
@@ -416,7 +416,7 @@ joinPath baseUrl path
   where
     stripTrailingSlash b = fromMaybe b (T.stripSuffix "/" b)
 
-{- | Encode a package name as its on-the-wire path segment: the rendered name
+{- Encode a package name as its on-the-wire path segment: the rendered name
 with the scope separator percent-encoded. A scoped @\@scope\/name@ becomes
 @\@scope%2Fname@ (the leading @\@@ is left as-is, per npm); an unscoped name is
 unchanged.
@@ -426,7 +426,7 @@ encodePackagePath name = case pkgNamespace name of
     Just scope -> "@" <> unScope scope <> "%2F" <> baseName name
     Nothing -> renderPackageName name
 
-{- | The bare (unscoped) package name — the path segment after the scope, or the
+{- The bare (unscoped) package name — the path segment after the scope, or the
 whole rendered name when unscoped. Used both for the @%2F@-encoded path and the
 tarball filename.
 -}
@@ -437,17 +437,17 @@ baseName name =
             Just _ -> T.drop 1 (snd (T.breakOn "/" rendered))
             Nothing -> rendered
 
--- | The conventional npm tarball filename for a version: @{base}-{version}.tgz@.
+-- The conventional npm tarball filename for a version: @{base}-{version}.tgz@.
 tarballFile :: PackageName -> Version -> Text
 tarballFile name version = baseName name <> "-" <> renderVersion version <> ".tgz"
 
--- | Attach a bearer token to a request when one is injected; otherwise leave it.
+-- Attach a bearer token to a request when one is injected; otherwise leave it.
 withToken :: Maybe Secret -> Request -> Request
 withToken Nothing request = request
 withToken (Just secret) request =
     applyBearerAuth (encodeUtf8 (unSecret secret)) request
 
--- | Add the present conditional-GET validators as request headers.
+-- Add the present conditional-GET validators as request headers.
 addValidators :: Validators -> Request -> Request
 addValidators validators request =
     request{requestHeaders = newHeaders <> requestHeaders request}
@@ -458,7 +458,7 @@ addValidators validators request =
             , (,) hIfModifiedSince <$> validatorIfModifiedSince validators
             ]
 
-{- | Parse a built URL into a 'Request', mapping a parse failure into a
+{- Parse a built URL into a 'Request', mapping a parse failure into a
 'UrlFormationError'. The URL is derived from configuration and an already-safe
 name, so a failure here is a configuration fault, reported uniformly with the
 other URL-formation errors.
@@ -469,7 +469,7 @@ parseRequestEither url =
         Just request -> Right request
         Nothing -> Left (UnparseableUrl url)
 
-{- | Run a request-building 'Either', throwing its 'UrlFormationError' as an 'IO'
+{- Run a request-building 'Either', throwing its 'UrlFormationError' as an 'IO'
 exception. Used by the effectful fetch and publish paths, where an unformable URL
 is a config fault rather than a per-response condition.
 -}

@@ -136,13 +136,13 @@ isBlockedTarget (LoweredHostSet allowedInternal) host =
     not (T.toLower host `Set.member` allowedInternal)
         && maybe False isInternalAddress (parseIpLiteral host)
 
-{- | An IP literal, parsed from a host for internal-range testing. Internal to
+{- An IP literal, parsed from a host for internal-range testing. Internal to
 this module; consumed only by 'isInternalAddress', so it carries no instances.
 -}
 data IpAddr
-    = -- | An IPv4 address as its four octets.
+    = -- An IPv4 address as its four octets.
       IPv4 Word8 Word8 Word8 Word8
-    | -- | An IPv6 address, normalised to its eight 16-bit groups.
+    | -- An IPv6 address, normalised to its eight 16-bit groups.
       IPv6 [Word16]
 
 {- | Extract the bare host from a URI or @host[:port]@ authority.
@@ -178,7 +178,7 @@ hostAddress raw =
         Just rest -> T.takeWhile (/= ']') rest
         Nothing -> T.takeWhile (/= ':') h
 
--- | Whether a parsed IP literal falls in any blocked internal range.
+-- Whether a parsed IP literal falls in any blocked internal range.
 isInternalAddress :: IpAddr -> Bool
 isInternalAddress = \case
     IPv4 a b _ _ ->
@@ -189,7 +189,7 @@ isInternalAddress = \case
             || (a == 192 && b == 168) -- RFC1918 192.168.0.0/16
     IPv6 groups -> isInternalV6 groups
 
-{- | Whether 16-bit IPv6 groups are loopback (@::1@), link-local
+{- Whether 16-bit IPv6 groups are loopback (@::1@), link-local
 (@fe80::\/10@), or IPv4-mapped (@::ffff:0:0\/96@). The mapped range lets an
 attacker embed an internal IPv4 literal (e.g. @::ffff:169.254.169.254@) in an
 IPv6 form that the per-IPv4-range checks would otherwise miss; decoding the
@@ -218,7 +218,7 @@ isInternalV6 groups =
             )
     isIpv4Mapped _ = False
 
-{- | Parse a host as an IP literal, or 'Nothing' for a DNS name. Handles dotted-
+{- Parse a host as an IP literal, or 'Nothing' for a DNS name. Handles dotted-
 quad IPv4 and the IPv6 forms a host realistically carries — full eight-group form,
 @::@-compressed forms (including @::1@), and a trailing embedded IPv4 (the
 @a.b.c.d@ in @::ffff:a.b.c.d@) — which is enough to recognise the loopback,
@@ -231,7 +231,7 @@ parseIpLiteral host = case T.uncons host of
     Nothing -> Nothing -- empty host: not a literal
     Just _ -> if T.any (== ':') host then parseIPv6 host else parseIPv4 host
 
--- | Parse a strict dotted-quad @a.b.c.d@ with each octet in @0..255@.
+-- Parse a strict dotted-quad @a.b.c.d@ with each octet in @0..255@.
 parseIPv4 :: Text -> Maybe IpAddr
 parseIPv4 host = case T.splitOn "." host of
     [a, b, c, d] -> IPv4 <$> octet a <*> octet b <*> octet c <*> octet d
@@ -244,7 +244,7 @@ parseIPv4 host = case T.splitOn "." host of
         n <- if isDecimal t then readMaybe (toString t) else Nothing :: Maybe Integer
         if n <= 255 then Just (fromInteger n) else Nothing
 
-{- | Parse an IPv6 literal — either the full eight-group form or a @::@-compressed
+{- Parse an IPv6 literal — either the full eight-group form or a @::@-compressed
 form (at most one @::@), optionally ending in an embedded dotted-quad IPv4 — into
 its eight 16-bit groups. Enough to recognise the @::1@, @fe80::\/10@, and
 @::ffff:0:0\/96@ addresses we block; rejects anything malformed.
@@ -300,11 +300,11 @@ parseIPv6 host =
     exactly8 :: [Word16] -> Maybe IpAddr
     exactly8 gs = if length gs == 8 then Just (IPv6 gs) else Nothing
 
--- | Whether @t@ is a non-empty run of decimal digits (no sign or whitespace).
+-- Whether @t@ is a non-empty run of decimal digits (no sign or whitespace).
 isDecimal :: Text -> Bool
 isDecimal t = not (T.null t) && T.all (`elem` ['0' .. '9']) t
 
--- | Whether @t@ is a non-empty run of hexadecimal digits.
+-- Whether @t@ is a non-empty run of hexadecimal digits.
 isHex :: Text -> Bool
 isHex t = not (T.null t) && T.all isHexDigit t
   where
@@ -352,7 +352,7 @@ upstreamUrlFor baseUrl name =
     joinUrl :: Text -> Text -> Text
     joinUrl b path = fromMaybe b (T.stripSuffix "/" b) <> "/" <> path
 
-{- | The structural components of a package name — its scope (if any) and base
+{- The structural components of a package name — its scope (if any) and base
 name — each of which must independently pass 'isSafeComponent'. Recovered by
 splitting the rendered name on the @\'\/\'@ scope separator, so a legitimate
 scoped name's own separator is not itself judged as unsafe content.

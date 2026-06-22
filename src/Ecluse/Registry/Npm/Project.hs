@@ -84,7 +84,7 @@ import Ecluse.Registry.Npm.Wire (
 import Ecluse.Registry.Npm.Wire qualified as Wire
 import Ecluse.Version (Version, mkVersion, renderVersion, unVersion)
 
-{- | The packument as this projection needs to read it: the wire fields plus the
+{- The packument as this projection needs to read it: the wire fields plus the
 per-version @_npmUser@ that "Ecluse.Registry.Npm.Wire" intentionally leaves off
 the manifest. Decoding the version objects here (rather than reusing the wire
 'Wire.Packument') is what lets the publisher survive, since the wire manifest has
@@ -105,7 +105,7 @@ instance FromJSON WirePackument where
             <*> o .:? "versions" .!= mempty
             <*> o .:? "time" .!= mempty
 
-{- | A decoded version object: the wire 'VersionManifest' plus its @_npmUser@
+{- A decoded version object: the wire 'VersionManifest' plus its @_npmUser@
 publisher. Both are decoded from the /same/ object in one pass, so there is a
 single notion of what a version object is.
 -}
@@ -157,7 +157,7 @@ parseVersionList resp = do
 
 -- ── packument decoding ───────────────────────────────────────────────────────
 
-{- | Decode a response body into a 'WirePackument', adapting aeson's 'String'
+{- Decode a response body into a 'WirePackument', adapting aeson's 'String'
 error into a domain 'ParseError'.
 -}
 decodePackument :: RegistryResponse -> Either ParseError WirePackument
@@ -166,7 +166,7 @@ decodePackument =
 
 -- ── per-version projection ───────────────────────────────────────────────────
 
-{- | Project every entry of the packument's @versions@ map into a
+{- Project every entry of the packument's @versions@ map into a
 'PackageDetails', keyed by the raw version string (the packument's own key).
 -}
 projectVersions :: PackageName -> WirePackument -> Map Text PackageDetails
@@ -179,7 +179,7 @@ projectVersions name pkmt =
             (mkVersion Npm rawVersion)
             (Map.lookup rawVersion (wpTime pkmt))
 
-{- | Build a 'PackageDetails' from one projected version entry and its publish
+{- Build a 'PackageDetails' from one projected version entry and its publish
 time (if the packument's @time@ map carried one).
 -}
 projectDetails :: PackageName -> Version -> Maybe UTCTime -> VersionEntry -> PackageDetails
@@ -200,13 +200,13 @@ projectDetails name version publishedAt entry =
   where
     vm = veManifest entry
 
--- | The SPDX expression or license name carried by a wire 'License'.
+-- The SPDX expression or license name carried by a wire 'License'.
 licenseText :: License -> Text
 licenseText = \case
     LicenseSpdx spdx -> spdx
     LicenseObject name _url -> name
 
-{- | Project the four npm dependency maps into a flat list of 'Dependency',
+{- Project the four npm dependency maps into a flat list of 'Dependency',
 tagging each with its 'DepKind'. The constraint strings are kept __raw__ (npm
 never resolves ranges server-side), and npm carries no PEP 508 environment
 markers, so 'depMarker' is always 'Nothing'.
@@ -231,7 +231,7 @@ projectDependencies vm =
         | (name, constraint) <- Map.toList deps
         ]
 
-{- | Map npm install-script presence onto 'CodeExecSignal'. The abbreviated
+{- Map npm install-script presence onto 'CodeExecSignal'. The abbreviated
 form's @hasInstallScript@ flag wins when present; otherwise presence is derived
 from the @scripts@ map (any of @preinstall@\/@install@\/@postinstall@), matching
 what npm itself sets the flag from.
@@ -247,15 +247,15 @@ installCode vm = case vmHasInstallScript vm of
   where
     hooks = filter (`Map.member` vmScripts vm) installHooks
 
--- | The lifecycle script names whose presence means installation runs code.
+-- The lifecycle script names whose presence means installation runs code.
 installHooks :: [Text]
 installHooks = ["preinstall", "install", "postinstall"]
 
--- | Map an optional @deprecated@ notice onto 'Availability'.
+-- Map an optional @deprecated@ notice onto 'Availability'.
 availability :: VersionManifest -> Availability
 availability vm = maybe Available Deprecated (vmDeprecated vm)
 
-{- | Project the @dist@ object into an 'Artifact', carrying __both__ integrity
+{- Project the @dist@ object into an 'Artifact', carrying __both__ integrity
 digests: the legacy SHA-1 @shasum@ and the modern @integrity@ SRI string. Each
 present digest becomes an algorithm-tagged 'Hash'; neither is dropped.
 -}
@@ -275,7 +275,7 @@ projectArtifact version dist =
     sriHash = Hash SRI <$> distIntegrity dist
     sha1Hash = Hash SHA1 <$> distShasum dist
 
-{- | The artifact filename for a tarball: the path segment after the URL's last
+{- The artifact filename for a tarball: the path segment after the URL's last
 @\'\/\'@ (the whole string when it has none), or the conventional
 @\<version\>.tgz@ form as a fallback when that segment is empty (a URL ending in
 a slash).
@@ -287,13 +287,13 @@ tarballFilename url version =
 
 -- ── packument-level projection ───────────────────────────────────────────────
 
-{- | Project the @dist-tags@ map (tag to raw version string) into a map of tag
+{- Project the @dist-tags@ map (tag to raw version string) into a map of tag
 to parsed 'Version'.
 -}
 projectDistTags :: WirePackument -> Map Text Version
 projectDistTags = Map.map (mkVersion Npm) . wpDistTags
 
-{- | Project the per-version publish timestamps from the packument's @time@ map,
+{- Project the per-version publish timestamps from the packument's @time@ map,
 keeping only the entries keyed by a version present in @versions@ (dropping the
 @created@\/@modified@ bookkeeping keys).
 -}
@@ -303,7 +303,7 @@ projectPublishTimes pkmt =
 
 -- ── name and person projection ───────────────────────────────────────────────
 
-{- | Parse an npm package name into the domain 'PackageName', splitting a scoped
+{- Parse an npm package name into the domain 'PackageName', splitting a scoped
 @\@scope\/name@ into its 'Scope' and bare name. Fails with a 'ParseError' on an
 empty name; a non-scoped or well-formed scoped name always succeeds.
 -}
@@ -314,7 +314,7 @@ projectName raw
         Just (scope, base) -> Right (mkPackageName Npm (Just scope) base)
         Nothing -> Right (mkPackageName Npm Nothing raw)
 
-{- | Split a scoped npm name @\@scope\/name@ into its 'Scope' and bare name, or
+{- Split a scoped npm name @\@scope\/name@ into its 'Scope' and bare name, or
 'Nothing' for an unscoped name. An @\'\@\'@-prefixed name with no @\'\/\'@, an
 empty scope, or an empty bare name are all malformed and yield 'Nothing' (the
 caller then treats the whole string as an unscoped name).
@@ -328,7 +328,7 @@ scopeOf raw = do
     guard (not (T.null base))
     pure (mkScope scopeText, base)
 
--- | Project a wire 'Wire.Person' into the domain 'Person' (a structural copy).
+-- Project a wire 'Wire.Person' into the domain 'Person' (a structural copy).
 projectPerson :: Wire.Person -> Person
 projectPerson p =
     Person

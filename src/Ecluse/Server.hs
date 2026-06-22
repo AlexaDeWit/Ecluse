@@ -140,7 +140,7 @@ client-IP recovery, timeout).
 application :: ServerConfig -> Env -> Application
 application cfg env = serverMiddleware cfg (dispatch cfg env)
 
-{- | Dispatch a request to its handler: top-level health probes first, then mount
+{- Dispatch a request to its handler: top-level health probes first, then mount
 dispatch into the pure router. Unrecognised paths (including an unmatched mount)
 are a @404@ — deny by default.
 -}
@@ -151,7 +151,7 @@ dispatch cfg env request respond =
         ["readyz"] -> respond (readiness env)
         segments -> respond (route env (dispatchMount (scMounts cfg) segments))
 
-{- | Strip the first matching mount prefix off the request path, returning the
+{- Strip the first matching mount prefix off the request path, returning the
 remaining ecosystem-native segments to classify. A mount prefix is accepted with
 or without a trailing slash, so @\/npm\/pkg@ and a bare @\/npm@ both match the
 @\/npm@ mount. When no mount matches, the path is classified as-is, which denies
@@ -165,7 +165,7 @@ dispatchMount mounts segments =
     strip :: [Text] -> Mount -> Maybe [Text]
     strip segs (Mount prefix) = stripPrefixSegments prefix segs
 
-{- | Strip a mount's prefix segments off the front of a request path. The root
+{- Strip a mount's prefix segments off the front of a request path. The root
 mount (an empty prefix) consumes nothing and always matches. A trailing empty
 segment left after the prefix — the trailing slash of a bare @\/npm\/@ — is
 dropped so it is not mistaken for an empty ecosystem path component.
@@ -191,7 +191,7 @@ firstJust f = foldr (\x acc -> f x <|> acc) Nothing
 
 -- ── route rendering ──────────────────────────────────────────────────────────
 
-{- | Render a classified 'Route' to a response. @\/-\/ping@ is answered locally;
+{- Render a classified 'Route' to a response. @\/-\/ping@ is answered locally;
 @\/-\/v1\/search@ is @501@ with a pointer message; a package or artifact route is
 recognised but returns @501@ (its serve pipeline lives outside this module);
 anything unrecognised is @404@.
@@ -206,13 +206,13 @@ route _env = \case
 
 -- ── meta-route responses ─────────────────────────────────────────────────────
 
-{- | @\/-\/ping@: answered locally with @200 {}@, since the client is only
+{- @\/-\/ping@: answered locally with @200 {}@, since the client is only
 checking that the proxy endpoint it talks to is up. No upstream round-trip.
 -}
 pong :: Response
 pong = jsonResponse status200 "{}"
 
-{- | @\/-\/v1\/search@: @501 Not Implemented@. Search is a discovery convenience,
+{- @\/-\/v1\/search@: @501 Not Implemented@. Search is a discovery convenience,
 not an install path, so it is deliberately unsupported rather than scope-creeping
 a filtered or pass-through search; the body points users to the public registry's
 website.
@@ -223,7 +223,7 @@ searchUnsupported =
         status501
         (denialBody Nothing "search is not supported by this proxy; use the public registry's website to discover packages")
 
-{- | A recognised package or artifact route that is not served here: @501 Not
+{- A recognised package or artifact route that is not served here: @501 Not
 Implemented@ with an explicit message, rather than a fabricated @200@. The
 fetch → rules → serve pipeline lives outside this module.
 -}
@@ -233,20 +233,20 @@ notYetServed =
         status501
         (denialBody Nothing "this route is recognised but not yet served by this proxy")
 
--- | An unrecognised path: @404@. Deny by default at the routing layer.
+-- An unrecognised path: @404@. Deny by default at the routing layer.
 notFound :: Response
 notFound = jsonResponse status404 (denialBody Nothing "not found")
 
 -- ── health probes ────────────────────────────────────────────────────────────
 
-{- | Liveness (@\/livez@): @200@ while the process is responsive. The architecture
+{- Liveness (@\/livez@): @200@ while the process is responsive. The architecture
 folds the mirror worker's consume-loop heartbeat into single-process liveness so a
 stalled worker fails it (see @docs\/architecture\/cloud-backends.md@ → "Process model").
 -}
 liveness :: Env -> Response
 liveness _env = jsonResponse status200 "{\"status\":\"live\"}"
 
-{- | Readiness (@\/readyz@): config is loaded and the listener is serving. It is
+{- Readiness (@\/readyz@): config is loaded and the listener is serving. It is
 deliberately __lenient about public-upstream reachability__ — the proxy still
 serves private-upstream hits when public is down — so readiness must not flap on
 an upstream blip and pull a healthy pod from rotation.

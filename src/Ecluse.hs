@@ -114,7 +114,7 @@ run = do
     logEnv <- newLogEnv JsonLog (Environment "production")
     withEnv unconfiguredRegistry queue unconfiguredCredentials manager logEnv runServices
 
-{- | Run the server and the mirror worker concurrently over one composition-root
+{- Run the server and the mirror worker concurrently over one composition-root
 'Env', the shape the single-process program uses. The two are independent (each
 depends only on the handles in 'Env', not on each other), so splitting into
 separate binaries later is two thin entry points calling 'runServer' \/

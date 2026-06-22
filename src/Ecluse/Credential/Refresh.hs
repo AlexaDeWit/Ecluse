@@ -132,30 +132,29 @@ defaultRefreshConfig =
     unconfigured field =
         throwIO (stringException ("Ecluse.Credential.Refresh: " <> toString field <> " is not configured"))
 
--- | The circuit breaker's state, gating whether a mint may be attempted.
+-- The circuit breaker's state, gating whether a mint may be attempted.
 data Breaker
-    = -- | Healthy: track consecutive failures up to the trip threshold.
+    = -- Healthy: track consecutive failures up to the trip threshold.
       Closed Int
-    | -- | Tripped until the given instant: mints fast-fail until then.
+    | -- Tripped until the given instant: mints fast-fail until then.
       Open UTCTime
-    | -- | Cooldown elapsed: one probe mint is allowed through to test recovery.
+    | -- Cooldown elapsed: one probe mint is allowed through to test recovery.
       HalfOpen
     deriving stock (Eq, Show)
 
-{- | The mutable state of a refreshing provider: the cached token, when its
+{- The mutable state of a refreshing provider: the cached token, when its
 proactive refresh is due, the single-flight flag, and the breaker.
 -}
 data CacheState = CacheState
-    { csToken :: AuthToken
-    -- ^ The token currently served.
-    , csRefreshDue :: Maybe UTCTime
-    {- ^ When a proactive background refresh should fire; 'Nothing' for a token
-    with no expiry (it never refreshes).
-    -}
-    , csRefreshing :: Bool
-    -- ^ Whether a mint is in flight (the single-flight flag).
-    , csBreaker :: Breaker
-    -- ^ The circuit-breaker state.
+    { -- The token currently served.
+      csToken :: AuthToken
+    , -- When a proactive background refresh should fire; 'Nothing' for a token
+      -- with no expiry (it never refreshes).
+      csRefreshDue :: Maybe UTCTime
+    , -- Whether a mint is in flight (the single-flight flag).
+      csRefreshing :: Bool
+    , -- The circuit-breaker state.
+      csBreaker :: Breaker
     }
 
 {- | Build a 'CredentialProvider' that caches a token and refreshes it per the
@@ -172,7 +171,7 @@ refreshingProvider cfg = do
     stateVar <- newTVarIO (CacheState token due False (Closed 0))
     pure CredentialProvider{currentToken = serve cfg stateVar}
 
-{- | Serve the current token, scheduling a background refresh or — only when the
+{- Serve the current token, scheduling a background refresh or — only when the
 token has expired — minting synchronously. The decision is made in one STM
 transaction so single-flight holds across a concurrent cohort.
 -}
@@ -210,16 +209,16 @@ serve cfg stateVar = do
                         writeTVar stateVar st{csRefreshing = True}
                         pure MintNow
 
--- | What a 'serve' decision resolves to.
+-- What a 'serve' decision resolves to.
 data ServeAction
-    = -- | The cached token is valid and no refresh is due: serve it.
+    = -- The cached token is valid and no refresh is due: serve it.
       ServeCached AuthToken
-    | -- | Valid but past the refresh threshold: serve it, refresh in background.
+    | -- Valid but past the refresh threshold: serve it, refresh in background.
       ServeAndRefresh AuthToken
-    | -- | Expired: the caller must mint synchronously (the slow path).
+    | -- Expired: the caller must mint synchronously (the slow path).
       MintNow
 
-{- | The background refresh: if the breaker admits a mint, attempt it and fold
+{- The background refresh: if the breaker admits a mint, attempt it and fold
 the result into the cache; otherwise (breaker open) skip it. Never throws — a
 failure leaves the still-valid token in place and advances the breaker, and a
 suppressed refresh just keeps serving the cached token, so the request hot path is
@@ -241,7 +240,7 @@ backgroundRefresh cfg stateVar = refresh `finally` releaseSingleFlight stateVar
                 Left (_ :: SomeException) ->
                     atomically (modifyTVar' stateVar (onMintFailure cfg now'))
 
-{- | The synchronous (expired-token) path: the caller blocks on a mint because
+{- The synchronous (expired-token) path: the caller blocks on a mint because
 there is no valid token to serve. The breaker gates it — when open and still in
 cooldown the call fast-fails with 'BreakerOpen' without minting; otherwise it
 mints, and an expired token plus a failing mint is the one case that surfaces to
@@ -267,7 +266,7 @@ mintSynchronously cfg stateVar = mint `finally` releaseSingleFlight stateVar
                         atomically (modifyTVar' stateVar (onMintFailure cfg now'))
                         throwIO e
 
-{- | Release the single-flight flag, run in a 'finally' around every mint attempt
+{- Release the single-flight flag, run in a 'finally' around every mint attempt
 so it is cleared on __every__ exit — success, a synchronous mint failure, or an
 __asynchronous__ exception (cancellation \/ timeout) landing between claiming the
 flag and folding the result. Without this, an async exception would leave the flag
@@ -279,7 +278,7 @@ releaseSingleFlight :: TVar CacheState -> IO ()
 releaseSingleFlight stateVar =
     atomically (modifyTVar' stateVar (\st -> st{csRefreshing = False}))
 
-{- | The circuit-breaker admission gate, shared by the background and synchronous
+{- The circuit-breaker admission gate, shared by the background and synchronous
 mint paths. While the breaker is 'Open' and the cooldown has not elapsed, deny
 (fast-fail); once it elapses, move to 'HalfOpen' and admit a single probe; a
 'Closed' or 'HalfOpen' breaker always admits.
@@ -295,7 +294,7 @@ admitMint stateVar now = do
                 pure True
         _ -> pure True
 
-{- | Fold a successful mint into the cache: install the token and reset the
+{- Fold a successful mint into the cache: install the token and reset the
 breaker. The single-flight flag is released by 'releaseSingleFlight' in the
 'finally' around the mint (not here), so it clears even on an async exception.
 -}
@@ -307,7 +306,7 @@ onMintSuccess token due st =
         , csBreaker = Closed 0
         }
 
-{- | Fold a failed mint into the cache: keep the still-cached token and advance the
+{- Fold a failed mint into the cache: keep the still-cached token and advance the
 breaker — counting up in 'Closed' until the threshold trips it 'Open', and
 re-opening when a half-open probe fails. (A mint is never attempted while the
 breaker is already 'Open', so that case does not arise here; folding it in with the
@@ -327,7 +326,7 @@ onMintFailure cfg now st = st{csBreaker = advance (csBreaker st)}
             | otherwise -> Closed (n + 1)
         _ -> tripped
 
-{- | Whether a token is still usable at the given instant. A token with no
+{- Whether a token is still usable at the given instant. A token with no
 expiry ('Nothing') is always valid.
 -}
 tokenValid :: UTCTime -> AuthToken -> Bool
@@ -335,7 +334,7 @@ tokenValid now token = case authExpiresAt token of
     Nothing -> True
     Just expiry -> now < expiry
 
-{- | Whether a proactive refresh is due: the token has a scheduled refresh
+{- Whether a proactive refresh is due: the token has a scheduled refresh
 instant and the clock has reached it.
 -}
 refreshNeeded :: UTCTime -> CacheState -> Bool
@@ -343,7 +342,7 @@ refreshNeeded now st = case csRefreshDue st of
     Nothing -> False
     Just due -> now >= due
 
-{- | Compute when a freshly minted token's proactive refresh should fire: the
+{- Compute when a freshly minted token's proactive refresh should fire: the
 'rcRefreshAt' fraction of its lifetime, pulled earlier by a per-token jitter
 sample and capped at 'rcRefreshFloor' before expiry. A token with no expiry never
 refreshes ('Nothing').

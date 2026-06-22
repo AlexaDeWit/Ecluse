@@ -466,7 +466,7 @@ errorMessage = \case
 
 -- ── helpers ──────────────────────────────────────────────────────────────────
 
-{- | Fail a lenient string-or-object decoder with a descriptive message,
+{- Fail a lenient string-or-object decoder with a descriptive message,
 naming the accepted shapes and reporting what was actually found. A small wrapper
 that keeps the @other ->@ branch of each tolerant instance to one readable line.
 -}
@@ -474,7 +474,7 @@ typeMismatchOneOf :: String -> Value -> Parser a
 typeMismatchOneOf expected actual =
     fail ("expected " <> expected <> ", but encountered " <> valueKind actual)
 
--- | A short, human description of a JSON value's kind, for parse-error messages.
+-- A short, human description of a JSON value's kind, for parse-error messages.
 valueKind :: Value -> String
 valueKind = \case
     Object{} -> "an object"

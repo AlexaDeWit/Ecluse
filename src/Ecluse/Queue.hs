@@ -133,7 +133,7 @@ data MirrorQueue = MirrorQueue
 
 -- ── in-memory double ─────────────────────────────────────────────────────────
 
-{- | The mutable state of the in-memory queue.
+{- The mutable state of the in-memory queue.
 
 Modelled as visible (waiting) jobs plus in-flight (received-but-unacked) ones,
 exactly mirroring the visibility-timeout model the cloud backends use: a 'receive'
@@ -141,17 +141,16 @@ makes visible jobs in-flight, an 'ack' drops an in-flight job, and an unacked
 in-flight job becomes visible again — redelivered — on a subsequent 'receive'.
 -}
 data QueueState = QueueState
-    { qsNextReceipt :: Word64
-    -- ^ A monotonic counter giving each delivery a unique 'ReceiptHandle'.
-    , qsVisible :: Seq MirrorJob
-    {- ^ Jobs waiting to be delivered, oldest first (FIFO). 'Seq' gives
-    O(1) amortised snoc so enqueue cost does not grow with queue depth.
-    -}
-    , qsInFlight :: Map ReceiptHandle InFlight
-    -- ^ Delivered-but-unacked jobs, keyed by the handle used to 'ack' them.
+    { -- A monotonic counter giving each delivery a unique 'ReceiptHandle'.
+      qsNextReceipt :: Word64
+    , -- Jobs waiting to be delivered, oldest first (FIFO). 'Seq' gives
+      -- O(1) amortised snoc so enqueue cost does not grow with queue depth.
+      qsVisible :: Seq MirrorJob
+    , -- Delivered-but-unacked jobs, keyed by the handle used to 'ack' them.
+      qsInFlight :: Map ReceiptHandle InFlight
     }
 
-{- | One in-flight job and whether its visibility has been extended.
+{- One in-flight job and whether its visibility has been extended.
 
 A held ('inFlightHeld' = 'True') job survives one reclaim pass (the effect of
 'extendVisibility'); otherwise an in-flight job is reclaimed — made visible again
@@ -159,10 +158,10 @@ for redelivery — on the next 'receive', modelling expiry of the visibility
 window.
 -}
 data InFlight = InFlight
-    { inFlightJob :: MirrorJob
-    -- ^ The job awaiting acknowledgement.
-    , inFlightHeld :: Bool
-    -- ^ Whether 'extendVisibility' has held it past the next reclaim.
+    { -- The job awaiting acknowledgement.
+      inFlightJob :: MirrorJob
+    , -- Whether 'extendVisibility' has held it past the next reclaim.
+      inFlightHeld :: Bool
     }
 
 {- | Build a fresh STM-backed in-memory 'MirrorQueue'.

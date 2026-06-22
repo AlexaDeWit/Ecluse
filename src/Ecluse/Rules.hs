@@ -112,7 +112,7 @@ evalRules ctx rules pd =
             then Denied (candRule c) (candReason c)
             else Approved (candRule c) (candReason c)
 
-{- | A rule that took a position against the package, carried with the inputs the
+{- A rule that took a position against the package, carried with the inputs the
 winner selection and the resulting 'Decision' need.
 -}
 data Candidate = Candidate
