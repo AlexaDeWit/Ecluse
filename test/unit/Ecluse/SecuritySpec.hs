@@ -216,6 +216,19 @@ internalRangeSpec = describe "isBlockedTarget" $ do
         it "does not block a mapped public address (::ffff:1.1.1.1)" $
             isBlockedTarget noOptIn "::ffff:101:101" `shouldBe` False
 
+    describe "blocks IPv4-mapped IPv6 in canonical dotted form (RFC 4291 §2.2.3)" $ do
+        -- The dotted spelling is what a tool or attacker actually emits; it must
+        -- be decoded too, not just the all-hex spelling above. This is the form
+        -- that previously slipped past the internal-range block.
+        it "blocks the instance-metadata address (::ffff:169.254.169.254)" $
+            isBlockedTarget noOptIn "::ffff:169.254.169.254" `shouldBe` True
+        it "blocks mapped loopback (::ffff:127.0.0.1)" $
+            isBlockedTarget noOptIn "::ffff:127.0.0.1" `shouldBe` True
+        it "blocks the fully-expanded mapped loopback (0:0:0:0:0:ffff:127.0.0.1)" $
+            isBlockedTarget noOptIn "0:0:0:0:0:ffff:127.0.0.1" `shouldBe` True
+        it "does not block a mapped public address (::ffff:1.1.1.1)" $
+            isBlockedTarget noOptIn "::ffff:1.1.1.1" `shouldBe` False
+
     describe "treats malformed IPv6 literals as names (not blocked)" $ do
         -- Each malformed form must fail to parse as an IP, so it is not mistaken
         -- for an internal literal; the allowlist would still gate a real name.
