@@ -68,6 +68,7 @@ library
     Ecluse.Env
     Ecluse.Log
     Ecluse.Package
+    Ecluse.Package.Merge
     Ecluse.Queue
     Ecluse.Registry
     Ecluse.Registry.Npm
@@ -119,6 +120,7 @@ test-suite ecluse-unit
     Ecluse.CredentialSpec
     Ecluse.EnvSpec
     Ecluse.LogSpec
+    Ecluse.Package.MergeSpec
     Ecluse.PackageSpec
     Ecluse.QueueSpec
     Ecluse.Registry.NpmSpec
