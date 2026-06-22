@@ -167,9 +167,10 @@ state — here, totality that is *load-bearing* (a crash would take down the gat
 not a reflexive "pure and total" tag (STYLE.md §9.2):
 
 ```haskell
--- | Evaluate a single rule against a single package version. Total — a
--- malformed rule or package yields an outcome, never an exception, so hostile
--- metadata cannot crash the gate.
+{- | Evaluate a single rule against a single package version. Total — a
+malformed rule or package yields an outcome, never an exception, so hostile
+metadata cannot crash the gate.
+-}
 evalRule
     :: EvalContext     -- ^ Ambient inputs (the current time, …)
     -> Rule            -- ^ The rule to apply
