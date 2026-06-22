@@ -53,6 +53,7 @@ import Ecluse.Registry (
         publishArtifact
     ),
     RegistryResponse (RegistryResponse, responseBody),
+    UrlFormationError (EmptyBaseUrl, UnparseableUrl),
  )
 import Ecluse.Registry.Npm (
     MetadataForm (Abbreviated, Full),
@@ -334,24 +335,28 @@ publishSpec = describe "publishArtifact idempotency" $ do
 
 urlFailureSpec :: Spec
 urlFailureSpec = describe "URL-formation failures" $ do
-    it "metadataRequest refuses an empty base URL with an explanatory error" $ do
+    it "metadataRequest refuses an empty base URL as a UrlFormationError, not a publish error" $ do
         manager <- newManager defaultManagerSettings
         let config = NpmClientConfig{npmBaseUrl = "", npmManager = manager, npmToken = Nothing}
-        -- Force the error text so the failure carries a reason (not just Left ()).
-        leftMessage (metadataRequest config Abbreviated noValidators isOdd)
-            `shouldSatisfy` maybe False (T.isInfixOf "EmptyBaseUrl")
+        -- A read-path (fetch) URL fault is a 'UrlFormationError' — the whole point
+        -- of the type split: it is never reported as a 'PublishError'.
+        metadataRequest config Abbreviated noValidators isOdd `shouldSatisfy` urlErrorWas EmptyBaseUrl
 
-    it "publishRequest refuses an empty base URL with an explanatory error" $ do
+    it "artifactRequest refuses an empty base URL as a UrlFormationError" $ do
         manager <- newManager defaultManagerSettings
         let config = NpmClientConfig{npmBaseUrl = "", npmManager = manager, npmToken = Nothing}
-        leftMessage (publishRequest config isOdd publishDoc)
-            `shouldSatisfy` maybe False (T.isInfixOf "EmptyBaseUrl")
+        artifactRequest config isOdd v1 `shouldSatisfy` urlErrorWas EmptyBaseUrl
 
-    it "publishArtifact short-circuits to a publish error on an empty base URL" $ do
+    it "publishRequest refuses an empty base URL as a UrlFormationError" $ do
+        manager <- newManager defaultManagerSettings
+        let config = NpmClientConfig{npmBaseUrl = "", npmManager = manager, npmToken = Nothing}
+        publishRequest config isOdd publishDoc `shouldSatisfy` urlErrorWas EmptyBaseUrl
+
+    it "publishArtifact throws on an unformable URL (config fault, not a retriable publish error)" $ do
         manager <- newManager defaultManagerSettings
         client <- newNpmClient NpmClientConfig{npmBaseUrl = "", npmManager = manager, npmToken = Nothing}
-        outcome <- publishArtifact client isOdd v1 publishDoc
-        outcome `shouldSatisfy` isLeft
+        outcome <- try (publishArtifact client isOdd v1 publishDoc)
+        outcome `shouldSatisfy` threwPublish
 
     it "fetchMetadata throws on an unformable URL (config fault, not a silent success)" $ do
         manager <- newManager defaultManagerSettings
@@ -365,13 +370,13 @@ urlFailureSpec = describe "URL-formation failures" $ do
         outcome <- try (fetchArtifact client isOdd v1)
         outcome `shouldSatisfy` threw
 
-    it "refuses a non-empty but unparseable base URL" $ do
+    it "reports a non-empty but unparseable base URL as UnparseableUrl" $ do
         manager <- newManager defaultManagerSettings
         -- Passes the empty-base guard but is not a parseable URL (no scheme,
-        -- embedded spaces), so http-client's parser rejects it.
+        -- embedded spaces), so http-client's parser rejects it. The fault names
+        -- the offending URL it could not parse.
         let config = NpmClientConfig{npmBaseUrl = "not a url", npmManager = manager, npmToken = Nothing}
-        leftMessage (metadataRequest config Abbreviated noValidators isOdd)
-            `shouldSatisfy` maybe False (T.isInfixOf "could not parse upstream URL")
+        metadataRequest config Abbreviated noValidators isOdd `shouldSatisfy` isUnparseable
 
     it "builds a metadata request against a well-formed base URL" $ do
         manager <- newManager defaultManagerSettings
@@ -428,12 +433,33 @@ v1 = mkVersion Npm "1.0.0"
 publishDoc :: ByteString
 publishDoc = "{\"_id\":\"is-odd\",\"name\":\"is-odd\"}"
 
-{- | The (forced) error message of a request-building 'Left', or 'Nothing' on
-a 'Right'. Forcing the message exercises the error-construction path.
+{- | The (forced) error message of a publish 'Left', or 'Nothing' on a 'Right'.
+Forcing the message exercises the error-construction path.
 -}
 leftMessage :: Either PublishError a -> Maybe Text
 leftMessage = either (Just . publishErrorMessage) (const Nothing)
 
+{- | Whether a request-builder result is the expected 'UrlFormationError'. The
+typed equality is the assertion that a URL fault is reported as a
+'UrlFormationError' (the read\/write-shared type), never as a 'PublishError'.
+-}
+urlErrorWas :: UrlFormationError -> Either UrlFormationError a -> Bool
+urlErrorWas expected = either (== expected) (const False)
+
+-- | Whether a request-builder result is an 'UnparseableUrl' (regardless of the URL).
+isUnparseable :: Either UrlFormationError a -> Bool
+isUnparseable = either matchUnparseable (const False)
+  where
+    matchUnparseable (UnparseableUrl _) = True
+    matchUnparseable _ = False
+
 -- | Whether a @try@'d fetch raised, rather than returning a response.
 threw :: Either SomeException RegistryResponse -> Bool
 threw = isLeft
+
+{- | Whether a @try@'d publish raised, rather than returning a publish outcome. A
+URL-formation fault on the publish path is a config fault that throws, not a
+'PublishError' the mirror job would retry.
+-}
+threwPublish :: Either SomeException (Either PublishError ()) -> Bool
+threwPublish = isLeft
