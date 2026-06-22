@@ -50,10 +50,9 @@ There is deliberately __no__ 'Ord' on 'Version': comparison goes through
 can never reach the comparator.
 -}
 data Version = Version
-    { versionRaw :: Text
-    {- ^ The version as published — used for rendering and round-tripping only,
-    never for ordering decisions.
-    -}
+    { -- The version as published — used for rendering and round-tripping only,
+      -- never for ordering decisions.
+      versionRaw :: Text
     , versionKey :: Maybe VersionKey
     {- ^ The parsed, canonical ordering key; 'Nothing' if the raw text could not
     be parsed for its ecosystem (ordering rules then abstain).
@@ -114,7 +113,7 @@ parseVersionKey eco raw = case eco of
   where
     note = maybe (Left (VersionError ("unparseable version: " <> raw))) Right
 
-{- | A version token: a numeric run or a textual run. Its 'Ord' is the RubyGems
+{- A version token: a numeric run or a textual run. Its 'Ord' is the RubyGems
 \/ PEP 440-local rule — numeric tokens outrank textual ones, numerics compare
 numerically, text compares lexically. (Semver prerelease ordering is the
 opposite and is handled in 'parseSemver'.)
@@ -128,39 +127,39 @@ instance Ord VToken where
     compare (VNum _) (VStr _) = GT
     compare (VStr _) (VNum _) = LT
 
--- | Parse a non-empty, all-digit segment as an integer.
+-- Parse a non-empty, all-digit segment as an integer.
 parseNumSeg :: Text -> Maybe Integer
 parseNumSeg t
     | not (T.null t) && T.all isDigit t = readMaybe (toString t)
     | otherwise = Nothing
 
--- | Read an all-digit (already validated) run as an integer, defaulting to 0.
+-- Read an all-digit (already validated) run as an integer, defaulting to 0.
 numOr0 :: Text -> Integer
 numOr0 t = if T.null t then 0 else fromMaybe 0 (readMaybe (toString t))
 
--- | The first non-'Nothing' result of applying @f@ across the list.
+-- The first non-'Nothing' result of applying @f@ across the list.
 firstJust :: (a -> Maybe b) -> [a] -> Maybe b
 firstJust f = asum . map f
 
 -- ── semver (npm) ───────────────────────────────────────────────────────────
 
-{- | A semver prerelease identifier; numeric identifiers rank below alphanumeric
+{- A semver prerelease identifier; numeric identifiers rank below alphanumeric
 ones (semver §11), encoded by the constructor order.
 -}
 data SemverPreId = SemverNum Integer | SemverText Text
     deriving stock (Eq, Ord, Show)
 
-{- | A semver prerelease: an actual prerelease ranks below the final release, so
+{- A semver prerelease: an actual prerelease ranks below the final release, so
 'SemverPre' is ordered before 'SemverFinal'.
 -}
 data SemverPre = SemverPre [SemverPreId] | SemverFinal
     deriving stock (Eq, Ord, Show)
 
--- | A parsed semver version: numeric core, then prerelease.
+-- A parsed semver version: numeric core, then prerelease.
 data SemverKey = SemverKey [Integer] SemverPre
     deriving stock (Eq, Ord, Show)
 
-{- | Parse a semver version (numeric core, optional @-prerelease@, ignoring
+{- Parse a semver version (numeric core, optional @-prerelease@, ignoring
 @+build@ metadata). Fails on a non-numeric core or malformed identifiers.
 -}
 parseSemver :: Text -> Maybe SemverKey
@@ -185,7 +184,7 @@ parseSemver raw = do
 
 -- ── Gem::Version (RubyGems) ──────────────────────────────────────────────────
 
-{- | A parsed @Gem::Version@: a flat token list compared with zero-padding, with
+{- A parsed @Gem::Version@: a flat token list compared with zero-padding, with
 numeric tokens outranking textual ones (see 'VToken').
 -}
 newtype GemKey = GemKey [VToken]
@@ -194,14 +193,14 @@ newtype GemKey = GemKey [VToken]
 instance Ord GemKey where
     compare (GemKey a) (GemKey b) = compareGemTokens a b
 
--- | Compare gem token lists, zero-padding the shorter side.
+-- Compare gem token lists, zero-padding the shorter side.
 compareGemTokens :: [VToken] -> [VToken] -> Ordering
 compareGemTokens [] [] = EQ
 compareGemTokens (x : xs) (y : ys) = compare x y <> compareGemTokens xs ys
 compareGemTokens (x : xs) [] = compare x (VNum 0) <> compareGemTokens xs []
 compareGemTokens [] (y : ys) = compare (VNum 0) y <> compareGemTokens [] ys
 
-{- | Parse a @Gem::Version@: dot-separated alphanumeric segments, each split into
+{- Parse a @Gem::Version@: dot-separated alphanumeric segments, each split into
 maximal digit and letter runs. Fails on empty or non-alphanumeric segments.
 -}
 parseGem :: Text -> Maybe GemKey
@@ -220,16 +219,16 @@ parseGem raw = do
 
 -- ── PEP 440 (PyPI) ───────────────────────────────────────────────────────────
 
-{- | A parsed PEP 440 version as its canonical ordering key:
+{- A parsed PEP 440 version as its canonical ordering key:
 @(epoch, release, pre, post, dev, local)@. Release has trailing zeros stripped
 (@1.0 == 1.0.0@). The rank tuples encode PEP 440's None-handling:
 
-* @p440Pre@ is @(band, stage, n)@ where @band@ is __0__ for a dev release with
+\* @p440Pre@ is @(band, stage, n)@ where @band@ is __0__ for a dev release with
   no prerelease and no post (it sorts /before/ all prereleases, e.g.
   @1.0.dev1 < 1.0a1@), __1__ for an actual prerelease (with @stage@ a\/b\/rc and
   its number), and __2__ for a final or post release (sorts after prereleases).
-* @p440Post@ is @(0,0)@ when absent, so a final sorts below any post-release.
-* @p440Dev@ is @(0,n)@ when present and @(1,0)@ when absent, so a dev release
+\* @p440Post@ is @(0,0)@ when absent, so a final sorts below any post-release.
+\* @p440Dev@ is @(0,n)@ when present and @(1,0)@ when absent, so a dev release
   sorts below its non-dev sibling.
 -}
 data Pep440Key = Pep440Key
@@ -242,7 +241,7 @@ data Pep440Key = Pep440Key
     }
     deriving stock (Eq, Ord, Show)
 
-{- | Parse a PEP 440 version, canonicalising non-normalised spellings
+{- Parse a PEP 440 version, canonicalising non-normalised spellings
 (@1.0ALPHA1@, @1.0-1@, trailing zeros, …). Fails if the string is not a valid
 PEP 440 version (e.g. no release, or unrecognised trailing text).
 -}
@@ -295,7 +294,7 @@ parsePep440 raw = do
                     else Nothing
     localTok s = if T.all isDigit s then VNum (numOr0 s) else VStr s
 
-{- | Consume a PEP 440 suffix into its prerelease\/post\/dev parts (each absent
+{- Consume a PEP 440 suffix into its prerelease\/post\/dev parts (each absent
 or present), failing if any text is left unconsumed (so trailing garbage is
 rejected). The banding into a sort key happens in 'parsePep440'.
 -}
@@ -307,13 +306,13 @@ parsePep440Suffix s0 =
         (dev, s3) = consumeDev s2
      in if T.null s3 then Just (pre, post, dev) else Nothing
 
--- | Drop one optional separator (@.@\/@-@\/@_@) from the front.
+-- Drop one optional separator (@.@\/@-@\/@_@) from the front.
 dropSep :: Text -> Text
 dropSep s = case T.uncons s of
     Just (c, rest) | c == '.' || c == '-' || c == '_' -> rest
     _ -> s
 
-{- | Consume an optional prerelease label into @Just (stage, n)@ (stage 0\/1\/2
+{- Consume an optional prerelease label into @Just (stage, n)@ (stage 0\/1\/2
 for a\/b\/rc); 'Nothing' if absent.
 -}
 consumePre :: Text -> (Maybe (Int, Integer), Text)
@@ -335,7 +334,7 @@ consumePre s =
         , ("c", 2)
         ]
 
-{- | Consume an optional post-release (@.postN@, @.revN@, or @-N@) into @Just n@;
+{- Consume an optional post-release (@.postN@, @.revN@, or @-N@) into @Just n@;
 'Nothing' if absent.
 -}
 consumePost :: Text -> (Maybe Integer, Text)
@@ -350,7 +349,7 @@ consumePost s =
                  in if T.null digits then (Nothing, s) else (Just (numOr0 digits), rest)
             Nothing -> (Nothing, s)
 
--- | Consume an optional dev-release (@.devN@) into @Just n@; 'Nothing' if absent.
+-- Consume an optional dev-release (@.devN@) into @Just n@; 'Nothing' if absent.
 consumeDev :: Text -> (Maybe Integer, Text)
 consumeDev s =
     case T.stripPrefix "dev" (dropSep s) of
