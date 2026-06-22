@@ -132,6 +132,18 @@
           pkgs.grype
           unstable.vulnix
         ];
+
+        # GitHub Actions linting (`make lint-workflows`): actionlint for
+        # correctness (shellcheck over `run:` blocks, expression/context checks)
+        # and zizmor for security (template injection, credential persistence,
+        # excessive permissions, dangerous triggers). Mechanizes the
+        # injection-free workflow rule in AGENTS.md → "CI & Security". zizmor
+        # comes from the newer nixpkgs — 24.11 ships only an ancient 0.2.1, the
+        # same situation as vulnix. See CONTRIBUTING.md → "Continuous Integration".
+        workflowLintInputs = [
+          pkgs.actionlint
+          unstable.zizmor
+        ];
       in {
         packages = {
           default = ecluse;
@@ -201,10 +213,11 @@
           '';
         };
 
-        # Full shell for humans: lean CI set + IDE + release tooling.
+        # Full shell for humans: lean CI set + IDE + release + scan + workflow-lint.
         devShells.default = pkgs.mkShell (shellEnv // {
           name = "ecluse";
-          buildInputs = ciInputs ++ ideInputs ++ releaseInputs ++ scanInputs;
+          buildInputs =
+            ciInputs ++ ideInputs ++ releaseInputs ++ scanInputs ++ workflowLintInputs;
         });
 
         # Lean shell for CI: only what the gate jobs invoke through `make`. CI
@@ -221,6 +234,13 @@
         devShells.scan = pkgs.mkShell (shellEnv // {
           name = "ecluse-scan";
           buildInputs = [ pkgs.bashInteractive pkgs.sbomnix ] ++ scanInputs;
+        });
+
+        # Lean shell for the workflow-lint gate job: the two Actions linters only.
+        # CI enters it with `nix develop .#workflow-lint`.
+        devShells.workflow-lint = pkgs.mkShell (shellEnv // {
+          name = "ecluse-workflow-lint";
+          buildInputs = [ pkgs.bashInteractive ] ++ workflowLintInputs;
         });
       });
 }

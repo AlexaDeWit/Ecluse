@@ -40,6 +40,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Set up toolchain
         uses: ./.github/actions/setup-toolchain
@@ -87,6 +89,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Set up toolchain
         uses: ./.github/actions/setup-toolchain
@@ -126,6 +130,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Set up toolchain
         uses: ./.github/actions/setup-toolchain
@@ -145,6 +151,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Set up toolchain
         uses: ./.github/actions/setup-toolchain
@@ -162,6 +170,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Set up toolchain
         uses: ./.github/actions/setup-toolchain
@@ -184,6 +194,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Set up toolchain
         uses: ./.github/actions/setup-toolchain
@@ -196,13 +208,33 @@ jobs:
       - name: Build Haddock
         run: nix develop .#ci --command make docs-site
 
+  workflow-lint:
+    name: Workflow lint (actionlint + zizmor)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Set up toolchain
+        uses: ./.github/actions/setup-toolchain
+
+      - name: Lint workflows
+        # actionlint (correctness) + zizmor (security). GH_TOKEN lets zizmor run
+        # its online audits with the job's own read-only token; no secret needed.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: nix develop .#workflow-lint --command make lint-workflows
+
   gate:
     name: CI gate
     # The single Required check. Runs after every other gating job regardless of
     # result, and fails unless all of them succeeded. Wire new required checks in
     # by adding them to `needs` here — never as additional required checks. The
     # smoke job is intentionally absent: it is allowed to fail.
-    needs: [build-and-test, integration, lint, semgrep, docs]
+    needs: [build-and-test, integration, lint, semgrep, docs, workflow-lint]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
