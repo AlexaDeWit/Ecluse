@@ -26,6 +26,19 @@
 
   labels: ["dependencies"],
 
+  // Haskell security-advisory (HSEC) alerting — the detection arm for our cabal
+  // dependencies. HSEC advisories are exported to OSV.dev, and Renovate maps the
+  // `hackage` datasource (extracted from ecluse.cabal by the haskell-cabal
+  // manager) to the OSV `Hackage` ecosystem, so this raises a fix-PR when a known
+  // advisory affects one of our cabal deps. It has to be the OSV-based opt-in:
+  // the default platform `vulnerabilityAlerts` (the GitHub Advisory Database) has
+  // no Hackage ecosystem, so it would never see an HSEC advisory. This covers the
+  // *declared* cabal deps; a deeper audit of the full resolved install plan
+  // (transitive deps + GHC-boot libraries) via `cabal-audit` is a possible later
+  // enhancement. See docs/architecture/release-supply-chain.md → "Vulnerability
+  // scanning & dependency freshness".
+  osvVulnerabilityAlerts: true,
+
   // Refresh flake.lock. The inputs track *branches* (e.g. nixos-26.05), which
   // carry no version for Renovate to bump — a lock refresh is how nixpkgs /
   // flake-utils move forward and the image's C-library closure picks up
