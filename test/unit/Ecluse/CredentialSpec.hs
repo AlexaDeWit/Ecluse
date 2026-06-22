@@ -1,11 +1,23 @@
 module Ecluse.CredentialSpec (spec) where
 
 import Data.Text qualified as T
-import Data.Time (NominalDiffTime, UTCTime (..), addUTCTime, fromGregorian)
+import Data.Time (NominalDiffTime, UTCTime (..), addUTCTime, diffUTCTime, fromGregorian)
+import Hedgehog (
+    Callback (Ensure, Update),
+    Command (Command),
+    FunctorB (..),
+    TraversableB (..),
+    annotateShow,
+    (===),
+ )
+import Hedgehog qualified as H
+import Hedgehog.Gen qualified as Gen
+import Hedgehog.Range qualified as Range
 import Test.Hspec
+import Test.Hspec.Hedgehog (hedgehog)
 import UnliftIO (async, cancel, timeout, wait)
 import UnliftIO.Concurrent (threadDelay)
-import UnliftIO.Exception (throwString)
+import UnliftIO.Exception (throwString, try)
 
 import Ecluse.Credential
 import Ecluse.Credential.Refresh
@@ -400,3 +412,409 @@ spec = do
             -- open; once it does, a half-open probe is admitted again.
             setClock (addUTCTime 30 (addUTCTime 2000 t0))
             currentToken provider `shouldThrow` (== BreakerOpen)
+
+    describe "refreshingProvider (model-based)" $
+        it "agrees with a pure cache/clock/breaker model under random operation sequences" $
+            hedgehog refreshModelProperty
+
+-- ── model-based state-machine property for refreshingProvider ────────────────
+
+{- | Policy constants the model and the provider-under-test share. Mirrors the
+'testConfig' knobs used by the example tests above (refresh at 80% of lifetime,
+zero jitter, a 30-second floor, breaker threshold 3, 30-second cooldown) so the
+pure model can predict the implementation exactly.
+-}
+modelRefreshAt :: Double
+modelRefreshAt = 0.8
+
+modelRefreshFloor :: NominalDiffTime
+modelRefreshFloor = 30
+
+modelBreakerThreshold :: Int
+modelBreakerThreshold = 3
+
+modelBreakerCooldown :: NominalDiffTime
+modelBreakerCooldown = 30
+
+-- | A token that lives @ttl@ seconds from the given issue instant.
+tokenLiving :: Text -> UTCTime -> NominalDiffTime -> AuthToken
+tokenLiving s issuedAt ttl =
+    AuthToken{authSecret = mkSecret s, authExpiresAt = Just (addUTCTime ttl issuedAt)}
+
+{- | The breaker, modelled exactly as 'Ecluse.Credential.Refresh's private one:
+healthy with a consecutive-failure count, open until an instant, or half-open.
+-}
+data MBreaker
+    = MClosed Int
+    | MOpen UTCTime
+    | MHalfOpen
+    deriving stock (Eq, Show)
+
+{- | The pure model of a 'refreshingProvider's cache: a mirror of its private
+@CacheState@ plus the injected clock and fail flag the commands drive, and a count
+of mints the implementation should have performed so the harness can settle the
+background refresh deterministically before each observation.
+-}
+data RModel (v :: Type -> Type) = RModel
+    { rmToken :: AuthToken
+    -- ^ The token the cache currently holds (and will serve while valid).
+    , rmRefreshDue :: Maybe UTCTime
+    -- ^ When a proactive background refresh is due; 'Nothing' never refreshes.
+    , rmBreaker :: MBreaker
+    -- ^ The circuit-breaker state.
+    , rmNow :: UTCTime
+    -- ^ The model's clock (advanced by 'AdvanceClock').
+    , rmFail :: Bool
+    -- ^ Whether the next mint is set to fail (toggled by 'SetFail').
+    , rmExpectedMints :: Int
+    -- ^ How many mints the implementation should have performed so far.
+    , rmNextToken :: Int
+    -- ^ Index of the next distinct token the mint will hand out on success.
+    }
+
+-- | Whether a token is usable at @now@; a no-expiry token is always valid.
+mTokenValid :: UTCTime -> AuthToken -> Bool
+mTokenValid now token = case authExpiresAt token of
+    Nothing -> True
+    Just expiry -> now < expiry
+
+-- | Whether a proactive refresh is due at @now@ (mirrors @refreshNeeded@).
+mRefreshNeeded :: UTCTime -> RModel v -> Bool
+mRefreshNeeded now m = case rmRefreshDue m of
+    Nothing -> False
+    Just due -> now >= due
+
+{- | The refresh instant for a freshly minted token, with zero jitter — the exact
+arithmetic of 'Ecluse.Credential.Refresh's @refreshDueAt@ for the shared knobs.
+-}
+mRefreshDueAt :: UTCTime -> AuthToken -> Maybe UTCTime
+mRefreshDueAt issuedAt token = case authExpiresAt token of
+    Nothing -> Nothing
+    Just expiry ->
+        let lifetime = realToFrac (diffUTCTime expiry issuedAt) :: Double
+            frac = clamp01 modelRefreshAt
+            byFraction = addUTCTime (realToFrac (frac * lifetime)) issuedAt
+            floorInstant = addUTCTime (negate modelRefreshFloor) expiry
+         in Just (max issuedAt (min byFraction floorInstant))
+  where
+    clamp01 = max 0 . min 1
+
+{- | Whether the breaker admits a mint at @now@, and the breaker state it leaves
+behind (mirrors @admitMint@: an elapsed 'MOpen' flips to half-open and admits;
+otherwise an open breaker denies; closed/half-open always admit).
+-}
+mAdmit :: UTCTime -> MBreaker -> (Bool, MBreaker)
+mAdmit now = \case
+    MOpen until'
+        | now < until' -> (False, MOpen until')
+        | otherwise -> (True, MHalfOpen)
+    other -> (True, other)
+
+-- | Fold a successful mint into the breaker (mirrors @onMintSuccess@): reset it.
+mOnSuccess :: MBreaker
+mOnSuccess = MClosed 0
+
+{- | Advance the breaker on a failed mint (mirrors @onMintFailure@): count up in
+'MClosed' until the threshold trips it open; any other state re-opens.
+-}
+mOnFailure :: UTCTime -> MBreaker -> MBreaker
+mOnFailure now = \case
+    MClosed n
+        | n + 1 >= modelBreakerThreshold -> tripped
+        | otherwise -> MClosed (n + 1)
+    _ -> tripped
+  where
+    tripped = MOpen (addUTCTime modelBreakerCooldown now)
+
+{- | The model's outcome of a 'RequestToken' at the current clock: the token (or
+'Nothing' for a thrown error) the caller should observe, and the model after the
+call has fully settled (background refresh included). This is the heart of the
+oracle — it folds the same decisions 'serve' makes, but purely.
+-}
+data RequestOutcome
+    = ServedToken AuthToken
+    | RaisedError
+    deriving stock (Eq, Show)
+
+stepRequest :: RModel v -> (RequestOutcome, RModel v)
+stepRequest m
+    | mTokenValid now (rmToken m) =
+        if mRefreshNeeded now m
+            then -- Valid but past the threshold: a background refresh fires (if the
+            -- breaker admits). The caller still gets the current, valid token.
+                (ServedToken (rmToken m), backgroundRefreshed)
+            else (ServedToken (rmToken m), m) -- valid, no refresh due: serve cached
+    | otherwise = expiredPath -- expired: must mint synchronously
+  where
+    now = rmNow m
+
+    -- A due background refresh: attempt a mint if the breaker admits, else skip.
+    backgroundRefreshed =
+        let (admit, br') = mAdmit now (rmBreaker m)
+         in if not admit
+                then m{rmBreaker = br'}
+                else mintInto m{rmBreaker = br'} (rmFail m)
+
+    -- The expired (synchronous) path: breaker may fast-fail without minting.
+    expiredPath =
+        let (admit, br') = mAdmit now (rmBreaker m)
+         in if not admit
+                then (RaisedError, m{rmBreaker = br'}) -- BreakerOpen, no mint
+                else
+                    let m' = mintInto m{rmBreaker = br'} (rmFail m)
+                     in if rmFail m
+                            then (RaisedError, m') -- expired + failed mint surfaces
+                            else (ServedToken (rmToken m'), m')
+
+    -- Apply one mint (success installs a fresh token and resets the breaker and
+    -- the refresh schedule; failure keeps the cached token and advances the
+    -- breaker). Either way the mint counter advances by one.
+    mintInto base failed
+        | failed =
+            base
+                { rmBreaker = mOnFailure now (rmBreaker base)
+                , rmExpectedMints = rmExpectedMints base + 1
+                }
+        | otherwise =
+            let fresh = tokenLiving (mintName (rmNextToken base)) now 1000
+             in base
+                    { rmToken = fresh
+                    , rmRefreshDue = mRefreshDueAt now fresh
+                    , rmBreaker = mOnSuccess
+                    , rmExpectedMints = rmExpectedMints base + 1
+                    , rmNextToken = rmNextToken base + 1
+                    }
+
+-- | The secret text the @n@-th successful mint hands out (distinct per mint).
+mintName :: Int -> Text
+mintName n = "tok-" <> show n
+
+-- ── the test harness wiring the model knobs to a real provider ───────────────
+
+{- | The mutable wiring a model run drives: a settable clock, a fail flag, a
+running mint count, the index of the next token to hand out, and a live gauge of
+mints in flight together with the high-water mark (so a single-flight violation —
+two mints overlapping — is caught directly).
+-}
+data RefreshHarness = RefreshHarness
+    { hClock :: IORef UTCTime
+    , hFail :: IORef Bool
+    , hMintCount :: IORef Int
+    , hNextToken :: IORef Int
+    , hInFlight :: IORef Int
+    , hMaxInFlight :: IORef Int
+    }
+
+newHarness :: UTCTime -> IO RefreshHarness
+newHarness start =
+    RefreshHarness
+        <$> newIORef start
+        <*> newIORef False
+        <*> newIORef 0
+        <*> newIORef 0
+        <*> newIORef 0
+        <*> newIORef 0
+
+{- | Build a provider whose clock and mint are wired to the harness. The mint
+records its concurrency (to catch single-flight violations), counts itself, and
+either fails (when the fail flag is set) or hands out the next distinct token —
+matching the model's 'mintInto' arithmetic.
+-}
+harnessProvider :: RefreshHarness -> IO CredentialProvider
+harnessProvider h =
+    refreshingProvider
+        defaultRefreshConfig
+            { rcClock = readIORef (hClock h)
+            , rcJitter = pure 0
+            , rcRefreshAt = modelRefreshAt
+            , rcRefreshFloor = modelRefreshFloor
+            , rcBreakerThreshold = modelBreakerThreshold
+            , rcBreakerCooldown = modelBreakerCooldown
+            , rcMint = mint
+            }
+  where
+    mint = do
+        -- Enter the mint: bump the in-flight gauge and record the high-water mark.
+        inFlight <- atomicModifyIORef' (hInFlight h) (\n -> (n + 1, n + 1))
+        atomicModifyIORef' (hMaxInFlight h) (\hi -> (max hi inFlight, ()))
+        _ <- atomicModifyIORef' (hMintCount h) (\n -> (n + 1, ()))
+        now <- readIORef (hClock h)
+        bad <- readIORef (hFail h)
+        let leave = atomicModifyIORef' (hInFlight h) (\n -> (n - 1, ()))
+        if bad
+            then leave >> throwString "model mint boom"
+            else do
+                idx <- atomicModifyIORef' (hNextToken h) (\n -> (n + 1, n))
+                leave
+                pure (tokenLiving (mintName idx) now 1000)
+
+-- ── command inputs (Hedgehog barbie functors; none carry symbolic variables) ──
+
+data RequestInput (v :: Type -> Type) = RequestInput
+    deriving stock (Show)
+
+instance FunctorB RequestInput where
+    bmap _ RequestInput = RequestInput
+
+instance TraversableB RequestInput where
+    btraverse _ RequestInput = pure RequestInput
+
+newtype AdvanceInput (v :: Type -> Type) = AdvanceInput NominalDiffTime
+    deriving stock (Show)
+
+instance FunctorB AdvanceInput where
+    bmap _ (AdvanceInput d) = AdvanceInput d
+
+instance TraversableB AdvanceInput where
+    btraverse _ (AdvanceInput d) = pure (AdvanceInput d)
+
+newtype SetFailInput (v :: Type -> Type) = SetFailInput Bool
+    deriving stock (Show)
+
+instance FunctorB SetFailInput where
+    bmap _ (SetFailInput b) = SetFailInput b
+
+instance TraversableB SetFailInput where
+    btraverse _ (SetFailInput b) = pure (SetFailInput b)
+
+-- ── commands ─────────────────────────────────────────────────────────────────
+
+{- | 'AdvanceClock dt': move the injected clock forward by @dt@ seconds. The clock
+only ever advances (time does not run backwards), so the generated deltas are
+non-negative. No mint can be triggered by advancing alone.
+-}
+advanceCommand :: RefreshHarness -> Command H.Gen (H.PropertyT IO) RModel
+advanceCommand h =
+    Command
+        (const (Just (AdvanceInput . fromInteger <$> Gen.integral (Range.linear 0 600))))
+        (\(AdvanceInput d) -> liftIO (atomicModifyIORef' (hClock h) (\now -> (addUTCTime d now, ()))))
+        [ Update $ \m (AdvanceInput d) _out -> m{rmNow = addUTCTime d (rmNow m)}
+        ]
+
+{- | 'SetFail b': arm or disarm the next mint to fail, modelling a transient token
+API outage and its recovery. Touches no token state directly.
+-}
+setFailCommand :: RefreshHarness -> Command H.Gen (H.PropertyT IO) RModel
+setFailCommand h =
+    Command
+        (const (Just (SetFailInput <$> Gen.bool)))
+        (\(SetFailInput b) -> liftIO (writeIORef (hFail h) b))
+        [ Update $ \m (SetFailInput b) _out -> m{rmFail = b}
+        ]
+
+{- | 'RequestToken': call 'currentToken'. After it returns we settle any
+background refresh (waiting for the predicted mint count), so the 'Ensure'
+oracle can assert deterministically that the served token — or the thrown error —
+exactly matches the model, the served secret is never fabricated, a served token
+is always valid at the current clock, and single-flight was never violated.
+-}
+requestCommand :: RefreshHarness -> CredentialProvider -> Command H.Gen (H.PropertyT IO) RModel
+requestCommand h provider =
+    Command
+        (const (Just (pure RequestInput)))
+        execute
+        [ Update $ \m RequestInput _out -> snd (stepRequest m)
+        , Ensure $ \beforeState _afterState RequestInput (observed, maxInFlight) -> do
+            let (expected, _) = stepRequest beforeState
+            annotateShow (rmNow beforeState)
+            annotateShow expected
+            -- The observed outcome (served secret or error) matches the model.
+            outcomeMatches expected observed
+            -- A served token is always valid at the clock it was served under
+            -- (the wrapper never hands back an expired token).
+            case observed of
+                Right tok -> H.assert (mTokenValid (rmNow beforeState) tok)
+                Left _ -> H.success
+            -- Single-flight: at no point did two mints overlap (high-water mark of
+            -- the in-flight gauge, captured by the harness mint, never exceeds 1).
+            H.assert (maxInFlight <= 1)
+            -- Non-vacuity: a generated sequence must reach each interesting policy
+            -- arm often enough, so the oracle is not silently testing only the
+            -- happy path (serve-cached). The percentages are per *step*.
+            let tag = coverTag beforeState expected
+            H.cover 1 "valid-bg-refresh" (tag == "valid-bg-refresh")
+            H.cover 1 "expired-mint-ok" (tag == "expired-mint-ok")
+            H.cover 1 "expired-error" (tag == "expired-error")
+        ]
+  where
+    -- Run currentToken, capture either the token or the fact it threw, then let
+    -- the background refresh (if the model predicts one) land before returning.
+    -- Reports the served outcome together with the single-flight high-water mark,
+    -- so the (pure 'Test') 'Ensure' can assert on both without touching 'IO'.
+    execute RequestInput = liftIO $ do
+        result <- try (currentToken provider)
+        -- The conservative settle below waits for quiescence by polling the
+        -- in-flight gauge to zero (and the mint count to stop moving), which is
+        -- enough to make the asynchronous background refresh deterministic under
+        -- the sequential model.
+        settleQuiescent h
+        maxInFlight <- readIORef (hMaxInFlight h)
+        pure (toObserved result, maxInFlight)
+
+    toObserved :: Either SomeException AuthToken -> Either Text AuthToken
+    toObserved = first (const "error")
+
+    coverTag :: RModel v -> RequestOutcome -> Text
+    coverTag st expected =
+        let valid = mTokenValid (rmNow st) (rmToken st)
+            refreshDue = mRefreshNeeded (rmNow st) st
+         in case (valid, refreshDue, expected) of
+                (True, False, _) -> "serve-cached"
+                (True, True, _) -> "valid-bg-refresh"
+                (False, _, RaisedError) -> "expired-error"
+                (False, _, ServedToken _) -> "expired-mint-ok"
+
+    outcomeMatches expected observed = case (expected, observed) of
+        (ServedToken tok, Right got) ->
+            unSecret (authSecret got) === unSecret (authSecret tok)
+        (RaisedError, Left _) -> H.success
+        _ -> do
+            annotateShow ("outcome mismatch" :: Text, expected, fmap (unSecret . authSecret) observed)
+            H.failure
+
+{- | Wait until no mint is in flight and the count has stopped moving, so a
+fire-and-forget background refresh has fully landed before the next observation.
+A short stability window guards against sampling the gauge in the gap before the
+async refresh has even started.
+-}
+settleQuiescent :: RefreshHarness -> IO ()
+settleQuiescent h = void (timeout 2_000_000 (go (0 :: Int) (-1)))
+  where
+    go stable lastCount = do
+        inFlight <- readIORef (hInFlight h)
+        count <- readIORef (hMintCount h)
+        if inFlight == 0 && count == lastCount
+            then
+                if stable >= 4
+                    then pure ()
+                    else threadDelay 500 >> go (stable + 1) count
+            else threadDelay 500 >> go 0 count
+
+{- | The property: seed a fresh provider whose first (construction) mint installs
+@tok-0@, then drive a random sequence of request / advance-clock / set-fail
+operations against it and the pure model, asserting they agree at every step.
+-}
+refreshModelProperty :: H.PropertyT IO ()
+refreshModelProperty = do
+    h <- liftIO (newHarness t0)
+    provider <- liftIO (harnessProvider h)
+    -- Construction performed exactly one mint, installing tok-0 (lives 1000s).
+    seedToken <- liftIO (currentToken provider)
+    liftIO (settleQuiescent h)
+    let initial =
+            RModel
+                { rmToken = seedToken
+                , rmRefreshDue = mRefreshDueAt t0 seedToken
+                , rmBreaker = MClosed 0
+                , rmNow = t0
+                , rmFail = False
+                , rmExpectedMints = 1
+                , rmNextToken = 1
+                }
+        commands =
+            [ requestCommand h provider
+            , advanceCommand h
+            , setFailCommand h
+            ]
+    actions <- H.forAll (Gen.sequential (Range.linear 1 40) initial commands)
+    H.executeSequential initial actions
