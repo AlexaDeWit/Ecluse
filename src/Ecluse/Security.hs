@@ -36,6 +36,7 @@ model these guards answer is recorded there too.
 module Ecluse.Security (
     -- * Outbound host allowlist
     isAllowedUpstreamHost,
+    lowerCaseHosts,
 
     -- * Internal-range block
     isBlockedTarget,
@@ -67,6 +68,14 @@ import Ecluse.Server.Route (isSafeComponent)
 
 -- ── outbound host allowlist ──────────────────────────────────────────────────
 
+{- | Pre-lower a set of host strings for use with 'isAllowedUpstreamHost' and
+'isBlockedTarget'. Call once when building your configuration, not on every
+request; passing a pre-lowered set avoids repeating 'Set.map T.toLower' per
+check.
+-}
+lowerCaseHosts :: Set Text -> Set Text
+lowerCaseHosts = Set.map T.toLower
+
 {- | Whether @host@ is one of the configured upstream hosts. __Pure and total.__
 
 The first guard on every outbound fetch: the proxy talks to its configured
@@ -76,6 +85,9 @@ if it appears in @allowed@. The match is exact on the bare host (no port, no
 scheme — extract it with 'hostAddress' first) and __case-insensitive__, since
 DNS hostnames are; an empty @host@ is never allowed. This is the allowlist half
 of the SSRF gate; pair it with 'isBlockedTarget' for the internal-range half.
+
+Pass the result of 'lowerCaseHosts' as @allowed@ to avoid repeating
+'Set.map T.toLower' on every call.
 -}
 isAllowedUpstreamHost :: Set Text -> Text -> Bool
 isAllowedUpstreamHost allowed host =
@@ -165,16 +177,31 @@ isInternalAddress = \case
             || (a == 192 && b == 168) -- RFC1918 192.168.0.0/16
     IPv6 groups -> isInternalV6 groups
 
-{- | Whether 16-bit IPv6 groups are loopback (@::1@) or link-local
-(@fe80::\/10@). Other v6 ranges (ULA @fc00::\/7@, mapped v4) are out of scope for
-this minimal hand-rolled check; the allowlist remains the primary v6 constraint.
+{- | Whether 16-bit IPv6 groups are loopback (@::1@), link-local
+(@fe80::\/10@), or IPv4-mapped (@::ffff:0:0\/96@). The mapped range lets an
+attacker embed an internal IPv4 literal (e.g. @::ffff:169.254.169.254@) in an
+IPv6 form that the per-IPv4-range checks would otherwise miss; decoding the
+embedded address and re-running 'isInternalAddress' on the IPv4 result closes
+the gap. ULA (@fc00::\/7@) and NAT64 (@64:ff9b::\/96@) are out of scope.
 -}
 isInternalV6 :: [Word16] -> Bool
 isInternalV6 groups =
     groups == [0, 0, 0, 0, 0, 0, 0, 1] -- ::1 loopback
         || any linkLocal (take 1 groups) -- fe80::/10 link-local (first group)
+        || isIpv4Mapped groups -- ::ffff:0:0/96 (IPv4-mapped)
   where
     linkLocal g0 = g0 >= 0xFE80 && g0 <= 0xFEBF
+    -- Perform Word16 arithmetic before narrowing to Word8 so the high-byte
+    -- extraction is not corrupted by premature truncation.
+    isIpv4Mapped [0, 0, 0, 0, 0, 0xFFFF, hi, lo] =
+        isInternalAddress
+            ( IPv4
+                (fromIntegral (hi `div` 256))
+                (fromIntegral (hi `mod` 256))
+                (fromIntegral (lo `div` 256))
+                (fromIntegral (lo `mod` 256))
+            )
+    isIpv4Mapped _ = False
 
 {- | Parse a host as an IP literal, or 'Nothing' for a DNS name. Handles dotted-
 quad IPv4 and the IPv6 forms a host realistically carries — full eight-group form
