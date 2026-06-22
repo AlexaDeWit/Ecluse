@@ -8,10 +8,11 @@ built-in deny defaults sit strictly above the allow defaults
 ('defaultPrecedence'), so "any deny overrides any allow" holds out of the box.
 If every rule abstains the package is denied by default. Because precedence —
 not list order — decides, the rule set is order-independent except for the
-equal-precedence deny tiebreak and the order abstain reasons are gathered.
+equal-precedence deny tiebreak and the order in which abstain reasons are
+gathered.
 
-The initial rule set is pure (no IO). Effectful rules (CVE lookups, etc.) are a
-later tier layered on top of this one; see @docs\/architecture.md@. The rule
+The rules in this module are pure (no @IO@). Effectful rules (CVE lookups, etc.)
+form a tier layered on top of this engine; see @docs\/architecture.md@. The rule
 data types live in "Ecluse.Rules.Types".
 -}
 module Ecluse.Rules (
