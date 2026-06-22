@@ -86,6 +86,28 @@ the partial-upstream-availability and no-survivors paths.
 failingUpstream :: IO Upstream
 failingUpstream = upstreamRespondingWith (responseLBS status500 [] "upstream error")
 
+{- | An upstream double that serves a sequence of bodies — its first for the first
+request, the next for the next, holding the last once the sequence is exhausted. Lets
+a test change what an upstream returns /between/ two requests within the cache TTL, to
+assert the served document tracks the latest fetch (the parse is written through, not
+read back stale) rather than a cached parse.
+-}
+mutatingUpstream :: NonEmpty LByteString -> IO Upstream
+mutatingUpstream bodies = do
+    remaining <- newIORef (toList bodies)
+    seen <- newIORef []
+    let app req respond = do
+            modifyIORef' seen (lookupAuth (requestHeaders req) :)
+            body <- atomicModifyIORef' remaining serveNext
+            respond (responseLBS status200 [] body)
+    pure Upstream{upApp = app, upSeenAuth = seen}
+  where
+    -- Serve the head and advance, but hold on the last body once exhausted.
+    serveNext :: [LByteString] -> ([LByteString], LByteString)
+    serveNext (b : rest@(_ : _)) = (rest, b)
+    serveNext [b] = ([b], b)
+    serveNext [] = ([], "")
+
 -- | Build an upstream double over a fixed response, recording seen auth headers.
 upstreamRespondingWith :: Response -> IO Upstream
 upstreamRespondingWith response = do
@@ -278,6 +300,7 @@ spec = do
     mergeSpec
     credentialSpec
     partialAvailabilitySpec
+    cacheSpec
     noSurvivorsSpec
     edgeAuthSpec
     conditionalSpec
@@ -325,6 +348,9 @@ mergeSpec = describe "multi-upstream merge (not fallback)" $ do
             -- 2.0.0 (too new) is filtered out; 1.5.0 (public, old) and 3.0.0
             -- (private, trusted) survive.
             servedVersions resp `shouldBe` ["1.5.0", "3.0.0"]
+            -- the denied, newer public latest (2.0.0) must not become the merged
+            -- latest: it resolves to the trusted private 3.0.0.
+            servedLatest resp `shouldBe` Just "3.0.0"
 
     it "denies a public install-script version while admitting a private one of the same key" $ do
         -- Both upstreams carry 1.0.0; the public copy declares an install script
@@ -432,11 +458,40 @@ partialAvailabilitySpec = describe "partial-upstream availability" $ do
             status resp `shouldBe` 200
             servedVersions resp `shouldBe` ["1.0.0"]
 
+-- ── cache write-through coherence ─────────────────────────────────────────────
+
+cacheSpec :: Spec
+cacheSpec = describe "metadata cache (write-through coherence)" $
+    it "serves a version published within the TTL, not a stale cached parse" $ do
+        -- The public upstream gains 2.0.0 between two requests inside the 60s TTL. A
+        -- read-through cache would pair the first request's stale typed view with the
+        -- second's fresh bytes and drop 2.0.0 (making it look policy-denied); the
+        -- write-through must serve {1.0.0, 2.0.0}. The private leg is absent, so the
+        -- served set is exactly the surviving public versions.
+        privateUp <- failingUpstream
+        let v1 =
+                encodePackument
+                    (packument [("1.0.0", plainVersion "1.0.0")] "1.0.0" [("1.0.0", publishedDaysAgo 30)])
+            v2 =
+                encodePackument
+                    ( packument
+                        [("1.0.0", plainVersion "1.0.0"), ("2.0.0", plainVersion "2.0.0")]
+                        "2.0.0"
+                        [("1.0.0", publishedDaysAgo 30), ("2.0.0", publishedDaysAgo 30)]
+                    )
+        publicUp <- mutatingUpstream (v1 :| [v2])
+        withProxy privateUp publicUp Nothing $ \app -> do
+            firstResp <- getThing Nothing app
+            servedVersions firstResp `shouldBe` ["1.0.0"]
+            secondResp <- getThing Nothing app
+            status secondResp `shouldBe` 200
+            servedVersions secondResp `shouldBe` ["1.0.0", "2.0.0"]
+
 -- ── no survivors ──────────────────────────────────────────────────────────────
 
 noSurvivorsSpec :: Spec
 noSurvivorsSpec = describe "no survivors in the merge" $ do
-    it "403s when every public version is denied by policy and there is no private set" $ do
+    it "503s when no version survives and the private upstream is unavailable (transient)" $ do
         privateUp <- failingUpstream
         publicUp <-
             servingUpstream

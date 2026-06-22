@@ -44,6 +44,7 @@ module Ecluse.Server.Cache (
 
     -- * Resolution
     resolveMetadata,
+    primeMetadata,
     cachedMetadata,
     cacheSize,
 ) where
@@ -215,6 +216,18 @@ resolveMetadata cache name fetch = do
     deregister key = do
         inFlight <- readTVar (mcInFlight cache)
         writeTVar (mcInFlight cache) (Map.delete key inFlight)
+
+{- | Write a freshly fetched-and-parsed packument through to the cache (a
+__write-through__), enforcing the size bound. Unlike 'resolveMetadata' — which on a
+hit returns the /cached/ parse and discards the caller's — this always stores the
+parse the caller hands it. Use it when the caller has already fetched the bytes and
+must keep using /that/ parse, so its typed view and the raw bytes it was decoded from
+stay coherent; the read-through 'resolveMetadata' is for callers that only need the
+typed view and want concurrent misses collapsed. What a packument serve primes here
+is what the tarball-gating 'resolveMetadata' then reuses.
+-}
+primeMetadata :: MetadataCache -> PackageName -> PackageInfo -> IO ()
+primeMetadata cache name = insertBounded cache (cacheKey name)
 
 {- | Insert a freshly fetched entry, enforcing the size bound. Expired entries are
 purged first (the cheap reclaim); if the cache is still at capacity, surplus

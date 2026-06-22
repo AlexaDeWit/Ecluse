@@ -42,8 +42,22 @@ served surface"). The 'MergePlan' names, for each surviving version, the source
 that won it; the served body is assembled by taking each survivor's object from
 the /raw @Value@/ of its winning source, carrying the reconciled @dist-tags@ and
 @time@, and relaying every other top-level key from the precedence-winning
-document. The typed model is never re-serialised. The served bytes get our
-__own ETag__, since a merged\/filtered body matches no single upstream's.
+document. The typed model is never re-serialised. The two fields the merge /owns/ as
+a decision — @dist-tags.latest@ and the @time@ instants — are re-rendered from that
+decision (the times as normalised ISO-8601), so they may differ byte-for-byte from
+any single upstream while denoting the same value; integrity-bearing fields
+(@dist.integrity@, @dist.tarball@) are relayed raw and untouched. The served bytes
+get our __own ETag__, since a merged\/filtered body matches no single upstream's.
+
+== Ecosystem coupling
+
+This is, for now, the __npm__ packument pipeline: it reaches for the npm registry
+client, projection, and structural filter directly, so it is the one
+@Ecluse.Server.*@ module that depends on a concrete adapter. The coupling is
+expedient, not intended — the agnostic seams that would let it dispatch through an
+adapter (a per-adapter router, and an ecosystem-neutral filter\/projection) are
+tracked as separate work, after which a second ecosystem would reuse this
+orchestration unchanged.
 -}
 module Ecluse.Server.Pipeline (
     -- * Dependencies
@@ -87,7 +101,7 @@ import Ecluse.Registry.Npm (
 import Ecluse.Registry.Npm.Filter (FilterResult (Filtered, NoSurvivors), filterPackument, rewriteTarballUrls)
 import Ecluse.Registry.Npm.Project (parsePackageInfo)
 import Ecluse.Rules.Types (Decision, EvalContext (EvalContext), PrecededRule)
-import Ecluse.Server.Cache (resolveMetadata)
+import Ecluse.Server.Cache (primeMetadata)
 import Ecluse.Server.Conditional (Conditional (Modified, NotModified), etagHeader, evaluateOwnETag)
 import Ecluse.Server.Response (
     HelpMessage,
@@ -220,16 +234,19 @@ data Source = Source
     , srcValue :: Value
     }
 
-{- Whether a leg's parsed 'PackageInfo' is shared with the metadata cache.
+{- Whether a leg's parsed 'PackageInfo' is written through to the metadata cache.
 
 The cache keys on /package identity/, but a packument is fetched from /two distinct
 upstreams/ whose documents differ — so only one leg may own the package's cache
 entry, or the two would cross-contaminate. The __public__ leg is the cached one: it
 is the gated set the tarball path also resolves (on a private miss) to evaluate a
-version, so the cache reuses one fetch+parse across the packument and tarball paths
-and collapses concurrent resolutions to a single public-upstream call. The trusted
-__private__ leg is fetched uncached — a private-upstream hit is served unfiltered
-and never re-parsed by the tarball path, so it has nothing to share. -}
+version, so writing the public parse through lets the tarball path reuse this
+fetch+parse. The trusted __private__ leg is fetched uncached — a private-upstream hit
+is served unfiltered and never re-parsed by the tarball path, so it has nothing to
+share. (A packument serve always fetches its own bytes — it needs the raw document to
+edit — so it does not read through the cache; coalescing concurrent packument fetches
+awaits caching the raw bytes alongside the parse under a per-source key, an
+enhancement tracked against the metadata cache.) -}
 data Caching = Cached | Uncached
 
 {- Fetch one upstream leg with the given credential posture, returning its parsed
@@ -244,28 +261,30 @@ fetchLeg caching env baseUrl token name = do
 {- Fetch the full packument for one leg (the @Full@ form, for the @time@ map a
 publish-age rule needs), projecting it into both the typed view used to decide and
 the raw @Value@ edited in place to serve. The bytes are fetched __once__ and decoded
-into both the typed 'PackageInfo' and the raw @Value@ for this request's served
-body. A 'Cached' leg additionally primes the metadata cache with its freshly parsed
-packument so the tarball-gating fetch — and concurrent resolutions of a hot package
-— reuse this parse. A non-decoding leg yields 'Nothing' so it degrades to a missing
-contribution rather than failing the whole request. -}
+into both the typed 'PackageInfo' and the raw @Value@ for this request's served body,
+which must come from the /same/ fetch — the decision is taken over exactly the bytes
+served. A 'Cached' leg __writes that parse through__ to the metadata cache (a
+write-through, not a read-through) so the tarball-gating fetch reuses it; it always
+uses its own fresh parse, never a possibly-stale cached one, so the typed view and the
+raw bytes never diverge. A non-decoding leg yields 'Nothing' so it degrades to a
+missing contribution rather than failing the whole request. -}
 fetchAndParse :: Caching -> Env -> Text -> Maybe Secret -> PackageName -> IO (Maybe (PackageInfo, Value))
 fetchAndParse caching env baseUrl token name = do
     response <- fetchMetadataForm (clientConfig env baseUrl token) Full noValidators name
     case (parsePackageInfo response, Aeson.eitherDecodeStrict (responseBody response)) of
         (Right info, Right value) -> do
-            shared <- prime info
-            pure (Just (shared, value))
+            prime info
+            pure (Just (info, value))
         _ -> pure Nothing
   where
-    -- Prime the package's cache entry with this parse (the fetch action is never
-    -- run — the bytes are in hand), or pass the parse through untouched for the
-    -- uncached private leg. The cache key is package identity, so only the cached
-    -- (public) leg may own it.
-    prime :: PackageInfo -> IO PackageInfo
+    -- Write this fresh parse through to the cache so the tarball-gating path reuses
+    -- it; the private (uncached) leg shares nothing, so it skips. The handler keeps
+    -- using the fresh parse regardless, so its typed view and served bytes stay
+    -- coherent — a read-through would return a stale entry for fresh bytes.
+    prime :: PackageInfo -> IO ()
     prime info = case caching of
-        Cached -> resolveMetadata (envMetadataCache env) name (pure info)
-        Uncached -> pure info
+        Cached -> primeMetadata (envMetadataCache env) name info
+        Uncached -> pure ()
 
 {- The npm client config for one leg: the shared 'Manager', the leg's base URL,
 and the leg's injected token (the client's credential for the private leg,
