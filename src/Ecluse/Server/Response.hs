@@ -44,6 +44,11 @@ module Ecluse.Server.Response (
     artifactStatus,
     artifactStatusCode,
 
+    -- * Packument status (over the merged survivor set)
+    PackumentStatus (..),
+    packumentStatus,
+    packumentStatusCode,
+
     -- * Denial body
     HelpMessage,
     mkHelpMessage,
@@ -202,6 +207,95 @@ artifactStatusCode = \case
     Unavailable'{} -> 503
     ServerError -> 500
     NotFound -> 404
+
+-- ── packument status (over the merged survivor set) ──────────────────────────
+
+{- | The HTTP status a __packument__ request renders to, chosen once the merged
+survivor set is known. A packument has no single per-version status — its versions
+are filtered and merged across upstreams — so the status is chosen __over the
+survivors__: with at least one survivor the document is served; with none, the
+status follows the most recoverable cause among the exclusions (see
+'packumentStatus').
+
+A domain sum (not a raw code) so the mapping is total and the WAI layer reads an
+exhaustive set; 'packumentStatusCode' gives the numeric code. There is no @404@: a
+packument whose versions were all withheld is __not__ a miss — the package exists,
+so a genuine upstream absence (no such package at all) is a separate concern of the
+serve layer, decided before the merge.
+-}
+data PackumentStatus
+    = -- | @200@ — at least one version survived; the merged, filtered packument is served.
+      PackumentOk
+    | {- | @403@ — no version survived and every exclusion was a policy denial; the
+      response body collects the denial reasons.
+      -}
+      PackumentForbidden
+    | {- | @503@ — no version survived, but at least one exclusion may self-heal (a
+      transient rule outcome, or a needed upstream that was unavailable), so a retry
+      may yet yield survivors. The 'RetryAfter', if any was suggested, becomes the
+      @Retry-After@ header.
+      -}
+      PackumentUnavailable (Maybe RetryAfter)
+    | {- | @500@ — no version survived, no exclusion is retryable, and at least one is
+      a permanent or internal inability to decide; retrying cannot help.
+      -}
+      PackumentServerError
+    deriving stock (Eq, Show)
+
+{- | Choose a packument's status from the per-version serve outcomes weighed for it:
+the 'Admit's for surviving versions (trusted, or rule-approved) and the 'Reject's
+for excluded ones — plus any 'Reject' a needed-but-unavailable upstream contributes.
+Pure and total.
+
+Any 'Admit' means the merged document has a survivor, so it is served
+('PackumentOk'). With no survivor the status follows the __most recoverable cause__
+among the exclusions, so a retry is invited exactly when it might produce survivors:
+
+* any 'Unavailable' 'WillResolve' → @503@, suggesting the longest 'RetryAfter' any
+  such cause asked for (so every transient cause has likely cleared by then);
+* else any 'Unavailable' 'WontResolve' → @500@ (a permanent inability — a retry
+  cannot help, so it is not dressed up as a retryable @503@);
+* else every exclusion is 'ByPolicy' (__including the degenerate empty input__) →
+  @403@: deny-by-default, when there is nothing to serve and nothing invites a retry.
+
+Never @404@: the versions existed and were withheld (see 'PackumentStatus').
+-}
+packumentStatus :: [ServeDecision] -> PackumentStatus
+packumentStatus decisions
+    | any isAdmit decisions = PackumentOk
+    | not (null willResolveDelays) = PackumentUnavailable (longestRetry willResolveDelays)
+    | anyWontResolve = PackumentServerError
+    | otherwise = PackumentForbidden
+  where
+    reasons :: [RejectReason]
+    reasons = [rejectionReason rej | Reject rej <- decisions]
+
+    willResolveDelays :: [Maybe RetryAfter]
+    willResolveDelays = [delay | Unavailable (WillResolve delay) <- reasons]
+
+    anyWontResolve :: Bool
+    anyWontResolve = not (null [() | Unavailable WontResolve <- reasons])
+
+    isAdmit :: ServeDecision -> Bool
+    isAdmit = \case
+        Admit -> True
+        Reject{} -> False
+
+{- | The longest suggested 'RetryAfter' among transient causes, or 'Nothing' when
+none of them suggested a delay.
+-}
+longestRetry :: [Maybe RetryAfter] -> Maybe RetryAfter
+longestRetry = foldl' keepLonger Nothing . catMaybes
+  where
+    keepLonger acc delay = Just (maybe delay (max delay) acc)
+
+-- | The numeric HTTP status code for a 'PackumentStatus'. Pure and total.
+packumentStatusCode :: PackumentStatus -> Int
+packumentStatusCode = \case
+    PackumentOk -> 200
+    PackumentForbidden -> 403
+    PackumentUnavailable{} -> 503
+    PackumentServerError -> 500
 
 -- ── denial body ──────────────────────────────────────────────────────────────
 
