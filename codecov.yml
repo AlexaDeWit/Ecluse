@@ -1,4 +1,4 @@
-# Codecov configuration. See CONTRIBUTING.md -> "Coverage".
+# Codecov configuration. See docs/testing.md -> "Coverage".
 #
 # Coverage is generated per gating test suite (HPC -> hpc-codecov, native Codecov
 # JSON) and uploaded under a flag, so Codecov merges the tiers into one project

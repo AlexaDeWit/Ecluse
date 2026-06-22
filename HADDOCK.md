@@ -286,8 +286,7 @@ renderDuration :: NominalDiffTime -> Text
 - Output is compared to GHCi's printed form: a `Text` shows **with quotes**
   (`"7 days"`).
 - Haddock also supports `prop>` properties, but Écluse pins invariants with
-  `hedgehog` in the test suites (see [`CONTRIBUTING.md`](CONTRIBUTING.md) →
-  "Testing Strategy")—use `>>>` here for illustration, not for property testing.
+  `hedgehog` in the test suites (see [`docs/testing.md`](docs/testing.md))—use `>>>` here for illustration, not for property testing.
 
 ---
 

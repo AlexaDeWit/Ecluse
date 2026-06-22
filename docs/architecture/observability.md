@@ -246,7 +246,7 @@ and no telemetry is emitted.
 
 The goal is *full confidence that a span and a metric emitted by Écluse actually
 arrive*, not just that the code compiles. It layers onto the existing three-tier
-[testing strategy](../../CONTRIBUTING.md), proving each concern at the cheapest
+[testing strategy](../testing.md), proving each concern at the cheapest
 tier that can. Tiers 1–2 are **backend-agnostic** (they prove the OTLP path any
 consumer relies on); the live Datadog check is the Datadog target carrying its own
 weight, not a baseline requirement:

@@ -27,14 +27,13 @@ permissions:
 
 # All gating checks are jobs in this one graph and feed the terminal `gate` job,
 # which is the single Required status check in branch protection (plus Codecov's
-# server-side statuses; see CONTRIBUTING.md → "Coverage"). Setup actions are
+# server-side statuses; see docs/testing.md → "Coverage"). Setup actions are
 # SHA-pinned once in .github/actions/setup-toolchain; CI enters the lean `.#ci`
 # dev shell.
 #
 # Caching is restore-everywhere / SAVE-ONLY-ON-main: the heavy compiled-dependency
 # store is built once on main and reused by every PR (which never write their own
-# copies). build-test is the single writer. See CONTRIBUTING.md → "Cache
-# management" and the setup-toolchain action.
+# copies). build-test is the single writer. See AGENTS.md → "CI & Security" and the setup-toolchain action.
 jobs:
   build-test:
     name: Build & tests (unit + integration)
@@ -113,7 +112,7 @@ jobs:
       # is saved from the widest plan above, so the entry is complete. Keys match
       # the restore keys in setup-toolchain exactly. actions/cache/save no-ops when
       # the key already exists, so a dependency epoch is written once and then
-      # reused untouched. See CONTRIBUTING.md → "Cache management".
+      # reused untouched. See AGENTS.md → "CI & Security".
       - name: Save cabal store (main)
         if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
@@ -139,8 +138,7 @@ jobs:
     # the PR. Also runs post-merge on main and nightly (schedule). Now that the
     # dependency store is warm on PRs (restored from main), this no longer pays a
     # full dependency build — only the smoke suite's incremental compile + the live
-    # calls. On promoting this to a required gate, see CONTRIBUTING.md →
-    # "Continuous Integration".
+    # calls. On promoting this to a required gate, see AGENTS.md → "CI & Security".
     continue-on-error: true
     env:
       CABAL_DIR: ${{ github.workspace }}/.cabal

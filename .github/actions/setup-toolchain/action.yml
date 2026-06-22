@@ -3,8 +3,7 @@ description: >-
   Install the flake-pinned Nix, restore the Nix store from the GitHub Actions
   cache, and (optionally) the cabal store + build dir. Centralises the SHA-pinned
   setup actions and cache config so every CI job shares one definition. Pins are
-  bumped by Dependabot here, in one place. See CONTRIBUTING.md → "Continuous
-  Integration".
+  bumped by Dependabot here, in one place. See AGENTS.md → "CI & Security".
 
   CACHING POLICY — restore everywhere, SAVE ONLY ON main. Every cache here is
   restore-only on PR/feature branches; the canonical entries are written solely
@@ -14,8 +13,7 @@ description: >-
   toolchain — they just never create their own branch-scoped copies. That one
   rule is what keeps the repo under the 10 GB cache ceiling: previously every PR
   saved its own ~1.3 GB Nix store + ~0.3 GB cabal cache, so a handful of open PRs
-  filled the quota and evicted main's caches. See CONTRIBUTING.md → "Cache
-  management".
+  filled the quota and evicted main's caches. See AGENTS.md → "CI & Security".
 
 inputs:
   cabal-cache:
