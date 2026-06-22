@@ -119,7 +119,12 @@ against:
 * __link-local__ @169.254.0.0\/16@ (which contains the @169.254.169.254@ metadata
   address) and IPv6 @fe80::\/10@;
 * __loopback__ @127.0.0.0\/8@ and IPv6 @::1@;
-* __RFC1918 private__ @10.0.0.0\/8@, @172.16.0.0\/12@, and @192.168.0.0\/16@.
+* __unspecified \/ this-host__ @0.0.0.0\/8@ and IPv6 @::@ — @0.0.0.0@ is not a
+  no-op target: on Linux a connect to it reaches a loopback-bound service, so it
+  is a loopback-equivalent that must be blocked alongside @127.0.0.0\/8@;
+* __RFC1918 private__ @10.0.0.0\/8@, @172.16.0.0\/12@, and @192.168.0.0\/16@;
+* __CGNAT shared__ @100.64.0.0\/10@ (RFC 6598) — carrier-grade NAT space some
+  cloud fabrics route internally.
 
 A host in @allowedInternal@ is __never__ blocked (matched case-insensitively, as
 DNS and the host allowlist are) — the deliberate opt-in for a private upstream that
@@ -178,22 +183,43 @@ hostAddress raw =
         Just rest -> T.takeWhile (/= ']') rest
         Nothing -> T.takeWhile (/= ':') h
 
+-- The four octets of an IPv4 address. Tuple ordering on the octets is
+-- lexicographic, which is exactly numeric IP order — so an address is inside a
+-- block iff it sits between the block's first and last address ('isInternalV4').
+type V4Octets = (Word8, Word8, Word8, Word8)
+
+-- The internal IPv4 blocks the proxy refuses to fetch from, each written as its
+-- inclusive (first address, last address) — the CIDR spelled out as a range, so
+-- testing membership needs no bit masking. Listed in numeric order for reading.
+internalV4Ranges :: [(V4Octets, V4Octets)]
+internalV4Ranges =
+    [ ((0, 0, 0, 0), (0, 255, 255, 255)) -- 0.0.0.0/8 unspecified / this-host (reaches loopback on Linux)
+    , ((10, 0, 0, 0), (10, 255, 255, 255)) -- 10.0.0.0/8 RFC1918 private
+    , ((100, 64, 0, 0), (100, 127, 255, 255)) -- 100.64.0.0/10 CGNAT shared (RFC 6598)
+    , ((127, 0, 0, 0), (127, 255, 255, 255)) -- 127.0.0.0/8 loopback
+    , ((169, 254, 0, 0), (169, 254, 255, 255)) -- 169.254.0.0/16 link-local (incl. 169.254.169.254 metadata)
+    , ((172, 16, 0, 0), (172, 31, 255, 255)) -- 172.16.0.0/12 RFC1918 private
+    , ((192, 168, 0, 0), (192, 168, 255, 255)) -- 192.168.0.0/16 RFC1918 private
+    ]
+
+-- Whether an IPv4 address falls in any blocked block: between its first and last
+-- address inclusive, under the lexicographic (= numeric) ordering of the octets.
+isInternalV4 :: V4Octets -> Bool
+isInternalV4 addr = any within internalV4Ranges
+  where
+    within (lo, hi) = lo <= addr && addr <= hi
+
 -- Whether a parsed IP literal falls in any blocked internal range.
 isInternalAddress :: IpAddr -> Bool
 isInternalAddress = \case
-    IPv4 a b _ _ ->
-        a == 127 -- loopback 127.0.0.0/8
-            || (a == 169 && b == 254) -- link-local 169.254.0.0/16
-            || a == 10 -- RFC1918 10.0.0.0/8
-            || (a == 172 && b >= 16 && b <= 31) -- RFC1918 172.16.0.0/12
-            || (a == 192 && b == 168) -- RFC1918 192.168.0.0/16
+    IPv4 a b c d -> isInternalV4 (a, b, c, d)
     IPv6 groups -> isInternalV6 groups
 
-{- Whether 16-bit IPv6 groups are loopback (@::1@), link-local
-(@fe80::\/10@), or IPv4-mapped (@::ffff:0:0\/96@). The mapped range lets an
+{- Whether 16-bit IPv6 groups are unspecified (@::@), loopback (@::1@),
+link-local (@fe80::\/10@), or IPv4-mapped (@::ffff:0:0\/96@). The mapped range lets an
 attacker embed an internal IPv4 literal (e.g. @::ffff:169.254.169.254@) in an
 IPv6 form that the per-IPv4-range checks would otherwise miss; decoding the
-embedded address and re-running 'isInternalAddress' on the IPv4 result closes
+embedded address and re-running 'isInternalV4' on the IPv4 result closes
 the gap. Both spellings of a mapped address reach here as the same eight groups
 — the hex form (@::ffff:a9fe:a9fe@) and the canonical dotted form
 (@::ffff:169.254.169.254@), which 'parseIPv6' expands. ULA (@fc00::\/7@) and
@@ -201,22 +227,29 @@ NAT64 (@64:ff9b::\/96@) are out of scope.
 -}
 isInternalV6 :: [Word16] -> Bool
 isInternalV6 groups =
-    groups == [0, 0, 0, 0, 0, 0, 0, 1] -- ::1 loopback
-        || any linkLocal (take 1 groups) -- fe80::/10 link-local (first group)
-        || isIpv4Mapped groups -- ::ffff:0:0/96 (IPv4-mapped)
+    isUnspecified || isLoopback || isLinkLocal || isMappedInternalV4
   where
-    linkLocal g0 = g0 >= 0xFE80 && g0 <= 0xFEBF
-    -- Perform Word16 arithmetic before narrowing to Word8 so the high-byte
-    -- extraction is not corrupted by premature truncation.
-    isIpv4Mapped [0, 0, 0, 0, 0, 0xFFFF, hi, lo] =
-        isInternalAddress
-            ( IPv4
-                (fromIntegral (hi `div` 256))
-                (fromIntegral (hi `mod` 256))
-                (fromIntegral (lo `div` 256))
-                (fromIntegral (lo `mod` 256))
-            )
-    isIpv4Mapped _ = False
+    -- :: and ::1, written out as their eight 16-bit groups.
+    isUnspecified = groups == [0, 0, 0, 0, 0, 0, 0, 0]
+    isLoopback = groups == [0, 0, 0, 0, 0, 0, 0, 1]
+
+    -- fe80::/10: the first group lies in fe80..febf; the rest is unconstrained.
+    isLinkLocal = case groups of
+        (g0 : _) -> g0 >= 0xFE80 && g0 <= 0xFEBF
+        [] -> False
+
+    -- ::ffff:a.b.c.d — the last two groups hold the embedded IPv4 (high group
+    -- then low). Recover its four octets and re-test, so an internal IPv4
+    -- smuggled in mapped form is caught too.
+    isMappedInternalV4 = case groups of
+        [0, 0, 0, 0, 0, 0xFFFF, hi, lo] ->
+            isInternalV4 (highByte hi, lowByte hi, highByte lo, lowByte lo)
+        _ -> False
+
+    -- Split a 16-bit group into its two bytes. The div/mod run on the Word16, so
+    -- the high byte is taken before any narrowing to Word8.
+    highByte g = fromIntegral (g `div` 256)
+    lowByte g = fromIntegral (g `mod` 256)
 
 {- Parse a host as an IP literal, or 'Nothing' for a DNS name. Handles dotted-
 quad IPv4 and the IPv6 forms a host realistically carries — full eight-group form,

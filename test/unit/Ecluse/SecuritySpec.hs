@@ -205,8 +205,18 @@ internalRangeSpec = describe "isBlockedTarget" $ do
             isBlockedTarget noOptIn "172.31.255.254" `shouldBe` True
         it "blocks RFC1918 192.168.0.0/16" $
             isBlockedTarget noOptIn "192.168.1.1" `shouldBe` True
+        it "blocks the unspecified / this-host address 0.0.0.0 (loopback-equivalent on Linux)" $
+            isBlockedTarget noOptIn "0.0.0.0" `shouldBe` True
+        it "blocks the rest of the 0.0.0.0/8 this-host block" $
+            isBlockedTarget noOptIn "0.1.2.3" `shouldBe` True
+        it "blocks CGNAT shared 100.64.0.0/10 (low edge)" $
+            isBlockedTarget noOptIn "100.64.0.0" `shouldBe` True
+        it "blocks CGNAT shared 100.64.0.0/10 (high edge)" $
+            isBlockedTarget noOptIn "100.127.255.254" `shouldBe` True
 
     describe "blocks internal IPv6 addresses" $ do
+        it "blocks the IPv6 unspecified address ::" $
+            isBlockedTarget noOptIn "::" `shouldBe` True
         it "blocks IPv6 loopback ::1" $
             isBlockedTarget noOptIn "::1" `shouldBe` True
         it "blocks IPv6 link-local fe80::/10" $
@@ -262,6 +272,12 @@ internalRangeSpec = describe "isBlockedTarget" $ do
             isBlockedTarget noOptIn "172.32.0.1" `shouldBe` False
         it "does not block 11.0.0.1 (just above 10/8)" $
             isBlockedTarget noOptIn "11.0.0.1" `shouldBe` False
+        it "does not block 1.0.0.0 (just above the 0/8 this-host block)" $
+            isBlockedTarget noOptIn "1.0.0.0" `shouldBe` False
+        it "does not block 100.63.255.255 (just below CGNAT 100.64/10)" $
+            isBlockedTarget noOptIn "100.63.255.255" `shouldBe` False
+        it "does not block 100.128.0.1 (just above CGNAT 100.64/10)" $
+            isBlockedTarget noOptIn "100.128.0.1" `shouldBe` False
         it "does not block a DNS name (the allowlist constrains those)" $
             isBlockedTarget noOptIn "registry.npmjs.org" `shouldBe` False
         it "does not block a public IPv6 address" $

@@ -145,6 +145,7 @@ be **merged** before it can start. Tier = the test suite(s) it owes
 | [S18](slices/S18-sqs-queue.md) | SQS `MirrorQueue` backend | S02 | I |
 | [S19](slices/S19-mirror-worker.md) | Mirror worker (fetch → verify → publish → ack) | S08, S16, S18 | U, I |
 | [S20](slices/S20-aws-composition.md) | AWS composition root + config wiring (**launch-ready**) | S03, S15, S17, S18, S19 | I |
+| [S40](slices/S40-egress-ssrf-hardening.md) | Egress / SSRF hardening — resolved-IP recheck, disallow-by-default tarball-host policy, operator egress docs — _follow-on to [S36](slices/S36-security-guards.md); [issue #11](https://github.com/AlexaDeWit/Ecluse/issues/11)_ | S08, S15 | U, I |
 
 ### M5 — Effectful rules & CVE
 
