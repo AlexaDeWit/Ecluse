@@ -57,3 +57,18 @@ forces an awkward cycle. The `hasInstallScript` derivation must match npm.md exa
 `dist.integrity` into the `Artifact` hashes: the cross-upstream merge ([S33](S33-packument-merge.md))
 flags a same-version integrity **divergence** between the private and public
 upstreams as a supply-chain signal, so neither hash may be dropped in projection.
+
+**As-built notes.**
+- **`PackageInfo` lives in `Ecluse.Package`** (alongside `PackageDetails`), the
+  preferred placement — no sibling module or `.hs-boot` was needed; the import graph
+  stays acyclic. Its fields are `infoName` / `infoVersions` (a `Map Text
+  PackageDetails`) / `infoDistTags` / `infoPublishedAt`.
+- **A thin projection-local wire wrapper recovers `_npmUser`.** S06's
+  `Wire.VersionManifest` intentionally does not model the per-version publisher, so
+  the projection decodes each version object once more through its own
+  `WirePackument`/`VersionEntry` types, which pair a `VersionManifest` with a
+  `Maybe Wire.Person` read straight from `_npmUser` — **reusing S06's `Wire.Person`
+  decoder** rather than adding a new one. `_npmUser` → `pkgPublisher`, both
+  `dist.shasum` (SHA-1) and `dist.integrity` (SRI) survive into `artHashes`, and
+  `time[version]` → `pkgPublishedAt`. Both signal-mapping requirements above are met
+  as written; this wrapper is the mechanism, not a deviation.

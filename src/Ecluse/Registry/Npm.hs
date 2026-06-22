@@ -6,11 +6,11 @@ This module is the network half of the npm protocol boundary. Where
 and projection, this is the side-effecting fetch and publish: 'newNpmClient'
 assembles a "Ecluse.Registry.RegistryClient" whose effectful fields talk to a
 registry over plain HTTP, and whose @parse*@ fields are the pure projection
-re-exported through the seam.
+re-exported through the handle.
 
 It speaks the npm registry protocol directly with @http-client@, __never__
 @amazonka@: the control plane (the @GetAuthorizationToken@ mint, the mirror
-queue) is @amazonka@'s job behind separate seams, but the data plane — fetch
+queue) is @amazonka@'s job behind separate handles, but the data plane — fetch
 metadata, stream a tarball, publish — is ordinary HTTPS+JSON, identical across
 every npm-speaking backend (npmjs.org, CodeArtifact, Artifact Registry, a
 self-hosted Verdaccio). Keeping the streaming path off @amazonka@'s
@@ -46,7 +46,7 @@ the @.tgz@ is never gunzipped in flight (and its @dist.integrity@ stays valid).
 The request is exposed so the web layer (see
 @docs\/architecture\/web-layer.md@ → "Streaming and resource lifetime") can
 bracket it with @withResponse@\/@responseStream@ and relay the open body
-__without buffering the whole artifact in memory__. The seam's
+__without buffering the whole artifact in memory__. The handle's
 'Ecluse.Registry.fetchArtifact' field, by contrast, buffers (its 'RegistryResponse'
 return is whole bytes) and is for the mirror worker, which must read the entire
 artifact to verify its integrity before publishing.
@@ -293,14 +293,14 @@ publishRequest config name document = do
             , requestHeaders = (hAccept, "application/json") : requestHeaders base
             }
 
--- ── seam assembly ─────────────────────────────────────────────────────────────
+-- ── handle assembly ───────────────────────────────────────────────────────────
 
 {- | Assemble a "Ecluse.Registry.RegistryClient" for the npm protocol over the
 given configuration.
 
 The effectful fields close over the config's 'Manager' and token and speak npm
 over HTTP; the @parse*@ fields are the pure projection from
-"Ecluse.Registry.Npm.Project", re-exported through the seam. The seam's
+"Ecluse.Registry.Npm.Project", re-exported through the handle. The handle's
 'Ecluse.Registry.fetchMetadata' requests the 'Abbreviated' form
 unconditionally; the richer 'fetchMetadataForm' (for the full packument and
 relayed validators) is exposed separately for the request pipeline.
@@ -318,7 +318,7 @@ newNpmClient config =
             }
 
 {- | Fetch a package's metadata in the requested 'MetadataForm', relaying any
-conditional-GET 'Validators'. The buffered fetch used by the seam's
+conditional-GET 'Validators'. The buffered fetch used by the handle's
 'Ecluse.Registry.fetchMetadata'; the request pipeline calls this directly when it
 needs the full packument or wants to revalidate against an @ETag@.
 
@@ -337,7 +337,7 @@ fetchMetadataForm config form validators name = do
     response <- httpLbs request (npmManager config)
     pure (RegistryResponse (toStrict (responseBody response)))
 
--- | Fetch and __buffer__ a version's artifact bytes (the seam's 'fetchArtifact').
+-- | Fetch and __buffer__ a version's artifact bytes (the handle's 'fetchArtifact').
 fetchArtifact' :: NpmClientConfig -> PackageName -> Version -> IO RegistryResponse
 fetchArtifact' config name version = do
     request <- orThrow (artifactRequest config name version)

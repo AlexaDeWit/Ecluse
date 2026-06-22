@@ -182,9 +182,12 @@ data RejectReason
   | Unavailable Transience     -- could not be decided (see Rules Engine)
 
 data Transience
-  = WillResolve (Maybe Seconds)  -- transient: upstream 5xx/429, advisory source down
-  | WontResolve                  -- not expected to self-heal (internal/parse error)
+  = WillResolve (Maybe RetryAfter)  -- transient: upstream 5xx/429, advisory source down
+  | WontResolve                     -- not expected to self-heal (internal/parse error)
 ```
+
+`RetryAfter` is a `newtype` over a whole-seconds `Int` (it becomes the `Retry-After`
+header), and a `ByPolicy` carries a `RuleName` newtype rather than a bare string.
 
 For a **concrete artifact** request (one specific version) the decision renders
 directly:

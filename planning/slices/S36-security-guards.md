@@ -77,9 +77,33 @@ slice provides the limit logic + config it consumes. Escalate if address parsing
 genuinely needs a dependency rather than a small CIDR check.
 
 **Deferred (defence-in-depth, fail-safe — out of scope here).** The internal-range
-block does not decode IPv4-mapped IPv6 (`::ffff:…`) or octal-form octets; both are
-still kept out by the host allowlist under the composed gate (`isAllowedUpstreamHost`
-∧ ¬`isBlockedTarget`), which a unit test pins. Revisit only if the block guard is
-ever used standalone or an internal IPv6 upstream is allowlisted. Post-resolution IP
-filtering — a DNS name that *resolves* to an internal address — belongs to the S08
-fetch layer (this pure layer cannot resolve names).
+block does not decode octal-form octets; they are still kept out by the host
+allowlist under the composed gate (`isAllowedUpstreamHost` ∧ ¬`isBlockedTarget`),
+which a unit test pins. Revisit only if the block guard is ever used standalone or
+an internal IPv6 upstream is allowlisted. Post-resolution IP filtering — a DNS name
+that *resolves* to an internal address — belongs to the S08 fetch layer (this pure
+layer cannot resolve names).
+
+**As-built notes (PR #31, hardened in PR #38).**
+- **Opaque `LoweredHostSet` newtype.** The host allowlist / internal-opt-in set is
+  no longer a bare `Set Text` — it is an opaque `newtype LoweredHostSet` built only
+  by `lowerCaseHosts :: Set Text -> LoweredHostSet`. A value therefore carries the
+  proof that every host in it is already lower-cased, so `isAllowedUpstreamHost` /
+  `isBlockedTarget` fold only the *incoming* host and the case-insensitive match
+  cannot be bypassed by an un-normalised configuration set. (Introduced in the PR #38
+  hardening pass; it tightens the type so case-folding is structural, not a caller
+  convention.)
+- **IPv4-mapped IPv6 *is* decoded** (no longer deferred). `isBlockedTarget` parses
+  the IPv4-mapped form `::ffff:a.b.c.d` (both the hex `::ffff:a9fe:a9fe` and the
+  canonical dotted `::ffff:169.254.169.254` spellings), recovers the embedded IPv4,
+  and re-runs the internal-range test on it — so an attacker cannot smuggle an
+  internal IPv4 (e.g. the metadata address) past the per-IPv4-range checks inside an
+  IPv6 literal. This closes the gap the original "Deferred" note left open (done in
+  PR #38). Octal-form octets remain undecoded (still covered only by the allowlist),
+  and ULA (`fc00::/7`) / NAT64 (`64:ff9b::/96`) stay out of scope.
+- **`upstreamUrlFor` + `UrlError` own the URL-construction side.** The sanctioned
+  builder `upstreamUrlFor :: Text -> PackageName -> Either UrlError Text` re-checks
+  every structural name component with the router's `isSafeComponent` as defence in
+  depth (the `mkScope`/`mkPackageName` smart constructors do no validation), and
+  reports `UnsafeComponent`/`EmptyBaseUrl`. `UrlError` is the shared URL-formation
+  vocabulary S08's request builders adapt into their `PublishError`.

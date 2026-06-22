@@ -58,3 +58,19 @@ effectful CVE rules (S21 `Unavailable`; S23 `DenyIfCVE` / `AllowIfRemediatesCve`
 the high-precedence remediation allow) layer on cleanly. Do not add the
 `Unavailable` outcome here — that is S21 (it needs the effectful tier). This slice
 is pure-tier only.
+
+**As-built notes (PR #36).**
+- **`PrecededRule { rulePrecedence :: Int, prRule :: Rule }`.** The precedence
+  representation is the wrapper-with-a-field shape (the field is `prRule`, type-tagged
+  per STYLE.md §6.3, not the sketch's bare `rule`), with no `Ord Rule` instance —
+  `evalRules` selects with `maximumBy` over a `(precedence, isDeny)` key (deny ranks
+  above allow at equal precedence), exactly as specified. Helpers ship alongside:
+  `defaultPrecedence :: Rule -> Int` and `atDefaultPrecedence :: Rule -> PrecededRule`.
+- **Per-type default precedences as named bindings.** `AllowIfPublishedBefore`=**100**,
+  `AllowScope`=**200**, `DenyHasInstallScripts`=**300** — each an exported top-level
+  binding (`defaultAllowIfPublishedBeforePrecedence`, etc.). These differ from the
+  *illustrative* example values in the acceptance criterion (which paired AllowScope
+  with 300 and DenyHasInstallScripts with 200); the load-bearing invariant — **every
+  deny default strictly above every allow default** — holds, with the two allow types
+  in an ordered allow band (scope above the passive age quarantine) below the deny
+  band.
