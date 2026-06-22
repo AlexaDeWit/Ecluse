@@ -41,6 +41,7 @@ module Ecluse.Registry (
     -- * Errors
     ParseError (..),
     PublishError (..),
+    UrlFormationError (..),
 ) where
 
 import Ecluse.Package (PackageDetails, PackageInfo, PackageName)
@@ -67,13 +68,36 @@ newtype ParseError = ParseError
     }
     deriving stock (Eq, Show)
 
-{- | Why publishing an artifact to a registry failed (an 'Ecluse.Queue' job is
-then left un-acked and retried; see @docs\/architecture\/cloud-backends.md@).
+{- | Why publishing an artifact to a registry failed — a genuine write fault
+reported by 'publishArtifact' (an 'Ecluse.Queue' job is then left un-acked and
+retried; see @docs\/architecture\/cloud-backends.md@).
+
+This is the __write-path__ fault and nothing more: forming the request URL is a
+separate concern (a 'UrlFormationError'), so a read-path fetch can no longer
+surface a failure mislabelled as a publish.
 -}
 newtype PublishError = PublishError
     { publishErrorMessage :: Text
     -- ^ A human-readable description of why the publish failed.
     }
+    deriving stock (Eq, Show)
+
+{- | Why an upstream request URL could not be formed from configuration and an
+already-parsed 'Ecluse.Package.PackageName'.
+
+This is a __protocol-independent__ fault shared by every request an adapter
+builds — metadata fetch, artifact fetch, and publish alike — so a read-path
+failure is reported as what it is rather than borrowing the write-path's
+'PublishError'. It is distinct from "Ecluse.Security"'s @UrlError@: that is the
+pure SSRF\/identifier guard (which also rejects unsafe name components), whereas
+this is the effectful adapter's report that the configured base URL is unusable.
+-}
+data UrlFormationError
+    = -- | The configured base URL is empty, so no request URL can be formed.
+      EmptyBaseUrl
+    | -- | The formed URL string could not be parsed into a request. Carries the
+      -- offending URL.
+      UnparseableUrl Text
     deriving stock (Eq, Show)
 
 {- | The registry-protocol handle — a record of functions over a backend whose

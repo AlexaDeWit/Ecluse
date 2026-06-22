@@ -117,9 +117,9 @@ import Ecluse.Registry (
     PublishError (..),
     RegistryClient (..),
     RegistryResponse (RegistryResponse),
+    UrlFormationError (EmptyBaseUrl, UnparseableUrl),
  )
 import Ecluse.Registry.Npm.Project qualified as Project
-import Ecluse.Security (UrlError (EmptyBaseUrl))
 import Ecluse.Version (Version, renderVersion)
 
 -- ── configuration ────────────────────────────────────────────────────────────
@@ -218,14 +218,14 @@ relayed conditional-GET 'Validators'.
 
 The package path is derived from an __already-parsed__ 'PackageName', then the
 scope separator is percent-encoded (@\@scope\/name@ → @\@scope%2Fname@). Fails
-with a 'PublishError' only when the URL cannot be formed (an empty base URL).
+with a 'UrlFormationError' only when the URL cannot be formed (an empty base URL).
 -}
 metadataRequest ::
     NpmClientConfig ->
     MetadataForm ->
     Validators ->
     PackageName ->
-    Either PublishError Request
+    Either UrlFormationError Request
 metadataRequest config form validators name = do
     url <- packageUrl (npmBaseUrl config) name
     base <- parseRequestEither url
@@ -248,13 +248,13 @@ URL is the registry-served tarball location, derived like 'metadataRequest' but
 addressing the version's artifact path. Exposed so the web layer can bracket it
 for bounded-memory streaming (see the module header).
 
-Fails with a 'PublishError' only when the URL cannot be formed.
+Fails with a 'UrlFormationError' only when the URL cannot be formed.
 -}
 artifactRequest ::
     NpmClientConfig ->
     PackageName ->
     Version ->
-    Either PublishError Request
+    Either UrlFormationError Request
 artifactRequest config name version = do
     url <- artifactUrl (npmBaseUrl config) name version
     base <- parseRequestEither url
@@ -275,13 +275,15 @@ document (a packument carrying the version manifest and the base64 tarball under
 @_attachments@), already serialised by the caller. Carries the bearer token and a
 @Content-Type: application\/json@ header.
 
-Fails with a 'PublishError' only when the URL cannot be formed.
+Fails with a 'UrlFormationError' only when the URL cannot be formed; a genuine
+write fault (a non-2xx, non-409 status) is the 'PublishError' that
+'Ecluse.Registry.publishArtifact' reports.
 -}
 publishRequest ::
     NpmClientConfig ->
     PackageName ->
     ByteString ->
-    Either PublishError Request
+    Either UrlFormationError Request
 publishRequest config name document = do
     url <- packageUrl (npmBaseUrl config) name
     base <- parseRequestEither url
@@ -351,6 +353,11 @@ A published @name\@version@ is immutable, so a conflict means the bytes are
 already there — exactly the success a redelivered mirror job wants, not an error
 to retry forever. Any other non-2xx status is reported as a 'PublishError' so the
 mirror job is left un-acked and retried.
+
+A request-building failure (an unformable URL) is a config\/programming fault,
+not a per-response publish condition, so it surfaces as an 'IO' exception (like
+the fetch paths) rather than as a 'PublishError' the mirror job would retry
+forever.
 -}
 publishArtifact' ::
     NpmClientConfig ->
@@ -358,13 +365,11 @@ publishArtifact' ::
     Version ->
     ByteString ->
     IO (Either PublishError ())
-publishArtifact' config name _version document =
-    case publishRequest config name document of
-        Left err -> pure (Left err)
-        Right request -> do
-            response <- httpLbs request (npmManager config)
-            let code = statusCode (responseStatus response)
-            pure (classifyPublish code)
+publishArtifact' config name _version document = do
+    request <- orThrow (publishRequest config name document)
+    response <- httpLbs request (npmManager config)
+    let code = statusCode (responseStatus response)
+    pure (classifyPublish code)
 
 {- | Map a publish response status onto success or a 'PublishError'. A 2xx or a
 @409@ (already present, immutable) is success; anything else is reported so the
@@ -382,7 +387,7 @@ classifyPublish code
 {- | The metadata\/publish URL for a package: @{baseUrl}\/{encoded-name}@, with
 the scoped-name separator percent-encoded (@\@scope\/name@ → @\@scope%2Fname@).
 -}
-packageUrl :: Text -> PackageName -> Either PublishError Text
+packageUrl :: Text -> PackageName -> Either UrlFormationError Text
 packageUrl baseUrl name =
     joinPath baseUrl (encodePackagePath name)
 
@@ -391,18 +396,18 @@ packageUrl baseUrl name =
 under the package's @\/-\/@ path; the filename is @{base}-{version}.tgz@ (scope
 dropped from the file segment, as npm names it).
 -}
-artifactUrl :: Text -> PackageName -> Version -> Either PublishError Text
+artifactUrl :: Text -> PackageName -> Version -> Either UrlFormationError Text
 artifactUrl baseUrl name version =
     joinPath baseUrl (encodePackagePath name <> "/-/" <> tarballFile name version)
 
 {- | Join a base URL and an already-encoded path, tolerating one trailing slash
-on the base so the join never doubles it. An empty base URL is refused with the
-shared 'Ecluse.Security.UrlError' vocabulary so an unformable URL reads
-consistently across the codebase.
+on the base so the join never doubles it. An empty base URL is refused with a
+'UrlFormationError' — the read- and write-path builders share this report, so an
+unformable URL is never mislabelled as a publish failure.
 -}
-joinPath :: Text -> Text -> Either PublishError Text
+joinPath :: Text -> Text -> Either UrlFormationError Text
 joinPath baseUrl path
-    | T.null baseUrl = Left (urlError EmptyBaseUrl)
+    | T.null baseUrl = Left EmptyBaseUrl
     | otherwise = Right (stripTrailingSlash baseUrl <> "/" <> path)
   where
     stripTrailingSlash b = fromMaybe b (T.stripSuffix "/" b)
@@ -450,25 +455,21 @@ addValidators validators request =
             ]
 
 {- | Parse a built URL into a 'Request', mapping a parse failure into a
-'PublishError'. The URL is derived from configuration and an already-safe name,
-so a failure here is a configuration fault, reported uniformly with the other
-URL-formation errors.
+'UrlFormationError'. The URL is derived from configuration and an already-safe
+name, so a failure here is a configuration fault, reported uniformly with the
+other URL-formation errors.
 -}
-parseRequestEither :: Text -> Either PublishError Request
+parseRequestEither :: Text -> Either UrlFormationError Request
 parseRequestEither url =
     case parseRequest (toString url) of
         Just request -> Right request
-        Nothing -> Left (PublishError ("could not parse upstream URL: " <> url))
+        Nothing -> Left (UnparseableUrl url)
 
--- | Adapt a 'UrlError' into the 'PublishError' the request builders report.
-urlError :: UrlError -> PublishError
-urlError err = PublishError ("could not form upstream URL: " <> show err)
-
-{- | Run a request-building 'Either', throwing its 'PublishError' as an 'IO'
-exception. Used by the effectful fetch paths, where an unformable URL is a
-config fault rather than a per-response condition.
+{- | Run a request-building 'Either', throwing its 'UrlFormationError' as an 'IO'
+exception. Used by the effectful fetch and publish paths, where an unformable URL
+is a config fault rather than a per-response condition.
 -}
-orThrow :: Either PublishError Request -> IO Request
+orThrow :: Either UrlFormationError Request -> IO Request
 orThrow = \case
-    Left err -> throwIO (stringException (toString (publishErrorMessage err)))
+    Left err -> throwIO (stringException ("could not form upstream URL: " <> show err))
     Right request -> pure request
