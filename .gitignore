@@ -18,5 +18,6 @@ http_cache.sqlite
 dist-weeder/
 *.hi
 *.o
+scratchpad/
 .vscode/*
 !.vscode/settings.json
