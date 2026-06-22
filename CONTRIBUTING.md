@@ -230,8 +230,11 @@ well-covered changes land). Both knobs live in [`codecov.yml`](codecov.yml).
 
 Every push and PR runs the single unified workflow
 ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)): build & test, format &
-lint, and Semgrep, all feeding one terminal **`gate`** job — the only required
-status check (plus Codecov's server-side `codecov/project` / `codecov/patch`; see
+lint, Semgrep, and **workflow-lint** (`make lint-workflows` = actionlint +
+zizmor, which audit the Actions workflows themselves for correctness and security
+— template injection, credential persistence, excessive permissions), all feeding
+one terminal **`gate`** job — the only required status check (plus Codecov's
+server-side `codecov/project` / `codecov/patch`; see
 [Coverage](#coverage--codecov-gating)). Local `make check` runs the same set, so a
 clean local run predicts a green gate. The design rationale — least-privilege
 token, the one-required-check rule, SHA-pinned shared setup, the lean

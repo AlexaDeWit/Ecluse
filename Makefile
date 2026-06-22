@@ -21,7 +21,8 @@ HADDOCK_FLAGS := --haddock-hyperlink-source --haddock-quickjump
 
 .DEFAULT_GOAL := help
 .PHONY: help update build test test-integration test-smoke test-all doctest \
-        coverage freeze gen-version-fixtures format format-check lint sast check run docs \
+        coverage freeze gen-version-fixtures format format-check lint sast \
+        lint-workflows check run docs \
         docs-site nix-build nix-check docker-build docker-push sbom scan \
         scan-vulnix clean
 
@@ -92,7 +93,15 @@ lint: ## Run hlint
 sast: ## Static analysis (Semgrep, registry rules)
 	$(NIX) semgrep scan --config auto --severity ERROR --severity WARNING --error .
 
-check: build test doctest format-check lint sast ## Run everything the CI gate requires
+# Lint the GitHub Actions workflows: actionlint (correctness) + zizmor (security).
+# zizmor's online audits use $GH_TOKEN when present (CI passes the job token);
+# without one it runs its offline audit subset and prints a notice. Runs from the
+# lean `.#workflow-lint` shell in CI.
+lint-workflows: ## Lint GitHub Actions workflows (actionlint + zizmor)
+	$(NIX) actionlint
+	$(NIX) zizmor .github/workflows/
+
+check: build test doctest format-check lint sast lint-workflows ## Run everything the CI gate requires
 
 run: ## Run the proxy
 	$(NIX) cabal run ecluse
