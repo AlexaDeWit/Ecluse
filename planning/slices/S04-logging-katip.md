@@ -2,7 +2,7 @@
 id: S04
 title: katip logging scaffold (json/console)
 milestone: M0 — Shell, handles & foundations
-status: not-started
+status: merged
 depends-on: [S01]
 test-tier: [unit]
 arch-refs:
@@ -44,3 +44,19 @@ attaches context to; trace-ID/`dd`-object correlation is added in M6 (S26).
 is S26 and depends on the OTel substrate (S24). Keep this scribe additive so S26
 layers correlation on without rework. Secrets must never reach a log field (assert
 nothing logs a token).
+
+**As-built notes.**
+- `LogFormat` (the `json`/`console` enum, with `parseLogFormat`/`renderLogFormat`)
+  lives in `Ecluse.Log` and is imported by `Ecluse.Config`, rather than being
+  defined in or re-exported from `Config` — one home for the type. `Config` gains
+  `cfgLogFormat` (`PROXY_LOG_FORMAT`, default `json`) read through the existing
+  strict env parser.
+- Filling the `Env` logger slot meant adding `envLogEnv :: LogEnv` and a `LogEnv`
+  argument to `newEnv`/`withEnv`, so the two call sites outside the slice's stated
+  file scope were updated for the additive change: `Ecluse.run` (the composition
+  root, which now builds the default JSONL `LogEnv`) and `Ecluse.EnvSpec` (the
+  handle-double assembly). `Ecluse.ConfigSpec` gained `PROXY_LOG_FORMAT` cases.
+- The scribe writes to stdout via katip's handle scribe with colour forced off, so
+  a `json` line is always valid JSON. Tests assert on `renderLogLine` (the
+  formatter output, no stdout) for the format/escaping contract, plus an
+  end-to-end stdout-capture check that a real `json` event is exactly one JSON line.

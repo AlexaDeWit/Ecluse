@@ -66,6 +66,7 @@ library
     Ecluse.Credential.Refresh
     Ecluse.Ecosystem
     Ecluse.Env
+    Ecluse.Log
     Ecluse.Package
     Ecluse.Queue
     Ecluse.Registry
@@ -88,6 +89,7 @@ library
     , http-client      ^>=0.7
     , http-client-tls  ^>=0.3.6
     , http-types       ^>=0.12
+    , katip            ^>=0.8.8
     , stm              ^>=2.5
     , text             ^>=2.0
     , time             ^>=1.12
@@ -116,6 +118,7 @@ test-suite ecluse-unit
     Ecluse.ConfigSpec
     Ecluse.CredentialSpec
     Ecluse.EnvSpec
+    Ecluse.LogSpec
     Ecluse.PackageSpec
     Ecluse.QueueSpec
     Ecluse.Registry.NpmSpec
@@ -143,6 +146,7 @@ test-suite ecluse-unit
     , http-client       ^>=0.7
     , http-client-tls   ^>=0.3.6
     , http-types        ^>=0.12
+    , katip             ^>=0.8.8
     , ecluse
     , text              ^>=2.0
     , time              ^>=1.12

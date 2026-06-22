@@ -1,6 +1,7 @@
 module Ecluse.EnvSpec (spec) where
 
 import Data.Text qualified as T
+import Katip (Environment (Environment), LogEnv, Namespace (Namespace), initLogEnv)
 import Network.HTTP.Client (Manager, defaultManagerSettings, newManager)
 import Test.Hspec
 import UnliftIO (bracket, evaluate, timeout, try)
@@ -55,12 +56,21 @@ on construction), so assembling an 'Env' touches no network.
 newTestManager :: IO Manager
 newTestManager = newManager defaultManagerSettings
 
--- | Assemble an 'Env' from the doubles above and a no-network manager.
+{- | A scribe-free 'LogEnv' double: a @katip@ environment with no scribe attached,
+so assembling an 'Env' opens no handle and writes nothing to stdout.
+-}
+newTestLogEnv :: IO LogEnv
+newTestLogEnv = initLogEnv (Namespace ["ecluse"]) (Environment "test")
+
+{- | Assemble an 'Env' from the doubles above, a no-network manager, and a
+scribe-free 'LogEnv'.
+-}
 newTestEnv :: IO Env
 newTestEnv = do
     queue <- newInMemoryQueue
     manager <- newTestManager
-    newEnv fakeRegistry queue fakeCredentials manager
+    logEnv <- newTestLogEnv
+    newEnv fakeRegistry queue fakeCredentials manager logEnv
 
 -- | A sample job for round-tripping the queue handle held in an 'Env'.
 sampleJob :: MirrorJob
@@ -117,20 +127,30 @@ spec = do
             _ <- evaluate (envManager env)
             pure ()
 
+        it "exposes the LogEnv it was built with" $ do
+            -- A 'LogEnv' is likewise opaque, so reaching 'envLogEnv' and forcing it
+            -- to weak-head normal form is the assertion: the wired logging
+            -- environment is the one stored.
+            env <- newTestEnv
+            _ <- evaluate (envLogEnv env)
+            pure ()
+
     describe "withEnv" $ do
         it "runs the body against the assembled Env and returns its result" $ do
             queue <- newInMemoryQueue
             manager <- newTestManager
-            result <- withEnv fakeRegistry queue fakeCredentials manager $ \env ->
+            logEnv <- newTestLogEnv
+            result <- withEnv fakeRegistry queue fakeCredentials manager logEnv $ \env ->
                 currentToken' env
             result `shouldBe` "env-spec-token"
 
         it "propagates an exception thrown in the body (bracketed teardown re-raises)" $ do
             queue <- newInMemoryQueue
             manager <- newTestManager
+            logEnv <- newTestLogEnv
             let body :: Env -> IO ()
                 body _ = throwString "boom"
-            outcome <- try (withEnv fakeRegistry queue fakeCredentials manager body)
+            outcome <- try (withEnv fakeRegistry queue fakeCredentials manager logEnv body)
             case outcome of
                 Left (_ :: StringException) -> pure ()
                 Right () -> expectationFailure "expected the body's exception to propagate"

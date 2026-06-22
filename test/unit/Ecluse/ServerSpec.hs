@@ -2,6 +2,7 @@ module Ecluse.ServerSpec (spec) where
 
 import Prelude hiding (get)
 
+import Katip (Environment (Environment), Namespace (Namespace), initLogEnv)
 import Network.HTTP.Client (Manager, defaultManagerSettings, newManager)
 import Network.HTTP.Types (methodPost, status200, statusCode)
 import Network.Wai (
@@ -66,7 +67,8 @@ newTestEnv :: IO Env
 newTestEnv = do
     queue <- newInMemoryQueue
     manager <- newTestManager
-    newEnv fakeRegistry queue fakeCredentials manager
+    logEnv <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
+    newEnv fakeRegistry queue fakeCredentials manager logEnv
 
 -- | The 'application' under the default server config (a single root mount).
 rootApp :: IO Application

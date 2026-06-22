@@ -101,6 +101,7 @@ import Data.Time (NominalDiffTime)
 import Env qualified
 import System.Environment (getEnvironment)
 
+import Ecluse.Log (LogFormat (..), parseLogFormat)
 import Ecluse.Package (mkScope)
 import Ecluse.Rules.Types (
     PrecededRule (..),
@@ -261,6 +262,10 @@ data EnvConfig = EnvConfig
     , cfgCveSyncInterval :: NominalDiffTime
     -- ^ How often the advisory index is refreshed (@CVE_SYNC_INTERVAL_SECONDS@,
     -- default 3600).
+    , cfgLogFormat :: LogFormat
+    -- ^ The structured-log output shape (@PROXY_LOG_FORMAT@, default @json@): the
+    -- one-line JSONL stream for a container, or the human-readable console form
+    -- for development (see "Ecluse.Log").
     }
     deriving stock (Eq, Show)
 
@@ -297,6 +302,7 @@ envParser =
         <*> Env.sensitive (optionalText "PROXY_AUTH_TOKEN")
         <*> optionalText "PROXY_HELP_MESSAGE"
         <*> Env.var cveIntervalReader "CVE_SYNC_INTERVAL_SECONDS" (Env.def defaultCveSyncInterval)
+        <*> Env.var logFormatReader "PROXY_LOG_FORMAT" (Env.def JsonLog)
   where
     defaultPublicUpstream :: Url
     defaultPublicUpstream = Url "https://registry.npmjs.org"
@@ -331,6 +337,10 @@ cveIntervalReader :: Env.Reader Env.Error NominalDiffTime
 cveIntervalReader = textReader $ \t -> case readMaybe (toString t) :: Maybe Integer of
     Just n | n >= 0 -> Right (fromInteger n)
     _ -> Left ("expected a non-negative integer count of seconds, got " <> quote t)
+
+-- An 'Env.Reader' for the log-format enum, surfacing 'parseLogFormat's reason.
+logFormatReader :: Env.Reader Env.Error LogFormat
+logFormatReader = textReader parseLogFormat
 
 {- | Render the aggregated environment errors as one human-facing block, one line
 per offending variable, so an operator sees every problem from a single failed
