@@ -114,17 +114,21 @@ don't-@ack@-to-retry / no-@nack@ conventions; all fields are 'IO'.
 -}
 data MirrorQueue = MirrorQueue
     { enqueue :: MirrorJob -> IO ()
-    -- ^ Producer. __Best-effort__: runs on the request hot path, so a failure is
-    -- logged\/metered and never fails the client response (see the header).
+    {- ^ Producer. __Best-effort__: runs on the request hot path, so a failure is
+    logged\/metered and never fails the client response (see the header).
+    -}
     , receive :: IO [QueueMessage]
-    -- ^ Consumer. One long-poll for a batch of messages; returns @[]@ on timeout
-    -- (an empty poll), so the worker loop simply polls again.
+    {- ^ Consumer. One long-poll for a batch of messages; returns @[]@ on timeout
+    (an empty poll), so the worker loop simply polls again.
+    -}
     , ack :: ReceiptHandle -> IO ()
-    -- ^ Acknowledge a processed message so it is not redelivered. __Not__ acking
-    -- is how a failed job is retried (the header's "retry is don't ack").
+    {- ^ Acknowledge a processed message so it is not redelivered. __Not__ acking
+    is how a failed job is retried (the header's "retry is don't ack").
+    -}
     , extendVisibility :: ReceiptHandle -> Seconds -> IO ()
-    -- ^ Extend a received message's visibility window to hold a long publish. An
-    -- optimization, not correctness-critical (redelivery is harmless).
+    {- ^ Extend a received message's visibility window to hold a long publish. An
+    optimization, not correctness-critical (redelivery is harmless).
+    -}
     }
 
 -- ── in-memory double ─────────────────────────────────────────────────────────
@@ -140,8 +144,9 @@ data QueueState = QueueState
     { qsNextReceipt :: Word64
     -- ^ A monotonic counter giving each delivery a unique 'ReceiptHandle'.
     , qsVisible :: Seq MirrorJob
-    -- ^ Jobs waiting to be delivered, oldest first (FIFO). 'Seq' gives
-    -- O(1) amortised snoc so enqueue cost does not grow with queue depth.
+    {- ^ Jobs waiting to be delivered, oldest first (FIFO). 'Seq' gives
+    O(1) amortised snoc so enqueue cost does not grow with queue depth.
+    -}
     , qsInFlight :: Map ReceiptHandle InFlight
     -- ^ Delivered-but-unacked jobs, keyed by the handle used to 'ack' them.
     }

@@ -4,7 +4,7 @@
 
 | Concern | Choice | Rationale |
 |---------|--------|-----------|
-| Language | Haskell (GHC 9.6) | Type safety, strong concurrency, fits the rule engine well. |
+| Language | Haskell (GHC 9.10) | Type safety, strong concurrency, fits the rule engine well. |
 | Prelude | `relude` | Safer defaults: `Text` over `String`, partial functions hidden, re-exports `containers`/`text`/`bytestring`/`stm`. Wired in as the implicit prelude (see below). |
 | Effect style | `ReaderT Env IO` (+ `unliftio`) | Simple, standard, testable without exotic dependencies. `unliftio` lifts `bracket`/`async` into the reader for the worker/service layer; request handlers stay in plain `IO` taking `Env`. See [Web Layer](web-layer.md#web-layer). |
 | HTTP server | `warp` + `wai` (+ `wai-extra`) | Fast, battle-tested. Raw WAI routing rather than a framework — see [Web Layer](web-layer.md#web-layer). `wai-extra` supplies cross-cutting middleware (size limits, real-IP, timeouts). |
@@ -20,7 +20,7 @@
 | Time | `time` | `AllowIfPublishedBefore` age calculations. |
 | Unit tests | `hspec` (+ `hspec-wai`) | `hspec-wai` drives the proxy `Application` end-to-end. |
 | Property tests | `hedgehog` (+ `hspec-hedgehog`) | Integrated shrinking; used heavily against the pure rules engine. |
-| Integration tests | `testcontainers` | Launches ephemeral Docker containers from the test suite (lifecycle + readiness). GHC 9.6-compatible, actively maintained. |
+| Integration tests | `testcontainers` | Launches ephemeral Docker containers from the test suite (lifecycle + readiness). GHC 9.10-compatible, actively maintained. |
 | Cloud emulation (tests) | `ministack` · Pub/Sub emulator | AWS via `ministack` (image `ministackorg/ministack`, port 4566, SQS/STS); GCP via Google's official Pub/Sub emulator. Both run as containers through `testcontainers` — no real cloud or credentials. |
 | Dev environment | Nix flakes + `direnv` | Fully reproducible; all tooling from `nix develop`. |
 | Build | Cabal | Natural Nix pairing; `flake.lock` provides reproducibility. |

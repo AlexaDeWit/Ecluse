@@ -12,7 +12,7 @@ in [`STYLE.md`](STYLE.md), and the documentation/Haddock conventions are in
 
 ## Local development
 
-**Nix (with flakes) is a hard dependency.** The whole toolchain — GHC 9.6, Cabal,
+**Nix (with flakes) is a hard dependency.** The whole toolchain — GHC 9.10, Cabal,
 fourmolu, hlint, Semgrep — comes from the dev shell, pinned by `flake.lock`; there
 is no supported system-level build. Enter the shell with `nix develop` (or let
 `direnv` do it), then run everything through **`make`**, the single entry point
@@ -79,7 +79,7 @@ Two build paths means two locks, one per resolver, pinned **independently**:
 
 | Path | Resolver | Lock |
 |------|----------|------|
-| Nix / hermetic build (the **shipped** artifact) | nixpkgs GHC 9.6 set | `flake.lock` |
+| Nix / hermetic build (the **shipped** artifact) | nixpkgs GHC 9.10 set | `flake.lock` |
 | `cabal` (dev shell + the CI gate) | Hackage | `index-state:` in `cabal.project` + `cabal.project.freeze` |
 
 `callCabal2nix` does **not** read `cabal.project` / `cabal.project.freeze`, so the
@@ -222,7 +222,7 @@ regression versus the PR base, within a 1% threshold) and `codecov/patch`
 the project status stays on no-regression so the baseline ratchets up as
 well-covered changes land). Both knobs live in [`codecov.yml`](codecov.yml).
 
-**References:** [testcontainers](https://hackage.haskell.org/package/testcontainers) (Haskell, GHC 9.6-compatible) · [ministack](https://github.com/ministackorg/ministack) (local AWS emulator, image `ministackorg/ministack`, port 4566) · [Pub/Sub emulator](https://cloud.google.com/pubsub/docs/emulator) (local GCP emulator, default port 8085).
+**References:** [testcontainers](https://hackage.haskell.org/package/testcontainers) (Haskell, GHC 9.10-compatible) · [ministack](https://github.com/ministackorg/ministack) (local AWS emulator, image `ministackorg/ministack`, port 4566) · [Pub/Sub emulator](https://cloud.google.com/pubsub/docs/emulator) (local GCP emulator, default port 8085).
 
 ---
 

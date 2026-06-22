@@ -2,6 +2,7 @@
 
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/AlexaDeWit/Ecluse/badge)](https://scorecard.dev/viewer/?uri=github.com/AlexaDeWit/Ecluse)
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/13335/badge)](https://www.bestpractices.dev/projects/13335)
+[![codecov](https://codecov.io/gh/AlexaDeWit/Ecluse/branch/main/graph/badge.svg?token=1TWB5HBQ0S)](https://codecov.io/gh/AlexaDeWit/Ecluse)
 
 ![Écluse — a supply-chain resilience proxy for package registries](docs/social-preview.png)
 
@@ -68,7 +69,7 @@ start follows.
 ### Prerequisites
 
 **[Nix](https://nixos.org/) with flakes enabled is a hard dependency.** The whole
-toolchain — GHC 9.6, Cabal, fourmolu, hlint, Semgrep — comes from the dev shell,
+toolchain — GHC 9.10, Cabal, fourmolu, hlint, Semgrep — comes from the dev shell,
 pinned by `flake.lock`. There is no supported system-level build: without Nix
 you're on your own to reproduce the exact toolchain by hand, which is a long crawl
 through the desert. Just install Nix.
@@ -115,4 +116,4 @@ for details.
 | `src/`      | Library — all business logic                                                                                             |
 | `test/`     | Unit and integration tests                                                                                               |
 | `docs/`     | Architecture and design documents                                                                                        |
-| `flake.nix` | Nix dev shell (GHC 9.6, cabal, HLS, ghcid) **and** the package build (`nix build`) + hermetic checks (`nix flake check`) |
+| `flake.nix` | Nix dev shell (GHC 9.10, cabal, HLS, ghcid) **and** the package build (`nix build`) + hermetic checks (`nix flake check`) |

@@ -1,9 +1,14 @@
 # Fourmolu configuration — the single source of truth for Haskell formatting.
 #
-# These values are fourmolu 0.14's defaults, pinned explicitly so that (a) the
-# formatting rules are legible to newcomers without consulting fourmolu's docs,
-# and (b) the layout cannot drift if the tool's defaults change in a future
-# version. The dev shell pins fourmolu itself via flake.lock.
+# Every value is set explicitly so that (a) the formatting rules are legible to
+# newcomers without consulting fourmolu's docs, and (b) the layout cannot drift
+# if the tool's defaults change in a future version. The dev shell pins fourmolu
+# itself via flake.lock (currently 0.19.x on the nixos-26.05 base). NOTE: 0.19
+# reads `haddock-style: multi-line` more strictly than 0.14 did — it reflows a
+# wrapped, multi-line `-- |`/`-- ^` Haddock into a `{- | … -}` block (single-line
+# `-- |` is untouched). That matches HADDOCK.md's "blocks for longer docs", so we
+# keep `multi-line`; `single-line` would instead rewrite the intentional `{- | -}`
+# block comments and churns far more.
 #
 # Do not hand-format Haskell; run `make format` (writes) or `make format-check`
 # (the gating check). See STYLE.md → "Formatting".

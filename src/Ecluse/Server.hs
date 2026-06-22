@@ -19,9 +19,9 @@ The classified 'Route' renders through the error model
 ("Ecluse.Server.Response"): @\/-\/ping@ is answered locally with @200 {}@,
 @\/-\/v1\/search@ is @501@ (search is not an install path), and anything
 unrecognised is @404@ — deny by default at the routing layer. The
-package\/artifact routes ('Packument', 'Tarball') resolve to the fetch → rules →
-serve pipeline; until that pipeline is wired they return an explicit
-@501 Not Implemented@, never a fabricated success.
+package\/artifact routes ('Packument', 'Tarball') are recognised but not served
+here: they return an explicit @501 Not Implemented@ rather than a fabricated
+success, since their fetch → rules → serve pipeline lives outside this module.
 
 Cross-cutting concerns are applied as middleware composed around the
 'Application' (see @docs\/architecture\/web-layer.md@ → "Middleware"): a
@@ -64,16 +64,17 @@ import Ecluse.Server.Route (Route (..), classify)
 {- | The server's own settings — the values the 'Application' and 'runServer'
 need that the composition-root 'Env' does not (yet) carry: the listen port, the
 served mounts, and the request-body cap. Backend selection and the resolved mount
-map are a later composition-root concern; this is the minimal shape the web layer
-needs to route.
+map are a composition-root concern; this is the minimal shape the web layer needs
+to route.
 -}
 data ServerConfig = ServerConfig
     { scPort :: Int
     -- ^ The TCP port @warp@ listens on.
     , scMounts :: [Mount]
-    -- ^ The mounts served, tried in order; the first whose prefix matches the
-    -- request's leading segment wins. A single-mount deployment is the
-    -- one-entry case at the root ('rootMount').
+    {- ^ The mounts served, tried in order; the first whose prefix matches the
+    request's leading segment wins. A single-mount deployment is the
+    one-entry case at the root ('rootMount').
+    -}
     , scSizeLimit :: RequestSizeLimit
     -- ^ The defensive cap on request-body size.
     }
@@ -191,8 +192,9 @@ firstJust f = foldr (\x acc -> f x <|> acc) Nothing
 -- ── route rendering ──────────────────────────────────────────────────────────
 
 {- | Render a classified 'Route' to a response. @\/-\/ping@ is answered locally;
-@\/-\/v1\/search@ is @501@ with a pointer message; a package or artifact route
-resolves to the (not-yet-wired) serve pipeline; anything unrecognised is @404@.
+@\/-\/v1\/search@ is @501@ with a pointer message; a package or artifact route is
+recognised but returns @501@ (its serve pipeline lives outside this module);
+anything unrecognised is @404@.
 -}
 route :: Env -> Route -> Response
 route _env = \case
@@ -221,9 +223,9 @@ searchUnsupported =
         status501
         (denialBody Nothing "search is not supported by this proxy; use the public registry's website to discover packages")
 
-{- | A package or artifact route whose serve pipeline is not yet wired:
-@501 Not Implemented@ with an explicit message, rather than a fabricated @200@.
-The fetch → rules → serve body is filled in by the request-pipeline slices.
+{- | A recognised package or artifact route that is not served here: @501 Not
+Implemented@ with an explicit message, rather than a fabricated @200@. The
+fetch → rules → serve pipeline lives outside this module.
 -}
 notYetServed :: Response
 notYetServed =

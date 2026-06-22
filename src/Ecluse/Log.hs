@@ -78,8 +78,9 @@ type rather than a 'Bool' so each case names its intent and a new shape is a new
 constructor, not a second flag.
 -}
 data LogFormat
-    = -- | One compact JSON object per line to stdout (JSONL) — the in-container
-      -- default a log collector's stdout JSON parsing consumes.
+    = {- | One compact JSON object per line to stdout (JSONL) — the in-container
+      default a log collector's stdout JSON parsing consumes.
+      -}
       JsonLog
     | -- | The human-readable bracketed form, for local development.
       ConsoleLog

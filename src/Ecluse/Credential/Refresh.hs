@@ -63,8 +63,9 @@ reached only on the expired-token path — and, because credentials are
 mirror-write only, never on the client serve path (see the module header).
 -}
 data CredentialError
-    = -- | The token has expired and the mint circuit breaker is open, so no mint
-      -- is attempted; the caller must back off and retry later.
+    = {- | The token has expired and the mint circuit breaker is open, so no mint
+      is attempted; the caller must back off and retry later.
+      -}
       BreakerOpen
     deriving stock (Eq, Show)
 
@@ -77,27 +78,33 @@ knobs with sensible defaults in 'defaultRefreshConfig'.
 -}
 data RefreshConfig = RefreshConfig
     { rcMint :: IO AuthToken
-    -- ^ The per-cloud token mint — the __only__ part that touches a network. A
-    -- backend supplies just this leaf; everything else is cloud-agnostic.
+    {- ^ The per-cloud token mint — the __only__ part that touches a network. A
+    backend supplies just this leaf; everything else is cloud-agnostic.
+    -}
     , rcClock :: IO UTCTime
-    -- ^ The clock the policy reads. Injected so refresh timing is testable
-    -- without real time passing.
+    {- ^ The clock the policy reads. Injected so refresh timing is testable
+    without real time passing.
+    -}
     , rcJitter :: IO Double
-    -- ^ A jitter fraction in @[0, 1)@, sampled once per token, that pulls the
-    -- refresh instant /earlier/ to desynchronise a cohort of instances so they
-    -- do not all refresh at the same moment.
+    {- ^ A jitter fraction in @[0, 1)@, sampled once per token, that pulls the
+    refresh instant /earlier/ to desynchronise a cohort of instances so they
+    do not all refresh at the same moment.
+    -}
     , rcRefreshAt :: Double
-    -- ^ The fraction of a token's lifetime at which to refresh, before jitter
-    -- (the ~80% point). Clamped into @[0, 1]@.
+    {- ^ The fraction of a token's lifetime at which to refresh, before jitter
+    (the ~80% point). Clamped into @[0, 1]@.
+    -}
     , rcRefreshFloor :: NominalDiffTime
-    -- ^ A hard floor: never schedule the refresh later than this many seconds
-    -- before expiry, so a token with a very short lifetime is still refreshed
-    -- ahead of its deadline rather than served right up to it.
+    {- ^ A hard floor: never schedule the refresh later than this many seconds
+    before expiry, so a token with a very short lifetime is still refreshed
+    ahead of its deadline rather than served right up to it.
+    -}
     , rcBreakerThreshold :: Int
     -- ^ Consecutive mint failures that trip the circuit breaker.
     , rcBreakerCooldown :: NominalDiffTime
-    -- ^ How long the breaker stays open (fast-failing mints) before a single
-    -- half-open probe is allowed to test recovery.
+    {- ^ How long the breaker stays open (fast-failing mints) before a single
+    half-open probe is allowed to test recovery.
+    -}
     }
 
 {- | Sensible defaults for the policy knobs. The caller must still supply the
@@ -142,8 +149,9 @@ data CacheState = CacheState
     { csToken :: AuthToken
     -- ^ The token currently served.
     , csRefreshDue :: Maybe UTCTime
-    -- ^ When a proactive background refresh should fire; 'Nothing' for a token
-    -- with no expiry (it never refreshes).
+    {- ^ When a proactive background refresh should fire; 'Nothing' for a token
+    with no expiry (it never refreshes).
+    -}
     , csRefreshing :: Bool
     -- ^ Whether a mint is in flight (the single-flight flag).
     , csBreaker :: Breaker
@@ -196,7 +204,6 @@ serve cfg stateVar = do
                     else pure (ServeCached (csToken st))
             else -- Expired. If a refresh is already in flight, wait for it (STM
             -- retry) rather than launching a second mint, then re-decide.
-
                 if csRefreshing st
                     then retry
                     else do

@@ -185,13 +185,15 @@ __only__ for the mirror-target write; reads forward the client's credential
 (private upstream) or are anonymous (public upstream).
 -}
 data CredentialBackend
-    = -- | AWS CodeArtifact: a short-lived token minted via @GetAuthorizationToken@
-      -- (wire name @"codeartifact"@).
+    = {- | AWS CodeArtifact: a short-lived token minted via @GetAuthorizationToken@
+      (wire name @"codeartifact"@).
+      -}
       CodeArtifactCredential
     | -- | A fixed, long-lived token supplied out of band (wire name @"static"@).
       StaticCredential
-    | -- | GCP Application Default Credentials: an OAuth2 access token (wire name
-      -- @"adc"@).
+    | {- | GCP Application Default Credentials: an OAuth2 access token (wire name
+      @"adc"@).
+      -}
       AdcCredential
     deriving stock (Eq, Show)
 
@@ -241,8 +243,9 @@ data EnvConfig = EnvConfig
     , cfgPrivateUpstream :: Url
     -- ^ The private upstream registry (@PRIVATE_UPSTREAM_URL@, required).
     , cfgPublicUpstream :: Url
-    -- ^ The public upstream registry (@PUBLIC_UPSTREAM_URL@, default
-    -- @https:\/\/registry.npmjs.org@).
+    {- ^ The public upstream registry (@PUBLIC_UPSTREAM_URL@, default
+    @https:\/\/registry.npmjs.org@).
+    -}
     , cfgMirrorTarget :: Url
     -- ^ Where approved packages are mirrored to (@MIRROR_TARGET_URL@, required).
     , cfgQueueBackend :: QueueBackend
@@ -252,20 +255,24 @@ data EnvConfig = EnvConfig
     , cfgAwsRegion :: Maybe Text
     -- ^ The AWS region for SQS\/CodeArtifact (@AWS_REGION@, AWS backends only).
     , cfgGoogleProject :: Maybe Text
-    -- ^ The GCP project for Pub\/Sub\/Artifact Registry (@GOOGLE_CLOUD_PROJECT@,
-    -- GCP backends only).
+    {- ^ The GCP project for Pub\/Sub\/Artifact Registry (@GOOGLE_CLOUD_PROJECT@,
+    GCP backends only).
+    -}
     , cfgAuthToken :: Maybe Text
-    -- ^ The inbound client auth token clients must present (@PROXY_AUTH_TOKEN@);
-    -- 'Nothing' leaves the proxy open to the network layer.
+    {- ^ The inbound client auth token clients must present (@PROXY_AUTH_TOKEN@);
+    'Nothing' leaves the proxy open to the network layer.
+    -}
     , cfgHelpMessage :: Maybe Text
     -- ^ A custom string appended to every denial message (@PROXY_HELP_MESSAGE@).
     , cfgCveSyncInterval :: NominalDiffTime
-    -- ^ How often the advisory index is refreshed (@CVE_SYNC_INTERVAL_SECONDS@,
-    -- default 3600).
+    {- ^ How often the advisory index is refreshed (@CVE_SYNC_INTERVAL_SECONDS@,
+    default 3600).
+    -}
     , cfgLogFormat :: LogFormat
-    -- ^ The structured-log output shape (@PROXY_LOG_FORMAT@, default @json@): the
-    -- one-line JSONL stream for a container, or the human-readable console form
-    -- for development (see "Ecluse.Log").
+    {- ^ The structured-log output shape (@PROXY_LOG_FORMAT@, default @json@): the
+    one-line JSONL stream for a container, or the human-readable console form
+    for development (see "Ecluse.Log").
+    -}
     }
     deriving stock (Eq, Show)
 
@@ -394,8 +401,9 @@ client's credential or are anonymous (see
 -}
 data RegistryTuple = RegistryTuple
     { regPrivateUpstream :: Url
-    -- ^ The authoritative, already-vetted upstream. Reads forward the __client's__
-    -- credential; Écluse holds none for it.
+    {- ^ The authoritative, already-vetted upstream. Reads forward the __client's__
+    credential; Écluse holds none for it.
+    -}
     , regPublicUpstream :: Url
     -- ^ The public upstream, read anonymously and gated by the rules.
     , regMirrorTarget :: MirrorTarget
@@ -450,8 +458,9 @@ policy.
 -}
 newtype RulePolicy = RulePolicy
     { policyRules :: Map Text PrecededRule
-    -- ^ The rules in force, keyed by the name they were given in config (or the
-    -- built-in name, for a default).
+    {- ^ The rules in force, keyed by the name they were given in config (or the
+    built-in name, for a default).
+    -}
     }
     deriving stock (Eq, Show)
 
@@ -475,19 +484,23 @@ __fail-loud__ rejection: a policy that does not resolve cleanly is a startup
 failure, never a silently mis-enforced policy.
 -}
 data PolicyError
-    = -- | A new (non-default) name carried no @type@, so it cannot stand as a
-      -- rule. Carries the offending name.
+    = {- | A new (non-default) name carried no @type@, so it cannot stand as a
+      rule. Carries the offending name.
+      -}
       MissingRuleType Text
-    | -- | A @type@ was named that is not a known, decodable rule. Carries the name
-      -- and the unknown type. A misspelled deny would otherwise vanish and stop
-      -- blocking; a misspelled allow would over-deny.
+    | {- | A @type@ was named that is not a known, decodable rule. Carries the name
+      and the unknown type. A misspelled deny would otherwise vanish and stop
+      blocking; a misspelled allow would over-deny.
+      -}
       UnknownRuleType Text Text
-    | -- | A field the named rule type does not accept (e.g. an @ageSeconds@ on a
-      -- deny rule), or a required value field missing. Carries the name and a
-      -- reason.
+    | {- | A field the named rule type does not accept (e.g. an @ageSeconds@ on a
+      deny rule), or a required value field missing. Carries the name and a
+      reason.
+      -}
       MalformedRule Text Text
-    | -- | An @"enabled": false@ suppression named a rule the default policy does
-      -- not define, so there is nothing to suppress. Carries the name.
+    | {- | An @"enabled": false@ suppression named a rule the default policy does
+      not define, so there is nothing to suppress. Carries the name.
+      -}
       SuppressUnknownRule Text
     deriving stock (Eq, Show)
 
@@ -626,8 +639,9 @@ it. Mounts hold the document's per-mount registry shape; their prefixes key the
 -}
 data ConfigDoc = ConfigDoc
     { docMounts :: Map MountPrefix MountDoc
-    -- ^ The mounts declared in the document, keyed by prefix. Empty when the
-    -- document carries only a rule policy.
+    {- ^ The mounts declared in the document, keyed by prefix. Empty when the
+    document carries only a rule policy.
+    -}
     , docRules :: RulePatch
     -- ^ The top-level rule-policy patch that applies to every mount.
     }
@@ -804,8 +818,9 @@ data Config = Config
     { configEnv :: EnvConfig
     -- ^ The process-level environment layer.
     , configMounts :: MountMap
-    -- ^ Every served mount, keyed by normalised prefix, each with a resolved
-    -- policy.
+    {- ^ Every served mount, keyed by normalised prefix, each with a resolved
+    policy.
+    -}
     }
     deriving stock (Eq, Show)
 
