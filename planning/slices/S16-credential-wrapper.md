@@ -12,7 +12,7 @@ pr: null
 
 # S16 — `CredentialProvider` generic wrapper + static leaf
 
-> Milestone **M4** · depends on: [S02](S02-seam-interfaces.md) · tier: unit
+> Milestone **M4** · depends on: [S02](S02-handle-interfaces.md) · tier: unit
 
 **Goal.** The interesting part of outbound auth is the refresh/cache/expiry/
 concurrency policy, not the cloud call. Build the generic wrapper that holds that

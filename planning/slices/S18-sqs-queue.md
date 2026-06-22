@@ -14,7 +14,7 @@ pr: null
 
 # S18 — SQS `MirrorQueue` backend
 
-> Milestone **M4** · depends on: [S02](S02-seam-interfaces.md) · tier: integration
+> Milestone **M4** · depends on: [S02](S02-handle-interfaces.md) · tier: integration
 
 **Goal.** The AWS queue backend behind the `MirrorQueue` handle:
 `SendMessage`/`ReceiveMessage`(+visibility timeout)/`DeleteMessage` over

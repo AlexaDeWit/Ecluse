@@ -234,7 +234,7 @@ envLayerSpec = describe "parseEnvPure" $ do
         rendered `shouldSatisfy` ("C: boom" `isInfix`)
 
     it "reads the live process environment via the IO entry point" $ do
-        -- 'parseEnv' is the thin IO seam over the pure parser; set the required
+        -- 'parseEnv' is the thin IO wrapper over the pure parser; set the required
         -- variables in-process, parse, and clean up so other examples are unaffected.
         traverse_ (uncurry setEnv) minimalEnv
         result <- parseEnv

@@ -15,7 +15,7 @@ pr: null
 
 # S08 — npm data plane: fetch + publish
 
-> Milestone **M1** · depends on: [S02](S02-seam-interfaces.md), [S07](S07-npm-projection.md) · tier: unit, smoke
+> Milestone **M1** · depends on: [S02](S02-handle-interfaces.md), [S07](S07-npm-projection.md) · tier: unit, smoke
 
 **Goal.** Implement the effectful `RegistryClient` fields over `http-client` (the
 data plane, never `amazonka`): `fetchMetadata`, `fetchArtifact`, `publishArtifact`,

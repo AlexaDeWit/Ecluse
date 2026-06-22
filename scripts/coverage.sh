@@ -61,11 +61,11 @@ hpc-codecov "${mix_args[@]}" \
 # with genuinely nothing to cover yet — an entry in `unscoped` below. See
 # CONTRIBUTING.md -> "Coverage".
 #
-# Intentionally unscoped: pure seams/types with no executable logic yet. Each
+# Intentionally unscoped: pure Handles/types with no executable logic yet. Each
 # entry states why and when it returns, so this stays a reviewed decision and not
 # a silent escape hatch. Paths use the ./src/... form the report emits.
 unscoped=(
-  # pure protocol seam (#16): the RegistryClient record + error newtypes, no
+  # pure protocol Handle (#16): the RegistryClient record + error newtypes, no
   # logic. Remove when S06 (npm-wire) adds real fetch/parse code and tests that
   # link it.
   ./src/Ecluse/Registry.hs

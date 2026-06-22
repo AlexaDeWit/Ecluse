@@ -102,7 +102,7 @@ be **merged** before it can start. Tier = the test suite(s) it owes
 | ID | Slice | Depends on | Tier |
 |----|-------|------------|------|
 | [S01](slices/S01-app-env-scaffold.md) | App/Env scaffold + composition root | S02 | U |
-| [S02](slices/S02-seam-interfaces.md) | Handle interfaces + in-memory doubles | — | U |
+| [S02](slices/S02-handle-interfaces.md) | Handle interfaces + in-memory doubles | — | U |
 | [S03](slices/S03-config-loader.md) | Config model & fail-fast loader | S02, S05 | U |
 | [S04](slices/S04-logging-katip.md) | `katip` logging scaffold (json/console) | S01 | U |
 | [S05](slices/S05-rules-precedence.md) | Rules precedence alignment | — | U |
