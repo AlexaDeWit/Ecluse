@@ -39,7 +39,7 @@ jobs:
       CABAL_DIR: ${{ github.workspace }}/.cabal
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Set up toolchain
         uses: ./.github/actions/setup-toolchain
@@ -86,7 +86,7 @@ jobs:
       CABAL_DIR: ${{ github.workspace }}/.cabal
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Set up toolchain
         uses: ./.github/actions/setup-toolchain
@@ -125,7 +125,7 @@ jobs:
       CABAL_DIR: ${{ github.workspace }}/.cabal
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Set up toolchain
         uses: ./.github/actions/setup-toolchain
@@ -144,7 +144,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Set up toolchain
         uses: ./.github/actions/setup-toolchain
@@ -161,7 +161,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Set up toolchain
         uses: ./.github/actions/setup-toolchain
@@ -183,7 +183,7 @@ jobs:
       CABAL_DIR: ${{ github.workspace }}/.cabal
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Set up toolchain
         uses: ./.github/actions/setup-toolchain
