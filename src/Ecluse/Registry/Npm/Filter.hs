@@ -30,10 +30,13 @@ transform performs no IO.
 that is not approved is removed from both @versions@ and @time@, so a client's
 resolver only ever sees admitted versions (presence in the packument /is/
 availability — see @docs\/research\/reverse-engineering\/npm.md@ §8). It then
-repoints @dist-tags.latest@ to the highest /surviving/ version (by
-'compareVersions'), and __drops__ — never repoints — any other tag that pointed at
-a removed version. The result is coherent: @dist-tags.latest@ is always a key of
-@versions@, and @time@ has an entry for exactly the surviving versions.
+resolves @dist-tags.latest@ with the shared __keep-unless-denied,
+stable-preferring__ rule ('Ecluse.Version.selectLatest'): the upstream @latest@
+is kept untouched as long as it survives, and only repointed — to the highest
+/stable/ survivor — when it was itself denied. Any other tag that pointed at a
+removed version is __dropped__, never repointed. The result is coherent:
+@dist-tags.latest@ is always a key of @versions@, and @time@ has an entry for
+exactly the surviving versions.
 
 When __no version survives__, filtering returns 'NoSurvivors' carrying each
 version's denial 'Decision'; the serve layer maps that to a status (S11\/S14),
@@ -41,7 +44,7 @@ which this slice deliberately does not choose.
 
 This filters a __single public packument__ (the gated set). Combining it with the
 trusted /private/ set is the cross-upstream merge, a separate slice; the @latest@
-repointed here is the highest survivor /within the public set/, not the final
+resolved here is over the survivors /within the public set/, not the final
 @latest@ over the merged union.
 -}
 module Ecluse.Registry.Npm.Filter (
@@ -57,15 +60,14 @@ import Data.Aeson (Value (Object, String))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap (KeyMap)
 import Data.Aeson.KeyMap qualified as KeyMap
-import Data.List (maximumBy)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
 
-import Ecluse.Package (PackageInfo (infoVersions), pkgVersion)
+import Ecluse.Package (PackageInfo (infoDistTags, infoVersions), pkgVersion)
 import Ecluse.Rules (evalRules)
 import Ecluse.Rules.Types (Decision (Approved), EvalContext, PrecededRule)
-import Ecluse.Version (Version, compareVersions)
+import Ecluse.Version (Version, selectLatest, unVersion)
 
 -- ── URL rewriting ─────────────────────────────────────────────────────────────
 
@@ -140,8 +142,9 @@ Choosing that status is __not__ this slice's job (S11\/S14).
 data FilterResult
     = -- | At least one version survived; the coherent, filtered packument body.
       Filtered Value
-    | -- | No version survived; each rejected version's decision, for the serve
-      -- layer to map to a status and a denial body.
+    | {- | No version survived; each rejected version's decision, for the serve
+      layer to map to a status and a denial body.
+      -}
       NoSurvivors [Decision]
     deriving stock (Eq, Show)
 
@@ -158,9 +161,13 @@ simply removed, exactly like a denial, and no transient status is fabricated.)
 When survivors remain the body is returned 'Filtered' with:
 
 * @versions@ and @time@ restricted to the surviving version keys;
-* @dist-tags.latest@ repointed to the highest surviving version by
-  'compareVersions' (a deliberate downgrade — a not-yet-cleared release does not
-  silently remain the default install while older admitted versions exist);
+* @dist-tags.latest@ resolved by 'Ecluse.Version.selectLatest' — kept as the
+  upstream maintainer published it while it survives, and only repointed (to the
+  highest /stable/ survivor) when that chosen @latest@ was itself denied. A
+  surviving @latest@ is never /promoted/ to a higher survivor; repointing a
+  denied @latest@ downward is the deliberate downgrade (a not-yet-cleared release
+  does not silently remain the default install while older admitted versions
+  exist);
 * every other @dist-tags@ entry whose target did not survive __dropped__.
 
 When nothing survives, 'NoSurvivors' carries the per-version decisions.
@@ -184,10 +191,11 @@ filterPackument ctx rules info = \case
         Approved{} -> True
         _ -> False
 
-    -- The surviving versions' parsed 'Version's, for ordering 'latest'. Keyed by
-    -- the same raw string the packument and the decisions use.
-    survivingVersionOf :: Text -> Maybe Version
-    survivingVersionOf raw = pkgVersion <$> Map.lookup raw (infoVersions info)
+    -- The parsed 'Version' a raw key projects to, if that key is present in the
+    -- packument (used both to map surviving keys to 'Version's and to resolve the
+    -- upstream @latest@ tag's target).
+    versionOf :: Text -> Maybe Version
+    versionOf raw = pkgVersion <$> Map.lookup raw (infoVersions info)
 
     -- Restrict @versions@ to the surviving keys, and drop the denied versions
     -- from @time@. @time@ is pruned by /removal/, not /retention/, because it
@@ -202,50 +210,45 @@ filterPackument ctx rules info = \case
       where
         deniedVersions = Set.difference (Map.keysSet (infoVersions info)) survivors
 
-    -- Repoint @dist-tags@: aim @latest@ at the highest survivor; drop any other
-    -- tag pointing at a removed version. A @dist-tags@ that is absent /or/
-    -- present-but-malformed — most commonly JSON @null@, which the projection
-    -- reads as "absent" yet the raw body still carries — is treated as empty, so
-    -- the coherence promise (a resolvable @latest@) holds even for that
-    -- malformed-upstream edge (see npm.md §8); a well-formed object is rebuilt in
-    -- place, preserving its unmodelled tags.
+    -- Resolve @dist-tags.latest@ and drop any other tag pointing at a removed
+    -- version. A @dist-tags@ that is absent /or/ present-but-malformed — most
+    -- commonly JSON @null@, which the projection reads as "absent" yet the raw
+    -- body still carries — is treated as empty, so the coherence promise (a
+    -- resolvable @latest@) holds even for that malformed-upstream edge (see
+    -- npm.md §8); a well-formed object is rebuilt in place, preserving its
+    -- unmodelled tags.
     repairTags :: Set Text -> KeyMap Value -> KeyMap Value
     repairTags survivors o =
-        let highest = highestSurvivor survivors
+        let resolved = unVersion <$> selectLatest chosen (survivingVersions survivors)
             existing = case KeyMap.lookup "dist-tags" o of
                 Just tags@(Object _) -> tags
                 _ -> Object mempty
-         in KeyMap.insert "dist-tags" (rebuildTags survivors highest existing) o
+         in KeyMap.insert "dist-tags" (rebuildTags survivors resolved existing) o
 
-    -- The highest surviving version's raw string, by 'compareVersions'. Every
-    -- survivor is ranked (paired with its parsed 'Version', if any); an
-    -- unparseable version ranks below any parsed one but is still a valid
-    -- fallback when nothing parses. 'Nothing' only for an empty set, which the
-    -- caller has already excluded.
-    highestSurvivor :: Set Text -> Maybe Text
-    highestSurvivor survivors =
-        fst <$> viaNonEmpty (maximumBy compareByVersion) (map rank (toList survivors))
-      where
-        rank raw = (raw, survivingVersionOf raw)
+    -- The upstream @latest@ tag's target as a 'Version': the @latest@ tag's raw
+    -- string (from the projected dist-tags) looked up in @versions@, so a tag
+    -- aimed at a version absent from the packument contributes nothing. This is
+    -- 'selectLatest'\'s @chosen@; it decides /survival/ itself, so this only
+    -- needs the version to be present, not surviving.
+    chosen :: Maybe Version
+    chosen = Map.lookup "latest" (infoDistTags info) >>= versionOf . unVersion
 
-    compareByVersion :: (Text, Maybe Version) -> (Text, Maybe Version) -> Ordering
-    compareByVersion (_, ma) (_, mb) = case (ma, mb) of
-        (Just a, Just b) -> fromMaybe EQ (compareVersions a b)
-        (Just _, Nothing) -> GT
-        (Nothing, Just _) -> LT
-        (Nothing, Nothing) -> EQ
+    -- The surviving versions' parsed 'Version's — 'selectLatest'\'s @survivors@.
+    survivingVersions :: Set Text -> [Version]
+    survivingVersions = mapMaybe versionOf . toList
 
-{- | Rebuild a @dist-tags@ object: point @latest@ at @highest@ (the raw version
-string of the highest survivor) and keep every other tag only if its target
-version still survives. A tag dropped here is one that pointed at a removed
-version — repointing @beta@ at a stable release would misrepresent it.
+{- | Rebuild a @dist-tags@ object: point @latest@ at @resolved@ (the raw version
+string 'selectLatest' resolved — the kept upstream @latest@, or its downward
+repoint) and keep every other tag only if its target version still survives. A
+tag dropped here is one that pointed at a removed version — repointing @beta@ at a
+stable release would misrepresent it.
 -}
 rebuildTags :: Set Text -> Maybe Text -> Value -> Value
-rebuildTags survivors highest = \case
+rebuildTags survivors resolved = \case
     Object tags ->
         Object
             ( KeyMap.filterWithKey keepTag tags
-                & maybe id (KeyMap.insert "latest" . String) highest
+                & maybe id (KeyMap.insert "latest" . String) resolved
             )
     -- @dist-tags@ should be an object; an unexpected shape is left as-is rather
     -- than fabricated, so nothing unmodelled is dropped.

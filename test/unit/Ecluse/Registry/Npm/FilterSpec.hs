@@ -123,9 +123,17 @@ filterSpec = describe "filterPackument" $ do
         Map.keys (versionsOf filtered) `shouldBe` ["1.0.0"]
         Map.keys (timeKeysOf filtered) `shouldBe` ["1.0.0"]
 
-    it "repoints latest to the highest surviving version (downgrade)" $ do
-        -- latest upstream points at the denied 2.0.0; it must drop to 1.0.0.
+    it "repoints latest down to a surviving version when the chosen latest is denied" $ do
+        -- latest upstream points at the denied 2.0.0; keep-unless-denied repoints
+        -- it down to the surviving 1.0.0.
         filtered <- filterTo twoVersions
+        distTag "latest" filtered `shouldBe` Just "1.0.0"
+
+    it "keeps a surviving upstream latest rather than promoting a higher survivor" $ do
+        -- The whole point of keep-unless-denied: upstream latest is 1.0.0 and both
+        -- 1.0.0 and the higher 2.0.0 survive, so latest stays 1.0.0 — it is never
+        -- promoted to the higher surviving version.
+        filtered <- filterTo latestKeptBelowHigherSurvivor
         distTag "latest" filtered `shouldBe` Just "1.0.0"
 
     it "drops a stale tag that pointed at a removed version" $ do
@@ -304,6 +312,22 @@ twoVersions =
         , versionLit "thing" "2.0.0" "https://upstream.test/thing/-/thing-2.0.0.tgz" []
         ]
         [("1.0.0", publishedDaysAgo 30), ("2.0.0", publishedDaysAgo 1)]
+
+{- | Both versions survive, and @latest@ aims at the /lower/ 1.0.0 (the
+maintainer's chosen release). Under keep-unless-denied, @latest@ must stay 1.0.0
+even though the higher 2.0.0 also survives — a surviving @latest@ is never
+promoted to the higher survivor.
+-}
+latestKeptBelowHigherSurvivor :: ByteString
+latestKeptBelowHigherSurvivor =
+    encodePackument
+        "thing"
+        Nothing
+        [("latest", "1.0.0")]
+        [ versionLit "thing" "1.0.0" "https://upstream.test/thing/-/thing-1.0.0.tgz" []
+        , versionLit "thing" "2.0.0" "https://upstream.test/thing/-/thing-2.0.0.tgz" []
+        ]
+        [("1.0.0", publishedDaysAgo 30), ("2.0.0", publishedDaysAgo 30)]
 
 -- | As 'twoVersions', but with a `beta` tag also aimed at the denied 2.0.0.
 twoVersionsWithBeta :: ByteString
