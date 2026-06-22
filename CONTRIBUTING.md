@@ -92,22 +92,12 @@ project-specific pattern below.
   smearing SDK or provider selection across call sites. See
   [Cloud Backends → Seams](docs/architecture/cloud-backends.md#seams-records-of-functions).
 
-Current layout:
-
-| Module | Holds |
-|--------|-------|
-| `Ecluse.Ecosystem` | The ecosystem tag (`Ecosystem`), shared by the package vocabulary, the version engine, and the registry adapters. It lives alone to break the `Package`↔`Version` import cycle (STYLE.md §4.3). |
-| `Ecluse.Version` | Version identity and ordering: `Version`, `VersionKey`, `mkVersion` / `compareVersions` / `parseVersionKey`, and the (private) per-ecosystem parsers — semver, PEP 440, `Gem::Version`. |
-| `Ecluse.Package` | The ecosystem-agnostic package vocabulary: `Scope`, `PackageName`, the normalised signals (`CodeExecSignal`, `Trust`, `Availability`), `Artifact`, `Person`, `Dependency`, and `PackageDetails` (which embeds a `Version`), with their smart constructors and renderers. |
-| `Ecluse.Rules.Types` | Rule data types: `Rule`, `EvalContext`, `RuleOutcome`, `Decision`. |
-| `Ecluse.Rules` | Rule evaluation and decision rendering: `evalRule`, `evalRules`, `renderDecision`, `renderDuration`. |
-| `Ecluse.Server.Route` | The pure npm request router: `classify` maps a decoded request path to a `Route`, deny-by-default (an unrecognised path is `Unsupported`). |
-| `Ecluse.Registry` | The registry-protocol seam (`RegistryClient`) — the auth-free fetch / publish / parse interface; one npm client serves every cloud. |
-| `Ecluse.Registry.Npm.Wire` | The npm wire JSON types and their lenient `FromJSON` decoders — the faithful raw-wire half of the npm protocol boundary. |
-| `Ecluse.Registry.Npm.Project` | Projection of the npm wire types onto the domain model (`PackageInfo` / `PackageDetails`); pure and total — the execution half of parse-don't-validate. |
-| `Ecluse.Queue` | The mirror-queue seam (`MirrorQueue`, `MirrorJob`) plus `newInMemoryQueue` — the demand-driven mirror-job hand-off to the worker. |
-| `Ecluse.Credential` | The outbound-credential seam (`CredentialProvider`, `AuthToken`, `Secret`) plus `staticProvider` — mints the mirror-write token. |
-| `Ecluse.Security` | Pure outbound / response guards: the SSRF allowlist + internal-range block, safe upstream-URL derivation, and the body-size / version-count / nesting limits. |
+For the **current module list**, read the module index of the
+[published Haddock](https://alexadewit.github.io/Ecluse/) — each module's one-line
+summary is its header — and the root [`Ecluse`](src/Ecluse.hs) module's "How the
+code is organized" synopsis for the narrative grouping. Both live with the code
+and update with it, so they cannot drift; this guide deliberately does not
+duplicate the list here.
 | `Ecluse.Env` | The composition root (`Env`): holds the three seams plus the shared HTTP `Manager`; the single place a backend is selected. |
 | `Ecluse.App` | The effectful orchestration monad (`App = ReaderT Env IO`) for the worker / service layer. |
 | `Ecluse` | The library entry points (`run`, `runServer`, `runWorker`) and the unconfigured default seams; the project synopsis. |

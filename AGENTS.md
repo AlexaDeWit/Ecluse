@@ -28,7 +28,7 @@ docs/      — architecture and design documents
 - Separate concerns: application wiring in `app/`, logic in `src/`, tests in `test/`.
 - Tests mirror the library module hierarchy (e.g. `src/Foo/Bar.hs` → `test/Foo/BarSpec.hs`).
 - Keep `app/Main.hs` thin — it should only parse config and call into the library.
-- **Keep modules fit-to-purpose with idiomatic namespacing.** Organize vertically (a type lives with the functions on it), one `Ecluse.<Area>` namespace per area, and split a `.Types` module only when it earns it. The full principles are in [`STYLE.md`](STYLE.md) → "Module organization"; the current concrete layout is in [`CONTRIBUTING.md`](CONTRIBUTING.md) → "Codebase Layout".
+- **Keep modules fit-to-purpose with idiomatic namespacing.** Organize vertically (a type lives with the functions on it), one `Ecluse.<Area>` namespace per area, and split a `.Types` module only when it earns it. The full principles are in [`STYLE.md`](STYLE.md) → "Module organization"; the current concrete module list is the published Haddock module index, and [`CONTRIBUTING.md`](CONTRIBUTING.md) → "Codebase Layout" records the project-specific layout patterns.
 
 ## Build & Tooling
 

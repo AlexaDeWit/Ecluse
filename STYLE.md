@@ -198,8 +198,10 @@ weakening the committed flags.
 ## 4. Module organization, namespacing, and exports
 
 This section is the durable how-to for *structuring* modules. The *current*
-concrete module list lives in `CONTRIBUTING.md` → "Codebase Layout"; the
-principles below are what decide where new code goes.
+concrete module list is the module index of the published Haddock (and the root
+`Ecluse` synopsis); `CONTRIBUTING.md` → "Codebase Layout" records the
+project-specific layout patterns. The principles below are what decide where new
+code goes.
 
 ### 4.1 Organize vertically — a type lives with the functions on it
 
