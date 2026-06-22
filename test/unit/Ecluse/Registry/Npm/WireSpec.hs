@@ -1,10 +1,30 @@
+-- The totality properties below are polymorphic in the decoded type @a@, which
+-- appears only under a type application at each call site (e.g.
+-- @valueDecodeIsTotal \@Person@); that is exactly what AllowAmbiguousTypes is for.
+{-# LANGUAGE AllowAmbiguousTypes #-}
+
 module Ecluse.Registry.Npm.WireSpec (spec) where
 
-import Data.Aeson (FromJSON, eitherDecode, eitherDecodeStrict)
+import Data.Aeson (
+    FromJSON,
+    Result (Error, Success),
+    Value (Array, Bool, Null, Number, Object, String),
+    eitherDecode,
+    eitherDecodeStrict,
+    fromJSON,
+ )
+import Data.Aeson.Key qualified as Key
+import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Map.Strict qualified as Map
 import Data.Time (UTCTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
+import Data.Vector qualified as V
+import Hedgehog (PropertyT, annotateShow, forAll)
+import Hedgehog qualified as H
+import Hedgehog.Gen qualified as Gen
+import Hedgehog.Range qualified as Range
 import Test.Hspec (Expectation, Spec, describe, it, shouldBe)
+import Test.Hspec.Hedgehog (hedgehog)
 
 import Ecluse.Registry.Npm.Wire
 
@@ -30,6 +50,7 @@ spec = do
     lenientScalarSpec
     errorResponseSpec
     jsonListSpec
+    totalitySpec
 
 -- ── abbreviated packument ────────────────────────────────────────────────────
 
@@ -402,6 +423,187 @@ jsonListSpec = describe "decoding JSON arrays of the wire types" $ do
                        , ErrorObject ErrorBody{errMessage = Just "nope", errError = Nothing}
                        ]
         map errorMessage errs `shouldBe` [Just "version not found", Just "Not found", Just "nope"]
+
+-- ── decoder totality (the fuzz target) ───────────────────────────────────────
+
+{- | The wire decoders eat __untrusted__ upstream JSON, so every one must be
+__total__: an arbitrary input may never make a decoder bottom (throw, or hit a
+partial function); it must always return a typed 'Success'\/'Error' (for a
+'Value') or a 'Right'\/'Left' (for raw bytes). These generative properties feed
+each 'FromJSON' instance a bounded-but-arbitrary 'Value' and a run of arbitrary
+bytes and assert the result is fully evaluable without an exception — the
+totality half of /parse, don't validate/ that the fixture suite above only spot-
+checks. (The companion projection-layer properties live in
+"Ecluse.Registry.Npm.ProjectSpec".)
+-}
+totalitySpec :: Spec
+totalitySpec = describe "decoder totality (arbitrary input never bottoms)" $ do
+    -- Each decoder must be total over an arbitrary 'Value': the result is a
+    -- typed Success or a typed Error, never ⊥. We force the whole decoded
+    -- structure (via its 'Show' rendering) so a partial function anywhere in it
+    -- would surface as a caught exception rather than slipping past in a thunk.
+    describe "every wire decoder is total over an arbitrary Value" $ do
+        it "Person" $ hedgehog (valueDecodeIsTotal @Person)
+        it "Repository" $ hedgehog (valueDecodeIsTotal @Repository)
+        it "Bugs" $ hedgehog (valueDecodeIsTotal @Bugs)
+        it "License" $ hedgehog (valueDecodeIsTotal @License)
+        it "Signature" $ hedgehog (valueDecodeIsTotal @Signature)
+        it "Dist" $ hedgehog (valueDecodeIsTotal @Dist)
+        it "VersionManifest" $ hedgehog (valueDecodeIsTotal @VersionManifest)
+        it "Packument" $ hedgehog (valueDecodeIsTotal @Packument)
+        it "AbbreviatedPackument" $ hedgehog (valueDecodeIsTotal @AbbreviatedPackument)
+        it "ErrorResponse" $ hedgehog (valueDecodeIsTotal @ErrorResponse)
+
+    -- The bytes-level entry ('eitherDecodeStrict') must be total over arbitrary
+    -- bytes too: garbage decodes to a typed 'Left', never a crash.
+    describe "every bytes-level decode is total over arbitrary bytes" $ do
+        it "Person" $ hedgehog (bytesDecodeIsTotal @Person)
+        it "Dist" $ hedgehog (bytesDecodeIsTotal @Dist)
+        it "VersionManifest" $ hedgehog (bytesDecodeIsTotal @VersionManifest)
+        it "Packument" $ hedgehog (bytesDecodeIsTotal @Packument)
+        it "AbbreviatedPackument" $ hedgehog (bytesDecodeIsTotal @AbbreviatedPackument)
+        it "ErrorResponse" $ hedgehog (bytesDecodeIsTotal @ErrorResponse)
+
+    -- For the permissive string-or-object scalars the generator must reach BOTH
+    -- the success and the failure arm, so the totality check above is not
+    -- vacuously all-failures. 'H.cover' fails the property if either arm is
+    -- under-sampled.
+    describe "the Value generator reaches both arms of a permissive decoder" $ do
+        it "Person decodes both ways" $ hedgehog (valueDecodeCoversBothArms @Person)
+        it "Repository decodes both ways" $ hedgehog (valueDecodeCoversBothArms @Repository)
+        it "Bugs decodes both ways" $ hedgehog (valueDecodeCoversBothArms @Bugs)
+        it "License decodes both ways" $ hedgehog (valueDecodeCoversBothArms @License)
+        it "ErrorResponse decodes both ways" $ hedgehog (valueDecodeCoversBothArms @ErrorResponse)
+
+    -- A raw-fidelity invariant the fixture suite implies: a successfully decoded
+    -- 'ErrorString' carries the generated string __verbatim__. This proves a
+    -- generated success is a genuine round-trip, not a coincidental accept.
+    it "a String that decodes as an ErrorResponse is captured verbatim" $
+        hedgehog $ do
+            s <- forAll (Gen.text (Range.linear 0 12) Gen.unicode)
+            case fromJSON (String s) :: Result ErrorResponse of
+                Success (ErrorString captured) -> captured H.=== s
+                other -> annotateShow other >> H.failure
+
+-- ── totality helpers ─────────────────────────────────────────────────────────
+
+{- | Assert a 'FromJSON' decoder is __total__ over an arbitrary 'Value': feed it a
+bounded-but-arbitrary value and fully evaluate the typed 'Result', so a bottom
+anywhere in the decoded structure surfaces as a caught exception ('H.eval' runs
+the forcing in pure code and turns any thrown bottom into a test failure) rather
+than a pass. Forcing the 'Show' rendering walks the whole structure, not just its
+outermost constructor.
+-}
+valueDecodeIsTotal :: forall a. (FromJSON a, Show a) => PropertyT IO ()
+valueDecodeIsTotal = do
+    v <- forAll genValue
+    annotateShow v
+    _ <- H.eval (resultRendering (fromJSON v :: Result a))
+    H.success
+
+{- | Assert a bytes-level decode ('eitherDecodeStrict') is __total__ over
+arbitrary bytes: random (mostly non-JSON) bytes must yield a typed 'Left', never
+a crash. As above, the whole 'Either' is forced through its rendering.
+-}
+bytesDecodeIsTotal :: forall a. (FromJSON a, Show a) => PropertyT IO ()
+bytesDecodeIsTotal = do
+    bytes <- forAll (Gen.bytes (Range.linear 0 64))
+    _ <- H.eval (length (show (eitherDecodeStrict bytes :: Either String a) :: String))
+    H.success
+
+{- | Confirm the 'Value' generator reaches __both__ the success and failure arms
+of a permissive decoder, so 'valueDecodeIsTotal' is not vacuously all-failures.
+'H.cover' fails the property when either arm is under-represented.
+-}
+valueDecodeCoversBothArms :: forall a. (FromJSON a, Show a) => PropertyT IO ()
+valueDecodeCoversBothArms = do
+    v <- forAll genValue
+    let decoded = fromJSON v :: Result a
+    annotateShow v
+    _ <- H.eval (resultRendering decoded)
+    H.cover 1 "decodes (Success)" (isSuccess decoded)
+    H.cover 1 "rejects (Error)" (not (isSuccess decoded))
+
+-- | Force a decoded 'Result' through its 'Show' rendering, returning its length.
+resultRendering :: (Show a) => Result a -> Int
+resultRendering = \case
+    Success a -> length (show a :: String)
+    Error e -> length e
+
+-- | Whether a decode 'Result' is the 'Success' arm.
+isSuccess :: Result a -> Bool
+isSuccess = \case
+    Success{} -> True
+    Error{} -> False
+
+{- | A recursive, depth- and breadth-__bounded__ arbitrary 'Aeson.Value': the
+five scalar kinds (null\/bool\/number\/string) plus small arrays and objects of
+recursively-generated values. 'Gen.recursive' shrinks toward the scalar
+(non-recursive) cases and the small ranges keep it terminating, so it covers the
+JSON shapes a registry might send (and many it never would) without diverging.
+The object keys lean on a small alphabet that includes the real wire field names,
+so generated objects routinely land on a decoder's expected keys.
+-}
+genValue :: H.Gen Value
+genValue =
+    Gen.recursive
+        Gen.choice
+        -- non-recursive (leaf) generators — also the shrink targets
+        [ pure Null
+        , Bool <$> Gen.bool
+        , Number . fromInteger <$> genInteger
+        , String <$> genJsonText
+        ]
+        -- recursive generators — small fan-out so the tree stays bounded
+        [ Array . V.fromList <$> Gen.list (Range.linear 0 4) genValue
+        , Object . KeyMap.fromList
+            <$> Gen.list (Range.linear 0 4) ((,) <$> genKey <*> genValue)
+        ]
+
+{- | A small arbitrary integer to seed a JSON number (kept in a modest range so
+'Show' is cheap; 'fromInteger' lifts it into aeson's 'Number' 'Scientific').
+-}
+genInteger :: H.Gen Integer
+genInteger = Gen.integral (Range.linearFrom 0 (-100000) 100000)
+
+-- | A short arbitrary JSON string value (unicode, to probe text handling).
+genJsonText :: H.Gen Text
+genJsonText = Gen.text (Range.linear 0 8) Gen.unicode
+
+{- | An object key drawn from a pool biased toward the real wire field names
+(@name@, @version@, @dist@, @tarball@, …) so generated objects frequently satisfy
+a decoder's required\/optional keys — otherwise almost every object would miss
+@.: \"name\"@ and the success arm would go unsampled.
+-}
+genKey :: H.Gen Key.Key
+genKey = Key.fromText <$> Gen.choice [Gen.element wireKeys, genJsonText]
+  where
+    wireKeys =
+        [ "name"
+        , "version"
+        , "modified"
+        , "dist"
+        , "dist-tags"
+        , "versions"
+        , "time"
+        , "tarball"
+        , "shasum"
+        , "integrity"
+        , "signatures"
+        , "sig"
+        , "keyid"
+        , "scripts"
+        , "license"
+        , "type"
+        , "url"
+        , "email"
+        , "message"
+        , "error"
+        , "maintainers"
+        , "dependencies"
+        , "deprecated"
+        , "hasInstallScript"
+        ]
 
 -- ── helpers ──────────────────────────────────────────────────────────────────
 

@@ -1,9 +1,22 @@
 module Ecluse.Registry.Npm.ProjectSpec (spec) where
 
+import Data.Aeson (
+    Value (Array, Bool, Null, Number, Object, String),
+    encode,
+ )
+import Data.Aeson.Key qualified as Key
+import Data.Aeson.KeyMap qualified as KeyMap
+import Data.ByteString.Lazy qualified as BL
 import Data.Map.Strict qualified as Map
 import Data.Time (UTCTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
+import Data.Vector qualified as V
+import Hedgehog (PropertyT, annotateShow, forAll)
+import Hedgehog qualified as H
+import Hedgehog.Gen qualified as Gen
+import Hedgehog.Range qualified as Range
 import Test.Hspec (Spec, describe, it, shouldBe, shouldNotSatisfy, shouldSatisfy)
+import Test.Hspec.Hedgehog (hedgehog)
 
 import Ecluse.Ecosystem (Ecosystem (Npm))
 import Ecluse.Package (
@@ -53,6 +66,7 @@ spec = do
     versionDetailsSpec
     versionListSpec
     failureSpec
+    totalitySpec
 
 -- ── packument-level projection ───────────────────────────────────────────────
 
@@ -280,6 +294,195 @@ failureSpec = describe "malformed input" $ do
 
     it "fails parseVersionList on a non-JSON body too" $
         parseVersionList (RegistryResponse "nope") `shouldSatisfy` isLeft
+
+-- ── projection totality (the fuzz target) ────────────────────────────────────
+
+{- | The projection eats __untrusted__ upstream JSON (it decodes the response
+body internally with 'eitherDecodeStrict' and then walks the wire shape into the
+domain model), so every @parse*@ entry must be __total__: an arbitrary body may
+never make it bottom; it must always return a typed 'Right' or a typed
+@ParseError@ 'Left', never ⊥. These generative properties feed each entry point a
+bounded-but-arbitrary 'Value' (encoded to a body) and a run of arbitrary bytes,
+then fully evaluate the result so a partial function anywhere in the projection
+surfaces as a caught exception rather than a pass. They are the projection-layer
+companion to the wire-decoder totality properties in
+"Ecluse.Registry.Npm.WireSpec".
+-}
+totalitySpec :: Spec
+totalitySpec = describe "projection totality (arbitrary input never bottoms)" $ do
+    describe "every projection entry is total over an arbitrary Value body" $ do
+        it "parsePackageInfo" $
+            hedgehog (projectionIsTotal (showResult . parsePackageInfo))
+        it "parseVersionList" $
+            hedgehog (projectionIsTotal (showResult . parseVersionList))
+        it "parseVersionDetails" $
+            hedgehog
+                ( projectionIsTotal
+                    (\r -> showResult (parseVersionDetails r (mkVersion Npm "1.0.0")))
+                )
+
+    describe "every projection entry is total over arbitrary bytes" $ do
+        it "parsePackageInfo" $
+            hedgehog (projectionBytesIsTotal (showResult . parsePackageInfo))
+        it "parseVersionList" $
+            hedgehog (projectionBytesIsTotal (showResult . parseVersionList))
+        it "parseVersionDetails" $
+            hedgehog
+                ( projectionBytesIsTotal
+                    (\r -> showResult (parseVersionDetails r (mkVersion Npm "1.0.0")))
+                )
+
+    it "the body generator reaches both a decodable packument and a rejected body" $
+        hedgehog $ do
+            v <- forAll genBody
+            let resp = RegistryResponse (encodeToBody v)
+                decoded = parsePackageInfo resp
+            annotateShow v
+            _ <- H.eval (showResult decoded)
+            -- Non-vacuity: 'genBody' must reach both the projects-to-domain arm
+            -- (the packument-shaped half) and the rejected-body arm (the
+            -- arbitrary half), so the totality checks above are not all-failures.
+            H.cover 5 "projects (Right)" (isRight decoded)
+            H.cover 5 "rejects (Left)" (isLeft decoded)
+
+-- ── totality helpers ─────────────────────────────────────────────────────────
+
+{- | Assert a projection entry is __total__ over an arbitrary 'Value' body: encode
+a 'genBody' value (which mixes fully-arbitrary JSON with packument-shaped objects,
+so the __success__ path of the projection is exercised too, not just rejection)
+into a response body and fully evaluate the entry's result (the @render@ argument
+forces it to a 'String'), so 'H.eval' turns any bottom inside the projection into
+a caught test failure rather than a pass.
+-}
+projectionIsTotal :: (RegistryResponse -> String) -> PropertyT IO ()
+projectionIsTotal render = do
+    v <- forAll genBody
+    annotateShow v
+    _ <- H.eval (length (render (RegistryResponse (encodeToBody v))))
+    H.success
+
+{- | Assert a projection entry is total over arbitrary bytes: a garbage body must
+yield a typed 'ParseError' 'Left', never a crash.
+-}
+projectionBytesIsTotal :: (RegistryResponse -> String) -> PropertyT IO ()
+projectionBytesIsTotal render = do
+    bytes <- forAll (Gen.bytes (Range.linear 0 64))
+    _ <- H.eval (length (render (RegistryResponse bytes)))
+    H.success
+
+-- | Force a projection result fully by rendering both arms to a 'String'.
+showResult :: (Show a) => Either ParseError a -> String
+showResult = \case
+    Left e -> show e :: String
+    Right a -> show a :: String
+
+-- | Encode a generated 'Value' into a strict response body.
+encodeToBody :: Value -> ByteString
+encodeToBody = BL.toStrict . encode
+
+{- | A recursive, depth- and breadth-__bounded__ arbitrary 'Aeson.Value' (the same
+shape as "Ecluse.Registry.Npm.WireSpec"'s generator, kept in-file to avoid a new
+module): the JSON scalar kinds plus small arrays and objects of recursively-
+generated values, shrinking toward the scalars so it terminates. Object keys are
+biased toward the real packument field names (@name@, @versions@, @dist-tags@, …)
+so a generated object routinely reaches the projection's success arm.
+-}
+genValue :: H.Gen Value
+genValue =
+    Gen.recursive
+        Gen.choice
+        [ pure Null
+        , Bool <$> Gen.bool
+        , Number . fromInteger <$> genInteger
+        , String <$> genJsonText
+        ]
+        [ Array . V.fromList <$> Gen.list (Range.linear 0 4) genValue
+        , Object . KeyMap.fromList
+            <$> Gen.list (Range.linear 0 4) ((,) <$> genKey <*> genValue)
+        ]
+
+{- | A response-body generator that mixes fully-arbitrary JSON ('genValue') with
+packument-__shaped__ objects ('genPackumentish'), so a property driving a
+projection reaches __both__ arms: arbitrary JSON almost always rejects (a 'Left'),
+while a packument-shaped object usually projects (a 'Right'). The wire decoders
+are lenient, so even the shaped half carries arbitrary values in its fields — it
+is a /shape/ bias, not a valid-document oracle, which keeps the fuzzing honest.
+-}
+genBody :: H.Gen Value
+genBody = Gen.frequency [(1, genValue), (1, genPackumentish)]
+
+{- | A top-level object shaped like an npm packument: a (usually non-empty) string
+@name@, a @versions@ map keyed by @1.0.0@ (the version 'parseVersionDetails' asks
+for) whose entries are arbitrary objects carrying a @dist@ object, plus an
+arbitrary @time@\/@dist-tags@. The values inside are still arbitrary, so this only
+biases the /shape/ toward the projection's success arm; it does not hand-build a
+known-valid document.
+-}
+genPackumentish :: H.Gen Value
+genPackumentish = do
+    name <- Gen.text (Range.linear 1 8) Gen.alphaNum
+    versionObj <- genVersionish
+    extra <- Gen.list (Range.linear 0 3) ((,) <$> genKey <*> genValue)
+    pure . Object . KeyMap.fromList $
+        [ (Key.fromText "name", String name)
+        , (Key.fromText "versions", Object (KeyMap.singleton (Key.fromText "1.0.0") versionObj))
+        ]
+            <> extra
+
+{- | A version-object-shaped 'Value': @name@\/@version@ strings and a @dist@ with a
+@tarball@ URL string, plus a few arbitrary keys — enough that the wire manifest
+decodes and the artifact projection has a tarball to read.
+-}
+genVersionish :: H.Gen Value
+genVersionish = do
+    tarball <- genJsonText
+    extra <- Gen.list (Range.linear 0 3) ((,) <$> genKey <*> genValue)
+    pure . Object . KeyMap.fromList $
+        [ (Key.fromText "name", String "pkg")
+        , (Key.fromText "version", String "1.0.0")
+        , (Key.fromText "dist", Object (KeyMap.singleton (Key.fromText "tarball") (String tarball)))
+        ]
+            <> extra
+
+{- | A small arbitrary integer to seed a JSON number (kept in a modest range;
+'fromInteger' lifts it into aeson's 'Number' 'Scientific').
+-}
+genInteger :: H.Gen Integer
+genInteger = Gen.integral (Range.linearFrom 0 (-100000) 100000)
+
+-- | A short arbitrary JSON string value (unicode, to probe text handling).
+genJsonText :: H.Gen Text
+genJsonText = Gen.text (Range.linear 0 8) Gen.unicode
+
+{- | An object key drawn from a pool biased toward the packument field names the
+projection reads, so generated objects frequently satisfy them (otherwise almost
+every object would miss @name@\/@versions@ and the success arm would go
+unsampled). @1.0.0@ is included so a generated @versions@ map can be keyed by the
+version the @parseVersionDetails@ property requests.
+-}
+genKey :: H.Gen Key.Key
+genKey = Key.fromText <$> Gen.choice [Gen.element packumentKeys, genJsonText]
+  where
+    packumentKeys =
+        [ "name"
+        , "version"
+        , "dist-tags"
+        , "versions"
+        , "time"
+        , "dist"
+        , "tarball"
+        , "shasum"
+        , "integrity"
+        , "scripts"
+        , "license"
+        , "deprecated"
+        , "hasInstallScript"
+        , "_npmUser"
+        , "maintainers"
+        , "dependencies"
+        , "1.0.0"
+        , "latest"
+        ]
 
 -- ── inline packument fixtures ────────────────────────────────────────────────
 
