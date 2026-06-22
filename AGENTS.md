@@ -5,6 +5,7 @@
 - **Always read `README.md` before starting any task.** It describes the current architecture, key design decisions, and module responsibilities.
 - **Read architecture documents** in `docs/` (if present) before making structural changes to the codebase.
 - **Keep documentation up to date.** Any change that affects behavior, architecture, public interfaces, or configuration must be reflected in `README.md` and any relevant `docs/` file in the same PR/commit. Do not defer documentation updates.
+- **[`USAGE.md`](USAGE.md) is the operator manual** — the consumer-facing reference for configuration, client setup, network-egress safety, and operations. Any change to something an operator configures or must do to run Écluse safely (environment variables, the config schema, egress requirements, client auth, health/observability endpoints) must update `USAGE.md` in the same PR/commit. The `docs/architecture/` documents stay the home for the *why*; `USAGE.md` is the *how*, and the two must not drift.
 - When adding a new module or significantly changing an existing one, update the architecture section of `README.md` to describe its role.
 
 ## Implementation Coordination

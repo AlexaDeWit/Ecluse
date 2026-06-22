@@ -4,6 +4,11 @@
 
 ## Configuration
 
+> **Operators:** the deployment-facing reference — the environment-variable table,
+> client setup, and the network-egress checklist — lives in the
+> [Operator Manual (`USAGE.md`)](../../USAGE.md). This document is the *design
+> rationale* behind those settings; keep the two in sync.
+
 Configuration has two layers: a small set of **environment variables** for
 process-level and secret values, and a **structured config document** carrying the
 two things too expressive for flat env vars — the **rule policy** and the **mount

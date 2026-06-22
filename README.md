@@ -24,6 +24,16 @@ See [`docs/architecture.md`](docs/architecture.md) for the full design:
 three-registry model, deny-by-default rules engine, mirror queue, and
 configuration reference.
 
+## Using Écluse
+
+**Deploying or operating Écluse? Start with the [Operator Manual
+(`USAGE.md`)](USAGE.md).** It is the consumer-facing reference: configuration
+(environment variables and the config document), connecting your clients, the
+**network-egress safety** you are responsible for, the rule policy, and the
+health/observability endpoints — surfaced out of the internal architecture docs so
+operators find them. The `docs/architecture/` documents remain the home for the
+*why* behind each setting.
+
 ## Verifying the image
 
 Every published image carries **provenance** and **SBOM** attestations — keyless
