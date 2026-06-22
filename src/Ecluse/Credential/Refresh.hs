@@ -105,7 +105,7 @@ effectful leaves — 'rcMint' and 'rcClock' default to a mint\/clock that always
 fails, so a provider built without wiring them up fails loudly rather than
 silently serving nothing.
 
-* refresh at 80% of lifetime, jitter pulling it up to 10% earlier;
+* refresh at 80% of lifetime (no jitter by default; 'rcJitter' may pull it earlier);
 * a 30-second floor before expiry;
 * breaker trips after 5 consecutive failures, cooling down for 60 seconds.
 -}
