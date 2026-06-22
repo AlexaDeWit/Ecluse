@@ -16,7 +16,7 @@ pr: null
 
 # S03 — Config model & fail-fast loader
 
-> Milestone **M0** · depends on: [S02](S02-seam-interfaces.md), [S05](S05-rules-precedence.md) · tier: unit
+> Milestone **M0** · depends on: [S02](S02-handle-interfaces.md), [S05](S05-rules-precedence.md) · tier: unit
 
 **Goal.** Parse process configuration into a validated, structured value the
 composition root consumes: environment variables (via `envparse`, aggregating

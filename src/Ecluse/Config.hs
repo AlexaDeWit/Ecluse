@@ -141,7 +141,7 @@ unUrl (Url u) = u
 -- ── backend selection ────────────────────────────────────────────────────────
 
 {- | The mirror-queue backend a mount publishes jobs to. The cloud axis the queue
-seam ("Ecluse.Queue") is constructed for; selected by name in config so the
+Handle ("Ecluse.Queue") is constructed for; selected by name in config so the
 composition root can build the matching backend.
 -}
 data QueueBackend

@@ -13,7 +13,7 @@ pr: null
 
 # S28 — Pub/Sub `MirrorQueue` backend
 
-> Milestone **M7** · depends on: [S02](S02-seam-interfaces.md), [S27](S27-gcp-spike.md) · tier: integration
+> Milestone **M7** · depends on: [S02](S02-handle-interfaces.md), [S27](S27-gcp-spike.md) · tier: integration
 
 **Goal.** The GCP queue backend behind the existing `MirrorQueue` handle, implemented
 per the S27 decision: `Publish` / `Pull`(+ack-deadline) / `Acknowledge`, verified

@@ -14,7 +14,7 @@ pr: null
 
 # S01 — App/Env scaffold + composition root
 
-> Milestone **M0** · depends on: [S02](S02-seam-interfaces.md) · tier: unit
+> Milestone **M0** · depends on: [S02](S02-handle-interfaces.md) · tier: unit
 
 **Goal.** Establish the imperative shell: `App = ReaderT Env IO` (with `unliftio`),
 the `Env` composition-root record that holds the handles + shared HTTP manager +
