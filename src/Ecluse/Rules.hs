@@ -119,8 +119,8 @@ data Candidate = Candidate
     , candReason :: Text
     }
 
-{- | A human-readable summary of a decision, suitable for logs and the
-(eventual) denial response body.
+{- | A human-readable summary of a decision, suitable for logs and the denial
+response body.
 -}
 renderDecision :: PackageDetails -> Decision -> Text
 renderDecision pd decision =

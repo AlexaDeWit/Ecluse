@@ -102,7 +102,7 @@ defaultDenyHasInstallScriptsPrecedence :: Int
 defaultDenyHasInstallScriptsPrecedence = 300
 
 {- | Ambient information a rule may need that is not part of the package itself
-(currently just the wall-clock "now" for age calculations).
+(the wall-clock "now" for age calculations).
 -}
 newtype EvalContext = EvalContext
     { ctxNow :: UTCTime
