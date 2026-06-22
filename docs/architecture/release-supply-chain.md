@@ -136,3 +136,14 @@ Renovate PR.
 **Haskell advisories** (`cabal-audit` / the HSEC database) are a deferred
 follow-up: `cabal-audit` is marked broken in the pinned nixpkgs, and the
 statically-linked Haskell deps are a lower-risk surface than the C libs.
+
+## Posture scoring — OpenSSF Scorecard
+
+[`scorecard.yml`](../../.github/workflows/scorecard.yml) runs **OpenSSF Scorecard**
+weekly (and on branch-protection changes / pushes to `main`). It grades the
+repository's supply-chain posture — branch protection, pinned dependencies,
+signed/attested releases, SAST, token permissions, and dangerous workflow
+patterns — uploads findings to the Security tab (code scanning), and publishes a
+public score that backs the README badge. It is **report-only**: it never gates a
+PR. For a tool whose purpose is supply-chain resilience, this is dogfooding — the
+same hygiene we proxy for, measured on ourselves.
