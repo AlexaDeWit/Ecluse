@@ -1,0 +1,878 @@
+{- | The configuration boundary: parse the process environment and the structured
+config document into one precise, validated value the composition root consumes.
+
+This module is the canonical __parse, don't validate__ edge for configuration.
+Untrusted, less-structured input — flat environment variables and an
+operator-authored JSON document — is turned into a 'Config' whose types already
+encode every invariant, so nothing downstream re-checks a URL, re-resolves a
+backend name, or trips over a rule that was misspelled. Two layers feed it:
+
+* The __environment layer__ ('parseEnv') reads the process-level and secret
+  values via @envparse@, which __aggregates__ failures: one run reports every
+  malformed or missing variable, not just the first.
+
+* The __document layer__ ('decodeDocument') decodes the structured 'ConfigDoc'
+  from JSON — a file or the @PROXY_CONFIG@ blob, one schema for both — carrying
+  the __mount map__ and the __rule policy__. Its decoders are __strict__: an
+  unknown key or an unknown rule @type@ is a loud failure, never a silent skip —
+  the accepted keys of each object are enumerated and anything else is rejected.
+
+The two combine in 'loadConfig', which __desugars__ the single-mount environment
+variables into a one-entry 'MountMap' and __merges__ the document's rule policy
+over the built-in 'defaultPolicy'. An env-only launch with no document still runs
+on that default policy.
+
+The rule-policy merge is a named-map patch sourced from "Ecluse.Rules.Types" —
+config selects and refines rules, it does not re-encode their semantics. See
+@docs\/architecture\/configuration.md@ and @docs\/architecture\/hosting.md@.
+
+== Secrets
+
+Tokens (the inbound 'cfgAuthToken', outbound registry tokens) arrive __only__
+through the environment, never the structured document: the document is
+reviewable and diffable, the wrong place for a secret. The document decoder
+__rejects__ a token field to keep that boundary enforced rather than merely
+documented.
+-}
+module Ecluse.Config (
+    -- * The assembled configuration
+    Config (..),
+    loadConfig,
+
+    -- * Environment layer
+    EnvConfig (..),
+    parseEnv,
+    parseEnvPure,
+    renderEnvErrors,
+
+    -- * Backend selection
+    QueueBackend (..),
+    parseQueueBackend,
+    renderQueueBackend,
+    CredentialBackend (..),
+    parseCredentialBackend,
+    renderCredentialBackend,
+
+    -- * Network values
+    Url,
+    mkUrl,
+    unUrl,
+
+    -- * The structured document
+    ConfigDoc (..),
+    MountDoc (..),
+    RulePatch (..),
+    RuleEntry (..),
+    decodeDocument,
+
+    -- * Mounts
+    MountMap,
+    Mount (..),
+    MountPrefix,
+    mkMountPrefix,
+    unMountPrefix,
+    RegistryTuple (..),
+    MirrorTarget (..),
+
+    -- * Rule policy
+    RulePolicy (..),
+    defaultPolicy,
+    resolvePolicy,
+    PolicyError (..),
+    renderPolicyError,
+) where
+
+import Data.Aeson (
+    FromJSON (parseJSON),
+    Value (Array, Bool, Null, Number, Object, String),
+    eitherDecodeStrict,
+    withObject,
+    (.!=),
+    (.:),
+    (.:?),
+ )
+import Data.Aeson.Key qualified as Key
+import Data.Aeson.KeyMap (KeyMap)
+import Data.Aeson.KeyMap qualified as KeyMap
+import Data.Aeson.Types (Parser)
+import Data.Map.Strict qualified as Map
+import Data.Text qualified as T
+import Data.Time (NominalDiffTime)
+import Env qualified
+import System.Environment (getEnvironment)
+
+import Ecluse.Package (mkScope)
+import Ecluse.Rules.Types (
+    PrecededRule (..),
+    Rule (..),
+    defaultPrecedence,
+ )
+
+-- ── network values ───────────────────────────────────────────────────────────
+
+{- | An absolute upstream\/target URL, stored normalised (surrounding whitespace
+trimmed). Opaque so a bare 'Text' that has not been through 'mkUrl' — and so
+could be empty — cannot be mistaken for one downstream.
+-}
+newtype Url = Url Text
+    deriving stock (Eq, Ord, Show)
+
+{- | Build a 'Url', rejecting one that is empty after trimming surrounding
+whitespace. Returns the reason on the 'Left' so the aggregating layers can name
+which value was bad.
+
+>>> mkUrl "https://registry.npmjs.org"
+Right (Url "https://registry.npmjs.org")
+
+>>> mkUrl "   "
+Left "expected a non-empty URL"
+-}
+mkUrl :: Text -> Either Text Url
+mkUrl raw =
+    let trimmed = T.strip raw
+     in if T.null trimmed
+            then Left "expected a non-empty URL"
+            else Right (Url trimmed)
+
+-- | The underlying URL text.
+unUrl :: Url -> Text
+unUrl (Url u) = u
+
+-- ── backend selection ────────────────────────────────────────────────────────
+
+{- | The mirror-queue backend a mount publishes jobs to. The cloud axis the queue
+seam ("Ecluse.Queue") is constructed for; selected by name in config so the
+composition root can build the matching backend.
+-}
+data QueueBackend
+    = -- | AWS SQS (wire name @"sqs"@).
+      SqsQueue
+    | -- | GCP Cloud Pub\/Sub (wire name @"pubsub"@).
+      PubSubQueue
+    deriving stock (Eq, Show)
+
+{- | Parse a 'QueueBackend' from its wire name, naming the accepted set on
+failure.
+
+>>> parseQueueBackend "sqs"
+Right SqsQueue
+
+>>> parseQueueBackend "kafka"
+Left "unknown queue provider \"kafka\" (expected one of: sqs, pubsub)"
+-}
+parseQueueBackend :: Text -> Either Text QueueBackend
+parseQueueBackend = \case
+    "sqs" -> Right SqsQueue
+    "pubsub" -> Right PubSubQueue
+    other ->
+        Left
+            ( "unknown queue provider "
+                <> quote other
+                <> " (expected one of: sqs, pubsub)"
+            )
+
+-- | The wire name of a 'QueueBackend' (the inverse of 'parseQueueBackend').
+renderQueueBackend :: QueueBackend -> Text
+renderQueueBackend = \case
+    SqsQueue -> "sqs"
+    PubSubQueue -> "pubsub"
+
+{- | How the bearer token that writes to a mount's mirror target is obtained — the
+credential axis of the backend matrix (see
+@docs\/architecture\/cloud-backends.md@ → "Credential Provider"). It is selected
+__only__ for the mirror-target write; reads forward the client's credential
+(private upstream) or are anonymous (public upstream).
+-}
+data CredentialBackend
+    = -- | AWS CodeArtifact: a short-lived token minted via @GetAuthorizationToken@
+      -- (wire name @"codeartifact"@).
+      CodeArtifactCredential
+    | -- | A fixed, long-lived token supplied out of band (wire name @"static"@).
+      StaticCredential
+    | -- | GCP Application Default Credentials: an OAuth2 access token (wire name
+      -- @"adc"@).
+      AdcCredential
+    deriving stock (Eq, Show)
+
+{- | Parse a 'CredentialBackend' from its wire name, naming the accepted set on
+failure.
+
+>>> parseCredentialBackend "codeartifact"
+Right CodeArtifactCredential
+
+>>> parseCredentialBackend "vault"
+Left "unknown credential provider \"vault\" (expected one of: codeartifact, static, adc)"
+-}
+parseCredentialBackend :: Text -> Either Text CredentialBackend
+parseCredentialBackend = \case
+    "codeartifact" -> Right CodeArtifactCredential
+    "static" -> Right StaticCredential
+    "adc" -> Right AdcCredential
+    other ->
+        Left
+            ( "unknown credential provider "
+                <> quote other
+                <> " (expected one of: codeartifact, static, adc)"
+            )
+
+{- | The wire name of a 'CredentialBackend' (the inverse of
+'parseCredentialBackend').
+-}
+renderCredentialBackend :: CredentialBackend -> Text
+renderCredentialBackend = \case
+    CodeArtifactCredential -> "codeartifact"
+    StaticCredential -> "static"
+    AdcCredential -> "adc"
+
+-- ── environment layer ────────────────────────────────────────────────────────
+
+{- | The flat, process-level configuration read from environment variables. These
+are the values too small or too secret for the structured document: process
+settings, the three endpoint URLs of the single-mount launch case, the queue
+backend, the cloud region\/project, and the inbound auth token.
+
+A single-mount deployment supplies only these; 'loadConfig' desugars them into a
+one-entry mount map.
+-}
+data EnvConfig = EnvConfig
+    { cfgPort :: Int
+    -- ^ The port the proxy listens on (@PROXY_PORT@, default 4873).
+    , cfgPrivateUpstream :: Url
+    -- ^ The private upstream registry (@PRIVATE_UPSTREAM_URL@, required).
+    , cfgPublicUpstream :: Url
+    -- ^ The public upstream registry (@PUBLIC_UPSTREAM_URL@, default
+    -- @https:\/\/registry.npmjs.org@).
+    , cfgMirrorTarget :: Url
+    -- ^ Where approved packages are mirrored to (@MIRROR_TARGET_URL@, required).
+    , cfgQueueBackend :: QueueBackend
+    -- ^ The mirror-queue backend (@MIRROR_QUEUE_PROVIDER@, default @sqs@).
+    , cfgQueueUrl :: Url
+    -- ^ The queue identifier for mirror jobs (@MIRROR_QUEUE_URL@, required).
+    , cfgAwsRegion :: Maybe Text
+    -- ^ The AWS region for SQS\/CodeArtifact (@AWS_REGION@, AWS backends only).
+    , cfgGoogleProject :: Maybe Text
+    -- ^ The GCP project for Pub\/Sub\/Artifact Registry (@GOOGLE_CLOUD_PROJECT@,
+    -- GCP backends only).
+    , cfgAuthToken :: Maybe Text
+    -- ^ The inbound client auth token clients must present (@PROXY_AUTH_TOKEN@);
+    -- 'Nothing' leaves the proxy open to the network layer.
+    , cfgHelpMessage :: Maybe Text
+    -- ^ A custom string appended to every denial message (@PROXY_HELP_MESSAGE@).
+    , cfgCveSyncInterval :: NominalDiffTime
+    -- ^ How often the advisory index is refreshed (@CVE_SYNC_INTERVAL_SECONDS@,
+    -- default 3600).
+    }
+    deriving stock (Eq, Show)
+
+{- | Read the environment layer from the process environment, __aggregating__
+every failure: one run reports all missing or malformed variables rather than
+stopping at the first. The 'Left' carries the @envparse@ error list; render it
+with 'renderEnvErrors'.
+-}
+parseEnv :: IO (Either [(String, Env.Error)] EnvConfig)
+parseEnv = parseEnvPure <$> getEnvironment
+
+{- | The pure environment parser, over an explicit @(name, value)@ list. The same
+parser 'parseEnv' runs against the process environment, exposed so the aggregation
+and defaulting behaviour is unit-tested without touching real environment state.
+-}
+parseEnvPure :: [(String, String)] -> Either [(String, Env.Error)] EnvConfig
+parseEnvPure = Env.parsePure envParser
+
+-- The @envparse@ declaration. Its 'Applicative' accumulates errors across every
+-- 'Env.var', which is the source of the all-at-once reporting promise. Readers
+-- that can fail go through 'Env.eitherReader' so a malformed value (bad URL, a
+-- non-integer, an unknown enum name) is reported against its own variable.
+envParser :: Env.Parser Env.Error EnvConfig
+envParser =
+    EnvConfig
+        <$> Env.var Env.auto "PROXY_PORT" (Env.def 4873)
+        <*> Env.var urlReader "PRIVATE_UPSTREAM_URL" mempty
+        <*> Env.var urlReader "PUBLIC_UPSTREAM_URL" (Env.def defaultPublicUpstream)
+        <*> Env.var urlReader "MIRROR_TARGET_URL" mempty
+        <*> Env.var queueBackendReader "MIRROR_QUEUE_PROVIDER" (Env.def SqsQueue)
+        <*> Env.var urlReader "MIRROR_QUEUE_URL" mempty
+        <*> optionalText "AWS_REGION"
+        <*> optionalText "GOOGLE_CLOUD_PROJECT"
+        <*> Env.sensitive (optionalText "PROXY_AUTH_TOKEN")
+        <*> optionalText "PROXY_HELP_MESSAGE"
+        <*> Env.var cveIntervalReader "CVE_SYNC_INTERVAL_SECONDS" (Env.def defaultCveSyncInterval)
+  where
+    defaultPublicUpstream :: Url
+    defaultPublicUpstream = Url "https://registry.npmjs.org"
+
+    defaultCveSyncInterval :: NominalDiffTime
+    defaultCveSyncInterval = 3600
+
+    -- An optional 'Text' variable: absent yields 'Nothing', present yields the
+    -- value. 'def' makes the parser total (it never fails on absence). The reader
+    -- maps 'Just' over the parsed value (through both the function and 'Either').
+    optionalText :: String -> Env.Parser Env.Error (Maybe Text)
+    optionalText name = Env.var ((fmap . fmap) Just Env.str) name (Env.def Nothing)
+
+-- Build a failing 'Env.Reader' from a 'Text'-parsing function, turning its
+-- reason into an @envparse@ unread error tagged against the variable. Written
+-- directly (rather than via @Env.eitherReader@) so it depends only on the
+-- 'Env.unread' constructor common to the @envparse@ versions in use.
+textReader :: (Text -> Either Text a) -> Env.Reader Env.Error a
+textReader parser s = first (Env.unread . toString) (parser (toText s))
+
+-- An 'Env.Reader' that parses a 'Url', surfacing 'mkUrl's reason.
+urlReader :: Env.Reader Env.Error Url
+urlReader = textReader mkUrl
+
+-- An 'Env.Reader' for the queue backend enum.
+queueBackendReader :: Env.Reader Env.Error QueueBackend
+queueBackendReader = textReader parseQueueBackend
+
+-- An 'Env.Reader' for the CVE sync interval: a non-negative integer count of
+-- seconds, read as a 'NominalDiffTime'.
+cveIntervalReader :: Env.Reader Env.Error NominalDiffTime
+cveIntervalReader = textReader $ \t -> case readMaybe (toString t) :: Maybe Integer of
+    Just n | n >= 0 -> Right (fromInteger n)
+    _ -> Left ("expected a non-negative integer count of seconds, got " <> quote t)
+
+{- | Render the aggregated environment errors as one human-facing block, one line
+per offending variable, so an operator sees every problem from a single failed
+launch.
+-}
+renderEnvErrors :: [(String, Env.Error)] -> Text
+renderEnvErrors = T.unlines . map renderOne
+  where
+    renderOne :: (String, Env.Error) -> Text
+    renderOne (name, err) = toText name <> ": " <> renderError err
+
+    renderError :: Env.Error -> Text
+    renderError = \case
+        Env.UnsetError -> "is required but unset"
+        Env.EmptyError -> "is set but empty"
+        Env.UnreadError msg -> toText msg
+
+-- ── mounts ───────────────────────────────────────────────────────────────────
+
+{- | A path prefix a mount is served under (e.g. @"\/npm"@), stored without a
+trailing slash so @"\/npm"@ and @"\/npm\/"@ name the same mount. Opaque to keep
+that normalisation in one place.
+-}
+newtype MountPrefix = MountPrefix Text
+    deriving stock (Eq, Ord, Show)
+
+{- | Build a 'MountPrefix', normalising it to a single leading slash and no
+trailing slash so the two ways a client may write a base URL collapse to one key.
+
+>>> mkMountPrefix "/npm/"
+MountPrefix "/npm"
+
+>>> mkMountPrefix "npm"
+MountPrefix "/npm"
+-}
+mkMountPrefix :: Text -> MountPrefix
+mkMountPrefix raw =
+    let stripped = T.dropWhileEnd (== '/') (T.dropWhile (== '/') (T.strip raw))
+     in MountPrefix ("/" <> stripped)
+
+-- | The normalised prefix text, with its single leading slash.
+unMountPrefix :: MountPrefix -> Text
+unMountPrefix (MountPrefix p) = p
+
+{- | The three-registry tuple of a mount: the private upstream and public upstream
+it reads from, and the mirror target it writes approved packages to. The
+credential and queue backends live on the 'MirrorTarget' because that is the one
+endpoint Écluse authenticates to with its own identity — reads forward the
+client's credential or are anonymous (see
+@docs\/architecture\/registry-model.md@ → "Credential flow and authority").
+-}
+data RegistryTuple = RegistryTuple
+    { regPrivateUpstream :: Url
+    -- ^ The authoritative, already-vetted upstream. Reads forward the __client's__
+    -- credential; Écluse holds none for it.
+    , regPublicUpstream :: Url
+    -- ^ The public upstream, read anonymously and gated by the rules.
+    , regMirrorTarget :: MirrorTarget
+    -- ^ Where approved packages are written, with the backends used to do so.
+    }
+    deriving stock (Eq, Show)
+
+{- | The mirror target of a mount: its URL plus the credential and queue backends
+used to write to it. This is the sole endpoint carrying an Écluse-minted
+credential.
+-}
+data MirrorTarget = MirrorTarget
+    { mtUrl :: Url
+    -- ^ The mirror-target registry endpoint.
+    , mtCredential :: CredentialBackend
+    -- ^ How the bearer token to publish here is obtained.
+    , mtQueue :: QueueBackend
+    -- ^ The mirror-queue backend the demand-driven mirror jobs are sent to.
+    }
+    deriving stock (Eq, Show)
+
+{- | One mount: a registry served under a path prefix. It binds the three-registry
+tuple and an __already-resolved__ rule policy — the shared policy, optionally
+refined for this mount. Holding the resolved rules (not the raw patch) is the
+parse-don't-validate payoff: the dispatcher evaluates them directly with no
+further merge.
+-}
+data Mount = Mount
+    { mountRegistries :: RegistryTuple
+    -- ^ The private\/public\/mirror endpoints this mount proxies.
+    , mountPolicy :: [PrecededRule]
+    -- ^ The fully-resolved rule set for this mount.
+    }
+    deriving stock (Eq, Show)
+
+{- | The mount map: every served mount keyed by its normalised path prefix.
+Dispatch matches a request's leading path segment to a key here (see
+@docs\/architecture\/hosting.md@ → "Dispatch"). A single-mount deployment is the
+one-entry degenerate case.
+-}
+type MountMap = Map MountPrefix Mount
+
+-- ── rule policy ──────────────────────────────────────────────────────────────
+
+{- | The resolved rule policy: the named rules in force, each at its competing
+precedence. Config has merged the document's patches over 'defaultPolicy' and
+turned every entry into a 'PrecededRule'.
+
+It is a named map rather than a bare @['PrecededRule']@ so a mount's per-mount
+refinement can patch a rule __by name__ (override or suppress it) over this shared
+policy.
+-}
+newtype RulePolicy = RulePolicy
+    { policyRules :: Map Text PrecededRule
+    -- ^ The rules in force, keyed by the name they were given in config (or the
+    -- built-in name, for a default).
+    }
+    deriving stock (Eq, Show)
+
+{- | The built-in default rule policy, sourced from "Ecluse.Rules.Types" so config
+never re-encodes rule semantics — it only selects and refines.
+
+The shipped default is a single rule, @min-age@: 'AllowIfPublishedBefore' a 7-day
+quarantine window, at its type's 'defaultPrecedence'. This admits public versions
+that have survived the window, the core defence against race-to-publish
+typosquatting — a floor to extend, not a wall.
+-}
+defaultPolicy :: RulePolicy
+defaultPolicy =
+    RulePolicy (Map.singleton "min-age" (atDefault (AllowIfPublishedBefore sevenDays)))
+  where
+    sevenDays :: NominalDiffTime
+    sevenDays = 7 * 86400
+
+{- | A reason a rule-policy merge could not be resolved. Every case is a
+__fail-loud__ rejection: a policy that does not resolve cleanly is a startup
+failure, never a silently mis-enforced policy.
+-}
+data PolicyError
+    = -- | A new (non-default) name carried no @type@, so it cannot stand as a
+      -- rule. Carries the offending name.
+      MissingRuleType Text
+    | -- | A @type@ was named that is not a known, decodable rule. Carries the name
+      -- and the unknown type. A misspelled deny would otherwise vanish and stop
+      -- blocking; a misspelled allow would over-deny.
+      UnknownRuleType Text Text
+    | -- | A field the named rule type does not accept (e.g. an @ageSeconds@ on a
+      -- deny rule), or a required value field missing. Carries the name and a
+      -- reason.
+      MalformedRule Text Text
+    | -- | An @"enabled": false@ suppression named a rule the default policy does
+      -- not define, so there is nothing to suppress. Carries the name.
+      SuppressUnknownRule Text
+    deriving stock (Eq, Show)
+
+-- | Render a 'PolicyError' as a human-facing line for an aggregated failure block.
+renderPolicyError :: PolicyError -> Text
+renderPolicyError = \case
+    MissingRuleType name ->
+        "rule " <> quote name <> " is not a default and is missing its \"type\""
+    UnknownRuleType name ty ->
+        "rule " <> quote name <> " names unknown type " <> quote ty
+    MalformedRule name reason ->
+        "rule " <> quote name <> ": " <> reason
+    SuppressUnknownRule name ->
+        "rule " <> quote name <> " disables a rule that no default defines"
+
+{- | Merge a rule patch over a base policy — the named-map merge at the heart of
+the rule-policy model. For each patch entry:
+
+* a name the base __defines__ takes a __partial patch__: an explicit @precedence@
+  or rule-value field overrides the default, unspecified fields are kept, and
+  @"enabled": false@ __suppresses__ it;
+* a __new__ name must carry a @type@ (it __adds__ a rule);
+* @"enabled": false@ against a name the base does not define is rejected
+  ('SuppressUnknownRule') — you cannot suppress a rule out of existence.
+
+Every reference must resolve: an unknown @type@, a missing @type@ on a new name,
+a malformed value, or a suppression of a non-existent rule is a 'PolicyError'.
+Errors __aggregate__ across all entries.
+-}
+resolvePolicy :: RulePolicy -> RulePatch -> Either [PolicyError] RulePolicy
+resolvePolicy (RulePolicy base) (RulePatch patch) =
+    case partitionEithers (map resolveEntry (Map.toList patch)) of
+        ([], updates) -> Right (RulePolicy (foldl' apply base updates))
+        (errs, _) -> Left (concat errs)
+  where
+    -- Apply one resolved update: a suppression deletes, a rule sets.
+    apply :: Map Text PrecededRule -> (Text, Maybe PrecededRule) -> Map Text PrecededRule
+    apply acc (name, Nothing) = Map.delete name acc
+    apply acc (name, Just pr) = Map.insert name pr acc
+
+    -- Resolve one patch entry to either an error list or a (name, update), where
+    -- 'Nothing' is a suppression and 'Just' a rule to set.
+    resolveEntry :: (Text, RuleEntry) -> Either [PolicyError] (Text, Maybe PrecededRule)
+    resolveEntry (name, entry)
+        | entryEnabled entry == Just False =
+            if Map.member name base
+                then Right (name, Nothing)
+                else Left [SuppressUnknownRule name]
+        | otherwise =
+            case Map.lookup name base of
+                Just existing -> (name,) . Just <$> patchExisting name entry existing
+                Nothing -> (name,) . Just <$> addNew name entry
+
+    -- Patch a default rule: override its value fields and precedence where given.
+    -- A restated @type@ must match a known type.
+    patchExisting :: Text -> RuleEntry -> PrecededRule -> Either [PolicyError] PrecededRule
+    patchExisting name entry (PrecededRule prec rule) = do
+        rule' <- patchRuleValue name entry rule
+        pure (PrecededRule (fromMaybe prec (entryPrecedence entry)) rule')
+
+    -- Add a brand-new rule: the @type@ is mandatory and must be known.
+    addNew :: Text -> RuleEntry -> Either [PolicyError] PrecededRule
+    addNew name entry = case entryType entry of
+        Nothing -> Left [MissingRuleType name]
+        Just ty -> do
+            rule <- buildRule name ty entry
+            pure (PrecededRule (fromMaybe (defaultPrecedence rule) (entryPrecedence entry)) rule)
+
+{- | Build a fresh rule of the named type from its entry, rejecting an unknown
+type and a value field the type cannot use.
+
+The effectful @AllowIfRemediatesCve@ rule type is __not__ a member of the rule
+model here, so naming it decodes as a clean 'UnknownRuleType' rather than a crash:
+config cannot conjure a rule the engine does not implement.
+-}
+buildRule :: Text -> Text -> RuleEntry -> Either [PolicyError] Rule
+buildRule name ty entry = case ty of
+    "AllowIfPublishedBefore" -> case entryAgeSeconds entry of
+        Just secs
+            | secs >= 0 -> Right (AllowIfPublishedBefore (fromInteger secs))
+            | otherwise -> Left [MalformedRule name "\"ageSeconds\" must be non-negative"]
+        Nothing -> Left [MalformedRule name "\"AllowIfPublishedBefore\" requires \"ageSeconds\""]
+    "AllowScope" -> case entryScope entry of
+        Just scope -> Right (AllowScope (mkScope scope))
+        Nothing -> Left [MalformedRule name "\"AllowScope\" requires \"scope\""]
+    "DenyHasInstallScripts" -> Right DenyHasInstallScripts
+    _ -> Left [UnknownRuleType name ty]
+
+{- | Apply an entry's value fields to an existing default rule, keeping its kind:
+only the type's own value field may be overridden, and a restated @type@ must
+match the existing rule's type.
+-}
+patchRuleValue :: Text -> RuleEntry -> Rule -> Either [PolicyError] Rule
+patchRuleValue name entry rule = do
+    () <- checkRestatedType name entry rule
+    case rule of
+        AllowIfPublishedBefore d -> case entryAgeSeconds entry of
+            Just secs
+                | secs >= 0 -> Right (AllowIfPublishedBefore (fromInteger secs))
+                | otherwise -> Left [MalformedRule name "\"ageSeconds\" must be non-negative"]
+            Nothing -> Right (AllowIfPublishedBefore d)
+        AllowScope s -> Right (AllowScope (maybe s mkScope (entryScope entry)))
+        DenyHasInstallScripts -> Right DenyHasInstallScripts
+
+-- A restated @type@ on a patch must match the existing rule's kind, so a typo
+-- there (changing the rule's identity by accident) is caught loudly.
+checkRestatedType :: Text -> RuleEntry -> Rule -> Either [PolicyError] ()
+checkRestatedType name entry rule = case entryType entry of
+    Nothing -> Right ()
+    Just ty
+        | ty == ruleTypeName rule -> Right ()
+        | ty `elem` knownRuleTypes -> Left [MalformedRule name ("\"type\" " <> quote ty <> " does not match the default rule it patches")]
+        | otherwise -> Left [UnknownRuleType name ty]
+
+-- The wire @type@ name of a rule constructor.
+ruleTypeName :: Rule -> Text
+ruleTypeName = \case
+    AllowScope{} -> "AllowScope"
+    AllowIfPublishedBefore{} -> "AllowIfPublishedBefore"
+    DenyHasInstallScripts -> "DenyHasInstallScripts"
+
+-- The rule @type@ names config can build. @AllowIfRemediatesCve@ is deliberately
+-- absent: it is effectful and not part of this rule model, so it is unknown here.
+knownRuleTypes :: [Text]
+knownRuleTypes = ["AllowScope", "AllowIfPublishedBefore", "DenyHasInstallScripts"]
+
+-- ── the structured document ──────────────────────────────────────────────────
+
+{- | The structured config document: the mount map and the top-level rule-policy
+patch, decoded from a JSON file or the @PROXY_CONFIG@ env blob (one schema for
+both). An env-only deployment supplies no document at all.
+
+The rule policy here is the __raw patch__ over the default; 'resolvePolicy' merges
+it. Mounts hold the document's per-mount registry shape; their prefixes key the
+'MountMap' that 'loadConfig' produces.
+-}
+data ConfigDoc = ConfigDoc
+    { docMounts :: Map MountPrefix MountDoc
+    -- ^ The mounts declared in the document, keyed by prefix. Empty when the
+    -- document carries only a rule policy.
+    , docRules :: RulePatch
+    -- ^ The top-level rule-policy patch that applies to every mount.
+    }
+    deriving stock (Eq, Show)
+
+{- | A single mount as written in the document: its registry endpoints and
+backends, plus an optional per-mount rule refinement that merges over the shared
+policy.
+-}
+data MountDoc = MountDoc
+    { mdocRegistries :: RegistryTuple
+    -- ^ The mount's three-registry tuple, as written.
+    , mdocRules :: RulePatch
+    -- ^ The per-mount rule refinement, empty when omitted.
+    }
+    deriving stock (Eq, Show)
+
+{- | A rule-policy patch: the named-map merge input. Each entry is one of add \/
+override \/ suppress against the base (see 'RuleEntry'); resolution is in
+'resolvePolicy'.
+-}
+newtype RulePatch = RulePatch (Map Text RuleEntry)
+    deriving stock (Eq, Show)
+
+{- | One entry of a 'RulePatch'. An entry may name an explicit @type@ (to add a
+rule or restate one), a @precedence@ (where it competes), @enabled@ (to suppress
+a default), and a type-specific value field (@ageSeconds@, @scope@). Which
+combination is legal depends on whether the name is a known default — resolved in
+'resolvePolicy'.
+-}
+data RuleEntry = RuleEntry
+    { entryType :: Maybe Text
+    -- ^ The rule @type@, if given. Required to __add__ a new (non-default) rule.
+    , entryPrecedence :: Maybe Int
+    -- ^ An explicit precedence; omitted, the rule type's default is used.
+    , entryEnabled :: Maybe Bool
+    -- ^ @false@ __suppresses__ a default rule; otherwise the rule is in force.
+    , entryAgeSeconds :: Maybe Integer
+    -- ^ The quarantine window for an @AllowIfPublishedBefore@ rule, in seconds.
+    , entryScope :: Maybe Text
+    -- ^ The scope for an @AllowScope@ rule.
+    }
+    deriving stock (Eq, Show)
+
+{- | Decode a 'ConfigDoc' from JSON bytes (a file's contents or the @PROXY_CONFIG@
+blob). __Strict__: an unknown key anywhere in the document is rejected, as is an
+unparseable JSON body; the 'Left' carries the decode error.
+-}
+decodeDocument :: ByteString -> Either Text ConfigDoc
+decodeDocument = first toText . eitherDecodeStrict
+
+instance FromJSON ConfigDoc where
+    parseJSON = withObject "config document" $ \o -> do
+        rejectUnknownKeys "config document" ["mounts", "rules"] o
+        -- The @mounts@ object is keyed by raw prefix string; re-key through
+        -- 'mkMountPrefix' so the map carries the normalised 'MountPrefix' the rest
+        -- of the system uses (no JSON-key instance needed on the opaque type).
+        rawMounts <- o .:? "mounts" .!= mempty
+        ConfigDoc (Map.mapKeys mkMountPrefix rawMounts)
+            <$> o .:? "rules" .!= emptyPatch
+
+instance FromJSON MountDoc where
+    parseJSON = withObject "mount" $ \o -> do
+        rejectUnknownKeys
+            "mount"
+            ["privateUpstream", "publicUpstream", "mirrorTarget", "rules"]
+            o
+        registries <-
+            RegistryTuple
+                <$> (o .: "privateUpstream" >>= parseUrl)
+                <*> (o .: "publicUpstream" >>= parseUrl)
+                <*> o .: "mirrorTarget"
+        MountDoc registries <$> o .:? "rules" .!= emptyPatch
+
+instance FromJSON MirrorTarget where
+    parseJSON = withObject "mirrorTarget" $ \o -> do
+        rejectUnknownKeys "mirrorTarget" ["url", "credential", "queue"] o
+        MirrorTarget
+            <$> (o .: "url" >>= parseUrl)
+            <*> (o .: "credential" >>= parseEnum parseCredentialBackend "credential")
+            <*> (o .: "queue" >>= parseEnum parseQueueBackend "queue")
+
+instance FromJSON RulePatch where
+    parseJSON = withObject "rules" $ \o ->
+        RulePatch . Map.fromList <$> traverse decodeEntry (KeyMap.toList o)
+      where
+        decodeEntry (k, v) = (Key.toText k,) <$> parseJSON v
+
+instance FromJSON RuleEntry where
+    parseJSON = withObject "rule" $ \o -> do
+        -- Secrets never live in the document: a token field is a hard decode
+        -- failure, enforcing the env-only-secrets boundary in the type system
+        -- rather than merely documenting it.
+        rejectSecretKeys o
+        rejectUnknownKeys "rule" ["type", "precedence", "enabled", "ageSeconds", "scope"] o
+        RuleEntry
+            <$> o .:? "type"
+            <*> o .:? "precedence"
+            <*> o .:? "enabled"
+            <*> o .:? "ageSeconds"
+            <*> o .:? "scope"
+
+-- ── decoder helpers ──────────────────────────────────────────────────────────
+
+-- An empty rule patch (the absent-rules default).
+emptyPatch :: RulePatch
+emptyPatch = RulePatch Map.empty
+
+{- | Reject any object key not in the accepted set, naming the offender. This is
+the explicit-key-set form of strict decoding: aeson's record decoders silently
+ignore extra keys, so the accepted set is enumerated and an unknown key fails the
+parse — catching an operator's typo loudly rather than dropping it.
+-}
+rejectUnknownKeys :: String -> [Key.Key] -> KeyMap Value -> Parser ()
+rejectUnknownKeys context accepted o =
+    case filter (`notElem` accepted) (KeyMap.keys o) of
+        [] -> pure ()
+        unknown ->
+            fail
+                ( "unexpected "
+                    <> context
+                    <> " key(s): "
+                    <> intercalate ", " (map (show . Key.toText) unknown)
+                )
+
+{- | Reject a known secret-bearing key inside a rule object, so a token can never
+be smuggled into the reviewable document. Secrets are environment-only.
+-}
+rejectSecretKeys :: KeyMap Value -> Parser ()
+rejectSecretKeys o =
+    case filter (`KeyMap.member` o) secretKeys of
+        [] -> pure ()
+        present ->
+            fail
+                ( "secret key(s) are not allowed in the config document (use environment variables): "
+                    <> intercalate ", " (map (show . Key.toText) present)
+                )
+  where
+    secretKeys :: [Key.Key]
+    secretKeys = ["token", "authToken", "password", "secret", "credentialToken"]
+
+-- Parse a 'Url' value, surfacing 'mkUrl's reason as a decoder failure.
+parseUrl :: Value -> Parser Url
+parseUrl = withText' $ \t -> either (fail . toString) pure (mkUrl t)
+
+-- Parse a string-valued enum via its 'Text' parser, naming the field on failure.
+parseEnum :: (Text -> Either Text a) -> String -> Value -> Parser a
+parseEnum parser field =
+    withText' $ \t -> either (\e -> fail (field <> ": " <> toString e)) pure (parser t)
+
+-- Run a 'Text'-consuming parser over a JSON string value.
+withText' :: (Text -> Parser a) -> Value -> Parser a
+withText' f = \case
+    String t -> f t
+    other -> fail ("expected a string, but encountered " <> valueKind other)
+
+-- A short, human description of a JSON value's kind, for parse-error messages.
+valueKind :: Value -> String
+valueKind = \case
+    Object{} -> "an object"
+    Array{} -> "an array"
+    Number{} -> "a number"
+    Bool{} -> "a boolean"
+    Null -> "null"
+    String{} -> "a string"
+
+-- ── assembly ─────────────────────────────────────────────────────────────────
+
+{- | The fully assembled, validated configuration the composition root consumes:
+the environment layer plus the mount map, every mount carrying its resolved rule
+policy. No raw patch is left here — all merging happened during 'loadConfig'.
+-}
+data Config = Config
+    { configEnv :: EnvConfig
+    -- ^ The process-level environment layer.
+    , configMounts :: MountMap
+    -- ^ Every served mount, keyed by normalised prefix, each with a resolved
+    -- policy.
+    }
+    deriving stock (Eq, Show)
+
+{- | Assemble the final 'Config' from the parsed environment layer and an optional
+config document.
+
+* With __no document__, the single-mount environment variables __desugar__ into a
+  one-entry mount map at the root prefix @"\/"@, running on the built-in
+  'defaultPolicy'.
+* With a __document__, the document's top-level rule patch is merged over the
+  default to form the shared policy, every declared mount is resolved against it
+  (applying its own refinement), and — when the document declares no mounts — the
+  env single-mount is desugared onto the shared policy.
+
+Every rule-policy merge is resolved here, so any 'PolicyError' (a bad merge
+reference, a missing or unknown @type@) surfaces as a startup failure, aggregated
+across all mounts.
+-}
+loadConfig :: EnvConfig -> Maybe ConfigDoc -> Either [PolicyError] Config
+loadConfig env mDoc = case mDoc of
+    Nothing -> Right (envOnly defaultPolicy)
+    Just doc ->
+        resolvePolicy defaultPolicy (docRules doc) >>= \shared ->
+            if Map.null (docMounts doc)
+                then Right (envOnly shared)
+                else Config env <$> resolveMounts shared (docMounts doc)
+  where
+    -- The env single-mount desugared onto a resolved shared policy.
+    envOnly :: RulePolicy -> Config
+    envOnly policy = Config env (Map.singleton (mkMountPrefix "/") (envMount (rulesOf policy)))
+
+    envMount :: [PrecededRule] -> Mount
+    envMount rules =
+        Mount
+            { mountRegistries =
+                RegistryTuple
+                    { regPrivateUpstream = cfgPrivateUpstream env
+                    , regPublicUpstream = cfgPublicUpstream env
+                    , regMirrorTarget =
+                        MirrorTarget
+                            { mtUrl = cfgMirrorTarget env
+                            , -- Env-only launch authenticates the mirror write with a
+                              -- static token (the documented MIRROR_TARGET_TOKEN path);
+                              -- a cloud-managed target names its backend in the document.
+                              mtCredential = StaticCredential
+                            , mtQueue = cfgQueueBackend env
+                            }
+                    }
+            , mountPolicy = rules
+            }
+
+-- Resolve every document mount against the shared policy, applying each mount's
+-- own refinement and aggregating policy errors across all of them.
+resolveMounts :: RulePolicy -> Map MountPrefix MountDoc -> Either [PolicyError] MountMap
+resolveMounts shared mounts =
+    case partitionEithers (map resolveOne (Map.toList mounts)) of
+        ([], resolved) -> Right (Map.fromList resolved)
+        (errs, _) -> Left (concat errs)
+  where
+    resolveOne :: (MountPrefix, MountDoc) -> Either [PolicyError] (MountPrefix, Mount)
+    resolveOne (prefix, mdoc) =
+        resolvePolicy shared (mdocRules mdoc) >>= \refined ->
+            Right
+                ( prefix
+                , Mount{mountRegistries = mdocRegistries mdoc, mountPolicy = rulesOf refined}
+                )
+
+-- The rules of a resolved policy as the engine's flat list.
+rulesOf :: RulePolicy -> [PrecededRule]
+rulesOf = Map.elems . policyRules
+
+-- ── small shared helpers ─────────────────────────────────────────────────────
+
+-- Pair a rule with its type's default precedence (the omitted-precedence case).
+atDefault :: Rule -> PrecededRule
+atDefault r = PrecededRule (defaultPrecedence r) r
+
+-- Wrap text in double quotes for a human-facing message.
+quote :: Text -> Text
+quote t = "\"" <> t <> "\""
