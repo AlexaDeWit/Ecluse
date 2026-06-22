@@ -101,6 +101,14 @@ layer cannot resolve names).
   IPv6 literal. This closes the gap the original "Deferred" note left open (done in
   PR #38). Octal-form octets remain undecoded (still covered only by the allowlist),
   and ULA (`fc00::/7`) / NAT64 (`64:ff9b::/96`) stay out of scope.
+- **Unspecified / this-host and CGNAT ranges now blocked.** `isBlockedTarget` also
+  rejects the unspecified / this-host range (`0.0.0.0/8` and IPv6 `::` — `0.0.0.0`
+  is a loopback-equivalent on Linux) and CGNAT shared space (`100.64.0.0/10`,
+  RFC 6598), closing the gap raised in
+  [issue #83](https://github.com/AlexaDeWit/Ecluse/issues/83). The remaining
+  hardening — re-checking **resolved** IPs and the disallow-by-default
+  `dist.tarball`-host policy — is its own follow-on slice
+  ([S40](S40-egress-ssrf-hardening.md)), since both need the live fetch path.
 - **`upstreamUrlFor` + `UrlError` own the URL-construction side.** The sanctioned
   builder `upstreamUrlFor :: Text -> PackageName -> Either UrlError Text` re-checks
   every structural name component with the router's `isSafeComponent` as defence in
