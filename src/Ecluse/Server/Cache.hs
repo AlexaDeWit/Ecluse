@@ -28,7 +28,10 @@ Two properties the @cache@ library does not provide on its own are layered here:
   'IO', so two concurrent misses would both fetch. 'resolveMetadata' instead
   installs an in-flight marker atomically, so the first miss fetches while
   concurrent misses wait on its result — collapsing a thundering herd to one
-  upstream call.
+  upstream call. The leader inserts the result into the store __before__ removing
+  its in-flight marker, so a caller arriving in the instant the fetch returns still
+  finds either the store entry or the marker (never a gap) and never re-leads a
+  redundant fetch.
 -}
 module Ecluse.Server.Cache (
     -- * Configuration
@@ -69,8 +72,9 @@ packages the cache holds before it evicts.
 -}
 data CacheConfig = CacheConfig
     { cacheTtl :: NominalDiffTime
-    -- ^ How long a cached 'PackageInfo' is served before it is re-fetched. Short
-    -- by design — brief staleness is benign, and conditional-GET revalidates.
+    {- ^ How long a cached 'PackageInfo' is served before it is re-fetched. Short
+    by design — brief staleness is benign, and conditional-GET revalidates.
+    -}
     , cacheMaxEntries :: Int
     -- ^ The maximum number of distinct packages held; an insert past this evicts.
     }
@@ -122,8 +126,9 @@ data MetadataCache = MetadataCache
     , mcMaxEntries :: Int
     -- ^ The entry-count bound enforced on insert.
     , mcInFlight :: TVar (Map CacheKey (TMVar (Either SomeException PackageInfo)))
-    -- ^ Packages currently being fetched, so concurrent misses coalesce onto one
-    -- fetch rather than each launching their own.
+    {- ^ Packages currently being fetched, so concurrent misses coalesce onto one
+    fetch rather than each launching their own.
+    -}
     }
 
 {- | Build a metadata cache from its configuration. The TTL is converted to the
@@ -183,16 +188,28 @@ resolveMetadata cache name fetch = do
 
     -- The leader fetches once, fills the marker, and de-registers itself — even on
     -- exception, so a failed fetch unblocks waiters with the error and leaves the
-    -- in-flight slot clean for a later retry. 'mask' keeps the marker fill and the
-    -- de-register from being interrupted between each other.
+    -- in-flight slot clean for a later retry. 'mask' keeps the marker fill, the
+    -- store insert, and the de-register from being interrupted between each other.
+    --
+    -- On success the result is __inserted into the store before the in-flight slot
+    -- is de-registered__: until 'insertBounded' completes the slot still exists, so
+    -- a late caller in 'decide' becomes a follower on the marker rather than finding
+    -- neither store hit nor in-flight slot and re-leading a redundant fetch. Insert
+    -- then deregister thus makes "collapse to one upstream call" hold even for a
+    -- caller arriving in the instant after the fetch returns. On failure nothing is
+    -- cached and the slot is freed so a later retry re-fetches.
     runLeader :: CacheKey -> TMVar (Either SomeException PackageInfo) -> IO PackageInfo
     runLeader key marker = mask $ \restore -> do
         result <- try (restore fetch)
         atomically (putTMVar marker result)
-        atomically (deregister key)
         case result of
-            Right info -> insertBounded cache key info >> pure info
-            Left err -> throwIO err
+            Right info -> do
+                insertBounded cache key info
+                atomically (deregister key)
+                pure info
+            Left err -> do
+                atomically (deregister key)
+                throwIO err
 
     deregister :: CacheKey -> STM ()
     deregister key = do

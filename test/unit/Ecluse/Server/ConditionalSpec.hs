@@ -67,6 +67,29 @@ spec = do
                 NotModified e -> e `shouldBe` etag
                 Modified _ -> expectationFailure "a match anywhere in the list is a 304"
 
+        it "matches our ETag across two separate If-None-Match header lines" $ do
+            -- A client may legally repeat If-None-Match as distinct header lines
+            -- rather than one comma-joined value; the match must scan every line
+            -- (the lookupAll/any path), not just the first.
+            let etag = ownETag bodyA
+                req =
+                    [ (hIfNoneMatch, "\"deadbeef\"")
+                    , (hIfNoneMatch, encodeUtf8 (renderETag etag))
+                    ]
+            case evaluateOwnETag req bodyA of
+                NotModified e -> e `shouldBe` etag
+                Modified _ -> expectationFailure "a match on any If-None-Match line is a 304"
+
+        it "is Modified when no separate If-None-Match line carries our ETag" $ do
+            -- The mirror of the above: multiple lines, none matching, must re-serve.
+            let req =
+                    [ (hIfNoneMatch, "\"deadbeef\"")
+                    , (hIfNoneMatch, encodeUtf8 (renderETag (ownETag bodyB)))
+                    ]
+            case evaluateOwnETag req bodyA of
+                Modified e -> e `shouldBe` ownETag bodyA
+                NotModified _ -> expectationFailure "no matching line must re-serve"
+
         it "treats a wildcard If-None-Match as a match (304)" $
             case evaluateOwnETag [(hIfNoneMatch, "*")] bodyA of
                 NotModified e -> e `shouldBe` ownETag bodyA

@@ -99,7 +99,7 @@ spec = do
             _ <- resolveMetadata c (pkg "stale") (countingFetch calls (pkg "stale"))
             readIORef calls `shouldReturn` 2
 
-    describe "resolveMetadata — collapse" $
+    describe "resolveMetadata — collapse" $ do
         it "collapses concurrent resolutions of one package to a single upstream call" $ do
             c <- freshCache
             calls <- newIORef (0 :: Int)
@@ -122,6 +122,30 @@ spec = do
                         putMVar release () -- let the single fetch complete
                     )
             map infoName results `shouldBe` replicate 8 (pkg "hot")
+            readIORef calls `shouldReturn` 1
+
+        it "has the entry in the store the instant the leader's fetch returns" $ do
+            -- The leader inserts into the store *before* de-registering its in-flight
+            -- slot, so by the time resolveMetadata returns the value is already
+            -- discoverable via the store (not merely via the now-removed marker).
+            -- A caller racing the de-register therefore finds the store entry rather
+            -- than re-leading a redundant fetch. The window between insert and
+            -- de-register is internal to runLeader (under mask, no injection seam),
+            -- so this asserts the observable post-condition the ordering guarantees:
+            -- the store is populated as soon as the call completes.
+            c <- freshCache
+            _ <- resolveMetadata c (pkg "fresh") (pure (info (pkg "fresh")))
+            cached <- cachedMetadata c (pkg "fresh")
+            (infoName <$> cached) `shouldBe` Just (pkg "fresh")
+
+        it "does not re-fetch for a caller arriving right after the fetch returns" $ do
+            -- Sequential mirror of the collapse property at the post-fetch boundary:
+            -- the second resolution lands after the first has fully returned, and is
+            -- served from the store with no second upstream call.
+            c <- freshCache
+            calls <- newIORef 0
+            _ <- resolveMetadata c (pkg "back-to-back") (countingFetch calls (pkg "back-to-back"))
+            _ <- resolveMetadata c (pkg "back-to-back") (countingFetch calls (pkg "back-to-back"))
             readIORef calls `shouldReturn` 1
 
     describe "size bound" $ do

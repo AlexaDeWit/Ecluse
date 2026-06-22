@@ -74,11 +74,13 @@ etagHeader etag = (hETag, encodeUtf8 (renderETag etag))
 validator already matches what we would serve.
 -}
 data Conditional
-    = -- | The served body is unchanged from the client's validator — answer @304@
-      -- with this 'ETag', no body.
+    = {- | The served body is unchanged from the client's validator — answer @304@
+      with this 'ETag', no body.
+      -}
       NotModified ETag
-    | -- | The served body differs (or no validator was sent) — serve @200@ with
-      -- this 'ETag' header.
+    | {- | The served body differs (or no validator was sent) — serve @200@ with
+      this 'ETag' header.
+      -}
       Modified ETag
     deriving stock (Eq, Show)
 
