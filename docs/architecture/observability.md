@@ -99,7 +99,7 @@ already first-class **cloud-native** metrics (CloudWatch for SQS, Cloud Monitori
 for Pub/Sub); having Écluse poll the queue API to re-emit them is duplicative, so
 we rely on cloud-native for those. Names follow **OTel semantic conventions** for
 HTTP (`http.server.*`, `http.client.*`) and a custom **`ecluse.*`** namespace for
-domain signals. The catalog:
+domain signals. The catalogue:
 
 - **Serving** — `http.server.request.duration` (histogram); `ecluse.serve.decision`
   (counter; admit/deny/unavailable).

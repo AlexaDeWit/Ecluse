@@ -21,7 +21,7 @@ answers "what is the license of this _repository_", but source files get copied,
 vendored, snippeted, and extracted — and lose the root file the moment they
 travel. A per-file SPDX tag attaches the license to the unit that actually moves,
 makes it deterministically parseable by SBOM / license-compliance tooling, and
-disambiguates any future non-MIT file. It is the source-level analog of the
+disambiguates any future non-MIT file. It is the source-level analogue of the
 artifact-level provenance Écluse already ships (SBOM + attestation), and aligns
 with the [REUSE specification](https://reuse.software) and OpenSSF Best Practices
 silver (`license_per_file` / `copyright_per_file`, both _suggested_).

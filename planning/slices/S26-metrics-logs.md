@@ -16,12 +16,12 @@ pr: null
 
 > Milestone **M6** · depends on: [S04](S04-logging-katip.md), [S24](S24-otel-substrate.md) · tier: unit, integration
 
-**Goal.** Emit the domain metrics catalog over the same OTLP pipeline (with a
+**Goal.** Emit the domain metrics catalogue over the same OTLP pipeline (with a
 Prometheus-scrape alternative), under a strict bounded-label discipline, and stitch
 logs to traces via trace-ID injection into the JSONL `dd` object.
 
 **Acceptance criteria.**
-- [ ] The `ecluse.*` metric catalog (serve decision, rule denials/eval-duration/
+- [ ] The `ecluse.*` metric catalogue (serve decision, rule denials/eval-duration/
   effectful-failures/breaker-state, advisory sync age/failures/last-good, upstream
   fetch, metadata-cache, mirror, credential refresh/ttl) plus OTel HTTP semantic
   conventions. — _observability.md#metrics_

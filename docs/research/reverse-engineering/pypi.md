@@ -11,9 +11,9 @@ A reverse-engineering reference for the Python package registry, the companion t
 > `https://pypi.org`. Two protocols matter:
 > - the **Simple / Index API** — the installer-facing index (PEP 503 HTML,
 >   PEP 691 JSON, PEP 700 extensions). This is what `pip` actually uses; it is
->   the analog of npm's *abbreviated packument*.
+>   the analogue of npm's *abbreviated packument*.
 > - the **JSON API** — Warehouse's richer metadata (`/pypi/{p}/json`), the
->   analog of npm's *full packument*.
+>   analogue of npm's *full packument*.
 >
 > Artifacts live on a **separate host**, `https://files.pythonhosted.org`, not
 > on `pypi.org`.
@@ -203,7 +203,7 @@ minted in the web UI, and Trusted Publishing mints them from a CI OIDC identity
 
 ## 4. Project metadata — the JSON API (rich)
 
-`GET /pypi/{project}/json` → `application/json`. The analog of npm's full
+`GET /pypi/{project}/json` → `application/json`. The analogue of npm's full
 packument: one document covering the project and **all** its releases.
 
 ### Top-level keys
@@ -368,7 +368,7 @@ GET https://files.pythonhosted.org/packages/…/requests-2.34.2-py3-none-any.whl
 ```
 
 The body is RFC-822-style key:value text (`Name`, `Version`, `Requires-Python`,
-`Requires-Dist: …`, `Provides-Extra: …`, …). This is the **direct analog of
+`Requires-Dist: …`, `Provides-Extra: …`, …). This is the **direct analogue of
 npm's abbreviated manifest**: it lets the resolver read dependencies cheaply.
 The index advertises its availability and hash via `core-metadata` (§5), so a
 client can fetch and verify it before committing to the full download.
@@ -387,14 +387,14 @@ charset_normalizer<4,>=2
 `extra == …`), and extras. A faithful model keeps the raw string and the parsed
 `{name, specifier, marker, extras}`.
 
-### Install-time code execution (the npm-install-script analog)
+### Install-time code execution (the npm-install-script analogue)
 
 PyPI has no `hasInstallScript`, but the risk exists in a different shape:
 
 - **Wheels run no code on install** — they are unpacked, not executed. Installing
   a wheel is inert.
 - **sdists execute a build backend** (`setup.py` / PEP 517 backend) at *install/
-  build* time — arbitrary code. The resilience analog of npm's
+  build* time — arbitrary code. The resilience analogue of npm's
   `DenyHasInstallScript` is therefore **"prefer/require wheels; treat
   sdist-only releases as higher risk."** This is derivable purely from the file
   list (`packagetype`), no download needed.
@@ -403,7 +403,7 @@ PyPI has no `hasInstallScript`, but the risk exists in a different shape:
 
 ## 7. The file (distribution) object
 
-The security-critical unit — the analog of npm's `dist`, but there are **many
+The security-critical unit — the analogue of npm's `dist`, but there are **many
 per version**, and its shape differs slightly between the JSON API and the
 Simple API.
 
@@ -568,7 +568,7 @@ Two mechanisms:
    short-lived, tightly-scoped API token used for that one upload. No long-lived
    secret stored. This is the recommended modern path.
 
-In `.pypirc` / `pip.conf`, credentials are configured per index URL (the analog
+In `.pypirc` / `pip.conf`, credentials are configured per index URL (the analogue
 of npm's per-registry nerf-dart), e.g.:
 
 ```ini
@@ -640,7 +640,7 @@ File = {
   requiresPython?: Pep440Specifier, -- ⊕ interpreter gate
   size?:           number,          -- ⊕
   uploadTime?:     ISODate,         -- ⊕ the age signal (per file!)
-  yanked:          boolean | string,-- ⊕ closest analog of pkgDeprecated
+  yanked:          boolean | string,-- ⊕ closest analogue of pkgDeprecated
   coreMetadata?:   boolean | { sha256: string },  -- ⊕ PEP 658/714 — .metadata exists
   provenance?:     string           -- ⊕ PEP 740 attestation URL (≈ npm dist.signatures)
 }
@@ -666,7 +666,7 @@ CoreMetadata = {
 }
 ```
 
-### `SimpleIndex` (abbreviated analog) and `ProjectJson` (full analog)
+### `SimpleIndex` (abbreviated analogue) and `ProjectJson` (full analogue)
 
 ```
 SimpleIndex = {                 -- GET /simple/{p}/  (PEP 691/700)

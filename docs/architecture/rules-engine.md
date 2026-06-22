@@ -38,7 +38,7 @@ fetches for resolution — publish age, declared scope, npm's `hasInstallScript`
 a PyPI file's `packagetype == sdist` — and support **pure** rules. Others are
 *not* exposed in any metadata response and must be fetched and parsed per
 version. RubyGems is the motivating case: a gem's native `extensions` — its
-install-time code-execution signal, the analog of npm's install scripts — appears
+install-time code-execution signal, the analogue of npm's install scripts — appears
 only in the gemspec inside the `.gem` (or the legacy `quick` Marshal spec), never
 in the Compact Index or the JSON API (see
 [`research/reverse-engineering/rubygems.md`](../research/reverse-engineering/rubygems.md)).
