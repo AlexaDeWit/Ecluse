@@ -1,5 +1,15 @@
 packages: .
 
+-- Pin the Hackage index the solver may see, so `cabal build`/`cabal test` (the
+-- dev-shell + CI path) resolve a *reproducible* plan: a package uploaded to
+-- Hackage after this instant cannot silently change the build or flip the gate
+-- with no source change. Paired with cabal.project.freeze (exact versions), this
+-- is the lockfile for the cabal path — the analogue of flake.lock, which locks
+-- the separate Nix path that builds the shipped artifact (callCabal2nix; it does
+-- not read these files). Bump both together via `make freeze`; see CONTRIBUTING
+-- → "Dependency locking".
+index-state: 2026-06-22T14:40:10Z
+
 -- Enable the test suites in the solver for *every* command, so a bare
 -- `cabal test <suite>` (as `make test` runs) resolves a tests-inclusive plan
 -- instead of failing with Cabal-7043. Without this, `cabal test` does not pass
