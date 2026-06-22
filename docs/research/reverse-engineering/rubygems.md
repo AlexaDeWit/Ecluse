@@ -9,7 +9,7 @@ both a Ruby **client** (fetching the way `gem`/Bundler do) and a Ruby **server**
 > **Terminology.** `gem` is the CLI and **Bundler** the dependency manager;
 > neither is the registry. The registry is **RubyGems.org** (`rubygems.org`).
 > The install-facing protocol is the **Compact Index** (`/versions`, `/info`,
-> `/names`) — plain text, append-only, Range-fetched; it is the analog of npm's
+> `/names`) — plain text, append-only, Range-fetched; it is the analogue of npm's
 > abbreviated packument / PyPI's Simple API. A richer **JSON API**
 > (`/api/v1/...`, `/api/v2/...`) is the packument-style metadata view. Artifacts
 > are `.gem` files under `/gems/`.
@@ -50,7 +50,7 @@ RubyGems sits between npm and PyPI in shape, with one transport twist of its own
   `bcrypt 3.1.22` ships both `3.1.22` (native/MRI) and `3.1.22-java` (JRuby).
 - **Like npm**, install can **execute arbitrary code**: a gem with **native
   extensions** compiles them at `gem install` time, running `extconf.rb` (and
-  `make`). This is the install-time RCE surface — the analog of npm's
+  `make`). This is the install-time RCE surface — the analogue of npm's
   install scripts.
 - **Unlike either**, the primary install protocol (Compact Index) is **plain
   text, append-only, and fetched incrementally with HTTP Range requests**, not a
@@ -215,7 +215,7 @@ live on `sinatra`: `metadata.rubygems_mfa_required`.)
 
 ### `GET /api/v1/versions/{name}.json` — all versions
 
-An array, newest first; the analog of npm's `versions` map / PyPI `releases`.
+An array, newest first; the analogue of npm's `versions` map / PyPI `releases`.
 Each entry (captured, `bcrypt`):
 
 | Field | Type | Notes |
@@ -618,7 +618,7 @@ GemVersionDetails = {
   createdAt:         ISODate,             -- pkgPublishedAt  (present in /info — unlike PyPI/npm, no separate time map)
   licenses?:         [string],           -- pkgLicense
   authors?:          [string],           -- pkgMaintainers (author names; emails not in index)
-  yanked:            boolean,             -- closest analog of pkgDeprecated (but = removal)
+  yanked:            boolean,             -- closest analogue of pkgDeprecated (but = removal)
   mfaRequired?:      boolean,             -- ⊕ metadata.rubygems_mfa_required — Ruby-specific trust signal
   extensions?:       [string]            -- ⊕⚠️ install-time-RCE signal; NOT in any API — from gemspec only
   -- pkgHasInstallScript ≡ (extensions is non-empty)

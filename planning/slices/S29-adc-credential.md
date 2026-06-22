@@ -17,7 +17,7 @@ pr: null
 
 **Goal.** The GCP per-cloud credential leaf: mint an OAuth2 access token via
 Application Default Credentials (ADC, TTL ~1h), wrapped by the S16 generic policy —
-the GCP analog of the CodeArtifact leaf (S17).
+the GCP analogue of the CodeArtifact leaf (S17).
 
 **Acceptance criteria.**
 - [ ] `newAdcProvider :: ... -> IO CredentialProvider` mints an OAuth2 access token
