@@ -117,7 +117,7 @@ data PackageName = PackageName
     }
     deriving stock (Show)
 
--- | The fields that constitute identity (the display form is excluded).
+-- The fields that constitute identity (the display form is excluded).
 nameKey :: PackageName -> (Ecosystem, Maybe Scope, Text)
 nameKey n = (pkgEcosystem n, pkgNamespace n, pkgCanonical n)
 
@@ -146,14 +146,14 @@ mkPackageName eco ns raw =
         Just s -> renderScope s <> "/" <> raw
         Nothing -> raw
 
--- | Normalise a display name into its canonical matching key for an ecosystem.
+-- Normalise a display name into its canonical matching key for an ecosystem.
 canonicalise :: Ecosystem -> Text -> Text
 canonicalise = \case
     Npm -> id
     RubyGems -> id
     PyPI -> normalisePyPI
 
-{- | PEP 503 name normalisation: lower-case, and collapse each run of
+{- PEP 503 name normalisation: lower-case, and collapse each run of
 @\'-\'@\/@\'_\'@\/@\'.\'@ to a single @\'-\'@.
 -}
 normalisePyPI :: Text -> Text
