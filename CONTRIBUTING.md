@@ -372,6 +372,36 @@ output ("slop") will be closed.
 
 ---
 
+## Developer Certificate of Origin (DCO)
+
+Écluse is, and will remain, free and open-source software. Contributions are
+accepted under the **[Developer Certificate of Origin](DCO)** (DCO, v1.1) — a
+lightweight, per-commit affirmation that you have the right to submit your work
+under the project's [MIT license](LICENSE). We use the DCO **rather than a
+Contributor License Agreement on purpose**: it asks you only to *certify
+provenance* and grants the project no power to relicense or close the code, so
+Écluse stays permanently FOSS — while MIT still lets anyone adopt it privately.
+
+**Sign off every commit.** `git commit -s` (or `--signoff`) appends a
+`Signed-off-by` trailer from your git identity:
+
+```
+Signed-off-by: Your Name <you@example.com>
+```
+
+By signing off you certify the [DCO](DCO): in short, that you wrote the change —
+or otherwise have the right to submit it under the project's license — and that
+your contribution and sign-off become a permanent public record.
+
+- **Every commit in a PR** needs a valid `Signed-off-by` matching its author.
+- It is **separate from the GPG signature**: `-S` proves *who* committed
+  (authenticity); `-s` certifies your *right to contribute* (provenance). Use
+  both — `git commit -S -s` — and it coexists with the `Assisted-by:` trailer.
+- **Forgot one?** `git commit --amend -s --no-edit` fixes the last commit;
+  `git rebase --signoff main` signs off a whole branch.
+
+---
+
 ## Repository requirements
 
 - **Workflows stay injection-free.** Never interpolate untrusted
@@ -384,5 +414,8 @@ output ("slop") will be closed.
   `fix`, `docs`, `chore`, `ci`, `refactor`, `test`, `build`, or `perf` (scope
   optional). Keep the summary short and imperative; put detail in the body.
 - **Commits are GPG-signed.** Keep history verifiable.
+- **Every commit is signed off (DCO).** Certify the [Developer Certificate of
+  Origin](#developer-certificate-of-origin-dco) with a `Signed-off-by` trailer —
+  `git commit -s`.
 - **Disclose AI assistance.** Mark non-trivial AI-assisted commits with an
   `Assisted-by:` trailer — see [AI-assisted contributions](#ai-assisted-contributions).
