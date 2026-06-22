@@ -31,6 +31,7 @@ import Ecluse.Server (
     rootMount,
     serverMiddleware,
  )
+import Ecluse.Server.Cache (defaultCacheConfig, newMetadataCache)
 
 {- | A registry-handle double whose effectful fields are never invoked: the S12
 web layer only routes, classifies, and renders — it never fetches — so a handle
@@ -67,8 +68,9 @@ newTestEnv :: IO Env
 newTestEnv = do
     queue <- newInMemoryQueue
     manager <- newTestManager
+    metadataCache <- newMetadataCache defaultCacheConfig
     logEnv <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
-    newEnv fakeRegistry queue fakeCredentials manager logEnv
+    newEnv fakeRegistry queue fakeCredentials manager metadataCache logEnv
 
 -- | The 'application' under the default server config (a single root mount).
 rootApp :: IO Application

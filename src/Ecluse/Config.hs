@@ -268,6 +268,17 @@ data EnvConfig = EnvConfig
     {- ^ How often the advisory index is refreshed (@CVE_SYNC_INTERVAL_SECONDS@,
     default 3600).
     -}
+    , cfgCacheTtl :: NominalDiffTime
+    {- ^ How long a parsed packument stays fresh in the metadata cache
+    (@METADATA_CACHE_TTL_SECONDS@, default 60). Short by design — brief staleness
+    is benign and conditional-GET revalidates (see "Ecluse.Server.Cache"). A
+    non-positive value disables caching: every entry is born already expired, so
+    each request re-fetches (a deliberate "off" knob).
+    -}
+    , cfgCacheMaxEntries :: Int
+    {- ^ The metadata cache's bound on the number of distinct packages held before
+    it evicts (@METADATA_CACHE_MAX_ENTRIES@, default 1024) — a flood safety valve.
+    -}
     , cfgLogFormat :: LogFormat
     {- ^ The structured-log output shape (@PROXY_LOG_FORMAT@, default @json@): the
     one-line JSONL stream for a container, or the human-readable console form
@@ -309,10 +320,23 @@ envParser =
         <*> Env.sensitive (optionalText "PROXY_AUTH_TOKEN")
         <*> optionalText "PROXY_HELP_MESSAGE"
         <*> Env.var cveIntervalReader "CVE_SYNC_INTERVAL_SECONDS" (Env.def defaultCveSyncInterval)
+        -- A non-negative seconds count: zero is accepted on purpose, disabling the
+        -- metadata cache (every entry expires immediately, so each request
+        -- re-fetches). Unlike METADATA_CACHE_MAX_ENTRIES, which must be positive (a
+        -- cache holding zero entries is a bug, not a knob), a zero TTL is a coherent
+        -- "off" setting; see cfgCacheTtl.
+        <*> Env.var secondsReader "METADATA_CACHE_TTL_SECONDS" (Env.def defaultCacheTtl)
+        <*> Env.var positiveIntReader "METADATA_CACHE_MAX_ENTRIES" (Env.def defaultCacheMaxEntries)
         <*> Env.var logFormatReader "PROXY_LOG_FORMAT" (Env.def JsonLog)
   where
     defaultPublicUpstream :: Url
     defaultPublicUpstream = Url "https://registry.npmjs.org"
+
+    defaultCacheTtl :: NominalDiffTime
+    defaultCacheTtl = 60
+
+    defaultCacheMaxEntries :: Int
+    defaultCacheMaxEntries = 1024
 
     defaultCveSyncInterval :: NominalDiffTime
     defaultCveSyncInterval = 3600
@@ -341,9 +365,21 @@ queueBackendReader = textReader parseQueueBackend
 -- An 'Env.Reader' for the CVE sync interval: a non-negative integer count of
 -- seconds, read as a 'NominalDiffTime'.
 cveIntervalReader :: Env.Reader Env.Error NominalDiffTime
-cveIntervalReader = textReader $ \t -> case readMaybe (toString t) :: Maybe Integer of
+cveIntervalReader = secondsReader
+
+-- An 'Env.Reader' for a non-negative integer count of seconds, read as a
+-- 'NominalDiffTime' (shared by every seconds-valued duration variable).
+secondsReader :: Env.Reader Env.Error NominalDiffTime
+secondsReader = textReader $ \t -> case readMaybe (toString t) :: Maybe Integer of
     Just n | n >= 0 -> Right (fromInteger n)
     _ -> Left ("expected a non-negative integer count of seconds, got " <> quote t)
+
+-- An 'Env.Reader' for a strictly positive integer (a cache must hold at least one
+-- entry, so zero is rejected rather than silently disabling the cache).
+positiveIntReader :: Env.Reader Env.Error Int
+positiveIntReader = textReader $ \t -> case readMaybe (toString t) :: Maybe Int of
+    Just n | n > 0 -> Right n
+    _ -> Left ("expected a positive integer, got " <> quote t)
 
 -- An 'Env.Reader' for the log-format enum, surfacing 'parseLogFormat's reason.
 logFormatReader :: Env.Reader Env.Error LogFormat

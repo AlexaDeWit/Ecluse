@@ -134,6 +134,8 @@ fullEnv =
     , ("PROXY_AUTH_TOKEN", "s3cr3t")
     , ("PROXY_HELP_MESSAGE", "ask #platform")
     , ("CVE_SYNC_INTERVAL_SECONDS", "60")
+    , ("METADATA_CACHE_TTL_SECONDS", "30")
+    , ("METADATA_CACHE_MAX_ENTRIES", "256")
     , ("PROXY_LOG_FORMAT", "console")
     ]
 
@@ -167,6 +169,8 @@ envLayerSpec = describe "parseEnvPure" $ do
                 cfgAuthToken cfg `shouldBe` Just "s3cr3t"
                 cfgHelpMessage cfg `shouldBe` Just "ask #platform"
                 cfgCveSyncInterval cfg `shouldBe` (60 :: NominalDiffTime)
+                cfgCacheTtl cfg `shouldBe` (30 :: NominalDiffTime)
+                cfgCacheMaxEntries cfg `shouldBe` 256
                 cfgLogFormat cfg `shouldBe` ConsoleLog
 
     it "applies the documented defaults for the optional variables" $ do
@@ -177,6 +181,8 @@ envLayerSpec = describe "parseEnvPure" $ do
                 unUrl (cfgPublicUpstream cfg) `shouldBe` "https://registry.npmjs.org"
                 cfgQueueBackend cfg `shouldBe` SqsQueue
                 cfgCveSyncInterval cfg `shouldBe` (3600 :: NominalDiffTime)
+                cfgCacheTtl cfg `shouldBe` (60 :: NominalDiffTime)
+                cfgCacheMaxEntries cfg `shouldBe` 1024
                 cfgAwsRegion cfg `shouldBe` Nothing
                 cfgAuthToken cfg `shouldBe` Nothing
                 cfgHelpMessage cfg `shouldBe` Nothing
