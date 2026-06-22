@@ -266,24 +266,73 @@ well-covered changes land). Both knobs live in [`codecov.yml`](codecov.yml).
 
 ## Continuous Integration
 
-Every push and PR runs the single unified workflow
-([`.github/workflows/ci.yml`](.github/workflows/ci.yml)): build & test, integration,
-a **Haddock** gate scoped to our own library (`make docs-check` — documents only
-`lib:ecluse`, skipping dependency docs and source links; the full source-linked
-site is published from `main` via Pages), and a combined **static-checks** job —
-fourmolu, hlint, `cabal check`,
-Semgrep, and **workflow-lint** (`make lint-workflows` = actionlint + zizmor, which
-audit the Actions workflows themselves for correctness and security — template
-injection, credential persistence, excessive permissions). The four non-Haskell
-checks share one job (they don't build, so a single toolchain setup serves them
-all) and each still runs even if a sibling fails, so one run reports them all. All
-feed one terminal **`gate`** job — the only required status check (plus Codecov's
+Every push to `main` and every PR runs the single unified workflow
+([`.github/workflows/ci.yml`](.github/workflows/ci.yml)). The **gating** tier feeds
+one terminal **`gate`** job — the only required status check (plus Codecov's
 server-side `codecov/project` / `codecov/patch`; see
-[Coverage](#coverage--codecov-gating)). Local `make check` runs the same set, so a
-clean local run predicts a green gate. The design rationale — least-privilege
-token, the one-required-check rule, SHA-pinned shared setup, the lean
-`nix develop .#ci` shell and Nix-store cache, and Semgrep-via-Nix — is in
+[Coverage](#coverage--codecov-gating)):
+
+- **build-test** — builds the project **once** (library, executable, all three
+  test suites) and then runs every Haskell tier against those same on-disk
+  artifacts: unit, integration (ministack over Docker), doctest, and coverage.
+  Building once removes the redundant ~8-minute dependency build that the old
+  separate build-and-test + integration jobs each paid on every PR.
+- **static-checks** — fourmolu, hlint, `cabal check`, Semgrep, and **workflow-lint**
+  (`make lint-workflows` = actionlint + zizmor, which audit the Actions workflows
+  for correctness and security — template injection, credential persistence,
+  excessive permissions). None build Haskell, so they share one toolchain setup,
+  and each runs even if a sibling fails, so one run reports them all.
+- **docs** — a **Haddock** gate scoped to our own library (`make docs-check` —
+  documents only `lib:ecluse`, skipping dependency docs and source links; the full
+  source-linked site is published from `main` via Pages).
+
+Two **non-gating** tiers also run on every PR (and post-merge on `main`), so their
+signal is visible per-PR without ever blocking the gate:
+
+- **smoke** — live npm/PyPI calls that catch protocol drift when those registries
+  change their wire behaviour. `continue-on-error`, so a transient registry blip
+  shows red on the PR but never blocks a merge; it additionally runs on the nightly
+  `schedule`, which catches drift the registries introduce independent of our
+  commits. **Promoting smoke to a required gate** is tempting given how much it
+  matters, but live-registry calls are inherently flaky — gate it only once the
+  suite distinguishes transport/network errors from genuine protocol-drift
+  assertion failures (retry or skip the former, fail on the latter), so the gate
+  fires on real drift rather than a third-party outage.
+- **weeder** — the informational dead-code report, surfaced on the PR that
+  introduces the unreachable code (where it is actionable) as well as on `main`.
+
+Both are cheap now that the dependency store is warm on PRs (they restore it from
+`main`; see [Cache management](#cache-management)). Local `make check` runs the
+gating set, so a clean local run predicts a green gate. The design rationale —
+least-privilege token, the one-required-check rule, SHA-pinned shared setup, the
+lean `nix develop .#ci` shell and Nix-store cache, and Semgrep-via-Nix — is in
 [`AGENTS.md`](AGENTS.md) → "CI & Security".
+
+### Cache management
+
+The repo's Actions cache is capped at 10 GB; past that GitHub evicts by LRU and
+the warm dependency store starts getting thrown away mid-PR. Two rules keep us
+well under the cap:
+
+1. **Save only on `main`.** Every cache (`cache-nix-action` for the Nix store;
+   `actions/cache` for the cabal store, `dist-newstyle`, and the weeder build
+   dir) is **restore-only on PRs** and written solely by `main`'s runs, anchored
+   on the shared [`setup-toolchain`](.github/actions/setup-toolchain/action.yml)
+   action. A PR restores the warm caches from its base branch but never leaves its
+   own branch-scoped copy — previously each open PR saved its own ~1.3 GB Nix store
+   + ~0.3 GB cabal cache, so a few PRs filled the quota and evicted main's entries.
+   `build-test` is the single writer of the shared cabal store + `dist-newstyle`,
+   and it writes them from the widest plan so every other job's subset is covered.
+2. **Key on the dependency plan, not the source.** The cabal caches key on
+   `flake.lock` + `cabal.project` + `cabal.project.freeze` — the inputs that
+   actually determine the resolved dependency set — instead of `**/*.cabal`, which
+   changed on ~half of commits (adding a module) and churned a fresh ~0.3 GB entry
+   each time without changing a single dependency.
+
+The [`cache-cleanup`](.github/workflows/cache-cleanup.yml) workflow is the daily
+backstop: it deletes caches on non-`main` refs and keeps only the newest couple of
+entries per key prefix on `main` (pruning superseded dependency epochs). The Nix
+store cache additionally bounds itself with `gc-max-store-size` before saving.
 
 ---
 

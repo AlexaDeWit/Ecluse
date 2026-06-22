@@ -1,17 +1,28 @@
 name: Set up toolchain
 description: >-
   Install the flake-pinned Nix, restore the Nix store from the GitHub Actions
-  cache, and (optionally) the cabal store. Centralises the SHA-pinned setup
-  actions and cache config so every CI job shares one definition. Pins are
+  cache, and (optionally) the cabal store + build dir. Centralises the SHA-pinned
+  setup actions and cache config so every CI job shares one definition. Pins are
   bumped by Dependabot here, in one place. See CONTRIBUTING.md → "Continuous
   Integration".
+
+  CACHING POLICY — restore everywhere, SAVE ONLY ON main. Every cache here is
+  restore-only on PR/feature branches; the canonical entries are written solely
+  by main's runs (the Nix store via cache-nix-action's `save:` guard below; the
+  cabal store + dist-newstyle by the build-test job's explicit save steps). GitHub
+  lets a PR restore caches from its base branch, so PRs still get a fully warm
+  toolchain — they just never create their own branch-scoped copies. That one
+  rule is what keeps the repo under the 10 GB cache ceiling: previously every PR
+  saved its own ~1.3 GB Nix store + ~0.3 GB cabal cache, so a handful of open PRs
+  filled the quota and evicted main's caches. See CONTRIBUTING.md → "Cache
+  management".
 
 inputs:
   cabal-cache:
     description: >-
-      Also restore/save the cabal store + dist-newstyle. Enable for jobs that
-      build Haskell (build/test, integration, smoke, docs); leave off for the
-      fourmolu/hlint and Semgrep jobs, which don't.
+      Also restore the cabal store + dist-newstyle. Enable for jobs that build
+      Haskell (build/test, docs, smoke, weeder); leave off for the
+      fourmolu/hlint/Semgrep/workflow-lint checks, which don't.
     default: "false"
 
 runs:
@@ -30,24 +41,51 @@ runs:
 
     # Restore /nix/store from the GitHub Actions cache, keyed on the flake, so
     # warm runs are fast and immune to cache.nixos.org flakiness. Every gate job
-    # realizes the same `.#ci` shell, so one shared key serves them all. No
-    # explicit purge: GitHub evicts caches by LRU / 7-day disuse, so this needs
-    # no `actions: write` and stays within the workflow's read-only token.
+    # realizes the same `.#ci` shell, so one shared key serves them all.
+    #
+    # save is gated to main: PR runs restore (from main's entry, via the
+    # base-branch fallback) but never write, so they can't each leave a ~1.3 GB
+    # copy behind. gc-max-store-size trims the store to its live closure before
+    # saving, so the cached entry can't balloon past the dev-shell closure. Stale
+    # older-flake.lock entries are pruned by the cache-cleanup workflow (this
+    # token is read-only; purging in-action would need `actions: write`).
     - name: Cache Nix store
       uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7.0.2
       with:
         primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.nix', 'flake.lock') }}
         restore-prefixes-first-match: nix-${{ runner.os }}-
+        save: ${{ github.ref == 'refs/heads/main' }}
+        gc-max-store-size-linux: 5G
 
-    # Hackage deps are built by cabal into CABAL_DIR / dist-newstyle, outside
-    # /nix/store, so they need their own cache.
-    - name: Cache cabal store & build artifacts
+    # Hackage deps are built by cabal into CABAL_DIR (the store + the package
+    # index), outside /nix/store, so they need their own cache. RESTORE ONLY — the
+    # build-test job is the single writer (on main), populating it from the widest
+    # plan (`cabal build all --enable-tests`) so every consumer job's narrower plan
+    # is fully covered. Keyed on the dependency *plan* inputs — flake.lock (the GHC)
+    # + cabal.project (index-state, constraints) + cabal.project.freeze (the exact
+    # version lock) — NOT `**/*.cabal`, which changed on ~half of recent commits
+    # (adding a module/source file) and needlessly churned a fresh ~0.3 GB entry
+    # each time while never actually changing the resolved dependency set.
+    - name: Restore cabal store
       if: inputs.cabal-cache == 'true'
-      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+      uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
       with:
-        path: |
-          ${{ github.workspace }}/.cabal
-          dist-newstyle
-        key: ${{ runner.os }}-cabal-${{ hashFiles('flake.lock', '**/*.cabal', 'cabal.project') }}
+        path: ${{ github.workspace }}/.cabal
+        key: cabal-store-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}
         restore-keys: |
-          ${{ runner.os }}-cabal-
+          cabal-store-${{ runner.os }}-
+
+    # The project's own incremental build products (changed-module recompiles only).
+    # Same dep-plan key, separate from the store: the store is the heavy, slow-moving
+    # part (180 compiled deps); dist-newstyle is small and fast-moving. Restore-only,
+    # written by build-test on main. The deps live in the store above, so a
+    # restore-keys fallback to a slightly older dist-newstyle only recompiles the
+    # changed local modules (~12k LoC) — never the dependency closure.
+    - name: Restore dist-newstyle
+      if: inputs.cabal-cache == 'true'
+      uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+      with:
+        path: dist-newstyle
+        key: dist-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}
+        restore-keys: |
+          dist-${{ runner.os }}-
