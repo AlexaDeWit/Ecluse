@@ -2,7 +2,7 @@
 id: S07
 title: npm projection → domain (PackageInfo/PackageDetails)
 milestone: M1 — npm protocol adapter
-status: not-started
+status: merged
 depends-on: [S06]
 test-tier: [unit]
 arch-refs:

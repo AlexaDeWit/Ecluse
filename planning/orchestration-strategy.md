@@ -142,12 +142,23 @@ A dedicated agent audits the integrated tree (fresh context, read-and-verify) fo
   ([S37](slices/S37-benchmark-harness.md)) exists, this audit is **measured, not
   eyeballed**: the micro-benchmarks quantify these regressions and the audit
   consults the informational trend (which itself never gates).
+- **Spec & doc accuracy reconciliation** — for every slice merged in the wave,
+  reconcile the as-built code against the slice file and the architecture
+  document(s) it derives from: fold any learnings, discoveries, and deviations
+  from the original acceptance criteria back into the [`slices/`](slices/) file,
+  and update the architecture doc so the design of record matches what shipped.
+  Confirm every merged slice's `status:` reads `merged`. This stops the plan and
+  the architecture drifting from reality as parallel slices land — drift the
+  per-PR loop cannot catch, because it never re-reads the spec after the merge.
+  **Material design changes are escalated to the architect** (they may reshape
+  later slices), not silently rewritten into the docs.
 
 The audit produces a **categorized findings report**; the team lead triages it:
 
 - **Safe, in-scope, behaviour-preserving fixes** (rename, dedupe, Haddock, a
-  localized conversion) land together as one reviewed, gated `refactor` / `docs`
-  PR — the same BUILD → EVALUATE → GATE loop.
+  localized conversion, slice/architecture doc reconciliation) land together as
+  one reviewed, gated `refactor` / `docs` PR — the same BUILD → EVALUATE → GATE
+  loop.
 - **Design-level or far-reaching findings** are **escalated to the architect** as
   new slices / issues rather than silently absorbed — they may reshape later waves.
 
@@ -207,6 +218,7 @@ A PR reaches the architect only when **all** hold:
 - [ ] Semgrep clean (no new ignores)
 - [ ] CI `gate` (and every job it needs) green on the PR
 - [ ] Docs updated in the same PR; changes limited to the slice's file scope (other files only with strong justification)
+- [ ] Slice file `status:` advanced to `merged` (true once this PR lands) and any as-built delta — design decisions, discoveries, deviations from the acceptance criteria — recorded in it; the slice's `planning/slices/SNN-*.md` is part of the slice's file scope
 - [ ] Commits GPG-signed + Conventional Commits
 
 ## Escalation

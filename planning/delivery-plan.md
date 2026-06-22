@@ -21,13 +21,19 @@ Per-slice files are deliberate: parallel agents (and their status updates) touch
 - **One slice = one PR.** Each slice is a single coherent, reviewable-in-a-sitting
   capability with a limited file scope, the test tier(s) it owes, acceptance
   criteria traced to architecture sections, and explicit dependencies.
-- **Status lives in the slice file.** Each [`slices/`](slices/)`SNN-*.md` carries a
-  `status:` field in its frontmatter — `not-started → in-progress → in-review →
-  merged` — advanced by a small `docs(planning)` commit when the slice moves. The
-  git history of those files *is* the milestone log. This index deliberately does
-  **not** duplicate per-slice status (that would reintroduce the merge conflict
-  the per-slice split avoids); the [**In flight**](#in-flight) section below is the
-  single-writer (team-lead) pointer to what is being worked right now.
+- **Status lives in the slice file, and the slice's own PR keeps it current.** Each
+  [`slices/`](slices/)`SNN-*.md` carries a `status:` field in its frontmatter —
+  `not-started → in-progress → in-review → merged`. The slice's implementation PR
+  advances it (to `merged`, which becomes true the moment that PR lands) and
+  records any as-built delta, with the `planning/slices/` file inside the slice's
+  file scope; the
+  [inter-wave pass](orchestration-strategy.md#inter-wave-quality--alignment-pass)
+  then reconciles every merged slice — and the architecture doc it derives from —
+  against what actually shipped. The git history of those files *is* the milestone
+  log. This index deliberately does **not** duplicate per-slice status (that would
+  reintroduce the merge conflict the per-slice split avoids); the
+  [**In flight**](#in-flight) section below is the single-writer (team-lead) pointer
+  to what is being worked right now.
 - **Depth is proximity-proportional.** Near-term slices (M0–M3) are detailed to
   implementation depth now. Later slices (M4–M8) carry goal / criteria / scope /
   deps and are deepened as their dependencies land and their worktrees are rebased
@@ -232,9 +238,11 @@ parallel, then converge at M3:
 
 ## In flight
 
-_Wave 1 (S02, S06, S10) merged. **Wave 2 in flight:** S01, S05, S07 (one worktree
-per slice). The inter-wave [quality & alignment pass](orchestration-strategy.md#inter-wave-quality--alignment-pass)
-runs once all three merge, before Wave 3 dispatches._
+_Wave 1 (S02, S06, S10) and Wave 2 (S01, S05, S07) merged; the inter-wave
+[quality & alignment pass](orchestration-strategy.md#inter-wave-quality--alignment-pass)
+ran (PR #45 — `LoweredHostSet` + a HADDOCK §11 sweep). **Wave 3 in flight:** S11
+(responses) merged; S03 (config) and S08 (npm data plane) in review; S04 (logging),
+S16 (credential wrapper), and S12 (WAI app, needs S11) are the next pulls._
 
 ---
 

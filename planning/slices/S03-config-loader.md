@@ -2,7 +2,7 @@
 id: S03
 title: Config model & fail-fast loader
 milestone: M0 — Shell, handles & foundations
-status: not-started
+status: in-review
 depends-on: [S02, S05]
 test-tier: [unit]
 arch-refs:

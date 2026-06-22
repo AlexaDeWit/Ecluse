@@ -2,7 +2,7 @@
 id: S36
 title: Outbound SSRF + input-validation + response-bound guards
 milestone: M0 — Shell, handles & foundations
-status: in-progress
+status: merged
 depends-on: []
 test-tier: [unit, integration]
 arch-refs:

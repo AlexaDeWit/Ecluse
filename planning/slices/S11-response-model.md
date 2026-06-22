@@ -2,7 +2,7 @@
 id: S11
 title: Error model + denial responses
 milestone: M2 — Web front door
-status: not-started
+status: merged
 depends-on: [S05, S10]
 test-tier: [unit]
 arch-refs:

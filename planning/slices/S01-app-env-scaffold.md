@@ -2,7 +2,7 @@
 id: S01
 title: App/Env scaffold + composition root
 milestone: M0 — Shell, handles & foundations
-status: not-started
+status: merged
 depends-on: [S02]
 test-tier: [unit]
 arch-refs:
