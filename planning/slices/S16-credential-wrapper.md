@@ -53,12 +53,12 @@ smoke-tier only.
 - The policy earned its own module, `Ecluse.Credential.Refresh`
   (`refreshingProvider` + `RefreshConfig`/`defaultRefreshConfig`); the handle and
   `staticProvider` stay in `Ecluse.Credential`. `Refresh` imports `Credential`
-  (one-way) rather than introducing a `.Types` module, so the existing fence held
+  (one-way) rather than introducing a `.Types` module, so the existing scope held
   and no cyclic-import split was needed.
 - **No shared breaker module.** The circuit breaker is a small self-contained
   state machine (`Closed`/`Open`/`HalfOpen`) private to `Refresh`, shared by the
   background and synchronous mint paths via one `admitMint` gate. This stayed
-  inside the slice fence, so the cross-slice "reusable breaker" decision flagged
+  inside the slice scope, so the cross-slice "reusable breaker" decision flagged
   for S21 was **not** triggered and needed no escalation; S21 can still factor a
   shared module later if it wants one.
 - `mintToken`/clock/jitter are injected on `RefreshConfig`, so the whole policy is
