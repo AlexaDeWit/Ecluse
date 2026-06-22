@@ -2,7 +2,7 @@
 id: S09
 title: URL rewrite + packument filtering
 milestone: M1 — npm protocol adapter
-status: not-started
+status: in-progress
 depends-on: [S05, S07]
 test-tier: [unit]
 arch-refs:
