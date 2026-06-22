@@ -134,13 +134,15 @@ merge unions it with the trusted set:
   ecosystem-agnostic by calling the predicate. Other tags (`next`, `beta`, …) that
   point at a removed version are **dropped** rather than repointed — aiming `beta`
   at a stable release would misrepresent it.
-- **No survivors → 403 or 503.** If **nothing survives in the merged document** —
-  no trusted private versions, and every gated public version was rejected — the
-  status follows the cause: **403** with the collected denial reasons when every
-  rejection is by policy; **503** (+`Retry-After`) when any rejection was
-  transient/undecidable, **or when an upstream the merge needed was itself
-  unavailable** (it may resolve on retry). Never 404 — the package exists; its
-  versions were withheld. See the serve [Error model](web-layer.md#error-model).
+- **No survivors → 403, 503, or 500.** If **nothing survives in the merged
+  document** — no trusted private versions, and every gated public version was
+  rejected — the status follows the most recoverable cause: **403** with the
+  collected denial reasons when every rejection is by policy; **503**
+  (+`Retry-After`) when any rejection was transient/undecidable, **or when an
+  upstream the merge needed was itself unavailable** (it may resolve on retry);
+  **500** when an exclusion is a permanent inability (`WontResolve`) and none is
+  retryable. Never 404 — the package exists; its versions were withheld. See the
+  serve [Error model](web-layer.md#error-model).
 
 Repointing `latest` downward when its target is denied is a deliberate downgrade,
 and it is the resilience posture — a not-yet-cleared (or actively bad) release does
