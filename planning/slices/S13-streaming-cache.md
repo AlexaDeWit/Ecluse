@@ -2,7 +2,7 @@
 id: S13
 title: Streaming + conditional-GET/ETag + metadata cache
 milestone: M2 — Web front door
-status: not-started
+status: in-review
 depends-on: [S12]
 test-tier: [unit]
 arch-refs:
@@ -22,22 +22,22 @@ the short-TTL in-memory metadata cache shared by the packument and tarball-gatin
 paths.
 
 **Acceptance criteria.**
-- [ ] **Streaming**: artifacts stream through with constant memory via
+- [x] **Streaming**: artifacts stream through with constant memory via
   `withResponse`/`responseStream`, the upstream connection bracketed around the
   `respond` call so it lives exactly as long as the streamed body (no
   use-after-free); backpressure from `write` blocking on the socket. —
   _web-layer.md#streaming-and-resource-lifetime_
-- [ ] **Conditional-GET/ETag**: for **pass-through** bodies (artifacts, unfiltered
+- [x] **Conditional-GET/ETag**: for **pass-through** bodies (artifacts, unfiltered
   private-upstream metadata) relay the client's validators upstream and pass `304`s
   back; for **transformed** bodies (filtered packuments, S09) compute our **own**
   `ETag` over the served bytes and answer conditional requests against that. —
   _web-layer.md#middleware-and-helper-libraries_
-- [ ] **Metadata cache**: an STM-backed, short-TTL, size-bounded cache (the `cache`
+- [x] **Metadata cache**: an STM-backed, short-TTL, size-bounded cache (the `cache`
   library) keyed by package holding the parsed `PackageInfo`; both the packument and
   the tarball-gating fetches reuse one fetch+parse; concurrent resolutions of a
   popular package collapse to one upstream call. **Metadata, not verdict** — rules
   re-evaluate on cached metadata each request. — _web-layer.md#metadata-cache_
-- [ ] Cache lives in `Env` (filling the S01 slot); TTL/size are configurable (S03).
+- [x] Cache lives in `Env` (filling the S01 slot); TTL/size are configurable (S03).
 
 **File scope.**
 - `src/Ecluse/Server/Stream.hs` — the streaming helper.
