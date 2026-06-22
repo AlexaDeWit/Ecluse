@@ -52,7 +52,7 @@ module Ecluse.Credential.Refresh (
 import Control.Concurrent.STM (retry)
 import Data.Time (NominalDiffTime, UTCTime, addUTCTime, diffUTCTime)
 import UnliftIO (async, throwIO, try)
-import UnliftIO.Exception (stringException)
+import UnliftIO.Exception (finally, stringException)
 
 import Ecluse.Credential (AuthToken (..), CredentialProvider (..))
 
@@ -219,12 +219,12 @@ suppressed refresh just keeps serving the cached token, so the request hot path 
 unaffected either way.
 -}
 backgroundRefresh :: RefreshConfig -> TVar CacheState -> IO ()
-backgroundRefresh cfg stateVar = do
-    now <- rcClock cfg
-    permitted <- atomically (admitMint stateVar now)
-    if not permitted
-        then atomically (modifyTVar' stateVar (\st -> st{csRefreshing = False}))
-        else do
+backgroundRefresh cfg stateVar = refresh `finally` releaseSingleFlight stateVar
+  where
+    refresh = do
+        now <- rcClock cfg
+        permitted <- atomically (admitMint stateVar now)
+        when permitted $ do
             result <- try (rcMint cfg)
             now' <- rcClock cfg
             case result of
@@ -241,24 +241,36 @@ mints, and an expired token plus a failing mint is the one case that surfaces to
 the caller.
 -}
 mintSynchronously :: RefreshConfig -> TVar CacheState -> IO AuthToken
-mintSynchronously cfg stateVar = do
-    now <- rcClock cfg
-    permitted <- atomically (admitMint stateVar now)
-    if not permitted
-        then do
-            atomically (modifyTVar' stateVar (\st -> st{csRefreshing = False}))
-            throwIO BreakerOpen
-        else do
-            result <- try (rcMint cfg)
-            now' <- rcClock cfg
-            case result of
-                Right token -> do
-                    due <- refreshDueAt cfg now' token
-                    atomically (modifyTVar' stateVar (onMintSuccess token due))
-                    pure token
-                Left (e :: SomeException) -> do
-                    atomically (modifyTVar' stateVar (onMintFailure cfg now'))
-                    throwIO e
+mintSynchronously cfg stateVar = mint `finally` releaseSingleFlight stateVar
+  where
+    mint = do
+        now <- rcClock cfg
+        permitted <- atomically (admitMint stateVar now)
+        if not permitted
+            then throwIO BreakerOpen
+            else do
+                result <- try (rcMint cfg)
+                now' <- rcClock cfg
+                case result of
+                    Right token -> do
+                        due <- refreshDueAt cfg now' token
+                        atomically (modifyTVar' stateVar (onMintSuccess token due))
+                        pure token
+                    Left (e :: SomeException) -> do
+                        atomically (modifyTVar' stateVar (onMintFailure cfg now'))
+                        throwIO e
+
+{- | Release the single-flight flag, run in a 'finally' around every mint attempt
+so it is cleared on __every__ exit — success, a synchronous mint failure, or an
+__asynchronous__ exception (cancellation \/ timeout) landing between claiming the
+flag and folding the result. Without this, an async exception would leave the flag
+set and wedge every later expired caller on the STM 'retry'. The flag is held for
+the whole operation, so no concurrent mint can re-claim it mid-flight — an
+unconditional release here therefore cannot clobber another operation's claim.
+-}
+releaseSingleFlight :: TVar CacheState -> IO ()
+releaseSingleFlight stateVar =
+    atomically (modifyTVar' stateVar (\st -> st{csRefreshing = False}))
 
 {- | The circuit-breaker admission gate, shared by the background and synchronous
 mint paths. While the breaker is 'Open' and the cooldown has not elapsed, deny
@@ -276,26 +288,27 @@ admitMint stateVar now = do
                 pure True
         _ -> pure True
 
-{- | Fold a successful mint into the cache: install the token, reset the breaker,
-and clear the single-flight flag.
+{- | Fold a successful mint into the cache: install the token and reset the
+breaker. The single-flight flag is released by 'releaseSingleFlight' in the
+'finally' around the mint (not here), so it clears even on an async exception.
 -}
 onMintSuccess :: AuthToken -> Maybe UTCTime -> CacheState -> CacheState
 onMintSuccess token due st =
     st
         { csToken = token
         , csRefreshDue = due
-        , csRefreshing = False
         , csBreaker = Closed 0
         }
 
-{- | Fold a failed mint into the cache: keep the still-cached token, clear the
-single-flight flag, and advance the breaker — counting up in 'Closed' until the
-threshold trips it 'Open', and re-opening when a half-open probe fails. (A mint is
-never attempted while the breaker is already 'Open', so that case does not arise
-here; folding it in with the half-open re-open keeps the function total.)
+{- | Fold a failed mint into the cache: keep the still-cached token and advance the
+breaker — counting up in 'Closed' until the threshold trips it 'Open', and
+re-opening when a half-open probe fails. (A mint is never attempted while the
+breaker is already 'Open', so that case does not arise here; folding it in with the
+half-open re-open keeps the function total.) The single-flight flag is released
+separately by 'releaseSingleFlight' (see 'onMintSuccess').
 -}
 onMintFailure :: RefreshConfig -> UTCTime -> CacheState -> CacheState
-onMintFailure cfg now st = st{csRefreshing = False, csBreaker = advance (csBreaker st)}
+onMintFailure cfg now st = st{csBreaker = advance (csBreaker st)}
   where
     tripped :: Breaker
     tripped = Open (addUTCTime (rcBreakerCooldown cfg) now)

@@ -3,7 +3,7 @@ module Ecluse.CredentialSpec (spec) where
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, UTCTime (..), addUTCTime, fromGregorian)
 import Test.Hspec
-import UnliftIO (async, timeout, wait)
+import UnliftIO (async, cancel, timeout, wait)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (throwString)
 
@@ -168,6 +168,34 @@ spec = do
             atomically (putTMVar gate ())
             waitUntil ((== "tok-2") . unSecret . authSecret <$> currentToken provider)
                 `shouldReturn` True
+
+        it "releases the single-flight flag when a mint is cancelled mid-flight (no wedge)" $ do
+            -- Regression: an async exception (cancellation / timeout) landing between
+            -- claiming the single-flight flag and folding the mint result must still
+            -- release the flag, or every later expired caller wedges on the STM retry.
+            (clock, setClock) <- newClock t0
+            started <- newEmptyTMVarIO
+            gate <- newEmptyTMVarIO
+            mintCount <- newIORef (0 :: Int)
+            let mint = do
+                    n <- atomicModifyIORef' mintCount (\c -> (c + 1, c + 1))
+                    case n of
+                        1 -> pure (tokenExpiringIn "seed" 1000)
+                        2 -> do
+                            -- In the mint (flag claimed); block so the caller can be
+                            -- cancelled here, mid-flight.
+                            atomically (putTMVar started ())
+                            (atomically (takeTMVar gate) :: IO ())
+                            pure (tokenExpiringIn "unreached" 1000)
+                        _ -> pure (tokenExpiringIn "recovered" 1000)
+            provider <- refreshingProvider (testConfig clock mint)
+            setClock (addUTCTime 2000 t0) -- expired: the next serve mints synchronously
+            blocked <- async (currentToken provider)
+            atomically (takeTMVar started) -- the caller holds the flag and is in the mint
+            cancel blocked -- async-cancel mid-mint; the finally must release the flag
+            -- A fresh caller must not wedge: with the flag released it mints (call #3).
+            result <- timeout 1_000_000 (currentToken provider)
+            (unSecret . authSecret <$> result) `shouldBe` Just "recovered"
 
         it "keeps serving the still-valid token when a background mint fails" $ do
             (clock, setClock) <- newClock t0
