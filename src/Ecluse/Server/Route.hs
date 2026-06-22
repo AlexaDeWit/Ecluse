@@ -81,7 +81,7 @@ classify :: [Text] -> Route
 classify ("-" : meta) = classifyMeta meta
 classify segments = classifyPackage segments
 
-{- | Classify a reserved meta-route — the segments __after__ the leading @"-"@.
+{- Classify a reserved meta-route — the segments __after__ the leading @"-"@.
 Only the routes the proxy actually serves are recognised; every other meta-route
 is 'Unsupported' (never re-interpreted as a package).
 -}
@@ -91,7 +91,7 @@ classifyMeta = \case
     ["v1", "search"] -> Search
     _ -> Unsupported
 
-{- | Classify a non-meta path as a package request. Splits off the leading
+{- Classify a non-meta path as a package request. Splits off the leading
 package unit (handling both scoped encodings) and dispatches on what trails it: a
 bare package is a 'Packument', @\/-\/{file}.tgz@ is a 'Tarball', anything else is
 'Unsupported'.
@@ -107,11 +107,11 @@ classifyPackage segments =
         ["-", file] | isTarballFile file && isSafeComponent file -> Tarball name file
         _ -> Unsupported
 
-{- | Peel the leading package unit off a path, returning its 'PackageName' and
+{- Peel the leading package unit off a path, returning its 'PackageName' and
 the remaining segments. Handles both wire encodings of a scoped name:
 
-* one decoded segment, @\@scope\/pkg@ — split on the first @\'\/\'@;
-* two segments, @\@scope@ then @pkg@ — consume both.
+\* one decoded segment, @\@scope\/pkg@ — split on the first @\'\/\'@;
+\* two segments, @\@scope@ then @pkg@ — consume both.
 
 Returns 'Nothing' (so the caller denies it) for anything without a usable
 package: an empty path, or a name with an __unsafe component__ — a scope or base
@@ -171,7 +171,7 @@ isSafeComponent c =
   where
     safeChar ch = ch /= '/' && ch /= '\\' && not (isControl ch)
 
-{- | Whether a tarball-slot filename is an npm tarball — a non-empty name ending
+{- Whether a tarball-slot filename is an npm tarball — a non-empty name ending
 in @.tgz@. Guards the 'Tarball' route (alongside 'isSafeComponent') so a
 non-artifact file under @\/-\/@ falls through to 'Unsupported'.
 -}
