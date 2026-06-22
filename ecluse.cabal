@@ -58,6 +58,7 @@ library
     Ecluse.Rules
     Ecluse.Rules.Types
     Ecluse.Security
+    Ecluse.Server.Response
     Ecluse.Server.Route
     Ecluse.Version
 
@@ -96,6 +97,7 @@ test-suite ecluse-unit
     Ecluse.Registry.Npm.WireSpec
     Ecluse.RulesSpec
     Ecluse.SecuritySpec
+    Ecluse.Server.ResponseSpec
     Ecluse.Server.RouteSpec
     Ecluse.VersionOrderingSpec
     Ecluse.VersionSpec
