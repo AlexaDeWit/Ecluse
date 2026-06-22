@@ -5,25 +5,35 @@ spread across upstreams: a trusted private upstream holds what has been vetted,
 while a gated public upstream holds the full history — including versions not yet
 mirrored. Serving only the private document would hide those, so Écluse serves
 their __union__ rather than short-circuiting on a private hit. This module is the
-pure, ecosystem-agnostic fold that builds that union over the
+pure, ecosystem-agnostic fold that reasons over that union on the
 'Ecluse.Package.PackageInfo' domain model — it lives above the registry handle,
 written once and reused by every ecosystem, and never imports a registry adapter.
+
+__Decision surface, not served surface.__ This module reasons over the /typed/
+'PackageInfo' but does __not__ emit a finished, re-serialisable 'PackageInfo'.
+The document Écluse serves is the raw upstream JSON (@Value@), edited in place by
+the serve layer (S14), so that every unmodeled wire key survives. The typed model
+is lossy, so re-encoding it would drop those keys. This module therefore emits a
+'MergePlan' — exactly which versions survive, which input each survivor came from,
+the reconciled @dist-tags@\/@time@, and the detected divergences — that the serve
+layer __replays onto the raw @Value@s__. See @docs\/architecture\/registry-model.md@
+→ "Decision surface vs served surface".
 
 The trust split is the __caller's__, expressed as a 'Provenance' tag on each
 input and applied /before/ the merge: 'TrustedSource' (private) versions are
 admitted as-is; 'GatedSource' (public) versions are the already-rule-filtered set.
-This module
-does not run rules — it unions exactly what it is handed (see
+This module does not run rules — it reasons over exactly what it is handed (see
 @docs\/architecture\/rules-engine.md@ → "Applying verdicts to a packument").
 
 Two things make the merge more than a map union, and both are
 __supply-chain signals, not silent reconciliations__:
 
 * __Collision.__ When the same version key comes from both a 'TrustedSource' and
-  a 'GatedSource', the trusted copy wins (it is the authority).
+  a 'GatedSource', the trusted copy wins (it is the authority) — recorded in the
+  plan as the survivor's winning 'SourceId'.
 * __Divergence.__ If the colliding copies carry /differing artifact integrity/,
   that is exactly the tampering Écluse exists to catch. The trusted copy still
-  wins the merge, but the divergence is __reported__ in the 'MergeResult'; whether
+  wins the merge, but the divergence is __reported__ in the 'MergePlan'; whether
   to additionally drop the version (fail-closed) is a policy decision left to the
   caller, so this module stays pure.
 
@@ -34,7 +44,8 @@ module Ecluse.Package.Merge (
     Provenance (..),
 
     -- * Merging
-    MergeResult (..),
+    SourceId,
+    MergePlan (..),
     Divergence (..),
     IntegrityFingerprint,
     integrityHashes,
@@ -50,8 +61,9 @@ import Ecluse.Package (
     HashAlg,
     PackageDetails (..),
     PackageInfo (..),
+    PackageName,
  )
-import Ecluse.Version (Version, compareVersions, unVersion)
+import Ecluse.Version (Version, selectLatest, unVersion)
 
 {- | The trust provenance of an upstream's contribution to the merge. The split
 is decided by the caller — by /which/ upstream a document came from — and applied
@@ -63,13 +75,29 @@ named @Trusted@; a bare name would collide for the many callers that import
 "Ecluse.Package" openly.
 -}
 data Provenance
-    = -- | A private-upstream document. Its versions are already vetted, so they
-      -- enter the union unfiltered and win any collision.
+    = {- | A private-upstream document. Its versions are already vetted, so they
+      enter the union unfiltered and win any collision.
+      -}
       TrustedSource
-    | -- | A public-upstream document. Its versions are the set that already
-      -- survived the rules engine; the merge unions them but never re-filters.
+    | {- | A public-upstream document. Its versions are the set that already
+      survived the rules engine; the merge unions them but never re-filters.
+      -}
       GatedSource
     deriving stock (Eq, Ord, Show)
+
+{- | A stable identifier for one input to a single 'mergePackuments' call: the
+__0-based index of that @(Provenance, PackageInfo)@ in the input list__.
+
+The serve layer (S14) needs to take a surviving version's object from the /raw/
+@Value@ of whichever source won it, so the plan must name that source. 'Provenance'
+alone is /not/ enough: it identifies a source only while there is exactly one
+input per provenance (the npm topology today — one trusted, one gated). The
+input index stays unambiguous even when several inputs share a provenance (e.g. an
+aggregating private upstream plus a first-party source, both 'TrustedSource'),
+which keeps the plan robust for the multi-source case without a new type. The
+caller pairs each 'SourceId' back to the raw @Value@ it passed at that position.
+-}
+type SourceId = Int
 
 {- | A detected integrity conflict: a version key present in more than one source
 whose artifact integrity does /not/ agree. The trusted copy wins the merge; this
@@ -79,8 +107,9 @@ signal — surfaced, never silently reconciled.
 -}
 data Divergence = Divergence
     { divVersion :: Text
-    -- ^ The raw version-string key the conflict was found at (the
-    -- 'Ecluse.Package.infoVersions' key).
+    {- ^ The raw version-string key the conflict was found at (the
+    'Ecluse.Package.infoVersions' key).
+    -}
     , divWinning :: IntegrityFingerprint
     -- ^ Integrity of the copy that won the merge (the higher-precedence source).
     , divLosing :: IntegrityFingerprint
@@ -88,17 +117,36 @@ data Divergence = Divergence
     }
     deriving stock (Eq, Show)
 
-{- | The outcome of merging a set of upstream packuments: the one document Écluse
-serves, plus every integrity divergence detected while building it.
+{- | The outcome of reasoning over a set of upstream packuments: a __plan__ the
+serve layer (S14) replays onto the raw upstream @Value@s to assemble the lossless
+served body. It carries exactly the decisions the merge owns — never a finished,
+re-serialisable document (see this module's header, "Decision surface, not served
+surface").
 -}
-data MergeResult = MergeResult
-    { mergedInfo :: PackageInfo
-    -- ^ The merged packument: the union of surviving versions, with @dist-tags@
-    -- and @time@ reconciled over that union.
-    , mergeDivergences :: [Divergence]
-    -- ^ Every same-version integrity conflict found, in the order the merge
-    -- encountered them. Empty when no two sources disagreed on a shared version's
-    -- integrity.
+data MergePlan = MergePlan
+    { mpName :: PackageName
+    {- ^ The package identity, taken from the first input (all inputs are the same
+    package fetched across its upstreams).
+    -}
+    , mpSurvivors :: Map Text SourceId
+    {- ^ Each surviving version key mapped to the 'SourceId' of the input that won
+    it, so the serve layer takes that version's object from the right source's
+    raw @Value@. Trusted wins a collision; absent versions are not keys here.
+    -}
+    , mpDistTags :: Map Text Version
+    {- ^ @dist-tags@ reconciled over the surviving union — @latest@ resolved by the
+    shared selector, every other surviving-target tag carried, absent-target
+    tags dropped.
+    -}
+    , mpTime :: Map Text UTCTime
+    {- ^ The @time@ union restricted to surviving versions; publish times for
+    versions that did not survive are dropped.
+    -}
+    , mpDivergences :: [Divergence]
+    {- ^ Every same-version integrity conflict found, in the order the merge
+    encountered them. Empty when no two sources disagreed on a shared version's
+    integrity.
+    -}
     }
     deriving stock (Eq, Show)
 
@@ -118,85 +166,96 @@ newtype IntegrityFingerprint = IntegrityFingerprint [(HashAlg, Text)]
 integrityHashes :: IntegrityFingerprint -> [(HashAlg, Text)]
 integrityHashes (IntegrityFingerprint hs) = hs
 
-{- | Merge several upstream packuments, by 'Provenance', into the single document
-Écluse serves, reporting every integrity divergence found. Pure and total.
+{- | Reason over several upstream packuments, by 'Provenance', and emit the
+'MergePlan' the serve layer replays onto the raw @Value@s. Pure and total.
 
-The merge is a fold with the __degenerate identity at one input__: merging a
-single packument yields that packument (its versions, tags, and times) with no
-divergences, so 0\/1-upstream deployments need no special case. The model:
+The merge is a fold with the __degenerate identity at one input__: a single
+packument yields a plan whose survivors are all of its versions (all won by source
+@0@), with its tags and times reconciled and no divergences, so 0\/1-upstream
+deployments need no special case. The model:
 
 * __Union by version key__, with __'TrustedSource' winning__ a collision over
-  'GatedSource' (the private upstream is the authority). A collision whose integrity
-  differs is recorded as a 'Divergence'; the winner is still kept.
-* __'dist-tags' reconciled over the union.__ @latest@ is repointed to the highest
-  /surviving/ version across all sources (by 'compareVersions'); any other tag
-  pointing at a version absent from the union is dropped.
-* __@time@ restricted to the union__ — publish times for versions that did not
-  survive are dropped.
+  'GatedSource' (the private upstream is the authority). The winning input's
+  'SourceId' is recorded for the survivor. A collision whose integrity differs is
+  recorded as a 'Divergence'; the winner is still kept.
+* __'dist-tags' reconciled over the union.__ @latest@ is resolved by
+  'Ecluse.Version.selectLatest' — keep-unless-denied, stable-preferring, and
+  unparseable-safe — from the precedence-winning source's tagged @latest@ and the
+  surviving versions; any other tag pointing at a version absent from the union is
+  dropped. Collisions on the same tag are resolved __by provenance__ (trusted
+  wins), consistent with the version fold, so the plan does not depend on caller
+  input order.
+* __@time@ restricted to the union__, with per-version collisions also resolved by
+  provenance — publish times for versions that did not survive are dropped.
 
-The merged document's identity ('Ecluse.Package.infoName') is taken from the
-first input; callers fetch one package across its upstreams, so all inputs share
-it. An empty input list yields an empty document for that name's absence — there
-is nothing to serve — represented by 'Nothing'.
+The plan's identity ('mpName') is taken from the first input; callers fetch one
+package across its upstreams, so all inputs share it. An empty input list yields
+'Nothing' — there is nothing to serve.
 -}
-mergePackuments :: [(Provenance, PackageInfo)] -> Maybe MergeResult
+mergePackuments :: [(Provenance, PackageInfo)] -> Maybe MergePlan
 mergePackuments [] = Nothing
 mergePackuments inputs@((_, firstInfo) : _) =
     Just
-        MergeResult
-            { mergedInfo =
-                PackageInfo
-                    { infoName = infoName firstInfo
-                    , infoVersions = mergedVersions
-                    , infoDistTags = reconciledTags
-                    , infoPublishedAt = reconciledTimes
-                    }
-            , mergeDivergences = divergences
+        MergePlan
+            { mpName = infoName firstInfo
+            , mpSurvivors = Map.map snd mergedVersions
+            , mpDistTags = reconciledTags
+            , mpTime = reconciledTimes
+            , mpDivergences = divergences
             }
   where
-    -- Fold the versions of every source into one map, trusted winning on a key
-    -- collision, collecting any integrity divergence as we go.
+    -- Each input tagged with its provenance and its stable 'SourceId' (list index).
+    indexed :: [(SourceId, Provenance, PackageInfo)]
+    indexed = [(i, prov, info) | (i, (prov, info)) <- zip [0 ..] inputs]
+
+    -- Fold every source's versions into one map, trusted winning a key collision,
+    -- recording for each survivor the details that won and the source that won it,
+    -- and collecting any integrity divergence as we go.
     (mergedVersions, divergences) =
-        foldl' mergeSource (Map.empty, []) inputs
+        foldl' mergeSource (Map.empty, []) indexed
 
     mergeSource ::
-        (Map Text PackageDetails, [Divergence]) ->
-        (Provenance, PackageInfo) ->
-        (Map Text PackageDetails, [Divergence])
-    mergeSource acc (prov, info) =
-        foldl' (mergeVersion prov) acc (Map.toList (infoVersions info))
+        (Map Text (PackageDetails, SourceId), [Divergence]) ->
+        (SourceId, Provenance, PackageInfo) ->
+        (Map Text (PackageDetails, SourceId), [Divergence])
+    mergeSource acc (sid, prov, info) =
+        foldl' (mergeVersion sid prov) acc (Map.toList (infoVersions info))
 
     mergeVersion ::
+        SourceId ->
         Provenance ->
-        (Map Text PackageDetails, [Divergence]) ->
+        (Map Text (PackageDetails, SourceId), [Divergence]) ->
         (Text, PackageDetails) ->
-        (Map Text PackageDetails, [Divergence])
-    mergeVersion prov (versions, divs) (key, incoming) =
+        (Map Text (PackageDetails, SourceId), [Divergence])
+    mergeVersion sid prov (versions, divs) (key, incoming) =
         case Map.lookup key versions of
-            Nothing -> (Map.insert key incoming versions, divs)
-            Just existing ->
-                let (winner, divs') = resolveCollision key prov existing incoming
+            Nothing -> (Map.insert key (incoming, sid) versions, divs)
+            Just (existing, existingSid) ->
+                let (winner, divs') =
+                        resolveCollision key prov (existing, existingSid) (incoming, sid)
                  in (Map.insert key winner versions, divs <> divs')
 
     -- The accumulator already holds a value for this key; @existing@ won an
     -- earlier round (so it is at least as high-precedence as anything before),
     -- and @incoming@ is the new contender at provenance @prov@. The higher
-    -- precedence wins, and a differing integrity is a divergence either way.
+    -- precedence wins — keeping its 'SourceId' — and a differing integrity is a
+    -- divergence either way.
     resolveCollision ::
         Text ->
         Provenance ->
-        PackageDetails ->
-        PackageDetails ->
-        (PackageDetails, [Divergence])
+        (PackageDetails, SourceId) ->
+        (PackageDetails, SourceId) ->
+        ((PackageDetails, SourceId), [Divergence])
     resolveCollision key prov existing incoming =
-        let winner = if prov == TrustedSource then incoming else existing
-            loser = if prov == TrustedSource then existing else incoming
-            diverges = fingerprint existing /= fingerprint incoming
+        let (winner, loser)
+                | prov == TrustedSource = (incoming, existing)
+                | otherwise = (existing, incoming)
+            diverges = fingerprint (fst existing) /= fingerprint (fst incoming)
             divs =
                 [ Divergence
                     { divVersion = key
-                    , divWinning = fingerprint winner
-                    , divLosing = fingerprint loser
+                    , divWinning = fingerprint (fst winner)
+                    , divLosing = fingerprint (fst loser)
                     }
                 | diverges
                 ]
@@ -205,36 +264,52 @@ mergePackuments inputs@((_, firstInfo) : _) =
     survives :: Text -> Bool
     survives key = Map.member key mergedVersions
 
-    -- @dist-tags@ reconciled over the union: @latest@ to the highest surviving
-    -- version across all sources, every other surviving-target tag carried, and
-    -- absent-target tags dropped. Built from the lowest-precedence source first
-    -- so higher-precedence sources' tag targets win.
+    -- The surviving version objects (the details that won each key).
+    survivingDetails :: [PackageDetails]
+    survivingDetails = map fst (Map.elems mergedVersions)
+
+    -- @dist-tags@ reconciled over the union: every surviving-target tag carried
+    -- with same-tag collisions resolved __by provenance__ (trusted wins), and
+    -- @latest@ resolved by the shared selector. Built so the plan never depends on
+    -- the order the caller happened to pass the inputs.
     reconciledTags :: Map Text Version
     reconciledTags =
-        let carried =
-                Map.filter (survives . unVersion) $
-                    Map.unions (map (infoDistTags . snd) (reverse inputs))
-         in case latestSurviving of
+        let carried = Map.filter (survives . unVersion) (byProvenance infoDistTags)
+         in case resolvedLatest of
                 Nothing -> Map.delete "latest" carried
                 Just v -> Map.insert "latest" v carried
 
-    -- The highest surviving version across the union, by 'compareVersions'.
-    -- Versions whose raw text does not parse abstain from ordering, so they
-    -- cannot become @latest@ (mirroring the version engine's "unknown" posture).
-    latestSurviving :: Maybe Version
-    latestSurviving =
-        foldl' higher Nothing (map pkgVersion (Map.elems mergedVersions))
-      where
-        higher acc v = case acc of
-            Nothing -> Just v
-            Just best -> if compareVersions v best == Just GT then Just v else acc
+    -- @latest@ via the shared resolver: keep the precedence-winning source's
+    -- tagged @latest@ if it survives, else repoint (stable-preferring,
+    -- unparseable-safe) among survivors. @chosen@ is picked by provenance — the
+    -- trusted source's @latest@ when one is tagged — consistent with the version
+    -- and dist-tag folds, so it does not depend on caller input order.
+    resolvedLatest :: Maybe Version
+    resolvedLatest =
+        selectLatest chosenLatest (map pkgVersion survivingDetails)
 
-    -- @time@ over the union: each source's publish times, restricted to surviving
-    -- versions, with higher-precedence sources winning a per-version collision.
+    chosenLatest :: Maybe Version
+    chosenLatest = Map.lookup "latest" (byProvenance infoDistTags)
+
+    -- @time@ over the union: each source's publish times restricted to surviving
+    -- versions, with per-version collisions resolved by provenance (trusted wins).
     reconciledTimes :: Map Text UTCTime
     reconciledTimes =
-        Map.filterWithKey (\k _ -> survives k) $
-            Map.unions (map (infoPublishedAt . snd) (reverse inputs))
+        Map.filterWithKey (\k _ -> survives k) (byProvenance infoPublishedAt)
+
+    {- Combine a per-source map across all inputs, resolving same-key collisions
+    __by provenance__: a 'TrustedSource' entry wins over a 'GatedSource' one,
+    independent of the order the inputs were passed. A left-biased union over the
+    inputs sorted so trusted sources come first achieves this; 'Data.Map.Strict'
+    is stable so a later trusted source never displaces an earlier one needlessly,
+    but any two values that could collide across the trust split are decided by the
+    split, not by position. -}
+    byProvenance :: (PackageInfo -> Map Text a) -> Map Text a
+    byProvenance f =
+        Map.unions [f info | (_, _, info) <- sortOn provenanceRank indexed]
+      where
+        -- Trusted ranks before gated, so trusted wins the left-biased union.
+        provenanceRank (_, prov, _) = prov == GatedSource
 
 -- The order-independent integrity fingerprint of a version: every artifact's
 -- @(algorithm, digest)@ pairs, gathered across all artifacts and sorted, so the
