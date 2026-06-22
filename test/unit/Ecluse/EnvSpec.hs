@@ -3,7 +3,7 @@ module Ecluse.EnvSpec (spec) where
 import Data.Text qualified as T
 import Network.HTTP.Client (Manager, defaultManagerSettings, newManager)
 import Test.Hspec
-import UnliftIO (bracket, evaluate, try)
+import UnliftIO (bracket, evaluate, timeout, try)
 import UnliftIO.Exception (StringException, throwString)
 
 import Ecluse (runServer, runWorker, unconfiguredCredentials, unconfiguredRegistry)
@@ -136,9 +136,13 @@ spec = do
                 Right () -> expectationFailure "expected the body's exception to propagate"
 
     describe "split-ready services" $ do
-        it "runServer over an Env returns (the stub serves nothing yet)" $ do
+        it "runServer over an Env serves (blocks) rather than returning" $ do
+            -- The server is now a real blocking listener: started under a short
+            -- timeout it keeps serving until cancelled, so 'timeout' yields
+            -- 'Nothing'. (The routing/meta/middleware behaviour itself is asserted
+            -- socket-free in "Ecluse.ServerSpec".)
             env <- newTestEnv
-            runServer env `shouldReturn` ()
+            timeout 100000 (runServer env) `shouldReturn` Nothing
 
         it "runWorker over an Env returns (the stub consumes nothing yet)" $ do
             env <- newTestEnv
