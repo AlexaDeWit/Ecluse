@@ -143,6 +143,16 @@ filterSpec = describe "filterPackument" $ do
         topLevelKey "_id" (Object (rawObject filtered)) `shouldBe` Just (String "thing")
         versionKey "1.0.0" "customField" (Object (rawObject filtered)) `shouldBe` Just (String "kept")
 
+    it "drops a denied version from time but keeps created/modified bookkeeping" $ do
+        -- `time` carries npm's unmodelled `created`/`modified` keys alongside the
+        -- per-version timestamps; only the denied 2.0.0 entry must go.
+        filtered <- filterTo twoVersionsWithTimeBookkeeping
+        let t = timeKeysOf filtered
+        Map.member "created" t `shouldBe` True
+        Map.member "modified" t `shouldBe` True
+        Map.member "1.0.0" t `shouldBe` True
+        Map.member "2.0.0" t `shouldBe` False
+
     it "signals NoSurvivors, carrying each denied version's decision, when nothing survives" $ do
         -- Both versions are 1 day old: neither clears the quarantine.
         (info, v) <- loadPackument allYoung
@@ -174,6 +184,23 @@ coherenceSpec = describe "coherence of the filtered packument" $ do
     it "synthesises a minimal dist-tags.latest when upstream carried none" $ do
         filtered <- filterTo noDistTagsPackument
         distTag "latest" filtered `shouldBe` Just "1.0.0"
+
+    it "synthesises latest when dist-tags is present but null (not merely absent)" $ do
+        -- `dist-tags: null` passes projection (read as absent) but the raw body
+        -- still carries the null; without repair it would ship with no resolvable
+        -- latest. Coherence outranks relaying the malformed shape.
+        filtered <- filterTo nullDistTagsPackument
+        distTag "latest" filtered `shouldBe` Just "1.0.0"
+
+    it "keeps an admitted but unparseable-version key and still resolves a present latest" $ do
+        -- `banana` is not parseable semver, so `compareVersions` against it yields
+        -- Nothing; it is old enough to survive the quarantine, exercising the
+        -- unorderable-version path while coherence (a present latest) must hold.
+        filtered <- filterTo unparseableSurvivorPackument
+        Map.member "banana" (versionsOf filtered) `shouldBe` True
+        case distTag "latest" filtered of
+            Just l -> Set.member l (Map.keysSet (versionsOf filtered)) `shouldBe` True
+            Nothing -> expectationFailure "latest must resolve even with an unparseable survivor"
 
 -- ── properties ───────────────────────────────────────────────────────────────
 
@@ -314,6 +341,40 @@ allYoung =
         ]
         [("1.0.0", publishedDaysAgo 1), ("2.0.0", publishedDaysAgo 1)]
 
+{- | As 'twoVersions', but the @time@ object also carries npm's @created@ /
+@modified@ bookkeeping keys, which are unmodelled and must survive filtering.
+-}
+twoVersionsWithTimeBookkeeping :: ByteString
+twoVersionsWithTimeBookkeeping =
+    encodePackument
+        "thing"
+        Nothing
+        [("latest", "2.0.0")]
+        [ versionLit "thing" "1.0.0" "https://upstream.test/thing/-/thing-1.0.0.tgz" []
+        , versionLit "thing" "2.0.0" "https://upstream.test/thing/-/thing-2.0.0.tgz" []
+        ]
+        [ ("created", publishedDaysAgo 100)
+        , ("1.0.0", publishedDaysAgo 30)
+        , ("2.0.0", publishedDaysAgo 1)
+        , ("modified", publishedDaysAgo 0)
+        ]
+
+{- | A package with a surviving version whose key is not parseable semver. npm
+accepts arbitrary version-key strings; the strict parser yields an unorderable
+'Version', so ranking @latest@ goes through the @compareVersions@-returns-Nothing
+path. @banana@ is old enough to clear the quarantine, so it survives.
+-}
+unparseableSurvivorPackument :: ByteString
+unparseableSurvivorPackument =
+    encodePackument
+        "thing"
+        Nothing
+        [("latest", "banana")]
+        [ versionLit "thing" "1.0.0" "https://upstream.test/thing/-/thing-1.0.0.tgz" []
+        , versionLit "thing" "banana" "https://upstream.test/thing/-/thing-banana.tgz" []
+        ]
+        [("1.0.0", publishedDaysAgo 30), ("banana", publishedDaysAgo 30)]
+
 -- | A surviving single version carrying extra (unmodelled) keys.
 survivorWithExtras :: ByteString
 survivorWithExtras = packumentWithExtras
@@ -354,6 +415,21 @@ noDistTagsPackument :: ByteString
 noDistTagsPackument =
     encode
         ( "{\"name\":\"thing\","
+            <> "\"versions\":{\"1.0.0\":{\"name\":\"thing\",\"version\":\"1.0.0\","
+            <> "\"dist\":{\"tarball\":\"https://upstream.test/thing/-/thing-1.0.0.tgz\"}}},"
+            <> "\"time\":{\"1.0.0\":\""
+            <> publishedDaysAgo 30
+            <> "\"}}"
+        )
+
+{- | A packument whose @dist-tags@ is JSON @null@ — the common malformed shape.
+The projection's @.:?@ reads it as absent, but the raw body still carries the
+null, so filtering must repair it rather than relay an unresolvable @latest@.
+-}
+nullDistTagsPackument :: ByteString
+nullDistTagsPackument =
+    encode
+        ( "{\"name\":\"thing\",\"dist-tags\":null,"
             <> "\"versions\":{\"1.0.0\":{\"name\":\"thing\",\"version\":\"1.0.0\","
             <> "\"dist\":{\"tarball\":\"https://upstream.test/thing/-/thing-1.0.0.tgz\"}}},"
             <> "\"time\":{\"1.0.0\":\""

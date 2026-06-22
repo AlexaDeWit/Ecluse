@@ -189,22 +189,33 @@ filterPackument ctx rules info = \case
     survivingVersionOf :: Text -> Maybe Version
     survivingVersionOf raw = pkgVersion <$> Map.lookup raw (infoVersions info)
 
-    -- Restrict @versions@ and @time@ to the surviving keys, in place.
+    -- Restrict @versions@ to the surviving keys, and drop the denied versions
+    -- from @time@. @time@ is pruned by /removal/, not /retention/, because it
+    -- also carries non-version bookkeeping keys (@created@, @modified@) that
+    -- Écluse does not model and must relay (PR #23); keeping only the survivor
+    -- keys would drop them. (@versions@ has only version keys, so retention and
+    -- removal coincide there.)
     restrict :: Set Text -> KeyMap Value -> KeyMap Value
     restrict survivors =
         adjustObject "versions" (keepKeys survivors)
-            . adjustObject "time" (keepKeys survivors)
+            . adjustObject "time" (dropKeys deniedVersions)
+      where
+        deniedVersions = Set.difference (Map.keysSet (infoVersions info)) survivors
 
     -- Repoint @dist-tags@: aim @latest@ at the highest survivor; drop any other
-    -- tag pointing at a removed version. A packument with no @dist-tags@ object
-    -- gains a minimal one ({latest}) so the coherence promise (a resolvable
-    -- @latest@) holds even for that malformed-upstream edge.
+    -- tag pointing at a removed version. A @dist-tags@ that is absent /or/
+    -- present-but-malformed — most commonly JSON @null@, which the projection
+    -- reads as "absent" yet the raw body still carries — is treated as empty, so
+    -- the coherence promise (a resolvable @latest@) holds even for that
+    -- malformed-upstream edge (see npm.md §8); a well-formed object is rebuilt in
+    -- place, preserving its unmodelled tags.
     repairTags :: Set Text -> KeyMap Value -> KeyMap Value
     repairTags survivors o =
         let highest = highestSurvivor survivors
-         in case KeyMap.lookup "dist-tags" o of
-                Just tags -> KeyMap.insert "dist-tags" (rebuildTags survivors highest tags) o
-                Nothing -> KeyMap.insert "dist-tags" (rebuildTags survivors highest (Object mempty)) o
+            existing = case KeyMap.lookup "dist-tags" o of
+                Just tags@(Object _) -> tags
+                _ -> Object mempty
+         in KeyMap.insert "dist-tags" (rebuildTags survivors highest existing) o
 
     -- The highest surviving version's raw string, by 'compareVersions'. Every
     -- survivor is ranked (paired with its parsed 'Version', if any); an
@@ -268,6 +279,15 @@ mapValues f = \case
 keepKeys :: Set Text -> Value -> Value
 keepKeys survivors = \case
     Object o -> Object (KeyMap.filterWithKey (\k _ -> Key.toText k `Set.member` survivors) o)
+    other -> other
+
+{- | Drop the object entries whose key is in the given set, leaving every other
+entry — surviving versions and unmodelled bookkeeping keys (@created@,
+@modified@) alike — untouched.
+-}
+dropKeys :: Set Text -> Value -> Value
+dropKeys keys = \case
+    Object o -> Object (KeyMap.filterWithKey (\k _ -> Key.toText k `Set.notMember` keys) o)
     other -> other
 
 -- | The 'Text' at @key@ in an object, if present and a JSON string.
