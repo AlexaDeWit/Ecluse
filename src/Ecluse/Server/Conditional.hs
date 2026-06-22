@@ -39,20 +39,8 @@ module Ecluse.Server.Conditional (
 import Crypto.Hash (Digest, SHA256, hashlazy)
 import Data.ByteArray.Encoding (Base (Base16), convertToBase)
 import Data.Text qualified as T
-import Network.HTTP.Types (Header, HeaderName, RequestHeaders, Status, statusCode)
-
-{- | The conditional/ETag header names this module uses, defined locally rather
-than imported from "Network.HTTP.Types". The http-types version resolved by the
-hermetic Nix build predates the addition of @hETag@ and @hIfNoneMatch@ (it exports
-@hIfModifiedSince@ but not those), so importing those constants breaks the
-@checks.unit@ build even though the newer http-types in the dev shell has them.
-'HeaderName' is a case-insensitive @CI ByteString@, so these literals match any
-header casing and are stable across http-types versions.
--}
-hETag, hIfNoneMatch, hIfModifiedSince :: HeaderName
-hETag = "ETag"
-hIfNoneMatch = "If-None-Match"
-hIfModifiedSince = "If-Modified-Since"
+import Network.HTTP.Types (Header, RequestHeaders, Status, statusCode)
+import Network.HTTP.Types.Header (hETag, hIfModifiedSince, hIfNoneMatch)
 
 -- ── our own ETag (transformed bodies) ────────────────────────────────────────
 

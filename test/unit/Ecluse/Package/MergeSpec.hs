@@ -199,9 +199,8 @@ spec = do
                 `shouldBe` Just ["1.0.0", "2.0.0"]
 
     describe "precedence is by provenance, not input order" $ do
-        -- Finding #1: dist-tags and time must resolve collisions by provenance
-        -- (trusted wins), so the plan is identical whichever order the caller
-        -- happens to pass the two upstreams.
+        -- dist-tags and time must resolve collisions by provenance (trusted wins),
+        -- so the plan is identical whichever order the caller passes the upstreams.
         let trusted =
                 ( TrustedSource
                 , (packument [("1.0.0", "sha512-priv")])
@@ -249,10 +248,10 @@ spec = do
                 `shouldBe` Just tTrusted
 
     describe "latest via the shared selector" $ do
-        -- Findings #2 + #3: latest is resolved by Ecluse.Version.selectLatest, so
-        -- the merge inherits keep-unless-denied + stable-preferring + unparseable-
-        -- safe behaviour. selectLatest is exhaustively unit-tested in its own spec;
-        -- these are integration-level checks that it is wired in correctly.
+        -- latest is resolved by Ecluse.Version.selectLatest, so the merge inherits
+        -- keep-unless-denied + stable-preferring + unparseable-safe behaviour.
+        -- selectLatest is exhaustively unit-tested in its own spec; these only
+        -- check that it is wired into the merge correctly.
         it "keeps the chosen latest when it still survives (no promotion)" $ do
             -- The trusted source tags latest at 1.0.0 and that version survives, so
             -- latest stays 1.0.0 even though 2.0.0 exists in the union.

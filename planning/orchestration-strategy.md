@@ -199,6 +199,11 @@ The audit produces a **categorized findings report**; the team lead triages it:
 - **Design-level or far-reaching findings** are **escalated to the architect** as
   new slices / issues rather than silently absorbed — they may reshape later waves.
 
+The pass also includes **housekeeping**: once the wave's PRs have landed, prune the
+spent worktrees and their merged branches so `git worktree list` stays an accurate
+map of live work. Prune only the merged-and-clean ones — a worktree carrying
+uncommitted or not-yet-merged work is surfaced to the architect, never force-removed.
+
 The pass **gates the next wave**: the integrated base a wave builds on is made
 coherent first. It is recorded in the
 [delivery plan](delivery-plan.md#parallelization--3-slices-in-flight)'s wave sequence.
