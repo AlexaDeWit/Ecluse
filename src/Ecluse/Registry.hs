@@ -95,8 +95,9 @@ this is the effectful adapter's report that the configured base URL is unusable.
 data UrlFormationError
     = -- | The configured base URL is empty, so no request URL can be formed.
       EmptyBaseUrl
-    | -- | The formed URL string could not be parsed into a request. Carries the
-      -- offending URL.
+    | {- | The formed URL string could not be parsed into a request. Carries the
+      offending URL.
+      -}
       UnparseableUrl Text
     deriving stock (Eq, Show)
 
@@ -110,15 +111,18 @@ data RegistryClient = RegistryClient
     , fetchArtifact :: PackageName -> Version -> IO RegistryResponse
     -- ^ Fetch the artifact bytes for one version.
     , publishArtifact :: PackageName -> Version -> ByteString -> IO (Either PublishError ())
-    -- ^ Publish an artifact's bytes for one version to the registry. Idempotent
-    -- at the protocol level (versions are immutable), so a redelivered mirror
-    -- job's re-publish is safe.
+    {- ^ Publish an artifact's bytes for one version to the registry. Idempotent
+    at the protocol level (versions are immutable), so a redelivered mirror
+    job's re-publish is safe.
+    -}
     , parsePackageInfo :: RegistryResponse -> Either ParseError PackageInfo
-    -- ^ Project a fetched metadata response into the packument-level
-    -- 'PackageInfo'.
+    {- ^ Project a fetched metadata response into the packument-level
+    'PackageInfo'.
+    -}
     , parseVersionDetails :: RegistryResponse -> Version -> Either ParseError PackageDetails
-    -- ^ Project a fetched metadata response into the per-version
-    -- 'PackageDetails' for a specific version.
+    {- ^ Project a fetched metadata response into the per-version
+    'PackageDetails' for a specific version.
+    -}
     , parseVersionList :: RegistryResponse -> Either ParseError [Version]
     -- ^ Extract the list of available versions from a fetched metadata response.
     }

@@ -1,0 +1,10 @@
+{
+  "name": "ecluse-version-oracles",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Reference npm version-ordering oracle (node-semver) for Ecluse's differential smoke suite and `make gen-version-fixtures`. Built into a node_modules via importNpmLock in flake.nix and exposed on NODE_PATH; Renovate's npm manager keeps it fresh.",
+  "license": "MIT",
+  "dependencies": {
+    "semver": "^7.7.2"
+  }
+}

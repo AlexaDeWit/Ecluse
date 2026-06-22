@@ -134,8 +134,9 @@ never chooses it (see the module header → "Authentication").
 -}
 data NpmClientConfig = NpmClientConfig
     { npmBaseUrl :: Text
-    -- ^ The registry base URL (e.g. the public registry, or a CodeArtifact npm
-    -- endpoint). The package path is appended to it.
+    {- ^ The registry base URL (e.g. the public registry, or a CodeArtifact npm
+    endpoint). The package path is appended to it.
+    -}
     , npmManager :: Manager
     -- ^ The shared @http-client@ 'Manager' to issue requests through.
     , npmToken :: Maybe Secret
@@ -166,12 +167,14 @@ defaultNpmConfig manager =
 header (see 'metadataAccept').
 -}
 data MetadataForm
-    = -- | The install-optimised __abbreviated__ packument
-      -- (@application\/vnd.npm.install-v1+json@). Smaller and the proxy's primary
-      -- view, but it drops the @time@ map.
+    = {- | The install-optimised __abbreviated__ packument
+      (@application\/vnd.npm.install-v1+json@). Smaller and the proxy's primary
+      view, but it drops the @time@ map.
+      -}
       Abbreviated
-    | -- | The __full__ packument (@application\/json@). Larger, but the only form
-      -- carrying the @time@ map a publish-age rule needs.
+    | {- | The __full__ packument (@application\/json@). Larger, but the only form
+      carrying the @time@ map a publish-age rule needs.
+      -}
       Full
     deriving stock (Eq, Show)
 
@@ -200,8 +203,9 @@ data Validators = Validators
     { validatorIfNoneMatch :: Maybe ByteString
     -- ^ An entity tag to send as @If-None-Match@ (an upstream @ETag@).
     , validatorIfModifiedSince :: Maybe ByteString
-    -- ^ An RFC-1123 date to send as @If-Modified-Since@ (an upstream
-    -- @Last-Modified@).
+    {- ^ An RFC-1123 date to send as @If-Modified-Since@ (an upstream
+    @Last-Modified@).
+    -}
     }
     deriving stock (Eq, Show)
 

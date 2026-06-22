@@ -3,12 +3,14 @@
 # Generate a coverage report for one test suite, in Codecov's native JSON format,
 # for upload by the Codecov action. See CONTRIBUTING.md -> "Coverage".
 #
-# Why we drive HPC by hand instead of `hpc-codecov cabal:<suite>`: hpc-codecov
-# 0.5 (our pinned GHC 9.6 set) builds a wrong .mix path for cabal's modern
+# Why we drive HPC by hand instead of `hpc-codecov cabal:<suite>`: hpc-codecov's
+# `cabal:` auto-discovery builds a wrong .mix path for cabal's modern
 # `extra-compilation-artifacts` layout (it doubles the package-key segment), so
-# its `cabal:` auto-discovery fails. We locate the .tix and every .mix directory
-# ourselves and pass them explicitly; extra .mix dirs are harmless because
-# hpc-codecov only reads the ones the .tix references.
+# it fails. We locate the .tix and every .mix directory ourselves and pass them
+# explicitly; extra .mix dirs are harmless because hpc-codecov only reads the
+# ones the .tix references. This manual path sidesteps the auto-discovery
+# entirely, so it is robust across hpc-codecov versions (pinned via the GHC 9.10
+# set in flake.lock; currently 0.6.x).
 #
 # Usage: scripts/coverage.sh [SUITE]   (default: ecluse-unit)
 set -euo pipefail

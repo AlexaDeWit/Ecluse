@@ -113,9 +113,11 @@ scan-vulnix` is a secondary [vulnix](https://github.com/flyingcircusio/vulnix)
 cross-check — more comprehensive and Nix-patch-aware, but un-graded, so *not* the
 authority. (A naive closure scan with distro-advisory matchers reports ~1000
 mostly-irrelevant CVEs — ancient or Debian/Ubuntu advisories that don't apply to
-a Nix build; grype-over-SBOM is the curated view.) Note: the pinned nixpkgs'
-`vulnix` (1.10.1) is broken against NVD's retired 1.1 feeds, so a working `vulnix`
-comes from a second, newer nixpkgs input used *only* for that tool.
+a Nix build; grype-over-SBOM is the curated view.) Both scanners come from the
+single pinned nixpkgs (26.05). (On the older 24.11 base that pin's `vulnix`
+(1.10.1) was broken against NVD's retired feeds, which once forced a second,
+newer nixpkgs input used *only* for `vulnix`; 26.05 ships a working one, so that
+extra input is gone.)
 
 The [`security.yml`](../../.github/workflows/security.yml) workflow is
 **report-only** — it never gates a PR, because the closure is fixed by a

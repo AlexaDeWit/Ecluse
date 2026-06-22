@@ -55,16 +55,18 @@ of these; an unrecognised path is 'Unsupported' (deny by default).
 data Route
     = -- | A package-metadata request, @GET \/{pkg}@ (the /packument/).
       Packument PackageName
-    | -- | An artifact request, @GET \/{pkg}\/-\/{file}.tgz@. The 'Text' is the
-      -- tarball filename exactly as requested (scope already dropped from the
-      -- basename for scoped packages).
+    | {- | An artifact request, @GET \/{pkg}\/-\/{file}.tgz@. The 'Text' is the
+      tarball filename exactly as requested (scope already dropped from the
+      basename for scoped packages).
+      -}
       Tarball PackageName Text
     | -- | @GET \/-\/ping@ — a registry liveness probe, answered locally.
       Ping
     | -- | @GET \/-\/v1\/search@ — package search (unsupported).
       Search
-    | -- | Anything unrecognised. Renders as a @404@ — deny by default at the
-      -- routing layer.
+    | {- | Anything unrecognised. Renders as a @404@ — deny by default at the
+      routing layer.
+      -}
       Unsupported
     deriving stock (Eq, Show)
 

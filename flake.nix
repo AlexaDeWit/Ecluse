@@ -2,26 +2,24 @@
   description = "ecluse: supply-chain resilience proxy for package registries";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-24.11";
-    # A second, newer nixpkgs used *only* for vulnix: 24.11's vulnix (1.10.1) is
-    # broken against NVD's retired 1.1 feeds. grype (the scan authority) and
-    # everything else stay on the pinned set. See CONTRIBUTING.md →
+    # Single pinned nixpkgs. The 26.05 base is current enough that every tool —
+    # including vulnix and zizmor, which historically forced a second
+    # newer-nixpkgs input on the 24.11 base (broken vulnix 1.10.1, ancient
+    # zizmor 0.2.1) — comes from this one set. See CONTRIBUTING.md →
     # "Vulnerability scanning".
-    nixpkgs-unstable.url = "github:NixOS/nixpkgs/nixos-unstable";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
     flake-utils.url = "github:numtide/flake-utils";
   };
 
-  outputs = { self, nixpkgs, nixpkgs-unstable, flake-utils }:
+  outputs = { self, nixpkgs, flake-utils }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
-        # vulnix only (see inputs); everything else comes from the pinned pkgs.
-        unstable = nixpkgs-unstable.legacyPackages.${system};
         hlib = pkgs.haskell.lib;
-        hpkgs = pkgs.haskell.packages.ghc96;
+        hpkgs = pkgs.haskell.packages.ghc910;
 
         # The cabal package, built by Nix. callCabal2nix reads ecluse.cabal and
-        # resolves dependencies from the nixpkgs GHC 9.6 set (pinned by
+        # resolves dependencies from the nixpkgs GHC 9.10 set (pinned by
         # flake.lock), not Hackage. This is the build/CI artifact; `cabal` in the
         # dev shell stays the incremental inner loop (Nix rebuilds the whole
         # package on any change, so it is poor for edit-compile cycles).
@@ -45,6 +43,19 @@
         # the cabal in scope, fourmolu's parser rejects them.
         hsSrc = pkgs.lib.sourceFilesBySuffices ./. [ ".hs" ".cabal" "cabal.project" ];
 
+        # The npm version-ordering oracle (`node-semver`) for the differential
+        # smoke suite and `make gen-version-fixtures`. nixpkgs 26.05 removed the
+        # node2nix-generated `nodePackages` set; the blessed replacement is to
+        # build node_modules from a committed lockfile. `importNpmLock` reads the
+        # integrity hashes already in test/oracles/package-lock.json (no separate
+        # Nix hash to maintain), and Renovate's npm manager bumps that lockfile on
+        # the same cadence as every other ecosystem. Exposed on NODE_PATH below
+        # so `require("semver")` resolves.
+        oracleNodeModules = pkgs.importNpmLock.buildNodeModules {
+          npmRoot = ./test/oracles;
+          inherit (pkgs) nodejs;
+        };
+
         # ---- Dev-shell composition -------------------------------------------
         # Env shared by every shell: a UTF-8 locale (so hspec's '✔' and other
         # Unicode output encode regardless of host locale) and the NODE_PATH that
@@ -53,7 +64,7 @@
         shellEnv = {
           LANG = "C.UTF-8";
           LC_ALL = "C.UTF-8";
-          NODE_PATH = "${pkgs.nodePackages.semver}/lib/node_modules";
+          NODE_PATH = "${oracleNodeModules}/node_modules";
         };
 
         # Everything CI drives through `make`, across every gate job — this is the
@@ -69,7 +80,7 @@
           hpkgs.fourmolu
           hpkgs.hlint
           # Run the >>> examples in Haddock comments as tests (`make doctest`),
-          # via `cabal repl --with-ghc=doctest`. Must come from the same GHC 9.6
+          # via `cabal repl --with-ghc=doctest`. Must come from the same GHC 9.10
           # set as the compiler it stands in for. See HADDOCK.md → "Examples that
           # run".
           hpkgs.doctest
@@ -80,10 +91,10 @@
           pkgs.zlib
           pkgs.pkg-config
           # Reference version-ordering oracles for the differential smoke suite
-          # and `make gen-version-fixtures`: node-semver (npm), Python packaging
+          # and `make gen-version-fixtures`: node-semver (npm, built via
+          # oracleNodeModules and put on NODE_PATH above), Python packaging
           # (PyPI), and Ruby Gem::Version (built into ruby).
           pkgs.nodejs
-          pkgs.nodePackages.semver
           (pkgs.python3.withPackages (ps: [ ps.packaging ]))
           pkgs.ruby
         ];
@@ -101,7 +112,7 @@
           # build-tool-depends, but HLS runs the same preprocessor when it loads
           # those modules and does not reproduce cabal's build-tool PATH — so it
           # reports "could not execute: hspec-discover". Put it on the shell PATH
-          # for HLS; from the same GHC 9.6 set, matching the build-tool-depends
+          # for HLS; from the same GHC 9.10 set, matching the build-tool-depends
           # version. CI never needs it here (cabal provides it), so it stays out
           # of ciInputs.
           hpkgs.hspec-discover
@@ -122,15 +133,16 @@
         # Vulnerability scanning. grype is the authority (`make scan`): it scans
         # the sbomnix SBOM of the image's C closure (openssl/curl/glibc/…) against
         # its maintained DB and gives severity-rated, low-noise findings. vulnix
-        # (from the newer nixpkgs — 24.11's is broken) is a secondary, Nix-native
-        # cross-check (`make scan-vulnix`): more comprehensive and patch-aware but
-        # un-graded, so not the authority. Haskell-advisory coverage (cabal-audit
-        # / HSEC) is a deferred follow-up — cabal-audit is broken in the pin, and
-        # the static Haskell deps are a lower-risk surface. See CONTRIBUTING.md →
-        # "Vulnerability scanning".
+        # is a secondary, Nix-native cross-check (`make scan-vulnix`): more
+        # comprehensive and patch-aware but un-graded, so not the authority. On
+        # the 26.05 base it comes straight from the pinned set (the older base's
+        # vulnix was broken against NVD's feeds, forcing a second input — no
+        # longer). Haskell-advisory coverage (cabal-audit / HSEC) is a deferred
+        # follow-up — the static Haskell deps are a lower-risk surface. See
+        # CONTRIBUTING.md → "Vulnerability scanning".
         scanInputs = [
           pkgs.grype
-          unstable.vulnix
+          pkgs.vulnix
         ];
 
         # GitHub Actions linting (`make lint-workflows`): actionlint for
@@ -138,11 +150,12 @@
         # and zizmor for security (template injection, credential persistence,
         # excessive permissions, dangerous triggers). Mechanizes the
         # injection-free workflow rule in AGENTS.md → "CI & Security". zizmor
-        # comes from the newer nixpkgs — 24.11 ships only an ancient 0.2.1, the
-        # same situation as vulnix. See CONTRIBUTING.md → "Continuous Integration".
+        # comes from the pinned set on the 26.05 base (the older base shipped only
+        # an ancient 0.2.1, which forced the second input alongside vulnix — no
+        # longer). See CONTRIBUTING.md → "Continuous Integration".
         workflowLintInputs = [
           pkgs.actionlint
-          unstable.zizmor
+          pkgs.zizmor
         ];
       in {
         packages = {
@@ -246,7 +259,7 @@
 
         # Shell for the informational weeder job: the CI toolchain (to build the
         # .hie files weeder reads) plus weeder itself, which must come from the
-        # same GHC 9.6 set as the compiler that produced those files. CI enters it
+        # same GHC 9.10 set as the compiler that produced those files. CI enters it
         # with `nix develop .#weeder`.
         devShells.weeder = pkgs.mkShell (shellEnv // {
           name = "ecluse-weeder";

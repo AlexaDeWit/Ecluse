@@ -8,7 +8,7 @@ packages: .
 -- the separate Nix path that builds the shipped artifact (callCabal2nix; it does
 -- not read these files). Bump both together via `make freeze`; see CONTRIBUTING
 -- → "Dependency locking".
-index-state: 2026-06-22T15:17:16Z
+index-state: 2026-06-22T15:55:06Z
 
 -- Enable the test suites in the solver for *every* command, so a bare
 -- `cabal test <suite>` (as `make test` runs) resolves a tests-inclusive plan
@@ -18,6 +18,19 @@ index-state: 2026-06-22T15:17:16Z
 -- `cabal build --enable-tests` succeeds. Keeping it here makes `make build` and
 -- `make test` resolve identically.
 tests: True
+
+-- Cap warp below 3.4.10. warp 3.4.10 ("Using newest dependencies") regressed
+-- connection handling so that its `testWithApplication` helper — which the unit
+-- suite's HTTP stub uses — tears the connection down before the response is
+-- written; every stubbed request then fails with `NoResponseDataReceived`.
+-- Bisected: 3.4.9 OK, 3.4.10 through the latest at this index-state (3.4.13.1)
+-- broken. 3.4.9 is also the version the nixpkgs/shipped path resolves, so this
+-- keeps both locks on the same warp. This is a runtime-behaviour cap (the
+-- library is API-compatible with later warp), so it lives here as solver
+-- guidance rather than as an upper bound in ecluse.cabal — Renovate's
+-- bound-widening can't silently undo it. Remove once upstream ships a fix
+-- (> 3.4.13.1) and re-freeze.
+constraints: warp < 3.4.10
 
 -- Warnings are errors for our own package, in CI and locally. GHC is pinned by
 -- flake.lock, so there is no "new compiler surfaces new warnings" surprise to

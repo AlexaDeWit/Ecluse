@@ -94,8 +94,9 @@ shape.
 -}
 data Person = Person
     { personName :: Text
-    -- ^ The person's name. For the packed-string form, the entire string as
-    -- sent (e.g. @"Mikeal Rogers \<mikeal\@example.com\>"@).
+    {- ^ The person's name. For the packed-string form, the entire string as
+    sent (e.g. @"Mikeal Rogers \<mikeal\@example.com\>"@).
+    -}
     , personEmail :: Maybe Text
     -- ^ Their email address, if given as an object field.
     , personUrl :: Maybe Text
@@ -166,11 +167,13 @@ distinction is not lost: 'LicenseSpdx' for the string, 'LicenseObject' for the
 legacy object.
 -}
 data License
-    = -- | An SPDX expression or identifier, sent as a bare string (@"MIT"@,
-      -- @"Apache-2.0"@, @"(MIT OR Apache-2.0)"@). The modern form.
+    = {- | An SPDX expression or identifier, sent as a bare string (@"MIT"@,
+      @"Apache-2.0"@, @"(MIT OR Apache-2.0)"@). The modern form.
+      -}
       LicenseSpdx Text
-    | -- | The legacy object form @{type, url?}@: a license name plus an optional
-      -- URL to the license text.
+    | {- | The legacy object form @{type, url?}@: a license name plus an optional
+      URL to the license text.
+      -}
       LicenseObject Text (Maybe Text)
     deriving stock (Eq, Ord, Show)
 
@@ -219,8 +222,9 @@ data Dist = Dist
     , distShasum :: Maybe Text
     -- ^ The tarball's SHA-1, hex-encoded (legacy integrity).
     , distIntegrity :: Maybe Text
-    -- ^ The Subresource-Integrity string (@"\<alg\>-\<base64\>"@, e.g.
-    -- @"sha512-…"@). The modern integrity check; prefer it over the shasum.
+    {- ^ The Subresource-Integrity string (@"\<alg\>-\<base64\>"@, e.g.
+    @"sha512-…"@). The modern integrity check; prefer it over the shasum.
+    -}
     , distFileCount :: Maybe Int
     -- ^ Number of files in the tarball, if reported.
     , distUnpackedSize :: Maybe Int
@@ -270,23 +274,28 @@ data VersionManifest = VersionManifest
     , vmDist :: Dist
     -- ^ The artifact descriptor (always present).
     , vmDeprecated :: Maybe Text
-    -- ^ A deprecation notice, present only when the version is deprecated. The
-    -- @deprecated@ field is a string message (npm sets it by re-publishing).
+    {- ^ A deprecation notice, present only when the version is deprecated. The
+    @deprecated@ field is a string message (npm sets it by re-publishing).
+    -}
     , vmHasInstallScript :: Maybe Bool
-    -- ^ Whether the version declares install scripts. Present in the
-    -- __abbreviated__ form only; 'Nothing' in the full form (derive from
-    -- 'vmScripts' there).
+    {- ^ Whether the version declares install scripts. Present in the
+    __abbreviated__ form only; 'Nothing' in the full form (derive from
+    'vmScripts' there).
+    -}
     , vmScripts :: Map Text Text
-    -- ^ The @scripts@ map (lifecycle name to command), empty when absent. The
-    -- source for deriving install-script presence from the full form.
+    {- ^ The @scripts@ map (lifecycle name to command), empty when absent. The
+    source for deriving install-script presence from the full form.
+    -}
     , vmLicense :: Maybe License
     -- ^ The declared license, if any (string or legacy object; see 'License').
     , vmMaintainers :: [Person]
-    -- ^ The package's maintainers as carried on this manifest; empty when
-    -- absent.
+    {- ^ The package's maintainers as carried on this manifest; empty when
+    absent.
+    -}
     , vmDependencies :: Map Text Text
-    -- ^ Runtime dependencies (name to semver __range__), empty when absent. The
-    -- ranges are never resolved server-side.
+    {- ^ Runtime dependencies (name to semver __range__), empty when absent. The
+    ranges are never resolved server-side.
+    -}
     , vmDevDependencies :: Map Text Text
     -- ^ Development dependencies, empty when absent.
     , vmPeerDependencies :: Map Text Text
@@ -336,8 +345,9 @@ data Packument = Packument
     , pkmtVersions :: Map Text VersionManifest
     -- ^ Every published version, keyed by its exact version string.
     , pkmtTime :: Map Text UTCTime
-    -- ^ Publish timestamps: @"created"@, @"modified"@, and one entry per
-    -- version key. The source of truth for publish age.
+    {- ^ Publish timestamps: @"created"@, @"modified"@, and one entry per
+    version key. The source of truth for publish age.
+    -}
     , pkmtMaintainers :: [Person]
     -- ^ Current package maintainers; empty when absent.
     , pkmtDescription :: Maybe Text
@@ -384,13 +394,15 @@ data AbbreviatedPackument = AbbreviatedPackument
     { apkmtName :: Text
     -- ^ The package name.
     , apkmtModified :: UTCTime
-    -- ^ Equivalent to the full form's @time.modified@; the only timestamp the
-    -- abbreviated form carries.
+    {- ^ Equivalent to the full form's @time.modified@; the only timestamp the
+    abbreviated form carries.
+    -}
     , apkmtDistTags :: Map Text Text
     -- ^ The @dist-tags@ map (tag to version), as in the full form.
     , apkmtVersions :: Map Text VersionManifest
-    -- ^ Every published version (abbreviated subset of fields), keyed by exact
-    -- version string.
+    {- ^ Every published version (abbreviated subset of fields), keyed by exact
+    version string.
+    -}
     }
     deriving stock (Eq, Show)
 

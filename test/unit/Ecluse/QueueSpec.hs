@@ -167,8 +167,9 @@ data QModel (v :: Type -> Type) = QModel
     { mVisible :: [MirrorJob]
     -- ^ Waiting jobs, oldest first (FIFO).
     , mInFlight :: [InFlightEntry v]
-    -- ^ Delivered-but-unacked jobs, in delivery order (ascending receipt) so a
-    -- reclaim re-enqueues them in the same order the implementation does.
+    {- ^ Delivered-but-unacked jobs, in delivery order (ascending receipt) so a
+    reclaim re-enqueues them in the same order the implementation does.
+    -}
     }
 
 {- | One in-flight job in the model: the job itself, whether 'Extend' has held it
