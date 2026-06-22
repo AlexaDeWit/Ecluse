@@ -90,8 +90,12 @@ format-check: ## Check formatting without writing
 lint: ## Run hlint
 	$(NIX) hlint $(HS)
 
-sast: ## Static analysis (Semgrep, registry rules)
-	$(NIX) semgrep scan --config auto --severity ERROR --severity WARNING --error .
+# --sarif-output writes a SARIF report *alongside* the normal text output (it
+# doesn't replace it), so the human-readable findings still print to the log and
+# CI can upload the SARIF to GitHub code scanning (Security tab). --error keeps
+# this gating: a non-zero exit on any ERROR/WARNING finding.
+sast: ## Static analysis (Semgrep, registry rules; also writes semgrep.sarif)
+	$(NIX) semgrep scan --config auto --severity ERROR --severity WARNING --sarif-output=semgrep.sarif --error .
 
 # cabal check validates the package description: well-formed .cabal, no fields
 # that would block distribution, sane structure. It exits 0 even on *warnings*,

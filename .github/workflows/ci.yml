@@ -170,6 +170,9 @@ jobs:
     name: Static analysis (Semgrep)
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write # upload the Semgrep SARIF to code scanning
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -182,8 +185,18 @@ jobs:
       - name: Semgrep scan
         # `make sast` runs the same Nix-pinned Semgrep developers use, with
         # --config auto (anonymous; rules fetched from the public Registry),
-        # failing on ERROR/WARNING findings.
+        # failing on ERROR/WARNING findings. It also writes semgrep.sarif.
         run: nix develop .#ci --command make sast
+
+      - name: Upload Semgrep SARIF to code scanning
+        # Surface findings in the Security tab. always() so findings that failed
+        # the gate above still upload; skipped on fork PRs, whose read-only token
+        # can't write security events.
+        if: ${{ always() && github.event.pull_request.head.repo.fork != true }}
+        uses: github/codeql-action/upload-sarif@dd903d2e4f5405488e5ef1422510ee31c8b32357 # v3
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep
 
   docs:
     name: Haddock builds

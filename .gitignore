@@ -9,6 +9,7 @@ result
 result-*
 /sbom/
 /grype.json
+/semgrep.sarif
 http_cache.sqlite
 /sbom.csv
 /sbom.cdx.json
