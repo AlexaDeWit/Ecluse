@@ -395,6 +395,17 @@ rulePolicySpec = describe "resolvePolicy" $ do
         resolveJson "{\"rules\":{\"trusted\":{\"type\":\"AllowScope\",\"scope\":\"myorg\"}}}"
             `shouldSatisfy` containsAllowScope
 
+    it "adds a new AllowIfPublishedBefore rule from a valid ageSeconds" $
+        -- The success arm of *building* (not patching) an AllowIfPublishedBefore:
+        -- a fresh min-age rule under a new name is constructed with the given
+        -- window at the type's default precedence, beside the existing default.
+        -- (Adding with a negative or absent ageSeconds is rejected below; this
+        -- pins the valid-construction path.)
+        resolveJson "{\"rules\":{\"young\":{\"type\":\"AllowIfPublishedBefore\",\"ageSeconds\":100}}}"
+            `shouldSatisfy` either
+                (const False)
+                (elem (PrecededRule defaultAllowIfPublishedBeforePrecedence (AllowIfPublishedBefore 100)))
+
     it "accepts a restated type on a patch that matches the default's kind" $
         -- Naming the default's own type alongside an override is allowed; it must
         -- match the rule it patches.
