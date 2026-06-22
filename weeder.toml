@@ -1,0 +1,18 @@
+# weeder — reports library code that is not reachable from the application entry
+# point (app/Main.hs → Ecluse.run). `make weeder` builds only the library +
+# executable (not the test suites) with .hie info, so "reachable" means "wired
+# into the running proxy" — NOT merely "covered by a test".
+#
+# That deliberately surfaces the large body of built-and-tested-but-not-yet-
+# connected scaffolding (config loading, policy resolution, the queue/credential
+# backends, …) as upcoming slices wire it into the composition root. The count is
+# therefore a feature-wiring progress signal that shrinks over time, not a
+# delete-this-dead-code list — which is exactly why the CI job is INFORMATIONAL
+# and never gates (see ci.yml → weeder).
+
+# Reachability roots: the executable entry point and Cabal's generated Paths_.
+roots = ["^Main\\.main$", "^Paths_"]
+
+# Treat instance methods as roots, so lawful type-class instances aren't reported
+# just because the app has no direct call site for them.
+type-class-roots = true
