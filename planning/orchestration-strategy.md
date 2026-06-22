@@ -139,7 +139,10 @@ A dedicated agent audits the integrated tree (fresh context, read-and-verify) fo
 - **Performance problems likely to surface** — needless type conversions (the
   `String`↔`Text`↔`ByteString` bounce), avoidable re-parsing / re-allocation,
   lazy/strict mismatches, accidentally-quadratic patterns — caught structurally
-  now, before later slices build on them.
+  now, before later slices build on them. Once the benchmark harness
+  ([S37](slices/S37-benchmark-harness.md)) exists, this audit is **measured, not
+  eyeballed**: the micro-benchmarks quantify these regressions and the audit
+  consults the informational trend (which itself never gates).
 
 The audit produces a **categorized findings report**; the team lead triages it:
 
