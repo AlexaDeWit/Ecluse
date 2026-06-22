@@ -51,11 +51,13 @@ can never reach the comparator.
 -}
 data Version = Version
     { versionRaw :: Text
-    -- ^ The version as published — used for rendering and round-tripping only,
-    -- never for ordering decisions.
+    {- ^ The version as published — used for rendering and round-tripping only,
+    never for ordering decisions.
+    -}
     , versionKey :: Maybe VersionKey
-    -- ^ The parsed, canonical ordering key; 'Nothing' if the raw text could not
-    -- be parsed for its ecosystem (ordering rules then abstain).
+    {- ^ The parsed, canonical ordering key; 'Nothing' if the raw text could not
+    be parsed for its ecosystem (ordering rules then abstain).
+    -}
     }
     deriving stock (Eq, Show)
 

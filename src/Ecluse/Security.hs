@@ -314,8 +314,9 @@ isHex t = not (T.null t) && T.all isHexDigit t
 
 -- | Why building an upstream URL from an identifier was refused.
 data UrlError
-    = -- | A name component (scope or base name) is unsafe to interpolate — see
-      -- 'Ecluse.Server.Route.isSafeComponent'. Carries the offending component.
+    = {- | A name component (scope or base name) is unsafe to interpolate — see
+      'Ecluse.Server.Route.isSafeComponent'. Carries the offending component.
+      -}
       UnsafeComponent Text
     | -- | The configured base URL is empty, so no URL can be formed.
       EmptyBaseUrl
@@ -381,15 +382,18 @@ returning a huge or pathological document.
 -}
 data Limits = Limits
     { maxBodyBytes :: Int
-    -- ^ Largest response body, in bytes, 'boundedRead' will accumulate before
-    -- aborting. Bounds memory on the metadata path (artifacts are streamed, not
-    -- buffered).
+    {- ^ Largest response body, in bytes, 'boundedRead' will accumulate before
+    aborting. Bounds memory on the metadata path (artifacts are streamed, not
+    buffered).
+    -}
     , maxVersionCount :: Int
-    -- ^ Largest number of versions a parsed packument may carry
-    -- ('checkVersionCount'); bounds per-version rule evaluation.
+    {- ^ Largest number of versions a parsed packument may carry
+    ('checkVersionCount'); bounds per-version rule evaluation.
+    -}
     , maxNestingDepth :: Int
-    -- ^ Deepest JSON nesting a decoded document may reach ('checkNestingDepth');
-    -- bounds stack\/CPU on pathologically nested input.
+    {- ^ Deepest JSON nesting a decoded document may reach ('checkNestingDepth');
+    bounds stack\/CPU on pathologically nested input.
+    -}
     }
     deriving stock (Eq, Show)
 
@@ -409,8 +413,9 @@ defaultLimits =
 data LimitError
     = -- | The body exceeded 'maxBodyBytes'; carries the configured ceiling.
       BodyTooLarge Int
-    | -- | The packument carried more than 'maxVersionCount' versions; carries the
-      -- count seen and the ceiling.
+    | {- | The packument carried more than 'maxVersionCount' versions; carries the
+      count seen and the ceiling.
+      -}
       TooManyVersions Int Int
     | -- | JSON nesting exceeded 'maxNestingDepth'; carries the ceiling.
       TooDeeplyNested Int

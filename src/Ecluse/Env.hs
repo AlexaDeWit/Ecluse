@@ -49,22 +49,27 @@ no-SDK and sole-composition-root invariants it upholds.
 -}
 data Env = Env
     { envRegistry :: RegistryClient
-    -- ^ The registry-protocol handle (fetch\/publish\/parse). One npm client is
-    -- reused across every cloud, since protocol and auth are orthogonal axes.
+    {- ^ The registry-protocol handle (fetch\/publish\/parse). One npm client is
+    reused across every cloud, since protocol and auth are orthogonal axes.
+    -}
     , envQueue :: MirrorQueue
-    -- ^ The mirror-queue handle: the durable hand-off from the request path to the
-    -- mirror worker.
+    {- ^ The mirror-queue handle: the durable hand-off from the request path to the
+    mirror worker.
+    -}
     , envCredentials :: CredentialProvider
-    -- ^ The outbound-credential handle: mints the bearer token used to write
-    -- approved packages to the mirror target.
+    {- ^ The outbound-credential handle: mints the bearer token used to write
+    approved packages to the mirror target.
+    -}
     , envManager :: Manager
-    -- ^ The shared @http-client@ 'Manager' for the data plane (metadata fetch and
-    -- artifact streaming), so connection pooling and TLS are established once and
-    -- reused across requests.
+    {- ^ The shared @http-client@ 'Manager' for the data plane (metadata fetch and
+    artifact streaming), so connection pooling and TLS are established once and
+    reused across requests.
+    -}
     , envLogEnv :: LogEnv
-    -- ^ The @katip@ logging environment (see "Ecluse.Log"): the structured-log
-    -- stream every layer attaches context to, with its stdout scribe and format
-    -- chosen at startup.
+    {- ^ The @katip@ logging environment (see "Ecluse.Log"): the structured-log
+    stream every layer attaches context to, with its stdout scribe and format
+    chosen at startup.
+    -}
     }
 
 {- | Assemble an 'Env' from its constructed handles and a shared HTTP 'Manager'.

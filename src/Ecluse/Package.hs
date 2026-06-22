@@ -109,8 +109,9 @@ data PackageName = PackageName
     , pkgNamespace :: Maybe Scope
     -- ^ The scope, if scoped (npm @\@scope\/name@). 'Nothing' for PyPI/RubyGems.
     , pkgCanonical :: Text
-    -- ^ The normalised key for equality and matching (PEP 503 for PyPI;
-    -- verbatim for npm/RubyGems).
+    {- ^ The normalised key for equality and matching (PEP 503 for PyPI;
+    verbatim for npm/RubyGems).
+    -}
     , pkgDisplay :: Text
     -- ^ The name as published, for rendering and round-tripping.
     }
@@ -176,8 +177,9 @@ data CodeExecSignal
       NoCodeOnInstall
     | -- | Determined: installation runs code; the text says how (audit trail).
       RunsCodeOnInstall Text
-    | -- | Not yet determined (e.g. the RubyGems gemspec has not been fetched).
-      -- Pure rules abstain; the effectful tier may resolve it.
+    | {- | Not yet determined (e.g. the RubyGems gemspec has not been fetched).
+      Pure rules abstain; the effectful tier may resolve it.
+      -}
       CodeExecUnknown
     deriving stock (Eq, Show)
 
@@ -214,8 +216,9 @@ data Availability
       Available
     | -- | Advisory deprecation (npm); still resolvable. Carries the message.
       Deprecated Text
-    | -- | Withdrawn from resolution (PyPI yank keeps the file; RubyGems yank
-      -- removes it). Carries the reason, if given.
+    | {- | Withdrawn from resolution (PyPI yank keeps the file; RubyGems yank
+      removes it). Carries the reason, if given.
+      -}
       Yanked (Maybe Text)
     deriving stock (Eq, Show)
 
@@ -228,8 +231,9 @@ data HashAlg
     | SHA512
     | MD5
     | Blake2b
-    | -- | A Subresource-Integrity string (npm @dist.integrity@), e.g.
-      -- @"sha512-…"@, carried whole.
+    | {- | A Subresource-Integrity string (npm @dist.integrity@), e.g.
+      @"sha512-…"@, carried whole.
+      -}
       SRI
     deriving stock (Eq, Ord, Show)
 
@@ -238,8 +242,9 @@ data Hash = Hash
     { hashAlg :: HashAlg
     -- ^ The algorithm the digest was computed with.
     , hashValue :: Text
-    -- ^ The digest itself, in the algorithm's wire encoding (e.g. hex, or the
-    -- whole @sha512-…@ string for 'SRI').
+    {- ^ The digest itself, in the algorithm's wire encoding (e.g. hex, or the
+    whole @sha512-…@ string for 'SRI').
+    -}
     }
     deriving stock (Eq, Show)
 
@@ -270,9 +275,10 @@ data Artifact = Artifact
     , artInterpreter :: Maybe Text
     -- ^ Interpreter constraint (@requires-python@ \/ @required_ruby_version@).
     , artYanked :: Bool
-    -- ^ Whether this individual file is yanked (PyPI per-file yank). For
-    -- ecosystems that yank whole versions this stays 'False' and
-    -- 'pkgAvailability' carries the status instead.
+    {- ^ Whether this individual file is yanked (PyPI per-file yank). For
+    ecosystems that yank whole versions this stays 'False' and
+    'pkgAvailability' carries the status instead.
+    -}
     , artProvenance :: Maybe Text
     -- ^ URL of a provenance\/attestation bundle, if any.
     }
@@ -325,8 +331,9 @@ data PackageDetails = PackageDetails
     , pkgVersion :: Version
     -- ^ The specific version this snapshot describes.
     , pkgPublishedAt :: Maybe UTCTime
-    -- ^ When this version was published, if known (absent from some cheap
-    -- metadata views).
+    {- ^ When this version was published, if known (absent from some cheap
+    metadata views).
+    -}
     , pkgInstallCode :: CodeExecSignal
     -- ^ Whether installing the version executes code.
     , pkgTrust :: Trust
@@ -355,16 +362,19 @@ data PackageInfo = PackageInfo
     { infoName :: PackageName
     -- ^ The package identity this document describes.
     , infoVersions :: Map Text PackageDetails
-    -- ^ Every published version, keyed by its __raw version string__ (the
-    -- packument's own key). Each 'PackageDetails' still carries its parsed
-    -- 'Version'; the map is keyed by 'Text' because a 'Version' has no 'Ord'
-    -- (ordering goes through 'Ecluse.Version.compareVersions', never a derived
-    -- instance) — see "Ecluse.Version".
+    {- ^ Every published version, keyed by its __raw version string__ (the
+    packument's own key). Each 'PackageDetails' still carries its parsed
+    'Version'; the map is keyed by 'Text' because a 'Version' has no 'Ord'
+    (ordering goes through 'Ecluse.Version.compareVersions', never a derived
+    instance) — see "Ecluse.Version".
+    -}
     , infoDistTags :: Map Text Version
-    -- ^ Distribution tags (e.g. @"latest"@, @"next"@) to the 'Version' they
-    -- point at.
+    {- ^ Distribution tags (e.g. @"latest"@, @"next"@) to the 'Version' they
+    point at.
+    -}
     , infoPublishedAt :: Map Text UTCTime
-    -- ^ Per-version publish times (the npm @time@ object), keyed by raw version
-    -- string, when known.
+    {- ^ Per-version publish times (the npm @time@ object), keyed by raw version
+    string, when known.
+    -}
     }
     deriving stock (Eq, Show)

@@ -93,13 +93,15 @@ unavailability is an /inability to decide/ and carries whether it is expected to
 self-heal, which is what separates a retryable @503@ from a terminal @500@\/@403@.
 -}
 data RejectReason
-    = -- | A rule denied the version (including deny-by-default). The 'RuleName'
-      -- is the rule that decided, for the audit trail and the denial body.
+    = {- | A rule denied the version (including deny-by-default). The 'RuleName'
+      is the rule that decided, for the audit trail and the denial body.
+      -}
       ByPolicy RuleName
-    | -- | The version could not be decided — an effectful rule the evaluator
-      -- needed could not be consulted (advisory source down, timeout). This is
-      -- __fail-closed__: a never-vetted version is not admitted just because the
-      -- scanner is unreachable. The 'Transience' says whether a retry can help.
+    | {- | The version could not be decided — an effectful rule the evaluator
+      needed could not be consulted (advisory source down, timeout). This is
+      __fail-closed__: a never-vetted version is not admitted just because the
+      scanner is unreachable. The 'Transience' says whether a retry can help.
+      -}
       Unavailable Transience
     deriving stock (Eq, Show)
 
@@ -110,11 +112,13 @@ This is the single distinction the status mapping turns on: a transient cause
 not, so it must not be dressed up as a retryable @503@.
 -}
 data Transience
-    = -- | Transient — a retry may succeed (upstream @5xx@\/@429@, an advisory
-      -- source briefly down). The optional 'RetryAfter' is the delay to suggest.
+    = {- | Transient — a retry may succeed (upstream @5xx@\/@429@, an advisory
+      source briefly down). The optional 'RetryAfter' is the delay to suggest.
+      -}
       WillResolve (Maybe RetryAfter)
-    | -- | Not expected to self-heal (an internal or parse error). Retrying
-      -- cannot help, so the request is a @500@, never a @503@.
+    | {- | Not expected to self-heal (an internal or parse error). Retrying
+      cannot help, so the request is a @500@, never a @503@.
+      -}
       WontResolve
     deriving stock (Eq, Show)
 
@@ -164,8 +168,9 @@ data ArtifactStatus
       Ok
     | -- | @403@ — refused by policy; the body is a 'denialBody'.
       Forbidden
-    | -- | @503@ — a transient inability to decide; the 'RetryAfter', if known,
-      -- becomes the @Retry-After@ header.
+    | {- | @503@ — a transient inability to decide; the 'RetryAfter', if known,
+      becomes the @Retry-After@ header.
+      -}
       Unavailable' (Maybe RetryAfter)
     | -- | @500@ — a permanent or internal inability to decide; not retryable.
       ServerError

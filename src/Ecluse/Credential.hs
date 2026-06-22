@@ -87,8 +87,9 @@ data AuthToken = AuthToken
     { authSecret :: Secret
     -- ^ The bearer secret itself (redacted in 'Show').
     , authExpiresAt :: Maybe UTCTime
-    -- ^ When the token expires, if it does; 'Nothing' for a non-expiring
-    -- (e.g. static) token.
+    {- ^ When the token expires, if it does; 'Nothing' for a non-expiring
+    (e.g. static) token.
+    -}
     }
     deriving stock (Eq, Show)
 
@@ -104,8 +105,9 @@ header).
 -}
 newtype CredentialProvider = CredentialProvider
     { currentToken :: IO AuthToken
-    -- ^ The bearer token to use now. An adapter refreshes before expiry behind
-    -- this field, so the caller just uses the returned token.
+    {- ^ The bearer token to use now. An adapter refreshes before expiry behind
+    this field, so the caller just uses the returned token.
+    -}
     }
 
 {- | An in-memory 'CredentialProvider' that always returns a fixed token.

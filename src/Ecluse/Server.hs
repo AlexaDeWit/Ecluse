@@ -71,9 +71,10 @@ data ServerConfig = ServerConfig
     { scPort :: Int
     -- ^ The TCP port @warp@ listens on.
     , scMounts :: [Mount]
-    -- ^ The mounts served, tried in order; the first whose prefix matches the
-    -- request's leading segment wins. A single-mount deployment is the
-    -- one-entry case at the root ('rootMount').
+    {- ^ The mounts served, tried in order; the first whose prefix matches the
+    request's leading segment wins. A single-mount deployment is the
+    one-entry case at the root ('rootMount').
+    -}
     , scSizeLimit :: RequestSizeLimit
     -- ^ The defensive cap on request-body size.
     }
