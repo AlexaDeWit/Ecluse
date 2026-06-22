@@ -20,7 +20,7 @@ pr: null
 packuments into the one document Écluse serves: a fold over
 `[(Provenance, PackageInfo)]` producing a single merged `PackageInfo` plus the
 divergences it detected. This is **core domain logic over `PackageInfo`**, above
-the `RegistryClient` seam — *not* npm-adapter code — so it is written once and
+the `RegistryClient` handle — *not* npm-adapter code — so it is written once and
 reused by every ecosystem. The packument lifecycle is now a **merge**, not a
 private-hit short-circuit (see
 [registry-model.md#packument-merge-across-upstreams](../../docs/architecture/registry-model.md#packument-merge-across-upstreams)

@@ -25,7 +25,7 @@ npm proxy.
 - [ ] The composition root reads config (S03) and selects backends —
   `MIRROR_QUEUE_PROVIDER=sqs` → `newSqsQueue`; mirror-target credential →
   `newCodeArtifactProvider` or `static` (`MIRROR_TARGET_TOKEN`) — storing the
-  resulting seam records in `Env`. Nothing downstream knows which backend it holds. —
+  resulting handle records in `Env`. Nothing downstream knows which backend it holds. —
   _cloud-backends.md#handles-records-of-functions, configuration.md#outbound-registry-credentials_
 - [ ] **One provider configured** (mirror-target write only); reads forward the
   client token / are anonymous (no Écluse read credential). — _configuration.md#outbound-registry-credentials_

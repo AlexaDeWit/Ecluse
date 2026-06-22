@@ -48,7 +48,7 @@ design into a **dependency-ordered DAG of PR-sized slices**, recorded in
 
 - **Walking skeleton first** — the thinnest end-to-end path, then capabilities
   layered onto it.
-- **Seams before consumers** — the Handle-pattern records (`RegistryClient`,
+- **Handles before consumers** — the Handle-pattern records (`RegistryClient`,
   `MirrorQueue`, `CredentialProvider`) are defined as interfaces early so
   downstream slices can be built in parallel against them.
 - **Each slice is one coherent, reviewable-in-a-sitting capability**, with
@@ -121,7 +121,7 @@ kept), then are re-verified.
 ## Inter-wave quality & alignment pass
 
 Per-PR review judges each slice **in isolation**; it cannot see the whole that
-parallel slices compose into. Slices built concurrently against the seams drift —
+parallel slices compose into. Slices built concurrently against the handles drift —
 divergent idioms, duplicated helpers, inconsistent Haddock, and type-conversion
 churn at the boundaries (bouncing a value through `String` / `Text` /
 `ByteString`) — and none of that fails a single-slice review. So **between waves**,
@@ -131,7 +131,7 @@ lead runs a codebase-wide **quality & alignment pass**.
 A dedicated agent audits the integrated tree (fresh context, read-and-verify) for:
 
 - **Structural improvements** — cross-slice duplication, misplaced or mis-sized
-  modules, abstractions that should be shared or split, leaky seams, and
+  modules, abstractions that should be shared or split, leaky handles, and
   error/idiom patterns that diverged across the slices that just landed.
 - **Haddock cleanup** — gaps, drift, and HADDOCK.md §11 violations (roadmap /
   slice narration that crept in); consistent voice and cross-references across

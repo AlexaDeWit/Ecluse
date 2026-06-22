@@ -1,7 +1,7 @@
 ---
 id: S02
-title: Seam interfaces + in-memory doubles
-milestone: M0 — Shell, seams & foundations
+title: Handle interfaces + in-memory doubles
+milestone: M0 — Shell, handles & foundations
 status: merged
 depends-on: []
 test-tier: [unit]
@@ -14,13 +14,13 @@ arch-refs:
 pr: null
 ---
 
-# S02 — Seam interfaces + in-memory doubles
+# S02 — Handle interfaces + in-memory doubles
 
 > Milestone **M0** · depends on: — (root) · tier: unit
 
 **Goal.** Define the three swappable backends as records of functions (the Handle
 pattern), each returning `IO` (never `App`), plus their payload types and
-in-memory test doubles. This is "seams before consumers": it unblocks the npm
+in-memory test doubles. This is "handles before consumers": it unblocks the npm
 adapter, the web layer, the cloud backends, and the worker to be built in parallel
 against stable interfaces.
 
@@ -31,7 +31,7 @@ against stable interfaces.
   fields are pure. — _registry-model.md#registry-abstraction_
 - [ ] Supporting types: `RegistryResponse`, `ParseError`, `PublishError`. (`PackageInfo`
   is introduced in S07; reference it here only via an `hs-boot`-free ordering — keep
-  the seam in a module that can import the domain types.) — _registry-model.md_
+  the handle in a module that can import the domain types.) — _registry-model.md_
 - [ ] `MirrorQueue` record (`enqueue`/`receive`/`ack`/`extendVisibility`) with
   `MirrorJob`, `QueueMessage`, opaque `ReceiptHandle`, `Seconds`. Conventions
   documented in Haddock: `enqueue` best-effort, retry-is-don't-ack, no `nack`. —
@@ -42,7 +42,7 @@ against stable interfaces.
 - [ ] In-memory doubles: `newInMemoryQueue :: IO MirrorQueue` (STM-backed), a
   `staticToken`-style `CredentialProvider`, and a `RegistryClient` test double
   driven by fixtures — usable by every downstream slice's tests.
-- [ ] Every type/field has Haddock; seams carry the `IO`-not-`App` rationale.
+- [ ] Every type/field has Haddock; handles carry the `IO`-not-`App` rationale.
 
 **File fence.**
 - `src/Ecluse/Registry.hs` — `RegistryClient`, `RegistryResponse`, `ParseError`, `PublishError`.
@@ -56,8 +56,8 @@ and `Secret` redaction are asserted; the doubles are the substrate later slices 
 
 **Notes / risks.** `Secret` redaction is load-bearing (no token in any signal —
 see observability.md#cardinality-and-attributes); pin it with a test now. Keep the
-seam modules free of any `Env`/`App` import so backends never couple to the core
+handle modules free of any `Env`/`App` import so backends never couple to the core
 (technology-stack.md#key-decisions). `PackageInfo`/`PackageDetails` ordering: the
-seam references domain types from `Ecluse.Package`/`Ecluse.Version`/(new) `PackageInfo`
+handle references domain types from `Ecluse.Package`/`Ecluse.Version`/(new) `PackageInfo`
 — coordinate the `PackageInfo` introduction with S07 to avoid an import cycle (prefer
 defining `PackageInfo` in `Ecluse.Package` or a sibling, never an `.hs-boot`).

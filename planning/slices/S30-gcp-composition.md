@@ -25,7 +25,7 @@ S20.
 - [ ] Composition root selects the GCP backends from config
   (`GOOGLE_CLOUD_PROJECT`, `pubsub`, ADC). — _configuration.md#configuration, #outbound-registry-credentials_
 - [ ] The proxy core, rules, web layer, worker, and CVE subsystem are **unchanged** —
-  GCP is purely additive behind the two seams. — _cloud-backends.md#cloud-backends_
+  GCP is purely additive behind the two handles. — _cloud-backends.md#cloud-backends_
 - [ ] End-to-end integration test on GCP backends (Pub/Sub emulator + stub npm
   registry) mirrors the AWS end-to-end (S20). — _cloud-backends.md#testing_
 - [ ] Config docs updated (the GCP rows already exist; mark them functional).
@@ -38,6 +38,6 @@ S20.
 **Test tier.** Integration — GCP composition end-to-end against emulators/stubs.
 
 **Notes / risks.** This closes the "AWS and GCP are both first-class" goal. The whole
-point of the seam design is that this slice touches only the composition root + a new
+point of the handle design is that this slice touches only the composition root + a new
 test — no core changes. If S27/S28 surfaced client limitations, reflect any residual
 caveats here and **escalate** material ones.

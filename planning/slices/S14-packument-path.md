@@ -22,7 +22,7 @@ pr: null
 router → **parallel multi-upstream fetch** → parse → (gate public / trust private) →
 **merge** (S33) + filter (S09) → serve, with the credential authority model
 enforced. The packument is **merged across upstreams, not a private-then-public
-fallback** (see registry-model.md#packument-merge-across-upstreams). Cloud seams use
+fallback** (see registry-model.md#packument-merge-across-upstreams). Cloud handles use
 the S02 in-memory doubles; real AWS backends arrive in M4.
 
 **Acceptance criteria.**

@@ -35,5 +35,5 @@ the GCP analog of the CodeArtifact leaf (S17).
 
 **Test tier.** Smoke — un-emulable token mint; allowed to fail, secret-gated.
 
-**Notes / risks.** Mirrors S17 exactly in shape — the seam split is what makes GCP an
+**Notes / risks.** Mirrors S17 exactly in shape — the handle split is what makes GCP an
 additive leaf, not a structural change. Keep it tiny.

@@ -1,7 +1,7 @@
 ---
 id: S03
 title: Config model & fail-fast loader
-milestone: M0 — Shell, seams & foundations
+milestone: M0 — Shell, handles & foundations
 status: not-started
 depends-on: [S02, S05]
 test-tier: [unit]

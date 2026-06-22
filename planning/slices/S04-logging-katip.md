@@ -1,7 +1,7 @@
 ---
 id: S04
 title: katip logging scaffold (json/console)
-milestone: M0 — Shell, seams & foundations
+milestone: M0 — Shell, handles & foundations
 status: not-started
 depends-on: [S01]
 test-tier: [unit]
