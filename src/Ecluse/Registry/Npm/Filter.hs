@@ -21,7 +21,7 @@ proxy also downloads the bytes through it rather than going straight to upstream
 and bypassing the gate (see @docs\/architecture\/hosting.md@ → "The load-bearing
 requirement: URL rewriting"). Keeping artifacts same-host also keeps npm's auth
 flowing, which a separate artifact host would silently drop. The mount's
-externally-visible base URL is __supplied by the caller__ (config, S03); this
+externally-visible base URL is __supplied by the caller__; this
 transform performs no IO.
 
 == Filtering
@@ -39,11 +39,11 @@ removed version is __dropped__, never repointed. The result is coherent:
 exactly the surviving versions.
 
 When __no version survives__, filtering returns 'NoSurvivors' carrying each
-version's denial 'Decision'; the serve layer maps that to a status (S11\/S14),
-which this slice deliberately does not choose.
+version's denial 'Decision'; the serve layer maps that to a status, which this
+module deliberately does not choose.
 
 This filters a __single public packument__ (the gated set). Combining it with the
-trusted /private/ set is the cross-upstream merge, a separate slice; the @latest@
+trusted /private/ set is the cross-upstream merge, handled elsewhere; the @latest@
 resolved here is over the survivors /within the public set/, not the final
 @latest@ over the merged union.
 -}
@@ -136,8 +136,8 @@ joinUrl base seg = T.dropWhileEnd (== '/') base <> "/" <> seg
 A 'Filtered' body still has at least one admitted version and is internally
 coherent. 'NoSurvivors' means every version was rejected; it carries each
 version's 'Decision' so the serve layer can render the denial and choose the
-status (403 for an all-policy denial; 503 once the undecidable path lands).
-Choosing that status is __not__ this slice's job (S11\/S14).
+status (403 for an all-policy denial, 503 for a transient or undecidable cause).
+Choosing that status is __not__ this module's job.
 -}
 data FilterResult
     = -- | At least one version survived; the coherent, filtered packument body.
@@ -154,9 +154,10 @@ non-approved version and repairing cross-field coherence.
 The decisions are taken from the projected 'PackageInfo' (the typed view of the
 /same/ document), but the edits land on the raw 'Value', so unmodelled fields
 survive (see the module header). A version is kept iff 'evalRules' 'Approved' it;
-a denied — or, once S21 lands, undecidable — version is dropped. (The undecidable
-path is currently __stubbed to the deny path__: a version that is not approved is
-simply removed, exactly like a denial, and no transient status is fabricated.)
+every other verdict — a denial, deny-by-default, or an undecidable outcome —
+drops it. Filtering never fabricates a transient status for a dropped version: it
+removes the version and records each 'Decision', leaving the status to the serve
+layer.
 
 When survivors remain the body is returned 'Filtered' with:
 
@@ -200,7 +201,7 @@ filterPackument ctx rules info = \case
     -- Restrict @versions@ to the surviving keys, and drop the denied versions
     -- from @time@. @time@ is pruned by /removal/, not /retention/, because it
     -- also carries non-version bookkeeping keys (@created@, @modified@) that
-    -- Écluse does not model and must relay (PR #23); keeping only the survivor
+    -- Écluse does not model and must relay; keeping only the survivor
     -- keys would drop them. (@versions@ has only version keys, so retention and
     -- removal coincide there.)
     restrict :: Set Text -> KeyMap Value -> KeyMap Value

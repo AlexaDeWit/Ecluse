@@ -12,7 +12,7 @@ written once and reused by every ecosystem, and never imports a registry adapter
 __Decision surface, not served surface.__ This module reasons over the /typed/
 'PackageInfo' but does __not__ emit a finished, re-serialisable 'PackageInfo'.
 The document Écluse serves is the raw upstream JSON (@Value@), edited in place by
-the serve layer (S14), so that every unmodeled wire key survives. The typed model
+the serve layer, so that every unmodeled wire key survives. The typed model
 is lossy, so re-encoding it would drop those keys. This module therefore emits a
 'MergePlan' — exactly which versions survive, which input each survivor came from,
 the reconciled @dist-tags@\/@time@, and the detected divergences — that the serve
@@ -88,7 +88,7 @@ data Provenance
 {- | A stable identifier for one input to a single 'mergePackuments' call: the
 __0-based index of that @(Provenance, PackageInfo)@ in the input list__.
 
-The serve layer (S14) needs to take a surviving version's object from the /raw/
+The serve layer needs to take a surviving version's object from the /raw/
 @Value@ of whichever source won it, so the plan must name that source. 'Provenance'
 alone is /not/ enough: it identifies a source only while there is exactly one
 input per provenance (the npm topology today — one trusted, one gated). The
@@ -118,7 +118,7 @@ data Divergence = Divergence
     deriving stock (Eq, Show)
 
 {- | The outcome of reasoning over a set of upstream packuments: a __plan__ the
-serve layer (S14) replays onto the raw upstream @Value@s to assemble the lossless
+serve layer replays onto the raw upstream @Value@s to assemble the lossless
 served body. It carries exactly the decisions the merge owns — never a finished,
 re-serialisable document (see this module's header, "Decision surface, not served
 surface").
@@ -268,13 +268,18 @@ mergePackuments inputs@((_, firstInfo) : _) =
     survivingDetails :: [PackageDetails]
     survivingDetails = map fst (Map.elems mergedVersions)
 
-    -- @dist-tags@ reconciled over the union: every surviving-target tag carried
-    -- with same-tag collisions resolved __by provenance__ (trusted wins), and
-    -- @latest@ resolved by the shared selector. Built so the plan never depends on
-    -- the order the caller happened to pass the inputs.
+    -- @dist-tags@ from every source with same-tag collisions resolved __by
+    -- provenance__ (trusted wins); computed once and shared by the carried tags
+    -- and @latest@ resolution below.
+    distTagsByProvenance :: Map Text Version
+    distTagsByProvenance = byProvenance infoDistTags
+
+    -- @dist-tags@ reconciled over the union: every surviving-target tag carried,
+    -- and @latest@ resolved by the shared selector. Built so the plan never depends
+    -- on the order the caller happened to pass the inputs.
     reconciledTags :: Map Text Version
     reconciledTags =
-        let carried = Map.filter (survives . unVersion) (byProvenance infoDistTags)
+        let carried = Map.filter (survives . unVersion) distTagsByProvenance
          in case resolvedLatest of
                 Nothing -> Map.delete "latest" carried
                 Just v -> Map.insert "latest" v carried
@@ -289,7 +294,7 @@ mergePackuments inputs@((_, firstInfo) : _) =
         selectLatest chosenLatest (map pkgVersion survivingDetails)
 
     chosenLatest :: Maybe Version
-    chosenLatest = Map.lookup "latest" (byProvenance infoDistTags)
+    chosenLatest = Map.lookup "latest" distTagsByProvenance
 
     -- @time@ over the union: each source's publish times restricted to surviving
     -- versions, with per-version collisions resolved by provenance (trusted wins).
@@ -303,12 +308,18 @@ mergePackuments inputs@((_, firstInfo) : _) =
     inputs sorted so trusted sources come first achieves this; 'Data.Map.Strict'
     is stable so a later trusted source never displaces an earlier one needlessly,
     but any two values that could collide across the trust split are decided by the
-    split, not by position. -}
+    split, not by position. Consults the once-sorted 'inputsByProvenance'. -}
     byProvenance :: (PackageInfo -> Map Text a) -> Map Text a
     byProvenance f =
-        Map.unions [f info | (_, _, info) <- sortOn provenanceRank indexed]
+        Map.unions [f info | (_, _, info) <- inputsByProvenance]
+
+    -- The inputs sorted so trusted sources precede gated, computed once and shared
+    -- by every 'byProvenance' call rather than re-sorted per call. Trusted ranks
+    -- before gated, so it wins the left-biased union; 'sortOn' is stable, so
+    -- same-provenance inputs keep their original input order.
+    inputsByProvenance :: [(SourceId, Provenance, PackageInfo)]
+    inputsByProvenance = sortOn provenanceRank indexed
       where
-        -- Trusted ranks before gated, so trusted wins the left-biased union.
         provenanceRank (_, prov, _) = prov == GatedSource
 
 -- The order-independent integrity fingerprint of a version: every artifact's

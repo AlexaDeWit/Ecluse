@@ -2,14 +2,14 @@
 id: S13
 title: Streaming + conditional-GET/ETag + metadata cache
 milestone: M2 — Web front door
-status: in-review
+status: merged
 depends-on: [S12]
 test-tier: [unit]
 arch-refs:
   - docs/architecture/web-layer.md#streaming-and-resource-lifetime
   - docs/architecture/web-layer.md#metadata-cache
   - docs/architecture/web-layer.md#middleware-and-helper-libraries
-pr: null
+pr: 93
 ---
 
 # S13 — Streaming + conditional-GET/ETag + metadata cache
