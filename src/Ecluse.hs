@@ -53,8 +53,9 @@ The library's vocabulary, roughly from the pure core outward:
 * __Policy__ — "Ecluse.Rules" (deny-by-default evaluation) over the rule types
   in "Ecluse.Rules.Types".
 * __Protocol boundary__ — "Ecluse.Registry" (the registry-protocol seam),
-  "Ecluse.Registry.Npm.Wire" (the lenient npm wire decoders that project onto
-  the domain model), and "Ecluse.Server.Route" (the pure npm request router).
+  "Ecluse.Registry.Npm.Wire" and "Ecluse.Registry.Npm.Project" (the lenient npm
+  wire decoders and their projection onto the domain model), and
+  "Ecluse.Server.Route" (the pure npm request router).
 * __Cloud seams__ — "Ecluse.Credential" (minting the mirror-target write token)
   and "Ecluse.Queue" (the durable mirror-job hand-off to the worker).
 
