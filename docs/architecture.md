@@ -86,6 +86,7 @@ and [Rules Engine → Applying verdicts to a packument](architecture/rules-engin
 | [Security Invariants](architecture/security.md) | Outbound-request & input-validation defences — identifier canonicalisation, the outbound host allowlist, internal-range blocking, and response bounds (issue #11). |
 | [Observability](architecture/observability.md) | Opt-in, vendor-neutral OpenTelemetry/OTLP tracing & metrics; Datadog as a first-class but optional target. |
 | [Technology Stack](architecture/technology-stack.md) | Library choices and the key cross-cutting decisions. |
+| [Release & Supply-Chain Operations](architecture/release-supply-chain.md) | The reproducible OCI image, the publish/attest chain (keyless provenance + SBOM), Docker Hub token handling, and CVE scanning + dependency freshness. |
 
 ## Out of Scope (for now)
 

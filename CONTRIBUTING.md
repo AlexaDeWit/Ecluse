@@ -98,9 +98,6 @@ summary is its header — and the root [`Ecluse`](src/Ecluse.hs) module's "How t
 code is organized" synopsis for the narrative grouping. Both live with the code
 and update with it, so they cannot drift; this guide deliberately does not
 duplicate the list here.
-| `Ecluse.Env` | The composition root (`Env`): holds the three seams plus the shared HTTP `Manager`; the single place a backend is selected. |
-| `Ecluse.App` | The effectful orchestration monad (`App = ReaderT Env IO`) for the worker / service layer. |
-| `Ecluse` | The library entry points (`run`, `runServer`, `runWorker`) and the unconfigured default seams; the project synopsis. |
 
 Tests mirror this hierarchy within each suite's source dir (e.g. the unit specs
 for `Ecluse.Rules` and `Ecluse.Version` are `test/unit/Ecluse/RulesSpec.hs` and
@@ -205,173 +202,31 @@ well-covered changes land). Both knobs live in [`codecov.yml`](codecov.yml).
 
 ## Continuous Integration
 
-CI is a **single unified workflow graph** ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)).
-Every check is a job in that one graph — build & test, format & lint, and Semgrep
-static analysis — and they all feed a terminal **gate** job that succeeds only
-when every upstream job has succeeded.
-
-- **Triggers & least-privilege token.** CI runs on pushes to `main`, on every
-  PR, and on manual dispatch — a feature-branch push no longer double-runs
-  alongside its PR. The workflow's default `GITHUB_TOKEN` is `contents: read`;
-  only the build/test job widens it (`id-token: write`) for the tokenless
-  Codecov upload.
-- **One required check, with one documented exception.** Branch-protection
-  rulesets mark only the `gate` job as `Required`; adding or removing an
-  *in-workflow* check never means editing the ruleset — a new job simply becomes
-  another dependency of the gate. The lone exception is **Codecov**: its
-  `project`/`patch` verdicts are computed server-side and surface as their own
-  `codecov/project` and `codecov/patch` commit statuses, which cannot be
-  expressed as jobs in this graph, so those two are additionally marked
-  `Required` (see "Coverage"). Every check that *can* be a job still routes
-  through `gate`.
-- **Shared, SHA-pinned setup.** Toolchain setup — install Nix, restore the Nix
-  store and cabal caches — lives once in the
-  [`setup-toolchain`](.github/actions/setup-toolchain/action.yml) composite
-  action, so every job shares one definition and the setup actions are pinned
-  (and Dependabot-bumped) in one place. Every `uses:` is a full commit SHA with
-  the version in a trailing comment; a re-tagged or compromised action can't
-  silently enter CI — directly relevant for a supply-chain tool.
-- **Lean CI shell + Nix-store cache.** CI enters a slimmed `nix develop .#ci`
-  shell (GHC, cabal, the formatter/linter, Semgrep, the version oracles — no IDE
-  or release tooling), not the full developer shell. The realized Nix store is
-  cached across runs ([`cache-nix-action`](https://github.com/nix-community/cache-nix-action),
-  keyed on `flake.nix`/`flake.lock`), so warm runs restore the toolchain from
-  the GitHub cache instead of `cache.nixos.org` — faster, and immune to that
-  substituter's transient flakiness. `nix.conf` retry knobs (`connect-timeout`,
-  `download-attempts`) harden the cold path.
-- **Semgrep via Nix.** Semgrep runs from the pinned Nix dev shell
-  (`nix develop --command semgrep ...`), exactly as developers run it locally,
-  rather than from a third-party container image — one fewer unpinned
-  supply-chain input.
+Every push and PR runs the single unified workflow
+([`.github/workflows/ci.yml`](.github/workflows/ci.yml)): build & test, format &
+lint, and Semgrep, all feeding one terminal **`gate`** job — the only required
+status check (plus Codecov's server-side `codecov/project` / `codecov/patch`; see
+[Coverage](#coverage--codecov-gating)). Local `make check` runs the same set, so a
+clean local run predicts a green gate. The design rationale — least-privilege
+token, the one-required-check rule, SHA-pinned shared setup, the lean
+`nix develop .#ci` shell and Nix-store cache, and Semgrep-via-Nix — is in
+[`AGENTS.md`](AGENTS.md) → "CI & Security".
 
 ---
 
-## Releases & container image
+## Releases, attestations & vulnerability scanning
 
-Écluse ships as a lean OCI image built **by Nix**
-(`dockerTools.buildLayeredImage`, see [`flake.nix`](flake.nix)), not a Dockerfile.
-The image is the stripped binary's runtime closure plus CA certificates and
-nothing else — no shell, no package manager, runs **non-root** (uid 65532), and
-is **bit-for-bit reproducible** (a fitting property for a supply-chain tool).
-Build it locally with `make docker-build` (→ `./result`, a `docker-archive`).
+Écluse ships as a lean, reproducible OCI image built by Nix (`make docker-build`),
+published by a tag-triggered workflow that attaches keyless SLSA provenance + SBOM
+attestations and a GitHub Release pinning the digest. Image CVEs are scanned
+report-only (`make scan` — grype over the SBOM) and dependency freshness is kept
+by Dependabot bumping `flake.lock`.
 
-> The image is ~23 MB. A residual chunk (`curl`/`openssl`/`krb5`) rides in via
-> the GHC runtime's `libdw` (elfutils) backtrace support, not our code; excising
-> it needs a static-musl build (with its own TLS caveats) and is a deliberate
-> later trim, not a launch blocker.
-
-Publishing is a separate, tag-triggered workflow
-([`.github/workflows/release.yml`](.github/workflows/release.yml)) — **not** part
-of the PR `gate`. Pushing a `vX.Y.Z` tag builds the image, pushes it
-(`make docker-push`), attaches keyless provenance + SBOM attestations as immutable
-OCI referrers (the GitHub attest-actions; SBOM content from `make sbom`), and
-publishes a **GitHub Release** carrying the image digest, the `gh attestation
-verify` recipe, and the auto-generated changelog
-([`scripts/release-notes.sh`](scripts/release-notes.sh)). A pre-release tag
-(`vX.Y.Z-rc.N`) is flagged as a prerelease; an `rc` smoke test via
-`workflow_dispatch` publishes the image but no Release.
-
-**Immutable tags — no `latest`.** The target repo
-([`alexadewit/ecluse`](https://hub.docker.com/r/alexadewit/ecluse)) enforces
-immutable tags, so every push is a fresh, never-reused tag: the release publishes
-`ecluse:X.Y.Z` (from the git tag) and nothing else. There is deliberately no
-moving pointer — **pin deployments by digest** (`alexadewit/ecluse@sha256:…`),
-which is the stronger supply-chain posture regardless; the digest for each version
-is published in its GitHub Release.
-
-### Supply-chain attestations
-
-Each release attaches two **keyless** (Sigstore/OIDC, no stored key) attestations
-to the image, bound to its **digest**, recorded in the public **Rekor**
-transparency log, and stored as **immutable OCI referrers** — each a
-content-addressed, write-once artifact that is never updated, so it can't be
-tampered with and it coexists with the repo's immutable tags. Both are produced
-in CI by GitHub's [attest-actions](https://github.com/actions/attest-build-provenance):
-
-- **Provenance** (`actions/attest-build-provenance`). SLSA provenance generated
-  from the run context — the source repo + commit, the release workflow, and the
-  run (the *how/where*). The cryptographic "who built it" guarantee is the
-  keyless signing identity (the release workflow's OIDC cert).
-- **SBOM** (`actions/attest-sbom`, content from `make sbom`). Generated with
-  [`sbomnix`](https://github.com/tiiuae/sbomnix) from the **Nix closure of the
-  exact binary the image ships** (`.#ecluse-bin`, stripped/static) — not a scan
-  of the image, which couldn't see the statically-linked Haskell deps. So it
-  lists the real contents (~23 components: the `ecluse` binary plus its C closure
-  — glibc, zlib, and the curl/openssl/krb5 chunk that rides in via the GHC
-  runtime's `libdw`) with no dynamic-build noise to trip CVE scanners. The
-  Haskell deps are compiled into the `ecluse` component; they are pinned by
-  `flake.lock` and, because the image is bit-for-bit reproducible, independently
-  derivable.
-
-> **Why the GitHub attest-actions, not cosign?** cosign stores attestations under
-> a single mutable `.att` tag (a second attestation must *update* it), which the
-> repo's immutable tags forbid — and cosign has no referrer mode for attestations
-> at any version (only for signatures). The attest-actions store each attestation
-> as its own immutable referrer, so the storage is immutable too. A separate
-> image signature is unnecessary: the provenance attestation already binds the
-> digest to the builder identity.
-
-Consumers verify by digest with `gh attestation verify`; the recipe lives in the
+The full operational detail — image contents, the publish/attest chain, Docker
+Hub token handling, and the scanning/freshness arms — is in
+[Release & Supply-Chain Operations](docs/architecture/release-supply-chain.md).
+Consumers verify an image with `gh attestation verify`; the recipe is in the
 [README](README.md#verifying-the-image).
-
-**Authentication (Docker Hub).** Docker Hub has no OIDC keyless login, so the push
-needs a long-lived token — kept as weak and contained as possible:
-
-- **Per-repo token scoping is not available on a personal account** — only
-  account-wide access tokens (choose the *Read & Write* permission level; `Delete`
-  is not needed for immutable-tag pushes). True per-repository scoping requires an
-  **Organization Access Token**, which needs a Docker org on a paid plan. The
-  pragmatic mitigation without paying: put the image under a dedicated **machine
-  account** that can reach *only* this repo, so its account-wide token is
-  effectively repo-scoped.
-- Store it as `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` on a **protected `release`
-  GitHub Environment** (required reviewers), so only an approved release job can
-  read it. The token is fed via `--password-stdin`, never argv or `echo`.
-- Each image carries **keyless provenance + SBOM attestations** via GitHub OIDC
-  (`id-token: write` + `attestations: write`) — immutable OCI referrers + the
-  Rekor log, no stored key — giving verifiable provenance and contents that
-  offset the static-token weakness. Verify with `gh attestation verify` (see
-  [README](README.md#verifying-the-image)).
-
-> The `release` environment and its `DOCKERHUB_*` secrets are configured, so a
-> `vX.Y.Z` tag (or a `workflow_dispatch`) runs the full build → push → attest
-> chain, gated by the environment's required reviewer.
-
----
-
-## Vulnerability scanning & dependency freshness
-
-Two arms keep the image's dependency closure honest over time — **detection** and
-**freshness**.
-
-**Detection — `grype` (the authority).** `make scan` builds the sbomnix SBOM of
-`.#ecluse-bin` (the exact shipped binary) and scans it with
-[grype](https://github.com/anchore/grype) against its maintained DB →
-severity-rated, low-noise findings in `grype.json` (plus a table). `make
-scan-vulnix` is a secondary [vulnix](https://github.com/flyingcircusio/vulnix)
-cross-check — more comprehensive and Nix-patch-aware, but un-graded, so *not* the
-authority. (A naive closure scan with distro-advisory matchers reports ~1000
-mostly-irrelevant CVEs — ancient or Debian/Ubuntu advisories that don't apply to
-a Nix build; grype-over-SBOM is the curated view.) Note: the pinned nixpkgs'
-`vulnix` (1.10.1) is broken against NVD's retired 1.1 feeds, so a working `vulnix`
-comes from a second, newer nixpkgs input used *only* for that tool.
-
-The [`security.yml`](.github/workflows/security.yml) workflow is **report-only** —
-it never gates a PR, because the closure is fixed by a `flake.lock` bump, not an
-in-PR change. On a PR it runs only when the flake changes; on a **daily schedule**
-it scans `main` and opens/updates a single tracking issue (label
-`security:vuln-scan`) when grype reports CVEs, closing it when clean — so CVEs
-disclosed *after* a release still surface.
-
-**Freshness — Dependabot (Nix).** [`dependabot.yml`](.github/dependabot.yml)
-monitors the **flake inputs** (`nix` ecosystem) and opens weekly PRs bumping
-`flake.lock`, so the C-library closure picks up upstream security fixes; the gate
-validates each bump and the scan re-runs on it. This is the remediation arm —
-fixing a finding is usually just merging the Dependabot PR.
-
-**Haskell advisories** (`cabal-audit` / the HSEC database) are a deferred
-follow-up: `cabal-audit` is marked broken in the pinned nixpkgs, and the
-statically-linked Haskell deps are a lower-risk surface than the C libs.
 
 ---
 

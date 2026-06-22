@@ -8,7 +8,7 @@ test-tier: []
 arch-refs:
   - docs/architecture/configuration.md
   - docs/architecture/observability.md#datadog-deployment-operator
-  - CONTRIBUTING.md#releases--container-image
+  - docs/architecture/release-supply-chain.md#releases--container-image
 pr: null
 ---
 
@@ -30,7 +30,7 @@ contract, the Datadog Operator recipe (optional), and the `release` environment 
   Agent endpoint + JSONL logs), clearly marked optional. — _observability.md#datadog-deployment-operator_
 - [ ] The `release` GitHub Environment + `DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN`
   machine-account setup documented so the publish workflow can succeed. —
-  _CONTRIBUTING.md#releases--container-image_
+  _docs/architecture/release-supply-chain.md#releases--container-image_
 - [ ] `README.md` updated to reflect launch status.
 
 **File fence.**
