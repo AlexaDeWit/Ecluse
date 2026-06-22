@@ -112,8 +112,8 @@ The implementer's own "it works" does not count; evidence does.
   deny-precedence), not tautological assertions, with **new/changed lines ≥ 95%
   covered** (`codecov/patch`); and **comment appropriateness** — Haddock documents
   the timeless contract and the *why*, never project / roadmap / slice narration
-  ([`../STYLE.md`](../STYLE.md) §5.6). Completeness is not enough: a comment can be
-  present, and the wrong kind.
+  ([`../HADDOCK.md`](../HADDOCK.md) §11). Completeness is not enough: a comment can
+  be present, and the wrong kind.
 
 Critical findings block and bounce to the implementer (resumed so context is
 kept), then are re-verified.
@@ -133,8 +133,9 @@ A dedicated agent audits the integrated tree (fresh context, read-and-verify) fo
 - **Structural improvements** — cross-slice duplication, misplaced or mis-sized
   modules, abstractions that should be shared or split, leaky seams, and
   error/idiom patterns that diverged across the slices that just landed.
-- **Haddock cleanup** — gaps, drift, and STYLE §5.6 violations (roadmap / slice
-  narration that crept in); consistent voice and cross-references across modules.
+- **Haddock cleanup** — gaps, drift, and HADDOCK.md §11 violations (roadmap /
+  slice narration that crept in); consistent voice and cross-references across
+  modules.
 - **Performance problems likely to surface** — needless type conversions (the
   `String`↔`Text`↔`ByteString` bounce), avoidable re-parsing / re-allocation,
   lazy/strict mismatches, accidentally-quadratic patterns — caught structurally
@@ -200,7 +201,7 @@ A PR reaches the architect only when **all** hold:
 - [ ] Independent review (Stage A + B) passed; no open critical issues
 - [ ] Local gate green: `make check && make test-integration && make docs-site && make nix-check`
 - [ ] New/changed lines ≥ 95% covered (`codecov/patch` green; reproduce via `make coverage`)
-- [ ] Comments are contract + why only — no roadmap / slice / PR references (STYLE §5.6)
+- [ ] Comments are contract + why only — no roadmap / slice / PR references (HADDOCK.md §11)
 - [ ] Semgrep clean (no new ignores)
 - [ ] CI `gate` (and every job it needs) green on the PR
 - [ ] Docs updated in the same PR; only fenced files touched

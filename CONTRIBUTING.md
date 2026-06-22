@@ -5,8 +5,9 @@ conventions, testing, and CI / repository requirements. For the systems design
 — the three-registry model, rules engine, the seams (registry, queue, credential
 provider) and cloud backends, and configuration — see
 [`docs/architecture.md`](docs/architecture.md). Haskell coding style —
-formatting, Haddock, naming, totality, and the compiler-flag set — has its own
-reference in [`STYLE.md`](STYLE.md). Agent-specific instructions live in
+formatting, naming, totality, and the compiler-flag set — has its own reference
+in [`STYLE.md`](STYLE.md), and the documentation/Haddock conventions are in
+[`HADDOCK.md`](HADDOCK.md). Agent-specific instructions live in
 [`AGENTS.md`](AGENTS.md).
 
 ## Local development
