@@ -229,11 +229,17 @@ well-covered changes land). Both knobs live in [`codecov.yml`](codecov.yml).
 ## Continuous Integration
 
 Every push and PR runs the single unified workflow
-([`.github/workflows/ci.yml`](.github/workflows/ci.yml)): build & test, format &
-lint, Semgrep, and **workflow-lint** (`make lint-workflows` = actionlint +
-zizmor, which audit the Actions workflows themselves for correctness and security
-— template injection, credential persistence, excessive permissions), all feeding
-one terminal **`gate`** job — the only required status check (plus Codecov's
+([`.github/workflows/ci.yml`](.github/workflows/ci.yml)): build & test, integration,
+a **Haddock** gate scoped to our own library (`make docs-check` — documents only
+`lib:ecluse`, skipping dependency docs and source links; the full source-linked
+site is published from `main` via Pages), and a combined **static-checks** job —
+fourmolu, hlint, `cabal check`,
+Semgrep, and **workflow-lint** (`make lint-workflows` = actionlint + zizmor, which
+audit the Actions workflows themselves for correctness and security — template
+injection, credential persistence, excessive permissions). The four non-Haskell
+checks share one job (they don't build, so a single toolchain setup serves them
+all) and each still runs even if a sibling fails, so one run reports them all. All
+feed one terminal **`gate`** job — the only required status check (plus Codecov's
 server-side `codecov/project` / `codecov/patch`; see
 [Coverage](#coverage--codecov-gating)). Local `make check` runs the same set, so a
 clean local run predicts a green gate. The design rationale — least-privilege

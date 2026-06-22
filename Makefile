@@ -23,7 +23,7 @@ HADDOCK_FLAGS := --haddock-hyperlink-source --haddock-quickjump
 .PHONY: help update build test test-integration test-smoke test-all doctest \
         coverage freeze gen-version-fixtures format format-check lint sast \
         cabal-check lint-workflows weeder check run docs \
-        docs-site nix-build nix-check docker-build docker-push sbom scan \
+        docs-check docs-site nix-build nix-check docker-build docker-push sbom scan \
         scan-vulnix clean
 
 help: ## Show this help
@@ -139,6 +139,17 @@ docs: ## Build hyperlinked, searchable Haddock HTML for the library and open it
 	@html=$$(find dist-newstyle -path '*/doc/html/ecluse/index.html' | head -n1); \
 	  echo "Haddock: $$html"; \
 	  command -v xdg-open >/dev/null 2>&1 && xdg-open "$$html" >/dev/null 2>&1 &
+
+# Faster Haddock build for the CI gate, scoped to our own library. Two changes
+# vs docs-site: it drops --haddock-hyperlink-source (the per-module source render),
+# and adds --disable-documentation so cabal does NOT (re)build the ~130-package
+# dependency haddock closure — it documents only lib:ecluse, which is all the gate
+# needs to validate (our doc comments compile; no broken modules). The dropped
+# dependency cross-links matter only for the published site, which the Pages
+# publish (docs-site, full flags) still builds on main. A gate failure here still
+# means our docs are broken. See CONTRIBUTING.md → "Continuous Integration".
+docs-check: ## Build Haddock for the CI gate (our library only; no dep docs, no source links)
+	$(NIX) cabal haddock lib:ecluse --haddock-quickjump --disable-documentation
 
 # Same docs, staged into ./_site for the GitHub Pages workflow to upload. The
 # Haddock output path embeds the arch + GHC version, so we locate it rather than
