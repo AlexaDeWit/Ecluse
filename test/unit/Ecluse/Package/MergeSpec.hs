@@ -1,0 +1,396 @@
+module Ecluse.Package.MergeSpec (spec) where
+
+import Data.List (nub)
+import Data.Map.Strict qualified as Map
+import Data.Time (UTCTime (..), fromGregorian)
+import Hedgehog (Gen, forAll, (===))
+import Hedgehog qualified as H
+import Hedgehog.Gen qualified as Gen
+import Hedgehog.Range qualified as Range
+import Test.Hspec
+import Test.Hspec.Hedgehog (hedgehog)
+
+import Ecluse.Ecosystem (Ecosystem (..))
+import Ecluse.Package
+import Ecluse.Package.Merge
+import Ecluse.Version (mkVersion, unVersion)
+
+-- ── fixtures ─────────────────────────────────────────────────────────────────
+
+name :: PackageName
+name = mkPackageName Npm Nothing "thing"
+
+{- | One tarball with the given integrity digest, so two versions of the same key
+can be made to agree or diverge purely on integrity.
+-}
+artifactWith :: Text -> Artifact
+artifactWith digest =
+    Artifact
+        { artFilename = "thing.tgz"
+        , artUrl = "https://example.test/thing.tgz"
+        , artKind = Tarball
+        , artHashes = [Hash SRI digest]
+        , artSize = Nothing
+        , artInterpreter = Nothing
+        , artYanked = False
+        , artProvenance = Nothing
+        }
+
+{- | A per-version snapshot for a raw version string, carrying a chosen integrity
+digest. Everything else is inert — the merge reads only the version key, the
+parsed version (for @latest@), and artifact integrity (for divergence).
+-}
+detailsWith :: Text -> Text -> PackageDetails
+detailsWith rawVer digest =
+    PackageDetails
+        { pkgName = name
+        , pkgVersion = mkVersion Npm rawVer
+        , pkgPublishedAt = Nothing
+        , pkgInstallCode = NoCodeOnInstall
+        , pkgTrust = Untrusted
+        , pkgAvailability = Available
+        , pkgArtifacts = artifactWith digest :| []
+        , pkgLicenses = ["MIT"]
+        , pkgPublisher = Nothing
+        , pkgMaintainers = []
+        , pkgDependencies = []
+        }
+
+{- | Build a single-package packument from @(rawVersion, integrityDigest)@ pairs.
+@latest@ is pointed at the lexically-highest version (a coherent packument always
+tags its newest release), so a lone source is already a fixed point of the merge's
+@latest@ reconciliation; @time@ gives each version a fixed instant.
+-}
+packument :: [(Text, Text)] -> PackageInfo
+packument vs =
+    PackageInfo
+        { infoName = name
+        , infoVersions = Map.fromList [(v, detailsWith v d) | (v, d) <- vs]
+        , infoDistTags = case sortOn Down (map fst vs) of
+            [] -> Map.empty
+            (hi : _) -> Map.singleton "latest" (mkVersion Npm hi)
+        , infoPublishedAt = Map.fromList [(v, t0) | (v, _) <- vs]
+        }
+  where
+    t0 = UTCTime (fromGregorian 2026 1 1) 0
+
+-- ── small accessors ──────────────────────────────────────────────────────────
+
+-- The surviving version keys (the merged union), sorted.
+survivorKeys :: MergePlan -> [Text]
+survivorKeys = sort . Map.keys . mpSurvivors
+
+-- The 'SourceId' that won a given surviving key, if it survived.
+winnerOf :: Text -> MergePlan -> Maybe SourceId
+winnerOf key = Map.lookup key . mpSurvivors
+
+-- The resolved @latest@ tag's raw text, if present.
+latestKey :: MergePlan -> Maybe Text
+latestKey p = unVersion <$> Map.lookup "latest" (mpDistTags p)
+
+-- ── generators ───────────────────────────────────────────────────────────────
+
+genDigest :: Gen Text
+genDigest = ("sha512-" <>) <$> Gen.text (Range.singleton 6) Gen.alphaNum
+
+-- | A simple numeric semver so generated versions always parse and order.
+genVersionStr :: Gen Text
+genVersionStr = do
+    a <- Gen.int (Range.linear 0 9)
+    b <- Gen.int (Range.linear 0 9)
+    c <- Gen.int (Range.linear 0 9)
+    pure (show a <> "." <> show b <> "." <> show c)
+
+genSource :: Gen (Provenance, PackageInfo)
+genSource = do
+    prov <- Gen.element [TrustedSource, GatedSource]
+    n <- Gen.int (Range.linear 0 5)
+    vers <- Gen.list (Range.singleton n) genVersionStr
+    let distinct = nub vers
+    pairs <- forM distinct (\v -> (,) v <$> genDigest)
+    pure (prov, packument pairs)
+
+genSources :: Gen [(Provenance, PackageInfo)]
+genSources = Gen.list (Range.linear 1 4) genSource
+
+-- ── spec ─────────────────────────────────────────────────────────────────────
+
+spec :: Spec
+spec = do
+    describe "mergePackuments" $ do
+        it "returns Nothing on an empty input (nothing to serve)" $
+            mergePackuments [] `shouldBe` Nothing
+
+        it "names the plan after the first input" $ do
+            let info = packument [("1.0.0", "sha512-aaa")]
+            (mpName <$> mergePackuments [(GatedSource, info)]) `shouldBe` Just name
+
+        it "is the identity on a single input (survivors, tags, time)" $ do
+            -- A lone source: every version survives, all won by source 0, with its
+            -- own latest kept and its times carried whole.
+            let info = packument [("1.0.0", "sha512-aaa"), ("2.0.0", "sha512-bbb")]
+                plan = mergePackuments [(GatedSource, info)]
+            (Map.keys . mpSurvivors <$> plan) `shouldBe` Just ["1.0.0", "2.0.0"]
+            (Map.elems . mpSurvivors <$> plan) `shouldBe` Just [0, 0]
+            (latestKey =<< plan) `shouldBe` Just "2.0.0"
+            (sort . Map.keys . mpTime <$> plan) `shouldBe` Just ["1.0.0", "2.0.0"]
+
+        it "reports no divergences for a single input" $ do
+            let info = packument [("1.0.0", "sha512-aaa")]
+            (mpDivergences <$> mergePackuments [(TrustedSource, info)]) `shouldBe` Just []
+
+        it "unions versions across sources" $ do
+            let trusted = packument [("1.0.0", "sha512-aaa")]
+                gated = packument [("2.0.0", "sha512-bbb")]
+            (survivorKeys <$> mergePackuments [(TrustedSource, trusted), (GatedSource, gated)])
+                `shouldBe` Just ["1.0.0", "2.0.0"]
+
+        it "private wins a collision: the survivor points at the trusted source" $ do
+            -- Same version key in both, with differing integrity. The plan records
+            -- the surviving key against the trusted input's 'SourceId', so the serve
+            -- layer takes that version's object from the private source's raw Value.
+            let gated = packument [("1.0.0", "sha512-public")] -- source 0
+                trusted = packument [("1.0.0", "sha512-private")] -- source 1
+            (winnerOf "1.0.0" =<< mergePackuments [(GatedSource, gated), (TrustedSource, trusted)])
+                `shouldBe` Just 1
+
+        it "detects a divergence when the same version's integrity differs" $ do
+            let trusted = packument [("1.0.0", "sha512-private")]
+                gated = packument [("1.0.0", "sha512-public")]
+                plan = mergePackuments [(TrustedSource, trusted), (GatedSource, gated)]
+            (map divVersion . mpDivergences <$> plan) `shouldBe` Just ["1.0.0"]
+
+        it "reports no divergence when a collision's integrity agrees" $ do
+            let trusted = packument [("1.0.0", "sha512-same")]
+                gated = packument [("1.0.0", "sha512-same")]
+                plan = mergePackuments [(TrustedSource, trusted), (GatedSource, gated)]
+            (mpDivergences <$> plan) `shouldBe` Just []
+
+        it "repoints latest to the highest surviving version when the chosen tag is gone" $ do
+            -- The trusted source's chosen latest (9.9.9) is not actually carried,
+            -- so selectLatest repoints across the union to the highest stable
+            -- survivor (3.0.0).
+            let trusted =
+                    (packument [("1.0.0", "sha512-aaa")])
+                        { infoDistTags = Map.singleton "latest" (mkVersion Npm "9.9.9")
+                        }
+                gated = packument [("3.0.0", "sha512-bbb"), ("2.0.0", "sha512-ccc")]
+            (latestKey =<< mergePackuments [(TrustedSource, trusted), (GatedSource, gated)])
+                `shouldBe` Just "3.0.0"
+
+        it "drops a dist-tag whose target is absent from the union" $ do
+            -- A source advertises a "next" tag pointing at a version it does not
+            -- actually carry; the merge drops it rather than serving a dangling tag.
+            let info =
+                    (packument [("1.0.0", "sha512-aaa")])
+                        { infoDistTags =
+                            Map.fromList
+                                [ ("latest", mkVersion Npm "1.0.0")
+                                , ("next", mkVersion Npm "9.9.9")
+                                ]
+                        }
+            (Map.keys . mpDistTags <$> mergePackuments [(GatedSource, info)])
+                `shouldBe` Just ["latest"]
+
+        it "restricts time to surviving versions" $ do
+            let trusted = packument [("1.0.0", "sha512-aaa")]
+                gated = packument [("2.0.0", "sha512-bbb")]
+            (sort . Map.keys . mpTime <$> mergePackuments [(TrustedSource, trusted), (GatedSource, gated)])
+                `shouldBe` Just ["1.0.0", "2.0.0"]
+
+    describe "precedence is by provenance, not input order" $ do
+        -- Finding #1: dist-tags and time must resolve collisions by provenance
+        -- (trusted wins), so the plan is identical whichever order the caller
+        -- happens to pass the two upstreams.
+        let trusted =
+                ( TrustedSource
+                , (packument [("1.0.0", "sha512-priv")])
+                    { infoDistTags = Map.fromList [("latest", mkVersion Npm "1.0.0"), ("beta", mkVersion Npm "1.0.0")]
+                    , infoPublishedAt = Map.singleton "1.0.0" tTrusted
+                    }
+                )
+            gated =
+                ( GatedSource
+                , (packument [("1.0.0", "sha512-pub")])
+                    { infoDistTags = Map.fromList [("latest", mkVersion Npm "1.0.0"), ("beta", mkVersion Npm "1.0.0")]
+                    , infoPublishedAt = Map.singleton "1.0.0" tGated
+                    }
+                )
+            tTrusted = UTCTime (fromGregorian 2026 3 3) 0
+            tGated = UTCTime (fromGregorian 2020 1 1) 0
+
+        it "resolves identically whichever order trusted/gated is passed" $ do
+            -- Every provenance-resolved decision must be order-independent: the
+            -- surviving keys, the reconciled tags (incl. latest), the time union,
+            -- and the divergences. The only thing that legitimately differs is the
+            -- winner's 'SourceId' — a faithful pointer to the trusted input's
+            -- position, asserted to name the trusted source below.
+            let forward = mergePackuments [trusted, gated]
+                backward = mergePackuments [gated, trusted]
+            (Map.keys . mpSurvivors <$> forward) `shouldBe` (Map.keys . mpSurvivors <$> backward)
+            (mpDistTags <$> forward) `shouldBe` (mpDistTags <$> backward)
+            (mpTime <$> forward) `shouldBe` (mpTime <$> backward)
+            (mpDivergences <$> forward) `shouldBe` (mpDivergences <$> backward)
+
+        it "a non-latest tag resolves to the trusted target regardless of order" $ do
+            -- 'beta' is a non-'latest' tag; both sources tag it at 1.0.0 but with
+            -- different integrity behind that key. The plan keeps the tag, and the
+            -- survivor for 1.0.0 is the trusted copy either ordering.
+            let forward = winnerOf "1.0.0" =<< mergePackuments [trusted, gated]
+                backward = winnerOf "1.0.0" =<< mergePackuments [gated, trusted]
+            -- trusted is index 0 forward, index 1 backward; both must name trusted.
+            forward `shouldBe` Just 0
+            backward `shouldBe` Just 1
+
+        it "time resolves to the trusted source's instant regardless of order" $ do
+            (Map.lookup "1.0.0" . mpTime =<< mergePackuments [trusted, gated])
+                `shouldBe` Just tTrusted
+            (Map.lookup "1.0.0" . mpTime =<< mergePackuments [gated, trusted])
+                `shouldBe` Just tTrusted
+
+    describe "latest via the shared selector" $ do
+        -- Findings #2 + #3: latest is resolved by Ecluse.Version.selectLatest, so
+        -- the merge inherits keep-unless-denied + stable-preferring + unparseable-
+        -- safe behaviour. selectLatest is exhaustively unit-tested in its own spec;
+        -- these are integration-level checks that it is wired in correctly.
+        it "keeps the chosen latest when it still survives (no promotion)" $ do
+            -- The trusted source tags latest at 1.0.0 and that version survives, so
+            -- latest stays 1.0.0 even though 2.0.0 exists in the union.
+            let trusted =
+                    ( TrustedSource
+                    , (packument [("1.0.0", "sha512-aaa")])
+                        { infoDistTags = Map.singleton "latest" (mkVersion Npm "1.0.0")
+                        }
+                    )
+                gated = (GatedSource, packument [("2.0.0", "sha512-bbb")])
+            (latestKey =<< mergePackuments [trusted, gated]) `shouldBe` Just "1.0.0"
+
+        it "chooses the chosen-latest by provenance (trusted's tag wins)" $ do
+            -- Both sources survive and both tag a latest; the trusted source's
+            -- latest is the chosen one, even though it is the lower version.
+            let trusted =
+                    ( TrustedSource
+                    , (packument [("1.0.0", "sha512-aaa")])
+                        { infoDistTags = Map.singleton "latest" (mkVersion Npm "1.0.0")
+                        }
+                    )
+                gated =
+                    ( GatedSource
+                    , (packument [("2.0.0", "sha512-bbb")])
+                        { infoDistTags = Map.singleton "latest" (mkVersion Npm "2.0.0")
+                        }
+                    )
+            (latestKey =<< mergePackuments [trusted, gated]) `shouldBe` Just "1.0.0"
+
+        it "repoints to the highest stable survivor over a prerelease when chosen is gone" $ do
+            -- The chosen latest (5.0.0) was denied/absent; among survivors a stable
+            -- release is preferred over a higher prerelease.
+            let info =
+                    (packument [("2.0.0", "sha512-aaa"), ("3.0.0-rc.1", "sha512-bbb")])
+                        { infoDistTags = Map.singleton "latest" (mkVersion Npm "5.0.0")
+                        }
+            (latestKey =<< mergePackuments [(GatedSource, info)]) `shouldBe` Just "2.0.0"
+
+        it "falls back to a surviving prerelease when no stable survivor exists" $ do
+            let info =
+                    (packument [("3.0.0-rc.1", "sha512-aaa"), ("3.0.0-beta", "sha512-bbb")])
+                        { infoDistTags = Map.singleton "latest" (mkVersion Npm "5.0.0")
+                        }
+            (latestKey =<< mergePackuments [(GatedSource, info)]) `shouldBe` Just "3.0.0-rc.1"
+
+    describe "properties" $ do
+        it "the survivors are exactly the union of every source's keys" $
+            hedgehog $ do
+                sources <- forAll genSources
+                plan <- H.evalMaybe (mergePackuments sources)
+                let expected = sort (nub (concatMap (Map.keys . infoVersions . snd) sources))
+                survivorKeys plan === expected
+
+        it "every surviving dist-tag target is a surviving version key" $
+            hedgehog $ do
+                sources <- forAll genSources
+                plan <- H.evalMaybe (mergePackuments sources)
+                let keys = Map.keys (mpSurvivors plan)
+                    targets = map unVersion (Map.elems (mpDistTags plan))
+                H.assert (all (`elem` keys) targets)
+
+        it "latest, when present, is a surviving key" $
+            hedgehog $ do
+                sources <- forAll genSources
+                plan <- H.evalMaybe (mergePackuments sources)
+                case latestKey plan of
+                    Nothing -> H.success
+                    Just k -> H.assert (k `elem` Map.keys (mpSurvivors plan))
+
+        it "time keys are a subset of the survivors" $
+            hedgehog $ do
+                sources <- forAll genSources
+                plan <- H.evalMaybe (mergePackuments sources)
+                let keys = Map.keys (mpSurvivors plan)
+                H.assert (all (`elem` keys) (Map.keys (mpTime plan)))
+
+        it "a single input is the identity over the plan" $
+            hedgehog $ do
+                src@(_, info) <- forAll genSource
+                plan <- H.evalMaybe (mergePackuments [src])
+                -- A lone source survives whole: every version is a survivor, all won
+                -- by source 0, no collisions, and every carried tag targets one of
+                -- its own versions.
+                Map.keys (mpSurvivors plan) === Map.keys (infoVersions info)
+                nub (Map.elems (mpSurvivors plan)) === ([0 | not (Map.null (infoVersions info))])
+                Map.keys (mpTime plan) === Map.keys (infoPublishedAt info)
+                mpDivergences plan === []
+
+        it "the surviving set and time union are order-independent" $
+            hedgehog $ do
+                -- On disjoint sources there are no cross-source collisions, so the
+                -- survivor set and the time union are a pure set operation and any
+                -- permutation yields the same ones. (The winning SourceId of a key
+                -- is its source's index, which a permutation relabels by design; and
+                -- the provenance precedence of a *colliding* tag/time is checked
+                -- deterministically in "precedence is by provenance" above, the
+                -- two-source split the architecture defines.)
+                sources <- forAll genDisjointSources
+                perm <- forAll (Gen.shuffle sources)
+                a <- H.evalMaybe (mergePackuments sources)
+                b <- H.evalMaybe (mergePackuments perm)
+                Map.keys (mpSurvivors a) === Map.keys (mpSurvivors b)
+                mpTime a === mpTime b
+
+        it "the private copy wins the tiebreak regardless of source order" $
+            hedgehog $ do
+                ver <- forAll genVersionStr
+                privDigest <- forAll genDigest
+                pubDigest <- forAll (Gen.filter (/= privDigest) genDigest)
+                let trusted = (TrustedSource, packument [(ver, privDigest)])
+                    gated = (GatedSource, packument [(ver, pubDigest)])
+                -- trusted at index 0 forward, index 1 backward; the survivor must
+                -- name the trusted source either way.
+                forward <- H.evalMaybe (winnerOf ver =<< mergePackuments [trusted, gated])
+                backward <- H.evalMaybe (winnerOf ver =<< mergePackuments [gated, trusted])
+                forward === 0
+                backward === 1
+
+        it "a divergence is detected iff a shared version's integrity differs" $
+            hedgehog $ do
+                ver <- forAll genVersionStr
+                d1 <- forAll genDigest
+                d2 <- forAll genDigest
+                let trusted = (TrustedSource, packument [(ver, d1)])
+                    gated = (GatedSource, packument [(ver, d2)])
+                plan <- H.evalMaybe (mergePackuments [trusted, gated])
+                let diverged = not (null (mpDivergences plan))
+                diverged === (d1 /= d2)
+
+{- | Sources with pairwise-disjoint version keys, so the merge is a pure set union
+with no collisions — the regime in which order cannot matter at all.
+-}
+genDisjointSources :: Gen [(Provenance, PackageInfo)]
+genDisjointSources = do
+    n <- Gen.int (Range.linear 1 4)
+    pure [oneSource i | i <- [1 .. n]]
+  where
+    -- Source @i@ owns the single version @i.0.0@, so no two sources share a key.
+    oneSource i =
+        let ver = show (i :: Int) <> ".0.0"
+         in (if even i then TrustedSource else GatedSource, packument [(ver, "sha512-" <> ver)])
