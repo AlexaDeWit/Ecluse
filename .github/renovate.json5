@@ -1,0 +1,96 @@
+{
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+
+  // One bot for every ecosystem this repo has: Nix flake inputs, GitHub
+  // Actions, and — the reason we left Dependabot — Haskell/Hackage cabal
+  // dependencies, which Dependabot has no manager for. Replaces the two-arm
+  // .github/dependabot.yml (github-actions + nix). Runs as the hosted Mend
+  // "Renovate Community Cloud" app (free for public repos).
+  extends: [
+    "config:recommended",
+    // Keep every GitHub Action pinned to a full-length commit SHA with the
+    // version in a trailing comment — the repo's supply-chain rule (AGENTS.md
+    // → "CI & Security"). Renovate updates both the digest and the comment and
+    // never unpins.
+    "helpers:pinGitHubActionDigests",
+  ],
+
+  // Mirror the deliberate weekly cadence the old Dependabot config used. UTC —
+  // a bot needs no local timezone.
+  schedule: ["before 9am on monday"],
+
+  // Conventional Commits, matching the repo's history. Default scope is "deps";
+  // the per-manager commit *type* is set in packageRules below to preserve the
+  // old prefixes (build → flake/cabal, ci → actions).
+  semanticCommits: "enabled",
+
+  labels: ["dependencies"],
+
+  // Refresh flake.lock. The inputs track *branches* (e.g. nixos-24.11), which
+  // carry no version for Renovate to bump — a lock refresh is how nixpkgs /
+  // flake-utils move forward and the image's C-library closure picks up
+  // upstream security fixes. This is the freshness arm of the supply-chain
+  // posture; grype is the detection arm (see release-supply-chain.md).
+  lockFileMaintenance: {
+    enabled: true,
+    schedule: ["before 9am on monday"],
+  },
+
+  packageRules: [
+    // Flake inputs + the flake.lock refresh → build(deps).
+    {
+      matchManagers: ["nix"],
+      semanticCommitType: "build",
+    },
+
+    // Haskell library bounds → build(deps).
+    {
+      matchManagers: ["haskell-cabal"],
+      semanticCommitType: "build",
+      // The shipped artifact resolves its Haskell deps from the *nixpkgs* GHC
+      // 9.6 set pinned by flake.lock (callCabal2nix), while `cabal build` in CI
+      // resolves from Hackage. "widen" only raises UPPER bounds, so a new
+      // Hackage release is *allowed* without forcing a lower bound the (laggier)
+      // nixpkgs set can't satisfy — which would otherwise break the Nix build.
+      rangeStrategy: "widen",
+    },
+
+    // GHC-boot libraries ship *with the compiler* (GHC 9.6, pinned by
+    // flake.lock), so their version is not independently choosable. Their cabal
+    // bounds should move only when GHC moves (a flake/nixpkgs bump), never on a
+    // standalone Hackage release — a bumped bound just reddens CI and stalls.
+    // Keep them out of cabal updates. (This rule is listed after the cabal rule
+    // above so its enabled:false wins on merge.)
+    {
+      matchManagers: ["haskell-cabal"],
+      matchPackageNames: [
+        "base",
+        "ghc-prim",
+        "ghc-bignum",
+        "array",
+        "bytestring",
+        "containers",
+        "deepseq",
+        "directory",
+        "filepath",
+        "mtl",
+        "parsec",
+        "pretty",
+        "process",
+        "stm",
+        "template-haskell",
+        "text",
+        "time",
+        "transformers",
+        "unix",
+      ],
+      enabled: false,
+    },
+
+    // GitHub Actions → ci(deps).
+    {
+      matchManagers: ["github-actions"],
+      semanticCommitType: "ci",
+    },
+  ],
+}
