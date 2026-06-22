@@ -220,7 +220,8 @@ token, the one-required-check rule, SHA-pinned shared setup, the lean
 published by a tag-triggered workflow that attaches keyless SLSA provenance + SBOM
 attestations and a GitHub Release pinning the digest. Image CVEs are scanned
 report-only (`make scan` — grype over the SBOM) and dependency freshness is kept
-by Dependabot bumping `flake.lock`.
+by Renovate refreshing `flake.lock` (and bumping the GitHub Actions and Haskell
+dependencies).
 
 The full operational detail — image contents, the publish/attest chain, Docker
 Hub token handling, and the scanning/freshness arms — is in

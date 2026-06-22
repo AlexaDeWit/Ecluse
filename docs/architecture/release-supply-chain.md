@@ -124,11 +124,14 @@ changes; on a **daily schedule** it scans `main` and opens/updates a single
 tracking issue (label `security:vuln-scan`) when grype reports CVEs, closing it
 when clean — so CVEs disclosed *after* a release still surface.
 
-**Freshness — Dependabot (Nix).** [`dependabot.yml`](../../.github/dependabot.yml)
-monitors the **flake inputs** (`nix` ecosystem) and opens weekly PRs bumping
-`flake.lock`, so the C-library closure picks up upstream security fixes; the gate
-validates each bump and the scan re-runs on it. This is the remediation arm —
-fixing a finding is usually just merging the Dependabot PR.
+**Freshness — Renovate.** [`renovate.json5`](../../.github/renovate.json5) runs one
+bot across every ecosystem the repo has — the **flake inputs** (`nix`), **GitHub
+Actions**, and **Haskell/Hackage** cabal deps (which Dependabot has no manager
+for — the reason we migrated). For Nix it refreshes `flake.lock` weekly (the
+branch-tracked inputs carry no version to bump), so the C-library closure picks
+up upstream security fixes; the gate validates each bump and the scan re-runs on
+it. This is the remediation arm — fixing a finding is usually just merging the
+Renovate PR.
 
 **Haskell advisories** (`cabal-audit` / the HSEC database) are a deferred
 follow-up: `cabal-audit` is marked broken in the pinned nixpkgs, and the
