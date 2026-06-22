@@ -35,8 +35,9 @@ model these guards answer is recorded there too.
 -}
 module Ecluse.Security (
     -- * Outbound host allowlist
-    isAllowedUpstreamHost,
+    LoweredHostSet,
     lowerCaseHosts,
+    isAllowedUpstreamHost,
 
     -- * Internal-range block
     isBlockedTarget,
@@ -68,13 +69,24 @@ import Ecluse.Server.Route (isSafeComponent)
 
 -- ── outbound host allowlist ──────────────────────────────────────────────────
 
-{- | Pre-lower a set of host strings for use with 'isAllowedUpstreamHost' and
-'isBlockedTarget'. Call once when building your configuration, not on every
-request; passing a pre-lowered set avoids repeating 'Set.map T.toLower' per
-check.
+{- | A set of host strings normalised to lower case, the form the host guards
+('isAllowedUpstreamHost' and 'isBlockedTarget') compare against.
+
+The type is __opaque, and 'lowerCaseHosts' is its only constructor__: a value of
+this type therefore carries the proof that every host in it is already
+lower-cased, so the guards lower only the /incoming/ host and the case-insensitive
+match cannot be bypassed by an un-normalised configuration set.
 -}
-lowerCaseHosts :: Set Text -> Set Text
-lowerCaseHosts = Set.map T.toLower
+newtype LoweredHostSet = LoweredHostSet (Set Text)
+    deriving stock (Eq, Show)
+
+{- | Normalise a set of configured host strings to lower case, yielding the
+'LoweredHostSet' the host guards take. DNS hostnames are case-insensitive, so
+folding case here lets the guards match an incoming host against the
+configuration regardless of how either was spelled.
+-}
+lowerCaseHosts :: Set Text -> LoweredHostSet
+lowerCaseHosts = LoweredHostSet . Set.map T.toLower
 
 {- | Whether @host@ is one of the configured upstream hosts. __Pure and total.__
 
@@ -86,12 +98,12 @@ scheme — extract it with 'hostAddress' first) and __case-insensitive__, since
 DNS hostnames are; an empty @host@ is never allowed. This is the allowlist half
 of the SSRF gate; pair it with 'isBlockedTarget' for the internal-range half.
 
-Pass the result of 'lowerCaseHosts' as @allowed@ to avoid repeating
-'Set.map T.toLower' on every call.
+The allowlist is a 'LoweredHostSet', so it is already lower-cased and only the
+incoming @host@ is folded here.
 -}
-isAllowedUpstreamHost :: Set Text -> Text -> Bool
-isAllowedUpstreamHost allowed host =
-    not (T.null host) && T.toLower host `Set.member` Set.map T.toLower allowed
+isAllowedUpstreamHost :: LoweredHostSet -> Text -> Bool
+isAllowedUpstreamHost (LoweredHostSet allowed) host =
+    not (T.null host) && T.toLower host `Set.member` allowed
 
 -- ── internal-range block ─────────────────────────────────────────────────────
 
@@ -111,16 +123,17 @@ against:
 
 A host in @allowedInternal@ is __never__ blocked (matched case-insensitively, as
 DNS and the host allowlist are) — the deliberate opt-in for a private upstream that
-genuinely lives on an internal address. A @host@ that is not
-an IP literal (a DNS name) is __not__ blocked here: name-based targets are
-constrained by the 'isAllowedUpstreamHost' allowlist instead, and post-resolution
-IP filtering belongs to the resolving fetch layer, not this pure check. Both
-guards apply — an allowlisted host that resolves to an internal literal is still
-caught when its address is tested here.
+genuinely lives on an internal address. As a 'LoweredHostSet' it is already
+lower-cased, so only the incoming @host@ is folded for the comparison. A @host@
+that is not an IP literal (a DNS name) is __not__ blocked here: name-based targets
+are constrained by the 'isAllowedUpstreamHost' allowlist instead, and
+post-resolution IP filtering belongs to the resolving fetch layer, not this pure
+check. Both guards apply — an allowlisted host that resolves to an internal literal
+is still caught when its address is tested here.
 -}
-isBlockedTarget :: Set Text -> Text -> Bool
-isBlockedTarget allowedInternal host =
-    not (T.toLower host `Set.member` Set.map T.toLower allowedInternal)
+isBlockedTarget :: LoweredHostSet -> Text -> Bool
+isBlockedTarget (LoweredHostSet allowedInternal) host =
+    not (T.toLower host `Set.member` allowedInternal)
         && maybe False isInternalAddress (parseIpLiteral host)
 
 {- | An IP literal, parsed from a host for internal-range testing. Internal to

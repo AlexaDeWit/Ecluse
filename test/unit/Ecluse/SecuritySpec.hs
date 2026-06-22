@@ -30,6 +30,7 @@ import Ecluse.Package (
 import Ecluse.Security (
     LimitError (..),
     Limits (..),
+    LoweredHostSet,
     UrlError (..),
     boundedRead,
     checkNestingDepth,
@@ -45,9 +46,18 @@ import Ecluse.Version (Version, mkVersion)
 
 -- ── fixtures ─────────────────────────────────────────────────────────────────
 
--- | The configured upstreams a deployment talks to (lower-/mixed-case on purpose).
-upstreams :: Set.Set Text
-upstreams = Set.fromList ["registry.npmjs.org", "Private.Internal.Example.com"]
+{- | The raw configured upstream hosts (lower-/mixed-case on purpose), before
+normalisation. Kept unwrapped so a case can extend it (e.g. the SSRF gate's
+allowlisted-internal case) before lowering it through 'lowerCaseHosts'.
+-}
+upstreamHosts :: Set.Set Text
+upstreamHosts = Set.fromList ["registry.npmjs.org", "Private.Internal.Example.com"]
+
+{- | The configured upstreams, normalised through 'lowerCaseHosts' — the only way
+to obtain the 'LoweredHostSet' the host guards take.
+-}
+upstreams :: LoweredHostSet
+upstreams = lowerCaseHosts upstreamHosts
 
 -- | An unscoped npm package identity.
 unscoped :: Text -> PackageName
@@ -170,13 +180,13 @@ hostAllowlistSpec = describe "isAllowedUpstreamHost" $ do
     it "rejects the empty host" $
         isAllowedUpstreamHost upstreams "" `shouldBe` False
     it "rejects every host when the allowlist is empty" $
-        isAllowedUpstreamHost Set.empty "registry.npmjs.org" `shouldBe` False
+        isAllowedUpstreamHost (lowerCaseHosts Set.empty) "registry.npmjs.org" `shouldBe` False
 
 -- ── internal-range block ─────────────────────────────────────────────────────
 
 internalRangeSpec :: Spec
 internalRangeSpec = describe "isBlockedTarget" $ do
-    let noOptIn = Set.empty :: Set.Set Text
+    let noOptIn = lowerCaseHosts Set.empty
 
     describe "blocks internal IPv4 ranges" $ do
         it "blocks the cloud instance-metadata address 169.254.169.254" $
@@ -273,13 +283,13 @@ internalRangeSpec = describe "isBlockedTarget" $ do
 
     describe "explicit per-host opt-in" $ do
         it "permits a deliberately-internal upstream that is opted in" $
-            isBlockedTarget (Set.singleton "10.0.0.5") "10.0.0.5" `shouldBe` False
+            isBlockedTarget (lowerCaseHosts (Set.singleton "10.0.0.5")) "10.0.0.5" `shouldBe` False
         it "still blocks an internal address that is not the opted-in one" $
-            isBlockedTarget (Set.singleton "10.0.0.5") "10.0.0.6" `shouldBe` True
+            isBlockedTarget (lowerCaseHosts (Set.singleton "10.0.0.5")) "10.0.0.6" `shouldBe` True
         it "honours an opt-in written in a different case (matched case-insensitively)" $
-            -- The opt-in is normalised like the host allowlist, so 'FE80::1' opts in
+            -- 'lowerCaseHosts' normalises the opt-in set, so 'FE80::1' opts in
             -- 'fe80::1' rather than over-blocking it on a case mismatch.
-            isBlockedTarget (Set.singleton "FE80::1") "fe80::1" `shouldBe` False
+            isBlockedTarget (lowerCaseHosts (Set.singleton "FE80::1")) "fe80::1" `shouldBe` False
 
 -- ── host extraction ──────────────────────────────────────────────────────────
 
@@ -313,7 +323,7 @@ hostAddressSpec = describe "hostAddress" $ do
     it "composes with the SSRF guards to catch a metadata URL" $
         -- The realistic call shape: extract, then test both guards.
         let h = hostAddress "http://169.254.169.254/latest/meta-data/"
-         in (isBlockedTarget Set.empty h, isAllowedUpstreamHost upstreams h)
+         in (isBlockedTarget (lowerCaseHosts Set.empty) h, isAllowedUpstreamHost upstreams h)
                 `shouldBe` (True, False)
 
 -- ── composed SSRF gate ───────────────────────────────────────────────────────
@@ -325,16 +335,17 @@ neither half can be silently weakened.
 -}
 ssrfGateSpec :: Spec
 ssrfGateSpec = describe "composed SSRF gate (allowlist AND not-blocked)" $ do
-    let passesGate h = isAllowedUpstreamHost upstreams h && not (isBlockedTarget Set.empty h)
+    let noOptIn = lowerCaseHosts Set.empty
+        passesGate h = isAllowedUpstreamHost upstreams h && not (isBlockedTarget noOptIn h)
 
     it "admits a configured public upstream" $
         passesGate "registry.npmjs.org" `shouldBe` True
     it "vetoes an allowlisted host that is an internal literal (block beats allowlist)" $
         -- Even if an operator allowlists an internal address, the internal-range
         -- block still rejects it: the guarantee is the conjunction, not either half.
-        let allowed = Set.insert "169.254.169.254" upstreams
+        let allowed = lowerCaseHosts (Set.insert "169.254.169.254" upstreamHosts)
          in ( isAllowedUpstreamHost allowed "169.254.169.254"
-                && not (isBlockedTarget Set.empty "169.254.169.254")
+                && not (isBlockedTarget noOptIn "169.254.169.254")
             )
                 `shouldBe` False
     it "refuses an IPv4-mapped IPv6 metadata literal (blocked by both halves)" $
@@ -524,20 +535,21 @@ nestingDepthSpec = describe "checkNestingDepth" $ do
                     )
          in checkNestingDepth defaultLimits doc `shouldBe` Right doc
 
--- ── lowerCaseHosts helper ────────────────────────────────────────────────────
+-- ── lowerCaseHosts (the LoweredHostSet parser) ───────────────────────────────
 
 lowerCaseHostsSpec :: Spec
 lowerCaseHostsSpec = describe "lowerCaseHosts" $ do
-    it "lower-cases all hosts in the set" $
-        lowerCaseHosts (Set.fromList ["Registry.NPMjs.ORG", "Private.Example.COM"])
-            `shouldBe` Set.fromList ["registry.npmjs.org", "private.example.com"]
-    it "a pre-lowered set gives the same result as repeated case-folding" $
-        -- Passing a pre-lowered set to isAllowedUpstreamHost is equivalent to
-        -- passing the original mixed-case set; both accept the same hosts.
-        let mixed = upstreams
-            lowered = lowerCaseHosts mixed
-         in isAllowedUpstreamHost lowered "registry.npmjs.org"
-                `shouldBe` isAllowedUpstreamHost mixed "registry.npmjs.org"
+    it "folds configured-host case so a mixed-case entry matches a lowercase query" $
+        -- 'lowerCaseHosts' is the only constructor of the 'LoweredHostSet' the
+        -- guard takes, so this proves the guard relies on it for normalisation: a
+        -- host configured in mixed case is matched by its lowercase form.
+        isAllowedUpstreamHost (lowerCaseHosts (Set.singleton "Registry.NPMjs.ORG")) "registry.npmjs.org"
+            `shouldBe` True
+    it "normalises distinct casings of one host to the same lowered set" $
+        -- Two spellings that differ only in case fold to equal 'LoweredHostSet'
+        -- values, so the normalisation is genuinely case-collapsing.
+        lowerCaseHosts (Set.fromList ["EXAMPLE.com", "example.COM"])
+            `shouldBe` lowerCaseHosts (Set.singleton "example.com")
 
 -- ── properties ───────────────────────────────────────────────────────────────
 
@@ -570,7 +582,9 @@ propertiesSpec = describe "properties" $ do
             optIn <- forAll (Gen.set (Range.linear 0 3) genMaybeInternalHost)
             H.cover 5 "internal host" (looksInternal host)
             H.cover 5 "public host" (not (looksInternal host))
-            let blocked = isBlockedTarget optIn host
+            -- The generated hosts are already lowercase, so 'lowerCaseHosts' leaves
+            -- them unchanged and the raw set is a faithful membership oracle.
+            let blocked = isBlockedTarget (lowerCaseHosts optIn) host
             if host `Set.member` optIn
                 then blocked === False -- opt-in always wins
                 else blocked === looksInternal host

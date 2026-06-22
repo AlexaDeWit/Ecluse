@@ -59,8 +59,8 @@ The library's vocabulary, roughly from the pure core outward:
   and "Ecluse.Queue" (the durable mirror-job hand-off to the worker).
 
 'run' is the entry point the @ecluse@ executable invokes (see "Main"). It lives
-in the library, not in @app\/Main.hs@, so the program's behaviour is exercised
-by the test suite rather than hidden in the executable.
+in the library, not in @app\/Main.hs@, so the composition root is a single
+importable unit and @app\/Main.hs@ stays a thin shell that only calls it.
 
 == Further reading
 
@@ -120,9 +120,6 @@ runServices env = concurrently_ (runServer env) (runWorker env)
 
 {- | Serve the proxy's HTTP front door over the composition-root 'Env'. Request
 handlers read the 'Env' in plain 'IO'.
-
-The WAI @Application@, routing, and Warp listener are not yet wired here; this
-is a minimal stub.
 -}
 runServer :: Env -> IO ()
 runServer _env = pass
@@ -130,9 +127,6 @@ runServer _env = pass
 {- | Run the supervised mirror worker over the composition-root 'Env': the
 consume → fetch → verify → publish → ack loop against the queue and credential
 seams, in the @App@ orchestration monad.
-
-The consume loop and its health signal are not yet wired here; this is a
-minimal stub.
 -}
 runWorker :: Env -> IO ()
 runWorker _env = pass

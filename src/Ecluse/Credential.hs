@@ -47,7 +47,7 @@ __Opaque, and its 'Show' is redacted__: the underlying token text is never
 rendered, so a 'Secret' can be embedded in any value — an 'AuthToken', a log
 record, an error — without risking disclosure (token material must never reach a
 log, metric, or trace; see @docs\/architecture\/observability.md@). This
-redaction is a load-bearing security property, pinned by a test.
+redaction is a load-bearing security property.
 
 Build one with 'mkSecret' and read the real value back __only__ at the point of
 use with 'unSecret' (e.g. when setting the @Authorization@ header).
