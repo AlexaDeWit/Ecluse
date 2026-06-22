@@ -24,7 +24,7 @@ docs/      — architecture and design documents
 
 ## Code Conventions
 
-- **Follow [`STYLE.md`](STYLE.md) for all Haskell coding style** — documentation/Haddock requirements, naming, function design, totality, imports, and the compiler-flag set. It is written to be followed directly by agents; read it before writing or changing code. The points below are the structural essentials only.
+- **Follow [`STYLE.md`](STYLE.md) for all Haskell coding style** — naming, function design, totality, imports, and the compiler-flag set — and **[`HADDOCK.md`](HADDOCK.md) for documentation/Haddock conventions** (what to document, how much, and the doctest-backed examples). Both are written to be followed directly by agents; read them before writing or changing code. The points below are the structural essentials only.
 - Separate concerns: application wiring in `app/`, logic in `src/`, tests in `test/`.
 - Tests mirror the library module hierarchy (e.g. `src/Foo/Bar.hs` → `test/Foo/BarSpec.hs`).
 - Keep `app/Main.hs` thin — it should only parse config and call into the library.
