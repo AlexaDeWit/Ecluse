@@ -228,6 +228,45 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: nix develop .#workflow-lint --command make lint-workflows
 
+  weeder:
+    name: Dead-code report (weeder — informational)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # INFORMATIONAL ONLY: not a `gate` dependency and never fails the run. weeder
+    # reports library code not yet reachable from the application entry point —
+    # deliberate scaffolding for upcoming slices — so this surfaces it (in the run
+    # summary) without ever blocking a merge.
+    env:
+      CABAL_DIR: ${{ github.workspace }}/.cabal
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Set up toolchain
+        uses: ./.github/actions/setup-toolchain
+        with:
+          cabal-cache: "true"
+
+      - name: Update package index
+        run: nix develop .#weeder --command make update
+
+      - name: weeder (report to job summary)
+        # weeder exits non-zero on findings; this tier is informational, so swallow
+        # that and render the findings into the run summary instead.
+        run: |
+          nix develop .#weeder --command make weeder 2>&1 | tee weeder.out || true
+          {
+            echo '## weeder — library code not yet reachable from the app entry';
+            echo;
+            echo '_Informational; never gates. These are built/tested but not yet wired into the app entry (Ecluse.run) — feature scaffolding that shrinks as slices land._';
+            echo;
+            echo '```';
+            grep -E ':[0-9]+:[0-9]+:' weeder.out || echo '(no findings)';
+            echo '```';
+          } >> "$GITHUB_STEP_SUMMARY"
+
   gate:
     name: CI gate
     # The single Required check. Runs after every other gating job regardless of

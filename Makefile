@@ -22,7 +22,7 @@ HADDOCK_FLAGS := --haddock-hyperlink-source --haddock-quickjump
 .DEFAULT_GOAL := help
 .PHONY: help update build test test-integration test-smoke test-all doctest \
         coverage freeze gen-version-fixtures format format-check lint sast \
-        lint-workflows check run docs \
+        lint-workflows weeder check run docs \
         docs-site nix-build nix-check docker-build docker-push sbom scan \
         scan-vulnix clean
 
@@ -100,6 +100,18 @@ sast: ## Static analysis (Semgrep, registry rules)
 lint-workflows: ## Lint GitHub Actions workflows (actionlint + zizmor)
 	$(NIX) actionlint
 	$(NIX) zizmor .github/workflows/
+
+# weeder reports library code not reachable from the application entry point —
+# i.e. built (and usually tested) but not yet wired into the running proxy. It
+# reads .hie files, so we build ONLY the library + executable with -fwrite-ide-info
+# into a dedicated builddir (no test suites, so "reachable" means "used by the app",
+# not "covered by a test"); roots + rationale live in weeder.toml. INFORMATIONAL:
+# weeder exits non-zero when it finds something — useful locally — but the CI job
+# never fails on it (the findings are deliberate feature scaffolding); it is not in
+# `make check` and not a `gate` dependency.
+weeder: ## Report app-unreachable library code (weeder; informational, non-gating)
+	$(NIX) cabal build exe:ecluse --builddir=dist-weeder --ghc-options=-fwrite-ide-info
+	$(NIX) weeder --hie-directory dist-weeder
 
 check: build test doctest format-check lint sast lint-workflows ## Run everything the CI gate requires
 

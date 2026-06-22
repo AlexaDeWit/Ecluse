@@ -213,11 +213,12 @@
           '';
         };
 
-        # Full shell for humans: lean CI set + IDE + release + scan + workflow-lint.
+        # Full shell for humans: lean CI set + IDE + release + scan + workflow-lint + weeder.
         devShells.default = pkgs.mkShell (shellEnv // {
           name = "ecluse";
           buildInputs =
-            ciInputs ++ ideInputs ++ releaseInputs ++ scanInputs ++ workflowLintInputs;
+            ciInputs ++ ideInputs ++ releaseInputs ++ scanInputs ++ workflowLintInputs
+            ++ [ hpkgs.weeder ];
         });
 
         # Lean shell for CI: only what the gate jobs invoke through `make`. CI
@@ -241,6 +242,15 @@
         devShells.workflow-lint = pkgs.mkShell (shellEnv // {
           name = "ecluse-workflow-lint";
           buildInputs = [ pkgs.bashInteractive ] ++ workflowLintInputs;
+        });
+
+        # Shell for the informational weeder job: the CI toolchain (to build the
+        # .hie files weeder reads) plus weeder itself, which must come from the
+        # same GHC 9.6 set as the compiler that produced those files. CI enters it
+        # with `nix develop .#weeder`.
+        devShells.weeder = pkgs.mkShell (shellEnv // {
+          name = "ecluse-weeder";
+          buildInputs = ciInputs ++ [ hpkgs.weeder ];
         });
       });
 }
