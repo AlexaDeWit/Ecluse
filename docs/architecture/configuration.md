@@ -77,6 +77,31 @@ upstream is queried anonymously with the client's token **stripped** — see
 Écluse's own, never the client's.) Minting the mirror-write credential from a
 cloud identity also keeps long-lived secrets out of config.
 
+### Outbound egress safety (planned)
+
+> **Design only — not yet a live setting.** Recorded here so the configuration
+> surface and its security trade-off are agreed before implementation
+> ([`S40`](../../planning/slices/S40-egress-ssrf-hardening.md)).
+
+Écluse constrains its own outbound fetches (host allowlist + internal-range block;
+see [Security Invariants](security.md)), but **network egress is a shared
+responsibility** — the deployment must also fence egress at the platform layer
+(security groups, `NetworkPolicy`, Istio `ServiceEntry`/egress policy, and blocking
+the `169.254.169.254` metadata endpoint). See
+[Network egress is a shared responsibility](security.md#network-egress-is-a-shared-responsibility).
+
+The one application-level knob, following Écluse's **secure-defaults /
+configurable-overrides** principle — *the consumer decides their threat tolerance*:
+
+| Variable (planned) | Default | Description |
+|--------------------|---------|-------------|
+| `PROXY_RESPECT_UPSTREAM_TARBALL_HOST` | `false` (secure default) | When `false`, a tarball is fetched only from the **same allowlisted upstream that served the packument**; a `dist.tarball` pointing at a *different* host is refused. Set `true` only for a registry that legitimately serves tarballs from a separate CDN/files host (e.g. the PyPI files host), which **widens the outbound fetch surface to any allowlisted host** — opt in deliberately, and pair it with platform egress controls. |
+
+The override never escapes the host allowlist or the internal-range block: it
+relaxes *which allowlisted host* may serve a tarball, not whether the allowlist
+applies. The default keeps the tightest reading of
+[invariant 2](security.md#invariants).
+
 ### Rule policy
 
 The rule policy is a **named map** of rules layered over a **built-in default
