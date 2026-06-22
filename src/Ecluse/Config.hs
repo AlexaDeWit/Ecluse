@@ -569,7 +569,7 @@ resolvePolicy (RulePolicy base) (RulePatch patch) =
             rule <- buildRule name ty entry
             pure (PrecededRule (fromMaybe (defaultPrecedence rule) (entryPrecedence entry)) rule)
 
-{- | Build a fresh rule of the named type from its entry, rejecting an unknown
+{- Build a fresh rule of the named type from its entry, rejecting an unknown
 type and a value field the type cannot use.
 
 The effectful @AllowIfRemediatesCve@ rule type is __not__ a member of the rule
@@ -589,7 +589,7 @@ buildRule name ty entry = case ty of
     "DenyHasInstallScripts" -> Right DenyHasInstallScripts
     _ -> Left [UnknownRuleType name ty]
 
-{- | Apply an entry's value fields to an existing default rule, keeping its kind:
+{- Apply an entry's value fields to an existing default rule, keeping its kind:
 only the type's own value field may be overridden, and a restated @type@ must
 match the existing rule's type.
 -}
@@ -750,7 +750,7 @@ instance FromJSON RuleEntry where
 emptyPatch :: RulePatch
 emptyPatch = RulePatch Map.empty
 
-{- | Reject any object key not in the accepted set, naming the offender. This is
+{- Reject any object key not in the accepted set, naming the offender. This is
 the explicit-key-set form of strict decoding: aeson's record decoders silently
 ignore extra keys, so the accepted set is enumerated and an unknown key fails the
 parse — catching an operator's typo loudly rather than dropping it.
@@ -767,7 +767,7 @@ rejectUnknownKeys context accepted o =
                     <> intercalate ", " (map (show . Key.toText) unknown)
                 )
 
-{- | Reject a known secret-bearing key inside a rule object, so a token can never
+{- Reject a known secret-bearing key inside a rule object, so a token can never
 be smuggled into the reviewable document. Secrets are environment-only.
 -}
 rejectSecretKeys :: KeyMap Value -> Parser ()
