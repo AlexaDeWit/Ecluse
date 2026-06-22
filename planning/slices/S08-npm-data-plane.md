@@ -2,7 +2,7 @@
 id: S08
 title: "npm data plane: fetch + publish"
 milestone: M1 — npm protocol adapter
-status: not-started
+status: in-review
 depends-on: [S02, S07]
 test-tier: [unit, smoke]
 arch-refs:

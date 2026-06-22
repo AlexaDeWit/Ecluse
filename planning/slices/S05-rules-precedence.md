@@ -2,7 +2,7 @@
 id: S05
 title: Rules precedence alignment
 milestone: M0 — Shell, handles & foundations
-status: not-started
+status: merged
 depends-on: []
 test-tier: [unit]
 arch-refs:

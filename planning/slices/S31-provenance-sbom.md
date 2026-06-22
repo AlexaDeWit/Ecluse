@@ -2,7 +2,7 @@
 id: S31
 title: SLSA provenance + SBOM attestation
 milestone: M8 — Release hardening
-status: in-review
+status: merged
 depends-on: []
 test-tier: []
 arch-refs:
