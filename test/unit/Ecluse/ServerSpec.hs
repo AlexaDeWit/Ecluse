@@ -98,8 +98,8 @@ dispatch routes through 'scClassify' rather than any hardwired grammar. The fake
 recognises a single sentinel path and denies everything else, so a response that
 follows it can only have come from the injected function.
 -}
-seamApp :: IO Application
-seamApp = application defaultServerConfig{scClassify = const fakeClassify} <$> newTestEnv
+fakeClassifierApp :: IO Application
+fakeClassifierApp = application defaultServerConfig{scClassify = const fakeClassify} <$> newTestEnv
   where
     -- A deliberately non-npm grammar: @\/beep@ is the (locally answered) Ping
     -- route, every other path is denied. npm's @\/is-odd@ would be a Packument;
@@ -192,11 +192,11 @@ spec = do
                 -- No mount matches @/pypi/...@, so it falls through to deny-by-default.
                 get "/pypi/is-odd" `shouldRespondWith` 404
 
-    describe "dispatch — injected classifier (the routing seam)" $
+    describe "dispatch — injected classifier (the routing boundary)" $
         -- Drive dispatch with a FAKE classifier (not npm's): the route a request
         -- takes must follow the injected function, proving the web layer is no
         -- longer hardwired to npm's grammar.
-        with seamApp $ do
+        with fakeClassifierApp $ do
             it "routes the fake classifier's recognised path (/beep → Ping → 200 {})" $
                 -- npm's grammar has no @\/beep@ route; the fake's does, so a 200
                 -- here can only come from the injected classifier.
