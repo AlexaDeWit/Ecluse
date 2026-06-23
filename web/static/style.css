@@ -1,0 +1,97 @@
+:root {
+  /* Brand palette — extracted from the SVG artwork; full palette + roles documented in
+     docs/branding/colours.md. Cream-and-charcoal paper-and-ink, sand/tan lock steps,
+     sage-teal water. */
+  --charcoal: #211f1c;
+  --cream:    #f4efe3;
+  --sand:     #ece4d2;
+  --tan:      #ddd3bb;
+  --slate:    #4f4b43;
+
+  /* Semantic roles. Ground is Sand (not the brighter Cream) so a full page reads warm
+     rather than glaring; Cream becomes the raised-surface colour. Accent is the brand
+     Water (#6e928b) darkened toward the same hue until it clears AA on Sand. */
+  --bg:            var(--sand);
+  --surface:       var(--cream);
+  --fg:            var(--charcoal);
+  --muted:         var(--slate);
+  --accent:        #3f6058;
+  --accent-strong: #2e4a45;
+  --border:        var(--tan);
+  --code-bg:       var(--cream);
+  color-scheme: light;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  color: var(--fg);
+  background: var(--bg);
+  font: 16px/1.65 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+a { color: var(--accent); }
+a:hover { color: var(--accent-strong); }
+
+.site-header {
+  display: flex; flex-wrap: wrap; gap: 1rem; align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1.25rem; border-bottom: 1px solid var(--slate);
+  background: var(--tan);
+}
+.site-header .brand {
+  display: inline-flex; align-items: center; gap: 0.5rem;
+  font-weight: 600; text-decoration: none; color: var(--fg);
+}
+.site-header nav { display: flex; flex-wrap: wrap; gap: 1rem; }
+.site-header nav a { color: var(--muted); text-decoration: none; }
+.site-header nav a:hover { color: var(--accent); }
+
+main.doc, main.home { max-width: 46rem; margin: 0 auto; padding: 2rem 1.25rem 3rem; }
+
+h1 { font-size: 2rem; line-height: 1.2; margin: 1.5rem 0 0.5rem; }
+h2 { margin-top: 2.25rem; padding-top: 0.6rem; border-top: 1px solid var(--border); }
+h3 { margin-top: 1.75rem; }
+
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9em;
+  background: var(--code-bg); padding: 0.15em 0.35em; border-radius: 4px;
+}
+pre {
+  background: var(--code-bg); padding: 1rem; border-radius: 8px;
+  overflow-x: auto; border: 1px solid var(--border);
+}
+pre code { background: none; padding: 0; }
+pre.mermaid { background: none; border: none; text-align: center; }
+
+blockquote {
+  margin: 1.25rem 0; padding: 0.25rem 1rem; color: var(--muted);
+  border-left: 3px solid var(--border);
+}
+table { border-collapse: collapse; width: 100%; margin: 1.25rem 0; display: block; overflow-x: auto; }
+th, td { border: 1px solid var(--border); padding: 0.5rem 0.75rem; text-align: left; }
+th { background: var(--code-bg); }
+img { max-width: 100%; }
+
+.site-footer {
+  max-width: 46rem; margin: 0 auto; padding: 2rem 1.25rem 3rem;
+  border-top: 1px solid var(--border); color: var(--muted); font-size: 0.9rem;
+}
+.site-footer a { color: var(--muted); }
+.site-footer .made-in { margin-top: 1rem; font-size: 0.85rem; }
+
+/* Landing page */
+.hero { text-align: center; padding: 3rem 0 1rem; }
+.hero img { height: 64px; }
+.hero h1 { border: none; margin-bottom: 0; }
+.hero .lead { color: var(--muted); font-size: 1.15rem; max-width: 34rem; margin: 0.5rem auto 0; }
+.cards {
+  display: grid; gap: 1rem; margin: 2.5rem 0;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+}
+.card {
+  border: 1px solid var(--border); border-radius: 10px; padding: 1.1rem 1.25rem;
+  text-decoration: none; color: inherit; background: var(--surface);
+}
+.card:hover { border-color: var(--accent); }
+.card h3 { margin: 0 0 0.3rem; }
+.card p { margin: 0; color: var(--muted); font-size: 0.95rem; }
