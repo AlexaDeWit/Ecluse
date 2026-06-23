@@ -34,7 +34,9 @@ layer into an adapter renderer. Several threads below build on this: **D5 shrank
 to deriving the prefix from the ecosystem and flowing the ecosystem through the
 binding and the config mount, and **D1 resolved** against it (see Resolved, below).
 
-Threads are worked **one at a time**; D1–D5 are resolved, so **D6 is the last thread**.
+Threads are worked **one at a time**. **All threads (D1–D6) are resolved** — see
+[Resolved](#resolved). The remaining work is code: the consolidated
+[pre-S15 hardening slice](#code-owing--the-pre-s15-hardening-slice).
 
 ### Item 1 — config: per-ecosystem generalization
 
@@ -42,20 +44,7 @@ Threads are worked **one at a time**; D1–D5 are resolved, so **D6 is the last 
 
 ### Item 2 — Reader pattern over the request path
 
-**D6 — Reader migration & request-context shape (+ the state idiom).**
-_(depends on D1 for the context's mount shape)_
-We already have `App = ReaderT Env IO` (`MonadReader`/`MonadUnliftIO`); the worker
-runs in it. The holdout is the request hot path, which threads `Env` **and** the
-mount's per-request deps explicitly (the `PackumentDeps` now carried by the
-`MountBinding`, post-#133; the parked [issue #121](https://github.com/AlexaDeWit/Ecluse/issues/121)).
-Proposal: extend `App` over the handlers and collapse the two-arg thread into a
-request-scoped context (`RequestCtx { ctxEnv, ctxMount }`, or `ReaderT (Env,
-ResolvedMount)`), with dispatch installing the matched mount via `local` after
-routing. **State idiom (decided, recorded so M4 follows it):** shared mutable state
-(credential-refresh cells, breaker state, in-flight sets) lives as `TVar`/`IORef`
-**in `Env`** under the single `ReaderT` — **no `StateT` layer** (`StateT`-over-`IO`
-loses state across `forkIO`/`async` and gives no shared state; the metadata cache
-already follows the refs-in-`Env` idiom). — **Status: queued.**
+> **Item 2 complete** — D6 resolved; see [Resolved](#resolved).
 
 ---
 
@@ -144,3 +133,49 @@ the pre-S15 hardening slice: re-key `Ecluse.Config`'s `MountMap` by ecosystem, a
 value-level `Ecosystem` to the declarative mount, derive `bindingPrefix`, default the
 env-only mount to npm, and resolve `ecosystem → RegistryClient` at the composition
 root (replacing the single global `envRegistry`).
+
+**D6 — Reader migration & request-context shape.** _(resolved 2026-06-23)_
+**Decision:** extend the existing `App = ReaderT Env IO` over the request hot path.
+Handlers run over a per-request **`RequestCtx { ctxEnv :: Env, ctxMount ::
+MountBinding, … }`** (`ReaderT RequestCtx IO`): the dispatch layer runs in
+`App`/`ReaderT Env`, matches the mount, builds `RequestCtx`, and runs the handler in
+it, so the per-mount deps (registry set, rules, renderer, derived prefix) are read
+from context rather than re-threaded through the pipeline. Shared mutable state lives
+as `TVar`/`IORef` **in `Env`** under the single reader — **no `StateT`**. Accessor
+style: a **concrete `RequestCtx` record with plain accessors** (matching the concrete
+`App` newtype), revisable to `Has`-classes (`HasEnv r`, …) only if a real need
+appears. Lands **before S15** so the tarball path is written in the target style.
+Closes the parked [#121](https://github.com/AlexaDeWit/Ecluse/issues/121).
+**Rendered into:** [`technology-stack.md` → Key Decisions](../docs/architecture/technology-stack.md#key-decisions)
+and [`web-layer.md`](../docs/architecture/web-layer.md#web-layer).
+**Code still owing** (hardening slice): introduce `RequestCtx`, run handlers in
+`ReaderT RequestCtx IO` (deriving `Katip`/`KatipContext`), and retire the packument
+handler's explicit `Env`+deps threading.
+
+---
+
+## Code owing — the pre-S15 hardening slice
+
+All six threads are resolved in the docs; the conforming **code** is gathered here as
+one hardening track, to land **before [S15](slices/S15-tarball-path.md)** so the
+tarball path is built on the new base. A natural ordering:
+
+1. **Rule-name normalization (early, standalone).** Rename `DenyHasInstallScripts` →
+   an agnostic install-time-code-execution name; settle `AllowScope`/namespace.
+   Touches `Ecluse.Rules.Types`, `Ecluse.Rules`, `Ecluse.Config` wire `type`s, the
+   tests, and the rule-name references in docs. Cheap pre-launch — do it before more
+   rules accrete. _(D3)_
+2. **Ecosystem as a value on the mount.** Add `Ecosystem` to the declarative config
+   mount; re-key `MountMap` / the document `mounts` by ecosystem; derive
+   `bindingPrefix`; default the env-only mount to npm. Rename `RegistryTuple` → a
+   structural name (e.g. `MountRegistries`). _(D1, D2, D5)_
+3. **Global credential providers.** Hoist `mtCredential` off `MirrorTarget` into a
+   process-global provider registry the mount references; add the boot-time
+   "credential references must resolve" check. _(D4)_
+4. **Composition-root wiring.** Resolve `ecosystem → RegistryClient + classifier +
+   bindingPrefix` into one `MountBinding` per ecosystem — the S20-flagged
+   Config → Server wiring. _(D5)_
+5. **Reader over the request path.** Introduce `RequestCtx`, run handlers in
+   `ReaderT RequestCtx IO`, retire explicit `Env`+deps threading. _(D6)_
+
+Dispatched as slices on the architect's kickoff, per the standing process.

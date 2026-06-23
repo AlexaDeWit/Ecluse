@@ -259,10 +259,12 @@ wire contract.**
   upstream and stream a whole artifact to nowhere (HEAD on artifacts is handled
   explicitly instead); and `Gzip` — artifacts are already compressed, and
   re-compressing the stream would fight the backpressure above.
-- **Adopt — `unliftio`** for the worker/service layer, where `ReaderT Env IO`
-  runs: it lifts `bracket`/`finally`/`async` into the reader so resource-safety
-  stays ergonomic. Request handlers stay in plain `IO` taking `Env`, so the hot
-  path carries no transformer lifting.
+- **Adopt — `unliftio`** for the whole shell, where `ReaderT Env IO` runs: it lifts
+  `bracket`/`finally`/`async` into the reader so resource-safety stays ergonomic.
+  Request handlers run in the reader too — over a per-request `RequestCtx` pairing
+  `Env` with the matched mount's [`MountBinding`](hosting.md#mounts), so per-mount
+  deps are read from context rather than re-threaded; shared mutable state lives as
+  `TVar`s in `Env`, not a `StateT` layer.
 - **Hand-roll** — the router (`classify`), response/error helpers (the agnostic
   serve-outcome model and status mapping in `Ecluse.Server.Response`; each mount's
   ecosystem error surface — npm's `{"error": …}` shape — in its adapter, e.g.
