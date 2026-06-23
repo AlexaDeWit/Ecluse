@@ -56,7 +56,7 @@ The library's vocabulary, roughly from the pure core outward:
   "Ecluse.Registry.Npm.Wire" and "Ecluse.Registry.Npm.Project" (the lenient npm
   wire decoders and their projection onto the domain model),
   "Ecluse.Registry.Npm.Route" (the npm path grammar), and "Ecluse.Server.Route"
-  (the shared serve-action 'Route' set and the injected-classifier seam).
+  (the shared serve-action 'Route' set and the injected route classifier).
 * __Cloud handles__ — "Ecluse.Credential" (minting the mirror-target write token)
   and "Ecluse.Queue" (the durable mirror-job hand-off to the worker).
 

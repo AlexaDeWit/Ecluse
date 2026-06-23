@@ -6,6 +6,12 @@ concern lives in the linked documents under [`architecture/`](architecture/).
 Development practices — codebase layout, testing strategy, and CI / repo
 requirements — live in [`../CONTRIBUTING.md`](../CONTRIBUTING.md).
 
+> These documents describe the **intended target design** (the design of record),
+> not necessarily the current state of the code. Implementation tracks toward them
+> slice by slice; a slice's PR reconciles the doc where its as-built reality diverges.
+> Read them as the destination — and check `git` and the `planning/` DAG for what has
+> actually shipped.
+
 ## Vision
 
 Supply chain attacks through malicious or hijacked package publications are an

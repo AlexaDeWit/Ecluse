@@ -7,9 +7,9 @@ path to a shared "Ecluse.Server.Route".
 
 'classify' turns an npm request path — the already-mount-stripped, percent-decoded
 path segments — into a 'Route', so the whole npm routing table is unit-testable
-with __no server__: feed it segments, assert the 'Route'. It is the npm half of
-the routing seam: the agnostic dispatcher carries a classifier per mount, and
-this is npm's contribution, wired in at the composition root.
+with __no server__: feed it segments, assert the 'Route'. The agnostic dispatcher
+carries a route classifier per mount; this module is npm's, wired in at the
+composition root.
 
 The model is __deny by default__: anything not explicitly recognised is
 'Unsupported' (a @404@ at the edge). Three npm-specific facts shape the matching,
