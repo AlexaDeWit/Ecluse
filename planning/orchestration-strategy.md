@@ -323,8 +323,9 @@ Escalations arrive **decision-ready**:
   and gets fixed N times.
 - **Surface decisions one at a time.** When several design questions are open at
   once, the team lead does **not** front-load them all on the architect in one
-  message. They are recorded in [`design-queue.md`](design-queue.md) and brought
-  **one at a time**, lead-with-a-recommendation; the rest wait their turn. This
+  message. They are **parked** (a short-lived `design-queue.md` under `planning/`, spun
+  up when decisions accumulate and removed once drained into `docs/` + slices) and
+  brought **one at a time**, lead-with-a-recommendation; the rest wait their turn. This
   complements *escalate, don't guess* — surface proactively, but serialized, not in
   a flood.
 - **"The term Seam" is retired.** The records-of-functions abstraction (`RegistryClient`,
@@ -337,6 +338,6 @@ Escalations arrive **decision-ready**:
 ## What lives under `planning/`
 
 This strategy; the concrete **delivery plan** (the PR DAG) once the architecture is
-finalized; and [`design-queue.md`](design-queue.md), the holding area for design
-decisions raised but not yet resolved (worked one at a time, then retired into
-`docs/` and a slice). See [README](README.md).
+finalized; and — when design questions accumulate — a short-lived `design-queue.md`
+holding area (worked one at a time, then drained into `docs/` and slices, and removed
+once empty). See [README](README.md).

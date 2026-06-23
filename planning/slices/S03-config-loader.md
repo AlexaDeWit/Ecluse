@@ -77,8 +77,7 @@ composition root needs — keep the backend-selection enum here (`sqs`/`pubsub`,
 **Decisions superseding this slice (base-hardening D1–D5).** S03 shipped the config
 loader against the earlier mount shape — a *configured* prefix, a positional
 three-registry *tuple* with a *per-endpoint* credential provider, the map keyed by
-prefix. The base-hardening decisions ([`design-queue.md`](../design-queue.md), now
-final and in implementation) move that model, and the architecture docs already
+prefix. The base-hardening decisions (now final and landed) move that model, and the architecture docs already
 reflect it:
 - **Mounts are keyed by ecosystem** (`npm`, `pypi`); the path prefix is **derived
   from the ecosystem, never configured** (a wrong/colliding prefix is

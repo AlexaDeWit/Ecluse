@@ -56,8 +56,8 @@ read `USAGE.md`.
 - `planning/slices/SNN-*.md` — **one file per slice**, the authoritative goal,
   acceptance criteria, file scope, and **live `status:`**. Read your slice's file
   before touching its code.
-- `planning/design-queue.md` — decisions raised and how they resolved (the "why"
-  behind recent shifts).
+- `docs/architecture/` — the design-of-record and the "why" behind the current
+  shape (where resolved design decisions land).
 
 **Before writing code or prose** — `STYLE.md` (Haskell style, module organisation,
 flags) and `HADDOCK.md` (what/how to document; §11: no slice/PR/roadmap narration in

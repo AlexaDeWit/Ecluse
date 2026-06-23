@@ -19,8 +19,9 @@ design). Design lives in `docs/`; process lives here.
   field in its frontmatter. **Status lives here, one file per slice**, so
   parallel agents and their status updates touch disjoint files and never collide
   on a shared table; the git history of these files is the milestone log.
-- **[design-queue.md](design-queue.md)** — the holding area for architectural
-  decisions raised but **not yet resolved**, worked **one at a time** with the
-  architect rather than front-loaded. When an item resolves it is retired into the
-  relevant [`../docs/`](../docs/) design document (and a slice, if it needs
-  building); the queue is a staging area, not design-of-record.
+- **`design-queue.md`** (transient — absent when nothing is queued) — a holding area
+  for architectural decisions raised but **not yet resolved**, worked **one at a
+  time** with the architect rather than front-loaded. Decisions drain into the
+  relevant [`../docs/`](../docs/) design document (and a slice, if they need
+  building); the queue is a staging area, not design-of-record, and is removed once
+  empty.
