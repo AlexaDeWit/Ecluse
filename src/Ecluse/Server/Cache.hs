@@ -1,12 +1,29 @@
 {- | The short-TTL, size-bounded metadata cache shared by the serve paths.
 
 Resolving a package re-fetches its upstream packument, parses it, and evaluates
-the rules. To avoid repeating the fetch+parse, the parsed __packument metadata__
-('PackageInfo') is held here in a short-TTL, size-bounded, STM-backed cache keyed
-by package identity (the @cache@ library backs the TTL store). Both serve paths
-share it: a packument request and the tarball-gating fetch that follows reuse one
-fetch+parse, and concurrent resolutions of a popular package __collapse to one
-upstream call__ (single-flight).
+the rules. To avoid repeating the fetch+parse, the result — a coherent pair of the
+parsed __packument metadata__ ('PackageInfo') and the __raw document__ it was decoded
+from ('CacheEntry') — is held here in a short-TTL, size-bounded, STM-backed cache
+(the @cache@ library backs the TTL store). Both serve paths share it: a packument
+request and the tarball-gating fetch that follows reuse one fetch+parse, and
+concurrent resolutions of a popular package __collapse to one upstream call__
+(single-flight).
+
+== Per-source key
+
+A packument is fetched from __two distinct upstreams__ — a private leg and a public
+leg — whose documents differ for the same package, so one entry cannot represent
+both. The key is therefore @(source, package)@: the source is the upstream's base
+URL, which distinguishes the legs without naming a credential, so the two never
+cross-contaminate and the key never blurs the trust split (each leg supplies its own
+token through its fetch action; the key carries none).
+
+== Coherent pair
+
+An entry holds the parsed 'PackageInfo' __and__ the raw 'Value' it was decoded from,
+so a hit returns a typed view and the exact bytes that produced it — never a
+mismatched pair. The packument serve path needs both: it decides over the typed view
+but serves the raw document edited in place, and the two must describe the same fetch.
 
 What is cached is the __metadata, not the verdict__. The rules are re-evaluated on
 the cached metadata each request, so time-sensitive rules
@@ -42,13 +59,17 @@ module Ecluse.Server.Cache (
     MetadataCache,
     newMetadataCache,
 
+    -- * Cache entries
+    Source (..),
+    CacheEntry (..),
+
     -- * Resolution
     resolveMetadata,
-    primeMetadata,
     cachedMetadata,
     cacheSize,
 ) where
 
+import Data.Aeson (Value)
 import Data.Cache (Cache)
 import Data.Cache qualified as Cache
 import Data.Map.Strict qualified as Map
@@ -69,15 +90,17 @@ import Ecluse.Package (
 
 {- | The metadata cache's tunables, sourced from configuration (see
 "Ecluse.Config"): how long a parsed packument stays fresh, and how many distinct
-packages the cache holds before it evicts.
+@(source, package)@ entries the cache holds before it evicts.
 -}
 data CacheConfig = CacheConfig
     { cacheTtl :: NominalDiffTime
-    {- ^ How long a cached 'PackageInfo' is served before it is re-fetched. Short
+    {- ^ How long a cached 'CacheEntry' is served before it is re-fetched. Short
     by design — brief staleness is benign, and conditional-GET revalidates.
     -}
     , cacheMaxEntries :: Int
-    -- ^ The maximum number of distinct packages held; an insert past this evicts.
+    {- ^ The maximum number of distinct @(source, package)@ entries held; an insert
+    past this evicts.
+    -}
     }
     deriving stock (Eq, Show)
 
@@ -92,24 +115,55 @@ defaultCacheConfig =
         , cacheMaxEntries = 1024
         }
 
+-- ── cache entries ──────────────────────────────────────────────────────────────
+
+{- | Which upstream a packument was fetched from — the dimension that distinguishes
+the private leg from the public leg of the same package.
+
+The discriminator is the upstream's __base URL__: the two legs are addressed at
+distinct URLs, and the URL names a location, never a credential, so keying on it
+keeps the trust split intact (each leg still fetches with its own token, supplied
+through its fetch action; the source carries none).
+-}
+newtype Source = Source Text
+    deriving stock (Eq, Ord, Show)
+
+{- | A coherent cache entry: the parsed 'PackageInfo' paired with the raw 'Value' it
+was decoded from. A hit returns both, so a caller gets a typed view to decide over
+and the exact bytes that produced it — the packument serve path edits the raw 'Value'
+in place and must keep its typed decision coherent with those bytes.
+-}
+data CacheEntry = CacheEntry
+    { entryInfo :: PackageInfo
+    -- ^ The typed packument view the rules and merge reason over.
+    , entryRaw :: Value
+    -- ^ The raw upstream document the served body is built from, edited in place.
+    }
+    deriving stock (Eq, Show)
+
 -- ── the cache handle ─────────────────────────────────────────────────────────
 
-{- | The key a 'PackageInfo' is cached under: the package's identity, rendered to
-a stable 'Text'. Distinct from a display name so two encodings of the same scoped
-package share one entry — equality and ordering match 'PackageName' identity (the
-@cache@ library needs a 'Hashable' key, which the opaque 'PackageName' does not
-expose, so the identity is projected to this key here rather than via an orphan
-instance).
+{- | The key a 'CacheEntry' is cached under: the upstream 'Source' paired with the
+package's identity, rendered to a stable 'Text'. The package identity is distinct
+from a display name so two encodings of the same scoped package share one entry, and
+the source dimension keeps the two upstream legs apart — equality and ordering match
+@(Source, PackageName)@ identity (the @cache@ library needs a 'Hashable' key, which
+the opaque 'PackageName' does not expose, so the identity is projected to this key
+here rather than via an orphan instance).
 -}
 newtype CacheKey = CacheKey Text
     deriving stock (Eq, Ord, Show)
     deriving newtype (Hashable)
 
--- | Project a 'PackageName' to its cache key (its identity, not its display form).
-cacheKey :: PackageName -> CacheKey
-cacheKey name =
+{- | Project a 'Source' and a 'PackageName' to their cache key (the source's base URL
+joined with the package's identity, not its display form).
+-}
+cacheKey :: Source -> PackageName -> CacheKey
+cacheKey (Source source) name =
     CacheKey
-        ( show (pkgEcosystem name)
+        ( source
+            <> "\x1f"
+            <> show (pkgEcosystem name)
             <> "\x1f"
             <> maybe "" renderScope (pkgNamespace name)
             <> "\x1f"
@@ -122,12 +176,12 @@ only through the accessors. Lives in 'Ecluse.Env.Env' (one per process), so ever
 request shares the same cache and its connection-collapsing.
 -}
 data MetadataCache = MetadataCache
-    { mcStore :: Cache CacheKey PackageInfo
+    { mcStore :: Cache CacheKey CacheEntry
     -- ^ The TTL- and STM-backed store (the @cache@ library).
     , mcMaxEntries :: Int
     -- ^ The entry-count bound enforced on insert.
-    , mcInFlight :: TVar (Map CacheKey (TMVar (Either SomeException PackageInfo)))
-    {- ^ Packages currently being fetched, so concurrent misses coalesce onto one
+    , mcInFlight :: TVar (Map CacheKey (TMVar (Either SomeException CacheEntry)))
+    {- ^ Entries currently being fetched, so concurrent misses coalesce onto one
     fetch rather than each launching their own.
     -}
     }
@@ -148,28 +202,33 @@ newMetadataCache cfg = do
 
 -- ── resolution ───────────────────────────────────────────────────────────────
 
-{- | Resolve a package's metadata, reusing the cache and collapsing concurrent
-misses.
+{- | Resolve a package's metadata from one upstream 'Source', reusing the cache and
+collapsing concurrent misses.
 
-On a fresh, unexpired hit the cached 'PackageInfo' is returned and the fetch
-action is never run. On a miss the action runs exactly once even under concurrent
-callers: the first installs an in-flight marker and fetches, the others wait on
-its result. A successful fetch is cached (subject to the TTL and size bound);
-a failed fetch caches __nothing__ (so a transient upstream error does not poison
-the cache) and is re-raised to every waiter.
+On a fresh, unexpired hit the cached 'CacheEntry' is returned and the fetch action
+is never run. On a miss the action runs exactly once even under concurrent callers:
+the first installs an in-flight marker and fetches, the others wait on its result.
+A successful fetch is cached (subject to the TTL and size bound); a failed fetch
+caches __nothing__ (so a transient upstream error does not poison the cache) and is
+re-raised to every waiter.
+
+The 'Source' partitions the cache: the private and public legs of the same package
+resolve under distinct keys and never cross-contaminate. The fetch action supplies
+the leg's own credential, so reading through one source never blurs another's trust
+posture.
 
 The result is always re-decided by the caller's rules on each request — only the
 fetch+parse is memoised, never the verdict.
 -}
-resolveMetadata :: MetadataCache -> PackageName -> IO PackageInfo -> IO PackageInfo
-resolveMetadata cache name fetch = do
-    let key = cacheKey name
+resolveMetadata :: MetadataCache -> Source -> PackageName -> IO CacheEntry -> IO CacheEntry
+resolveMetadata cache source name fetch = do
+    let key = cacheKey source name
     nowT <- getTime Monotonic
     -- One atomic decision point: a fresh hit short-circuits; otherwise become the
     -- leader (install an empty marker) or a follower (take the existing one).
     decision <- atomically (decide key nowT)
     case decision of
-        Hit info -> pure info
+        Hit entry -> pure entry
         Follow marker -> either throwIO pure =<< atomically (readTMVar marker)
         Lead marker -> runLeader key marker
   where
@@ -177,7 +236,7 @@ resolveMetadata cache name fetch = do
     decide key nowT = do
         hit <- Cache.lookupSTM False key (mcStore cache) nowT
         case hit of
-            Just info -> pure (Hit info)
+            Just entry -> pure (Hit entry)
             Nothing -> do
                 inFlight <- readTVar (mcInFlight cache)
                 case Map.lookup key inFlight of
@@ -199,15 +258,15 @@ resolveMetadata cache name fetch = do
     -- then deregister thus makes "collapse to one upstream call" hold even for a
     -- caller arriving in the instant after the fetch returns. On failure nothing is
     -- cached and the slot is freed so a later retry re-fetches.
-    runLeader :: CacheKey -> TMVar (Either SomeException PackageInfo) -> IO PackageInfo
+    runLeader :: CacheKey -> TMVar (Either SomeException CacheEntry) -> IO CacheEntry
     runLeader key marker = mask $ \restore -> do
         result <- try (restore fetch)
         atomically (putTMVar marker result)
         case result of
-            Right info -> do
-                insertBounded cache key info
+            Right entry -> do
+                insertBounded cache key entry
                 atomically (deregister key)
-                pure info
+                pure entry
             Left err -> do
                 atomically (deregister key)
                 throwIO err
@@ -217,29 +276,17 @@ resolveMetadata cache name fetch = do
         inFlight <- readTVar (mcInFlight cache)
         writeTVar (mcInFlight cache) (Map.delete key inFlight)
 
-{- | Write a freshly fetched-and-parsed packument through to the cache (a
-__write-through__), enforcing the size bound. Unlike 'resolveMetadata' — which on a
-hit returns the /cached/ parse and discards the caller's — this always stores the
-parse the caller hands it. Use it when the caller has already fetched the bytes and
-must keep using /that/ parse, so its typed view and the raw bytes it was decoded from
-stay coherent; the read-through 'resolveMetadata' is for callers that only need the
-typed view and want concurrent misses collapsed. What a packument serve primes here
-is what the tarball-gating 'resolveMetadata' then reuses.
--}
-primeMetadata :: MetadataCache -> PackageName -> PackageInfo -> IO ()
-primeMetadata cache name = insertBounded cache (cacheKey name)
-
 {- | Insert a freshly fetched entry, enforcing the size bound. Expired entries are
 purged first (the cheap reclaim); if the cache is still at capacity, surplus
 entries are evicted before the insert so the bound holds. The new entry is always
 admitted.
 -}
-insertBounded :: MetadataCache -> CacheKey -> PackageInfo -> IO ()
-insertBounded cache key info = do
+insertBounded :: MetadataCache -> CacheKey -> CacheEntry -> IO ()
+insertBounded cache key entry = do
     Cache.purgeExpired (mcStore cache)
     n <- Cache.size (mcStore cache)
     when (n >= mcMaxEntries cache) (evictSurplus cache)
-    Cache.insert (mcStore cache) key info
+    Cache.insert (mcStore cache) key entry
 
 -- Evict entries until there is room for one more, keeping the cache at or below
 -- its bound. Eviction order among live entries is unspecified (the store is a
@@ -250,13 +297,13 @@ evictSurplus cache = do
     let surplus = length ks - (mcMaxEntries cache - 1)
     when (surplus > 0) (mapM_ (Cache.delete (mcStore cache)) (take surplus ks))
 
-{- | Look up a package's cached metadata without fetching on a miss — the cache's
-read-only view, for inspection and tests. A 'Nothing' is a miss or an expired
-entry; this never triggers a fetch and never collapses (use 'resolveMetadata' for
-the serve path).
+{- | Look up a package's cached entry for one 'Source' without fetching on a miss —
+the cache's read-only view, for inspection and tests. A 'Nothing' is a miss or an
+expired entry; this never triggers a fetch and never collapses (use 'resolveMetadata'
+for the serve path).
 -}
-cachedMetadata :: MetadataCache -> PackageName -> IO (Maybe PackageInfo)
-cachedMetadata cache name = Cache.lookup (mcStore cache) (cacheKey name)
+cachedMetadata :: MetadataCache -> Source -> PackageName -> IO (Maybe CacheEntry)
+cachedMetadata cache source name = Cache.lookup (mcStore cache) (cacheKey source name)
 
 -- | The number of entries currently held (including any not-yet-purged expired).
 cacheSize :: MetadataCache -> IO Int
@@ -267,9 +314,9 @@ cacheSize cache = Cache.size (mcStore cache)
 -- The outcome of the one atomic resolve decision: a fresh hit, follow an in-flight
 -- fetch, or lead a new one.
 data Decision
-    = Hit PackageInfo
-    | Follow (TMVar (Either SomeException PackageInfo))
-    | Lead (TMVar (Either SomeException PackageInfo))
+    = Hit CacheEntry
+    | Follow (TMVar (Either SomeException CacheEntry))
+    | Lead (TMVar (Either SomeException CacheEntry))
 
 -- Convert a 'NominalDiffTime' (seconds) to the @cache@ library's monotonic
 -- 'TimeSpec' (whole seconds + nanoseconds), clamping a negative TTL to zero.

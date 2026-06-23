@@ -458,16 +458,17 @@ partialAvailabilitySpec = describe "partial-upstream availability" $ do
             status resp `shouldBe` 200
             servedVersions resp `shouldBe` ["1.0.0"]
 
--- ── cache write-through coherence ─────────────────────────────────────────────
+-- ── cache read-through coherence ──────────────────────────────────────────────
 
 cacheSpec :: Spec
-cacheSpec = describe "metadata cache (write-through coherence)" $
-    it "serves a version published within the TTL, not a stale cached parse" $ do
-        -- The public upstream gains 2.0.0 between two requests inside the 60s TTL. A
-        -- read-through cache would pair the first request's stale typed view with the
-        -- second's fresh bytes and drop 2.0.0 (making it look policy-denied); the
-        -- write-through must serve {1.0.0, 2.0.0}. The private leg is absent, so the
-        -- served set is exactly the surviving public versions.
+cacheSpec = describe "metadata cache (read-through coherence)" $ do
+    it "reuses the cached document within the TTL — a second request does not re-fetch" $ do
+        -- The public upstream would gain 2.0.0 on a second fetch, but within the 60s
+        -- TTL the packument path reads through: the second request is served from the
+        -- cached entry, so the upstream is hit exactly once and the served set stays
+        -- {1.0.0}. The mutating double is the witness — 2.0.0 appears only if a second
+        -- fetch occurred, so its absence proves the single-flight reuse. The private
+        -- leg is absent, so the served set is exactly the cached public versions.
         privateUp <- failingUpstream
         let v1 =
                 encodePackument
@@ -485,7 +486,40 @@ cacheSpec = describe "metadata cache (write-through coherence)" $
             servedVersions firstResp `shouldBe` ["1.0.0"]
             secondResp <- getThing Nothing app
             status secondResp `shouldBe` 200
-            servedVersions secondResp `shouldBe` ["1.0.0", "2.0.0"]
+            -- Read-through reuse: the cached v1 is served, not the upstream's later v2.
+            servedVersions secondResp `shouldBe` ["1.0.0"]
+            -- Only the first request reached the public upstream; the second collapsed
+            -- onto the cached entry (the regained single-flight benefit).
+            seenAuth publicUp `shouldReturn` [Nothing]
+
+    it "serves a coherent pair: the cached typed decision matches the cached bytes" $ do
+        -- A hit returns the typed view and the exact bytes it was parsed from, so the
+        -- served document is internally coherent — never a stale typed decision paired
+        -- with fresh bytes. The public upstream serves 1.0.0 (kept) and 2.0.0 (too new
+        -- → denied); the second request, served from cache, must keep that same
+        -- decision (only 1.0.0) over the same bytes (1.0.0's integrity and its
+        -- unmodeled key relayed unchanged).
+        privateUp <- failingUpstream
+        publicUp <-
+            servingUpstream
+                ( encodePackument
+                    ( packument
+                        [("1.0.0", plainVersion "1.0.0"), ("2.0.0", plainVersion "2.0.0")]
+                        "2.0.0"
+                        [("1.0.0", publishedDaysAgo 30), ("2.0.0", publishedDaysAgo 3)]
+                    )
+                )
+        withProxy privateUp publicUp Nothing $ \app -> do
+            firstResp <- getThing Nothing app
+            servedVersions firstResp `shouldBe` ["1.0.0"]
+            secondResp <- getThing Nothing app
+            status secondResp `shouldBe` 200
+            -- The cached decision (2.0.0 denied) holds on the hit.
+            servedVersions secondResp `shouldBe` ["1.0.0"]
+            -- The served bytes are 1.0.0's own: its integrity and unmodeled key, the
+            -- exact bytes the cached typed view was decided over.
+            servedIntegrity "1.0.0" secondResp `shouldBe` Just "sha512-1.0.0-int"
+            servedVersionKey "1.0.0" "_unmodeled" secondResp `shouldBe` Just (String "kept")
 
 -- ── no survivors ──────────────────────────────────────────────────────────────
 
