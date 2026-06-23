@@ -54,7 +54,7 @@ get our __own ETag__, since a merged\/filtered body matches no single upstream's
 This is, for now, the __npm__ packument pipeline: it reaches for the npm registry
 client, projection, and structural filter directly, so it is the one
 @Ecluse.Server.*@ module that depends on a concrete adapter. The coupling is
-expedient, not intended — the agnostic seams that would let it dispatch through an
+expedient, not intended — the agnostic handles that would let it dispatch through an
 adapter (a per-adapter router, and an ecosystem-neutral filter\/projection) are
 tracked as separate work, after which a second ecosystem would reuse this
 orchestration unchanged.

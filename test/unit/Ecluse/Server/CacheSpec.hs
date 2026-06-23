@@ -130,7 +130,7 @@ spec = do
             -- discoverable via the store (not merely via the now-removed marker).
             -- A caller racing the de-register therefore finds the store entry rather
             -- than re-leading a redundant fetch. The window between insert and
-            -- de-register is internal to runLeader (under mask, no injection seam),
+            -- de-register is internal to runLeader (under mask, no injection handle),
             -- so this asserts the observable post-condition the ordering guarantees:
             -- the store is populated as soon as the call completes.
             c <- freshCache
