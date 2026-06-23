@@ -1,15 +1,24 @@
 :root {
-  /* Palette taken from the brand SVGs (docs/social-card.svg, docs/branding/logo.svg):
-     the warm "sepia" cream ground, charcoal ink, and the locks' sage-teal "water" as
-     the accent (darkened for legible link contrast). The brand presentation is light
-     (the social card's ground is #f4efe3), so the site is light-only here — a warm,
-     on-brand dark mode (the charcoal #211f1c tile) could follow later. */
-  --fg: #211f1c;      /* logo charcoal ink */
-  --muted: #4f4b43;   /* warm dark grey */
-  --bg: #f4efe3;      /* the cream / sepia card ground */
-  --accent: #3f6058;  /* water teal, darkened for contrast on cream */
-  --border: #ddd3bb;  /* tan lock-step */
-  --code-bg: #ece4d2; /* warm beige lock-step */
+  /* Brand palette — extracted from the SVG artwork; full palette + roles documented in
+     docs/branding/colours.md. Cream-and-charcoal paper-and-ink, sand/tan lock steps,
+     sage-teal water. */
+  --charcoal: #211f1c;
+  --cream:    #f4efe3;
+  --sand:     #ece4d2;
+  --tan:      #ddd3bb;
+  --slate:    #4f4b43;
+
+  /* Semantic roles. Ground is Sand (not the brighter Cream) so a full page reads warm
+     rather than glaring; Cream becomes the raised-surface colour. Accent is the brand
+     Water (#6e928b) darkened toward the same hue until it clears AA on Sand. */
+  --bg:            var(--sand);
+  --surface:       var(--cream);
+  --fg:            var(--charcoal);
+  --muted:         var(--slate);
+  --accent:        #3f6058;
+  --accent-strong: #2e4a45;
+  --border:        var(--tan);
+  --code-bg:       var(--cream);
   color-scheme: light;
 }
 
@@ -21,11 +30,13 @@ body {
   font: 16px/1.65 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
 a { color: var(--accent); }
+a:hover { color: var(--accent-strong); }
 
 .site-header {
   display: flex; flex-wrap: wrap; gap: 1rem; align-items: center;
   justify-content: space-between;
   padding: 0.75rem 1.25rem; border-bottom: 1px solid var(--border);
+  background: var(--surface);
 }
 .site-header .brand {
   display: inline-flex; align-items: center; gap: 0.5rem;
@@ -79,7 +90,7 @@ img { max-width: 100%; }
 }
 .card {
   border: 1px solid var(--border); border-radius: 10px; padding: 1.1rem 1.25rem;
-  text-decoration: none; color: inherit;
+  text-decoration: none; color: inherit; background: var(--surface);
 }
 .card:hover { border-color: var(--accent); }
 .card h3 { margin: 0 0 0.3rem; }
