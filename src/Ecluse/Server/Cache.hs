@@ -20,12 +20,12 @@ upstreams never cross-contaminate and the key never blurs the trust split.
 == Anonymous (public) leg only
 
 Only the __anonymous public leg__ is cached. The trusted private upstream is the
-__per-client authority__ — it re-authorizes each client's request with that
+__per-client authority__ — it re-authorises each client's request with that
 client's own forwarded credential — so its metadata must __not__ be shared across
 clients and is fetched per request, never through this cache. The key carries no
 credential dimension, so caching the private leg would let one client's entry serve
 another client's private document within the TTL, bypassing the upstream's
-authorization. The public leg is anonymous (no client credential), so one shared
+authorisation. The public leg is anonymous (no client credential), so one shared
 entry serves every client without crossing any trust boundary — there is nothing
 per-client to preserve.
 

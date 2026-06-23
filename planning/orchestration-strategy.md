@@ -92,8 +92,17 @@ typed-decision-vs-served-`Value` contract surfaced late — see
    │           confirm the real gate green on the PR     │
    └────┬───────────────────────────────────────────────┘
         ▼
-   HAND OFF to the architect (only if everything above is green)
+   HAND OFF — mark the PR ready for review (only if all the above is green;
+              until then it stays a draft)
 ```
+
+**Draft until ready.** A PR is opened as a **draft** and stays one until it has
+cleared EVALUATE and the gate and the team lead is confident handing it over. Taking
+it out of draft — **marking it ready for review** — is the hand-off signal: it means
+_ready for the architect to review and potentially merge_, nothing less. A PR still
+building, mid-review, gate-red, or that the team lead is simply not yet sure of stays
+a **draft**, so "ready for review" is never ambiguous and the architect never spends
+attention on — or merges — work that was not deliberately offered.
 
 **Fix routing.** A reviewer's "changes required" does **not** resume the original
 implementer — in this harness a running or rested agent cannot be redirected or
@@ -150,8 +159,10 @@ The implementer's own "it works" does not count; evidence does.
   ([`../HADDOCK.md`](../HADDOCK.md) §11). Completeness is not enough: a comment can
   be present, and the wrong kind.
 
-Critical findings block and bounce to the implementer (resumed so context is
-kept), then are re-verified.
+Critical findings block; the fix is routed per __Fix routing__ above — the team lead
+applies a small, reviewer-specified fix directly, or briefs a fresh build agent for a
+larger rework — then re-verified. A running or rested agent cannot be resumed in this
+harness, so review never "bounces back" to the original implementer.
 
 ## Inter-wave quality & alignment pass
 
@@ -261,6 +272,7 @@ A PR reaches the architect only when **all** hold:
 - [ ] Docs updated in the same PR; changes limited to the slice's file scope (other files only with strong justification)
 - [ ] Slice file `status:` advanced to `merged` (true once this PR lands) and any as-built delta — design decisions, discoveries, deviations from the acceptance criteria — recorded in it; the slice's `planning/slices/SNN-*.md` is part of the slice's file scope
 - [ ] Commits GPG-signed + Conventional Commits
+- [ ] PR taken **out of draft and marked ready for review** — the hand-off itself, done only once every box above holds; until then the PR stays a **draft** so it is never mistaken for review-ready
 
 ## Escalation
 
@@ -293,6 +305,9 @@ Escalations arrive **decision-ready**:
 
 - Implementation work lands via **PRs only**; the team lead never merges and never
   pushes to `main`.
+- **PRs open as a draft; marked ready for review only at hand-off** — once EVALUATE
+  and the gate are green and the team lead is confident, never before. "Ready for
+  review" is the signal it is ready for the architect to review and potentially merge.
 - **One worktree per agent**; agents keep changes within their slice's file scope, touching other files only with strong justification.
 - **GPG-signed** commits, **Conventional Commits** (`type(scope): summary`).
 - **Semgrep clean** before every push; ignores need the architect's approval.
