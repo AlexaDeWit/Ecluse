@@ -112,7 +112,7 @@ import Ecluse.Composition qualified as Composition
 import Ecluse.Config (
     ConfigDoc,
     CredentialBackend (StaticCredential),
-    EnvConfig (cfgLogFormat, cfgPort),
+    EnvConfig (cfgLogFormat, cfgPort, cfgTelemetry),
     decodeDocument,
     parseEnv,
     renderEnvErrors,
@@ -132,6 +132,7 @@ import Ecluse.Server (MountBinding (..), ServerConfig (scPort), mkServerConfig)
 import Ecluse.Server qualified as Server
 import Ecluse.Server.Cache (newMetadataCache)
 import Ecluse.Server.Context (PackumentDeps)
+import Ecluse.Telemetry (withTelemetry)
 
 {- | Start Écluse: the entry point the @ecluse@ executable runs (see "Main").
 
@@ -140,11 +141,12 @@ layer and the optional config document, __validates everything and fails fast at
 boot__ on any problem (a malformed env, an unresolved rule policy, a configured
 mount with no adapter, a credential reference that does not resolve), aggregating
 the failures so a single run reports them all. On success it builds the handles —
-the shared HTTP @Manager@, the metadata cache, the logger, and the
-process-global credential provider — into an 'Env', derives the served mount
-bindings, then runs the server and the mirror worker __concurrently__ over that
-single 'Env' ('runServer' and 'runWorker'). Bracketing the 'Env' for the lifetime
-of both means their shared resources are torn down along every exit path.
+the shared HTTP @Manager@, the metadata cache, the logger, the process-global
+credential provider, and the telemetry substrate (off unless @PROXY_TELEMETRY@
+enables it) — into an 'Env', derives the served mount bindings, then runs the
+server and the mirror worker __concurrently__ over that single 'Env' ('runServer'
+and 'runWorker'). Bracketing the 'Env' (and the telemetry providers) for the
+lifetime of both means their shared resources are torn down along every exit path.
 -}
 run :: IO ()
 run = do
@@ -157,7 +159,8 @@ run = do
     queue <- newInMemoryQueue
     metadataCache <- newMetadataCache (Composition.cacheConfigFor env)
     logEnv <- newLogEnv (cfgLogFormat env) (Environment "production")
-    withEnv unconfiguredRegistry queue (mirrorWriteProvider providers) manager metadataCache logEnv (runServices serverConfig)
+    withTelemetry (cfgTelemetry env) $ \telemetry ->
+        withEnv unconfiguredRegistry queue (mirrorWriteProvider providers) manager metadataCache logEnv telemetry (runServices serverConfig)
 
 {- | Read the optional structured config document from the @PROXY_CONFIG@ env blob,
 decoding it strictly. 'Nothing' when unset — an env-only deployment supplies no

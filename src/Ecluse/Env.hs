@@ -44,6 +44,7 @@ import Ecluse.Credential (CredentialProvider)
 import Ecluse.Queue (MirrorQueue)
 import Ecluse.Registry (RegistryClient)
 import Ecluse.Server.Cache (MetadataCache)
+import Ecluse.Telemetry (Telemetry)
 
 {- | The composition-root record: the handles plus the shared HTTP manager and the
 metadata cache, from which the whole effectful shell is reached. See the module
@@ -83,20 +84,27 @@ data Env = Env
     stream every layer attaches context to, with its stdout scribe and format
     chosen at startup.
     -}
+    , envTelemetry :: Telemetry
+    {- ^ The OpenTelemetry handle (see "Ecluse.Telemetry"): the tracer and meter
+    providers spans and metrics are emitted through, or — by default, with
+    @PROXY_TELEMETRY@ unset — the inert no-op that emits nothing. Its provider
+    lifecycle is bracketed by the composition root that supplies it.
+    -}
     }
 
 {- | Assemble an 'Env' from its constructed handles and a shared HTTP 'Manager'.
 
-The 'Manager', 'MetadataCache', and 'LogEnv' are taken as arguments rather than
-built here: a 'Manager' owns a connection pool whose lifetime should be bracketed
-by the caller that also owns teardown (see 'withEnv'), and injecting them keeps
-'Env' assembly pure of network and logging setup — so it can be exercised in tests
-against in-memory handle doubles with no sockets opened and no scribe attached to
-stdout. Backend selection happens in the handle smart constructors that produce
-the arguments; this only gathers them.
+The 'Manager', 'MetadataCache', 'LogEnv', and 'Telemetry' handle are taken as
+arguments rather than built here: a 'Manager' owns a connection pool whose lifetime
+should be bracketed by the caller that also owns teardown (see 'withEnv'), and
+injecting them keeps 'Env' assembly pure of network, logging, and telemetry setup —
+so it can be exercised in tests against in-memory handle doubles with no sockets
+opened, no scribe attached to stdout, and no exporter initialised. Backend
+selection happens in the handle smart constructors that produce the arguments;
+this only gathers them.
 -}
-newEnv :: RegistryClient -> MirrorQueue -> CredentialProvider -> Manager -> MetadataCache -> LogEnv -> IO Env
-newEnv registry queue credentials manager metadataCache logEnv =
+newEnv :: RegistryClient -> MirrorQueue -> CredentialProvider -> Manager -> MetadataCache -> LogEnv -> Telemetry -> IO Env
+newEnv registry queue credentials manager metadataCache logEnv telemetry =
     pure
         Env
             { envRegistry = registry
@@ -105,6 +113,7 @@ newEnv registry queue credentials manager metadataCache logEnv =
             , envManager = manager
             , envMetadataCache = metadataCache
             , envLogEnv = logEnv
+            , envTelemetry = telemetry
             }
 
 {- | Build an 'Env', run an action against it, and tear it down — even on
@@ -120,15 +129,18 @@ withEnv ::
     Manager ->
     MetadataCache ->
     LogEnv ->
+    Telemetry ->
     (Env -> m a) ->
     m a
-withEnv registry queue credentials manager metadataCache logEnv =
+withEnv registry queue credentials manager metadataCache logEnv telemetry =
     bracket
-        (liftIO (newEnv registry queue credentials manager metadataCache logEnv))
+        (liftIO (newEnv registry queue credentials manager metadataCache logEnv telemetry))
         teardown
   where
-    -- The connection pool behind the 'Manager' is owned and released by whoever
-    -- provided it, and the handles hold no resource this root acquired, so the
-    -- composition root has nothing of its own to release.
+    -- The connection pool behind the 'Manager' and the telemetry providers behind
+    -- the 'Telemetry' handle are each owned and released by whoever provided them
+    -- (the manager's caller; 'Ecluse.Telemetry.withTelemetry' for the providers),
+    -- and the handles hold no resource this root acquired — so the composition
+    -- root has nothing of its own to release.
     teardown :: (MonadUnliftIO m) => Env -> m ()
     teardown _ = pure ()

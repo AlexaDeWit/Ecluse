@@ -62,6 +62,7 @@ import Ecluse.Server (
  )
 import Ecluse.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Server.Context (PackumentDeps (..))
+import Ecluse.Telemetry (telemetryDisabled)
 import Ecluse.Version (Version, mkVersion)
 
 -- ── a fixed clock and the quarantine policy ───────────────────────────────────
@@ -316,7 +317,7 @@ newTestEnvWithQueue :: MirrorQueue -> Manager -> IO Env
 newTestEnvWithQueue queue manager = do
     metadataCache <- newMetadataCache defaultCacheConfig
     logEnv <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
-    newEnv fakeRegistry queue fakeCredentials manager metadataCache logEnv
+    newEnv fakeRegistry queue fakeCredentials manager metadataCache logEnv telemetryDisabled
 
 {- | The packument-serve dependencies pointing at two in-process upstream ports,
 with the given inbound edge token (usually 'Nothing').

@@ -17,6 +17,7 @@ import Ecluse.Rules.Types (
     defaultAllowIfPublishedBeforePrecedence,
     defaultDenyInstallTimeExecutionPrecedence,
  )
+import Ecluse.Telemetry (TelemetrySwitch (..))
 
 {- | Tests for the configuration boundary. They exercise the three promises of the
 loader: the environment layer aggregates all errors at once (present \/ absent \/
@@ -139,6 +140,7 @@ fullEnv =
     , ("METADATA_CACHE_TTL_SECONDS", "30")
     , ("METADATA_CACHE_MAX_ENTRIES", "256")
     , ("PROXY_LOG_FORMAT", "console")
+    , ("PROXY_TELEMETRY", "on")
     ]
 
 -- The minimum valid environment: only the three required URLs, everything else
@@ -175,6 +177,7 @@ envLayerSpec = describe "parseEnvPure" $ do
                 cfgCacheTtl cfg `shouldBe` (30 :: NominalDiffTime)
                 cfgCacheMaxEntries cfg `shouldBe` 256
                 cfgLogFormat cfg `shouldBe` ConsoleLog
+                cfgTelemetry cfg `shouldBe` TelemetryOn
 
     it "applies the documented defaults for the optional variables" $ do
         case parseEnvPure minimalEnv of
@@ -191,6 +194,9 @@ envLayerSpec = describe "parseEnvPure" $ do
                 cfgMirrorTargetToken cfg `shouldBe` Nothing
                 cfgHelpMessage cfg `shouldBe` Nothing
                 cfgLogFormat cfg `shouldBe` JsonLog
+                -- Telemetry is opt-in: an unset PROXY_TELEMETRY leaves it off, so
+                -- nothing is wired and nothing is emitted.
+                cfgTelemetry cfg `shouldBe` TelemetryOff
 
     it "reports a single missing required variable against its own name" $
         failedNames (parseEnvPure (without "PRIVATE_UPSTREAM_URL" minimalEnv))
@@ -229,6 +235,10 @@ envLayerSpec = describe "parseEnvPure" $ do
     it "rejects an unknown log format against its own name" $
         failedNames (parseEnvPure (set "PROXY_LOG_FORMAT" "yaml" minimalEnv))
             `shouldBe` ["PROXY_LOG_FORMAT"]
+
+    it "rejects an unknown telemetry switch against its own name" $
+        failedNames (parseEnvPure (set "PROXY_TELEMETRY" "maybe" minimalEnv))
+            `shouldBe` ["PROXY_TELEMETRY"]
 
     it "renders every aggregated error in the failure block" $ do
         -- The rendered block names each offending variable, so a launch failure

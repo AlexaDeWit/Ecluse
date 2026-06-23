@@ -108,6 +108,7 @@ import Ecluse.Rules.Types (
     Rule (..),
     defaultPrecedence,
  )
+import Ecluse.Telemetry (TelemetrySwitch (..), parseTelemetrySwitch)
 
 -- ── network values ───────────────────────────────────────────────────────────
 
@@ -295,6 +296,11 @@ data EnvConfig = EnvConfig
     one-line JSONL stream for a container, or the human-readable console form
     for development (see "Ecluse.Log").
     -}
+    , cfgTelemetry :: TelemetrySwitch
+    {- ^ The OpenTelemetry master switch (@PROXY_TELEMETRY@, default @off@). With
+    it @off@ nothing is wired and no telemetry is emitted; the standard @OTEL_*@
+    variables are read by the SDK only once it is @on@ (see "Ecluse.Telemetry").
+    -}
     }
     deriving stock (Eq, Show)
 
@@ -340,6 +346,7 @@ envParser =
         <*> Env.var secondsReader "METADATA_CACHE_TTL_SECONDS" (Env.def defaultCacheTtl)
         <*> Env.var positiveIntReader "METADATA_CACHE_MAX_ENTRIES" (Env.def defaultCacheMaxEntries)
         <*> Env.var logFormatReader "PROXY_LOG_FORMAT" (Env.def JsonLog)
+        <*> Env.var telemetrySwitchReader "PROXY_TELEMETRY" (Env.def TelemetryOff)
   where
     defaultPublicUpstream :: Url
     defaultPublicUpstream = Url "https://registry.npmjs.org"
@@ -396,6 +403,11 @@ positiveIntReader = textReader $ \t -> case readMaybe (toString t) :: Maybe Int 
 -- An 'Env.Reader' for the log-format enum, surfacing 'parseLogFormat's reason.
 logFormatReader :: Env.Reader Env.Error LogFormat
 logFormatReader = textReader parseLogFormat
+
+-- An 'Env.Reader' for the telemetry master switch, surfacing
+-- 'parseTelemetrySwitch's reason.
+telemetrySwitchReader :: Env.Reader Env.Error TelemetrySwitch
+telemetrySwitchReader = textReader parseTelemetrySwitch
 
 {- | Render the aggregated environment errors as one human-facing block, one line
 per offending variable, so an operator sees every problem from a single failed

@@ -16,7 +16,113 @@
       let
         pkgs = nixpkgs.legacyPackages.${system};
         hlib = pkgs.haskell.lib;
-        hpkgs = pkgs.haskell.packages.ghc910;
+
+        # OpenTelemetry 1.0 overlay. The pinned nixpkgs (26.05) ships the older
+        # 0.x line (sdk 0.1.0.1, api 0.3.1.0, no api-types package at all), but
+        # the architect chose OTel 1.0 — the May-2026 release that finally ships
+        # metrics and logs alongside tracing, with OTLP export. So the Nix path
+        # (callCabal2nix, which resolves from this set rather than Hackage) gets
+        # the 1.0 stack injected here, matching the cabal/Hackage path's 1.0 pin
+        # in cabal.project + cabal.project.freeze. Sources are pinned by exact
+        # version + Hackage tarball sha256 (callHackageDirect: no flake input, no
+        # runtime fetch beyond the fixed-output derivation). The whole stack is
+        # overridden together so each 1.0 package resolves its OTel deps against
+        # the other 1.0 packages here, never the 0.x ones still in the base set.
+        # See docs/architecture/observability.md → "OpenTelemetry as the substrate".
+        otelOverlay = hself: _hsuper: {
+          hs-opentelemetry-api-types =
+            hself.callHackageDirect {
+              pkg = "hs-opentelemetry-api-types";
+              ver = "1.0.0.0";
+              sha256 = "sha256-9ByP41wlV45TMCqbyyVpwejQDi5fsG0+j8bMk8ORLw8=";
+            } { };
+          hs-opentelemetry-api =
+            hself.callHackageDirect {
+              pkg = "hs-opentelemetry-api";
+              ver = "1.0.0.0";
+              sha256 = "sha256-COhj9Ms1eu1Gt9wTC21oQ37k6vJ9mxlJvYpHtvXff6A=";
+            } { };
+          hs-opentelemetry-otlp =
+            hself.callHackageDirect {
+              pkg = "hs-opentelemetry-otlp";
+              ver = "1.0.0.0";
+              sha256 = "sha256-kVuKKi6qRx+oBQclTpUnx20Eqw+CRQk8pT4tkcxt1xo=";
+            } { };
+          hs-opentelemetry-semantic-conventions =
+            hself.callHackageDirect {
+              pkg = "hs-opentelemetry-semantic-conventions";
+              ver = "1.40.0.0";
+              sha256 = "sha256-7cIC9dTrd5bJjAsiEyyupi1xSZyc17FpjbACnm0p5ik=";
+            } { };
+          # The SDK 1.0 re-exports the standard propagators (W3C TraceContext is
+          # the default; B3/Jaeger/X-Ray/Datadog are alternates a deployment
+          # selects), so they travel with it on the 1.0 line. The Datadog one is
+          # the optional, vendor-specific propagator from the observability design.
+          hs-opentelemetry-propagator-b3 =
+            hself.callHackageDirect {
+              pkg = "hs-opentelemetry-propagator-b3";
+              ver = "1.0.0.0";
+              sha256 = "sha256-gsNe818CprXM9l61mLUsdnePxIQChfml9kegmCDoAmw=";
+            } { };
+          hs-opentelemetry-propagator-datadog =
+            hself.callHackageDirect {
+              pkg = "hs-opentelemetry-propagator-datadog";
+              ver = "1.0.0.0";
+              sha256 = "sha256-nTXEtira3bktvycZkjDmPZewyMJ1IEEDygLT9OiIFYo=";
+            } { };
+          hs-opentelemetry-propagator-jaeger =
+            hself.callHackageDirect {
+              pkg = "hs-opentelemetry-propagator-jaeger";
+              ver = "1.0.0.0";
+              sha256 = "sha256-VL+3YwKbqe0elfZQ0EN7icNS0+pxmtlxlKauPHRqhb8=";
+            } { };
+          hs-opentelemetry-propagator-w3c =
+            hself.callHackageDirect {
+              pkg = "hs-opentelemetry-propagator-w3c";
+              ver = "1.0.0.0";
+              sha256 = "sha256-p8d2Tx8bCVRk6hps8k0qAg/L2gdBVoYuLYJbTzTbI3s=";
+            } { };
+          hs-opentelemetry-propagator-xray =
+            hself.callHackageDirect {
+              pkg = "hs-opentelemetry-propagator-xray";
+              ver = "1.0.0.0";
+              sha256 = "sha256-Tg7TrCMb8GA+jm+ohMAqMW7othRm/HLEyr9SifGa6qI=";
+            } { };
+          hs-opentelemetry-exporter-handle =
+            hself.callHackageDirect {
+              pkg = "hs-opentelemetry-exporter-handle";
+              ver = "1.0.0.0";
+              sha256 = "sha256-DCoVG0Y2aaMjinOP2GWmew0WmjN96j3/UUzEWxN7Ajs=";
+            } { };
+          # The in-memory exporter is part of the SDK's own dependency closure
+          # in this set; the base set's 0.x build does not compile against the
+          # 1.0 api (a SpanProcessor field changed type), so it moves to 1.0 too.
+          hs-opentelemetry-exporter-in-memory =
+            hself.callHackageDirect {
+              pkg = "hs-opentelemetry-exporter-in-memory";
+              ver = "1.0.0.0";
+              sha256 = "sha256-bJjUHBNMRKhmkqRRnUrAQIDLWpUrox7F418r2QbVQ6o=";
+            } { };
+          hs-opentelemetry-sdk =
+            hself.callHackageDirect {
+              pkg = "hs-opentelemetry-sdk";
+              ver = "1.0.0.0";
+              sha256 = "sha256-kG8gmP8Lr9mPCnJjukCduFI/tADgKCfuelxcQZcXyA8=";
+            } { };
+          # HTTP/protobuf is the default; the gRPC path (which would pull in
+          # grapesy) stays behind the package's cabal flag, off — matching the
+          # `-grpc` flag the cabal freeze resolves. We need no gRPC.
+          hs-opentelemetry-exporter-otlp =
+            hself.callHackageDirect {
+              pkg = "hs-opentelemetry-exporter-otlp";
+              ver = "1.0.0.0";
+              sha256 = "sha256-rHgsisH2d45CI9woEDb/j0WnTzllxaE2Mkx5/OmWn0c=";
+            } { };
+        };
+
+        hpkgs = pkgs.haskell.packages.ghc910.override {
+          overrides = otelOverlay;
+        };
 
         # The cabal package, built by Nix. callCabal2nix reads ecluse.cabal and
         # resolves dependencies from the nixpkgs GHC 9.10 set (pinned by

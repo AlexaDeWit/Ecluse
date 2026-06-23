@@ -56,6 +56,20 @@ tests: True
 -- (> 3.4.13.1) and re-freeze.
 constraints: warp < 3.4.10
 
+-- Pin the OpenTelemetry stack to the 1.0 line. The architect chose 1.0 (the
+-- May-2026 release that finally ships metrics and logs alongside tracing, with
+-- OTLP export) over the older 0.x line; the library stanza's ^>=1.0 bounds drive
+-- the directly-named sdk/exporter, and these constraints carry the choice down
+-- to the api/api-types packages they pull, so the whole closure resolves on the
+-- 1.0 line rather than the 0.x set the solver would otherwise be free to mix in.
+-- The Nix path makes the same choice through a nixpkgs overlay in flake.nix
+-- (the pinned set ships only 0.1.0.1). See docs/architecture/observability.md →
+-- "OpenTelemetry as the substrate".
+constraints: hs-opentelemetry-api ==1.0.*,
+             hs-opentelemetry-api-types ==1.0.*,
+             hs-opentelemetry-sdk ==1.0.*,
+             hs-opentelemetry-exporter-otlp ==1.0.*
+
 -- Warnings are errors for our own package, in CI and locally. GHC is pinned by
 -- flake.lock, so there is no "new compiler surfaces new warnings" surprise to
 -- guard against. Scoped to `ecluse` so dependencies (which we do not control)
