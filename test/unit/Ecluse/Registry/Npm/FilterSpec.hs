@@ -18,10 +18,11 @@ import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
 import Ecluse.Package (PackageInfo)
+import Ecluse.Package.Filter (filterPlan)
 import Ecluse.Registry (ParseError, RegistryResponse (RegistryResponse))
 import Ecluse.Registry.Npm.Filter (
     FilterResult (Filtered, NoSurvivors),
-    filterPackument,
+    applyFilterPlan,
     rewriteTarballUrls,
  )
 import Ecluse.Registry.Npm.Project (parsePackageInfo)
@@ -116,7 +117,7 @@ rewriteSpec = describe "rewriteTarballUrls" $ do
 -- ── filtering ────────────────────────────────────────────────────────────────
 
 filterSpec :: Spec
-filterSpec = describe "filterPackument" $ do
+filterSpec = describe "applyFilterPlan (replay)" $ do
     it "removes a denied version from versions and time, keeping the approved one" $ do
         -- 2.0.0 is 1 day old (denied by quarantine); 1.0.0 is 30 days old (approved).
         filtered <- filterTo twoVersions
@@ -164,7 +165,7 @@ filterSpec = describe "filterPackument" $ do
     it "signals NoSurvivors, carrying each denied version's decision, when nothing survives" $ do
         -- Both versions are 1 day old: neither clears the quarantine.
         (info, v) <- loadPackument allYoung
-        case filterPackument ctx quarantine info v of
+        case applyTo ctx quarantine info v of
             NoSurvivors decisions -> do
                 length decisions `shouldBe` 2
                 any isApproved decisions `shouldBe` False
@@ -172,7 +173,14 @@ filterSpec = describe "filterPackument" $ do
 
     it "treats a non-object body as having no survivors and no decisions" $ do
         (info, _) <- loadPackument oneVersionPackument
-        filterPackument ctx quarantine info (Array mempty) `shouldBe` NoSurvivors []
+        applyTo ctx quarantine info (Array mempty) `shouldBe` NoSurvivors []
+
+    it "rewrites surviving versions' dist.tarball under the mount base during replay" $ do
+        -- The replay rewrites tarballs as part of the wire-shape contract; a surviving
+        -- version's tarball lands under {base}/{pkg}/-/{file} (idempotent at assembly).
+        filtered <- filterTo twoVersions
+        tarballAt "1.0.0" (Object (rawObject filtered))
+            `shouldBe` Just "https://proxy.test/npm/thing/-/thing-1.0.0.tgz"
 
 -- ── coherence ────────────────────────────────────────────────────────────────
 
@@ -239,7 +247,7 @@ propertiesSpec = describe "properties" $ do
             spec' <- forAll genPackumentSpec
             (info, v) <- loadOrFail (renderPackument spec')
             let denied = deniedVersions spec'
-            case filterPackument ctx quarantine info v of
+            case applyTo ctx quarantine info v of
                 NoSurvivors _ -> success
                 Filtered out -> do
                     let o = asObject out
@@ -256,7 +264,7 @@ propertiesSpec = describe "properties" $ do
         hedgehog $ do
             spec' <- forAll genPackumentSpec
             (info, v) <- loadOrFail (renderPackument spec')
-            case filterPackument ctx quarantine info v of
+            case applyTo ctx quarantine info v of
                 NoSurvivors _ -> success
                 Filtered out -> do
                     let o = asObject out
@@ -604,11 +612,18 @@ loadPackument bs = do
     v <- decodeValue bs
     pure (info, v)
 
+{- | Decide the plan ('Ecluse.Package.Filter.filterPlan') over the typed view and
+replay it ('applyFilterPlan') onto the raw body — the composition the serve layer
+performs. The mount 'base' is supplied so the replay's tarball rewrite is exercised.
+-}
+applyTo :: EvalContext -> [PrecededRule] -> PackageInfo -> Value -> FilterResult
+applyTo c rules info = applyFilterPlan base (filterPlan c rules info)
+
 -- | Filter a fixture body, requiring survivors; returns the filtered packument.
 filterTo :: ByteString -> IO FilteredPackument
 filterTo bs = do
     (info, v) <- loadPackument bs
-    case filterPackument ctx quarantine info v of
+    case applyTo ctx quarantine info v of
         Filtered out -> pure (FilteredPackument (asObject out))
         NoSurvivors _ -> fail "expected survivors, got NoSurvivors"
 

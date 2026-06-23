@@ -1,6 +1,6 @@
 {- | The two pure transforms a __single public-upstream__ npm packument needs
 before Écluse serves it: rewrite the embedded artifact URLs under the mount's
-prefix, and apply the rules engine's verdicts across every version.
+prefix, and replay a 'FilterPlan'\'s verdicts across every version.
 
 Both transforms operate __structurally over the raw @aeson@ 'Value'__, never by
 re-serialising a typed model. This is load-bearing: the served packument is an
@@ -9,9 +9,18 @@ __open__ document — its schema is @additionalProperties: true@ (see
 any field Écluse does not model (author keys, registry bookkeeping, per-version
 extras) must be __relayed unchanged__. Editing the @Value@ in place removes denied
 versions and rewrites @dist.tarball@ while leaving every unmodelled key untouched;
-rebuilding the body from "Ecluse.Package" would silently drop them. The typed
-model is consulted only to /decide/ which versions survive; the bytes that ship
-are the edited upstream ones.
+rebuilding the body from "Ecluse.Package" would silently drop them.
+
+== The decision\/replay split
+
+/Which/ versions survive, where @dist-tags.latest@ resolves, and each version's
+denial 'Decision' is the ecosystem-agnostic filtering decision, taken over the
+typed 'Ecluse.Package.PackageInfo' by "Ecluse.Package.Filter" and handed here as a
+'Ecluse.Package.Filter.FilterPlan'. This module owns only the __npm wire-shape
+replay__: restrict @versions@\/@time@ to the surviving keys, rebuild @dist-tags@,
+and rewrite tarball URLs over the raw upstream bytes. The npm wire knowledge lives
+here; the decision logic does not (it is reused by every ecosystem). See
+@docs\/architecture\/registry-model.md@ → "Decision surface vs served surface".
 
 == URL rewriting
 
@@ -22,37 +31,32 @@ and bypassing the gate (see @docs\/architecture\/hosting.md@ → "The load-beari
 requirement: URL rewriting"). Keeping artifacts same-host also keeps npm's auth
 flowing, which a separate artifact host would silently drop. The mount's
 externally-visible base URL is __supplied by the caller__; this
-transform performs no IO.
+transform performs no IO. It is __idempotent__, so a later assembly pass that
+rewrites the merged body again is a no-op on an already-rewritten URL.
 
-== Filtering
+== Replaying the filter plan
 
-'filterPackument' applies the rules engine across the @versions@ map: a version
-that is not approved is removed from both @versions@ and @time@, so a client's
-resolver only ever sees admitted versions (presence in the packument /is/
-availability — see @docs\/research\/reverse-engineering\/npm.md@ §8). It then
-resolves @dist-tags.latest@ with the shared __keep-unless-denied,
-stable-preferring__ rule ('Ecluse.Version.selectLatest'): the upstream @latest@
-is kept untouched as long as it survives, and only repointed — to the highest
-/stable/ survivor — when it was itself denied. Any other tag that pointed at a
-removed version is __dropped__, never repointed. The result is coherent:
-@dist-tags.latest@ is always a key of @versions@, and @time@ has an entry for
-exactly the surviving versions.
+'applyFilterPlan' replays a 'FilterPlan' onto the raw @Value@: a version not in the
+plan's survivors is removed from both @versions@ and @time@, so a client's resolver
+only ever sees admitted versions (presence in the packument /is/ availability — see
+@docs\/research\/reverse-engineering\/npm.md@ §8). @dist-tags.latest@ is repointed
+at the plan's resolved @latest@, and any other tag whose target did not survive is
+__dropped__, never repointed. Finally tarball URLs are rewritten under the mount
+base. The result is coherent: @dist-tags.latest@ is always a key of @versions@, and
+@time@ has an entry for exactly the surviving versions.
 
-When __no version survives__, filtering returns 'NoSurvivors' carrying each
-version's denial 'Decision'; the serve layer maps that to a status, which this
-module deliberately does not choose.
-
-This filters a __single public packument__ (the gated set). Combining it with the
-trusted /private/ set is the cross-upstream merge, handled elsewhere; the @latest@
-resolved here is over the survivors /within the public set/, not the final
-@latest@ over the merged union.
+When the plan has __no survivors__, the replay returns 'NoSurvivors' carrying the
+plan's per-version denial 'Decision's; the serve layer maps that to a status, which
+this module deliberately does not choose. A body that is not even a JSON object is
+not a packument we can replay onto — it carries no versions to serve, so it yields
+'NoSurvivors' with no decisions.
 -}
 module Ecluse.Registry.Npm.Filter (
     -- * URL rewriting
     rewriteTarballUrls,
 
     -- * Filtering
-    filterPackument,
+    applyFilterPlan,
     FilterResult (..),
 ) where
 
@@ -60,14 +64,12 @@ import Data.Aeson (Value (Object, String))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap (KeyMap)
 import Data.Aeson.KeyMap qualified as KeyMap
-import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
 
-import Ecluse.Package (PackageInfo (infoDistTags, infoVersions), pkgVersion)
-import Ecluse.Rules (evalRules)
-import Ecluse.Rules.Types (Decision (Approved), EvalContext, PrecededRule)
-import Ecluse.Version (Version, selectLatest, unVersion)
+import Ecluse.Package.Filter (FilterPlan (fpDecisions, fpLatest, fpSurvivors))
+import Ecluse.Rules.Types (Decision)
+import Ecluse.Version (unVersion)
 
 -- ── URL rewriting ─────────────────────────────────────────────────────────────
 
@@ -131,7 +133,7 @@ joinUrl base seg = T.dropWhileEnd (== '/') base <> "/" <> seg
 
 -- ── filtering ─────────────────────────────────────────────────────────────────
 
-{- | The outcome of filtering a packument against a rule set.
+{- | The outcome of replaying a 'FilterPlan' onto a packument.
 
 A 'Filtered' body still has at least one admitted version and is internally
 coherent. 'NoSurvivors' means every version was rejected; it carries each
@@ -148,101 +150,90 @@ data FilterResult
       NoSurvivors [Decision]
     deriving stock (Eq, Show)
 
-{- | Apply the rules engine across a packument's versions, removing every
-non-approved version and repairing cross-field coherence.
+{- | Replay a 'FilterPlan' onto the raw packument @Value@, removing every
+non-surviving version, repairing cross-field coherence, and rewriting tarball URLs
+under @base@ (the mount's externally-visible base URL).
 
-The decisions are taken from the projected 'PackageInfo' (the typed view of the
-/same/ document), but the edits land on the raw 'Value', so unmodelled fields
-survive (see the module header). A version is kept iff 'evalRules' 'Approved' it;
-every other verdict — a denial, deny-by-default, or an undecidable outcome —
-drops it. Filtering never fabricates a transient status for a dropped version: it
-removes the version and records each 'Decision', leaving the status to the serve
-layer.
+The plan was decided over the projected 'Ecluse.Package.PackageInfo' (the typed
+view of the /same/ document), but the edits land on the raw 'Value', so unmodelled
+fields survive (see the module header). A version key is kept iff it is in the
+plan's survivors.
 
 When survivors remain the body is returned 'Filtered' with:
 
-* @versions@ and @time@ restricted to the surviving version keys;
-* @dist-tags.latest@ resolved by 'Ecluse.Version.selectLatest' — kept as the
-  upstream maintainer published it while it survives, and only repointed (to the
-  highest /stable/ survivor) when that chosen @latest@ was itself denied. A
-  surviving @latest@ is never /promoted/ to a higher survivor; repointing a
-  denied @latest@ downward is the deliberate downgrade (a not-yet-cleared release
-  does not silently remain the default install while older admitted versions
-  exist);
-* every other @dist-tags@ entry whose target did not survive __dropped__.
+* @versions@ and @time@ restricted to the surviving version keys (@time@ is pruned
+  by /removal/ of the denied keys, so its unmodelled @created@\/@modified@
+  bookkeeping is relayed);
+* @dist-tags.latest@ pointed at the plan's resolved @latest@ ('fpLatest') — the
+  kept upstream @latest@, or its downward repoint when the upstream @latest@ was
+  denied;
+* every other @dist-tags@ entry whose target did not survive __dropped__ (never
+  repointed — repointing @beta@ at a stable release would misrepresent it);
+* every surviving version's @dist.tarball@ rewritten under @base@. The rewrite is
+  idempotent, so a later cross-upstream assembly pass that rewrites the merged body
+  again leaves these URLs unchanged.
 
-When nothing survives, 'NoSurvivors' carries the per-version decisions.
+When the plan has no survivors, 'NoSurvivors' carries its per-version decisions. A
+non-object body is not a packument we can replay onto; with no versions it has no
+survivors and no decisions to report.
 -}
-filterPackument :: EvalContext -> [PrecededRule] -> PackageInfo -> Value -> FilterResult
-filterPackument ctx rules info = \case
-    Object o ->
-        let decisions = Map.map (evalRules ctx rules) (infoVersions info)
-            survivors = Map.keysSet (Map.filter isApproved decisions)
-         in if null survivors
-                then NoSurvivors (Map.elems decisions)
-                else Filtered (Object (repairTags survivors (restrict survivors o)))
-    -- A non-object body is not a packument we can filter; with no versions to
-    -- evaluate it has no survivors and no decisions to report.
+applyFilterPlan :: Text -> FilterPlan -> Value -> FilterResult
+applyFilterPlan base plan = \case
+    Object o
+        | Set.null (fpSurvivors plan) -> NoSurvivors (fpDecisions plan)
+        | otherwise -> Filtered (rewriteTarballUrls base (Object (repairTags plan (restrict plan o))))
+    -- A non-object body is not a packument we can replay onto; with no versions to
+    -- serve it has no survivors and no decisions to report.
     _ -> NoSurvivors []
+
+{- | Restrict @versions@ to the surviving keys, and drop the denied versions from
+@time@. @time@ is pruned by /removal/, not /retention/, because it also carries
+non-version bookkeeping keys (@created@, @modified@) that Écluse does not model and
+must relay; keeping only the survivor keys would drop them. The denied keys are the
+raw @versions@ keys absent from the plan's survivors — derived from the document so
+the replay needs no extra plan field. (@versions@ has only version keys, so
+retention and removal coincide there.)
+-}
+restrict :: FilterPlan -> KeyMap Value -> KeyMap Value
+restrict plan o =
+    adjustObject "versions" (keepKeys survivors)
+        . adjustObject "time" (dropKeys deniedVersions)
+        $ o
   where
-    -- A version key survives only on an explicit approval; every other outcome
-    -- (deny, deny-by-default, and the stubbed undecidable path) drops it.
-    isApproved :: Decision -> Bool
-    isApproved = \case
-        Approved{} -> True
-        _ -> False
+    survivors = fpSurvivors plan
+    deniedVersions = Set.difference (versionKeys o) survivors
 
-    -- The parsed 'Version' a raw key projects to, if that key is present in the
-    -- packument (used both to map surviving keys to 'Version's and to resolve the
-    -- upstream @latest@ tag's target).
-    versionOf :: Text -> Maybe Version
-    versionOf raw = pkgVersion <$> Map.lookup raw (infoVersions info)
+{- | Resolve @dist-tags.latest@ to the plan's resolved @latest@ and drop any other
+tag pointing at a removed version. A @dist-tags@ that is absent /or/
+present-but-malformed — most commonly JSON @null@, which the projection reads as
+"absent" yet the raw body still carries — is treated as empty, so the coherence
+promise (a resolvable @latest@) holds even for that malformed-upstream edge (see
+npm.md §8); a well-formed object is rebuilt in place, preserving its unmodelled
+tags.
+-}
+repairTags :: FilterPlan -> KeyMap Value -> KeyMap Value
+repairTags plan o =
+    let resolved = unVersion <$> fpLatest plan
+        existing = case KeyMap.lookup "dist-tags" o of
+            Just tags@(Object _) -> tags
+            _ -> Object mempty
+     in KeyMap.insert "dist-tags" (rebuildTags (fpSurvivors plan) resolved existing) o
 
-    -- Restrict @versions@ to the surviving keys, and drop the denied versions
-    -- from @time@. @time@ is pruned by /removal/, not /retention/, because it
-    -- also carries non-version bookkeeping keys (@created@, @modified@) that
-    -- Écluse does not model and must relay; keeping only the survivor
-    -- keys would drop them. (@versions@ has only version keys, so retention and
-    -- removal coincide there.)
-    restrict :: Set Text -> KeyMap Value -> KeyMap Value
-    restrict survivors =
-        adjustObject "versions" (keepKeys survivors)
-            . adjustObject "time" (dropKeys deniedVersions)
-      where
-        deniedVersions = Set.difference (Map.keysSet (infoVersions info)) survivors
-
-    -- Resolve @dist-tags.latest@ and drop any other tag pointing at a removed
-    -- version. A @dist-tags@ that is absent /or/ present-but-malformed — most
-    -- commonly JSON @null@, which the projection reads as "absent" yet the raw
-    -- body still carries — is treated as empty, so the coherence promise (a
-    -- resolvable @latest@) holds even for that malformed-upstream edge (see
-    -- npm.md §8); a well-formed object is rebuilt in place, preserving its
-    -- unmodelled tags.
-    repairTags :: Set Text -> KeyMap Value -> KeyMap Value
-    repairTags survivors o =
-        let resolved = unVersion <$> selectLatest chosen (survivingVersions survivors)
-            existing = case KeyMap.lookup "dist-tags" o of
-                Just tags@(Object _) -> tags
-                _ -> Object mempty
-         in KeyMap.insert "dist-tags" (rebuildTags survivors resolved existing) o
-
-    -- The upstream @latest@ tag's target as a 'Version': the @latest@ tag's raw
-    -- string (from the projected dist-tags) looked up in @versions@, so a tag
-    -- aimed at a version absent from the packument contributes nothing. This is
-    -- 'selectLatest'\'s @chosen@; it decides /survival/ itself, so this only
-    -- needs the version to be present, not surviving.
-    chosen :: Maybe Version
-    chosen = Map.lookup "latest" (infoDistTags info) >>= versionOf . unVersion
-
-    -- The surviving versions' parsed 'Version's — 'selectLatest'\'s @survivors@.
-    survivingVersions :: Set Text -> [Version]
-    survivingVersions = mapMaybe versionOf . toList
+{- | The raw @versions@ object's keys, as a 'Set' of version strings; empty when
+@versions@ is absent or not an object. These are exactly the projected
+'Ecluse.Package.infoVersions' keys, so subtracting the survivors yields the denied
+version keys the @time@ prune removes.
+-}
+versionKeys :: KeyMap Value -> Set Text
+versionKeys o = case KeyMap.lookup "versions" o of
+    Just (Object vs) -> Set.fromList (map Key.toText (KeyMap.keys vs))
+    _ -> mempty
 
 {- | Rebuild a @dist-tags@ object: point @latest@ at @resolved@ (the raw version
-string 'selectLatest' resolved — the kept upstream @latest@, or its downward
-repoint) and keep every other tag only if its target version still survives. A
-tag dropped here is one that pointed at a removed version — repointing @beta@ at a
-stable release would misrepresent it.
+string the plan resolved — the kept upstream @latest@, or its downward repoint) and
+keep every other tag only if its target version still survives. A tag dropped here
+is one that pointed at a removed version — repointing @beta@ at a stable release
+would misrepresent it.
 -}
 rebuildTags :: Set Text -> Maybe Text -> Value -> Value
 rebuildTags survivors resolved = \case
