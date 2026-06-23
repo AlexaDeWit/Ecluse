@@ -162,12 +162,21 @@ docs-site: ## Build Haddock and stage it under ./_site/api for GitHub Pages
 	  rm -rf _site && mkdir -p _site/api && cp -R "$$src"/. _site/api/ && touch _site/.nojekyll; \
 	  echo "Staged Haddock into ./_site/api"
 
-# Assemble the full Pages site that the workflow uploads: the home page at the
-# root (from web/) and the Haddock under /api (via docs-site). Kept separate from
-# docs-site so the gate-repro / local Haddock build stays about the docs alone.
-site: docs-site ## Assemble the Pages site (home page at /, Haddock under /api)
-	@cp -R web/. _site/
-	@echo "Assembled ./_site (home page at /, Haddock under /api)"
+# Assemble the full Pages site that the workflow uploads:
+#   /       the landing page + the user docs rendered from Markdown (pandoc)
+#   /api    the library Haddock (via docs-site)
+# Kept separate from docs-site so the gate-repro / local Haddock build stays about
+# the docs alone. Build inputs (template, Lua filters) live in web/; only web/static
+# is published. PoC note: Mermaid renders client-side from a pinned CDN — see
+# web/template.html — vendor it to make the published site self-contained.
+PANDOC_FLAGS := --standalone --from gfm --template web/template.html --lua-filter web/mermaid.lua --lua-filter web/links.lua
+site: docs-site ## Assemble the Pages site (landing + rendered docs at /, Haddock under /api)
+	@cp -R web/static/. _site/
+	@cp docs/branding/logo.svg docs/branding/favicon-32.png docs/social-preview.png _site/
+	$(NIX) pandoc MOTIVATION.md   -o _site/motivation.html   $(PANDOC_FLAGS) -M title="Why Écluse?"
+	$(NIX) pandoc ALTERNATIVES.md -o _site/alternatives.html $(PANDOC_FLAGS) -M title="Alternatives"
+	$(NIX) pandoc USAGE.md        -o _site/usage.html        $(PANDOC_FLAGS) -M title="Operator Manual"
+	@echo "Assembled ./_site (landing + rendered docs at /, Haddock under /api)"
 
 nix-build: ## Build the release artifact via Nix (hermetic)
 	nix build

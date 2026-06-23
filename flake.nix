@@ -99,6 +99,11 @@
           pkgs.ruby
         ];
 
+        # Site rendering: pandoc turns the repo's Markdown into the published site
+        # pages (`make site`). Only the Pages publish uses it, so it rides in the
+        # default (human) shell below but is kept out of the lean CI set.
+        docsInputs = [ pkgs.pandoc ];
+
         # Interactive-only tooling: in the default (human) shell, never needed by
         # CI. HLS/ghcid for live feedback; hoogle/cabal-plan for API & build-plan
         # search (see AGENTS.md).
@@ -250,7 +255,7 @@
           name = "ecluse";
           buildInputs =
             ciInputs ++ ideInputs ++ releaseInputs ++ scanInputs ++ workflowLintInputs
-            ++ [ hpkgs.weeder ];
+            ++ docsInputs ++ [ hpkgs.weeder ];
         });
 
         # Lean shell for CI: only what the gate jobs invoke through `make`. CI
