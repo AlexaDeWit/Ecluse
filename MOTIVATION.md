@@ -83,8 +83,8 @@ through — with direct egress to the public registries closed off — cannot be
 by a per-project toolchain: whatever `npm` or `pnpm` a project conjures, its fetches still
 cross the network, where only the chokepoint answers. That is what turns "please install
 safely" into "you can only install through here," for CI runners and developer laptops
-alike. (The egress side is an operator concern — see [`USAGE.md`](USAGE.md); this document
-is about why it matters.)
+alike. (The enforcement side is an operator concern — see [`USAGE.md` → Locking down CI
+egress](USAGE.md#locking-down-ci-egress-recommended); this document is about why it matters.)
 
 ## Why you can't simply buy it
 
