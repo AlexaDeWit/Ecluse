@@ -81,6 +81,7 @@ library
     Ecluse.Server
     Ecluse.Server.Cache
     Ecluse.Server.Conditional
+    Ecluse.Server.Pipeline
     Ecluse.Server.Response
     Ecluse.Server.Route
     Ecluse.Server.Stream
@@ -140,6 +141,7 @@ test-suite ecluse-unit
     Ecluse.ServerSpec
     Ecluse.Server.CacheSpec
     Ecluse.Server.ConditionalSpec
+    Ecluse.Server.PipelineSpec
     Ecluse.Server.ResponseSpec
     Ecluse.Server.RouteSpec
     Ecluse.Server.StreamSpec

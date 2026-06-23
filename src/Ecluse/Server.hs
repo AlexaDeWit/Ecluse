@@ -1,3 +1,7 @@
+-- TupleSections: pairing a matched mount with its classified remainder in
+-- 'dispatchMount' ((mount,) . classify); see STYLE.md §2.
+{-# LANGUAGE TupleSections #-}
+
 {- | The HTTP front door: the raw @wai@ 'Application', its dispatch, the
 meta-routes, the middleware stack, and 'runServer'.
 
@@ -35,6 +39,7 @@ module Ecluse.Server (
     defaultServerConfig,
     Mount (..),
     rootMount,
+    noPackumentDeps,
     application,
 
     -- * Running the server
@@ -49,13 +54,14 @@ module Ecluse.Server (
 ) where
 
 import Network.HTTP.Types (Status, hContentType, status200, status404, status501)
-import Network.Wai (Application, Middleware, Response, pathInfo, responseLBS)
+import Network.Wai (Application, Middleware, Request, Response, ResponseReceived, pathInfo, responseLBS)
 import Network.Wai.Handler.Warp qualified as Warp
 import Network.Wai.Middleware.RealIp (realIp)
 import Network.Wai.Middleware.RequestSizeLimit (defaultRequestSizeLimitSettings, requestSizeLimitMiddleware, setMaxLengthForRequest)
 import Network.Wai.Middleware.Timeout (timeout)
 
 import Ecluse.Env (Env)
+import Ecluse.Server.Pipeline (PackumentDeps, servePackument)
 import Ecluse.Server.Response (denialBody)
 import Ecluse.Server.Route (Route (..), classify)
 
@@ -77,12 +83,21 @@ data ServerConfig = ServerConfig
     -}
     , scSizeLimit :: RequestSizeLimit
     -- ^ The defensive cap on request-body size.
+    , scPackumentDeps :: Mount -> Maybe PackumentDeps
+    {- ^ The packument-serve dependencies for a matched mount — its upstream
+    endpoints, rule policy, and edge token. 'Nothing' leaves the packument route
+    recognised-but-unserved (the @501@ stub), so the resolved mount map is wired in
+    at the composition root rather than baked into the web layer. The function form
+    keys per matched mount without forcing 'PackumentDeps' (which carries a clock
+    action) into the 'Eq'\/'Show' 'Mount'.
+    -}
     }
 
 {- | The default server settings: a single root mount on the conventional npm
-proxy port (4873), with the default body cap. This is the env-only,
-single-mount launch shape; a multi-mount or alternate-port deployment overrides
-it at the composition root.
+proxy port (4873), with the default body cap and no packument-serve dependencies
+(the route stays the recognised-but-unserved @501@ until a composition root
+supplies them). This is the env-only, single-mount launch shape; a multi-mount or
+alternate-port deployment overrides it at the composition root.
 -}
 defaultServerConfig :: ServerConfig
 defaultServerConfig =
@@ -90,7 +105,15 @@ defaultServerConfig =
         { scPort = 4873
         , scMounts = [rootMount]
         , scSizeLimit = defaultRequestSizeLimit
+        , scPackumentDeps = noPackumentDeps
         }
+
+{- | The "no packument dependencies wired" resolver: every mount maps to 'Nothing',
+so the packument route renders the recognised-but-unserved @501@ stub. The default
+until a composition root supplies a mount's upstreams and policy.
+-}
+noPackumentDeps :: Mount -> Maybe PackumentDeps
+noPackumentDeps _ = Nothing
 
 {- | A mount: a path prefix bound to a registry served beneath it. Dispatch
 matches a request's leading path segment to 'mountPrefix', strips it, and routes
@@ -149,21 +172,47 @@ dispatch cfg env request respond =
     case pathInfo request of
         ["livez"] -> respond (liveness env)
         ["readyz"] -> respond (readiness env)
-        segments -> respond (route env (dispatchMount (scMounts cfg) segments))
+        segments ->
+            let (mount, classified) = dispatchMount (scMounts cfg) segments
+             in serve cfg env mount classified request respond
+
+{- Serve a classified route. The package\/artifact routes are effectful (they
+fetch upstream), so they are handled in 'IO' over the 'respond' continuation; every
+other route renders to a pure 'Response'. A 'Packument' on a mount with wired
+dependencies is served by the pipeline; without them it falls back to the
+recognised-but-unserved @501@.
+-}
+serve :: ServerConfig -> Env -> Mount -> Route -> Request -> (Response -> IO ResponseReceived) -> IO ResponseReceived
+serve cfg env mount classified request respond =
+    case classified of
+        Packument name
+            | Just deps <- scPackumentDeps cfg mount ->
+                servePackument deps env name request respond
+        _ -> respond (route env classified)
 
 {- Strip the first matching mount prefix off the request path, returning the
-remaining ecosystem-native segments to classify. A mount prefix is accepted with
-or without a trailing slash, so @\/npm\/pkg@ and a bare @\/npm@ both match the
-@\/npm@ mount. When no mount matches, the path is classified as-is, which denies
-it by default (the router recognises no such path) — there is no separate
-"unknown mount" status, by design.
+matched mount and the classified ecosystem-native remainder. A mount prefix is
+accepted with or without a trailing slash, so @\/npm\/pkg@ and a bare @\/npm@ both
+match the @\/npm@ mount. When no mount matches, the path is classified as-is under
+the first mount, which denies it by default (the router recognises no such path) —
+there is no separate "unknown mount" status, by design.
 -}
-dispatchMount :: [Mount] -> [Text] -> Route
+dispatchMount :: [Mount] -> [Text] -> (Mount, Route)
 dispatchMount mounts segments =
-    classify (fromMaybe segments (firstJust (strip segments) mounts))
+    fromMaybe (firstMount, classify segments) (firstJust matched mounts)
   where
-    strip :: [Text] -> Mount -> Maybe [Text]
-    strip segs (Mount prefix) = stripPrefixSegments prefix segs
+    -- The mount whose prefix the path begins with, paired with the classified
+    -- remainder. 'Nothing' for a mount whose prefix does not match.
+    matched :: Mount -> Maybe (Mount, Route)
+    matched mount@(Mount prefix) = (mount,) . classify <$> stripPrefixSegments prefix segments
+
+    -- When no mount matched, classification still runs (denying by default); it is
+    -- reported under the first configured mount, whose deps are irrelevant to an
+    -- 'Unsupported' route. A non-empty mount list is the launch invariant.
+    firstMount :: Mount
+    firstMount = case mounts of
+        mount : _ -> mount
+        [] -> rootMount
 
 {- Strip a mount's prefix segments off the front of a request path. The root
 mount (an empty prefix) consumes nothing and always matches. A trailing empty
@@ -191,10 +240,12 @@ firstJust f = foldr (\x acc -> f x <|> acc) Nothing
 
 -- ── route rendering ──────────────────────────────────────────────────────────
 
-{- Render a classified 'Route' to a response. @\/-\/ping@ is answered locally;
-@\/-\/v1\/search@ is @501@ with a pointer message; a package or artifact route is
-recognised but returns @501@ (its serve pipeline lives outside this module);
-anything unrecognised is @404@.
+{- Render a classified 'Route' to a pure response. @\/-\/ping@ is answered
+locally; @\/-\/v1\/search@ is @501@ with a pointer message; anything unrecognised
+is @404@. The package\/artifact routes are effectful and served by 'serve' before
+reaching here; they fall through to the recognised-but-unserved @501@ stub only on
+a mount with no serve dependencies wired (the tarball path is not yet served at
+all).
 -}
 route :: Env -> Route -> Response
 route _env = \case

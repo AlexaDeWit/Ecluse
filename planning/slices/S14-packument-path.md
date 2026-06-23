@@ -2,7 +2,7 @@
 id: S14
 title: Packument path end-to-end (walking skeleton)
 milestone: M3 — Request pipeline
-status: not-started
+status: in-progress
 depends-on: [S08, S09, S13, S33]
 test-tier: [unit]
 arch-refs:
@@ -26,26 +26,27 @@ fallback** (see registry-model.md#packument-merge-across-upstreams). Cloud handl
 the S02 in-memory doubles; real AWS backends arrive in M4.
 
 **Acceptance criteria.**
-- [ ] **Multi-upstream merge**: fetch the **private and public upstreams in
+- [x] **Multi-upstream merge**: fetch the **private and public upstreams in
   parallel**; trust private versions (unfiltered) and gate public versions (rules);
   **merge** into one document via S33 (private wins on collision; integrity
   divergence flagged). No private-hit short-circuit. —
   _registry-model.md#packument-merge-across-upstreams, architecture.md#request-lifecycle_
-- [ ] **Credential authority**: the client's `Authorization`/`_authToken` is
+- [x] **Credential authority**: the client's `Authorization`/`_authToken` is
   **forwarded to the private upstream** and **stripped before any public-upstream
   fetch**; the public leg is anonymous. Pin this with a test — it is the
   non-negotiable invariant. — _registry-model.md#credential-flow-and-authority, web-layer.md#control-plane-vs-data-plane_
-- [ ] **Public set gated**: fetch (full packument for `time`) → `parsePackageInfo`
+- [x] **Public set gated**: fetch (full packument for `time`) → `parsePackageInfo`
   → evaluate rules per version → `filterPackument` (S09) → rewrite tarball URLs
   (S09); the filtered public set is merged (S33) with the trusted private set and
   served with our **own ETag** (S13). — _rules-engine.md#applying-verdicts-to-a-packument_
-- [ ] **No survivors in the merge** → 403 (all by-policy) or 503 (any
+- [x] **No survivors in the merge** → 403 (all by-policy) or 503 (any
   transient/undecidable once S21 lands, **or a needed upstream unavailable**); never
   404 when the package exists. **Partial-upstream availability**: one upstream
   failing while another succeeds serves the best-effort union, not an error. —
   _rules-engine.md#applying-verdicts-to-a-packument, registry-model.md#packument-merge-across-upstreams_
-- [ ] Optional inbound `PROXY_AUTH_TOKEN` validated at the edge before proxying (S03).
-- [ ] Uses the metadata cache (S13) so the fetch+parse is shared/collapsed.
+- [x] Optional inbound `PROXY_AUTH_TOKEN` validated at the edge before proxying (S03).
+- [x] Uses the metadata cache (S13) so the fetch+parse is shared/collapsed (the
+  **public** leg only — see as-built notes).
 
 **File scope.**
 - `src/Ecluse/Server/Pipeline.hs` — the packument handler: fetch orchestration, credential forward/strip, rules+filter+serve.
@@ -61,3 +62,35 @@ proxies a merged, filtered packument end to end. The credential strip-before-pub
 the single most important security assertion in this slice. Keep the handler in plain
 `IO` taking `Env` (no transformer lifting on the hot path). Mirror enqueue is **not**
 here (packument requests don't mirror) — that is the tarball path, S15.
+
+**As-built deltas.**
+- **`PackumentDeps` as an explicit handler input.** `Env` carries one
+  `RegistryClient` and no upstream URLs / rule policy (config → `Env` wiring is
+  S20). The handler `servePackument :: PackumentDeps -> Env -> …` takes its
+  mount-level inputs (private/public base URLs, mount base URL, resolved
+  `[PrecededRule]`, optional inbound token, `IO UTCTime` clock, help message) as a
+  record. The two legs are built per-request as `NpmClientConfig`s over the shared
+  `Manager` — private with the client's forwarded token, public anonymous — so the
+  credential authority lives in one place. Fetched in parallel via
+  `UnliftIO.concurrently`.
+- **Decision-surface replay.** Each leg yields `(PackageInfo, raw Value)`. Public is
+  gated (`filterPackument` over its raw `Value`); private is trusted as-is. The two
+  typed `PackageInfo`s feed `mergePackuments` → `MergePlan`; the served body is built
+  by taking each surviving version's object from the raw `Value` of its winning
+  `SourceId`, carrying the plan's reconciled `dist-tags`/`time` (with `time`'s
+  `created`/`modified` bookkeeping relayed from the winning doc), relaying every other
+  top-level key, and rewriting tarball URLs (S09). The typed model is never
+  re-serialised. `time` values are re-rendered from the plan's `UTCTime` as ISO-8601
+  (the merge owns `time` as a typed decision; integrity-bearing fields are relayed raw).
+- **Cache is the public leg only.** S13's `MetadataCache` keys on **package
+  identity**, but a packument is fetched from two distinct upstreams whose documents
+  differ — sharing one entry across both legs cross-contaminates them. The **public**
+  leg owns the cache entry (it is the gated set the tarball path also resolves on a
+  private miss, so the cache reuses one fetch+parse across both paths); the trusted
+  **private** leg is fetched uncached. See escalation: a per-source cache key is the
+  proper fix and belongs to S13/S15.
+- **Server wiring.** `ServerConfig` gains `scPackumentDeps :: Mount -> Maybe
+  PackumentDeps` (default `noPackumentDeps`, leaving the route the S12 `501` stub);
+  `dispatchMount` now returns the matched mount so its deps reach the handler. `Mount`
+  is unchanged (kept `Eq`/`Show`), so the function-valued deps do not infect it. S20
+  supplies real per-mount deps from the resolved mount map.
