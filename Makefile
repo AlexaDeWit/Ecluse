@@ -185,7 +185,7 @@ docs-site: ## Build Haddock and stage it under ./_site/api for GitHub Pages
 PANDOC_FLAGS := --standalone --from gfm --template web/template.html --lua-filter web/mermaid.lua --lua-filter web/links.lua
 site: docs-site ## Assemble the Pages site (landing + rendered docs at /, Haddock under /api)
 	@cp -R web/static/. _site/
-	@cp docs/branding/logo.svg docs/branding/favicon-32.png docs/social-preview.png _site/
+	@cp docs/branding/logo.svg docs/branding/favicon-32.png docs/branding/lock-illustration.svg docs/social-preview.png _site/
 	@$(NIX) sh -c 'mkdir -p _site/vendor && cp "$$MERMAID_JS" _site/vendor/mermaid.min.js'
 	$(NIX) pandoc MOTIVATION.md   -o _site/motivation.html   $(PANDOC_FLAGS) -M title="Why Écluse?"
 	$(NIX) pandoc ALTERNATIVES.md -o _site/alternatives.html $(PANDOC_FLAGS) -M title="Alternatives"
