@@ -285,6 +285,21 @@
           buildInputs = ciInputs ++ [ hpkgs.weeder ];
         });
 
+        # Lean shell for the release workflow. release.yml enters it with
+        # `nix develop .#release`. It carries the release tooling (skopeo, sbomnix)
+        # plus the multi-arch assembly tools: `podman` builds the manifest list
+        # locally from the two per-arch Nix archives and pushes ONE canonical
+        # `:X.Y.Z` tag (an OCI index over both platform images — no lingering
+        # per-arch tags, the way `docker buildx imagetools create` would leave
+        # them), and `jq` parses the pushed index to recover the per-platform
+        # digests the attest-actions bind to. Kept out of the default human shell
+        # so podman's closure doesn't bloat everyday `nix develop`. See
+        # scripts/push-multiarch.sh and docs/architecture/release-supply-chain.md.
+        devShells.release = pkgs.mkShell (shellEnv // {
+          name = "ecluse-release";
+          buildInputs = [ pkgs.bashInteractive pkgs.podman pkgs.jq ] ++ releaseInputs;
+        });
+
         # PoC LSP<->MCP bridge shell (HLS + mcp-language-server). Opt-in only: not
         # built by CI (the gate runs no `nix flake check`) and not part of the
         # default dev shell. Enter with `nix develop .#mcp`, or let `.mcp.json`

@@ -25,31 +25,75 @@ supply-chain tool). Build it locally with `make docker-build` (→ `./result`, a
 
 Publishing is a separate, tag-triggered workflow
 ([`.github/workflows/release.yml`](../../.github/workflows/release.yml)) — **not**
-part of the PR `gate`. Pushing a `vX.Y.Z` tag builds the image, pushes it
-(`make docker-push`), attaches keyless provenance + SBOM attestations as immutable
-OCI referrers (the GitHub attest-actions; SBOM content from `make sbom`), and
-publishes a **GitHub Release** carrying the image digest, the `gh attestation
-verify` recipe, and the auto-generated changelog
+part of the PR `gate`. Pushing a `vX.Y.Z` tag builds the image **natively for both
+`linux/amd64` and `linux/arm64`** (see [Multi-architecture image](#multi-architecture-image)),
+assembles the two builds into a single multi-arch manifest list pushed under one
+immutable tag, attaches keyless provenance + SBOM attestations as immutable OCI
+referrers (the GitHub attest-actions; SBOM content from `make sbom`), and publishes
+a **GitHub Release** carrying the image digest, the `gh attestation verify` recipe,
+and the auto-generated changelog
 ([`scripts/release-notes.sh`](../../scripts/release-notes.sh)). A pre-release tag
 (`vX.Y.Z-rc.N`) is flagged as a prerelease; an `rc` smoke test via
-`workflow_dispatch` publishes the image but no Release.
+`workflow_dispatch` publishes the image but no Release. (`make docker-build` /
+`make docker-push` remain the **single-arch, host-architecture** path for local
+builds and manual pushes; the cross-arch assembly is CI-only.)
 
 **Immutable tags — no `latest`.** The target repo
 ([`alexadewit/ecluse`](https://hub.docker.com/r/alexadewit/ecluse)) enforces
 immutable tags, so every push is a fresh, never-reused tag: the release publishes
-`ecluse:X.Y.Z` (from the git tag) and nothing else. There is deliberately no
-moving pointer — **pin deployments by digest** (`alexadewit/ecluse@sha256:…`),
-which is the stronger supply-chain posture regardless; the digest for each version
-is published in its GitHub Release.
+`ecluse:X.Y.Z` (from the git tag) and nothing else — a **single canonical
+multi-arch tag** (an OCI index) that serves amd64 or arm64 automatically, with no
+per-arch tags. There is deliberately no moving pointer — **pin deployments by
+digest** (`alexadewit/ecluse@sha256:…`, the index digest), which is the stronger
+supply-chain posture regardless; the digest for each version is published in its
+GitHub Release.
+
+## Multi-architecture image
+
+The image is published as a **single multi-arch tag** — `ecluse:X.Y.Z` is an OCI
+manifest list (index) over a `linux/amd64` and a `linux/arm64` image, so a
+consumer pulls the one tag and the registry serves the right architecture. Many
+consumers are migrating clouds to arm64 while others still need amd64; one tag
+covers both.
+
+Each architecture is **built natively, not cross-compiled.** A matrix `build` job
+runs the Nix image build on its own runner — amd64 on `ubuntu-latest`, arm64 on
+GitHub's free public-repo `ubuntu-24.04-arm` runner — so GHC compiles natively on
+each target and the per-arch image stays bit-for-bit reproducible. This sidesteps
+GHC cross-compilation (fragile with Template Haskell) entirely. The build legs are
+**credential-free**: each only uploads its image archive and per-arch SBOM as a
+workflow artifact.
+
+A single privileged `publish` job then assembles the manifest list **locally**
+from the two archives ([`scripts/push-multiarch.sh`](../../scripts/push-multiarch.sh):
+`skopeo` imports each archive, `podman manifest` builds the index) and pushes
+**only the one canonical tag**. Local assembly is deliberate: building the list
+from registry references (e.g. `docker buildx imagetools create`) would require the
+platform images to be pre-pushed under their own tags, which — because the repo's
+tags are immutable and the push token has no delete scope — would persist forever.
+Assembling locally pushes the index plus both platform images as digest-addressed
+blobs under the single tag, leaving no per-arch tags behind.
+
+Centralising the push in one job also keeps the registry credential in exactly one
+place (the protected `release` environment), off the matrix build legs — a small
+blast-radius win on top of the attestation posture below.
 
 ## Supply-chain attestations
 
-Each release attaches two **keyless** (Sigstore/OIDC, no stored key) attestations
-to the image, bound to its **digest**, recorded in the public **Rekor**
-transparency log, and stored as **immutable OCI referrers** — each a
-content-addressed, write-once artifact that is never updated, so it can't be
-tampered with and it coexists with the repo's immutable tags. Both are produced
-in CI by GitHub's [attest-actions](https://github.com/actions/attest-build-provenance):
+Each release attaches **keyless** (Sigstore/OIDC, no stored key) attestations to
+the image by **digest**, recorded in the public **Rekor** transparency log and
+stored as **immutable OCI referrers** — each a content-addressed, write-once
+artifact that is never updated, so it can't be tampered with and it coexists with
+the repo's immutable tags. They are produced in CI by GitHub's
+[attest-actions](https://github.com/actions/attest-build-provenance).
+
+Because the image is [multi-arch](#multi-architecture-image), the attestations are
+**per platform plus the index**: **provenance** is attested on the index digest
+(what `gh attestation verify oci://…:X.Y.Z` resolves to) *and* on each platform
+digest (so a consumer pinning a single architecture by digest can verify it too);
+the **SBOM** is attested **per platform** — each arch has its own C closure, so its
+SBOM binds to that platform's digest, never to the index, which has no closure of
+its own.
 
 - **Provenance** (`actions/attest-build-provenance`). SLSA provenance generated
   from the run context — the source repo + commit, the release workflow, and the
