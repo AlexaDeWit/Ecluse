@@ -1,7 +1,7 @@
 # Implementation Orchestration Strategy
 
 How **Écluse** (package `ecluse`) is built as a coordinated multi-agent effort.
-This document is about *process*; the system design lives in
+This document is about _process_; the system design lives in
 [`../docs/architecture.md`](../docs/architecture.md), the development workflow and
 CI in [`../CONTRIBUTING.md`](../CONTRIBUTING.md), Haskell style in
 [`../STYLE.md`](../STYLE.md), and agent-facing essentials in
@@ -12,7 +12,7 @@ CI in [`../CONTRIBUTING.md`](../CONTRIBUTING.md), Haskell style in
 - **Principal architect** (the repo owner) — owns the design and the
   requirements, and is the final decision-maker on both. Reviews and merges every
   PR.
-- **Team lead** (the coordinating agent) — decomposes the *finalized* architecture
+- **Team lead** (the coordinating agent) — decomposes the _finalized_ architecture
   into PR-sized work, dispatches and supervises implementation subagents,
   evaluates their output, reproduces the CI gate, and hands review-ready PRs to
   the architect. **The team lead never merges and, during implementation, never
@@ -22,7 +22,7 @@ CI in [`../CONTRIBUTING.md`](../CONTRIBUTING.md), Haskell style in
 
 The single most important rule. Whenever an agent is **stuck, unsure, blocked, or
 facing ambiguous / missing / contradictory spec, it stops and surfaces the
-problem** rather than inventing a way past it. Agents make a *bounded* attempt
+problem** rather than inventing a way past it. Agents make a _bounded_ attempt
 against the existing specs first, then escalate — they do not thrash, and they do
 not paper over uncertainty. Specifically, an implementation agent must never:
 
@@ -37,8 +37,8 @@ not paper over uncertainty. Specifically, an implementation agent must never:
 A leftover stub or a quietly-relaxed test **is a blocker, not a delivery** — the
 team lead scans for exactly that in review, because it is how guessing hides.
 
-Surfacing is also **proactive**: concerns, limitations, and risks are raised *as
-warranted*, not only when something is hard-blocked.
+Surfacing is also **proactive**: concerns, limitations, and risks are raised _as
+warranted_, not only when something is hard-blocked.
 
 ## Phase 0 — architecture → delivery plan
 
@@ -59,11 +59,11 @@ The architect signs off on this breakdown **before any code is written**.
 
 ## Convergence slices: contract before construction
 
-The DAG encodes *ordering* (`depends-on`) but not the **shape** of what crosses
+The DAG encodes _ordering_ (`depends-on`) but not the **shape** of what crosses
 each edge. Where several producer slices converge on one consumer — e.g.
 `S09 + S33 → S14` (the packument pipeline) or `S15/S17/S18/S19 → S20` (launch
 composition) — specify the **consumer's interface, the types that flow across the
-boundary, before building the producers**. Producers then build *to* a known
+boundary, before building the producers**. Producers then build _to_ a known
 contract instead of the consumer reverse-engineering whatever they happened to
 emit. A convergence slice's interface is a deliverable of **this planning pass**,
 not a discovery of the build pass. (Skipping it is how the packument pipeline's
@@ -134,10 +134,10 @@ to compensate for an environment defect unique to long-lived agent sessions.
 
 The implementer's own "it works" does not count; evidence does.
 
-- **Stage A — requirements.** Every acceptance criterion is met *and backed by a
-  deterministic, gating test* (unit or integration) — a non-gating smoke test
-  detects drift but never stands in for a criterion ([Testing Strategy](../docs/testing.md) → *What gates, and what doesn't*); nothing in the slice's architecture
-  scope is silently dropped; **limited scope** (changes stay within the slice's files; touching others needs strong justification); documentation is updated in the *same* PR
+- **Stage A — requirements.** Every acceptance criterion is met _and backed by a
+  deterministic, gating test_ (unit or integration) — a non-gating smoke test
+  detects drift but never stands in for a criterion ([Testing Strategy](../docs/testing.md) → _What gates, and what doesn't_); nothing in the slice's architecture
+  scope is silently dropped; **limited scope** (changes stay within the slice's files; touching others needs strong justification); documentation is updated in the _same_ PR
   (per [`../AGENTS.md`](../AGENTS.md) → Documentation Policy).
 - **Stage B — quality & security.** Idiomatic Haskell per
   [`../STYLE.md`](../STYLE.md); totality; `-Werror`-clean; no unsafe/partial
@@ -146,7 +146,7 @@ The implementer's own "it works" does not count; evidence does.
   quality** — properties present where required (e.g. rules-engine
   deny-precedence), not tautological assertions, with **new/changed lines ≥ 95%
   covered** (`codecov/patch`); and **comment appropriateness** — Haddock documents
-  the timeless contract and the *why*, never project / roadmap / slice narration
+  the timeless contract and the _why_, never project / roadmap / slice narration
   ([`../HADDOCK.md`](../HADDOCK.md) §11). Completeness is not enough: a comment can
   be present, and the wrong kind.
 
@@ -214,15 +214,15 @@ gate** locally before pushing. The gating jobs (the `needs` of the terminal
 `gate` job in [`../.github/workflows/ci.yml`](../.github/workflows/ci.yml)) map
 one-to-one to make targets:
 
-| Gating CI job | Local command |
-|---|---|
-| `build-and-test` (build + unit) | `make check` *(build, unit, format-check, lint, sast)* |
-| `lint` (fourmolu + hlint) | ↳ included in `make check` |
-| `semgrep` (`--config auto`, ERROR/WARNING) | ↳ included in `make check` |
-| `integration` (ministack / Docker) | `make test-integration` |
-| `docs` (Haddock) | `make docs-site` |
-| `gate` | green iff all of the above are green |
-| `smoke` (live registries) | `make test-smoke` — **non-gating, never blocks** |
+| Gating CI job                              | Local command                                          |
+| ------------------------------------------ | ------------------------------------------------------ |
+| `build-and-test` (build + unit)            | `make check` _(build, unit, format-check, lint, sast)_ |
+| `lint` (fourmolu + hlint)                  | ↳ included in `make check`                             |
+| `semgrep` (`--config auto`, ERROR/WARNING) | ↳ included in `make check`                             |
+| `integration` (ministack / Docker)         | `make test-integration`                                |
+| `docs` (Haddock)                           | `make docs-site`                                       |
+| `gate`                                     | green iff all of the above are green                   |
+| `smoke` (live registries)                  | `make test-smoke` — **non-gating, never blocks**       |
 
 Pre-push command:
 
@@ -231,7 +231,7 @@ make check && make test-integration && make docs-site && make nix-check
 ```
 
 `make nix-check` is the hermetic backstop: it catches `-Werror` warnings and the
-*flakes only see git-tracked files* trap, so new modules must be `git add`-ed
+_flakes only see git-tracked files_ trap, so new modules must be `git add`-ed
 (and listed in the `.cabal` file) **before** the Nix checks run.
 
 `make coverage` reproduces the patch-coverage check: Codecov's `codecov/patch`
@@ -306,11 +306,12 @@ Escalations arrive **decision-ready**:
   packument merge; lossless `Value` passthrough across filter/merge/serve), extract
   it into a single shared helper the slices call — duplicated invariant logic drifts
   and gets fixed N times.
-- **"Seam" is retired.** The records-of-functions abstraction (`RegistryClient`,
+- **"The term Seam" is retired.** The records-of-functions abstraction (`RegistryClient`,
   `MirrorQueue`, `CredentialProvider`) is **the Handle pattern**. Don't reintroduce
   "seam" — not even in the generic "integration boundary" sense, which re-muddies the
   rename. Say **"the Handle pattern"** for the abstraction and **"integration
-  boundary" / "interface contract"** for where components meet.
+  boundary" / "interface contract"** for where components meet, refer to it simply as "an abstraction boundary"
+  or similar terminology as appropriate.
 
 ## What lives under `planning/`
 

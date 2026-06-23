@@ -27,29 +27,31 @@ the packument's source — and document the operator-side egress controls the
 application guards assume.
 
 **Acceptance criteria.**
+
 - [ ] **Post-resolution internal-range recheck.** The S08 fetch layer re-applies
-  `isBlockedTarget` to the **resolved** IP of every outbound connection (not just
-  the host literal), so an allowlisted DNS name that resolves to an internal
-  address is refused at connect time. Closes the gap the S36 "Deferred" note names
-  (the pure layer cannot resolve names). — _security.md invariant 3_
+      `isBlockedTarget` to the **resolved** IP of every outbound connection (not just
+      the host literal), so an allowlisted DNS name that resolves to an internal
+      address is refused at connect time. Closes the gap the S36 "Deferred" note names
+      (the pure layer cannot resolve names). — _security.md invariant 3_
 - [ ] **`dist.tarball` host policy, disallow-by-default.** A tarball is fetched only
-  from the **same allowlisted upstream that served the packument** unless the
-  operator opts in via `PROXY_RESPECT_UPSTREAM_TARBALL_HOST` (see
-  [Configuration → Outbound egress safety](../../docs/architecture/configuration.md#outbound-egress-safety-planned)),
-  which relaxes to "any allowlisted host" — never escaping the allowlist or the
-  internal-range block. Secure default; configurable override. — _security.md_
+      from the **same allowlisted upstream that served the packument** unless the
+      operator opts in via `PROXY_RESPECT_UPSTREAM_TARBALL_HOST` (see
+      [Configuration → Outbound egress safety](../../docs/architecture/configuration.md#outbound-egress-safety-planned)),
+      which relaxes to "any allowlisted host" — never escaping the allowlist or the
+      internal-range block. Secure default; configurable override. — _security.md_
 - [ ] **Config surface + validation.** The new setting is parsed at the config
-  boundary with the same fail-fast posture as the rest (S03), defaulting to the
-  secure value; its security note ships in the same change.
+      boundary with the same fail-fast posture as the rest (S03), defaulting to the
+      secure value; its security note ships in the same change.
 - [ ] **Operator egress runbook.** The platform-layer egress guidance (security
-  groups / NACLs, K8s `NetworkPolicy`, Istio `ServiceEntry` + egress policy, IMDSv2
-  hop-limit / metadata-endpoint denial) is carried into the deployment runbook
-  ([S32](S32-launch-docs.md)). — _security.md#network-egress-is-a-shared-responsibility_
+      groups / NACLs, K8s `NetworkPolicy`, Istio `ServiceEntry` + egress policy, IMDSv2
+      hop-limit / metadata-endpoint denial) is carried into the deployment runbook
+      ([S32](S32-launch-docs.md)). — _security.md#network-egress-is-a-shared-responsibility_
 - [ ] **Hostile-fixture extension.** The S36 corpus gains resolved-internal-IP and
-  cross-host-`dist.tarball` cases, exercised through the real request path
-  (integration).
+      cross-host-`dist.tarball` cases, exercised through the real request path
+      (integration).
 
 **File scope.**
+
 - `src/Ecluse/Registry/Npm.hs` (or the S08 fetch boundary) — the resolved-IP
   recheck and the tarball-host policy decision at the connect point.
 - `src/Ecluse/Config.hs` — the `PROXY_RESPECT_UPSTREAM_TARBALL_HOST` setting.
@@ -62,11 +64,11 @@ application guards assume.
 
 **Notes / risks.** The resolved-IP recheck must run **after** DNS resolution but
 **before** the connection is used — i.e. at the `http-client` connection hook, not
-in pure code. Confirm the chosen client exposes that seam; escalate if it forces a
+in pure code. Confirm the chosen client exposes that handle abstraction; escalate if it forces a
 custom `Manager`. The tarball-host policy is a behaviour change for any deployment
 relying on a separate tarball CDN — it is gated behind the opt-in precisely so the
 default cannot silently break those, but the launch docs must call it out.
 
-**Out of scope.** Octal/decimal/short-form IPv4 *literal* parsing in the pure block
+**Out of scope.** Octal/decimal/short-form IPv4 _literal_ parsing in the pure block
 (still covered by the allowlist + the resolved-IP recheck, which sees the
 canonical address); ULA `fc00::/7` and NAT64 `64:ff9b::/96` (unchanged from S36).
