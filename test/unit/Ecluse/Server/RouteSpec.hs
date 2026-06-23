@@ -13,8 +13,9 @@ import Ecluse.Server.Route (Route (..), denyAll, isSafeComponent)
 classifier, and the ecosystem-independent component-safety gate.
 
 No ecosystem path grammar lives here — that is each adapter's classifier (e.g.
-"Ecluse.Registry.Npm.Route"). These specs pin the neutral seam: the default
-classifier denies everything, and 'isSafeComponent' is the shared traversal gate.
+"Ecluse.Registry.Npm.Route"). These specs pin the neutral routing boundary: the
+default classifier denies everything, and 'isSafeComponent' is the shared
+traversal gate.
 -}
 spec :: Spec
 spec = do
