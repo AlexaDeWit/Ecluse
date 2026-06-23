@@ -2,6 +2,7 @@
   "mcpServers": {
     "hls": {
       "type": "stdio",
+      "timeout": 180000,
       "command": "bash",
       "args": [
         "-c",
