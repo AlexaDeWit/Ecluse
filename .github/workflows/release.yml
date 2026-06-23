@@ -125,9 +125,9 @@ jobs:
         with:
           path: artifacts
 
-      # Authenticate so podman can push the manifest list and the attest-actions
+      # Authenticate so regctl can push the manifest list and the attest-actions
       # can push referrers. docker/login-action writes ~/.docker/config.json,
-      # which podman and skopeo read as their fallback auth file.
+      # which both regctl and skopeo read as their fallback auth file.
       - name: Log in to Docker Hub
         uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
         with:
@@ -136,7 +136,7 @@ jobs:
 
       # Assemble the two per-arch archives into ONE manifest list, push the single
       # canonical tag, and emit the index + per-platform digests for the attest
-      # steps. All podman/skopeo/jq logic lives in the script (shellcheck'd), so
+      # steps. All skopeo/regctl/jq logic lives in the script (shellcheck'd), so
       # the workflow stays injection-free.
       - name: Assemble & push multi-arch image
         id: push
