@@ -95,12 +95,27 @@ jobs:
       - name: Coverage (unit)
         run: nix develop .#ci --command make coverage
 
-      - name: Upload coverage to Codecov
+      - name: Upload unit coverage to Codecov
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
           use_oidc: true # tokenless upload via GitHub OIDC; no CODECOV_TOKEN secret
           files: coverage/ecluse-unit.json
           flags: unit
+          fail_ci_if_error: true # a lost upload must not silently skip the gate
+
+      # Instrumented re-run of the integration suite (against the same ministack
+      # tier as above), so the cloud-backed modules the unit suite cannot exercise
+      # — the SQS MirrorQueue backend — count toward the merged Codecov total. Like
+      # the unit pass, only our package recompiles under -fhpc.
+      - name: Coverage (integration)
+        run: nix develop .#ci --command make coverage SUITE=ecluse-integration
+
+      - name: Upload integration coverage to Codecov
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        with:
+          use_oidc: true # tokenless upload via GitHub OIDC; no CODECOV_TOKEN secret
+          files: coverage/ecluse-integration.json
+          flags: integration
           fail_ci_if_error: true # a lost upload must not silently skip the gate
 
       # ---- Cache writes: main only, single writer ---------------------------
