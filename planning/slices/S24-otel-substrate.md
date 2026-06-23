@@ -44,3 +44,35 @@ cabal — confirm availability in the pinned package set; **escalate** if the 1.
 is not yet in nixpkgs (a real external dependency on the toolchain). Keep this purely
 substrate — spans (S25) and metrics/logs (S26) layer on. Off-by-default is the FOSS
 posture: the maintainer's Datadog choice must not become every consumer's obligation.
+
+## As-built notes
+
+- **OTel 1.0 sourcing proved on both paths.** Hackage (index-state
+  `2026-06-23T19:20:36Z`) carries the whole 1.0 stack; `cabal.project` pins it
+  (`hs-opentelemetry-{api,api-types,sdk,exporter-otlp} ==1.0.*`) and
+  `cabal.project.freeze` was regenerated via `make freeze` (sdk/api/api-types/
+  exporter-otlp/otlp `1.0.0.0`, semantic-conventions `1.40.0.0`; the
+  exporter resolves with its `grpc` flag **off** — HTTP/protobuf only, no
+  `grapesy`).
+- **Nix path needed an overlay**, since the pinned nixpkgs (26.05) ships only the
+  0.x line (sdk `0.1.0.1`, api `0.3.1.0`, and no `hs-opentelemetry-api-types` at
+  all). `flake.nix` adds an `otelOverlay` (`callHackageDirect`, version + tarball
+  sha256 pinned — no new flake input) bumping the full stack to 1.0: api-types,
+  api, otlp, semantic-conventions (1.40), the five propagators (b3/datadog/
+  jaeger/w3c/xray), exporter-handle, exporter-in-memory, sdk, exporter-otlp. The
+  in-memory exporter and propagators had to move too: the 0.x ones don't compile
+  against the 1.0 api. `make nix-check` (callCabal2nix → unit check) is green.
+- **Substrate shape.** `Ecluse.Telemetry` exposes a `PROXY_TELEMETRY` master
+  switch (`TelemetrySwitch`, default `off`) wired into `EnvConfig` (`cfgTelemetry`),
+  and a `Telemetry` handle held in `Env` (`envTelemetry`). `withTelemetry` brackets
+  the providers in the composition root: `off` is a pure pass-through that never
+  initialises the SDK and emits nothing; `on` runs `hs-opentelemetry-sdk`'s
+  `withOpenTelemetry`, reading the standard `OTEL_*` env, and exposes the tracer +
+  meter providers. The unit tier covers config parsing, the off-by-default no-op,
+  and the enabled-handle wiring — `telemetryEnabled` is exercised against /offline/
+  providers (an empty-processor tracer provider + the no-op meter provider; no
+  exporter opened, no `OTEL_*` read). Only the live `withTelemetry on` path
+  (`withOpenTelemetry`, which opens an OTLP exporter) stays integration-tier, per
+  the verification plan. `codecov/patch` is 100% (every changed line carries a
+  covered tick; the `withOpenTelemetry` lambda body shares its line with the
+  covered `TelemetryOn` case-head).
