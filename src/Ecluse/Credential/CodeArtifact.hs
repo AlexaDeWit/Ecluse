@@ -23,6 +23,7 @@ module Ecluse.Credential.CodeArtifact (
 
     -- * The provider
     newCodeArtifactProvider,
+    providerForEnv,
 ) where
 
 import Amazonka qualified as AWS
@@ -63,26 +64,34 @@ data CodeArtifactConfig = CodeArtifactConfig
     deriving stock (Eq, Show)
 
 {- | Build a refreshing 'CredentialProvider' backed by CodeArtifact
-@GetAuthorizationToken@. The @amazonka@ 'Env' is constructed once here (with
-standard credential discovery) and captured by the mint closure; the returned
-provider then serves a cached token and refreshes it ahead of expiry per
-"Ecluse.Credential.Refresh".
+@GetAuthorizationToken@. Discovers AWS credentials the standard way
+('AWS.discover') and hands the resulting 'AWS.Env' to 'providerForEnv'.
 
 Mints once eagerly to seed the cache, so a misconfiguration (bad region, missing
 credentials, no permission) fails here at construction rather than on the first
 mirror write.
 -}
 newCodeArtifactProvider :: CodeArtifactConfig -> IO CredentialProvider
-newCodeArtifactProvider cfg = do
-    env <- regioned <$> AWS.newEnv AWS.discover
+newCodeArtifactProvider cfg = AWS.newEnv AWS.discover >>= \env -> providerForEnv env cfg
+
+{- | Build the provider over a caller-supplied @amazonka@ 'Env' — the seam the
+production 'newCodeArtifactProvider' wraps with credential discovery. The config's
+region is applied to the 'Env', and each mint calls @GetAuthorizationToken@ through
+it under the cache\/proactive-refresh\/single-flight\/breaker policy of
+"Ecluse.Credential.Refresh" (so the token API is not re-hit per request). Exposed
+so a test can drive the real mint against an 'Env' aimed at a stub endpoint, with
+no live AWS.
+-}
+providerForEnv :: AWS.Env -> CodeArtifactConfig -> IO CredentialProvider
+providerForEnv env cfg =
     refreshingProvider
         defaultRefreshConfig
-            { rcMint = mint env
+            { rcMint = mint (regioned env)
             , rcClock = getCurrentTime
             }
   where
     regioned :: AWS.Env -> AWS.Env
-    regioned env = env{AWS.region = AWS.Region' (caRegion cfg)}
+    regioned e = e{AWS.region = AWS.Region' (caRegion cfg)}
 
     request :: CA.GetAuthorizationToken
     request =
@@ -92,8 +101,8 @@ newCodeArtifactProvider cfg = do
 
     -- One mint: call GetAuthorizationToken and lift the response into an AuthToken.
     mint :: AWS.Env -> IO AuthToken
-    mint env = do
-        response <- runResourceT (AWS.send env request)
+    mint e = do
+        response <- runResourceT (AWS.send e request)
         secret <- case response ^. CA.getAuthorizationTokenResponse_authorizationToken of
             Just token -> pure (mkSecret token)
             Nothing ->
