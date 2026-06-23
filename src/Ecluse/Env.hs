@@ -25,8 +25,9 @@ Two invariants make this hold together:
   through here and nowhere else (see
   @docs\/architecture\/cloud-backends.md@ → "Process model").
 
-Request handlers read an 'Env' in plain 'IO'; the worker\/service layer reads it
-through "Ecluse.App"'s @App@ monad.
+Request handlers read this 'Env' through a per-request
+'Ecluse.Server.Context.RequestCtx' that pairs it with the matched mount; the
+worker\/service layer reads it through "Ecluse.App"'s @App@ monad.
 -}
 module Ecluse.Env (
     -- * Composition root

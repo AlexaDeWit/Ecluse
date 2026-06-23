@@ -40,7 +40,7 @@ import Ecluse.Server (
     mkServerConfig,
  )
 import Ecluse.Server.Cache (defaultCacheConfig, newMetadataCache)
-import Ecluse.Server.Pipeline (PackumentDeps (..))
+import Ecluse.Server.Context (PackumentDeps (..))
 
 -- ── a fixed clock and the quarantine policy ───────────────────────────────────
 

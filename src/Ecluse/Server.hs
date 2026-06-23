@@ -40,8 +40,11 @@ Responses split into __two tiers__:
 Cross-cutting concerns are applied as middleware composed around the
 'Application' (see @docs\/architecture\/web-layer.md@ → "Middleware"): a
 defensive request-body size cap, correct client-IP recovery behind a load
-balancer, and a request timeout. Handlers run in plain 'IO' taking 'Env', so the
-hot path carries no transformer lifting.
+balancer, and a request timeout. Dispatch builds a per-request
+'Ecluse.Server.Context.RequestCtx' — the composition-root 'Env' paired with the
+matched 'MountBinding' — and the effectful routes run in the
+'Ecluse.Server.Context.Handler' reader over it, so a handler reads its mount's
+wiring and the composition root from context rather than as threaded arguments.
 -}
 module Ecluse.Server (
     -- * The WAI application
@@ -70,9 +73,14 @@ import Network.Wai.Middleware.RequestSizeLimit (defaultRequestSizeLimitSettings,
 import Network.Wai.Middleware.Timeout (timeout)
 
 import Ecluse.Env (Env)
-import Ecluse.Server.Pipeline (PackumentDeps, servePackument)
+import Ecluse.Server.Context (
+    MountBinding (..),
+    RequestCtx (RequestCtx),
+    runHandler,
+ )
+import Ecluse.Server.Pipeline (servePackument)
 import Ecluse.Server.Response (MountRenderer, RenderedBody (RenderedBody), renderError)
-import Ecluse.Server.Route (Classifier, Route (..))
+import Ecluse.Server.Route (Route (..))
 
 -- ── server configuration ─────────────────────────────────────────────────────
 
@@ -112,33 +120,6 @@ mkServerConfig mounts =
 -- | The conventional npm proxy listen port (4873), the 'mkServerConfig' default.
 defaultPort :: Int
 defaultPort = 4873
-
-{- | A mount: a path prefix bound to a registry, carrying that registry's
-__complete__ ecosystem wiring. Dispatch matches a request's leading path segments
-to 'bindingPrefix', strips them, and routes the remainder through the rest of the
-binding (see "Ecluse.Server").
-
-The prefix is a 'NonEmpty' list of segments (@"npm" :| []@ for a @\/npm@ mount):
-every registry is path-mounted, so a root mount — which would force a URL change
-on every consumer the day a second ecosystem is added — is __unrepresentable__
-rather than merely discouraged. Bundling the classifier, serve dependencies, and
-renderer into one record means a mount cannot be half-wired: there is no default
-to fall back to.
--}
-data MountBinding = MountBinding
-    { bindingPrefix :: NonEmpty Text
-    -- ^ The leading path segments this mount is served under; never empty.
-    , bindingClassifier :: Classifier
-    -- ^ The ecosystem path grammar mapping this mount's native path to a 'Route'.
-    , bindingPackumentDeps :: Maybe PackumentDeps
-    {- ^ The packument-serve dependencies, when wired; 'Nothing' leaves the
-    packument route recognised-but-unserved (the @501@ stub).
-    -}
-    , bindingRenderer :: MountRenderer
-    {- ^ This mount's renderer for error\/denial bodies — the ecosystem surface an
-    in-mount @403@\/@404@\/@501@ is shaped into.
-    -}
-    }
 
 -- ── request-body cap ─────────────────────────────────────────────────────────
 
@@ -184,19 +165,22 @@ dispatch cfg env request respond =
             Nothing -> respond notFound
             Just (binding, classified) -> serve env binding classified request respond
 
-{- Serve a classified route under its matched mount. The package\/artifact routes
-are effectful (they fetch upstream), so a 'Packument' on a mount with wired
-dependencies is handled in 'IO' over the 'respond' continuation; every other route
-renders to a pure 'Response' through the mount's renderer. Without serve
-dependencies a 'Packument' falls back to the recognised-but-unserved @501@.
+{- Serve a classified route under its matched mount. Dispatch builds the
+per-request 'RequestCtx' once — the composition-root 'Env' paired with the matched
+'MountBinding' — and the effectful 'Packument' route runs in the 'Handler' reader
+over it, so the handler reads the mount's serve dependencies and renderer from
+context rather than as threaded arguments (the deps-or-@501@ decision is the
+handler's). Every other route renders to a pure 'Response' through the mount's
+renderer.
 -}
 serve :: Env -> MountBinding -> Route -> Request -> (Response -> IO ResponseReceived) -> IO ResponseReceived
 serve env binding classified request respond =
     case classified of
-        Packument name
-            | Just deps <- bindingPackumentDeps binding ->
-                servePackument (bindingRenderer binding) deps env name request respond
+        Packument name -> runHandler ctx (servePackument name request respond)
         _ -> respond (renderRoute (bindingRenderer binding) classified)
+  where
+    ctx :: RequestCtx
+    ctx = RequestCtx env binding
 
 {- Match a request path to a mount: the first binding whose prefix the path begins
 with, paired with the remainder classified through that mount's classifier.
@@ -240,12 +224,13 @@ firstJust f = foldr (\x acc -> f x <|> acc) Nothing
 
 -- ── route rendering ──────────────────────────────────────────────────────────
 
-{- Render an in-mount classified 'Route' to a pure response through the mount's
-renderer. @\/-\/ping@ is answered locally with @200 {}@; @\/-\/v1\/search@ is a
-@501@ pointer; a recognised-but-unserved package\/artifact route is a @501@; an
-unrecognised in-mount path is a @404@ — every error in the mount's own surface.
-The served packument route is effectful and handled by 'serve' before reaching
-here.
+{- Render a non-effectful in-mount classified 'Route' to a pure response through
+the mount's renderer. @\/-\/ping@ is answered locally with @200 {}@;
+@\/-\/v1\/search@ is a @501@ pointer; a recognised-but-unserved artifact route is a
+@501@; an unrecognised in-mount path is a @404@ — every error in the mount's own
+surface. The effectful 'Packument' route is dispatched to the 'Handler' by 'serve'
+before reaching here; the branch below is the defensive fallback should that
+routing ever change.
 -}
 renderRoute :: MountRenderer -> Route -> Response
 renderRoute renderer = \case
@@ -340,11 +325,10 @@ sizeLimitMiddleware (RequestSizeLimit maxBytes) =
 -- ── running ──────────────────────────────────────────────────────────────────
 
 {- | Serve the proxy's HTTP front door: start @warp@ on the 'ServerConfig''s port
-with the 'application' built over it and the composition-root 'Env'. Request
-handlers read the 'Env' in plain 'IO'. The 'ServerConfig' — in particular its mount
-bindings ('scMounts'), each a mount's complete ecosystem wiring — is supplied by
-the composition root, which is where the served ecosystems are mounted (see
-"Ecluse").
+with the 'application' built over it and the composition-root 'Env'. The
+'ServerConfig' — in particular its mount bindings ('scMounts'), each a mount's
+complete ecosystem wiring — is supplied by the composition root, which is where the
+served ecosystems are mounted (see "Ecluse").
 -}
 runServer :: ServerConfig -> Env -> IO ()
 runServer cfg env =
