@@ -16,12 +16,14 @@ map**.
 
 Of the two, the **rule policy is what earns the document its keep**: a set of rules
 with per-rule precedence and value overrides, layered over a built-in default (see
-[Rule policy](#rule-policy)). **Mounts are comparatively flat** — a prefix, a base
-URL, three registry endpoints, a queue backend — so the **single-mount environment
-variables (below) desugar to a one-entry mount map**, and the common launch case
-(one npm mount on the default policy) needs no document at all. Multi-mount
-deployments (see [Multi-Ecosystem Hosting](hosting.md#multi-ecosystem-hosting))
-name their mounts in the document.
+[Rule policy](#rule-policy)). **Mounts are comparatively flat** — three registry
+endpoints and a queue backend, under a prefix
+[derived from the ecosystem](hosting.md#mounts), not configured — so the
+**single-ecosystem environment variables (below) desugar to a one-entry mount map**,
+and the common launch case (one npm mount on the default policy) needs no document
+at all. Multi-ecosystem deployments (see
+[Multi-Ecosystem Hosting](hosting.md#multi-ecosystem-hosting)) declare each
+ecosystem's registries in the document.
 
 The document is supplied in one of two forms:
 
@@ -123,9 +125,9 @@ defines is a **patch** onto it (override precedence and/or values); an entry wit
 **new** name must carry a full `type` (it **adds** a rule); and any entry may set
 `"enabled": false` to **suppress** a default rule. With no rule config supplied at
 all, the default policy applies unchanged. This top-level policy applies to **every
-mount**; a multi-mount deployment may additionally give an individual mount its own
-[refinement](hosting.md#mounts) that merges over it (the `/npm-prod` vs
-`/npm-canary` case).
+mount**; a multi-ecosystem deployment may additionally give an individual
+ecosystem's mount its own [refinement](hosting.md#mounts) that merges over it (e.g.
+a stricter policy on npm than on PyPI).
 
 ```json
 {

@@ -16,7 +16,13 @@ under paths, several ecosystems side by side.
 
 ## Mounts
 
-A **mount** binds a path prefix to:
+**One mount per ecosystem.** The served ecosystem is a mount's identity: there is
+exactly one mount per ecosystem, and its path prefix is **derived from the
+ecosystem, not configured** (npm → `/npm`, PyPI → `/pypi`). An operator chooses
+*which* ecosystems to serve, never how they are addressed — so a prefix can neither
+collide nor be mistyped.
+
+A **mount** binds its ecosystem to:
 
 - a **registry adapter** — the `RegistryClient` for that ecosystem (see
   [Registry Abstraction](registry-model.md#registry-abstraction));
@@ -26,10 +32,10 @@ A **mount** binds a path prefix to:
   `{"error": …}` JSON object; a different shape for PyPI), so the agnostic web layer
   decides an error's *status* but holds no ecosystem *body* shape of its own (see
   [Web Layer → Error model](web-layer.md#error-model));
-- optionally, a **per-mount rule refinement** — a named map that merges over the
+- optionally, a **per-ecosystem rule refinement** — a named map that merges over the
   shared [rule policy](configuration.md#rule-policy) (itself layered on the built-in
-  default), for running several mounts under different policies. Omitted, the mount
-  uses the shared policy unchanged.
+  default), so different ecosystems may run under different policies. Omitted, that
+  ecosystem uses the shared policy unchanged.
 
 A binding carries all of these **as one unit**, so a mount cannot be half-wired and
 there is no ecosystem default to fall back to — its grammar, renderer, and serve
@@ -40,11 +46,10 @@ at `/`, so adding a second ecosystem later never changes an existing consumer's
 URLs — the cost a root mount would impose. (The web-layer prefix is a non-empty
 segment list, making a root mount unrepresentable rather than merely discouraged.)
 
-Mounts are independent, so one process can host several mounts of the *same*
-ecosystem under different policies (e.g. `/npm-prod` vs `/npm-canary`), not
-merely one mount per ecosystem. The single-registry setup described under
-[Configuration](configuration.md#configuration) is the degenerate case — one
-mount, still under its own prefix — and generalizes to a map of `prefix → mount`.
+The mount map is therefore keyed by ecosystem (`ecosystem → mount`). The
+single-ecosystem setup described under
+[Configuration](configuration.md#configuration) — one npm mount — is the degenerate
+case, still under its own derived prefix.
 
 ## Why path prefixes work
 

@@ -25,21 +25,20 @@ level:
 - The Reader migration should land **before S15**, so the request hot path is
   written in the target style rather than retrofitted.
 
-Threads are ordered so the **spine decision (D1)** is settled first; the rest
-depend on it. Work them top-down, one at a time.
+**Substrate that landed mid-discussion (#133, `refactor/server`):** the web layer
+was generalized to a complete per-mount `MountBinding` (prefix + classifier +
+packument deps + error renderer, wired as one unit at the composition root), with
+**mandatory path-mounting** — a root mount is unrepresentable (`bindingPrefix ::
+NonEmpty Text`) — and npm's `{"error": …}` body shape moved out of the agnostic
+layer into an adapter renderer. Several threads below build on this: **D5 shrank**
+to deriving the prefix from the ecosystem and flowing the ecosystem through the
+binding and the config mount, and **D1 resolved** against it (see Resolved, below).
+
+Threads are worked **one at a time**; D1 (the spine) is resolved, so **D2 is next**.
 
 ### Item 1 — config: per-ecosystem generalization
 
-**D1 — Ecosystem representation: value-level vs type-level.** _(spine; everything
-hangs off this)_
-The fork: is `Ecosystem` a **value** a mount carries, or a **type parameter**
-(`Mount e`, `RegistryClient e`, `Rule e`)? Team-lead recommendation: **value-level**,
-consistent with the existing grain (the `RegistryClient`/`MirrorQueue`/`CredentialProvider`
-Handle pattern, the ecosystem-agnostic core, `Ecluse.Ecosystem` as a dispatch tag).
-Type parameters buy compile-time "a PyPI rule can't touch an npm mount" but force
-existential wrapping of a heterogeneous `MountMap` and infect the ecosystem-blind
-server/dispatch/worker layers; the same safety is available from a **fail-fast
-config check** (already the config philosophy). — **Status: in-discussion.**
+> **D1 is resolved** — see [Resolved](#resolved). Outstanding threads: D2–D5.
 
 **D2 — Registry topology generalization.** _(depends on D1)_
 `RegistryTuple {private, public, mirror}` reads as npm-shaped but the three are
@@ -64,30 +63,42 @@ Open question to settle: is the genuinely ecosystem-specific surface really just
 the "namespace/scope"-shaped rules, or is deeper per-ecosystem rule *semantics*
 coming? — **Status: queued.**
 
-**D4 — Cloud coordinates: global → per-mount.** _(largely independent of D1)_
-`mtCredential`/`mtQueue` (the *backends*) are already per-`MirrorTarget`, but
-`AWS_REGION` / `GOOGLE_CLOUD_PROJECT` / `MIRROR_QUEUE_URL` are flat `EnvConfig`
-**globals** — a multi-mount, multi-cloud deployment (one AWS mount, one GCP mount)
-can't express that. Move these coordinates onto the per-mount target. — **Status: queued.**
+**D4 — Cloud auth: concrete global provider, abstracted per-mount consumer.**
+_(largely independent of D1)_
+AWS/GCP credentials are usually **container-level** (instance role / IRSA / ADC /
+workload identity), so the **credential store and its auth state stay global**, not
+per-mount. `AWS_REGION` / `GOOGLE_CLOUD_PROJECT` scope that ambient identity and so
+**stay global** too — a multi-cloud process holds one concrete provider *per cloud*
+in `Env`, keyed by cloud. What is **per-mount** is only the *methodology*: the
+[credential strategy](../docs/architecture/access-model.md) and which backend a
+mount's mirror-write (and `service`/`delegated-cache` read) draws from —
+"abstracted mount-specific consumers, concrete global providers." The genuinely
+per-mount *coordinate* is the target/queue identifier a mount writes to
+(`mtUrl` / `MIRROR_QUEUE_URL`), not the auth that reaches it. Cross-cuts **D6**: the
+provider's token-refresh **state** (the minted short-lived token and its expiry) is
+global mutable state — a `TVar` in `Env`, one per provider. _(Supersedes the earlier
+"move region/project per-mount" framing.)_ — **Status: queued.**
 
-**D5 — Adapter location: global `Env` → per-ecosystem.** _(depends on D1; tied to D2)_
-Today `Env` holds one `envRegistry` ("one npm client reused across every cloud")
-and the classifier is hardcoded (`npmClassifier _mount = Npm.classify` *ignores*
-the mount). Under value-level ecosystem the composition root resolves
-**ecosystem → `RegistryClient`** and the classifier becomes
-`\mount -> classifierFor (mountEcosystem mount)`. The adapter handle can't sit on
-`Config.Mount` without breaking its `Eq`/`Show`; reuse the existing precedent —
-`ServerConfig.scPackumentDeps :: Mount -> Maybe PackumentDeps` keeps function-valued
-deps off `Mount` — so a *resolved/runtime* mount pairs the declarative mount with
-its constructed adapter. — **Status: queued.**
+**D5 — Ecosystem drives the binding & the config mount.**
+_(depends on D1; tied to D2; partly delivered by #133)_
+#133 already moved the web layer to a complete per-mount `MountBinding` (replacing
+the old `Mount -> X` resolver fields and `defaultServerConfig`) and made every
+registry path-mounted. What remains: the binding's `bindingPrefix :: NonEmpty Text`
+is still set free-form (`Ecluse.hs` hard-codes `/npm`) — under D1 it must be
+**derived from the ecosystem**, and the **ecosystem must flow into the binding and
+the `Ecluse.Config` mount** (the env-only single mount still desugars to prefix `/`,
+which the no-root rule forbids — the follow-up #133 flagged for the Config → Server
+wiring, S20). The adapter (`RegistryClient`) is likewise resolved **per-ecosystem**
+at the composition root rather than the single global `envRegistry`. — **Status: queued.**
 
 ### Item 2 — Reader pattern over the request path
 
 **D6 — Reader migration & request-context shape (+ the state idiom).**
 _(depends on D1 for the context's mount shape)_
 We already have `App = ReaderT Env IO` (`MonadReader`/`MonadUnliftIO`); the worker
-runs in it. The holdout is the request hot path, which threads `Env` **and** a
-per-mount `PackumentDeps` explicitly (the parked [issue #121](https://github.com/AlexaDeWit/Ecluse/issues/121)).
+runs in it. The holdout is the request hot path, which threads `Env` **and** the
+mount's per-request deps explicitly (the `PackumentDeps` now carried by the
+`MountBinding`, post-#133; the parked [issue #121](https://github.com/AlexaDeWit/Ecluse/issues/121)).
 Proposal: extend `App` over the handlers and collapse the two-arg thread into a
 request-scoped context (`RequestCtx { ctxEnv, ctxMount }`, or `ReaderT (Env,
 ResolvedMount)`), with dispatch installing the matched mount via `local` after
@@ -96,3 +107,22 @@ routing. **State idiom (decided, recorded so M4 follows it):** shared mutable st
 **in `Env`** under the single `ReaderT` — **no `StateT` layer** (`StateT`-over-`IO`
 loses state across `forkIO`/`async` and gives no shared state; the metadata cache
 already follows the refs-in-`Env` idiom). — **Status: queued.**
+
+---
+
+## Resolved
+
+**D1 — Ecosystem representation & mount identity.** _(resolved 2026-06-23)_
+**Decision:** ecosystem is **value-level** data (not a type parameter); **one mount
+per ecosystem**; the path prefix is **derived from the ecosystem, not configured**
+(npm → `/npm`); the mount map is keyed by ecosystem. Cross-ecosystem rule safety
+(D3) will come from a fail-fast config check, not the type system. The earlier
+"several mounts of the *same* ecosystem / `/npm-prod` vs `/npm-canary`" capability
+was a misread requirement and is **dropped** — "multiple" means multiple
+*ecosystems*.
+**Rendered into:** [`hosting.md` → Mounts](../docs/architecture/hosting.md#mounts)
+and [`configuration.md`](../docs/architecture/configuration.md#configuration).
+**Code still owing** (a pre-S15 hardening slice; see D5): the value-level
+`Ecosystem` on the declarative mount, the `ecosystem → mount` keying, and the
+ecosystem-derived `bindingPrefix`. Not built yet — `Ecluse.hs` still hard-codes
+`/npm` and `Ecluse.Config` still keys by `MountPrefix`.
