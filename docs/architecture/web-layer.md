@@ -164,11 +164,11 @@ appear instantly. This is **in-memory metadata only**; on-disk artifact caching
 stays out of scope, and the mirror remains the durable store.
 
 The cache holds the **anonymous public (gated) leg only**. The trusted **private
-upstream** is the **per-client authority** — it re-authorizes each client's request
+upstream** is the **per-client authority** — it re-authorises each client's request
 with that client's own forwarded credential — so its metadata is **fetched per
 request, never cached**. A cache key carries no credential dimension, so a shared
 private entry would let one client's cached document be served to another client
-within the TTL, bypassing the upstream's per-client authorization (see
+within the TTL, bypassing the upstream's per-client authorisation (see
 [Credential flow and authority → the private upstream's metadata is not cached
 across clients](registry-model.md#the-private-upstreams-metadata-is-not-cached-across-clients)).
 The public leg is anonymous, so a single shared entry crosses no trust boundary and

@@ -24,11 +24,11 @@ credential posture; nothing shares a token across the trust split.
 
 Because the private upstream is the __per-client authority__, its metadata is
 __not cached across clients__: the private leg fetches and parses on every request
-with that client's own credential, so the upstream re-authorizes each client
+with that client's own credential, so the upstream re-authorises each client
 itself. Only the anonymous public leg is cached (one shared document, no per-client
 authority to preserve). Caching the private leg keyed by base URL alone would let
 one client's cached entry serve another client's private document within the TTL,
-bypassing the upstream's authorization — a cross-client disclosure.
+bypassing the upstream's authorisation — a cross-client disclosure.
 
 == Merge, not fallback
 
@@ -250,10 +250,10 @@ whatever resolved (partial-upstream availability).
 
 The private upstream is the per-client authority for who may read what, so its
 metadata is __not__ shared across clients: this leg fetches and parses on __every__
-request with that client's own forwarded token, so the upstream re-authorizes each
+request with that client's own forwarded token, so the upstream re-authorises each
 client itself. Caching it would key on the base URL alone (no credential
 dimension), so within the TTL one client's cache hit would skip the fetch and serve
-another client's private document — bypassing the upstream's authorization. The leg
+another client's private document — bypassing the upstream's authorisation. The leg
 is therefore deliberately kept out of the metadata cache; only the anonymous public
 leg is cached. -}
 fetchPrivateLeg :: Env -> Text -> Maybe Secret -> PackageName -> IO (Maybe (PackageInfo, Value))

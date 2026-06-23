@@ -19,7 +19,7 @@ the upstreams; Écluse holds a credential only to *write* mirrored packages. Eac
 role has a distinct credential behaviour:
 
 - **Private upstream (read)** — Écluse **forwards the client's own credential**
-  (`Authorization` / `_authToken`) verbatim, and the private upstream authorizes.
+  (`Authorization` / `_authToken`) verbatim, and the private upstream authorises.
   The upstream is the authority for who may read what; Écluse adjudicates nothing
   on reads and never substitutes its own identity.
 - **Public upstream (read/fallback)** — queried **anonymously**. The client's
@@ -39,16 +39,16 @@ upstream and nothing else — and never the public upstream.**
 Because the private upstream is the **per-client authority** for who may read what,
 its packument metadata is **not cached across clients**: it is re-consulted on
 **every request**, with that client's **own** forwarded credential, so the upstream
-re-authorizes each client itself. Only the **anonymous public (gated) leg** is held
+re-authorises each client itself. Only the **anonymous public (gated) leg** is held
 in the [metadata cache](web-layer.md#metadata-cache).
 
 The reason is a cross-client disclosure hazard. The cache key carries **no
 credential dimension** (it is the upstream base URL plus the package — a credential
 is never part of a cache key). So if the private leg were cached, one client could
 warm an entry for `@org/secret` and, within the TTL, a differently-scoped or
-unauthorized client would get a cache **hit** — served the first client's private
+unauthorised client would get a cache **hit** — served the first client's private
 document, their own token never validated upstream. Caching the private leg would
-therefore **bypass the upstream's per-client authorization**. The public leg has no
+therefore **bypass the upstream's per-client authorisation**. The public leg has no
 such hazard: it is fetched anonymously, so one shared entry serves every client
 without crossing any trust boundary — there is nothing per-client to preserve.
 
