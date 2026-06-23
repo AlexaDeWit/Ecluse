@@ -180,9 +180,12 @@ renderQueueBackend = \case
 
 {- | How the bearer token that writes to a mount's mirror target is obtained — the
 credential axis of the backend matrix (see
-@docs\/architecture\/cloud-backends.md@ → "Credential Provider"). It is selected
-__only__ for the mirror-target write; reads forward the client's credential
-(private upstream) or are anonymous (public upstream).
+@docs\/architecture\/cloud-backends.md@ → "Credential Provider"). The mirror-target
+write always needs one; under the default @passthrough@ strategy that is the only
+credential a mount holds (reads forward the client's credential to the private
+upstream, or are anonymous to the public). The @service@ \/ @delegated-cache@
+strategies additionally back the private-upstream read with such a provider (see
+@docs\/architecture\/access-model.md@).
 -}
 data CredentialBackend
     = {- | AWS CodeArtifact: a short-lived token minted via @GetAuthorizationToken@

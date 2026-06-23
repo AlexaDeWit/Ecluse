@@ -54,12 +54,13 @@ artifact to verify its integrity before publishing.
 == Authentication
 
 The client accepts an __injected__ bearer token and attaches it to every
-request; it never originates credential policy. Which token to send on which leg
-(forward the client's to the private upstream, strip it before any public fetch,
-use the minted mirror token only to write) is the request pipeline's authority
-model, decided upstream of this module (see
-@docs\/architecture\/registry-model.md@ → "Credential flow and authority"). A
-client with no token sends none.
+request; it never originates credential policy. Which token to send on which leg is
+the request pipeline's authority model, decided upstream of this module: always
+__strip__ the client's token before any public fetch, and use the minted mirror
+token only to write. Whether the client's own token is forwarded to the private
+upstream (the default @passthrough@) or Écluse's own read token is used instead is
+the mount's access strategy (see @docs\/architecture\/access-model.md@). A client
+with no token sends none.
 -}
 module Ecluse.Registry.Npm (
     -- * Construction

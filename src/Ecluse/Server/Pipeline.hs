@@ -13,22 +13,26 @@ own-ETag conditional ("Ecluse.Server.Conditional"), and the serve-outcome status
 
 == Credential authority
 
-The non-negotiable invariant (see
-@docs\/architecture\/registry-model.md@ → "Credential flow and authority"): the
-client's own credential is __forwarded verbatim to the private upstream__ — the
-upstream is the authority for who may read what — and __stripped before any
-public-upstream fetch__, which is always anonymous. Sending an internal token to
-the public registry would be a credential disclosure, so the public leg is built
-with no token at all. The two legs are fetched concurrently, each with its own
-credential posture; nothing shares a token across the trust split.
+This handler implements the default @passthrough@ credential posture (see
+@docs\/architecture\/access-model.md@). The invariant that holds under __every__
+strategy is the __public strip__: the client's credential is __stripped before any
+public-upstream fetch__, which is always anonymous — sending an internal token to the
+public registry would be a credential disclosure, so the public leg is built with no
+token at all. Under @passthrough@ the client's own credential is additionally
+__forwarded verbatim to the private upstream__, which is the authority for who may
+read what. The two legs are fetched concurrently, each with its own credential
+posture; nothing shares a token across the trust split.
 
-Because the private upstream is the __per-client authority__, its metadata is
-__not cached across clients__: the private leg fetches and parses on every request
-with that client's own credential, so the upstream re-authorises each client
-itself. Only the anonymous public leg is cached (one shared document, no per-client
-authority to preserve). Caching the private leg keyed by base URL alone would let
-one client's cached entry serve another client's private document within the TTL,
-bypassing the upstream's authorisation — a cross-client disclosure.
+Because @passthrough@ makes the private upstream the __per-client authority__, its
+metadata is __not cached across clients__ here: the private leg fetches and parses on
+every request with that client's own credential, so the upstream re-authorises each
+client itself, and only the anonymous public leg is cached (one shared document, no
+per-client authority to preserve). Caching the private leg keyed by base URL alone
+would let one client's cached entry serve another client's private document within the
+TTL, bypassing the upstream's authorisation — a cross-client disclosure. (Other
+strategies make the private leg shareable by authorising each serve differently; the
+metadata cache itself stays credential-free regardless — see
+@docs\/architecture\/access-model.md@ → "Caching".)
 
 == Merge, not fallback
 
@@ -142,7 +146,7 @@ decide and serve one packument.
 -}
 data PackumentDeps = PackumentDeps
     { pdPrivateBaseUrl :: Text
-    -- ^ The private upstream base URL; reads forward the client's credential.
+    -- ^ The private upstream base URL; under @passthrough@, reads forward the client's credential.
     , pdPublicBaseUrl :: Text
     -- ^ The public upstream base URL; reads are anonymous (no client credential).
     , pdMountBaseUrl :: Text
@@ -246,19 +250,20 @@ data Contribution = Contribution
     }
 
 {- Resolve the private (trusted) upstream leg, __uncached__, forwarding the client's
-own credential. Returns its coherent (parsed packument, raw @Value@) pair — or
-'Nothing' when the leg is unavailable or its body does not parse. A failed leg is a
-degraded contribution, not an error: the merge serves the best-effort union of
-whatever resolved (partial-upstream availability).
+own credential (the default @passthrough@ posture). Returns its coherent (parsed
+packument, raw @Value@) pair — or 'Nothing' when the leg is unavailable or its body
+does not parse. A failed leg is a degraded contribution, not an error: the merge
+serves the best-effort union of whatever resolved (partial-upstream availability).
 
-The private upstream is the per-client authority for who may read what, so its
-metadata is __not__ shared across clients: this leg fetches and parses on __every__
-request with that client's own forwarded token, so the upstream re-authorises each
-client itself. Caching it would key on the base URL alone (no credential
+Under @passthrough@ the private upstream is the per-client authority for who may read
+what, so its metadata is __not__ shared across clients: this leg fetches and parses on
+__every__ request with that client's own forwarded token, so the upstream re-authorises
+each client itself. Caching it would key on the base URL alone (no credential
 dimension), so within the TTL one client's cache hit would skip the fetch and serve
-another client's private document — bypassing the upstream's authorisation. The leg
-is therefore deliberately kept out of the metadata cache; only the anonymous public
-leg is cached. -}
+another client's private document — bypassing the upstream's authorisation. The leg is
+therefore deliberately kept out of the metadata cache; only the anonymous public leg
+is cached. (How a non-@passthrough@ strategy can instead share this leg safely is the
+serve-time authorisation it adds — see @docs\/architecture\/access-model.md@.) -}
 fetchPrivateLeg :: Env -> Text -> Maybe Secret -> PackageName -> IO (Maybe (PackageInfo, Value))
 fetchPrivateLeg env baseUrl token name = do
     resolved <- tryAny (fetchEntry env baseUrl token name)
