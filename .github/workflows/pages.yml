@@ -1,10 +1,11 @@
 name: Docs
 
-# Publish the library's Haddock API docs to GitHub Pages so they always track
-# the code on main. Runs on every push to main and on demand. This is a separate
-# lifecycle from the PR `gate` in ci.yml — a docs-deploy failure must never block
-# a merge — and, like every workflow here, each action is pinned to a full commit
-# SHA (Dependabot keeps them current).
+# Publish the project site to GitHub Pages so it always tracks the code on main:
+# the home page at the root and the library's Haddock API docs under /api. Runs on
+# every push to main and on demand. This is a separate lifecycle from the PR `gate`
+# in ci.yml — a docs-deploy failure must never block a merge — and, like every
+# workflow here, each action is pinned to a full commit SHA (Dependabot keeps them
+# current).
 on:
   push:
     branches: [main]
@@ -25,7 +26,7 @@ permissions:
 
 jobs:
   deploy:
-    name: Build & deploy Haddock
+    name: Build & deploy site
     runs-on: ubuntu-latest
     environment:
       name: github-pages
@@ -69,9 +70,10 @@ jobs:
       - name: Update package index
         run: nix develop --command make update
 
-      # Builds the library's Haddock and stages it (with .nojekyll) into ./_site.
-      - name: Build Haddock into ./_site
-        run: nix develop --command make docs-site
+      # Assembles the Pages site into ./_site: the home page at the root and the
+      # library Haddock under /api (with .nojekyll at the root).
+      - name: Build the Pages site into ./_site
+        run: nix develop --command make site
 
       # enablement: true turns Pages on via the API on first run, so no manual
       # repo-settings step is needed to bootstrap this.

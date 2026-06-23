@@ -24,7 +24,7 @@ to other tools in this space is in [`ALTERNATIVES.md`](ALTERNATIVES.md).
 > of truth); [`USAGE.md`](USAGE.md) is the deployment **contract**, not a claim
 > that every capability is wired today.
 
-**API documentation:** [Haddock for the library](https://alexadewit.github.io/Ecluse/), auto-published from `main`.
+**API documentation:** [Haddock for the library](https://alexadewit.github.io/Ecluse/api/), auto-published from `main`.
 
 ## Overview
 
