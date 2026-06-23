@@ -124,6 +124,7 @@ the informational benchmark track (M9).
 | **M7** | GCP backends | The Pub/Sub de-risking spike → Pub/Sub `MirrorQueue`, the ADC credential leaf, GCP wiring. **Scheduled after AWS launch.** |
 | **M8** | Release hardening | SLSA build provenance + SBOM attestation; the launch docs & deployment runbook. |
 | **M9** | Performance benchmarking | The benchmark harness + micro / pipeline / load benchmarks, wired into CI as an **informational, non-gating** trend compared against prior baselines. **Never blocks a merge** — a correctness change may knowingly accept a regression. Off the launch critical path. |
+| **M10** | Azure backends | The Service-Bus-vs-Storage-Queues de-risking spike → Azure `MirrorQueue`, the Entra ID credential leaf, Azure composition wiring. **Lowest priority — furthest-out; after AWS *and* GCP.** |
 
 ---
 
@@ -233,6 +234,19 @@ owes also owes a deterministic `U`/`I` test (see [Testing Strategy](../docs/test
 | [S38](slices/S38-pipeline-benchmarks.md) | End-to-end pipeline benchmarks (in-process) | S14, S33, S37 | B |
 | [S39](slices/S39-load-and-memory.md) | Macro load + bounded-memory streaming observations | S15, S37 | B |
 
+### M10 — Azure backends (lowest priority; after AWS & GCP)
+
+The furthest-out track — a third cloud behind the same two handles. Gated on its own
+de-risking spike (the queue decision), sharper than GCP's; the credential and registry
+arms are low-risk. See [Cloud Backends → Azure backends](../docs/architecture/cloud-backends.md#azure-backends-designed-for-furthest-out).
+
+| ID | Slice | Depends on | Tier |
+|----|-------|------------|------|
+| [S47](slices/S47-azure-spike.md) | Azure queue de-risking spike — **Service Bus (REST) vs Storage Queues (Azurite)** decision gate | S18 | I |
+| [S48](slices/S48-azure-queue.md) | Azure `MirrorQueue` backend (per S47) | S02, S47 | I |
+| [S49](slices/S49-entra-credential.md) | Entra ID credential leaf (Managed Identity / Workload Identity Federation) | S16 | S |
+| [S50](slices/S50-azure-composition.md) | Azure composition wiring | S03, S48, S49 | I |
+
 ---
 
 ## Parallelization — ~3 slices in flight
@@ -277,6 +291,11 @@ ordered. The live pointer to current work is [In flight](#in-flight)._
   pass (which then *measures* regressions instead of eyeballing them); `S38` joins
   once the walking skeleton (`S14` / `S33`) lands, `S39` once the tarball path
   (`S15`) is up. **None gate** — they inform.
+- **Azure (M10) is the furthest-out track of all** — sequenced **after GCP** and the
+  lowest priority in the queue. Gated on its own spike (`S47`: Service Bus-over-REST,
+  smoke-only, vs Storage Queues on Azurite — sharper than GCP's emulator gap); the
+  Entra credential leaf (`S49`) and Azure Artifacts publish are low-risk. Purely
+  additive behind the two handles.
 
 ### Critical path to AWS launch
 
