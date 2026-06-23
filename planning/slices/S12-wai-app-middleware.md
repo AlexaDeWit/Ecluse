@@ -89,3 +89,13 @@ The streaming/ETag/cache concerns are S13 — this slice is routing + meta + mid
   *starts and keeps serving under a short timeout* — the correct test for a
   blocking listener. The routing/meta/middleware behaviour itself is covered
   socket-free in `Ecluse.ServerSpec`.
+
+**Reconciliation (post-merge).** The "single root mount" / "root mount = empty
+prefix" model here is **superseded by #122 / #133 (mandatory path-mounting)**: every
+registry is path-mounted, a root mount is now unrepresentable
+(`bindingPrefix :: NonEmpty Text`), and the per-mount unit is a `MountBinding`
+carrying its prefix, classifier, packument deps and error renderer as one
+composition-root-wired unit. The base-hardening track
+([`design-queue.md`](../design-queue.md) D1 / D5) keys the mount map by **ecosystem**
+and derives the prefix from it; the env-only single mount defaults to npm → `/npm`.
+See [hosting.md → Mounts](../../docs/architecture/hosting.md#mounts).

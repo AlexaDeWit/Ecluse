@@ -52,3 +52,12 @@ layer runs in `App`.
 S13, telemetry in S24). The composition root must remain config-driven by S20; here
 it accepts injected handles so tests build an `Env` from doubles. Do not import any
 backend SDK in `Env`/`App` — only the handle records (decoupling invariant).
+
+**Reconciliation (post-merge).** "Request handlers run in plain `IO` taking `Env`"
+is **superseded by the base-hardening Reader migration**
+([`design-queue.md`](../design-queue.md) D6): handlers now run in
+`ReaderT RequestCtx IO` over a per-request `RequestCtx { ctxEnv, ctxMount, … }`,
+reading the matched mount's deps from context. `App = ReaderT Env IO` and the
+`Env`-as-composition-root model this slice established are unchanged — `RequestCtx`
+extends them across the request hot path. See
+[technology-stack.md → Key Decisions](../../docs/architecture/technology-stack.md#key-decisions).

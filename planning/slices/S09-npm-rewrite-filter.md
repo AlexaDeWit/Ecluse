@@ -75,3 +75,12 @@ cross-upstream **merge**, a separate ecosystem-agnostic core slice
 ([S33](S33-packument-merge.md)); do **not** fold merging in here. `latest`-repointing
 within the public set still happens here; the final `latest` over the merged union
 is S33's.
+
+**Reconciliation (post-merge).** The verdict-application logic was later **extracted
+into an agnostic `FilterPlan`** (`Ecluse.Package.Filter`) that the npm adapter
+**replays** (#107 / #119): the ecosystem-agnostic decision (which versions survive,
+the `latest` repoint) lives in the core, and `Ecluse.Registry.Npm.Filter` applies it
+structurally to the raw npm `Value` — the same decision-surface-vs-served-surface
+split S33/S14 use. The acceptance criteria above are unchanged in substance; only the
+home of the agnostic decision moved out of the adapter. See
+[registry-model.md → decision vs served surface](../../docs/architecture/registry-model.md#decision-surface-vs-served-surface).

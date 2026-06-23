@@ -73,3 +73,25 @@ not a crash. "Reject the unknown" via aeson means turning off permissive default
 the merge's fail-loud references too. The mount-map shape must match what S20's
 composition root needs — keep the backend-selection enum here (`sqs`/`pubsub`,
 `codeartifact`/`static`/`adc`).
+
+**Decisions superseding this slice (base-hardening D1–D5).** S03 shipped the config
+loader against the earlier mount shape — a *configured* prefix, a positional
+three-registry *tuple* with a *per-endpoint* credential provider, the map keyed by
+prefix. The base-hardening decisions ([`design-queue.md`](../design-queue.md), now
+final and in implementation) move that model, and the architecture docs already
+reflect it:
+- **Mounts are keyed by ecosystem** (`npm`, `pypi`); the path prefix is **derived
+  from the ecosystem, never configured** (a wrong/colliding prefix is
+  unrepresentable), and the env-only single mount defaults to npm → `/npm`. — _D1, D5;
+  [hosting.md → Mounts](../../docs/architecture/hosting.md#mounts),
+  [configuration.md](../../docs/architecture/configuration.md#configuration)_
+- The three registry roles are a **named-role record (`MountRegistries`)**, not a
+  positional tuple; the private upstream and mirror target may coincide. — _D2_
+- **Credential providers are process-global**; a mount **references** which provider
+  its strategy draws on (no per-endpoint provider), and a reference to an
+  uninitialized provider **fails fast at boot**. — _D4;
+  [cloud-backends.md → Credential Provider](../../docs/architecture/cloud-backends.md#credential-provider),
+  [configuration.md → Validation](../../docs/architecture/configuration.md#validation-fail-fast-reject-the-unknown)_
+
+The conforming config code lands with the base-hardening track (not a DAG slice);
+this note keeps the slice record from contradicting the design of record.

@@ -1,8 +1,8 @@
 # Écluse Delivery Plan
 
 The dependency-ordered DAG of PR-sized slices that takes **Écluse** from its
-current state — the pure functional core — to a launch-ready, releasable proxy
-and through its designed fast-follows.
+functional core, through the merged walking skeleton, to a launch-ready, releasable
+proxy and through its designed fast-follows.
 
 This is **Phase 0** of [`orchestration-strategy.md`](orchestration-strategy.md):
 the architecture is frozen ([`../docs/architecture.md`](../docs/architecture.md)),
@@ -56,21 +56,57 @@ Per-slice files are deliberate: parallel agents (and their status updates) touch
 - `Ecluse.Package` — the full ecosystem-agnostic domain model (`PackageName`,
   `CodeExecSignal`, `Trust`, `Availability`, `Artifact`, `Dependency`, `Person`,
   `PackageDetails`).
-- `Ecluse.Rules` + `Ecluse.Rules.Types` — the **pure** rule tier (the three
-  launch rules), deny-by-default.
+- `Ecluse.Rules` + `Ecluse.Rules.Types` — the **pure** rule tier, deny-by-default
+  with precedence-field, order-independent selection (S05).
 - Mature CI/release infrastructure: the unified `gate`, coverage → Codecov,
-  Nix-store cache, lean CI shell, reproducible OCI image + keyless provenance/SBOM attestations.
+  Nix-store cache, lean CI shell, reproducible OCI image + keyless provenance/SBOM
+  attestations (S31).
 
-**Design-only (no code yet) — what this plan delivers:** the imperative shell
-(`Env`/`App`), the three handles (`RegistryClient`, `MirrorQueue`,
-`CredentialProvider`), the config loader, the npm adapter, the web layer, the
-request pipeline, the AWS backends + mirror worker, the effectful/CVE tier,
-observability, and the GCP backends.
+**Built and merged — the walking skeleton (the packument path, end to end):**
 
-> **One alignment item folded in:** `Ecluse.Rules.evalRules` currently selects by
-> *list order* (deny short-circuits, first allow wins). The architecture specifies
-> *precedence-field*-based, order-independent selection plus an `Unavailable`
-> fourth outcome. Slice **S05** brings the code to the end-state design.
+- **M0** — the imperative shell (`Env`/`App`), the three handles with in-memory
+  doubles, the config loader, `katip` logging, rules-precedence alignment, and the
+  SSRF / input-validation / response-bound guards (S01–S05, S36).
+- **M1** — the npm adapter: wire decoders, projection to the domain model, the
+  `http-client` data plane (fetch/publish), and URL rewrite + packument filtering
+  (S06–S09).
+- **M2 (core)** — the raw-WAI `Application`: pure router, error/denial model,
+  meta-routes + middleware + dispatch, bounded-memory streaming, conditional-GET /
+  ETag, and the metadata cache (S10–S13). _The capability manifest (S34/S35) is the
+  remaining M2 work, off the launch critical path._
+- **M3 (core)** — the cross-upstream packument merge (S33) and the packument path
+  end to end (S14): `GET /{pkg}` flows router → parallel multi-upstream fetch →
+  gate-public / trust-private → merge + filter → serve, under the default
+  `passthrough` credential strategy.
+- Pulled in early: **S16** (the `CredentialProvider` generic wrapper + static leaf,
+  M4) and **S31** (SLSA provenance + SBOM attestation, M8).
+
+> **Refactors layered on the merged slices** (each landed without its own DAG slice,
+> is reflected in the **architecture** docs, and is cross-referenced from the
+> affected slice file): the agnostic `FilterPlan` extraction (#107 / #119);
+> per-source metadata-cache keying with a cached raw document (#111 / #113); the
+> injected route classifier, with npm path grammar moved into the adapter
+> (#106 / #116); the uncached trusted-leg fix for per-client authority (#115 /
+> #117); and the **per-mount error renderer + mandatory path-mounting** refactor
+> (#122 / #133), which introduced `MountBinding` (`bindingPrefix :: NonEmpty Text`,
+> so a root mount is unrepresentable) and moved npm's `{"error": …}` body out of the
+> agnostic serve layer into the adapter renderer.
+
+**Remaining — what this plan still delivers:** the tarball path + demand-driven
+mirror enqueue (S15); the non-default credential strategies (`service` /
+`delegated-cache`, S43–S45); the AWS backends + mirror worker + composition root
+(M4); the effectful / CVE tier (M5); observability (M6); the GCP backends (M7); the
+launch docs + release-hardening tail (M8); the capability manifest (S34 / S35); and
+the informational benchmark track (M9).
+
+> **Base-hardening before S15.** The config / mount / credential / Reader-context
+> generalization decided in [`design-queue.md`](design-queue.md) (D1–D6) is in
+> active implementation ahead of S15, bringing the merged code into line with the
+> already-rendered architecture: ecosystem-keyed mounts with a derived prefix; the
+> `MountRegistries` role record; process-global credential providers a mount
+> *references*; and the `ReaderT RequestCtx IO` request hot path. Its **decision
+> outcomes** are reflected in the affected slice files (S01, S03, S14, S15, S20,
+> S43); per the architect it is **not** a DAG entry of its own.
 
 ---
 
@@ -207,12 +243,14 @@ After every merge the team lead rebases the dependent worktrees onto the new bas
 and re-runs their gate.
 
 The three vertical tracks (foundations, adapter, web) run against the handles in
-parallel, then converge at M3:
+parallel, then converge at M3. _**Waves 1–3 and the M3 convergence (through S14)
+are merged**; the sequence below is the historical record of how the build was
+ordered. The live pointer to current work is [In flight](#in-flight)._
 
 - **Wave 1 — independent roots (no deps):** `S02` (handles), `S06` (npm decoders),
   `S10` (router). _S05 (rules precedence) is also dependency-free and is the
   natural next pull as a slot frees._
-- **Wave 2 (in flight):** `S01` (Env, needs S02), `S05` (rules precedence, root),
+- **Wave 2:** `S01` (Env, needs S02), `S05` (rules precedence, root),
   `S07` (npm projection, needs S06). _`S11` (responses) moves to Wave 3 — it needs
   `S05`, which is pulled forward into Wave 2._
 - **Between waves — quality & alignment pass.** Once a wave's PRs are all merged,
@@ -243,17 +281,25 @@ parallel, then converge at M3:
 ### Critical path to AWS launch
 
 `S02 → S01 → S12 → S13 → S14 → S15 → S20`, with `S06→S07→S08→S09`, `S07→S33`, and
-`S16→{S17,S18}→S19` feeding the join at S20.
+`S16→{S17,S18}→S19` feeding the join at S20. _Merged through **S14**; the live
+frontier is **S15** (built on the post-D6 Reader hot path — see
+[In flight](#in-flight))._
 
 ---
 
 ## In flight
 
-_Wave 1 (S02, S06, S10) and Wave 2 (S01, S05, S07) merged; the inter-wave
-[quality & alignment pass](orchestration-strategy.md#inter-wave-quality--alignment-pass)
-ran (PR #45 — `LoweredHostSet` + a HADDOCK §11 sweep). **Wave 3 in flight:** S11
-(responses) merged; S03 (config) and S08 (npm data plane) in review; S04 (logging),
-S16 (credential wrapper), and S12 (WAI app, needs S11) are the next pulls._
+_The **walking skeleton is merged** — M0, M1, M2 (core) and M3 (core: S33 packument
+merge, S14 packument path), plus S16 (credential wrapper) and S31 (provenance/SBOM);
+see [Current state](#current-state-the-baseline-this-plan-builds-on). No feature
+slice is in review right now._
+
+_The active work is the **base-hardening track** (config / mount / credential /
+Reader-context generalization — [`design-queue.md`](design-queue.md) D1–D6), being
+implemented ahead of [S15](slices/S15-tarball-path.md) to bring the merged code into
+line with the already-rendered architecture; its decisions are final and it is not a
+DAG slice. Once it lands, the critical path resumes at **S15** (tarball path), then
+**M4** (AWS)._
 
 ---
 

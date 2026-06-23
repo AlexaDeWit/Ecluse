@@ -42,3 +42,10 @@ the whole URL surface.
 the scoped-name encodings early so downstream never re-checks. Keep `classify`
 ecosystem-native (mount dispatch/prefix-strip is S12) — this function never sees the
 mount prefix.
+
+**As-built / reconciliation.** `Route` / `classify` shipped in
+`Ecluse.Server.Route`. A later refactor (#106 / #116) **injected the route
+classifier** into the server and **relocated the npm-specific path grammar into the
+adapter** (`Ecluse.Registry.Npm.Route`), so dispatch is ecosystem-agnostic and each
+mount supplies its own classifier — the generic `Route` type and the agnostic split
+stay as specified here.
