@@ -136,8 +136,7 @@ The implementer's own "it works" does not count; evidence does.
 
 - **Stage A — requirements.** Every acceptance criterion is met *and backed by a
   deterministic, gating test* (unit or integration) — a non-gating smoke test
-  detects drift but never stands in for a criterion (CONTRIBUTING → Testing
-  Strategy → *What gates, and what doesn't*); nothing in the slice's architecture
+  detects drift but never stands in for a criterion ([Testing Strategy](../docs/testing.md) → *What gates, and what doesn't*); nothing in the slice's architecture
   scope is silently dropped; **limited scope** (changes stay within the slice's files; touching others needs strong justification); documentation is updated in the *same* PR
   (per [`../AGENTS.md`](../AGENTS.md) → Documentation Policy).
 - **Stage B — quality & security.** Idiomatic Haskell per

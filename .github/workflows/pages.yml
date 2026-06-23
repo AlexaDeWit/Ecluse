@@ -49,8 +49,7 @@ jobs:
       # dependency-plan key as every other job (flake.lock + cabal.project +
       # cabal.project.freeze) instead of the old `**/*.cabal` key that churned a
       # separate ~0.3 GB lineage on every module add. Pages runs after build-test on
-      # the same main push, so the store is warm. See CONTRIBUTING.md → "Cache
-      # management".
+      # the same main push, so the store is warm. See AGENTS.md → "CI & Security".
       - name: Restore cabal store
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:

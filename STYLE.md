@@ -6,8 +6,7 @@ coding agents can follow it without guesswork.
 
 It covers *how code is written* — formatting, documentation, naming, function
 design. For *where code lives* (module layout, the `Ecluse.<Area>` namespacing,
-the `.Types` split), see [`CONTRIBUTING.md`](CONTRIBUTING.md) → "Codebase
-Layout". For *why the stack is what it is* (relude, raw WAI, the effect style),
+the `.Types` split), see [`docs/getting-started.md`](docs/getting-started.md) → "Codebase Layout". For *why the stack is what it is* (relude, raw WAI, the effect style),
 see [`docs/architecture.md`](docs/architecture.md).
 
 > **The golden rule: when in doubt, match the nearest existing module.**
@@ -199,7 +198,7 @@ weakening the committed flags.
 
 This section is the durable how-to for *structuring* modules. The *current*
 concrete module list is the module index of the published Haddock (and the root
-`Ecluse` synopsis); `CONTRIBUTING.md` → "Codebase Layout" records the
+`Ecluse` synopsis); [`docs/getting-started.md`](docs/getting-started.md) → "Codebase Layout" records the
 project-specific layout patterns. The principles below are what decide where new
 code goes.
 

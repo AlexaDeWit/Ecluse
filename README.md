@@ -70,53 +70,21 @@ for how the attestations are produced.
 
 ## Development
 
-See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full contributor guide —
-codebase conventions, testing strategy, CI / repository requirements, and the
-[AI-assisted contribution](CONTRIBUTING.md#ai-assisted-contributions) policy; all
-participation is governed by our [Code of Conduct](CODE_OF_CONDUCT.md). A quick
-start follows.
-
-### Prerequisites
-
-**[Nix](https://nixos.org/) with flakes enabled is a hard dependency.** The whole
-toolchain — GHC 9.10, Cabal, fourmolu, hlint, Semgrep — comes from the dev shell,
-pinned by `flake.lock`. There is no supported system-level build: without Nix
-you're on your own to reproduce the exact toolchain by hand, which is a long crawl
-through the desert. Just install Nix.
-
-A running Docker daemon is required only for the integration test suite (ephemeral
-containers via `testcontainers` / `ministack`); the unit suite needs nothing
-beyond the dev shell.
-
-### Getting started
-
-Enter the dev shell, then drive everything through `make` (run `make help` for
-the full list):
+**[Nix](https://nixos.org/) with flakes is a hard dependency** — the whole
+toolchain (GHC 9.10, Cabal, fourmolu, hlint, Semgrep) comes from the pinned dev
+shell. Get productive in three commands:
 
 ```bash
-nix develop        # enter the Nix dev shell — direnv does this automatically
-
-make build         # build library, executable, and tests
-make test          # fast, gating unit suite
-make check         # build + test + doctest + format + lint + sast (what the CI gate runs)
-make run           # run the proxy
+nix develop        # enter the dev shell (direnv does this automatically)
+make build         # build the library, executable, and tests
+make check         # everything the CI gate runs
 ```
 
-Run `make` **from inside** the dev shell (`nix develop` / direnv). Targets also
-work from a bare terminal — each wraps itself in `nix develop --command` — but
-that re-enters the shell once per target, so it's only meant for the occasional
-one-off. For a hermetic, reproducible build/checks — sandboxed, what you'd ship —
-use `make nix-build` and `make nix-check`.
-
-### Continuous integration
-
-Every push and pull request runs [`.github/workflows/ci.yml`](.github/workflows/ci.yml):
-build, unit and integration tests, format & lint, and Semgrep static analysis,
-all feeding a single `gate` job (the one required status check). The smoke suite
-(live-registry checks) also runs but is allowed to fail and does not gate. CI
-uses the same Nix dev shell as local development (pinned by `flake.lock`), so it
-validates against the exact same toolchain. See [`CONTRIBUTING.md`](CONTRIBUTING.md)
-for details.
+Full setup, the `make` workflow, reproducible/hermetic builds, and dependency
+locking are in **[Getting Started](docs/getting-started.md)**. The contribution
+process — conventions, DCO sign-off, and the AI-assistance policy — is in
+[`CONTRIBUTING.md`](CONTRIBUTING.md); all participation is governed by our
+[Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Project Structure
 

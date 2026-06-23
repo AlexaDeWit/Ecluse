@@ -98,7 +98,7 @@ be **merged** before it can start. Tier = the test suite(s) it owes
 (`U`=unit, `I`=integration, `S`=smoke, `B`=bench — informational, non-gating).
 `S` and `B` never gate: a smoke test detects drift against a live service and
 **never discharges an acceptance criterion on its own**, so any behaviour a slice
-owes also owes a deterministic `U`/`I` test (see CONTRIBUTING → Testing Strategy →
+owes also owes a deterministic `U`/`I` test (see [Testing Strategy](../docs/testing.md) →
 *What gates, and what doesn't*).
 
 ### M0 — Shell, handles & foundations
