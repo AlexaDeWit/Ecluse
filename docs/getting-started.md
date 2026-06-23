@@ -113,7 +113,7 @@ project-specific pattern below.
   [Cloud Backends → Handles](architecture/cloud-backends.md#handles-records-of-functions).
 
 For the **current module list**, read the module index of the
-[published Haddock](https://alexadewit.github.io/Ecluse/) — each module's one-line
+[published Haddock](https://alexadewit.github.io/Ecluse/api/) — each module's one-line
 summary is its header — and the root [`Ecluse`](../src/Ecluse.hs) module's "How the
 code is organized" synopsis for the narrative grouping. Both live with the code
 and update with it, so they cannot drift; this guide deliberately does not

@@ -23,7 +23,7 @@ HADDOCK_FLAGS := --haddock-hyperlink-source --haddock-quickjump
 .PHONY: help update build test test-integration test-smoke test-all doctest \
         coverage freeze gen-version-fixtures format format-check lint sast \
         cabal-check lint-workflows weeder check run docs \
-        docs-check docs-site nix-build nix-check docker-build docker-push sbom scan \
+        docs-check docs-site site nix-build nix-check docker-build docker-push sbom scan \
         scan-vulnix clean
 
 help: ## Show this help
@@ -151,14 +151,23 @@ docs: ## Build hyperlinked, searchable Haddock HTML for the library and open it
 docs-check: ## Build Haddock for the CI gate (our library only; no dep docs, no source links)
 	$(NIX) cabal haddock lib:ecluse --haddock-quickjump --disable-documentation
 
-# Same docs, staged into ./_site for the GitHub Pages workflow to upload. The
-# Haddock output path embeds the arch + GHC version, so we locate it rather than
-# hard-code it. .nojekyll keeps Pages from touching the static assets.
-docs-site: ## Build Haddock and stage it into ./_site for GitHub Pages
+# Build the library Haddock and stage it under ./_site/api for the GitHub Pages
+# workflow to upload — the site root is left free for the home page (see `site`).
+# The Haddock output path embeds the arch + GHC version, so we locate it rather
+# than hard-code it. .nojekyll (at the _site root) keeps Pages from touching the
+# static assets.
+docs-site: ## Build Haddock and stage it under ./_site/api for GitHub Pages
 	$(NIX) cabal haddock lib:ecluse $(HADDOCK_FLAGS)
 	@src=$$(find dist-newstyle -path '*/doc/html/ecluse' -type d | head -n1); \
-	  rm -rf _site && mkdir -p _site && cp -R "$$src"/. _site/ && touch _site/.nojekyll; \
-	  echo "Staged Haddock into ./_site"
+	  rm -rf _site && mkdir -p _site/api && cp -R "$$src"/. _site/api/ && touch _site/.nojekyll; \
+	  echo "Staged Haddock into ./_site/api"
+
+# Assemble the full Pages site that the workflow uploads: the home page at the
+# root (from web/) and the Haddock under /api (via docs-site). Kept separate from
+# docs-site so the gate-repro / local Haddock build stays about the docs alone.
+site: docs-site ## Assemble the Pages site (home page at /, Haddock under /api)
+	@cp -R web/. _site/
+	@echo "Assembled ./_site (home page at /, Haddock under /api)"
 
 nix-build: ## Build the release artifact via Nix (hermetic)
 	nix build
