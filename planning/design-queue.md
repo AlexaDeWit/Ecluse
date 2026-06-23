@@ -34,23 +34,11 @@ layer into an adapter renderer. Several threads below build on this: **D5 shrank
 to deriving the prefix from the ecosystem and flowing the ecosystem through the
 binding and the config mount, and **D1 resolved** against it (see Resolved, below).
 
-Threads are worked **one at a time**; D1–D4 are resolved, so **D5 is next** (then D6).
+Threads are worked **one at a time**; D1–D5 are resolved, so **D6 is the last thread**.
 
 ### Item 1 — config: per-ecosystem generalization
 
-> **D1–D4 resolved** — see [Resolved](#resolved). Outstanding in Item 1: **D5**.
-
-**D5 — Ecosystem drives the binding & the config mount.**
-_(depends on D1; tied to D2; partly delivered by #133)_
-#133 already moved the web layer to a complete per-mount `MountBinding` (replacing
-the old `Mount -> X` resolver fields and `defaultServerConfig`) and made every
-registry path-mounted. What remains: the binding's `bindingPrefix :: NonEmpty Text`
-is still set free-form (`Ecluse.hs` hard-codes `/npm`) — under D1 it must be
-**derived from the ecosystem**, and the **ecosystem must flow into the binding and
-the `Ecluse.Config` mount** (the env-only single mount still desugars to prefix `/`,
-which the no-root rule forbids — the follow-up #133 flagged for the Config → Server
-wiring, S20). The adapter (`RegistryClient`) is likewise resolved **per-ecosystem**
-at the composition root rather than the single global `envRegistry`. — **Status: queued.**
+> **Item 1 complete** — D1–D5 all resolved; see [Resolved](#resolved).
 
 ### Item 2 — Reader pattern over the request path
 
@@ -139,3 +127,20 @@ more rules and usages accrete; touches `Ecluse.Rules.Types`, `Ecluse.Rules`,
 `DenyInstallTimeExecution`); `AllowScope` → keep as the agnostic "namespace" concept
 the domain model already carries (abstaining where absent), optionally
 `AllowNamespace` — final identifiers the architect's call.
+
+**D5 — Ecosystem drives the binding & the config mount.** _(resolved 2026-06-23)_
+**Decision:** the config document's `mounts` object is **keyed by ecosystem name**
+(`npm`, `pypi`); the path prefix is **derived** from that key, never declared (a
+wrong/colliding prefix is unrepresentable). The env-only single-mount path defaults
+to ecosystem = **npm** and derives `/npm` — closing the #133 gap where it desugared
+to `/`, which the no-root rule forbids. The composition root resolves **ecosystem →
+`RegistryClient` + classifier + derived `bindingPrefix`**, producing one
+`MountBinding` per ecosystem.
+**Rendered into:** [`configuration.md`](../docs/architecture/configuration.md#configuration)
+(mounts keyed by ecosystem); the model is in
+[`hosting.md` → Mounts](../docs/architecture/hosting.md#mounts) (D1).
+**Code still owing** — this *is* the S20-flagged Config → Server wiring, folded into
+the pre-S15 hardening slice: re-key `Ecluse.Config`'s `MountMap` by ecosystem, add the
+value-level `Ecosystem` to the declarative mount, derive `bindingPrefix`, default the
+env-only mount to npm, and resolve `ecosystem → RegistryClient` at the composition
+root (replacing the single global `envRegistry`).

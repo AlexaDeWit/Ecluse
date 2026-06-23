@@ -23,7 +23,9 @@ endpoints and a queue backend, under a prefix
 and the common launch case (one npm mount on the default policy) needs no document
 at all. Multi-ecosystem deployments (see
 [Multi-Ecosystem Hosting](hosting.md#multi-ecosystem-hosting)) declare each
-ecosystem's registries in the document.
+ecosystem's registries in the document's `mounts` object, **keyed by ecosystem name**
+(`npm`, `pypi`) — the path prefix is derived from that key, never declared, so a
+wrong or colliding prefix is unrepresentable.
 
 The document is supplied in one of two forms:
 
