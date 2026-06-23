@@ -20,10 +20,15 @@ pr: null
 > `delegated-cache` strategy: keep the upstream as the authority for retrievability,
 > but reuse the cached compute — "the upstream decides; we cache the result."_
 
-**Goal.** Under `delegated-cache`, the private leg is **service-fetched and shared**
-(S44), but **every cache hit is gated by a fresh per-request authorisation probe**
-against the upstream before it is served. This recovers caching without making the
-edge the authority and without holding any caller-credential state.
+**Goal.** Under `delegated-cache`, the private leg is **shared**, and **every cache
+hit is gated by a fresh per-request authorisation probe** against the upstream before
+it is served — that probe, not how the entry was populated, is what makes a shared
+private entry safe. This recovers caching without making the edge the authority and
+without holding any caller-credential state. The shared entry may be **service-
+populated** (reusing the S44 read path; proactively warmable) or **caller-populated**
+(filled by the first authorised caller's forwarded token, holding no read credential);
+populate is an orthogonal operational choice (see
+[access-model.md → Caching](../../docs/architecture/access-model.md#caching)).
 
 **Acceptance criteria.**
 - [ ] Before serving a `delegated-cache` hit, Écluse issues an **authorisation probe**

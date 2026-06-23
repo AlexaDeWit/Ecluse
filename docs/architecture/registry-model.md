@@ -23,9 +23,11 @@ upstream wants on the wire* (credential supply). The strategies are detailed in 
 - **Private upstream (read)** — depends on the mount's strategy. Under the default
   **`passthrough`**, Écluse **forwards the client's own credential**
   (`Authorization` / `_authToken`) verbatim and the upstream authorises each request
-  (Écluse substitutes no identity). Under **`service`** / **`delegated-cache`**,
-  Écluse reads with its **own** [`CredentialProvider`](cloud-backends.md#credential-provider)
-  token and authority moves to the edge or to a per-request probe respectively (see
+  (Écluse substitutes no identity). Under **`service`**, Écluse reads with its **own**
+  [`CredentialProvider`](cloud-backends.md#credential-provider) token and authority
+  moves to the edge. Under **`delegated-cache`** the upstream stays the authority via
+  a cheap per-request probe, and the shared entry is filled either by the caller's
+  forwarded token or by Écluse's own token — an orthogonal population choice (see
   [credential strategies](access-model.md#credential-strategies-per-mount)).
 - **Public upstream (read/fallback)** — queried **anonymously** under every strategy.
   The client's credential is **never** forwarded here; sending an internal token to
@@ -48,9 +50,11 @@ cached across clients**: it is re-consulted on **every request**, with that clie
 **own** forwarded credential, so the upstream re-authorises each client itself. Only
 the **anonymous public (gated) leg** is held in the
 [metadata cache](web-layer.md#metadata-cache). (The **`service`** and
-**`delegated-cache`** strategies fetch the private leg with Écluse's own identity and
-*do* share it — safely, because the bytes are identity-independent or re-authorised
-per request before serving; see [Access & Credential Model → Caching](access-model.md#caching).)
+**`delegated-cache`** strategies *do* share the private leg — safely, because the
+bytes are identity-independent and each serve is freshly authorised: the edge under
+`service`, a per-request probe under `delegated-cache`. How the shared entry is
+populated is an orthogonal choice; see
+[Access & Credential Model → Caching](access-model.md#caching).)
 
 The reason is a cross-client disclosure hazard. The cache key carries **no
 credential dimension** (it is the upstream base URL plus the package — a credential

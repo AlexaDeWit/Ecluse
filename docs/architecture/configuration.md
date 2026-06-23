@@ -79,11 +79,14 @@ or a static token.
 [Access & Credential Model](access-model.md)). Under the default **`passthrough`**,
 reads carry **no Écluse credential**: the private upstream receives the **client's**
 forwarded token (it is the authority for reads) and the public upstream is queried
-anonymously with the client's token **stripped**. Under **`service`** /
-**`delegated-cache`**, Écluse reads the private upstream with its **own**
-`CredentialProvider` token (which is what lets the private leg be cached). The public
-upstream is anonymous under every strategy — and the client's token is **never**
-forwarded there. (If a public mirror itself requires auth, set a separate
+anonymously with the client's token **stripped**. Under **`service`** — and a
+**service-populated `delegated-cache`** — Écluse reads the private upstream with its
+**own** `CredentialProvider` token; a **caller-populated `delegated-cache`** keeps
+forwarding the client's token, so it needs no read credential. (What lets the private
+leg be *cached* is the strategy's serve-time authorisation — the edge or a probe —
+not the populate; see [Access & Credential Model → Caching](access-model.md#caching).)
+The public upstream is anonymous under every strategy — and the client's token is
+**never** forwarded there. (If a public mirror itself requires auth, set a separate
 `PUBLIC_UPSTREAM_TOKEN` — Écluse's own, never the client's.) Minting these
 credentials from a cloud identity keeps long-lived secrets out of config.
 
