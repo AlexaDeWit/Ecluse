@@ -198,7 +198,7 @@ data CredentialBackend
       @"adc"@).
       -}
       AdcCredential
-    deriving stock (Eq, Show)
+    deriving stock (Eq, Ord, Show)
 
 {- | Parse a 'CredentialBackend' from its wire name, naming the accepted set on
 failure.
@@ -265,6 +265,14 @@ data EnvConfig = EnvConfig
     {- ^ The inbound client auth token clients must present (@PROXY_AUTH_TOKEN@);
     'Nothing' leaves the proxy open to the network layer.
     -}
+    , cfgMirrorTargetToken :: Maybe Text
+    {- ^ The static bearer token Écluse writes to the mirror target with
+    (@MIRROR_TARGET_TOKEN@), when the target is reached with a fixed credential
+    rather than a cloud-minted one. It is the token material behind a mount that
+    names the @static@ credential backend; 'Nothing' leaves no static provider
+    initialized, so a mount that names @static@ then fails the boot-time
+    credential-reference check.
+    -}
     , cfgHelpMessage :: Maybe Text
     -- ^ A custom string appended to every denial message (@PROXY_HELP_MESSAGE@).
     , cfgCveSyncInterval :: NominalDiffTime
@@ -321,6 +329,7 @@ envParser =
         <*> optionalText "AWS_REGION"
         <*> optionalText "GOOGLE_CLOUD_PROJECT"
         <*> Env.sensitive (optionalText "PROXY_AUTH_TOKEN")
+        <*> Env.sensitive (optionalText "MIRROR_TARGET_TOKEN")
         <*> optionalText "PROXY_HELP_MESSAGE"
         <*> Env.var cveIntervalReader "CVE_SYNC_INTERVAL_SECONDS" (Env.def defaultCveSyncInterval)
         -- A non-negative seconds count: zero is accepted on purpose, disabling the

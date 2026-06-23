@@ -133,6 +133,7 @@ fullEnv =
     , ("MIRROR_QUEUE_URL", "projects/p/topics/t")
     , ("AWS_REGION", "eu-west-1")
     , ("PROXY_AUTH_TOKEN", "s3cr3t")
+    , ("MIRROR_TARGET_TOKEN", "mirror-write")
     , ("PROXY_HELP_MESSAGE", "ask #platform")
     , ("CVE_SYNC_INTERVAL_SECONDS", "60")
     , ("METADATA_CACHE_TTL_SECONDS", "30")
@@ -168,6 +169,7 @@ envLayerSpec = describe "parseEnvPure" $ do
                 cfgAwsRegion cfg `shouldBe` Just "eu-west-1"
                 cfgGoogleProject cfg `shouldBe` Nothing
                 cfgAuthToken cfg `shouldBe` Just "s3cr3t"
+                cfgMirrorTargetToken cfg `shouldBe` Just "mirror-write"
                 cfgHelpMessage cfg `shouldBe` Just "ask #platform"
                 cfgCveSyncInterval cfg `shouldBe` (60 :: NominalDiffTime)
                 cfgCacheTtl cfg `shouldBe` (30 :: NominalDiffTime)
@@ -186,6 +188,7 @@ envLayerSpec = describe "parseEnvPure" $ do
                 cfgCacheMaxEntries cfg `shouldBe` 1024
                 cfgAwsRegion cfg `shouldBe` Nothing
                 cfgAuthToken cfg `shouldBe` Nothing
+                cfgMirrorTargetToken cfg `shouldBe` Nothing
                 cfgHelpMessage cfg `shouldBe` Nothing
                 cfgLogFormat cfg `shouldBe` JsonLog
 

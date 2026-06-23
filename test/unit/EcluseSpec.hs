@@ -7,10 +7,12 @@ import Network.HTTP.Client (Manager, defaultManagerSettings, newManager)
 import Network.Wai (Application)
 import Test.Hspec
 import Test.Hspec.Wai
-import UnliftIO (timeout)
+import UnliftIO (timeout, try)
 import UnliftIO.Exception (throwString)
 
-import Ecluse (mountBindingFor, npmServerConfig, run)
+import System.Environment (setEnv, unsetEnv)
+
+import Ecluse (BootAborted (..), mountBindingFor, npmServerConfig, orExit, run)
 import Ecluse.Credential (AuthToken (..), CredentialProvider, mkSecret, staticProvider)
 import Ecluse.Ecosystem (Ecosystem (..))
 import Ecluse.Env (Env, newEnv)
@@ -62,17 +64,56 @@ in-process — so the actual mount the composition root wires is exercised, no s
 npmApp :: IO Application
 npmApp = application npmServerConfig <$> newTestEnv
 
+{- | A valid minimal environment for the config-driven 'run': the three required
+URLs, a static mirror-target token so the env single-mount's @static@ credential
+reference resolves, and an ephemeral port so the brief blocking listen does not
+collide with the conventional default. The document-loading path is exercised
+separately by layering @PROXY_CONFIG@ on top of this base.
+-}
+runEnv :: [(String, String)]
+runEnv =
+    [ ("PRIVATE_UPSTREAM_URL", "https://private.example.test")
+    , ("MIRROR_TARGET_URL", "https://mirror.example.test")
+    , ("MIRROR_QUEUE_URL", "https://sqs.example.test/q")
+    , ("MIRROR_TARGET_TOKEN", "mirror-write-token")
+    , ("PROXY_PORT", "0")
+    ]
+
 spec :: Spec
 spec = do
     -- The umbrella module is the composition root the @ecluse@ executable calls
     -- into. It lives in the library (not app/Main.hs) so it is exercised here
     -- rather than only through the binary, and stays linked into the unit suite
-    -- where scripts/coverage.sh can see it. 'run' assembles the root and starts
-    -- the blocking server, so under a short timeout it keeps serving rather than
-    -- returning — the liveness check that it wires up and starts without throwing.
-    describe "run" $
-        it "assembles the composition root and starts serving (blocks) without throwing" $
-            timeout 100000 run `shouldReturn` Nothing
+    -- where scripts/coverage.sh can see it. 'run' parses configuration, validates
+    -- it, and starts the blocking server, so over a valid minimal env it keeps
+    -- serving under a short timeout — the liveness check that the config-driven
+    -- root wires up and starts without throwing. The static mirror-target token is
+    -- supplied so the env single-mount's @static@ credential reference resolves.
+    describe "run" $ do
+        it "boots from the environment layer alone (no document) and serves" $ do
+            unsetEnv "PROXY_CONFIG"
+            traverse_ (uncurry setEnv) runEnv
+            outcome <- timeout 100000 run
+            traverse_ (unsetEnv . fst) runEnv
+            outcome `shouldBe` Nothing
+
+        it "boots with an inline PROXY_CONFIG document and serves" $ do
+            traverse_ (uncurry setEnv) runEnv
+            setEnv "PROXY_CONFIG" "{\"rules\":{}}"
+            outcome <- timeout 100000 run
+            unsetEnv "PROXY_CONFIG"
+            traverse_ (unsetEnv . fst) runEnv
+            outcome `shouldBe` Nothing
+
+    describe "orExit (boot fail-fast)" $ do
+        it "yields the value on a Right (a passing boot phase)" $
+            orExit (const "unused") (Right 7 :: Either () Int) `shouldReturn` 7
+
+        it "reports the failure and aborts the boot on a Left" $ do
+            outcome <- try (orExit (const "boot rejected") (Left ()) :: IO ()) :: IO (Either BootAborted ())
+            case outcome of
+                Left BootAborted -> pure ()
+                Right () -> expectationFailure "expected the boot to abort"
 
     describe "npmServerConfig — the composed npm front door" $
         -- Drive the real composition the composition root wires (npmServerConfig),

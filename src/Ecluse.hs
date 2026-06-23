@@ -83,21 +83,44 @@ module Ecluse (
     npmServerConfig,
     mountBindingFor,
 
+    -- * Composition glue (exposed for direct testing)
+    mirrorWriteProvider,
+    orExit,
+    BootAborted (..),
+
     -- * Default handles
     unconfiguredRegistry,
     unconfiguredCredentials,
 ) where
 
+import Data.Text qualified as T
+import Data.Text.IO qualified as TIO
+import Data.Time (getCurrentTime)
 import Katip (Environment (Environment))
 import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 import System.IO.Error (userError)
 import UnliftIO (concurrently_, throwIO)
 
+import Ecluse.Composition (
+    CredentialProviders,
+    initCredentialProviders,
+    planMounts,
+    renderBootError,
+ )
+import Ecluse.Composition qualified as Composition
+import Ecluse.Config (
+    ConfigDoc,
+    CredentialBackend (StaticCredential),
+    EnvConfig (cfgLogFormat, cfgPort),
+    decodeDocument,
+    parseEnv,
+    renderEnvErrors,
+ )
 import Ecluse.Credential (AuthToken (..), CredentialProvider, mkSecret, staticProvider)
 import Ecluse.Ecosystem (Ecosystem (Npm), prefixFor)
 import Ecluse.Env (Env, withEnv)
-import Ecluse.Log (LogFormat (JsonLog), newLogEnv)
+import Ecluse.Log (newLogEnv)
 import Ecluse.Queue (newInMemoryQueue)
 import Ecluse.Registry (
     ParseError (..),
@@ -105,54 +128,111 @@ import Ecluse.Registry (
  )
 import Ecluse.Registry.Npm.Route qualified as Npm
 import Ecluse.Registry.Npm.Serve (npmRenderer)
-import Ecluse.Server (MountBinding (..), ServerConfig, mkServerConfig)
+import Ecluse.Server (MountBinding (..), ServerConfig (scPort), mkServerConfig)
 import Ecluse.Server qualified as Server
-import Ecluse.Server.Cache (defaultCacheConfig, newMetadataCache)
-import Ecluse.Server.Pipeline (PackumentDeps)
+import Ecluse.Server.Cache (newMetadataCache)
+import Ecluse.Server.Context (PackumentDeps)
 
 {- | Start Écluse: the entry point the @ecluse@ executable runs (see "Main").
 
-It assembles the composition root — the handles plus a shared HTTP @Manager@ — into
-an 'Env', then runs the server and the mirror worker __concurrently__ over that
-single 'Env' ('runServer' and 'runWorker'). Bracketing the 'Env' for the
-lifetime of both means their shared resources are torn down along every exit
-path.
+It assembles the composition root from configuration: it parses the environment
+layer and the optional config document, __validates everything and fails fast at
+boot__ on any problem (a malformed env, an unresolved rule policy, a configured
+mount with no adapter, a credential reference that does not resolve), aggregating
+the failures so a single run reports them all. On success it builds the handles —
+the shared HTTP @Manager@, the metadata cache, the logger, and the
+process-global credential provider — into an 'Env', derives the served mount
+bindings, then runs the server and the mirror worker __concurrently__ over that
+single 'Env' ('runServer' and 'runWorker'). Bracketing the 'Env' for the lifetime
+of both means their shared resources are torn down along every exit path.
 -}
 run :: IO ()
 run = do
+    env <- parseEnv >>= orExit renderEnvErrors
+    mDoc <- loadDocument
+    providers <- initCredentialProviders env
+    bindings <- orExit (T.unlines . map renderBootError) (planMounts mountBindingFor getCurrentTime providers env mDoc)
+    let serverConfig = (mkServerConfig bindings){scPort = cfgPort env}
     manager <- HTTP.newManager tlsManagerSettings
     queue <- newInMemoryQueue
-    metadataCache <- newMetadataCache defaultCacheConfig
-    logEnv <- newLogEnv JsonLog (Environment "production")
-    withEnv unconfiguredRegistry queue unconfiguredCredentials manager metadataCache logEnv runServices
+    metadataCache <- newMetadataCache (Composition.cacheConfigFor env)
+    logEnv <- newLogEnv (cfgLogFormat env) (Environment "production")
+    withEnv unconfiguredRegistry queue (mirrorWriteProvider providers) manager metadataCache logEnv (runServices serverConfig)
+
+{- | Read the optional structured config document from the @PROXY_CONFIG@ env blob,
+decoding it strictly. 'Nothing' when unset — an env-only deployment supplies no
+document and runs on the built-in default policy. A set-but-undecodable blob is a
+fail-fast boot error (an operator typo must not be silently ignored).
+
+@PROXY_CONFIG@ is the documented, named source for the inline document (see
+@docs\/architecture\/configuration.md@ → "Configuration"); the alternative
+file form has no documented env var for its path yet, so it is not read here.
+-}
+loadDocument :: IO (Maybe ConfigDoc)
+loadDocument =
+    lookupEnv "PROXY_CONFIG" >>= \case
+        Nothing -> pure Nothing
+        Just blob -> Just <$> orExit ("PROXY_CONFIG: " <>) (decodeDocument (encodeUtf8 blob))
+
+{- The process-global mirror-write credential provider stored in 'Env' for the
+worker. In the collapses-to-one common case there is a single provider; the
+@static@ leaf is selected when a static write token is configured, else the
+no-backend placeholder holds the slot (the worker — its only consumer — is a stub
+in this build; the per-ecosystem worker-publish wiring lands with the worker
+slice). A mount that references an uninitialized provider has already failed the
+boot-time credential check by this point. -}
+mirrorWriteProvider :: CredentialProviders -> CredentialProvider
+mirrorWriteProvider providers =
+    fromMaybe unconfiguredCredentials (Composition.lookupProvider StaticCredential providers)
+
+{- | Raised to abort start-up after a boot phase has reported its aggregated
+failure to stderr. A distinct type — rather than a bare 'exitFailure' — so the
+abort is observable in a test without the process actually exiting; uncaught, it
+propagates to 'main' and the runtime exits non-zero, the operator-facing fail-fast.
+-}
+data BootAborted = BootAborted
+    deriving stock (Eq, Show)
+
+instance Exception BootAborted
+
+{- Report the rendered failure to stderr and abort the boot when a phase fails,
+otherwise yield its value. The aggregated failure block is written so an operator
+sees every problem from a single failed launch, then 'BootAborted' unwinds to
+'main'. -}
+orExit :: (e -> Text) -> Either e a -> IO a
+orExit render = \case
+    Right a -> pure a
+    Left err -> TIO.hPutStrLn stderr (render err) >> throwIO BootAborted
 
 {- Run the server and the mirror worker concurrently over one composition-root
 'Env', the shape the single-process program uses. The two are independent (each
 depends only on the handles in 'Env', not on each other), so splitting into
 separate binaries later is two thin entry points calling 'runServer' \/
-'runWorker' — no rearchitecting.
+'runWorker' — no rearchitecting. The server's settings (its derived mount bindings
+and port) are supplied by the composition root and threaded to 'runServer'.
 -}
-runServices :: Env -> IO ()
-runServices env = concurrently_ (runServer env) (runWorker env)
+runServices :: ServerConfig -> Env -> IO ()
+runServices serverConfig env = concurrently_ (runServer serverConfig env) (runWorker env)
 
-{- | Run the proxy's HTTP front door over the composition-root 'Env'.
+{- | Run the proxy's HTTP front door over the composition-root 'Env' with the
+config-derived 'ServerConfig'.
 
-This is the npm-aware composition site: it mounts npm — its path grammar
-("Ecluse.Registry.Npm.Route") and its denial renderer ("Ecluse.Registry.Npm.Serve")
-— into the otherwise ecosystem-neutral web layer ('Ecluse.Server.runServer'), so
-the agnostic server stays closed over the shared 'Ecluse.Server.Route.Route' set
-and only this one place names an ecosystem. Splitting the server into its own
-binary later reuses this same entry.
+This is the npm-aware composition site: 'mountBindingFor' mounts npm — its path
+grammar ("Ecluse.Registry.Npm.Route") and its denial renderer
+("Ecluse.Registry.Npm.Serve") — into the otherwise ecosystem-neutral web layer
+('Ecluse.Server.runServer'), so the agnostic server stays closed over the shared
+'Ecluse.Server.Route.Route' set and only this one place names an ecosystem.
+Splitting the server into its own binary later reuses this same entry.
 -}
-runServer :: Env -> IO ()
-runServer = Server.runServer npmServerConfig
+runServer :: ServerConfig -> Env -> IO ()
+runServer = Server.runServer
 
-{- | The server settings 'runServer' runs: a single npm mount under the prefix
-derived from its ecosystem (@\/npm@). npm is deliberately __path-mounted, never at
-the root__, so adding a second ecosystem later changes no existing consumer's URLs.
-Exposed so the composed front door can be driven directly (e.g. embedded in another
-@wai@ application, or exercised in tests through 'Ecluse.Server.application' without
-binding a socket).
+{- | The fallback server settings: a single npm mount with __no__ packument-serve
+dependencies, so the packument route is the recognised-but-unserved @501@ stub.
+Exposed so the composed front door can be driven directly without binding a socket
+(e.g. embedded in another @wai@ application, or exercised in tests through
+'Ecluse.Server.application') to assert the routing and the unwired-mount surface; a
+real launch derives its bindings from configuration in 'run'.
 -}
 npmServerConfig :: ServerConfig
 npmServerConfig = mkServerConfig [npmMount Nothing]

@@ -34,9 +34,10 @@ layer into an adapter renderer. Several threads below build on this: **D5 shrank
 to deriving the prefix from the ecosystem and flowing the ecosystem through the
 binding and the config mount, and **D1 resolved** against it (see Resolved, below).
 
-Threads are worked **one at a time**. **All threads (D1–D6) are resolved** — see
-[Resolved](#resolved). The remaining work is code: the consolidated
-[pre-S15 hardening slice](#code-owing--the-pre-s15-hardening-slice).
+Threads are worked **one at a time**. **All threads (D1–D6) are resolved, and all of
+the conforming code has landed** — see [Resolved](#resolved). The pre-S15 hardening
+track is [complete](#code--the-pre-s15-hardening-track), so this epic is closed: the
+tarball path ([S15](slices/S15-tarball-path.md)) and M4 now build on the new base.
 
 ### Item 1 — config: per-ecosystem generalization
 
@@ -60,10 +61,11 @@ was a misread requirement and is **dropped** — "multiple" means multiple
 *ecosystems*.
 **Rendered into:** [`hosting.md` → Mounts](../docs/architecture/hosting.md#mounts)
 and [`configuration.md`](../docs/architecture/configuration.md#configuration).
-**Code still owing** (a pre-S15 hardening slice; see D5): the value-level
-`Ecosystem` on the declarative mount, the `ecosystem → mount` keying, and the
-ecosystem-derived `bindingPrefix`. Not built yet — `Ecluse.hs` still hard-codes
-`/npm` and `Ecluse.Config` still keys by `MountPrefix`.
+**Code: landed** _(#140 `refactor/per-ecosystem-mounts`; serving wired in
+`feat/composition-root-config-creds`)_. The value-level `Ecosystem` sits on the
+declarative mount, the `MountMap` is keyed by ecosystem, and `bindingPrefix` is derived
+(npm → `/npm`); `MountPrefix` is retired. The composition root now derives and serves
+the npm mount from config rather than hard-coding it.
 
 **D2 — Registry topology.** _(resolved 2026-06-23)_
 **Decision:** the topology is exactly **three architectural roles** — private
@@ -78,8 +80,9 @@ is discovered from the upstream response and governed by the egress policy
 (`PROXY_RESPECT_UPSTREAM_TARBALL_HOST`, S40).
 **Rendered into:** [`hosting.md` → Mounts](../docs/architecture/hosting.md#mounts);
 registry-model.md already carried the role table and the roles-may-coincide note.
-**Code still owing** (hardening slice): rename `RegistryTuple` → a structural name
-(e.g. `MountRegistries`); align the `S03` slice prose when the rename lands.
+**Code: landed** _(#140 `refactor/per-ecosystem-mounts`)_. `RegistryTuple` is now the
+record `MountRegistries`, its named roles `regPrivateUpstream` / `regPublicUpstream` /
+`regMirrorTarget`.
 
 **D4 — Cloud auth: global provider, per-mount reference.** _(resolved 2026-06-23)_
 **Decision:** the credential identity is **process-global** — typically a single
@@ -95,9 +98,13 @@ references a credential source with **no initialized provider halts the app at b
 (aggregated fail-fast). Supersedes the earlier "move region/project per-mount" idea.
 **Rendered into:** [`cloud-backends.md` → Credential Provider](../docs/architecture/cloud-backends.md#credential-provider)
 and [`configuration.md` → Validation](../docs/architecture/configuration.md#validation-fail-fast-reject-the-unknown).
-**Code still owing** (hardening slice): hoist `mtCredential` off `MirrorTarget` into a
-global provider registry the mount references, and add the boot-time "credential
-references must resolve" check to config validation / the composition root.
+**Code: landed** _(`feat/composition-root-config-creds`)_. Credential providers are built
+**once** at the composition root (`Ecluse.Composition.initCredentialProviders`), keyed by
+backend; a mount keeps `mtCredential` as the **name** it references, and the boot-time
+check (`UnresolvedCredential`) rejects any reference with no initialized provider,
+aggregated with the other boot errors. Only the `static` leaf (`MIRROR_TARGET_TOKEN`) is
+built in this build; `codeartifact` / `adc` have no leaf yet, so naming one is an honest
+boot failure until the cloud-backend slices land.
 
 **D3 — Rule vocabulary.** _(resolved 2026-06-23)_
 **Decision:** rules are **ecosystem-agnostic by design** — they reason only over the
@@ -126,11 +133,19 @@ to `/`, which the no-root rule forbids. The composition root resolves **ecosyste
 **Rendered into:** [`configuration.md`](../docs/architecture/configuration.md#configuration)
 (mounts keyed by ecosystem); the model is in
 [`hosting.md` → Mounts](../docs/architecture/hosting.md#mounts) (D1).
-**Code still owing** — this *is* the S20-flagged Config → Server wiring, folded into
-the pre-S15 hardening slice: re-key `Ecluse.Config`'s `MountMap` by ecosystem, add the
-value-level `Ecosystem` to the declarative mount, derive `bindingPrefix`, default the
-env-only mount to npm, and resolve `ecosystem → RegistryClient` at the composition
-root (replacing the single global `envRegistry`).
+**Code: landed** _(#140 `refactor/per-ecosystem-mounts` + `feat/composition-root-config-creds`)_.
+`Ecluse.Config` keys the `MountMap` by ecosystem, carries the value-level `Ecosystem` on
+the mount, derives `bindingPrefix`, and defaults the env-only mount to npm (#140); the
+composition root now loads config and resolves each ecosystem to a served `MountBinding`,
+failing fast at boot on an unresolved policy or a configured mount with no adapter
+(`feat/composition-root-config-creds`).
+**As-built reconciliation:** the serve-side endpoints flow on the mount's `PackumentDeps`
+/ `MountBinding` (per #133 / #139), **not** a per-mount `RegistryClient` — the serve path
+builds an `NpmClientConfig` per leg from the shared `Manager`, so the
+"ecosystem → `RegistryClient`" wording predates that refactor. The single global
+`envRegistry` is therefore left in place (vestigial on the serve path); resolving a
+per-ecosystem publish `RegistryClient` and retiring `envRegistry` belongs with the
+**worker slice** — its only consumer, currently a stub.
 
 **D6 — Reader migration & request-context shape.** _(resolved 2026-06-23)_
 **Decision:** extend the existing `App = ReaderT Env IO` over the request hot path.
@@ -146,32 +161,39 @@ appears. Lands **before S15** so the tarball path is written in the target style
 Closes the parked [#121](https://github.com/AlexaDeWit/Ecluse/issues/121).
 **Rendered into:** [`technology-stack.md` → Key Decisions](../docs/architecture/technology-stack.md#key-decisions)
 and [`web-layer.md`](../docs/architecture/web-layer.md#web-layer).
-**Code still owing** (hardening slice): introduce `RequestCtx`, run handlers in
-`ReaderT RequestCtx IO` (deriving `Katip`/`KatipContext`), and retire the packument
-handler's explicit `Env`+deps threading.
+**Code: landed** _(#139 `refactor/reader-request-ctx`)_. `RequestCtx` and the `Handler`
+reader over it live in `Ecluse.Server.Context` (deriving `Katip` / `KatipContext`);
+dispatch builds the context and the packument handler reads its mount wiring from it
+rather than from threaded `Env` + deps arguments.
 
 ---
 
-## Code owing — the pre-S15 hardening slice
+## Code — the pre-S15 hardening track
 
-All six threads are resolved in the docs; the conforming **code** is gathered here as
-one hardening track, to land **before [S15](slices/S15-tarball-path.md)** so the
-tarball path is built on the new base. A natural ordering:
+All six threads are resolved in the docs **and the conforming code has landed**, so the
+tarball path ([S15](slices/S15-tarball-path.md)) now builds on the new base. The track,
+in the order it was built:
 
 1. ~~**Rule-name normalization (early, standalone).**~~ **Done** — `DenyHasInstallScripts`
    → `DenyInstallTimeExecution` (constructor, wire `type`, precedence helper, tests,
    docs); `AllowScope` kept. _(D3 — `refactor/rename-install-rule`)_
-2. **Ecosystem as a value on the mount.** Add `Ecosystem` to the declarative config
-   mount; re-key `MountMap` / the document `mounts` by ecosystem; derive
-   `bindingPrefix`; default the env-only mount to npm. Rename `RegistryTuple` → a
-   structural name (e.g. `MountRegistries`). _(D1, D2, D5)_
-3. **Global credential providers.** Hoist `mtCredential` off `MirrorTarget` into a
-   process-global provider registry the mount references; add the boot-time
-   "credential references must resolve" check. _(D4)_
-4. **Composition-root wiring.** Resolve `ecosystem → RegistryClient + classifier +
-   bindingPrefix` into one `MountBinding` per ecosystem — the S20-flagged
-   Config → Server wiring. _(D5)_
-5. **Reader over the request path.** Introduce `RequestCtx`, run handlers in
-   `ReaderT RequestCtx IO`, retire explicit `Env`+deps threading. _(D6)_
+2. ~~**Ecosystem as a value on the mount.**~~ **Done** — `Ecosystem` on the declarative
+   mount; `MountMap` / document `mounts` keyed by ecosystem; `bindingPrefix` derived;
+   env-only mount defaults to npm; `RegistryTuple` → `MountRegistries`.
+   _(D1, D2, D5 — #140 `refactor/per-ecosystem-mounts`)_
+3. ~~**Global credential providers.**~~ **Done** — providers built once at the composition
+   root, keyed by backend; the mount references one by name (`mtCredential`); the
+   boot-time "credential references must resolve" check aggregates with the other boot
+   errors. _(D4 — `feat/composition-root-config-creds`)_
+4. ~~**Composition-root wiring.**~~ **Done** — `run` loads config and resolves each
+   ecosystem to a served `MountBinding` (with real `PackumentDeps`, so packuments are
+   merged rather than the `501` stub), failing fast at boot. The serve endpoints flow on
+   `PackumentDeps`, not a per-mount `RegistryClient` (see the D5 as-built reconciliation
+   above). _(D5 — `feat/composition-root-config-creds`)_
+5. ~~**Reader over the request path.**~~ **Done** — `RequestCtx` introduced, handlers run
+   in a `Handler` reader over it (`Ecluse.Server.Context`); the packument handler reads
+   its mount wiring from context rather than threaded arguments.
+   _(D6 — #139 `refactor/reader-request-ctx`)_
 
-Dispatched as slices on the architect's kickoff, per the standing process.
+Delivered as slices on the architect's kickoffs, per the standing process; with item 4
+landed the track — and this epic — is closed.

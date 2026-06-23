@@ -61,6 +61,7 @@ library
   exposed-modules:
     Ecluse
     Ecluse.App
+    Ecluse.Composition
     Ecluse.Config
     Ecluse.Credential
     Ecluse.Credential.Refresh
@@ -129,6 +130,7 @@ test-suite ecluse-unit
   hs-source-dirs:     test/unit
   other-modules:
     EcluseSpec
+    Ecluse.CompositionSpec
     Ecluse.ConfigSpec
     Ecluse.CredentialSpec
     Ecluse.EnvSpec
