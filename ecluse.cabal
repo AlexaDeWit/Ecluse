@@ -76,6 +76,7 @@ library
     Ecluse.Registry.Npm.Filter
     Ecluse.Registry.Npm.Project
     Ecluse.Registry.Npm.Route
+    Ecluse.Registry.Npm.Serve
     Ecluse.Registry.Npm.Wire
     Ecluse.Rules
     Ecluse.Rules.Types
@@ -139,6 +140,7 @@ test-suite ecluse-unit
     Ecluse.Registry.Npm.FilterSpec
     Ecluse.Registry.Npm.ProjectSpec
     Ecluse.Registry.Npm.RouteSpec
+    Ecluse.Registry.Npm.ServeSpec
     Ecluse.Registry.Npm.WireSpec
     Ecluse.RulesSpec
     Ecluse.SecuritySpec

@@ -234,9 +234,16 @@ inability (`WontResolve`); else `403`. Never `404` — the versions existed and 
 withheld; a genuinely absent package is a separate upstream miss. (`packumentStatus`
 in `Ecluse.Server.Response` is the code-level counterpart of `artifactStatus`.)
 
-The denial-body shape and `PROXY_HELP_MESSAGE` handling are in
-[Rules Engine → Denial Responses](rules-engine.md#denial-responses). This type
-lives in `Ecluse.Server.Response`.
+The serve-outcome model and the per-outcome status mapping live in
+`Ecluse.Server.Response`, which decides an error's *status* but holds **no body
+shape of its own**. Each mount supplies a `MountRenderer` that shapes the error
+bytes in its ecosystem's surface — npm's `{"error": …}` object lives in
+`Ecluse.Registry.Npm.Serve` — so the agnostic layer carries no ecosystem body.
+Rendering therefore splits into **two tiers**: a request matching **no mount** is a
+neutral `404 Not Found` in `text/plain` (there is no ecosystem to render it), while
+every in-mount error — a policy `403`, an unrecognised-path `404`, a `501` — renders
+through that mount's renderer. The denial-body shape and `PROXY_HELP_MESSAGE`
+handling are in [Rules Engine → Denial Responses](rules-engine.md#denial-responses).
 
 ## Middleware and helper libraries
 
@@ -256,9 +263,10 @@ wire contract.**
   runs: it lifts `bracket`/`finally`/`async` into the reader so resource-safety
   stays ergonomic. Request handlers stay in plain `IO` taking `Env`, so the hot
   path carries no transformer lifting.
-- **Hand-roll** — the router (`classify`), response/error helpers (the npm
-  `{"error": …}` shape lives in an `Ecluse.Server.Response` module, grown as
-  repetition surfaces), a thin `katip` logging middleware (so request logs join
+- **Hand-roll** — the router (`classify`), response/error helpers (the agnostic
+  serve-outcome model and status mapping in `Ecluse.Server.Response`; each mount's
+  ecosystem error surface — npm's `{"error": …}` shape — in its adapter, e.g.
+  `Ecluse.Registry.Npm.Serve`), a thin `katip` logging middleware (so request logs join
   the same structured stream as everything else, rather than `wai-extra`'s stock
   logger), and conditional-GET / ETag handling: for **pass-through** bodies
   (artifacts — including a private-upstream tarball, served unfiltered) the

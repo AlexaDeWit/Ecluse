@@ -119,15 +119,17 @@ import Ecluse.Server.Cache (CacheEntry (CacheEntry, entryInfo, entryRaw), Source
 import Ecluse.Server.Conditional (Conditional (Modified, NotModified), etagHeader, evaluateOwnETag)
 import Ecluse.Server.Response (
     HelpMessage,
+    MountRenderer,
     PackumentStatus (PackumentForbidden, PackumentOk, PackumentServerError, PackumentUnavailable),
     RejectReason (Unavailable),
     Rejection (Rejection, rejectionMessage),
+    RenderedBody (RenderedBody),
     RetryAfter (RetryAfter),
     ServeDecision (Admit, Reject),
     Transience (WillResolve),
-    denialBody,
     packumentStatus,
     packumentStatusCode,
+    renderError,
     serveDecisionOf,
  )
 import Ecluse.Version (renderVersion)
@@ -181,17 +183,19 @@ surviving sets are merged ('mergePackuments') and
 the 'MergePlan' replayed onto the raw upstream @Value@s to assemble the served
 body, which is then answered against the client's conditional request with our own
 ETag. When nothing survives, the status follows the most recoverable cause via
-'packumentStatus'.
+'packumentStatus'. Every refusal — the edge @401@ and the no-survivors
+@403@\/@503@\/@500@ — is rendered through the mount's 'MountRenderer'.
 -}
 servePackument ::
+    MountRenderer ->
     PackumentDeps ->
     Env ->
     PackageName ->
     Request ->
     (Response -> IO ResponseReceived) ->
     IO ResponseReceived
-servePackument deps env name request respond
-    | not (edgeAuthorised deps request) = respond edgeUnauthorised
+servePackument renderer deps env name request respond
+    | not (edgeAuthorised deps request) = respond (edgeUnauthorised renderer)
     | otherwise = do
         ctx <- EvalContext <$> pdNow deps
         let clientToken = forwardedToken request
@@ -204,7 +208,7 @@ servePackument deps env name request respond
             sources = catMaybes [private, public]
         case assemble deps sources of
             Just body -> respond (servePackumentBody request body)
-            Nothing -> respond (noSurvivors deps (collectDecisions privResult publicExclusions))
+            Nothing -> respond (noSurvivors renderer deps (collectDecisions privResult publicExclusions))
 
 -- ── edge authentication ──────────────────────────────────────────────────────
 
@@ -217,10 +221,11 @@ edgeAuthorised deps request = case pdInboundToken deps of
     Nothing -> True
     Just expected -> forwardedToken request == Just expected
 
--- A @401@ for a request that failed edge authentication, before any upstream fetch.
-edgeUnauthorised :: Response
-edgeUnauthorised =
-    jsonResponse status401 [] (denialBody Nothing "authentication required")
+-- A @401@ for a request that failed edge authentication, before any upstream
+-- fetch; the body is shaped by the mount's renderer.
+edgeUnauthorised :: MountRenderer -> Response
+edgeUnauthorised renderer =
+    renderedResponse status401 [] (renderError renderer Nothing "authentication required")
 
 {- The client's forwarded bearer credential, recovered from the request's
 @Authorization: Bearer …@ header. 'Nothing' when no bearer credential is present;
@@ -526,9 +531,9 @@ servePackumentBody request body =
 {- Render the no-survivors outcome: the status 'packumentStatus' chose over the
 exclusions, with a denial body collecting the reasons. Never a @404@ — the package
 existed and its versions were withheld. -}
-noSurvivors :: PackumentDeps -> [ServeDecision] -> Response
-noSurvivors deps decisions =
-    jsonResponse (toStatus status) (retryAfterHeader status) (denialBody (pdHelp deps) message)
+noSurvivors :: MountRenderer -> PackumentDeps -> [ServeDecision] -> Response
+noSurvivors renderer deps decisions =
+    renderedResponse (toStatus status) (retryAfterHeader status) (renderError renderer (pdHelp deps) message)
   where
     status :: PackumentStatus
     status = packumentStatus decisions
@@ -564,7 +569,14 @@ retryAfterHeader = \case
 
 -- ── response helper ───────────────────────────────────────────────────────────
 
--- A JSON response with the given status, extra headers, and body.
+-- A JSON response with the given status, extra headers, and body. Used for the
+-- served packument document itself, which is npm JSON.
 jsonResponse :: Status -> ResponseHeaders -> LByteString -> Response
 jsonResponse status extra =
     responseLBS status ((hContentType, "application/json") : extra)
+
+-- A response built from a renderer's 'RenderedBody': its content type, then any
+-- extra headers, then the rendered bytes.
+renderedResponse :: Status -> ResponseHeaders -> RenderedBody -> Response
+renderedResponse status extra (RenderedBody contentType body) =
+    responseLBS status ((hContentType, contentType) : extra) body

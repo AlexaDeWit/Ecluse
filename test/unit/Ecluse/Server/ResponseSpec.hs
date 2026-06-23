@@ -1,8 +1,5 @@
 module Ecluse.Server.ResponseSpec (spec) where
 
-import Data.Aeson (Value (String), eitherDecode)
-import Data.Aeson qualified as Aeson
-import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Text qualified as T
 import Data.Time (UTCTime (..), addUTCTime, fromGregorian, nominalDay)
 import Test.Hspec
@@ -35,7 +32,6 @@ import Ecluse.Server.Response (
     Transience (..),
     artifactStatus,
     artifactStatusCode,
-    denialBody,
     mkHelpMessage,
     packumentStatus,
     packumentStatusCode,
@@ -80,20 +76,6 @@ pkg scope ageDays code =
         , pkgMaintainers = []
         , pkgDependencies = []
         }
-
-{- | Decode a denial body and read its @error@ string. 'Right' the string when
-the body is a JSON object carrying a string @error@; 'Left' (which fails the
-@`shouldBe` Right …@ assertion) for any other shape, so the npm @{"error": …}@
-contract is pinned without a partial decode.
--}
-errorField :: LByteString -> Either Text Text
-errorField raw =
-    case eitherDecode raw of
-        Right (Aeson.Object o) ->
-            case KeyMap.lookup "error" o of
-                Just (String msg) -> Right msg
-                _ -> Left "denial body has no string \"error\" field"
-        _ -> Left "denial body is not a JSON object"
 
 spec :: Spec
 spec = do
@@ -165,23 +147,6 @@ spec = do
             packumentStatusCode (PackumentUnavailable Nothing) `shouldBe` 503
             packumentStatusCode (PackumentUnavailable (Just (RetryAfter 30))) `shouldBe` 503
             packumentStatusCode PackumentServerError `shouldBe` 500
-
-    describe "denialBody — the npm {\"error\": …} shape" $ do
-        it "is a JSON object with a string error field carrying the message" $
-            errorField (denialBody Nothing "denied because reasons")
-                `shouldBe` Right "denied because reasons"
-        it "appends a configured help message to the error text" $
-            errorField (denialBody (Just (mkHelpMessage "Contact #platform-eng.")) "denied")
-                `shouldBe` Right "denied Contact #platform-eng."
-        it "appends nothing when no help message is configured" $
-            errorField (denialBody Nothing "denied")
-                `shouldBe` Right "denied"
-        it "does not duplicate spacing when the message already ends in a space" $
-            errorField (denialBody (Just (mkHelpMessage "Help.")) "denied ")
-                `shouldBe` Right "denied Help."
-        it "ignores a blank help message rather than appending empty text" $
-            errorField (denialBody (Just (mkHelpMessage "   ")) "denied")
-                `shouldBe` Right "denied"
 
     describe "HelpMessage — trimmed at construction" $ do
         it "stores the message trimmed of surrounding whitespace" $

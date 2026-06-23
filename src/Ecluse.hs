@@ -99,10 +99,10 @@ import Ecluse.Registry (
     RegistryClient (..),
  )
 import Ecluse.Registry.Npm.Route qualified as Npm
-import Ecluse.Server (Mount, ServerConfig (..), defaultServerConfig)
+import Ecluse.Registry.Npm.Serve (npmRenderer)
+import Ecluse.Server (MountBinding (..), ServerConfig, mkServerConfig)
 import Ecluse.Server qualified as Server
 import Ecluse.Server.Cache (defaultCacheConfig, newMetadataCache)
-import Ecluse.Server.Route (Classifier)
 
 {- | Start Écluse: the entry point the @ecluse@ executable runs (see "Main").
 
@@ -131,26 +131,36 @@ runServices env = concurrently_ (runServer env) (runWorker env)
 
 {- | Run the proxy's HTTP front door over the composition-root 'Env'.
 
-This is the npm-aware composition site: it wires npm's path grammar
-("Ecluse.Registry.Npm.Route") into the otherwise ecosystem-neutral web layer
-('Ecluse.Server.runServer'), so the agnostic server stays closed over the shared
-'Ecluse.Server.Route.Route' set and only this one place names an ecosystem's
-router. Splitting the server into its own binary later reuses this same entry.
+This is the npm-aware composition site: it mounts npm — its path grammar
+("Ecluse.Registry.Npm.Route") and its denial renderer ("Ecluse.Registry.Npm.Serve")
+— into the otherwise ecosystem-neutral web layer ('Ecluse.Server.runServer'), so
+the agnostic server stays closed over the shared 'Ecluse.Server.Route.Route' set
+and only this one place names an ecosystem. Splitting the server into its own
+binary later reuses this same entry.
 -}
 runServer :: Env -> IO ()
 runServer = Server.runServer npmServerConfig
 
-{- The server settings for an npm front door: the defaults with npm's classifier
-injected for every mount. The default config is ecosystem-neutral (it denies every
-path); this is where the served ecosystem's grammar is chosen.
+{- The server settings for the npm front door: a single npm mount at @\/npm@. npm
+is deliberately __path-mounted, never at the root__, so adding a second ecosystem
+later changes no existing consumer's URLs.
 -}
 npmServerConfig :: ServerConfig
-npmServerConfig = defaultServerConfig{scClassify = npmClassifier}
+npmServerConfig = mkServerConfig [npmMount]
 
--- Route every mount through npm's path grammar. A single-ecosystem deployment
--- ignores the 'Mount' argument; a multi-ecosystem one would select per mount.
-npmClassifier :: Mount -> Classifier
-npmClassifier _mount = Npm.classify
+{- The npm mount: npm's complete wiring under the @\/npm@ prefix — its path grammar
+and its denial renderer — with no packument-serve dependencies wired yet, so the
+packument route stays the recognised-but-unserved @501@ until the composition root
+supplies them.
+-}
+npmMount :: MountBinding
+npmMount =
+    MountBinding
+        { bindingPrefix = "npm" :| []
+        , bindingClassifier = Npm.classify
+        , bindingPackumentDeps = Nothing
+        , bindingRenderer = npmRenderer
+        }
 
 {- | Run the supervised mirror worker over the composition-root 'Env': the
 consume → fetch → verify → publish → ack loop against the queue and credential

@@ -262,12 +262,17 @@ on-disk cache would instead add rotation / bounded-disk tests.)
 
 When a request is denied (no allow rule matched, or a deny rule fired):
 
-- HTTP status follows npm protocol conventions (403 for policy denials).
-- The response body is a JSON object matching the npm error format:
+- HTTP **status** is decided by the agnostic serve layer (403 for policy denials);
+  see [Web Layer → Error model](web-layer.md#error-model).
+- The response **body shape is the mount's** — its
+  [error renderer](hosting.md#mounts) shapes the bytes in the ecosystem's surface,
+  so the agnostic layer holds no body shape of its own. For npm the renderer
+  (`Ecluse.Registry.Npm.Serve`) emits the npm error object:
   ```json
   {
     "error": "Package @evil/pkg@1.0.0 was denied: AllowIfPublishedBefore — published 3 hours ago, minimum age is 7 days. Contact #platform-eng on Slack for assistance."
   }
   ```
 - The denial reason (which rule decided, and why) is always included.
-- `PROXY_HELP_MESSAGE`, if configured, is appended to every denial.
+- `PROXY_HELP_MESSAGE`, if configured, is appended to every denial (the
+  ecosystem-neutral `appendHelp`, before the renderer wraps it).
