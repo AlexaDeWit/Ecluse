@@ -6,9 +6,13 @@
 
 ![Écluse — a supply-chain resilience proxy for package registries](docs/social-preview.png)
 
-A supply-chain resilience proxy for package registries, written in Haskell. The
-name is French for a canal lock — the controlled passage every dependency clears
-before it reaches your build.
+A supply-chain resilience proxy for package registries, written in Haskell. The name —
+**Écluse** (*Quebec French:* "ayy-cluze", [e.klyz]) — is French for a canal lock: the
+controlled passage every dependency clears before it reaches your build.
+
+**New here?** [**Why Écluse?** (`MOTIVATION.md`)](MOTIVATION.md) is the *why* — the problem,
+why the off-the-shelf options didn't fit, and the reasoning behind the design; a fair guide
+to other tools in this space is in [`ALTERNATIVES.md`](ALTERNATIVES.md).
 
 > **Status: pre-launch — under active development; no GA release yet.** The
 > functional core and the npm **packument** path are in place; the **tarball**
