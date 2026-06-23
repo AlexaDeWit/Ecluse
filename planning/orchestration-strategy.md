@@ -125,6 +125,28 @@ worktrees onto the new base and re-runs their gate, so integration drift surface
 immediately rather than at PR time. Slices that genuinely cannot be split become
 **stacked PRs**; otherwise they stay small and independent.
 
+**Pin the model; there is no effort dial.** The Agent tool's `model` argument, left
+unset, takes the general-purpose agent's default — which may be **lighter than the
+team lead's own model** — and the tool exposes **no** thinking-effort parameter, so
+`model` is the only capability lever the dispatcher controls. A lighter default tends
+to head straight to implementation and skip the exploration a slice needs (e.g. it
+will name a tool but not bootstrap into it; see below). For **design-bearing or
+security-sensitive** work — a shared type, the credential-discipline serve path, a
+parse-don't-validate boundary — dispatch with `model` pinned to the strongest
+available rather than defaulting; reserve the default only for genuinely mechanical
+slices.
+
+**Have agents bootstrap their tools — the LSP MCP especially.** The HLS-over-MCP
+navigation tools (`mcp__hls__definition` / `references` / `hover` / `diagnostics`) are
+surfaced as *deferred* tools: an agent must **load them before it can call them**, and
+a less-exploratory agent skips that step and falls back to `grep`. A brief should
+direct the agent to load and use them early for cross-module work — find-references for
+a refactor's blast radius, go-to-definition across re-exports, type-at-point to confirm
+a signature — which is higher-precision and faster than `grep` over this codebase's
+qualified imports and re-exports (the compiler stays ground truth for correctness).
+An instruction to use a tool the agent cannot actually reach is just decoration, so
+confirm the MCP is wired into the agent's environment when you rely on it.
+
 **Invoke the toolchain through the current flake, never the ambient shell.** A
 long-lived agent session enters a `nix develop` once and holds it for the whole
 session; if a flake upgrade merges _mid-session_ (a new GHC, fourmolu, or
