@@ -59,7 +59,9 @@ import Ecluse.Registry.Npm (
     MetadataForm (Abbreviated, Full),
     NpmClientConfig (..),
     Validators (..),
+    artifactFileUrl,
     artifactRequest,
+    artifactRequestByFile,
     defaultNpmConfig,
     fetchMetadataForm,
     metadataAccept,
@@ -290,6 +292,26 @@ artifactSpec = describe "fetchArtifact / artifactRequest" $ do
                 -- that breaks the tarball's dist.integrity.
                 Client.requestHeaders req `shouldNotSatisfy` any ((== "accept-encoding") . fst)
 
+    around (withStub status200 "tarball-bytes") $
+        it "artifactRequestByFile fetches by the preserved filename, non-decompressing" $ \stub -> do
+            config <- stubConfig stub
+            -- The serve path fetches an artifact by the exact on-the-wire filename the
+            -- client requested (not one rebuilt from the coordinate). The %2F-encoded
+            -- package path is used, the verbatim filename trails @/-/@, and the request
+            -- is non-decompressing for the same reason as 'artifactRequest'.
+            case artifactRequestByFile config babelCodeFrame "code-frame-7.0.0.tgz" of
+                Left err -> fail ("artifactRequestByFile failed: " <> show err)
+                Right req -> do
+                    Client.path req `shouldBe` "/@babel%2Fcode-frame/-/code-frame-7.0.0.tgz"
+                    decompress req "application/gzip" `shouldBe` False
+                    Client.requestHeaders req `shouldNotSatisfy` any ((== "accept-encoding") . fst)
+
+    it "artifactFileUrl builds the preserved-filename URL under the package /-/ path" $ do
+        -- The mirror job records the public artifact location by its on-the-wire
+        -- filename; the URL is @{base}/{encoded-pkg}/-/{filename}@ verbatim.
+        artifactFileUrl "https://reg.test" babelCodeFrame "code-frame-7.0.0.tgz"
+            `shouldBe` Right "https://reg.test/@babel%2Fcode-frame/-/code-frame-7.0.0.tgz"
+
 -- ── publish ─────────────────────────────────────────────────────────────────────
 
 publishSpec :: Spec
@@ -346,6 +368,14 @@ urlFailureSpec = describe "URL-formation failures" $ do
         manager <- newManager defaultManagerSettings
         let config = NpmClientConfig{npmBaseUrl = "", npmManager = manager, npmToken = Nothing}
         artifactRequest config isOdd v1 `shouldSatisfy` urlErrorWas EmptyBaseUrl
+
+    it "artifactRequestByFile refuses an empty base URL as a UrlFormationError" $ do
+        manager <- newManager defaultManagerSettings
+        let config = NpmClientConfig{npmBaseUrl = "", npmManager = manager, npmToken = Nothing}
+        artifactRequestByFile config isOdd "is-odd-1.0.0.tgz" `shouldSatisfy` urlErrorWas EmptyBaseUrl
+
+    it "artifactFileUrl refuses an empty base URL as a UrlFormationError" $ do
+        artifactFileUrl "" isOdd "is-odd-1.0.0.tgz" `shouldSatisfy` urlErrorWas EmptyBaseUrl
 
     it "publishRequest refuses an empty base URL as a UrlFormationError" $ do
         manager <- newManager defaultManagerSettings
