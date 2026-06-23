@@ -55,3 +55,4 @@ docs/      — architecture and design documents
 - **Before pushing, verify Semgrep is clean locally:** inside `nix develop`, `make sast` (Semgrep `--config auto`, failing on ERROR/WARNING) must report zero findings. Do not push with outstanding findings.
 - **Semgrep ignores require the repo owner's approval.** Do not add `.semgrepignore` entries or `nosemgrep` comments unilaterally.
 - Commits are GPG-signed; keep history verifiable.
+- **Sign off every commit (DCO).** Add a `Signed-off-by` trailer with `git commit -s` (pair it with the GPG signature — `git commit -S -s`); the DCO check verifies it per commit. PRs are **squash-merged** and the squash message is assembled from your commit messages, so a sign-off lands on `main` only if every commit carries one — keep the `Signed-off-by` line(s) when finalising the squash. Details in [`CONTRIBUTING.md`](CONTRIBUTING.md#developer-certificate-of-origin-dco).

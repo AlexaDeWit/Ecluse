@@ -88,6 +88,14 @@ your contribution and sign-off become a permanent public record.
   both — `git commit -S -s` — and it coexists with the `Assisted-by:` trailer.
 - **Forgot one?** `git commit --amend -s --no-edit` fixes the last commit;
   `git rebase --signoff main` signs off a whole branch.
+- **We squash-merge, so sign off _every_ commit.** The squash commit's message
+  is assembled from your branch commits' messages, so a `Signed-off-by` reaches
+  `main` only when the commits themselves carry it — and the DCO check verifies
+  it per commit regardless. When the PR is squashed, keep the `Signed-off-by`
+  line(s) in the final message; don't trim them. The
+  [pull-request template](.github/PULL_REQUEST_TEMPLATE.md) repeats this as a
+  reminder, but the per-commit trailer is what counts — editing the PR
+  description does not sign your commits.
 
 ---
 
