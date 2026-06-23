@@ -183,8 +183,12 @@ unconfiguredRegistry =
     notConfigured = ParseError{parseErrorMessage = "no registry backend configured"}
 
 {- | A credential handle with no backend behind it: a static, non-expiring empty
-secret. Credentials are mirror-write only and never read on the serve path, so
-this holds the handle slot in the composition root without minting a live token.
+secret. It holds the 'CredentialProvider' slot in the composition root until a live
+backend is selected — for the mirror-target write, and for the private-upstream read
+under the @service@ \/ @delegated-cache@ strategies. The default @passthrough@
+strategy needs no read credential at all (reads forward the caller's own token), so
+this empty placeholder is harmless on the serve path there. See
+@docs\/architecture\/access-model.md@.
 -}
 unconfiguredCredentials :: CredentialProvider
 unconfiguredCredentials =

@@ -33,9 +33,14 @@ fake mint (see @docs\/architecture\/cloud-backends.md@ → "Credential Provider"
   effectful-rule tier — see
   @docs\/architecture\/rules-engine.md@ → "Effectful-rule failure").
 
-Because a 'CredentialProvider' is __mirror-write only__, even a fully failed
-refresh never touches the client serve path — only the mirror publish (see
-@docs\/architecture\/registry-model.md@ → "Credential flow and authority").
+A 'CredentialProvider' always backs the mirror-target __write__; under the default
+@passthrough@ access strategy that is its only use, so even a fully failed refresh
+touches only the mirror publish and never the client serve path. Where a mount
+instead puts a provider on the private-upstream __read__ (the @service@ and
+service-populated @delegated-cache@ strategies), that dependent operation /is/ a
+client read, so an exhausted read credential degrades serving. The refresh policy
+here is identical either way (see
+@docs\/architecture\/access-model.md@ → "Credential supply").
 -}
 module Ecluse.Credential.Refresh (
     -- * Configuration
@@ -59,8 +64,10 @@ import Ecluse.Credential (AuthToken (..), CredentialProvider (..))
 {- | The one failure a 'refreshingProvider' surfaces to its caller: there is no
 valid token to serve and a fresh mint is unavailable. A still-valid token is
 always served instead (the refresh fails silently in the background), so this is
-reached only on the expired-token path — and, because credentials are
-mirror-write only, never on the client serve path (see the module header).
+reached only on the expired-token path. Whether reaching it can affect a client
+serve depends on what the credential backs: never under the default @passthrough@
+strategy (mirror-write only), but it can where a provider sits on the
+private-upstream read (see the module header).
 -}
 data CredentialError
     = {- | The token has expired and the mint circuit breaker is open, so no mint
