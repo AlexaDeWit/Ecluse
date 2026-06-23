@@ -36,8 +36,9 @@ A packument is the /set of available versions/, spread across upstreams, so it i
 __merged__ rather than short-circuited on a private hit (see
 @docs\/architecture\/registry-model.md@ → "Packument merge across upstreams").
 Private versions are trusted and enter unfiltered; public versions are gated
-through the rules and 'filterPackument' before they enter; the two are combined,
-private winning a collision and an integrity divergence flagged. If one upstream
+through the rules and the structural filter ('filterPlan' decides, 'applyFilterPlan'
+replays) before they enter; the two are combined, private winning a collision and
+an integrity divergence flagged. If one upstream
 is unavailable while the other succeeds, the best-effort union of what resolved is
 served — only when /nothing/ resolves does the request error.
 
@@ -93,6 +94,7 @@ import UnliftIO.Exception (throwString, tryAny)
 import Ecluse.Credential (Secret, mkSecret)
 import Ecluse.Env (Env (envManager, envMetadataCache))
 import Ecluse.Package (PackageInfo (infoDistTags, infoPublishedAt, infoVersions), PackageName)
+import Ecluse.Package.Filter (filterPlan)
 import Ecluse.Package.Merge (
     MergePlan (mpDistTags, mpSurvivors, mpTime),
     Provenance (GatedSource, TrustedSource),
@@ -106,7 +108,7 @@ import Ecluse.Registry.Npm (
     fetchMetadataForm,
     noValidators,
  )
-import Ecluse.Registry.Npm.Filter (FilterResult (Filtered, NoSurvivors), filterPackument, rewriteTarballUrls)
+import Ecluse.Registry.Npm.Filter (FilterResult (Filtered, NoSurvivors), applyFilterPlan, rewriteTarballUrls)
 import Ecluse.Registry.Npm.Project (parsePackageInfo)
 import Ecluse.Rules.Types (Decision, EvalContext (EvalContext), PrecededRule)
 import Ecluse.Server.Cache (CacheEntry (CacheEntry, entryInfo, entryRaw), Source (Source), resolveMetadata)
@@ -170,7 +172,8 @@ the private and public upstreams are fetched __concurrently__ — the client's
 credential forwarded to the private leg, the public leg anonymous — each parse
 failure or unavailable upstream degrading to a missing contribution rather than an
 error. Private versions are trusted as-is; public versions are gated through the
-rules and 'filterPackument'; the surviving sets are merged ('mergePackuments') and
+rules and the structural filter ('filterPlan' then 'applyFilterPlan'); the
+surviving sets are merged ('mergePackuments') and
 the 'MergePlan' replayed onto the raw upstream @Value@s to assemble the served
 body, which is then answered against the client's conditional request with our own
 ETag. When nothing survives, the status follows the most recoverable cause via
@@ -316,10 +319,12 @@ filter, returning the surviving 'Contribution' (if any survived) and the per-ver
 exclusion outcomes (for the no-survivors status when nothing survives anywhere).
 
 A public leg that did not resolve contributes nothing and no exclusions. A
-resolved leg is filtered with 'filterPackument' over its raw @Value@: 'Filtered'
-yields a gated 'Contribution' over the surviving versions; 'NoSurvivors' yields no
-contribution and the per-version 'ServeDecision's (each excluded version's decision
-projected, paired with its 'PackageDetails' for the denial message).
+resolved leg is decided by the agnostic 'filterPlan' (over the typed
+'PackageInfo') and that plan replayed by 'applyFilterPlan' onto its raw @Value@:
+'Filtered' yields a gated 'Contribution' over the surviving versions; 'NoSurvivors'
+yields no contribution and the per-version 'ServeDecision's (each excluded
+version's decision projected, paired with its 'PackageDetails' for the denial
+message).
 
 The gated contribution's typed 'PackageInfo' is __restricted to the survivors__ to
 match its filtered @Value@: 'mergePackuments' treats a 'GatedSource' as the
@@ -329,7 +334,7 @@ gatePublic :: PackumentDeps -> EvalContext -> Maybe (PackageInfo, Value) -> (May
 gatePublic deps ctx = \case
     Nothing -> (Nothing, [])
     Just (info, value) ->
-        case filterPackument ctx (pdRules deps) info value of
+        case applyFilterPlan (pdMountBaseUrl deps) (filterPlan ctx (pdRules deps) info) value of
             Filtered filtered ->
                 (Just (Contribution GatedSource (restrictToSurvivors filtered info) filtered), [])
             NoSurvivors decisions -> (Nothing, projectDecisions info decisions)
@@ -353,9 +358,9 @@ restrictToSurvivors filtered info =
         Nothing -> mempty
 
 {- Project each excluded version's 'Decision' to a 'ServeDecision' for the
-no-survivors status. 'filterPackument' returns the decisions in @versions@-key
-order ('Data.Map.elems'), so they zip back onto the same-ordered 'PackageDetails'
-to recover the package\/version each denial is about. -}
+no-survivors status. 'applyFilterPlan' carries the plan's decisions in
+@versions@-key order ('Data.Map.elems'), so they zip back onto the same-ordered
+'PackageDetails' to recover the package\/version each denial is about. -}
 projectDecisions :: PackageInfo -> [Decision] -> [ServeDecision]
 projectDecisions info =
     zipWith serveDecisionOf (Map.elems (infoVersions info))
