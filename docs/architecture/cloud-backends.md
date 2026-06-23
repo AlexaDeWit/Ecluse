@@ -98,7 +98,9 @@ once and reused across every cloud (a managed registry is just an npm endpoint
 plus a token; there is no per-cloud publish path and no object-store handle).
 Everything else — the proxy core, rules engine, web layer, CVE subsystem — is
 cloud-agnostic too. **AWS and GCP are both first-class targets**; the design
-admits a third provider by adding backends behind these two handles.
+admits a third provider by adding backends behind these two handles — **Azure is
+the worked example** (designed-for, furthest-out — see
+[Azure backends](#azure-backends-designed-for-furthest-out)).
 
 ### Handles: records of functions
 
@@ -130,12 +132,12 @@ answer behind the existing handle if it ever arises.
 
 ### Service mapping
 
-| Concern | AWS | GCP |
-|---------|-----|-----|
-| Mirror queue | SQS | Cloud Pub/Sub |
-| Managed npm registry | CodeArtifact | Artifact Registry |
-| Workload identity / token source | STS / instance role | Workload Identity / ADC |
-| Local emulator (tests) | `ministack` (LocalStack-style) | Google's official Pub/Sub emulator |
+| Concern | AWS | GCP | Azure (designed-for, furthest-out) |
+|---------|-----|-----|-----|
+| Mirror queue | SQS | Cloud Pub/Sub | Service Bus *or* Storage Queues ([see below](#azure-backends-designed-for-furthest-out)) |
+| Managed npm registry | CodeArtifact | Artifact Registry | Azure Artifacts (Azure DevOps feed) |
+| Workload identity / token source | STS / instance role | Workload Identity / ADC | Microsoft Entra ID (Managed Identity / Workload Identity Federation) |
+| Local emulator (tests) | `ministack` (LocalStack-style) | Google's official Pub/Sub emulator | Service Bus emulator (**AMQP-only**) / Azurite (Storage Queues, REST) |
 
 Both managed registries speak the **npm protocol over HTTPS** and differ only in
 how the bearer token is obtained and refreshed, so they sit behind the
@@ -307,3 +309,53 @@ injected clock and a fake mint, and the real cloud mint runs end-to-end only in
 the (non-gating) smoke tier. The split shrinks the un-testable surface to one
 small function per cloud — an explicit, accepted residual risk, consistent with
 how `ecluse-smoke` is already treated.
+
+### Azure backends (designed-for, furthest-out)
+
+Azure is the **worked third backend**: it slots into the same two handles with **no
+structural change**, but it sits **last in the priority queue** — after AWS and GCP —
+because its queue side carries a risk sharper than GCP's. The roadmap reflects this:
+Azure is milestone **M10**, the furthest-out track (slices S47–S50; see the
+[delivery plan](../../planning/delivery-plan.md)).
+
+Its arms split cleanly into *easy* and *risky*:
+
+- **Credential leaf — easy.** `mintToken` acquires a **Microsoft Entra ID** bearer
+  token over plain HTTPS+JSON — via **Managed Identity** (the IMDS endpoint
+  `169.254.169.254/metadata/identity/oauth2/token`, ~1h TTL) or **Workload Identity
+  Federation** on AKS (exchange the projected service-account token, audience
+  `api://AzureADTokenExchange`). No SDK; it is the size of the ADC leaf and rides the
+  existing refresh-off-`expiresAt` wrapper. For an **Azure Artifacts** mirror target
+  the token's `resource` is the Azure DevOps app ID
+  `499b84ac-1321-427f-aa17-267ca6975798`.
+- **Managed registry — unchanged.** **Azure Artifacts** feeds speak the npm protocol
+  over HTTPS (`https://pkgs.dev.azure.com/{org}/{project}/_packaging/{feed}/npm/registry/`),
+  so they ride the existing npm `RegistryClient` plus an Entra bearer — no per-cloud
+  publish path. (Azure Artifacts' own *upstream sources* are a registry-composition
+  feature, the analog of CodeArtifact external connections — the same
+  [composition-optional, don't-bypass-the-gate](registry-model.md#registry-level-composition-optional-never-required)
+  caveat applies.)
+- **Queue — the risk, and why Azure is last.** Sharper than the GCP gRPC-vs-REST gap:
+  - The natural fit is **Service Bus** (peek-lock → `receive`, renew-lock →
+    `extendVisibility`, complete → `ack`, native dead-letter; lock token →
+    `ReceiptHandle`). But its primary protocol is **AMQP 1.0**, for which Haskell has
+    **no** client (the `amqp` package is AMQP 0.9.1 / RabbitMQ), and the only Service
+    Bus Hackage package is **deprecated (2014)**. A hand-rolled **REST** client works
+    against the *real* service, but the **official Service Bus emulator is AMQP-only**
+    (messaging on 5672; its HTTP port is management-only) — so REST messaging **cannot
+    be tested against the emulator**.
+  - The testable alternative is **Storage Queues over REST**, which **Azurite** (the
+    official storage emulator) serves — so a hand-rolled client *is*
+    `testcontainers`-testable. The cost is **no native dead-letter** (emulate via a
+    poison-queue keyed on `DequeueCount`) and a thinner feature set.
+  - Service Bus's lock duration also **caps at 5 min** (vs SQS 12h / Pub/Sub 10min),
+    so under that option `extendVisibility` becomes load-bearing for large publishes.
+
+So Azure is **gated on its own de-risking spike** — the queue decision (Service Bus
+over REST, smoke-tested only, vs Storage Queues on Azurite) — exactly as GCP is gated
+on the Pub/Sub spike (see
+[Haskell client maturity](#haskell-client-maturity--a-design-risk-to-retire-early)
+for the pattern). The credential and registry arms need no spike. Because the queue
+risk is the steepest of the three clouds and AWS + GCP already cover the launch and
+its first fast-follow, Azure is sequenced **last** — M10, the lowest priority in the
+queue.
