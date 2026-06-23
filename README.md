@@ -53,10 +53,13 @@ operators find them. The `docs/architecture/` documents remain the home for the
 > (expect breaking changes before `v0.1.0`). It is the verification contract every
 > released image will meet.
 
-Every published image carries **provenance** and **SBOM** attestations — keyless
-(Sigstore), recorded in the public Rekor transparency log, and stored as
-**immutable OCI referrers** on the image (write-once; they can't be overwritten).
-Once a release is cut, each version's digest will be published in its
+Each published tag is a **single multi-arch image** (`linux/amd64` + `linux/arm64`)
+— pull the one tag and the registry serves your architecture. Every image carries
+**provenance** and **SBOM** attestations — keyless (Sigstore), recorded in the
+public Rekor transparency log, and stored as **immutable OCI referrers** on the
+image (write-once; they can't be overwritten); provenance is attested on the index
+and each platform, the SBOM per platform. Once a release is cut, each version's
+digest will be published in its
 [GitHub Release](https://github.com/AlexaDeWit/Ecluse/releases); until then, pin a
 published tag by digest. Verify by **digest** with the GitHub CLI:
 

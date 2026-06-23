@@ -1,10 +1,13 @@
 name: Release
 
 # Publishing is a separate lifecycle from the PR `gate` in ci.yml: it runs only
-# when a version tag is pushed (or dispatched manually), builds the Nix image,
-# pushes it under an immutable `X.Y.Z` tag, attaches keyless provenance + SBOM
-# attestations, and (on a real tag) publishes a GitHub Release pinning the digest.
-# It is never a gate dependency.
+# when a version tag is pushed (or dispatched manually). The image is built
+# NATIVELY on a per-arch matrix (amd64 + arm64 — no fragile GHC cross-compilation),
+# then one privileged job assembles the two builds into a SINGLE multi-arch
+# manifest list, pushes it under an immutable `X.Y.Z` tag, attaches keyless
+# provenance + SBOM attestations (per platform, plus provenance on the index),
+# and (on a real tag) publishes a GitHub Release pinning the digest. It is never
+# a gate dependency. See docs/architecture/release-supply-chain.md.
 on:
   push:
     tags:
@@ -24,12 +27,69 @@ permissions:
   contents: read
 
 jobs:
+  build:
+    name: Build image (${{ matrix.platform.arch }})
+    # Native per-arch builds: amd64 on the standard runner, arm64 on GitHub's free
+    # public-repo arm64 runner — so GHC compiles natively on each target and we
+    # avoid cross-compilation entirely. fail-fast off so one arch failing still
+    # leaves the other's logs. No secrets here: the build legs are credential-free;
+    # only the `publish` job below is privileged.
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.platform.runner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
+
+      - name: Build image
+        run: nix develop .#release --command make docker-build
+
+      # Dereference the ./result symlink (it points into /nix/store) so the
+      # uploaded artifact carries the archive's bytes, not a dangling link.
+      - name: Stage image archive
+        env:
+          ARCH: ${{ matrix.platform.arch }}
+        run: cp -L result "image-${ARCH}.tar"
+
+      # Per-platform SBOM: .#ecluse-bin is THIS arch's binary, so its closure (and
+      # thus the SBOM) is arch-specific. Attested to the platform digest below.
+      - name: Generate SBOM
+        run: nix develop .#release --command make sbom
+
+      - name: Upload image archive
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: image-${{ matrix.platform.arch }}
+          path: image-${{ matrix.platform.arch }}.tar
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Upload SBOM
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sbom-${{ matrix.platform.arch }}
+          path: sbom/ecluse.spdx.json
+          retention-days: 1
+          if-no-files-found: error
+
   publish:
-    name: Build, push & attest image
+    name: Assemble multi-arch image, attest & release
+    needs: build
     runs-on: ubuntu-latest
     # The token lives on a protected environment (required reviewers), so only an
-    # approved release can read it. Configure DOCKERHUB_USERNAME / DOCKERHUB_TOKEN
-    # there — until then this job fails at the push step, by design.
+    # approved release can read it. Only this job is privileged; the build legs
+    # above carry no secrets. Configure DOCKERHUB_USERNAME / DOCKERHUB_TOKEN here.
     environment: release
     permissions:
       contents: write # create the GitHub Release (digest pin + verify recipe + notes)
@@ -60,65 +120,88 @@ jobs:
           fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
-      - name: Build image
-        run: nix develop --command make docker-build
+      - name: Download per-arch build artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: artifacts
 
-      - name: Push image
-        env:
-          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-          TAG: ${{ steps.tag.outputs.tag }}
-        run: nix develop --command make docker-push TAG="$TAG"
-
-      # Attestations bind to the image *digest*, not the tag; resolve it from the
-      # registry (public read, no auth needed).
-      - name: Resolve pushed digest
-        id: digest
-        env:
-          TAG: ${{ steps.tag.outputs.tag }}
-        run: |
-          digest=$(nix develop --command skopeo inspect "docker://$IMAGE:$TAG" --format '{{.Digest}}')
-          echo "digest=$digest" >> "$GITHUB_OUTPUT"
-
-      # SBOM from the Nix closure of the exact shipped binary (.#ecluse-bin).
-      - name: Generate SBOM
-        run: nix develop --command make sbom
-
-      # Authenticate so the attest actions can push referrers to Docker Hub.
+      # Authenticate so podman can push the manifest list and the attest-actions
+      # can push referrers. docker/login-action writes ~/.docker/config.json,
+      # which podman and skopeo read as their fallback auth file.
       - name: Log in to Docker Hub
         uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # SLSA provenance, keyless (OIDC → Fulcio/Rekor), stored as an immutable OCI
-      # referrer on the image — compatible with the repo's immutable tags.
-      - name: Attest provenance
+      # Assemble the two per-arch archives into ONE manifest list, push the single
+      # canonical tag, and emit the index + per-platform digests for the attest
+      # steps. All podman/skopeo/jq logic lives in the script (shellcheck'd), so
+      # the workflow stays injection-free.
+      - name: Assemble & push multi-arch image
+        id: push
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          nix develop .#release --command \
+            bash scripts/push-multiarch.sh "$IMAGE" "$TAG" \
+              artifacts/image-amd64/image-amd64.tar \
+              artifacts/image-arm64/image-arm64.tar >> "$GITHUB_OUTPUT"
+
+      # Provenance on the index (what `gh attestation verify oci://IMAGE:TAG`
+      # resolves to) and on each platform digest (so a consumer pinning a single
+      # arch by digest can verify it too). Keyless (OIDC → Fulcio/Rekor), stored as
+      # immutable OCI referrers — compatible with the repo's immutable tags.
+      - name: Attest provenance (index)
         uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
         with:
           subject-name: ${{ env.IMAGE }}
-          subject-digest: ${{ steps.digest.outputs.digest }}
+          subject-digest: ${{ steps.push.outputs.index-digest }}
           push-to-registry: true
 
-      # SBOM (sbomnix SPDX) as a second immutable OCI referrer (+ Rekor).
-      - name: Attest SBOM
+      - name: Attest provenance (amd64)
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.push.outputs.amd64-digest }}
+          push-to-registry: true
+
+      - name: Attest provenance (arm64)
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.push.outputs.arm64-digest }}
+          push-to-registry: true
+
+      # SBOM is per-platform (each arch has its own C closure): attach each arch's
+      # SBOM to that arch's platform digest, never to the index (which has no
+      # closure of its own).
+      - name: Attest SBOM (amd64)
         uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
         with:
           subject-name: ${{ env.IMAGE }}
-          subject-digest: ${{ steps.digest.outputs.digest }}
-          sbom-path: sbom/ecluse.spdx.json
+          subject-digest: ${{ steps.push.outputs.amd64-digest }}
+          sbom-path: artifacts/sbom-amd64/ecluse.spdx.json
+          push-to-registry: true
+
+      - name: Attest SBOM (arm64)
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.push.outputs.arm64-digest }}
+          sbom-path: artifacts/sbom-arm64/ecluse.spdx.json
           push-to-registry: true
 
       # On a real version tag (not an rc dispatch), publish a GitHub Release that
-      # pins the digest, gives the `gh attestation verify` recipe, and carries the
-      # auto-generated changelog — the canonical place to discover the digest.
-      # Untrusted refs flow through env, never into the run script directly.
+      # pins the INDEX digest, gives the `gh attestation verify` recipe, and carries
+      # the auto-generated changelog. Untrusted refs flow through env, never into
+      # the run script directly.
       - name: Publish GitHub Release
         if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
-          DIGEST: ${{ steps.digest.outputs.digest }}
+          DIGEST: ${{ steps.push.outputs.index-digest }}
         run: |
           bash scripts/release-notes.sh "$TAG" "$IMAGE" "$DIGEST" > "$RUNNER_TEMP/notes.md"
           pre=""; case "$TAG" in *-*) pre="--prerelease" ;; esac
