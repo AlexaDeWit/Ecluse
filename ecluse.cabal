@@ -84,6 +84,7 @@ library
     Ecluse.Server
     Ecluse.Server.Cache
     Ecluse.Server.Conditional
+    Ecluse.Server.Context
     Ecluse.Server.Pipeline
     Ecluse.Server.Response
     Ecluse.Server.Route

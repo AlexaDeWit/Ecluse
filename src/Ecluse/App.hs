@@ -1,16 +1,18 @@
 {- | The application monad for Écluse's effectful shell.
 
-@'App' = 'ReaderT' 'Env' 'IO'@ is the orchestration monad for the
-worker\/service layer: code that needs the composition root reads it from the
-'Env' and runs effects in 'IO'. It derives 'MonadUnliftIO', so @unliftio@'s
-resource and concurrency combinators (@bracket@, @finally@, @async@) lift into
-the reader without manual unlifting — the property the supervised worker and
-the advisory-sync task rely on (see "Ecluse.Env").
+@'App'@ is the orchestration monad for the worker\/service layer: code that needs
+the composition root reads it from the 'Env' and runs effects in 'IO'. It is a
+reader over 'Env' that also carries the @katip@ logging state, so the structured
+log stream composes through it without hand-threaded plumbing. It derives
+'MonadUnliftIO', so @unliftio@'s resource and concurrency combinators (@bracket@,
+@finally@, @async@) lift into the reader without manual unlifting — the property
+the supervised worker and the advisory-sync task rely on (see "Ecluse.Env").
 
-The request hot path is deliberately /not/ written in 'App': HTTP handlers run
-in plain 'IO' taking an 'Env' argument, so the serve path carries no transformer
-lifting. 'App' is for the background\/service layer, where the ergonomics of
-'ReaderT' over hand-threaded 'Env' pay off.
+The request hot path runs in its own reader over a per-request context — see
+'Ecluse.Server.Context.Handler' — so a handler reads the matched mount and the
+composition root from one place rather than taking them as explicit arguments.
+Both monads layer over the same @katip@ base, so logging composes uniformly across
+the service and request layers.
 
 This module is part of the imperative shell; the pure core (rules, parsers,
 renderers) never imports it (see @docs\/architecture\/technology-stack.md@ →
@@ -22,21 +24,30 @@ module Ecluse.App (
     runApp,
 ) where
 
+import Katip (Katip, KatipContext)
+import Katip.Monadic (KatipContextT, runKatipContextT)
 import UnliftIO (MonadUnliftIO)
 
-import Ecluse.Env (Env)
+import Ecluse.Env (Env, envLogEnv)
 
 {- | The effectful orchestration monad: a reader over the composition-root 'Env'
-in 'IO'.
+layered on @katip@'s logging context.
 
-It is a @newtype@ rather than a bare 'ReaderT' synonym so that its instances —
-notably 'MonadUnliftIO' — are this module's to control, and so call sites name a
-single concrete monad. The derived instances give the usual reader access
-('MonadReader' 'Env'), arbitrary effects ('MonadIO'), and the unlift capability
-('MonadUnliftIO') that lets @bracket@\/@async@ run in 'App'.
+It is a @newtype@ rather than a bare transformer stack so that its instances are
+this module's to control, and so call sites name a single concrete monad. The
+derived instances give the usual reader access ('MonadReader' 'Env'), arbitrary
+effects ('MonadIO'), the unlift capability ('MonadUnliftIO') that lets
+@bracket@\/@async@ run in 'App', and the @katip@ logging classes ('Katip',
+'KatipContext') so a structured log call composes without explicit plumbing.
+
+The @katip@ base ('KatipContextT') is a reader over the log environment and the
+current context\/namespace — never a 'StateT' — so the logging state behaves
+correctly across @forkIO@\/@async@ (each forked action carries the context it was
+spawned with), and shared mutable state stays in 'Env' as 'TVar's
+(see @docs\/architecture\/technology-stack.md@ → "Key Decisions").
 -}
 newtype App a = App
-    { unApp :: ReaderT Env IO a
+    { unApp :: ReaderT Env (KatipContextT IO) a
     }
     deriving newtype
         ( Functor
@@ -45,12 +56,19 @@ newtype App a = App
         , MonadIO
         , MonadReader Env
         , MonadUnliftIO
+        , Katip
+        , KatipContext
         )
 
 {- | Run an 'App' computation against a composition-root 'Env', yielding the
 underlying 'IO' action. This is the boundary where the shell's 'App' code is
 discharged to 'IO' — for instance where a plain-'IO' entry point runs a
 service-layer action over the 'Env' it built.
+
+The @katip@ context is initialised empty under the namespace the 'Env''s 'LogEnv'
+already carries; a service-layer action narrows the namespace or adds context with
+@katip@'s @katipAddNamespace@\/@katipAddContext@ as it logs.
 -}
 runApp :: Env -> App a -> IO a
-runApp env action = runReaderT (unApp action) env
+runApp env action =
+    runKatipContextT (envLogEnv env) () mempty (runReaderT (unApp action) env)

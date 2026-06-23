@@ -8,8 +8,10 @@ slices that decide /what/ to serve — the registry client
 filter ("Ecluse.Registry.Npm.Filter"), the cross-upstream merge
 ("Ecluse.Package.Merge"), the metadata cache ("Ecluse.Server.Cache"), the
 own-ETag conditional ("Ecluse.Server.Conditional"), and the serve-outcome status
-("Ecluse.Server.Response") — into one 'IO' action over the composition-root
-'Ecluse.Env.Env'. It runs in plain 'IO' (no transformer lifting on the hot path).
+("Ecluse.Server.Response") — into one action in the
+'Ecluse.Server.Context.Handler' reader, reading its mount's serve dependencies and
+the composition-root 'Ecluse.Env.Env' from the request's
+'Ecluse.Server.Context.RequestCtx'.
 
 == Credential authority
 
@@ -73,9 +75,6 @@ tracked as separate work, after which a second ecosystem would reuse this
 orchestration unchanged.
 -}
 module Ecluse.Server.Pipeline (
-    -- * Dependencies
-    PackumentDeps (..),
-
     -- * The packument handler
     servePackument,
 ) where
@@ -90,7 +89,7 @@ import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
-import Network.HTTP.Types (ResponseHeaders, Status, hAuthorization, hContentType, mkStatus, status200, status401)
+import Network.HTTP.Types (ResponseHeaders, Status, hAuthorization, hContentType, mkStatus, status200, status401, status501)
 import Network.Wai (Request, Response, ResponseReceived, requestHeaders, responseLBS)
 import UnliftIO (concurrently)
 import UnliftIO.Exception (throwString, tryAny)
@@ -114,11 +113,17 @@ import Ecluse.Registry.Npm (
  )
 import Ecluse.Registry.Npm.Filter (FilterResult (Filtered, NoSurvivors), applyFilterPlan, rewriteTarballUrls)
 import Ecluse.Registry.Npm.Project (parsePackageInfo)
-import Ecluse.Rules.Types (Decision, EvalContext (EvalContext), PrecededRule)
+import Ecluse.Rules.Types (Decision, EvalContext (EvalContext))
 import Ecluse.Server.Cache (CacheEntry (CacheEntry, entryInfo, entryRaw), Source (Source), resolveMetadata)
 import Ecluse.Server.Conditional (Conditional (Modified, NotModified), etagHeader, evaluateOwnETag)
+import Ecluse.Server.Context (
+    Handler,
+    MountBinding (bindingPackumentDeps, bindingRenderer),
+    PackumentDeps (..),
+    ctxEnv,
+    ctxMount,
+ )
 import Ecluse.Server.Response (
-    HelpMessage,
     MountRenderer,
     PackumentStatus (PackumentForbidden, PackumentOk, PackumentServerError, PackumentUnavailable),
     RejectReason (Unavailable),
@@ -134,81 +139,74 @@ import Ecluse.Server.Response (
  )
 import Ecluse.Version (renderVersion)
 
--- ── dependencies ──────────────────────────────────────────────────────────────
-
-{- | The per-request inputs the packument handler needs that the composition-root
-'Env' does not (yet) carry: the resolved mount the request landed on.
-
-These are a mount-level concern — the two upstream endpoints, the mount's
-externally-visible base URL, and its resolved rule policy — plus the edge auth
-token and the operator help message. They are passed explicitly rather than read
-from 'Env' because backend selection and the mount map are resolved at the
-composition root (a separate concern); the handler takes exactly what it needs to
-decide and serve one packument.
--}
-data PackumentDeps = PackumentDeps
-    { pdPrivateBaseUrl :: Text
-    -- ^ The private upstream base URL; under @passthrough@, reads forward the client's credential.
-    , pdPublicBaseUrl :: Text
-    -- ^ The public upstream base URL; reads are anonymous (no client credential).
-    , pdMountBaseUrl :: Text
-    {- ^ The mount's externally-visible base URL, under which served @dist.tarball@
-    URLs are rewritten so artifacts are fetched back through the gate.
-    -}
-    , pdRules :: [PrecededRule]
-    -- ^ The mount's resolved rule policy, evaluated against every public version.
-    , pdInboundToken :: Maybe Secret
-    {- ^ The optional inbound token a client must present (@PROXY_AUTH_TOKEN@);
-    'Nothing' leaves the edge open (the network layer guards it).
-    -}
-    , pdNow :: IO UTCTime
-    {- ^ The wall-clock "now" for the rules' 'EvalContext'. Injected so the
-    time-sensitive age gate is deterministic under test.
-    -}
-    , pdHelp :: Maybe HelpMessage
-    -- ^ The operator help message appended to every denial body, if configured.
-    }
-
 -- ── the handler ─────────────────────────────────────────────────────────────
 
-{- | Serve a @GET \/{pkg}@ packument request end to end.
+{- | Serve a @GET \/{pkg}@ packument request end to end, over the request's
+'RequestCtx'.
 
-The edge token, if configured, is validated before any upstream is touched. Then
-the private and public upstreams are fetched __concurrently__ — the client's
-credential forwarded to the private leg, the public leg anonymous — each parse
-failure or unavailable upstream degrading to a missing contribution rather than an
-error. Private versions are trusted as-is; public versions are gated through the
-rules and the structural filter ('filterPlan' then 'applyFilterPlan'); the
-surviving sets are merged ('mergePackuments') and
-the 'MergePlan' replayed onto the raw upstream @Value@s to assemble the served
-body, which is then answered against the client's conditional request with our own
-ETag. When nothing survives, the status follows the most recoverable cause via
+The mount's 'PackumentDeps' and error renderer are read from the matched
+'MountBinding' in context, not threaded as arguments. When the mount has no
+packument-serve dependencies wired, the route is recognised but not served — a
+@501@ in the mount's surface — rather than fabricating a result.
+
+With dependencies wired: the edge token, if configured, is validated before any
+upstream is touched. Then the private and public upstreams are fetched
+__concurrently__ — the client's credential forwarded to the private leg, the public
+leg anonymous — each parse failure or unavailable upstream degrading to a missing
+contribution rather than an error. Private versions are trusted as-is; public
+versions are gated through the rules and the structural filter ('filterPlan' then
+'applyFilterPlan'); the surviving sets are merged ('mergePackuments') and the
+'MergePlan' replayed onto the raw upstream @Value@s to assemble the served body,
+which is then answered against the client's conditional request with our own ETag.
+When nothing survives, the status follows the most recoverable cause via
 'packumentStatus'. Every refusal — the edge @401@ and the no-survivors
 @403@\/@503@\/@500@ — is rendered through the mount's 'MountRenderer'.
 -}
 servePackument ::
-    MountRenderer ->
-    PackumentDeps ->
-    Env ->
     PackageName ->
     Request ->
     (Response -> IO ResponseReceived) ->
-    IO ResponseReceived
-servePackument renderer deps env name request respond
-    | not (edgeAuthorised deps request) = respond (edgeUnauthorised renderer)
+    Handler ResponseReceived
+servePackument name request respond = do
+    renderer <- asks (bindingRenderer . ctxMount)
+    asks (bindingPackumentDeps . ctxMount) >>= \case
+        Nothing -> liftIO (respond (recognisedButUnserved renderer))
+        Just deps -> serveWithDeps renderer deps name request respond
+
+-- Serve a packument once the mount's dependencies are known: fetch, gate, merge,
+-- and answer — the credential-authority and merge logic the module header
+-- describes. The composition-root 'Env' is read from the request context.
+serveWithDeps ::
+    MountRenderer ->
+    PackumentDeps ->
+    PackageName ->
+    Request ->
+    (Response -> IO ResponseReceived) ->
+    Handler ResponseReceived
+serveWithDeps renderer deps name request respond
+    | not (edgeAuthorised deps request) = liftIO (respond (edgeUnauthorised renderer))
     | otherwise = do
-        ctx <- EvalContext <$> pdNow deps
-        let clientToken = forwardedToken request
-        (privResult, pubResult) <-
-            concurrently
-                (fetchPrivateLeg env (pdPrivateBaseUrl deps) clientToken name)
-                (fetchPublicLeg env (pdPublicBaseUrl deps) name)
-        let private = trustedSource <$> privResult
-            (public, publicExclusions) = gatePublic deps ctx pubResult
-            sources = catMaybes [private, public]
-        case assemble deps sources of
-            Just body -> respond (servePackumentBody request body)
-            Nothing -> respond (noSurvivors renderer deps (collectDecisions privResult publicExclusions))
+        env <- asks ctxEnv
+        liftIO $ do
+            evalCtx <- EvalContext <$> pdNow deps
+            let clientToken = forwardedToken request
+            (privResult, pubResult) <-
+                concurrently
+                    (fetchPrivateLeg env (pdPrivateBaseUrl deps) clientToken name)
+                    (fetchPublicLeg env (pdPublicBaseUrl deps) name)
+            let private = trustedSource <$> privResult
+                (public, publicExclusions) = gatePublic deps evalCtx pubResult
+                sources = catMaybes [private, public]
+            case assemble deps sources of
+                Just body -> respond (servePackumentBody request body)
+                Nothing -> respond (noSurvivors renderer deps (collectDecisions privResult publicExclusions))
+
+-- A recognised-but-unserved packument route: a @501@ in the mount's surface, for a
+-- mount whose packument-serve dependencies are not wired. The decision to serve or
+-- stub is the handler's, so the routing layer need not re-derive it.
+recognisedButUnserved :: MountRenderer -> Response
+recognisedButUnserved renderer =
+    renderedResponse status501 [] (renderError renderer Nothing "this route is recognised but not yet served by this proxy")
 
 -- ── edge authentication ──────────────────────────────────────────────────────
 
