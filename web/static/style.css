@@ -1,24 +1,16 @@
 :root {
-  /* Palette taken from the brand SVGs (docs/branding/logo.svg + the social cards):
-     warm cream and charcoal, with the locks' "water" sage-teal as the accent.
-     The accent is the water teal (#6e928b) darkened for legible link contrast. */
-  --fg: #211f1c;      /* logo charcoal tile */
+  /* Palette taken from the brand SVGs (docs/social-card.svg, docs/branding/logo.svg):
+     the warm "sepia" cream ground, charcoal ink, and the locks' sage-teal "water" as
+     the accent (darkened for legible link contrast). The brand presentation is light
+     (the social card's ground is #f4efe3), so the site is light-only here — a warm,
+     on-brand dark mode (the charcoal #211f1c tile) could follow later. */
+  --fg: #211f1c;      /* logo charcoal ink */
   --muted: #4f4b43;   /* warm dark grey */
-  --bg: #f4efe3;      /* cream — the logo "É" / card ground */
+  --bg: #f4efe3;      /* the cream / sepia card ground */
   --accent: #3f6058;  /* water teal, darkened for contrast on cream */
   --border: #ddd3bb;  /* tan lock-step */
   --code-bg: #ece4d2; /* warm beige lock-step */
-  color-scheme: light dark;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --fg: #f4efe3;      /* cream text (the logo "É") */
-    --muted: #b3ab99;   /* warm muted grey */
-    --bg: #211f1c;      /* the logo charcoal tile */
-    --accent: #9bbbb4;  /* lighter water teal */
-    --border: #4f4b43;  /* warm dark grey (from the palette) */
-    --code-bg: #2a2723; /* a touch above the charcoal ground */
-  }
+  color-scheme: light;
 }
 
 * { box-sizing: border-box; }
