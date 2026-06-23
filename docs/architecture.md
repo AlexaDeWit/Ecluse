@@ -4,7 +4,9 @@ This is the **index** to Écluse's systems design. It captures the vision, how a
 request flows end to end, and what is out of scope; the detailed design of each
 concern lives in the linked documents under [`architecture/`](architecture/).
 Development practices — codebase layout, testing strategy, and CI / repo
-requirements — live in [`../CONTRIBUTING.md`](../CONTRIBUTING.md).
+requirements — live in [`../CONTRIBUTING.md`](../CONTRIBUTING.md). For *why* Écluse
+exists — the problem it solves and the reasoning behind these decisions — see
+[`../MOTIVATION.md`](../MOTIVATION.md); this document and those it links are the *how*.
 
 > These documents describe the **intended target design** (the design of record),
 > not necessarily the current state of the code. Implementation tracks toward them
