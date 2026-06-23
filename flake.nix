@@ -104,6 +104,14 @@
         # default (human) shell below but is kept out of the lean CI set.
         docsInputs = [ pkgs.pandoc ];
 
+        # Vendored Mermaid bundle for the site: one self-contained UMD build, pinned
+        # by hash and copied into the published site (see Makefile `site`) so diagrams
+        # render with no external CDN dependency. Bump the version and hash together.
+        mermaidJs = pkgs.fetchurl {
+          url = "https://cdn.jsdelivr.net/npm/mermaid@11.15.0/dist/mermaid.min.js";
+          hash = "sha256-cBN+d7snO7LvlyuG6LBADMqL5TyyW/xFkRoYbcmGZd4=";
+        };
+
         # Interactive-only tooling: in the default (human) shell, never needed by
         # CI. HLS/ghcid for live feedback; hoogle/cabal-plan for API & build-plan
         # search (see AGENTS.md).
@@ -256,6 +264,8 @@
           buildInputs =
             ciInputs ++ ideInputs ++ releaseInputs ++ scanInputs ++ workflowLintInputs
             ++ docsInputs ++ [ hpkgs.weeder ];
+          # Path to the pinned Mermaid bundle; `make site` copies it into _site/vendor.
+          MERMAID_JS = "${mermaidJs}";
         });
 
         # Lean shell for CI: only what the gate jobs invoke through `make`. CI

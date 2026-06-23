@@ -39,13 +39,11 @@ $body$
       <p class="made-in">Proudly built in Québec&nbsp;⚜</p>
     </footer>
     <!--
-      Proof-of-concept: Mermaid renders client-side from a pinned CDN bundle. For
-      production, vendor a pinned Mermaid bundle (e.g. fetched via the flake) so the
-      published site has no external runtime dependency.
+      Mermaid renders the diagrams client-side from a vendored, hash-pinned bundle
+      (the flake's `mermaidJs`, copied to _site/vendor by `make site`) — no external
+      runtime dependency.
     -->
-    <script type="module">
-      import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
-      mermaid.initialize({ startOnLoad: true, theme: "neutral" });
-    </script>
+    <script src="vendor/mermaid.min.js"></script>
+    <script>mermaid.initialize({ startOnLoad: true, theme: "neutral" });</script>
   </body>
 </html>
