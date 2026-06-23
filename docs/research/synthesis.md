@@ -236,7 +236,7 @@ data PackageDetails = PackageDetails
 deny-precedence fold, allow-abstain-deny outcomes, deny-by-default with collected
 reasons. The revision touches inputs, not the fold:
 
-- **`DenyHasInstallScripts`** changes from reading a `Bool` to matching
+- **`DenyInstallTimeExecution`** changes from reading a `Bool` to matching
   `CodeExecSignal`: `RunsCodeOnInstall why → Deny why`; `NoCodeOnInstall →
   Abstain`; **`CodeExecUnknown → Abstain`** (pure tier defers; the effectful tier
   fetches the gemspec and re-evaluates). This is the single most important

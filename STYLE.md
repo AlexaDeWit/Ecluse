@@ -385,7 +385,7 @@ unambiguous at the use site and across modules: `pkgName`, `pkgVersion`,
 for `EvalContext`.
 
 **Rule 6.4 — Names read as domain language.** Constructors are verbs/phrases of
-intent (`AllowScope`, `DenyHasInstallScripts`, `DeniedByDefault`); booleans and
+intent (`AllowScope`, `DenyInstallTimeExecution`, `DeniedByDefault`); booleans and
 predicates read as assertions (`pkgHasInstallScripts`, `isAllow`).
 
 ---
@@ -481,7 +481,7 @@ ruleName :: Rule -> Text
 ruleName = \case
     AllowScope{} -> "AllowScope"
     AllowIfPublishedBefore{} -> "AllowIfPublishedBefore"
-    DenyHasInstallScripts -> "DenyHasInstallScripts"
+    DenyInstallTimeExecution -> "DenyInstallTimeExecution"
 ```
 
 Match every constructor explicitly (no wildcard) when you want the compiler to

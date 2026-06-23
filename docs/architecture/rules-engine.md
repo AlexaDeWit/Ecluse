@@ -54,7 +54,7 @@ A rule over such a signal is necessarily **effectful**, even though it is
 conceptually a simple per-version predicate. Guidance: `parseVersionDetails`
 populates `PackageDetails` from the cheap metadata path; a signal that needs an
 extra fetch belongs in the effectful tier alongside advisory lookups, and the
-same logical rule (e.g. `DenyHasInstallScripts`) may therefore land in different
+same logical rule (e.g. `DenyInstallTimeExecution`) may therefore land in different
 tiers for different ecosystems.
 
 ### Evaluation model
@@ -169,7 +169,7 @@ filtered body rather than relaying upstream's (see
 |------|------|-------------|
 | `AllowIfPublishedBefore ageSeconds` | Pure | Allows a package version if it was published more than `ageSeconds` seconds ago. Default: 604800 (7 days). Guards against typosquatting and dependency confusion attacks where attackers race to publish before detection. |
 | `AllowScope scope` | Pure | Unconditionally allows all packages under a given npm scope (e.g. `@myorg`). Use for internal scopes that bypass public-registry rules. |
-| `DenyHasInstallScripts` | Pure | Denies any version whose metadata flags install scripts (npm's `hasInstallScript`) — a common arbitrary-code-execution vector at install time. Abstains otherwise. As a deny rule it overrides any allow. |
+| `DenyInstallTimeExecution` | Pure | Denies any version flagged with an install-time code-execution signal (npm's `hasInstallScript`, a RubyGems native extension, a PyPI sdist) — a common arbitrary-code-execution vector. Abstains otherwise. As a deny rule it overrides any allow. |
 
 Further rules are added as later phases — the **effectful** CVE rules
 [`DenyIfCVE` and `AllowIfRemediatesCve`](#cve-subsystem), and effectful per-version

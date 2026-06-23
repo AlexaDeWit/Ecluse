@@ -164,7 +164,7 @@ autodiscovery JSON parsing consumes. Each line carries a populated **`dd` object
 for correlation and unified service tagging:
 
 ```json
-{"level":"warn","msg":"denied","dd":{"trace_id":"…","span_id":"…","service":"ecluse","env":"prod","version":"1.4.2"},"package":"@evil/pkg","version":"1.0.0","rule":"DenyHasInstallScripts"}
+{"level":"warn","msg":"denied","dd":{"trace_id":"…","span_id":"…","service":"ecluse","env":"prod","version":"1.4.2"},"package":"@evil/pkg","version":"1.0.0","rule":"DenyInstallTimeExecution"}
 ```
 
 `dd.service`/`dd.env`/`dd.version` are sourced from the **same** config as the

@@ -14,7 +14,7 @@ import Ecluse.Rules.Types (
     PrecededRule (..),
     Rule (..),
     defaultAllowIfPublishedBeforePrecedence,
-    defaultDenyHasInstallScriptsPrecedence,
+    defaultDenyInstallTimeExecutionPrecedence,
  )
 
 {- | Tests for the configuration boundary. They exercise the three promises of the
@@ -367,7 +367,7 @@ mixedBase =
         ( Map.fromList
             [ ("min-age", PrecededRule 100 (AllowIfPublishedBefore (7 * 86400)))
             , ("trusted", PrecededRule 200 (AllowScope (mkScope "myorg")))
-            , ("deny-scripts", PrecededRule 300 DenyHasInstallScripts)
+            , ("deny-scripts", PrecededRule 300 DenyInstallTimeExecution)
             ]
         )
 
@@ -388,17 +388,17 @@ rulePolicySpec = describe "resolvePolicy" $ do
             `shouldBe` Right [PrecededRule 150 (AllowIfPublishedBefore (7 * 86400))]
 
     it "adds a new rule that carries a full type at its type's default precedence" $
-        resolveJson "{\"rules\":{\"deny-scripts\":{\"type\":\"DenyHasInstallScripts\"}}}"
+        resolveJson "{\"rules\":{\"deny-scripts\":{\"type\":\"DenyInstallTimeExecution\"}}}"
             `shouldBe` Right
                 [ PrecededRule defaultAllowIfPublishedBeforePrecedence (AllowIfPublishedBefore (7 * 86400))
-                , PrecededRule defaultDenyHasInstallScriptsPrecedence DenyHasInstallScripts
+                , PrecededRule defaultDenyInstallTimeExecutionPrecedence DenyInstallTimeExecution
                 ]
 
     it "adds a new rule with an explicit precedence" $
-        resolveJson "{\"rules\":{\"deny-scripts\":{\"type\":\"DenyHasInstallScripts\",\"precedence\":250}}}"
+        resolveJson "{\"rules\":{\"deny-scripts\":{\"type\":\"DenyInstallTimeExecution\",\"precedence\":250}}}"
             `shouldBe` Right
                 [ PrecededRule defaultAllowIfPublishedBeforePrecedence (AllowIfPublishedBefore (7 * 86400))
-                , PrecededRule 250 DenyHasInstallScripts
+                , PrecededRule 250 DenyInstallTimeExecution
                 ]
 
     it "suppresses a default rule with enabled:false" $
@@ -429,8 +429,8 @@ rulePolicySpec = describe "resolvePolicy" $ do
     it "rejects a restated type on a patch that changes the default's kind" $
         -- Re-typing min-age to a different known rule is a loud error, not a
         -- silent identity swap.
-        resolveJson "{\"rules\":{\"min-age\":{\"type\":\"DenyHasInstallScripts\"}}}"
-            `shouldBe` Left [MalformedRule "min-age" "\"type\" \"DenyHasInstallScripts\" does not match the default rule it patches"]
+        resolveJson "{\"rules\":{\"min-age\":{\"type\":\"DenyInstallTimeExecution\"}}}"
+            `shouldBe` Left [MalformedRule "min-age" "\"type\" \"DenyInstallTimeExecution\" does not match the default rule it patches"]
 
     it "rejects a restated unknown type on a patch" $
         resolveJson "{\"rules\":{\"min-age\":{\"type\":\"Bogus\"}}}"
@@ -459,19 +459,19 @@ rulePolicySpec = describe "resolvePolicy" $ do
             resolveJsonOver mixedBase "{\"rules\":{\"trusted\":{\"precedence\":210}}}"
                 `shouldSatisfy` hasRuleAtPrec 210 (AllowScope (mkScope "myorg"))
 
-        it "patches a DenyHasInstallScripts default's precedence" $
+        it "patches a DenyInstallTimeExecution default's precedence" $
             resolveJsonOver mixedBase "{\"rules\":{\"deny-scripts\":{\"precedence\":350}}}"
-                `shouldSatisfy` hasRuleAtPrec 350 DenyHasInstallScripts
+                `shouldSatisfy` hasRuleAtPrec 350 DenyInstallTimeExecution
 
         it "accepts a restated matching type on an AllowScope default" $
             resolveJsonOver mixedBase "{\"rules\":{\"trusted\":{\"type\":\"AllowScope\",\"scope\":\"acme\"}}}"
                 `shouldSatisfy` hasRuleAtPrec 200 (AllowScope (mkScope "acme"))
 
-        it "accepts a restated matching type on a DenyHasInstallScripts default" $
-            resolveJsonOver mixedBase "{\"rules\":{\"deny-scripts\":{\"type\":\"DenyHasInstallScripts\"}}}"
-                `shouldSatisfy` hasRuleAtPrec 300 DenyHasInstallScripts
+        it "accepts a restated matching type on a DenyInstallTimeExecution default" $
+            resolveJsonOver mixedBase "{\"rules\":{\"deny-scripts\":{\"type\":\"DenyInstallTimeExecution\"}}}"
+                `shouldSatisfy` hasRuleAtPrec 300 DenyInstallTimeExecution
 
-        it "rejects a restated mismatching type on a DenyHasInstallScripts default" $
+        it "rejects a restated mismatching type on a DenyInstallTimeExecution default" $
             resolveJsonOver mixedBase "{\"rules\":{\"deny-scripts\":{\"type\":\"AllowScope\"}}}"
                 `shouldBe` Left [MalformedRule "deny-scripts" "\"type\" \"AllowScope\" does not match the default rule it patches"]
 
@@ -479,7 +479,7 @@ rulePolicySpec = describe "resolvePolicy" $ do
             resolveJsonOver mixedBase "{\"rules\":{\"trusted\":{\"enabled\":false}}}"
                 `shouldBe` Right
                     [ PrecededRule 100 (AllowIfPublishedBefore (7 * 86400))
-                    , PrecededRule 300 DenyHasInstallScripts
+                    , PrecededRule 300 DenyInstallTimeExecution
                     ]
 
     describe "fail-loud merge references" $ do
@@ -489,8 +489,8 @@ rulePolicySpec = describe "resolvePolicy" $ do
             cases =
                 [
                     ( "an unknown rule type (a typo'd deny must not vanish)"
-                    , "{\"rules\":{\"deny-scripts\":{\"type\":\"DenyHasInstallScript\"}}}"
-                    , [UnknownRuleType "deny-scripts" "DenyHasInstallScript"]
+                    , "{\"rules\":{\"deny-scripts\":{\"type\":\"DenyInstallTimeExecutio\"}}}"
+                    , [UnknownRuleType "deny-scripts" "DenyInstallTimeExecutio"]
                     )
                 ,
                     ( "the effectful AllowIfRemediatesCve type (unknown here, not a crash)"
@@ -575,7 +575,7 @@ desugarSpec = describe "loadConfig" $ do
             Right cfg -> case Map.lookup (mkMountPrefix "/npm") (configMounts cfg) of
                 Nothing -> expectationFailure "expected the /npm mount"
                 Just mount ->
-                    mountPolicy mount `shouldBe` [PrecededRule defaultDenyHasInstallScriptsPrecedence DenyHasInstallScripts]
+                    mountPolicy mount `shouldBe` [PrecededRule defaultDenyInstallTimeExecutionPrecedence DenyInstallTimeExecution]
 
     it "surfaces a bad per-mount refinement as a policy error" $ do
         env <- expectEnv minimalEnv
@@ -615,7 +615,7 @@ refinedMountDoc =
     \\"publicUpstream\":\"https://registry.npmjs.org\",\
     \\"mirrorTarget\":{\"url\":\"https://mirror.example.test\",\"credential\":\"static\",\"queue\":\"sqs\"},\
     \\"rules\":{\"min-age\":{\"enabled\":false}}}},\
-    \\"rules\":{\"deny-scripts\":{\"type\":\"DenyHasInstallScripts\"}}}"
+    \\"rules\":{\"deny-scripts\":{\"type\":\"DenyInstallTimeExecution\"}}}"
 
 -- A document whose mount refinement names an unknown rule type.
 badRefinementDoc :: ByteString

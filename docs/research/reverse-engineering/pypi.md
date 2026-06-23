@@ -394,8 +394,8 @@ PyPI has no `hasInstallScript`, but the risk exists in a different shape:
 - **Wheels run no code on install** — they are unpacked, not executed. Installing
   a wheel is inert.
 - **sdists execute a build backend** (`setup.py` / PEP 517 backend) at *install/
-  build* time — arbitrary code. The resilience analogue of npm's
-  `DenyHasInstallScript` is therefore **"prefer/require wheels; treat
+  build* time — arbitrary code. For PyPI, the `DenyInstallTimeExecution` signal is
+  therefore **"prefer/require wheels; treat
   sdist-only releases as higher risk."** This is derivable purely from the file
   list (`packagetype`), no download needed.
 

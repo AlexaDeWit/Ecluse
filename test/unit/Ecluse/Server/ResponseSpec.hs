@@ -18,7 +18,7 @@ import Ecluse.Package (
 import Ecluse.Rules (evalRules)
 import Ecluse.Rules.Types (
     EvalContext (EvalContext),
-    Rule (AllowScope, DenyHasInstallScripts),
+    Rule (AllowScope, DenyInstallTimeExecution),
     atDefaultPrecedence,
  )
 import Ecluse.Server.Response (
@@ -85,7 +85,7 @@ spec = do
         it "Admit streams a 200" $
             artifactStatus Admit `shouldBe` Ok
         it "a policy rejection is a 403" $
-            artifactStatus (Reject (Rejection (ByPolicy (RuleName "DenyHasInstallScripts")) "no"))
+            artifactStatus (Reject (Rejection (ByPolicy (RuleName "DenyInstallTimeExecution")) "no"))
                 `shouldBe` Forbidden
         it "a will-resolve rejection (no Retry-After) is a 503 with no delay" $
             artifactStatus (Reject (Rejection (Unavailable (WillResolve Nothing)) "down"))
@@ -117,7 +117,7 @@ spec = do
                 `shouldBe` 500
 
     describe "packumentStatus — status over the merged survivor set" $ do
-        let denied = Reject (Rejection (ByPolicy (RuleName "DenyHasInstallScripts")) "no")
+        let denied = Reject (Rejection (ByPolicy (RuleName "DenyInstallTimeExecution")) "no")
             transient d = Reject (Rejection (Unavailable (WillResolve d)) "down")
             broken = Reject (Rejection (Unavailable WontResolve) "broken")
         it "serves (200) when any version survives, whatever else was excluded" $ do
@@ -158,11 +158,11 @@ spec = do
     describe "serveDecisionOf — a rules Decision becomes a serve outcome" $ do
         it "a deny-rule decision rejects ByPolicy, naming the rule, with the rendered why" $ do
             let pd = pkg "public" 30 (RunsCodeOnInstall "preinstall hook")
-                decision = evalRules (EvalContext now) [atDefaultPrecedence DenyHasInstallScripts] pd
+                decision = evalRules (EvalContext now) [atDefaultPrecedence DenyInstallTimeExecution] pd
             case serveDecisionOf pd decision of
                 Reject rej -> do
-                    rejectionReason rej `shouldBe` ByPolicy (RuleName "DenyHasInstallScripts")
-                    rejectionMessage rej `shouldSatisfy` T.isInfixOf "DenyHasInstallScripts"
+                    rejectionReason rej `shouldBe` ByPolicy (RuleName "DenyInstallTimeExecution")
+                    rejectionMessage rej `shouldSatisfy` T.isInfixOf "DenyInstallTimeExecution"
                     rejectionMessage rej `shouldSatisfy` T.isInfixOf "preinstall hook"
                 Admit -> expectationFailure "a deny decision must reject, not admit"
         it "a deny-by-default decision rejects ByPolicy (no rule allowed it)" $ do
