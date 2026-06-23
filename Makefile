@@ -21,7 +21,7 @@ HADDOCK_FLAGS := --haddock-hyperlink-source --haddock-quickjump
 
 .DEFAULT_GOAL := help
 .PHONY: help update build test test-integration test-smoke test-all doctest \
-        coverage freeze gen-version-fixtures format format-check lint sast \
+        coverage freeze gen-version-fixtures new-worktree format format-check lint sast \
         cabal-check lint-workflows weeder check run docs \
         docs-check docs-site site nix-build nix-check docker-build docker-push sbom scan \
         scan-vulnix clean
@@ -80,6 +80,18 @@ coverage: ## Generate $(SUITE) coverage as Codecov JSON under coverage/
 
 gen-version-fixtures: ## Regenerate version-ordering fixtures from the reference tools (node-semver / packaging / Gem::Version)
 	$(NIX) bash scripts/gen-version-fixtures.sh
+
+# Create an isolated agent worktree on BRANCH and warm its HLS index in the
+# background (a `make build` populating dist-newstyle, which HLS reuses) so the
+# agent's first agent-lsp navigation call lands hot rather than a cold typecheck
+# mid-session. One worktree per agent; cap concurrency at 2-3 and stagger
+# creations (HLS is memory-hungry). NOT $(NIX)-wrapped: git/bash are ambient and
+# the script enters the flake itself, only for the background build. Override
+# BASE (default origin/main) and DIR (default .claude/worktrees/<branch-slug>).
+# See AGENTS.md -> "Build & Tooling" and planning/orchestration-strategy.md.
+new-worktree: ## Create an agent worktree on BRANCH and warm its HLS index (BASE=…, DIR=…)
+	@test -n "$(BRANCH)" || { echo "set BRANCH, e.g. make new-worktree BRANCH=slice/foo"; exit 1; }
+	bash scripts/new-worktree.sh "$(BRANCH)" "$(BASE)" "$(DIR)"
 
 format: ## Reformat Haskell sources in place
 	$(NIX) fourmolu --mode inplace $(HS)

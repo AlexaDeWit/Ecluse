@@ -6,7 +6,7 @@
       "command": "bash",
       "args": [
         "-c",
-        "exec nix develop .#mcp --command mcp-language-server -workspace \"$PWD\" -lsp haskell-language-server-wrapper -- --lsp"
+        "exec nix develop .#mcp --command agent-lsp haskell:haskell-language-server-wrapper,--lsp"
       ]
     }
   }

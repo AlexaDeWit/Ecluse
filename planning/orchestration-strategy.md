@@ -125,6 +125,20 @@ worktrees onto the new base and re-runs their gate, so integration drift surface
 immediately rather than at PR time. Slices that genuinely cannot be split become
 **stacked PRs**; otherwise they stay small and independent.
 
+**Warm each worktree's HLS index at creation.** A fresh worktree is a fresh HLS
+workspace: its `dist-newstyle` and `.hie` start empty, so the first navigation call
+pays a cold typecheck. Create worktrees with `make new-worktree BRANCH=<branch>`,
+which adds the worktree and kicks off a background `make build` so the interface
+files HLS reuses are on disk before the agent arrives — the first call then returns
+in seconds, not after a full typecheck. Dependencies come warm from the shared Nix
+store, so only this project's own modules cost anything. Two reasons one-worktree-per-
+agent is a **hard** rule and not just a speed-up: HLS keys its `hiedb` (a SQLite DB)
+by *workspace path*, so multiple agents in one shared checkout contend on a single
+database and can stall each other — a separate directory per agent gives each its own
+DB; and with 2–3 worktrees in flight, **stagger** the creations so parallel cold
+typechecks don't thrash the CPU. After a post-merge rebase, re-run `make build` to
+re-warm incrementally.
+
 **Pin the model; there is no effort dial.** The Agent tool's `model` argument, left
 unset, takes the general-purpose agent's default — which may be **lighter than the
 team lead's own model** — and the tool exposes **no** thinking-effort parameter, so
@@ -137,15 +151,18 @@ available rather than defaulting; reserve the default only for genuinely mechani
 slices.
 
 **Have agents bootstrap their tools — the LSP MCP especially.** The HLS-over-MCP
-navigation tools (`mcp__hls__definition` / `references` / `hover` / `diagnostics`) are
-surfaced as *deferred* tools: an agent must **load them before it can call them**, and
-a less-exploratory agent skips that step and falls back to `grep`. A brief should
-direct the agent to load and use them early for cross-module work — find-references for
-a refactor's blast radius, go-to-definition across re-exports, type-at-point to confirm
-a signature — which is higher-precision and faster than `grep` over this codebase's
-qualified imports and re-exports (the compiler stays ground truth for correctness).
-An instruction to use a tool the agent cannot actually reach is just decoration, so
-confirm the MCP is wired into the agent's environment when you rely on it.
+navigation tools (`start_lsp`, `go_to_definition`, `find_references`, `hover`,
+`get_diagnostics`, `go_to_symbol`, exposed by `agent-lsp`) are surfaced as *deferred*
+tools: an agent must **load them before it can call them**, and a less-exploratory
+agent skips that step and falls back to `grep`. A brief should direct the agent to
+**first call `start_lsp` with `root_dir` set to its worktree root** — without it
+agent-lsp drops to single-file mode and HLS reports "Could not find module …", because
+a worktree's `.git` is a file — then use find-references for a refactor's blast radius,
+go-to-definition across re-exports, and type-at-point to confirm a signature, all
+higher-precision and faster than `grep` over this codebase's qualified imports and
+re-exports (the compiler stays ground truth for correctness). An instruction to use a
+tool the agent cannot actually reach is just decoration, so confirm the MCP is wired
+into the agent's environment when you rely on it.
 
 **Invoke the toolchain through the current flake, never the ambient shell.** A
 long-lived agent session enters a `nix develop` once and holds it for the whole
