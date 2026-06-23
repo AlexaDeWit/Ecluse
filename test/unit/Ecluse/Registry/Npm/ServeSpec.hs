@@ -6,7 +6,7 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Test.Hspec
 
 import Ecluse.Registry.Npm.Serve (npmDenialBody, npmRenderer)
-import Ecluse.Server.Response (RenderedBody (renderedBytes, renderedContentType), mkHelpMessage, renderError)
+import Ecluse.Server.Response (RenderedBody (..), mkHelpMessage, renderError)
 
 {- | Decode a denial body and read its @error@ string. 'Right' the string when the
 body is a JSON object carrying a string @error@; 'Left' (which fails the
@@ -45,6 +45,9 @@ spec = do
         it "tags the rendered body application/json" $
             renderedContentType (renderError npmRenderer Nothing "denied")
                 `shouldBe` "application/json"
+        it "renders the full content-type + bytes pair" $
+            renderError npmRenderer Nothing "denied"
+                `shouldBe` RenderedBody "application/json" "{\"error\":\"denied\"}"
         it "shapes the body as the npm {\"error\": …} object" $
             errorField (renderedBytes (renderError npmRenderer Nothing "denied"))
                 `shouldBe` Right "denied"

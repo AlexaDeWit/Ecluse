@@ -79,6 +79,9 @@ module Ecluse (
     runServer,
     runWorker,
 
+    -- * npm front door
+    npmServerConfig,
+
     -- * Default handles
     unconfiguredRegistry,
     unconfiguredCredentials,
@@ -141,9 +144,11 @@ binary later reuses this same entry.
 runServer :: Env -> IO ()
 runServer = Server.runServer npmServerConfig
 
-{- The server settings for the npm front door: a single npm mount at @\/npm@. npm
-is deliberately __path-mounted, never at the root__, so adding a second ecosystem
-later changes no existing consumer's URLs.
+{- | The server settings 'runServer' runs: a single npm mount at @\/npm@. npm is
+deliberately __path-mounted, never at the root__, so adding a second ecosystem
+later changes no existing consumer's URLs. Exposed so the composed front door can
+be driven directly (e.g. embedded in another @wai@ application, or exercised in
+tests through 'Ecluse.Server.application' without binding a socket).
 -}
 npmServerConfig :: ServerConfig
 npmServerConfig = mkServerConfig [npmMount]
