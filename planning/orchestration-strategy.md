@@ -125,6 +125,17 @@ worktrees onto the new base and re-runs their gate, so integration drift surface
 immediately rather than at PR time. Slices that genuinely cannot be split become
 **stacked PRs**; otherwise they stay small and independent.
 
+**Warm each worktree's HLS index at creation.** A fresh worktree is a fresh HLS
+workspace: its `dist-newstyle` and `.hie` start empty, so the first `mcp__hls__*`
+call in it would otherwise pay a cold full-project typecheck — the failure mode an
+agent can stall on. Create worktrees with `make new-worktree BRANCH=<branch>`, which
+adds the worktree and kicks off a background `make build` so the interface files HLS
+reuses are on disk before the agent arrives. Dependencies already come warm from the
+shared Nix store, so only this project's own modules cost anything; still, HLS holds
+~1–3 GB per load, so with 2–3 worktrees in flight, **stagger** the creations rather
+than firing the cold builds in parallel. After a post-merge rebase, re-run `make
+build` in the rebased worktree to re-warm it incrementally.
+
 **Pin the model; there is no effort dial.** The Agent tool's `model` argument, left
 unset, takes the general-purpose agent's default — which may be **lighter than the
 team lead's own model** — and the tool exposes **no** thinking-effort parameter, so
