@@ -46,14 +46,17 @@ import Ecluse.Server.Route (Classifier)
 
 -- ── packument-serve dependencies ──────────────────────────────────────────────
 
-{- | The per-mount inputs the packument handler needs beyond the composition-root
-'Env': the two upstream endpoints, the mount's externally-visible base URL, its
-resolved rule policy, the edge auth token, the wall-clock source, and the operator
-help message.
+{- | The per-mount inputs the serve handlers need beyond the composition-root
+'Env': the two upstream endpoints, the mount's externally-visible base URL, the
+mirror-target endpoint, its resolved rule policy, the edge auth token, the
+wall-clock source, and the operator help message.
 
 These are a mount-level concern, resolved at the composition root (a separate
-concern) and carried on the mount's 'MountBinding'; the handler reads exactly what
-it needs to decide and serve one packument from the 'RequestCtx' it runs in.
+concern) and carried on the mount's 'MountBinding'; a handler reads exactly what it
+needs to decide and serve from the 'RequestCtx' it runs in. Both the packument and
+the tarball paths share these deps — the tarball path additionally gates one
+version and enqueues a mirror job to 'pdMirrorTarget' — so the name is retained for
+continuity rather than narrowed to one route.
 -}
 data PackumentDeps = PackumentDeps
     { pdPrivateBaseUrl :: Text
@@ -63,6 +66,12 @@ data PackumentDeps = PackumentDeps
     , pdMountBaseUrl :: Text
     {- ^ The mount's externally-visible base URL, under which served @dist.tarball@
     URLs are rewritten so artifacts are fetched back through the gate.
+    -}
+    , pdMirrorTarget :: Text
+    {- ^ The mount's mirror-target endpoint — where the demand-driven mirror worker
+    publishes an approved artifact. Carried on the enqueued
+    'Ecluse.Queue.MirrorJob' as its publish destination; the serve path never reads
+    or writes it itself.
     -}
     , pdRules :: [PrecededRule]
     -- ^ The mount's resolved rule policy, evaluated against every public version.

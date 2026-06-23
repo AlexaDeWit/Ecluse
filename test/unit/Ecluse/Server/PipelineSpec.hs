@@ -8,14 +8,15 @@ import Data.Aeson (Value (Null, Object, String), eitherDecodeStrict, object, (.=
 import Data.Aeson qualified as Aeson
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
+import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.CaseInsensitive qualified as CI
 import Data.Time (UTCTime (UTCTime), addUTCTime, fromGregorian, nominalDay)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Katip (Environment (Environment), Namespace (Namespace), initLogEnv)
 import Network.HTTP.Client (Manager, defaultManagerSettings, newManager)
-import Network.HTTP.Types (Header, hAuthorization, status200, status500, statusCode)
-import Network.Wai (Application, Request (requestHeaders), Response, responseLBS)
+import Network.HTTP.Types (Header, hAuthorization, status200, status404, status500, statusCode)
+import Network.Wai (Application, Request (rawPathInfo, requestHeaders), Response, responseLBS)
 import Network.Wai.Handler.Warp (testWithApplication)
 import Network.Wai.Test (
     SResponse (simpleBody, simpleHeaders, simpleStatus),
@@ -28,8 +29,15 @@ import Test.Hspec
 import UnliftIO.Exception (throwString)
 
 import Ecluse.Credential (AuthToken (..), CredentialProvider, mkSecret, staticProvider)
-import Ecluse.Env (Env, newEnv)
-import Ecluse.Queue (newInMemoryQueue)
+import Ecluse.Ecosystem (Ecosystem (Npm))
+import Ecluse.Env (Env (envQueue), newEnv)
+import Ecluse.Package (PackageName, mkPackageName)
+import Ecluse.Queue (
+    MirrorJob (jobArtifactUrl, jobMirrorTarget, jobPackage, jobVersion),
+    MirrorQueue (enqueue, receive),
+    QueueMessage (msgJob),
+    newInMemoryQueue,
+ )
 import Ecluse.Registry (ParseError (..), RegistryClient (..))
 import Ecluse.Registry.Npm.Route qualified as Npm
 import Ecluse.Registry.Npm.Serve (npmRenderer)
@@ -41,6 +49,7 @@ import Ecluse.Server (
  )
 import Ecluse.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Server.Context (PackumentDeps (..))
+import Ecluse.Version (Version, mkVersion)
 
 -- ── a fixed clock and the quarantine policy ───────────────────────────────────
 
@@ -128,6 +137,55 @@ lookupAuth headers = snd <$> find ((== hAuthorization) . fst) headers
 seenAuth :: Upstream -> IO [Maybe ByteString]
 seenAuth up = reverse <$> readIORef (upSeenAuth up)
 
+-- ── tarball upstream doubles (path-aware) ─────────────────────────────────────
+
+{- | Whether a request path is a tarball slot (@\/…\/-\/….tgz@) rather than a
+packument. The artifact and packument legs of a single upstream are distinguished
+by this, so one double can answer both.
+-}
+isTarballPath :: ByteString -> Bool
+isTarballPath path = "/-/" `BS.isInfixOf` path && ".tgz" `BS.isSuffixOf` path
+
+{- | A path-aware upstream double: it answers a tarball-slot path with @200@ and the
+given artifact bytes, and any other path (the packument fetch) with @200@ and the
+given packument body. Records each request's @Authorization@ header. The single
+double thus serves both legs the public artifact path consults — the gating
+packument and the artifact itself.
+-}
+artifactUpstream :: LByteString -> LByteString -> IO Upstream
+artifactUpstream packumentBody tarballBody = do
+    seen <- newIORef []
+    let app :: Application
+        app req respond = do
+            modifyIORef' seen (lookupAuth (requestHeaders req) :)
+            respond $
+                if isTarballPath (rawPathInfo req)
+                    then responseLBS status200 [] tarballBody
+                    else responseLBS status200 [] packumentBody
+    pure Upstream{upApp = app, upSeenAuth = seen}
+
+{- | A private upstream double that has the artifact: it answers a tarball-slot path
+with @200@ and the given bytes (a __private hit__), and any other path with @404@
+(the private leg is never consulted for a packument on the artifact path).
+-}
+privateArtifactHit :: LByteString -> IO Upstream
+privateArtifactHit tarballBody = do
+    seen <- newIORef []
+    let app :: Application
+        app req respond = do
+            modifyIORef' seen (lookupAuth (requestHeaders req) :)
+            respond $
+                if isTarballPath (rawPathInfo req)
+                    then responseLBS status200 [] tarballBody
+                    else responseLBS status404 [] "not found"
+    pure Upstream{upApp = app, upSeenAuth = seen}
+
+{- | A private upstream double that does __not__ have the artifact: every path is a
+@404@ miss, so the artifact path falls through to the public leg.
+-}
+privateArtifactMiss :: IO Upstream
+privateArtifactMiss = upstreamRespondingWith (responseLBS status404 [] "not found")
+
 -- ── packument fixtures ────────────────────────────────────────────────────────
 
 {- | A minimal npm packument body for @thing@ with the given version objects, a
@@ -191,11 +249,11 @@ fakeCredentials :: CredentialProvider
 fakeCredentials = staticProvider AuthToken{authSecret = mkSecret "unused", authExpiresAt = Nothing}
 
 {- | A fresh 'Env' over handle doubles and a real (no-TLS) manager for the in-process
-upstream doubles.
+upstream doubles, carrying the given mirror queue (the in-memory double, or one
+rigged to fail for the best-effort-enqueue assertion).
 -}
-newTestEnv :: Manager -> IO Env
-newTestEnv manager = do
-    queue <- newInMemoryQueue
+newTestEnvWithQueue :: MirrorQueue -> Manager -> IO Env
+newTestEnvWithQueue queue manager = do
     metadataCache <- newMetadataCache defaultCacheConfig
     logEnv <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
     newEnv fakeRegistry queue fakeCredentials manager metadataCache logEnv
@@ -209,6 +267,7 @@ deps privatePort publicPort inbound =
         { pdPrivateBaseUrl = localhost privatePort
         , pdPublicBaseUrl = localhost publicPort
         , pdMountBaseUrl = "https://proxy.test"
+        , pdMirrorTarget = "https://mirror.test"
         , pdRules = policy
         , pdInboundToken = mkSecret <$> inbound
         , pdNow = pure now
@@ -217,6 +276,49 @@ deps privatePort publicPort inbound =
 
 localhost :: Int -> Text
 localhost port = "http://127.0.0.1:" <> show port
+
+{- | Run an assertion against a proxy whose two upstream legs are the given
+in-process doubles, with access to the proxy's own 'Env' (so a test can drain the
+mirror queue) and over the given mirror queue. The upstream apps are hosted on
+ephemeral ports via Warp; the proxy is driven in-process through a WAI session (no
+proxy socket).
+-}
+withProxyEnvQueue ::
+    MirrorQueue ->
+    Upstream ->
+    Upstream ->
+    Maybe Text ->
+    -- The continuation sees the proxy application, its 'Env' (to drain the queue),
+    -- and the public upstream's ephemeral port (to assert an enqueued artifact URL).
+    (forall a. (Application -> Env -> Int -> IO a) -> IO a)
+withProxyEnvQueue queue privateUp publicUp inbound k =
+    testWithApplication (pure (upApp privateUp)) $ \privatePort ->
+        testWithApplication (pure (upApp publicUp)) $ \publicPort -> do
+            manager <- newManager defaultManagerSettings
+            env <- newTestEnvWithQueue queue manager
+            let cfg =
+                    mkServerConfig
+                        [ MountBinding
+                            { bindingPrefix = "npm" :| []
+                            , bindingClassifier = Npm.classify
+                            , bindingPackumentDeps = Just (deps privatePort publicPort inbound)
+                            , bindingRenderer = npmRenderer
+                            }
+                        ]
+            k (application cfg env) env publicPort
+
+{- | Run an assertion against a proxy over the two upstream doubles and the proxy's
+own 'Env' (over a vanilla in-memory queue), so a test can drain the enqueued mirror
+jobs.
+-}
+withProxyEnv ::
+    Upstream ->
+    Upstream ->
+    Maybe Text ->
+    (forall a. (Application -> Env -> IO a) -> IO a)
+withProxyEnv privateUp publicUp inbound k = do
+    queue <- newInMemoryQueue
+    withProxyEnvQueue queue privateUp publicUp inbound (\app env _port -> k app env)
 
 {- | Run an assertion against a proxy whose two upstream legs are the given
 in-process doubles. The upstream apps are hosted on ephemeral ports via Warp; the
@@ -228,20 +330,7 @@ withProxy ::
     Maybe Text ->
     (forall a. (Application -> IO a) -> IO a)
 withProxy privateUp publicUp inbound k =
-    testWithApplication (pure (upApp privateUp)) $ \privatePort ->
-        testWithApplication (pure (upApp publicUp)) $ \publicPort -> do
-            manager <- newManager defaultManagerSettings
-            env <- newTestEnv manager
-            let cfg =
-                    mkServerConfig
-                        [ MountBinding
-                            { bindingPrefix = "npm" :| []
-                            , bindingClassifier = Npm.classify
-                            , bindingPackumentDeps = Just (deps privatePort publicPort inbound)
-                            , bindingRenderer = npmRenderer
-                            }
-                        ]
-            k (application cfg env)
+    withProxyEnv privateUp publicUp inbound (\app _env -> k app)
 
 -- ── driving the proxy ─────────────────────────────────────────────────────────
 
@@ -258,6 +347,21 @@ getThing bearer = runSession (request (setPath baseRequest "/npm/thing"))
 getThingWith :: [Header] -> Application -> IO SResponse
 getThingWith extra =
     runSession (request (setPath defaultRequest{requestHeaders = extra} "/npm/thing"))
+
+{- | A @GET /npm/thing/-/thing-{version}.tgz@ artifact request carrying the given
+(optional) bearer credential — the tarball path for @thing@ at one version.
+-}
+getTarball :: Text -> Maybe Text -> Application -> IO SResponse
+getTarball version bearer =
+    runSession (request (setPath baseRequest path))
+  where
+    path = "/npm/thing/-/thing-" <> encodeUtf8 version <> ".tgz"
+    baseRequest =
+        defaultRequest{requestHeaders = maybe [] (\t -> [(hAuthorization, "Bearer " <> encodeUtf8 t)]) bearer}
+
+-- | Drain every mirror job currently enqueued on the proxy's queue, in FIFO order.
+drainJobs :: Env -> IO [MirrorJob]
+drainJobs env = map msgJob <$> receive (envQueue env)
 
 -- The decoded JSON body of a proxy response, or 'Null' if it did not decode (a
 -- non-JSON body then surfaces as a plain assertion mismatch, not a crash).
@@ -313,6 +417,7 @@ spec = do
     edgeAuthSpec
     conditionalSpec
     losslessSpec
+    tarballSpec
 
 -- ── multi-upstream merge ──────────────────────────────────────────────────────
 
@@ -663,6 +768,138 @@ losslessSpec = describe "lossless served surface (raw Value edited in place)" $ 
         withProxy privateUp publicUp Nothing $ \app -> do
             resp <- getThing Nothing app
             servedTarball "1.0.0" resp `shouldBe` Just "https://proxy.test/thing/-/thing-1.0.0.tgz"
+
+-- ── the artifact (tarball) path ───────────────────────────────────────────────
+
+-- The opaque bytes a tarball double serves, distinct per leg so a test can pin
+-- which upstream the served artifact came from.
+privateTarballBytes :: LByteString
+privateTarballBytes = "PRIVATE-TGZ-BYTES"
+
+publicTarballBytes :: LByteString
+publicTarballBytes = "PUBLIC-TGZ-BYTES"
+
+-- A public packument whose single version @v@ clears the quarantine (admitted on
+-- the artifact path).
+admittingPublic :: Text -> Value
+admittingPublic v = packument [(v, plainVersion v)] v [(v, publishedDaysAgo 30)]
+
+-- A flat projection of a mirror job, for an order-stable equality assertion over
+-- the four coordinates the job carries (package, version, public artifact URL,
+-- mirror target).
+jobShape :: MirrorJob -> (PackageName, Version, Text, Text)
+jobShape job = (jobPackage job, jobVersion job, jobArtifactUrl job, jobMirrorTarget job)
+
+tarballSpec :: Spec
+tarballSpec = describe "artifact (tarball) path" $ do
+    it "streams the private artifact unfiltered on a private hit (public never consulted)" $ do
+        -- The private upstream has the artifact: it is streamed straight through,
+        -- the public leg never queried and no mirror job enqueued (the bytes are
+        -- already vetted; mirroring is for public-sourced artifacts).
+        privateUp <- privateArtifactHit privateTarballBytes
+        publicUp <- artifactUpstream (encodePackument (admittingPublic "1.0.0")) publicTarballBytes
+        withProxyEnv privateUp publicUp Nothing $ \app env -> do
+            resp <- getTarball "1.0.0" (Just "client-token") app
+            status resp `shouldBe` 200
+            simpleBody resp `shouldBe` privateTarballBytes
+            -- The public upstream was never touched on a private hit.
+            seenAuth publicUp `shouldReturn` []
+            -- A private hit enqueues nothing — only a public-sourced admit does.
+            drainJobs env `shouldReturn` []
+
+    it "forwards the client credential to the private leg, never to the public" $ do
+        -- On a private MISS the artifact still comes from public, but the gating
+        -- packument and artifact fetches must be anonymous; the private leg saw the
+        -- client's bearer.
+        privateUp <- privateArtifactMiss
+        publicUp <- artifactUpstream (encodePackument (admittingPublic "1.0.0")) publicTarballBytes
+        withProxyEnv privateUp publicUp Nothing $ \app _env -> do
+            _ <- getTarball "1.0.0" (Just "client-secret-token") app
+            privAuth <- seenAuth privateUp
+            pubAuth <- seenAuth publicUp
+            -- The private leg received the client's bearer credential.
+            privAuth `shouldBe` [Just "Bearer client-secret-token"]
+            -- Both public-leg requests (packument gate + artifact fetch) were anonymous.
+            pubAuth `shouldBe` [Nothing, Nothing]
+
+    it "on a private miss: gates the version, streams from public, and enqueues a mirror job" $ do
+        privateUp <- privateArtifactMiss
+        publicUp <- artifactUpstream (encodePackument (admittingPublic "1.0.0")) publicTarballBytes
+        queue <- newInMemoryQueue
+        withProxyEnvQueue queue privateUp publicUp Nothing $ \app env publicPort -> do
+            resp <- getTarball "1.0.0" Nothing app
+            status resp `shouldBe` 200
+            -- The served bytes are the PUBLIC artifact's (private missed).
+            simpleBody resp `shouldBe` publicTarballBytes
+            -- Exactly one demand-driven mirror job was enqueued, naming the public
+            -- artifact URL and the mount's mirror target.
+            jobs <- drainJobs env
+            map jobShape jobs
+                `shouldBe` [
+                               ( mkPackageName Npm Nothing "thing"
+                               , mkVersion Npm "1.0.0"
+                               , localhost publicPort <> "/thing/-/thing-1.0.0.tgz"
+                               , "https://mirror.test"
+                               )
+                           ]
+
+    it "rejects a too-new version with 403 and enqueues nothing (policy denial)" $ do
+        -- 2.0.0 is 3 days old (< the 7-day quarantine) → denied by policy → 403,
+        -- and a rejected artifact is never mirrored.
+        privateUp <- privateArtifactMiss
+        let tooNew = packument [("2.0.0", plainVersion "2.0.0")] "2.0.0" [("2.0.0", publishedDaysAgo 3)]
+        publicUp <- artifactUpstream (encodePackument tooNew) publicTarballBytes
+        withProxyEnv privateUp publicUp Nothing $ \app env -> do
+            resp <- getTarball "2.0.0" Nothing app
+            status resp `shouldBe` 403
+            drainJobs env `shouldReturn` []
+
+    it "503s when the public upstream is unavailable (transient), enqueuing nothing" $ do
+        privateUp <- privateArtifactMiss
+        publicUp <- failingUpstream
+        withProxyEnv privateUp publicUp Nothing $ \app env -> do
+            resp <- getTarball "1.0.0" Nothing app
+            status resp `shouldBe` 503
+            drainJobs env `shouldReturn` []
+
+    it "404s a version absent from the public metadata (forwarded miss), enqueuing nothing" $ do
+        -- The package resolves but the requested 9.9.9 is not among its versions: a
+        -- forwarded upstream miss → 404, never a fabricated admit.
+        privateUp <- privateArtifactMiss
+        publicUp <- artifactUpstream (encodePackument (admittingPublic "1.0.0")) publicTarballBytes
+        withProxyEnv privateUp publicUp Nothing $ \app env -> do
+            resp <- getTarball "9.9.9" Nothing app
+            status resp `shouldBe` 404
+            drainJobs env `shouldReturn` []
+
+    it "serves the artifact even when the enqueue fails (best-effort, non-blocking)" $ do
+        -- The queue's enqueue throws; the client must still receive the streamed
+        -- artifact with a 200. The enqueue failure is swallowed, never surfaced.
+        privateUp <- privateArtifactMiss
+        publicUp <- artifactUpstream (encodePackument (admittingPublic "1.0.0")) publicTarballBytes
+        failingQueue <- newFailingQueue
+        withProxyEnvQueue failingQueue privateUp publicUp Nothing $ \app _env _port -> do
+            resp <- getTarball "1.0.0" Nothing app
+            status resp `shouldBe` 200
+            simpleBody resp `shouldBe` publicTarballBytes
+
+    it "gates a lockfile install hitting the tarball URL with no preceding packument request" $ do
+        -- An `npm ci` install fetches the tarball directly; the gate decides on this
+        -- path alone (the version metadata is fetched here), with no prior packument
+        -- request. A denied version is still refused.
+        privateUp <- privateArtifactMiss
+        let tooNew = packument [("2.0.0", plainVersion "2.0.0")] "2.0.0" [("2.0.0", publishedDaysAgo 3)]
+        publicUp <- artifactUpstream (encodePackument tooNew) publicTarballBytes
+        withProxyEnv privateUp publicUp Nothing $ \app _env ->
+            getTarball "2.0.0" Nothing app >>= \resp -> status resp `shouldBe` 403
+
+-- A mirror queue whose 'enqueue' always throws, for the best-effort assertion: the
+-- serve path must swallow the failure and still serve the artifact. 'receive' is a
+-- no-op returning no messages (nothing is ever enqueued).
+newFailingQueue :: IO MirrorQueue
+newFailingQueue = do
+    queue <- newInMemoryQueue
+    pure queue{enqueue = \_ -> throwString "enqueue failed (test double)"}
 
 -- ── fixture/assert helpers shared across groups ───────────────────────────────
 

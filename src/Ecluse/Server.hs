@@ -78,7 +78,7 @@ import Ecluse.Server.Context (
     RequestCtx (RequestCtx),
     runHandler,
  )
-import Ecluse.Server.Pipeline (servePackument)
+import Ecluse.Server.Pipeline (servePackument, serveTarball)
 import Ecluse.Server.Response (MountRenderer, RenderedBody (RenderedBody), renderError)
 import Ecluse.Server.Route (Route (..))
 
@@ -167,16 +167,17 @@ dispatch cfg env request respond =
 
 {- Serve a classified route under its matched mount. Dispatch builds the
 per-request 'RequestCtx' once — the composition-root 'Env' paired with the matched
-'MountBinding' — and the effectful 'Packument' route runs in the 'Handler' reader
-over it, so the handler reads the mount's serve dependencies and renderer from
-context rather than as threaded arguments (the deps-or-@501@ decision is the
-handler's). Every other route renders to a pure 'Response' through the mount's
-renderer.
+'MountBinding' — and the effectful 'Packument' and 'Tarball' routes run in the
+'Handler' reader over it, so the handler reads the mount's serve dependencies and
+renderer from context rather than as threaded arguments (the deps-or-@501@ decision
+is the handler's). Every other route renders to a pure 'Response' through the
+mount's renderer.
 -}
 serve :: Env -> MountBinding -> Route -> Request -> (Response -> IO ResponseReceived) -> IO ResponseReceived
 serve env binding classified request respond =
     case classified of
         Packument name -> runHandler ctx (servePackument name request respond)
+        Tarball name version filename -> runHandler ctx (serveTarball name version filename request respond)
         _ -> respond (renderRoute (bindingRenderer binding) classified)
   where
     ctx :: RequestCtx
@@ -226,18 +227,17 @@ firstJust f = foldr (\x acc -> f x <|> acc) Nothing
 
 {- Render a non-effectful in-mount classified 'Route' to a pure response through
 the mount's renderer. @\/-\/ping@ is answered locally with @200 {}@;
-@\/-\/v1\/search@ is a @501@ pointer; a recognised-but-unserved artifact route is a
-@501@; an unrecognised in-mount path is a @404@ — every error in the mount's own
-surface. The effectful 'Packument' route is dispatched to the 'Handler' by 'serve'
-before reaching here; the branch below is the defensive fallback should that
-routing ever change.
+@\/-\/v1\/search@ is a @501@ pointer; an unrecognised in-mount path is a @404@ —
+every error in the mount's own surface. The effectful 'Packument' and 'Tarball'
+routes are dispatched to the 'Handler' by 'serve' before reaching here; their
+branches below are the defensive @501@ fallback should that routing ever change.
 -}
 renderRoute :: MountRenderer -> Route -> Response
 renderRoute renderer = \case
     Ping -> pong
     Search -> renderedError renderer status501 "search is not supported by this proxy; use the public registry's website to discover packages"
     Packument _ -> renderedError renderer status501 notYetServedMessage
-    Tarball _ _ -> renderedError renderer status501 notYetServedMessage
+    Tarball{} -> renderedError renderer status501 notYetServedMessage
     Unsupported -> renderedError renderer status404 "not found"
   where
     notYetServedMessage :: Text

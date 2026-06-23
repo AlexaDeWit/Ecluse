@@ -23,6 +23,7 @@ This is the serve path; it __streams, never buffers__. The whole-artifact-in-mem
 module Ecluse.Server.Stream (
     -- * Streaming a response through
     streamUpstream,
+    streamUpstreamWhen,
 
     -- * The pump
     pumpBody,
@@ -60,6 +61,42 @@ streamUpstream manager request relay respond =
          in respond $
                 responseStream status headers $ \write flush ->
                     pumpBody (brRead (HTTP.responseBody upstream)) write flush
+
+{- | Stream an upstream response through __only when__ its status passes the
+@accept@ predicate, otherwise abandon it without responding.
+
+This is the conditional relay the serve path's __private leg__ needs: it must open
+the upstream to learn the status, stream the body on a hit, and on a miss fall
+through to another upstream — all without buffering and without leaking the
+connection. The upstream is opened with @withResponse@, so the connection is held
+only inside the bracket: on a 'Just' it lives exactly as long as the streamed body
+(the WAI lifetime contract, as in 'streamUpstream'); on a 'Nothing' the predicate
+rejected the status and @withResponse@ closes the connection as the bracket exits,
+the body never read. The caller then tries the fall-through leg.
+
+The @accept@ predicate sees only the status (the hit\/miss decision a serve leg
+makes); a passing response is relayed exactly as 'streamUpstream' would, the
+@relay@ choosing the client-facing status and headers.
+-}
+streamUpstreamWhen ::
+    Manager ->
+    Request ->
+    (Status -> Bool) ->
+    (Status -> ResponseHeaders -> (Status, ResponseHeaders)) ->
+    (Response -> IO ResponseReceived) ->
+    IO (Maybe ResponseReceived)
+streamUpstreamWhen manager request accept relay respond =
+    withResponse request manager $ \upstream ->
+        let upstreamStatus = responseStatus upstream
+         in if not (accept upstreamStatus)
+                then pure Nothing
+                else
+                    let (status, headers) = relay upstreamStatus (responseHeaders upstream)
+                     in Just
+                            <$> respond
+                                ( responseStream status headers $ \write flush ->
+                                    pumpBody (brRead (HTTP.responseBody upstream)) write flush
+                                )
 
 {- | Pump a chunked body from a reader to a WAI stream sink with constant memory.
 

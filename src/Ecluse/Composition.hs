@@ -58,7 +58,7 @@ import Ecluse.Config (
     ConfigDoc,
     CredentialBackend (..),
     EnvConfig (..),
-    MirrorTarget (mtCredential),
+    MirrorTarget (mtCredential, mtUrl),
     Mount (..),
     MountRegistries (..),
     PolicyError,
@@ -234,6 +234,7 @@ composeBindings resolveAdapter clock providers config =
                 { pdPrivateBaseUrl = unUrl (regPrivateUpstream regs)
                 , pdPublicBaseUrl = unUrl (regPublicUpstream regs)
                 , pdMountBaseUrl = mountBasePath (mountEcosystem mount)
+                , pdMirrorTarget = unUrl (mtUrl (regMirrorTarget regs))
                 , pdRules = mountPolicy mount
                 , pdInboundToken = mkSecret <$> inboundToken
                 , pdNow = clock

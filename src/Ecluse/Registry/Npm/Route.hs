@@ -28,7 +28,12 @@ all from the protocol research (see @docs\/research\/reverse-engineering\/npm.md
 * __A tarball path is @\/{pkg}\/-\/{file}.tgz@.__ The interior @"-"@ segment and
   the @.tgz@ suffix distinguish it from a packument request (@\/{pkg}@); for a
   scoped package the basename drops the scope (@\@babel\/code-frame@ →
-  @code-frame-7.0.0.tgz@), which 'classify' carries through verbatim as the file.
+  @code-frame-7.0.0.tgz@). 'classify' is the npm-side parse of the artifact
+  coordinate: it checks the @file@'s basename is exactly @{unscoped-name}-{rest}@
+  for the requested package and reads @rest@ as the version (@mkVersion@, total),
+  yielding @'Tarball' name version ('Filename' file)@ with the file __preserved
+  verbatim__. A basename that does not match the package is a path-confusion
+  attempt and denies (deny by default), never a fabricated coordinate.
 
 Mount dispatch / prefix-stripping and the liveness\/readiness routes are handled
 in the agnostic web layer (see @docs\/architecture\/web-layer.md@); 'classify'
@@ -43,8 +48,9 @@ module Ecluse.Registry.Npm.Route (
 import Data.Text qualified as T
 
 import Ecluse.Ecosystem (Ecosystem (Npm))
-import Ecluse.Package (PackageName, mkPackageName, mkScope)
-import Ecluse.Server.Route (Classifier, Route (..), isSafeComponent)
+import Ecluse.Package (PackageName, mkPackageName, mkScope, pkgNamespace, renderPackageName, unScope)
+import Ecluse.Server.Route (Classifier, Filename (Filename), Route (..), isSafeComponent)
+import Ecluse.Version (mkVersion)
 
 {- | Classify an npm-native request path into a shared 'Route'.
 
@@ -69,8 +75,8 @@ classifyMeta = \case
 
 {- Classify a non-meta path as a package request. Splits off the leading
 package unit (handling both scoped encodings) and dispatches on what trails it: a
-bare package is a 'Packument', @\/-\/{file}.tgz@ is a 'Tarball', anything else is
-'Unsupported'.
+bare package is a 'Packument', @\/-\/{file}.tgz@ a 'Tarball' when its basename
+parses for the package, anything else 'Unsupported'.
 -}
 classifyPackage :: [Text] -> Route
 classifyPackage segments =
@@ -80,7 +86,8 @@ classifyPackage segments =
   where
     dispatch name = \case
         [] -> Packument name
-        ["-", file] | isTarballFile file && isSafeComponent file -> Tarball name file
+        ["-", file]
+            | isSafeComponent file -> tarballRoute name file
         _ -> Unsupported
 
 {- Peel the leading package unit off a path, returning its 'PackageName' and
@@ -125,9 +132,32 @@ takePackage (seg : rest)
             Just (mkPackageName Npm (Just (mkScope scope)) base)
         | otherwise = Nothing
 
-{- Whether a tarball-slot filename is an npm tarball — a non-empty name ending
-in @.tgz@. Guards the 'Tarball' route (alongside 'isSafeComponent') so a
-non-artifact file under @\/-\/@ falls through to 'Unsupported'.
+{- Parse an npm tarball-slot @file@ into a 'Tarball' coordinate for @name@, or
+deny it. The npm convention is @{unscoped-name}-{version}.tgz@, so the file must:
+
+\* end in @.tgz@ over a non-empty name (a bare @.tgz@ is not an artifact), and
+\* have a basename of exactly @{unscoped-name}-{version}@ — the unscoped name (the
+  scope dropped, as npm names the file), a @\'-\'@, then a non-empty @version@.
+
+A basename that does not begin with @{unscoped-name}-@ is addressing some other
+package's artifact under this package's path — a path-confusion attempt — so it
+denies rather than fabricating a coordinate. On a match the @version@ run is read
+by the total 'mkVersion' (an unparseable version still yields a coordinate, so a
+parser gap never drops a real artifact), and the @file@ is preserved verbatim in
+the 'Filename'. The caller has already passed @file@ through 'isSafeComponent'.
 -}
-isTarballFile :: Text -> Bool
-isTarballFile file = T.isSuffixOf ".tgz" file && T.length file > T.length ".tgz"
+tarballRoute :: PackageName -> Text -> Route
+tarballRoute name file =
+    case T.stripSuffix ".tgz" file >>= T.stripPrefix (unscopedName name <> "-") of
+        Just version
+            | not (T.null version) -> Tarball name (mkVersion Npm version) (Filename file)
+        _ -> Unsupported
+
+{- The unscoped (base) name of a package — the file segment npm names a tarball
+after, with any scope dropped (@\@babel\/code-frame@ → @code-frame@). -}
+unscopedName :: PackageName -> Text
+unscopedName name = case pkgNamespace name of
+    Just scope ->
+        let rendered = renderPackageName name
+         in fromMaybe rendered (T.stripPrefix ("@" <> unScope scope <> "/") rendered)
+    Nothing -> renderPackageName name

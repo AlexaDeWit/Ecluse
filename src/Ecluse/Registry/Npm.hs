@@ -80,6 +80,8 @@ module Ecluse.Registry.Npm (
     -- * Request building
     metadataRequest,
     artifactRequest,
+    artifactRequestByFile,
+    artifactFileUrl,
     publishRequest,
 
     -- * Lower-level fetch (form- and validator-aware)
@@ -275,6 +277,36 @@ artifactRequest config name version = do
               decompress = const False
             }
 
+{- | Build the artifact @GET@ request addressing a tarball by its __preserved
+on-the-wire filename__, at @{baseUrl}\/{encoded-pkg}\/-\/{filename}@.
+
+The serve path fetches an artifact by the exact filename the client requested —
+the authoritative name for the bytes — rather than reconstructing it from
+@(package, version)@ as 'artifactRequest' does, so a registry whose tarball naming
+differs from the proxy's own convention still resolves. The @filename@ is taken
+verbatim (the classifier has already passed it through the component-safety gate),
+and the package segment is the same scope-percent-encoded path 'artifactRequest'
+uses. The request is marked __non-decompressing__ for the same reason: a @.tgz@ is
+opaque binary streamed byte-for-byte so its @dist.integrity@ verifies. Exposed so
+the web layer can bracket it for bounded-memory streaming (see the module header).
+
+Fails with a 'UrlFormationError' only when the URL cannot be formed.
+-}
+artifactRequestByFile ::
+    NpmClientConfig ->
+    PackageName ->
+    Text ->
+    Either UrlFormationError Request
+artifactRequestByFile config name filename = do
+    url <- artifactFileUrl (npmBaseUrl config) name filename
+    base <- parseRequestEither url
+    pure
+        . withToken (npmToken config)
+        $ base
+            { -- A tarball must never be gunzipped in flight (see 'artifactRequest').
+              decompress = const False
+            }
+
 {- | Build the publish @PUT \/{pkg}@ request: the body is the npm publish
 document (a packument carrying the version manifest and the base64 tarball under
 @_attachments@), already serialised by the caller. Carries the bearer token and a
@@ -404,6 +436,18 @@ dropped from the file segment, as npm names it).
 artifactUrl :: Text -> PackageName -> Version -> Either UrlFormationError Text
 artifactUrl baseUrl name version =
     joinPath baseUrl (encodePackagePath name <> "/-/" <> tarballFile name version)
+
+{- | The artifact (tarball) URL addressing a __preserved filename__:
+@{baseUrl}\/{encoded-name}\/-\/{filename}@. The filename is the exact on-the-wire
+name (not @{base}-{version}.tgz@ rebuilt from the coordinate), so the bytes are
+fetched by the name the client requested. Exposed so the serve path can record the
+public artifact location on a mirror job (the same URL its public fetch targets).
+
+Fails with a 'UrlFormationError' only when the URL cannot be formed.
+-}
+artifactFileUrl :: Text -> PackageName -> Text -> Either UrlFormationError Text
+artifactFileUrl baseUrl name filename =
+    joinPath baseUrl (encodePackagePath name <> "/-/" <> filename)
 
 {- Join a base URL and an already-encoded path, tolerating one trailing slash
 on the base so the join never doubles it. An empty base URL is refused with a
