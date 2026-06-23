@@ -34,26 +34,11 @@ layer into an adapter renderer. Several threads below build on this: **D5 shrank
 to deriving the prefix from the ecosystem and flowing the ecosystem through the
 binding and the config mount, and **D1 resolved** against it (see Resolved, below).
 
-Threads are worked **one at a time**; D1, D2, and D4 are resolved, so **D3 is next**
-(then D5, D6).
+Threads are worked **one at a time**; D1–D4 are resolved, so **D5 is next** (then D6).
 
 ### Item 1 — config: per-ecosystem generalization
 
-> **D1, D2, and D4 are resolved** — see [Resolved](#resolved). Outstanding in Item 1:
-> D3, D5.
-
-**D3 — Rule vocabulary per ecosystem.** _(depends on D1)_
-The agnostic domain model already did most of the work: `AllowIfPublishedBefore`
-and the CVE rules are cross-ecosystem; `DenyHasInstallScripts` reads the agnostic
-`CodeExecSignal` (PyPI/gems populate the same signal via their projections), so it
-is arguably **mis-named, not ecosystem-bound** — candidate rename toward the
-install-time-code-execution concept. `AllowScope` is **genuinely npm-specific**
-(no scopes in PyPI/gems). Proposal: keep `Rule` a **single sum type**; each
-constructor declares the **ecosystems it applies to**; config-load **validates**
-each mount's named rules against its ecosystem and fails loudly otherwise.
-Open question to settle: is the genuinely ecosystem-specific surface really just
-the "namespace/scope"-shaped rules, or is deeper per-ecosystem rule *semantics*
-coming? — **Status: queued.**
+> **D1–D4 resolved** — see [Resolved](#resolved). Outstanding in Item 1: **D5**.
 
 **D5 — Ecosystem drives the binding & the config mount.**
 _(depends on D1; tied to D2; partly delivered by #133)_
@@ -136,3 +121,21 @@ and [`configuration.md` → Validation](../docs/architecture/configuration.md#va
 **Code still owing** (hardening slice): hoist `mtCredential` off `MirrorTarget` into a
 global provider registry the mount references, and add the boot-time "credential
 references must resolve" check to config validation / the composition root.
+
+**D3 — Rule vocabulary.** _(resolved 2026-06-23)_
+**Decision:** rules are **ecosystem-agnostic by design** — they reason only over the
+agnostic `PackageDetails`; **ecosystem-specific rules are out of scope**. A rule
+whose signal is absent for an ecosystem (e.g. a declared scope on a scopeless
+ecosystem) **abstains** — under deny-by-default that is the sensible default, not a
+per-ecosystem error. No per-ecosystem rule vocabulary, applicability tagging, or
+ecosystem-gated validation (the machinery earlier proposed is **dropped**). Rule
+**names** track the agnostic concept, normalized **early**.
+**Rendered into:** [`rules-engine.md` → Rules Engine](../docs/architecture/rules-engine.md#rules-engine).
+**Code still owing — an *early*, dedicated rename slice** (cheap pre-launch, before
+more rules and usages accrete; touches `Ecluse.Rules.Types`, `Ecluse.Rules`,
+`Ecluse.Config`'s wire `type` strings, the tests, and the rule-name references in
+`configuration.md` / `rules-engine.md` / `observability.md` / research):
+`DenyHasInstallScripts` → an agnostic install-time-code-execution name (proposed
+`DenyInstallTimeExecution`); `AllowScope` → keep as the agnostic "namespace" concept
+the domain model already carries (abstaining where absent), optionally
+`AllowNamespace` — final identifiers the architect's call.
