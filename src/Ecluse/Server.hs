@@ -10,24 +10,32 @@ door is a raw 'Application' rather than a web framework — matching on @pathInf
 keeps the encoded-slash handling and the streaming control the proxy depends on
 (see @docs\/architecture\/web-layer.md@). Routing is two layers:
 
-* __Mount dispatch__ — match a request's leading path segment to a configured
-  mount, strip the prefix, and hand the remainder (an ecosystem-native path) to
-  the mount's injected 'Ecluse.Server.Route.Classifier'. The web layer is closed
-  over the shared 'Route' set ("Ecluse.Server.Route") and routes through whatever
-  classifier a composition root wires in ('scClassify'), so no ecosystem's path
-  grammar is baked in here. A mount prefix is accepted with or without a trailing
-  slash (see @docs\/architecture\/hosting.md@ → "Dispatch").
+* __Mount dispatch__ — match a request's leading path segments to a configured
+  'MountBinding', strip the prefix, and hand the remainder (an ecosystem-native
+  path) to that mount's 'Ecluse.Server.Route.Classifier'. A binding carries a
+  mount's __complete__ ecosystem wiring — its classifier, its packument-serve
+  dependencies, and its error 'Ecluse.Server.Response.MountRenderer' — so the web
+  layer is closed over the shared 'Route' set ("Ecluse.Server.Route") and holds no
+  ecosystem's path grammar or body shape of its own. Every registry is
+  __path-mounted__ (e.g. @\/npm@); there is no root mount, so adding an ecosystem
+  never changes an existing consumer's URLs. A mount prefix is accepted with or
+  without a trailing slash (see @docs\/architecture\/hosting.md@ → "Dispatch").
 
-* __Control-plane meta-routes__ — orchestration health probes (@\/livez@,
-  @\/readyz@) answered at the top level, above any mount.
+Responses split into __two tiers__:
 
-The classified 'Route' renders through the error model
-("Ecluse.Server.Response"): @\/-\/ping@ is answered locally with @200 {}@,
-@\/-\/v1\/search@ is @501@ (search is not an install path), and anything
-unrecognised is @404@ — deny by default at the routing layer. The
-package\/artifact routes ('Packument', 'Tarball') are recognised but not served
-here: they return an explicit @501 Not Implemented@ rather than a fabricated
-success, since their fetch → rules → serve pipeline lives outside this module.
+* __Above the mounts — neutral, server-owned.__ The orchestration health probes
+  (@\/livez@, @\/readyz@) are answered at the top level, and a path matching __no__
+  configured mount is a generic @404 Not Found@ in @text\/plain@ — there is no
+  ecosystem to shape it.
+
+* __Within a matched mount — the mount's renderer.__ The classified 'Route'
+  renders through that mount's 'Ecluse.Server.Response.MountRenderer', in the
+  ecosystem's own error surface: @\/-\/ping@ is answered locally with @200 {}@,
+  @\/-\/v1\/search@ is @501@ (search is not an install path), an unrecognised
+  in-mount path is @404@ (deny by default), and the package\/artifact routes
+  ('Packument', 'Tarball') are recognised but, without serve dependencies wired,
+  return an explicit @501 Not Implemented@ rather than a fabricated success — their
+  fetch → rules → serve pipeline lives outside this module.
 
 Cross-cutting concerns are applied as middleware composed around the
 'Application' (see @docs\/architecture\/web-layer.md@ → "Middleware"): a
@@ -38,11 +46,9 @@ hot path carries no transformer lifting.
 module Ecluse.Server (
     -- * The WAI application
     ServerConfig (..),
-    defaultServerConfig,
-    Mount (..),
-    rootMount,
-    noPackumentDeps,
-    noClassifier,
+    mkServerConfig,
+    defaultPort,
+    MountBinding (..),
     application,
 
     -- * Running the server
@@ -65,98 +71,74 @@ import Network.Wai.Middleware.Timeout (timeout)
 
 import Ecluse.Env (Env)
 import Ecluse.Server.Pipeline (PackumentDeps, servePackument)
-import Ecluse.Server.Response (denialBody)
-import Ecluse.Server.Route (Classifier, Route (..), denyAll)
+import Ecluse.Server.Response (MountRenderer, RenderedBody (RenderedBody), renderError)
+import Ecluse.Server.Route (Classifier, Route (..))
 
 -- ── server configuration ─────────────────────────────────────────────────────
 
 {- | The server's own settings — the values the 'Application' and 'runServer'
-need that the composition-root 'Env' does not (yet) carry: the listen port, the
-served mounts, and the request-body cap. Backend selection and the resolved mount
-map are a composition-root concern; this is the minimal shape the web layer needs
-to route.
+need that the composition-root 'Env' does not carry: the listen port, the served
+mount bindings, and the request-body cap. Backend selection is a composition-root
+concern; this is the minimal shape the web layer needs to route.
 -}
 data ServerConfig = ServerConfig
     { scPort :: Int
     -- ^ The TCP port @warp@ listens on.
-    , scMounts :: [Mount]
+    , scMounts :: [MountBinding]
     {- ^ The mounts served, tried in order; the first whose prefix matches the
-    request's leading segment wins. A single-mount deployment is the
-    one-entry case at the root ('rootMount').
+    request's leading segments wins. A deployment with no mounts serves nothing
+    beyond the health probes — every other path is the neutral @404@.
     -}
     , scSizeLimit :: RequestSizeLimit
     -- ^ The defensive cap on request-body size.
-    , scClassify :: Mount -> Classifier
-    {- ^ The route classifier for a matched mount — the ecosystem path grammar
-    that maps its native path to a shared 'Route'. The default 'noClassifier'
-    denies every path ('Ecluse.Server.Route.denyAll'), so the web layer carries no
-    ecosystem's grammar and a composition root injects each mount's adapter
-    classifier instead. The function form keys per matched mount, mirroring
-    'scPackumentDeps', so a multi-ecosystem deployment routes each mount through
-    its own grammar.
-    -}
-    , scPackumentDeps :: Mount -> Maybe PackumentDeps
-    {- ^ The packument-serve dependencies for a matched mount — its upstream
-    endpoints, rule policy, and edge token. 'Nothing' leaves the packument route
-    recognised-but-unserved (the @501@ stub), so the resolved mount map is wired in
-    at the composition root rather than baked into the web layer. The function form
-    keys per matched mount without forcing 'PackumentDeps' (which carries a clock
-    action) into the 'Eq'\/'Show' 'Mount'.
-    -}
     }
 
-{- | The default server settings: a single root mount on the conventional npm
-proxy port (4873), with the default body cap, no route classifier (every path is
-denied) and no packument-serve dependencies (the route stays the
-recognised-but-unserved @501@ until a composition root supplies them). This is the
-env-only, single-mount launch shape; a multi-mount or alternate-port deployment
-overrides it at the composition root.
+{- | Build a 'ServerConfig' over the given mount bindings, taking the default
+listen port ('defaultPort') and request-body cap ('defaultRequestSizeLimit').
 
-The default deliberately carries __no ecosystem grammar__: with 'noClassifier'
-every request is 'Unsupported', so a composition root must wire an adapter's
-classifier in for the server to recognise anything.
+The composition root supplies the bindings — each a mount's complete ecosystem
+wiring — and overrides the port or cap by record update where a deployment needs
+to. There is no built-in mount: an ecosystem is served only once its binding is
+passed here, so the web layer carries no ecosystem of its own.
 -}
-defaultServerConfig :: ServerConfig
-defaultServerConfig =
+mkServerConfig :: [MountBinding] -> ServerConfig
+mkServerConfig mounts =
     ServerConfig
-        { scPort = 4873
-        , scMounts = [rootMount]
+        { scPort = defaultPort
+        , scMounts = mounts
         , scSizeLimit = defaultRequestSizeLimit
-        , scClassify = noClassifier
-        , scPackumentDeps = noPackumentDeps
         }
 
-{- | The "no route classifier wired" resolver: every mount maps to
-'Ecluse.Server.Route.denyAll', so every path is 'Unsupported' (a @404@). The
-default until a composition root supplies a mount's ecosystem grammar.
--}
-noClassifier :: Mount -> Classifier
-noClassifier _ = denyAll
+-- | The conventional npm proxy listen port (4873), the 'mkServerConfig' default.
+defaultPort :: Int
+defaultPort = 4873
 
-{- | The "no packument dependencies wired" resolver: every mount maps to 'Nothing',
-so the packument route renders the recognised-but-unserved @501@ stub. The default
-until a composition root supplies a mount's upstreams and policy.
--}
-noPackumentDeps :: Mount -> Maybe PackumentDeps
-noPackumentDeps _ = Nothing
+{- | A mount: a path prefix bound to a registry, carrying that registry's
+__complete__ ecosystem wiring. Dispatch matches a request's leading path segments
+to 'bindingPrefix', strips them, and routes the remainder through the rest of the
+binding (see "Ecluse.Server").
 
-{- | A mount: a path prefix bound to a registry served beneath it. Dispatch
-matches a request's leading path segment to 'mountPrefix', strips it, and routes
-the remainder. The prefix is the path segments before the ecosystem-native path
-(e.g. @["npm"]@ for a @\/npm@ mount); the empty list is the root mount, under
-which the whole path is ecosystem-native.
+The prefix is a 'NonEmpty' list of segments (@"npm" :| []@ for a @\/npm@ mount):
+every registry is path-mounted, so a root mount — which would force a URL change
+on every consumer the day a second ecosystem is added — is __unrepresentable__
+rather than merely discouraged. Bundling the classifier, serve dependencies, and
+renderer into one record means a mount cannot be half-wired: there is no default
+to fall back to.
 -}
-newtype Mount = Mount
-    { mountPrefix :: [Text]
-    -- ^ The leading path segments this mount is served under; @[]@ is the root.
+data MountBinding = MountBinding
+    { bindingPrefix :: NonEmpty Text
+    -- ^ The leading path segments this mount is served under; never empty.
+    , bindingClassifier :: Classifier
+    -- ^ The ecosystem path grammar mapping this mount's native path to a 'Route'.
+    , bindingPackumentDeps :: Maybe PackumentDeps
+    {- ^ The packument-serve dependencies, when wired; 'Nothing' leaves the
+    packument route recognised-but-unserved (the @501@ stub).
+    -}
+    , bindingRenderer :: MountRenderer
+    {- ^ This mount's renderer for error\/denial bodies — the ecosystem surface an
+    in-mount @403@\/@404@\/@501@ is shaped into.
+    -}
     }
-    deriving stock (Eq, Show)
-
-{- | The root mount: no prefix, so the whole request path is the ecosystem-native
-path handed to the mount's classifier. The degenerate single-mount case.
--}
-rootMount :: Mount
-rootMount = Mount{mountPrefix = []}
 
 -- ── request-body cap ─────────────────────────────────────────────────────────
 
@@ -188,58 +170,49 @@ client-IP recovery, timeout).
 application :: ServerConfig -> Env -> Application
 application cfg env = serverMiddleware cfg (dispatch cfg env)
 
-{- Dispatch a request to its handler: top-level health probes first, then mount
-dispatch through the injected classifier. Unrecognised paths (including an
-unmatched mount) are a @404@ — deny by default.
+{- Dispatch a request to its handler. Top-level health probes are answered first,
+above any mount. Otherwise the leading path segments are matched to a mount: a
+match routes the remainder through that mount's binding; no match is the neutral
+@404@, since there is no ecosystem to render it.
 -}
 dispatch :: ServerConfig -> Env -> Application
 dispatch cfg env request respond =
     case pathInfo request of
         ["livez"] -> respond (liveness env)
         ["readyz"] -> respond (readiness env)
-        segments ->
-            let (mount, classified) = dispatchMount (scClassify cfg) (scMounts cfg) segments
-             in serve cfg env mount classified request respond
+        segments -> case matchMount (scMounts cfg) segments of
+            Nothing -> respond notFound
+            Just (binding, classified) -> serve env binding classified request respond
 
-{- Serve a classified route. The package\/artifact routes are effectful (they
-fetch upstream), so they are handled in 'IO' over the 'respond' continuation; every
-other route renders to a pure 'Response'. A 'Packument' on a mount with wired
-dependencies is served by the pipeline; without them it falls back to the
-recognised-but-unserved @501@.
+{- Serve a classified route under its matched mount. The package\/artifact routes
+are effectful (they fetch upstream), so a 'Packument' on a mount with wired
+dependencies is handled in 'IO' over the 'respond' continuation; every other route
+renders to a pure 'Response' through the mount's renderer. Without serve
+dependencies a 'Packument' falls back to the recognised-but-unserved @501@.
 -}
-serve :: ServerConfig -> Env -> Mount -> Route -> Request -> (Response -> IO ResponseReceived) -> IO ResponseReceived
-serve cfg env mount classified request respond =
+serve :: Env -> MountBinding -> Route -> Request -> (Response -> IO ResponseReceived) -> IO ResponseReceived
+serve env binding classified request respond =
     case classified of
         Packument name
-            | Just deps <- scPackumentDeps cfg mount ->
-                servePackument deps env name request respond
-        _ -> respond (route env classified)
+            | Just deps <- bindingPackumentDeps binding ->
+                servePackument (bindingRenderer binding) deps env name request respond
+        _ -> respond (renderRoute (bindingRenderer binding) classified)
 
-{- Strip the first matching mount prefix off the request path, classify the
-remainder through that mount's injected classifier, and return the matched mount
-with its 'Route'. A mount prefix is accepted with or without a trailing slash, so
-@\/npm\/pkg@ and a bare @\/npm@ both match the @\/npm@ mount. When no mount
-matches, the path is classified as-is under the first mount, which denies it by
-default (the classifier recognises no such path) — there is no separate "unknown
-mount" status, by design.
+{- Match a request path to a mount: the first binding whose prefix the path begins
+with, paired with the remainder classified through that mount's classifier.
+'Nothing' when no mount's prefix matches — the caller then answers the neutral
+@404@. A mount prefix is accepted with or without a trailing slash, so @\/npm\/pkg@
+and a bare @\/npm@ both match the @\/npm@ mount.
 -}
-dispatchMount :: (Mount -> Classifier) -> [Mount] -> [Text] -> (Mount, Route)
-dispatchMount classifierFor mounts segments =
-    fromMaybe (firstMount, classifierFor firstMount segments) (firstJust matched mounts)
+matchMount :: [MountBinding] -> [Text] -> Maybe (MountBinding, Route)
+matchMount mounts segments = firstJust match mounts
   where
-    -- The mount whose prefix the path begins with, paired with the remainder
-    -- classified by that mount's classifier. 'Nothing' for a non-matching prefix.
-    matched :: Mount -> Maybe (Mount, Route)
-    matched mount@(Mount prefix) =
-        (mount,) . classifierFor mount <$> stripPrefixSegments prefix segments
-
-    -- When no mount matched, classification still runs (denying by default); it is
-    -- reported under the first configured mount, whose deps are irrelevant to an
-    -- 'Unsupported' route. A non-empty mount list is the launch invariant.
-    firstMount :: Mount
-    firstMount = case mounts of
-        mount : _ -> mount
-        [] -> rootMount
+    -- The binding whose prefix the path begins with, paired with the classified
+    -- remainder. 'Nothing' for a non-matching prefix.
+    match :: MountBinding -> Maybe (MountBinding, Route)
+    match binding =
+        (binding,) . bindingClassifier binding
+            <$> stripPrefixSegments (toList (bindingPrefix binding)) segments
 
 {- Strip a mount's prefix segments off the front of a request path. The root
 mount (an empty prefix) consumes nothing and always matches. A trailing empty
@@ -267,20 +240,30 @@ firstJust f = foldr (\x acc -> f x <|> acc) Nothing
 
 -- ── route rendering ──────────────────────────────────────────────────────────
 
-{- Render a classified 'Route' to a pure response. @\/-\/ping@ is answered
-locally; @\/-\/v1\/search@ is @501@ with a pointer message; anything unrecognised
-is @404@. The package\/artifact routes are effectful and served by 'serve' before
-reaching here; they fall through to the recognised-but-unserved @501@ stub only on
-a mount with no serve dependencies wired (the tarball path is not yet served at
-all).
+{- Render an in-mount classified 'Route' to a pure response through the mount's
+renderer. @\/-\/ping@ is answered locally with @200 {}@; @\/-\/v1\/search@ is a
+@501@ pointer; a recognised-but-unserved package\/artifact route is a @501@; an
+unrecognised in-mount path is a @404@ — every error in the mount's own surface.
+The served packument route is effectful and handled by 'serve' before reaching
+here.
 -}
-route :: Env -> Route -> Response
-route _env = \case
+renderRoute :: MountRenderer -> Route -> Response
+renderRoute renderer = \case
     Ping -> pong
-    Search -> searchUnsupported
-    Packument _ -> notYetServed
-    Tarball _ _ -> notYetServed
-    Unsupported -> notFound
+    Search -> renderedError renderer status501 "search is not supported by this proxy; use the public registry's website to discover packages"
+    Packument _ -> renderedError renderer status501 notYetServedMessage
+    Tarball _ _ -> renderedError renderer status501 notYetServedMessage
+    Unsupported -> renderedError renderer status404 "not found"
+  where
+    notYetServedMessage :: Text
+    notYetServedMessage = "this route is recognised but not yet served by this proxy"
+
+-- An in-mount error response: the status, with the body shaped by the mount's
+-- renderer. A meta-route error carries no operator help message.
+renderedError :: MountRenderer -> Status -> Text -> Response
+renderedError renderer status message =
+    let RenderedBody contentType body = renderError renderer Nothing message
+     in responseLBS status [(hContentType, contentType)] body
 
 -- ── meta-route responses ─────────────────────────────────────────────────────
 
@@ -290,30 +273,13 @@ checking that the proxy endpoint it talks to is up. No upstream round-trip.
 pong :: Response
 pong = jsonResponse status200 "{}"
 
-{- @\/-\/v1\/search@: @501 Not Implemented@. Search is a discovery convenience,
-not an install path, so it is deliberately unsupported rather than scope-creeping
-a filtered or pass-through search; the body points users to the public registry's
-website.
+{- A path matching no configured mount: a generic @404 Not Found@ in @text\/plain@.
+This tier sits above the mounts, so there is no ecosystem to shape it — the body is
+kept as readable as possible to whatever client reached an unmounted path.
 -}
-searchUnsupported :: Response
-searchUnsupported =
-    jsonResponse
-        status501
-        (denialBody Nothing "search is not supported by this proxy; use the public registry's website to discover packages")
-
-{- A recognised package or artifact route that is not served here: @501 Not
-Implemented@ with an explicit message, rather than a fabricated @200@. The
-fetch → rules → serve pipeline lives outside this module.
--}
-notYetServed :: Response
-notYetServed =
-    jsonResponse
-        status501
-        (denialBody Nothing "this route is recognised but not yet served by this proxy")
-
--- An unrecognised path: @404@. Deny by default at the routing layer.
 notFound :: Response
-notFound = jsonResponse status404 (denialBody Nothing "not found")
+notFound =
+    responseLBS status404 [(hContentType, "text/plain; charset=utf-8")] "Not Found\n"
 
 -- ── health probes ────────────────────────────────────────────────────────────
 
@@ -375,9 +341,10 @@ sizeLimitMiddleware (RequestSizeLimit maxBytes) =
 
 {- | Serve the proxy's HTTP front door: start @warp@ on the 'ServerConfig''s port
 with the 'application' built over it and the composition-root 'Env'. Request
-handlers read the 'Env' in plain 'IO'. The 'ServerConfig' — in particular its
-injected route classifier ('scClassify') — is supplied by the composition root,
-which is where the served ecosystem's path grammar is wired in (see "Ecluse").
+handlers read the 'Env' in plain 'IO'. The 'ServerConfig' — in particular its mount
+bindings ('scMounts'), each a mount's complete ecosystem wiring — is supplied by
+the composition root, which is where the served ecosystems are mounted (see
+"Ecluse").
 -}
 runServer :: ServerConfig -> Env -> IO ()
 runServer cfg env =

@@ -32,11 +32,12 @@ import Ecluse.Env (Env, newEnv)
 import Ecluse.Queue (newInMemoryQueue)
 import Ecluse.Registry (ParseError (..), RegistryClient (..))
 import Ecluse.Registry.Npm.Route qualified as Npm
+import Ecluse.Registry.Npm.Serve (npmRenderer)
 import Ecluse.Rules.Types (PrecededRule, Rule (AllowIfPublishedBefore, DenyHasInstallScripts), atDefaultPrecedence)
 import Ecluse.Server (
-    ServerConfig (..),
+    MountBinding (..),
     application,
-    defaultServerConfig,
+    mkServerConfig,
  )
 import Ecluse.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Server.Pipeline (PackumentDeps (..))
@@ -232,27 +233,31 @@ withProxy privateUp publicUp inbound k =
             manager <- newManager defaultManagerSettings
             env <- newTestEnv manager
             let cfg =
-                    defaultServerConfig
-                        { scClassify = const Npm.classify
-                        , scPackumentDeps = const (Just (deps privatePort publicPort inbound))
-                        }
+                    mkServerConfig
+                        [ MountBinding
+                            { bindingPrefix = "npm" :| []
+                            , bindingClassifier = Npm.classify
+                            , bindingPackumentDeps = Just (deps privatePort publicPort inbound)
+                            , bindingRenderer = npmRenderer
+                            }
+                        ]
             k (application cfg env)
 
 -- ── driving the proxy ─────────────────────────────────────────────────────────
 
--- | A @GET /thing@ request carrying the given (optional) bearer credential.
+-- | A @GET /npm/thing@ request carrying the given (optional) bearer credential.
 getThing :: Maybe Text -> Application -> IO SResponse
-getThing bearer = runSession (request (setPath baseRequest "/thing"))
+getThing bearer = runSession (request (setPath baseRequest "/npm/thing"))
   where
     baseRequest =
         defaultRequest{requestHeaders = maybe [] (\t -> [(hAuthorization, "Bearer " <> encodeUtf8 t)]) bearer}
 
-{- | A @GET /thing@ with no credential and the given extra request headers (e.g. a
-conditional @If-None-Match@).
+{- | A @GET /npm/thing@ with no credential and the given extra request headers
+(e.g. a conditional @If-None-Match@).
 -}
 getThingWith :: [Header] -> Application -> IO SResponse
 getThingWith extra =
-    runSession (request (setPath defaultRequest{requestHeaders = extra} "/thing"))
+    runSession (request (setPath defaultRequest{requestHeaders = extra} "/npm/thing"))
 
 -- The decoded JSON body of a proxy response, or 'Null' if it did not decode (a
 -- non-JSON body then surfaces as a plain assertion mismatch, not a crash).

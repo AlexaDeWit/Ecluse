@@ -1,10 +1,18 @@
-{- | The serve-outcome model and its rendering to npm-shaped responses.
+{- | The serve-outcome model, the per-outcome status mapping, and the agnostic
+shape of an error body.
 
 Every client-facing reply is the rendering of one __serve outcome__ — admit the
 request, or reject it — so that an error maps to the status a client can act on
 rather than a generic 403\/500. The model and the per-outcome status mapping live
 here; the WAI layer that turns an 'ArtifactStatus' into an actual response and
 streams the body is separate (see @docs\/architecture\/web-layer.md@).
+
+This module decides the HTTP /status/ of a refusal but holds __no body shape of
+its own__: the bytes a client reads an error from are an ecosystem's (npm's
+@{"error": …}@ JSON, a different surface for PyPI), so a mount supplies a
+'MountRenderer' — chosen at the composition root alongside its path grammar — and
+the agnostic web layer never names one. 'appendHelp' is the ecosystem-neutral part
+the renderer reuses: joining the operator help message onto a denial.
 
 == The outcome model
 
@@ -22,12 +30,13 @@ single 'ArtifactStatus'. The load-bearing rule is __503 only when we believe it
 will resolve__ — a transient upstream\/advisory condition invites a retry, while a
 permanent or internal inability to decide ('WontResolve') is a @500@, because
 retrying it cannot help and we should not invite it. A policy rejection is a
-@403@ with a 'denialBody'. A __packument__ request has no single status — its
-versions are filtered and the status is chosen over the surviving set — so this
-module deliberately maps __per outcome__, not per request.
+@403@ whose body the mount's 'MountRenderer' shapes. A __packument__ request has
+no single status — its versions are filtered and the status is chosen over the
+surviving set — so this module deliberately maps __per outcome__, not per request.
 
-The denial body is npm's @{"error": …}@ object; an operator's help message, when
-configured, is appended to every denial so clients are told where to ask.
+An operator help message, when configured, is appended to every denial
+('appendHelp') so clients are told where to ask; how the joined text is then
+wrapped into bytes is the mount renderer's.
 -}
 module Ecluse.Server.Response (
     -- * Serve outcomes
@@ -49,15 +58,15 @@ module Ecluse.Server.Response (
     packumentStatus,
     packumentStatusCode,
 
-    -- * Denial body
+    -- * Denial rendering
     HelpMessage,
     mkHelpMessage,
     unHelpMessage,
-    denialBody,
+    appendHelp,
+    RenderedBody (..),
+    MountRenderer (..),
 ) where
 
-import Data.Aeson (object, (.=))
-import Data.Aeson qualified as Aeson
 import Data.Text qualified as T
 
 import Ecluse.Package (PackageDetails)
@@ -171,7 +180,7 @@ case.
 data ArtifactStatus
     = -- | @200@ — admitted; the artifact is streamed.
       Ok
-    | -- | @403@ — refused by policy; the body is a 'denialBody'.
+    | -- | @403@ — refused by policy; the body is shaped by the mount's 'MountRenderer'.
       Forbidden
     | {- | @503@ — a transient inability to decide; the 'RetryAfter', if known,
       becomes the @Retry-After@ header.
@@ -297,7 +306,7 @@ packumentStatusCode = \case
     PackumentUnavailable{} -> 503
     PackumentServerError -> 500
 
--- ── denial body ──────────────────────────────────────────────────────────────
+-- ── denial rendering ─────────────────────────────────────────────────────────
 
 {- | An operator-configured message appended to every denial — typically where to
 ask for help (e.g. a support channel). Stored trimmed of surrounding whitespace
@@ -315,20 +324,43 @@ mkHelpMessage = HelpMessage . T.strip
 unHelpMessage :: HelpMessage -> Text
 unHelpMessage (HelpMessage t) = t
 
-{- | Render a denial body as the npm error object — @{"error": …}@ — whose
-@error@ string is the message with the help message, if any, appended.
+{- | Append a non-blank operator 'HelpMessage' to a denial message, separated by a
+single space; a blank or absent help message contributes nothing.
 
-npm clients read the human-facing reason from this object (preferring @message@,
-then @error@); Écluse emits the @error@ key, matching npm's own denial bodies. A
-blank or absent 'HelpMessage' is omitted rather than appended as empty text.
+This is the ecosystem-neutral part of denial rendering — every ecosystem appends
+the operator's help text the same way. How the joined text is then wrapped into
+body bytes is the mount's 'MountRenderer'.
 -}
-denialBody :: Maybe HelpMessage -> Text -> LByteString
-denialBody help message =
-    Aeson.encode (object ["error" .= appendHelp help message])
-
--- Append a non-blank help message to the denial text, separated by one space.
 appendHelp :: Maybe HelpMessage -> Text -> Text
 appendHelp help message =
     case help of
         Just (HelpMessage h) | not (T.null h) -> T.strip message <> " " <> h
         _ -> message
+
+{- | A rendered error body: its @Content-Type@ and the bytes.
+
+The agnostic serve layer chooses the HTTP /status/; the body shape — JSON, plain
+text, HTML — is the mount's, so a 'MountRenderer' returns this pair and the WAI
+layer reads the content type off it rather than assuming one.
+-}
+data RenderedBody = RenderedBody
+    { renderedContentType :: ByteString
+    -- ^ The @Content-Type@ the body is tagged with (e.g. @application\/json@).
+    , renderedBytes :: LByteString
+    -- ^ The encoded error body.
+    }
+    deriving stock (Eq, Show)
+
+{- | A mount's ecosystem-specific error renderer — the Handle that keeps the npm
+@{"error": …}@ shape (and any other ecosystem's) out of the agnostic web layer.
+
+The status machinery here is ecosystem-agnostic, but the body a client reads an
+error from is not: an npm client expects a JSON @{"error": …}@ object, a PyPI
+client a different surface. Each mount supplies a renderer, chosen at the
+composition root alongside its path grammar, so the web layer holds no body shape
+of its own. 'renderError' shapes a denial or meta-route error (a @403@\/@404@\/@501@
+body) from the optional operator help message and the human-facing reason.
+-}
+newtype MountRenderer = MountRenderer
+    { renderError :: Maybe HelpMessage -> Text -> RenderedBody
+    }

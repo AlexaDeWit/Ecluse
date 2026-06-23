@@ -23,22 +23,23 @@ import Ecluse.Env (Env, newEnv)
 import Ecluse.Queue (newInMemoryQueue)
 import Ecluse.Registry (ParseError (..), RegistryClient (..))
 import Ecluse.Registry.Npm.Route qualified as Npm
+import Ecluse.Registry.Npm.Serve (npmRenderer)
 import Ecluse.Server (
-    Mount (..),
+    MountBinding (..),
     RequestSizeLimit (..),
     ServerConfig (..),
     application,
-    defaultServerConfig,
-    rootMount,
+    defaultPort,
+    mkServerConfig,
     serverMiddleware,
  )
 import Ecluse.Server.Cache (defaultCacheConfig, newMetadataCache)
-import Ecluse.Server.Route (Route (..))
+import Ecluse.Server.Route (Classifier, Route (..))
 
-{- | A registry-handle double whose effectful fields are never invoked: the S12
-web layer only routes, classifies, and renders — it never fetches — so a handle
-that refuses loudly is enough to assemble an 'Env'. If a route reached an
-effectful field, the refusal would surface the leak.
+{- | A registry-handle double whose effectful fields are never invoked: the web
+layer only routes, classifies, and renders — it never fetches — so a handle that
+refuses loudly is enough to assemble an 'Env'. If a route reached an effectful
+field, the refusal would surface the leak.
 -}
 fakeRegistry :: RegistryClient
 fakeRegistry =
@@ -52,10 +53,10 @@ fakeRegistry =
         }
   where
     unused :: IO a
-    unused = throwString "fakeRegistry: the web layer must not fetch in S12"
+    unused = throwString "fakeRegistry: the web layer must not fetch when only routing"
 
     unusedParse :: ParseError
-    unusedParse = ParseError "fakeRegistry: the web layer must not parse in S12"
+    unusedParse = ParseError "fakeRegistry: the web layer must not parse when only routing"
 
 -- | A credential-handle double: a fixed, non-expiring token, never read here.
 fakeCredentials :: CredentialProvider
@@ -74,48 +75,55 @@ newTestEnv = do
     logEnv <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
     newEnv fakeRegistry queue fakeCredentials manager metadataCache logEnv
 
-{- | The npm-wired server config: the defaults with npm's path grammar injected as
-the route classifier. The default config is ecosystem-neutral (it denies every
-path), so the npm-grammar dispatch assertions below run through an explicitly
-npm-wired classifier — the same wiring the composition root does.
+{- | A test mount binding: the given prefix and classifier, npm's denial renderer,
+and no packument-serve dependencies (so a 'Packument' route is the recognised-but-
+unserved @501@ stub).
 -}
-npmConfig :: ServerConfig
-npmConfig = defaultServerConfig{scClassify = const Npm.classify}
+mountAt :: NonEmpty Text -> Classifier -> MountBinding
+mountAt prefix classifier =
+    MountBinding
+        { bindingPrefix = prefix
+        , bindingClassifier = classifier
+        , bindingPackumentDeps = Nothing
+        , bindingRenderer = npmRenderer
+        }
 
--- | The 'application' under the npm-wired config (a single root mount).
-rootApp :: IO Application
-rootApp = application npmConfig <$> newTestEnv
-
-{- | The 'application' under a single @\/npm@ mount, so prefix-strip dispatch can
-be asserted against a non-root prefix. npm's classifier is injected as above.
+{- | The 'application' under a single @\/npm@ mount carrying npm's path grammar, so
+prefix-strip dispatch and the npm routing table can be asserted through the real
+classifier the composition root wires in.
 -}
 npmMountApp :: IO Application
-npmMountApp =
-    application npmConfig{scMounts = [Mount{mountPrefix = ["npm"]}]} <$> newTestEnv
+npmMountApp = application (mkServerConfig [mountAt ("npm" :| []) Npm.classify]) <$> newTestEnv
 
-{- | The 'application' under a __fake__ injected classifier (not npm's), proving
-dispatch routes through 'scClassify' rather than any hardwired grammar. The fake
-recognises a single sentinel path and denies everything else, so a response that
-follows it can only have come from the injected function.
+{- | The 'application' under a single @\/npm@ mount whose classifier is a __fake__
+grammar (not npm's), proving dispatch routes through the binding's classifier
+rather than any hardwired grammar. The fake recognises a single sentinel path and
+denies everything else, so a response that follows it can only have come from the
+injected function.
 -}
 fakeClassifierApp :: IO Application
-fakeClassifierApp = application defaultServerConfig{scClassify = const fakeClassify} <$> newTestEnv
+fakeClassifierApp = application (mkServerConfig [mountAt ("npm" :| []) fakeClassify]) <$> newTestEnv
   where
-    -- A deliberately non-npm grammar: @\/beep@ is the (locally answered) Ping
-    -- route, every other path is denied. npm's @\/is-odd@ would be a Packument;
-    -- here it is Unsupported, so the two grammars give observably different routes.
+    -- A deliberately non-npm grammar: @beep@ is the (locally answered) Ping route,
+    -- every other path is denied. npm's @is-odd@ would be a Packument; here it is
+    -- Unsupported, so the two grammars give observably different routes.
     fakeClassify :: [Text] -> Route
     fakeClassify ["beep"] = Ping
     fakeClassify _ = Unsupported
 
+{- | The 'application' with __no mounts__: every path but the control-plane health
+probes matches no mount and is the neutral @404@.
+-}
+neutralApp :: IO Application
+neutralApp = application (mkServerConfig []) <$> newTestEnv
+
 {- | The server middleware stack wrapping a body-reading application under a tiny
 request-body cap. The size-limit middleware rejects an over-cap body only once a
-handler reads it, so the inner app strictly consumes the body — exercising the
-cap that the no-body meta-route handlers never trip. The 'realIp' and 'timeout'
-middleware are part of the same stack.
+handler reads it, so the inner app strictly consumes the body — exercising the cap.
+The 'realIp' and 'timeout' middleware are part of the same stack.
 -}
 cappedApp :: Application
-cappedApp = serverMiddleware defaultServerConfig{scSizeLimit = RequestSizeLimit 8} echoBody
+cappedApp = serverMiddleware (mkServerConfig []){scSizeLimit = RequestSizeLimit 8} echoBody
   where
     echoBody :: Application
     echoBody req respond = do
@@ -125,9 +133,8 @@ cappedApp = serverMiddleware defaultServerConfig{scSizeLimit = RequestSizeLimit 
 {- | Drive a POST with the given body through an 'Application' and return its
 status code. The request is marked 'ChunkedBody' (rather than a known length) so
 the size-limit middleware applies its streaming byte-count check as the body is
-read — the path @hspec-wai@'s @request@, which fixes @requestBodyLength@ at a
-known zero, cannot reach. (@srequest@ supplies the body chunks from the
-'LByteString'.)
+read — the path @hspec-wai@'s @request@, which fixes @requestBodyLength@ at a known
+zero, cannot reach. (@srequest@ supplies the body chunks from the 'LByteString'.)
 -}
 statusForBody :: Application -> LByteString -> IO Int
 statusForBody app body = do
@@ -140,86 +147,76 @@ statusForBody app body = do
 
 spec :: Spec
 spec = do
-    describe "meta-routes" $
-        with rootApp $ do
-            it "answers /-/ping locally with 200 {}" $
-                get "/-/ping" `shouldRespondWith` "{}"{matchStatus = 200}
-
-            it "answers /-/v1/search with 501 (search is not an install path)" $
-                get "/-/v1/search" `shouldRespondWith` 501
-
+    describe "control-plane health probes (above any mount)" $
+        with npmMountApp $ do
             it "answers /livez with 200" $
                 get "/livez" `shouldRespondWith` 200
 
             it "answers /readyz with 200" $
                 get "/readyz" `shouldRespondWith` 200
 
-            it "keeps /livez and /readyz distinct routes" $ do
-                get "/livez" `shouldRespondWith` 200
-                get "/readyz" `shouldRespondWith` 200
+    describe "meta-routes under a mount" $
+        with npmMountApp $ do
+            it "answers /npm/-/ping locally with 200 {}" $
+                get "/npm/-/ping" `shouldRespondWith` "{}"{matchStatus = 200}
 
-    describe "dispatch — root mount" $
-        with rootApp $ do
+            it "answers /npm/-/v1/search with 501 (search is not an install path)" $
+                get "/npm/-/v1/search" `shouldRespondWith` 501
+
+    describe "dispatch — /npm mount (prefix strip + npm grammar)" $
+        with npmMountApp $ do
             it "recognises a packument route but does not yet serve it (501, not a fake 200)" $
-                get "/is-odd" `shouldRespondWith` 501
+                get "/npm/is-odd" `shouldRespondWith` 501
 
             it "recognises a tarball route but does not yet serve it (501)" $
-                get "/is-odd/-/is-odd-3.0.1.tgz" `shouldRespondWith` 501
+                get "/npm/is-odd/-/is-odd-3.0.1.tgz" `shouldRespondWith` 501
 
-            it "404s an unrecognised path (deny by default)" $
-                get "/is-odd/3.0.1" `shouldRespondWith` 404
+            it "accepts the bare mount prefix with a trailing slash (empty path → 404)" $
+                get "/npm/" `shouldRespondWith` 404
 
-            it "404s an unknown /-/… meta-route" $
-                get "/-/whoami" `shouldRespondWith` 404
+            it "404s an unknown /-/… meta-route under the mount" $
+                get "/npm/-/whoami" `shouldRespondWith` 404
 
             it "404s a hostile traversal path rather than routing it" $
                 -- @%2F@ decodes to one segment carrying a slash; the router denies it.
-                get "/foo%2Fbar" `shouldRespondWith` 404
+                get "/npm/foo%2Fbar" `shouldRespondWith` 404
 
-    describe "dispatch — /npm mount (prefix strip)" $
+    describe "the two response tiers (neutral above mounts, mount renderer within)" $
         with npmMountApp $ do
-            it "strips the mount prefix and classifies the remainder" $
-                get "/npm/is-odd" `shouldRespondWith` 501
+            it "renders an UNMOUNTED path as a neutral text/plain 404" $
+                -- No mount matches @/pypi/...@; there is no ecosystem to shape it, so
+                -- the body is the generic plain-text Not Found, not an npm error object.
+                get "/pypi/is-odd" `shouldRespondWith` "Not Found\n"{matchStatus = 404}
 
-            it "accepts the bare mount prefix with a trailing slash" $
-                -- @/npm/@ strips to the empty ecosystem path → Unsupported → 404.
-                get "/npm/" `shouldRespondWith` 404
-
-            it "routes a meta-route under the mount" $
-                get "/npm/-/ping" `shouldRespondWith` "{}"{matchStatus = 200}
-
-            it "404s a path outside the mount prefix" $
-                -- No mount matches @/pypi/...@, so it falls through to deny-by-default.
-                get "/pypi/is-odd" `shouldRespondWith` 404
+            it "renders an unrecognised IN-MOUNT path through the mount's npm renderer" $
+                -- @/npm/is-odd/3.0.1@ is under the npm mount but not a recognised npm
+                -- path, so its 404 body is the npm {\"error\": …} object — the mount's
+                -- surface, distinct from the neutral plain-text 404 above.
+                get "/npm/is-odd/3.0.1" `shouldRespondWith` "{\"error\":\"not found\"}"{matchStatus = 404}
 
     describe "dispatch — injected classifier (the routing boundary)" $
         -- Drive dispatch with a FAKE classifier (not npm's): the route a request
-        -- takes must follow the injected function, proving the web layer is no
-        -- longer hardwired to npm's grammar.
+        -- takes must follow the injected function, proving the web layer is not
+        -- hardwired to npm's grammar.
         with fakeClassifierApp $ do
-            it "routes the fake classifier's recognised path (/beep → Ping → 200 {})" $
-                -- npm's grammar has no @\/beep@ route; the fake's does, so a 200
-                -- here can only come from the injected classifier.
-                get "/beep" `shouldRespondWith` "{}"{matchStatus = 200}
+            it "routes the fake classifier's recognised path (/npm/beep → Ping → 200 {})" $
+                get "/npm/beep" `shouldRespondWith` "{}"{matchStatus = 200}
 
-            it "denies a path npm would accept but the fake does not (/is-odd → 404)" $
-                -- Under npm's grammar @\/is-odd@ is a Packument (501); under the
-                -- injected fake it is Unsupported (404). The 404 proves dispatch
-                -- followed the injected function, not a baked-in npm router.
-                get "/is-odd" `shouldRespondWith` 404
+            it "denies a path npm would accept but the fake does not (/npm/is-odd → 404)" $
+                -- Under npm's grammar @is-odd@ is a Packument (501); under the injected
+                -- fake it is Unsupported (404). The 404 proves dispatch followed the
+                -- injected function, not a baked-in npm router.
+                get "/npm/is-odd" `shouldRespondWith` 404
 
             it "denies npm's ping meta-route (the fake's grammar does not recognise it)" $
-                get "/-/ping" `shouldRespondWith` 404
+                get "/npm/-/ping" `shouldRespondWith` 404
 
-    describe "defaultServerConfig — ecosystem-neutral by default" $
-        -- The default config wires no classifier, so the agnostic web layer denies
-        -- every request until a composition root injects an ecosystem's grammar.
-        with (application defaultServerConfig <$> newTestEnv) $ do
-            it "404s a package-shaped path (no grammar is built in)" $
-                get "/is-odd" `shouldRespondWith` 404
-
-            it "404s npm's ping meta-route (not recognised without a classifier)" $
-                get "/-/ping" `shouldRespondWith` 404
+    describe "no mounts — neutral by default" $
+        -- With no mount wired, the web layer serves nothing but the health probes;
+        -- every other path matches no mount and is the neutral 404.
+        with neutralApp $ do
+            it "404s a package-shaped path (no mount is configured)" $
+                get "/npm/is-odd" `shouldRespondWith` "Not Found\n"{matchStatus = 404}
 
             it "still answers the control-plane health probes (above any mount)" $ do
                 get "/livez" `shouldRespondWith` 200
@@ -236,15 +233,15 @@ spec = do
         it "passes a request whose body is within the cap through to the handler" $
             statusForBody cappedApp "tiny" `shouldReturn` 200
 
-    describe "defaultServerConfig" $ do
+    describe "mkServerConfig — defaults" $ do
         it "listens on the conventional npm proxy port" $
-            scPort defaultServerConfig `shouldBe` 4873
+            scPort (mkServerConfig []) `shouldBe` defaultPort
 
-        it "serves a single root mount" $
-            scMounts defaultServerConfig `shouldBe` [rootMount]
-
-        it "the root mount has no prefix" $
-            mountPrefix rootMount `shouldBe` []
+        it "the default port is 4873" $
+            defaultPort `shouldBe` 4873
 
         it "caps the request body at 25 MiB by default" $
-            scSizeLimit defaultServerConfig `shouldBe` RequestSizeLimit (25 * 1024 * 1024)
+            scSizeLimit (mkServerConfig []) `shouldBe` RequestSizeLimit (25 * 1024 * 1024)
+
+        it "path-mounts a binding under its prefix (never the root)" $
+            bindingPrefix (mountAt ("npm" :| []) Npm.classify) `shouldBe` "npm" :| []
