@@ -108,7 +108,7 @@ import Ecluse.Registry.Npm.Serve (npmRenderer)
 import Ecluse.Server (MountBinding (..), ServerConfig, mkServerConfig)
 import Ecluse.Server qualified as Server
 import Ecluse.Server.Cache (defaultCacheConfig, newMetadataCache)
-import Ecluse.Server.Pipeline (PackumentDeps)
+import Ecluse.Server.Context (PackumentDeps)
 
 {- | Start Écluse: the entry point the @ecluse@ executable runs (see "Main").
 
