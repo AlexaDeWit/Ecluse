@@ -86,27 +86,33 @@ safely" into "you can only install through here," for CI runners and developer l
 alike. (The enforcement side is an operator concern — see [`USAGE.md` → Locking down CI
 egress](USAGE.md#locking-down-ci-egress-recommended); this document is about why it matters.)
 
-## Why you can't simply buy it
+## You can buy it — at a price
 
-Granted a chokepoint with a freshness policy, why build anything? Because each off-the-shelf
-option sits at an awkward point.
+Granted a chokepoint with a freshness policy, can't you just buy one? Partly, yes — and it
+is worth being honest about that. **The commercial repository-firewall and curation
+platforms do exactly this**, off the shelf: an age-based quarantine, enforced at the proxy.
+If that is what you need and you can fund it, buying is a legitimate, working answer. The
+catch is not capability — it is cost and shape.
 
 - **The managed cloud registry you may already run** gives you the chokepoint, the storage,
   and the authentication — everything except this. It has no notion of a freshness policy.
-- **Commercial repository-firewall and curation platforms** *do* enforce policy at the
-  proxy, and some offer exactly this age-based quarantine — but the capability tends to sit
-  behind a platform's upper licensing tiers, bundled inside a full artifact-hosting product.
-  To add one safeguard you adopt, operate, and pay for a second registry, most of which
-  duplicates the one you already run.
+- **Commercial repository-firewall and curation platforms** *do* sell exactly this
+  safeguard, and it works — but it tends to sit behind a platform's upper licensing tiers,
+  readily into five figures a year, bundled inside a full artifact-hosting product. To add
+  one capability you adopt, operate, and pay for a second registry, most of which duplicates
+  the one you already run.
 - **Hosted inspection services** avoid the migration but bill by usage — which scales the
   wrong way for an organisation running many CI jobs a day — and route your dependency
   requests, and your private-package metadata, through a third party.
 - **Cryptographic provenance** is valuable and complementary, but it attests *where* a
   package was built, not *whether* it is safe.
 
-None of this means buying is wrong; for many teams it is the right call. This section keeps
-names out of the critique on purpose. A fair, *named* guide to these tools — and when each
-may suit you better than Écluse — is in [`ALTERNATIVES.md`](ALTERNATIVES.md).
+So buying is not off the table — for a team that can absorb the licence and wants a vendor to
+own it, it can be the right call. The friction is **cost and proportion**: a whole platform,
+at enterprise prices, to rent one safeguard you could otherwise place in front of the
+registry you already run. This section keeps names out of the critique on purpose; a fair,
+*named* guide to these tools — and when each may suit you better than Écluse — is in
+[`ALTERNATIVES.md`](ALTERNATIVES.md).
 
 ## Why it is open
 
