@@ -34,11 +34,11 @@ gates packages on the way through.
 Per-project, per-consumer controls that need no infrastructure — the right mechanism when you
 can ensure consistent configuration across everyone who installs.
 
-- **npm's minimum-release-age cooldown, pnpm's `minimumReleaseAge`, and equivalents in bun and
+- **npm's minimum-release-age cooldown, pnpm's [`minimumReleaseAge`](https://pnpm.io/settings), and equivalents in bun and
   uv** — an install-time delay configured in the project (or per consumer); newer
   package-manager releases are moving toward stronger install-time defaults. *Reach for it* for
   immediate, zero-infrastructure protection of a project you control.
-- **Renovate** and **Dependabot** cooldowns — delay *update* proposals until a version has aged.
+- **[Renovate](https://docs.renovatebot.com/key-concepts/minimum-release-age/)** and **[Dependabot](https://docs.github.com/en/code-security/dependabot)** cooldowns — delay *update* proposals until a version has aged.
   *Reach for it* when your dependency updates already flow through a bot and you want a cooldown
   with no new moving parts.
 - **[SafeDep PMG](https://github.com/safedep/pmg)** (Package Manager Guard) — an open-source
@@ -53,11 +53,11 @@ can ensure consistent configuration across everyone who installs.
 Turnkey, vendor-supported options — central enforcement without building or maintaining it
 yourself.
 
-- **JFrog Artifactory** with **Curation** — a full artifact platform whose curation layer
+- **JFrog Artifactory** with **[Curation](https://jfrog.com/curation/)** — a full artifact platform whose curation layer
   enforces policy at the proxy, including age-based ("immature package") gating and
   malicious-package blocking. *Reach for it* when you want one vendor-supported platform across
   many ecosystems, with enterprise support.
-- **Sonatype** Nexus Repository with **Repository Firewall** — quarantines suspicious components
+- **Sonatype** Nexus Repository with **[Repository Firewall](https://www.sonatype.com/products/sonatype-repository-firewall)** — quarantines suspicious components
   at the proxy using behavioural and metadata signals, releasing safe ones automatically.
   *Reach for it* for mature behavioural detection backed by a large intelligence database,
   integrated with a widely-deployed repository manager.
@@ -71,7 +71,7 @@ yourself.
 - **[Socket](https://socket.dev/)** — behavioural analysis of packages (install scripts, network
   access, and more), surfaced in CI and pull requests and via a registry proxy. *Reach for it*
   for deep per-package behavioural signals and developer-facing reviews.
-- **Managed cloud registries** — **AWS CodeArtifact** and **Google Artifact Registry** — give
+- **Managed cloud registries** — **[AWS CodeArtifact](https://aws.amazon.com/codeartifact/)** and **[Google Artifact Registry](https://cloud.google.com/artifact-registry)** — give
   you a chokepoint, storage, authentication, and dependency-confusion controls. They have no
   freshness policy of their own, so pair them with one of the cooldown approaches above. *Reach
   for it* as the backing store you most likely already run — and note that Écluse is designed to
@@ -81,7 +81,7 @@ yourself.
 
 These address a different part of the problem and pair well with any of the above.
 
-- **Provenance and attestations** — npm provenance (Sigstore / SLSA) and `npm audit signatures`
+- **Provenance and attestations** — [npm provenance](https://docs.npmjs.com/generating-provenance-statements/) (Sigstore / SLSA) and `npm audit signatures`
   attest *where and how* a package was built. *Use alongside* a cooldown for cryptographic
   build-origin verification.
 - **Malicious-package scanners** — e.g. **[GuardDog](https://github.com/DataDog/guarddog)** and
