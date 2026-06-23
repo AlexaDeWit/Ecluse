@@ -19,7 +19,8 @@ import Ecluse.Package (
     unScope,
  )
 import Ecluse.Registry.Npm.Route (classify)
-import Ecluse.Server.Route (Route (..))
+import Ecluse.Server.Route (Filename (Filename), Route (..))
+import Ecluse.Version (Version, mkVersion)
 
 -- | An unscoped npm package identity, for building expected 'Route's.
 unscoped :: Text -> PackageName
@@ -28,6 +29,10 @@ unscoped = mkPackageName Npm Nothing
 -- | A scoped npm package identity (scope, base name), for expected 'Route's.
 scoped :: Text -> Text -> PackageName
 scoped scope = mkPackageName Npm (Just (mkScope scope))
+
+-- | An npm version, for the parsed coordinate a 'Tarball' route carries.
+npmVersion :: Text -> Version
+npmVersion = mkVersion Npm
 
 {- | The npm routing table, asserted as @pathInfo → Route@. The path is
 percent-decoded before it reaches 'classify', so each scoped case appears in
@@ -48,17 +53,37 @@ spec = do
         it "agrees on the same Route for both scoped encodings" $
             classify ["@babel", "code-frame"] `shouldBe` classify ["@babel/code-frame"]
 
-    describe "classify — tarballs" $ do
-        it "routes an unscoped tarball to its artifact" $
+    describe "classify — tarballs (the parsed artifact coordinate)" $ do
+        it "routes an unscoped tarball to its artifact, parsing the version" $
             classify ["is-odd", "-", "is-odd-3.0.1.tgz"]
-                `shouldBe` Tarball (unscoped "is-odd") "is-odd-3.0.1.tgz"
+                `shouldBe` Tarball (unscoped "is-odd") (npmVersion "3.0.1") (Filename "is-odd-3.0.1.tgz")
         it "routes a scoped tarball (two segments) to its artifact" $
             -- The basename drops the scope: @\@babel\/code-frame@ → @code-frame-7.0.0.tgz@.
             classify ["@babel", "code-frame", "-", "code-frame-7.0.0.tgz"]
-                `shouldBe` Tarball (scoped "babel" "code-frame") "code-frame-7.0.0.tgz"
+                `shouldBe` Tarball (scoped "babel" "code-frame") (npmVersion "7.0.0") (Filename "code-frame-7.0.0.tgz")
         it "routes a scoped tarball (one decoded segment) to its artifact" $
             classify ["@babel/code-frame", "-", "code-frame-7.0.0.tgz"]
-                `shouldBe` Tarball (scoped "babel" "code-frame") "code-frame-7.0.0.tgz"
+                `shouldBe` Tarball (scoped "babel" "code-frame") (npmVersion "7.0.0") (Filename "code-frame-7.0.0.tgz")
+        it "reads a prerelease-hyphen version out of the basename verbatim" $
+            -- The version itself carries hyphens (@1.0.0-rc.1@); the parse must split
+            -- on the FIRST @{name}-@ boundary, taking everything after as the version.
+            classify ["pkg", "-", "pkg-1.0.0-rc.1.tgz"]
+                `shouldBe` Tarball (unscoped "pkg") (npmVersion "1.0.0-rc.1") (Filename "pkg-1.0.0-rc.1.tgz")
+        it "preserves the filename verbatim, not one rebuilt from (name, version)" $
+            -- The file's parsed version round-trips and the Filename is byte-identical
+            -- to what arrived — it, not a reconstruction, fetches the bytes.
+            classify ["@babel/code-frame", "-", "code-frame-7.0.0.tgz"]
+                `shouldBe` Tarball (scoped "babel" "code-frame") (npmVersion "7.0.0") (Filename "code-frame-7.0.0.tgz")
+        it "denies a basename that does not match the requested package (path-confusion)" $
+            -- The file names a DIFFERENT package's artifact under @is-odd@'s path; the
+            -- basename does not begin with @is-odd-@, so it is denied, never coerced
+            -- into a fabricated @is-odd@ coordinate.
+            classify ["is-odd", "-", "is-even-3.0.1.tgz"] `shouldBe` Unsupported
+        it "denies a basename that is the bare package name with no version" $
+            -- @{name}.tgz@ has no @-{version}@ run, so there is no coordinate to parse.
+            classify ["is-odd", "-", "is-odd.tgz"] `shouldBe` Unsupported
+        it "denies a basename that is the name and a trailing hyphen but empty version" $
+            classify ["is-odd", "-", "is-odd-.tgz"] `shouldBe` Unsupported
 
     describe "classify — meta-routes (matched before any package)" $ do
         it "routes /-/ping to Ping" $
@@ -78,8 +103,7 @@ spec = do
         it "routes a non-.tgz artifact-shaped path to Unsupported" $
             classify ["is-odd", "-", "is-odd-3.0.1.zip"] `shouldBe` Unsupported
         it "routes a bare \".tgz\" (no name before the suffix) to Unsupported" $
-            -- Pins the isTarballFile length guard: the file must be longer than
-            -- @.tgz@, so the exact suffix alone is not a tarball.
+            -- The basename is empty, so it can never match @{name}-{version}@.
             classify ["is-odd", "-", ".tgz"] `shouldBe` Unsupported
         it "routes a version-manifest request to Unsupported" $
             -- @GET /{pkg}/{version}@ is not a packument: a bare package is, but a
@@ -169,7 +193,7 @@ spec = do
                 case route of
                     Packument pn ->
                         H.assert (all safe (nameComponents pn))
-                    Tarball pn file ->
+                    Tarball pn _ (Filename file) ->
                         H.assert (all safe (file : nameComponents pn))
                     _ -> pure ()
 
@@ -177,7 +201,7 @@ spec = do
 isAccepted :: Route -> Bool
 isAccepted = \case
     Packument _ -> True
-    Tarball _ _ -> True
+    Tarball{} -> True
     _ -> False
 
 {- | The structural components of an accepted name — its scope (if any) and its

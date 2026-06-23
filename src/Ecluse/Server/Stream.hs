@@ -23,6 +23,7 @@ This is the serve path; it __streams, never buffers__. The whole-artifact-in-mem
 module Ecluse.Server.Stream (
     -- * Streaming a response through
     streamUpstream,
+    streamUpstreamWhen,
 
     -- * The pump
     pumpBody,
@@ -30,10 +31,11 @@ module Ecluse.Server.Stream (
 
 import Data.ByteString qualified as BS
 import Data.ByteString.Builder (Builder, byteString)
-import Network.HTTP.Client (BodyReader, Manager, Request, brRead, responseHeaders, responseStatus, withResponse)
+import Network.HTTP.Client (BodyReader, Manager, Request, brRead, responseClose, responseHeaders, responseOpen, responseStatus, withResponse)
 import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types (ResponseHeaders, Status)
 import Network.Wai (Response, ResponseReceived, responseStream)
+import UnliftIO.Exception (finally, tryAny)
 
 {- | Stream an upstream response through to the client with constant memory.
 
@@ -60,6 +62,60 @@ streamUpstream manager request relay respond =
          in respond $
                 responseStream status headers $ \write flush ->
                     pumpBody (brRead (HTTP.responseBody upstream)) write flush
+
+{- | Stream an upstream response through __only when__ its status passes the
+@accept@ predicate, keeping a recoverable miss distinct from an unrecoverable
+mid-stream failure.
+
+This is the conditional relay the serve path's __private leg__ needs: open the
+upstream, learn its status, stream the body on a hit, and on a miss fall through to
+another upstream — without buffering and without leaking the connection. The two
+outcomes are deliberately kept apart:
+
+* __Recoverable miss__ — the connection could not be opened, or the status fails
+  @accept@. No response has been committed, so the connection is closed and
+  'Nothing' is returned and the caller may fall through to another leg.
+* __Committed stream__ — the status passed, so the response is begun on the wire.
+  From that point a failure pumping the body is __unrecoverable__: it is __not__
+  collapsed into a miss (that would call @respond@ a second time over a half-sent
+  response), but propagates — the connection torn down as it unwinds — so the
+  caller fails internally rather than responding again.
+
+Only the connection open is caught here; once @respond@ is reached exceptions fly.
+The connection is released on every path: a rejected status closes it before
+returning, a streamed (or failed) body closes it as the stream unwinds.
+
+The @accept@ predicate sees only the status (the hit\/miss decision a serve leg
+makes); a passing response is relayed exactly as 'streamUpstream' would, the
+@relay@ choosing the client-facing status and headers.
+-}
+streamUpstreamWhen ::
+    Manager ->
+    Request ->
+    (Status -> Bool) ->
+    (Status -> ResponseHeaders -> (Status, ResponseHeaders)) ->
+    (Response -> IO ResponseReceived) ->
+    IO (Maybe ResponseReceived)
+streamUpstreamWhen manager request accept relay respond =
+    -- The connection open is the recoverable phase: a failure here is a clean miss
+    -- the caller may fall through on. Once a 2xx hands off to 'respond' the response
+    -- is committed, so a body failure there is left to propagate (not caught into a
+    -- 'Nothing'); the connection is closed on every path as the stream unwinds.
+    tryAny (responseOpen request manager) >>= \case
+        Left _ -> pure Nothing
+        Right upstream -> stream upstream `finally` responseClose upstream
+  where
+    stream upstream
+        | not (accept upstreamStatus) = pure Nothing
+        | otherwise =
+            let (status, headers) = relay upstreamStatus (responseHeaders upstream)
+             in Just
+                    <$> respond
+                        ( responseStream status headers $ \write flush ->
+                            pumpBody (brRead (HTTP.responseBody upstream)) write flush
+                        )
+      where
+        upstreamStatus = responseStatus upstream
 
 {- | Pump a chunked body from a reader to a WAI stream sink with constant memory.
 

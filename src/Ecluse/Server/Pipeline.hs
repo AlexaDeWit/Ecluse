@@ -1,8 +1,7 @@
-{- | The packument serve path: fetch a package across its upstreams in parallel,
-gate the public set and trust the private set, merge them, and serve the
-edited-in-place raw document.
+{- | The serve paths behind the package routes: the packument merge behind
+@GET \/{pkg}@ and the artifact relay behind @GET \/{pkg}\/-\/{file}.tgz@.
 
-This is the data-plane handler behind a @GET \/{pkg}@ route. It composes the
+This is the data-plane handler module. It composes the
 slices that decide /what/ to serve — the registry client
 ("Ecluse.Registry.Npm"), the per-version rules ("Ecluse.Rules"), the structural
 filter ("Ecluse.Registry.Npm.Filter"), the cross-upstream merge
@@ -73,10 +72,33 @@ expedient, not intended — the agnostic handles that would let it dispatch thro
 adapter (a per-adapter router, and an ecosystem-neutral filter\/projection) are
 tracked as separate work, after which a second ecosystem would reuse this
 orchestration unchanged.
+
+== Artifact path
+
+The tarball handler ('serveTarball') is the demand-driven artifact relay. It
+fetches __by the preserved on-the-wire filename__ the route parsed (not a name
+rebuilt from the coordinate), so the bytes are addressed exactly as the client
+requested them. The private leg is tried first, __uncached__, forwarding the
+client's credential; a hit streams the artifact through with __bounded memory__
+(the @withResponse@\/@responseStream@ relay, never a buffering fetch), a miss falls
+through. The public leg is anonymous: it gates __that one version__ against the
+rules (the same machinery the packument path gates the whole set with), and on an
+admit __streams the public bytes and enqueues a 'Ecluse.Queue.MirrorJob'__ for the
+worker to back-fill the mirror target; on a reject it renders the serve error model
+(@403@\/@503@\/@500@) through the mount's renderer. The enqueue is
+__serve-then-enqueue, best-effort and non-blocking__: the artifact reaches the
+client first, and an enqueue failure is swallowed rather than failing or delaying
+the response. Mirroring is __demand-driven__ — a job is enqueued only here, on a
+tarball-path admit, never when a packument is filtered. The serve path does __not__
+verify @dist.integrity@; the client checks the artifact's own hash and the worker
+re-verifies before publishing.
 -}
 module Ecluse.Server.Pipeline (
     -- * The packument handler
     servePackument,
+
+    -- * The tarball handler
+    serveTarball,
 ) where
 
 import Data.Aeson (Value (Object, String))
@@ -89,14 +111,14 @@ import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
-import Network.HTTP.Types (ResponseHeaders, Status, hAuthorization, hContentType, mkStatus, status200, status401, status501)
+import Network.HTTP.Types (ResponseHeaders, Status, hAuthorization, hContentType, mkStatus, status200, status401, status501, statusIsSuccessful)
 import Network.Wai (Request, Response, ResponseReceived, requestHeaders, responseLBS)
 import UnliftIO (concurrently)
 import UnliftIO.Exception (throwString, tryAny)
 
 import Ecluse.Credential (Secret, mkSecret)
-import Ecluse.Env (Env (envManager, envMetadataCache))
-import Ecluse.Package (PackageInfo (infoDistTags, infoPublishedAt, infoVersions), PackageName)
+import Ecluse.Env (Env (envManager, envMetadataCache, envQueue))
+import Ecluse.Package (PackageDetails, PackageInfo (infoDistTags, infoPublishedAt, infoVersions), PackageName)
 import Ecluse.Package.Filter (filterPlan)
 import Ecluse.Package.Merge (
     MergePlan (mpDistTags, mpSurvivors, mpTime),
@@ -104,16 +126,20 @@ import Ecluse.Package.Merge (
     SourceId,
     mergePackuments,
  )
+import Ecluse.Queue (MirrorJob (MirrorJob, jobArtifactUrl, jobMirrorTarget, jobPackage, jobVersion), enqueue)
 import Ecluse.Registry (RegistryResponse (responseBody))
 import Ecluse.Registry.Npm (
     MetadataForm (Full),
     NpmClientConfig (..),
+    artifactFileUrl,
+    artifactRequestByFile,
     fetchMetadataForm,
     noValidators,
  )
 import Ecluse.Registry.Npm.Filter (FilterResult (Filtered, NoSurvivors), applyFilterPlan, rewriteTarballUrls)
 import Ecluse.Registry.Npm.Project (parsePackageInfo)
-import Ecluse.Rules.Types (Decision, EvalContext (EvalContext))
+import Ecluse.Rules (evalRules)
+import Ecluse.Rules.Types (Decision, EvalContext (EvalContext), PrecededRule)
 import Ecluse.Server.Cache (CacheEntry (CacheEntry, entryInfo, entryRaw), Source (Source), resolveMetadata)
 import Ecluse.Server.Conditional (Conditional (Modified, NotModified), etagHeader, evaluateOwnETag)
 import Ecluse.Server.Context (
@@ -124,6 +150,7 @@ import Ecluse.Server.Context (
     ctxMount,
  )
 import Ecluse.Server.Response (
+    ArtifactStatus (Forbidden, NotFound, Ok, ServerError, Unavailable'),
     MountRenderer,
     PackumentStatus (PackumentForbidden, PackumentOk, PackumentServerError, PackumentUnavailable),
     RejectReason (Unavailable),
@@ -131,13 +158,17 @@ import Ecluse.Server.Response (
     RenderedBody (RenderedBody),
     RetryAfter (RetryAfter),
     ServeDecision (Admit, Reject),
-    Transience (WillResolve),
+    Transience (WillResolve, WontResolve),
+    artifactStatus,
+    artifactStatusCode,
     packumentStatus,
     packumentStatusCode,
     renderError,
     serveDecisionOf,
  )
-import Ecluse.Version (renderVersion)
+import Ecluse.Server.Route (Filename (Filename))
+import Ecluse.Server.Stream (streamUpstream, streamUpstreamWhen)
+import Ecluse.Version (Version, renderVersion)
 
 -- ── the handler ─────────────────────────────────────────────────────────────
 
@@ -578,3 +609,240 @@ jsonResponse status extra =
 renderedResponse :: Status -> ResponseHeaders -> RenderedBody -> Response
 renderedResponse status extra (RenderedBody contentType body) =
     responseLBS status ((hContentType, contentType) : extra) body
+
+-- ── the tarball handler ───────────────────────────────────────────────────────
+
+{- | Serve a @GET \/{pkg}\/-\/{file}.tgz@ artifact request end to end, over the
+request's 'RequestCtx'.
+
+The mount's 'PackumentDeps' and error renderer are read from the matched
+'MountBinding'; an unwired mount is the recognised-but-unserved @501@ stub (as for
+'servePackument'). With dependencies wired and the edge token (if any) validated,
+the artifact is fetched __by the preserved 'Filename'__ — never a name rebuilt from
+the coordinate:
+
+* the __private__ upstream is tried first, __uncached__, forwarding the client's
+  credential; a @2xx@ streams the bytes through with bounded memory, any other
+  status falls through;
+* on a private miss the __public__ version metadata is fetched anonymously and
+  __that one version__ gated against the rules; an admit streams the public bytes
+  __and enqueues a 'MirrorJob'__ (serve-then-enqueue, the enqueue best-effort and
+  non-blocking), a reject renders the serve error model
+  (@403@\/@503@\/@500@\/@404@) through the mount's renderer.
+
+The public leg is always anonymous (the client credential is never sent to the
+public upstream); the mirror job carries no credential. The serve path does not
+verify @dist.integrity@ (see the module header → "Artifact path").
+-}
+serveTarball ::
+    PackageName ->
+    Version ->
+    Filename ->
+    Request ->
+    (Response -> IO ResponseReceived) ->
+    Handler ResponseReceived
+serveTarball name version filename request respond = do
+    renderer <- asks (bindingRenderer . ctxMount)
+    asks (bindingPackumentDeps . ctxMount) >>= \case
+        Nothing -> liftIO (respond (recognisedButUnserved renderer))
+        Just deps -> serveTarballWithDeps renderer deps name version filename request respond
+
+-- Serve a tarball once the mount's dependencies are known: edge auth, then the
+-- private-hit / public-miss legs the module header describes. The composition-root
+-- 'Env' is read from the request context.
+serveTarballWithDeps ::
+    MountRenderer ->
+    PackumentDeps ->
+    PackageName ->
+    Version ->
+    Filename ->
+    Request ->
+    (Response -> IO ResponseReceived) ->
+    Handler ResponseReceived
+serveTarballWithDeps renderer deps name version (Filename file) request respond
+    | not (edgeAuthorised deps request) = liftIO (respond (edgeUnauthorised renderer))
+    | otherwise = do
+        env <- asks ctxEnv
+        liftIO $ do
+            let clientToken = forwardedToken request
+            privateHit <- streamPrivateArtifact env deps clientToken name file respond
+            case privateHit of
+                Just received -> pure received
+                Nothing -> servePublicArtifact env renderer deps name version file respond
+
+{- Stream the artifact from the private upstream by its preserved filename,
+forwarding the client's credential (the @passthrough@ private leg, uncached). A
+@2xx@ is streamed through with bounded memory and yields 'Just'; a non-@2xx@ status,
+an unformable URL, or a failure opening the connection yields 'Nothing' so the
+caller falls through to the public leg, the upstream body never read.
+
+A failure that strikes __after__ a @2xx@ has begun streaming is unrecoverable — the
+response is already on the wire — so 'streamUpstreamWhen' lets it propagate rather
+than reporting a miss: the request fails internally (the connection is torn down)
+instead of responding a second time over a half-sent artifact. -}
+streamPrivateArtifact ::
+    Env ->
+    PackumentDeps ->
+    Maybe Secret ->
+    PackageName ->
+    Text ->
+    (Response -> IO ResponseReceived) ->
+    IO (Maybe ResponseReceived)
+streamPrivateArtifact env deps token name file respond =
+    case artifactRequestByFile (clientConfig env (pdPrivateBaseUrl deps) token) name file of
+        Left _ -> pure Nothing
+        Right req -> streamUpstreamWhen (envManager env) req statusIsSuccessful relayArtifact respond
+
+{- Serve the artifact from the public upstream after a private miss: gate the
+single requested version against the rules, and on an admit stream the public bytes
+(anonymously) and enqueue a mirror job; on a reject render the serve error model.
+The public version metadata is fetched anonymously to decide. -}
+servePublicArtifact ::
+    Env ->
+    MountRenderer ->
+    PackumentDeps ->
+    PackageName ->
+    Version ->
+    Text ->
+    (Response -> IO ResponseReceived) ->
+    IO ResponseReceived
+servePublicArtifact env renderer deps name version file respond = do
+    decision <- gatePublicVersion env deps name version
+    case artifactStatus decision of
+        Ok -> streamPublicArtifact env deps name version file respond
+        status -> respond (artifactError renderer deps status decision)
+
+{- Gate the single requested version against the mount's rules, returning its
+serve outcome. The public packument is fetched anonymously and parsed; the
+requested version's 'PackageDetails' is evaluated against the rule set
+('evalRules', the same engine the packument path gates with) and projected to a
+'ServeDecision'.
+
+The outcome distinguishes the refusal causes the error model maps: a version
+absent from the public metadata is a genuine miss (a @404@ forwarded upstream
+absence, projected as 'Unavailable' 'WontResolve' only to carry a non-admit — the
+status is overridden to @404@ in 'artifactError'); a metadata fetch that fails is a
+transient upstream outage (@503@); a present version is decided by the rules. -}
+gatePublicVersion :: Env -> PackumentDeps -> PackageName -> Version -> IO ServeDecision
+gatePublicVersion env deps name version = do
+    evalCtx <- EvalContext <$> pdNow deps
+    fetched <- tryAny (fetchPublicLeg env (pdPublicBaseUrl deps) name)
+    pure $ case fetched of
+        Left _ -> upstreamUnavailable
+        Right Nothing -> upstreamUnavailable
+        Right (Just (info, _value)) -> case Map.lookup (renderVersion version) (infoVersions info) of
+            Nothing -> versionAbsent
+            Just details -> gateVersion evalCtx (pdRules deps) details
+
+-- Project a single version's rule decision to a serve outcome.
+gateVersion :: EvalContext -> [PrecededRule] -> PackageDetails -> ServeDecision
+gateVersion ctx rules details = serveDecisionOf details (evalRules ctx rules details)
+
+-- A transient public-upstream outage: a 'WillResolve' rejection (→ @503@).
+upstreamUnavailable :: ServeDecision
+upstreamUnavailable =
+    Reject (Rejection (Unavailable (WillResolve Nothing)) "the upstream registry was unavailable")
+
+{- A version not present in the public metadata: a non-admit carrying a
+'WontResolve' cause, whose status 'artifactError' overrides to a @404@ forwarded
+miss (the package may exist, this version does not). -}
+versionAbsent :: ServeDecision
+versionAbsent =
+    Reject (Rejection (Unavailable WontResolve) "the requested version was not found upstream")
+
+{- Stream the artifact from the public upstream by its preserved filename,
+__anonymously__ (the client credential is never sent to the public upstream), and —
+__after__ the response is begun — enqueue a best-effort mirror job. An unformable
+URL is the internal-error path. -}
+streamPublicArtifact ::
+    Env ->
+    PackumentDeps ->
+    PackageName ->
+    Version ->
+    Text ->
+    (Response -> IO ResponseReceived) ->
+    IO ResponseReceived
+streamPublicArtifact env deps name version file respond =
+    case artifactRequestByFile (clientConfig env (pdPublicBaseUrl deps) Nothing) name file of
+        Left _ -> respond internalArtifactError
+        Right req -> do
+            received <- streamUpstream (envManager env) req relayArtifact respond
+            enqueueMirror env deps name version file
+            pure received
+
+{- Enqueue a demand-driven mirror job for an admitted artifact, __best-effort__: it
+runs after the client response is begun and any failure is swallowed, so a queue
+outage never fails or delays the serve. The job names the public artifact URL (the
+same location the public fetch targeted) and the mount's mirror target; it carries
+no credential (the worker mints its own). An unformable artifact URL skips the
+enqueue rather than failing the served response. -}
+enqueueMirror :: Env -> PackumentDeps -> PackageName -> Version -> Text -> IO ()
+enqueueMirror env deps name version file =
+    case artifactFileUrl (pdPublicBaseUrl deps) name file of
+        Left _ -> pure ()
+        Right artifactUrl ->
+            void . tryAny . enqueue (envQueue env) $
+                MirrorJob
+                    { jobPackage = name
+                    , jobVersion = version
+                    , jobArtifactUrl = artifactUrl
+                    , jobMirrorTarget = pdMirrorTarget deps
+                    }
+
+{- The relay for an artifact stream: forward the upstream status and headers,
+dropping only the hop-by-hop framing headers (@Transfer-Encoding@, @Connection@)
+whose values describe the upstream hop, not the artifact. The body is opaque binary
+streamed verbatim, so the content headers (type, length, encoding) and the
+upstream's @ETag@ pass through unchanged — the client verifies the artifact's own
+@dist.integrity@ over exactly these bytes. -}
+relayArtifact :: Status -> ResponseHeaders -> (Status, ResponseHeaders)
+relayArtifact status headers =
+    (status, filter (not . isHopByHop . fst) headers)
+  where
+    isHopByHop name = name == "Transfer-Encoding" || name == "Connection"
+
+{- Render a non-admit artifact outcome as the serve error model: @403@ for a policy
+denial, @503@ for a transient upstream unavailability, @404@ for a forwarded
+upstream miss (the requested version is absent), @500@ otherwise. The body is shaped
+by the mount's renderer; a transient status carries no suggested delay here (the
+single-artifact path has none to offer). A @404@ is the version-absent miss, which
+'gatePublicVersion' flags as a 'WontResolve' rejection — the only such cause on this
+path — so it is mapped to @404@ rather than the @500@ a 'WontResolve' would
+otherwise render. -}
+artifactError :: MountRenderer -> PackumentDeps -> ArtifactStatus -> ServeDecision -> Response
+artifactError renderer deps status decision =
+    renderedResponse (toStatus actualStatus) [] (renderError renderer (pdHelp deps) message)
+  where
+    -- The version-absent miss is carried as a 'WontResolve' rejection but rendered
+    -- as a forwarded @404@, not the @500@ a generic 'WontResolve' maps to.
+    actualStatus :: ArtifactStatus
+    actualStatus = if isVersionAbsent then NotFound else status
+
+    isVersionAbsent :: Bool
+    isVersionAbsent = case decision of
+        Reject (Rejection (Unavailable WontResolve) _) -> True
+        _ -> False
+
+    toStatus :: ArtifactStatus -> Status
+    toStatus s = mkStatus (artifactStatusCode s) (statusReason s)
+
+    statusReason :: ArtifactStatus -> ByteString
+    statusReason = \case
+        Ok -> "OK"
+        Forbidden -> "Forbidden"
+        Unavailable'{} -> "Service Unavailable"
+        ServerError -> "Internal Server Error"
+        NotFound -> "Not Found"
+
+    message :: Text
+    message = case decision of
+        Admit -> "the artifact is available"
+        Reject rej -> rejectionMessage rej
+
+{- A @500@ for an unformable upstream artifact URL — a configuration fault, not a
+serve decision. The package segment and filename are already known-safe, so this is
+reachable only on a misconfigured base URL; it is the internal-error tier, distinct
+from the rule\/upstream outcomes 'artifactError' renders. -}
+internalArtifactError :: Response
+internalArtifactError =
+    responseLBS (mkStatus 500 "Internal Server Error") [(hContentType, "application/json")] "{\"error\":\"could not form the upstream artifact URL\"}"

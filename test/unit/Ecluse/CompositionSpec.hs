@@ -173,6 +173,9 @@ composeBindingsSpec = describe "planMounts / composeBindings (config-driven serv
                         -- The mount base is the derived relative prefix, so tarball
                         -- URLs rewrite back through the proxy mount.
                         pdMountBaseUrl deps `shouldBe` "/npm"
+                        -- The mirror-target endpoint is wired from the mount's config,
+                        -- for the demand-driven mirror job's publish destination.
+                        pdMirrorTarget deps `shouldBe` "https://mirror.example.test"
             Right other -> expectationFailure ("expected exactly one binding, got " <> show (length other))
 
     it "carries the resolved rule policy onto the binding's packument deps" $ do

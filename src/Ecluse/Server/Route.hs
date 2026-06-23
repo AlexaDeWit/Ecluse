@@ -21,6 +21,7 @@ server__: feed a 'Classifier' some segments, assert the 'Route'.
 module Ecluse.Server.Route (
     -- * Routes
     Route (..),
+    Filename (..),
 
     -- * Classification
     Classifier,
@@ -34,6 +35,7 @@ import Data.Char (isControl)
 import Data.Text qualified as T
 
 import Ecluse.Package (PackageName)
+import Ecluse.Version (Version)
 
 {- | A classified request. Everything the front door is willing to serve is one
 of these; an unrecognised path is 'Unsupported' (deny by default).
@@ -47,11 +49,13 @@ ecosystem-specific.
 data Route
     = -- | A package-metadata request — the /packument/.
       Packument PackageName
-    | {- | An artifact request. The 'Text' is the tarball filename exactly as
-      requested (with any ecosystem-specific basename handling already applied by
-      the classifier).
+    | {- | An artifact request, as a __parsed coordinate__: the package, the
+      'Version' the classifier read out of the artifact name, and the 'Filename'
+      itself. The 'Version' is the coordinate the rules gate on; the 'Filename' is
+      the artifact's on-the-wire name, __preserved verbatim__ — it, not a name
+      rebuilt from @(package, version)@, is authoritative for fetching the bytes.
       -}
-      Tarball PackageName Text
+      Tarball PackageName Version Filename
     | -- | A registry liveness probe, answered locally.
       Ping
     | -- | Package search (unsupported).
@@ -60,6 +64,20 @@ data Route
       routing layer.
       -}
       Unsupported
+    deriving stock (Eq, Show)
+
+{- | An artifact's on-the-wire file name, the agnostic artifact-name type a
+'Tarball' route carries.
+
+It is held as a distinct type, not a bare 'Text', because it is __authoritative
+for fetching the bytes__: the proxy fetches an artifact at the upstream path built
+from this exact name, never one reconstructed from @(package, version)@, so that a
+registry whose artifact naming differs from the proxy's own convention still
+resolves. The name is preserved verbatim as received; the classifier that produces
+it has already applied the component-safety gate ('isSafeComponent'), so the value
+is safe to interpolate into a downstream URL.
+-}
+newtype Filename = Filename Text
     deriving stock (Eq, Show)
 
 {- | The mapping from an ecosystem-native request path to a 'Route'.
