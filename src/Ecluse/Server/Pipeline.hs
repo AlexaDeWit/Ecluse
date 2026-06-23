@@ -22,6 +22,14 @@ the public registry would be a credential disclosure, so the public leg is built
 with no token at all. The two legs are fetched concurrently, each with its own
 credential posture; nothing shares a token across the trust split.
 
+Because the private upstream is the __per-client authority__, its metadata is
+__not cached across clients__: the private leg fetches and parses on every request
+with that client's own credential, so the upstream re-authorizes each client
+itself. Only the anonymous public leg is cached (one shared document, no per-client
+authority to preserve). Caching the private leg keyed by base URL alone would let
+one client's cached entry serve another client's private document within the TTL,
+bypassing the upstream's authorization — a cross-client disclosure.
+
 == Merge, not fallback
 
 A packument is the /set of available versions/, spread across upstreams, so it is
@@ -182,8 +190,8 @@ servePackument deps env name request respond
         let clientToken = forwardedToken request
         (privResult, pubResult) <-
             concurrently
-                (fetchLeg env (pdPrivateBaseUrl deps) clientToken name)
-                (fetchLeg env (pdPublicBaseUrl deps) Nothing name)
+                (fetchPrivateLeg env (pdPrivateBaseUrl deps) clientToken name)
+                (fetchPublicLeg env (pdPublicBaseUrl deps) name)
         let private = trustedSource <$> privResult
             (public, publicExclusions) = gatePublic deps ctx pubResult
             sources = catMaybes [private, public]
@@ -234,40 +242,57 @@ data Contribution = Contribution
     , srcValue :: Value
     }
 
-{- Resolve one upstream leg through the metadata cache, keyed by the leg's base URL
-as its 'Source', returning its coherent (parsed packument, raw @Value@) pair — or
+{- Resolve the private (trusted) upstream leg, __uncached__, forwarding the client's
+own credential. Returns its coherent (parsed packument, raw @Value@) pair — or
 'Nothing' when the leg is unavailable or its body does not parse. A failed leg is a
 degraded contribution, not an error: the merge serves the best-effort union of
 whatever resolved (partial-upstream availability).
 
-Each leg has its own cache key (the source dimension), so the private and public
-documents of one package never cross-contaminate, and concurrent resolutions of a
-popular package __collapse to one upstream call__. The credential posture is the
-fetch action's, not the key's: the private leg fetches with the client's forwarded
-token, the public leg anonymously, and the cache key — a base URL — names neither. A
-hit returns the cached pair (typed view and the exact bytes it was decoded from), so
-the served document and the decision over it stay coherent across the TTL. -}
-fetchLeg :: Env -> Text -> Maybe Secret -> PackageName -> IO (Maybe (PackageInfo, Value))
-fetchLeg env baseUrl token name = do
-    resolved <- tryAny (resolveMetadata (envMetadataCache env) (Source baseUrl) name fetch)
+The private upstream is the per-client authority for who may read what, so its
+metadata is __not__ shared across clients: this leg fetches and parses on __every__
+request with that client's own forwarded token, so the upstream re-authorizes each
+client itself. Caching it would key on the base URL alone (no credential
+dimension), so within the TTL one client's cache hit would skip the fetch and serve
+another client's private document — bypassing the upstream's authorization. The leg
+is therefore deliberately kept out of the metadata cache; only the anonymous public
+leg is cached. -}
+fetchPrivateLeg :: Env -> Text -> Maybe Secret -> PackageName -> IO (Maybe (PackageInfo, Value))
+fetchPrivateLeg env baseUrl token name = do
+    resolved <- tryAny (fetchEntry env baseUrl token name)
     pure (either (const Nothing) (Just . unpair) resolved)
-  where
-    -- The cache's fetch action: fetch the full packument for this leg (the @Full@
-    -- form, for the @time@ map a publish-age rule needs) and decode it once into
-    -- both the typed 'PackageInfo' used to decide and the raw @Value@ edited in place
-    -- to serve. The two come from the /same/ fetch, so the decision is taken over
-    -- exactly the bytes served. A body that does not decode into both throws, so the
-    -- leg degrades to a missing contribution (caching nothing) rather than failing
-    -- the whole request.
-    fetch :: IO CacheEntry
-    fetch = do
-        response <- fetchMetadataForm (clientConfig env baseUrl token) Full noValidators name
-        case (parsePackageInfo response, Aeson.eitherDecodeStrict (responseBody response)) of
-            (Right info, Right value) -> pure (CacheEntry{entryInfo = info, entryRaw = value})
-            _ -> throwString "packument did not decode into both a typed view and a raw document"
 
-    unpair :: CacheEntry -> (PackageInfo, Value)
-    unpair entry = (entryInfo entry, entryRaw entry)
+{- Resolve the public (gated, anonymous) upstream leg through the metadata cache,
+keyed by the leg's base URL as its 'Source', returning its coherent (parsed
+packument, raw @Value@) pair — or 'Nothing' when the leg is unavailable or its body
+does not parse. A failed leg is a degraded contribution, not an error.
+
+The public leg is anonymous (no client credential), so a single cached entry serves
+every client without crossing any trust boundary — there is no per-client authority
+to preserve, only one shared anonymous document. A hit returns the cached pair
+(typed view and the exact bytes it was decoded from), so the served document and the
+decision over it stay coherent across the TTL, and concurrent resolutions of a
+popular package __collapse to one upstream call__. -}
+fetchPublicLeg :: Env -> Text -> PackageName -> IO (Maybe (PackageInfo, Value))
+fetchPublicLeg env baseUrl name = do
+    resolved <- tryAny (resolveMetadata (envMetadataCache env) (Source baseUrl) name (fetchEntry env baseUrl Nothing name))
+    pure (either (const Nothing) (Just . unpair) resolved)
+
+{- Fetch one upstream leg's full packument (the @Full@ form, for the @time@ map a
+publish-age rule needs) and decode it once into both the typed 'PackageInfo' used to
+decide and the raw @Value@ edited in place to serve. The two come from the /same/
+fetch, so the decision is taken over exactly the bytes served. A body that does not
+decode into both throws, so the leg degrades to a missing contribution rather than
+failing the whole request. The injected token is the leg's credential posture (the
+client's for the private leg, 'Nothing' for the anonymous public leg). -}
+fetchEntry :: Env -> Text -> Maybe Secret -> PackageName -> IO CacheEntry
+fetchEntry env baseUrl token name = do
+    response <- fetchMetadataForm (clientConfig env baseUrl token) Full noValidators name
+    case (parsePackageInfo response, Aeson.eitherDecodeStrict (responseBody response)) of
+        (Right info, Right value) -> pure (CacheEntry{entryInfo = info, entryRaw = value})
+        _ -> throwString "packument did not decode into both a typed view and a raw document"
+
+unpair :: CacheEntry -> (PackageInfo, Value)
+unpair entry = (entryInfo entry, entryRaw entry)
 
 {- The npm client config for one leg: the shared 'Manager', the leg's base URL,
 and the leg's injected token (the client's credential for the private leg,

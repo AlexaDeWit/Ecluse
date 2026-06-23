@@ -14,9 +14,20 @@ concurrent resolutions of a popular package __collapse to one upstream call__
 A packument is fetched from __two distinct upstreams__ — a private leg and a public
 leg — whose documents differ for the same package, so one entry cannot represent
 both. The key is therefore @(source, package)@: the source is the upstream's base
-URL, which distinguishes the legs without naming a credential, so the two never
-cross-contaminate and the key never blurs the trust split (each leg supplies its own
-token through its fetch action; the key carries none).
+URL, which distinguishes any cached leg without naming a credential, so distinct
+upstreams never cross-contaminate and the key never blurs the trust split.
+
+== Anonymous (public) leg only
+
+Only the __anonymous public leg__ is cached. The trusted private upstream is the
+__per-client authority__ — it re-authorizes each client's request with that
+client's own forwarded credential — so its metadata must __not__ be shared across
+clients and is fetched per request, never through this cache. The key carries no
+credential dimension, so caching the private leg would let one client's entry serve
+another client's private document within the TTL, bypassing the upstream's
+authorization. The public leg is anonymous (no client credential), so one shared
+entry serves every client without crossing any trust boundary — there is nothing
+per-client to preserve.
 
 == Coherent pair
 
@@ -117,13 +128,15 @@ defaultCacheConfig =
 
 -- ── cache entries ──────────────────────────────────────────────────────────────
 
-{- | Which upstream a packument was fetched from — the dimension that distinguishes
-the private leg from the public leg of the same package.
+{- | Which upstream a cached packument was fetched from — the dimension that
+partitions the cache by source so distinct upstreams never share an entry.
 
-The discriminator is the upstream's __base URL__: the two legs are addressed at
-distinct URLs, and the URL names a location, never a credential, so keying on it
-keeps the trust split intact (each leg still fetches with its own token, supplied
-through its fetch action; the source carries none).
+The discriminator is the upstream's __base URL__: an upstream is addressed at a
+distinct URL, and the URL names a location, never a credential, so keying on it
+keeps the trust split intact (the cached leg fetches with its own token, supplied
+through its fetch action; the source carries none). Only the anonymous public leg is
+cached, so in practice the cache holds one source per package; the dimension keeps
+the key honest about /which/ upstream an entry is, never blurring the split.
 -}
 newtype Source = Source Text
     deriving stock (Eq, Ord, Show)
@@ -146,7 +159,7 @@ data CacheEntry = CacheEntry
 {- | The key a 'CacheEntry' is cached under: the upstream 'Source' paired with the
 package's identity, rendered to a stable 'Text'. The package identity is distinct
 from a display name so two encodings of the same scoped package share one entry, and
-the source dimension keeps the two upstream legs apart — equality and ordering match
+the source dimension keeps distinct upstreams apart — equality and ordering match
 @(Source, PackageName)@ identity (the @cache@ library needs a 'Hashable' key, which
 the opaque 'PackageName' does not expose, so the identity is projected to this key
 here rather than via an orphan instance).
@@ -212,10 +225,12 @@ A successful fetch is cached (subject to the TTL and size bound); a failed fetch
 caches __nothing__ (so a transient upstream error does not poison the cache) and is
 re-raised to every waiter.
 
-The 'Source' partitions the cache: the private and public legs of the same package
-resolve under distinct keys and never cross-contaminate. The fetch action supplies
-the leg's own credential, so reading through one source never blurs another's trust
-posture.
+The 'Source' partitions the cache: distinct upstreams of the same package resolve
+under distinct keys and never cross-contaminate. The fetch action supplies the leg's
+own credential, so reading through one source never blurs another's trust posture.
+Only the anonymous public leg is resolved here — the trusted private leg is the
+per-client authority and is fetched per request, never cached, so a shared entry can
+never serve one client another's private document.
 
 The result is always re-decided by the caller's rules on each request — only the
 fetch+parse is memoised, never the verdict.
