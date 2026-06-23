@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Create a git worktree for one agent slice and warm its HLS index in the
-# background, so the implementer's first `mcp__hls__*` call lands on a hot index
+# background, so the implementer's first agent-lsp navigation call lands on a hot index
 # instead of paying a cold full-project typecheck mid-session. See AGENTS.md ->
 # "Build & Tooling" and planning/orchestration-strategy.md -> "Subagents and
 # isolation".

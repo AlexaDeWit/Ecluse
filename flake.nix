@@ -171,28 +171,49 @@
           pkgs.zizmor
         ];
 
-        # Proof-of-concept: an LSP<->MCP bridge so an MCP client (e.g. Claude
-        # Code) can drive haskell-language-server's semantic navigation —
-        # go-to-definition, find-references, hover/type-at-point, diagnostics,
-        # rename — over this project, instead of relying on lexical grep. The
-        # bridge (mcp-language-server, from the pinned set — no npx/runtime fetch)
-        # runs as an MCP stdio server and is internally an LSP client to HLS. HLS
-        # needs the GHC 9.10 toolchain and hspec-discover on PATH to load the
-        # Spec.hs modules (same reason as ideInputs), so they travel with it here.
-        # Entirely separate from default/ci so it imposes nothing on the normal
-        # dev or gate flow; opt in via .mcp.json (see AGENTS.md → "Build & Tooling").
+        # agent-lsp: the LSP<->MCP bridge that lets an MCP client (e.g. Claude
+        # Code) drive haskell-language-server's semantic navigation — go-to-
+        # definition, find-references, hover/type-at-point, diagnostics, rename —
+        # over this project instead of lexical grep. It is built on a *complete*
+        # LSP client. (The earlier bridge, mcp-language-server v0.1.1, was an
+        # incomplete client that left HLS deadlocked at ~0 % CPU on every semantic
+        # request — verified against this project; the same HLS is flawless under
+        # VS Code's vscode-languageclient. See AGENTS.md → "Build & Tooling".)
+        # agent-lsp is not in nixpkgs, so it is built from tagged source via
+        # buildGoModule; go.mod needs Go 1.26 (the 26.05 set ships go_1_26) and it
+        # is pure-Go (modernc sqlite — no cgo). HLS still needs the GHC 9.10
+        # toolchain + hspec-discover on PATH to load the Spec.hs modules (same
+        # reason as ideInputs), so they travel with it here.
+        agent-lsp = (pkgs.buildGoModule.override { go = pkgs.go_1_26; }) rec {
+          pname = "agent-lsp";
+          version = "0.15.0";
+          src = pkgs.fetchFromGitHub {
+            owner = "blackwell-systems";
+            repo = "agent-lsp";
+            rev = "v${version}"; # commit ab89838db139125bcf0e3c4e0c10addf57ed52c6
+            hash = "sha256-l04uuMP4giVUykDpR4mWK2P+Tkj/E16EqDuMOEYNa8U=";
+          };
+          vendorHash = "sha256-/y+v/aCzqigLut3kljCwa5iMD5yMLK1L5ul9ue8YFqU=";
+          subPackages = [ "cmd/agent-lsp" ]; # the server binary only — skip ./scripts, ./test, experiments
+          doCheck = false; # its test suite spins up real language servers
+          ldflags = [ "-s" "-w" "-X main.Version=${version}" ];
+        };
+
+        # Opt-in only: entirely separate from default/ci so it imposes nothing on
+        # the normal dev or gate flow; opt in via .mcp.json (see AGENTS.md).
         mcpInputs = [
           pkgs.bashInteractive
           hpkgs.ghc
           hpkgs.cabal-install
           hpkgs.hspec-discover
           hpkgs.haskell-language-server
-          pkgs.mcp-language-server
+          agent-lsp
         ];
       in {
         packages = {
           default = ecluse;
           ecluse = ecluse;
+          agent-lsp = agent-lsp; # LSP<->MCP bridge (see mcpInputs); `nix build .#agent-lsp`
 
           # The exact stripped, static binary that ships inside the image
           # (`justStaticExecutables`, no Haskell-library closure). Exposed so the
@@ -319,7 +340,7 @@
           buildInputs = [ pkgs.bashInteractive pkgs.regclient pkgs.jq ] ++ releaseInputs;
         });
 
-        # PoC LSP<->MCP bridge shell (HLS + mcp-language-server). Opt-in only: not
+        # LSP<->MCP bridge shell (HLS + agent-lsp). Opt-in only: not
         # built by CI (the gate runs no `nix flake check`) and not part of the
         # default dev shell. Enter with `nix develop .#mcp`, or let `.mcp.json`
         # launch it. See AGENTS.md → "Build & Tooling".

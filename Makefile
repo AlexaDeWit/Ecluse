@@ -83,7 +83,7 @@ gen-version-fixtures: ## Regenerate version-ordering fixtures from the reference
 
 # Create an isolated agent worktree on BRANCH and warm its HLS index in the
 # background (a `make build` populating dist-newstyle, which HLS reuses) so the
-# agent's first mcp__hls__* call lands hot rather than paying a cold typecheck
+# agent's first agent-lsp navigation call lands hot rather than a cold typecheck
 # mid-session. One worktree per agent; cap concurrency at 2-3 and stagger
 # creations (HLS is memory-hungry). NOT $(NIX)-wrapped: git/bash are ambient and
 # the script enters the flake itself, only for the background build. Override
