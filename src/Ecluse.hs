@@ -54,8 +54,9 @@ The library's vocabulary, roughly from the pure core outward:
   in "Ecluse.Rules.Types".
 * __Protocol boundary__ — "Ecluse.Registry" (the registry-protocol handle),
   "Ecluse.Registry.Npm.Wire" and "Ecluse.Registry.Npm.Project" (the lenient npm
-  wire decoders and their projection onto the domain model), and
-  "Ecluse.Server.Route" (the pure npm request router).
+  wire decoders and their projection onto the domain model),
+  "Ecluse.Registry.Npm.Route" (the npm path grammar), and "Ecluse.Server.Route"
+  (the shared serve-action 'Route' set and the injected-classifier seam).
 * __Cloud handles__ — "Ecluse.Credential" (minting the mirror-target write token)
   and "Ecluse.Queue" (the durable mirror-job hand-off to the worker).
 
@@ -97,8 +98,11 @@ import Ecluse.Registry (
     ParseError (..),
     RegistryClient (..),
  )
-import Ecluse.Server (runServer)
+import Ecluse.Registry.Npm.Route qualified as Npm
+import Ecluse.Server (Mount, ServerConfig (..), defaultServerConfig)
+import Ecluse.Server qualified as Server
 import Ecluse.Server.Cache (defaultCacheConfig, newMetadataCache)
+import Ecluse.Server.Route (Classifier)
 
 {- | Start Écluse: the entry point the @ecluse@ executable runs (see "Main").
 
@@ -124,6 +128,29 @@ separate binaries later is two thin entry points calling 'runServer' \/
 -}
 runServices :: Env -> IO ()
 runServices env = concurrently_ (runServer env) (runWorker env)
+
+{- | Run the proxy's HTTP front door over the composition-root 'Env'.
+
+This is the npm-aware composition site: it wires npm's path grammar
+("Ecluse.Registry.Npm.Route") into the otherwise ecosystem-neutral web layer
+('Ecluse.Server.runServer'), so the agnostic server stays closed over the shared
+'Ecluse.Server.Route.Route' set and only this one place names an ecosystem's
+router. Splitting the server into its own binary later reuses this same entry.
+-}
+runServer :: Env -> IO ()
+runServer = Server.runServer npmServerConfig
+
+{- The server settings for an npm front door: the defaults with npm's classifier
+injected for every mount. The default config is ecosystem-neutral (it denies every
+path); this is where the served ecosystem's grammar is chosen.
+-}
+npmServerConfig :: ServerConfig
+npmServerConfig = defaultServerConfig{scClassify = npmClassifier}
+
+-- Route every mount through npm's path grammar. A single-ecosystem deployment
+-- ignores the 'Mount' argument; a multi-ecosystem one would select per mount.
+npmClassifier :: Mount -> Classifier
+npmClassifier _mount = Npm.classify
 
 {- | Run the supervised mirror worker over the composition-root 'Env': the
 consume → fetch → verify → publish → ack loop against the queue and credential

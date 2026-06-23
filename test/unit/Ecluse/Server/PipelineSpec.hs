@@ -31,6 +31,7 @@ import Ecluse.Credential (AuthToken (..), CredentialProvider, mkSecret, staticPr
 import Ecluse.Env (Env, newEnv)
 import Ecluse.Queue (newInMemoryQueue)
 import Ecluse.Registry (ParseError (..), RegistryClient (..))
+import Ecluse.Registry.Npm.Route qualified as Npm
 import Ecluse.Rules.Types (PrecededRule, Rule (AllowIfPublishedBefore, DenyHasInstallScripts), atDefaultPrecedence)
 import Ecluse.Server (
     ServerConfig (..),
@@ -232,7 +233,8 @@ withProxy privateUp publicUp inbound k =
             env <- newTestEnv manager
             let cfg =
                     defaultServerConfig
-                        { scPackumentDeps = const (Just (deps privatePort publicPort inbound))
+                        { scClassify = const Npm.classify
+                        , scPackumentDeps = const (Just (deps privatePort publicPort inbound))
                         }
             k (application cfg env)
 

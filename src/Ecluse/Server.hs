@@ -1,5 +1,5 @@
 -- TupleSections: pairing a matched mount with its classified remainder in
--- 'dispatchMount' ((mount,) . classify); see STYLE.md §2.
+-- 'dispatchMount' ((mount,) . classifier); see STYLE.md §2.
 {-# LANGUAGE TupleSections #-}
 
 {- | The HTTP front door: the raw @wai@ 'Application', its dispatch, the
@@ -12,9 +12,11 @@ keeps the encoded-slash handling and the streaming control the proxy depends on
 
 * __Mount dispatch__ — match a request's leading path segment to a configured
   mount, strip the prefix, and hand the remainder (an ecosystem-native path) to
-  the __pure__ router 'classify' ("Ecluse.Server.Route"). A mount prefix is
-  accepted with or without a trailing slash (see
-  @docs\/architecture\/hosting.md@ → "Dispatch").
+  the mount's injected 'Ecluse.Server.Route.Classifier'. The web layer is closed
+  over the shared 'Route' set ("Ecluse.Server.Route") and routes through whatever
+  classifier a composition root wires in ('scClassify'), so no ecosystem's path
+  grammar is baked in here. A mount prefix is accepted with or without a trailing
+  slash (see @docs\/architecture\/hosting.md@ → "Dispatch").
 
 * __Control-plane meta-routes__ — orchestration health probes (@\/livez@,
   @\/readyz@) answered at the top level, above any mount.
@@ -40,6 +42,7 @@ module Ecluse.Server (
     Mount (..),
     rootMount,
     noPackumentDeps,
+    noClassifier,
     application,
 
     -- * Running the server
@@ -63,7 +66,7 @@ import Network.Wai.Middleware.Timeout (timeout)
 import Ecluse.Env (Env)
 import Ecluse.Server.Pipeline (PackumentDeps, servePackument)
 import Ecluse.Server.Response (denialBody)
-import Ecluse.Server.Route (Route (..), classify)
+import Ecluse.Server.Route (Classifier, Route (..), denyAll)
 
 -- ── server configuration ─────────────────────────────────────────────────────
 
@@ -83,6 +86,15 @@ data ServerConfig = ServerConfig
     -}
     , scSizeLimit :: RequestSizeLimit
     -- ^ The defensive cap on request-body size.
+    , scClassify :: Mount -> Classifier
+    {- ^ The route classifier for a matched mount — the ecosystem path grammar
+    that maps its native path to a shared 'Route'. The default 'noClassifier'
+    denies every path ('Ecluse.Server.Route.denyAll'), so the web layer carries no
+    ecosystem's grammar and a composition root injects each mount's adapter
+    classifier instead. The function form keys per matched mount, mirroring
+    'scPackumentDeps', so a multi-ecosystem deployment routes each mount through
+    its own grammar.
+    -}
     , scPackumentDeps :: Mount -> Maybe PackumentDeps
     {- ^ The packument-serve dependencies for a matched mount — its upstream
     endpoints, rule policy, and edge token. 'Nothing' leaves the packument route
@@ -94,10 +106,15 @@ data ServerConfig = ServerConfig
     }
 
 {- | The default server settings: a single root mount on the conventional npm
-proxy port (4873), with the default body cap and no packument-serve dependencies
-(the route stays the recognised-but-unserved @501@ until a composition root
-supplies them). This is the env-only, single-mount launch shape; a multi-mount or
-alternate-port deployment overrides it at the composition root.
+proxy port (4873), with the default body cap, no route classifier (every path is
+denied) and no packument-serve dependencies (the route stays the
+recognised-but-unserved @501@ until a composition root supplies them). This is the
+env-only, single-mount launch shape; a multi-mount or alternate-port deployment
+overrides it at the composition root.
+
+The default deliberately carries __no ecosystem grammar__: with 'noClassifier'
+every request is 'Unsupported', so a composition root must wire an adapter's
+classifier in for the server to recognise anything.
 -}
 defaultServerConfig :: ServerConfig
 defaultServerConfig =
@@ -105,8 +122,16 @@ defaultServerConfig =
         { scPort = 4873
         , scMounts = [rootMount]
         , scSizeLimit = defaultRequestSizeLimit
+        , scClassify = noClassifier
         , scPackumentDeps = noPackumentDeps
         }
+
+{- | The "no route classifier wired" resolver: every mount maps to
+'Ecluse.Server.Route.denyAll', so every path is 'Unsupported' (a @404@). The
+default until a composition root supplies a mount's ecosystem grammar.
+-}
+noClassifier :: Mount -> Classifier
+noClassifier _ = denyAll
 
 {- | The "no packument dependencies wired" resolver: every mount maps to 'Nothing',
 so the packument route renders the recognised-but-unserved @501@ stub. The default
@@ -128,7 +153,7 @@ newtype Mount = Mount
     deriving stock (Eq, Show)
 
 {- | The root mount: no prefix, so the whole request path is the ecosystem-native
-path handed to 'classify'. The degenerate single-mount case.
+path handed to the mount's classifier. The degenerate single-mount case.
 -}
 rootMount :: Mount
 rootMount = Mount{mountPrefix = []}
@@ -164,8 +189,8 @@ application :: ServerConfig -> Env -> Application
 application cfg env = serverMiddleware cfg (dispatch cfg env)
 
 {- Dispatch a request to its handler: top-level health probes first, then mount
-dispatch into the pure router. Unrecognised paths (including an unmatched mount)
-are a @404@ — deny by default.
+dispatch through the injected classifier. Unrecognised paths (including an
+unmatched mount) are a @404@ — deny by default.
 -}
 dispatch :: ServerConfig -> Env -> Application
 dispatch cfg env request respond =
@@ -173,7 +198,7 @@ dispatch cfg env request respond =
         ["livez"] -> respond (liveness env)
         ["readyz"] -> respond (readiness env)
         segments ->
-            let (mount, classified) = dispatchMount (scMounts cfg) segments
+            let (mount, classified) = dispatchMount (scClassify cfg) (scMounts cfg) segments
              in serve cfg env mount classified request respond
 
 {- Serve a classified route. The package\/artifact routes are effectful (they
@@ -190,21 +215,23 @@ serve cfg env mount classified request respond =
                 servePackument deps env name request respond
         _ -> respond (route env classified)
 
-{- Strip the first matching mount prefix off the request path, returning the
-matched mount and the classified ecosystem-native remainder. A mount prefix is
-accepted with or without a trailing slash, so @\/npm\/pkg@ and a bare @\/npm@ both
-match the @\/npm@ mount. When no mount matches, the path is classified as-is under
-the first mount, which denies it by default (the router recognises no such path) —
-there is no separate "unknown mount" status, by design.
+{- Strip the first matching mount prefix off the request path, classify the
+remainder through that mount's injected classifier, and return the matched mount
+with its 'Route'. A mount prefix is accepted with or without a trailing slash, so
+@\/npm\/pkg@ and a bare @\/npm@ both match the @\/npm@ mount. When no mount
+matches, the path is classified as-is under the first mount, which denies it by
+default (the classifier recognises no such path) — there is no separate "unknown
+mount" status, by design.
 -}
-dispatchMount :: [Mount] -> [Text] -> (Mount, Route)
-dispatchMount mounts segments =
-    fromMaybe (firstMount, classify segments) (firstJust matched mounts)
+dispatchMount :: (Mount -> Classifier) -> [Mount] -> [Text] -> (Mount, Route)
+dispatchMount classifierFor mounts segments =
+    fromMaybe (firstMount, classifierFor firstMount segments) (firstJust matched mounts)
   where
-    -- The mount whose prefix the path begins with, paired with the classified
-    -- remainder. 'Nothing' for a mount whose prefix does not match.
+    -- The mount whose prefix the path begins with, paired with the remainder
+    -- classified by that mount's classifier. 'Nothing' for a non-matching prefix.
     matched :: Mount -> Maybe (Mount, Route)
-    matched mount@(Mount prefix) = (mount,) . classify <$> stripPrefixSegments prefix segments
+    matched mount@(Mount prefix) =
+        (mount,) . classifierFor mount <$> stripPrefixSegments prefix segments
 
     -- When no mount matched, classification still runs (denying by default); it is
     -- reported under the first configured mount, whose deps are irrelevant to an
@@ -346,14 +373,12 @@ sizeLimitMiddleware (RequestSizeLimit maxBytes) =
 
 -- ── running ──────────────────────────────────────────────────────────────────
 
-{- | Serve the proxy's HTTP front door: start @warp@ on the configured port with
-the 'application' built over the composition-root 'Env'. Request handlers read
-the 'Env' in plain 'IO'. This is the server entry function of the single-process
-program (run concurrently with the mirror worker; see "Ecluse").
+{- | Serve the proxy's HTTP front door: start @warp@ on the 'ServerConfig''s port
+with the 'application' built over it and the composition-root 'Env'. Request
+handlers read the 'Env' in plain 'IO'. The 'ServerConfig' — in particular its
+injected route classifier ('scClassify') — is supplied by the composition root,
+which is where the served ecosystem's path grammar is wired in (see "Ecluse").
 -}
-runServer :: Env -> IO ()
-runServer env =
+runServer :: ServerConfig -> Env -> IO ()
+runServer cfg env =
     Warp.run (scPort cfg) (application cfg env)
-  where
-    cfg :: ServerConfig
-    cfg = defaultServerConfig
