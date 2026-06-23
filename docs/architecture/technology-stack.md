@@ -6,7 +6,7 @@
 |---------|--------|-----------|
 | Language | Haskell (GHC 9.10) | Type safety, strong concurrency, fits the rule engine well. |
 | Prelude | `relude` | Safer defaults: `Text` over `String`, partial functions hidden, re-exports `containers`/`text`/`bytestring`/`stm`. Wired in as the implicit prelude (see below). |
-| Effect style | `ReaderT Env IO` (+ `unliftio`) | Simple, standard, testable without exotic dependencies. `unliftio` lifts `bracket`/`async` into the reader for the worker/service layer; request handlers stay in plain `IO` taking `Env`. See [Web Layer](web-layer.md#web-layer). |
+| Effect style | `ReaderT Env IO` (+ `unliftio`) | Simple, standard, testable without exotic dependencies. `unliftio` lifts `bracket`/`async` into the reader; the server, worker, and request handlers all read through it (handlers over a per-request `RequestCtx`). Shared mutable state lives as `TVar`s in `Env`, never a `StateT` layer. See [Web Layer](web-layer.md#web-layer). |
 | HTTP server | `warp` + `wai` (+ `wai-extra`) | Fast, battle-tested. Raw WAI routing rather than a framework — see [Web Layer](web-layer.md#web-layer). `wai-extra` supplies cross-cutting middleware (size limits, real-IP, timeouts). |
 | HTTP client | `http-client` + `http-client-tls` | The data plane: streams artifacts and fetches metadata, including the CodeArtifact / Artifact Registry npm endpoints. Kept off `amazonka`'s `ResourceT` streaming path — see [Web Layer](web-layer.md#web-layer). |
 | JSON | `aeson` | Metadata parsing (lenient **inbound** wire decoding), rule config, queue payloads, denial bodies. |
@@ -51,9 +51,15 @@ routing, the control/data-plane split, streaming, and the middleware stance — 
 in [Web Layer](web-layer.md#web-layer).
 
 **The effect model: `IO` handles, `App` orchestration.** `App = ReaderT Env IO`
-(with `unliftio`) is the orchestration monad for the worker/service layer;
-request handlers run in plain `IO` taking `Env`, so the hot path carries no
-transformer lifting (see [Web Layer](web-layer.md#web-layer)). The handle records
+(with `unliftio`) is the orchestration monad; the server and worker read `Env`
+through it, and **request handlers run in the reader too** — over a per-request
+`RequestCtx { ctxEnv, ctxMount }` pairing `Env` with the matched mount's
+[`MountBinding`](hosting.md#mounts), built once at dispatch so the per-mount deps
+(registry set, rules, renderer, derived prefix) are read from context rather than
+re-threaded through the pipeline (see [Web Layer](web-layer.md#web-layer)). Shared
+mutable state (credential refresh, circuit-breaker, in-flight sets) lives as
+`TVar`/`IORef` **in `Env`** under that single reader — **not a `StateT` layer**,
+which would lose state across `forkIO`/`async` and give no shared state. The handle records
 — `RegistryClient`, `MirrorQueue`, `CredentialProvider` — return **`IO`, not
 `App`**: each adapter closes over its own backend state and never imports the
 core's `Env`/`App`, so backends stay decoupled (no import cycle, and no recursive

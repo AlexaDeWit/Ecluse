@@ -158,6 +158,21 @@ target) and reads forward the client's own credential; the same holds for a
 upstream is anonymous under every strategy. See [Access & Credential Model](access-model.md) and
 [Credential flow and authority](registry-model.md#credential-flow-and-authority).
 
+**Providers are global; mounts reference them.** A `CredentialProvider` is the
+service's own cloud identity — typically a single **container task role** (AWS) or
+**workload identity** (GCP), available process-wide — so it is built **once at the
+composition root**, not per mount. A mount carries no provider of its own; it
+**names which configured provider** its strategy draws on. In the common deployment
+those references collapse to **one** identity: the same container role both writes
+the mirror target and (under `service` / a service-populated `delegated-cache`)
+reads the private upstream — Écluse acts as one consistent entity. A multi-cloud
+process holds one provider per cloud, keyed by cloud; the region/project scoping
+each (`AWS_REGION` / `GOOGLE_CLOUD_PROJECT`) are likewise process-global. **A mount
+that names a credential source with no initialized provider is a boot-time failure**
+(aggregated with other config errors — see
+[Configuration → Validation](configuration.md#validation-fail-fast-reject-the-unknown)),
+never a runtime surprise.
+
 **The sub-handle that matters.** The interesting logic is the refresh / cache /
 expiry / concurrency policy, *not* the cloud call. So a single generic wrapper
 holds that policy, parameterised over a tiny per-cloud `mintToken` leaf:

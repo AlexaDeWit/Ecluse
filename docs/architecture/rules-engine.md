@@ -17,6 +17,14 @@ Rules evaluate a single `PackageDetails` snapshot — the ecosystem-agnostic
 per-version view produced by a registry adapter. A rule never sees registry wire
 formats.
 
+**Rules are ecosystem-agnostic by design.** A rule reasons only over the agnostic
+`PackageDetails`; modelling an *ecosystem-specific* rule is out of scope. Where a
+signal a rule reads is simply absent for an ecosystem — a declared scope on an
+ecosystem with no namespacing, say — the rule **abstains**, which under
+deny-by-default is the sensible no-op, never a per-ecosystem configuration error.
+Rule **names** track the agnostic concept, not one ecosystem's mechanism (the
+install-time code-execution signal, not npm's `hasInstallScript`).
+
 Rules are evaluated in two tiers:
 
 1. **Pure rules** — evaluated against `PackageDetails` with no IO. Fast and
