@@ -34,6 +34,24 @@ role has a distinct credential behaviour:
 The non-negotiable invariant: **the client's credential reaches the private
 upstream and nothing else — and never the public upstream.**
 
+#### The private upstream's metadata is not cached across clients
+
+Because the private upstream is the **per-client authority** for who may read what,
+its packument metadata is **not cached across clients**: it is re-consulted on
+**every request**, with that client's **own** forwarded credential, so the upstream
+re-authorizes each client itself. Only the **anonymous public (gated) leg** is held
+in the [metadata cache](web-layer.md#metadata-cache).
+
+The reason is a cross-client disclosure hazard. The cache key carries **no
+credential dimension** (it is the upstream base URL plus the package — a credential
+is never part of a cache key). So if the private leg were cached, one client could
+warm an entry for `@org/secret` and, within the TTL, a differently-scoped or
+unauthorized client would get a cache **hit** — served the first client's private
+document, their own token never validated upstream. Caching the private leg would
+therefore **bypass the upstream's per-client authorization**. The public leg has no
+such hazard: it is fetched anonymously, so one shared entry serves every client
+without crossing any trust boundary — there is nothing per-client to preserve.
+
 Outbound requests are further constrained by the
 [security invariants](security.md): an **outbound host allowlist**,
 **internal-range blocking**, **identifier canonicalisation**, and **bounded

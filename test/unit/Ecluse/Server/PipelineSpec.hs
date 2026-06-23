@@ -299,6 +299,7 @@ spec :: Spec
 spec = do
     mergeSpec
     credentialSpec
+    privateAuthoritySpec
     partialAvailabilitySpec
     cacheSpec
     noSurvivorsSpec
@@ -434,6 +435,34 @@ credentialSpec = describe "credential authority (forward-to-private, strip-befor
             privAuth `shouldBe` [Just "Bearer client-secret-token"]
             -- The public leg was queried ANONYMOUSLY — the internal token never left
             -- for the public registry. This is the load-bearing security assertion.
+            pubAuth `shouldBe` [Nothing]
+
+-- ── private leg is the per-client authority (uncached across clients) ──────────
+
+privateAuthoritySpec :: Spec
+privateAuthoritySpec = describe "private leg is the per-client authority (not cached across clients)" $
+    it "re-consults the private upstream per client within the TTL — each client's token reaches it" $ do
+        -- Two requests to the SAME proxy with DIFFERENT client bearer tokens, well
+        -- within the 60s metadata-cache TTL. The private upstream is the authority for
+        -- who may read what, so its metadata must not be shared across clients: each
+        -- request must re-consult it with that client's OWN forwarded token. Were the
+        -- private leg cached (keyed by base URL, with no credential dimension), the
+        -- second request would be a hit and the upstream would see only tokenA — client
+        -- B would be served A's private document, its token never validated upstream.
+        privateUp <- servingUpstream (encodePackument (privatePackument [("1.0.0", plainVersion "1.0.0")] "1.0.0"))
+        publicUp <-
+            servingUpstream
+                (encodePackument (packument [("2.0.0", plainVersion "2.0.0")] "2.0.0" [("2.0.0", publishedDaysAgo 30)]))
+        withProxy privateUp publicUp Nothing $ \app -> do
+            _ <- getThing (Just "tokenA") app
+            _ <- getThing (Just "tokenB") app
+            privAuth <- seenAuth privateUp
+            pubAuth <- seenAuth publicUp
+            -- The private upstream saw BOTH client tokens, in order — it was
+            -- re-authorized per client and never served a shared cached entry.
+            privAuth `shouldBe` [Just "Bearer tokenA", Just "Bearer tokenB"]
+            -- The anonymous public leg IS cached: it was hit once, anonymously, and the
+            -- second request collapsed onto the cached entry (public caching retained).
             pubAuth `shouldBe` [Nothing]
 
 -- ── partial-upstream availability ─────────────────────────────────────────────
