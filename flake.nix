@@ -157,6 +157,25 @@
           pkgs.actionlint
           pkgs.zizmor
         ];
+
+        # Proof-of-concept: an LSP<->MCP bridge so an MCP client (e.g. Claude
+        # Code) can drive haskell-language-server's semantic navigation —
+        # go-to-definition, find-references, hover/type-at-point, diagnostics,
+        # rename — over this project, instead of relying on lexical grep. The
+        # bridge (mcp-language-server, from the pinned set — no npx/runtime fetch)
+        # runs as an MCP stdio server and is internally an LSP client to HLS. HLS
+        # needs the GHC 9.10 toolchain and hspec-discover on PATH to load the
+        # Spec.hs modules (same reason as ideInputs), so they travel with it here.
+        # Entirely separate from default/ci so it imposes nothing on the normal
+        # dev or gate flow; opt in via .mcp.json (see AGENTS.md → "Build & Tooling").
+        mcpInputs = [
+          pkgs.bashInteractive
+          hpkgs.ghc
+          hpkgs.cabal-install
+          hpkgs.hspec-discover
+          hpkgs.haskell-language-server
+          pkgs.mcp-language-server
+        ];
       in {
         packages = {
           default = ecluse;
@@ -264,6 +283,15 @@
         devShells.weeder = pkgs.mkShell (shellEnv // {
           name = "ecluse-weeder";
           buildInputs = ciInputs ++ [ hpkgs.weeder ];
+        });
+
+        # PoC LSP<->MCP bridge shell (HLS + mcp-language-server). Opt-in only: not
+        # built by CI (the gate runs no `nix flake check`) and not part of the
+        # default dev shell. Enter with `nix develop .#mcp`, or let `.mcp.json`
+        # launch it. See AGENTS.md → "Build & Tooling".
+        devShells.mcp = pkgs.mkShell (shellEnv // {
+          name = "ecluse-mcp";
+          buildInputs = mcpInputs;
         });
       });
 }
