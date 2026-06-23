@@ -27,7 +27,7 @@ import Ecluse.Rules.Types (
     Decision (Approved),
     EvalContext (EvalContext),
     PrecededRule,
-    Rule (AllowIfPublishedBefore, DenyHasInstallScripts),
+    Rule (AllowIfPublishedBefore, DenyInstallTimeExecution),
     atDefaultPrecedence,
  )
 import Ecluse.Version (compareVersions, isStable, mkVersion, parseVersionKey, unVersion)
@@ -56,7 +56,7 @@ rules engine over the domain model (no @Value@ in sight).
 policy :: [PrecededRule]
 policy =
     [ atDefaultPrecedence (AllowIfPublishedBefore (7 * nominalDay))
-    , atDefaultPrecedence DenyHasInstallScripts
+    , atDefaultPrecedence DenyInstallTimeExecution
     ]
 
 -- ── typed fixtures ───────────────────────────────────────────────────────────

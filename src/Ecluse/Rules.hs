@@ -34,7 +34,7 @@ ruleName :: Rule -> Text
 ruleName = \case
     AllowScope{} -> "AllowScope"
     AllowIfPublishedBefore{} -> "AllowIfPublishedBefore"
-    DenyHasInstallScripts -> "DenyHasInstallScripts"
+    DenyInstallTimeExecution -> "DenyInstallTimeExecution"
 
 {- | Evaluate a single rule against a single package version. Total — a malformed
 rule or package yields an outcome, never an exception, so hostile metadata
@@ -69,7 +69,7 @@ evalRule ctx (AllowIfPublishedBefore minAge) pd =
                                 <> " ago, minimum age is "
                                 <> renderDuration minAge
                             )
-evalRule _ DenyHasInstallScripts pd =
+evalRule _ DenyInstallTimeExecution pd =
     case pkgInstallCode pd of
         RunsCodeOnInstall how -> Deny ("runs code on install: " <> how)
         NoCodeOnInstall -> Abstain "no install-time code execution"

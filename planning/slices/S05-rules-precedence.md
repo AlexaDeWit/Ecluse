@@ -35,7 +35,7 @@ one current/end-state gap.
   "any deny overrides any allow" holds out of the box), but an operator can rank a
   specific allow above a specific deny. — _rules-engine.md#rules-engine_
 - [ ] **Per-type default precedences** are defined (e.g. AllowScope 300,
-  DenyHasInstallScripts 200, AllowIfPublishedBefore 100) — each rule *type's*
+  DenyInstallTimeExecution 200, AllowIfPublishedBefore 100) — each rule *type's*
   default when `precedence` is omitted, independent of **which** rules ship enabled
   (that is the default policy — S03's concern). — _configuration.md#rule-policy_
 - [ ] **Properties (hedgehog):** deny-by-default holds; deny-precedence over allows
@@ -67,10 +67,10 @@ is pure-tier only.
   above allow at equal precedence), exactly as specified. Helpers ship alongside:
   `defaultPrecedence :: Rule -> Int` and `atDefaultPrecedence :: Rule -> PrecededRule`.
 - **Per-type default precedences as named bindings.** `AllowIfPublishedBefore`=**100**,
-  `AllowScope`=**200**, `DenyHasInstallScripts`=**300** — each an exported top-level
+  `AllowScope`=**200**, `DenyInstallTimeExecution`=**300** — each an exported top-level
   binding (`defaultAllowIfPublishedBeforePrecedence`, etc.). These differ from the
   *illustrative* example values in the acceptance criterion (which paired AllowScope
-  with 300 and DenyHasInstallScripts with 200); the load-bearing invariant — **every
+  with 300 and DenyInstallTimeExecution with 200); the load-bearing invariant — **every
   deny default strictly above every allow default** — holds, with the two allow types
   in an ordered allow band (scope above the passive age quarantine) below the deny
   band.

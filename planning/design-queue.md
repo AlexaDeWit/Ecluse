@@ -108,14 +108,12 @@ per-ecosystem error. No per-ecosystem rule vocabulary, applicability tagging, or
 ecosystem-gated validation (the machinery earlier proposed is **dropped**). Rule
 **names** track the agnostic concept, normalized **early**.
 **Rendered into:** [`rules-engine.md` → Rules Engine](../docs/architecture/rules-engine.md#rules-engine).
-**Code still owing — an *early*, dedicated rename slice** (cheap pre-launch, before
-more rules and usages accrete; touches `Ecluse.Rules.Types`, `Ecluse.Rules`,
-`Ecluse.Config`'s wire `type` strings, the tests, and the rule-name references in
-`configuration.md` / `rules-engine.md` / `observability.md` / research):
-`DenyHasInstallScripts` → an agnostic install-time-code-execution name (proposed
-`DenyInstallTimeExecution`); `AllowScope` → keep as the agnostic "namespace" concept
-the domain model already carries (abstaining where absent), optionally
-`AllowNamespace` — final identifiers the architect's call.
+**Code: landed** _(refactor/rename-install-rule)_. Renamed `DenyHasInstallScripts`
+→ `DenyInstallTimeExecution` — the `Rule` constructor, the wire `type`,
+`defaultDenyInstallTimeExecutionPrecedence`, the tests, and the references in
+`configuration.md` / `rules-engine.md` / `observability.md` / `STYLE.md` /
+`USAGE.md` / research. `AllowScope` kept as the agnostic "namespace" concept the
+domain model already carries (abstaining where absent).
 
 **D5 — Ecosystem drives the binding & the config mount.** _(resolved 2026-06-23)_
 **Decision:** the config document's `mounts` object is **keyed by ecosystem name**
@@ -160,11 +158,9 @@ All six threads are resolved in the docs; the conforming **code** is gathered he
 one hardening track, to land **before [S15](slices/S15-tarball-path.md)** so the
 tarball path is built on the new base. A natural ordering:
 
-1. **Rule-name normalization (early, standalone).** Rename `DenyHasInstallScripts` →
-   an agnostic install-time-code-execution name; settle `AllowScope`/namespace.
-   Touches `Ecluse.Rules.Types`, `Ecluse.Rules`, `Ecluse.Config` wire `type`s, the
-   tests, and the rule-name references in docs. Cheap pre-launch — do it before more
-   rules accrete. _(D3)_
+1. ~~**Rule-name normalization (early, standalone).**~~ **Done** — `DenyHasInstallScripts`
+   → `DenyInstallTimeExecution` (constructor, wire `type`, precedence helper, tests,
+   docs); `AllowScope` kept. _(D3 — `refactor/rename-install-rule`)_
 2. **Ecosystem as a value on the mount.** Add `Ecosystem` to the declarative config
    mount; re-key `MountMap` / the document `mounts` by ecosystem; derive
    `bindingPrefix`; default the env-only mount to npm. Rename `RegistryTuple` → a

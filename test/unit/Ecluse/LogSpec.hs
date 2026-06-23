@@ -80,7 +80,7 @@ dataField key logItem = do
 
 -- | The structured-context fields the audit trail attaches to a denial.
 deniedContext :: SimpleLogPayload
-deniedContext = auditContext "@evil/pkg" "1.0.0" "DenyHasInstallScripts"
+deniedContext = auditContext "@evil/pkg" "1.0.0" "DenyInstallTimeExecution"
 
 {- | Run an 'IO' action with the process 'stdout' redirected to a temporary file,
 returning everything written. The original 'stdout' is restored on every exit
@@ -129,7 +129,7 @@ spec = do
             T.isSuffixOf "}" line `shouldBe` True
             T.count "\n" line `shouldBe` 0
             -- It is valid JSON that round-trips to the expected payload fields.
-            dataField "rule" (item deniedContext "denied") `shouldBe` Just "DenyHasInstallScripts"
+            dataField "rule" (item deniedContext "denied") `shouldBe` Just "DenyInstallTimeExecution"
 
         it "ConsoleLog emits the human-readable bracketed form, not JSON" $ do
             let line = renderLogLine ConsoleLog (item deniedContext "denied")
@@ -159,7 +159,7 @@ spec = do
             isJust (itemObject it') `shouldBe` True
             dataField "package" it' `shouldBe` Just "@evil/pkg"
             dataField "version" it' `shouldBe` Just "1.0.0"
-            dataField "rule" it' `shouldBe` Just "DenyHasInstallScripts"
+            dataField "rule" it' `shouldBe` Just "DenyInstallTimeExecution"
 
     describe "auditContext" $
         it "attaches package, version, and rule under the data object" $ do
@@ -211,7 +211,7 @@ spec = do
             case physicalLines of
                 [line] -> do
                     eitherDecodeStrict (encodeUtf8 line) `shouldSatisfy` isObjectValue
-                    line `shouldSatisfy` T.isInfixOf "DenyHasInstallScripts"
+                    line `shouldSatisfy` T.isInfixOf "DenyInstallTimeExecution"
                 _ -> expectationFailure "expected exactly one JSON log line"
 
         it "writes a ConsoleLog event in the human-readable bracketed form" $ do

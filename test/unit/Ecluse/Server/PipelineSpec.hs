@@ -33,7 +33,7 @@ import Ecluse.Queue (newInMemoryQueue)
 import Ecluse.Registry (ParseError (..), RegistryClient (..))
 import Ecluse.Registry.Npm.Route qualified as Npm
 import Ecluse.Registry.Npm.Serve (npmRenderer)
-import Ecluse.Rules.Types (PrecededRule, Rule (AllowIfPublishedBefore, DenyHasInstallScripts), atDefaultPrecedence)
+import Ecluse.Rules.Types (PrecededRule, Rule (AllowIfPublishedBefore, DenyInstallTimeExecution), atDefaultPrecedence)
 import Ecluse.Server (
     MountBinding (..),
     application,
@@ -62,7 +62,7 @@ install script; anything else is excluded.
 policy :: [PrecededRule]
 policy =
     [ atDefaultPrecedence (AllowIfPublishedBefore (7 * nominalDay))
-    , atDefaultPrecedence DenyHasInstallScripts
+    , atDefaultPrecedence DenyInstallTimeExecution
     ]
 
 -- ── upstream doubles ──────────────────────────────────────────────────────────

@@ -172,14 +172,14 @@ biased toward resilience rather than blanket bans:
 - **`remediation-fast-track`** — admit a release that fixes a known CVE
   immediately, ahead of the quarantine. **On once the CVE tier lands.**
 
-You override values, add rules (e.g. opt into `DenyHasInstallScripts`), or suppress
+You override values, add rules (e.g. opt into `DenyInstallTimeExecution`), or suppress
 a default by name in the configuration document:
 
 ```json
 {
   "rules": {
     "min-age":      { "ageSeconds": 1209600 },
-    "deny-scripts": { "type": "DenyHasInstallScripts", "precedence": 200 }
+    "deny-scripts": { "type": "DenyInstallTimeExecution", "precedence": 200 }
   }
 }
 ```

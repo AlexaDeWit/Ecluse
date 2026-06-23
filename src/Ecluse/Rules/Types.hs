@@ -13,7 +13,7 @@ module Ecluse.Rules.Types (
     atDefaultPrecedence,
     defaultAllowIfPublishedBeforePrecedence,
     defaultAllowScopePrecedence,
-    defaultDenyHasInstallScriptsPrecedence,
+    defaultDenyInstallTimeExecutionPrecedence,
 
     -- * Evaluation
     EvalContext (..),
@@ -39,10 +39,11 @@ data Rule
       publishes a malicious version and hopes it is consumed before takedown.
       -}
       AllowIfPublishedBefore NominalDiffTime
-    | {- | Deny any package version that runs install scripts (a common vector
-      for arbitrary code execution at install time). Abstains otherwise.
+    | {- | Deny any package version that runs code at install time — npm install
+      scripts, a RubyGems native-extension build, a PyPI sdist build backend — a
+      common arbitrary-code-execution vector. Abstains otherwise.
       -}
-      DenyHasInstallScripts
+      DenyInstallTimeExecution
     deriving stock (Eq, Show)
 
 {- | A 'Rule' paired with the integer precedence at which it competes (higher
@@ -70,7 +71,7 @@ __Every deny type defaults strictly above every allow type__, so "any deny
 overrides any allow" holds out of the box. The three rule types occupy two
 bands: the allow band (@AllowIfPublishedBefore@ <
 'defaultAllowScopePrecedence'), then the deny band
-('defaultDenyHasInstallScriptsPrecedence') strictly above both. An operator may
+('defaultDenyInstallTimeExecutionPrecedence') strictly above both. An operator may
 still elevate a /specific/ allow above a /specific/ deny by giving it a higher
 explicit precedence — the per-type defaults set only the out-of-the-box ordering.
 -}
@@ -78,7 +79,7 @@ defaultPrecedence :: Rule -> Int
 defaultPrecedence = \case
     AllowIfPublishedBefore{} -> defaultAllowIfPublishedBeforePrecedence
     AllowScope{} -> defaultAllowScopePrecedence
-    DenyHasInstallScripts -> defaultDenyHasInstallScriptsPrecedence
+    DenyInstallTimeExecution -> defaultDenyInstallTimeExecutionPrecedence
 
 -- | Pair a rule with its type's 'defaultPrecedence'.
 atDefaultPrecedence :: Rule -> PrecededRule
@@ -97,11 +98,11 @@ time gate — but still below every deny.
 defaultAllowScopePrecedence :: Int
 defaultAllowScopePrecedence = 200
 
-{- | Default precedence of 'DenyHasInstallScripts': the deny band, strictly above
+{- | Default precedence of 'DenyInstallTimeExecution': the deny band, strictly above
 every allow default, so a matching deny overrides any allow out of the box.
 -}
-defaultDenyHasInstallScriptsPrecedence :: Int
-defaultDenyHasInstallScriptsPrecedence = 300
+defaultDenyInstallTimeExecutionPrecedence :: Int
+defaultDenyInstallTimeExecutionPrecedence = 300
 
 {- | Ambient information a rule may need that is not part of the package itself
 (the wall-clock "now" for age calculations).

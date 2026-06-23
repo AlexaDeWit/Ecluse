@@ -96,14 +96,14 @@ genPrecedence = Gen.int (Range.linear 0 1000)
 {- | A rule that takes a position against the package the order-independence
 property builds (scoped @scopeTxt@, old, running install scripts): a matching
 'AllowScope', an 'AllowIfPublishedBefore' it is old enough for, or
-'DenyHasInstallScripts'. None abstains, so every generated rule competes.
+'DenyInstallTimeExecution'. None abstains, so every generated rule competes.
 -}
 genFiringRule :: Text -> Gen Rule
 genFiringRule scopeTxt =
     Gen.element
         [ AllowScope (mkScope scopeTxt)
         , AllowIfPublishedBefore (7 * nominalDay)
-        , DenyHasInstallScripts
+        , DenyInstallTimeExecution
         ]
 
 {- | Canonicalise a decision for order-independence comparison: the audit-reason
@@ -134,31 +134,31 @@ spec = do
         it "AllowIfPublishedBefore abstains on a too-young version" $
             evalRule ctx (AllowIfPublishedBefore (7 * nominalDay)) (pkg Nothing 1)
                 `shouldSatisfy` isAbstain
-        it "DenyHasInstallScripts denies a package that runs install scripts" $
-            evalRule ctx DenyHasInstallScripts (withInstallScripts (pkg Nothing 99))
+        it "DenyInstallTimeExecution denies a package that runs install scripts" $
+            evalRule ctx DenyInstallTimeExecution (withInstallScripts (pkg Nothing 99))
                 `shouldSatisfy` isDeny
-        it "DenyHasInstallScripts abstains when there are no install scripts" $
-            evalRule ctx DenyHasInstallScripts (pkg Nothing 99)
+        it "DenyInstallTimeExecution abstains when there are no install scripts" $
+            evalRule ctx DenyInstallTimeExecution (pkg Nothing 99)
                 `shouldSatisfy` isAbstain
 
     describe "PrecededRule" $ do
         it "exposes the precedence and rule it was built with" $ do
             -- The fields a config loader reads to patch a rule's precedence.
-            let pr = PrecededRule 250 DenyHasInstallScripts
+            let pr = PrecededRule 250 DenyInstallTimeExecution
             rulePrecedence pr `shouldBe` 250
-            prRule pr `shouldBe` DenyHasInstallScripts
+            prRule pr `shouldBe` DenyInstallTimeExecution
         it "shows both fields" $
-            show (PrecededRule 250 DenyHasInstallScripts)
-                `shouldBe` ("PrecededRule {rulePrecedence = 250, prRule = DenyHasInstallScripts}" :: String)
+            show (PrecededRule 250 DenyInstallTimeExecution)
+                `shouldBe` ("PrecededRule {rulePrecedence = 250, prRule = DenyInstallTimeExecution}" :: String)
 
     describe "defaultPrecedence" $ do
         it "ranks every deny default strictly above every allow default" $
             -- The out-of-the-box invariant: a matching deny overrides any allow.
-            defaultPrecedence DenyHasInstallScripts
+            defaultPrecedence DenyInstallTimeExecution
                 `shouldSatisfy` (\d -> d > defaultPrecedence (AllowScope (mkScope "x")) && d > defaultPrecedence (AllowIfPublishedBefore 0))
         it "atDefaultPrecedence pairs a rule with its type default" $
-            atDefaultPrecedence DenyHasInstallScripts
-                `shouldBe` PrecededRule defaultDenyHasInstallScriptsPrecedence DenyHasInstallScripts
+            atDefaultPrecedence DenyInstallTimeExecution
+                `shouldBe` PrecededRule defaultDenyInstallTimeExecutionPrecedence DenyInstallTimeExecution
 
     describe "evalRules" $ do
         it "denies by default with no rules" $
@@ -177,18 +177,18 @@ spec = do
                 )
                 `shouldBe` Just (AllowScope (mkScope "myorg"))
         it "a matching deny rule overrides an allow at default precedence, whatever the order" $ do
-            let rs = map atDefaultPrecedence [AllowScope (mkScope "myorg"), DenyHasInstallScripts]
+            let rs = map atDefaultPrecedence [AllowScope (mkScope "myorg"), DenyInstallTimeExecution]
                 p = withInstallScripts (pkg (Just "myorg") 99)
-            deniedBy (evalRules ctx rs p) `shouldBe` Just DenyHasInstallScripts
-            deniedBy (evalRules ctx (reverse rs) p) `shouldBe` Just DenyHasInstallScripts
+            deniedBy (evalRules ctx rs p) `shouldBe` Just DenyInstallTimeExecution
+            deniedBy (evalRules ctx (reverse rs) p) `shouldBe` Just DenyInstallTimeExecution
         it "an operator-elevated allow outranks a higher-default deny" $
             -- The scope allow is lifted above the deny's default precedence, so a
             -- trusted internal scope is admitted despite running install scripts.
             approvedBy
                 ( evalRules
                     ctx
-                    [ at (defaultDenyHasInstallScriptsPrecedence + 1) (AllowScope (mkScope "myorg"))
-                    , atDefaultPrecedence DenyHasInstallScripts
+                    [ at (defaultDenyInstallTimeExecutionPrecedence + 1) (AllowScope (mkScope "myorg"))
+                    , atDefaultPrecedence DenyInstallTimeExecution
                     ]
                     (withInstallScripts (pkg (Just "myorg") 99))
                 )
@@ -226,7 +226,7 @@ spec = do
                         zipWith
                             PrecededRule
                             precs
-                            [AllowScope (mkScope scopeTxt), AllowIfPublishedBefore (7 * nominalDay), DenyHasInstallScripts]
+                            [AllowScope (mkScope scopeTxt), AllowIfPublishedBefore (7 * nominalDay), DenyInstallTimeExecution]
                 case evalRules ctx rules (pkg (Just otherTxt) 1) of
                     DeniedByDefault _ -> H.success
                     other -> H.annotateShow other >> H.failure
@@ -236,9 +236,9 @@ spec = do
                 scopeTxt <- forAll genScope
                 ageDays <- forAll genAgeDays
                 prec <- forAll genPrecedence
-                let rules = [at prec (AllowScope (mkScope scopeTxt)), at prec DenyHasInstallScripts]
+                let rules = [at prec (AllowScope (mkScope scopeTxt)), at prec DenyInstallTimeExecution]
                     p = withInstallScripts (pkg (Just scopeTxt) ageDays)
-                deniedBy (evalRules ctx rules p) === Just DenyHasInstallScripts
+                deniedBy (evalRules ctx rules p) === Just DenyInstallTimeExecution
 
         it "the highest-precedence deny wins over any lower allow" $
             hedgehog $ do
@@ -246,9 +246,9 @@ spec = do
                 ageDays <- forAll genAgeDays
                 allowPrec <- forAll genPrecedence
                 denyPrec <- forAll (Gen.int (Range.linear (allowPrec + 1) (allowPrec + 1000)))
-                let rules = [at allowPrec (AllowScope (mkScope scopeTxt)), at denyPrec DenyHasInstallScripts]
+                let rules = [at allowPrec (AllowScope (mkScope scopeTxt)), at denyPrec DenyInstallTimeExecution]
                     p = withInstallScripts (pkg (Just scopeTxt) ageDays)
-                deniedBy (evalRules ctx rules p) === Just DenyHasInstallScripts
+                deniedBy (evalRules ctx rules p) === Just DenyInstallTimeExecution
 
         it "an operator-elevated allow outranks a lower-precedence deny" $
             hedgehog $ do
@@ -256,7 +256,7 @@ spec = do
                 ageDays <- forAll genAgeDays
                 denyPrec <- forAll genPrecedence
                 allowPrec <- forAll (Gen.int (Range.linear (denyPrec + 1) (denyPrec + 1000)))
-                let rules = [at allowPrec (AllowScope (mkScope scopeTxt)), at denyPrec DenyHasInstallScripts]
+                let rules = [at allowPrec (AllowScope (mkScope scopeTxt)), at denyPrec DenyInstallTimeExecution]
                     p = withInstallScripts (pkg (Just scopeTxt) ageDays)
                 approvedBy (evalRules ctx rules p) === Just (AllowScope (mkScope scopeTxt))
 
@@ -280,9 +280,9 @@ spec = do
             hedgehog $ do
                 scopeTxt <- forAll genScope
                 ageDays <- forAll genAgeDays
-                let rules = map atDefaultPrecedence [AllowScope (mkScope scopeTxt), DenyHasInstallScripts]
+                let rules = map atDefaultPrecedence [AllowScope (mkScope scopeTxt), DenyInstallTimeExecution]
                     p = withInstallScripts (pkg (Just scopeTxt) ageDays)
-                deniedBy (evalRules ctx rules p) === Just DenyHasInstallScripts
+                deniedBy (evalRules ctx rules p) === Just DenyInstallTimeExecution
   where
     -- A list of @n@ distinct precedences, so each rule competes at its own rank.
     distinctPrecedences :: Int -> Gen [Int]

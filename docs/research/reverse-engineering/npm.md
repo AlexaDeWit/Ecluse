@@ -296,7 +296,7 @@ Two of these are decisive for Écluse's rules and deserve emphasis:
 
 - **`hasInstallScript: true`** — present in the **abbreviated** form when the
   version declares `preinstall`/`install`/`postinstall` scripts. This is the
-  single cleanest signal for a future `DenyHasInstallScript` rule.
+  single cleanest signal for the `DenyInstallTimeExecution` rule.
   ⚠️ **It does not exist in the full manifest** — there you must derive it
   yourself from the `scripts` object (see §6). *Captured live:* `core-js@3.49.0`
   abbreviated → `"hasInstallScript": true`; the same version's full manifest has

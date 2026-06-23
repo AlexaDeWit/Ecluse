@@ -625,7 +625,7 @@ buildRule name ty entry = case ty of
     "AllowScope" -> case entryScope entry of
         Just scope -> Right (AllowScope (mkScope scope))
         Nothing -> Left [MalformedRule name "\"AllowScope\" requires \"scope\""]
-    "DenyHasInstallScripts" -> Right DenyHasInstallScripts
+    "DenyInstallTimeExecution" -> Right DenyInstallTimeExecution
     _ -> Left [UnknownRuleType name ty]
 
 {- Apply an entry's value fields to an existing default rule, keeping its kind:
@@ -642,7 +642,7 @@ patchRuleValue name entry rule = do
                 | otherwise -> Left [MalformedRule name "\"ageSeconds\" must be non-negative"]
             Nothing -> Right (AllowIfPublishedBefore d)
         AllowScope s -> Right (AllowScope (maybe s mkScope (entryScope entry)))
-        DenyHasInstallScripts -> Right DenyHasInstallScripts
+        DenyInstallTimeExecution -> Right DenyInstallTimeExecution
 
 -- A restated @type@ on a patch must match the existing rule's kind, so a typo
 -- there (changing the rule's identity by accident) is caught loudly.
@@ -659,12 +659,12 @@ ruleTypeName :: Rule -> Text
 ruleTypeName = \case
     AllowScope{} -> "AllowScope"
     AllowIfPublishedBefore{} -> "AllowIfPublishedBefore"
-    DenyHasInstallScripts -> "DenyHasInstallScripts"
+    DenyInstallTimeExecution -> "DenyInstallTimeExecution"
 
 -- The rule @type@ names config can build. @AllowIfRemediatesCve@ is deliberately
 -- absent: it is effectful and not part of this rule model, so it is unknown here.
 knownRuleTypes :: [Text]
-knownRuleTypes = ["AllowScope", "AllowIfPublishedBefore", "DenyHasInstallScripts"]
+knownRuleTypes = ["AllowScope", "AllowIfPublishedBefore", "DenyInstallTimeExecution"]
 
 -- ── the structured document ──────────────────────────────────────────────────
 

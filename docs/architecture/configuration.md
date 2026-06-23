@@ -135,7 +135,7 @@ a stricter policy on npm than on PyPI).
 {
   "rules": {
     "min-age":      { "ageSeconds": 1209600 },
-    "deny-scripts": { "type": "DenyHasInstallScripts", "precedence": 200 }
+    "deny-scripts": { "type": "DenyInstallTimeExecution", "precedence": 200 }
   }
 }
 ```
@@ -162,7 +162,7 @@ blanket bans** — a floor to extend, not a wall:
 | `min-age` | `AllowIfPublishedBefore` (7 days) | **On at launch** | Admit public versions that have survived a quarantine window — the core defence against race-to-publish typosquatting and dependency confusion. |
 | `remediation-fast-track` | `AllowIfRemediatesCve` | **On once the [CVE tier](rules-engine.md#cve-subsystem) lands** | Ranked **above** `min-age` so a release that fixes a known CVE is admitted **immediately** — a quarantine must never delay a security patch (see [Rules Engine](rules-engine.md#allowifremediatescve--remediation-fast-track)). |
 
-Deliberately **not** in the default: `DenyHasInstallScripts` (plenty of legitimate
+Deliberately **not** in the default: `DenyInstallTimeExecution` (plenty of legitimate
 packages ship install scripts — a blanket ban is too blunt for a default) and
 `DenyIfCVE` (blanket-denying every advisory-affected version can break installs of
 widely-used packages over low-severity advisories). Both remain **available rules**
@@ -179,7 +179,7 @@ Crucially, **unknown is an error, not a silent skip**:
 
 - An unknown rule `type` is **rejected, not ignored**. Silently dropping a
   misspelled rule is a security hole: a typo'd **deny** rule
-  (`DenyHasInstallScript` vs `DenyHasInstallScripts`) would vanish and stop
+  (`DenyInstallTimeExecutio` vs `DenyInstallTimeExecution`) would vanish and stop
   blocking, and a typo'd **allow** rule would over-deny. Deny-by-default only
   protects you if the policy you wrote is the policy that loaded.
 - **Unknown fields/keys are rejected** too — config is operator-authored
