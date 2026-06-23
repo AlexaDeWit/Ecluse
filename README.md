@@ -10,6 +10,16 @@ A supply-chain resilience proxy for package registries, written in Haskell. The
 name is French for a canal lock — the controlled passage every dependency clears
 before it reaches your build.
 
+> **Status: pre-launch — under active development; no GA release yet.** The
+> functional core and the npm **packument** path are in place; the **tarball**
+> path, the **mirror worker**, and the **cloud backends** are still landing, so
+> Écluse is not yet a proxy you can put in front of a build. Pre-release candidates
+> are published and attested, but expect breaking changes before `v0.1.0`. What has
+> actually shipped is tracked slice by slice in the
+> [delivery plan](planning/delivery-plan.md) (the per-slice `status:` is the source
+> of truth); [`USAGE.md`](USAGE.md) is the deployment **contract**, not a claim
+> that every capability is wired today.
+
 **API documentation:** [Haddock for the library](https://alexadewit.github.io/Ecluse/), auto-published from `main`.
 
 ## Overview
@@ -36,12 +46,19 @@ operators find them. The `docs/architecture/` documents remain the home for the
 
 ## Verifying the image
 
+> **Pre-release.** No GA release is cut yet — no
+> [GitHub Releases](https://github.com/AlexaDeWit/Ecluse/releases) and no `v0.1.0`
+> tag. Pre-release candidates (e.g. `0.1.0-rc.2`) are published to Docker Hub and
+> **already carry the attestations below**, so this recipe works against an RC today
+> (expect breaking changes before `v0.1.0`). It is the verification contract every
+> released image will meet.
+
 Every published image carries **provenance** and **SBOM** attestations — keyless
 (Sigstore), recorded in the public Rekor transparency log, and stored as
 **immutable OCI referrers** on the image (write-once; they can't be overwritten).
-Each version's digest is published in its
-[GitHub Release](https://github.com/AlexaDeWit/Ecluse/releases). Verify by
-**digest** with the GitHub CLI:
+Once a release is cut, each version's digest will be published in its
+[GitHub Release](https://github.com/AlexaDeWit/Ecluse/releases); until then, pin a
+published tag by digest. Verify by **digest** with the GitHub CLI:
 
 ```bash
 IMAGE=alexadewit/ecluse@sha256:…   # pin by digest
@@ -59,10 +76,11 @@ workflow's identity and the Rekor log, and that its subject matches the digest
 you pulled. Add `--format json` to extract the documents (e.g. the SPDX SBOM).
 
 Strongest of all, the image is **bit-for-bit reproducible** — rather than trust
-anyone, rebuild it from the pinned source and compare to what you pulled:
+anyone, rebuild it from the pinned source and compare to what you pulled (pin a
+release tag once one is cut; until then, a branch or commit ref):
 
 ```bash
-nix build github:AlexaDeWit/Ecluse/v0.1.0#dockerImage   # → ./result (a docker-archive)
+nix build github:AlexaDeWit/Ecluse/<ref>#dockerImage   # → ./result (a docker-archive)
 ```
 
 See [Release & Supply-Chain Operations](docs/architecture/release-supply-chain.md#supply-chain-attestations)
