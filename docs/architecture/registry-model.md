@@ -16,7 +16,7 @@ The proxy is configured with three registry endpoints:
 
 How reads are credentialled is a **per-mount choice** — the
 [credential strategy](access-model.md), which separates *who is calling* (edge
-authentication), *what they may retrieve* (authorization), and *what token an
+authentication), *what they may retrieve* (authorisation), and *what token an
 upstream wants on the wire* (credential supply). The strategies are detailed in the
 [Access & Credential Model](access-model.md); the per-role behaviour is:
 

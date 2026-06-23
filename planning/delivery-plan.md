@@ -151,7 +151,7 @@ owes also owes a deterministic `U`/`I` test (see [Testing Strategy](../docs/test
 | [S19](slices/S19-mirror-worker.md) | Mirror worker (fetch → verify → publish → ack) | S08, S16, S18 | U, I |
 | [S20](slices/S20-aws-composition.md) | AWS composition root + config wiring (**launch-ready**) | S03, S15, S17, S18, S19 | I |
 | [S44](slices/S44-service-credential-reads.md) | Service-credential read path (`service` strategy; shareable private cache) — _access-model; off the launch critical path_ | S43, S16, S13 | U, I |
-| [S45](slices/S45-delegated-cache-probe.md) | Delegated-cache authorization probe — upstream decides retrievability, cache the compute — _access-model; off the launch critical path_ | S44 | U, I |
+| [S45](slices/S45-delegated-cache-probe.md) | Delegated-cache authorisation probe — upstream decides retrievability, cache the compute — _access-model; off the launch critical path_ | S44 | U, I |
 | [S40](slices/S40-egress-ssrf-hardening.md) | Egress / SSRF hardening — resolved-IP recheck, disallow-by-default tarball-host policy, operator egress docs — _follow-on to [S36](slices/S36-security-guards.md); [issue #11](https://github.com/AlexaDeWit/Ecluse/issues/11)_ | S08, S15 | U, I |
 
 ### M5 — Effectful rules & CVE

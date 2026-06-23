@@ -8,7 +8,7 @@ test-tier: [unit, integration]
 arch-refs:
   - docs/architecture/access-model.md#service--the-edge-authenticates-écluse-brokers
   - docs/architecture/access-model.md#caching
-  - docs/architecture/access-model.md#credential-supply-the-credentialprovider-generalized
+  - docs/architecture/access-model.md#credential-supply-the-credentialprovider-generalised
 pr: null
 ---
 
@@ -29,7 +29,7 @@ the edge (S43); the upstream sees one identity.
 **Acceptance criteria.**
 - [ ] When a mount's strategy is `service`, the private-upstream fetch uses a
   configured **read** `CredentialProvider` (reusing the S16 wrapper + an S17/S29 leaf
-  or `static`), never the caller's forwarded token. — _access-model.md#credential-supply-the-credentialprovider-generalized_
+  or `static`), never the caller's forwarded token. — _access-model.md#credential-supply-the-credentialprovider-generalised_
 - [ ] The private leg becomes **cache-eligible** under `service`: the cache admits a
   private entry, keyed by source + package (never a credential), and concurrent
   resolutions collapse to one upstream fetch — matching the public leg's sharing. —
@@ -40,7 +40,7 @@ the edge (S43); the upstream sees one identity.
 - [ ] A read-credential refresh failure degrades **reads** (surfaced per the
   [serve error model](web-layer.md#error-model)); document that, unlike the
   mirror-write-only past, a read credential now sits on the serve path under
-  `service`. — _access-model.md#credential-supply-the-credentialprovider-generalized_
+  `service`. — _access-model.md#credential-supply-the-credentialprovider-generalised_
 - [ ] Tests: unit over the strategy branch (service vs passthrough fetch identity +
   cache admission) with a fake provider and an in-process upstream stub; integration
   exercising a `service`-mount read through the composition root.

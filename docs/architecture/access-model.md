@@ -6,7 +6,7 @@
 like one — "auth" — are kept deliberately apart:
 
 - **Edge authentication** — *who is calling the proxy?*
-- **Authorization (retrievability)** — *which packages may this caller retrieve?*
+- **Authorisation (retrievability)** — *which packages may this caller retrieve?*
 - **Credential supply** — *what bearer token does each upstream require on the wire?*
 
 The simplest design fuses all three into a single act: forward the caller's
@@ -18,7 +18,7 @@ to a per-request upstream round-trip. Separating the concerns turns "how Écluse
 handles credentials" into a **per-mount credential strategy** — a universally-safe
 default plus two opt-in strategies that recover caching.
 
-**Écluse never builds an authentication system.** Authorization is always
+**Écluse never builds an authentication system.** Authorisation is always
 *delegated* — to the upstream (its native authority) or to the deployment edge
 (network / service mesh / gateway). The strategies differ only in *where* authority
 sits and *what may be cached as a result*.
@@ -40,12 +40,12 @@ Four properties are all desirable; **a strategy can hold at most three:**
 | **`passthrough`** (default) | ✓ | ✗ | ✓ | ✗ |
 | **`delegated-cache`** | ✓ | ✓ | ✓ | ✗ |
 | **`service`** | edge | ✓ | ✓ | ✓ |
-| _`memoized` (deferred)_ | ✓ | ✓ | ✗ | ✓ |
+| _`memoised` (deferred)_ | ✓ | ✓ | ✗ | ✓ |
 
 `passthrough` gives up two corners — it is the simplest and the only one safe under
-*any* upstream authorization model. Each other strategy gives up exactly one. Which
+*any* upstream authorisation model. Each other strategy gives up exactly one. Which
 to choose is a property of the **operator's environment** — chiefly their upstream's
-authorization model — not something Écluse can settle for everyone, so it is
+authorisation model — not something Écluse can settle for everyone, so it is
 configured per mount with `passthrough` as the floor.
 
 ## Credential strategies (per mount)
@@ -53,19 +53,19 @@ configured per mount with `passthrough` as the floor.
 ### `passthrough` — the default, universally safe
 
 Écluse **forwards the caller's own credential** to the private upstream, which
-authorizes each request; the public upstream is queried anonymously with the
+authorises each request; the public upstream is queried anonymously with the
 caller's credential stripped. The private leg is **fetched per request and never
 entered into the shared cache** (see [Caching](#caching), and
 [the private upstream's metadata is not cached across clients](registry-model.md#the-private-upstreams-metadata-is-not-cached-across-clients-under-passthrough)).
 This is what the [walking skeleton](../../planning/delivery-plan.md) ships, and it
-is correct regardless of whether the upstream's read authorization is coarse or
+is correct regardless of whether the upstream's read authorisation is coarse or
 fine-grained — the upstream re-decides every request.
 
 ### `delegated-cache` — the upstream decides retrievability; Écluse caches the compute
 
 The expensive compute — the merged, filtered packument, or the verified artifact
 bytes — is produced once with a **service credential** and held in the **shared**
-cache. Before any cache hit is served, the request is **authorized against the
+cache. Before any cache hit is served, the request is **authorised against the
 upstream with a cheap probe** (e.g. an authenticated `whoami`/`HEAD` that succeeds
 iff the caller may read the mount). The upstream therefore remains the authority for
 *who may retrieve what*, while the costly fetch + parse + merge is reused across
@@ -75,8 +75,8 @@ This holds **no client-credential state** (the probe forwards the caller's
 credential transiently, exactly as `passthrough` does) and costs a per-request
 probe — which must be **cheaper than the fetch it replaces**, and is only available
 where the upstream offers such a probe. The probe's **granularity must match the
-upstream's** (see [Authorization granularity](#authorization-granularity)); a probe
-coarser than the upstream's authorization would over-grant, and the proxy must not.
+upstream's** (see [Authorisation granularity](#authorisation-granularity)); a probe
+coarser than the upstream's authorisation would over-grant, and the proxy must not.
 
 ### `service` — the edge authenticates; Écluse brokers
 
@@ -89,9 +89,9 @@ least-privilege service token, and **no caller credentials at all**. The trade i
 that the **edge, not the upstream, is the authority** for who may use the proxy;
 selecting `service` is an explicit operator assertion to that effect.
 
-### `memoized` — deferred, documented for completeness
+### `memoised` — deferred, documented for completeness
 
-A fourth point caches the upstream's authorization **verdict**, keyed by a hash of
+A fourth point caches the upstream's authorisation **verdict**, keyed by a hash of
 the caller's credential, to drop the per-request round-trip *without* a service
 credential. It is **not in the shipping set**: it holds credential-derived state (a
 honeypot to threat-model) and serves within a self-chosen revalidation window
@@ -121,18 +121,18 @@ remains a gateway concern). Richer per-user token issuance (`npm login` web SSO,
 OIDC exchange) is a possible future, not a launch item, and would be ecosystem-specific
 where the strategies above are not.
 
-## Authorization granularity
+## Authorisation granularity
 
-The available strategies depend on the upstream's authorization granularity:
+The available strategies depend on the upstream's authorisation granularity:
 
 - **Coarse (repo-level)** — a valid token ⇒ the caller may read the whole mount. GCP
   Artifact Registry is always repo-level; AWS CodeArtifact is, in the common case
-  (repo-scoped IAM and a repo-scoped authorization token). A **per-mount** probe
+  (repo-scoped IAM and a repo-scoped authorisation token). A **per-mount** probe
   suffices for `delegated-cache`.
 - **Fine (per-package)** — different callers may read different packages (e.g.
   CodeArtifact resource policies). `delegated-cache` then needs a **per-resource**
   probe before serving a hit — more probes, but it still caches the expensive
-  compute. A probe coarser than the upstream's authorization would over-grant.
+  compute. A probe coarser than the upstream's authorisation would over-grant.
 
 `passthrough` is safe under either, because the upstream re-decides every request.
 
@@ -144,7 +144,7 @@ The available strategies depend on the upstream's authorization granularity:
   under `service` / `delegated-cache`. This makes the
   [#115](https://github.com/AlexaDeWit/Ecluse/issues/115) cross-client disclosure
   hazard *unrepresentable* rather than a discipline.
-- **`service` requires an explicit "the edge authorizes callers" assertion** in
+- **`service` requires an explicit "the edge authorises callers" assertion** in
   config — it is the one strategy that moves authority off the upstream.
 - Unknown or contradictory strategy configuration **fails fast at startup**,
   consistent with [config validation](configuration.md#validation-fail-fast-reject-the-unknown).
@@ -160,12 +160,12 @@ The strategy is exactly what determines whether the private leg of the
 - **`service`** — the private leg is fetched with one identity, so it is
   identity-independent and **shared freely**.
 - **`delegated-cache`** — the private leg is service-fetched and **shared**, but
-  every hit is gated by a fresh per-request authorization probe.
+  every hit is gated by a fresh per-request authorisation probe.
 
 A cache key never carries a credential dimension under any strategy; sharing is made
-safe by *how the entry was fetched and authorized*, not by keying on the caller.
+safe by *how the entry was fetched and authorised*, not by keying on the caller.
 
-## Credential supply: the `CredentialProvider`, generalized
+## Credential supply: the `CredentialProvider`, generalised
 
 The [`CredentialProvider`](cloud-backends.md#credential-provider) handle mints and
 refreshes a bearer for **any upstream endpoint that requires one** — the
@@ -176,7 +176,7 @@ private upstream in addition to its mirror-target one; both are the same handle,
 same refresh/single-flight/breaker policy, differing only in the per-cloud
 `mintToken` leaf.
 
-## Multi-instance is an isolation tool, not an authorization mechanism
+## Multi-instance is an isolation tool, not an authorisation mechanism
 
 Running separate Écluse instances per tenant (each a flat `service`/edge deployment)
 is a legitimate **blast-radius / policy** isolation choice, orthogonal to the
@@ -188,7 +188,7 @@ distinct policy per tenant, not to avoid choosing a strategy.
 
 - The caller's credential is **never** sent to the public upstream.
 - Outbound fetches stay within the [security invariants](security.md): the host
-  allowlist, internal-range block, identifier canonicalization, and bounded responses.
+  allowlist, internal-range block, identifier canonicalisation, and bounded responses.
 - Public versions are **always** gated by the [rules engine](rules-engine.md);
   trusted private versions enter the
   [packument merge](registry-model.md#packument-merge-across-upstreams) unfiltered.

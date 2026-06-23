@@ -29,8 +29,8 @@ docs/      — architecture and design documents
 - Separate concerns: application wiring in `app/`, logic in `src/`, tests in `test/`.
 - Tests mirror the library module hierarchy (e.g. `src/Foo/Bar.hs` → `test/Foo/BarSpec.hs`).
 - Keep `app/Main.hs` thin — it should only parse config and call into the library.
-- **Keep modules fit-to-purpose with idiomatic namespacing.** Organize vertically (a type lives with the functions on it), one `Ecluse.<Area>` namespace per area, and split a `.Types` module only when it earns it. The full principles are in [`STYLE.md`](STYLE.md) → "Module organization"; the current concrete module list is the published Haddock module index, and [`docs/getting-started.md`](docs/getting-started.md) → "Codebase Layout" records the project-specific layout patterns.
-- **Write prose in Canadian English.** Docs, code comments, and commit/PR messages use Canadian spelling — `colour`, `behaviour`, `centre`/`centred`, `catalogue`, `analogue`, `defence`, `licence` (noun); keep `-ize` endings (`organize`, `optimize`, `marginalized`). This is an agent-consistency convention: do **not** police or rewrite human contributors' spelling in their issues, PRs, or comments.
+- **Keep modules fit-to-purpose with idiomatic namespacing.** Organise vertically (a type lives with the functions on it), one `Ecluse.<Area>` namespace per area, and split a `.Types` module only when it earns it. The full principles are in [`STYLE.md`](STYLE.md) → "Module organization"; the current concrete module list is the published Haddock module index, and [`docs/getting-started.md`](docs/getting-started.md) → "Codebase Layout" records the project-specific layout patterns.
+- **Write prose in Canadian English.** Docs, code comments, and commit/PR messages use Canadian spelling — `colour`, `behaviour`, `centre`/`centred`, `catalogue`, `analogue`, `defence`, `licence` (noun); use `-ise` endings (`organise`, `optimise`, `authorise`), **not** `-ize`. This is an agent-consistency convention: do **not** police or rewrite human contributors' spelling in their issues, PRs, or comments.
 
 ## Build & Tooling
 

@@ -40,7 +40,7 @@ validation, and the edge-identity extraction.
   reachable **only** under `service`/`delegated-cache`; the types/config make
   "`passthrough` + shared private cache" impossible to express, not merely rejected
   at runtime. — _access-model.md#safe-defaults-and-unrepresentable-unsafe-combinations_
-- [ ] `service` requires an explicit "the edge authorizes callers" acknowledgement in
+- [ ] `service` requires an explicit "the edge authorises callers" acknowledgement in
   config; omitting it is a fail-fast startup error. — _access-model.md#safe-defaults-and-unrepresentable-unsafe-combinations_
 - [ ] The caller's edge identity (when present) is available to the request pipeline
   for audit/logging without becoming a metric label (bounded-cardinality rule). —
