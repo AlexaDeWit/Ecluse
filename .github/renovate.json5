@@ -74,6 +74,15 @@
     },
   ],
 
+  // The freeze also pins GHC's *virtual* packages, which are NOT published on
+  // Hackage — so the customManager extracts them but the `hackage` lookup fails
+  // ("failed to look up hackage package rts"). Ignore them outright: `rts` (the
+  // GHC runtime) and `system-cxx-std-lib` (the C++ standard-library shim) are
+  // compiler internals, not dependencies. (GHC-bundled packages that *are* on
+  // Hackage — ghc-internal, ghc-boot-th, integer-gmp, … — resolve fine and are
+  // handled by the boot-lib rule below instead.)
+  ignoreDeps: ["rts", "system-cxx-std-lib"],
+
   packageRules: [
     // Flake inputs + the flake.lock refresh → build(deps).
     {
@@ -119,14 +128,22 @@
     // bounds should move only when GHC moves (a flake/nixpkgs bump), never on a
     // standalone Hackage release — a bumped bound just reddens CI and stalls.
     // Keep them out of *both* cabal arms (declared bounds and the freeze) — hence
-    // matched by datasource, not manager. (Listed after the cabal rules above so
-    // its enabled:false wins on merge.)
+    // matched by datasource, not manager. The freeze surfaces the fuller
+    // GHC-bundled set (ghc-internal, ghc-boot-th, ghc-heap, integer-gmp, …), all
+    // of which belong here. (Listed after the cabal rules above so its
+    // enabled:false wins on merge.)
     {
       matchDatasources: ["hackage"],
       matchPackageNames: [
         "base",
         "ghc-prim",
         "ghc-bignum",
+        "ghc-boot",
+        "ghc-boot-th",
+        "ghc-heap",
+        "ghc-internal",
+        "ghci",
+        "integer-gmp",
         "array",
         "bytestring",
         "containers",
