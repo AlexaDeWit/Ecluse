@@ -34,11 +34,13 @@ layer into an adapter renderer. Several threads below build on this: **D5 shrank
 to deriving the prefix from the ecosystem and flowing the ecosystem through the
 binding and the config mount, and **D1 resolved** against it (see Resolved, below).
 
-Threads are worked **one at a time**; D1 and D2 are resolved, so **D3 is next**.
+Threads are worked **one at a time**; D1, D2, and D4 are resolved, so **D3 is next**
+(then D5, D6).
 
 ### Item 1 — config: per-ecosystem generalization
 
-> **D1 and D2 are resolved** — see [Resolved](#resolved). Outstanding threads: D3–D5.
+> **D1, D2, and D4 are resolved** — see [Resolved](#resolved). Outstanding in Item 1:
+> D3, D5.
 
 **D3 — Rule vocabulary per ecosystem.** _(depends on D1)_
 The agnostic domain model already did most of the work: `AllowIfPublishedBefore`
@@ -52,27 +54,6 @@ each mount's named rules against its ecosystem and fails loudly otherwise.
 Open question to settle: is the genuinely ecosystem-specific surface really just
 the "namespace/scope"-shaped rules, or is deeper per-ecosystem rule *semantics*
 coming? — **Status: queued.**
-
-**D4 — Cloud auth: concrete global provider, abstracted per-mount consumer.**
-_(largely independent of D1)_
-AWS/GCP credentials are usually **container-level** (instance role / IRSA / ADC /
-workload identity), so the **credential store and its auth state stay global**, not
-per-mount. `AWS_REGION` / `GOOGLE_CLOUD_PROJECT` scope that ambient identity and so
-**stay global** too — a multi-cloud process holds one concrete provider *per cloud*
-in `Env`, keyed by cloud. What is **per-mount** is only the *methodology*: the
-[credential strategy](../docs/architecture/access-model.md) and which backend a
-mount's mirror-write (and `service`/`delegated-cache` read) draws from —
-"abstracted mount-specific consumers, concrete global providers." In practice those
-providers very likely **collapse to one**: Écluse runs under a single container task
-role (AWS) / workload identity (GCP), so the mirror-write and any
-`service`/`delegated-cache` read resolve to the **same** identity — the service acts
-as one consistent entity, and the per-mount credential *selection* usually just
-points back at it. The genuinely per-mount *coordinate* is the target/queue
-identifier a mount writes to
-(`mtUrl` / `MIRROR_QUEUE_URL`), not the auth that reaches it. Cross-cuts **D6**: the
-provider's token-refresh **state** (the minted short-lived token and its expiry) is
-global mutable state — a `TVar` in `Env`, one per provider. _(Supersedes the earlier
-"move region/project per-mount" framing.)_ — **Status: queued.**
 
 **D5 — Ecosystem drives the binding & the config mount.**
 _(depends on D1; tied to D2; partly delivered by #133)_
@@ -137,3 +118,21 @@ is discovered from the upstream response and governed by the egress policy
 registry-model.md already carried the role table and the roles-may-coincide note.
 **Code still owing** (hardening slice): rename `RegistryTuple` → a structural name
 (e.g. `MountRegistries`); align the `S03` slice prose when the rename lands.
+
+**D4 — Cloud auth: global provider, per-mount reference.** _(resolved 2026-06-23)_
+**Decision:** the credential identity is **process-global** — typically a single
+container task role (AWS) / workload identity (GCP), built **once at the composition
+root**, with its region/project (`AWS_REGION` / `GOOGLE_CLOUD_PROJECT`) and refresh
+**state** (minted token + expiry, a `TVar` in `Env`) global too. A mount holds **no
+provider of its own**; it only **references** which global provider its strategy
+draws on — "abstracted mount-specific consumers, concrete global providers." In the
+common deployment those references **collapse to one** identity (mirror-write and any
+`service`/`delegated-cache` read are the same container role; Écluse acts as one
+consistent entity); a multi-cloud process keeps one provider per cloud. A mount that
+references a credential source with **no initialized provider halts the app at boot**
+(aggregated fail-fast). Supersedes the earlier "move region/project per-mount" idea.
+**Rendered into:** [`cloud-backends.md` → Credential Provider](../docs/architecture/cloud-backends.md#credential-provider)
+and [`configuration.md` → Validation](../docs/architecture/configuration.md#validation-fail-fast-reject-the-unknown).
+**Code still owing** (hardening slice): hoist `mtCredential` off `MirrorTarget` into a
+global provider registry the mount references, and add the boot-time "credential
+references must resolve" check to config validation / the composition root.

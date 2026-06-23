@@ -190,6 +190,13 @@ Crucially, **unknown is an error, not a silent skip**:
   `"enabled": false` against a rule that does not exist, a patch missing the `type`
   it would need to stand alone — is **rejected**. You cannot silently suppress or
   mistype a rule out of existence.
+- **Credential references must resolve.** A mount whose
+  [credential strategy](access-model.md) draws on a provider the deployment has not
+  initialized — e.g. a `service` (or service-populated `delegated-cache`) mount with
+  no read provider, or a mirror target naming a backend whose ambient cloud identity
+  is absent — is **rejected at boot**. Credential providers are
+  [process-global](cloud-backends.md#credential-provider) and a mount only references
+  one, so an incompatible reference never reaches a request.
 
 A bad config is thus a loud, immediate startup failure an operator sees and fixes,
 never a quietly mis-enforced policy.
