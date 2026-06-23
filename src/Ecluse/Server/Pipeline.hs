@@ -80,7 +80,7 @@ import Data.Time.Format.ISO8601 (iso8601Show)
 import Network.HTTP.Types (ResponseHeaders, Status, hAuthorization, hContentType, mkStatus, status200, status401)
 import Network.Wai (Request, Response, ResponseReceived, requestHeaders, responseLBS)
 import UnliftIO (concurrently)
-import UnliftIO.Exception (tryAny)
+import UnliftIO.Exception (throwString, tryAny)
 
 import Ecluse.Credential (Secret, mkSecret)
 import Ecluse.Env (Env (envManager, envMetadataCache))
@@ -101,7 +101,7 @@ import Ecluse.Registry.Npm (
 import Ecluse.Registry.Npm.Filter (FilterResult (Filtered, NoSurvivors), filterPackument, rewriteTarballUrls)
 import Ecluse.Registry.Npm.Project (parsePackageInfo)
 import Ecluse.Rules.Types (Decision, EvalContext (EvalContext), PrecededRule)
-import Ecluse.Server.Cache (primeMetadata)
+import Ecluse.Server.Cache (CacheEntry (CacheEntry, entryInfo, entryRaw), Source (Source), resolveMetadata)
 import Ecluse.Server.Conditional (Conditional (Modified, NotModified), etagHeader, evaluateOwnETag)
 import Ecluse.Server.Response (
     HelpMessage,
@@ -182,8 +182,8 @@ servePackument deps env name request respond
         let clientToken = forwardedToken request
         (privResult, pubResult) <-
             concurrently
-                (fetchLeg Uncached env (pdPrivateBaseUrl deps) clientToken name)
-                (fetchLeg Cached env (pdPublicBaseUrl deps) Nothing name)
+                (fetchLeg env (pdPrivateBaseUrl deps) clientToken name)
+                (fetchLeg env (pdPublicBaseUrl deps) Nothing name)
         let private = trustedSource <$> privResult
             (public, publicExclusions) = gatePublic deps ctx pubResult
             sources = catMaybes [private, public]
@@ -228,63 +228,46 @@ forwardedToken request = do
 decide, alongside the raw @Value@ that is edited in place to serve. Pairing them
 is the decision-surface\/served-surface contract — every stage carries the raw
 @Value@ next to the typed view so losslessness survives the pipeline. -}
-data Source = Source
+data Contribution = Contribution
     { srcProvenance :: Provenance
     , srcInfo :: PackageInfo
     , srcValue :: Value
     }
 
-{- Whether a leg's parsed 'PackageInfo' is written through to the metadata cache.
+{- Resolve one upstream leg through the metadata cache, keyed by the leg's base URL
+as its 'Source', returning its coherent (parsed packument, raw @Value@) pair — or
+'Nothing' when the leg is unavailable or its body does not parse. A failed leg is a
+degraded contribution, not an error: the merge serves the best-effort union of
+whatever resolved (partial-upstream availability).
 
-The cache keys on /package identity/, but a packument is fetched from /two distinct
-upstreams/ whose documents differ — so only one leg may own the package's cache
-entry, or the two would cross-contaminate. The __public__ leg is the cached one: it
-is the gated set the tarball path also resolves (on a private miss) to evaluate a
-version, so writing the public parse through lets the tarball path reuse this
-fetch+parse. The trusted __private__ leg is fetched uncached — a private-upstream hit
-is served unfiltered and never re-parsed by the tarball path, so it has nothing to
-share. (A packument serve always fetches its own bytes — it needs the raw document to
-edit — so it does not read through the cache; coalescing concurrent packument fetches
-awaits caching the raw bytes alongside the parse under a per-source key, an
-enhancement tracked against the metadata cache.) -}
-data Caching = Cached | Uncached
-
-{- Fetch one upstream leg with the given credential posture, returning its parsed
-packument and raw @Value@ — or 'Nothing' when the leg is unavailable or its body
-does not parse. A failed leg is a degraded contribution, not an error: the merge
-serves the best-effort union of whatever resolved (partial-upstream availability). -}
-fetchLeg :: Caching -> Env -> Text -> Maybe Secret -> PackageName -> IO (Maybe (PackageInfo, Value))
-fetchLeg caching env baseUrl token name = do
-    fetched <- tryAny (fetchAndParse caching env baseUrl token name)
-    pure (fromRight Nothing fetched)
-
-{- Fetch the full packument for one leg (the @Full@ form, for the @time@ map a
-publish-age rule needs), projecting it into both the typed view used to decide and
-the raw @Value@ edited in place to serve. The bytes are fetched __once__ and decoded
-into both the typed 'PackageInfo' and the raw @Value@ for this request's served body,
-which must come from the /same/ fetch — the decision is taken over exactly the bytes
-served. A 'Cached' leg __writes that parse through__ to the metadata cache (a
-write-through, not a read-through) so the tarball-gating fetch reuses it; it always
-uses its own fresh parse, never a possibly-stale cached one, so the typed view and the
-raw bytes never diverge. A non-decoding leg yields 'Nothing' so it degrades to a
-missing contribution rather than failing the whole request. -}
-fetchAndParse :: Caching -> Env -> Text -> Maybe Secret -> PackageName -> IO (Maybe (PackageInfo, Value))
-fetchAndParse caching env baseUrl token name = do
-    response <- fetchMetadataForm (clientConfig env baseUrl token) Full noValidators name
-    case (parsePackageInfo response, Aeson.eitherDecodeStrict (responseBody response)) of
-        (Right info, Right value) -> do
-            prime info
-            pure (Just (info, value))
-        _ -> pure Nothing
+Each leg has its own cache key (the source dimension), so the private and public
+documents of one package never cross-contaminate, and concurrent resolutions of a
+popular package __collapse to one upstream call__. The credential posture is the
+fetch action's, not the key's: the private leg fetches with the client's forwarded
+token, the public leg anonymously, and the cache key — a base URL — names neither. A
+hit returns the cached pair (typed view and the exact bytes it was decoded from), so
+the served document and the decision over it stay coherent across the TTL. -}
+fetchLeg :: Env -> Text -> Maybe Secret -> PackageName -> IO (Maybe (PackageInfo, Value))
+fetchLeg env baseUrl token name = do
+    resolved <- tryAny (resolveMetadata (envMetadataCache env) (Source baseUrl) name fetch)
+    pure (either (const Nothing) (Just . unpair) resolved)
   where
-    -- Write this fresh parse through to the cache so the tarball-gating path reuses
-    -- it; the private (uncached) leg shares nothing, so it skips. The handler keeps
-    -- using the fresh parse regardless, so its typed view and served bytes stay
-    -- coherent — a read-through would return a stale entry for fresh bytes.
-    prime :: PackageInfo -> IO ()
-    prime info = case caching of
-        Cached -> primeMetadata (envMetadataCache env) name info
-        Uncached -> pure ()
+    -- The cache's fetch action: fetch the full packument for this leg (the @Full@
+    -- form, for the @time@ map a publish-age rule needs) and decode it once into
+    -- both the typed 'PackageInfo' used to decide and the raw @Value@ edited in place
+    -- to serve. The two come from the /same/ fetch, so the decision is taken over
+    -- exactly the bytes served. A body that does not decode into both throws, so the
+    -- leg degrades to a missing contribution (caching nothing) rather than failing
+    -- the whole request.
+    fetch :: IO CacheEntry
+    fetch = do
+        response <- fetchMetadataForm (clientConfig env baseUrl token) Full noValidators name
+        case (parsePackageInfo response, Aeson.eitherDecodeStrict (responseBody response)) of
+            (Right info, Right value) -> pure (CacheEntry{entryInfo = info, entryRaw = value})
+            _ -> throwString "packument did not decode into both a typed view and a raw document"
+
+    unpair :: CacheEntry -> (PackageInfo, Value)
+    unpair entry = (entryInfo entry, entryRaw entry)
 
 {- The npm client config for one leg: the shared 'Manager', the leg's base URL,
 and the leg's injected token (the client's credential for the private leg,
@@ -300,30 +283,30 @@ clientConfig env baseUrl token =
 
 -- A trusted (private) source enters the merge unfiltered, its raw @Value@ kept as
 -- fetched (tarball URLs are rewritten at assembly, uniformly across sources).
-trustedSource :: (PackageInfo, Value) -> Source
-trustedSource (info, value) = Source TrustedSource info value
+trustedSource :: (PackageInfo, Value) -> Contribution
+trustedSource (info, value) = Contribution TrustedSource info value
 
 {- Gate a public-upstream contribution through the rules and the structural
-filter, returning the surviving 'Source' (if any survived) and the per-version
+filter, returning the surviving 'Contribution' (if any survived) and the per-version
 exclusion outcomes (for the no-survivors status when nothing survives anywhere).
 
 A public leg that did not resolve contributes nothing and no exclusions. A
 resolved leg is filtered with 'filterPackument' over its raw @Value@: 'Filtered'
-yields a gated 'Source' over the surviving versions; 'NoSurvivors' yields no source
-and the per-version 'ServeDecision's (each excluded version's decision projected,
-paired with its 'PackageDetails' for the denial message).
+yields a gated 'Contribution' over the surviving versions; 'NoSurvivors' yields no
+contribution and the per-version 'ServeDecision's (each excluded version's decision
+projected, paired with its 'PackageDetails' for the denial message).
 
-The gated source's typed 'PackageInfo' is __restricted to the survivors__ to match
-its filtered @Value@: 'mergePackuments' treats a 'GatedSource' as the
+The gated contribution's typed 'PackageInfo' is __restricted to the survivors__ to
+match its filtered @Value@: 'mergePackuments' treats a 'GatedSource' as the
 already-filtered set and never re-filters, so feeding it the unfiltered view would
 let a denied version reach the merge plan (and skew the reconciled @latest@\/@time@). -}
-gatePublic :: PackumentDeps -> EvalContext -> Maybe (PackageInfo, Value) -> (Maybe Source, [ServeDecision])
+gatePublic :: PackumentDeps -> EvalContext -> Maybe (PackageInfo, Value) -> (Maybe Contribution, [ServeDecision])
 gatePublic deps ctx = \case
     Nothing -> (Nothing, [])
     Just (info, value) ->
         case filterPackument ctx (pdRules deps) info value of
             Filtered filtered ->
-                (Just (Source GatedSource (restrictToSurvivors filtered info) filtered), [])
+                (Just (Contribution GatedSource (restrictToSurvivors filtered info) filtered), [])
             NoSurvivors decisions -> (Nothing, projectDecisions info decisions)
 
 {- Restrict a 'PackageInfo' to the version keys that survived filtering — those
@@ -370,11 +353,11 @@ come from the plan (with @time@'s non-version bookkeeping keys retained from the
 sources); every other top-level key is relayed from the precedence-winning
 document. Tarball URLs are rewritten under the mount base so artifacts route back
 through the gate. -}
-assemble :: PackumentDeps -> [Source] -> Maybe ServedBody
+assemble :: PackumentDeps -> [Contribution] -> Maybe ServedBody
 assemble deps sources = do
     plan <- mergePackuments [(srcProvenance s, srcInfo s) | s <- sources]
     guard (not (Map.null (mpSurvivors plan)))
-    let bySource :: Map SourceId Source
+    let bySource :: Map SourceId Contribution
         bySource = Map.fromList (zip [0 ..] sources)
     pure (ServedBody (replayPlan deps bySource plan (baseDocument sources)))
 
@@ -382,7 +365,7 @@ assemble deps sources = do
 the precedence-winning source's raw @Value@ — the first trusted source if any,
 else the first source. (The merge takes its identity from the first input
 likewise.) An empty source list never reaches here. -}
-baseDocument :: [Source] -> Value
+baseDocument :: [Contribution] -> Value
 baseDocument sources =
     case find ((== TrustedSource) . srcProvenance) sources of
         Just s -> srcValue s
@@ -393,7 +376,7 @@ baseDocument sources =
 {- Replay a 'MergePlan' onto the raw source @Value@s: rebuild @versions@,
 @dist-tags@, and @time@ from the plan, then rewrite the tarball URLs of the
 result. Other top-level keys are inherited from the base document. -}
-replayPlan :: PackumentDeps -> Map SourceId Source -> MergePlan -> Value -> Value
+replayPlan :: PackumentDeps -> Map SourceId Contribution -> MergePlan -> Value -> Value
 replayPlan deps bySource plan base =
     rewriteTarballUrls (pdMountBaseUrl deps) (Object rebuilt)
   where
