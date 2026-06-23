@@ -1,0 +1,112 @@
+{- | The AWS CodeArtifact leaf of the outbound-credential handle: mint a
+short-lived registry bearer token via CodeArtifact's @GetAuthorizationToken@.
+
+This is the one genuinely cloud-specific part of outbound auth — everything else
+(caching, proactive refresh, single-flight, the circuit breaker) is the
+cloud-agnostic policy in "Ecluse.Credential.Refresh", which this module wires its
+mint into. The leaf itself is tiny: build an @amazonka@ 'Env' once (credentials
+discovered the standard AWS way — environment, instance role, container role, SSO,
+STS), then on each mint call @GetAuthorizationToken@ and return the token together
+with its real expiry so the refresh policy schedules off the token's own
+lifetime (CodeArtifact tokens last up to 12h).
+
+This is __control plane__ only: @amazonka@ obtains the token, and the data plane
+that then uses it to publish to the registry stays on @http-client@ (see
+@docs\/architecture\/web-layer.md@ → "Control plane vs data plane"). The 'Env' is
+constructed once at provider creation and captured in the mint closure, so the
+backend's state never leaks into the proxy's @Env@\/@App@ (see
+@docs\/architecture\/technology-stack.md@ → "Key Decisions").
+-}
+module Ecluse.Credential.CodeArtifact (
+    -- * Configuration
+    CodeArtifactConfig (..),
+
+    -- * The provider
+    newCodeArtifactProvider,
+) where
+
+import Amazonka qualified as AWS
+import Amazonka.CodeArtifact.GetAuthorizationToken qualified as CA
+import Control.Monad.Trans.Resource (runResourceT)
+import Data.Time (getCurrentTime)
+import Lens.Micro (Lens', (?~), (^.))
+import UnliftIO.Exception (throwString)
+
+import Ecluse.Credential (AuthToken (..), CredentialProvider, mkSecret)
+import Ecluse.Credential.Refresh (
+    RefreshConfig (..),
+    defaultRefreshConfig,
+    refreshingProvider,
+ )
+
+{- | What the CodeArtifact leaf needs to mint a token. The AWS /credentials/ used
+to make the call are __not__ here: they are discovered the standard AWS way
+('AWS.discover') from the ambient environment (env vars, instance\/container role,
+SSO, STS), so the proxy never holds long-lived AWS keys itself.
+-}
+data CodeArtifactConfig = CodeArtifactConfig
+    { caRegion :: Text
+    -- ^ The AWS region the CodeArtifact domain lives in (e.g. @"us-east-1"@).
+    , caDomain :: Text
+    -- ^ The CodeArtifact domain that scopes the token.
+    , caDomainOwner :: Maybe Text
+    {- ^ The 12-digit account number that owns the domain, when it differs from
+    the calling account ('Nothing' to default to the caller's account).
+    -}
+    , caDurationSeconds :: Maybe Natural
+    {- ^ Requested token lifetime in seconds (@900@–@43200@, i.e. 15 min–12 h);
+    'Nothing' lets CodeArtifact default it (it ties the token to the caller's
+    role-credential expiry). The refresh policy adapts to whatever expiry the
+    minted token actually carries, so this is only a preference.
+    -}
+    }
+    deriving stock (Eq, Show)
+
+{- | Build a refreshing 'CredentialProvider' backed by CodeArtifact
+@GetAuthorizationToken@. The @amazonka@ 'Env' is constructed once here (with
+standard credential discovery) and captured by the mint closure; the returned
+provider then serves a cached token and refreshes it ahead of expiry per
+"Ecluse.Credential.Refresh".
+
+Mints once eagerly to seed the cache, so a misconfiguration (bad region, missing
+credentials, no permission) fails here at construction rather than on the first
+mirror write.
+-}
+newCodeArtifactProvider :: CodeArtifactConfig -> IO CredentialProvider
+newCodeArtifactProvider cfg = do
+    env <- regioned <$> AWS.newEnv AWS.discover
+    refreshingProvider
+        defaultRefreshConfig
+            { rcMint = mint env
+            , rcClock = getCurrentTime
+            }
+  where
+    regioned :: AWS.Env -> AWS.Env
+    regioned env = env{AWS.region = AWS.Region' (caRegion cfg)}
+
+    request :: CA.GetAuthorizationToken
+    request =
+        setOptional CA.getAuthorizationToken_domainOwner (caDomainOwner cfg)
+            . setOptional CA.getAuthorizationToken_durationSeconds (caDurationSeconds cfg)
+            $ CA.newGetAuthorizationToken (caDomain cfg)
+
+    -- One mint: call GetAuthorizationToken and lift the response into an AuthToken.
+    mint :: AWS.Env -> IO AuthToken
+    mint env = do
+        response <- runResourceT (AWS.send env request)
+        secret <- case response ^. CA.getAuthorizationTokenResponse_authorizationToken of
+            Just token -> pure (mkSecret token)
+            Nothing ->
+                throwString
+                    "Ecluse.Credential.CodeArtifact: GetAuthorizationToken returned no token"
+        pure
+            AuthToken
+                { authSecret = secret
+                , authExpiresAt = response ^. CA.getAuthorizationTokenResponse_expiration
+                }
+
+{- | Set an optional request field only when present, leaving the @amazonka@
+default ('Nothing') in place otherwise.
+-}
+setOptional :: Lens' s (Maybe a) -> Maybe a -> s -> s
+setOptional l = maybe id (l ?~)

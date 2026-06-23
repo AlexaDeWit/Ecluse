@@ -71,6 +71,11 @@ unscoped=(
   # logic. Remove when S06 (npm-wire) adds real fetch/parse code and tests that
   # link it.
   ./src/Ecluse/Registry.hs
+  # CodeArtifact credential leaf (S17): its only exercise is the live-AWS smoke
+  # test (control plane via amazonka GetAuthorizationToken), which the unit
+  # coverage suite does not run. Remove if a mockable seam later lets a unit test
+  # link it.
+  ./src/Ecluse/Credential/CodeArtifact.hs
 )
 
 expected="$(find src -name '*.hs' | sed 's#^#./#' | sort)"
