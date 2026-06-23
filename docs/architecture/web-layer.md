@@ -95,12 +95,13 @@ The same split holds on GCP — Pub/Sub and the Artifact Registry token are
 control-plane work, while the npm data plane is unchanged `http-client` (see
 [Cloud Backends](cloud-backends.md#cloud-backends)).
 
-On the data plane, credential handling follows the
-[authority model](registry-model.md#credential-flow-and-authority): the client's
-`Authorization` is **forwarded to the private upstream** and **stripped before any
-public-upstream fetch** — an internal token must never leave for the public
-registry. Écluse's own [`CredentialProvider`](cloud-backends.md#credential-provider)
-is used only by the worker to write the mirror, never to read on a client's behalf.
+On the data plane, credential handling follows the mount's
+[credential strategy](access-model.md): under the default `passthrough` the client's
+`Authorization` is **forwarded to the private upstream**; under `service` /
+`delegated-cache` the private fetch uses Écluse's own
+[`CredentialProvider`](cloud-backends.md#credential-provider) token instead. The
+client's `Authorization` is **always stripped before any public-upstream fetch** —
+an internal token must never leave for the public registry — regardless of strategy.
 
 ## Streaming and resource lifetime
 
@@ -163,16 +164,20 @@ benign and even aligned with the resilience posture — a brand-new publish need
 appear instantly. This is **in-memory metadata only**; on-disk artifact caching
 stays out of scope, and the mirror remains the durable store.
 
-The cache holds the **anonymous public (gated) leg only**. The trusted **private
-upstream** is the **per-client authority** — it re-authorises each client's request
-with that client's own forwarded credential — so its metadata is **fetched per
-request, never cached**. A cache key carries no credential dimension, so a shared
-private entry would let one client's cached document be served to another client
-within the TTL, bypassing the upstream's per-client authorisation (see
-[Credential flow and authority → the private upstream's metadata is not cached
-across clients](registry-model.md#the-private-upstreams-metadata-is-not-cached-across-clients)).
-The public leg is anonymous, so a single shared entry crosses no trust boundary and
-is cached freely.
+What the cache may hold on the private leg is set by the mount's
+[credential strategy](access-model.md#caching). Under the default `passthrough` the
+cache holds the **anonymous public (gated) leg only**: the trusted **private
+upstream** is the **per-client authority** — it re-authorises each request with that
+client's own forwarded credential — so its metadata is **fetched per request, never
+cached**, because a cache key carries no credential dimension and a shared private
+entry would let one client's document be served to another within the TTL, bypassing
+the upstream's per-client authorisation (see
+[the private upstream's metadata is not cached across clients](registry-model.md#the-private-upstreams-metadata-is-not-cached-across-clients-under-passthrough)).
+Under `service` / `delegated-cache` the private leg is fetched with Écluse's own
+identity (and, for `delegated-cache`, re-authorised per request by a cheap probe
+before a hit is served), so it is identity-independent and **cached and shared** like
+the public leg. The public leg is anonymous under every strategy, so a single shared
+entry crosses no trust boundary and is cached freely.
 
 ## Error model
 

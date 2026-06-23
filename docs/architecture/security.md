@@ -123,10 +123,11 @@ in rough order of leverage:
   - **Service mesh (Istio/Linkerd)** — set the sidecar outbound policy to
     `REGISTRY_ONLY`, declare each upstream as an explicit `ServiceEntry`, and
     constrain it with a `Sidecar` egress listener and egress `AuthorizationPolicy`.
-- **Run the proxy with no ambient cloud write credentials it does not need.** The
-  only credential Écluse holds is the mirror-write token (see
-  [Configuration](configuration.md#outbound-registry-credentials)); scope the
-  instance role to exactly that.
+- **Run the proxy with no ambient cloud credentials it does not need.** Écluse holds
+  a mirror-**write** credential, and — under the `service` / `delegated-cache`
+  [credential strategies](access-model.md) — a private-upstream **read** credential;
+  scope the instance role to exactly those it is configured to use and no more (see
+  [Configuration](configuration.md#outbound-registry-credentials)).
 
 These belong in the deployment runbook ([`S32`](../../planning/slices/S32-launch-docs.md));
 this section is the security rationale they implement.

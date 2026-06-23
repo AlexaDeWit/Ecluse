@@ -139,7 +139,8 @@ An inline proxy sees thousands of distinct packages, so the failure mode is a
   small, fixed domain. (Any PR adding a label whose domain is not obviously finite
   is rejected.)
 - **Secrets/PII never appear in any signal** — no tokens, no `Authorization`,
-  anywhere. In particular the **forwarded client token** (see
+  anywhere. In particular a **forwarded client token** (present under the
+  `passthrough` / `delegated-cache` [strategies](access-model.md); see
   [Credential flow](registry-model.md#credential-flow-and-authority)) must be
   scrubbed from anything the WAI / http-client instrumentation might capture.
 - **Exemplars** (trace-ID samples attached to metric buckets, for dashboard→trace

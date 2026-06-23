@@ -14,33 +14,43 @@ The proxy is configured with three registry endpoints:
 
 ### Credential flow and authority
 
-Écluse is **not** an access-granting authority. Read access is decided entirely by
-the upstreams; Écluse holds a credential only to *write* mirrored packages. Each
-role has a distinct credential behaviour:
+How reads are credentialled is a **per-mount choice** — the
+[credential strategy](access-model.md), which separates *who is calling* (edge
+authentication), *what they may retrieve* (authorization), and *what token an
+upstream wants on the wire* (credential supply). The strategies are detailed in the
+[Access & Credential Model](access-model.md); the per-role behaviour is:
 
-- **Private upstream (read)** — Écluse **forwards the client's own credential**
-  (`Authorization` / `_authToken`) verbatim, and the private upstream authorises.
-  The upstream is the authority for who may read what; Écluse adjudicates nothing
-  on reads and never substitutes its own identity.
-- **Public upstream (read/fallback)** — queried **anonymously**. The client's
-  credential is **never** forwarded here; sending an internal token to the public
-  registry would be a credential disclosure. (If a public mirror itself needs
-  auth, that is Écluse's *own* configured credential — never the client's.)
-- **Mirror target (write)** — the **only** place Écluse uses its own credential:
-  the [`CredentialProvider`](cloud-backends.md#credential-provider) mints the token
-  to publish approved packages. Often the same registry as the private upstream,
-  but a different identity on it: the *client* reads it, *Écluse* writes it.
+- **Private upstream (read)** — depends on the mount's strategy. Under the default
+  **`passthrough`**, Écluse **forwards the client's own credential**
+  (`Authorization` / `_authToken`) verbatim and the upstream authorises each request
+  (Écluse substitutes no identity). Under **`service`** / **`delegated-cache`**,
+  Écluse reads with its **own** [`CredentialProvider`](cloud-backends.md#credential-provider)
+  token and authority moves to the edge or to a per-request probe respectively (see
+  [credential strategies](access-model.md#credential-strategies-per-mount)).
+- **Public upstream (read/fallback)** — queried **anonymously** under every strategy.
+  The client's credential is **never** forwarded here; sending an internal token to
+  the public registry would be a credential disclosure. (If a public mirror itself
+  needs auth, that is Écluse's *own* configured credential — never the client's.)
+- **Mirror target (write)** — always Écluse's own credential: the
+  [`CredentialProvider`](cloud-backends.md#credential-provider) mints the token to
+  publish approved packages. Often the same registry as the private upstream, but a
+  different identity on it: the *client* reads it, *Écluse* writes it.
 
-The non-negotiable invariant: **the client's credential reaches the private
-upstream and nothing else — and never the public upstream.**
+The non-negotiable invariant, under **every** strategy: **the client's credential is
+never sent to the public upstream.** (Whether it reaches the private upstream is
+strategy-specific — it does under `passthrough`, not under `service`.)
 
-#### The private upstream's metadata is not cached across clients
+#### The private upstream's metadata is not cached across clients (under `passthrough`)
 
-Because the private upstream is the **per-client authority** for who may read what,
-its packument metadata is **not cached across clients**: it is re-consulted on
-**every request**, with that client's **own** forwarded credential, so the upstream
-re-authorises each client itself. Only the **anonymous public (gated) leg** is held
-in the [metadata cache](web-layer.md#metadata-cache).
+Under the default **`passthrough`** strategy the private upstream is the
+**per-client authority** for who may read what, so its packument metadata is **not
+cached across clients**: it is re-consulted on **every request**, with that client's
+**own** forwarded credential, so the upstream re-authorises each client itself. Only
+the **anonymous public (gated) leg** is held in the
+[metadata cache](web-layer.md#metadata-cache). (The **`service`** and
+**`delegated-cache`** strategies fetch the private leg with Écluse's own identity and
+*do* share it — safely, because the bytes are identity-independent or re-authorised
+per request before serving; see [Access & Credential Model → Caching](access-model.md#caching).)
 
 The reason is a cross-client disclosure hazard. The cache key carries **no
 credential dimension** (it is the upstream base URL plus the package — a credential
@@ -75,8 +85,9 @@ therefore **merged**, not short-circuited.
 the degenerate identity:
 
 - **Fetch upstreams in parallel.** For a packument, the private and public
-  upstreams are fetched concurrently (the credential rules above still hold:
-  client token to private, anonymous to public).
+  upstreams are fetched concurrently (the credential rules above still hold: the
+  private fetch follows the mount's [credential strategy](access-model.md), the
+  public fetch is always anonymous).
 - **Trust split by provenance.** Private-upstream versions are **trusted** and
   enter the merged document **unfiltered** (already vetted). Public-upstream
   versions are **gated** — the rules engine filters them (see

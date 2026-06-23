@@ -31,10 +31,12 @@ the S02 in-memory doubles; real AWS backends arrive in M4.
   **merge** into one document via S33 (private wins on collision; integrity
   divergence flagged). No private-hit short-circuit. —
   _registry-model.md#packument-merge-across-upstreams, architecture.md#request-lifecycle_
-- [x] **Credential authority**: the client's `Authorization`/`_authToken` is
+- [x] **Credential authority** (the default [`passthrough`](../../docs/architecture/access-model.md)
+  strategy this slice ships): the client's `Authorization`/`_authToken` is
   **forwarded to the private upstream** and **stripped before any public-upstream
-  fetch**; the public leg is anonymous. Pin this with a test — it is the
-  non-negotiable invariant. — _registry-model.md#credential-flow-and-authority, web-layer.md#control-plane-vs-data-plane_
+  fetch**; the public leg is anonymous. Pin this with a test. The invariant that
+  holds under *every* strategy is the **public strip**; forwarding to the private
+  upstream is specifically the `passthrough` behaviour. — _registry-model.md#credential-flow-and-authority, access-model.md, web-layer.md#control-plane-vs-data-plane_
 - [x] **Public set gated**: fetch (full packument for `time`) → `parsePackageInfo`
   → evaluate rules per version → `filterPackument` (S09) → rewrite tarball URLs
   (S09); the filtered public set is merged (S33) with the trusted private set and

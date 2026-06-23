@@ -65,7 +65,7 @@ is the operator reference. **Keep the two in sync** when either changes.
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `PROXY_PORT` | No (default `4873`) | TCP port the proxy listens on. |
-| `PRIVATE_UPSTREAM_URL` | **Yes** | URL of the private upstream registry (the authority for reads). |
+| `PRIVATE_UPSTREAM_URL` | **Yes** | URL of the private upstream registry (the authority for reads under the default `passthrough` strategy). |
 | `PUBLIC_UPSTREAM_URL` | No (default `https://registry.npmjs.org`) | URL of the public upstream, queried anonymously and gated by the rules. |
 | `PUBLIC_UPSTREAM_TOKEN` | No | Écluse's own token for a public mirror that itself requires auth. Never the client's. |
 | `MIRROR_TARGET_URL` | **Yes** | Registry that approved packages are mirrored to. |
@@ -96,12 +96,14 @@ examples: [Configuration & Authentication](docs/architecture/configuration.md#co
 ### Secrets
 
 **Secrets never live in the configuration document.** Client and registry tokens
-are always environment variables, and cloud-managed mirror targets (CodeArtifact /
+are always environment variables, and cloud-managed registries (CodeArtifact /
 Artifact Registry) derive **short-lived** tokens from ambient cloud credentials,
-keeping long-lived secrets out of config entirely. Écluse holds a credential for
-exactly one thing — writing to the mirror target; reads forward the *client's* own
-token to the private upstream and strip it before the public one. See
-[Outbound Registry Credentials](docs/architecture/configuration.md#outbound-registry-credentials).
+keeping long-lived secrets out of config entirely. Écluse always holds a
+mirror-target **write** credential; how *reads* are credentialled is the mount's
+[credential strategy](docs/architecture/access-model.md) — the default `passthrough`
+forwards the *client's* own token to the private upstream (and strips it before the
+public one), while `service` / `delegated-cache` read with Écluse's own credential.
+See [Outbound Registry Credentials](docs/architecture/configuration.md#outbound-registry-credentials).
 
 ## Connecting your clients
 
@@ -114,14 +116,18 @@ registry=https://ecluse.example.internal/
 //ecluse.example.internal/:_authToken=${ECLUSE_TOKEN}
 ```
 
-Authentication to the proxy has three modes:
+Edge authentication to the proxy has three modes (and feeds the mount's
+[credential strategy](docs/architecture/access-model.md), which decides how the
+upstreams are then credentialled):
 
 1. **Open** — `PROXY_AUTH_TOKEN` unset; access control is delegated entirely to
    the network layer (VPC, service mesh). Appropriate only on a closed network.
 2. **Static token** — `PROXY_AUTH_TOKEN` set; clients send it as
    `Authorization: Bearer <token>` or `.npmrc` `_authToken`.
-3. **Cloud IAM** — deferred as a gateway concern (validate at the edge / let the
-   managed mirror target enforce write IAM).
+3. **Trusted edge identity** — a fronting gateway / IAP / mesh asserts a verified
+   identity Écluse trusts, sound only where Écluse is reachable solely through that
+   edge. Validating cloud IAM at the npm edge directly stays a gateway concern (the
+   npm client cannot speak it; let the managed mirror target enforce write IAM).
 
 ## Securing network egress (required)
 
@@ -147,7 +153,8 @@ At minimum:
     `REGISTRY_ONLY`, declare each upstream as a `ServiceEntry`, and constrain it
     with a `Sidecar` egress listener and an egress `AuthorizationPolicy`.
 - **Grant the proxy only the cloud permissions it needs** — the mirror-write
-  credential, nothing more.
+  credential (and, under the `service` / `delegated-cache` strategies, the
+  private-read credential), nothing more.
 
 The reasoning behind these — and why the application guards alone are not enough —
 is in [Security: Outbound-Request & Input-Validation Invariants](docs/architecture/security.md#network-egress-is-a-shared-responsibility).
