@@ -97,8 +97,8 @@ control-plane work, while the npm data plane is unchanged `http-client` (see
 
 On the data plane, credential handling follows the mount's
 [credential strategy](access-model.md): under the default `passthrough` the client's
-`Authorization` is **forwarded to the private upstream**; under `service` /
-`delegated-cache` the private fetch uses Écluse's own
+`Authorization` is **forwarded to the private upstream**; under `service` (and a
+service-populated `delegated-cache`) the private fetch uses Écluse's own
 [`CredentialProvider`](cloud-backends.md#credential-provider) token instead. The
 client's `Authorization` is **always stripped before any public-upstream fetch** —
 an internal token must never leave for the public registry — regardless of strategy.
@@ -173,11 +173,13 @@ cached**, because a cache key carries no credential dimension and a shared priva
 entry would let one client's document be served to another within the TTL, bypassing
 the upstream's per-client authorisation (see
 [the private upstream's metadata is not cached across clients](registry-model.md#the-private-upstreams-metadata-is-not-cached-across-clients-under-passthrough)).
-Under `service` / `delegated-cache` the private leg is fetched with Écluse's own
-identity (and, for `delegated-cache`, re-authorised per request by a cheap probe
-before a hit is served), so it is identity-independent and **cached and shared** like
-the public leg. The public leg is anonymous under every strategy, so a single shared
-entry crosses no trust boundary and is cached freely.
+Under `service` / `delegated-cache` the private leg is **cached and shared** like the
+public leg — made safe not by how it was populated but by how each serve is
+authorised: the edge under `service`, and a fresh per-request probe under
+`delegated-cache` (whose shared entry may be caller- or service-populated; see
+[Access & Credential Model → Caching](access-model.md#caching)). The public leg is
+anonymous under every strategy, so a single shared entry crosses no trust boundary and
+is cached freely.
 
 ## Error model
 

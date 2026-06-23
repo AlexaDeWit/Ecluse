@@ -63,20 +63,29 @@ fine-grained — the upstream re-decides every request.
 
 ### `delegated-cache` — the upstream decides retrievability; Écluse caches the compute
 
-The expensive compute — the merged, filtered packument, or the verified artifact
-bytes — is produced once with a **service credential** and held in the **shared**
-cache. Before any cache hit is served, the request is **authorised against the
-upstream with a cheap probe** (e.g. an authenticated `whoami`/`HEAD` that succeeds
-iff the caller may read the mount). The upstream therefore remains the authority for
-*who may retrieve what*, while the costly fetch + parse + merge is reused across
-callers.
+The defining move is on the **read** side: the expensive compute — the merged,
+filtered packument, or the verified artifact bytes — is held in the **shared** cache,
+and **before any cache hit is served the request is authorised against the upstream
+with a cheap probe** (e.g. an authenticated `whoami`/`HEAD` that succeeds iff the
+caller may read the mount). The upstream therefore remains the authority for *who may
+retrieve what*, while the costly fetch + parse + merge is reused across callers.
 
-This holds **no client-credential state** (the probe forwards the caller's
-credential transiently, exactly as `passthrough` does) and costs a per-request
-probe — which must be **cheaper than the fetch it replaces**, and is only available
-where the upstream offers such a probe. The probe's **granularity must match the
-upstream's** (see [Authorisation granularity](#authorisation-granularity)); a probe
-coarser than the upstream's authorisation would over-grant, and the proxy must not.
+This holds **no client-credential state** (the probe forwards the caller's credential
+transiently, exactly as `passthrough` does) and costs a per-request probe — which
+must be **cheaper than the fetch it replaces**, and is only available where the
+upstream offers such a probe. The probe's **granularity must match the upstream's**
+(see [Authorisation granularity](#authorisation-granularity)); a probe coarser than
+the upstream's authorisation would over-grant, and the proxy must not.
+
+**How the shared entry is *populated* is orthogonal to this** — an operational
+choice, not a safety one, because the per-request probe (not the fetch's provenance)
+is what authorises each serve (see [Caching](#caching)). The compute may be
+**caller-populated** — filled lazily by the first authorised caller's own forwarded
+token, holding **no Écluse read credential at all** — or **service-populated** —
+filled with Écluse's own [`CredentialProvider`](cloud-backends.md#credential-provider)
+token, which costs a read credential but lets Écluse warm or refresh an entry
+proactively rather than waiting for an authorised caller. Either way the bytes are the
+same canonical document, so either way the probe gates retrievability identically.
 
 ### `service` — the edge authenticates; Écluse brokers
 
@@ -151,30 +160,57 @@ The available strategies depend on the upstream's authorisation granularity:
 
 ## Caching
 
-The strategy is exactly what determines whether the private leg of the
-[metadata cache](web-layer.md#metadata-cache) is shareable:
+What makes a shared private cache safe is **two invariants**; the strategy only
+decides how the second is met:
 
-- **`passthrough`** — the private leg is per-caller and **not shared**; only the
-  anonymous public (gated) leg is cached. (This *is* the resolution of #115 in the
-  default: there is no shared private entry to leak.)
-- **`service`** — the private leg is fetched with one identity, so it is
-  identity-independent and **shared freely**.
-- **`delegated-cache`** — the private leg is service-fetched and **shared**, but
-  every hit is gated by a fresh per-request authorisation probe.
+1. **The cache stores no credential-derived state.** A cache key carries **no
+   credential dimension** (it is the upstream base URL plus the package), and a cache
+   value is the canonical document — never a credential or a credential-derived
+   verdict. (This invariant is exactly what rules `memoised` out of the shipping set.)
+2. **A shared *private* entry is served only after freshly authorising *that*
+   caller.** No caller ever receives a private document without that request being
+   authorised first.
 
-A cache key never carries a credential dimension under any strategy; sharing is made
-safe by *how the entry was fetched and authorised*, not by keying on the caller.
+Given those, the **serve-time authorisation method** — not how the bytes were
+populated — is what governs sharing of the private leg of the
+[metadata cache](web-layer.md#metadata-cache):
+
+- **`passthrough`** — serve-time authorisation *is* the per-request fetch with the
+  caller's token, so there is no shared private entry at all; only the anonymous
+  public (gated) leg is cached. (This *is* the resolution of #115 in the default:
+  there is no shared private entry to leak.)
+- **`delegated-cache`** — the private leg is **shared**, and every hit is gated by a
+  fresh per-request authorisation **probe** with the caller's token; the upstream
+  re-decides retrievability on each serve.
+- **`service`** — the edge has already authorised the caller, so a shared private
+  entry is served with no per-request upstream check.
+
+**Population is orthogonal to all of this.** Because invariant 2 authorises *every*
+serve, it does not matter whether a shared entry was filled by a caller's own fetch
+or by Écluse's service identity — no caller is served bytes they have not just been
+authorised for. Population is therefore an operational choice (lazy/caller-populated,
+holding no read credential, versus proactively warmed/service-populated), not a
+security boundary.
+
+This rests on one precondition: the cached document is **identity-independent in
+content** — a packument is canonical *per package*, and artifact bytes are
+content-addressed by `dist.integrity`, so authorisation governs *whether* a caller
+may read an entry, never *what* its bytes are. The probe gates **retrievability**,
+not **content**. (Were an upstream ever to return identity-specific *content* rather
+than a plain allow/deny, population would re-enter the safety picture; npm upstreams
+do not.)
 
 ## Credential supply: the `CredentialProvider`, generalised
 
 The [`CredentialProvider`](cloud-backends.md#credential-provider) handle mints and
 refreshes a bearer for **any upstream endpoint that requires one** — the
-mirror-target **write** always, and the private-upstream **read** under `service` /
-`delegated-cache`. `passthrough` reads use the forwarded caller token and no
-provider. A mount may therefore configure a **read** credential provider for its
-private upstream in addition to its mirror-target one; both are the same handle, the
-same refresh/single-flight/breaker policy, differing only in the per-cloud
-`mintToken` leaf.
+mirror-target **write** always, and the private-upstream **read** under `service`
+(always) and a **service-populated** `delegated-cache`. `passthrough` reads — and a
+**caller-populated** `delegated-cache` — use the forwarded caller token and no read
+provider. A mount that needs a private-upstream read credential configures a **read**
+provider in addition to its mirror-target one; both are the same handle, the same
+refresh/single-flight/breaker policy, differing only in the per-cloud `mintToken`
+leaf.
 
 ## Multi-instance is an isolation tool, not an authorisation mechanism
 

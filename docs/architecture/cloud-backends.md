@@ -149,13 +149,13 @@ data AuthToken = AuthToken { secret :: Secret, expiresAt :: Maybe UTCTime }
 ```
 
 A `CredentialProvider` mints the token for any upstream that needs one: the
-**mirror-target write** always, and — under the `service` / `delegated-cache`
-[credential strategies](access-model.md#credential-strategies-per-mount) — the
-**private-upstream read** as well. Under the default `passthrough` strategy a
-deployment configures **one** provider (for the mirror target) and reads forward the
-client's own credential; selecting `service` / `delegated-cache` adds a **read**
-provider for the private upstream. The public upstream is anonymous under every
-strategy. See [Access & Credential Model](access-model.md) and
+**mirror-target write** always, and — under `service` (and a **service-populated**
+`delegated-cache`) — the **private-upstream read** as well. Under the default
+`passthrough` strategy a deployment configures **one** provider (for the mirror
+target) and reads forward the client's own credential; the same holds for a
+**caller-populated** `delegated-cache`, while `service` and a service-populated
+`delegated-cache` add a **read** provider for the private upstream. The public
+upstream is anonymous under every strategy. See [Access & Credential Model](access-model.md) and
 [Credential flow and authority](registry-model.md#credential-flow-and-authority).
 
 **The sub-handle that matters.** The interesting logic is the refresh / cache /
@@ -188,11 +188,12 @@ effectful tier — see
 and alarms; only if the token has actually **expired *and* mint still fails** does
 the dependent operation fail. For a **mirror-write** credential that is the publish —
 the job is left un-acked and retries / dead-letters (see [Mirror Queue](#mirror-queue)),
-never touching the client serve path. For a **read** credential under the `service` /
-`delegated-cache` [strategies](access-model.md#credential-strategies-per-mount) the
-dependent operation *is* a client read, so an exhausted read credential degrades
-serving (surfaced per the [serve error model](web-layer.md#error-model)) — one reason
-`passthrough`, which holds no read credential, stays the default. The `static`
+never touching the client serve path. For a **read** credential — under `service`, and
+a **service-populated** `delegated-cache` — the dependent operation *is* a client
+read, so an exhausted read credential degrades serving (surfaced per the
+[serve error model](web-layer.md#error-model)) — one reason `passthrough` (and a
+caller-populated `delegated-cache`), which hold no read credential, stay the simplest
+options. The `static`
 provider has no expiry and never refreshes. The clock is injected, so the whole
 policy is unit-tested deterministically.
 

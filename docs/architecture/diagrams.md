@@ -232,8 +232,9 @@ A `CredentialProvider` refreshes a registry token off its own `expiresAt`,
 proactively and single-flight, so the request hot path never blocks on a mint in
 the common case. Under the default `passthrough` strategy credentials are
 **mirror-write only**, so even a fully failed refresh never touches the client serve
-path — only the mirror publish; under the `service` / `delegated-cache`
-[strategies](access-model.md) a read credential failing does degrade serving. See
+path — only the mirror publish; under `service` (and a service-populated
+`delegated-cache`) a read credential sits on the serve path, so its failure does
+degrade serving. See
 [Cloud Backends → Credential Provider](cloud-backends.md#credential-provider).
 
 ```mermaid
@@ -250,8 +251,8 @@ stateDiagram-v2
         Under passthrough the mirror publish is the only
         dependent op: the job is left un-acked and retries /
         dead-letters, never touching the client serve path.
-        (Under service / delegated-cache a read credential
-        sits on the serve path — see access-model.md.)
+        (Under service / a service-populated delegated-cache
+        a read credential sits on the serve path — see access-model.md.)
     end note
 ```
 
