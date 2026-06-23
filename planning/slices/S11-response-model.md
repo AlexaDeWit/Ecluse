@@ -73,3 +73,12 @@ no single status (S14 chooses 403-vs-503 over the filtered set).
   projected to a `ServeDecision` via `serveDecisionOf` reusing `renderDecision` for
   the message. The `Unavailable`/`Transience` arm is present from the start (only
   reachable once S21 lands), exactly as the note above requires.
+
+**Reconciliation (post-merge).** The npm `{"error": …}` body shape encoded here was
+**moved out of the agnostic layer by #122 / #133**: `Ecluse.Server.Response` now
+decides an error's *status* but holds **no body shape of its own**, and each mount
+supplies a `MountRenderer` (returning a `RenderedBody`) — npm's object lives in
+`Ecluse.Registry.Npm.Serve`. Rendering is two-tier: a request matching **no mount**
+is a neutral `text/plain` 404; every in-mount error renders through that mount's
+renderer. See [web-layer.md → Error model](../../docs/architecture/web-layer.md#error-model)
+and [rules-engine.md → Denial Responses](../../docs/architecture/rules-engine.md#denial-responses).

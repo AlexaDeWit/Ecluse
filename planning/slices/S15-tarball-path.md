@@ -48,4 +48,7 @@ double (assert the enqueued job); no network, no cloud.
 SQS in S18, the consuming worker in S19). Keep the serve-then-enqueue ordering — the
 client must never wait on the queue. The integrity hash travels in the job for the
 worker to verify (S19); this slice does **not** verify on the serve path (it relies
-on the client's `dist.integrity`).
+on the client's `dist.integrity`). The tarball handler is added on the
+post-base-hardening **`ReaderT RequestCtx IO`** hot path
+([`design-queue.md`](../design-queue.md) D6), reading its mount deps from
+`RequestCtx` — not the plain-`IO`-taking-`Env` shape S14 first shipped.

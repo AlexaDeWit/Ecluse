@@ -72,3 +72,10 @@ the config model for config-as-JSON-Schema.
 Do **not** model npm's full packument or registry protocol (out of scope — that is
 npm's contract). The manifest documents Écluse's *coverage*; pass-through bodies
 link out rather than reproduce the upstream schema.
+
+**Reconciliation (post-#133).** The owned *error/denial* schema is the **agnostic
+serve outcome** (`Ecluse.Server.Response`); npm's `{"error": …}` **body** now lives
+in the mount's renderer (`Ecluse.Registry.Npm.Serve`, per #122 / #133). So the
+manifest models the agnostic envelope as the owned schema and treats each mount's
+rendered body as that ecosystem's surface. See
+[web-layer.md → Error model](../../docs/architecture/web-layer.md#error-model).

@@ -35,8 +35,10 @@ the edge (S43); the upstream sees one identity.
   resolutions collapse to one upstream fetch — matching the public leg's sharing. —
   _access-model.md#caching, web-layer.md#metadata-cache_
 - [ ] `passthrough` behaviour is unchanged (no read credential; private leg not
-  cached). The cache-admission witness from S43 gates which path may populate the
-  shared private entry. — _access-model.md#caching_
+  cached). The cache-admission witness from S43 gates whether a shared **private**
+  entry is **admitted to serving**, independent of how it was populated — population
+  is an orthogonal operational choice (#129), since every serve is freshly authorised. —
+  _access-model.md#caching_
 - [ ] A read-credential refresh failure degrades **reads** (surfaced per the
   [serve error model](web-layer.md#error-model)); document that, unlike the
   mirror-write-only past, a read credential now sits on the serve path under

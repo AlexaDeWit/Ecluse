@@ -2,7 +2,7 @@
 id: S14
 title: Packument path end-to-end (walking skeleton)
 milestone: M3 — Request pipeline
-status: in-progress
+status: merged
 depends-on: [S08, S09, S13, S33]
 test-tier: [unit]
 arch-refs:
@@ -11,7 +11,7 @@ arch-refs:
   - docs/architecture/registry-model.md#packument-merge-across-upstreams
   - docs/architecture/web-layer.md#control-plane-vs-data-plane
   - docs/architecture/rules-engine.md#applying-verdicts-to-a-packument
-pr: null
+pr: 109
 ---
 
 # S14 — Packument path end-to-end (**walking skeleton**)
@@ -96,3 +96,19 @@ here (packument requests don't mirror) — that is the tarball path, S15.
   `dispatchMount` now returns the matched mount so its deps reach the handler. `Mount`
   is unchanged (kept `Eq`/`Show`), so the function-valued deps do not infect it. S20
   supplies real per-mount deps from the resolved mount map.
+
+**Reconciliation (post-merge).** Three notes above have since been overtaken — the
+code is being brought into line by refactors and the base-hardening track:
+- The "**cache is the public leg only / per-source key belongs to S13/S15**"
+  escalation was **resolved by #111 / #113**: the metadata cache now keys per source
+  and stores the raw document, so the trusted private leg is cacheable (kept uncached
+  only under `passthrough`, per #115 / #117 and
+  [access-model → Caching](../../docs/architecture/access-model.md#caching)).
+- "`Mount` is unchanged" is **superseded by #122 / #133**: the per-mount unit is now
+  `MountBinding` (`bindingPrefix :: NonEmpty Text`, no root mount), carrying its
+  classifier, packument deps and error renderer.
+- The plain-`IO`-taking-`Env` handler and the explicit `PackumentDeps` threading are
+  **superseded by the base-hardening Reader migration**
+  ([`design-queue.md`](../design-queue.md) D6): handlers now run in
+  `ReaderT RequestCtx IO`, reading per-mount deps from `RequestCtx`. See
+  [technology-stack.md → Key Decisions](../../docs/architecture/technology-stack.md#key-decisions).
