@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Écluse — logo mark.
+  The letter É built as a flight of locks: the E's two counters hold water — pooled
+  against the spine and open on the right, as a real E's counters are — stepping from
+  a lighter upper pound to a darker lower one; the acute accent rides above. Drawn on
+  a dark rounded-square tile, so the mark is self-contained on any background and
+  doubles as a favicon / avatar / app icon.
+
+  Original vector. No third-party assets and no font dependency: the letterform is
+  constructed from rectangles, so it renders identically everywhere.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128"
+     role="img" aria-label="Écluse logo">
+  <title>Écluse</title>
+  <desc>The letter É as a flight of locks: two water-filled chambers stepping down, the acute above.</desc>
+  <rect x="6" y="6" width="116" height="116" rx="28" fill="#211F1C"/>
+  <!-- water pooled against the spine (upper pound lighter, lower darker — the flight) -->
+  <rect x="48" y="50" width="30" height="14" fill="#9BBBB4"/>
+  <rect x="48" y="77" width="30" height="14" fill="#6E928B"/>
+  <!-- the E, cream -->
+  <g fill="#F4EFE3">
+    <rect x="32" y="36" width="16" height="69"/>
+    <rect x="32" y="36" width="64" height="14"/>
+    <rect x="32" y="64" width="64" height="13"/>
+    <rect x="32" y="91" width="64" height="14"/>
+  </g>
+  <!-- acute accent -->
+  <line x1="64" y1="30" x2="82" y2="16" stroke="#F4EFE3" stroke-width="7" stroke-linecap="round"/>
+</svg>
