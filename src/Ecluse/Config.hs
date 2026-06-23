@@ -13,14 +13,16 @@ backend name, or trips over a rule that was misspelled. Two layers feed it:
 
 * The __document layer__ ('decodeDocument') decodes the structured 'ConfigDoc'
   from JSON — a file or the @PROXY_CONFIG@ blob, one schema for both — carrying
-  the __mount map__ and the __rule policy__. Its decoders are __strict__: an
-  unknown key or an unknown rule @type@ is a loud failure, never a silent skip —
-  the accepted keys of each object are enumerated and anything else is rejected.
+  the __mount map__ and the __rule policy__. Its @mounts@ object is __keyed by
+  ecosystem name__ (@npm@, @pypi@); the path prefix is derived from that key, not
+  declared. Its decoders are __strict__: an unknown key, an unknown ecosystem, or
+  an unknown rule @type@ is a loud failure, never a silent skip — the accepted
+  keys of each object are enumerated and anything else is rejected.
 
 The two combine in 'loadConfig', which __desugars__ the single-mount environment
-variables into a one-entry 'MountMap' and __merges__ the document's rule policy
-over the built-in 'defaultPolicy'. An env-only launch with no document still runs
-on that default policy.
+variables into a one-entry 'MountMap' (the npm ecosystem, the env-only default)
+and __merges__ the document's rule policy over the built-in 'defaultPolicy'. An
+env-only launch with no document still runs on that default policy.
 
 The rule-policy merge is a named-map patch sourced from "Ecluse.Rules.Types" —
 config selects and refines rules, it does not re-encode their semantics. See
@@ -68,10 +70,7 @@ module Ecluse.Config (
     -- * Mounts
     MountMap,
     Mount (..),
-    MountPrefix,
-    mkMountPrefix,
-    unMountPrefix,
-    RegistryTuple (..),
+    MountRegistries (..),
     MirrorTarget (..),
 
     -- * Rule policy
@@ -101,6 +100,7 @@ import Data.Time (NominalDiffTime)
 import Env qualified
 import System.Environment (getEnvironment)
 
+import Ecluse.Ecosystem (Ecosystem (Npm), parseEcosystem)
 import Ecluse.Log (LogFormat (..), parseLogFormat)
 import Ecluse.Package (mkScope)
 import Ecluse.Rules.Types (
@@ -406,39 +406,15 @@ renderEnvErrors = T.unlines . map renderOne
 
 -- ── mounts ───────────────────────────────────────────────────────────────────
 
-{- | A path prefix a mount is served under (e.g. @"\/npm"@), stored without a
-trailing slash so @"\/npm"@ and @"\/npm\/"@ name the same mount. Opaque to keep
-that normalisation in one place.
--}
-newtype MountPrefix = MountPrefix Text
-    deriving stock (Eq, Ord, Show)
-
-{- | Build a 'MountPrefix', normalising it to a single leading slash and no
-trailing slash so the two ways a client may write a base URL collapse to one key.
-
->>> mkMountPrefix "/npm/"
-MountPrefix "/npm"
-
->>> mkMountPrefix "npm"
-MountPrefix "/npm"
--}
-mkMountPrefix :: Text -> MountPrefix
-mkMountPrefix raw =
-    let stripped = T.dropWhileEnd (== '/') (T.dropWhile (== '/') (T.strip raw))
-     in MountPrefix ("/" <> stripped)
-
--- | The normalised prefix text, with its single leading slash.
-unMountPrefix :: MountPrefix -> Text
-unMountPrefix (MountPrefix p) = p
-
-{- | The three-registry tuple of a mount: the private upstream and public upstream
-it reads from, and the mirror target it writes approved packages to. The
-credential and queue backends live on the 'MirrorTarget' because that is the one
-endpoint Écluse authenticates to with its own identity — reads forward the
-client's credential or are anonymous (see
+{- | The three registry endpoints of a mount: the private upstream and public
+upstream it reads from, and the mirror target it writes approved packages to —
+the three architectural roles, as a record of named roles rather than a positional
+tuple. The credential and queue backends live on the 'MirrorTarget' because that
+is the one endpoint Écluse authenticates to with its own identity — reads forward
+the client's credential or are anonymous (see
 @docs\/architecture\/registry-model.md@ → "Credential flow and authority").
 -}
-data RegistryTuple = RegistryTuple
+data MountRegistries = MountRegistries
     { regPrivateUpstream :: Url
     {- ^ The authoritative, already-vetted upstream. Reads forward the __client's__
     credential; Écluse holds none for it.
@@ -464,26 +440,31 @@ data MirrorTarget = MirrorTarget
     }
     deriving stock (Eq, Show)
 
-{- | One mount: a registry served under a path prefix. It binds the three-registry
-tuple and an __already-resolved__ rule policy — the shared policy, optionally
-refined for this mount. Holding the resolved rules (not the raw patch) is the
-parse-don't-validate payoff: the dispatcher evaluates them directly with no
+{- | One mount: an ecosystem's registries served under a derived path prefix. It
+binds the served 'Ecosystem' (a runtime value, not a type parameter), its three
+registry endpoints, and an __already-resolved__ rule policy — the shared policy,
+optionally refined for this mount. The path prefix is __not__ stored: it is
+derived from 'mountEcosystem' (see @Ecluse.Ecosystem.prefixFor@), so it can
+neither collide nor be mistyped. Holding the resolved rules (not the raw patch) is
+the parse-don't-validate payoff: the dispatcher evaluates them directly with no
 further merge.
 -}
 data Mount = Mount
-    { mountRegistries :: RegistryTuple
+    { mountEcosystem :: Ecosystem
+    -- ^ The ecosystem this mount serves; the path prefix is derived from it.
+    , mountRegistries :: MountRegistries
     -- ^ The private\/public\/mirror endpoints this mount proxies.
     , mountPolicy :: [PrecededRule]
     -- ^ The fully-resolved rule set for this mount.
     }
     deriving stock (Eq, Show)
 
-{- | The mount map: every served mount keyed by its normalised path prefix.
-Dispatch matches a request's leading path segment to a key here (see
-@docs\/architecture\/hosting.md@ → "Dispatch"). A single-mount deployment is the
-one-entry degenerate case.
+{- | The mount map: every served mount keyed by its 'Ecosystem'. There is exactly
+one mount per ecosystem, and the path prefix dispatch matches on is derived from
+the key (see @docs\/architecture\/hosting.md@ → "Mounts"). A single-mount
+deployment is the one-entry degenerate case.
 -}
-type MountMap = Map MountPrefix Mount
+type MountMap = Map Ecosystem Mount
 
 -- ── rule policy ──────────────────────────────────────────────────────────────
 
@@ -673,12 +654,12 @@ patch, decoded from a JSON file or the @PROXY_CONFIG@ env blob (one schema for
 both). An env-only deployment supplies no document at all.
 
 The rule policy here is the __raw patch__ over the default; 'resolvePolicy' merges
-it. Mounts hold the document's per-mount registry shape; their prefixes key the
+it. Mounts hold the document's per-mount registry shape; their ecosystem keys the
 'MountMap' that 'loadConfig' produces.
 -}
 data ConfigDoc = ConfigDoc
-    { docMounts :: Map MountPrefix MountDoc
-    {- ^ The mounts declared in the document, keyed by prefix. Empty when the
+    { docMounts :: Map Ecosystem MountDoc
+    {- ^ The mounts declared in the document, keyed by 'Ecosystem'. Empty when the
     document carries only a rule policy.
     -}
     , docRules :: RulePatch
@@ -688,11 +669,12 @@ data ConfigDoc = ConfigDoc
 
 {- | A single mount as written in the document: its registry endpoints and
 backends, plus an optional per-mount rule refinement that merges over the shared
-policy.
+policy. The served ecosystem is __not__ written here — it is the @mounts@ key the
+mount is declared under, and its path prefix is derived from it.
 -}
 data MountDoc = MountDoc
-    { mdocRegistries :: RegistryTuple
-    -- ^ The mount's three-registry tuple, as written.
+    { mdocRegistries :: MountRegistries
+    -- ^ The mount's three registry endpoints, as written.
     , mdocRules :: RulePatch
     -- ^ The per-mount rule refinement, empty when omitted.
     }
@@ -735,12 +717,23 @@ decodeDocument = first toText . eitherDecodeStrict
 instance FromJSON ConfigDoc where
     parseJSON = withObject "config document" $ \o -> do
         rejectUnknownKeys "config document" ["mounts", "rules"] o
-        -- The @mounts@ object is keyed by raw prefix string; re-key through
-        -- 'mkMountPrefix' so the map carries the normalised 'MountPrefix' the rest
-        -- of the system uses (no JSON-key instance needed on the opaque type).
+        -- The @mounts@ object is keyed by ecosystem name (@npm@, @pypi@); each key
+        -- is resolved through 'parseEcosystem' and an unknown ecosystem is a loud
+        -- failure (strict decoding, never a silent skip) — the path prefix is then
+        -- derived from the ecosystem, never declared.
         rawMounts <- o .:? "mounts" .!= mempty
-        ConfigDoc (Map.mapKeys mkMountPrefix rawMounts)
-            <$> o .:? "rules" .!= emptyPatch
+        ConfigDoc
+            <$> parseMounts rawMounts
+            <*> o .:? "rules" .!= emptyPatch
+      where
+        parseMounts :: KeyMap MountDoc -> Parser (Map Ecosystem MountDoc)
+        parseMounts =
+            fmap Map.fromList . traverse parseKeyed . KeyMap.toList
+
+        parseKeyed :: (Key.Key, MountDoc) -> Parser (Ecosystem, MountDoc)
+        parseKeyed (k, mdoc) = case parseEcosystem (Key.toText k) of
+            Just eco -> pure (eco, mdoc)
+            Nothing -> fail ("unknown mount ecosystem " <> show (Key.toText k))
 
 instance FromJSON MountDoc where
     parseJSON = withObject "mount" $ \o -> do
@@ -749,7 +742,7 @@ instance FromJSON MountDoc where
             ["privateUpstream", "publicUpstream", "mirrorTarget", "rules"]
             o
         registries <-
-            RegistryTuple
+            MountRegistries
                 <$> (o .: "privateUpstream" >>= parseUrl)
                 <*> (o .: "publicUpstream" >>= parseUrl)
                 <*> o .: "mirrorTarget"
@@ -857,9 +850,7 @@ data Config = Config
     { configEnv :: EnvConfig
     -- ^ The process-level environment layer.
     , configMounts :: MountMap
-    {- ^ Every served mount, keyed by normalised prefix, each with a resolved
-    policy.
-    -}
+    -- ^ Every served mount, keyed by 'Ecosystem', each with a resolved policy.
     }
     deriving stock (Eq, Show)
 
@@ -867,8 +858,8 @@ data Config = Config
 config document.
 
 * With __no document__, the single-mount environment variables __desugar__ into a
-  one-entry mount map at the root prefix @"\/"@, running on the built-in
-  'defaultPolicy'.
+  one-entry mount map for the __npm__ ecosystem (its prefix derived as @\/npm@),
+  running on the built-in 'defaultPolicy'.
 * With a __document__, the document's top-level rule patch is merged over the
   default to form the shared policy, every declared mount is resolved against it
   (applying its own refinement), and — when the document declares no mounts — the
@@ -887,15 +878,18 @@ loadConfig env mDoc = case mDoc of
                 then Right (envOnly shared)
                 else Config env <$> resolveMounts shared (docMounts doc)
   where
-    -- The env single-mount desugared onto a resolved shared policy.
+    -- The env single-mount desugared onto a resolved shared policy. An env-only
+    -- launch serves the npm ecosystem, keyed by it and served under the derived
+    -- @\/npm@ prefix — never the root @\/@, which the no-root rule forbids.
     envOnly :: RulePolicy -> Config
-    envOnly policy = Config env (Map.singleton (mkMountPrefix "/") (envMount (rulesOf policy)))
+    envOnly policy = Config env (Map.singleton Npm (envMount (rulesOf policy)))
 
     envMount :: [PrecededRule] -> Mount
     envMount rules =
         Mount
-            { mountRegistries =
-                RegistryTuple
+            { mountEcosystem = Npm
+            , mountRegistries =
+                MountRegistries
                     { regPrivateUpstream = cfgPrivateUpstream env
                     , regPublicUpstream = cfgPublicUpstream env
                     , regMirrorTarget =
@@ -912,19 +906,24 @@ loadConfig env mDoc = case mDoc of
             }
 
 -- Resolve every document mount against the shared policy, applying each mount's
--- own refinement and aggregating policy errors across all of them.
-resolveMounts :: RulePolicy -> Map MountPrefix MountDoc -> Either [PolicyError] MountMap
+-- own refinement and aggregating policy errors across all of them. The map key is
+-- the served ecosystem, carried onto each resolved 'Mount'.
+resolveMounts :: RulePolicy -> Map Ecosystem MountDoc -> Either [PolicyError] MountMap
 resolveMounts shared mounts =
     case partitionEithers (map resolveOne (Map.toList mounts)) of
         ([], resolved) -> Right (Map.fromList resolved)
         (errs, _) -> Left (concat errs)
   where
-    resolveOne :: (MountPrefix, MountDoc) -> Either [PolicyError] (MountPrefix, Mount)
-    resolveOne (prefix, mdoc) =
+    resolveOne :: (Ecosystem, MountDoc) -> Either [PolicyError] (Ecosystem, Mount)
+    resolveOne (eco, mdoc) =
         resolvePolicy shared (mdocRules mdoc) >>= \refined ->
             Right
-                ( prefix
-                , Mount{mountRegistries = mdocRegistries mdoc, mountPolicy = rulesOf refined}
+                ( eco
+                , Mount
+                    { mountEcosystem = eco
+                    , mountRegistries = mdocRegistries mdoc
+                    , mountPolicy = rulesOf refined
+                    }
                 )
 
 -- The rules of a resolved policy as the engine's flat list.

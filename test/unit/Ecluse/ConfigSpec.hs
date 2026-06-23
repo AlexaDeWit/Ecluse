@@ -8,6 +8,7 @@ import System.Environment (setEnv, unsetEnv)
 import Test.Hspec
 
 import Ecluse.Config
+import Ecluse.Ecosystem (Ecosystem (..))
 import Ecluse.Log (LogFormat (..))
 import Ecluse.Package (mkScope)
 import Ecluse.Rules.Types (
@@ -73,9 +74,9 @@ instancesSpec = describe "derived instances and accessors" $ do
         showText (UnknownRuleType "n" "T") `shouldSatisfy` ("UnknownRuleType" `isInfix`)
         showText defaultPolicy `shouldSatisfy` ("AllowIfPublishedBefore" `isInfix`)
 
-    it "round-trips a mount prefix through mk/un" $ do
-        unMountPrefix (mkMountPrefix "npm/") `shouldBe` "/npm"
-        unMountPrefix (mkMountPrefix "/") `shouldBe` "/"
+    it "keys a decoded mount by its ecosystem (the mount map's key)" $ do
+        doc <- expectDoc singleMountDoc
+        Map.keys (docMounts doc) `shouldBe` [Npm]
 
 -- ── backend enums & renderers ────────────────────────────────────────────────
 
@@ -264,25 +265,30 @@ documentDecodeSpec = describe "decodeDocument" $ do
     it "decodes a document with one mount and a rule patch" $
         case decodeDocument singleMountDoc of
             Left e -> expectationFailure ("unexpected decode error: " <> toString e)
-            Right doc -> Map.keys (docMounts doc) `shouldBe` [mkMountPrefix "/npm"]
+            Right doc -> Map.keys (docMounts doc) `shouldBe` [Npm]
 
     it "decodes a document carrying only a rule policy (no mounts)" $
         case decodeDocument "{\"rules\":{\"min-age\":{\"ageSeconds\":1209600}}}" of
             Left e -> expectationFailure ("unexpected decode error: " <> toString e)
             Right doc -> docMounts doc `shouldBe` mempty
 
-    it "normalises a mount prefix written with a trailing slash" $
-        -- A client may write the base URL with or without a trailing slash; both
-        -- collapse to one mount key.
-        case decodeDocument (mountDocWithPrefix "/npm/") of
+    it "keys a mount by its ecosystem name, deriving the prefix from it" $
+        -- The @mounts@ object is keyed by ecosystem name (@npm@), never a path
+        -- prefix; the served prefix is derived from the ecosystem downstream.
+        case decodeDocument (mountDocForEcosystem "npm") of
             Left e -> expectationFailure ("unexpected decode error: " <> toString e)
-            Right doc -> Map.keys (docMounts doc) `shouldBe` [mkMountPrefix "/npm"]
+            Right doc -> Map.keys (docMounts doc) `shouldBe` [Npm]
 
     it "rejects an unparseable JSON body" $
         decodeDocument "{not json" `shouldSatisfy` isLeft
 
     it "rejects an unknown top-level key, naming it (strict, not silently dropped)" $
         decodeDocument "{\"mountz\":{}}" `shouldSatisfy` decodeErrorMentions "mountz"
+
+    it "rejects an unknown mount ecosystem key, naming it (strict, not silently dropped)" $
+        -- A @mounts@ key that names no known ecosystem is a loud failure, not a
+        -- silent skip — a typo'd or unsupported ecosystem must never vanish.
+        decodeDocument (mountDocForEcosystem "npmm") `shouldSatisfy` decodeErrorMentions "npmm"
 
     it "rejects an unknown key inside a mount, naming it" $
         decodeDocument (mountDocWithExtraKey "baseURL") `shouldSatisfy` decodeErrorMentions "baseURL"
@@ -306,15 +312,15 @@ documentDecodeSpec = describe "decodeDocument" $ do
     it "decodes the adc credential backend in a mount" $
         case decodeDocument (mountWithCredential "adc") of
             Left e -> expectationFailure ("unexpected decode error: " <> toString e)
-            Right doc -> case Map.lookup (mkMountPrefix "/npm") (docMounts doc) of
-                Nothing -> expectationFailure "expected the /npm mount"
+            Right doc -> case Map.lookup Npm (docMounts doc) of
+                Nothing -> expectationFailure "expected the npm mount"
                 Just mdoc -> mtCredential (regMirrorTarget (mdocRegistries mdoc)) `shouldBe` AdcCredential
 
     it "rejects a non-string where a URL string is expected, naming the number kind" $
         -- A URL field given a number (not a string) is a typed decode failure,
         -- not a coerced value.
         decodeDocument
-            "{\"mounts\":{\"/npm\":{\"privateUpstream\":42,\"publicUpstream\":\"https://b\",\
+            "{\"mounts\":{\"npm\":{\"privateUpstream\":42,\"publicUpstream\":\"https://b\",\
             \\"mirrorTarget\":{\"url\":\"https://c\",\"credential\":\"static\",\"queue\":\"sqs\"}}}}"
             `shouldSatisfy` decodeErrorMentions "a number"
 
@@ -330,11 +336,11 @@ documentDecodeSpec = describe "decodeDocument" $ do
         decodeDocument (mountWithCredential' "null")
             `shouldSatisfy` decodeErrorMentions "null"
 
-    it "decodes the mount registry tuple and backends faithfully" $
+    it "decodes the mount registries and backends faithfully" $
         case decodeDocument singleMountDoc of
             Left e -> expectationFailure ("unexpected decode error: " <> toString e)
-            Right doc -> case Map.lookup (mkMountPrefix "/npm") (docMounts doc) of
-                Nothing -> expectationFailure "expected the /npm mount"
+            Right doc -> case Map.lookup Npm (docMounts doc) of
+                Nothing -> expectationFailure "expected the npm mount"
                 Just mdoc -> do
                     let reg = mdocRegistries mdoc
                     unUrl (regPrivateUpstream reg) `shouldBe` "https://private.example.test"
@@ -536,10 +542,13 @@ desugarSpec = describe "loadConfig" $ do
         case loadConfig env Nothing of
             Left errs -> expectationFailure ("unexpected policy errors: " <> show errs)
             Right cfg -> do
-                Map.keys (configMounts cfg) `shouldBe` [mkMountPrefix "/"]
-                case Map.lookup (mkMountPrefix "/") (configMounts cfg) of
-                    Nothing -> expectationFailure "expected the root mount"
+                -- The env-only mount defaults to the npm ecosystem (its prefix
+                -- derived as /npm), never the root /, which the no-root rule forbids.
+                Map.keys (configMounts cfg) `shouldBe` [Npm]
+                case Map.lookup Npm (configMounts cfg) of
+                    Nothing -> expectationFailure "expected the npm mount"
                     Just mount -> do
+                        mountEcosystem mount `shouldBe` Npm
                         mountPolicy mount
                             `shouldBe` [PrecededRule defaultAllowIfPublishedBeforePrecedence (AllowIfPublishedBefore (7 * 86400))]
                         let reg = mountRegistries mount
@@ -549,13 +558,13 @@ desugarSpec = describe "loadConfig" $ do
 
     it "desugars the env single-mount onto a document-only policy patch" $ do
         -- A document with a rule policy but no mounts still produces the env
-        -- single-mount, now running on the merged policy.
+        -- single-mount (npm), now running on the merged policy.
         env <- expectEnv minimalEnv
         doc <- expectDoc "{\"rules\":{\"min-age\":{\"enabled\":false}}}"
         case loadConfig env (Just doc) of
             Left errs -> expectationFailure ("unexpected policy errors: " <> show errs)
-            Right cfg -> case Map.lookup (mkMountPrefix "/") (configMounts cfg) of
-                Nothing -> expectationFailure "expected the root mount"
+            Right cfg -> case Map.lookup Npm (configMounts cfg) of
+                Nothing -> expectationFailure "expected the npm mount"
                 Just mount -> mountPolicy mount `shouldBe` []
 
     it "uses the document's declared mounts when present" $ do
@@ -563,7 +572,7 @@ desugarSpec = describe "loadConfig" $ do
         doc <- expectDoc singleMountDoc
         case loadConfig env (Just doc) of
             Left errs -> expectationFailure ("unexpected policy errors: " <> show errs)
-            Right cfg -> Map.keys (configMounts cfg) `shouldBe` [mkMountPrefix "/npm"]
+            Right cfg -> Map.keys (configMounts cfg) `shouldBe` [Npm]
 
     it "applies a per-mount rule refinement over the shared policy" $ do
         -- The shared policy adds deny-scripts; the mount suppresses min-age, so
@@ -572,8 +581,8 @@ desugarSpec = describe "loadConfig" $ do
         doc <- expectDoc refinedMountDoc
         case loadConfig env (Just doc) of
             Left errs -> expectationFailure ("unexpected policy errors: " <> show errs)
-            Right cfg -> case Map.lookup (mkMountPrefix "/npm") (configMounts cfg) of
-                Nothing -> expectationFailure "expected the /npm mount"
+            Right cfg -> case Map.lookup Npm (configMounts cfg) of
+                Nothing -> expectationFailure "expected the npm mount"
                 Just mount ->
                     mountPolicy mount `shouldBe` [PrecededRule defaultDenyInstallTimeExecutionPrecedence DenyInstallTimeExecution]
 
@@ -597,10 +606,10 @@ secretsSpec = describe "secrets are environment-only" $ do
 
 -- ── fixtures & helpers ───────────────────────────────────────────────────────
 
--- A document with a single /npm mount and a min-age override.
+-- A document with a single npm mount and a min-age override.
 singleMountDoc :: ByteString
 singleMountDoc =
-    "{\"mounts\":{\"/npm\":{\
+    "{\"mounts\":{\"npm\":{\
     \\"privateUpstream\":\"https://private.example.test\",\
     \\"publicUpstream\":\"https://registry.npmjs.org\",\
     \\"mirrorTarget\":{\"url\":\"https://mirror.example.test\",\"credential\":\"codeartifact\",\"queue\":\"sqs\"}}},\
@@ -610,7 +619,7 @@ singleMountDoc =
 -- min-age, so the mount resolves to the deny alone.
 refinedMountDoc :: ByteString
 refinedMountDoc =
-    "{\"mounts\":{\"/npm\":{\
+    "{\"mounts\":{\"npm\":{\
     \\"privateUpstream\":\"https://private.example.test\",\
     \\"publicUpstream\":\"https://registry.npmjs.org\",\
     \\"mirrorTarget\":{\"url\":\"https://mirror.example.test\",\"credential\":\"static\",\"queue\":\"sqs\"},\
@@ -620,18 +629,18 @@ refinedMountDoc =
 -- A document whose mount refinement names an unknown rule type.
 badRefinementDoc :: ByteString
 badRefinementDoc =
-    "{\"mounts\":{\"/npm\":{\
+    "{\"mounts\":{\"npm\":{\
     \\"privateUpstream\":\"https://private.example.test\",\
     \\"publicUpstream\":\"https://registry.npmjs.org\",\
     \\"mirrorTarget\":{\"url\":\"https://mirror.example.test\",\"credential\":\"static\",\"queue\":\"sqs\"},\
     \\"rules\":{\"oops\":{\"type\":\"NoSuchRule\"}}}}}"
 
--- A bare single-mount document with the given prefix.
-mountDocWithPrefix :: Text -> ByteString
-mountDocWithPrefix prefix =
+-- A bare single-mount document keyed by the given ecosystem name.
+mountDocForEcosystem :: Text -> ByteString
+mountDocForEcosystem eco =
     encodeUtf8
         ( "{\"mounts\":{\""
-            <> prefix
+            <> eco
             <> "\":{\"privateUpstream\":\"https://a\",\"publicUpstream\":\"https://b\",\
                \\"mirrorTarget\":{\"url\":\"https://c\",\"credential\":\"static\",\"queue\":\"sqs\"}}}}"
         )
@@ -640,7 +649,7 @@ mountDocWithPrefix prefix =
 mountDocWithExtraKey :: Text -> ByteString
 mountDocWithExtraKey extra =
     encodeUtf8
-        ( "{\"mounts\":{\"/npm\":{\"privateUpstream\":\"https://a\",\"publicUpstream\":\"https://b\",\
+        ( "{\"mounts\":{\"npm\":{\"privateUpstream\":\"https://a\",\"publicUpstream\":\"https://b\",\
           \\"mirrorTarget\":{\"url\":\"https://c\",\"credential\":\"static\",\"queue\":\"sqs\"},\""
             <> extra
             <> "\":\"x\"}}}"
@@ -649,14 +658,14 @@ mountDocWithExtraKey extra =
 -- A mount whose mirror target carries an unexpected key.
 mirrorTargetWithExtraKey :: ByteString
 mirrorTargetWithExtraKey =
-    "{\"mounts\":{\"/npm\":{\"privateUpstream\":\"https://a\",\"publicUpstream\":\"https://b\",\
+    "{\"mounts\":{\"npm\":{\"privateUpstream\":\"https://a\",\"publicUpstream\":\"https://b\",\
     \\"mirrorTarget\":{\"url\":\"https://c\",\"credential\":\"static\",\"queue\":\"sqs\",\"token\":\"x\"}}}}"
 
 -- A mount whose mirror target names the given queue backend.
 mountWithQueue :: Text -> ByteString
 mountWithQueue q =
     encodeUtf8
-        ( "{\"mounts\":{\"/npm\":{\"privateUpstream\":\"https://a\",\"publicUpstream\":\"https://b\",\
+        ( "{\"mounts\":{\"npm\":{\"privateUpstream\":\"https://a\",\"publicUpstream\":\"https://b\",\
           \\"mirrorTarget\":{\"url\":\"https://c\",\"credential\":\"static\",\"queue\":\""
             <> q
             <> "\"}}}}"
@@ -666,7 +675,7 @@ mountWithQueue q =
 mountWithCredential :: Text -> ByteString
 mountWithCredential c =
     encodeUtf8
-        ( "{\"mounts\":{\"/npm\":{\"privateUpstream\":\"https://a\",\"publicUpstream\":\"https://b\",\
+        ( "{\"mounts\":{\"npm\":{\"privateUpstream\":\"https://a\",\"publicUpstream\":\"https://b\",\
           \\"mirrorTarget\":{\"url\":\"https://c\",\"credential\":\""
             <> c
             <> "\",\"queue\":\"sqs\"}}}}"
@@ -677,7 +686,7 @@ mountWithCredential c =
 mountWithCredential' :: Text -> ByteString
 mountWithCredential' rawJson =
     encodeUtf8
-        ( "{\"mounts\":{\"/npm\":{\"privateUpstream\":\"https://a\",\"publicUpstream\":\"https://b\",\
+        ( "{\"mounts\":{\"npm\":{\"privateUpstream\":\"https://a\",\"publicUpstream\":\"https://b\",\
           \\"mirrorTarget\":{\"url\":\"https://c\",\"credential\":"
             <> rawJson
             <> ",\"queue\":\"sqs\"}}}}"
@@ -687,7 +696,7 @@ mountWithCredential' rawJson =
 mountWithMirrorUrl :: Text -> ByteString
 mountWithMirrorUrl u =
     encodeUtf8
-        ( "{\"mounts\":{\"/npm\":{\"privateUpstream\":\"https://a\",\"publicUpstream\":\"https://b\",\
+        ( "{\"mounts\":{\"npm\":{\"privateUpstream\":\"https://a\",\"publicUpstream\":\"https://b\",\
           \\"mirrorTarget\":{\"url\":\""
             <> u
             <> "\",\"credential\":\"static\",\"queue\":\"sqs\"}}}}"

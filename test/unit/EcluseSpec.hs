@@ -10,12 +10,13 @@ import Test.Hspec.Wai
 import UnliftIO (timeout)
 import UnliftIO.Exception (throwString)
 
-import Ecluse (npmServerConfig, run)
+import Ecluse (mountBindingFor, npmServerConfig, run)
 import Ecluse.Credential (AuthToken (..), CredentialProvider, mkSecret, staticProvider)
+import Ecluse.Ecosystem (Ecosystem (..))
 import Ecluse.Env (Env, newEnv)
 import Ecluse.Queue (newInMemoryQueue)
 import Ecluse.Registry (ParseError (..), RegistryClient (..))
-import Ecluse.Server (application)
+import Ecluse.Server (MountBinding (..), application)
 import Ecluse.Server.Cache (defaultCacheConfig, newMetadataCache)
 
 {- | A registry-handle double whose effectful fields are never invoked — the
@@ -90,3 +91,15 @@ spec = do
 
             it "renders an unmounted prefix as a neutral text/plain 404" $
                 get "/pypi/is-odd" `shouldRespondWith` "Not Found\n"{matchStatus = 404}
+
+    describe "mountBindingFor — ecosystem drives the binding" $ do
+        it "resolves npm to a binding whose prefix is derived from the ecosystem (/npm)" $
+            -- The path prefix is derived from the ecosystem, never configured, so
+            -- the npm binding is served under its own /npm prefix.
+            (bindingPrefix <$> mountBindingFor Npm Nothing) `shouldBe` Just ("npm" :| [])
+
+        it "has no binding for an ecosystem with no adapter wired (loud Nothing, not a stub)" $ do
+            -- PyPI and RubyGems have no registry client or renderer yet, so resolving
+            -- one is a Nothing the caller must handle — never a silently half-wired mount.
+            (bindingPrefix <$> mountBindingFor PyPI Nothing) `shouldBe` Nothing
+            (bindingPrefix <$> mountBindingFor RubyGems Nothing) `shouldBe` Nothing

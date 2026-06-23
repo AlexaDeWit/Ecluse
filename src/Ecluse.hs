@@ -81,6 +81,7 @@ module Ecluse (
 
     -- * npm front door
     npmServerConfig,
+    mountBindingFor,
 
     -- * Default handles
     unconfiguredRegistry,
@@ -94,6 +95,7 @@ import System.IO.Error (userError)
 import UnliftIO (concurrently_, throwIO)
 
 import Ecluse.Credential (AuthToken (..), CredentialProvider, mkSecret, staticProvider)
+import Ecluse.Ecosystem (Ecosystem (Npm), prefixFor)
 import Ecluse.Env (Env, withEnv)
 import Ecluse.Log (LogFormat (JsonLog), newLogEnv)
 import Ecluse.Queue (newInMemoryQueue)
@@ -106,6 +108,7 @@ import Ecluse.Registry.Npm.Serve (npmRenderer)
 import Ecluse.Server (MountBinding (..), ServerConfig, mkServerConfig)
 import Ecluse.Server qualified as Server
 import Ecluse.Server.Cache (defaultCacheConfig, newMetadataCache)
+import Ecluse.Server.Pipeline (PackumentDeps)
 
 {- | Start Écluse: the entry point the @ecluse@ executable runs (see "Main").
 
@@ -144,26 +147,46 @@ binary later reuses this same entry.
 runServer :: Env -> IO ()
 runServer = Server.runServer npmServerConfig
 
-{- | The server settings 'runServer' runs: a single npm mount at @\/npm@. npm is
-deliberately __path-mounted, never at the root__, so adding a second ecosystem
-later changes no existing consumer's URLs. Exposed so the composed front door can
-be driven directly (e.g. embedded in another @wai@ application, or exercised in
-tests through 'Ecluse.Server.application' without binding a socket).
+{- | The server settings 'runServer' runs: a single npm mount under the prefix
+derived from its ecosystem (@\/npm@). npm is deliberately __path-mounted, never at
+the root__, so adding a second ecosystem later changes no existing consumer's URLs.
+Exposed so the composed front door can be driven directly (e.g. embedded in another
+@wai@ application, or exercised in tests through 'Ecluse.Server.application' without
+binding a socket).
 -}
 npmServerConfig :: ServerConfig
-npmServerConfig = mkServerConfig [npmMount]
+npmServerConfig = mkServerConfig [npmMount Nothing]
 
-{- The npm mount: npm's complete wiring under the @\/npm@ prefix — its path grammar
-and its denial renderer — with no packument-serve dependencies wired yet, so the
-packument route stays the recognised-but-unserved @501@ until the composition root
-supplies them.
+{- | Resolve an 'Ecosystem' to its complete 'MountBinding', or 'Nothing' when that
+ecosystem has no adapter wired in this build. The ecosystem selects its path
+grammar (the 'Ecluse.Server.Route.Classifier') and its denial renderer (the
+'Ecluse.Server.Response.MountRenderer'), and its path prefix is __derived__ from it
+('prefixFor') rather than configured — so the ecosystem is the single thing that
+drives the binding (see @docs\/architecture\/hosting.md@ → "Mounts"). The
+packument-serve dependencies are passed in (the composition root supplies them once
+the per-mount registry set is resolved); 'Nothing' for them leaves the packument
+route the recognised-but-unserved @501@ stub.
+
+npm is the only ecosystem with an adapter at launch; the others have no registry
+client or renderer yet, so they resolve to 'Nothing' — a loud miss at the call
+site rather than a silently half-wired mount.
 -}
-npmMount :: MountBinding
-npmMount =
+mountBindingFor :: Ecosystem -> Maybe PackumentDeps -> Maybe MountBinding
+mountBindingFor eco packumentDeps = case eco of
+    Npm -> Just (npmMount packumentDeps)
+    _ -> Nothing
+
+{- The npm mount: npm's complete wiring under its derived @\/npm@ prefix — its path
+grammar and its denial renderer — taking the packument-serve dependencies the
+composition root supplies ('Nothing' leaves the packument route the
+recognised-but-unserved @501@ stub).
+-}
+npmMount :: Maybe PackumentDeps -> MountBinding
+npmMount packumentDeps =
     MountBinding
-        { bindingPrefix = "npm" :| []
+        { bindingPrefix = prefixFor Npm
         , bindingClassifier = Npm.classify
-        , bindingPackumentDeps = Nothing
+        , bindingPackumentDeps = packumentDeps
         , bindingRenderer = npmRenderer
         }
 
