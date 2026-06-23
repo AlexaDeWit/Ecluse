@@ -672,10 +672,14 @@ serveTarballWithDeps renderer deps name version (Filename file) request respond
 
 {- Stream the artifact from the private upstream by its preserved filename,
 forwarding the client's credential (the @passthrough@ private leg, uncached). A
-@2xx@ is streamed through with bounded memory and yields 'Just'; any other status
-(a miss, or an upstream error) yields 'Nothing' so the caller falls through to the
-public leg, the upstream body never read. An unformable URL or a connection failure
-likewise falls through. -}
+@2xx@ is streamed through with bounded memory and yields 'Just'; a non-@2xx@ status,
+an unformable URL, or a failure opening the connection yields 'Nothing' so the
+caller falls through to the public leg, the upstream body never read.
+
+A failure that strikes __after__ a @2xx@ has begun streaming is unrecoverable — the
+response is already on the wire — so 'streamUpstreamWhen' lets it propagate rather
+than reporting a miss: the request fails internally (the connection is torn down)
+instead of responding a second time over a half-sent artifact. -}
 streamPrivateArtifact ::
     Env ->
     PackumentDeps ->
@@ -687,9 +691,7 @@ streamPrivateArtifact ::
 streamPrivateArtifact env deps token name file respond =
     case artifactRequestByFile (clientConfig env (pdPrivateBaseUrl deps) token) name file of
         Left _ -> pure Nothing
-        Right req -> do
-            attempt <- tryAny (streamUpstreamWhen (envManager env) req statusIsSuccessful relayArtifact respond)
-            pure (fromRight Nothing attempt)
+        Right req -> streamUpstreamWhen (envManager env) req statusIsSuccessful relayArtifact respond
 
 {- Serve the artifact from the public upstream after a private miss: gate the
 single requested version against the rules, and on an admit stream the public bytes

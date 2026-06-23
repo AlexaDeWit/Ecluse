@@ -16,7 +16,7 @@ import Data.Time.Format.ISO8601 (iso8601Show)
 import Katip (Environment (Environment), Namespace (Namespace), initLogEnv)
 import Network.HTTP.Client (Manager, defaultManagerSettings, newManager)
 import Network.HTTP.Types (Header, hAuthorization, status200, status404, status500, statusCode)
-import Network.Wai (Application, Request (rawPathInfo, requestHeaders), Response, responseLBS)
+import Network.Wai (Application, Request (rawPathInfo, requestHeaders), Response, responseLBS, responseRaw)
 import Network.Wai.Handler.Warp (testWithApplication)
 import Network.Wai.Test (
     SResponse (simpleBody, simpleHeaders, simpleStatus),
@@ -26,7 +26,7 @@ import Network.Wai.Test (
     setPath,
  )
 import Test.Hspec
-import UnliftIO.Exception (throwString)
+import UnliftIO.Exception (throwString, try)
 
 import Ecluse.Credential (AuthToken (..), CredentialProvider, mkSecret, staticProvider)
 import Ecluse.Ecosystem (Ecosystem (Npm))
@@ -185,6 +185,36 @@ privateArtifactHit tarballBody = do
 -}
 privateArtifactMiss :: IO Upstream
 privateArtifactMiss = upstreamRespondingWith (responseLBS status404 [] "not found")
+
+{- | A private upstream double that begins serving the artifact then fails
+__mid-stream__: a tarball-slot path is answered (over the raw connection) with a
+@200@ that __promises far more than it delivers__ — a large @Content-Length@ but
+only a little body — and then returns, so Warp closes the socket and the proxy's
+read of the artifact hits EOF short of the promised length and fails at once. Any
+other path is a @404@. The handler never throws (so @testWithApplication@ does not
+surface a server-side error), and the immediate close keeps the short read from
+stalling on a read timeout. It exercises the committed-stream case — once the @200@
+is on the wire the serve path must fail internally, not fall through to the public
+leg.
+-}
+privateArtifactMidStreamFailure :: IO Upstream
+privateArtifactMidStreamFailure = do
+    seen <- newIORef []
+    let app :: Application
+        app req respond = do
+            modifyIORef' seen (lookupAuth (requestHeaders req) :)
+            if isTarballPath (rawPathInfo req)
+                then respond (responseRaw truncatedArtifact (responseLBS status500 [] "raw unsupported"))
+                else respond (responseLBS status404 [] "not found")
+    pure Upstream{upApp = app, upSeenAuth = seen}
+  where
+    -- Write a 200 declaring a 1 MiB body, send only a little, then return: Warp
+    -- closes the raw socket, so the proxy reads EOF short of the Content-Length and
+    -- fails immediately — no exception thrown here, no timeout waited on.
+    truncatedArtifact :: IO ByteString -> (ByteString -> IO ()) -> IO ()
+    truncatedArtifact _recv send = do
+        send "HTTP/1.1 200 OK\r\nContent-Length: 1048576\r\n\r\n"
+        send (BS.replicate 1024 0x7a)
 
 -- ── packument fixtures ────────────────────────────────────────────────────────
 
@@ -892,6 +922,19 @@ tarballSpec = describe "artifact (tarball) path" $ do
         publicUp <- artifactUpstream (encodePackument tooNew) publicTarballBytes
         withProxyEnv privateUp publicUp Nothing $ \app _env ->
             getTarball "2.0.0" Nothing app >>= \resp -> status resp `shouldBe` 403
+
+    it "fails internally on a mid-stream private failure, never falling through to public" $ do
+        -- The private leg commits a 200 then drops the connection mid-body. Because
+        -- the response is already on the wire, the serve path must fail (the broken
+        -- stream surfaces as an error here) rather than swallow it and respond a
+        -- second time over the half-sent artifact — so the public leg is never
+        -- consulted and nothing is enqueued.
+        privateUp <- privateArtifactMidStreamFailure
+        publicUp <- artifactUpstream (encodePackument (admittingPublic "1.0.0")) publicTarballBytes
+        withProxyEnv privateUp publicUp Nothing $ \app env -> do
+            (_ :: Either SomeException SResponse) <- try (getTarball "1.0.0" (Just "client-token") app)
+            seenAuth publicUp `shouldReturn` []
+            drainJobs env `shouldReturn` []
 
 -- A mirror queue whose 'enqueue' always throws, for the best-effort assertion: the
 -- serve path must swallow the failure and still serve the artifact. 'receive' is a
