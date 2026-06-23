@@ -67,20 +67,25 @@ gate); the public upstream is always fetched and gated by Écluse.
 
 ### Outbound Registry Credentials
 
-Écluse holds a credential for exactly **one** thing: writing to the **mirror
-target**. That endpoint selects a
+Écluse always holds a credential for one thing — writing to the **mirror target** —
+and, depending on the mount's [credential strategy](access-model.md), may also hold
+one for **reading** the private upstream. Each such endpoint selects a
 [`CredentialProvider`](cloud-backends.md#credential-provider) — **cloud-managed**
 (CodeArtifact / Artifact Registry, token derived from the ambient cloud
 credentials above: `AWS_REGION` / instance role, or ADC / `GOOGLE_CLOUD_PROJECT`)
-or a static `MIRROR_TARGET_TOKEN`.
+or a static token.
 
-**Reads carry no Écluse credential.** The private upstream receives the
-**client's** forwarded token (it is the authority for reads), and the public
-upstream is queried anonymously with the client's token **stripped** — see
-[Credential flow and authority](registry-model.md#credential-flow-and-authority).
-(If a public mirror itself requires auth, set a separate `PUBLIC_UPSTREAM_TOKEN` —
-Écluse's own, never the client's.) Minting the mirror-write credential from a
-cloud identity also keeps long-lived secrets out of config.
+**How reads are credentialled is the credential strategy** (see
+[Access & Credential Model](access-model.md)). Under the default **`passthrough`**,
+reads carry **no Écluse credential**: the private upstream receives the **client's**
+forwarded token (it is the authority for reads) and the public upstream is queried
+anonymously with the client's token **stripped**. Under **`service`** /
+**`delegated-cache`**, Écluse reads the private upstream with its **own**
+`CredentialProvider` token (which is what lets the private leg be cached). The public
+upstream is anonymous under every strategy — and the client's token is **never**
+forwarded there. (If a public mirror itself requires auth, set a separate
+`PUBLIC_UPSTREAM_TOKEN` — Écluse's own, never the client's.) Minting these
+credentials from a cloud identity keeps long-lived secrets out of config.
 
 ### Outbound egress safety (planned)
 
@@ -186,14 +191,16 @@ never a quietly mis-enforced policy.
 
 ## Client Authentication
 
-This section covers **inbound** auth (client → proxy). Outbound credentials differ
-by direction: the client's credential is **forwarded to the private upstream** (the
-authority for reads) and **never to the public upstream**, while Écluse's own
-[`CredentialProvider`](cloud-backends.md#credential-provider) is used **only** to
-write to the mirror target — see
-[Credential flow and authority](registry-model.md#credential-flow-and-authority).
+This section covers **inbound** auth (client → proxy) — the **edge authentication**
+half of the [Access & Credential Model](access-model.md). How the *upstreams* are
+then credentialled (forward the client token, or use Écluse's own) is the mount's
+[credential strategy](access-model.md#credential-strategies-per-mount), covered there
+and under [Outbound Registry Credentials](#outbound-registry-credentials); the one
+invariant that holds regardless is that the client's credential is **never** sent to
+the public upstream.
 
-Authentication to the proxy is **optional**. Three modes:
+Edge authentication is **optional**. The modes (full rationale, including the npm
+client's constraints, in [access-model](access-model.md#edge-authentication)):
 
 1. **Open** — `PROXY_AUTH_TOKEN` is unset. Any client can reach the proxy.
    Access control is delegated entirely to the network layer (VPC, service mesh,
@@ -201,7 +208,9 @@ Authentication to the proxy is **optional**. Three modes:
 2. **Static token** — `PROXY_AUTH_TOKEN` is set. Clients must include it as
    `Bearer <token>` in the `Authorization` header or as `_authToken` in
    `.npmrc`. Standard npm tooling supports this out of the box.
-3. **Cloud IAM (future)** — Validating cloud identity (AWS IAM / GCP IAM) at the
-   proxy edge is deferred as a gateway concern. A managed registry (CodeArtifact /
-   Artifact Registry) can be the mirror target with cloud IAM controlling writes
-   independently.
+3. **Trusted edge identity** — a fronting authenticating proxy / cloud IAP / service
+   mesh performs SSO or mTLS and asserts a verified identity Écluse trusts — sound
+   only where Écluse is reachable *exclusively* through that edge. Validating cloud
+   IAM at the npm edge directly is out (the npm client cannot speak it); it stays a
+   gateway concern, and a managed registry can independently enforce write IAM on the
+   mirror target.

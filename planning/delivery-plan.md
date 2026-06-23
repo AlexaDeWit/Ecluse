@@ -81,8 +81,8 @@ observability, and the GCP backends.
 | **M0** | Shell, handles & foundations | The imperative shell + the three handle interfaces with in-memory doubles; config loader; logging; rules-precedence alignment. Unblocks every downstream track. |
 | **M1** | npm protocol adapter | The npm `RegistryClient`: wire decoders, projection to the domain model, data-plane fetch/publish, URL rewrite + packument filtering. |
 | **M2** | Web front door | The raw-WAI `Application`: pure router, error/denial model, meta-routes, middleware, bounded-memory streaming, conditional-GET/ETag, metadata cache, and the capability manifest (`/openapi.json`). |
-| **M3** | Request pipeline (**walking skeleton**) | The thin end-to-end path: multi-upstream packument merge, credential forward/strip, packument + tarball serving, demand-driven mirror enqueue (against in-memory cloud doubles). |
-| **M4** | AWS cloud backends & worker | `CredentialProvider` (CodeArtifact / static), SQS `MirrorQueue`, the mirror worker, the AWS composition root. **AWS launch-ready.** |
+| **M3** | Request pipeline (**walking skeleton**) | The thin end-to-end path: multi-upstream packument merge, the `passthrough` credential default (forward/strip) and the per-mount [credential-strategy](../docs/architecture/access-model.md) framework, packument + tarball serving, demand-driven mirror enqueue (against in-memory cloud doubles). |
+| **M4** | AWS cloud backends & worker | `CredentialProvider` (CodeArtifact / static) — the mirror-target write, and private-upstream reads under the `service` / `delegated-cache` [strategies](../docs/architecture/access-model.md) — SQS `MirrorQueue`, the mirror worker, the AWS composition root. **AWS launch-ready.** |
 | **M5** | Effectful rules & CVE | The effectful tier (timeout / retry / circuit-breaker, `Unavailable`), the OSV local-sync in-memory advisory index, and the CVE rules — `DenyIfCVE` (block affected) and `AllowIfRemediatesCve` (fast-track fixes past the quarantine). |
 | **M6** | Observability | Opt-in, vendor-neutral OpenTelemetry/OTLP: tracing, the `ecluse.*` metrics catalog, JSONL `dd` log correlation. |
 | **M7** | GCP backends | The Pub/Sub de-risking spike → Pub/Sub `MirrorQueue`, the ADC credential leaf, GCP wiring. **Scheduled after AWS launch.** |
@@ -139,6 +139,7 @@ owes also owes a deterministic `U`/`I` test (see [Testing Strategy](../docs/test
 | [S33](slices/S33-packument-merge.md) | Packument merge across upstreams (core, pure) | S07 | U |
 | [S14](slices/S14-packument-path.md) | Packument path end-to-end (**skeleton closes**) | S08, S09, S13, S33 | U |
 | [S15](slices/S15-tarball-path.md) | Tarball path + demand-driven mirror enqueue | S14 | U |
+| [S43](slices/S43-credential-strategy.md) | Credential strategy + edge authentication — _access-model framework; off the launch critical path_ | S03, S12, S14 | U |
 
 ### M4 — AWS cloud backends & worker
 
@@ -149,6 +150,8 @@ owes also owes a deterministic `U`/`I` test (see [Testing Strategy](../docs/test
 | [S18](slices/S18-sqs-queue.md) | SQS `MirrorQueue` backend | S02 | I |
 | [S19](slices/S19-mirror-worker.md) | Mirror worker (fetch → verify → publish → ack) | S08, S16, S18 | U, I |
 | [S20](slices/S20-aws-composition.md) | AWS composition root + config wiring (**launch-ready**) | S03, S15, S17, S18, S19 | I |
+| [S44](slices/S44-service-credential-reads.md) | Service-credential read path (`service` strategy; shareable private cache) — _access-model; off the launch critical path_ | S43, S16, S13 | U, I |
+| [S45](slices/S45-delegated-cache-probe.md) | Delegated-cache authorisation probe — upstream decides retrievability, cache the compute — _access-model; off the launch critical path_ | S44 | U, I |
 | [S40](slices/S40-egress-ssrf-hardening.md) | Egress / SSRF hardening — resolved-IP recheck, disallow-by-default tarball-host policy, operator egress docs — _follow-on to [S36](slices/S36-security-guards.md); [issue #11](https://github.com/AlexaDeWit/Ecluse/issues/11)_ | S08, S15 | U, I |
 
 ### M5 — Effectful rules & CVE

@@ -230,8 +230,10 @@ flowchart TD
 
 A `CredentialProvider` refreshes a registry token off its own `expiresAt`,
 proactively and single-flight, so the request hot path never blocks on a mint in
-the common case. Because credentials are **mirror-write only**, even a fully failed
-refresh never touches the client serve path — only the mirror publish. See
+the common case. Under the default `passthrough` strategy credentials are
+**mirror-write only**, so even a fully failed refresh never touches the client serve
+path — only the mirror publish; under the `service` / `delegated-cache`
+[strategies](access-model.md) a read credential failing does degrade serving. See
 [Cloud Backends → Credential Provider](cloud-backends.md#credential-provider).
 
 ```mermaid
@@ -245,19 +247,21 @@ stateDiagram-v2
     Expired --> PublishFails: expired and mint still failing
     PublishFails --> Valid: mint recovers
     note right of PublishFails
-        Only the mirror publish fails: the job is left
-        un-acked and retries / dead-letters. The client
-        serve path is never affected (credentials are
-        mirror-write only).
+        Under passthrough the mirror publish is the only
+        dependent op: the job is left un-acked and retries /
+        dead-letters, never touching the client serve path.
+        (Under service / delegated-cache a read credential
+        sits on the serve path — see access-model.md.)
     end note
 ```
 
 ## 7. Credential authority across the three registries
 
-Écluse is **not** a read-access authority. The non-negotiable invariant: the
-client's credential reaches the **private upstream and nothing else** — and never
-the public upstream. Écluse uses its own credential for exactly one thing, the
-mirror-target write. See
+The diagram shows the default **`passthrough`** strategy. The invariant that holds
+under **every** strategy is narrower: the client's credential is **never** sent to
+the public upstream. Whether it reaches the private upstream is strategy-specific —
+it does under `passthrough`; under `service` / `delegated-cache` Écluse reads with
+its own credential instead. See [Access & Credential Model](access-model.md) and
 [Registry Model → Credential flow and authority](registry-model.md#credential-flow-and-authority).
 
 ```mermaid

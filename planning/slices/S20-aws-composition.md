@@ -9,6 +9,7 @@ arch-refs:
   - docs/architecture/cloud-backends.md#handles-records-of-functions
   - docs/architecture/configuration.md#outbound-registry-credentials
   - docs/architecture/cloud-backends.md#service-mapping
+  - docs/architecture/access-model.md#credential-strategies-per-mount
 pr: null
 ---
 
@@ -27,8 +28,10 @@ npm proxy.
   `newCodeArtifactProvider` or `static` (`MIRROR_TARGET_TOKEN`) — storing the
   resulting handle records in `Env`. Nothing downstream knows which backend it holds. —
   _cloud-backends.md#handles-records-of-functions, configuration.md#outbound-registry-credentials_
-- [ ] **One provider configured** (mirror-target write only); reads forward the
-  client token / are anonymous (no Écluse read credential). — _configuration.md#outbound-registry-credentials_
+- [ ] **Credential providers wired per the mount's [strategy](../../docs/architecture/access-model.md)**:
+  always a mirror-target write provider; under the default `passthrough`, reads
+  forward the client token / are anonymous (no Écluse read credential); the
+  `service` / `delegated-cache` read provider is wired by **S44**. — _access-model.md, configuration.md#outbound-registry-credentials_
 - [ ] End-to-end integration test: a request through an in-process Écluse with a
   ministack queue + a stub npm registry exercises packument-filter, tarball-gate,
   enqueue, and worker fetch→verify→publish. — _cloud-backends.md#testing_
