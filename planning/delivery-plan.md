@@ -187,6 +187,7 @@ owes also owes a deterministic `U`/`I` test (see [Testing Strategy](../docs/test
 | [S32](slices/S32-launch-docs.md) | Launch docs & deployment runbook | S20 | — |
 | [S41](slices/S41-image-runtime-smoke.md) | Image runtime smoke — distroless `docker run` + real proxied fetch (`dlopen`/NSS verification) — _defence-in-depth; low priority_ | S20 | — |
 | [S42](slices/S42-spdx-license-headers.md) | Per-file SPDX license headers (REUSE-style) + new-file lint — _housekeeping; tree-wide sweep, run at a quiet point_ | — | — |
+| [S46](slices/S46-dockerhub-org-account.md) | Docker Hub org account + repo-scoped publish token (retire account-wide personal PAT) — _accepted risk pre-MVP; harden before GA_ | — | — |
 
 ### M9 — Performance benchmarking (informational; never gates)
 
