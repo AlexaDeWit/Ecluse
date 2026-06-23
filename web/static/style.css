@@ -81,7 +81,10 @@ img { max-width: 100%; }
 
 /* Landing page */
 .hero { text-align: center; padding: 3rem 0 1rem; }
-.hero img { height: 64px; }
+.hero-art {
+  display: block; width: 100%; max-width: 40rem; height: auto;
+  margin: 0 auto 1.5rem; border: 1px solid var(--border); border-radius: 12px;
+}
 .hero h1 { border: none; margin-bottom: 0; }
 .hero .lead { color: var(--muted); font-size: 1.15rem; max-width: 34rem; margin: 0.5rem auto 0; }
 .cards {
