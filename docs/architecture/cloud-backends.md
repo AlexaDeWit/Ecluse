@@ -68,6 +68,15 @@ distinct from the server's HTTP readiness, so that the single process's health
 reflects a stalled worker today and a future standalone worker binary has its own
 liveness/readiness probe.
 
+The worker is the consumer of the composition root's **publish-side
+`RegistryClient`**: it `publishArtifact`s approved packages to the mirror target
+through it, paired with the global [`CredentialProvider`](#credential-provider) for
+the bearer token. That handle is resolved **per ecosystem** at the composition root
+— the same `ecosystem → RegistryClient` resolution the mounts are keyed by. The
+request serve path does **not** share it: each packument leg builds its own per-leg
+client over the shared HTTP manager (two upstreams, per-leg credentials), so the
+handle is **publish-side only**.
+
 ## Cloud Backends
 
 Écluse couples to a cloud provider in exactly **two handles**, both records of

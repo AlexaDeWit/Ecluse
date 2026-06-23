@@ -28,11 +28,11 @@ npm proxy.
   `newCodeArtifactProvider` or `static` (`MIRROR_TARGET_TOKEN`) — storing the
   resulting handle records in `Env`. Nothing downstream knows which backend it holds.
   (The generic `ecosystem → RegistryClient + classifier + bindingPrefix → MountBinding`
-  resolution is delivered by the **base-hardening track** — [D5](../design-queue.md);
+  resolution is delivered by the **base-hardening track** (D5);
   S20 layers AWS backend selection on top of it.) —
   _cloud-backends.md#handles-records-of-functions, configuration.md#outbound-registry-credentials_
 - [ ] **Credential providers are process-global; mounts reference them**
-  ([base-hardening D4](../design-queue.md)): the composition root builds the
+  (base-hardening D4): the composition root builds the
   provider(s) **once** (a single container task role in the common case) and each
   mount *names* which it draws on — always a mirror-target write provider; under the
   default `passthrough`, reads forward the client token / are anonymous (no Écluse

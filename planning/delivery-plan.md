@@ -100,8 +100,8 @@ launch docs + release-hardening tail (M8); the capability manifest (S34 / S35); 
 the informational benchmark track (M9).
 
 > **Base-hardening before S15.** The config / mount / credential / Reader-context
-> generalization decided in [`design-queue.md`](design-queue.md) (D1–D6) is in
-> active implementation ahead of S15, bringing the merged code into line with the
+> generalization decided across the **base-hardening track** (D1–D6) is now
+> landed ahead of S15, bringing the merged code into line with the
 > already-rendered architecture: ecosystem-keyed mounts with a derived prefix; the
 > `MountRegistries` role record; process-global credential providers a mount
 > *references*; and the `ReaderT RequestCtx IO` request hot path. Its **decision
@@ -295,9 +295,9 @@ see [Current state](#current-state-the-baseline-this-plan-builds-on). No feature
 slice is in review right now._
 
 _The active work is the **base-hardening track** (config / mount / credential /
-Reader-context generalization — [`design-queue.md`](design-queue.md) D1–D6), being
-implemented ahead of [S15](slices/S15-tarball-path.md) to bring the merged code into
-line with the already-rendered architecture; its decisions are final and it is not a
+Reader-context generalization — the **base-hardening track**, D1–D6), now landed
+ahead of [S15](slices/S15-tarball-path.md) and reconciled with the already-rendered
+architecture; its decisions are final and it is not a
 DAG slice. Once it lands, the critical path resumes at **S15** (tarball path), then
 **M4** (AWS)._
 

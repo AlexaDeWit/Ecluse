@@ -27,6 +27,15 @@ a supervised concurrent thread, split-ready.
   `dist.integrity`** → `publishArtifact` (bearer from `CredentialProvider`) → `ack`.
   A **hash mismatch fails the job (no publish)** and alarms — a tampered artifact
   never enters the private upstream. — _cloud-backends.md#mirror-queue_
+- [ ] **Wire the publish-side `RegistryClient`** — the deferred tail of the
+  per-ecosystem composition-root wiring (D5; the *serve* side landed in
+  [#144](https://github.com/AlexaDeWit/Ecluse/pull/144)). Resolve the configured
+  publish client **per ecosystem** (the mirror-target endpoint paired with the global
+  `CredentialProvider`) at the composition root, replacing the refusing
+  `Env.envRegistry` placeholder (`unconfiguredRegistry`). `envRegistry` is currently
+  consumed by nothing — the serve path builds its own per-leg clients — so this slice
+  is its first real consumer and retires/repurposes the single global slot. —
+  _cloud-backends.md#process-model_
 - [ ] **Idempotent publish**: a redelivered job whose version already exists is
   treated as success (S08's 409-is-success). — _cloud-backends.md#mirror-queue_
 - [ ] **No re-running rules** in the worker (gated at serve time); retry-is-don't-ack
@@ -41,7 +50,9 @@ a supervised concurrent thread, split-ready.
 **File scope.**
 - `src/Ecluse/Worker.hs` — `runWorker`, the consume loop, integrity verification, heartbeat.
 - `src/Ecluse/Env.hs` — worker heartbeat handle (additive).
-- `src/Ecluse.hs` — run server+worker concurrently (additive to S12).
+- `src/Ecluse.hs` — run server+worker concurrently (additive to S12); resolve the
+  per-ecosystem publish `RegistryClient` from config and retire the single global
+  `envRegistry` placeholder.
 - `test/unit/Ecluse/WorkerSpec.hs` — loop logic with in-memory queue + WAI-stub upstream + fake publish: verify-fail→no-publish→no-ack, idempotent-success, heartbeat.
 - `test/integration/Ecluse/WorkerSpec.hs` — end-to-end against ministack queue + a WAI/Verdaccio mirror stub.
 
@@ -54,3 +65,11 @@ tarball in memory). The npm publish protocol is the same regardless of cloud (ma
 registry = npm endpoint + token), so there is no per-cloud publish path. Worker
 liveness must surface a stall (single-process health reflects a stalled worker today;
 a future standalone binary keeps its own probe).
+
+**Deferred composition wiring (from [#144](https://github.com/AlexaDeWit/Ecluse/pull/144)).**
+The per-ecosystem composition root wired the *serve* side (each mount's
+`PackumentDeps`); the *publish* side — a configured `RegistryClient` per ecosystem —
+was deliberately left to this slice, the worker being its only consumer. Today
+`Env.envRegistry` is a single global refusing placeholder, so this slice resolves it
+from config and retires the single global slot — the deferred D5 tail of the
+per-ecosystem composition-root work.

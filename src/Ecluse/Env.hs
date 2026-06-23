@@ -51,8 +51,13 @@ header for the no-SDK and sole-composition-root invariants it upholds.
 -}
 data Env = Env
     { envRegistry :: RegistryClient
-    {- ^ The registry-protocol handle (fetch\/publish\/parse). One npm client is
-    reused across every cloud, since protocol and auth are orthogonal axes.
+    {- ^ The registry-protocol handle the mirror __worker__ publishes approved
+    packages through. The request serve path does __not__ read it: each upstream leg
+    of a packument merge builds its own client over 'envManager' (two upstreams, with
+    per-leg credentials), so this slot is the __publish side__. One npm client serves
+    every cloud, since protocol and auth are orthogonal axes; until a backend is
+    configured behind it the slot is a refusing placeholder (see
+    'Ecluse.unconfiguredRegistry').
     -}
     , envQueue :: MirrorQueue
     {- ^ The mirror-queue handle: the durable hand-off from the request path to the
