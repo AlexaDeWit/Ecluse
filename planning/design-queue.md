@@ -34,21 +34,11 @@ layer into an adapter renderer. Several threads below build on this: **D5 shrank
 to deriving the prefix from the ecosystem and flowing the ecosystem through the
 binding and the config mount, and **D1 resolved** against it (see Resolved, below).
 
-Threads are worked **one at a time**; D1 (the spine) is resolved, so **D2 is next**.
+Threads are worked **one at a time**; D1 and D2 are resolved, so **D3 is next**.
 
 ### Item 1 — config: per-ecosystem generalization
 
-> **D1 is resolved** — see [Resolved](#resolved). Outstanding threads: D2–D5.
-
-**D2 — Registry topology generalization.** _(depends on D1)_
-`RegistryTuple {private, public, mirror}` reads as npm-shaped but the three are
-**architectural roles** every ecosystem has. The genuinely ecosystem-variant axis
-is narrower: the **artifact/files host** (npm often co-located; PyPI splits to
-`files.pythonhosted.org`; gems serves `.gem` separately — cf. the planned
-`PROXY_RESPECT_UPSTREAM_TARBALL_HOST` knob). Proposal: keep the three-role tuple,
-lift the **artifact-host** out as a first-class per-role coordinate, bind the
-adapter per-mount. Protocol/metadata shape (packument vs PEP 503 simple-index vs
-compact-index) stays the adapter's concern, not the topology's. — **Status: queued.**
+> **D1 and D2 are resolved** — see [Resolved](#resolved). Outstanding threads: D3–D5.
 
 **D3 — Rule vocabulary per ecosystem.** _(depends on D1)_
 The agnostic domain model already did most of the work: `AllowIfPublishedBefore`
@@ -72,8 +62,13 @@ per-mount. `AWS_REGION` / `GOOGLE_CLOUD_PROJECT` scope that ambient identity and
 in `Env`, keyed by cloud. What is **per-mount** is only the *methodology*: the
 [credential strategy](../docs/architecture/access-model.md) and which backend a
 mount's mirror-write (and `service`/`delegated-cache` read) draws from —
-"abstracted mount-specific consumers, concrete global providers." The genuinely
-per-mount *coordinate* is the target/queue identifier a mount writes to
+"abstracted mount-specific consumers, concrete global providers." In practice those
+providers very likely **collapse to one**: Écluse runs under a single container task
+role (AWS) / workload identity (GCP), so the mirror-write and any
+`service`/`delegated-cache` read resolve to the **same** identity — the service acts
+as one consistent entity, and the per-mount credential *selection* usually just
+points back at it. The genuinely per-mount *coordinate* is the target/queue
+identifier a mount writes to
 (`mtUrl` / `MIRROR_QUEUE_URL`), not the auth that reaches it. Cross-cuts **D6**: the
 provider's token-refresh **state** (the minted short-lived token and its expiry) is
 global mutable state — a `TVar` in `Env`, one per provider. _(Supersedes the earlier
@@ -126,3 +121,19 @@ and [`configuration.md`](../docs/architecture/configuration.md#configuration).
 `Ecosystem` on the declarative mount, the `ecosystem → mount` keying, and the
 ecosystem-derived `bindingPrefix`. Not built yet — `Ecluse.hs` still hard-codes
 `/npm` and `Ecluse.Config` still keys by `MountPrefix`.
+
+**D2 — Registry topology.** _(resolved 2026-06-23)_
+**Decision:** the topology is exactly **three architectural roles** — private
+upstream, public upstream, mirror target — there for the security/flow design, not
+npm-specific. Modelled as a **record of named roles, not a positional tuple** (the
+code type is already a record; the fix is the name). Two roles **may coincide**: the
+private upstream and the mirror target are permitted to be the same registry (a
+consumer flow choice; CodeArtifact upstream-folding supports it) — and the
+**credential identity** behind them very likely coincides too (see D4: a single
+container task role). The **artifact/files host is *not* a topology coordinate**: it
+is discovered from the upstream response and governed by the egress policy
+(`PROXY_RESPECT_UPSTREAM_TARBALL_HOST`, S40).
+**Rendered into:** [`hosting.md` → Mounts](../docs/architecture/hosting.md#mounts);
+registry-model.md already carried the role table and the roles-may-coincide note.
+**Code still owing** (hardening slice): rename `RegistryTuple` → a structural name
+(e.g. `MountRegistries`); align the `S03` slice prose when the rename lands.
