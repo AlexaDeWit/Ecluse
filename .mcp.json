@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "hls": {
+      "type": "stdio",
+      "command": "bash",
+      "args": [
+        "-c",
+        "exec nix develop .#mcp --command mcp-language-server -workspace \"$PWD\" -lsp haskell-language-server-wrapper -- --lsp"
+      ]
+    }
+  }
+}
