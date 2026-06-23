@@ -126,5 +126,58 @@ regression versus the PR base, within a 1% threshold) and `codecov/patch`
 the project status stays on no-regression so the baseline ratchets up as
 well-covered changes land). Both knobs live in [`codecov.yml`](../codecov.yml).
 
+### Coverage gates behaviour, not boilerplate
+
+The 95% patch bar guards **hand-written logic and branches** — where regressions
+hide. It is not a tax on every generated token, and three rules keep it honest.
+
+**Don't test a derived instance for its laws.** A `deriving stock (Eq, Show, Ord)`
+is lawful by construction; a test that merely exercises it catches a GHC bug, not
+ours. A `partial` or uncovered derived line is an **accepted partial** — note it in
+the PR and move on. (Likewise a genuinely-unreachable branch behind the
+[STYLE §10](../STYLE.md) `error`-escape-hatch: total by construction, accepted.)
+
+**No coverage theater.** Never add a test whose only purpose is to colour a line —
+`show x \`shouldSatisfy\` (not . null)` pins nothing and trains the wrong reflex.
+This is the *no tautological assertions* bar applied to coverage: a test states a
+behaviour or it should not exist. Colouring a derived line green is worse than
+leaving it `partial`.
+
+**But guard a derivation that encodes a load-bearing decision.** A derived instance
+is lawful, yet the *specific* behaviour it picks can be wrong — and the choice rides
+on declaration structure, invisible to the compiler and to
+`-Wmissing-deriving-strategies`, so a later "cosmetic" refactor can silently move a
+contract. Three axes, one discriminator:
+
+- **Order — `Ord`/`Enum`/`Bounded`.** Derived order is lexicographic by *field*
+  (products) or *constructor* (sums) declaration order; reordering them silently
+  changes it. When the domain depends on the *specific* order (severity, priority,
+  ranges), pin it with a `sort`/`compare` assertion, or route ordering through a
+  function. `Version` and `PrecededRule` deliberately do **not** derive `Ord` —
+  their order is law-bearing — and `compareVersions` is property-tested against the
+  differential oracles above.
+- **Equality membership — `Eq`/`Ord`.** Derived equality folds in *every* field;
+  sometimes one must be excluded. `PackageName` hand-writes `Eq`/`Ord` over a
+  canonical key so the display form never affects identity — a derived instance
+  there would be a latent bug.
+- **Wire contract — `ToJSON`/`FromJSON`.** A derived JSON instance couples the
+  external wire shape to the record's structure, so a field rename or re-nesting is a
+  silent breaking change for clients we cannot recompile. For an **owned,
+  externally-observable** response, guard it — a golden snapshot of the encoded bytes
+  plus a schema round-trip (the
+  [OpenAPI contract-drift controls](architecture/api-surface.md#contract-drift-controls):
+  `validateToJSON`, the golden manifest), and decode-against-real-fixtures on the
+  input side. Better
+  still, design the coupling away: the served packument relays the **raw upstream
+  `Value`**, edited in place
+  ([decision vs served surface](architecture/registry-model.md#decision-surface-vs-served-surface)),
+  and the config decoders are hand-written and strict — neither drifts with a refactor.
+
+The discriminator is always: **does an external party or a domain rule depend on the
+*specific* shape, or only that *some* instance exists?** An `Ord` used only as a
+`Map`/`Set` key needs no test — any consistent order works; the same `Ord` used to
+sort by severity does. And prefer designing the coupling away over testing a fragile
+derivation — a test on a still-fragile derivation is the weaker guard.
+
 **References:** [testcontainers](https://hackage.haskell.org/package/testcontainers) (Haskell, GHC 9.10-compatible) · [ministack](https://github.com/ministackorg/ministack) (local AWS emulator, image `ministackorg/ministack`, port 4566) · [Pub/Sub emulator](https://cloud.google.com/pubsub/docs/emulator) (local GCP emulator, default port 8085).
 
