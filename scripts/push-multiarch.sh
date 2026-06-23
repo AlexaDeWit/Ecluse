@@ -1,18 +1,21 @@
 #!/usr/bin/env bash
 #
-# Assemble the two per-arch Nix-built OCI archives into ONE multi-arch manifest
-# list and push it under a single canonical immutable tag — so a consumer pulls
+# Assemble the two per-arch Nix-built OCI archives into ONE multi-arch image index
+# and push it under a single canonical immutable tag — so a consumer pulls
 # `<image>:<tag>` and the registry serves amd64 or arm64 automatically, with no
 # lingering per-arch tags. The two platform images land in the registry as
-# digest-addressed blobs referenced by the index, not as named tags. The list is
-# built LOCALLY (podman) from the archives, so only the one canonical tag is
-# pushed — unlike `docker buildx imagetools create`, which would need the platform
-# images pre-pushed under their own (permanent, since tags are immutable) tags.
+# digest-addressed blobs referenced by the index, not as named tags.
 #
-# Run by release.yml after the matrix build; needs skopeo, podman, jq (the
+# The assembly is fully DAEMONLESS and rootless-safe: skopeo writes each archive
+# into an on-disk OCI image layout (plain files — no container engine, no
+# containers-storage, so no user namespace, which is what ubuntu-24.04's AppArmor
+# blocks for /nix/store binaries), and `regctl` (regclient) builds the index from
+# those layouts and copies it to the registry. No podman, no sudo.
+#
+# Run by release.yml after the matrix build; needs skopeo, regctl, jq (the
 # `.#release` shell) and an active Docker Hub login (release.yml's
-# docker/login-action writes ~/.docker/config.json, which podman/skopeo read).
-# See docs/architecture/release-supply-chain.md → "Multi-architecture image".
+# docker/login-action writes ~/.docker/config.json, which both skopeo and regctl
+# read). See docs/architecture/release-supply-chain.md → "Multi-architecture image".
 #
 # Emits the resolved digests to stdout as `key=value` lines (index-digest,
 # amd64-digest, arm64-digest) — and nothing else — so release.yml can append them
@@ -26,38 +29,28 @@ tag="$2"
 amd64_archive="$3"
 arm64_archive="$4"
 
-# A deterministic, fuse-free, rootless-safe local store shared by skopeo and
-# podman. vfs needs no overlay/fuse support (robust on any CI runner); the images
-# are tiny (~23 MB) so its copy-up cost is irrelevant. CONTAINERS_STORAGE_CONF is
-# honoured by skopeo and podman alike.
 workdir="$(mktemp -d)"
 trap 'rm -rf "$workdir"' EXIT
-export CONTAINERS_STORAGE_CONF="$workdir/storage.conf"
-cat >"$CONTAINERS_STORAGE_CONF" <<EOF
-[storage]
-driver = "vfs"
-graphroot = "$workdir/graph"
-runroot = "$workdir/run"
-EOF
+layout="$workdir/layout"
 
-# Import each per-arch archive (Nix builds them with tag=null) under a known
-# local name. Tool output to stderr so stdout stays clean for the digest lines.
-skopeo copy "docker-archive:${amd64_archive}" "containers-storage:localhost/ecluse-stage:amd64" >&2
-skopeo copy "docker-archive:${arm64_archive}" "containers-storage:localhost/ecluse-stage:arm64" >&2
+# Each per-arch archive (Nix builds them with tag=null) → an entry in a shared
+# on-disk OCI image layout. Tool output to stderr so stdout stays clean for the
+# digest lines.
+skopeo copy "docker-archive:${amd64_archive}" "oci:${layout}:amd64" >&2
+skopeo copy "docker-archive:${arm64_archive}" "oci:${layout}:arm64" >&2
 
-# Build the index locally and push ONLY the canonical tag (--all pushes both
-# platform images plus the index that references them).
-list="ecluse-multiarch:${tag}"
-podman manifest create "$list" >&2
-podman manifest add "$list" containers-storage:localhost/ecluse-stage:amd64 >&2
-podman manifest add "$list" containers-storage:localhost/ecluse-stage:arm64 >&2
-podman manifest push --all "$list" "docker://${image}:${tag}" >&2
+# Build the multi-arch index from the two single-platform layout entries (regctl
+# reads each entry's image config for its platform), then copy the index + both
+# platform images to the registry under the single canonical tag.
+regctl index create "ocidir://${layout}:multi" \
+  --ref "ocidir://${layout}:amd64" \
+  --ref "ocidir://${layout}:arm64" >&2
+regctl image copy "ocidir://${layout}:multi" "${image}:${tag}" >&2
 
-# Recover the digests from the pushed index for the attest steps: the index
-# itself (what `gh attestation verify oci://IMAGE:TAG` resolves to) and each
-# platform manifest it references.
-raw="$(skopeo inspect --raw "docker://${image}:${tag}")"
-index_digest="$(skopeo inspect "docker://${image}:${tag}" --format '{{.Digest}}')"
+# Recover the digests for the attest steps: the index itself (what
+# `gh attestation verify oci://IMAGE:TAG` resolves to) and each platform manifest.
+index_digest="$(regctl manifest head "${image}:${tag}")"
+raw="$(regctl manifest get "${image}:${tag}" --format raw-body)"
 amd64_digest="$(printf '%s' "$raw" | jq -r '.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64") | .digest')"
 arm64_digest="$(printf '%s' "$raw" | jq -r '.manifests[] | select(.platform.os == "linux" and .platform.architecture == "arm64") | .digest')"
 

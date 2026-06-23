@@ -287,17 +287,21 @@
 
         # Lean shell for the release workflow. release.yml enters it with
         # `nix develop .#release`. It carries the release tooling (skopeo, sbomnix)
-        # plus the multi-arch assembly tools: `podman` builds the manifest list
-        # locally from the two per-arch Nix archives and pushes ONE canonical
-        # `:X.Y.Z` tag (an OCI index over both platform images — no lingering
-        # per-arch tags, the way `docker buildx imagetools create` would leave
-        # them), and `jq` parses the pushed index to recover the per-platform
-        # digests the attest-actions bind to. Kept out of the default human shell
-        # so podman's closure doesn't bloat everyday `nix develop`. See
-        # scripts/push-multiarch.sh and docs/architecture/release-supply-chain.md.
+        # plus the multi-arch assembly tools. The assembly is deliberately
+        # DAEMONLESS: skopeo writes each per-arch Nix archive into an on-disk OCI
+        # image layout (plain files — no container engine, no user namespace, which
+        # ubuntu-24.04's AppArmor blocks for /nix/store binaries), and `regctl`
+        # (regclient) builds the index from those layouts and copies it to the
+        # registry as ONE canonical `:X.Y.Z` tag (an OCI index over both platform
+        # images — no lingering per-arch tags, the way `docker buildx imagetools
+        # create` would leave them). `jq` parses the pushed index for the
+        # per-platform digests the attest-actions bind to. (regctl replaced podman
+        # here: podman needs rootless containers-storage, whose user namespace the
+        # runner's AppArmor denies.) See scripts/push-multiarch.sh and
+        # docs/architecture/release-supply-chain.md → "Multi-architecture image".
         devShells.release = pkgs.mkShell (shellEnv // {
           name = "ecluse-release";
-          buildInputs = [ pkgs.bashInteractive pkgs.podman pkgs.jq ] ++ releaseInputs;
+          buildInputs = [ pkgs.bashInteractive pkgs.regclient pkgs.jq ] ++ releaseInputs;
         });
 
         # PoC LSP<->MCP bridge shell (HLS + mcp-language-server). Opt-in only: not

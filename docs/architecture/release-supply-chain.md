@@ -64,15 +64,25 @@ GHC cross-compilation (fragile with Template Haskell) entirely. The build legs a
 **credential-free**: each only uploads its image archive and per-arch SBOM as a
 workflow artifact.
 
-A single privileged `publish` job then assembles the manifest list **locally**
-from the two archives ([`scripts/push-multiarch.sh`](../../scripts/push-multiarch.sh):
-`skopeo` imports each archive, `podman manifest` builds the index) and pushes
-**only the one canonical tag**. Local assembly is deliberate: building the list
-from registry references (e.g. `docker buildx imagetools create`) would require the
-platform images to be pre-pushed under their own tags, which — because the repo's
-tags are immutable and the push token has no delete scope — would persist forever.
-Assembling locally pushes the index plus both platform images as digest-addressed
-blobs under the single tag, leaving no per-arch tags behind.
+A single privileged `publish` job then assembles the index **locally** from the
+two archives ([`scripts/push-multiarch.sh`](../../scripts/push-multiarch.sh)) and
+pushes **only the one canonical tag**. The assembly is **daemonless**: `skopeo`
+writes each archive into an on-disk **OCI image layout** (plain files), and
+[`regctl`](https://regclient.org) (regclient) builds the index from those layouts
+and copies it — index plus both platform images, as digest-addressed blobs — to the
+registry under the single tag. Two design choices are deliberate:
+
+- **Local assembly, not registry-side.** Building the list from registry
+  references (e.g. `docker buildx imagetools create`) would require the platform
+  images to be pre-pushed under their own tags, which — because the repo's tags are
+  immutable and the push token has no delete scope — would persist forever. Local
+  assembly leaves **no per-arch tags behind**.
+- **Daemonless (OCI layouts + regctl), not a container engine.** A rootless
+  container engine (podman/buildah) needs a local `containers-storage`, whose
+  **user namespace ubuntu-24.04's AppArmor denies** for binaries running from
+  `/nix/store` — the publish job would fail with `unshare(...): Operation not
+  permitted`. OCI layouts are just files and `regctl` is pure-Go over HTTP, so the
+  whole path avoids user namespaces (and any `sudo`/AppArmor workaround) entirely.
 
 Centralising the push in one job also keeps the registry credential in exactly one
 place (the protected `release` environment), off the matrix build legs — a small
