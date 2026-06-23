@@ -24,6 +24,7 @@ to the internal [architecture documents](docs/architecture.md), which explain th
   - [Secrets](#secrets)
 - [Connecting your clients](#connecting-your-clients)
 - [Securing network egress (required)](#securing-network-egress-required)
+- [Locking down CI egress (recommended)](#locking-down-ci-egress-recommended)
 - [Rule policy](#rule-policy)
 - [Operating Écluse](#operating-écluse)
 - [Planned controls](#planned-controls)
@@ -131,18 +132,21 @@ upstreams are then credentialled):
 
 ## Securing network egress (required)
 
-Écluse's built-in outbound guards — a host **allowlist**, an **internal-address
+Écluse makes outbound requests to the registries you point it at — that is its
+job — and some of the URLs it follows (a version's `dist.tarball`) are taken from
+upstream responses. As with any service that fetches on a client's behalf, the
+sensible posture is **least-privilege egress**, in two layers. Écluse provides the
+first in the application itself — a host **allowlist**, an **internal-address
 block** (loopback, link-local incl. the `169.254.169.254` metadata endpoint, the
 unspecified `0.0.0.0/8` / `::` range, RFC1918, and CGNAT), and **response-size
-bounds** — are an application-layer **backstop, not a substitute** for fencing
-egress at the platform. A proxy sits in a privileged network position; a guard bug
-or an unforeseen fetch path must not be able to become an SSRF into your cloud
-control plane. **You are responsible for constraining where the proxy can reach.**
-At minimum:
+bounds** — and you provide the second at the platform, the standard defence-in-depth
+for an outbound-fetching service. With both in place, no single guard bug or unusual
+fetch path can reach somewhere you didn't intend. At minimum:
 
 - **Block the instance-metadata endpoint.** Require IMDSv2 and set the hop limit
   to 1 (AWS `httpPutResponseHopLimit: 1`), or deny egress to `169.254.169.254`
-  outright. This removes the single highest-value SSRF target.
+  outright — the metadata endpoint is the most sensitive internal target, so close
+  it first.
 - **Default-deny egress, allow only your registries + mirror target.**
   - **AWS** — security-group egress rules / network ACLs to the upstream and
     mirror CIDRs; deny RFC1918 and link-local.
@@ -156,8 +160,37 @@ At minimum:
   credential (and, under the `service` / `delegated-cache` strategies, the
   private-read credential), nothing more.
 
-The reasoning behind these — and why the application guards alone are not enough —
-is in [Security: Outbound-Request & Input-Validation Invariants](docs/architecture/security.md#network-egress-is-a-shared-responsibility).
+The rationale — and why both the application guards and the platform controls are
+worth having — is in [Security: Outbound-Request & Input-Validation Invariants](docs/architecture/security.md#network-egress-is-a-shared-responsibility).
+
+## Locking down CI egress (recommended)
+
+The controls above secure Écluse's *own* outbound path. This one is about your
+*consumers'* — and it is the step that turns Écluse from a proxy clients are *asked*
+to use into the registry they *can only* reach.
+
+If you control your CI environment, **deny CI runners outbound access to the public
+registries** (`registry.npmjs.org`, and the equivalents for other ecosystems) and
+let them reach **only Écluse** and your own internal services. Point the runners'
+package managers at Écluse as their registry.
+
+The result is safe-by-default behaviour. A job that is misconfigured — a stray
+`--registry` flag, a committed `.npmrc` pointing at the public registry, a tool that
+ignores the settings you shipped — does not quietly bypass the policy: it simply
+**cannot reach the public registry, so it fails** instead of pulling an unvetted
+package. You stop depending on every job being configured correctly, and depend only
+on the network, which you administer centrally.
+
+This is what makes the deny-by-default policy *unbypassable* rather than merely
+*default*. Per-project package-manager and version-manager setups (npm/pnpm config,
+nvm, Nix shells, containers) can each override what you ship to a machine — but none
+of them can route around a network that only reaches Écluse. See
+[MOTIVATION → The bar](MOTIVATION.md#the-bar-a-chokepoint-you-cant-step-around) for
+why this is the layer that holds.
+
+The same idea can extend to developer workstations — for example, allowing tarball
+fetches only through Écluse on a managed or zero-trust network while leaving registry
+browsing and search open — though workstations are usually a softer control than CI.
 
 ## Rule policy
 

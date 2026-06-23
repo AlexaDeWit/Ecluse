@@ -104,12 +104,12 @@ internal address — which the pure layer cannot see).
 
 ## Network egress is a shared responsibility
 
-Écluse's outbound guards are **necessary but not sufficient**. They are an
-application-layer backstop; they do not replace the deployment's own egress
-controls, and a defence-in-depth posture assumes both. Operators **must** constrain
-where the proxy's network namespace can reach, so that a guard bug or an
-unforeseen fetch path cannot become an SSRF into the cloud control plane. Recommended,
-in rough order of leverage:
+Écluse's outbound guards are the **primary, application-layer** control; a
+defence-in-depth posture pairs them with the deployment's own egress controls — the
+standard arrangement for any service that fetches on a client's behalf. Constraining
+where the proxy's network namespace can reach means no single guard bug or
+unforeseen fetch path can turn into a request you did not intend — the classic case
+being an SSRF to the cloud metadata endpoint. Recommended, in rough order of leverage:
 
 - **Block the instance-metadata endpoint at the platform.** Require IMDSv2 and set
   the hop limit to 1 (AWS `httpPutResponseHopLimit: 1`), or deny `169.254.169.254`
