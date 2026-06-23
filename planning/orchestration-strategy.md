@@ -321,6 +321,12 @@ Escalations arrive **decision-ready**:
   packument merge; lossless `Value` passthrough across filter/merge/serve), extract
   it into a single shared helper the slices call — duplicated invariant logic drifts
   and gets fixed N times.
+- **Surface decisions one at a time.** When several design questions are open at
+  once, the team lead does **not** front-load them all on the architect in one
+  message. They are recorded in [`design-queue.md`](design-queue.md) and brought
+  **one at a time**, lead-with-a-recommendation; the rest wait their turn. This
+  complements *escalate, don't guess* — surface proactively, but serialized, not in
+  a flood.
 - **"The term Seam" is retired.** The records-of-functions abstraction (`RegistryClient`,
   `MirrorQueue`, `CredentialProvider`) is **the Handle pattern**. Don't reintroduce
   "seam" — not even in the generic "integration boundary" sense, which re-muddies the
@@ -330,5 +336,7 @@ Escalations arrive **decision-ready**:
 
 ## What lives under `planning/`
 
-This strategy now; the concrete **delivery plan** (the PR DAG) once the
-architecture is finalized. See [README](README.md).
+This strategy; the concrete **delivery plan** (the PR DAG) once the architecture is
+finalized; and [`design-queue.md`](design-queue.md), the holding area for design
+decisions raised but not yet resolved (worked one at a time, then retired into
+`docs/` and a slice). See [README](README.md).
