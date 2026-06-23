@@ -83,6 +83,11 @@ module Ecluse (
     npmServerConfig,
     mountBindingFor,
 
+    -- * Composition glue (exposed for direct testing)
+    mirrorWriteProvider,
+    orExit,
+    BootAborted (..),
+
     -- * Default handles
     unconfiguredRegistry,
     unconfiguredCredentials,
@@ -107,7 +112,7 @@ import Ecluse.Composition qualified as Composition
 import Ecluse.Config (
     ConfigDoc,
     CredentialBackend (StaticCredential),
-    EnvConfig (cfgCacheMaxEntries, cfgCacheTtl, cfgHelpMessage, cfgLogFormat, cfgPort),
+    EnvConfig (cfgLogFormat, cfgPort),
     decodeDocument,
     parseEnv,
     renderEnvErrors,
@@ -125,9 +130,8 @@ import Ecluse.Registry.Npm.Route qualified as Npm
 import Ecluse.Registry.Npm.Serve (npmRenderer)
 import Ecluse.Server (MountBinding (..), ServerConfig (scPort), mkServerConfig)
 import Ecluse.Server qualified as Server
-import Ecluse.Server.Cache (CacheConfig (CacheConfig, cacheMaxEntries, cacheTtl), newMetadataCache)
+import Ecluse.Server.Cache (newMetadataCache)
 import Ecluse.Server.Context (PackumentDeps)
-import Ecluse.Server.Response (mkHelpMessage)
 
 {- | Start Écluse: the entry point the @ecluse@ executable runs (see "Main").
 
@@ -147,12 +151,11 @@ run = do
     env <- parseEnv >>= orExit renderEnvErrors
     mDoc <- loadDocument
     providers <- initCredentialProviders env
-    let help = mkHelpMessage <$> cfgHelpMessage env
-    bindings <- orExit (T.unlines . map renderBootError) (planMounts mountBindingFor getCurrentTime help providers env mDoc)
+    bindings <- orExit (T.unlines . map renderBootError) (planMounts mountBindingFor getCurrentTime providers env mDoc)
     let serverConfig = (mkServerConfig bindings){scPort = cfgPort env}
     manager <- HTTP.newManager tlsManagerSettings
     queue <- newInMemoryQueue
-    metadataCache <- newMetadataCache (cacheConfigFor env)
+    metadataCache <- newMetadataCache (Composition.cacheConfigFor env)
     logEnv <- newLogEnv (cfgLogFormat env) (Environment "production")
     withEnv unconfiguredRegistry queue (mirrorWriteProvider providers) manager metadataCache logEnv (runServices serverConfig)
 
@@ -171,16 +174,6 @@ loadDocument =
         Nothing -> pure Nothing
         Just blob -> Just <$> orExit ("PROXY_CONFIG: " <>) (decodeDocument (encodeUtf8 blob))
 
-{- The metadata-cache tunables drawn from the validated environment layer (TTL and
-the entry bound), so a deployment's cache settings flow from config rather than the
-built-in defaults. -}
-cacheConfigFor :: EnvConfig -> CacheConfig
-cacheConfigFor env =
-    CacheConfig
-        { cacheTtl = cfgCacheTtl env
-        , cacheMaxEntries = cfgCacheMaxEntries env
-        }
-
 {- The process-global mirror-write credential provider stored in 'Env' for the
 worker. In the collapses-to-one common case there is a single provider; the
 @static@ leaf is selected when a static write token is configured, else the
@@ -192,15 +185,24 @@ mirrorWriteProvider :: CredentialProviders -> CredentialProvider
 mirrorWriteProvider providers =
     fromMaybe unconfiguredCredentials (Composition.lookupProvider StaticCredential providers)
 
-{- Exit the process with the rendered failure when a boot phase fails, otherwise
-yield its value. The aggregated failure block is written to stderr so an operator
-sees every problem from a single failed launch. -}
+{- | Raised to abort start-up after a boot phase has reported its aggregated
+failure to stderr. A distinct type — rather than a bare 'exitFailure' — so the
+abort is observable in a test without the process actually exiting; uncaught, it
+propagates to 'main' and the runtime exits non-zero, the operator-facing fail-fast.
+-}
+data BootAborted = BootAborted
+    deriving stock (Eq, Show)
+
+instance Exception BootAborted
+
+{- Report the rendered failure to stderr and abort the boot when a phase fails,
+otherwise yield its value. The aggregated failure block is written so an operator
+sees every problem from a single failed launch, then 'BootAborted' unwinds to
+'main'. -}
 orExit :: (e -> Text) -> Either e a -> IO a
 orExit render = \case
     Right a -> pure a
-    Left err -> do
-        TIO.hPutStrLn stderr (render err)
-        exitFailure
+    Left err -> TIO.hPutStrLn stderr (render err) >> throwIO BootAborted
 
 {- Run the server and the mirror worker concurrently over one composition-root
 'Env', the shape the single-process program uses. The two are independent (each

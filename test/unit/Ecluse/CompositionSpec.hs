@@ -1,12 +1,13 @@
 module Ecluse.CompositionSpec (spec) where
 
 import Data.Text qualified as T
-import Data.Time (UTCTime (UTCTime), fromGregorian)
+import Data.Time (NominalDiffTime, UTCTime (UTCTime), fromGregorian)
 import Test.Hspec
 
-import Ecluse (mountBindingFor)
+import Ecluse (mirrorWriteProvider, mountBindingFor)
 import Ecluse.Composition (
     BootError (..),
+    cacheConfigFor,
     composeBindings,
     initCredentialProviders,
     initializedBackends,
@@ -26,11 +27,12 @@ import Ecluse.Config (
  )
 import Ecluse.Credential (authSecret, currentToken, unSecret)
 import Ecluse.Ecosystem (Ecosystem (..))
+import Ecluse.Server.Cache (CacheConfig (cacheMaxEntries, cacheTtl))
 import Ecluse.Server.Context (
     MountBinding (bindingPackumentDeps, bindingPrefix),
     PackumentDeps (..),
  )
-import Ecluse.Server.Response (mkHelpMessage, unHelpMessage)
+import Ecluse.Server.Response (unHelpMessage)
 
 {- | Tests for the composition root's boot-time wiring. They exercise the two
 promises of the slice: a valid configuration produces served mount bindings with
@@ -43,6 +45,8 @@ nothing here opens a socket.
 spec :: Spec
 spec = do
     credentialProvidersSpec
+    mirrorWriteProviderSpec
+    cacheConfigSpec
     composeBindingsSpec
     bootErrorSpec
     renderSpec
@@ -94,7 +98,7 @@ mountDoc eco credential =
 planFrom :: EnvConfig -> Maybe ConfigDoc -> IO (Either [BootError] [MountBinding])
 planFrom env mDoc = do
     providers <- initCredentialProviders env
-    pure (planMounts mountBindingFor (pure fixedNow) Nothing providers env mDoc)
+    pure (planMounts mountBindingFor (pure fixedNow) providers env mDoc)
 
 -- ── credential providers ──────────────────────────────────────────────────────
 
@@ -125,6 +129,31 @@ credentialProvidersSpec = describe "initCredentialProviders" $ do
         -- resolve regardless of configuration.
         isJust (lookupProvider CodeArtifactCredential providers) `shouldBe` False
         isJust (lookupProvider AdcCredential providers) `shouldBe` False
+
+-- ── mirror-write credential selection ─────────────────────────────────────────
+
+mirrorWriteProviderSpec :: Spec
+mirrorWriteProviderSpec = describe "mirrorWriteProvider" $ do
+    it "selects the initialized static provider as the mirror-write credential" $ do
+        env <- expectEnv staticEnvVars
+        providers <- initCredentialProviders env
+        tok <- currentToken (mirrorWriteProvider providers)
+        unSecret (authSecret tok) `shouldBe` "mirror-write-token"
+
+    it "falls back to the empty placeholder when no provider is initialized" $ do
+        env <- expectEnv noTokenEnvVars
+        providers <- initCredentialProviders env
+        tok <- currentToken (mirrorWriteProvider providers)
+        unSecret (authSecret tok) `shouldBe` ""
+
+-- ── config-derived cache settings ─────────────────────────────────────────────
+
+cacheConfigSpec :: Spec
+cacheConfigSpec = describe "cacheConfigFor" $
+    it "maps the env cache tunables onto the metadata CacheConfig" $ do
+        env <- expectEnv (("METADATA_CACHE_TTL_SECONDS", "45") : ("METADATA_CACHE_MAX_ENTRIES", "256") : staticEnvVars)
+        cacheTtl (cacheConfigFor env) `shouldBe` (45 :: NominalDiffTime)
+        cacheMaxEntries (cacheConfigFor env) `shouldBe` 256
 
 -- ── config-driven serving ─────────────────────────────────────────────────────
 
@@ -158,11 +187,10 @@ composeBindingsSpec = describe "planMounts / composeBindings (config-driven serv
         -- Forces the remaining 'PackumentDeps' fields: the inbound token (from
         -- PROXY_AUTH_TOKEN), the injected clock ('pdNow'), and the operator help
         -- message — all wired by the composition root.
-        env <- expectEnv (("PROXY_AUTH_TOKEN", "edge-secret") : staticEnvVars)
+        env <- expectEnv (("PROXY_AUTH_TOKEN", "edge-secret") : ("PROXY_HELP_MESSAGE", "ask #platform") : staticEnvVars)
         providers <- initCredentialProviders env
         config <- expectConfig env Nothing
-        let help = Just (mkHelpMessage "ask #platform")
-        case composeBindings mountBindingFor (pure fixedNow) help providers config of
+        case composeBindings mountBindingFor (pure fixedNow) providers config of
             Right [binding] -> case bindingPackumentDeps binding of
                 Just deps -> do
                     fmap unSecret (pdInboundToken deps) `shouldBe` Just "edge-secret"
@@ -178,7 +206,7 @@ composeBindingsSpec = describe "planMounts / composeBindings (config-driven serv
         env <- expectEnv staticEnvVars
         providers <- initCredentialProviders env
         config <- expectConfig env Nothing
-        case composeBindings mountBindingFor (pure fixedNow) Nothing providers config of
+        case composeBindings mountBindingFor (pure fixedNow) providers config of
             Right bindings -> map bindingPrefix bindings `shouldBe` ["npm" :| []]
             Left errs -> expectationFailure ("unexpected boot errors: " <> show errs)
 

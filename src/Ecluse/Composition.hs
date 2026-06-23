@@ -43,6 +43,9 @@ module Ecluse.Composition (
     renderBootError,
     planMounts,
     composeBindings,
+
+    -- * Config-derived runtime settings
+    cacheConfigFor,
 ) where
 
 import Data.Map.Strict qualified as Map
@@ -66,8 +69,9 @@ import Ecluse.Config (
  )
 import Ecluse.Credential (AuthToken (..), CredentialProvider, mkSecret, staticProvider)
 import Ecluse.Ecosystem (Ecosystem, ecosystemName, prefixFor)
+import Ecluse.Server.Cache (CacheConfig (..))
 import Ecluse.Server.Context (MountBinding, PackumentDeps (..))
-import Ecluse.Server.Response (HelpMessage)
+import Ecluse.Server.Response (HelpMessage, mkHelpMessage)
 
 -- ── global credential providers ───────────────────────────────────────────────
 
@@ -164,14 +168,13 @@ this validation is pure of IO and unit-testable without a socket.
 planMounts ::
     (Ecosystem -> Maybe PackumentDeps -> Maybe MountBinding) ->
     IO UTCTime ->
-    Maybe HelpMessage ->
     CredentialProviders ->
     EnvConfig ->
     Maybe ConfigDoc ->
     Either [BootError] [MountBinding]
-planMounts resolveAdapter clock help providers env mDoc =
+planMounts resolveAdapter clock providers env mDoc =
     first (map PolicyBootError) (loadConfig env mDoc)
-        >>= composeBindings resolveAdapter clock help providers
+        >>= composeBindings resolveAdapter clock providers
 
 {- | Turn a validated 'Config' into the served 'MountBinding's, or the aggregated
 boot errors. For each mount, in ecosystem order: its credential reference must
@@ -182,17 +185,21 @@ served rather than the @501@ stub). Errors aggregate across every mount.
 composeBindings ::
     (Ecosystem -> Maybe PackumentDeps -> Maybe MountBinding) ->
     IO UTCTime ->
-    Maybe HelpMessage ->
     CredentialProviders ->
     Config ->
     Either [BootError] [MountBinding]
-composeBindings resolveAdapter clock help providers config =
+composeBindings resolveAdapter clock providers config =
     case partitionEithers (map bindingFor (Map.elems (configMounts config))) of
         ([], bindings) -> Right bindings
         (errs, _) -> Left (concat errs)
   where
     inboundToken :: Maybe Text
     inboundToken = cfgAuthToken (configEnv config)
+
+    -- The operator help message, derived from the environment layer like the
+    -- inbound token, so every mount's denials carry it.
+    helpMessage :: Maybe HelpMessage
+    helpMessage = mkHelpMessage <$> cfgHelpMessage (configEnv config)
 
     {- Resolve one mount to its binding, or the boot errors that block it. Both the
     credential reference and the adapter are checked even when one already failed,
@@ -230,7 +237,7 @@ composeBindings resolveAdapter clock help providers config =
                 , pdRules = mountPolicy mount
                 , pdInboundToken = mkSecret <$> inboundToken
                 , pdNow = clock
-                , pdHelp = help
+                , pdHelp = helpMessage
                 }
 
 -- The mount's externally-visible base path, derived from its ecosystem prefix
@@ -238,3 +245,16 @@ composeBindings resolveAdapter clock help providers config =
 -- relative path a client's registry endpoint maps onto.
 mountBasePath :: Ecosystem -> Text
 mountBasePath eco = "/" <> T.intercalate "/" (toList (prefixFor eco))
+
+-- ── config-derived runtime settings ───────────────────────────────────────────
+
+{- | The metadata-cache tunables drawn from the validated environment layer — its
+TTL and entry bound — so a deployment's cache settings flow from config rather than
+the built-in defaults (see "Ecluse.Server.Cache").
+-}
+cacheConfigFor :: EnvConfig -> CacheConfig
+cacheConfigFor env =
+    CacheConfig
+        { cacheTtl = cfgCacheTtl env
+        , cacheMaxEntries = cfgCacheMaxEntries env
+        }
