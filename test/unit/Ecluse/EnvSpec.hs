@@ -7,7 +7,7 @@ import Test.Hspec
 import UnliftIO (bracket, evaluate, timeout, try)
 import UnliftIO.Exception (StringException, throwString)
 
-import Ecluse (runServer, runWorker, unconfiguredCredentials, unconfiguredRegistry)
+import Ecluse (npmServerConfig, runServer, runWorker, unconfiguredCredentials, unconfiguredRegistry)
 import Ecluse.App (App, runApp)
 import Ecluse.Credential (
     AuthToken (..),
@@ -164,13 +164,13 @@ spec = do
                 Right () -> expectationFailure "expected the body's exception to propagate"
 
     describe "split-ready services" $ do
-        it "runServer over an Env serves (blocks) rather than returning" $ do
+        it "runServer over a ServerConfig and Env serves (blocks) rather than returning" $ do
             -- The server is now a real blocking listener: started under a short
             -- timeout it keeps serving until cancelled, so 'timeout' yields
             -- 'Nothing'. (The routing/meta/middleware behaviour itself is asserted
             -- socket-free in "Ecluse.ServerSpec".)
             env <- newTestEnv
-            timeout 100000 (runServer env) `shouldReturn` Nothing
+            timeout 100000 (runServer npmServerConfig env) `shouldReturn` Nothing
 
         it "runWorker over an Env returns (the stub consumes nothing yet)" $ do
             env <- newTestEnv
