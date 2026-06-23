@@ -81,6 +81,7 @@ library
     Ecluse.Registry.Npm.Serve
     Ecluse.Registry.Npm.Wire
     Ecluse.Rules
+    Ecluse.Rules.Effectful
     Ecluse.Rules.Types
     Ecluse.Security
     Ecluse.Server
@@ -152,6 +153,7 @@ test-suite ecluse-unit
     Ecluse.Registry.Npm.RouteSpec
     Ecluse.Registry.Npm.ServeSpec
     Ecluse.Registry.Npm.WireSpec
+    Ecluse.Rules.EffectfulSpec
     Ecluse.RulesSpec
     Ecluse.SecuritySpec
     Ecluse.ServerSpec

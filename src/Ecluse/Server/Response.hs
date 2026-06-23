@@ -71,7 +71,11 @@ import Data.Text qualified as T
 
 import Ecluse.Package (PackageDetails)
 import Ecluse.Rules (renderDecision, ruleName)
-import Ecluse.Rules.Types (Decision (Approved, Denied, DeniedByDefault))
+import Ecluse.Rules.Types (
+    Decision (Approved, ApprovedEffectful, Denied, DeniedByDefault, DeniedEffectful, Undecidable),
+    RetryAfter (..),
+    Transience (..),
+ )
 
 -- ── serve outcomes ───────────────────────────────────────────────────────────
 
@@ -119,30 +123,6 @@ data RejectReason
       Unavailable Transience
     deriving stock (Eq, Show)
 
-{- | Whether an 'Unavailable' condition is expected to resolve on its own.
-
-This is the single distinction the status mapping turns on: a transient cause
-(@WillResolve@) is worth retrying; a permanent or internal one (@WontResolve@) is
-not, so it must not be dressed up as a retryable @503@.
--}
-data Transience
-    = {- | Transient — a retry may succeed (upstream @5xx@\/@429@, an advisory
-      source briefly down). The optional 'RetryAfter' is the delay to suggest.
-      -}
-      WillResolve (Maybe RetryAfter)
-    | {- | Not expected to self-heal (an internal or parse error). Retrying
-      cannot help, so the request is a @500@, never a @503@.
-      -}
-      WontResolve
-    deriving stock (Eq, Show)
-
-{- | A @Retry-After@ delay, in whole seconds. A 'newtype' so a raw count of
-seconds is never confused with some other integer when it reaches the response
-header.
--}
-newtype RetryAfter = RetryAfter Int
-    deriving stock (Eq, Ord, Show)
-
 {- | The name of the rule that decided a refusal, carried for the audit trail and
 the denial body. A 'newtype' over the 'Ecluse.Rules.ruleName' text so a rule
 identity is not just any string.
@@ -155,17 +135,23 @@ and total.
 
 An 'Approved' decision admits; a 'Denied' or 'DeniedByDefault' decision rejects
 'ByPolicy', naming the deciding rule and carrying the human-readable
-'renderDecision' as the message. Only a denial rejects — an approval is never
-turned into a 'Rejection'.
+'renderDecision' as the message. An 'Undecidable' decision (a needed effectful rule
+could not be consulted) rejects as 'Unavailable', carrying its 'Transience' so the
+status mapping can choose @503@ vs @500@ — __fail-closed__, exactly as a denial
+removes a version, but flagged retryable when the cause may self-heal. Only an
+approval admits.
 -}
 serveDecisionOf :: PackageDetails -> Decision -> ServeDecision
 serveDecisionOf pd decision = case decision of
     Approved{} -> Admit
-    Denied rule _ -> Reject (rejectAs (RuleName (ruleName rule)))
-    DeniedByDefault{} -> Reject (rejectAs (RuleName "DeniedByDefault"))
+    ApprovedEffectful{} -> Admit
+    Denied rule _ -> Reject (rejectAs (ByPolicy (RuleName (ruleName rule))))
+    DeniedEffectful name _ -> Reject (rejectAs (ByPolicy (RuleName name)))
+    DeniedByDefault{} -> Reject (rejectAs (ByPolicy (RuleName "DeniedByDefault")))
+    Undecidable transience _ -> Reject (rejectAs (Unavailable transience))
   where
-    rejectAs :: RuleName -> Rejection
-    rejectAs name = Rejection (ByPolicy name) (renderDecision pd decision)
+    rejectAs :: RejectReason -> Rejection
+    rejectAs reason = Rejection reason (renderDecision pd decision)
 
 -- ── concrete-artifact status ─────────────────────────────────────────────────
 

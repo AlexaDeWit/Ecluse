@@ -1,6 +1,7 @@
 module Ecluse.RulesSpec (spec) where
 
 import Data.List (nub)
+import Data.Text qualified as T
 import Data.Time (UTCTime (..), addUTCTime, fromGregorian, nominalDay)
 import Hedgehog (Gen, forAll, (===))
 import Hedgehog qualified as H
@@ -283,6 +284,23 @@ spec = do
                 let rules = map atDefaultPrecedence [AllowScope (mkScope scopeTxt), DenyInstallTimeExecution]
                     p = withInstallScripts (pkg (Just scopeTxt) ageDays)
                 deniedBy (evalRules ctx rules p) === Just DenyInstallTimeExecution
+
+    describe "renderDecision" $ do
+        let pd = pkg (Just "myorg") 0
+        it "renders a pure approval naming the rule and its reason" $
+            renderDecision pd (Approved (AllowScope (mkScope "myorg")) "scope @myorg is allow-listed")
+                `shouldSatisfy` (\t -> T.isInfixOf "AllowScope" t && T.isInfixOf "approved" t)
+        it "renders an effectful approval naming the rule and its reason" $
+            -- The effectful arms render the deciding rule by its carried name (there
+            -- is no pure 'Rule' to name); the log/audit line still reads the same.
+            renderDecision pd (ApprovedEffectful "AllowAdvisory" "remediates an advisory")
+                `shouldSatisfy` (\t -> T.isInfixOf "AllowAdvisory" t && T.isInfixOf "remediates an advisory" t)
+        it "renders an effectful denial naming the rule and its reason" $
+            renderDecision pd (DeniedEffectful "DenyAdvisory" "affected by an advisory")
+                `shouldSatisfy` (\t -> T.isInfixOf "DenyAdvisory" t && T.isInfixOf "affected by an advisory" t)
+        it "renders an undecidable outcome explaining it could not be evaluated" $
+            renderDecision pd (Undecidable (WillResolve Nothing) "the advisory source is down")
+                `shouldSatisfy` (\t -> T.isInfixOf "could not be evaluated" t && T.isInfixOf "advisory source is down" t)
   where
     -- A list of @n@ distinct precedences, so each rule competes at its own rank.
     distinctPrecedences :: Int -> Gen [Int]

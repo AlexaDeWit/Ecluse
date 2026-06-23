@@ -41,6 +41,7 @@ trusted /private/ set is the cross-upstream merge ("Ecluse.Package.Merge").
 module Ecluse.Package.Filter (
     FilterPlan (..),
     filterPlan,
+    filterPlanFromDecisions,
 ) where
 
 import Data.Map.Strict qualified as Map
@@ -48,7 +49,7 @@ import Data.Set qualified as Set
 
 import Ecluse.Package (PackageInfo (infoDistTags, infoVersions), pkgVersion)
 import Ecluse.Rules (evalRules)
-import Ecluse.Rules.Types (Decision (Approved), EvalContext, PrecededRule)
+import Ecluse.Rules.Types (Decision (Approved, ApprovedEffectful), EvalContext, PrecededRule)
 import Ecluse.Version (Version, selectLatest, unVersion)
 
 {- | The decisions filtering a single public packument owns, for the adapter to
@@ -90,17 +91,28 @@ nothing survives.
 -}
 filterPlan :: EvalContext -> [PrecededRule] -> PackageInfo -> FilterPlan
 filterPlan ctx rules info =
+    filterPlanFromDecisions (Map.map (evalRules ctx rules) (infoVersions info)) info
+
+{- | Build a 'FilterPlan' from per-version 'Decision's already taken, rather than
+evaluating the pure tier here. This is the path the __effectful__ tier feeds: it
+decides each version in IO (see "Ecluse.Rules.Effectful"), then hands the decisions
+here for the same pure survivor\/@latest@ resolution 'filterPlan' performs. The
+decision map is keyed by raw version string and __must__ cover exactly the
+packument's versions; a version with no decision is treated as not surviving.
+
+A version survives iff its decision is an approval (pure or effectful); every other
+verdict — denial, deny-by-default, or 'Ecluse.Rules.Types.Undecidable' — drops it,
+so a fail-closed undecidable version is filtered out exactly like a denial, while its
+decision is still carried in 'fpDecisions' for the no-survivors status.
+-}
+filterPlanFromDecisions :: Map Text Decision -> PackageInfo -> FilterPlan
+filterPlanFromDecisions decisions info =
     FilterPlan
         { fpSurvivors = survivors
         , fpLatest = selectLatest chosen survivingVersions
         , fpDecisions = Map.elems decisions
         }
   where
-    -- Each version's decision, keyed by its raw version string (so 'Map.elems' is
-    -- in version-key order — the order the adapter zips decisions back onto).
-    decisions :: Map Text Decision
-    decisions = Map.map (evalRules ctx rules) (infoVersions info)
-
     -- A version survives only on an explicit approval; every other outcome (deny,
     -- deny-by-default, undecidable) drops it.
     survivors :: Set Text
@@ -109,6 +121,7 @@ filterPlan ctx rules info =
     isApproved :: Decision -> Bool
     isApproved = \case
         Approved{} -> True
+        ApprovedEffectful{} -> True
         _ -> False
 
     -- The parsed 'Version' a raw key projects to, if present in the packument.

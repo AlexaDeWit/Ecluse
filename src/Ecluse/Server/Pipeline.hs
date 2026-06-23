@@ -119,7 +119,7 @@ import UnliftIO.Exception (throwString, tryAny)
 import Ecluse.Credential (Secret, mkSecret)
 import Ecluse.Env (Env (envManager, envMetadataCache, envQueue))
 import Ecluse.Package (PackageDetails, PackageInfo (infoDistTags, infoPublishedAt, infoVersions), PackageName)
-import Ecluse.Package.Filter (filterPlan)
+import Ecluse.Package.Filter (filterPlanFromDecisions)
 import Ecluse.Package.Merge (
     MergePlan (mpDistTags, mpSurvivors, mpTime),
     Provenance (GatedSource, TrustedSource),
@@ -138,8 +138,8 @@ import Ecluse.Registry.Npm (
  )
 import Ecluse.Registry.Npm.Filter (FilterResult (Filtered, NoSurvivors), applyFilterPlan, rewriteTarballUrls)
 import Ecluse.Registry.Npm.Project (parsePackageInfo)
-import Ecluse.Rules (evalRules)
-import Ecluse.Rules.Types (Decision, EvalContext (EvalContext), PrecededRule)
+import Ecluse.Rules.Effectful (evalRulesEffectful)
+import Ecluse.Rules.Types (Decision, EvalContext (EvalContext))
 import Ecluse.Server.Cache (CacheEntry (CacheEntry, entryInfo, entryRaw), Source (Source), resolveMetadata)
 import Ecluse.Server.Conditional (Conditional (Modified, NotModified), etagHeader, evaluateOwnETag)
 import Ecluse.Server.Context (
@@ -225,8 +225,8 @@ serveWithDeps renderer deps name request respond
                 concurrently
                     (fetchPrivateLeg env (pdPrivateBaseUrl deps) clientToken name)
                     (fetchPublicLeg env (pdPublicBaseUrl deps) name)
+            (public, publicExclusions) <- gatePublic deps evalCtx pubResult
             let private = trustedSource <$> privResult
-                (public, publicExclusions) = gatePublic deps evalCtx pubResult
                 sources = catMaybes [private, public]
             case assemble deps sources of
                 Just body -> respond (servePackumentBody request body)
@@ -353,30 +353,44 @@ clientConfig env baseUrl token =
 trustedSource :: (PackageInfo, Value) -> Contribution
 trustedSource (info, value) = Contribution TrustedSource info value
 
-{- Gate a public-upstream contribution through the rules and the structural
+{- Gate a public-upstream contribution through both rule tiers and the structural
 filter, returning the surviving 'Contribution' (if any survived) and the per-version
 exclusion outcomes (for the no-survivors status when nothing survives anywhere).
 
-A public leg that did not resolve contributes nothing and no exclusions. A
-resolved leg is decided by the agnostic 'filterPlan' (over the typed
-'PackageInfo') and that plan replayed by 'applyFilterPlan' onto its raw @Value@:
-'Filtered' yields a gated 'Contribution' over the surviving versions; 'NoSurvivors'
-yields no contribution and the per-version 'ServeDecision's (each excluded
-version's decision projected, paired with its 'PackageDetails' for the denial
-message).
+A public leg that did not resolve contributes nothing and no exclusions. A resolved
+leg has every version decided by both tiers ('evalRulesEffectful' — the pure tier
+first, the effectful tier only where it could change the outcome), the resulting
+decisions handed to the agnostic 'filterPlanFromDecisions', and that plan replayed by
+'applyFilterPlan' onto the raw @Value@: 'Filtered' yields a gated 'Contribution' over
+the surviving versions; 'NoSurvivors' yields no contribution and the per-version
+'ServeDecision's, each excluded version's decision projected (a fail-closed
+'Ecluse.Rules.Types.Undecidable' carrying its transient\/permanent cause, so the
+no-survivors status is a @503@\/@500@ rather than a @403@). The effectful tier is IO,
+so this gate is IO; with no effectful rules configured it reduces exactly to the pure
+tier.
 
 The gated contribution's typed 'PackageInfo' is __restricted to the survivors__ to
 match its filtered @Value@: 'mergePackuments' treats a 'GatedSource' as the
 already-filtered set and never re-filters, so feeding it the unfiltered view would
 let a denied version reach the merge plan (and skew the reconciled @latest@\/@time@). -}
-gatePublic :: PackumentDeps -> EvalContext -> Maybe (PackageInfo, Value) -> (Maybe Contribution, [ServeDecision])
+gatePublic :: PackumentDeps -> EvalContext -> Maybe (PackageInfo, Value) -> IO (Maybe Contribution, [ServeDecision])
 gatePublic deps ctx = \case
-    Nothing -> (Nothing, [])
-    Just (info, value) ->
-        case applyFilterPlan (pdMountBaseUrl deps) (filterPlan ctx (pdRules deps) info) value of
+    Nothing -> pure (Nothing, [])
+    Just (info, value) -> do
+        decisions <- decideVersions deps ctx info
+        pure $ case applyFilterPlan (pdMountBaseUrl deps) (filterPlanFromDecisions decisions info) value of
             Filtered filtered ->
                 (Just (Contribution GatedSource (restrictToSurvivors filtered info) filtered), [])
-            NoSurvivors decisions -> (Nothing, projectDecisions info decisions)
+            NoSurvivors leftover -> (Nothing, projectDecisions info leftover)
+
+{- Decide every version of a public packument against both rule tiers, keyed by raw
+version string (the map 'filterPlanFromDecisions' consumes). Each version is run
+through 'evalRulesEffectful', so a needed effectful rule that cannot be consulted
+yields a fail-closed 'Ecluse.Rules.Types.Undecidable' decision. With no effectful
+rules the per-version call collapses to the pure tier. -}
+decideVersions :: PackumentDeps -> EvalContext -> PackageInfo -> IO (Map Text Decision)
+decideVersions deps ctx info =
+    traverse (evalRulesEffectful ctx (pdRules deps) (pdEffectfulRules deps)) (infoVersions info)
 
 {- Restrict a 'PackageInfo' to the version keys that survived filtering — those
 present in the filtered @Value@'s @versions@ — so the typed view handed to the merge
@@ -712,31 +726,33 @@ servePublicArtifact env renderer deps name version file respond = do
         Ok -> streamPublicArtifact env deps name version file respond
         status -> respond (artifactError renderer deps status decision)
 
-{- Gate the single requested version against the mount's rules, returning its
-serve outcome. The public packument is fetched anonymously and parsed; the
-requested version's 'PackageDetails' is evaluated against the rule set
-('evalRules', the same engine the packument path gates with) and projected to a
-'ServeDecision'.
+{- Gate the single requested version against both rule tiers, returning its serve
+outcome. The public packument is fetched anonymously and parsed; the requested
+version's 'PackageDetails' is evaluated through 'evalRulesEffectful' (the same engine
+the packument path gates with) and projected to a 'ServeDecision'.
 
-The outcome distinguishes the refusal causes the error model maps: a version
-absent from the public metadata is a genuine miss (a @404@ forwarded upstream
-absence, projected as 'Unavailable' 'WontResolve' only to carry a non-admit — the
-status is overridden to @404@ in 'artifactError'); a metadata fetch that fails is a
-transient upstream outage (@503@); a present version is decided by the rules. -}
+The outcome distinguishes the refusal causes the error model maps: a version absent
+from the public metadata is a genuine miss (a @404@ forwarded upstream absence,
+projected as 'Unavailable' 'WontResolve' only to carry a non-admit — the status is
+overridden to @404@ in 'artifactError'); a metadata fetch that fails is a transient
+upstream outage (@503@); a present version is decided by the rules, where a needed
+effectful rule that cannot be consulted fail-closes to an 'Unavailable'
+@503@\/@500@. -}
 gatePublicVersion :: Env -> PackumentDeps -> PackageName -> Version -> IO ServeDecision
 gatePublicVersion env deps name version = do
     evalCtx <- EvalContext <$> pdNow deps
     fetched <- tryAny (fetchPublicLeg env (pdPublicBaseUrl deps) name)
-    pure $ case fetched of
-        Left _ -> upstreamUnavailable
-        Right Nothing -> upstreamUnavailable
+    case fetched of
+        Left _ -> pure upstreamUnavailable
+        Right Nothing -> pure upstreamUnavailable
         Right (Just (info, _value)) -> case Map.lookup (renderVersion version) (infoVersions info) of
-            Nothing -> versionAbsent
-            Just details -> gateVersion evalCtx (pdRules deps) details
+            Nothing -> pure versionAbsent
+            Just details -> gateVersion evalCtx deps details
 
--- Project a single version's rule decision to a serve outcome.
-gateVersion :: EvalContext -> [PrecededRule] -> PackageDetails -> ServeDecision
-gateVersion ctx rules details = serveDecisionOf details (evalRules ctx rules details)
+-- Project a single version's two-tier rule decision to a serve outcome.
+gateVersion :: EvalContext -> PackumentDeps -> PackageDetails -> IO ServeDecision
+gateVersion ctx deps details =
+    serveDecisionOf details <$> evalRulesEffectful ctx (pdRules deps) (pdEffectfulRules deps) details
 
 -- A transient public-upstream outage: a 'WillResolve' rejection (→ @503@).
 upstreamUnavailable :: ServeDecision

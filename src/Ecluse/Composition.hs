@@ -236,6 +236,9 @@ composeBindings resolveAdapter clock providers config =
                 , pdMountBaseUrl = mountBasePath (mountEcosystem mount)
                 , pdMirrorTarget = unUrl (mtUrl (regMirrorTarget regs))
                 , pdRules = mountPolicy mount
+                , -- No effectful rule type is wired into the policy model yet, so the
+                  -- effectful tier is empty here and gating reduces to the pure tier.
+                  pdEffectfulRules = []
                 , pdInboundToken = mkSecret <$> inboundToken
                 , pdNow = clock
                 , pdHelp = helpMessage

@@ -41,7 +41,20 @@ import Ecluse.Queue (
 import Ecluse.Registry (ParseError (..), RegistryClient (..))
 import Ecluse.Registry.Npm.Route qualified as Npm
 import Ecluse.Registry.Npm.Serve (npmRenderer)
-import Ecluse.Rules.Types (PrecededRule, Rule (AllowIfPublishedBefore, DenyInstallTimeExecution), atDefaultPrecedence)
+import Ecluse.Rules.Effectful (
+    EffectfulConfig (..),
+    EffectfulRule (..),
+    FailurePolicy (OnUnavailable),
+    PrecededEffectfulRule (PrecededEffectfulRule),
+    defaultEffectfulConfig,
+    newBreaker,
+ )
+import Ecluse.Rules.Types (
+    PrecededRule,
+    Rule (AllowIfPublishedBefore, DenyInstallTimeExecution),
+    RuleOutcome (Allow, Deny),
+    atDefaultPrecedence,
+ )
 import Ecluse.Server (
     MountBinding (..),
     application,
@@ -316,10 +329,19 @@ deps privatePort publicPort inbound =
         , pdMountBaseUrl = "https://proxy.test"
         , pdMirrorTarget = "https://mirror.test"
         , pdRules = policy
+        , pdEffectfulRules = []
         , pdInboundToken = mkSecret <$> inbound
         , pdNow = pure now
         , pdHelp = Nothing
         }
+
+{- | The packument-serve dependencies as 'deps', but with the given effectful rules
+wired into the policy, so a test can drive the effectful tier end to end through the
+pipeline.
+-}
+depsWith :: [PrecededEffectfulRule] -> Int -> Int -> PackumentDeps
+depsWith effectful privatePort publicPort =
+    (deps privatePort publicPort Nothing){pdEffectfulRules = effectful}
 
 localhost :: Int -> Text
 localhost port = "http://127.0.0.1:" <> show port
@@ -392,6 +414,32 @@ withProxy ::
     (forall a. (Application -> IO a) -> IO a)
 withProxy privateUp publicUp inbound k =
     withProxyEnv privateUp publicUp inbound (\app _env -> k app)
+
+{- | Run an assertion against a proxy whose npm mount carries the given effectful
+rules, so a request flows through both rule tiers. The two upstream doubles are
+hosted on ephemeral ports as elsewhere; the effectful rules see the public version.
+-}
+withProxyEffectful ::
+    [PrecededEffectfulRule] ->
+    Upstream ->
+    Upstream ->
+    (forall a. (Application -> IO a) -> IO a)
+withProxyEffectful effectful privateUp publicUp k = do
+    queue <- newInMemoryQueue
+    testWithApplication (pure (upApp privateUp)) $ \privatePort ->
+        testWithApplication (pure (upApp publicUp)) $ \publicPort -> do
+            manager <- newManager defaultManagerSettings
+            env <- newTestEnvWithQueue queue manager
+            let cfg =
+                    mkServerConfig
+                        [ MountBinding
+                            { bindingPrefix = "npm" :| []
+                            , bindingClassifier = Npm.classify
+                            , bindingPackumentDeps = Just (depsWith effectful privatePort publicPort)
+                            , bindingRenderer = npmRenderer
+                            }
+                        ]
+            k (application cfg env)
 
 -- ── driving the proxy ─────────────────────────────────────────────────────────
 
@@ -486,6 +534,7 @@ spec = do
     conditionalSpec
     losslessSpec
     tarballSpec
+    effectfulSpec
 
 -- ── multi-upstream merge ──────────────────────────────────────────────────────
 
@@ -1041,6 +1090,120 @@ tarballSpec = describe "artifact (tarball) path" $ do
             (_ :: Either SomeException SResponse) <- try (getTarball "1.0.0" (Just "client-token") app)
             seenAuth publicUp `shouldReturn` []
             drainJobs env `shouldReturn` []
+
+-- ── the effectful rule tier through the pipeline ───────────────────────────────
+
+{- | An effectful rule, fresh breaker and a no-retry fast config, that always fails
+its IO (its source is down). Wired at a precedence above the pure quarantine, it is
+consulted on an otherwise-admitted version and, exhausted, fail-closes it.
+-}
+downEffectfulRule :: IO PrecededEffectfulRule
+downEffectfulRule = do
+    breaker <- newBreaker
+    let rule =
+            EffectfulRule
+                { erName = "DownAdvisory"
+                , erEval = \_ -> throwString "advisory source down"
+                , erConfig = defaultEffectfulConfig{ecBackoff = [], ecSleep = \_ -> pure ()}
+                , erOnError = OnUnavailable
+                , erBreaker = breaker
+                }
+    pure (PrecededEffectfulRule 400 rule)
+
+{- | An effectful rule that denies the version outright (its source is reachable and
+returns a verdict), wired above the pure tier so its deny stands.
+-}
+denyingEffectfulRule :: IO PrecededEffectfulRule
+denyingEffectfulRule = do
+    breaker <- newBreaker
+    let rule =
+            EffectfulRule
+                { erName = "DenyAdvisory"
+                , erEval = \_ -> pure (Deny "affected by a known advisory")
+                , erConfig = defaultEffectfulConfig
+                , erOnError = OnUnavailable
+                , erBreaker = breaker
+                }
+    pure (PrecededEffectfulRule 400 rule)
+
+{- | An effectful rule that admits the version (its source vouches for it), wired
+above the pure tier so it lifts a version the pure quarantine would otherwise hold.
+-}
+allowingEffectfulRule :: IO PrecededEffectfulRule
+allowingEffectfulRule = do
+    breaker <- newBreaker
+    let rule =
+            EffectfulRule
+                { erName = "AllowAdvisory"
+                , erEval = \_ -> pure (Allow "remediates a known advisory")
+                , erConfig = defaultEffectfulConfig
+                , erOnError = OnUnavailable
+                , erBreaker = breaker
+                }
+    pure (PrecededEffectfulRule 400 rule)
+
+effectfulSpec :: Spec
+effectfulSpec = describe "effectful rule tier" $ do
+    it "filters an Undecidable version out of a packument and 503s when nothing survives" $ do
+        -- The single public version would clear the pure quarantine, but a needed
+        -- effectful rule cannot be consulted, so it is fail-closed (Undecidable) and
+        -- filtered out exactly like a denial. With no private survivors the
+        -- no-survivors status is a transient 503, inviting a retry.
+        rule <- downEffectfulRule
+        privateUp <- servingUpstream (encodePackument (privatePackument [] "0.0.0"))
+        publicUp <- servingUpstream (encodePackument (admittingPublic "1.0.0"))
+        withProxyEffectful [rule] privateUp publicUp $ \app -> do
+            resp <- getThing Nothing app
+            status resp `shouldBe` 503
+            status resp `shouldNotBe` 404
+
+    it "excludes a version a reachable effectful deny rejects (403 when nothing else survives)" $ do
+        -- A reachable effectful deny outranks the pure allow, so the only public
+        -- version is excluded; with no private survivors that is a by-policy 403.
+        rule <- denyingEffectfulRule
+        privateUp <- servingUpstream (encodePackument (privatePackument [] "0.0.0"))
+        publicUp <- servingUpstream (encodePackument (admittingPublic "1.0.0"))
+        withProxyEffectful [rule] privateUp publicUp $ \app -> do
+            resp <- getThing Nothing app
+            status resp `shouldBe` 403
+
+    it "serves a version a reachable effectful allow admits (a 200 with that version)" $ do
+        -- A young public version the pure quarantine would hold is lifted by a
+        -- higher-ranked effectful allow, so it survives the filter and is served.
+        rule <- allowingEffectfulRule
+        privateUp <- servingUpstream (encodePackument (privatePackument [] "0.0.0"))
+        publicUp <-
+            servingUpstream
+                ( encodePackument
+                    (packument [("1.0.0", plainVersion "1.0.0")] "1.0.0" [("1.0.0", publishedDaysAgo 1)])
+                )
+        withProxyEffectful [rule] privateUp publicUp $ \app -> do
+            resp <- getThing Nothing app
+            status resp `shouldBe` 200
+            servedVersions resp `shouldBe` ["1.0.0"]
+
+    it "serves a tarball a reachable effectful allow admits on the artifact path" $ do
+        -- The same admit on the concrete-artifact path: the gated version is admitted
+        -- by the effectful allow and the public bytes stream through.
+        rule <- allowingEffectfulRule
+        privateUp <- privateArtifactMiss
+        let young = packument [("1.0.0", plainVersion "1.0.0")] "1.0.0" [("1.0.0", publishedDaysAgo 1)]
+        publicUp <- artifactUpstream (encodePackument young) publicTarballBytes
+        withProxyEffectful [rule] privateUp publicUp $ \app -> do
+            resp <- getTarball "1.0.0" Nothing app
+            status resp `shouldBe` 200
+            simpleBody resp `shouldBe` publicTarballBytes
+
+    it "maps a concrete-artifact Undecidable to a 503 on the tarball path" $ do
+        -- A direct tarball fetch gates the one version through both tiers; the
+        -- exhausted effectful rule fail-closes it, surfacing as a transient 503
+        -- (not a 403 denial, not a 500) via the serve error model.
+        rule <- downEffectfulRule
+        privateUp <- privateArtifactMiss
+        publicUp <- artifactUpstream (encodePackument (admittingPublic "1.0.0")) publicTarballBytes
+        withProxyEffectful [rule] privateUp publicUp $ \app -> do
+            resp <- getTarball "1.0.0" Nothing app
+            status resp `shouldBe` 503
 
 -- A mirror queue whose 'enqueue' always throws, for the best-effort assertion: the
 -- serve path must swallow the failure and still serve the artifact. 'receive' is a
