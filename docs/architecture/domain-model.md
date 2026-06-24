@@ -5,8 +5,8 @@
 `PackageDetails` ([`src/Ecluse/Package.hs`](../../src/Ecluse/Package.hs)) is the
 ecosystem-agnostic per-version snapshot every adapter produces and the rules
 engine consumes. Its shape is the synthesis of the npm/PyPI/RubyGems protocol
-studies ([`research/synthesis.md`](../research/synthesis.md)); two principles
-govern it:
+studies ([`research/reverse-engineering/`](../research/reverse-engineering/README.md));
+two principles govern it:
 
 - **The rules engine is ecosystem-blind.** It never branches on npm vs PyPI vs
   RubyGems. Adapters project each ecosystem's wire format into *normalised
@@ -31,8 +31,8 @@ govern it:
 
 ## Decisions captured
 
-The model resolves the open questions from the synthesis (worked through one at a
-time):
+The model resolves the open questions surfaced by those protocol studies (worked
+through one at a time):
 
 1. **Yank/availability granularity** — version-level `Availability` **and** a
    per-artifact `artYanked` flag (faithful to all three ecosystems).

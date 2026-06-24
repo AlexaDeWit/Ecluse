@@ -40,7 +40,7 @@ A reverse-engineering reference for the Python package registry, the companion t
 9. [Authentication (in theory)](#9-authentication-in-theory)
 10. [Write path (for completeness)](#10-write-path-for-completeness)
 11. [Type model](#11-type-model)
-12. [What Écluse must replicate](#12-what-écluse-must-replicate)
+12. [Implementing the protocol](#12-implementing-the-protocol)
 13. [Reproducing the probes](#13-reproducing-the-probes)
 14. [References](#14-references)
 
@@ -161,12 +161,12 @@ changes — that's the hash guarantee) and cache effectively forever.
 
 `Accept-Encoding: gzip` is honoured. PyPI explicitly asks clients to **set a
 descriptive `User-Agent`** (with contact info) and to prefer a mirror/cache for
-high volume — relevant for Écluse's upstream fetch.
+high volume — relevant for a proxy's upstream fetch.
 
 ### Errors
 
 Unknown project / version → `404` (plain, no structured body). There is no
-rich error envelope like npm's `{error}`. Écluse's own denial responses should
+rich error envelope like npm's `{error}`. A proxy's own denial responses should
 still be explicit; for a Simple-API surface the natural denial is to **omit**
 the file/version (§8) or return `403`.
 
@@ -334,7 +334,7 @@ file. `data-yanked` (PEP 592), when present, marks a yanked file.
 | `files[].core-metadata` | bool \| `{sha256}` | 658/714 | If truthy, a `.metadata` file exists (see §6). `data-dist-info-metadata` is the **old name** for the same thing — both emitted for compat (PEP 714). |
 | `files[].provenance` | string\|null | 740 | URL of attestation bundle, if any. |
 | `files[].size` | number | 700 | Bytes. |
-| `files[].upload-time` | ISO-8601 | 700 | The **publish timestamp** (Écluse's age signal). |
+| `files[].upload-time` | ISO-8601 | 700 | The **publish timestamp** (the age signal). |
 | `files[].yanked` | bool \| string | 592 | `true` or a reason string. |
 
 This is the richer, modern surface — prefer JSON, fall back to HTML only for
@@ -394,10 +394,10 @@ PyPI has no `hasInstallScript`, but the risk exists in a different shape:
 - **Wheels run no code on install** — they are unpacked, not executed. Installing
   a wheel is inert.
 - **sdists execute a build backend** (`setup.py` / PEP 517 backend) at *install/
-  build* time — arbitrary code. For PyPI, the `DenyInstallTimeExecution` signal is
-  therefore **"prefer/require wheels; treat
-  sdist-only releases as higher risk."** This is derivable purely from the file
-  list (`packagetype`), no download needed.
+  build* time — arbitrary code. For PyPI, the install-time-execution signal is
+  therefore **"prefer/require wheels; treat sdist-only releases as higher
+  risk."** This is derivable purely from the file list (`packagetype`), no
+  download needed.
 
 ---
 
@@ -446,9 +446,9 @@ markupsafe-3.0.3-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
 ```
 
 `pip` selects files whose tags match the running interpreter/platform. A pure
-wheel uses `py3-none-any`. **Implication for the model:** a `Version` maps to a
-*set* of files, each with its own hash, size, tags, and metadata — Écluse cannot
-collapse a version to a single `Dist`.
+wheel uses `py3-none-any`. **Implication:** a version maps to a *set* of files,
+each with its own hash, size, tags, and metadata — it cannot be collapsed to a
+single artifact the way npm's `dist` can.
 
 ### Integrity & provenance
 
@@ -507,27 +507,27 @@ So **availability of a version = "a usable, non-yanked file for it exists in the
 index"** — there is no separate availability API; presence in the Simple index
 *is* availability, modulo yank/compat filtering.
 
-### Consequences for Écluse (both directions)
+### Consequences for a proxy (both directions)
 
 - **As a client**, fetch version/availability info = `GET /simple/{p}/` (JSON)
   and read `versions`/`files`. Don't ask upstream to resolve a specifier;
   resolve PEP 440 yourself (or forward the whole index). Read dependencies from
   `.metadata` rather than downloading wheels.
-- **As a server**, to let `pip` resolve, Écluse must serve a **coherent Simple
+- **As a server**, to let `pip` resolve, the proxy must serve a **coherent Simple
   index**: every offered file with a correct `sha256`, `requires-python`, and
   `yanked` flag, plus `versions` (PEP 700). Names **must** be normalized and
   non-canonical requests 301-redirected.
-- **Policy shapes availability.** Écluse's rules decide per file/version. To
-  *hide* a denied release, **omit its files** from the served index (the cleanest
-  experience — `pip` simply never considers it). To *soft-block*, mark files
-  `yanked` (keeps `==` pins working but drops them from ranges). To *hard-block*,
-  serve the index but `403` the artifact fetch (a mid-resolution failure). The
-  deny-by-default served index is, as with npm, a **filtered projection** of the
-  upstream index.
-- **`upload-time` is the age signal** for an `AllowIfPublishedBefore`-style rule
-  — it's in the Simple JSON (PEP 700) and the JSON API (`upload_time_iso_8601`),
-  per file. Note age is **per file**, not per version (a version's wheels can be
-  uploaded at different times).
+- **Policy shapes availability.** A per-file/version policy decides what to
+  serve. To *hide* a denied release, **omit its files** from the served index
+  (the cleanest experience — `pip` simply never considers it). To *soft-block*,
+  mark files `yanked` (keeps `==` pins working but drops them from ranges). To
+  *hard-block*, serve the index but `403` the artifact fetch (a mid-resolution
+  failure). A deny-by-default served index is, as with npm, a **filtered
+  projection** of the upstream index.
+- **`upload-time` is the age signal** for an age-based policy — it's in the
+  Simple JSON (PEP 700) and the JSON API (`upload_time_iso_8601`), per file. Note
+  age is **per file**, not per version (a version's wheels can be uploaded at
+  different times).
 
 ---
 
@@ -577,24 +577,23 @@ of npm's per-registry nerf-dart), e.g.:
   password = pypi-AgEIcHlwaS5vcmc…
 ```
 
-### Implications for Écluse
+### Implications for a proxy
 
 - **Read proxy to public PyPI needs no credentials at all** — simpler than npm.
 - **Private upstream**: forward/attach `Authorization: Basic …` (static token,
   or CodeArtifact's IAM-derived credential — same Basic shape, AWS-issued).
-- **Mirror/upload request** (if Écluse ever publishes): `POST .../legacy/` with
+- **Mirror/upload request** (if the proxy ever publishes): `POST .../legacy/` with
   `__token__` Basic, or mint via OIDC.
-- Écluse's **own** client gate stays the separate `PROXY_AUTH_TOKEN`
-  (architecture.md → Client Authentication); it need implement none of PyPI's
-  write/auth endpoints to be a functional install index.
+- A proxy's **own** client gate is a separate concern; it need implement none of
+  PyPI's write/auth endpoints to be a functional install index.
 - Set a descriptive `User-Agent` on upstream requests (PyPI asks for it).
 
 ---
 
 ## 10. Write path (for completeness)
 
-Not on the proxy's critical path (Écluse delegates storage; mirror writes go
-through `publishArtifact`), but documented so "act as a Python index" is complete.
+Not on the proxy's critical path (Écluse delegates storage; mirror writes are a
+separate concern), but documented so "act as a Python index" is complete.
 
 - **Upload** — `POST https://upload.pypi.org/legacy/`, `multipart/form-data`
   with `:action=file_upload`, `protocol_version=1`, the core-metadata fields
@@ -611,18 +610,17 @@ through `publishArtifact`), but documented so "act as a Python index" is complet
 
 ## 11. Type model
 
-The proposed JSON ⇄ domain mapping, designed to **share** the `Ecluse.Package`
-vocabulary with [`npm.md` §11](npm.md#11-type-model). Lenient on input (ignore
-unknown keys, tolerate the HTML/JSON dual forms and the `core-metadata` /
-`data-dist-info-metadata` alias), strict on output. ⊕ marks something the
-current `Ecluse.Package` (`src/Ecluse/Package.hs`) does not yet carry; ⚠️ marks
-a real impedance mismatch with the npm model.
+A JSON type model for the wire format, sharing vocabulary with [`npm.md`
+§11](npm.md#11-type-model) for easy comparison. Lenient on input (ignore unknown
+keys, tolerate the HTML/JSON dual forms and the `core-metadata` /
+`data-dist-info-metadata` alias), strict on output. ⚠️ marks a shape that
+differs materially from the npm wire model.
 
 ### Shared scalars
 
 ```
-NormalizedName  = string   -- PEP 503 normalized (lowercase, [-_.]+ → -)  ⊕ npm has Scope+base instead
-Pep440Version   = string   -- exact, e.g. "2.34.2"; kept opaque (Ecluse.Version)
+NormalizedName  = string   -- PEP 503 normalized (lowercase, [-_.]+ → -)  ⚠️ npm has Scope+base instead
+Pep440Version   = string   -- exact, e.g. "2.34.2"; opaque, never resolved server-side
 Pep440Specifier = string   -- a requirement, e.g. ">=2,<4"; never resolved server-side
 Pep508Req       = string   -- full dependency: name + specifier + extras + marker
 ISODate         = string   -- ISO-8601 UTC (upload-time)
@@ -635,34 +633,34 @@ Hashes          = { sha256: string, md5?: string, blake2b_256?: string }
 File = {
   filename:        string,          -- encodes tags (PEP 425/427)
   url:             string,          -- on files.pythonhosted.org
-  packagetype:     "sdist" | "bdist_wheel",   -- ⊕ drives the "prefer wheels" rule
-  hashes:          Hashes,          -- distIntegrity ← hashes.sha256
-  requiresPython?: Pep440Specifier, -- ⊕ interpreter gate
-  size?:           number,          -- ⊕
-  uploadTime?:     ISODate,         -- ⊕ the age signal (per file!)
-  yanked:          boolean | string,-- ⊕ closest analogue of pkgDeprecated
-  coreMetadata?:   boolean | { sha256: string },  -- ⊕ PEP 658/714 — .metadata exists
-  provenance?:     string           -- ⊕ PEP 740 attestation URL (≈ npm dist.signatures)
+  packagetype:     "sdist" | "bdist_wheel",   -- drives the "prefer wheels" signal
+  hashes:          Hashes,          -- integrity ← hashes.sha256
+  requiresPython?: Pep440Specifier, -- interpreter gate
+  size?:           number,
+  uploadTime?:     ISODate,         -- the age signal (per file!)
+  yanked:          boolean | string,-- closest analogue of npm's deprecated
+  coreMetadata?:   boolean | { sha256: string },  -- PEP 658/714 — .metadata exists
+  provenance?:     string           -- PEP 740 attestation URL (≈ npm dist.signatures)
 }
 ```
 
-### `CoreMetadata` (the per-version manifest → `Ecluse.PackageDetails`)
+### `CoreMetadata` (the per-version manifest)
 
 Parsed from the `.metadata` file or the JSON `info`:
 
 ```
 CoreMetadata = {
-  name:            NormalizedName,  -- pkgName
-  version:         Pep440Version,   -- pkgVersion
+  name:            NormalizedName,
+  version:         Pep440Version,
   requiresPython?: Pep440Specifier,
-  requiresDist:    [Pep508Req],     -- pkgDependencies (⚠️ ranges carry markers/extras, not a flat name→range map)
+  requiresDist:    [Pep508Req],     -- ⚠️ ranges carry markers/extras, not a flat name→range map (cf. npm)
   providesExtra?:  [string],
-  license?:        string,          -- pkgLicense (license_expression preferred, PEP 639)
+  license?:        string,          -- license_expression preferred (PEP 639)
   summary?:        string,
-  classifiers?:    [string],        -- ⊕ trove (license, status, supported Pythons)
-  authorEmail?:    string           -- pkgMaintainers ← author/maintainer/author_email
-  -- hasInstallScript has NO direct field: derive risk from any file's packagetype == "sdist"
-  -- pkgPublishedAt: NOT here — comes from the File.uploadTime
+  classifiers?:    [string],        -- trove (license, status, supported Pythons)
+  authorEmail?:    string           -- from author/maintainer/author_email
+  -- no direct install-script field: derive risk from any file's packagetype == "sdist"
+  -- the publish timestamp is NOT here — it comes from the File.uploadTime
 }
 ```
 
@@ -703,18 +701,15 @@ Vulnerability = {               -- OSV, inline in the JSON API
 -- auth (theory): API token = Basic("__token__", "pypi-…"); no token object on the wire.
 ```
 
-> **Cross-ecosystem note.** To share one `RegistryClient`/`PackageDetails`
-> across npm and PyPI, the model must (a) let a version own **N** artifacts
-> (generalize `Dist` → `[Dist]`/`[File]`), (b) carry a **normalized-name**
-> notion alongside npm scopes, (c) source `pkgPublishedAt` from a per-file
-> timestamp here vs. the packument `time` map in npm, and (d) replace the
-> boolean `pkgHasInstallScript` with an ecosystem-specific risk signal
-> (`hasInstallScript` for npm; `packagetype == sdist` for PyPI). These are the
-> generalizations worth making before a second adapter lands.
+> **Cross-ecosystem note.** The main shape differences from npm: (a) a version
+> owns **N** artifacts here, not one (`Dist` → `[File]`); (b) names are PEP 503
+> *normalized* rather than scoped; (c) the publish timestamp is per-file here
+> vs. the packument `time` map in npm; and (d) the install-time-execution signal
+> is `packagetype == sdist` rather than npm's `hasInstallScript`.
 
 ---
 
-## 12. What Écluse must replicate
+## 12. Implementing the protocol
 
 ### To be a believable Python **index** (answer `pip install`)
 
@@ -743,18 +738,8 @@ Vulnerability = {               -- OSV, inline in the JSON API
 - [ ] For private upstreams attach `Authorization: Basic …` (static or
       CodeArtifact-issued).
 - [ ] Verify downloaded files against `sha256` before mirroring.
-- [ ] Project upstream indexes into a **filtered** index reflecting rule
+- [ ] Project upstream indexes into a **filtered** index reflecting policy
       decisions (omit/yank denied files, preserve `upload-time`).
-
-### Maps onto `RegistryClient`
-
-`fetchMetadata`→§5 (Simple JSON) · `fetchArtifact`→§7 (files host) ·
-`parsePackageInfo`→`SimpleIndex`/`ProjectJson` ·
-`parseVersionDetails`→`CoreMetadata`(+`File.uploadTime`) ·
-`parseVersionList`→`SimpleIndex.versions` + per-file `yanked`/tags (§8) ·
-`publishArtifact`→§10. The handle is the same; only the wire projection differs —
-which is exactly the point of the abstraction (architecture.md → Registry
-Abstraction).
 
 ---
 
@@ -813,6 +798,5 @@ curl -s https://pypi.org/pypi/markupsafe/json | jq '{version:.info.version, n_fi
   <https://docs.pypi.org/trusted-publishers/>
 - OSV (the `vulnerabilities` source): <https://osv.dev/>
 - Internal: [`npm.md`](npm.md) (the parallel npm reference),
-  [`../../architecture.md`](../../architecture.md),
-  [`Ecluse.Package`](../../../src/Ecluse/Package.hs).
+  [`../../architecture.md`](../../architecture.md).
 ```
