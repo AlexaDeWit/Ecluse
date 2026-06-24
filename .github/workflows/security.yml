@@ -44,13 +44,8 @@ jobs:
 
       - name: Upload grype SARIF to code scanning
         # Surface the closure CVEs in the Security tab (code scanning), alongside
-        # Semgrep + Scorecard. MAIN ONLY: code-scanning alerts should reflect the
-        # default branch's shipped closure, not accumulate per-PR/branch noise (and a
-        # flake-PR's closure is transient). The scan still runs on flake-PRs for the
-        # job-summary report — only the alert upload is gated to main; the daily
-        # scheduled scan runs on main, which is where the alerts come from. The
-        # tracking issue (below) stays as the single consolidated summary.
-        if: ${{ always() && github.ref == 'refs/heads/main' }}
+        # Semgrep + Scorecard, via sarif upload
+        if: ${{ always() }}
         uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
         with:
           sarif_file: grype.sarif
