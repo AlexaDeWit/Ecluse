@@ -15,7 +15,7 @@ import Data.Time (UTCTime (UTCTime), addUTCTime, fromGregorian, nominalDay)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Katip (Environment (Environment), Namespace (Namespace), initLogEnv)
 import Network.HTTP.Client (Manager, defaultManagerSettings, newManager)
-import Network.HTTP.Types (Header, hAuthorization, status200, status404, status500, statusCode)
+import Network.HTTP.Types (Header, hAuthorization, status200, status404, status500, statusCode, statusMessage)
 import Network.Wai (Application, Request (rawPathInfo, requestHeaders), Response, responseLBS, responseRaw)
 import Network.Wai.Handler.Warp (testWithApplication)
 import Network.Wai.Test (
@@ -180,6 +180,23 @@ privateArtifactHit tarballBody = do
                     else responseLBS status404 [] "not found"
     pure Upstream{upApp = app, upSeenAuth = seen}
 
+{- | A private upstream double that has the artifact and tags it with an upstream
+header (a @Content-Type@): a tarball-slot path is answered @200@ with the bytes and
+that header, any other path is a @404@. Lets a test assert the relay forwards the
+artifact's own content headers through to the client.
+-}
+privateArtifactHitWithHeader :: ByteString -> ByteString -> LByteString -> IO Upstream
+privateArtifactHitWithHeader headerName headerValue tarballBody = do
+    seen <- newIORef []
+    let app :: Application
+        app req respond = do
+            modifyIORef' seen (lookupAuth (requestHeaders req) :)
+            respond $
+                if isTarballPath (rawPathInfo req)
+                    then responseLBS status200 [(CI.mk headerName, headerValue)] tarballBody
+                    else responseLBS status404 [] "not found"
+    pure Upstream{upApp = app, upSeenAuth = seen}
+
 {- | A private upstream double that does __not__ have the artifact: every path is a
 @404@ miss, so the artifact path falls through to the public leg.
 -}
@@ -321,7 +338,21 @@ withProxyEnvQueue ::
     -- The continuation sees the proxy application, its 'Env' (to drain the queue),
     -- and the public upstream's ephemeral port (to assert an enqueued artifact URL).
     (forall a. (Application -> Env -> Int -> IO a) -> IO a)
-withProxyEnvQueue queue privateUp publicUp inbound k =
+withProxyEnvQueue queue privateUp publicUp inbound =
+    withProxyEnvQueueDeps queue privateUp publicUp inbound id
+
+{- | Like 'withProxyEnvQueue', but with the mount's 'PackumentDeps' passed through
+the given transform first — so a test can break one leg's base URL (an unformable
+upstream URL) without a new harness.
+-}
+withProxyEnvQueueDeps ::
+    MirrorQueue ->
+    Upstream ->
+    Upstream ->
+    Maybe Text ->
+    (PackumentDeps -> PackumentDeps) ->
+    (forall a. (Application -> Env -> Int -> IO a) -> IO a)
+withProxyEnvQueueDeps queue privateUp publicUp inbound tweakDeps k =
     testWithApplication (pure (upApp privateUp)) $ \privatePort ->
         testWithApplication (pure (upApp publicUp)) $ \publicPort -> do
             manager <- newManager defaultManagerSettings
@@ -331,7 +362,7 @@ withProxyEnvQueue queue privateUp publicUp inbound k =
                         [ MountBinding
                             { bindingPrefix = "npm" :| []
                             , bindingClassifier = Npm.classify
-                            , bindingPackumentDeps = Just (deps privatePort publicPort inbound)
+                            , bindingPackumentDeps = Just (tweakDeps (deps privatePort publicPort inbound))
                             , bindingRenderer = npmRenderer
                             }
                         ]
@@ -432,6 +463,13 @@ servedLatest resp = do
 
 status :: SResponse -> Int
 status = statusCode . simpleStatus
+
+{- The HTTP reason phrase of a response (e.g. @"Forbidden"@). Reading it forces the
+status' message, which the @mkStatus@-built serve statuses carry as a lazy field —
+so an assertion over it exercises the per-status reason mapping the serve path
+threads through, not just the numeric code. -}
+reason :: SResponse -> ByteString
+reason = statusMessage . simpleStatus
 
 header :: ByteString -> SResponse -> Maybe ByteString
 header name resp = snd <$> find ((== CI.mk name) . fst) (simpleHeaders resp)
@@ -837,6 +875,46 @@ tarballSpec = describe "artifact (tarball) path" $ do
             -- A private hit enqueues nothing — only a public-sourced admit does.
             drainJobs env `shouldReturn` []
 
+    it "relays the upstream status and content headers through on a private hit" $ do
+        -- The relay forwards the artifact's own status and content headers verbatim
+        -- (the client verifies dist.integrity over exactly these bytes). Asserting a
+        -- relayed Content-Type forces the header relay the streaming path applies.
+        privateUp <- privateArtifactHitWithHeader "Content-Type" "application/octet-stream" privateTarballBytes
+        publicUp <- artifactUpstream (encodePackument (admittingPublic "1.0.0")) publicTarballBytes
+        withProxyEnv privateUp publicUp Nothing $ \app _env -> do
+            resp <- getTarball "1.0.0" (Just "client-token") app
+            status resp `shouldBe` 200
+            reason resp `shouldBe` "OK"
+            header "Content-Type" resp `shouldBe` Just "application/octet-stream"
+            simpleBody resp `shouldBe` privateTarballBytes
+
+    it "falls through to the public leg when the private upstream URL is unformable" $ do
+        -- An empty private base URL cannot form an artifact request, so the private
+        -- leg yields a clean miss (never an error) and the serve path falls through
+        -- to the public leg — the artifact is still served from public.
+        privateUp <- privateArtifactHit privateTarballBytes
+        publicUp <- artifactUpstream (encodePackument (admittingPublic "1.0.0")) publicTarballBytes
+        queue <- newInMemoryQueue
+        let breakPrivate d = d{pdPrivateBaseUrl = ""}
+        withProxyEnvQueueDeps queue privateUp publicUp Nothing breakPrivate $ \app _env _port -> do
+            resp <- getTarball "1.0.0" Nothing app
+            status resp `shouldBe` 200
+            -- Served from public (the unformable private leg contributed nothing).
+            simpleBody resp `shouldBe` publicTarballBytes
+
+    it "401s a tarball request that fails edge authentication, before any upstream fetch" $ do
+        -- The inbound edge token gates the tarball path exactly as the packument
+        -- path: a missing/incorrect token is a 401 rendered before either upstream
+        -- is touched.
+        privateUp <- privateArtifactHit privateTarballBytes
+        publicUp <- artifactUpstream (encodePackument (admittingPublic "1.0.0")) publicTarballBytes
+        withProxyEnv privateUp publicUp (Just "edge-secret") $ \app _env -> do
+            resp <- getTarball "1.0.0" (Just "wrong-token") app
+            status resp `shouldBe` 401
+            -- No upstream was consulted — the edge rejected first.
+            seenAuth privateUp `shouldReturn` []
+            seenAuth publicUp `shouldReturn` []
+
     it "forwards the client credential to the private leg, never to the public" $ do
         -- On a private MISS the artifact still comes from public, but the gating
         -- packument and artifact fetches must be anonymous; the private leg saw the
@@ -882,6 +960,8 @@ tarballSpec = describe "artifact (tarball) path" $ do
         withProxyEnv privateUp publicUp Nothing $ \app env -> do
             resp <- getTarball "2.0.0" Nothing app
             status resp `shouldBe` 403
+            -- The reason phrase the serve error model maps a policy denial to.
+            reason resp `shouldBe` "Forbidden"
             drainJobs env `shouldReturn` []
 
     it "503s when the public upstream is unavailable (transient), enqueuing nothing" $ do
@@ -890,6 +970,10 @@ tarballSpec = describe "artifact (tarball) path" $ do
         withProxyEnv privateUp publicUp Nothing $ \app env -> do
             resp <- getTarball "1.0.0" Nothing app
             status resp `shouldBe` 503
+            reason resp `shouldBe` "Service Unavailable"
+            -- The rendered body carries the transient-outage reason the serve path
+            -- attaches to an unavailable public upstream.
+            decodedBody resp `shouldBe` object ["error" .= ("the upstream registry was unavailable" :: Text)]
             drainJobs env `shouldReturn` []
 
     it "404s a version absent from the public metadata (forwarded miss), enqueuing nothing" $ do
@@ -900,6 +984,10 @@ tarballSpec = describe "artifact (tarball) path" $ do
         withProxyEnv privateUp publicUp Nothing $ \app env -> do
             resp <- getTarball "9.9.9" Nothing app
             status resp `shouldBe` 404
+            -- The version-absent miss is carried as a WontResolve rejection but
+            -- rendered as a forwarded 404 — its reason phrase, not the 500 a
+            -- WontResolve would otherwise map to.
+            reason resp `shouldBe` "Not Found"
             drainJobs env `shouldReturn` []
 
     it "serves the artifact even when the enqueue fails (best-effort, non-blocking)" $ do
@@ -912,6 +1000,24 @@ tarballSpec = describe "artifact (tarball) path" $ do
             resp <- getTarball "1.0.0" Nothing app
             status resp `shouldBe` 200
             simpleBody resp `shouldBe` publicTarballBytes
+
+    it "500s when an admitted artifact's upstream URL cannot be formed (internal fault)" $ do
+        -- The version run carries a character that is a safe path component (so the
+        -- route accepts it and the gate admits the version) yet makes the upstream
+        -- artifact URL unparseable: an internal/config fault, distinct from the
+        -- rule/upstream serve outcomes — a 500 with the internal-error body, and no
+        -- mirror job. (The gate's metadata URL — @{base}/{pkg}@ — still forms, so the
+        -- gate admits; only the artifact URL — @{base}/{pkg}/-/{file}@ — fails.)
+        privateUp <- privateArtifactMiss
+        let badVersion = "1.0.0[" -- '[' is a safe component but unparseable in a URL path
+            admitting = packument [(badVersion, plainVersion badVersion)] badVersion [(badVersion, publishedDaysAgo 30)]
+        publicUp <- artifactUpstream (encodePackument admitting) publicTarballBytes
+        withProxyEnv privateUp publicUp Nothing $ \app env -> do
+            resp <- getTarball badVersion Nothing app
+            status resp `shouldBe` 500
+            reason resp `shouldBe` "Internal Server Error"
+            decodedBody resp `shouldBe` object ["error" .= ("could not form the upstream artifact URL" :: Text)]
+            drainJobs env `shouldReturn` []
 
     it "gates a lockfile install hitting the tarball URL with no preceding packument request" $ do
         -- An `npm ci` install fetches the tarball directly; the gate decides on this

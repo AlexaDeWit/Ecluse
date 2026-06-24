@@ -12,13 +12,14 @@ import Network.HTTP.Client (
     responseBody,
  )
 import Network.HTTP.Client qualified as HTTP
-import Network.HTTP.Types (status200)
-import Network.Wai (Application, responseStream)
+import Network.HTTP.Types (status200, status404, statusIsSuccessful)
+import Network.HTTP.Types.Header (hContentType)
+import Network.Wai (Application, responseLBS, responseStream)
 import Network.Wai.Handler.Warp (testWithApplication)
 import Test.Hspec
 import UnliftIO (concurrently)
 
-import Ecluse.Server.Stream (pumpBody, streamUpstream)
+import Ecluse.Server.Stream (pumpBody, streamUpstream, streamUpstreamWhen)
 
 {- | A chunk source over a fixed list of chunks: each pull returns the next chunk
 and an empty 'ByteString' once exhausted (the @http-client@ @BodyReader@
@@ -112,6 +113,45 @@ spec = do
                     req <- parseRequest ("http://127.0.0.1:" <> show proxyPort <> "/")
                     resp <- httpLbs req manager
                     toStrict (responseBody resp) `shouldBe` bigBody
+
+    describe "streamUpstreamWhen — conditional relay (hit / miss / open-failure)" $ do
+        it "relays the body AND the upstream content headers when the status passes accept" $ do
+            -- On a passing status the body streams through and the relay forwards the
+            -- upstream's content headers (the client verifies dist.integrity over the
+            -- relayed bytes and headers). The hit is observable as the upstream body
+            -- and its Content-Type reaching the real client.
+            manager <- newManager defaultManagerSettings
+            testWithApplication (pure headeredUpstream) $ \upPort ->
+                testWithApplication (pure (conditionalProxy manager upPort)) $ \proxyPort -> do
+                    req <- parseRequest ("http://127.0.0.1:" <> show proxyPort <> "/")
+                    resp <- httpLbs req manager
+                    toStrict (responseBody resp) `shouldBe` "the-bytes"
+                    (snd <$> find ((== hContentType) . fst) (HTTP.responseHeaders resp))
+                        `shouldBe` Just "application/octet-stream"
+
+        it "returns a clean miss (the fall-through marker) when the status fails accept" $ do
+            -- A 404 fails the success predicate: no response is committed, so the
+            -- proxy falls through and answers its own marker — proving the helper
+            -- reported the recoverable miss rather than relaying the upstream body.
+            manager <- newManager defaultManagerSettings
+            testWithApplication (pure missingUpstream) $ \upPort ->
+                testWithApplication (pure (conditionalProxy manager upPort)) $ \proxyPort -> do
+                    req <- parseRequest ("http://127.0.0.1:" <> show proxyPort <> "/")
+                    resp <- httpLbs req manager
+                    responseBody resp `shouldBe` fellThroughMarker
+
+        it "returns a clean miss when the upstream connection cannot be opened" $ do
+            -- The upstream port is bound only long enough to learn a free port, then
+            -- released, so opening the connection fails. That failure is the
+            -- recoverable phase: the helper reports a miss (Nothing) and the proxy
+            -- falls through, never committing a response from a connection it could
+            -- not open.
+            manager <- newManager defaultManagerSettings
+            deadPort <- testWithApplication (pure missingUpstream) pure
+            testWithApplication (pure (conditionalProxy manager deadPort)) $ \proxyPort -> do
+                req <- parseRequest ("http://127.0.0.1:" <> show proxyPort <> "/")
+                resp <- httpLbs req manager
+                responseBody resp `shouldBe` fellThroughMarker
   where
     -- An upstream that streams a fixed body back in 64 KiB chunks.
     upstreamApp :: ByteString -> Application
@@ -123,6 +163,31 @@ spec = do
     proxyApp manager upPort _req respond = do
         upReq <- parseRequest ("http://127.0.0.1:" <> show upPort <> "/")
         streamUpstream manager upReq (,) respond
+
+    -- An upstream that answers 200 with a body and a content header to relay.
+    headeredUpstream :: Application
+    headeredUpstream _req respond =
+        respond (responseLBS status200 [(hContentType, "application/octet-stream")] "the-bytes")
+
+    -- An upstream that always 404s — the conditional relay's recoverable miss.
+    missingUpstream :: Application
+    missingUpstream _req respond = respond (responseLBS status404 [] "not found")
+
+    {- The proxy under test: relay only a successful upstream status, otherwise
+    answer the fall-through marker. So a hit is observable as the upstream body, and
+    a miss (rejected status, or a connection that could not be opened) as the marker. -}
+    conditionalProxy :: HTTP.Manager -> Int -> Application
+    conditionalProxy manager upPort _req respond = do
+        upReq <- parseRequest ("http://127.0.0.1:" <> show upPort <> "/")
+        outcome <- streamUpstreamWhen manager upReq statusIsSuccessful (,) respond
+        case outcome of
+            Just received -> pure received
+            Nothing -> respond (responseLBS status200 [] fellThroughMarker)
+
+    -- The body a proxy answers on a conditional-relay miss (no upstream relay
+    -- occurred), distinct from any upstream body so a miss is unambiguous.
+    fellThroughMarker :: LByteString
+    fellThroughMarker = "FELL-THROUGH"
 
     writeChunks :: (Builder -> IO ()) -> IO () -> [ByteString] -> IO ()
     writeChunks _ _ [] = pure ()
