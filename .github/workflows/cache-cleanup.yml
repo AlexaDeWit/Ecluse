@@ -34,7 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
-      contents: read # checkout, to run scripts/prune-caches.py
+      contents: read # checkout, to run scripts/prune-caches.sh
       actions: write # delete caches via the REST API
     env:
       GH_TOKEN: ${{ github.token }}
@@ -62,10 +62,10 @@ jobs:
 
           # Decide which ids to delete. The selection logic (off-main stragglers +
           # superseded-epoch pruning, keyed on the prefix with the trailing hashFiles
-          # digest stripped) lives in scripts/prune-caches.py so it is reviewable,
-          # lintable, and runnable outside CI. It reads the TSV on stdin and writes
-          # the ids to delete on stdout.
-          python3 scripts/prune-caches.py < caches.tsv > to-delete.txt
+          # digest stripped) lives in scripts/prune-caches.sh — reviewable, lintable,
+          # and runnable outside CI. It reads the TSV on stdin and writes the ids to
+          # delete on stdout.
+          bash scripts/prune-caches.sh < caches.tsv > to-delete.txt
 
           count=$(wc -l < to-delete.txt | tr -d ' ')
           echo "Caches to delete: $count"
