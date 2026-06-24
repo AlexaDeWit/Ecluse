@@ -211,29 +211,43 @@ mergePackuments inputs@((_, firstInfo) : _) =
     -- Fold every source's versions into one map, trusted winning a key collision,
     -- recording for each survivor the details that won and the source that won it,
     -- and collecting any integrity divergence as we go.
-    (mergedVersions, divergences) =
+    (mergedVersions, reversedDivs) =
         foldl' mergeSource (Map.empty, []) indexed
+
+    -- The fold prepends each divergence (O(1)) rather than appending, so it stays
+    -- O(k) for k divergences; reverse once here to restore encounter order, which
+    -- 'mpDivergences' documents.
+    divergences = reverse reversedDivs
 
     mergeSource ::
         (Map Text (PackageDetails, SourceId), [Divergence]) ->
         (SourceId, Provenance, PackageInfo) ->
         (Map Text (PackageDetails, SourceId), [Divergence])
     mergeSource acc (sid, prov, info) =
-        foldl' (mergeVersion sid prov) acc (Map.toList (infoVersions info))
+        -- Fold the tree directly with 'foldlWithKey'' rather than over
+        -- 'Map.toList': the list form allocates a cons cell and a (key, value)
+        -- tuple per version (up to 'maxVersionCount') only to be torn apart at
+        -- once. 'mergeVersion' takes the key and value unpaired to match.
+        Map.foldlWithKey' (mergeVersion sid prov) acc (infoVersions info)
 
     mergeVersion ::
         SourceId ->
         Provenance ->
         (Map Text (PackageDetails, SourceId), [Divergence]) ->
-        (Text, PackageDetails) ->
+        Text ->
+        PackageDetails ->
         (Map Text (PackageDetails, SourceId), [Divergence])
-    mergeVersion sid prov (versions, divs) (key, incoming) =
+    mergeVersion sid prov (versions, divs) key incoming =
         case Map.lookup key versions of
             Nothing -> (Map.insert key (incoming, sid) versions, divs)
             Just (existing, existingSid) ->
+                -- Prepend, not append: 'divs <> divs'' would re-traverse the growing
+                -- accumulator each step, making the fold O(k²) in the number of
+                -- divergences. 'mergePackuments' reverses once at the end to recover
+                -- the encounter order 'mpDivergences' documents.
                 let (winner, divs') =
                         resolveCollision key prov (existing, existingSid) (incoming, sid)
-                 in (Map.insert key winner versions, divs <> divs')
+                 in (Map.insert key winner versions, divs' ++ divs)
 
     -- The accumulator already holds a value for this key; @existing@ won an
     -- earlier round (so it is at least as high-precedence as anything before),

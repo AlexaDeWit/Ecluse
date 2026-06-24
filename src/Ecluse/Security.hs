@@ -523,7 +523,7 @@ checkNestingDepth limits value =
     within budget v =
         budget >= 1 && case v of
             Object o -> all (within (budget - 1)) (KeyMap.elems o)
-            Array xs -> all (within (budget - 1)) (V.toList xs)
+            Array xs -> V.all (within (budget - 1)) xs
             String _ -> True
             Number _ -> True
             Bool _ -> True
