@@ -9,6 +9,7 @@ local pages = {
   ["ALTERNATIVES.md"] = "alternatives.html",
   ["USAGE.md"]        = "usage.html",
   ["README.md"]       = "index.html",
+  ["AI-DISCLOSURE.md"] = "ai-disclosure.html",
 }
 
 local blob = "https://github.com/AlexaDeWit/Ecluse/blob/main/"

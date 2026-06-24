@@ -87,6 +87,11 @@ img { max-width: 100%; }
 }
 .hero h1 { border: none; margin-bottom: 0; }
 .hero .lead { color: var(--muted); font-size: 1.15rem; max-width: 34rem; margin: 0.5rem auto 0; }
+.disclosure-note {
+  max-width: 38rem; margin: 0 auto; padding: 0.75rem 1rem; text-align: center;
+  font-size: 0.9rem; color: var(--muted);
+  border: 1px solid var(--border); border-radius: 10px; background: var(--surface);
+}
 .cards {
   display: grid; gap: 1rem; margin: 2.5rem 0;
   grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));

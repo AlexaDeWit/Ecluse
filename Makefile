@@ -208,6 +208,7 @@ site: docs-site ## Assemble the Pages site (landing + rendered docs at /, Haddoc
 	$(NIX) pandoc MOTIVATION.md   -o _site/motivation.html   $(PANDOC_FLAGS) -M title="Why Écluse?"
 	$(NIX) pandoc ALTERNATIVES.md -o _site/alternatives.html $(PANDOC_FLAGS) -M title="Alternatives"
 	$(NIX) pandoc USAGE.md        -o _site/usage.html        $(PANDOC_FLAGS) -M title="Operator Manual"
+	$(NIX) pandoc AI-DISCLOSURE.md -o _site/ai-disclosure.html $(PANDOC_FLAGS) -M title="Built with AI"
 	@echo "Assembled ./_site (landing + rendered docs at /, Haddock under /api)"
 
 nix-build: ## Build the release artifact via Nix (hermetic)
