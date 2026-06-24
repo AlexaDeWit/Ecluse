@@ -18,9 +18,9 @@ import Data.Time.Format.ISO8601 (iso8601Show)
 import GHC.IO.Handle (hClose, hDuplicate, hDuplicateTo)
 import Katip (Environment (Environment), Namespace (Namespace), closeScribes, initLogEnv)
 import Network.HTTP.Client (Manager, defaultManagerSettings, newManager)
-import Network.HTTP.Types (Header, hAuthorization, status200, status404, status500, statusCode, statusMessage)
+import Network.HTTP.Types (Header, hAuthorization, methodHead, status200, status404, status500, statusCode, statusMessage)
 import Network.HTTP.Types.Header (hHost)
-import Network.Wai (Application, Request (rawPathInfo, requestHeaders), Response, responseLBS, responseRaw)
+import Network.Wai (Application, Request (rawPathInfo, requestHeaders, requestMethod), Response, responseLBS, responseRaw)
 import Network.Wai.Handler.Warp (testWithApplication)
 import Network.Wai.Test (
     SResponse (simpleBody, simpleHeaders, simpleStatus),
@@ -99,12 +99,14 @@ policy =
 -- ── upstream doubles ──────────────────────────────────────────────────────────
 
 {- | An in-process upstream double: it records the @Authorization@ header of every
-request it receives (so the credential-authority invariant is assertable) and
-serves a fixed response.
+request it receives (so the credential-authority invariant is assertable), records
+the HTTP method of every artifact-slot (tarball) request it receives (so a HEAD that
+must not pump the artifact body is assertable), and serves a fixed response.
 -}
 data Upstream = Upstream
     { upApp :: Application
     , upSeenAuth :: IORef [Maybe ByteString]
+    , upSeenArtifactMethods :: IORef [ByteString]
     }
 
 {- | An upstream double serving a fixed packument body with @200@, recording each
@@ -133,7 +135,7 @@ mutatingUpstream bodies = do
             modifyIORef' seen (lookupAuth (requestHeaders req) :)
             body <- atomicModifyIORef' remaining serveNext
             respond (responseLBS status200 [] body)
-    pure Upstream{upApp = app, upSeenAuth = seen}
+    mkUpstream seen app
   where
     -- Serve the head and advance, but hold on the last body once exhausted.
     serveNext :: [LByteString] -> ([LByteString], LByteString)
@@ -149,7 +151,7 @@ upstreamRespondingWith response = do
         app req respond = do
             modifyIORef' seen (lookupAuth (requestHeaders req) :)
             respond response
-    pure Upstream{upApp = app, upSeenAuth = seen}
+    mkUpstream seen app
 
 -- The @Authorization@ header value a request carried, if any.
 lookupAuth :: [Header] -> Maybe ByteString
@@ -158,6 +160,27 @@ lookupAuth headers = snd <$> find ((== hAuthorization) . fst) headers
 -- The auth headers an upstream double saw, in arrival order.
 seenAuth :: Upstream -> IO [Maybe ByteString]
 seenAuth up = reverse <$> readIORef (upSeenAuth up)
+
+-- The HTTP methods an upstream double saw on its artifact-slot (tarball) requests,
+-- in arrival order — so a test can assert a HEAD request reached upstream as a HEAD
+-- (never the body-pumping GET) and that no full-artifact GET was issued.
+seenArtifactMethods :: Upstream -> IO [ByteString]
+seenArtifactMethods up = reverse <$> readIORef (upSeenArtifactMethods up)
+
+{- | Assemble an 'Upstream' over a double that already records each request's
+@Authorization@ into the given ref: allocate the artifact-method ref and wrap the
+app so a tarball-slot request additionally records its 'requestMethod'. The doubles
+keep recording auth themselves (each shapes its own response); this only layers the
+artifact-method recording on uniformly.
+-}
+mkUpstream :: IORef [Maybe ByteString] -> Application -> IO Upstream
+mkUpstream seen app = do
+    methods <- newIORef []
+    let recording req respond = do
+            when (isTarballPath (rawPathInfo req)) $
+                modifyIORef' methods (requestMethod req :)
+            app req respond
+    pure Upstream{upApp = recording, upSeenAuth = seen, upSeenArtifactMethods = methods}
 
 -- ── tarball upstream doubles (path-aware) ─────────────────────────────────────
 
@@ -224,7 +247,7 @@ artifactUpstream version tarballBody = do
                 if isTarballPath (rawPathInfo req)
                     then responseLBS status200 [] tarballBody
                     else responseLBS status200 [] (encodePackument (selfHostedAdmitting (selfBaseUrl req) version))
-    pure Upstream{upApp = app, upSeenAuth = seen}
+    mkUpstream seen app
 
 {- | A path-aware upstream double serving a __given__ packument body verbatim (its
 @dist.tarball@ already addressing this double via 'selfBaseUrl'), and the given
@@ -242,7 +265,7 @@ artifactUpstreamServing packumentFor tarballBody = do
                 if isTarballPath (rawPathInfo req)
                     then responseLBS status200 [] tarballBody
                     else responseLBS status200 [] (packumentFor (selfBaseUrl req))
-    pure Upstream{upApp = app, upSeenAuth = seen}
+    mkUpstream seen app
 
 {- | A private upstream double that has the artifact: it answers the packument fetch
 with a single-version packument whose @dist.tarball@ points back at this double
@@ -277,7 +300,7 @@ privateArtifactHitWith version extraHeaders tarballBody = do
                 if isTarballPath (rawPathInfo req)
                     then responseLBS status200 extraHeaders tarballBody
                     else responseLBS status200 [] (encodePackument (selfHostedAdmitting (selfBaseUrl req) version))
-    pure Upstream{upApp = app, upSeenAuth = seen}
+    mkUpstream seen app
 
 {- | A private upstream double that has a __hashless__ artifact: the packument fetch
 returns a single-version packument whose @dist@ carries a @tarball@ pointing back at
@@ -299,7 +322,7 @@ privateArtifactHitHashless version tarballBody = do
                         responseLBS status200 [] $
                             encodePackument
                                 (packument [(version, selfHostedHashless (selfBaseUrl req) version)] version [(version, publishedDaysAgo 1)])
-    pure Upstream{upApp = app, upSeenAuth = seen}
+    mkUpstream seen app
 
 {- | A private upstream double that resolves the packument but does __not__ hold the
 artifact bytes: the packument fetch is a self-referential single-version packument
@@ -316,7 +339,7 @@ privateArtifactMiss = do
                 if isTarballPath (rawPathInfo req)
                     then responseLBS status404 [] "not found"
                     else responseLBS status200 [] (encodePackument (selfHostedAdmitting (selfBaseUrl req) "1.0.0"))
-    pure Upstream{upApp = app, upSeenAuth = seen}
+    mkUpstream seen app
 
 {- | A private upstream double that begins serving the artifact then fails
 __mid-stream__: a tarball-slot path is answered (over the raw connection) with a
@@ -338,7 +361,7 @@ privateArtifactMidStreamFailure = do
             if isTarballPath (rawPathInfo req)
                 then respond (responseRaw truncatedArtifact (responseLBS status500 [] "raw unsupported"))
                 else respond (responseLBS status200 [] (encodePackument (selfHostedAdmitting (selfBaseUrl req) "1.0.0")))
-    pure Upstream{upApp = app, upSeenAuth = seen}
+    mkUpstream seen app
   where
     -- Write a 200 declaring a 1 MiB body, send only a little, then return: Warp
     -- closes the raw socket, so the proxy reads EOF short of the Content-Length and
@@ -605,6 +628,18 @@ getThingWith extra =
 getTarball :: Text -> Maybe Text -> Application -> IO SResponse
 getTarball version bearer =
     runSession (request (setPath baseRequest path))
+  where
+    path = "/npm/thing/-/thing-" <> encodeUtf8 version <> ".tgz"
+    baseRequest =
+        defaultRequest{requestHeaders = maybe [] (\t -> [(hAuthorization, "Bearer " <> encodeUtf8 t)]) bearer}
+
+{- | A @HEAD /npm/thing/-/thing-{version}.tgz@ artifact request carrying the given
+(optional) bearer credential — the same tarball coordinate as 'getTarball', issued
+as a HEAD so the serve path must answer without pumping the full artifact body.
+-}
+headTarball :: Text -> Maybe Text -> Application -> IO SResponse
+headTarball version bearer =
+    runSession (request (setPath baseRequest path){requestMethod = methodHead})
   where
     path = "/npm/thing/-/thing-" <> encodeUtf8 version <> ".tgz"
     baseRequest =
@@ -1128,7 +1163,7 @@ crossHostPublicUpstream crossHost version tarballBody = do
             let port = snd (T.breakOnEnd ":" (decodeUtf8 (maybe "" snd (find ((== hHost) . fst) (requestHeaders req)))))
                 tarballBase = "http://" <> crossHost <> ":" <> port
              in selfHostedAdmitting tarballBase version
-    pure Upstream{upApp = app, upSeenAuth = seen}
+    mkUpstream seen app
 
 {- | A double whose version's @dist.tarball@ sits at a __non-conventional path__
 (@\/files\/{filename}@, not the npm @\/-\/@ slot) on its own host, with the given
@@ -1156,7 +1191,7 @@ honouredPathUpstream version filename tarballBody = do
                         ]
                 vo = object ["name" .= ("thing" :: Text), "version" .= version, "dist" .= dist]
              in packument [(version, vo)] version [(version, publishedDaysAgo 30)]
-    pure Upstream{upApp = app, upSeenAuth = seen}
+    mkUpstream seen app
 
 -- A flat projection of a mirror job, for an order-stable equality assertion over
 -- the four coordinates the job carries (package, version, public artifact URL,
@@ -1516,6 +1551,64 @@ tarballSpec = describe "artifact (tarball) path" $ do
             -- Streamed from the trusted private origin, not fallen through to public.
             simpleBody resp `shouldBe` privateTarballBytes
             seenAuth publicUp `shouldReturn` []
+
+    headTarballSpec
+
+{- | HEAD on a tarball route must never run the full-GET streaming pump: a bodiless
+HEAD must not be able to force the proxy to open the upstream artifact connection and
+pump a whole artifact body to nowhere — the DoS-amplification lever this guards
+against. A HEAD goes through the identical gating and upstream-request construction as
+the GET path, but issues the upstream request as a HEAD and relays its status (and
+safe headers) with no body.
+-}
+headTarballSpec :: Spec
+headTarballSpec = describe "HEAD on a tarball route (no full-artifact body pump)" $ do
+    it "answers a private-hit HEAD by probing upstream as a HEAD, never a body GET" $ do
+        -- The private upstream has the artifact. A HEAD must reach its artifact slot
+        -- as a HEAD — never the body-pumping GET — and the client gets a 200 with an
+        -- empty body. (A GET reaching upstream would be the amplification this prevents.)
+        privateUp <- privateArtifactHit "1.0.0" privateTarballBytes
+        publicUp <- artifactUpstream "1.0.0" publicTarballBytes
+        withProxyEnv privateUp publicUp Nothing $ \app env -> do
+            resp <- headTarball "1.0.0" (Just "client-token") app
+            status resp `shouldBe` 200
+            -- No body on a HEAD reply.
+            simpleBody resp `shouldBe` ""
+            -- The upstream artifact slot was contacted as a HEAD, never a GET.
+            seenArtifactMethods privateUp `shouldReturn` [methodHead]
+            -- The public origin was never consulted on a private hit, and no mirror
+            -- job is enqueued (a HEAD serves no bytes — there is nothing to back-fill).
+            seenAuth publicUp `shouldReturn` []
+            drainJobs env `shouldReturn` []
+
+    it "answers a public-admit HEAD by probing upstream as a HEAD, enqueuing nothing" $ do
+        -- A private miss falls through to the public origin, the version is gated and
+        -- admitted, and the artifact slot is probed as a HEAD (never a GET). The reply
+        -- is a 200 with an empty body; a HEAD enqueues no mirror job.
+        privateUp <- privateArtifactMiss
+        publicUp <- artifactUpstream "1.0.0" publicTarballBytes
+        withProxyEnv privateUp publicUp Nothing $ \app env -> do
+            resp <- headTarball "1.0.0" Nothing app
+            status resp `shouldBe` 200
+            simpleBody resp `shouldBe` ""
+            -- The public artifact slot was contacted as a HEAD, never a body GET.
+            seenArtifactMethods publicUp `shouldReturn` [methodHead]
+            drainJobs env `shouldReturn` []
+
+    it "denies a too-new version with 403 and an empty body, never touching the artifact" $ do
+        -- The gating is identical to GET: a version inside the quarantine is a policy
+        -- denial. A denied HEAD is a 403 with no body, and the artifact slot is never
+        -- contacted by any method.
+        privateUp <- privateArtifactMiss
+        let tooNew base = packument [("2.0.0", selfHostedVersion base "2.0.0")] "2.0.0" [("2.0.0", publishedDaysAgo 3)]
+        publicUp <- artifactUpstreamServing (encodePackument . tooNew) publicTarballBytes
+        withProxyEnv privateUp publicUp Nothing $ \app env -> do
+            resp <- headTarball "2.0.0" Nothing app
+            status resp `shouldBe` 403
+            simpleBody resp `shouldBe` ""
+            -- The artifact was never fetched, by any method — the gate refused first.
+            seenArtifactMethods publicUp `shouldReturn` []
+            drainJobs env `shouldReturn` []
 
 -- ── the effectful rule tier through the pipeline ───────────────────────────────
 

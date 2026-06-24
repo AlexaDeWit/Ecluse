@@ -79,8 +79,8 @@ module Ecluse.Server (
     defaultRequestSizeLimit,
 ) where
 
-import Network.HTTP.Types (Status, hConnection, hContentType, status200, status404, status501, status503)
-import Network.Wai (Application, Middleware, Request, Response, ResponseReceived, mapResponseHeaders, modifyResponse, pathInfo, responseLBS)
+import Network.HTTP.Types (Status, hConnection, hContentType, methodHead, status200, status404, status501, status503)
+import Network.Wai (Application, Middleware, Request, Response, ResponseReceived, mapResponseHeaders, modifyResponse, pathInfo, requestMethod, responseLBS)
 import Network.Wai.Handler.Warp qualified as Warp
 import Network.Wai.Middleware.RealIp (realIp)
 import Network.Wai.Middleware.RequestSizeLimit (defaultRequestSizeLimitSettings, requestSizeLimitMiddleware, setMaxLengthForRequest)
@@ -97,7 +97,7 @@ import Ecluse.Server.Context (
     RequestCtx (RequestCtx),
     runHandler,
  )
-import Ecluse.Server.Pipeline (servePackument, serveTarball)
+import Ecluse.Server.Pipeline (headTarball, servePackument, serveTarball)
 import Ecluse.Server.Response (MountRenderer, RenderedBody (RenderedBody), renderError)
 import Ecluse.Server.Route (Route (..))
 import Ecluse.Worker (heartbeatHealthyNow)
@@ -341,16 +341,26 @@ per-request 'RequestCtx' once — the composition-root 'Env' paired with the mat
 renderer from context rather than as threaded arguments (the deps-or-@501@ decision
 is the handler's). Every other route renders to a pure 'Response' through the
 mount's renderer.
+
+A @HEAD@ on the 'Tarball' route is dispatched to 'headTarball', which gates the
+artifact identically to the @GET@ path but probes the upstream as a @HEAD@ and relays
+the headers with no body — so a bodiless @HEAD@ can never open and pump the full
+artifact body (the reason @Autohead@ is deliberately not used; see 'serverMiddleware').
 -}
 serve :: Env -> MountBinding -> Route -> Request -> (Response -> IO ResponseReceived) -> IO ResponseReceived
 serve env binding classified request respond =
     case classified of
         Packument name -> runHandler ctx (servePackument name request respond)
-        Tarball name version filename -> runHandler ctx (serveTarball name version filename request respond)
+        Tarball name version filename
+            | isHead -> runHandler ctx (headTarball name version filename request respond)
+            | otherwise -> runHandler ctx (serveTarball name version filename request respond)
         _ -> respond (renderRoute (bindingRenderer binding) classified)
   where
     ctx :: RequestCtx
     ctx = RequestCtx env binding
+
+    isHead :: Bool
+    isHead = requestMethod request == methodHead
 
 {- Match a request path to a mount: the first binding whose prefix the path begins
 with, paired with the remainder classified through that mount's classifier.
@@ -491,10 +501,12 @@ mesh's connection pool) does not reuse a socket on an instance that is shutting 
 
 Two @wai-extra@ middlewares are deliberately __not__ used. @Autohead@ answers a
 HEAD by running the GET handler and discarding the body, which on a tarball route
-would open the upstream and stream a whole artifact to nowhere — HEAD on
-artifacts is handled explicitly instead. @Gzip@ would re-compress already
-compressed artifacts and fight the streaming backpressure the serve path relies
-on.
+would open the upstream and stream a whole artifact to nowhere; instead a HEAD on
+the tarball route is handled explicitly (in 'serve'), gating the artifact exactly as
+the GET path does but probing the upstream as a HEAD and relaying the headers with no
+body, so a bodiless HEAD can never trigger a full-artifact upstream fetch. @Gzip@
+would re-compress already compressed artifacts and fight the streaming backpressure
+the serve path relies on.
 -}
 serverMiddleware :: ServerConfig -> Middleware
 serverMiddleware cfg =
