@@ -30,7 +30,7 @@ import Ecluse.Registry (ParseError (ParseError), RegistryClient (..))
 import Ecluse.Registry.Npm.Route qualified as Npm
 import Ecluse.Registry.Npm.Serve (npmRenderer)
 import Ecluse.Rules.Types (PrecededRule, Rule (AllowIfPublishedBefore), atDefaultPrecedence)
-import Ecluse.Security (LoweredHostSet, TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), lowerCaseHosts)
+import Ecluse.Security (LoweredHostSet, TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), defaultLimits, lowerCaseHosts)
 import Ecluse.Security.Egress (newGuardedTlsManager)
 import Ecluse.Server (MountBinding (..), application, mkServerConfig)
 import Ecluse.Server.Cache (defaultCacheConfig, newMetadataCache)
@@ -146,6 +146,7 @@ deps policy internalOptIn port =
         , pdEffectfulRules = []
         , pdTarballHostPolicy = policy
         , pdAllowedInternalHosts = internalOptIn
+        , pdLimits = defaultLimits
         , pdInboundToken = Nothing
         , pdNow = pure fixedNow
         , pdHelp = Nothing

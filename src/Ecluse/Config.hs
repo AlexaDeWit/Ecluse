@@ -110,6 +110,10 @@ import Ecluse.Rules.Types (
     Rule (..),
     defaultPrecedence,
  )
+import Ecluse.Security (
+    Limits (maxBodyBytes, maxNestingDepth, maxVersionCount),
+    defaultLimits,
+ )
 import Ecluse.Telemetry (TelemetrySwitch (..), parseTelemetrySwitch)
 
 -- ── network values ───────────────────────────────────────────────────────────
@@ -309,6 +313,26 @@ data EnvConfig = EnvConfig
     {- ^ The metadata cache's bound on the number of distinct packages held before
     it evicts (@METADATA_CACHE_MAX_ENTRIES@, default 1024) — a flood safety valve.
     -}
+    , cfgMaxResponseBytes :: Int
+    {- ^ The largest upstream metadata body, in bytes, the data plane buffers before
+    aborting the fetch (@PROXY_MAX_RESPONSE_BYTES@, default 16 MiB — 'maxBodyBytes'
+    of 'Ecluse.Security.defaultLimits'). Bounds memory against a hostile upstream
+    returning a multi-gigabyte body; the metadata path streams a bounded read, so a
+    body past the cap is refused fail-closed rather than buffered whole (artifacts
+    stream and are not subject to this).
+    -}
+    , cfgMaxVersionCount :: Int
+    {- ^ The largest number of versions a parsed packument may carry before it is
+    refused (@PROXY_MAX_VERSION_COUNT@, default 100000 — 'maxVersionCount' of
+    'Ecluse.Security.defaultLimits'). Bounds per-version rule evaluation against a
+    version-flood document.
+    -}
+    , cfgMaxNestingDepth :: Int
+    {- ^ The deepest JSON nesting a decoded upstream document may reach before it is
+    refused (@PROXY_MAX_NESTING_DEPTH@, default 64 — 'maxNestingDepth' of
+    'Ecluse.Security.defaultLimits'). Bounds stack\/CPU against a pathologically
+    nested payload.
+    -}
     , cfgLogFormat :: LogFormat
     {- ^ The structured-log output shape (@PROXY_LOG_FORMAT@, default @json@): the
     one-line JSONL stream for a container, or the human-readable console form
@@ -370,6 +394,16 @@ envParser =
         -- "off" setting; see cfgCacheTtl.
         <*> Env.var secondsReader "METADATA_CACHE_TTL_SECONDS" (Env.def defaultCacheTtl)
         <*> Env.var positiveIntReader "METADATA_CACHE_MAX_ENTRIES" (Env.def defaultCacheMaxEntries)
+        -- The response-bound budget (security.md invariant 4), each defaulting to the
+        -- corresponding field of 'Ecluse.Security.defaultLimits'. Every one must be a
+        -- strictly positive integer: a zero or negative ceiling is a degenerate budget
+        -- (a body limit of 0 refuses every body, a version/depth limit of 0 refuses
+        -- every document), so it is rejected loudly rather than silently fail-closing
+        -- the proxy. The values are generous for real registry documents and tight
+        -- enough to fail closed on pathological input.
+        <*> Env.var positiveIntReader "PROXY_MAX_RESPONSE_BYTES" (Env.def (maxBodyBytes defaultLimits))
+        <*> Env.var positiveIntReader "PROXY_MAX_VERSION_COUNT" (Env.def (maxVersionCount defaultLimits))
+        <*> Env.var positiveIntReader "PROXY_MAX_NESTING_DEPTH" (Env.def (maxNestingDepth defaultLimits))
         <*> Env.var logFormatReader "PROXY_LOG_FORMAT" (Env.def JsonLog)
         <*> Env.var telemetrySwitchReader "PROXY_TELEMETRY" (Env.def TelemetryOff)
   where

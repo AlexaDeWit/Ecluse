@@ -27,7 +27,7 @@ import Ecluse.Config (
  )
 import Ecluse.Credential (authSecret, currentToken, unSecret)
 import Ecluse.Ecosystem (Ecosystem (..))
-import Ecluse.Security (TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument))
+import Ecluse.Security (Limits (maxBodyBytes, maxNestingDepth, maxVersionCount), TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), defaultLimits)
 import Ecluse.Server.Cache (CacheConfig (cacheMaxEntries, cacheTtl))
 import Ecluse.Server.Context (
     MountBinding (bindingPackumentDeps, bindingPrefix),
@@ -219,6 +219,35 @@ composeBindingsSpec = describe "planMounts / composeBindings (config-driven serv
         planFrom env Nothing >>= \case
             Right [binding] -> case bindingPackumentDeps binding of
                 Just deps -> pdTarballHostPolicy deps `shouldBe` AnyAllowlistedHost
+                Nothing -> expectationFailure "expected packument deps wired"
+            other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
+
+    it "defaults the response-bound budget to the secure defaults" $ do
+        -- With no PROXY_MAX_* set, the deps carry Ecluse.Security.defaultLimits — the
+        -- secure-default body/version/nesting ceilings (security.md invariant 4).
+        env <- expectEnv staticEnvVars
+        planFrom env Nothing >>= \case
+            Right [binding] -> case bindingPackumentDeps binding of
+                Just deps -> pdLimits deps `shouldBe` defaultLimits
+                Nothing -> expectationFailure "expected packument deps wired"
+            other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
+
+    it "threads the operator's response-bound overrides onto the deps" $ do
+        -- The three PROXY_MAX_* knobs flow from the environment layer onto every
+        -- mount's Limits budget, so a deployment tightens or loosens the bounds.
+        env <-
+            expectEnv
+                ( ("PROXY_MAX_RESPONSE_BYTES", "2048")
+                    : ("PROXY_MAX_VERSION_COUNT", "10")
+                    : ("PROXY_MAX_NESTING_DEPTH", "16")
+                    : staticEnvVars
+                )
+        planFrom env Nothing >>= \case
+            Right [binding] -> case bindingPackumentDeps binding of
+                Just deps -> do
+                    maxBodyBytes (pdLimits deps) `shouldBe` 2048
+                    maxVersionCount (pdLimits deps) `shouldBe` 10
+                    maxNestingDepth (pdLimits deps) `shouldBe` 16
                 Nothing -> expectationFailure "expected packument deps wired"
             other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
 

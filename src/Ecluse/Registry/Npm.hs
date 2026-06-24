@@ -87,18 +87,24 @@ module Ecluse.Registry.Npm (
 
     -- * Lower-level fetch (form- and validator-aware)
     fetchMetadataForm,
+
+    -- * Response-bound breach
+    ResponseBoundExceeded (..),
 ) where
 
 import Data.Text qualified as T
 import Network.HTTP.Client (
+    BodyReader,
     Manager,
     Request (decompress, method, requestBody, requestHeaders),
     RequestBody (RequestBodyBS),
     Response (responseStatus),
     applyBearerAuth,
+    brRead,
     httpLbs,
     parseRequest,
     responseBody,
+    withResponse,
  )
 import Network.HTTP.Types.Header (
     hAccept,
@@ -124,6 +130,12 @@ import Ecluse.Registry (
     UrlFormationError (EmptyBaseUrl, UnparseableUrl),
  )
 import Ecluse.Registry.Npm.Project qualified as Project
+import Ecluse.Security (
+    LimitError,
+    Limits,
+    boundedRead,
+    defaultLimits,
+ )
 import Ecluse.Version (Version, renderVersion)
 
 -- ── configuration ────────────────────────────────────────────────────────────
@@ -145,6 +157,13 @@ data NpmClientConfig = NpmClientConfig
     -- ^ The shared @http-client@ 'Manager' to issue requests through.
     , npmToken :: Maybe Secret
     -- ^ An injected bearer token to attach, or 'Nothing' for anonymous requests.
+    , npmLimits :: Limits
+    {- ^ The response-bound budget enforced on a metadata fetch: 'fetchMetadataForm'
+    reads the body through 'Ecluse.Security.boundedRead' against
+    'Ecluse.Security.maxBodyBytes', aborting fail-closed past the cap rather than
+    buffering an unbounded body. The other 'Ecluse.Security.Limits' ceilings (version
+    count, nesting depth) are enforced by the decode\/projection layer, not here.
+    -}
     }
 
 {- | The canonical public npm registry base URL, @https:\/\/registry.npmjs.org@.
@@ -154,8 +173,9 @@ publicRegistryBaseUrl :: Text
 publicRegistryBaseUrl = "https://registry.npmjs.org"
 
 {- | An anonymous client config against the public registry ('publicRegistryBaseUrl'),
-using the given shared 'Manager'. Override 'npmBaseUrl'\/'npmToken' for a managed
-backend.
+using the given shared 'Manager' and the secure-default response bounds
+('Ecluse.Security.defaultLimits'). Override 'npmBaseUrl'\/'npmToken'\/'npmLimits' for
+a managed backend or a per-deployment budget.
 -}
 defaultNpmConfig :: Manager -> NpmClientConfig
 defaultNpmConfig manager =
@@ -163,6 +183,7 @@ defaultNpmConfig manager =
         { npmBaseUrl = publicRegistryBaseUrl
         , npmManager = manager
         , npmToken = Nothing
+        , npmLimits = defaultLimits
         }
 
 -- ── content negotiation ──────────────────────────────────────────────────────
@@ -392,15 +413,29 @@ newNpmClient config =
             }
 
 {- | Fetch a package's metadata in the requested 'MetadataForm', relaying any
-conditional-GET 'Validators'. The buffered fetch used by the handle's
+conditional-GET 'Validators'. The bounded-read fetch used by the handle's
 'Ecluse.Registry.fetchMetadata'; the request pipeline calls this directly when it
 needs the full packument or wants to revalidate against an @ETag@.
 
-A request-building failure (an unformable URL) surfaces as a typed
-'UrlFormationError' exception rather than a silent success: a misconfigured base
-URL is a programming\/config fault on the read path, not a per-response condition
-the projection layer reports. (The write path instead returns it as a
-'Ecluse.Registry.PublishFault' value, where the worker must choose retry vs. drop.)
+The body is read __chunk-by-chunk through 'Ecluse.Security.boundedRead'__ against
+the config's 'npmLimits', not buffered whole: a hostile or compromised upstream
+returning a body larger than 'Ecluse.Security.maxBodyBytes' is aborted
+__fail-closed__ rather than exhausting memory (security.md invariant 4). A body
+within budget is returned whole (the metadata path projects the entire document);
+artifacts are the separate streaming concern, not bounded here. The request's
+@Accept-Encoding: gzip@ still applies — @http-client@ decompresses transparently
+under 'withResponse' exactly as under @httpLbs@, so the cap bounds the
+__decompressed__ bytes the proxy actually retains.
+
+A body-size breach surfaces as a typed 'ResponseBoundExceeded' exception carrying
+the 'Ecluse.Security.LimitError', so the request pipeline's @tryAny@ degrades the
+contribution to nothing — the fail-closed parse-failure path — rather than the
+projection layer ever seeing a truncated body. A request-building failure (an
+unformable URL) likewise surfaces as a typed 'UrlFormationError' exception rather
+than a silent success: a misconfigured base URL is a programming\/config fault on
+the read path, not a per-response condition the projection layer reports. (The write
+path instead returns an unformable URL as a 'Ecluse.Registry.PublishFault' value,
+where the worker must choose retry vs. drop.)
 -}
 fetchMetadataForm ::
     NpmClientConfig ->
@@ -410,8 +445,39 @@ fetchMetadataForm ::
     IO RegistryResponse
 fetchMetadataForm config form validators name = do
     request <- orThrow (metadataRequest config form validators name)
-    response <- httpLbs request (npmManager config)
-    pure (RegistryResponse (toStrict (responseBody response)))
+    withResponse request (npmManager config) $ \response ->
+        readBoundedBody (npmLimits config) (responseBody response)
+
+{- | Raised when an upstream metadata body breaches a 'Ecluse.Security.Limits'
+ceiling: the body-size guard here, or — surfaced through the same type by the serve
+pipeline — the version-count or nesting-depth guard.
+
+Carries the 'Ecluse.Security.LimitError' (which ceiling, the observed value, and the
+cap), so the breach is __diagnosable__ rather than collapsing into an opaque failure:
+the serve path logs it at the breach point before degrading the contribution to
+nothing. It is thrown fail-closed (never a truncated or partial body), so it surfaces
+to the fetch caller exactly as a parse failure would — the request pipeline's @tryAny@
+treats it as a degraded (missing) contribution.
+-}
+newtype ResponseBoundExceeded = ResponseBoundExceeded LimitError
+    deriving stock (Eq, Show)
+
+instance Exception ResponseBoundExceeded
+
+{- Read a response body chunk-by-chunk through 'boundedRead' against the budget,
+returning the whole body as a 'RegistryResponse' when within the cap. A body past
+'Ecluse.Security.maxBodyBytes' aborts the read fail-closed and is raised as a typed
+'ResponseBoundExceeded' (never a truncated body), so the caller can log the breach
+and its @tryAny@ degrades it to a missing contribution — the same handling a parse
+failure gets. -}
+readBoundedBody :: Limits -> BodyReader -> IO RegistryResponse
+readBoundedBody limits bodyReader =
+    boundedRead limits (brRead bodyReader) >>= \case
+        Right body -> pure (RegistryResponse body)
+        -- 'boundedRead' only ever yields 'BodyTooLarge'; the other 'LimitError's
+        -- come from the decode\/projection layer. Either way a bound breach is a
+        -- fail-closed typed exception, never a truncated body.
+        Left err -> throwIO (ResponseBoundExceeded err)
 
 -- Fetch and __buffer__ a version's artifact bytes (the handle's 'fetchArtifact').
 fetchArtifact' :: NpmClientConfig -> PackageName -> Version -> IO RegistryResponse

@@ -62,6 +62,9 @@ registries derive short-lived tokens from ambient cloud credentials (see
 | `PROXY_LOG_FORMAT` | No (default: `json`) | Structured-log output shape: `json` (one object per line, for log collectors) or `console` (human-readable). See [Observability](observability.md). |
 | `CVE_SYNC_INTERVAL_SECONDS` | No (default: 3600) | How often to refresh the in-memory advisory index from OSV (see [CVE Subsystem](rules-engine.md#cve-subsystem)). |
 | `PROXY_SHUTDOWN_DRAIN_TIMEOUT` | No (default: 30) | Seconds the graceful shutdown waits for in-flight requests and in-progress artifact streams to finish after the listen socket closes, before the process exits regardless. Must be a positive integer. See [Graceful rollover](hosting.md#graceful-rollover). |
+| `PROXY_MAX_RESPONSE_BYTES` | No (default: `16777216` — 16 MiB) | Largest upstream **metadata** body the proxy buffers before aborting the fetch fail-closed. Bounds memory against a hostile upstream returning a multi-gigabyte body. Must be a positive integer. See [Response bounds](#response-bounds). |
+| `PROXY_MAX_VERSION_COUNT` | No (default: `100000`) | Largest number of versions a parsed packument may carry before it is refused. Bounds per-version rule evaluation against a version-flood document. Must be a positive integer. See [Response bounds](#response-bounds). |
+| `PROXY_MAX_NESTING_DEPTH` | No (default: `64`) | Deepest JSON nesting a decoded upstream document may reach before it is refused. Bounds stack/CPU against a pathologically nested payload. Must be a positive integer. See [Response bounds](#response-bounds). |
 | `PROXY_CONFIG` | No | The structured config document as an inline JSON blob, the alternate to a mounted config file for an env-only deployment. |
 
 ### Upstream composition (optional)
@@ -123,6 +126,27 @@ The override never escapes the host allowlist or the internal-range block: it
 relaxes *which allowlisted host* may serve a tarball, not whether the allowlist
 applies. The default keeps the tightest reading of
 [invariant 2](security.md#invariants).
+
+### Response bounds
+
+Écluse bounds what an upstream response may cost it ([invariant 4](security.md#invariants)):
+a hostile or compromised upstream cannot exhaust the proxy with a multi-gigabyte
+body, a version flood, or a deeply-nested JSON document. The bounds are enforced on
+the **upstream→proxy** metadata path and **fail closed** — a document past any ceiling
+is refused outright (the contribution degrades exactly as a parse failure does), never
+partially served. They are independent of the client→proxy request-body cap, which
+guards the other direction. Artifacts are streamed with constant memory and are not
+subject to the body-size bound.
+
+The defaults are generous for real registry documents and tight enough to fail closed
+on pathological input; each is a strictly positive integer (a non-positive value is a
+degenerate budget and is rejected at startup).
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PROXY_MAX_RESPONSE_BYTES` | `16777216` (16 MiB) | Largest metadata body buffered before the bounded read aborts the fetch. |
+| `PROXY_MAX_VERSION_COUNT` | `100000` | Largest version count a packument may carry before it is refused (bounds per-version rule evaluation). |
+| `PROXY_MAX_NESTING_DEPTH` | `64` | Deepest JSON nesting a decoded document may reach before it is refused (bounds stack/CPU on a pathological payload). |
 
 ### Rule policy
 

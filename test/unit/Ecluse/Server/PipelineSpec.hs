@@ -15,7 +15,8 @@ import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), addUTCTime, fromGregorian, nominalDay)
 import Data.Time.Format.ISO8601 (iso8601Show)
-import Katip (Environment (Environment), Namespace (Namespace), initLogEnv)
+import GHC.IO.Handle (hClose, hDuplicate, hDuplicateTo)
+import Katip (Environment (Environment), Namespace (Namespace), closeScribes, initLogEnv)
 import Network.HTTP.Client (Manager, defaultManagerSettings, newManager)
 import Network.HTTP.Types (Header, hAuthorization, status200, status404, status500, statusCode, statusMessage)
 import Network.HTTP.Types.Header (hHost)
@@ -29,11 +30,14 @@ import Network.Wai.Test (
     setPath,
  )
 import Test.Hspec
+import UnliftIO (bracket)
 import UnliftIO.Exception (throwString, try)
+import UnliftIO.Temporary (withSystemTempFile)
 
 import Ecluse.Credential (AuthToken (..), CredentialProvider, mkSecret, staticProvider)
 import Ecluse.Ecosystem (Ecosystem (Npm))
 import Ecluse.Env (Env (envQueue), newEnv)
+import Ecluse.Log (LogFormat (JsonLog), newLogEnv)
 import Ecluse.Package (PackageName, mkPackageName)
 import Ecluse.Queue (
     MirrorJob (jobArtifactUrl, jobMirrorTarget, jobPackage, jobVersion),
@@ -58,7 +62,7 @@ import Ecluse.Rules.Types (
     RuleOutcome (Allow, Deny),
     atDefaultPrecedence,
  )
-import Ecluse.Security (TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), lowerCaseHosts)
+import Ecluse.Security (Limits (maxBodyBytes, maxNestingDepth, maxVersionCount), TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), defaultLimits, lowerCaseHosts)
 import Ecluse.Server (
     MountBinding (..),
     application,
@@ -464,6 +468,7 @@ deps privatePort publicPort inbound =
         , pdEffectfulRules = []
         , pdTarballHostPolicy = SameHostAsPackument
         , pdAllowedInternalHosts = lowerCaseHosts (Set.singleton "127.0.0.1")
+        , pdLimits = defaultLimits
         , pdInboundToken = mkSecret <$> inbound
         , pdNow = pure now
         , pdHelp = Nothing
@@ -669,6 +674,8 @@ spec = do
     losslessSpec
     tarballSpec
     effectfulSpec
+    boundsSpec
+    boundsLogSpec
 
 -- ── multi-upstream merge ──────────────────────────────────────────────────────
 
@@ -881,6 +888,34 @@ partialAvailabilitySpec = describe "partial-upstream availability" $ do
             resp <- getThing Nothing app
             status resp `shouldBe` 200
             servedVersions resp `shouldBe` ["1.0.0"]
+
+    it "degrades a private leg whose body is unparseable, serving the public set" $ do
+        -- The private upstream returns a 200 with a non-JSON body, so it does not
+        -- decode into a packument: the contribution degrades to nothing (the
+        -- parse-failure path), exactly as a bound breach does, and the public set is
+        -- served. Distinct from a 5xx outage — here the body itself is malformed.
+        privateUp <- servingUpstream "this is not json at all"
+        publicUp <-
+            servingUpstream
+                (encodePackument (packument [("2.0.0", plainVersion "2.0.0")] "2.0.0" [("2.0.0", publishedDaysAgo 30)]))
+        withProxy privateUp publicUp Nothing $ \app -> do
+            resp <- getThing Nothing app
+            status resp `shouldBe` 200
+            servedVersions resp `shouldBe` ["2.0.0"]
+
+    it "degrades a private leg that decodes but does not project to a packument" $ do
+        -- The private body is valid JSON but not a packument shape (no name/versions),
+        -- so it decodes to a Value yet fails projection — the inner decodeFailure path,
+        -- distinct from an outright JSON parse error. It degrades and the public set
+        -- is served.
+        privateUp <- servingUpstream "[1, 2, 3]"
+        publicUp <-
+            servingUpstream
+                (encodePackument (packument [("2.0.0", plainVersion "2.0.0")] "2.0.0" [("2.0.0", publishedDaysAgo 30)]))
+        withProxy privateUp publicUp Nothing $ \app -> do
+            resp <- getThing Nothing app
+            status resp `shouldBe` 200
+            servedVersions resp `shouldBe` ["2.0.0"]
 
 -- ── cache read-through coherence ──────────────────────────────────────────────
 
@@ -1570,6 +1605,235 @@ effectfulSpec = describe "effectful rule tier" $ do
         withProxyEffectful [rule] privateUp publicUp $ \app -> do
             resp <- getTarball "1.0.0" Nothing app
             status resp `shouldBe` 503
+
+-- ── response bounds through the real request path (security.md invariant 4) ────
+
+{- | A tight response-bound budget for the bounds tests: small enough that the
+fixtures below breach it while a normal packument clears it. Each ceiling stays
+strictly positive (the config layer rejects a non-positive one), so what is asserted
+is the breach behaviour, not a degenerate "everything is too big".
+-}
+tightLimits :: Limits
+tightLimits =
+    defaultLimits
+        { maxBodyBytes = 4096
+        , maxVersionCount = 3
+        , maxNestingDepth = 8
+        }
+
+-- Set the mount's response-bound budget on the deps (the composition root's job in
+-- production; here a per-test tweak to exercise the breach paths).
+withLimits :: Limits -> PackumentDeps -> PackumentDeps
+withLimits limits d = d{pdLimits = limits}
+
+{- | A packument body larger than the tight @maxBodyBytes@: the same admitting
+single-version document padded past the cap with a large unmodeled string. It still
+parses and projects, so only the body-size bound — not a parse failure — can refuse
+it.
+-}
+oversizedPackument :: Text -> LByteString
+oversizedPackument v =
+    encodePackument $ case admittingPublic v of
+        Object o -> Object (KeyMap.insert "_padding" (String (T.replicate 8192 "x")) o)
+        other -> other
+
+{- | A packument carrying more versions than the tight @maxVersionCount@ (4 > 3),
+every one old enough to clear the quarantine — so only the version-count bound can
+refuse it.
+-}
+versionFloodPackument :: LByteString
+versionFloodPackument =
+    encodePackument
+        ( packument
+            [(v, plainVersion v) | v <- floodVersions]
+            "4.0.0"
+            [(v, publishedDaysAgo 30) | v <- floodVersions]
+        )
+  where
+    floodVersions :: [Text]
+    floodVersions = ["1.0.0", "2.0.0", "3.0.0", "4.0.0"]
+
+{- | A JSON body nested deeper than the tight @maxNestingDepth@ (a chain of nested
+arrays). It is valid JSON but not a packument; 'checkNestingDepth' refuses it at the
+decode boundary, before projection ever runs — so the nesting bound, not a parse
+failure, is what fails it closed.
+-}
+deeplyNestedBody :: LByteString
+deeplyNestedBody = encodePackument (nest 32 (String "deep"))
+  where
+    nest :: Int -> Value -> Value
+    nest 0 v = v
+    nest n v = nest (n - 1) (Aeson.toJSON [v])
+
+boundsSpec :: Spec
+boundsSpec = describe "response bounds through the request path (security.md invariant 4)" $ do
+    it "refuses an oversized private packument fail-closed, serving only the public set" $ do
+        -- The private body exceeds maxBodyBytes, so its bounded read aborts: the private
+        -- contribution degrades to nothing (the parse-failure path), never a partial
+        -- merge. The good public version is still served, proving the oversized document
+        -- was refused outright rather than truncated into the served document.
+        privateUp <- servingUpstream (oversizedPackument "9.9.9")
+        publicUp <- servingUpstream (encodePackument (admittingPublic "1.0.0"))
+        queue <- newInMemoryQueue
+        withProxyEnvQueueDeps queue privateUp publicUp Nothing (withLimits tightLimits) $ \app _env _port -> do
+            resp <- getThing Nothing app
+            status resp `shouldBe` 200
+            -- Only the public version survives; the oversized private 9.9.9 never enters.
+            servedVersions resp `shouldBe` ["1.0.0"]
+
+    it "503s when the only (public) packument is oversized and the private upstream is down" $ do
+        -- With no private contribution and the public body over the cap, nothing
+        -- resolves — a fail-closed refusal (a needed upstream unavailable, 503), never
+        -- a partially-served oversized document.
+        privateUp <- failingUpstream
+        publicUp <- servingUpstream (oversizedPackument "1.0.0")
+        queue <- newInMemoryQueue
+        withProxyEnvQueueDeps queue privateUp publicUp Nothing (withLimits tightLimits) $ \app _env _port -> do
+            resp <- getThing Nothing app
+            status resp `shouldBe` 503
+
+    it "refuses a version-flood public packument fail-closed (nothing served from it)" $ do
+        -- The public packument carries more versions than maxVersionCount, so the whole
+        -- contribution is refused after projection — not trimmed to the first N. With
+        -- the private upstream down, that is a 503 (a needed upstream unavailable),
+        -- never a partial serve of the flood.
+        privateUp <- failingUpstream
+        publicUp <- servingUpstream versionFloodPackument
+        queue <- newInMemoryQueue
+        withProxyEnvQueueDeps queue privateUp publicUp Nothing (withLimits tightLimits) $ \app _env _port -> do
+            resp <- getThing Nothing app
+            status resp `shouldBe` 503
+
+    it "serves the public set when a version-flood document arrives on the private leg" $ do
+        -- A version flood on the private leg degrades that contribution to nothing
+        -- (refused after projection), so the served document is the gated public set —
+        -- the flood never enters, partially or otherwise.
+        privateUp <- servingUpstream versionFloodPackument
+        publicUp <- servingUpstream (encodePackument (admittingPublic "1.0.0"))
+        queue <- newInMemoryQueue
+        withProxyEnvQueueDeps queue privateUp publicUp Nothing (withLimits tightLimits) $ \app _env _port -> do
+            resp <- getThing Nothing app
+            status resp `shouldBe` 200
+            servedVersions resp `shouldBe` ["1.0.0"]
+
+    it "refuses a deeply-nested public document fail-closed (503 with the private upstream down)" $ do
+        -- The public body is nested past maxNestingDepth, refused at the decode boundary
+        -- before any projection. With no private contribution, that is a 503 — a
+        -- fail-closed refusal, never a partial traversal of the nested document.
+        privateUp <- failingUpstream
+        publicUp <- servingUpstream deeplyNestedBody
+        queue <- newInMemoryQueue
+        withProxyEnvQueueDeps queue privateUp publicUp Nothing (withLimits tightLimits) $ \app _env _port -> do
+            resp <- getThing Nothing app
+            status resp `shouldBe` 503
+
+    it "serves the public set when a deeply-nested document arrives on the private leg" $ do
+        -- A deeply-nested body on the private leg is refused at decode and contributes
+        -- nothing, so only the gated public version is served.
+        privateUp <- servingUpstream deeplyNestedBody
+        publicUp <- servingUpstream (encodePackument (admittingPublic "1.0.0"))
+        queue <- newInMemoryQueue
+        withProxyEnvQueueDeps queue privateUp publicUp Nothing (withLimits tightLimits) $ \app _env _port -> do
+            resp <- getThing Nothing app
+            status resp `shouldBe` 200
+            servedVersions resp `shouldBe` ["1.0.0"]
+
+    it "serves normally when every document is within the bounds (no false refusal)" $ do
+        -- The same tight budget admits an ordinary single-version packument on each
+        -- leg: the bounds refuse only the pathological documents above, not a normal one.
+        privateUp <- servingUpstream (encodePackument (privatePackument [("3.0.0", plainVersion "3.0.0")] "3.0.0"))
+        publicUp <- servingUpstream (encodePackument (admittingPublic "1.0.0"))
+        queue <- newInMemoryQueue
+        withProxyEnvQueueDeps queue privateUp publicUp Nothing (withLimits tightLimits) $ \app _env _port -> do
+            resp <- getThing Nothing app
+            status resp `shouldBe` 200
+            servedVersions resp `shouldBe` ["1.0.0", "3.0.0"]
+
+-- ── a bound breach is logged before degrading (observability) ──────────────────
+
+{- | Run an 'IO' action with the process @stdout@ redirected to a temporary file,
+returning everything written — so a katip scribe's output can be asserted with no
+network. The original @stdout@ is restored on every exit path. (Mirrors the helper
+in "Ecluse.LogSpec"; kept local rather than exported to avoid widening that module's
+surface for a test-only utility.)
+-}
+captureStdout :: IO () -> IO Text
+captureStdout act =
+    withSystemTempFile "ecluse-pipeline-log.txt" $ \path tmpHandle ->
+        bracket (hDuplicate stdout) restore $ \_saved -> do
+            hFlush stdout
+            hDuplicateTo tmpHandle stdout
+            act
+            hFlush stdout
+            hClose tmpHandle
+            decodeUtf8 <$> readFileBS path
+  where
+    restore saved = do
+        hFlush stdout
+        hDuplicateTo saved stdout
+        hClose saved
+
+{- | Drive @GET \/npm\/thing@ once against a proxy whose 'LogEnv' writes JSONL to the
+real stdout scribe, with the given private-leg packument body and a __down__ public
+leg, under the tight bounds — and return everything the scribe wrote. The private
+body breaches a bound, so the serve path logs a WARNING before degrading; capturing
+stdout (with the scribes drained) makes that line assertable.
+-}
+captureBreachLog :: LByteString -> IO Text
+captureBreachLog privateBody = do
+    privateUp <- servingUpstream privateBody
+    publicUp <- failingUpstream
+    queue <- newInMemoryQueue
+    testWithApplication (pure (upApp privateUp)) $ \privatePort ->
+        testWithApplication (pure (upApp publicUp)) $ \publicPort -> do
+            manager <- newManager defaultManagerSettings
+            metadataCache <- newMetadataCache defaultCacheConfig
+            -- A LogEnv with the real JSONL stdout scribe, so the serve path's warning
+            -- is actually written and capturable.
+            logEnv <- newLogEnv JsonLog (Environment "test")
+            env <- newEnv fakeRegistry queue fakeCredentials manager manager metadataCache logEnv telemetryDisabled
+            let cfg =
+                    mkServerConfig
+                        [ MountBinding
+                            { bindingPrefix = "npm" :| []
+                            , bindingClassifier = Npm.classify
+                            , bindingPackumentDeps = Just (withLimits tightLimits (deps privatePort publicPort Nothing))
+                            , bindingRenderer = npmRenderer
+                            }
+                        ]
+            captureStdout $ do
+                _ <- getThing Nothing (application cfg env)
+                -- Draining the scribes blocks until the worker has flushed the queued
+                -- line to stdout, making the capture deterministic (a katip handle
+                -- scribe writes asynchronously). The returned, scribe-less LogEnv is
+                -- discarded — the env is not reused.
+                _ <- closeScribes logEnv
+                pure ()
+
+boundsLogSpec :: Spec
+boundsLogSpec = describe "a response-bound breach is logged before degrading" $ do
+    it "logs a WARNING naming the version-count bound, distinct from a plain parse failure" $ do
+        -- A version flood on the private leg breaches the version-count bound; the
+        -- public leg is down, so the request 503s (the degrade path). The breach must
+        -- be logged at WARNING first, naming which ceiling and the package — so an
+        -- operator can tell a bound breach from an ordinary parse failure or outage.
+        logged <- captureBreachLog versionFloodPackument
+        logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Warning\""
+        logged `shouldSatisfy` T.isInfixOf "\"bound\":\"version-count\""
+        logged `shouldSatisfy` T.isInfixOf "\"package\":\"thing\""
+
+    it "logs a WARNING naming the body-size bound on an oversized body" $ do
+        -- The oversized private body breaches maxBodyBytes in the bounded read; the
+        -- breach is raised from the fetch and logged here before the degrade.
+        logged <- captureBreachLog (oversizedPackument "9.9.9")
+        logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Warning\""
+        logged `shouldSatisfy` T.isInfixOf "\"bound\":\"body-size\""
+
+    it "logs a WARNING naming the nesting-depth bound on a deeply-nested body" $ do
+        -- The deeply-nested private body breaches maxNestingDepth at the decode check.
+        logged <- captureBreachLog deeplyNestedBody
+        logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Warning\""
+        logged `shouldSatisfy` T.isInfixOf "\"bound\":\"nesting-depth\""
 
 -- A mirror queue whose 'enqueue' always throws, for the best-effort assertion: the
 -- serve path must swallow the failure and still serve the artifact. 'receive' is a
