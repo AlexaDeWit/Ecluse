@@ -277,6 +277,12 @@ admitOldEnough = [atDefaultPrecedence (AllowIfPublishedBefore (7 * nominalDay))]
 
 -- ── handle doubles (the serve path talks to upstreams directly) ───────────────
 
+-- The serve path reaches upstreams through the data-plane managers, never through
+-- the 'RegistryClient' handle, so these actions are genuinely unreachable on the path
+-- under test — the @error@s are dead branches whose only role is to make a misuse
+-- loud. The per-declaration ignore (STYLE.md §10) unblocks them; the bodies stay tiny
+-- so its scope is just this double.
+{- HLINT ignore fakeRegistry "Avoid restricted function" -}
 fakeRegistry :: RegistryClient
 fakeRegistry =
     RegistryClient
