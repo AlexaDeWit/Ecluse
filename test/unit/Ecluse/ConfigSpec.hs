@@ -8,6 +8,7 @@ import System.Environment (setEnv, unsetEnv)
 import Test.Hspec
 
 import Ecluse.Config
+import Ecluse.Credential (mkSecret)
 import Ecluse.Ecosystem (Ecosystem (..))
 import Ecluse.Log (LogFormat (..))
 import Ecluse.Package (mkScope)
@@ -171,8 +172,8 @@ envLayerSpec = describe "parseEnvPure" $ do
                 unUrl (cfgQueueUrl cfg) `shouldBe` "projects/p/topics/t"
                 cfgAwsRegion cfg `shouldBe` Just "eu-west-1"
                 cfgGoogleProject cfg `shouldBe` Nothing
-                cfgAuthToken cfg `shouldBe` Just "s3cr3t"
-                cfgMirrorTargetToken cfg `shouldBe` Just "mirror-write"
+                cfgAuthToken cfg `shouldBe` Just (mkSecret "s3cr3t")
+                cfgMirrorTargetToken cfg `shouldBe` Just (mkSecret "mirror-write")
                 cfgHelpMessage cfg `shouldBe` Just "ask #platform"
                 cfgCveSyncInterval cfg `shouldBe` (60 :: NominalDiffTime)
                 cfgCacheTtl cfg `shouldBe` (30 :: NominalDiffTime)
@@ -180,6 +181,13 @@ envLayerSpec = describe "parseEnvPure" $ do
                 cfgLogFormat cfg `shouldBe` ConsoleLog
                 cfgTelemetry cfg `shouldBe` TelemetryOn
                 cfgRespectUpstreamTarballHost cfg `shouldBe` True
+                -- Secret-redaction regression: the tokens are parsed and held,
+                -- but must never reach a Show-based signal (a log, an error, a
+                -- deriving Show) — they are redacted Secrets, not raw Text. See
+                -- Ecluse.Credential.Secret.
+                showText cfg `shouldNotSatisfy` ("s3cr3t" `isInfix`)
+                showText cfg `shouldNotSatisfy` ("mirror-write" `isInfix`)
+                showText cfg `shouldSatisfy` ("REDACTED" `isInfix`)
 
     it "applies the documented defaults for the optional variables" $ do
         case parseEnvPure minimalEnv of
