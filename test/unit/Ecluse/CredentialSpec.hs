@@ -23,6 +23,7 @@ import UnliftIO.Exception (throwString, try)
 
 import Ecluse.Credential
 import Ecluse.Credential.Refresh
+import Ecluse.Credential.Refresh.Internal (refreshingProviderWith)
 
 -- | A fixed expiry instant for the static-provider test.
 anExpiry :: UTCTime

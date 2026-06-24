@@ -67,6 +67,7 @@ library
     Ecluse.Credential
     Ecluse.Credential.CodeArtifact
     Ecluse.Credential.Refresh
+    Ecluse.Credential.Refresh.Internal
     Ecluse.Ecosystem
     Ecluse.Env
     Ecluse.Log
