@@ -20,6 +20,7 @@ import Ecluse.Queue (newInMemoryQueue)
 import Ecluse.Registry (ParseError (..), RegistryClient (..))
 import Ecluse.Server (MountBinding (..), application)
 import Ecluse.Server.Cache (defaultCacheConfig, newMetadataCache)
+import Ecluse.Telemetry (telemetryDisabled)
 
 {- | A registry-handle double whose effectful fields are never invoked — the
 composition-root routing assertions below only route, classify, and render.
@@ -56,7 +57,7 @@ newTestEnv = do
     manager <- newTestManager
     metadataCache <- newMetadataCache defaultCacheConfig
     logEnv <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
-    newEnv fakeRegistry queue fakeCredentials manager metadataCache logEnv
+    newEnv fakeRegistry queue fakeCredentials manager metadataCache logEnv telemetryDisabled
 
 {- | The composed npm front door ('npmServerConfig') as a WAI 'Application', driven
 in-process — so the actual mount the composition root wires is exercised, no socket.

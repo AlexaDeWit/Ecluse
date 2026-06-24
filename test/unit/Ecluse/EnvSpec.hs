@@ -23,6 +23,7 @@ import Ecluse.Package (PackageName, mkPackageName)
 import Ecluse.Queue (MirrorJob (..), enqueue, msgJob, newInMemoryQueue, receive)
 import Ecluse.Registry (ParseError (..), RegistryClient (..), RegistryResponse (..))
 import Ecluse.Server.Cache (MetadataCache, defaultCacheConfig, newMetadataCache)
+import Ecluse.Telemetry (telemetryDisabled, telemetryMeterProvider, telemetryTracerProvider)
 import Ecluse.Version (Version, mkVersion)
 
 {- | A registry-handle double: the @parse*@ fields return fixed pure results and
@@ -76,7 +77,7 @@ newTestEnv = do
     manager <- newTestManager
     metadataCache <- newTestCache
     logEnv <- newTestLogEnv
-    newEnv fakeRegistry queue fakeCredentials manager metadataCache logEnv
+    newEnv fakeRegistry queue fakeCredentials manager metadataCache logEnv telemetryDisabled
 
 -- | A sample job for round-tripping the queue handle held in an 'Env'.
 sampleJob :: MirrorJob
@@ -141,13 +142,22 @@ spec = do
             _ <- evaluate (envLogEnv env)
             pure ()
 
+        it "wires the telemetry handle through (the off-by-default no-op)" $ do
+            -- The default substrate is disabled, so the handle stored in the 'Env'
+            -- exposes no providers — telemetry is genuinely inert, not merely
+            -- unsampled. A 'TracerProvider' has no 'Show', so each is checked
+            -- through 'isNothing' rather than a printing matcher.
+            env <- newTestEnv
+            isNothing (telemetryTracerProvider (envTelemetry env)) `shouldBe` True
+            isNothing (telemetryMeterProvider (envTelemetry env)) `shouldBe` True
+
     describe "withEnv" $ do
         it "runs the body against the assembled Env and returns its result" $ do
             queue <- newInMemoryQueue
             manager <- newTestManager
             metadataCache <- newTestCache
             logEnv <- newTestLogEnv
-            result <- withEnv fakeRegistry queue fakeCredentials manager metadataCache logEnv $ \env ->
+            result <- withEnv fakeRegistry queue fakeCredentials manager metadataCache logEnv telemetryDisabled $ \env ->
                 currentToken' env
             result `shouldBe` "env-spec-token"
 
@@ -158,7 +168,7 @@ spec = do
             logEnv <- newTestLogEnv
             let body :: Env -> IO ()
                 body _ = throwString "boom"
-            outcome <- try (withEnv fakeRegistry queue fakeCredentials manager metadataCache logEnv body)
+            outcome <- try (withEnv fakeRegistry queue fakeCredentials manager metadataCache logEnv telemetryDisabled body)
             case outcome of
                 Left (_ :: StringException) -> pure ()
                 Right () -> expectationFailure "expected the body's exception to propagate"
