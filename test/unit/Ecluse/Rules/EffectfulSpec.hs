@@ -1,5 +1,6 @@
 module Ecluse.Rules.EffectfulSpec (spec) where
 
+import Control.Retry (simulatePolicy)
 import Data.Time (UTCTime (..), addUTCTime, fromGregorian, nominalDay)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (throwString)
@@ -62,12 +63,11 @@ pkg mScope ageDays =
         , pkgDependencies = []
         }
 
--- | A config with no retries and a no-op backoff sleep, so a test never waits.
+-- | A config with no retries, so a test never waits on a backoff.
 fastConfig :: EffectfulConfig
 fastConfig =
     defaultEffectfulConfig
         { ecBackoff = []
-        , ecSleep = \_ -> pure ()
         , ecBreakerThreshold = 2
         , ecBreakerCooldown = 30
         }
@@ -130,6 +130,21 @@ spec = do
             ecBreakerThreshold defaultEffectfulConfig `shouldBe` 5
             ecBreakerCooldown defaultEffectfulConfig `shouldBe` 30
             ecRetryAfter defaultEffectfulConfig `shouldBe` Nothing
+
+    describe "backoffPolicy — the compiled retry schedule" $ do
+        -- 'simulatePolicy' walks the policy without sleeping, so the schedule the
+        -- harness drives the retry loop with is asserted directly: the n-th retry
+        -- waits the n-th 'ecBackoff' delay, and the policy stops (yields 'Nothing')
+        -- once the list is exhausted — its length being the retry budget.
+        it "the default schedule retries twice, at 100ms then 250ms, then stops" $ do
+            -- 'simulatePolicy n' walks iterations 0..n; the first two yield the two
+            -- backoffs, and the schedule is then exhausted (a 'Nothing' stop).
+            delays <- simulatePolicy 2 (backoffPolicy [100_000, 250_000])
+            map snd delays `shouldBe` [Just 100_000, Just 250_000, Nothing]
+
+        it "an empty schedule admits no retry (the single initial attempt only)" $ do
+            delays <- simulatePolicy 0 (backoffPolicy [])
+            map snd delays `shouldBe` [Nothing]
 
     describe "evalRulesEffectful — tier is performance, not precedence" $ do
         it "with no effectful rules, agrees with the pure tier exactly" $ do
@@ -261,28 +276,28 @@ spec = do
             -- A 5ms timeout against a rule that sleeps far longer: the attempt is a
             -- failure, so an OnUnavailable rule yields Unavailable.
             let pd = pkg Nothing 0
-                cfg = fastConfig{ecTimeout = 5_000, ecSleep = threadDelay}
+                cfg = fastConfig{ecTimeout = 5_000}
             rule <- mkRule "Slow" cfg OnUnavailable $ \_ -> threadDelay 1_000_000 >> pure (Allow "late")
             outcome <- runEffectfulRule ctx rule pd
             outcome `shouldSatisfy` isUnavailableOutcome
 
         it "retries a transiently failing rule and succeeds within the budget" $ do
             -- The rule fails once then succeeds; one retry (one backoff) is enough.
+            -- A near-zero backoff keeps the retry delay free; the invocation count is
+            -- the seam-independent witness that exactly one retry ran.
             attempts <- newIORef (0 :: Int)
-            sleeps <- newIORef (0 :: Int)
             let pd = pkg Nothing 0
-                cfg = fastConfig{ecBackoff = [50_000], ecSleep = \_ -> modifyIORef' sleeps (+ 1)}
+                cfg = fastConfig{ecBackoff = [0]}
             rule <- mkRule "Flaky" cfg OnUnavailable $ \_ -> do
                 n <- atomicModifyIORef' attempts (\k -> (k + 1, k + 1))
                 if n < 2 then throwString "blip" else pure (Allow "recovered")
             outcome <- runEffectfulRule ctx rule pd
             outcome `shouldBe` Allow "recovered"
-            readIORef attempts `shouldReturn` 2
-            readIORef sleeps `shouldReturn` 1 -- exactly one backoff between the two attempts
+            readIORef attempts `shouldReturn` 2 -- the initial attempt plus one retry
         it "gives up after the retry budget is spent" $ do
             attempts <- newIORef (0 :: Int)
             let pd = pkg Nothing 0
-                cfg = fastConfig{ecBackoff = [1, 1], ecSleep = \_ -> pure ()}
+                cfg = fastConfig{ecBackoff = [0, 0]}
             rule <- mkRule "Down" cfg OnUnavailable $ \_ -> do
                 modifyIORef' attempts (+ 1)
                 throwString "still down"
