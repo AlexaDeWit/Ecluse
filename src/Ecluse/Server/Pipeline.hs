@@ -443,21 +443,23 @@ status. -}
 dropHashless :: PackageInfo -> (PackageInfo, [Text])
 dropHashless info =
     ( info
-        { infoVersions = Map.restrictKeys versions admissibleKeys
+        { infoVersions = admissible
         , infoDistTags = Map.filter ((`Set.member` admissibleKeys) . renderVersion) (infoDistTags info)
         , infoPublishedAt = Map.restrictKeys (infoPublishedAt info) admissibleKeys
         }
-    , hashlessKeys
+    , Map.keys hashless
     )
   where
-    versions :: Map Text PackageDetails
-    versions = infoVersions info
+    -- One pass splits the versions into the admissible (integrity-bearing) and the
+    -- hashless, rather than scanning the up-to-100k-version map twice with
+    -- complementary 'Map.filter's and re-deriving the admissible map a third time
+    -- with 'Map.restrictKeys'. 'hasIntegrity' is evaluated once per version, and
+    -- the admissible map is reused directly as the kept 'infoVersions'.
+    admissible, hashless :: Map Text PackageDetails
+    (admissible, hashless) = Map.partition hasIntegrity (infoVersions info)
 
     admissibleKeys :: Set Text
-    admissibleKeys = Map.keysSet (Map.filter hasIntegrity versions)
-
-    hashlessKeys :: [Text]
-    hashlessKeys = Map.keys (Map.filter (not . hasIntegrity) versions)
+    admissibleKeys = Map.keysSet admissible
 
     -- A version carries an integrity digest iff not all of its artifacts are
     -- hashless. npm publishes exactly one artifact per version, but the check is
