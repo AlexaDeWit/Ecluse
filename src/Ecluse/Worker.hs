@@ -300,9 +300,15 @@ publishVerified receipt job bytes = do
         Right () -> do
             logFM InfoS (ls ("mirrored artifact published: " <> renderJob job))
             pure Succeeded
-        Left (PublishRejected err) ->
+        Left (PublishRejected err) -> do
+            -- Transient: undo the long success-path hold so the job redelivers at once
+            -- rather than waiting it out (the hold only exists to protect a slow
+            -- success). The message is left un-acked, so it redelivers either way.
+            releaseForRetry receipt
             pure (Retried ("registry rejected publish: " <> show err))
         Left (PublishUrlUnformable urlErr) ->
+            -- Non-retryable: 'processMessage' acks this to retire it, so there is no
+            -- redelivery to hasten — leave the hold be.
             pure (Dropped ("unformable publish URL: " <> show urlErr))
   where
     artifact = jobArtifact job
@@ -367,7 +373,8 @@ workerArtifactLimits = defaultLimits{maxBodyBytes = 512 * 1024 * 1024}
 -- ── visibility helpers ──────────────────────────────────────────────────────────
 
 -- Hold a received message past the visibility window before a publish that may run
--- long, so a slow write does not let the message redeliver mid-publish. The hold is
+-- long, so a slow write does not let the message redeliver mid-publish — which would
+-- waste a full re-fetch and re-publish of a (potentially large) artifact. The hold is
 -- an optimization (idempotency makes a redelivery harmless), so a failure to extend
 -- is swallowed rather than failing the job.
 holdForLongPublish :: ReceiptHandle -> App ()
@@ -376,13 +383,26 @@ holdForLongPublish receipt = do
     _ <- tryAny (liftIO (extendVisibility queue receipt extendBy))
     pass
   where
-    -- The window a single publish is given before the message could redeliver
-    -- mid-write. A typical artifact publishes well inside this; a publish slower
-    -- than it just earns one harmless redelivery (idempotent re-publish). Kept
-    -- modest rather than huge so a transient publish *failure* still retries
-    -- promptly — the extension must not become a long backoff on a fast 5xx.
+    -- The window one publish is given before the message could redeliver mid-write.
+    -- Sized to comfortably cover a publish of the maximum artifact ('workerArtifactLimits',
+    -- 512 MiB): even over a slow mirror-target link (a conservative ~2 MiB/s floor)
+    -- that uploads in well under 300s, so a successful publish never redelivers
+    -- mid-flight. A *failed* publish does not wait this out — the failure path resets
+    -- the message to visible at once (see 'releaseForRetry') — so the generous hold
+    -- costs nothing on the retry path; this is the background worker's correct trade
+    -- (never interrupt a slow success; retry latency on failure does not matter).
     extendBy :: Seconds
-    extendBy = Seconds 10
+    extendBy = Seconds 300
+
+-- Reset a received message to immediately visible, so a failed publish redelivers at
+-- once rather than waiting out the long success-path hold ('holdForLongPublish'). A
+-- best-effort optimization (a missed reset just means the message redelivers after the
+-- hold instead), so a failure to reset is swallowed.
+releaseForRetry :: ReceiptHandle -> App ()
+releaseForRetry receipt = do
+    queue <- asks envQueue
+    _ <- tryAny (liftIO (extendVisibility queue receipt (Seconds 0)))
+    pass
 
 -- ── integrity verification ──────────────────────────────────────────────────────
 
