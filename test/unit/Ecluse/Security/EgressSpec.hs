@@ -105,6 +105,16 @@ blockedResolvedAddrsSpec = describe "blockedResolvedAddrs" $ do
         it "still refuses a different internal address than the opted-in one" $
             blockedResolvedAddrs (lowerCaseHosts (Set.singleton "10.0.0.5")) [v4 (10, 0, 0, 6)]
                 `shouldBe` ["10.0.0.6"]
+        it "permits a resolved IPv6 address opted in by its canonical compressed form" $
+            -- The opt-in key is the address's canonical compressed literal, so an
+            -- opt-in written that way suppresses the block for the resolved address.
+            blockedResolvedAddrs (lowerCaseHosts (Set.singleton "fe80::1")) [v6 (0xfe80, 0, 0, 0, 0, 0, 0, 1)]
+                `shouldBe` []
+        it "still refuses an IPv6 address opted in only by its uncompressed spelling" $
+            -- The uncompressed spelling is not the key, so it does not opt in — and
+            -- the refused literal is reported in the canonical compressed form.
+            blockedResolvedAddrs (lowerCaseHosts (Set.singleton "fe80:0:0:0:0:0:0:1")) [v6 (0xfe80, 0, 0, 0, 0, 0, 0, 1)]
+                `shouldBe` ["fe80::1"]
 
 -- ── the live connection hook ──────────────────────────────────────────────────
 
