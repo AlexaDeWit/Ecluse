@@ -185,6 +185,7 @@ import Ecluse.Server.Context (
     ctxEnv,
     ctxMount,
  )
+import Ecluse.Server.Pipeline.Internal (PackumentUndecodable (PackumentUndecodable), logDecodeFailure)
 import Ecluse.Server.Response (
     ArtifactStatus (Forbidden, NotFound, Ok, ServerError, Unavailable'),
     MountRenderer,
@@ -423,15 +424,6 @@ fetchEntry logEnv limits manager baseUrl token name = do
 unpair :: CacheEntry -> (PackageInfo, Value)
 unpair entry = (entryInfo entry, entryRaw entry)
 
-{- The one bad-upstream condition the response-bound guards leave silent: the
-upstream answered, but its body did not decode into the typed view and raw document
-the serve path needs. A (typed) throw, not a stringly one, caught by the origin
-fetcher's @tryAny@ and degraded to a missing contribution like a bound breach. -}
-data PackumentUndecodable = PackumentUndecodable
-    deriving stock (Eq, Show)
-
-instance Exception PackumentUndecodable
-
 {- Log a response-bound breach at 'WarningS' before the contribution is degraded
 fail-closed, so an operator can distinguish a bound breach (a hostile\/oversized
 upstream, or a too-tight cap) from an ordinary parse failure or upstream outage. The
@@ -468,24 +460,11 @@ logBreach logEnv name err =
         TooManyVersions seen c -> ("version-count", show seen, show c)
         TooDeeplyNested c -> ("nesting-depth", "over " <> show c <> " levels", show c <> " levels")
 
--- The module these serve-path logs are emitted from, tagged on each line via
--- 'Ecluse.Log.moduleField' so the stream can be filtered by emitter.
+-- The module the breach log is emitted from, tagged on the line via
+-- 'Ecluse.Log.moduleField' so the stream can be filtered by emitter. (The decode
+-- failure's log lives in "Ecluse.Server.Pipeline.Internal", tagged with its own path.)
 pipelineModule :: Text
 pipelineModule = "Ecluse.Server.Pipeline"
-
-{- Log a parse failure at 'WarningS' — the one bad-upstream condition the response
-bound guards leave silent: the upstream answered, but its body did not decode into
-the typed view and raw document the serve path needs. Same fail-closed degrade and
-the same @module@\/@package@ payload as 'logBreach', so an operator sees an
-undecodable upstream distinctly rather than as silence. -}
-logDecodeFailure :: LogEnv -> PackageName -> IO ()
-logDecodeFailure logEnv name =
-    runKatipContextT logEnv payload mempty $
-        logFM WarningS (ls message)
-  where
-    payload = moduleField pipelineModule <> sl "package" (renderPackageName name)
-    message :: Text
-    message = "refused an upstream metadata document: it did not decode into a usable packument"
 
 {- The npm client config for one fetch: its response-bound budget, 'Manager', base
 URL, and injected token (the client's credential for the private origin, 'Nothing'
