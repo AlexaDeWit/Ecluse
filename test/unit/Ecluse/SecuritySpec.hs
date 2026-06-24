@@ -31,6 +31,7 @@ import Ecluse.Security (
     LimitError (..),
     Limits (..),
     LoweredHostSet,
+    TarballHostPolicy (..),
     UrlError (..),
     boundedRead,
     checkNestingDepth,
@@ -40,6 +41,7 @@ import Ecluse.Security (
     isAllowedUpstreamHost,
     isBlockedTarget,
     lowerCaseHosts,
+    tarballHostAllowed,
     upstreamUrlFor,
  )
 import Ecluse.Version (Version, mkVersion)
@@ -137,6 +139,7 @@ spec = do
     internalRangeSpec
     hostAddressSpec
     ssrfGateSpec
+    tarballHostPolicySpec
     upstreamUrlSpec
     boundedReadSpec
     versionCountSpec
@@ -157,6 +160,9 @@ showInstancesSpec = describe "Show instances" $ do
     it "renders UrlError values" $ do
         show (UnsafeComponent "..") `shouldBe` ("UnsafeComponent \"..\"" :: Text)
         show EmptyBaseUrl `shouldBe` ("EmptyBaseUrl" :: Text)
+    it "renders TarballHostPolicy values" $ do
+        show SameHostAsPackument `shouldBe` ("SameHostAsPackument" :: Text)
+        show AnyAllowlistedHost `shouldBe` ("AnyAllowlistedHost" :: Text)
     it "renders Limits" $
         show defaultLimits
             `shouldBe` ( "Limits {maxBodyBytes = 16777216, maxVersionCount = 100000, maxNestingDepth = 64}" ::
@@ -225,6 +231,19 @@ internalRangeSpec = describe "isBlockedTarget" $ do
             isBlockedTarget noOptIn "febf::1" `shouldBe` True
         it "blocks fully-expanded IPv6 loopback" $
             isBlockedTarget noOptIn "0:0:0:0:0:0:0:1" `shouldBe` True
+        it "blocks IPv6 unique-local fc00::/7 (low edge, fc00)" $
+            isBlockedTarget noOptIn "fc00::1" `shouldBe` True
+        it "blocks IPv6 unique-local fc00::/7 (high edge, fdff)" $
+            isBlockedTarget noOptIn "fdff::1" `shouldBe` True
+        it "blocks the AWS IMDSv6 metadata endpoint fd00:ec2::254" $
+            -- The IPv6 analogue of 169.254.169.254; an SSRF aimed at IPv6 instance
+            -- metadata must be caught alongside the IPv4 endpoint.
+            isBlockedTarget noOptIn "fd00:ec2::254" `shouldBe` True
+        it "does not block a public IPv6 address just below the ULA range (fbff)" $
+            isBlockedTarget noOptIn "fbff::1" `shouldBe` False
+        it "does not block a public IPv6 address just above the ULA range (fe00)" $
+            -- fe00 is above fc00::/7 (fc00..fdff) and below link-local fe80::/10.
+            isBlockedTarget noOptIn "fe00::1" `shouldBe` False
 
     describe "blocks IPv4-mapped IPv6 (::ffff:0:0/96)" $ do
         it "blocks the cloud instance-metadata address in mapped form (::ffff:169.254.169.254)" $
@@ -371,6 +390,68 @@ ssrfGateSpec = describe "composed SSRF gate (allowlist AND not-blocked)" $ do
         passesGate "::ffff:a9fe:a9fe" `shouldBe` False
     it "refuses a metadata host extracted from a URL" $
         passesGate (hostAddress "http://169.254.169.254/latest/meta-data/") `shouldBe` False
+
+-- ── tarball-host policy ───────────────────────────────────────────────────────
+
+{- | The @dist.tarball@ host policy: under the secure default a tarball is fetched
+only from the same host that served the packument; the opt-in relaxes that to any
+allowlisted host. Neither ever escapes the allowlist or the internal-range block —
+the deny paths are exercised hardest, since under-blocking here is a vulnerability.
+-}
+tarballHostPolicySpec :: Spec
+tarballHostPolicySpec = describe "tarballHostAllowed" $ do
+    let noOptIn = lowerCaseHosts Set.empty
+        -- Two allowlisted upstreams: the packument source and a separate CDN.
+        allow = lowerCaseHosts (Set.fromList ["registry.npmjs.org", "cdn.npmjs.org"])
+        same policy = tarballHostAllowed policy allow noOptIn
+        -- A short alias: packument host fixed to the npm registry.
+        decide policy = same policy "registry.npmjs.org"
+
+    describe "SameHostAsPackument (the secure default)" $ do
+        it "admits a tarball on the same host that served the packument" $
+            decide SameHostAsPackument "registry.npmjs.org" `shouldBe` True
+        it "refuses a tarball on a different host, even one on the allowlist" $
+            -- The crux of the default: an allowlisted-but-different CDN is refused.
+            decide SameHostAsPackument "cdn.npmjs.org" `shouldBe` False
+        it "refuses a tarball on a host not on the allowlist" $
+            decide SameHostAsPackument "evil.example.com" `shouldBe` False
+        it "matches the same-host clause case-insensitively (DNS is)" $
+            decide SameHostAsPackument "Registry.NPMJS.org" `shouldBe` True
+        it "refuses an empty tarball host" $
+            decide SameHostAsPackument "" `shouldBe` False
+        it "refuses a look-alike suffix of the packument host" $
+            -- registry.npmjs.org.evil.com is neither allowlisted nor equal.
+            decide SameHostAsPackument "registry.npmjs.org.evil.com" `shouldBe` False
+
+    describe "AnyAllowlistedHost (the opt-in)" $ do
+        it "admits a tarball on a different but allowlisted host" $
+            decide AnyAllowlistedHost "cdn.npmjs.org" `shouldBe` True
+        it "still admits a tarball on the same host" $
+            decide AnyAllowlistedHost "registry.npmjs.org" `shouldBe` True
+        it "still refuses a tarball on a host not on the allowlist" $
+            -- The opt-in relaxes which allowlisted host, never the allowlist itself.
+            decide AnyAllowlistedHost "evil.example.com" `shouldBe` False
+
+    describe "the internal-range block beats either policy" $ do
+        it "refuses an internal literal even when it equals the packument host" $
+            -- An operator could (mis)configure an internal upstream host; the
+            -- internal block still vetoes a tarball pointed at it under the
+            -- default. The allowlist must carry the literal for this to even reach
+            -- the block clause.
+            let allowInternal = lowerCaseHosts (Set.singleton "169.254.169.254")
+             in tarballHostAllowed SameHostAsPackument allowInternal noOptIn "169.254.169.254" "169.254.169.254"
+                    `shouldBe` False
+        it "refuses an allowlisted internal literal under the opt-in too" $
+            let allowInternal = lowerCaseHosts (Set.singleton "10.0.0.5")
+             in tarballHostAllowed AnyAllowlistedHost allowInternal noOptIn "registry.npmjs.org" "10.0.0.5"
+                    `shouldBe` False
+        it "honours an explicit internal opt-in for a deliberately-internal host" $
+            -- With the host opted in to the internal block, an allowlisted internal
+            -- tarball host is permitted under the relaxed policy.
+            let allowInternal = lowerCaseHosts (Set.singleton "10.0.0.5")
+                optIn = lowerCaseHosts (Set.singleton "10.0.0.5")
+             in tarballHostAllowed AnyAllowlistedHost allowInternal optIn "registry.npmjs.org" "10.0.0.5"
+                    `shouldBe` True
 
 -- ── identifier → URL safety ──────────────────────────────────────────────────
 

@@ -74,7 +74,7 @@ newTestEnv = do
     manager <- newTestManager
     metadataCache <- newMetadataCache defaultCacheConfig
     logEnv <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
-    newEnv fakeRegistry queue fakeCredentials manager metadataCache logEnv telemetryDisabled
+    newEnv fakeRegistry queue fakeCredentials manager manager metadataCache logEnv telemetryDisabled
 
 {- | A test mount binding: the given prefix and classifier, npm's denial renderer,
 and no packument-serve dependencies (so a 'Packument' route is the recognised-but-

@@ -42,6 +42,7 @@ import Ecluse.Credential (Secret)
 import Ecluse.Env (Env, envLogEnv)
 import Ecluse.Rules.Effectful (PrecededEffectfulRule)
 import Ecluse.Rules.Types (PrecededRule)
+import Ecluse.Security (TarballHostPolicy)
 import Ecluse.Server.Response (HelpMessage, MountRenderer)
 import Ecluse.Server.Route (Classifier)
 
@@ -81,6 +82,13 @@ data PackumentDeps = PackumentDeps
     layered on the pure tier per "Ecluse.Rules.Effectful". Empty when no effectful
     rule is configured, in which case the effectful tier is skipped and gating
     reduces exactly to the pure tier.
+    -}
+    , pdTarballHostPolicy :: TarballHostPolicy
+    {- ^ Whether a tarball may be fetched from a @dist.tarball@ host that differs
+    from the upstream that served the packument
+    ('Ecluse.Security.SameHostAsPackument' by default, the secure reading of the
+    host allowlist; relaxed to 'Ecluse.Security.AnyAllowlistedHost' by
+    @PROXY_RESPECT_UPSTREAM_TARBALL_HOST@).
     -}
     , pdInboundToken :: Maybe Secret
     {- ^ The optional inbound token a client must present (@PROXY_AUTH_TOKEN@);

@@ -76,6 +76,7 @@ is the operator reference. **Keep the two in sync** when either changes.
 | `AWS_REGION` | AWS backends only | Region for SQS and CodeArtifact. |
 | `GOOGLE_CLOUD_PROJECT` | GCP backends only | Project for Pub/Sub and Artifact Registry (credentials via ADC). |
 | `PROXY_AUTH_TOKEN` | No | If set, clients must present this token (`Bearer` / `_authToken`). Omit for network-secured deployments. |
+| `PROXY_RESPECT_UPSTREAM_TARBALL_HOST` | No (default `false`) | Secure default. When `false`, a tarball is fetched only from the **same allowlisted upstream that served the packument**; set `true` only for a registry that serves tarballs from a separate CDN/files host (widens the fetch surface to any allowlisted host). See [Securing network egress](#securing-network-egress-required). |
 | `PROXY_HELP_MESSAGE` | No | String appended to every denial message (e.g. a support channel). |
 | `PROXY_LOG_FORMAT` | No (default `json`) | Log shape: `json` (one JSON object per line, for log collectors) or `console` (human-readable). |
 | `CVE_SYNC_INTERVAL_SECONDS` | No (default `3600`) | How often the in-memory advisory index refreshes from OSV. **(with the CVE tier)** |
@@ -136,29 +137,60 @@ upstreams are then credentialled):
 job — and some of the URLs it follows (a version's `dist.tarball`) are taken from
 upstream responses. As with any service that fetches on a client's behalf, the
 sensible posture is **least-privilege egress**, in two layers. Écluse provides the
-first in the application itself — a host **allowlist**, an **internal-address
-block** (loopback, link-local incl. the `169.254.169.254` metadata endpoint, the
-unspecified `0.0.0.0/8` / `::` range, RFC1918, and CGNAT), and **response-size
-bounds** — and you provide the second at the platform, the standard defence-in-depth
-for an outbound-fetching service. With both in place, no single guard bug or unusual
-fetch path can reach somewhere you didn't intend. At minimum:
+first in the application itself, with a **leg-aware trust model**:
 
-- **Block the instance-metadata endpoint.** Require IMDSv2 and set the hop limit
-  to 1 (AWS `httpPutResponseHopLimit: 1`), or deny egress to `169.254.169.254`
-  outright — the metadata endpoint is the most sensitive internal target, so close
-  it first.
+- **Untrusted legs** — the public-upstream fetch and every artifact (`dist.tarball`)
+  fetch — go through a host **allowlist**, an **internal-address block** (loopback,
+  link-local incl. the `169.254.169.254` metadata endpoint, the unspecified
+  `0.0.0.0/8` / `::` range, RFC1918, CGNAT, and IPv6 ULA `fc00::/7` incl.
+  `fd00:ec2::254`) **re-applied to every resolved IP** at connection time (so an
+  allowlisted name that resolves to an internal address is refused — a DNS-rebinding
+  backstop), a **disallow-by-default `dist.tarball` host policy** (below), and
+  **response-size bounds**.
+- **The trusted private leg** — your operator-configured `PRIVATE_UPSTREAM_URL` — is
+  deliberately *not* subject to the internal-address block: a private registry
+  legitimately lives on your internal network, so Écluse must be able to reach it.
+
+Crucially, **SSRF access to the instance-metadata endpoint is prevented at the
+service-behaviour level, not by blocking metadata at the network.** Écluse only
+follows internal-resolving locations on the *trusted* private leg, never on a
+client- or upstream-influenced one — so an attacker cannot steer it at
+`169.254.169.254`. Écluse itself **needs** the metadata endpoint to mint its
+instance-role credentials (`AWS.newEnv AWS.discover`, over amazonka's own HTTP
+client — independent of the guarded data-plane path), so do **not** deny the proxy
+egress to metadata or to internal ranges: that would break its own credentials.
+
+You provide the second layer at the platform — the standard defence-in-depth for an
+outbound-fetching service, protecting your **data targets** (registries, mirror) and
+catching anything the application layer doesn't:
+
+- **Require IMDSv2 and set the hop limit to 1** (AWS `httpPutResponseHopLimit: 1`).
+  This is the right metadata hardening: it keeps the proxy's *own* credential
+  minting working while stopping a containerised neighbour or a forwarded request
+  from reaching metadata through extra hops. **Do not** deny the instance egress to
+  `169.254.169.254` outright — Écluse needs it for credentials.
 - **Default-deny egress, allow only your registries + mirror target.**
   - **AWS** — security-group egress rules / network ACLs to the upstream and
-    mirror CIDRs; deny RFC1918 and link-local.
+    mirror CIDRs (plus the metadata endpoint the instance role needs).
   - **GCP** — VPC firewall egress rules and, where applicable, VPC Service Controls.
   - **Kubernetes** — a default-deny `NetworkPolicy` with an explicit egress
-    allowlist (enforced by your CNI).
+    allowlist (enforced by your CNI); allow your private upstream's internal range.
   - **Service mesh (Istio/Linkerd)** — set the sidecar outbound policy to
     `REGISTRY_ONLY`, declare each upstream as a `ServiceEntry`, and constrain it
     with a `Sidecar` egress listener and an egress `AuthorizationPolicy`.
 - **Grant the proxy only the cloud permissions it needs** — the mirror-write
   credential (and, under the `service` / `delegated-cache` strategies, the
   private-read credential), nothing more.
+
+**The `dist.tarball` host policy.** A version's `dist.tarball` is upstream-chosen
+data, so by default Écluse fetches a tarball only from the **same allowlisted
+upstream that served the packument** — a `dist.tarball` pointing at a *different*
+host is refused even if that host is otherwise on the allowlist. If your registry
+legitimately serves artifacts from a separate CDN/files host (the PyPI-files-host
+shape), set `PROXY_RESPECT_UPSTREAM_TARBALL_HOST=true` to relax this to *any
+allowlisted host* — it never escapes the allowlist or the internal-range block, but
+it does widen the fetch surface, so opt in deliberately and pair it with the
+platform egress controls above.
 
 The rationale — and why both the application guards and the platform controls are
 worth having — is in [Security: Outbound-Request & Input-Validation Invariants](docs/architecture/security.md#network-egress-is-a-shared-responsibility).
@@ -242,13 +274,6 @@ Documented here so the configuration surface and its security trade-off are know
 ahead of implementation. Écluse's posture is **secure by default, with overrides
 under your explicit control — you decide your threat tolerance.**
 
-- **`PROXY_RESPECT_UPSTREAM_TARBALL_HOST`** *(planned —
-  [S40](planning/slices/S40-egress-ssrf-hardening.md))*. By default a tarball is
-  fetched only from the **same allowlisted upstream that served the packument**;
-  set `true` only for a registry that legitimately serves tarballs from a separate
-  CDN/files host, which **widens the outbound fetch surface** to any allowlisted
-  host. Pair the override with the egress controls above. See
-  [Outbound egress safety](docs/architecture/configuration.md#outbound-egress-safety-planned).
 - **AWS / GCP backends and the mirror worker** — the SQS/Pub-Sub queues, the
   CodeArtifact / ADC credential leaves, and the demand-driven mirror are landing
   per the [delivery plan](planning/delivery-plan.md) (milestones M4, M7).

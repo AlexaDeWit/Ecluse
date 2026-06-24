@@ -27,6 +27,7 @@ import Ecluse.Config (
  )
 import Ecluse.Credential (authSecret, currentToken, unSecret)
 import Ecluse.Ecosystem (Ecosystem (..))
+import Ecluse.Security (TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument))
 import Ecluse.Server.Cache (CacheConfig (cacheMaxEntries, cacheTtl))
 import Ecluse.Server.Context (
     MountBinding (bindingPackumentDeps, bindingPrefix),
@@ -200,6 +201,24 @@ composeBindingsSpec = describe "planMounts / composeBindings (config-driven serv
                     fmap unHelpMessage (pdHelp deps) `shouldBe` Just "ask #platform"
                     served <- pdNow deps
                     served `shouldBe` fixedNow
+                Nothing -> expectationFailure "expected packument deps wired"
+            other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
+
+    it "defaults the tarball-host policy to same-host (secure default)" $ do
+        -- With PROXY_RESPECT_UPSTREAM_TARBALL_HOST unset, the deny-by-default
+        -- reading of the allowlist is threaded onto every mount's deps.
+        env <- expectEnv staticEnvVars
+        planFrom env Nothing >>= \case
+            Right [binding] -> case bindingPackumentDeps binding of
+                Just deps -> pdTarballHostPolicy deps `shouldBe` SameHostAsPackument
+                Nothing -> expectationFailure "expected packument deps wired"
+            other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
+
+    it "relaxes the tarball-host policy when the operator opts in" $ do
+        env <- expectEnv (("PROXY_RESPECT_UPSTREAM_TARBALL_HOST", "true") : staticEnvVars)
+        planFrom env Nothing >>= \case
+            Right [binding] -> case bindingPackumentDeps binding of
+                Just deps -> pdTarballHostPolicy deps `shouldBe` AnyAllowlistedHost
                 Nothing -> expectationFailure "expected packument deps wired"
             other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
 

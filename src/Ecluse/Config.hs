@@ -266,6 +266,14 @@ data EnvConfig = EnvConfig
     {- ^ The inbound client auth token clients must present (@PROXY_AUTH_TOKEN@);
     'Nothing' leaves the proxy open to the network layer.
     -}
+    , cfgRespectUpstreamTarballHost :: Bool
+    {- ^ Whether to honour a @dist.tarball@ host that differs from the upstream
+    that served the packument (@PROXY_RESPECT_UPSTREAM_TARBALL_HOST@, default
+    'False' — the secure default). 'False' fetches a tarball only from the same
+    allowlisted upstream that served the metadata; 'True' relaxes to any
+    allowlisted host (for a registry that serves artifacts from a separate
+    CDN\/files host), never escaping the allowlist or the internal-range block.
+    -}
     , cfgMirrorTargetToken :: Maybe Text
     {- ^ The static bearer token Écluse writes to the mirror target with
     (@MIRROR_TARGET_TOKEN@), when the target is reached with a fixed credential
@@ -335,6 +343,9 @@ envParser =
         <*> optionalText "AWS_REGION"
         <*> optionalText "GOOGLE_CLOUD_PROJECT"
         <*> Env.sensitive (optionalText "PROXY_AUTH_TOKEN")
+        -- Defaults to the secure value (do not honour a cross-host dist.tarball):
+        -- an unset or empty variable is the tightest reading of the allowlist.
+        <*> Env.var boolReader "PROXY_RESPECT_UPSTREAM_TARBALL_HOST" (Env.def False)
         <*> Env.sensitive (optionalText "MIRROR_TARGET_TOKEN")
         <*> optionalText "PROXY_HELP_MESSAGE"
         <*> Env.var cveIntervalReader "CVE_SYNC_INTERVAL_SECONDS" (Env.def defaultCveSyncInterval)
@@ -408,6 +419,20 @@ logFormatReader = textReader parseLogFormat
 -- 'parseTelemetrySwitch's reason.
 telemetrySwitchReader :: Env.Reader Env.Error TelemetrySwitch
 telemetrySwitchReader = textReader parseTelemetrySwitch
+
+-- An 'Env.Reader' for a boolean flag. Accepts the conventional spellings
+-- case-insensitively and rejects anything else loudly (fail-fast, never a silent
+-- coercion of a typo to a default), so a security-relevant toggle is never
+-- mis-set without the operator seeing it.
+boolReader :: Env.Reader Env.Error Bool
+boolReader = textReader $ \t -> case T.toLower (T.strip t) of
+    "true" -> Right True
+    "false" -> Right False
+    "1" -> Right True
+    "0" -> Right False
+    "yes" -> Right True
+    "no" -> Right False
+    _ -> Left ("expected a boolean (true/false), got " <> quote t)
 
 {- | Render the aggregated environment errors as one human-facing block, one line
 per offending variable, so an operator sees every problem from a single failed

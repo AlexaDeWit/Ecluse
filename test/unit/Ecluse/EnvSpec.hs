@@ -77,7 +77,7 @@ newTestEnv = do
     manager <- newTestManager
     metadataCache <- newTestCache
     logEnv <- newTestLogEnv
-    newEnv fakeRegistry queue fakeCredentials manager metadataCache logEnv telemetryDisabled
+    newEnv fakeRegistry queue fakeCredentials manager manager metadataCache logEnv telemetryDisabled
 
 -- | A sample job for round-tripping the queue handle held in an 'Env'.
 sampleJob :: MirrorJob
@@ -134,6 +134,14 @@ spec = do
             _ <- evaluate (envManager env)
             pure ()
 
+        it "exposes the trusted private-leg manager it was built with" $ do
+            -- The second data-plane manager (the trusted private leg, exempt from
+            -- the resolved-IP recheck) is likewise opaque, so forcing the accessor
+            -- to weak-head normal form is the assertion that it is wired.
+            env <- newTestEnv
+            _ <- evaluate (envPrivateManager env)
+            pure ()
+
         it "exposes the LogEnv it was built with" $ do
             -- A 'LogEnv' is likewise opaque, so reaching 'envLogEnv' and forcing it
             -- to weak-head normal form is the assertion: the wired logging
@@ -157,7 +165,7 @@ spec = do
             manager <- newTestManager
             metadataCache <- newTestCache
             logEnv <- newTestLogEnv
-            result <- withEnv fakeRegistry queue fakeCredentials manager metadataCache logEnv telemetryDisabled $ \env ->
+            result <- withEnv fakeRegistry queue fakeCredentials manager manager metadataCache logEnv telemetryDisabled $ \env ->
                 currentToken' env
             result `shouldBe` "env-spec-token"
 
@@ -168,7 +176,7 @@ spec = do
             logEnv <- newTestLogEnv
             let body :: Env -> IO ()
                 body _ = throwString "boom"
-            outcome <- try (withEnv fakeRegistry queue fakeCredentials manager metadataCache logEnv telemetryDisabled body)
+            outcome <- try (withEnv fakeRegistry queue fakeCredentials manager manager metadataCache logEnv telemetryDisabled body)
             case outcome of
                 Left (_ :: StringException) -> pure ()
                 Right () -> expectationFailure "expected the body's exception to propagate"

@@ -111,13 +111,14 @@ import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
+import Network.HTTP.Client (Manager)
 import Network.HTTP.Types (ResponseHeaders, Status, hAuthorization, hContentType, mkStatus, status200, status401, status501, statusIsSuccessful)
 import Network.Wai (Request, Response, ResponseReceived, requestHeaders, responseLBS)
 import UnliftIO (concurrently)
 import UnliftIO.Exception (throwString, tryAny)
 
 import Ecluse.Credential (Secret, mkSecret)
-import Ecluse.Env (Env (envManager, envMetadataCache, envQueue))
+import Ecluse.Env (Env (envManager, envMetadataCache, envPrivateManager, envQueue))
 import Ecluse.Package (PackageDetails, PackageInfo (infoDistTags, infoPublishedAt, infoVersions), PackageName)
 import Ecluse.Package.Filter (filterPlanFromDecisions)
 import Ecluse.Package.Merge (
@@ -300,7 +301,7 @@ is cached. (How a non-@passthrough@ strategy can instead share this leg safely i
 serve-time authorisation it adds — see @docs\/architecture\/access-model.md@.) -}
 fetchPrivateLeg :: Env -> Text -> Maybe Secret -> PackageName -> IO (Maybe (PackageInfo, Value))
 fetchPrivateLeg env baseUrl token name = do
-    resolved <- tryAny (fetchEntry env baseUrl token name)
+    resolved <- tryAny (fetchEntry (envPrivateManager env) baseUrl token name)
     pure (either (const Nothing) (Just . unpair) resolved)
 
 {- Resolve the public (gated, anonymous) upstream leg through the metadata cache,
@@ -316,7 +317,7 @@ decision over it stay coherent across the TTL, and concurrent resolutions of a
 popular package __collapse to one upstream call__. -}
 fetchPublicLeg :: Env -> Text -> PackageName -> IO (Maybe (PackageInfo, Value))
 fetchPublicLeg env baseUrl name = do
-    resolved <- tryAny (resolveMetadata (envMetadataCache env) (Source baseUrl) name (fetchEntry env baseUrl Nothing name))
+    resolved <- tryAny (resolveMetadata (envMetadataCache env) (Source baseUrl) name (fetchEntry (envManager env) baseUrl Nothing name))
     pure (either (const Nothing) (Just . unpair) resolved)
 
 {- Fetch one upstream leg's full packument (the @Full@ form, for the @time@ map a
@@ -326,9 +327,9 @@ fetch, so the decision is taken over exactly the bytes served. A body that does 
 decode into both throws, so the leg degrades to a missing contribution rather than
 failing the whole request. The injected token is the leg's credential posture (the
 client's for the private leg, 'Nothing' for the anonymous public leg). -}
-fetchEntry :: Env -> Text -> Maybe Secret -> PackageName -> IO CacheEntry
-fetchEntry env baseUrl token name = do
-    response <- fetchMetadataForm (clientConfig env baseUrl token) Full noValidators name
+fetchEntry :: Manager -> Text -> Maybe Secret -> PackageName -> IO CacheEntry
+fetchEntry manager baseUrl token name = do
+    response <- fetchMetadataForm (clientConfig manager baseUrl token) Full noValidators name
     case (parsePackageInfo response, Aeson.eitherDecodeStrict (responseBody response)) of
         (Right info, Right value) -> pure (CacheEntry{entryInfo = info, entryRaw = value})
         _ -> throwString "packument did not decode into both a typed view and a raw document"
@@ -336,15 +337,17 @@ fetchEntry env baseUrl token name = do
 unpair :: CacheEntry -> (PackageInfo, Value)
 unpair entry = (entryInfo entry, entryRaw entry)
 
-{- The npm client config for one leg: the shared 'Manager', the leg's base URL,
-and the leg's injected token (the client's credential for the private leg,
-'Nothing' for the anonymous public leg). The client never originates a token; the
-authority model is decided here. -}
-clientConfig :: Env -> Text -> Maybe Secret -> NpmClientConfig
-clientConfig env baseUrl token =
+{- The npm client config for one leg: the leg's 'Manager', base URL, and injected
+token (the client's credential for the private leg, 'Nothing' for the anonymous
+public leg). The client never originates a token; the authority model is decided
+here. The 'Manager' is passed explicitly per leg — the trusted 'envPrivateManager'
+for the private upstream, the guarded 'envManager' for the public\/artifact legs —
+so the resolved-IP SSRF recheck applies only to the untrusted egress. -}
+clientConfig :: Manager -> Text -> Maybe Secret -> NpmClientConfig
+clientConfig manager baseUrl token =
     NpmClientConfig
         { npmBaseUrl = baseUrl
-        , npmManager = envManager env
+        , npmManager = manager
         , npmToken = token
         }
 
@@ -703,9 +706,9 @@ streamPrivateArtifact ::
     (Response -> IO ResponseReceived) ->
     IO (Maybe ResponseReceived)
 streamPrivateArtifact env deps token name file respond =
-    case artifactRequestByFile (clientConfig env (pdPrivateBaseUrl deps) token) name file of
+    case artifactRequestByFile (clientConfig (envPrivateManager env) (pdPrivateBaseUrl deps) token) name file of
         Left _ -> pure Nothing
-        Right req -> streamUpstreamWhen (envManager env) req statusIsSuccessful relayArtifact respond
+        Right req -> streamUpstreamWhen (envPrivateManager env) req statusIsSuccessful relayArtifact respond
 
 {- Serve the artifact from the public upstream after a private miss: gate the
 single requested version against the rules, and on an admit stream the public bytes
@@ -779,7 +782,7 @@ streamPublicArtifact ::
     (Response -> IO ResponseReceived) ->
     IO ResponseReceived
 streamPublicArtifact env deps name version file respond =
-    case artifactRequestByFile (clientConfig env (pdPublicBaseUrl deps) Nothing) name file of
+    case artifactRequestByFile (clientConfig (envManager env) (pdPublicBaseUrl deps) Nothing) name file of
         Left _ -> respond internalArtifactError
         Right req -> do
             received <- streamUpstream (envManager env) req relayArtifact respond
