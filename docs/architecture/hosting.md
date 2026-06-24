@@ -144,6 +144,14 @@ mid-drain (e.g. a Kubernetes `terminationGracePeriodSeconds` comfortably above t
 configured drain). The readiness-flip-then-drain sequence assumes the LB acts on
 `/readyz`; a deployment that load-balances without a readiness check should add one.
 
+**Local development.** When Écluse is attached to an **interactive terminal**, two
+keys force an *immediate* halt that **bypasses** the drain: a **second `Ctrl+C`**
+(the first begins the graceful drain; the second hard-stops it) and **`Ctrl+D`**
+(end of standard input) — the dev "quit now" key. This is strictly a development
+affordance: it is gated on standard input being a TTY, so in **production** (where
+standard input is a non-TTY or closed) no such watcher exists and the only path is
+the signal-driven graceful drain above.
+
 ## Capability manifest
 
 Because dispatch is a fan-out over a fixed set of mounts and each mount classifies

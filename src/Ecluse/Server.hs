@@ -66,6 +66,11 @@ module Ecluse.Server (
     ShutdownDrainTimeout (..),
     defaultShutdownDrainTimeout,
 
+    -- * Local-dev immediate halt
+    InteractiveHalt (..),
+    defaultInteractiveHalt,
+    withInteractiveHalt,
+
     -- * Middleware
     serverMiddleware,
 
@@ -80,7 +85,11 @@ import Network.Wai.Handler.Warp qualified as Warp
 import Network.Wai.Middleware.RealIp (realIp)
 import Network.Wai.Middleware.RequestSizeLimit (defaultRequestSizeLimitSettings, requestSizeLimitMiddleware, setMaxLengthForRequest)
 import Network.Wai.Middleware.Timeout (timeout)
+import System.Exit (ExitCode (ExitFailure))
+import System.IO (hIsTerminalDevice, isEOF)
+import System.Posix.Process (exitImmediately)
 import System.Posix.Signals (Handler (CatchOnce), installHandler, sigINT, sigTERM)
+import UnliftIO.Async (withAsync)
 
 import Ecluse.Env (Env)
 import Ecluse.Server.Context (
@@ -226,6 +235,75 @@ short enough that a stuck request cannot pin the old instance indefinitely.
 -}
 defaultShutdownDrainTimeout :: ShutdownDrainTimeout
 defaultShutdownDrainTimeout = ShutdownDrainTimeout 30
+
+-- ── local-dev immediate halt ─────────────────────────────────────────────────
+
+{- | The local-development immediate-halt wiring, as three injectable seams so its
+logic is exercised without a real terminal. It exists only to give an interactive
+session a "quit now" key: when the server is attached to a TTY, closing standard
+input (Ctrl-D) forces an __immediate__ process exit, aborting any in-progress drain
+— the same hard-stop a second Ctrl-C gives, but on the dev's deliberate signal.
+
+It is __inert outside an interactive terminal__: in production standard input is a
+non-TTY or closed, 'haltOnInteractive' returns 'False', and no watcher is installed,
+so the signal-driven graceful lifecycle is completely untouched. The TTY guard is
+what enforces that zero-production-impact contract (see 'withInteractiveHalt').
+-}
+data InteractiveHalt = InteractiveHalt
+    { haltOnInteractive :: IO Bool
+    {- ^ Whether to arm the halt at all — the production guard. The real wiring is
+    "is standard input a terminal?", so a non-interactive process never installs the
+    watcher.
+    -}
+    , awaitHaltSignal :: IO ()
+    {- ^ Block until the dev's halt signal. The real wiring reads standard input
+    until end-of-input (Ctrl-D); it returns when the watcher should fire.
+    -}
+    , halt :: IO ()
+    {- ^ The halt itself: terminate the process __immediately__, bypassing the drain
+    wait. The real wiring is a direct @_exit@ ('exitImmediately'), matching the
+    second-Ctrl-C hard stop.
+    -}
+    }
+
+{- | The real local-dev halt: armed only when standard input is a terminal
+('hIsTerminalDevice'), fired by end-of-input on standard input (Ctrl-D), and
+halting via 'exitImmediately' — an immediate @_exit@ that bypasses the graceful
+drain, mirroring a second Ctrl-C. The exit status (130) is the conventional
+"terminated from the terminal" code.
+-}
+defaultInteractiveHalt :: InteractiveHalt
+defaultInteractiveHalt =
+    InteractiveHalt
+        { haltOnInteractive = hIsTerminalDevice stdin
+        , awaitHaltSignal = awaitStdinEof
+        , halt = exitImmediately (ExitFailure 130)
+        }
+  where
+    -- Read and discard standard input until end-of-input. On an interactive
+    -- terminal this blocks until the dev presses Ctrl-D (or the stream otherwise
+    -- closes); typed lines in between are consumed and ignored — the watcher only
+    -- cares about the close.
+    awaitStdinEof :: IO ()
+    awaitStdinEof = go
+      where
+        go =
+            isEOF >>= \case
+                True -> pass
+                False -> void getLine >> go
+
+{- | Run an action with the local-dev immediate-halt watcher armed __only when
+interactive__. If 'haltOnInteractive' is 'True', a watcher runs alongside the action
+for exactly its lifetime ('withAsync', so it is torn down when the action returns or
+is cancelled — it never lingers); the watcher blocks on 'awaitHaltSignal' and, when
+that returns, runs 'halt'. If 'False' — the production case — the action runs alone,
+with no watcher and no extra thread, so nothing about the graceful lifecycle changes.
+-}
+withInteractiveHalt :: InteractiveHalt -> IO a -> IO a
+withInteractiveHalt ih action =
+    haltOnInteractive ih >>= \case
+        False -> action
+        True -> withAsync (awaitHaltSignal ih >> halt ih) (const action)
 
 -- ── the application ──────────────────────────────────────────────────────────
 
@@ -464,6 +542,11 @@ accepting new connections and waits for in-flight requests __and in-progress
 artifact streams__ to finish before the process exits, bounded by 'scDrainTimeout'.
 The handler is a 'CatchOnce', so a second signal during the drain hard-stops the
 server rather than being swallowed.
+
+__Local-dev quit key.__ The whole run is wrapped in 'withInteractiveHalt', which —
+__only when attached to an interactive terminal__ — arms a watcher that forces an
+immediate halt on Ctrl-D (end of standard input), bypassing the drain like a second
+Ctrl-C. Outside a TTY (production) no watcher is installed and this changes nothing.
 -}
 runServer :: ServerConfig -> Env -> IO ()
 runServer cfg0 env = do
@@ -475,7 +558,7 @@ runServer cfg0 env = do
                 . Warp.setInstallShutdownHandler (installShutdownHandler drain)
                 . Warp.setGracefulShutdownTimeout (Just timeoutSecs)
                 $ Warp.defaultSettings
-    Warp.runSettings settings (application cfg env)
+    withInteractiveHalt defaultInteractiveHalt (Warp.runSettings settings (application cfg env))
 
 {- Install the OS shutdown handler @warp@ asks for: on @SIGTERM@\/@SIGINT@, raise the
 drain (flip readiness to @503@ and start stamping @Connection: close@) and then run
