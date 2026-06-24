@@ -61,6 +61,7 @@ library
   exposed-modules:
     Ecluse
     Ecluse.App
+    Ecluse.Breaker
     Ecluse.Composition
     Ecluse.Config
     Ecluse.Credential
@@ -144,6 +145,7 @@ test-suite ecluse-unit
   hs-source-dirs:     test/unit
   other-modules:
     EcluseSpec
+    Ecluse.BreakerSpec
     Ecluse.CompositionSpec
     Ecluse.ConfigSpec
     Ecluse.Credential.CodeArtifactSpec
