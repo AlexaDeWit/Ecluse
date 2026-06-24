@@ -224,15 +224,20 @@ mergePackuments inputs@((_, firstInfo) : _) =
         (SourceId, Provenance, PackageInfo) ->
         (Map Text (PackageDetails, SourceId), [Divergence])
     mergeSource acc (sid, prov, info) =
-        foldl' (mergeVersion sid prov) acc (Map.toList (infoVersions info))
+        -- Fold the tree directly with 'foldlWithKey'' rather than over
+        -- 'Map.toList': the list form allocates a cons cell and a (key, value)
+        -- tuple per version (up to 'maxVersionCount') only to be torn apart at
+        -- once. 'mergeVersion' takes the key and value unpaired to match.
+        Map.foldlWithKey' (mergeVersion sid prov) acc (infoVersions info)
 
     mergeVersion ::
         SourceId ->
         Provenance ->
         (Map Text (PackageDetails, SourceId), [Divergence]) ->
-        (Text, PackageDetails) ->
+        Text ->
+        PackageDetails ->
         (Map Text (PackageDetails, SourceId), [Divergence])
-    mergeVersion sid prov (versions, divs) (key, incoming) =
+    mergeVersion sid prov (versions, divs) key incoming =
         case Map.lookup key versions of
             Nothing -> (Map.insert key (incoming, sid) versions, divs)
             Just (existing, existingSid) ->
