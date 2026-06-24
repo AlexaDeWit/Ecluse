@@ -2,7 +2,7 @@
 id: S17
 title: CodeArtifact mintToken leaf
 milestone: M4 — AWS cloud backends & worker
-status: not-started
+status: merged
 depends-on: [S16]
 test-tier: [smoke]
 arch-refs:

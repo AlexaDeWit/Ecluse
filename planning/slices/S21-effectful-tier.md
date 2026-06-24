@@ -2,7 +2,7 @@
 id: S21
 title: Effectful rule tier (Unavailable, timeout/retry/breaker)
 milestone: M5 — Effectful rules & CVE
-status: in-review
+status: merged
 depends-on: [S05, S14]
 test-tier: [unit]
 arch-refs:

@@ -2,7 +2,7 @@
 id: S18
 title: SQS MirrorQueue backend
 milestone: M4 — AWS cloud backends & worker
-status: not-started
+status: merged
 depends-on: [S02]
 test-tier: [integration]
 arch-refs:

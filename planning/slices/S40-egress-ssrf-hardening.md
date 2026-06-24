@@ -2,7 +2,7 @@
 id: S40
 title: Egress / SSRF hardening — resolved-IP recheck, tarball-host policy, operator egress docs
 milestone: M4 — AWS cloud backends & worker
-status: in-progress
+status: merged
 depends-on: [S08, S15]
 test-tier: [unit, integration]
 arch-refs:

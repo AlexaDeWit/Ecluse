@@ -2,7 +2,7 @@
 id: S15
 title: Tarball path + demand-driven mirror enqueue
 milestone: M3 — Request pipeline
-status: not-started
+status: merged
 depends-on: [S14]
 test-tier: [unit]
 arch-refs:
