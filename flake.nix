@@ -406,6 +406,15 @@
             esac
             touch $out
           '';
+
+          # Build the library Haddock via the Nix Haskell builder. The dependency
+          # closure comes prebuilt from the pinned haskell set (with their .haddock
+          # interfaces), so ONLY ecluse compiles + haddocks — whereas `cabal haddock`
+          # (make docs-check) rebuilds the whole ~188-package closure every CI run,
+          # because it wants a documentation variant of the deps that build-test's
+          # `cabal build` store lacks. doHaddock forces the Haddock pass (broken doc
+          # comments fail the build); dontCheck skips the test suites.
+          docs = hlib.doHaddock (hlib.dontCheck ecluseRaw);
         };
 
         # Full shell for humans: lean CI set + IDE + release + scan + workflow-lint + weeder.

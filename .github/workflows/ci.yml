@@ -248,14 +248,17 @@ jobs:
     name: Haddock builds
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    # Builds the library Haddock (`make docs-check`) so broken doc comments / missing
-    # modules are caught on the PR, not after merge when the Pages deploy fails. This
-    # drops the expensive --haddock-hyperlink-source pass (the dominant cost) — the
-    # full source-linked styling is built only by the Pages publish (`make docs-site`)
-    # on main, whose deploy is non-gating. The compile + doc-comment validation here
-    # is identical, so a green gate still predicts a successful publish.
-    env:
-      CABAL_DIR: ${{ github.workspace }}/.cabal
+    # Builds the library Haddock so broken doc comments / missing modules are caught
+    # on the PR, not after merge when the Pages deploy fails. SPIKE: builds it as the
+    # `checks.docs` flake check (Nix Haskell builder) rather than `cabal haddock`
+    # (`make docs-check`). The cabal path rebuilt the whole ~188-package dependency
+    # closure every run (~12 min), because `cabal haddock` wants a documentation
+    # variant of the deps that build-test's `cabal build` store lacks; the flake check
+    # takes the deps prebuilt from the pinned Haskell set, so only ecluse compiles +
+    # haddocks (~44 s locally). Same validation — broken doc comments fail the build.
+    # Restore-only Nix store (build-test stays the single writer); no cabal cache (the
+    # build resolves deps via Nix, not cabal). The published, source-linked styling is
+    # still built by the Pages publish (`make site`) on main.
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -265,13 +268,10 @@ jobs:
       - name: Set up toolchain
         uses: ./.github/actions/setup-toolchain
         with:
-          cabal-cache: "true"
+          save-nix-store: "false"
 
-      - name: Update package index
-        run: nix develop .#ci --command make update
-
-      - name: Build Haddock
-        run: nix develop .#ci --command make docs-check
+      - name: Build library Haddock (checks.docs flake check)
+        run: nix build .#checks.x86_64-linux.docs --no-link --print-build-logs
 
   weeder:
     name: Dead-code report (weeder — informational)
