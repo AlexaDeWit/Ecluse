@@ -126,6 +126,8 @@ import Data.Time (UTCTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Katip (LogEnv, Severity (WarningS), logFM, ls, sl)
 import Katip.Monadic (runKatipContextT)
+import Lens.Micro ((^?))
+import Lens.Micro.Aeson (key, _Object)
 import Network.HTTP.Client (Manager)
 import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types (ResponseHeaders, Status, hAuthorization, hContentType, mkStatus, status200, status401, status501, statusIsSuccessful)
@@ -577,9 +579,8 @@ restrictToSurvivors filtered info =
         }
   where
     survivors :: Set Text
-    survivors = case objectAt "versions" filtered of
-        Just versionsObject -> Set.fromList (map Key.toText (KeyMap.keys versionsObject))
-        Nothing -> mempty
+    survivors =
+        maybe mempty (Set.fromList . map Key.toText . KeyMap.keys) (filtered ^? key "versions" . _Object)
 
 {- Project each excluded version's 'Decision' to a 'ServeDecision' for the
 no-survivors status. 'applyFilterPlan' carries the plan's decisions in
@@ -664,7 +665,7 @@ replayPlan deps bySource plan base =
     -- re-extract the same object on every version; hoisting it here leaves each
     -- survivor a single inner lookup. ('bySource' holds one entry per upstream.)
     versionsBySource :: Map SourceId (KeyMap Value)
-    versionsBySource = Map.mapMaybe (objectAt "versions" . srcValue) bySource
+    versionsBySource = Map.mapMaybe ((^? key "versions" . _Object) . srcValue) bySource
 
     versionObjectFrom :: SourceId -> Text -> Maybe Value
     versionObjectFrom sid version =
@@ -698,27 +699,19 @@ replayPlan deps bySource plan base =
     -- is a pair of lookups, not a full traversal of every version's publish time.
     bookkeepingTime :: KeyMap Value
     bookkeepingTime =
-        case objectAt "time" base of
+        case base ^? key "time" . _Object of
             Nothing -> mempty
             Just timeObject ->
                 KeyMap.fromList
-                    [ (key, value)
+                    [ (k, value)
                     | name <- timeBookkeepingKeys
-                    , let key = Key.fromText name
-                    , Just value <- [KeyMap.lookup key timeObject]
+                    , let k = Key.fromText name
+                    , Just value <- [KeyMap.lookup k timeObject]
                     ]
 
 -- The non-version keys an npm @time@ object carries that must be relayed unchanged.
 timeBookkeepingKeys :: [Text]
 timeBookkeepingKeys = ["created", "modified"]
-
--- The object at @key@ within a JSON object, when it is itself an object.
-objectAt :: Text -> Value -> Maybe (KeyMap Value)
-objectAt key = \case
-    Object o -> case KeyMap.lookup (Key.fromText key) o of
-        Just (Object inner) -> Just inner
-        _ -> Nothing
-    _ -> Nothing
 
 -- Render a publish time as the ISO-8601 instant npm serves in its @time@ map.
 renderTime :: UTCTime -> Text
