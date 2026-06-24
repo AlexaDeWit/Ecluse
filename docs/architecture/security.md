@@ -112,13 +112,27 @@ not by URL reconstruction:
   (invariant 2), with the internal-range block (invariant 3) as defence-in-depth.
 
 The load-bearing guard is thus `isAllowedUpstreamHost`; the IP-range block is its
-backstop. Full literal-form completeness in that block earns its keep because the
-fetch layer also re-checks **resolved** IPs: the shared HTTP manager's connection
-hook resolves every outbound host and re-applies the internal-range block to each
-resolved address before the socket is used (`Ecluse.Security.Egress`), so a DNS
-name that resolves to an internal address — which the pure layer cannot see — is
-refused at connect time. This narrows the resolve-then-connect (DNS-rebinding)
-window the pure layer leaves open.
+backstop. That block has two parts with a deliberate seam between them. Recognising
+whether a host **is** an IP literal stays a **hand-rolled, intentionally lenient**
+parser; testing a recognised address for **membership** of the blocked CIDR ranges
+is delegated to the `iproute` library (one shared predicate, `isBlockedIP`, for
+both the literal block and the resolved-address recheck, so they gate against
+identical ranges). The split is load-bearing: a strict IP library rejects ambiguous
+bypass spellings — notably leading-zero octets (`0127.0.0.1`, `010.0.0.1`) — as
+non-literals, which would let them **skip** the block and reach the fetch layer as
+names, silently *narrowing* the gate. The lenient recogniser instead parses them as
+the address they coerce to on a typical resolver and **blocks** them; conversely a
+malformed group that overflows 16 bits (`fe80::1ffff`) is treated as a name the
+allowlist constrains. Delegating literal *parsing* to a library would change both
+behaviours, so only membership is delegated.
+
+This literal-form coverage earns its keep because the fetch layer also re-checks
+**resolved** IPs: the shared HTTP manager's connection hook resolves every outbound
+host and re-applies the same internal-range block to each resolved address before
+the socket is used (`Ecluse.Security.Egress`), so a DNS name that resolves to an
+internal address — which the pure layer cannot see — is refused at connect time.
+This narrows the resolve-then-connect (DNS-rebinding) window the pure layer leaves
+open.
 
 ## Network egress is a shared responsibility
 

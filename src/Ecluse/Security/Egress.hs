@@ -44,26 +44,20 @@ module Ecluse.Security.Egress (
 
     -- * The resolved-IP decision (pure)
     blockedResolvedAddrs,
-    sockAddrHostText,
 ) where
 
-import Data.Text qualified as T
+import Data.IP (IP, fromSockAddr)
 import Network.HTTP.Client (Manager, ManagerSettings (managerRawConnection, managerTlsConnection), newManager)
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 import Network.Socket (
     AddrInfo (addrAddress),
-    HostAddress,
-    HostAddress6,
-    SockAddr (SockAddrInet, SockAddrInet6, SockAddrUnix),
+    SockAddr,
     defaultHints,
     getAddrInfo,
-    hostAddress6ToTuple,
-    hostAddressToTuple,
  )
-import Numeric (showHex)
 import UnliftIO.Exception (throwIO)
 
-import Ecluse.Security (LoweredHostSet, isBlockedTarget)
+import Ecluse.Security (LoweredHostSet, hostOptedIn, isBlockedIP)
 
 -- ── the connection-time refusal ───────────────────────────────────────────────
 
@@ -158,45 +152,27 @@ checkResolved allowedInternal host = do
 
 {- | The blocked IP literals among a set of resolved socket addresses.
 
-Each 'SockAddr' is rendered to its canonical IP-literal text ('sockAddrHostText')
-and tested with the pure internal-range block ('Ecluse.Security.isBlockedTarget')
-under the given per-host opt-in. The result is the (possibly empty) list of literals
-that were refused: empty means every resolved address is permitted. A non-IP
-address (a Unix socket) cannot be an outbound HTTP target and is ignored.
+Each 'SockAddr' is converted directly to an @iproute@ @IP@ and tested with the shared
+internal-range block ('Ecluse.Security.isBlockedIP') under the given per-host
+opt-in — the same block and exemption the pure host layer applies, so a resolved
+address gates against identical ranges. The result is the (possibly empty) list of
+canonical literals that were refused, for the 'BlockedTarget' diagnostic: empty
+means every resolved address is permitted. A non-IP address (a Unix socket) cannot
+be an outbound HTTP target and is ignored.
 
 Exposed pure so the connection-hook decision can be unit-tested over constructed
 addresses without performing DNS or opening a socket.
 -}
 blockedResolvedAddrs :: LoweredHostSet -> [SockAddr] -> [Text]
 blockedResolvedAddrs allowedInternal =
-    filter (isBlockedTarget allowedInternal) . mapMaybe sockAddrHostText
-
-{- | The canonical IP-literal text of a socket address, or 'Nothing' for an
-address with no IP host (a Unix-domain socket).
-
-An IPv4 address renders dotted-quad (@10.0.0.1@) and an IPv6 address renders its
-eight colon-separated hex groups, uncompressed (@fe80:0:0:0:0:0:0:1@) — the
-uncompressed form 'Ecluse.Security.isBlockedTarget' parses — so the rendered
-literal feeds the internal-range block directly. The port, flow info, and scope id
-are irrelevant to the host check and dropped.
--}
-sockAddrHostText :: SockAddr -> Maybe Text
-sockAddrHostText = \case
-    SockAddrInet _ addr -> Just (renderV4 addr)
-    SockAddrInet6 _ _ addr _ -> Just (renderV6 addr)
-    SockAddrUnix _ -> Nothing
-
--- An IPv4 'HostAddress' as its dotted-quad literal.
-renderV4 :: HostAddress -> Text
-renderV4 addr =
-    let (a, b, c, d) = hostAddressToTuple addr
-     in T.intercalate "." (map show [a, b, c, d])
-
--- An IPv6 'HostAddress6' as its eight colon-separated hex groups, uncompressed.
-renderV6 :: HostAddress6 -> Text
-renderV6 addr =
-    let (a, b, c, d, e, f, g, h) = hostAddress6ToTuple addr
-     in T.intercalate ":" (map hexGroup [a, b, c, d, e, f, g, h])
+    mapMaybe (blockedLiteral . fst) . mapMaybe fromSockAddr
   where
-    hexGroup :: Word16 -> Text
-    hexGroup w = toText (showHex w "")
+    -- The IP's canonical literal, or 'Nothing' if it is permitted. Rendering once
+    -- gives both the opt-in key and the diagnostic text, so the address is parsed
+    -- (by 'fromSockAddr') and its membership tested exactly once.
+    blockedLiteral :: IP -> Maybe Text
+    blockedLiteral ip =
+        let lit = show ip
+         in if not (hostOptedIn allowedInternal lit) && isBlockedIP ip
+                then Just lit
+                else Nothing
