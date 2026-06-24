@@ -25,7 +25,8 @@ so reserve it for one-offs.
 | Lint | `make lint` |
 | Static analysis (SAST) | `make sast` |
 | Coverage (unit → Codecov JSON) | `make coverage` |
-| Everything the gate runs | `make check` |
+| Pre-push checks (fast) | `make check` |
+| Full CI-gate mirror (needs Docker) | `make gate` |
 
 Run `make help` for the full list (the integration/smoke suites, `nix-build`,
 `nix-check`, …). The underlying commands live in the [`Makefile`](../Makefile), so
@@ -34,7 +35,10 @@ local and CI never drift.
 **Before you push,** run `make check` — it must be clean: build (warnings are
 errors via `-Werror`; see [`STYLE.md`](../STYLE.md) → "Compiler flags"), the unit
 suite, the doctest examples, `fourmolu --mode check`, `hlint`, and Semgrep (zero
-findings).
+findings). `make check` is the fast subset; `make gate` additionally runs the
+Docker-bound integration suite and the Haddock build — the two tiers the gate has
+that `make check` doesn't — for a faithful end-to-end reproduction. (The only gate
+input neither runs is the Codecov upload, which is computed server-side.)
 Add `make test-integration` (needs Docker) for the other gating suite. The CI
 `gate` enforces the same set, so a clean local run predicts a green gate. The
 smoke suite (`make test-smoke`) is allowed to fail and never gates (see [Testing Strategy](testing.md)).
