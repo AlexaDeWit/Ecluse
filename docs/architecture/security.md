@@ -40,16 +40,16 @@ noted below.
    `dist.tarball`, after the allowlist check — never from a client-supplied URL.
    See [Registry Model](registry-model.md#registry-abstraction) and
    [URL rewriting](hosting.md#the-load-bearing-requirement-url-rewriting).
-3. **Internal address ranges are blocked on the untrusted legs** — link-local
+3. **Internal address ranges are blocked on the untrusted origins** — link-local
    (incl. the `169.254.169.254` cloud-metadata endpoint), loopback, the
    unspecified / this-host range (`0.0.0.0/8` and IPv6 `::`, since `0.0.0.0` is a
    loopback-equivalent on Linux), RFC1918, CGNAT shared space (`100.64.0.0/10`), and
    IPv6 unique-local `fc00::/7` (incl. the AWS IMDSv6 endpoint `fd00:ec2::254`). The
-   block is **leg-aware**: it guards the **untrusted** egress — the public-upstream
+   block is **origin-aware**: it guards the **untrusted** egress — the public-upstream
    fetch and every artifact (`dist.tarball`) fetch — and is **re-applied to every
    resolved IP** at connection time (so an allowlisted name that resolves to an
    internal address is refused — the DNS-rebinding backstop). The **trusted private
-   leg** (the operator-configured private upstream) is deliberately *exempt*: a
+   origin** (the operator-configured private upstream) is deliberately *exempt*: a
    private registry may legitimately live on an internal address, and only an
    untrusted target can be steered by an attacker. This is **defence-in-depth behind
    invariant 2**: the host allowlist is the load-bearing control, and the
@@ -122,7 +122,7 @@ standard arrangement for any service that fetches on a client's behalf.
 
 **The cloud-metadata SSRF is handled at the service-behaviour level, not by blocking
 metadata at the network.** Écluse only follows an internal-resolving location on the
-**trusted private leg** (invariant 3) — never on a public-upstream or
+**trusted private origin** (invariant 3) — never on a public-upstream or
 `dist.tarball`-derived target, which are exactly the attacker-influenced ones — so an
 SSRF cannot steer it at `169.254.169.254` or `fd00:ec2::254`. At the same time Écluse
 **needs** the metadata endpoint to mint its instance-role credentials

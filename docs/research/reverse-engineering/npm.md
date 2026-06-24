@@ -124,7 +124,7 @@ different documents at the same URL).
 
 `Accept-Encoding: gzip` is honoured (`Content-Encoding: gzip`). Packuments for
 popular packages are large (megabytes); always request gzip on the upstream
-leg.
+fetch.
 
 ### Caching & conditional requests
 
@@ -240,7 +240,7 @@ the manifest.
 The full packument carries `readme`, every historical manifest with `scripts`,
 `gitHead`, `_npmOperationalInternal`, etc. For a popular package this is
 megabytes. The **abbreviated** form (§5) carries everything install needs at a
-fraction of the size — prefer it for the proxy's metadata leg, and only fall to
+fraction of the size — prefer it for the proxy's metadata fetch, and only fall to
 full when a field you need is full-only (notably `time`, see §8).
 
 ### Real example (trimmed — `is-odd`)
@@ -583,7 +583,7 @@ private upstream.
 ### Implications for Écluse
 
 - **Client side.** Écluse holds upstream credentials and attaches
-  `Authorization: Bearer …` on the private-upstream and mirror legs. For
+  `Authorization: Bearer …` on the private-upstream and mirror requests. For
   **CodeArtifact**, the bearer token is a short-lived AWS-issued token refreshed
   via the SDK (architecture.md → Registry Abstraction) — same wire shape,
   different issuer.

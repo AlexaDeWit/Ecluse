@@ -544,7 +544,7 @@ Modern refinements (parallel to npm/PyPI):
 - **Private upstream**: forward/attach `Authorization: Basic …` (or the raw API
   key shape if the upstream expects it). CodeArtifact's RubyGems endpoint uses an
   AWS-issued bearer/token, handled the same way as its npm endpoint.
-- **Mirror/push leg** (if Écluse ever publishes): `POST /api/v1/gems` with the
+- **Mirror/push request** (if Écluse ever publishes): `POST /api/v1/gems` with the
   raw-key `Authorization`, or OIDC trusted publishing.
 - Écluse's **own** client gate stays the separate `PROXY_AUTH_TOKEN`
   (architecture.md → Client Authentication). Note the wire difference: an npm

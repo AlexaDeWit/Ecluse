@@ -161,7 +161,7 @@ changes — that's the hash guarantee) and cache effectively forever.
 
 `Accept-Encoding: gzip` is honoured. PyPI explicitly asks clients to **set a
 descriptive `User-Agent`** (with contact info) and to prefer a mirror/cache for
-high volume — relevant for Écluse's upstream leg.
+high volume — relevant for Écluse's upstream fetch.
 
 ### Errors
 
@@ -582,7 +582,7 @@ of npm's per-registry nerf-dart), e.g.:
 - **Read proxy to public PyPI needs no credentials at all** — simpler than npm.
 - **Private upstream**: forward/attach `Authorization: Basic …` (static token,
   or CodeArtifact's IAM-derived credential — same Basic shape, AWS-issued).
-- **Mirror/upload leg** (if Écluse ever publishes): `POST .../legacy/` with
+- **Mirror/upload request** (if Écluse ever publishes): `POST .../legacy/` with
   `__token__` Basic, or mint via OIDC.
 - Écluse's **own** client gate stays the separate `PROXY_AUTH_TOKEN`
   (architecture.md → Client Authentication); it need implement none of PyPI's

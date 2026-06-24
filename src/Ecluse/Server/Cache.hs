@@ -11,26 +11,26 @@ concurrent resolutions of a popular package __collapse to one upstream call__
 
 == Per-source key
 
-A packument is fetched from __two distinct upstreams__ — a private leg and a public
-leg — whose documents differ for the same package, so one entry cannot represent
+A packument is fetched from __two distinct upstreams__ — a private origin and a public
+origin — whose documents differ for the same package, so one entry cannot represent
 both. The key is therefore @(source, package)@: the source is the upstream's base
-URL, which distinguishes any cached leg without naming a credential, so distinct
+URL, which distinguishes any cached origin without naming a credential, so distinct
 upstreams never cross-contaminate and the key never blurs the trust split.
 
 == Credential-free; sharing is the caller's policy
 
 This cache is __strategy-neutral__: its key carries __no credential dimension__ (it
 is @(source, package)@) and its value is a canonical document, so it stores nothing
-derived from a caller's credential. Whether a given leg is /handed/ to it — and so
+derived from a caller's credential. Whether a given origin is /handed/ to it — and so
 shared across clients — is the serve path's decision, not the cache's.
 
-Under the default @passthrough@ access strategy only the __anonymous public leg__ is
+Under the default @passthrough@ access strategy only the __anonymous public origin__ is
 cached: the trusted private upstream is the __per-client authority__ — it re-authorises
 each client's request with that client's own forwarded credential — so the serve path
 fetches it per request and never hands it to this cache. Were a private entry cached
 under @passthrough@, the credential-free key would let one client's entry serve another
 client's private document within the TTL, bypassing the upstream's authorisation. The
-public leg is anonymous (no client credential), so one shared entry serves every client
+public origin is anonymous (no client credential), so one shared entry serves every client
 without crossing any trust boundary. Other strategies make a shared private entry safe
 by authorising each serve before it is returned (see
 @docs\/architecture\/access-model.md@ → "Caching"); that gate lives on the serve path,
@@ -140,9 +140,9 @@ partitions the cache by source so distinct upstreams never share an entry.
 
 The discriminator is the upstream's __base URL__: an upstream is addressed at a
 distinct URL, and the URL names a location, never a credential, so keying on it
-keeps the trust split intact (the cached leg fetches with its own token, supplied
+keeps the trust split intact (the cached origin is fetched with its own token, supplied
 through its fetch action; the source carries none). Under the default @passthrough@
-strategy only the anonymous public leg is cached, so in practice the cache holds one
+strategy only the anonymous public origin is cached, so in practice the cache holds one
 source per package; the dimension keeps the key honest about /which/ upstream an entry
 is, never blurring the split.
 -}
@@ -234,10 +234,10 @@ caches __nothing__ (so a transient upstream error does not poison the cache) and
 re-raised to every waiter.
 
 The 'Source' partitions the cache: distinct upstreams of the same package resolve
-under distinct keys and never cross-contaminate. The fetch action supplies the leg's
+under distinct keys and never cross-contaminate. The fetch action supplies the origin's
 own credential, so reading through one source never blurs another's trust posture.
-Under the default @passthrough@ strategy only the anonymous public leg is resolved
-here — the trusted private leg is the per-client authority and is fetched per request,
+Under the default @passthrough@ strategy only the anonymous public origin is resolved
+here — the trusted private origin is the per-client authority and is fetched per request,
 never cached, so a shared entry can never serve one client another's private document.
 
 The result is always re-decided by the caller's rules on each request — only the

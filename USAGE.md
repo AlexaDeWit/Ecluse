@@ -137,9 +137,9 @@ upstreams are then credentialled):
 job — and some of the URLs it follows (a version's `dist.tarball`) are taken from
 upstream responses. As with any service that fetches on a client's behalf, the
 sensible posture is **least-privilege egress**, in two layers. Écluse provides the
-first in the application itself, with a **leg-aware trust model**:
+first in the application itself, with an **origin-aware trust model**:
 
-- **Untrusted legs** — the public-upstream fetch and every artifact (`dist.tarball`)
+- **Untrusted origins** — the public-upstream fetch and every artifact (`dist.tarball`)
   fetch — go through a host **allowlist**, an **internal-address block** (loopback,
   link-local incl. the `169.254.169.254` metadata endpoint, the unspecified
   `0.0.0.0/8` / `::` range, RFC1918, CGNAT, and IPv6 ULA `fc00::/7` incl.
@@ -147,13 +147,13 @@ first in the application itself, with a **leg-aware trust model**:
   allowlisted name that resolves to an internal address is refused — a DNS-rebinding
   backstop), a **disallow-by-default `dist.tarball` host policy** (below), and
   **response-size bounds**.
-- **The trusted private leg** — your operator-configured `PRIVATE_UPSTREAM_URL` — is
+- **The trusted private origin** — your operator-configured `PRIVATE_UPSTREAM_URL` — is
   deliberately *not* subject to the internal-address block: a private registry
   legitimately lives on your internal network, so Écluse must be able to reach it.
 
 Crucially, **SSRF access to the instance-metadata endpoint is prevented at the
 service-behaviour level, not by blocking metadata at the network.** Écluse only
-follows internal-resolving locations on the *trusted* private leg, never on a
+follows internal-resolving locations on the *trusted* private origin, never on a
 client- or upstream-influenced one — so an attacker cannot steer it at
 `169.254.169.254`. Écluse itself **needs** the metadata endpoint to mint its
 instance-role credentials (`AWS.newEnv AWS.discover`, over amazonka's own HTTP

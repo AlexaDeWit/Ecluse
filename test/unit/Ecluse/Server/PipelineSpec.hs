@@ -106,7 +106,7 @@ request's @Authorization@ header.
 servingUpstream :: LByteString -> IO Upstream
 servingUpstream body = upstreamRespondingWith (responseLBS status200 [] body)
 
-{- | An upstream double that always answers @500@ — a failed/unavailable leg, for
+{- | An upstream double that always answers @500@ — a failed/unavailable upstream, for
 the partial-upstream-availability and no-survivors paths.
 -}
 failingUpstream :: IO Upstream
@@ -155,7 +155,7 @@ seenAuth up = reverse <$> readIORef (upSeenAuth up)
 -- ── tarball upstream doubles (path-aware) ─────────────────────────────────────
 
 {- | Whether a request path is a tarball slot (@\/…\/-\/….tgz@) rather than a
-packument. The artifact and packument legs of a single upstream are distinguished
+packument. The artifact and packument fetches of a single upstream are distinguished
 by this, so one double can answer both.
 -}
 isTarballPath :: ByteString -> Bool
@@ -164,7 +164,7 @@ isTarballPath path = "/-/" `BS.isInfixOf` path && ".tgz" `BS.isSuffixOf` path
 {- | A path-aware upstream double: it answers a tarball-slot path with @200@ and the
 given artifact bytes, and any other path (the packument fetch) with @200@ and the
 given packument body. Records each request's @Authorization@ header. The single
-double thus serves both legs the public artifact path consults — the gating
+double thus serves both fetches the public artifact path consults — the gating
 packument and the artifact itself.
 -}
 artifactUpstream :: LByteString -> LByteString -> IO Upstream
@@ -181,7 +181,7 @@ artifactUpstream packumentBody tarballBody = do
 
 {- | A private upstream double that has the artifact: it answers a tarball-slot path
 with @200@ and the given bytes (a __private hit__), and any other path with @404@
-(the private leg is never consulted for a packument on the artifact path).
+(the private origin is never consulted for a packument on the artifact path).
 -}
 privateArtifactHit :: LByteString -> IO Upstream
 privateArtifactHit tarballBody = do
@@ -213,7 +213,7 @@ privateArtifactHitWithHeader headerName headerValue tarballBody = do
     pure Upstream{upApp = app, upSeenAuth = seen}
 
 {- | A private upstream double that does __not__ have the artifact: every path is a
-@404@ miss, so the artifact path falls through to the public leg.
+@404@ miss, so the artifact path falls through to the public origin.
 -}
 privateArtifactMiss :: IO Upstream
 privateArtifactMiss = upstreamRespondingWith (responseLBS status404 [] "not found")
@@ -227,7 +227,7 @@ other path is a @404@. The handler never throws (so @testWithApplication@ does n
 surface a server-side error), and the immediate close keeps the short read from
 stalling on a read timeout. It exercises the committed-stream case — once the @200@
 is on the wire the serve path must fail internally, not fall through to the public
-leg.
+origin.
 -}
 privateArtifactMidStreamFailure :: IO Upstream
 privateArtifactMidStreamFailure = do
@@ -349,7 +349,7 @@ depsWith effectful privatePort publicPort =
 localhost :: Int -> Text
 localhost port = "http://127.0.0.1:" <> show port
 
-{- | Run an assertion against a proxy whose two upstream legs are the given
+{- | Run an assertion against a proxy whose two upstream origins are the given
 in-process doubles, with access to the proxy's own 'Env' (so a test can drain the
 mirror queue) and over the given mirror queue. The upstream apps are hosted on
 ephemeral ports via Warp; the proxy is driven in-process through a WAI session (no
@@ -367,7 +367,7 @@ withProxyEnvQueue queue privateUp publicUp inbound =
     withProxyEnvQueueDeps queue privateUp publicUp inbound id
 
 {- | Like 'withProxyEnvQueue', but with the mount's 'PackumentDeps' passed through
-the given transform first — so a test can break one leg's base URL (an unformable
+the given transform first — so a test can break one origin's base URL (an unformable
 upstream URL) without a new harness.
 -}
 withProxyEnvQueueDeps ::
@@ -406,7 +406,7 @@ withProxyEnv privateUp publicUp inbound k = do
     queue <- newInMemoryQueue
     withProxyEnvQueue queue privateUp publicUp inbound (\app env _port -> k app env)
 
-{- | Run an assertion against a proxy whose two upstream legs are the given
+{- | Run an assertion against a proxy whose two upstream origins are the given
 in-process doubles. The upstream apps are hosted on ephemeral ports via Warp; the
 proxy is driven in-process through a WAI session (no proxy socket).
 -}
@@ -630,7 +630,7 @@ mergeSpec = describe "multi-upstream merge (not fallback)" $ do
 
     it "repoints dist-tags.latest to a survivor when the public latest is denied (public-only)" $ do
         -- Public latest points at 2.0.0 (3 days old → denied by the quarantine);
-        -- 1.0.0 (30 days) survives. With the private leg down, the served document
+        -- 1.0.0 (30 days) survives. With the private origin down, the served document
         -- is public-only — its latest must repoint to the surviving 1.0.0, never
         -- remain the withheld 2.0.0. This pins that the merge reconciles latest over
         -- the FILTERED public set, not the raw one.
@@ -663,22 +663,22 @@ credentialSpec = describe "credential authority (forward-to-private, strip-befor
             _ <- getThing (Just "client-secret-token") app
             privAuth <- seenAuth privateUp
             pubAuth <- seenAuth publicUp
-            -- The private leg received the client's bearer credential verbatim.
+            -- The private origin received the client's bearer credential verbatim.
             privAuth `shouldBe` [Just "Bearer client-secret-token"]
-            -- The public leg was queried ANONYMOUSLY — the internal token never left
+            -- The public origin was queried ANONYMOUSLY — the internal token never left
             -- for the public registry. This is the load-bearing security assertion.
             pubAuth `shouldBe` [Nothing]
 
--- ── private leg is the per-client authority (uncached across clients) ──────────
+-- ── private origin is the per-client authority (uncached across clients) ───────
 
 privateAuthoritySpec :: Spec
-privateAuthoritySpec = describe "private leg is the per-client authority (not cached across clients)" $
+privateAuthoritySpec = describe "private origin is the per-client authority (not cached across clients)" $
     it "re-consults the private upstream per client within the TTL — each client's token reaches it" $ do
         -- Two requests to the SAME proxy with DIFFERENT client bearer tokens, well
         -- within the 60s metadata-cache TTL. The private upstream is the authority for
         -- who may read what, so its metadata must not be shared across clients: each
         -- request must re-consult it with that client's OWN forwarded token. Were the
-        -- private leg cached (keyed by base URL, with no credential dimension), the
+        -- private origin cached (keyed by base URL, with no credential dimension), the
         -- second request would be a hit and the upstream would see only tokenA — client
         -- B would be served A's private document, its token never validated upstream.
         privateUp <- servingUpstream (encodePackument (privatePackument [("1.0.0", plainVersion "1.0.0")] "1.0.0"))
@@ -693,7 +693,7 @@ privateAuthoritySpec = describe "private leg is the per-client authority (not ca
             -- The private upstream saw BOTH client tokens, in order — it was
             -- re-authorized per client and never served a shared cached entry.
             privAuth `shouldBe` [Just "Bearer tokenA", Just "Bearer tokenB"]
-            -- The anonymous public leg IS cached: it was hit once, anonymously, and the
+            -- The anonymous public origin IS cached: it was hit once, anonymously, and the
             -- second request collapsed onto the cached entry (public caching retained).
             pubAuth `shouldBe` [Nothing]
 
@@ -729,7 +729,7 @@ cacheSpec = describe "metadata cache (read-through coherence)" $ do
         -- cached entry, so the upstream is hit exactly once and the served set stays
         -- {1.0.0}. The mutating double is the witness — 2.0.0 appears only if a second
         -- fetch occurred, so its absence proves the single-flight reuse. The private
-        -- leg is absent, so the served set is exactly the cached public versions.
+        -- origin is absent, so the served set is exactly the cached public versions.
         privateUp <- failingUpstream
         let v1 =
                 encodePackument
@@ -792,8 +792,8 @@ noSurvivorsSpec = describe "no survivors in the merge" $ do
             servingUpstream
                 ( encodePackument
                     -- Both public versions are too new to clear the quarantine →
-                    -- all denied → no survivors. With a failed private leg this
-                    -- would be 503; here the private leg failing makes it transient.
+                    -- all denied → no survivors. With a failed private origin this
+                    -- would be 503; here the private origin failing makes it transient.
                     ( packument
                         [("1.0.0", plainVersion "1.0.0"), ("2.0.0", plainVersion "2.0.0")]
                         "2.0.0"
@@ -802,7 +802,7 @@ noSurvivorsSpec = describe "no survivors in the merge" $ do
                 )
         withProxy privateUp publicUp Nothing $ \app -> do
             resp <- getThing Nothing app
-            -- A failed private leg is a needed-upstream-unavailable signal (transient)
+            -- A failed private origin is a needed-upstream-unavailable signal (transient)
             -- → 503, inviting a retry, even though every public version was by policy.
             status resp `shouldBe` 503
 
@@ -891,7 +891,7 @@ losslessSpec = describe "lossless served surface (raw Value edited in place)" $ 
 
 -- ── the artifact (tarball) path ───────────────────────────────────────────────
 
--- The opaque bytes a tarball double serves, distinct per leg so a test can pin
+-- The opaque bytes a tarball double serves, distinct per origin so a test can pin
 -- which upstream the served artifact came from.
 privateTarballBytes :: LByteString
 privateTarballBytes = "PRIVATE-TGZ-BYTES"
@@ -914,7 +914,7 @@ tarballSpec :: Spec
 tarballSpec = describe "artifact (tarball) path" $ do
     it "streams the private artifact unfiltered on a private hit (public never consulted)" $ do
         -- The private upstream has the artifact: it is streamed straight through,
-        -- the public leg never queried and no mirror job enqueued (the bytes are
+        -- the public origin never queried and no mirror job enqueued (the bytes are
         -- already vetted; mirroring is for public-sourced artifacts).
         privateUp <- privateArtifactHit privateTarballBytes
         publicUp <- artifactUpstream (encodePackument (admittingPublic "1.0.0")) publicTarballBytes
@@ -940,10 +940,10 @@ tarballSpec = describe "artifact (tarball) path" $ do
             header "Content-Type" resp `shouldBe` Just "application/octet-stream"
             simpleBody resp `shouldBe` privateTarballBytes
 
-    it "falls through to the public leg when the private upstream URL is unformable" $ do
+    it "falls through to the public origin when the private upstream URL is unformable" $ do
         -- An empty private base URL cannot form an artifact request, so the private
-        -- leg yields a clean miss (never an error) and the serve path falls through
-        -- to the public leg — the artifact is still served from public.
+        -- origin yields a clean miss (never an error) and the serve path falls through
+        -- to the public origin — the artifact is still served from public.
         privateUp <- privateArtifactHit privateTarballBytes
         publicUp <- artifactUpstream (encodePackument (admittingPublic "1.0.0")) publicTarballBytes
         queue <- newInMemoryQueue
@@ -951,7 +951,7 @@ tarballSpec = describe "artifact (tarball) path" $ do
         withProxyEnvQueueDeps queue privateUp publicUp Nothing breakPrivate $ \app _env _port -> do
             resp <- getTarball "1.0.0" Nothing app
             status resp `shouldBe` 200
-            -- Served from public (the unformable private leg contributed nothing).
+            -- Served from public (the unformable private origin contributed nothing).
             simpleBody resp `shouldBe` publicTarballBytes
 
     it "401s a tarball request that fails edge authentication, before any upstream fetch" $ do
@@ -967,9 +967,9 @@ tarballSpec = describe "artifact (tarball) path" $ do
             seenAuth privateUp `shouldReturn` []
             seenAuth publicUp `shouldReturn` []
 
-    it "forwards the client credential to the private leg, never to the public" $ do
+    it "forwards the client credential to the private origin, never to the public" $ do
         -- On a private MISS the artifact still comes from public, but the gating
-        -- packument and artifact fetches must be anonymous; the private leg saw the
+        -- packument and artifact fetches must be anonymous; the private origin saw the
         -- client's bearer.
         privateUp <- privateArtifactMiss
         publicUp <- artifactUpstream (encodePackument (admittingPublic "1.0.0")) publicTarballBytes
@@ -977,9 +977,9 @@ tarballSpec = describe "artifact (tarball) path" $ do
             _ <- getTarball "1.0.0" (Just "client-secret-token") app
             privAuth <- seenAuth privateUp
             pubAuth <- seenAuth publicUp
-            -- The private leg received the client's bearer credential.
+            -- The private origin received the client's bearer credential.
             privAuth `shouldBe` [Just "Bearer client-secret-token"]
-            -- Both public-leg requests (packument gate + artifact fetch) were anonymous.
+            -- Both public-origin requests (packument gate + artifact fetch) were anonymous.
             pubAuth `shouldBe` [Nothing, Nothing]
 
     it "on a private miss: gates the version, streams from public, and enqueues a mirror job" $ do
@@ -1082,10 +1082,10 @@ tarballSpec = describe "artifact (tarball) path" $ do
             getTarball "2.0.0" Nothing app >>= \resp -> status resp `shouldBe` 403
 
     it "fails internally on a mid-stream private failure, never falling through to public" $ do
-        -- The private leg commits a 200 then drops the connection mid-body. Because
+        -- The private origin commits a 200 then drops the connection mid-body. Because
         -- the response is already on the wire, the serve path must fail (the broken
         -- stream surfaces as an error here) rather than swallow it and respond a
-        -- second time over the half-sent artifact — so the public leg is never
+        -- second time over the half-sent artifact — so the public origin is never
         -- consulted and nothing is enqueued.
         privateUp <- privateArtifactMidStreamFailure
         publicUp <- artifactUpstream (encodePackument (admittingPublic "1.0.0")) publicTarballBytes

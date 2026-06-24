@@ -18,20 +18,20 @@ This handler implements the default @passthrough@ credential posture (see
 @docs\/architecture\/access-model.md@). The invariant that holds under __every__
 strategy is the __public strip__: the client's credential is __stripped before any
 public-upstream fetch__, which is always anonymous — sending an internal token to the
-public registry would be a credential disclosure, so the public leg is built with no
-token at all. Under @passthrough@ the client's own credential is additionally
+public registry would be a credential disclosure, so the public-upstream fetch is built
+with no token at all. Under @passthrough@ the client's own credential is additionally
 __forwarded verbatim to the private upstream__, which is the authority for who may
-read what. The two legs are fetched concurrently, each with its own credential
+read what. The two origins are fetched concurrently, each with its own credential
 posture; nothing shares a token across the trust split.
 
 Because @passthrough@ makes the private upstream the __per-client authority__, its
-metadata is __not cached across clients__ here: the private leg fetches and parses on
+metadata is __not cached across clients__ here: the private origin is fetched and parsed on
 every request with that client's own credential, so the upstream re-authorises each
-client itself, and only the anonymous public leg is cached (one shared document, no
-per-client authority to preserve). Caching the private leg keyed by base URL alone
+client itself, and only the anonymous public origin is cached (one shared document, no
+per-client authority to preserve). Caching the private origin keyed by base URL alone
 would let one client's cached entry serve another client's private document within the
 TTL, bypassing the upstream's authorisation — a cross-client disclosure. (Other
-strategies make the private leg shareable by authorising each serve differently; the
+strategies make the private origin shareable by authorising each serve differently; the
 metadata cache itself stays credential-free regardless — see
 @docs\/architecture\/access-model.md@ → "Caching".)
 
@@ -77,10 +77,10 @@ let a second ecosystem reuse this orchestration unchanged.
 The tarball handler ('serveTarball') is the demand-driven artifact relay. It
 fetches __by the preserved on-the-wire filename__ the route parsed (not a name
 rebuilt from the coordinate), so the bytes are addressed exactly as the client
-requested them. The private leg is tried first, __uncached__, forwarding the
+requested them. The private origin is tried first, __uncached__, forwarding the
 client's credential; a hit streams the artifact through with __bounded memory__
 (the @withResponse@\/@responseStream@ relay, never a buffering fetch), a miss falls
-through. The public leg is anonymous: it gates __that one version__ against the
+through. The public origin is anonymous: it gates __that one version__ against the
 rules (the same machinery the packument path gates the whole set with), and on an
 admit __streams the public bytes and enqueues a 'Ecluse.Queue.MirrorJob'__ for the
 worker to back-fill the mirror target; on a reject it renders the serve error model
@@ -182,8 +182,8 @@ packument-serve dependencies wired, the route is recognised but not served — a
 
 With dependencies wired: the edge token, if configured, is validated before any
 upstream is touched. Then the private and public upstreams are fetched
-__concurrently__ — the client's credential forwarded to the private leg, the public
-leg anonymous — each parse failure or unavailable upstream degrading to a missing
+__concurrently__ — the client's credential forwarded to the private origin, the public
+origin anonymous — each parse failure or unavailable upstream degrading to a missing
 contribution rather than an error. Private versions are trusted as-is; public
 versions are gated through the rules and the structural filter ('filterPlan' then
 'applyFilterPlan'); the surviving sets are merged ('mergePackuments') and the
@@ -223,8 +223,8 @@ serveWithDeps renderer deps name request respond
             let clientToken = forwardedToken request
             (privResult, pubResult) <-
                 concurrently
-                    (fetchPrivateLeg env (pdPrivateBaseUrl deps) clientToken name)
-                    (fetchPublicLeg env (pdPublicBaseUrl deps) name)
+                    (fetchPrivateOrigin env (pdPrivateBaseUrl deps) clientToken name)
+                    (fetchPublicOrigin env (pdPublicBaseUrl deps) name)
             (public, publicExclusions) <- gatePublic deps evalCtx pubResult
             let private = trustedSource <$> privResult
                 sources = catMaybes [private, public]
@@ -271,7 +271,7 @@ forwardedToken request = do
     guard (not (T.null token))
     pure (mkSecret token)
 
--- ── per-upstream fetch ────────────────────────────────────────────────────────
+-- ── per-origin fetch ──────────────────────────────────────────────────────────
 
 {- A successfully resolved upstream contribution: the parsed packument used to
 decide, alongside the raw @Value@ that is edited in place to serve. Pairing them
@@ -283,49 +283,50 @@ data Contribution = Contribution
     , srcValue :: Value
     }
 
-{- Resolve the private (trusted) upstream leg, __uncached__, forwarding the client's
+{- Resolve the private (trusted) upstream origin, __uncached__, forwarding the client's
 own credential (the default @passthrough@ posture). Returns its coherent (parsed
-packument, raw @Value@) pair — or 'Nothing' when the leg is unavailable or its body
-does not parse. A failed leg is a degraded contribution, not an error: the merge
+packument, raw @Value@) pair — or 'Nothing' when the origin is unavailable or its body
+does not parse. A failed fetch is a degraded contribution, not an error: the merge
 serves the best-effort union of whatever resolved (partial-upstream availability).
 
 Under @passthrough@ the private upstream is the per-client authority for who may read
-what, so its metadata is __not__ shared across clients: this leg fetches and parses on
+what, so its metadata is __not__ shared across clients: it is fetched and parsed on
 __every__ request with that client's own forwarded token, so the upstream re-authorises
 each client itself. Caching it would key on the base URL alone (no credential
 dimension), so within the TTL one client's cache hit would skip the fetch and serve
-another client's private document — bypassing the upstream's authorisation. The leg is
-therefore deliberately kept out of the metadata cache; only the anonymous public leg
-is cached. (How a non-@passthrough@ strategy can instead share this leg safely is the
-serve-time authorisation it adds — see @docs\/architecture\/access-model.md@.) -}
-fetchPrivateLeg :: Env -> Text -> Maybe Secret -> PackageName -> IO (Maybe (PackageInfo, Value))
-fetchPrivateLeg env baseUrl token name = do
+another client's private document — bypassing the upstream's authorisation. The private
+origin is therefore deliberately kept out of the metadata cache; only the anonymous
+public origin is cached. (How a non-@passthrough@ strategy can instead share the private
+origin safely is the serve-time authorisation it adds — see
+@docs\/architecture\/access-model.md@.) -}
+fetchPrivateOrigin :: Env -> Text -> Maybe Secret -> PackageName -> IO (Maybe (PackageInfo, Value))
+fetchPrivateOrigin env baseUrl token name = do
     resolved <- tryAny (fetchEntry (envPrivateManager env) baseUrl token name)
     pure (either (const Nothing) (Just . unpair) resolved)
 
-{- Resolve the public (gated, anonymous) upstream leg through the metadata cache,
-keyed by the leg's base URL as its 'Source', returning its coherent (parsed
-packument, raw @Value@) pair — or 'Nothing' when the leg is unavailable or its body
-does not parse. A failed leg is a degraded contribution, not an error.
+{- Resolve the public (gated, anonymous) upstream origin through the metadata cache,
+keyed by the origin's base URL as its 'Source', returning its coherent (parsed
+packument, raw @Value@) pair — or 'Nothing' when the origin is unavailable or its body
+does not parse. A failed fetch is a degraded contribution, not an error.
 
-The public leg is anonymous (no client credential), so a single cached entry serves
+The public origin is anonymous (no client credential), so a single cached entry serves
 every client without crossing any trust boundary — there is no per-client authority
 to preserve, only one shared anonymous document. A hit returns the cached pair
 (typed view and the exact bytes it was decoded from), so the served document and the
 decision over it stay coherent across the TTL, and concurrent resolutions of a
 popular package __collapse to one upstream call__. -}
-fetchPublicLeg :: Env -> Text -> PackageName -> IO (Maybe (PackageInfo, Value))
-fetchPublicLeg env baseUrl name = do
+fetchPublicOrigin :: Env -> Text -> PackageName -> IO (Maybe (PackageInfo, Value))
+fetchPublicOrigin env baseUrl name = do
     resolved <- tryAny (resolveMetadata (envMetadataCache env) (Source baseUrl) name (fetchEntry (envManager env) baseUrl Nothing name))
     pure (either (const Nothing) (Just . unpair) resolved)
 
-{- Fetch one upstream leg's full packument (the @Full@ form, for the @time@ map a
+{- Fetch one upstream's full packument (the @Full@ form, for the @time@ map a
 publish-age rule needs) and decode it once into both the typed 'PackageInfo' used to
 decide and the raw @Value@ edited in place to serve. The two come from the /same/
 fetch, so the decision is taken over exactly the bytes served. A body that does not
-decode into both throws, so the leg degrades to a missing contribution rather than
-failing the whole request. The injected token is the leg's credential posture (the
-client's for the private leg, 'Nothing' for the anonymous public leg). -}
+decode into both throws, so the fetch degrades to a missing contribution rather than
+failing the whole request. The injected token is the fetch's credential posture (the
+client's for the private origin, 'Nothing' for the anonymous public origin). -}
 fetchEntry :: Manager -> Text -> Maybe Secret -> PackageName -> IO CacheEntry
 fetchEntry manager baseUrl token name = do
     response <- fetchMetadataForm (clientConfig manager baseUrl token) Full noValidators name
@@ -345,11 +346,11 @@ fetchEntry manager baseUrl token name = do
 unpair :: CacheEntry -> (PackageInfo, Value)
 unpair entry = (entryInfo entry, entryRaw entry)
 
-{- The npm client config for one leg: the leg's 'Manager', base URL, and injected
-token (the client's credential for the private leg, 'Nothing' for the anonymous
-public leg). The client never originates a token; the authority model is decided
-here. The 'Manager' is passed explicitly per leg — the trusted 'envPrivateManager'
-for the private upstream, the guarded 'envManager' for the public\/artifact legs —
+{- The npm client config for one fetch: its 'Manager', base URL, and injected
+token (the client's credential for the private origin, 'Nothing' for the anonymous
+public origin). The client never originates a token; the authority model is decided
+here. The 'Manager' is passed explicitly per fetch — the trusted 'envPrivateManager'
+for the private upstream, the guarded 'envManager' for the public\/artifact fetches —
 so the resolved-IP SSRF recheck applies only to the untrusted egress. -}
 clientConfig :: Manager -> Text -> Maybe Secret -> NpmClientConfig
 clientConfig manager baseUrl token =
@@ -368,8 +369,8 @@ trustedSource (info, value) = Contribution TrustedSource info value
 filter, returning the surviving 'Contribution' (if any survived) and the per-version
 exclusion outcomes (for the no-survivors status when nothing survives anywhere).
 
-A public leg that did not resolve contributes nothing and no exclusions. A resolved
-leg has every version decided by both tiers ('evalRulesEffectful' — the pure tier
+A public origin that did not resolve contributes nothing and no exclusions. A resolved
+origin has every version decided by both tiers ('evalRulesEffectful' — the pure tier
 first, the effectful tier only where it could change the outcome), the resulting
 decisions handed to the agnostic 'filterPlanFromDecisions', and that plan replayed by
 'applyFilterPlan' onto the raw @Value@: 'Filtered' yields a gated 'Contribution' over
@@ -655,7 +656,7 @@ the coordinate:
   non-blocking), a reject renders the serve error model
   (@403@\/@503@\/@500@\/@404@) through the mount's renderer.
 
-The public leg is always anonymous (the client credential is never sent to the
+The public-upstream fetch is always anonymous (the client credential is never sent to the
 public upstream); the mirror job carries no credential. The serve path does not
 verify @dist.integrity@ (see the module header → "Artifact path").
 -}
@@ -673,7 +674,7 @@ serveTarball name version filename request respond = do
         Just deps -> serveTarballWithDeps renderer deps name version filename request respond
 
 -- Serve a tarball once the mount's dependencies are known: edge auth, then the
--- private-hit / public-miss legs the module header describes. The composition-root
+-- private-hit / public-miss fetches the module header describes. The composition-root
 -- 'Env' is read from the request context.
 serveTarballWithDeps ::
     MountRenderer ->
@@ -696,10 +697,10 @@ serveTarballWithDeps renderer deps name version (Filename file) request respond
                 Nothing -> servePublicArtifact env renderer deps name version file respond
 
 {- Stream the artifact from the private upstream by its preserved filename,
-forwarding the client's credential (the @passthrough@ private leg, uncached). A
+forwarding the client's credential (the @passthrough@ private-origin fetch, uncached). A
 @2xx@ is streamed through with bounded memory and yields 'Just'; a non-@2xx@ status,
 an unformable URL, or a failure opening the connection yields 'Nothing' so the
-caller falls through to the public leg, the upstream body never read.
+caller falls through to the public origin, the upstream body never read.
 
 A failure that strikes __after__ a @2xx@ has begun streaming is unrecoverable — the
 response is already on the wire — so 'streamUpstreamWhen' lets it propagate rather
@@ -752,7 +753,7 @@ effectful rule that cannot be consulted fail-closes to an 'Unavailable'
 gatePublicVersion :: Env -> PackumentDeps -> PackageName -> Version -> IO ServeDecision
 gatePublicVersion env deps name version = do
     evalCtx <- EvalContext <$> pdNow deps
-    fetched <- tryAny (fetchPublicLeg env (pdPublicBaseUrl deps) name)
+    fetched <- tryAny (fetchPublicOrigin env (pdPublicBaseUrl deps) name)
     case fetched of
         Left _ -> pure upstreamUnavailable
         Right Nothing -> pure upstreamUnavailable

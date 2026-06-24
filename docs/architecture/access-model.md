@@ -12,7 +12,7 @@ like one — "auth" — are kept deliberately apart:
 The simplest design fuses all three into a single act: forward the caller's
 credential to the private upstream and let the upstream answer all three, on every
 request. That is correct and builds no auth machinery, but it forbids sharing the
-private leg of the [metadata cache](web-layer.md#metadata-cache) across callers
+private origin of the [metadata cache](web-layer.md#metadata-cache) across callers
 ([issue #115](https://github.com/AlexaDeWit/Ecluse/issues/115)) and pins every read
 to a per-request upstream round-trip. Separating the concerns turns "how Écluse
 handles credentials" into a **per-mount credential strategy** — a universally-safe
@@ -54,7 +54,7 @@ configured per mount with `passthrough` as the floor.
 
 Écluse **forwards the caller's own credential** to the private upstream, which
 authorises each request; the public upstream is queried anonymously with the
-caller's credential stripped. The private leg is **fetched per request and never
+caller's credential stripped. The private origin is **fetched per request and never
 entered into the shared cache** (see [Caching](#caching), and
 [the private upstream's metadata is not cached across clients](registry-model.md#the-private-upstreams-metadata-is-not-cached-across-clients-under-passthrough)).
 This is what the [walking skeleton](../../planning/delivery-plan.md) ships, and it
@@ -148,7 +148,7 @@ The available strategies depend on the upstream's authorisation granularity:
 ## Safe defaults and unrepresentable unsafe combinations
 
 - **The default is `passthrough`.** A correct deployment needs nothing else.
-- **A shared private-leg cache under `passthrough` is forbidden by construction**,
+- **A shared private-origin cache under `passthrough` is forbidden by construction**,
   not merely documented against: the metadata cache admits a private entry **only**
   under `service` / `delegated-cache`. This makes the
   [#115](https://github.com/AlexaDeWit/Ecluse/issues/115) cross-client disclosure
@@ -172,14 +172,14 @@ decides how the second is met:
    authorised first.
 
 Given those, the **serve-time authorisation method** — not how the bytes were
-populated — is what governs sharing of the private leg of the
+populated — is what governs sharing of the private origin of the
 [metadata cache](web-layer.md#metadata-cache):
 
 - **`passthrough`** — serve-time authorisation *is* the per-request fetch with the
   caller's token, so there is no shared private entry at all; only the anonymous
-  public (gated) leg is cached. (This *is* the resolution of #115 in the default:
+  public (gated) origin is cached. (This *is* the resolution of #115 in the default:
   there is no shared private entry to leak.)
-- **`delegated-cache`** — the private leg is **shared**, and every hit is gated by a
+- **`delegated-cache`** — the private origin is **shared**, and every hit is gated by a
   fresh per-request authorisation **probe** with the caller's token; the upstream
   re-decides retrievability on each serve.
 - **`service`** — the edge has already authorised the caller, so a shared private
@@ -228,5 +228,5 @@ distinct policy per tenant, not to avoid choosing a strategy.
 - Public versions are **always** gated by the [rules engine](rules-engine.md);
   trusted private versions enter the
   [packument merge](registry-model.md#packument-merge-across-upstreams) unfiltered.
-  A strategy changes *how the private leg is fetched and cached* — never *whether
+  A strategy changes *how the private origin is fetched and cached* — never *whether
   public versions are gated*.
