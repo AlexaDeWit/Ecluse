@@ -150,8 +150,12 @@
         # `.hlint.yaml` config files. The configs must be in scope so the flake checks
         # apply the repo's own formatting / lint rules (e.g. `import-export-style:
         # diff-friendly`) rather than the tools' built-in defaults — otherwise they
-        # silently diverge from the `make format` / `make lint` path (which discover
-        # those configs from the repo root) on, e.g., import ordering.
+        # silently diverge from the `make format` / `make lint` path on, e.g., import
+        # ordering. NB the two tools discover their config differently: fourmolu walks
+        # up from each input file (so `fourmolu.yaml` under `hsSrc` is found
+        # automatically), but hlint reads `.hlint.yaml` only from the working
+        # directory — so the `lint` check below `cd`s into `hsSrc` first, otherwise it
+        # would silently fall back to hlint's defaults and skip the repo's bans.
         hsSrc = pkgs.lib.sourceFilesBySuffices ./. [ ".hs" ".cabal" "cabal.project" "fourmolu.yaml" ".hlint.yaml" ];
 
         # The npm version-ordering oracle (`node-semver`) for the differential
@@ -386,9 +390,16 @@
             touch $out
           '';
 
+          # `cd` into the source root first: hlint discovers `.hlint.yaml` only from
+          # its working directory (unlike fourmolu, which walks up from each input),
+          # so without this the check runs from the build sandbox with hlint's
+          # built-in hints and skips the repo's security restrictions — the banned
+          # `error` / `undefined` / partial functions. `hsSrc` carries `.hlint.yaml`,
+          # so running from there enforces the same rules `make lint` does.
           lint = pkgs.runCommand "hlint-check"
             { nativeBuildInputs = [ hpkgs.hlint ]; } ''
-            hlint $(find ${hsSrc} -name '*.hs')
+            cd ${hsSrc}
+            hlint $(find . -name '*.hs')
             touch $out
           '';
 
