@@ -189,10 +189,9 @@ loadDocument =
 {- The process-global mirror-write credential provider stored in 'Env' for the
 worker. In the collapses-to-one common case there is a single provider; the
 @static@ leaf is selected when a static write token is configured, else the
-no-backend placeholder holds the slot (the worker — its only consumer — is a stub
-in this build; the per-ecosystem worker-publish wiring lands with the worker
-slice). A mount that references an uninitialized provider has already failed the
-boot-time credential check by this point. -}
+no-backend placeholder holds the slot for the worker, its only consumer. A mount
+that references an uninitialized provider has already failed the boot-time
+credential check by this point. -}
 mirrorWriteProvider :: CredentialProviders -> CredentialProvider
 mirrorWriteProvider providers =
     fromMaybe unconfiguredCredentials (Composition.lookupProvider StaticCredential providers)
@@ -250,7 +249,7 @@ npmServerConfig :: ServerConfig
 npmServerConfig = mkServerConfig [npmMount Nothing]
 
 {- | Resolve an 'Ecosystem' to its complete 'MountBinding', or 'Nothing' when that
-ecosystem has no adapter wired in this build. The ecosystem selects its path
+ecosystem has no adapter wired. The ecosystem selects its path
 grammar (the 'Ecluse.Server.Route.Classifier') and its denial renderer (the
 'Ecluse.Server.Response.MountRenderer'), and its path prefix is __derived__ from it
 ('prefixFor') rather than configured — so the ecosystem is the single thing that
@@ -259,8 +258,8 @@ packument-serve dependencies are passed in (the composition root supplies them o
 the per-mount registry set is resolved); 'Nothing' for them leaves the packument
 route the recognised-but-unserved @501@ stub.
 
-npm is the only ecosystem with an adapter at launch; the others have no registry
-client or renderer yet, so they resolve to 'Nothing' — a loud miss at the call
+npm is the only ecosystem with an adapter; the others have no registry
+client or renderer, so they resolve to 'Nothing' — a loud miss at the call
 site rather than a silently half-wired mount.
 -}
 mountBindingFor :: Ecosystem -> Maybe PackumentDeps -> Maybe MountBinding

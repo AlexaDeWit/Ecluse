@@ -48,6 +48,7 @@ registries derive short-lived tokens from ambient cloud credentials (see
 | `PRIVATE_UPSTREAM_URL` | Yes | URL of the private upstream registry. |
 | `PUBLIC_UPSTREAM_URL` | No (default: `https://registry.npmjs.org`) | URL of the public upstream. |
 | `MIRROR_TARGET_URL` | Yes | URL of the registry to mirror approved packages to. |
+| `MIRROR_TARGET_TOKEN` | No | Static write token for the mirror target, used when it is reached with a fixed credential rather than a cloud-managed one. |
 | `MIRROR_QUEUE_PROVIDER` | No (default: `sqs`) | Mirror-queue backend: `sqs` (AWS) or `pubsub` (GCP). See [Cloud Backends](cloud-backends.md#cloud-backends). |
 | `MIRROR_QUEUE_URL` | Yes | Queue identifier for mirror jobs: an SQS queue URL, or a Pub/Sub `projects/<project>/topics/<topic>` resource, per provider. |
 | `AWS_REGION` | AWS backends only | Region for SQS and CodeArtifact. |
@@ -55,7 +56,9 @@ registries derive short-lived tokens from ambient cloud credentials (see
 | `PROXY_AUTH_TOKEN` | No | If set, clients must supply this token as `Bearer` or `_authToken`. Omit for open/network-secured deployments. |
 | `PROXY_RESPECT_UPSTREAM_TARBALL_HOST` | No (default: `false`) | Secure default. When `false`, a tarball is fetched only from the same allowlisted upstream that served the packument. See [Outbound egress safety](#outbound-egress-safety). |
 | `PROXY_HELP_MESSAGE` | No | Custom string appended to all denial messages (e.g. `"Contact #platform-eng on Slack for assistance."`). |
+| `PROXY_LOG_FORMAT` | No (default: `json`) | Structured-log output shape: `json` (one object per line, for log collectors) or `console` (human-readable). See [Observability](observability.md). |
 | `CVE_SYNC_INTERVAL_SECONDS` | No (default: 3600) | How often to refresh the in-memory advisory index from OSV (see [CVE Subsystem](rules-engine.md#cve-subsystem)). |
+| `PROXY_CONFIG` | No | The structured config document as an inline JSON blob, the alternate to a mounted config file for an env-only deployment. |
 
 ### Upstream composition (optional)
 

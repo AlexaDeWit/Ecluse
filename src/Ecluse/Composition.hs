@@ -17,9 +17,8 @@ it draws on (its @mtCredential@). The boot-time check is the resolution of that
 reference: every distinct credential backend named across all mounts must resolve
 to an __initialized__ provider, or the app halts at boot (see
 @docs\/architecture\/cloud-backends.md@ → "Credential Provider"). Only the
-@static@ backend has a leaf in this build (from @MIRROR_TARGET_TOKEN@); a mount
-naming @codeartifact@ or @adc@ resolves to no provider and is an honest boot
-failure until those cloud leaves land.
+@static@ backend has a leaf (from @MIRROR_TARGET_TOKEN@); a mount naming
+@codeartifact@ or @adc@ resolves to no provider and is an honest boot failure.
 
 == Fail-fast at boot
 
@@ -86,17 +85,17 @@ that names a backend absent from it has an unresolved credential reference.
 newtype CredentialProviders = CredentialProviders (Map CredentialBackend CredentialProvider)
 
 {- | Build the global credential providers from the environment layer. Only the
-backends whose leaf this build can construct from ambient credentials are
+backends whose leaf can be constructed from ambient credentials are
 initialized:
 
 * @static@ — built from @MIRROR_TARGET_TOKEN@ ('cfgMirrorTargetToken') when set;
   absent, no static provider is initialized, so a mount naming @static@ fails the
   boot-time credential-reference check.
 
-@codeartifact@ and @adc@ have no mint leaf in this build (future cloud-backend
-slices), so they are deliberately __not__ initialized here: a mount naming one is
-an honest boot failure ("names a provider not initialized in this build"), which
-is the fail-fast mechanism working, not a gap.
+@codeartifact@ and @adc@ have no mint leaf, so they are deliberately __not__
+initialized here: a mount naming one is an honest boot failure — the unresolved
+credential reference the boot check rejects — which is the fail-fast mechanism
+working, not a gap.
 -}
 initCredentialProviders :: EnvConfig -> IO CredentialProviders
 initCredentialProviders env =
@@ -133,7 +132,7 @@ operator must fix.
 data BootError
     = -- | A rule policy did not resolve (surfaced by 'loadConfig').
       PolicyBootError PolicyError
-    | {- | A configured mount's ecosystem has no adapter wired in this build, so it
+    | {- | A configured mount's ecosystem has no adapter wired, so it
       cannot be served (a loud miss, never a silent drop). Carries the ecosystem.
       -}
       MissingAdapter Ecosystem
