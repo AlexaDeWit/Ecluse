@@ -57,7 +57,8 @@ make targets):
 
 `nix flake check` builds the package and runs the pure tier: the `ecluse-unit`
 suite (`checks.unit`), `fourmolu --mode check` (`checks.format`), `hlint`
-(`checks.lint`), and `cabal check` (`checks.cabal-check`). Deliberately
+(`checks.lint`), `cabal check` (`checks.cabal-check`), and the library Haddock
+(`checks.docs`). Deliberately
 **excluded** — they cannot run in a hermetic
 sandbox: `ecluse-integration` (needs a Docker daemon), `ecluse-smoke` (live
 network), and Semgrep (`--config auto` fetches rules over the network). Those
