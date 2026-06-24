@@ -22,7 +22,7 @@ HADDOCK_FLAGS := --haddock-hyperlink-source --haddock-quickjump
 .DEFAULT_GOAL := help
 .PHONY: help update build test test-integration test-smoke test-all doctest \
         coverage freeze gen-version-fixtures new-worktree format format-check lint sast \
-        cabal-check lint-workflows weeder check run docs \
+        cabal-check lint-workflows weeder check gate run docs \
         docs-check docs-site site nix-build nix-check docker-build docker-push sbom scan \
         scan-vulnix clean
 
@@ -136,7 +136,14 @@ weeder: ## Report app-unreachable library code (weeder; informational, non-gatin
 	$(NIX) cabal build exe:ecluse --builddir=dist-weeder --ghc-options=-fwrite-ide-info
 	$(NIX) weeder --hie-directory dist-weeder
 
-check: build test doctest format-check lint sast cabal-check lint-workflows ## Run everything the CI gate requires
+check: build test doctest format-check lint sast cabal-check lint-workflows ## Fast pre-push checks: the gate minus its Docker integration + Haddock tiers (see gate)
+
+# The faithful local mirror of the CI gate: everything `check` runs, plus the two
+# tiers it omits — the integration suite (needs a Docker daemon, exactly like the
+# gate's build-test job) and the Haddock build (docs-check). Together these are every
+# pass/fail check the gate runs; the one gate input that can't be reproduced locally
+# is the Codecov coverage upload/status, which is computed server-side.
+gate: check test-integration docs-check ## Reproduce the full CI gate locally (integration tier needs Docker)
 
 run: ## Run the proxy
 	$(NIX) cabal run ecluse

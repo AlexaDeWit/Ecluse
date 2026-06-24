@@ -102,7 +102,8 @@ shell. Get productive in three commands:
 ```bash
 nix develop        # enter the dev shell (direnv does this automatically)
 make build         # build the library, executable, and tests
-make check         # everything the CI gate runs
+make check         # fast pre-push checks (a subset of the gate)
+make gate          # the full CI-gate mirror (adds the Docker integration + Haddock tiers)
 ```
 
 Full setup, the `make` workflow, reproducible/hermetic builds, and dependency
