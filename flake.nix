@@ -383,6 +383,29 @@
             hlint $(find ${hsSrc} -name '*.hs')
             touch $out
           '';
+
+          # Validate the package description hermetically, mirroring
+          # `make cabal-check`: fail on any Warning:/Error: line (the package is
+          # kept warning-free). `cabal check` does no build and needs no package
+          # index or network, so it runs in the sandbox — but it DOES verify that
+          # referenced files exist (license-file: LICENSE, the extra-source-files
+          # fixture globs), so it needs the COMPLETE package source. That is `self`
+          # (the git-tracked tree — LICENSE and fixtures included, dist-newstyle and
+          # other untracked cruft excluded), NOT the .hs/.cabal subset that hsSrc
+          # filters to for format/lint. (It therefore re-runs whenever any tracked
+          # file changes, but cabal check is sub-second.) Sources are copied into a
+          # writable dir (the store path is read-only); HOME → $TMPDIR for config.
+          cabal-check = pkgs.runCommand "cabal-check"
+            { nativeBuildInputs = [ hpkgs.cabal-install ]; } ''
+            cp -r ${self}/. ./pkg && cd ./pkg
+            export HOME="$TMPDIR"
+            report="$(cabal check 2>&1)" || true
+            printf '%s\n' "$report"
+            case "$report" in
+              *Warning:* | *Error:*) echo "cabal check reported issues (above)" >&2; exit 1 ;;
+            esac
+            touch $out
+          '';
         };
 
         # Full shell for humans: lean CI set + IDE + release + scan + workflow-lint + weeder.

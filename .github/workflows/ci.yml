@@ -195,28 +195,28 @@ jobs:
       - name: Set up toolchain
         uses: ./.github/actions/setup-toolchain
 
-      # SPIKE (ci/flake-checks-spike) — run the two hermetic tiers, format and
-      # lint, as first-class Nix flake checks instead of `make` targets inside a
-      # devshell. The check derivations (flake.nix → checks.<system>.{format,lint})
-      # already existed but nothing invoked them: CI ran the `make` equivalents, so
-      # each task was expressed twice and the flake-check form was dead. This points
-      # CI straight at the flake graph. The payoff we are measuring: the checks are
-      # sandboxed (no ambient state), content-addressed (unchanged sources are a
-      # store hit — instant), and pinned (they run the EXACT flake fourmolu/hlint, so
-      # a stale ambient tool cannot drift the result — the failure mode AGENTS.md
-      # warns about). Locally this is the same `nix build`, or `nix flake check` for
-      # the whole graph. The runner is x86_64, hence the hard-coded system; a
-      # graduated version would derive it. Semgrep + workflow-lint stay as `make`
-      # steps below: both reach the network (rule registry / zizmor's online audit),
-      # so they cannot be pure offline-sandboxed checks. cabal-check, doctest, and
-      # docs-check are the next candidates if the numbers/UX here hold up.
-      - name: Format + lint (flake checks)
+      # The purely-hermetic static tier — format, lint, cabal-check — runs as
+      # first-class Nix flake checks (flake.nix → checks.<system>.*) rather than
+      # `make` targets in a devshell, so CI points straight at the flake graph. The
+      # checks are sandboxed (no ambient state), content-addressed (unchanged
+      # sources are a store hit — no rerun), and pinned (they run the EXACT flake
+      # fourmolu/hlint/cabal, so a stale ambient tool can't drift the result — the
+      # failure mode AGENTS.md warns about). Locally: this same `nix build`, or
+      # `nix flake check` for the whole graph. The runner is x86_64, hence the
+      # hard-coded system; deriving it is a follow-up.
+      #
+      # These three are the WHOLE purely-hermetic static tier. The remaining gate
+      # tiers (doctest, docs-check, build, the unit suite) all COMPILE the package,
+      # which as a flake check goes through the Nix Haskell builder — a separate
+      # compilation from the cabal/dist-newstyle path the build-test job uses, so
+      # moving them trades that job's incremental rebuild for a second full build.
+      # That is a deliberate decision to measure on its own, not a mechanical next
+      # step. Semgrep + workflow-lint stay as `make` steps below: both reach the
+      # network (rule registry / zizmor's online audit), so they can't be
+      # offline-sandboxed checks.
+      - name: Format, lint, cabal-check (flake checks)
         if: ${{ !cancelled() }}
-        run: nix build .#checks.x86_64-linux.format .#checks.x86_64-linux.lint --no-link --print-build-logs
-
-      - name: cabal check (package metadata)
-        if: ${{ !cancelled() }}
-        run: nix develop .#ci --command make cabal-check
+        run: nix build .#checks.x86_64-linux.format .#checks.x86_64-linux.lint .#checks.x86_64-linux.cabal-check --no-link --print-build-logs
 
       - name: Semgrep scan
         if: ${{ !cancelled() }}
