@@ -24,7 +24,7 @@ import Test.Hspec
 import UnliftIO.Exception (try)
 
 import Ecluse.Credential (AuthToken (AuthToken, authExpiresAt, authSecret), CredentialProvider, mkSecret, staticProvider)
-import Ecluse.Env (newEnv)
+import Ecluse.Env (newEnv, newWorkerHeartbeat)
 import Ecluse.Queue (newInMemoryQueue)
 import Ecluse.Registry (ParseError (ParseError), RegistryClient (..))
 import Ecluse.Registry.Npm.Route qualified as Npm
@@ -119,7 +119,8 @@ proxyApp policy internalOptIn port = do
     queue <- newInMemoryQueue
     metadataCache <- newMetadataCache defaultCacheConfig
     logEnv <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
-    env <- newEnv fakeRegistry queue fakeCredentials guardedManager trusted metadataCache logEnv telemetryDisabled
+    heartbeat <- newWorkerHeartbeat
+    env <- newEnv fakeRegistry queue fakeCredentials guardedManager trusted metadataCache logEnv telemetryDisabled heartbeat
     let cfg =
             mkServerConfig
                 [ MountBinding

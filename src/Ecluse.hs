@@ -59,6 +59,8 @@ The library's vocabulary, roughly from the pure core outward:
   (the shared serve-action 'Route' set and the injected route classifier).
 * __Cloud handles__ — "Ecluse.Credential" (minting the mirror-target write token)
   and "Ecluse.Queue" (the durable mirror-job hand-off to the worker).
+* __Mirror worker__ — "Ecluse.Worker" (the supervised consume loop that fetches,
+  verifies against the job's integrity digest, and publishes an approved artifact).
 
 'run' is the entry point the @ecluse@ executable invokes (see "Main"). It lives
 in the library, not in @app\/Main.hs@, so the composition root is a single
@@ -98,12 +100,15 @@ import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
 import Data.Time (getCurrentTime)
 import Katip (Environment (Environment))
+import Network.HTTP.Client (Manager)
 import UnliftIO (concurrently_, throwIO)
 
 import Ecluse.Composition (
     CredentialProviders,
+    PublishTarget (ptCredentials, ptEcosystem, ptMirrorUrl),
     initCredentialProviders,
     planMounts,
+    planPublishTargets,
     renderBootError,
  )
 import Ecluse.Composition qualified as Composition
@@ -115,24 +120,26 @@ import Ecluse.Config (
     parseEnv,
     renderEnvErrors,
  )
-import Ecluse.Credential (AuthToken (..), CredentialProvider, mkSecret, staticProvider)
+import Ecluse.Credential (AuthToken (..), CredentialProvider, currentToken, mkSecret, staticProvider)
 import Ecluse.Ecosystem (Ecosystem (Npm), prefixFor)
-import Ecluse.Env (Env, withEnv)
+import Ecluse.Env (Env, newWorkerHeartbeat, withEnv)
 import Ecluse.Log (newLogEnv)
 import Ecluse.Queue (newInMemoryQueue)
 import Ecluse.Registry (
     ParseError (..),
     RegistryClient (..),
  )
+import Ecluse.Registry.Npm (NpmClientConfig (NpmClientConfig, npmBaseUrl, npmLimits, npmManager, npmToken), newNpmClient)
 import Ecluse.Registry.Npm.Route qualified as Npm
 import Ecluse.Registry.Npm.Serve (npmRenderer)
-import Ecluse.Security (lowerCaseHosts)
+import Ecluse.Security (defaultLimits, lowerCaseHosts)
 import Ecluse.Security.Egress (newGuardedTlsManager, newTrustedTlsManager)
 import Ecluse.Server (MountBinding (..), ServerConfig (scDrainTimeout, scPort), ShutdownDrainTimeout (ShutdownDrainTimeout), mkServerConfig)
 import Ecluse.Server qualified as Server
 import Ecluse.Server.Cache (newMetadataCache)
 import Ecluse.Server.Context (PackumentDeps)
 import Ecluse.Telemetry (withTelemetry)
+import Ecluse.Worker qualified as Worker
 
 {- | Start Écluse: the entry point the @ecluse@ executable runs (see "Main").
 
@@ -154,6 +161,7 @@ run = do
     mDoc <- loadDocument
     providers <- initCredentialProviders env
     bindings <- orExit (T.unlines . map renderBootError) (planMounts mountBindingFor getCurrentTime providers env mDoc)
+    publishTargets <- orExit (T.unlines . map renderBootError) (planPublishTargets providers env mDoc)
     let serverConfig =
             (mkServerConfig bindings)
                 { scPort = cfgPort env
@@ -168,11 +176,17 @@ run = do
     -- internal address, so it is deliberately not rechecked.
     manager <- newGuardedTlsManager (lowerCaseHosts Set.empty)
     privateManager <- newTrustedTlsManager
+    -- The mirror worker's publish-side registry client, resolved per ecosystem from
+    -- the configured mirror target and its write credential. It writes to the
+    -- operator-configured, trusted mirror target, so it uses the trusted private
+    -- manager (no resolved-IP recheck — that guards only the untrusted public fetch).
+    publishClient <- resolvePublishClient privateManager publishTargets
     queue <- newInMemoryQueue
     metadataCache <- newMetadataCache (Composition.cacheConfigFor env)
     logEnv <- newLogEnv (cfgLogFormat env) (Environment "production")
+    heartbeat <- newWorkerHeartbeat
     withTelemetry (cfgTelemetry env) $ \telemetry ->
-        withEnv unconfiguredRegistry queue (mirrorWriteProvider providers) manager privateManager metadataCache logEnv telemetry (runServices serverConfig)
+        withEnv publishClient queue (mirrorWriteProvider providers) manager privateManager metadataCache logEnv telemetry heartbeat (runServices serverConfig)
 
 {- | Read the optional structured config document from the @PROXY_CONFIG@ env blob,
 decoding it strictly. 'Nothing' when unset — an env-only deployment supplies no
@@ -285,11 +299,38 @@ npmMount packumentDeps =
         }
 
 {- | Run the supervised mirror worker over the composition-root 'Env': the
-consume → fetch → verify → publish → ack loop against the queue and credential
-handles, in the @App@ orchestration monad.
+consume → fetch → verify → publish → ack loop against the queue, the publish-side
+registry client, and the credential handle, in the @App@ orchestration monad. The
+loop logic lives in "Ecluse.Worker"; this is the composition-root entry the
+single-process program runs alongside 'runServer'.
 -}
 runWorker :: Env -> IO ()
-runWorker _env = pass
+runWorker = Worker.runWorker
+
+{- Build the worker's publish-side registry client from the resolved per-ecosystem
+publish targets, over the given (trusted) manager.
+
+The publish client speaks the registry protocol; the only ecosystem with an adapter
+is npm, so a target is wired into an npm client pointed at the mirror-target
+endpoint and carrying the bearer minted from the target's credential provider. The
+credential is read once here at the composition root (the @static@ provider never
+expires, so a baked token is correct for it). When no mount is configured there is
+nothing to publish, so the slot holds the refusing 'unconfiguredRegistry'
+placeholder, whose effectful fields fail loudly if ever called — the worker only
+reaches it once a job exists, which only a configured mount produces. -}
+resolvePublishClient :: Manager -> [PublishTarget] -> IO RegistryClient
+resolvePublishClient manager targets =
+    case find ((== Npm) . ptEcosystem) targets of
+        Nothing -> pure unconfiguredRegistry
+        Just target -> do
+            token <- authSecret <$> currentToken (ptCredentials target)
+            newNpmClient
+                NpmClientConfig
+                    { npmBaseUrl = ptMirrorUrl target
+                    , npmManager = manager
+                    , npmToken = Just token
+                    , npmLimits = defaultLimits
+                    }
 
 {- | Raised by 'unconfiguredRegistry' when an effectful registry field is called
 with no backend wired in — a composition-root misconfiguration. A distinct typed

@@ -18,9 +18,9 @@ import Ecluse.Credential (
     unSecret,
  )
 import Ecluse.Ecosystem (Ecosystem (..))
-import Ecluse.Env (Env (..), newEnv, withEnv)
-import Ecluse.Package (PackageName, mkPackageName)
-import Ecluse.Queue (MirrorJob (..), enqueue, msgJob, newInMemoryQueue, receive)
+import Ecluse.Env (Env (..), newEnv, newWorkerHeartbeat, withEnv)
+import Ecluse.Package (Hash (..), HashAlg (..), PackageName, mkPackageName)
+import Ecluse.Queue (MirrorArtifact (..), MirrorJob (..), enqueue, msgJob, newInMemoryQueue, receive)
 import Ecluse.Registry (ParseError (..), RegistryClient (..), RegistryResponse (..))
 import Ecluse.Server (scPort)
 import Ecluse.Server.Cache (MetadataCache, defaultCacheConfig, newMetadataCache)
@@ -78,7 +78,8 @@ newTestEnv = do
     manager <- newTestManager
     metadataCache <- newTestCache
     logEnv <- newTestLogEnv
-    newEnv fakeRegistry queue fakeCredentials manager manager metadataCache logEnv telemetryDisabled
+    heartbeat <- newWorkerHeartbeat
+    newEnv fakeRegistry queue fakeCredentials manager manager metadataCache logEnv telemetryDisabled heartbeat
 
 -- | A sample job for round-tripping the queue handle held in an 'Env'.
 sampleJob :: MirrorJob
@@ -88,6 +89,12 @@ sampleJob =
         , jobVersion = ver
         , jobArtifactUrl = "https://public.test/thing/-/thing-1.0.0.tgz"
         , jobMirrorTarget = "https://mirror.test/thing/-/thing-1.0.0.tgz"
+        , jobArtifact =
+            MirrorArtifact
+                { maFilename = "thing-1.0.0.tgz"
+                , maHashes = Hash SHA1 "abc" :| []
+                , maSize = Just 42
+                }
         }
 
 -- | A sample package name and version, for the registry-handle assertions.
@@ -166,7 +173,8 @@ spec = do
             manager <- newTestManager
             metadataCache <- newTestCache
             logEnv <- newTestLogEnv
-            result <- withEnv fakeRegistry queue fakeCredentials manager manager metadataCache logEnv telemetryDisabled $ \env ->
+            heartbeat <- newWorkerHeartbeat
+            result <- withEnv fakeRegistry queue fakeCredentials manager manager metadataCache logEnv telemetryDisabled heartbeat $ \env ->
                 currentToken' env
             result `shouldBe` "env-spec-token"
 
@@ -175,9 +183,10 @@ spec = do
             manager <- newTestManager
             metadataCache <- newTestCache
             logEnv <- newTestLogEnv
+            heartbeat <- newWorkerHeartbeat
             let body :: Env -> IO ()
                 body _ = throwString "boom"
-            outcome <- try (withEnv fakeRegistry queue fakeCredentials manager manager metadataCache logEnv telemetryDisabled body)
+            outcome <- try (withEnv fakeRegistry queue fakeCredentials manager manager metadataCache logEnv telemetryDisabled heartbeat body)
             case outcome of
                 Left (_ :: StringException) -> pure ()
                 Right () -> expectationFailure "expected the body's exception to propagate"
@@ -192,9 +201,13 @@ spec = do
             env <- newTestEnv
             timeout 100000 (runServer (npmServerConfig{scPort = 0}) env) `shouldReturn` Nothing
 
-        it "runWorker over an Env returns (the stub consumes nothing yet)" $ do
+        it "runWorker over an Env serves (blocks polling) rather than returning" $ do
+            -- The worker is a continuous consume loop: started under a short timeout
+            -- it keeps long-polling the (empty in-memory) queue until cancelled, so
+            -- 'timeout' yields 'Nothing'. The loop logic itself is asserted
+            -- socket-free in "Ecluse.WorkerSpec".
             env <- newTestEnv
-            runWorker env `shouldReturn` ()
+            timeout 100000 (runWorker env) `shouldReturn` Nothing
 
     describe "App / runApp" $ do
         it "reads the Env through the reader and runs effects in IO" $ do

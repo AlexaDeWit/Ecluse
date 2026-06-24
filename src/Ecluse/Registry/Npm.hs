@@ -85,6 +85,9 @@ module Ecluse.Registry.Npm (
     artifactFileUrl,
     publishRequest,
 
+    -- * Publish-document assembly
+    npmPublishDocument,
+
     -- * Lower-level fetch (form- and validator-aware)
     fetchMetadataForm,
 
@@ -92,6 +95,11 @@ module Ecluse.Registry.Npm (
     ResponseBoundExceeded (..),
 ) where
 
+import Data.Aeson (object, (.=))
+import Data.Aeson qualified as Aeson
+import Data.Aeson.Key qualified as Key
+import Data.ByteArray.Encoding (Base (Base64), convertToBase)
+import Data.ByteString qualified as BS
 import Data.Text qualified as T
 import Network.HTTP.Client (
     BodyReader,
@@ -388,6 +396,79 @@ publishRequest config name document = do
             , requestBody = RequestBodyBS document
             , requestHeaders = (hAccept, "application/json") : requestHeaders base
             }
+
+-- ── publish-document assembly ─────────────────────────────────────────────────
+
+{- | Assemble the npm publish document for one version from its verified tarball
+bytes — the serialised body 'publishRequest' (hence
+'Ecluse.Registry.publishArtifact') @PUT@s to @\/{pkg}@.
+
+The document is the npm @PUT \/{pkg}@ shape: the package name and a single-version
+@versions@ map carrying the version manifest (@name@, @version@, and a @dist@ with
+the integrity digests), @dist-tags.latest@ pointed at that version, and the tarball
+itself base64-encoded under @_attachments@ with its byte @length@. A managed npm
+registry (CodeArtifact, Artifact Registry, Verdaccio) recomputes the served
+@dist.tarball@ location from the attachment, so the location is not carried.
+
+The integrity digests written into @dist@ are the __caller's__ — the worker passes
+the serve-time-admitted digests it has already verified the bytes against — so the
+published manifest's integrity matches exactly the bytes attached. The tarball
+@length@ is taken from the actual byte count, never a caller-declared size, so the
+attachment can never disagree with its own bytes.
+
+This is the inverse of the read-side decode in "Ecluse.Registry.Npm.Wire", which
+deliberately does not model @_attachments@: it is constructed only here, for the
+write.
+-}
+npmPublishDocument ::
+    -- | The package being published.
+    PackageName ->
+    -- | The version being published.
+    Version ->
+    -- | The tarball's filename — the @_attachments@ key and tarball file segment.
+    Text ->
+    -- | The @dist.integrity@ SRI string, if known (e.g. @"sha512-…"@).
+    Maybe Text ->
+    -- | The @dist.shasum@ (SHA-1, hex), if known.
+    Maybe Text ->
+    -- | The verified tarball bytes.
+    ByteString ->
+    ByteString
+npmPublishDocument name version filename integrity shasum tarball =
+    toStrict . Aeson.encode $
+        object
+            [ "_id" .= renderPackageName name
+            , "name" .= renderPackageName name
+            , "dist-tags" .= object ["latest" .= versionText]
+            , "versions"
+                .= object
+                    [ Key.fromText versionText
+                        .= object
+                            [ "name" .= renderPackageName name
+                            , "version" .= versionText
+                            , "dist"
+                                .= object
+                                    ( ["tarball" .= filename]
+                                        <> maybe [] (\i -> ["integrity" .= i]) integrity
+                                        <> maybe [] (\s -> ["shasum" .= s]) shasum
+                                    )
+                            ]
+                    ]
+            , "_attachments"
+                .= object
+                    [ Key.fromText filename
+                        .= object
+                            [ "content_type" .= ("application/octet-stream" :: Text)
+                            , "data" .= encodedTarball
+                            , "length" .= BS.length tarball
+                            ]
+                    ]
+            ]
+  where
+    versionText = renderVersion version
+    -- The npm attachment carries the raw tarball bytes, standard-base64-encoded.
+    encodedTarball :: Text
+    encodedTarball = decodeUtf8 (convertToBase Base64 tarball :: ByteString)
 
 -- ── handle assembly ───────────────────────────────────────────────────────────
 

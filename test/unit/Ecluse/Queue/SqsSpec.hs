@@ -4,8 +4,8 @@ import Data.Text qualified as T
 import Test.Hspec
 
 import Ecluse.Ecosystem (Ecosystem (Npm, PyPI))
-import Ecluse.Package (mkPackageName, mkScope)
-import Ecluse.Queue (MirrorJob (..), Seconds (..))
+import Ecluse.Package (Hash (Hash), HashAlg (SHA1, SRI), mkPackageName, mkScope)
+import Ecluse.Queue (MirrorArtifact (..), MirrorJob (..), Seconds (..))
 import Ecluse.Queue.Sqs (
     SqsConfig (..),
     decodeJob,
@@ -14,7 +14,9 @@ import Ecluse.Queue.Sqs (
  )
 import Ecluse.Version (mkVersion)
 
--- | An unscoped npm job fixture.
+{- | An unscoped npm job fixture, carrying both an SRI and a SHA-1 digest so the
+multi-digest arm of the artifact wire mapping is exercised.
+-}
 npmJob :: MirrorJob
 npmJob =
     MirrorJob
@@ -22,6 +24,12 @@ npmJob =
         , jobVersion = mkVersion Npm "4.17.21"
         , jobArtifactUrl = "https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz"
         , jobMirrorTarget = "https://mirror.example/lodash/-/lodash-4.17.21.tgz"
+        , jobArtifact =
+            MirrorArtifact
+                { maFilename = "lodash-4.17.21.tgz"
+                , maHashes = Hash SRI "sha512-abc" :| [Hash SHA1 "deadbeef"]
+                , maSize = Just 1234
+                }
         }
 
 -- | A scoped npm job fixture, to exercise the scope arm of the wire mapping.
@@ -32,6 +40,12 @@ scopedJob =
         , jobVersion = mkVersion Npm "7.24.0"
         , jobArtifactUrl = "https://registry.npmjs.org/@babel/core/-/core-7.24.0.tgz"
         , jobMirrorTarget = "https://mirror.example/@babel/core/-/core-7.24.0.tgz"
+        , jobArtifact =
+            MirrorArtifact
+                { maFilename = "core-7.24.0.tgz"
+                , maHashes = Hash SRI "sha512-xyz" :| []
+                , maSize = Nothing
+                }
         }
 
 -- | A PyPI job fixture: a different ecosystem, no scope.
@@ -42,6 +56,12 @@ pypiJob =
         , jobVersion = mkVersion PyPI "3.0.2"
         , jobArtifactUrl = "https://files.pythonhosted.org/packages/flask-3.0.2.tar.gz"
         , jobMirrorTarget = "https://mirror.example/flask-3.0.2.tar.gz"
+        , jobArtifact =
+            MirrorArtifact
+                { maFilename = "flask-3.0.2.tar.gz"
+                , maHashes = Hash SHA1 "0a4d" :| []
+                , maSize = Just 9001
+                }
         }
 
 spec :: Spec
@@ -59,13 +79,14 @@ spec = do
         it "carries every field through unchanged" $ do
             -- Field-by-field so a single mangled field is pinpointed, not lost in
             -- a whole-record comparison.
-            case decodeJob (encodeJob scopedJob) of
+            case decodeJob (encodeJob npmJob) of
                 Left err -> expectationFailure (toString err)
                 Right job -> do
-                    jobPackage job `shouldBe` jobPackage scopedJob
-                    jobVersion job `shouldBe` jobVersion scopedJob
-                    jobArtifactUrl job `shouldBe` jobArtifactUrl scopedJob
-                    jobMirrorTarget job `shouldBe` jobMirrorTarget scopedJob
+                    jobPackage job `shouldBe` jobPackage npmJob
+                    jobVersion job `shouldBe` jobVersion npmJob
+                    jobArtifactUrl job `shouldBe` jobArtifactUrl npmJob
+                    jobMirrorTarget job `shouldBe` jobMirrorTarget npmJob
+                    jobArtifact job `shouldBe` jobArtifact npmJob
 
     describe "decodeJob rejects a malformed body" $ do
         it "rejects non-JSON" $
@@ -87,6 +108,21 @@ spec = do
                 \\"version\":\"1.0.0\",\"artifactUrl\":\"u\",\"mirrorTarget\":\"m\"}" of
                 Left err -> err `shouldSatisfy` ("cargo" `T.isInfixOf`)
                 Right job -> expectationFailure ("expected a decode error, got " <> show job)
+
+        it "rejects a body with no artifact descriptor" $
+            -- The serve-time-admitted digest is mandatory: a body without it has
+            -- nothing to verify the fetched bytes against.
+            decodeJob
+                "{\"ecosystem\":\"npm\",\"scope\":null,\"name\":\"x\",\
+                \\"version\":\"1.0.0\",\"artifactUrl\":\"u\",\"mirrorTarget\":\"m\"}"
+                `shouldSatisfy` isLeft
+
+        it "rejects an artifact carrying an empty hash list (the NonEmpty invariant)" $
+            decodeJob
+                "{\"ecosystem\":\"npm\",\"scope\":null,\"name\":\"x\",\
+                \\"version\":\"1.0.0\",\"artifactUrl\":\"u\",\"mirrorTarget\":\"m\",\
+                \\"artifact\":{\"filename\":\"x-1.0.0.tgz\",\"hashes\":[],\"size\":null}}"
+                `shouldSatisfy` isLeft
 
     describe "defaultSqsConfig" $ do
         let cfg = defaultSqsConfig "https://sqs.example/q" "us-east-1"

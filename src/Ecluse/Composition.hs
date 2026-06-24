@@ -43,6 +43,10 @@ module Ecluse.Composition (
     planMounts,
     composeBindings,
 
+    -- * Publish-side wiring
+    PublishTarget (..),
+    planPublishTargets,
+
     -- * Config-derived runtime settings
     cacheConfigFor,
 ) where
@@ -276,6 +280,70 @@ composeBindings resolveAdapter clock providers config =
 -- relative path a client's registry endpoint maps onto.
 mountBasePath :: Ecosystem -> Text
 mountBasePath eco = "/" <> T.intercalate "/" (toList (prefixFor eco))
+
+-- ── publish-side wiring ───────────────────────────────────────────────────────
+
+{- | One ecosystem's resolved __publish__ target: the mirror-target endpoint the
+mirror worker writes approved artifacts to, paired with the credential provider
+that mints its bearer token.
+
+This is the publish side of the per-ecosystem composition (the serve side is the
+mount's 'PackumentDeps'). The worker's single consumer builds a registry-protocol
+client from these — the endpoint as its base URL, the provider's token as its
+bearer — so the publish client is resolved here at the composition root rather than
+re-derived per request.
+-}
+data PublishTarget = PublishTarget
+    { ptEcosystem :: Ecosystem
+    -- ^ The ecosystem this publish target serves.
+    , ptMirrorUrl :: Text
+    -- ^ The mirror-target endpoint approved artifacts are published to.
+    , ptCredentials :: CredentialProvider
+    -- ^ The provider minting the mirror-target write token.
+    }
+
+{- | Resolve each configured mount to its publish target, or the aggregated boot
+errors. The publish side of 'planMounts': it validates the same config and resolves
+each mount's mirror-target endpoint and write credential, so the worker's publish
+client can be built at the composition root.
+
+An unresolved credential reference is the same fail-loud boot error 'composeBindings'
+reports for the serve side, so the two surfaces never disagree on what is wired.
+-}
+planPublishTargets ::
+    CredentialProviders ->
+    EnvConfig ->
+    Maybe ConfigDoc ->
+    Either [BootError] [PublishTarget]
+planPublishTargets providers env mDoc =
+    first (map PolicyBootError) (loadConfig env mDoc)
+        >>= composePublishTargets providers
+
+-- Resolve every mount's publish target from a validated config, aggregating an
+-- unresolved-credential error per mount (the same check 'composeBindings' applies).
+composePublishTargets ::
+    CredentialProviders ->
+    Config ->
+    Either [BootError] [PublishTarget]
+composePublishTargets providers config =
+    case partitionEithers (map targetFor (Map.elems (configMounts config))) of
+        ([], targets) -> Right targets
+        (errs, _) -> Left (concat errs)
+  where
+    targetFor :: Mount -> Either [BootError] PublishTarget
+    targetFor mount =
+        let target = regMirrorTarget (mountRegistries mount)
+            backend = mtCredential target
+         in case lookupProvider backend providers of
+                Just provider ->
+                    Right
+                        PublishTarget
+                            { ptEcosystem = mountEcosystem mount
+                            , ptMirrorUrl = unUrl (mtUrl target)
+                            , ptCredentials = provider
+                            }
+                Nothing ->
+                    Left [UnresolvedCredential (mountEcosystem mount) backend]
 
 -- ── config-derived runtime settings ───────────────────────────────────────────
 

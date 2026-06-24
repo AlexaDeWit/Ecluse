@@ -36,7 +36,7 @@ import UnliftIO.Temporary (withSystemTempFile)
 
 import Ecluse.Credential (AuthToken (..), CredentialProvider, mkSecret, staticProvider)
 import Ecluse.Ecosystem (Ecosystem (Npm))
-import Ecluse.Env (Env (envQueue), newEnv)
+import Ecluse.Env (Env (envQueue), newEnv, newWorkerHeartbeat)
 import Ecluse.Log (LogFormat (JsonLog), newLogEnv)
 import Ecluse.Package (PackageName, mkPackageName)
 import Ecluse.Queue (
@@ -445,7 +445,8 @@ newTestEnvWithQueue :: MirrorQueue -> Manager -> IO Env
 newTestEnvWithQueue queue manager = do
     metadataCache <- newMetadataCache defaultCacheConfig
     logEnv <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
-    newEnv fakeRegistry queue fakeCredentials manager manager metadataCache logEnv telemetryDisabled
+    heartbeat <- newWorkerHeartbeat
+    newEnv fakeRegistry queue fakeCredentials manager manager metadataCache logEnv telemetryDisabled heartbeat
 
 {- | The packument-serve dependencies pointing at two in-process upstream ports,
 with the given inbound edge token (usually 'Nothing').
@@ -1822,7 +1823,8 @@ captureBreachLog privateBody = do
             -- A LogEnv with the real JSONL stdout scribe, so the serve path's warning
             -- is actually written and capturable.
             logEnv <- newLogEnv JsonLog (Environment "test")
-            env <- newEnv fakeRegistry queue fakeCredentials manager manager metadataCache logEnv telemetryDisabled
+            heartbeat <- newWorkerHeartbeat
+            env <- newEnv fakeRegistry queue fakeCredentials manager manager metadataCache logEnv telemetryDisabled heartbeat
             let cfg =
                     mkServerConfig
                         [ MountBinding

@@ -54,13 +54,25 @@ import Data.Aeson (
     (.=),
  )
 import Data.Aeson qualified as Aeson
-import Data.Aeson.Types (parseEither)
+import Data.Aeson.Types (Parser, parseEither)
 import Data.Text qualified as T
 import Lens.Micro ((?~), (^.))
 
 import Ecluse.Ecosystem (ecosystemName, parseEcosystem)
-import Ecluse.Package (PackageName, mkPackageName, mkScope, pkgEcosystem, pkgNamespace, renderPackageName, renderScope, unScope)
+import Ecluse.Package (
+    Hash (Hash, hashAlg, hashValue),
+    HashAlg (Blake2b, MD5, SHA1, SHA256, SHA512, SRI),
+    PackageName,
+    mkPackageName,
+    mkScope,
+    pkgEcosystem,
+    pkgNamespace,
+    renderPackageName,
+    renderScope,
+    unScope,
+ )
 import Ecluse.Queue (
+    MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize),
     MirrorJob (..),
     MirrorQueue (..),
     QueueMessage (..),
@@ -222,7 +234,10 @@ toQueueMessage message = do
 {- | Encode a 'MirrorJob' as the JSON text of an SQS message body. The inverse of
 'decodeJob': the package identity is split into its ecosystem, optional scope, and
 bare name so it round-trips through 'mkPackageName', and the version keeps its raw
-string.
+string. The serve-time-admitted artifact descriptor ('jobArtifact') — the filename,
+the integrity digests, and the declared size — round-trips as a nested object so the
+worker has the digest to verify the fetched bytes against and the inputs to assemble
+the publish document.
 -}
 encodeJob :: MirrorJob -> Text
 encodeJob job =
@@ -234,13 +249,27 @@ encodeJob job =
             , "version" .= renderVersion (jobVersion job)
             , "artifactUrl" .= jobArtifactUrl job
             , "mirrorTarget" .= jobMirrorTarget job
+            , "artifact" .= encodeArtifact (jobArtifact job)
             ]
   where
     name = jobPackage job
 
+-- Encode the serve-time-admitted artifact descriptor: filename, the integrity
+-- digests (each an algorithm-tagged value), and the declared size when known.
+encodeArtifact :: MirrorArtifact -> Aeson.Value
+encodeArtifact artifact =
+    object
+        [ "filename" .= maFilename artifact
+        , "hashes" .= map encodeHash (toList (maHashes artifact))
+        , "size" .= maSize artifact
+        ]
+  where
+    encodeHash :: Hash -> Aeson.Value
+    encodeHash h = object ["alg" .= hashAlgName (hashAlg h), "value" .= hashValue h]
+
 {- | Decode an SQS message body back into a 'MirrorJob', or a human-readable error
 if the body is not the JSON object 'encodeJob' produces (a missing field, an
-unknown ecosystem, malformed JSON).
+unknown ecosystem, an empty hash list, malformed JSON).
 -}
 decodeJob :: Text -> Either Text MirrorJob
 decodeJob body =
@@ -255,14 +284,58 @@ decodeJob body =
         rawVersion <- o .: "version"
         artifactUrl <- o .: "artifactUrl"
         mirrorTarget <- o .: "mirrorTarget"
+        artifact <- o .: "artifact" >>= parseArtifact
         pure
             MirrorJob
                 { jobPackage = mkPackageName eco (mkScope <$> scope) rawName
                 , jobVersion = mkVersion eco rawVersion
                 , jobArtifactUrl = artifactUrl
                 , jobMirrorTarget = mirrorTarget
+                , jobArtifact = artifact
                 }
     unknownEcosystem n = "unknown ecosystem " <> show (n :: Text)
+
+-- Parse the nested artifact descriptor, failing on an empty hash list (the
+-- 'NonEmpty' invariant the serve path upholds — a job must carry a digest to verify
+-- against).
+parseArtifact :: Aeson.Value -> Parser MirrorArtifact
+parseArtifact = withObject "MirrorArtifact" $ \o -> do
+    filename <- o .: "filename"
+    rawHashes <- o .: "hashes" >>= traverse parseHash
+    size <- o .:? "size"
+    case nonEmpty rawHashes of
+        Nothing -> fail "MirrorArtifact carries no integrity digest"
+        Just hashes ->
+            pure MirrorArtifact{maFilename = filename, maHashes = hashes, maSize = size}
+  where
+    parseHash :: Aeson.Value -> Parser Hash
+    parseHash = withObject "Hash" $ \h -> do
+        algName <- h .: "alg"
+        alg <- maybe (fail (unknownAlg algName)) pure (parseHashAlg algName)
+        value <- h .: "value"
+        pure Hash{hashAlg = alg, hashValue = value}
+    unknownAlg n = "unknown hash algorithm " <> show (n :: Text)
+
+-- The wire name of a 'HashAlg', and its inverse. Kept here at the wire boundary
+-- (the domain type itself carries no wire encoding).
+hashAlgName :: HashAlg -> Text
+hashAlgName = \case
+    SHA1 -> "sha1"
+    SHA256 -> "sha256"
+    SHA512 -> "sha512"
+    MD5 -> "md5"
+    Blake2b -> "blake2b"
+    SRI -> "sri"
+
+parseHashAlg :: Text -> Maybe HashAlg
+parseHashAlg = \case
+    "sha1" -> Just SHA1
+    "sha256" -> Just SHA256
+    "sha512" -> Just SHA512
+    "md5" -> Just MD5
+    "blake2b" -> Just Blake2b
+    "sri" -> Just SRI
+    _ -> Nothing
 
 {- The bare (scope-stripped) package name: the third argument 'mkPackageName'
 took. When scoped, 'mkPackageName' builds the display form as @scope/name@, so

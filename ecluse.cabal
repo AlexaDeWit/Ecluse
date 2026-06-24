@@ -102,6 +102,7 @@ library
     Ecluse.Server.Stream
     Ecluse.Telemetry
     Ecluse.Version
+    Ecluse.Worker
 
   -- Per-ecosystem version grammars and their shared lexical atoms. Internal to
   -- the library: VersionKey is opaque, so callers reach these only through the
@@ -199,6 +200,7 @@ test-suite ecluse-unit
     Ecluse.TelemetrySpec
     Ecluse.VersionOrderingSpec
     Ecluse.VersionSpec
+    Ecluse.WorkerSpec
 
   build-tool-depends: hspec-discover:hspec-discover ^>=2.11
   build-depends:
@@ -209,6 +211,7 @@ test-suite ecluse-unit
     , case-insensitive  ^>=1.2
     , clock             ^>=0.8
     , containers        ^>=0.7
+    , crypton           ^>=1.0
     , envparse          >=0.5 && <0.7
     , hedgehog          ^>=1.5
     , hspec             ^>=2.11
@@ -221,6 +224,7 @@ test-suite ecluse-unit
     , hs-opentelemetry-sdk  ^>=1.0
     , katip             ^>=0.8.8
     , ecluse
+    , memory            ^>=0.18
     , network           ^>=3.2
     , retry             ^>=0.9
     , text              ^>=2.1
@@ -247,10 +251,12 @@ test-suite ecluse-integration
   main-is:            Spec.hs
   hs-source-dirs:     test/integration
   other-modules:
+    Ecluse.Integration.Ministack
     Ecluse.MirrorQueueSpec
     Ecluse.Security.EgressOriginSpec
     Ecluse.Server.GracefulShutdownSpec
     Ecluse.Server.TarballHostSpec
+    Ecluse.WorkerSpec
 
   build-tool-depends: hspec-discover:hspec-discover ^>=2.11
   build-depends:
@@ -259,11 +265,13 @@ test-suite ecluse-integration
     , amazonka-sqs     ^>=2.0
     , bytestring       ^>=0.12
     , containers       ^>=0.7
+    , crypton          ^>=1.0
     , ecluse
     , hspec            ^>=2.11
     , http-client      ^>=0.7
     , http-types       ^>=0.12
     , katip            ^>=0.8.8
+    , memory           ^>=0.18
     , microlens        ^>=0.4.13
     , network          ^>=3.2
     , resourcet        ^>=1.3
