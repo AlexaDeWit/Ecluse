@@ -20,22 +20,23 @@ import Ecluse.App (runApp)
 import Ecluse.Credential (AuthToken (..), CredentialProvider, mkSecret, staticProvider)
 import Ecluse.Ecosystem (Ecosystem (Npm))
 import Ecluse.Env (Env, envWorkerHeartbeat, lastPoll, newEnv, newWorkerHeartbeat)
-import Ecluse.Package (Hash (Hash), HashAlg (Blake2b, SHA1, SRI), PackageName, mkPackageName)
+import Ecluse.Package (Hash (Hash), HashAlg (Blake2b, MD5, SHA1, SHA256, SRI), PackageName, mkPackageName)
+import Ecluse.Package qualified as Pkg
 import Ecluse.Queue (
     MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize),
     MirrorJob (..),
-    MirrorQueue,
+    MirrorQueue (receive),
     QueueMessage (msgReceipt),
     ReceiptHandle,
     enqueue,
     newInMemoryQueue,
-    receive,
  )
 import Ecluse.Registry (
     ParseError (ParseError),
     PublishError (PublishError),
-    PublishFault (PublishRejected),
+    PublishFault (PublishRejected, PublishUrlUnformable),
     RegistryClient (..),
+    UrlFormationError (EmptyBaseUrl),
  )
 import Ecluse.Registry.Npm (npmPublishDocument)
 import Ecluse.Server.Cache (defaultCacheConfig, newMetadataCache)
@@ -67,6 +68,12 @@ trueSha1 = decodeUtf8 (convertToBase Base16 (hashlazy (toLazy tarballBytes) :: D
 -- | The SRI (@sha512-<base64>@) of 'tarballBytes'.
 trueSri :: Text
 trueSri = "sha512-" <> decodeUtf8 (convertToBase Base64 (hashlazy (toLazy tarballBytes) :: Digest SHA512) :: ByteString)
+
+{- | The lower-cased hex SHA-512 of 'tarballBytes' — the form a __raw 'SHA512'-tagged__
+digest carries (as opposed to the base64 inside an SRI string).
+-}
+trueSha512Hex :: Text
+trueSha512Hex = decodeUtf8 (convertToBase Base16 (hashlazy (toLazy tarballBytes) :: Digest SHA512) :: ByteString)
 
 {- | A well-formed sha512 SRI that does NOT match 'tarballBytes' (it is the digest of
 different bytes) — for the tamper-direction regression: a real sha512 that fails.
@@ -157,6 +164,47 @@ withWorkerEnv outcome body = do
     credentials :: CredentialProvider
     credentials = staticProvider AuthToken{authSecret = mkSecret "tok", authExpiresAt = Nothing}
 
+{- | Build an 'Env' over a caller-supplied queue (the publish client is the
+never-succeeding recording double, unused here) and run the body against it. Lets a
+test drive the supervised loop against a queue whose @receive@ misbehaves.
+-}
+withQueueEnv :: MirrorQueue -> (Env -> IO a) -> IO a
+withQueueEnv queue body = do
+    logRef <- newIORef (PublishLog [])
+    manager <- newManager defaultManagerSettings
+    metadataCache <- newMetadataCache defaultCacheConfig
+    logEnv <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
+    heartbeat <- newWorkerHeartbeat
+    env <-
+        newEnv
+            (recordingClient logRef (Right ()))
+            queue
+            credentials
+            manager
+            manager
+            metadataCache
+            logEnv
+            telemetryDisabled
+            heartbeat
+    body env
+  where
+    credentials :: CredentialProvider
+    credentials = staticProvider AuthToken{authSecret = mkSecret "tok", authExpiresAt = Nothing}
+
+{- | A queue whose @receive@ always throws, counting each call. Stands in for a
+persistently-failing dependency so the supervised loop's catch-log-backoff arm can
+be exercised: the loop must survive a throwing iteration and poll again, not die.
+-}
+throwingReceiveQueue :: IORef Int -> IO MirrorQueue
+throwingReceiveQueue calls = do
+    base <- newInMemoryQueue
+    pure
+        base
+            { receive = do
+                atomicModifyIORef' calls (\n -> (n + 1, ()))
+                throwString "receive: simulated queue outage"
+            }
+
 {- | Run a stub upstream that serves 'tarballBytes' and yields its base URL to the
 body.
 -}
@@ -172,6 +220,13 @@ the genuine transient fault. Port 1 is in the privileged range and never bound.
 -}
 unreachableUrl :: Text
 unreachableUrl = "http://127.0.0.1:1/thing/-/thing-1.0.0.tgz"
+
+{- | A job artifact URL that cannot be parsed into a request at all (a space and no
+scheme), so the worker's by-URL request build fails before any fetch — the
+unformable-URL arm, distinct from a reachable-but-failing fetch.
+-}
+unformableUrl :: Text
+unformableUrl = "not a url"
 
 -- Enqueue a job, receive it, and return its receipt handle so the per-job processing
 -- can be driven with a real handle.
@@ -193,6 +248,13 @@ spec = do
         it "verifies an SRI (sha512)-only artifact against its sha512" $
             verifyIntegrity (Hash SRI trueSri :| []) tarballBytes `shouldBe` IntegrityVerified
 
+        it "verifies a raw SHA512-tagged digest against its hex sha512 (the tag arm, not SRI)" $
+            -- A digest carried under the raw 'SHA512' tag (hex), distinct from the same
+            -- hash inside an SRI string: the worker computes hex SHA-512 and matches it,
+            -- so this exercises the SHA512-tag compute arm rather than the SRI path.
+            -- (Pkg.SHA512 is the HashAlg constructor; the bare SHA512 here is Crypto's.)
+            verifyIntegrity (Hash Pkg.SHA512 trueSha512Hex :| []) tarballBytes `shouldBe` IntegrityVerified
+
         it "verifies against the strongest digest when both sha512 and sha1 match" $
             verifyIntegrity (Hash SHA1 trueSha1 :| [Hash SRI trueSri]) tarballBytes
                 `shouldBe` IntegrityVerified
@@ -212,6 +274,40 @@ spec = do
             -- NOT fall back to the (matching) sha1 — fail closed.
             verifyIntegrity (Hash Blake2b "whatever" :| [Hash SHA1 trueSha1]) tarballBytes
                 `shouldSatisfy` isMismatch
+
+        it "names the uncomputable strongest algorithm in the fail-closed detail" $
+            -- The fail-closed detail is operator-facing: it must name WHICH algorithm
+            -- the worker could not verify, so a refused publish is diagnosable. Asserting
+            -- the message (not just the constructor) pins that diagnostic.
+            mismatchDetail (verifyIntegrity (Hash Blake2b "whatever" :| [Hash SHA1 trueSha1]) tarballBytes)
+                `shouldBe` Just "the strongest admitted digest (Blake2b) is in an algorithm the worker cannot verify"
+
+        it "fails closed on a sha256-only digest (the worker cannot compute SHA-256)" $
+            -- SHA-256 outranks a SHA-1, but the worker has no SHA-256 computation, so a
+            -- sha256-only artifact must fail closed rather than be admitted unverified —
+            -- it must NOT silently fall through to a (non-present) weaker digest.
+            mismatchDetail (verifyIntegrity (Hash SHA256 "whatever" :| []) tarballBytes)
+                `shouldBe` Just "the strongest admitted digest (SHA256) is in an algorithm the worker cannot verify"
+
+        it "fails closed on an md5-only digest (the worker cannot compute MD5)" $
+            -- MD5 is cryptographically broken AND uncomputable here; an md5-only artifact
+            -- fails closed, never admitted on the strength of a forgeable hash.
+            mismatchDetail (verifyIntegrity (Hash MD5 "whatever" :| []) tarballBytes)
+                `shouldBe` Just "the strongest admitted digest (MD5) is in an algorithm the worker cannot verify"
+
+        it "fails closed on an SRI whose inner algorithm is not sha512 (uncomputable)" $
+            -- An SRI string names its own algorithm; only sha512 is computable here. A
+            -- sha256 SRI ranks below everything (its inner alg does not resolve) and is
+            -- uncomputable, so it fails closed — and the detail names it as an SRI.
+            mismatchDetail (verifyIntegrity (Hash SRI "sha256-Zm9vYmFy" :| []) tarballBytes)
+                `shouldBe` Just "the strongest admitted digest (SRI sha256) is in an algorithm the worker cannot verify"
+
+        it "names the algorithm in a plain (computable) digest mismatch too" $
+            -- The non-uncomputable mismatch branch: a sha512 SRI that simply does not
+            -- match. The detail names the algorithm via the SRI 'describe' arm, so a
+            -- genuine tamper is reported with its algorithm, not anonymously.
+            mismatchDetail (verifyIntegrity (Hash SRI falseSri :| []) tarballBytes)
+                `shouldBe` Just "the SRI sha512 digest did not match the fetched bytes"
 
         it "is case-insensitive on the hex shasum" $
             verifyIntegrity (Hash SHA1 (T.toUpper trueSha1) :| []) tarballBytes
@@ -270,6 +366,28 @@ spec = do
                     outcome <- runApp env (processJob receipt job)
                     outcome `shouldSatisfy` isRetried
 
+        it "leaves the job for redelivery when the artifact URL is unformable (no publish)" $
+            -- A job whose artifact URL cannot be parsed into a request never reaches a
+            -- fetch: the by-URL build fails, which the worker treats as a transient
+            -- reason (Retried) rather than crashing the iteration. Nothing is published.
+            withWorkerEnv (Right ()) $ \env queue logRef -> do
+                (receipt, job) <- enqueueAndReceive queue (jobWith unformableUrl (Hash SHA1 trueSha1 :| []))
+                outcome <- runApp env (processJob receipt job)
+                outcome `shouldSatisfy` isRetried
+                published <- plDocuments <$> readIORef logRef
+                published `shouldBe` []
+
+        it "drops a job (non-retryable) when the publish URL is unformable (a config fault)" $
+            -- An unformable PUBLISH URL is a misconfiguration redelivery cannot fix, so
+            -- the registry handle surfaces it as PublishUrlUnformable and the worker
+            -- DROPS the job rather than re-enqueueing it forever — the non-retryable
+            -- terminal outcome, distinct from a retryable registry rejection.
+            withUpstream $ \url ->
+                withWorkerEnv (Left (PublishUrlUnformable EmptyBaseUrl)) $ \env queue _logRef -> do
+                    (receipt, job) <- enqueueAndReceive queue (jobWith url (Hash SHA1 trueSha1 :| []))
+                    outcome <- runApp env (processJob receipt job)
+                    outcome `shouldSatisfy` isDropped
+
     describe "processBatch — ack semantics over the in-memory queue" $ do
         it "acks a successfully-mirrored job so it is not redelivered" $
             withUpstream $ \url ->
@@ -295,6 +413,23 @@ spec = do
                     redelivered <- pollUntilRedelivered queue 5
                     redelivered `shouldBe` True
 
+        it "acks a DROPPED job so a tampered artifact is retired, not redelivered forever" $
+            -- An integrity mismatch is non-retryable: redelivery can never make the
+            -- bytes match, so the worker must ack the job to retire it from the queue
+            -- (having alarmed at the mismatch) rather than leave it to redeliver
+            -- indefinitely. A second poll past the visibility window yields nothing.
+            withUpstream $ \url ->
+                withWorkerEnv (Right ()) $ \env queue logRef -> do
+                    enqueue queue (jobWith url (Hash SHA1 "deadbeef" :| []))
+                    messages <- receive queue
+                    runApp env (processBatch messages)
+                    -- Nothing was published (the mismatch refused the publish)...
+                    published <- plDocuments <$> readIORef logRef
+                    published `shouldBe` []
+                    -- ...and the job was acked: it does not redeliver.
+                    redelivered <- pollUntilRedelivered queue 5
+                    redelivered `shouldBe` False
+
     describe "heartbeat" $ do
         it "advances the last-successful-poll once the loop has polled the queue" $
             withWorkerEnv (Right ()) $ \env _queue _logRef -> do
@@ -306,6 +441,22 @@ spec = do
                 _ <- timeout 200000 (runApp env workerLoop)
                 pollAfter <- lastPoll (envWorkerHeartbeat env)
                 pollAfter `shouldSatisfy` isJust
+
+    describe "workerLoop — supervision (one bad iteration must not kill the loop)" $
+        it "survives a throwing receive: catches, backs off, and polls again" $ do
+            -- A persistently-failing queue: every poll throws. The loop is wrapped in
+            -- tryAny, so a throwing iteration must be caught, logged, and retried after a
+            -- backoff — never escape and tear the worker thread down. The witness is the
+            -- receive count: more than one call across the window proves the loop polled
+            -- AGAIN after the first throw (it recovered), rather than dying on it.
+            calls <- newIORef (0 :: Int)
+            queue <- throwingReceiveQueue calls
+            withQueueEnv queue $ \env -> do
+                -- The backoff after a failed iteration is ~1s, so a ~2.5s window admits a
+                -- couple of attempts; assert at least a second poll occurred.
+                _ <- timeout 2_500_000 (runApp env workerLoop)
+                attempts <- readIORef calls
+                attempts `shouldSatisfy` (>= 2)
 
     describe "heartbeatHealthy (the /livez staleness rule)" $ do
         it "is healthy before the first poll (the worker is starting, not stalled)" $
@@ -341,6 +492,12 @@ isMismatch :: IntegrityResult -> Bool
 isMismatch = \case
     IntegrityMismatch _ -> True
     IntegrityVerified -> False
+
+-- The operator-facing detail of an integrity mismatch, or 'Nothing' when verified.
+mismatchDetail :: IntegrityResult -> Maybe Text
+mismatchDetail = \case
+    IntegrityMismatch detail -> Just detail
+    IntegrityVerified -> Nothing
 
 isDropped :: JobOutcome -> Bool
 isDropped = \case

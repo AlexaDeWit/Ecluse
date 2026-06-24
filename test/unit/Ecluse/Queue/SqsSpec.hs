@@ -4,7 +4,7 @@ import Data.Text qualified as T
 import Test.Hspec
 
 import Ecluse.Ecosystem (Ecosystem (Npm, PyPI))
-import Ecluse.Package (Hash (Hash), HashAlg (SHA1, SRI), mkPackageName, mkScope)
+import Ecluse.Package (Hash (Hash), HashAlg (Blake2b, MD5, SHA1, SHA256, SHA512, SRI), mkPackageName, mkScope)
 import Ecluse.Queue (MirrorArtifact (..), MirrorJob (..), Seconds (..))
 import Ecluse.Queue.Sqs (
     SqsConfig (..),
@@ -88,6 +88,28 @@ spec = do
                     jobMirrorTarget job `shouldBe` jobMirrorTarget npmJob
                     jobArtifact job `shouldBe` jobArtifact npmJob
 
+        it "round-trips every hash algorithm's wire name (encode/decode are inverse over all algs)" $
+            -- A job whose artifact carries one digest of EACH algorithm exercises both
+            -- directions of the wire mapping (hashAlgName on encode, parseHashAlg on
+            -- decode) for sha1/sha256/sha512/md5/blake2b/sri — so a future algorithm
+            -- whose two halves disagree is caught here rather than silently dropping a
+            -- digest the worker would later need to verify against.
+            let allAlgsJob =
+                    npmJob
+                        { jobArtifact =
+                            (jobArtifact npmJob)
+                                { maHashes =
+                                    Hash SHA1 "aa"
+                                        :| [ Hash SHA256 "bb"
+                                           , Hash SHA512 "cc"
+                                           , Hash MD5 "dd"
+                                           , Hash Blake2b "ee"
+                                           , Hash SRI "sha512-ff"
+                                           ]
+                                }
+                        }
+             in decodeJob (encodeJob allAlgsJob) `shouldBe` Right allAlgsJob
+
     describe "decodeJob rejects a malformed body" $ do
         it "rejects non-JSON" $
             decodeJob "not json at all" `shouldSatisfy` isLeft
@@ -123,6 +145,18 @@ spec = do
                 \\"version\":\"1.0.0\",\"artifactUrl\":\"u\",\"mirrorTarget\":\"m\",\
                 \\"artifact\":{\"filename\":\"x-1.0.0.tgz\",\"hashes\":[],\"size\":null}}"
                 `shouldSatisfy` isLeft
+
+        it "rejects an unknown hash algorithm, naming it in the error" $
+            -- A digest whose algorithm the worker does not recognise cannot be used to
+            -- verify the fetched bytes, so the job is rejected at decode rather than
+            -- admitted with an unverifiable digest. The error names the offending alg.
+            case decodeJob
+                "{\"ecosystem\":\"npm\",\"scope\":null,\"name\":\"x\",\
+                \\"version\":\"1.0.0\",\"artifactUrl\":\"u\",\"mirrorTarget\":\"m\",\
+                \\"artifact\":{\"filename\":\"x-1.0.0.tgz\",\
+                \\"hashes\":[{\"alg\":\"crc32\",\"value\":\"deadbeef\"}],\"size\":null}}" of
+                Left err -> err `shouldSatisfy` ("crc32" `T.isInfixOf`)
+                Right job -> expectationFailure ("expected a decode error, got " <> show job)
 
     describe "defaultSqsConfig" $ do
         let cfg = defaultSqsConfig "https://sqs.example/q" "us-east-1"
