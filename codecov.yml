@@ -6,6 +6,18 @@
 # identically once its suite has real cases. The smoke tier is excluded
 # (non-gating, network-bound).
 
+# Two coverage reports are uploaded per commit — the `unit` and `integration`
+# flags below — both from the single gating build-test job. Wait for BOTH before
+# computing statuses: with the default (1), Codecov computes the project total
+# off whichever upload lands first and fires a transient "coverage decreased"
+# status, then re-computes when the second arrives. build-test always emits
+# exactly these two, so a fixed wait is deterministic and safe here. (Were the
+# count ever variable, notify.manual_trigger + an explicit send-notifications
+# step would be the robust alternative.)
+codecov:
+  notify:
+    after_n_builds: 2
+
 coverage:
   status:
     project:

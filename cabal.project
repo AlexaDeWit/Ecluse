@@ -10,10 +10,11 @@ packages: .
 -- that builds the shipped artifact — on identical amazonka sources. Bump this rev
 -- in lockstep with `nix flake update` (never independently), then re-freeze.
 --
--- The monorepo is one checkout with per-package subdirs; we vendor only the four
--- the CodeArtifact leaf needs: the umbrella `amazonka` (Env/auth/send) and its
--- own dependencies amazonka-core + amazonka-sso + amazonka-sts, plus the
--- amazonka-codeartifact service.
+-- The monorepo is one checkout with per-package subdirs; we vendor only the ones
+-- our cloud leaves need: the umbrella `amazonka` (Env/auth/send) and its own
+-- dependencies amazonka-core + amazonka-sso + amazonka-sts, plus the service
+-- packages we call — amazonka-codeartifact (the credential leaf) and amazonka-sqs
+-- (the mirror queue).
 source-repository-package
   type:     git
   location: https://github.com/brendanhay/amazonka.git
@@ -23,6 +24,7 @@ source-repository-package
             lib/services/amazonka-sso
             lib/services/amazonka-sts
             lib/services/amazonka-codeartifact
+            lib/services/amazonka-sqs
 
 -- Pin the Hackage index the solver may see, so `cabal build`/`cabal test` (the
 -- dev-shell + CI path) resolve a *reproducible* plan: a package uploaded to
@@ -32,7 +34,7 @@ source-repository-package
 -- the separate Nix path that builds the shipped artifact (callCabal2nix; it does
 -- not read these files). Bump both together via `make freeze`; see CONTRIBUTING
 -- → "Dependency locking".
-index-state: 2026-06-23T19:41:54Z
+index-state: 2026-06-24T00:28:28Z
 
 -- Enable the test suites in the solver for *every* command, so a bare
 -- `cabal test <suite>` (as `make test` runs) resolves a tests-inclusive plan

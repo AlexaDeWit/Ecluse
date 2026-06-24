@@ -78,6 +78,27 @@ spec = do
             received <- drain q
             received `shouldBe` [sampleJob, otherJob]
 
+        it "ignores an ack for a handle it never issued" $ do
+            -- A handle from outside this queue (here, an unparseable one) names no
+            -- in-flight job, so the ack is a harmless no-op: the real in-flight job
+            -- is untouched and still redelivers.
+            q <- newInMemoryQueue
+            enqueue q sampleJob
+            _ <- receive q
+            ack q (mkReceiptHandle "not-a-handle")
+            redelivered <- receive q
+            map msgJob redelivered `shouldBe` [sampleJob]
+
+        it "ignores an extendVisibility for a handle it never issued" $ do
+            -- Likewise extendVisibility on an unknown handle holds nothing, so the
+            -- genuinely in-flight job still lapses and redelivers.
+            q <- newInMemoryQueue
+            enqueue q sampleJob
+            _ <- receive q
+            extendVisibility q (mkReceiptHandle "not-a-handle") (Seconds 30)
+            redelivered <- receive q
+            map msgJob redelivered `shouldBe` [sampleJob]
+
         it "does not redeliver a job that was acked" $ do
             q <- newInMemoryQueue
             enqueue q sampleJob

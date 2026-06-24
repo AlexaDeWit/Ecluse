@@ -1,0 +1,103 @@
+module Ecluse.Queue.SqsSpec (spec) where
+
+import Data.Text qualified as T
+import Test.Hspec
+
+import Ecluse.Ecosystem (Ecosystem (Npm, PyPI))
+import Ecluse.Package (mkPackageName, mkScope)
+import Ecluse.Queue (MirrorJob (..), Seconds (..))
+import Ecluse.Queue.Sqs (
+    SqsConfig (..),
+    decodeJob,
+    defaultSqsConfig,
+    encodeJob,
+ )
+import Ecluse.Version (mkVersion)
+
+-- | An unscoped npm job fixture.
+npmJob :: MirrorJob
+npmJob =
+    MirrorJob
+        { jobPackage = mkPackageName Npm Nothing "lodash"
+        , jobVersion = mkVersion Npm "4.17.21"
+        , jobArtifactUrl = "https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz"
+        , jobMirrorTarget = "https://mirror.example/lodash/-/lodash-4.17.21.tgz"
+        }
+
+-- | A scoped npm job fixture, to exercise the scope arm of the wire mapping.
+scopedJob :: MirrorJob
+scopedJob =
+    MirrorJob
+        { jobPackage = mkPackageName Npm (Just (mkScope "babel")) "core"
+        , jobVersion = mkVersion Npm "7.24.0"
+        , jobArtifactUrl = "https://registry.npmjs.org/@babel/core/-/core-7.24.0.tgz"
+        , jobMirrorTarget = "https://mirror.example/@babel/core/-/core-7.24.0.tgz"
+        }
+
+-- | A PyPI job fixture: a different ecosystem, no scope.
+pypiJob :: MirrorJob
+pypiJob =
+    MirrorJob
+        { jobPackage = mkPackageName PyPI Nothing "Flask"
+        , jobVersion = mkVersion PyPI "3.0.2"
+        , jobArtifactUrl = "https://files.pythonhosted.org/packages/flask-3.0.2.tar.gz"
+        , jobMirrorTarget = "https://mirror.example/flask-3.0.2.tar.gz"
+        }
+
+spec :: Spec
+spec = do
+    describe "encodeJob / decodeJob round-trip" $ do
+        it "round-trips an unscoped npm job" $
+            decodeJob (encodeJob npmJob) `shouldBe` Right npmJob
+
+        it "round-trips a scoped npm job (scope and bare name both recovered)" $
+            decodeJob (encodeJob scopedJob) `shouldBe` Right scopedJob
+
+        it "round-trips a PyPI job (ecosystem carried through)" $
+            decodeJob (encodeJob pypiJob) `shouldBe` Right pypiJob
+
+        it "carries every field through unchanged" $ do
+            -- Field-by-field so a single mangled field is pinpointed, not lost in
+            -- a whole-record comparison.
+            case decodeJob (encodeJob scopedJob) of
+                Left err -> expectationFailure (toString err)
+                Right job -> do
+                    jobPackage job `shouldBe` jobPackage scopedJob
+                    jobVersion job `shouldBe` jobVersion scopedJob
+                    jobArtifactUrl job `shouldBe` jobArtifactUrl scopedJob
+                    jobMirrorTarget job `shouldBe` jobMirrorTarget scopedJob
+
+    describe "decodeJob rejects a malformed body" $ do
+        it "rejects non-JSON" $
+            decodeJob "not json at all" `shouldSatisfy` isLeft
+
+        it "rejects a JSON value that is not an object" $
+            decodeJob "[1,2,3]" `shouldSatisfy` isLeft
+
+        it "rejects an object missing a required field" $
+            -- No "mirrorTarget".
+            decodeJob
+                "{\"ecosystem\":\"npm\",\"scope\":null,\"name\":\"x\",\
+                \\"version\":\"1.0.0\",\"artifactUrl\":\"u\"}"
+                `shouldSatisfy` isLeft
+
+        it "rejects an unknown ecosystem, naming it in the error" $
+            case decodeJob
+                "{\"ecosystem\":\"cargo\",\"scope\":null,\"name\":\"x\",\
+                \\"version\":\"1.0.0\",\"artifactUrl\":\"u\",\"mirrorTarget\":\"m\"}" of
+                Left err -> err `shouldSatisfy` ("cargo" `T.isInfixOf`)
+                Right job -> expectationFailure ("expected a decode error, got " <> show job)
+
+    describe "defaultSqsConfig" $ do
+        let cfg = defaultSqsConfig "https://sqs.example/q" "us-east-1"
+        it "carries the queue URL and region through" $ do
+            sqsQueueUrl cfg `shouldBe` "https://sqs.example/q"
+            sqsRegion cfg `shouldBe` "us-east-1"
+        it "defaults to no endpoint override (real AWS / ambient credentials)" $
+            sqsEndpoint cfg `shouldBe` Nothing
+        it "defaults the batch size to a full SQS batch of 10" $
+            sqsBatchSize cfg `shouldBe` 10
+        it "defaults the long-poll window to the SQS maximum of 20 seconds" $
+            sqsWaitSeconds cfg `shouldBe` 20
+        it "defaults the visibility timeout to 30 seconds" $
+            sqsVisibilityTimeout cfg `shouldBe` Seconds 30

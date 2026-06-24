@@ -63,6 +63,16 @@ hpc-codecov "${mix_args[@]}" \
 # with genuinely nothing to cover yet — an entry in `unscoped` below. See
 # CONTRIBUTING.md -> "Coverage".
 #
+# This whole-library expectation holds only for the unit suite, the one tier meant
+# to link every module. A focused suite (e.g. ecluse-integration, which links only
+# the cloud-backed modules its emulator tests exercise) legitimately reports a
+# subset; its partial view is merged into the Codecov total under its own flag, so
+# the guard would only produce false positives there. Skip it for non-unit suites.
+if [ "$suite" != "ecluse-unit" ]; then
+  echo "coverage: wrote $out"
+  exit 0
+fi
+
 # Intentionally unscoped: pure Handles/types with no executable logic yet. Each
 # entry states why and when it returns, so this stays a reviewed decision and not
 # a silent escape hatch. Paths use the ./src/... form the report emits.

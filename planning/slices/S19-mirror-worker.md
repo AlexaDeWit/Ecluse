@@ -66,6 +66,39 @@ registry = npm endpoint + token), so there is no per-cloud publish path. Worker
 liveness must surface a stall (single-process health reflects a stalled worker today;
 a future standalone binary keeps its own probe).
 
+**Review points (carried from the S18 review).** The queue handle exposes only a
+one-shot long-poll `receive` (a batch, or `[]` after `sqsWaitSeconds`); the
+*continuous* loop, concurrency, and supervision are this slice's responsibility.
+Decide and document each here when building:
+
+- **Loop robustness — the loop must not die on a single bad iteration.** Wrap each
+  iteration so a transient `receive`/fetch/publish error or an undecodable body is
+  caught, logged/metered, and backed-off — then the loop continues. ("Retry-is-don't-
+  ack" is *job-level* semantics; it does not protect the loop itself — an escaping
+  exception would kill the worker thread.)
+- **Supervision posture.** `runServices` holds the worker via `concurrently_`
+  (`runServer` ‖ `runWorker`), so it is a GC root and a crash *propagates* (fail-stop,
+  taking the process down). Decide: self-recover from transients (catch-and-continue,
+  above) and reserve fail-stop for genuinely fatal (e.g. config) errors; the heartbeat
+  AC surfaces a stalled/dead loop. (GHC note: a long-poll `receive` parks in the IO
+  manager, not on an MVar/STM, so the deadlock detector never culls it and GC never
+  collects the running thread — provided it stays held by the supervisor, never
+  fire-and-forget. So the long-running `receive` IO is safe; the only real liveness
+  risk is an unhandled exception, addressed above.)
+- **Graceful shutdown.** Bracket the loop so process shutdown tears it down cleanly;
+  in-flight un-acked messages simply redeliver (safe — idempotent publish covers it).
+- **Batch concurrency.** `receive` returns up to `sqsBatchSize` (≤10). Decide
+  sequential vs bounded-concurrent processing of a batch (throughput vs the per-message
+  visibility budget).
+- **Ack-within-visibility discipline.** Ack on success; on a long publish call
+  `extendVisibility` *before* the `sqsVisibilityTimeout` (30s) lapses; on failure let
+  it redeliver (don't ack). Make the per-job processing-time vs visibility-budget
+  relationship explicit.
+- **Long-poll vs HTTP timeout (cross-ref S18).** The `receive` request relies on the
+  HTTP response timeout exceeding the long-poll window (`sqsWaitSeconds`, 20s). S18's
+  `receiveRequest` should pin an explicit `responseTimeout > sqsWaitSeconds` (or confirm
+  amazonka's default exceeds it) so a client-side timeout never cuts a long-poll short.
+
 **Deferred composition wiring (from [#144](https://github.com/AlexaDeWit/Ecluse/pull/144)).**
 The per-ecosystem composition root wired the *serve* side (each mount's
 `PackumentDeps`); the *publish* side — a configured `RegistryClient` per ecosystem —

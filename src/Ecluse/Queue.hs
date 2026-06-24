@@ -51,6 +51,8 @@ module Ecluse.Queue (
 
     -- * Opaque receipt
     ReceiptHandle,
+    mkReceiptHandle,
+    unReceiptHandle,
 
     -- * Durations
     Seconds (..),
@@ -83,13 +85,27 @@ data MirrorJob = MirrorJob
     deriving stock (Eq, Show)
 
 {- | An __opaque__ handle identifying a received message for 'ack' \/
-'extendVisibility'. It abstracts an SQS receipt handle or a Pub\/Sub @ackId@; the
-constructor is hidden so neither provider's representation leaks into worker
-code, and a handle is only ever obtained from a 'QueueMessage' returned by
-'receive'.
+'extendVisibility'. It carries the backend's own delivery token — an SQS receipt
+handle or a Pub\/Sub @ackId@ — as text; the constructor is hidden so neither
+provider's representation leaks into worker code, and a handle is only ever
+obtained from a 'QueueMessage' returned by 'receive'. Build one (in a backend)
+with 'mkReceiptHandle' and read the token back with 'unReceiptHandle'.
 -}
-newtype ReceiptHandle = ReceiptHandle Word64
+newtype ReceiptHandle = ReceiptHandle Text
     deriving stock (Eq, Ord, Show)
+
+{- | Wrap a backend's delivery token (an SQS receipt handle, a Pub\/Sub @ackId@)
+as an opaque 'ReceiptHandle'. For backend implementations only — worker code
+obtains handles from 'receive', never builds them.
+-}
+mkReceiptHandle :: Text -> ReceiptHandle
+mkReceiptHandle = ReceiptHandle
+
+{- | Recover the backend's delivery token from a 'ReceiptHandle', to pass back to
+the backend on 'ack' \/ 'extendVisibility'. For backend implementations only.
+-}
+unReceiptHandle :: ReceiptHandle -> Text
+unReceiptHandle (ReceiptHandle t) = t
 
 {- | A received message: the 'MirrorJob' to process together with the
 'ReceiptHandle' used to 'ack' it (or 'extendVisibility' on it) once processed.
@@ -146,8 +162,10 @@ data QueueState = QueueState
     , -- Jobs waiting to be delivered, oldest first (FIFO). 'Seq' gives
       -- O(1) amortised snoc so enqueue cost does not grow with queue depth.
       qsVisible :: Seq MirrorJob
-    , -- Delivered-but-unacked jobs, keyed by the handle used to 'ack' them.
-      qsInFlight :: Map ReceiptHandle InFlight
+    , -- Delivered-but-unacked jobs, keyed by the numeric receipt counter (not the
+      -- rendered 'ReceiptHandle' text) so iteration stays in delivery — hence
+      -- FIFO-reclaim — order rather than the lexicographic order text keys give.
+      qsInFlight :: Map Word64 InFlight
     }
 
 {- One in-flight job and whether its visibility has been extended.
@@ -194,15 +212,26 @@ newInMemoryQueue = do
     enqueueJob :: MirrorJob -> QueueState -> QueueState
     enqueueJob job qs = qs{qsVisible = qsVisible qs <> Seq.singleton job}
 
-    -- Drop an acked in-flight job; a handle that is unknown (already acked, or
-    -- never issued) is a harmless no-op.
+    -- Drop an acked in-flight job; a handle that is unknown (already acked, never
+    -- issued, or not one of ours) is a harmless no-op.
     ackJob :: ReceiptHandle -> QueueState -> QueueState
-    ackJob handle qs = qs{qsInFlight = Map.delete handle (qsInFlight qs)}
+    ackJob handle qs =
+        case receiptKey handle of
+            Just key -> qs{qsInFlight = Map.delete key (qsInFlight qs)}
+            Nothing -> qs
 
     -- Hold an in-flight job past the next reclaim pass. Unknown handle: no-op.
     holdJob :: ReceiptHandle -> QueueState -> QueueState
     holdJob handle qs =
-        qs{qsInFlight = Map.adjust (\f -> f{inFlightHeld = True}) handle (qsInFlight qs)}
+        case receiptKey handle of
+            Just key ->
+                qs{qsInFlight = Map.adjust (\f -> f{inFlightHeld = True}) key (qsInFlight qs)}
+            Nothing -> qs
+
+    -- Recover the numeric counter a handle was minted from (the inverse of the
+    -- 'show' in 'assignReceipts'); 'Nothing' for a handle this queue never issued.
+    receiptKey :: ReceiptHandle -> Maybe Word64
+    receiptKey = readMaybe . toString . unReceiptHandle
 
     {- A single receive. First reclaim any un-held in-flight jobs (their
     visibility window has lapsed) back to the front of the visible queue, and
@@ -227,26 +256,27 @@ newInMemoryQueue = do
     stay in flight). A held entry stays in flight but has its hold cleared, so a
     later un-held receive reclaims it. -}
     reclaim ::
-        [(ReceiptHandle, InFlight)] ->
-        ([MirrorJob], [(ReceiptHandle, InFlight)])
+        [(Word64, InFlight)] ->
+        ([MirrorJob], [(Word64, InFlight)])
     reclaim = foldr step ([], [])
       where
-        step (handle, f) (jobs, held)
-            | inFlightHeld f = (jobs, (handle, f{inFlightHeld = False}) : held)
+        step (key, f) (jobs, held)
+            | inFlightHeld f = (jobs, (key, f{inFlightHeld = False}) : held)
             | otherwise = (inFlightJob f : jobs, held)
 
     {- Give each job a fresh receipt, threading the monotonic counter. Returns
-    the messages, the next free counter value, and the new in-flight entries. -}
+    the messages, the next free counter value, and the new in-flight entries. The
+    in-flight map is keyed by the numeric counter; the 'ReceiptHandle' the message
+    carries is that counter rendered as text. -}
     assignReceipts ::
         Word64 ->
         [MirrorJob] ->
-        ([QueueMessage], Word64, Map ReceiptHandle InFlight)
+        ([QueueMessage], Word64, Map Word64 InFlight)
     assignReceipts next [] = ([], next, mempty)
     assignReceipts next (job : rest) =
-        let handle = ReceiptHandle next
-            message = QueueMessage{msgJob = job, msgReceipt = handle}
+        let message = QueueMessage{msgJob = job, msgReceipt = mkReceiptHandle (show next)}
             (messages, next', inFlight) = assignReceipts (next + 1) rest
          in ( message : messages
             , next'
-            , Map.insert handle (InFlight{inFlightJob = job, inFlightHeld = False}) inFlight
+            , Map.insert next (InFlight{inFlightJob = job, inFlightHeld = False}) inFlight
             )
