@@ -192,7 +192,7 @@ import Ecluse.Server.Response (
     serveDecisionOf,
  )
 import Ecluse.Server.Route (Filename (Filename))
-import Ecluse.Server.Stream (streamUpstream, streamUpstreamWhen)
+import Ecluse.Server.Stream (streamUpstreamWhen)
 import Ecluse.Version (Version, renderVersion)
 
 -- ── the handler ─────────────────────────────────────────────────────────────
@@ -811,7 +811,7 @@ servePublicArtifact ::
 servePublicArtifact env renderer deps name version file respond = do
     gated <- gatePublicVersion env deps name version file
     case gated of
-        Admitted artifact -> streamPublicArtifact env deps name version artifact respond
+        Admitted artifact -> streamPublicArtifact env renderer deps name version artifact respond
         Refused decision -> respond (artifactError renderer deps (artifactStatus decision) decision)
 
 {- The outcome of gating a single requested artifact on the public path: either the
@@ -877,22 +877,36 @@ __after__ the response is begun — enqueue a best-effort mirror job. The chosen
 tarball-host policy gates whether that location may be fetched (the public packument
 host is the reference), and the resolved-IP recheck on 'envManager' is the
 defence-in-depth backstop. A host the policy refuses is the @403@ policy-denial path;
-an unformable URL is the internal-error path. -}
+an unformable URL is the internal-error path.
+
+The fetch keeps the open phase distinct from the committed stream, the same split the
+private origin uses: opening the connection is the recoverable phase, so a transient
+network failure or a connection-time 'Ecluse.Security.BlockedTarget' (the resolved-IP
+recheck refusing an allowlisted name that resolves internal) yields no committed
+response and is rendered as the transient upstream-unavailable @503@ through the
+mount's renderer — not left to escape as a bare @500@. Any upstream status is relayed
+verbatim (the @accept@ predicate is total); only a failure __after__ the stream is
+committed propagates, the connection torn down as it unwinds, so a half-sent artifact
+is never followed by a second response. The mirror enqueue runs only on the committed
+path, after the response is begun. -}
 streamPublicArtifact ::
     Env ->
+    MountRenderer ->
     PackumentDeps ->
     PackageName ->
     Version ->
     Artifact ->
     (Response -> IO ResponseReceived) ->
     IO ResponseReceived
-streamPublicArtifact env deps name version artifact respond =
+streamPublicArtifact env renderer deps name version artifact respond =
     if tarballHostHonoured deps (pdPublicBaseUrl deps) (artUrl artifact)
         then case artifactRequestByUrl (clientConfig (envManager env) (pdPublicBaseUrl deps) Nothing) (artUrl artifact) of
-            Right req -> do
-                received <- streamUpstream (envManager env) req relayArtifact respond
-                enqueueMirror env deps name version (artUrl artifact)
-                pure received
+            Right req ->
+                streamUpstreamWhen (envManager env) req (const True) relayArtifact respond >>= \case
+                    Just received -> do
+                        enqueueMirror env deps name version (artUrl artifact)
+                        pure received
+                    Nothing -> respond (artifactError renderer deps (artifactStatus upstreamUnavailable) upstreamUnavailable)
             Left _ -> respond internalArtifactError
         else respond crossHostRefused
 
