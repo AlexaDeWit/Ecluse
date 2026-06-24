@@ -99,6 +99,7 @@ import Data.Text qualified as T
 import Data.Time (NominalDiffTime)
 import Env qualified
 import System.Environment (getEnvironment)
+import Validation (eitherToValidation, validationToEither)
 
 import Ecluse.Credential (Secret, mkSecret)
 import Ecluse.Ecosystem (Ecosystem (Npm), parseEcosystem)
@@ -614,9 +615,13 @@ Errors __aggregate__ across all entries.
 -}
 resolvePolicy :: RulePolicy -> RulePatch -> Either [PolicyError] RulePolicy
 resolvePolicy (RulePolicy base) (RulePatch patch) =
-    case partitionEithers (map resolveEntry (Map.toList patch)) of
-        ([], updates) -> Right (RulePolicy (foldl' apply base updates))
-        (errs, _) -> Left (concat errs)
+    -- The 'Validation' applicative accumulates each entry's errors through the
+    -- '[PolicyError]' 'Semigroup', so one resolution reports every offending
+    -- entry rather than stopping at the first; on all-success the updates fold
+    -- onto the base in entry order.
+    validationToEither $
+        RulePolicy . foldl' apply base
+            <$> traverse (eitherToValidation . resolveEntry) (Map.toList patch)
   where
     -- Apply one resolved update: a suppression deletes, a rule sets.
     apply :: Map Text PrecededRule -> (Text, Maybe PrecededRule) -> Map Text PrecededRule
@@ -972,9 +977,10 @@ loadConfig env mDoc = case mDoc of
 -- the served ecosystem, carried onto each resolved 'Mount'.
 resolveMounts :: RulePolicy -> Map Ecosystem MountDoc -> Either [PolicyError] MountMap
 resolveMounts shared mounts =
-    case partitionEithers (map resolveOne (Map.toList mounts)) of
-        ([], resolved) -> Right (Map.fromList resolved)
-        (errs, _) -> Left (concat errs)
+    -- One pass over the mounts, accumulating every mount's policy errors through
+    -- the 'Validation' applicative so a failed load names all of them at once.
+    validationToEither $
+        Map.fromList <$> traverse (eitherToValidation . resolveOne) (Map.toList mounts)
   where
     resolveOne :: (Ecosystem, MountDoc) -> Either [PolicyError] (Ecosystem, Mount)
     resolveOne (eco, mdoc) =

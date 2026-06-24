@@ -127,6 +127,7 @@ library
     , time                            ^>=1.12
     , unix                            ^>=2.8
     , unliftio                        ^>=0.2.25
+    , validation-selective            ^>=0.2
     , vector                          ^>=0.13
     , wai                             ^>=3.2
     , wai-extra                       ^>=3.1
