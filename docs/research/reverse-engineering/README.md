@@ -5,21 +5,14 @@ reverse-engineers a registry's **wire protocol** — the HTTP surface, the JSON
 shapes, the resolution and auth behaviours — to the level of detail needed to
 implement *both halves* of the proxy:
 
-- **Client behaviour** — Écluse fetching from upstream registries
-  (`fetchMetadata`, `fetchArtifact`, the `parse*` functions of
-  [`RegistryClient`](../../architecture/registry-model.md#registry-abstraction)).
-- **Server behaviour** — Écluse answering an npm/pip client well enough that
-  the client believes it is talking to a real registry.
+- **Client behaviour** — fetching metadata and artifacts from upstream
+  registries the way each ecosystem's installer does.
+- **Server behaviour** — answering an npm/pip/gem client well enough that the
+  client believes it is talking to a real registry.
 
-The end goal is a precise **JSON type model** (see each document's "Type model"
-section) that both directions share, so a request can be decoded once, evaluated
-by the rules engine, and re-encoded faithfully.
-
-**Capstone:** [`../synthesis.md`](../synthesis.md) folds these three studies into
-the cross-ecosystem patterns (invariants vs. variabilities), the central
-"rules consume normalized signals" idea, and an assessment + proposed revision of
-the internal `Ecluse.Package` types. Read the protocol docs for the *what*; read
-the synthesis for *how it shapes our types*.
+Each document also gives a precise **type model of the wire format** (see its
+"Type model" section), so a request can be decoded and re-encoded faithfully in
+either direction.
 
 ## Documents
 

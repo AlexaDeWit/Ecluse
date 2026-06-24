@@ -32,7 +32,7 @@ lets Écluse act as both an npm **client** (fetching from upstreams) and an npm
 9. [Authentication (in theory)](#9-authentication-in-theory)
 10. [Write path (for completeness)](#10-write-path-for-completeness)
 11. [Type model](#11-type-model)
-12. [What Écluse must replicate](#12-what-écluse-must-replicate)
+12. [Implementing the protocol](#12-implementing-the-protocol)
 13. [Reproducing the probes](#13-reproducing-the-probes)
 14. [References](#14-references)
 
@@ -91,10 +91,10 @@ public registry tolerates the raw form (`/@babel/code-frame` → `200`) too, but
 server implementation **must** accept the `%2F` form and should accept both. The
 leading `@` is **not** encoded.
 
-> Implementation note: with raw-WAI routing (Écluse's choice, see
-> architecture.md), `pathInfo` arrives **already percent-decoded** by WAI, so
-> `["@babel/code-frame"]` and `["@babel", "code-frame"]` are both possible
-> depending on the client — normalise early.
+> Implementation note: depending on the client and the server's routing, the
+> scope separator may arrive **already percent-decoded**, so
+> `["@babel/code-frame"]` and `["@babel", "code-frame"]` are both possible —
+> normalise early.
 
 ### Content negotiation (the key lever)
 
@@ -159,9 +159,7 @@ then `error`." Observed shapes:
 
 Note the inconsistency: the per-version 404 is a bare JSON string, not an
 object. A lenient decoder must tolerate "JSON value that isn't the success
-shape" rather than assuming `{error}`. For Écluse's own **denial** responses the
-architecture standardises on `{"error": "…"}` (see architecture.md → "Denial
-Responses"), which matches the package-level shape.
+shape" rather than assuming `{error}`.
 
 ---
 
@@ -292,11 +290,11 @@ when relevant**:
 `acceptDependencies`, `bin`, `directories`, `engines`, `_hasShrinkwrap`,
 **`hasInstallScript`**, `funding`, `cpu`, `os`.
 
-Two of these are decisive for Écluse's rules and deserve emphasis:
+Two of these are decisive for install-time policy and deserve emphasis:
 
 - **`hasInstallScript: true`** — present in the **abbreviated** form when the
   version declares `preinstall`/`install`/`postinstall` scripts. This is the
-  single cleanest signal for the `DenyInstallTimeExecution` rule.
+  single cleanest signal for an install-time code-execution policy.
   ⚠️ **It does not exist in the full manifest** — there you must derive it
   yourself from the `scripts` object (see §6). *Captured live:* `core-js@3.49.0`
   abbreviated → `"hasInstallScript": true`; the same version's full manifest has
@@ -336,9 +334,8 @@ Two of these are decisive for Écluse's rules and deserve emphasis:
 
 ## 6. Package details — the version manifest
 
-The per-version object is what the architecture calls **package details**
-(`Ecluse.PackageDetails`, in `src/Ecluse/Package.hs`) — the snapshot the
-rules engine evaluates. It is available two ways:
+The per-version object is the **version manifest** (what §1 called *package
+details*) — the snapshot a policy evaluates. It is available two ways:
 
 1. **Embedded**: `packument.versions["1.2.3"]` (one round trip for everything).
 2. **Standalone**: `GET /{pkg}/{version}` or `GET /{pkg}/{dist-tag}` →
@@ -384,8 +381,8 @@ hasInstallScript  ≡  scripts has any of {preinstall, install, postinstall}
 
 *Captured live:* `core-js@3.49.0` full manifest →
 `"scripts": { "postinstall": "node -e \"…\"" }`, no `hasInstallScript` key.
-Écluse should prefer the abbreviated `hasInstallScript` and fall back to this
-derivation when only the full form is available.
+Prefer the abbreviated `hasInstallScript`; fall back to this derivation when
+only the full form is available.
 
 ### Resolving by tag
 
@@ -417,10 +414,9 @@ carries it.
   clients fetch artifacts through the proxy too — otherwise the client resolves
   metadata via Écluse but pulls bytes straight from `registry.npmjs.org`,
   bypassing the gate. (Whether to rewrite is a policy decision; note it.)
-- `integrity`/`shasum` are what a downloaded tarball is verified against —
-  these map to `Ecluse.Dist`'s `distIntegrity` / `distShasum`. The client
-  **fails the install** if the bytes don't match, so any mirror/rewrite must
-  preserve the exact artifact.
+- `integrity`/`shasum` are what a downloaded tarball is verified against. The
+  client **fails the install** if the bytes don't match, so any mirror/rewrite
+  must preserve the exact artifact.
 - Tarball path convention: `/{pkg}/-/{basename}-{version}.tgz`. For scoped
   packages the basename drops the scope:
   `@babel/code-frame` → `/@babel/code-frame/-/code-frame-7.0.0.tgz`.
@@ -471,29 +467,30 @@ When a user runs `npm install lodash` (no version) or `npm install lodash@^4`:
 (and reachable via a tag)?" There is no separate availability API — presence in
 the packument *is* availability.
 
-### Consequences for Écluse (both directions)
+### Consequences for a proxy (both directions)
 
 - **As a client**, fetching version/availability info = fetch the (abbreviated)
   packument and read `versions` + `dist-tags`. Don't try to ask the upstream to
   resolve a range; resolve it yourself (or just forward the whole packument).
-- **As a server**, to let a client resolve, Écluse must return a **coherent
+- **As a server**, to let a client resolve, the proxy must return a **coherent
   packument**: `versions` containing every offered version's manifest, a
   `dist-tags.latest` that points at a key actually present, and matching `time`
   entries (clients/tools read `time` for age and "last published"). An empty or
   inconsistent `dist-tags`/`versions` breaks resolution.
-- **Policy shapes availability.** Écluse's rules decide per-version. To *hide* a
-  denied version, drop its key from `versions` (and `time`, and never let it be
-  `latest`); to *block at fetch*, keep it listed but deny the tarball/manifest
-  request with a 403. Dropping from the packument is the cleaner client
-  experience (the version simply "doesn't exist" to `semver.maxSatisfying`);
-  blocking the tarball yields a hard install error mid-resolution. The
-  deny-by-default model (architecture.md) means the served packument is, in
+- **Policy shapes availability.** A per-version policy decides what to serve. To
+  *hide* a denied version, drop its key from `versions` (and `time`, and never
+  let it be `latest`); to *block at fetch*, keep it listed but deny the
+  tarball/manifest request with a 403. Dropping from the packument is the cleaner
+  client experience (the version simply "doesn't exist" to
+  `semver.maxSatisfying`); blocking the tarball yields a hard install error
+  mid-resolution. A deny-by-default policy makes the served packument, in
   effect, a **filtered projection** of the upstream one.
-- **`time` is full-only.** Age-based rules (`AllowIfPublishedBefore`) need the
-  publish timestamp, which is in the full packument's `time` map (and the
-  standalone manifest is timeless). The abbreviated form gives only top-level
-  `modified`. So the rules pipeline needs the full packument (or to retain
-  `time` when projecting) to know *when* a version was published.
+- **`time` is full-only.** Age-based policy (e.g. "allow only versions published
+  before a date") needs the publish timestamp, which is in the full packument's
+  `time` map (and the standalone manifest is timeless). The abbreviated form
+  gives only top-level `modified`. So the metadata pipeline needs the full
+  packument (or to retain `time` when projecting) to know *when* a version was
+  published.
 
 ### Adjacent discovery endpoints
 
@@ -580,27 +577,25 @@ private upstream.
 *Observed unauthenticated:* `GET /-/whoami` → `401 {"error":"Unauthorized"}`;
 `GET /-/npm/v1/tokens` → `401`; a bogus `Authorization: Bearer …` → `401 {}`.
 
-### Implications for Écluse
+### Implications for a proxy
 
-- **Client side.** Écluse holds upstream credentials and attaches
+- **Client side.** A proxy holds upstream credentials and attaches
   `Authorization: Bearer …` on the private-upstream and mirror requests. For
   **CodeArtifact**, the bearer token is a short-lived AWS-issued token refreshed
-  via the SDK (architecture.md → Registry Abstraction) — same wire shape,
-  different issuer.
-- **Server side.** Écluse's *own* client auth is the separate, optional
-  `PROXY_AUTH_TOKEN` (architecture.md → Client Authentication): clients present
-  it as `Bearer`/`_authToken` and Écluse validates it at the edge before
-  proxying. Écluse does **not** need to implement the login/token-lifecycle
-  endpoints to be a functional install server — those are publish-time concerns.
-- Forward `npm-otp` and `Authorization` transparently if Écluse ever proxies
-  write traffic; for a read-only resilience gateway it can ignore 2FA entirely.
+  via the SDK — same wire shape, different issuer.
+- **Server side.** A proxy may require its own client auth (presented as
+  `Bearer`/`_authToken` and validated at the edge before proxying), but it does
+  **not** need to implement the login/token-lifecycle endpoints to be a
+  functional install server — those are publish-time concerns.
+- Forward `npm-otp` and `Authorization` transparently if the proxy ever carries
+  write traffic; a read-only resilience gateway can ignore 2FA entirely.
 
 ---
 
 ## 10. Write path (for completeness)
 
-Not on the proxy's critical path (Écluse delegates storage; mirror writes go
-through `publishArtifact`), but documented so "act as an npm server" is complete.
+Not on the proxy's critical path (Écluse delegates storage; mirror writes are a
+separate concern), but documented so "act as an npm server" is complete.
 
 - **Publish** — `PUT /{pkg}` with a body that is itself a packument:
   `{ _id, name, "dist-tags", versions: { "<v>": <manifest> }, _attachments: {
@@ -619,11 +614,9 @@ through `publishArtifact`), but documented so "act as an npm server" is complete
 
 ## 11. Type model
 
-The proposed JSON ⇄ domain mapping. Lenient on input (ignore unknown keys,
+A JSON type model for the wire format. Lenient on input (ignore unknown keys,
 tolerate nulls and the string-vs-object license/bugs/person variants), strict on
-output. Naming follows the existing `Ecluse.Package` vocabulary
-(`src/Ecluse/Package.hs`); ⊕ marks a field that module does **not** yet
-carry.
+output.
 
 ### Shared scalars
 
@@ -632,62 +625,56 @@ Person          = { name: string, email?: string, url?: string }   -- author/mai
 Repository      = { type?: string, url: string } | string
 Bugs            = { url?: string, email?: string } | string
 License         = string (SPDX) | { type: string, url?: string }    -- legacy object form
-SemverVersion   = string  -- exact, e.g. "1.2.3"; kept opaque (Ecluse.Version)
+SemverVersion   = string  -- exact, e.g. "1.2.3"; opaque, never resolved server-side
 SemverRange     = string  -- a *dependency* spec, e.g. "^4.17.0"; never resolved server-side
 DistTag         = string  -- "latest", "next", …
 ISODate         = string  -- ISO-8601 UTC
 ```
 
-### `Dist` (→ `Ecluse.Dist`)
+### `Dist`
 
 ```
 Dist = {
-  tarball:        string,            -- distTarball
-  shasum?:        string,            -- distShasum (SHA-1, legacy)
-  integrity?:     string,            -- distIntegrity (SRI "sha512-…")
-  fileCount?:     number,         -- ⊕
-  unpackedSize?:  number,         -- ⊕
-  signatures?:    [{ sig: string, keyid: string }],  -- ⊕ registry ECDSA
-  "npm-signature"?: string        -- ⊕ legacy PGP
+  tarball:        string,
+  shasum?:        string,            -- SHA-1, legacy
+  integrity?:     string,            -- SRI "sha512-…"
+  fileCount?:     number,
+  unpackedSize?:  number,
+  signatures?:    [{ sig: string, keyid: string }],  -- registry ECDSA
+  "npm-signature"?: string        -- legacy PGP
 }
 ```
 
-### `VersionManifest` (→ `Ecluse.PackageDetails`)
+### `VersionManifest`
 
-The per-version snapshot the rules engine sees. Combine the full-form fields
-with the abbreviated-only `hasInstallScript`:
+The per-version snapshot. Combine the full-form fields with the abbreviated-only
+`hasInstallScript`:
 
 ```
 VersionManifest = {
-  name:           string,            -- pkgName (parse @scope/base → Scope+base)
-  version:        SemverVersion,     -- pkgVersion
-  dist:           Dist,              -- pkgDist
-  dependencies?:        { [name]: SemverRange },   -- pkgDependencies
+  name:           string,            -- parse @scope/base → scope + base
+  version:        SemverVersion,
+  dist:           Dist,
+  dependencies?:        { [name]: SemverRange },
   devDependencies?:     { [name]: SemverRange },
   peerDependencies?:    { [name]: SemverRange },
   optionalDependencies?:{ [name]: SemverRange },
   bundleDependencies?:  [string],
-  deprecated?:    string,            -- pkgDeprecated (Maybe)
-  license?:       License,           -- pkgLicense
-  maintainers?:   [Person],          -- pkgMaintainers
+  deprecated?:    string,
+  license?:       License,
+  maintainers?:   [Person],
   scripts?:       { [name]: string }, -- source for install-script derivation
-  hasInstallScript?: boolean,        -- ⊕ abbreviated-only; else derive from scripts
+  hasInstallScript?: boolean,        -- abbreviated-only; else derive from scripts
   engines?:       { [name]: string },
   bin?:           string | { [name]: string },
   cpu?: [string], os?: [string], funding?: …,
-  _npmUser?:      Person,         -- ⊕ provenance (publisher)
-  _npmVersion?:   string, _nodeVersion?: string, _hasShrinkwrap?: boolean  -- ⊕
+  _npmUser?:      Person,         -- provenance (publisher)
+  _npmVersion?:   string, _nodeVersion?: string, _hasShrinkwrap?: boolean
   -- … ignore unknown keys (gitHead, exports, type, tool-config blocks, _*)
 }
 
--- pkgPublishedAt is NOT in the manifest; it comes from packument.time[version] (see below).
+-- the publish timestamp is NOT in the manifest; it comes from packument.time[version] (see below).
 ```
-
-> Gap to close in `Ecluse.Package`: `Dist` already carries `integrity` and
-> `shasum`; add `fileCount`/`unpackedSize`/`signatures` if size/signature rules
-> are wanted. `PackageDetails` already models `pkgHasInstallScript` (good — fill it
-> from abbreviated `hasInstallScript` or derived `scripts`) and `pkgPublishedAt`
-> (fill it from the packument `time` map, not the manifest).
 
 ### `Packument` (full) and `AbbreviatedPackument`
 
@@ -740,7 +727,7 @@ Token           = { token: string, key: string, cidr_whitelist: [string]|null,
 
 ---
 
-## 12. What Écluse must replicate
+## 12. Implementing the protocol
 
 A checklist that turns this protocol into proxy obligations.
 
@@ -756,25 +743,19 @@ A checklist that turns this protocol into proxy obligations.
       immutable cache headers; decide tarball-URL rewriting (§7).
 - [ ] Scoped names via `%2F` (and tolerate raw `/`).
 - [ ] `404 {"error":"Not found"}` for unknown packages; policy denials as
-      `403 {"error": "…rule + reason…"}` (architecture.md).
+      `403 {"error": "…reason…"}`.
 - [ ] Optional `GET /-/package/{pkg}/dist-tags`, `GET /-/v1/search` passthrough.
 - [ ] ETag/`If-None-Match` → `304` support to keep clients cheap.
 
 ### To be a correct npm **client** (fetch from upstreams)
 
 - [ ] Request abbreviated metadata (`Accept: …install-v1+json`) + `Accept-Encoding: gzip`.
-- [ ] Fetch the **full** packument when `time`/publish-age is needed for rules.
+- [ ] Fetch the **full** packument when `time`/publish-age is needed for policy.
 - [ ] Resolve ranges/tags **locally**; never expect the upstream to.
 - [ ] Attach `Authorization: Bearer` (static, or CodeArtifact-refreshed) per §9.
 - [ ] Verify downloaded tarballs against `dist.integrity` before mirroring.
-- [ ] Project upstream packuments into a **filtered** packument reflecting rule
+- [ ] Project upstream packuments into a **filtered** packument reflecting policy
       decisions (drop denied versions, fix `latest`, retain `time`).
-
-### Maps cleanly onto `RegistryClient`
-
-`fetchMetadata`→§4/§5 · `fetchArtifact`→§7 · `parsePackageInfo`→`Packument` ·
-`parseVersionDetails`→`VersionManifest`(+`time`) · `parseVersionList`→
-`versions` keys + `dist-tags` (§8) · `publishArtifact`→§10.
 
 ---
 
@@ -835,7 +816,5 @@ curl -s -X POST -H 'content-type: application/json' \
   <https://docs.npmjs.com/cli/v10/using-npm/registry>
 - SRI (the `integrity` format):
   <https://w3c.github.io/webappsec-subresource-integrity/>
-- Internal: [`../../architecture.md`](../../architecture.md) (Registry
-  Abstraction, Request Lifecycle, Rules Engine),
-  [`Ecluse.Package`](../../../src/Ecluse/Package.hs) (the domain types
-  this model maps onto).
+- Internal: [`../../architecture.md`](../../architecture.md) — how Écluse
+  consumes these protocols.

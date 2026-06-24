@@ -35,7 +35,7 @@ both a Ruby **client** (fetching the way `gem`/Bundler do) and a Ruby **server**
 9. [Authentication (in theory)](#9-authentication-in-theory)
 10. [Write path (for completeness)](#10-write-path-for-completeness)
 11. [Type model](#11-type-model)
-12. [What Écluse must replicate](#12-what-écluse-must-replicate)
+12. [Implementing the protocol](#12-implementing-the-protocol)
 13. [Reproducing the probes](#13-reproducing-the-probes)
 14. [References](#14-references)
 
@@ -62,7 +62,7 @@ And one finding that dominates the security design:
   only inside the gem's gemspec (the `metadata.gz` in the `.gem`, or the legacy
   `quick` Marshal spec) — **not** in the Compact Index and **not** in the JSON
   API (captured: `extensions: null` for `bcrypt`, which plainly has one). See §6.
-  This makes Écluse's "does it run code on install?" rule a *fetch-and-parse*
+  This makes the "does it run code on install?" signal a *fetch-and-parse*
   operation, not a free field read — a real divergence from npm.
 
 ### npm ↔ PyPI ↔ RubyGems
@@ -154,7 +154,7 @@ is honoured on text endpoints. The legacy full indexes are gzipped Marshal
 | Unknown `.gem` file | `403` | (Fastly/object-store denies a missing key) |
 
 Note the `.gem` **403** (not 404) for a non-existent artifact — an object-store
-quirk worth handling. Écluse's own denials should be explicit; for the compact
+quirk worth handling. A proxy's own denials should be explicit; for the compact
 index the natural denial is to **omit** the version line (§8) or `403`.
 
 ---
@@ -367,10 +367,9 @@ required_ruby_version: !ruby/object:Gem::Requirement
 
 The presence of a non-empty `extensions:` list is the install-time-RCE signal.
 Both formats are **Ruby-native serializations** (Marshal / a YAML dialect with
-`!ruby/object:` tags), so a non-Ruby implementation (Écluse is Haskell) must
-either parse them directly or shell to a Ruby helper. For the YAML form, the
-`extensions:` key is a plain string list and is readable without instantiating
-the Ruby objects.
+`!ruby/object:` tags), so a non-Ruby implementation must either parse them
+directly or shell to a Ruby helper. For the YAML form, the `extensions:` key is a
+plain string list and is readable without instantiating the Ruby objects.
 
 ### Dependencies (`Gem::Requirement`)
 
@@ -468,11 +467,11 @@ resolving (403/404). Contrast PyPI, where a yanked file stays downloadable for
 exact pins. So in RubyGems a yank is closer to a soft-delete than PyPI's
 "hidden-from-ranges."
 
-### Consequences for Écluse (both directions)
+### Consequences for a proxy (both directions)
 
 - **As a client**, fetch availability via the Compact Index (incrementally —
   honour `Range`/`ETag`), read deps/checksums from `/info`, resolve
-  `Gem::Requirement` locally. **For the install-script rule, additionally fetch
+  `Gem::Requirement` locally. **For an install-script policy, additionally fetch
   the gemspec** (`/quick/...gemspec.rz` or the `.gem`'s `metadata.gz`) — the one
   signal the index withholds.
 - **As a server**, serve a coherent Compact Index: a `/versions` whose per-gem
@@ -481,14 +480,14 @@ exact pins. So in RubyGems a yank is closer to a soft-delete than PyPI's
   fetch holds. Also serve `/names` and the `.gem` files.
 - **Policy shapes availability.** To deny a version, **omit its `/info` line**
   (Bundler simply never sees it) and update the `/versions` MD5 accordingly; to
-  hard-block, serve the index but `403` the `.gem`. The deny-by-default served
+  hard-block, serve the index but `403` the `.gem`. A deny-by-default served
   index is, as elsewhere, a **filtered projection** of upstream — but here the
   projection must also keep the append-only/checksum invariants intact, which is
   more delicate than rewriting a JSON blob.
 - **`created_at` (per version, in `/info` and JSON) is the age signal** for an
-  `AllowIfPublishedBefore`-style rule.
+  age-based policy.
 - **`rubygems_mfa_required`** (JSON `metadata`) is a Ruby-specific trust signal
-  worth a rule: prefer gems published under enforced MFA.
+  worth a policy: prefer gems published under enforced MFA.
 
 ---
 
@@ -537,26 +536,25 @@ Modern refinements (parallel to npm/PyPI):
   workflow exchanges an OIDC identity for a short-lived scoped key, so no
   long-lived secret is stored. The PyPI-style modern path.
 
-### Implications for Écluse
+### Implications for a proxy
 
 - **Read proxy to public RubyGems needs no credentials** — like PyPI, simpler
   than npm.
 - **Private upstream**: forward/attach `Authorization: Basic …` (or the raw API
   key shape if the upstream expects it). CodeArtifact's RubyGems endpoint uses an
   AWS-issued bearer/token, handled the same way as its npm endpoint.
-- **Mirror/push request** (if Écluse ever publishes): `POST /api/v1/gems` with the
+- **Mirror/push request** (if the proxy ever publishes): `POST /api/v1/gems` with the
   raw-key `Authorization`, or OIDC trusted publishing.
-- Écluse's **own** client gate stays the separate `PROXY_AUTH_TOKEN`
-  (architecture.md → Client Authentication). Note the wire difference: an npm
-  client sends `Bearer`, a Ruby client sends a raw key or Basic — the edge auth
-  check must accept the relevant ecosystem's form per mount.
+- A proxy's **own** client gate is a separate concern. Note the wire difference:
+  an npm client sends `Bearer`, a Ruby client sends a raw key or Basic — the edge
+  auth check must accept the relevant ecosystem's form per mount.
 
 ---
 
 ## 10. Write path (for completeness)
 
-Not on the proxy's critical path (Écluse delegates storage; mirror writes go
-through `publishArtifact`), but documented so "act as a gem server" is complete.
+Not on the proxy's critical path (Écluse delegates storage; mirror writes are a
+separate concern), but documented so "act as a gem server" is complete.
 
 - **Push** — `POST /api/v1/gems`, `Authorization: <key>` (+ `OTP`), body is the
   raw `.gem`. Re-pushing an existing `name-version[-platform]` is rejected
@@ -571,19 +569,18 @@ through `publishArtifact`), but documented so "act as a gem server" is complete.
 
 ## 11. Type model
 
-The proposed wire ⇄ domain mapping, designed to **share** the `Ecluse.Package`
-vocabulary with [`npm.md` §11](npm.md#11-type-model) and
-[`pypi.md` §11](pypi.md#11-type-model). Lenient on input (ignore unknown keys;
-tolerate the plain-text Compact Index, JSON, and Ruby-serialized gemspec
-forms), strict on output. ⊕ = not yet in `Ecluse.Package`
-(`src/Ecluse/Package.hs`); ⚠️ = real impedance mismatch.
+A wire type model, sharing vocabulary with [`npm.md` §11](npm.md#11-type-model)
+and [`pypi.md` §11](pypi.md#11-type-model) for easy comparison. Lenient on input
+(ignore unknown keys; tolerate the plain-text Compact Index, JSON, and
+Ruby-serialized gemspec forms), strict on output. ⚠️ = a shape that differs
+materially from the npm wire model.
 
 ### Shared scalars
 
 ```
 GemName        = string   -- verbatim, no normalization (≠ PyPI)
-GemVersion     = string   -- Gem::Version, e.g. "3.1.22", "1.0.0.beta1" (Ecluse.Version, opaque)
-Platform       = string   -- "ruby" | "java" | "x86_64-linux" | …  ⊕
+GemVersion     = string   -- Gem::Version, e.g. "3.1.22", "1.0.0.beta1"; opaque
+Platform       = string   -- "ruby" | "java" | "x86_64-linux" | …
 GemRequirement = string   -- Gem::Requirement, e.g. "~> 3.0", "< 4&>= 3.0.0"
 ISODate        = string   -- created_at / built_at
 ```
@@ -594,43 +591,41 @@ ISODate        = string   -- created_at / built_at
 GemFile = {
   name:        GemName,
   version:     GemVersion,
-  platform:    Platform,            -- ⊕ part of the file identity
+  platform:    Platform,            -- part of the file identity
   url:         string,              -- /gems/{name}-{version}[-{platform}].gem
-  checksum:    string,              -- distIntegrity ← SHA256 of the .gem (from /info or JSON sha)
-  uploadTime?: ISODate,             -- ⊕ created_at (age signal)
-  yanked:      boolean              -- ⊕ (and: yanked ⇒ file removed)
+  checksum:    string,              -- SHA256 of the .gem (from /info or JSON sha)
+  uploadTime?: ISODate,             -- created_at (age signal)
+  yanked:      boolean              -- (and: yanked ⇒ file removed)
 }
 ```
 
-### `GemVersionDetails` (per-version → `Ecluse.PackageDetails`)
+### `GemVersionDetails` (per-version)
 
 Assembled from `/info` + JSON + (for `extensions`) the gemspec:
 
 ```
 GemVersionDetails = {
-  name:              GemName,             -- pkgName
-  version:           GemVersion,          -- pkgVersion
+  name:              GemName,
+  version:           GemVersion,
   platform:          Platform,
-  runtimeDeps:       [{ name: GemName, req: GemRequirement }],  -- pkgDependencies (⚠️ ~> & &-joined, not name→range)
-  requiredRuby?:     GemRequirement,      -- ⊕ "ruby:" in /info
-  requiredRubygems?: GemRequirement,      -- ⊕
-  checksum:          string,              -- distIntegrity (SHA256 of .gem)
-  createdAt:         ISODate,             -- pkgPublishedAt  (present in /info — unlike PyPI/npm, no separate time map)
-  licenses?:         [string],           -- pkgLicense
-  authors?:          [string],           -- pkgMaintainers (author names; emails not in index)
-  yanked:            boolean,             -- closest analogue of pkgDeprecated (but = removal)
-  mfaRequired?:      boolean,             -- ⊕ metadata.rubygems_mfa_required — Ruby-specific trust signal
-  extensions?:       [string]            -- ⊕⚠️ install-time-RCE signal; NOT in any API — from gemspec only
-  -- pkgHasInstallScript ≡ (extensions is non-empty)
+  runtimeDeps:       [{ name: GemName, req: GemRequirement }],  -- ⚠️ ~> & &-joined, not name→range (cf. npm)
+  requiredRuby?:     GemRequirement,      -- "ruby:" in /info
+  requiredRubygems?: GemRequirement,
+  checksum:          string,              -- SHA256 of .gem
+  createdAt:         ISODate,             -- publish timestamp (present in /info — unlike PyPI/npm, no separate time map)
+  licenses?:         [string],
+  authors?:          [string],           -- author names; emails not in index
+  yanked:            boolean,             -- closest analogue of npm's deprecated (but = removal)
+  mfaRequired?:      boolean,             -- metadata.rubygems_mfa_required — Ruby-specific trust signal
+  extensions?:       [string]            -- ⚠️ install-time-RCE signal; NOT in any API — from gemspec only
+  -- install-script signal ≡ (extensions is non-empty)
 }
 ```
 
-> Gap to close in `Ecluse.Package`: the boolean `pkgHasInstallScript` maps to
-> `extensions` non-empty here — but unlike npm (free in the abbreviated
-> packument) and PyPI (free from `packagetype`), this signal is **not in the
-> metadata responses** and must be fetched from the gemspec. Treat it like an
-> *effectful* input (a fetch), not a pure field — closer to the CVE-lookup tier
-> than the pure-rule tier (architecture.md → Rules Engine).
+> The install-script signal (`extensions` non-empty) is, unlike npm (free in the
+> abbreviated packument) and PyPI (free from `packagetype`), **not in the
+> metadata responses** — it must be fetched from the gemspec. So it behaves like
+> an *effectful* input (a fetch), not a field that can be read for free.
 
 ### Compact Index & JSON shapes
 
@@ -650,17 +645,17 @@ GemJsonVersions = [ { number, platform, sha, ruby_version, prerelease, created_a
 GemJsonVersion  = GemJsonLatest-shaped, one version -- GET /api/v2/rubygems/{n}/versions/{v}.json
 ```
 
-> **Cross-ecosystem note.** RubyGems reinforces the same three generalizations
-> PyPI surfaced — (a) a version owns **N** artifacts (`Dist` → list, keyed by
-> platform), (b) `pkgPublishedAt` is per-file/per-version (here right inside
-> `/info`, no separate time map), (c) the install-risk signal is
+> **Cross-ecosystem note.** RubyGems echoes the same shape differences PyPI
+> surfaced versus npm — (a) a version owns **N** artifacts (`Dist` → list, keyed
+> by platform); (b) the publish timestamp is per-file/per-version (here right
+> inside `/info`, no separate time map); (c) the install-risk signal is
 > ecosystem-specific (`hasInstallScript` / `packagetype==sdist` / `extensions`)
-> — and adds a fourth: that signal may live **outside the metadata API**, so the
-> rules engine needs a path to *fetch* per-version detail, not just read it.
+> — and adds a fourth: that signal may live **outside the metadata API**, so a
+> resolver needs a path to *fetch* per-version detail, not just read it.
 
 ---
 
-## 12. What Écluse must replicate
+## 12. Implementing the protocol
 
 ### To be a believable gem **server** (answer `bundle install`)
 
@@ -684,21 +679,11 @@ GemJsonVersion  = GemJsonLatest-shaped, one version -- GET /api/v2/rubygems/{n}/
 - [ ] Select the right **platform** file; exclude **yanked** and (by default)
       prereleases.
 - [ ] Read deps/checksum/ruby-req from `/info`; **fetch the gemspec** to learn
-      `extensions` for the install-script rule.
+      `extensions` for the install-script signal.
 - [ ] For private upstreams attach `Authorization: Basic …` / raw key.
 - [ ] Verify each `.gem` against its SHA256 `checksum` before mirroring.
-- [ ] Project upstream into a **filtered** Compact Index reflecting rule
+- [ ] Project upstream into a **filtered** Compact Index reflecting policy
       decisions, preserving the append-only/MD5/checksum invariants.
-
-### Maps onto `RegistryClient`
-
-`fetchMetadata`→§5 (Compact Index) · `fetchArtifact`→§7 (`/gems/…`) ·
-`parsePackageInfo`→`CompactVersions`/`GemJsonLatest` ·
-`parseVersionDetails`→`GemVersionDetails` (from `/info` + gemspec for
-`extensions`) · `parseVersionList`→`/info` versions + `yanked`/platform (§8) ·
-`publishArtifact`→§10. Same handle as npm/PyPI; the wire projection differs most
-here (plain-text, Range-incremental, Ruby-serialized gemspec), which is exactly
-what the adapter abstraction absorbs (architecture.md → Registry Abstraction).
 
 ---
 
@@ -750,6 +735,5 @@ curl -s -o /dev/null -w "missing /info -> %{http_code}\n" https://rubygems.org/i
 - Bundler resolver (PubGrub): <https://github.com/jhawthorn/pub_grub>
 - OSV (advisory source covering RubyGems): <https://osv.dev/>
 - Internal: [`npm.md`](npm.md), [`pypi.md`](pypi.md) (parallel references),
-  [`../../architecture.md`](../../architecture.md),
-  [`Ecluse.Package`](../../../src/Ecluse/Package.hs).
+  [`../../architecture.md`](../../architecture.md).
 ```
