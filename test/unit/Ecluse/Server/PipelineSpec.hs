@@ -451,11 +451,13 @@ newTestEnvWithQueue queue manager = do
 with the given inbound edge token (usually 'Nothing').
 
 The in-process upstream doubles bind loopback, so @127.0.0.1@ is opted in to the
-internal-range block for the honoured-tarball gate — the unit-test analogue of an
-operator deliberately pointing the proxy at an internal upstream (exactly what
-'Ecluse.Security.Egress.newTrustedTlsManager' permits per origin). The default
-tarball-host policy is the secure 'SameHostAsPackument'; a test overrides it where it
-exercises the cross-host relaxation.
+internal-range block for the __public__ leg's honoured-tarball gate — the unit-test
+analogue of an operator deliberately opting an internal /public/ host in. The
+__private__ leg needs no opt-in: it gates as the trusted origin, exempt from the
+internal-range block (the serve-path mirror of
+'Ecluse.Security.Egress.newTrustedTlsManager'); a test empties this set to assert that
+exemption directly. The default tarball-host policy is the secure 'SameHostAsPackument';
+a test overrides it where it exercises the cross-host relaxation.
 -}
 deps :: Int -> Int -> Maybe Text -> PackumentDeps
 deps privatePort publicPort inbound =
@@ -1491,6 +1493,28 @@ tarballSpec = describe "artifact (tarball) path" $ do
             status resp `shouldBe` 200
             -- Served from public: the private cross-host location was refused, never fetched.
             simpleBody resp `shouldBe` publicTarballBytes
+
+    it "serves a same-host private dist.tarball on an internal-IP private origin with no opt-in (trusted-origin exempt)" $ do
+        -- The trusted private origin lives on an internal IP literal (127.0.0.1, the
+        -- in-process double's loopback bind) and serves a same-host dist.tarball. With
+        -- the internal-range opt-in empty, the private leg's tarball-host gate must STILL
+        -- admit it — the trusted origin is exempt from the internal-range block exactly as
+        -- the connection layer's newTrustedTlsManager carries no resolved-IP recheck
+        -- (security.md invariant 3). Were the private path subject to the block, the gate
+        -- would refuse the same-host private tarball and the request would fall through to
+        -- public — an asymmetric, install-breaking failure (the same-host private metadata
+        -- already resolved). The allowlist + same-host checks stay intact for the private
+        -- leg; only the internal-range conjunct is exempted by trust.
+        privateUp <- privateArtifactHit "1.0.0" privateTarballBytes
+        publicUp <- artifactUpstream "1.0.0" publicTarballBytes
+        let noOptIn d = d{pdAllowedInternalHosts = lowerCaseHosts Set.empty}
+        queue <- newInMemoryQueue
+        withProxyEnvQueueDeps queue privateUp publicUp Nothing noOptIn $ \app _env _port -> do
+            resp <- getTarball "1.0.0" (Just "client-token") app
+            status resp `shouldBe` 200
+            -- Streamed from the trusted private origin, not fallen through to public.
+            simpleBody resp `shouldBe` privateTarballBytes
+            seenAuth publicUp `shouldReturn` []
 
 -- ── the effectful rule tier through the pipeline ───────────────────────────────
 

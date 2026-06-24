@@ -170,6 +170,7 @@ import Ecluse.Security (
     LimitError (BodyTooLarge, TooDeeplyNested, TooManyVersions),
     Limits,
     LoweredHostSet,
+    Origin (TrustedOrigin, UntrustedOrigin),
     checkNestingDepth,
     checkVersionCount,
     hostAddress,
@@ -908,9 +909,14 @@ connection — yields 'Nothing' so the caller falls through to the public origin
 upstream artifact body never read.
 
 The private upstream is operator-configured and trusted, so its fetch carries no
-resolved-IP recheck ('envPrivateManager'); the configured tarball-host policy still
-applies, gating the @artUrl@ host against the upstream allowlist (the private base
-URL's own host is on it, so a same-host private tarball is admitted by default).
+resolved-IP recheck ('envPrivateManager') and its tarball-host gate is the
+'Ecluse.Security.TrustedOrigin' one — __exempt from the internal-range block__, the
+serve-path mirror of that unguarded manager (security.md invariant 3): a private
+registry on an internal address (e.g. @http:\/\/10.0.0.5\/@) serves its same-host
+@dist.tarball@ rather than having it refused while same-host metadata succeeds. The
+configured tarball-host policy still gates the @artUrl@ host against the upstream
+allowlist and (under the secure default) to the private base URL's own host, so a
+same-host private tarball is admitted by default and a cross-host one refused.
 
 A failure that strikes __after__ a @2xx@ has begun streaming is unrecoverable — the
 response is already on the wire — so 'streamUpstreamWhen' lets it propagate rather
@@ -936,7 +942,7 @@ streamPrivateArtifact env deps token name version file respond = do
     -- a private miss the caller falls through on, never a fabricated reconstruction.
     privateRequestFor :: Artifact -> Maybe HTTP.Request
     privateRequestFor artifact =
-        if tarballHostHonoured deps (pdPrivateBaseUrl deps) (artUrl artifact)
+        if tarballHostHonoured TrustedOrigin deps (pdPrivateBaseUrl deps) (artUrl artifact)
             then rightToMaybe (artifactRequestByUrl (clientConfig (pdLimits deps) (envPrivateManager env) (pdPrivateBaseUrl deps) token) (artUrl artifact))
             else Nothing
 
@@ -1078,7 +1084,7 @@ streamPublicArtifact ::
     (Response -> IO ResponseReceived) ->
     IO ResponseReceived
 streamPublicArtifact env renderer deps name version artifact respond =
-    if tarballHostHonoured deps (pdPublicBaseUrl deps) (artUrl artifact)
+    if tarballHostHonoured UntrustedOrigin deps (pdPublicBaseUrl deps) (artUrl artifact)
         then case artifactRequestByUrl (clientConfig (pdLimits deps) (envManager env) (pdPublicBaseUrl deps) Nothing) (artUrl artifact) of
             Right req ->
                 streamUpstreamWhen (envManager env) req (const True) relayArtifact respond >>= \case
@@ -1106,21 +1112,29 @@ enqueueMirror env deps name version artifactUrl =
 
 -- ── the egress gate at the serve seam ─────────────────────────────────────────
 
-{- Whether an artifact's authoritative @url@ may be fetched, given the mount's
-tarball-host policy and the host that served the packument it came from. Connects
-the pure 'tarballHostAllowed' at the serve seam: the @url@'s host must be on the
-upstream allowlist and not an internal literal, and — under the secure-default
+{- Whether an artifact's authoritative @url@ may be fetched, given the origin's trust,
+the mount's tarball-host policy, and the host that served the packument it came from.
+Connects the pure 'tarballHostAllowed' at the serve seam: the @url@'s host must be on
+the upstream allowlist and — under the secure-default
 'Ecluse.Security.SameHostAsPackument' — equal to the packument host; the opt-in
-'Ecluse.Security.AnyAllowlistedHost' relaxes that last clause to any allowlisted
-host. This is the policy half of the @dist.tarball@ defence; the resolved-IP recheck
-on the guarded manager is its connection-time backstop (an allowlisted name that
-resolves to an internal address is still refused there).
+'Ecluse.Security.AnyAllowlistedHost' relaxes that last clause to any allowlisted host.
+This is the policy half of the @dist.tarball@ defence; for an
+'Ecluse.Security.UntrustedOrigin' the resolved-IP recheck on the guarded manager is
+its connection-time backstop (an allowlisted name that resolves to an internal address
+is still refused there).
 
-The internal-range opt-in is empty here, matching the composition root's secure
-default: no host is exempted from the internal-range block on the serve path. -}
-tarballHostHonoured :: PackumentDeps -> Text -> Text -> Bool
-tarballHostHonoured deps packumentBaseUrl artifactUrl =
+The internal-range block is __origin-aware__, mirroring the connection layer's trusted
+vs guarded manager split: an 'Ecluse.Security.UntrustedOrigin' (the public path) is
+gated against it (subject to the empty opt-in here, the composition root's secure
+default), while an 'Ecluse.Security.TrustedOrigin' (the operator-configured private
+upstream) is exempt — a private registry may legitimately live on an internal address,
+just as its connections use the unguarded 'Ecluse.Security.Egress.newTrustedTlsManager'
+(security.md invariant 3). The allowlist and same-host clauses still gate the trusted
+origin identically. -}
+tarballHostHonoured :: Origin -> PackumentDeps -> Text -> Text -> Bool
+tarballHostHonoured origin deps packumentBaseUrl artifactUrl =
     tarballHostAllowed
+        origin
         (pdTarballHostPolicy deps)
         (upstreamAllowlist deps)
         (pdAllowedInternalHosts deps)

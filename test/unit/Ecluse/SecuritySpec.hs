@@ -33,6 +33,7 @@ import Ecluse.Security (
     LimitError (..),
     Limits (..),
     LoweredHostSet,
+    Origin (TrustedOrigin, UntrustedOrigin),
     TarballHostPolicy (..),
     UrlError (..),
     boundedRead,
@@ -512,15 +513,20 @@ ssrfGateSpec = describe "composed SSRF gate (allowlist AND not-blocked)" $ do
 
 {- | The @dist.tarball@ host policy: under the secure default a tarball is fetched
 only from the same host that served the packument; the opt-in relaxes that to any
-allowlisted host. Neither ever escapes the allowlist or the internal-range block —
-the deny paths are exercised hardest, since under-blocking here is a vulnerability.
+allowlisted host. Neither ever escapes the allowlist; the internal-range block is
+__origin-aware__ — the untrusted origin is gated by it (subject to the per-host
+opt-in), the trusted private origin exempt from it (mirroring the connection layer's
+unguarded manager, security.md invariant 3). The deny paths are exercised hardest,
+since under-blocking on the untrusted origin is a vulnerability.
 -}
 tarballHostPolicySpec :: Spec
 tarballHostPolicySpec = describe "tarballHostAllowed" $ do
     let noOptIn = lowerCaseHosts Set.empty
         -- Two allowlisted upstreams: the packument source and a separate CDN.
         allow = lowerCaseHosts (Set.fromList ["registry.npmjs.org", "cdn.npmjs.org"])
-        same policy = tarballHostAllowed policy allow noOptIn
+        -- The untrusted public origin: the internal-range block applies (the existing
+        -- policy/allowlist/internal-range coverage is over this origin).
+        same policy = tarballHostAllowed UntrustedOrigin policy allow noOptIn
         -- A short alias: packument host fixed to the npm registry.
         decide policy = same policy "registry.npmjs.org"
 
@@ -549,26 +555,53 @@ tarballHostPolicySpec = describe "tarballHostAllowed" $ do
             -- The opt-in relaxes which allowlisted host, never the allowlist itself.
             decide AnyAllowlistedHost "evil.example.com" `shouldBe` False
 
-    describe "the internal-range block beats either policy" $ do
+    describe "the internal-range block beats either policy (untrusted origin)" $ do
         it "refuses an internal literal even when it equals the packument host" $
             -- An operator could (mis)configure an internal upstream host; the
             -- internal block still vetoes a tarball pointed at it under the
             -- default. The allowlist must carry the literal for this to even reach
             -- the block clause.
             let allowInternal = lowerCaseHosts (Set.singleton "169.254.169.254")
-             in tarballHostAllowed SameHostAsPackument allowInternal noOptIn "169.254.169.254" "169.254.169.254"
+             in tarballHostAllowed UntrustedOrigin SameHostAsPackument allowInternal noOptIn "169.254.169.254" "169.254.169.254"
                     `shouldBe` False
         it "refuses an allowlisted internal literal under the opt-in too" $
             let allowInternal = lowerCaseHosts (Set.singleton "10.0.0.5")
-             in tarballHostAllowed AnyAllowlistedHost allowInternal noOptIn "registry.npmjs.org" "10.0.0.5"
+             in tarballHostAllowed UntrustedOrigin AnyAllowlistedHost allowInternal noOptIn "registry.npmjs.org" "10.0.0.5"
                     `shouldBe` False
         it "honours an explicit internal opt-in for a deliberately-internal host" $
             -- With the host opted in to the internal block, an allowlisted internal
             -- tarball host is permitted under the relaxed policy.
             let allowInternal = lowerCaseHosts (Set.singleton "10.0.0.5")
                 optIn = lowerCaseHosts (Set.singleton "10.0.0.5")
-             in tarballHostAllowed AnyAllowlistedHost allowInternal optIn "registry.npmjs.org" "10.0.0.5"
+             in tarballHostAllowed UntrustedOrigin AnyAllowlistedHost allowInternal optIn "registry.npmjs.org" "10.0.0.5"
                     `shouldBe` True
+
+    describe "the trusted private origin is exempt from the internal-range block" $ do
+        -- The trusted origin mirrors the connection layer's unguarded manager
+        -- (security.md invariant 3): a private registry may legitimately live on an
+        -- internal address, so its same-host dist.tarball is admitted with no opt-in —
+        -- where the untrusted origin would be refused. The allowlist and same-host
+        -- clauses still gate it, so the exemption never widens past its own host.
+        let allowInternal = lowerCaseHosts (Set.singleton "10.0.0.5")
+        it "admits a same-host internal-literal tarball with no opt-in (where untrusted is refused)" $ do
+            tarballHostAllowed TrustedOrigin SameHostAsPackument allowInternal noOptIn "10.0.0.5" "10.0.0.5"
+                `shouldBe` True
+            -- The same inputs on the untrusted origin are refused by the internal block.
+            tarballHostAllowed UntrustedOrigin SameHostAsPackument allowInternal noOptIn "10.0.0.5" "10.0.0.5"
+                `shouldBe` False
+        it "still refuses a trusted tarball off the host allowlist (allowlist not relaxed)" $
+            -- The exemption is the internal-range clause only; an off-allowlist host is
+            -- still refused, so the trusted origin cannot be steered onto an arbitrary host.
+            tarballHostAllowed TrustedOrigin AnyAllowlistedHost allowInternal noOptIn "10.0.0.5" "192.168.0.9"
+                `shouldBe` False
+        it "still refuses a cross-host trusted tarball under the secure default (same-host not relaxed)" $
+            -- Two allowlisted internal hosts; under SameHostAsPackument the trusted
+            -- origin's tarball must still equal its packument host, so a different
+            -- (allowlisted, internal) host is refused.
+            let bothAllowed = lowerCaseHosts (Set.fromList ["10.0.0.5", "10.0.0.6"])
+                bothInternal = lowerCaseHosts (Set.fromList ["10.0.0.5", "10.0.0.6"])
+             in tarballHostAllowed TrustedOrigin SameHostAsPackument bothAllowed bothInternal "10.0.0.5" "10.0.0.6"
+                    `shouldBe` False
 
 -- ── identifier → URL safety ──────────────────────────────────────────────────
 

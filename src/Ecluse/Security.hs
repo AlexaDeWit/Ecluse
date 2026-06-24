@@ -47,6 +47,7 @@ module Ecluse.Security (
 
     -- * Tarball-host policy
     TarballHostPolicy (..),
+    Origin (..),
     tarballHostAllowed,
 
     -- * Identifier → URL safety
@@ -447,8 +448,32 @@ data TarballHostPolicy
       AnyAllowlistedHost
     deriving stock (Eq, Show)
 
-{- | Whether a @dist.tarball@ host may be fetched, given the policy, the host that
-served the packument, and the configured guards.
+{- | The trust of the origin a @dist.tarball@ is being served from, mirroring the
+connection-layer trust split (see "Ecluse.Security.Egress"): the operator-configured
+private upstream is 'TrustedOrigin', and the public upstream — together with every
+artifact location an attacker could influence — is 'UntrustedOrigin'.
+
+The distinction governs the __internal-range block__ alone. The trusted private
+origin is deliberately exempt from it (a private registry may legitimately live on
+an internal address, and only an untrusted target can be steered there), exactly as
+the trusted origin's connections use the unguarded 'Ecluse.Security.Egress.newTrustedTlsManager'
+while untrusted ones carry the resolved-IP recheck of
+'Ecluse.Security.Egress.newGuardedTlsManager' (@security.md@ invariant 3). It never
+relaxes the host allowlist or the same-host clause — those gate both origins
+identically — so a trusted origin's @dist.tarball@ is still constrained to its own
+allowlisted host.
+-}
+data Origin
+    = -- | The operator-configured private upstream: exempt from the internal-range block.
+      TrustedOrigin
+    | {- | The public upstream, and any attacker-influenceable target: subject to the
+      internal-range block (and the resolved-IP recheck at connect time).
+      -}
+      UntrustedOrigin
+    deriving stock (Eq, Show)
+
+{- | Whether a @dist.tarball@ host may be fetched, given the origin's trust, the
+policy, the host that served the packument, and the configured guards.
 
 This is the policy half of the @dist.tarball@ defence; it never replaces the host
 allowlist or the internal-range block but composes /on top/ of them, so the
@@ -459,12 +484,18 @@ fail-safe:
   target is — a @dist.tarball@ host off the allowlist is refused regardless of
   policy;
 * it must not be an internal address (subject to the per-host @allowedInternal@
-  opt-in), as every outbound target is; and
+  opt-in), as every untrusted outbound target is — but a 'TrustedOrigin' is __exempt__
+  from this clause (its connections likewise carry no resolved-IP recheck; see
+  'Origin' and @security.md@ invariant 3); and
 * under 'SameHostAsPackument' (the secure default) it must additionally __equal__
   the @packumentHost@ — the host that served the metadata — so a tarball on a
   /different/ host is refused even when that host is allowlisted. Under
   'AnyAllowlistedHost' that last clause is relaxed, leaving only the allowlist and
-  internal-range checks.
+  (origin-aware) internal-range checks.
+
+The allowlist and same-host clauses gate __both__ origins identically; only the
+internal-range clause is origin-aware, so a 'TrustedOrigin' is never let past its own
+allowlisted host or onto a /different/ host than its metadata under the default.
 
 Hosts are compared by their canonical key (case-folded, and for an IP-literal the
 single canonical literal — see 'canonicalHostKey'), as the host guards are. An
@@ -474,22 +505,31 @@ empty @tarballHost@ is never allowed (the allowlist already refuses it). The
 be re-validated here — it was already gated when the packument was fetched.
 -}
 tarballHostAllowed ::
+    Origin ->
     TarballHostPolicy ->
     -- | The host allowlist (the same one every outbound fetch is gated by).
     LoweredHostSet ->
-    -- | The hosts deliberately opted in to the internal-range block.
+    -- | The hosts deliberately opted in to the internal-range block (untrusted origin).
     LoweredHostSet ->
     -- | The bare host that served the packument.
     Text ->
     -- | The bare host of the candidate @dist.tarball@.
     Text ->
     Bool
-tarballHostAllowed policy allowed allowedInternal packumentHost tarballHost =
+tarballHostAllowed origin policy allowed allowedInternal packumentHost tarballHost =
     isAllowedUpstreamHost allowed tarballHost
-        && not (isBlockedTarget allowedInternal tarballHost)
+        && internalRangeOk
         && case policy of
             SameHostAsPackument -> canonicalHostKey tarballHost == canonicalHostKey packumentHost
             AnyAllowlistedHost -> True
+  where
+    -- The internal-range block is origin-aware: the trusted private origin is exempt
+    -- (mirroring its unguarded connection manager), the untrusted origin is gated
+    -- subject to the per-host opt-in.
+    internalRangeOk :: Bool
+    internalRangeOk = case origin of
+        TrustedOrigin -> True
+        UntrustedOrigin -> not (isBlockedTarget allowedInternal tarballHost)
 
 -- ── identifier → URL safety ──────────────────────────────────────────────────
 
