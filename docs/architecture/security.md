@@ -60,6 +60,20 @@ noted below.
 4. **Parsed upstream responses are bounded** — maximum body size, version count,
    and JSON nesting depth — and **fail closed** past any bound: an oversized or
    pathological document is refused, never partially served.
+5. **A public version must carry an integrity digest to be served.** A version from
+   an **untrusted (public)** upstream whose selected artifact carries **no integrity
+   digest of any kind** — neither an SRI `dist.integrity` nor a legacy `dist.shasum`
+   (both optional on the wire) — is **inadmissible**: the artifact gate refuses it
+   with a `403` (the tarball is never fetched), and the packument path **filters it
+   out of the served listing** (so a client never sees a version it could not
+   verify). A version with no integrity check cannot be tied to a tamper-evident
+   fingerprint, so two differing-byte hashless copies would fingerprint identically
+   and a [cross-upstream divergence](registry-model.md#packument-merge-across-upstreams)
+   would go **undetected** — exactly the supply-chain case the divergence check
+   exists to catch. Refusing at admission closes that gap before the version reaches
+   serve or contributes a hashless fingerprint to the merge. The **trusted private
+   origin is exempt** (its versions are admitted unfiltered), consistent with the
+   trust split throughout.
 
 ## Posture
 

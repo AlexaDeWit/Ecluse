@@ -121,6 +121,16 @@ data RejectReason
       scanner is unreachable. The 'Transience' says whether a retry can help.
       -}
       Unavailable Transience
+    | {- | The version's selected artifact carries __no integrity digest of any
+      kind__ (neither an SRI nor a legacy shasum), so its bytes cannot be tied to
+      a tamper-evident fingerprint. A version without an integrity check is
+      inadmissible from an /untrusted/ (public) upstream — there is nothing to
+      detect a divergence against — so admission refuses it outright. This is a
+      deliberate, deny-by-default __admission policy__, not a rule decision and not
+      a retryable inability: it maps to a @403@. The trusted private upstream is
+      exempt; this reason never arises on that path.
+      -}
+      MissingIntegrity
     deriving stock (Eq, Show)
 
 {- | The name of the rule that decided a refusal, carried for the audit trail and
@@ -191,6 +201,7 @@ artifactStatus = \case
     Admit -> Ok
     Reject rej -> case rejectionReason rej of
         ByPolicy{} -> Forbidden
+        MissingIntegrity -> Forbidden
         Unavailable (WillResolve retryAfter) -> Unavailable' retryAfter
         Unavailable WontResolve -> ServerError
 
@@ -250,8 +261,9 @@ among the exclusions, so a retry is invited exactly when it might produce surviv
   such cause asked for (so every transient cause has likely cleared by then);
 * else any 'Unavailable' 'WontResolve' → @500@ (a permanent inability — a retry
   cannot help, so it is not dressed up as a retryable @503@);
-* else every exclusion is 'ByPolicy' (__including the degenerate empty input__) →
-  @403@: deny-by-default, when there is nothing to serve and nothing invites a retry.
+* else every exclusion is a deny-by-default cause — a 'ByPolicy' rule denial or a
+  'MissingIntegrity' admission refusal (__including the degenerate empty input__) →
+  @403@: there is nothing to serve and nothing invites a retry.
 
 Never @404@: the versions existed and were withheld (see 'PackumentStatus').
 -}

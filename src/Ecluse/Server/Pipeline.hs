@@ -134,7 +134,7 @@ import UnliftIO.Exception (throwString, tryAny)
 import Ecluse.Credential (Secret, mkSecret)
 import Ecluse.Env (Env (envManager, envMetadataCache, envPrivateManager, envQueue))
 import Ecluse.Package (
-    Artifact (artFilename, artUrl),
+    Artifact (artFilename, artHashes, artUrl),
     PackageDetails (pkgArtifacts),
     PackageInfo (infoDistTags, infoPublishedAt, infoVersions),
     PackageName,
@@ -178,7 +178,7 @@ import Ecluse.Server.Response (
     ArtifactStatus (Forbidden, NotFound, Ok, ServerError, Unavailable'),
     MountRenderer,
     PackumentStatus (PackumentForbidden, PackumentOk, PackumentServerError, PackumentUnavailable),
-    RejectReason (Unavailable),
+    RejectReason (MissingIntegrity, Unavailable),
     Rejection (Rejection, rejectionMessage),
     RenderedBody (RenderedBody),
     RetryAfter (RetryAfter),
@@ -395,30 +395,75 @@ filter, returning the surviving 'Contribution' (if any survived) and the per-ver
 exclusion outcomes (for the no-survivors status when nothing survives anywhere).
 
 A public origin that did not resolve contributes nothing and no exclusions. A resolved
-origin has every version decided by both tiers ('evalRulesEffectful' — the pure tier
-first, the effectful tier only where it could change the outcome), the resulting
-decisions handed to the agnostic 'filterPlanFromDecisions', and that plan replayed by
-'applyFilterPlan' onto the raw @Value@: 'Filtered' yields a gated 'Contribution' over
-the surviving versions; 'NoSurvivors' yields no contribution and the per-version
-'ServeDecision's, each excluded version's decision projected (a fail-closed
-'Ecluse.Rules.Types.Undecidable' carrying its transient\/permanent cause, so the
-no-survivors status is a @503@\/@500@ rather than a @403@). The effectful tier is IO,
-so this gate is IO; with no effectful rules configured it reduces exactly to the pure
-tier.
+origin first has the __integrity-presence admission policy__ applied: any version whose
+artifact carries no integrity digest of any kind is dropped from the gated set up front
+('dropHashless'), so a hashless public version is never listed (a client cannot fetch
+it — the artifact gate would refuse it anyway) and never contributes a hashless
+fingerprint to the merge. The remaining versions are decided by both tiers
+('evalRulesEffectful' — the pure tier first, the effectful tier only where it could
+change the outcome), the resulting decisions handed to the agnostic
+'filterPlanFromDecisions', and that plan replayed by 'applyFilterPlan' onto the raw
+@Value@: 'Filtered' yields a gated 'Contribution' over the surviving versions;
+'NoSurvivors' yields no contribution and the per-version 'ServeDecision's, each excluded
+version's decision projected (a fail-closed 'Ecluse.Rules.Types.Undecidable' carrying
+its transient\/permanent cause, so the no-survivors status is a @503@\/@500@ rather than
+a @403@). The dropped hashless versions are projected as 'MissingIntegrity' refusals and
+appended to those exclusions, so a packument with /only/ hashless public versions is a
+@403@ rather than an empty success. The effectful tier is IO, so this gate is IO; with
+no effectful rules configured it reduces exactly to the pure tier.
 
 The gated contribution's typed 'PackageInfo' is __restricted to the survivors__ to
 match its filtered @Value@: 'mergePackuments' treats a 'GatedSource' as the
 already-filtered set and never re-filters, so feeding it the unfiltered view would
-let a denied version reach the merge plan (and skew the reconciled @latest@\/@time@). -}
+let a denied version reach the merge plan (and skew the reconciled @latest@\/@time@).
+
+The trusted private upstream is exempt: this gate runs on the public path only, so a
+hashless private version still enters the merge unfiltered. -}
 gatePublic :: PackumentDeps -> EvalContext -> Maybe (PackageInfo, Value) -> IO (Maybe Contribution, [ServeDecision])
 gatePublic deps ctx = \case
     Nothing -> pure (Nothing, [])
     Just (info, value) -> do
-        decisions <- decideVersions deps ctx info
-        pure $ case applyFilterPlan (pdMountBaseUrl deps) (filterPlanFromDecisions decisions info) value of
+        let (admissible, hashless) = dropHashless info
+            hashlessRefusals = integrityMissing <$ hashless
+        decisions <- decideVersions deps ctx admissible
+        pure $ case applyFilterPlan (pdMountBaseUrl deps) (filterPlanFromDecisions decisions admissible) value of
             Filtered filtered ->
-                (Just (Contribution GatedSource (restrictToSurvivors filtered info) filtered), [])
-            NoSurvivors leftover -> (Nothing, projectDecisions info leftover)
+                (Just (Contribution GatedSource (restrictToSurvivors filtered admissible) filtered), hashlessRefusals)
+            NoSurvivors leftover -> (Nothing, projectDecisions admissible leftover <> hashlessRefusals)
+
+{- Apply the integrity-presence admission policy to a public 'PackageInfo', splitting
+its versions into the admissible (carrying at least one integrity digest) and the
+hashless. A version without any integrity digest cannot be tied to a tamper-evident
+fingerprint, so it is inadmissible from an untrusted public upstream — dropped from the
+gated set (and from the served listing) rather than served a client could never verify.
+Returns the admissible 'PackageInfo' (with @dist-tags@\/@time@ pruned to the kept keys,
+exactly as 'restrictToSurvivors' prunes for the rules) and the hashless version keys,
+each of which the caller projects to a 'MissingIntegrity' refusal for the no-survivors
+status. -}
+dropHashless :: PackageInfo -> (PackageInfo, [Text])
+dropHashless info =
+    ( info
+        { infoVersions = Map.restrictKeys versions admissibleKeys
+        , infoDistTags = Map.filter ((`Set.member` admissibleKeys) . renderVersion) (infoDistTags info)
+        , infoPublishedAt = Map.restrictKeys (infoPublishedAt info) admissibleKeys
+        }
+    , hashlessKeys
+    )
+  where
+    versions :: Map Text PackageDetails
+    versions = infoVersions info
+
+    admissibleKeys :: Set Text
+    admissibleKeys = Map.keysSet (Map.filter hasIntegrity versions)
+
+    hashlessKeys :: [Text]
+    hashlessKeys = Map.keys (Map.filter (not . hasIntegrity) versions)
+
+    -- A version carries an integrity digest iff not all of its artifacts are
+    -- hashless. npm publishes exactly one artifact per version, but the check is
+    -- over the whole 'NonEmpty' so it holds for a multi-artifact ecosystem too.
+    hasIntegrity :: PackageDetails -> Bool
+    hasIntegrity = not . all (null . artHashes) . pkgArtifacts
 
 {- Decide every version of a public packument against both rule tiers, keyed by raw
 version string (the map 'filterPlanFromDecisions' consumes). Each version is run
@@ -850,13 +895,26 @@ gatePublicVersion env deps name version file = do
 {- Project a single version's two-tier rule decision to a gate outcome, selecting the
 artifact by filename on an admit. A denied version is 'Refused' with its decision; an
 admitted version whose requested filename matches no artifact is a forwarded miss
-('versionAbsent', rendered @404@). -}
+('versionAbsent', rendered @404@).
+
+The __integrity-presence admission policy__ is enforced here, after the rules admit
+and the artifact is selected: a public version whose selected artifact carries no
+integrity digest of any kind is inadmissible ('integrityMissing', rendered @403@) and
+refused outright, never fetched. This is the public path; the trusted private upstream
+('selectPrivateArtifact') is exempt and never reaches this gate. -}
 gateVersion :: EvalContext -> PackumentDeps -> Text -> PackageDetails -> IO PublicArtifactGate
 gateVersion ctx deps file details = do
     decision <- serveDecisionOf details <$> evalRulesEffectful ctx (pdRules deps) (pdEffectfulRules deps) details
     pure $ case decision of
-        Admit -> maybe (Refused versionAbsent) Admitted (artifactFor file details)
+        Admit -> maybe (Refused versionAbsent) admitWithIntegrity (artifactFor file details)
         Reject _ -> Refused decision
+  where
+    -- A rule-admitted artifact is served only if it carries an integrity digest;
+    -- one with empty 'artHashes' is refused by the integrity-presence policy.
+    admitWithIntegrity :: Artifact -> PublicArtifactGate
+    admitWithIntegrity artifact
+        | null (artHashes artifact) = Refused integrityMissing
+        | otherwise = Admitted artifact
 
 -- A transient public-upstream outage: a 'WillResolve' rejection (→ @503@).
 upstreamUnavailable :: ServeDecision
@@ -869,6 +927,15 @@ miss (the package may exist, this version does not). -}
 versionAbsent :: ServeDecision
 versionAbsent =
     Reject (Rejection (Unavailable WontResolve) "the requested version was not found upstream")
+
+{- A public version refused by the integrity-presence admission policy: its selected
+artifact carries no integrity digest of any kind, so it cannot be tied to a
+tamper-evident fingerprint. A deliberate deny-by-default policy refusal ('MissingIntegrity',
+rendered @403@), not a rule denial and not a retryable outage. The trusted private
+upstream is exempt, so this never arises on the private path. -}
+integrityMissing :: ServeDecision
+integrityMissing =
+    Reject (Rejection MissingIntegrity "this version carries no integrity digest and cannot be served from a public upstream")
 
 {- Stream the artifact from the public upstream at its __authoritative location__,
 __anonymously__ (the client credential is never sent to the public upstream), and —

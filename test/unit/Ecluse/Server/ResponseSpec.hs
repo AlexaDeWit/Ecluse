@@ -97,6 +97,9 @@ spec = do
         it "a wont-resolve rejection is a 500, never a 503" $
             artifactStatus (Reject (Rejection (Unavailable WontResolve) "broken"))
                 `shouldBe` ServerError
+        it "a missing-integrity refusal is a 403 (an admission-policy denial)" $
+            artifactStatus (Reject (Rejection MissingIntegrity "no integrity"))
+                `shouldBe` Forbidden
 
     describe "artifactStatusCode — numeric HTTP codes" $ do
         it "Ok is 200" $ artifactStatusCode Ok `shouldBe` 200
@@ -140,6 +143,9 @@ spec = do
                 `shouldBe` PackumentUnavailable (Just (RetryAfter 10))
         it "is 500 when an exclusion is a permanent inability and none is retryable" $
             packumentStatus [denied, broken] `shouldBe` PackumentServerError
+        it "is 403 when no survivor and the only exclusion is a missing-integrity refusal" $
+            packumentStatus [Reject (Rejection MissingIntegrity "no integrity")]
+                `shouldBe` PackumentForbidden
 
     describe "packumentStatusCode — numeric HTTP codes (never 404)" $
         it "maps Ok/Forbidden/Unavailable/ServerError to 200/403/503/500" $ do

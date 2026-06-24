@@ -143,6 +143,17 @@ the degenerate identity:
   that divergence is exactly the supply-chain tampering Écluse exists to catch: it
   is **detected, logged, and metered** (and may fail-closed on that version), never
   silently reconciled.
+- **A hashless public version is inadmissible (admission, not merge).** Divergence
+  detection compares a version's integrity fingerprint across upstreams, so a public
+  version that carries **no integrity digest at all** (neither `dist.integrity` nor
+  `dist.shasum` — both optional on the wire) is a blind spot: two differing-byte
+  hashless copies fingerprint identically (an empty fingerprint), so a divergence
+  would go undetected. Écluse resolves this **at admission, not in the merge**: a
+  public version with no integrity digest is **refused before it reaches the merge**
+  — the artifact gate `403`s it and the gated set drops it from the served listing —
+  so it never contributes a hashless fingerprint and a client never sees a version it
+  could not verify. The **trusted private upstream is exempt** (its versions enter
+  unfiltered). This is [security invariant 5](security.md#invariants).
 - **Reconcile over the union.** `dist-tags.latest` follows the **keep-unless-denied,
   stable-preferring** rule (see
   [Applying verdicts to a packument](rules-engine.md#applying-verdicts-to-a-packument)):
