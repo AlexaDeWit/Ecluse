@@ -66,7 +66,7 @@ import Ecluse.Config (
     renderPolicyError,
     unUrl,
  )
-import Ecluse.Credential (AuthToken (..), CredentialProvider, mkSecret, staticProvider)
+import Ecluse.Credential (AuthToken (..), CredentialProvider, Secret, staticProvider)
 import Ecluse.Ecosystem (Ecosystem, ecosystemName, prefixFor)
 import Ecluse.Security (TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), lowerCaseHosts)
 import Ecluse.Server.Cache (CacheConfig (..))
@@ -108,7 +108,7 @@ initCredentialProviders env =
         token <- cfgMirrorTargetToken env
         pure
             ( StaticCredential
-            , staticProvider AuthToken{authSecret = mkSecret token, authExpiresAt = Nothing}
+            , staticProvider AuthToken{authSecret = token, authExpiresAt = Nothing}
             )
 
 {- | The set of credential backends that resolved to an initialized provider — the
@@ -193,7 +193,7 @@ composeBindings resolveAdapter clock providers config =
         ([], bindings) -> Right bindings
         (errs, _) -> Left (concat errs)
   where
-    inboundToken :: Maybe Text
+    inboundToken :: Maybe Secret
     inboundToken = cfgAuthToken (configEnv config)
 
     -- The resolved tarball-host policy for every mount, from the secure-default
@@ -253,7 +253,7 @@ composeBindings resolveAdapter clock providers config =
                   -- the composition root's secure default, matching the guarded
                   -- manager's resolved-IP recheck (built with an empty opt-in too).
                   pdAllowedInternalHosts = lowerCaseHosts mempty
-                , pdInboundToken = mkSecret <$> inboundToken
+                , pdInboundToken = inboundToken
                 , pdNow = clock
                 , pdHelp = helpMessage
                 }

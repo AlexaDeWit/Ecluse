@@ -100,6 +100,7 @@ import Data.Time (NominalDiffTime)
 import Env qualified
 import System.Environment (getEnvironment)
 
+import Ecluse.Credential (Secret, mkSecret)
 import Ecluse.Ecosystem (Ecosystem (Npm), parseEcosystem)
 import Ecluse.Log (LogFormat (..), parseLogFormat)
 import Ecluse.Package (mkScope)
@@ -262,9 +263,10 @@ data EnvConfig = EnvConfig
     {- ^ The GCP project for Pub\/Sub\/Artifact Registry (@GOOGLE_CLOUD_PROJECT@,
     GCP backends only).
     -}
-    , cfgAuthToken :: Maybe Text
+    , cfgAuthToken :: Maybe Secret
     {- ^ The inbound client auth token clients must present (@PROXY_AUTH_TOKEN@);
-    'Nothing' leaves the proxy open to the network layer.
+    'Nothing' leaves the proxy open to the network layer. Held as a redacted
+    'Secret' so the token text never reaches the derived 'Show' of this record.
     -}
     , cfgRespectUpstreamTarballHost :: Bool
     {- ^ Whether to honour a @dist.tarball@ host that differs from the upstream
@@ -274,13 +276,14 @@ data EnvConfig = EnvConfig
     allowlisted host (for a registry that serves artifacts from a separate
     CDN\/files host), never escaping the allowlist or the internal-range block.
     -}
-    , cfgMirrorTargetToken :: Maybe Text
+    , cfgMirrorTargetToken :: Maybe Secret
     {- ^ The static bearer token Écluse writes to the mirror target with
     (@MIRROR_TARGET_TOKEN@), when the target is reached with a fixed credential
     rather than a cloud-minted one. It is the token material behind a mount that
     names the @static@ credential backend; 'Nothing' leaves no static provider
     initialized, so a mount that names @static@ then fails the boot-time
-    credential-reference check.
+    credential-reference check. Held as a redacted 'Secret' so the token text
+    never reaches the derived 'Show' of this record.
     -}
     , cfgHelpMessage :: Maybe Text
     -- ^ A custom string appended to every denial message (@PROXY_HELP_MESSAGE@).
@@ -342,11 +345,11 @@ envParser =
         <*> Env.var urlReader "MIRROR_QUEUE_URL" mempty
         <*> optionalText "AWS_REGION"
         <*> optionalText "GOOGLE_CLOUD_PROJECT"
-        <*> Env.sensitive (optionalText "PROXY_AUTH_TOKEN")
+        <*> (fmap mkSecret <$> Env.sensitive (optionalText "PROXY_AUTH_TOKEN"))
         -- Defaults to the secure value (do not honour a cross-host dist.tarball):
         -- an unset or empty variable is the tightest reading of the allowlist.
         <*> Env.var boolReader "PROXY_RESPECT_UPSTREAM_TARBALL_HOST" (Env.def False)
-        <*> Env.sensitive (optionalText "MIRROR_TARGET_TOKEN")
+        <*> (fmap mkSecret <$> Env.sensitive (optionalText "MIRROR_TARGET_TOKEN"))
         <*> optionalText "PROXY_HELP_MESSAGE"
         <*> Env.var cveIntervalReader "CVE_SYNC_INTERVAL_SECONDS" (Env.def defaultCveSyncInterval)
         -- A non-negative seconds count: zero is accepted on purpose, disabling the
