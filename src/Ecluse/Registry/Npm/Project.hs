@@ -145,15 +145,15 @@ parsePackageInfoFromValue value = decodePackumentValue value >>= projectPackageI
 -- Project a decoded 'WirePackument' into the domain 'PackageInfo'. Shared by both
 -- the byte- and 'Value'-decoding entry points so the projection lives in one place.
 projectPackageInfo :: WirePackument -> Either ParseError PackageInfo
-projectPackageInfo pkmt = do
-    name <- projectName (wpName pkmt)
-    pure
-        PackageInfo
-            { infoName = name
-            , infoVersions = projectVersions name pkmt
-            , infoDistTags = projectDistTags pkmt
-            , infoPublishedAt = projectPublishTimes pkmt
-            }
+projectPackageInfo pkmt =
+    let name = projectName (wpName pkmt)
+     in Right
+            PackageInfo
+                { infoName = name
+                , infoVersions = projectVersions name pkmt
+                , infoDistTags = projectDistTags pkmt
+                , infoPublishedAt = projectPublishTimes pkmt
+                }
 
 {- | Project a fetched metadata response into the 'PackageDetails' for a single
 version. Fails with a 'ParseError' if the body does not decode or the requested
@@ -339,16 +339,19 @@ projectPublishTimes pkmt =
 
 -- ── name and person projection ───────────────────────────────────────────────
 
-{- Parse an npm package name into the domain 'PackageName', splitting a scoped
-@\@scope\/name@ into its 'Scope' and bare name. Fails with a 'ParseError' on an
-empty name; a non-scoped or well-formed scoped name always succeeds.
+{- Project an npm package name into the domain 'PackageName', splitting a scoped
+@\@scope\/name@ into its 'Scope' and bare name. __Total__: an empty name (the
+default the wire decoder already supplies when the packument omits @name@) projects
+to an empty-display unscoped name rather than aborting. A name-less-but-version-bearing
+document must still contribute its versions — the registry model serves the
+best-effort union and errors only when /nothing/ resolves, and the requested name is
+known from the route — so the name is never the projection's gate; the serve layer's
+own tarball rewrite likewise skips a missing name rather than failing on it.
 -}
-projectName :: Text -> Either ParseError PackageName
-projectName raw
-    | T.null raw = Left (ParseError "empty package name")
-    | otherwise = case scopeOf raw of
-        Just (scope, base) -> Right (mkPackageName Npm (Just scope) base)
-        Nothing -> Right (mkPackageName Npm Nothing raw)
+projectName :: Text -> PackageName
+projectName raw = case scopeOf raw of
+    Just (scope, base) -> mkPackageName Npm (Just scope) base
+    Nothing -> mkPackageName Npm Nothing raw
 
 {- Split a scoped npm name @\@scope\/name@ into its 'Scope' and bare name, or
 'Nothing' for an unscoped name. An @\'\@\'@-prefixed name with no @\'\/\'@, an

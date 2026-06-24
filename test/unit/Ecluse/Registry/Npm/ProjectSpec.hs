@@ -97,6 +97,16 @@ packageInfoSpec = describe "parsePackageInfo" $ do
         info <- projectFixture "core-js.abbreviated.json"
         infoPublishedAt info `shouldBe` Map.empty
 
+    it "still projects the versions of a name-less but version-bearing document" $ do
+        -- A document whose top-level `name` is empty (or absent) must not lose its
+        -- versions: per the registry model's partial-upstream availability, the
+        -- projection serves the best-effort union and only the serve layer, which
+        -- already knows the requested name, supplies it. The empty name falls back
+        -- to an empty display rather than aborting the whole projection.
+        info <- orFailParse (parsePackageInfo (RegistryResponse namelessPackument))
+        Map.keys (infoVersions info) `shouldBe` ["1.0.0", "2.0.0"]
+        renderName (infoName info) `shouldBe` ""
+
 -- ── the signal-mapping table ─────────────────────────────────────────────────
 
 signalMappingSpec :: Spec
@@ -285,10 +295,6 @@ failureSpec :: Spec
 failureSpec = describe "malformed input" $ do
     it "reports a ParseError on a body that is not JSON" $
         parsePackageInfo (RegistryResponse "this is not json") `shouldSatisfy` isLeft
-
-    it "reports a ParseError on an empty package name" $
-        -- A document whose `name` is the empty string cannot yield a PackageName.
-        parsePackageInfo (RegistryResponse "{\"name\":\"\"}") `shouldSatisfy` isLeft
 
     it "reports a ParseError on a JSON value that is not a packument object" $
         -- Valid JSON of the wrong shape (here an array) is reported, not crashed.
@@ -562,6 +568,17 @@ shasumOnlyPackument :: ByteString
 shasumOnlyPackument =
     "{\"name\":\"sha\",\"versions\":{\"1.0.0\":{\"name\":\"sha\",\"version\":\"1.0.0\",\
     \\"dist\":{\"tarball\":\"https://r/sha/-/sha-1.0.0.tgz\",\"shasum\":\"deadbeef\"}}}}"
+
+{- | A packument whose top-level @name@ is absent but which carries intact
+@versions@: the projection must still contribute those versions, falling the
+package-level name back to an empty display rather than discarding the document.
+The per-version @name@ remains (the version manifest still carries its own).
+-}
+namelessPackument :: ByteString
+namelessPackument =
+    "{\"versions\":{\
+    \\"1.0.0\":{\"name\":\"x\",\"version\":\"1.0.0\",\"dist\":{\"tarball\":\"https://r/a.tgz\"}},\
+    \\"2.0.0\":{\"name\":\"x\",\"version\":\"2.0.0\",\"dist\":{\"tarball\":\"https://r/b.tgz\"}}}}"
 
 -- | A packument with three versions, to check version-list extraction.
 multiVersionPackument :: ByteString
