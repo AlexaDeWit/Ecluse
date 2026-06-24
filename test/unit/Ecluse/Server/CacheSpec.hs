@@ -1,12 +1,14 @@
+{-# LANGUAGE TupleSections #-}
+
 module Ecluse.Server.CacheSpec (spec) where
 
 import Data.Aeson (Value (String))
 import Data.Map.Strict qualified as Map
 import Data.Time (NominalDiffTime)
 import Test.Hspec
-import UnliftIO (catchAny, concurrently, mapConcurrently)
+import UnliftIO (async, cancel, catchAny, concurrently, mapConcurrently, timeout, wait)
 import UnliftIO.Concurrent (threadDelay)
-import UnliftIO.Exception (throwString)
+import UnliftIO.Exception (throwString, try)
 
 import Ecluse.Ecosystem (Ecosystem (Npm))
 import Ecluse.Package (PackageInfo (..), PackageName, mkPackageName)
@@ -20,6 +22,7 @@ import Ecluse.Server.Cache (
     defaultCacheConfig,
     newMetadataCache,
     resolveMetadata,
+    resolveMetadataWith,
  )
 
 -- | A package name fixture; the metadata cache keys on package identity.
@@ -206,6 +209,77 @@ spec = do
             _ <- resolveMetadata c publicSource (pkg "back-to-back") (countingFetch calls (pkg "back-to-back") "raw")
             readIORef calls `shouldReturn` 1
 
+    describe "resolveMetadata — single-flight orphan window" $ do
+        it "unblocks a waiting follower and lets a later caller re-lead when the leader is cancelled at the claim handoff" $ do
+            -- Regression: an async exception (request timeout, killed handler thread)
+            -- landing on the leader between claiming the in-flight slot and completing
+            -- must still fill the marker with the error and free the slot, or the
+            -- waiting follower parks on the marker forever and the key wedges until
+            -- restart. The window is otherwise a seam-less, interruptible point, so it
+            -- is driven deterministically through the 'resolveMetadataWith' hook, which
+            -- runs on the leading thread at exactly the claim -> fetch-runner handoff:
+            -- it signals it has reached the window, then parks, so the test can cancel
+            -- the leader there. Everything that could wedge is wrapped in a 'timeout' so
+            -- a regression fails fast instead of hanging the suite.
+            result <- timeout 5_000_000 $ do
+                c <- freshCache
+                calls <- newIORef (0 :: Int)
+                reached <- newEmptyMVar
+                release <- newEmptyMVar
+                armed <- newIORef True -- only the first (cancelled) leader parks
+                let fetch = countingFetch calls (pkg "wedge") "raw"
+                    afterClaim = do
+                        wasArmed <- atomicModifyIORef' armed (False,)
+                        when wasArmed $ do
+                            putMVar reached () -- claimed the slot; parked at the handoff
+                            takeMVar release -- block interruptibly so the cancel lands here
+                            -- The leader claims the slot and parks at the handoff, holding it.
+                leader <- async (resolveMetadataWith afterClaim c publicSource (pkg "wedge") fetch)
+                takeMVar reached
+                -- A follower arrives while the slot is held; it must become a follower
+                -- on the marker, not re-lead. (It will block on the marker until the
+                -- cancelled leader fills it.)
+                follower <- async (try (resolveMetadata c publicSource (pkg "wedge") fetch) :: IO (Either SomeException CacheEntry))
+                threadDelay 30000 -- give the follower time to register on the marker
+                cancel leader -- cancel in the handoff window; the slot must still free
+                -- The follower must unblock with the leader's error, never park forever.
+                followed <- wait follower
+                -- A subsequent caller must re-lead and fetch successfully (the slot is free).
+                recovered <- resolveMetadata c publicSource (pkg "wedge") fetch
+                pure (followed, infoName (entryInfo recovered))
+            case result of
+                Nothing -> expectationFailure "wedged: a cancelled leader orphaned the in-flight slot"
+                Just (followed, recoveredName) -> do
+                    isLeft followed `shouldBe` True -- the follower got the error, did not hang
+                    recoveredName `shouldBe` pkg "wedge"
+
+        it "frees the slot for a later caller when the leader's fetch is cancelled mid-flight" $ do
+            -- The mid-fetch analogue: the async exception lands while the leader is
+            -- inside the fetch (under restore). The marker fill and de-register must
+            -- still run, so a subsequent caller re-leads and fetches rather than
+            -- finding a stuck slot.
+            result <- timeout 5_000_000 $ do
+                c <- freshCache
+                calls <- newIORef (0 :: Int)
+                started <- newEmptyMVar
+                release <- newEmptyMVar
+                let blockingFetch = do
+                        atomicModifyIORef' calls (\n -> (n + 1, ()))
+                        putMVar started () -- in the fetch (slot claimed)
+                        () <- takeMVar release -- block so the leader can be cancelled here
+                        pure (entry (pkg "midflight") "unreached")
+                leader <- async (resolveMetadata c publicSource (pkg "midflight") blockingFetch)
+                takeMVar started -- the leader holds the slot and is inside the fetch
+                cancel leader -- async-cancel mid-fetch; the slot must still free
+                -- A fresh caller must not wedge: with the slot freed it re-leads.
+                recovered <- resolveMetadata c publicSource (pkg "midflight") (countingFetch calls (pkg "midflight") "raw")
+                n <- readIORef calls
+                pure (infoName (entryInfo recovered), n)
+            case result of
+                Nothing -> expectationFailure "wedged: a mid-flight cancel orphaned the in-flight slot"
+                Just (recoveredName, n) -> do
+                    recoveredName `shouldBe` pkg "midflight"
+                    n `shouldBe` 2 -- the cancelled fetch and the recovering re-lead, no caching of the failure
     describe "size bound" $ do
         it "never exceeds the configured maximum entry count" $ do
             c <- newMetadataCache (config 60 4)

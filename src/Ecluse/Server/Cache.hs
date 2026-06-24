@@ -83,6 +83,7 @@ module Ecluse.Server.Cache (
 
     -- * Resolution
     resolveMetadata,
+    resolveMetadataWith,
     cachedMetadata,
     cacheSize,
 ) where
@@ -93,7 +94,7 @@ import Data.Cache qualified as Cache
 import Data.Map.Strict qualified as Map
 import Data.Time (NominalDiffTime)
 import System.Clock (Clock (Monotonic), TimeSpec (TimeSpec), getTime)
-import UnliftIO.Exception (mask, throwIO, try)
+import UnliftIO.Exception (mask, throwIO, try, withException)
 
 import Ecluse.Package (
     PackageInfo,
@@ -233,6 +234,16 @@ A successful fetch is cached (subject to the TTL and size bound); a failed fetch
 caches __nothing__ (so a transient upstream error does not poison the cache) and is
 re-raised to every waiter.
 
+A claimed in-flight slot is __always eventually filled and de-registered__, even if
+the leader is hit by an async exception (a request timeout, a killed handler thread)
+between claiming the slot and completing: the claim and the leader's cleanup-armed
+run live under __one mask__, so no interruptible point sits in the gap, and any
+exception before normal completion fills the marker with that error — unblocking
+every waiting follower with it rather than leaving them parked forever — and frees
+the slot so a later call re-leads. This closes the single-flight orphan window
+(without it, a cancelled leader would wedge that @(source, package)@ key until
+restart). A follower's own wait on the marker stays interruptible.
+
 The 'Source' partitions the cache: distinct upstreams of the same package resolve
 under distinct keys and never cross-contaminate. The fetch action supplies the origin's
 own credential, so reading through one source never blurs another's trust posture.
@@ -244,16 +255,31 @@ The result is always re-decided by the caller's rules on each request — only t
 fetch+parse is memoised, never the verdict.
 -}
 resolveMetadata :: MetadataCache -> Source -> PackageName -> IO CacheEntry -> IO CacheEntry
-resolveMetadata cache source name fetch = do
+resolveMetadata = resolveMetadataWith (pure ())
+
+{- | As 'resolveMetadata', but with a hook run on the leading thread at the
+single-flight claim → fetch-runner handoff: the window between the STM transaction
+committing the in-flight claim and the leader's exception guard taking ownership of
+the marker. It exists only so a test can deterministically park a leader in that
+window and cancel it there, exercising the orphan-window guarantee; production always
+passes @pure ()@ via 'resolveMetadata'.
+-}
+resolveMetadataWith :: IO () -> MetadataCache -> Source -> PackageName -> IO CacheEntry -> IO CacheEntry
+resolveMetadataWith afterClaim cache source name fetch = mask $ \restore -> do
     let key = cacheKey source name
     nowT <- getTime Monotonic
     -- One atomic decision point: a fresh hit short-circuits; otherwise become the
-    -- leader (install an empty marker) or a follower (take the existing one).
+    -- leader (install an empty marker) or a follower (take the existing one). The
+    -- decision and — for a leader — the run that owns the freshly claimed marker
+    -- are under one 'mask', so no interruptible point sits between claiming the
+    -- slot and arming the cleanup that always fills and de-registers it. A 'Hit' or
+    -- 'Follow' claims nothing, so its wait runs under @restore@ and stays
+    -- interruptible.
     decision <- atomically (decide key nowT)
     case decision of
         Hit entry -> pure entry
-        Follow marker -> either throwIO pure =<< atomically (readTMVar marker)
-        Lead marker -> runLeader key marker
+        Follow marker -> restore (either throwIO pure =<< atomically (readTMVar marker))
+        Lead marker -> runLeader restore key marker
   where
     decide :: CacheKey -> TimeSpec -> STM Decision
     decide key nowT = do
@@ -269,10 +295,18 @@ resolveMetadata cache source name fetch = do
                         writeTVar (mcInFlight cache) (Map.insert key marker inFlight)
                         pure (Lead marker)
 
-    -- The leader fetches once, fills the marker, and de-registers itself — even on
-    -- exception, so a failed fetch unblocks waiters with the error and leaves the
-    -- in-flight slot clean for a later retry. 'mask' keeps the marker fill, the
-    -- store insert, and the de-register from being interrupted between each other.
+    -- The leader fetches once, fills the marker, and de-registers itself. The claim
+    -- is made under the caller's 'mask' and this run is reached with no interruptible
+    -- point in between, so the 'withException' guard is armed before anything can
+    -- interrupt. A synchronous fetch error is caught by 'try' and folded to a 'Left'
+    -- that the normal failure path fills and de-registers; an __asynchronous__
+    -- exception (a request timeout, a killed handler thread, 'ThreadKilled') landing
+    -- anywhere in the claim → completion window is re-raised by 'try', so the guard
+    -- fills the still-empty marker with that exception — unblocking every waiting
+    -- follower with it, never a forever-park — and frees the slot so a later call
+    -- re-leads, before the exception propagates to this (cancelled) thread. The fetch
+    -- runs under @restore@ so it stays cancellable; the marker fill, store insert, and
+    -- de-register run masked and never block, so the tail is uninterruptible.
     --
     -- On success the result is __inserted into the store before the in-flight slot
     -- is de-registered__: until 'insertBounded' completes the slot still exists, so
@@ -281,9 +315,8 @@ resolveMetadata cache source name fetch = do
     -- then deregister thus makes "collapse to one upstream call" hold even for a
     -- caller arriving in the instant after the fetch returns. On failure nothing is
     -- cached and the slot is freed so a later retry re-fetches.
-    runLeader :: CacheKey -> TMVar (Either SomeException CacheEntry) -> IO CacheEntry
-    runLeader key marker = mask $ \restore -> do
-        result <- try (restore fetch)
+    runLeader restore key marker = do
+        result <- try (restore (afterClaim >> fetch)) `withException` orphan key marker
         atomically (putTMVar marker result)
         case result of
             Right entry -> do
@@ -293,6 +326,20 @@ resolveMetadata cache source name fetch = do
             Left err -> do
                 atomically (deregister key)
                 throwIO err
+
+    -- The exception guard for the claim → completion window. 'withException' runs it
+    -- with the offending exception, then re-raises that exception to the leader's own
+    -- thread. Fill the still-empty marker with it (so blocked followers unblock with
+    -- the error rather than parking forever), then free the slot so a later call
+    -- re-leads. Fills only when empty: a synchronous fetch error is folded to a 'Left'
+    -- by 'try' rather than re-raised, so the guard runs only for an exception 'try'
+    -- did not record — and the empty check keeps it correct even so.
+    orphan :: CacheKey -> TMVar (Either SomeException CacheEntry) -> SomeException -> IO ()
+    orphan key marker err =
+        atomically $ do
+            unfilled <- isEmptyTMVar marker
+            when unfilled (putTMVar marker (Left err))
+            deregister key
 
     deregister :: CacheKey -> STM ()
     deregister key = do
