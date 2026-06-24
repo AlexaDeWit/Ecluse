@@ -138,7 +138,7 @@ import Ecluse.Registry.Npm (
     noValidators,
  )
 import Ecluse.Registry.Npm.Filter (FilterResult (Filtered, NoSurvivors), applyFilterPlan, rewriteTarballUrls)
-import Ecluse.Registry.Npm.Project (parsePackageInfo)
+import Ecluse.Registry.Npm.Project (parsePackageInfoFromValue)
 import Ecluse.Rules.Effectful (evalRulesEffectful)
 import Ecluse.Rules.Types (Decision, EvalContext (EvalContext))
 import Ecluse.Server.Cache (CacheEntry (CacheEntry, entryInfo, entryRaw), Source (Source), resolveMetadata)
@@ -330,8 +330,14 @@ client's for the private leg, 'Nothing' for the anonymous public leg). -}
 fetchEntry :: Manager -> Text -> Maybe Secret -> PackageName -> IO CacheEntry
 fetchEntry manager baseUrl token name = do
     response <- fetchMetadataForm (clientConfig manager baseUrl token) Full noValidators name
-    case (parsePackageInfo response, Aeson.eitherDecodeStrict (responseBody response)) of
-        (Right info, Right value) -> pure (CacheEntry{entryInfo = info, entryRaw = value})
+    -- Decode the body once into the raw @Value@, then project the typed view from
+    -- that same parse: aeson decodes bytes to a 'Value' and runs the 'FromJSON'
+    -- instance either way, so projecting from the @Value@ reuses the one parse
+    -- rather than tokenising a multi-megabyte packument a second time.
+    case Aeson.eitherDecodeStrict (responseBody response) of
+        Right value
+            | Right info <- parsePackageInfoFromValue value ->
+                pure (CacheEntry{entryInfo = info, entryRaw = value})
         _ -> throwString "packument did not decode into both a typed view and a raw document"
 
 unpair :: CacheEntry -> (PackageInfo, Value)
