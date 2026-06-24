@@ -326,6 +326,19 @@ internalRangeSpec = describe "isBlockedTarget" $ do
             -- 'lowerCaseHosts' normalises the opt-in set, so 'FE80::1' opts in
             -- 'fe80::1' rather than over-blocking it on a case mismatch.
             isBlockedTarget (lowerCaseHosts (Set.singleton "FE80::1")) "fe80::1" `shouldBe` False
+        it "honours an IPv6 opt-in written in its expanded form against the compressed literal" $
+            -- The opt-in is canonicalised to the same form a literal renders to, so
+            -- the expanded '0:0:0:0:0:0:0:1' opts in the compressed '::1' rather than
+            -- missing it on a textual mismatch.
+            isBlockedTarget (lowerCaseHosts (Set.singleton "0:0:0:0:0:0:0:1")) "::1" `shouldBe` False
+        it "honours an IPv6 opt-in written in its compressed form against the expanded literal" $
+            -- The reverse direction: a compressed opt-in matches an expanded query,
+            -- since both are canonicalised before comparison.
+            isBlockedTarget (lowerCaseHosts (Set.singleton "::1")) "0:0:0:0:0:0:0:1" `shouldBe` False
+        it "does not over-opt-in: a different IPv6 address than the canonical opt-in is still blocked" $
+            isBlockedTarget (lowerCaseHosts (Set.singleton "0:0:0:0:0:0:0:1")) "fe80::1" `shouldBe` True
+        it "leaves an IPv4 opt-in unaffected by canonicalisation" $
+            isBlockedTarget (lowerCaseHosts (Set.singleton "10.0.0.5")) "10.0.0.5" `shouldBe` False
 
 -- ── classification corpus (the equivalence bar) ──────────────────────────────
 

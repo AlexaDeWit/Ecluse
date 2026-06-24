@@ -94,13 +94,20 @@ match cannot be bypassed by an un-normalised configuration set.
 newtype LoweredHostSet = LoweredHostSet (Set Text)
     deriving stock (Eq, Show)
 
-{- | Normalise a set of configured host strings to lower case, yielding the
-'LoweredHostSet' the host guards take. DNS hostnames are case-insensitive, so
-folding case here lets the guards match an incoming host against the
-configuration regardless of how either was spelled.
+{- | Normalise a set of configured host strings to the canonical key form the host
+guards take, yielding a 'LoweredHostSet'.
+
+A plain DNS name is folded to lower case (hostnames are case-insensitive), so the
+guards match an incoming host against the configuration regardless of how either
+was spelled. An entry that parses as an __IP literal__ is additionally rendered to
+the single canonical literal the resolved-address recheck produces (see
+'canonicalHostKey'), so equivalent spellings of one address — compressed versus
+expanded IPv6, differing case — collapse to one key. An operator who opts in
+@0:0:0:0:0:0:0:1@ therefore matches a resolved @::1@ rather than missing it on a
+textual difference.
 -}
 lowerCaseHosts :: Set Text -> LoweredHostSet
-lowerCaseHosts = LoweredHostSet . Set.map T.toLower
+lowerCaseHosts = LoweredHostSet . Set.map canonicalHostKey
 
 {- | Whether @host@ is one of the configured upstream hosts.
 
@@ -112,12 +119,14 @@ scheme — extract it with 'hostAddress' first) and __case-insensitive__, since
 DNS hostnames are; an empty @host@ is never allowed. This is the allowlist half
 of the SSRF gate; pair it with 'isBlockedTarget' for the internal-range half.
 
-The allowlist is a 'LoweredHostSet', so it is already lower-cased and only the
-incoming @host@ is folded here.
+The allowlist is a 'LoweredHostSet', so it is already normalised and only the
+incoming @host@ is folded here — through the same 'canonicalHostKey' the set was
+built with, so an IP-literal entry matches regardless of how either side spells the
+address.
 -}
 isAllowedUpstreamHost :: LoweredHostSet -> Text -> Bool
 isAllowedUpstreamHost (LoweredHostSet allowed) host =
-    not (T.null host) && T.toLower host `Set.member` allowed
+    not (T.null host) && canonicalHostKey host `Set.member` allowed
 
 -- ── internal-range block ─────────────────────────────────────────────────────
 
@@ -162,13 +171,14 @@ exemption for a private upstream that genuinely lives on an internal address.
 
 The opt-in half of 'isBlockedTarget', shared with the resolved-address recheck in
 "Ecluse.Security.Egress" so the literal block and the connection-time block honour
-the exemption identically. The match is case-insensitive (as DNS and the host
-allowlist are); the @allowedInternal@ set is a 'LoweredHostSet', already
-lower-cased, so only @host@ is folded here.
+the exemption identically. The match folds case (as DNS and the host allowlist do)
+and, for an IP-literal, collapses equivalent spellings to one canonical key (see
+'canonicalHostKey'): the @allowedInternal@ set was built with that same key, so an
+opt-in matches a resolved or literal address whichever representation either uses.
 -}
 hostOptedIn :: LoweredHostSet -> Text -> Bool
 hostOptedIn (LoweredHostSet allowedInternal) host =
-    T.toLower host `Set.member` allowedInternal
+    canonicalHostKey host `Set.member` allowedInternal
 
 {- | Whether an 'IP' falls in a blocked internal range.
 
@@ -225,6 +235,27 @@ ipAddrToIP :: IpAddr -> IP
 ipAddrToIP = \case
     IpV4 a b c d -> IPv4 (toIPv4 (map fromIntegral [a, b, c, d]))
     IpV6 groups -> IPv6 (toIPv6 (map fromIntegral groups))
+
+{- The canonical comparison key for a host: a normalised string the host guards
+match a 'LoweredHostSet' on. A host that parses as an IP literal is rendered to the
+@iproute@ canonical literal — the /same/ form the resolved-address recheck in
+"Ecluse.Security.Egress" renders a connected address to, since both go through this
+@IP@ 'show' — so equivalent spellings of one address collapse to one key:
+compressed versus expanded IPv6 (@::1@ ≡ @0:0:0:0:0:0:0:1@), embedded IPv4, and
+hex case all canonicalise identically. Anything that is not a literal (a DNS name)
+is merely case-folded, since hostnames are case-insensitive.
+
+This is the single canonicaliser feeding __both__ sides of the internal-range
+opt-in: 'lowerCaseHosts' builds the set with it, and 'hostOptedIn' folds the
+queried host with it, so an operator's opt-in matches a resolved or literal address
+whichever representation either uses. Pointing the opt-in key and the guard's
+rendered key at one @show@ is what guarantees they are identical — a second,
+separate canonicaliser could drift.
+-}
+canonicalHostKey :: Text -> Text
+canonicalHostKey host = case parseIpLiteral host of
+    Just addr -> show (ipAddrToIP addr)
+    Nothing -> T.toLower host
 
 {- Decode an IPv4-mapped IPv6 address (@::ffff:a.b.c.d@) to its embedded IPv4, so
 it is tested against the IPv4 ranges; any other address is returned unchanged.
@@ -435,8 +466,9 @@ fail-safe:
   'AnyAllowlistedHost' that last clause is relaxed, leaving only the allowlist and
   internal-range checks.
 
-Hosts are compared case-insensitively (as DNS and the host guards are). An empty
-@tarballHost@ is never allowed (the allowlist already refuses it). The
+Hosts are compared by their canonical key (case-folded, and for an IP-literal the
+single canonical literal — see 'canonicalHostKey'), as the host guards are. An
+empty @tarballHost@ is never allowed (the allowlist already refuses it). The
 @packumentHost@ is the bare host the metadata was fetched from (extract it with
 'hostAddress'); only its equality to @tarballHost@ matters, so it need not itself
 be re-validated here — it was already gated when the packument was fetched.
@@ -456,7 +488,7 @@ tarballHostAllowed policy allowed allowedInternal packumentHost tarballHost =
     isAllowedUpstreamHost allowed tarballHost
         && not (isBlockedTarget allowedInternal tarballHost)
         && case policy of
-            SameHostAsPackument -> T.toLower tarballHost == T.toLower packumentHost
+            SameHostAsPackument -> canonicalHostKey tarballHost == canonicalHostKey packumentHost
             AnyAllowlistedHost -> True
 
 -- ── identifier → URL safety ──────────────────────────────────────────────────
