@@ -188,6 +188,10 @@ mkEnv cfg = case sqsEndpoint cfg of
             )
 
 -- One long-poll ReceiveMessage with the configured batch / wait / visibility.
+-- SQS caps the long-poll ('sqsWaitSeconds') at 20s, which stays within amazonka's
+-- default per-service request timeout, so the client never cuts a long-poll short
+-- and no explicit response-timeout override is needed; a configured wait above the
+-- SQS cap is clamped by SQS, so the relationship cannot be broken from config.
 receiveRequest :: SqsConfig -> SQS.ReceiveMessage
 receiveRequest cfg =
     SQS.newReceiveMessage (sqsQueueUrl cfg)
