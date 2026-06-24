@@ -324,11 +324,15 @@ data ECandidate = ECandidate Int Text RuleOutcome
 under the shared @(precedence, deny-before-allow)@ comparator. The pure winner is
 seeded as the incumbent at its precedence; each effectful candidate that took a
 position (anything but 'Abstain') competes against it, an 'Unavailable' ranking with
-the denies (it is fail-closed). The highest-ranked position wins; if none of the
-effectful candidates outranks the pure winner, the pure decision stands. -}
+the denies (it is fail-closed). An effectful candidate must __strictly outrank__ the
+pure winner to displace it: 'maximumBy' keeps the /last/ entry on a rank tie, so the
+pure entry is seeded last and wins any equal-rank tie — an equal-precedence effectful
+allow leaves the pure 'Approved' standing, and an equal-precedence effectful
+'Unavailable' leaves a pure denial as a permanent deny rather than flipping it to a
+retryable 'Undecidable'. -}
 selectDecision :: Maybe Int -> Decision -> [ECandidate] -> Decision
 selectDecision pureWinPrec pureDecision candidates =
-    case nonEmpty (pureEntry <> positions) of
+    case nonEmpty (positions <> pureEntry) of
         Nothing -> pureDecision
         Just entries -> entryDecision (maximumBy (comparing rank) entries)
   where
