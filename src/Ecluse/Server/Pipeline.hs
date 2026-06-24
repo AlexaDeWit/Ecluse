@@ -282,7 +282,9 @@ recognisedButUnserved renderer =
 {- Whether the request carries the configured inbound token. With no token
 configured the edge is open; with one configured the request's bearer
 @Authorization@ must match it exactly. Deny-by-default: a missing or mismatched
-token is rejected. -}
+token is rejected. The token match is constant-time: 'Secret' equality compares
+over the full UTF-8 bytes without a content-dependent early out, so this gate
+does not leak the configured token's prefix length through timing. -}
 edgeAuthorised :: PackumentDeps -> Request -> Bool
 edgeAuthorised deps request = case pdInboundToken deps of
     Nothing -> True
