@@ -35,6 +35,22 @@
     - {name: System.IO.Unsafe.unsafePerformIO, within: [], message: "Unsafe: keep IO in IO; do not smuggle effects into pure code."}
     - {name: Unsafe.Coerce.unsafeCoerce, within: [], message: "Unsafe: defeats the type system."}
 
+# --- Stringly-typed throws: surface errors as values or typed exceptions -----
+# These erase the error type: a caught StringException / IOError carries only a
+# message, so a caller cannot dispatch on the cause (STYLE.md section 11). Prefer
+# a domain value (an Either or a purpose-built sum) or, for a genuine fault, a
+# typed Exception with its own instance.
+#
+# Rollout is a ratchet, not a flag day: a function is banned only once its current
+# callers are converted, so the gate stays green while the refactor lands slice by
+# slice. Each `within:` entry is a remaining holdout, dropped as it is refactored.
+# `throwString` is the next addition here, once its sites
+# (Ecluse.Credential.CodeArtifact, Ecluse.Server.Pipeline, and the test stubs)
+# move to typed errors.
+- functions:
+    - {name: System.IO.Error.userError, within: [], message: "Stringly IOError: throw a typed Exception (e.g. a nullary type with an Exception instance), or return a domain value. See STYLE.md section 11."}
+    - {name: UnliftIO.Exception.stringException, within: [Ecluse.Credential.Refresh], message: "Stringly exception: throw a typed Exception or return a domain value (STYLE.md section 11). Ecluse.Credential.Refresh is the remaining holdout, pending its value-surfacing refactor."}
+
 # --- Debugging leftovers: banned in committed code --------------------------
 - modules:
     - {name: Debug.Trace, within: [], message: "Remove debug tracing before committing; use 'katip' for real logging."}
