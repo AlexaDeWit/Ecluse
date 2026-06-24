@@ -110,10 +110,12 @@ build. `make coverage` builds a suite instrumented (HPC, in an isolated
 format for Codecov to ingest. See [`scripts/coverage.sh`](../scripts/coverage.sh).
 
 - **Per-suite flags.** Each tier uploads under its own Codecov *flag*, so one
-  combined gate spans the suites while each stays visible. `unit` uploads today;
-  `integration` is wired identically (commented in `ci.yml`) and turns on when
-  that suite gains real cases. The **smoke** tier is excluded — non-gating and
-  network-bound, like everywhere else.
+  combined gate spans the suites while each stays visible. Both the `unit` and
+  `integration` tiers upload, each under its own flag, and Codecov waits for both
+  (`notify.after_n_builds: 2` in `codecov.yml`) before computing the combined
+  total — so a partial upload can't fire a transient "coverage decreased" status.
+  The **smoke** tier is excluded — non-gating and network-bound, like everywhere
+  else.
 - **Tokenless upload.** CI uploads via GitHub **OIDC** (`use_oidc: true`), so
   there is no `CODECOV_TOKEN` secret to store or leak — the same keyless posture
   as the release image signing.
