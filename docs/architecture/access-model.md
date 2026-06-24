@@ -108,6 +108,23 @@ honeypot to threat-model) and serves within a self-chosen revalidation window
 so the design space is explicit; it would require an explicit opt-in that names the
 trade.
 
+## Publishing: the publication target (passthrough write)
+
+The strategies above govern **reads**. The one client-driven **write** path —
+`npm publish` to the
+[publication target](registry-model.md#publishing-first-party-packages-the-publication-target) —
+uses **passthrough**, symmetric with the `passthrough` read of the private upstream:
+Écluse forwards the **publisher's own** `Authorization` / `_authToken` to the
+publication target, which authorises the publisher. Écluse substitutes no identity and
+mints no token of its own for this path — unlike the **mirror target** write, which is
+always Écluse's own `CredentialProvider` token.
+
+The universal invariant holds: the client's token reaches only the private upstream (on
+read, under `passthrough`) and the publication target (on publish) — **never** the
+public upstream. Before any forward, the publish path enforces the **publish scope
+allow-list** (the anti-shadowing guard): a name outside the operator's configured scopes
+is refused with no upstream write attempted.
+
 ## Edge authentication
 
 The npm client authenticates to a registry with an **opaque bearer** in `.npmrc`
