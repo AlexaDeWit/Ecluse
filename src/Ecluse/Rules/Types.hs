@@ -19,6 +19,10 @@ module Ecluse.Rules.Types (
     EvalContext (..),
     RuleOutcome (..),
     Decision (..),
+
+    -- * Unavailability
+    Transience (..),
+    RetryAfter (..),
 ) where
 
 import Data.Time (NominalDiffTime, UTCTime)
@@ -122,16 +126,71 @@ data RuleOutcome
       Deny Text
     | -- | This rule has no opinion; the reason is kept for the audit trail.
       Abstain Text
+    | {- | An effectful rule the evaluator needed could not be consulted — its IO
+      failed, timed out, or its source circuit breaker is open. This is
+      __fail-closed__: a version a needed rule could not vet is not admitted just
+      because the scanner is unreachable. The 'Transience' records whether a retry
+      can help (transient outage) or not (a permanent inability); the 'Text' is the
+      audit reason. A pure rule never yields this — only the effectful tier does, and
+      only when a rule whose verdict could still change the outcome was unreachable.
+      -}
+      Unavailable Transience Text
     deriving stock (Eq, Show)
 
--- | The overall decision for a package version against a whole rule set.
+{- | The overall decision for a package version against a whole rule set.
+
+The first three arms are the pure tier's; the effectful tier ("Ecluse.Rules.Effectful")
+adds the last three. An effectful approval\/denial carries the deciding rule's
+__name__ ('Text') rather than a pure 'Rule', because an effectful rule is not a
+member of the pure 'Rule' enumeration — its identity is just the name it logs under.
+-}
 data Decision
-    = -- | Allowed by a specific rule, with its reason.
+    = -- | Allowed by a specific pure rule, with its reason.
       Approved Rule Text
-    | -- | Denied by a specific (deny) rule, with its reason.
+    | -- | Denied by a specific pure (deny) rule, with its reason.
       Denied Rule Text
     | {- | No rule allowed it. Deny-by-default; carries every rule's reason so
       the denial response can explain what was considered.
       -}
       DeniedByDefault [Text]
+    | -- | Allowed by an effectful rule (named), with its reason.
+      ApprovedEffectful Text Text
+    | -- | Denied by an effectful rule (named), with its reason.
+      DeniedEffectful Text Text
+    | {- | Undecidable: an effectful rule whose verdict could still have changed the
+      outcome could not be consulted, so the version could not be vetted. This is
+      __fail-closed__ — it is not admitted (a packument filters it out like a denial;
+      a concrete artifact surfaces a @503@\/@500@ by the serve error model). The
+      'Transience' carries whether a retry can help; the 'Text' is the audit reason.
+      -}
+      Undecidable Transience Text
     deriving stock (Eq, Show)
+
+-- ── unavailability ────────────────────────────────────────────────────────────
+
+{- | Whether an unavailability is expected to resolve on its own.
+
+This is the single distinction the serve status mapping turns on: a transient cause
+('WillResolve') is worth retrying (a @503@); a permanent or internal one
+('WontResolve') is not, so it must not be dressed up as a retryable @503@ (it is a
+@500@). The effectful tier sets it from the nature of the failure: an upstream
+outage, rate limit, timeout, or open breaker is transient; an internal or parse
+fault is not.
+-}
+data Transience
+    = {- | Transient — a retry may succeed (an advisory source briefly down, a
+      timeout, an open circuit breaker). The optional 'RetryAfter' is the delay to
+      suggest to the client.
+      -}
+      WillResolve (Maybe RetryAfter)
+    | {- | Not expected to self-heal (an internal or parse error). Retrying cannot
+      help, so the request is a @500@, never a @503@.
+      -}
+      WontResolve
+    deriving stock (Eq, Show)
+
+{- | A @Retry-After@ delay, in whole seconds. A 'newtype' so a raw count of seconds
+is never confused with some other integer when it reaches the response header.
+-}
+newtype RetryAfter = RetryAfter Int
+    deriving stock (Eq, Ord, Show)

@@ -40,6 +40,7 @@ import UnliftIO (MonadUnliftIO)
 
 import Ecluse.Credential (Secret)
 import Ecluse.Env (Env, envLogEnv)
+import Ecluse.Rules.Effectful (PrecededEffectfulRule)
 import Ecluse.Rules.Types (PrecededRule)
 import Ecluse.Server.Response (HelpMessage, MountRenderer)
 import Ecluse.Server.Route (Classifier)
@@ -74,7 +75,13 @@ data PackumentDeps = PackumentDeps
     or writes it itself.
     -}
     , pdRules :: [PrecededRule]
-    -- ^ The mount's resolved rule policy, evaluated against every public version.
+    -- ^ The mount's resolved pure rule policy, evaluated against every public version.
+    , pdEffectfulRules :: [PrecededEffectfulRule]
+    {- ^ The mount's effectful rule policy (advisory lookups, per-version fetches),
+    layered on the pure tier per "Ecluse.Rules.Effectful". Empty when no effectful
+    rule is configured, in which case the effectful tier is skipped and gating
+    reduces exactly to the pure tier.
+    -}
     , pdInboundToken :: Maybe Secret
     {- ^ The optional inbound token a client must present (@PROXY_AUTH_TOKEN@);
     'Nothing' leaves the edge open (the network layer guards it).

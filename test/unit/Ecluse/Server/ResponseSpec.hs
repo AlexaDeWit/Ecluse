@@ -17,6 +17,7 @@ import Ecluse.Package (
  )
 import Ecluse.Rules (evalRules)
 import Ecluse.Rules.Types (
+    Decision (ApprovedEffectful, DeniedEffectful, Undecidable),
     EvalContext (EvalContext),
     Rule (AllowScope, DenyInstallTimeExecution),
     atDefaultPrecedence,
@@ -177,3 +178,23 @@ spec = do
             let pd = pkg "internal" 30 NoCodeOnInstall
                 decision = evalRules (EvalContext now) [atDefaultPrecedence (AllowScope (mkScope "internal"))] pd
             serveDecisionOf pd decision `shouldBe` Admit
+
+        it "an effectful approval admits, like a pure approval" $ do
+            let pd = pkg "public" 30 NoCodeOnInstall
+            serveDecisionOf pd (ApprovedEffectful "AllowAdvisory" "remediates") `shouldBe` Admit
+
+        it "an effectful denial rejects ByPolicy, naming the effectful rule" $ do
+            let pd = pkg "public" 30 NoCodeOnInstall
+            case serveDecisionOf pd (DeniedEffectful "DenyAdvisory" "affected by an advisory") of
+                Reject rej -> do
+                    rejectionReason rej `shouldBe` ByPolicy (RuleName "DenyAdvisory")
+                    rejectionMessage rej `shouldSatisfy` T.isInfixOf "DenyAdvisory"
+                Admit -> expectationFailure "an effectful denial must reject, not admit"
+
+        it "an undecidable decision rejects as Unavailable, carrying its transience" $ do
+            -- Fail-closed: a needed effectful rule that could not be consulted
+            -- rejects as Unavailable, the transience flowing through to the status.
+            let pd = pkg "public" 30 NoCodeOnInstall
+            case serveDecisionOf pd (Undecidable (WillResolve (Just (RetryAfter 20))) "advisory source down") of
+                Reject rej -> rejectionReason rej `shouldBe` Unavailable (WillResolve (Just (RetryAfter 20)))
+                Admit -> expectationFailure "an undecidable decision must reject, not admit"

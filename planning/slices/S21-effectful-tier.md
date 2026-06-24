@@ -2,7 +2,7 @@
 id: S21
 title: Effectful rule tier (Unavailable, timeout/retry/breaker)
 milestone: M5 — Effectful rules & CVE
-status: not-started
+status: in-review
 depends-on: [S05, S14]
 test-tier: [unit]
 arch-refs:
@@ -50,3 +50,44 @@ properties for tier-skip and fail-closed.
 of the data source. Reconcile the S09 filter and S14 serve "deny-only" placeholders
 to handle `Unavailable` here — those were explicitly flagged as awaiting this slice.
 Keep the pure tier's behaviour unchanged when no effectful rules are configured.
+
+## As-built notes
+
+- **`Unavailable Transience Text` (`RuleOutcome`) + `Undecidable Transience Text`
+  (`Decision`).** The fourth outcome the effectful tier yields; it folds to the
+  `Decision`'s `Undecidable` arm (fail-closed). `Transience`/`RetryAfter` __moved
+  down__ from `Ecluse.Server.Response` to `Ecluse.Rules.Types` (they are rules-engine
+  vocabulary) to break the cycle that would arise from `Rules.Types` importing them
+  back from `Response`; `Response` re-exports them, so every existing importer is
+  unchanged. Two effectful decision arms were added — `ApprovedEffectful Text Text` /
+  `DeniedEffectful Text Text` — because an effectful rule is __not__ a member of the
+  pure `Rule` enumeration, so it carries its deciding identity as a name, not a
+  `Rule`. The pure tier's behaviour and types are otherwise untouched.
+- **`Ecluse.Rules.Effectful`** earned its own module: the `EffectfulRule` interface
+  (name, `erEval :: PackageDetails -> IO RuleOutcome`, config, `FailurePolicy`, a
+  per-source breaker `TVar`), the resilience harness (`runEffectfulRule`: per-attempt
+  timeout, bounded retry+backoff, circuit breaker), and the two-tier `evalRulesEffectful`.
+  `Ecluse.Rules.evalRulesWithPrecedence` is exported so the effectful tier knows the
+  pure winner's precedence and can __skip__ rules ranked below it (performance, not
+  precedence). Tier-skip, fail-closed, cross-tier precedence, timeout/retry/breaker
+  trip-half-open-reopen, and `onError: abstain` are all property-/example-tested in
+  `test/unit/Ecluse/Rules/EffectfulSpec.hs` with an injected clock (`ctxNow`) and an
+  injected backoff sleep — no real time passes.
+- **Breaker reuse — pattern, not module (flagged decision).** S16 left its breaker
+  __private__ to `Ecluse.Credential.Refresh` and explicitly deferred the
+  shared-module decision to S21. To avoid editing a merged out-of-scope file (and
+  colliding with parallel work), S21 __mirrors__ the same `Closed`/`Open`/`HalfOpen`
+  shape and `admit`/`trip` gates in `Rules.Effectful` rather than extracting a shared
+  `Ecluse.Breaker`. Extracting a common module remains a clean, deferrable refactor.
+- **Pipeline wiring.** `PackumentDeps` gained `pdEffectfulRules :: [PrecededEffectfulRule]`
+  (empty at the composition root — no effectful rule type is configurable until S23).
+  `Ecluse.Package.Filter.filterPlanFromDecisions` was split out so the (IO) effectful
+  decisions feed the same pure survivor/`latest` replay. Both serve paths now gate via
+  `evalRulesEffectful`; an `Undecidable` version is filtered out of a packument like a
+  denial (→ `503` when nothing survives) and surfaces as `503`/`500` on a concrete
+  artifact, all reachability now exercised end-to-end in `PipelineSpec`.
+- **One accepted-partial line.** `Ecluse.Rules.evalRulesWithPrecedence`'s `classify`
+  must be total over `RuleOutcome`, but a __pure__ `Rule` provably never yields
+  `Unavailable`; that arm (`Unavailable _ reason -> Left reason`) is therefore dead by
+  construction and unreachable in a unit test. Flagged as an accepted partial per
+  `docs/testing.md` rather than covered with a contrived test.

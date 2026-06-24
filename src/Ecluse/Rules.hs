@@ -18,6 +18,7 @@ module Ecluse.Rules (
     ruleName,
     evalRule,
     evalRules,
+    evalRulesWithPrecedence,
     renderDecision,
     renderDuration,
 ) where
@@ -86,10 +87,24 @@ audit trail and denial message. Only that reason order, and which of two equally
 ranked rules is reported, depend on list order; the decision itself does not.
 -}
 evalRules :: EvalContext -> [PrecededRule] -> PackageDetails -> Decision
-evalRules ctx rules pd =
+evalRules ctx rules pd = snd (evalRulesWithPrecedence ctx rules pd)
+
+{- | Evaluate a rule set, returning the winning rule's __precedence__ alongside the
+'Decision'. The precedence is 'Nothing' for a deny-by-default (no rule took a
+position), and @'Just' p@ for the position-taking rule that won at precedence @p@.
+
+This is the pure tier as the effectful tier consults it: the winning precedence is
+what the effectful tier compares its own rules against to decide which — if any —
+could still change the outcome, so a rule ranked below the pure winner is skipped
+(see "Ecluse.Rules.Effectful"). 'evalRules' is this with the precedence dropped.
+-}
+evalRulesWithPrecedence :: EvalContext -> [PrecededRule] -> PackageDetails -> (Maybe Int, Decision)
+evalRulesWithPrecedence ctx rules pd =
     case nonEmpty candidates of
-        Nothing -> DeniedByDefault abstainReasons
-        Just cands -> winningDecision (maximumBy (comparing sortKey) cands)
+        Nothing -> (Nothing, DeniedByDefault abstainReasons)
+        Just cands ->
+            let winner = maximumBy (comparing sortKey) cands
+             in (Just (candPrecedence winner), winningDecision winner)
   where
     -- One pass: each rule is either an abstain (its reason, kept in order for
     -- the audit trail) or a candidate that took a position.
@@ -97,9 +112,13 @@ evalRules ctx rules pd =
 
     classify :: PrecededRule -> Either Text Candidate
     classify (PrecededRule prec r) = case evalRule ctx r pd of
-        Abstain reason -> Left reason
         Allow reason -> Right (Candidate prec False r reason)
         Deny reason -> Right (Candidate prec True r reason)
+        -- An abstain takes no position; a pure rule's 'Unavailable' cannot occur
+        -- (only the effectful tier yields it) and is folded in here, both as "no
+        -- position" so the pure tier stays unchanged.
+        Abstain reason -> Left reason
+        Unavailable _ reason -> Left reason
 
     -- Highest precedence wins; at equal precedence a deny (rank 'True') outranks
     -- an allow (rank 'False'), since 'maximumBy' takes the greatest key.
@@ -133,12 +152,18 @@ renderDecision pd decision =
                 subject <> " was approved by " <> ruleName rule <> ": " <> reason
             Denied rule reason ->
                 subject <> " was denied by " <> ruleName rule <> ": " <> reason
+            ApprovedEffectful name reason ->
+                subject <> " was approved by " <> name <> ": " <> reason
+            DeniedEffectful name reason ->
+                subject <> " was denied by " <> name <> ": " <> reason
             DeniedByDefault reasons ->
                 subject
                     <> " was denied (no rule allowed it)"
                     <> if null reasons
                         then ""
                         else ": " <> T.intercalate "; " reasons
+            Undecidable _ reason ->
+                subject <> " could not be evaluated: " <> reason
 
 {- | Render a duration as an approximate, human-friendly string for use in
 decision messages. Always non-negative.
