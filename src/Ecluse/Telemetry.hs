@@ -10,7 +10,7 @@ nothing is wired and no telemetry is emitted__ — the SDK is not even initialis
 
 This module is purely the __substrate__: it stands up (or, by default, declines to
 stand up) the providers and brackets their lifecycle. The spans on the request
-lifecycle and the metric instruments layer on top of it in later slices; nothing
+lifecycle and the metric instruments layer on top of this substrate; nothing
 here instruments the hot path.
 
 == The switch and the handle
