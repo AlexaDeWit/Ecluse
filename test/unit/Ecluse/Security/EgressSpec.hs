@@ -110,10 +110,21 @@ blockedResolvedAddrsSpec = describe "blockedResolvedAddrs" $ do
             -- opt-in written that way suppresses the block for the resolved address.
             blockedResolvedAddrs (lowerCaseHosts (Set.singleton "fe80::1")) [v6 (0xfe80, 0, 0, 0, 0, 0, 0, 1)]
                 `shouldBe` []
-        it "still refuses an IPv6 address opted in only by its uncompressed spelling" $
-            -- The uncompressed spelling is not the key, so it does not opt in — and
-            -- the refused literal is reported in the canonical compressed form.
+        it "permits a resolved IPv6 address opted in by its uncompressed spelling" $
+            -- An opt-in that parses as an IP literal is canonicalised to the same form
+            -- the guard renders the resolved address to, so the expanded spelling opts
+            -- in the compressed address rather than missing it on a textual mismatch.
             blockedResolvedAddrs (lowerCaseHosts (Set.singleton "fe80:0:0:0:0:0:0:1")) [v6 (0xfe80, 0, 0, 0, 0, 0, 0, 1)]
+                `shouldBe` []
+        it "permits resolved IPv6 loopback opted in by its expanded form (the resolve-localhost-to-::1 case)" $
+            -- The exact CI surprise: an operator opting in '0:0:0:0:0:0:0:1' must match
+            -- a resolved '::1', since some hosts resolve localhost to ::1 only.
+            blockedResolvedAddrs (lowerCaseHosts (Set.singleton "0:0:0:0:0:0:0:1")) [v6 (0, 0, 0, 0, 0, 0, 0, 1)]
+                `shouldBe` []
+        it "still refuses a different IPv6 address than the canonical opt-in" $
+            -- Canonicalisation widens nothing: an opt-in for one address does not opt in
+            -- a different one, which is still refused in canonical compressed form.
+            blockedResolvedAddrs (lowerCaseHosts (Set.singleton "0:0:0:0:0:0:0:1")) [v6 (0xfe80, 0, 0, 0, 0, 0, 0, 1)]
                 `shouldBe` ["fe80::1"]
 
 -- ── the live connection hook ──────────────────────────────────────────────────
