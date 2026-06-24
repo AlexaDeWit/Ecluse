@@ -20,8 +20,10 @@ import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (throwString)
 import UnliftIO.Timeout (timeout)
 
+import Data.Time (addUTCTime, getCurrentTime)
+
 import Ecluse.Credential (AuthToken (..), CredentialProvider, mkSecret, staticProvider)
-import Ecluse.Env (Env, newEnv, newWorkerHeartbeat)
+import Ecluse.Env (Env, envWorkerHeartbeat, newEnv, newWorkerHeartbeat, recordPoll)
 import Ecluse.Queue (newInMemoryQueue)
 import Ecluse.Registry (ParseError (..), RegistryClient (..))
 import Ecluse.Registry.Npm.Route qualified as Npm
@@ -47,6 +49,7 @@ import Ecluse.Server (
 import Ecluse.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Server.Route (Classifier, Route (..))
 import Ecluse.Telemetry (telemetryDisabled)
+import Ecluse.Worker (workerHeartbeatStaleAfter)
 
 {- | A registry-handle double whose effectful fields are never invoked: the web
 layer only routes, classifies, and renders — it never fetches — so a handle that
@@ -146,6 +149,21 @@ raisedDrain = do
     beginDrain drain
     pure drain
 
+{- | An npm-mount 'application' whose worker heartbeat is __stale__: its last
+successful poll is recorded well past 'workerHeartbeatStaleAfter' ago, standing in
+for a single-process worker whose consume loop has gone quiet. Used to drive the
+liveness probe to its @503@ "worker stalled" arm — the single-process liveness
+signal the front door folds the worker heartbeat into.
+-}
+stalledWorkerApp :: IO Application
+stalledWorkerApp = do
+    env <- newTestEnv
+    now <- getCurrentTime
+    -- A poll older than the staleness threshold: the loop has not advanced its
+    -- heartbeat within the window, so liveness must read it as stalled.
+    recordPoll (envWorkerHeartbeat env) (addUTCTime (negate (workerHeartbeatStaleAfter + 60)) now)
+    pure (application (mkServerConfig [mountAt ("npm" :| []) Npm.classify]) env)
+
 {- | A header matcher that passes only when the response carries __no__
 @Connection@ header — the not-draining expectation, the complement of the
 going-away assertion. (@hspec-wai@'s '<:>' only asserts a header is present.)
@@ -192,6 +210,21 @@ spec = do
                 get "/livez" `shouldRespondWith` 200
 
             it "answers /readyz with 200" $
+                get "/readyz" `shouldRespondWith` 200
+
+    describe "liveness — worker-stall arm of /livez" $
+        with stalledWorkerApp $ do
+            it "fails /livez with 503 once the worker heartbeat is stale" $
+                -- The single-process liveness signal folds in the mirror worker's
+                -- consume-loop heartbeat: a loop quiet past the staleness threshold is a
+                -- genuine stall, so liveness must flip to 503 (fail-stop visibility) even
+                -- though the HTTP front door itself is still serving.
+                get "/livez" `shouldRespondWith` 503
+
+            it "keeps /readyz at 200 (readiness ignores worker staleness; it is not draining)" $
+                -- Readiness is about whether to route NEW traffic, gated only on the drain
+                -- signal — not on worker liveness. A stalled worker fails /livez, never
+                -- /readyz, so the two probes stay independent.
                 get "/readyz" `shouldRespondWith` 200
 
     describe "graceful shutdown — readiness flip while draining" $

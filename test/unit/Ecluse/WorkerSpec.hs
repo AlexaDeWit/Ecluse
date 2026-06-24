@@ -34,8 +34,9 @@ import Ecluse.Queue (
 import Ecluse.Registry (
     ParseError (ParseError),
     PublishError (PublishError),
-    PublishFault (PublishRejected),
+    PublishFault (PublishRejected, PublishUrlUnformable),
     RegistryClient (..),
+    UrlFormationError (EmptyBaseUrl),
  )
 import Ecluse.Registry.Npm (npmPublishDocument)
 import Ecluse.Server.Cache (defaultCacheConfig, newMetadataCache)
@@ -173,6 +174,13 @@ the genuine transient fault. Port 1 is in the privileged range and never bound.
 unreachableUrl :: Text
 unreachableUrl = "http://127.0.0.1:1/thing/-/thing-1.0.0.tgz"
 
+{- | A job artifact URL that cannot be parsed into a request at all (a space and no
+scheme), so the worker's by-URL request build fails before any fetch — the
+unformable-URL arm, distinct from a reachable-but-failing fetch.
+-}
+unformableUrl :: Text
+unformableUrl = "not a url"
+
 -- Enqueue a job, receive it, and return its receipt handle so the per-job processing
 -- can be driven with a real handle.
 enqueueAndReceive :: MirrorQueue -> MirrorJob -> IO (ReceiptHandle, MirrorJob)
@@ -270,6 +278,28 @@ spec = do
                     outcome <- runApp env (processJob receipt job)
                     outcome `shouldSatisfy` isRetried
 
+        it "leaves the job for redelivery when the artifact URL is unformable (no publish)" $
+            -- A job whose artifact URL cannot be parsed into a request never reaches a
+            -- fetch: the by-URL build fails, which the worker treats as a transient
+            -- reason (Retried) rather than crashing the iteration. Nothing is published.
+            withWorkerEnv (Right ()) $ \env queue logRef -> do
+                (receipt, job) <- enqueueAndReceive queue (jobWith unformableUrl (Hash SHA1 trueSha1 :| []))
+                outcome <- runApp env (processJob receipt job)
+                outcome `shouldSatisfy` isRetried
+                published <- plDocuments <$> readIORef logRef
+                published `shouldBe` []
+
+        it "drops a job (non-retryable) when the publish URL is unformable (a config fault)" $
+            -- An unformable PUBLISH URL is a misconfiguration redelivery cannot fix, so
+            -- the registry handle surfaces it as PublishUrlUnformable and the worker
+            -- DROPS the job rather than re-enqueueing it forever — the non-retryable
+            -- terminal outcome, distinct from a retryable registry rejection.
+            withUpstream $ \url ->
+                withWorkerEnv (Left (PublishUrlUnformable EmptyBaseUrl)) $ \env queue _logRef -> do
+                    (receipt, job) <- enqueueAndReceive queue (jobWith url (Hash SHA1 trueSha1 :| []))
+                    outcome <- runApp env (processJob receipt job)
+                    outcome `shouldSatisfy` isDropped
+
     describe "processBatch — ack semantics over the in-memory queue" $ do
         it "acks a successfully-mirrored job so it is not redelivered" $
             withUpstream $ \url ->
@@ -294,6 +324,23 @@ spec = do
                     -- reclaim pass; poll a few times so the held message reappears.
                     redelivered <- pollUntilRedelivered queue 5
                     redelivered `shouldBe` True
+
+        it "acks a DROPPED job so a tampered artifact is retired, not redelivered forever" $
+            -- An integrity mismatch is non-retryable: redelivery can never make the
+            -- bytes match, so the worker must ack the job to retire it from the queue
+            -- (having alarmed at the mismatch) rather than leave it to redeliver
+            -- indefinitely. A second poll past the visibility window yields nothing.
+            withUpstream $ \url ->
+                withWorkerEnv (Right ()) $ \env queue logRef -> do
+                    enqueue queue (jobWith url (Hash SHA1 "deadbeef" :| []))
+                    messages <- receive queue
+                    runApp env (processBatch messages)
+                    -- Nothing was published (the mismatch refused the publish)...
+                    published <- plDocuments <$> readIORef logRef
+                    published `shouldBe` []
+                    -- ...and the job was acked: it does not redeliver.
+                    redelivered <- pollUntilRedelivered queue 5
+                    redelivered `shouldBe` False
 
     describe "heartbeat" $ do
         it "advances the last-successful-poll once the loop has polled the queue" $

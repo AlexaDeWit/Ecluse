@@ -124,6 +124,18 @@ spec = do
                 \\"artifact\":{\"filename\":\"x-1.0.0.tgz\",\"hashes\":[],\"size\":null}}"
                 `shouldSatisfy` isLeft
 
+        it "rejects an unknown hash algorithm, naming it in the error" $
+            -- A digest whose algorithm the worker does not recognise cannot be used to
+            -- verify the fetched bytes, so the job is rejected at decode rather than
+            -- admitted with an unverifiable digest. The error names the offending alg.
+            case decodeJob
+                "{\"ecosystem\":\"npm\",\"scope\":null,\"name\":\"x\",\
+                \\"version\":\"1.0.0\",\"artifactUrl\":\"u\",\"mirrorTarget\":\"m\",\
+                \\"artifact\":{\"filename\":\"x-1.0.0.tgz\",\
+                \\"hashes\":[{\"alg\":\"crc32\",\"value\":\"deadbeef\"}],\"size\":null}}" of
+                Left err -> err `shouldSatisfy` ("crc32" `T.isInfixOf`)
+                Right job -> expectationFailure ("expected a decode error, got " <> show job)
+
     describe "defaultSqsConfig" $ do
         let cfg = defaultSqsConfig "https://sqs.example/q" "us-east-1"
         it "carries the queue URL and region through" $ do
