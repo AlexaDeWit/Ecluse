@@ -16,10 +16,9 @@ import Ecluse.Credential (AuthToken (..), CredentialProvider, mkSecret, staticPr
 import Ecluse.Ecosystem (Ecosystem (Npm))
 import Ecluse.Env (Env, envWorkerHeartbeat, lastPoll, newEnv, newWorkerHeartbeat)
 import Ecluse.Integration.Ministack (
-    QueueOptions (qoVisibilityTimeout, qoWaitSeconds),
+    QueueOptions (qoWaitSeconds),
     defaultQueueOptions,
     freshQueue,
-    receiveUntilWithin,
     withMinistack,
  )
 import Ecluse.Package (Hash (Hash), HashAlg (SHA1), mkPackageName)
@@ -27,8 +26,6 @@ import Ecluse.Queue (
     MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize),
     MirrorJob (..),
     MirrorQueue (enqueue, receive),
-    QueueMessage (msgJob),
-    Seconds (Seconds),
  )
 import Ecluse.Registry.Npm (NpmClientConfig (NpmClientConfig, npmBaseUrl, npmLimits, npmManager, npmToken), newNpmClient)
 import Ecluse.Security (defaultLimits)
@@ -92,18 +89,49 @@ spec =
             it "leaves a transiently-rejected job un-acked, so it redelivers" $ \container ->
                 withUpstream $ \upstreamUrl ->
                     -- The mirror target answers 503 (a retryable rejection). The worker
-                    -- must not ack, so the message redelivers once its (short)
-                    -- visibility window lapses — a real second delivery.
+                    -- must not ack, so the message redelivers — a real second delivery.
                     withMirrorTarget status503 $ \mirrorUrl publishLog -> do
-                        queue <- freshQueue container "worker-retry" defaultQueueOptions{qoVisibilityTimeout = Seconds 1}
+                        queue <- freshQueue container "worker-retry" defaultQueueOptions
                         env <- envFor queue mirrorUrl
                         enqueue queue (job upstreamUrl trueSha1)
-                        -- Run the loop until it has attempted the (failing) publish,
-                        -- then stop. The worker extends visibility around the publish,
-                        -- so redelivery follows once that hold lapses — never an ack.
-                        runLoopUntil env (publishedAtLeast publishLog 1)
-                        redelivered <- receiveUntilWithin 30 queue
-                        map (jobArtifactUrl . msgJob) redelivered `shouldBe` [upstreamUrl <> artifactPath]
+                        -- Observe the redelivery through the worker's /own/ second
+                        -- publish attempt: a transient 503 is never acked, so the message
+                        -- becomes visible again and the running loop re-consumes it and
+                        -- PUTs the same artifact a second time. We wait for two recorded
+                        -- publish PUTs — that second PUT only exists because the un-acked
+                        -- message genuinely redelivered — then tear the loop down.
+                        --
+                        -- This is robust-by-construction where the old test was a timing
+                        -- knife-edge. Redelivery on this path is driven by the worker's
+                        -- 'releaseForRetry' (it resets the message to visible the instant
+                        -- the 503 comes back), NOT by the visibility timeout lapsing: the
+                        -- success-path 'holdForLongPublish' has already extended the
+                        -- in-flight window to 300s, so a bare timeout would never
+                        -- redeliver within a test's patience (which is why this no longer
+                        -- sets a 1s 'qoVisibilityTimeout' — it never governed redelivery
+                        -- here, it only looked like the lever).
+                        --
+                        -- The old test instead /stole/ the redelivery: it tore the loop
+                        -- down the instant the first PUT was logged, then polled the queue
+                        -- itself. But the stub records the PUT before it answers 503, so
+                        -- the log fills a beat before the worker runs 'releaseForRetry' —
+                        -- and under the slower -fhpc-instrumented loop the teardown could
+                        -- win that race and cancel the loop before the release ran,
+                        -- leaving the message held under the 300s hold so it never
+                        -- redelivered within budget. Waiting on the worker's /second/ PUT
+                        -- removes that race entirely: the second PUT cannot happen unless
+                        -- the release ran and the message redelivered.
+                        runLoopUntil env (publishedAtLeast publishLog 2)
+                        published <- readIORef publishLog
+                        -- The one un-acked job was delivered and PUT more than once — a
+                        -- real redelivery — and every PUT targeted its publish path. We
+                        -- assert "at least twice, all to the publish path" rather than an
+                        -- exact count: once the condition trips, the loop keeps redriving
+                        -- (each redelivery is another 503, another redelivery) until the
+                        -- 'race_' teardown lands, so the exact tally is teardown-timing
+                        -- dependent while "redelivered at least once" is the invariant.
+                        length published `shouldSatisfy` (>= 2)
+                        published `shouldSatisfy` all (== npmPublishPath)
 
             it "advances the heartbeat as the loop polls a real queue" $ \container ->
                 withUpstream $ \_upstreamUrl ->
@@ -131,6 +159,12 @@ trueSha1 = decodeUtf8 (convertToBase Base16 (hashlazy tarballBytes :: Digest SHA
 -- The path the job's artifact URL appends to the upstream stub base.
 artifactPath :: Text
 artifactPath = "/left-pad/-/left-pad-1.3.0.tgz"
+
+-- The request path an npm publish PUTs to: @\/{package}@ (the unscoped @left-pad@
+-- needs no escaping). This is what the mirror-target stub records in its publish
+-- log, so the redelivery case asserts each delivery's PUT landed here.
+npmPublishPath :: ByteString
+npmPublishPath = "/left-pad"
 
 -- A mirror job pointing at the upstream stub, carrying the given SHA-1 digest.
 job :: Text -> Text -> MirrorJob
@@ -182,18 +216,30 @@ the loop — the same cooperative cancellation process shutdown uses. A hard tim
 bounds the whole thing so a failing test cannot hang. -}
 runLoopUntil :: Env -> IO Bool -> IO ()
 runLoopUntil env done =
-    void $ timeout 12_000_000 $ race_ (runApp env workerLoop) (waitFor done)
+    void $ timeout loopHardTimeout $ race_ (runApp env workerLoop) (waitFor done)
+
+{- The hard ceiling on a 'runLoopUntil' run, sized so even the slowest positive
+condition (the redelivery case waiting on a /second/ publish — two full
+fetch → verify → publish cycles plus a real redelivery in between) lands with
+comfortable headroom under @-fhpc@ instrumentation, where the loop runs several
+times slower than uninstrumented. Uninstrumented those steps take well under a
+second; 45s is deliberately far above that so the ceiling never clips a healthy run
+and only ever fires on a genuine hang. -}
+loopHardTimeout :: Int
+loopHardTimeout = 45_000_000
 
 {- Run the supervised 'workerLoop' for a fixed wall-clock window, then cancel it —
-for the cases that assert a /negative/ (nothing published, a redelivery, an idle
-heartbeat) where there is no positive condition to wait on. -}
+for the cases that assert a /negative/ (nothing published, an idle heartbeat) where
+there is no positive condition to wait on. -}
 runLoopFor :: Env -> Int -> IO ()
 runLoopFor env micros = void (timeout micros (runApp env workerLoop))
 
--- Poll a condition until it holds, bounded so a failing test does not hang past the
--- enclosing timeout.
+-- Poll a condition until it holds, bounded so a failing test does not hang. The
+-- bound (~40s of 200ms ticks) sits just under 'loopHardTimeout' so that ceiling, not
+-- this poller, is what fires on a genuine hang — while still leaving the slowest
+-- healthy positive condition (the -fhpc redelivery wait) ample room to land.
 waitFor :: IO Bool -> IO ()
-waitFor done = go (60 :: Int)
+waitFor done = go (200 :: Int)
   where
     go :: Int -> IO ()
     go 0 = pure ()
