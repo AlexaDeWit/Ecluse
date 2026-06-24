@@ -52,8 +52,9 @@ make targets):
 | Run the hermetic checks | `make nix-check` (`nix flake check`) |
 
 `nix flake check` builds the package and runs the pure tier: the `ecluse-unit`
-suite (`checks.unit`), `fourmolu --mode check` (`checks.format`), and `hlint`
-(`checks.lint`). Deliberately **excluded** — they cannot run in a hermetic
+suite (`checks.unit`), `fourmolu --mode check` (`checks.format`), `hlint`
+(`checks.lint`), and `cabal check` (`checks.cabal-check`). Deliberately
+**excluded** — they cannot run in a hermetic
 sandbox: `ecluse-integration` (needs a Docker daemon), `ecluse-smoke` (live
 network), and Semgrep (`--config auto` fetches rules over the network). Those
 stay dev-shell / CI steps.
