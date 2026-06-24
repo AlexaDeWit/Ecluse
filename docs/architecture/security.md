@@ -40,15 +40,23 @@ noted below.
    `dist.tarball`, after the allowlist check — never from a client-supplied URL.
    See [Registry Model](registry-model.md#registry-abstraction) and
    [URL rewriting](hosting.md#the-load-bearing-requirement-url-rewriting).
-3. **Internal address ranges are blocked** for outbound requests — link-local
+3. **Internal address ranges are blocked on the untrusted legs** — link-local
    (incl. the `169.254.169.254` cloud-metadata endpoint), loopback, the
    unspecified / this-host range (`0.0.0.0/8` and IPv6 `::`, since `0.0.0.0` is a
-   loopback-equivalent on Linux), RFC1918, and CGNAT shared space (`100.64.0.0/10`)
-   — unless the configured upstream is deliberately internal (an explicit per-host
-   opt-in). This is **defence-in-depth behind invariant 2**: the host allowlist is
-   the load-bearing control, and the internal-range block is the second gate for an
-   allowlisted name that resolves to an internal literal (see
-   [Why `dist.tarball` is honoured](#why-disttarball-is-honoured-and-what-bounds-it)).
+   loopback-equivalent on Linux), RFC1918, CGNAT shared space (`100.64.0.0/10`), and
+   IPv6 unique-local `fc00::/7` (incl. the AWS IMDSv6 endpoint `fd00:ec2::254`). The
+   block is **leg-aware**: it guards the **untrusted** egress — the public-upstream
+   fetch and every artifact (`dist.tarball`) fetch — and is **re-applied to every
+   resolved IP** at connection time (so an allowlisted name that resolves to an
+   internal address is refused — the DNS-rebinding backstop). The **trusted private
+   leg** (the operator-configured private upstream) is deliberately *exempt*: a
+   private registry may legitimately live on an internal address, and only an
+   untrusted target can be steered by an attacker. This is **defence-in-depth behind
+   invariant 2**: the host allowlist is the load-bearing control, and the
+   internal-range block is the second gate for an untrusted allowlisted name that
+   resolves to an internal literal (see
+   [Why `dist.tarball` is honoured](#why-disttarball-is-honoured-and-what-bounds-it)
+   and [Network egress is a shared responsibility](#network-egress-is-a-shared-responsibility)).
 4. **Parsed upstream responses are bounded** — maximum body size, version count,
    and JSON nesting depth — and **fail closed** past any bound: an oversized or
    pathological document is refused, never partially served.
@@ -98,28 +106,47 @@ not by URL reconstruction:
   (invariant 2), with the internal-range block (invariant 3) as defence-in-depth.
 
 The load-bearing guard is thus `isAllowedUpstreamHost`; the IP-range block is its
-backstop, and full literal-form completeness in that block only earns its keep once
-the S08 fetch layer re-checks **resolved** IPs (a DNS name that resolves to an
-internal address — which the pure layer cannot see).
+backstop. Full literal-form completeness in that block earns its keep because the
+fetch layer also re-checks **resolved** IPs: the shared HTTP manager's connection
+hook resolves every outbound host and re-applies the internal-range block to each
+resolved address before the socket is used (`Ecluse.Security.Egress`), so a DNS
+name that resolves to an internal address — which the pure layer cannot see — is
+refused at connect time. This narrows the resolve-then-connect (DNS-rebinding)
+window the pure layer leaves open.
 
 ## Network egress is a shared responsibility
 
 Écluse's outbound guards are the **primary, application-layer** control; a
 defence-in-depth posture pairs them with the deployment's own egress controls — the
-standard arrangement for any service that fetches on a client's behalf. Constraining
-where the proxy's network namespace can reach means no single guard bug or
-unforeseen fetch path can turn into a request you did not intend — the classic case
-being an SSRF to the cloud metadata endpoint. Recommended, in rough order of leverage:
+standard arrangement for any service that fetches on a client's behalf.
 
-- **Block the instance-metadata endpoint at the platform.** Require IMDSv2 and set
-  the hop limit to 1 (AWS `httpPutResponseHopLimit: 1`), or deny `169.254.169.254`
-  egress outright. This single step removes the highest-value SSRF target.
-- **Restrict egress with a default-deny network policy.**
-  - **AWS** — security-group egress rules / network ACLs allowing only the
-    upstream registry CIDRs and the mirror target; deny RFC1918 and link-local.
+**The cloud-metadata SSRF is handled at the service-behaviour level, not by blocking
+metadata at the network.** Écluse only follows an internal-resolving location on the
+**trusted private leg** (invariant 3) — never on a public-upstream or
+`dist.tarball`-derived target, which are exactly the attacker-influenced ones — so an
+SSRF cannot steer it at `169.254.169.254` or `fd00:ec2::254`. At the same time Écluse
+**needs** the metadata endpoint to mint its instance-role credentials
+(`AWS.newEnv AWS.discover`, which builds amazonka's **own** HTTP client, separate from
+the guarded data-plane manager — so credential minting reaches IMDS regardless of the
+data-plane guard). The platform controls below therefore protect the **data targets**
+and add defence-in-depth; they must **not** cut the proxy off from metadata or from
+its private upstream's internal range. Recommended, in rough order of leverage:
+
+- **Harden the instance-metadata endpoint — do not block it.** Require IMDSv2 and set
+  the hop limit to 1 (AWS `httpPutResponseHopLimit: 1`): this stops a neighbour or a
+  forwarded request from reaching metadata through extra hops while keeping the
+  proxy's own credential minting working. Denying the instance egress to
+  `169.254.169.254` outright would break that minting and is **not** recommended — the
+  SSRF risk is already closed at the behaviour level.
+- **Restrict egress with a default-deny network policy** scoped to the **data
+  targets**.
+  - **AWS** — security-group egress rules / network ACLs allowing only the upstream
+    registry CIDRs, the mirror target, and the metadata endpoint the instance role
+    needs.
   - **GCP** — VPC firewall egress rules and, where applicable, VPC Service Controls.
   - **Kubernetes** — a default-deny `NetworkPolicy` with an explicit egress
-    allowlist (and a CNI that enforces it).
+    allowlist (and a CNI that enforces it); allow the private upstream's internal
+    range.
   - **Service mesh (Istio/Linkerd)** — set the sidecar outbound policy to
     `REGISTRY_ONLY`, declare each upstream as an explicit `ServiceEntry`, and
     constrain it with a `Sidecar` egress listener and egress `AuthorizationPolicy`.
@@ -139,17 +166,17 @@ explicit control — the consumer decides their own threat tolerance.** The egre
 guards follow that principle, and one planned control makes it concrete for the
 tarball path:
 
-- **`dist.tarball` host, disallow-by-default (planned — design only).** By default
-  the proxy will fetch a tarball only from the **same allowlisted upstream that
-  served the packument**, refusing a `dist.tarball` that points at a *different*
-  host even if it is otherwise on the allowlist — the safest reading of invariant 2.
-  An operator whose registry legitimately serves tarballs from a separate CDN (the
+- **`dist.tarball` host, disallow-by-default.** By default the proxy fetches a
+  tarball only from the **same allowlisted upstream that served the packument**,
+  refusing a `dist.tarball` that points at a *different* host even if it is
+  otherwise on the allowlist — the safest reading of invariant 2
+  (`Ecluse.Security.tarballHostAllowed` with `SameHostAsPackument`). An operator
+  whose registry legitimately serves tarballs from a separate CDN (the
   PyPI-files-host shape above) **opts in** to honouring the upstream-declared host
-  (constrained to the allowlist) via configuration, accepting the documented wider
-  fetch surface in exchange. Tracked in
-  [`S40`](../../planning/slices/S40-egress-ssrf-hardening.md); the configuration
-  surface and its security note are sketched in
-  [Configuration → Outbound egress safety](configuration.md#outbound-egress-safety-planned).
+  (constrained to the allowlist) by setting `PROXY_RESPECT_UPSTREAM_TARBALL_HOST`,
+  accepting the documented wider fetch surface in exchange. The configuration
+  surface and its security note are in
+  [Configuration → Outbound egress safety](configuration.md#outbound-egress-safety).
 
 The internal-range opt-in (invariant 3) is the same shape: internal addresses are
 blocked unless a specific private upstream is deliberately opted in.

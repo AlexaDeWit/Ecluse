@@ -141,6 +141,7 @@ fullEnv =
     , ("METADATA_CACHE_MAX_ENTRIES", "256")
     , ("PROXY_LOG_FORMAT", "console")
     , ("PROXY_TELEMETRY", "on")
+    , ("PROXY_RESPECT_UPSTREAM_TARBALL_HOST", "true")
     ]
 
 -- The minimum valid environment: only the three required URLs, everything else
@@ -178,6 +179,7 @@ envLayerSpec = describe "parseEnvPure" $ do
                 cfgCacheMaxEntries cfg `shouldBe` 256
                 cfgLogFormat cfg `shouldBe` ConsoleLog
                 cfgTelemetry cfg `shouldBe` TelemetryOn
+                cfgRespectUpstreamTarballHost cfg `shouldBe` True
 
     it "applies the documented defaults for the optional variables" $ do
         case parseEnvPure minimalEnv of
@@ -197,6 +199,9 @@ envLayerSpec = describe "parseEnvPure" $ do
                 -- Telemetry is opt-in: an unset PROXY_TELEMETRY leaves it off, so
                 -- nothing is wired and nothing is emitted.
                 cfgTelemetry cfg `shouldBe` TelemetryOff
+                -- The secure default: a cross-host dist.tarball is NOT honoured
+                -- unless the operator explicitly opts in.
+                cfgRespectUpstreamTarballHost cfg `shouldBe` False
 
     it "reports a single missing required variable against its own name" $
         failedNames (parseEnvPure (without "PRIVATE_UPSTREAM_URL" minimalEnv))
@@ -239,6 +244,35 @@ envLayerSpec = describe "parseEnvPure" $ do
     it "rejects an unknown telemetry switch against its own name" $
         failedNames (parseEnvPure (set "PROXY_TELEMETRY" "maybe" minimalEnv))
             `shouldBe` ["PROXY_TELEMETRY"]
+
+    it "parses the tarball-host toggle as a boolean" $
+        -- The opt-in to honour a cross-host dist.tarball; "false" is the secure
+        -- value the default also gives.
+        case parseEnvPure (set "PROXY_RESPECT_UPSTREAM_TARBALL_HOST" "false" minimalEnv) of
+            Left errs -> expectationFailure ("unexpected errors: " <> show errs)
+            Right cfg -> cfgRespectUpstreamTarballHost cfg `shouldBe` False
+
+    it "rejects a non-boolean tarball-host toggle rather than coercing it" $
+        -- A security-relevant toggle must fail loudly on a typo, never silently
+        -- fall back to a default the operator did not intend.
+        failedNames (parseEnvPure (set "PROXY_RESPECT_UPSTREAM_TARBALL_HOST" "maybe" minimalEnv))
+            `shouldBe` ["PROXY_RESPECT_UPSTREAM_TARBALL_HOST"]
+
+    it "accepts the conventional boolean spellings (1/0, yes/no) case-insensitively"
+        $
+        -- The toggle takes the usual true/false synonyms an operator might reach
+        -- for, so each documented spelling parses to its value rather than being
+        -- rejected as a typo.
+        forM_
+            [ ("1", True)
+            , ("0", False)
+            , ("YES", True)
+            , ("No", False)
+            ]
+        $ \(raw, expected) ->
+            case parseEnvPure (set "PROXY_RESPECT_UPSTREAM_TARBALL_HOST" raw minimalEnv) of
+                Left errs -> expectationFailure ("unexpected errors for " <> raw <> ": " <> show errs)
+                Right cfg -> cfgRespectUpstreamTarballHost cfg `shouldBe` expected
 
     it "renders every aggregated error in the failure block" $ do
         -- The rendered block names each offending variable, so a launch failure

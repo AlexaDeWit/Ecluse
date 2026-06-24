@@ -85,6 +85,7 @@ library
     Ecluse.Rules.Effectful
     Ecluse.Rules.Types
     Ecluse.Security
+    Ecluse.Security.Egress
     Ecluse.Server
     Ecluse.Server.Cache
     Ecluse.Server.Conditional
@@ -116,6 +117,7 @@ library
     , katip                           ^>=0.8.8
     , memory                          ^>=0.18
     , microlens                       ^>=0.4.13
+    , network                         ^>=3.2
     , resourcet                       ^>=1.3
     , stm                             ^>=2.5
     , text                            ^>=2.1
@@ -162,6 +164,7 @@ test-suite ecluse-unit
     Ecluse.Rules.EffectfulSpec
     Ecluse.RulesSpec
     Ecluse.SecuritySpec
+    Ecluse.Security.EgressSpec
     Ecluse.ServerSpec
     Ecluse.Server.CacheSpec
     Ecluse.Server.ConditionalSpec
@@ -194,6 +197,7 @@ test-suite ecluse-unit
     , hs-opentelemetry-sdk  ^>=1.0
     , katip             ^>=0.8.8
     , ecluse
+    , network           ^>=3.2
     , text              ^>=2.1
     , time              ^>=1.12
     , unliftio          ^>=0.2.25
@@ -202,9 +206,9 @@ test-suite ecluse-unit
     , wai-extra         ^>=3.1
     , warp              ^>=3.4
 
--- Integration tests: exercise AWS-backed code against a ministack container
--- (via testcontainers). Hermetic and gating; require a Docker daemon. The deps
--- (testcontainers, amazonka-*) are added with the first real case.
+-- Integration tests: exercise the real request path against in-process servers
+-- (and, where they land, AWS-backed code against a ministack container via
+-- testcontainers). Hermetic and gating; the AWS cases require a Docker daemon.
 test-suite ecluse-integration
   import:             shared
   -- hspec-discover generates a Main without an export list.
@@ -212,18 +216,26 @@ test-suite ecluse-integration
   type:               exitcode-stdio-1.0
   main-is:            Spec.hs
   hs-source-dirs:     test/integration
-  other-modules:      Ecluse.MirrorQueueSpec
+  other-modules:
+    Ecluse.MirrorQueueSpec
+    Ecluse.Security.EgressLegSpec
+
   build-tool-depends: hspec-discover:hspec-discover ^>=2.11
   build-depends:
+    , aeson            ^>=2.2
     , amazonka         ^>=2.0
     , amazonka-sqs     ^>=2.0
     , ecluse
     , hspec            ^>=2.11
+    , http-client      ^>=0.7
+    , http-types       ^>=0.12
     , microlens        ^>=0.4.13
     , resourcet        ^>=1.3
     , testcontainers   ^>=0.5.3
     , text             ^>=2.1
     , unliftio         ^>=0.2.25
+    , wai              ^>=3.2
+    , warp             ^>=3.4
 
 -- Smoke tests: live calls to public registries (npm/PyPI) to validate our JSON
 -- and protocol handling. ALLOWED TO FAIL by design (non-gating) — they depend on

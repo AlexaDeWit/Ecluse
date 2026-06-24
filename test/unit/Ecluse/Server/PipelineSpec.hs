@@ -55,6 +55,7 @@ import Ecluse.Rules.Types (
     RuleOutcome (Allow, Deny),
     atDefaultPrecedence,
  )
+import Ecluse.Security (TarballHostPolicy (SameHostAsPackument))
 import Ecluse.Server (
     MountBinding (..),
     application,
@@ -317,7 +318,7 @@ newTestEnvWithQueue :: MirrorQueue -> Manager -> IO Env
 newTestEnvWithQueue queue manager = do
     metadataCache <- newMetadataCache defaultCacheConfig
     logEnv <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
-    newEnv fakeRegistry queue fakeCredentials manager metadataCache logEnv telemetryDisabled
+    newEnv fakeRegistry queue fakeCredentials manager manager metadataCache logEnv telemetryDisabled
 
 {- | The packument-serve dependencies pointing at two in-process upstream ports,
 with the given inbound edge token (usually 'Nothing').
@@ -331,6 +332,7 @@ deps privatePort publicPort inbound =
         , pdMirrorTarget = "https://mirror.test"
         , pdRules = policy
         , pdEffectfulRules = []
+        , pdTarballHostPolicy = SameHostAsPackument
         , pdInboundToken = mkSecret <$> inbound
         , pdNow = pure now
         , pdHelp = Nothing

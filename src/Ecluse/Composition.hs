@@ -69,6 +69,7 @@ import Ecluse.Config (
  )
 import Ecluse.Credential (AuthToken (..), CredentialProvider, mkSecret, staticProvider)
 import Ecluse.Ecosystem (Ecosystem, ecosystemName, prefixFor)
+import Ecluse.Security (TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument))
 import Ecluse.Server.Cache (CacheConfig (..))
 import Ecluse.Server.Context (MountBinding, PackumentDeps (..))
 import Ecluse.Server.Response (HelpMessage, mkHelpMessage)
@@ -196,6 +197,15 @@ composeBindings resolveAdapter clock providers config =
     inboundToken :: Maybe Text
     inboundToken = cfgAuthToken (configEnv config)
 
+    -- The resolved tarball-host policy for every mount, from the secure-default
+    -- environment toggle: honour a cross-host dist.tarball only when explicitly
+    -- opted in (and even then, never past the allowlist or the internal block).
+    tarballHostPolicy :: TarballHostPolicy
+    tarballHostPolicy =
+        if cfgRespectUpstreamTarballHost (configEnv config)
+            then AnyAllowlistedHost
+            else SameHostAsPackument
+
     -- The operator help message, derived from the environment layer like the
     -- inbound token, so every mount's denials carry it.
     helpMessage :: Maybe HelpMessage
@@ -239,6 +249,7 @@ composeBindings resolveAdapter clock providers config =
                 , -- No effectful rule type is wired into the policy model yet, so the
                   -- effectful tier is empty here and gating reduces to the pure tier.
                   pdEffectfulRules = []
+                , pdTarballHostPolicy = tarballHostPolicy
                 , pdInboundToken = mkSecret <$> inboundToken
                 , pdNow = clock
                 , pdHelp = helpMessage

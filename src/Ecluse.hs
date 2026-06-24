@@ -93,12 +93,11 @@ module Ecluse (
     unconfiguredCredentials,
 ) where
 
+import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
 import Data.Time (getCurrentTime)
 import Katip (Environment (Environment))
-import Network.HTTP.Client qualified as HTTP
-import Network.HTTP.Client.TLS (tlsManagerSettings)
 import System.IO.Error (userError)
 import UnliftIO (concurrently_, throwIO)
 
@@ -128,6 +127,8 @@ import Ecluse.Registry (
  )
 import Ecluse.Registry.Npm.Route qualified as Npm
 import Ecluse.Registry.Npm.Serve (npmRenderer)
+import Ecluse.Security (lowerCaseHosts)
+import Ecluse.Security.Egress (newGuardedTlsManager, newTrustedTlsManager)
 import Ecluse.Server (MountBinding (..), ServerConfig (scPort), mkServerConfig)
 import Ecluse.Server qualified as Server
 import Ecluse.Server.Cache (newMetadataCache)
@@ -155,12 +156,20 @@ run = do
     providers <- initCredentialProviders env
     bindings <- orExit (T.unlines . map renderBootError) (planMounts mountBindingFor getCurrentTime providers env mDoc)
     let serverConfig = (mkServerConfig bindings){scPort = cfgPort env}
-    manager <- HTTP.newManager tlsManagerSettings
+    -- Two data-plane managers, split by trust. The guarded one rechecks every
+    -- resolved outbound IP against the internal-range block (DNS-rebinding /
+    -- resolve-to-internal SSRF) and serves the untrusted legs — the public upstream
+    -- and every artifact stream — blocking every internal resolved address (an empty
+    -- opt-in: the secure default). The trusted one serves the private leg only: the
+    -- private base URL is operator-configured and may legitimately resolve to an
+    -- internal address, so it is deliberately not rechecked.
+    manager <- newGuardedTlsManager (lowerCaseHosts Set.empty)
+    privateManager <- newTrustedTlsManager
     queue <- newInMemoryQueue
     metadataCache <- newMetadataCache (Composition.cacheConfigFor env)
     logEnv <- newLogEnv (cfgLogFormat env) (Environment "production")
     withTelemetry (cfgTelemetry env) $ \telemetry ->
-        withEnv unconfiguredRegistry queue (mirrorWriteProvider providers) manager metadataCache logEnv telemetry (runServices serverConfig)
+        withEnv unconfiguredRegistry queue (mirrorWriteProvider providers) manager privateManager metadataCache logEnv telemetry (runServices serverConfig)
 
 {- | Read the optional structured config document from the @PROXY_CONFIG@ env blob,
 decoding it strictly. 'Nothing' when unset — an env-only deployment supplies no

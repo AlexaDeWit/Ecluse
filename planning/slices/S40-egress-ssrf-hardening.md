@@ -2,13 +2,13 @@
 id: S40
 title: Egress / SSRF hardening — resolved-IP recheck, tarball-host policy, operator egress docs
 milestone: M4 — AWS cloud backends & worker
-status: not-started
+status: in-progress
 depends-on: [S08, S15]
 test-tier: [unit, integration]
 arch-refs:
   - docs/architecture/security.md#network-egress-is-a-shared-responsibility
   - docs/architecture/security.md#why-disttarball-is-honoured-and-what-bounds-it
-  - docs/architecture/configuration.md#outbound-egress-safety-planned
+  - docs/architecture/configuration.md#outbound-egress-safety
 issue: 11
 pr: null
 ---
@@ -36,7 +36,7 @@ application guards assume.
 - [ ] **`dist.tarball` host policy, disallow-by-default.** A tarball is fetched only
       from the **same allowlisted upstream that served the packument** unless the
       operator opts in via `PROXY_RESPECT_UPSTREAM_TARBALL_HOST` (see
-      [Configuration → Outbound egress safety](../../docs/architecture/configuration.md#outbound-egress-safety-planned)),
+      [Configuration → Outbound egress safety](../../docs/architecture/configuration.md#outbound-egress-safety)),
       which relaxes to "any allowlisted host" — never escaping the allowlist or the
       internal-range block. Secure default; configurable override. — _security.md_
 - [ ] **Config surface + validation.** The new setting is parsed at the config
@@ -71,4 +71,6 @@ default cannot silently break those, but the launch docs must call it out.
 
 **Out of scope.** Octal/decimal/short-form IPv4 _literal_ parsing in the pure block
 (still covered by the allowlist + the resolved-IP recheck, which sees the
-canonical address); ULA `fc00::/7` and NAT64 `64:ff9b::/96` (unchanged from S36).
+canonical address); NAT64 `64:ff9b::/96` (unchanged from S36). IPv6 ULA `fc00::/7`
+(incl. AWS IMDSv6 `fd00:ec2::254`) is now **in scope** — added alongside the
+leg-aware split per the post-review (issue #162).

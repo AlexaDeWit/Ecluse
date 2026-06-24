@@ -69,9 +69,21 @@ data Env = Env
     approved packages to the mirror target.
     -}
     , envManager :: Manager
-    {- ^ The shared @http-client@ 'Manager' for the data plane (metadata fetch and
-    artifact streaming), so connection pooling and TLS are established once and
-    reused across requests.
+    {- ^ The shared @http-client@ 'Manager' for the __untrusted__ data plane — the
+    public-upstream metadata fetch and every artifact stream — so connection pooling
+    and TLS are established once and reused across requests. This manager carries the
+    resolved-IP SSRF recheck (see "Ecluse.Security.Egress"): a public fetch whose host
+    resolves to an internal address is refused at connect time, since a public
+    @dist.tarball@ is upstream-chosen and could otherwise steer the proxy at an
+    internal target.
+    -}
+    , envPrivateManager :: Manager
+    {- ^ The @http-client@ 'Manager' for the __trusted__ private-upstream leg. The
+    private base URL is operator-configured and deliberately trusted — it may
+    legitimately resolve to an internal address (a registry on the private network) —
+    so this manager does __not__ carry the resolved-IP recheck that 'envManager' does.
+    The trust split is by leg: only the untrusted public\/artifact legs are guarded
+    (see @docs\/architecture\/security.md@).
     -}
     , envMetadataCache :: MetadataCache
     {- ^ The short-TTL, size-bounded metadata cache (see "Ecluse.Server.Cache")
@@ -92,9 +104,11 @@ data Env = Env
     -}
     }
 
-{- | Assemble an 'Env' from its constructed handles and a shared HTTP 'Manager'.
+{- | Assemble an 'Env' from its constructed handles and the two data-plane HTTP
+'Manager's — the guarded one for the untrusted public\/artifact legs and the
+trusted one for the private leg.
 
-The 'Manager', 'MetadataCache', 'LogEnv', and 'Telemetry' handle are taken as
+The 'Manager's, 'MetadataCache', 'LogEnv', and 'Telemetry' handle are taken as
 arguments rather than built here: a 'Manager' owns a connection pool whose lifetime
 should be bracketed by the caller that also owns teardown (see 'withEnv'), and
 injecting them keeps 'Env' assembly pure of network, logging, and telemetry setup —
@@ -103,14 +117,15 @@ opened, no scribe attached to stdout, and no exporter initialised. Backend
 selection happens in the handle smart constructors that produce the arguments;
 this only gathers them.
 -}
-newEnv :: RegistryClient -> MirrorQueue -> CredentialProvider -> Manager -> MetadataCache -> LogEnv -> Telemetry -> IO Env
-newEnv registry queue credentials manager metadataCache logEnv telemetry =
+newEnv :: RegistryClient -> MirrorQueue -> CredentialProvider -> Manager -> Manager -> MetadataCache -> LogEnv -> Telemetry -> IO Env
+newEnv registry queue credentials manager privateManager metadataCache logEnv telemetry =
     pure
         Env
             { envRegistry = registry
             , envQueue = queue
             , envCredentials = credentials
             , envManager = manager
+            , envPrivateManager = privateManager
             , envMetadataCache = metadataCache
             , envLogEnv = logEnv
             , envTelemetry = telemetry
@@ -127,14 +142,15 @@ withEnv ::
     MirrorQueue ->
     CredentialProvider ->
     Manager ->
+    Manager ->
     MetadataCache ->
     LogEnv ->
     Telemetry ->
     (Env -> m a) ->
     m a
-withEnv registry queue credentials manager metadataCache logEnv telemetry =
+withEnv registry queue credentials manager privateManager metadataCache logEnv telemetry =
     bracket
-        (liftIO (newEnv registry queue credentials manager metadataCache logEnv telemetry))
+        (liftIO (newEnv registry queue credentials manager privateManager metadataCache logEnv telemetry))
         teardown
   where
     -- The connection pool behind the 'Manager' and the telemetry providers behind

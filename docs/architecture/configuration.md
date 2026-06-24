@@ -53,6 +53,7 @@ registries derive short-lived tokens from ambient cloud credentials (see
 | `AWS_REGION` | AWS backends only | Region for SQS and CodeArtifact. |
 | `GOOGLE_CLOUD_PROJECT` | GCP backends only | Project for Pub/Sub and Artifact Registry. Credentials come from Application Default Credentials (ADC). |
 | `PROXY_AUTH_TOKEN` | No | If set, clients must supply this token as `Bearer` or `_authToken`. Omit for open/network-secured deployments. |
+| `PROXY_RESPECT_UPSTREAM_TARBALL_HOST` | No (default: `false`) | Secure default. When `false`, a tarball is fetched only from the same allowlisted upstream that served the packument. See [Outbound egress safety](#outbound-egress-safety). |
 | `PROXY_HELP_MESSAGE` | No | Custom string appended to all denial messages (e.g. `"Contact #platform-eng on Slack for assistance."`). |
 | `CVE_SYNC_INTERVAL_SECONDS` | No (default: 3600) | How often to refresh the in-memory advisory index from OSV (see [CVE Subsystem](rules-engine.md#cve-subsystem)). |
 
@@ -94,14 +95,11 @@ The public upstream is anonymous under every strategy — and the client's token
 `PUBLIC_UPSTREAM_TOKEN` — Écluse's own, never the client's.) Minting these
 credentials from a cloud identity keeps long-lived secrets out of config.
 
-### Outbound egress safety (planned)
+### Outbound egress safety
 
-> **Design only — not yet a live setting.** Recorded here so the configuration
-> surface and its security trade-off are agreed before implementation
-> ([`S40`](../../planning/slices/S40-egress-ssrf-hardening.md)).
-
-Écluse constrains its own outbound fetches (host allowlist + internal-range block;
-see [Security Invariants](security.md)), but **network egress is a shared
+Écluse constrains its own outbound fetches (host allowlist + internal-range block,
+**re-applied to every resolved IP** at connection time; see
+[Security Invariants](security.md)), but **network egress is a shared
 responsibility** — the deployment must also fence egress at the platform layer
 (security groups, `NetworkPolicy`, Istio `ServiceEntry`/egress policy, and blocking
 the `169.254.169.254` metadata endpoint). See
@@ -110,8 +108,8 @@ the `169.254.169.254` metadata endpoint). See
 The one application-level knob, following Écluse's **secure-defaults /
 configurable-overrides** principle — *the consumer decides their threat tolerance*:
 
-| Variable (planned) | Default | Description |
-|--------------------|---------|-------------|
+| Variable | Default | Description |
+|----------|---------|-------------|
 | `PROXY_RESPECT_UPSTREAM_TARBALL_HOST` | `false` (secure default) | When `false`, a tarball is fetched only from the **same allowlisted upstream that served the packument**; a `dist.tarball` pointing at a *different* host is refused. Set `true` only for a registry that legitimately serves tarballs from a separate CDN/files host (e.g. the PyPI files host), which **widens the outbound fetch surface to any allowlisted host** — opt in deliberately, and pair it with platform egress controls. |
 
 The override never escapes the host allowlist or the internal-range block: it

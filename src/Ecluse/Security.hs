@@ -43,6 +43,10 @@ module Ecluse.Security (
     isBlockedTarget,
     hostAddress,
 
+    -- * Tarball-host policy
+    TarballHostPolicy (..),
+    tarballHostAllowed,
+
     -- * Identifier → URL safety
     upstreamUrlFor,
     UrlError (..),
@@ -124,7 +128,9 @@ against:
   is a loopback-equivalent that must be blocked alongside @127.0.0.0\/8@;
 * __RFC1918 private__ @10.0.0.0\/8@, @172.16.0.0\/12@, and @192.168.0.0\/16@;
 * __CGNAT shared__ @100.64.0.0\/10@ (RFC 6598) — carrier-grade NAT space some
-  cloud fabrics route internally.
+  cloud fabrics route internally;
+* __IPv6 unique-local__ @fc00::\/7@ (RFC 4193) — the private-network IPv6 analogue,
+  which contains the AWS IMDSv6 metadata endpoint @fd00:ec2::254@.
 
 A host in @allowedInternal@ is __never__ blocked (matched case-insensitively, as
 DNS and the host allowlist are) — the deliberate opt-in for a private upstream that
@@ -216,18 +222,19 @@ isInternalAddress = \case
     IPv6 groups -> isInternalV6 groups
 
 {- Whether 16-bit IPv6 groups are unspecified (@::@), loopback (@::1@),
-link-local (@fe80::\/10@), or IPv4-mapped (@::ffff:0:0\/96@). The mapped range lets an
-attacker embed an internal IPv4 literal (e.g. @::ffff:169.254.169.254@) in an
-IPv6 form that the per-IPv4-range checks would otherwise miss; decoding the
-embedded address and re-running 'isInternalV4' on the IPv4 result closes
-the gap. Both spellings of a mapped address reach here as the same eight groups
-— the hex form (@::ffff:a9fe:a9fe@) and the canonical dotted form
-(@::ffff:169.254.169.254@), which 'parseIPv6' expands. ULA (@fc00::\/7@) and
-NAT64 (@64:ff9b::\/96@) are out of scope.
+link-local (@fe80::\/10@), unique-local (@fc00::\/7@), or IPv4-mapped
+(@::ffff:0:0\/96@). The mapped range lets an attacker embed an internal IPv4 literal
+(e.g. @::ffff:169.254.169.254@) in an IPv6 form that the per-IPv4-range checks would
+otherwise miss; decoding the embedded address and re-running 'isInternalV4' on the
+IPv4 result closes the gap. Both spellings of a mapped address reach here as the same
+eight groups — the hex form (@::ffff:a9fe:a9fe@) and the canonical dotted form
+(@::ffff:169.254.169.254@), which 'parseIPv6' expands. Unique-local space includes
+the AWS IPv6 instance-metadata endpoint @fd00:ec2::254@, the IMDSv6 analogue of the
+IPv4 @169.254.169.254@. NAT64 (@64:ff9b::\/96@) is out of scope.
 -}
 isInternalV6 :: [Word16] -> Bool
 isInternalV6 groups =
-    isUnspecified || isLoopback || isLinkLocal || isMappedInternalV4
+    isUnspecified || isLoopback || isLinkLocal || isUniqueLocal || isMappedInternalV4
   where
     -- :: and ::1, written out as their eight 16-bit groups.
     isUnspecified = groups == [0, 0, 0, 0, 0, 0, 0, 0]
@@ -236,6 +243,13 @@ isInternalV6 groups =
     -- fe80::/10: the first group lies in fe80..febf; the rest is unconstrained.
     isLinkLocal = case groups of
         (g0 : _) -> g0 >= 0xFE80 && g0 <= 0xFEBF
+        [] -> False
+
+    -- fc00::/7: the first group's top 7 bits are 1111110, i.e. fc00..fdff. This is
+    -- the private-network IPv6 analogue of RFC1918, and contains the AWS IMDSv6
+    -- endpoint fd00:ec2::254 — so an SSRF aimed at IPv6 instance metadata is caught.
+    isUniqueLocal = case groups of
+        (g0 : _) -> g0 >= 0xFC00 && g0 <= 0xFDFF
         [] -> False
 
     -- ::ffff:a.b.c.d — the last two groups hold the embedded IPv4 (high group
@@ -342,6 +356,77 @@ isHex :: Text -> Bool
 isHex t = not (T.null t) && T.all isHexDigit t
   where
     isHexDigit c = c `elem` (['0' .. '9'] <> ['a' .. 'f'] <> ['A' .. 'F'])
+
+-- ── tarball-host policy ───────────────────────────────────────────────────────
+
+{- | Whether a tarball may be fetched from a host that differs from the upstream
+that served the packument.
+
+An upstream's @dist.tarball@ is server-chosen data (see
+@docs\/architecture\/security.md@ → "Why @dist.tarball@ is honoured"), so a
+compromised or hostile upstream can name __any__ host as the artifact location.
+This policy bounds the third axis of that risk — /where/ the bytes are fetched —
+that the host allowlist and the resolved-IP block leave open: even an
+allowlisted-but-/different/ host is a wider fetch surface than the packument's own
+source, and the safe reading of the allowlist is "same source unless told
+otherwise".
+-}
+data TarballHostPolicy
+    = {- | The secure default: a tarball is fetched only from the __same__ host
+      that served the packument; a @dist.tarball@ on any other host is refused,
+      even one otherwise on the allowlist.
+      -}
+      SameHostAsPackument
+    | {- | The opt-in: a tarball may be fetched from __any allowlisted__ host (for a
+      registry that legitimately serves artifacts from a separate CDN\/files host).
+      This widens the fetch surface to the whole allowlist; it never escapes it or
+      the internal-range block.
+      -}
+      AnyAllowlistedHost
+    deriving stock (Eq, Show)
+
+{- | Whether a @dist.tarball@ host may be fetched, given the policy, the host that
+served the packument, and the configured guards.
+
+This is the policy half of the @dist.tarball@ defence; it never replaces the host
+allowlist or the internal-range block but composes /on top/ of them, so the
+answer is the conjunction of three independent checks and over-blocking is the
+fail-safe:
+
+* the @tarballHost@ must be on the host allowlist (@allowed@), as every outbound
+  target is — a @dist.tarball@ host off the allowlist is refused regardless of
+  policy;
+* it must not be an internal address (subject to the per-host @allowedInternal@
+  opt-in), as every outbound target is; and
+* under 'SameHostAsPackument' (the secure default) it must additionally __equal__
+  the @packumentHost@ — the host that served the metadata — so a tarball on a
+  /different/ host is refused even when that host is allowlisted. Under
+  'AnyAllowlistedHost' that last clause is relaxed, leaving only the allowlist and
+  internal-range checks.
+
+Hosts are compared case-insensitively (as DNS and the host guards are). An empty
+@tarballHost@ is never allowed (the allowlist already refuses it). The
+@packumentHost@ is the bare host the metadata was fetched from (extract it with
+'hostAddress'); only its equality to @tarballHost@ matters, so it need not itself
+be re-validated here — it was already gated when the packument was fetched.
+-}
+tarballHostAllowed ::
+    TarballHostPolicy ->
+    -- | The host allowlist (the same one every outbound fetch is gated by).
+    LoweredHostSet ->
+    -- | The hosts deliberately opted in to the internal-range block.
+    LoweredHostSet ->
+    -- | The bare host that served the packument.
+    Text ->
+    -- | The bare host of the candidate @dist.tarball@.
+    Text ->
+    Bool
+tarballHostAllowed policy allowed allowedInternal packumentHost tarballHost =
+    isAllowedUpstreamHost allowed tarballHost
+        && not (isBlockedTarget allowedInternal tarballHost)
+        && case policy of
+            SameHostAsPackument -> T.toLower tarballHost == T.toLower packumentHost
+            AnyAllowlistedHost -> True
 
 -- ── identifier → URL safety ──────────────────────────────────────────────────
 
