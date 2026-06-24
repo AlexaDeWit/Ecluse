@@ -1,3 +1,5 @@
+{-# LANGUAGE TupleSections #-}
+
 module Ecluse.CredentialSpec (spec) where
 
 import Data.Text qualified as T
@@ -206,6 +208,46 @@ spec = do
             atomically (takeTMVar started) -- the caller holds the flag and is in the mint
             cancel blocked -- async-cancel mid-mint; the finally must release the flag
             -- A fresh caller must not wedge: with the flag released it mints (call #3).
+            result <- timeout 1_000_000 (currentToken provider)
+            (unSecret . authSecret <$> result) `shouldBe` Just "recovered"
+
+        it "releases the single-flight flag when the serving thread is cancelled at the claim handoff (no wedge)" $ do
+            -- Regression for the parent-side gap the mid-flight test above does not
+            -- cover: the flag is claimed in the serve transaction but released only
+            -- once the mint runner has installed its handler. An async exception in
+            -- that handoff — before the runner takes ownership — must still release
+            -- the flag, or every later expired caller wedges on the STM retry.
+            --
+            -- The window is otherwise a seam-less, interruptible point in pure
+            -- dispatch (an empirical ~0.15% of naive cancels land there), so it is
+            -- driven deterministically through the 'afterClaim' hook, which runs on
+            -- the serving thread at exactly that handoff: it signals it has reached
+            -- the window, then parks, so the test can cancel the thread there.
+            (clock, setClock) <- newClock t0
+            reached <- newEmptyTMVarIO
+            release <- newEmptyTMVarIO
+            armed <- newIORef True -- only the first claim parks; recovery runs free
+            mintCount <- newIORef (0 :: Int)
+            let mint = do
+                    n <- atomicModifyIORef' mintCount (\c -> (c + 1, c + 1))
+                    if n == 1
+                        then pure (tokenExpiringIn "seed" 1000)
+                        else pure (tokenExpiringIn "recovered" 1000)
+                -- Run on the serving thread in the claim -> mint-runner window. On the
+                -- first (to-be-cancelled) claim only, mark that the flag is claimed and
+                -- the thread is parked here, then block (interruptibly) so the cancel
+                -- lands inside this window; later claims pass straight through.
+                afterClaim = do
+                    wasArmed <- atomicModifyIORef' armed (False,)
+                    when wasArmed $ do
+                        atomically (putTMVar reached ())
+                        (atomically (takeTMVar release) :: IO ())
+            provider <- refreshingProviderWith afterClaim (testConfig clock mint)
+            setClock (addUTCTime 2000 t0) -- expired: the next serve mints synchronously
+            blocked <- async (currentToken provider)
+            atomically (takeTMVar reached) -- flag claimed; thread parked at the handoff
+            cancel blocked -- cancel in the handoff window; the flag must still release
+            -- A fresh expired caller must not wedge: with the flag released it mints.
             result <- timeout 1_000_000 (currentToken provider)
             (unSecret . authSecret <$> result) `shouldBe` Just "recovered"
 
