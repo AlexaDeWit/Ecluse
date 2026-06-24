@@ -15,6 +15,35 @@
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
+
+        # TEMPORARY security overlay: openssl 3.6.3 ahead of the nixos-26.05 channel.
+        # 3.6.3 fixes CVE-2026-34182 (Critical) + 9 High in the shipped image closure
+        # (issue #214). It landed in nixpkgs on 2026-06-13 (NixOS/nixpkgs#530964) and on
+        # staging-26.05 on 2026-06-16 (#531387) but has NOT yet merged to the
+        # nixos-26.05 *channel* branch — openssl is a mass-rebuild trigger that sits in
+        # staging through a Hydra cycle. The bump is purely version+hash (no patch
+        # changes), so overrideAttrs is faithful. SCOPED to the shipped executable
+        # only — ecluseBin (below) is rebuilt against securePkgs; the checks, the dev
+        # shells, and the cabal-path build-test all keep `pkgs`'s cached channel
+        # openssl, so the 15-minute gate jobs pay no openssl rebuild. The 3.6.3 image
+        # is validated by the grype scan (security.yml runs on flake.* PRs) + release.
+        # REMOVE once `nix flake update nixpkgs` brings 3.6.3 from the channel.
+        securePkgs = import nixpkgs {
+          inherit system;
+          overlays = [
+            (_final: prev: {
+              openssl_3_6 = prev.openssl_3_6.overrideAttrs (_old: rec {
+                version = "3.6.3";
+                # fetchurlBoot, NOT fetchurl: openssl bootstraps fetchurl (curl→openssl),
+                # so fetching openssl's own src with fetchurl is an infinite recursion.
+                src = prev.stdenv.fetchurlBoot {
+                  url = "https://github.com/openssl/openssl/releases/download/openssl-${version}/openssl-${version}.tar.gz";
+                  hash = "sha256-JDqGZJz28j7rai/yRW4J5dd92QGKVNPZawxr3Wumx/E=";
+                };
+              });
+            })
+          ];
+        };
         hlib = pkgs.haskell.lib;
 
         # OpenTelemetry 1.0 overlay. The pinned nixpkgs (26.05) ships the older
@@ -140,8 +169,19 @@
         # The executable alone, stripped and with its reference to the full
         # Haskell library closure removed (justStaticExecutables). A plain dynamic
         # build drags that whole closure in and bloats the image to ~500 MB; this
-        # keeps only the binary + its system C deps for the container image.
-        ecluseBin = hlib.justStaticExecutables (hlib.dontCheck ecluseRaw);
+        # keeps only the binary + its system C deps for the container image. THIS is
+        # the ONLY artifact built against securePkgs (openssl 3.6.3): its closure is
+        # what ships and what the grype scan inspects, so ecluse is re-resolved here
+        # through securePkgs's haskell set to pick up the patched openssl. Everything
+        # else (ecluseRaw, the checks, the dev shells) stays on the cached channel
+        # openssl, keeping the gate fast.
+        ecluseBin =
+          let
+            hlibSecure = securePkgs.haskell.lib;
+            hpkgsSecure = securePkgs.haskell.packages.ghc910.override { overrides = otelOverlay; };
+          in
+          hlibSecure.justStaticExecutables
+            (hlibSecure.dontCheck (hpkgsSecure.callCabal2nix "ecluse" ./. { }));
 
         # Sources for the format/lint checks: the .hs files plus the cabal files
         # (so fourmolu can read default-language / default-extensions (GHC2021 →

@@ -24,7 +24,13 @@ jobs:
   scan:
     name: Vulnerability scan (grype)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 60 (not the usual 30) while the temporary openssl 3.6.3 overlay is in flake.nix:
+    # `make scan` builds .#ecluse-bin against the overlay (openssl 3.6.3 + the ecluse
+    # closure re-resolved through it), which is uncached and cold every run since
+    # build-test owns the shared nix-store key. Restore to 30 when the overlay is
+    # removed (i.e. once nixos-26.05 ships 3.6.3). See flake.nix → "TEMPORARY security
+    # overlay" and issue #214.
+    timeout-minutes: 60
     permissions:
       contents: read
       issues: write # the scheduled run opens/updates a tracking issue
