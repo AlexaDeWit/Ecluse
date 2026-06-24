@@ -5,16 +5,15 @@ outcome. When the environment is unavailable (no docker / image), every case is
 reported @pending@ rather than failed.
 
 See @planning\/slices\/S53-e2e-ecosystem.md@ for the design and the full scenario
-list. @HEAD@-no-body and graceful-drain are @pending@ here: they track in-flight
-work (the #211\/#269 HEAD fix is not on this base; the #160 drain work) and activate
-once that lands.
+list. Graceful-drain is @pending@ here — it tracks the #160 drain work and activates
+once the harness can signal the running container and observe the readiness flip.
 -}
 module Ecluse.E2E.SuiteSpec (spec) where
 
 import System.Exit (ExitCode (ExitSuccess))
 import Test.Hspec
 
-import Ecluse.E2E.Fixtures (PkgSpec, allowPkg, denyPkg, mirrorPkg, psName, psVersion, tamperPkg)
+import Ecluse.E2E.Fixtures (PkgSpec, allowPkg, denyPkg, headPkg, mirrorPkg, psName, psVersion, tamperPkg)
 import Ecluse.E2E.Harness
 
 spec :: Spec
@@ -52,9 +51,19 @@ scenarios = do
             mirrored <- verdaccioHasVersion e2e (psName tamperPkg) (psVersion tamperPkg)
             mirrored `shouldBe` False
 
-    describe "protocol behaviours (tracking in-flight work)" $ do
-        it "answers HEAD on a tarball without streaming the body" $ \_e2e ->
-            pendingWith "activates with the #211/#269 HEAD fix (not on this base)"
+    describe "protocol behaviours" $ do
+        it "answers HEAD on a tarball with its size but no body, and enqueues no mirror" $ \e2e -> do
+            -- A HEAD goes through the same gating as the GET path but probes the upstream
+            -- as a HEAD and relays the headers with no body (#211/#269): it reports a
+            -- Content-Length yet streams zero body bytes, and — serving no bytes to
+            -- back-fill — enqueues no mirror. Driven on a package only ever HEADed (never
+            -- installed/GET), so the empty mirror is attributable to the HEAD alone.
+            (status, declared, bodyBytes) <- proxyHead e2e (tarballPath headPkg)
+            status `shouldBe` 200
+            bodyBytes `shouldBe` 0
+            declared `shouldSatisfy` maybe False (> 0)
+            mirrored <- verdaccioHasVersion e2e (psName headPkg) (psVersion headPkg)
+            mirrored `shouldBe` False
 
         it "drains in-flight work on SIGTERM" $ \_e2e ->
             pendingWith "activates with the #160 graceful-drain work"

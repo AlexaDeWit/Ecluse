@@ -89,9 +89,11 @@ each via `make test-e2e` and in the CI e2e job):
 - [x] **integrity tamper:** the public stub serves an artifact whose bytes do
   **not** match the version's integrity; the worker's strongest-digest gate
   **rejects it and never publishes** (the mirror stays empty for that version).
-- [ ] **HEAD on a tarball** does not pump the upstream body — **pending**, ties to
-  the [#211](https://github.com/AlexaDeWit/Ecluse/issues/211) / [#269](https://github.com/AlexaDeWit/Ecluse/pull/269)
-  fix (not on this base); the case is written and `pending`, activating when that lands.
+- [x] **HEAD on a tarball** reports the artifact size but streams no body and
+  enqueues no mirror — the [#211](https://github.com/AlexaDeWit/Ecluse/issues/211) /
+  [#269](https://github.com/AlexaDeWit/Ecluse/pull/269) fix is now on this base, so the
+  case is a **live assertion**, driven on a HEAD-only fixture so the empty mirror is
+  attributable to the HEAD alone (no GET to back-fill it).
 - [ ] **graceful drain:** a `SIGTERM` flips readiness (`/readyz`) and drains
   in-flight work — **pending**, ties to [#160](https://github.com/AlexaDeWit/Ecluse/issues/160).
 - [ ] _publish round-trip via the publication target — **deferred** to land with

@@ -23,6 +23,7 @@ module Ecluse.E2E.Fixtures (
     denyPkg,
     mirrorPkg,
     tamperPkg,
+    headPkg,
     fixturePackages,
     buildFixtures,
 ) where
@@ -77,9 +78,17 @@ mirrorPkg = defaultPkgSpec "e2e-mirror"
 tamperPkg :: PkgSpec
 tamperPkg = (defaultPkgSpec "e2e-tamper"){psTamper = True}
 
+{- | A package used only for @HEAD@ probes. A @HEAD@ on a tarball must report the
+artifact size without streaming the body and without enqueueing a mirror, so this
+package is never installed or @GET@ (either would itself mirror it) — leaving an empty
+mirror attributable to the @HEAD@ alone.
+-}
+headPkg :: PkgSpec
+headPkg = defaultPkgSpec "e2e-head"
+
 -- | The full fixture set the stub serves.
 fixturePackages :: [PkgSpec]
-fixturePackages = [allowPkg, denyPkg, mirrorPkg, tamperPkg]
+fixturePackages = [allowPkg, denyPkg, mirrorPkg, tamperPkg, headPkg]
 
 {- | Write every fixture package under @root@ (the directory bind-mounted into the
 nginx stub as its document root). Creates the packument and the gzipped artifact and
