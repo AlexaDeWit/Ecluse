@@ -91,3 +91,13 @@ Keep the pure tier's behaviour unchanged when no effectful rules are configured.
   `Unavailable`; that arm (`Unavailable _ reason -> Left reason`) is therefore dead by
   construction and unreachable in a unit test. Flagged as an accepted partial per
   `docs/testing.md` rather than covered with a contrived test.
+- **`EvalContext` unchanged — fetchers live in the rule closure.** The acceptance
+  criterion "`EvalContext` extended with the fetchers/lookups the effectful tier
+  needs" was satisfied by a different design: `EvalContext` stayed
+  `newtype { ctxNow :: UTCTime }`, and each `EffectfulRule` carries its fetchers inside
+  its `erEval :: PackageDetails -> IO RuleOutcome` closure, so no shared context field
+  was added. The criterion's intent (the tier can reach what it needs) holds; the
+  mechanism differs.
+- **Breaker extraction — since landed.** The "mirror, not extract" decision above was
+  the deferrable refactor it described; the shared `Ecluse.Breaker` was subsequently
+  extracted (#189), and both `Credential.Refresh` and `Rules.Effectful` now consume it.

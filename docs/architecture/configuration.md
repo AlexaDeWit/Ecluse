@@ -54,7 +54,7 @@ registries derive short-lived tokens from ambient cloud credentials (see
 | `AWS_REGION` | AWS backends only | Region for SQS and CodeArtifact. |
 | `GOOGLE_CLOUD_PROJECT` | GCP backends only | Project for Pub/Sub and Artifact Registry. Credentials come from Application Default Credentials (ADC). |
 | `PROXY_AUTH_TOKEN` | No | If set, clients must supply this token as `Bearer` or `_authToken`. Omit for open/network-secured deployments. |
-| `PROXY_RESPECT_UPSTREAM_TARBALL_HOST` | No (default: `false`) | Secure default. When `false`, a tarball is fetched only from the same allowlisted upstream that served the packument. See [Outbound egress safety](#outbound-egress-safety). |
+| `PROXY_RESPECT_UPSTREAM_TARBALL_HOST` | No (default: `false`) | **Not yet enforced** — planned; tracked by slice S51. The serve path currently fetches tarballs from the configured upstream by reconstruction, so this setting has no effect today. Once wired: when `false`, a tarball is fetched only from the same allowlisted upstream that served the packument. See [Outbound egress safety](#outbound-egress-safety). |
 | `PROXY_HELP_MESSAGE` | No | Custom string appended to all denial messages (e.g. `"Contact #platform-eng on Slack for assistance."`). |
 | `PROXY_LOG_FORMAT` | No (default: `json`) | Structured-log output shape: `json` (one object per line, for log collectors) or `console` (human-readable). See [Observability](observability.md). |
 | `CVE_SYNC_INTERVAL_SECONDS` | No (default: 3600) | How often to refresh the in-memory advisory index from OSV (see [CVE Subsystem](rules-engine.md#cve-subsystem)). |
@@ -113,7 +113,7 @@ configurable-overrides** principle — *the consumer decides their threat tolera
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PROXY_RESPECT_UPSTREAM_TARBALL_HOST` | `false` (secure default) | When `false`, a tarball is fetched only from the **same allowlisted upstream that served the packument**; a `dist.tarball` pointing at a *different* host is refused. Set `true` only for a registry that legitimately serves tarballs from a separate CDN/files host (e.g. the PyPI files host), which **widens the outbound fetch surface to any allowlisted host** — opt in deliberately, and pair it with platform egress controls. |
+| `PROXY_RESPECT_UPSTREAM_TARBALL_HOST` | `false` (secure default) | **Not yet enforced** — planned; tracked by slice S51 (the serve path currently reconstructs the tarball URL from the configured upstream, so this setting has no effect yet). Once wired: when `false`, a tarball is fetched only from the **same allowlisted upstream that served the packument**; a `dist.tarball` pointing at a *different* host is refused. Set `true` only for a registry that legitimately serves tarballs from a separate CDN/files host (e.g. the PyPI files host), which **widens the outbound fetch surface to any allowlisted host** — opt in deliberately, and pair it with platform egress controls. |
 
 The override never escapes the host allowlist or the internal-range block: it
 relaxes *which allowlisted host* may serve a tarball, not whether the allowlist

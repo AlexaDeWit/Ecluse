@@ -73,6 +73,12 @@ paths land, exercised through the real request path.
 
 ## Why `dist.tarball` is honoured, and what bounds it
 
+> **Status: target design; not yet fully enforced.** The serve path currently
+> *reconstructs* the tarball URL from the configured upstream rather than honouring
+> the upstream-declared `dist.tarball`, so the host-policy control described below is
+> **not yet enforced** (the resolved-IP recheck *is* live). Honouring the declared
+> location and wiring the host policy load-bearing is tracked by slice S51.
+
 A natural question is why Écluse fetches from an **upstream-declared** artifact
 location at all — why not reconstruct every tarball URL from the configured host
 and refuse anything else, making a hostile location impossible by construction?

@@ -74,3 +74,28 @@ default cannot silently break those, but the launch docs must call it out.
 canonical address); NAT64 `64:ff9b::/96` (unchanged from S36). IPv6 ULA `fc00::/7`
 (incl. AWS IMDSv6 `fd00:ec2::254`) is now **in scope** — added alongside the
 leg-aware split per the post-review (issue #162).
+
+## As-built notes
+
+- **Per-origin manager split + resolved-IP recheck — shipped and live.** The data
+  plane splits into a guarded `envManager` (resolved-IP recheck applied to every
+  outbound connection, for the untrusted public / artifact origin) and a trusted
+  `envPrivateManager` (the operator-configured private origin), with per-origin
+  integration coverage (`EgressOriginSpec`). This is the enforced, working half of
+  the slice — acceptance criteria 1, 3, 4 (and the operator runbook guidance).
+- **Behaviour-level metadata protection (#162) + IPv6 ULA — shipped.** The egress
+  guard refuses link-local / metadata ranges (incl. IPv6 ULA `fc00::/7` and IMDSv6
+  `fd00:ec2::254`) at the service level; the operator docs were corrected so the
+  metadata endpoint the proxy itself needs (instance-role credential minting) is not
+  network-blocked. IMDSv2 + hop-limit-1 retained.
+- **Tarball-host policy — plumbed and unit-tested, NOT yet enforced on the serve
+  path.** `Ecluse.Security.tarballHostAllowed`, `TarballHostPolicy`, the
+  `PROXY_RESPECT_UPSTREAM_TARBALL_HOST` config, and the `pdTarballHostPolicy` field
+  shipped with unit coverage — but the serve path reconstructs the tarball URL from
+  the configured upstream (discarding the upstream-advertised `dist.tarball`), so the
+  policy is never consulted and the `true` opt-in has no effect. Acceptance criterion
+  2 is met as plumbing, not enforcement; criterion 5's cross-host case has no
+  real-request-path test. **Wiring it load-bearing — honouring the authoritative
+  `Artifact.artUrl`, gated — is deferred to slice [S51](S51-honour-artifact-url.md)**
+  (surfaced by the inter-wave audit). The configuration / security docs are marked
+  not-yet-enforced accordingly.
