@@ -124,20 +124,23 @@ import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
+import Katip (LogEnv, Severity (WarningS), logFM, ls, sl)
+import Katip.Monadic (runKatipContextT)
 import Network.HTTP.Client (Manager)
 import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types (ResponseHeaders, Status, hAuthorization, hContentType, mkStatus, status200, status401, status501, statusIsSuccessful)
 import Network.Wai (Request, Response, ResponseReceived, requestHeaders, responseLBS)
 import UnliftIO (concurrently)
-import UnliftIO.Exception (throwString, tryAny)
+import UnliftIO.Exception (handle, throwIO, throwString, tryAny)
 
 import Ecluse.Credential (Secret, mkSecret)
-import Ecluse.Env (Env (envManager, envMetadataCache, envPrivateManager, envQueue))
+import Ecluse.Env (Env (envLogEnv, envManager, envMetadataCache, envPrivateManager, envQueue))
 import Ecluse.Package (
     Artifact (artFilename, artHashes, artUrl),
     PackageDetails (pkgArtifacts),
     PackageInfo (infoDistTags, infoPublishedAt, infoVersions),
     PackageName,
+    renderPackageName,
  )
 import Ecluse.Package.Filter (filterPlanFromDecisions)
 import Ecluse.Package.Merge (
@@ -151,6 +154,7 @@ import Ecluse.Registry (RegistryResponse (responseBody))
 import Ecluse.Registry.Npm (
     MetadataForm (Full),
     NpmClientConfig (..),
+    ResponseBoundExceeded (ResponseBoundExceeded),
     artifactRequestByUrl,
     fetchMetadataForm,
     noValidators,
@@ -160,7 +164,11 @@ import Ecluse.Registry.Npm.Project (parsePackageInfoFromValue)
 import Ecluse.Rules.Effectful (evalRulesEffectful)
 import Ecluse.Rules.Types (Decision, EvalContext (EvalContext))
 import Ecluse.Security (
+    LimitError (BodyTooLarge, TooDeeplyNested, TooManyVersions),
+    Limits,
     LoweredHostSet,
+    checkNestingDepth,
+    checkVersionCount,
     hostAddress,
     lowerCaseHosts,
     tarballHostAllowed,
@@ -248,8 +256,8 @@ serveWithDeps renderer deps name request respond
             let clientToken = forwardedToken request
             (privResult, pubResult) <-
                 concurrently
-                    (fetchPrivateOrigin env (pdPrivateBaseUrl deps) clientToken name)
-                    (fetchPublicOrigin env (pdPublicBaseUrl deps) name)
+                    (fetchPrivateOrigin (pdLimits deps) env (pdPrivateBaseUrl deps) clientToken name)
+                    (fetchPublicOrigin (pdLimits deps) env (pdPublicBaseUrl deps) name)
             (public, publicExclusions) <- gatePublic deps evalCtx pubResult
             let private = trustedSource <$> privResult
                 sources = catMaybes [private, public]
@@ -324,9 +332,9 @@ origin is therefore deliberately kept out of the metadata cache; only the anonym
 public origin is cached. (How a non-@passthrough@ strategy can instead share the private
 origin safely is the serve-time authorisation it adds — see
 @docs\/architecture\/access-model.md@.) -}
-fetchPrivateOrigin :: Env -> Text -> Maybe Secret -> PackageName -> IO (Maybe (PackageInfo, Value))
-fetchPrivateOrigin env baseUrl token name = do
-    resolved <- tryAny (fetchEntry (envPrivateManager env) baseUrl token name)
+fetchPrivateOrigin :: Limits -> Env -> Text -> Maybe Secret -> PackageName -> IO (Maybe (PackageInfo, Value))
+fetchPrivateOrigin limits env baseUrl token name = do
+    resolved <- tryAny (fetchEntry (envLogEnv env) limits (envPrivateManager env) baseUrl token name)
     pure (either (const Nothing) (Just . unpair) resolved)
 
 {- Resolve the public (gated, anonymous) upstream origin through the metadata cache,
@@ -340,9 +348,9 @@ to preserve, only one shared anonymous document. A hit returns the cached pair
 (typed view and the exact bytes it was decoded from), so the served document and the
 decision over it stay coherent across the TTL, and concurrent resolutions of a
 popular package __collapse to one upstream call__. -}
-fetchPublicOrigin :: Env -> Text -> PackageName -> IO (Maybe (PackageInfo, Value))
-fetchPublicOrigin env baseUrl name = do
-    resolved <- tryAny (resolveMetadata (envMetadataCache env) (Source baseUrl) name (fetchEntry (envManager env) baseUrl Nothing name))
+fetchPublicOrigin :: Limits -> Env -> Text -> PackageName -> IO (Maybe (PackageInfo, Value))
+fetchPublicOrigin limits env baseUrl name = do
+    resolved <- tryAny (resolveMetadata (envMetadataCache env) (Source baseUrl) name (fetchEntry (envLogEnv env) limits (envManager env) baseUrl Nothing name))
     pure (either (const Nothing) (Just . unpair) resolved)
 
 {- Fetch one upstream's full packument (the @Full@ form, for the @time@ map a
@@ -351,38 +359,117 @@ decide and the raw @Value@ edited in place to serve. The two come from the /same
 fetch, so the decision is taken over exactly the bytes served. A body that does not
 decode into both throws, so the fetch degrades to a missing contribution rather than
 failing the whole request. The injected token is the fetch's credential posture (the
-client's for the private origin, 'Nothing' for the anonymous public origin). -}
-fetchEntry :: Manager -> Text -> Maybe Secret -> PackageName -> IO CacheEntry
-fetchEntry manager baseUrl token name = do
-    response <- fetchMetadataForm (clientConfig manager baseUrl token) Full noValidators name
+client's for the private origin, 'Nothing' for the anonymous public origin).
+
+The response bounds (security.md invariant 4) are enforced here against the mount's
+'Limits' budget, every breach mapped onto the same fail-closed degraded path a parse
+failure already takes (the throw that 'fetchPrivateOrigin'\/'fetchPublicOrigin' catch
+to 'Nothing') — but each breach is __logged at a 'WarningS'__ first, naming the
+package and the ceiling it crossed, so an operator can tell a hostile\/oversized
+upstream (or a too-tight cap) from an ordinary parse failure:
+
+\* __body size__ — 'fetchMetadataForm' reads the body through
+  'Ecluse.Security.boundedRead' against the budget's @maxBodyBytes@, so an oversized
+  body raises a 'ResponseBoundExceeded' from the fetch before it is ever buffered
+  whole; it is caught here, logged, and re-raised;
+\* __nesting depth__ — 'Ecluse.Security.checkNestingDepth' is applied on the decoded
+  @Value@, before it is projected or deeply traversed, so a pathologically nested
+  payload is refused before any deep walk. (The structure is already
+  /bounded-by-body-size/ at the parser — the @maxBodyBytes@ cap above precedes the
+  decode — so this guard bounds the /traversal/ cost of a within-size-but-deep
+  document, not an unbounded one.)
+\* __version count__ — 'Ecluse.Security.checkVersionCount' is applied after projection,
+  before the document threads into rule evaluation, so a version-flood packument is
+  refused before per-version rules run.
+
+A pathological document is therefore refused outright, never partially served. -}
+fetchEntry :: LogEnv -> Limits -> Manager -> Text -> Maybe Secret -> PackageName -> IO CacheEntry
+fetchEntry logEnv limits manager baseUrl token name = do
+    -- The body-size breach is raised from the bounded read as a typed
+    -- 'ResponseBoundExceeded'; log it (which ceiling, observed-vs-cap) before letting
+    -- it propagate to the origin fetcher's @tryAny@, the same fail-closed degrade.
+    response <-
+        handle (\(ResponseBoundExceeded err) -> logBreach logEnv name err *> throwIO (ResponseBoundExceeded err)) $
+            fetchMetadataForm (clientConfig limits manager baseUrl token) Full noValidators name
     -- Decode the body once into the raw @Value@, then project the typed view from
     -- that same parse: aeson decodes bytes to a 'Value' and runs the 'FromJSON'
     -- instance either way, so projecting from the @Value@ reuses the one parse
     -- rather than tokenising a multi-megabyte packument a second time.
     case Aeson.eitherDecodeStrict (responseBody response) of
-        Right value -> case parsePackageInfoFromValue value of
-            Right info -> pure (CacheEntry{entryInfo = info, entryRaw = value})
-            Left _ -> decodeFailure
+        -- Bound the nesting depth on the decoded @Value@, before projecting or
+        -- traversing, then the version count after projection, before the document
+        -- reaches rule evaluation. A breach of either is logged and then degraded
+        -- exactly like a parse failure.
+        Right value -> case checkNestingDepth limits value of
+            Right bounded -> case parsePackageInfoFromValue bounded of
+                Right info -> case checkVersionCount limits info of
+                    Right boundedInfo -> pure (CacheEntry{entryInfo = boundedInfo, entryRaw = bounded})
+                    Left err -> boundBreach err
+                Left _ -> decodeFailure
+            Left err -> boundBreach err
         Left _ -> decodeFailure
   where
+    -- A nesting/version breach: log which ceiling was crossed, then fail closed as a
+    -- typed 'ResponseBoundExceeded' (caught by the origin fetcher's @tryAny@).
+    boundBreach :: LimitError -> IO CacheEntry
+    boundBreach err = logBreach logEnv name err *> throwIO (ResponseBoundExceeded err)
+
     decodeFailure :: IO CacheEntry
-    decodeFailure = throwString "packument did not decode into both a typed view and a raw document"
+    decodeFailure = throwString "packument did not decode into both a typed view and a raw document within the response bounds"
 
 unpair :: CacheEntry -> (PackageInfo, Value)
 unpair entry = (entryInfo entry, entryRaw entry)
 
-{- The npm client config for one fetch: its 'Manager', base URL, and injected
-token (the client's credential for the private origin, 'Nothing' for the anonymous
-public origin). The client never originates a token; the authority model is decided
-here. The 'Manager' is passed explicitly per fetch — the trusted 'envPrivateManager'
-for the private upstream, the guarded 'envManager' for the public\/artifact fetches —
-so the resolved-IP SSRF recheck applies only to the untrusted egress. -}
-clientConfig :: Manager -> Text -> Maybe Secret -> NpmClientConfig
-clientConfig manager baseUrl token =
+{- Log a response-bound breach at 'WarningS' before the contribution is degraded
+fail-closed, so an operator can distinguish a bound breach (a hostile\/oversized
+upstream, or a too-tight cap) from an ordinary parse failure or upstream outage. The
+structured payload names the package, which @bound@ was crossed, and the observed
+value against its @cap@ — the high-cardinality identifiers that belong on the log
+line, not a metric label. Run through the composition-root 'LogEnv' since the fetch
+path is plain 'IO' (off the 'Handler' reader), under the same @ecluse@ namespace the
+rest of the stream uses. -}
+logBreach :: LogEnv -> PackageName -> LimitError -> IO ()
+logBreach logEnv name err =
+    runKatipContextT logEnv payload mempty $
+        logFM WarningS (ls message)
+  where
+    -- The package the refused document was for, plus the breach detail, as the
+    -- structured @data@ object on the line.
+    payload =
+        sl "package" (renderPackageName name)
+            <> sl "bound" boundName
+            <> sl "observed" observed
+            <> sl "cap" cap
+
+    -- A human-readable one-line summary; the structured fields carry the detail.
+    message :: Text
+    message = "refused an upstream metadata document: it exceeded the " <> boundName <> " response bound (observed " <> observed <> ", cap " <> cap <> ")"
+
+    -- Which ceiling, the observed value, and the cap — pulled from the typed error so
+    -- the three are always consistent with what was enforced.
+    boundName :: Text
+    observed :: Text
+    cap :: Text
+    (boundName, observed, cap) = case err of
+        BodyTooLarge c -> ("body-size", "over " <> show c <> " bytes", show c <> " bytes")
+        TooManyVersions seen c -> ("version-count", show seen, show c)
+        TooDeeplyNested c -> ("nesting-depth", "over " <> show c <> " levels", show c <> " levels")
+
+{- The npm client config for one fetch: its response-bound budget, 'Manager', base
+URL, and injected token (the client's credential for the private origin, 'Nothing'
+for the anonymous public origin). The client never originates a token; the authority
+model is decided here. The 'Manager' is passed explicitly per fetch — the trusted
+'envPrivateManager' for the private upstream, the guarded 'envManager' for the
+public\/artifact fetches — so the resolved-IP SSRF recheck applies only to the
+untrusted egress. The 'Limits' carries the mount's @maxBodyBytes@ to the bounded
+metadata read in 'fetchMetadataForm'. -}
+clientConfig :: Limits -> Manager -> Text -> Maybe Secret -> NpmClientConfig
+clientConfig limits manager baseUrl token =
     NpmClientConfig
         { npmBaseUrl = baseUrl
         , npmManager = manager
         , npmToken = token
+        , npmLimits = limits
         }
 
 -- A trusted (private) source enters the merge unfiltered, its raw @Value@ kept as
@@ -827,7 +914,7 @@ streamPrivateArtifact env deps token name version file respond = do
     privateRequestFor :: Artifact -> Maybe HTTP.Request
     privateRequestFor artifact =
         if tarballHostHonoured deps (pdPrivateBaseUrl deps) (artUrl artifact)
-            then rightToMaybe (artifactRequestByUrl (clientConfig (envPrivateManager env) (pdPrivateBaseUrl deps) token) (artUrl artifact))
+            then rightToMaybe (artifactRequestByUrl (clientConfig (pdLimits deps) (envPrivateManager env) (pdPrivateBaseUrl deps) token) (artUrl artifact))
             else Nothing
 
 {- Fetch the private packument (uncached, with the client's credential) and select
@@ -836,7 +923,7 @@ private origin does not resolve, the version is absent, or no artifact matches t
 filename — each a clean private miss the caller falls through on. -}
 selectPrivateArtifact :: Env -> PackumentDeps -> Maybe Secret -> PackageName -> Version -> Text -> IO (Maybe Artifact)
 selectPrivateArtifact env deps token name version file = do
-    resolved <- fetchPrivateOrigin env (pdPrivateBaseUrl deps) token name
+    resolved <- fetchPrivateOrigin (pdLimits deps) env (pdPrivateBaseUrl deps) token name
     pure $ do
         (info, _value) <- resolved
         details <- Map.lookup (renderVersion version) (infoVersions info)
@@ -888,7 +975,7 @@ be consulted fail-closes to an 'Unavailable' @503@\/@500@. -}
 gatePublicVersion :: Env -> PackumentDeps -> PackageName -> Version -> Text -> IO PublicArtifactGate
 gatePublicVersion env deps name version file = do
     evalCtx <- EvalContext <$> pdNow deps
-    fetchPublicOrigin env (pdPublicBaseUrl deps) name >>= \case
+    fetchPublicOrigin (pdLimits deps) env (pdPublicBaseUrl deps) name >>= \case
         Nothing -> pure (Refused upstreamUnavailable)
         Just (info, _value) -> case Map.lookup (renderVersion version) (infoVersions info) of
             Nothing -> pure (Refused versionAbsent)
@@ -969,7 +1056,7 @@ streamPublicArtifact ::
     IO ResponseReceived
 streamPublicArtifact env renderer deps name version artifact respond =
     if tarballHostHonoured deps (pdPublicBaseUrl deps) (artUrl artifact)
-        then case artifactRequestByUrl (clientConfig (envManager env) (pdPublicBaseUrl deps) Nothing) (artUrl artifact) of
+        then case artifactRequestByUrl (clientConfig (pdLimits deps) (envManager env) (pdPublicBaseUrl deps) Nothing) (artUrl artifact) of
             Right req ->
                 streamUpstreamWhen (envManager env) req (const True) relayArtifact respond >>= \case
                     Just received -> do

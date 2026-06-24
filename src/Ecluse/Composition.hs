@@ -68,7 +68,7 @@ import Ecluse.Config (
  )
 import Ecluse.Credential (AuthToken (..), CredentialProvider, Secret, staticProvider)
 import Ecluse.Ecosystem (Ecosystem, ecosystemName, prefixFor)
-import Ecluse.Security (TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), lowerCaseHosts)
+import Ecluse.Security (Limits (Limits, maxBodyBytes, maxNestingDepth, maxVersionCount), TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), lowerCaseHosts)
 import Ecluse.Server.Cache (CacheConfig (..))
 import Ecluse.Server.Context (MountBinding, PackumentDeps (..))
 import Ecluse.Server.Response (HelpMessage, mkHelpMessage)
@@ -205,6 +205,18 @@ composeBindings resolveAdapter clock providers config =
             then AnyAllowlistedHost
             else SameHostAsPackument
 
+    -- The response-bound budget every mount enforces on its upstream fetches and
+    -- decodes (security.md invariant 4), assembled from the validated environment
+    -- ceilings. Carried onto each mount's deps so the data plane reads the metadata
+    -- body bounded, and refuses an over-deep or version-flooded document fail-closed.
+    limits :: Limits
+    limits =
+        Limits
+            { maxBodyBytes = cfgMaxResponseBytes (configEnv config)
+            , maxVersionCount = cfgMaxVersionCount (configEnv config)
+            , maxNestingDepth = cfgMaxNestingDepth (configEnv config)
+            }
+
     -- The operator help message, derived from the environment layer like the
     -- inbound token, so every mount's denials carry it.
     helpMessage :: Maybe HelpMessage
@@ -253,6 +265,7 @@ composeBindings resolveAdapter clock providers config =
                   -- the composition root's secure default, matching the guarded
                   -- manager's resolved-IP recheck (built with an empty opt-in too).
                   pdAllowedInternalHosts = lowerCaseHosts mempty
+                , pdLimits = limits
                 , pdInboundToken = inboundToken
                 , pdNow = clock
                 , pdHelp = helpMessage

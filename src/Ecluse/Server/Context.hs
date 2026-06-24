@@ -42,7 +42,7 @@ import Ecluse.Credential (Secret)
 import Ecluse.Env (Env, envLogEnv)
 import Ecluse.Rules.Effectful (PrecededEffectfulRule)
 import Ecluse.Rules.Types (PrecededRule)
-import Ecluse.Security (LoweredHostSet, TarballHostPolicy)
+import Ecluse.Security (Limits, LoweredHostSet, TarballHostPolicy)
 import Ecluse.Server.Response (HelpMessage, MountRenderer)
 import Ecluse.Server.Route (Classifier)
 
@@ -97,6 +97,17 @@ data PackumentDeps = PackumentDeps
     "Ecluse.Security.Egress"), carried here so the pure tarball-host gate and the
     connection-time recheck agree on which internal hosts are deliberate. Empty by
     default — the secure reading, matching the composition root's guarded manager.
+    -}
+    , pdLimits :: Limits
+    {- ^ The response-bound budget enforced on every upstream metadata fetch and
+    decode (@PROXY_MAX_RESPONSE_BYTES@\/@PROXY_MAX_VERSION_COUNT@\/@PROXY_MAX_NESTING_DEPTH@):
+    the body-size, version-count, and JSON-nesting ceilings of
+    'Ecluse.Security.Limits'. The data plane reads the metadata body through
+    'Ecluse.Security.boundedRead' against @maxBodyBytes@, checks
+    'Ecluse.Security.checkNestingDepth' at the JSON-decode boundary, and
+    'Ecluse.Security.checkVersionCount' after projection; a breach degrades the
+    contribution to nothing (the fail-closed parse-failure path), so a pathological
+    upstream document is refused, never partially served (security.md invariant 4).
     -}
     , pdInboundToken :: Maybe Secret
     {- ^ The optional inbound token a client must present (@PROXY_AUTH_TOKEN@);

@@ -59,7 +59,24 @@ noted below.
    and [Network egress is a shared responsibility](#network-egress-is-a-shared-responsibility)).
 4. **Parsed upstream responses are bounded** — maximum body size, version count,
    and JSON nesting depth — and **fail closed** past any bound: an oversized or
-   pathological document is refused, never partially served.
+   pathological document is refused, never partially served. The bounds are
+   **wired into the live metadata data plane**: `Ecluse.Registry.Npm.fetchMetadataForm`
+   reads the body through `Ecluse.Security.boundedRead` at the `http-client` boundary
+   (so a body past the cap aborts before it is buffered whole), `Ecluse.Server.Pipeline.fetchEntry`
+   applies `checkNestingDepth` on the decoded document and `checkVersionCount`
+   after projection, and **every breach degrades the contribution to nothing** — the
+   same fail-closed path a parse failure takes, and **logged at `WARNING`** (which
+   ceiling, observed-vs-cap) so a bound breach is distinguishable from an ordinary
+   parse failure — so the merge serves the best-effort union of whatever resolved
+   within budget and a pathological document never reaches serve. (The body-size cap
+   is what bounds an *unbounded* structure — it precedes the decode, so the document
+   reaching the depth check is already bounded-by-body-size; the depth check then
+   bounds the *traversal cost* of a within-size-but-deeply-nested document.) The
+   ceilings are operator-tunable with secure defaults (`PROXY_MAX_RESPONSE_BYTES`
+   / `PROXY_MAX_VERSION_COUNT` / `PROXY_MAX_NESTING_DEPTH`; see
+   [Configuration → Response bounds](configuration.md#response-bounds)). Artifacts are
+   streamed with constant memory and are not subject to the body-size bound; the
+   inbound client→proxy request-body cap is the separate `sizeLimitMiddleware`.
 5. **A public version must carry an integrity digest to be served.** A version from
    an **untrusted (public)** upstream whose selected artifact carries **no integrity
    digest of any kind** — neither an SRI `dist.integrity` nor a legacy `dist.shasum`
@@ -81,9 +98,13 @@ Every guard is **deny-by-default** and **fail-closed**, consistent with the rule
 engine. The invariants are verified by a **hostile-input corpus** (`S36`) —
 traversal, encoded slashes, alternate-host and absolute URLs, CRLF, metadata and
 RFC1918 targets, oversized and deeply-nested payloads — asserted against the pure
-guards and, as the fetch ([`S08`](../../planning/slices/S08-npm-data-plane.md)) and
-serve ([`S14`](../../planning/slices/S14-packument-path.md)/[`S15`](../../planning/slices/S15-tarball-path.md))
-paths land, exercised through the real request path.
+guards and exercised **through the real request path** now that the fetch
+([`S08`](../../planning/slices/S08-npm-data-plane.md)) and serve
+([`S14`](../../planning/slices/S14-packument-path.md)/[`S15`](../../planning/slices/S15-tarball-path.md))
+paths have landed: an oversized body, a version flood, and a deeply-nested document
+each drive a fail-closed refusal (a degraded contribution, never a partial serve) in
+`Ecluse.Server.PipelineSpec`, and the bounded body read is unit-tested at the
+`http-client` boundary in `Ecluse.Registry.NpmSpec`.
 
 ## Why `dist.tarball` is honoured, and what bounds it
 

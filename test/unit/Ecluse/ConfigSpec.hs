@@ -140,6 +140,9 @@ fullEnv =
     , ("CVE_SYNC_INTERVAL_SECONDS", "60")
     , ("METADATA_CACHE_TTL_SECONDS", "30")
     , ("METADATA_CACHE_MAX_ENTRIES", "256")
+    , ("PROXY_MAX_RESPONSE_BYTES", "1048576")
+    , ("PROXY_MAX_VERSION_COUNT", "5000")
+    , ("PROXY_MAX_NESTING_DEPTH", "32")
     , ("PROXY_LOG_FORMAT", "console")
     , ("PROXY_TELEMETRY", "on")
     , ("PROXY_RESPECT_UPSTREAM_TARBALL_HOST", "true")
@@ -178,6 +181,9 @@ envLayerSpec = describe "parseEnvPure" $ do
                 cfgCveSyncInterval cfg `shouldBe` (60 :: NominalDiffTime)
                 cfgCacheTtl cfg `shouldBe` (30 :: NominalDiffTime)
                 cfgCacheMaxEntries cfg `shouldBe` 256
+                cfgMaxResponseBytes cfg `shouldBe` 1048576
+                cfgMaxVersionCount cfg `shouldBe` 5000
+                cfgMaxNestingDepth cfg `shouldBe` 32
                 cfgLogFormat cfg `shouldBe` ConsoleLog
                 cfgTelemetry cfg `shouldBe` TelemetryOn
                 cfgRespectUpstreamTarballHost cfg `shouldBe` True
@@ -199,6 +205,11 @@ envLayerSpec = describe "parseEnvPure" $ do
                 cfgCveSyncInterval cfg `shouldBe` (3600 :: NominalDiffTime)
                 cfgCacheTtl cfg `shouldBe` (60 :: NominalDiffTime)
                 cfgCacheMaxEntries cfg `shouldBe` 1024
+                -- The response-bound budget defaults to Ecluse.Security.defaultLimits:
+                -- a 16 MiB body, 100k versions, 64 levels of nesting.
+                cfgMaxResponseBytes cfg `shouldBe` 16 * 1024 * 1024
+                cfgMaxVersionCount cfg `shouldBe` 100000
+                cfgMaxNestingDepth cfg `shouldBe` 64
                 cfgAwsRegion cfg `shouldBe` Nothing
                 cfgAuthToken cfg `shouldBe` Nothing
                 cfgMirrorTargetToken cfg `shouldBe` Nothing
@@ -248,6 +259,20 @@ envLayerSpec = describe "parseEnvPure" $ do
     it "rejects an unknown log format against its own name" $
         failedNames (parseEnvPure (set "PROXY_LOG_FORMAT" "yaml" minimalEnv))
             `shouldBe` ["PROXY_LOG_FORMAT"]
+
+    it "rejects a non-positive response-byte bound rather than fail-closing the proxy" $
+        -- A zero body cap would refuse every upstream body; it is a degenerate budget,
+        -- so it fails loudly against its own name instead of silently breaking fetches.
+        failedNames (parseEnvPure (set "PROXY_MAX_RESPONSE_BYTES" "0" minimalEnv))
+            `shouldBe` ["PROXY_MAX_RESPONSE_BYTES"]
+
+    it "rejects a negative version-count bound against its own name" $
+        failedNames (parseEnvPure (set "PROXY_MAX_VERSION_COUNT" "-1" minimalEnv))
+            `shouldBe` ["PROXY_MAX_VERSION_COUNT"]
+
+    it "rejects a non-positive nesting-depth bound against its own name" $
+        failedNames (parseEnvPure (set "PROXY_MAX_NESTING_DEPTH" "0" minimalEnv))
+            `shouldBe` ["PROXY_MAX_NESTING_DEPTH"]
 
     it "rejects an unknown telemetry switch against its own name" $
         failedNames (parseEnvPure (set "PROXY_TELEMETRY" "maybe" minimalEnv))

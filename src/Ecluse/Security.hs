@@ -650,12 +650,19 @@ checkVersionCount limits info =
 {- | Reject a decoded JSON document nested deeper than 'maxNestingDepth',
 returning it unchanged when within budget.
 
-Run at the JSON-decode boundary, before projecting a document to domain types, so
-a pathologically nested payload is refused before any deep traversal. Depth counts
-container nesting: a scalar is depth @1@, and each enclosing 'Object'\/'Array'
-adds one. An empty container counts as a leaf (depth @1@), since it forces no
-descent. Traversal short-circuits at the first sub-tree to breach the ceiling, so
-a deeply-nested branch costs no more than the ceiling to reject.
+Run on the __already-decoded__ 'Value' — after the parser has produced it, before
+the document is projected to domain types — so a pathologically nested payload is
+refused before any deep /domain/ traversal. It is therefore __not__ the defence
+against an unbounded structure: the structure is already /bounded-by-body-size/ by
+the time it reaches here, since the @maxBodyBytes@ cap on the streamed read precedes
+the decode (a body the parser never finishes reading never produces a 'Value'). This
+guard bounds the __traversal cost__ of a within-size-but-deeply-nested document — the
+stack\/CPU a recursive walk of it would spend — which the body cap alone does not
+bound (a small body can still nest deeply). Depth counts container nesting: a scalar
+is depth @1@, and each enclosing 'Object'\/'Array' adds one. An empty container
+counts as a leaf (depth @1@), since it forces no descent. Traversal short-circuits at
+the first sub-tree to breach the ceiling, so a deeply-nested branch costs no more than
+the ceiling to reject.
 -}
 checkNestingDepth :: Limits -> Value -> Either LimitError Value
 checkNestingDepth limits value =

@@ -13,11 +13,11 @@ import Ecluse.Package (PackageName, mkPackageName)
 import Ecluse.Registry (RegistryResponse (responseBody))
 import Ecluse.Registry.Npm (
     MetadataForm (Abbreviated),
-    NpmClientConfig (NpmClientConfig, npmBaseUrl, npmManager, npmToken),
+    NpmClientConfig (NpmClientConfig, npmBaseUrl, npmLimits, npmManager, npmToken),
     fetchMetadataForm,
     noValidators,
  )
-import Ecluse.Security (lowerCaseHosts)
+import Ecluse.Security (defaultLimits, lowerCaseHosts)
 import Ecluse.Security.Egress (
     BlockedTarget (BlockedTarget),
     newGuardedTlsManager,
@@ -75,6 +75,7 @@ clientConfig manager port =
         { npmBaseUrl = "http://127.0.0.1:" <> show port
         , npmManager = manager
         , npmToken = Nothing
+        , npmLimits = defaultLimits
         }
 
 -- Run an action against an in-process upstream serving the packument on loopback.

@@ -19,6 +19,9 @@ build-type:    Simple
 -- file is reference-oracle output (regenerate with `make gen-version-fixtures`);
 -- the npm/*.json bodies are captures derived from
 -- docs/research/reverse-engineering/npm.md, decoded by Ecluse.Registry.Npm.Wire.
+-- express.full.json is a real, untrimmed capture of a large trusted package's full
+-- packument (registry.npmjs.org/express), so the response-bound defaults can be
+-- proven not to false-positive on a legitimate large package.
 extra-source-files:
   test/unit/fixtures/npm/*.json
   test/unit/fixtures/version-ordering.txt
@@ -211,6 +214,11 @@ test-suite ecluse-unit
     , wai               ^>=3.2
     , wai-extra         ^>=3.1
     , warp              ^>=3.4
+    -- Test-only: gzip a body so the bounded metadata read can be asserted to bound
+    -- DECOMPRESSED bytes (a small compressed blob that inflates past the cap). zlib
+    -- is already in the resolved build plan (a transitive dependency), so this adds
+    -- no new resolution.
+    , zlib              ^>=0.7
 
 -- Integration tests: exercise the real request path against in-process servers
 -- (and, where they land, AWS-backed code against a ministack container via

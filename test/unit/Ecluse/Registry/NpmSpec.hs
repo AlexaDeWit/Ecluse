@@ -1,5 +1,6 @@
 module Ecluse.Registry.NpmSpec (spec) where
 
+import Codec.Compression.GZip qualified as GZip
 import Control.Exception (try)
 import Data.ByteString qualified as BS
 import Data.CaseInsensitive (CI)
@@ -11,6 +12,7 @@ import Network.HTTP.Client (
     newManager,
  )
 import Network.HTTP.Client qualified as Client
+import Network.HTTP.Types (Header, hContentEncoding)
 import Network.HTTP.Types.Status (
     Status,
     status200,
@@ -56,6 +58,8 @@ import Ecluse.Registry (
     RegistryResponse (RegistryResponse, responseBody),
     UrlFormationError (EmptyBaseUrl, UnparseableUrl),
  )
+import Ecluse.Security (Limits (maxBodyBytes), defaultLimits)
+
 import Ecluse.Registry.Npm (
     MetadataForm (Abbreviated, Full),
     NpmClientConfig (..),
@@ -90,6 +94,7 @@ success, not an error.
 spec :: Spec
 spec = do
     requestShapingSpec
+    boundedBodySpec
     pathEncodingSpec
     authSpec
     artifactSpec
@@ -133,7 +138,14 @@ with a fixed status and body. @testWithApplication@ binds a free port for the
 action's duration, so the test never collides on a fixed port.
 -}
 withStub :: Status -> LByteString -> (Stub -> IO a) -> IO a
-withStub status body action = do
+withStub status = withStubHeaders status []
+
+{- | 'withStub' with extra response headers — e.g. @Content-Encoding: gzip@ so the
+@http-client@ body reader decompresses the served bytes, letting a test assert the
+bounded read bounds /decompressed/ size rather than wire size.
+-}
+withStubHeaders :: Status -> [Header] -> LByteString -> (Stub -> IO a) -> IO a
+withStubHeaders status extraHeaders body action = do
     captured <- newIORef Nothing
     let app :: Application
         app waiReq respond = do
@@ -146,7 +158,7 @@ withStub status body action = do
                         , capBody = toStrict bodyBytes
                         }
             atomicModifyIORef' captured (const (Just cap, ()))
-            respond (responseLBS status [] body)
+            respond (responseLBS status extraHeaders body)
     testWithApplication (pure app) $ \port ->
         action Stub{stubPort = port, stubCaptured = captured}
 
@@ -159,6 +171,7 @@ stubConfig stub = do
             { npmBaseUrl = stubBaseUrl stub
             , npmManager = manager
             , npmToken = Nothing
+            , npmLimits = defaultLimits
             }
 
 -- | Look up a header (case-insensitively) in a captured request.
@@ -210,6 +223,65 @@ requestShapingSpec =
                 cap <- lastCaptured stub
                 headerValue "If-None-Match" cap `shouldBe` Nothing
                 headerValue "If-Modified-Since" cap `shouldBe` Nothing
+
+-- ── bounded body read (response bound, security.md invariant 4) ───────────────
+
+{- | The metadata fetch reads the upstream body through 'boundedRead' against the
+config's 'npmLimits', so a body past 'maxBodyBytes' is aborted fail-closed (an 'IO'
+exception) rather than buffered whole, while a body within budget is returned
+verbatim. This is the body-size half of invariant 4 at the @http-client@ boundary;
+the version-count and nesting-depth halves are enforced in the serve pipeline's
+decode step (asserted through the request path in
+"Ecluse.Server.PipelineSpec").
+-}
+boundedBodySpec :: Spec
+boundedBodySpec = describe "bounded metadata body read" $ do
+    it "aborts fail-closed when the upstream body exceeds maxBodyBytes" $
+        -- The stub serves a body larger than the tight cap; the bounded read must raise
+        -- rather than return a (truncated) RegistryResponse.
+        withStub status200 (toLazy oversizedBody) $ \stub -> do
+            base <- stubConfig stub
+            let config = base{npmLimits = defaultLimits{maxBodyBytes = 64}}
+            outcome <- try (fetchMetadataForm config Full noValidators isOdd)
+            outcome `shouldSatisfy` threw
+
+    it "returns a body that is within maxBodyBytes verbatim" $
+        -- A body the cap admits is read whole and returned unchanged — no false refusal.
+        withStub status200 "{\"name\":\"is-odd\"}" $ \stub -> do
+            base <- stubConfig stub
+            let config = base{npmLimits = defaultLimits{maxBodyBytes = 64}}
+            resp <- fetchMetadataForm config Full noValidators isOdd
+            responseBody resp `shouldBe` "{\"name\":\"is-odd\"}"
+
+    it "bounds DECOMPRESSED size: a small gzip body that inflates past the cap aborts" $
+        -- The load-bearing security property: the metadata request advertises
+        -- @Accept-Encoding: gzip@ and http-client decompresses transparently, so the
+        -- cap must bound the inflated bytes, not the wire size. The stub serves a gzip
+        -- body whose COMPRESSED size is well under the cap but whose DECOMPRESSED size
+        -- is well over it; the bounded read must still abort fail-closed. This guards
+        -- against a future change silently moving the cap to compressed bytes (which a
+        -- gzip bomb would then walk straight through).
+        withStubHeaders status200 [(hContentEncoding, "gzip")] (toLazy gzippedOversizedBody) $ \stub -> do
+            base <- stubConfig stub
+            let config = base{npmLimits = defaultLimits{maxBodyBytes = 1024}}
+            -- Sanity: the compressed body really is under the cap, so only the
+            -- decompressed-size bound can explain a refusal.
+            BS.length gzippedOversizedBody `shouldSatisfy` (< 1024)
+            outcome <- try (fetchMetadataForm config Full noValidators isOdd)
+            outcome `shouldSatisfy` threw
+
+-- A body comfortably larger than the tight 64-byte cap the bounded-body test sets.
+oversizedBody :: ByteString
+oversizedBody = "{\"name\":\"is-odd\",\"_padding\":\"" <> BS.replicate 256 0x78 <> "\"}"
+
+{- | A gzip-compressed JSON body whose __decompressed__ size (a long run of one byte,
+~64 KiB) far exceeds the 1 KiB cap the gzip test sets, while its __compressed__ size
+stays well under it (a long single-byte run deflates tiny). Serving this under
+@Content-Encoding: gzip@ proves the bounded read measures inflated, not wire, bytes.
+-}
+gzippedOversizedBody :: ByteString
+gzippedOversizedBody =
+    toStrict (GZip.compress (toLazy ("{\"name\":\"is-odd\",\"_padding\":\"" <> BS.replicate 65536 0x78 <> "\"}")))
 
 -- ── scoped-name path encoding ─────────────────────────────────────────────────
 
@@ -281,7 +353,7 @@ artifactSpec = describe "fetchArtifact / artifactRequest" $ do
 
     it "marks the artifact request non-decompressing so a .tgz streams byte-for-byte" $ do
         manager <- newManager defaultManagerSettings
-        let config = NpmClientConfig{npmBaseUrl = "https://reg.test", npmManager = manager, npmToken = Nothing}
+        let config = NpmClientConfig{npmBaseUrl = "https://reg.test", npmManager = manager, npmToken = Nothing, npmLimits = defaultLimits}
         case artifactRequest config isOdd v1 of
             Left err -> fail ("artifactRequest failed: " <> show err)
             Right req -> do
@@ -320,7 +392,7 @@ artifactSpec = describe "fetchArtifact / artifactRequest" $ do
         -- not reconstructed. The base URL in the config is irrelevant (the URL is
         -- absolute); the request is non-decompressing like the other artifact fetches.
         manager <- newManager defaultManagerSettings
-        let config = NpmClientConfig{npmBaseUrl = "https://reg.test", npmManager = manager, npmToken = Nothing}
+        let config = NpmClientConfig{npmBaseUrl = "https://reg.test", npmManager = manager, npmToken = Nothing, npmLimits = defaultLimits}
             url = "https://cdn.example.net/files/abc/code-frame-7.0.0.tgz?sig=deadbeef"
         case artifactRequestByUrl config url of
             Left err -> fail ("artifactRequestByUrl failed: " <> show err)
@@ -333,7 +405,7 @@ artifactSpec = describe "fetchArtifact / artifactRequest" $ do
 
     it "artifactRequestByUrl attaches an injected bearer token (the private-leg credential posture)" $ do
         manager <- newManager defaultManagerSettings
-        let config = NpmClientConfig{npmBaseUrl = "https://reg.test", npmManager = manager, npmToken = Just (mkSecret "tok-xyz")}
+        let config = NpmClientConfig{npmBaseUrl = "https://reg.test", npmManager = manager, npmToken = Just (mkSecret "tok-xyz"), npmLimits = defaultLimits}
         case artifactRequestByUrl config "https://private.reg/files/thing.tgz" of
             Left err -> fail ("artifactRequestByUrl failed: " <> show err)
             Right req ->
@@ -387,19 +459,19 @@ urlFailureSpec :: Spec
 urlFailureSpec = describe "URL-formation failures" $ do
     it "metadataRequest refuses an empty base URL as a UrlFormationError, not a publish error" $ do
         manager <- newManager defaultManagerSettings
-        let config = NpmClientConfig{npmBaseUrl = "", npmManager = manager, npmToken = Nothing}
+        let config = NpmClientConfig{npmBaseUrl = "", npmManager = manager, npmToken = Nothing, npmLimits = defaultLimits}
         -- A read-path (fetch) URL fault is a 'UrlFormationError' — the whole point
         -- of the type split: it is never reported as a 'PublishError'.
         metadataRequest config Abbreviated noValidators isOdd `shouldSatisfy` urlErrorWas EmptyBaseUrl
 
     it "artifactRequest refuses an empty base URL as a UrlFormationError" $ do
         manager <- newManager defaultManagerSettings
-        let config = NpmClientConfig{npmBaseUrl = "", npmManager = manager, npmToken = Nothing}
+        let config = NpmClientConfig{npmBaseUrl = "", npmManager = manager, npmToken = Nothing, npmLimits = defaultLimits}
         artifactRequest config isOdd v1 `shouldSatisfy` urlErrorWas EmptyBaseUrl
 
     it "artifactRequestByFile refuses an empty base URL as a UrlFormationError" $ do
         manager <- newManager defaultManagerSettings
-        let config = NpmClientConfig{npmBaseUrl = "", npmManager = manager, npmToken = Nothing}
+        let config = NpmClientConfig{npmBaseUrl = "", npmManager = manager, npmToken = Nothing, npmLimits = defaultLimits}
         artifactRequestByFile config isOdd "is-odd-1.0.0.tgz" `shouldSatisfy` urlErrorWas EmptyBaseUrl
 
     it "artifactFileUrl refuses an empty base URL as a UrlFormationError" $ do
@@ -407,29 +479,29 @@ urlFailureSpec = describe "URL-formation failures" $ do
 
     it "artifactRequestByUrl refuses an unparseable URL as a UrlFormationError" $ do
         manager <- newManager defaultManagerSettings
-        let config = NpmClientConfig{npmBaseUrl = "https://reg.test", npmManager = manager, npmToken = Nothing}
+        let config = NpmClientConfig{npmBaseUrl = "https://reg.test", npmManager = manager, npmToken = Nothing, npmLimits = defaultLimits}
         artifactRequestByUrl config "not a url with spaces" `shouldSatisfy` urlErrorWas (UnparseableUrl "not a url with spaces")
 
     it "publishRequest refuses an empty base URL as a UrlFormationError" $ do
         manager <- newManager defaultManagerSettings
-        let config = NpmClientConfig{npmBaseUrl = "", npmManager = manager, npmToken = Nothing}
+        let config = NpmClientConfig{npmBaseUrl = "", npmManager = manager, npmToken = Nothing, npmLimits = defaultLimits}
         publishRequest config isOdd publishDoc `shouldSatisfy` urlErrorWas EmptyBaseUrl
 
     it "reports an unformable URL as a non-retriable PublishUrlUnformable value (a config fault to drop, not thrown and not a retriable rejection)" $ do
         manager <- newManager defaultManagerSettings
-        client <- newNpmClient NpmClientConfig{npmBaseUrl = "", npmManager = manager, npmToken = Nothing}
+        client <- newNpmClient NpmClientConfig{npmBaseUrl = "", npmManager = manager, npmToken = Nothing, npmLimits = defaultLimits}
         outcome <- publishArtifact client isOdd v1 publishDoc
         outcome `shouldBe` Left (PublishUrlUnformable EmptyBaseUrl)
 
     it "fetchMetadata raises the typed UrlFormationError on an unformable URL (catchable by type, not a stringly exception)" $ do
         manager <- newManager defaultManagerSettings
-        client <- newNpmClient NpmClientConfig{npmBaseUrl = "", npmManager = manager, npmToken = Nothing}
+        client <- newNpmClient NpmClientConfig{npmBaseUrl = "", npmManager = manager, npmToken = Nothing, npmLimits = defaultLimits}
         outcome <- try (fetchMetadata client isOdd)
         outcome `shouldBe` (Left EmptyBaseUrl :: Either UrlFormationError RegistryResponse)
 
     it "fetchArtifact raises the typed UrlFormationError on an unformable URL" $ do
         manager <- newManager defaultManagerSettings
-        client <- newNpmClient NpmClientConfig{npmBaseUrl = "", npmManager = manager, npmToken = Nothing}
+        client <- newNpmClient NpmClientConfig{npmBaseUrl = "", npmManager = manager, npmToken = Nothing, npmLimits = defaultLimits}
         outcome <- try (fetchArtifact client isOdd v1)
         outcome `shouldBe` (Left EmptyBaseUrl :: Either UrlFormationError RegistryResponse)
 
@@ -438,12 +510,12 @@ urlFailureSpec = describe "URL-formation failures" $ do
         -- Passes the empty-base guard but is not a parseable URL (no scheme,
         -- embedded spaces), so http-client's parser rejects it. The fault names
         -- the offending URL it could not parse.
-        let config = NpmClientConfig{npmBaseUrl = "not a url", npmManager = manager, npmToken = Nothing}
+        let config = NpmClientConfig{npmBaseUrl = "not a url", npmManager = manager, npmToken = Nothing, npmLimits = defaultLimits}
         metadataRequest config Abbreviated noValidators isOdd `shouldSatisfy` isUnparseable
 
     it "builds a metadata request against a well-formed base URL" $ do
         manager <- newManager defaultManagerSettings
-        let config = NpmClientConfig{npmBaseUrl = "https://reg.test/", npmManager = manager, npmToken = Nothing}
+        let config = NpmClientConfig{npmBaseUrl = "https://reg.test/", npmManager = manager, npmToken = Nothing, npmLimits = defaultLimits}
         -- A trailing slash on the base must not double the join.
         metadataRequest config Abbreviated noValidators isOdd `shouldNotSatisfy` isLeft
 
@@ -456,6 +528,9 @@ configAndWiringSpec = describe "config and handle wiring" $ do
         let config = defaultNpmConfig manager
         npmBaseUrl config `shouldBe` publicRegistryBaseUrl
         isJust (npmToken config) `shouldBe` False
+        -- The secure-default response bounds are carried, so an anonymous public
+        -- fetch is bounded out of the box (a deployment overrides per its budget).
+        npmLimits config `shouldBe` defaultLimits
         -- A 'Manager' is opaque (no Eq/Show), so forcing it to WHNF is the
         -- assertion that the field carries the manager we passed, not a bottom.
         _ <- evaluate (npmManager config)
@@ -518,3 +593,10 @@ isUnparseable = either matchUnparseable (const False)
   where
     matchUnparseable (UnparseableUrl _) = True
     matchUnparseable _ = False
+
+{- | Whether a @try@'d fetch raised rather than returning a response — the assertion
+the bounded-body tests make when an over-budget body aborts the read fail-closed
+(the metadata fetch throws a 'ResponseBoundExceeded').
+-}
+threw :: Either SomeException RegistryResponse -> Bool
+threw = isLeft

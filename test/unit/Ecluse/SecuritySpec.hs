@@ -1,6 +1,6 @@
 module Ecluse.SecuritySpec (spec) where
 
-import Data.Aeson (Value (Array, Bool, Null, Number, Object, String))
+import Data.Aeson (Value (Array, Bool, Null, Number, Object, String), eitherDecodeStrict)
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
@@ -26,7 +26,9 @@ import Ecluse.Package (
     Trust (Untrusted),
     mkPackageName,
     mkScope,
+    renderPackageName,
  )
+import Ecluse.Registry.Npm.Project (parsePackageInfoFromValue)
 import Ecluse.Security (
     LimitError (..),
     Limits (..),
@@ -145,6 +147,7 @@ spec = do
     boundedReadSpec
     versionCountSpec
     nestingDepthSpec
+    realPackumentSpec
     showInstancesSpec
     lowerCaseHostsSpec
     propertiesSpec
@@ -745,6 +748,65 @@ nestingDepthSpec = describe "checkNestingDepth" $ do
                         ]
                     )
          in checkNestingDepth defaultLimits doc `shouldBe` Right doc
+
+-- ── real-world admissibility (the defaults must not false-positive) ──────────
+
+{- | The whole point of the default 'Limits' (16 MiB body, 100k versions, depth 64)
+is that they must __never__ refuse a legitimate trusted package. This drives the
+exact sequence the data plane applies in @Ecluse.Server.Pipeline.fetchEntry@ —
+bounded read, depth check on the decoded document, projection, then version-count
+check — over a __real, untrimmed__ packument committed under the fixtures directory,
+and asserts the document is __admissible__ under the default budget at every step.
+
+The fixture is @registry.npmjs.org/express@'s full packument (a large, widely-trusted
+package: ~805 KB, 288 versions, JSON depth 7). It is a genuine capture, not
+hand-trimmed — so a default that was accidentally too tight would fail here, exactly
+the regression this guards. @react@ (the architect's example) is ~6.7 MB / 2841
+versions, too large to commit comfortably; @express@ is the representative
+large-but-committable choice. The live smoke tier
+("Ecluse.RegistryProtocolSpec") validates @react@ and other large packuments against
+__current__ data without committing megabytes.
+-}
+realPackumentSpec :: Spec
+realPackumentSpec = describe "default Limits admit a real large trusted packument (no false positive)" $ do
+    it "express: bounded read, decode, depth, projection, and version count all clear the defaults" $ do
+        body <- readFileBS "test/unit/fixtures/npm/express.full.json"
+        -- 1. Body size: the bounded read returns the whole body (within maxBodyBytes).
+        bounded <- case runBounded defaultLimits [body] of
+            Left err -> expectationFailure ("real packument refused by the body bound: " <> show err) >> pure ""
+            Right b -> pure b
+        bounded `shouldBe` body
+        -- 2. Decode to a Value, then 3. depth-check it (within maxNestingDepth).
+        value <- case eitherDecodeStrict bounded of
+            Left e -> expectationFailure ("real packument did not decode: " <> e) >> pure (Object mempty)
+            Right v -> pure v
+        depthChecked <- case checkNestingDepth defaultLimits value of
+            Left err -> expectationFailure ("real packument refused by the nesting bound: " <> show err) >> pure (Object mempty)
+            Right v -> pure v
+        -- 4. Project to the typed view (it really is a well-formed packument), then
+        -- 5. version-count check it (within maxVersionCount).
+        info <- case parsePackageInfoFromValue depthChecked of
+            Left err -> expectationFailure ("real packument did not project: " <> show err) >> pure emptyInfo
+            Right i -> pure i
+        case checkVersionCount defaultLimits info of
+            Left err -> expectationFailure ("real packument refused by the version bound: " <> show err)
+            Right admitted -> do
+                renderPackageName (infoName admitted) `shouldBe` "express"
+                -- A genuinely large version set, well under the 100k ceiling: proof the
+                -- count bound clears a real package, not a toy one.
+                Map.size (infoVersions admitted) `shouldSatisfy` (> 200)
+                Map.size (infoVersions admitted) `shouldSatisfy` (<= maxVersionCount defaultLimits)
+
+-- An empty 'PackageInfo' placeholder so a failed projection keeps the example total
+-- (it has already failed via 'expectationFailure' before this is forced).
+emptyInfo :: PackageInfo
+emptyInfo =
+    PackageInfo
+        { infoName = unscoped "unused"
+        , infoVersions = Map.empty
+        , infoDistTags = Map.empty
+        , infoPublishedAt = Map.empty
+        }
 
 -- ── lowerCaseHosts (the LoweredHostSet parser) ───────────────────────────────
 
