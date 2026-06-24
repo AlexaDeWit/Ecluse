@@ -31,9 +31,10 @@ Build and CI automation is **Bash** — one language, so there is one thing to r
 review. Scripts live in [`scripts/`](scripts/) (`#!/usr/bin/env bash`, `set -euo
 pipefail`) and are invoked from the [`Makefile`](Makefile) or the workflows. The
 `Makefile` orchestrates; any non-trivial logic belongs in a `scripts/*.sh` file rather
-than inline in a workflow `run:` block, so it stays reviewable, `shellcheck`-able, and
-runnable outside CI. `awk`/`sort` handle structured-data munging — reach for them before
-a heavier runtime.
+than inline in a workflow `run:` block, so it stays reviewable, runnable outside CI, and
+`shellcheck`-clean — `make lint-scripts` runs `shellcheck` over `scripts/*.sh` in the
+gate (at `--severity=warning`). `awk`/`sort` handle structured-data munging — reach for
+them before a heavier runtime.
 
 Use another language only when one is genuinely *forced*, and say why in review:
 

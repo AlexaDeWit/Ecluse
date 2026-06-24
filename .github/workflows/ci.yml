@@ -244,6 +244,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: nix develop .#workflow-lint --command make lint-workflows
 
+      - name: Lint shell scripts (shellcheck)
+        if: ${{ !cancelled() }}
+        # shellcheck over scripts/*.sh (--severity=warning). Same lean .#workflow-lint
+        # shell as the workflow lint above. See CONTRIBUTING.md → "Automation scripting".
+        run: nix develop .#workflow-lint --command make lint-scripts
+
   docs:
     name: Haddock builds
     runs-on: ubuntu-latest

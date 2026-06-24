@@ -275,6 +275,9 @@
         workflowLintInputs = [
           pkgs.actionlint
           pkgs.zizmor
+          # shellcheck for `make lint-scripts` (scripts/*.sh). actionlint already runs
+          # shellcheck on workflow `run:` blocks; this lints the committed scripts too.
+          pkgs.shellcheck
         ];
 
         # agent-lsp: the LSP<->MCP bridge that lets an MCP client (e.g. Claude
@@ -458,8 +461,8 @@
           buildInputs = [ pkgs.bashInteractive pkgs.sbomnix ] ++ scanInputs;
         });
 
-        # Lean shell for the workflow-lint gate job: the two Actions linters only.
-        # CI enters it with `nix develop .#workflow-lint`.
+        # Lean shell for the lint gate steps: the Actions linters (actionlint, zizmor)
+        # plus shellcheck for scripts/*.sh. CI enters it with `nix develop .#workflow-lint`.
         devShells.workflow-lint = pkgs.mkShell (shellEnv // {
           name = "ecluse-workflow-lint";
           buildInputs = [ pkgs.bashInteractive ] ++ workflowLintInputs;
