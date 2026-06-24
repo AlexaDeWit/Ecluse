@@ -483,6 +483,27 @@ spec = do
         -- divergence signal, and (the core property) order-independence of every
         -- decision a caller can observe except the positional 'SourceId' label.
 
+        it "the trust order IS the hierarchy: TrustedSource < GatedSource (keystone — do not reorder)" $
+            -- DO NOT read this as a trivial Enum/Ord check. This single line is the
+            -- keystone of the entire merge. Every "the private registry always wins"
+            -- decision the module makes — which copy survives a version collision,
+            -- whose integrity is recorded as the divergence winner, and which
+            -- source's dist-tags and time are kept — is resolved by 'Set.findMin' /
+            -- 'keepBetter' over the @(Provenance, SourceId)@ rank, whose precedence
+            -- is governed entirely by this 'Ord Provenance'. 'TrustedSource' is
+            -- declared before 'GatedSource', so the derived 'Ord' makes it the
+            -- smaller value, and "smallest wins" is what gives the private upstream
+            -- authority.
+            --
+            -- If a future edit reorders the 'Provenance' constructors (or otherwise
+            -- inverts this comparison), the trust relationship flips SILENTLY: the
+            -- public upstream would win every collision, and a tampered public copy
+            -- could shadow the vetted private one — the precise supply-chain failure
+            -- Écluse exists to prevent — with nothing else in the types objecting.
+            -- A failure here therefore means "the trust hierarchy has been inverted,"
+            -- NOT "update the expected value." This assertion is the tripwire; keep it.
+            compare TrustedSource GatedSource `shouldBe` LT
+
         it "trusted wins a collision; the divergence's winner is the trusted copy" $ do
             -- Trusted and gated collide at 1.0.0 with differing integrity. The
             -- survivor is the trusted copy and the recorded divergence's *winning*
