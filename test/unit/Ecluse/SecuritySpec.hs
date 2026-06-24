@@ -137,6 +137,7 @@ spec :: Spec
 spec = do
     hostAllowlistSpec
     internalRangeSpec
+    classificationCorpusSpec
     hostAddressSpec
     ssrfGateSpec
     tarballHostPolicySpec
@@ -325,6 +326,106 @@ internalRangeSpec = describe "isBlockedTarget" $ do
             -- 'lowerCaseHosts' normalises the opt-in set, so 'FE80::1' opts in
             -- 'fe80::1' rather than over-blocking it on a case mismatch.
             isBlockedTarget (lowerCaseHosts (Set.singleton "FE80::1")) "fe80::1" `shouldBe` False
+
+-- ── classification corpus (the equivalence bar) ──────────────────────────────
+
+{- | The blocked-vs-allowed classification of 'isBlockedTarget', pinned against an
+__explicit expected table__ rather than any prior implementation. The internal
+block recognises a host as a literal with a deliberately lenient hand-rolled
+parser and delegates only the range membership to a library, so this corpus
+guards that the gate neither narrows nor widens: every internal range blocks, the
+IPv4-mapped smuggling forms decode and block, and the lenient/strict boundary
+spellings classify exactly as documented.
+
+The boundary cases are the load-bearing ones. @0127.0.0.1@ and @010.0.0.1@ are
+__blocked__: the recogniser accepts leading-zero octets and treats them as the
+address they coerce to on a typical resolver, so they cannot skip the block as
+unparsed names — a stricter parser that rejected them would narrow the gate.
+@fe80::1ffff@ is __not__ blocked: its final group overflows 16 bits, so it is not
+a literal here and stays a name the allowlist constrains.
+-}
+classificationCorpusSpec :: Spec
+classificationCorpusSpec =
+    describe "isBlockedTarget classification corpus (explicit expected table)" $
+        for_ corpus $ \(host, expected) ->
+            it (renderCase host expected) $
+                isBlockedTarget noOptIn host `shouldBe` expected
+  where
+    noOptIn = lowerCaseHosts Set.empty
+    renderCase host expected =
+        toString $
+            (if expected then "blocks " else "permits ")
+                <> (if T.null host then "<empty>" else host)
+
+    -- (host, expected-blocked). Grouped by intent; every internal range, both
+    -- IPv4-mapped spellings, the lenient/strict boundary, and externals/names.
+    corpus :: [(Text, Bool)]
+    corpus =
+        internalV4 <> internalV6 <> mappedV4 <> lenientBoundary <> externals <> names
+
+    internalV4 =
+        [ ("169.254.169.254", True) -- IMDSv4
+        , ("169.254.1.1", True) -- link-local 169.254.0.0/16
+        , ("127.0.0.1", True) -- loopback
+        , ("127.255.255.254", True) -- loopback 127.0.0.0/8 high
+        , ("10.1.2.3", True) -- RFC1918 10/8
+        , ("172.16.0.1", True) -- RFC1918 172.16/12 low
+        , ("172.31.255.254", True) -- RFC1918 172.16/12 high
+        , ("192.168.1.1", True) -- RFC1918 192.168/16
+        , ("0.0.0.0", True) -- unspecified / this-host
+        , ("0.1.2.3", True) -- rest of 0.0.0.0/8
+        , ("100.64.0.0", True) -- CGNAT 100.64/10 low
+        , ("100.127.255.254", True) -- CGNAT 100.64/10 high
+        ]
+
+    internalV6 =
+        [ ("::", True) -- unspecified
+        , ("::1", True) -- loopback
+        , ("0:0:0:0:0:0:0:1", True) -- loopback, fully expanded
+        , ("fe80::1", True) -- link-local fe80::/10 low
+        , ("febf::1", True) -- link-local fe80::/10 high
+        , ("fc00::1", True) -- unique-local fc00::/7 low
+        , ("fdff::1", True) -- unique-local fc00::/7 high
+        , ("fd00:ec2::254", True) -- IMDSv6
+        ]
+
+    mappedV4 =
+        [ ("::ffff:169.254.169.254", True) -- IMDSv4 mapped, dotted spelling
+        , ("::ffff:a9fe:a9fe", True) -- IMDSv4 mapped, hex spelling
+        , ("::ffff:127.0.0.1", True) -- mapped loopback
+        , ("0:0:0:0:0:ffff:127.0.0.1", True) -- mapped loopback, fully expanded
+        , ("::ffff:1.1.1.1", False) -- mapped public stays permitted
+        ]
+
+    lenientBoundary =
+        [ ("0127.0.0.1", True) -- leading-zero octet still blocks
+        , ("010.0.0.1", True) -- leading-zero octet still blocks
+        , ("fe80::1ffff", False) -- over-16-bit group is not a literal
+        ]
+
+    externals =
+        [ ("8.8.8.8", False)
+        , ("1.1.1.1", False)
+        , ("93.184.216.34", False)
+        , ("172.32.0.1", False) -- just above the 172.16/12 block
+        , ("11.0.0.1", False) -- just above 10/8
+        , ("100.63.255.255", False) -- just below CGNAT
+        , ("100.128.0.1", False) -- just above CGNAT
+        , ("2606:4700::1111", False)
+        , ("2001:db8::1", False)
+        , ("fbff::1", False) -- just below fc00::/7
+        , ("fe00::1", False) -- between fc00::/7 and fe80::/10
+        ]
+
+    names =
+        [ ("registry.npmjs.org", False) -- a DNS name
+        , ("", False) -- empty
+        , ("10.0.0.256", False) -- octet out of range → not a literal
+        , ("10.0.0.x", False) -- non-numeric octet → not a literal
+        , ("10.0.0", False) -- too few octets → not a literal
+        , ("1::2::3", False) -- two "::" → malformed
+        , ("::ffff:1.2.3.4.5", False) -- mapped form with a bad embedded IPv4
+        ]
 
 -- ── host extraction ──────────────────────────────────────────────────────────
 

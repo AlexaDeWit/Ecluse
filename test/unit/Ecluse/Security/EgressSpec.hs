@@ -23,7 +23,6 @@ import Ecluse.Security.Egress (
     BlockedTarget (..),
     blockedResolvedAddrs,
     newGuardedTlsManager,
-    sockAddrHostText,
  )
 
 -- ── fixtures ─────────────────────────────────────────────────────────────────
@@ -42,25 +41,9 @@ v6 groups = SockAddrInet6 443 0 (tupleToHostAddress6 groups) 0
 
 spec :: Spec
 spec = do
-    sockAddrHostTextSpec
     blockedResolvedAddrsSpec
     guardedManagerSpec
     showInstancesSpec
-
--- ── socket-address rendering ──────────────────────────────────────────────────
-
-sockAddrHostTextSpec :: Spec
-sockAddrHostTextSpec = describe "sockAddrHostText" $ do
-    it "renders an IPv4 address as its dotted-quad literal" $
-        sockAddrHostText (v4 (169, 254, 169, 254)) `shouldBe` Just "169.254.169.254"
-    it "renders the all-zero IPv4 address" $
-        sockAddrHostText (v4 (0, 0, 0, 0)) `shouldBe` Just "0.0.0.0"
-    it "renders an IPv6 address as uncompressed colon-separated hex groups" $
-        sockAddrHostText (v6 (0xfe80, 0, 0, 0, 0, 0, 0, 1)) `shouldBe` Just "fe80:0:0:0:0:0:0:1"
-    it "renders the IPv6 loopback in uncompressed form" $
-        sockAddrHostText (v6 (0, 0, 0, 0, 0, 0, 0, 1)) `shouldBe` Just "0:0:0:0:0:0:0:1"
-    it "yields Nothing for a non-IP (Unix-domain) socket address" $
-        sockAddrHostText (SockAddrUnix "/tmp/sock") `shouldBe` Nothing
 
 -- ── the resolved-IP decision ──────────────────────────────────────────────────
 
@@ -93,15 +76,17 @@ blockedResolvedAddrsSpec = describe "blockedResolvedAddrs" $ do
             blockedResolvedAddrs noOptIn [v4 (10, 1, 2, 3)] `shouldBe` ["10.1.2.3"]
         it "refuses the unspecified / this-host address 0.0.0.0" $
             blockedResolvedAddrs noOptIn [v4 (0, 0, 0, 0)] `shouldBe` ["0.0.0.0"]
-        it "refuses IPv6 loopback" $
-            blockedResolvedAddrs noOptIn [v6 (0, 0, 0, 0, 0, 0, 0, 1)] `shouldBe` ["0:0:0:0:0:0:0:1"]
+        it "refuses IPv6 loopback (reported as the canonical compressed literal)" $
+            -- The blocked literal is rendered in its canonical, compressed form for
+            -- the diagnostic — the form an operator reads and writes.
+            blockedResolvedAddrs noOptIn [v6 (0, 0, 0, 0, 0, 0, 0, 1)] `shouldBe` ["::1"]
         it "refuses IPv6 link-local" $
-            blockedResolvedAddrs noOptIn [v6 (0xfe80, 0, 0, 0, 0, 0, 0, 1)] `shouldBe` ["fe80:0:0:0:0:0:0:1"]
+            blockedResolvedAddrs noOptIn [v6 (0xfe80, 0, 0, 0, 0, 0, 0, 1)] `shouldBe` ["fe80::1"]
         it "refuses an IPv6 unique-local address (fc00::/7)" $
-            blockedResolvedAddrs noOptIn [v6 (0xfd00, 0, 0, 0, 0, 0, 0, 1)] `shouldBe` ["fd00:0:0:0:0:0:0:1"]
+            blockedResolvedAddrs noOptIn [v6 (0xfd00, 0, 0, 0, 0, 0, 0, 1)] `shouldBe` ["fd00::1"]
         it "refuses the AWS IMDSv6 endpoint fd00:ec2::254" $
             blockedResolvedAddrs noOptIn [v6 (0xfd00, 0xec2, 0, 0, 0, 0, 0, 0x254)]
-                `shouldBe` ["fd00:ec2:0:0:0:0:0:254"]
+                `shouldBe` ["fd00:ec2::254"]
 
     describe "a mixed resolution is refused if any address is internal" $ do
         it "reports the internal address even when a public one is also present" $
@@ -120,6 +105,16 @@ blockedResolvedAddrsSpec = describe "blockedResolvedAddrs" $ do
         it "still refuses a different internal address than the opted-in one" $
             blockedResolvedAddrs (lowerCaseHosts (Set.singleton "10.0.0.5")) [v4 (10, 0, 0, 6)]
                 `shouldBe` ["10.0.0.6"]
+        it "permits a resolved IPv6 address opted in by its canonical compressed form" $
+            -- The opt-in key is the address's canonical compressed literal, so an
+            -- opt-in written that way suppresses the block for the resolved address.
+            blockedResolvedAddrs (lowerCaseHosts (Set.singleton "fe80::1")) [v6 (0xfe80, 0, 0, 0, 0, 0, 0, 1)]
+                `shouldBe` []
+        it "still refuses an IPv6 address opted in only by its uncompressed spelling" $
+            -- The uncompressed spelling is not the key, so it does not opt in — and
+            -- the refused literal is reported in the canonical compressed form.
+            blockedResolvedAddrs (lowerCaseHosts (Set.singleton "fe80:0:0:0:0:0:0:1")) [v6 (0xfe80, 0, 0, 0, 0, 0, 0, 1)]
+                `shouldBe` ["fe80::1"]
 
 -- ── the live connection hook ──────────────────────────────────────────────────
 

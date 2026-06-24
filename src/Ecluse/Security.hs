@@ -41,6 +41,8 @@ module Ecluse.Security (
 
     -- * Internal-range block
     isBlockedTarget,
+    isBlockedIP,
+    hostOptedIn,
     hostAddress,
 
     -- * Tarball-host policy
@@ -63,6 +65,14 @@ module Ecluse.Security (
 import Data.Aeson (Value (Array, Bool, Null, Number, Object, String))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
+import Data.IP (
+    IP (IPv4, IPv6),
+    IPRange (IPv4Range, IPv6Range),
+    fromIPv6b,
+    isMatchedTo,
+    toIPv4,
+    toIPv6,
+ )
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
@@ -143,18 +153,103 @@ check. Both guards apply — an allowlisted host that resolves to an internal li
 is still caught when its address is tested here.
 -}
 isBlockedTarget :: LoweredHostSet -> Text -> Bool
-isBlockedTarget (LoweredHostSet allowedInternal) host =
-    not (T.toLower host `Set.member` allowedInternal)
-        && maybe False isInternalAddress (parseIpLiteral host)
+isBlockedTarget allowedInternal host =
+    not (hostOptedIn allowedInternal host)
+        && maybe False (isBlockedIP . ipAddrToIP) (parseIpLiteral host)
+
+{- | Whether @host@ is opted in to the internal-range block — the deliberate
+exemption for a private upstream that genuinely lives on an internal address.
+
+The opt-in half of 'isBlockedTarget', shared with the resolved-address recheck in
+"Ecluse.Security.Egress" so the literal block and the connection-time block honour
+the exemption identically. The match is case-insensitive (as DNS and the host
+allowlist are); the @allowedInternal@ set is a 'LoweredHostSet', already
+lower-cased, so only @host@ is folded here.
+-}
+hostOptedIn :: LoweredHostSet -> Text -> Bool
+hostOptedIn (LoweredHostSet allowedInternal) host =
+    T.toLower host `Set.member` allowedInternal
+
+{- | Whether an 'IP' falls in a blocked internal range.
+
+The single source of record for the internal-range decision, shared by the
+literal block here ('isBlockedTarget') and the resolved-address recheck in
+"Ecluse.Security.Egress" so both gate against __identical__ ranges. An
+IPv4-mapped IPv6 address (@::ffff:a.b.c.d@) is first decoded to its embedded IPv4
+and tested against the IPv4 ranges: a mapped internal literal (e.g.
+@::ffff:169.254.169.254@) is a recognised SSRF smuggling form, so it must be
+caught by the IPv4 block rather than slip through as an unrelated IPv6 address.
+-}
+isBlockedIP :: IP -> Bool
+isBlockedIP ip = any matches blockedRanges
+  where
+    decoded = decodeMappedV4 ip
+    matches = \case
+        IPv4Range r -> case decoded of
+            IPv4 a -> a `isMatchedTo` r
+            IPv6 _ -> False
+        IPv6Range r -> case decoded of
+            IPv6 a -> a `isMatchedTo` r
+            IPv4 _ -> False
+
+{- The internal ranges the proxy refuses to fetch from, as @iproute@ CIDR values:
+the unspecified \/ this-host, loopback, link-local, RFC1918, CGNAT-shared, and
+IPv6 unique-local blocks. Declared once and consulted by 'isBlockedIP' alone, so
+the blocked set is a single cross-cutting invariant. @0.0.0.0\/8@ is blocked
+because @0.0.0.0@ reaches a loopback-bound service on Linux; @169.254.0.0\/16@
+contains the @169.254.169.254@ cloud-metadata endpoint; @fc00::\/7@ contains the
+AWS IMDSv6 endpoint @fd00:ec2::254@.
+-}
+blockedRanges :: [IPRange]
+blockedRanges =
+    [ "0.0.0.0/8" -- unspecified / this-host (reaches loopback on Linux)
+    , "10.0.0.0/8" -- RFC1918 private
+    , "100.64.0.0/10" -- CGNAT shared (RFC 6598)
+    , "127.0.0.0/8" -- loopback
+    , "169.254.0.0/16" -- link-local (incl. 169.254.169.254 metadata)
+    , "172.16.0.0/12" -- RFC1918 private
+    , "192.168.0.0/16" -- RFC1918 private
+    , "::/128" -- IPv6 unspecified
+    , "::1/128" -- IPv6 loopback
+    , "fe80::/10" -- IPv6 link-local
+    , "fc00::/7" -- IPv6 unique-local (incl. AWS IMDSv6 fd00:ec2::254)
+    ]
+
+{- Convert a recognised literal to an @iproute@ 'IP' for the membership test.
+The four IPv4 octets become an 'IPv4', and the eight 16-bit groups an 'IPv6'. The
+IPv4-mapped decode is left to 'isBlockedIP' ('decodeMappedV4'), so a mapped
+literal is carried here as the IPv6 it textually is and decoded only at the point
+of the range test.
+-}
+ipAddrToIP :: IpAddr -> IP
+ipAddrToIP = \case
+    IpV4 a b c d -> IPv4 (toIPv4 (map fromIntegral [a, b, c, d]))
+    IpV6 groups -> IPv6 (toIPv6 (map fromIntegral groups))
+
+{- Decode an IPv4-mapped IPv6 address (@::ffff:a.b.c.d@) to its embedded IPv4, so
+it is tested against the IPv4 ranges; any other address is returned unchanged.
+Over the sixteen octets 'fromIPv6b' yields, the mapped form is ten zero octets,
+then @ff ff@, then the four IPv4 octets. Testing a mapped internal literal against
+the IPv6 ranges instead would let @::ffff:169.254.169.254@ through, so the decode
+is load-bearing for the SSRF block.
+-}
+decodeMappedV4 :: IP -> IP
+decodeMappedV4 = \case
+    IPv6 v6 -> case fromIPv6b v6 of
+        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF, a, b, c, d] ->
+            IPv4 (toIPv4 [a, b, c, d])
+        _ -> IPv6 v6
+    ip -> ip
 
 {- An IP literal, parsed from a host for internal-range testing. Internal to
-this module; consumed only by 'isInternalAddress', so it carries no instances.
+this module; converted to an @iproute@ 'IP' by 'ipAddrToIP' for the membership
+test, so it carries no instances.
 -}
 data IpAddr
     = -- An IPv4 address as its four octets.
-      IPv4 Word8 Word8 Word8 Word8
+      IpV4 Word8 Word8 Word8 Word8
     | -- An IPv6 address, normalised to its eight 16-bit groups.
-      IPv6 [Word16]
+      IpV6 [Word16]
 
 {- | Extract the bare host from a URI or @host[:port]@ authority.
 
@@ -189,89 +284,25 @@ hostAddress raw =
         Just rest -> T.takeWhile (/= ']') rest
         Nothing -> T.takeWhile (/= ':') h
 
--- The four octets of an IPv4 address. Tuple ordering on the octets is
--- lexicographic, which is exactly numeric IP order — so an address is inside a
--- block iff it sits between the block's first and last address ('isInternalV4').
-type V4Octets = (Word8, Word8, Word8, Word8)
-
--- The internal IPv4 blocks the proxy refuses to fetch from, each written as its
--- inclusive (first address, last address) — the CIDR spelled out as a range, so
--- testing membership needs no bit masking. Listed in numeric order for reading.
-internalV4Ranges :: [(V4Octets, V4Octets)]
-internalV4Ranges =
-    [ ((0, 0, 0, 0), (0, 255, 255, 255)) -- 0.0.0.0/8 unspecified / this-host (reaches loopback on Linux)
-    , ((10, 0, 0, 0), (10, 255, 255, 255)) -- 10.0.0.0/8 RFC1918 private
-    , ((100, 64, 0, 0), (100, 127, 255, 255)) -- 100.64.0.0/10 CGNAT shared (RFC 6598)
-    , ((127, 0, 0, 0), (127, 255, 255, 255)) -- 127.0.0.0/8 loopback
-    , ((169, 254, 0, 0), (169, 254, 255, 255)) -- 169.254.0.0/16 link-local (incl. 169.254.169.254 metadata)
-    , ((172, 16, 0, 0), (172, 31, 255, 255)) -- 172.16.0.0/12 RFC1918 private
-    , ((192, 168, 0, 0), (192, 168, 255, 255)) -- 192.168.0.0/16 RFC1918 private
-    ]
-
--- Whether an IPv4 address falls in any blocked block: between its first and last
--- address inclusive, under the lexicographic (= numeric) ordering of the octets.
-isInternalV4 :: V4Octets -> Bool
-isInternalV4 addr = any within internalV4Ranges
-  where
-    within (lo, hi) = lo <= addr && addr <= hi
-
--- Whether a parsed IP literal falls in any blocked internal range.
-isInternalAddress :: IpAddr -> Bool
-isInternalAddress = \case
-    IPv4 a b c d -> isInternalV4 (a, b, c, d)
-    IPv6 groups -> isInternalV6 groups
-
-{- Whether 16-bit IPv6 groups are unspecified (@::@), loopback (@::1@),
-link-local (@fe80::\/10@), unique-local (@fc00::\/7@), or IPv4-mapped
-(@::ffff:0:0\/96@). The mapped range lets an attacker embed an internal IPv4 literal
-(e.g. @::ffff:169.254.169.254@) in an IPv6 form that the per-IPv4-range checks would
-otherwise miss; decoding the embedded address and re-running 'isInternalV4' on the
-IPv4 result closes the gap. Both spellings of a mapped address reach here as the same
-eight groups — the hex form (@::ffff:a9fe:a9fe@) and the canonical dotted form
-(@::ffff:169.254.169.254@), which 'parseIPv6' expands. Unique-local space includes
-the AWS IPv6 instance-metadata endpoint @fd00:ec2::254@, the IMDSv6 analogue of the
-IPv4 @169.254.169.254@. NAT64 (@64:ff9b::\/96@) is out of scope.
--}
-isInternalV6 :: [Word16] -> Bool
-isInternalV6 groups =
-    isUnspecified || isLoopback || isLinkLocal || isUniqueLocal || isMappedInternalV4
-  where
-    -- :: and ::1, written out as their eight 16-bit groups.
-    isUnspecified = groups == [0, 0, 0, 0, 0, 0, 0, 0]
-    isLoopback = groups == [0, 0, 0, 0, 0, 0, 0, 1]
-
-    -- fe80::/10: the first group lies in fe80..febf; the rest is unconstrained.
-    isLinkLocal = case groups of
-        (g0 : _) -> g0 >= 0xFE80 && g0 <= 0xFEBF
-        [] -> False
-
-    -- fc00::/7: the first group's top 7 bits are 1111110, i.e. fc00..fdff. This is
-    -- the private-network IPv6 analogue of RFC1918, and contains the AWS IMDSv6
-    -- endpoint fd00:ec2::254 — so an SSRF aimed at IPv6 instance metadata is caught.
-    isUniqueLocal = case groups of
-        (g0 : _) -> g0 >= 0xFC00 && g0 <= 0xFDFF
-        [] -> False
-
-    -- ::ffff:a.b.c.d — the last two groups hold the embedded IPv4 (high group
-    -- then low). Recover its four octets and re-test, so an internal IPv4
-    -- smuggled in mapped form is caught too.
-    isMappedInternalV4 = case groups of
-        [0, 0, 0, 0, 0, 0xFFFF, hi, lo] ->
-            isInternalV4 (highByte hi, lowByte hi, highByte lo, lowByte lo)
-        _ -> False
-
-    -- Split a 16-bit group into its two bytes. The div/mod run on the Word16, so
-    -- the high byte is taken before any narrowing to Word8.
-    highByte g = fromIntegral (g `div` 256)
-    lowByte g = fromIntegral (g `mod` 256)
-
 {- Parse a host as an IP literal, or 'Nothing' for a DNS name. Handles dotted-
 quad IPv4 and the IPv6 forms a host realistically carries — full eight-group form,
 @::@-compressed forms (including @::1@), and a trailing embedded IPv4 (the
 @a.b.c.d@ in @::ffff:a.b.c.d@) — which is enough to recognise the loopback,
-link-local, and IPv4-mapped addresses 'isInternalAddress' blocks. It is
-deliberately __not__ a complete IPv6 parser (no zone ids); an unrecognised
-literal is treated as a name, which the host allowlist still constrains.
+link-local, and IPv4-mapped addresses 'isBlockedIP' blocks. It is deliberately
+__not__ a complete IPv6 parser (no zone ids); an unrecognised literal is treated
+as a name, which the host allowlist still constrains.
+
+Only range __membership__ is delegated to @iproute@ ('isBlockedIP'); recognising
+the literal stays hand-rolled __on purpose__. This recogniser is deliberately
+__lenient__ — it accepts ambiguous bypass spellings a strict IP library rejects,
+notably leading-zero octets (@0127.0.0.1@, @010.0.0.1@), and __blocks__ them by
+parsing them as the address they coerce to on a typical resolver. A stricter
+parser would reject those spellings as non-literals, so they would skip the
+internal-range block and reach the resolving fetch as names — silently
+__narrowing__ the SSRF gate. Conversely a malformed group that overflows 16 bits
+(@fe80::1ffff@) is __not__ a literal here, so it stays a name the allowlist
+constrains. Delegating literal /parsing/ to a library would change both of these,
+so it is kept here.
 -}
 parseIpLiteral :: Text -> Maybe IpAddr
 parseIpLiteral host = case T.uncons host of
@@ -281,7 +312,7 @@ parseIpLiteral host = case T.uncons host of
 -- Parse a strict dotted-quad @a.b.c.d@ with each octet in @0..255@.
 parseIPv4 :: Text -> Maybe IpAddr
 parseIPv4 host = case T.splitOn "." host of
-    [a, b, c, d] -> IPv4 <$> octet a <*> octet b <*> octet c <*> octet d
+    [a, b, c, d] -> IpV4 <$> octet a <*> octet b <*> octet c <*> octet d
     _ -> Nothing
   where
     -- An octet is a non-empty all-decimal run in 0..255. The digit check keeps
@@ -307,7 +338,7 @@ parseIPv6 host =
             -- on either side must total at most 7 (leaving room to fill to 8).
             let present = length hd + length tl
             if present <= 7
-                then Just (IPv6 (hd <> replicate (8 - present) 0 <> tl))
+                then Just (IpV6 (hd <> replicate (8 - present) 0 <> tl))
                 else Nothing
         _ -> Nothing -- more than one "::" is illegal
   where
@@ -332,7 +363,7 @@ parseIPv6 host =
     -- A trailing dotted-quad IPv4 as its two 16-bit groups (high pair, low pair).
     embeddedV4 :: Text -> Maybe [Word16]
     embeddedV4 t = case parseIPv4 t of
-        Just (IPv4 a b c d) -> Just [pair a b, pair c d]
+        Just (IpV4 a b c d) -> Just [pair a b, pair c d]
         _ -> Nothing
       where
         pair hi lo = fromIntegral hi * 256 + fromIntegral lo
@@ -345,7 +376,7 @@ parseIPv6 host =
         if n <= 0xFFFF then Just (fromInteger n) else Nothing
 
     exactly8 :: [Word16] -> Maybe IpAddr
-    exactly8 gs = if length gs == 8 then Just (IPv6 gs) else Nothing
+    exactly8 gs = if length gs == 8 then Just (IpV6 gs) else Nothing
 
 -- Whether @t@ is a non-empty run of decimal digits (no sign or whitespace).
 isDecimal :: Text -> Bool
