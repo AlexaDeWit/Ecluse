@@ -35,12 +35,12 @@ configurable policy on what may be fetched and mirrored from the public registry
 
 ## Request Lifecycle
 
-The two request shapes diverge in how they use the upstreams — a tarball
-*falls back*, a packument *merges*:
+The three request shapes diverge in how they use the upstreams — a tarball
+*falls back*, a packument *merges*, and a publish *writes through*:
 
 ```mermaid
 flowchart TD
-    C(["Client request"]) --> K{"packument or tarball?"}
+    C(["Client request"]) --> K{"packument, tarball, or publish?"}
 
     K -->|"tarball"| T1["Fetch from private upstream"]
     T1 -->|"2xx hit"| TSV(["Stream unfiltered. Done."])
@@ -54,6 +54,13 @@ flowchart TD
     P2 --> P3["Merge (private wins; flag divergence),<br/>filter, repoint latest"]
     P3 -->|"survivors"| PSV(["Serve merged packument. Done."])
     P3 -->|"none survive"| PD(["403 / 503. Done."])
+
+    K -->|"publish (PUT)"| W1{"PUBLICATION_TARGET_URL set?"}
+    W1 -->|"no"| W405(["405 Method Not Allowed. Done."])
+    W1 -->|"yes"| W2["Enforce publish-scope allow-list<br/>(anti-shadowing)"]
+    W2 -->|"out of scope"| WR(["4xx, no upstream write. Done."])
+    W2 -->|"in scope"| W3["Write to publication target<br/>(client token forwarded)"]
+    W3 --> WSV(["npm success. Done."])
 ```
 
 A **tarball/artifact** request is gated for *that one version*: a private-upstream
@@ -78,12 +85,21 @@ mirroring can fire for them. See
 [Registry Model → Packument merge](architecture/registry-model.md#packument-merge-across-upstreams)
 and [Rules Engine → Applying verdicts to a packument](architecture/rules-engine.md#applying-verdicts-to-a-packument).
 
+A **publish** request (`PUT /{pkg}`, i.e. `npm publish`) is the one client-driven *write*:
+it is accepted at the mount, checked against the operator's **publish-scope allow-list**
+(the anti-shadowing guard — rejected before any upstream write), and relayed to the
+**publication target** with the publisher's *own* forwarded credential. It is opt-in (a
+`405` when no `PUBLICATION_TARGET_URL` is configured), and published packages are read back
+through the private upstream — distinct from the mirror target, which the *worker* writes
+with Écluse's own credential. See
+[Registry Model → Publishing first-party packages](architecture/registry-model.md#publishing-first-party-packages-the-publication-target).
+
 ## Document Map
 
 | Document | Covers |
 |---|---|
 | [Diagrams](architecture/diagrams.md) | **Visual companion (Mermaid):** system overview, packument / tarball / worker sequences, and the rules-engine and credential lifecycles. |
-| [Registry Model](architecture/registry-model.md) | The three-registry model and the `RegistryClient` protocol handle. |
+| [Registry Model](architecture/registry-model.md) | The four registry roles (two reads, two writes) and the `RegistryClient` protocol handle. |
 | [Internal Domain Model](architecture/domain-model.md) | `PackageDetails` and the ecosystem-agnostic signal vocabulary the rules engine consumes. |
 | [Multi-Ecosystem Hosting](architecture/hosting.md) | Mounting ecosystems under path prefixes, URL rewriting, and dispatch. |
 | [Web Layer](architecture/web-layer.md) | The raw-WAI front door: routing, the control/data-plane split, streaming, middleware. |

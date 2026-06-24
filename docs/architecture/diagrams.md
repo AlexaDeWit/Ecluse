@@ -17,7 +17,8 @@ All diagrams are [Mermaid](https://mermaid.js.org/), which GitHub renders inline
 4. [Mirror worker](#4-mirror-worker)
 5. [Rules-engine decision flow](#5-rules-engine-decision-flow)
 6. [Credential token lifecycle](#6-credential-token-lifecycle)
-7. [Credential authority across the three registries](#7-credential-authority-across-the-three-registries)
+7. [Credential authority across the four registry roles](#7-credential-authority-across-the-four-registry-roles)
+8. [First-party publish path](#8-first-party-publish-path)
 
 ---
 
@@ -48,6 +49,7 @@ flowchart LR
         PRIV["Private upstream<br/>e.g. CodeArtifact"]
         PUB["Public upstream<br/>registry.npmjs.org"]
         MIRROR["Mirror target<br/>managed npm registry"]
+        PUBT["Publication target<br/>first-party publishes (opt-in)"]
     end
 
     subgraph handles["Cloud handles"]
@@ -57,11 +59,12 @@ flowchart LR
 
     OSV["OSV advisory exports"]
 
-    DEV -->|"packument / tarball"| WEB
+    DEV -->|"packument / tarball / publish"| WEB
     WEB --> RULES
     WEB --> CACHE
     WEB -->|"read: client token forwarded"| PRIV
     WEB -->|"read: anonymous"| PUB
+    WEB -->|"publish (write): client token forwarded"| PUBT
     WEB -.->|"enqueue (best-effort)"| QUEUE
     RULES -.->|"reads index"| SYNC
     SYNC -->|"periodic pull"| OSV
@@ -99,14 +102,14 @@ sequenceDiagram
     and
         E->>Cache: lookup parsed public metadata
         alt cache miss
-            E->>Pub: fetch (anonymous; token stripped)
+            E->>Pub: fetch (anonymous, token stripped)
             Pub-->>E: packument (or miss)
             E->>Cache: store parsed metadata (short TTL)
         end
     end
     E->>Rules: evaluate every public version
     Rules-->>E: verdicts (allow / deny / unavailable)
-    Note over E: filter gated (public) versions; trust private;<br/>merge (private wins; flag integrity divergence);<br/>repoint latest; recompute ETag over merged body
+    Note over E: filter gated (public) versions, trust private,<br/>merge (private wins, flag integrity divergence),<br/>repoint latest, recompute ETag over merged body
     alt no survivors in merge
         E-->>Client: 403 policy / 503 transient or upstream-unavailable
     else some admitted
@@ -256,28 +259,67 @@ stateDiagram-v2
     end note
 ```
 
-## 7. Credential authority across the three registries
+## 7. Credential authority across the four registry roles
 
 The diagram shows the default **`passthrough`** strategy. The invariant that holds
 under **every** strategy is narrower: the client's credential is **never** sent to
 the public upstream. Whether it reaches the private upstream is strategy-specific —
 it does under `passthrough`; under `service` / `delegated-cache` Écluse reads with
-its own credential instead. See [Access & Credential Model](access-model.md) and
+its own credential instead. The fourth role, the **publication target**, receives the
+client's *forwarded* publish credential (the write symmetric of the private read); the
+public upstream still never sees the client's token. See
+[Access & Credential Model](access-model.md) and
 [Registry Model → Credential flow and authority](registry-model.md#credential-flow-and-authority).
 
 ```mermaid
 flowchart LR
     Client["Client (dev / CI)"]
     subgraph E["Écluse"]
-        SRV["Server — reads"]
+        SRV["Server — reads + publish"]
         WK["Worker — writes"]
     end
     Priv["Private upstream<br/>e.g. CodeArtifact"]
     Pub["Public upstream"]
     Mirror["Mirror target"]
+    PubT["Publication target<br/>(first-party publishes)"]
 
     Client -->|"client credential"| SRV
     SRV -->|"forwards the client credential"| Priv
     SRV -->|"anonymous — client token stripped"| Pub
+    SRV -->|"forwards the client credential (publish)"| PubT
     WK -->|"Écluse's own token (CredentialProvider)"| Mirror
+```
+
+## 8. First-party publish path
+
+A client's `npm publish` (`PUT /{pkg}`) is mediated like any other request rather than
+pushed out-of-band. It is gated by the operator's **publish-scope allow-list** (the
+anti-shadowing guard, which rejects before any upstream write) and relayed to the
+**publication target** with the publisher's **own forwarded credential** — the write
+counterpart to the private read, and distinct from the mirror target (which the worker
+writes with Écluse's own token). The path is opt-in: with no `PUBLICATION_TARGET_URL`,
+`PUT /{pkg}` is a `405`. Published packages are read back through the private upstream. See
+[Registry Model → Publishing first-party packages](registry-model.md#publishing-first-party-packages-the-publication-target).
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Client as Publisher
+    participant E as Écluse
+    participant PubT as Publication target
+
+    Client->>E: PUT /{pkg} (npm publish: document + client token)
+    alt no PUBLICATION_TARGET_URL configured
+        E-->>Client: 405 Method Not Allowed
+    else publication target configured
+        Note over E: enforce publish-scope allow-list<br/>(anti-shadowing, reject before any write)
+        alt name out of scope
+            E-->>Client: 4xx npm-shaped error (no upstream write)
+        else name in scope
+            E->>PubT: publishArtifact (client token forwarded)
+            PubT-->>E: result (publication target authorises the publisher)
+            E-->>Client: npm success shape
+        end
+    end
+    Note over E,PubT: write-only from the proxy, read back via the private upstream
 ```

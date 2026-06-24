@@ -170,7 +170,7 @@ and culled only afterwards**, which is too late. Neither one is acceptable.
 
 ### The design that's left: three registries
 
-What survives all of that is a model of three **roles** (not necessarily three servers): a
+What survives all of that is a model of three **roles**[^publish-target] (not necessarily three servers): a
 **private upstream** (the vetted store developers pull from), a **public upstream** (the
 outside world, consulted but never trusted blindly), and a **mirror target** (where
 approved packages are replicated for fast serving later).
@@ -236,3 +236,5 @@ spirit of a thing that might help. Please receive it that way.
   of enforcement.
 - [`ALTERNATIVES.md`](ALTERNATIVES.md): other tools in this space, and when they might suit
   you better.
+
+[^publish-target]: The full architecture actually carries a fourth registry role, a *publication target* for first-party `npm publish` (the write counterpart to the private read). It's an opt-in convenience for internal publishing, not part of the resilience argument here, so I've kept this section to the three roles that bear on blast radius. See [Registry Model → Publishing first-party packages](docs/architecture/registry-model.md#publishing-first-party-packages-the-publication-target).
