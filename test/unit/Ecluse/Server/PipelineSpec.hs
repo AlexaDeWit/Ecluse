@@ -275,6 +275,28 @@ privateArtifactHitWith version extraHeaders tarballBody = do
                     else responseLBS status200 [] (encodePackument (selfHostedAdmitting (selfBaseUrl req) version))
     pure Upstream{upApp = app, upSeenAuth = seen}
 
+{- | A private upstream double that has a __hashless__ artifact: the packument fetch
+returns a single-version packument whose @dist@ carries a @tarball@ pointing back at
+this double but neither @integrity@ nor @shasum@ (@200@), and a tarball-slot path
+@200@ with the given bytes. A private hit on a version with no integrity digest — the
+trusted private path is exempt from the integrity-presence policy, so this still
+streams through.
+-}
+privateArtifactHitHashless :: Text -> LByteString -> IO Upstream
+privateArtifactHitHashless version tarballBody = do
+    seen <- newIORef []
+    let app :: Application
+        app req respond = do
+            modifyIORef' seen (lookupAuth (requestHeaders req) :)
+            respond $
+                if isTarballPath (rawPathInfo req)
+                    then responseLBS status200 [] tarballBody
+                    else
+                        responseLBS status200 [] $
+                            encodePackument
+                                (packument [(version, selfHostedHashless (selfBaseUrl req) version)] version [(version, publishedDaysAgo 1)])
+    pure Upstream{upApp = app, upSeenAuth = seen}
+
 {- | A private upstream double that resolves the packument but does __not__ hold the
 artifact bytes: the packument fetch is a self-referential single-version packument
 (@200@), but a tarball-slot path is a @404@ miss — so the serve path's honour fetch
@@ -361,6 +383,33 @@ versionObject version integrity hasInstall =
 -- A plain (no-install-script) version object with a distinct integrity.
 plainVersion :: Text -> Value
 plainVersion version = versionObject version ("sha512-" <> version <> "-int") False
+
+{- | A version object carrying __no integrity digest at all__: a @dist@ with a
+@tarball@ but neither @integrity@ nor @shasum@ (both optional on the wire), so it
+projects to an artifact with empty @artHashes@. The integrity-presence admission
+policy refuses such a version from a public upstream.
+-}
+hashlessVersion :: Text -> Value
+hashlessVersion version =
+    object
+        [ "name" .= ("thing" :: Text)
+        , "version" .= version
+        , "dist" .= object ["tarball" .= ("https://upstream.example/thing/-/thing-" <> version <> ".tgz")]
+        , "_unmodeled" .= ("kept" :: Text)
+        ]
+
+{- | A hashless version object whose @dist.tarball@ points at @baseUrl@ — the
+self-hosting form the artifact path fetches, but with neither @integrity@ nor
+@shasum@. The artifact-gate refusal must fire before this URL is ever fetched.
+-}
+selfHostedHashless :: Text -> Text -> Value
+selfHostedHashless baseUrl version =
+    object
+        [ "name" .= ("thing" :: Text)
+        , "version" .= version
+        , "dist" .= object ["tarball" .= (baseUrl <> "/thing/-/thing-" <> version <> ".tgz")]
+        , "_unmodeled" .= ("kept" :: Text)
+        ]
 
 -- ── env + proxy assembly ──────────────────────────────────────────────────────
 
@@ -687,6 +736,38 @@ mergeSpec = describe "multi-upstream merge (not fallback)" $ do
             servedVersions resp `shouldBe` ["1.0.0"]
             -- The served 1.0.0 is the private (trusted) copy: its integrity wins.
             servedIntegrity "1.0.0" resp `shouldBe` Just "sha512-1.0.0-int"
+
+    it "filters a hashless public version out of the served listing (integrity-presence policy)" $ do
+        -- Public 2.0.0 carries no integrity digest (neither integrity nor shasum)
+        -- → inadmissible, filtered from the served packument so a client never sees
+        -- a version it could not fetch. Public 1.0.0 has a digest → kept.
+        privateUp <- failingUpstream
+        publicUp <-
+            servingUpstream
+                ( encodePackument
+                    ( packument
+                        [("1.0.0", plainVersion "1.0.0"), ("2.0.0", hashlessVersion "2.0.0")]
+                        "1.0.0"
+                        [("1.0.0", publishedDaysAgo 30), ("2.0.0", publishedDaysAgo 30)]
+                    )
+                )
+        withProxy privateUp publicUp Nothing $ \app -> do
+            resp <- getThing Nothing app
+            status resp `shouldBe` 200
+            servedVersions resp `shouldBe` ["1.0.0"]
+
+    it "lists a hashless version from the trusted private upstream (the private path is exempt)" $ do
+        -- The private upstream is trusted: its versions enter unfiltered, so a
+        -- hashless private 1.0.0 is still served in the listing. The
+        -- integrity-presence policy applies to public versions only.
+        privateUp <-
+            servingUpstream
+                (encodePackument (privatePackumentWith [("1.0.0", hashlessVersion "1.0.0")] "1.0.0"))
+        publicUp <- failingUpstream
+        withProxy privateUp publicUp Nothing $ \app -> do
+            resp <- getThing Nothing app
+            status resp `shouldBe` 200
+            servedVersions resp `shouldBe` ["1.0.0"]
 
     it "serves the private copy on an integrity divergence (private wins; flagged in the merge)" $ do
         -- Same version key, differing integrity across upstreams: the private copy
@@ -1152,6 +1233,46 @@ tarballSpec = describe "artifact (tarball) path" $ do
             status resp `shouldBe` 403
             -- The reason phrase the serve error model maps a policy denial to.
             reason resp `shouldBe` "Forbidden"
+            drainJobs env `shouldReturn` []
+
+    it "refuses a hashless public version with 403 before fetching the artifact (integrity-presence policy)" $ do
+        -- 1.0.0 is old enough to clear the quarantine and declares no install
+        -- script, so the rules admit it — but its public dist carries neither
+        -- integrity nor shasum. A public version with no integrity digest is
+        -- inadmissible: refused 403 (a policy denial, not a 500), the artifact
+        -- never fetched and nothing enqueued.
+        privateUp <- privateArtifactMiss
+        let hashless base = packument [("1.0.0", selfHostedHashless base "1.0.0")] "1.0.0" [("1.0.0", publishedDaysAgo 30)]
+        publicUp <- artifactUpstreamServing (encodePackument . hashless) publicTarballBytes
+        withProxyEnv privateUp publicUp Nothing $ \app env -> do
+            resp <- getTarball "1.0.0" Nothing app
+            status resp `shouldBe` 403
+            reason resp `shouldBe` "Forbidden"
+            -- The artifact itself was never fetched: only the gating packument was requested.
+            seenAuth publicUp `shouldReturn` [Nothing]
+            drainJobs env `shouldReturn` []
+
+    it "admits a digest-bearing public version on the artifact path (no regression)" $ do
+        -- The same version WITH an integrity digest is admitted and streamed as
+        -- today — the integrity-presence policy refuses only the hashless case.
+        privateUp <- privateArtifactMiss
+        publicUp <- artifactUpstream "1.0.0" publicTarballBytes
+        withProxyEnv privateUp publicUp Nothing $ \app _env -> do
+            resp <- getTarball "1.0.0" Nothing app
+            status resp `shouldBe` 200
+            simpleBody resp `shouldBe` publicTarballBytes
+
+    it "serves a hashless version from the trusted private upstream (the private path is exempt)" $ do
+        -- The private upstream is trusted, so the integrity-presence policy does
+        -- not apply to it: a private hit with no integrity digest still streams
+        -- through, the public origin never consulted.
+        privateUp <- privateArtifactHitHashless "1.0.0" privateTarballBytes
+        publicUp <- artifactUpstream "1.0.0" publicTarballBytes
+        withProxyEnv privateUp publicUp Nothing $ \app env -> do
+            resp <- getTarball "1.0.0" (Just "client-token") app
+            status resp `shouldBe` 200
+            simpleBody resp `shouldBe` privateTarballBytes
+            seenAuth publicUp `shouldReturn` []
             drainJobs env `shouldReturn` []
 
     it "503s when the public upstream is unavailable (transient), enqueuing nothing" $ do

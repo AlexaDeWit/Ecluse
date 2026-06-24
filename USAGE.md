@@ -253,6 +253,28 @@ Full semantics — precedence, the patch/add/suppress merge, and the strict
 validation — are in [Rule policy](docs/architecture/configuration.md#rule-policy)
 and [Rules Engine](docs/architecture/rules-engine.md).
 
+### Always-on: a public version must carry an integrity digest
+
+Independent of the configurable rules above, Écluse enforces one **non-negotiable
+admission policy** on **public** (untrusted) upstreams: a version is served only if
+its `dist` carries **at least one integrity digest** — an SRI `integrity` *or* a
+legacy `shasum`. A public version with **neither** is **inadmissible**:
+
+- requesting its tarball returns a **`403`** (the artifact is never fetched), and
+- it is **filtered out of the served packument listing**, so a client never sees a
+  version it could not safely fetch.
+
+This closes a tamper-detection gap: a version with no integrity check cannot be tied
+to a fingerprint, so a divergence between two hashless copies would go undetected.
+The **private** (trusted) upstream is **exempt** — its versions enter unfiltered, so
+a hashless private version is still served.
+
+**Gotcha.** If a custom or off-spec public upstream serves versions without
+`integrity`/`shasum`, those versions silently disappear from what Écluse serves and a
+direct fetch `403`s. This is deliberate. If you genuinely need to serve such a source,
+point it at the **private** (trusted) upstream slot, not the public one. See
+[Security Policy](SECURITY.md#a-public-version-must-carry-an-integrity-digest).
+
 ## Operating Écluse
 
 - **Health probes.** `GET /livez` reports process liveness (a stalled mirror
