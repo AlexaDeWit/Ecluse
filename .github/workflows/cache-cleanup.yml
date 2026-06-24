@@ -34,12 +34,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
+      contents: read # checkout, to run scripts/prune-caches.py
       actions: write # delete caches via the REST API
     env:
       GH_TOKEN: ${{ github.token }}
       REPO: ${{ github.repository }}
       KEEP_PER_PREFIX: "2" # newest N per key prefix to retain on main
     steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
       - name: Prune superseded and off-main caches
         run: |
           set -euo pipefail
@@ -54,33 +60,12 @@ jobs:
             exit 0
           fi
 
-          # Decide which ids to delete. Rules:
-          #   - ref != refs/heads/main            -> delete (straggler)
-          #   - on main, beyond newest N/prefix   -> delete (superseded epoch)
-          # Prefix = the key with a trailing -<16+ hex> (hashFiles digest) stripped.
-          # The selector is written to a file first so the heredoc (the program) and
-          # caches.tsv (the data on stdin) don't both compete for stdin.
-          cat > prune.py <<'PY'
-          import sys, os, re, collections
-          keep = int(os.environ.get("KEEP_PER_PREFIX", "2"))
-          groups = collections.defaultdict(list)  # prefix -> [(created, id)]
-          for line in sys.stdin:
-              line = line.rstrip("\n")
-              if not line:
-                  continue
-              cid, ref, key, created = (line.split("\t") + ["", "", "", ""])[:4]
-              if ref != "refs/heads/main":
-                  print(cid)                       # off-main straggler
-                  continue
-              prefix = re.sub(r"-[0-9a-f]{16,}$", "", key)
-              groups[prefix].append((created, cid))
-
-          for prefix, items in groups.items():
-              items.sort(reverse=True)             # newest created_at first
-              for _created, cid in items[keep:]:
-                  print(cid)                       # superseded on main
-          PY
-          python3 prune.py < caches.tsv > to-delete.txt
+          # Decide which ids to delete. The selection logic (off-main stragglers +
+          # superseded-epoch pruning, keyed on the prefix with the trailing hashFiles
+          # digest stripped) lives in scripts/prune-caches.py so it is reviewable,
+          # lintable, and runnable outside CI. It reads the TSV on stdin and writes
+          # the ids to delete on stdout.
+          python3 scripts/prune-caches.py < caches.tsv > to-delete.txt
 
           count=$(wc -l < to-delete.txt | tr -d ' ')
           echo "Caches to delete: $count"
