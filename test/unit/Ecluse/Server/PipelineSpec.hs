@@ -11,11 +11,14 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.CaseInsensitive qualified as CI
+import Data.Set qualified as Set
+import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), addUTCTime, fromGregorian, nominalDay)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Katip (Environment (Environment), Namespace (Namespace), initLogEnv)
 import Network.HTTP.Client (Manager, defaultManagerSettings, newManager)
 import Network.HTTP.Types (Header, hAuthorization, status200, status404, status500, statusCode, statusMessage)
+import Network.HTTP.Types.Header (hHost)
 import Network.Wai (Application, Request (rawPathInfo, requestHeaders), Response, responseLBS, responseRaw)
 import Network.Wai.Handler.Warp (testWithApplication)
 import Network.Wai.Test (
@@ -55,7 +58,7 @@ import Ecluse.Rules.Types (
     RuleOutcome (Allow, Deny),
     atDefaultPrecedence,
  )
-import Ecluse.Security (TarballHostPolicy (SameHostAsPackument))
+import Ecluse.Security (TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), lowerCaseHosts)
 import Ecluse.Server (
     MountBinding (..),
     application,
@@ -161,14 +164,54 @@ by this, so one double can answer both.
 isTarballPath :: ByteString -> Bool
 isTarballPath path = "/-/" `BS.isInfixOf` path && ".tgz" `BS.isSuffixOf` path
 
-{- | A path-aware upstream double: it answers a tarball-slot path with @200@ and the
-given artifact bytes, and any other path (the packument fetch) with @200@ and the
-given packument body. Records each request's @Authorization@ header. The single
-double thus serves both fetches the public artifact path consults — the gating
-packument and the artifact itself.
+{- | The base URL a request reached this in-process double at, recovered from its
+@Host@ header (@http:\/\/{host:port}@). The serve path now honours the packument's
+@dist.tarball@ rather than reconstructing it, so a double's packument must point its
+tarball at __itself__ — and only the @Host@ header names the ephemeral port the test
+harness assigned. An absent header (never the case under Warp) falls back to a
+loopback host so the helper stays total.
 -}
-artifactUpstream :: LByteString -> LByteString -> IO Upstream
-artifactUpstream packumentBody tarballBody = do
+selfBaseUrl :: Request -> Text
+selfBaseUrl req =
+    case find ((== hHost) . fst) (requestHeaders req) of
+        Just (_, hostPort) -> "http://" <> decodeUtf8 hostPort
+        Nothing -> "http://127.0.0.1"
+
+{- | A version object whose @dist.tarball@ points at the given base URL's
+conventional tarball slot (@{base}\/thing\/-\/thing-{v}.tgz@), with a distinct
+integrity and no install script. The serve path fetches this exact URL, so a double
+builds it from its own @Host@ ('selfBaseUrl') to address itself.
+-}
+selfHostedVersion :: Text -> Text -> Value
+selfHostedVersion baseUrl version =
+    object
+        [ "name" .= ("thing" :: Text)
+        , "version" .= version
+        , "dist"
+            .= object
+                [ "tarball" .= (baseUrl <> "/thing/-/thing-" <> version <> ".tgz")
+                , "integrity" .= ("sha512-" <> version <> "-int")
+                , "shasum" .= ("deadbeef" :: Text)
+                ]
+        , "_unmodeled" .= ("kept" :: Text)
+        ]
+
+{- | An admitting public packument (single old-enough version @v@) whose
+@dist.tarball@ points at @baseUrl@ — the self-hosting form the artifact path fetches.
+-}
+selfHostedAdmitting :: Text -> Text -> Value
+selfHostedAdmitting baseUrl v =
+    packument [(v, selfHostedVersion baseUrl v)] v [(v, publishedDaysAgo 30)]
+
+{- | A path-aware upstream double: it answers a tarball-slot path with @200@ and the
+given artifact bytes, and any other path (the packument fetch) with @200@ and a
+packument whose @dist.tarball@ for version @v@ points back at this double (so the
+serve path's honour-the-URL fetch returns here). Records each request's
+@Authorization@ header. The single double thus serves both fetches the public
+artifact path consults — the gating packument and the artifact itself.
+-}
+artifactUpstream :: Text -> LByteString -> IO Upstream
+artifactUpstream version tarballBody = do
     seen <- newIORef []
     let app :: Application
         app req respond = do
@@ -176,15 +219,17 @@ artifactUpstream packumentBody tarballBody = do
             respond $
                 if isTarballPath (rawPathInfo req)
                     then responseLBS status200 [] tarballBody
-                    else responseLBS status200 [] packumentBody
+                    else responseLBS status200 [] (encodePackument (selfHostedAdmitting (selfBaseUrl req) version))
     pure Upstream{upApp = app, upSeenAuth = seen}
 
-{- | A private upstream double that has the artifact: it answers a tarball-slot path
-with @200@ and the given bytes (a __private hit__), and any other path with @404@
-(the private origin is never consulted for a packument on the artifact path).
+{- | A path-aware upstream double serving a __given__ packument body verbatim (its
+@dist.tarball@ already addressing this double via 'selfBaseUrl'), and the given
+artifact bytes on a tarball-slot path. For tests that shape the gating packument
+themselves (a too-new version, a bad coordinate) while still honouring a
+self-referential tarball URL.
 -}
-privateArtifactHit :: LByteString -> IO Upstream
-privateArtifactHit tarballBody = do
+artifactUpstreamServing :: (Text -> LByteString) -> LByteString -> IO Upstream
+artifactUpstreamServing packumentFor tarballBody = do
     seen <- newIORef []
     let app :: Application
         app req respond = do
@@ -192,31 +237,60 @@ privateArtifactHit tarballBody = do
             respond $
                 if isTarballPath (rawPathInfo req)
                     then responseLBS status200 [] tarballBody
-                    else responseLBS status404 [] "not found"
+                    else responseLBS status200 [] (packumentFor (selfBaseUrl req))
     pure Upstream{upApp = app, upSeenAuth = seen}
+
+{- | A private upstream double that has the artifact: it answers the packument fetch
+with a single-version packument whose @dist.tarball@ points back at this double
+(@200@), and a tarball-slot path with @200@ and the given bytes (a __private hit__).
+The serve path honours the private @dist.tarball@, so the double must serve a
+packument naming itself.
+-}
+privateArtifactHit :: Text -> LByteString -> IO Upstream
+privateArtifactHit version = privateArtifactHitWith version []
 
 {- | A private upstream double that has the artifact and tags it with an upstream
-header (a @Content-Type@): a tarball-slot path is answered @200@ with the bytes and
-that header, any other path is a @404@. Lets a test assert the relay forwards the
-artifact's own content headers through to the client.
+header (a @Content-Type@): the packument fetch is a self-referential single-version
+packument, a tarball-slot path is answered @200@ with the bytes and that header. Lets
+a test assert the relay forwards the artifact's own content headers through.
 -}
-privateArtifactHitWithHeader :: ByteString -> ByteString -> LByteString -> IO Upstream
-privateArtifactHitWithHeader headerName headerValue tarballBody = do
+privateArtifactHitWithHeader :: ByteString -> ByteString -> Text -> LByteString -> IO Upstream
+privateArtifactHitWithHeader headerName headerValue version =
+    privateArtifactHitWith version [(CI.mk headerName, headerValue)]
+
+{- | The shared private-hit double: the packument fetch returns a self-hosted
+single-version packument (@200@), a tarball-slot path returns @200@ with the given
+artifact bytes and extra headers. A private hit thus honours the private
+@dist.tarball@ — the double names itself as the tarball host.
+-}
+privateArtifactHitWith :: Text -> [Header] -> LByteString -> IO Upstream
+privateArtifactHitWith version extraHeaders tarballBody = do
     seen <- newIORef []
     let app :: Application
         app req respond = do
             modifyIORef' seen (lookupAuth (requestHeaders req) :)
             respond $
                 if isTarballPath (rawPathInfo req)
-                    then responseLBS status200 [(CI.mk headerName, headerValue)] tarballBody
-                    else responseLBS status404 [] "not found"
+                    then responseLBS status200 extraHeaders tarballBody
+                    else responseLBS status200 [] (encodePackument (selfHostedAdmitting (selfBaseUrl req) version))
     pure Upstream{upApp = app, upSeenAuth = seen}
 
-{- | A private upstream double that does __not__ have the artifact: every path is a
-@404@ miss, so the artifact path falls through to the public origin.
+{- | A private upstream double that resolves the packument but does __not__ hold the
+artifact bytes: the packument fetch is a self-referential single-version packument
+(@200@), but a tarball-slot path is a @404@ miss — so the serve path's honour fetch
+to the private tarball location misses and falls through to the public origin.
 -}
 privateArtifactMiss :: IO Upstream
-privateArtifactMiss = upstreamRespondingWith (responseLBS status404 [] "not found")
+privateArtifactMiss = do
+    seen <- newIORef []
+    let app :: Application
+        app req respond = do
+            modifyIORef' seen (lookupAuth (requestHeaders req) :)
+            respond $
+                if isTarballPath (rawPathInfo req)
+                    then responseLBS status404 [] "not found"
+                    else responseLBS status200 [] (encodePackument (selfHostedAdmitting (selfBaseUrl req) "1.0.0"))
+    pure Upstream{upApp = app, upSeenAuth = seen}
 
 {- | A private upstream double that begins serving the artifact then fails
 __mid-stream__: a tarball-slot path is answered (over the raw connection) with a
@@ -237,7 +311,7 @@ privateArtifactMidStreamFailure = do
             modifyIORef' seen (lookupAuth (requestHeaders req) :)
             if isTarballPath (rawPathInfo req)
                 then respond (responseRaw truncatedArtifact (responseLBS status500 [] "raw unsupported"))
-                else respond (responseLBS status404 [] "not found")
+                else respond (responseLBS status200 [] (encodePackument (selfHostedAdmitting (selfBaseUrl req) "1.0.0")))
     pure Upstream{upApp = app, upSeenAuth = seen}
   where
     -- Write a 200 declaring a 1 MiB body, send only a little, then return: Warp
@@ -322,6 +396,13 @@ newTestEnvWithQueue queue manager = do
 
 {- | The packument-serve dependencies pointing at two in-process upstream ports,
 with the given inbound edge token (usually 'Nothing').
+
+The in-process upstream doubles bind loopback, so @127.0.0.1@ is opted in to the
+internal-range block for the honoured-tarball gate — the unit-test analogue of an
+operator deliberately pointing the proxy at an internal upstream (exactly what
+'Ecluse.Security.Egress.newTrustedTlsManager' permits per origin). The default
+tarball-host policy is the secure 'SameHostAsPackument'; a test overrides it where it
+exercises the cross-host relaxation.
 -}
 deps :: Int -> Int -> Maybe Text -> PackumentDeps
 deps privatePort publicPort inbound =
@@ -333,6 +414,7 @@ deps privatePort publicPort inbound =
         , pdRules = policy
         , pdEffectfulRules = []
         , pdTarballHostPolicy = SameHostAsPackument
+        , pdAllowedInternalHosts = lowerCaseHosts (Set.singleton "127.0.0.1")
         , pdInboundToken = mkSecret <$> inbound
         , pdNow = pure now
         , pdHelp = Nothing
@@ -900,9 +982,62 @@ publicTarballBytes :: LByteString
 publicTarballBytes = "PUBLIC-TGZ-BYTES"
 
 -- A public packument whose single version @v@ clears the quarantine (admitted on
--- the artifact path).
+-- the artifact path). Used on the PACKUMENT path, where its dist.tarball is only
+-- relayed (rewritten under the mount base), never fetched.
 admittingPublic :: Text -> Value
 admittingPublic v = packument [(v, plainVersion v)] v [(v, publishedDaysAgo 30)]
+
+{- | A path-aware public double whose packument names its @dist.tarball@ on a
+__different host__ (@crossHost@) than the one the packument was served on, while
+still serving the tarball bytes itself. @crossHost@ that resolves to this server (a
+loopback alias like @localhost@) lets a cross-host admit actually fetch through; the
+host text drives the tarball-host policy decision regardless.
+-}
+crossHostPublicUpstream :: Text -> Text -> LByteString -> IO Upstream
+crossHostPublicUpstream crossHost version tarballBody = do
+    seen <- newIORef []
+    let app :: Application
+        app req respond = do
+            modifyIORef' seen (lookupAuth (requestHeaders req) :)
+            respond $
+                if isTarballPath (rawPathInfo req)
+                    then responseLBS status200 [] tarballBody
+                    else responseLBS status200 [] (encodePackument (crossHostPackument req))
+        -- The packument is served on this host (its own Host), but its dist.tarball
+        -- names @crossHost@ at this same port — so the policy sees a cross-host URL.
+        crossHostPackument req =
+            let port = snd (T.breakOnEnd ":" (decodeUtf8 (maybe "" snd (find ((== hHost) . fst) (requestHeaders req)))))
+                tarballBase = "http://" <> crossHost <> ":" <> port
+             in selfHostedAdmitting tarballBase version
+    pure Upstream{upApp = app, upSeenAuth = seen}
+
+{- | A double whose version's @dist.tarball@ sits at a __non-conventional path__
+(@\/files\/{filename}@, not the npm @\/-\/@ slot) on its own host, with the given
+@filename@ as the artifact name. The serve path honours that exact URL rather than
+reconstructing @{base}\/{pkg}\/-\/{file}@, so the double serves the bytes at the
+honoured path (matched by @.tgz@ suffix) — proving the location is honoured, not
+rebuilt. The artifact is selected by @filename@, so a request whose filename differs
+finds no match.
+-}
+honouredPathUpstream :: Text -> Text -> LByteString -> IO Upstream
+honouredPathUpstream version filename tarballBody = do
+    seen <- newIORef []
+    let app :: Application
+        app req respond = do
+            modifyIORef' seen (lookupAuth (requestHeaders req) :)
+            respond $
+                if ".tgz" `BS.isSuffixOf` rawPathInfo req
+                    then responseLBS status200 [] tarballBody
+                    else responseLBS status200 [] (encodePackument (altPackument (selfBaseUrl req)))
+        altPackument base =
+            let dist =
+                    object
+                        [ "tarball" .= (base <> "/files/" <> filename)
+                        , "integrity" .= ("sha512-" <> version <> "-int")
+                        ]
+                vo = object ["name" .= ("thing" :: Text), "version" .= version, "dist" .= dist]
+             in packument [(version, vo)] version [(version, publishedDaysAgo 30)]
+    pure Upstream{upApp = app, upSeenAuth = seen}
 
 -- A flat projection of a mirror job, for an order-stable equality assertion over
 -- the four coordinates the job carries (package, version, public artifact URL,
@@ -916,8 +1051,8 @@ tarballSpec = describe "artifact (tarball) path" $ do
         -- The private upstream has the artifact: it is streamed straight through,
         -- the public origin never queried and no mirror job enqueued (the bytes are
         -- already vetted; mirroring is for public-sourced artifacts).
-        privateUp <- privateArtifactHit privateTarballBytes
-        publicUp <- artifactUpstream (encodePackument (admittingPublic "1.0.0")) publicTarballBytes
+        privateUp <- privateArtifactHit "1.0.0" privateTarballBytes
+        publicUp <- artifactUpstream "1.0.0" publicTarballBytes
         withProxyEnv privateUp publicUp Nothing $ \app env -> do
             resp <- getTarball "1.0.0" (Just "client-token") app
             status resp `shouldBe` 200
@@ -931,8 +1066,8 @@ tarballSpec = describe "artifact (tarball) path" $ do
         -- The relay forwards the artifact's own status and content headers verbatim
         -- (the client verifies dist.integrity over exactly these bytes). Asserting a
         -- relayed Content-Type forces the header relay the streaming path applies.
-        privateUp <- privateArtifactHitWithHeader "Content-Type" "application/octet-stream" privateTarballBytes
-        publicUp <- artifactUpstream (encodePackument (admittingPublic "1.0.0")) publicTarballBytes
+        privateUp <- privateArtifactHitWithHeader "Content-Type" "application/octet-stream" "1.0.0" privateTarballBytes
+        publicUp <- artifactUpstream "1.0.0" publicTarballBytes
         withProxyEnv privateUp publicUp Nothing $ \app _env -> do
             resp <- getTarball "1.0.0" (Just "client-token") app
             status resp `shouldBe` 200
@@ -944,8 +1079,8 @@ tarballSpec = describe "artifact (tarball) path" $ do
         -- An empty private base URL cannot form an artifact request, so the private
         -- origin yields a clean miss (never an error) and the serve path falls through
         -- to the public origin — the artifact is still served from public.
-        privateUp <- privateArtifactHit privateTarballBytes
-        publicUp <- artifactUpstream (encodePackument (admittingPublic "1.0.0")) publicTarballBytes
+        privateUp <- privateArtifactHit "1.0.0" privateTarballBytes
+        publicUp <- artifactUpstream "1.0.0" publicTarballBytes
         queue <- newInMemoryQueue
         let breakPrivate d = d{pdPrivateBaseUrl = ""}
         withProxyEnvQueueDeps queue privateUp publicUp Nothing breakPrivate $ \app _env _port -> do
@@ -958,8 +1093,8 @@ tarballSpec = describe "artifact (tarball) path" $ do
         -- The inbound edge token gates the tarball path exactly as the packument
         -- path: a missing/incorrect token is a 401 rendered before either upstream
         -- is touched.
-        privateUp <- privateArtifactHit privateTarballBytes
-        publicUp <- artifactUpstream (encodePackument (admittingPublic "1.0.0")) publicTarballBytes
+        privateUp <- privateArtifactHit "1.0.0" privateTarballBytes
+        publicUp <- artifactUpstream "1.0.0" publicTarballBytes
         withProxyEnv privateUp publicUp (Just "edge-secret") $ \app _env -> do
             resp <- getTarball "1.0.0" (Just "wrong-token") app
             status resp `shouldBe` 401
@@ -970,21 +1105,24 @@ tarballSpec = describe "artifact (tarball) path" $ do
     it "forwards the client credential to the private origin, never to the public" $ do
         -- On a private MISS the artifact still comes from public, but the gating
         -- packument and artifact fetches must be anonymous; the private origin saw the
-        -- client's bearer.
+        -- client's bearer on BOTH its requests — the packument (to find the artifact's
+        -- authoritative URL) and the honoured tarball fetch (which misses, falling
+        -- through to public).
         privateUp <- privateArtifactMiss
-        publicUp <- artifactUpstream (encodePackument (admittingPublic "1.0.0")) publicTarballBytes
+        publicUp <- artifactUpstream "1.0.0" publicTarballBytes
         withProxyEnv privateUp publicUp Nothing $ \app _env -> do
             _ <- getTarball "1.0.0" (Just "client-secret-token") app
             privAuth <- seenAuth privateUp
             pubAuth <- seenAuth publicUp
-            -- The private origin received the client's bearer credential.
-            privAuth `shouldBe` [Just "Bearer client-secret-token"]
+            -- Both private-origin requests (packument + honoured tarball) carried the
+            -- client's bearer credential.
+            privAuth `shouldBe` [Just "Bearer client-secret-token", Just "Bearer client-secret-token"]
             -- Both public-origin requests (packument gate + artifact fetch) were anonymous.
             pubAuth `shouldBe` [Nothing, Nothing]
 
     it "on a private miss: gates the version, streams from public, and enqueues a mirror job" $ do
         privateUp <- privateArtifactMiss
-        publicUp <- artifactUpstream (encodePackument (admittingPublic "1.0.0")) publicTarballBytes
+        publicUp <- artifactUpstream "1.0.0" publicTarballBytes
         queue <- newInMemoryQueue
         withProxyEnvQueue queue privateUp publicUp Nothing $ \app env publicPort -> do
             resp <- getTarball "1.0.0" Nothing app
@@ -1007,8 +1145,8 @@ tarballSpec = describe "artifact (tarball) path" $ do
         -- 2.0.0 is 3 days old (< the 7-day quarantine) → denied by policy → 403,
         -- and a rejected artifact is never mirrored.
         privateUp <- privateArtifactMiss
-        let tooNew = packument [("2.0.0", plainVersion "2.0.0")] "2.0.0" [("2.0.0", publishedDaysAgo 3)]
-        publicUp <- artifactUpstream (encodePackument tooNew) publicTarballBytes
+        let tooNew base = packument [("2.0.0", selfHostedVersion base "2.0.0")] "2.0.0" [("2.0.0", publishedDaysAgo 3)]
+        publicUp <- artifactUpstreamServing (encodePackument . tooNew) publicTarballBytes
         withProxyEnv privateUp publicUp Nothing $ \app env -> do
             resp <- getTarball "2.0.0" Nothing app
             status resp `shouldBe` 403
@@ -1032,7 +1170,7 @@ tarballSpec = describe "artifact (tarball) path" $ do
         -- The package resolves but the requested 9.9.9 is not among its versions: a
         -- forwarded upstream miss → 404, never a fabricated admit.
         privateUp <- privateArtifactMiss
-        publicUp <- artifactUpstream (encodePackument (admittingPublic "1.0.0")) publicTarballBytes
+        publicUp <- artifactUpstream "1.0.0" publicTarballBytes
         withProxyEnv privateUp publicUp Nothing $ \app env -> do
             resp <- getTarball "9.9.9" Nothing app
             status resp `shouldBe` 404
@@ -1046,7 +1184,7 @@ tarballSpec = describe "artifact (tarball) path" $ do
         -- The queue's enqueue throws; the client must still receive the streamed
         -- artifact with a 200. The enqueue failure is swallowed, never surfaced.
         privateUp <- privateArtifactMiss
-        publicUp <- artifactUpstream (encodePackument (admittingPublic "1.0.0")) publicTarballBytes
+        publicUp <- artifactUpstream "1.0.0" publicTarballBytes
         failingQueue <- newFailingQueue
         withProxyEnvQueue failingQueue privateUp publicUp Nothing $ \app _env _port -> do
             resp <- getTarball "1.0.0" Nothing app
@@ -1062,8 +1200,11 @@ tarballSpec = describe "artifact (tarball) path" $ do
         -- gate admits; only the artifact URL — @{base}/{pkg}/-/{file}@ — fails.)
         privateUp <- privateArtifactMiss
         let badVersion = "1.0.0[" -- '[' is a safe component but unparseable in a URL path
-            admitting = packument [(badVersion, plainVersion badVersion)] badVersion [(badVersion, publishedDaysAgo 30)]
-        publicUp <- artifactUpstream (encodePackument admitting) publicTarballBytes
+        -- The honoured dist.tarball URL carries the bad version in its filename,
+        -- so its host is the (allowlisted, opted-in) upstream — the host gate
+        -- passes — but the URL itself is unparseable, the internal-error path.
+            admitting base = packument [(badVersion, selfHostedVersion base badVersion)] badVersion [(badVersion, publishedDaysAgo 30)]
+        publicUp <- artifactUpstreamServing (encodePackument . admitting) publicTarballBytes
         withProxyEnv privateUp publicUp Nothing $ \app env -> do
             resp <- getTarball badVersion Nothing app
             status resp `shouldBe` 500
@@ -1076,8 +1217,8 @@ tarballSpec = describe "artifact (tarball) path" $ do
         -- path alone (the version metadata is fetched here), with no prior packument
         -- request. A denied version is still refused.
         privateUp <- privateArtifactMiss
-        let tooNew = packument [("2.0.0", plainVersion "2.0.0")] "2.0.0" [("2.0.0", publishedDaysAgo 3)]
-        publicUp <- artifactUpstream (encodePackument tooNew) publicTarballBytes
+        let tooNew base = packument [("2.0.0", selfHostedVersion base "2.0.0")] "2.0.0" [("2.0.0", publishedDaysAgo 3)]
+        publicUp <- artifactUpstreamServing (encodePackument . tooNew) publicTarballBytes
         withProxyEnv privateUp publicUp Nothing $ \app _env ->
             getTarball "2.0.0" Nothing app >>= \resp -> status resp `shouldBe` 403
 
@@ -1088,11 +1229,112 @@ tarballSpec = describe "artifact (tarball) path" $ do
         -- second time over the half-sent artifact — so the public origin is never
         -- consulted and nothing is enqueued.
         privateUp <- privateArtifactMidStreamFailure
-        publicUp <- artifactUpstream (encodePackument (admittingPublic "1.0.0")) publicTarballBytes
+        publicUp <- artifactUpstream "1.0.0" publicTarballBytes
         withProxyEnv privateUp publicUp Nothing $ \app env -> do
             (_ :: Either SomeException SResponse) <- try (getTarball "1.0.0" (Just "client-token") app)
             seenAuth publicUp `shouldReturn` []
             drainJobs env `shouldReturn` []
+
+    it "serves a same-host public artifact at its honoured dist.tarball location" $ do
+        -- The public packument's dist.tarball is on the SAME host that served it
+        -- (the secure-default SameHostAsPackument is satisfied); the honoured URL is
+        -- fetched and its bytes streamed — no regression on the shipped same-host path.
+        privateUp <- privateArtifactMiss
+        publicUp <- artifactUpstream "1.0.0" publicTarballBytes
+        withProxyEnv privateUp publicUp Nothing $ \app _env -> do
+            resp <- getTarball "1.0.0" Nothing app
+            status resp `shouldBe` 200
+            simpleBody resp `shouldBe` publicTarballBytes
+
+    it "refuses a cross-host public dist.tarball under the SameHostAsPackument default (403, no fetch)" $ do
+        -- The packument is served on 127.0.0.1 but its dist.tarball names a different
+        -- host (localhost). Under the secure default the cross-host location is refused
+        -- before any artifact fetch — the tarball-host policy on the real serve path.
+        privateUp <- privateArtifactMiss
+        publicUp <- crossHostPublicUpstream "localhost" "1.0.0" publicTarballBytes
+        withProxyEnv privateUp publicUp Nothing $ \app env -> do
+            resp <- getTarball "1.0.0" Nothing app
+            status resp `shouldBe` 403
+            reason resp `shouldBe` "Forbidden"
+            -- The artifact was never fetched: only the gating packument was requested.
+            seenAuth publicUp `shouldReturn` [Nothing]
+            drainJobs env `shouldReturn` []
+
+    it "serves a cross-host public dist.tarball under AnyAllowlistedHost when the host is allowlisted" $ do
+        -- With the opt-in policy and the cross-host (localhost) on the upstream
+        -- allowlist (carried via the mirror target's host), the cross-host location is
+        -- honoured and its bytes streamed. localhost resolves to this same loopback
+        -- server, so the fetch reaches the artifact.
+        privateUp <- privateArtifactMiss
+        publicUp <- crossHostPublicUpstream "localhost" "1.0.0" publicTarballBytes
+        queue <- newInMemoryQueue
+        let relax d = d{pdTarballHostPolicy = AnyAllowlistedHost, pdMirrorTarget = "http://localhost:9"}
+        withProxyEnvQueueDeps queue privateUp publicUp Nothing relax $ \app _env _port -> do
+            resp <- getTarball "1.0.0" Nothing app
+            status resp `shouldBe` 200
+            simpleBody resp `shouldBe` publicTarballBytes
+
+    it "refuses a cross-host public dist.tarball under AnyAllowlistedHost when the host is off the allowlist" $ do
+        -- The opt-in relaxes SameHostAsPackument but never escapes the allowlist: a
+        -- cross-host (localhost) NOT among the configured upstream hosts is still
+        -- refused (the allowlist is the load-bearing control, security.md invariant 2).
+        privateUp <- privateArtifactMiss
+        publicUp <- crossHostPublicUpstream "localhost" "1.0.0" publicTarballBytes
+        queue <- newInMemoryQueue
+        let relax d = d{pdTarballHostPolicy = AnyAllowlistedHost}
+        withProxyEnvQueueDeps queue privateUp publicUp Nothing relax $ \app _env _port -> do
+            resp <- getTarball "1.0.0" Nothing app
+            status resp `shouldBe` 403
+
+    it "404s a requested filename absent from the version's artifacts (selection by filename)" $ do
+        -- The version's only artifact is named thing-1.0.0-alt.tgz; a request for the
+        -- conventional thing-1.0.0.tgz matches no artifact, so it is a forwarded miss
+        -- (404), never a fabricated fetch of the unrequested file.
+        privateUp <- privateArtifactMiss
+        publicUp <- honouredPathUpstream "1.0.0" "thing-1.0.0-alt.tgz" publicTarballBytes
+        withProxyEnv privateUp publicUp Nothing $ \app env -> do
+            resp <- getTarball "1.0.0" Nothing app
+            status resp `shouldBe` 404
+            reason resp `shouldBe` "Not Found"
+            drainJobs env `shouldReturn` []
+
+    it "honours a non-conventional public dist.tarball path (not a reconstructed /-/ URL)" $ do
+        -- The public packument's dist.tarball sits at /files/… on the same host — a
+        -- path the npm /-/ convention would never reconstruct. The serve path honours
+        -- that exact URL and streams its bytes, proving the location is honoured rather
+        -- than rebuilt from (package, file).
+        privateUp <- privateArtifactMiss
+        publicUp <- honouredPathUpstream "1.0.0" "thing-1.0.0.tgz" publicTarballBytes
+        withProxyEnv privateUp publicUp Nothing $ \app _env -> do
+            resp <- getTarball "1.0.0" Nothing app
+            status resp `shouldBe` 200
+            simpleBody resp `shouldBe` publicTarballBytes
+
+    it "honours the private dist.tarball location on a private hit (not a reconstructed URL)" $ do
+        -- The private packument's dist.tarball sits at a non-conventional /files/ path;
+        -- the serve path honours that exact URL (the private upstream is trusted), so
+        -- the private bytes stream through and the public origin is never consulted.
+        privateUp <- honouredPathUpstream "1.0.0" "thing-1.0.0.tgz" privateTarballBytes
+        publicUp <- artifactUpstream "1.0.0" publicTarballBytes
+        withProxyEnv privateUp publicUp Nothing $ \app env -> do
+            resp <- getTarball "1.0.0" Nothing app
+            status resp `shouldBe` 200
+            simpleBody resp `shouldBe` privateTarballBytes
+            seenAuth publicUp `shouldReturn` []
+            drainJobs env `shouldReturn` []
+
+    it "refuses a cross-host private dist.tarball under the default and falls through to public" $ do
+        -- The private packument (on 127.0.0.1) names its dist.tarball on a different
+        -- host (localhost). The tarball-host policy gates the private leg too: under the
+        -- secure default the cross-host private location is refused, so the private leg
+        -- is a clean miss and the artifact is served from the public origin instead.
+        privateUp <- crossHostPublicUpstream "localhost" "1.0.0" privateTarballBytes
+        publicUp <- artifactUpstream "1.0.0" publicTarballBytes
+        withProxyEnv privateUp publicUp Nothing $ \app _env -> do
+            resp <- getTarball "1.0.0" Nothing app
+            status resp `shouldBe` 200
+            -- Served from public: the private cross-host location was refused, never fetched.
+            simpleBody resp `shouldBe` publicTarballBytes
 
 -- ── the effectful rule tier through the pipeline ───────────────────────────────
 
@@ -1190,8 +1432,8 @@ effectfulSpec = describe "effectful rule tier" $ do
         -- by the effectful allow and the public bytes stream through.
         rule <- allowingEffectfulRule
         privateUp <- privateArtifactMiss
-        let young = packument [("1.0.0", plainVersion "1.0.0")] "1.0.0" [("1.0.0", publishedDaysAgo 1)]
-        publicUp <- artifactUpstream (encodePackument young) publicTarballBytes
+        let young base = packument [("1.0.0", selfHostedVersion base "1.0.0")] "1.0.0" [("1.0.0", publishedDaysAgo 1)]
+        publicUp <- artifactUpstreamServing (encodePackument . young) publicTarballBytes
         withProxyEffectful [rule] privateUp publicUp $ \app -> do
             resp <- getTarball "1.0.0" Nothing app
             status resp `shouldBe` 200
@@ -1203,7 +1445,7 @@ effectfulSpec = describe "effectful rule tier" $ do
         -- (not a 403 denial, not a 500) via the serve error model.
         rule <- downEffectfulRule
         privateUp <- privateArtifactMiss
-        publicUp <- artifactUpstream (encodePackument (admittingPublic "1.0.0")) publicTarballBytes
+        publicUp <- artifactUpstream "1.0.0" publicTarballBytes
         withProxyEffectful [rule] privateUp publicUp $ \app -> do
             resp <- getTarball "1.0.0" Nothing app
             status resp `shouldBe` 503

@@ -68,7 +68,7 @@ import Ecluse.Config (
  )
 import Ecluse.Credential (AuthToken (..), CredentialProvider, mkSecret, staticProvider)
 import Ecluse.Ecosystem (Ecosystem, ecosystemName, prefixFor)
-import Ecluse.Security (TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument))
+import Ecluse.Security (TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), lowerCaseHosts)
 import Ecluse.Server.Cache (CacheConfig (..))
 import Ecluse.Server.Context (MountBinding, PackumentDeps (..))
 import Ecluse.Server.Response (HelpMessage, mkHelpMessage)
@@ -249,6 +249,10 @@ composeBindings resolveAdapter clock providers config =
                   -- effectful tier is empty here and gating reduces to the pure tier.
                   pdEffectfulRules = []
                 , pdTarballHostPolicy = tarballHostPolicy
+                , -- The internal-range opt-in for an honoured tarball host is empty —
+                  -- the composition root's secure default, matching the guarded
+                  -- manager's resolved-IP recheck (built with an empty opt-in too).
+                  pdAllowedInternalHosts = lowerCaseHosts mempty
                 , pdInboundToken = mkSecret <$> inboundToken
                 , pdNow = clock
                 , pdHelp = helpMessage

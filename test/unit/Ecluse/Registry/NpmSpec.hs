@@ -62,6 +62,7 @@ import Ecluse.Registry.Npm (
     artifactFileUrl,
     artifactRequest,
     artifactRequestByFile,
+    artifactRequestByUrl,
     defaultNpmConfig,
     fetchMetadataForm,
     metadataAccept,
@@ -312,6 +313,32 @@ artifactSpec = describe "fetchArtifact / artifactRequest" $ do
         artifactFileUrl "https://reg.test" babelCodeFrame "code-frame-7.0.0.tgz"
             `shouldBe` Right "https://reg.test/@babel%2Fcode-frame/-/code-frame-7.0.0.tgz"
 
+    it "artifactRequestByUrl addresses the authoritative URL verbatim (host, path, non-decompressing)" $ do
+        -- The serve path honours the packument's dist.tarball location: a cross-host
+        -- URL with a non-/-/ path and a signed-style query is fetched exactly as given,
+        -- not reconstructed. The base URL in the config is irrelevant (the URL is
+        -- absolute); the request is non-decompressing like the other artifact fetches.
+        manager <- newManager defaultManagerSettings
+        let config = NpmClientConfig{npmBaseUrl = "https://reg.test", npmManager = manager, npmToken = Nothing}
+            url = "https://cdn.example.net/files/abc/code-frame-7.0.0.tgz?sig=deadbeef"
+        case artifactRequestByUrl config url of
+            Left err -> fail ("artifactRequestByUrl failed: " <> show err)
+            Right req -> do
+                Client.host req `shouldBe` "cdn.example.net"
+                Client.path req `shouldBe` "/files/abc/code-frame-7.0.0.tgz"
+                Client.queryString req `shouldBe` "?sig=deadbeef"
+                decompress req "application/gzip" `shouldBe` False
+                Client.requestHeaders req `shouldNotSatisfy` any ((== "accept-encoding") . fst)
+
+    it "artifactRequestByUrl attaches an injected bearer token (the private-leg credential posture)" $ do
+        manager <- newManager defaultManagerSettings
+        let config = NpmClientConfig{npmBaseUrl = "https://reg.test", npmManager = manager, npmToken = Just (mkSecret "tok-xyz")}
+        case artifactRequestByUrl config "https://private.reg/files/thing.tgz" of
+            Left err -> fail ("artifactRequestByUrl failed: " <> show err)
+            Right req ->
+                find ((== "Authorization") . fst) (Client.requestHeaders req)
+                    `shouldBe` Just ("Authorization", "Bearer tok-xyz")
+
 -- ── publish ─────────────────────────────────────────────────────────────────────
 
 publishSpec :: Spec
@@ -376,6 +403,11 @@ urlFailureSpec = describe "URL-formation failures" $ do
 
     it "artifactFileUrl refuses an empty base URL as a UrlFormationError" $ do
         artifactFileUrl "" isOdd "is-odd-1.0.0.tgz" `shouldSatisfy` urlErrorWas EmptyBaseUrl
+
+    it "artifactRequestByUrl refuses an unparseable URL as a UrlFormationError" $ do
+        manager <- newManager defaultManagerSettings
+        let config = NpmClientConfig{npmBaseUrl = "https://reg.test", npmManager = manager, npmToken = Nothing}
+        artifactRequestByUrl config "not a url with spaces" `shouldSatisfy` urlErrorWas (UnparseableUrl "not a url with spaces")
 
     it "publishRequest refuses an empty base URL as a UrlFormationError" $ do
         manager <- newManager defaultManagerSettings

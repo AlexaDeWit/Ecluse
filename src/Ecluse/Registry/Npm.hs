@@ -81,6 +81,7 @@ module Ecluse.Registry.Npm (
     metadataRequest,
     artifactRequest,
     artifactRequestByFile,
+    artifactRequestByUrl,
     artifactFileUrl,
     publishRequest,
 
@@ -299,6 +300,40 @@ artifactRequestByFile ::
     Either UrlFormationError Request
 artifactRequestByFile config name filename = do
     url <- artifactFileUrl (npmBaseUrl config) name filename
+    base <- parseRequestEither url
+    pure
+        . withToken (npmToken config)
+        $ base
+            { -- A tarball must never be gunzipped in flight (see 'artifactRequest').
+              decompress = const False
+            }
+
+{- | Build the artifact @GET@ request addressing a tarball at its __authoritative
+upstream location__ — the absolute @url@ the projection preserved from the
+upstream's @dist.tarball@ — rather than reconstructing it from @(base, package,
+file)@.
+
+The artifact location is server-chosen data, not a derivable fact: a registry may
+serve a version's tarball from a different host or a path the npm @\/-\/@ convention
+cannot rebuild (a separate CDN\/files host, server-generated segments, a signed
+query string). Honouring the preserved location is what lets Écluse front those
+registries; the URL it fetches is the same one the served packument's
+@dist.integrity@ is paired with, so the bytes still verify. The egress gate
+('Ecluse.Security.tarballHostAllowed' plus the resolved-IP recheck) decides
+__whether__ that location may be fetched; this builder only forms the request once
+it is permitted. The 'NpmClientConfig''s @npmBaseUrl@ is unused here (the URL is
+absolute) but its 'Manager' and token are not — the manager carries the trust
+context and the token the credential posture.
+
+The request is marked __non-decompressing__ for the same reason as 'artifactRequest':
+a @.tgz@ is opaque binary streamed byte-for-byte. Fails with a 'UrlFormationError'
+only when the @url@ cannot be parsed into a request.
+-}
+artifactRequestByUrl ::
+    NpmClientConfig ->
+    Text ->
+    Either UrlFormationError Request
+artifactRequestByUrl config url = do
     base <- parseRequestEither url
     pure
         . withToken (npmToken config)

@@ -42,7 +42,7 @@ import Ecluse.Credential (Secret)
 import Ecluse.Env (Env, envLogEnv)
 import Ecluse.Rules.Effectful (PrecededEffectfulRule)
 import Ecluse.Rules.Types (PrecededRule)
-import Ecluse.Security (TarballHostPolicy)
+import Ecluse.Security (LoweredHostSet, TarballHostPolicy)
 import Ecluse.Server.Response (HelpMessage, MountRenderer)
 import Ecluse.Server.Route (Classifier)
 
@@ -89,6 +89,14 @@ data PackumentDeps = PackumentDeps
     ('Ecluse.Security.SameHostAsPackument' by default, the secure reading of the
     host allowlist; relaxed to 'Ecluse.Security.AnyAllowlistedHost' by
     @PROXY_RESPECT_UPSTREAM_TARBALL_HOST@).
+    -}
+    , pdAllowedInternalHosts :: LoweredHostSet
+    {- ^ The hosts deliberately opted in to the internal-range block when gating an
+    honoured artifact location ('Ecluse.Security.tarballHostAllowed'). This is the
+    same per-host opt-in the guarded manager's resolved-IP recheck honours (see
+    "Ecluse.Security.Egress"), carried here so the pure tarball-host gate and the
+    connection-time recheck agree on which internal hosts are deliberate. Empty by
+    default — the secure reading, matching the composition root's guarded manager.
     -}
     , pdInboundToken :: Maybe Secret
     {- ^ The optional inbound token a client must present (@PROXY_AUTH_TOKEN@);

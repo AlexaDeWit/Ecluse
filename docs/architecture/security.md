@@ -183,19 +183,24 @@ this section is the security rationale they implement.
 
 Écluse's posture is **secure by default, with the override under the operator's
 explicit control — the consumer decides their own threat tolerance.** The egress
-guards follow that principle, and one planned control makes it concrete for the
-tarball path:
+guards follow that principle, and it is made concrete for the tarball path:
 
-- **`dist.tarball` host, disallow-by-default.** By default the proxy fetches a
-  tarball only from the **same allowlisted upstream that served the packument**,
-  refusing a `dist.tarball` that points at a *different* host even if it is
-  otherwise on the allowlist — the safest reading of invariant 2
-  (`Ecluse.Security.tarballHostAllowed` with `SameHostAsPackument`). An operator
-  whose registry legitimately serves tarballs from a separate CDN (the
+- **`dist.tarball` host, disallow-by-default.** The serve path fetches each tarball
+  from its **authoritative upstream location** (the preserved `dist.tarball`), but
+  gates *where* that location may be: by default it is fetched only from the **same
+  allowlisted upstream that served the packument**, refusing a `dist.tarball` that
+  points at a *different* host even if it is otherwise on the allowlist — the safest
+  reading of invariant 2 (`Ecluse.Security.tarballHostAllowed` with
+  `SameHostAsPackument`, applied on the serve path in `Ecluse.Server.Pipeline`). A
+  cross-host `dist.tarball` is refused with a `403` before any artifact fetch. An
+  operator whose registry legitimately serves tarballs from a separate CDN (the
   PyPI-files-host shape above) **opts in** to honouring the upstream-declared host
-  (constrained to the allowlist) by setting `PROXY_RESPECT_UPSTREAM_TARBALL_HOST`,
-  accepting the documented wider fetch surface in exchange. The configuration
-  surface and its security note are in
+  (still constrained to the allowlist) by setting
+  `PROXY_RESPECT_UPSTREAM_TARBALL_HOST`, accepting the documented wider fetch surface
+  in exchange. The override never escapes the allowlist or the resolved-IP block: an
+  allowlisted cross-host name that resolves to an internal address is still refused at
+  connect time by the resolved-IP recheck (invariant 3). The configuration surface and
+  its security note are in
   [Configuration → Outbound egress safety](configuration.md#outbound-egress-safety).
 
 The internal-range opt-in (invariant 3) is the same shape: internal addresses are
