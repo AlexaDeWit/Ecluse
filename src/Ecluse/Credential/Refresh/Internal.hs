@@ -16,6 +16,16 @@ module Ecluse.Credential.Refresh.Internal (
 
     -- * Failure
     CredentialError (..),
+
+    -- * State and pure\/transition helpers (exposed for direct testing)
+    CacheState (..),
+    ServeAction (..),
+    decide,
+    refreshDueAt,
+    onMintSuccess,
+    onMintFailure,
+    admitMint,
+    releaseSingleFlight,
 ) where
 
 import Control.Concurrent.STM (retry)
@@ -104,19 +114,20 @@ defaultRefreshConfig =
     unconfigured field =
         throwIO (stringException ("Ecluse.Credential.Refresh: " <> toString field <> " is not configured"))
 
-{- The mutable state of a refreshing provider: the cached token, when its
+{- | The mutable state of a refreshing provider: the cached token, when its
 proactive refresh is due, the single-flight flag, and the breaker.
 -}
 data CacheState = CacheState
-    { -- The token currently served.
-      csToken :: AuthToken
-    , -- When a proactive background refresh should fire; 'Nothing' for a token
-      -- with no expiry (it never refreshes).
-      csRefreshDue :: Maybe UTCTime
-    , -- Whether a mint is in flight (the single-flight flag).
-      csRefreshing :: Bool
-    , -- The circuit-breaker state.
-      csBreaker :: Breaker
+    { csToken :: AuthToken
+    -- ^ The token currently served.
+    , csRefreshDue :: Maybe UTCTime
+    {- ^ When a proactive background refresh should fire; 'Nothing' for a token
+    with no expiry (it never refreshes).
+    -}
+    , csRefreshing :: Bool
+    -- ^ Whether a mint is in flight (the single-flight flag).
+    , csBreaker :: Breaker
+    -- ^ The circuit-breaker state.
     }
 
 {- | Build a 'CredentialProvider' that caches a token and refreshes it per the
@@ -161,7 +172,7 @@ stays interruptible — the flag is simply guaranteed to have an owner first. Th
 serve :: IO () -> RefreshConfig -> TVar CacheState -> IO AuthToken
 serve afterClaim cfg stateVar = mask $ \restore -> do
     now <- rcClock cfg
-    action <- atomically (decide now)
+    action <- atomically (decide stateVar now)
     case action of
         ServeCached token -> pure token
         ServeAndRefresh token -> do
@@ -180,35 +191,42 @@ serve afterClaim cfg stateVar = mask $ \restore -> do
             -- @restore@ so the synchronous mint stays cancellable.
             restore (afterClaim >> mintSynchronously cfg stateVar)
                 `finally` releaseSingleFlight stateVar
-  where
-    -- One atomic decision over the current state. Claims the single-flight flag
-    -- (or routes to the blocking path) so at most one mint is ever launched.
-    decide :: UTCTime -> STM ServeAction
-    decide now = do
-        st <- readTVar stateVar
-        if tokenValid now (csToken st)
-            then
-                if refreshNeeded now st && not (csRefreshing st)
-                    then do
-                        writeTVar stateVar st{csRefreshing = True}
-                        pure (ServeAndRefresh (csToken st))
-                    else pure (ServeCached (csToken st))
-            else -- Expired. If a refresh is already in flight, wait for it (STM
-            -- retry) rather than launching a second mint, then re-decide.
-                if csRefreshing st
-                    then retry
-                    else do
-                        writeTVar stateVar st{csRefreshing = True}
-                        pure MintNow
 
--- What a 'serve' decision resolves to.
+{- | The single-flight decision over the current cache state, made atomically so it
+holds across a concurrent cohort: serve the still-valid token, claim the flag and
+route to a background refresh when one is due, or — when the token has expired —
+either claim the flag and mint synchronously or, if a mint is already in flight,
+'retry' (block) until it lands rather than launching a second. The flag claim
+happens here, in the transaction, so at most one mint is ever launched; the
+claiming caller is responsible for releasing it (see 'serve' \/ 'releaseSingleFlight').
+-}
+decide :: TVar CacheState -> UTCTime -> STM ServeAction
+decide stateVar now = do
+    st <- readTVar stateVar
+    if tokenValid now (csToken st)
+        then
+            if refreshNeeded now st && not (csRefreshing st)
+                then do
+                    writeTVar stateVar st{csRefreshing = True}
+                    pure (ServeAndRefresh (csToken st))
+                else pure (ServeCached (csToken st))
+        else -- Expired. If a refresh is already in flight, wait for it (STM
+        -- retry) rather than launching a second mint, then re-decide.
+            if csRefreshing st
+                then retry
+                else do
+                    writeTVar stateVar st{csRefreshing = True}
+                    pure MintNow
+
+-- | What a 'serve'\/'decide' decision resolves to.
 data ServeAction
-    = -- The cached token is valid and no refresh is due: serve it.
+    = -- | The cached token is valid and no refresh is due: serve it.
       ServeCached AuthToken
-    | -- Valid but past the refresh threshold: serve it, refresh in background.
+    | -- | Valid but past the refresh threshold: serve it, refresh in background.
       ServeAndRefresh AuthToken
-    | -- Expired: the caller must mint synchronously (the slow path).
+    | -- | Expired: the caller must mint synchronously (the slow path).
       MintNow
+    deriving stock (Eq, Show)
 
 {- The background refresh: if the breaker admits a mint, attempt it and fold
 the result into the cache; otherwise (breaker open) skip it. Never throws — a
@@ -257,7 +275,7 @@ mintSynchronously cfg stateVar = do
                     atomically (modifyTVar' stateVar (onMintFailure cfg now'))
                     throwIO e
 
-{- Release the single-flight flag. It is run in a 'finally' that is installed in
+{- | Release the single-flight flag. It is run in a 'finally' that is installed in
 the __same masked scope__ that claimed the flag — 'serve's own 'finally' for the
 synchronous mint, the background 'Async' for a proactive refresh — so the flag is
 cleared on __every__ exit: success, a synchronous mint failure, or an
@@ -272,7 +290,7 @@ releaseSingleFlight :: TVar CacheState -> IO ()
 releaseSingleFlight stateVar =
     atomically (modifyTVar' stateVar (\st -> st{csRefreshing = False}))
 
-{- The circuit-breaker admission gate, shared by the background and synchronous
+{- | The circuit-breaker admission gate, shared by the background and synchronous
 mint paths. Defers the decision to 'Ecluse.Breaker.admit' and commits the breaker
 state it returns: while open and cooling down it denies (fast-fail); once the
 cooldown elapses it moves to half-open and admits a single probe; a closed or
@@ -285,7 +303,7 @@ admitMint stateVar now = do
     writeTVar stateVar st{csBreaker = breaker'}
     pure permitted
 
-{- Fold a successful mint into the cache: install the token and reset the
+{- | Fold a successful mint into the cache: install the token and reset the
 breaker. The single-flight flag is released by 'releaseSingleFlight' in the
 'finally' around the mint (not here), so it clears even on an async exception.
 -}
@@ -297,7 +315,7 @@ onMintSuccess token due st =
         , csBreaker = recordSuccess (csBreaker st)
         }
 
-{- Fold a failed mint into the cache: keep the still-cached token and advance the
+{- | Fold a failed mint into the cache: keep the still-cached token and advance the
 breaker per the configured threshold and cooldown ('Ecluse.Breaker.recordFailure').
 The single-flight flag is released separately by 'releaseSingleFlight' (see
 'onMintSuccess').
@@ -322,7 +340,7 @@ refreshNeeded now st = case csRefreshDue st of
     Nothing -> False
     Just due -> now >= due
 
-{- Compute when a freshly minted token's proactive refresh should fire: the
+{- | Compute when a freshly minted token's proactive refresh should fire: the
 'rcRefreshAt' fraction of its lifetime, pulled earlier by a per-token jitter
 sample and capped at 'rcRefreshFloor' before expiry. A token with no expiry never
 refreshes ('Nothing').

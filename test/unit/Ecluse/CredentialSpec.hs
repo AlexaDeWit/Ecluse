@@ -21,9 +21,20 @@ import UnliftIO (async, cancel, timeout, wait)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (throwString, try)
 
+import Ecluse.Breaker (Breaker (..), initialBreaker)
 import Ecluse.Credential
 import Ecluse.Credential.Refresh
-import Ecluse.Credential.Refresh.Internal (refreshingProviderWith)
+import Ecluse.Credential.Refresh.Internal (
+    CacheState (..),
+    ServeAction (..),
+    admitMint,
+    decide,
+    onMintFailure,
+    onMintSuccess,
+    refreshDueAt,
+    refreshingProviderWith,
+    releaseSingleFlight,
+ )
 
 -- | A fixed expiry instant for the static-provider test.
 anExpiry :: UTCTime
@@ -77,6 +88,26 @@ synchronise on a background mint having started before asserting on it.
 -}
 waitForCount :: IORef Int -> Int -> IO Bool
 waitForCount ref n = waitUntil ((>= n) <$> readIORef ref)
+
+{- | A baseline 'CacheState' for the direct helper tests: a healthy, not-yet-
+refreshing provider holding a long-lived token, which each test tweaks on the one
+axis it exercises. (The token is a benign default; tests that care override it.)
+-}
+aCacheState :: CacheState
+aCacheState =
+    CacheState
+        { csToken = tokenExpiringIn "cached" 1000
+        , csRefreshDue = Just (addUTCTime 800 t0)
+        , csRefreshing = False
+        , csBreaker = initialBreaker
+        }
+
+{- | A 'RefreshConfig' carrying only the breaker knobs the pure fold helpers read
+(threshold 3, cooldown 30s); its effectful leaves stay at the loud 'defaultRefreshConfig'
+defaults, which these helpers never touch.
+-}
+breakerCfg :: RefreshConfig
+breakerCfg = defaultRefreshConfig{rcBreakerThreshold = 3, rcBreakerCooldown = 30}
 
 spec :: Spec
 spec = do
@@ -455,6 +486,133 @@ spec = do
             -- open; once it does, a half-open probe is admitted again.
             setClock (addUTCTime 30 (addUTCTime 2000 t0))
             currentToken provider `shouldThrow` (== BreakerOpen)
+
+    -- Direct, deterministic unit tests for the pure / state-transition helpers,
+    -- so a regression localises to the function rather than only surfacing
+    -- through 'currentToken'. These complement (do not replace) the behavioural
+    -- and orphan-window tests above, which cover the concurrent serve/mask path.
+    describe "refreshDueAt" $ do
+        it "schedules the refresh at the configured fraction of the lifetime" $ do
+            -- Default knobs: 0.8 fraction, 30s floor, no jitter. A 1000s token
+            -- issued at t0 is due at 800s (well clear of the 30s floor).
+            due <- refreshDueAt defaultRefreshConfig t0 (tokenExpiringIn "tok" 1000)
+            due `shouldBe` Just (addUTCTime 800 t0)
+
+        it "never schedules later than the floor before expiry" $ do
+            -- A short 100s token: 0.8 * 100 = 80s would land 20s before expiry,
+            -- inside the 30s floor, so the floor (70s) wins.
+            due <- refreshDueAt defaultRefreshConfig t0 (tokenExpiringIn "tok" 100)
+            due `shouldBe` Just (addUTCTime 70 t0)
+
+        it "pulls the refresh earlier by the sampled jitter fraction" $ do
+            -- Jitter 0.2 pulls the 0.8 fraction down to 0.6 of the lifetime.
+            due <- refreshDueAt defaultRefreshConfig{rcJitter = pure 0.2} t0 (tokenExpiringIn "tok" 1000)
+            due `shouldBe` Just (addUTCTime 600 t0)
+
+        it "never schedules a refresh before the issue instant" $ do
+            -- A fraction of 0 cannot pull the due time before issue.
+            due <- refreshDueAt defaultRefreshConfig{rcRefreshAt = 0} t0 (tokenExpiringIn "tok" 1000)
+            due `shouldBe` Just t0
+
+        it "never schedules a refresh for a token with no expiry" $ do
+            let noExpiryToken = AuthToken{authSecret = mkSecret "forever", authExpiresAt = Nothing}
+            refreshDueAt defaultRefreshConfig t0 noExpiryToken `shouldReturn` Nothing
+
+    describe "onMintSuccess" $
+        it "installs the new token and due, clears the refreshing flag, and resets the breaker" $ do
+            let token' = tokenExpiringIn "fresh" 1000
+                due' = Just (addUTCTime 800 t0)
+                st0 = aCacheState{csRefreshing = True, csBreaker = Closed 2}
+                st1 = onMintSuccess token' due' st0
+            csToken st1 `shouldBe` token'
+            csRefreshDue st1 `shouldBe` due'
+            -- The flag is released by 'releaseSingleFlight', not here, so it is
+            -- left untouched by the success fold.
+            csRefreshing st1 `shouldBe` True
+            csBreaker st1 `shouldBe` initialBreaker
+
+    describe "onMintFailure" $ do
+        it "advances the breaker's consecutive-failure count below the threshold" $ do
+            let st1 = onMintFailure breakerCfg t0 aCacheState{csBreaker = Closed 1}
+            csBreaker st1 `shouldBe` Closed 2
+
+        it "trips the breaker open for the cooldown once the threshold is reached" $ do
+            -- breakerCfg threshold = 3, cooldown = 30: the third failure trips it.
+            let st1 = onMintFailure breakerCfg t0 aCacheState{csBreaker = Closed 2}
+            csBreaker st1 `shouldBe` Open (addUTCTime 30 t0)
+
+        it "leaves the cached token and refreshing flag untouched" $ do
+            let st0 = aCacheState{csRefreshing = True}
+                st1 = onMintFailure breakerCfg t0 st0
+            csToken st1 `shouldBe` csToken st0
+            csRefreshDue st1 `shouldBe` csRefreshDue st0
+            csRefreshing st1 `shouldBe` True
+
+    describe "admitMint" $ do
+        it "denies a mint while the breaker is open and still in cooldown" $ do
+            stateVar <- newTVarIO aCacheState{csBreaker = Open (addUTCTime 30 t0)}
+            atomically (admitMint stateVar t0) `shouldReturn` False
+            -- The breaker is left open (unchanged) for the next attempt.
+            csBreaker <$> readTVarIO stateVar `shouldReturn` Open (addUTCTime 30 t0)
+
+        it "admits a probe and half-opens once the cooldown has elapsed" $ do
+            stateVar <- newTVarIO aCacheState{csBreaker = Open t0}
+            atomically (admitMint stateVar (addUTCTime 1 t0)) `shouldReturn` True
+            csBreaker <$> readTVarIO stateVar `shouldReturn` HalfOpen
+
+        it "admits a closed breaker, leaving it unchanged" $ do
+            stateVar <- newTVarIO aCacheState{csBreaker = Closed 1}
+            atomically (admitMint stateVar t0) `shouldReturn` True
+            csBreaker <$> readTVarIO stateVar `shouldReturn` Closed 1
+
+    describe "releaseSingleFlight" $ do
+        it "clears the single-flight flag" $ do
+            stateVar <- newTVarIO aCacheState{csRefreshing = True}
+            releaseSingleFlight stateVar
+            csRefreshing <$> readTVarIO stateVar `shouldReturn` False
+
+        it "is idempotent: releasing an already-clear flag is a no-op" $ do
+            stateVar <- newTVarIO aCacheState{csRefreshing = False}
+            releaseSingleFlight stateVar
+            releaseSingleFlight stateVar
+            csRefreshing <$> readTVarIO stateVar `shouldReturn` False
+
+    describe "decide" $ do
+        it "serves the cached token when it is valid and no refresh is due" $ do
+            let token' = tokenExpiringIn "valid" 1000
+            stateVar <- newTVarIO aCacheState{csToken = token', csRefreshDue = Just (addUTCTime 800 t0)}
+            -- Well before the 800s due instant: serve cached, no claim.
+            atomically (decide stateVar t0) `shouldReturn` ServeCached token'
+            csRefreshing <$> readTVarIO stateVar `shouldReturn` False
+
+        it "claims the flag and routes to a background refresh once one is due" $ do
+            let token' = tokenExpiringIn "valid" 1000
+            stateVar <- newTVarIO aCacheState{csToken = token', csRefreshDue = Just (addUTCTime 800 t0)}
+            -- Past the due instant but still valid: serve it and claim the flag.
+            atomically (decide stateVar (addUTCTime 850 t0)) `shouldReturn` ServeAndRefresh token'
+            csRefreshing <$> readTVarIO stateVar `shouldReturn` True
+
+        it "does not re-claim a background refresh that is already in flight" $ do
+            let token' = tokenExpiringIn "valid" 1000
+            stateVar <-
+                newTVarIO aCacheState{csToken = token', csRefreshDue = Just (addUTCTime 800 t0), csRefreshing = True}
+            -- Past the due instant but a refresh already holds the flag: just serve.
+            atomically (decide stateVar (addUTCTime 850 t0)) `shouldReturn` ServeCached token'
+
+        it "claims the flag and mints synchronously when the token has expired" $ do
+            let token' = tokenExpiringIn "stale" 1000
+            stateVar <- newTVarIO aCacheState{csToken = token'}
+            -- Past expiry, nothing in flight: claim the flag and mint now.
+            atomically (decide stateVar (addUTCTime 2000 t0)) `shouldReturn` MintNow
+            csRefreshing <$> readTVarIO stateVar `shouldReturn` True
+
+        it "blocks (STM retry) on an expired token when a mint is already in flight" $ do
+            let token' = tokenExpiringIn "stale" 1000
+            stateVar <- newTVarIO aCacheState{csToken = token', csRefreshing = True}
+            -- Expired and a mint already holds the flag: 'decide' must block rather
+            -- than launch a second mint, so the transaction never commits and the
+            -- timed wait yields Nothing.
+            timeout 50_000 (atomically (decide stateVar (addUTCTime 2000 t0))) `shouldReturn` Nothing
 
     describe "refreshingProvider (model-based)" $
         it "agrees with a pure cache/clock/breaker model under random operation sequences" $
