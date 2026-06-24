@@ -47,11 +47,13 @@ against npm's published keys, a fetch this pure projection does not perform.
 module Ecluse.Registry.Npm.Project (
     -- * Projection
     parsePackageInfo,
+    parsePackageInfoFromValue,
     parseVersionDetails,
     parseVersionList,
 ) where
 
-import Data.Aeson (FromJSON (parseJSON), eitherDecodeStrict, withObject, (.!=), (.:?))
+import Data.Aeson (FromJSON (parseJSON), Value, eitherDecodeStrict, withObject, (.!=), (.:?))
+import Data.Aeson.Types (parseEither)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime)
@@ -123,8 +125,23 @@ Pure and total: a body that is not a decodable npm packument is reported as a
 'ParseError', never thrown.
 -}
 parsePackageInfo :: RegistryResponse -> Either ParseError PackageInfo
-parsePackageInfo resp = do
-    pkmt <- decodePackument resp
+parsePackageInfo resp = decodePackument resp >>= projectPackageInfo
+
+{- | Project an __already-decoded__ packument @Value@ into the packument-level
+'PackageInfo', without re-parsing any bytes. This is the entry point the serve
+layer uses when it has already decoded the upstream body to a raw @Value@ (the
+document it edits in place to serve) and wants the typed view of the /same/
+document: projecting from the @Value@ reuses that one parse rather than tokenising
+the bytes a second time. Pure and total — a @Value@ that is not a decodable npm
+packument is reported as a 'ParseError', never thrown.
+-}
+parsePackageInfoFromValue :: Value -> Either ParseError PackageInfo
+parsePackageInfoFromValue value = decodePackumentValue value >>= projectPackageInfo
+
+-- Project a decoded 'WirePackument' into the domain 'PackageInfo'. Shared by both
+-- the byte- and 'Value'-decoding entry points so the projection lives in one place.
+projectPackageInfo :: WirePackument -> Either ParseError PackageInfo
+projectPackageInfo pkmt = do
     name <- projectName (wpName pkmt)
     pure
         PackageInfo
@@ -163,6 +180,16 @@ error into a domain 'ParseError'.
 decodePackument :: RegistryResponse -> Either ParseError WirePackument
 decodePackument =
     first (ParseError . toText) . eitherDecodeStrict . responseBody
+
+{- Project an already-decoded 'Value' into a 'WirePackument' via its 'FromJSON'
+instance, adapting aeson's 'String' error into a domain 'ParseError'. The result is
+identical to 'decodePackument' on the bytes that produced the @Value@: aeson decodes
+to a 'Value' and then runs the same 'FromJSON' instance either way, so this reuses
+the one parse instead of tokenising the bytes again.
+-}
+decodePackumentValue :: Value -> Either ParseError WirePackument
+decodePackumentValue =
+    first (ParseError . toText) . parseEither parseJSON
 
 -- ── per-version projection ───────────────────────────────────────────────────
 
