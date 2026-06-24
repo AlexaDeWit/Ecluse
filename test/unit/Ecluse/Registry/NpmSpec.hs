@@ -307,6 +307,17 @@ pathEncodingSpec =
                 cap <- lastCaptured stub
                 BS.isPrefixOf "/@babel" (capPath cap) `shouldBe` True
 
+            it "re-encodes a literal '%' in a once-decoded name so a live escape never reaches the upstream" $ \stub -> do
+                -- The defect's concrete vector: '/npm/foo%252e%252e%252fbar' is
+                -- WAI-decoded once to the single segment 'foo%2e%2e%2fbar', which
+                -- passes 'isSafeComponent' (no literal '/'). The data plane must
+                -- re-encode the '%' so the upstream receives '%25…', never a live
+                -- '%2e%2e%2f' a decode-and-normalise CDN can resolve to traversal.
+                config <- stubConfig stub
+                _ <- fetchMetadataForm config Abbreviated noValidators onceDecodedTraversal
+                cap <- lastCaptured stub
+                capPath cap `shouldBe` "/foo%252e%252e%252fbar"
+
 -- ── auth ──────────────────────────────────────────────────────────────────────
 
 authSpec :: Spec
@@ -563,6 +574,14 @@ isOdd = mkPackageName Npm Nothing "is-odd"
 
 babelCodeFrame :: PackageName
 babelCodeFrame = mkPackageName Npm (Just (mkScope "babel")) "code-frame"
+
+{- | A package name as it arrives once-decoded from the request path: the original
+@\/npm\/foo%252e%252e%252fbar@ is WAI-decoded once to the single segment
+@foo%2e%2e%2fbar@. It carries no literal @\'\/\'@, so the agnostic component gate
+accepts it; the data plane must re-encode the @\'%\'@ when building the upstream URL.
+-}
+onceDecodedTraversal :: PackageName
+onceDecodedTraversal = mkPackageName Npm Nothing "foo%2e%2e%2fbar"
 
 v1 :: Version
 v1 = mkVersion Npm "1.0.0"

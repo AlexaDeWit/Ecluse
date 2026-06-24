@@ -69,6 +69,7 @@ import Data.Text qualified as T
 
 import Ecluse.Package.Filter (FilterPlan (fpDecisions, fpLatest, fpSurvivors))
 import Ecluse.Rules.Types (Decision)
+import Ecluse.Server.Route (isSafeComponent)
 import Ecluse.Version (unVersion)
 
 -- ── URL rewriting ─────────────────────────────────────────────────────────────
@@ -88,13 +89,37 @@ Total and lossless: a version with no @dist@ object, no @tarball@ string, or a
 usable @name@; every unmodelled key is relayed unchanged. Rewriting is
 __idempotent__ — a second pass derives the same @{pkg}@ and @{file}@ and so
 produces the same URL.
+
+The @name@ is __upstream-controlled__ (it is the packument's own field), so each
+of its structural components — the scope and base name either side of a @\@scope\/@
+prefix — is gated through "Ecluse.Server.Route.isSafeComponent" before it is
+interpolated. A name carrying a traversal, an embedded separator, or a control
+character is rejected and the document is left untouched rather than emit a
+@dist.tarball@ that aims a client outside the package's own path.
 -}
 rewriteTarballUrls :: Text -> Value -> Value
 rewriteTarballUrls base = \case
     Object o
-        | Just pkg <- stringField "name" o ->
+        | Just pkg <- stringField "name" o
+        , safeName pkg ->
             Object (adjustObject "versions" (mapValues (rewriteVersion (joinUrl base pkg))) o)
     other -> other
+
+{- | Whether an upstream-controlled packument @name@ is safe to interpolate into a
+rewritten @dist.tarball@ path: every structural component (the scope and base name
+either side of an @\@scope\/@ prefix, or the whole name when unscoped) must pass
+"Ecluse.Server.Route.isSafeComponent". Splitting on the scope separator first means
+a legitimate @\@scope\/name@'s own @\'\/\'@ is not itself judged unsafe, while a
+slash anywhere else (a traversal, a path injection) is caught.
+-}
+safeName :: Text -> Bool
+safeName name = all isSafeComponent components
+  where
+    components = case T.stripPrefix "@" name of
+        Just scopeAndBase ->
+            let (scope, base) = T.breakOn "/" scopeAndBase
+             in if T.null base then [name] else [scope, T.drop 1 base]
+        Nothing -> [name]
 
 {- | Rewrite one version object's @dist.tarball@ under the given @{base}\/{pkg}@
 prefix, leaving the object untouched if it carries no rewritable tarball.
