@@ -59,6 +59,7 @@ import Data.Time (NominalDiffTime, UTCTime, addUTCTime, diffUTCTime)
 import UnliftIO (async, throwIO, try)
 import UnliftIO.Exception (finally, stringException)
 
+import Ecluse.Breaker (Breaker, admit, initialBreaker, recordFailure, recordSuccess)
 import Ecluse.Credential (AuthToken (..), CredentialProvider (..))
 
 {- | The one failure a 'refreshingProvider' surfaces to its caller: there is no
@@ -139,16 +140,6 @@ defaultRefreshConfig =
     unconfigured field =
         throwIO (stringException ("Ecluse.Credential.Refresh: " <> toString field <> " is not configured"))
 
--- The circuit breaker's state, gating whether a mint may be attempted.
-data Breaker
-    = -- Healthy: track consecutive failures up to the trip threshold.
-      Closed Int
-    | -- Tripped until the given instant: mints fast-fail until then.
-      Open UTCTime
-    | -- Cooldown elapsed: one probe mint is allowed through to test recovery.
-      HalfOpen
-    deriving stock (Eq, Show)
-
 {- The mutable state of a refreshing provider: the cached token, when its
 proactive refresh is due, the single-flight flag, and the breaker.
 -}
@@ -175,7 +166,7 @@ refreshingProvider cfg = do
     now <- rcClock cfg
     token <- rcMint cfg
     due <- refreshDueAt cfg now token
-    stateVar <- newTVarIO (CacheState token due False (Closed 0))
+    stateVar <- newTVarIO (CacheState token due False initialBreaker)
     pure CredentialProvider{currentToken = serve cfg stateVar}
 
 {- Serve the current token, scheduling a background refresh or — only when the
@@ -286,20 +277,17 @@ releaseSingleFlight stateVar =
     atomically (modifyTVar' stateVar (\st -> st{csRefreshing = False}))
 
 {- The circuit-breaker admission gate, shared by the background and synchronous
-mint paths. While the breaker is 'Open' and the cooldown has not elapsed, deny
-(fast-fail); once it elapses, move to 'HalfOpen' and admit a single probe; a
-'Closed' or 'HalfOpen' breaker always admits.
+mint paths. Defers the decision to 'Ecluse.Breaker.admit' and commits the breaker
+state it returns: while open and cooling down it denies (fast-fail); once the
+cooldown elapses it moves to half-open and admits a single probe; a closed or
+half-open breaker always admits.
 -}
 admitMint :: TVar CacheState -> UTCTime -> STM Bool
 admitMint stateVar now = do
     st <- readTVar stateVar
-    case csBreaker st of
-        Open until'
-            | now < until' -> pure False
-            | otherwise -> do
-                writeTVar stateVar st{csBreaker = HalfOpen}
-                pure True
-        _ -> pure True
+    let (permitted, breaker') = admit now (csBreaker st)
+    writeTVar stateVar st{csBreaker = breaker'}
+    pure permitted
 
 {- Fold a successful mint into the cache: install the token and reset the
 breaker. The single-flight flag is released by 'releaseSingleFlight' in the
@@ -310,28 +298,17 @@ onMintSuccess token due st =
     st
         { csToken = token
         , csRefreshDue = due
-        , csBreaker = Closed 0
+        , csBreaker = recordSuccess (csBreaker st)
         }
 
 {- Fold a failed mint into the cache: keep the still-cached token and advance the
-breaker — counting up in 'Closed' until the threshold trips it 'Open', and
-re-opening when a half-open probe fails. (A mint is never attempted while the
-breaker is already 'Open', so that case does not arise here; folding it in with the
-half-open re-open keeps the function total.) The single-flight flag is released
-separately by 'releaseSingleFlight' (see 'onMintSuccess').
+breaker per the configured threshold and cooldown ('Ecluse.Breaker.recordFailure').
+The single-flight flag is released separately by 'releaseSingleFlight' (see
+'onMintSuccess').
 -}
 onMintFailure :: RefreshConfig -> UTCTime -> CacheState -> CacheState
-onMintFailure cfg now st = st{csBreaker = advance (csBreaker st)}
-  where
-    tripped :: Breaker
-    tripped = Open (addUTCTime (rcBreakerCooldown cfg) now)
-
-    advance :: Breaker -> Breaker
-    advance = \case
-        Closed n
-            | n + 1 >= rcBreakerThreshold cfg -> tripped
-            | otherwise -> Closed (n + 1)
-        _ -> tripped
+onMintFailure cfg now st =
+    st{csBreaker = recordFailure (rcBreakerThreshold cfg) (rcBreakerCooldown cfg) now (csBreaker st)}
 
 {- Whether a token is still usable at the given instant. A token with no
 expiry ('Nothing') is always valid.

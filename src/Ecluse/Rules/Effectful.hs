@@ -24,11 +24,10 @@ effectful deny overrides a lower pure allow and vice versa.
 == Resilience
 
 Each rule carries an 'EffectfulConfig': a timeout per attempt, a bounded retry
-count with a backoff schedule, and a 'Breaker' threshold/cooldown. The breaker is
-the same small @Closed@\/@Open@\/@HalfOpen@ state machine the credential refresh
-policy uses ("Ecluse.Credential.Refresh"); it is kept per source as a 'TVar' so
-repeated failures of one advisory source fast-fail without latency or hammering,
-while a half-open probe tests recovery. The clock is read from the
+count with a backoff schedule, and a breaker threshold/cooldown. The breaker is the
+shared "Ecluse.Breaker" state machine, kept per source as a 'TVar' so repeated
+failures of one advisory source fast-fail without latency or hammering, while a
+half-open probe tests recovery. The clock is read from the
 'Ecluse.Rules.Types.EvalContext' and the backoff sleep is injected, so the whole
 harness is deterministic under test with no real time passing.
 
@@ -52,10 +51,11 @@ module Ecluse.Rules.Effectful (
 ) where
 
 import Data.List (maximumBy)
-import Data.Time (NominalDiffTime, UTCTime, addUTCTime)
+import Data.Time (NominalDiffTime, UTCTime)
 import UnliftIO (timeout, tryAny)
 import UnliftIO.Concurrent (threadDelay)
 
+import Ecluse.Breaker (Breaker (..), admit, initialBreaker, recordFailure, recordSuccess)
 import Ecluse.Package (PackageDetails)
 import Ecluse.Rules (evalRulesWithPrecedence)
 import Ecluse.Rules.Types (
@@ -171,23 +171,9 @@ defaultEffectfulConfig =
         , ecRetryAfter = Nothing
         }
 
-{- | The circuit breaker's state, gating whether a rule's IO may be attempted. The
-same shape as the credential refresh breaker ("Ecluse.Credential.Refresh"): healthy
-with a consecutive-failure count, tripped open until an instant, or half-open for a
-single recovery probe.
--}
-data Breaker
-    = -- | Healthy: track consecutive failures up to the trip threshold.
-      Closed Int
-    | -- | Tripped until the given instant: evaluations fast-fail until then.
-      Open UTCTime
-    | -- | Cooldown elapsed: one probe evaluation is allowed to test recovery.
-      HalfOpen
-    deriving stock (Eq, Show)
-
--- | A fresh, healthy breaker (no failures recorded).
+-- | A fresh, healthy breaker (no failures recorded) in a new 'TVar'.
 newBreaker :: IO (TVar Breaker)
-newBreaker = newTVarIO (Closed 0)
+newBreaker = newTVarIO initialBreaker
 
 -- ── the resilience harness ────────────────────────────────────────────────────
 
@@ -215,7 +201,7 @@ runEffectfulRule ctx rule pd = do
             result <- attemptWithRetry rule pd
             case result of
                 Just outcome -> do
-                    atomically (modifyTVar' (erBreaker rule) (const (Closed 0)))
+                    atomically (modifyTVar' (erBreaker rule) recordSuccess)
                     pure outcome
                 Nothing -> do
                     atomically (modifyTVar' (erBreaker rule) (tripOnFailure (erConfig rule) now))
@@ -263,29 +249,21 @@ exhausted rule reason = case erOnError rule of
 
 -- ── the breaker gate ──────────────────────────────────────────────────────────
 
-{- The breaker admission gate (mirrors 'Ecluse.Credential.Refresh's @admitMint@):
-while 'Open' and the cooldown has not elapsed, deny; once it elapses, move to
-'HalfOpen' and admit a single probe; a 'Closed' or 'HalfOpen' breaker always admits. -}
+{- The breaker admission gate: defer the decision to 'Ecluse.Breaker.admit' and
+commit the breaker state it returns. While open and cooling down it denies; once the
+cooldown elapses it moves to half-open and admits a single probe; a closed or
+half-open breaker always admits. -}
 admitProbe :: TVar Breaker -> UTCTime -> STM Bool
 admitProbe breaker now = do
     st <- readTVar breaker
-    case st of
-        Open until'
-            | now < until' -> pure False
-            | otherwise -> writeTVar breaker HalfOpen >> pure True
-        _ -> pure True
+    let (permitted, st') = admit now st
+    writeTVar breaker st'
+    pure permitted
 
-{- Advance the breaker on a failed evaluation (mirrors @onMintFailure@): count up in
-'Closed' until the threshold trips it 'Open' for the cooldown, and re-open when a
-half-open probe fails. -}
+{- Advance the breaker on a failed evaluation per this rule's configured threshold
+and cooldown ('Ecluse.Breaker.recordFailure'). -}
 tripOnFailure :: EffectfulConfig -> UTCTime -> Breaker -> Breaker
-tripOnFailure cfg now = \case
-    Closed n
-        | n + 1 >= ecBreakerThreshold cfg -> tripped
-        | otherwise -> Closed (n + 1)
-    _ -> tripped
-  where
-    tripped = Open (addUTCTime (ecBreakerCooldown cfg) now)
+tripOnFailure cfg = recordFailure (ecBreakerThreshold cfg) (ecBreakerCooldown cfg)
 
 -- ── evaluation ────────────────────────────────────────────────────────────────
 
