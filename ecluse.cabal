@@ -138,6 +138,7 @@ test-suite ecluse-unit
     EcluseSpec
     Ecluse.CompositionSpec
     Ecluse.ConfigSpec
+    Ecluse.Credential.CodeArtifactSpec
     Ecluse.CredentialSpec
     Ecluse.EnvSpec
     Ecluse.LogSpec
@@ -166,6 +167,7 @@ test-suite ecluse-unit
   build-tool-depends: hspec-discover:hspec-discover ^>=2.11
   build-depends:
     , aeson             ^>=2.2
+    , amazonka          ^>=2.0
     , bytestring        ^>=0.12
     , cache             ^>=0.1.3
     , case-insensitive  ^>=1.2
