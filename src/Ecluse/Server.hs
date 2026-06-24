@@ -91,7 +91,7 @@ import System.Posix.Process (exitImmediately)
 import System.Posix.Signals (Handler (CatchOnce), installHandler, sigINT, sigTERM)
 import UnliftIO.Async (withAsync)
 
-import Ecluse.Env (Env)
+import Ecluse.Env (Env, envWorkerHeartbeat)
 import Ecluse.Server.Context (
     MountBinding (..),
     RequestCtx (RequestCtx),
@@ -100,6 +100,7 @@ import Ecluse.Server.Context (
 import Ecluse.Server.Pipeline (servePackument, serveTarball)
 import Ecluse.Server.Response (MountRenderer, RenderedBody (RenderedBody), renderError)
 import Ecluse.Server.Route (Route (..))
+import Ecluse.Worker (heartbeatHealthyNow)
 
 -- ── server configuration ─────────────────────────────────────────────────────
 
@@ -327,7 +328,7 @@ match routes the remainder through that mount's binding; no match is the neutral
 dispatch :: ServerConfig -> Env -> Application
 dispatch cfg env request respond =
     case pathInfo request of
-        ["livez"] -> respond (liveness env)
+        ["livez"] -> liveness env >>= respond
         ["readyz"] -> readiness (scDrain cfg) >>= respond
         segments -> case matchMount (scMounts cfg) segments of
             Nothing -> respond notFound
@@ -432,16 +433,23 @@ notFound =
 
 -- ── health probes ────────────────────────────────────────────────────────────
 
-{- Liveness (@\/livez@): @200@ while the process is responsive. The architecture
-folds the mirror worker's consume-loop heartbeat into single-process liveness so a
-stalled worker fails it (see @docs\/architecture\/cloud-backends.md@ → "Process model").
+{- Liveness (@\/livez@): @200@ while the process is responsive, @503@ once the
+single-process mirror worker has stalled. The architecture folds the worker's
+consume-loop heartbeat into single-process liveness, so a worker whose loop has gone
+quiet past the staleness threshold ('Ecluse.Worker.workerHeartbeatStaleAfter') fails
+liveness here (see @docs\/architecture\/cloud-backends.md@ → "Process model"); a
+worker still starting (no poll yet) or polling normally stays @200@.
 
 Liveness stays @200@ __throughout__ a graceful drain: a draining instance is alive
 and finishing its in-flight work, not unhealthy, so an orchestrator must not kill it
-prematurely — that is the readiness probe's job (see 'readiness').
+prematurely — that is the readiness probe's job (see 'readiness'). Worker staleness
+is the only thing that fails it.
 -}
-liveness :: Env -> Response
-liveness _env = jsonResponse status200 "{\"status\":\"live\"}"
+liveness :: Env -> IO Response
+liveness env =
+    heartbeatHealthyNow (envWorkerHeartbeat env) <&> \case
+        True -> jsonResponse status200 "{\"status\":\"live\"}"
+        False -> jsonResponse status503 "{\"status\":\"worker stalled\"}"
 
 {- Readiness (@\/readyz@): @200@ when config is loaded and the listener is serving,
 @503@ once the instance is __draining__. It is deliberately __lenient about

@@ -6,6 +6,7 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteArray.Encoding (Base (Base16, Base64), convertToBase)
 import Data.ByteString qualified as BS
 import Data.Text qualified as T
+import Data.Time (UTCTime (UTCTime), addUTCTime, fromGregorian, secondsToDiffTime)
 import Katip (Environment (Environment), Namespace (Namespace), initLogEnv)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types (status200)
@@ -19,7 +20,7 @@ import Ecluse.App (runApp)
 import Ecluse.Credential (AuthToken (..), CredentialProvider, mkSecret, staticProvider)
 import Ecluse.Ecosystem (Ecosystem (Npm))
 import Ecluse.Env (Env, envWorkerHeartbeat, lastPoll, newEnv, newWorkerHeartbeat)
-import Ecluse.Package (Hash (Hash), HashAlg (SHA1, SRI), PackageName, mkPackageName)
+import Ecluse.Package (Hash (Hash), HashAlg (Blake2b, SHA1, SRI), PackageName, mkPackageName)
 import Ecluse.Queue (
     MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize),
     MirrorJob (..),
@@ -43,9 +44,11 @@ import Ecluse.Version (Version, mkVersion)
 import Ecluse.Worker (
     IntegrityResult (IntegrityMismatch, IntegrityVerified),
     JobOutcome (Dropped, Retried, Succeeded),
+    heartbeatHealthy,
     processBatch,
     processJob,
     verifyIntegrity,
+    workerHeartbeatStaleAfter,
     workerLoop,
  )
 
@@ -64,6 +67,16 @@ trueSha1 = decodeUtf8 (convertToBase Base16 (hashlazy (toLazy tarballBytes) :: D
 -- | The SRI (@sha512-<base64>@) of 'tarballBytes'.
 trueSri :: Text
 trueSri = "sha512-" <> decodeUtf8 (convertToBase Base64 (hashlazy (toLazy tarballBytes) :: Digest SHA512) :: ByteString)
+
+{- | A well-formed sha512 SRI that does NOT match 'tarballBytes' (it is the digest of
+different bytes) — for the tamper-direction regression: a real sha512 that fails.
+-}
+falseSri :: Text
+falseSri = "sha512-" <> decodeUtf8 (convertToBase Base64 (hashlazy "completely-different-bytes" :: Digest SHA512) :: ByteString)
+
+-- | A fixed reference instant for the heartbeat-staleness assertions.
+epoch :: UTCTime
+epoch = UTCTime (fromGregorian 2020 1 1) (secondsToDiffTime 0)
 
 pkg :: PackageName
 pkg = mkPackageName Npm Nothing "thing"
@@ -174,18 +187,30 @@ enqueueAndReceive queue job = do
 spec :: Spec
 spec = do
     describe "verifyIntegrity" $ do
-        it "verifies bytes that match a SHA-1 shasum" $
+        it "verifies a sha1-only artifact against its sha1 (no stronger digest present)" $
             verifyIntegrity (Hash SHA1 trueSha1 :| []) tarballBytes `shouldBe` IntegrityVerified
 
-        it "verifies bytes that match an SRI (sha512) digest" $
+        it "verifies an SRI (sha512)-only artifact against its sha512" $
             verifyIntegrity (Hash SRI trueSri :| []) tarballBytes `shouldBe` IntegrityVerified
 
-        it "verifies when any one of several digests matches" $
-            verifyIntegrity (Hash SHA1 "deadbeef" :| [Hash SRI trueSri]) tarballBytes
+        it "verifies against the strongest digest when both sha512 and sha1 match" $
+            verifyIntegrity (Hash SHA1 trueSha1 :| [Hash SRI trueSri]) tarballBytes
                 `shouldBe` IntegrityVerified
 
-        it "reports a mismatch when no digest matches" $
+        it "REJECTS bytes that match the weak sha1 but fail the strong sha512 (tamper guard)" $
+            -- The security crux of the most-authoritative-digest rule: a collision
+            -- against the broken SHA-1 must NOT admit an artifact whose sha512 fails.
+            verifyIntegrity (Hash SHA1 trueSha1 :| [Hash SRI falseSri]) tarballBytes
+                `shouldSatisfy` isMismatch
+
+        it "reports a mismatch when the sole digest does not match" $
             verifyIntegrity (Hash SHA1 "deadbeef" :| []) tarballBytes
+                `shouldSatisfy` isMismatch
+
+        it "fails closed when the strongest present digest is in an uncomputable algorithm" $
+            -- A blake2b ranks at the top but the worker cannot compute it, so it must
+            -- NOT fall back to the (matching) sha1 — fail closed.
+            verifyIntegrity (Hash Blake2b "whatever" :| [Hash SHA1 trueSha1]) tarballBytes
                 `shouldSatisfy` isMismatch
 
         it "is case-insensitive on the hex shasum" $
@@ -270,7 +295,7 @@ spec = do
                     redelivered <- pollUntilRedelivered queue 5
                     redelivered `shouldBe` True
 
-    describe "heartbeat" $
+    describe "heartbeat" $ do
         it "advances the last-successful-poll once the loop has polled the queue" $
             withWorkerEnv (Right ()) $ \env _queue _logRef -> do
                 pollBefore <- lastPoll (envWorkerHeartbeat env)
@@ -281,6 +306,17 @@ spec = do
                 _ <- timeout 200000 (runApp env workerLoop)
                 pollAfter <- lastPoll (envWorkerHeartbeat env)
                 pollAfter `shouldSatisfy` isJust
+
+    describe "heartbeatHealthy (the /livez staleness rule)" $ do
+        it "is healthy before the first poll (the worker is starting, not stalled)" $
+            heartbeatHealthy epoch Nothing `shouldBe` True
+
+        it "is healthy for a poll within the staleness window" $
+            heartbeatHealthy (addUTCTime 10 epoch) (Just epoch) `shouldBe` True
+
+        it "is unhealthy once the last poll is staler than the threshold" $
+            heartbeatHealthy (addUTCTime (workerHeartbeatStaleAfter + 1) epoch) (Just epoch)
+                `shouldBe` False
 
 -- Poll the queue up to @n@ times, returning 'True' as soon as a message reappears
 -- (the un-acked job redelivered). The in-memory double may hold a visibility-extended

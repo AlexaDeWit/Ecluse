@@ -33,9 +33,10 @@ genuinely fatal error propagates and takes the process down (fail-stop), while
 transient faults self-recover here. A successful poll advances the
 'Ecluse.Env.WorkerHeartbeat', so a stalled loop is visible to the liveness probe.
 
-The loop is bracketed, so process shutdown tears it down cleanly; an in-flight,
-un-acked message simply redelivers — safe, because publishing is idempotent (a
-version already present is success).
+Shutdown tears the loop down cleanly: the composition root runs it under
+@concurrently_@ within the @withEnv@ resource bracket, so process teardown cancels
+the loop thread and an in-flight, un-acked message simply redelivers — safe, because
+publishing is idempotent (a version already present is success).
 
 == Ack within the visibility budget
 
@@ -58,6 +59,11 @@ module Ecluse.Worker (
     processJob,
     JobOutcome (..),
 
+    -- * Liveness
+    workerHeartbeatStaleAfter,
+    heartbeatHealthy,
+    heartbeatHealthyNow,
+
     -- * Integrity verification
     IntegrityResult (..),
     verifyIntegrity,
@@ -65,9 +71,10 @@ module Ecluse.Worker (
 
 import Crypto.Hash (Digest, SHA1, SHA512, hashlazy)
 import Data.ByteArray.Encoding (Base (Base16, Base64), convertToBase)
+import Data.Foldable (maximumBy)
 import Data.List.NonEmpty qualified as NE
 import Data.Text qualified as T
-import Data.Time (getCurrentTime)
+import Data.Time (NominalDiffTime, UTCTime, diffUTCTime, getCurrentTime)
 import Katip (Severity (ErrorS, InfoS, WarningS), katipAddNamespace, logFM, ls)
 import Network.HTTP.Client (HttpException, Manager, Request, brRead, responseBody, withResponse)
 import UnliftIO (tryAny)
@@ -77,6 +84,8 @@ import UnliftIO.Exception (try)
 import Ecluse.App (App, runApp)
 import Ecluse.Env (
     Env (envManager, envQueue, envRegistry, envWorkerHeartbeat),
+    WorkerHeartbeat,
+    lastPoll,
     recordPoll,
  )
 import Ecluse.Package (Hash (hashAlg, hashValue), HashAlg (Blake2b, MD5, SHA1, SHA256, SHA512, SRI), renderPackageName)
@@ -98,7 +107,7 @@ import Ecluse.Registry.Npm (
     artifactRequestByUrl,
     npmPublishDocument,
  )
-import Ecluse.Security (boundedRead, defaultLimits)
+import Ecluse.Security (Limits (maxBodyBytes), boundedRead, defaultLimits)
 import Ecluse.Version (renderVersion)
 
 -- ── entry point ───────────────────────────────────────────────────────────────
@@ -146,6 +155,52 @@ workerLoop = forever $ do
 backoff :: App ()
 backoff = threadDelay 1_000_000
 
+-- ── liveness ──────────────────────────────────────────────────────────────────
+
+{- | How long the worker's last successful poll may be stale before the loop is
+considered stalled — the staleness threshold the liveness probe applies.
+
+It is a generous multiple of the long-poll cadence: a healthy idle worker still
+completes a poll at least every 'Ecluse.Queue.Sqs.sqsWaitSeconds' (≤ 20s by
+default), so a gap several times that is a genuine stall, not an idle queue. Set
+well above one poll window so liveness never flaps on normal scheduling jitter.
+-}
+workerHeartbeatStaleAfter :: NominalDiffTime
+workerHeartbeatStaleAfter = 120
+
+{- | Whether the worker's consume loop is healthy as of @now@, given its last
+successful poll. This is the liveness signal the single-process @\/livez@ probe
+folds in (see "Ecluse.Server"), distinct from HTTP readiness.
+
+* 'Nothing' (no poll yet) is __healthy__: the worker is still starting, not stalled.
+* A poll within 'workerHeartbeatStaleAfter' is healthy.
+* A poll older than that is __unhealthy__: the loop has gone quiet for too long.
+
+>>> import Data.Time (UTCTime (UTCTime), fromGregorian, secondsToDiffTime)
+>>> let t0 = UTCTime (fromGregorian 2020 1 1) (secondsToDiffTime 0)
+>>> heartbeatHealthy t0 Nothing
+True
+
+>>> let now = UTCTime (fromGregorian 2020 1 1) (secondsToDiffTime 10)
+>>> heartbeatHealthy now (Just t0)
+True
+
+>>> let later = UTCTime (fromGregorian 2020 1 1) (secondsToDiffTime 300)
+>>> heartbeatHealthy later (Just t0)
+False
+-}
+heartbeatHealthy :: UTCTime -> Maybe UTCTime -> Bool
+heartbeatHealthy _ Nothing = True
+heartbeatHealthy now (Just polledAt) = diffUTCTime now polledAt <= workerHeartbeatStaleAfter
+
+{- | Read the worker heartbeat and decide liveness against the current wall clock —
+the @IO@ wrapper the liveness probe calls. 'True' while the consume loop is alive
+(or still starting); 'False' once the last successful poll is staler than
+'workerHeartbeatStaleAfter'.
+-}
+heartbeatHealthyNow :: WorkerHeartbeat -> IO Bool
+heartbeatHealthyNow heartbeat = heartbeatHealthy <$> getCurrentTime <*> lastPoll heartbeat
+
 {- | Process one received batch __sequentially__, so each job gets the full
 visibility budget rather than competing with its batch-mates for it. A batch is at
 most the queue's configured batch size (≤ 10), so sequential processing is a
@@ -161,7 +216,6 @@ processMessage :: QueueMessage -> App ()
 processMessage message =
     processJob (msgReceipt message) (msgJob message) >>= \case
         Succeeded -> ackMessage (msgReceipt message)
-        AlreadyPresent -> ackMessage (msgReceipt message)
         Dropped reason -> do
             -- A non-retryable fault (a tampered artifact, an unformable URL): the
             -- job can never succeed, so it must not redeliver forever. Ack it to
@@ -183,12 +237,12 @@ ackMessage receipt = do
 message is acked or left to redeliver.
 -}
 data JobOutcome
-    = -- | Published (a fresh write). Ack.
-      Succeeded
-    | {- | The version was already present at the mirror target (an idempotent
-      redelivery — a @409@-equivalent the registry handle treats as success). Ack.
+    = {- | The publish succeeded, so the job is acked. This covers an idempotent
+      redelivery too: a version already present at the mirror target is a @409@ the
+      registry handle treats as success ('Ecluse.Registry.publishArtifact'), so it
+      surfaces here as 'Succeeded' rather than a distinct case.
       -}
-      AlreadyPresent
+      Succeeded
     | {- | A __non-retryable__ fault: the bytes did not match the serve-time digest
       (tamper), or the publish URL was unformable (misconfiguration). Redelivery
       cannot help, so the job is dropped after alarming. Carries the reason.
@@ -256,14 +310,14 @@ publishVerified receipt job bytes = do
 -- ── artifact fetch ────────────────────────────────────────────────────────────
 
 {- Fetch the artifact bytes from the public upstream at the job's authoritative
-URL, buffering them so they can be verified and attached to the publish document.
-A network failure is returned as a transient reason ('Retried' at the call site),
-not thrown, so a flaky upstream redelivers rather than killing the iteration.
-
-The read is bounded by 'Ecluse.Security.maxBodyBytes': a publish-by-document needs
-the whole tarball in hand to base64-encode it, so the bytes are necessarily held,
-but the bound caps that at a configured ceiling — an upstream returning an
-unbounded body is refused fail-closed rather than exhausting memory. -}
+URL into memory. Publishing is __publish-by-document__: the npm @PUT \/{pkg}@ carries
+the tarball base64-encoded under @_attachments@, so the whole artifact must be in
+hand to verify it and assemble the document. This path is therefore
+__bounded-buffered__, not streamed — the bytes are necessarily held — but the read
+is capped (see 'workerArtifactLimits'), so an upstream returning an unbounded body
+is refused fail-closed rather than exhausting memory. A network failure is returned
+as a transient reason ('Retried' at the call site), not thrown, so a flaky upstream
+redelivers rather than killing the iteration. -}
 fetchArtifactBytes :: Text -> App (Either Text ByteString)
 fetchArtifactBytes url = do
     manager <- asks envManager
@@ -286,20 +340,29 @@ fetchArtifactBytes url = do
             { npmBaseUrl = url
             , npmManager = manager
             , npmToken = Nothing
-            , npmLimits = defaultLimits
+            , npmLimits = workerArtifactLimits
             }
 
 {- Open the artifact request and read its body chunk-by-chunk through the bounded
-read, returning the whole bytes when within the response bound or a typed
+read, returning the whole bytes when within the artifact cap or a typed
 'ResponseBoundExceeded' otherwise. A network failure throws (caught by the caller
-as a transient reason). The bound caps the necessarily-buffered tarball at a
-configured ceiling so an unbounded body is refused fail-closed. -}
+as a transient reason). The cap bounds the necessarily-buffered tarball so an
+unbounded body is refused fail-closed. -}
 boundedFetch :: Manager -> Request -> IO (Either ResponseBoundExceeded ByteString)
 boundedFetch manager request =
     withResponse request manager $ \response ->
-        boundedRead defaultLimits (brRead (responseBody response)) >>= \case
+        boundedRead workerArtifactLimits (brRead (responseBody response)) >>= \case
             Right body -> pure (Right body)
             Left limitErr -> pure (Left (ResponseBoundExceeded limitErr))
+
+{- The response-bound budget for an __artifact__ fetch. The metadata-path
+'Ecluse.Security.defaultLimits' caps bodies at 16 MiB, which is fine for a packument
+but far too small for a real tarball, so the artifact cap is raised to a realistic
+ceiling while the other limits (version count, nesting depth) stay at their defaults
+(they do not apply to an opaque tarball). A body past this is refused fail-closed
+rather than buffered, bounding the worker's memory per in-flight job. -}
+workerArtifactLimits :: Limits
+workerArtifactLimits = defaultLimits{maxBodyBytes = 512 * 1024 * 1024}
 
 -- ── visibility helpers ──────────────────────────────────────────────────────────
 
@@ -313,10 +376,13 @@ holdForLongPublish receipt = do
     _ <- tryAny (liftIO (extendVisibility queue receipt extendBy))
     pass
   where
-    -- A generous window relative to the default 30s visibility timeout, so even a
-    -- large-artifact publish completes inside one extension.
+    -- The window a single publish is given before the message could redeliver
+    -- mid-write. A typical artifact publishes well inside this; a publish slower
+    -- than it just earns one harmless redelivery (idempotent re-publish). Kept
+    -- modest rather than huge so a transient publish *failure* still retries
+    -- promptly — the extension must not become a long backoff on a fast 5xx.
     extendBy :: Seconds
-    extendBy = Seconds 120
+    extendBy = Seconds 10
 
 -- ── integrity verification ──────────────────────────────────────────────────────
 
@@ -325,19 +391,31 @@ A sum type, not a 'Bool', so the mismatch carries the detail an operator needs t
 explain why a publish was refused.
 -}
 data IntegrityResult
-    = -- | The bytes matched at least one admitted digest.
+    = -- | The bytes matched the most authoritative admitted digest.
       IntegrityVerified
-    | -- | No admitted digest matched. Carries a human-readable detail.
+    | {- | The bytes failed the integrity gate. Carries a human-readable detail (the
+      digest they were checked against, or that the strongest one was uncomputable).
+      -}
       IntegrityMismatch Text
     deriving stock (Eq, Show)
 
-{- | Verify fetched artifact bytes against the serve-time-admitted integrity
-digests. The bytes pass when they match __any__ of the digests (a version may carry
-both a modern SRI digest and the legacy SHA-1 shasum); a digest in an algorithm the
-worker cannot compute is skipped, not treated as a pass.
+{- | Verify fetched artifact bytes against the __most authoritative__ integrity
+digest the version carries — never against a weaker one while a stronger is present.
 
-This is the tamper gate before a publish: a mismatch must fail the job, never
-publish a corrupt or substituted artifact into the private upstream.
+A real npm version carries both a modern SRI @sha512@ digest and the legacy SHA-1
+@shasum@. Passing on /any/ match would let an artifact that matches the weak SHA-1
+but fails the strong @sha512@ through — and SHA-1 collision resistance is broken, so
+that is exploitable. So the gate ranks the admitted digests by algorithm authority
+(strongest first: @sha512@ \/ @blake2b@ > @sha256@ > @sha1@ > @md5@), and checks the
+bytes against the strongest one present: the bytes pass __iff__ that digest matches.
+A weaker digest can neither override nor rescue a failed strong one.
+
+If the strongest digest present is in an algorithm the worker cannot compute, the
+gate __fails closed__ rather than falling back to a weaker digest — a tampered
+artifact must never be admitted on the strength of a hash an attacker could forge.
+
+This is the tamper gate before a publish: a mismatch fails the job and never
+publishes a corrupt or substituted artifact into the private upstream.
 
 >>> import Ecluse.Package (Hash (Hash), HashAlg (SHA1))
 >>> verifyIntegrity (Hash SHA1 "0a4d55a8d778e5022fab701977c5d840bbc486d0" :| []) "Hello World"
@@ -345,44 +423,82 @@ IntegrityVerified
 
 >>> import Ecluse.Package (Hash (Hash), HashAlg (SHA1))
 >>> verifyIntegrity (Hash SHA1 "deadbeef" :| []) "Hello World"
-IntegrityMismatch "no admitted digest (SHA1) matched the fetched bytes"
+IntegrityMismatch "the SHA1 digest did not match the fetched bytes"
 -}
 verifyIntegrity :: NonEmpty Hash -> ByteString -> IntegrityResult
-verifyIntegrity hashes bytes
-    | any matches hashes = IntegrityVerified
-    | otherwise =
-        IntegrityMismatch
-            ( "no admitted digest ("
-                <> T.intercalate ", " (map (show . hashAlg) (NE.toList hashes))
-                <> ") matched the fetched bytes"
-            )
+verifyIntegrity hashes bytes =
+    let strongest = maximumBy (comparing authority) hashes
+     in case computeLike strongest of
+            Nothing ->
+                -- Fail closed: the strongest present digest is in an algorithm we
+                -- cannot recompute, so we cannot prove the bytes — never drop to a
+                -- weaker digest an attacker could forge.
+                IntegrityMismatch
+                    ( "the strongest admitted digest ("
+                        <> describe strongest
+                        <> ") is in an algorithm the worker cannot verify"
+                    )
+            Just computed
+                | computed == T.toLower (hashValue strongest) -> IntegrityVerified
+                | otherwise ->
+                    IntegrityMismatch ("the " <> describe strongest <> " digest did not match the fetched bytes")
   where
-    matches :: Hash -> Bool
-    matches h = case computeLike h of
-        Nothing -> False
-        Just computed -> computed == T.toLower (hashValue h)
+    lazyBytes = toLazy bytes
 
-    -- Compute the digest of the fetched bytes in the same wire encoding the given
-    -- hash uses, so the comparison is like-for-like. 'Nothing' for an algorithm the
-    -- worker does not verify (its presence alone never passes the bytes).
+    -- Algorithm authority, strongest first, so 'maximumBy' selects the digest a
+    -- match must be proven against. An SRI string is ranked by its embedded
+    -- algorithm (npm's @sha512-…@ ranks as 'SHA512'); an unrecognised SRI alg ranks
+    -- below everything so it never wins over a digest we can actually check.
+    authority :: Hash -> Int
+    authority h = case effectiveAlg h of
+        Just SHA512 -> 5
+        Just Blake2b -> 5
+        Just SHA256 -> 4
+        Just SHA1 -> 2
+        Just MD5 -> 1
+        Just SRI -> 0 -- an SRI whose inner alg did not resolve; never authoritative
+        Nothing -> 0
+
+    -- The algorithm a hash effectively asserts: its tag directly, or — for an SRI
+    -- string — the algorithm named in its @"<alg>-<base64>"@ prefix.
+    effectiveAlg :: Hash -> Maybe HashAlg
+    effectiveAlg h = case hashAlg h of
+        SRI -> sriAlg (hashValue h)
+        alg -> Just alg
+
+    -- Parse an SRI string's leading algorithm name. Only @sha512@ is computable
+    -- here; any other (or malformed) prefix yields 'Nothing', so it cannot win the
+    -- authority ranking and, if it somehow did, fails closed in 'computeLike'.
+    sriAlg :: Text -> Maybe HashAlg
+    sriAlg sri = case fst (T.breakOn "-" sri) of
+        "sha512" -> Just SHA512
+        _ -> Nothing
+
+    -- Recompute the chosen digest over the fetched bytes in its own wire encoding,
+    -- for a like-for-like compare. 'Nothing' for an algorithm the worker cannot
+    -- compute (the fail-closed case above).
     computeLike :: Hash -> Maybe Text
     computeLike h = case hashAlg h of
         SHA1 -> Just (hexLower (hashlazy lazyBytes :: Digest SHA1))
+        SHA512 -> Just (hexLower (hashlazy lazyBytes :: Digest SHA512))
         SRI -> sriDigest (hashValue h)
         SHA256 -> Nothing
-        SHA512 -> Nothing
         MD5 -> Nothing
         Blake2b -> Nothing
 
-    lazyBytes = toLazy bytes
-
-    -- A Subresource-Integrity string is @"<alg>-<base64>"@. We support sha512 SRI
-    -- (npm's @dist.integrity@): recompute SHA-512 over the bytes, base64-encode it,
-    -- and render the same @"sha512-<base64>"@ string for a like-for-like compare.
+    -- A Subresource-Integrity string is @"<alg>-<base64>"@. The worker computes
+    -- @sha512@ SRI (npm's @dist.integrity@): recompute SHA-512, base64-encode it, and
+    -- render the same @"sha512-<base64>"@ string. Any other SRI algorithm is
+    -- uncomputable here, so it fails closed rather than passing.
     sriDigest :: Text -> Maybe Text
     sriDigest sri = case T.breakOn "-" sri of
         ("sha512", _) -> Just (T.toLower ("sha512-" <> base64 (hashlazy lazyBytes :: Digest SHA512)))
         _ -> Nothing
+
+    describe :: Hash -> Text
+    describe h = case hashAlg h of
+        SRI -> "SRI " <> fst (T.breakOn "-" (hashValue h))
+        alg -> show alg
 
 -- The lower-cased hex encoding of a digest (matching npm's hex shasum form).
 hexLower :: Digest a -> Text
