@@ -51,6 +51,15 @@ spec = do
             cmp RubyGems "1.0.0.beta1" "1.0.0" `shouldBe` Just LT
         it "RubyGems orders numeric segments numerically" $
             cmp RubyGems "1.10.0" "1.9.0" `shouldBe` Just GT
+        -- Gem::Version#canonical_segments drops a release trailing zero before the
+        -- prerelease, so 2.0.a keys as [2,"a"]: 2.t > 2.0.a (a live-oracle
+        -- differential counterexample), and 2.0.a == 2.a.
+        it "RubyGems canonicalises a release trailing zero before a prerelease (2.t > 2.0.a)" $
+            cmp RubyGems "2.t" "2.0.a" `shouldBe` Just GT
+        it "RubyGems equates versions that canonicalise alike (2.0.a == 2.a)" $
+            cmp RubyGems "2.0.a" "2.a" `shouldBe` Just EQ
+        it "RubyGems strips a release trailing zero (2.0 == 2)" $
+            cmp RubyGems "2.0" "2" `shouldBe` Just EQ
         it "is Nothing when a version cannot be parsed" $
             cmp Npm "not a version" "1.0.0" `shouldBe` Nothing
         it "is reflexive — EQ when parseable, Nothing otherwise" $
