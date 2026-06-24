@@ -44,6 +44,39 @@ reason. "It reads a little cleaner" isn't one.
 
 ---
 
+## Coverage
+
+Coverage is reported to **Codecov**, which is the **merged authority**: it sums the per-tier
+flag uploads (unit ∪ integration) into one project total. The full strategy, gates, and
+Codecov knobs live in [Testing Strategy](docs/testing.md) → "Coverage"; the contributor-facing
+commands are:
+
+- **`make coverage` — the canonical command.** Builds *both* gating tiers instrumented
+  (HPC, in an isolated `dist-coverage/`), `hpc combine --union`s their `.tix`, and writes the
+  combined Codecov JSON to `coverage/combined.json`. This reproduces the **merged total Codecov
+  shows**, so a local read agrees with the dashboard. It runs the integration tier, so it
+  **needs a running Docker daemon** (the ministack containers; the Nix shell ships the
+  toolchain, not the daemon). With no daemon it fails with a clear message pointing at the fast
+  path.
+- **`make coverage-unit` (≡ `make coverage SUITE=ecluse-unit`) — the fast, Docker-free loop.**
+  Measures the **unit tier only**. It is a **partial view** Codecov merges with the integration
+  tier — the run prints this loudly — so it under-counts every module the integration tier
+  exercises (the SQS `MirrorQueue` backend, the worker's real fetch/publish path). Reach for it
+  for a quick local number; reach for bare `make coverage` for the honest, Codecov-matching one.
+- **`make coverage SUITE=<tier>` — one tier's report.** The per-flag form CI uses: each tier
+  (`ecluse-unit`, `ecluse-integration`) writes its own `coverage/<tier>.json`, uploaded under
+  its own Codecov flag. Keep this shape — the per-flag uploads depend on it.
+
+**Reporting divergence is not a coverage gap.** This combined command exists to kill a
+*reporting* confusion (a local single-tier read disagreeing with the merged dashboard). It does
+not move real coverage: if the **merged** report still shows a module's error arms red, that is
+a genuine uncovered path the tests owe — fix it with a test, not with tooling.
+
+The generators are [`scripts/coverage.sh`](scripts/coverage.sh) (one tier) and
+[`scripts/coverage-combined.sh`](scripts/coverage-combined.sh) (the merged view).
+
+---
+
 ## Releases, attestations & vulnerability scanning
 
 Écluse ships as a lean, reproducible OCI image built by Nix (`make docker-build`), published

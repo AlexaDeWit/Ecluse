@@ -1,7 +1,16 @@
 #!/usr/bin/env bash
 #
-# Generate a coverage report for one test suite, in Codecov's native JSON format,
+# Generate a coverage report for ONE test suite, in Codecov's native JSON format,
 # for upload by the Codecov action. See CONTRIBUTING.md -> "Coverage".
+#
+# This is a PARTIAL view: a single tier is only one of the flags Codecov merges
+# into the project total (unit ∪ integration). CI uses this per-tier form on
+# purpose — each tier uploads under its own flag — but a developer reading a single
+# tier's number is under-counting every module the other tier exercises. For the
+# merged picture that matches the Codecov dashboard, run the combined report:
+#   scripts/coverage-combined.sh   (make coverage)   — needs Docker.
+# Each non-combined run prints this caveat (suppressed via
+# ECLUSE_COVERAGE_QUIET_PARTIAL=1 when the combined script drives it internally).
 #
 # Why we drive HPC by hand instead of `hpc-codecov cabal:<suite>`: hpc-codecov's
 # `cabal:` auto-discovery builds a wrong .mix path for cabal's modern
@@ -19,6 +28,25 @@ suite="${1:-ecluse-unit}"
 builddir="dist-coverage" # isolated from dist-newstyle so the normal `cabal
                          # build` cache isn't invalidated by -fhpc instrumentation
 outdir="coverage"
+
+# Loudly remind that a single tier is a PARTIAL view Codecov merges with the other
+# tier — the divergence this machinery exists to prevent (a local single-tier read
+# under-counts every module the other tier covers). coverage-combined.sh sets
+# ECLUSE_COVERAGE_QUIET_PARTIAL when it drives this per tier, because it then prints
+# the merged total itself.
+if [ -z "${ECLUSE_COVERAGE_QUIET_PARTIAL:-}" ]; then
+  case "$suite" in
+    ecluse-unit) other="ecluse-integration" ;;
+    ecluse-integration) other="ecluse-unit" ;;
+    *) other="the other gating tier" ;;
+  esac
+  {
+    echo "coverage: PARTIAL VIEW — measuring '$suite' ONLY."
+    echo "  Codecov merges this with '$other' into the project total, so this number"
+    echo "  under-counts every module '$other' exercises. For the merged, Codecov-matching"
+    echo "  picture run:  make coverage   (combined unit ∪ integration; needs Docker)."
+  } >&2
+fi
 
 # Instrumented build + run of just this suite.
 cabal test "$suite" \
