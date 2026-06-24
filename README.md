@@ -14,6 +14,11 @@ controlled passage every dependency clears before it reaches your build.
 why the off-the-shelf options didn't fit, and the reasoning behind the design; a fair guide
 to other tools in this space is in [`ALTERNATIVES.md`](ALTERNATIVES.md).
 
+**Built with AI.** Most of the implementation here has been written with heavy AI
+assistance during this bootstrapping phase, under a documented review process and a hard
+CI gate — see [`AI-DISCLOSURE.md`](AI-DISCLOSURE.md) for what is and isn't AI-written, and
+how to verify the result rather than trust it.
+
 > **Status: pre-launch — under active development; no GA release yet.** The
 > functional core and the npm **packument** and **tarball** paths are in place; the
 > **mirror worker** and the **cloud backends** are still landing, so
