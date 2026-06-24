@@ -91,9 +91,13 @@ jobs:
 
       # Instrumented re-run of the unit suite in a separate build dir, emitting
       # Codecov-native JSON. Only our small package recompiles (-fhpc); deps come
-      # from the cached cabal store, so this is cheap.
+      # from the cached cabal store, so this is cheap. EXPLICIT SUITE=ecluse-unit:
+      # bare `make coverage` is now the COMBINED (unit ∪ integration) report for
+      # local use, so each CI step names its tier to keep emitting that tier's own
+      # per-flag JSON (coverage/ecluse-unit.json) — the unit-flag upload depends on
+      # it. See CONTRIBUTING.md → "Coverage".
       - name: Coverage (unit)
-        run: nix develop .#ci --command make coverage
+        run: nix develop .#ci --command make coverage SUITE=ecluse-unit
 
       - name: Upload unit coverage to Codecov
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0

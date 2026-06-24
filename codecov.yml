@@ -37,6 +37,21 @@ coverage:
 
 # Flags let one combined gate span multiple suites. carryforward keeps a suite's
 # last-known coverage on runs that don't re-upload it (e.g. a job that skipped).
+#
+# carryforward is a SAFETY NET here, not an active path — settled, not a defect.
+# The concern was: on a PR that *adds* a module, could a carried-forward stale flag
+# report (one predating the module) make the merged view show the new module
+# uncovered? It can't, because both flags re-upload on EVERY commit: the single
+# `build-test` job runs `Coverage (unit)` and `Coverage (integration)`
+# unconditionally (no `if:` guard, `fail_ci_if_error: true`), so each flag always
+# lands a fresh report and carryforward never substitutes. It would only kick in if
+# an upload were genuinely missing (a flag's job removed/skipped), and then keeping
+# the last-known number beats dropping the flag to 0% and firing a false regression.
+# Concretely, `Worker.hs` (added in #255) is linked AND exercised by BOTH tiers —
+# each suite has its own `Ecluse.WorkerSpec` — so both flags attribute it correctly
+# the moment it lands. (Worker.hs has genuinely uncovered error arms even in the
+# merged view; that's a real test gap, addressed by a test, not a carryforward
+# artifact — see docs/testing.md → "Coverage".)
 flags:
   unit:
     paths:

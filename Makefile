@@ -24,7 +24,7 @@ HADDOCK_FLAGS := --haddock-hyperlink-source --haddock-quickjump
 
 .DEFAULT_GOAL := help
 .PHONY: help update build test test-integration test-smoke test-all doctest \
-        coverage freeze gen-version-fixtures new-worktree format format-check lint sast \
+        coverage coverage-unit freeze gen-version-fixtures new-worktree format format-check lint sast \
         cabal-check lint-workflows lint-scripts weeder check gate run docs \
         docs-check docs-site site nix-build nix-check docker-build docker-push sbom scan \
         scan-vulnix clean
@@ -74,12 +74,32 @@ test-all: test test-integration test-smoke ## Run every test suite
 doctest: ## Run the Haddock >>> examples as tests (doctest)
 	$(NIX) cabal repl --with-ghc=doctest --repl-options="-Wwarn -Wno-missing-export-lists" lib:ecluse
 
-# Suite to measure for `coverage`; override to cover another gating tier, e.g.
-# `make coverage SUITE=ecluse-integration` (needs Docker, like the suite itself).
+# Coverage has two shapes (see CONTRIBUTING.md → "Coverage"):
+#   make coverage                    COMBINED unit ∪ integration — the picture
+#                                    Codecov shows (its merged project total).
+#                                    Needs Docker (the integration tier). This is
+#                                    the canonical local command: a local read of
+#                                    it AGREES with the dashboard.
+#   make coverage SUITE=ecluse-unit  ONE tier's report (the per-flag JSON CI
+#                                    uploads). A PARTIAL view the run flags loudly;
+#                                    `ecluse-unit` is the fast, Docker-free loop.
+#                                    `make coverage-unit` is the same thing, named.
+# CI calls the explicit SUITE= form for each tier so each flag keeps its own JSON.
+#
+# Bare `make coverage` runs the combined report; passing SUITE= on the command line
+# selects the single-tier path. `origin` distinguishes a command-line SUITE= from
+# this default, so the bare target is combined while `SUITE=…` stays per-tier.
 SUITE ?= ecluse-unit
 
-coverage: ## Generate $(SUITE) coverage as Codecov JSON under coverage/
+coverage: ## Combined unit ∪ integration coverage matching Codecov (Docker); SUITE=<tier> for one tier
+ifeq ($(origin SUITE),command line)
 	$(NIX) bash scripts/coverage.sh $(SUITE)
+else
+	$(NIX) bash scripts/coverage-combined.sh
+endif
+
+coverage-unit: ## Fast, Docker-free unit-only coverage (a PARTIAL view; Codecov merges it with integration)
+	$(NIX) bash scripts/coverage.sh ecluse-unit
 
 gen-version-fixtures: ## Regenerate version-ordering fixtures from the reference tools (node-semver / packaging / Gem::Version)
 	$(NIX) bash scripts/gen-version-fixtures.sh

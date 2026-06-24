@@ -23,7 +23,8 @@ for one-offs.
 | Format (write) | `make format` |
 | Lint | `make lint` |
 | Static analysis (SAST) | `make sast` |
-| Coverage (unit → Codecov JSON) | `make coverage` |
+| Coverage (combined, matches Codecov; needs Docker) | `make coverage` |
+| Coverage (fast, unit-only, Docker-free; partial) | `make coverage-unit` |
 | Pre-push checks (fast) | `make check` |
 | Full CI-gate mirror (needs Docker) | `make gate` |
 
