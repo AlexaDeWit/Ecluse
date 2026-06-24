@@ -335,10 +335,13 @@ fetchEntry manager baseUrl token name = do
     -- instance either way, so projecting from the @Value@ reuses the one parse
     -- rather than tokenising a multi-megabyte packument a second time.
     case Aeson.eitherDecodeStrict (responseBody response) of
-        Right value
-            | Right info <- parsePackageInfoFromValue value ->
-                pure (CacheEntry{entryInfo = info, entryRaw = value})
-        _ -> throwString "packument did not decode into both a typed view and a raw document"
+        Right value -> case parsePackageInfoFromValue value of
+            Right info -> pure (CacheEntry{entryInfo = info, entryRaw = value})
+            Left _ -> decodeFailure
+        Left _ -> decodeFailure
+  where
+    decodeFailure :: IO CacheEntry
+    decodeFailure = throwString "packument did not decode into both a typed view and a raw document"
 
 unpair :: CacheEntry -> (PackageInfo, Value)
 unpair entry = (entryInfo entry, entryRaw entry)
