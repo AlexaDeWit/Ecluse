@@ -12,14 +12,14 @@ import Network.HTTP.Client (
     responseBody,
  )
 import Network.HTTP.Client qualified as HTTP
-import Network.HTTP.Types (status200, status404, statusIsSuccessful)
+import Network.HTTP.Types (methodHead, status200, status404, statusIsSuccessful)
 import Network.HTTP.Types.Header (hContentType)
 import Network.Wai (Application, responseLBS, responseStream)
 import Network.Wai.Handler.Warp (testWithApplication)
 import Test.Hspec
 import UnliftIO (concurrently)
 
-import Ecluse.Server.Stream (pumpBody, streamUpstream, streamUpstreamWhen)
+import Ecluse.Server.Stream (probeUpstreamWhen, pumpBody, streamUpstream, streamUpstreamWhen)
 
 {- | A chunk source over a fixed list of chunks: each pull returns the next chunk
 and an empty 'ByteString' once exhausted (the @http-client@ @BodyReader@
@@ -152,6 +152,42 @@ spec = do
                 req <- parseRequest ("http://127.0.0.1:" <> show proxyPort <> "/")
                 resp <- httpLbs req manager
                 responseBody resp `shouldBe` fellThroughMarker
+
+    describe "probeUpstreamWhen — bodiless relay (HEAD, no pump)" $ do
+        it "relays the upstream status and content headers with no body on a hit" $ do
+            -- A HEAD probe through the helper: the client gets the upstream's status
+            -- and content headers (here a Content-Type) but an EMPTY body — the body is
+            -- never pumped (the amplification a HEAD must never trigger).
+            manager <- newManager defaultManagerSettings
+            testWithApplication (pure headLengthUpstream) $ \upPort ->
+                testWithApplication (pure (probeProxy manager upPort)) $ \proxyPort -> do
+                    req <- parseRequest ("http://127.0.0.1:" <> show proxyPort <> "/")
+                    resp <- httpLbs req manager
+                    -- No body relayed (the pump never ran).
+                    responseBody resp `shouldBe` ""
+                    -- The content headers the matching GET would carry are relayed.
+                    (snd <$> find ((== hContentType) . fst) (HTTP.responseHeaders resp))
+                        `shouldBe` Just "application/octet-stream"
+
+        it "returns a clean miss when the status fails accept" $ do
+            -- A 404 fails the success predicate: no response is committed, so the proxy
+            -- falls through to its marker rather than relaying anything.
+            manager <- newManager defaultManagerSettings
+            testWithApplication (pure missingUpstream) $ \upPort ->
+                testWithApplication (pure (probeProxy manager upPort)) $ \proxyPort -> do
+                    req <- parseRequest ("http://127.0.0.1:" <> show proxyPort <> "/")
+                    resp <- httpLbs req manager
+                    responseBody resp `shouldBe` fellThroughMarker
+
+        it "returns a clean miss when the upstream connection cannot be opened" $ do
+            -- The open is the recoverable phase here too: a failed connection is a
+            -- miss, never a committed bodiless reply.
+            manager <- newManager defaultManagerSettings
+            deadPort <- testWithApplication (pure missingUpstream) pure
+            testWithApplication (pure (probeProxy manager deadPort)) $ \proxyPort -> do
+                req <- parseRequest ("http://127.0.0.1:" <> show proxyPort <> "/")
+                resp <- httpLbs req manager
+                responseBody resp `shouldBe` fellThroughMarker
   where
     -- An upstream that streams a fixed body back in 64 KiB chunks.
     upstreamApp :: ByteString -> Application
@@ -172,6 +208,24 @@ spec = do
     -- An upstream that always 404s — the conditional relay's recoverable miss.
     missingUpstream :: Application
     missingUpstream _req respond = respond (responseLBS status404 [] "not found")
+
+    {- An upstream that answers a content header (a Content-Type) with no body, as a
+    HEAD reply does, so the probe relay is seen to forward the content metadata a GET
+    would carry while pumping nothing. -}
+    headLengthUpstream :: Application
+    headLengthUpstream _req respond =
+        respond (responseLBS status200 [(hContentType, "application/octet-stream")] "")
+
+    {- The probe proxy under test: mark the upstream request a HEAD and relay it
+    bodiless on a successful status, else answer the fall-through marker. So a hit is
+    observable as the relayed headers with an empty body, a miss as the marker. -}
+    probeProxy :: HTTP.Manager -> Int -> Application
+    probeProxy manager upPort _req respond = do
+        upReq <- parseRequest ("http://127.0.0.1:" <> show upPort <> "/")
+        outcome <- probeUpstreamWhen manager upReq{HTTP.method = methodHead} statusIsSuccessful (,) respond
+        case outcome of
+            Just received -> pure received
+            Nothing -> respond (responseLBS status200 [] fellThroughMarker)
 
     {- The proxy under test: relay only a successful upstream status, otherwise
     answer the fall-through marker. So a hit is observable as the upstream body, and

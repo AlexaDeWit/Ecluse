@@ -112,6 +112,7 @@ module Ecluse.Server.Pipeline (
 
     -- * The tarball handler
     serveTarball,
+    headTarball,
 ) where
 
 import Data.Aeson (Value (Object, String))
@@ -130,8 +131,8 @@ import Lens.Micro ((^?))
 import Lens.Micro.Aeson (key, _Object)
 import Network.HTTP.Client (Manager)
 import Network.HTTP.Client qualified as HTTP
-import Network.HTTP.Types (ResponseHeaders, Status, hAuthorization, hContentType, mkStatus, status200, status401, status501, statusIsSuccessful)
-import Network.Wai (Request, Response, ResponseReceived, requestHeaders, responseLBS)
+import Network.HTTP.Types (ResponseHeaders, Status, hAuthorization, hContentType, methodHead, mkStatus, status200, status401, status501, statusIsSuccessful)
+import Network.Wai (Request, Response, ResponseReceived, requestHeaders, responseHeaders, responseLBS, responseStatus)
 import UnliftIO (concurrently)
 import UnliftIO.Exception (handle, throwIO, tryAny)
 
@@ -209,7 +210,7 @@ import Ecluse.Server.Response (
     serveDecisionOf,
  )
 import Ecluse.Server.Route (Filename (Filename))
-import Ecluse.Server.Stream (streamUpstreamWhen)
+import Ecluse.Server.Stream (probeUpstreamWhen, streamUpstreamWhen)
 import Ecluse.Version (Version, renderVersion)
 
 -- ── the handler ─────────────────────────────────────────────────────────────
@@ -851,16 +852,79 @@ serveTarball ::
     Request ->
     (Response -> IO ResponseReceived) ->
     Handler ResponseReceived
-serveTarball name version filename request respond = do
+serveTarball = tarballWith ServeFull
+
+{- | Serve a @HEAD \/{pkg}\/-\/{file}.tgz@ artifact request end to end, over the
+request's 'RequestCtx'.
+
+A HEAD must __never__ run the full-@GET@ streaming pump: a bodiless HEAD would
+otherwise open the upstream artifact connection and pump a whole artifact body that
+the reply then discards — wasted upstream egress and a DoS-amplification lever (a
+client forcing arbitrary full-artifact fetches with cheap HEADs). So this handler
+gates the artifact through the __identical__ pipeline as 'serveTarball' — the same
+edge auth, host-allowlist, internal-range, and tarball-host policy, and the same
+upstream-request construction — but issues the upstream request as a HEAD and relays
+its status and safe response headers ('relayArtifact') with __no body__
+('Ecluse.Server.Stream.probeUpstreamWhen'). On an admit no 'MirrorJob' is enqueued: a
+HEAD serves no bytes, so there is nothing to back-fill (mirroring stays demand-driven
+on the GET path). A refusal renders the same serve error model with an empty body.
+-}
+headTarball ::
+    PackageName ->
+    Version ->
+    Filename ->
+    Request ->
+    (Response -> IO ResponseReceived) ->
+    Handler ResponseReceived
+headTarball name version filename request respond =
+    -- A HEAD reply carries no body, by HTTP semantics: every branch — the bodiless
+    -- upstream probe, an edge 401, a policy 403/404/503, an internal 500 — answers
+    -- through 'bodiless', which keeps each branch's status and headers but strips the
+    -- body. (The 'ServeHead' upstream probe is what keeps the artifact body from being
+    -- fetched at all; this strips the body of the locally-rendered branches too.)
+    tarballWith ServeHead name version filename request (respond . bodiless)
+
+-- Strip a response's body while keeping its status and headers — the bodiless form a
+-- HEAD reply takes on every branch (HTTP semantics: a HEAD carries no message body).
+-- The headers a GET would carry (notably any relayed @Content-Length@) are preserved.
+bodiless :: Response -> Response
+bodiless response = responseLBS (responseStatus response) (responseHeaders response) ""
+
+-- The artifact serve mode: a full GET that streams the body through, or a HEAD that
+-- probes the upstream bodiless and relays only the headers. Threaded through the
+-- artifact path so the gating and upstream-request construction are shared verbatim
+-- between the two, differing only in the upstream method, whether a body is pumped,
+-- and whether an admit enqueues a mirror job.
+data ArtifactServe
+    = -- A GET: stream the artifact body through, enqueuing a mirror job on a public
+      -- admit (the demand-driven back-fill).
+      ServeFull
+    | -- A HEAD: probe the upstream as a HEAD and relay the headers with no body,
+      -- enqueuing nothing (no bytes are served, so there is nothing to mirror).
+      ServeHead
+
+-- The dispatch shared by 'serveTarball' and 'headTarball': resolve the mount's
+-- dependencies (or the recognised-but-unserved @501@ stub) and serve in the given mode.
+tarballWith ::
+    ArtifactServe ->
+    PackageName ->
+    Version ->
+    Filename ->
+    Request ->
+    (Response -> IO ResponseReceived) ->
+    Handler ResponseReceived
+tarballWith mode name version filename request respond = do
     renderer <- asks (bindingRenderer . ctxMount)
     asks (bindingPackumentDeps . ctxMount) >>= \case
         Nothing -> liftIO (respond (recognisedButUnserved renderer))
-        Just deps -> serveTarballWithDeps renderer deps name version filename request respond
+        Just deps -> serveTarballWithDeps mode renderer deps name version filename request respond
 
 -- Serve a tarball once the mount's dependencies are known: edge auth, then the
 -- private-hit / public-miss fetches the module header describes. The composition-root
--- 'Env' is read from the request context.
+-- 'Env' is read from the request context. The 'ArtifactServe' mode is threaded into
+-- both legs so a HEAD takes the identical gating as a GET, probing bodiless.
 serveTarballWithDeps ::
+    ArtifactServe ->
     MountRenderer ->
     PackumentDeps ->
     PackageName ->
@@ -869,16 +933,16 @@ serveTarballWithDeps ::
     Request ->
     (Response -> IO ResponseReceived) ->
     Handler ResponseReceived
-serveTarballWithDeps renderer deps name version (Filename file) request respond
+serveTarballWithDeps mode renderer deps name version (Filename file) request respond
     | not (edgeAuthorised deps request) = liftIO (respond (edgeUnauthorised renderer))
     | otherwise = do
         env <- asks ctxEnv
         liftIO $ do
             let clientToken = forwardedToken request
-            privateHit <- streamPrivateArtifact env deps clientToken name version file respond
+            privateHit <- streamPrivateArtifact mode env deps clientToken name version file respond
             case privateHit of
                 Just received -> pure received
-                Nothing -> servePublicArtifact env renderer deps name version file respond
+                Nothing -> servePublicArtifact mode env renderer deps name version file respond
 
 {- Stream the artifact from the __trusted__ private upstream at its __authoritative
 location__: fetch the private packument (uncached, forwarding the client's credential
@@ -908,6 +972,7 @@ response is already on the wire — so 'streamUpstreamWhen' lets it propagate ra
 than reporting a miss: the request fails internally (the connection is torn down)
 instead of responding a second time over a half-sent artifact. -}
 streamPrivateArtifact ::
+    ArtifactServe ->
     Env ->
     PackumentDeps ->
     Maybe Secret ->
@@ -916,19 +981,21 @@ streamPrivateArtifact ::
     Text ->
     (Response -> IO ResponseReceived) ->
     IO (Maybe ResponseReceived)
-streamPrivateArtifact env deps token name version file respond = do
+streamPrivateArtifact mode env deps token name version file respond = do
     selected <- selectPrivateArtifact env deps token name version file
     case privateRequestFor =<< selected of
-        Just req -> streamUpstreamWhen (envPrivateManager env) req statusIsSuccessful relayArtifact respond
+        Just req -> relayUpstreamWhen mode (envPrivateManager env) req statusIsSuccessful relayArtifact respond
         Nothing -> pure Nothing
   where
     -- Form the honoured-URL request for a selected private artifact, when its host
     -- passes the tarball-host policy and its URL parses. 'Nothing' on either refusal —
     -- a private miss the caller falls through on, never a fabricated reconstruction.
+    -- The request is marked with the serve mode's method (GET / HEAD) so a HEAD probes
+    -- bodiless.
     privateRequestFor :: Artifact -> Maybe HTTP.Request
     privateRequestFor artifact =
         if tarballHostHonoured TrustedOrigin deps (pdPrivateBaseUrl deps) (artUrl artifact)
-            then rightToMaybe (artifactRequestByUrl (clientConfig (pdLimits deps) (envPrivateManager env) (pdPrivateBaseUrl deps) token) (artUrl artifact))
+            then withMethod mode <$> rightToMaybe (artifactRequestByUrl (clientConfig (pdLimits deps) (envPrivateManager env) (pdPrivateBaseUrl deps) token) (artUrl artifact))
             else Nothing
 
 {- Fetch the private packument (uncached, with the client's credential) and select
@@ -948,6 +1015,7 @@ single requested version against the rules, and on an admit stream the public by
 (anonymously) and enqueue a mirror job; on a reject render the serve error model.
 The public version metadata is fetched anonymously to decide. -}
 servePublicArtifact ::
+    ArtifactServe ->
     Env ->
     MountRenderer ->
     PackumentDeps ->
@@ -956,10 +1024,10 @@ servePublicArtifact ::
     Text ->
     (Response -> IO ResponseReceived) ->
     IO ResponseReceived
-servePublicArtifact env renderer deps name version file respond = do
+servePublicArtifact mode env renderer deps name version file respond = do
     gated <- gatePublicVersion env deps name version file
     case gated of
-        Admitted artifact -> streamPublicArtifact env renderer deps name version artifact respond
+        Admitted artifact -> streamPublicArtifact mode env renderer deps name version artifact respond
         Refused decision -> respond (artifactError renderer deps (artifactStatus decision) decision)
 
 {- The outcome of gating a single requested artifact on the public path: either the
@@ -1060,6 +1128,7 @@ committed propagates, the connection torn down as it unwinds, so a half-sent art
 is never followed by a second response. The mirror enqueue runs only on the committed
 path, after the response is begun. -}
 streamPublicArtifact ::
+    ArtifactServe ->
     Env ->
     MountRenderer ->
     PackumentDeps ->
@@ -1068,17 +1137,53 @@ streamPublicArtifact ::
     Artifact ->
     (Response -> IO ResponseReceived) ->
     IO ResponseReceived
-streamPublicArtifact env renderer deps name version artifact respond =
+streamPublicArtifact mode env renderer deps name version artifact respond =
     if tarballHostHonoured UntrustedOrigin deps (pdPublicBaseUrl deps) (artUrl artifact)
-        then case artifactRequestByUrl (clientConfig (pdLimits deps) (envManager env) (pdPublicBaseUrl deps) Nothing) (artUrl artifact) of
+        then case withMethod mode <$> artifactRequestByUrl (clientConfig (pdLimits deps) (envManager env) (pdPublicBaseUrl deps) Nothing) (artUrl artifact) of
             Right req ->
-                streamUpstreamWhen (envManager env) req (const True) relayArtifact respond >>= \case
+                relayUpstreamWhen mode (envManager env) req (const True) relayArtifact respond >>= \case
                     Just received -> do
-                        enqueueMirror env deps name version artifact
+                        -- Mirroring is demand-driven on the GET path only: a HEAD serves
+                        -- no bytes, so there is nothing to back-fill.
+                        enqueueOnFull mode (enqueueMirror env deps name version artifact)
                         pure received
                     Nothing -> respond (artifactError renderer deps (artifactStatus upstreamUnavailable) upstreamUnavailable)
             Left _ -> respond internalArtifactError
         else respond crossHostRefused
+
+-- ── the serve mode's three differences ─────────────────────────────────────────
+
+{- Tag an upstream artifact request with the serve mode's method: a 'ServeFull' fetch
+keeps the request's default @GET@, a 'ServeHead' probe is marked @HEAD@ so the upstream
+sees a bodiless request and the proxy never pumps the body. -}
+withMethod :: ArtifactServe -> HTTP.Request -> HTTP.Request
+withMethod = \case
+    ServeFull -> id
+    ServeHead -> \req -> req{HTTP.method = methodHead}
+
+{- Relay an upstream artifact response in the serve mode: 'ServeFull' streams the body
+through with bounded memory ('streamUpstreamWhen'); 'ServeHead' probes bodiless,
+relaying the status and headers with no body ('probeUpstreamWhen'). Both keep the same
+recoverable-miss / committed split, so a HEAD falls through a private miss to the public
+origin exactly as a GET does. -}
+relayUpstreamWhen ::
+    ArtifactServe ->
+    Manager ->
+    HTTP.Request ->
+    (Status -> Bool) ->
+    (Status -> ResponseHeaders -> (Status, ResponseHeaders)) ->
+    (Response -> IO ResponseReceived) ->
+    IO (Maybe ResponseReceived)
+relayUpstreamWhen = \case
+    ServeFull -> streamUpstreamWhen
+    ServeHead -> probeUpstreamWhen
+
+-- Run the demand-driven mirror enqueue only on the 'ServeFull' (GET) path; a
+-- 'ServeHead' served no bytes, so it back-fills nothing.
+enqueueOnFull :: ArtifactServe -> IO () -> IO ()
+enqueueOnFull mode act = case mode of
+    ServeFull -> act
+    ServeHead -> pass
 
 {- Enqueue a demand-driven mirror job for an admitted artifact, __best-effort__: it
 runs after the client response is begun and any failure is swallowed, so a queue

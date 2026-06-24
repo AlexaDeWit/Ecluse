@@ -141,6 +141,38 @@ ecosystem (e.g. PyPI) or a non-verifying client lands. The mirror **worker does
 verify** before publishing to the sanitized home (see
 [Cloud Backends → Mirror Queue](cloud-backends.md#mirror-queue)).
 
+### HEAD on artifacts
+
+A `HEAD` on the tarball route must **never** run the full-`GET` streaming pump above:
+a bodiless `HEAD` would otherwise open the upstream artifact connection and pump a
+whole artifact body that Warp then discards for the reply — wasted upstream egress
+and a DoS-amplification lever (a client forcing arbitrary full-artifact upstream
+fetches with cheap, bodiless `HEAD`s). This is exactly why the [`Autohead`
+middleware](#middleware-and-helper-libraries) is *not* used.
+
+`HEAD` is therefore handled **explicitly in dispatch**, not by re-running the `GET`
+handler. The contract: a `HEAD` on the tarball route goes through the **identical
+gating and upstream-request construction** as the `GET` path — edge authentication,
+the host allowlist and internal-range block, the same-host `dist.tarball`
+[tarball-host policy](#streaming-and-resource-lifetime), the trusted/untrusted
+[origin trust split](access-model.md), and the honoured-tarball-host resolution — but
+issues the upstream request as a **`HEAD`** and relays its status and safe response
+headers (`Content-Type`, `Content-Length`, `ETag`, `Last-Modified`, `Accept-Ranges`
+where present) with **no body**. It is the correct, non-amplifying reverse-proxy
+behaviour: a private hit probes the private upstream as a `HEAD`, a private miss falls
+through to a `HEAD` of the public origin exactly as the `GET` path falls through, and
+every refusal (a policy `403`, a forwarded `404`, a transient `503`, an internal
+`500`, the edge `401`) renders the same serve-outcome status with an **empty body**
+(HTTP semantics: a `HEAD` reply carries no message body). A `HEAD` admit enqueues **no
+mirror job** — mirroring stays demand-driven on the `GET` path, since a `HEAD` serves
+no bytes to back-fill.
+
+(`HEAD` on the **packument** route is not yet special-cased: a packument body is built
+locally rather than streamed from upstream, so it carries no artifact-pump
+amplification — the lever this control closes. A future refinement may answer a
+packument `HEAD` without materialising the merged body; it is a metadata-only cost,
+not the artifact-egress one.)
+
 ## Metadata cache
 
 Resolving a package re-fetches its upstream packument(s), parses them, and
@@ -256,9 +288,10 @@ wire contract.**
   balancer), and `Timeout`, composed around the `Application`. Two it
   deliberately does *not* use: `Autohead` — it answers HEAD by running the GET
   handler and discarding the body, which on a tarball route would open the
-  upstream and stream a whole artifact to nowhere (HEAD on artifacts is handled
-  explicitly instead); and `Gzip` — artifacts are already compressed, and
-  re-compressing the stream would fight the backpressure above.
+  upstream and stream a whole artifact to nowhere; a HEAD on the tarball route is
+  instead handled explicitly in dispatch (see [HEAD on artifacts](#head-on-artifacts));
+  and `Gzip` — artifacts are already compressed, and re-compressing the stream
+  would fight the backpressure above.
 - **Adopt — `unliftio`** for the whole shell, where `ReaderT Env IO` runs: it lifts
   `bracket`/`finally`/`async` into the reader so resource-safety stays ergonomic.
   Request handlers run in the reader too — over a per-request `RequestCtx` pairing

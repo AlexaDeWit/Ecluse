@@ -25,6 +25,9 @@ module Ecluse.Server.Stream (
     streamUpstream,
     streamUpstreamWhen,
 
+    -- * Probing without a body (HEAD)
+    probeUpstreamWhen,
+
     -- * The pump
     pumpBody,
 ) where
@@ -34,7 +37,7 @@ import Data.ByteString.Builder (Builder, byteString)
 import Network.HTTP.Client (BodyReader, Manager, Request, brRead, responseClose, responseHeaders, responseOpen, responseStatus, withResponse)
 import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types (ResponseHeaders, Status)
-import Network.Wai (Response, ResponseReceived, responseStream)
+import Network.Wai (Response, ResponseReceived, responseLBS, responseStream)
 import UnliftIO.Exception (finally, tryAny)
 
 {- | Stream an upstream response through to the client with constant memory.
@@ -114,6 +117,49 @@ streamUpstreamWhen manager request accept relay respond =
                         ( responseStream status headers $ \write flush ->
                             pumpBody (brRead (HTTP.responseBody upstream)) write flush
                         )
+      where
+        upstreamStatus = responseStatus upstream
+
+{- | Probe an upstream __without pumping a body__ — the bodiless relay a @HEAD@
+takes, so a client cannot force the proxy to open the upstream artifact connection
+and stream a whole artifact to nowhere (the GET-pump amplification a HEAD must never
+trigger).
+
+The @request@ must already carry the @HEAD@ method (the caller sets it), so the
+upstream sees a bodiless request too and replies with headers and no body. This
+mirrors 'streamUpstreamWhen''s hit\/miss split, but the committed phase answers with
+'responseLBS' over an __empty body__ rather than the streaming pump:
+
+* __Recoverable miss__ — the connection could not be opened, or the status fails
+  @accept@; no response is committed, the connection is closed, and 'Nothing' is
+  returned so the caller may fall through to another upstream.
+* __Committed reply__ — the status passed, so a bodiless response is sent with the
+  relayed status and headers. The upstream body reader is never read.
+
+The @relay@ chooses the client-facing status and headers from upstream's (the same
+header-filtering the streamed path applies), so a @HEAD@ relays an artifact's content
+headers — @Content-Type@, @Content-Length@, @ETag@, and the like — exactly as the
+matching @GET@ would, only without the bytes. The connection is released on every
+path; nothing is pumped, so there is no mid-stream phase to guard.
+-}
+probeUpstreamWhen ::
+    Manager ->
+    Request ->
+    (Status -> Bool) ->
+    (Status -> ResponseHeaders -> (Status, ResponseHeaders)) ->
+    (Response -> IO ResponseReceived) ->
+    IO (Maybe ResponseReceived)
+probeUpstreamWhen manager request accept relay respond =
+    tryAny (responseOpen request manager) >>= \case
+        Left _ -> pure Nothing
+        Right upstream -> probe upstream `finally` responseClose upstream
+  where
+    probe upstream
+        | not (accept upstreamStatus) = pure Nothing
+        | otherwise =
+            let (status, headers) = relay upstreamStatus (responseHeaders upstream)
+             in -- A HEAD reply carries no body; the upstream body reader is never read.
+                Just <$> respond (responseLBS status headers "")
       where
         upstreamStatus = responseStatus upstream
 
