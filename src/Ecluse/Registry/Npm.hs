@@ -117,6 +117,7 @@ import Network.HTTP.Client (
 import Network.HTTP.Types.Header (
     hAccept,
     hAcceptEncoding,
+    hContentType,
     hIfModifiedSince,
     hIfNoneMatch,
  )
@@ -394,7 +395,13 @@ publishRequest config name document = do
         $ base
             { method = "PUT"
             , requestBody = RequestBodyBS document
-            , requestHeaders = (hAccept, "application/json") : requestHeaders base
+            , -- A spec-compliant registry (e.g. Verdaccio) rejects a publish whose
+              -- body is not declared @application/json@ with a 415; the npm publish
+              -- protocol requires it. Accept is set too, for the registry's response.
+              requestHeaders =
+                (hContentType, "application/json")
+                    : (hAccept, "application/json")
+                    : requestHeaders base
             }
 
 -- ── publish-document assembly ─────────────────────────────────────────────────

@@ -436,6 +436,9 @@ publishSpec = describe "publishArtifact idempotency" $ do
             capMethod cap `shouldBe` "PUT"
             capPath cap `shouldBe` "/is-odd"
             capBody cap `shouldBe` publishDoc
+            -- The publish body must be declared application/json: a spec-compliant
+            -- registry (e.g. Verdaccio) 415s a publish that omits it.
+            headerValue "content-type" cap `shouldBe` Just "application/json"
 
     it "treats a 2xx as success" $
         withStub status200 "{}" $ \stub -> do
