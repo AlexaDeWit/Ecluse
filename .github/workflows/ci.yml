@@ -187,8 +187,11 @@ jobs:
     # and cross-component regressions nothing else does, but it is heavy (a Nix image
     # build, containers, npm) — so it is NOT a `gate` dependency and runs
     # continue-on-error: visible on every PR and nightly, never a blocker. Uses the full
-    # dev shell (not `.#ci`) because the harness needs the npm CLI on PATH. Revisit the
-    # cadence (e.g. nightly-only) if the runner lacks the disk/memory/compute.
+    # dev shell (not `.#ci`) because the harness needs the npm CLI on PATH. The disk-prep
+    # steps below free the small root partition and move the Nix store + Docker data-root
+    # onto the ephemeral /mnt volume, since the image build + `docker load` can exhaust
+    # root; if that stops sufficing (e.g. as more ecosystems land), the next levers are
+    # nightly-only cadence or a larger runner. See planning/slices/S53-e2e-ecosystem.md.
     continue-on-error: true
     env:
       CABAL_DIR: ${{ github.workspace }}/.cabal
@@ -198,10 +201,54 @@ jobs:
         with:
           persist-credentials: false
 
+      # Free the ~14 GB root partition that the Nix image build + `docker load` can
+      # exhaust. Removes preinstalled toolchains this pure-Nix job never touches —
+      # the system GHC/ghcup, Android SDK, .NET, Swift — since npm/node and GHC all
+      # come from the Nix dev shell. `df` before/after so a failing nightly shows the
+      # actual reclaim. Done inline (not a third-party action) to honour the repo's
+      # SHA-pin supply-chain convention. See planning/slices/S53-e2e-ecosystem.md.
+      - name: Free disk space
+        run: |
+          echo "before:"; df -h / /mnt
+          sudo rm -rf \
+            /usr/local/lib/android \
+            /usr/share/dotnet \
+            /usr/share/swift \
+            /opt/ghc \
+            /usr/local/.ghcup
+          echo "after:"; df -h / /mnt
+
+      # Put the two biggest disk consumers on the ephemeral /mnt volume (~70 GB)
+      # rather than the small root partition: the Nix store (bind-mounted now so the
+      # image build's GHC closure lands on /mnt when "Set up toolchain" installs into
+      # it) and the Docker data-root (so `docker load` of the OCI image + the running
+      # containers do too). Both must precede their first use — the bind mount before
+      # the toolchain install, the data-root before `make test-e2e`.
+      - name: Relocate the Nix store and Docker data-root onto /mnt
+        run: |
+          sudo mkdir -p /mnt/nix /nix
+          sudo mount --bind /mnt/nix /nix
+          sudo systemctl stop docker.service docker.socket
+          sudo mkdir -p /mnt/docker
+          if [ -f /etc/docker/daemon.json ]; then
+            sudo jq '. + {"data-root": "/mnt/docker"}' /etc/docker/daemon.json \
+              | sudo tee /etc/docker/daemon.json.tmp >/dev/null
+            sudo mv /etc/docker/daemon.json.tmp /etc/docker/daemon.json
+          else
+            echo '{"data-root": "/mnt/docker"}' | sudo tee /etc/docker/daemon.json >/dev/null
+          fi
+          sudo systemctl start docker.service
+          docker info --format 'Docker root: {{.DockerRootDir}}'
+
       - name: Set up toolchain
         uses: ./.github/actions/setup-toolchain
         with:
           cabal-cache: "true"
+          # Never write the shared Nix-store cache: this job realizes the FULL dev
+          # shell (a superset of the gating `.#ci` closure) and runs on the nightly
+          # main schedule, so saving here would bloat and race the canonical entry
+          # that build-test owns. Restore-only. See setup-toolchain's caching policy.
+          save-nix-store: "false"
 
       - name: Update package index
         run: nix develop --command make update

@@ -128,7 +128,11 @@ _The e2e tier:_
 - `scripts/e2e.sh` + `Makefile` `test-e2e` — build + load the image, run the suite;
   **not** in `check`/`gate`.
 - `.github/workflows/ci.yml` — a non-gating `e2e` job (PR visibility + nightly),
-  `continue-on-error`, never a `gate` dependency.
+  `continue-on-error`, never a `gate` dependency. Disk-prep steps free the small root
+  partition (remove preinstalled toolchains the pure-Nix job never uses) and relocate
+  the Nix store + Docker data-root onto the ephemeral `/mnt` volume, since the image
+  build + `docker load` can exhaust root; the job is also `save-nix-store: "false"`
+  (restore-only — it must not write the shared cache the `.#ci` jobs own).
 - `docs/testing.md` — document the new tier (what it covers, that it never gates).
 - `test/unit/Ecluse/SecuritySpec.hs` — the **tripwire** pinning the RFC 5737
   documentation ranges (incl. `203.0.113.0/24`) as deliberately **not** in
@@ -176,6 +180,16 @@ above makes the dependency explicit so the two cannot silently collide; record i
   topology if so. The deterministic behaviours it asserts are **also** owed a
   `U`/`I` test elsewhere (per `docs/testing.md` → *What gates, and what doesn't*) —
   e2e is the cross-component proof, not the sole evidence for any one behaviour.
+- **Runner disk.** The default `ubuntu-latest` root partition (~14 GB) is the binding
+  constraint: the Nix image build's GHC closure, the `docker load` copy of the OCI
+  image, and the running containers all want space. The job mitigates this in two
+  cheap, coverage-preserving ways before the toolchain installs — free the root
+  partition (drop preinstalled Android/.NET/Swift/ghcup the pure-Nix job never uses)
+  and bind-mount the Nix store + Docker data-root onto the larger ephemeral `/mnt`
+  volume. This buys headroom for more ecosystems (rubygems, pypi) landing in the
+  image; if it stops sufficing, the next levers are nightly-only cadence, splitting
+  the image build into its own job (push to a registry, pull to test), or a larger
+  runner.
 
 **Relationship to other slices.** Exercises the integration points of
 [S14](S14-packument-path.md) (packument path), [S15](S15-tarball-path.md) (tarball
