@@ -180,13 +180,24 @@ jobs:
       - name: Set up toolchain
         uses: ./.github/actions/setup-toolchain
 
-      - name: fourmolu (format check)
+      # SPIKE (ci/flake-checks-spike) — run the two hermetic tiers, format and
+      # lint, as first-class Nix flake checks instead of `make` targets inside a
+      # devshell. The check derivations (flake.nix → checks.<system>.{format,lint})
+      # already existed but nothing invoked them: CI ran the `make` equivalents, so
+      # each task was expressed twice and the flake-check form was dead. This points
+      # CI straight at the flake graph. The payoff we are measuring: the checks are
+      # sandboxed (no ambient state), content-addressed (unchanged sources are a
+      # store hit — instant), and pinned (they run the EXACT flake fourmolu/hlint, so
+      # a stale ambient tool cannot drift the result — the failure mode AGENTS.md
+      # warns about). Locally this is the same `nix build`, or `nix flake check` for
+      # the whole graph. The runner is x86_64, hence the hard-coded system; a
+      # graduated version would derive it. Semgrep + workflow-lint stay as `make`
+      # steps below: both reach the network (rule registry / zizmor's online audit),
+      # so they cannot be pure offline-sandboxed checks. cabal-check, doctest, and
+      # docs-check are the next candidates if the numbers/UX here hold up.
+      - name: Format + lint (flake checks)
         if: ${{ !cancelled() }}
-        run: nix develop .#ci --command make format-check
-
-      - name: hlint
-        if: ${{ !cancelled() }}
-        run: nix develop .#ci --command make lint
+        run: nix build .#checks.x86_64-linux.format .#checks.x86_64-linux.lint --no-link --print-build-logs
 
       - name: cabal check (package metadata)
         if: ${{ !cancelled() }}
