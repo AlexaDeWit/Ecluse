@@ -25,7 +25,7 @@ The line matters, so I will be precise about it.
   deliberately so. They are the product of months of on-and-off thought — the dead ends
   in [`MOTIVATION.md`](MOTIVATION.md) are real — about how a small team gets this
   protection without enterprise licences or running its own registry. I am an experienced
-  engineer with years of professional work in typed functional programming (fp-ts, Scala,
+  developer with years of professional work in typed functional programming (fp-ts, Scala,
   category-theory-patterned ecosystems); the paradigm Haskell lives in is long familiar to
   me. I own, and can explain, the design and the safety-critical paths.
 - **AI-assisted — the implementation.** The Haskell itself — turning that design into
@@ -97,6 +97,6 @@ now. Start with [`MOTIVATION.md`](MOTIVATION.md) and the
 ## The shape of this going forward
 
 This heavy reliance on AI is a property of the **bootstrapping phase**, not a permanent
-engineering philosophy; I expect it to taper as the project — and my own line-by-line
+way of working; I expect it to taper as the project — and my own line-by-line
 familiarity with the code — matures. The conviction behind the design is not going
 anywhere.
