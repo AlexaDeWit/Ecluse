@@ -22,6 +22,7 @@ import Ecluse.Env (Env (..), newEnv, withEnv)
 import Ecluse.Package (PackageName, mkPackageName)
 import Ecluse.Queue (MirrorJob (..), enqueue, msgJob, newInMemoryQueue, receive)
 import Ecluse.Registry (ParseError (..), RegistryClient (..), RegistryResponse (..))
+import Ecluse.Server (scPort)
 import Ecluse.Server.Cache (MetadataCache, defaultCacheConfig, newMetadataCache)
 import Ecluse.Telemetry (telemetryDisabled, telemetryMeterProvider, telemetryTracerProvider)
 import Ecluse.Version (Version, mkVersion)
@@ -186,9 +187,10 @@ spec = do
             -- The server is now a real blocking listener: started under a short
             -- timeout it keeps serving until cancelled, so 'timeout' yields
             -- 'Nothing'. (The routing/meta/middleware behaviour itself is asserted
-            -- socket-free in "Ecluse.ServerSpec".)
+            -- socket-free in "Ecluse.ServerSpec".) 'scPort = 0' binds an OS-assigned
+            -- ephemeral port, so the test never races a fixed port already in use.
             env <- newTestEnv
-            timeout 100000 (runServer npmServerConfig env) `shouldReturn` Nothing
+            timeout 100000 (runServer (npmServerConfig{scPort = 0}) env) `shouldReturn` Nothing
 
         it "runWorker over an Env returns (the stub consumes nothing yet)" $ do
             env <- newTestEnv

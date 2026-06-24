@@ -143,11 +143,16 @@
         # keeps only the binary + its system C deps for the container image.
         ecluseBin = hlib.justStaticExecutables (hlib.dontCheck ecluseRaw);
 
-        # Sources for the format/lint checks: the .hs files plus the cabal files,
-        # so fourmolu can read default-language / default-extensions (GHC2021 →
-        # ImportQualifiedPost) and parse postpositive `qualified` imports. Without
-        # the cabal in scope, fourmolu's parser rejects them.
-        hsSrc = pkgs.lib.sourceFilesBySuffices ./. [ ".hs" ".cabal" "cabal.project" ];
+        # Sources for the format/lint checks: the .hs files plus the cabal files
+        # (so fourmolu can read default-language / default-extensions (GHC2021 →
+        # ImportQualifiedPost) and parse postpositive `qualified` imports — without
+        # the cabal in scope its parser rejects them), AND the `fourmolu.yaml` /
+        # `.hlint.yaml` config files. The configs must be in scope so the flake checks
+        # apply the repo's own formatting / lint rules (e.g. `import-export-style:
+        # diff-friendly`) rather than the tools' built-in defaults — otherwise they
+        # silently diverge from the `make format` / `make lint` path (which discover
+        # those configs from the repo root) on, e.g., import ordering.
+        hsSrc = pkgs.lib.sourceFilesBySuffices ./. [ ".hs" ".cabal" "cabal.project" "fourmolu.yaml" ".hlint.yaml" ];
 
         # The npm version-ordering oracle (`node-semver`) for the differential
         # smoke suite and `make gen-version-fixtures`. nixpkgs 26.05 removed the
