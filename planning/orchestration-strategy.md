@@ -302,8 +302,9 @@ pass under-covers the threat. A small, low-risk refactor must not cost an hour o
 ceremony.
 
 Hard stops: **Semgrep reports zero findings** before any push (no new ignores
-without the architect's approval); commits are **GPG-signed** and use
-[Conventional Commits](https://www.conventionalcommits.org/); any workflow change
+without the architect's approval); commits are **GPG-signed**, carry a **DCO
+`Signed-off-by`** trailer (`git commit -s` — the `DCO` status check gates on it),
+and use [Conventional Commits](https://www.conventionalcommits.org/); any workflow change
 stays **injection-free** with **SHA-pinned** actions. After pushing, the real run
 is confirmed green (`gh pr checks` / `gh run watch`) before handoff — on the
 result, not the prediction. A red gate is root-caused, not patched over.
@@ -321,7 +322,7 @@ A PR reaches the architect only when **all** hold:
 - [ ] CI `gate` (and every job it needs) green on the PR
 - [ ] Docs updated in the same PR; changes limited to the slice's file scope (other files only with strong justification)
 - [ ] Slice file `status:` advanced to `merged` (true once this PR lands) and any as-built delta — design decisions, discoveries, deviations from the acceptance criteria — recorded in it; the slice's `planning/slices/SNN-*.md` is part of the slice's file scope
-- [ ] Commits GPG-signed + Conventional Commits
+- [ ] Commits GPG-signed + DCO `Signed-off-by` (`git commit -s`) + Conventional Commits
 - [ ] PR taken **out of draft and marked ready for review** — the hand-off itself, done only once every box above holds; until then the PR stays a **draft** so it is never mistaken for review-ready
 
 ## Escalation
@@ -359,7 +360,8 @@ Escalations arrive **decision-ready**:
   and the gate are green and the team lead is confident, never before. "Ready for
   review" is the signal it is ready for the architect to review and potentially merge.
 - **One worktree per agent**; agents keep changes within their slice's file scope, touching other files only with strong justification.
-- **GPG-signed** commits, **Conventional Commits** (`type(scope): summary`).
+- **GPG-signed** commits carrying a **DCO `Signed-off-by`** trailer (`git commit -s`;
+  the repo's `DCO` status check gates on it), **Conventional Commits** (`type(scope): summary`).
 - **Semgrep clean** before every push; ignores need the architect's approval.
 - GitHub Actions **SHA-pinned**; workflows kept **injection-free**.
 - Documentation updated in the **same** PR as the change it describes.
