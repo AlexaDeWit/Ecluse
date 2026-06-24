@@ -136,6 +136,7 @@ import Ecluse.Security (
     boundedRead,
     defaultLimits,
  )
+import Ecluse.Server.Route (encodeComponent)
 import Ecluse.Version (Version, renderVersion)
 
 -- ── configuration ────────────────────────────────────────────────────────────
@@ -544,16 +545,18 @@ artifactUrl baseUrl name version =
     joinPath baseUrl (encodePackagePath name <> "/-/" <> tarballFile name version)
 
 {- | The artifact (tarball) URL addressing a __preserved filename__:
-@{baseUrl}\/{encoded-name}\/-\/{filename}@. The filename is the exact on-the-wire
-name (not @{base}-{version}.tgz@ rebuilt from the coordinate), so the bytes are
-fetched by the name the client requested. Exposed so the serve path can record the
+@{baseUrl}\/{encoded-name}\/-\/{encoded-filename}@. The filename is the exact
+on-the-wire name (not @{base}-{version}.tgz@ rebuilt from the coordinate), so the
+bytes are fetched by the name the client requested; it is percent-encoded as a
+single component ('Ecluse.Server.Route.encodeComponent') so a once-decoded escape
+in it cannot reach the upstream raw. Exposed so the serve path can record the
 public artifact location on a mirror job (the same URL its public fetch targets).
 
 Fails with a 'UrlFormationError' only when the URL cannot be formed.
 -}
 artifactFileUrl :: Text -> PackageName -> Text -> Either UrlFormationError Text
 artifactFileUrl baseUrl name filename =
-    joinPath baseUrl (encodePackagePath name <> "/-/" <> filename)
+    joinPath baseUrl (encodePackagePath name <> "/-/" <> encodeComponent filename)
 
 {- Join a base URL and an already-encoded path, tolerating one trailing slash
 on the base so the join never doubles it. An empty base URL is refused with a
@@ -567,15 +570,21 @@ joinPath baseUrl path
   where
     stripTrailingSlash b = fromMaybe b (T.stripSuffix "/" b)
 
-{- Encode a package name as its on-the-wire path segment: the rendered name
-with the scope separator percent-encoded. A scoped @\@scope\/name@ becomes
-@\@scope%2Fname@ (the leading @\@@ is left as-is, per npm); an unscoped name is
-unchanged.
+{- Encode a package name as its on-the-wire path segment. Each name component
+(scope, base name) is percent-encoded ('Ecluse.Server.Route.encodeComponent')
+around the structural delimiters this builder writes: a scoped @\@scope\/name@
+becomes @\@{enc-scope}%2F{enc-base}@ — the leading @\@@ and the @%2F@ separator
+are written here, never derived from a component, so a legitimate scoped name
+yields exactly one @%2F@ — and an unscoped name is its single encoded component.
+Encoding each component is the defence in depth that keeps a @\'%\'@, @\'\/\'@, or
+other reserved byte inside a decoded name from reaching the upstream URL raw (a
+once-decoded @%2e%2e%2f@ is re-encoded to @%252e%252e%252f@), without
+double-encoding the structural separator.
 -}
 encodePackagePath :: PackageName -> Text
 encodePackagePath name = case pkgNamespace name of
-    Just scope -> "@" <> unScope scope <> "%2F" <> baseName name
-    Nothing -> renderPackageName name
+    Just scope -> "@" <> encodeComponent (unScope scope) <> "%2F" <> encodeComponent (baseName name)
+    Nothing -> encodeComponent (renderPackageName name)
 
 {- The bare (unscoped) package name — the path segment after the scope, or the
 whole rendered name when unscoped. Used both for the @%2F@-encoded path and the
@@ -588,9 +597,13 @@ baseName name =
             Just _ -> T.drop 1 (snd (T.breakOn "/" rendered))
             Nothing -> rendered
 
--- The conventional npm tarball filename for a version: @{base}-{version}.tgz@.
+{- The conventional npm tarball filename for a version: @{base}-{version}.tgz@.
+The base name and version are percent-encoded as components around the structural
+@\'-\'@ and @.tgz@ this builder writes, so a reserved byte in either cannot reach
+the upstream URL raw. -}
 tarballFile :: PackageName -> Version -> Text
-tarballFile name version = baseName name <> "-" <> renderVersion version <> ".tgz"
+tarballFile name version =
+    encodeComponent (baseName name) <> "-" <> encodeComponent (renderVersion version) <> ".tgz"
 
 -- Attach a bearer token to a request when one is injected; otherwise leave it.
 withToken :: Maybe Secret -> Request -> Request

@@ -580,15 +580,45 @@ upstreamUrlSpec = describe "upstreamUrlFor" $ do
         it "joins the base URL and an unscoped name" $
             upstreamUrlFor base (unscoped "is-odd")
                 `shouldBe` Right "https://registry.npmjs.org/is-odd"
-        it "renders a scoped name as @scope/name under the base" $
+        it "renders a scoped name in npm wire form (@scope%2Fname) under the base" $
+            -- The scope separator is the structural '%2F' this builder writes — the
+            -- same wire form the data plane uses — not a literal '/' that a segment
+            -- splitter downstream could re-split.
             upstreamUrlFor base (scoped "babel" "code-frame")
-                `shouldBe` Right "https://registry.npmjs.org/@babel/code-frame"
+                `shouldBe` Right "https://registry.npmjs.org/@babel%2Fcode-frame"
         it "accepts a name with interior dots (not over-rejected)" $
             upstreamUrlFor base (unscoped "lodash.merge")
                 `shouldBe` Right "https://registry.npmjs.org/lodash.merge"
         it "tolerates a single trailing slash on the base without doubling it" $
             upstreamUrlFor "https://registry.npmjs.org/" (unscoped "is-odd")
                 `shouldBe` Right "https://registry.npmjs.org/is-odd"
+        it "emits exactly one %2F scope separator for a scoped name (no double-encoding)" $
+            -- The structural '%2F' the scoped path carries is the separator this
+            -- builder writes, never an encoding of a component's content: a
+            -- legitimate '@scope/name' yields a single '%2F', the '@' is verbatim,
+            -- and the hyphen in the base name is left literal.
+            upstreamUrlFor base (scoped "babel" "code-frame")
+                `shouldBe` Right "https://registry.npmjs.org/@babel%2Fcode-frame"
+
+    describe "percent-encodes an accepted component so a once-decoded escape cannot reach the upstream raw" $ do
+        it "re-encodes a literal '%' in an unscoped name (the %2e%2e%2f vector)" $
+            -- 'foo%2e%2e%2fbar' passes the denylist (no literal '/'), so the
+            -- defence in depth is to encode the '%' — the upstream must receive
+            -- '%25', never a live '%2e%2e%2f' a decode-and-normalise CDN resolves
+            -- to traversal.
+            upstreamUrlFor base (unscoped "foo%2e%2e%2fbar")
+                `shouldBe` Right "https://registry.npmjs.org/foo%252e%252e%252fbar"
+        it "re-encodes a literal '%' hidden in the base name of a scoped package" $
+            upstreamUrlFor base (scoped "babel" "code%2e%2eframe")
+                `shouldBe` Right "https://registry.npmjs.org/@babel%2Fcode%252e%252eframe"
+        it "encodes an accepted '?' (and the '=' after it) so it cannot inject an upstream query" $
+            -- '?' becomes '%3F' and the reserved '=' '%3D', so the whole component
+            -- is opaque path, never a query the upstream would parse.
+            upstreamUrlFor base (unscoped "pkg?inject=1")
+                `shouldBe` Right "https://registry.npmjs.org/pkg%3Finject%3D1"
+        it "encodes an accepted '#' so it cannot inject an upstream fragment" $
+            upstreamUrlFor base (unscoped "pkg#frag")
+                `shouldBe` Right "https://registry.npmjs.org/pkg%23frag"
 
     describe "refuses to build a URL from a hostile identifier" $ do
         it "rejects a traversal segment in the base name" $
@@ -615,12 +645,13 @@ upstreamUrlSpec = describe "upstreamUrlFor" $ do
                 `shouldBe` Left (UnsafeComponent "code/frame")
 
     describe "handles an '@'-leading name with no scope separator" $ do
-        it "accepts a bare '@'-prefixed name as a single safe component" $
+        it "accepts a bare '@'-prefixed name as a single component, percent-encoding the stray '@'" $
             -- A rendered name starting with '@' but carrying no '/' is treated as
-            -- one component (the 'nameComponents' fallback), and a stray '@' is
-            -- harmless to interpolate.
+            -- one component (the single-component fallback). With no structural
+            -- scope frame, the '@' is component content, so it is percent-encoded
+            -- ('%40') rather than emitted as a sigil.
             upstreamUrlFor base (unscoped "@foo")
-                `shouldBe` Right "https://registry.npmjs.org/@foo"
+                `shouldBe` Right "https://registry.npmjs.org/%40foo"
         it "still rejects a traversal hidden after an '@' scope prefix" $
             -- "@..\/b" splits to ["..", "b"]; the ".." component is caught.
             upstreamUrlFor base (unscoped "@../b") `shouldBe` Left (UnsafeComponent "..")
@@ -862,21 +893,46 @@ propertiesSpec = describe "properties" $ do
                 then blocked === False -- opt-in always wins
                 else blocked === looksInternal host
 
-    it "an accepted upstream URL never contains a traversal/separator artefact" $
+    it "an accepted upstream URL never contains a traversal/separator/injection artefact" $
         hedgehog $ do
             name <- forAll genName
             case upstreamUrlFor "https://registry.npmjs.org" name of
                 Left _ -> H.success -- refused names are fine
                 Right url -> do
-                    -- An accepted URL's path is exactly base ++ "/" ++ rendered,
-                    -- so beyond the scheme it must carry no "/../" or "/./" smuggle
-                    -- and no control character.
+                    -- An accepted URL is base ++ "/" ++ (one optional structural
+                    -- "@…%2F…" scope frame over percent-encoded components), so
+                    -- beyond the scheme its path must carry no "/../" or "/./"
+                    -- smuggle, no backslash, no control character, and no live
+                    -- escape, query, fragment, or space a component could inject.
                     let path = T.drop (T.length "https://registry.npmjs.org") url
                     annotateShow url
                     H.assert (not ("/../" `T.isInfixOf` path))
                     H.assert (not ("/./" `T.isInfixOf` path))
                     H.assert (not ("\\" `T.isInfixOf` path))
                     H.assert (T.all (\c -> c /= '\n' && c /= '\r' && c /= '\0') path)
+                    -- No injectable delimiter survives unescaped: a query, fragment,
+                    -- semicolon, or space a component carried is percent-encoded, so
+                    -- none appears literally in the path.
+                    H.assert (T.all (\c -> c `notElem` ['?', '#', ';', ' ']) path)
+                    -- Every '%' is a well-formed '%XX' escape this builder wrote
+                    -- (the '%2F' separator, or an encodeComponent escape) — a raw
+                    -- '%' a component carried is itself re-encoded to '%25', so no
+                    -- live escape (the once-decoded '%2e%2e%2f' vector) leaks.
+                    H.assert (allEscapesWellFormed path)
+
+{- | Whether every @\'%\'@ in the text begins a well-formed @%XX@ escape (two hex
+digits). A raw @\'%\'@ that a component carried is re-encoded to @%25@, so a path
+this builder produced has only well-formed escapes — the assertion that no live,
+once-decoded escape (the @%2e%2e%2f@ vector) survives into the upstream URL.
+-}
+allEscapesWellFormed :: Text -> Bool
+allEscapesWellFormed = go . toString
+  where
+    go ('%' : a : b : rest) = isHexDigit a && isHexDigit b && go rest
+    go ('%' : _) = False -- a '%' not followed by two hex digits is a raw, unescaped '%'
+    go (_ : rest) = go rest
+    go [] = True
+    isHexDigit c = c `elem` (['0' .. '9'] <> ['a' .. 'f'] <> ['A' .. 'F'])
 
 -- | A scalar wrapped in @n-1@ nested single-key objects, giving total depth @n@.
 nestObject :: Int -> Value

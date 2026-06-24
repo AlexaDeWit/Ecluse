@@ -9,7 +9,7 @@ import Test.Hspec.Hedgehog (hedgehog)
 
 import Ecluse.Ecosystem (Ecosystem (Npm))
 import Ecluse.Package (PackageName, mkPackageName)
-import Ecluse.Server.Route (Filename (Filename), Route (..), denyAll, isSafeComponent)
+import Ecluse.Server.Route (Filename (Filename), Route (..), denyAll, encodeComponent, isSafeComponent)
 import Ecluse.Version (Version, mkVersion)
 
 -- | An unscoped package identity, for building 'Tarball' routes in the assertions.
@@ -73,3 +73,24 @@ spec = do
             isSafeComponent "foo\tbar" `shouldBe` False
         it "rejects a component with a NUL" $
             isSafeComponent "foo\0bar" `shouldBe` False
+
+    describe "encodeComponent — the shared component percent-encoder" $ do
+        it "leaves an ordinary name unchanged (only unreserved characters)" $
+            encodeComponent "is-odd" `shouldBe` "is-odd"
+        it "leaves interior dots, hyphens, underscores, digits, and tildes unchanged" $
+            encodeComponent "lodash.merge_2~x" `shouldBe` "lodash.merge_2~x"
+        it "percent-encodes a literal percent sign (closing the once-decoded re-encode gap)" $
+            -- The crux of the defect: a once-decoded segment carrying '%2e%2e%2f'
+            -- must have its '%' re-encoded so the upstream never sees a live escape.
+            encodeComponent "foo%2e%2e%2fbar" `shouldBe` "foo%252e%252e%252fbar"
+        it "percent-encodes a literal slash" $
+            encodeComponent "a/b" `shouldBe` "a%2Fb"
+        it "percent-encodes the URL-reserved query, fragment, and sub-delimiter characters" $
+            encodeComponent "a?b#c;d" `shouldBe` "a%3Fb%23c%3Bd"
+        it "percent-encodes a space" $
+            encodeComponent "a b" `shouldBe` "a%20b"
+        it "percent-encodes a leading '@' (the scope sigil is added structurally, never within a component)" $
+            encodeComponent "@scope" `shouldBe` "%40scope"
+        it "encodes a multi-byte UTF-8 character byte-by-byte" $
+            -- 'é' is U+00E9, two UTF-8 bytes C3 A9, each percent-encoded.
+            encodeComponent "café" `shouldBe` "caf%C3%A9"

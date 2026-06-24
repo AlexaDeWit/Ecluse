@@ -114,6 +114,20 @@ rewriteSpec = describe "rewriteTarballUrls" $ do
         let once = rewriteTarballUrls base v
         rewriteTarballUrls base once `shouldBe` once
 
+    it "leaves a tarball untouched when the upstream-controlled name carries a traversal component" $ do
+        -- The packument's `name` is upstream-controlled. A name whose component is
+        -- a traversal would, if interpolated raw, build a `dist.tarball` aimed
+        -- outside the package's path; the rewrite must instead leave that version's
+        -- tarball as-is rather than emit a path-confusing URL.
+        v <- decodeValue traversalNamePackument
+        tarballAt "1.0.0" (rewriteTarballUrls base v)
+            `shouldBe` Just "https://upstream.test/thing/-/thing-1.0.0.tgz"
+
+    it "leaves a tarball untouched when the upstream-controlled name carries a control character" $ do
+        v <- decodeValue controlCharNamePackument
+        tarballAt "1.0.0" (rewriteTarballUrls base v)
+            `shouldBe` Just "https://upstream.test/thing/-/thing-1.0.0.tgz"
+
 -- ── filtering ────────────────────────────────────────────────────────────────
 
 filterSpec :: Spec
@@ -420,6 +434,36 @@ packumentWithExtras =
         [("latest", "1.0.0")]
         [versionLit "thing" "1.0.0" "https://upstream.test/thing/-/thing-1.0.0.tgz" [("customField", "\"kept\""), ("dist-extra-marker", "true")]]
         [("1.0.0", publishedDaysAgo 30)]
+
+{- | A packument whose (upstream-controlled) @name@ carries an embedded slash and
+@..@ traversal. A raw interpolation would aim the rewritten @dist.tarball@ outside
+the package's own path, so the rewrite must leave the version's tarball untouched.
+-}
+traversalNamePackument :: ByteString
+traversalNamePackument =
+    encode
+        ( "{\"name\":\"../evil\",\"dist-tags\":{\"latest\":\"1.0.0\"},"
+            <> "\"versions\":{\"1.0.0\":{\"name\":\"../evil\",\"version\":\"1.0.0\","
+            <> "\"dist\":{\"tarball\":\"https://upstream.test/thing/-/thing-1.0.0.tgz\"}}},"
+            <> "\"time\":{\"1.0.0\":\""
+            <> publishedDaysAgo 30
+            <> "\"}}"
+        )
+
+{- | A packument whose (upstream-controlled) @name@ carries a control character
+(a literal @\\u0001@), which the component-safety gate rejects — so the rewrite
+leaves the version's tarball untouched rather than interpolating it.
+-}
+controlCharNamePackument :: ByteString
+controlCharNamePackument =
+    encode
+        ( "{\"name\":\"th\\u0001ing\",\"dist-tags\":{\"latest\":\"1.0.0\"},"
+            <> "\"versions\":{\"1.0.0\":{\"name\":\"th\\u0001ing\",\"version\":\"1.0.0\","
+            <> "\"dist\":{\"tarball\":\"https://upstream.test/thing/-/thing-1.0.0.tgz\"}}},"
+            <> "\"time\":{\"1.0.0\":\""
+            <> publishedDaysAgo 30
+            <> "\"}}"
+        )
 
 -- | A version with no @dist@ object at all.
 distlessPackument :: ByteString
