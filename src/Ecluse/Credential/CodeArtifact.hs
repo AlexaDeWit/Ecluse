@@ -74,7 +74,7 @@ mirror write.
 newCodeArtifactProvider :: CodeArtifactConfig -> IO CredentialProvider
 newCodeArtifactProvider cfg = AWS.newEnv AWS.discover >>= \env -> providerForEnv env cfg
 
-{- | Build the provider over a caller-supplied @amazonka@ 'Env' — the seam the
+{- | Build the provider over a caller-supplied @amazonka@ 'Env' — the boundary the
 production 'newCodeArtifactProvider' wraps with credential discovery. The config's
 region is applied to the 'Env', and each mint calls @GetAuthorizationToken@ through
 it under the cache\/proactive-refresh\/single-flight\/breaker policy of

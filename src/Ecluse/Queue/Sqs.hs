@@ -18,8 +18,10 @@ timeout lapses; persistent failures fall to the queue's native dead-letter
 The @amazonka@ 'AWS.Env' is built once at 'newSqsQueue' and captured by the
 handle's closures, so the backend's state never reaches the proxy's @Env@\/@App@
 (see @docs\/architecture\/technology-stack.md@ → "Key Decisions"). The
-'MirrorJob' wire mapping is a plain JSON object, decoded strictly on 'receive' so
-a malformed body surfaces as an error rather than a silently-dropped field.
+'MirrorJob' wire mapping is a plain JSON object, decoded on 'receive'; a body that
+fails to parse is dropped rather than yielded as a partial, so — like any message
+left unprocessed — it is not 'ack'ed and SQS redelivers it, ultimately to the
+dead-letter queue.
 -}
 module Ecluse.Queue.Sqs (
     -- * Configuration
