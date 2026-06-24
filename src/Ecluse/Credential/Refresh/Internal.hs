@@ -31,24 +31,34 @@ module Ecluse.Credential.Refresh.Internal (
 import Control.Concurrent.STM (retry)
 import Data.Time (NominalDiffTime, UTCTime, addUTCTime, diffUTCTime)
 import UnliftIO (asyncWithUnmask, throwIO, try)
-import UnliftIO.Exception (finally, mask, stringException)
+import UnliftIO.Exception (finally, mask)
 
 import Ecluse.Breaker (Breaker, admit, initialBreaker, recordFailure, recordSuccess)
 import Ecluse.Credential (AuthToken (..), CredentialProvider (..))
 
-{- | The one failure a 'refreshingProvider' surfaces to its caller: there is no
-valid token to serve and a fresh mint is unavailable. A still-valid token is
-always served instead (the refresh fails silently in the background), so this is
-reached only on the expired-token path. Whether reaching it can affect a client
-serve depends on what the credential backs: never under the default @passthrough@
-strategy (mirror-write only), but it can where a provider sits on the
-private-upstream read (see the module header).
+{- | A failure surfaced from the credential-refresh layer.
+
+The runtime case is 'BreakerOpen': there is no valid token to serve and a fresh
+mint is unavailable. A still-valid token is always served instead (the refresh
+fails silently in the background), so this is reached only on the expired-token
+path. Whether reaching it can affect a client serve depends on what the credential
+backs: never under the default @passthrough@ strategy (mirror-write only), but it
+can where a provider sits on the private-upstream read (see the module header).
+
+The degenerate case is 'Unconfigured': a 'RefreshConfig' from
+'defaultRefreshConfig' was used without supplying an effectful leaf, a wiring
+fault the default raises loudly rather than silently serving nothing.
 -}
 data CredentialError
     = {- | The token has expired and the mint circuit breaker is open, so no mint
       is attempted; the caller must back off and retry later.
       -}
       BreakerOpen
+    | {- | A 'RefreshConfig' built from 'defaultRefreshConfig' was used without
+      supplying the named effectful leaf ('rcMint' or 'rcClock'). A wiring fault,
+      not a runtime token condition.
+      -}
+      Unconfigured Text
     deriving stock (Eq, Show)
 
 instance Exception CredentialError
@@ -111,8 +121,7 @@ defaultRefreshConfig =
         }
   where
     unconfigured :: Text -> IO a
-    unconfigured field =
-        throwIO (stringException ("Ecluse.Credential.Refresh: " <> toString field <> " is not configured"))
+    unconfigured field = throwIO (Unconfigured field)
 
 {- | The mutable state of a refreshing provider: the cached token, when its
 proactive refresh is due, the single-flight flag, and the breaker.

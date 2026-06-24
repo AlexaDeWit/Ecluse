@@ -31,7 +31,7 @@ import Amazonka.CodeArtifact.GetAuthorizationToken qualified as CA
 import Control.Monad.Trans.Resource (runResourceT)
 import Data.Time (getCurrentTime)
 import Lens.Micro (Lens', (?~), (^.))
-import UnliftIO.Exception (throwString)
+import UnliftIO.Exception (throwIO)
 
 import Ecluse.Credential (AuthToken (..), CredentialProvider, mkSecret)
 import Ecluse.Credential.Refresh (
@@ -39,6 +39,16 @@ import Ecluse.Credential.Refresh (
     defaultRefreshConfig,
     refreshingProvider,
  )
+
+{- The mint's one failure: @GetAuthorizationToken@ succeeded but carried no token.
+Thrown (not a stringly exception) because the refresh breaker runs this leaf and
+catches 'SomeException' to count failures and trip — the leaf must throw to be seen,
+and a returned value would fight that contract (STYLE.md section 11.4). Not exported
+for the same reason: the breaker sees it as a 'SomeException'. -}
+data CodeArtifactMintError = AuthorizationTokenMissing
+    deriving stock (Eq, Show)
+
+instance Exception CodeArtifactMintError
 
 {- | What the CodeArtifact leaf needs to mint a token. The AWS /credentials/ used
 to make the call are __not__ here: they are discovered the standard AWS way
@@ -105,9 +115,7 @@ providerForEnv env cfg =
         response <- runResourceT (AWS.send e request)
         secret <- case response ^. CA.getAuthorizationTokenResponse_authorizationToken of
             Just token -> pure (mkSecret token)
-            Nothing ->
-                throwString
-                    "Ecluse.Credential.CodeArtifact: GetAuthorizationToken returned no token"
+            Nothing -> throwIO AuthorizationTokenMissing
         pure
             AuthToken
                 { authSecret = secret

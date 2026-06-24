@@ -614,6 +614,25 @@ machinery the edge is built on. So:
 - The `either` package's `EitherT` (`Control.Monad.Trans.Either`) is
   **deprecated** in favour of `ExceptT` from `transformers`; do not introduce it.
 
+**Rule 11.4 — Justify every throw; a throw caught nearby wanted to be a value.**
+Throwing is the exception, not the default, so each `throwIO` carries a one-line
+reason *why a value would not do*, in the Haddock or a comment at the throw site.
+The good reasons are narrow:
+
+- **It integrates with an exception-based boundary you do not own.** The credential
+  breaker runs its mint leaf and catches `SomeException` to count failures and trip,
+  so that leaf must *throw* to be seen; returning a value would fight the contract.
+- **It is a wiring or programming fault with no per-request meaning.** An
+  unconfigured config leaf, or the unconfigured registry handle, has no caller
+  decision to make, only "fail loudly", so the exception is the fail-fast.
+
+The tell-tale that a value was the right answer: **a throw that the throwing
+function, or its immediate caller, catches and turns back into a normal result** —
+throw here, `tryAny` one frame up, degrade to `Nothing`. That round-trip is a value
+wearing an exception's clothes. Prefer returning the value; reach for the throw only
+when threading it back is genuinely worse (e.g. it would ripple a `Maybe` through a
+signature several layers off), and when you make that trade, say so at the site.
+
 This is the same instinct as §10 (totality). A partial function crashes on inputs
 *it did not name*; a stringly throw discards the *cause* it did know. Both trade a
 value the type could have carried for a surprise at run time.

@@ -133,7 +133,7 @@ import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types (ResponseHeaders, Status, hAuthorization, hContentType, mkStatus, status200, status401, status501, statusIsSuccessful)
 import Network.Wai (Request, Response, ResponseReceived, requestHeaders, responseLBS)
 import UnliftIO (concurrently)
-import UnliftIO.Exception (handle, throwIO, throwString, tryAny)
+import UnliftIO.Exception (handle, throwIO, tryAny)
 
 import Ecluse.Credential (Secret, mkSecret)
 import Ecluse.Env (Env (envLogEnv, envManager, envMetadataCache, envPrivateManager, envQueue))
@@ -417,10 +417,19 @@ fetchEntry logEnv limits manager baseUrl token name = do
     boundBreach err = logBreach logEnv name err *> throwIO (ResponseBoundExceeded err)
 
     decodeFailure :: IO CacheEntry
-    decodeFailure = throwString "packument did not decode into both a typed view and a raw document within the response bounds"
+    decodeFailure = throwIO PackumentUndecodable
 
 unpair :: CacheEntry -> (PackageInfo, Value)
 unpair entry = (entryInfo entry, entryRaw entry)
+
+{- The one bad-upstream condition the response-bound guards leave silent: the
+upstream answered, but its body did not decode into the typed view and raw document
+the serve path needs. A (typed) throw, not a stringly one, caught by the origin
+fetcher's @tryAny@ and degraded to a missing contribution like a bound breach. -}
+data PackumentUndecodable = PackumentUndecodable
+    deriving stock (Eq, Show)
+
+instance Exception PackumentUndecodable
 
 {- Log a response-bound breach at 'WarningS' before the contribution is degraded
 fail-closed, so an operator can distinguish a bound breach (a hostile\/oversized
