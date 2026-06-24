@@ -25,6 +25,27 @@ Source code, identifiers, comments, and commit messages stay in English.
 
 ---
 
+## Automation scripting
+
+Build and CI automation is **Bash** — one language, so there is one thing to read and
+review. Scripts live in [`scripts/`](scripts/) (`#!/usr/bin/env bash`, `set -euo
+pipefail`) and are invoked from the [`Makefile`](Makefile) or the workflows. The
+`Makefile` orchestrates; any non-trivial logic belongs in a `scripts/*.sh` file rather
+than inline in a workflow `run:` block, so it stays reviewable, `shellcheck`-able, and
+runnable outside CI. `awk`/`sort` handle structured-data munging — reach for them before
+a heavier runtime.
+
+Use another language only when one is genuinely *forced*, and say why in review:
+
+- **Lua** for the pandoc filters in [`web/`](web/) — pandoc's filter API is Lua.
+- **Make** and **Nix** are the task orchestrator and the build/derivation language; they
+  are not homes for procedural logic.
+
+Introducing a new build-time dependency on Python, Node, or similar needs a strong,
+stated reason — "it reads a little cleaner" is not one.
+
+---
+
 ## Releases, attestations & vulnerability scanning
 
 Écluse ships as a lean, reproducible OCI image built by Nix (`make docker-build`),
