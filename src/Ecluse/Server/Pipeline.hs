@@ -137,6 +137,7 @@ import UnliftIO.Exception (handle, throwIO, tryAny)
 
 import Ecluse.Credential (Secret, mkSecret)
 import Ecluse.Env (Env (envLogEnv, envManager, envMetadataCache, envPrivateManager, envQueue))
+import Ecluse.Log (moduleField)
 import Ecluse.Package (
     Artifact (artFilename, artHashes, artUrl),
     PackageDetails (pkgArtifacts),
@@ -417,7 +418,7 @@ fetchEntry logEnv limits manager baseUrl token name = do
     boundBreach err = logBreach logEnv name err *> throwIO (ResponseBoundExceeded err)
 
     decodeFailure :: IO CacheEntry
-    decodeFailure = throwIO PackumentUndecodable
+    decodeFailure = logDecodeFailure logEnv name *> throwIO PackumentUndecodable
 
 unpair :: CacheEntry -> (PackageInfo, Value)
 unpair entry = (entryInfo entry, entryRaw entry)
@@ -447,7 +448,8 @@ logBreach logEnv name err =
     -- The package the refused document was for, plus the breach detail, as the
     -- structured @data@ object on the line.
     payload =
-        sl "package" (renderPackageName name)
+        moduleField pipelineModule
+            <> sl "package" (renderPackageName name)
             <> sl "bound" boundName
             <> sl "observed" observed
             <> sl "cap" cap
@@ -465,6 +467,25 @@ logBreach logEnv name err =
         BodyTooLarge c -> ("body-size", "over " <> show c <> " bytes", show c <> " bytes")
         TooManyVersions seen c -> ("version-count", show seen, show c)
         TooDeeplyNested c -> ("nesting-depth", "over " <> show c <> " levels", show c <> " levels")
+
+-- The module these serve-path logs are emitted from, tagged on each line via
+-- 'Ecluse.Log.moduleField' so the stream can be filtered by emitter.
+pipelineModule :: Text
+pipelineModule = "Ecluse.Server.Pipeline"
+
+{- Log a parse failure at 'WarningS' — the one bad-upstream condition the response
+bound guards leave silent: the upstream answered, but its body did not decode into
+the typed view and raw document the serve path needs. Same fail-closed degrade and
+the same @module@\/@package@ payload as 'logBreach', so an operator sees an
+undecodable upstream distinctly rather than as silence. -}
+logDecodeFailure :: LogEnv -> PackageName -> IO ()
+logDecodeFailure logEnv name =
+    runKatipContextT logEnv payload mempty $
+        logFM WarningS (ls message)
+  where
+    payload = moduleField pipelineModule <> sl "package" (renderPackageName name)
+    message :: Text
+    message = "refused an upstream metadata document: it did not decode into a usable packument"
 
 {- The npm client config for one fetch: its response-bound budget, 'Manager', base
 URL, and injected token (the client's credential for the private origin, 'Nothing'

@@ -1653,6 +1653,13 @@ versionFloodPackument =
     floodVersions :: [Text]
     floodVersions = ["1.0.0", "2.0.0", "3.0.0", "4.0.0"]
 
+{- | A tiny body that is not valid JSON, so it fails the decode (not a bound) and
+exercises the parse-failure log — the one bad-upstream case the bound guards leave
+silent.
+-}
+undecodableBody :: LByteString
+undecodableBody = "!"
+
 {- | A JSON body nested deeper than the tight @maxNestingDepth@ (a chain of nested
 arrays). It is valid JSON but not a packument; 'checkNestingDepth' refuses it at the
 decode boundary, before projection ever runs — so the nesting bound, not a parse
@@ -1811,7 +1818,7 @@ captureBreachLog privateBody = do
                 pure ()
 
 boundsLogSpec :: Spec
-boundsLogSpec = describe "a response-bound breach is logged before degrading" $ do
+boundsLogSpec = describe "serve-path warnings are logged before degrading" $ do
     it "logs a WARNING naming the version-count bound, distinct from a plain parse failure" $ do
         -- A version flood on the private leg breaches the version-count bound; the
         -- public leg is down, so the request 503s (the degrade path). The breach must
@@ -1834,6 +1841,19 @@ boundsLogSpec = describe "a response-bound breach is logged before degrading" $ 
         logged <- captureBreachLog deeplyNestedBody
         logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Warning\""
         logged `shouldSatisfy` T.isInfixOf "\"bound\":\"nesting-depth\""
+
+    it "logs a WARNING on an undecodable upstream body (the case the bound guards leave silent)" $ do
+        -- A body that is not valid JSON fails the decode, not a bound; it was silently
+        -- degraded before, and must now log a WARNING distinct from a bound breach.
+        logged <- captureBreachLog undecodableBody
+        logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Warning\""
+        logged `shouldSatisfy` T.isInfixOf "did not decode"
+
+    it "tags every serve-path log line with the emitting module" $ do
+        -- The standardised `module` field names the emitter on the JSON line, so the
+        -- stream can be filtered by source without leaning on the katip namespace.
+        logged <- captureBreachLog versionFloodPackument
+        logged `shouldSatisfy` T.isInfixOf "\"module\":\"Ecluse.Server.Pipeline\""
 
 -- A mirror queue whose 'enqueue' always throws, for the best-effort assertion: the
 -- serve path must swallow the failure and still serve the artifact. 'receive' is a
