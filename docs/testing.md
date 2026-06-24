@@ -62,6 +62,28 @@ registry calls it needs real external access (here, cloud credentials), so it's 
 fail and stays isolated to one small function per cloud, an accepted residual risk,
 consistent with the rest of this tier.
 
+## End-to-end tests: `ecluse-e2e` (non-gating)
+
+The only tier that assembles the **whole system through the real composition root** and
+drives it with the **real `npm` CLI**. It runs the actual published OCI image
+(`nix build .#dockerImage`), an nginx public-upstream stub, and a Verdaccio private
+upstream + mirror target as containers on a docker network, then asserts client- and
+mirror-observable outcomes: an allow-listed package installs; a rules-denied one is blocked
+and never mirrored; an installed package round-trips server→worker to the private mirror; a
+tampered artifact fails the integrity gate and never publishes. It is the tier that catches
+**composition-root and cross-component** regressions nothing else does — its first run found
+that the path-relative `dist.tarball` rewrite was not installable by `npm` (now fixed by
+`PROXY_PUBLIC_URL`).
+
+It is **non-gating** — far heavier than the gate (an image build, multiple containers, the
+npm CLI) — and runs pre-merge for visibility and nightly, like the smoke tier; the CI `gate`
+never depends on it. The egress guard refuses internal addresses on the public path, so the
+containers run on an RFC 5737 documentation subnet (`203.0.113.0/24`) the guard treats as
+external — **no production escape hatch**, the real default-build image runs unmodified. Run
+`make test-e2e` (it builds + loads the image, then runs the suite); it needs a Docker daemon
+and the npm CLI, and **skips** (every case `pending`) when `ECLUSE_E2E_IMAGE` is unset. The
+design is in [`planning/slices/S53-e2e-ecosystem.md`](../planning/slices/S53-e2e-ecosystem.md).
+
 ## What gates, and what doesn't
 
 Two things about the split are easy to get backwards, so I'll state them plainly:

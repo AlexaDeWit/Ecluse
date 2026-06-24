@@ -178,6 +178,37 @@ jobs:
       - name: Smoke tests
         run: nix develop .#ci --command make test-smoke
 
+  e2e:
+    name: End-to-end tests (whole-system, real npm — non-gating)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Stands the whole system up as the real OCI image + nginx stub + Verdaccio on a
+    # docker network and drives it with the real npm CLI (S53). Catches composition-root
+    # and cross-component regressions nothing else does, but it is heavy (a Nix image
+    # build, containers, npm) — so it is NOT a `gate` dependency and runs
+    # continue-on-error: visible on every PR and nightly, never a blocker. Uses the full
+    # dev shell (not `.#ci`) because the harness needs the npm CLI on PATH. Revisit the
+    # cadence (e.g. nightly-only) if the runner lacks the disk/memory/compute.
+    continue-on-error: true
+    env:
+      CABAL_DIR: ${{ github.workspace }}/.cabal
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Set up toolchain
+        uses: ./.github/actions/setup-toolchain
+        with:
+          cabal-cache: "true"
+
+      - name: Update package index
+        run: nix develop --command make update
+
+      - name: End-to-end suite (builds + loads the image, drives the real npm CLI)
+        run: nix develop --command make test-e2e
+
   static-checks:
     name: Static checks (format, lint, Semgrep, workflows)
     runs-on: ubuntu-latest

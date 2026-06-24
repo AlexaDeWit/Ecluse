@@ -23,7 +23,7 @@ IMAGE ?= docker.io/alexadewit/ecluse
 HADDOCK_FLAGS := --haddock-hyperlink-source --haddock-quickjump
 
 .DEFAULT_GOAL := help
-.PHONY: help update build test test-integration test-smoke test-all doctest \
+.PHONY: help update build test test-integration test-smoke test-e2e test-all doctest \
         coverage coverage-unit freeze gen-version-fixtures new-worktree format format-check lint sast \
         cabal-check lint-workflows lint-scripts weeder check gate run docs \
         docs-check docs-site site nix-build nix-check docker-build docker-push sbom scan \
@@ -58,6 +58,13 @@ test-integration: ## Run the integration suite (requires a Docker daemon)
 
 test-smoke: ## Run the smoke suite (live registries; non-gating)
 	$(NIX) cabal test ecluse-smoke --test-show-details=direct
+
+# End-to-end: builds the real OCI image, loads it, and runs the whole system as
+# containers driven by the real npm CLI. Heavy and NON-GATING — never wired into
+# `check`/`gate`. Needs a Docker daemon + the npm CLI. See scripts/e2e.sh and
+# planning/slices/S53-e2e-ecosystem.md.
+test-e2e: ## Run the end-to-end suite (builds + runs the real image; non-gating)
+	$(NIX) bash scripts/e2e.sh
 
 test-all: test test-integration test-smoke ## Run every test suite
 

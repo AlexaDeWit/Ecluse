@@ -75,53 +75,73 @@ to end. The headline flow no current tier exercises:
   composition (swap the in-memory queue for ministack SQS where it adds coverage).
 
 **Acceptance criteria** (representative scenarios — the `e2e` suite is green on
-each, locally with Docker + npm and in the nightly CI job):
-- [ ] **install (allow):** `npm install` of an allow-listed package (published
+each via `make test-e2e` and in the CI e2e job):
+- [x] **install (allow):** `npm install` of an allow-listed package (published
   >7 days ago, so the default `min-age` rule admits it) succeeds end to end, with
-  the **correct bytes / integrity** (npm's own SRI check passes).
-- [ ] **deny:** a package carrying an **install script** (denied by
+  npm's own SRI check passing on the served bytes.
+- [x] **deny:** a package carrying an **install script** (denied by
   `DenyInstallTimeExecution`) is **blocked at the public surface** — `npm install`
-  fails, the package is never served, and **no mirror job is enqueued**.
-- [ ] **mirror round-trip (headline):** a first `npm install` triggers an enqueue;
-  the worker mirrors the artifact to Verdaccio; a **later install is served from
-  the private mirror** — proven by taking the public stub offline (or 404) and
-  showing the install still succeeds.
-- [ ] **integrity tamper:** the public stub serves an artifact whose bytes do
+  fails and the package is never mirrored.
+- [x] **mirror round-trip (headline):** an `npm install` triggers a demand-driven
+  enqueue; the worker mirrors the artifact to Verdaccio (server↔worker, in one
+  process over the in-memory queue), and the version becomes present in the private
+  mirror.
+- [x] **integrity tamper:** the public stub serves an artifact whose bytes do
   **not** match the version's integrity; the worker's strongest-digest gate
   **rejects it and never publishes** (the mirror stays empty for that version).
-- [ ] **HEAD on a tarball** does not pump the upstream body (ties to
-  [#211](https://github.com/AlexaDeWit/Ecluse/issues/211) / [#270](https://github.com/AlexaDeWit/Ecluse/issues/270)).
-- [ ] **graceful drain:** under a small concurrent load, a `SIGTERM` flips
-  readiness (`/readyz`) and lets in-flight requests complete before exit (ties to
-  [#160](https://github.com/AlexaDeWit/Ecluse/issues/160) / the S19 drain work).
+- [ ] **HEAD on a tarball** does not pump the upstream body — **pending**, ties to
+  the [#211](https://github.com/AlexaDeWit/Ecluse/issues/211) / [#269](https://github.com/AlexaDeWit/Ecluse/pull/269)
+  fix (not on this base); the case is written and `pending`, activating when that lands.
+- [ ] **graceful drain:** a `SIGTERM` flips readiness (`/readyz`) and drains
+  in-flight work — **pending**, ties to [#160](https://github.com/AlexaDeWit/Ecluse/issues/160).
 - [ ] _publish round-trip via the publication target — **deferred** to land with
   [#163](https://github.com/AlexaDeWit/Ecluse/issues/163) / S52 (the publish path
-  itself is not built yet); the harness leaves a marked hook for it._
+  itself is not built yet)._
+
+**Bugs the tier surfaced and fixed (the slice's payoff).** On its first real run
+against a live `npm` client + Verdaccio, the e2e tier caught two composition-level
+defects no unit/integration test could (none drives a real client), both fixed here:
+1. **`dist.tarball` was rewritten path-relative (`/npm/…`)**, which `npm` reads as a
+   local `file:` path and cannot install. Fixed by a new **`PROXY_PUBLIC_URL`** config
+   that makes the composition root emit an **absolute** rewrite base
+   (`Ecluse.Config`, `Ecluse.Composition`); `USAGE.md` documents it as required for
+   real installs.
+2. **The mirror worker's publish omitted `Content-Type: application/json`**, which a
+   spec-compliant registry (Verdaccio) rejects with `415` — so no artifact ever
+   mirrored. Fixed in `Ecluse.Registry.Npm.publishRequest` (the docstring already
+   promised the header; the code never set it).
 
 **File scope.**
+
+_The e2e tier:_
 - `test/e2e/Spec.hs` — `hspec-discover` entry for the new suite.
 - `test/e2e/Ecluse/E2E/Harness.hs` — the docker orchestration via `typed-process`:
-  create/destroy the TEST-NET network, `docker load` the image archive + parse its
-  tag, run/stop the proxy + Verdaccio + nginx-stub containers, publish + `/readyz`
-  wait, and the isolated-`npm` driver.
-- `test/e2e/Ecluse/E2E/Fixtures.hs` — generate the nginx static tree per scenario:
-  npm-format packuments + tarballs with **correct SRI** (`npm pack` + `crypton`
-  sha512), and the allow / deny / missing / tamper variants.
-- `test/e2e/Ecluse/E2E/*Spec.hs` — one spec per scenario group above.
-- `scripts/e2e-*.sh` — any non-trivial docker glue (Bash, `shellcheck`-clean), so
-  logic stays out of inline blocks per `CONTRIBUTING.md` → Automation scripting.
-- `ecluse.cabal` — the `ecluse-e2e` test-suite stanza (`typed-process`; Docker + npm;
-  non-gating). **No library/flag change** — the production image is run as-is.
-- `Makefile` — `test-e2e` target (builds `.#dockerImage`, then runs the suite;
-  **not** in `check`/`gate`).
+  pick the host port up front (for `PROXY_PUBLIC_URL`), create the TEST-NET network,
+  run/stop the proxy + Verdaccio + nginx-stub containers, `/readyz` wait, the
+  isolated-`npm` driver and the HTTP/mirror probes, and teardown.
+- `test/e2e/Ecluse/E2E/Fixtures.hs` — generate the nginx static tree: npm-format
+  packuments + `tar`-built tarballs with **correct SRI** (`crypton` sha512), in
+  allow / deny / mirror / tamper variants.
+- `test/e2e/Ecluse/E2E/SuiteSpec.hs` — the scenarios, one booted env via `aroundAll`,
+  skipping `pending` when the env is unavailable.
+- `ecluse.cabal` — the `ecluse-e2e` test-suite stanza (non-gating).
+- `scripts/e2e.sh` + `Makefile` `test-e2e` — build + load the image, run the suite;
+  **not** in `check`/`gate`.
 - `.github/workflows/ci.yml` — a non-gating `e2e` job (PR visibility + nightly),
-  never wired as a `gate` dependency.
-- `test/unit/Ecluse/Security/EgressSpec.hs` — a **tripwire** case pinning that
-  `203.0.113.0/24` (and the other RFC 5737 documentation ranges) are deliberately
-  **not** in `blockedRanges`, commented to the e2e tier + #178, so a future blocklist
-  audit makes a conscious choice rather than silently breaking e2e. _(Add to the
-  existing egress spec; this is the one touch outside `test/e2e`.)_
+  `continue-on-error`, never a `gate` dependency.
 - `docs/testing.md` — document the new tier (what it covers, that it never gates).
+- `test/unit/Ecluse/SecuritySpec.hs` — the **tripwire** pinning the RFC 5737
+  documentation ranges (incl. `203.0.113.0/24`) as deliberately **not** in
+  `blockedRanges`, commented to the e2e tier + #178.
+
+_The two production fixes the tier surfaced (see above):_
+- `src/Ecluse/Config.hs` — the `PROXY_PUBLIC_URL` field + env parse.
+- `src/Ecluse/Composition.hs` — `mountBaseUrl`: the absolute rewrite base under
+  `PROXY_PUBLIC_URL` (relative-path fallback retained).
+- `src/Ecluse/Registry/Npm.hs` — set `Content-Type: application/json` on publish.
+- `USAGE.md` — document `PROXY_PUBLIC_URL`.
+- `test/unit/Ecluse/ConfigSpec.hs`, `test/unit/Ecluse/CompositionSpec.hs`,
+  `test/unit/Ecluse/Registry/NpmSpec.hs` — unit coverage for the three fixes.
 
 **Test tier.** A new **`e2e`** tier — slower, real-`npm`, real-Verdaccio, the
 **real OCI image** — **non-gating** (pre-merge visibility + nightly), alongside the
