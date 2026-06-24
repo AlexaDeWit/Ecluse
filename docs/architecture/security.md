@@ -37,15 +37,15 @@ noted below.
    [Web Layer](web-layer.md#raw-wai-not-a-web-framework). That structural gate is a
    denylist, so it is paired with **encode-on-build**: every accepted name component
    is percent-encoded (`Ecluse.Server.Route.encodeComponent`) when the upstream URL
-   is composed — around the structural `@` sigil and `%2F` scope separator the
+   is composed, around the structural `@` sigil and `%2F` scope separator the
    builder writes itself, so a legitimate scoped name still yields exactly one
-   `%2F`. A reserved byte the denylist admits — a `%`, `?`, `#`, `;`, or space, the
-   canonical case being a once-decoded segment carrying a literal `%2e%2e%2f` — is
+   `%2F`. A reserved byte the denylist admits (a `%`, `?`, `#`, `;`, or space; the
+   canonical case being a once-decoded segment carrying a literal `%2e%2e%2f`) is
    therefore re-encoded (`%2e%2e%2f` → `%252e%252e%252f`) rather than reaching the
    upstream raw, where a decode-and-normalise CDN could resolve it to traversal or a
    `?`/`#` could inject an upstream query/fragment. Both seams that compose an
-   upstream URL from a name — the data-plane request builders (`Ecluse.Registry.Npm`)
-   and the defence-in-depth re-check (`Ecluse.Security.upstreamUrlFor`) — apply the
+   upstream URL from a name, the data-plane request builders (`Ecluse.Registry.Npm`)
+   and the defence-in-depth re-check (`Ecluse.Security.upstreamUrlFor`), apply the
    same encoder.
 2. **Outbound fetches are restricted to the configured upstream hosts** (an
    allowlist). Artifact bytes are fetched only from the upstream-declared

@@ -140,7 +140,7 @@ with any service that fetches on a client's behalf, the sensible posture is
 itself, with an **origin-aware trust model**:
 
 - **Untrusted origins**: the public-upstream fetch and every artifact (`dist.tarball`)
-  fetch all go through a host **allowlist**, an **internal-address block** (loopback,
+  fetch from an untrusted origin go through a host **allowlist**, an **internal-address block** (loopback,
   link-local incl. the `169.254.169.254` metadata endpoint, the unspecified
   `0.0.0.0/8` / `::` range, RFC1918, CGNAT, and IPv6 ULA `fc00::/7` incl.
   `fd00:ec2::254`) **re-applied to every resolved IP** at connection time (so an
