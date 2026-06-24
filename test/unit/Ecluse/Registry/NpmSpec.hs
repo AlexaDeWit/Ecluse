@@ -44,6 +44,7 @@ import Ecluse.Ecosystem (Ecosystem (Npm))
 import Ecluse.Package (PackageInfo (infoName), PackageName, mkPackageName, mkScope, renderPackageName)
 import Ecluse.Registry (
     PublishError (publishErrorMessage),
+    PublishFault (PublishRejected, PublishUrlUnformable),
     RegistryClient (
         fetchArtifact,
         fetchMetadata,
@@ -414,23 +415,23 @@ urlFailureSpec = describe "URL-formation failures" $ do
         let config = NpmClientConfig{npmBaseUrl = "", npmManager = manager, npmToken = Nothing}
         publishRequest config isOdd publishDoc `shouldSatisfy` urlErrorWas EmptyBaseUrl
 
-    it "publishArtifact throws on an unformable URL (config fault, not a retriable publish error)" $ do
+    it "reports an unformable URL as a non-retriable PublishUrlUnformable value (a config fault to drop, not thrown and not a retriable rejection)" $ do
         manager <- newManager defaultManagerSettings
         client <- newNpmClient NpmClientConfig{npmBaseUrl = "", npmManager = manager, npmToken = Nothing}
-        outcome <- try (publishArtifact client isOdd v1 publishDoc)
-        outcome `shouldSatisfy` threwPublish
+        outcome <- publishArtifact client isOdd v1 publishDoc
+        outcome `shouldBe` Left (PublishUrlUnformable EmptyBaseUrl)
 
-    it "fetchMetadata throws on an unformable URL (config fault, not a silent success)" $ do
+    it "fetchMetadata raises the typed UrlFormationError on an unformable URL (catchable by type, not a stringly exception)" $ do
         manager <- newManager defaultManagerSettings
         client <- newNpmClient NpmClientConfig{npmBaseUrl = "", npmManager = manager, npmToken = Nothing}
         outcome <- try (fetchMetadata client isOdd)
-        outcome `shouldSatisfy` threw
+        outcome `shouldBe` (Left EmptyBaseUrl :: Either UrlFormationError RegistryResponse)
 
-    it "fetchArtifact throws on an unformable URL" $ do
+    it "fetchArtifact raises the typed UrlFormationError on an unformable URL" $ do
         manager <- newManager defaultManagerSettings
         client <- newNpmClient NpmClientConfig{npmBaseUrl = "", npmManager = manager, npmToken = Nothing}
         outcome <- try (fetchArtifact client isOdd v1)
-        outcome `shouldSatisfy` threw
+        outcome `shouldBe` (Left EmptyBaseUrl :: Either UrlFormationError RegistryResponse)
 
     it "reports a non-empty but unparseable base URL as UnparseableUrl" $ do
         manager <- newManager defaultManagerSettings
@@ -498,8 +499,11 @@ publishDoc = "{\"_id\":\"is-odd\",\"name\":\"is-odd\"}"
 {- | The (forced) error message of a publish 'Left', or 'Nothing' on a 'Right'.
 Forcing the message exercises the error-construction path.
 -}
-leftMessage :: Either PublishError a -> Maybe Text
-leftMessage = either (Just . publishErrorMessage) (const Nothing)
+leftMessage :: Either PublishFault a -> Maybe Text
+leftMessage outcome = case outcome of
+    Left (PublishRejected err) -> Just (publishErrorMessage err)
+    Left (PublishUrlUnformable _) -> Nothing
+    Right _ -> Nothing
 
 {- | Whether a request-builder result is the expected 'UrlFormationError'. The
 typed equality is the assertion that a URL fault is reported as a
@@ -514,14 +518,3 @@ isUnparseable = either matchUnparseable (const False)
   where
     matchUnparseable (UnparseableUrl _) = True
     matchUnparseable _ = False
-
--- | Whether a @try@'d fetch raised, rather than returning a response.
-threw :: Either SomeException RegistryResponse -> Bool
-threw = isLeft
-
-{- | Whether a @try@'d publish raised, rather than returning a publish outcome. A
-URL-formation fault on the publish path is a config fault that throws, not a
-'PublishError' the mirror job would retry.
--}
-threwPublish :: Either SomeException (Either PublishError ()) -> Bool
-threwPublish = isLeft

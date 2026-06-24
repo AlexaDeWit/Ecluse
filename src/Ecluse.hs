@@ -98,7 +98,6 @@ import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
 import Data.Time (getCurrentTime)
 import Katip (Environment (Environment))
-import System.IO.Error (userError)
 import UnliftIO (concurrently_, throwIO)
 
 import Ecluse.Composition (
@@ -288,8 +287,18 @@ handles, in the @App@ orchestration monad.
 runWorker :: Env -> IO ()
 runWorker _env = pass
 
+{- | Raised by 'unconfiguredRegistry' when an effectful registry field is called
+with no backend wired in — a composition-root misconfiguration. A distinct typed
+exception (not a stringly @userError@), so the refusal is observable in a test,
+catchable by type, and never mistaken for a configured backend's own failure.
+-}
+data RegistryUnconfigured = RegistryUnconfigured
+    deriving stock (Eq, Show)
+
+instance Exception RegistryUnconfigured
+
 {- | A registry handle with no backend behind it: every effectful field __refuses
-loudly__ ('throwIO') and every pure @parse*@ field returns 'Left', so an
+loudly__ (a typed 'RegistryUnconfigured') and every pure @parse*@ field returns 'Left', so an
 unconfigured fetch\/publish or parse fails explicitly rather than silently
 returning a fabricated success. It holds the handle slot in the composition root
 where a configured backend is selected elsewhere.
@@ -306,7 +315,7 @@ unconfiguredRegistry =
         }
   where
     refuse :: IO a
-    refuse = throwIO (userError "registry: no backend configured")
+    refuse = throwIO RegistryUnconfigured
 
     notConfigured :: ParseError
     notConfigured = ParseError{parseErrorMessage = "no registry backend configured"}

@@ -41,6 +41,7 @@ module Ecluse.Registry (
     -- * Errors
     ParseError (..),
     PublishError (..),
+    PublishFault (..),
     UrlFormationError (..),
 ) where
 
@@ -101,6 +102,34 @@ data UrlFormationError
       UnparseableUrl Text
     deriving stock (Eq, Show)
 
+{- | A 'UrlFormationError' is throwable. The __read__ path (metadata\/artifact
+fetch) treats an unformable URL as a configuration fault and raises it as this
+typed exception — catchable by type, never laundered into a stringly-typed
+@stringException@. The __write__ path does not throw it: it surfaces it as a
+'PublishFault' value instead (see below), because the mirror worker must decide
+retry vs. drop on it.
+-}
+instance Exception UrlFormationError
+
+{- | Why a publish could not complete, surfaced as a __value__ rather than thrown
+so the mirror worker decides retry vs. drop by an exhaustive pattern match rather
+than by catching (and re-classifying) an exception. The two cases differ in
+exactly that — retryability — which is the whole reason this is a value: one is
+worth redelivering and the other never is.
+-}
+data PublishFault
+    = {- | The request URL could not be formed (e.g. an empty base URL) — a
+      configuration fault carried as its 'UrlFormationError'. __Not retryable__:
+      redelivering the job cannot change a misconfigured base URL, so the worker
+      drops (and alerts) rather than re-enqueueing forever.
+      -}
+      PublishUrlUnformable UrlFormationError
+    | {- | The registry rejected the write (a non-2xx, non-@409@ status), carried
+      as a 'PublishError'. __Retryable__: the job is left un-acked and redelivered.
+      -}
+      PublishRejected PublishError
+    deriving stock (Eq, Show)
+
 {- | The registry-protocol handle — a record of functions over a backend whose
 private state the closures capture. The effectful fields return 'IO' (decoupled
 from the core); the @parse*@ fields are pure. See the module header.
@@ -110,10 +139,12 @@ data RegistryClient = RegistryClient
     -- ^ Fetch a package's metadata document (its packument) from the registry.
     , fetchArtifact :: PackageName -> Version -> IO RegistryResponse
     -- ^ Fetch the artifact bytes for one version.
-    , publishArtifact :: PackageName -> Version -> ByteString -> IO (Either PublishError ())
+    , publishArtifact :: PackageName -> Version -> ByteString -> IO (Either PublishFault ())
     {- ^ Publish an artifact's bytes for one version to the registry. Idempotent
     at the protocol level (versions are immutable), so a redelivered mirror
-    job's re-publish is safe.
+    job's re-publish is safe. A failure is reported as a 'PublishFault' __value__
+    — 'PublishRejected' (retry) or 'PublishUrlUnformable' (drop) — never thrown,
+    so the worker's retry-vs-drop decision is total at the call site.
     -}
     , parsePackageInfo :: RegistryResponse -> Either ParseError PackageInfo
     {- ^ Project a fetched metadata response into the packument-level

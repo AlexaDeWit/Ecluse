@@ -108,7 +108,6 @@ import Network.HTTP.Types.Header (
  )
 import Network.HTTP.Types.Status (statusCode)
 import UnliftIO (throwIO)
-import UnliftIO.Exception (stringException)
 
 import Ecluse.Credential (Secret, unSecret)
 import Ecluse.Package (
@@ -119,6 +118,7 @@ import Ecluse.Package (
  )
 import Ecluse.Registry (
     PublishError (..),
+    PublishFault (PublishRejected, PublishUrlUnformable),
     RegistryClient (..),
     RegistryResponse (RegistryResponse),
     UrlFormationError (EmptyBaseUrl, UnparseableUrl),
@@ -396,9 +396,11 @@ conditional-GET 'Validators'. The buffered fetch used by the handle's
 'Ecluse.Registry.fetchMetadata'; the request pipeline calls this directly when it
 needs the full packument or wants to revalidate against an @ETag@.
 
-A request-building failure (an unformable URL) surfaces as an 'IO' exception
-rather than a silent success: a misconfigured base URL is a programming\/config
-fault, not a per-response condition the projection layer reports.
+A request-building failure (an unformable URL) surfaces as a typed
+'UrlFormationError' exception rather than a silent success: a misconfigured base
+URL is a programming\/config fault on the read path, not a per-response condition
+the projection layer reports. (The write path instead returns it as a
+'Ecluse.Registry.PublishFault' value, where the worker must choose retry vs. drop.)
 -}
 fetchMetadataForm ::
     NpmClientConfig ->
@@ -423,36 +425,39 @@ already present) as idempotent success.
 
 A published @name\@version@ is immutable, so a conflict means the bytes are
 already there — exactly the success a redelivered mirror job wants, not an error
-to retry forever. Any other non-2xx status is reported as a 'PublishError' so the
-mirror job is left un-acked and retried.
+to retry forever. Any other non-2xx status is reported as a 'PublishRejected' so
+the mirror job is left un-acked and retried.
 
-A request-building failure (an unformable URL) is a config\/programming fault,
-not a per-response publish condition, so it surfaces as an 'IO' exception (like
-the fetch paths) rather than as a 'PublishError' the mirror job would retry
-forever.
+A request-building failure (an unformable URL) is reported as a
+'PublishUrlUnformable' __value__, distinct from 'PublishRejected': it is a
+config\/programming fault the worker must __drop__, not a transient rejection it
+should retry forever. Surfacing it as a value (rather than throwing, as the read
+paths do) keeps that retry-vs-drop decision total at the call site.
 -}
 publishArtifact' ::
     NpmClientConfig ->
     PackageName ->
     Version ->
     ByteString ->
-    IO (Either PublishError ())
-publishArtifact' config name _version document = do
-    request <- orThrow (publishRequest config name document)
-    response <- httpLbs request (npmManager config)
-    let code = statusCode (responseStatus response)
-    pure (classifyPublish code)
+    IO (Either PublishFault ())
+publishArtifact' config name _version document =
+    case publishRequest config name document of
+        Left urlErr -> pure (Left (PublishUrlUnformable urlErr))
+        Right request -> do
+            response <- httpLbs request (npmManager config)
+            let code = statusCode (responseStatus response)
+            pure (classifyPublish code)
 
-{- Map a publish response status onto success or a 'PublishError'. A 2xx or a
-@409@ (already present, immutable) is success; anything else is reported so the
-job is retried.
+{- Map a publish response status onto success or a 'PublishFault'. A 2xx or a
+@409@ (already present, immutable) is success; anything else is a retryable
+'PublishRejected' naming the status the job saw.
 -}
-classifyPublish :: Int -> Either PublishError ()
+classifyPublish :: Int -> Either PublishFault ()
 classifyPublish code
     | code >= 200 && code < 300 = Right ()
     | code == 409 = Right () -- version already present; immutable, so success-equivalent
     | otherwise =
-        Left (PublishError ("publish failed with HTTP status " <> show code))
+        Left (PublishRejected (PublishError ("publish failed with HTTP status " <> show code)))
 
 -- ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -549,11 +554,13 @@ parseRequestEither url =
         Just request -> Right request
         Nothing -> Left (UnparseableUrl url)
 
-{- Run a request-building 'Either', throwing its 'UrlFormationError' as an 'IO'
-exception. Used by the effectful fetch and publish paths, where an unformable URL
-is a config fault rather than a per-response condition.
+{- Run a request-building 'Either' from a __read__ path, raising its
+'UrlFormationError' as the typed exception it is (no stringly @stringException@).
+Used by the metadata and artifact fetches, where an unformable URL is a config
+fault rather than a per-response condition; the write path instead returns it as
+a 'PublishUrlUnformable' value.
 -}
 orThrow :: Either UrlFormationError Request -> IO Request
 orThrow = \case
-    Left err -> throwIO (stringException ("could not form upstream URL: " <> show err))
+    Left err -> throwIO err
     Right request -> pure request

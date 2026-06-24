@@ -224,7 +224,7 @@ vertical slice of one area, not a horizontal type-vs-function split.
   the code is about), not by *layer* (type vs class vs handler).
 - GHC requires the module name to match the file path — PascalCase and
   hierarchical: `Ecluse.Rules.Types` ⇄ `src/Ecluse/Rules/Types.hs`. The compiler
-  enforces this; tests mirror it (`test/unit/Ecluse/RulesSpec.hs`, see §11).
+  enforces this; tests mirror it (`test/unit/Ecluse/RulesSpec.hs`, see §12).
 - Prefer a few cohesive modules over many tiny ones. A module per single
   function is over-splitting; a 1,000-line module spanning three concerns is
   under-splitting. Aim for one clear responsibility per module. (`Ecluse.Version`
@@ -551,7 +551,76 @@ Rules for the escape hatch:
 
 ---
 
-## 11. Tests
+## 11. Errors: values in the core, typed exceptions at the edge
+
+A resilience proxy spends most of its effort deciding how to *respond* when
+something upstream goes wrong, so how an error is represented is a design
+decision, not an afterthought. The rule has two halves: what shape an error
+takes, and what monad it lives in.
+
+**Rule 11.1 — A domain outcome is a value; a fault is a typed exception.** Before
+you reach for `throwIO`, ask which kind of failure you are holding:
+
+- A **domain outcome** is a result the caller must *decide on*: a fetch that
+  404s, a publish the registry rejected, a packument that did not parse, a rule
+  that denied a version. Return it in the type (an `Either`, a `Maybe`, or a
+  purpose-built sum) so the caller cannot forget it. This is "parse, don't
+  validate" (the guiding principle) carried to the effectful edge: the outcome is
+  evidence the type forces the next step to read.
+- A **fault** is a condition no local caller can sensibly act on: a base URL
+  misconfigured at the composition root, an invariant the program itself broke, a
+  resource that vanished mid-stream. Raise it as a *typed* exception that unwinds
+  to a boundary built to log it and fail closed. `BootAborted` and the credential
+  breaker's `CredentialError` are this category.
+
+The same surface can sit on either side of the line depending on context. The npm
+handle returns an unformable publish URL as a `PublishUrlUnformable` value,
+because the mirror worker has a real decision to make (drop it and never retry, as
+against a `PublishRejected` it should leave un-acked and redeliver). The *same*
+unformable URL from the unconfigured null handle is a typed `RegistryUnconfigured`
+exception, because there is no request to decide about: the handle was wired
+wrong, and the only correct move is to fail loudly.
+
+```haskell
+-- A value: the worker pattern-matches and chooses retry vs. drop.
+publishArtifact :: PackageName -> Version -> ByteString -> IO (Either PublishFault ())
+
+-- An exception: a misconfigured composition root has nothing to decide.
+refuse = throwIO RegistryUnconfigured
+```
+
+**Rule 11.2 — If you throw, throw a typed `Exception`, never a stringly one.**
+`stringException`, `throwString`, and `userError` are banned (`.hlint.yaml`):
+they erase the type, so nothing downstream can catch the condition by category or
+read its cause, and a `try` decays into grepping a message. Give the condition a
+type with an `Exception` instance (a nullary type like `RegistryUnconfigured`, or
+a small sum), exactly as the codebase already does for `BootAborted`. A typed
+exception is catchable, testable, and self-describing; a string is none of those.
+
+**Rule 11.3 — Surface errors as values; do not thread `ExceptT` through the base
+monad.** The effectful shell runs in `ReaderT Env IO` over `unliftio`, and
+`MonadUnliftIO` has no instance for `ExceptT` (nor `StateT` or `WriterT`):
+unlifting a short-circuiting monad across an async-exception boundary is unsafe,
+so the library refuses to. The consequence is concrete and unforgiving: a
+function in `ExceptT e (ReaderT Env IO)` cannot use `bracket`, `finally`, `mask`,
+`async`, or `withRunInIO`, which is precisely the resource and concurrency
+machinery the edge is built on. So:
+
+- Keep the base monad `ReaderT Env IO`. An edge function reports its error as a
+  *value* it returns (`IO (Either DomainError a)`), not as a transformer layer.
+- `ExceptT` earns its place only in a **small, IO-free or non-bracketing span**
+  where `do`-notation short-circuiting genuinely reads better, collapsed back to
+  an `Either` at the boundary. Reach for it rarely.
+- The `either` package's `EitherT` (`Control.Monad.Trans.Either`) is
+  **deprecated** in favour of `ExceptT` from `transformers`; do not introduce it.
+
+This is the same instinct as §10 (totality). A partial function crashes on inputs
+*it did not name*; a stringly throw discards the *cause* it did know. Both trade a
+value the type could have carried for a surprise at run time.
+
+---
+
+## 12. Tests
 
 Tests are documentation too; keep them as readable as the code. (Layout and the
 three-tier strategy are in `CONTRIBUTING.md`; this is style.)
@@ -581,7 +650,7 @@ three-tier strategy are in `CONTRIBUTING.md`; this is style.)
 
 ---
 
-## 12. Checklist (before you open a PR)
+## 13. Checklist (before you open a PR)
 
 - [ ] `make format` run; `make check` is green (build with `-Werror`, unit
       tests, doctest, fourmolu, hlint, Semgrep).
@@ -593,6 +662,9 @@ three-tier strategy are in `CONTRIBUTING.md`; this is style.)
       as appropriate.
 - [ ] No partial functions; no `error`/`undefined`/`unsafePerformIO` (a
       genuinely-unreachable `error` needs the §10 ignore + justifying comment).
+- [ ] Errors follow §11: domain outcomes are typed values, faults are typed
+      exceptions; no `stringException`/`throwString`/`userError`, and no `ExceptT`
+      threaded through the `ReaderT Env IO` base.
 - [ ] Functions are small and composed; logic is pure where it can be.
 - [ ] Docs that the change affects (`README.md`, `docs/`, this file) are updated
       in the same commit.
