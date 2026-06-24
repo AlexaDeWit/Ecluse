@@ -125,7 +125,16 @@ mirroring never fires for them** (see
 therefore **merged**, not short-circuited.
 
 **The merge is a fold over upstream packuments**, with the single-source case as
-the degenerate identity:
+the degenerate identity. It is realised as a lawful **`Monoid`**: the identity is
+the empty merge (zero inputs), `<>` is the trusted-wins union with
+order-independent divergence detection, and the fold is `foldMap` over each input's
+contribution. The fold is **associative and identity-respecting but intentionally
+not commutative** — each survivor is labelled with the *position* of the input that
+won it, so the serve layer can index back to the right raw `Value`, and swapping
+inputs swaps those labels. Every *decision* the merge owns is order-independent
+(see the precedence rule below); only the positional labels track input order. The
+detected divergences are a **set**, because divergence is a property of the set of
+distinct integrity fingerprints offered for a version key, not of any one fold step.
 
 - **Fetch upstreams in parallel.** For a packument, the private and public
   upstreams are fetched concurrently (the credential rules above still hold: the

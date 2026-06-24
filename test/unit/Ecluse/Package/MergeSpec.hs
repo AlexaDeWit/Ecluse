@@ -1,7 +1,15 @@
+-- This spec deliberately writes out the Monoid identity laws (@mempty <> a@ and
+-- @a <> mempty@) to /assert/ them; hlint would otherwise "simplify" the very
+-- expressions under test. Silenced file-wide because proving the laws is the
+-- file's purpose, not an oversight.
+{- HLINT ignore "Monoid law, left identity" -}
+{- HLINT ignore "Monoid law, right identity" -}
+
 module Ecluse.Package.MergeSpec (spec) where
 
 import Data.List (nub)
 import Data.Map.Strict qualified as Map
+import Data.Set qualified as Set
 import Data.Time (UTCTime (..), fromGregorian)
 import Hedgehog (Gen, forAll, (===))
 import Hedgehog qualified as H
@@ -88,6 +96,19 @@ winnerOf key = Map.lookup key . mpSurvivors
 latestKey :: MergePlan -> Maybe Text
 latestKey p = unVersion <$> Map.lookup "latest" (mpDistTags p)
 
+{- | The winning __provenance__ per surviving version key, resolved back through the
+inputs the plan was built from. A 'SourceId' is a list index, so this maps each
+survivor's winning index to the 'Provenance' of the input at that position — the
+order-/independent/ decision the merge owns, beneath the order-/dependent/ label.
+-}
+winnerProvenances :: [(Provenance, PackageInfo)] -> MergePlan -> Map Text Provenance
+winnerProvenances inputs plan =
+    -- Index the inputs by 'SourceId' (their list position) up front, so the lookup
+    -- is total — no partial indexing into the list.
+    Map.mapMaybe (`Map.lookup` byId) (mpSurvivors plan)
+  where
+    byId = Map.fromList (zip [0 ..] (map fst inputs))
+
 -- ── generators ───────────────────────────────────────────────────────────────
 
 genDigest :: Gen Text
@@ -113,6 +134,14 @@ genSource = do
 genSources :: Gen [(Provenance, PackageInfo)]
 genSources = Gen.list (Range.linear 1 4) genSource
 
+{- | An arbitrary 'Merge' accumulator: a 'foldMap' of 'contribute' over a small
+list of sources, so the value carries internal 'SourceId's @0..n-1@ and exercises
+collisions, tags, and times — the realistic inputs the laws must hold over. The
+empty list yields 'mempty', so the identity is in the generated range too.
+-}
+genMerge :: Gen Merge
+genMerge = foldMap (uncurry contribute) <$> Gen.list (Range.linear 0 3) genSource
+
 -- ── spec ─────────────────────────────────────────────────────────────────────
 
 spec :: Spec
@@ -137,7 +166,7 @@ spec = do
 
         it "reports no divergences for a single input" $ do
             let info = packument [("1.0.0", "sha512-aaa")]
-            (mpDivergences <$> mergePackuments [(TrustedSource, info)]) `shouldBe` Just []
+            (mpDivergences <$> mergePackuments [(TrustedSource, info)]) `shouldBe` Just Set.empty
 
         it "unions versions across sources" $ do
             let trusted = packument [("1.0.0", "sha512-aaa")]
@@ -158,13 +187,13 @@ spec = do
             let trusted = packument [("1.0.0", "sha512-private")]
                 gated = packument [("1.0.0", "sha512-public")]
                 plan = mergePackuments [(TrustedSource, trusted), (GatedSource, gated)]
-            (map divVersion . mpDivergences <$> plan) `shouldBe` Just ["1.0.0"]
+            (map divVersion . Set.toList . mpDivergences <$> plan) `shouldBe` Just ["1.0.0"]
 
         it "reports no divergence when a collision's integrity agrees" $ do
             let trusted = packument [("1.0.0", "sha512-same")]
                 gated = packument [("1.0.0", "sha512-same")]
                 plan = mergePackuments [(TrustedSource, trusted), (GatedSource, gated)]
-            (mpDivergences <$> plan) `shouldBe` Just []
+            (mpDivergences <$> plan) `shouldBe` Just Set.empty
 
         it "repoints latest to the highest surviving version when the chosen tag is gone" $ do
             -- The trusted source's chosen latest (9.9.9) is not actually carried,
@@ -212,7 +241,7 @@ spec = do
             (winnerOf "1.0.0" =<< plan) `shouldBe` Just 0
 
         it "records the winning (trusted) and losing (gated) integrity for the audit trail" $
-            case mpDivergences <$> plan of
+            case Set.toList . mpDivergences <$> plan of
                 Just [d] -> do
                     divVersion d `shouldBe` "1.0.0"
                     integrityHashes (divWinning d) `shouldBe` [(SRI, "sha512-private")]
@@ -359,7 +388,7 @@ spec = do
                 Map.keys (mpSurvivors plan) === Map.keys (infoVersions info)
                 nub (Map.elems (mpSurvivors plan)) === ([0 | not (Map.null (infoVersions info))])
                 Map.keys (mpTime plan) === Map.keys (infoPublishedAt info)
-                mpDivergences plan === []
+                mpDivergences plan === Set.empty
 
         it "the surviving set and time union are order-independent" $
             hedgehog $ do
@@ -399,8 +428,204 @@ spec = do
                 let trusted = (TrustedSource, packument [(ver, d1)])
                     gated = (GatedSource, packument [(ver, d2)])
                 plan <- H.evalMaybe (mergePackuments [trusted, gated])
-                let diverged = not (null (mpDivergences plan))
+                let diverged = not (Set.null (mpDivergences plan))
                 diverged === (d1 /= d2)
+
+    describe "the merge accumulator is a lawful Monoid" $ do
+        -- The fold is realised over the 'Merge' accumulator; its laws are what make
+        -- 'mergePackuments' associative and identity-respecting. The instance is
+        -- deliberately associative + identity but *not* commutative (the 'SourceId'
+        -- tiebreak is positional); the decision-order-independence the business
+        -- rules need is proved separately below, over input permutations.
+        it "is associative: (a <> b) <> c === a <> (b <> c)" $
+            hedgehog $ do
+                a <- forAll genMerge
+                b <- forAll genMerge
+                c <- forAll genMerge
+                (a <> b) <> c === a <> (b <> c)
+
+        it "has mempty as a left identity: mempty <> a === a" $
+            hedgehog $ do
+                a <- forAll genMerge
+                mempty <> a === a
+
+        it "has mempty as a right identity: a <> mempty === a" $
+            hedgehog $ do
+                a <- forAll genMerge
+                a <> mempty === a
+
+        it "is intentionally NOT commutative (SourceId labels are positional)" $ do
+            -- This is documented behaviour, not a defect: 'SourceId' must name the
+            -- input's *position* so the serve layer can index back to a raw Value,
+            -- so swapping operands swaps the labels. We assert the asymmetry rather
+            -- than papering over it: two single-input merges of *different*
+            -- provenance at the *same* version key, combined both ways. The decision
+            -- (trusted wins) is identical; the winning SourceId label flips with
+            -- the order — which is exactly why commutativity is the wrong law.
+            let trusted = contribute TrustedSource (packument [("1.0.0", "sha512-priv")])
+                gated = contribute GatedSource (packument [("1.0.0", "sha512-pub")])
+                forward = planFrom (trusted <> gated)
+                backward = planFrom (gated <> trusted)
+            -- Same decision (trusted wins) but opposite positional label, so the
+            -- two plans — and the two accumulators — are genuinely not equal.
+            (trusted <> gated == gated <> trusted) `shouldBe` False
+            (winnerOf "1.0.0" =<< forward) `shouldBe` Just 0
+            (winnerOf "1.0.0" =<< backward) `shouldBe` Just 1
+
+        it "mergePackuments is planFrom . foldMap contribute" $
+            hedgehog $ do
+                sources <- forAll genSources
+                mergePackuments sources === planFrom (foldMap (uncurry contribute) sources)
+
+    describe "the laws do not erode the trust hierarchy" $ do
+        -- The architect's explicit requirement: prove the lawful refactor still
+        -- enforces the business rules — trusted-wins precedence, the union, the
+        -- divergence signal, and (the core property) order-independence of every
+        -- decision a caller can observe except the positional 'SourceId' label.
+
+        it "trusted wins a collision; the divergence's winner is the trusted copy" $ do
+            -- Trusted and gated collide at 1.0.0 with differing integrity. The
+            -- survivor is the trusted copy and the recorded divergence's *winning*
+            -- fingerprint is the trusted integrity — the hierarchy, intact.
+            let trusted = (TrustedSource, packument [("1.0.0", "sha512-priv")])
+                gated = (GatedSource, packument [("1.0.0", "sha512-pub")])
+                plan = mergePackuments [gated, trusted] -- trusted at index 1
+            (winnerOf "1.0.0" =<< plan) `shouldBe` Just 1
+            case Set.toList . mpDivergences <$> plan of
+                Just [d] -> do
+                    divVersion d `shouldBe` "1.0.0"
+                    integrityHashes (divWinning d) `shouldBe` [(SRI, "sha512-priv")]
+                    integrityHashes (divLosing d) `shouldBe` [(SRI, "sha512-pub")]
+                other -> expectationFailure ("expected one divergence, got " <> show other)
+
+        it "the merged set is the mixed-provenance union trusted ∪ filtered(public)" $ do
+            -- Versions unique to each upstream are all present; the trust split does
+            -- not drop a side, it unions them.
+            let trusted = (TrustedSource, packument [("1.0.0", "sha512-a"), ("1.1.0", "sha512-b")])
+                gated = (GatedSource, packument [("2.0.0", "sha512-c"), ("1.1.0", "sha512-b")])
+            (survivorKeys <$> mergePackuments [trusted, gated])
+                `shouldBe` Just ["1.0.0", "1.1.0", "2.0.0"]
+
+        it "identical integrity across sources yields no divergence" $ do
+            let trusted = (TrustedSource, packument [("1.0.0", "sha512-same")])
+                gated = (GatedSource, packument [("1.0.0", "sha512-same")])
+            (mpDivergences <$> mergePackuments [trusted, gated]) `shouldBe` Just Set.empty
+
+        it "a 3+-copy collision fans the winner out against each distinct loser" $ do
+            -- THREE copies of one key with three distinct fingerprints: one trusted
+            -- (wins), two gated. A non-associative pairwise divergence definition
+            -- would miss or double-count one of the losing pairs; the set-of-distinct
+            -- -fingerprints definition records the trusted winner against *each* of
+            -- the two distinct losers, exactly once.
+            let t = (TrustedSource, packument [("1.0.0", "sha512-T")]) -- index 0, wins
+                g1 = (GatedSource, packument [("1.0.0", "sha512-G1")]) -- index 1
+                g2 = (GatedSource, packument [("1.0.0", "sha512-G2")]) -- index 2
+                plan = mergePackuments [t, g1, g2]
+            (winnerOf "1.0.0" =<< plan) `shouldBe` Just 0
+            let expected =
+                    Set.fromList
+                        [ ("1.0.0", [(SRI, "sha512-T")], [(SRI, "sha512-G1")])
+                        , ("1.0.0", [(SRI, "sha512-T")], [(SRI, "sha512-G2")])
+                        ]
+                actual =
+                    Set.map
+                        (\d -> (divVersion d, integrityHashes (divWinning d), integrityHashes (divLosing d)))
+                        . mpDivergences
+                        <$> plan
+            actual `shouldBe` Just expected
+
+        it "a 3+-copy collision's divergences are associativity-stable (regroup the fold)" $ do
+            -- The same three copies, folded in two different associativity groupings
+            -- of 'contribute', must yield the same divergence fingerprint-pairs — the
+            -- property a pairwise winner-vs-loser fold would violate.
+            let t = contribute TrustedSource (packument [("1.0.0", "sha512-T")])
+                g1 = contribute GatedSource (packument [("1.0.0", "sha512-G1")])
+                g2 = contribute GatedSource (packument [("1.0.0", "sha512-G2")])
+                left = planFrom ((t <> g1) <> g2)
+                right = planFrom (t <> (g1 <> g2))
+            (mpDivergences <$> left) `shouldBe` (mpDivergences <$> right)
+
+        it "dist-tags: keep-unless-denied, absent-target dropped, by provenance" $ do
+            -- 'latest' kept at the trusted source's surviving tag; a 'next' tag whose
+            -- target is absent from the union is dropped; resolution is by provenance.
+            let trusted =
+                    ( TrustedSource
+                    , (packument [("1.0.0", "sha512-a")])
+                        { infoDistTags =
+                            Map.fromList
+                                [ ("latest", mkVersion Npm "1.0.0")
+                                , ("next", mkVersion Npm "9.9.9")
+                                ]
+                        }
+                    )
+                gated = (GatedSource, packument [("2.0.0", "sha512-b")])
+                plan = mergePackuments [gated, trusted]
+            (latestKey =<< plan) `shouldBe` Just "1.0.0"
+            (sort . Map.keys . mpDistTags <$> plan) `shouldBe` Just ["latest"]
+
+        it "single source is the degenerate identity: all survive, won by source 0" $
+            hedgehog $ do
+                src@(_, info) <- forAll genSource
+                plan <- H.evalMaybe (mergePackuments [src])
+                Map.keys (mpSurvivors plan) === Map.keys (infoVersions info)
+                nub (Map.elems (mpSurvivors plan)) === ([0 | not (Map.null (infoVersions info))])
+                Map.keys (mpTime plan) === Map.keys (infoPublishedAt info)
+                mpDivergences plan === Set.empty
+
+        it "the always-invariant decisions survive any permutation of any inputs" $
+            hedgehog $ do
+                -- Over arbitrary mixed-provenance inputs ('genSources' freely collides
+                -- keys, including *same-provenance* collisions), two decisions are
+                -- order-independent without qualification: the surviving key *set* and
+                -- the winning *provenance* per key. (A same-provenance collision's
+                -- concrete winner is positional — provenance cannot break that tie —
+                -- so the value-level targets are asserted in the npm topology below,
+                -- and the positional boundary is documented after.) Only the 'SourceId'
+                -- labels move; the provenance beneath them does not.
+                sources <- forAll genSources
+                perm <- forAll (Gen.shuffle sources)
+                base <- H.evalMaybe (mergePackuments sources)
+                shuffled <- H.evalMaybe (mergePackuments perm)
+                sort (Map.keys (mpSurvivors base)) === sort (Map.keys (mpSurvivors shuffled))
+                winnerProvenances sources base === winnerProvenances perm shuffled
+
+        it "every decision is order-independent in the npm (1 trusted, 1 gated) topology" $
+            hedgehog $ do
+                -- The architecture's defined two-source topology — exactly one trusted
+                -- and one gated upstream — is where the merge actually runs today. Every
+                -- collision there is *cross-provenance*, so provenance (trusted wins)
+                -- resolves it regardless of position and EVERY decision is fully
+                -- order-independent: survivors, winning provenance, divergence
+                -- fingerprint-pairs, dist-tags, and time. Only the winner's 'SourceId'
+                -- label tracks position. This is the "behaviour preserved" anchor.
+                trusted <- forAll (snd <$> genSource)
+                gated <- forAll (snd <$> genSource)
+                let fwd = [(TrustedSource, trusted), (GatedSource, gated)]
+                    bwd = [(GatedSource, gated), (TrustedSource, trusted)]
+                forward <- H.evalMaybe (mergePackuments fwd)
+                backward <- H.evalMaybe (mergePackuments bwd)
+                sort (Map.keys (mpSurvivors forward)) === sort (Map.keys (mpSurvivors backward))
+                winnerProvenances fwd forward === winnerProvenances bwd backward
+                mpDivergences forward === mpDivergences backward
+                mpDistTags forward === mpDistTags backward
+                mpTime forward === mpTime backward
+
+        it "within one provenance, the divergence winner is positional (documented boundary)" $ do
+            -- The boundary of the order-independence guarantee, asserted not hidden:
+            -- when two same-provenance copies of a key carry differing integrity,
+            -- \*provenance cannot break the tie*, so the lower 'SourceId' (earlier
+            -- position) wins — the same positional tiebreak that makes the Semigroup
+            -- non-commutative. This case never arises in the npm topology (collisions
+            -- there are always cross-provenance); it is the multi-same-provenance
+            -- topology 'SourceId' exists for, where the winner legitimately tracks
+            -- order. The *surviving set* and *winning provenance* stay invariant; only
+            -- the winner/loser fingerprint labels flip.
+            let a = (GatedSource, packument [("1.0.0", "sha512-A")]) -- earlier wins
+                b = (GatedSource, packument [("1.0.0", "sha512-B")])
+                forward = Set.toList . mpDivergences <$> mergePackuments [a, b]
+                backward = Set.toList . mpDivergences <$> mergePackuments [b, a]
+            (map (integrityHashes . divWinning) <$> forward) `shouldBe` Just [[(SRI, "sha512-A")]]
+            (map (integrityHashes . divWinning) <$> backward) `shouldBe` Just [[(SRI, "sha512-B")]]
 
 {- | Sources with pairwise-disjoint version keys, so the merge is a pure set union
 with no collisions — the regime in which order cannot matter at all.
