@@ -26,9 +26,10 @@ A **mount** binds its ecosystem to:
 
 - a **registry adapter** — the `RegistryClient` for that ecosystem (see
   [Registry Abstraction](registry-model.md#registry-abstraction));
-- a **registry set** — its three named roles (private upstream, public upstream,
-  mirror target), where the private upstream and mirror target may be the *same*
-  registry (see [Three-Registry Model](registry-model.md#three-registry-model));
+- a **registry set** — its four named roles (private + public upstream, mirror +
+  publication target), where several may map to the *same* registry — the mirror and
+  publication targets are each, most commonly, the private upstream (see
+  [Registry roles](registry-model.md#registry-roles));
 - an **error renderer** — the ecosystem's client-facing denial/error surface (npm's
   `{"error": …}` JSON object; a different shape for PyPI), so the agnostic web layer
   decides an error's *status* but holds no ecosystem *body* shape of its own (see

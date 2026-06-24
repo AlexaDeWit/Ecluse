@@ -2,15 +2,19 @@
 
 > Part of the [Écluse architecture overview](../architecture.md).
 
-## Three-Registry Model
+## Registry roles
 
-The proxy is configured with three registry endpoints:
+The proxy is configured with **four registry roles** — two reads and two writes. They
+are distinct roles, configured separately, but several may map to the *same* physical
+registry (the publication target and the mirror target are each, most commonly, the
+private upstream):
 
 | Role | Purpose |
 |------|---------|
 | **Private upstream** | Authoritative, already-vetted source. A **tarball** found here is served immediately, unfiltered. A **packument**'s versions are trusted and **merged** with the gated public set (see [Packument merge](#packument-merge-across-upstreams)) rather than short-circuiting the public fetch. |
 | **Public upstream** | Source of versions not (yet) in the private upstream; rules are applied to everything from here. For a **tarball** it is the fallback on a private miss; for a **packument** it is fetched **alongside** the private upstream and merged in. |
 | **Mirror target** | Where approved public packages are written after passing rules. May be the same registry as the private upstream (most common) or a different one (e.g. separate internal/public stores). |
+| **Publication target** | Where **client-published first-party packages** are written (`npm publish` through the proxy). The write counterpart to the private read role; may be the same registry as the private upstream (so published packages are then readable via the private leg) or a different one. Distinct from the mirror target: *client*-driven first-party content vs *proxy*-driven approved-public content. See [Publishing first-party packages](#publishing-first-party-packages-the-publication-target). |
 
 ### Credential flow and authority
 
@@ -37,6 +41,12 @@ upstream wants on the wire* (credential supply). The strategies are detailed in 
   [`CredentialProvider`](cloud-backends.md#credential-provider) mints the token to
   publish approved packages. Often the same registry as the private upstream, but a
   different identity on it: the *client* reads it, *Écluse* writes it.
+- **Publication target (write)** — the **client's own forwarded credential**
+  (`passthrough`): a `npm publish` is relayed to the publication target, which
+  authorises the publisher. Symmetric with the private-upstream read under
+  `passthrough` — Écluse substitutes no identity and mints no token of its own here
+  (unlike the mirror target). The client's publish token is forwarded **only** to the
+  publication target.
 
 The non-negotiable invariant, under **every** strategy: **the client's credential is
 never sent to the public upstream.** (Whether it reaches the private upstream is
@@ -71,6 +81,35 @@ Outbound requests are further constrained by the
 **internal-range blocking**, **identifier canonicalisation**, and **bounded
 responses**, so a crafted identifier or a hostile upstream can neither steer a
 fetch to an unintended target nor exhaust the proxy (issue #11).
+
+## Publishing first-party packages (the publication target)
+
+The roles above are read-plus-mirror; the **publication target** adds the one
+client-driven *write* path. A client's `npm publish` (`PUT /{pkg}`) is accepted at the
+mount and relayed to the publication target, so the proxy mediates the publish the same
+way it mediates reads — rather than forcing first-party publishers into a separate,
+out-of-band flow.
+
+- **What it writes.** First-party / internal packages the client publishes — the write
+  counterpart to the private read role. Contrast the mirror target, which the *proxy*
+  writes with *approved public* packages after the rules gate. Same
+  `RegistryClient.publishArtifact` primitive; different trigger, content, and credential.
+- **Anti-shadowing guard (the load-bearing control).** A publish is **refused** unless
+  its package name falls within the operator's configured **publish scope allow-list**
+  (the MVP mechanism — e.g. `@acme/*`). This is what stops a client publishing a name
+  that shadows an existing public package — a dependency-confusion vector the proxy must
+  not enable. (Future work may add richer name grammars or live collision resolution;
+  the allow-list is the MVP.)
+- **Credential — passthrough.** The publisher's own token is forwarded to the
+  publication target (see [Credential flow and authority](#credential-flow-and-authority));
+  Écluse authorises nothing itself and mints no token here.
+- **No read-back role.** The publication target is **write-only** from the proxy's view.
+  Published packages are read back through the **private upstream** — so to serve what
+  was published, the operator configures the publication target to be the *same
+  registry* as the private upstream (or has the private upstream aggregate it). This
+  keeps the read model at two sources.
+- **Opt-in.** The path exists only when `PUBLICATION_TARGET_URL` is configured; with no
+  publication target a `PUT /{pkg}` is rejected with **`405 Method Not Allowed`**.
 
 ## Packument merge across upstreams
 
