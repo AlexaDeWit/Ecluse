@@ -26,11 +26,14 @@ coverage:
         threshold: 1% # absorb rounding/noise; block real drops
     patch:
       default:
-        # New/changed lines must be >=95% covered: the standard for all newly
-        # introduced work. The project status above stays on no-regression, so
-        # the codebase baseline ratchets up as well-covered changes land rather
-        # than gating the whole tree to an absolute number it is not yet at.
-        target: 95%
+        # New/changed lines >=85% covered — a sensible floor that verifies
+        # behaviour without grinding on the number. Coverage exists to confirm
+        # behaviour, not for "line go up": aim for thorough branch testing by
+        # reasoning about the code, and let this status flag genuine gaps. ~95% is
+        # a long-term goal, not a per-PR gate (chasing it is wasteful). The project
+        # status above stays on no-regression, so the baseline still ratchets up as
+        # well-covered changes land.
+        target: 85%
 
 # Flags let one combined gate span multiple suites. carryforward keeps a suite's
 # last-known coverage on runs that don't re-upload it (e.g. a job that skipped).

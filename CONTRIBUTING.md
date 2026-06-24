@@ -138,3 +138,6 @@ your contribution and sign-off become a permanent public record.
   `git commit -s`.
 - **Disclose AI assistance.** Mark non-trivial AI-assisted commits with an
   `Assisted-by:` trailer — see [AI-assisted contributions](#ai-assisted-contributions).
+- **Diagrams are Mermaid, not ASCII art** in committed Markdown docs — a fenced
+  ` ```mermaid ` block, never box-drawing characters. See [`AGENTS.md`](AGENTS.md)
+  → Code Conventions.

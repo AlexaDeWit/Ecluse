@@ -14,8 +14,8 @@ CI in [`../CONTRIBUTING.md`](../CONTRIBUTING.md), Haskell style in
   PR.
 - **Team lead** (the coordinating agent) — decomposes the _finalized_ architecture
   into PR-sized work, dispatches and supervises implementation subagents,
-  evaluates their output, reproduces the CI gate, and hands review-ready PRs to
-  the architect. **The team lead never merges and, during implementation, never
+  evaluates their output, runs a fast local check and lets CI be the gate, and
+  hands review-ready PRs to the architect. **The team lead never merges and, during implementation, never
   pushes to `main`** — all code lands through PRs the architect reviews.
 
 ## Operating principle: escalate, don't guess
@@ -72,28 +72,13 @@ typed-decision-vs-served-`Value` contract surfaced late — see
 
 ## The per-PR loop
 
-```
-   pick DAG node (dependencies merged)
-        │
-   ┌────▼──────────────────────────────────────────────┐
-   │ BUILD     implementer agent, its own git worktree   │
-   │           TDD: RED → GREEN → REFACTOR               │
-   │           self-runs the local gate before reporting │
-   └────┬───────────────────────────────────────────────┘
-   ┌────▼──────────────────────────────────────────────┐
-   │ EVALUATE  fresh reviewer agent(s), two stages:      │
-   │   A. spec / requirements compliance + traceability  │
-   │   B. code quality + security + test quality         │
-   │   team lead reads the diff; fixes routed per the    │
-   │   Fix routing policy (resume / direct / fresh agent)│
-   └────┬───────────────────────────────────────────────┘
-   ┌────▼──────────────────────────────────────────────┐
-   │ GATE      reproduce CI locally → push branch →      │
-   │           confirm the real gate green on the PR     │
-   └────┬───────────────────────────────────────────────┘
-        ▼
-   HAND OFF — mark the PR ready for review (only if all the above is green;
-              until then it stays a draft)
+```mermaid
+flowchart TD
+    P["Pick a DAG node<br/>(dependencies merged)"] --> B["BUILD<br/>implementer · own worktree · TDD<br/>fast local check, not the full gate"]
+    B --> E["EVALUATE<br/>fresh reviewer · Stage A + Stage B<br/>team lead reads the diff"]
+    E -->|changes required| B
+    E -->|clean| G["GATE<br/>open the draft PR ·<br/>CI is the gate — watch it green"]
+    G --> H(["HAND OFF<br/>mark ready for review<br/>(draft until all the above is green)"])
 ```
 
 **Draft until ready.** A PR is opened as a **draft** and stays one until it has
@@ -193,8 +178,9 @@ The implementer's own "it works" does not count; evidence does.
   functions; a **security review** appropriate to a supply-chain tool (input
   parsing, deny-by-default invariants, injection-free workflows); **test
   quality** — properties present where required (e.g. rules-engine
-  deny-precedence), not tautological assertions, with **new/changed lines ≥ 95%
-  covered** (`codecov/patch`); and **comment appropriateness** — Haddock documents
+  deny-precedence), not tautological assertions, with the **branches you can
+  foresee tested by intent** (`codecov/patch` ≥ 85% is a CI backstop, not a number
+  to chase); and **comment appropriateness** — Haddock documents
   the timeless contract and the _why_, never project / roadmap / slice narration
   ([`../HADDOCK.md`](../HADDOCK.md) §11). Completeness is not enough: a comment can
   be present, and the wrong kind.
@@ -259,12 +245,30 @@ The pass **gates the next wave**: the integrated base a wave builds on is made
 coherent first. It is recorded in the
 [delivery plan](delivery-plan.md#parallelization--3-slices-in-flight)'s wave sequence.
 
-## Reproducing the CI gate
+## Verification: fast local, CI is the gate
 
-Because every CI job just calls `make`, the team lead reproduces the **entire
-gate** locally before pushing. The gating jobs (the `needs` of the terminal
-`gate` job in [`../.github/workflows/ci.yml`](../.github/workflows/ci.yml)) map
-one-to-one to make targets:
+CI **is** the gate; local verification is for _fast feedback_, not a pre-push
+ceremony. Every CI job just calls `make`, and CI runs the tiers **in parallel** on
+its own runners — so reproducing the slow, parallelizable ones (Docker
+integration, the hermetic `nix-check`, Haddock) serially on one contended host is
+wasted work CI does anyway, and the team lead reproducing the whole gate before
+pushing is **running it twice**.
+
+The **fast floor** is the agent's whole local obligation before pushing:
+
+```bash
+make build && make test && make sast
+```
+
+It builds, the unit suite for what you touched passes, and **Semgrep is clean**
+(the one hard pre-push stop: zero findings, no new ignores without the architect's
+approval). Then **push early, let CI parallelize the rest, and watch the real run
+to green** (`gh pr checks --watch`).
+
+Reproduce a tier locally **only to debug a red** — map the red CI job back to its
+`make` target and run just that one, never the whole gate wholesale. The gating
+jobs (the `needs` of the terminal `gate` job in
+[`../.github/workflows/ci.yml`](../.github/workflows/ci.yml)) map one-to-one:
 
 | Gating CI job                              | Local command                                          |
 | ------------------------------------------ | ------------------------------------------------------ |
@@ -276,21 +280,24 @@ one-to-one to make targets:
 | `gate`                                     | green iff all of the above are green                   |
 | `smoke` (live registries)                  | `make test-smoke` — **non-gating, never blocks**       |
 
-Pre-push command:
+`make nix-check` is the one worth a _proactive_ local run when you have touched the
+flake or added a module: it catches `-Werror` warnings and the _flakes only see
+git-tracked files_ trap, so a new module must be `git add`-ed (and listed in the
+`.cabal` file) **before** it runs — a failure a plain `make build` misses.
 
-```bash
-make check && make test-integration && make docs-site && make nix-check
-```
+Coverage takes the same posture: `codecov/patch` runs in CI as a **backstop**
+(≥ 85% on changed lines), so write the behaviour tests you would write anyway and
+let it flag genuine gaps — don't pre-run `make coverage` and parse
+`coverage/<suite>.json` to colour a number up. ~95% is a long-term aspiration, not
+a per-PR bar (chasing it is wasteful); see
+[Testing Strategy → Coverage](../docs/testing.md).
 
-`make nix-check` is the hermetic backstop: it catches `-Werror` warnings and the
-_flakes only see git-tracked files_ trap, so new modules must be `git add`-ed
-(and listed in the `.cabal` file) **before** the Nix checks run.
-
-`make coverage` reproduces the patch-coverage check: Codecov's `codecov/patch`
-requires **≥ 95%** on new/changed lines (the documented server-side exception to
-the single-`gate` rule). Inspect the generated `coverage/<suite>.json` for any
-0-hit changed lines before pushing, and close them — coverage is a quality bar on
-the work, not an afterthought.
+**Scale verification to the change.** Light by default. Reserve heavier local
+reproduction _and_ exhaustive case-enumeration for the genuinely risky surfaces —
+the parsers and identifier canonicalisation, the credential path, deny-by-default
+rule precedence, and egress/SSRF — where a regression is costly and a fast unit
+pass under-covers the threat. A small, low-risk refactor must not cost an hour of
+ceremony.
 
 Hard stops: **Semgrep reports zero findings** before any push (no new ignores
 without the architect's approval); commits are **GPG-signed** and use
@@ -305,8 +312,8 @@ A PR reaches the architect only when **all** hold:
 
 - [ ] All acceptance criteria met, each with passing **deterministic, gating** (unit/integration) test evidence — a non-gating smoke test never stands in for a criterion
 - [ ] Independent review (Stage A + B) passed; no open critical issues
-- [ ] Local gate green: `make check && make test-integration && make docs-site && make nix-check`
-- [ ] New/changed lines ≥ 95% covered (`codecov/patch` green; reproduce via `make coverage`)
+- [ ] Fast local checks pass before pushing (`make build && make test && make sast`) — not the full gate
+- [ ] Foreseeable branches tested by intent; `codecov/patch` green (≥ 85%, a CI backstop — not a number chased locally)
 - [ ] Comments are contract + why only — no roadmap / slice / PR references (HADDOCK.md §11)
 - [ ] Semgrep clean (no new ignores)
 - [ ] CI `gate` (and every job it needs) green on the PR

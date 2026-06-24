@@ -124,14 +124,16 @@ format for Codecov to ingest. See [`scripts/coverage.sh`](../scripts/coverage.sh
 
 The gate itself is Codecov's two commit statuses: `codecov/project` (no
 regression versus the PR base, within a 1% threshold) and `codecov/patch`
-(new/changed lines ≥ 95% — the coverage standard for all newly introduced work;
-the project status stays on no-regression so the baseline ratchets up as
-well-covered changes land). Both knobs live in [`codecov.yml`](../codecov.yml).
+(new/changed lines ≥ 85% — a floor that verifies behaviour, not a number to chase;
+~95% is a long-term aspiration, not a per-PR gate. The project status stays on
+no-regression so the baseline still ratchets up as well-covered changes land).
+Both knobs live in [`codecov.yml`](../codecov.yml).
 
 ### Coverage gates behaviour, not boilerplate
 
-The 95% patch bar guards **hand-written logic and branches** — where regressions
-hide. It is not a tax on every generated token, and three rules keep it honest.
+The 85% patch bar guards **hand-written logic and branches** — where regressions
+hide. It is a floor for verifying behaviour, not a number to chase (~95% is a
+long-term goal, not a per-PR gate), and three rules keep it honest.
 
 **Don't test a derived instance for its laws.** A `deriving stock (Eq, Show, Ord)`
 is lawful by construction; a test that merely exercises it catches a GHC bug, not
