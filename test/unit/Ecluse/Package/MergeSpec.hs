@@ -198,6 +198,27 @@ spec = do
             (sort . Map.keys . mpTime <$> mergePackuments [(TrustedSource, trusted), (GatedSource, gated)])
                 `shouldBe` Just ["1.0.0", "2.0.0"]
 
+    describe "collision resolution & divergence correction (the supply-chain signal)" $ do
+        -- A version present in both a trusted (private) and a gated (public) source
+        -- is a collision: the trusted copy wins. If the two copies' artifact
+        -- integrity disagrees the merge *flags* it as a tampering signal — and
+        -- flags without dropping the version, leaving fail-closed to the caller.
+        let trusted = packument [("1.0.0", "sha512-private")] -- source 0
+            gated = packument [("1.0.0", "sha512-public")] -- source 1
+            plan = mergePackuments [(TrustedSource, trusted), (GatedSource, gated)]
+
+        it "keeps the divergent version, won by the trusted source (flags, does not drop)" $ do
+            (survivorKeys <$> plan) `shouldBe` Just ["1.0.0"]
+            (winnerOf "1.0.0" =<< plan) `shouldBe` Just 0
+
+        it "records the winning (trusted) and losing (gated) integrity for the audit trail" $
+            case mpDivergences <$> plan of
+                Just [d] -> do
+                    divVersion d `shouldBe` "1.0.0"
+                    integrityHashes (divWinning d) `shouldBe` [(SRI, "sha512-private")]
+                    integrityHashes (divLosing d) `shouldBe` [(SRI, "sha512-public")]
+                other -> expectationFailure ("expected exactly one divergence, got " <> show other)
+
     describe "precedence is by provenance, not input order" $ do
         -- dist-tags and time must resolve collisions by provenance (trusted wins),
         -- so the plan is identical whichever order the caller passes the upstreams.

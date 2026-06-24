@@ -190,7 +190,7 @@ with, paired with the remainder classified through that mount's classifier.
 and a bare @\/npm@ both match the @\/npm@ mount.
 -}
 matchMount :: [MountBinding] -> [Text] -> Maybe (MountBinding, Route)
-matchMount mounts segments = firstJust match mounts
+matchMount mounts segments = asum (map match mounts)
   where
     -- The binding whose prefix the path begins with, paired with the classified
     -- remainder. 'Nothing' for a non-matching prefix.
@@ -218,10 +218,6 @@ dropTrailingSlash :: [Text] -> [Text]
 dropTrailingSlash [""] = []
 dropTrailingSlash (x : xs) = x : dropTrailingSlash xs
 dropTrailingSlash [] = []
-
--- The first non-'Nothing' result of applying @f@ across the list, or 'Nothing'.
-firstJust :: (a -> Maybe b) -> [a] -> Maybe b
-firstJust f = foldr (\x acc -> f x <|> acc) Nothing
 
 -- ── route rendering ──────────────────────────────────────────────────────────
 

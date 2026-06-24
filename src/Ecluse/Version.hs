@@ -229,10 +229,6 @@ parseNumSeg t
 numOr0 :: Text -> Integer
 numOr0 t = if T.null t then 0 else fromMaybe 0 (readMaybe (toString t))
 
--- The first non-'Nothing' result of applying @f@ across the list.
-firstJust :: (a -> Maybe b) -> [a] -> Maybe b
-firstJust f = asum . map f
-
 -- ── semver (npm) ───────────────────────────────────────────────────────────
 
 {- A semver prerelease identifier; numeric identifiers rank below alphanumeric
@@ -409,7 +405,7 @@ for a\/b\/rc); 'Nothing' if absent.
 -}
 consumePre :: Text -> (Maybe (Int, Integer), Text)
 consumePre s =
-    case firstJust (\(lbl, rk) -> (,) rk <$> T.stripPrefix lbl (dropSep s)) preLabels of
+    case asum (map (\(lbl, rk) -> (,) rk <$> T.stripPrefix lbl (dropSep s)) preLabels) of
         Nothing -> (Nothing, s)
         Just (rk, afterLabel) ->
             let (digits, rest) = T.span isDigit (dropSep afterLabel)
@@ -431,7 +427,7 @@ consumePre s =
 -}
 consumePost :: Text -> (Maybe Integer, Text)
 consumePost s =
-    case firstJust (\lbl -> T.stripPrefix lbl (dropSep s)) ["post", "rev"] of
+    case asum (map (\lbl -> T.stripPrefix lbl (dropSep s)) ["post", "rev"]) of
         Just afterLabel ->
             let (digits, rest) = T.span isDigit (dropSep afterLabel)
              in (Just (numOr0 digits), rest)
