@@ -33,6 +33,7 @@ import Ecluse.Server.Response (
     Transience (..),
     artifactStatus,
     artifactStatusCode,
+    longestRetry,
     mkHelpMessage,
     packumentStatus,
     packumentStatusCode,
@@ -146,6 +147,15 @@ spec = do
         it "is 403 when no survivor and the only exclusion is a missing-integrity refusal" $
             packumentStatus [Reject (Rejection MissingIntegrity "no integrity")]
                 `shouldBe` PackumentForbidden
+
+    describe "longestRetry — the longest suggested delay, or none" $ do
+        it "is Nothing for an empty list" $
+            longestRetry [] `shouldBe` Nothing
+        it "is Nothing when no cause suggested a delay" $
+            longestRetry [Nothing, Nothing] `shouldBe` Nothing
+        it "is the maximum delay among those that suggested one" $
+            longestRetry [Just (RetryAfter 5), Nothing, Just (RetryAfter 30), Just (RetryAfter 12)]
+                `shouldBe` Just (RetryAfter 30)
 
     describe "packumentStatusCode — numeric HTTP codes (never 404)" $
         it "maps Ok/Forbidden/Unavailable/ServerError to 200/403/503/500" $ do

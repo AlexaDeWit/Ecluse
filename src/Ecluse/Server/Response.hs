@@ -57,6 +57,7 @@ module Ecluse.Server.Response (
     PackumentStatus (..),
     packumentStatus,
     packumentStatusCode,
+    longestRetry,
 
     -- * Denial rendering
     HelpMessage,
@@ -67,6 +68,7 @@ module Ecluse.Server.Response (
     MountRenderer (..),
 ) where
 
+import Data.Semigroup (Max (Max, getMax))
 import Data.Text qualified as T
 
 import Ecluse.Package (PackageDetails)
@@ -292,9 +294,7 @@ packumentStatus decisions
 none of them suggested a delay.
 -}
 longestRetry :: [Maybe RetryAfter] -> Maybe RetryAfter
-longestRetry = foldl' keepLonger Nothing . catMaybes
-  where
-    keepLonger acc delay = Just (maybe delay (max delay) acc)
+longestRetry = fmap getMax . foldMap (fmap Max)
 
 -- | The numeric HTTP status code for a 'PackumentStatus'. Pure and total.
 packumentStatusCode :: PackumentStatus -> Int
