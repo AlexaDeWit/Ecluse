@@ -81,6 +81,9 @@ unscoped=(
   # logic. Remove when S06 (npm-wire) adds real fetch/parse code and tests that
   # link it.
   ./src/Ecluse/Registry.hs
+  # pure re-export shim: the curated public surface only; implementation and
+  # coverage live in Ecluse.Credential.Refresh.Internal.
+  ./src/Ecluse/Credential/Refresh.hs
 )
 
 expected="$(find src -name '*.hs' | sed 's#^#./#' | sort)"
