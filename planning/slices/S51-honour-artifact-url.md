@@ -2,7 +2,7 @@
 id: S51
 title: Honour the upstream artifact location on the serve path
 milestone: M3 — Request pipeline
-status: not-started
+status: merged
 depends-on: [S15, S33, S40]
 test-tier: [unit, integration]
 arch-refs:
