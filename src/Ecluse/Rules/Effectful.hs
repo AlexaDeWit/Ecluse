@@ -24,12 +24,16 @@ effectful deny overrides a lower pure allow and vice versa.
 == Resilience
 
 Each rule carries an 'EffectfulConfig': a timeout per attempt, a bounded retry
-count with a backoff schedule, and a breaker threshold/cooldown. The breaker is the
-shared "Ecluse.Breaker" state machine, kept per source as a 'TVar' so repeated
-failures of one advisory source fast-fail without latency or hammering, while a
-half-open probe tests recovery. The clock is read from the
-'Ecluse.Rules.Types.EvalContext' and the backoff sleep is injected, so the whole
-harness is deterministic under test with no real time passing.
+count with a backoff schedule, and a breaker threshold/cooldown. The 'ecBackoff'
+schedule is compiled to a "Control.Retry" 'RetryPolicyM': the n-th retry waits the
+n-th delay, and the list's length /is/ the retry budget, so @[]@ is a single attempt
+and the schedule runs out rather than retrying forever. The breaker is the shared
+"Ecluse.Breaker" state machine, kept per source as a 'TVar' so repeated failures of
+one advisory source fast-fail without latency or hammering, while a half-open probe
+tests recovery. The breaker clock is read from the
+'Ecluse.Rules.Types.EvalContext', so its timing is deterministic under test, and a
+test that asserts the retry /schedule/ does so without sleeping via
+'Control.Retry.simulatePolicy' over the same policy the harness runs.
 
 See @docs\/architecture\/rules-engine.md@ → "Effectful-rule failure".
 -}
@@ -42,6 +46,7 @@ module Ecluse.Rules.Effectful (
     -- * Resilience
     EffectfulConfig (..),
     defaultEffectfulConfig,
+    backoffPolicy,
     Breaker (..),
     newBreaker,
 
@@ -50,10 +55,14 @@ module Ecluse.Rules.Effectful (
     runEffectfulRule,
 ) where
 
+import Control.Retry (
+    RetryPolicyM (RetryPolicyM),
+    RetryStatus (rsIterNumber),
+    retrying,
+ )
 import Data.List (maximumBy)
 import Data.Time (NominalDiffTime, UTCTime)
 import UnliftIO (timeout, tryAny)
-import UnliftIO.Concurrent (threadDelay)
 
 import Ecluse.Breaker (Breaker (..), admit, initialBreaker, recordFailure, recordSuccess)
 import Ecluse.Package (PackageDetails)
@@ -126,8 +135,7 @@ data PrecededEffectfulRule = PrecededEffectfulRule
 
 {- | The resilience knobs around an effectful rule's IO: a per-attempt timeout,
 how many retries to make on failure with the backoff before each, and the breaker
-threshold and cooldown. The clock is the 'EvalContext', and 'ecSleep' is injected
-so the backoff is deterministic under test.
+threshold and cooldown. The breaker clock is the 'EvalContext'.
 -}
 data EffectfulConfig = EffectfulConfig
     { ecTimeout :: Int
@@ -138,10 +146,6 @@ data EffectfulConfig = EffectfulConfig
     {- ^ The backoff delays in microseconds, one per retry, applied __before__ the
     corresponding retry attempt. Its length is the retry budget: @[]@ means the
     single initial attempt only, @[100, 200]@ means up to two retries after it.
-    -}
-    , ecSleep :: Int -> IO ()
-    {- ^ The delay action the backoff sleeps with (microseconds). Injected so a test
-    drives the schedule with a no-op; production wires 'threadDelay'.
     -}
     , ecBreakerThreshold :: Int
     -- ^ Consecutive exhausted-rule failures that trip the breaker.
@@ -156,16 +160,15 @@ data EffectfulConfig = EffectfulConfig
     }
 
 {- | Sensible defaults for the resilience knobs: a 2-second per-attempt timeout, two
-retries at 100ms then 250ms, a breaker tripping after 5 consecutive failures and
-cooling for 30 seconds, and 'threadDelay' as the backoff sleep. The caller supplies
-the rule's 'erEval'; the knobs are policy with these defaults.
+retries at 100ms then 250ms, and a breaker tripping after 5 consecutive failures and
+cooling for 30 seconds. The caller supplies the rule's 'erEval'; the knobs are policy
+with these defaults.
 -}
 defaultEffectfulConfig :: EffectfulConfig
 defaultEffectfulConfig =
     EffectfulConfig
         { ecTimeout = 2_000_000
         , ecBackoff = [100_000, 250_000]
-        , ecSleep = threadDelay
         , ecBreakerThreshold = 5
         , ecBreakerCooldown = 30
         , ecRetryAfter = Nothing
@@ -185,9 +188,8 @@ rule itself yielding 'Unavailable' on every attempt) advances the breaker and
 resolves per the rule's 'erOnError' — 'Unavailable' (fail-closed) or 'Abstain'
 (fail-open).
 
-The breaker timing reads the 'EvalContext' clock, and the backoff sleeps with the
-injected 'ecSleep', so the whole harness is deterministic under test. Total — it
-never throws; a rule failure becomes an outcome.
+The breaker timing reads the 'EvalContext' clock, so it is deterministic under test.
+Total — it never throws; a rule failure becomes an outcome.
 -}
 runEffectfulRule :: EvalContext -> EffectfulRule -> PackageDetails -> IO RuleOutcome
 runEffectfulRule ctx rule pd = do
@@ -211,17 +213,21 @@ runEffectfulRule ctx rule pd = do
 the retry budget is spent. 'Just' a clean verdict on success; 'Nothing' when every
 attempt failed (an exception, a timeout, or the rule yielding its own 'Unavailable').
 A rule that returns 'Allow'\/'Deny'\/'Abstain' is taken at face value and not
-retried. -}
+retried — 'retrying' stops as soon as the attempt yields 'Just'. -}
 attemptWithRetry :: EffectfulRule -> PackageDetails -> IO (Maybe RuleOutcome)
-attemptWithRetry rule pd = go (ecBackoff (erConfig rule))
+attemptWithRetry rule pd =
+    retrying (backoffPolicy (ecBackoff (erConfig rule))) shouldRetry (\_ -> attemptOnce rule pd)
   where
-    go backoffs = do
-        outcome <- attemptOnce rule pd
-        case outcome of
-            Just clean -> pure (Just clean)
-            Nothing -> case backoffs of
-                [] -> pure Nothing
-                (delay : rest) -> ecSleep (erConfig rule) delay >> go rest
+    shouldRetry _ = pure . isNothing
+
+{- | An 'ecBackoff' schedule compiled to a "Control.Retry" policy: the retry at
+iteration n waits the n-th delay (microseconds) before it, and the policy stops
+(yields 'Nothing') once the schedule is exhausted — so the list's length is the retry
+budget. @[]@ admits no retry (a single attempt); @[a, b]@ admits up to two. Inspect
+the resulting delays without sleeping with 'Control.Retry.simulatePolicy'.
+-}
+backoffPolicy :: [Int] -> RetryPolicyM IO
+backoffPolicy backoffs = RetryPolicyM (\rs -> pure (backoffs !!? rsIterNumber rs))
 
 {- One attempt: run the rule's IO under the timeout, catching any exception. 'Just'
 a clean verdict; 'Nothing' on a timeout, an exception, or the rule yielding

@@ -1107,7 +1107,7 @@ downEffectfulRule = do
             EffectfulRule
                 { erName = "DownAdvisory"
                 , erEval = \_ -> throwString "advisory source down"
-                , erConfig = defaultEffectfulConfig{ecBackoff = [], ecSleep = \_ -> pure ()}
+                , erConfig = defaultEffectfulConfig{ecBackoff = []}
                 , erOnError = OnUnavailable
                 , erBreaker = breaker
                 }
