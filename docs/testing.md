@@ -97,18 +97,39 @@ Two things about the split are easy to get backwards, so I'll state them plainly
 
 Coverage is measured per **gating** suite and reported to
 [Codecov](https://about.codecov.io/). Generation is local and tool-agnostic: Codecov is only
-the consumer, so the reporter can be swapped without touching the build. `make coverage`
-builds a suite instrumented (HPC, in an isolated `dist-coverage/` so the normal build cache is
+the consumer, so the reporter can be swapped without touching the build. Generation builds a
+suite instrumented (HPC, in an isolated `dist-coverage/` so the normal build cache is
 untouched), then converts the `.tix`/`.mix` output to Codecov's native JSON with
 [`hpc-codecov`](https://hackage.haskell.org/package/hpc-codecov), the leanest format for
-Codecov to ingest. See [`scripts/coverage.sh`](../scripts/coverage.sh).
+Codecov to ingest. See [`scripts/coverage.sh`](../scripts/coverage.sh) (one tier) and
+[`scripts/coverage-combined.sh`](../scripts/coverage-combined.sh) (the merged view).
 
-- **Per-suite flags.** Each tier uploads under its own Codecov *flag*, so one combined gate
-  spans the suites while each stays visible. Both the `unit` and `integration` tiers upload,
-  each under its own flag, and Codecov waits for both (`notify.after_n_builds: 2` in
-  `codecov.yml`) before computing the combined total, so a partial upload can't fire a
-  transient "coverage decreased" status. The **smoke** tier is excluded: non-gating and
-  network-bound, like everywhere else.
+- **Codecov is the merged authority; `make coverage` reproduces it.** Codecov merges the
+  per-tier flag uploads into one project total (unit ∪ integration), so a single tier's number
+  *under-counts* every module the other tier exercises — the SQS `MirrorQueue` backend and the
+  worker's real fetch/publish path are covered only by the integration tier. The canonical
+  local command, **`make coverage`**, reproduces Codecov's merged total: it runs both gating
+  tiers, `hpc combine --union`s their `.tix` (ADD join, unioned module namespace, mirroring how
+  Codecov sums the flags), and reports the combined picture as `coverage/combined.json`. A
+  local `make coverage` therefore **agrees with the dashboard**. Because it runs the integration
+  tier it **needs a running Docker daemon** (the ministack containers, exactly like the suite
+  itself); with no daemon it fails with a clear message pointing at the fast path below. For a
+  quick, Docker-free loop, **`make coverage-unit`** (or `make coverage SUITE=ecluse-unit`)
+  measures the unit tier only and **loudly prints that it is a partial view** Codecov merges
+  with the integration tier — so a single-tier read is never mistaken for the whole picture.
+- **Per-suite flags (what CI uploads).** Each tier uploads under its own Codecov *flag*, so one
+  combined gate spans the suites while each stays visible. CI runs the per-tier form
+  (`make coverage SUITE=ecluse-unit` and `make coverage SUITE=ecluse-integration`) so each flag
+  gets its own JSON; both the `unit` and `integration` tiers upload, and Codecov waits for both
+  (`notify.after_n_builds: 2` in `codecov.yml`) before computing the combined total, so a
+  partial upload can't fire a transient "coverage decreased" status. The **smoke** tier is
+  excluded: non-gating and network-bound, like everywhere else.
+- **Reporting divergence vs. real gaps.** This combined command exists to remove a *reporting*
+  confusion — a local single-tier read disagreeing with the merged dashboard — not to paper
+  over real coverage gaps. If the **merged** report still shows a module's error arms red (e.g.
+  `Worker.hs`'s fail-closed integrity-mismatch branch), that is a *genuine* uncovered path the
+  tests owe, not a reporting artifact: it is fixed by a test, not by this tooling. Keep the two
+  distinct.
 - **Tokenless upload.** CI uploads via GitHub **OIDC** (`use_oidc: true`), so there's no
   `CODECOV_TOKEN` secret to store or leak, the same keyless posture as the release image
   signing.

@@ -91,9 +91,13 @@ jobs:
 
       # Instrumented re-run of the unit suite in a separate build dir, emitting
       # Codecov-native JSON. Only our small package recompiles (-fhpc); deps come
-      # from the cached cabal store, so this is cheap.
+      # from the cached cabal store, so this is cheap. EXPLICIT SUITE=ecluse-unit:
+      # bare `make coverage` is now the COMBINED (unit ∪ integration) report for
+      # local use, so each CI step names its tier to keep emitting that tier's own
+      # per-flag JSON (coverage/ecluse-unit.json) — the unit-flag upload depends on
+      # it. See CONTRIBUTING.md → "Coverage".
       - name: Coverage (unit)
-        run: nix develop .#ci --command make coverage
+        run: nix develop .#ci --command make coverage SUITE=ecluse-unit
 
       - name: Upload unit coverage to Codecov
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
@@ -226,12 +230,12 @@ jobs:
         run: nix develop .#ci --command make sast
 
       - name: Upload Semgrep SARIF to code scanning
-        # Surface findings in the Security tab — MAIN ONLY, so the dashboard reflects
+        # Surface findings in the Security tab, so the dashboard reflects
         # trunk's state rather than per-PR/branch alerts. Semgrep still GATES on every
         # PR (`make sast` fails on findings), so nothing slips through; this upload is
-        # only the dashboard view, which should track main. always() so a main run
+        # only the dashboard view, which should track main. always() so a run
         # still uploads even if an earlier step failed.
-        if: ${{ always() && github.ref == 'refs/heads/main' }}
+        if: ${{ always() }}
         uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
         with:
           sarif_file: semgrep.sarif
