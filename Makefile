@@ -12,6 +12,9 @@ NIX := $(if $(IN_NIX_SHELL),,nix develop --command)
 # Tracked Haskell sources, for the formatter and linter.
 HS := $(shell git ls-files '*.hs')
 
+# Tracked shell scripts, for shellcheck (`make lint-scripts`).
+SH := $(shell git ls-files '*.sh')
+
 # Published image repository. Override for forks/mirrors: `make docker-push IMAGE=…`.
 IMAGE ?= docker.io/alexadewit/ecluse
 
@@ -22,7 +25,7 @@ HADDOCK_FLAGS := --haddock-hyperlink-source --haddock-quickjump
 .DEFAULT_GOAL := help
 .PHONY: help update build test test-integration test-smoke test-all doctest \
         coverage freeze gen-version-fixtures new-worktree format format-check lint sast \
-        cabal-check lint-workflows weeder check gate run docs \
+        cabal-check lint-workflows lint-scripts weeder check gate run docs \
         docs-check docs-site site nix-build nix-check docker-build docker-push sbom scan \
         scan-vulnix clean
 
@@ -124,6 +127,14 @@ lint-workflows: ## Lint GitHub Actions workflows (actionlint + zizmor)
 	$(NIX) actionlint
 	$(NIX) zizmor .github/workflows/
 
+# Lint the committed shell scripts. --severity=warning gates on correctness/robustness
+# (quoting, unset vars, …) but not shellcheck's opinionated "style" tier (e.g. SC2001,
+# prefer-parameter-expansion-over-sed, which does not always apply). actionlint already
+# shellchecks the workflow `run:` blocks; this covers scripts/*.sh. Runs from the lean
+# `.#workflow-lint` shell in CI. See CONTRIBUTING.md → "Automation scripting".
+lint-scripts: ## Lint shell scripts (shellcheck)
+	$(NIX) shellcheck --severity=warning $(SH)
+
 # weeder reports library code not reachable from the application entry point —
 # i.e. built (and usually tested) but not yet wired into the running proxy. It
 # reads .hie files, so we build ONLY the library + executable with -fwrite-ide-info
@@ -136,7 +147,7 @@ weeder: ## Report app-unreachable library code (weeder; informational, non-gatin
 	$(NIX) cabal build exe:ecluse --builddir=dist-weeder --ghc-options=-fwrite-ide-info
 	$(NIX) weeder --hie-directory dist-weeder
 
-check: build test doctest format-check lint sast cabal-check lint-workflows ## Fast pre-push checks: the gate minus its Docker integration + Haddock tiers (see gate)
+check: build test doctest format-check lint sast cabal-check lint-workflows lint-scripts ## Fast pre-push checks: the gate minus its Docker integration + Haddock tiers (see gate)
 
 # The faithful local mirror of the CI gate: everything `check` runs, plus the two
 # tiers it omits — the integration suite (needs a Docker daemon, exactly like the
