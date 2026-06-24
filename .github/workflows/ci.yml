@@ -130,14 +130,14 @@ jobs:
       # reused untouched. See AGENTS.md → "CI & Security".
       - name: Save cabal store (main)
         if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache/save@2c8a9bd7457de244a408f35966fab2fb45fda9c8 # v6.0.0
         with:
           path: ${{ github.workspace }}/.cabal
           key: cabal-store-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}
 
       - name: Save dist-newstyle (main)
         if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache/save@2c8a9bd7457de244a408f35966fab2fb45fda9c8 # v6.0.0
         with:
           path: dist-newstyle
           key: dist-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}
@@ -306,7 +306,7 @@ jobs:
       # copies); the matching save below runs on main only — same single-writer
       # policy as every other cache. Keyed on the dependency plan.
       - name: Restore weeder build (dist-weeder)
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache/restore@2c8a9bd7457de244a408f35966fab2fb45fda9c8 # v6.0.0
         with:
           path: dist-weeder
           key: dist-weeder-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}
@@ -333,7 +333,7 @@ jobs:
 
       - name: Save weeder build (dist-weeder, main)
         if: ${{ !cancelled() && github.ref == 'refs/heads/main' }}
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache/save@2c8a9bd7457de244a408f35966fab2fb45fda9c8 # v6.0.0
         with:
           path: dist-weeder
           key: dist-weeder-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}
