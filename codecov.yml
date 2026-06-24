@@ -2,9 +2,9 @@
 #
 # Coverage is generated per gating test suite (HPC -> hpc-codecov, native Codecov
 # JSON) and uploaded under a flag, so Codecov merges the tiers into one project
-# total while still tracking each. `unit` uploads today; `integration` wires in
-# identically once its suite has real cases. The smoke tier is excluded
-# (non-gating, network-bound).
+# total while still tracking each. Both the `unit` and `integration` tiers
+# upload, each under its own flag. The smoke tier is excluded (non-gating,
+# network-bound).
 
 # Two coverage reports are uploaded per commit — the `unit` and `integration`
 # flags below — both from the single gating build-test job. Wait for BOTH before
