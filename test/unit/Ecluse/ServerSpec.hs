@@ -4,7 +4,7 @@ import Prelude hiding (get)
 
 import Katip (Environment (Environment), Namespace (Namespace), initLogEnv)
 import Network.HTTP.Client (Manager, defaultManagerSettings, newManager)
-import Network.HTTP.Types (methodPost, status200, statusCode)
+import Network.HTTP.Types (hConnection, methodPost, status200, statusCode)
 import Network.Wai (
     Application,
     Request (requestBodyLength, requestMethod),
@@ -25,12 +25,19 @@ import Ecluse.Registry (ParseError (..), RegistryClient (..))
 import Ecluse.Registry.Npm.Route qualified as Npm
 import Ecluse.Registry.Npm.Serve (npmRenderer)
 import Ecluse.Server (
+    DrainSignal,
     MountBinding (..),
     RequestSizeLimit (..),
     ServerConfig (..),
+    ShutdownDrainTimeout (..),
     application,
+    beginDrain,
     defaultPort,
+    defaultShutdownDrainTimeout,
+    isDraining,
     mkServerConfig,
+    neverDraining,
+    newDrainSignal,
     serverMiddleware,
  )
 import Ecluse.Server.Cache (defaultCacheConfig, newMetadataCache)
@@ -118,6 +125,32 @@ probes matches no mount and is the neutral @404@.
 neutralApp :: IO Application
 neutralApp = application (mkServerConfig []) <$> newTestEnv
 
+{- | An npm-mount 'application' whose 'DrainSignal' is __already raised__, standing
+in for an instance mid-graceful-shutdown without binding a socket. Used to assert
+the front door's draining behaviour: the readiness flip and the going-away header.
+-}
+drainingApp :: IO Application
+drainingApp = do
+    drain <- raisedDrain
+    application (mkServerConfig [mountAt ("npm" :| []) Npm.classify]){scDrain = drain} <$> newTestEnv
+
+-- | A live 'DrainSignal' raised into the draining state.
+raisedDrain :: IO DrainSignal
+raisedDrain = do
+    drain <- newDrainSignal
+    beginDrain drain
+    pure drain
+
+{- | A header matcher that passes only when the response carries __no__
+@Connection@ header — the not-draining expectation, the complement of the
+going-away assertion. (@hspec-wai@'s '<:>' only asserts a header is present.)
+-}
+matchNoConnectionHeader :: MatchHeader
+matchNoConnectionHeader = MatchHeader $ \headers _body ->
+    if any ((== hConnection) . fst) headers
+        then Just "expected no Connection header, but one was present"
+        else Nothing
+
 {- | The server middleware stack wrapping a body-reading application under a tiny
 request-body cap. The size-limit middleware rejects an over-cap body only once a
 handler reads it, so the inner app strictly consumes the body — exercising the cap.
@@ -155,6 +188,26 @@ spec = do
 
             it "answers /readyz with 200" $
                 get "/readyz" `shouldRespondWith` 200
+
+    describe "graceful shutdown — readiness flip while draining" $
+        with drainingApp $ do
+            it "fails /readyz with 503 (the LB stops routing new traffic here)" $
+                get "/readyz" `shouldRespondWith` 503
+
+            it "keeps /livez at 200 (a draining instance is alive, not unhealthy)" $
+                get "/livez" `shouldRespondWith` 200
+
+    describe "graceful shutdown — going-away header" $ do
+        with drainingApp $
+            it "stamps Connection: close on a response while draining" $
+                -- A keep-alive pool (a client's, or a mesh's) must not reuse a socket
+                -- on a closing instance; the header is what tells it to close.
+                get "/npm/-/ping"
+                    `shouldRespondWith` 200{matchHeaders = ["Connection" <:> "close"]}
+
+        with npmMountApp $
+            it "adds no Connection header when not draining" $
+                get "/npm/-/ping" `shouldRespondWith` 200{matchHeaders = [matchNoConnectionHeader]}
 
     describe "meta-routes under a mount" $
         with npmMountApp $ do
@@ -244,5 +297,31 @@ spec = do
         it "caps the request body at 25 MiB by default" $
             scSizeLimit (mkServerConfig []) `shouldBe` RequestSizeLimit (25 * 1024 * 1024)
 
+        it "defaults the graceful-drain timeout to 30 seconds" $
+            scDrainTimeout (mkServerConfig []) `shouldBe` defaultShutdownDrainTimeout
+
+        it "the default graceful-drain timeout is 30 seconds" $
+            defaultShutdownDrainTimeout `shouldBe` ShutdownDrainTimeout 30
+
         it "path-mounts a binding under its prefix (never the root)" $
             bindingPrefix (mountAt ("npm" :| []) Npm.classify) `shouldBe` "npm" :| []
+
+    describe "DrainSignal" $ do
+        it "a fresh signal is not draining" $ do
+            drain <- newDrainSignal
+            isDraining drain `shouldReturn` False
+
+        it "beginDrain raises it" $ do
+            drain <- newDrainSignal
+            beginDrain drain
+            isDraining drain `shouldReturn` True
+
+        it "raising is idempotent (a second raise keeps it raised)" $ do
+            drain <- newDrainSignal
+            beginDrain drain
+            beginDrain drain
+            isDraining drain `shouldReturn` True
+
+        it "neverDraining stays lowered even after a raise (the inert default)" $ do
+            beginDrain neverDraining
+            isDraining neverDraining `shouldReturn` False

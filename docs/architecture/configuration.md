@@ -61,6 +61,7 @@ registries derive short-lived tokens from ambient cloud credentials (see
 | `PROXY_HELP_MESSAGE` | No | Custom string appended to all denial messages (e.g. `"Contact #platform-eng on Slack for assistance."`). |
 | `PROXY_LOG_FORMAT` | No (default: `json`) | Structured-log output shape: `json` (one object per line, for log collectors) or `console` (human-readable). See [Observability](observability.md). |
 | `CVE_SYNC_INTERVAL_SECONDS` | No (default: 3600) | How often to refresh the in-memory advisory index from OSV (see [CVE Subsystem](rules-engine.md#cve-subsystem)). |
+| `PROXY_SHUTDOWN_DRAIN_TIMEOUT` | No (default: 30) | Seconds the graceful shutdown waits for in-flight requests and in-progress artifact streams to finish after the listen socket closes, before the process exits regardless. Must be a positive integer. See [Graceful rollover](hosting.md#graceful-rollover). |
 | `PROXY_CONFIG` | No | The structured config document as an inline JSON blob, the alternate to a mounted config file for an env-only deployment. |
 
 ### Upstream composition (optional)

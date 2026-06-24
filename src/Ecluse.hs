@@ -111,7 +111,7 @@ import Ecluse.Composition qualified as Composition
 import Ecluse.Config (
     ConfigDoc,
     CredentialBackend (StaticCredential),
-    EnvConfig (cfgLogFormat, cfgPort, cfgTelemetry),
+    EnvConfig (cfgLogFormat, cfgPort, cfgShutdownDrainTimeout, cfgTelemetry),
     decodeDocument,
     parseEnv,
     renderEnvErrors,
@@ -129,7 +129,7 @@ import Ecluse.Registry.Npm.Route qualified as Npm
 import Ecluse.Registry.Npm.Serve (npmRenderer)
 import Ecluse.Security (lowerCaseHosts)
 import Ecluse.Security.Egress (newGuardedTlsManager, newTrustedTlsManager)
-import Ecluse.Server (MountBinding (..), ServerConfig (scPort), mkServerConfig)
+import Ecluse.Server (MountBinding (..), ServerConfig (scDrainTimeout, scPort), ShutdownDrainTimeout (ShutdownDrainTimeout), mkServerConfig)
 import Ecluse.Server qualified as Server
 import Ecluse.Server.Cache (newMetadataCache)
 import Ecluse.Server.Context (PackumentDeps)
@@ -155,7 +155,11 @@ run = do
     mDoc <- loadDocument
     providers <- initCredentialProviders env
     bindings <- orExit (T.unlines . map renderBootError) (planMounts mountBindingFor getCurrentTime providers env mDoc)
-    let serverConfig = (mkServerConfig bindings){scPort = cfgPort env}
+    let serverConfig =
+            (mkServerConfig bindings)
+                { scPort = cfgPort env
+                , scDrainTimeout = ShutdownDrainTimeout (cfgShutdownDrainTimeout env)
+                }
     -- Two data-plane managers, split by trust. The guarded one rechecks every
     -- resolved outbound IP against the internal-range block (DNS-rebinding /
     -- resolve-to-internal SSRF) and serves the untrusted upstreams — the public upstream
