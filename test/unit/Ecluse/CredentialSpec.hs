@@ -34,6 +34,28 @@ spec = do
             mkSecret "x" `shouldBe` mkSecret "x"
             mkSecret "x" `shouldNotBe` mkSecret "y"
 
+        it "is unequal for equal-length tokens that differ" $
+            -- A 'Secret' equality is constant-time (no content-dependent early
+            -- out), so this same-length, differing-content case must not be
+            -- mistaken for equal — the property timing-safe comparison exists to
+            -- protect, exercised on the shape that would otherwise leak.
+            mkSecret "abcdef" `shouldNotBe` mkSecret "abcxef"
+
+        it "is unequal when one token is a strict prefix of the other" $ do
+            -- A prefix match is exactly the case a short-circuiting compare would
+            -- separate by time; equality treats it as plain inequality.
+            mkSecret "abc" `shouldNotBe` mkSecret "abcdef"
+            mkSecret "abcdef" `shouldNotBe` mkSecret "abc"
+
+        it "treats the empty token like any other (equal to itself, unequal to a non-empty)" $ do
+            mkSecret "" `shouldBe` mkSecret ""
+            mkSecret "" `shouldNotBe` mkSecret "x"
+
+        it "compares over the full UTF-8 encoding, not a truncated form" $
+            -- Equality reflects the whole token text including multi-byte
+            -- characters, so it cannot collide two distinct tokens.
+            mkSecret "tøken-α" `shouldBe` mkSecret "tøken-α"
+
         it "never leaks the secret even when embedded in an AuthToken's Show" $ do
             let tok = AuthToken{authSecret = mkSecret "leak-me", authExpiresAt = Just anExpiry}
             T.pack (show tok) `shouldSatisfy` (not . T.isInfixOf "leak-me")

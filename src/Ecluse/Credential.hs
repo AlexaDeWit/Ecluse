@@ -39,6 +39,7 @@ module Ecluse.Credential (
     staticProvider,
 ) where
 
+import Data.ByteArray qualified as BA
 import Data.Time (UTCTime)
 import Text.Show (showString, showsPrec)
 
@@ -52,9 +53,29 @@ redaction is a load-bearing security property.
 
 Build one with 'mkSecret' and read the real value back __only__ at the point of
 use with 'unSecret' (e.g. when setting the @Authorization@ header).
+
+__Equality is constant-time__: two secrets are compared over their UTF-8 bytes
+without a content-dependent early out (see the 'Eq' instance). The default
+derived equality would be 'Data.Text'\'s short-circuiting compare, which returns
+as soon as two tokens first differ and so leaks, through timing, how long a
+shared prefix is. Folding that property into the type itself means no comparison
+on a 'Secret' — the inbound edge-auth gate above all — can accidentally become
+non-constant-time. (A constant-time compare can still reveal the token /length/;
+that residual leak is accepted, but the /content/ is never short-circuited on.)
 -}
 newtype Secret = Secret Text
-    deriving stock (Eq)
+
+{- | Constant-time equality over the UTF-8 encoding of the wrapped token.
+
+'BA.constEq' compares every byte regardless of where the inputs first diverge,
+so a near-miss token cannot be distinguished from a far-miss one by how long the
+comparison takes. This is the security property the whole type exists to make
+unmissable: the @PROXY_AUTH_TOKEN@ edge gate compares the client's bearer token
+against the configured one through this instance, and a short-circuiting compare
+there would leak the secret's prefix length to a remote attacker.
+-}
+instance Eq Secret where
+    Secret a == Secret b = BA.constEq (encodeUtf8 a :: ByteString) (encodeUtf8 b :: ByteString)
 
 {- | Renders a fixed placeholder, __never__ the secret text. This is the whole
 point of the type: it makes accidental disclosure through any @'show'@-based
