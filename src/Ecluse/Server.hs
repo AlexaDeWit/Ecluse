@@ -57,6 +57,20 @@ module Ecluse.Server (
     -- * Running the server
     runServer,
 
+    -- * Graceful shutdown
+    DrainSignal,
+    newDrainSignal,
+    neverDraining,
+    beginDrain,
+    isDraining,
+    ShutdownDrainTimeout (..),
+    defaultShutdownDrainTimeout,
+
+    -- * Local-dev immediate halt
+    InteractiveHalt (..),
+    defaultInteractiveHalt,
+    withInteractiveHalt,
+
     -- * Middleware
     serverMiddleware,
 
@@ -65,12 +79,17 @@ module Ecluse.Server (
     defaultRequestSizeLimit,
 ) where
 
-import Network.HTTP.Types (Status, hContentType, status200, status404, status501)
-import Network.Wai (Application, Middleware, Request, Response, ResponseReceived, pathInfo, responseLBS)
+import Network.HTTP.Types (Status, hConnection, hContentType, status200, status404, status501, status503)
+import Network.Wai (Application, Middleware, Request, Response, ResponseReceived, mapResponseHeaders, modifyResponse, pathInfo, responseLBS)
 import Network.Wai.Handler.Warp qualified as Warp
 import Network.Wai.Middleware.RealIp (realIp)
 import Network.Wai.Middleware.RequestSizeLimit (defaultRequestSizeLimitSettings, requestSizeLimitMiddleware, setMaxLengthForRequest)
 import Network.Wai.Middleware.Timeout (timeout)
+import System.Exit (ExitCode (ExitFailure))
+import System.IO (hIsTerminalDevice, isEOF)
+import System.Posix.Process (exitImmediately)
+import System.Posix.Signals (Handler (CatchOnce), installHandler, sigINT, sigTERM)
+import UnliftIO.Async (withAsync)
 
 import Ecluse.Env (Env)
 import Ecluse.Server.Context (
@@ -99,6 +118,18 @@ data ServerConfig = ServerConfig
     -}
     , scSizeLimit :: RequestSizeLimit
     -- ^ The defensive cap on request-body size.
+    , scDrain :: DrainSignal
+    {- ^ The shared shutdown-drain flag the front door observes: once raised, the
+    readiness probe fails ('readiness') and responses carry @Connection: close@
+    (the going-away middleware), so a load balancer stops routing new traffic to
+    this instance and clients stop reusing keep-alive sockets to it. Defaults to
+    'neverDraining'; 'runServer' replaces it with a live signal it flips on a
+    shutdown signal.
+    -}
+    , scDrainTimeout :: ShutdownDrainTimeout
+    {- ^ How long the graceful drain waits for in-flight requests and in-progress
+    artifact streams to finish before the process exits ('defaultShutdownDrainTimeout').
+    -}
     }
 
 {- | Build a 'ServerConfig' over the given mount bindings, taking the default
@@ -115,6 +146,8 @@ mkServerConfig mounts =
         { scPort = defaultPort
         , scMounts = mounts
         , scSizeLimit = defaultRequestSizeLimit
+        , scDrain = neverDraining
+        , scDrainTimeout = defaultShutdownDrainTimeout
         }
 
 -- | The conventional npm proxy listen port (4873), the 'mkServerConfig' default.
@@ -136,6 +169,141 @@ way and are never buffered), while still bounding a hostile upload.
 -}
 defaultRequestSizeLimit :: RequestSizeLimit
 defaultRequestSizeLimit = RequestSizeLimit (25 * 1024 * 1024)
+
+-- ── graceful shutdown ──────────────────────────────────────────────────────────
+
+{- | The shared shutdown-drain flag the front door observes during a graceful
+rollover, as a small handle (a reader plus a one-way raise) rather than a bare
+'TVar' — so the same field can hold either a live, flip-once signal ('newDrainSignal')
+or the inert 'neverDraining' constant the socket-free tests assemble against, and
+nothing downstream can lower it back. It is raised once, on a shutdown signal, and
+read on every request by the readiness probe and the going-away middleware.
+-}
+data DrainSignal = DrainSignal
+    { drainState :: STM Bool
+    -- ^ Whether the instance is draining: 'False' while serving, 'True' once raised.
+    , drainRaise :: STM ()
+    -- ^ Raise the flag. Idempotent — a second raise is a no-op.
+    }
+
+{- | Allocate a live, lowered shutdown-drain signal backed by a 'TVar'. 'runServer'
+allocates one per launch and flips it from the signal handler; the @application@ it
+builds reads the very same signal, so the readiness probe and the going-away
+middleware see the drain the instant the handler raises it.
+-}
+newDrainSignal :: IO DrainSignal
+newDrainSignal = do
+    tvar <- newTVarIO False
+    pure
+        DrainSignal
+            { drainState = readTVar tvar
+            , drainRaise = writeTVar tvar True
+            }
+
+{- | The inert drain signal: permanently lowered, raising it is a no-op. The
+'mkServerConfig' default, so an @application@ assembled for a socket-free test (and
+one driven without ever entering shutdown) reports ready and adds no going-away
+header. A real launch overrides it with 'newDrainSignal' in 'runServer'.
+-}
+neverDraining :: DrainSignal
+neverDraining =
+    DrainSignal
+        { drainState = pure False
+        , drainRaise = pure ()
+        }
+
+-- | Raise a drain signal — the one-way transition into draining. Idempotent.
+beginDrain :: DrainSignal -> IO ()
+beginDrain = atomically . drainRaise
+
+-- | Read whether a drain signal is raised.
+isDraining :: DrainSignal -> IO Bool
+isDraining = atomically . drainState
+
+{- | The bound on the graceful drain: how many seconds the server waits for
+in-flight requests and in-progress artifact streams to finish after it stops
+accepting new connections, before the process exits regardless. A @newtype@ so a
+raw seconds count is not mistaken for some other 'Int', and so a non-positive value
+cannot be passed where a positive timeout is meant (see 'runServer').
+-}
+newtype ShutdownDrainTimeout = ShutdownDrainTimeout Int
+    deriving stock (Eq, Show)
+
+{- | The default graceful-drain bound: 30 seconds. Long enough for an in-flight
+metadata fetch or a moderate artifact stream to complete during a rolling deploy,
+short enough that a stuck request cannot pin the old instance indefinitely.
+-}
+defaultShutdownDrainTimeout :: ShutdownDrainTimeout
+defaultShutdownDrainTimeout = ShutdownDrainTimeout 30
+
+-- ── local-dev immediate halt ─────────────────────────────────────────────────
+
+{- | The local-development immediate-halt wiring, as three injectable seams so its
+logic is exercised without a real terminal. It exists only to give an interactive
+session a "quit now" key: when the server is attached to a TTY, closing standard
+input (Ctrl-D) forces an __immediate__ process exit, aborting any in-progress drain
+— the same hard-stop a second Ctrl-C gives, but on the dev's deliberate signal.
+
+It is __inert outside an interactive terminal__: in production standard input is a
+non-TTY or closed, 'haltOnInteractive' returns 'False', and no watcher is installed,
+so the signal-driven graceful lifecycle is completely untouched. The TTY guard is
+what enforces that zero-production-impact contract (see 'withInteractiveHalt').
+-}
+data InteractiveHalt = InteractiveHalt
+    { haltOnInteractive :: IO Bool
+    {- ^ Whether to arm the halt at all — the production guard. The real wiring is
+    "is standard input a terminal?", so a non-interactive process never installs the
+    watcher.
+    -}
+    , awaitHaltSignal :: IO ()
+    {- ^ Block until the dev's halt signal. The real wiring reads standard input
+    until end-of-input (Ctrl-D); it returns when the watcher should fire.
+    -}
+    , halt :: IO ()
+    {- ^ The halt itself: terminate the process __immediately__, bypassing the drain
+    wait. The real wiring is a direct @_exit@ ('exitImmediately'), matching the
+    second-Ctrl-C hard stop.
+    -}
+    }
+
+{- | The real local-dev halt: armed only when standard input is a terminal
+('hIsTerminalDevice'), fired by end-of-input on standard input (Ctrl-D), and
+halting via 'exitImmediately' — an immediate @_exit@ that bypasses the graceful
+drain, mirroring a second Ctrl-C. The exit status (130) is the conventional
+"terminated from the terminal" code.
+-}
+defaultInteractiveHalt :: InteractiveHalt
+defaultInteractiveHalt =
+    InteractiveHalt
+        { haltOnInteractive = hIsTerminalDevice stdin
+        , awaitHaltSignal = awaitStdinEof
+        , halt = exitImmediately (ExitFailure 130)
+        }
+  where
+    -- Read and discard standard input until end-of-input. On an interactive
+    -- terminal this blocks until the dev presses Ctrl-D (or the stream otherwise
+    -- closes); typed lines in between are consumed and ignored — the watcher only
+    -- cares about the close.
+    awaitStdinEof :: IO ()
+    awaitStdinEof = go
+      where
+        go =
+            isEOF >>= \case
+                True -> pass
+                False -> void getLine >> go
+
+{- | Run an action with the local-dev immediate-halt watcher armed __only when
+interactive__. If 'haltOnInteractive' is 'True', a watcher runs alongside the action
+for exactly its lifetime ('withAsync', so it is torn down when the action returns or
+is cancelled — it never lingers); the watcher blocks on 'awaitHaltSignal' and, when
+that returns, runs 'halt'. If 'False' — the production case — the action runs alone,
+with no watcher and no extra thread, so nothing about the graceful lifecycle changes.
+-}
+withInteractiveHalt :: InteractiveHalt -> IO a -> IO a
+withInteractiveHalt ih action =
+    haltOnInteractive ih >>= \case
+        False -> action
+        True -> withAsync (awaitHaltSignal ih >> halt ih) (const action)
 
 -- ── the application ──────────────────────────────────────────────────────────
 
@@ -160,7 +328,7 @@ dispatch :: ServerConfig -> Env -> Application
 dispatch cfg env request respond =
     case pathInfo request of
         ["livez"] -> respond (liveness env)
-        ["readyz"] -> respond (readiness env)
+        ["readyz"] -> readiness (scDrain cfg) >>= respond
         segments -> case matchMount (scMounts cfg) segments of
             Nothing -> respond notFound
             Just (binding, classified) -> serve env binding classified request respond
@@ -267,17 +435,30 @@ notFound =
 {- Liveness (@\/livez@): @200@ while the process is responsive. The architecture
 folds the mirror worker's consume-loop heartbeat into single-process liveness so a
 stalled worker fails it (see @docs\/architecture\/cloud-backends.md@ → "Process model").
+
+Liveness stays @200@ __throughout__ a graceful drain: a draining instance is alive
+and finishing its in-flight work, not unhealthy, so an orchestrator must not kill it
+prematurely — that is the readiness probe's job (see 'readiness').
 -}
 liveness :: Env -> Response
 liveness _env = jsonResponse status200 "{\"status\":\"live\"}"
 
-{- Readiness (@\/readyz@): config is loaded and the listener is serving. It is
-deliberately __lenient about public-upstream reachability__ — the proxy still
-serves private-upstream hits when public is down — so readiness must not flap on
-an upstream blip and pull a healthy pod from rotation.
+{- Readiness (@\/readyz@): @200@ when config is loaded and the listener is serving,
+@503@ once the instance is __draining__. It is deliberately __lenient about
+public-upstream reachability__ — the proxy still serves private-upstream hits when
+public is down — so readiness must not flap on an upstream blip and pull a healthy
+pod from rotation.
+
+The drain flip is the load-balancer signal of a graceful rollover: while the
+'DrainSignal' is raised, readiness fails so an upstream LB or service mesh stops
+routing __new__ traffic here, while in-flight requests finish (see
+@docs\/architecture\/hosting.md@ → "Graceful rollover").
 -}
-readiness :: Env -> Response
-readiness _env = jsonResponse status200 "{\"status\":\"ready\"}"
+readiness :: DrainSignal -> IO Response
+readiness drain =
+    isDraining drain <&> \case
+        True -> jsonResponse status503 "{\"status\":\"draining\"}"
+        False -> jsonResponse status200 "{\"status\":\"ready\"}"
 
 -- ── response helpers ─────────────────────────────────────────────────────────
 
@@ -293,6 +474,13 @@ defensive request-body size cap (rejecting an over-cap body with @413@ once a
 handler reads it), correct client-IP recovery behind a load balancer
 (@X-Forwarded-For@ \/ @X-Real-IP@), and a per-request timeout.
 
+A fourth middleware, the __going-away__ header, is active only during a graceful
+drain: while the 'ServerConfig''s 'DrainSignal' is raised it stamps @Connection:
+close@ on every response so an HTTP\/1.1 keep-alive pool (a client's, or a service
+mesh's connection pool) does not reuse a socket on an instance that is shutting down
+— the cause of the 503-on-rollover this guards against (see
+@docs\/architecture\/hosting.md@ → "Graceful rollover").
+
 Two @wai-extra@ middlewares are deliberately __not__ used. @Autohead@ answers a
 HEAD by running the GET handler and discarding the body, which on a tarball route
 would open the upstream and stream a whole artifact to nowhere — HEAD on
@@ -305,6 +493,25 @@ serverMiddleware cfg =
     sizeLimitMiddleware (scSizeLimit cfg)
         . realIp
         . timeout timeoutSeconds
+        . goingAwayMiddleware (scDrain cfg)
+
+{- While the instance is draining, stamp @Connection: close@ on every response so a
+keep-alive client (or a mesh connection pool) does not reuse the socket on a closing
+instance; while serving, pass responses through untouched. The flag is read
+per-response — the same one-way 'DrainSignal' the readiness probe observes — so the
+header appears the moment the drain begins and on every response thereafter.
+-}
+goingAwayMiddleware :: DrainSignal -> Middleware
+goingAwayMiddleware drain app request respond = do
+    draining <- isDraining drain
+    if draining
+        then modifyResponse closeConnection app request respond
+        else app request respond
+  where
+    -- Add @Connection: close@ to the response's header set. A streaming response
+    -- keeps streaming — only its headers are rewritten.
+    closeConnection :: Response -> Response
+    closeConnection = mapResponseHeaders ((hConnection, "close") :)
 
 -- The per-request timeout, in seconds. Generous enough for a large packument
 -- fetch, bounded so a stuck upstream cannot pin a handler indefinitely.
@@ -325,7 +532,42 @@ with the 'application' built over it and the composition-root 'Env'. The
 'ServerConfig' — in particular its mount bindings ('scMounts'), each a mount's
 complete ecosystem wiring — is supplied by the composition root, which is where the
 served ecosystems are mounted (see "Ecluse").
+
+__Graceful shutdown.__ A fresh live 'DrainSignal' is allocated per launch and wired
+into both the request path (the @application@ reads it through 'scDrain') and the
+@warp@ shutdown handler. On @SIGTERM@ or @SIGINT@ the handler raises the drain — so
+the readiness probe begins failing and responses gain @Connection: close@ — then
+closes the listen socket, which puts @warp@ into graceful-shutdown mode: it stops
+accepting new connections and waits for in-flight requests __and in-progress
+artifact streams__ to finish before the process exits, bounded by 'scDrainTimeout'.
+The handler is a 'CatchOnce', so a second signal during the drain hard-stops the
+server rather than being swallowed.
+
+__Local-dev quit key.__ The whole run is wrapped in 'withInteractiveHalt', which —
+__only when attached to an interactive terminal__ — arms a watcher that forces an
+immediate halt on Ctrl-D (end of standard input), bypassing the drain like a second
+Ctrl-C. Outside a TTY (production) no watcher is installed and this changes nothing.
 -}
 runServer :: ServerConfig -> Env -> IO ()
-runServer cfg env =
-    Warp.run (scPort cfg) (application cfg env)
+runServer cfg0 env = do
+    drain <- newDrainSignal
+    let cfg = cfg0{scDrain = drain}
+        ShutdownDrainTimeout timeoutSecs = scDrainTimeout cfg
+        settings =
+            Warp.setPort (scPort cfg)
+                . Warp.setInstallShutdownHandler (installShutdownHandler drain)
+                . Warp.setGracefulShutdownTimeout (Just timeoutSecs)
+                $ Warp.defaultSettings
+    withInteractiveHalt defaultInteractiveHalt (Warp.runSettings settings (application cfg env))
+
+{- Install the OS shutdown handler @warp@ asks for: on @SIGTERM@\/@SIGINT@, raise the
+drain (flip readiness to @503@ and start stamping @Connection: close@) and then run
+@warp@'s @closeSocket@, which begins the graceful drain of in-flight work. Each
+signal is caught __once__ ('CatchOnce') so a second signal falls through to the
+runtime's default and hard-stops a drain that is taking too long.
+-}
+installShutdownHandler :: DrainSignal -> IO () -> IO ()
+installShutdownHandler drain closeSocket =
+    traverse_ install [sigTERM, sigINT]
+  where
+    install sig = installHandler sig (CatchOnce (beginDrain drain >> closeSocket)) Nothing

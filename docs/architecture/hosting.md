@@ -105,6 +105,53 @@ learns to fan out. A mount prefix should be accepted with or without a trailing
 slash, since the base-URL join behaviour differs subtly between clients — an area
 to validate against the real `npm` and `pip` clients during implementation.
 
+## Graceful rollover
+
+A rolling deploy or a pod eviction takes an instance down while clients and the
+load balancer are still pointed at it. Done naively, the instance stops accepting
+the moment it receives `SIGTERM`, and any request in flight — including a
+half-streamed artifact — is cut off, surfacing as a `503` to the client and, behind
+a service mesh, as a poisoned connection-pool entry. Écluse closes that window with
+a **full graceful drain** on `SIGTERM` and `SIGINT`:
+
+1. **Readiness flips, liveness holds.** The instance enters a *draining* state, in
+   which `GET /readyz` returns **`503`** while `GET /livez` stays **`200`**. The
+   readiness `503` is the signal a load balancer or service mesh (Kubernetes, an
+   Envoy/Istio outlier-detection check) watches: it stops routing **new** traffic
+   to this instance. Liveness stays green deliberately — a draining instance is
+   alive and finishing its work, not unhealthy, so an orchestrator must **not**
+   kill it early; that is readiness's job, not liveness's.
+
+2. **Going-away header.** While draining, every response carries
+   **`Connection: close`**. An HTTP/1.1 keep-alive pool — a client's, or a mesh's
+   connection pool — would otherwise reuse an already-open socket to this instance
+   even after readiness flips, landing a request on a closing process and producing
+   the very rollover `503` the flip was meant to avoid. The header tells the pool to
+   close the socket after the response, so the next request opens a fresh connection
+   that the mesh routes to a *ready* instance.
+
+3. **Drain in-flight work, then exit.** The instance stops accepting new
+   connections and **waits for in-flight requests and in-progress artifact streams
+   to finish** before the process exits — a half-delivered tarball runs to
+   completion rather than being severed. The wait is bounded by
+   **`PROXY_SHUTDOWN_DRAIN_TIMEOUT`** (default **30 seconds**; see
+   [Configuration](configuration.md#configuration)), after which the process exits
+   regardless so a stuck request cannot pin the old instance open through a deploy.
+
+**Operator note.** Set the platform's termination grace period **longer** than
+`PROXY_SHUTDOWN_DRAIN_TIMEOUT` so the orchestrator does not `SIGKILL` the process
+mid-drain (e.g. a Kubernetes `terminationGracePeriodSeconds` comfortably above the
+configured drain). The readiness-flip-then-drain sequence assumes the LB acts on
+`/readyz`; a deployment that load-balances without a readiness check should add one.
+
+**Local development.** When Écluse is attached to an **interactive terminal**, two
+keys force an *immediate* halt that **bypasses** the drain: a **second `Ctrl+C`**
+(the first begins the graceful drain; the second hard-stops it) and **`Ctrl+D`**
+(end of standard input) — the dev "quit now" key. This is strictly a development
+affordance: it is gated on standard input being a TTY, so in **production** (where
+standard input is a non-TTY or closed) no such watcher exists and the only path is
+the signal-driven graceful drain above.
+
 ## Capability manifest
 
 Because dispatch is a fan-out over a fixed set of mounts and each mount classifies

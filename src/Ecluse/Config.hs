@@ -291,6 +291,12 @@ data EnvConfig = EnvConfig
     {- ^ How often the advisory index is refreshed (@CVE_SYNC_INTERVAL_SECONDS@,
     default 3600).
     -}
+    , cfgShutdownDrainTimeout :: Int
+    {- ^ How many seconds the graceful shutdown drain waits for in-flight requests
+    and in-progress artifact streams to finish before the process exits
+    (@PROXY_SHUTDOWN_DRAIN_TIMEOUT@, default 30). Threaded to the server as its
+    'Ecluse.Server.ShutdownDrainTimeout'.
+    -}
     , cfgCacheTtl :: NominalDiffTime
     {- ^ How long a parsed packument stays fresh in the metadata cache
     (@METADATA_CACHE_TTL_SECONDS@, default 60). Short by design — brief staleness
@@ -352,6 +358,10 @@ envParser =
         <*> (fmap mkSecret <$> Env.sensitive (optionalText "MIRROR_TARGET_TOKEN"))
         <*> optionalText "PROXY_HELP_MESSAGE"
         <*> Env.var cveIntervalReader "CVE_SYNC_INTERVAL_SECONDS" (Env.def defaultCveSyncInterval)
+        -- The graceful-drain bound in seconds: strictly positive (a zero or negative
+        -- drain window would defeat the point — no time to finish in-flight work), so
+        -- it is rejected loudly rather than coerced.
+        <*> Env.var positiveIntReader "PROXY_SHUTDOWN_DRAIN_TIMEOUT" (Env.def defaultShutdownDrainTimeout)
         -- A non-negative seconds count: zero is accepted on purpose, disabling the
         -- metadata cache (every entry expires immediately, so each request
         -- re-fetches). Unlike METADATA_CACHE_MAX_ENTRIES, which must be positive (a
@@ -373,6 +383,9 @@ envParser =
 
     defaultCveSyncInterval :: NominalDiffTime
     defaultCveSyncInterval = 3600
+
+    defaultShutdownDrainTimeout :: Int
+    defaultShutdownDrainTimeout = 30
 
     -- An optional 'Text' variable: absent yields 'Nothing', present yields the
     -- value. 'def' makes the parser total (it never fails on absence). The reader
