@@ -32,6 +32,33 @@ spec = do
         it "starts healthy with no failures recorded" $
             initialBreaker `shouldBe` Closed 0
 
+    describe "Eq / Show instances" $ do
+        it "compares equal only for the same constructor and payload" $ do
+            -- Same constructor, same payload: equal.
+            Closed 1 `shouldBe` Closed 1
+            HalfOpen `shouldBe` HalfOpen
+            Open now `shouldBe` Open now
+            -- Same constructor, differing payload: unequal.
+            Closed 1 `shouldNotBe` Closed 2
+            Open now `shouldNotBe` Open (addUTCTime 1 now)
+            -- Across constructors: unequal in every pairing.
+            Closed 0 `shouldNotBe` HalfOpen
+            Closed 0 `shouldNotBe` Open now
+            HalfOpen `shouldNotBe` Open now
+
+        it "renders each constructor distinctly" $ do
+            -- Exercise the derived Show on every constructor at the top level
+            -- (precedence 0, no surrounding parentheses).
+            show (Closed 3) `shouldBe` ("Closed 3" :: String)
+            show HalfOpen `shouldBe` ("HalfOpen" :: String)
+            show (Open now) `shouldContain` "Open "
+
+        it "parenthesises an argument-bearing constructor in a nested position" $ do
+            -- Showing a breaker as an argument (precedence 11) drives the derived
+            -- Show's parenthesising branch, which a top-level show alone leaves out.
+            show (Just (Closed 3)) `shouldBe` ("Just (Closed 3)" :: String)
+            show [Open now] `shouldContain` "[Open "
+
     describe "admit" $ do
         it "admits a closed breaker unchanged" $
             admit now (Closed 0) `shouldBe` (True, Closed 0)

@@ -54,16 +54,17 @@ recorded.
 -}
 admit :: UTCTime -> Breaker -> (Bool, Breaker)
 admit now = \case
-    Open until'
-        | now < until' -> (False, Open until')
-        | otherwise -> (True, HalfOpen)
+    Open until' | now < until' -> (False, Open until')
+    Open _ -> (True, HalfOpen)
     healthy -> (True, healthy)
 
 {- | Fold a successful attempt into the breaker: reset it to healthy, clearing any
 accumulated failures or a half-open probe.
 -}
 recordSuccess :: Breaker -> Breaker
-recordSuccess _ = initialBreaker
+recordSuccess Closed{} = initialBreaker
+recordSuccess Open{} = initialBreaker
+recordSuccess HalfOpen = initialBreaker
 
 {- | Fold a failed attempt into the breaker, given the caller's trip @threshold@ and
 @cooldown@ and the current instant.
@@ -74,9 +75,8 @@ folded in while already open) (re-)opens for a fresh cooldown.
 -}
 recordFailure :: Int -> NominalDiffTime -> UTCTime -> Breaker -> Breaker
 recordFailure threshold cooldown now = \case
-    Closed n
-        | n + 1 >= threshold -> tripped
-        | otherwise -> Closed (n + 1)
+    Closed n | n + 1 >= threshold -> tripped
+    Closed n -> Closed (n + 1)
     _ -> tripped
   where
     tripped = Open (addUTCTime cooldown now)
