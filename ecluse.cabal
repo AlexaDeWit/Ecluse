@@ -153,6 +153,7 @@ test-suite ecluse-unit
     Ecluse.CompositionSpec
     Ecluse.ConfigSpec
     Ecluse.Credential.CodeArtifactSpec
+    Ecluse.Credential.Refresh.InternalSpec
     Ecluse.CredentialSpec
     Ecluse.EnvSpec
     Ecluse.LogSpec
