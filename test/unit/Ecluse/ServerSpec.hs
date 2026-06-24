@@ -21,7 +21,7 @@ import UnliftIO.Exception (throwString)
 import UnliftIO.Timeout (timeout)
 
 import Ecluse.Credential (AuthToken (..), CredentialProvider, mkSecret, staticProvider)
-import Ecluse.Env (Env, newEnv)
+import Ecluse.Env (Env, newEnv, newWorkerHeartbeat)
 import Ecluse.Queue (newInMemoryQueue)
 import Ecluse.Registry (ParseError (..), RegistryClient (..))
 import Ecluse.Registry.Npm.Route qualified as Npm
@@ -85,7 +85,8 @@ newTestEnv = do
     manager <- newTestManager
     metadataCache <- newMetadataCache defaultCacheConfig
     logEnv <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
-    newEnv fakeRegistry queue fakeCredentials manager manager metadataCache logEnv telemetryDisabled
+    heartbeat <- newWorkerHeartbeat
+    newEnv fakeRegistry queue fakeCredentials manager manager metadataCache logEnv telemetryDisabled heartbeat
 
 {- | A test mount binding: the given prefix and classifier, npm's denial renderer,
 and no packument-serve dependencies (so a 'Packument' route is the recognised-but-

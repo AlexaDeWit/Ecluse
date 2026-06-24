@@ -19,7 +19,7 @@ import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
 import Ecluse.Ecosystem (Ecosystem (..))
-import Ecluse.Package (mkPackageName)
+import Ecluse.Package (Hash (Hash), HashAlg (SHA1), mkPackageName)
 import Ecluse.Queue
 import Ecluse.Version (mkVersion)
 
@@ -34,6 +34,12 @@ sampleJob =
         , jobVersion = mkVersion Npm "1.0.0"
         , jobArtifactUrl = "https://public.test/thing/-/thing-1.0.0.tgz"
         , jobMirrorTarget = "https://mirror.test/thing/-/thing-1.0.0.tgz"
+        , jobArtifact =
+            MirrorArtifact
+                { maFilename = "thing-1.0.0.tgz"
+                , maHashes = Hash SHA1 "abc" :| []
+                , maSize = Just 7
+                }
         }
 
 {- | A second, distinct job, used to assert FIFO ordering across two enqueues.

@@ -34,8 +34,15 @@ module Ecluse.Env (
     Env (..),
     newEnv,
     withEnv,
+
+    -- * Worker heartbeat
+    WorkerHeartbeat,
+    newWorkerHeartbeat,
+    recordPoll,
+    lastPoll,
 ) where
 
+import Data.Time (UTCTime)
 import Katip (LogEnv)
 import Network.HTTP.Client (Manager)
 import UnliftIO (MonadUnliftIO, bracket)
@@ -102,7 +109,44 @@ data Env = Env
     @PROXY_TELEMETRY@ unset — the inert no-op that emits nothing. Its provider
     lifecycle is bracketed by the composition root that supplies it.
     -}
+    , envWorkerHeartbeat :: WorkerHeartbeat
+    {- ^ The mirror worker's consume-loop heartbeat: the time of its
+    last-successful-poll. Distinct from the server's HTTP readiness — it is the
+    worker's own liveness surface — and read by the liveness probe so a stalled
+    worker is visible in single-process health (see "Ecluse.Worker").
+    -}
     }
+
+{- | The mirror worker's consume-loop heartbeat: the wall-clock time of the
+worker's __last successful poll__ of the queue.
+
+It is the worker's own liveness signal, kept apart from the server's HTTP
+readiness so single-process health reflects a stalled worker today and a future
+standalone worker binary keeps the same probe. The worker 'recordPoll's after each
+successful @receive@ (whether or not the batch was empty — an empty long-poll is a
+healthy idle, not a stall); a liveness probe reads 'lastPoll' and compares it
+against the wall clock to decide whether the loop has gone quiet for too long.
+-}
+newtype WorkerHeartbeat = WorkerHeartbeat (TVar (Maybe UTCTime))
+
+{- | Build a fresh 'WorkerHeartbeat' with no poll yet recorded ('lastPoll' is
+'Nothing' until the worker's first successful @receive@).
+-}
+newWorkerHeartbeat :: IO WorkerHeartbeat
+newWorkerHeartbeat = WorkerHeartbeat <$> newTVarIO Nothing
+
+{- | Record the time of a successful queue poll, advancing the heartbeat. Called
+by the worker after each @receive@ returns (the loop is alive even on an empty
+batch).
+-}
+recordPoll :: WorkerHeartbeat -> UTCTime -> IO ()
+recordPoll (WorkerHeartbeat var) now = atomically (writeTVar var (Just now))
+
+{- | The time of the worker's last successful poll, or 'Nothing' before its first.
+A liveness probe reads this and compares it against the wall clock.
+-}
+lastPoll :: WorkerHeartbeat -> IO (Maybe UTCTime)
+lastPoll (WorkerHeartbeat var) = readTVarIO var
 
 {- | Assemble an 'Env' from its constructed handles and the two data-plane HTTP
 'Manager's — the guarded one for the untrusted public\/artifact fetches and the
@@ -117,8 +161,8 @@ opened, no scribe attached to stdout, and no exporter initialised. Backend
 selection happens in the handle smart constructors that produce the arguments;
 this only gathers them.
 -}
-newEnv :: RegistryClient -> MirrorQueue -> CredentialProvider -> Manager -> Manager -> MetadataCache -> LogEnv -> Telemetry -> IO Env
-newEnv registry queue credentials manager privateManager metadataCache logEnv telemetry =
+newEnv :: RegistryClient -> MirrorQueue -> CredentialProvider -> Manager -> Manager -> MetadataCache -> LogEnv -> Telemetry -> WorkerHeartbeat -> IO Env
+newEnv registry queue credentials manager privateManager metadataCache logEnv telemetry heartbeat =
     pure
         Env
             { envRegistry = registry
@@ -129,6 +173,7 @@ newEnv registry queue credentials manager privateManager metadataCache logEnv te
             , envMetadataCache = metadataCache
             , envLogEnv = logEnv
             , envTelemetry = telemetry
+            , envWorkerHeartbeat = heartbeat
             }
 
 {- | Build an 'Env', run an action against it, and tear it down — even on
@@ -146,11 +191,12 @@ withEnv ::
     MetadataCache ->
     LogEnv ->
     Telemetry ->
+    WorkerHeartbeat ->
     (Env -> m a) ->
     m a
-withEnv registry queue credentials manager privateManager metadataCache logEnv telemetry =
+withEnv registry queue credentials manager privateManager metadataCache logEnv telemetry heartbeat =
     bracket
-        (liftIO (newEnv registry queue credentials manager privateManager metadataCache logEnv telemetry))
+        (liftIO (newEnv registry queue credentials manager privateManager metadataCache logEnv telemetry heartbeat))
         teardown
   where
     -- The connection pool behind the 'Manager' and the telemetry providers behind

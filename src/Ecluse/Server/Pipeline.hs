@@ -139,7 +139,7 @@ import Ecluse.Credential (Secret, mkSecret)
 import Ecluse.Env (Env (envLogEnv, envManager, envMetadataCache, envPrivateManager, envQueue))
 import Ecluse.Log (moduleField)
 import Ecluse.Package (
-    Artifact (artFilename, artHashes, artUrl),
+    Artifact (artFilename, artHashes, artSize, artUrl),
     PackageDetails (pkgArtifacts),
     PackageInfo (infoDistTags, infoPublishedAt, infoVersions),
     PackageName,
@@ -152,7 +152,11 @@ import Ecluse.Package.Merge (
     SourceId,
     mergePackuments,
  )
-import Ecluse.Queue (MirrorJob (MirrorJob, jobArtifactUrl, jobMirrorTarget, jobPackage, jobVersion), enqueue)
+import Ecluse.Queue (
+    MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize),
+    MirrorJob (MirrorJob, jobArtifact, jobArtifactUrl, jobMirrorTarget, jobPackage, jobVersion),
+    enqueue,
+ )
 import Ecluse.Registry (RegistryResponse (responseBody))
 import Ecluse.Registry.Npm (
     MetadataForm (Full),
@@ -1070,7 +1074,7 @@ streamPublicArtifact env renderer deps name version artifact respond =
             Right req ->
                 streamUpstreamWhen (envManager env) req (const True) relayArtifact respond >>= \case
                     Just received -> do
-                        enqueueMirror env deps name version (artUrl artifact)
+                        enqueueMirror env deps name version artifact
                         pure received
                     Nothing -> respond (artifactError renderer deps (artifactStatus upstreamUnavailable) upstreamUnavailable)
             Left _ -> respond internalArtifactError
@@ -1080,16 +1084,31 @@ streamPublicArtifact env renderer deps name version artifact respond =
 runs after the client response is begun and any failure is swallowed, so a queue
 outage never fails or delays the serve. The job names the artifact's authoritative
 URL (the same location the public fetch targeted) and the mount's mirror target; it
-carries no credential (the worker mints its own). -}
-enqueueMirror :: Env -> PackumentDeps -> PackageName -> Version -> Text -> IO ()
-enqueueMirror env deps name version artifactUrl =
-    void . tryAny . enqueue (envQueue env) $
-        MirrorJob
-            { jobPackage = name
-            , jobVersion = version
-            , jobArtifactUrl = artifactUrl
-            , jobMirrorTarget = pdMirrorTarget deps
-            }
+carries no credential (the worker mints its own).
+
+It also captures the __serve-time-admitted__ integrity digests, filename, and
+declared size on the job, so the worker verifies the fetched bytes against exactly
+what the rules cleared (immune to an upstream packument mutated in the
+enqueue → process window) and can assemble the publish document without re-fetching.
+The artifact reached this point through the integrity-presence admission policy, so
+'artHashes' is non-empty; a hashless artifact (which that policy already refuses to
+serve) is not enqueued, since there would be no digest to verify against. -}
+enqueueMirror :: Env -> PackumentDeps -> PackageName -> Version -> Artifact -> IO ()
+enqueueMirror env deps name version artifact =
+    whenJust (nonEmpty (artHashes artifact)) $ \hashes ->
+        void . tryAny . enqueue (envQueue env) $
+            MirrorJob
+                { jobPackage = name
+                , jobVersion = version
+                , jobArtifactUrl = artUrl artifact
+                , jobMirrorTarget = pdMirrorTarget deps
+                , jobArtifact =
+                    MirrorArtifact
+                        { maFilename = artFilename artifact
+                        , maHashes = hashes
+                        , maSize = artSize artifact
+                        }
+                }
 
 -- ── the egress gate at the serve seam ─────────────────────────────────────────
 

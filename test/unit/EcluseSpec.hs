@@ -15,7 +15,7 @@ import System.Environment (setEnv, unsetEnv)
 import Ecluse (BootAborted (..), mountBindingFor, npmServerConfig, orExit, run)
 import Ecluse.Credential (AuthToken (..), CredentialProvider, mkSecret, staticProvider)
 import Ecluse.Ecosystem (Ecosystem (..))
-import Ecluse.Env (Env, newEnv)
+import Ecluse.Env (Env, newEnv, newWorkerHeartbeat)
 import Ecluse.Queue (newInMemoryQueue)
 import Ecluse.Registry (ParseError (..), RegistryClient (..))
 import Ecluse.Server (MountBinding (..), application)
@@ -57,7 +57,8 @@ newTestEnv = do
     manager <- newTestManager
     metadataCache <- newMetadataCache defaultCacheConfig
     logEnv <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
-    newEnv fakeRegistry queue fakeCredentials manager manager metadataCache logEnv telemetryDisabled
+    heartbeat <- newWorkerHeartbeat
+    newEnv fakeRegistry queue fakeCredentials manager manager metadataCache logEnv telemetryDisabled heartbeat
 
 {- | The composed npm front door ('npmServerConfig') as a WAI 'Application', driven
 in-process — so the actual mount the composition root wires is exercised, no socket.

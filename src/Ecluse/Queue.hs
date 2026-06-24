@@ -47,6 +47,7 @@ module Ecluse.Queue (
 
     -- * Payloads
     MirrorJob (..),
+    MirrorArtifact (..),
     QueueMessage (..),
 
     -- * Opaque receipt
@@ -64,13 +65,21 @@ module Ecluse.Queue (
 import Data.Map.Strict qualified as Map
 import Data.Sequence qualified as Seq
 
-import Ecluse.Package (PackageName)
+import Ecluse.Package (Hash, PackageName)
 import Ecluse.Version (Version)
 
 {- | A mirror job: everything the worker needs to back-fill one artifact into the
 mirror target. The version was already gated by the rules at serve time (when
-the job was enqueued), so the worker does not re-run the rules; it fetches,
-verifies the bytes against the artifact's integrity hash, and publishes.
+the job was enqueued), so the worker does not re-run the rules; it fetches the
+bytes, verifies them against the __serve-time-admitted__ integrity digest the job
+carries, and publishes.
+
+The integrity digest and the artifact descriptor are captured __at enqueue time__
+('jobArtifact'), not re-fetched: the worker mirrors exactly what the rules
+admitted, so an upstream packument mutated in the enqueue → process window cannot
+substitute a different artifact for the one that was gated. The descriptor also
+carries the filename and declared size the worker needs to assemble the publish
+document.
 -}
 data MirrorJob = MirrorJob
     { jobPackage :: PackageName
@@ -81,6 +90,35 @@ data MirrorJob = MirrorJob
     -- ^ Where to fetch the artifact bytes from (the public upstream).
     , jobMirrorTarget :: Text
     -- ^ The mirror-target endpoint the artifact is published to.
+    , jobArtifact :: MirrorArtifact
+    {- ^ The serve-time-admitted artifact descriptor: the integrity digest the
+    fetched bytes are verified against, plus the filename and declared size the
+    publish document is assembled from.
+    -}
+    }
+    deriving stock (Eq, Show)
+
+{- | The serve-time-admitted artifact descriptor carried on a 'MirrorJob': exactly
+the fields the worker needs to verify the fetched bytes and assemble the publish
+document, captured when the version was gated.
+
+'maHashes' is a 'NonEmpty' because the serve path admits a public version only when
+it carries at least one integrity digest (the integrity-presence admission policy),
+so a job with __no__ digest to verify against is unrepresentable — the worker always
+has a fingerprint to check the bytes against before they reach the private upstream.
+-}
+data MirrorArtifact = MirrorArtifact
+    { maFilename :: Text
+    {- ^ The artifact's on-the-wire filename, the @_attachments@ key in the publish
+    document.
+    -}
+    , maHashes :: NonEmpty Hash
+    {- ^ The serve-time-admitted integrity digests (at least one). The worker
+    verifies the fetched bytes against these before publishing; a mismatch fails
+    the job with no publish.
+    -}
+    , maSize :: Maybe Int
+    -- ^ The declared artifact size in bytes, if the registry reported it.
     }
     deriving stock (Eq, Show)
 

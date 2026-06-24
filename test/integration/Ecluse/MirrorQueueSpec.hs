@@ -15,8 +15,9 @@ import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (try)
 
 import Ecluse.Ecosystem (Ecosystem (Npm))
-import Ecluse.Package (mkPackageName)
+import Ecluse.Package (Hash (Hash), HashAlg (SHA1), mkPackageName)
 import Ecluse.Queue (
+    MirrorArtifact (..),
     MirrorJob (..),
     MirrorQueue (..),
     QueueMessage (..),
@@ -84,6 +85,12 @@ sampleJob =
         , jobVersion = mkVersion Npm "1.3.0"
         , jobArtifactUrl = "https://registry.npmjs.org/left-pad/-/left-pad-1.3.0.tgz"
         , jobMirrorTarget = "https://mirror.example/left-pad/-/left-pad-1.3.0.tgz"
+        , jobArtifact =
+            MirrorArtifact
+                { maFilename = "left-pad-1.3.0.tgz"
+                , maHashes = Hash SHA1 "abc123" :| []
+                , maSize = Just 256
+                }
         }
 
 -- ── ministack container + queue setup ────────────────────────────────────────
