@@ -37,6 +37,14 @@ __supply-chain signals, not silent reconciliations__:
   to additionally drop the version (fail-closed) is a policy decision left to the
   caller, so this module stays pure.
 
+__The merge is a lawful 'Monoid'.__ The fold is realised over a 'Merge'
+accumulator with a lawful 'Semigroup' \/ 'Monoid': 'mempty' is the empty merge
+(the degenerate identity at zero inputs) and @(<>)@ is the trusted-wins union with
+order-independent divergence detection. 'mergePackuments' assigns each input a
+'SourceId' by list position, @foldMap@s the contributions into the accumulator,
+and projects to a 'MergePlan'. See the 'Semigroup' instance for the exact law
+domain (associative + identity, intentionally __not__ commutative).
+
 See @docs\/architecture\/registry-model.md@ → "Packument merge across upstreams".
 -}
 module Ecluse.Package.Merge (
@@ -50,9 +58,16 @@ module Ecluse.Package.Merge (
     IntegrityFingerprint,
     integrityHashes,
     mergePackuments,
+
+    -- * The merge accumulator
+    -- $accumulator
+    Merge,
+    contribute,
+    planFrom,
 ) where
 
 import Data.Map.Strict qualified as Map
+import Data.Set qualified as Set
 import Data.Time (UTCTime)
 
 import Ecluse.Package (
@@ -73,6 +88,10 @@ The constructors are named @\*Source@ rather than the bare @Trusted@\/@Gated@
 because "Ecluse.Package" already exports a 'Ecluse.Package.Trust' constructor
 named @Trusted@; a bare name would collide for the many callers that import
 "Ecluse.Package" openly.
+
+The 'Ord' instance is the trust order itself — 'TrustedSource' compares __less
+than__ 'GatedSource' so that "smallest wins" gives trusted precedence; the merge's
+resolution leans on this directly (see 'mergePackuments').
 -}
 data Provenance
     = {- | A private-upstream document. Its versions are already vetted, so they
@@ -104,6 +123,10 @@ whose artifact integrity does /not/ agree. The trusted copy wins the merge; this
 record preserves both fingerprints so the caller can log, meter, and decide policy
 (serve-with-private-winning vs fail-closed). It is the merge's supply-chain
 signal — surfaced, never silently reconciled.
+
+'Ord' is derived purely to let 'MergePlan' carry divergences as a 'Set': the
+ordering is structural (over the version key and the two fingerprints) and has no
+meaning beyond deduplication and a stable presentation.
 -}
 data Divergence = Divergence
     { divVersion :: Text
@@ -115,7 +138,7 @@ data Divergence = Divergence
     , divLosing :: IntegrityFingerprint
     -- ^ Integrity of the copy that lost — kept so the conflict is auditable.
     }
-    deriving stock (Eq, Show)
+    deriving stock (Eq, Ord, Show)
 
 {- | The outcome of reasoning over a set of upstream packuments: a __plan__ the
 serve layer replays onto the raw upstream @Value@s to assemble the lossless
@@ -142,10 +165,14 @@ data MergePlan = MergePlan
     {- ^ The @time@ union restricted to surviving versions; publish times for
     versions that did not survive are dropped.
     -}
-    , mpDivergences :: [Divergence]
-    {- ^ Every same-version integrity conflict found, in the order the merge
-    encountered them. Empty when no two sources disagreed on a shared version's
-    integrity.
+    , mpDivergences :: Set Divergence
+    {- ^ Every distinct same-version integrity conflict found. A 'Set' because
+    divergence is a property of the /set/ of distinct integrity fingerprints
+    contributed for a version key, not of any pairwise fold step: when more than
+    one distinct fingerprint exists for a key, the winner's fingerprint is recorded
+    against /each distinct losing fingerprint/, which is order-independent and
+    deduplicating by construction. Empty when no two sources disagreed on a shared
+    version's integrity.
     -}
     }
     deriving stock (Eq, Show)
@@ -158,13 +185,210 @@ size) that legitimately vary between mirrors of the same bytes.
 
 Opaque so the equality used for divergence detection cannot be sidestepped; read
 the pairs back with 'integrityHashes' when logging or metering a 'Divergence'.
+'Ord' is derived (structurally, over the sorted pairs) only so a 'Divergence' may
+live in a 'Set'; it carries no domain meaning beyond that.
 -}
 newtype IntegrityFingerprint = IntegrityFingerprint [(HashAlg, Text)]
-    deriving stock (Eq, Show)
+    deriving stock (Eq, Ord, Show)
 
 -- | The @(algorithm, digest)@ pairs of a fingerprint, sorted, for an audit trail.
 integrityHashes :: IntegrityFingerprint -> [(HashAlg, Text)]
 integrityHashes (IntegrityFingerprint hs) = hs
+
+{- | The trust-then-position rank of a contribution, the strict total order the
+whole merge resolves by: 'TrustedSource' outranks 'GatedSource', and ties — only
+possible between two inputs of the /same/ provenance — are broken by the __lower
+'SourceId'__ (the earlier input position). 'SourceId' is unique per input, so this
+is a strict total order and the smallest-ranked contribution is a deterministic,
+order-independent winner. With one trusted and one gated source (the topology
+today) the trusted rank always wins outright and the positional tiebreak never
+fires, so behaviour is preserved exactly.
+
+The order is over a @(Provenance, SourceId)@ pair, exploiting that 'TrustedSource'
+'<' 'GatedSource' and that smaller 'SourceId' is earlier; @minimumBy (comparing
+rank)@ then picks the winner.
+-}
+rank :: Provenance -> SourceId -> (Provenance, SourceId)
+rank prov sid = (prov, sid)
+
+{- | One source's contribution to a single version key: the input that offered it
+(by 'Provenance' and 'SourceId') together with the integrity fingerprint and the
+typed details it carried. Equality and order are structural over all four fields,
+so a 'Set' of these deduplicates identical contributions while keeping distinct
+ones (e.g. two sources at the same key but differing integrity).
+-}
+data Candidate = Candidate
+    { candProvenance :: Provenance
+    , candSourceId :: SourceId
+    , candFingerprint :: IntegrityFingerprint
+    , candDetails :: PackageDetails
+    }
+    deriving stock (Show)
+
+-- The identity of a candidate, for 'Eq' and 'Ord' alike: its resolution rank
+-- ('TrustedSource' first, then lower 'SourceId') and its integrity fingerprint.
+-- 'candDetails' is deliberately /not/ part of the identity — two contributions
+-- that agree on rank and integrity are the same candidate for the merge — and
+-- 'SourceId' is unique per call, so this never collapses two real inputs. Keeping
+-- 'Eq' and 'Ord' on the same fields satisfies their consistency law (so a 'Set'
+-- membership test agrees with structural equality).
+candKey :: Candidate -> ((Provenance, SourceId), IntegrityFingerprint)
+candKey c = (rank (candProvenance c) (candSourceId c), candFingerprint c)
+
+instance Eq Candidate where
+    a == b = candKey a == candKey b
+
+instance Ord Candidate where
+    compare a b = compare (candKey a) (candKey b)
+
+{- | One source's tagged value (a @dist-tags@ target or a @time@ instant) for a
+single key, paired with the rank of the source that offered it, so the projection
+can pick the precedence-winning value the same way version collisions are
+resolved. Ordered by rank alone — the winner is the minimum — so a left-biased
+@Map.unions@ of singletons resolves the collision by provenance, not position.
+-}
+data Ranked a = Ranked
+    { rankedRank :: (Provenance, SourceId)
+    , rankedValue :: a
+    }
+    deriving stock (Eq, Show)
+
+instance (Eq a) => Ord (Ranked a) where
+    compare a b = compare (rankedRank a) (rankedRank b)
+
+-- Combine two ranked values for the same key by keeping the higher-precedence
+-- one (the smaller rank). Associative and commutative, so a 'Map.unionWith' over
+-- it resolves a key's collision by provenance independent of input order.
+keepBetter :: Ranked a -> Ranked a -> Ranked a
+keepBetter x y = if rankedRank x <= rankedRank y then x else y
+
+{- $accumulator
+The merge is realised as a fold into a lawful 'Monoid'. 'contribute' turns one
+@(Provenance, PackageInfo)@ input into a 'Merge'; @(<>)@ combines two merges
+(trusted-wins union, with order-independent divergence kept unresolved until the
+projection); 'mempty' is the empty merge (the degenerate identity). 'planFrom'
+projects a folded 'Merge' to a 'MergePlan'. 'mergePackuments' is exactly
+@'planFrom' . 'foldMap' ('uncurry' 'contribute')@. The 'Merge' type is opaque —
+build it only through 'contribute' and 'mempty' — so a 'SourceId' always names a
+real input position. See the 'Semigroup' instance for the law domain (associative
++ identity, intentionally __not__ commutative, and why).
+-}
+
+{- | The monoidal accumulator the merge folds into. It holds, /unresolved/, every
+candidate offered for every version key, plus the ranked @dist-tags@ and @time@
+contributions; resolution to a single winner per key, and the divergence set,
+happens once in 'planFrom'. Keeping candidates unresolved is what makes @(<>)@
+associative: a pairwise winner-vs-loser decision taken /during/ the fold is not
+associative once three or more copies of a key collide, because divergence is a
+property of the whole /set/ of distinct fingerprints, not of any one step.
+
+Each accumulator also carries the count of inputs it represents, so that @(<>)@
+can __re-index the right operand's 'SourceId's by the left operand's input
+count__. This positional re-indexing is what makes a 'SourceId' name an input's
+list position after a @foldMap@ of single-input contributions — and it is the sole
+reason the instance is non-commutative (see the 'Semigroup' instance).
+-}
+data Merge = Merge
+    { mergeCount :: Int
+    -- ^ How many inputs this accumulator represents (the next free 'SourceId').
+    , mergeVersions :: Map Text (Set Candidate)
+    -- ^ Every candidate offered for each version key, unresolved.
+    , mergeDistTags :: Map Text (Ranked Version)
+    -- ^ The precedence-winning @dist-tags@ target offered for each tag.
+    , mergeTime :: Map Text (Ranked UTCTime)
+    -- ^ The precedence-winning publish instant offered for each version key.
+    , mergeName :: Maybe PackageName
+    {- ^ The package identity, taken from the /first/ input (the left-most 'Merge'
+    with a name under @(<>)@). 'Nothing' only for 'mempty'.
+    -}
+    }
+    deriving stock (Eq, Show)
+
+{- | The merge's 'Semigroup' has a deliberately narrow law domain, and the
+narrowing is load-bearing, not an accident:
+
+* __Associative__ — @(a '<>' b) '<>' c@ '==' @a '<>' (b '<>' c)@. The 'SourceId'
+  re-indexing offsets compose additively, and every per-key combiner (set union
+  for candidates, "keep the smaller rank" for tags\/time, "left name wins" for the
+  identity) is itself associative, so the whole is.
+* __Identity__ — 'mempty' (the empty merge) is both a left and a right unit.
+* __Intentionally NOT commutative__ — @a '<>' b@ '/=' @b '<>' a@ in general. @(<>)@
+  re-indexes the /right/ operand's 'SourceId's by the /left/ operand's input
+  count, because a 'SourceId' must name the input's __position__ in the caller's
+  list — the index the serve layer pairs back to a raw @Value@. Swapping the
+  operands swaps those positions, so the 'SourceId' /labels/ differ.
+
+The order-independence guarantee, stated precisely (and the reason commutativity is
+the wrong law): precedence is resolved __by provenance__, so the surviving key set
+and the winning /provenance/ per key are invariant under any permutation of the
+inputs, and the value-level reconciliations (the survivor a key resolves to, the
+divergence fingerprint-pairs, the @dist-tags@\/@time@ targets) are invariant under
+any permutation that keeps each collision __cross-provenance__ — which the npm
+topology (exactly one trusted, one gated upstream) always does, so every observable
+decision is order-independent there. The /sole/ residual order-dependence is the
+positional tiebreak between two inputs of the __same__ provenance: provenance cannot
+break that tie, so the lower 'SourceId' (earlier input) wins it, and which copy is
+the divergence winner then tracks order. That positional tiebreak is exactly why
+'SourceId' exists and why the instance is non-commutative.
+-}
+instance Semigroup Merge where
+    a <> b =
+        Merge
+            { mergeCount = mergeCount a + mergeCount b
+            , mergeVersions =
+                Map.unionWith Set.union (mergeVersions a) (shiftVersions (mergeVersions b))
+            , mergeDistTags =
+                Map.unionWith keepBetter (mergeDistTags a) (shiftRanked <$> mergeDistTags b)
+            , mergeTime =
+                Map.unionWith keepBetter (mergeTime a) (shiftRanked <$> mergeTime b)
+            , mergeName = mergeName a <|> mergeName b
+            }
+      where
+        -- Re-index the right operand's SourceIds into positions after the left
+        -- operand's inputs, so a fold of single-input contributions lands each at
+        -- its list index. This offset is what makes (<>) non-commutative.
+        offset = mergeCount a
+        shiftVersions = fmap (Set.map shiftCandidate)
+        shiftCandidate c = c{candSourceId = candSourceId c + offset}
+        shiftRanked (Ranked (prov, sid) v) = Ranked (prov, sid + offset) v
+
+instance Monoid Merge where
+    mempty =
+        Merge
+            { mergeCount = 0
+            , mergeVersions = Map.empty
+            , mergeDistTags = Map.empty
+            , mergeTime = Map.empty
+            , mergeName = Nothing
+            }
+
+{- | One input's contribution to the accumulator, at local 'SourceId' @0@: every
+version becomes a candidate, every @dist-tags@ target and @time@ instant a ranked
+value at this input's provenance, and the package name is offered as the identity.
+@foldMap contribute@ over the inputs then re-indexes each to its list position via
+the 'Semigroup' offset, so the absolute 'SourceId' of a single-input contribution
+is its index in the @foldMap@.
+-}
+contribute :: Provenance -> PackageInfo -> Merge
+contribute prov info =
+    Merge
+        { mergeCount = 1
+        , mergeVersions = Map.map candidateFor (infoVersions info)
+        , mergeDistTags = Map.map (Ranked here) (infoDistTags info)
+        , mergeTime = Map.map (Ranked here) (infoPublishedAt info)
+        , mergeName = Just (infoName info)
+        }
+  where
+    -- Local SourceId 0; the Semigroup offset re-indexes it to the input position.
+    here = (prov, 0)
+    candidateFor details =
+        Set.singleton
+            Candidate
+                { candProvenance = prov
+                , candSourceId = 0
+                , candFingerprint = fingerprint details
+                , candDetails = details
+                }
 
 {- | Reason over several upstream packuments, by 'Provenance', and emit the
 'MergePlan' the serve layer replays onto the raw @Value@s. Pure and total.
@@ -172,7 +396,8 @@ integrityHashes (IntegrityFingerprint hs) = hs
 The merge is a fold with the __degenerate identity at one input__: a single
 packument yields a plan whose survivors are all of its versions (all won by source
 @0@), with its tags and times reconciled and no divergences, so 0\/1-upstream
-deployments need no special case. The model:
+deployments need no special case. It is realised as a 'foldMap' of each input's
+'contribute' into the lawful 'Merge' 'Monoid', projected by 'planFrom'. The model:
 
 * __Union by version key__, with __'TrustedSource' winning__ a collision over
   'GatedSource' (the private upstream is the authority). The winning input's
@@ -194,147 +419,84 @@ package across its upstreams, so all inputs share it. An empty input list yields
 -}
 mergePackuments :: [(Provenance, PackageInfo)] -> Maybe MergePlan
 mergePackuments [] = Nothing
-mergePackuments inputs@((_, firstInfo) : _) =
-    Just
+mergePackuments inputs = planFrom (foldMap (uncurry contribute) inputs)
+
+{- | Project the resolved 'MergePlan' from a folded 'Merge'. Resolves each version
+key to its precedence winner, derives the divergence 'Set' from each key's distinct
+fingerprints, and reconciles @dist-tags@\/@time@ over the survivors. Returns
+'Nothing' only for the empty merge ('mempty'), which has no name and so nothing to
+serve — equivalently, the empty input list.
+-}
+planFrom :: Merge -> Maybe MergePlan
+planFrom acc = do
+    name <- mergeName acc
+    pure
         MergePlan
-            { mpName = infoName firstInfo
-            , mpSurvivors = Map.map snd mergedVersions
+            { mpName = name
+            , mpSurvivors = Map.map (candSourceId . winnerOf) (mergeVersions acc)
             , mpDistTags = reconciledTags
             , mpTime = reconciledTimes
             , mpDivergences = divergences
             }
   where
-    -- Each input tagged with its provenance and its stable 'SourceId' (list index).
-    indexed :: [(SourceId, Provenance, PackageInfo)]
-    indexed = [(i, prov, info) | (i, (prov, info)) <- zip [0 ..] inputs]
-
-    -- Fold every source's versions into one map, trusted winning a key collision,
-    -- recording for each survivor the details that won and the source that won it,
-    -- and collecting any integrity divergence as we go.
-    (mergedVersions, reversedDivs) =
-        foldl' mergeSource (Map.empty, []) indexed
-
-    -- The fold prepends each divergence (O(1)) rather than appending, so it stays
-    -- O(k) for k divergences; reverse once here to restore encounter order, which
-    -- 'mpDivergences' documents.
-    divergences = reverse reversedDivs
-
-    mergeSource ::
-        (Map Text (PackageDetails, SourceId), [Divergence]) ->
-        (SourceId, Provenance, PackageInfo) ->
-        (Map Text (PackageDetails, SourceId), [Divergence])
-    mergeSource acc (sid, prov, info) =
-        -- Fold the tree directly with 'foldlWithKey'' rather than over
-        -- 'Map.toList': the list form allocates a cons cell and a (key, value)
-        -- tuple per version (up to 'maxVersionCount') only to be torn apart at
-        -- once. 'mergeVersion' takes the key and value unpaired to match.
-        Map.foldlWithKey' (mergeVersion sid prov) acc (infoVersions info)
-
-    mergeVersion ::
-        SourceId ->
-        Provenance ->
-        (Map Text (PackageDetails, SourceId), [Divergence]) ->
-        Text ->
-        PackageDetails ->
-        (Map Text (PackageDetails, SourceId), [Divergence])
-    mergeVersion sid prov (versions, divs) key incoming =
-        case Map.lookup key versions of
-            Nothing -> (Map.insert key (incoming, sid) versions, divs)
-            Just (existing, existingSid) ->
-                -- Prepend, not append: 'divs <> divs'' would re-traverse the growing
-                -- accumulator each step, making the fold O(k²) in the number of
-                -- divergences. 'mergePackuments' reverses once at the end to recover
-                -- the encounter order 'mpDivergences' documents.
-                let (winner, divs') =
-                        resolveCollision key prov (existing, existingSid) (incoming, sid)
-                 in (Map.insert key winner versions, divs' ++ divs)
-
-    -- The accumulator already holds a value for this key; @existing@ won an
-    -- earlier round (so it is at least as high-precedence as anything before),
-    -- and @incoming@ is the new contender at provenance @prov@. The higher
-    -- precedence wins — keeping its 'SourceId' — and a differing integrity is a
-    -- divergence either way.
-    resolveCollision ::
-        Text ->
-        Provenance ->
-        (PackageDetails, SourceId) ->
-        (PackageDetails, SourceId) ->
-        ((PackageDetails, SourceId), [Divergence])
-    resolveCollision key prov existing incoming =
-        let (winner, loser)
-                | prov == TrustedSource = (incoming, existing)
-                | otherwise = (existing, incoming)
-            diverges = fingerprint (fst existing) /= fingerprint (fst incoming)
-            divs =
-                [ Divergence
-                    { divVersion = key
-                    , divWinning = fingerprint (fst winner)
-                    , divLosing = fingerprint (fst loser)
-                    }
-                | diverges
-                ]
-         in (winner, divs)
+    -- The precedence winner among a key's candidates: the minimum by rank
+    -- ('TrustedSource' first, then lower 'SourceId'). A key always has at least
+    -- one candidate, so 'Set.findMin' is total here.
+    winnerOf :: Set Candidate -> Candidate
+    winnerOf = Set.findMin
 
     survives :: Text -> Bool
-    survives key = Map.member key mergedVersions
+    survives key = Map.member key (mergeVersions acc)
 
     -- The surviving version objects (the details that won each key).
     survivingDetails :: [PackageDetails]
-    survivingDetails = map fst (Map.elems mergedVersions)
+    survivingDetails =
+        [candDetails (winnerOf cs) | cs <- Map.elems (mergeVersions acc)]
 
-    -- @dist-tags@ from every source with same-tag collisions resolved __by
-    -- provenance__ (trusted wins); computed once and shared by the carried tags
-    -- and @latest@ resolution below.
-    distTagsByProvenance :: Map Text Version
-    distTagsByProvenance = byProvenance infoDistTags
+    -- \| Divergence is a property of the /set/ of distinct integrity fingerprints
+    --    a key was offered, never of a pairwise fold step — which is what keeps it
+    --    order-independent and associative for 3+ copies of a key. For each version
+    --    key: if more than one distinct fingerprint was contributed, record the
+    --    winner's fingerprint against /each distinct losing fingerprint/. With the
+    --    two-source topology this is exactly today's single winner-vs-loser pair; with
+    --    three or more it is the full fan-out, deduplicated by the 'Set'.
+    divergences :: Set Divergence
+    divergences =
+        Set.fromList
+            [ Divergence{divVersion = key, divWinning = win, divLosing = lose}
+            | (key, cs) <- Map.toList (mergeVersions acc)
+            , let win = candFingerprint (winnerOf cs)
+            , let distinct = Set.fromList [candFingerprint c | c <- Set.toList cs]
+            , lose <- Set.toList (Set.delete win distinct)
+            ]
 
     -- @dist-tags@ reconciled over the union: every surviving-target tag carried,
-    -- and @latest@ resolved by the shared selector. Built so the plan never depends
-    -- on the order the caller happened to pass the inputs.
+    -- and @latest@ resolved by the shared selector. Same-tag collisions are
+    -- already resolved by provenance in the accumulator, so this never depends on
+    -- the order the caller passed the inputs.
     reconciledTags :: Map Text Version
     reconciledTags =
-        let carried = Map.filter (survives . unVersion) distTagsByProvenance
+        let carried = Map.filter (survives . unVersion) (Map.map rankedValue (mergeDistTags acc))
          in case resolvedLatest of
                 Nothing -> Map.delete "latest" carried
                 Just v -> Map.insert "latest" v carried
 
     -- @latest@ via the shared resolver: keep the precedence-winning source's
     -- tagged @latest@ if it survives, else repoint (stable-preferring,
-    -- unparseable-safe) among survivors. @chosen@ is picked by provenance — the
-    -- trusted source's @latest@ when one is tagged — consistent with the version
-    -- and dist-tag folds, so it does not depend on caller input order.
+    -- unparseable-safe) among survivors. @chosen@ is the provenance-winning
+    -- source's @latest@, consistent with the version and dist-tag folds.
     resolvedLatest :: Maybe Version
     resolvedLatest =
         selectLatest chosenLatest (map pkgVersion survivingDetails)
 
     chosenLatest :: Maybe Version
-    chosenLatest = Map.lookup "latest" distTagsByProvenance
+    chosenLatest = rankedValue <$> Map.lookup "latest" (mergeDistTags acc)
 
-    -- @time@ over the union: each source's publish times restricted to surviving
-    -- versions, with per-version collisions resolved by provenance (trusted wins).
+    -- @time@ over the union: each key's publish instant (collisions already
+    -- resolved by provenance in the accumulator) restricted to surviving versions.
     reconciledTimes :: Map Text UTCTime
     reconciledTimes =
-        Map.filterWithKey (\k _ -> survives k) (byProvenance infoPublishedAt)
-
-    {- Combine a per-source map across all inputs, resolving same-key collisions
-    __by provenance__: a 'TrustedSource' entry wins over a 'GatedSource' one,
-    independent of the order the inputs were passed. A left-biased union over the
-    inputs sorted so trusted sources come first achieves this; 'Data.Map.Strict'
-    is stable so a later trusted source never displaces an earlier one needlessly,
-    but any two values that could collide across the trust split are decided by the
-    split, not by position. Consults the once-sorted 'inputsByProvenance'. -}
-    byProvenance :: (PackageInfo -> Map Text a) -> Map Text a
-    byProvenance f =
-        Map.unions [f info | (_, _, info) <- inputsByProvenance]
-
-    -- The inputs sorted so trusted sources precede gated, computed once and shared
-    -- by every 'byProvenance' call rather than re-sorted per call. Trusted ranks
-    -- before gated, so it wins the left-biased union; 'sortOn' is stable, so
-    -- same-provenance inputs keep their original input order.
-    inputsByProvenance :: [(SourceId, Provenance, PackageInfo)]
-    inputsByProvenance = sortOn provenanceRank indexed
-      where
-        provenanceRank (_, prov, _) = prov == GatedSource
+        Map.filterWithKey (\k _ -> survives k) (Map.map rankedValue (mergeTime acc))
 
 -- The order-independent integrity fingerprint of a version: every artifact's
 -- @(algorithm, digest)@ pairs, gathered across all artifacts and sorted, so the
