@@ -4,7 +4,7 @@ import Data.Text qualified as T
 import Test.Hspec
 
 import Ecluse.Ecosystem (Ecosystem (Npm, PyPI))
-import Ecluse.Package (Hash (Hash), HashAlg (SHA1, SRI), mkPackageName, mkScope)
+import Ecluse.Package (Hash (Hash), HashAlg (Blake2b, MD5, SHA1, SHA256, SHA512, SRI), mkPackageName, mkScope)
 import Ecluse.Queue (MirrorArtifact (..), MirrorJob (..), Seconds (..))
 import Ecluse.Queue.Sqs (
     SqsConfig (..),
@@ -87,6 +87,28 @@ spec = do
                     jobArtifactUrl job `shouldBe` jobArtifactUrl npmJob
                     jobMirrorTarget job `shouldBe` jobMirrorTarget npmJob
                     jobArtifact job `shouldBe` jobArtifact npmJob
+
+        it "round-trips every hash algorithm's wire name (encode/decode are inverse over all algs)" $
+            -- A job whose artifact carries one digest of EACH algorithm exercises both
+            -- directions of the wire mapping (hashAlgName on encode, parseHashAlg on
+            -- decode) for sha1/sha256/sha512/md5/blake2b/sri — so a future algorithm
+            -- whose two halves disagree is caught here rather than silently dropping a
+            -- digest the worker would later need to verify against.
+            let allAlgsJob =
+                    npmJob
+                        { jobArtifact =
+                            (jobArtifact npmJob)
+                                { maHashes =
+                                    Hash SHA1 "aa"
+                                        :| [ Hash SHA256 "bb"
+                                           , Hash SHA512 "cc"
+                                           , Hash MD5 "dd"
+                                           , Hash Blake2b "ee"
+                                           , Hash SRI "sha512-ff"
+                                           ]
+                                }
+                        }
+             in decodeJob (encodeJob allAlgsJob) `shouldBe` Right allAlgsJob
 
     describe "decodeJob rejects a malformed body" $ do
         it "rejects non-JSON" $
