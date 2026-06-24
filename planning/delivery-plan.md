@@ -362,8 +362,9 @@ brief:
   values or API behaviour, no silently-weakened tests, no `.semgrepignore` without
   the architect's approval, no sprawl beyond the slice's file scope without strong justification, no leftover
   `TODO`/`undefined`/stub passed off as done.
-- **Fast local check, then CI is the gate:** `make build && make test && make sast`
-  before pushing (Semgrep clean is the hard floor); open the draft PR and confirm
+- **Fast local check, then CI is the gate:** `make check` before pushing — the fast
+  pre-push tier (build, test, fourmolu/hlint, Semgrep), the gate minus its Docker
+  and Haddock tiers; Semgrep clean is the hard floor. Open the draft PR and confirm
   the real `gate` green — don't reproduce the whole gate locally. GPG-signed
   Conventional Commits; SHA-pinned, injection-free workflows.
 

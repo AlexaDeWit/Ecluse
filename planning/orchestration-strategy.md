@@ -257,13 +257,15 @@ pushing is **running it twice**.
 The **fast floor** is the agent's whole local obligation before pushing:
 
 ```bash
-make build && make test && make sast
+make check
 ```
 
-It builds, the unit suite for what you touched passes, and **Semgrep is clean**
-(the one hard pre-push stop: zero findings, no new ignores without the architect's
-approval). Then **push early, let CI parallelize the rest, and watch the real run
-to green** (`gh pr checks --watch`).
+`make check` is the project's fast pre-push target — build, unit tests, doctest,
+fourmolu/hlint, Semgrep, `cabal check`, and workflow-lint: **the gate minus its
+Docker integration and Haddock tiers**, the slow parallelizable ones CI runs for
+you. The one hard stop within it is **Semgrep clean** (zero findings, no new ignores
+without the architect's approval). Then **push early, let CI parallelize the rest,
+and watch the real run to green** (`gh pr checks --watch`).
 
 Reproduce a tier locally **only to debug a red** — map the red CI job back to its
 `make` target and run just that one, never the whole gate wholesale. The gating
@@ -312,7 +314,7 @@ A PR reaches the architect only when **all** hold:
 
 - [ ] All acceptance criteria met, each with passing **deterministic, gating** (unit/integration) test evidence — a non-gating smoke test never stands in for a criterion
 - [ ] Independent review (Stage A + B) passed; no open critical issues
-- [ ] Fast local checks pass before pushing (`make build && make test && make sast`) — not the full gate
+- [ ] Fast local checks pass before pushing (`make check` — the gate minus its Docker + Haddock tiers) — not the full gate
 - [ ] Foreseeable branches tested by intent; `codecov/patch` green (≥ 85%, a CI backstop — not a number chased locally)
 - [ ] Comments are contract + why only — no roadmap / slice / PR references (HADDOCK.md §11)
 - [ ] Semgrep clean (no new ignores)
