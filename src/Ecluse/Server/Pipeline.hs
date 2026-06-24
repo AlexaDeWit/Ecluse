@@ -74,23 +74,37 @@ let a second ecosystem reuse this orchestration unchanged.
 
 == Artifact path
 
-The tarball handler ('serveTarball') is the demand-driven artifact relay. It
-fetches __by the preserved on-the-wire filename__ the route parsed (not a name
-rebuilt from the coordinate), so the bytes are addressed exactly as the client
-requested them. The private origin is tried first, __uncached__, forwarding the
-client's credential; a hit streams the artifact through with __bounded memory__
-(the @withResponse@\/@responseStream@ relay, never a buffering fetch), a miss falls
-through. The public origin is anonymous: it gates __that one version__ against the
-rules (the same machinery the packument path gates the whole set with), and on an
-admit __streams the public bytes and enqueues a 'Ecluse.Queue.MirrorJob'__ for the
-worker to back-fill the mirror target; on a reject it renders the serve error model
-(@403@\/@503@\/@500@) through the mount's renderer. The enqueue is
-__serve-then-enqueue, best-effort and non-blocking__: the artifact reaches the
-client first, and an enqueue failure is swallowed rather than failing or delaying
-the response. Mirroring is __demand-driven__ — a job is enqueued only here, on a
-tarball-path admit, never when a packument is filtered. The serve path does __not__
-verify @dist.integrity@; the client checks the artifact's own hash and the worker
-re-verifies before publishing.
+The tarball handler ('serveTarball') is the demand-driven artifact relay. It fetches
+each tarball from its __authoritative upstream location__ — the @Artifact.artUrl@ the
+projection preserved from the upstream @dist.tarball@, selected from the gated
+version by the requested filename — rather than reconstructing
+@{base}\/{pkg}\/-\/{file}@ by npm convention. Honouring the upstream-declared
+location is what lets the proxy front a registry that serves its artifacts from a
+separate host or an off-convention path (a CDN\/files host, a signed URL); a
+reconstruction would silently fetch the wrong place. The location is gated, not
+trusted: it is fetched only when the tarball-host policy
+('Ecluse.Security.tarballHostAllowed', per @PROXY_RESPECT_UPSTREAM_TARBALL_HOST@)
+admits its host — the default refuses a cross-host @dist.tarball@ — and the
+untrusted egress additionally carries the resolved-IP recheck.
+
+The private origin is tried first, __uncached__, forwarding the client's credential:
+its packument is fetched, the requested artifact selected, and its @artUrl@ fetched
+over the __trusted__ manager; a hit streams the artifact through with __bounded
+memory__ (the @withResponse@\/@responseStream@ relay, never a buffering fetch), and
+any non-served outcome — the packument not resolving, no artifact matching the
+filename, the policy refusing the host, a non-@2xx@ — falls through. The public
+origin is anonymous: it gates __that one version__ against the rules (the same
+machinery the packument path gates the whole set with) and selects the artifact, and
+on an admit __streams the public bytes from @artUrl@ and enqueues a
+'Ecluse.Queue.MirrorJob'__ (naming that authoritative URL) for the worker to
+back-fill the mirror target; on a reject — including a host the tarball-host policy
+refuses — it renders the serve error model (@403@\/@503@\/@500@\/@404@) through the
+mount's renderer. The enqueue is __serve-then-enqueue, best-effort and
+non-blocking__: the artifact reaches the client first, and an enqueue failure is
+swallowed rather than failing or delaying the response. Mirroring is
+__demand-driven__ — a job is enqueued only here, on a tarball-path admit, never when
+a packument is filtered. The serve path does __not__ verify @dist.integrity@; the
+client checks the artifact's own hash and the worker re-verifies before publishing.
 -}
 module Ecluse.Server.Pipeline (
     -- * The packument handler
@@ -111,6 +125,7 @@ import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Network.HTTP.Client (Manager)
+import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types (ResponseHeaders, Status, hAuthorization, hContentType, mkStatus, status200, status401, status501, statusIsSuccessful)
 import Network.Wai (Request, Response, ResponseReceived, requestHeaders, responseLBS)
 import UnliftIO (concurrently)
@@ -118,7 +133,12 @@ import UnliftIO.Exception (throwString, tryAny)
 
 import Ecluse.Credential (Secret, mkSecret)
 import Ecluse.Env (Env (envManager, envMetadataCache, envPrivateManager, envQueue))
-import Ecluse.Package (PackageDetails, PackageInfo (infoDistTags, infoPublishedAt, infoVersions), PackageName)
+import Ecluse.Package (
+    Artifact (artFilename, artUrl),
+    PackageDetails (pkgArtifacts),
+    PackageInfo (infoDistTags, infoPublishedAt, infoVersions),
+    PackageName,
+ )
 import Ecluse.Package.Filter (filterPlanFromDecisions)
 import Ecluse.Package.Merge (
     MergePlan (mpDistTags, mpSurvivors, mpTime),
@@ -131,8 +151,7 @@ import Ecluse.Registry (RegistryResponse (responseBody))
 import Ecluse.Registry.Npm (
     MetadataForm (Full),
     NpmClientConfig (..),
-    artifactFileUrl,
-    artifactRequestByFile,
+    artifactRequestByUrl,
     fetchMetadataForm,
     noValidators,
  )
@@ -140,6 +159,12 @@ import Ecluse.Registry.Npm.Filter (FilterResult (Filtered, NoSurvivors), applyFi
 import Ecluse.Registry.Npm.Project (parsePackageInfoFromValue)
 import Ecluse.Rules.Effectful (evalRulesEffectful)
 import Ecluse.Rules.Types (Decision, EvalContext (EvalContext))
+import Ecluse.Security (
+    LoweredHostSet,
+    hostAddress,
+    lowerCaseHosts,
+    tarballHostAllowed,
+ )
 import Ecluse.Server.Cache (CacheEntry (CacheEntry, entryInfo, entryRaw), Source (Source), resolveMetadata)
 import Ecluse.Server.Conditional (Conditional (Modified, NotModified), etagHeader, evaluateOwnETag)
 import Ecluse.Server.Context (
@@ -691,16 +716,28 @@ serveTarballWithDeps renderer deps name version (Filename file) request respond
         env <- asks ctxEnv
         liftIO $ do
             let clientToken = forwardedToken request
-            privateHit <- streamPrivateArtifact env deps clientToken name file respond
+            privateHit <- streamPrivateArtifact env deps clientToken name version file respond
             case privateHit of
                 Just received -> pure received
                 Nothing -> servePublicArtifact env renderer deps name version file respond
 
-{- Stream the artifact from the private upstream by its preserved filename,
-forwarding the client's credential (the @passthrough@ private-origin fetch, uncached). A
-@2xx@ is streamed through with bounded memory and yields 'Just'; a non-@2xx@ status,
-an unformable URL, or a failure opening the connection yields 'Nothing' so the
-caller falls through to the public origin, the upstream body never read.
+{- Stream the artifact from the __trusted__ private upstream at its __authoritative
+location__: fetch the private packument (uncached, forwarding the client's credential
+— the @passthrough@ private-origin posture), select the requested version's 'Artifact'
+by its preserved filename, and fetch that artifact's 'artUrl' directly, rather than
+reconstructing @{base}\/{pkg}\/-\/{file}@. Honouring the preserved location is what
+lets the private upstream serve a tarball wherever it chooses (a separate files host,
+a path the npm convention cannot rebuild). A @2xx@ is streamed through with bounded
+memory and yields 'Just'; anything that does not produce a served body — the
+packument not resolving, no artifact matching the filename, the host policy refusing
+the @artUrl@, an unformable URL, a non-@2xx@ status, or a failure opening the
+connection — yields 'Nothing' so the caller falls through to the public origin, the
+upstream artifact body never read.
+
+The private upstream is operator-configured and trusted, so its fetch carries no
+resolved-IP recheck ('envPrivateManager'); the configured tarball-host policy still
+applies, gating the @artUrl@ host against the upstream allowlist (the private base
+URL's own host is on it, so a same-host private tarball is admitted by default).
 
 A failure that strikes __after__ a @2xx@ has begun streaming is unrecoverable — the
 response is already on the wire — so 'streamUpstreamWhen' lets it propagate rather
@@ -711,13 +748,36 @@ streamPrivateArtifact ::
     PackumentDeps ->
     Maybe Secret ->
     PackageName ->
+    Version ->
     Text ->
     (Response -> IO ResponseReceived) ->
     IO (Maybe ResponseReceived)
-streamPrivateArtifact env deps token name file respond =
-    case artifactRequestByFile (clientConfig (envPrivateManager env) (pdPrivateBaseUrl deps) token) name file of
-        Left _ -> pure Nothing
-        Right req -> streamUpstreamWhen (envPrivateManager env) req statusIsSuccessful relayArtifact respond
+streamPrivateArtifact env deps token name version file respond = do
+    selected <- selectPrivateArtifact env deps token name version file
+    case privateRequestFor =<< selected of
+        Just req -> streamUpstreamWhen (envPrivateManager env) req statusIsSuccessful relayArtifact respond
+        Nothing -> pure Nothing
+  where
+    -- Form the honoured-URL request for a selected private artifact, when its host
+    -- passes the tarball-host policy and its URL parses. 'Nothing' on either refusal —
+    -- a private miss the caller falls through on, never a fabricated reconstruction.
+    privateRequestFor :: Artifact -> Maybe HTTP.Request
+    privateRequestFor artifact =
+        if tarballHostHonoured deps (pdPrivateBaseUrl deps) (artUrl artifact)
+            then rightToMaybe (artifactRequestByUrl (clientConfig (envPrivateManager env) (pdPrivateBaseUrl deps) token) (artUrl artifact))
+            else Nothing
+
+{- Fetch the private packument (uncached, with the client's credential) and select
+the requested version's 'Artifact' by its preserved filename. 'Nothing' when the
+private origin does not resolve, the version is absent, or no artifact matches the
+filename — each a clean private miss the caller falls through on. -}
+selectPrivateArtifact :: Env -> PackumentDeps -> Maybe Secret -> PackageName -> Version -> Text -> IO (Maybe Artifact)
+selectPrivateArtifact env deps token name version file = do
+    resolved <- fetchPrivateOrigin env (pdPrivateBaseUrl deps) token name
+    pure $ do
+        (info, _value) <- resolved
+        details <- Map.lookup (renderVersion version) (infoVersions info)
+        artifactFor file details
 
 {- Serve the artifact from the public upstream after a private miss: gate the
 single requested version against the rules, and on an admit stream the public bytes
@@ -733,38 +793,54 @@ servePublicArtifact ::
     (Response -> IO ResponseReceived) ->
     IO ResponseReceived
 servePublicArtifact env renderer deps name version file respond = do
-    decision <- gatePublicVersion env deps name version
-    case artifactStatus decision of
-        Ok -> streamPublicArtifact env deps name version file respond
-        status -> respond (artifactError renderer deps status decision)
+    gated <- gatePublicVersion env deps name version file
+    case gated of
+        Admitted artifact -> streamPublicArtifact env deps name version artifact respond
+        Refused decision -> respond (artifactError renderer deps (artifactStatus decision) decision)
 
-{- Gate the single requested version against both rule tiers, returning its serve
-outcome. The public packument is fetched anonymously and parsed; the requested
-version's 'PackageDetails' is evaluated through 'evalRulesEffectful' (the same engine
-the packument path gates with) and projected to a 'ServeDecision'.
+{- The outcome of gating a single requested artifact on the public path: either the
+chosen 'Artifact' to fetch, or the serve decision the error model renders. The
+admit carries the artifact so the stream step honours its 'artUrl' rather than
+re-deciding or reconstructing the location. -}
+data PublicArtifactGate
+    = -- | The version was admitted; carries the artifact selected by filename.
+      Admitted Artifact
+    | -- | The version was refused (policy denial, upstream outage, or absence).
+      Refused ServeDecision
 
-The outcome distinguishes the refusal causes the error model maps: a version absent
-from the public metadata is a genuine miss (a @404@ forwarded upstream absence,
-projected as 'Unavailable' 'WontResolve' only to carry a non-admit — the status is
-overridden to @404@ in 'artifactError'); a metadata fetch that fails is a transient
-upstream outage (@503@); a present version is decided by the rules, where a needed
-effectful rule that cannot be consulted fail-closes to an 'Unavailable'
-@503@\/@500@. -}
-gatePublicVersion :: Env -> PackumentDeps -> PackageName -> Version -> IO ServeDecision
-gatePublicVersion env deps name version = do
+{- Gate the single requested version against both rule tiers and select its
+artifact, returning the gate outcome. The public packument is fetched anonymously
+and parsed; the requested version's 'PackageDetails' is evaluated through
+'evalRulesEffectful' (the same engine the packument path gates with). On an admit the
+artifact matching the requested filename is selected ('artifactFor'); a filename
+absent from an otherwise-admitted version is a forwarded miss, the same @404@ as an
+absent version.
+
+The refusal causes the error model maps: a version (or file) absent from the public
+metadata is a genuine miss (a @404@ forwarded absence, projected as 'Unavailable'
+'WontResolve' only to carry a non-admit — the status is overridden to @404@ in
+'artifactError'); a metadata fetch that fails is a transient upstream outage (@503@);
+a present version is decided by the rules, where a needed effectful rule that cannot
+be consulted fail-closes to an 'Unavailable' @503@\/@500@. -}
+gatePublicVersion :: Env -> PackumentDeps -> PackageName -> Version -> Text -> IO PublicArtifactGate
+gatePublicVersion env deps name version file = do
     evalCtx <- EvalContext <$> pdNow deps
-    fetched <- tryAny (fetchPublicOrigin env (pdPublicBaseUrl deps) name)
-    case fetched of
-        Left _ -> pure upstreamUnavailable
-        Right Nothing -> pure upstreamUnavailable
-        Right (Just (info, _value)) -> case Map.lookup (renderVersion version) (infoVersions info) of
-            Nothing -> pure versionAbsent
-            Just details -> gateVersion evalCtx deps details
+    fetchPublicOrigin env (pdPublicBaseUrl deps) name >>= \case
+        Nothing -> pure (Refused upstreamUnavailable)
+        Just (info, _value) -> case Map.lookup (renderVersion version) (infoVersions info) of
+            Nothing -> pure (Refused versionAbsent)
+            Just details -> gateVersion evalCtx deps file details
 
--- Project a single version's two-tier rule decision to a serve outcome.
-gateVersion :: EvalContext -> PackumentDeps -> PackageDetails -> IO ServeDecision
-gateVersion ctx deps details =
-    serveDecisionOf details <$> evalRulesEffectful ctx (pdRules deps) (pdEffectfulRules deps) details
+{- Project a single version's two-tier rule decision to a gate outcome, selecting the
+artifact by filename on an admit. A denied version is 'Refused' with its decision; an
+admitted version whose requested filename matches no artifact is a forwarded miss
+('versionAbsent', rendered @404@). -}
+gateVersion :: EvalContext -> PackumentDeps -> Text -> PackageDetails -> IO PublicArtifactGate
+gateVersion ctx deps file details = do
+    decision <- serveDecisionOf details <$> evalRulesEffectful ctx (pdRules deps) (pdEffectfulRules deps) details
+    pure $ case decision of
+        Admit -> maybe (Refused versionAbsent) Admitted (artifactFor file details)
+        Reject _ -> Refused decision
 
 -- A transient public-upstream outage: a 'WillResolve' rejection (→ @503@).
 upstreamUnavailable :: ServeDecision
@@ -778,44 +854,96 @@ versionAbsent :: ServeDecision
 versionAbsent =
     Reject (Rejection (Unavailable WontResolve) "the requested version was not found upstream")
 
-{- Stream the artifact from the public upstream by its preserved filename,
+{- Stream the artifact from the public upstream at its __authoritative location__,
 __anonymously__ (the client credential is never sent to the public upstream), and —
-__after__ the response is begun — enqueue a best-effort mirror job. An unformable
-URL is the internal-error path. -}
+__after__ the response is begun — enqueue a best-effort mirror job. The chosen
+'Artifact''s 'artUrl' is honoured directly rather than reconstructed; the
+tarball-host policy gates whether that location may be fetched (the public packument
+host is the reference), and the resolved-IP recheck on 'envManager' is the
+defence-in-depth backstop. A host the policy refuses is the @403@ policy-denial path;
+an unformable URL is the internal-error path. -}
 streamPublicArtifact ::
     Env ->
     PackumentDeps ->
     PackageName ->
     Version ->
-    Text ->
+    Artifact ->
     (Response -> IO ResponseReceived) ->
     IO ResponseReceived
-streamPublicArtifact env deps name version file respond =
-    case artifactRequestByFile (clientConfig (envManager env) (pdPublicBaseUrl deps) Nothing) name file of
-        Left _ -> respond internalArtifactError
-        Right req -> do
-            received <- streamUpstream (envManager env) req relayArtifact respond
-            enqueueMirror env deps name version file
-            pure received
+streamPublicArtifact env deps name version artifact respond =
+    if tarballHostHonoured deps (pdPublicBaseUrl deps) (artUrl artifact)
+        then case artifactRequestByUrl (clientConfig (envManager env) (pdPublicBaseUrl deps) Nothing) (artUrl artifact) of
+            Right req -> do
+                received <- streamUpstream (envManager env) req relayArtifact respond
+                enqueueMirror env deps name version (artUrl artifact)
+                pure received
+            Left _ -> respond internalArtifactError
+        else respond crossHostRefused
 
 {- Enqueue a demand-driven mirror job for an admitted artifact, __best-effort__: it
 runs after the client response is begun and any failure is swallowed, so a queue
-outage never fails or delays the serve. The job names the public artifact URL (the
-same location the public fetch targeted) and the mount's mirror target; it carries
-no credential (the worker mints its own). An unformable artifact URL skips the
-enqueue rather than failing the served response. -}
+outage never fails or delays the serve. The job names the artifact's authoritative
+URL (the same location the public fetch targeted) and the mount's mirror target; it
+carries no credential (the worker mints its own). -}
 enqueueMirror :: Env -> PackumentDeps -> PackageName -> Version -> Text -> IO ()
-enqueueMirror env deps name version file =
-    case artifactFileUrl (pdPublicBaseUrl deps) name file of
-        Left _ -> pure ()
-        Right artifactUrl ->
-            void . tryAny . enqueue (envQueue env) $
-                MirrorJob
-                    { jobPackage = name
-                    , jobVersion = version
-                    , jobArtifactUrl = artifactUrl
-                    , jobMirrorTarget = pdMirrorTarget deps
-                    }
+enqueueMirror env deps name version artifactUrl =
+    void . tryAny . enqueue (envQueue env) $
+        MirrorJob
+            { jobPackage = name
+            , jobVersion = version
+            , jobArtifactUrl = artifactUrl
+            , jobMirrorTarget = pdMirrorTarget deps
+            }
+
+-- ── the egress gate at the serve seam ─────────────────────────────────────────
+
+{- Whether an artifact's authoritative @url@ may be fetched, given the mount's
+tarball-host policy and the host that served the packument it came from. Connects
+the pure 'tarballHostAllowed' at the serve seam: the @url@'s host must be on the
+upstream allowlist and not an internal literal, and — under the secure-default
+'Ecluse.Security.SameHostAsPackument' — equal to the packument host; the opt-in
+'Ecluse.Security.AnyAllowlistedHost' relaxes that last clause to any allowlisted
+host. This is the policy half of the @dist.tarball@ defence; the resolved-IP recheck
+on the guarded manager is its connection-time backstop (an allowlisted name that
+resolves to an internal address is still refused there).
+
+The internal-range opt-in is empty here, matching the composition root's secure
+default: no host is exempted from the internal-range block on the serve path. -}
+tarballHostHonoured :: PackumentDeps -> Text -> Text -> Bool
+tarballHostHonoured deps packumentBaseUrl artifactUrl =
+    tarballHostAllowed
+        (pdTarballHostPolicy deps)
+        (upstreamAllowlist deps)
+        (pdAllowedInternalHosts deps)
+        (hostAddress packumentBaseUrl)
+        (hostAddress artifactUrl)
+
+{- The host allowlist on the serve path: the bare hosts of the mount's configured
+upstreams — the public and private upstream base URLs and the mirror target. These
+are exactly the hosts the proxy is configured to talk to, so an artifact @url@ on any
+other host is off the allowlist regardless of policy (security.md invariant 2: a
+@dist.tarball@ host off the configured upstreams is refused). -}
+upstreamAllowlist :: PackumentDeps -> LoweredHostSet
+upstreamAllowlist deps =
+    lowerCaseHosts . fromList $
+        map hostAddress [pdPublicBaseUrl deps, pdPrivateBaseUrl deps, pdMirrorTarget deps]
+
+{- Select the artifact a request's filename names from a version's distribution
+files. npm has exactly one artifact per version, so the match is the single file; a
+many-per-version ecosystem (PyPI) would select the wheel\/sdist whose filename the
+client requested. 'Nothing' when no artifact carries the requested filename — a
+forwarded miss, never a fabricated location. -}
+artifactFor :: Text -> PackageDetails -> Maybe Artifact
+artifactFor file details =
+    find ((== file) . artFilename) (pkgArtifacts details)
+
+{- A @403@ for an artifact whose authoritative @url@ the tarball-host policy refuses:
+a cross-host @dist.tarball@ under the secure-default 'Ecluse.Security.SameHostAsPackument',
+or a host off the upstream allowlist. A policy denial, not a serve outcome the rules
+produced — the same @403@ surface a rule denial renders, with a fixed reason. -}
+crossHostRefused :: Response
+crossHostRefused =
+    responseLBS (mkStatus 403 "Forbidden") [(hContentType, "application/json")] "{\"error\":\"the upstream artifact host is not permitted by the tarball-host policy\"}"
 
 {- The relay for an artifact stream: forward the upstream status and headers,
 dropping only the hop-by-hop framing headers (@Transfer-Encoding@, @Connection@)
