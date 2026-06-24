@@ -227,6 +227,39 @@ spec = do
             decision <- evalRulesEffectful ctx pureRules [at 300 rule] pd
             deniedBy decision `shouldBe` Just DenyInstallTimeExecution
 
+        it "an equal-precedence effectful allow does not displace the pure allow" $ do
+            -- An effectful allow at the same precedence as a pure allow does not
+            -- outrank it (the contract is strict-greater), so the credited decision
+            -- stays the pure rule's own 'Approved', not 'ApprovedEffectful'.
+            let pd = pkg (Just "myorg") 0
+                pureRules = [PrecededRule 200 (AllowScope (mkScope "myorg"))]
+            rule <- constRule "EffAllow" fastConfig OnUnavailable (Allow "also vouched")
+            decision <- evalRulesEffectful ctx pureRules [at 200 rule] pd
+            decision `shouldBe` Approved (AllowScope (mkScope "myorg")) "scope @myorg is allow-listed"
+
+        it "an equal-precedence effectful Unavailable does not flip a pure deny to undecidable" $ do
+            -- The security-relevant tie: a pure deny at precedence 300 and a failing
+            -- effectful rule (ranking as a deny, fail-closed) at the same 300. The
+            -- effectful candidate does not outrank the pure deny, so the decision
+            -- stays the permanent policy denial (403) rather than flipping to a
+            -- retryable 'Undecidable' (503).
+            let pd = withInstallScripts (pkg (Just "myorg") 0)
+                pureRules = [atDefaultPrecedence DenyInstallTimeExecution] -- denies at 300
+            rule <- failingRule "EffDeny" fastConfig OnUnavailable -- yields Unavailable at 300
+            decision <- evalRulesEffectful ctx pureRules [at 300 rule] pd
+            isUndecidable decision `shouldBe` False
+            deniedBy decision `shouldBe` Just DenyInstallTimeExecution
+
+        it "a strictly-higher effectful Unavailable still outranks the pure deny (fail-closed)" $ do
+            -- The guarded path the tie fix must not regress: an effectful failure
+            -- ranked strictly above the pure deny still wins and is fail-closed to
+            -- 'Undecidable'.
+            let pd = withInstallScripts (pkg (Just "myorg") 0)
+                pureRules = [atDefaultPrecedence DenyInstallTimeExecution] -- denies at 300
+            rule <- failingRule "EffDeny" fastConfig OnUnavailable
+            decision <- evalRulesEffectful ctx pureRules [at 400 rule] pd
+            decision `shouldSatisfy` isUndecidable
+
     describe "evalRulesEffectful — fail-closed (Unavailable)" $ do
         it "a failing effectful rule that could change the outcome is Undecidable" $ do
             let pd = pkg (Just "myorg") 0
