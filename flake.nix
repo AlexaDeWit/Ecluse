@@ -427,6 +427,21 @@
           buildInputs = ciInputs;
         });
 
+        # Lean shell for the Pages publish (pages.yml `make site`): the Haskell
+        # toolchain to build the library Haddock + pandoc to render the Markdown
+        # pages, plus the build essentials (zlib/pkg-config) the library compiles
+        # against. Far smaller than the default (human) shell the Pages job used to
+        # enter — no IDE/release/scan/lint tooling — so the job realizes and caches a
+        # much smaller closure. MERMAID_JS points at the pinned bundle `make site`
+        # vendors into the site. CI enters it with `nix develop .#docs`.
+        devShells.docs = pkgs.mkShell (shellEnv // {
+          name = "ecluse-docs";
+          buildInputs =
+            [ pkgs.bashInteractive hpkgs.ghc hpkgs.cabal-install pkgs.zlib pkgs.pkg-config ]
+            ++ docsInputs;
+          MERMAID_JS = "${mermaidJs}";
+        });
+
         # Lean shell for the security workflow: the vuln scanners only. CI enters
         # it with `nix develop .#scan`.
         devShells.scan = pkgs.mkShell (shellEnv // {

@@ -40,40 +40,28 @@ jobs:
         with:
           persist-credentials: false
 
-      # Same reproducible dev shell as ci.yml and developers, pinned by flake.lock.
-      - name: Install Nix
-        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
-
-      # Restore the shared compiled-dependency store + build dir that ci.yml's
-      # build-test job populates on main. RESTORE ONLY — this workflow never writes
-      # a cache (build-test is the single writer), and it uses the same stable,
-      # dependency-plan key as every other job (flake.lock + cabal.project +
-      # cabal.project.freeze) instead of the old `**/*.cabal` key that churned a
-      # separate ~0.3 GB lineage on every module add. Pages runs after build-test on
-      # the same main push, so the store is warm. See AGENTS.md → "CI & Security".
-      - name: Restore cabal store
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+      # Same SHA-pinned setup as the gate jobs (install Nix + restore the shared Nix
+      # store, cabal store, and dist-newstyle), instead of a bespoke install + two
+      # restore steps. save-nix-store: false keeps Pages RESTORE-ONLY for the Nix
+      # store: build-test is the single writer, and Pages runs on main concurrently,
+      # so it must not race it for the nix-<os>-<flakehash> entry. The cabal/dist
+      # caches in the composite are already restore-only, keyed on the dependency
+      # plan, so Pages's run on the same main push is warm. See AGENTS.md.
+      - name: Set up toolchain
+        uses: ./.github/actions/setup-toolchain
         with:
-          path: ${{ github.workspace }}/.cabal
-          key: cabal-store-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}
-          restore-keys: |
-            cabal-store-${{ runner.os }}-
-
-      - name: Restore dist-newstyle
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-        with:
-          path: dist-newstyle
-          key: dist-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}
-          restore-keys: |
-            dist-${{ runner.os }}-
+          cabal-cache: "true"
+          save-nix-store: "false"
 
       - name: Update package index
-        run: nix develop --command make update
+        run: nix develop .#docs --command make update
 
       # Assembles the Pages site into ./_site: the home page at the root and the
-      # library Haddock under /api (with .nojekyll at the root).
+      # library Haddock under /api (with .nojekyll at the root). Runs in the lean
+      # `.#docs` shell (Haskell toolchain + pandoc only), not the heavy default human
+      # shell the job used to enter.
       - name: Build the Pages site into ./_site
-        run: nix develop --command make site
+        run: nix develop .#docs --command make site
 
       # enablement: true turns Pages on via the API on first run, so no manual
       # repo-settings step is needed to bootstrap this.

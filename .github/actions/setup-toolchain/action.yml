@@ -22,6 +22,14 @@ inputs:
       Haskell (build/test, docs, smoke, weeder); leave off for the
       fourmolu/hlint/Semgrep/workflow-lint checks, which don't.
     default: "false"
+  save-nix-store:
+    description: >-
+      Whether this job may SAVE the Nix-store cache (only ever on main). Default
+      true. Set "false" for a non-writer job that should restore the shared store
+      but never write it — e.g. the Pages publish, which runs on main concurrently
+      with build-test (the single writer) and must not race it for the one
+      nix-<os>-<flakehash> entry.
+    default: "true"
 
 runs:
   using: composite
@@ -41,18 +49,21 @@ runs:
     # warm runs are fast and immune to cache.nixos.org flakiness. Every gate job
     # realizes the same `.#ci` shell, so one shared key serves them all.
     #
-    # save is gated to main: PR runs restore (from main's entry, via the
-    # base-branch fallback) but never write, so they can't each leave a ~1.3 GB
-    # copy behind. gc-max-store-size trims the store to its live closure before
-    # saving, so the cached entry can't balloon past the dev-shell closure. Stale
-    # older-flake.lock entries are pruned by the cache-cleanup workflow (this
-    # token is read-only; purging in-action would need `actions: write`).
+    # save is gated to main AND to the save-nix-store input: PR runs restore (from
+    # main's entry, via the base-branch fallback) but never write, so they can't
+    # each leave a ~1.3 GB copy behind; and a non-writer main job (Pages, which sets
+    # save-nix-store: false) restores the shared store but never races build-test —
+    # the single writer — for the one nix-<os>-<flakehash> entry. gc-max-store-size
+    # trims the store to its live closure before saving, so the cached entry can't
+    # balloon past the dev-shell closure. Stale older-flake.lock entries are pruned
+    # by the cache-cleanup workflow (this token is read-only; purging in-action
+    # would need `actions: write`).
     - name: Cache Nix store
       uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7.0.2
       with:
         primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.nix', 'flake.lock') }}
         restore-prefixes-first-match: nix-${{ runner.os }}-
-        save: ${{ github.ref == 'refs/heads/main' }}
+        save: ${{ inputs.save-nix-store == 'true' && github.ref == 'refs/heads/main' }}
         gc-max-store-size-linux: 5G
 
     # Hackage deps are built by cabal into CABAL_DIR (the store + the package
