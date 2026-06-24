@@ -45,6 +45,7 @@ module Ecluse.Log (
 
     -- * Structured context
     auditContext,
+    moduleField,
 
     -- * Rendering (for serialise-and-assert)
     renderLogLine,
@@ -176,6 +177,17 @@ auditContext ::
     SimpleLogPayload
 auditContext package version rule =
     sl "package" package <> sl "version" version <> sl "rule" rule
+
+{- | The structured context naming the __source module__ a log line was emitted
+from, so every JSON record carries a @module@ field (e.g.
+@"module":"Ecluse.Server.Pipeline"@). Compose it into a log site's payload alongside
+the event's own fields, so the stream can be filtered by emitter without leaning on
+the @katip@ namespace. @katip@ renders the key into the line's @data@ object. This is
+the standard tag for a log raised off the 'Handler' reader (a plain-'IO' path that
+opens its own context through the composition-root 'LogEnv').
+-}
+moduleField :: Text -> SimpleLogPayload
+moduleField = sl "module"
 
 -- ── rendering ────────────────────────────────────────────────────────────────
 
