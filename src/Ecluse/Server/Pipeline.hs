@@ -524,11 +524,17 @@ replayPlan deps bySource plan base =
             , Just object <- [versionObjectFrom sid version]
             ]
 
+    -- Each source's raw @versions@ object, extracted once per source.
+    -- 'versionObjectFrom' runs once per surviving version (up to the packument's
+    -- version cap), so resolving the source's @versions@ object inside it would
+    -- re-extract the same object on every version; hoisting it here leaves each
+    -- survivor a single inner lookup. ('bySource' holds one entry per upstream.)
+    versionsBySource :: Map SourceId (KeyMap Value)
+    versionsBySource = Map.mapMaybe (objectAt "versions" . srcValue) bySource
+
     versionObjectFrom :: SourceId -> Text -> Maybe Value
-    versionObjectFrom sid version = do
-        source <- Map.lookup sid bySource
-        versionsObject <- objectAt "versions" (srcValue source)
-        KeyMap.lookup (Key.fromText version) versionsObject
+    versionObjectFrom sid version =
+        Map.lookup sid versionsBySource >>= KeyMap.lookup (Key.fromText version)
 
     -- @dist-tags@ rebuilt from the plan's reconciled tags (each a rendered version
     -- string). The plan has already resolved @latest@ and dropped absent-target
@@ -552,11 +558,21 @@ replayPlan deps bySource plan base =
                 | (version, t) <- Map.toList (mpTime plan)
                 ]
 
+    -- The base @time@ map carries one entry per published version (up to the
+    -- packument's version cap) plus the @created@\/@modified@ bookkeeping keys.
+    -- Look those two keys up directly rather than filtering the whole map, so this
+    -- is a pair of lookups, not a full traversal of every version's publish time.
     bookkeepingTime :: KeyMap Value
     bookkeepingTime =
         case objectAt "time" base of
-            Just timeObject -> KeyMap.filterWithKey (\k _ -> Key.toText k `elem` timeBookkeepingKeys) timeObject
             Nothing -> mempty
+            Just timeObject ->
+                KeyMap.fromList
+                    [ (key, value)
+                    | name <- timeBookkeepingKeys
+                    , let key = Key.fromText name
+                    , Just value <- [KeyMap.lookup key timeObject]
+                    ]
 
 -- The non-version keys an npm @time@ object carries that must be relayed unchanged.
 timeBookkeepingKeys :: [Text]
