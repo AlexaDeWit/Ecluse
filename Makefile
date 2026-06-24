@@ -239,17 +239,18 @@ sbom: ## Generate the image SBOM (SPDX + CycloneDX) under sbom/
 
 # Scan the image's dependency closure for known CVEs. `scan` is the authority:
 # sbomnix builds the SBOM of the shipped binary, grype scans it against its
-# maintained DB → severity-rated table + grype.json. `scan-vulnix` is the
+# maintained DB → severity-rated table + grype.json + grype.sarif (the SARIF the
+# security workflow uploads to GitHub code scanning). `scan-vulnix` is the
 # secondary Nix-native cross-check (more comprehensive and patch-aware, but no
 # severity grades). Both are report-only. See CONTRIBUTING.md → "Vulnerability
 # scanning".
-scan: ## Scan the image closure for CVEs (grype over the SBOM → grype.json)
+scan: ## Scan the image closure for CVEs (grype over the SBOM → grype.json + grype.sarif)
 	@mkdir -p sbom
 	$(NIX) sbomnix --cdx sbom/ecluse.cdx.json .#ecluse-bin
-	$(NIX) grype sbom:sbom/ecluse.cdx.json -o table -o json=grype.json
+	$(NIX) grype sbom:sbom/ecluse.cdx.json -o table -o json=grype.json -o sarif=grype.sarif
 
 scan-vulnix: ## Secondary Nix-native cross-check (vulnix; comprehensive, no severity)
 	-$(NIX) bash -c 'vulnix -C "$$(nix build .#ecluse-bin --no-link --print-out-paths)"'
 
 clean: ## Remove build artifacts
-	rm -rf dist-newstyle result sbom grype.json
+	rm -rf dist-newstyle result sbom grype.json grype.sarif

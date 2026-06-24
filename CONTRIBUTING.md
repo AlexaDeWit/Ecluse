@@ -49,8 +49,9 @@ reason. "It reads a little cleaner" isn't one.
 Écluse ships as a lean, reproducible OCI image built by Nix (`make docker-build`), published
 by a tag-triggered workflow that attaches keyless SLSA provenance + SBOM attestations and a
 GitHub Release pinning the digest. Image CVEs are scanned report-only (`make scan`, grype over
-the SBOM) and dependency freshness is kept by Renovate refreshing `flake.lock` (and bumping
-the GitHub Actions and Haskell dependencies).
+the SBOM); findings surface both in the **Security tab** (code scanning, alongside Semgrep and
+Scorecard) and in a single auto-updating tracking issue. Dependency freshness is kept by Renovate
+refreshing `flake.lock` (and bumping the GitHub Actions and Haskell dependencies).
 
 The full operational detail (image contents, the publish/attest chain, Docker Hub token
 handling, and the scanning/freshness arms) is in
