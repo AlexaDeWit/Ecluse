@@ -88,6 +88,21 @@ spec = describe "tarball-host policy + resolved-IP recheck (real serve path, cro
                 Left _ -> pass
                 Right resp -> status resp `shouldNotBe` 200
 
+    it "renders the mount's 503 (not a bare 500) when the admitted artifact's upstream open fails" $
+        withDeadTarballUpstream $ \livePort -> do
+            -- The packument resolves and the version is admitted, but its dist.tarball
+            -- names a same-host port nothing listens on, so opening the artifact
+            -- connection fails. That open-phase failure is recoverable (no response is
+            -- committed), so the serve path must render the transient upstream-unavailable
+            -- error through the mount's renderer — the 503 its siblings produce — rather
+            -- than letting the failure escape uncaught into Warp's generic 500.
+            app <- proxyApp SameHostAsPackument (optIn ["127.0.0.1"]) livePort
+            resp <- getTarball app
+            status resp `shouldBe` 503
+            -- The body is the mount renderer's, proving the transient error was rendered
+            -- rather than surfaced as Warp's default 500 page.
+            simpleBody resp `shouldBe` upstreamUnavailableBody
+
 -- ── the proxy under test ──────────────────────────────────────────────────────
 
 {- The proxy application over the guarded data-plane manager (resolved-IP recheck
@@ -185,6 +200,57 @@ crossHostPackument port =
 
 tarballBytes :: LByteString
 tarballBytes = "CROSS-HOST-TGZ-BYTES"
+
+{- An in-process upstream whose packument admits a version but names its dist.tarball
+on a __same-host port nothing listens on__: the packument fetch succeeds (so the
+version reaches the tarball-host gate and is admitted), but opening the artifact
+connection fails. The dead port is learned by binding briefly and releasing it before
+the live upstream starts, so the artifact open is a clean connection-open failure — the
+recoverable phase the serve path must render as the mount's 503. The callback receives
+the live packument port. -}
+withDeadTarballUpstream :: (Port -> IO a) -> IO a
+withDeadTarballUpstream k = do
+    deadPort <- testWithApplication (pure noUpstream) pure
+    testWithApplication (pure (app deadPort)) k
+  where
+    -- Always answers the packument (the tarball slot is never reached: its connection
+    -- never opens), naming the dead artifact port on the same host as the packument.
+    app :: Port -> Application
+    app deadPort _req respond =
+        respond (responseLBS status200 [] (encode (deadTarballPackument (show deadPort))))
+
+    noUpstream :: Application
+    noUpstream _req respond = respond (responseLBS status200 [] "")
+
+-- A single-version packument whose dist.tarball is on the same host (@127.0.0.1@) as
+-- the packument — so the secure-default tarball-host policy admits it — at a dead
+-- port, so opening the artifact connection fails.
+deadTarballPackument :: Text -> Value
+deadTarballPackument port =
+    object
+        [ "name" .= ("thing" :: Text)
+        , "dist-tags" .= object ["latest" .= ("1.0.0" :: Text)]
+        , "versions"
+            .= object
+                [ "1.0.0"
+                    .= object
+                        [ "name" .= ("thing" :: Text)
+                        , "version" .= ("1.0.0" :: Text)
+                        , "dist"
+                            .= object
+                                [ "tarball" .= ("http://127.0.0.1:" <> port <> "/thing/-/thing-1.0.0.tgz")
+                                , "integrity" .= ("sha512-x" :: Text)
+                                ]
+                        ]
+                ]
+        , "time" .= object ["1.0.0" .= ("2020-01-01T00:00:00.000Z" :: Text)]
+        ]
+
+-- The mount renderer's body for the transient upstream-unavailable 503 the serve path
+-- produces when the artifact open fails — the npm @{"error": …}@ shape, distinct from
+-- Warp's default 500 page, so the rendered 503 is unambiguous.
+upstreamUnavailableBody :: LByteString
+upstreamUnavailableBody = "{\"error\":\"the upstream registry was unavailable\"}"
 
 -- ── helpers ───────────────────────────────────────────────────────────────────
 
