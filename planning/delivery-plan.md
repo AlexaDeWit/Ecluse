@@ -81,6 +81,22 @@ Per-slice files are deliberate: parallel agents (and their status updates) touch
 - Pulled in early: **S16** (the `CredentialProvider` generic wrapper + static leaf,
   M4) and **S31** (SLSA provenance + SBOM attestation, M8).
 
+**Merged onto the skeleton — M3 closed and M4 / M5 / M6 partially landed:**
+
+- **M3 (complete)** — the tarball path + demand-driven mirror enqueue (S15): the
+  bounded-memory artifact stream and the enqueue-on-miss that hands a mirror request
+  to the `MirrorQueue` double.
+- **M4 (partial)** — the AWS credential leaf (CodeArtifact `mintToken`, S17) and the
+  SQS `MirrorQueue` backend (S18), each behind its handle; plus egress / SSRF
+  hardening — per-context resolved-IP recheck on the untrusted public / artifact
+  path, a disallow-by-default `dist.tarball`-host policy, and behaviour-level metadata
+  protection (S40). _Remaining for launch-ready: the mirror worker (S19) and the AWS
+  composition root (S20)._
+- **M5 (partial)** — the effectful rule tier: `Unavailable`, with per-source
+  timeout / retry / circuit-breaker (S21). _Remaining: the CVE tier (S22 / S23)._
+- **M6 (partial)** — the OpenTelemetry substrate + telemetry config, off by default
+  (S24). _Remaining: tracing spans (S25) and the metrics / log correlation (S26)._
+
 > **Refactors layered on the merged slices** (each landed without its own DAG slice,
 > is reflected in the **architecture** docs, and is cross-referenced from the
 > affected slice file): the agnostic `FilterPlan` extraction (#107 / #119);
@@ -92,12 +108,13 @@ Per-slice files are deliberate: parallel agents (and their status updates) touch
 > so a root mount is unrepresentable) and moved npm's `{"error": …}` body out of the
 > agnostic serve layer into the adapter renderer.
 
-**Remaining — what this plan still delivers:** the tarball path + demand-driven
-mirror enqueue (S15); the non-default credential strategies (`service` /
-`delegated-cache`, S43–S45); the AWS backends + mirror worker + composition root
-(M4); the effectful / CVE tier (M5); observability (M6); the GCP backends (M7); the
-launch docs + release-hardening tail (M8); the capability manifest (S34 / S35); and
-the informational benchmark track (M9).
+**Remaining — what this plan still delivers:** the mirror worker (S19) and the AWS
+composition root (S20) that close **M4** to launch-ready; the non-default credential
+strategies (`service` / `delegated-cache`, S43–S45); the CVE tier (S22 / S23) on top
+of the merged effectful tier (**M5**); the tracing spans (S25) and metrics / log
+correlation (S26) on top of the merged OTel substrate (**M6**); the GCP backends
+(M7); the launch docs + release-hardening tail (M8); the capability manifest
+(S34 / S35); and the informational benchmark track (M9).
 
 > **Base-hardening before S15.** The config / mount / credential / Reader-context
 > generalization decided across the **base-hardening track** (D1–D6) is now
@@ -300,25 +317,26 @@ ordered. The live pointer to current work is [In flight](#in-flight)._
 ### Critical path to AWS launch
 
 `S02 → S01 → S12 → S13 → S14 → S15 → S20`, with `S06→S07→S08→S09`, `S07→S33`, and
-`S16→{S17,S18}→S19` feeding the join at S20. _Merged through **S14**; the live
-frontier is **S15** (built on the post-D6 Reader hot path — see
-[In flight](#in-flight))._
+`S16→{S17,S18}→S19` feeding the join at S20. _Merged through **S15**, with the
+`S16→{S17,S18}` feed merged too; the live frontier is **S19** (mirror worker) →
+**S20** (the launch-ready composition join) — see [In flight](#in-flight)._
 
 ---
 
 ## In flight
 
-_The **walking skeleton is merged** — M0, M1, M2 (core) and M3 (core: S33 packument
-merge, S14 packument path), plus S16 (credential wrapper) and S31 (provenance/SBOM);
-see [Current state](#current-state-the-baseline-this-plan-builds-on). No feature
-slice is in review right now._
+_No feature slice is in flight. The S15 → S40 wave is **merged** — the tarball path
+(S15), the CodeArtifact credential leaf (S17), the SQS `MirrorQueue` (S18), the
+effectful rule tier (S21), the OTel substrate (S24), and egress / SSRF hardening
+(S40) — closing M3 and landing M4 / M5 / M6 partially; see
+[Current state](#current-state-the-baseline-this-plan-builds-on)._
 
-_The active work is the **base-hardening track** (config / mount / credential /
-Reader-context generalization — the **base-hardening track**, D1–D6), now landed
-ahead of [S15](slices/S15-tarball-path.md) and reconciled with the already-rendered
-architecture; its decisions are final and it is not a
-DAG slice. Once it lands, the critical path resumes at **S15** (tarball path), then
-**M4** (AWS)._
+_The build is **between waves**, in the
+[inter-wave quality & alignment pass](orchestration-strategy.md#inter-wave-quality--alignment-pass)
+that gates the next wave: clearing the issue tracker and the carried tech-debt before
+dispatch. The next wave resumes the critical path at **S19** (mirror worker) →
+**S20** (the launch-ready AWS composition), with **S25 / S26** (telemetry spans +
+metrics) layering onto the merged S24 substrate._
 
 ---
 

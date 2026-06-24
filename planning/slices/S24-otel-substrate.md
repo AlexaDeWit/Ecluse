@@ -2,7 +2,7 @@
 id: S24
 title: OTel substrate + telemetry config (off by default)
 milestone: M6 — Observability
-status: not-started
+status: merged
 depends-on: [S01, S03]
 test-tier: [unit]
 arch-refs:

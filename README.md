@@ -15,8 +15,8 @@ why the off-the-shelf options didn't fit, and the reasoning behind the design; a
 to other tools in this space is in [`ALTERNATIVES.md`](ALTERNATIVES.md).
 
 > **Status: pre-launch — under active development; no GA release yet.** The
-> functional core and the npm **packument** path are in place; the **tarball**
-> path, the **mirror worker**, and the **cloud backends** are still landing, so
+> functional core and the npm **packument** and **tarball** paths are in place; the
+> **mirror worker** and the **cloud backends** are still landing, so
 > Écluse is not yet a proxy you can put in front of a build. Pre-release candidates
 > are published and attested, but expect breaking changes before `v0.1.0`. What has
 > actually shipped is tracked slice by slice in the
