@@ -84,8 +84,8 @@ typed-decision-vs-served-`Value` contract surfaced late — see
    │ EVALUATE  fresh reviewer agent(s), two stages:      │
    │   A. spec / requirements compliance + traceability  │
    │   B. code quality + security + test quality         │
-   │   team lead reads the diff; fixes are routed by the  │
-   │   team lead (agents can't be resumed in this harness)│
+   │   team lead reads the diff; fixes routed per the    │
+   │   Fix routing policy (resume / direct / fresh agent)│
    └────┬───────────────────────────────────────────────┘
    ┌────▼──────────────────────────────────────────────┐
    │ GATE      reproduce CI locally → push branch →      │
@@ -104,12 +104,13 @@ building, mid-review, gate-red, or that the team lead is simply not yet sure of 
 a **draft**, so "ready for review" is never ambiguous and the architect never spends
 attention on — or merges — work that was not deliberately offered.
 
-**Fix routing.** A reviewer's "changes required" does **not** resume the original
-implementer — in this harness a running or rested agent cannot be redirected or
-continued. Small, reviewer-specified fixes the team lead applies **directly** (then
-re-runs the gate); a larger rework is dispatched as a **fresh** build agent briefed
-with the review. Either way the fix lands as a distinct, separately-reviewable
-commit.
+**Fix routing.** A reviewer's "changes required" is routed one of three ways. A
+**background** implementer agent can be **resumed** (`SendMessage` to its agent ID):
+it keeps its full build context, so it is the natural first choice for a fix that
+continues what it just built. Alternatively the team lead applies a small,
+reviewer-specified fix **directly** (then re-runs the gate); or — for a larger rework
+that benefits from a clean slate — briefs a **fresh** build agent with the review.
+Either way the fix lands as a distinct, separately-reviewable commit.
 
 ## Subagents and isolation
 
@@ -199,9 +200,10 @@ The implementer's own "it works" does not count; evidence does.
   be present, and the wrong kind.
 
 Critical findings block; the fix is routed per __Fix routing__ above — the team lead
-applies a small, reviewer-specified fix directly, or briefs a fresh build agent for a
-larger rework — then re-verified. A running or rested agent cannot be resumed in this
-harness, so review never "bounces back" to the original implementer.
+resumes the original background agent (`SendMessage`), applies a small
+reviewer-specified fix directly, or briefs a fresh build agent for a larger rework —
+then re-verifies. Review _can_ bounce back to the original implementer now that a
+background agent can be resumed with its context intact.
 
 ## Inter-wave quality & alignment pass
 
@@ -367,6 +369,10 @@ Escalations arrive **decision-ready**:
   brought **one at a time**, lead-with-a-recommendation; the rest wait their turn. This
   complements *escalate, don't guess* — surface proactively, but serialized, not in
   a flood.
+- **Reference work by identifiers the architect can see.** When surfacing or
+  escalating, name a piece of work by what is visible to the architect — its slice ID
+  (`S19`), PR or issue number (`#168`), or a short descriptive title — never an
+  internal task-tracker ID (the architect's view does not render those).
 - **"The term Seam" is retired.** The records-of-functions abstraction (`RegistryClient`,
   `MirrorQueue`, `CredentialProvider`) is **the Handle pattern**. Don't reintroduce
   "seam" — not even in the generic "integration boundary" sense, which re-muddies the

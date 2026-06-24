@@ -21,9 +21,10 @@ Do this before acting on any task or summary:
 
 1. **Re-read the process + design canon** (the team-lead operating manual and the
    design of record):
-   - `planning/orchestration-strategy.md` — the per-PR loop, **Fix routing** (agents
-     cannot be resumed in this harness → the team lead applies a small reviewer-
-     specified fix directly, or briefs a fresh agent), the **draft-until-ready**
+   - `planning/orchestration-strategy.md` — the per-PR loop, **Fix routing** (a
+     reviewer's "changes required" can resume the original background agent via
+     `SendMessage`, or the team lead applies a small fix directly, or briefs a fresh
+     agent), the **draft-until-ready**
      procedure (PRs open as draft; ready-for-review only at hand-off), the Definition
      of Done, the Guardrails.
    - `planning/delivery-plan.md` — the slice DAG and wave state.
@@ -72,9 +73,10 @@ durable and copied verbatim. Its final line bootstraps the routine above.
 > CRITICAL CONVENTIONS: (1) run ALL build/format/gate via
 > `env -u IN_NIX_SHELL nix develop --command make <target>` (ambient shell stale →
 > wrong fourmolu). (2) Canadian spelling in all prose/Haddock. (3) HADDOCK §11: no
-> slice/PR/issue/roadmap narration in source Haddock. (4) agents cannot be resumed →
-> a reviewer's "changes required" means the team lead applies the small fix directly
-> OR briefs a fresh agent. (5) PRs open as DRAFT, marked ready-for-review only at
+> slice/PR/issue/roadmap narration in source Haddock. (4) a reviewer's "changes
+> required" can resume the original background agent (`SendMessage`), or the team
+> lead applies the small fix directly, or briefs a fresh agent. (5) PRs open as
+> DRAFT, marked ready-for-review only at
 > hand-off (after EVALUATE + gate + confident).
 >
 > CURRENT STATE (verify against git/gh): [fill: what is merged, in review, in flight].
