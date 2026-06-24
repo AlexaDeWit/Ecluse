@@ -102,14 +102,14 @@ sequenceDiagram
     and
         E->>Cache: lookup parsed public metadata
         alt cache miss
-            E->>Pub: fetch (anonymous; token stripped)
+            E->>Pub: fetch (anonymous, token stripped)
             Pub-->>E: packument (or miss)
             E->>Cache: store parsed metadata (short TTL)
         end
     end
     E->>Rules: evaluate every public version
     Rules-->>E: verdicts (allow / deny / unavailable)
-    Note over E: filter gated (public) versions; trust private;<br/>merge (private wins; flag integrity divergence);<br/>repoint latest; recompute ETag over merged body
+    Note over E: filter gated (public) versions, trust private,<br/>merge (private wins, flag integrity divergence),<br/>repoint latest, recompute ETag over merged body
     alt no survivors in merge
         E-->>Client: 403 policy / 503 transient or upstream-unavailable
     else some admitted
@@ -312,7 +312,7 @@ sequenceDiagram
     alt no PUBLICATION_TARGET_URL configured
         E-->>Client: 405 Method Not Allowed
     else publication target configured
-        Note over E: enforce publish-scope allow-list<br/>(anti-shadowing; reject before any write)
+        Note over E: enforce publish-scope allow-list<br/>(anti-shadowing, reject before any write)
         alt name out of scope
             E-->>Client: 4xx npm-shaped error (no upstream write)
         else name in scope
@@ -321,5 +321,5 @@ sequenceDiagram
             E-->>Client: npm success shape
         end
     end
-    Note over E,PubT: write-only from the proxy; read back via the private upstream
+    Note over E,PubT: write-only from the proxy, read back via the private upstream
 ```
