@@ -181,14 +181,10 @@ envLayerSpec = describe "parseEnvPure" $ do
                 cfgLogFormat cfg `shouldBe` ConsoleLog
                 cfgTelemetry cfg `shouldBe` TelemetryOn
                 cfgRespectUpstreamTarballHost cfg `shouldBe` True
-
-    it "redacts secret tokens from the env layer's Show (no token text leaks)" $
-        case parseEnvPure fullEnv of
-            Left errs -> expectationFailure ("unexpected errors: " <> show errs)
-            Right cfg -> do
-                -- The tokens are parsed and held, but must never reach a
-                -- Show-based signal (a log, an error, a deriving Show): they are
-                -- redacted Secrets, not raw Text. See Ecluse.Credential.Secret.
+                -- Secret-redaction regression: the tokens are parsed and held,
+                -- but must never reach a Show-based signal (a log, an error, a
+                -- deriving Show) — they are redacted Secrets, not raw Text. See
+                -- Ecluse.Credential.Secret.
                 showText cfg `shouldNotSatisfy` ("s3cr3t" `isInfix`)
                 showText cfg `shouldNotSatisfy` ("mirror-write" `isInfix`)
                 showText cfg `shouldSatisfy` ("REDACTED" `isInfix`)
