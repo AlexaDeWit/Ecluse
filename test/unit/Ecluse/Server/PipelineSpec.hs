@@ -1595,6 +1595,29 @@ headTarballSpec = describe "HEAD on a tarball route (no full-artifact body pump)
             seenArtifactMethods publicUp `shouldReturn` [methodHead]
             drainJobs env `shouldReturn` []
 
+    it "falls a private-artifact-miss HEAD through to a public HEAD (recoverable miss, both probed as HEAD)" $ do
+        -- The private upstream resolves the metadata (so the version is selected) but
+        -- 404s the artifact: probeUpstreamWhen's `not (accept upstreamStatus)` makes that
+        -- a RECOVERABLE miss, exactly as a GET, so the request must fall through to the
+        -- public origin — which has the artifact. The fall-through is probed as a HEAD on
+        -- BOTH legs (never a body GET on either): the private artifact slot is contacted
+        -- as a HEAD and misses, then the public artifact slot is contacted as a HEAD. The
+        -- reply is bodiless with the public status, and a HEAD enqueues nothing.
+        privateUp <- privateArtifactMiss
+        publicUp <- artifactUpstream "1.0.0" publicTarballBytes
+        withProxyEnv privateUp publicUp Nothing $ \app env -> do
+            resp <- headTarball "1.0.0" (Just "client-token") app
+            status resp `shouldBe` 200
+            -- Bodiless reply carrying the public origin's status.
+            simpleBody resp `shouldBe` ""
+            -- The private artifact slot was probed as a HEAD (and 404'd — a recoverable miss).
+            seenArtifactMethods privateUp `shouldReturn` [methodHead]
+            -- It fell through: the public artifact slot was then probed as a HEAD too,
+            -- never a body GET on either leg.
+            seenArtifactMethods publicUp `shouldReturn` [methodHead]
+            -- A HEAD serves no bytes, so nothing is enqueued for back-fill.
+            drainJobs env `shouldReturn` []
+
     it "denies a too-new version with 403 and an empty body, never touching the artifact" $ do
         -- The gating is identical to GET: a version inside the quarantine is a policy
         -- denial. A denied HEAD is a 403 with no body, and the artifact slot is never
