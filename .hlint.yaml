@@ -49,7 +49,7 @@
 # move to typed errors.
 - functions:
     - {name: System.IO.Error.userError, within: [], message: "Stringly IOError: throw a typed Exception (e.g. a nullary type with an Exception instance), or return a domain value. See STYLE.md section 11."}
-    - {name: UnliftIO.Exception.stringException, within: [Ecluse.Credential.Refresh], message: "Stringly exception: throw a typed Exception or return a domain value (STYLE.md section 11). Ecluse.Credential.Refresh is the remaining holdout, pending its value-surfacing refactor."}
+    - {name: UnliftIO.Exception.stringException, within: [Ecluse.Credential.Refresh.Internal], message: "Stringly exception: throw a typed Exception or return a domain value (STYLE.md section 11). Ecluse.Credential.Refresh.Internal is the remaining holdout, pending its value-surfacing refactor."}
 
 # --- Debugging leftovers: banned in committed code --------------------------
 - modules:

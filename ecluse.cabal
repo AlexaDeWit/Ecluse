@@ -70,6 +70,7 @@ library
     Ecluse.Credential
     Ecluse.Credential.CodeArtifact
     Ecluse.Credential.Refresh
+    Ecluse.Credential.Refresh.Internal
     Ecluse.Ecosystem
     Ecluse.Env
     Ecluse.Log
@@ -156,6 +157,7 @@ test-suite ecluse-unit
     Ecluse.CompositionSpec
     Ecluse.ConfigSpec
     Ecluse.Credential.CodeArtifactSpec
+    Ecluse.Credential.Refresh.InternalSpec
     Ecluse.CredentialSpec
     Ecluse.EnvSpec
     Ecluse.LogSpec
