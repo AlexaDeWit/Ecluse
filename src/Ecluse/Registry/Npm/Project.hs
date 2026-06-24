@@ -17,14 +17,18 @@ the wire shape.
 
 The npm-specific fields collapse onto the normalised, ecosystem-blind signals:
 
-* install-script presence → 'CodeExecSignal'. The abbreviated form's
-  @hasInstallScript@ flag is authoritative when present; otherwise it is
-  /derived/ from the @scripts@ map, which runs code on install exactly when it
-  declares any of @preinstall@\/@install@\/@postinstall@, matching what npm
-  itself sets the flag from. A version with neither signal maps to
-  'NoCodeOnInstall' (both metadata forms always carry the @scripts@\/
-  @hasInstallScript@ information, so its absence is a determination, not an
-  unknown).
+* install-script presence → 'CodeExecSignal', read __fail-closed__ across two
+  independent wire signals. A version runs code on install when /either/ the
+  abbreviated form's @hasInstallScript@ flag is @true@ /or/ the @scripts@ map
+  declares any of @preinstall@\/@install@\/@postinstall@ (matching what npm
+  itself sets the flag from). The two fields are independent on the wire, so the
+  @scripts@ map is consulted __even when @hasInstallScript@ is present and
+  @false@__: a hostile upstream must not be able to mask a real install hook by
+  lying in the sibling flag, so a declared script is authoritative and the
+  signal is the union of the two, never the flag overriding a script. A version
+  with neither signal maps to 'NoCodeOnInstall' (both metadata forms always
+  carry the @scripts@\/@hasInstallScript@ information, so its absence is a
+  determination, not an unknown).
 * @deprecated@ → 'Availability': a notice yields 'Deprecated' (carrying the
   message), its absence 'Available'. npm has no per-version yank, so @Yanked@
   never arises here.
@@ -258,19 +262,24 @@ projectDependencies vm =
         | (name, constraint) <- Map.toList deps
         ]
 
-{- Map npm install-script presence onto 'CodeExecSignal'. The abbreviated
-form's @hasInstallScript@ flag wins when present; otherwise presence is derived
-from the @scripts@ map (any of @preinstall@\/@install@\/@postinstall@), matching
-what npm itself sets the flag from.
+{- Map npm install-script presence onto 'CodeExecSignal', failing closed across
+the two independent wire signals: a version runs code on install when /either/
+the @scripts@ map declares an install hook
+(@preinstall@\/@install@\/@postinstall@) /or/ the abbreviated form's
+@hasInstallScript@ flag is @true@. The @scripts@ map is consulted __even when
+the flag is present and @false@__ — the two fields are independent on the wire,
+so a hostile upstream cannot suppress a manifest's own declared install hook by
+setting @hasInstallScript:false@ beside it. A declared script is authoritative;
+the flag only contributes the abbreviated-form signal (where @scripts@ is
+stripped), it never overrides a script the manifest itself carries.
 -}
 installCode :: VersionManifest -> CodeExecSignal
-installCode vm = case vmHasInstallScript vm of
-    Just True -> RunsCodeOnInstall "declares an install script (hasInstallScript)"
-    Just False -> NoCodeOnInstall
-    Nothing
-        | not (null hooks) ->
-            RunsCodeOnInstall ("declares install script(s): " <> T.intercalate ", " hooks)
-        | otherwise -> NoCodeOnInstall
+installCode vm
+    | not (null hooks) =
+        RunsCodeOnInstall ("declares install script(s): " <> T.intercalate ", " hooks)
+    | vmHasInstallScript vm == Just True =
+        RunsCodeOnInstall "declares an install script (hasInstallScript)"
+    | otherwise = NoCodeOnInstall
   where
     hooks = filter (`Map.member` vmScripts vm) installHooks
 

