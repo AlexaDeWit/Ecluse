@@ -34,7 +34,7 @@ source-repository-package
 -- the separate Nix path that builds the shipped artifact (callCabal2nix; it does
 -- not read these files). Bump both together via `make freeze`; see CONTRIBUTING
 -- → "Dependency locking".
-index-state: 2026-06-24T15:29:52Z
+index-state: 2026-06-24T18:57:47Z
 
 -- Enable the test suites in the solver for *every* command, so a bare
 -- `cabal test <suite>` (as `make test` runs) resolves a tests-inclusive plan
