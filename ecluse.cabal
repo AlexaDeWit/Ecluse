@@ -102,6 +102,15 @@ library
     Ecluse.Telemetry
     Ecluse.Version
 
+  -- Per-ecosystem version grammars and their shared lexical atoms. Internal to
+  -- the library: VersionKey is opaque, so callers reach these only through the
+  -- agnostic Ecluse.Version API.
+  other-modules:
+    Ecluse.Version.Gem
+    Ecluse.Version.Pep440
+    Ecluse.Version.Semver
+    Ecluse.Version.Token
+
   build-depends:
     , aeson                           ^>=2.2
     , amazonka                        ^>=2.0
