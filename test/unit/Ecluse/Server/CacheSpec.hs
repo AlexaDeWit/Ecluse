@@ -120,7 +120,7 @@ spec = do
     describe "resolveMetadata — per-source isolation" $ do
         it "keeps the private and public documents of one package apart" $ do
             -- The same package is fetched from two distinct sources; each source has its
-            -- own entry, so neither leg sees the other's bytes (no cross-contamination).
+            -- own entry, so neither origin sees the other's bytes (no cross-contamination).
             c <- freshCache
             _ <- resolveMetadata c privateSource (pkg "shared") (pure (entry (pkg "shared") "private-doc"))
             _ <- resolveMetadata c publicSource (pkg "shared") (pure (entry (pkg "shared") "public-doc"))
@@ -132,8 +132,8 @@ spec = do
         it "fetches once per source even for the same package" $ do
             c <- freshCache
             calls <- newIORef 0
-            _ <- resolveMetadata c privateSource (pkg "two-legs") (countingFetch calls (pkg "two-legs") "priv")
-            _ <- resolveMetadata c publicSource (pkg "two-legs") (countingFetch calls (pkg "two-legs") "pub")
+            _ <- resolveMetadata c privateSource (pkg "two-origins") (countingFetch calls (pkg "two-origins") "priv")
+            _ <- resolveMetadata c publicSource (pkg "two-origins") (countingFetch calls (pkg "two-origins") "pub")
             -- Two distinct (source, package) keys → two fetches; neither reuses the
             -- other's entry.
             readIORef calls `shouldReturn` 2
@@ -216,7 +216,7 @@ spec = do
 
         it "counts the two sources of one package as two entries against the bound" $ do
             -- The size bound is over (source, package) entries: caching one package
-            -- from both legs occupies two slots, exercising the per-source key under
+            -- from both origins occupies two slots, exercising the per-source key under
             -- the bound.
             c <- newMetadataCache (config 60 4)
             for_ [1 .. 10 :: Int] $ \i -> do

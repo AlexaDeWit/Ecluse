@@ -158,9 +158,9 @@ run = do
     let serverConfig = (mkServerConfig bindings){scPort = cfgPort env}
     -- Two data-plane managers, split by trust. The guarded one rechecks every
     -- resolved outbound IP against the internal-range block (DNS-rebinding /
-    -- resolve-to-internal SSRF) and serves the untrusted legs — the public upstream
+    -- resolve-to-internal SSRF) and serves the untrusted upstreams — the public upstream
     -- and every artifact stream — blocking every internal resolved address (an empty
-    -- opt-in: the secure default). The trusted one serves the private leg only: the
+    -- opt-in: the secure default). The trusted one serves the private origin only: the
     -- private base URL is operator-configured and may legitimately resolve to an
     -- internal address, so it is deliberately not rechecked.
     manager <- newGuardedTlsManager (lowerCaseHosts Set.empty)

@@ -67,14 +67,14 @@ streamUpstream manager request relay respond =
 @accept@ predicate, keeping a recoverable miss distinct from an unrecoverable
 mid-stream failure.
 
-This is the conditional relay the serve path's __private leg__ needs: open the
+This is the conditional relay the serve path's __private-origin fetch__ needs: open the
 upstream, learn its status, stream the body on a hit, and on a miss fall through to
 another upstream — without buffering and without leaking the connection. The two
 outcomes are deliberately kept apart:
 
 * __Recoverable miss__ — the connection could not be opened, or the status fails
   @accept@. No response has been committed, so the connection is closed and
-  'Nothing' is returned and the caller may fall through to another leg.
+  'Nothing' is returned and the caller may fall through to another upstream.
 * __Committed stream__ — the status passed, so the response is begun on the wire.
   From that point a failure pumping the body is __unrecoverable__: it is __not__
   collapsed into a miss (that would call @respond@ a second time over a half-sent
@@ -85,7 +85,7 @@ Only the connection open is caught here; once @respond@ is reached exceptions fl
 The connection is released on every path: a rejected status closes it before
 returning, a streamed (or failed) body closes it as the stream unwinds.
 
-The @accept@ predicate sees only the status (the hit\/miss decision a serve leg
+The @accept@ predicate sees only the status (the hit\/miss decision a serve fetch
 makes); a passing response is relayed exactly as 'streamUpstream' would, the
 @relay@ choosing the client-facing status and headers.
 -}

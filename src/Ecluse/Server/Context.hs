@@ -162,7 +162,7 @@ so a structured log call composes — over the same base as 'Ecluse.App.App', so
 service and request layers log uniformly.
 
 The @katip@ base is a reader, never a 'StateT', so logging context behaves
-correctly across the serve path's concurrent legs (see
+correctly across the serve path's concurrent fetches (see
 @docs\/architecture\/technology-stack.md@ → "Key Decisions").
 -}
 newtype Handler a = Handler

@@ -54,7 +54,7 @@ artifact to verify its integrity before publishing.
 == Authentication
 
 The client accepts an __injected__ bearer token and attaches it to every
-request; it never originates credential policy. Which token to send on which leg is
+request; it never originates credential policy. Which token to send on which request is
 the request pipeline's authority model, decided upstream of this module: always
 __strip__ the client's token before any public fetch, and use the minted mirror
 token only to write. Whether the client's own token is forwarded to the private

@@ -53,9 +53,9 @@ header for the no-SDK and sole-composition-root invariants it upholds.
 data Env = Env
     { envRegistry :: RegistryClient
     {- ^ The registry-protocol handle the mirror __worker__ publishes approved
-    packages through. The request serve path does __not__ read it: each upstream leg
+    packages through. The request serve path does __not__ read it: each upstream
     of a packument merge builds its own client over 'envManager' (two upstreams, with
-    per-leg credentials), so this slot is the __publish side__. One npm client serves
+    per-origin credentials), so this slot is the __publish side__. One npm client serves
     every cloud, since protocol and auth are orthogonal axes; until a backend is
     configured behind it the slot is a refusing placeholder (see
     'Ecluse.unconfiguredRegistry').
@@ -78,11 +78,11 @@ data Env = Env
     internal target.
     -}
     , envPrivateManager :: Manager
-    {- ^ The @http-client@ 'Manager' for the __trusted__ private-upstream leg. The
+    {- ^ The @http-client@ 'Manager' for the __trusted__ private upstream. The
     private base URL is operator-configured and deliberately trusted — it may
     legitimately resolve to an internal address (a registry on the private network) —
     so this manager does __not__ carry the resolved-IP recheck that 'envManager' does.
-    The trust split is by leg: only the untrusted public\/artifact legs are guarded
+    The trust split is by origin: only the untrusted public\/artifact fetches are guarded
     (see @docs\/architecture\/security.md@).
     -}
     , envMetadataCache :: MetadataCache
@@ -105,8 +105,8 @@ data Env = Env
     }
 
 {- | Assemble an 'Env' from its constructed handles and the two data-plane HTTP
-'Manager's — the guarded one for the untrusted public\/artifact legs and the
-trusted one for the private leg.
+'Manager's — the guarded one for the untrusted public\/artifact fetches and the
+trusted one for the private upstream.
 
 The 'Manager's, 'MetadataCache', 'LogEnv', and 'Telemetry' handle are taken as
 arguments rather than built here: a 'Manager' owns a connection pool whose lifetime

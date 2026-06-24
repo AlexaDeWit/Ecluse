@@ -24,11 +24,11 @@ bare host and port are known, not whether it is a sanctioned upstream. This laye
 is purely the resolved-IP backstop to that allowlist, the @security.md@ invariant 3
 "defence-in-depth behind invariant 2".
 
-The recheck is __leg-aware__: 'newGuardedTlsManager' is for the __untrusted__ legs
-(the public-upstream fetch and every artifact stream), while the __trusted__ private
+The recheck is __origin-aware__: 'newGuardedTlsManager' is for the __untrusted__
+origins (the public-upstream fetch and every artifact stream), while the __trusted__ private
 upstream — an operator-configured target that may legitimately live on an internal
 address — uses the unguarded 'newTrustedTlsManager'. Only an attacker-influenced
-target needs the backstop, so only those legs carry it (see @security.md@ →
+target needs the backstop, so only those fetches carry it (see @security.md@ →
 "Network egress is a shared responsibility").
 -}
 module Ecluse.Security.Egress (
@@ -75,7 +75,7 @@ a refusal is diagnosable (the operator sees /which/ name resolved to /what/
 internal address). It is thrown from the connection hook before the socket is used,
 so it surfaces to the fetch caller exactly as a connection failure would —
 'Ecluse.Server.Stream.streamUpstreamWhen' treats it as a recoverable miss on the
-private leg, and the buffered fetches as an upstream error — never a served body.
+private-origin fetch, and the buffered fetches as an upstream error — never a served body.
 -}
 data BlockedTarget = BlockedTarget
     { blockedHost :: Text
@@ -120,9 +120,9 @@ guardedManagerSettings allowedInternal base =
 {- | Build a TLS-capable 'Manager' guarded by the resolved-IP recheck.
 
 The default 'tlsManagerSettings' wrapped by 'guardedManagerSettings' — the
-data-plane manager the composition root installs for the __untrusted__ legs (the
+data-plane manager the composition root installs for the __untrusted__ origins (the
 public-upstream metadata fetch and every artifact stream), so the resolved-IP
-recheck applies there. The trusted private leg uses 'newTrustedTlsManager' instead.
+recheck applies there. The trusted private upstream uses 'newTrustedTlsManager' instead.
 -}
 newGuardedTlsManager :: LoweredHostSet -> IO Manager
 newGuardedTlsManager allowedInternal =
@@ -131,12 +131,12 @@ newGuardedTlsManager allowedInternal =
 -- ── the trusted manager ───────────────────────────────────────────────────────
 
 {- | Build a plain TLS-capable 'Manager' with __no__ resolved-IP recheck, for the
-trusted private-upstream leg.
+trusted private upstream.
 
 The private base URL is operator-configured and deliberately trusted (it may
 legitimately resolve to an internal address — a registry on the private network),
-so its leg is not subject to the internal-range recheck the public\/artifact legs
-carry. The trust boundary is per leg: only an __untrusted__ target (a public
+so it is not subject to the internal-range recheck the public\/artifact fetches
+carry. The trust boundary is per origin: only an __untrusted__ target (a public
 upstream, or a public @dist.tarball@) can steer the proxy somewhere unintended, so
 only those go through 'newGuardedTlsManager'.
 -}

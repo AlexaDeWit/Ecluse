@@ -218,7 +218,7 @@ test-suite ecluse-integration
   hs-source-dirs:     test/integration
   other-modules:
     Ecluse.MirrorQueueSpec
-    Ecluse.Security.EgressLegSpec
+    Ecluse.Security.EgressOriginSpec
 
   build-tool-depends: hspec-discover:hspec-discover ^>=2.11
   build-depends:

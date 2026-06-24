@@ -134,8 +134,8 @@ spec = do
             _ <- evaluate (envManager env)
             pure ()
 
-        it "exposes the trusted private-leg manager it was built with" $ do
-            -- The second data-plane manager (the trusted private leg, exempt from
+        it "exposes the trusted private-origin manager it was built with" $ do
+            -- The second data-plane manager (the trusted private origin, exempt from
             -- the resolved-IP recheck) is likewise opaque, so forcing the accessor
             -- to weak-head normal form is the assertion that it is wired.
             env <- newTestEnv

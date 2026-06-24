@@ -73,8 +73,8 @@ The worker is the consumer of the composition root's **publish-side
 through it, paired with the global [`CredentialProvider`](#credential-provider) for
 the bearer token. That handle is resolved **per ecosystem** at the composition root
 — the same `ecosystem → RegistryClient` resolution the mounts are keyed by. The
-request serve path does **not** share it: each packument leg builds its own per-leg
-client over the shared HTTP manager (two upstreams, per-leg credentials), so the
+request serve path does **not** share it: each packument upstream builds its own
+client over the shared HTTP manager (two upstreams, per-origin credentials), so the
 handle is **publish-side only**.
 
 ## Cloud Backends
