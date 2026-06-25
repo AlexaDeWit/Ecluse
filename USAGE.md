@@ -294,8 +294,10 @@ Documented here so the configuration surface and its security trade-off are know
 implementation. Écluse's posture is **secure by default, with overrides under your explicit
 control: you decide your threat tolerance.**
 
-- **AWS / GCP backends and the mirror worker**: the SQS/Pub-Sub queues, the CodeArtifact /
-  ADC credential leaves, and the demand-driven mirror are landing per the
+- **AWS / GCP backends**: the mirror worker, the SQS `MirrorQueue`, and the CodeArtifact
+  credential leaf are built behind their handles; the AWS composition root that wires them
+  into a config-driven deployment, and the GCP backends (the Pub/Sub queue and the ADC
+  credential leaf), are landing per the
   [delivery plan](planning/delivery-plan.md) (milestones M4, M7).
 - **Effectful CVE rules**: `DenyIfCVE` / `AllowIfRemediatesCve` over a local OSV advisory
   index (milestone M5).

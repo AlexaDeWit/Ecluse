@@ -55,7 +55,7 @@ The process is built so that "the AI wrote it" can't quietly turn into "nobody c
   root) throw out a whole category of confident-but-wrong AI output before anyone reads it.
 - **"It works" doesn't count. Tests do.** Every acceptance criterion has a deterministic test
   behind it; the rules engine's deny-precedence is **property-tested** with Hedgehog; changed
-  lines have to clear 95% coverage; Semgrep, lint, and a hermetic Nix build all have to pass.
+  lines have to clear 85% coverage; Semgrep, lint, and a hermetic Nix build all have to pass.
   Details in [`docs/testing.md`](docs/testing.md).
 
 ## Nothing ships until I've audited it
