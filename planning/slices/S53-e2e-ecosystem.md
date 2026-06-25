@@ -82,10 +82,14 @@ each via `make test-e2e` and in the CI e2e job):
 - [x] **deny:** a package carrying an **install script** (denied by
   `DenyInstallTimeExecution`) is **blocked at the public surface** — `npm install`
   fails and the package is never mirrored.
-- [x] **mirror round-trip (headline):** an `npm install` triggers a demand-driven
-  enqueue; the worker mirrors the artifact to Verdaccio (server↔worker, in one
-  process over the in-memory queue), and the version becomes present in the private
-  mirror.
+- [x] **mirror round-trip (headline):** the full core loop, end to end, as an
+  upstream-outage scenario — a package missing from the private mirror but present on
+  public is **served from public** (an `npm install` writes a lockfile), the worker
+  mirrors the artifact to Verdaccio (server↔worker, in one process over the in-memory
+  queue), and then, **with the public upstream paused**, an `npm ci` from that lockfile
+  still installs it **from the private mirror** (the tarball path is private-first and
+  `npm ci` never re-resolves via the packument, so public is never contacted) — proving
+  the served-from-mirror hop, not merely its presence.
 - [x] **integrity tamper:** the public stub serves an artifact whose bytes do
   **not** match the version's integrity; the worker's strongest-digest gate
   **rejects it and never publishes** (the mirror stays empty for that version).
@@ -124,8 +128,10 @@ _The e2e tier:_
 - `test/e2e/Ecluse/E2E/Fixtures.hs` — generate the nginx static tree: npm-format
   packuments + `tar`-built tarballs with **correct SRI** (`crypton` sha512), in
   allow / deny / mirror / tamper variants.
-- `test/e2e/Ecluse/E2E/SuiteSpec.hs` — the scenarios, one booted env via `aroundAll`,
-  skipping `pending` when the env is unavailable.
+- `test/e2e/Ecluse/E2E/SuiteSpec.hs` — the scenarios, each in its **own freshly booted
+  environment** (`around withE2E`, per-test isolation the default so a case can halt or
+  mutate its harness without leaking into another), skipping `pending` when the env is
+  unavailable.
 - `ecluse.cabal` — the `ecluse-e2e` test-suite stanza (non-gating).
 - `scripts/e2e.sh` + `Makefile` `test-e2e` — build + load the image, run the suite;
   **not** in `check`/`gate`.

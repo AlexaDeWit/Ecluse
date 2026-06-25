@@ -20,11 +20,17 @@ module Ecluse.E2E.Harness (
 
     -- * Driving the system
     NpmResult (..),
+    NpmProject,
     npmInstall,
+    withNpmProject,
+    npmInstallIn,
+    npmCiIn,
+    withUpstreamPaused,
     proxyStatus,
     proxyGet,
     proxyHead,
     verdaccioHasVersion,
+    verdaccioHasVersionNow,
 ) where
 
 import Data.ByteString qualified as BS
@@ -62,7 +68,7 @@ import System.Directory (createDirectoryIfMissing, getTemporaryDirectory, remove
 import System.Exit (ExitCode (ExitSuccess))
 import System.FilePath ((</>))
 import System.Process.Typed (proc, readProcess, readProcessStdout, setEnv, setWorkingDir)
-import UnliftIO (bracket, handleAny)
+import UnliftIO (bracket, bracket_, handleAny)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Environment (getEnvironment)
 
@@ -76,6 +82,10 @@ data E2E = E2E
     -- ^ The proxy's base URL on host loopback (no trailing slash).
     , e2eVerdaccio :: Text
     -- ^ The Verdaccio base URL on host loopback (the mirror, for polling).
+    , e2eStubContainer :: String
+    {- ^ The public-upstream stub container name, so a test can pause and resume it
+    ('withUpstreamPaused') to simulate a public-registry outage.
+    -}
     , e2eManager :: Manager
     -- ^ A shared HTTP manager for the harness's own probes.
     }
@@ -189,6 +199,7 @@ withE2E action = do
                         { e2eRegistry = base <> "/npm/"
                         , e2eBaseUrl = base
                         , e2eVerdaccio = "http://127.0.0.1:" <> show verdPort
+                        , e2eStubContainer = stub
                         , e2eManager = manager
                         }
             ready <- waitFor manager (base <> "/readyz") 200
@@ -234,12 +245,21 @@ data NpmResult = NpmResult
     }
     deriving stock (Show)
 
-{- | Run @npm install \<pkg\>@ against the proxy in a throwaway project with a fully
-isolated npm environment (own cache, userconfig, prefix, @HOME@), so a developer's
-global npm state cannot leak in and the only registry is the proxy.
+{- | An isolated, throwaway @npm@ project: its directory plus the fully isolated
+environment (own cache, userconfig, prefix, @HOME@) so a developer's global npm state
+cannot leak in and the only registry is the proxy. The lockfile is left __enabled__, so
+an @npm install@ here writes a @package-lock.json@ a later 'npmCiIn' installs from.
 -}
-npmInstall :: E2E -> Text -> IO NpmResult
-npmInstall e2e pkg = do
+data NpmProject = NpmProject
+    { npDir :: FilePath
+    , npEnv :: [(String, String)]
+    }
+
+{- | Bracket an isolated npm project (see 'NpmProject'): create the dirs and the pinned
+environment, run the action, then remove the project tree on every exit path.
+-}
+withNpmProject :: E2E -> (NpmProject -> IO a) -> IO a
+withNpmProject e2e use = do
     sfx <- uniqueSuffix
     tmpRoot <- getTemporaryDirectory
     let projectDir = tmpRoot </> ("ecluse-e2e-npm-" <> sfx)
@@ -247,9 +267,9 @@ npmInstall e2e pkg = do
         prefixDir = projectDir </> "prefix"
         npmrc = projectDir </> ".npmrc"
     bracket
-        (createDirectoryIfMissing True cacheDir >> createDirectoryIfMissing True prefixDir)
-        (\_ -> handleAny (const pass) (removePathForcibly projectDir))
-        ( \_ -> do
+        ( do
+            createDirectoryIfMissing True cacheDir
+            createDirectoryIfMissing True prefixDir
             writeFileText (projectDir </> "package.json") consumerPackageJson
             writeFileText npmrc ""
             baseEnv <- getEnvironment
@@ -262,7 +282,6 @@ npmInstall e2e pkg = do
                     , ("npm_config_fund", "false")
                     , ("npm_config_update_notifier", "false")
                     , ("npm_config_progress", "false")
-                    , ("npm_config_package_lock", "false")
                     , ("HOME", projectDir)
                     ]
                 cleanEnv =
@@ -270,20 +289,56 @@ npmInstall e2e pkg = do
                         (\(k, _) -> k `notElem` map fst overrides && not ("npm_config_" `isPrefixOf` k))
                         baseEnv
                         <> overrides
-                cmd =
-                    setWorkingDir projectDir . setEnv cleanEnv $
-                        proc "npm" ["install", toString pkg, "--no-save"]
-            (code, out, err) <- readProcess cmd
-            pure
-                NpmResult
-                    { npmExit = code
-                    , npmStdout = decodeUtf8 (LBS.toStrict out)
-                    , npmStderr = decodeUtf8 (LBS.toStrict err)
-                    }
+            pure NpmProject{npDir = projectDir, npEnv = cleanEnv}
         )
+        (\_ -> handleAny (const pass) (removePathForcibly projectDir))
+        use
+
+-- | Run @npm@ with the given args in a project, capturing its exit and output.
+runNpm :: NpmProject -> [String] -> IO NpmResult
+runNpm proj args = do
+    let cmd = setWorkingDir (npDir proj) . setEnv (npEnv proj) $ proc "npm" args
+    (code, out, err) <- readProcess cmd
+    pure
+        NpmResult
+            { npmExit = code
+            , npmStdout = decodeUtf8 (LBS.toStrict out)
+            , npmStderr = decodeUtf8 (LBS.toStrict err)
+            }
+
+{- | @npm install \<pkg\>@ in a project — resolves via the packument and writes the
+lockfile (@package.json@ + @package-lock.json@) for a later 'npmCiIn'.
+-}
+npmInstallIn :: NpmProject -> Text -> IO NpmResult
+npmInstallIn proj pkg = runNpm proj ["install", toString pkg]
+
+{- | @npm ci@ in a project — a deterministic install from the lockfile. It fetches each
+artifact from the lockfile's @resolved@ URL (the proxy's __private-first__ tarball path)
+and checks @integrity@, without re-resolving via the packument — so once a version is
+mirrored it never contacts the public upstream.
+-}
+npmCiIn :: NpmProject -> IO NpmResult
+npmCiIn proj = runNpm proj ["ci"]
+
+{- | @npm install \<pkg\>@ against the proxy in a throwaway project (see 'withNpmProject'),
+for the one-shot cases that only need the install's outcome.
+-}
+npmInstall :: E2E -> Text -> IO NpmResult
+npmInstall e2e pkg = withNpmProject e2e (`npmInstallIn` pkg)
 
 consumerPackageJson :: Text
 consumerPackageJson = "{\"name\":\"e2e-consumer\",\"version\":\"1.0.0\",\"private\":true}\n"
+
+{- | Pause the public-upstream stub for the duration of an action, then resume it
+(@docker pause@ / @docker unpause@). Used to prove an install is served from the private
+mirror while the public registry is unreachable: with the stub frozen, the only source
+that can answer is the mirror. Resumed on every exit path so later cases see it again.
+-}
+withUpstreamPaused :: E2E -> IO a -> IO a
+withUpstreamPaused e2e =
+    bracket_
+        (dockerOk ["pause", e2eStubContainer e2e])
+        (dockerOk ["unpause", e2eStubContainer e2e])
 
 -- ── HTTP probes ─────────────────────────────────────────────────────────────
 
@@ -322,14 +377,22 @@ verdaccioHasVersion e2e pkg version = go (40 :: Int)
   where
     go 0 = pure False
     go n = do
-        present <- handleAny (\_ -> pure False) $ do
-            req <- parseRequest (toString (e2eVerdaccio e2e <> "/" <> pkg))
-            resp <- httpLbs req (e2eManager e2e)
-            pure
-                ( statusCode (responseStatus resp) == 200
-                    && version `T.isInfixOf` decodeUtf8 (LBS.toStrict (responseBody resp))
-                )
+        present <- verdaccioHasVersionNow e2e pkg version
         if present then pure True else threadDelay 500000 >> go (n - 1)
+
+{- | A single, non-retrying check of whether the mirror already serves a version —
+the precondition probe (\"absent now\") without the patience window
+'verdaccioHasVersion' spends to confirm an absence.
+-}
+verdaccioHasVersionNow :: E2E -> Text -> Text -> IO Bool
+verdaccioHasVersionNow e2e pkg version =
+    handleAny (\_ -> pure False) $ do
+        req <- parseRequest (toString (e2eVerdaccio e2e <> "/" <> pkg))
+        resp <- httpLbs req (e2eManager e2e)
+        pure
+            ( statusCode (responseStatus resp) == 200
+                && version `T.isInfixOf` decodeUtf8 (LBS.toStrict (responseBody resp))
+            )
 
 -- ── docker helpers ────────────────────────────────────────────────────────────
 
