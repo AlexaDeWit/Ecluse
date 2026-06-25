@@ -37,11 +37,26 @@ scenarios = do
             mirrored `shouldBe` False
 
     describe "server↔worker — the mirror round-trip" $ do
-        it "mirrors an installed package to the private mirror" $ \e2e -> do
-            res <- npmInstall e2e (psName mirrorPkg)
-            npmExit res `shouldBe` ExitSuccess
-            mirrored <- verdaccioHasVersion e2e (psName mirrorPkg) (psVersion mirrorPkg)
-            mirrored `shouldBe` True
+        it "mirrors a package served from public, then installs it from the mirror with public down" $ \e2e -> do
+            -- The core resilience loop, end to end, as a real upstream-outage scenario.
+            -- A package absent from the private mirror but present on public is served
+            -- from public (an `npm install` succeeds and writes a lockfile); the worker
+            -- mirrors it to the private mirror; then, with the public upstream PAUSED, an
+            -- `npm ci` from that lockfile still installs it. `npm ci` fetches the artifact
+            -- from the lockfile's `resolved` URL (the proxy's private-first tarball path)
+            -- without re-resolving via the packument, so it never touches public — the
+            -- success proves the bytes came from the mirror, not a still-reachable public.
+            let name = psName mirrorPkg
+                ver = psVersion mirrorPkg
+            presentBefore <- verdaccioHasVersionNow e2e name ver -- (1) a miss in the private mirror
+            presentBefore `shouldBe` False
+            withNpmProject e2e $ \proj -> do
+                installed <- npmInstallIn proj name -- (2,3) served from public; writes the lockfile
+                npmExit installed `shouldBe` ExitSuccess
+                mirrored <- verdaccioHasVersion e2e name ver -- (4) the worker mirrors it to private
+                mirrored `shouldBe` True
+                fromMirror <- withUpstreamPaused e2e (npmCiIn proj) -- (5) public down → from the mirror
+                npmExit fromMirror `shouldBe` ExitSuccess
 
         it "refuses to mirror an artifact whose bytes fail the integrity gate" $ \e2e -> do
             -- A tarball request enqueues a mirror (S15 demand-driven). The proxy serves
