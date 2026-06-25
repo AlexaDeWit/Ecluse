@@ -148,7 +148,7 @@ import UnliftIO (concurrently)
 import UnliftIO.Exception (handle, throwIO, tryAny)
 
 import Ecluse.Credential (Secret, mkSecret)
-import Ecluse.Env (Env (envLogEnv, envManager, envMetadataCache, envPrivateManager, envQueue))
+import Ecluse.Env (Env (envLogEnv, envManager, envMetadataCache, envPrivateManager, envQueue, envTelemetry))
 import Ecluse.Log (moduleField)
 import Ecluse.Package (
     Artifact (artFilename, artHashes, artSize, artUrl),
@@ -232,6 +232,7 @@ import Ecluse.Server.Response (
  )
 import Ecluse.Server.Route (Filename (Filename))
 import Ecluse.Server.Stream (probeUpstreamWhen, streamUpstreamWhen)
+import Ecluse.Telemetry.Tracing (withMirrorEnqueueSpan, withRuleEvalSpan)
 import Ecluse.Version (Version, renderVersion)
 
 -- ── the handler ─────────────────────────────────────────────────────────────
@@ -1222,7 +1223,22 @@ gatePublicVersion env deps name version file = do
         Nothing -> pure (Refused upstreamUnavailable)
         Just (info, _value) -> case Map.lookup (renderVersion version) (infoVersions info) of
             Nothing -> pure (Refused versionAbsent)
-            Just details -> gateVersion evalCtx deps file details
+            Just details ->
+                -- The rule-eval domain span wraps the actual decision (only reached once
+                -- the version exists), recording the verdict so a denial → 403 is
+                -- explainable from the trace; the upstream-outage and version-absent
+                -- branches above are not rule evaluations and carry no span.
+                withRuleEvalSpan (envTelemetry env) name version $ do
+                    gate <- gateVersion evalCtx deps file details
+                    pure (gate, gateVerdict gate)
+
+-- The serve verdict a public-artifact gate outcome carries, for the rule-eval span:
+-- an admitted version admits; a refused one carries the decision the serve error
+-- model renders.
+gateVerdict :: PublicArtifactGate -> ServeDecision
+gateVerdict = \case
+    Admitted _ -> Admit
+    Refused decision -> decision
 
 {- Project a single version's two-tier rule decision to a gate outcome, selecting the
 artifact by filename on an admit. A denied version is 'Refused' with its decision; an
@@ -1399,19 +1415,20 @@ serve) is not enqueued, since there would be no digest to verify against. -}
 enqueueMirror :: Env -> PackumentDeps -> PackageName -> Version -> Artifact -> IO ()
 enqueueMirror env deps name version artifact =
     whenJust (nonEmpty (artHashes artifact)) $ \hashes ->
-        void . tryAny . enqueue (envQueue env) $
-            MirrorJob
-                { jobPackage = name
-                , jobVersion = version
-                , jobArtifactUrl = artUrl artifact
-                , jobMirrorTarget = pdMirrorTarget deps
-                , jobArtifact =
-                    MirrorArtifact
-                        { maFilename = artFilename artifact
-                        , maHashes = hashes
-                        , maSize = artSize artifact
-                        }
-                }
+        withMirrorEnqueueSpan (envTelemetry env) name version (artUrl artifact) $
+            void . tryAny . enqueue (envQueue env) $
+                MirrorJob
+                    { jobPackage = name
+                    , jobVersion = version
+                    , jobArtifactUrl = artUrl artifact
+                    , jobMirrorTarget = pdMirrorTarget deps
+                    , jobArtifact =
+                        MirrorArtifact
+                            { maFilename = artFilename artifact
+                            , maHashes = hashes
+                            , maSize = artSize artifact
+                            }
+                    }
 
 -- ── the egress gate at the serve boundary ─────────────────────────────────────────
 

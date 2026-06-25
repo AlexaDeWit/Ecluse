@@ -103,6 +103,7 @@ library
     Ecluse.Server.Stream
     Ecluse.Telemetry
     Ecluse.Telemetry.Resolve
+    Ecluse.Telemetry.Tracing
     Ecluse.Version
     Ecluse.Worker
 
@@ -132,6 +133,8 @@ library
     , http-types                      ^>=0.12
     , hs-opentelemetry-api            ^>=1.0
     , hs-opentelemetry-exporter-otlp  ^>=1.0
+    , hs-opentelemetry-instrumentation-http-client  ^>=1.0
+    , hs-opentelemetry-instrumentation-wai          ^>=1.0
     , hs-opentelemetry-sdk            ^>=1.0
     , iproute                         ^>=1.7
     , katip                           ^>=0.8.8
@@ -155,6 +158,10 @@ library
 
 executable ecluse
   import:         shared
+  -- The threaded runtime is required: with telemetry enabled the OpenTelemetry SDK
+  -- runs a batch span processor on a background thread, which aborts under the
+  -- non-threaded RTS. -N lets the server and worker use every core.
+  ghc-options:    -threaded -rtsopts "-with-rtsopts=-N"
   main-is:        Main.hs
   hs-source-dirs: app
   build-depends:  ecluse
@@ -202,6 +209,7 @@ test-suite ecluse-unit
     Ecluse.Server.RouteSpec
     Ecluse.Server.StreamSpec
     Ecluse.Telemetry.ResolveSpec
+    Ecluse.Telemetry.TracingSpec
     Ecluse.TelemetrySpec
     Ecluse.VersionOrderingSpec
     Ecluse.VersionSpec
@@ -226,6 +234,9 @@ test-suite ecluse-unit
     , http-client-tls   ^>=0.3.6
     , http-types        ^>=0.12
     , hs-opentelemetry-api  ^>=1.0
+    , hs-opentelemetry-exporter-in-memory  ^>=1.0
+    , hs-opentelemetry-instrumentation-http-client  ^>=1.0
+    , hs-opentelemetry-instrumentation-wai          ^>=1.0
     , hs-opentelemetry-sdk  ^>=1.0
     , katip             ^>=0.8.8
     , ecluse
@@ -250,8 +261,10 @@ test-suite ecluse-unit
 -- testcontainers). Hermetic and gating; the AWS cases require a Docker daemon.
 test-suite ecluse-integration
   import:             shared
-  -- hspec-discover generates a Main without an export list.
-  ghc-options:        -Wno-missing-export-lists
+  -- hspec-discover generates a Main without an export list. -threaded is required by
+  -- the OpenTelemetry batch span processor the tracing integration test drives
+  -- through the live SDK (it aborts under the non-threaded RTS).
+  ghc-options:        -Wno-missing-export-lists -threaded
   type:               exitcode-stdio-1.0
   main-is:            Spec.hs
   hs-source-dirs:     test/integration
@@ -262,6 +275,7 @@ test-suite ecluse-integration
     Ecluse.Security.EgressOriginSpec
     Ecluse.Server.GracefulShutdownSpec
     Ecluse.Server.TarballHostSpec
+    Ecluse.TelemetryTracingSpec
     Ecluse.WorkerSpec
 
   build-tool-depends: hspec-discover:hspec-discover ^>=2.11
@@ -276,6 +290,8 @@ test-suite ecluse-integration
     , hspec            ^>=2.11
     , http-client      ^>=0.7
     , http-types       ^>=0.12
+    , hs-opentelemetry-api  ^>=1.0
+    , hs-opentelemetry-sdk  ^>=1.0
     , katip            ^>=0.8.8
     , memory           ^>=0.18
     , microlens        ^>=0.4.13
