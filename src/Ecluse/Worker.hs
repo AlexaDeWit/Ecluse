@@ -89,6 +89,7 @@ import Ecluse.Env (
     recordPoll,
  )
 import Ecluse.Package (Hash (hashAlg, hashValue), HashAlg (Blake2b, MD5, SHA1, SHA256, SHA512, SRI), renderPackageName)
+import Ecluse.Package.Integrity (assertedAlg, integrityStrength)
 import Ecluse.Queue (
     MirrorArtifact (maFilename, maHashes),
     MirrorJob (jobArtifact, jobArtifactUrl, jobPackage, jobVersion),
@@ -464,42 +465,18 @@ verifyIntegrity hashes bytes =
   where
     lazyBytes = toLazy bytes
 
-    -- Algorithm authority, strongest first, so 'maximumBy' selects the digest a
-    -- match must be proven against. An SRI string is ranked by its embedded
-    -- algorithm (npm's @sha512-…@ ranks as 'SHA512'); an SRI whose inner alg is not
-    -- sha512 is a strong digest the worker cannot recompute, so it ranks at the
-    -- strong tier (above the legacy SHA-1/MD5) and the gate fails closed on it rather
-    -- than downgrading to a weaker computable digest.
+    -- Algorithm authority, strongest first, so 'maximumBy' selects the digest a match
+    -- must be proven against. It reuses the shared 'integrityStrength' ranking so the
+    -- tamper gate and the serve-admission floor agree on which algorithms are strong.
+    -- An SRI is ranked by the algorithm it asserts ('assertedAlg' — npm's @sha512-…@
+    -- ranks as 'SHA512'); an SRI whose inner alg is unrecognised is a strong digest the
+    -- worker cannot recompute, so it asserts nothing and ranks at the SHA-256 strong
+    -- tier (above the legacy SHA-1/MD5). It therefore WINS the 'maximumBy' and the gate
+    -- fails closed in 'matchStrongest', rather than downgrading to a weaker computable
+    -- digest an attacker who also controls it could forge; it stays below a computable
+    -- sha512, so a real sha512, when co-present, is still preferred and verified.
     authority :: Hash -> Int
-    authority h = case effectiveAlg h of
-        Just SHA512 -> 5
-        Just Blake2b -> 5
-        Just SHA256 -> 4
-        -- An SRI asserting a strong algorithm the worker cannot recompute (any inner
-        -- alg but sha512). It ranks at the strong tier — above the legacy SHA-1/MD5 —
-        -- so it WINS the 'maximumBy' and the gate fails closed, rather than
-        -- downgrading to a weaker computable digest an attacker who also controls it
-        -- could forge. It stays below a computable sha512, so a real sha512, when
-        -- co-present, is still preferred and verified.
-        Nothing -> 4
-        Just SHA1 -> 2
-        Just MD5 -> 1
-        Just SRI -> 0 -- unreachable: 'effectiveAlg' resolves SRI to its inner alg or 'Nothing'
-
-    -- The algorithm a hash effectively asserts: its tag directly, or — for an SRI
-    -- string — the algorithm named in its @"<alg>-<base64>"@ prefix.
-    effectiveAlg :: Hash -> Maybe HashAlg
-    effectiveAlg h = case hashAlg h of
-        SRI -> sriAlg (hashValue h)
-        alg -> Just alg
-
-    -- Parse an SRI string's leading algorithm name. Only @sha512@ is computable
-    -- here; any other (or malformed) prefix yields 'Nothing', so it cannot win the
-    -- authority ranking and, if it somehow did, fails closed in 'computeLike'.
-    sriAlg :: Text -> Maybe HashAlg
-    sriAlg sri = case fst (T.breakOn "-" sri) of
-        "sha512" -> Just SHA512
-        _ -> Nothing
+    authority = maybe (integrityStrength SHA256) integrityStrength . assertedAlg
 
     -- Whether the fetched bytes match the chosen digest, compared in that digest's
     -- own wire encoding. A hex digest (SHA-1, hex SHA-512) compares

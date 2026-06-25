@@ -297,6 +297,16 @@ spec = do
                 plan = mergePackuments [trusted, gated]
             (map divVersion . Set.toList . mpDivergences <$> plan) `shouldBe` Just ["1.0.0"]
 
+        it "private SHA-1 vs public SHA-1+SHA-256 cross-checks on the shared SHA-1 (not a divergence)" $ do
+            -- The blessed asymmetric-trust case: a private (trusted) upstream serving
+            -- only a legacy SHA-1 shasum, a public one serving that shasum plus a modern
+            -- SHA-256. They share SHA-1 and it agrees, so the cross-check passes — the
+            -- public copy independently clears the admission floor on its SHA-256, and
+            -- the asymmetric SHA-256 is no contradiction.
+            let trusted = (TrustedSource, packumentWith [("1.0.0", [sha1 "abc"])])
+                gated = (GatedSource, packumentWith [("1.0.0", [sha1 "abc", Hash SHA256 "def"])])
+            (mpDivergences <$> mergePackuments [trusted, gated]) `shouldBe` Just Set.empty
+
         it "SRI+SHA-1 vs SHA-1-only, agreeing on the shared SHA-1, is not a divergence" $ do
             -- One copy carries sha512 + sha1, the other only the legacy sha1, and that
             -- single shared algorithm agrees. With no contradiction on a shared

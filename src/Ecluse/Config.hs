@@ -105,6 +105,7 @@ import Ecluse.Credential (Secret, mkSecret)
 import Ecluse.Ecosystem (Ecosystem (Npm), parseEcosystem)
 import Ecluse.Log (LogFormat (..), parseLogFormat)
 import Ecluse.Package (mkScope)
+import Ecluse.Package.Integrity (MinIntegrity, defaultMinIntegrity, parseMinIntegrity)
 import Ecluse.Rules.Types (
     PrecededRule (..),
     Rule (..),
@@ -352,6 +353,15 @@ data EnvConfig = EnvConfig
     it reads a leading-slash @dist.tarball@ as a local @file:@ path — so any
     deployment that serves real @npm install@s must set this.
     -}
+    , cfgMinPublicIntegrity :: MinIntegrity
+    {- ^ The minimum integrity algorithm a __public__ (untrusted) version's digest
+    must meet to be admitted (@PROXY_MIN_PUBLIC_INTEGRITY@, default @sha256@). A
+    public version whose strongest digest is weaker than this floor (e.g. a SHA-1
+    shasum only) is refused, since a collision-broken digest cannot tie its bytes to
+    a tamper-evident fingerprint. The floor may be raised (@sha512@, @blake2b@) but
+    never set below SHA-256 — a sub-floor value is rejected at load. The trusted
+    private upstream is exempt (see "Ecluse.Package.Integrity").
+    -}
     }
     deriving stock (Eq, Show)
 
@@ -416,6 +426,10 @@ envParser =
         <*> Env.var logFormatReader "PROXY_LOG_FORMAT" (Env.def JsonLog)
         <*> Env.var telemetrySwitchReader "PROXY_TELEMETRY" (Env.def TelemetryOff)
         <*> optionalUrl "PROXY_PUBLIC_URL"
+        -- The public-integrity admission floor (default sha256, the hard minimum). A
+        -- value below SHA-256 or an unknown algorithm is rejected loudly here rather
+        -- than clamped, so a misconfiguration cannot silently weaken admission.
+        <*> Env.var minIntegrityReader "PROXY_MIN_PUBLIC_INTEGRITY" (Env.def defaultMinIntegrity)
   where
     defaultPublicUpstream :: Url
     defaultPublicUpstream = Url "https://registry.npmjs.org"
@@ -485,6 +499,11 @@ logFormatReader = textReader parseLogFormat
 -- 'parseTelemetrySwitch's reason.
 telemetrySwitchReader :: Env.Reader Env.Error TelemetrySwitch
 telemetrySwitchReader = textReader parseTelemetrySwitch
+
+-- An 'Env.Reader' for the public-integrity floor: an algorithm name, rejected if
+-- unknown or weaker than SHA-256 (the hard minimum).
+minIntegrityReader :: Env.Reader Env.Error MinIntegrity
+minIntegrityReader = textReader parseMinIntegrity
 
 -- An 'Env.Reader' for a boolean flag. Accepts the conventional spellings
 -- case-insensitively and rejects anything else loudly (fail-fast, never a silent

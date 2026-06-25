@@ -72,6 +72,7 @@ import Ecluse.Config (
  )
 import Ecluse.Credential (AuthToken (..), CredentialProvider, Secret, staticProvider)
 import Ecluse.Ecosystem (Ecosystem, ecosystemName, prefixFor)
+import Ecluse.Package.Integrity (MinIntegrity)
 import Ecluse.Security (Limits (Limits, maxBodyBytes, maxNestingDepth, maxVersionCount), TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), lowerCaseHosts)
 import Ecluse.Server.Cache (CacheConfig (..))
 import Ecluse.Server.Context (MountBinding, PackumentDeps (..))
@@ -226,6 +227,11 @@ composeBindings resolveAdapter clock providers config =
     helpMessage :: Maybe HelpMessage
     helpMessage = mkHelpMessage <$> cfgHelpMessage (configEnv config)
 
+    -- The global public-integrity admission floor, validated at config load, carried
+    -- onto every mount's deps so the public gate refuses a below-floor version.
+    minIntegrity :: MinIntegrity
+    minIntegrity = cfgMinPublicIntegrity (configEnv config)
+
     -- A mount's externally-visible base URL for the dist.tarball rewrite. Absolute
     -- under PROXY_PUBLIC_URL when set (so a served tarball is a full URL an npm
     -- client can fetch); otherwise the relative prefix path, retained for
@@ -287,6 +293,7 @@ composeBindings resolveAdapter clock providers config =
                 , pdInboundToken = inboundToken
                 , pdNow = clock
                 , pdHelp = helpMessage
+                , pdMinIntegrity = minIntegrity
                 }
 
 -- The mount's externally-visible base path, derived from its ecosystem prefix

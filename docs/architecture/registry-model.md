@@ -160,17 +160,24 @@ deduplicating.
   the same bytes and is **not** a divergence: a weak digest agreeing never suppresses
   a contradicting strong one, and a strong digest agreeing makes the asymmetric weak
   one irrelevant.
-- **A hashless public version is inadmissible (admission, not merge).** Divergence
+- **A below-floor public version is inadmissible (admission, not merge).** Divergence
   detection compares a version's integrity fingerprint across upstreams, so a public
-  version that carries **no integrity digest at all** (neither `dist.integrity` nor
-  `dist.shasum` — both optional on the wire) is a blind spot: two differing-byte
-  hashless copies fingerprint identically (an empty fingerprint), so a divergence
-  would go undetected. Écluse resolves this **at admission, not in the merge**: a
-  public version with no integrity digest is **refused before it reaches the merge**
-  — the artifact gate `403`s it and the gated set drops it from the served listing —
-  so it never contributes a hashless fingerprint and a client never sees a version it
-  could not verify. The **trusted private upstream is exempt** (its versions enter
-  unfiltered). This is [security invariant 5](security.md#invariants).
+  version whose strongest digest is too weak (or absent) is a blind spot: two
+  differing-byte copies that carry no digest, or only a collision-broken one, can
+  fingerprint-collide so a divergence goes undetected. Écluse resolves this **at
+  admission, not in the merge**: a public version whose strongest digest does not meet
+  the configurable **integrity floor** (`PROXY_MIN_PUBLIC_INTEGRITY`, default SHA-256)
+  is **refused before it reaches the merge** — the artifact gate `403`s it
+  (`MissingIntegrity` for no digest, `BelowIntegrityFloor` for a too-weak one) and the
+  gated set drops it from the served listing — so it never contributes a weak
+  fingerprint and a client never sees a version it could not safely verify. With the
+  floor enforced at admission, a below-floor public version never reaches the merge, so
+  the cross-upstream divergence reasons over fingerprints that are each anchored on a
+  strong digest; the **private-weak / public-strong** cross-check on a shared weak
+  digest stays valid because the public copy independently cleared the floor. The
+  **trusted private upstream is exempt** (its versions enter unfiltered, so a SHA-1-only
+  private version is still served). This is
+  [security invariant 5](security.md#invariants).
 - **Reconcile over the union.** `dist-tags.latest` follows the **keep-unless-denied,
   stable-preferring** rule (see
   [Applying verdicts to a packument](rules-engine.md#applying-verdicts-to-a-packument)):

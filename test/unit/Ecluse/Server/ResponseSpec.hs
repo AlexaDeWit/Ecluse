@@ -101,6 +101,9 @@ spec = do
         it "a missing-integrity refusal is a 403 (an admission-policy denial)" $
             artifactStatus (Reject (Rejection MissingIntegrity "no integrity"))
                 `shouldBe` Forbidden
+        it "a below-floor refusal is a 403 (an admission-policy denial)" $
+            artifactStatus (Reject (Rejection BelowIntegrityFloor "too weak"))
+                `shouldBe` Forbidden
 
     describe "artifactStatusCode — numeric HTTP codes" $ do
         it "Ok is 200" $ artifactStatusCode Ok `shouldBe` 200
@@ -147,6 +150,9 @@ spec = do
             packumentStatus [denied, broken] `shouldBe` PackumentServerError
         it "is 403 when no survivor and the only exclusion is a missing-integrity refusal" $
             packumentStatus [Reject (Rejection MissingIntegrity "no integrity")]
+                `shouldBe` PackumentForbidden
+        it "is 403 when no survivor and the only exclusion is a below-floor refusal" $
+            packumentStatus [Reject (Rejection BelowIntegrityFloor "too weak")]
                 `shouldBe` PackumentForbidden
         it "is 502 when a responding upstream returned a packument for a different package" $
             packumentStatus [invalid] `shouldBe` PackumentBadGateway

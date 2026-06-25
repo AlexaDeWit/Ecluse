@@ -27,6 +27,8 @@ import Ecluse.Config (
  )
 import Ecluse.Credential (authSecret, currentToken, unSecret)
 import Ecluse.Ecosystem (Ecosystem (..))
+import Ecluse.Package (HashAlg (SHA512))
+import Ecluse.Package.Integrity (defaultMinIntegrity, mkMinIntegrity)
 import Ecluse.Security (Limits (maxBodyBytes, maxNestingDepth, maxVersionCount), TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), defaultLimits)
 import Ecluse.Server.Cache (CacheConfig (cacheMaxEntries, cacheTtl))
 import Ecluse.Server.Context (
@@ -267,6 +269,25 @@ composeBindingsSpec = describe "planMounts / composeBindings (config-driven serv
                     maxBodyBytes (pdLimits deps) `shouldBe` 2048
                     maxVersionCount (pdLimits deps) `shouldBe` 10
                     maxNestingDepth (pdLimits deps) `shouldBe` 16
+                Nothing -> expectationFailure "expected packument deps wired"
+            other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
+
+    it "defaults the public-integrity floor to SHA-256 onto the deps" $ do
+        -- With PROXY_MIN_PUBLIC_INTEGRITY unset, every mount's deps carry the default
+        -- SHA-256 floor the public admission gate enforces.
+        env <- expectEnv staticEnvVars
+        planFrom env Nothing >>= \case
+            Right [binding] -> case bindingPackumentDeps binding of
+                Just deps -> pdMinIntegrity deps `shouldBe` defaultMinIntegrity
+                Nothing -> expectationFailure "expected packument deps wired"
+            other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
+
+    it "threads a raised public-integrity floor onto the deps" $ do
+        sha512Floor <- either (fail . toString) pure (mkMinIntegrity SHA512)
+        env <- expectEnv (("PROXY_MIN_PUBLIC_INTEGRITY", "sha512") : staticEnvVars)
+        planFrom env Nothing >>= \case
+            Right [binding] -> case bindingPackumentDeps binding of
+                Just deps -> pdMinIntegrity deps `shouldBe` sha512Floor
                 Nothing -> expectationFailure "expected packument deps wired"
             other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
 

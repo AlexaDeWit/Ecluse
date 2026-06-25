@@ -38,7 +38,8 @@ import Ecluse.Credential (AuthToken (..), CredentialProvider, mkSecret, staticPr
 import Ecluse.Ecosystem (Ecosystem (Npm))
 import Ecluse.Env (Env (envQueue), newEnv, newWorkerHeartbeat)
 import Ecluse.Log (LogFormat (JsonLog), newLogEnv)
-import Ecluse.Package (PackageName, mkPackageName)
+import Ecluse.Package (HashAlg (SHA512), PackageName, mkPackageName)
+import Ecluse.Package.Integrity (defaultMinIntegrity, mkMinIntegrity)
 import Ecluse.Queue (
     MirrorJob (jobArtifactUrl, jobMirrorTarget, jobPackage, jobVersion),
     MirrorQueue (enqueue, receive),
@@ -444,6 +445,24 @@ versionObject version integrity hasInstall =
 plainVersion :: Text -> Value
 plainVersion version = versionObject version ("sha512-" <> version <> "-int") False
 
+{- | A version object carrying __only a legacy SHA-1 shasum__ (a @dist@ with a tarball
+and @shasum@ but no @integrity@ SRI), so it projects to an artifact whose strongest
+digest is SHA-1 — below the default SHA-256 floor. The integrity-floor admission policy
+refuses such a version from a /public/ upstream; a /private/ one is exempt.
+-}
+shasumOnlyVersion :: Text -> Value
+shasumOnlyVersion version =
+    object
+        [ "name" .= ("thing" :: Text)
+        , "version" .= version
+        , "dist"
+            .= object
+                [ "tarball" .= ("https://upstream.example/thing/-/thing-" <> version <> ".tgz")
+                , "shasum" .= ("deadbeef" :: Text)
+                ]
+        , "_unmodeled" .= ("kept" :: Text)
+        ]
+
 {- | A version object carrying __no integrity digest at all__: a @dist@ with a
 @tarball@ but neither @integrity@ nor @shasum@ (both optional on the wire), so it
 projects to an artifact with empty @artHashes@. The integrity-presence admission
@@ -531,6 +550,7 @@ deps privatePort publicPort inbound =
         , pdInboundToken = mkSecret <$> inbound
         , pdNow = pure now
         , pdHelp = Nothing
+        , pdMinIntegrity = defaultMinIntegrity
         }
 
 {- | The packument-serve dependencies as 'deps', but with the given effectful rules
@@ -856,6 +876,80 @@ mergeSpec = describe "multi-upstream merge (not fallback)" $ do
             resp <- getThing Nothing app
             status resp `shouldBe` 200
             servedVersions resp `shouldBe` ["1.0.0"]
+
+    it "rejects a public version whose only digest is below the floor (SHA-1 shasum)" $ do
+        -- Public 2.0.0 carries only a legacy SHA-1 shasum (below the default SHA-256
+        -- floor) → inadmissible, filtered from the served packument. (This is also the
+        -- matrix's forbidden case: a public SHA-1-only version is rejected regardless of
+        -- what a private upstream carries.) Public 1.0.0 has a sha512 digest → kept.
+        privateUp <- failingUpstream
+        publicUp <-
+            servingUpstream
+                ( encodePackument
+                    ( packument
+                        [("1.0.0", plainVersion "1.0.0"), ("2.0.0", shasumOnlyVersion "2.0.0")]
+                        "1.0.0"
+                        [("1.0.0", publishedDaysAgo 30), ("2.0.0", publishedDaysAgo 30)]
+                    )
+                )
+        withProxy privateUp publicUp Nothing $ \app -> do
+            resp <- getThing Nothing app
+            status resp `shouldBe` 200
+            servedVersions resp `shouldBe` ["1.0.0"]
+
+    it "admits a public version carrying a SHA-256 integrity digest (meets the floor)" $ do
+        -- A public version whose integrity SRI is sha256 clears the default SHA-256
+        -- floor and is served (alongside its legacy shasum, which is irrelevant once a
+        -- floor-clearing digest is present).
+        privateUp <- failingUpstream
+        publicUp <-
+            servingUpstream
+                ( encodePackument
+                    ( packument
+                        [("1.0.0", versionObject "1.0.0" "sha256-Zm9vYmFy" False)]
+                        "1.0.0"
+                        [("1.0.0", publishedDaysAgo 30)]
+                    )
+                )
+        withProxy privateUp publicUp Nothing $ \app -> do
+            resp <- getThing Nothing app
+            status resp `shouldBe` 200
+            servedVersions resp `shouldBe` ["1.0.0"]
+
+    it "lists a SHA-1-only version from the trusted private upstream (the floor is public-only)" $ do
+        -- The integrity floor applies to public versions only: a trusted private version
+        -- carrying just a legacy SHA-1 shasum still enters the merge and is served.
+        privateUp <-
+            servingUpstream
+                (encodePackument (privatePackumentWith [("1.0.0", shasumOnlyVersion "1.0.0")] "1.0.0"))
+        publicUp <- failingUpstream
+        withProxy privateUp publicUp Nothing $ \app -> do
+            resp <- getThing Nothing app
+            status resp `shouldBe` 200
+            servedVersions resp `shouldBe` ["1.0.0"]
+
+    it "rejects a public SHA-256 version when the floor is raised to SHA-512 (the floor value is wired)" $ do
+        -- The floor VALUE flows from config to the gate, not just its presence: under
+        -- the default SHA-256 floor this sha256 version is admitted, but with the floor
+        -- raised to SHA-512 it no longer clears it and is filtered, leaving only the
+        -- trusted private 3.0.0.
+        sha512Floor <- either (fail . toString) pure (mkMinIntegrity SHA512)
+        privateUp <-
+            servingUpstream (encodePackument (privatePackumentWith [("3.0.0", plainVersion "3.0.0")] "3.0.0"))
+        publicUp <-
+            servingUpstream
+                ( encodePackument
+                    ( packument
+                        [("1.0.0", versionObject "1.0.0" "sha256-Zm9vYmFy" False)]
+                        "1.0.0"
+                        [("1.0.0", publishedDaysAgo 30)]
+                    )
+                )
+        queue <- newInMemoryQueue
+        withProxyEnvQueueDeps queue privateUp publicUp Nothing (\d -> d{pdMinIntegrity = sha512Floor}) $ \app _env _port -> do
+            resp <- getThing Nothing app
+            status resp `shouldBe` 200
+            servedVersions resp `shouldBe` ["3.0.0"]
 
     it "serves the private copy on an integrity divergence (private wins; flagged in the merge)" $ do
         -- Same version key, differing integrity across upstreams: the private copy
