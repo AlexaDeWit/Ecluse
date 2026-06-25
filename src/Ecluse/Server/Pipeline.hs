@@ -105,6 +105,15 @@ swallowed rather than failing or delaying the response. Mirroring is
 __demand-driven__ — a job is enqueued only here, on a tarball-path admit, never when
 a packument is filtered. The serve path does __not__ verify @dist.integrity@; the
 client checks the artifact's own hash and the worker re-verifies before publishing.
+
+An artifact is a __pass-through__ body — served byte-identical to upstream's — so its
+conditional-GET handling __relays__ rather than computing an own ETag (see
+@docs\/architecture\/web-layer.md@ → "Middleware and helper libraries", and contrast
+the merged-packument own-ETag path): the client's @If-None-Match@\/@If-Modified-Since@
+are forwarded onto the upstream artifact request on __both__ legs ('forwardValidators'),
+and an upstream @304 Not Modified@ is relayed straight back to the client as a bodiless
+@304@ ('isNotModified' via the relay's accept predicate) rather than re-downloading the
+tarball — the cheap freshness check on the hot artifact path.
 -}
 module Ecluse.Server.Pipeline (
     -- * The packument handler
@@ -131,7 +140,7 @@ import Lens.Micro ((^?))
 import Lens.Micro.Aeson (key, _Object)
 import Network.HTTP.Client (Manager)
 import Network.HTTP.Client qualified as HTTP
-import Network.HTTP.Types (ResponseHeaders, Status, hAuthorization, hContentType, methodHead, mkStatus, status200, status401, status501, statusIsSuccessful)
+import Network.HTTP.Types (RequestHeaders, ResponseHeaders, Status, hAuthorization, hContentType, methodHead, mkStatus, status200, status401, status501, statusIsSuccessful)
 import Network.Wai (Request, Response, ResponseReceived, requestHeaders, responseHeaders, responseLBS, responseStatus)
 import UnliftIO (concurrently)
 import UnliftIO.Exception (handle, throwIO, tryAny)
@@ -183,7 +192,7 @@ import Ecluse.Security (
     tarballHostAllowed,
  )
 import Ecluse.Server.Cache (CacheEntry (CacheEntry, entryInfo, entryRaw), Source (Source), resolveMetadata)
-import Ecluse.Server.Conditional (Conditional (Modified, NotModified), etagHeader, evaluateOwnETag)
+import Ecluse.Server.Conditional (Conditional (Modified, NotModified), etagHeader, evaluateOwnETag, forwardValidators, isNotModified)
 import Ecluse.Server.Context (
     Handler,
     MountBinding (bindingPackumentDeps, bindingRenderer),
@@ -939,10 +948,14 @@ serveTarballWithDeps mode renderer deps name version (Filename file) request res
         env <- asks ctxEnv
         liftIO $ do
             let clientToken = forwardedToken request
-            privateHit <- streamPrivateArtifact mode env deps clientToken name version file respond
+                -- The client's conditional validators, relayed onto the upstream
+                -- artifact request on both legs so upstream can answer a 304 for a
+                -- pass-through body we serve unchanged (the conditional-GET contract).
+                validators = forwardValidators (requestHeaders request)
+            privateHit <- streamPrivateArtifact mode env deps clientToken validators name version file respond
             case privateHit of
                 Just received -> pure received
-                Nothing -> servePublicArtifact mode env renderer deps name version file respond
+                Nothing -> servePublicArtifact mode env renderer deps validators name version file respond
 
 {- Stream the artifact from the __trusted__ private upstream at its __authoritative
 location__: fetch the private packument (uncached, forwarding the client's credential
@@ -970,32 +983,40 @@ same-host private tarball is admitted by default and a cross-host one refused.
 A failure that strikes __after__ a @2xx@ has begun streaming is unrecoverable — the
 response is already on the wire — so 'streamUpstreamWhen' lets it propagate rather
 than reporting a miss: the request fails internally (the connection is torn down)
-instead of responding a second time over a half-sent artifact. -}
+instead of responding a second time over a half-sent artifact.
+
+The client's conditional @validators@ are relayed onto the upstream artifact request
+('forwardValidators' filtered them upstream), and the relay accepts an upstream @304
+Not Modified@ ('acceptArtifact') as well as a @2xx@: a private tarball is a
+pass-through body, so upstream's own validator is authoritative and a @304@ is relayed
+straight back to the client (bodiless) rather than treated as a private miss
+falling through to the public origin. -}
 streamPrivateArtifact ::
     ArtifactServe ->
     Env ->
     PackumentDeps ->
     Maybe Secret ->
+    RequestHeaders ->
     PackageName ->
     Version ->
     Text ->
     (Response -> IO ResponseReceived) ->
     IO (Maybe ResponseReceived)
-streamPrivateArtifact mode env deps token name version file respond = do
+streamPrivateArtifact mode env deps token validators name version file respond = do
     selected <- selectPrivateArtifact env deps token name version file
     case privateRequestFor =<< selected of
-        Just req -> relayUpstreamWhen mode (envPrivateManager env) req statusIsSuccessful relayArtifact respond
+        Just req -> relayUpstreamWhen mode (envPrivateManager env) req acceptArtifact relayArtifact respond
         Nothing -> pure Nothing
   where
     -- Form the honoured-URL request for a selected private artifact, when its host
     -- passes the tarball-host policy and its URL parses. 'Nothing' on either refusal —
     -- a private miss the caller falls through on, never a fabricated reconstruction.
     -- The request is marked with the serve mode's method (GET / HEAD) so a HEAD probes
-    -- bodiless.
+    -- bodiless, and carries the client's relayed conditional validators.
     privateRequestFor :: Artifact -> Maybe HTTP.Request
     privateRequestFor artifact =
         if tarballHostHonoured TrustedOrigin deps (pdPrivateBaseUrl deps) (artUrl artifact)
-            then withMethod mode <$> rightToMaybe (artifactRequestByUrl (clientConfig (pdLimits deps) (envPrivateManager env) (pdPrivateBaseUrl deps) token) (artUrl artifact))
+            then withValidators validators . withMethod mode <$> rightToMaybe (artifactRequestByUrl (clientConfig (pdLimits deps) (envPrivateManager env) (pdPrivateBaseUrl deps) token) (artUrl artifact))
             else Nothing
 
 {- Fetch the private packument (uncached, with the client's credential) and select
@@ -1019,15 +1040,16 @@ servePublicArtifact ::
     Env ->
     MountRenderer ->
     PackumentDeps ->
+    RequestHeaders ->
     PackageName ->
     Version ->
     Text ->
     (Response -> IO ResponseReceived) ->
     IO ResponseReceived
-servePublicArtifact mode env renderer deps name version file respond = do
+servePublicArtifact mode env renderer deps validators name version file respond = do
     gated <- gatePublicVersion env deps name version file
     case gated of
-        Admitted artifact -> streamPublicArtifact mode env renderer deps name version artifact respond
+        Admitted artifact -> streamPublicArtifact mode env renderer deps validators name version artifact respond
         Refused decision -> respond (artifactError renderer deps (artifactStatus decision) decision)
 
 {- The outcome of gating a single requested artifact on the public path: either the
@@ -1126,20 +1148,27 @@ mount's renderer — not left to escape as a bare @500@. Any upstream status is 
 verbatim (the @accept@ predicate is total); only a failure __after__ the stream is
 committed propagates, the connection torn down as it unwinds, so a half-sent artifact
 is never followed by a second response. The mirror enqueue runs only on the committed
-path, after the response is begun. -}
+path, after the response is begun.
+
+The client's conditional @validators@ are relayed onto the upstream artifact request
+('forwardValidators' filtered them); the public artifact is a pass-through body, so an
+upstream @304 Not Modified@ is relayed straight back to the client (bodiless, via
+'streamUpstreamWhen'), the bytes never re-downloaded. The validators carry no
+credential and the public fetch stays anonymous. -}
 streamPublicArtifact ::
     ArtifactServe ->
     Env ->
     MountRenderer ->
     PackumentDeps ->
+    RequestHeaders ->
     PackageName ->
     Version ->
     Artifact ->
     (Response -> IO ResponseReceived) ->
     IO ResponseReceived
-streamPublicArtifact mode env renderer deps name version artifact respond =
+streamPublicArtifact mode env renderer deps validators name version artifact respond =
     if tarballHostHonoured UntrustedOrigin deps (pdPublicBaseUrl deps) (artUrl artifact)
-        then case withMethod mode <$> artifactRequestByUrl (clientConfig (pdLimits deps) (envManager env) (pdPublicBaseUrl deps) Nothing) (artUrl artifact) of
+        then case withValidators validators . withMethod mode <$> artifactRequestByUrl (clientConfig (pdLimits deps) (envManager env) (pdPublicBaseUrl deps) Nothing) (artUrl artifact) of
             Right req ->
                 relayUpstreamWhen mode (envManager env) req (const True) relayArtifact respond >>= \case
                     Just received -> do
@@ -1160,6 +1189,24 @@ withMethod :: ArtifactServe -> HTTP.Request -> HTTP.Request
 withMethod = \case
     ServeFull -> id
     ServeHead -> \req -> req{HTTP.method = methodHead}
+
+{- Relay the client's conditional validators (the @If-None-Match@ \/ @If-Modified-Since@
+'forwardValidators' filtered) onto an upstream artifact request, so upstream can answer
+a @304 Not Modified@ for a pass-through body we serve unchanged. An empty validator set
+(the client sent none) leaves the request unconditional. -}
+withValidators :: RequestHeaders -> HTTP.Request -> HTTP.Request
+withValidators validators req =
+    req{HTTP.requestHeaders = validators <> HTTP.requestHeaders req}
+
+{- The upstream artifact statuses the private relay accepts back to the client: a
+@2xx@ success (the streamed artifact) or a @304 Not Modified@ (the pass-through
+conditional-GET relay — the client's relayed validators matched upstream's, so the
+unchanged artifact is answered as a bodiless @304@ by 'streamUpstreamWhen' rather than
+re-downloaded). Any other status is a clean private miss the caller falls through on.
+(The public relay accepts every status — it relays whatever the public origin returns
+verbatim — so it needs no predicate of its own.) -}
+acceptArtifact :: Status -> Bool
+acceptArtifact s = statusIsSuccessful s || isNotModified s
 
 {- Relay an upstream artifact response in the serve mode: 'ServeFull' streams the body
 through with bounded memory ('streamUpstreamWhen'); 'ServeHead' probes bodiless,
