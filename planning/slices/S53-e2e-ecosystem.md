@@ -82,10 +82,14 @@ each via `make test-e2e` and in the CI e2e job):
 - [x] **deny:** a package carrying an **install script** (denied by
   `DenyInstallTimeExecution`) is **blocked at the public surface** — `npm install`
   fails and the package is never mirrored.
-- [x] **mirror round-trip (headline):** an `npm install` triggers a demand-driven
-  enqueue; the worker mirrors the artifact to Verdaccio (server↔worker, in one
-  process over the in-memory queue), and the version becomes present in the private
-  mirror.
+- [x] **mirror round-trip (headline):** the full core loop, end to end, as an
+  upstream-outage scenario — a package missing from the private mirror but present on
+  public is **served from public** (an `npm install` writes a lockfile), the worker
+  mirrors the artifact to Verdaccio (server↔worker, in one process over the in-memory
+  queue), and then, **with the public upstream paused**, an `npm ci` from that lockfile
+  still installs it **from the private mirror** (the tarball path is private-first and
+  `npm ci` never re-resolves via the packument, so public is never contacted) — proving
+  the served-from-mirror hop, not merely its presence.
 - [x] **integrity tamper:** the public stub serves an artifact whose bytes do
   **not** match the version's integrity; the worker's strongest-digest gate
   **rejects it and never publishes** (the mirror stays empty for that version).
