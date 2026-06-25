@@ -285,6 +285,22 @@ the **private** (trusted) upstream slot, not the public one. See
   stdout log-collector autodiscovery, or `console` for local development. Bearer tokens are
   carried as a redacted type whose rendering is a placeholder, so token material never reaches
   a log field.
+- **Telemetry (opt-in).** OpenTelemetry traces and metrics are **off by default**; set
+  `PROXY_TELEMETRY=on` to enable them. Identity and endpoint are **self-aligning across
+  dialects**: set the `DD_*` variables (`DD_SERVICE`, `DD_ENV`, `DD_VERSION`, `DD_AGENT_HOST`)
+  if you run Datadog, or the standard `OTEL_*` ones for any other backend — the `DD_*` form
+  wins where both are present, and the same resolved identity stamps both your traces and the
+  `dd` object on every log line. `DD_API_KEY`/`DD_SITE` are deliberately ignored: Écluse only
+  ever exports to a node-local collector or Agent.
+  - **Agent-only by default.** Export goes to `http://localhost:4318` (or your
+    `DD_AGENT_HOST`/`OTEL_EXPORTER_OTLP_ENDPOINT`). A telemetry endpoint that resolves to a
+    **public** address makes the proxy refuse to start — set
+    `PROXY_TELEMETRY_ALLOW_PUBLIC_EGRESS=true` to deliberately export off-cluster
+    (authenticate with `OTEL_EXPORTER_OTLP_HEADERS`).
+  - **Never on the request path.** Export is asynchronous and batched, so an unreachable
+    collector never slows or fails a served request; an absent endpoint logs one boot warning
+    and falls back to localhost, and persistent export errors are logged once and then
+    throttled to a periodic heartbeat rather than flooding your logs.
 - **Search.** `GET /-/v1/search` returns `501` by design: search is a discovery convenience,
   not an install path. Use the public registry's website to discover packages.
 

@@ -99,8 +99,9 @@ import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
 import Data.Time (getCurrentTime)
-import Katip (Environment (Environment))
+import Katip (Environment (Environment), LogEnv)
 import Network.HTTP.Client (Manager)
+import System.Environment (getEnvironment)
 import UnliftIO (concurrently_, throwIO)
 
 import Ecluse.Composition (
@@ -138,7 +139,8 @@ import Ecluse.Server (MountBinding (..), ServerConfig (scDrainTimeout, scPort), 
 import Ecluse.Server qualified as Server
 import Ecluse.Server.Cache (newMetadataCache)
 import Ecluse.Server.Context (PackumentDeps)
-import Ecluse.Telemetry (withTelemetry)
+import Ecluse.Telemetry (TelemetrySwitch (TelemetryOff, TelemetryOn), withTelemetry)
+import Ecluse.Telemetry.Resolve (prepareTelemetry)
 import Ecluse.Worker qualified as Worker
 
 {- | Start Écluse: the entry point the @ecluse@ executable runs (see "Main").
@@ -185,6 +187,10 @@ run = do
     metadataCache <- newMetadataCache (Composition.cacheConfigFor env)
     logEnv <- newLogEnv (cfgLogFormat env) (Environment "production")
     heartbeat <- newWorkerHeartbeat
+    -- Resolve the telemetry identity, gate public egress, and normalise the OTEL_*
+    -- environment the SDK reads — all before the substrate initialises. A no-op when
+    -- telemetry is off; a fail-loud boot abort on a public endpoint without the opt-in.
+    prepareTelemetryBoot (cfgTelemetry env) logEnv
     withTelemetry (cfgTelemetry env) $ \telemetry ->
         withEnv publishClient queue (mirrorWriteProvider providers) manager privateManager metadataCache logEnv telemetry heartbeat (runServices serverConfig)
 
@@ -231,6 +237,19 @@ orExit :: (e -> Text) -> Either e a -> IO a
 orExit render = \case
     Right a -> pure a
     Left err -> TIO.hPutStrLn stderr (render err) >> throwIO BootAborted
+
+{- Prepare the telemetry substrate before the SDK initialises: when enabled, resolve
+the identity, gate public egress, normalise the @OTEL_*@ environment, and install the
+throttled export-error handler ("Ecluse.Telemetry.Resolve.prepareTelemetry"); a
+fail-loud reason (a public endpoint without the opt-in, or a malformed flag) aborts
+the boot. A no-op when telemetry is off, so an unset @PROXY_TELEMETRY@ reads no
+process environment and gates nothing. -}
+prepareTelemetryBoot :: TelemetrySwitch -> LogEnv -> IO ()
+prepareTelemetryBoot switch logEnv = case switch of
+    TelemetryOff -> pass
+    TelemetryOn -> do
+        environment <- getEnvironment
+        prepareTelemetry logEnv environment >>= orExit identity
 
 {- Run the server and the mirror worker concurrently over one composition-root
 'Env', the shape the single-process program uses. The two are independent (each
