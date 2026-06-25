@@ -40,6 +40,8 @@ import Network.HTTP.Types (ResponseHeaders, Status)
 import Network.Wai (Response, ResponseReceived, responseLBS, responseStream)
 import UnliftIO.Exception (finally, tryAny)
 
+import Ecluse.Server.Conditional (isNotModified)
+
 {- | Stream an upstream response through to the client with constant memory.
 
 The upstream connection is opened with @withResponse@ __bracketed around the
@@ -84,6 +86,13 @@ outcomes are deliberately kept apart:
   response), but propagates — the connection torn down as it unwinds — so the
   caller fails internally rather than responding again.
 
+A passing 'isNotModified' (@304 Not Modified@) status is the __pass-through
+conditional-GET relay__: it is committed like any accepted status, but answered
+__bodiless__ ('responseLBS' over an empty body) rather than pumped, since a @304@
+carries no body (RFC 9110 §15.4.5) — the upstream body reader is never read. This is
+how a client validator relayed upstream that matches comes straight back as a @304@,
+the artifact never re-downloaded.
+
 Only the connection open is caught here; once @respond@ is reached exceptions fly.
 The connection is released on every path: a rejected status closes it before
 returning, a streamed (or failed) body closes it as the stream unwinds.
@@ -110,6 +119,12 @@ streamUpstreamWhen manager request accept relay respond =
   where
     stream upstream
         | not (accept upstreamStatus) = pure Nothing
+        | isNotModified upstreamStatus =
+            -- A 304 carries no body: relay it bodiless rather than pumping (the
+            -- upstream body reader is never read), the pass-through conditional-GET
+            -- not-modified relay.
+            let (status, headers) = relay upstreamStatus (responseHeaders upstream)
+             in Just <$> respond (responseLBS status headers "")
         | otherwise =
             let (status, headers) = relay upstreamStatus (responseHeaders upstream)
              in Just

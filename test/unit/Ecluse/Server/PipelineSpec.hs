@@ -18,8 +18,8 @@ import Data.Time.Format.ISO8601 (iso8601Show)
 import GHC.IO.Handle (hClose, hDuplicate, hDuplicateTo)
 import Katip (Environment (Environment), Namespace (Namespace), closeScribes, initLogEnv)
 import Network.HTTP.Client (Manager, defaultManagerSettings, newManager)
-import Network.HTTP.Types (Header, hAuthorization, methodHead, status200, status404, status500, statusCode, statusMessage)
-import Network.HTTP.Types.Header (hHost)
+import Network.HTTP.Types (Header, hAuthorization, methodHead, status200, status304, status404, status500, statusCode, statusMessage)
+import Network.HTTP.Types.Header (hETag, hHost, hIfNoneMatch)
 import Network.Wai (Application, Request (rawPathInfo, requestHeaders, requestMethod), Response, responseLBS, responseRaw)
 import Network.Wai.Handler.Warp (testWithApplication)
 import Network.Wai.Test (
@@ -101,12 +101,15 @@ policy =
 {- | An in-process upstream double: it records the @Authorization@ header of every
 request it receives (so the credential-authority invariant is assertable), records
 the HTTP method of every artifact-slot (tarball) request it receives (so a HEAD that
-must not pump the artifact body is assertable), and serves a fixed response.
+must not pump the artifact body is assertable), records the @If-None-Match@
+conditional validator of every artifact-slot request (so the pass-through
+conditional-GET relay is assertable), and serves a fixed response.
 -}
 data Upstream = Upstream
     { upApp :: Application
     , upSeenAuth :: IORef [Maybe ByteString]
     , upSeenArtifactMethods :: IORef [ByteString]
+    , upSeenArtifactValidators :: IORef [Maybe ByteString]
     }
 
 {- | An upstream double serving a fixed packument body with @200@, recording each
@@ -167,6 +170,17 @@ seenAuth up = reverse <$> readIORef (upSeenAuth up)
 seenArtifactMethods :: Upstream -> IO [ByteString]
 seenArtifactMethods up = reverse <$> readIORef (upSeenArtifactMethods up)
 
+-- The @If-None-Match@ conditional validators an upstream double saw on its
+-- artifact-slot (tarball) requests, in arrival order — so a test can assert the
+-- client's validators were relayed onto the upstream artifact request (the
+-- pass-through conditional-GET contract). 'Nothing' for a request that carried none.
+seenArtifactValidators :: Upstream -> IO [Maybe ByteString]
+seenArtifactValidators up = reverse <$> readIORef (upSeenArtifactValidators up)
+
+-- The @If-None-Match@ header value a request carried, if any.
+lookupIfNoneMatch :: [Header] -> Maybe ByteString
+lookupIfNoneMatch headers = snd <$> find ((== hIfNoneMatch) . fst) headers
+
 {- | Assemble an 'Upstream' over a double that already records each request's
 @Authorization@ into the given ref: allocate the artifact-method ref and wrap the
 app so a tarball-slot request additionally records its 'requestMethod'. The doubles
@@ -176,11 +190,19 @@ artifact-method recording on uniformly.
 mkUpstream :: IORef [Maybe ByteString] -> Application -> IO Upstream
 mkUpstream seen app = do
     methods <- newIORef []
+    validators <- newIORef []
     let recording req respond = do
-            when (isTarballPath (rawPathInfo req)) $
+            when (isTarballPath (rawPathInfo req)) $ do
                 modifyIORef' methods (requestMethod req :)
+                modifyIORef' validators (lookupIfNoneMatch (requestHeaders req) :)
             app req respond
-    pure Upstream{upApp = recording, upSeenAuth = seen, upSeenArtifactMethods = methods}
+    pure
+        Upstream
+            { upApp = recording
+            , upSeenAuth = seen
+            , upSeenArtifactMethods = methods
+            , upSeenArtifactValidators = validators
+            }
 
 -- ── tarball upstream doubles (path-aware) ─────────────────────────────────────
 
@@ -632,6 +654,16 @@ getTarball version bearer =
     path = "/npm/thing/-/thing-" <> encodeUtf8 version <> ".tgz"
     baseRequest =
         defaultRequest{requestHeaders = maybe [] (\t -> [(hAuthorization, "Bearer " <> encodeUtf8 t)]) bearer}
+
+{- | A @GET /npm/thing/-/thing-{version}.tgz@ artifact request with no credential
+and the given extra request headers (e.g. a conditional @If-None-Match@), to drive
+the pass-through conditional-GET relay.
+-}
+getTarballWith :: Text -> [Header] -> Application -> IO SResponse
+getTarballWith version extra =
+    runSession (request (setPath defaultRequest{requestHeaders = extra} path))
+  where
+    path = "/npm/thing/-/thing-" <> encodeUtf8 version <> ".tgz"
 
 {- | A @HEAD /npm/thing/-/thing-{version}.tgz@ artifact request carrying the given
 (optional) bearer credential — the same tarball coordinate as 'getTarball', issued
@@ -1193,6 +1225,33 @@ honouredPathUpstream version filename tarballBody = do
              in packument [(version, vo)] version [(version, publishedDaysAgo 30)]
     mkUpstream seen app
 
+{- | A path-aware upstream double that honours a conditional artifact request: its
+packument fetch is a self-referential single-version admitting packument (@200@), and
+a tarball-slot path answers a bodiless @304 Not Modified@ (carrying an @ETag@) when
+the request carries an @If-None-Match@, else @200@ with the artifact bytes. Lets a
+test drive the pass-through conditional-GET relay end to end: a client validator
+relayed upstream that matches must come straight back as a relayed @304@, the artifact
+never re-downloaded. Used as either the private or the public origin's double.
+-}
+conditionalArtifactUpstream :: Text -> LByteString -> IO Upstream
+conditionalArtifactUpstream version tarballBody = do
+    seen <- newIORef []
+    let app :: Application
+        app req respond = do
+            modifyIORef' seen (lookupAuth (requestHeaders req) :)
+            respond $
+                if isTarballPath (rawPathInfo req)
+                    then conditionalTarball (requestHeaders req)
+                    else responseLBS status200 [] (encodePackument (selfHostedAdmitting (selfBaseUrl req) version))
+    mkUpstream seen app
+  where
+    -- A relayed client validator turns the upstream artifact fetch into a 304; an
+    -- unconditional fetch still serves the bytes.
+    conditionalTarball :: [Header] -> Response
+    conditionalTarball headers
+        | any ((== hIfNoneMatch) . fst) headers = responseLBS status304 [(hETag, "\"v1\"")] ""
+        | otherwise = responseLBS status200 [] tarballBody
+
 -- A flat projection of a mirror job, for an order-stable equality assertion over
 -- the four coordinates the job carries (package, version, public artifact URL,
 -- mirror target).
@@ -1552,7 +1611,71 @@ tarballSpec = describe "artifact (tarball) path" $ do
             simpleBody resp `shouldBe` privateTarballBytes
             seenAuth publicUp `shouldReturn` []
 
+    conditionalArtifactSpec
+
     headTarballSpec
+
+{- | Pass-through conditional-GET on the artifact path: the client's validators are
+relayed onto the upstream artifact request (on both the private and public legs), and
+an upstream @304 Not Modified@ is relayed straight back to the client as a bodiless
+@304@ rather than treated as a miss/fall-through — so a conditional artifact GET whose
+validator matches upstream never re-downloads the tarball. (The merged-packument path
+answers conditional requests against our own ETag instead; see 'conditionalSpec'.)
+-}
+conditionalArtifactSpec :: Spec
+conditionalArtifactSpec = describe "pass-through conditional GET on the artifact path" $ do
+    it "relays a private-upstream 304 back as a bodiless 304 (never re-downloaded, never fallen through)" $ do
+        -- The private upstream answers the conditional artifact fetch with a 304: it
+        -- must be relayed straight back as a bodiless 304, the public origin never
+        -- consulted (a 304 is a relay, not a private miss) and no mirror job enqueued
+        -- (no bytes were served).
+        privateUp <- conditionalArtifactUpstream "1.0.0" privateTarballBytes
+        publicUp <- artifactUpstream "1.0.0" publicTarballBytes
+        withProxyEnv privateUp publicUp Nothing $ \app env -> do
+            resp <- getTarballWith "1.0.0" [(hIfNoneMatch, "\"v1\"")] app
+            status resp `shouldBe` 304
+            -- A 304 carries no body — the tarball was not re-downloaded or pumped.
+            simpleBody resp `shouldBe` ""
+            -- The upstream's validator (ETag) is relayed back to the client.
+            header "ETag" resp `shouldBe` Just "\"v1\""
+            -- The 304 was relayed, not treated as a private miss falling through.
+            seenAuth publicUp `shouldReturn` []
+            drainJobs env `shouldReturn` []
+
+    it "relays a public-upstream 304 back as a bodiless 304 on a private miss" $ do
+        -- A private miss falls through to the public origin, which answers the
+        -- conditional artifact fetch with a 304 — relayed straight back as a bodiless
+        -- 304, the public bytes never re-downloaded.
+        privateUp <- privateArtifactMiss
+        publicUp <- conditionalArtifactUpstream "1.0.0" publicTarballBytes
+        withProxyEnv privateUp publicUp Nothing $ \app _env -> do
+            resp <- getTarballWith "1.0.0" [(hIfNoneMatch, "\"v1\"")] app
+            status resp `shouldBe` 304
+            simpleBody resp `shouldBe` ""
+            header "ETag" resp `shouldBe` Just "\"v1\""
+
+    it "forwards the client's If-None-Match onto BOTH the private and public artifact upstream requests" $ do
+        -- The private leg misses (its tarball slot 404s), so the artifact comes from
+        -- public — and the client's conditional validator must be relayed onto BOTH the
+        -- private artifact fetch (which misses) and the public artifact fetch.
+        privateUp <- privateArtifactMiss
+        publicUp <- artifactUpstream "1.0.0" publicTarballBytes
+        withProxyEnv privateUp publicUp Nothing $ \app _env -> do
+            _ <- getTarballWith "1.0.0" [(hIfNoneMatch, "\"client-etag\"")] app
+            seenArtifactValidators privateUp `shouldReturn` [Just "\"client-etag\""]
+            seenArtifactValidators publicUp `shouldReturn` [Just "\"client-etag\""]
+
+    it "streams a non-conditional artifact GET normally (no regression)" $ do
+        -- With no client validator, the upstream artifact fetch is unconditional and
+        -- the full body streams through as before — the conditional wiring is inert on
+        -- the unconditional path. The upstream saw no If-None-Match.
+        privateUp <- conditionalArtifactUpstream "1.0.0" privateTarballBytes
+        publicUp <- artifactUpstream "1.0.0" publicTarballBytes
+        withProxyEnv privateUp publicUp Nothing $ \app _env -> do
+            resp <- getTarball "1.0.0" Nothing app
+            status resp `shouldBe` 200
+            simpleBody resp `shouldBe` privateTarballBytes
+            seenArtifactValidators privateUp `shouldReturn` [Nothing]
 
 {- | HEAD on a tarball route must never run the full-GET streaming pump: a bodiless
 HEAD must not be able to force the proxy to open the upstream artifact connection and

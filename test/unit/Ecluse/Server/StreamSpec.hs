@@ -12,13 +12,14 @@ import Network.HTTP.Client (
     responseBody,
  )
 import Network.HTTP.Client qualified as HTTP
-import Network.HTTP.Types (methodHead, status200, status404, statusIsSuccessful)
-import Network.HTTP.Types.Header (hContentType)
+import Network.HTTP.Types (methodHead, status200, status304, status404, statusCode, statusIsSuccessful)
+import Network.HTTP.Types.Header (hContentType, hETag)
 import Network.Wai (Application, responseLBS, responseStream)
 import Network.Wai.Handler.Warp (testWithApplication)
 import Test.Hspec
 import UnliftIO (concurrently)
 
+import Ecluse.Server.Conditional (isNotModified)
 import Ecluse.Server.Stream (probeUpstreamWhen, pumpBody, streamUpstream, streamUpstreamWhen)
 
 {- | A chunk source over a fixed list of chunks: each pull returns the next chunk
@@ -153,6 +154,21 @@ spec = do
                 resp <- httpLbs req manager
                 responseBody resp `shouldBe` fellThroughMarker
 
+        it "relays an upstream 304 as a bodiless 304, forwarding its validator (the pass-through conditional relay)" $ do
+            -- A 304 passes the artifact relay's accept predicate (a 2xx OR a 304), and
+            -- is relayed straight back as a BODILESS 304 with the upstream's validator
+            -- (ETag) forwarded — never pumped as a streamed body. This is the cheap
+            -- conditional-GET freshness check: the client gets a 304, not the artifact.
+            manager <- newManager defaultManagerSettings
+            testWithApplication (pure notModifiedUpstream) $ \upPort ->
+                testWithApplication (pure (notModifiedProxy manager upPort)) $ \proxyPort -> do
+                    req <- parseRequest ("http://127.0.0.1:" <> show proxyPort <> "/")
+                    resp <- httpLbs req manager
+                    statusCode (HTTP.responseStatus resp) `shouldBe` 304
+                    responseBody resp `shouldBe` ""
+                    (snd <$> find ((== hETag) . fst) (HTTP.responseHeaders resp))
+                        `shouldBe` Just "\"v1\""
+
     describe "probeUpstreamWhen — bodiless relay (HEAD, no pump)" $ do
         it "relays the upstream status and content headers with no body on a hit" $ do
             -- A HEAD probe through the helper: the client gets the upstream's status
@@ -208,6 +224,23 @@ spec = do
     -- An upstream that always 404s — the conditional relay's recoverable miss.
     missingUpstream :: Application
     missingUpstream _req respond = respond (responseLBS status404 [] "not found")
+
+    -- An upstream that answers a bodiless 304 with a validator (an ETag) — the
+    -- not-modified case of the pass-through conditional relay.
+    notModifiedUpstream :: Application
+    notModifiedUpstream _req respond =
+        respond (responseLBS status304 [(hETag, "\"v1\"")] "")
+
+    {- The artifact relay's conditional proxy: accept a 2xx OR a 304 (the predicate the
+    serve path's artifact relay uses) and relay it through; a miss answers the
+    fall-through marker. So an upstream 304 is observable as a relayed bodiless 304. -}
+    notModifiedProxy :: HTTP.Manager -> Int -> Application
+    notModifiedProxy manager upPort _req respond = do
+        upReq <- parseRequest ("http://127.0.0.1:" <> show upPort <> "/")
+        outcome <- streamUpstreamWhen manager upReq (\s -> statusIsSuccessful s || isNotModified s) (,) respond
+        case outcome of
+            Just received -> pure received
+            Nothing -> respond (responseLBS status200 [] fellThroughMarker)
 
     {- An upstream that answers a content header (a Content-Type) with no body, as a
     HEAD reply does, so the probe relay is seen to forward the content metadata a GET
