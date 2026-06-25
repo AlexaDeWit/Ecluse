@@ -154,6 +154,15 @@ spec = do
             let info = packument [("1.0.0", "sha512-aaa")]
             (mpName <$> mergePackuments [(GatedSource, info)]) `shouldBe` Just name
 
+        it "carries mpName from a contribution, never a manufactured value" $ do
+            -- Every contribution shares the validated identity (name validation runs
+            -- upstream of the merge), so the plan's mpName originates from an input's
+            -- own 'infoName' — it is never substituted or fabricated.
+            let a = packument [("1.0.0", "sha512-aaa")]
+                b = packument [("2.0.0", "sha512-bbb")]
+                inputs = [(TrustedSource, a), (GatedSource, b)]
+            (mpName <$> mergePackuments inputs) `shouldBe` Just (infoName a)
+
         it "is the identity on a single input (survivors, tags, time)" $ do
             -- A lone source: every version survives, all won by source 0, with its
             -- own latest kept and its times carried whole.

@@ -190,6 +190,46 @@ not re-implement merging, and the merge is unit-tested over hand-built
 upstream produces** — Écluse authors it — which is why its served schema is owned
 (see [API Surface](api-surface.md#the-synthesized-packument-schema--the-trust-boundary)).
 
+### The route name is the served name's validation authority
+
+The proxy always knows the requested package name from the **route**, so an upstream
+packument's self-reported top-level `name` is at most a **cross-check**, never the
+served authority. The route name is the authority for **validation, not rewriting**:
+the served packument's `name` is always a value an upstream *genuinely reported*
+(which, having passed validation, equals the route name) — never a substituted,
+manufactured, or empty value the proxy invented.
+
+The check is applied **per origin, at the serve seam**, as the upstream packument is
+projected:
+
+- If an origin's self-reported `name` **agrees** with the route name, its
+  contribution is admitted into the merge as normal (trusted-private unfiltered,
+  gated-public rule-filtered).
+- If an origin's self-reported `name` **disagrees**, that origin is treated as
+  **untrusted for this request**: its contribution is **dropped from the merge** —
+  degraded exactly like the existing undecodable-packument path — and the mismatch is
+  **logged** (a katip warning carrying the requested name, the upstream's reported
+  name, and the origin). An *absent* or otherwise undecodable name remains an
+  undecodable-packument degrade, as before; only a *present-but-different* name is a
+  mismatch.
+
+This preserves **graceful degradation**: a single misreporting upstream just drops
+out, and any *other* origin that returned a valid packument for the route name still
+serves `200`. A bad upstream never denies a package another upstream serves.
+
+When **no** origin yields a valid packument *because the responding origins
+mismatched*, the request is a **`502 Bad Gateway`** — a responding upstream returned
+an invalid response. This is deliberately **distinct from a genuine absence** (no such
+package at all, which keeps its existing status): a mismatch is "upstream returned an
+invalid response", not "package not found". The status surface is the
+`PackumentBadGateway` variant of `packumentStatus` (see
+[Web Layer → Error model](web-layer.md#error-model)).
+
+This also forecloses a cache-poisoning-adjacent hazard: because the served name can
+only ever be a name an upstream genuinely reported for the requested route, a
+misreporting upstream can neither shadow a real package under the served name nor have
+its divergent `name` chosen over the correct one in the cross-upstream union.
+
 ### Decision surface vs served surface
 
 The merge reasons over the **typed** `PackageInfo` domain model, but the document
@@ -243,7 +283,7 @@ data RegistryClient = RegistryClient
   { fetchMetadata    :: PackageName -> IO RegistryResponse
   , fetchArtifact    :: PackageName -> Version -> IO RegistryResponse
   , publishArtifact  :: PackageName -> Version -> ByteString -> IO (Either PublishError ())
-  , parsePackageInfo :: RegistryResponse -> Either ParseError PackageInfo
+  , parsePackageInfo :: PackageName -> RegistryResponse -> Either ParseError PackageInfo
   , parseVersionDetails :: RegistryResponse -> Version -> Either ParseError PackageDetails
   , parseVersionList :: RegistryResponse -> Either ParseError [Version]
   }
@@ -253,6 +293,13 @@ The effectful fields return plain `IO`, not `App`: an adapter closes over its ow
 state (HTTP manager, credentials) and never imports the proxy's `Env`/`App`, so
 backends stay decoupled from the core. The `parse*` fields are pure. See
 [Technology Stack → the effect model](technology-stack.md#key-decisions).
+
+`parsePackageInfo` takes the **route-requested `PackageName`** as a validation input:
+the proxy always knows it, so the adapter validates the upstream's self-reported name
+against it rather than trusting the self-report (see
+[The route name is the served name's validation authority](#the-route-name-is-the-served-names-validation-authority)).
+The served name is therefore always one an upstream genuinely reported — never
+substituted.
 
 Nothing above the registry layer imports registry-specific types. The proxy core
 operates only on `PackageInfo` (the packument-level view) and `PackageDetails`

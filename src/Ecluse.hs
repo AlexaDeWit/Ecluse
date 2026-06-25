@@ -354,7 +354,7 @@ unconfiguredRegistry =
         { fetchMetadata = const refuse
         , fetchArtifact = \_ _ -> refuse
         , publishArtifact = \_ _ _ -> refuse
-        , parsePackageInfo = const (Left notConfigured)
+        , parsePackageInfo = \_ _ -> Left notConfigured
         , parseVersionDetails = \_ _ -> Left notConfigured
         , parseVersionList = const (Left notConfigured)
         }

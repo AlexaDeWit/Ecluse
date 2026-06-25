@@ -146,9 +146,12 @@ data RegistryClient = RegistryClient
     — 'PublishRejected' (retry) or 'PublishUrlUnformable' (drop) — never thrown,
     so the worker's retry-vs-drop decision is total at the call site.
     -}
-    , parsePackageInfo :: RegistryResponse -> Either ParseError PackageInfo
+    , parsePackageInfo :: PackageName -> RegistryResponse -> Either ParseError PackageInfo
     {- ^ Project a fetched metadata response into the packument-level
-    'PackageInfo'.
+    'PackageInfo' for the requested package. The 'PackageName' is the identity the
+    request is for — the proxy always knows it from the route — supplied so the
+    projection has the requested identity available alongside the upstream
+    document's self-reported @name@.
     -}
     , parseVersionDetails :: RegistryResponse -> Version -> Either ParseError PackageDetails
     {- ^ Project a fetched metadata response into the per-version

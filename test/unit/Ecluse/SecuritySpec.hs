@@ -28,7 +28,7 @@ import Ecluse.Package (
     mkScope,
     renderPackageName,
  )
-import Ecluse.Registry.Npm.Project (parsePackageInfoFromValue)
+import Ecluse.Registry.Npm.Project (Projection (NameMismatch, Projected), parsePackageInfoFromValue)
 import Ecluse.Security (
     LimitError (..),
     Limits (..),
@@ -867,9 +867,11 @@ realPackumentSpec = describe "default Limits admit a real large trusted packumen
             Right v -> pure v
         -- 4. Project to the typed view (it really is a well-formed packument), then
         -- 5. version-count check it (within maxVersionCount).
-        info <- case parsePackageInfoFromValue depthChecked of
+        info <- case parsePackageInfoFromValue (unscoped "express") depthChecked of
             Left err -> expectationFailure ("real packument did not project: " <> show err) >> pure emptyInfo
-            Right i -> pure i
+            Right (Projected i) -> pure i
+            Right (NameMismatch reported) ->
+                expectationFailure ("real packument self-reported an unexpected name: " <> toString reported) >> pure emptyInfo
         case checkVersionCount defaultLimits info of
             Left err -> expectationFailure ("real packument refused by the version bound: " <> show err)
             Right admitted -> do

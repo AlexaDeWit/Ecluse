@@ -125,6 +125,7 @@ spec = do
         let denied = Reject (Rejection (ByPolicy (RuleName "DenyInstallTimeExecution")) "no")
             transient d = Reject (Rejection (Unavailable (WillResolve d)) "down")
             broken = Reject (Rejection (Unavailable WontResolve) "broken")
+            invalid = Reject (Rejection UpstreamInvalid "wrong package")
         it "serves (200) when any version survives, whatever else was excluded" $ do
             packumentStatus [Admit] `shouldBe` PackumentOk
             packumentStatus [denied, Admit, broken] `shouldBe` PackumentOk
@@ -147,6 +148,16 @@ spec = do
         it "is 403 when no survivor and the only exclusion is a missing-integrity refusal" $
             packumentStatus [Reject (Rejection MissingIntegrity "no integrity")]
                 `shouldBe` PackumentForbidden
+        it "is 502 when a responding upstream returned a packument for a different package" $
+            packumentStatus [invalid] `shouldBe` PackumentBadGateway
+        it "is 502 when both responding origins reported the wrong package" $
+            packumentStatus [invalid, invalid] `shouldBe` PackumentBadGateway
+        it "prefers 503 over 502: a retryable outage may yet yield a valid document" $
+            packumentStatus [invalid, transient Nothing] `shouldBe` PackumentUnavailable Nothing
+        it "prefers 502 over 500: a concrete gateway fault outranks a generic permanent inability" $
+            packumentStatus [invalid, broken] `shouldBe` PackumentBadGateway
+        it "prefers 502 over 403: a misreporting upstream outranks a deny-by-default" $
+            packumentStatus [invalid, denied] `shouldBe` PackumentBadGateway
 
     describe "longestRetry — the longest suggested delay, or none" $ do
         it "is Nothing for an empty list" $
@@ -163,6 +174,7 @@ spec = do
             packumentStatusCode PackumentForbidden `shouldBe` 403
             packumentStatusCode (PackumentUnavailable Nothing) `shouldBe` 503
             packumentStatusCode (PackumentUnavailable (Just (RetryAfter 30))) `shouldBe` 503
+            packumentStatusCode PackumentBadGateway `shouldBe` 502
             packumentStatusCode PackumentServerError `shouldBe` 500
 
     describe "HelpMessage — trimmed at construction" $ do

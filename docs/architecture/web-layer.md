@@ -230,6 +230,8 @@ data Rejection = Rejection
 data RejectReason
   = ByPolicy RuleName          -- a rule denied it (incl. deny-by-default)
   | Unavailable Transience     -- could not be decided (see Rules Engine)
+  | MissingIntegrity           -- public version carries no integrity digest (admission)
+  | UpstreamInvalid            -- a responding upstream returned a packument for a different package
 
 data Transience
   = WillResolve (Maybe RetryAfter)  -- transient: upstream 5xx/429, advisory source down
@@ -261,10 +263,14 @@ each `Reject` (gated, public-provenance) version is filtered out (see
 while trusted private versions are admitted unfiltered. A status is chosen only
 when *nothing* survives the merge, following the most recoverable cause: `503` if
 any rejection was `WillResolve` **or a needed upstream was unavailable** (a retry
-may yield survivors); `500` if none is retryable but an exclusion is a permanent
-inability (`WontResolve`); else `403`. Never `404` — the versions existed and were
-withheld; a genuinely absent package is a separate upstream miss. (`packumentStatus`
-in `Ecluse.Server.Response` is the code-level counterpart of `artifactStatus`.)
+may yield survivors); else `502` if a responding upstream returned an **invalid
+response** — a packument whose self-reported name is for a *different* package (see
+[Registry Model → name validation](registry-model.md#the-route-name-is-the-served-names-validation-authority));
+`500` if none is retryable but an exclusion is a permanent inability (`WontResolve`);
+else `403`. Never `404` — the versions existed and were withheld; a genuinely absent
+package is a separate upstream miss, distinct from the `502` a misreporting upstream
+earns. (`packumentStatus` in `Ecluse.Server.Response` is the code-level counterpart
+of `artifactStatus`.)
 
 The serve-outcome model and the per-outcome status mapping live in
 `Ecluse.Server.Response`, which decides an error's *status* but holds **no body

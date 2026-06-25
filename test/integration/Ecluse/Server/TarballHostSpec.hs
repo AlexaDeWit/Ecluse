@@ -291,7 +291,7 @@ fakeRegistry =
         { fetchMetadata = const (error "fakeRegistry: fetchMetadata is unused on the serve path")
         , fetchArtifact = \_ _ -> error "fakeRegistry: fetchArtifact is unused on the serve path"
         , publishArtifact = \_ _ _ -> error "fakeRegistry: publishArtifact is unused on the serve path"
-        , parsePackageInfo = const (Left (ParseError "unused"))
+        , parsePackageInfo = \_ _ -> Left (ParseError "unused")
         , parseVersionDetails = \_ _ -> Left (ParseError "unused")
         , parseVersionList = const (Left (ParseError "unused"))
         }

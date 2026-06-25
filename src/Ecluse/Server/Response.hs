@@ -133,6 +133,16 @@ data RejectReason
       exempt; this reason never arises on that path.
       -}
       MissingIntegrity
+    | {- | A responding upstream returned an __invalid response__ for the requested
+      package — its packument self-reported a name for a /different/ package, so that
+      origin is untrusted for this request and its contribution is dropped. It is not
+      a policy verdict and not a retryable inability but a /gateway/ fault: when no
+      origin yields a valid packument and a responding one was invalid this way, the
+      packument request maps to a @502@. Distinct from a genuine absence (no such
+      package at all), which is not refused this way. Arises on the packument path
+      only — the artifact path never validates a packument name.
+      -}
+      UpstreamInvalid
     deriving stock (Eq, Show)
 
 {- | The name of the rule that decided a refusal, carried for the audit trail and
@@ -206,6 +216,10 @@ artifactStatus = \case
         MissingIntegrity -> Forbidden
         Unavailable (WillResolve retryAfter) -> Unavailable' retryAfter
         Unavailable WontResolve -> ServerError
+        -- A packument-path validation cause; the artifact path never validates a
+        -- packument name, so this does not arise here. A misbehaving upstream on the
+        -- artifact path is already an internal inability to serve, so it maps to @500@.
+        UpstreamInvalid -> ServerError
 
 -- | The numeric HTTP status code for an 'ArtifactStatus'. Pure and total.
 artifactStatusCode :: ArtifactStatus -> Int
@@ -244,6 +258,13 @@ data PackumentStatus
       @Retry-After@ header.
       -}
       PackumentUnavailable (Maybe RetryAfter)
+    | {- | @502@ — no version survived because a responding upstream returned an
+      __invalid response__ (a packument self-reporting a different package's name),
+      and no origin yielded a valid packument. A gateway fault, distinct from a
+      genuine absence (no such package) and from a retryable outage: the upstream
+      answered, but with a document for the wrong package.
+      -}
+      PackumentBadGateway
     | {- | @500@ — no version survived, no exclusion is retryable, and at least one is
       a permanent or internal inability to decide; retrying cannot help.
       -}
@@ -261,6 +282,10 @@ among the exclusions, so a retry is invited exactly when it might produce surviv
 
 * any 'Unavailable' 'WillResolve' → @503@, suggesting the longest 'RetryAfter' any
   such cause asked for (so every transient cause has likely cleared by then);
+* else any 'UpstreamInvalid' → @502@ (a responding upstream returned a packument for
+  a different package; ranked above the terminal @500@\/@403@ because it names a
+  concrete, actionable gateway fault, but below the retryable @503@ since a transient
+  origin may yet come back with a valid document);
 * else any 'Unavailable' 'WontResolve' → @500@ (a permanent inability — a retry
   cannot help, so it is not dressed up as a retryable @503@);
 * else every exclusion is a deny-by-default cause — a 'ByPolicy' rule denial or a
@@ -273,6 +298,7 @@ packumentStatus :: [ServeDecision] -> PackumentStatus
 packumentStatus decisions
     | any isAdmit decisions = PackumentOk
     | not (null willResolveDelays) = PackumentUnavailable (longestRetry willResolveDelays)
+    | anyUpstreamInvalid = PackumentBadGateway
     | anyWontResolve = PackumentServerError
     | otherwise = PackumentForbidden
   where
@@ -281,6 +307,9 @@ packumentStatus decisions
 
     willResolveDelays :: [Maybe RetryAfter]
     willResolveDelays = [delay | Unavailable (WillResolve delay) <- reasons]
+
+    anyUpstreamInvalid :: Bool
+    anyUpstreamInvalid = not (null [() | UpstreamInvalid <- reasons])
 
     anyWontResolve :: Bool
     anyWontResolve = not (null [() | Unavailable WontResolve <- reasons])
@@ -302,6 +331,7 @@ packumentStatusCode = \case
     PackumentOk -> 200
     PackumentForbidden -> 403
     PackumentUnavailable{} -> 503
+    PackumentBadGateway -> 502
     PackumentServerError -> 500
 
 -- ── denial rendering ─────────────────────────────────────────────────────────

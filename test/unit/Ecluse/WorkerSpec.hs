@@ -132,7 +132,7 @@ recordingClient logRef outcome =
         , publishArtifact = \_ _ document -> do
             atomicModifyIORef' logRef (\l -> (l{plDocuments = document : plDocuments l}, ()))
             pure outcome
-        , parsePackageInfo = const (Left (ParseError "unused"))
+        , parsePackageInfo = \_ _ -> Left (ParseError "unused")
         , parseVersionDetails = \_ _ -> Left (ParseError "unused")
         , parseVersionList = const (Left (ParseError "unused"))
         }
