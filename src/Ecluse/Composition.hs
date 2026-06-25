@@ -43,6 +43,9 @@ module Ecluse.Composition (
     planMounts,
     composeBindings,
 
+    -- * Mirror-queue backend selection
+    planMirrorQueue,
+
     -- * Publish-side wiring
     PublishTarget (..),
     planPublishTargets,
@@ -65,14 +68,17 @@ import Ecluse.Config (
     Mount (..),
     MountRegistries (..),
     PolicyError,
+    QueueBackend (..),
     loadConfig,
     renderCredentialBackend,
     renderPolicyError,
+    renderQueueBackend,
     unUrl,
  )
 import Ecluse.Credential (AuthToken (..), CredentialProvider, Secret, staticProvider)
 import Ecluse.Ecosystem (Ecosystem, ecosystemName, prefixFor)
 import Ecluse.Package.Integrity (MinIntegrity)
+import Ecluse.Queue.Sqs (SqsConfig, defaultSqsConfig)
 import Ecluse.Security (Limits (Limits, maxBodyBytes, maxNestingDepth, maxVersionCount), TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), lowerCaseHosts)
 import Ecluse.Server.Cache (CacheConfig (..))
 import Ecluse.Server.Context (MountBinding, PackumentDeps (..))
@@ -145,6 +151,15 @@ data BootError
       the ecosystem of the mount and the unresolved backend.
       -}
       UnresolvedCredential Ecosystem CredentialBackend
+    | {- | The configured mirror-queue backend has no implementation compiled into
+      this binary, so no queue can be built for it. Carries the unavailable backend.
+      An honest refusal — never a silent fall-through to a different backend.
+      -}
+      QueueProviderUnavailable QueueBackend
+    | {- | The SQS mirror-queue backend was selected but no AWS region was supplied
+      (@AWS_REGION@), so the queue cannot be scoped to a region.
+      -}
+      QueueRegionMissing
     deriving stock (Eq, Show)
 
 -- | Render a 'BootError' as a human-facing line for the aggregated failure block.
@@ -159,6 +174,14 @@ renderBootError = \case
             <> " names credential source "
             <> renderCredentialBackend backend
             <> ", not initialized in this build"
+    QueueProviderUnavailable backend ->
+        "mirror queue provider "
+            <> renderQueueBackend backend
+            <> " is not available in this build"
+    QueueRegionMissing ->
+        "mirror queue provider "
+            <> renderQueueBackend SqsQueue
+            <> " requires AWS_REGION to be set"
 
 {- | Validate the environment layer and optional document into the served mount
 bindings, or the aggregated boot errors. The composition root's single entry: it
@@ -365,6 +388,29 @@ composePublishTargets providers config =
                             }
                 Nothing ->
                     Left [UnresolvedCredential (mountEcosystem mount) backend]
+
+-- ── mirror-queue backend selection ────────────────────────────────────────────
+
+{- | Select the mirror-queue backend from the environment layer, yielding the
+'SqsConfig' the composition root builds the AWS SQS queue from, or the aggregated
+boot errors that block it.
+
+This is the pure half of the queue's backend choice — the single place that knows
+which backends this binary can build. The AWS @sqs@ backend resolves to an
+'SqsConfig' (the queue URL and region, with the provider knobs at their defaults);
+the composition root passes that to @Ecluse.Queue.Sqs.newSqsQueue@, so the one SDK
+constructor call lives there while the decision lives here. The GCP @pubsub@ arm is
+recognised but not built, so it is a fail-loud 'QueueProviderUnavailable' boot error
+rather than a silent fall-through; a missing @AWS_REGION@ under @sqs@ is a
+'QueueRegionMissing' boot error. Errors are returned as a list so they aggregate
+with the rest of the boot-time validation.
+-}
+planMirrorQueue :: EnvConfig -> Either [BootError] SqsConfig
+planMirrorQueue env = case cfgQueueBackend env of
+    PubSubQueue -> Left [QueueProviderUnavailable PubSubQueue]
+    SqsQueue -> case T.strip <$> cfgAwsRegion env of
+        Just region | not (T.null region) -> Right (defaultSqsConfig (unUrl (cfgQueueUrl env)) region)
+        _ -> Left [QueueRegionMissing]
 
 -- ── config-derived runtime settings ───────────────────────────────────────────
 

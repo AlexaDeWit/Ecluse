@@ -2,7 +2,7 @@
 id: S20
 title: AWS composition root + config wiring (launch-ready)
 milestone: M4 — AWS cloud backends & worker
-status: not-started
+status: in-progress
 depends-on: [S03, S15, S17, S18, S19]
 test-tier: [integration]
 arch-refs:
@@ -60,3 +60,52 @@ product works on AWS. Backend selection must be the *only* place SDK choice live
 "not yet built" until M7; keep that honest (a clear error, not a silent fallback).
 After this, M5 (CVE), M6 (observability), and M8 (provenance/docs) layer on; M7 (GCP)
 is scheduled.
+
+## As-built notes
+
+The D4/D5 base-hardening track had already landed most of the composition root
+(`Ecluse.Composition` + `Ecluse.Config`): config-driven mounts, the process-global
+credential providers (the `static` leaf), boot-time fail-fast aggregation
+(`planMounts` / `planPublishTargets`), and the publish-side `RegistryClient`
+resolution. S20 layered the remaining AWS backend selection on top of that, rather
+than reimplementing it:
+
+- **Mirror-queue selection (AC1 / AC3).** `run` previously hard-wired the
+  `newInMemoryQueue` test double. It now selects the backend from config through a
+  pure `Ecluse.Composition.planMirrorQueue :: EnvConfig -> Either [BootError] SqsConfig`:
+  `MIRROR_QUEUE_PROVIDER=sqs` → an `SqsConfig` (from `MIRROR_QUEUE_URL` + `AWS_REGION`)
+  that `run` hands to `newSqsQueue`; `pubsub` (the GCP arm) → a clear
+  `QueueProviderUnavailable` boot error (no silent fallback); `sqs` with no
+  `AWS_REGION` → a `QueueRegionMissing` boot error. The single `newSqsQueue` call lives
+  in `run`; `planMirrorQueue` is the single place the not-built decision lives.
+- **Static credential path is the AWS launch path.** A deployment with
+  `MIRROR_TARGET_TOKEN` (static write credential) + an SQS queue + `AWS_REGION` is a
+  fully working AWS-backed npm proxy today — that is the launch gate this slice
+  closes. A mount that names an uninitialized provider still fails fast at boot
+  (the D4 check), unchanged.
+- **End-to-end integration test (AC4).** `test/integration/Ecluse/AwsEndToEndSpec.hs`
+  drives an in-process Écluse (the real `Ecluse.Server.application` + the real
+  `Ecluse.Worker.workerLoop`) over a **real SQS queue** (a `ministack` container) and
+  WAI npm stubs: a packument request is filtered by the rules, a tarball request is
+  gated and enqueues a real SQS job, and the worker fetches → verifies the integrity
+  digest → publishes it to the mirror-target stub.
+
+### Deferred / escalated (do not mark merged without the architect's call)
+
+1. **CodeArtifact auto-mint wiring (`newCodeArtifactProvider`) is NOT wired.** The
+   leaf exists (S17), but `GetAuthorizationToken` needs a CodeArtifact **domain**
+   (and optionally owner / token-duration), and the design-of-record config surface
+   (`docs/architecture/configuration.md`, `USAGE.md`) defines **no** production key
+   for it — only the smoke-tier `ECLUSE_SMOKE_CODEARTIFACT_*` vars exist. Wiring it
+   would mean inventing operator-facing config keys (or deriving the domain from
+   `MIRROR_TARGET_URL`), which is an architect-level config-surface decision.
+   `codeartifact` therefore stays the honest boot failure D4/D5 already implements.
+   AWS launch ships on `static`; CodeArtifact auto-mint is a follow-up once the
+   config surface is decided.
+2. **`run` no longer has an in-memory queue path.** `MIRROR_QUEUE_PROVIDER` defaults
+   to `sqs`, so the production entry now requires a reachable SQS endpoint (and
+   `AWS_REGION`). There is **no** config key to point production `run` at an SQS
+   emulator (the `SqsEndpoint` override is test-only), so the `test/e2e` harness —
+   which deliberately ran the real image over the in-memory queue with a dummy
+   `MIRROR_QUEUE_URL` — needs a queue strategy on rebase (a `ministack` queue
+   container, or a decision on the emulator-endpoint config).

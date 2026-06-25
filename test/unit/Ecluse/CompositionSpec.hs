@@ -12,6 +12,7 @@ import Ecluse.Composition (
     initCredentialProviders,
     initializedBackends,
     lookupProvider,
+    planMirrorQueue,
     planMounts,
     renderBootError,
  )
@@ -21,6 +22,7 @@ import Ecluse.Config (
     CredentialBackend (..),
     EnvConfig,
     PolicyError (UnknownRuleType),
+    QueueBackend (..),
     decodeDocument,
     loadConfig,
     parseEnvPure,
@@ -29,6 +31,7 @@ import Ecluse.Credential (authSecret, currentToken, unSecret)
 import Ecluse.Ecosystem (Ecosystem (..))
 import Ecluse.Package (HashAlg (SHA512))
 import Ecluse.Package.Integrity (defaultMinIntegrity, mkMinIntegrity)
+import Ecluse.Queue.Sqs (SqsConfig (sqsQueueUrl, sqsRegion))
 import Ecluse.Security (Limits (maxBodyBytes, maxNestingDepth, maxVersionCount), TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), defaultLimits)
 import Ecluse.Server.Cache (CacheConfig (cacheMaxEntries, cacheTtl))
 import Ecluse.Server.Context (
@@ -49,6 +52,7 @@ spec :: Spec
 spec = do
     credentialProvidersSpec
     mirrorWriteProviderSpec
+    mirrorQueueSpec
     cacheConfigSpec
     composeBindingsSpec
     bootErrorSpec
@@ -148,6 +152,34 @@ mirrorWriteProviderSpec = describe "mirrorWriteProvider" $ do
         providers <- initCredentialProviders env
         tok <- currentToken (mirrorWriteProvider providers)
         unSecret (authSecret tok) `shouldBe` ""
+
+-- ── mirror-queue backend selection ────────────────────────────────────────────
+
+mirrorQueueSpec :: Spec
+mirrorQueueSpec = describe "planMirrorQueue" $ do
+    it "selects the SQS backend from the configured queue URL and region" $ do
+        env <- expectEnv (("AWS_REGION", "us-east-1") : staticEnvVars)
+        case planMirrorQueue env of
+            Right cfg -> do
+                sqsQueueUrl cfg `shouldBe` "https://sqs.example.test/q"
+                sqsRegion cfg `shouldBe` "us-east-1"
+            Left errs -> expectationFailure ("expected an SQS config, got boot errors: " <> show errs)
+
+    it "fails fast when the SQS backend has no AWS_REGION" $ do
+        -- AWS_REGION is required for the AWS queue; absent, the backend cannot be
+        -- region-scoped, so it is a loud boot failure rather than a silent default.
+        env <- expectEnv staticEnvVars
+        planMirrorQueue env `shouldBe` Left [QueueRegionMissing]
+
+    it "treats a blank AWS_REGION as missing" $ do
+        env <- expectEnv (("AWS_REGION", "   ") : staticEnvVars)
+        planMirrorQueue env `shouldBe` Left [QueueRegionMissing]
+
+    it "refuses the GCP pubsub backend as not built in this binary (no silent fallback)" $ do
+        -- The pubsub arm is recognised by config (S03) but has no backend compiled in;
+        -- it must route to a clear "not built" error, never quietly to a different queue.
+        env <- expectEnv (("MIRROR_QUEUE_PROVIDER", "pubsub") : ("AWS_REGION", "us-east-1") : staticEnvVars)
+        planMirrorQueue env `shouldBe` Left [QueueProviderUnavailable PubSubQueue]
 
 -- ── config-derived cache settings ─────────────────────────────────────────────
 
@@ -360,6 +392,8 @@ renderSpec = describe "renderBootError" $
         renderBootError (MissingAdapter PyPI) `shouldSatisfy` infixed "no adapter"
         renderBootError (UnresolvedCredential Npm CodeArtifactCredential)
             `shouldSatisfy` infixed "not initialized"
+        renderBootError (QueueProviderUnavailable PubSubQueue) `shouldSatisfy` infixed "not available"
+        renderBootError QueueRegionMissing `shouldSatisfy` infixed "AWS_REGION"
   where
     infixed :: Text -> Text -> Bool
     infixed needle hay = needle `T.isInfixOf` hay

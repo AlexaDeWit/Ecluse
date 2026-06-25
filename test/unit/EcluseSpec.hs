@@ -70,7 +70,8 @@ npmApp = application npmServerConfig <$> newTestEnv
 URLs, a static mirror-target token so the env single-mount's @static@ credential
 reference resolves, and an ephemeral port so the brief blocking listen does not
 collide with the conventional default. The document-loading path is exercised
-separately by layering @PROXY_CONFIG@ on top of this base.
+separately by layering @PROXY_CONFIG@ on top of this base. It deliberately omits
+@AWS_REGION@, so it is also the fixture for the queue-region fail-fast case.
 -}
 runEnv :: [(String, String)]
 runEnv =
@@ -80,6 +81,21 @@ runEnv =
     , ("MIRROR_TARGET_TOKEN", "mirror-write-token")
     , ("PROXY_PORT", "0")
     ]
+
+{- | 'runEnv' extended with the AWS settings the default @sqs@ mirror-queue backend
+needs to be built: a region, and throwaway credentials in the environment so
+@amazonka@'s discovery resolves from env vars (no instance-metadata round-trip) and
+'Ecluse.Queue.Sqs.newSqsQueue' constructs without touching the network. The bogus
+queue URL is never reached on the boot-and-serve path — the worker's failing polls
+are caught by its own supervision — so this stays hermetic.
+-}
+awsRunEnv :: [(String, String)]
+awsRunEnv =
+    [ ("AWS_REGION", "us-east-1")
+    , ("AWS_ACCESS_KEY_ID", "test")
+    , ("AWS_SECRET_ACCESS_KEY", "test")
+    ]
+        <> runEnv
 
 spec :: Spec
 spec = do
@@ -94,18 +110,41 @@ spec = do
     describe "run" $ do
         it "boots from the environment layer alone (no document) and serves" $ do
             unsetEnv "PROXY_CONFIG"
-            traverse_ (uncurry setEnv) runEnv
+            traverse_ (uncurry setEnv) awsRunEnv
             outcome <- timeout 100000 run
-            traverse_ (unsetEnv . fst) runEnv
+            traverse_ (unsetEnv . fst) awsRunEnv
             outcome `shouldBe` Nothing
 
         it "boots with an inline PROXY_CONFIG document and serves" $ do
-            traverse_ (uncurry setEnv) runEnv
+            traverse_ (uncurry setEnv) awsRunEnv
             setEnv "PROXY_CONFIG" "{\"rules\":{}}"
             outcome <- timeout 100000 run
             unsetEnv "PROXY_CONFIG"
-            traverse_ (unsetEnv . fst) runEnv
+            traverse_ (unsetEnv . fst) awsRunEnv
             outcome `shouldBe` Nothing
+
+        it "aborts fast at boot when the mirror-queue backend is not built (pubsub)" $ do
+            -- The GCP arm is recognised but unbuilt, so the composition root refuses
+            -- to start rather than silently falling back to a different queue.
+            unsetEnv "PROXY_CONFIG"
+            traverse_ (uncurry setEnv) awsRunEnv
+            setEnv "MIRROR_QUEUE_PROVIDER" "pubsub"
+            outcome <- try (timeout 100000 run) :: IO (Either BootAborted (Maybe ()))
+            unsetEnv "MIRROR_QUEUE_PROVIDER"
+            traverse_ (unsetEnv . fst) awsRunEnv
+            outcome `shouldBe` Left BootAborted
+
+        it "aborts fast at boot when the sqs backend has no AWS_REGION" $ do
+            -- The default sqs backend needs a region to be scoped to; absent, the
+            -- composition root fails fast rather than building an unscoped queue.
+            unsetEnv "PROXY_CONFIG"
+            -- Clear AWS_REGION explicitly so a sibling case (run under a randomized
+            -- order) cannot leak it into this missing-region fixture.
+            unsetEnv "AWS_REGION"
+            traverse_ (uncurry setEnv) runEnv
+            outcome <- try (timeout 100000 run) :: IO (Either BootAborted (Maybe ()))
+            traverse_ (unsetEnv . fst) runEnv
+            outcome `shouldBe` Left BootAborted
 
     describe "orExit (boot fail-fast)" $ do
         it "yields the value on a Right (a passing boot phase)" $

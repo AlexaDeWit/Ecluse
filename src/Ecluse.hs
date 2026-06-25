@@ -107,6 +107,7 @@ import Ecluse.Composition (
     CredentialProviders,
     PublishTarget (ptCredentials, ptEcosystem, ptMirrorUrl),
     initCredentialProviders,
+    planMirrorQueue,
     planMounts,
     planPublishTargets,
     renderBootError,
@@ -124,7 +125,7 @@ import Ecluse.Credential (AuthToken (..), CredentialProvider, currentToken, mkSe
 import Ecluse.Ecosystem (Ecosystem (Npm), prefixFor)
 import Ecluse.Env (Env, newWorkerHeartbeat, withEnv)
 import Ecluse.Log (newLogEnv)
-import Ecluse.Queue (newInMemoryQueue)
+import Ecluse.Queue.Sqs (newSqsQueue)
 import Ecluse.Registry (
     ParseError (..),
     RegistryClient (..),
@@ -146,11 +147,13 @@ import Ecluse.Worker qualified as Worker
 It assembles the composition root from configuration: it parses the environment
 layer and the optional config document, __validates everything and fails fast at
 boot__ on any problem (a malformed env, an unresolved rule policy, a configured
-mount with no adapter, a credential reference that does not resolve), aggregating
-the failures so a single run reports them all. On success it builds the handles —
-the shared HTTP @Manager@, the metadata cache, the logger, the process-global
-credential provider, and the telemetry substrate (off unless @PROXY_TELEMETRY@
-enables it) — into an 'Env', derives the served mount bindings, then runs the
+mount with no adapter, a credential reference that does not resolve, or a
+mirror-queue backend that is not built in this binary), aggregating the failures so
+a single run reports them all. On success it builds the handles — the shared HTTP
+@Manager@, the config-selected mirror queue, the metadata cache, the logger, the
+process-global credential provider, and the telemetry substrate (off unless
+@PROXY_TELEMETRY@ enables it) — into an 'Env', derives the served mount bindings,
+then runs the
 server and the mirror worker __concurrently__ over that single 'Env' ('runServer'
 and 'runWorker'). Bracketing the 'Env' (and the telemetry providers) for the
 lifetime of both means their shared resources are torn down along every exit path.
@@ -162,6 +165,10 @@ run = do
     providers <- initCredentialProviders env
     bindings <- orExit (T.unlines . map renderBootError) (planMounts mountBindingFor getCurrentTime providers env mDoc)
     publishTargets <- orExit (T.unlines . map renderBootError) (planPublishTargets providers env mDoc)
+    -- Select the mirror-queue backend from config (the GCP arm is a fail-loud
+    -- "not built" boot error, never a silent fall-through); the resulting SqsConfig
+    -- is handed to the one newSqsQueue call below.
+    sqsConfig <- orExit (T.unlines . map renderBootError) (planMirrorQueue env)
     let serverConfig =
             (mkServerConfig bindings)
                 { scPort = cfgPort env
@@ -181,7 +188,9 @@ run = do
     -- operator-configured, trusted mirror target, so it uses the trusted private
     -- manager (no resolved-IP recheck — that guards only the untrusted public fetch).
     publishClient <- resolvePublishClient privateManager publishTargets
-    queue <- newInMemoryQueue
+    -- The config-selected mirror queue: the AWS SQS backend, built once here (the
+    -- single SDK-constructor call) from the validated SqsConfig and captured in Env.
+    queue <- newSqsQueue sqsConfig
     metadataCache <- newMetadataCache (Composition.cacheConfigFor env)
     logEnv <- newLogEnv (cfgLogFormat env) (Environment "production")
     heartbeat <- newWorkerHeartbeat
