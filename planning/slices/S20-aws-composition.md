@@ -82,14 +82,20 @@ than reimplementing it:
   selected by `MIRROR_TARGET_CREDENTIAL_PROVIDER` (default `static`) through a pure
   `Ecluse.Composition.planMirrorCredential`: `static` uses `MIRROR_TARGET_TOKEN`;
   `codeartifact` resolves a `CodeArtifactConfig` (`resolveCodeArtifactConfig`) and
-  builds the S16 refresh wrapper around the S17 `newCodeArtifactProvider` leaf (which
-  mints once eagerly, so a misconfigured identity fails loudly at boot); the GCP
-  `gcp-artifact-registry` arm is a fail-loud "not built" boot error. AWS credentials
-  are the ambient container/task role (amazonka's chain), never an Écluse key.
-  CodeArtifact inputs resolve **(a) from explicit `MIRROR_TARGET_CODEARTIFACT_*` keys,
-  else (b) parsed from the mirror-target host** `{domain}-{owner}.d.codeartifact.{region}.amazonaws.com`
-  (region also falls back to `AWS_REGION`); a required input that resolves by neither
-  is a fail-loud boot error naming the exact missing key.
+  builds the generic refresh/cache wrapper around the `newCodeArtifactProvider` mint
+  leaf (which mints once eagerly, so a misconfigured identity fails loudly at boot);
+  the GCP `gcp-artifact-registry` arm is a fail-loud "not built" boot error. AWS
+  credentials are the ambient container/task role (amazonka's chain), never an Écluse
+  key. CodeArtifact inputs resolve **(a) from explicit `MIRROR_TARGET_CODEARTIFACT_*`
+  keys, else (b) parsed from the mirror-target host** `{domain}-{owner}.d.codeartifact.{region}.amazonaws.com`;
+  region precedence is explicit key → host (its authoritative region) → `AWS_REGION`.
+  The owner must be a 12-digit AWS account id (a host whose tail after the last hyphen
+  is not one is not a CodeArtifact endpoint, so it never mis-parses; an explicit
+  non-account-id owner is rejected). A required input that resolves by neither route is
+  a fail-loud boot error naming the exact key. The boot-time mint failure is caught and
+  rendered through the aggregated boot block (legible transient-vs-permanent) while
+  keeping the eager-mint fail-fast posture; the SQS endpoint-override secret key is
+  carried as a redacted `Secret` end to end.
 - **Mirror-target URL fold.** `MIRROR_TARGET_URL` is now optional and folds onto
   `PRIVATE_UPSTREAM_URL` when unset (one registry, read and written). The write
   **credential** does not fold — it stays the explicit provider above. The read-side

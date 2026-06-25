@@ -220,7 +220,7 @@ mirrorQueueSpec = describe "planMirrorQueue" $ do
                 ( ("AWS_REGION", "us-east-1")
                     : ("AWS_ENDPOINT_URL_SQS", "http://localhost:4566")
                     : ("AWS_ACCESS_KEY_ID", "test")
-                    : ("AWS_SECRET_ACCESS_KEY", "test")
+                    : ("AWS_SECRET_ACCESS_KEY", "sqs-secret-xyz")
                     : staticEnvVars
                 )
         case planMirrorQueue env of
@@ -229,6 +229,11 @@ mirrorQueueSpec = describe "planMirrorQueue" $ do
                     endpointSecure ep `shouldBe` False
                     endpointHost ep `shouldBe` "localhost"
                     endpointPort ep `shouldBe` 4566
+                    -- N2: the endpoint secret key is a redacted Secret — its plaintext
+                    -- must never reach the derived Show of the config/endpoint.
+                    let rendered = show cfg :: Text
+                    rendered `shouldNotSatisfy` ("sqs-secret-xyz" `T.isInfixOf`)
+                    rendered `shouldSatisfy` ("REDACTED" `T.isInfixOf`)
                 Nothing -> expectationFailure "expected the endpoint override to resolve"
             Left errs -> expectationFailure ("expected an SQS config, got boot errors: " <> show errs)
 
@@ -297,16 +302,57 @@ mirrorCredentialSpec = describe "planMirrorCredential / resolveCodeArtifactConfi
                 caRegion cfg `shouldBe` "us-west-2"
             Left errs -> expectationFailure ("expected the host to parse, got " <> show errs)
 
-    it "falls the region back to AWS_REGION between the explicit key and the host" $ do
+    it "ranks the host-encoded region above AWS_REGION (mints against the domain's region)" $ do
+        -- N3: the endpoint host encodes the domain's authoritative region, so a
+        -- cross-region deploy (us-west-2 URL, AWS_REGION=us-east-1) mints in us-west-2.
+        env <-
+            expectEnv
+                ( ("MIRROR_TARGET_CREDENTIAL_PROVIDER", "codeartifact")
+                    : ("MIRROR_TARGET_URL", "https://my-domain-111122223333.d.codeartifact.us-west-2.amazonaws.com/npm/my-repo/")
+                    : ("AWS_REGION", "us-east-1")
+                    : withoutMirrorTargetUrl staticEnvVars
+                )
+        (caRegion <$> rightToMaybe (resolveCodeArtifactConfig env)) `shouldBe` Just "us-west-2"
+
+    it "falls the region back to AWS_REGION only when neither explicit key nor host supplies it" $ do
+        -- A non-CodeArtifact mirror URL (no host region) and no explicit region: the
+        -- process-wide AWS_REGION is the last resort.
         env <-
             expectEnv
                 ( ("MIRROR_TARGET_CREDENTIAL_PROVIDER", "codeartifact")
                     : ("MIRROR_TARGET_CODEARTIFACT_DOMAIN", "d")
-                    : ("MIRROR_TARGET_CODEARTIFACT_DOMAIN_OWNER", "o")
+                    : ("MIRROR_TARGET_CODEARTIFACT_DOMAIN_OWNER", "111122223333")
                     : ("AWS_REGION", "ap-south-1")
                     : staticEnvVars
                 )
         (caRegion <$> rightToMaybe (resolveCodeArtifactConfig env)) `shouldBe` Just "ap-south-1"
+
+    it "fails loud, naming the owner key, on a hyphen-bearing non-CodeArtifact host" $ do
+        -- B1: a host whose tail after the last hyphen is not a 12-digit account id is
+        -- not a CodeArtifact endpoint, so its owner never mis-parses (e.g. owner "b").
+        -- With domain + region supplied explicitly, only the owner is unresolved.
+        env <-
+            expectEnv
+                ( ("MIRROR_TARGET_CREDENTIAL_PROVIDER", "codeartifact")
+                    : ("MIRROR_TARGET_URL", "https://a-b.d.codeartifact.us-east-1.amazonaws.com/npm/r/")
+                    : ("MIRROR_TARGET_CODEARTIFACT_DOMAIN", "a")
+                    : ("MIRROR_TARGET_CODEARTIFACT_REGION", "us-east-1")
+                    : withoutMirrorTargetUrl staticEnvVars
+                )
+        resolveCodeArtifactConfig env `shouldBe` Left [CodeArtifactConfigMissing "MIRROR_TARGET_CODEARTIFACT_DOMAIN_OWNER"]
+
+    it "fails loud on an explicit owner that is not a 12-digit account id" $ do
+        -- B1: a malformed explicit owner must be rejected, not sail through.
+        env <-
+            expectEnv
+                ( ("MIRROR_TARGET_CREDENTIAL_PROVIDER", "codeartifact")
+                    : ("MIRROR_TARGET_CODEARTIFACT_DOMAIN", "d")
+                    : ("MIRROR_TARGET_CODEARTIFACT_DOMAIN_OWNER", "123")
+                    : ("MIRROR_TARGET_CODEARTIFACT_REGION", "us-east-1")
+                    : staticEnvVars
+                )
+        resolveCodeArtifactConfig env
+            `shouldBe` Left [CodeArtifactConfigInvalid "MIRROR_TARGET_CODEARTIFACT_DOMAIN_OWNER" "expected a 12-digit AWS account id"]
 
     it "fails loud, naming each unresolved input, when neither key nor host supplies it" $ do
         -- A non-CodeArtifact mirror URL and no explicit keys / AWS_REGION: domain,
@@ -537,6 +583,10 @@ renderSpec = describe "renderBootError" $
             `shouldSatisfy` infixed "gcp-artifact-registry"
         renderBootError (CodeArtifactConfigMissing "MIRROR_TARGET_CODEARTIFACT_DOMAIN")
             `shouldSatisfy` infixed "MIRROR_TARGET_CODEARTIFACT_DOMAIN"
+        renderBootError (CodeArtifactConfigInvalid "MIRROR_TARGET_CODEARTIFACT_DOMAIN_OWNER" "expected a 12-digit AWS account id")
+            `shouldSatisfy` infixed "12-digit"
+        -- The mint-failure render makes the transient-vs-permanent distinction legible.
+        renderBootError (CodeArtifactMintFailed "AccessDenied") `shouldSatisfy` infixed "transient"
   where
     infixed :: Text -> Text -> Bool
     infixed needle hay = needle `T.isInfixOf` hay

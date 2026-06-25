@@ -701,6 +701,21 @@ desugarSpec = describe "loadConfig" $ do
                         unUrl (regPrivateUpstream reg) `shouldBe` "https://private.example.test"
                         mtCredential (regMirrorTarget reg) `shouldBe` StaticCredential
                         mtQueue (regMirrorTarget reg) `shouldBe` SqsQueue
+                        -- The explicit MIRROR_TARGET_URL in minimalEnv is used verbatim.
+                        unUrl (mtUrl (regMirrorTarget reg)) `shouldBe` "https://mirror.example.test"
+
+    it "folds an unset MIRROR_TARGET_URL onto the private upstream" $ do
+        -- N7a: with MIRROR_TARGET_URL absent, the mirror target IS the private
+        -- upstream (one registry, read and written) — the write credential does not fold.
+        env <- expectEnv (without "MIRROR_TARGET_URL" minimalEnv)
+        case loadConfig env Nothing of
+            Left errs -> expectationFailure ("unexpected policy errors: " <> show errs)
+            Right cfg -> case Map.lookup Npm (configMounts cfg) of
+                Nothing -> expectationFailure "expected the npm mount"
+                Just mount -> do
+                    let reg = mountRegistries mount
+                    unUrl (mtUrl (regMirrorTarget reg)) `shouldBe` "https://private.example.test"
+                    unUrl (regPrivateUpstream reg) `shouldBe` "https://private.example.test"
 
     it "desugars the env single-mount onto a document-only policy patch" $ do
         -- A document with a rule policy but no mounts still produces the env

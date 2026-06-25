@@ -72,8 +72,8 @@ operator reference. **Keep the two in sync** when either changes.
 | `MIRROR_TARGET_CREDENTIAL_PROVIDER` | No (default `static`) | Mirror-target write credential: `static` (`MIRROR_TARGET_TOKEN`) or `codeartifact` (mints under the container/task role). `gcp-artifact-registry` is recognised but not yet built. |
 | `MIRROR_TARGET_TOKEN` | No | Static write token, when `MIRROR_TARGET_CREDENTIAL_PROVIDER=static` (the default). |
 | `MIRROR_TARGET_CODEARTIFACT_DOMAIN` | `codeartifact` only | CodeArtifact domain — or parsed from a CodeArtifact `MIRROR_TARGET_URL` host. |
-| `MIRROR_TARGET_CODEARTIFACT_DOMAIN_OWNER` | `codeartifact` only | 12-digit owning account — or parsed from the host. |
-| `MIRROR_TARGET_CODEARTIFACT_REGION` | `codeartifact` only | Region — this key, else `AWS_REGION`, else the host. |
+| `MIRROR_TARGET_CODEARTIFACT_DOMAIN_OWNER` | `codeartifact` only | 12-digit owning account id — or parsed from the host (a non-account-id value is rejected at boot). |
+| `MIRROR_TARGET_CODEARTIFACT_REGION` | `codeartifact` only | Region — this key, else the host (its authoritative region), else `AWS_REGION`. |
 | `MIRROR_TARGET_CODEARTIFACT_TOKEN_DURATION_SECONDS` | No | Token lifetime in seconds, capped at `43200` (12 h). |
 | `MIRROR_QUEUE_PROVIDER` | No (default `sqs`) | Mirror-queue backend: `sqs` (AWS). `pubsub` (GCP) is recognised but not yet built. |
 | `MIRROR_QUEUE_URL` | **Yes** | Queue identifier: an SQS queue URL or a Pub/Sub `projects/<p>/topics/<t>` resource. |

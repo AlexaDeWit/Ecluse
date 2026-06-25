@@ -40,6 +40,7 @@ import TestContainers.Hspec (withContainers)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (try)
 
+import Ecluse.Credential (mkSecret, unSecret)
 import Ecluse.Queue (MirrorQueue (receive), QueueMessage, Seconds (Seconds))
 import Ecluse.Queue.Sqs (SqsConfig (..), SqsEndpoint (..), defaultSqsConfig, newSqsQueue)
 
@@ -91,7 +92,7 @@ endpointFor container =
             , endpointHost = host
             , endpointPort = mappedPort
             , endpointAccessKey = "test"
-            , endpointSecretKey = "test"
+            , endpointSecretKey = mkSecret "test"
             }
 
 -- ── per-test queue ────────────────────────────────────────────────────────────
@@ -145,7 +146,7 @@ envFor endpoint = do
     base <-
         AWS.Auth.fromKeys
             (AWS.AccessKey (encodeUtf8 (endpointAccessKey endpoint)))
-            (AWS.SecretKey (encodeUtf8 (endpointSecretKey endpoint)))
+            (AWS.SecretKey (encodeUtf8 (unSecret (endpointSecretKey endpoint))))
             <$> AWS.newEnvNoAuth
     let regioned = base{AWS.region = AWS.Region' "us-east-1"}
     pure $

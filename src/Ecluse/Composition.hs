@@ -58,10 +58,12 @@ module Ecluse.Composition (
     cacheConfigFor,
 ) where
 
+import Data.Char (isDigit)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Time (UTCTime)
+import UnliftIO (tryAny)
 
 import Ecluse.Config (
     Config (..),
@@ -80,7 +82,7 @@ import Ecluse.Config (
     renderQueueBackend,
     unUrl,
  )
-import Ecluse.Credential (AuthToken (..), CredentialProvider, Secret, staticProvider, unSecret)
+import Ecluse.Credential (AuthToken (..), CredentialProvider, Secret, mkSecret, staticProvider)
 import Ecluse.Credential.CodeArtifact (CodeArtifactConfig (..), newCodeArtifactProvider)
 import Ecluse.Ecosystem (Ecosystem, ecosystemName, prefixFor)
 import Ecluse.Package.Integrity (MinIntegrity)
@@ -111,10 +113,13 @@ selected by 'cfgMirrorTargetCredentialProvider' (see 'planMirrorCredential'):
 * @codeartifact@ — the CodeArtifact inputs are resolved
   ('resolveCodeArtifactConfig'); a required input that resolves by neither an
   explicit key nor the mirror-target host is a fail-loud boot error. On success the
-  S16 refresh wrapper around the S17 mint leaf ('newCodeArtifactProvider') is built,
-  which mints once eagerly — so a misconfigured identity fails here at boot. AWS
-  credentials are the ambient container\/task role (the standard chain), never an
-  Écluse key.
+  generic refresh\/cache wrapper around the CodeArtifact mint leaf
+  ('newCodeArtifactProvider') is built, which mints once eagerly — so a misconfigured
+  identity fails here at boot. AWS credentials are the ambient container\/task role
+  (the standard chain), never an Écluse key. A mint that throws at boot (a transient
+  AWS error, or a permanent one like a bad domain\/region or missing permission) is
+  caught and rendered as a 'CodeArtifactMintFailed' boot error rather than escaping as
+  a raw exception, so it joins the aggregated failure block.
 * @gcp-artifact-registry@ — recognised but not built in this binary, so selecting
   it is a fail-loud boot error rather than a silent fall-through.
 
@@ -124,14 +129,22 @@ independent of the selector, so a static token never goes unused.
 initCredentialProviders :: EnvConfig -> IO (Either [BootError] CredentialProviders)
 initCredentialProviders env = case planMirrorCredential env of
     Left errs -> pure (Left errs)
-    Right mCodeArtifact -> do
+    Right Nothing -> pure (Right (providersFrom Nothing))
+    Right (Just caConfig) ->
         -- The CodeArtifact leaf mints once eagerly at construction, so an unreachable
         -- or unauthorised identity fails the boot here rather than on the first write.
-        codeArtifactEntry <- traverse buildCodeArtifact mCodeArtifact
-        pure (Right (CredentialProviders (Map.fromList (catMaybes [staticEntry] <> maybeToList codeArtifactEntry))))
+        -- Catch that mint so its failure renders through the aggregated boot block
+        -- instead of escaping as a raw amazonka exception.
+        tryAny (newCodeArtifactProvider caConfig) <&> \case
+            Left err -> Left [CodeArtifactMintFailed (toText (displayException err))]
+            Right provider -> Right (providersFrom (Just provider))
   where
-    buildCodeArtifact :: CodeArtifactConfig -> IO (CredentialBackend, CredentialProvider)
-    buildCodeArtifact caConfig = (CodeArtifactCredential,) <$> newCodeArtifactProvider caConfig
+    -- Assemble the provider map from the static leaf (when a token is present) plus
+    -- the optionally-built CodeArtifact provider.
+    providersFrom :: Maybe CredentialProvider -> CredentialProviders
+    providersFrom mCodeArtifact =
+        CredentialProviders
+            (Map.fromList (catMaybes [staticEntry] <> maybeToList ((CodeArtifactCredential,) <$> mCodeArtifact)))
 
     -- The static provider, when a static write token is supplied. A static token
     -- never expires, so the in-memory 'staticProvider' leaf is the whole policy.
@@ -179,15 +192,21 @@ boot errors naming each input that could not be resolved.
 
 Each required input is resolved __(a) from its explicit @MIRROR_TARGET_CODEARTIFACT_*@
 key, else (b) by parsing the mirror-target URL host__ of the form
-@{domain}-{owner}.d.codeartifact.{region}.amazonaws.com@ (the architect-ratified
-fallback). The region additionally falls back to @AWS_REGION@ between (a) and (b).
-The mirror-target URL is the resolved one — an unset @MIRROR_TARGET_URL@ has already
-folded onto the private upstream — so a private-upstream CodeArtifact endpoint is
-parsed too. The optional token-duration carries through ('cfgMirrorCodeArtifactTokenDuration').
+@{domain}-{owner}.d.codeartifact.{region}.amazonaws.com@ (the documented host
+fallback). The region resolves explicit key → host → @AWS_REGION@: the endpoint host
+encodes the domain's authoritative region, so it outranks the process-wide
+@AWS_REGION@ (a cross-region deploy mints against the domain's region, not the
+caller's). The mirror-target URL is the resolved one — an unset @MIRROR_TARGET_URL@
+has already folded onto the private upstream — so a private-upstream CodeArtifact
+endpoint is parsed too. The optional token-duration carries through
+('cfgMirrorCodeArtifactTokenDuration').
 
-If a required input (domain, owner, or region) resolves by __neither__ (a) nor (b),
-that is a fail-loud 'CodeArtifactConfigMissing' boot error naming the exact key the
-operator must set, aggregated so one run reports every missing input.
+The @{owner}@ is a 12-digit AWS account id: a resolved owner (from either source)
+that is not 12 digits is a fail-loud 'CodeArtifactConfigInvalid' error, and a host
+whose tail after the last hyphen is not an account id is not a CodeArtifact endpoint
+at all (so it falls through to the named-key check). If a required input resolves by
+__neither__ source, that is a fail-loud 'CodeArtifactConfigMissing' boot error naming
+the exact key the operator must set, aggregated so one run reports every problem.
 -}
 resolveCodeArtifactConfig :: EnvConfig -> Either [BootError] CodeArtifactConfig
 resolveCodeArtifactConfig env =
@@ -210,35 +229,47 @@ resolveCodeArtifactConfig env =
     mirrorTargetUrl :: Text
     mirrorTargetUrl = maybe (unUrl (cfgPrivateUpstream env)) unUrl (cfgMirrorTarget env)
 
-    -- (a) explicit key, else (b) the parsed host field; a non-empty resolution wins,
-    -- else the named-key boot error.
-    resolve :: Text -> Maybe Text -> Maybe Text -> Either BootError Text
-    resolve key explicit fromHost =
-        case nonBlank =<< (explicit <|> fromHost) of
-            Just value -> Right value
-            Nothing -> Left (CodeArtifactConfigMissing key)
+    -- The first non-blank of the precedence-ordered candidates, or the named-key
+    -- boot error. Each candidate is trimmed, so a blank explicit value falls through.
+    resolve :: Text -> [Maybe Text] -> Either BootError Text
+    resolve key candidates =
+        maybe (Left (CodeArtifactConfigMissing key)) Right (asum (map (>>= nonBlank) candidates))
 
-    domainE = resolve "MIRROR_TARGET_CODEARTIFACT_DOMAIN" (cfgMirrorCodeArtifactDomain env) (fst3 <$> parsed)
-    ownerE = resolve "MIRROR_TARGET_CODEARTIFACT_DOMAIN_OWNER" (cfgMirrorCodeArtifactDomainOwner env) (snd3 <$> parsed)
-    -- Region resolves through AWS_REGION between the explicit key and the host parse.
-    regionE = resolve "MIRROR_TARGET_CODEARTIFACT_REGION" (cfgMirrorCodeArtifactRegion env <|> cfgAwsRegion env) (thd3 <$> parsed)
+    domainE = resolve "MIRROR_TARGET_CODEARTIFACT_DOMAIN" [cfgMirrorCodeArtifactDomain env, fst3 <$> parsed]
+    ownerE =
+        resolve "MIRROR_TARGET_CODEARTIFACT_DOMAIN_OWNER" [cfgMirrorCodeArtifactDomainOwner env, snd3 <$> parsed]
+            >>= validateAccountId "MIRROR_TARGET_CODEARTIFACT_DOMAIN_OWNER"
+    regionE = resolve "MIRROR_TARGET_CODEARTIFACT_REGION" [cfgMirrorCodeArtifactRegion env, thd3 <$> parsed, cfgAwsRegion env]
+
+    -- A resolved owner must be a 12-digit AWS account id (an explicit key can supply a
+    -- malformed one; a host owner is already validated by 'parseCodeArtifactHost').
+    validateAccountId :: Text -> Text -> Either BootError Text
+    validateAccountId key owner
+        | isAccountId owner = Right owner
+        | otherwise = Left (CodeArtifactConfigInvalid key "expected a 12-digit AWS account id")
 
     fst3 (a, _, _) = a
     snd3 (_, b, _) = b
     thd3 (_, _, c) = c
 
+-- Whether a value is a 12-digit AWS account id.
+isAccountId :: Text -> Bool
+isAccountId t = T.length t == 12 && T.all isDigit t
+
 {- Parse a CodeArtifact npm endpoint host into its (domain, owner, region). The host
 shape is @{domain}-{owner}.d.codeartifact.{region}.amazonaws.com@; the @{owner}@ is the
-12-digit account number after the __last__ hyphen of the first label, so a domain may
-itself contain hyphens. 'Nothing' for any host that is not this shape. -}
+12-digit account id after the __last__ hyphen of the first label, so a domain may
+itself contain hyphens. 'Nothing' for any host that is not this shape — including one
+whose tail after the last hyphen is not an account id, so a hyphen-bearing
+non-CodeArtifact host never mis-parses into a bogus owner. -}
 parseCodeArtifactHost :: Text -> Maybe (Text, Text, Text)
 parseCodeArtifactHost host = do
     [domainOwner, regionTail] <- Just (T.splitOn ".d.codeartifact." host)
     region <- nonBlank =<< T.stripSuffix ".amazonaws.com" regionTail
     let (domainDash, owner) = T.breakOnEnd "-" domainOwner
     domain <- nonBlank (T.dropEnd 1 domainDash)
-    ownerValue <- nonBlank owner
-    pure (domain, ownerValue, region)
+    guard (isAccountId owner)
+    pure (domain, owner, region)
 
 -- A 'Text' that is non-empty after trimming, or 'Nothing'.
 nonBlank :: Text -> Maybe Text
@@ -284,6 +315,15 @@ data BootError
       name of the key the operator must set.
       -}
       CodeArtifactConfigMissing Text
+    | {- | A CodeArtifact input resolved but is malformed (e.g. a domain owner that is
+      not a 12-digit AWS account id). Carries the key and a reason.
+      -}
+      CodeArtifactConfigInvalid Text Text
+    | {- | The eager boot-time CodeArtifact mint threw — a transient AWS error (worth a
+      retry) or a permanent one (a bad domain\/region or missing permission, to be
+      fixed). Carries the rendered exception so the cause is legible and aggregated.
+      -}
+      CodeArtifactMintFailed Text
     deriving stock (Eq, Show)
 
 -- | Render a 'BootError' as a human-facing line for the aggregated failure block.
@@ -316,6 +356,12 @@ renderBootError = \case
         "mirror-target credential provider codeartifact requires "
             <> key
             <> " (set it explicitly, or use a CodeArtifact MIRROR_TARGET_URL it can be parsed from)"
+    CodeArtifactConfigInvalid key reason ->
+        "mirror-target credential provider codeartifact: " <> key <> " is invalid (" <> reason <> ")"
+    CodeArtifactMintFailed detail ->
+        "mirror-target credential provider codeartifact failed to mint an initial token at boot: "
+            <> detail
+            <> " (a transient AWS error may clear on retry; a permanent one — bad domain/region or missing permission — must be fixed)"
 
 {- | Validate the environment layer and optional document into the served mount
 bindings, or the aggregated boot errors. The composition root's single entry: it
@@ -574,25 +620,37 @@ resolveSqsEndpoint env =
                             , endpointHost = host
                             , endpointPort = port
                             , endpointAccessKey = fromMaybe "" (cfgAwsAccessKeyId env)
-                            , endpointSecretKey = maybe "" unSecret (cfgAwsSecretAccessKey env)
+                            , -- Carried as a redacted 'Secret' end to end (never unwrapped here).
+                              endpointSecretKey = fromMaybe (mkSecret "") (cfgAwsSecretAccessKey env)
                             }
                     )
             Nothing -> Left [QueueEndpointMalformed url]
 
 {- Parse an endpoint URL into its (TLS flag, host, port). The scheme picks the TLS
 flag and the default port (443\/80) when none is given; an absent scheme or a
-non-numeric port yields 'Nothing'. -}
+non-numeric port yields 'Nothing'. A bracketed IPv6 literal authority
+(@[::1]:4566@) is split on the closing bracket, not on an inner colon, and the host
+is returned without brackets. -}
 parseEndpointUrl :: Text -> Maybe (Bool, Text, Int)
 parseEndpointUrl raw = do
     (secure, afterScheme) <-
         ((True,) <$> T.stripPrefix "https://" raw) <|> ((False,) <$> T.stripPrefix "http://" raw)
     let authority = T.takeWhile (`notElem` ['/', '?', '#']) afterScheme
-        (hostText, portText) = T.breakOn ":" authority
+    (hostText, portText) <- splitAuthority authority
     host <- nonBlank hostText
     port <- case T.stripPrefix ":" portText of
         Nothing -> Just (if secure then 443 else 80)
         Just digits -> readMaybe (toString digits)
     pure (secure, host, port)
+  where
+    -- Split an authority into (host, "":port"|""). A @[…]@ IPv6 literal splits on the
+    -- closing bracket so an inner colon is never mistaken for the port separator.
+    splitAuthority :: Text -> Maybe (Text, Text)
+    splitAuthority authority = case T.stripPrefix "[" authority of
+        Just rest -> case T.breakOn "]" rest of
+            (_, "") -> Nothing -- an opening bracket with no close: malformed
+            (inner, afterBracket) -> Just (inner, T.drop 1 afterBracket)
+        Nothing -> Just (T.breakOn ":" authority)
 
 -- ── config-derived runtime settings ───────────────────────────────────────────
 
