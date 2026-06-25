@@ -308,6 +308,30 @@ spec = do
                 gated = (GatedSource, packumentWith [("1.0.0", [sha1 "abc"])])
             (mpDivergences <$> mergePackuments [trusted, gated]) `shouldBe` Just Set.empty
 
+        -- A single version can carry several digests of *one* algorithm — the domain
+        -- model allows many artifacts ('pkgArtifacts' is a 'NonEmpty'), each with its
+        -- own hashes (a PyPI sdist + wheels may each carry a SHA-256), and 'fingerprint'
+        -- gathers them all. For a shared algorithm the copies therefore agree only when
+        -- the set of digests they each offer for it matches.
+        it "agrees when a shared algorithm carries the same set of digests in any order" $ do
+            -- The same two SRI digests on both copies, listed in opposite order: the
+            -- per-algorithm set is identical, so this is not a divergence.
+            let trusted = (TrustedSource, packumentWith [("1.0.0", [sri "sha512-X", sri "sha512-Y"])])
+                gated = (GatedSource, packumentWith [("1.0.0", [sri "sha512-Y", sri "sha512-X"])])
+            (mpDivergences <$> mergePackuments [trusted, gated]) `shouldBe` Just Set.empty
+
+        it "contradicts when a shared algorithm's set of digests differs" $
+            -- One copy offers two SRI digests for the key, the other only one of them:
+            -- the digest sets for the shared algorithm differ, so it is flagged.
+            let trusted = (TrustedSource, packumentWith [("1.0.0", [sri "sha512-X", sri "sha512-Y"])])
+                gated = (GatedSource, packumentWith [("1.0.0", [sri "sha512-X"])])
+             in case Set.toList . mpDivergences <$> mergePackuments [trusted, gated] of
+                    Just [d] -> do
+                        divVersion d `shouldBe` "1.0.0"
+                        integrityHashes (divWinning d) `shouldBe` [(SRI, "sha512-X"), (SRI, "sha512-Y")]
+                        integrityHashes (divLosing d) `shouldBe` [(SRI, "sha512-X")]
+                    other -> expectationFailure ("expected exactly one divergence, got " <> show other)
+
     describe "precedence is by provenance, not input order" $ do
         -- dist-tags and time must resolve collisions by provenance (trusted wins),
         -- so the plan is identical whichever order the caller passes the upstreams.
