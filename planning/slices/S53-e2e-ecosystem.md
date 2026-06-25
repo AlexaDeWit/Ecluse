@@ -2,7 +2,7 @@
 id: S53
 title: End-to-end testing ecosystem (whole-system, public-surface, cross-component)
 milestone: M8 — Release hardening
-status: in-progress
+status: merged
 depends-on: [S15, S19]
 test-tier: [e2e]
 arch-refs:

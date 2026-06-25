@@ -2,7 +2,7 @@
 id: S19
 title: Mirror worker (fetch → verify → publish → ack)
 milestone: M4 — AWS cloud backends & worker
-status: in-review
+status: merged
 depends-on: [S08, S16, S18]
 test-tier: [unit, integration]
 arch-refs:
