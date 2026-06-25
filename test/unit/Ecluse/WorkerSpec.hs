@@ -309,6 +309,15 @@ spec = do
             mismatchDetail (verifyIntegrity (Hash SRI "sha256-Zm9vYmFy" :| []) tarballBytes)
                 `shouldBe` Just "the strongest admitted digest (SRI sha256) is in an algorithm the worker cannot verify"
 
+        it "fails closed on an unrecognised SRI that outranks a matching weaker digest (no downgrade)" $
+            -- The downgrade guard, multi-digest: a present-but-uncomputable strong SRI
+            -- (sha256) must OUTRANK a co-present, matching SHA-1 the attacker also
+            -- controls, so the gate fails closed instead of admitting the artifact on
+            -- the weaker digest. The lone-SRI test above cannot see this — with no
+            -- weaker digest present there is nothing to downgrade to.
+            mismatchDetail (verifyIntegrity (Hash SRI "sha256-Zm9vYmFy" :| [Hash SHA1 trueSha1]) tarballBytes)
+                `shouldBe` Just "the strongest admitted digest (SRI sha256) is in an algorithm the worker cannot verify"
+
         it "names the algorithm in a plain (computable) digest mismatch too" $
             -- The non-uncomputable mismatch branch: a sha512 SRI that simply does not
             -- match. The detail names the algorithm via the SRI 'describe' arm, so a

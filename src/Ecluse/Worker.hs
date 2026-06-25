@@ -466,17 +466,25 @@ verifyIntegrity hashes bytes =
 
     -- Algorithm authority, strongest first, so 'maximumBy' selects the digest a
     -- match must be proven against. An SRI string is ranked by its embedded
-    -- algorithm (npm's @sha512-…@ ranks as 'SHA512'); an unrecognised SRI alg ranks
-    -- below everything so it never wins over a digest we can actually check.
+    -- algorithm (npm's @sha512-…@ ranks as 'SHA512'); an SRI whose inner alg is not
+    -- sha512 is a strong digest the worker cannot recompute, so it ranks at the
+    -- strong tier (above the legacy SHA-1/MD5) and the gate fails closed on it rather
+    -- than downgrading to a weaker computable digest.
     authority :: Hash -> Int
     authority h = case effectiveAlg h of
         Just SHA512 -> 5
         Just Blake2b -> 5
         Just SHA256 -> 4
+        -- An SRI asserting a strong algorithm the worker cannot recompute (any inner
+        -- alg but sha512). It ranks at the strong tier — above the legacy SHA-1/MD5 —
+        -- so it WINS the 'maximumBy' and the gate fails closed, rather than
+        -- downgrading to a weaker computable digest an attacker who also controls it
+        -- could forge. It stays below a computable sha512, so a real sha512, when
+        -- co-present, is still preferred and verified.
+        Nothing -> 4
         Just SHA1 -> 2
         Just MD5 -> 1
-        Just SRI -> 0 -- an SRI whose inner alg did not resolve; never authoritative
-        Nothing -> 0
+        Just SRI -> 0 -- unreachable: 'effectiveAlg' resolves SRI to its inner alg or 'Nothing'
 
     -- The algorithm a hash effectively asserts: its tag directly, or — for an SRI
     -- string — the algorithm named in its @"<alg>-<base64>"@ prefix.
