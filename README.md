@@ -19,9 +19,10 @@ bootstrapping phase, behind a documented review process and a strict CI gate. Se
 [`AI-DISCLOSURE.md`](AI-DISCLOSURE.md) for what's mine, what the AI did, and how to verify
 it rather than trust it.
 
-> **Status: pre-launch, under active development; no GA release yet.** The functional core
-> and the npm **packument** and **tarball** paths are in place; the **mirror worker** and
-> the **cloud backends** are still landing, so Écluse isn't yet a proxy you can put in front
+> **Status: pre-launch, under active development; no GA release yet.** The functional core,
+> the npm **packument** and **tarball** paths, and the **mirror worker** are in place; the
+> **cloud backends** — the AWS composition root that wires them into a runnable deployment —
+> are still landing, so Écluse isn't yet a proxy you can put in front
 > of a build. Pre-release candidates are published and attested, but expect breaking changes
 > before `v0.1.0`. What's actually shipped is tracked slice by slice in the
 > [delivery plan](planning/delivery-plan.md) (the per-slice `status:` is the source of
