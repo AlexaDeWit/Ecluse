@@ -28,28 +28,29 @@ import Ecluse.Version (mkVersion, unVersion)
 name :: PackageName
 name = mkPackageName Npm Nothing "thing"
 
-{- | One tarball with the given integrity digest, so two versions of the same key
-can be made to agree or diverge purely on integrity.
+{- | One tarball carrying a chosen set of integrity digests, so two copies of the
+same version key can be made to agree, contradict, or merely expose asymmetric
+algorithm sets purely on integrity.
 -}
-artifactWith :: Text -> Artifact
-artifactWith digest =
+artifactWith :: [Hash] -> Artifact
+artifactWith hs =
     Artifact
         { artFilename = "thing.tgz"
         , artUrl = "https://example.test/thing.tgz"
         , artKind = Tarball
-        , artHashes = [Hash SRI digest]
+        , artHashes = hs
         , artSize = Nothing
         , artInterpreter = Nothing
         , artYanked = False
         , artProvenance = Nothing
         }
 
-{- | A per-version snapshot for a raw version string, carrying a chosen integrity
-digest. Everything else is inert — the merge reads only the version key, the
-parsed version (for @latest@), and artifact integrity (for divergence).
+{- | A per-version snapshot for a raw version string, carrying a chosen set of
+integrity digests. Everything else is inert — the merge reads only the version
+key, the parsed version (for @latest@), and artifact integrity (for divergence).
 -}
-detailsWith :: Text -> Text -> PackageDetails
-detailsWith rawVer digest =
+detailsWith :: Text -> [Hash] -> PackageDetails
+detailsWith rawVer hs =
     PackageDetails
         { pkgName = name
         , pkgVersion = mkVersion Npm rawVer
@@ -57,23 +58,25 @@ detailsWith rawVer digest =
         , pkgInstallCode = NoCodeOnInstall
         , pkgTrust = Untrusted
         , pkgAvailability = Available
-        , pkgArtifacts = artifactWith digest :| []
+        , pkgArtifacts = artifactWith hs :| []
         , pkgLicenses = ["MIT"]
         , pkgPublisher = Nothing
         , pkgMaintainers = []
         , pkgDependencies = []
         }
 
-{- | Build a single-package packument from @(rawVersion, integrityDigest)@ pairs.
-@latest@ is pointed at the lexically-highest version (a coherent packument always
-tags its newest release), so a lone source is already a fixed point of the merge's
-@latest@ reconciliation; @time@ gives each version a fixed instant.
+{- | Build a single-package packument from @(rawVersion, integrityDigests)@ pairs,
+each version carrying the given set of integrity hashes (so two copies of one key
+can expose asymmetric algorithm sets). @latest@ is pointed at the lexically-highest
+version (a coherent packument always tags its newest release), so a lone source is
+already a fixed point of the merge's @latest@ reconciliation; @time@ gives each
+version a fixed instant.
 -}
-packument :: [(Text, Text)] -> PackageInfo
-packument vs =
+packumentWith :: [(Text, [Hash])] -> PackageInfo
+packumentWith vs =
     PackageInfo
         { infoName = name
-        , infoVersions = Map.fromList [(v, detailsWith v d) | (v, d) <- vs]
+        , infoVersions = Map.fromList [(v, detailsWith v hs) | (v, hs) <- vs]
         , infoDistTags = case sortOn Down (map fst vs) of
             [] -> Map.empty
             (hi : _) -> Map.singleton "latest" (mkVersion Npm hi)
@@ -81,6 +84,13 @@ packument vs =
         }
   where
     t0 = UTCTime (fromGregorian 2026 1 1) 0
+
+{- | Build a packument whose every version carries a single SRI digest — the common
+case for the collision and reconciliation tests, where the algorithm set is uniform
+and only the digest value varies.
+-}
+packument :: [(Text, Text)] -> PackageInfo
+packument vs = packumentWith [(v, [Hash SRI d]) | (v, d) <- vs]
 
 -- ── small accessors ──────────────────────────────────────────────────────────
 
@@ -113,6 +123,10 @@ winnerProvenances inputs plan =
 
 genDigest :: Gen Text
 genDigest = ("sha512-" <>) <$> Gen.text (Range.singleton 6) Gen.alphaNum
+
+-- | An arbitrary 40-hex-character SHA-1 shasum (npm's @dist.shasum@ wire form).
+genSha1 :: Gen Text
+genSha1 = Gen.text (Range.singleton 40) Gen.hexit
 
 -- | A simple numeric semver so generated versions always parse and order.
 genVersionStr :: Gen Text
@@ -256,6 +270,43 @@ spec = do
                     integrityHashes (divWinning d) `shouldBe` [(SRI, "sha512-private")]
                     integrityHashes (divLosing d) `shouldBe` [(SRI, "sha512-public")]
                 other -> expectationFailure ("expected exactly one divergence, got " <> show other)
+
+    describe "divergence compares on shared algorithms, not the whole digest set" $ do
+        -- A divergence is reported only when two copies *contradict* on an algorithm
+        -- they both carry. An asymmetric digest set — one mirror also serving a digest
+        -- the other omits — is not, on its own, a contradiction: an older registry
+        -- exposing only a legacy shasum while npmjs serves shasum + a modern SRI
+        -- describes the same bytes and must not be flagged.
+        let sha1 = Hash SHA1
+            sri = Hash SRI
+
+        it "agreeing on the shared SRI is not a divergence though one also carries SHA-1" $ do
+            -- Both expose the same sha512 SRI; the private copy additionally carries a
+            -- legacy SHA-1 shasum the public copy lacks. The shared algorithm (SRI)
+            -- agrees, so this is the same bytes — not a divergence.
+            let trusted = (TrustedSource, packumentWith [("1.0.0", [sri "sha512-X", sha1 "deadbeef"])])
+                gated = (GatedSource, packumentWith [("1.0.0", [sri "sha512-X"])])
+            (mpDivergences <$> mergePackuments [trusted, gated]) `shouldBe` Just Set.empty
+
+        it "contradicting on the shared SRI is a divergence even when SHA-1 agrees" $ do
+            -- Both carry the same SHA-1 but a *different* sha512 SRI. A SHA-1 agreement
+            -- can never rescue a contradicting secure digest, so the SRI contradiction
+            -- is flagged regardless of the matching weak digest beside it.
+            let trusted = (TrustedSource, packumentWith [("1.0.0", [sri "sha512-X", sha1 "abc"])])
+                gated = (GatedSource, packumentWith [("1.0.0", [sri "sha512-Y", sha1 "abc"])])
+                plan = mergePackuments [trusted, gated]
+            (map divVersion . Set.toList . mpDivergences <$> plan) `shouldBe` Just ["1.0.0"]
+
+        it "SRI+SHA-1 vs SHA-1-only, agreeing on the shared SHA-1, is not a divergence" $ do
+            -- One copy carries sha512 + sha1, the other only the legacy sha1, and that
+            -- single shared algorithm agrees. With no contradiction on a shared
+            -- algorithm this is not a divergence; the comparison only ever flags a
+            -- shared algorithm whose digests disagree. (Pinned so the current behaviour
+            -- is explicit: whether a weak-only agreement should itself be treated as
+            -- suspicious is a separate, stricter policy not decided by this fold.)
+            let trusted = (TrustedSource, packumentWith [("1.0.0", [sri "sha512-X", sha1 "abc"])])
+                gated = (GatedSource, packumentWith [("1.0.0", [sha1 "abc"])])
+            (mpDivergences <$> mergePackuments [trusted, gated]) `shouldBe` Just Set.empty
 
     describe "precedence is by provenance, not input order" $ do
         -- dist-tags and time must resolve collisions by provenance (trusted wins),
@@ -439,6 +490,19 @@ spec = do
                 plan <- H.evalMaybe (mergePackuments [trusted, gated])
                 let diverged = not (Set.null (mpDivergences plan))
                 diverged === (d1 /= d2)
+
+        it "an extra SHA-1 on one copy never diverges while the shared SRI agrees" $
+            hedgehog $ do
+                -- The asymmetric-digest invariant, generalised: whatever legacy SHA-1
+                -- one mirror adds, two copies that agree on the shared SRI are the same
+                -- bytes and never diverge on the asymmetry alone.
+                ver <- forAll genVersionStr
+                sri <- forAll genDigest
+                extra <- forAll genSha1
+                let trusted = (TrustedSource, packumentWith [(ver, [Hash SRI sri, Hash SHA1 extra])])
+                    gated = (GatedSource, packumentWith [(ver, [Hash SRI sri])])
+                plan <- H.evalMaybe (mergePackuments [trusted, gated])
+                mpDivergences plan === Set.empty
 
     describe "the merge accumulator is a lawful Monoid" $ do
         -- The fold is realised over the 'Merge' accumulator; its laws are what make
