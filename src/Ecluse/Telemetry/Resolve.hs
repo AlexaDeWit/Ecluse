@@ -182,10 +182,26 @@ defaultServiceName = "ecluse"
 defaultEndpointUrl :: Text
 defaultEndpointUrl = "http://localhost:4318"
 
--- The OTLP HTTP\/protobuf endpoint for a Datadog Agent host: the Agent's OTLP
--- receiver listens on 4318 for HTTP\/protobuf, the only transport we build.
+{- Build the OTLP HTTP\/protobuf endpoint URL for a Datadog Agent host: the Agent's
+OTLP receiver listens on 4318 for HTTP\/protobuf, the only transport we build. A
+literal IPv6 host is bracketed so the authority is well-formed — @http:\/\/[fd00::1]:4318@,
+not the invalid @http:\/\/fd00::1:4318@ — which also keeps 'hostAddress' (and so the
+egress classification) extracting the right host rather than a truncated one. A host
+that already carries a scheme is used verbatim, and one already carrying a port is not
+given a second, so a deliberately-qualified @DD_AGENT_HOST@ is never mangled. Colon
+count disambiguates: a bare IPv6 literal has two or more colons, a @host:port@ exactly
+one, and a bare host or IPv4 none. -}
 agentHostUrl :: Text -> Text
-agentHostUrl host = "http://" <> host <> ":4318"
+agentHostUrl raw
+    | "://" `T.isInfixOf` host = host
+    | otherwise = "http://" <> authority
+  where
+    host = T.strip raw
+    authority
+        | "[" `T.isPrefixOf` host = if "]:" `T.isInfixOf` host then host else host <> ":4318"
+        | T.count ":" host >= 2 = "[" <> host <> "]:4318"
+        | T.count ":" host == 1 = host
+        | otherwise = host <> ":4318"
 
 -- ── canonical OTEL_* projection ──────────────────────────────────────────────
 
@@ -464,7 +480,13 @@ resolveHostAddresses host =
 export errors through @katip@ under a throttle, so a persistently unreachable
 collector is one warning plus a periodic heartbeat rather than a per-flush flood.
 The SDK exposes a single settable handler, so this replaces the default
-stderr handler for the lifetime of the process. -}
+stderr handler for the lifetime of the process.
+
+The forwarded diagnostic 'String' is the SDK's own export-error text and is trusted
+not to carry secrets: this module never reads the credential-bearing telemetry inputs
+(@OTEL_EXPORTER_OTLP_HEADERS@, @DD_API_KEY@, @DD_SITE@), so the only residual channel
+is whatever the SDK itself chooses to log, which the upstream exporter keeps to
+endpoint/status diagnostics. -}
 installThrottledErrorHandler :: LogEnv -> IO ()
 installThrottledErrorHandler logEnv = do
     throttle <- newIORef initialThrottle

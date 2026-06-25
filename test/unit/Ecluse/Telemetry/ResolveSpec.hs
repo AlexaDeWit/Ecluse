@@ -5,6 +5,7 @@ import Data.List (lookup)
 import Data.Time (UTCTime (UTCTime), addUTCTime, fromGregorian)
 import Test.Hspec
 
+import Ecluse.Security (hostAddress)
 import Ecluse.Telemetry.Resolve (
     EgressDecision (..),
     EndpointEgress (..),
@@ -88,6 +89,23 @@ resolveSpec = describe "resolveTelemetry" $ do
         rtEndpoint (resolveTelemetry [])
             `shouldBe` TelemetryEndpoint "http://localhost:4318" DefaultedEndpoint
 
+    it "brackets a literal IPv6 DD_AGENT_HOST and leaves an already-qualified value alone" $ do
+        teUrl (rtEndpoint (resolveTelemetry [("DD_AGENT_HOST", "fd00::1")]))
+            `shouldBe` "http://[fd00::1]:4318"
+        -- A value already carrying a scheme is used verbatim (no double scheme).
+        teUrl (rtEndpoint (resolveTelemetry [("DD_AGENT_HOST", "https://agent.internal:4318")]))
+            `shouldBe` "https://agent.internal:4318"
+        -- A host already carrying a port is not given a second.
+        teUrl (rtEndpoint (resolveTelemetry [("DD_AGENT_HOST", "10.0.0.9:4317")]))
+            `shouldBe` "http://10.0.0.9:4317"
+
+    it "keeps the IPv6 endpoint host extractable, so the egress guard classifies the right host" $
+        -- Regression: an unbracketed IPv6 authority truncates under 'hostAddress'
+        -- ("fd00::1:4318" → "fd00"), which would misclassify a public IPv6 agent host
+        -- as unverifiable and bypass the public-egress guard.
+        hostAddress (teUrl (rtEndpoint (resolveTelemetry [("DD_AGENT_HOST", "2606:4700:4700::1111")])))
+            `shouldBe` "2606:4700:4700::1111"
+
 -- ── the canonical OTEL_* projection ──────────────────────────────────────────
 
 overridesSpec :: Spec
@@ -118,9 +136,9 @@ classifySpec = describe "classifyResolved" $ do
         classifyResolved (Just (["127.0.0.1", "10.4.5.6", "::1"] :: [IP]))
             `shouldBe` EgressInternal
 
-    it "is public when any resolved address is public" $
-        classifyResolved (Just (["10.0.0.1", "8.8.8.8"] :: [IP]))
-            `shouldBe` EgressPublic
+    it "is public when any resolved address is public (IPv4 or IPv6)" $ do
+        classifyResolved (Just (["10.0.0.1", "8.8.8.8"] :: [IP])) `shouldBe` EgressPublic
+        classifyResolved (Just (["2606:4700:4700::1111"] :: [IP])) `shouldBe` EgressPublic
 
     it "is unverified when the host resolves to nothing" $ do
         classifyResolved Nothing `shouldBe` EgressUnverified
@@ -147,6 +165,14 @@ decisionSpec = describe "egressDecision" $ do
         case egressDecision True "http://1.2.3.4:4318" EgressPublic of
             EgressAllowWithWarning _ -> pure ()
             other -> expectationFailure ("expected allow-with-warning, got " <> show other)
+
+    it "fails boot for a public IPv6 endpoint without the opt-in (the bracketing regression)" $
+        case egressDecision
+            False
+            "http://[2606:4700:4700::1111]:4318"
+            (classifyResolved (Just (["2606:4700:4700::1111"] :: [IP]))) of
+            EgressFailBoot _ -> pure ()
+            other -> expectationFailure ("expected fail-boot, got " <> show other)
 
 -- ── the public-egress opt-in ─────────────────────────────────────────────────
 
