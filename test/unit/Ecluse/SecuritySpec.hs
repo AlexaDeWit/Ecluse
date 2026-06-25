@@ -321,6 +321,24 @@ internalRangeSpec = describe "isBlockedTarget" $ do
             -- the host allowlist independently rejects it.
             isBlockedTarget noOptIn "" `shouldBe` False
 
+    describe "deliberately treats RFC 5737 documentation ranges as external" $ do
+        -- A tripwire, not just coverage. The end-to-end suite (S53) stands the
+        -- whole system up on a docker network whose subnet is TEST-NET-3
+        -- (203.0.113.0/24): it points the proxy's gated *public* upstream at a
+        -- stub on that range, relying on these documentation addresses being
+        -- reachable rather than blocked. That is correct — a documentation range
+        -- never aliases a real service, so blocking it adds no SSRF protection —
+        -- but a future blocklist audit (issue #178) that broadened the block to
+        -- all reserved space would silently break e2e. If you are here because
+        -- this failed: that broadening is a conscious choice; update the e2e
+        -- harness (planning/slices/S53-e2e-ecosystem.md) to match.
+        it "does not block TEST-NET-3 203.0.113.0/24 (the e2e network subnet)" $
+            isBlockedTarget noOptIn "203.0.113.2" `shouldBe` False
+        it "does not block TEST-NET-1 192.0.2.0/24" $
+            isBlockedTarget noOptIn "192.0.2.1" `shouldBe` False
+        it "does not block TEST-NET-2 198.51.100.0/24" $
+            isBlockedTarget noOptIn "198.51.100.1" `shouldBe` False
+
     describe "explicit per-host opt-in" $ do
         it "permits a deliberately-internal upstream that is opted in" $
             isBlockedTarget (lowerCaseHosts (Set.singleton "10.0.0.5")) "10.0.0.5" `shouldBe` False

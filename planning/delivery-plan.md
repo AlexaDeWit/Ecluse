@@ -243,6 +243,7 @@ owes also owes a deterministic `U`/`I` test (see [Testing Strategy](../docs/test
 | [S41](slices/S41-image-runtime-smoke.md) | Image runtime smoke — distroless `docker run` + real proxied fetch (`dlopen`/NSS verification) — _defence-in-depth; low priority_ | S20 | — |
 | [S42](slices/S42-spdx-license-headers.md) | Per-file SPDX license headers (REUSE-style) + new-file lint — _housekeeping; tree-wide sweep, run at a quiet point_ | — | — |
 | [S46](slices/S46-dockerhub-org-account.md) | Docker Hub org account + repo-scoped publish token (retire account-wide personal PAT) — _accepted risk pre-MVP; harden before GA_ | — | — |
+| [S53](slices/S53-e2e-ecosystem.md) | End-to-end testing ecosystem — whole-system through the real composition root, real `npm` CLI on the public surface, server↔worker round-trip; real Verdaccio + scriptable upstream stub — _new **non-gating** `e2e` tier (pre-merge + nightly); built now on `runServices`, rebased onto S20 when it lands; [#271](https://github.com/AlexaDeWit/Ecluse/issues/271)_ | S15, S19 | E2E |
 
 ### M9 — Performance benchmarking (informational; never gates)
 
@@ -326,18 +327,19 @@ ordered. The live pointer to current work is [In flight](#in-flight)._
 
 ## In flight
 
-_No feature slice is in flight. The S15 → S40 wave is **merged** — the tarball path
-(S15), the CodeArtifact credential leaf (S17), the SQS `MirrorQueue` (S18), the
-effectful rule tier (S21), the OTel substrate (S24), and egress / SSRF hardening
-(S40) — closing M3 and landing M4 / M5 / M6 partially; see
+_In flight: **S53** (end-to-end testing ecosystem) — the new non-gating `e2e` tier
+that boots the whole system through the real composition root and drives it with the
+real `npm` CLI; built now on `runServices`, ahead of S20. The S15 → S40 wave and
+**S19** (mirror worker, [#255](https://github.com/AlexaDeWit/Ecluse/pull/255)) are
+**merged** — the tarball path (S15), the CodeArtifact credential leaf (S17), the SQS
+`MirrorQueue` (S18), the effectful rule tier (S21), the OTel substrate (S24), and
+egress / SSRF hardening (S40) — closing M3 and landing M4 / M5 / M6 partially; see
 [Current state](#current-state-the-baseline-this-plan-builds-on)._
 
-_The build is **between waves**, in the
-[inter-wave quality & alignment pass](orchestration-strategy.md#inter-wave-quality--alignment-pass)
-that gates the next wave: clearing the issue tracker and the carried tech-debt before
-dispatch. The next wave resumes the critical path at **S19** (mirror worker) →
-**S20** (the launch-ready AWS composition), with **S25 / S26** (telemetry spans +
-metrics) layering onto the merged S24 substrate._
+_The critical path to AWS launch now resumes at **S20** (the launch-ready AWS
+composition), with **S25 / S26** (telemetry spans + metrics) layering onto the merged
+S24 substrate. The [inter-wave quality & alignment pass](orchestration-strategy.md#inter-wave-quality--alignment-pass)
+continues to clear the issue tracker and carried tech-debt alongside._
 
 ---
 

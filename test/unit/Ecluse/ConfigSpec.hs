@@ -146,6 +146,7 @@ fullEnv =
     , ("PROXY_LOG_FORMAT", "console")
     , ("PROXY_TELEMETRY", "on")
     , ("PROXY_RESPECT_UPSTREAM_TARBALL_HOST", "true")
+    , ("PROXY_PUBLIC_URL", "https://proxy.example.test")
     ]
 
 -- The minimum valid environment: only the three required URLs, everything else
@@ -187,6 +188,7 @@ envLayerSpec = describe "parseEnvPure" $ do
                 cfgLogFormat cfg `shouldBe` ConsoleLog
                 cfgTelemetry cfg `shouldBe` TelemetryOn
                 cfgRespectUpstreamTarballHost cfg `shouldBe` True
+                fmap unUrl (cfgPublicUrl cfg) `shouldBe` Just "https://proxy.example.test"
                 -- Secret-redaction regression: the tokens are parsed and held,
                 -- but must never reach a Show-based signal (a log, an error, a
                 -- deriving Show) — they are redacted Secrets, not raw Text. See
@@ -212,6 +214,7 @@ envLayerSpec = describe "parseEnvPure" $ do
                 cfgMaxNestingDepth cfg `shouldBe` 64
                 cfgAwsRegion cfg `shouldBe` Nothing
                 cfgAuthToken cfg `shouldBe` Nothing
+                cfgPublicUrl cfg `shouldBe` Nothing
                 cfgMirrorTargetToken cfg `shouldBe` Nothing
                 cfgHelpMessage cfg `shouldBe` Nothing
                 cfgLogFormat cfg `shouldBe` JsonLog

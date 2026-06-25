@@ -171,13 +171,32 @@ composeBindingsSpec = describe "planMounts / composeBindings (config-driven serv
                     Just deps -> do
                         pdPrivateBaseUrl deps `shouldBe` "https://private.example.test"
                         pdPublicBaseUrl deps `shouldBe` "https://public.example.test"
-                        -- The mount base is the derived relative prefix, so tarball
-                        -- URLs rewrite back through the proxy mount.
+                        -- With no PROXY_PUBLIC_URL the mount base falls back to the
+                        -- derived relative prefix (the npm CLI cannot consume this;
+                        -- the absolute form below is what a real client needs).
                         pdMountBaseUrl deps `shouldBe` "/npm"
                         -- The mirror-target endpoint is wired from the mount's config,
                         -- for the demand-driven mirror job's publish destination.
                         pdMirrorTarget deps `shouldBe` "https://mirror.example.test"
             Right other -> expectationFailure ("expected exactly one binding, got " <> show (length other))
+
+    it "rewrites the tarball base to an absolute URL under PROXY_PUBLIC_URL" $ do
+        -- With PROXY_PUBLIC_URL set, dist.tarball rewrites to an absolute URL a real
+        -- npm client can fetch, instead of the npm-incompatible relative path.
+        env <- expectEnv (("PROXY_PUBLIC_URL", "https://proxy.example.test") : staticEnvVars)
+        planFrom env Nothing >>= \case
+            Right [binding] -> case bindingPackumentDeps binding of
+                Just deps -> pdMountBaseUrl deps `shouldBe` "https://proxy.example.test/npm"
+                Nothing -> expectationFailure "expected packument deps wired"
+            other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
+
+    it "drops a trailing slash on PROXY_PUBLIC_URL so the base joins with one separator" $ do
+        env <- expectEnv (("PROXY_PUBLIC_URL", "https://proxy.example.test/") : staticEnvVars)
+        planFrom env Nothing >>= \case
+            Right [binding] -> case bindingPackumentDeps binding of
+                Just deps -> pdMountBaseUrl deps `shouldBe` "https://proxy.example.test/npm"
+                Nothing -> expectationFailure "expected packument deps wired"
+            other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
 
     it "carries the resolved rule policy onto the binding's packument deps" $ do
         env <- expectEnv staticEnvVars

@@ -226,6 +226,17 @@ composeBindings resolveAdapter clock providers config =
     helpMessage :: Maybe HelpMessage
     helpMessage = mkHelpMessage <$> cfgHelpMessage (configEnv config)
 
+    -- A mount's externally-visible base URL for the dist.tarball rewrite. Absolute
+    -- under PROXY_PUBLIC_URL when set (so a served tarball is a full URL an npm
+    -- client can fetch); otherwise the relative prefix path, retained for
+    -- compatibility. A trailing slash on the configured URL is dropped so the join
+    -- with the leading-slash mount path yields exactly one separator.
+    mountBaseUrl :: Ecosystem -> Text
+    mountBaseUrl eco =
+        case cfgPublicUrl (configEnv config) of
+            Nothing -> mountBasePath eco
+            Just public -> T.dropWhileEnd (== '/') (unUrl public) <> mountBasePath eco
+
     {- Resolve one mount to its binding, or the boot errors that block it. Both the
     credential reference and the adapter are checked even when one already failed,
     so a mount missing both reports both in one run rather than one at a time. -}
@@ -247,18 +258,21 @@ composeBindings resolveAdapter clock providers config =
 
     {- Build a mount's 'PackumentDeps' from its registries, resolved rules, the
     inbound edge token, the injected clock, and the operator help message. The
-    mount's externally-visible base URL is its derived prefix path (@\/npm@): a
-    relative base, so a rewritten @dist.tarball@ (@\/npm\/{pkg}\/-\/{file}@)
-    resolves against the registry endpoint a client is pointed at — the proxy
-    mount itself — keeping artifact fetches on the gated path without a separately
-    configured public base (see @docs\/architecture\/hosting.md@ → "URL rewriting"). -}
+    mount's externally-visible base URL drives the @dist.tarball@ rewrite: an
+    __absolute__ URL under @PROXY_PUBLIC_URL@ (@{public}\/npm\/{pkg}\/-\/{file}@)
+    when one is configured, so an @npm@ client fetches the artifact back through the
+    proxy on the gated path; otherwise the relative prefix path (@\/npm@), retained
+    for compatibility — but note @npm@ cannot consume a relative @dist.tarball@ (it
+    reads a leading slash as a @file:@ path), so a real install path must set
+    @PROXY_PUBLIC_URL@ (see @mountBaseUrl@ and
+    @docs\/architecture\/hosting.md@ → "URL rewriting"). -}
     packumentDepsFor :: Mount -> PackumentDeps
     packumentDepsFor mount =
         let regs = mountRegistries mount
          in PackumentDeps
                 { pdPrivateBaseUrl = unUrl (regPrivateUpstream regs)
                 , pdPublicBaseUrl = unUrl (regPublicUpstream regs)
-                , pdMountBaseUrl = mountBasePath (mountEcosystem mount)
+                , pdMountBaseUrl = mountBaseUrl (mountEcosystem mount)
                 , pdMirrorTarget = unUrl (mtUrl (regMirrorTarget regs))
                 , pdRules = mountPolicy mount
                 , -- No effectful rule type is wired into the policy model yet, so the

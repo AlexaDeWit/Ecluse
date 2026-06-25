@@ -312,3 +312,40 @@ test-suite ecluse-smoke
     , process          ^>=1.6
     , text             ^>=2.1
     , unliftio         ^>=0.2.25
+
+-- End-to-end tests: the whole system as the real OCI image, driven by the real npm
+-- CLI over its public HTTP surface, with the server↔worker round-trip across real
+-- containers. NON-GATING (pre-merge visibility + nightly) — needs a Docker daemon,
+-- the npm CLI, and the `.#dockerImage` build, so it is far heavier than the gate.
+-- It COMPILES in the normal build but only RUNS when ECLUSE_E2E_IMAGE names a loaded
+-- image (otherwise every case is `pending`), so a bare `cabal test` never fails on a
+-- machine without the setup. See planning/slices/S53-e2e-ecosystem.md.
+test-suite ecluse-e2e
+  import:             shared
+  -- hspec-discover generates a Main without an export list.
+  ghc-options:        -Wno-missing-export-lists
+  type:               exitcode-stdio-1.0
+  main-is:            Spec.hs
+  hs-source-dirs:     test/e2e
+  other-modules:
+    Ecluse.E2E.Fixtures
+    Ecluse.E2E.Harness
+    Ecluse.E2E.SuiteSpec
+
+  build-tool-depends: hspec-discover:hspec-discover ^>=2.11
+  build-depends:
+    , aeson          ^>=2.2
+    , bytestring     ^>=0.12
+    , containers     ^>=0.7
+    , crypton        ^>=1.0
+    , directory      ^>=1.3
+    , filepath       ^>=1.5
+    , hspec          ^>=2.11
+    , http-client    ^>=0.7
+    , http-types     ^>=0.12
+    , memory         ^>=0.18
+    , network        ^>=3.2
+    , text           ^>=2.1
+    , time           ^>=1.12
+    , typed-process  ^>=0.2.13
+    , unliftio       ^>=0.2.25

@@ -343,6 +343,15 @@ data EnvConfig = EnvConfig
     it @off@ nothing is wired and no telemetry is emitted; the standard @OTEL_*@
     variables are read by the SDK only once it is @on@ (see "Ecluse.Telemetry").
     -}
+    , cfgPublicUrl :: Maybe Url
+    {- ^ The proxy's own externally-reachable base URL (@PROXY_PUBLIC_URL@, e.g.
+    @https:\/\/registry.example.com@). When set, each served @dist.tarball@ is
+    rewritten to an __absolute__ URL under it (@{PROXY_PUBLIC_URL}\/npm\/…@) so a
+    client fetches the artifact back through the proxy. 'Nothing' falls back to a
+    path-relative rewrite (@\/npm\/…@) — which the @npm@ CLI cannot consume, since
+    it reads a leading-slash @dist.tarball@ as a local @file:@ path — so any
+    deployment that serves real @npm install@s must set this.
+    -}
     }
     deriving stock (Eq, Show)
 
@@ -406,6 +415,7 @@ envParser =
         <*> Env.var positiveIntReader "PROXY_MAX_NESTING_DEPTH" (Env.def (maxNestingDepth defaultLimits))
         <*> Env.var logFormatReader "PROXY_LOG_FORMAT" (Env.def JsonLog)
         <*> Env.var telemetrySwitchReader "PROXY_TELEMETRY" (Env.def TelemetryOff)
+        <*> optionalUrl "PROXY_PUBLIC_URL"
   where
     defaultPublicUpstream :: Url
     defaultPublicUpstream = Url "https://registry.npmjs.org"
@@ -427,6 +437,11 @@ envParser =
     -- maps 'Just' over the parsed value (through both the function and 'Either').
     optionalText :: String -> Env.Parser Env.Error (Maybe Text)
     optionalText name = Env.var ((fmap . fmap) Just Env.str) name (Env.def Nothing)
+
+    -- An optional 'Url' variable: absent yields 'Nothing'. Same shape as
+    -- 'optionalText', through 'urlReader'.
+    optionalUrl :: String -> Env.Parser Env.Error (Maybe Url)
+    optionalUrl name = Env.var ((fmap . fmap) Just urlReader) name (Env.def Nothing)
 
 -- Build a failing 'Env.Reader' from a 'Text'-parsing function, turning its
 -- reason into an @envparse@ unread error tagged against the variable. Written
