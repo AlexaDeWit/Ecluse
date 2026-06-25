@@ -146,7 +146,7 @@ import Ecluse.Package (
     PackageName,
     renderPackageName,
  )
-import Ecluse.Package.Filter (filterPlanFromDecisions)
+import Ecluse.Package.Filter (filterPlanFromDecisions, fpSurvivors)
 import Ecluse.Package.Merge (
     MergePlan (mpDistTags, mpSurvivors, mpTime),
     Provenance (GatedSource, TrustedSource),
@@ -532,9 +532,10 @@ gatePublic deps ctx = \case
         let (admissible, hashless) = dropHashless info
             hashlessRefusals = integrityMissing <$ hashless
         decisions <- decideVersions deps ctx admissible
-        pure $ case applyFilterPlan (pdMountBaseUrl deps) (filterPlanFromDecisions decisions admissible) value of
+        let plan = filterPlanFromDecisions decisions admissible
+        pure $ case applyFilterPlan (pdMountBaseUrl deps) plan value of
             Filtered filtered ->
-                (Just (Contribution GatedSource (restrictToSurvivors filtered admissible) filtered), hashlessRefusals)
+                (Just (Contribution GatedSource (restrictToSurvivors (fpSurvivors plan) admissible) filtered), hashlessRefusals)
             NoSurvivors leftover -> (Nothing, projectDecisions admissible leftover <> hashlessRefusals)
 
 {- Apply the integrity-presence admission policy to a public 'PackageInfo', splitting
@@ -582,22 +583,22 @@ decideVersions :: PackumentDeps -> EvalContext -> PackageInfo -> IO (Map Text De
 decideVersions deps ctx info =
     traverse (evalRulesEffectful ctx (pdRules deps) (pdEffectfulRules deps)) (infoVersions info)
 
-{- Restrict a 'PackageInfo' to the version keys that survived filtering — those
-present in the filtered @Value@'s @versions@ — so the typed view handed to the merge
-matches the filtered document. @dist-tags@ and @time@ are pruned to the surviving
-keys likewise (the merge reconciles them over the union); @dist-tags@ targets absent
-from the survivors are dropped. -}
-restrictToSurvivors :: Value -> PackageInfo -> PackageInfo
-restrictToSurvivors filtered info =
+{- Restrict a 'PackageInfo' to the version keys that survived filtering — the
+'Ecluse.Package.Filter.FilterPlan'\'s own 'fpSurvivors', which 'applyFilterPlan' kept
+in the filtered @Value@'s @versions@, so the typed view handed to the merge matches
+the filtered document. Taking the survivor set from the plan reuses the 'Set' the
+filter already built rather than re-deriving it from the filtered @Value@'s keys (a
+@Set.fromList@ of every survivor key, each 'Key.toText'-converted, over a packument of
+up to the version cap). @dist-tags@ and @time@ are pruned to the surviving keys
+likewise (the merge reconciles them over the union); @dist-tags@ targets absent from
+the survivors are dropped. -}
+restrictToSurvivors :: Set Text -> PackageInfo -> PackageInfo
+restrictToSurvivors survivors info =
     info
         { infoVersions = Map.restrictKeys (infoVersions info) survivors
         , infoDistTags = Map.filter ((`Set.member` survivors) . renderVersion) (infoDistTags info)
         , infoPublishedAt = Map.restrictKeys (infoPublishedAt info) survivors
         }
-  where
-    survivors :: Set Text
-    survivors =
-        maybe mempty (Set.fromList . map Key.toText . KeyMap.keys) (filtered ^? key "versions" . _Object)
 
 {- Project each excluded version's 'Decision' to a 'ServeDecision' for the
 no-survivors status. 'applyFilterPlan' carries the plan's decisions in
