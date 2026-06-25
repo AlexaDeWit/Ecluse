@@ -1147,7 +1147,26 @@ noSurvivorsSpec = describe "no survivors in the merge" $ do
         withProxy privateUp publicUp Nothing $ \app -> do
             resp <- getThing Nothing app
             status resp `shouldBe` 502
+            -- The 502 reason phrase is rendered, and a gateway fault is not retryable —
+            -- no Retry-After (unlike a 503).
+            reason resp `shouldBe` "Bad Gateway"
+            header "Retry-After" resp `shouldBe` Nothing
             -- A mismatch is "upstream returned an invalid response", not "not found".
+            status resp `shouldNotBe` 404
+
+    it "502s a public-leg mismatch routed through the metadata cache (private resolves but is empty)" $ do
+        -- Isolates the public-cache path: the private leg resolves a valid but empty
+        -- `thing` packument (so it adds no transient signal), while the public leg —
+        -- fetched through `resolveMetadata` — answers with a packument for `other`. The
+        -- typed mismatch is re-thrown through the cache leader and recovered as the
+        -- public origin's bad-gateway signal, so with no valid contribution it is a 502.
+        privateUp <- servingUpstream (encodePackument (privatePackument [] "0.0.0"))
+        publicUp <-
+            servingUpstream
+                (encodePackument (packumentNamed "other" [("2.0.0", plainVersion "2.0.0")] "2.0.0" [("2.0.0", publishedDaysAgo 30)]))
+        withProxy privateUp publicUp Nothing $ \app -> do
+            resp <- getThing Nothing app
+            status resp `shouldBe` 502
             status resp `shouldNotBe` 404
 
 -- ── edge authentication ───────────────────────────────────────────────────────
