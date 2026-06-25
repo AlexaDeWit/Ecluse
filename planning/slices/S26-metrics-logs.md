@@ -9,7 +9,7 @@ arch-refs:
   - docs/architecture/observability.md#metrics
   - docs/architecture/observability.md#cardinality-and-attributes
   - docs/architecture/observability.md#logs
-pr: null
+pr: 296
 ---
 
 # S26 — `ecluse.*` metrics + JSONL `dd` correlation
