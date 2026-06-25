@@ -81,6 +81,13 @@ different bytes) — for the tamper-direction regression: a real sha512 that fai
 falseSri :: Text
 falseSri = "sha512-" <> decodeUtf8 (convertToBase Base64 (hashlazy "completely-different-bytes" :: Digest SHA512) :: ByteString)
 
+{- | A well-formed sha512 SRI whose base64 body is the correct digest with its
+letter case flipped. base64 is case-sensitive, so this must NOT verify — a
+case-folding comparison would wrongly admit it.
+-}
+caseVariantSri :: Text
+caseVariantSri = "sha512-" <> T.toUpper (fromMaybe "" (T.stripPrefix "sha512-" trueSri))
+
 -- | A fixed reference instant for the heartbeat-staleness assertions.
 epoch :: UTCTime
 epoch = UTCTime (fromGregorian 2020 1 1) (secondsToDiffTime 0)
@@ -312,6 +319,13 @@ spec = do
         it "is case-insensitive on the hex shasum" $
             verifyIntegrity (Hash SHA1 (T.toUpper trueSha1) :| []) tarballBytes
                 `shouldBe` IntegrityVerified
+
+        it "REJECTS an SRI whose base64 body matches only after case-folding (base64 is case-sensitive)" $
+            -- The hex arms fold case (hex is case-insensitive), but an SRI carries a
+            -- base64 digest, which is case-sensitive: a body matching the bytes only after
+            -- a case change must NOT verify, or the tamper gate is silently weakened.
+            verifyIntegrity (Hash SRI caseVariantSri :| []) tarballBytes
+                `shouldBe` IntegrityMismatch "the SRI sha512 digest did not match the fetched bytes"
 
     describe "npmPublishDocument" $ do
         it "assembles a PUT document with the version, dist integrity, and base64 attachment" $ do

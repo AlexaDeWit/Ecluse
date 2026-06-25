@@ -448,7 +448,7 @@ IntegrityMismatch "the SHA1 digest did not match the fetched bytes"
 verifyIntegrity :: NonEmpty Hash -> ByteString -> IntegrityResult
 verifyIntegrity hashes bytes =
     let strongest = maximumBy (comparing authority) hashes
-     in case computeLike strongest of
+     in case matchStrongest strongest of
             Nothing ->
                 -- Fail closed: the strongest present digest is in an algorithm we
                 -- cannot recompute, so we cannot prove the bytes — never drop to a
@@ -458,10 +458,9 @@ verifyIntegrity hashes bytes =
                         <> describe strongest
                         <> ") is in an algorithm the worker cannot verify"
                     )
-            Just computed
-                | computed == T.toLower (hashValue strongest) -> IntegrityVerified
-                | otherwise ->
-                    IntegrityMismatch ("the " <> describe strongest <> " digest did not match the fetched bytes")
+            Just True -> IntegrityVerified
+            Just False ->
+                IntegrityMismatch ("the " <> describe strongest <> " digest did not match the fetched bytes")
   where
     lazyBytes = toLazy bytes
 
@@ -494,25 +493,29 @@ verifyIntegrity hashes bytes =
         "sha512" -> Just SHA512
         _ -> Nothing
 
-    -- Recompute the chosen digest over the fetched bytes in its own wire encoding,
-    -- for a like-for-like compare. 'Nothing' for an algorithm the worker cannot
-    -- compute (the fail-closed case above).
-    computeLike :: Hash -> Maybe Text
-    computeLike h = case hashAlg h of
-        SHA1 -> Just (hexLower (hashlazy lazyBytes :: Digest SHA1))
-        SHA512 -> Just (hexLower (hashlazy lazyBytes :: Digest SHA512))
-        SRI -> sriDigest (hashValue h)
+    -- Whether the fetched bytes match the chosen digest, compared in that digest's
+    -- own wire encoding. A hex digest (SHA-1, hex SHA-512) compares
+    -- case-insensitively, since hex is; an SRI's base64 body compares
+    -- case-sensitively, since base64 is — folding its case would admit a digest that
+    -- matches the bytes only after a case change, silently weakening the gate.
+    -- 'Nothing' for an algorithm the worker cannot compute (the fail-closed case
+    -- above).
+    matchStrongest :: Hash -> Maybe Bool
+    matchStrongest h = case hashAlg h of
+        SHA1 -> Just (hexLower (hashlazy lazyBytes :: Digest SHA1) == T.toLower (hashValue h))
+        SHA512 -> Just (hexLower (hashlazy lazyBytes :: Digest SHA512) == T.toLower (hashValue h))
+        SRI -> matchSri (hashValue h)
         SHA256 -> Nothing
         MD5 -> Nothing
         Blake2b -> Nothing
 
-    -- A Subresource-Integrity string is @"<alg>-<base64>"@. The worker computes
-    -- @sha512@ SRI (npm's @dist.integrity@): recompute SHA-512, base64-encode it, and
-    -- render the same @"sha512-<base64>"@ string. Any other SRI algorithm is
-    -- uncomputable here, so it fails closed rather than passing.
-    sriDigest :: Text -> Maybe Text
-    sriDigest sri = case T.breakOn "-" sri of
-        ("sha512", _) -> Just (T.toLower ("sha512-" <> base64 (hashlazy lazyBytes :: Digest SHA512)))
+    -- A Subresource-Integrity string is @"<alg>-<base64>"@; only @sha512@ (npm's
+    -- @dist.integrity@) is computable here. Recompute SHA-512, base64-encode it, and
+    -- compare against the SRI's base64 body __exactly__ — base64 is case-sensitive.
+    -- Any other SRI algorithm is uncomputable, so it fails closed rather than passing.
+    matchSri :: Text -> Maybe Bool
+    matchSri sri = case T.breakOn "-" sri of
+        ("sha512", rest) -> Just (base64 (hashlazy lazyBytes :: Digest SHA512) == T.drop 1 rest)
         _ -> Nothing
 
     describe :: Hash -> Text
