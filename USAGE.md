@@ -82,6 +82,7 @@ operator reference. **Keep the two in sync** when either changes.
 | `PROXY_MAX_RESPONSE_BYTES` | No (default `16777216`, 16 MiB) | Largest upstream **metadata** body buffered before the fetch aborts fail-closed. Bounds memory against a hostile upstream returning a giant body. Positive integer. |
 | `PROXY_MAX_VERSION_COUNT` | No (default `100000`) | Largest version count a packument may carry before it is refused. Bounds per-version rule evaluation against a version flood. Positive integer. |
 | `PROXY_MAX_NESTING_DEPTH` | No (default `64`) | Deepest JSON nesting a decoded upstream document may reach before it is refused. Bounds CPU/stack against a pathologically nested payload. Positive integer. |
+| `PROXY_MIN_PUBLIC_INTEGRITY` | No (default `sha256`) | Minimum integrity algorithm a **public** version's digest must meet to be served: `sha256`, `sha512`, or `blake2b`. A public version whose strongest digest is weaker (e.g. a legacy SHA-1 `shasum` only) is refused with a `403`. **Hard-floored at SHA-256** — `sha1`/`md5`/an unknown name is rejected at startup. The trusted private upstream is exempt. |
 | `PROXY_CONFIG` | No | The configuration document as an inline JSON blob, for an env-only deployment with no mounted file. |
 
 Configuration is **validated in full at startup, and the process refuses to start on any
@@ -252,26 +253,32 @@ Full semantics (precedence, the patch/add/suppress merge, and the strict validat
 [Rule policy](docs/architecture/configuration.md#rule-policy) and
 [Rules Engine](docs/architecture/rules-engine.md).
 
-### Always-on: a public version must carry an integrity digest
+### Always-on: a public version must carry a strong integrity digest
 
 Independent of the configurable rules above, Écluse enforces one **non-negotiable admission
 policy** on **public** (untrusted) upstreams: a version is served only if its `dist` carries
-**at least one integrity digest**, an SRI `integrity` *or* a legacy `shasum`. A public
-version with **neither** is **inadmissible**:
+at least one integrity digest whose algorithm meets the **integrity floor**
+(`PROXY_MIN_PUBLIC_INTEGRITY`, default **SHA-256**). A public version whose strongest digest
+is **absent** or **below the floor** — for example only a legacy SHA-1 `shasum`, with no
+`sha256`/`sha512` SRI `integrity` — is **inadmissible**:
 
 - requesting its tarball returns a **`403`** (the artifact is never fetched), and
 - it's **filtered out of the served packument listing**, so a client never sees a version it
   couldn't safely fetch.
 
-This closes a tamper-detection gap: a version with no integrity check can't be tied to a
-fingerprint, so a divergence between two hashless copies would go undetected. The **private**
-(trusted) upstream is **exempt**: its versions enter unfiltered, so a hashless private
-version is still served.
+SHA-1 and MD5 have practical collisions, so a match on one can't prove the bytes weren't
+substituted; this closes a tamper-detection gap, since a divergence between two copies that
+share only a weak digest could go undetected. The floor may be **raised** (`sha512`,
+`blake2b`) but never set below SHA-256 — a sub-floor value is rejected at startup. The
+**private** (trusted) upstream is **exempt**: its versions enter unfiltered, so a SHA-1-only
+private version is still served (trust substitutes for cryptographic strength there).
 
-**Gotcha.** If a custom or off-spec public upstream serves versions without
-`integrity`/`shasum`, those versions silently disappear from what Écluse serves and a direct
-fetch `403`s. This is deliberate. If you genuinely need to serve such a source, point it at
-the **private** (trusted) upstream slot, not the public one. See
+**Gotcha.** If a custom or off-spec public upstream serves versions without a digest meeting
+the floor (no `integrity`, or only a legacy `shasum`), those versions silently disappear from
+what Écluse serves and a direct fetch `403`s. This is deliberate. If you genuinely need to
+serve such a source, point it at the **private** (trusted) upstream slot, not the public one,
+or — only if the source is trustworthy and you accept the weaker digest — this is the one
+knob you must not lower below SHA-256. See
 [Security Policy](SECURITY.md#a-public-version-must-carry-an-integrity-digest).
 
 ## Operating Écluse

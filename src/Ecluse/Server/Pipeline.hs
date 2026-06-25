@@ -156,6 +156,11 @@ import Ecluse.Package (
     renderPackageName,
  )
 import Ecluse.Package.Filter (filterPlanFromDecisions, fpSurvivors)
+import Ecluse.Package.Integrity (
+    MinIntegrity,
+    VersionIntegrity (BelowFloor, MeetsFloor, NoIntegrity),
+    classifyArtifacts,
+ )
 import Ecluse.Package.Merge (
     MergePlan (mpDistTags, mpSurvivors, mpTime),
     Provenance (GatedSource, TrustedSource),
@@ -210,7 +215,7 @@ import Ecluse.Server.Response (
     ArtifactStatus (Forbidden, NotFound, Ok, ServerError, Unavailable'),
     MountRenderer,
     PackumentStatus (PackumentBadGateway, PackumentForbidden, PackumentOk, PackumentServerError, PackumentUnavailable),
-    RejectReason (MissingIntegrity, Unavailable, UpstreamInvalid),
+    RejectReason (BelowIntegrityFloor, MissingIntegrity, Unavailable, UpstreamInvalid),
     Rejection (Rejection, rejectionMessage),
     RenderedBody (RenderedBody),
     RetryAfter (RetryAfter),
@@ -564,22 +569,23 @@ filter, returning the surviving 'Contribution' (if any survived) and the per-ver
 exclusion outcomes (for the no-survivors status when nothing survives anywhere).
 
 A public origin that did not resolve contributes nothing and no exclusions. A resolved
-origin first has the __integrity-presence admission policy__ applied: any version whose
-artifact carries no integrity digest of any kind is dropped from the gated set up front
-('dropHashless'), so a hashless public version is never listed (a client cannot fetch
-it — the artifact gate would refuse it anyway) and never contributes a hashless
-fingerprint to the merge. The remaining versions are decided by both tiers
-('evalRulesEffectful' — the pure tier first, the effectful tier only where it could
-change the outcome), the resulting decisions handed to the agnostic
+origin first has the __integrity-floor admission policy__ applied: any version whose
+strongest digest does not meet the configured floor ('pdMinIntegrity') is dropped from
+the gated set up front ('admitByIntegrity'), so a below-floor public version is never
+listed (a client cannot fetch it — the artifact gate would refuse it anyway) and never
+contributes its fingerprint to the merge. The remaining versions are decided by both
+tiers ('evalRulesEffectful' — the pure tier first, the effectful tier only where it
+could change the outcome), the resulting decisions handed to the agnostic
 'filterPlanFromDecisions', and that plan replayed by 'applyFilterPlan' onto the raw
 @Value@: 'Filtered' yields a gated 'Contribution' over the surviving versions;
 'NoSurvivors' yields no contribution and the per-version 'ServeDecision's, each excluded
 version's decision projected (a fail-closed 'Ecluse.Rules.Types.Undecidable' carrying
 its transient\/permanent cause, so the no-survivors status is a @503@\/@500@ rather than
-a @403@). The dropped hashless versions are projected as 'MissingIntegrity' refusals and
-appended to those exclusions, so a packument with /only/ hashless public versions is a
-@403@ rather than an empty success. The effectful tier is IO, so this gate is IO; with
-no effectful rules configured it reduces exactly to the pure tier.
+a @403@). The dropped below-floor versions are projected as 'MissingIntegrity' (no digest
+at all) or 'BelowIntegrityFloor' (a digest, but too weak) refusals and appended to those
+exclusions, so a packument with /only/ inadmissible public versions is a @403@ rather
+than an empty success. The effectful tier is IO, so this gate is IO; with no effectful
+rules configured it reduces exactly to the pure tier.
 
 The gated contribution's typed 'PackageInfo' is __restricted to the survivors__ to
 match its filtered @Value@: 'mergePackuments' treats a 'GatedSource' as the
@@ -587,55 +593,48 @@ already-filtered set and never re-filters, so feeding it the unfiltered view wou
 let a denied version reach the merge plan (and skew the reconciled @latest@\/@time@).
 
 The trusted private upstream is exempt: this gate runs on the public path only, so a
-hashless private version still enters the merge unfiltered. -}
+weak-digest private version still enters the merge unfiltered. -}
 gatePublic :: PackumentDeps -> EvalContext -> Maybe (PackageInfo, Value) -> IO (Maybe Contribution, [ServeDecision])
 gatePublic deps ctx = \case
     Nothing -> pure (Nothing, [])
     Just (info, value) -> do
-        let (admissible, hashless) = dropHashless info
-            hashlessRefusals = integrityMissing <$ hashless
+        let (admissible, integrityRefusals) = admitByIntegrity (pdMinIntegrity deps) info
         decisions <- decideVersions deps ctx admissible
         let plan = filterPlanFromDecisions decisions admissible
         pure $ case applyFilterPlan (pdMountBaseUrl deps) plan value of
             Filtered filtered ->
-                (Just (Contribution GatedSource (restrictToSurvivors (fpSurvivors plan) admissible) filtered), hashlessRefusals)
-            NoSurvivors leftover -> (Nothing, projectDecisions admissible leftover <> hashlessRefusals)
+                (Just (Contribution GatedSource (restrictToSurvivors (fpSurvivors plan) admissible) filtered), integrityRefusals)
+            NoSurvivors leftover -> (Nothing, projectDecisions admissible leftover <> integrityRefusals)
 
-{- Apply the integrity-presence admission policy to a public 'PackageInfo', splitting
-its versions into the admissible (carrying at least one integrity digest) and the
-hashless. A version without any integrity digest cannot be tied to a tamper-evident
-fingerprint, so it is inadmissible from an untrusted public upstream — dropped from the
-gated set (and from the served listing) rather than served a client could never verify.
-Returns the admissible 'PackageInfo' (with @dist-tags@\/@time@ pruned to the kept keys,
-exactly as 'restrictToSurvivors' prunes for the rules) and the hashless version keys,
-each of which the caller projects to a 'MissingIntegrity' refusal for the no-survivors
+{- Apply the integrity-floor admission policy to a public 'PackageInfo', keeping only
+the versions whose strongest digest meets the floor and projecting the rest to refusals.
+A version whose digests are all weaker than the floor (or absent) cannot be tied to a
+tamper-evident fingerprint, so it is inadmissible from an untrusted public upstream —
+dropped from the gated set (and from the served listing) rather than served a client
+could never safely verify. Returns the admissible 'PackageInfo' (with
+@dist-tags@\/@time@ pruned to the kept keys, exactly as 'restrictToSurvivors' prunes for
+the rules) and the refusals for the dropped versions: 'BelowIntegrityFloor' for a
+too-weak digest, 'MissingIntegrity' for none at all, each feeding the no-survivors
 status. -}
-dropHashless :: PackageInfo -> (PackageInfo, [Text])
-dropHashless info =
+admitByIntegrity :: MinIntegrity -> PackageInfo -> (PackageInfo, [ServeDecision])
+admitByIntegrity minIntegrity info =
     ( info
-        { infoVersions = admissible
+        { infoVersions = Map.restrictKeys (infoVersions info) admissibleKeys
         , infoDistTags = Map.filter ((`Set.member` admissibleKeys) . renderVersion) (infoDistTags info)
         , infoPublishedAt = Map.restrictKeys (infoPublishedAt info) admissibleKeys
         }
-    , Map.keys hashless
+    , [integrityBelowFloor | (_, BelowFloor) <- Map.toList classified]
+        <> [integrityMissing | (_, NoIntegrity) <- Map.toList classified]
     )
   where
-    -- One pass splits the versions into the admissible (integrity-bearing) and the
-    -- hashless, rather than scanning the up-to-100k-version map twice with
-    -- complementary 'Map.filter's and re-deriving the admissible map a third time
-    -- with 'Map.restrictKeys'. 'hasIntegrity' is evaluated once per version, and
-    -- the admissible map is reused directly as the kept 'infoVersions'.
-    admissible, hashless :: Map Text PackageDetails
-    (admissible, hashless) = Map.partition hasIntegrity (infoVersions info)
+    -- Classify each version against the floor exactly once (the up-to-100k-version map
+    -- is walked a single time); the admissible keys and the two refusal buckets are
+    -- then read off the small class map.
+    classified :: Map Text VersionIntegrity
+    classified = Map.map (classifyArtifacts minIntegrity . pkgArtifacts) (infoVersions info)
 
     admissibleKeys :: Set Text
-    admissibleKeys = Map.keysSet admissible
-
-    -- A version carries an integrity digest iff not all of its artifacts are
-    -- hashless. npm publishes exactly one artifact per version, but the check is
-    -- over the whole 'NonEmpty' so it holds for a multi-artifact ecosystem too.
-    hasIntegrity :: PackageDetails -> Bool
-    hasIntegrity = not . all (null . artHashes) . pkgArtifacts
+    admissibleKeys = Map.keysSet (Map.filter (== MeetsFloor) classified)
 
 {- Decide every version of a public packument against both rule tiers, keyed by raw
 version string (the map 'filterPlanFromDecisions' consumes). Each version is run
@@ -1164,9 +1163,10 @@ artifact by filename on an admit. A denied version is 'Refused' with its decisio
 admitted version whose requested filename matches no artifact is a forwarded miss
 ('versionAbsent', rendered @404@).
 
-The __integrity-presence admission policy__ is enforced here, after the rules admit
-and the artifact is selected: a public version whose selected artifact carries no
-integrity digest of any kind is inadmissible ('integrityMissing', rendered @403@) and
+The __integrity-floor admission policy__ is enforced here, after the rules admit and
+the artifact is selected: a public version whose selected artifact carries no digest
+meeting the floor ('pdMinIntegrity') is inadmissible — 'integrityMissing' (no digest at
+all) or 'integrityBelowFloor' (a digest, but too weak), both rendered @403@ — and
 refused outright, never fetched. This is the public path; the trusted private upstream
 ('selectPrivateArtifact') is exempt and never reaches this gate. -}
 gateVersion :: EvalContext -> PackumentDeps -> Text -> PackageDetails -> IO PublicArtifactGate
@@ -1176,12 +1176,13 @@ gateVersion ctx deps file details = do
         Admit -> maybe (Refused versionAbsent) admitWithIntegrity (artifactFor file details)
         Reject _ -> Refused decision
   where
-    -- A rule-admitted artifact is served only if it carries an integrity digest;
-    -- one with empty 'artHashes' is refused by the integrity-presence policy.
+    -- A rule-admitted artifact is served only if it carries a digest meeting the floor;
+    -- a weaker-than-floor or hashless one is refused by the integrity-floor policy.
     admitWithIntegrity :: Artifact -> PublicArtifactGate
-    admitWithIntegrity artifact
-        | null (artHashes artifact) = Refused integrityMissing
-        | otherwise = Admitted artifact
+    admitWithIntegrity artifact = case classifyArtifacts (pdMinIntegrity deps) (artifact :| []) of
+        MeetsFloor -> Admitted artifact
+        BelowFloor -> Refused integrityBelowFloor
+        NoIntegrity -> Refused integrityMissing
 
 -- A transient public-upstream outage: a 'WillResolve' rejection (→ @503@).
 upstreamUnavailable :: ServeDecision
@@ -1203,6 +1204,16 @@ upstream is exempt, so this never arises on the private path. -}
 integrityMissing :: ServeDecision
 integrityMissing =
     Reject (Rejection MissingIntegrity "this version carries no integrity digest and cannot be served from a public upstream")
+
+{- A public version refused by the integrity-floor admission policy: its selected
+artifact carries an integrity digest, but the strongest one is weaker than the configured
+minimum algorithm, so its bytes cannot be tied to a collision-resistant fingerprint. A
+deliberate deny-by-default policy refusal ('BelowIntegrityFloor', rendered @403@),
+distinct from 'integrityMissing' so the audit trail says which. The trusted private
+upstream is exempt, so this never arises on the private path. -}
+integrityBelowFloor :: ServeDecision
+integrityBelowFloor =
+    Reject (Rejection BelowIntegrityFloor "this version's integrity digest is weaker than the configured minimum and cannot be served from a public upstream")
 
 {- Stream the artifact from the public upstream at its __authoritative location__,
 __anonymously__ (the client credential is never sent to the public upstream), and —

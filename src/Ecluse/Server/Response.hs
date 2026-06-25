@@ -133,6 +133,16 @@ data RejectReason
       exempt; this reason never arises on that path.
       -}
       MissingIntegrity
+    | {- | The version's selected artifact carries an integrity digest, but its
+      strongest one is __weaker than the configured minimum algorithm__ (e.g. a
+      legacy SHA-1 shasum only, under the default SHA-256 floor). A collision-broken
+      digest cannot tie the bytes to a tamper-evident fingerprint, so it is
+      inadmissible from an /untrusted/ (public) upstream — distinct from
+      'MissingIntegrity' (which has no digest at all) so the audit trail says which.
+      A deny-by-default __admission policy__ that maps to a @403@; the trusted private
+      upstream is exempt and this reason never arises on that path.
+      -}
+      BelowIntegrityFloor
     | {- | A responding upstream returned an __invalid response__ for the requested
       package — its packument self-reported a name for a /different/ package, so that
       origin is untrusted for this request and its contribution is dropped. It is not
@@ -214,6 +224,7 @@ artifactStatus = \case
     Reject rej -> case rejectionReason rej of
         ByPolicy{} -> Forbidden
         MissingIntegrity -> Forbidden
+        BelowIntegrityFloor -> Forbidden
         Unavailable (WillResolve retryAfter) -> Unavailable' retryAfter
         Unavailable WontResolve -> ServerError
         -- A packument-path validation cause; the artifact path never validates a
@@ -288,9 +299,10 @@ among the exclusions, so a retry is invited exactly when it might produce surviv
   origin may yet come back with a valid document);
 * else any 'Unavailable' 'WontResolve' → @500@ (a permanent inability — a retry
   cannot help, so it is not dressed up as a retryable @503@);
-* else every exclusion is a deny-by-default cause — a 'ByPolicy' rule denial or a
-  'MissingIntegrity' admission refusal (__including the degenerate empty input__) →
-  @403@: there is nothing to serve and nothing invites a retry.
+* else every exclusion is a deny-by-default cause — a 'ByPolicy' rule denial or an
+  admission refusal ('MissingIntegrity' or 'BelowIntegrityFloor'), __including the
+  degenerate empty input__ → @403@: there is nothing to serve and nothing invites a
+  retry.
 
 Never @404@: the versions existed and were withheld (see 'PackumentStatus').
 -}

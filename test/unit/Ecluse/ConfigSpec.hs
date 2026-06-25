@@ -11,7 +11,8 @@ import Ecluse.Config
 import Ecluse.Credential (mkSecret)
 import Ecluse.Ecosystem (Ecosystem (..))
 import Ecluse.Log (LogFormat (..))
-import Ecluse.Package (mkScope)
+import Ecluse.Package (HashAlg (SHA512), mkScope)
+import Ecluse.Package.Integrity (defaultMinIntegrity, unMinIntegrity)
 import Ecluse.Rules.Types (
     PrecededRule (..),
     Rule (..),
@@ -224,6 +225,8 @@ envLayerSpec = describe "parseEnvPure" $ do
                 -- The secure default: a cross-host dist.tarball is NOT honoured
                 -- unless the operator explicitly opts in.
                 cfgRespectUpstreamTarballHost cfg `shouldBe` False
+                -- The public-integrity floor defaults to SHA-256 (the hard minimum).
+                cfgMinPublicIntegrity cfg `shouldBe` defaultMinIntegrity
 
     it "reports a single missing required variable against its own name" $
         failedNames (parseEnvPure (without "PRIVATE_UPSTREAM_URL" minimalEnv))
@@ -280,6 +283,21 @@ envLayerSpec = describe "parseEnvPure" $ do
     it "rejects an unknown telemetry switch against its own name" $
         failedNames (parseEnvPure (set "PROXY_TELEMETRY" "maybe" minimalEnv))
             `shouldBe` ["PROXY_TELEMETRY"]
+
+    it "parses a raised public-integrity floor" $
+        case parseEnvPure (set "PROXY_MIN_PUBLIC_INTEGRITY" "sha512" minimalEnv) of
+            Left errs -> expectationFailure ("unexpected errors: " <> show errs)
+            Right cfg -> (unMinIntegrity . cfgMinPublicIntegrity) cfg `shouldBe` SHA512
+
+    it "rejects a sub-floor public-integrity algorithm (below SHA-256) against its own name" $
+        -- A SHA-1 floor would admit collision-broken public versions; a sub-floor value
+        -- is a configuration error, rejected loudly rather than silently clamped.
+        failedNames (parseEnvPure (set "PROXY_MIN_PUBLIC_INTEGRITY" "sha1" minimalEnv))
+            `shouldBe` ["PROXY_MIN_PUBLIC_INTEGRITY"]
+
+    it "rejects an unknown public-integrity algorithm against its own name" $
+        failedNames (parseEnvPure (set "PROXY_MIN_PUBLIC_INTEGRITY" "frobnicate" minimalEnv))
+            `shouldBe` ["PROXY_MIN_PUBLIC_INTEGRITY"]
 
     it "parses the tarball-host toggle as a boolean" $
         -- The opt-in to honour a cross-host dist.tarball; "false" is the secure

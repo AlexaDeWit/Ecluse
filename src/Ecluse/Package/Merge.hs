@@ -31,11 +31,14 @@ __supply-chain signals, not silent reconciliations__:
 * __Collision.__ When the same version key comes from both a 'TrustedSource' and
   a 'GatedSource', the trusted copy wins (it is the authority) — recorded in the
   plan as the survivor's winning 'SourceId'.
-* __Divergence.__ If the colliding copies carry /differing artifact integrity/,
-  that is exactly the tampering Écluse exists to catch. The trusted copy still
-  wins the merge, but the divergence is __reported__ in the 'MergePlan'; whether
-  to additionally drop the version (fail-closed) is a policy decision left to the
-  caller, so this module stays pure.
+* __Divergence.__ When the colliding copies __contradict on a shared integrity
+  algorithm__ — an algorithm both expose carries /disagreeing/ digests — that is
+  exactly the tampering Écluse exists to catch. Copies that merely expose
+  /different/ algorithm sets without contradicting on a shared one (one mirror also
+  carrying a legacy digest the other omits) describe the same bytes and are __not__ a
+  divergence. The trusted copy still wins the merge, but a real contradiction is
+  __reported__ in the 'MergePlan'; whether to additionally drop the version
+  (fail-closed) is a policy decision left to the caller, so this module stays pure.
 
 __The merge is a lawful 'Monoid'.__ The fold is realised over a 'Merge'
 accumulator with a lawful 'Semigroup' \/ 'Monoid': 'mempty' is the empty merge
@@ -119,10 +122,11 @@ caller pairs each 'SourceId' back to the raw @Value@ it passed at that position.
 type SourceId = Int
 
 {- | A detected integrity conflict: a version key present in more than one source
-whose artifact integrity does /not/ agree. The trusted copy wins the merge; this
-record preserves both fingerprints so the caller can log, meter, and decide policy
-(serve-with-private-winning vs fail-closed). It is the merge's supply-chain
-signal — surfaced, never silently reconciled.
+whose copies __contradict on a shared algorithm__ — an algorithm both expose carries
+disagreeing digests. The trusted copy wins the merge; this record preserves both
+fingerprints so the caller can log, meter, and decide policy (serve-with-private-winning
+vs fail-closed). It is the merge's supply-chain signal — surfaced, never silently
+reconciled.
 
 'Ord' is derived purely to let 'MergePlan' carry divergences as a 'Set': the
 ordering is structural (over the version key and the two fingerprints) and has no
@@ -171,25 +175,34 @@ data MergePlan = MergePlan
     , mpDivergences :: Set Divergence
     {- ^ Every distinct same-version integrity conflict found. A 'Set' because
     divergence is a property of the /set/ of distinct integrity fingerprints
-    contributed for a version key, not of any pairwise fold step: when more than
-    one distinct fingerprint exists for a key, the winner's fingerprint is recorded
-    against /each distinct losing fingerprint/, which is order-independent and
-    deduplicating by construction. Empty when no two sources disagreed on a shared
-    version's integrity.
+    contributed for a version key, not of any pairwise fold step: the winner's
+    fingerprint is recorded against /each distinct fingerprint that contradicts it on
+    a shared algorithm/, which is order-independent and deduplicating by construction.
+    Empty when no two copies of a shared version contradict on a shared algorithm —
+    including when they merely expose different algorithm sets without disagreeing on
+    one they share.
     -}
     }
     deriving stock (Eq, Show)
 
 {- | An order-independent fingerprint of a version's artifact integrity: the
 sorted multiset of @(algorithm, digest)@ pairs across all of the version's
-artifacts. Two versions /diverge/ exactly when their fingerprints differ, so the
-comparison ignores artifact ordering and non-integrity fields (filename, URL,
-size) that legitimately vary between mirrors of the same bytes.
+artifacts. The comparison ignores artifact ordering and non-integrity fields
+(filename, URL, size) that legitimately vary between mirrors of the same bytes.
 
-Opaque so the equality used for divergence detection cannot be sidestepped; read
-the pairs back with 'integrityHashes' when logging or metering a 'Divergence'.
-'Ord' is derived (structurally, over the sorted pairs) only so a 'Divergence' may
-live in a 'Set'; it carries no domain meaning beyond that.
+Two copies /diverge/ when they __contradict on a shared algorithm__: an algorithm
+present in both carries disagreeing digests. An /asymmetric/ pair — one copy
+exposing an algorithm the other omits — does __not__ diverge on that account; only a
+shared algorithm whose digests disagree does. So a mirror serving a modern digest
+alongside a legacy one agrees with a mirror serving only the modern digest, as long
+as that shared digest matches.
+
+Opaque so the comparison used for divergence detection cannot be sidestepped; read
+the pairs back with 'integrityHashes' when logging or metering a 'Divergence'. 'Ord'
+is derived (structurally, over the sorted pairs) only so a 'Divergence' may live in a
+'Set'; it carries no domain meaning beyond that, and in particular is __not__ the
+divergence test (which is the shared-algorithm contradiction above, never structural
+inequality of the whole set).
 -}
 newtype IntegrityFingerprint = IntegrityFingerprint [(HashAlg, Text)]
     deriving stock (Eq, Ord, Show)
@@ -407,8 +420,8 @@ deployments need no special case. It is realised as a 'foldMap' of each input's
 
 * __Union by version key__, with __'TrustedSource' winning__ a collision over
   'GatedSource' (the private upstream is the authority). The winning input's
-  'SourceId' is recorded for the survivor. A collision whose integrity differs is
-  recorded as a 'Divergence'; the winner is still kept.
+  'SourceId' is recorded for the survivor. A collision whose copies contradict on a
+  shared integrity algorithm is recorded as a 'Divergence'; the winner is still kept.
 * __'dist-tags' reconciled over the union.__ @latest@ is resolved by
   'Ecluse.Version.selectLatest' — keep-unless-denied, stable-preferring, and
   unparseable-safe — from the precedence-winning source's tagged @latest@ and the
@@ -430,8 +443,9 @@ mergePackuments [] = Nothing
 mergePackuments inputs = planFrom (foldMap (uncurry contribute) inputs)
 
 {- | Project the resolved 'MergePlan' from a folded 'Merge'. Resolves each version
-key to its precedence winner, derives the divergence 'Set' from each key's distinct
-fingerprints, and reconciles @dist-tags@\/@time@ over the survivors. Returns
+key to its precedence winner, derives the divergence 'Set' from the shared-algorithm
+contradictions among each key's distinct fingerprints, and reconciles
+@dist-tags@\/@time@ over the survivors. Returns
 'Nothing' only for the empty merge ('mempty'), which has no name and so nothing to
 serve — equivalently, the empty input list.
 -}
@@ -461,13 +475,15 @@ planFrom acc = do
     survivingDetails =
         [candDetails (winnerOf cs) | cs <- Map.elems (mergeVersions acc)]
 
-    -- \| Divergence is a property of the /set/ of distinct integrity fingerprints
-    --    a key was offered, never of a pairwise fold step — which is what keeps it
-    --    order-independent and associative for 3+ copies of a key. For each version
-    --    key: if more than one distinct fingerprint was contributed, record the
-    --    winner's fingerprint against /each distinct losing fingerprint/. With the
-    --    two-source topology this is exactly today's single winner-vs-loser pair; with
-    --    three or more it is the full fan-out, deduplicated by the 'Set'.
+    -- Divergence is a property of the /set/ of distinct integrity fingerprints a key
+    -- was offered, never of a pairwise fold step — which is what keeps it
+    -- order-independent and associative for 3+ copies of a key. For each version key,
+    -- record the winner's fingerprint against each distinct fingerprint that
+    -- 'contradicts' it on a shared algorithm; a fingerprint that only adds or omits an
+    -- algorithm relative to the winner, without disagreeing on one they share, is not a
+    -- divergence (and the winner never contradicts itself, so it is excluded too). With
+    -- the two-source topology this is a single winner-vs-loser pair; with three or more
+    -- it is the full fan-out, deduplicated by the 'Set'.
     divergences :: Set Divergence
     divergences =
         Set.fromList
@@ -475,7 +491,8 @@ planFrom acc = do
             | (key, cs) <- Map.toList (mergeVersions acc)
             , let win = candFingerprint (winnerOf cs)
             , let distinct = Set.fromList [candFingerprint c | c <- Set.toList cs]
-            , lose <- Set.toList (Set.delete win distinct)
+            , lose <- Set.toList distinct
+            , contradicts win lose
             ]
 
     -- @dist-tags@ reconciled over the union: every surviving-target tag carried,
@@ -518,3 +535,20 @@ fingerprint =
         . pkgArtifacts
   where
     artHashPairs art = [(hashAlg h, hashValue h) | h <- artHashes art]
+
+-- Whether two fingerprints contradict: some algorithm carried by /both/ has
+-- disagreeing digests. This is the divergence test. Only a shared algorithm whose
+-- digests disagree counts — an asymmetric pair that merely adds or omits an algorithm
+-- one side lacks does not contradict, because the same bytes can be described by
+-- different sets of digests (an older mirror serving only a legacy shasum, a newer one
+-- serving that shasum alongside a modern SRI). The comparison is per algorithm over the
+-- set of digests offered for it, so it is symmetric and ignores algorithms present on
+-- only one side; a weak digest agreeing therefore never suppresses a contradicting
+-- strong one, and a strong digest agreeing makes the asymmetric weak one irrelevant.
+contradicts :: IntegrityFingerprint -> IntegrityFingerprint -> Bool
+contradicts a b =
+    or (Map.intersectionWith (/=) (digestsByAlg a) (digestsByAlg b))
+  where
+    digestsByAlg :: IntegrityFingerprint -> Map HashAlg (Set Text)
+    digestsByAlg (IntegrityFingerprint pairs) =
+        Map.fromListWith Set.union [(alg, Set.singleton digest) | (alg, digest) <- pairs]

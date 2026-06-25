@@ -76,6 +76,7 @@ library
     Ecluse.Log
     Ecluse.Package
     Ecluse.Package.Filter
+    Ecluse.Package.Integrity
     Ecluse.Package.Merge
     Ecluse.Queue
     Ecluse.Queue.Sqs
@@ -175,6 +176,7 @@ test-suite ecluse-unit
     Ecluse.EnvSpec
     Ecluse.LogSpec
     Ecluse.Package.FilterSpec
+    Ecluse.Package.IntegritySpec
     Ecluse.Package.MergeSpec
     Ecluse.PackageSpec
     Ecluse.QueueSpec

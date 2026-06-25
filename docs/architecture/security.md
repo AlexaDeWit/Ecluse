@@ -89,20 +89,37 @@ noted below.
    [Configuration → Response bounds](configuration.md#response-bounds)). Artifacts are
    streamed with constant memory and are not subject to the body-size bound; the
    inbound client→proxy request-body cap is the separate `sizeLimitMiddleware`.
-5. **A public version must carry an integrity digest to be served.** A version from
-   an **untrusted (public)** upstream whose selected artifact carries **no integrity
-   digest of any kind** — neither an SRI `dist.integrity` nor a legacy `dist.shasum`
-   (both optional on the wire) — is **inadmissible**: the artifact gate refuses it
-   with a `403` (the tarball is never fetched), and the packument path **filters it
-   out of the served listing** (so a client never sees a version it could not
-   verify). A version with no integrity check cannot be tied to a tamper-evident
-   fingerprint, so two differing-byte hashless copies would fingerprint identically
-   and a [cross-upstream divergence](registry-model.md#packument-merge-across-upstreams)
-   would go **undetected** — exactly the supply-chain case the divergence check
-   exists to catch. Refusing at admission closes that gap before the version reaches
-   serve or contributes a hashless fingerprint to the merge. The **trusted private
-   origin is exempt** (its versions are admitted unfiltered), consistent with the
-   trust split throughout.
+5. **A public version must carry a *strong* integrity digest to be served
+   (asymmetric integrity trust).** Écluse trusts a digest only as far as its algorithm
+   is collision-resistant, and it trusts the two upstreams **asymmetrically**:
+
+   - A version from an **untrusted (public)** upstream is **inadmissible** unless its
+     selected artifact carries at least one digest whose algorithm meets a configurable
+     **integrity floor** (`PROXY_MIN_PUBLIC_INTEGRITY`, default **SHA-256**; the floor
+     may be raised to `sha512`/`blake2b` but [never set below
+     SHA-256](configuration.md#public-integrity-floor)). A version with **no** digest
+     (`MissingIntegrity`) or only a digest **below the floor** — e.g. a legacy SHA-1
+     `dist.shasum` with no SRI (`BelowIntegrityFloor`) — is refused: the artifact gate
+     answers `403` (the tarball is never fetched), and the packument path **filters it
+     out of the served listing** (so a client never sees a version it could not safely
+     verify). SHA-1 and MD5 have practical collisions, so a match on one cannot prove
+     the bytes were not substituted; admitting on such a digest would let a colliding
+     artifact pass the tamper gate, and two differing-byte copies that share only a weak
+     digest could fingerprint-collide so a
+     [cross-upstream divergence](registry-model.md#packument-merge-across-upstreams)
+     went **undetected**. Refusing at admission closes that gap before the version
+     reaches serve or contributes its fingerprint to the merge.
+   - The **trusted private origin is exempt** — its versions are admitted unfiltered,
+     so a SHA-1-only private version is served. Trust (the private upstream is the
+     operator's own vetted source) substitutes for cryptographic strength there. A
+     private-weak / public-strong pair can still cross-check on a shared weak digest
+     (private `{sha1}` vs public `{sha1, sha256}` compare on `sha1`) because the public
+     copy independently meets the floor on its `sha256`.
+
+   The shared notion of algorithm strength and the floor predicate live in one module,
+   `Ecluse.Package.Integrity`, reused by the worker's tamper gate
+   (`Ecluse.Worker.verifyIntegrity`) so the admission floor and the publish-time
+   verification rank algorithms identically.
 
 ## Posture
 

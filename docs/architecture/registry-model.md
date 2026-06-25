@@ -133,8 +133,11 @@ not commutative** — each survivor is labelled with the *position* of the input
 won it, so the serve layer can index back to the right raw `Value`, and swapping
 inputs swaps those labels. Every *decision* the merge owns is order-independent
 (see the precedence rule below); only the positional labels track input order. The
-detected divergences are a **set**, because divergence is a property of the set of
-distinct integrity fingerprints offered for a version key, not of any one fold step.
+detected divergences are a **set**: a version key's distinct integrity fingerprints
+are compared and a divergence is flagged when two copies **contradict on a shared
+digest algorithm** (one both carry, whose digests disagree), a property of the set of
+fingerprints offered rather than of any one fold step, so it is order-independent and
+deduplicating.
 
 - **Fetch upstreams in parallel.** For a packument, the private and public
   upstreams are fetched concurrently (the credential rules above still hold: the
@@ -148,21 +151,33 @@ distinct integrity fingerprints offered for a version key, not of any one fold s
   `trusted(private) ∪ filtered(public)`.
 - **Collision → private wins; divergence is a signal.** When the same version key
   appears in both upstreams, the private copy wins (it is the authority). But if
-  the public copy's **integrity differs** from the private one of the same version,
-  that divergence is exactly the supply-chain tampering Écluse exists to catch: it
-  is **detected, logged, and metered** (and may fail-closed on that version), never
-  silently reconciled.
-- **A hashless public version is inadmissible (admission, not merge).** Divergence
+  the public copy **contradicts the private one on a shared integrity algorithm**
+  (an algorithm both carry whose digests disagree) for that version, that divergence
+  is exactly the supply-chain tampering Écluse exists to catch: it is **detected,
+  logged, and metered** (and may fail-closed on that version), never silently
+  reconciled. An **asymmetric** digest set — one upstream also carrying a legacy
+  digest the other omits, with no disagreement on any *shared* algorithm — describes
+  the same bytes and is **not** a divergence: a weak digest agreeing never suppresses
+  a contradicting strong one, and a strong digest agreeing makes the asymmetric weak
+  one irrelevant.
+- **A below-floor public version is inadmissible (admission, not merge).** Divergence
   detection compares a version's integrity fingerprint across upstreams, so a public
-  version that carries **no integrity digest at all** (neither `dist.integrity` nor
-  `dist.shasum` — both optional on the wire) is a blind spot: two differing-byte
-  hashless copies fingerprint identically (an empty fingerprint), so a divergence
-  would go undetected. Écluse resolves this **at admission, not in the merge**: a
-  public version with no integrity digest is **refused before it reaches the merge**
-  — the artifact gate `403`s it and the gated set drops it from the served listing —
-  so it never contributes a hashless fingerprint and a client never sees a version it
-  could not verify. The **trusted private upstream is exempt** (its versions enter
-  unfiltered). This is [security invariant 5](security.md#invariants).
+  version whose strongest digest is too weak (or absent) is a blind spot: two
+  differing-byte copies that carry no digest, or only a collision-broken one, can
+  fingerprint-collide so a divergence goes undetected. Écluse resolves this **at
+  admission, not in the merge**: a public version whose strongest digest does not meet
+  the configurable **integrity floor** (`PROXY_MIN_PUBLIC_INTEGRITY`, default SHA-256)
+  is **refused before it reaches the merge** — the artifact gate `403`s it
+  (`MissingIntegrity` for no digest, `BelowIntegrityFloor` for a too-weak one) and the
+  gated set drops it from the served listing — so it never contributes a weak
+  fingerprint and a client never sees a version it could not safely verify. With the
+  floor enforced at admission, a below-floor public version never reaches the merge, so
+  the cross-upstream divergence reasons over fingerprints that are each anchored on a
+  strong digest; the **private-weak / public-strong** cross-check on a shared weak
+  digest stays valid because the public copy independently cleared the floor. The
+  **trusted private upstream is exempt** (its versions enter unfiltered, so a SHA-1-only
+  private version is still served). This is
+  [security invariant 5](security.md#invariants).
 - **Reconcile over the union.** `dist-tags.latest` follows the **keep-unless-denied,
   stable-preferring** rule (see
   [Applying verdicts to a packument](rules-engine.md#applying-verdicts-to-a-packument)):

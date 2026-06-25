@@ -40,6 +40,7 @@ import UnliftIO (MonadUnliftIO)
 
 import Ecluse.Credential (Secret)
 import Ecluse.Env (Env, envLogEnv)
+import Ecluse.Package.Integrity (MinIntegrity)
 import Ecluse.Rules.Effectful (PrecededEffectfulRule)
 import Ecluse.Rules.Types (PrecededRule)
 import Ecluse.Security (Limits, LoweredHostSet, TarballHostPolicy)
@@ -119,6 +120,12 @@ data PackumentDeps = PackumentDeps
     -}
     , pdHelp :: Maybe HelpMessage
     -- ^ The operator help message appended to every denial body, if configured.
+    , pdMinIntegrity :: MinIntegrity
+    {- ^ The minimum integrity algorithm a __public__ version's digest must meet to be
+    admitted (the global @PROXY_MIN_PUBLIC_INTEGRITY@ floor, default SHA-256). The
+    public gate refuses a version whose strongest digest is below this; the trusted
+    private path never consults it (see "Ecluse.Package.Integrity").
+    -}
     }
 
 -- ── mount binding ─────────────────────────────────────────────────────────────
