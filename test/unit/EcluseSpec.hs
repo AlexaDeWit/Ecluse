@@ -146,6 +146,26 @@ spec = do
             traverse_ (unsetEnv . fst) runEnv
             outcome `shouldBe` Left BootAborted
 
+        it "aborts fast at boot when the gcp-artifact-registry credential provider is selected (not built)" $ do
+            unsetEnv "PROXY_CONFIG"
+            traverse_ (uncurry setEnv) awsRunEnv
+            setEnv "MIRROR_TARGET_CREDENTIAL_PROVIDER" "gcp-artifact-registry"
+            outcome <- try (timeout 100000 run) :: IO (Either BootAborted (Maybe ()))
+            unsetEnv "MIRROR_TARGET_CREDENTIAL_PROVIDER"
+            traverse_ (unsetEnv . fst) awsRunEnv
+            outcome `shouldBe` Left BootAborted
+
+        it "aborts fast at boot when codeartifact is selected but its domain cannot be resolved" $ do
+            -- The CodeArtifact inputs resolve by neither an explicit key nor the
+            -- (non-CodeArtifact) mirror URL host, so boot fails before any AWS mint.
+            unsetEnv "PROXY_CONFIG"
+            traverse_ (uncurry setEnv) awsRunEnv
+            setEnv "MIRROR_TARGET_CREDENTIAL_PROVIDER" "codeartifact"
+            outcome <- try (timeout 100000 run) :: IO (Either BootAborted (Maybe ()))
+            unsetEnv "MIRROR_TARGET_CREDENTIAL_PROVIDER"
+            traverse_ (unsetEnv . fst) awsRunEnv
+            outcome `shouldBe` Left BootAborted
+
     describe "orExit (boot fail-fast)" $ do
         it "yields the value on a Right (a passing boot phase)" $
             orExit (const "unused") (Right 7 :: Either () Int) `shouldReturn` 7

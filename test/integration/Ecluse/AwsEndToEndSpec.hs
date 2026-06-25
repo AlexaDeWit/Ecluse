@@ -16,21 +16,23 @@ import Network.HTTP.Types.Header (hHost)
 import Network.Wai (Application, Request (rawPathInfo), requestHeaders, requestMethod, responseLBS)
 import Network.Wai.Handler.Warp (testWithApplication)
 import Network.Wai.Test (SResponse (simpleBody, simpleStatus), defaultRequest, request, runSession, setPath)
-import TestContainers (Container)
 import Test.Hspec
+import TestContainers (Container)
 import UnliftIO (race_, timeout)
 import UnliftIO.Concurrent (threadDelay)
 
 import Ecluse.App (runApp)
+import Ecluse.Composition (planMirrorQueue, renderBootError)
+import Ecluse.Config (parseEnvPure)
 import Ecluse.Credential (AuthToken (AuthToken, authExpiresAt, authSecret), CredentialProvider, mkSecret, staticProvider)
 import Ecluse.Env (Env, newEnv, newWorkerHeartbeat)
 import Ecluse.Integration.Ministack (
-    QueueOptions (qoWaitSeconds),
-    defaultQueueOptions,
-    freshQueue,
+    endpointFor,
+    freshQueueUrl,
     withMinistack,
  )
 import Ecluse.Queue (MirrorQueue)
+import Ecluse.Queue.Sqs (SqsConfig (sqsWaitSeconds), SqsEndpoint (endpointHost, endpointPort), newSqsQueue)
 import Ecluse.Registry.Npm (NpmClientConfig (NpmClientConfig, npmBaseUrl, npmLimits, npmManager, npmToken), newNpmClient)
 import Ecluse.Registry.Npm.Route qualified as Npm
 import Ecluse.Registry.Npm.Serve (npmRenderer)
@@ -101,17 +103,47 @@ data TestProxy = TestProxy
 
 {- Stand up the three WAI stubs (public upstream, missing private upstream, mirror
 target), a fresh real SQS queue in the container, and the composition-root 'Env' and
-serve 'Application' over them, then run the body against the assembled proxy. -}
+serve 'Application' over them, then run the body against the assembled proxy.
+
+The queue is built through the __config-driven composition root__
+('Ecluse.Composition.planMirrorQueue' → 'Ecluse.Queue.Sqs.newSqsQueue'), driven by the
+AWS-SDK-standard @AWS_ENDPOINT_URL_SQS@ override pointed at the container — the same
+production path the released image runs, with no test-only seam. -}
 withAwsProxy :: Container -> Text -> (TestProxy -> IO a) -> IO a
 withAwsProxy container queueName body =
     withPrivateUpstream $ \privateUrl ->
         withPublicUpstream $ \publicUrl ->
             withMirrorTarget $ \mirrorUrl mirrorLog -> do
-                -- A short long-poll so the worker loop polls the real queue briskly.
-                queue <- freshQueue container queueName defaultQueueOptions{qoWaitSeconds = 1}
+                queue <- configDrivenQueue container queueName
                 env <- buildEnv queue mirrorUrl
                 let app = application (mkServerConfig [mountBinding privateUrl publicUrl mirrorUrl]) env
                 body TestProxy{tpApp = app, tpEnv = env, tpMirrorLog = mirrorLog}
+
+{- Build the SQS-backed mirror queue through the production composition root: create a
+queue in the container, then resolve the backend from an environment layer carrying the
+AWS-SDK-standard @AWS_ENDPOINT_URL_SQS@ override (and the standard credential keys an
+emulator needs), exactly as the released image would. A short long-poll keeps the worker
+loop brisk. -}
+configDrivenQueue :: Container -> Text -> IO MirrorQueue
+configDrivenQueue container queueName = do
+    queueUrl <- freshQueueUrl container queueName
+    let endpoint = endpointFor container
+        endpointUrl = "http://" <> endpointHost endpoint <> ":" <> show (endpointPort endpoint)
+    env <- either (fail . ("AwsEndToEndSpec fixture env: " <>) . show) pure (parseEnvPure (sqsEnvVars queueUrl endpointUrl))
+    sqsConfig <- either (fail . toString . T.unlines . map renderBootError) pure (planMirrorQueue env)
+    newSqsQueue sqsConfig{sqsWaitSeconds = 1}
+
+-- The environment layer the released image would run with to target a ministack SQS:
+-- the standard endpoint override and credential keys, plus the required upstreams.
+sqsEnvVars :: Text -> Text -> [(String, String)]
+sqsEnvVars queueUrl endpointUrl =
+    [ ("PRIVATE_UPSTREAM_URL", "https://private.invalid")
+    , ("MIRROR_QUEUE_URL", toString queueUrl)
+    , ("AWS_REGION", "us-east-1")
+    , ("AWS_ENDPOINT_URL_SQS", toString endpointUrl)
+    , ("AWS_ACCESS_KEY_ID", "test")
+    , ("AWS_SECRET_ACCESS_KEY", "test")
+    ]
 
 -- The composition-root 'Env' over the real SQS queue and the publish client aimed at
 -- the mirror-target stub. The guarded data-plane manager opts loopback in so the

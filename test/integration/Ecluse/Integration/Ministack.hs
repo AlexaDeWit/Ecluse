@@ -17,6 +17,7 @@ module Ecluse.Integration.Ministack (
 
     -- * Per-test queue
     freshQueue,
+    freshQueueUrl,
     QueueOptions (..),
     defaultQueueOptions,
     receiveUntil,
@@ -119,15 +120,24 @@ up the instant the port opens, so the @CreateQueue@ call is retried.
 -}
 freshQueue :: Container -> Text -> QueueOptions -> IO MirrorQueue
 freshQueue container queueName options = do
-    let endpoint = endpointFor container
-    env <- envFor endpoint
-    queueUrl <- createQueueWithRetry env queueName 30
+    queueUrl <- freshQueueUrl container queueName
     newSqsQueue
         (defaultSqsConfig queueUrl "us-east-1")
-            { sqsEndpoint = Just endpoint
+            { sqsEndpoint = Just (endpointFor container)
             , sqsWaitSeconds = qoWaitSeconds options
             , sqsVisibilityTimeout = qoVisibilityTimeout options
             }
+
+{- | Create a fresh SQS queue in the @ministack@ container and return its queue URL
+(without binding a 'MirrorQueue' to it), so a test can drive the queue through the
+config-driven composition root ('Ecluse.Composition.planMirrorQueue') and the
+endpoint-override key rather than the direct backend constructor. ministack may not
+have the SQS service up the instant the port opens, so @CreateQueue@ is retried.
+-}
+freshQueueUrl :: Container -> Text -> IO Text
+freshQueueUrl container queueName = do
+    env <- envFor (endpointFor container)
+    createQueueWithRetry env queueName 30
 
 -- A region-scoped, endpoint-overridden amazonka Env with the throwaway keys.
 envFor :: SqsEndpoint -> IO AWS.Env

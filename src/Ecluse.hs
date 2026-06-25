@@ -115,8 +115,8 @@ import Ecluse.Composition (
 import Ecluse.Composition qualified as Composition
 import Ecluse.Config (
     ConfigDoc,
-    CredentialBackend (StaticCredential),
-    EnvConfig (cfgLogFormat, cfgPort, cfgShutdownDrainTimeout, cfgTelemetry),
+    CredentialBackend,
+    EnvConfig (cfgLogFormat, cfgMirrorTargetCredentialProvider, cfgPort, cfgShutdownDrainTimeout, cfgTelemetry),
     decodeDocument,
     parseEnv,
     renderEnvErrors,
@@ -162,7 +162,10 @@ run :: IO ()
 run = do
     env <- parseEnv >>= orExit renderEnvErrors
     mDoc <- loadDocument
-    providers <- initCredentialProviders env
+    -- Build the process-global mirror-target write provider(s) selected by config:
+    -- the static token, or the CodeArtifact mint (whose inputs are validated and which
+    -- mints once eagerly, so a misconfiguration fails loudly here at boot).
+    providers <- initCredentialProviders env >>= orExit (T.unlines . map renderBootError)
     bindings <- orExit (T.unlines . map renderBootError) (planMounts mountBindingFor getCurrentTime providers env mDoc)
     publishTargets <- orExit (T.unlines . map renderBootError) (planPublishTargets providers env mDoc)
     -- Select the mirror-queue backend from config (the GCP arm is a fail-loud
@@ -195,7 +198,7 @@ run = do
     logEnv <- newLogEnv (cfgLogFormat env) (Environment "production")
     heartbeat <- newWorkerHeartbeat
     withTelemetry (cfgTelemetry env) $ \telemetry ->
-        withEnv publishClient queue (mirrorWriteProvider providers) manager privateManager metadataCache logEnv telemetry heartbeat (runServices serverConfig)
+        withEnv publishClient queue (mirrorWriteProvider (cfgMirrorTargetCredentialProvider env) providers) manager privateManager metadataCache logEnv telemetry heartbeat (runServices serverConfig)
 
 {- | Read the optional structured config document from the @PROXY_CONFIG@ env blob,
 decoding it strictly. 'Nothing' when unset — an env-only deployment supplies no
@@ -213,14 +216,15 @@ loadDocument =
         Just blob -> Just <$> orExit ("PROXY_CONFIG: " <>) (decodeDocument (encodeUtf8 blob))
 
 {- The process-global mirror-write credential provider stored in 'Env' for the
-worker. In the collapses-to-one common case there is a single provider; the
-@static@ leaf is selected when a static write token is configured, else the
-no-backend placeholder holds the slot for the worker, its only consumer. A mount
-that references an uninitialized provider has already failed the boot-time
-credential check by this point. -}
-mirrorWriteProvider :: CredentialProviders -> CredentialProvider
-mirrorWriteProvider providers =
-    fromMaybe unconfiguredCredentials (Composition.lookupProvider StaticCredential providers)
+worker, selected by the configured provider backend
+('Ecluse.Config.cfgMirrorTargetCredentialProvider'): the static token or the
+CodeArtifact mint. In the common case there is a single provider; the no-backend
+placeholder only holds the slot when the selected provider was not built — a mount
+that references it has already failed the boot-time credential check by this point,
+so the worker (the slot's only consumer) never reaches the placeholder. -}
+mirrorWriteProvider :: CredentialBackend -> CredentialProviders -> CredentialProvider
+mirrorWriteProvider backend providers =
+    fromMaybe unconfiguredCredentials (Composition.lookupProvider backend providers)
 
 {- | Raised to abort start-up after a boot phase has reported its aggregated
 failure to stderr. A distinct type — rather than a bare 'exitFailure' — so the

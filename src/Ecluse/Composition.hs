@@ -37,6 +37,10 @@ module Ecluse.Composition (
     initializedBackends,
     lookupProvider,
 
+    -- * Mirror-target credential provider selection
+    planMirrorCredential,
+    resolveCodeArtifactConfig,
+
     -- * Boot-time wiring
     BootError (..),
     renderBootError,
@@ -71,15 +75,17 @@ import Ecluse.Config (
     QueueBackend (..),
     loadConfig,
     renderCredentialBackend,
+    renderMirrorCredentialProvider,
     renderPolicyError,
     renderQueueBackend,
     unUrl,
  )
-import Ecluse.Credential (AuthToken (..), CredentialProvider, Secret, staticProvider)
+import Ecluse.Credential (AuthToken (..), CredentialProvider, Secret, staticProvider, unSecret)
+import Ecluse.Credential.CodeArtifact (CodeArtifactConfig (..), newCodeArtifactProvider)
 import Ecluse.Ecosystem (Ecosystem, ecosystemName, prefixFor)
 import Ecluse.Package.Integrity (MinIntegrity)
-import Ecluse.Queue.Sqs (SqsConfig, defaultSqsConfig)
-import Ecluse.Security (Limits (Limits, maxBodyBytes, maxNestingDepth, maxVersionCount), TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), lowerCaseHosts)
+import Ecluse.Queue.Sqs (SqsConfig (sqsEndpoint), SqsEndpoint (..), defaultSqsConfig)
+import Ecluse.Security (Limits (Limits, maxBodyBytes, maxNestingDepth, maxVersionCount), TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), hostAddress, lowerCaseHosts)
 import Ecluse.Server.Cache (CacheConfig (..))
 import Ecluse.Server.Context (MountBinding, PackumentDeps (..))
 import Ecluse.Server.Response (HelpMessage, mkHelpMessage)
@@ -95,23 +101,38 @@ that names a backend absent from it has an unresolved credential reference.
 -}
 newtype CredentialProviders = CredentialProviders (Map CredentialBackend CredentialProvider)
 
-{- | Build the global credential providers from the environment layer. Only the
-backends whose leaf can be constructed from ambient credentials are
-initialized:
+{- | Build the global credential providers from the environment layer, or the
+aggregated boot errors that block them. The mirror-target write provider is
+selected by 'cfgMirrorTargetCredentialProvider' (see 'planMirrorCredential'):
 
 * @static@ — built from @MIRROR_TARGET_TOKEN@ ('cfgMirrorTargetToken') when set;
   absent, no static provider is initialized, so a mount naming @static@ fails the
   boot-time credential-reference check.
+* @codeartifact@ — the CodeArtifact inputs are resolved
+  ('resolveCodeArtifactConfig'); a required input that resolves by neither an
+  explicit key nor the mirror-target host is a fail-loud boot error. On success the
+  S16 refresh wrapper around the S17 mint leaf ('newCodeArtifactProvider') is built,
+  which mints once eagerly — so a misconfigured identity fails here at boot. AWS
+  credentials are the ambient container\/task role (the standard chain), never an
+  Écluse key.
+* @gcp-artifact-registry@ — recognised but not built in this binary, so selecting
+  it is a fail-loud boot error rather than a silent fall-through.
 
-@codeartifact@ and @adc@ have no mint leaf, so they are deliberately __not__
-initialized here: a mount naming one is an honest boot failure — the unresolved
-credential reference the boot check rejects — which is the fail-fast mechanism
-working, not a gap.
+The @static@ provider is also built whenever @MIRROR_TARGET_TOKEN@ is present,
+independent of the selector, so a static token never goes unused.
 -}
-initCredentialProviders :: EnvConfig -> IO CredentialProviders
-initCredentialProviders env =
-    pure (CredentialProviders (Map.fromList (catMaybes [staticEntry])))
+initCredentialProviders :: EnvConfig -> IO (Either [BootError] CredentialProviders)
+initCredentialProviders env = case planMirrorCredential env of
+    Left errs -> pure (Left errs)
+    Right mCodeArtifact -> do
+        -- The CodeArtifact leaf mints once eagerly at construction, so an unreachable
+        -- or unauthorised identity fails the boot here rather than on the first write.
+        codeArtifactEntry <- traverse buildCodeArtifact mCodeArtifact
+        pure (Right (CredentialProviders (Map.fromList (catMaybes [staticEntry] <> maybeToList codeArtifactEntry))))
   where
+    buildCodeArtifact :: CodeArtifactConfig -> IO (CredentialBackend, CredentialProvider)
+    buildCodeArtifact caConfig = (CodeArtifactCredential,) <$> newCodeArtifactProvider caConfig
+
     -- The static provider, when a static write token is supplied. A static token
     -- never expires, so the in-memory 'staticProvider' leaf is the whole policy.
     staticEntry :: Maybe (CredentialBackend, CredentialProvider)
@@ -133,6 +154,95 @@ initialized (the unresolved-reference case the boot check rejects).
 -}
 lookupProvider :: CredentialBackend -> CredentialProviders -> Maybe CredentialProvider
 lookupProvider backend (CredentialProviders ps) = Map.lookup backend ps
+
+-- ── mirror-target credential provider selection ───────────────────────────────
+
+{- | Decide what mirror-target write provider the environment layer selects, as the
+pure half of 'initCredentialProviders': 'Nothing' when the @static@ provider is
+selected (its leaf is the @MIRROR_TARGET_TOKEN@ already handled there), 'Just' a
+resolved 'CodeArtifactConfig' when @codeartifact@ is selected, or the aggregated
+boot errors that block the selection.
+
+The @gcp-artifact-registry@ arm is recognised but not built in this binary, so it is
+a fail-loud 'MirrorCredentialProviderUnavailable' boot error — never a silent
+fall-through to a different provider, mirroring how 'planMirrorQueue' treats the GCP
+queue arm.
+-}
+planMirrorCredential :: EnvConfig -> Either [BootError] (Maybe CodeArtifactConfig)
+planMirrorCredential env = case cfgMirrorTargetCredentialProvider env of
+    StaticCredential -> Right Nothing
+    CodeArtifactCredential -> Just <$> resolveCodeArtifactConfig env
+    AdcCredential -> Left [MirrorCredentialProviderUnavailable AdcCredential]
+
+{- | Resolve the CodeArtifact inputs for the mirror-target token, or the aggregated
+boot errors naming each input that could not be resolved.
+
+Each required input is resolved __(a) from its explicit @MIRROR_TARGET_CODEARTIFACT_*@
+key, else (b) by parsing the mirror-target URL host__ of the form
+@{domain}-{owner}.d.codeartifact.{region}.amazonaws.com@ (the architect-ratified
+fallback). The region additionally falls back to @AWS_REGION@ between (a) and (b).
+The mirror-target URL is the resolved one — an unset @MIRROR_TARGET_URL@ has already
+folded onto the private upstream — so a private-upstream CodeArtifact endpoint is
+parsed too. The optional token-duration carries through ('cfgMirrorCodeArtifactTokenDuration').
+
+If a required input (domain, owner, or region) resolves by __neither__ (a) nor (b),
+that is a fail-loud 'CodeArtifactConfigMissing' boot error naming the exact key the
+operator must set, aggregated so one run reports every missing input.
+-}
+resolveCodeArtifactConfig :: EnvConfig -> Either [BootError] CodeArtifactConfig
+resolveCodeArtifactConfig env =
+    case partitionEithers [domainE, ownerE, regionE] of
+        ([], [domain, owner, region]) ->
+            Right
+                CodeArtifactConfig
+                    { caRegion = region
+                    , caDomain = domain
+                    , caDomainOwner = Just owner
+                    , caDurationSeconds = cfgMirrorCodeArtifactTokenDuration env
+                    }
+        (errs, _) -> Left errs
+  where
+    -- The parsed (domain, owner, region) of the resolved mirror-target host, when it
+    -- is a CodeArtifact endpoint — the (b) fallback source for each input.
+    parsed :: Maybe (Text, Text, Text)
+    parsed = parseCodeArtifactHost (hostAddress mirrorTargetUrl)
+
+    mirrorTargetUrl :: Text
+    mirrorTargetUrl = maybe (unUrl (cfgPrivateUpstream env)) unUrl (cfgMirrorTarget env)
+
+    -- (a) explicit key, else (b) the parsed host field; a non-empty resolution wins,
+    -- else the named-key boot error.
+    resolve :: Text -> Maybe Text -> Maybe Text -> Either BootError Text
+    resolve key explicit fromHost =
+        case nonBlank =<< (explicit <|> fromHost) of
+            Just value -> Right value
+            Nothing -> Left (CodeArtifactConfigMissing key)
+
+    domainE = resolve "MIRROR_TARGET_CODEARTIFACT_DOMAIN" (cfgMirrorCodeArtifactDomain env) (fst3 <$> parsed)
+    ownerE = resolve "MIRROR_TARGET_CODEARTIFACT_DOMAIN_OWNER" (cfgMirrorCodeArtifactDomainOwner env) (snd3 <$> parsed)
+    -- Region resolves through AWS_REGION between the explicit key and the host parse.
+    regionE = resolve "MIRROR_TARGET_CODEARTIFACT_REGION" (cfgMirrorCodeArtifactRegion env <|> cfgAwsRegion env) (thd3 <$> parsed)
+
+    fst3 (a, _, _) = a
+    snd3 (_, b, _) = b
+    thd3 (_, _, c) = c
+
+{- Parse a CodeArtifact npm endpoint host into its (domain, owner, region). The host
+shape is @{domain}-{owner}.d.codeartifact.{region}.amazonaws.com@; the @{owner}@ is the
+12-digit account number after the __last__ hyphen of the first label, so a domain may
+itself contain hyphens. 'Nothing' for any host that is not this shape. -}
+parseCodeArtifactHost :: Text -> Maybe (Text, Text, Text)
+parseCodeArtifactHost host = do
+    [domainOwner, regionTail] <- Just (T.splitOn ".d.codeartifact." host)
+    region <- nonBlank =<< T.stripSuffix ".amazonaws.com" regionTail
+    let (domainDash, owner) = T.breakOnEnd "-" domainOwner
+    domain <- nonBlank (T.dropEnd 1 domainDash)
+    ownerValue <- nonBlank owner
+    pure (domain, ownerValue, region)
+
+-- A 'Text' that is non-empty after trimming, or 'Nothing'.
+nonBlank :: Text -> Maybe Text
+nonBlank t = let trimmed = T.strip t in if T.null trimmed then Nothing else Just trimmed
 
 -- ── boot-time wiring ──────────────────────────────────────────────────────────
 
@@ -160,6 +270,20 @@ data BootError
       (@AWS_REGION@), so the queue cannot be scoped to a region.
       -}
       QueueRegionMissing
+    | {- | The configured SQS endpoint override (@AWS_ENDPOINT_URL_SQS@ \/
+      @AWS_ENDPOINT_URL@) is not a parseable endpoint URL. Carries the offending value.
+      -}
+      QueueEndpointMalformed Text
+    | {- | The selected mirror-target credential provider has no implementation
+      compiled into this binary. Carries the unavailable provider. An honest refusal,
+      never a silent fall-through.
+      -}
+      MirrorCredentialProviderUnavailable CredentialBackend
+    | {- | A required CodeArtifact input for the mirror-target token could not be
+      resolved from either its explicit key or the mirror-target host. Carries the
+      name of the key the operator must set.
+      -}
+      CodeArtifactConfigMissing Text
     deriving stock (Eq, Show)
 
 -- | Render a 'BootError' as a human-facing line for the aggregated failure block.
@@ -182,6 +306,16 @@ renderBootError = \case
         "mirror queue provider "
             <> renderQueueBackend SqsQueue
             <> " requires AWS_REGION to be set"
+    QueueEndpointMalformed url ->
+        "the SQS endpoint override (AWS_ENDPOINT_URL_SQS / AWS_ENDPOINT_URL) is not a valid endpoint URL: " <> url
+    MirrorCredentialProviderUnavailable backend ->
+        "mirror-target credential provider "
+            <> renderMirrorCredentialProvider backend
+            <> " is not available in this build"
+    CodeArtifactConfigMissing key ->
+        "mirror-target credential provider codeartifact requires "
+            <> key
+            <> " (set it explicitly, or use a CodeArtifact MIRROR_TARGET_URL it can be parsed from)"
 
 {- | Validate the environment layer and optional document into the served mount
 bindings, or the aggregated boot errors. The composition root's single entry: it
@@ -404,13 +538,61 @@ recognised but not built, so it is a fail-loud 'QueueProviderUnavailable' boot e
 rather than a silent fall-through; a missing @AWS_REGION@ under @sqs@ is a
 'QueueRegionMissing' boot error. Errors are returned as a list so they aggregate
 with the rest of the boot-time validation.
+
+When an endpoint override is configured (@AWS_ENDPOINT_URL_SQS@, else
+@AWS_ENDPOINT_URL@ — the AWS-SDK-standard variables), it is parsed into the
+backend's 'SqsEndpoint' so the released image can target a local emulator
+(@ministack@) or a VPC endpoint without a test-only seam; a malformed override URL is
+a fail-loud 'QueueEndpointMalformed' boot error. With no override, the SQS backend
+uses AWS's default endpoint and credential resolution.
 -}
 planMirrorQueue :: EnvConfig -> Either [BootError] SqsConfig
 planMirrorQueue env = case cfgQueueBackend env of
     PubSubQueue -> Left [QueueProviderUnavailable PubSubQueue]
     SqsQueue -> case T.strip <$> cfgAwsRegion env of
-        Just region | not (T.null region) -> Right (defaultSqsConfig (unUrl (cfgQueueUrl env)) region)
+        Just region | not (T.null region) -> do
+            endpoint <- resolveSqsEndpoint env
+            Right (defaultSqsConfig (unUrl (cfgQueueUrl env)) region){sqsEndpoint = endpoint}
         _ -> Left [QueueRegionMissing]
+
+{- Resolve the optional SQS endpoint override into an 'SqsEndpoint', or 'Nothing' for
+AWS's default resolution. The AWS-SDK-standard @AWS_ENDPOINT_URL_SQS@ takes precedence
+over the generic @AWS_ENDPOINT_URL@; the override URL is parsed into its TLS flag,
+host, and port, and the request signing keys are taken from the standard
+@AWS_ACCESS_KEY_ID@\/@AWS_SECRET_ACCESS_KEY@ (an emulator is off the ambient chain).
+A malformed override URL is a fail-loud boot error. -}
+resolveSqsEndpoint :: EnvConfig -> Either [BootError] (Maybe SqsEndpoint)
+resolveSqsEndpoint env =
+    case nonBlank =<< (cfgAwsEndpointUrlSqs env <|> cfgAwsEndpointUrl env) of
+        Nothing -> Right Nothing
+        Just url -> case parseEndpointUrl url of
+            Just (secure, host, port) ->
+                Right
+                    ( Just
+                        SqsEndpoint
+                            { endpointSecure = secure
+                            , endpointHost = host
+                            , endpointPort = port
+                            , endpointAccessKey = fromMaybe "" (cfgAwsAccessKeyId env)
+                            , endpointSecretKey = maybe "" unSecret (cfgAwsSecretAccessKey env)
+                            }
+                    )
+            Nothing -> Left [QueueEndpointMalformed url]
+
+{- Parse an endpoint URL into its (TLS flag, host, port). The scheme picks the TLS
+flag and the default port (443\/80) when none is given; an absent scheme or a
+non-numeric port yields 'Nothing'. -}
+parseEndpointUrl :: Text -> Maybe (Bool, Text, Int)
+parseEndpointUrl raw = do
+    (secure, afterScheme) <-
+        ((True,) <$> T.stripPrefix "https://" raw) <|> ((False,) <$> T.stripPrefix "http://" raw)
+    let authority = T.takeWhile (`notElem` ['/', '?', '#']) afterScheme
+        (hostText, portText) = T.breakOn ":" authority
+    host <- nonBlank hostText
+    port <- case T.stripPrefix ":" portText of
+        Nothing -> Just (if secure then 443 else 80)
+        Just digits -> readMaybe (toString digits)
+    pure (secure, host, port)
 
 -- ── config-derived runtime settings ───────────────────────────────────────────
 

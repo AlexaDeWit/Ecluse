@@ -7,14 +7,17 @@ import Test.Hspec
 import Ecluse (mirrorWriteProvider, mountBindingFor)
 import Ecluse.Composition (
     BootError (..),
+    CredentialProviders,
     cacheConfigFor,
     composeBindings,
     initCredentialProviders,
     initializedBackends,
     lookupProvider,
+    planMirrorCredential,
     planMirrorQueue,
     planMounts,
     renderBootError,
+    resolveCodeArtifactConfig,
  )
 import Ecluse.Config (
     Config,
@@ -28,10 +31,11 @@ import Ecluse.Config (
     parseEnvPure,
  )
 import Ecluse.Credential (authSecret, currentToken, unSecret)
+import Ecluse.Credential.CodeArtifact (CodeArtifactConfig (caDomain, caDomainOwner, caDurationSeconds, caRegion))
 import Ecluse.Ecosystem (Ecosystem (..))
 import Ecluse.Package (HashAlg (SHA512))
 import Ecluse.Package.Integrity (defaultMinIntegrity, mkMinIntegrity)
-import Ecluse.Queue.Sqs (SqsConfig (sqsQueueUrl, sqsRegion))
+import Ecluse.Queue.Sqs (SqsConfig (sqsEndpoint, sqsQueueUrl, sqsRegion), SqsEndpoint (endpointHost, endpointPort, endpointSecure))
 import Ecluse.Security (Limits (maxBodyBytes, maxNestingDepth, maxVersionCount), TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), defaultLimits)
 import Ecluse.Server.Cache (CacheConfig (cacheMaxEntries, cacheTtl))
 import Ecluse.Server.Context (
@@ -53,6 +57,7 @@ spec = do
     credentialProvidersSpec
     mirrorWriteProviderSpec
     mirrorQueueSpec
+    mirrorCredentialSpec
     cacheConfigSpec
     composeBindingsSpec
     bootErrorSpec
@@ -80,8 +85,19 @@ staticEnvVars =
 noTokenEnvVars :: [(String, String)]
 noTokenEnvVars = filter ((/= "MIRROR_TARGET_TOKEN") . fst) staticEnvVars
 
+-- Drop any MIRROR_TARGET_URL entry, so a test that supplies its own (a CodeArtifact
+-- endpoint to parse) is not shadowed by the base fixture's value.
+withoutMirrorTargetUrl :: [(String, String)] -> [(String, String)]
+withoutMirrorTargetUrl = filter ((/= "MIRROR_TARGET_URL") . fst)
+
 expectEnv :: [(String, String)] -> IO EnvConfig
 expectEnv = either (\errs -> fail ("env parse failed: " <> show errs)) pure . parseEnvPure
+
+-- Build the credential providers, failing the test on a boot error (the static-path
+-- examples expect a clean build).
+expectProviders :: EnvConfig -> IO CredentialProviders
+expectProviders env =
+    initCredentialProviders env >>= either (\errs -> fail ("provider init failed: " <> show errs)) pure
 
 expectDoc :: ByteString -> IO ConfigDoc
 expectDoc = either (\e -> fail ("document decode failed: " <> toString e)) pure . decodeDocument
@@ -103,9 +119,10 @@ mountDoc eco credential =
 -- Build the served bindings from an env + optional document through 'planMounts',
 -- with the real adapter resolver, the fixed clock, and the env's static providers.
 planFrom :: EnvConfig -> Maybe ConfigDoc -> IO (Either [BootError] [MountBinding])
-planFrom env mDoc = do
-    providers <- initCredentialProviders env
-    pure (planMounts mountBindingFor (pure fixedNow) providers env mDoc)
+planFrom env mDoc =
+    initCredentialProviders env >>= \case
+        Left errs -> pure (Left errs)
+        Right providers -> pure (planMounts mountBindingFor (pure fixedNow) providers env mDoc)
 
 -- ── credential providers ──────────────────────────────────────────────────────
 
@@ -113,12 +130,12 @@ credentialProvidersSpec :: Spec
 credentialProvidersSpec = describe "initCredentialProviders" $ do
     it "initializes the static provider from MIRROR_TARGET_TOKEN when set" $ do
         env <- expectEnv staticEnvVars
-        providers <- initCredentialProviders env
+        providers <- expectProviders env
         initializedBackends providers `shouldBe` fromList [StaticCredential]
 
     it "yields the configured static token through the initialized provider" $ do
         env <- expectEnv staticEnvVars
-        providers <- initCredentialProviders env
+        providers <- expectProviders env
         case lookupProvider StaticCredential providers of
             Nothing -> expectationFailure "expected an initialized static provider"
             Just provider -> do
@@ -127,15 +144,31 @@ credentialProvidersSpec = describe "initCredentialProviders" $ do
 
     it "initializes no provider when no static token is supplied" $ do
         env <- expectEnv noTokenEnvVars
-        providers <- initCredentialProviders env
+        providers <- expectProviders env
         initializedBackends providers `shouldBe` mempty
         -- 'CredentialProvider' has no 'Eq'\/'Show' (it is a record of an IO
         -- function), so resolution is asserted through 'isJust' on a 'Bool'.
         isJust (lookupProvider StaticCredential providers) `shouldBe` False
-        -- The cloud-minted backends have no leaf in this build, so they never
-        -- resolve regardless of configuration.
+        -- The cloud-minted backends are not selected here, so they never resolve.
         isJust (lookupProvider CodeArtifactCredential providers) `shouldBe` False
         isJust (lookupProvider AdcCredential providers) `shouldBe` False
+
+    it "refuses to build when the gcp-artifact-registry provider is selected (not built)" $ do
+        -- 'CredentialProviders' has no 'Show', so the Left is extracted to compare.
+        env <- expectEnv (("MIRROR_TARGET_CREDENTIAL_PROVIDER", "gcp-artifact-registry") : staticEnvVars)
+        result <- initCredentialProviders env
+        leftToMaybe result `shouldBe` Just [MirrorCredentialProviderUnavailable AdcCredential]
+
+    it "refuses to build when codeartifact is selected but its domain cannot be resolved" $ do
+        -- A non-CodeArtifact MIRROR_TARGET_URL and no explicit keys: domain and owner
+        -- resolve by neither route, so both are named in the aggregated boot failure.
+        env <- expectEnv (("MIRROR_TARGET_CREDENTIAL_PROVIDER", "codeartifact") : ("AWS_REGION", "us-east-1") : staticEnvVars)
+        result <- initCredentialProviders env
+        leftToMaybe result
+            `shouldBe` Just
+                [ CodeArtifactConfigMissing "MIRROR_TARGET_CODEARTIFACT_DOMAIN"
+                , CodeArtifactConfigMissing "MIRROR_TARGET_CODEARTIFACT_DOMAIN_OWNER"
+                ]
 
 -- ── mirror-write credential selection ─────────────────────────────────────────
 
@@ -143,14 +176,14 @@ mirrorWriteProviderSpec :: Spec
 mirrorWriteProviderSpec = describe "mirrorWriteProvider" $ do
     it "selects the initialized static provider as the mirror-write credential" $ do
         env <- expectEnv staticEnvVars
-        providers <- initCredentialProviders env
-        tok <- currentToken (mirrorWriteProvider providers)
+        providers <- expectProviders env
+        tok <- currentToken (mirrorWriteProvider StaticCredential providers)
         unSecret (authSecret tok) `shouldBe` "mirror-write-token"
 
-    it "falls back to the empty placeholder when no provider is initialized" $ do
+    it "falls back to the empty placeholder when the selected provider is not initialized" $ do
         env <- expectEnv noTokenEnvVars
-        providers <- initCredentialProviders env
-        tok <- currentToken (mirrorWriteProvider providers)
+        providers <- expectProviders env
+        tok <- currentToken (mirrorWriteProvider StaticCredential providers)
         unSecret (authSecret tok) `shouldBe` ""
 
 -- ── mirror-queue backend selection ────────────────────────────────────────────
@@ -180,6 +213,111 @@ mirrorQueueSpec = describe "planMirrorQueue" $ do
         -- it must route to a clear "not built" error, never quietly to a different queue.
         env <- expectEnv (("MIRROR_QUEUE_PROVIDER", "pubsub") : ("AWS_REGION", "us-east-1") : staticEnvVars)
         planMirrorQueue env `shouldBe` Left [QueueProviderUnavailable PubSubQueue]
+
+    it "honours the AWS-standard SQS endpoint override (AWS_ENDPOINT_URL_SQS)" $ do
+        env <-
+            expectEnv
+                ( ("AWS_REGION", "us-east-1")
+                    : ("AWS_ENDPOINT_URL_SQS", "http://localhost:4566")
+                    : ("AWS_ACCESS_KEY_ID", "test")
+                    : ("AWS_SECRET_ACCESS_KEY", "test")
+                    : staticEnvVars
+                )
+        case planMirrorQueue env of
+            Right cfg -> case sqsEndpoint cfg of
+                Just ep -> do
+                    endpointSecure ep `shouldBe` False
+                    endpointHost ep `shouldBe` "localhost"
+                    endpointPort ep `shouldBe` 4566
+                Nothing -> expectationFailure "expected the endpoint override to resolve"
+            Left errs -> expectationFailure ("expected an SQS config, got boot errors: " <> show errs)
+
+    it "falls back to the generic AWS_ENDPOINT_URL when the SQS-specific one is unset" $ do
+        env <-
+            expectEnv
+                ( ("AWS_REGION", "us-east-1")
+                    : ("AWS_ENDPOINT_URL", "https://sqs.vpce.example:8443")
+                    : staticEnvVars
+                )
+        case planMirrorQueue env of
+            Right cfg -> ((endpointSecure &&& endpointPort) <$> sqsEndpoint cfg) `shouldBe` Just (True, 8443)
+            Left errs -> expectationFailure ("expected an SQS config, got boot errors: " <> show errs)
+
+    it "uses AWS default resolution (no endpoint) when no override is set" $ do
+        env <- expectEnv (("AWS_REGION", "us-east-1") : staticEnvVars)
+        (sqsEndpoint <$> rightToMaybe (planMirrorQueue env)) `shouldBe` Just Nothing
+
+    it "fails fast on a malformed SQS endpoint override" $ do
+        env <- expectEnv (("AWS_REGION", "us-east-1") : ("AWS_ENDPOINT_URL_SQS", "not-a-url") : staticEnvVars)
+        planMirrorQueue env `shouldBe` Left [QueueEndpointMalformed "not-a-url"]
+
+-- ── mirror-target credential provider selection ───────────────────────────────
+
+mirrorCredentialSpec :: Spec
+mirrorCredentialSpec = describe "planMirrorCredential / resolveCodeArtifactConfig" $ do
+    it "selects the static provider (no CodeArtifact config) by default" $ do
+        env <- expectEnv staticEnvVars
+        planMirrorCredential env `shouldBe` Right Nothing
+
+    it "refuses the gcp-artifact-registry provider as not built" $ do
+        env <- expectEnv (("MIRROR_TARGET_CREDENTIAL_PROVIDER", "gcp-artifact-registry") : staticEnvVars)
+        planMirrorCredential env `shouldBe` Left [MirrorCredentialProviderUnavailable AdcCredential]
+
+    it "resolves CodeArtifact inputs from the explicit MIRROR_TARGET_CODEARTIFACT_* keys" $ do
+        env <-
+            expectEnv
+                ( ("MIRROR_TARGET_CREDENTIAL_PROVIDER", "codeartifact")
+                    : ("MIRROR_TARGET_CODEARTIFACT_DOMAIN", "my-domain")
+                    : ("MIRROR_TARGET_CODEARTIFACT_DOMAIN_OWNER", "111122223333")
+                    : ("MIRROR_TARGET_CODEARTIFACT_REGION", "eu-west-1")
+                    : ("MIRROR_TARGET_CODEARTIFACT_TOKEN_DURATION_SECONDS", "1800")
+                    : staticEnvVars
+                )
+        case resolveCodeArtifactConfig env of
+            Right cfg -> do
+                caDomain cfg `shouldBe` "my-domain"
+                caDomainOwner cfg `shouldBe` Just "111122223333"
+                caRegion cfg `shouldBe` "eu-west-1"
+                caDurationSeconds cfg `shouldBe` Just 1800
+            Left errs -> expectationFailure ("expected a resolved CodeArtifact config, got " <> show errs)
+
+    it "parses the domain, owner, and region from a CodeArtifact MIRROR_TARGET_URL host" $ do
+        -- (b) the URL-parse fallback: a real CodeArtifact npm endpoint host, with a
+        -- hyphenated domain so the 12-digit owner after the LAST hyphen is recovered.
+        env <-
+            expectEnv
+                ( ("MIRROR_TARGET_CREDENTIAL_PROVIDER", "codeartifact")
+                    : ("MIRROR_TARGET_URL", "https://my-domain-111122223333.d.codeartifact.us-west-2.amazonaws.com/npm/my-repo/")
+                    : withoutMirrorTargetUrl staticEnvVars
+                )
+        case resolveCodeArtifactConfig env of
+            Right cfg -> do
+                caDomain cfg `shouldBe` "my-domain"
+                caDomainOwner cfg `shouldBe` Just "111122223333"
+                caRegion cfg `shouldBe` "us-west-2"
+            Left errs -> expectationFailure ("expected the host to parse, got " <> show errs)
+
+    it "falls the region back to AWS_REGION between the explicit key and the host" $ do
+        env <-
+            expectEnv
+                ( ("MIRROR_TARGET_CREDENTIAL_PROVIDER", "codeartifact")
+                    : ("MIRROR_TARGET_CODEARTIFACT_DOMAIN", "d")
+                    : ("MIRROR_TARGET_CODEARTIFACT_DOMAIN_OWNER", "o")
+                    : ("AWS_REGION", "ap-south-1")
+                    : staticEnvVars
+                )
+        (caRegion <$> rightToMaybe (resolveCodeArtifactConfig env)) `shouldBe` Just "ap-south-1"
+
+    it "fails loud, naming each unresolved input, when neither key nor host supplies it" $ do
+        -- A non-CodeArtifact mirror URL and no explicit keys / AWS_REGION: domain,
+        -- owner, and region are all unresolved and all named in one aggregated failure.
+        env <- expectEnv (("MIRROR_TARGET_CREDENTIAL_PROVIDER", "codeartifact") : staticEnvVars)
+        resolveCodeArtifactConfig env
+            `shouldBe` Left
+                [ CodeArtifactConfigMissing "MIRROR_TARGET_CODEARTIFACT_DOMAIN"
+                , CodeArtifactConfigMissing "MIRROR_TARGET_CODEARTIFACT_DOMAIN_OWNER"
+                , CodeArtifactConfigMissing "MIRROR_TARGET_CODEARTIFACT_REGION"
+                ]
 
 -- ── config-derived cache settings ─────────────────────────────────────────────
 
@@ -245,7 +383,7 @@ composeBindingsSpec = describe "planMounts / composeBindings (config-driven serv
         -- PROXY_AUTH_TOKEN), the injected clock ('pdNow'), and the operator help
         -- message — all wired by the composition root.
         env <- expectEnv (("PROXY_AUTH_TOKEN", "edge-secret") : ("PROXY_HELP_MESSAGE", "ask #platform") : staticEnvVars)
-        providers <- initCredentialProviders env
+        providers <- expectProviders env
         config <- expectConfig env Nothing
         case composeBindings mountBindingFor (pure fixedNow) providers config of
             Right [binding] -> case bindingPackumentDeps binding of
@@ -327,7 +465,7 @@ composeBindingsSpec = describe "planMounts / composeBindings (config-driven serv
         -- The pure builder over an already-loaded Config is the testable core;
         -- planMounts is just loadConfig sequenced into it.
         env <- expectEnv staticEnvVars
-        providers <- initCredentialProviders env
+        providers <- expectProviders env
         config <- expectConfig env Nothing
         case composeBindings mountBindingFor (pure fixedNow) providers config of
             Right bindings -> map bindingPrefix bindings `shouldBe` ["npm" :| []]
@@ -394,6 +532,11 @@ renderSpec = describe "renderBootError" $
             `shouldSatisfy` infixed "not initialized"
         renderBootError (QueueProviderUnavailable PubSubQueue) `shouldSatisfy` infixed "not available"
         renderBootError QueueRegionMissing `shouldSatisfy` infixed "AWS_REGION"
+        renderBootError (QueueEndpointMalformed "x") `shouldSatisfy` infixed "endpoint"
+        renderBootError (MirrorCredentialProviderUnavailable AdcCredential)
+            `shouldSatisfy` infixed "gcp-artifact-registry"
+        renderBootError (CodeArtifactConfigMissing "MIRROR_TARGET_CODEARTIFACT_DOMAIN")
+            `shouldSatisfy` infixed "MIRROR_TARGET_CODEARTIFACT_DOMAIN"
   where
     infixed :: Text -> Text -> Bool
     infixed needle hay = needle `T.isInfixOf` hay
