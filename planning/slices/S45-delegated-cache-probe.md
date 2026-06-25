@@ -33,7 +33,7 @@ populate is an orthogonal operational choice (see
 **Acceptance criteria.**
 - [ ] Before serving a `delegated-cache` hit, Écluse issues an **authorisation probe**
   to the upstream carrying the caller's credential; a non-2xx probe is refused per the
-  [serve error model](web-layer.md#error-model), and a 2xx admits the cached compute. —
+  [serve error model](../../docs/architecture/web-layer.md#error-model), and a 2xx admits the cached compute. —
   _access-model.md#delegated-cache--the-upstream-decides-retrievability-écluse-caches-the-compute_
 - [ ] **Probe granularity is configurable and must match the upstream's authorisation**:
   `mount` (a coarse, per-mount probe, e.g. `whoami`/`HEAD`) or `resource` (a

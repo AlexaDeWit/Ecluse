@@ -40,7 +40,7 @@ the edge (S43); the upstream sees one identity.
   is an orthogonal operational choice (#129), since every serve is freshly authorised. —
   _access-model.md#caching_
 - [ ] A read-credential refresh failure degrades **reads** (surfaced per the
-  [serve error model](web-layer.md#error-model)); document that, unlike the
+  [serve error model](../../docs/architecture/web-layer.md#error-model)); document that, unlike the
   mirror-write-only past, a read credential now sits on the serve path under
   `service`. — _access-model.md#credential-supply-the-credentialprovider-generalised_
 - [ ] Tests: unit over the strategy branch (service vs passthrough fetch identity +

@@ -11,7 +11,7 @@ lets Écluse act as both an npm **client** (fetching from upstreams) and an npm
 
 > **Provenance.** Live examples were captured on **2026-06-21** against
 > `https://registry.npmjs.org` with `curl`/`jq` (see
-> [Reproducing the probes](#reproducing-the-probes)). Normative claims are
+> [Reproducing the probes](#13-reproducing-the-probes)). Normative claims are
 > backed by the npm registry docs ([npm/registry](https://github.com/npm/registry)),
 > quoted inline. The public registry is fronted by Cloudflare and has drifted
 > from the published spec in places; where they differ, both are noted and the
