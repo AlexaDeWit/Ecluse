@@ -17,7 +17,8 @@ import Hedgehog.Range qualified as Range
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
-import Ecluse.Package (PackageInfo)
+import Ecluse.Ecosystem (Ecosystem (Npm))
+import Ecluse.Package (PackageInfo, PackageName, mkPackageName, mkScope)
 import Ecluse.Package.Filter (filterPlan)
 import Ecluse.Registry (ParseError, RegistryResponse (RegistryResponse))
 import Ecluse.Registry.Npm.Filter (
@@ -649,11 +650,36 @@ upstreamTarball name ver = "https://upstream.test/" <> name <> "/-/" <> baseName
 decodeValue :: ByteString -> IO Value
 decodeValue bs = either (fail . ("decode failure: " <>)) pure (eitherDecodeStrict bs)
 
+{- | The route-requested 'PackageName' for projecting a fixture: the body's /own/
+self-reported top-level @name@, so the projection's name validation is a guaranteed
+pass and these tests exercise filtering, not name validation (which has its own
+suite). Mirrors the npm scope split the projection performs.
+-}
+fixtureName :: Value -> PackageName
+fixtureName v = npmName (nameOf v)
+  where
+    nameOf :: Value -> Text
+    nameOf value = case value of
+        Object o -> case KeyMap.lookup "name" o of
+            Just (String t) -> t
+            _ -> ""
+        _ -> ""
+
+    npmName :: Text -> PackageName
+    npmName raw = case T.stripPrefix "@" raw of
+        Just afterAt
+            | (scopeText, rest) <- T.break (== '/') afterAt
+            , bare <- T.drop 1 rest
+            , not (T.null scopeText)
+            , not (T.null bare) ->
+                mkPackageName Npm (Just (mkScope scopeText)) bare
+        _ -> mkPackageName Npm Nothing raw
+
 -- | Project and decode the same bytes, so the 'PackageInfo' and 'Value' agree.
 loadPackument :: ByteString -> IO (PackageInfo, Value)
 loadPackument bs = do
-    info <- orFailParse (parsePackageInfo (RegistryResponse bs))
     v <- decodeValue bs
+    info <- orFailParse (parsePackageInfo (fixtureName v) (RegistryResponse bs))
     pure (info, v)
 
 {- | Decide the plan ('Ecluse.Package.Filter.filterPlan') over the typed view and
@@ -695,8 +721,8 @@ decodeOrFail bs = either (\e -> annotateShow e >> failure) pure (eitherDecodeStr
 
 loadOrFail :: ByteString -> H.PropertyT IO (PackageInfo, Value)
 loadOrFail bs = do
-    info <- either (\e -> annotateShow e >> failure) pure (parsePackageInfo (RegistryResponse bs))
     v <- decodeOrFail bs
+    info <- either (\e -> annotateShow e >> failure) pure (parsePackageInfo (fixtureName v) (RegistryResponse bs))
     pure (info, v)
 
 -- ── raw-Value navigation ─────────────────────────────────────────────────────

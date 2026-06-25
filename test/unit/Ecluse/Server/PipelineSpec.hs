@@ -409,6 +409,17 @@ packument versions latest times =
         , "_id" .= ("thing" :: Text) -- an unmodeled top-level key
         ]
 
+{- | A packument like 'packument' but self-reporting a /different/ top-level @name@,
+to exercise the route-name validation. The route under test is always @\/npm\/thing@,
+so a packument named anything but @thing@ is validated out (an untrusted, misreporting
+origin) and its contribution dropped.
+-}
+packumentNamed :: Text -> [(Text, Value)] -> Text -> [(Text, Text)] -> Value
+packumentNamed nm versions latest times =
+    case packument versions latest times of
+        Object o -> Object (KeyMap.insert "name" (String nm) o)
+        v -> v
+
 {- | A version object with a @dist@ carrying a tarball URL and an @integrity@, plus
 an unmodeled per-version key. @scripts@ flags an install script when asked, so the
 install-script deny can be exercised.
@@ -471,7 +482,7 @@ fakeRegistry =
         { fetchMetadata = const (refuse "fetchMetadata")
         , fetchArtifact = \_ _ -> refuse "fetchArtifact"
         , publishArtifact = \_ _ _ -> refuse "publishArtifact"
-        , parsePackageInfo = const (Left (ParseError "unused"))
+        , parsePackageInfo = \_ _ -> Left (ParseError "unused")
         , parseVersionDetails = \_ _ -> Left (ParseError "unused")
         , parseVersionList = const (Left (ParseError "unused"))
         }
@@ -987,6 +998,35 @@ partialAvailabilitySpec = describe "partial-upstream availability" $ do
             status resp `shouldBe` 200
             servedVersions resp `shouldBe` ["2.0.0"]
 
+    it "drops a private leg that self-reports a different package, serving the public set (200)" $ do
+        -- The private upstream answers, but its packument's top-level `name` is `other`,
+        -- not the requested `thing`: it is validated out (untrusted for this request) and
+        -- dropped, and the public set still serves 200. A single misreporting upstream
+        -- must never deny a package another upstream serves.
+        privateUp <-
+            servingUpstream
+                (encodePackument (packumentNamed "other" [("1.0.0", plainVersion "1.0.0")] "1.0.0" [("1.0.0", publishedDaysAgo 30)]))
+        publicUp <-
+            servingUpstream
+                (encodePackument (packument [("2.0.0", plainVersion "2.0.0")] "2.0.0" [("2.0.0", publishedDaysAgo 30)]))
+        withProxy privateUp publicUp Nothing $ \app -> do
+            resp <- getThing Nothing app
+            status resp `shouldBe` 200
+            servedVersions resp `shouldBe` ["2.0.0"]
+            -- The served name is the genuine `thing` the surviving (public) origin reported.
+            topLevel "name" resp `shouldBe` Just (String "thing")
+
+    it "drops a public leg that self-reports a different package, serving the private set (200)" $ do
+        privateUp <- servingUpstream (encodePackument (privatePackument [("1.0.0", plainVersion "1.0.0")] "1.0.0"))
+        publicUp <-
+            servingUpstream
+                (encodePackument (packumentNamed "other" [("2.0.0", plainVersion "2.0.0")] "2.0.0" [("2.0.0", publishedDaysAgo 30)]))
+        withProxy privateUp publicUp Nothing $ \app -> do
+            resp <- getThing Nothing app
+            status resp `shouldBe` 200
+            servedVersions resp `shouldBe` ["1.0.0"]
+            topLevel "name" resp `shouldBe` Just (String "thing")
+
 -- ── cache read-through coherence ──────────────────────────────────────────────
 
 cacheSpec :: Spec
@@ -1091,6 +1131,42 @@ noSurvivorsSpec = describe "no survivors in the merge" $ do
             resp <- getThing Nothing app
             status resp `shouldBe` 403
             -- Never a 404: the package exists; its versions were withheld.
+            status resp `shouldNotBe` 404
+
+    it "502s when every responding origin reports a different package (no valid contribution)" $ do
+        -- Both upstreams answer, but each self-reports `other` for the requested
+        -- `thing`: neither is a valid contribution. With no valid origin, the request
+        -- is a 502 (a responding upstream returned an invalid response) — distinct from
+        -- a genuine absence (which is not refused this way).
+        privateUp <-
+            servingUpstream
+                (encodePackument (packumentNamed "other" [("1.0.0", plainVersion "1.0.0")] "1.0.0" [("1.0.0", publishedDaysAgo 30)]))
+        publicUp <-
+            servingUpstream
+                (encodePackument (packumentNamed "other" [("2.0.0", plainVersion "2.0.0")] "2.0.0" [("2.0.0", publishedDaysAgo 30)]))
+        withProxy privateUp publicUp Nothing $ \app -> do
+            resp <- getThing Nothing app
+            status resp `shouldBe` 502
+            -- The 502 reason phrase is rendered, and a gateway fault is not retryable —
+            -- no Retry-After (unlike a 503).
+            reason resp `shouldBe` "Bad Gateway"
+            header "Retry-After" resp `shouldBe` Nothing
+            -- A mismatch is "upstream returned an invalid response", not "not found".
+            status resp `shouldNotBe` 404
+
+    it "502s a public-leg mismatch routed through the metadata cache (private resolves but is empty)" $ do
+        -- Isolates the public-cache path: the private leg resolves a valid but empty
+        -- `thing` packument (so it adds no transient signal), while the public leg —
+        -- fetched through `resolveMetadata` — answers with a packument for `other`. The
+        -- typed mismatch is re-thrown through the cache leader and recovered as the
+        -- public origin's bad-gateway signal, so with no valid contribution it is a 502.
+        privateUp <- servingUpstream (encodePackument (privatePackument [] "0.0.0"))
+        publicUp <-
+            servingUpstream
+                (encodePackument (packumentNamed "other" [("2.0.0", plainVersion "2.0.0")] "2.0.0" [("2.0.0", publishedDaysAgo 30)]))
+        withProxy privateUp publicUp Nothing $ \app -> do
+            resp <- getThing Nothing app
+            status resp `shouldBe` 502
             status resp `shouldNotBe` 404
 
 -- ── edge authentication ───────────────────────────────────────────────────────

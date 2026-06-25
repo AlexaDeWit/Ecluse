@@ -148,8 +148,11 @@ surface").
 -}
 data MergePlan = MergePlan
     { mpName :: PackageName
-    {- ^ The package identity, taken from the first input (all inputs are the same
-    package fetched across its upstreams).
+    {- ^ The package identity, carried from the contributions. Every contribution that
+    reaches the merge has had its self-reported name validated against the requested
+    one upstream of here (a disagreeing origin is dropped before the merge), so all
+    inputs carry the same identity and it is never a substituted or manufactured value
+    — only one an upstream genuinely reported.
     -}
     , mpSurvivors :: Map Text SourceId
     {- ^ Each surviving version key mapped to the 'SourceId' of the input that won
@@ -298,8 +301,11 @@ data Merge = Merge
     , mergeTime :: Map Text (Ranked UTCTime)
     -- ^ The precedence-winning publish instant offered for each version key.
     , mergeName :: Maybe PackageName
-    {- ^ The package identity, taken from the /first/ input (the left-most 'Merge'
-    with a name under @(<>)@). 'Nothing' only for 'mempty'.
+    {- ^ The package identity. Every contribution carries the same name — each has been
+    validated against the requested name before reaching the merge — so the left-biased
+    @(<>)@ choice selects that one shared identity rather than arbitrating between
+    possibly-divergent self-reports. 'Nothing' only for 'mempty' (the empty merge), so
+    the @(<|>)@ over 'Maybe' encodes purely the degenerate "no inputs yet" identity.
     -}
     }
     deriving stock (Eq, Show)
@@ -413,9 +419,11 @@ deployments need no special case. It is realised as a 'foldMap' of each input's
 * __@time@ restricted to the union__, with per-version collisions also resolved by
   provenance — publish times for versions that did not survive are dropped.
 
-The plan's identity ('mpName') is taken from the first input; callers fetch one
-package across its upstreams, so all inputs share it. An empty input list yields
-'Nothing' — there is nothing to serve.
+The plan's identity ('mpName') is carried from the contributions; callers fetch one
+package across its upstreams and each contribution's name has been validated against
+the requested one before reaching here, so all inputs share that one identity and it
+is never a substituted value. An empty input list yields 'Nothing' — there is nothing
+to serve.
 -}
 mergePackuments :: [(Provenance, PackageInfo)] -> Maybe MergePlan
 mergePackuments [] = Nothing

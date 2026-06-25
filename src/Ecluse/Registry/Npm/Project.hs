@@ -47,6 +47,19 @@ The npm-specific fields collapse onto the normalised, ecosystem-blind signals:
 
 Trust is left 'TrustUnknown': establishing it needs signature verification
 against npm's published keys, a fetch this pure projection does not perform.
+
+== Name as a validation input
+
+The requested 'PackageName' — the identity the proxy resolved from the route — is
+the __validation authority__ for the served packument's name, never a rewrite of
+it. The packument projection takes the requested name and checks the upstream's
+self-reported top-level @name@ against it: a document whose self-report agrees is a
+'Projected' 'PackageInfo' carrying the name the upstream genuinely reported; a
+document whose self-report __disagrees__ is a 'NameMismatch', so the caller can
+treat that origin as untrusted for this request and drop its contribution. The
+served name is therefore always a value an upstream genuinely reported, never a
+substituted or manufactured one. An /absent/ or otherwise undecodable name remains
+a 'ParseError', as before — distinct from a present-but-different name.
 -}
 module Ecluse.Registry.Npm.Project (
     -- * Projection
@@ -54,6 +67,9 @@ module Ecluse.Registry.Npm.Project (
     parsePackageInfoFromValue,
     parseVersionDetails,
     parseVersionList,
+
+    -- * Name validation
+    Projection (..),
 ) where
 
 import Data.Aeson (FromJSON (parseJSON), Value, eitherDecodeStrict, withObject, (.!=), (.:?))
@@ -80,6 +96,7 @@ import Ecluse.Package (
     Trust (TrustUnknown),
     mkPackageName,
     mkScope,
+    renderPackageName,
  )
 import Ecluse.Registry (ParseError (..), RegistryResponse (responseBody))
 import Ecluse.Registry.Npm.Wire (
@@ -124,26 +141,82 @@ instance FromJSON VersionEntry where
     parseJSON v =
         withObject "npm version object" (\o -> VersionEntry <$> parseJSON v <*> o .:? "_npmUser") v
 
-{- | Project a fetched metadata response into the packument-level 'PackageInfo'.
-Pure and total: a body that is not a decodable npm packument is reported as a
-'ParseError', never thrown.
--}
-parsePackageInfo :: RegistryResponse -> Either ParseError PackageInfo
-parsePackageInfo resp = decodePackument resp >>= projectPackageInfo
+{- | The outcome of projecting an upstream packument against the requested package
+name (see the module header, "Name as a validation input").
 
-{- | Project an __already-decoded__ packument @Value@ into the packument-level
-'PackageInfo', without re-parsing any bytes. This is the entry point the serve
+The requested name validates the document; it never rewrites it. A document whose
+self-reported name agrees with the request is 'Projected'; one that disagrees is a
+'NameMismatch'. The 'PackageInfo' of a 'Projected' carries the name the upstream
+genuinely reported (which, having matched, equals the requested name) — never a
+substituted value.
+-}
+data Projection
+    = -- | The document decoded and its self-reported name matched the request.
+      Projected PackageInfo
+    | -- | The document decoded but self-reported this /different/ name (carried verbatim for the audit log).
+      NameMismatch Text
+    deriving stock (Eq, Show)
+
+{- | Project a fetched metadata response into the packument-level 'PackageInfo' for
+the requested package. Pure and total: a body that is not a decodable npm packument
+is reported as a 'ParseError', never thrown.
+
+The requested name is the validation authority. A document whose self-reported name
+__disagrees__ with the request cannot yield a valid view of the requested package,
+so it is reported as a 'ParseError' here — the typed-view accessor admits only a
+matching document. The finer 'Projection' (a mismatch distinguished from a decode
+failure) is surfaced by 'parsePackageInfoFromValue', which the serve layer uses to
+distinguish a misreporting origin from an undecodable one.
+-}
+parsePackageInfo :: PackageName -> RegistryResponse -> Either ParseError PackageInfo
+parsePackageInfo requestedName resp =
+    decodePackument resp >>= projectValidated requestedName >>= requireMatch
+
+{- | Project an __already-decoded__ packument @Value@ into a 'Projection' for the
+requested package, without re-parsing any bytes. This is the entry point the serve
 layer uses when it has already decoded the upstream body to a raw @Value@ (the
 document it edits in place to serve) and wants the typed view of the /same/
 document: projecting from the @Value@ reuses that one parse rather than tokenising
 the bytes a second time. Pure and total — a @Value@ that is not a decodable npm
 packument is reported as a 'ParseError', never thrown.
--}
-parsePackageInfoFromValue :: Value -> Either ParseError PackageInfo
-parsePackageInfoFromValue value = decodePackumentValue value >>= projectPackageInfo
 
--- Project a decoded 'WirePackument' into the domain 'PackageInfo'. Shared by both
--- the byte- and 'Value'-decoding entry points so the projection lives in one place.
+The requested name validates the self-reported @name@: a match is 'Projected', a
+disagreement is 'NameMismatch'. The serve layer drops a 'NameMismatch' origin's
+contribution (an untrusted, misreporting upstream) and keeps the served name a value
+some upstream genuinely reported.
+-}
+parsePackageInfoFromValue :: PackageName -> Value -> Either ParseError Projection
+parsePackageInfoFromValue requestedName value =
+    decodePackumentValue value >>= projectValidated requestedName
+
+{- Project + validate a decoded packument against the requested name. The genuine
+self-reported name (from 'projectPackageInfo', which fails an absent\/empty name as
+a 'ParseError') is compared to the request via 'PackageName' equality — ecosystem-
+aware, so npm's case sensitivity is honoured. Equal yields 'Projected' carrying the
+genuine 'PackageInfo'; unequal yields 'NameMismatch' carrying what the upstream
+reported. The name is never substituted. -}
+projectValidated :: PackageName -> WirePackument -> Either ParseError Projection
+projectValidated requestedName pkmt = do
+    info <- projectPackageInfo pkmt
+    pure $
+        if infoName info == requestedName
+            then Projected info
+            else NameMismatch (renderPackageName (infoName info))
+
+{- Collapse a 'Projection' to the typed view the handle's @parsePackageInfo@ field
+returns: a match is the 'PackageInfo'; a mismatch is a 'ParseError', because the
+typed-view accessor cannot yield a valid view of the requested package from a
+document that is for a different one. -}
+requireMatch :: Projection -> Either ParseError PackageInfo
+requireMatch = \case
+    Projected info -> Right info
+    NameMismatch reported ->
+        Left (ParseError ("upstream packument self-reported the name " <> reported <> ", which is not the requested package"))
+
+-- Project a decoded 'WirePackument' into the domain 'PackageInfo', taking the name
+-- from the upstream's self-reported @name@ (validated against the request by
+-- 'projectValidated'). Shared by the validating entry points and the version-detail
+-- accessor so the projection lives in one place.
 projectPackageInfo :: WirePackument -> Either ParseError PackageInfo
 projectPackageInfo pkmt = do
     name <- projectName (wpName pkmt)
@@ -161,7 +234,7 @@ version is absent from the packument.
 -}
 parseVersionDetails :: RegistryResponse -> Version -> Either ParseError PackageDetails
 parseVersionDetails resp version = do
-    info <- parsePackageInfo resp
+    info <- decodePackument resp >>= projectPackageInfo
     case Map.lookup (renderVersion version) (infoVersions info) of
         Just details -> Right details
         Nothing ->

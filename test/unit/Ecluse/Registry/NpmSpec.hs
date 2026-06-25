@@ -562,7 +562,7 @@ configAndWiringSpec = describe "config and handle wiring" $ do
         -- A minimal packument projects through the fields the client installed,
         -- proving each pure projection is reachable via the assembled handle.
         let resp = RegistryResponse "{\"name\":\"is-odd\"}"
-        case parsePackageInfo client resp of
+        case parsePackageInfo client isOdd resp of
             Left err -> fail ("expected a successful projection, got: " <> show err)
             Right info -> renderPackageName (infoName info) `shouldBe` "is-odd"
         -- No versions in this body, so the version list is empty and a

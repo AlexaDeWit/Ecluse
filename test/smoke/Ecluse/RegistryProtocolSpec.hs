@@ -22,7 +22,7 @@ import Ecluse.Registry.Npm (
     newNpmClient,
     noValidators,
  )
-import Ecluse.Registry.Npm.Project (parsePackageInfoFromValue)
+import Ecluse.Registry.Npm.Project (Projection (NameMismatch, Projected), parsePackageInfoFromValue)
 import Ecluse.Registry.Npm.Wire (
     AbbreviatedPackument (apkmtDistTags, apkmtName, apkmtVersions),
  )
@@ -81,7 +81,7 @@ spec = describe "live registry protocol (npm / PyPI)" $ do
             Left (_ :: SomeException) ->
                 pendingWith "npm registry unreachable (offline); smoke test skipped"
             Right response ->
-                case parsePackageInfo client response of
+                case parsePackageInfo client isOdd response of
                     Left err ->
                         expectationFailure ("live packument failed to project: " <> show err)
                     Right info -> do
@@ -141,6 +141,9 @@ admissibleUnderDefaults manager name = do
     -- same chain fetchEntry runs; any refusal throws and fails the smoke case.
     value <- either (\e -> throwString ("decode failed: " <> e)) pure (eitherDecodeStrict (responseBody response))
     bounded <- either (\e -> throwString ("nesting bound refused a real package: " <> show e)) pure (checkNestingDepth defaultLimits value)
-    info <- either (\e -> throwString ("projection failed: " <> show e)) pure (parsePackageInfoFromValue bounded)
+    info <- case parsePackageInfoFromValue name bounded of
+        Left e -> throwString ("projection failed: " <> show e)
+        Right (Projected i) -> pure i
+        Right (NameMismatch reported) -> throwString ("projection self-reported a different name: " <> toString reported)
     admitted <- either (\e -> throwString ("version bound refused a real package: " <> show e)) pure (checkVersionCount defaultLimits info)
     pure (renderPackageName (infoName admitted), Map.size (infoVersions admitted))

@@ -3,11 +3,14 @@ module Ecluse.Registry.Npm.ProjectSpec (spec) where
 import Data.Aeson (
     Value (Array, Bool, Null, Number, Object, String),
     encode,
+    object,
+    (.=),
  )
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString.Lazy qualified as BL
 import Data.Map.Strict qualified as Map
+import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.Vector qualified as V
@@ -33,13 +36,17 @@ import Ecluse.Package (
     PackageName,
     Person (Person),
     Trust (TrustUnknown),
+    mkPackageName,
+    mkScope,
     pkgCanonical,
     pkgNamespace,
     renderScope,
  )
 import Ecluse.Registry (ParseError, RegistryResponse (RegistryResponse))
 import Ecluse.Registry.Npm.Project (
+    Projection (NameMismatch, Projected),
     parsePackageInfo,
+    parsePackageInfoFromValue,
     parseVersionDetails,
     parseVersionList,
  )
@@ -61,6 +68,7 @@ onto 'pkgPublisher'; @time[version]@ onto 'pkgPublishedAt'; and scoped names ont
 spec :: Spec
 spec = do
     packageInfoSpec
+    nameValidationSpec
     signalMappingSpec
     integritySpec
     versionDetailsSpec
@@ -73,7 +81,7 @@ spec = do
 packageInfoSpec :: Spec
 packageInfoSpec = describe "parsePackageInfo" $ do
     it "projects the package name, versions, and dist-tags (is-odd)" $ do
-        info <- projectFixture "is-odd.full.json"
+        info <- projectFixture (unscoped "is-odd") "is-odd.full.json"
         renderName (infoName info) `shouldBe` "is-odd"
         Map.keys (infoVersions info) `shouldBe` ["3.0.1"]
         fmap renderVersion (Map.lookup "latest" (infoDistTags info)) `shouldBe` Just "3.0.1"
@@ -82,20 +90,52 @@ packageInfoSpec = describe "parsePackageInfo" $ do
         -- The packument `time` map also carries `created`/`modified`; only the
         -- per-version entries are publish times, so those bookkeeping keys must
         -- not leak into the projected map.
-        info <- projectFixture "is-odd.full.json"
+        info <- projectFixture (unscoped "is-odd") "is-odd.full.json"
         published <- readUTC "2018-05-31T20:04:53.306Z"
         infoPublishedAt info `shouldBe` Map.singleton "3.0.1" published
 
     it "splits a scoped name into scope and bare name (@babel/code-frame)" $ do
-        info <- projectFixture "babel-code-frame.abbreviated.json"
+        info <- projectFixture (mkPackageName Npm (Just (mkScope "babel")) "code-frame") "babel-code-frame.abbreviated.json"
         fmap renderScope (pkgNamespace (infoName info)) `shouldBe` Just "@babel"
         pkgCanonical (infoName info) `shouldBe` "@babel/code-frame"
 
     it "leaves the publish-time map empty for an abbreviated document (no time)" $ do
         -- The abbreviated form omits the `time` map entirely, so every version's
         -- publish time is unknown.
-        info <- projectFixture "core-js.abbreviated.json"
+        info <- projectFixture (unscoped "core-js") "core-js.abbreviated.json"
         infoPublishedAt info `shouldBe` Map.empty
+
+-- ── name as a validation input (route name is the authority) ──────────────────
+
+nameValidationSpec :: Spec
+nameValidationSpec = describe "name validation against the requested name" $ do
+    it "projects a document whose self-reported name matches the request" $ do
+        -- The served name is a value the upstream genuinely reported (it matched).
+        case parsePackageInfoFromValue (unscoped "thing") (packumentValueNamed "thing") of
+            Right (Projected info) -> renderName (infoName info) `shouldBe` "thing"
+            other -> fail ("expected a matching projection, got: " <> show other)
+
+    it "flags a document whose self-reported name disagrees with the request" $ do
+        -- A present-but-different name is a NameMismatch carrying the upstream's
+        -- self-reported name (for the audit log) — never a rewrite to the route name.
+        parsePackageInfoFromValue (unscoped "thing") (packumentValueNamed "other")
+            `shouldBe` Right (NameMismatch "other")
+
+    it "validates the scope, not just the bare name (@scope/a is not @scope/b)" $
+        parsePackageInfoFromValue (mkPackageName Npm (Just (mkScope "scope")) "a") (packumentValueNamed "@scope/b")
+            `shouldBe` Right (NameMismatch "@scope/b")
+
+    it "treats a present-but-different name as a mismatch, not a decode failure (handle field rejects it)" $
+        -- The handle's typed-view accessor collapses a mismatch to a ParseError: it
+        -- cannot yield a valid view of the requested package from a different one's document.
+        parsePackageInfo (unscoped "thing") (responseNamed "other") `shouldSatisfy` isLeft
+
+    it "never substitutes the served name: a match carries the upstream's own name" $ do
+        -- The route name is the validation authority, not a rewrite: infoName is the
+        -- name the upstream reported (here equal to the request, having matched).
+        case parsePackageInfoFromValue (unscoped "thing") (packumentValueNamed "thing") of
+            Right (Projected info) -> infoName info `shouldBe` unscoped "thing"
+            other -> fail ("expected a matching projection, got: " <> show other)
 
 -- ── the signal-mapping table ─────────────────────────────────────────────────
 
@@ -284,20 +324,21 @@ versionListSpec = describe "parseVersionList" $ do
 failureSpec :: Spec
 failureSpec = describe "malformed input" $ do
     it "reports a ParseError on a body that is not JSON" $
-        parsePackageInfo (RegistryResponse "this is not json") `shouldSatisfy` isLeft
+        parsePackageInfo (unscoped "thing") (RegistryResponse "this is not json") `shouldSatisfy` isLeft
 
     it "reports a ParseError on an empty package name" $
-        -- A document whose `name` is the empty string cannot yield a PackageName.
-        parsePackageInfo (RegistryResponse "{\"name\":\"\"}") `shouldSatisfy` isLeft
+        -- An absent/empty `name` cannot yield a PackageName, so it is a decode-level
+        -- ParseError — distinct from a present-but-different name (a mismatch).
+        parsePackageInfo (unscoped "thing") (RegistryResponse "{\"name\":\"\"}") `shouldSatisfy` isLeft
 
     it "reports a ParseError on a JSON value that is not a packument object" $
         -- Valid JSON of the wrong shape (here an array) is reported, not crashed.
-        parsePackageInfo (RegistryResponse "[1,2,3]") `shouldSatisfy` isLeft
+        parsePackageInfo (unscoped "thing") (RegistryResponse "[1,2,3]") `shouldSatisfy` isLeft
 
     it "reports a ParseError when a versions entry is not an object" $
         -- Each version must be an object; a scalar there is a parse failure, not
         -- a dropped version.
-        parsePackageInfo (RegistryResponse "{\"name\":\"x\",\"versions\":{\"1.0.0\":42}}")
+        parsePackageInfo (unscoped "x") (RegistryResponse "{\"name\":\"x\",\"versions\":{\"1.0.0\":42}}")
             `shouldSatisfy` isLeft
 
     it "fails parseVersionList on a non-JSON body too" $
@@ -320,7 +361,7 @@ totalitySpec :: Spec
 totalitySpec = describe "projection totality (arbitrary input never bottoms)" $ do
     describe "every projection entry is total over an arbitrary Value body" $ do
         it "parsePackageInfo" $
-            hedgehog (projectionIsTotal (showResult . parsePackageInfo))
+            hedgehog (projectionIsTotal (showResult . parsePackageInfo (unscoped "thing")))
         it "parseVersionList" $
             hedgehog (projectionIsTotal (showResult . parseVersionList))
         it "parseVersionDetails" $
@@ -331,7 +372,7 @@ totalitySpec = describe "projection totality (arbitrary input never bottoms)" $ 
 
     describe "every projection entry is total over arbitrary bytes" $ do
         it "parsePackageInfo" $
-            hedgehog (projectionBytesIsTotal (showResult . parsePackageInfo))
+            hedgehog (projectionBytesIsTotal (showResult . parsePackageInfo (unscoped "thing")))
         it "parseVersionList" $
             hedgehog (projectionBytesIsTotal (showResult . parseVersionList))
         it "parseVersionDetails" $
@@ -344,7 +385,10 @@ totalitySpec = describe "projection totality (arbitrary input never bottoms)" $ 
         hedgehog $ do
             v <- forAll genBody
             let resp = RegistryResponse (encodeToBody v)
-                decoded = parsePackageInfo resp
+                -- Validate against the body's own self-reported name so a
+                -- packument-shaped body reaches the success arm (name matches),
+                -- while arbitrary JSON still rejects — both arms stay sampled.
+                decoded = parsePackageInfo (routeNameOf v) resp
             annotateShow v
             _ <- H.eval (showResult decoded)
             -- Non-vacuity: 'genBody' must reach both the projects-to-domain arm
@@ -596,13 +640,50 @@ the path Cabal runs tests from).
 readFixture :: FilePath -> IO ByteString
 readFixture name = readFileBS ("test/unit/fixtures/npm/" <> name)
 
-{- | Project a fixture into a 'PackageInfo', failing the example with the
-'ParseError' message on a projection failure.
+{- | Project a fixture into a 'PackageInfo' under the given route-requested name,
+failing the example with the 'ParseError' message on a projection (or name-validation)
+failure.
 -}
-projectFixture :: FilePath -> IO PackageInfo
-projectFixture name = do
+projectFixture :: PackageName -> FilePath -> IO PackageInfo
+projectFixture route name = do
     body <- readFixture name
-    orFailParse (parsePackageInfo (RegistryResponse body))
+    orFailParse (parsePackageInfo route (RegistryResponse body))
+
+-- | An unscoped npm 'PackageName' (the common case in these fixtures).
+unscoped :: Text -> PackageName
+unscoped = mkPackageName Npm Nothing
+
+-- | A minimal packument 'Value' self-reporting the given top-level @name@.
+packumentValueNamed :: Text -> Value
+packumentValueNamed nm = object ["name" .= nm, "versions" .= object []]
+
+-- | A response body for a minimal packument self-reporting the given @name@.
+responseNamed :: Text -> RegistryResponse
+responseNamed nm = RegistryResponse (BL.toStrict (encode (packumentValueNamed nm)))
+
+{- | The npm route name a packument 'Value' self-reports (scope-aware), used to feed
+the projection a matching requested name in the totality property so a well-shaped
+body reaches the success arm.
+-}
+routeNameOf :: Value -> PackageName
+routeNameOf v = npmName (nameOf v)
+  where
+    nameOf :: Value -> Text
+    nameOf value = case value of
+        Object o -> case KeyMap.lookup "name" o of
+            Just (String t) -> t
+            _ -> ""
+        _ -> ""
+
+    npmName :: Text -> PackageName
+    npmName raw = case T.stripPrefix "@" raw of
+        Just afterAt
+            | (scopeText, rest) <- T.break (== '/') afterAt
+            , bare <- T.drop 1 rest
+            , not (T.null scopeText)
+            , not (T.null bare) ->
+                mkPackageName Npm (Just (mkScope scopeText)) bare
+        _ -> mkPackageName Npm Nothing raw
 
 -- | Project one version of a fixture into its 'PackageDetails'.
 projectVersion :: FilePath -> Version -> IO PackageDetails

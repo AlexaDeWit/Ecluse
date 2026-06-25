@@ -177,7 +177,7 @@ import Ecluse.Registry.Npm (
     noValidators,
  )
 import Ecluse.Registry.Npm.Filter (FilterResult (Filtered, NoSurvivors), applyFilterPlan, rewriteTarballUrls)
-import Ecluse.Registry.Npm.Project (parsePackageInfoFromValue)
+import Ecluse.Registry.Npm.Project (Projection (NameMismatch, Projected), parsePackageInfoFromValue)
 import Ecluse.Rules.Effectful (evalRulesEffectful)
 import Ecluse.Rules.Types (Decision, EvalContext (EvalContext))
 import Ecluse.Security (
@@ -200,12 +200,17 @@ import Ecluse.Server.Context (
     ctxEnv,
     ctxMount,
  )
-import Ecluse.Server.Pipeline.Internal (PackumentUndecodable (PackumentUndecodable), logDecodeFailure)
+import Ecluse.Server.Pipeline.Internal (
+    PackumentNameMismatch (PackumentNameMismatch),
+    PackumentUndecodable (PackumentUndecodable),
+    logDecodeFailure,
+    logNameMismatch,
+ )
 import Ecluse.Server.Response (
     ArtifactStatus (Forbidden, NotFound, Ok, ServerError, Unavailable'),
     MountRenderer,
-    PackumentStatus (PackumentForbidden, PackumentOk, PackumentServerError, PackumentUnavailable),
-    RejectReason (MissingIntegrity, Unavailable),
+    PackumentStatus (PackumentBadGateway, PackumentForbidden, PackumentOk, PackumentServerError, PackumentUnavailable),
+    RejectReason (MissingIntegrity, Unavailable, UpstreamInvalid),
     Rejection (Rejection, rejectionMessage),
     RenderedBody (RenderedBody),
     RetryAfter (RetryAfter),
@@ -242,8 +247,13 @@ versions are gated through the rules and the structural filter ('filterPlan' the
 'MergePlan' replayed onto the raw upstream @Value@s to assemble the served body,
 which is then answered against the client's conditional request with our own ETag.
 When nothing survives, the status follows the most recoverable cause via
-'packumentStatus'. Every refusal — the edge @401@ and the no-survivors
-@403@\/@503@\/@500@ — is rendered through the mount's 'MountRenderer'.
+'packumentStatus'. An origin whose self-reported packument name disagrees with the
+route is validated out — dropped as untrusted for this request and logged — so a
+single misreporting upstream never denies a package another upstream serves; when
+that leaves __no__ valid origin, the request is a @502@ (a responding upstream
+returned an invalid response), distinct from a genuine absence. Every refusal — the
+edge @401@ and the no-survivors @403@\/@503@\/@502@\/@500@ — is rendered through the
+mount's 'MountRenderer'.
 -}
 servePackument ::
     PackageName ->
@@ -277,12 +287,12 @@ serveWithDeps renderer deps name request respond
                 concurrently
                     (fetchPrivateOrigin (pdLimits deps) env (pdPrivateBaseUrl deps) clientToken name)
                     (fetchPublicOrigin (pdLimits deps) env (pdPublicBaseUrl deps) name)
-            (public, publicExclusions) <- gatePublic deps evalCtx pubResult
-            let private = trustedSource <$> privResult
+            (public, publicExclusions) <- gatePublic deps evalCtx (originPackument pubResult)
+            let private = trustedSource <$> originPackument privResult
                 sources = catMaybes [private, public]
             case assemble deps sources of
                 Just body -> respond (servePackumentBody request body)
-                Nothing -> respond (noSurvivors renderer deps (collectDecisions privResult publicExclusions))
+                Nothing -> respond (noSurvivors renderer deps (collectDecisions privResult pubResult publicExclusions))
 
 -- A recognised-but-unserved packument route: a @501@ in the mount's surface, for a
 -- mount whose packument-serve dependencies are not wired. The decision to serve or
@@ -337,6 +347,43 @@ data Contribution = Contribution
     , srcValue :: Value
     }
 
+{- The outcome of resolving one upstream origin for a packument, beyond the
+plain "resolved or not" the merge consumes: a name mismatch is kept distinct from a
+plain non-resolution so the no-valid-origin terminal status can render a @502@ (a
+responding upstream returned a packument for a different package) apart from a
+transient outage or a genuine absence. -}
+data OriginResult
+    = -- | A packument that decoded and whose self-reported name matched the request.
+      OriginResolved (PackageInfo, Value)
+    | {- | The origin answered, but its packument self-reported a name for a /different/
+      package — dropped as untrusted for this request, and a @502@ signal when no
+      origin is valid.
+      -}
+      OriginNameMismatch
+    | {- | The origin did not yield a usable packument — unreachable, undecodable, or a
+      genuine absence — the existing degrade (no contribution).
+      -}
+      OriginUnresolved
+
+-- The resolved (packument, raw @Value@) pair an origin contributed, if any. A name
+-- mismatch and a plain non-resolution alike contribute no document to the merge.
+originPackument :: OriginResult -> Maybe (PackageInfo, Value)
+originPackument = \case
+    OriginResolved pair -> Just pair
+    OriginNameMismatch -> Nothing
+    OriginUnresolved -> Nothing
+
+{- Classify a caught origin fetch into an 'OriginResult': a success is 'OriginResolved';
+a 'PackumentNameMismatch' throw (the validated-name degrade) is kept distinct as
+'OriginNameMismatch'; every other degrade (outage, bound breach, undecodable body) is a
+plain 'OriginUnresolved'. -}
+originResultFrom :: Either SomeException CacheEntry -> OriginResult
+originResultFrom = \case
+    Right entry -> OriginResolved (unpair entry)
+    Left err -> case fromException err of
+        Just PackumentNameMismatch -> OriginNameMismatch
+        Nothing -> OriginUnresolved
+
 {- Resolve the private (trusted) upstream origin, __uncached__, forwarding the client's
 own credential (the default @passthrough@ posture). Returns its coherent (parsed
 packument, raw @Value@) pair — or 'Nothing' when the origin is unavailable or its body
@@ -353,10 +400,10 @@ origin is therefore deliberately kept out of the metadata cache; only the anonym
 public origin is cached. (How a non-@passthrough@ strategy can instead share the private
 origin safely is the serve-time authorisation it adds — see
 @docs\/architecture\/access-model.md@.) -}
-fetchPrivateOrigin :: Limits -> Env -> Text -> Maybe Secret -> PackageName -> IO (Maybe (PackageInfo, Value))
+fetchPrivateOrigin :: Limits -> Env -> Text -> Maybe Secret -> PackageName -> IO OriginResult
 fetchPrivateOrigin limits env baseUrl token name = do
     resolved <- tryAny (fetchEntry (envLogEnv env) limits (envPrivateManager env) baseUrl token name)
-    pure (either (const Nothing) (Just . unpair) resolved)
+    pure (originResultFrom resolved)
 
 {- Resolve the public (gated, anonymous) upstream origin through the metadata cache,
 keyed by the origin's base URL as its 'Source', returning its coherent (parsed
@@ -369,10 +416,10 @@ to preserve, only one shared anonymous document. A hit returns the cached pair
 (typed view and the exact bytes it was decoded from), so the served document and the
 decision over it stay coherent across the TTL, and concurrent resolutions of a
 popular package __collapse to one upstream call__. -}
-fetchPublicOrigin :: Limits -> Env -> Text -> PackageName -> IO (Maybe (PackageInfo, Value))
+fetchPublicOrigin :: Limits -> Env -> Text -> PackageName -> IO OriginResult
 fetchPublicOrigin limits env baseUrl name = do
     resolved <- tryAny (resolveMetadata (envMetadataCache env) (Source baseUrl) name (fetchEntry (envLogEnv env) limits (envManager env) baseUrl Nothing name))
-    pure (either (const Nothing) (Just . unpair) resolved)
+    pure (originResultFrom resolved)
 
 {- Fetch one upstream's full packument (the @Full@ form, for the @time@ map a
 publish-age rule needs) and decode it once into both the typed 'PackageInfo' used to
@@ -422,10 +469,11 @@ fetchEntry logEnv limits manager baseUrl token name = do
         -- reaches rule evaluation. A breach of either is logged and then degraded
         -- exactly like a parse failure.
         Right value -> case checkNestingDepth limits value of
-            Right bounded -> case parsePackageInfoFromValue bounded of
-                Right info -> case checkVersionCount limits info of
+            Right bounded -> case parsePackageInfoFromValue name bounded of
+                Right (Projected info) -> case checkVersionCount limits info of
                     Right boundedInfo -> pure (CacheEntry{entryInfo = boundedInfo, entryRaw = bounded})
                     Left err -> boundBreach err
+                Right (NameMismatch reported) -> nameMismatch reported
                 Left _ -> decodeFailure
             Left err -> boundBreach err
         Left _ -> decodeFailure
@@ -437,6 +485,12 @@ fetchEntry logEnv limits manager baseUrl token name = do
 
     decodeFailure :: IO CacheEntry
     decodeFailure = logDecodeFailure logEnv name *> throwIO PackumentUndecodable
+
+    -- The origin answered with a packument self-reporting a different package's name:
+    -- log it (both names + this origin) and degrade like a decode failure, but with a
+    -- distinct typed throw so the no-valid-origin status can render a @502@.
+    nameMismatch :: Text -> IO CacheEntry
+    nameMismatch reported = logNameMismatch logEnv name baseUrl reported *> throwIO PackumentNameMismatch
 
 unpair :: CacheEntry -> (PackageInfo, Value)
 unpair entry = (entryInfo entry, entryRaw entry)
@@ -747,19 +801,36 @@ renderTime = toText . iso8601Show
 -- ── status when nothing survives ──────────────────────────────────────────────
 
 {- The per-version serve decisions weighed for the no-survivors status: the
-public-set exclusions, plus a needed-but-unavailable signal for a private upstream
-that did not resolve. A private upstream that failed to resolve contributes a
-transient 'ServeDecision' (it may resolve on retry), so a private outage with no
-public survivors is a @503@ rather than a @403@ — a needed upstream was
-unavailable. -}
-collectDecisions :: Maybe (PackageInfo, Value) -> [ServeDecision] -> [ServeDecision]
-collectDecisions privResult publicExclusions =
-    privateUnavailable <> publicExclusions
+public-set exclusions, plus the per-origin signals each upstream contributes.
+
+A private upstream that did not resolve is a needed-but-unavailable transient signal
+(it may resolve on retry), so a private outage with no public survivors is a @503@
+rather than a @403@. An origin (private or public) that __answered with a packument
+for a different package__ contributes an 'UpstreamInvalid' signal, so a request whose
+only responding origins were invalid this way renders a @502@ — distinct from a
+genuine absence. A public upstream that merely did not resolve degrades silently, as
+before: its absence is not by itself a needed-upstream outage. -}
+collectDecisions :: OriginResult -> OriginResult -> [ServeDecision] -> [ServeDecision]
+collectDecisions privResult pubResult publicExclusions =
+    privateDecision privResult <> publicMismatch pubResult <> publicExclusions
   where
-    privateUnavailable :: [ServeDecision]
-    privateUnavailable = case privResult of
-        Just _ -> []
-        Nothing -> [Reject (Rejection (Unavailable (WillResolve Nothing)) "a needed upstream was unavailable")]
+    privateDecision :: OriginResult -> [ServeDecision]
+    privateDecision = \case
+        OriginResolved _ -> []
+        OriginUnresolved -> [neededUpstreamUnavailable]
+        OriginNameMismatch -> [upstreamInvalidDecision]
+
+    publicMismatch :: OriginResult -> [ServeDecision]
+    publicMismatch = \case
+        OriginNameMismatch -> [upstreamInvalidDecision]
+        OriginResolved _ -> []
+        OriginUnresolved -> []
+
+    neededUpstreamUnavailable :: ServeDecision
+    neededUpstreamUnavailable = Reject (Rejection (Unavailable (WillResolve Nothing)) "a needed upstream was unavailable")
+
+    upstreamInvalidDecision :: ServeDecision
+    upstreamInvalidDecision = Reject (Rejection UpstreamInvalid "an upstream returned a packument for a different package")
 
 -- ── response rendering ────────────────────────────────────────────────────────
 
@@ -796,6 +867,7 @@ noSurvivors renderer deps decisions =
         PackumentOk -> "OK"
         PackumentForbidden -> "Forbidden"
         PackumentUnavailable{} -> "Service Unavailable"
+        PackumentBadGateway -> "Bad Gateway"
         PackumentServerError -> "Internal Server Error"
 
     -- The collected denial reasons; an empty set (no versions at all) renders a
@@ -1026,7 +1098,7 @@ private origin does not resolve, the version is absent, or no artifact matches t
 filename — each a clean private miss the caller falls through on. -}
 selectPrivateArtifact :: Env -> PackumentDeps -> Maybe Secret -> PackageName -> Version -> Text -> IO (Maybe Artifact)
 selectPrivateArtifact env deps token name version file = do
-    resolved <- fetchPrivateOrigin (pdLimits deps) env (pdPrivateBaseUrl deps) token name
+    resolved <- originPackument <$> fetchPrivateOrigin (pdLimits deps) env (pdPrivateBaseUrl deps) token name
     pure $ do
         (info, _value) <- resolved
         details <- Map.lookup (renderVersion version) (infoVersions info)
@@ -1080,7 +1152,8 @@ be consulted fail-closes to an 'Unavailable' @503@\/@500@. -}
 gatePublicVersion :: Env -> PackumentDeps -> PackageName -> Version -> Text -> IO PublicArtifactGate
 gatePublicVersion env deps name version file = do
     evalCtx <- EvalContext <$> pdNow deps
-    fetchPublicOrigin (pdLimits deps) env (pdPublicBaseUrl deps) name >>= \case
+    resolved <- originPackument <$> fetchPublicOrigin (pdLimits deps) env (pdPublicBaseUrl deps) name
+    case resolved of
         Nothing -> pure (Refused upstreamUnavailable)
         Just (info, _value) -> case Map.lookup (renderVersion version) (infoVersions info) of
             Nothing -> pure (Refused versionAbsent)

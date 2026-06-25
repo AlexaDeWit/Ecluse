@@ -38,7 +38,7 @@ fakeRegistry =
         { fetchMetadata = const unused
         , fetchArtifact = \_ _ -> unused
         , publishArtifact = \_ _ _ -> unused
-        , parsePackageInfo = const (Left parseStub)
+        , parsePackageInfo = \_ _ -> Left parseStub
         , parseVersionDetails = \_ _ -> Left parseStub
         , parseVersionList = \(RegistryResponse body) -> Left (ParseError (decodeUtf8 body))
         }
@@ -248,7 +248,7 @@ spec = do
             let resp = RegistryResponse "anything"
                 expected :: Either ParseError b
                 expected = Left (ParseError "no registry backend configured")
-            parsePackageInfo unconfiguredRegistry resp `shouldBe` expected
+            parsePackageInfo unconfiguredRegistry pkg resp `shouldBe` expected
             parseVersionDetails unconfiguredRegistry resp ver `shouldBe` expected
             parseVersionList unconfiguredRegistry resp `shouldBe` expected
 
