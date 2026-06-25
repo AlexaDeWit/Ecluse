@@ -87,21 +87,31 @@ spec = do
             (unMinIntegrity <$> mkMinIntegrity SHA512) `shouldBe` Right SHA512
             (unMinIntegrity <$> mkMinIntegrity Blake2b) `shouldBe` Right Blake2b
 
-        it "rejects a floor below SHA-256 (a sub-floor is a configuration error)" $ do
-            mkMinIntegrity SHA1 `shouldSatisfy` isLeft
-            mkMinIntegrity MD5 `shouldSatisfy` isLeft
+        it "rejects a floor below SHA-256 with a precise message (a sub-floor is a config error)" $ do
+            -- Asserted by value (not just isLeft) so the operator-facing message — and
+            -- the rejected algorithm's rendered name — is pinned.
+            mkMinIntegrity SHA1 `shouldBe` Left "the minimum public integrity algorithm must be SHA-256 or stronger, not sha1"
+            mkMinIntegrity MD5 `shouldBe` Left "the minimum public integrity algorithm must be SHA-256 or stronger, not md5"
+            mkMinIntegrity SRI `shouldBe` Left "the minimum public integrity algorithm must be SHA-256 or stronger, not sri"
 
         it "parses algorithm names, case- and separator-insensitively" $ do
             (unMinIntegrity <$> parseMinIntegrity "sha256") `shouldBe` Right SHA256
             (unMinIntegrity <$> parseMinIntegrity "SHA-512") `shouldBe` Right SHA512
             (unMinIntegrity <$> parseMinIntegrity "blake2b") `shouldBe` Right Blake2b
 
-        it "rejects a below-floor name and an unknown name distinctly" $ do
-            parseMinIntegrity "sha1" `shouldSatisfy` isLeft
-            parseMinIntegrity "frobnicate" `shouldSatisfy` isLeft
+        it "rejects a below-floor name and an unknown name with distinct messages" $ do
+            -- A recognised-but-weak name fails the floor; an unrecognised name fails the
+            -- parse — the two error texts are distinct so a misconfiguration is precise.
+            parseMinIntegrity "sha1" `shouldBe` Left "the minimum public integrity algorithm must be SHA-256 or stronger, not sha1"
+            parseMinIntegrity "md5" `shouldBe` Left "the minimum public integrity algorithm must be SHA-256 or stronger, not md5"
+            parseMinIntegrity "frobnicate" `shouldBe` Left "unknown integrity algorithm: frobnicate"
 
-        it "round-trips render and parse" $
+        it "round-trips render and parse for every floor-eligible algorithm" $ do
+            sha512Floor <- expectRight (mkMinIntegrity SHA512)
+            blake2bFloor <- expectRight (mkMinIntegrity Blake2b)
             parseMinIntegrity (renderMinIntegrity defaultMinIntegrity) `shouldBe` Right defaultMinIntegrity
+            parseMinIntegrity (renderMinIntegrity sha512Floor) `shouldBe` Right sha512Floor
+            parseMinIntegrity (renderMinIntegrity blake2bFloor) `shouldBe` Right blake2bFloor
 
     describe "classifyArtifacts" $ do
         let classify floorAlg hs =
@@ -116,6 +126,11 @@ spec = do
 
         it "BelowFloor for a SHA-1-only version (a digest, but too weak)" $
             classify defaultMinIntegrity [Hash SHA1 "x"] `shouldBe` BelowFloor
+
+        it "BelowFloor for a version whose only digest is an unrecognised SRI (cannot clear the floor)" $
+            -- An SRI that resolves to no known algorithm asserts no floor-clearing digest,
+            -- so it does not clear the floor (the conservative, fail-closed reading).
+            classify defaultMinIntegrity [Hash SRI "sha384-x"] `shouldBe` BelowFloor
 
         it "NoIntegrity for a version carrying no digest at all" $
             classify defaultMinIntegrity [] `shouldBe` NoIntegrity

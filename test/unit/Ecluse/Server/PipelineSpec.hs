@@ -490,6 +490,23 @@ selfHostedHashless baseUrl version =
         , "_unmodeled" .= ("kept" :: Text)
         ]
 
+{- | A self-hosting version object carrying __only a legacy SHA-1 shasum__ (no SRI
+@integrity@), so its strongest digest is below the default floor. The artifact-gate
+refusal (@BelowIntegrityFloor@) must fire before its @dist.tarball@ is ever fetched.
+-}
+selfHostedShasumOnly :: Text -> Text -> Value
+selfHostedShasumOnly baseUrl version =
+    object
+        [ "name" .= ("thing" :: Text)
+        , "version" .= version
+        , "dist"
+            .= object
+                [ "tarball" .= (baseUrl <> "/thing/-/thing-" <> version <> ".tgz")
+                , "shasum" .= ("deadbeef" :: Text)
+                ]
+        , "_unmodeled" .= ("kept" :: Text)
+        ]
+
 -- ── env + proxy assembly ──────────────────────────────────────────────────────
 
 {- | A registry-handle double whose fields are never invoked (the pipeline talks to
@@ -951,6 +968,31 @@ mergeSpec = describe "multi-upstream merge (not fallback)" $ do
             status resp `shouldBe` 200
             servedVersions resp `shouldBe` ["3.0.0"]
 
+    it "drops a public SHA-1-only copy at the same key, serving the private SHA-256 (the weak digest never leaks)" $ do
+        -- The architect's named combined case: a public copy of 1.0.0 carries only a
+        -- legacy SHA-1 shasum (below the floor) and a private copy of the SAME version
+        -- carries a strong SHA-256. The public copy is refused by the integrity floor
+        -- and never reaches the merge, so the served 1.0.0 is the trusted private copy
+        -- and its SHA-256 integrity — the weak public digest never enters the served
+        -- packument.
+        privateUp <-
+            servingUpstream
+                (encodePackument (privatePackumentWith [("1.0.0", versionObject "1.0.0" "sha256-PRIVATE" False)] "1.0.0"))
+        publicUp <-
+            servingUpstream
+                ( encodePackument
+                    ( packument
+                        [("1.0.0", shasumOnlyVersion "1.0.0")]
+                        "1.0.0"
+                        [("1.0.0", publishedDaysAgo 30)]
+                    )
+                )
+        withProxy privateUp publicUp Nothing $ \app -> do
+            resp <- getThing Nothing app
+            status resp `shouldBe` 200
+            servedVersions resp `shouldBe` ["1.0.0"]
+            servedIntegrity "1.0.0" resp `shouldBe` Just "sha256-PRIVATE"
+
     it "serves the private copy on an integrity divergence (private wins; flagged in the merge)" $ do
         -- Same version key, differing integrity across upstreams: the private copy
         -- wins the served document. The divergence is recorded in the MergePlan
@@ -1225,6 +1267,27 @@ noSurvivorsSpec = describe "no survivors in the merge" $ do
             resp <- getThing Nothing app
             status resp `shouldBe` 403
             -- Never a 404: the package exists; its versions were withheld.
+            status resp `shouldNotBe` 404
+
+    it "403s when every public version is integrity-inadmissible and the private upstream has none" $ do
+        -- The private upstream resolves but holds no versions; the public versions are
+        -- all inadmissible by the integrity floor — one below it (a SHA-1-only shasum)
+        -- and one with no digest at all. With no survivor and every exclusion a
+        -- deny-by-default admission refusal (BelowIntegrityFloor / MissingIntegrity), the
+        -- packument request is a 403 (it forces both refusal projections in the gate).
+        privateUp <- servingUpstream (encodePackument (privatePackument [] "0.0.0"))
+        publicUp <-
+            servingUpstream
+                ( encodePackument
+                    ( packument
+                        [("1.0.0", shasumOnlyVersion "1.0.0"), ("2.0.0", hashlessVersion "2.0.0")]
+                        "1.0.0"
+                        [("1.0.0", publishedDaysAgo 30), ("2.0.0", publishedDaysAgo 30)]
+                    )
+                )
+        withProxy privateUp publicUp Nothing $ \app -> do
+            resp <- getThing Nothing app
+            status resp `shouldBe` 403
             status resp `shouldNotBe` 404
 
     it "502s when every responding origin reports a different package (no valid contribution)" $ do
@@ -1551,6 +1614,21 @@ tarballSpec = describe "artifact (tarball) path" $ do
             status resp `shouldBe` 403
             reason resp `shouldBe` "Forbidden"
             -- The artifact itself was never fetched: only the gating packument was requested.
+            seenAuth publicUp `shouldReturn` [Nothing]
+            drainJobs env `shouldReturn` []
+
+    it "refuses a below-floor public version with 403 before fetching the artifact (integrity floor)" $ do
+        -- 1.0.0 clears the rules but its public dist carries only a legacy SHA-1
+        -- shasum (no SRI integrity) — below the default SHA-256 floor. The artifact
+        -- gate refuses it 403 (a BelowIntegrityFloor policy denial), the tarball never
+        -- fetched and nothing enqueued — the BelowFloor arm of the concrete-artifact gate.
+        privateUp <- privateArtifactMiss
+        let belowFloor base = packument [("1.0.0", selfHostedShasumOnly base "1.0.0")] "1.0.0" [("1.0.0", publishedDaysAgo 30)]
+        publicUp <- artifactUpstreamServing (encodePackument . belowFloor) publicTarballBytes
+        withProxyEnv privateUp publicUp Nothing $ \app env -> do
+            resp <- getTarball "1.0.0" Nothing app
+            status resp `shouldBe` 403
+            reason resp `shouldBe` "Forbidden"
             seenAuth publicUp `shouldReturn` [Nothing]
             drainJobs env `shouldReturn` []
 

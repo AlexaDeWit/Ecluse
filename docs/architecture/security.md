@@ -97,7 +97,7 @@ noted below.
      selected artifact carries at least one digest whose algorithm meets a configurable
      **integrity floor** (`PROXY_MIN_PUBLIC_INTEGRITY`, default **SHA-256**; the floor
      may be raised to `sha512`/`blake2b` but [never set below
-     SHA-256](configuration.md#response-bounds)). A version with **no** digest
+     SHA-256](configuration.md#public-integrity-floor)). A version with **no** digest
      (`MissingIntegrity`) or only a digest **below the floor** — e.g. a legacy SHA-1
      `dist.shasum` with no SRI (`BelowIntegrityFloor`) — is refused: the artifact gate
      answers `403` (the tarball is never fetched), and the packument path **filters it

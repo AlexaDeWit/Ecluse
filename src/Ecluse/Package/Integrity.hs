@@ -74,6 +74,9 @@ integrityStrength :: HashAlg -> Int
 integrityStrength = \case
     MD5 -> 1
     SHA1 -> 2
+    -- Rank 3 is intentionally left unused: it reserves a gap between the broken
+    -- algorithms (SHA-1, MD5) and the floor (SHA-256) for a future weak-but-not-broken
+    -- algorithm, without renumbering. Do not "close" it.
     SHA256 -> 4
     SHA512 -> 5
     Blake2b -> 5
@@ -186,8 +189,8 @@ classifyArtifacts minIntegrity arts
     | all (null . artHashes) arts = NoIntegrity
     | otherwise = BelowFloor
   where
-    meetsFloorArtifact = any hashMeetsFloor . artHashes
-    hashMeetsFloor = maybe False (meetsFloor minIntegrity) . assertedAlg
+    meetsFloorArtifact art = any hashMeetsFloor (artHashes art)
+    hashMeetsFloor h = maybe False (meetsFloor minIntegrity) (assertedAlg h)
 
 -- ── algorithm names ──────────────────────────────────────────────────────────
 
