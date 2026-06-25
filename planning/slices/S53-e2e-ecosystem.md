@@ -128,8 +128,10 @@ _The e2e tier:_
 - `test/e2e/Ecluse/E2E/Fixtures.hs` — generate the nginx static tree: npm-format
   packuments + `tar`-built tarballs with **correct SRI** (`crypton` sha512), in
   allow / deny / mirror / tamper variants.
-- `test/e2e/Ecluse/E2E/SuiteSpec.hs` — the scenarios, one booted env via `aroundAll`,
-  skipping `pending` when the env is unavailable.
+- `test/e2e/Ecluse/E2E/SuiteSpec.hs` — the scenarios, each in its **own freshly booted
+  environment** (`around withE2E`, per-test isolation the default so a case can halt or
+  mutate its harness without leaking into another), skipping `pending` when the env is
+  unavailable.
 - `ecluse.cabal` — the `ecluse-e2e` test-suite stanza (non-gating).
 - `scripts/e2e.sh` + `Makefile` `test-e2e` — build + load the image, run the suite;
   **not** in `check`/`gate`.
