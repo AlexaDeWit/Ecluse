@@ -51,8 +51,18 @@ module Ecluse.Package (
     -- * Artifacts
     Artifact (..),
     ArtifactKind (..),
-    Hash (..),
+    Hash,
+    hashAlg,
+    hashValue,
+    mkHash,
     HashAlg (..),
+
+    -- * Algorithm vocabulary
+    renderHashAlg,
+    parseHashAlg,
+    sriPrefix,
+    sriBody,
+    sriAlgorithm,
 
     -- * Dependencies
     Dependency (..),
@@ -68,6 +78,8 @@ module Ecluse.Package (
     PackageInfo (..),
 ) where
 
+import Crypto.Hash (Blake2b_512, MD5, SHA1, SHA256, SHA384, SHA512, digestFromByteString)
+import Data.ByteArray.Encoding (Base (Base16, Base64), convertFromBase)
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 
@@ -237,7 +249,11 @@ data HashAlg
       SRI
     deriving stock (Eq, Ord, Show)
 
--- | An integrity digest of an artifact.
+{- | An integrity digest of an artifact. __Opaque__: a 'Hash' is built only through
+'mkHash', which validates that the digest is well-formed, so every value of this type
+carries the proof that its digest could be a real digest of its algorithm. Read it
+back through 'hashAlg' and 'hashValue'.
+-}
 data Hash = Hash
     { hashAlg :: HashAlg
     -- ^ The algorithm the digest was computed with.
@@ -247,6 +263,170 @@ data Hash = Hash
     -}
     }
     deriving stock (Eq, Show)
+
+{- | Build a 'Hash', validating that the digest is __structurally well-formed__:
+cleanly encoded and exactly the byte length its algorithm specifies. This is the only
+way to construct a 'Hash', so the type itself is the proof that the digest could be a
+real digest of that algorithm — an empty, truncated, over-long, non-hex, or bad-base64
+value is unconstructable and so can never reach an integrity gate as a degenerate
+digest (the fail-open this closes is @docs\/architecture\/security.md@ invariant 5).
+
+Well-formedness is __not__ admissibility: a well-formed but weak SHA-1 digest builds
+fine; whether it clears the public-integrity floor is the separate decision of
+"Ecluse.Package.Integrity". 'mkHash' rejects a malformed digest, never a merely weak one.
+
+A hex-tagged algorithm (everything but 'SRI') takes lower- or upper-case hex of the
+algorithm's digest length. An 'SRI' takes one or more whitespace-separated
+@\<alg\>-\<base64\>@ components, each naming a Subresource-Integrity algorithm
+(@sha256@, @sha384@, @sha512@) whose base64 body decodes to that algorithm's digest
+length; every component must be well-formed.
+
+>>> import Ecluse.Package (HashAlg (SHA1))
+>>> fmap hashAlg (mkHash SHA1 "0a4d55a8d778e5022fab701977c5d840bbc486d0")
+Right SHA1
+
+>>> mkHash SHA1 "deadbeef"
+Left "malformed sha1 digest"
+-}
+mkHash :: HashAlg -> Text -> Either Text Hash
+mkHash alg value
+    | wellFormed alg value = Right (Hash alg value)
+    | otherwise = Left ("malformed " <> renderHashAlg alg <> " digest")
+
+-- Whether a digest string is a well-formed digest of the given algorithm.
+wellFormed :: HashAlg -> Text -> Bool
+wellFormed = \case
+    SRI -> wellFormedSri
+    alg -> wellFormedHex alg
+
+-- A hex digest is well-formed when it decodes as hex (case-insensitively) to exactly
+-- the algorithm's digest length — which 'digestFromByteString' decides by accepting
+-- only an input of the right size.
+wellFormedHex :: HashAlg -> Text -> Bool
+wellFormedHex alg t =
+    case convertFromBase Base16 (encodeUtf8 (T.toLower t) :: ByteString) :: Either String ByteString of
+        Left _ -> False
+        Right bytes -> hexDigestOk alg bytes
+
+hexDigestOk :: HashAlg -> ByteString -> Bool
+hexDigestOk alg bytes = case alg of
+    SHA1 -> isJust (digestFromByteString @SHA1 bytes)
+    SHA256 -> isJust (digestFromByteString @SHA256 bytes)
+    SHA512 -> isJust (digestFromByteString @SHA512 bytes)
+    MD5 -> isJust (digestFromByteString @MD5 bytes)
+    Blake2b -> isJust (digestFromByteString @Blake2b_512 bytes)
+    SRI -> False
+
+{- A Subresource-Integrity string is one or more whitespace-separated
+@\<alg\>-\<base64\>@ components (npm's @dist.integrity@ is usually one); every
+component must be well-formed, and there must be at least one.
+-}
+wellFormedSri :: Text -> Bool
+wellFormedSri t = case T.words t of
+    [] -> False
+    comps -> all wellFormedSriComponent comps
+
+wellFormedSriComponent :: Text -> Bool
+wellFormedSriComponent comp
+    -- An empty body means no @\<alg\>-\<base64\>@ shape (no separator, or nothing after it).
+    | T.null (sriBody comp) = False
+    | otherwise = sriBodyOk (sriPrefix comp) (sriBody comp)
+
+-- The SRI algorithms recognised are exactly the Subresource-Integrity set
+-- (sha256/sha384/sha512); the base64 body must decode to that algorithm's digest
+-- length. sha384 is validated and accepted even though it is not a modelled 'HashAlg':
+-- it is a well-formed digest, and floor-admission ('assertedAlg') decides separately
+-- that an unmodelled alg clears no floor.
+sriBodyOk :: Text -> Text -> Bool
+sriBodyOk algName body =
+    case convertFromBase Base64 (encodeUtf8 body :: ByteString) :: Either String ByteString of
+        Left _ -> False
+        Right bytes -> case algName of
+            "sha256" -> isJust (digestFromByteString @SHA256 bytes)
+            "sha384" -> isJust (digestFromByteString @SHA384 bytes)
+            "sha512" -> isJust (digestFromByteString @SHA512 bytes)
+            _ -> False
+
+-- ── algorithm vocabulary ─────────────────────────────────────────────────────
+
+-- This is the single home for the algorithm vocabulary: the wire name an algorithm
+-- renders to and parses from, and how a Subresource-Integrity string is split and
+-- resolved. It lives here, in the lowest layer, because 'mkHash' needs it and
+-- "Ecluse.Package" cannot import "Ecluse.Package.Integrity". Everything that names an
+-- algorithm or reads an SRI (the worker's tamper gate, the serve-admission floor, the
+-- queue wire) defers here, so they share one notion of what @"sha512"@ means and what
+-- an SRI asserts rather than each re-encoding it. "Ecluse.Package.Integrity" re-exports
+-- these names for its existing callers.
+
+{- | The lower-case wire name of an algorithm — the canonical spelling 'parseHashAlg'
+reads back. Total and injective, so it doubles as config rendering and error text.
+
+>>> renderHashAlg SHA256
+"sha256"
+-}
+renderHashAlg :: HashAlg -> Text
+renderHashAlg = \case
+    MD5 -> "md5"
+    SHA1 -> "sha1"
+    SHA256 -> "sha256"
+    SHA512 -> "sha512"
+    Blake2b -> "blake2b"
+    SRI -> "sri"
+
+{- | Parse an algorithm name, tolerating case and an optional internal @\'-\'@ (so
+@"SHA-256"@ and @"sha256"@ both parse). An unrecognised name is reported as such,
+distinct from a recognised-but-too-weak floor. This admits only the named hash
+algorithms; the @sri@ wrapper is not a config-selectable algorithm and is rejected.
+
+>>> parseHashAlg "SHA-256"
+Right SHA256
+
+>>> parseHashAlg "frobnicate"
+Left "unknown integrity algorithm: frobnicate"
+-}
+parseHashAlg :: Text -> Either Text HashAlg
+parseHashAlg raw = case T.filter (/= '-') (T.toLower (T.strip raw)) of
+    "md5" -> Right MD5
+    "sha1" -> Right SHA1
+    "sha256" -> Right SHA256
+    "sha512" -> Right SHA512
+    "blake2b" -> Right Blake2b
+    _ -> Left ("unknown integrity algorithm: " <> raw)
+
+{- | The algorithm-name token of a Subresource-Integrity string — the @\<alg\>@ before
+the first @\'-\'@ in @\<alg\>-\<base64\>@. A string with no @\'-\'@ is all prefix.
+
+>>> sriPrefix "sha512-Zm9vYmFy"
+"sha512"
+-}
+sriPrefix :: Text -> Text
+sriPrefix = fst . T.breakOn "-"
+
+{- | The base64 digest body of a Subresource-Integrity string — the @\<base64\>@ after
+the first @\'-\'@ in @\<alg\>-\<base64\>@. A string with no @\'-\'@ has an empty body.
+
+>>> sriBody "sha512-Zm9vYmFy"
+"Zm9vYmFy"
+-}
+sriBody :: Text -> Text
+sriBody = T.drop 1 . snd . T.breakOn "-"
+
+{- | The 'HashAlg' a Subresource-Integrity string names, read from its @\<alg\>@ prefix.
+The prefixes resolved are @sha256@ and @sha512@ (the long digests the model represents
+and a registry serves); an unrecognised or malformed prefix yields 'Nothing', so the
+string asserts no algorithm and clears no floor (the fail-closed reading).
+
+>>> sriAlgorithm "sha512-Zm9vYmFy"
+Just SHA512
+
+>>> sriAlgorithm "sha384-Zm9vYmFy"
+Nothing
+-}
+sriAlgorithm :: Text -> Maybe HashAlg
+sriAlgorithm sri = case sriPrefix sri of
+    "sha256" -> Just SHA256
+    "sha512" -> Just SHA512
+    _ -> Nothing
 
 -- | What kind of distribution file an artifact is.
 data ArtifactKind

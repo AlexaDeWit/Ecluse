@@ -19,7 +19,7 @@ import Ecluse.Credential (
  )
 import Ecluse.Ecosystem (Ecosystem (..))
 import Ecluse.Env (Env (..), newEnv, newWorkerHeartbeat, withEnv)
-import Ecluse.Package (Hash (..), HashAlg (..), PackageName, mkPackageName)
+import Ecluse.Package (Hash, HashAlg (..), PackageName, mkHash, mkPackageName)
 import Ecluse.Queue (MirrorArtifact (..), MirrorJob (..), enqueue, msgJob, newInMemoryQueue, receive)
 import Ecluse.Registry (ParseError (..), RegistryClient (..), RegistryResponse (..))
 import Ecluse.Server (scPort)
@@ -92,7 +92,7 @@ sampleJob =
         , jobArtifact =
             MirrorArtifact
                 { maFilename = "thing-1.0.0.tgz"
-                , maHashes = Hash SHA1 "abc" :| []
+                , maHashes = unsafeHash SHA1 validSha1 :| []
                 , maSize = Just 42
                 }
         }
@@ -103,6 +103,16 @@ pkg = mkPackageName Npm Nothing "thing"
 
 ver :: Version
 ver = mkVersion Npm "1.0.0"
+
+{- HLINT ignore unsafeHash "Avoid restricted function" -}
+
+-- | Build a 'Hash' from a known-valid digest for the sample job; errors on a malformed one.
+unsafeHash :: HashAlg -> Text -> Hash
+unsafeHash alg = either error id . mkHash alg
+
+-- | A well-formed SHA-1 digest (sha1 of the empty string) for the sample job.
+validSha1 :: Text
+validSha1 = "da39a3ee5e6b4b0d3255bfef95601890afd80709"
 
 spec :: Spec
 spec = do

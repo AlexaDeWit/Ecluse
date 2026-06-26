@@ -4,10 +4,12 @@ module Ecluse.Server.PipelineSpec (spec) where
 
 import Prelude hiding (get)
 
+import Crypto.Hash (Digest, SHA256, SHA512, hash)
 import Data.Aeson (Value (Null, Object, String), eitherDecodeStrict, object, (.=))
 import Data.Aeson qualified as Aeson
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
+import Data.ByteArray.Encoding (Base (Base64), convertToBase)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.CaseInsensitive qualified as CI
@@ -240,8 +242,8 @@ selfHostedVersion baseUrl version =
         , "dist"
             .= object
                 [ "tarball" .= (baseUrl <> "/thing/-/thing-" <> version <> ".tgz")
-                , "integrity" .= ("sha512-" <> version <> "-int")
-                , "shasum" .= ("deadbeef" :: Text)
+                , "integrity" .= sriFor version
+                , "shasum" .= validShasum
                 ]
         , "_unmodeled" .= ("kept" :: Text)
         ]
@@ -434,7 +436,7 @@ versionObject version integrity hasInstall =
                 .= object
                     [ "tarball" .= ("https://upstream.example/thing/-/thing-" <> version <> ".tgz")
                     , "integrity" .= integrity
-                    , "shasum" .= ("deadbeef" :: Text)
+                    , "shasum" .= validShasum
                     ]
           , "_unmodeled" .= ("kept" :: Text) -- a per-version unmodeled key
           ]
@@ -443,7 +445,22 @@ versionObject version integrity hasInstall =
 
 -- A plain (no-install-script) version object with a distinct integrity.
 plainVersion :: Text -> Value
-plainVersion version = versionObject version ("sha512-" <> version <> "-int") False
+plainVersion version = versionObject version (sriFor version) False
+
+{- | A well-formed sha512 (resp. sha256) SRI derived from a label, so the projection's
+digest validation keeps it. These serve tests exercise admission, the merge, and
+dist-tag reconciliation — not digest realism — so a deterministic well-formed digest
+per label stands in for a real one while staying 'mkHash'-constructible.
+-}
+sriFor, sri256For :: Text -> Text
+sriFor label =
+    "sha512-" <> decodeUtf8 (convertToBase Base64 (hash (encodeUtf8 label :: ByteString) :: Digest SHA512) :: ByteString)
+sri256For label =
+    "sha256-" <> decodeUtf8 (convertToBase Base64 (hash (encodeUtf8 label :: ByteString) :: Digest SHA256) :: ByteString)
+
+-- | A well-formed 40-hex SHA-1 shasum (sha1 of the empty string) for the dist fixtures.
+validShasum :: Text
+validShasum = "da39a3ee5e6b4b0d3255bfef95601890afd80709"
 
 {- | A version object carrying __only a legacy SHA-1 shasum__ (a @dist@ with a tarball
 and @shasum@ but no @integrity@ SRI), so it projects to an artifact whose strongest
@@ -458,7 +475,7 @@ shasumOnlyVersion version =
         , "dist"
             .= object
                 [ "tarball" .= ("https://upstream.example/thing/-/thing-" <> version <> ".tgz")
-                , "shasum" .= ("deadbeef" :: Text)
+                , "shasum" .= validShasum
                 ]
         , "_unmodeled" .= ("kept" :: Text)
         ]
@@ -474,6 +491,26 @@ hashlessVersion version =
         [ "name" .= ("thing" :: Text)
         , "version" .= version
         , "dist" .= object ["tarball" .= ("https://upstream.example/thing/-/thing-" <> version <> ".tgz")]
+        , "_unmodeled" .= ("kept" :: Text)
+        ]
+
+{- | A version object whose @dist@ carries __empty-string__ @integrity@ and @shasum@ (a
+present-but-content-empty digest pair). The projection normalises an empty digest to
+absent, so this projects to an artifact with empty @artHashes@ — identical to
+'hashlessVersion' — and the integrity-presence admission policy refuses it from a public
+upstream (classified 'NoIntegrity', not 'BelowFloor').
+-}
+emptyDigestVersion :: Text -> Value
+emptyDigestVersion version =
+    object
+        [ "name" .= ("thing" :: Text)
+        , "version" .= version
+        , "dist"
+            .= object
+                [ "tarball" .= ("https://upstream.example/thing/-/thing-" <> version <> ".tgz")
+                , "integrity" .= ("" :: Text)
+                , "shasum" .= ("" :: Text)
+                ]
         , "_unmodeled" .= ("kept" :: Text)
         ]
 
@@ -502,7 +539,25 @@ selfHostedShasumOnly baseUrl version =
         , "dist"
             .= object
                 [ "tarball" .= (baseUrl <> "/thing/-/thing-" <> version <> ".tgz")
-                , "shasum" .= ("deadbeef" :: Text)
+                , "shasum" .= validShasum
+                ]
+        , "_unmodeled" .= ("kept" :: Text)
+        ]
+
+{- | A self-hosting version object whose @dist@ carries __empty-string__ @integrity@ and
+@shasum@, so it projects to no digest at all. The artifact-gate refusal ('MissingIntegrity')
+must fire before its @dist.tarball@ is ever fetched.
+-}
+selfHostedEmptyDigest :: Text -> Text -> Value
+selfHostedEmptyDigest baseUrl version =
+    object
+        [ "name" .= ("thing" :: Text)
+        , "version" .= version
+        , "dist"
+            .= object
+                [ "tarball" .= (baseUrl <> "/thing/-/thing-" <> version <> ".tgz")
+                , "integrity" .= ("" :: Text)
+                , "shasum" .= ("" :: Text)
                 ]
         , "_unmodeled" .= ("kept" :: Text)
         ]
@@ -869,7 +924,7 @@ mergeSpec = describe "multi-upstream merge (not fallback)" $ do
             servingUpstream
                 ( encodePackument
                     ( packument
-                        [("1.0.0", versionObject "1.0.0" "sha512-public-int" True)]
+                        [("1.0.0", versionObject "1.0.0" (sriFor "public-int") True)]
                         "1.0.0"
                         [("1.0.0", publishedDaysAgo 30)]
                     )
@@ -879,7 +934,7 @@ mergeSpec = describe "multi-upstream merge (not fallback)" $ do
             status resp `shouldBe` 200
             servedVersions resp `shouldBe` ["1.0.0"]
             -- The served 1.0.0 is the private (trusted) copy: its integrity wins.
-            servedIntegrity "1.0.0" resp `shouldBe` Just "sha512-1.0.0-int"
+            servedIntegrity "1.0.0" resp `shouldBe` Just (sriFor "1.0.0")
 
     it "filters a hashless public version out of the served listing (integrity-presence policy)" $ do
         -- Public 2.0.0 carries no integrity digest (neither integrity nor shasum)
@@ -891,6 +946,28 @@ mergeSpec = describe "multi-upstream merge (not fallback)" $ do
                 ( encodePackument
                     ( packument
                         [("1.0.0", plainVersion "1.0.0"), ("2.0.0", hashlessVersion "2.0.0")]
+                        "1.0.0"
+                        [("1.0.0", publishedDaysAgo 30), ("2.0.0", publishedDaysAgo 30)]
+                    )
+                )
+        withProxy privateUp publicUp Nothing $ \app -> do
+            resp <- getThing Nothing app
+            status resp `shouldBe` 200
+            servedVersions resp `shouldBe` ["1.0.0"]
+
+    it "filters an empty-digest public version out of the served listing (a content-empty digest is no digest)" $ do
+        -- Public 2.0.0 carries `integrity:""`/`shasum:""` — present-but-content-empty
+        -- digests the projection normalises to none, so the integrity-presence policy
+        -- drops it from the served packument exactly as a truly hashless one. 1.0.0 has a
+        -- real digest → kept. Proves the projection fix composes with the existing gate
+        -- (no parallel check); without it the empty strings would project to degenerate
+        -- empty Hashes and 2.0.0 would leak into the listing.
+        privateUp <- failingUpstream
+        publicUp <-
+            servingUpstream
+                ( encodePackument
+                    ( packument
+                        [("1.0.0", plainVersion "1.0.0"), ("2.0.0", emptyDigestVersion "2.0.0")]
                         "1.0.0"
                         [("1.0.0", publishedDaysAgo 30), ("2.0.0", publishedDaysAgo 30)]
                     )
@@ -942,7 +1019,7 @@ mergeSpec = describe "multi-upstream merge (not fallback)" $ do
             servingUpstream
                 ( encodePackument
                     ( packument
-                        [("1.0.0", versionObject "1.0.0" "sha256-Zm9vYmFy" False)]
+                        [("1.0.0", versionObject "1.0.0" (sri256For "x") False)]
                         "1.0.0"
                         [("1.0.0", publishedDaysAgo 30)]
                     )
@@ -976,7 +1053,7 @@ mergeSpec = describe "multi-upstream merge (not fallback)" $ do
             servingUpstream
                 ( encodePackument
                     ( packument
-                        [("1.0.0", versionObject "1.0.0" "sha256-Zm9vYmFy" False)]
+                        [("1.0.0", versionObject "1.0.0" (sri256For "x") False)]
                         "1.0.0"
                         [("1.0.0", publishedDaysAgo 30)]
                     )
@@ -996,7 +1073,7 @@ mergeSpec = describe "multi-upstream merge (not fallback)" $ do
         -- packument.
         privateUp <-
             servingUpstream
-                (encodePackument (privatePackumentWith [("1.0.0", versionObject "1.0.0" "sha256-PRIVATE" False)] "1.0.0"))
+                (encodePackument (privatePackumentWith [("1.0.0", versionObject "1.0.0" (sri256For "private") False)] "1.0.0"))
         publicUp <-
             servingUpstream
                 ( encodePackument
@@ -1010,7 +1087,7 @@ mergeSpec = describe "multi-upstream merge (not fallback)" $ do
             resp <- getThing Nothing app
             status resp `shouldBe` 200
             servedVersions resp `shouldBe` ["1.0.0"]
-            servedIntegrity "1.0.0" resp `shouldBe` Just "sha256-PRIVATE"
+            servedIntegrity "1.0.0" resp `shouldBe` Just (sri256For "private")
 
     it "serves the private copy on an integrity divergence (private wins; flagged in the merge)" $ do
         -- Same version key, differing integrity across upstreams: the private copy
@@ -1019,12 +1096,12 @@ mergeSpec = describe "multi-upstream merge (not fallback)" $ do
         -- served bytes are the trusted copy's, never the public one's.
         privateUp <-
             servingUpstream
-                (encodePackument (privatePackumentWith [("1.0.0", versionObject "1.0.0" "sha512-PRIVATE" False)] "1.0.0"))
+                (encodePackument (privatePackumentWith [("1.0.0", versionObject "1.0.0" (sriFor "private") False)] "1.0.0"))
         publicUp <-
             servingUpstream
                 ( encodePackument
                     ( packument
-                        [("1.0.0", versionObject "1.0.0" "sha512-PUBLIC" False)]
+                        [("1.0.0", versionObject "1.0.0" (sriFor "public") False)]
                         "1.0.0"
                         [("1.0.0", publishedDaysAgo 30)]
                     )
@@ -1032,7 +1109,7 @@ mergeSpec = describe "multi-upstream merge (not fallback)" $ do
         withProxy privateUp publicUp Nothing $ \app -> do
             resp <- getThing Nothing app
             status resp `shouldBe` 200
-            servedIntegrity "1.0.0" resp `shouldBe` Just "sha512-PRIVATE"
+            servedIntegrity "1.0.0" resp `shouldBe` Just (sriFor "private")
 
     it "repoints dist-tags.latest to a survivor when the public latest is denied (public-only)" $ do
         -- Public latest points at 2.0.0 (3 days old → denied by the quarantine);
@@ -1242,7 +1319,7 @@ cacheSpec = describe "metadata cache (read-through coherence)" $ do
             servedVersions secondResp `shouldBe` ["1.0.0"]
             -- The served bytes are 1.0.0's own: its integrity and unmodeled key, the
             -- exact bytes the cached typed view was decided over.
-            servedIntegrity "1.0.0" secondResp `shouldBe` Just "sha512-1.0.0-int"
+            servedIntegrity "1.0.0" secondResp `shouldBe` Just (sriFor "1.0.0")
             servedVersionKey "1.0.0" "_unmodeled" secondResp `shouldBe` Just (String "kept")
 
 -- ── no survivors ──────────────────────────────────────────────────────────────
@@ -1277,7 +1354,7 @@ noSurvivorsSpec = describe "no survivors in the merge" $ do
             servingUpstream
                 ( encodePackument
                     ( packument
-                        [("2.0.0", versionObject "2.0.0" "sha512-x" True)]
+                        [("2.0.0", versionObject "2.0.0" (sriFor "x") True)]
                         "2.0.0"
                         [("2.0.0", publishedDaysAgo 30)]
                     )
@@ -1574,7 +1651,7 @@ honouredPathUpstream version filename tarballBody = do
             let dist =
                     object
                         [ "tarball" .= (base <> "/files/" <> filename)
-                        , "integrity" .= ("sha512-" <> version <> "-int")
+                        , "integrity" .= sriFor version
                         ]
                 vo = object ["name" .= ("thing" :: Text), "version" .= version, "dist" .= dist]
              in packument [(version, vo)] version [(version, publishedDaysAgo 30)]
@@ -1736,6 +1813,26 @@ tarballSpec = describe "artifact (tarball) path" $ do
             status resp `shouldBe` 403
             reason resp `shouldBe` "Forbidden"
             -- The artifact itself was never fetched: only the gating packument was requested.
+            seenAuth publicUp `shouldReturn` [Nothing]
+            drainJobs env `shouldReturn` []
+
+    it "refuses an empty-digest public version with 403 MissingIntegrity before fetching the artifact" $ do
+        -- 1.0.0 clears the rules but its public dist carries `integrity:""`/`shasum:""`.
+        -- The projection normalises those to no digest, so the artifact gate classifies
+        -- the version NoIntegrity and refuses it with the MissingIntegrity 403 — the same
+        -- path a truly hashless version takes, the existing gate firing on the fixed
+        -- projection. The MissingIntegrity message (not BelowIntegrityFloor) pins that the
+        -- empty strings became NO digest, not a present-but-weak one; the tarball is never
+        -- fetched and nothing is enqueued.
+        privateUp <- privateArtifactMiss
+        let emptyDigest base = packument [("1.0.0", selfHostedEmptyDigest base "1.0.0")] "1.0.0" [("1.0.0", publishedDaysAgo 30)]
+        publicUp <- artifactUpstreamServing (encodePackument . emptyDigest) publicTarballBytes
+        withProxyEnv privateUp publicUp Nothing $ \app env -> do
+            resp <- getTarball "1.0.0" Nothing app
+            status resp `shouldBe` 403
+            reason resp `shouldBe` "Forbidden"
+            decodedBody resp
+                `shouldBe` object ["error" .= ("this version carries no integrity digest and cannot be served from a public upstream" :: Text)]
             seenAuth publicUp `shouldReturn` [Nothing]
             drainJobs env `shouldReturn` []
 

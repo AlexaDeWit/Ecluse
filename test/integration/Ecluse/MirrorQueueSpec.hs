@@ -10,7 +10,7 @@ import Ecluse.Integration.Ministack (
     receiveUntil,
     withMinistack,
  )
-import Ecluse.Package (Hash (Hash), HashAlg (SHA1), mkPackageName)
+import Ecluse.Package (Hash, HashAlg (SHA1), mkHash, mkPackageName)
 import Ecluse.Queue (
     MirrorArtifact (..),
     MirrorJob (..),
@@ -77,7 +77,19 @@ sampleJob =
         , jobArtifact =
             MirrorArtifact
                 { maFilename = "left-pad-1.3.0.tgz"
-                , maHashes = Hash SHA1 "abc123" :| []
+                , maHashes = unsafeHash SHA1 validSha1 :| []
                 , maSize = Just 256
                 }
         }
+
+{- HLINT ignore unsafeHash "Avoid restricted function" -}
+
+{- | Build a 'Hash' from a known-valid digest; errors on a malformed one. The job
+round-trips through the real SQS queue, which validates the digest on decode.
+-}
+unsafeHash :: HashAlg -> Text -> Hash
+unsafeHash alg = either error id . mkHash alg
+
+-- | A well-formed SHA-1 digest (sha1 of the empty string) for the sample job.
+validSha1 :: Text
+validSha1 = "da39a3ee5e6b4b0d3255bfef95601890afd80709"

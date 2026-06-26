@@ -29,13 +29,14 @@ import Ecluse.Package (
     CodeExecSignal (NoCodeOnInstall, RunsCodeOnInstall),
     DepKind (Dev, Optional, Peer, Runtime),
     Dependency (depConstraint, depKind, depMarker, depName),
-    Hash (Hash),
+    Hash,
     HashAlg (SHA1, SRI),
     PackageDetails (..),
     PackageInfo (..),
     PackageName,
     Person (Person),
     Trust (TrustUnknown),
+    mkHash,
     mkPackageName,
     mkScope,
     pkgCanonical,
@@ -250,8 +251,8 @@ integritySpec = describe "dist → Artifact integrity" $ do
         -- detect a same-version integrity divergence.
         d <- projectVersion "is-odd.full.json" (mkVersion Npm "3.0.1")
         artHashes (soleArtifact d)
-            `shouldBe` [ Hash SRI "sha512-CQpnWPrDwmP1+SMHXZhtLtJv90yiyVfluGsX5iNCVkrhQtU3TQHsUWPG9wkdk9Lgd5yNpAg9jQEo90CBaXgWMA=="
-                       , Hash SHA1 "65101baf3727d728b66fa62f50cda7f2d3989601"
+            `shouldBe` [ unsafeHash SRI "sha512-CQpnWPrDwmP1+SMHXZhtLtJv90yiyVfluGsX5iNCVkrhQtU3TQHsUWPG9wkdk9Lgd5yNpAg9jQEo90CBaXgWMA=="
+                       , unsafeHash SHA1 "65101baf3727d728b66fa62f50cda7f2d3989601"
                        ]
 
     it "projects exactly one tarball artifact with the dist URL (is-odd)" $ do
@@ -287,11 +288,30 @@ integritySpec = describe "dist → Artifact integrity" $ do
     it "keeps the SRI integrity even when the shasum is absent (inline dist)" $ do
         -- An integrity-only dist still yields the SRI hash (and only it).
         d <- projectVersionOf integrityOnlyPackument (mkVersion Npm "1.0.0")
-        artHashes (soleArtifact d) `shouldBe` [Hash SRI "sha512-onlyintegrity=="]
+        artHashes (soleArtifact d)
+            `shouldBe` [unsafeHash SRI "sha512-z4PhNX7vuL3xVChQ1m2AB9Yg5AULVxXcg/SpIdNs6c5H0NE8XYXysP+DGNKHfuwvY7kxvUdBeoGlODJ6+SfaPg=="]
 
     it "keeps the SHA-1 shasum even when the integrity is absent (inline dist)" $ do
         d <- projectVersionOf shasumOnlyPackument (mkVersion Npm "1.0.0")
-        artHashes (soleArtifact d) `shouldBe` [Hash SHA1 "deadbeef"]
+        artHashes (soleArtifact d) `shouldBe` [unsafeHash SHA1 "da39a3ee5e6b4b0d3255bfef95601890afd80709"]
+
+    it "treats an empty-string shasum as no digest (a content-empty digest is absent)" $ do
+        -- An empty `shasum` decodes to a present `Just ""`, but it ties the version to no
+        -- tamper-evident fingerprint. It must project to NO Hash — not a degenerate
+        -- `Hash SHA1 ""` that would pass the list-emptiness admission gate.
+        d <- projectVersionOf emptyShasumPackument (mkVersion Npm "1.0.0")
+        artHashes (soleArtifact d) `shouldBe` []
+
+    it "treats an empty-string integrity as no digest (a content-empty digest is absent)" $ do
+        d <- projectVersionOf emptyIntegrityPackument (mkVersion Npm "1.0.0")
+        artHashes (soleArtifact d) `shouldBe` []
+
+    it "yields a truly hashless artifact when both digests are empty strings" $ do
+        -- Both digests empty → empty artHashes → the version contributes no integrity
+        -- fingerprint at all (rather than a degenerate empty one) to the cross-upstream
+        -- divergence check, and classifies as NoIntegrity for the admission gate.
+        d <- projectVersionOf emptyBothPackument (mkVersion Npm "1.0.0")
+        artHashes (soleArtifact d) `shouldBe` []
 
 -- ── parseVersionDetails ──────────────────────────────────────────────────────
 
@@ -599,13 +619,37 @@ trailingSlashPackument =
 integrityOnlyPackument :: ByteString
 integrityOnlyPackument =
     "{\"name\":\"intg\",\"versions\":{\"1.0.0\":{\"name\":\"intg\",\"version\":\"1.0.0\",\
-    \\"dist\":{\"tarball\":\"https://r/intg/-/intg-1.0.0.tgz\",\"integrity\":\"sha512-onlyintegrity==\"}}}}"
+    \\"dist\":{\"tarball\":\"https://r/intg/-/intg-1.0.0.tgz\",\"integrity\":\"sha512-z4PhNX7vuL3xVChQ1m2AB9Yg5AULVxXcg/SpIdNs6c5H0NE8XYXysP+DGNKHfuwvY7kxvUdBeoGlODJ6+SfaPg==\"}}}}"
 
 -- | A packument whose version's @dist@ carries only the legacy SHA-1 @shasum@.
 shasumOnlyPackument :: ByteString
 shasumOnlyPackument =
     "{\"name\":\"sha\",\"versions\":{\"1.0.0\":{\"name\":\"sha\",\"version\":\"1.0.0\",\
-    \\"dist\":{\"tarball\":\"https://r/sha/-/sha-1.0.0.tgz\",\"shasum\":\"deadbeef\"}}}}"
+    \\"dist\":{\"tarball\":\"https://r/sha/-/sha-1.0.0.tgz\",\"shasum\":\"da39a3ee5e6b4b0d3255bfef95601890afd80709\"}}}}"
+
+{- | A packument whose version's @dist@ carries an __empty-string__ @shasum@ (and no
+@integrity@): a present-but-content-empty digest the projection must treat as absent.
+-}
+emptyShasumPackument :: ByteString
+emptyShasumPackument =
+    "{\"name\":\"es\",\"versions\":{\"1.0.0\":{\"name\":\"es\",\"version\":\"1.0.0\",\
+    \\"dist\":{\"tarball\":\"https://r/es/-/es-1.0.0.tgz\",\"shasum\":\"\"}}}}"
+
+{- | A packument whose version's @dist@ carries an __empty-string__ @integrity@ (and no
+@shasum@): a present-but-content-empty digest the projection must treat as absent.
+-}
+emptyIntegrityPackument :: ByteString
+emptyIntegrityPackument =
+    "{\"name\":\"ei\",\"versions\":{\"1.0.0\":{\"name\":\"ei\",\"version\":\"1.0.0\",\
+    \\"dist\":{\"tarball\":\"https://r/ei/-/ei-1.0.0.tgz\",\"integrity\":\"\"}}}}"
+
+{- | A packument whose version's @dist@ carries __both__ digests as empty strings: the
+artifact projects to no 'Hash' at all (a truly hashless version).
+-}
+emptyBothPackument :: ByteString
+emptyBothPackument =
+    "{\"name\":\"eb\",\"versions\":{\"1.0.0\":{\"name\":\"eb\",\"version\":\"1.0.0\",\
+    \\"dist\":{\"tarball\":\"https://r/eb/-/eb-1.0.0.tgz\",\"shasum\":\"\",\"integrity\":\"\"}}}}"
 
 -- | A packument with three versions, to check version-list extraction.
 multiVersionPackument :: ByteString
@@ -627,6 +671,14 @@ the 'NonEmpty' is total.
 -}
 soleArtifact :: PackageDetails -> Artifact
 soleArtifact d = let (art :| _) = pkgArtifacts d in art
+
+{- HLINT ignore unsafeHash "Avoid restricted function" -}
+
+{- | Build a 'Hash' from a known-valid digest, for asserting a projected artifact's
+hashes. Errors on a malformed digest, so a typo in a fixture fails loudly.
+-}
+unsafeHash :: HashAlg -> Text -> Hash
+unsafeHash alg = either error id . mkHash alg
 
 -- | Whether a 'CodeExecSignal' is one of the @RunsCodeOnInstall@ determinations.
 runsCode :: CodeExecSignal -> Bool

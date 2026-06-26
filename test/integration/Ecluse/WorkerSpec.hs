@@ -21,7 +21,7 @@ import Ecluse.Integration.Ministack (
     freshQueue,
     withMinistack,
  )
-import Ecluse.Package (Hash (Hash), HashAlg (SHA1), mkPackageName)
+import Ecluse.Package (Hash, HashAlg (SHA1), mkHash, mkPackageName)
 import Ecluse.Queue (
     MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize),
     MirrorJob (..),
@@ -66,9 +66,9 @@ spec =
                     withMirrorTarget status201 $ \mirrorUrl publishLog -> do
                         queue <- freshQueue container "worker-tamper" defaultQueueOptions
                         env <- envFor queue mirrorUrl
-                        -- The threaded digest does not match the served bytes: a
-                        -- tampered artifact. The worker must refuse to publish.
-                        enqueue queue (job upstreamUrl "deadbeef")
+                        -- The threaded digest is well-formed but does not match the served
+                        -- bytes: a tampered artifact. The worker must refuse to publish.
+                        enqueue queue (job upstreamUrl wrongSha1)
                         runLoopFor env 4_000_000
                         published <- readIORef publishLog
                         published `shouldBe` []
@@ -177,10 +177,25 @@ job upstreamUrl sha1 =
         , jobArtifact =
             MirrorArtifact
                 { maFilename = "left-pad-1.3.0.tgz"
-                , maHashes = Hash SHA1 sha1 :| []
+                , maHashes = unsafeHash SHA1 sha1 :| []
                 , maSize = Nothing
                 }
         }
+
+{- HLINT ignore unsafeHash "Avoid restricted function" -}
+
+{- | Build a 'Hash' from a known-valid digest; errors on a malformed one. The job's
+digest round-trips through the real queue, which validates it on decode.
+-}
+unsafeHash :: HashAlg -> Text -> Hash
+unsafeHash alg = either error id . mkHash alg
+
+{- | A well-formed SHA-1 digest (sha1 of the empty string) that does not match the
+served tarball — the tamper fixture, distinct from a malformed digest the queue would
+reject at decode.
+-}
+wrongSha1 :: Text
+wrongSha1 = "da39a3ee5e6b4b0d3255bfef95601890afd80709"
 
 -- ── Env over the real queue + a publish client at the mirror stub ──────────────
 

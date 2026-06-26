@@ -453,13 +453,12 @@ artifact must never be admitted on the strength of a hash an attacker could forg
 This is the tamper gate before a publish: a mismatch fails the job and never
 publishes a corrupt or substituted artifact into the private upstream.
 
->>> import Ecluse.Package (Hash (Hash), HashAlg (SHA1))
->>> verifyIntegrity (Hash SHA1 "0a4d55a8d778e5022fab701977c5d840bbc486d0" :| []) "Hello World"
-IntegrityVerified
+>>> import Ecluse.Package (mkHash, HashAlg (SHA1))
+>>> fmap (\h -> verifyIntegrity (h :| []) "Hello World") (mkHash SHA1 "0a4d55a8d778e5022fab701977c5d840bbc486d0")
+Right IntegrityVerified
 
->>> import Ecluse.Package (Hash (Hash), HashAlg (SHA1))
->>> verifyIntegrity (Hash SHA1 "deadbeef" :| []) "Hello World"
-IntegrityMismatch "the SHA1 digest did not match the fetched bytes"
+>>> fmap (\h -> verifyIntegrity (h :| []) "Hello World") (mkHash SHA1 "da39a3ee5e6b4b0d3255bfef95601890afd80709")
+Right (IntegrityMismatch "the SHA1 digest did not match the fetched bytes")
 -}
 verifyIntegrity :: NonEmpty Hash -> ByteString -> IntegrityResult
 verifyIntegrity hashes bytes =

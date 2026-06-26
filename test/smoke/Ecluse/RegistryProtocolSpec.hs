@@ -1,7 +1,8 @@
 module Ecluse.RegistryProtocolSpec (spec) where
 
 import Control.Exception (try)
-import Data.Aeson (eitherDecodeStrict)
+import Data.Aeson (Value (Object, String), eitherDecodeStrict)
+import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Network.HTTP.Client (Manager, newManager)
@@ -12,7 +13,16 @@ import Test.Hspec
 import UnliftIO.Exception (throwString)
 
 import Ecluse.Ecosystem (Ecosystem (Npm))
-import Ecluse.Package (PackageInfo (infoDistTags, infoName, infoVersions), PackageName, Scope, mkPackageName, mkScope, renderPackageName)
+import Ecluse.Package (
+    HashAlg (SHA1, SRI),
+    PackageInfo (infoDistTags, infoName, infoVersions),
+    PackageName,
+    Scope,
+    mkHash,
+    mkPackageName,
+    mkScope,
+    renderPackageName,
+ )
 import Ecluse.Registry (RegistryClient (fetchMetadata, parsePackageInfo), RegistryResponse (responseBody))
 import Ecluse.Registry.Npm (
     MetadataForm (Full),
@@ -91,6 +101,33 @@ spec = describe "live registry protocol (npm / PyPI)" $ do
                         renderPackageName (infoName info) `shouldBe` "is-odd"
                         Map.member "latest" (infoDistTags info) `shouldBe` True
 
+    it "validates every real dist.shasum and dist.integrity a long-lived npm packument serves (mkHash accepts real formats)" $ do
+        -- A fail-closed validator must not false-reject a digest npm actually serves: that
+        -- would silently drop a legitimate version to "no integrity". lodash spans the
+        -- legacy SHA-1-only `dist.shasum` era and the modern `dist.integrity` (sha512 SRI)
+        -- era, so it exercises both formats (and any multi-component integrity it serves,
+        -- which mkHash validates component-by-component). Every real digest must construct
+        -- (a Right) — this is about WELL-FORMEDNESS, not the public floor: a real 40-hex
+        -- SHA-1 shasum validates here even though the floor would later exclude that
+        -- version from a public listing. Non-gating: pends on a network failure.
+        (code, out, _err) <-
+            readProcessWithExitCode "curl" ["-sf", registryBase <> "/lodash"] ""
+        case code of
+            ExitFailure _ ->
+                pendingWith "npm registry unreachable (offline or curl unavailable); smoke test skipped"
+            ExitSuccess ->
+                case eitherDecodeStrict (encodeUtf8 out) :: Either String Value of
+                    Left err -> expectationFailure ("lodash packument failed to decode: " <> err)
+                    Right value -> do
+                        let digests = collectDistDigests value
+                        -- Non-vacuous: the packument really carried both digest kinds, so
+                        -- the assertion spans both the legacy and modern eras.
+                        any ((== SHA1) . fst) digests `shouldBe` True
+                        any ((== SRI) . fst) digests `shouldBe` True
+                        -- Every real digest validates through the same mkHash the projection
+                        -- uses; a Left here is our validator false-rejecting a real format.
+                        [(alg, d) | (alg, d) <- digests, isLeft (mkHash alg d)] `shouldBe` []
+
     -- The default Limits must not false-positive on CURRENT real data: each large,
     -- widely-trusted package's full packument is admissible under the defaults
     -- (security.md invariant 4). This validates the committed-fixture proof
@@ -147,3 +184,20 @@ admissibleUnderDefaults manager name = do
         Right (NameMismatch reported) -> throwString ("projection self-reported a different name: " <> toString reported)
     admitted <- either (\e -> throwString ("version bound refused a real package: " <> show e)) pure (checkVersionCount defaultLimits info)
     pure (renderPackageName (infoName admitted), Map.size (infoVersions admitted))
+
+{- | Every @dist.shasum@ (as a 'SHA1' digest) and @dist.integrity@ (as an 'SRI') a
+packument carries, across all of its versions — the raw digest strings the projection
+feeds to 'mkHash'. Extracted straight from the wire JSON so the smoke test checks
+'mkHash' against what npm genuinely serves.
+-}
+collectDistDigests :: Value -> [(HashAlg, Text)]
+collectDistDigests value =
+    [ pair
+    | Object top <- [value]
+    , Just (Object versions) <- [KeyMap.lookup "versions" top]
+    , Object versionObj <- KeyMap.elems versions
+    , Just (Object dist) <- [KeyMap.lookup "dist" versionObj]
+    , pair <-
+        [(SHA1, s) | Just (String s) <- [KeyMap.lookup "shasum" dist]]
+            <> [(SRI, i) | Just (String i) <- [KeyMap.lookup "integrity" dist]]
+    ]

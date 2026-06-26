@@ -195,7 +195,7 @@ crossHostPackument port =
                         , "dist"
                             .= object
                                 [ "tarball" .= ("http://localhost:" <> port <> "/thing/-/thing-1.0.0.tgz")
-                                , "integrity" .= ("sha512-x" :: Text)
+                                , "integrity" .= validSri
                                 ]
                         ]
                 ]
@@ -204,6 +204,13 @@ crossHostPackument port =
 
 tarballBytes :: LByteString
 tarballBytes = "CROSS-HOST-TGZ-BYTES"
+
+{- | A well-formed sha512 SRI (sha512 of the empty string) so the version clears the
+integrity gate and reaches the tarball-host policy under test. The bytes are never
+hashed against it here — these tests exercise the dist.tarball host gate, not integrity.
+-}
+validSri :: Text
+validSri = "sha512-z4PhNX7vuL3xVChQ1m2AB9Yg5AULVxXcg/SpIdNs6c5H0NE8XYXysP+DGNKHfuwvY7kxvUdBeoGlODJ6+SfaPg=="
 
 {- An in-process upstream whose packument admits a version but names its dist.tarball
 on a __same-host port nothing listens on__: the packument fetch succeeds (so the
@@ -243,7 +250,7 @@ deadTarballPackument port =
                         , "dist"
                             .= object
                                 [ "tarball" .= ("http://127.0.0.1:" <> port <> "/thing/-/thing-1.0.0.tgz")
-                                , "integrity" .= ("sha512-x" :: Text)
+                                , "integrity" .= validSri
                                 ]
                         ]
                 ]
