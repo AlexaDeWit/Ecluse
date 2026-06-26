@@ -62,10 +62,19 @@ flags:
       - src/
     carryforward: true
 
-# Out of scope for coverage: the thin executable entry point and the tests.
+# Out of scope for coverage: the thin executable entry point and the tests. The
+# `test/**` glob already covers the shared ecluse-test-support library under
+# test/support/, but it is called out explicitly below because that library is a
+# first-class cabal component (its Ecluse.Test.* modules are instrumented by the
+# coverage build), so it must never be attributed as software under test. The
+# generation side enforces this too: scripts/coverage.sh and
+# scripts/coverage-combined.sh exclude every Ecluse.Test.* module from the HPC
+# report, so the support library never reaches Codecov in the first place. The
+# `src/`-scoped `flags.*.paths` above are the matching positive constraint.
 ignore:
   - "app/**"
   - "test/**"
+  - "test/support/**"
 
 comment:
   layout: "reach, diff, flags, files"

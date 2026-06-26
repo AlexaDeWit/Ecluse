@@ -20,7 +20,7 @@ import Ecluse.App (runApp)
 import Ecluse.Credential (AuthToken (..), CredentialProvider, mkSecret, staticProvider)
 import Ecluse.Ecosystem (Ecosystem (Npm))
 import Ecluse.Env (Env, envWorkerHeartbeat, lastPoll, newEnv, newWorkerHeartbeat)
-import Ecluse.Package (Hash, HashAlg (Blake2b, MD5, SHA1, SHA256, SRI), PackageName, mkHash, mkPackageName)
+import Ecluse.Package (Hash, HashAlg (Blake2b, MD5, SHA1, SHA256, SRI), PackageName, mkPackageName)
 import Ecluse.Package qualified as Pkg
 import Ecluse.Queue (
     MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize),
@@ -41,6 +41,7 @@ import Ecluse.Registry (
 import Ecluse.Registry.Npm (npmPublishDocument)
 import Ecluse.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Telemetry (telemetryDisabled)
+import Ecluse.Test.Package (unsafeHash)
 import Ecluse.Version (Version, mkVersion)
 import Ecluse.Worker (
     IntegrityResult (IntegrityMismatch, IntegrityVerified),
@@ -103,14 +104,6 @@ case-folding comparison would wrongly admit it.
 -}
 caseVariantSri :: Text
 caseVariantSri = "sha512-" <> T.toUpper (fromMaybe "" (T.stripPrefix "sha512-" trueSri))
-
-{- HLINT ignore unsafeHash "Avoid restricted function" -}
-
-{- | Build a 'Hash' from a known-valid digest. Errors on a malformed digest, so a typo
-in a fixture fails loudly rather than silently constructing nothing.
--}
-unsafeHash :: HashAlg -> Text -> Hash
-unsafeHash alg = either error id . mkHash alg
 
 {- | A well-formed SHA-1 digest that does NOT match 'tarballBytes' (it is sha1 of the
 empty string) — the mismatch fixture, distinct from a malformed one.

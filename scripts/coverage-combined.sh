@@ -80,13 +80,23 @@ while IFS= read -r d; do
   mix_args+=(-m "$d")
 done < <(find "$builddir" -type d -path '*/hpc/vanilla/mix')
 
+# Exclude the ecluse-test-support library's modules, derived from test/support/ so
+# a new Ecluse.Test.* module is dropped automatically. It is shared test
+# scaffolding, not the software under test, and must never enter the report (see
+# scripts/coverage.sh for the full rationale; codecov.yml `ignore` backs it up).
+support_exclude=()
+while IFS= read -r module; do
+  support_exclude+=(-x "$module")
+done < <(find test/support -name '*.hs' | sed -e 's#^test/support/##' -e 's#/#.#g' -e 's#\.hs$##')
+
 # Flags mirror scripts/coverage.sh exactly so the combined JSON is shaped like the
-# per-tier ones Codecov already ingests. Library-vs-test scoping stays in
+# per-tier ones Codecov already ingests. Library-vs-test scoping otherwise stays in
 # codecov.yml `ignore`, so new spec modules need no change here.
 hpc-codecov "${mix_args[@]}" \
   -s . \
   -x Main \
   -x Paths_ecluse \
+  "${support_exclude[@]}" \
   -f codecov \
   -o "$out" \
   "$combined_tix"

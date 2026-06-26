@@ -665,6 +665,16 @@ three-tier strategy are in `CONTRIBUTING.md`; this is style.)
   that must hold for *every* input — not just the handful an example covers —
   belongs here (e.g. an order-independence or round-trip law).
 - Comment a non-obvious case with the reasoning it encodes.
+- **Share cross-suite helpers through `ecluse-test-support`**: a helper or fixture
+  that more than one suite needs lives in the internal `ecluse-test-support`
+  library (`test/support/`), not copied into each suite. Its modules mirror the
+  main-library namespace, so a helper supporting `Ecluse.X` lives in
+  `Ecluse.Test.X`: the digest fixtures and `unsafeHash` for `Ecluse.Package` live
+  in `Ecluse.Test.Package`, following the same `module name = file path` rule §4.2
+  sets for the library. Genuinely cross-cutting helpers that belong to no single
+  module live in the general `Ecluse.Test.Support`. A suite imports a shared helper
+  from the library rather than re-defining it; a helper only one suite uses stays
+  local to that suite. See `docs/testing.md`.
 
 ---
 

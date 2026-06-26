@@ -178,7 +178,10 @@ executable ecluse
 library ecluse-test-support
   import:          shared
   hs-source-dirs:  test/support
-  exposed-modules: Ecluse.Test.Support
+  exposed-modules:
+    Ecluse.Test.Package
+    Ecluse.Test.Support
+
   build-depends:
     , ecluse
     , hspec   ^>=2.11
