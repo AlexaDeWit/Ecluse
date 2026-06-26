@@ -29,6 +29,7 @@ import Ecluse.Ecosystem (Ecosystem (..), ecosystemName)
 import Ecluse.Registry.Npm.Wire (Packument (pkmtVersions))
 import Ecluse.Registry.Pypi.Wire qualified as Pypi
 import Ecluse.Registry.Rubygems.Wire qualified as Rubygems
+import Ecluse.Test.Version qualified as V
 import Ecluse.Version
 
 {- | Smoke tier: validate 'Ecluse.Version.compareVersions' against the /live/
@@ -74,7 +75,7 @@ spec = do
     -- Modest iteration count: this tier shells out to a tool per comparison.
     describe "compareVersions agrees with the live oracle on random inputs" $
         modifyMaxSuccess (const 60) $
-            for_ [(Npm, genNpm), (PyPI, genPyPI), (RubyGems, genGem)] $ \(eco, gen) -> do
+            for_ [(Npm, npmish), (PyPI, pypiish), (RubyGems, gemish)] $ \(eco, gen) -> do
                 -- Probe the oracle once on a known-valid pair. If it can't be
                 -- reached (interpreter or library missing), pend the whole
                 -- ecosystem — otherwise every iteration would skip and the
@@ -409,59 +410,22 @@ renderDivergences eco pkg refSorted ds =
 
 -- ── generators (a mix of structurally valid and messy strings) ──────────────
 
-{- | npm-flavoured strings: valid semver (core + optional pre/build) mixed with
-the shared 'messy' generator. The both-accept gate filters out whatever neither
-side should compare.
--}
-genNpm :: Gen Text
-genNpm =
-    Gen.choice
-        [ validNpm
-        , messy
-        ]
-  where
-    validNpm = do
-        core <- T.intercalate "." <$> Gen.list (Range.singleton 3) numSeg
-        pre <- Gen.maybe (("-" <>) . T.intercalate "." <$> Gen.list (Range.linear 1 3) preId)
-        build <- Gen.maybe (("+" <>) <$> alnumRun)
-        pure (core <> fromMaybe "" pre <> fromMaybe "" build)
-    preId = Gen.choice [numSeg, alnumId]
+-- The structurally valid cores come from the shared 'Ecluse.Test.Version'
+-- generators; each is mixed here with the deliberately 'messy' generator so the
+-- differential also exercises malformed inputs. The both-accept gate filters out
+-- whatever neither side (ours or the live oracle) should compare.
 
-{- | PEP 440-flavoured strings: canonical releases with optional pre/post/dev,
-plus messy variants exercising the both-accept gate.
--}
-genPyPI :: Gen Text
-genPyPI =
-    Gen.choice
-        [ valid
-        , messy
-        ]
-  where
-    valid = do
-        release <- T.intercalate "." <$> Gen.list (Range.linear 1 3) numSeg
-        pre <- Gen.maybe ((<>) <$> Gen.element ["a", "b", "rc"] <*> numSeg)
-        post <- Gen.maybe ((".post" <>) <$> numSeg)
-        dev <- Gen.maybe ((".dev" <>) <$> numSeg)
-        pure (release <> fromMaybe "" pre <> fromMaybe "" post <> fromMaybe "" dev)
+-- | npm-flavoured strings: the shared valid 'V.genNpm' mixed with 'messy'.
+npmish :: Gen Text
+npmish = Gen.choice [V.genNpm, messy]
 
-{- | @Gem::Version@-flavoured strings: dotted numeric segments with an optional
-letter-led prerelease segment, plus messy variants.
--}
-genGem :: Gen Text
-genGem =
-    Gen.choice
-        [ valid
-        , messy
-        ]
-  where
-    valid = do
-        nums <- Gen.list (Range.linear 1 4) numSeg
-        pre <- Gen.maybe gemPreSeg
-        pure (T.intercalate "." (nums <> maybeToList pre))
-    gemPreSeg = do
-        c <- Gen.element ['a' .. 'z']
-        rest <- Gen.text (Range.linear 0 4) (Gen.element (['a' .. 'z'] <> ['0' .. '9']))
-        pure (T.cons c rest)
+-- | PEP 440-flavoured strings: the shared valid 'V.genPyPI' mixed with 'messy'.
+pypiish :: Gen Text
+pypiish = Gen.choice [V.genPyPI, messy]
+
+-- | @Gem::Version@-flavoured strings: the shared valid 'V.genGem' mixed with 'messy'.
+gemish :: Gen Text
+gemish = Gen.choice [V.genGem, messy]
 
 {- | Deliberately messy version-ish text: short tokens, stray separators, and
 mixed alnum. Most of these are rejected by one or both sides (and thus skipped),
@@ -472,20 +436,3 @@ messy =
     Gen.text
         (Range.linear 1 10)
         (Gen.element ('.' : '-' : '+' : '_' : '!' : ['0' .. '9'] <> "abcrvdevpostpre"))
-
--- ── shared atoms ─────────────────────────────────────────────────────────────
-
--- | A small non-negative integer segment.
-numSeg :: Gen Text
-numSeg = show <$> Gen.integral (Range.linear 0 (15 :: Integer))
-
--- | A non-empty alphanumeric run (build metadata / prerelease text).
-alnumRun :: Gen Text
-alnumRun = Gen.text (Range.linear 1 4) (Gen.element (['a' .. 'z'] <> ['A' .. 'Z'] <> ['0' .. '9']))
-
--- | A letter-led alphanumeric identifier (a non-numeric semver prerelease id).
-alnumId :: Gen Text
-alnumId = do
-    c <- Gen.element (['a' .. 'z'] <> ['A' .. 'Z'])
-    rest <- Gen.text (Range.linear 0 4) (Gen.element (['a' .. 'z'] <> ['A' .. 'Z'] <> ['0' .. '9'] <> "-"))
-    pure (T.cons c rest)

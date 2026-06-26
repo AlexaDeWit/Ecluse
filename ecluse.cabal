@@ -182,10 +182,13 @@ library ecluse-test-support
   exposed-modules:
     Ecluse.Test.Package
     Ecluse.Test.Support
+    Ecluse.Test.Version
 
   build-depends:
     , ecluse
-    , hspec   ^>=2.11
+    , hedgehog  ^>=1.5
+    , hspec     ^>=2.11
+    , text      ^>=2.1
 
 -- Unit tests: pure, fast, deterministic. Gating.
 test-suite ecluse-unit
