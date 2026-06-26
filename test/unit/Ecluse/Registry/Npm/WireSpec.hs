@@ -172,6 +172,24 @@ versionManifestSpec = describe "VersionManifest" $ do
             `shouldBe` Just
                 "request has been deprecated, see https://github.com/request/request/issues/3142"
 
+    it "reads a boolean deprecated=false as not deprecated (npm's wire variant)" $ do
+        vm <-
+            decodeOrFail @VersionManifest
+                "{\"name\":\"x\",\"version\":\"1.0.0\",\"dist\":{\"tarball\":\"https://e.test/x.tgz\"},\"deprecated\":false}"
+        vmDeprecated vm `shouldBe` Nothing
+
+    it "reads a boolean deprecated=true as deprecated with an empty message" $ do
+        vm <-
+            decodeOrFail @VersionManifest
+                "{\"name\":\"x\",\"version\":\"1.0.0\",\"dist\":{\"tarball\":\"https://e.test/x.tgz\"},\"deprecated\":true}"
+        vmDeprecated vm `shouldBe` Just ""
+
+    it "still reads a string deprecated as the message (inline, not just the fixture)" $ do
+        vm <-
+            decodeOrFail @VersionManifest
+                "{\"name\":\"x\",\"version\":\"1.0.0\",\"dist\":{\"tarball\":\"https://e.test/x.tgz\"},\"deprecated\":\"gone\"}"
+        vmDeprecated vm `shouldBe` Just "gone"
+
     it "captures runtime dependencies as raw ranges" $ do
         vm <- decodeFixture @VersionManifest "request.manifest.json"
         Map.lookup "form-data" (vmDependencies vm) `shouldBe` Just "~2.3.2"
