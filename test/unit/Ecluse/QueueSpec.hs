@@ -20,7 +20,7 @@ import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
 import Ecluse.Ecosystem (Ecosystem (..))
-import Ecluse.Package (Hash (Hash), HashAlg (SHA1), mkPackageName)
+import Ecluse.Package (Hash, HashAlg (SHA1), mkHash, mkPackageName)
 import Ecluse.Queue
 import Ecluse.Version (mkVersion)
 
@@ -38,7 +38,7 @@ sampleJob =
         , jobArtifact =
             MirrorArtifact
                 { maFilename = "thing-1.0.0.tgz"
-                , maHashes = Hash SHA1 "abc" :| []
+                , maHashes = unsafeHash SHA1 validSha1 :| []
                 , maSize = Just 7
                 }
         }
@@ -55,6 +55,18 @@ jobs apart from a dropped-newest one at the cap.
 -}
 thirdJob :: MirrorJob
 thirdJob = sampleJob{jobVersion = mkVersion Npm "3.0.0"}
+
+{- HLINT ignore unsafeHash "Avoid restricted function" -}
+
+{- | Build a 'Hash' from a known-valid digest. The queue does not inspect a job's
+digest, so any well-formed value serves; errors on a malformed one.
+-}
+unsafeHash :: HashAlg -> Text -> Hash
+unsafeHash alg = either error id . mkHash alg
+
+-- | A well-formed SHA-1 digest (sha1 of the empty string) for the job fixtures.
+validSha1 :: Text
+validSha1 = "da39a3ee5e6b4b0d3255bfef95601890afd80709"
 
 spec :: Spec
 spec = do

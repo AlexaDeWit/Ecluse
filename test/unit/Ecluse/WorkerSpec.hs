@@ -20,7 +20,7 @@ import Ecluse.App (runApp)
 import Ecluse.Credential (AuthToken (..), CredentialProvider, mkSecret, staticProvider)
 import Ecluse.Ecosystem (Ecosystem (Npm))
 import Ecluse.Env (Env, envWorkerHeartbeat, lastPoll, newEnv, newWorkerHeartbeat)
-import Ecluse.Package (Hash (Hash), HashAlg (Blake2b, MD5, SHA1, SHA256, SRI), PackageName, mkPackageName)
+import Ecluse.Package (Hash, HashAlg (Blake2b, MD5, SHA1, SHA256, SRI), PackageName, mkHash, mkPackageName)
 import Ecluse.Package qualified as Pkg
 import Ecluse.Queue (
     MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize),
@@ -87,6 +87,29 @@ case-folding comparison would wrongly admit it.
 -}
 caseVariantSri :: Text
 caseVariantSri = "sha512-" <> T.toUpper (fromMaybe "" (T.stripPrefix "sha512-" trueSri))
+
+{- HLINT ignore unsafeHash "Avoid restricted function" -}
+
+{- | Build a 'Hash' from a known-valid digest. Errors on a malformed digest, so a typo
+in a fixture fails loudly rather than silently constructing nothing.
+-}
+unsafeHash :: HashAlg -> Text -> Hash
+unsafeHash alg = either error id . mkHash alg
+
+{- | A well-formed SHA-1 digest that does NOT match 'tarballBytes' (it is sha1 of the
+empty string) — the mismatch fixture, distinct from a malformed one.
+-}
+wrongSha1 :: Text
+wrongSha1 = "da39a3ee5e6b4b0d3255bfef95601890afd80709"
+
+-- Well-formed digests of algorithms the worker cannot recompute (the empty-input
+-- digest of each), so the fail-closed-on-uncomputable arm sees a real digest rather
+-- than a malformed one; their values are immaterial since the worker never computes them.
+someBlake2b, someSha256, someMd5, someSha256Sri :: Text
+someBlake2b = "786a02f742015903c6c6fd852552d272912f4740e15847618a86e217f71f5419d25e1031afee585313896444934eb04b903a685b1448b755d56f701afe9be2ce"
+someSha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+someMd5 = "d41d8cd98f00b204e9800998ecf8427e"
+someSha256Sri = "sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU="
 
 -- | A fixed reference instant for the heartbeat-staleness assertions.
 epoch :: UTCTime
@@ -250,63 +273,63 @@ spec :: Spec
 spec = do
     describe "verifyIntegrity" $ do
         it "verifies a sha1-only artifact against its sha1 (no stronger digest present)" $
-            verifyIntegrity (Hash SHA1 trueSha1 :| []) tarballBytes `shouldBe` IntegrityVerified
+            verifyIntegrity (unsafeHash SHA1 trueSha1 :| []) tarballBytes `shouldBe` IntegrityVerified
 
         it "verifies an SRI (sha512)-only artifact against its sha512" $
-            verifyIntegrity (Hash SRI trueSri :| []) tarballBytes `shouldBe` IntegrityVerified
+            verifyIntegrity (unsafeHash SRI trueSri :| []) tarballBytes `shouldBe` IntegrityVerified
 
         it "verifies a raw SHA512-tagged digest against its hex sha512 (the tag arm, not SRI)" $
             -- A digest carried under the raw 'SHA512' tag (hex), distinct from the same
             -- hash inside an SRI string: the worker computes hex SHA-512 and matches it,
             -- so this exercises the SHA512-tag compute arm rather than the SRI path.
             -- (Pkg.SHA512 is the HashAlg constructor; the bare SHA512 here is Crypto's.)
-            verifyIntegrity (Hash Pkg.SHA512 trueSha512Hex :| []) tarballBytes `shouldBe` IntegrityVerified
+            verifyIntegrity (unsafeHash Pkg.SHA512 trueSha512Hex :| []) tarballBytes `shouldBe` IntegrityVerified
 
         it "verifies against the strongest digest when both sha512 and sha1 match" $
-            verifyIntegrity (Hash SHA1 trueSha1 :| [Hash SRI trueSri]) tarballBytes
+            verifyIntegrity (unsafeHash SHA1 trueSha1 :| [unsafeHash SRI trueSri]) tarballBytes
                 `shouldBe` IntegrityVerified
 
         it "REJECTS bytes that match the weak sha1 but fail the strong sha512 (tamper guard)" $
             -- The security crux of the most-authoritative-digest rule: a collision
             -- against the broken SHA-1 must NOT admit an artifact whose sha512 fails.
-            verifyIntegrity (Hash SHA1 trueSha1 :| [Hash SRI falseSri]) tarballBytes
+            verifyIntegrity (unsafeHash SHA1 trueSha1 :| [unsafeHash SRI falseSri]) tarballBytes
                 `shouldSatisfy` isMismatch
 
         it "reports a mismatch when the sole digest does not match" $
-            verifyIntegrity (Hash SHA1 "deadbeef" :| []) tarballBytes
+            verifyIntegrity (unsafeHash SHA1 wrongSha1 :| []) tarballBytes
                 `shouldSatisfy` isMismatch
 
         it "fails closed when the strongest present digest is in an uncomputable algorithm" $
             -- A blake2b ranks at the top but the worker cannot compute it, so it must
             -- NOT fall back to the (matching) sha1 — fail closed.
-            verifyIntegrity (Hash Blake2b "whatever" :| [Hash SHA1 trueSha1]) tarballBytes
+            verifyIntegrity (unsafeHash Blake2b someBlake2b :| [unsafeHash SHA1 trueSha1]) tarballBytes
                 `shouldSatisfy` isMismatch
 
         it "names the uncomputable strongest algorithm in the fail-closed detail" $
             -- The fail-closed detail is operator-facing: it must name WHICH algorithm
             -- the worker could not verify, so a refused publish is diagnosable. Asserting
             -- the message (not just the constructor) pins that diagnostic.
-            mismatchDetail (verifyIntegrity (Hash Blake2b "whatever" :| [Hash SHA1 trueSha1]) tarballBytes)
+            mismatchDetail (verifyIntegrity (unsafeHash Blake2b someBlake2b :| [unsafeHash SHA1 trueSha1]) tarballBytes)
                 `shouldBe` Just "the strongest admitted digest (Blake2b) is in an algorithm the worker cannot verify"
 
         it "fails closed on a sha256-only digest (the worker cannot compute SHA-256)" $
             -- SHA-256 outranks a SHA-1, but the worker has no SHA-256 computation, so a
             -- sha256-only artifact must fail closed rather than be admitted unverified —
             -- it must NOT silently fall through to a (non-present) weaker digest.
-            mismatchDetail (verifyIntegrity (Hash SHA256 "whatever" :| []) tarballBytes)
+            mismatchDetail (verifyIntegrity (unsafeHash SHA256 someSha256 :| []) tarballBytes)
                 `shouldBe` Just "the strongest admitted digest (SHA256) is in an algorithm the worker cannot verify"
 
         it "fails closed on an md5-only digest (the worker cannot compute MD5)" $
             -- MD5 is cryptographically broken AND uncomputable here; an md5-only artifact
             -- fails closed, never admitted on the strength of a forgeable hash.
-            mismatchDetail (verifyIntegrity (Hash MD5 "whatever" :| []) tarballBytes)
+            mismatchDetail (verifyIntegrity (unsafeHash MD5 someMd5 :| []) tarballBytes)
                 `shouldBe` Just "the strongest admitted digest (MD5) is in an algorithm the worker cannot verify"
 
         it "fails closed on an SRI whose inner algorithm is not sha512 (uncomputable)" $
             -- An SRI string names its own algorithm; only sha512 is computable here. A
             -- sha256 SRI ranks below everything (its inner alg does not resolve) and is
             -- uncomputable, so it fails closed — and the detail names it as an SRI.
-            mismatchDetail (verifyIntegrity (Hash SRI "sha256-Zm9vYmFy" :| []) tarballBytes)
+            mismatchDetail (verifyIntegrity (unsafeHash SRI someSha256Sri :| []) tarballBytes)
                 `shouldBe` Just "the strongest admitted digest (SRI sha256) is in an algorithm the worker cannot verify"
 
         it "fails closed on an unrecognised SRI that outranks a matching weaker digest (no downgrade)" $
@@ -315,25 +338,25 @@ spec = do
             -- controls, so the gate fails closed instead of admitting the artifact on
             -- the weaker digest. The lone-SRI test above cannot see this — with no
             -- weaker digest present there is nothing to downgrade to.
-            mismatchDetail (verifyIntegrity (Hash SRI "sha256-Zm9vYmFy" :| [Hash SHA1 trueSha1]) tarballBytes)
+            mismatchDetail (verifyIntegrity (unsafeHash SRI someSha256Sri :| [unsafeHash SHA1 trueSha1]) tarballBytes)
                 `shouldBe` Just "the strongest admitted digest (SRI sha256) is in an algorithm the worker cannot verify"
 
         it "names the algorithm in a plain (computable) digest mismatch too" $
             -- The non-uncomputable mismatch branch: a sha512 SRI that simply does not
             -- match. The detail names the algorithm via the SRI 'describe' arm, so a
             -- genuine tamper is reported with its algorithm, not anonymously.
-            mismatchDetail (verifyIntegrity (Hash SRI falseSri :| []) tarballBytes)
+            mismatchDetail (verifyIntegrity (unsafeHash SRI falseSri :| []) tarballBytes)
                 `shouldBe` Just "the SRI sha512 digest did not match the fetched bytes"
 
         it "is case-insensitive on the hex shasum" $
-            verifyIntegrity (Hash SHA1 (T.toUpper trueSha1) :| []) tarballBytes
+            verifyIntegrity (unsafeHash SHA1 (T.toUpper trueSha1) :| []) tarballBytes
                 `shouldBe` IntegrityVerified
 
         it "REJECTS an SRI whose base64 body matches only after case-folding (base64 is case-sensitive)" $
             -- The hex arms fold case (hex is case-insensitive), but an SRI carries a
             -- base64 digest, which is case-sensitive: a body matching the bytes only after
             -- a case change must NOT verify, or the tamper gate is silently weakened.
-            verifyIntegrity (Hash SRI caseVariantSri :| []) tarballBytes
+            verifyIntegrity (unsafeHash SRI caseVariantSri :| []) tarballBytes
                 `shouldBe` IntegrityMismatch "the SRI sha512 digest did not match the fetched bytes"
 
     describe "npmPublishDocument" $ do
@@ -355,7 +378,7 @@ spec = do
         it "publishes and reports success when the bytes match the admitted digest" $
             withUpstream $ \url ->
                 withWorkerEnv (Right ()) $ \env queue logRef -> do
-                    (receipt, job) <- enqueueAndReceive queue (jobWith url (Hash SHA1 trueSha1 :| []))
+                    (receipt, job) <- enqueueAndReceive queue (jobWith url (unsafeHash SHA1 trueSha1 :| []))
                     outcome <- runApp env (processJob receipt job)
                     outcome `shouldBe` Succeeded
                     published <- plDocuments <$> readIORef logRef
@@ -366,7 +389,7 @@ spec = do
                 withWorkerEnv (Right ()) $ \env queue logRef -> do
                     -- A tampered/substituted artifact: the threaded digest does not match
                     -- the fetched bytes, so the worker must NOT publish.
-                    (receipt, job) <- enqueueAndReceive queue (jobWith url (Hash SHA1 "deadbeef" :| []))
+                    (receipt, job) <- enqueueAndReceive queue (jobWith url (unsafeHash SHA1 wrongSha1 :| []))
                     outcome <- runApp env (processJob receipt job)
                     outcome `shouldSatisfy` isDropped
                     published <- plDocuments <$> readIORef logRef
@@ -376,7 +399,7 @@ spec = do
             -- An unreachable upstream (connection refused) is a transient fault: the
             -- fetch throws, so the job is left for redelivery and nothing is published.
             withWorkerEnv (Right ()) $ \env queue logRef -> do
-                (receipt, job) <- enqueueAndReceive queue (jobWith unreachableUrl (Hash SHA1 trueSha1 :| []))
+                (receipt, job) <- enqueueAndReceive queue (jobWith unreachableUrl (unsafeHash SHA1 trueSha1 :| []))
                 outcome <- runApp env (processJob receipt job)
                 outcome `shouldSatisfy` isRetried
                 published <- plDocuments <$> readIORef logRef
@@ -385,7 +408,7 @@ spec = do
         it "treats a registry rejection as retryable (job left for redelivery)" $
             withUpstream $ \url ->
                 withWorkerEnv (Left (PublishRejected (PublishError "503"))) $ \env queue _logRef -> do
-                    (receipt, job) <- enqueueAndReceive queue (jobWith url (Hash SHA1 trueSha1 :| []))
+                    (receipt, job) <- enqueueAndReceive queue (jobWith url (unsafeHash SHA1 trueSha1 :| []))
                     outcome <- runApp env (processJob receipt job)
                     outcome `shouldSatisfy` isRetried
 
@@ -394,7 +417,7 @@ spec = do
             -- fetch: the by-URL build fails, which the worker treats as a transient
             -- reason (Retried) rather than crashing the iteration. Nothing is published.
             withWorkerEnv (Right ()) $ \env queue logRef -> do
-                (receipt, job) <- enqueueAndReceive queue (jobWith unformableUrl (Hash SHA1 trueSha1 :| []))
+                (receipt, job) <- enqueueAndReceive queue (jobWith unformableUrl (unsafeHash SHA1 trueSha1 :| []))
                 outcome <- runApp env (processJob receipt job)
                 outcome `shouldSatisfy` isRetried
                 published <- plDocuments <$> readIORef logRef
@@ -407,7 +430,7 @@ spec = do
             -- terminal outcome, distinct from a retryable registry rejection.
             withUpstream $ \url ->
                 withWorkerEnv (Left (PublishUrlUnformable EmptyBaseUrl)) $ \env queue _logRef -> do
-                    (receipt, job) <- enqueueAndReceive queue (jobWith url (Hash SHA1 trueSha1 :| []))
+                    (receipt, job) <- enqueueAndReceive queue (jobWith url (unsafeHash SHA1 trueSha1 :| []))
                     outcome <- runApp env (processJob receipt job)
                     outcome `shouldSatisfy` isDropped
 
@@ -415,7 +438,7 @@ spec = do
         it "acks a successfully-mirrored job so it is not redelivered" $
             withUpstream $ \url ->
                 withWorkerEnv (Right ()) $ \env queue _logRef -> do
-                    enqueue queue (jobWith url (Hash SHA1 trueSha1 :| []))
+                    enqueue queue (jobWith url (unsafeHash SHA1 trueSha1 :| []))
                     messages <- receive queue
                     runApp env (processBatch messages)
                     -- A redelivery pass past the (immediate) visibility window yields
@@ -426,7 +449,7 @@ spec = do
         it "does not ack a transiently-failed job, so it redelivers" $
             withUpstream $ \url ->
                 withWorkerEnv (Left (PublishRejected (PublishError "503"))) $ \env queue _logRef -> do
-                    enqueue queue (jobWith url (Hash SHA1 trueSha1 :| []))
+                    enqueue queue (jobWith url (unsafeHash SHA1 trueSha1 :| []))
                     messages <- receive queue
                     runApp env (processBatch messages)
                     -- The publish was rejected (retryable), so the job is left un-acked
@@ -443,7 +466,7 @@ spec = do
             -- indefinitely. A second poll past the visibility window yields nothing.
             withUpstream $ \url ->
                 withWorkerEnv (Right ()) $ \env queue logRef -> do
-                    enqueue queue (jobWith url (Hash SHA1 "deadbeef" :| []))
+                    enqueue queue (jobWith url (unsafeHash SHA1 wrongSha1 :| []))
                     messages <- receive queue
                     runApp env (processBatch messages)
                     -- Nothing was published (the mismatch refused the publish)...

@@ -48,6 +48,70 @@ details name version =
 
 spec :: Spec
 spec = do
+    describe "mkHash" $ do
+        it "accepts a well-formed 40-hex SHA-1 shasum" $
+            (hashAlg <$> mkHash SHA1 "da39a3ee5e6b4b0d3255bfef95601890afd80709") `shouldBe` Right SHA1
+
+        it "accepts a well-formed sha512 SRI integrity" $
+            (hashAlg <$> mkHash SRI "sha512-z4PhNX7vuL3xVChQ1m2AB9Yg5AULVxXcg/SpIdNs6c5H0NE8XYXysP+DGNKHfuwvY7kxvUdBeoGlODJ6+SfaPg==")
+                `shouldBe` Right SRI
+
+        it "accepts a multi-component integrity, validating every component" $
+            -- npm may serve "sha512-… sha256-…"; both components must be well-formed.
+            mkHash
+                SRI
+                "sha512-z4PhNX7vuL3xVChQ1m2AB9Yg5AULVxXcg/SpIdNs6c5H0NE8XYXysP+DGNKHfuwvY7kxvUdBeoGlODJ6+SfaPg== sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU="
+                `shouldSatisfy` isRight
+
+        it "accepts a well-formed sha384 SRI (validated by length, accepted though unmodelled)" $
+            -- sha384 is a real SRI algorithm: it is validated and accepted as well-formed.
+            -- Whether it clears the integrity floor is a separate decision (it does not).
+            mkHash SRI "sha384-OLBgp1GsljhM2TJ+sbHjaiH9txEUvgdDTAzHv2P24donTt6/529l+9Ua0vFImLlb"
+                `shouldSatisfy` isRight
+
+        it "preserves the original (upper-case) hex value while validating case-insensitively" $
+            (hashValue <$> mkHash SHA1 "DA39A3EE5E6B4B0D3255BFEF95601890AFD80709")
+                `shouldBe` Right "DA39A3EE5E6B4B0D3255BFEF95601890AFD80709"
+
+        it "rejects an empty digest" $
+            mkHash SHA1 "" `shouldSatisfy` isLeft
+
+        it "rejects a 39-character (odd-length) hex SHA-1" $
+            mkHash SHA1 "da39a3ee5e6b4b0d3255bfef95601890afd8070" `shouldSatisfy` isLeft
+
+        it "rejects an over-long (21-byte) hex SHA-1" $
+            mkHash SHA1 "da39a3ee5e6b4b0d3255bfef95601890afd80709aa" `shouldSatisfy` isLeft
+
+        it "rejects a non-hex SHA-1" $
+            mkHash SHA1 "zz39a3ee5e6b4b0d3255bfef95601890afd80709" `shouldSatisfy` isLeft
+
+        it "rejects a truncated SRI (alg prefix, no body)" $
+            mkHash SRI "sha512-" `shouldSatisfy` isLeft
+
+        it "rejects an SRI with a non-base64 body" $
+            mkHash SRI "sha512-not base64!!" `shouldSatisfy` isLeft
+
+        it "rejects an SRI whose base64 body is the wrong length for its algorithm" $
+            -- Valid base64, but decodes to 6 bytes, not sha256's 32.
+            mkHash SRI "sha256-Zm9vYmFy" `shouldSatisfy` isLeft
+
+        it "rejects an SRI naming an algorithm outside the Subresource-Integrity set" $
+            -- The SRI set is sha256/sha384/sha512; a well-formed sha1 base64 body is still
+            -- not a valid SRI (sha1 is not an SRI algorithm), so it does not construct.
+            mkHash SRI "sha1-2jmj7l5rSw0yVb/vlWAYkK/YBwk=" `shouldSatisfy` isLeft
+
+        it "rejects a multi-component integrity when any component is malformed" $
+            mkHash SRI "sha512-z4PhNX7vuL3xVChQ1m2AB9Yg5AULVxXcg/SpIdNs6c5H0NE8XYXysP+DGNKHfuwvY7kxvUdBeoGlODJ6+SfaPg== sha256-short"
+                `shouldSatisfy` isLeft
+
+        it "never yields a Hash from non-digest text, for any algorithm" $
+            -- The fail-closed property: a value built only from characters outside the hex
+            -- and base64 alphabets is never a well-formed digest of any algorithm.
+            hedgehog $ do
+                alg <- forAll (Gen.element [SHA1, SHA256, SHA512, MD5, Blake2b, SRI])
+                junk <- forAll (Gen.text (Range.linear 0 80) (Gen.element ("!@#$%& *()" :: String)))
+                isLeft (mkHash alg junk) === True
+
     describe "Scope" $ do
         it "mkScope strips a leading '@'" $
             unScope (mkScope "@myorg") `shouldBe` "myorg"

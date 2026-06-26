@@ -7,6 +7,8 @@
 
 module Ecluse.Package.MergeSpec (spec) where
 
+import Crypto.Hash (Digest, SHA1, SHA256, SHA512, hash)
+import Data.ByteArray.Encoding (Base (Base16, Base64), convertToBase)
 import Data.List (nub)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
@@ -90,7 +92,62 @@ case for the collision and reconciliation tests, where the algorithm set is unif
 and only the digest value varies.
 -}
 packument :: [(Text, Text)] -> PackageInfo
-packument vs = packumentWith [(v, [Hash SRI d]) | (v, d) <- vs]
+packument vs = packumentWith [(v, [unsafeHash SRI d]) | (v, d) <- vs]
+
+-- ── digest fixtures ────────────────────────────────────────────────────────────
+
+{- HLINT ignore unsafeHash "Avoid restricted function" -}
+
+{- | Build a 'Hash' from a known-valid digest. The merge fold compares digests as
+opaque values, so the tests use mnemonic tokens mapped to well-formed digests via
+'validSriOf' \/ 'validSha1Of' \/ 'validSha256Of'; this errors on a malformed one so a
+fixture typo fails loudly rather than silently.
+-}
+unsafeHash :: HashAlg -> Text -> Hash
+unsafeHash alg = either error id . mkHash alg
+
+-- A well-formed sha512 SRI deterministically derived from a mnemonic label, so distinct
+-- labels yield distinct well-formed digests and the same label always yields the same one.
+validSriOf :: Text -> Text
+validSriOf label =
+    "sha512-" <> decodeUtf8 (convertToBase Base64 (hash (encodeUtf8 label :: ByteString) :: Digest SHA512) :: ByteString)
+
+-- Well-formed hex SHA-1 / SHA-256 digests derived from a label (40- / 64-hex).
+validSha1Of, validSha256Of :: Text -> Text
+validSha1Of label =
+    decodeUtf8 (convertToBase Base16 (hash (encodeUtf8 label :: ByteString) :: Digest SHA1) :: ByteString)
+validSha256Of label =
+    decodeUtf8 (convertToBase Base16 (hash (encodeUtf8 label :: ByteString) :: Digest SHA256) :: ByteString)
+
+-- Mnemonic SRI tokens (each a distinct, well-formed sha512 SRI), named for the role
+-- each plays in the collision / divergence tests.
+sriAaa, sriBbb, sriCcc, sriPriv, sriPrivate, sriPub, sriPublic, sriSame :: Text
+sriAaa = validSriOf "aaa"
+sriBbb = validSriOf "bbb"
+sriCcc = validSriOf "ccc"
+sriPriv = validSriOf "priv"
+sriPrivate = validSriOf "private"
+sriPub = validSriOf "pub"
+sriPublic = validSriOf "public"
+sriSame = validSriOf "same"
+
+sriX, sriY, sriT, sriG1, sriG2, sriCapA, sriCapB, sriLowA, sriLowB, sriLowC :: Text
+sriX = validSriOf "X"
+sriY = validSriOf "Y"
+sriT = validSriOf "T"
+sriG1 = validSriOf "G1"
+sriG2 = validSriOf "G2"
+sriCapA = validSriOf "A"
+sriCapB = validSriOf "B"
+sriLowA = validSriOf "a"
+sriLowB = validSriOf "b"
+sriLowC = validSriOf "c"
+
+-- SHA-1 / SHA-256 mnemonic digests for the shared-algorithm cross-check tests.
+sha1Abc, sha1Dead, sha256Def :: Text
+sha1Abc = validSha1Of "abc"
+sha1Dead = validSha1Of "deadbeef"
+sha256Def = validSha256Of "def"
 
 -- ── small accessors ──────────────────────────────────────────────────────────
 
@@ -122,7 +179,7 @@ winnerProvenances inputs plan =
 -- ── generators ───────────────────────────────────────────────────────────────
 
 genDigest :: Gen Text
-genDigest = ("sha512-" <>) <$> Gen.text (Range.singleton 6) Gen.alphaNum
+genDigest = validSriOf <$> Gen.text (Range.singleton 6) Gen.alphaNum
 
 -- | An arbitrary 40-hex-character SHA-1 shasum (npm's @dist.shasum@ wire form).
 genSha1 :: Gen Text
@@ -165,22 +222,22 @@ spec = do
             mergePackuments [] `shouldBe` Nothing
 
         it "names the plan after the first input" $ do
-            let info = packument [("1.0.0", "sha512-aaa")]
+            let info = packument [("1.0.0", sriAaa)]
             (mpName <$> mergePackuments [(GatedSource, info)]) `shouldBe` Just name
 
         it "carries mpName from a contribution, never a manufactured value" $ do
             -- Every contribution shares the validated identity (name validation runs
             -- upstream of the merge), so the plan's mpName originates from an input's
             -- own 'infoName' — it is never substituted or fabricated.
-            let a = packument [("1.0.0", "sha512-aaa")]
-                b = packument [("2.0.0", "sha512-bbb")]
+            let a = packument [("1.0.0", sriAaa)]
+                b = packument [("2.0.0", sriBbb)]
                 inputs = [(TrustedSource, a), (GatedSource, b)]
             (mpName <$> mergePackuments inputs) `shouldBe` Just (infoName a)
 
         it "is the identity on a single input (survivors, tags, time)" $ do
             -- A lone source: every version survives, all won by source 0, with its
             -- own latest kept and its times carried whole.
-            let info = packument [("1.0.0", "sha512-aaa"), ("2.0.0", "sha512-bbb")]
+            let info = packument [("1.0.0", sriAaa), ("2.0.0", sriBbb)]
                 plan = mergePackuments [(GatedSource, info)]
             (Map.keys . mpSurvivors <$> plan) `shouldBe` Just ["1.0.0", "2.0.0"]
             (Map.elems . mpSurvivors <$> plan) `shouldBe` Just [0, 0]
@@ -188,12 +245,12 @@ spec = do
             (sort . Map.keys . mpTime <$> plan) `shouldBe` Just ["1.0.0", "2.0.0"]
 
         it "reports no divergences for a single input" $ do
-            let info = packument [("1.0.0", "sha512-aaa")]
+            let info = packument [("1.0.0", sriAaa)]
             (mpDivergences <$> mergePackuments [(TrustedSource, info)]) `shouldBe` Just Set.empty
 
         it "unions versions across sources" $ do
-            let trusted = packument [("1.0.0", "sha512-aaa")]
-                gated = packument [("2.0.0", "sha512-bbb")]
+            let trusted = packument [("1.0.0", sriAaa)]
+                gated = packument [("2.0.0", sriBbb)]
             (survivorKeys <$> mergePackuments [(TrustedSource, trusted), (GatedSource, gated)])
                 `shouldBe` Just ["1.0.0", "2.0.0"]
 
@@ -201,20 +258,20 @@ spec = do
             -- Same version key in both, with differing integrity. The plan records
             -- the surviving key against the trusted input's 'SourceId', so the serve
             -- layer takes that version's object from the private source's raw Value.
-            let gated = packument [("1.0.0", "sha512-public")] -- source 0
-                trusted = packument [("1.0.0", "sha512-private")] -- source 1
+            let gated = packument [("1.0.0", sriPublic)] -- source 0
+                trusted = packument [("1.0.0", sriPrivate)] -- source 1
             (winnerOf "1.0.0" =<< mergePackuments [(GatedSource, gated), (TrustedSource, trusted)])
                 `shouldBe` Just 1
 
         it "detects a divergence when the same version's integrity differs" $ do
-            let trusted = packument [("1.0.0", "sha512-private")]
-                gated = packument [("1.0.0", "sha512-public")]
+            let trusted = packument [("1.0.0", sriPrivate)]
+                gated = packument [("1.0.0", sriPublic)]
                 plan = mergePackuments [(TrustedSource, trusted), (GatedSource, gated)]
             (map divVersion . Set.toList . mpDivergences <$> plan) `shouldBe` Just ["1.0.0"]
 
         it "reports no divergence when a collision's integrity agrees" $ do
-            let trusted = packument [("1.0.0", "sha512-same")]
-                gated = packument [("1.0.0", "sha512-same")]
+            let trusted = packument [("1.0.0", sriSame)]
+                gated = packument [("1.0.0", sriSame)]
                 plan = mergePackuments [(TrustedSource, trusted), (GatedSource, gated)]
             (mpDivergences <$> plan) `shouldBe` Just Set.empty
 
@@ -223,10 +280,10 @@ spec = do
             -- so selectLatest repoints across the union to the highest stable
             -- survivor (3.0.0).
             let trusted =
-                    (packument [("1.0.0", "sha512-aaa")])
+                    (packument [("1.0.0", sriAaa)])
                         { infoDistTags = Map.singleton "latest" (mkVersion Npm "9.9.9")
                         }
-                gated = packument [("3.0.0", "sha512-bbb"), ("2.0.0", "sha512-ccc")]
+                gated = packument [("3.0.0", sriBbb), ("2.0.0", sriCcc)]
             (latestKey =<< mergePackuments [(TrustedSource, trusted), (GatedSource, gated)])
                 `shouldBe` Just "3.0.0"
 
@@ -234,7 +291,7 @@ spec = do
             -- A source advertises a "next" tag pointing at a version it does not
             -- actually carry; the merge drops it rather than serving a dangling tag.
             let info =
-                    (packument [("1.0.0", "sha512-aaa")])
+                    (packument [("1.0.0", sriAaa)])
                         { infoDistTags =
                             Map.fromList
                                 [ ("latest", mkVersion Npm "1.0.0")
@@ -245,8 +302,8 @@ spec = do
                 `shouldBe` Just ["latest"]
 
         it "restricts time to surviving versions" $ do
-            let trusted = packument [("1.0.0", "sha512-aaa")]
-                gated = packument [("2.0.0", "sha512-bbb")]
+            let trusted = packument [("1.0.0", sriAaa)]
+                gated = packument [("2.0.0", sriBbb)]
             (sort . Map.keys . mpTime <$> mergePackuments [(TrustedSource, trusted), (GatedSource, gated)])
                 `shouldBe` Just ["1.0.0", "2.0.0"]
 
@@ -255,8 +312,8 @@ spec = do
         -- is a collision: the trusted copy wins. If the two copies' artifact
         -- integrity disagrees the merge *flags* it as a tampering signal — and
         -- flags without dropping the version, leaving fail-closed to the caller.
-        let trusted = packument [("1.0.0", "sha512-private")] -- source 0
-            gated = packument [("1.0.0", "sha512-public")] -- source 1
+        let trusted = packument [("1.0.0", sriPrivate)] -- source 0
+            gated = packument [("1.0.0", sriPublic)] -- source 1
             plan = mergePackuments [(TrustedSource, trusted), (GatedSource, gated)]
 
         it "keeps the divergent version, won by the trusted source (flags, does not drop)" $ do
@@ -267,8 +324,8 @@ spec = do
             case Set.toList . mpDivergences <$> plan of
                 Just [d] -> do
                     divVersion d `shouldBe` "1.0.0"
-                    integrityHashes (divWinning d) `shouldBe` [(SRI, "sha512-private")]
-                    integrityHashes (divLosing d) `shouldBe` [(SRI, "sha512-public")]
+                    integrityHashes (divWinning d) `shouldBe` [(SRI, sriPrivate)]
+                    integrityHashes (divLosing d) `shouldBe` [(SRI, sriPublic)]
                 other -> expectationFailure ("expected exactly one divergence, got " <> show other)
 
     describe "divergence compares on shared algorithms, not the whole digest set" $ do
@@ -277,23 +334,23 @@ spec = do
         -- the other omits — is not, on its own, a contradiction: an older registry
         -- exposing only a legacy shasum while npmjs serves shasum + a modern SRI
         -- describes the same bytes and must not be flagged.
-        let sha1 = Hash SHA1
-            sri = Hash SRI
+        let sha1 = unsafeHash SHA1
+            sri = unsafeHash SRI
 
         it "agreeing on the shared SRI is not a divergence though one also carries SHA-1" $ do
             -- Both expose the same sha512 SRI; the private copy additionally carries a
             -- legacy SHA-1 shasum the public copy lacks. The shared algorithm (SRI)
             -- agrees, so this is the same bytes — not a divergence.
-            let trusted = (TrustedSource, packumentWith [("1.0.0", [sri "sha512-X", sha1 "deadbeef"])])
-                gated = (GatedSource, packumentWith [("1.0.0", [sri "sha512-X"])])
+            let trusted = (TrustedSource, packumentWith [("1.0.0", [sri sriX, sha1 sha1Dead])])
+                gated = (GatedSource, packumentWith [("1.0.0", [sri sriX])])
             (mpDivergences <$> mergePackuments [trusted, gated]) `shouldBe` Just Set.empty
 
         it "contradicting on the shared SRI is a divergence even when SHA-1 agrees" $ do
             -- Both carry the same SHA-1 but a *different* sha512 SRI. A SHA-1 agreement
             -- can never rescue a contradicting secure digest, so the SRI contradiction
             -- is flagged regardless of the matching weak digest beside it.
-            let trusted = (TrustedSource, packumentWith [("1.0.0", [sri "sha512-X", sha1 "abc"])])
-                gated = (GatedSource, packumentWith [("1.0.0", [sri "sha512-Y", sha1 "abc"])])
+            let trusted = (TrustedSource, packumentWith [("1.0.0", [sri sriX, sha1 sha1Abc])])
+                gated = (GatedSource, packumentWith [("1.0.0", [sri sriY, sha1 sha1Abc])])
                 plan = mergePackuments [trusted, gated]
             (map divVersion . Set.toList . mpDivergences <$> plan) `shouldBe` Just ["1.0.0"]
 
@@ -303,8 +360,8 @@ spec = do
             -- SHA-256. They share SHA-1 and it agrees, so the cross-check passes — the
             -- public copy independently clears the admission floor on its SHA-256, and
             -- the asymmetric SHA-256 is no contradiction.
-            let trusted = (TrustedSource, packumentWith [("1.0.0", [sha1 "abc"])])
-                gated = (GatedSource, packumentWith [("1.0.0", [sha1 "abc", Hash SHA256 "def"])])
+            let trusted = (TrustedSource, packumentWith [("1.0.0", [sha1 sha1Abc])])
+                gated = (GatedSource, packumentWith [("1.0.0", [sha1 sha1Abc, unsafeHash SHA256 sha256Def])])
             (mpDivergences <$> mergePackuments [trusted, gated]) `shouldBe` Just Set.empty
 
         it "SRI+SHA-1 vs SHA-1-only, agreeing on the shared SHA-1, is not a divergence" $ do
@@ -314,8 +371,8 @@ spec = do
             -- shared algorithm whose digests disagree. (Pinned so the current behaviour
             -- is explicit: whether a weak-only agreement should itself be treated as
             -- suspicious is a separate, stricter policy not decided by this fold.)
-            let trusted = (TrustedSource, packumentWith [("1.0.0", [sri "sha512-X", sha1 "abc"])])
-                gated = (GatedSource, packumentWith [("1.0.0", [sha1 "abc"])])
+            let trusted = (TrustedSource, packumentWith [("1.0.0", [sri sriX, sha1 sha1Abc])])
+                gated = (GatedSource, packumentWith [("1.0.0", [sha1 sha1Abc])])
             (mpDivergences <$> mergePackuments [trusted, gated]) `shouldBe` Just Set.empty
 
         -- A single version can carry several digests of *one* algorithm — the domain
@@ -326,20 +383,20 @@ spec = do
         it "agrees when a shared algorithm carries the same set of digests in any order" $ do
             -- The same two SRI digests on both copies, listed in opposite order: the
             -- per-algorithm set is identical, so this is not a divergence.
-            let trusted = (TrustedSource, packumentWith [("1.0.0", [sri "sha512-X", sri "sha512-Y"])])
-                gated = (GatedSource, packumentWith [("1.0.0", [sri "sha512-Y", sri "sha512-X"])])
+            let trusted = (TrustedSource, packumentWith [("1.0.0", [sri sriX, sri sriY])])
+                gated = (GatedSource, packumentWith [("1.0.0", [sri sriY, sri sriX])])
             (mpDivergences <$> mergePackuments [trusted, gated]) `shouldBe` Just Set.empty
 
         it "contradicts when a shared algorithm's set of digests differs" $
             -- One copy offers two SRI digests for the key, the other only one of them:
             -- the digest sets for the shared algorithm differ, so it is flagged.
-            let trusted = (TrustedSource, packumentWith [("1.0.0", [sri "sha512-X", sri "sha512-Y"])])
-                gated = (GatedSource, packumentWith [("1.0.0", [sri "sha512-X"])])
+            let trusted = (TrustedSource, packumentWith [("1.0.0", [sri sriX, sri sriY])])
+                gated = (GatedSource, packumentWith [("1.0.0", [sri sriX])])
              in case Set.toList . mpDivergences <$> mergePackuments [trusted, gated] of
                     Just [d] -> do
                         divVersion d `shouldBe` "1.0.0"
-                        integrityHashes (divWinning d) `shouldBe` [(SRI, "sha512-X"), (SRI, "sha512-Y")]
-                        integrityHashes (divLosing d) `shouldBe` [(SRI, "sha512-X")]
+                        integrityHashes (divWinning d) `shouldBe` [(SRI, sriX), (SRI, sriY)]
+                        integrityHashes (divLosing d) `shouldBe` [(SRI, sriX)]
                     other -> expectationFailure ("expected exactly one divergence, got " <> show other)
 
     describe "precedence is by provenance, not input order" $ do
@@ -347,14 +404,14 @@ spec = do
         -- so the plan is identical whichever order the caller passes the upstreams.
         let trusted =
                 ( TrustedSource
-                , (packument [("1.0.0", "sha512-priv")])
+                , (packument [("1.0.0", sriPriv)])
                     { infoDistTags = Map.fromList [("latest", mkVersion Npm "1.0.0"), ("beta", mkVersion Npm "1.0.0")]
                     , infoPublishedAt = Map.singleton "1.0.0" tTrusted
                     }
                 )
             gated =
                 ( GatedSource
-                , (packument [("1.0.0", "sha512-pub")])
+                , (packument [("1.0.0", sriPub)])
                     { infoDistTags = Map.fromList [("latest", mkVersion Npm "1.0.0"), ("beta", mkVersion Npm "1.0.0")]
                     , infoPublishedAt = Map.singleton "1.0.0" tGated
                     }
@@ -401,11 +458,11 @@ spec = do
             -- latest stays 1.0.0 even though 2.0.0 exists in the union.
             let trusted =
                     ( TrustedSource
-                    , (packument [("1.0.0", "sha512-aaa")])
+                    , (packument [("1.0.0", sriAaa)])
                         { infoDistTags = Map.singleton "latest" (mkVersion Npm "1.0.0")
                         }
                     )
-                gated = (GatedSource, packument [("2.0.0", "sha512-bbb")])
+                gated = (GatedSource, packument [("2.0.0", sriBbb)])
             (latestKey =<< mergePackuments [trusted, gated]) `shouldBe` Just "1.0.0"
 
         it "chooses the chosen-latest by provenance (trusted's tag wins)" $ do
@@ -413,13 +470,13 @@ spec = do
             -- latest is the chosen one, even though it is the lower version.
             let trusted =
                     ( TrustedSource
-                    , (packument [("1.0.0", "sha512-aaa")])
+                    , (packument [("1.0.0", sriAaa)])
                         { infoDistTags = Map.singleton "latest" (mkVersion Npm "1.0.0")
                         }
                     )
                 gated =
                     ( GatedSource
-                    , (packument [("2.0.0", "sha512-bbb")])
+                    , (packument [("2.0.0", sriBbb)])
                         { infoDistTags = Map.singleton "latest" (mkVersion Npm "2.0.0")
                         }
                     )
@@ -429,14 +486,14 @@ spec = do
             -- The chosen latest (5.0.0) was denied/absent; among survivors a stable
             -- release is preferred over a higher prerelease.
             let info =
-                    (packument [("2.0.0", "sha512-aaa"), ("3.0.0-rc.1", "sha512-bbb")])
+                    (packument [("2.0.0", sriAaa), ("3.0.0-rc.1", sriBbb)])
                         { infoDistTags = Map.singleton "latest" (mkVersion Npm "5.0.0")
                         }
             (latestKey =<< mergePackuments [(GatedSource, info)]) `shouldBe` Just "2.0.0"
 
         it "falls back to a surviving prerelease when no stable survivor exists" $ do
             let info =
-                    (packument [("3.0.0-rc.1", "sha512-aaa"), ("3.0.0-beta", "sha512-bbb")])
+                    (packument [("3.0.0-rc.1", sriAaa), ("3.0.0-beta", sriBbb)])
                         { infoDistTags = Map.singleton "latest" (mkVersion Npm "5.0.0")
                         }
             (latestKey =<< mergePackuments [(GatedSource, info)]) `shouldBe` Just "3.0.0-rc.1"
@@ -533,8 +590,8 @@ spec = do
                 ver <- forAll genVersionStr
                 sri <- forAll genDigest
                 extra <- forAll genSha1
-                let trusted = (TrustedSource, packumentWith [(ver, [Hash SRI sri, Hash SHA1 extra])])
-                    gated = (GatedSource, packumentWith [(ver, [Hash SRI sri])])
+                let trusted = (TrustedSource, packumentWith [(ver, [unsafeHash SRI sri, unsafeHash SHA1 extra])])
+                    gated = (GatedSource, packumentWith [(ver, [unsafeHash SRI sri])])
                 plan <- H.evalMaybe (mergePackuments [trusted, gated])
                 mpDivergences plan === Set.empty
 
@@ -569,8 +626,8 @@ spec = do
             -- provenance at the *same* version key, combined both ways. The decision
             -- (trusted wins) is identical; the winning SourceId label flips with
             -- the order — which is exactly why commutativity is the wrong law.
-            let trusted = contribute TrustedSource (packument [("1.0.0", "sha512-priv")])
-                gated = contribute GatedSource (packument [("1.0.0", "sha512-pub")])
+            let trusted = contribute TrustedSource (packument [("1.0.0", sriPriv)])
+                gated = contribute GatedSource (packument [("1.0.0", sriPub)])
                 forward = planFrom (trusted <> gated)
                 backward = planFrom (gated <> trusted)
             -- Same decision (trusted wins) but opposite positional label, so the
@@ -615,28 +672,28 @@ spec = do
             -- Trusted and gated collide at 1.0.0 with differing integrity. The
             -- survivor is the trusted copy and the recorded divergence's *winning*
             -- fingerprint is the trusted integrity — the hierarchy, intact.
-            let trusted = (TrustedSource, packument [("1.0.0", "sha512-priv")])
-                gated = (GatedSource, packument [("1.0.0", "sha512-pub")])
+            let trusted = (TrustedSource, packument [("1.0.0", sriPriv)])
+                gated = (GatedSource, packument [("1.0.0", sriPub)])
                 plan = mergePackuments [gated, trusted] -- trusted at index 1
             (winnerOf "1.0.0" =<< plan) `shouldBe` Just 1
             case Set.toList . mpDivergences <$> plan of
                 Just [d] -> do
                     divVersion d `shouldBe` "1.0.0"
-                    integrityHashes (divWinning d) `shouldBe` [(SRI, "sha512-priv")]
-                    integrityHashes (divLosing d) `shouldBe` [(SRI, "sha512-pub")]
+                    integrityHashes (divWinning d) `shouldBe` [(SRI, sriPriv)]
+                    integrityHashes (divLosing d) `shouldBe` [(SRI, sriPub)]
                 other -> expectationFailure ("expected one divergence, got " <> show other)
 
         it "the merged set is the mixed-provenance union trusted ∪ filtered(public)" $ do
             -- Versions unique to each upstream are all present; the trust split does
             -- not drop a side, it unions them.
-            let trusted = (TrustedSource, packument [("1.0.0", "sha512-a"), ("1.1.0", "sha512-b")])
-                gated = (GatedSource, packument [("2.0.0", "sha512-c"), ("1.1.0", "sha512-b")])
+            let trusted = (TrustedSource, packument [("1.0.0", sriLowA), ("1.1.0", sriLowB)])
+                gated = (GatedSource, packument [("2.0.0", sriLowC), ("1.1.0", sriLowB)])
             (survivorKeys <$> mergePackuments [trusted, gated])
                 `shouldBe` Just ["1.0.0", "1.1.0", "2.0.0"]
 
         it "identical integrity across sources yields no divergence" $ do
-            let trusted = (TrustedSource, packument [("1.0.0", "sha512-same")])
-                gated = (GatedSource, packument [("1.0.0", "sha512-same")])
+            let trusted = (TrustedSource, packument [("1.0.0", sriSame)])
+                gated = (GatedSource, packument [("1.0.0", sriSame)])
             (mpDivergences <$> mergePackuments [trusted, gated]) `shouldBe` Just Set.empty
 
         it "a 3+-copy collision fans the winner out against each distinct loser" $ do
@@ -645,15 +702,15 @@ spec = do
             -- would miss or double-count one of the losing pairs; the set-of-distinct
             -- -fingerprints definition records the trusted winner against *each* of
             -- the two distinct losers, exactly once.
-            let t = (TrustedSource, packument [("1.0.0", "sha512-T")]) -- index 0, wins
-                g1 = (GatedSource, packument [("1.0.0", "sha512-G1")]) -- index 1
-                g2 = (GatedSource, packument [("1.0.0", "sha512-G2")]) -- index 2
+            let t = (TrustedSource, packument [("1.0.0", sriT)]) -- index 0, wins
+                g1 = (GatedSource, packument [("1.0.0", sriG1)]) -- index 1
+                g2 = (GatedSource, packument [("1.0.0", sriG2)]) -- index 2
                 plan = mergePackuments [t, g1, g2]
             (winnerOf "1.0.0" =<< plan) `shouldBe` Just 0
             let expected =
                     Set.fromList
-                        [ ("1.0.0", [(SRI, "sha512-T")], [(SRI, "sha512-G1")])
-                        , ("1.0.0", [(SRI, "sha512-T")], [(SRI, "sha512-G2")])
+                        [ ("1.0.0", [(SRI, sriT)], [(SRI, sriG1)])
+                        , ("1.0.0", [(SRI, sriT)], [(SRI, sriG2)])
                         ]
                 actual =
                     Set.map
@@ -666,9 +723,9 @@ spec = do
             -- The same three copies, folded in two different associativity groupings
             -- of 'contribute', must yield the same divergence fingerprint-pairs — the
             -- property a pairwise winner-vs-loser fold would violate.
-            let t = contribute TrustedSource (packument [("1.0.0", "sha512-T")])
-                g1 = contribute GatedSource (packument [("1.0.0", "sha512-G1")])
-                g2 = contribute GatedSource (packument [("1.0.0", "sha512-G2")])
+            let t = contribute TrustedSource (packument [("1.0.0", sriT)])
+                g1 = contribute GatedSource (packument [("1.0.0", sriG1)])
+                g2 = contribute GatedSource (packument [("1.0.0", sriG2)])
                 left = planFrom ((t <> g1) <> g2)
                 right = planFrom (t <> (g1 <> g2))
             (mpDivergences <$> left) `shouldBe` (mpDivergences <$> right)
@@ -678,7 +735,7 @@ spec = do
             -- target is absent from the union is dropped; resolution is by provenance.
             let trusted =
                     ( TrustedSource
-                    , (packument [("1.0.0", "sha512-a")])
+                    , (packument [("1.0.0", sriLowA)])
                         { infoDistTags =
                             Map.fromList
                                 [ ("latest", mkVersion Npm "1.0.0")
@@ -686,7 +743,7 @@ spec = do
                                 ]
                         }
                     )
-                gated = (GatedSource, packument [("2.0.0", "sha512-b")])
+                gated = (GatedSource, packument [("2.0.0", sriLowB)])
                 plan = mergePackuments [gated, trusted]
             (latestKey =<< plan) `shouldBe` Just "1.0.0"
             (sort . Map.keys . mpDistTags <$> plan) `shouldBe` Just ["latest"]
@@ -748,12 +805,12 @@ spec = do
             -- topology 'SourceId' exists for, where the winner legitimately tracks
             -- order. The *surviving set* and *winning provenance* stay invariant; only
             -- the winner/loser fingerprint labels flip.
-            let a = (GatedSource, packument [("1.0.0", "sha512-A")]) -- earlier wins
-                b = (GatedSource, packument [("1.0.0", "sha512-B")])
+            let a = (GatedSource, packument [("1.0.0", sriCapA)]) -- earlier wins
+                b = (GatedSource, packument [("1.0.0", sriCapB)])
                 forward = Set.toList . mpDivergences <$> mergePackuments [a, b]
                 backward = Set.toList . mpDivergences <$> mergePackuments [b, a]
-            (map (integrityHashes . divWinning) <$> forward) `shouldBe` Just [[(SRI, "sha512-A")]]
-            (map (integrityHashes . divWinning) <$> backward) `shouldBe` Just [[(SRI, "sha512-B")]]
+            (map (integrityHashes . divWinning) <$> forward) `shouldBe` Just [[(SRI, sriCapA)]]
+            (map (integrityHashes . divWinning) <$> backward) `shouldBe` Just [[(SRI, sriCapB)]]
 
 {- | Sources with pairwise-disjoint version keys, so the merge is a pure set union
 with no collisions — the regime in which order cannot matter at all.
@@ -766,4 +823,4 @@ genDisjointSources = do
     -- Source @i@ owns the single version @i.0.0@, so no two sources share a key.
     oneSource i =
         let ver = show (i :: Int) <> ".0.0"
-         in (if even i then TrustedSource else GatedSource, packument [(ver, "sha512-" <> ver)])
+         in (if even i then TrustedSource else GatedSource, packument [(ver, validSriOf ver)])

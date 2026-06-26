@@ -61,9 +61,12 @@ import Lens.Micro ((?~), (^.))
 import Ecluse.Credential (Secret, unSecret)
 import Ecluse.Ecosystem (ecosystemName, parseEcosystem)
 import Ecluse.Package (
-    Hash (Hash, hashAlg, hashValue),
+    Hash,
     HashAlg (Blake2b, MD5, SHA1, SHA256, SHA512, SRI),
     PackageName,
+    hashAlg,
+    hashValue,
+    mkHash,
     mkPackageName,
     mkScope,
     pkgEcosystem,
@@ -320,7 +323,11 @@ parseArtifact = withObject "MirrorArtifact" $ \o -> do
         algName <- h .: "alg"
         alg <- maybe (fail (unknownAlg algName)) pure (parseHashAlg algName)
         value <- h .: "value"
-        pure Hash{hashAlg = alg, hashValue = value}
+        -- The queue is a trust boundary: validate the digest on decode through the same
+        -- 'mkHash' the serve path uses, so the worker can never ingest a malformed digest
+        -- to verify the fetched bytes against. A malformed value fails the decode (the job
+        -- is left un-acked and redelivers, ultimately to the dead-letter queue).
+        either (fail . toString) pure (mkHash alg value)
     unknownAlg n = "unknown hash algorithm " <> show (n :: Text)
 
 -- Decode a wire algorithm name back to its 'HashAlg' — the inverse of 'renderHashAlg'

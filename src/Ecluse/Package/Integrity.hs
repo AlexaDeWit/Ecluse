@@ -53,12 +53,17 @@ module Ecluse.Package.Integrity (
     classifyArtifacts,
 ) where
 
-import Data.Text qualified as T
-
 import Ecluse.Package (
     Artifact (artHashes),
-    Hash (hashAlg, hashValue),
+    Hash,
     HashAlg (Blake2b, MD5, SHA1, SHA256, SHA512, SRI),
+    hashAlg,
+    hashValue,
+    parseHashAlg,
+    renderHashAlg,
+    sriAlgorithm,
+    sriBody,
+    sriPrefix,
  )
 
 -- ── algorithm strength ───────────────────────────────────────────────────────
@@ -120,15 +125,15 @@ algorithm named in its @\<alg\>-\<base64\>@ prefix. The SRI prefixes resolved ar
 an unrecognised or malformed prefix yields 'Nothing', so it asserts no algorithm and
 clears no floor (the fail-closed reading).
 
->>> import Ecluse.Package (Hash (Hash))
->>> assertedAlg (Hash SRI "sha512-abc")
-Just SHA512
+>>> import Ecluse.Package (mkHash, HashAlg (SHA1, SRI))
+>>> assertedAlg <$> mkHash SRI "sha512-z4PhNX7vuL3xVChQ1m2AB9Yg5AULVxXcg/SpIdNs6c5H0NE8XYXysP+DGNKHfuwvY7kxvUdBeoGlODJ6+SfaPg=="
+Right (Just SHA512)
 
->>> assertedAlg (Hash SHA1 "deadbeef")
-Just SHA1
+>>> assertedAlg <$> mkHash SHA1 "da39a3ee5e6b4b0d3255bfef95601890afd80709"
+Right (Just SHA1)
 
->>> assertedAlg (Hash SRI "sha384-abc")
-Nothing
+>>> assertedAlg <$> mkHash SRI "sha384-OLBgp1GsljhM2TJ+sbHjaiH9txEUvgdDTAzHv2P24donTt6/529l+9Ua0vFImLlb"
+Right Nothing
 -}
 assertedAlg :: Hash -> Maybe HashAlg
 assertedAlg h = case hashAlg h of
@@ -219,80 +224,6 @@ classifyArtifacts minIntegrity arts
     meetsFloorArtifact art = any hashMeetsFloor (artHashes art)
     hashMeetsFloor h = maybe False (meetsFloor minIntegrity) (assertedAlg h)
 
--- ── algorithm names and SRI strings ──────────────────────────────────────────
-
--- This module is the single home for the algorithm vocabulary: the wire name an
--- algorithm renders to and parses from, and how a Subresource-Integrity string is
--- split and resolved. Everything that names an algorithm or reads an SRI defers here,
--- so the worker's tamper gate, the serve-admission floor, and the queue wire share one
--- notion of what @"sha512"@ means and what an SRI asserts rather than each re-encoding it.
-
-{- | The lower-case wire name of an algorithm — the canonical spelling 'parseHashAlg'
-reads back. Total and injective, so it doubles as config rendering and error text.
-
->>> renderHashAlg SHA256
-"sha256"
--}
-renderHashAlg :: HashAlg -> Text
-renderHashAlg = \case
-    MD5 -> "md5"
-    SHA1 -> "sha1"
-    SHA256 -> "sha256"
-    SHA512 -> "sha512"
-    Blake2b -> "blake2b"
-    SRI -> "sri"
-
-{- | Parse an algorithm name, tolerating case and an optional internal @\'-\'@ (so
-@"SHA-256"@ and @"sha256"@ both parse). An unrecognised name is reported as such,
-distinct from a recognised-but-too-weak floor. This admits only the named hash
-algorithms; the @sri@ wrapper is not a config-selectable algorithm and is rejected.
-
->>> parseHashAlg "SHA-256"
-Right SHA256
-
->>> parseHashAlg "frobnicate"
-Left "unknown integrity algorithm: frobnicate"
--}
-parseHashAlg :: Text -> Either Text HashAlg
-parseHashAlg raw = case T.filter (/= '-') (T.toLower (T.strip raw)) of
-    "md5" -> Right MD5
-    "sha1" -> Right SHA1
-    "sha256" -> Right SHA256
-    "sha512" -> Right SHA512
-    "blake2b" -> Right Blake2b
-    _ -> Left ("unknown integrity algorithm: " <> raw)
-
-{- | The algorithm-name token of a Subresource-Integrity string — the @\<alg\>@ before
-the first @\'-\'@ in @\<alg\>-\<base64\>@. A string with no @\'-\'@ is all prefix.
-
->>> sriPrefix "sha512-Zm9vYmFy"
-"sha512"
--}
-sriPrefix :: Text -> Text
-sriPrefix = fst . T.breakOn "-"
-
-{- | The base64 digest body of a Subresource-Integrity string — the @\<base64\>@ after
-the first @\'-\'@ in @\<alg\>-\<base64\>@. A string with no @\'-\'@ has an empty body.
-
->>> sriBody "sha512-Zm9vYmFy"
-"Zm9vYmFy"
--}
-sriBody :: Text -> Text
-sriBody = T.drop 1 . snd . T.breakOn "-"
-
-{- | The 'HashAlg' a Subresource-Integrity string names, read from its @\<alg\>@ prefix.
-The prefixes resolved are @sha256@ and @sha512@ (the long digests the model represents
-and a registry serves); an unrecognised or malformed prefix yields 'Nothing', so the
-string asserts no algorithm and clears no floor (the fail-closed reading).
-
->>> sriAlgorithm "sha512-Zm9vYmFy"
-Just SHA512
-
->>> sriAlgorithm "sha384-Zm9vYmFy"
-Nothing
--}
-sriAlgorithm :: Text -> Maybe HashAlg
-sriAlgorithm sri = case sriPrefix sri of
-    "sha256" -> Just SHA256
-    "sha512" -> Just SHA512
-    _ -> Nothing
+-- The algorithm vocabulary (the wire name renderer\/parser and the SRI splitter\/resolver)
+-- lives in "Ecluse.Package", the lowest layer, and is re-exported above so this module's
+-- callers (and the worker and SQS) keep importing it from here.

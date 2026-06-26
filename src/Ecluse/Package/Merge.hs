@@ -75,11 +75,12 @@ import Data.Time (UTCTime)
 
 import Ecluse.Package (
     Artifact (..),
-    Hash (..),
     HashAlg,
     PackageDetails (..),
     PackageInfo (..),
     PackageName,
+    hashAlg,
+    hashValue,
  )
 import Ecluse.Version (Version, selectLatest, unVersion)
 

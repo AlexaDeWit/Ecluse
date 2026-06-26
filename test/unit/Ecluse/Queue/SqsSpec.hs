@@ -4,7 +4,7 @@ import Data.Text qualified as T
 import Test.Hspec
 
 import Ecluse.Ecosystem (Ecosystem (Npm, PyPI))
-import Ecluse.Package (Hash (Hash), HashAlg (Blake2b, MD5, SHA1, SHA256, SHA512, SRI), mkPackageName, mkScope)
+import Ecluse.Package (Hash, HashAlg (Blake2b, MD5, SHA1, SHA256, SHA512, SRI), mkHash, mkPackageName, mkScope)
 import Ecluse.Queue (MirrorArtifact (..), MirrorJob (..), Seconds (..))
 import Ecluse.Queue.Sqs (
     SqsConfig (..),
@@ -27,7 +27,7 @@ npmJob =
         , jobArtifact =
             MirrorArtifact
                 { maFilename = "lodash-4.17.21.tgz"
-                , maHashes = Hash SRI "sha512-abc" :| [Hash SHA1 "deadbeef"]
+                , maHashes = unsafeHash SRI validSha512Sri :| [unsafeHash SHA1 validSha1]
                 , maSize = Just 1234
                 }
         }
@@ -43,7 +43,7 @@ scopedJob =
         , jobArtifact =
             MirrorArtifact
                 { maFilename = "core-7.24.0.tgz"
-                , maHashes = Hash SRI "sha512-xyz" :| []
+                , maHashes = unsafeHash SRI validSha512Sri :| []
                 , maSize = Nothing
                 }
         }
@@ -59,7 +59,7 @@ pypiJob =
         , jobArtifact =
             MirrorArtifact
                 { maFilename = "flask-3.0.2.tar.gz"
-                , maHashes = Hash SHA1 "0a4d" :| []
+                , maHashes = unsafeHash SHA1 validSha1 :| []
                 , maSize = Just 9001
                 }
         }
@@ -99,12 +99,12 @@ spec = do
                         { jobArtifact =
                             (jobArtifact npmJob)
                                 { maHashes =
-                                    Hash SHA1 "aa"
-                                        :| [ Hash SHA256 "bb"
-                                           , Hash SHA512 "cc"
-                                           , Hash MD5 "dd"
-                                           , Hash Blake2b "ee"
-                                           , Hash SRI "sha512-ff"
+                                    unsafeHash SHA1 validSha1
+                                        :| [ unsafeHash SHA256 validSha256
+                                           , unsafeHash SHA512 validSha512Hex
+                                           , unsafeHash MD5 validMd5
+                                           , unsafeHash Blake2b validBlake2b
+                                           , unsafeHash SRI validSha512Sri
                                            ]
                                 }
                         }
@@ -158,6 +158,18 @@ spec = do
                 Left err -> err `shouldSatisfy` ("crc32" `T.isInfixOf`)
                 Right job -> expectationFailure ("expected a decode error, got " <> show job)
 
+        it "rejects a digest whose value is malformed for its algorithm (validated at the queue boundary)" $
+            -- The queue is a trust boundary: the worker verifies fetched bytes against this
+            -- digest, so it must be well-formed. A 4-byte 'sha1' value cannot be a SHA-1
+            -- digest (20 bytes), so 'mkHash' refuses it and the job fails to decode rather
+            -- than reaching the worker with an unusable digest (issue #291, the queue side).
+            decodeJob
+                "{\"ecosystem\":\"npm\",\"scope\":null,\"name\":\"x\",\
+                \\"version\":\"1.0.0\",\"artifactUrl\":\"u\",\"mirrorTarget\":\"m\",\
+                \\"artifact\":{\"filename\":\"x-1.0.0.tgz\",\
+                \\"hashes\":[{\"alg\":\"sha1\",\"value\":\"deadbeef\"}],\"size\":null}}"
+                `shouldSatisfy` isLeft
+
     describe "defaultSqsConfig" $ do
         let cfg = defaultSqsConfig "https://sqs.example/q" "us-east-1"
         it "carries the queue URL and region through" $ do
@@ -171,3 +183,23 @@ spec = do
             sqsWaitSeconds cfg `shouldBe` 20
         it "defaults the visibility timeout to 30 seconds" $
             sqsVisibilityTimeout cfg `shouldBe` Seconds 30
+
+-- ── digest fixtures ────────────────────────────────────────────────────────────
+
+{- HLINT ignore unsafeHash "Avoid restricted function" -}
+
+{- | Build a 'Hash' from a known-valid digest, for the round-trip fixtures. Errors on
+a malformed digest, so a typo in a fixture fails loudly rather than silently.
+-}
+unsafeHash :: HashAlg -> Text -> Hash
+unsafeHash alg = either error id . mkHash alg
+
+-- Well-formed digests of each algorithm (the empty-input digest), so every fixture
+-- 'Hash' is 'mkHash'-constructible and survives the validated decode round-trip.
+validSha1, validSha256, validSha512Hex, validMd5, validBlake2b, validSha512Sri :: Text
+validSha1 = "da39a3ee5e6b4b0d3255bfef95601890afd80709"
+validSha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+validSha512Hex = "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e"
+validMd5 = "d41d8cd98f00b204e9800998ecf8427e"
+validBlake2b = "786a02f742015903c6c6fd852552d272912f4740e15847618a86e217f71f5419d25e1031afee585313896444934eb04b903a685b1448b755d56f701afe9be2ce"
+validSha512Sri = "sha512-z4PhNX7vuL3xVChQ1m2AB9Yg5AULVxXcg/SpIdNs6c5H0NE8XYXysP+DGNKHfuwvY7kxvUdBeoGlODJ6+SfaPg=="

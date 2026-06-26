@@ -34,14 +34,15 @@ The npm-specific fields collapse onto the normalised, ecosystem-blind signals:
   never arises here.
 * @dist@ → a single-element 'NonEmpty' of 'Artifact' (npm publishes exactly one
   tarball per version). __Both__ integrity digests survive when present and
-  non-empty: @dist.shasum@ as a 'SHA1' 'Hash' /and/ @dist.integrity@ as an 'SRI'
-  'Hash'. Carrying both is load-bearing — a cross-upstream merge compares the same
-  version's integrity across the private and public registries to detect a
-  supply-chain divergence, which dropping either digest would blind. A
-  __content-empty__ digest string (@"shasum":""@ or @"integrity":""@) is treated
-  as __absent__, not as a digest: an empty string cannot tie the version to a
-  tamper-evident fingerprint, so projecting it to a degenerate empty 'Hash' would
-  let a hashless version slip past the public-integrity admission gate.
+  __well-formed__: @dist.shasum@ as a 'SHA1' 'Hash' /and/ @dist.integrity@ as an
+  'SRI' 'Hash'. Carrying both is load-bearing — a cross-upstream merge compares the
+  same version's integrity across the private and public registries to detect a
+  supply-chain divergence, which dropping either digest would blind. Each digest is
+  built through the validating 'mkHash', so a __malformed__ one — empty
+  (@"shasum":""@ \/ @"integrity":""@), truncated, non-hex, or bad-base64 — is
+  unconstructable and so treated as __absent__, never as a degenerate 'Hash': a
+  digest that ties the version to no tamper-evident fingerprint must not slip past
+  the public-integrity admission gate.
 * @_npmUser@ → 'pkgPublisher' (who pushed this version — provenance). It rides
   on the version object but is not modelled by the wire manifest, so the
   projection reads it directly from the version object here.
@@ -90,7 +91,7 @@ import Ecluse.Package (
     CodeExecSignal (NoCodeOnInstall, RunsCodeOnInstall),
     DepKind (Dev, Optional, Peer, Runtime),
     Dependency (..),
-    Hash (..),
+    Hash,
     HashAlg (SHA1, SRI),
     PackageDetails (..),
     PackageInfo (..),
@@ -98,6 +99,7 @@ import Ecluse.Package (
     Person (..),
     Scope,
     Trust (TrustUnknown),
+    mkHash,
     mkPackageName,
     mkScope,
     renderPackageName,
@@ -387,15 +389,17 @@ projectArtifact version dist =
         , artProvenance = Nothing
         }
   where
-    -- An empty-string digest (@"shasum":""@ / @"integrity":""@) decodes to a present
-    -- @Just ""@ but is unambiguously "no digest", so it is normalised to absent rather
-    -- than projected to a degenerate empty Hash. An empty digest ties the version to no
-    -- tamper-evident fingerprint, so admitting one would defeat the public-integrity
-    -- admission gate (security.md invariant 5) and feed an empty fingerprint to the
-    -- cross-upstream divergence check; dropping it here leaves the now-hashless version to
-    -- be classified NoIntegrity by Ecluse.Package.Integrity.
-    sriHash = Hash SRI <$> mfilter (not . T.null) (distIntegrity dist)
-    sha1Hash = Hash SHA1 <$> mfilter (not . T.null) (distShasum dist)
+    -- Build each present digest through the validating 'mkHash'; a malformed value (the
+    -- empty string @"shasum":""@ / @"integrity":""@, but equally a truncated or non-hex
+    -- one) is unconstructable, so it becomes absent rather than a degenerate 'Hash'. A
+    -- digest that ties the version to no tamper-evident fingerprint must not slip past the
+    -- public-integrity admission gate (security.md invariant 5) or feed a bogus fingerprint
+    -- to the cross-upstream divergence check; dropping it here leaves the now-hashless
+    -- version to be classified NoIntegrity by Ecluse.Package.Integrity.
+    toHash :: HashAlg -> Text -> Maybe Hash
+    toHash alg = rightToMaybe . mkHash alg
+    sriHash = distIntegrity dist >>= toHash SRI
+    sha1Hash = distShasum dist >>= toHash SHA1
 
 {- The artifact filename for a tarball: the path segment after the URL's last
 @\'\/\'@ (the whole string when it has none), or the conventional
