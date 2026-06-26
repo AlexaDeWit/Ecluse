@@ -96,6 +96,16 @@ nix build github:AlexaDeWit/Ecluse/<ref>#dockerImage   # → ./result (a docker-
 See [Release & Supply-Chain Operations](docs/architecture/release-supply-chain.md#supply-chain-attestations)
 for how the attestations are produced.
 
+## Versioning
+
+Écluse follows [semantic versioning](https://semver.org): `MAJOR.MINOR.PATCH` against the
+operator-facing contract (the `PROXY_*` configuration and the proxy's behaviour), not the
+Haskell module API. The version lives in one place, `ecluse.cabal`'s `version:` field, and the
+image tag, git tag, and GitHub Release all derive from it. While the version is `0.y.z` the
+contract is not yet stable, so pin an exact version (by digest) and expect breaking changes in
+any release. [`VERSIONING.md`](VERSIONING.md) is the full policy: what each number means, how
+release candidates work, and how a release is cut.
+
 ## Development
 
 **[Nix](https://nixos.org/) with flakes is a hard dependency**: the whole toolchain (GHC
