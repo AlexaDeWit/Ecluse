@@ -98,8 +98,17 @@ Per-slice files are deliberate: parallel agents (and their status updates) touch
   path (S52) and the `service` / `delegated-cache` read strategies (S44 / S45)._
 - **M5 (partial)** — the effectful rule tier: `Unavailable`, with per-source
   timeout / retry / circuit-breaker (S21). _Remaining: the CVE tier (S22 / S23)._
-- **M6 (partial)** — the OpenTelemetry substrate + telemetry config, off by default
-  (S24). _Remaining: tracing spans (S25) and the metrics / log correlation (S26)._
+- **M6 (complete)** — opt-in, vendor-neutral OpenTelemetry: the substrate + telemetry
+  config (S24); WAI/http-client + domain spans (S25,
+  [#293](https://github.com/AlexaDeWit/Ecluse/pull/293)); and the `ecluse.*` metrics
+  catalogue + bounded-label guard + JSONL `dd` log correlation (S26, across
+  [#296](https://github.com/AlexaDeWit/Ecluse/pull/296) /
+  [#312](https://github.com/AlexaDeWit/Ecluse/pull/312) /
+  [#331](https://github.com/AlexaDeWit/Ecluse/pull/331) /
+  [#341](https://github.com/AlexaDeWit/Ecluse/pull/341)), with OTLP export failures routed to
+  a throttled `katip` warning. _Deferred follow-ons: the Prometheus `/metrics` scrape exporter
+  ([#288](https://github.com/AlexaDeWit/Ecluse/issues/288)) and the advisory-sync span / metrics
+  (land with the CVE tier, S22)._
 
 > **Refactors layered on the merged slices** (each landed without its own DAG slice,
 > is reflected in the **architecture** docs, and is cross-referenced from the
@@ -113,12 +122,11 @@ Per-slice files are deliberate: parallel agents (and their status updates) touch
 > agnostic serve layer into the adapter renderer.
 
 **Remaining — what this plan still delivers:** on top of the launch-ready AWS base
-(**M4**, closed by S20), the first-party publish path (S52) and the non-default
-credential strategies (`service` / `delegated-cache`, S43–S45); the CVE tier
-(S22 / S23) on top of the merged effectful tier (**M5**); the tracing spans (S25) and
-metrics / log correlation (S26) on top of the merged OTel substrate (**M6**); the GCP
-backends (M7); the launch docs + release-hardening tail (M8); the capability manifest
-(S34 / S35); and the informational benchmark track (M9).
+(**M4**, closed by S20) and the now-complete observability stack (**M6**), the
+first-party publish path (S52) and the non-default credential strategies
+(`service` / `delegated-cache`, S43–S45); the CVE tier (S22 / S23) on top of the merged
+effectful tier (**M5**); the GCP backends (M7); the launch docs + release-hardening tail
+(M8); the capability manifest (S34 / S35); and the informational benchmark track (M9).
 
 > **Base-hardening before S15.** The config / mount / credential / Reader-context
 > generalization decided across the **base-hardening track** (D1–D6) is now
@@ -332,22 +340,36 @@ composition join (S20) are all in. See [In flight](#in-flight) for what now lead
 
 ## In flight
 
-_**M4 is closed — the AWS launch path is live.** S20 (AWS composition root + SQS
-mirror-queue wiring, [#292](https://github.com/AlexaDeWit/Ecluse/pull/292)) merged on
-2026-06-26, tying the AWS backends into the single config-driven composition root. With
-the tarball path (S15), the `S16→{S17,S18}→S19` worker feed, the effectful rule tier
-(S21), the OTel substrate (S24), and egress / SSRF hardening (S40) already in — and the
-non-gating `e2e` tier (S53, [#276](https://github.com/AlexaDeWit/Ecluse/pull/276))
-booting the whole system through the real composition root — the core product now works
-on AWS end to end; see
-[Current state](#current-state-the-baseline-this-plan-builds-on)._
+_**M4 and M6 are closed.** The AWS launch path is live (S20,
+[#292](https://github.com/AlexaDeWit/Ecluse/pull/292)) — the tarball path (S15), the
+`S16→{S17,S18}→S19` worker feed, the effectful rule tier (S21), and egress / SSRF hardening
+(S40) tied into the single config-driven composition root. The opt-in observability stack is
+complete: the OTel substrate (S24), tracing (S25,
+[#293](https://github.com/AlexaDeWit/Ecluse/pull/293)), the `ecluse.*` metrics catalogue +
+JSONL `dd` correlation (S26,
+[#296](https://github.com/AlexaDeWit/Ecluse/pull/296) /
+[#312](https://github.com/AlexaDeWit/Ecluse/pull/312) /
+[#331](https://github.com/AlexaDeWit/Ecluse/pull/331)), and OTLP export failures surfaced as
+a throttled `katip` warning ([#341](https://github.com/AlexaDeWit/Ecluse/pull/341)). The
+non-gating `e2e` tier (S53) boots the whole system — including telemetry — through the real
+composition root._
 
-_**In flight — M6 observability:** S25 (WAI/http-client + domain spans,
-[#293](https://github.com/AlexaDeWit/Ecluse/pull/293), draft) and S26 PR2 (the
-`ecluse.*` metric catalogue + bounded-label guard, stacked on the merged substrate-config
-PR1, [#296](https://github.com/AlexaDeWit/Ecluse/pull/296)) layer onto the S24 substrate.
-The [inter-wave quality & alignment pass](orchestration-strategy.md#inter-wave-quality--alignment-pass)
-runs alongside, clearing the documentation-steward backlog and carried tech-debt._
+_**Post-wave corrective / baseline pass — done.** The shared host-authority parser
+([#329](https://github.com/AlexaDeWit/Ecluse/pull/329)); the bounded in-memory `MirrorQueue`
+backend ([#298](https://github.com/AlexaDeWit/Ecluse/pull/298) /
+[#313](https://github.com/AlexaDeWit/Ecluse/pull/313)); the integrity vocabulary centralization
++ SHA-384 as a first-class algorithm ([#314](https://github.com/AlexaDeWit/Ecluse/pull/314) /
+[#321](https://github.com/AlexaDeWit/Ecluse/pull/321) /
+[#334](https://github.com/AlexaDeWit/Ecluse/pull/334)); the shared `ecluse-test-support` library
+([#336](https://github.com/AlexaDeWit/Ecluse/pull/336) /
+[#338](https://github.com/AlexaDeWit/Ecluse/pull/338)); the `WireVocab` named-enum vocabulary
+with the PyPI / RubyGems version-wire arms ([#337](https://github.com/AlexaDeWit/Ecluse/pull/337));
+the helper dedupe ([#339](https://github.com/AlexaDeWit/Ecluse/pull/339)); and the
+retired-terminology cleanup ([#333](https://github.com/AlexaDeWit/Ecluse/pull/333))._
+
+_**Nothing is in flight.** The next dispatchable work is a package split (in progress
+elsewhere); after it the queue is the CVE tier (S22 / S23, **M5**) and the first-party publish
+path (S52, **M4**), per the architect's sequencing._
 
 ---
 

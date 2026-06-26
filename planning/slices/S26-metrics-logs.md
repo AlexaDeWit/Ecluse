@@ -2,7 +2,7 @@
 id: S26
 title: ecluse.* metrics + JSONL dd correlation
 milestone: M6 — Observability
-status: in-progress
+status: merged
 depends-on: [S04, S24]
 test-tier: [unit, integration]
 arch-refs:
@@ -15,6 +15,15 @@ pr: 296
 # S26 — `ecluse.*` metrics + JSONL `dd` correlation
 
 > Milestone **M6** · depends on: [S04](S04-logging-katip.md), [S24](S24-otel-substrate.md) · tier: unit, integration
+
+> **As-built (merged).** Landed across four PRs: the substrate-config resolver (PR1,
+> [#296](https://github.com/AlexaDeWit/Ecluse/pull/296)), the `ecluse.*` metric catalogue +
+> bounded-label guard + `dd` correlation (PR2, [#312](https://github.com/AlexaDeWit/Ecluse/pull/312)),
+> the deferred breaker-state + credential refresh/ttl emits
+> ([#331](https://github.com/AlexaDeWit/Ecluse/pull/331)), and routing real OTLP export
+> failures into a throttled `katip` warning ([#341](https://github.com/AlexaDeWit/Ecluse/pull/341)).
+> Deferred: the Prometheus `/metrics` scrape exporter ([#288](https://github.com/AlexaDeWit/Ecluse/issues/288))
+> and the advisory-sync metrics (land with the CVE tier, S22).
 
 **Goal.** Emit the domain metrics catalogue over the same OTLP pipeline (with a
 Prometheus-scrape alternative), under a strict bounded-label discipline, and stitch

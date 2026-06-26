@@ -2,20 +2,19 @@
 id: S25
 title: WAI/http-client + domain spans
 milestone: M6 — Observability
-status: not-started
+status: merged
 depends-on: [S12, S19, S24]
 test-tier: [unit, integration]
 arch-refs:
   - docs/architecture/observability.md#what-gets-traced
   - docs/architecture/observability.md#sampling
   - docs/architecture/observability.md#verifying-it--smoke-test-plan
-pr: null
-status: in-progress
+pr: 293
 ---
 
 # S25 — WAI/http-client + domain spans
 
-> **As-built (in-progress).**
+> **As-built (merged, [#293](https://github.com/AlexaDeWit/Ecluse/pull/293)).**
 > - WAI server span wired into the S12 middleware stack as the outermost layer via
 >   `Ecluse.Server.tracedApplication` (`runServer` uses it); http-client child spans
 >   + W3C context propagation come from instrumenting the two data-plane `Manager`s

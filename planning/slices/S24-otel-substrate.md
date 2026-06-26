@@ -8,7 +8,7 @@ test-tier: [unit]
 arch-refs:
   - docs/architecture/observability.md#opentelemetry-as-the-substrate
   - docs/architecture/observability.md#configuration
-pr: null
+pr: 158
 ---
 
 # S24 — OTel substrate + telemetry config (off by default)
