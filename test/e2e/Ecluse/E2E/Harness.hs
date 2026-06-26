@@ -198,7 +198,7 @@ withE2E action = do
                 , "ministack"
                 , "-p"
                 , "127.0.0.1:0:4566"
-                , "ministackorg/ministack:latest"
+                , "ministackorg/ministack@sha256:5164592def36af01b8ac76364028e27c5ecd8f1494c8a53d5fcd811cc7dfb594"
                 ]
             manager <- newManager defaultManagerSettings
             -- Create the mirror queue in ministack and learn its URL. The proxy routes to

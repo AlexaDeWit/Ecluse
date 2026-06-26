@@ -72,10 +72,11 @@ ministack =
             & TC.setWaitingFor (TC.waitUntilTimeout 120 (TC.waitUntilMappedPortReachable ministackPort))
             & TC.setRm True
 
--- ministack with an ASCII description label (see 'withMinistack' for why).
+-- ministack (pinned by digest; tag 1.3-full) with an ASCII description label
+-- (see 'withMinistack' for why).
 ministackDockerfile :: Text
 ministackDockerfile =
-    "FROM ministackorg/ministack:latest\n\
+    "FROM ministackorg/ministack@sha256:5164592def36af01b8ac76364028e27c5ecd8f1494c8a53d5fcd811cc7dfb594\n\
     \LABEL description=\"Local AWS Service Emulator\"\n"
 
 -- ── endpoint ──────────────────────────────────────────────────────────────────
