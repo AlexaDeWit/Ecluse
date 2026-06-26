@@ -179,20 +179,20 @@ jobs:
         run: nix develop .#ci --command make test-smoke
 
   e2e:
-    name: End-to-end tests (whole-system, real npm — non-gating)
+    name: End-to-end tests (whole-system, real npm)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # Stands the whole system up as the real OCI image + nginx stub + Verdaccio on a
     # docker network and drives it with the real npm CLI (S53). Catches composition-root
-    # and cross-component regressions nothing else does, but it is heavy (a Nix image
-    # build, containers, npm) — so it is NOT a `gate` dependency and runs
-    # continue-on-error: visible on every PR and nightly, never a blocker. Uses the full
-    # dev shell (not `.#ci`) because the harness needs the npm CLI on PATH. The disk-prep
-    # steps below free the small root partition and move the Nix store + Docker data-root
-    # onto the ephemeral /mnt volume, since the image build + `docker load` can exhaust
-    # root; if that stops sufficing (e.g. as more ecosystems land), the next levers are
-    # nightly-only cadence or a larger runner. See planning/slices/S53-e2e-ecosystem.md.
-    continue-on-error: true
+    # and cross-component regressions nothing else does. It is heavy (a Nix image build,
+    # containers, npm) and runs as its own parallel job, but it is hermetic (no live
+    # registry — unlike smoke) and has been reliably green, so it GATES: a `gate`
+    # dependency, run on every PR and nightly. If its weight starts to hurt PR latency
+    # or it turns flaky, the levers are nightly-only cadence or a larger runner before
+    # dropping it from the gate. Uses the full dev shell (not `.#ci`) because the harness
+    # needs the npm CLI on PATH. The disk-prep steps below free the small root partition
+    # and move the Nix store + Docker data-root onto the ephemeral /mnt volume, since the
+    # image build + `docker load` can exhaust root. See planning/slices/S53-e2e-ecosystem.md.
     env:
       CABAL_DIR: ${{ github.workspace }}/.cabal
     steps:
@@ -428,8 +428,10 @@ jobs:
     # result, and fails unless all of them succeeded. Wire new required checks in
     # by adding them to `needs` here — never as additional required checks. smoke
     # and weeder are intentionally absent: they run on PRs for visibility but are
-    # non-gating, so the gate never waits on (or fails because of) them.
-    needs: [build-test, static-checks, docs]
+    # non-gating, so the gate never waits on (or fails because of) them. e2e IS a
+    # dependency: it runs as its own parallel job (hermetic, reliably green) and the
+    # gate blocks on it.
+    needs: [build-test, static-checks, docs, e2e]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
