@@ -33,6 +33,13 @@ the proxy within: when enabled it initialises the providers and tears them down 
 flushing buffered spans and metrics — along every exit path; when disabled it is a
 pure pass-through that opens nothing to tear down.
 
+When enabled it also makes export failures __visible__: the OTLP span and metric
+exporters are wrapped so a failed export — which @hs-opentelemetry 1.0.0.0@ otherwise
+drops silently — is observed and routed through the shared @katip@ throttle
+("Ecluse.Telemetry.Resolve"), the first failure logged plainly then a periodic
+heartbeat. The wrappers only /observe/; export semantics are unchanged, so an
+unreachable collector still degrades off the request path.
+
 The configuration model and the signal catalogue are described in
 @docs\/architecture\/observability.md@.
 -}
@@ -52,14 +59,44 @@ module Ecluse.Telemetry (
 
     -- * Lifecycle
     withTelemetry,
+
+    -- * Export-failure observation (exporter wrappers)
+    observeSpanExporter,
+    observeMetricExporter,
 ) where
 
-import OpenTelemetry.Metric (MeterProvider)
-import OpenTelemetry.SDK (
-    OTelSignals (otelMeterProvider, otelTracerProvider),
-    withOpenTelemetry,
+import Katip (LogEnv)
+import OpenTelemetry.Environment (lookupBooleanEnv)
+import OpenTelemetry.Exporter.Metric (MetricExporter (..))
+import OpenTelemetry.Exporter.OTLP.Span (loadExporterEnvironmentVariables, otlpExporter)
+import OpenTelemetry.Exporter.Span (SpanExporter (..))
+import OpenTelemetry.Log (initializeGlobalLoggerProvider, shutdownLoggerProvider)
+import OpenTelemetry.Metric (
+    MeterProvider (..),
+    PeriodicMetricReaderHandle (..),
+    createMeterProvider,
+    defaultSdkMeterProviderOptions,
+    forkPeriodicMetricReader,
+    noopMeterProvider,
+    periodicMetricReaderOptionsFromEnv,
+    resolveMetricExporter,
+    setGlobalMeterProvider,
+    shutdownMeterProvider,
  )
-import OpenTelemetry.Trace (TracerProvider)
+import OpenTelemetry.Registry (registerSpanExporterFactory)
+import OpenTelemetry.Resource (materializeResources, mergeResources, mkResource)
+import OpenTelemetry.Resource.Detect (detectBuiltInResources, detectResourceAttributes)
+import OpenTelemetry.SDK (OTelSignals (..))
+import OpenTelemetry.Trace (TracerProvider, initializeGlobalTracerProvider, shutdownTracerProvider)
+import UnliftIO (bracket)
+import UnliftIO.Exception (catchAny)
+
+import Ecluse.Telemetry.Resolve (
+    ExportFailureSink,
+    exportFailureSink,
+    installExportErrorHandler,
+    observeExportResult,
+ )
 
 import Ecluse.Wire (WireVocab (..), parseWire, renderWire)
 
@@ -179,17 +216,114 @@ telemetryMeterProvider = \case
 metrics — along every exit path.
 
 * __'TelemetryOff'__ (the default) is a pure pass-through: the SDK is __never
-  initialised__, the body runs against 'telemetryDisabled', and there is nothing
-  to tear down. An unset @PROXY_TELEMETRY@ therefore opens no exporter and emits
-  nothing.
-* __'TelemetryOn'__ initialises the SDK from the standard @OTEL_*@ environment
-  (via @hs-opentelemetry-sdk@'s @withOpenTelemetry@), runs the body against the
-  enabled handle, and shuts the providers down on exit.
+  initialised__, the body runs against 'telemetryDisabled', the 'LogEnv' is unused,
+  and there is nothing to tear down. An unset @PROXY_TELEMETRY@ therefore opens no
+  exporter and emits nothing.
+* __'TelemetryOn'__ initialises the SDK from the standard @OTEL_*@ environment with the
+  OTLP exporters wrapped for failure observation (the shared throttle feeds the supplied
+  'LogEnv'), runs the body against the enabled handle, and shuts the providers down on
+  exit.
 
 This is the scope the composition root ("Ecluse.Env") runs the server and worker
 within, so telemetry is established once and flushed on shutdown.
 -}
-withTelemetry :: TelemetrySwitch -> (Telemetry -> IO a) -> IO a
-withTelemetry = \case
-    TelemetryOff -> \use -> use telemetryDisabled
-    TelemetryOn -> \use -> withOpenTelemetry (use . telemetryEnabled)
+withTelemetry :: TelemetrySwitch -> LogEnv -> (Telemetry -> IO a) -> IO a
+withTelemetry switch logEnv use = case switch of
+    TelemetryOff -> use telemetryDisabled
+    TelemetryOn -> do
+        sink <- exportFailureSink logEnv
+        installExportErrorHandler sink
+        registerObservedSpanExporter sink
+        bracket (initializeObservedOpenTelemetry sink) otelShutdown (use . telemetryEnabled)
+
+-- ── export-failure observation ───────────────────────────────────────────────
+
+{- Wrap the OTLP span exporter so a failed export is observed — routed through the shared
+'ExportFailureSink' into @katip@ under a throttle — and the inner result returned
+unchanged. @hs-opentelemetry 1.0.0.0@ drops a failed export silently (the batch processor
+discards the 'ExportResult'), so this wrapper is where Écluse learns the export failed
+without changing export semantics: the failure stays off the request path. -}
+observeSpanExporter :: ExportFailureSink -> SpanExporter -> SpanExporter
+observeSpanExporter sink inner =
+    inner
+        { spanExporterExport = \completedSpans -> do
+            result <- spanExporterExport inner completedSpans
+            observeExportResult sink "span" result
+            pure result
+        }
+
+-- Dual of 'observeSpanExporter' for the periodic metric reader's exporter (which likewise
+-- discards the 'ExportResult').
+observeMetricExporter :: ExportFailureSink -> MetricExporter -> MetricExporter
+observeMetricExporter sink inner =
+    inner
+        { metricExporterExport = \batches -> do
+            result <- metricExporterExport inner batches
+            observeExportResult sink "metric" result
+            pure result
+        }
+
+{- Register the observed OTLP span exporter under the @otlp@ key before the SDK's
+env-driven tracer init runs: 'initializeGlobalTracerProvider' resolves
+@OTEL_TRACES_EXPORTER@ through the exporter 'OpenTelemetry.Registry', which prefers a
+registered factory over the built-in default, so the wrapped exporter is the one the
+batch processor drives. The metric path has no such registry hook, so it is wrapped
+directly in 'initializeObservedMeterProvider'. -}
+registerObservedSpanExporter :: ExportFailureSink -> IO ()
+registerObservedSpanExporter sink =
+    registerSpanExporterFactory
+        "otlp"
+        (observeSpanExporter sink <$> (otlpExporter =<< loadExporterEnvironmentVariables))
+
+{- Stand up the three SDK signal providers from the @OTEL_*@ environment with the OTLP
+exporters wrapped for failure observation, mirroring @hs-opentelemetry-sdk@'s own
+@initializeOpenTelemetry@. The tracer picks up the observed span exporter through the
+registry ('registerObservedSpanExporter', run before this); the meter is built here
+because the SDK's metric init exposes no registry hook for its exporter. This and
+'initializeObservedMeterProvider' are pinned to @hs-opentelemetry-sdk 1.0.0.0@; re-diff
+both against the SDK on any version bump. -}
+initializeObservedOpenTelemetry :: ExportFailureSink -> IO OTelSignals
+initializeObservedOpenTelemetry sink = do
+    tracerProvider <- initializeGlobalTracerProvider
+    meterProvider <- initializeObservedMeterProvider sink
+    loggerProvider <- initializeGlobalLoggerProvider
+    let shutdown = do
+            void (shutdownTracerProvider tracerProvider Nothing) `catchAny` const pass
+            void (shutdownMeterProvider meterProvider Nothing) `catchAny` const pass
+            void (shutdownLoggerProvider loggerProvider Nothing) `catchAny` const pass
+    pure
+        OTelSignals
+            { otelTracerProvider = tracerProvider
+            , otelMeterProvider = meterProvider
+            , otelLoggerProvider = loggerProvider
+            , otelPropagators = mempty
+            , otelShutdown = shutdown
+            }
+
+{- Build the global meter provider with the OTLP metric exporter wrapped for failure
+observation. Mirrors @hs-opentelemetry-sdk@'s @initializeGlobalMeterProvider@ exactly,
+differing only in wrapping the exporter the periodic reader drives — the SDK's metric
+init takes the exporter directly ('resolveMetricExporter') with no registry injection
+point, unlike the span path. Pinned to @hs-opentelemetry-sdk 1.0.0.0@; re-verify against
+the SDK's @initializeGlobalMeterProvider@ on any version bump. -}
+initializeObservedMeterProvider :: ExportFailureSink -> IO MeterProvider
+initializeObservedMeterProvider sink = do
+    disabled <- lookupBooleanEnv "OTEL_SDK_DISABLED"
+    if disabled
+        then noopMeterProvider <$ setGlobalMeterProvider noopMeterProvider
+        else do
+            exporter <- observeMetricExporter sink <$> resolveMetricExporter
+            readerOptions <- periodicMetricReaderOptionsFromEnv
+            builtInResources <- detectBuiltInResources
+            envResources <- mkResource . map Just <$> detectResourceAttributes
+            let resources = materializeResources (mergeResources envResources builtInResources)
+            (provider, env) <- createMeterProvider resources defaultSdkMeterProviderOptions
+            readerHandle <- forkPeriodicMetricReader env exporter readerOptions
+            let provider' =
+                    provider
+                        { meterProviderShutdown = \timeout -> do
+                            stopPeriodicMetricReader readerHandle
+                            meterProviderShutdown provider timeout
+                        }
+            setGlobalMeterProvider provider'
+            pure provider'
