@@ -90,7 +90,7 @@ spec = do
 
         it "round-trips every hash algorithm's wire name (encode/decode are inverse over all algs)" $
             -- A job whose artifact carries one digest of EACH algorithm exercises both
-            -- directions of the wire mapping (hashAlgName on encode, parseHashAlg on
+            -- directions of the wire mapping (renderHashAlg on encode, parseHashAlg on
             -- decode) for sha1/sha256/sha512/md5/blake2b/sri — so a future algorithm
             -- whose two halves disagree is caught here rather than silently dropping a
             -- digest the worker would later need to verify against.

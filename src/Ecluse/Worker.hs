@@ -89,7 +89,7 @@ import Ecluse.Env (
     recordPoll,
  )
 import Ecluse.Package (Hash (hashAlg, hashValue), HashAlg (Blake2b, MD5, SHA1, SHA256, SHA512, SRI), renderPackageName)
-import Ecluse.Package.Integrity (Strength, assertedAlg, integrityStrength)
+import Ecluse.Package.Integrity (Strength, assertedAlg, integrityStrength, sriAlgorithm, sriBody, sriPrefix)
 import Ecluse.Queue (
     MirrorArtifact (maFilename, maHashes),
     MirrorJob (jobArtifact, jobArtifactUrl, jobPackage, jobVersion),
@@ -511,13 +511,13 @@ verifyIntegrity hashes bytes =
     -- compare against the SRI's base64 body __exactly__ — base64 is case-sensitive.
     -- Any other SRI algorithm is uncomputable, so it fails closed rather than passing.
     matchSri :: Text -> Maybe Bool
-    matchSri sri = case T.breakOn "-" sri of
-        ("sha512", rest) -> Just (base64 (hashlazy lazyBytes :: Digest SHA512) == T.drop 1 rest)
+    matchSri sri = case sriAlgorithm sri of
+        Just SHA512 -> Just (base64 (hashlazy lazyBytes :: Digest SHA512) == sriBody sri)
         _ -> Nothing
 
     describe :: Hash -> Text
     describe h = case hashAlg h of
-        SRI -> "SRI " <> fst (T.breakOn "-" (hashValue h))
+        SRI -> "SRI " <> sriPrefix (hashValue h)
         alg -> show alg
 
 -- The lower-cased hex encoding of a digest (matching npm's hex shasum form).

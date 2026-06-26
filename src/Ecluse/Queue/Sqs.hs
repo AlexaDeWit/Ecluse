@@ -72,6 +72,7 @@ import Ecluse.Package (
     renderScope,
     unScope,
  )
+import Ecluse.Package.Integrity (renderHashAlg)
 import Ecluse.Queue (
     MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize),
     MirrorJob (..),
@@ -271,7 +272,7 @@ encodeArtifact artifact =
         ]
   where
     encodeHash :: Hash -> Aeson.Value
-    encodeHash h = object ["alg" .= hashAlgName (hashAlg h), "value" .= hashValue h]
+    encodeHash h = object ["alg" .= renderHashAlg (hashAlg h), "value" .= hashValue h]
 
 {- | Decode an SQS message body back into a 'MirrorJob', or a human-readable error
 if the body is not the JSON object 'encodeJob' produces (a missing field, an
@@ -322,17 +323,11 @@ parseArtifact = withObject "MirrorArtifact" $ \o -> do
         pure Hash{hashAlg = alg, hashValue = value}
     unknownAlg n = "unknown hash algorithm " <> show (n :: Text)
 
--- The wire name of a 'HashAlg', and its inverse. Kept here at the wire boundary
--- (the domain type itself carries no wire encoding).
-hashAlgName :: HashAlg -> Text
-hashAlgName = \case
-    SHA1 -> "sha1"
-    SHA256 -> "sha256"
-    SHA512 -> "sha512"
-    MD5 -> "md5"
-    Blake2b -> "blake2b"
-    SRI -> "sri"
-
+-- Decode a wire algorithm name back to its 'HashAlg' — the inverse of 'renderHashAlg'
+-- over the SQS message vocabulary, including the @sri@ wrapper an npm @dist.integrity@
+-- digest rides under. An exact match on a name a digest is serialized under, so a
+-- well-formed message round-trips and an unrecognised name yields 'Nothing' (the job
+-- is then rejected with a digest the worker could never have verified against).
 parseHashAlg :: Text -> Maybe HashAlg
 parseHashAlg = \case
     "sha1" -> Just SHA1
