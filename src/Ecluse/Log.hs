@@ -84,6 +84,8 @@ import Katip (
  )
 import Katip.Scribes.Handle (ItemFormatter, bracketFormat, jsonFormat, mkHandleScribeWithFormatter)
 
+import Ecluse.Wire (WireVocab (..), parseWire, renderWire)
+
 -- ── log format ───────────────────────────────────────────────────────────────
 
 {- | The on-the-wire shape of the log stream, selected by configuration. A sum
@@ -99,6 +101,14 @@ data LogFormat
       ConsoleLog
     deriving stock (Eq, Show)
 
+-- The wire vocabulary of a 'LogFormat': the single source both 'parseWire' and
+-- 'renderWire' derive from for this type.
+instance WireVocab LogFormat where
+    wireKind = "log format"
+    wireTable =
+        (JsonLog, "json")
+            :| [(ConsoleLog, "console")]
+
 {- | Parse a 'LogFormat' from its wire name, naming the accepted set on failure.
 The same strict, fail-loud style as the other configuration enums
 ("Ecluse.Config").
@@ -110,21 +120,11 @@ Right JsonLog
 Left "unknown log format \"yaml\" (expected one of: json, console)"
 -}
 parseLogFormat :: Text -> Either Text LogFormat
-parseLogFormat = \case
-    "json" -> Right JsonLog
-    "console" -> Right ConsoleLog
-    other ->
-        Left
-            ( "unknown log format \""
-                <> other
-                <> "\" (expected one of: json, console)"
-            )
+parseLogFormat = parseWire
 
 -- | The wire name of a 'LogFormat' (the inverse of 'parseLogFormat').
 renderLogFormat :: LogFormat -> Text
-renderLogFormat = \case
-    JsonLog -> "json"
-    ConsoleLog -> "console"
+renderLogFormat = renderWire
 
 -- ── pipeline construction ────────────────────────────────────────────────────
 

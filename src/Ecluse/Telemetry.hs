@@ -61,6 +61,8 @@ import OpenTelemetry.SDK (
  )
 import OpenTelemetry.Trace (TracerProvider)
 
+import Ecluse.Wire (WireVocab (..), parseWire, renderWire)
+
 -- ── master switch ────────────────────────────────────────────────────────────
 
 {- | The @PROXY_TELEMETRY@ master switch: telemetry is opt-in, so 'TelemetryOff' is
@@ -77,6 +79,15 @@ data TelemetrySwitch
       TelemetryOn
     deriving stock (Eq, Show)
 
+-- The wire vocabulary of a 'TelemetrySwitch': the single source both 'parseWire' and
+-- 'renderWire' derive from for this type. Listed @on@ before @off@, the order the
+-- accepted-set message has always named them.
+instance WireVocab TelemetrySwitch where
+    wireKind = "telemetry switch"
+    wireTable =
+        (TelemetryOn, "on")
+            :| [(TelemetryOff, "off")]
+
 {- | Parse a 'TelemetrySwitch' from its wire name, naming the accepted set on
 failure. The same strict, fail-loud style as the other configuration enums
 ("Ecluse.Config"): an unrecognised value is a loud failure, never a silent
@@ -92,21 +103,11 @@ Right TelemetryOn
 Left "unknown telemetry switch \"maybe\" (expected one of: on, off)"
 -}
 parseTelemetrySwitch :: Text -> Either Text TelemetrySwitch
-parseTelemetrySwitch = \case
-    "off" -> Right TelemetryOff
-    "on" -> Right TelemetryOn
-    other ->
-        Left
-            ( "unknown telemetry switch \""
-                <> other
-                <> "\" (expected one of: on, off)"
-            )
+parseTelemetrySwitch = parseWire
 
 -- | The wire name of a 'TelemetrySwitch' (the inverse of 'parseTelemetrySwitch').
 renderTelemetrySwitch :: TelemetrySwitch -> Text
-renderTelemetrySwitch = \case
-    TelemetryOff -> "off"
-    TelemetryOn -> "on"
+renderTelemetrySwitch = renderWire
 
 -- ── the telemetry handle ─────────────────────────────────────────────────────
 

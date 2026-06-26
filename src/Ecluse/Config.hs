@@ -118,6 +118,7 @@ import Ecluse.Security (
     defaultLimits,
  )
 import Ecluse.Telemetry (TelemetrySwitch (..), parseTelemetrySwitch)
+import Ecluse.Wire (WireVocab (..), parseWire, renderWire)
 
 -- ── network values ───────────────────────────────────────────────────────────
 
@@ -169,6 +170,16 @@ data QueueBackend
       MemoryQueue
     deriving stock (Eq, Show)
 
+-- The wire vocabulary of a 'QueueBackend': the single source both 'parseWire' and
+-- 'renderWire' derive from for this type.
+instance WireVocab QueueBackend where
+    wireKind = "queue provider"
+    wireTable =
+        (SqsQueue, "sqs")
+            :| [ (PubSubQueue, "pubsub")
+               , (MemoryQueue, "memory")
+               ]
+
 {- | Parse a 'QueueBackend' from its wire name, naming the accepted set on
 failure.
 
@@ -179,23 +190,11 @@ Right SqsQueue
 Left "unknown queue provider \"kafka\" (expected one of: sqs, pubsub, memory)"
 -}
 parseQueueBackend :: Text -> Either Text QueueBackend
-parseQueueBackend = \case
-    "sqs" -> Right SqsQueue
-    "pubsub" -> Right PubSubQueue
-    "memory" -> Right MemoryQueue
-    other ->
-        Left
-            ( "unknown queue provider "
-                <> quote other
-                <> " (expected one of: sqs, pubsub, memory)"
-            )
+parseQueueBackend = parseWire
 
 -- | The wire name of a 'QueueBackend' (the inverse of 'parseQueueBackend').
 renderQueueBackend :: QueueBackend -> Text
-renderQueueBackend = \case
-    SqsQueue -> "sqs"
-    PubSubQueue -> "pubsub"
-    MemoryQueue -> "memory"
+renderQueueBackend = renderWire
 
 {- | How the bearer token that writes to a mount's mirror target is obtained — the
 credential axis of the backend matrix (see
@@ -219,6 +218,17 @@ data CredentialBackend
       AdcCredential
     deriving stock (Eq, Ord, Show)
 
+-- The wire vocabulary of a per-mount 'CredentialBackend' field. The mirror-target
+-- selector names the same constructors differently and so is its own type — see
+-- 'MirrorCredentialProvider'.
+instance WireVocab CredentialBackend where
+    wireKind = "credential provider"
+    wireTable =
+        (CodeArtifactCredential, "codeartifact")
+            :| [ (StaticCredential, "static")
+               , (AdcCredential, "adc")
+               ]
+
 {- | Parse a 'CredentialBackend' from its wire name, naming the accepted set on
 failure.
 
@@ -229,25 +239,32 @@ Right CodeArtifactCredential
 Left "unknown credential provider \"vault\" (expected one of: codeartifact, static, adc)"
 -}
 parseCredentialBackend :: Text -> Either Text CredentialBackend
-parseCredentialBackend = \case
-    "codeartifact" -> Right CodeArtifactCredential
-    "static" -> Right StaticCredential
-    "adc" -> Right AdcCredential
-    other ->
-        Left
-            ( "unknown credential provider "
-                <> quote other
-                <> " (expected one of: codeartifact, static, adc)"
-            )
+parseCredentialBackend = parseWire
 
 {- | The wire name of a 'CredentialBackend' (the inverse of
 'parseCredentialBackend').
 -}
 renderCredentialBackend :: CredentialBackend -> Text
-renderCredentialBackend = \case
-    CodeArtifactCredential -> "codeartifact"
-    StaticCredential -> "static"
-    AdcCredential -> "adc"
+renderCredentialBackend = renderWire
+
+{- | The mirror-target write-credential selector as a distinct wire vocabulary over
+the same 'CredentialBackend' constructors. The selector orders the set differently
+and names the GCP arm after the managed registry (@gcp-artifact-registry@) rather
+than the token source (@adc@), so it is its own type: a 'WireVocab' instance is keyed
+by type, and a type speaks one vocabulary. It is unwrapped at the boundary by
+'parseMirrorCredentialProvider' \/ 'renderMirrorCredentialProvider', so it does not
+escape into the rest of the configuration.
+-}
+newtype MirrorCredentialProvider = MirrorCredentialProvider CredentialBackend
+    deriving stock (Eq)
+
+instance WireVocab MirrorCredentialProvider where
+    wireKind = "mirror-target credential provider"
+    wireTable =
+        (MirrorCredentialProvider StaticCredential, "static")
+            :| [ (MirrorCredentialProvider CodeArtifactCredential, "codeartifact")
+               , (MirrorCredentialProvider AdcCredential, "gcp-artifact-registry")
+               ]
 
 {- | Parse the process-level mirror-target write-credential provider selector
 ('cfgMirrorTargetCredentialProvider', from @MIRROR_TARGET_CREDENTIAL_PROVIDER@) onto
@@ -264,25 +281,14 @@ Right CodeArtifactCredential
 Left "unknown mirror-target credential provider \"vault\" (expected one of: static, codeartifact, gcp-artifact-registry)"
 -}
 parseMirrorCredentialProvider :: Text -> Either Text CredentialBackend
-parseMirrorCredentialProvider = \case
-    "static" -> Right StaticCredential
-    "codeartifact" -> Right CodeArtifactCredential
-    "gcp-artifact-registry" -> Right AdcCredential
-    other ->
-        Left
-            ( "unknown mirror-target credential provider "
-                <> quote other
-                <> " (expected one of: static, codeartifact, gcp-artifact-registry)"
-            )
+parseMirrorCredentialProvider raw =
+    (\(MirrorCredentialProvider backend) -> backend) <$> parseWire raw
 
 {- | The wire name of a mirror-target credential provider selector (the inverse of
 'parseMirrorCredentialProvider'); the GCP arm renders as @gcp-artifact-registry@.
 -}
 renderMirrorCredentialProvider :: CredentialBackend -> Text
-renderMirrorCredentialProvider = \case
-    StaticCredential -> "static"
-    CodeArtifactCredential -> "codeartifact"
-    AdcCredential -> "gcp-artifact-registry"
+renderMirrorCredentialProvider = renderWire . MirrorCredentialProvider
 
 -- ── environment layer ────────────────────────────────────────────────────────
 

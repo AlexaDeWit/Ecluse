@@ -112,6 +112,7 @@ library
     Ecluse.Telemetry.Resolve
     Ecluse.Telemetry.Tracing
     Ecluse.Version
+    Ecluse.Wire
     Ecluse.Worker
 
   -- Per-ecosystem version grammars and their shared lexical atoms. Internal to
@@ -241,6 +242,7 @@ test-suite ecluse-unit
     Ecluse.Test.SupportLinkageSpec
     Ecluse.VersionOrderingSpec
     Ecluse.VersionSpec
+    Ecluse.WireSpec
     Ecluse.WorkerSpec
 
   build-tool-depends: hspec-discover:hspec-discover ^>=2.11
