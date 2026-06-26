@@ -271,6 +271,9 @@
         scanInputs = [
           pkgs.grype
           pkgs.vulnix
+          # jq: scripts/grype-sarif-locations.sh post-processes grype.sarif for
+          # GitHub code scanning; pinned here rather than relying on the runner's.
+          pkgs.jq
         ];
 
         # GitHub Actions linting (`make lint-workflows`): actionlint for

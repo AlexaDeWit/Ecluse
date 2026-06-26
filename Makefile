@@ -275,6 +275,7 @@ scan: ## Scan the image closure for CVEs (grype over the SBOM → grype.json + g
 	@mkdir -p sbom
 	$(NIX) sbomnix --cdx sbom/ecluse.cdx.json .#ecluse-bin
 	$(NIX) grype sbom:sbom/ecluse.cdx.json -o table -o json=grype.json -o sarif=grype.sarif
+	$(NIX) bash scripts/grype-sarif-locations.sh grype.sarif
 
 scan-vulnix: ## Secondary Nix-native cross-check (vulnix; comprehensive, no severity)
 	-$(NIX) bash -c 'vulnix -C "$$(nix build .#ecluse-bin --no-link --print-out-paths)"'
