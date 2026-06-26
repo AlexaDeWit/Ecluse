@@ -145,9 +145,9 @@ import Ecluse.Core.Security (
     boundedRead,
     defaultLimits,
  )
+import Ecluse.Core.Server.Route (encodeComponent)
 import Ecluse.Core.Text (joinUrlPath)
 import Ecluse.Core.Version (Version, renderVersion)
-import Ecluse.Server.Route (encodeComponent)
 
 -- ── configuration ────────────────────────────────────────────────────────────
 
@@ -637,7 +637,7 @@ artifactUrl baseUrl name version =
 @{baseUrl}\/{encoded-name}\/-\/{encoded-filename}@. The filename is the exact
 on-the-wire name (not @{base}-{version}.tgz@ rebuilt from the coordinate), so the
 bytes are fetched by the name the client requested; it is percent-encoded as a
-single component ('Ecluse.Server.Route.encodeComponent') so a once-decoded escape
+single component ('Ecluse.Core.Server.Route.encodeComponent') so a once-decoded escape
 in it cannot reach the upstream raw. Exposed so the serve path can record the
 public artifact location on a mirror job (the same URL its public fetch targets).
 
@@ -658,7 +658,7 @@ joinPath baseUrl path
     | otherwise = Right (joinUrlPath baseUrl path)
 
 {- Encode a package name as its on-the-wire path segment. Each name component
-(scope, base name) is percent-encoded ('Ecluse.Server.Route.encodeComponent')
+(scope, base name) is percent-encoded ('Ecluse.Core.Server.Route.encodeComponent')
 around the structural delimiters this builder writes: a scoped @\@scope\/name@
 becomes @\@{enc-scope}%2F{enc-base}@ — the leading @\@@ and the @%2F@ separator
 are written here, never derived from a component, so a legitimate scoped name

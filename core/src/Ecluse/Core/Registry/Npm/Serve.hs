@@ -1,7 +1,7 @@
 {- | npm's client-facing error surface: the denial-body renderer wired into an npm
 mount.
 
-The agnostic serve layer ("Ecluse.Server.Response") decides the HTTP /status/ of a
+The agnostic serve layer ("Ecluse.Core.Server.Response") decides the HTTP /status/ of a
 refusal; the /body/ shape is npm's, and lives here. npm clients read the
 human-facing reason from a JSON error object (preferring @message@, then @error@);
 Écluse emits the @error@ key, matching npm's own denial bodies. 'npmRenderer' is
@@ -16,7 +16,7 @@ module Ecluse.Core.Registry.Npm.Serve (
 import Data.Aeson (object, (.=))
 import Data.Aeson qualified as Aeson
 
-import Ecluse.Server.Response (
+import Ecluse.Core.Server.Response (
     HelpMessage,
     MountRenderer (MountRenderer),
     RenderedBody (RenderedBody),

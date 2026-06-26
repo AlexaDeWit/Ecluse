@@ -3,7 +3,7 @@
 {-# LANGUAGE TupleSections #-}
 
 {- | The npm path grammar: the request router that maps an npm-native request
-path to a shared "Ecluse.Server.Route".
+path to a shared "Ecluse.Core.Server.Route".
 
 'classify' turns an npm request path — the already-mount-stripped, percent-decoded
 path segments — into a 'Route', so the whole npm routing table is unit-testable
@@ -49,8 +49,8 @@ import Data.Text qualified as T
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageName, mkPackageName, mkScope, pkgNamespace, renderPackageName, unScope)
+import Ecluse.Core.Server.Route (Classifier, Filename (Filename), Route (..), isSafeComponent)
 import Ecluse.Core.Version (mkVersion)
-import Ecluse.Server.Route (Classifier, Filename (Filename), Route (..), isSafeComponent)
 
 {- | Classify an npm-native request path into a shared 'Route'.
 

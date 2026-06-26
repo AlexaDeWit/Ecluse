@@ -19,8 +19,8 @@ import Ecluse.Core.Package (
     unScope,
  )
 import Ecluse.Core.Registry.Npm.Route (classify)
+import Ecluse.Core.Server.Route (Filename (Filename), Route (..))
 import Ecluse.Core.Version (Version, mkVersion)
-import Ecluse.Server.Route (Filename (Filename), Route (..))
 
 -- | An unscoped npm package identity, for building expected 'Route's.
 unscoped :: Text -> PackageName

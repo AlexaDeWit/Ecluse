@@ -22,7 +22,7 @@ repoint, an integrity divergence — and never collides a stale body onto a fres
 one. The functions here are pure; turning a 'Conditional' or relayed status into a
 WAI response is the serving layer's job.
 -}
-module Ecluse.Server.Conditional (
+module Ecluse.Core.Server.Conditional (
     -- * Our own ETag (transformed bodies)
     ETag,
     ownETag,

@@ -14,6 +14,14 @@ import Ecluse.Core.Package (mkPackageName)
 import Ecluse.Core.Registry.Npm (ResponseBoundExceeded (ResponseBoundExceeded))
 import Ecluse.Core.Rules.Types (Decision (DeniedByDefault, Undecidable))
 import Ecluse.Core.Security (LimitError (BodyTooLarge))
+import Ecluse.Core.Server.Response (
+    RejectReason (BelowIntegrityFloor, ByPolicy, MissingIntegrity, Unavailable, UpstreamInvalid),
+    Rejection (Rejection),
+    RuleName (RuleName),
+    ServeDecision (Admit, Reject),
+    Transience (WillResolve, WontResolve),
+ )
+import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Log (LogFormat (JsonLog), newLogEnv)
 import Ecluse.Server.Pipeline.Internal (
     PackumentNameMismatch (PackumentNameMismatch),
@@ -29,16 +37,8 @@ import Ecluse.Server.Pipeline.Internal (
     serveDecisionClass,
     transienceCause,
  )
-import Ecluse.Server.Response (
-    RejectReason (BelowIntegrityFloor, ByPolicy, MissingIntegrity, Unavailable, UpstreamInvalid),
-    Rejection (Rejection),
-    RuleName (RuleName),
-    ServeDecision (Admit, Reject),
-    Transience (WillResolve, WontResolve),
- )
 import Ecluse.Telemetry (telemetryDisabled)
 import Ecluse.Telemetry.Instruments (newMetrics)
-import Ecluse.Telemetry.Metrics qualified as Metric
 
 {- | A stand-in exception 'fetchCause' does not specifically classify, so the
 catch-all @other@ arm is exercised with a typed throw rather than a restricted

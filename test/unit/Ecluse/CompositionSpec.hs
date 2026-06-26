@@ -42,12 +42,12 @@ import Ecluse.Core.Package.Integrity (defaultMinIntegrity, mkMinIntegrity)
 import Ecluse.Core.Queue (defaultMemoryQueueConfig)
 import Ecluse.Core.Queue.Sqs (SqsConfig (sqsEndpoint, sqsQueueUrl, sqsRegion), SqsEndpoint (endpointHost, endpointPort, endpointSecure))
 import Ecluse.Core.Security (Limits (maxBodyBytes, maxNestingDepth, maxVersionCount), TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), defaultLimits)
+import Ecluse.Core.Server.Response (unHelpMessage)
 import Ecluse.Server.Cache (CacheConfig (cacheMaxEntries, cacheTtl))
 import Ecluse.Server.Context (
     MountBinding (bindingPackumentDeps, bindingPrefix),
     PackumentDeps (..),
  )
-import Ecluse.Server.Response (unHelpMessage)
 
 {- | Tests for the composition root's boot-time wiring. They exercise the two
 promises of the slice: a valid configuration produces served mount bindings with

@@ -69,8 +69,8 @@ import Data.Text qualified as T
 
 import Ecluse.Core.Package.Filter (FilterPlan (fpDecisions, fpLatest, fpSurvivors))
 import Ecluse.Core.Rules.Types (Decision)
+import Ecluse.Core.Server.Route (isSafeComponent)
 import Ecluse.Core.Version (unVersion)
-import Ecluse.Server.Route (isSafeComponent)
 
 -- ── URL rewriting ─────────────────────────────────────────────────────────────
 
@@ -92,7 +92,7 @@ produces the same URL.
 
 The @name@ is __upstream-controlled__ (it is the packument's own field), so each
 of its structural components — the scope and base name either side of a @\@scope\/@
-prefix — is gated through "Ecluse.Server.Route.isSafeComponent" before it is
+prefix — is gated through "Ecluse.Core.Server.Route.isSafeComponent" before it is
 interpolated. A name carrying a traversal, an embedded separator, or a control
 character is rejected and the document is left untouched rather than emit a
 @dist.tarball@ that aims a client outside the package's own path.
@@ -108,7 +108,7 @@ rewriteTarballUrls base = \case
 {- | Whether an upstream-controlled packument @name@ is safe to interpolate into a
 rewritten @dist.tarball@ path: every structural component (the scope and base name
 either side of an @\@scope\/@ prefix, or the whole name when unscoped) must pass
-"Ecluse.Server.Route.isSafeComponent". Splitting on the scope separator first means
+"Ecluse.Core.Server.Route.isSafeComponent". Splitting on the scope separator first means
 a legitimate @\@scope\/name@'s own @\'\/\'@ is not itself judged unsafe, while a
 slash anywhere else (a traversal, a path injection) is caught.
 -}

@@ -6,8 +6,8 @@ slices that decide /what/ to serve — the registry client
 ("Ecluse.Core.Registry.Npm"), the per-version rules ("Ecluse.Core.Rules"), the structural
 filter ("Ecluse.Core.Registry.Npm.Filter"), the cross-upstream merge
 ("Ecluse.Core.Package.Merge"), the metadata cache ("Ecluse.Server.Cache"), the
-own-ETag conditional ("Ecluse.Server.Conditional"), and the serve-outcome status
-("Ecluse.Server.Response") — into one action in the
+own-ETag conditional ("Ecluse.Core.Server.Conditional"), and the serve-outcome status
+("Ecluse.Core.Server.Response") — into one action in the
 'Ecluse.Server.Context.Handler' reader, reading its mount's serve dependencies and
 the composition-root 'Ecluse.Env.Env' from the request's
 'Ecluse.Server.Context.RequestCtx'.
@@ -196,11 +196,31 @@ import Ecluse.Core.Security (
     lowerCaseHosts,
     tarballHostAllowed,
  )
+import Ecluse.Core.Server.Conditional (Conditional (Modified, NotModified), etagHeader, evaluateOwnETag, forwardValidators, isNotModified)
+import Ecluse.Core.Server.Response (
+    ArtifactStatus (Forbidden, NotFound, Ok, ServerError, Unavailable'),
+    MountRenderer,
+    PackumentStatus (PackumentBadGateway, PackumentForbidden, PackumentOk, PackumentServerError, PackumentUnavailable),
+    RejectReason (BelowIntegrityFloor, MissingIntegrity, Unavailable, UpstreamInvalid),
+    Rejection (Rejection, rejectionMessage),
+    RenderedBody (RenderedBody),
+    RetryAfter (RetryAfter),
+    ServeDecision (Admit, Reject),
+    Transience (WillResolve, WontResolve),
+    artifactStatus,
+    artifactStatusCode,
+    packumentStatus,
+    packumentStatusCode,
+    renderError,
+    serveDecisionOf,
+ )
+import Ecluse.Core.Server.Route (Filename (Filename))
+import Ecluse.Core.Server.Stream (probeUpstreamWhen, streamUpstreamWhen)
+import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Version (Version, renderVersion)
 import Ecluse.Env (Env (envLogEnv, envManager, envMetadataCache, envMetrics, envPrivateManager, envQueue, envTelemetry))
 import Ecluse.Log (moduleField)
 import Ecluse.Server.Cache (CacheEntry (CacheEntry, entryInfo, entryRaw), Source (Source), resolveMetadata)
-import Ecluse.Server.Conditional (Conditional (Modified, NotModified), etagHeader, evaluateOwnETag, forwardValidators, isNotModified)
 import Ecluse.Server.Context (
     Handler,
     MountBinding (bindingPackumentDeps, bindingRenderer),
@@ -220,25 +240,6 @@ import Ecluse.Server.Pipeline.Internal (
     recordEffectfulFailures,
     serveDecisionClass,
  )
-import Ecluse.Server.Response (
-    ArtifactStatus (Forbidden, NotFound, Ok, ServerError, Unavailable'),
-    MountRenderer,
-    PackumentStatus (PackumentBadGateway, PackumentForbidden, PackumentOk, PackumentServerError, PackumentUnavailable),
-    RejectReason (BelowIntegrityFloor, MissingIntegrity, Unavailable, UpstreamInvalid),
-    Rejection (Rejection, rejectionMessage),
-    RenderedBody (RenderedBody),
-    RetryAfter (RetryAfter),
-    ServeDecision (Admit, Reject),
-    Transience (WillResolve, WontResolve),
-    artifactStatus,
-    artifactStatusCode,
-    packumentStatus,
-    packumentStatusCode,
-    renderError,
-    serveDecisionOf,
- )
-import Ecluse.Server.Route (Filename (Filename))
-import Ecluse.Server.Stream (probeUpstreamWhen, streamUpstreamWhen)
 import Ecluse.Telemetry.Instruments (
     Metrics,
     recordMirrorEnqueueFailure,
@@ -249,7 +250,6 @@ import Ecluse.Telemetry.Instruments (
     recordUpstreamFetchError,
     timedSeconds,
  )
-import Ecluse.Telemetry.Metrics qualified as Metric
 import Ecluse.Telemetry.Tracing (withMirrorEnqueueSpan, withRuleEvalSpan)
 
 -- ── the handler ─────────────────────────────────────────────────────────────
@@ -1054,7 +1054,7 @@ gates the artifact through the __identical__ pipeline as 'serveTarball' — the 
 edge auth, host-allowlist, internal-range, and tarball-host policy, and the same
 upstream-request construction — but issues the upstream request as a HEAD and relays
 its status and safe response headers ('relayArtifact') with __no body__
-('Ecluse.Server.Stream.probeUpstreamWhen'). On an admit no 'MirrorJob' is enqueued: a
+('Ecluse.Core.Server.Stream.probeUpstreamWhen'). On an admit no 'MirrorJob' is enqueued: a
 HEAD serves no bytes, so there is nothing to back-fill (mirroring stays demand-driven
 on the GET path). A refusal renders the same serve error model with an empty body.
 -}

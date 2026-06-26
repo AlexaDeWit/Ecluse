@@ -78,13 +78,13 @@ import OpenTelemetry.Trace (
 import UnliftIO (MonadUnliftIO)
 
 import Ecluse.Core.Package (PackageName, renderPackageName)
-import Ecluse.Core.Version (Version, renderVersion)
-import Ecluse.Server.Response (
+import Ecluse.Core.Server.Response (
     RejectReason (BelowIntegrityFloor, ByPolicy, MissingIntegrity, Unavailable, UpstreamInvalid),
     Rejection (rejectionMessage, rejectionReason),
     RuleName (RuleName),
     ServeDecision (Admit, Reject),
  )
+import Ecluse.Core.Version (Version, renderVersion)
 import Ecluse.Telemetry (
     Telemetry,
     telemetryMeterProvider,

@@ -9,8 +9,8 @@ import Test.Hspec.Hedgehog (hedgehog)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageName, mkPackageName)
+import Ecluse.Core.Server.Route (Filename (Filename), Route (..), denyAll, encodeComponent, isSafeComponent)
 import Ecluse.Core.Version (Version, mkVersion)
-import Ecluse.Server.Route (Filename (Filename), Route (..), denyAll, encodeComponent, isSafeComponent)
 
 -- | An unscoped package identity, for building 'Tarball' routes in the assertions.
 unscoped :: Text -> PackageName

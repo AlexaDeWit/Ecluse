@@ -103,6 +103,7 @@ import Ecluse.Core.Registry.Npm (
     npmPublishDocument,
  )
 import Ecluse.Core.Security (Limits (maxBodyBytes), boundedRead, defaultLimits)
+import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Version (renderVersion)
 import Ecluse.Env (
     Env (envDdContext, envManager, envMetrics, envQueue, envRegistry, envTelemetry, envWorkerHeartbeat),
@@ -112,7 +113,6 @@ import Ecluse.Env (
  )
 import Ecluse.Telemetry.Correlation (ddPayloadNow)
 import Ecluse.Telemetry.Instruments (recordMirrorJobProcessed, recordMirrorPublishDuration, timedSeconds)
-import Ecluse.Telemetry.Metrics qualified as Metric
 import Ecluse.Telemetry.Tracing (JobSpanOutcome (JobSpanOutcome), withMirrorJobSpan)
 
 -- ── entry point ───────────────────────────────────────────────────────────────

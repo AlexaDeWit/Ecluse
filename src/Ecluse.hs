@@ -55,7 +55,7 @@ The library's vocabulary, roughly from the pure core outward:
 * __Protocol boundary__ — "Ecluse.Core.Registry" (the registry-protocol handle),
   "Ecluse.Core.Registry.Npm.Wire" and "Ecluse.Core.Registry.Npm.Project" (the lenient npm
   wire decoders and their projection onto the domain model),
-  "Ecluse.Core.Registry.Npm.Route" (the npm path grammar), and "Ecluse.Server.Route"
+  "Ecluse.Core.Registry.Npm.Route" (the npm path grammar), and "Ecluse.Core.Server.Route"
   (the shared serve-action 'Route' set and the injected route classifier).
 * __Cloud handles__ — "Ecluse.Core.Credential" (minting the mirror-target write token)
   and "Ecluse.Core.Queue" (the durable mirror-job hand-off to the worker).
@@ -141,6 +141,7 @@ import Ecluse.Core.Registry.Npm.Route qualified as Npm
 import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
 import Ecluse.Core.Security (defaultLimits, lowerCaseHosts)
 import Ecluse.Core.Security.Egress (guardedManagerSettings)
+import Ecluse.Core.Telemetry.Metrics (BreakerSource (CredentialMint), Provider (CodeArtifact))
 import Ecluse.Env (Env, envMetrics, newWorkerHeartbeat, withEnv)
 import Ecluse.Log (moduleField, newLogEnv)
 import Ecluse.Server (MountBinding (..), ServerConfig (scDrainTimeout, scPort), ShutdownDrainTimeout (ShutdownDrainTimeout), mkServerConfig)
@@ -148,7 +149,6 @@ import Ecluse.Server qualified as Server
 import Ecluse.Server.Cache (newMetadataCache)
 import Ecluse.Server.Context (PackumentDeps)
 import Ecluse.Telemetry (TelemetrySwitch (TelemetryOff, TelemetryOn), withTelemetry)
-import Ecluse.Telemetry.Metrics (BreakerSource (CredentialMint), Provider (CodeArtifact))
 import Ecluse.Telemetry.Reporters (
     deferredBreakerReporter,
     deferredRefreshReporter,
@@ -340,7 +340,7 @@ This is the npm-aware composition site: 'mountBindingFor' mounts npm — its pat
 grammar ("Ecluse.Core.Registry.Npm.Route") and its denial renderer
 ("Ecluse.Core.Registry.Npm.Serve") — into the otherwise ecosystem-neutral web layer
 ('Ecluse.Server.runServer'), so the agnostic server stays closed over the shared
-'Ecluse.Server.Route.Route' set and only this one place names an ecosystem.
+'Ecluse.Core.Server.Route.Route' set and only this one place names an ecosystem.
 Splitting the server into its own binary later reuses this same entry.
 -}
 runServer :: ServerConfig -> Env -> IO ()
@@ -358,8 +358,8 @@ npmServerConfig = mkServerConfig [npmMount Nothing]
 
 {- | Resolve an 'Ecosystem' to its complete 'MountBinding', or 'Nothing' when that
 ecosystem has no adapter wired. The ecosystem selects its path
-grammar (the 'Ecluse.Server.Route.Classifier') and its denial renderer (the
-'Ecluse.Server.Response.MountRenderer'), and its path prefix is __derived__ from it
+grammar (the 'Ecluse.Core.Server.Route.Classifier') and its denial renderer (the
+'Ecluse.Core.Server.Response.MountRenderer'), and its path prefix is __derived__ from it
 ('prefixFor') rather than configured — so the ecosystem is the single thing that
 drives the binding (see @docs\/architecture\/hosting.md@ → "Mounts"). The
 packument-serve dependencies are passed in (the composition root supplies them once

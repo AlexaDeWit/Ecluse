@@ -23,7 +23,7 @@ materialises a label list into the OpenTelemetry 'Attributes' an instrument is r
 with. The catalogue and the cardinality rule are described in
 @docs\/architecture\/observability.md@.
 -}
-module Ecluse.Telemetry.Metrics (
+module Ecluse.Core.Telemetry.Metrics (
     -- * The metric-name catalogue
     MetricName (..),
     metricName,
@@ -198,7 +198,7 @@ data Decision = Admit | Deny | Unavailable
     deriving stock (Bounded, Enum, Eq, Show)
 
 {- | The bucketed class of a denial reason — a bounded summary of
-"Ecluse.Server.Response.RejectReason", __not__ the rule name or the message (those are
+"Ecluse.Core.Server.Response.RejectReason", __not__ the rule name or the message (those are
 high-cardinality and stay on the log line).
 -}
 data ReasonClass = ReasonPolicy | ReasonMissingIntegrity | ReasonUnavailable | ReasonLimit

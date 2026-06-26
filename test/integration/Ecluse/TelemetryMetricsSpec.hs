@@ -13,6 +13,14 @@ import TestContainers.Docker (fromDockerfile)
 import TestContainers.Hspec (withContainers)
 import UnliftIO.Concurrent (threadDelay)
 
+import Ecluse.Core.Telemetry.Metrics (
+    CacheResult (Hit, Miss),
+    Decision (Admit, Deny),
+    MirrorResult (Published),
+    ReasonClass (ReasonPolicy),
+    StatusClass (Status2xx),
+    Upstream (Public),
+ )
 import Ecluse.Telemetry (
     TelemetrySwitch (TelemetryOff, TelemetryOn),
     telemetryMeterProvider,
@@ -25,14 +33,6 @@ import Ecluse.Telemetry.Instruments (
     recordRuleDenial,
     recordServeDecision,
     recordUpstreamFetch,
- )
-import Ecluse.Telemetry.Metrics (
-    CacheResult (Hit, Miss),
-    Decision (Admit, Deny),
-    MirrorResult (Published),
-    ReasonClass (ReasonPolicy),
-    StatusClass (Status2xx),
-    Upstream (Public),
  )
 
 {- | The integration tier for metrics: drive @ecluse.*@ measurements through an

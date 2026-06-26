@@ -1,7 +1,7 @@
 {- | The runtime metric instruments and the typed emit helpers the hot path records
-through — the IO layer over the pure @ecluse.*@ catalogue ("Ecluse.Telemetry.Metrics").
+through — the IO layer over the pure @ecluse.*@ catalogue ("Ecluse.Core.Telemetry.Metrics").
 
-"Ecluse.Telemetry.Metrics" defines /what/ the catalogue is (the names and the closed
+"Ecluse.Core.Telemetry.Metrics" defines /what/ the catalogue is (the names and the closed
 set of bounded labels); this module turns that catalogue into live OpenTelemetry
 instruments and exposes one typed @record*@ per signal. Each helper takes only the
 bounded label values its metric carries — never a free identifier — so the
@@ -75,8 +75,7 @@ import OpenTelemetry.Metric.Core (
     noopMeterProvider,
  )
 
-import Ecluse.Telemetry (Telemetry, telemetryMeterProvider)
-import Ecluse.Telemetry.Metrics (
+import Ecluse.Core.Telemetry.Metrics (
     BreakerSource,
     BreakerState,
     CacheResult,
@@ -95,6 +94,7 @@ import Ecluse.Telemetry.Metrics (
     metricAttributes,
     metricName,
  )
+import Ecluse.Telemetry (Telemetry, telemetryMeterProvider)
 
 -- ── the instrument handle ─────────────────────────────────────────────────────
 

@@ -95,10 +95,10 @@ import Ecluse.Core.Package.Integrity (MinIntegrity)
 import Ecluse.Core.Queue (MemoryQueueConfig, defaultMemoryQueueConfig)
 import Ecluse.Core.Queue.Sqs (SqsConfig (sqsEndpoint), SqsEndpoint (..), defaultSqsConfig)
 import Ecluse.Core.Security (Limits (Limits, maxBodyBytes, maxNestingDepth, maxVersionCount), TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), hostAddress, lowerCaseHosts, splitHostPort)
+import Ecluse.Core.Server.Response (HelpMessage, mkHelpMessage)
 import Ecluse.Core.Text (nonBlank)
 import Ecluse.Server.Cache (CacheConfig (..))
 import Ecluse.Server.Context (MountBinding, PackumentDeps (..))
-import Ecluse.Server.Response (HelpMessage, mkHelpMessage)
 
 -- ── global credential providers ───────────────────────────────────────────────
 

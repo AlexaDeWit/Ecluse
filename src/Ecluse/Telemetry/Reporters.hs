@@ -31,19 +31,19 @@ module Ecluse.Telemetry.Reporters (
 
 import Ecluse.Core.Breaker (Breaker (..), BreakerReporter (..))
 import Ecluse.Core.Credential.Refresh (RefreshReporter (..))
+import Ecluse.Core.Telemetry.Metrics (
+    BreakerSource,
+    BreakerState,
+    CredentialResult (RefreshFailed, Refreshed),
+    Provider,
+ )
+import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Telemetry.Instruments (
     Metrics,
     recordBreakerState,
     recordCredentialRefresh,
     recordCredentialTokenTtl,
  )
-import Ecluse.Telemetry.Metrics (
-    BreakerSource,
-    BreakerState,
-    CredentialResult (RefreshFailed, Refreshed),
-    Provider,
- )
-import Ecluse.Telemetry.Metrics qualified as Metric
 
 -- ── deferred metric handle ────────────────────────────────────────────────────
 
@@ -100,7 +100,7 @@ deferredRefreshReporter deferred provider =
 -- ── breaker-state projection ──────────────────────────────────────────────────
 
 {- | Project the breaker's runtime state ("Ecluse.Core.Breaker") onto the bounded gauge value
-the catalogue records ("Ecluse.Telemetry.Metrics"). The consecutive-failure tally a
+the catalogue records ("Ecluse.Core.Telemetry.Metrics"). The consecutive-failure tally a
 'Closed' breaker carries is not observable, so it collapses to the single closed value.
 -}
 breakerStateOf :: Breaker -> BreakerState
