@@ -2,8 +2,9 @@
 the real @npm@ CLI, and tear it all down.
 
 The topology runs the __real OCI image__ (the artifact we publish), an __nginx__
-public-upstream stub, a __Verdaccio__ private upstream + mirror target, and a
-__ministack__ SQS emulator on a docker network whose subnet is RFC 5737 documentation
+public-upstream stub, a __Verdaccio__ private upstream + mirror target, a
+__ministack__ SQS emulator, and — for the telemetry scenarios ('E2EConfig') — an
+__OTLP collector__ the proxy exports to, on a docker network whose subnet is RFC 5737 documentation
 space (@203.0.113.0\/24@). That range is __not__ in the egress guard's internal-range
 block, so the proxy reaches the stub at a non-internal address with no production code
 change — see @planning\/slices\/S53-e2e-ecosystem.md@. Custom-subnet networks are
@@ -26,6 +27,23 @@ module Ecluse.E2E.Harness (
     E2E (..),
     e2eUnavailable,
     withE2E,
+    withE2EWith,
+    E2EConfig (..),
+    defaultE2EConfig,
+
+    -- * Telemetry topology
+    collectorOtlpEndpoint,
+    otlpCollectorEnv,
+    datadogCollectorEnv,
+    ddTagService,
+    ddTagEnv,
+    ddTagVersion,
+
+    -- * Observing container output
+    proxyContainerLogs,
+    awaitProxyLog,
+    awaitCollectorLog,
+    hasPopulatedTraceId,
 
     -- * Driving the system
     NpmResult (..),
@@ -44,6 +62,7 @@ module Ecluse.E2E.Harness (
 
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
+import Data.Char (isDigit)
 import Data.List (lookup)
 import Data.Text qualified as T
 import Data.Time.Clock.POSIX (getPOSIXTime)
@@ -95,9 +114,34 @@ data E2E = E2E
     {- ^ The public-upstream stub container name, so a test can pause and resume it
     ('withUpstreamPaused') to simulate a public-registry outage.
     -}
+    , e2eProxyContainer :: String
+    {- ^ The proxy container name, so a test can read the proxy's own JSONL log stream
+    ('proxyContainerLogs') — what it wrote to stdout\/stderr.
+    -}
+    , e2eCollectorContainer :: Maybe String
+    {- ^ The OTLP collector container name when one was booted ('ecCollector'), so a
+    test can read the collector's debug-exporter output to assert which signals arrived.
+    'Nothing' for an environment booted without a collector.
+    -}
     , e2eManager :: Manager
     -- ^ A shared HTTP manager for the harness's own probes.
     }
+
+{- | What an end-to-end environment boots beyond the base topology: whether to stand
+up an OTLP collector for the proxy to export to, and any extra proxy environment
+(telemetry switches, the OTLP\/Datadog dialect) layered over the base 'proxyEnv'. The
+default boots neither — the plain topology the non-telemetry scenarios use.
+-}
+data E2EConfig = E2EConfig
+    { ecCollector :: Bool
+    -- ^ Stand up the OTLP collector container (reached by the proxy as @otelcol@).
+    , ecExtraEnv :: [(Text, Text)]
+    -- ^ Extra proxy environment, appended over (and so overriding) the base 'proxyEnv'.
+    }
+
+-- | The base configuration: the plain topology, no collector and no extra environment.
+defaultE2EConfig :: E2EConfig
+defaultE2EConfig = E2EConfig{ecCollector = False, ecExtraEnv = []}
 
 -- ── availability ──────────────────────────────────────────────────────────────
 
@@ -123,12 +167,23 @@ dockerDaemonReachable =
 
 -- ── lifecycle ───────────────────────────────────────────────────────────────
 
-{- | Bring the network + three containers up, wait for proxy readiness, run the
-action, then tear everything down on every exit path. Assumes 'e2eUnavailable'
-returned 'Nothing'.
+{- | Bring the network + base containers up, wait for proxy readiness, run the action,
+then tear everything down on every exit path — the plain topology ('defaultE2EConfig'),
+no collector and no extra proxy environment. Assumes 'e2eUnavailable' returned 'Nothing'.
 -}
 withE2E :: (E2E -> IO ()) -> IO ()
-withE2E action = do
+withE2E = withE2EWith defaultE2EConfig
+
+{- | 'withE2E' parameterised by an 'E2EConfig': optionally stand up an OTLP collector
+the proxy exports to (on the same TEST-NET, reached by its @otelcol@ network alias),
+and layer extra proxy environment over the base 'proxyEnv'. The collector — when asked
+for — is brought up __before__ the proxy and waited until ready, so it is already
+receiving when the proxy makes its first export, and is torn down with the others. Every
+case under 'withE2EWith' is still per-test isolated: its own network, containers, and
+collector, freshly booted and torn down (see "Ecluse.E2E.SuiteSpec").
+-}
+withE2EWith :: E2EConfig -> (E2E -> IO ()) -> IO ()
+withE2EWith cfg action = do
     image <- maybe (fail (imageVar <> " unset")) pure =<< lookupEnv imageVar
     sfx <- uniqueSuffix
     tmpRoot <- getTemporaryDirectory
@@ -137,19 +192,46 @@ withE2E action = do
         verd = "ecluse-e2e-verd-" <> sfx
         mini = "ecluse-e2e-mini-" <> sfx
         prox = "ecluse-e2e-proxy-" <> sfx
+        coll = "ecluse-e2e-otelcol-" <> sfx
         workDir = tmpRoot </> ("ecluse-e2e-" <> sfx)
         htmlDir = workDir </> "html"
         verdConf = workDir </> "verdaccio.yaml"
         nginxConf = workDir </> "nginx.conf"
     bracket
         (pure ())
-        (\_ -> teardown net [prox, verd, stub, mini] workDir)
+        (\_ -> teardown net [prox, verd, stub, mini, coll] workDir)
         ( \_ -> do
             createDirectoryIfMissing True htmlDir
             buildFixtures htmlDir fixturePackages
             writeFileText verdConf verdaccioConfig
             writeFileText nginxConf nginxStubConfig
             dockerOk ["network", "create", "--subnet", "203.0.113.0/24", net]
+            -- The OTLP collector, when the scenario asks for one: an OTLP/HTTP receiver
+            -- into a `debug` exporter at detailed verbosity (so each received metric and
+            -- span is written to its logs), reached by the proxy as `otelcol`. Brought up
+            -- and waited ready here — before the proxy — so it is already accepting when
+            -- the proxy first exports.
+            when (ecCollector cfg) $ do
+                dockerOk
+                    [ "run"
+                    , "-d"
+                    , "--name"
+                    , coll
+                    , "--network"
+                    , net
+                    , "--network-alias"
+                    , toString collectorAlias
+                    , "-e"
+                    , "OTELCOL_CONFIG=" <> toString collectorConfig
+                    , collectorImage
+                    , -- The args after the image replace the image's default CMD, so the
+                      -- inline config arrives through the `env:` provider with no shell,
+                      -- file, or bind mount on the distroless image.
+                      "--config"
+                    , "env:OTELCOL_CONFIG"
+                    ]
+                ready <- awaitContainerLog coll (T.isInfixOf "Everything is ready") 240
+                unless ready (fail "OTLP collector did not become ready within the timeout")
             -- nginx public-upstream stub, reachable by the proxy as `upstream`. The
             -- config maps /<pkg> to the package's packument.json (the tarball lives
             -- under /<pkg>/-/, so /<pkg> cannot be a file and a directory both).
@@ -222,7 +304,7 @@ withE2E action = do
                 , "-p"
                 , "127.0.0.1:" <> show proxyPort <> ":4873"
                 ]
-                    <> concatMap (\(k, v) -> ["-e", toString (k <> "=" <> v)]) (proxyEnv proxyPort queueUrl)
+                    <> concatMap (\(k, v) -> ["-e", toString (k <> "=" <> v)]) (proxyEnv proxyPort queueUrl <> ecExtraEnv cfg)
                     <> [image]
             verdPort <- publishedPort verd "4873/tcp"
             let base = "http://127.0.0.1:" <> show proxyPort
@@ -232,6 +314,8 @@ withE2E action = do
                         , e2eBaseUrl = base
                         , e2eVerdaccio = "http://127.0.0.1:" <> show verdPort
                         , e2eStubContainer = stub
+                        , e2eProxyContainer = prox
+                        , e2eCollectorContainer = if ecCollector cfg then Just coll else Nothing
                         , e2eManager = manager
                         }
             ready <- waitFor manager (base <> "/readyz") 200
@@ -274,6 +358,144 @@ teardown net containers workDir = do
     for_ containers (\c -> void (readProcess (proc "docker" ["rm", "-f", c])))
     void (readProcess (proc "docker" ["network", "rm", net]))
     handleAny (const pass) (removePathForcibly workDir)
+
+-- ── telemetry topology ────────────────────────────────────────────────────────
+
+-- The collector's network alias on the TEST-NET; the proxy exports to it by this name.
+collectorAlias :: Text
+collectorAlias = "otelcol"
+
+{- | The in-cluster OTLP endpoint the proxy exports to — the collector reached by its
+network alias on the TEST-NET. A scenario names it through 'otlpCollectorEnv' (vanilla
+OpenTelemetry) or has the resolver derive it from @DD_AGENT_HOST@ ('datadogCollectorEnv').
+-}
+collectorOtlpEndpoint :: Text
+collectorOtlpEndpoint = "http://" <> collectorAlias <> ":4318"
+
+{- Fast-flush export knobs — standard @OTEL_*@ configuration (read by the SDK), not a
+test-only path — so a span and a metric reach the collector well within a scenario's
+patience window rather than on the SDK's minute-scale batch defaults. -}
+telemetryExportTuning :: [(Text, Text)]
+telemetryExportTuning =
+    [ ("OTEL_TRACES_EXPORTER", "otlp")
+    , ("OTEL_METRICS_EXPORTER", "otlp")
+    , ("OTEL_METRIC_EXPORT_INTERVAL", "1000")
+    , ("OTEL_BSP_SCHEDULE_DELAY", "1000")
+    ]
+
+{- | Proxy environment for the vanilla-OpenTelemetry dialect: telemetry __on__, the OTLP
+endpoint named by @OTEL_EXPORTER_OTLP_ENDPOINT@. Paired with @ecCollector = True@ the
+collector is up and receives (the healthy-publication path); paired with
+@ecCollector = False@ the named endpoint resolves to nothing, exercising the
+missing-collector graceful-degradation path — the same proxy configuration, only the
+collector's presence differs.
+-}
+otlpCollectorEnv :: [(Text, Text)]
+otlpCollectorEnv =
+    [ ("PROXY_TELEMETRY", "on")
+    , ("OTEL_EXPORTER_OTLP_ENDPOINT", collectorOtlpEndpoint)
+    ]
+        <> telemetryExportTuning
+
+{- | The Datadog unified-service-tag identity the Datadog scenario configures __and__
+asserts on — exported as resource attributes and stamped onto the @dd@ log object. Named
+constants so the proxy environment and the assertions cannot drift apart.
+-}
+ddTagService, ddTagEnv, ddTagVersion :: Text
+ddTagService = "ecluse-e2e-dd"
+ddTagEnv = "e2e-staging"
+ddTagVersion = "9.9.9-e2e"
+
+{- | Proxy environment for the Datadog dialect: @DD_SERVICE@\/@DD_ENV@\/@DD_VERSION@ (the
+unified-service tags) plus @DD_AGENT_HOST@ pointing the self-aligning resolver at the
+collector. The resolver projects these onto @service.name@\/@deployment.environment@\/
+@service.version@ resource attributes and the @dd@ log object. Pair with @ecCollector = True@.
+-}
+datadogCollectorEnv :: [(Text, Text)]
+datadogCollectorEnv =
+    [ ("PROXY_TELEMETRY", "on")
+    , ("DD_SERVICE", ddTagService)
+    , ("DD_ENV", ddTagEnv)
+    , ("DD_VERSION", ddTagVersion)
+    , ("DD_AGENT_HOST", collectorAlias)
+    ]
+        <> telemetryExportTuning
+
+-- The OTLP Collector image, version 0.119.0 (matching the integration tier), pinned by
+-- its multi-arch manifest-list digest like the ministack pin above: the scenarios assert
+-- on this image's exact `debug`-exporter output and its readiness line, so its surface
+-- must be immutable, not a movable tag. The core distribution carries the OTLP receiver
+-- and the `debug` exporter the assertions read.
+collectorImage :: String
+collectorImage = "otel/opentelemetry-collector@sha256:3805724e26351df55a45032a793c9b64a2117ac9a58f13f070674a9723fab373"
+
+{- The whole collector configuration as a single-line (flow-style) YAML document, passed
+through the @env:@ config provider so no shell, file, or bind mount is needed on the
+distroless image: an OTLP/HTTP receiver feeding a `debug` exporter at detailed verbosity
+through __both__ a traces and a metrics pipeline, so every received span and metric is
+written to the container logs. -}
+collectorConfig :: Text
+collectorConfig =
+    "{receivers: {otlp: {protocols: {http: {endpoint: \"0.0.0.0:4318\"}}}}, "
+        <> "exporters: {debug: {verbosity: detailed}}, "
+        <> "service: {pipelines: {"
+        <> "traces: {receivers: [otlp], exporters: [debug]}, "
+        <> "metrics: {receivers: [otlp], exporters: [debug]}}}}"
+
+-- ── observing container output ──────────────────────────────────────────────────
+
+{- | The proxy container's combined stdout+stderr as docker has captured it so far — the
+JSONL stream the proxy writes (@PROXY_LOG_FORMAT=json@), so a test can assert the proxy
+logs at all (the stdout\/stderr property) and inspect the @dd@ object on its lines.
+-}
+proxyContainerLogs :: E2E -> IO Text
+proxyContainerLogs = containerLogs . e2eProxyContainer
+
+-- A container's combined stdout+stderr so far ('docker logs'); empty on any docker
+-- error (e.g. the container does not exist yet, mid image-pull).
+containerLogs :: String -> IO Text
+containerLogs cname =
+    handleAny (\_ -> pure "") $ do
+        (_, out, err) <- readProcess (proc "docker" ["logs", cname])
+        pure (decodeUtf8 (LBS.toStrict out) <> decodeUtf8 (LBS.toStrict err))
+
+-- Poll a container's logs until the predicate holds, up to @attempts@ times at ~250ms.
+awaitContainerLog :: String -> (Text -> Bool) -> Int -> IO Bool
+awaitContainerLog cname matches = go
+  where
+    go n
+        | n <= 0 = pure False
+        | otherwise = do
+            logs <- containerLogs cname
+            if matches logs then pure True else threadDelay 250000 >> go (n - 1)
+
+{- | Poll the proxy's own log stream until the predicate holds, or the attempts lapse —
+for an assertion that has to await an asynchronous line (e.g. the worker's
+@mirrored artifact published@, or a throttled telemetry export-error warning).
+-}
+awaitProxyLog :: E2E -> (Text -> Bool) -> Int -> IO Bool
+awaitProxyLog e2e = awaitContainerLog (e2eProxyContainer e2e)
+
+{- | Poll the OTLP collector's debug-exporter output until the predicate holds. Fails
+loudly if the environment was booted without a collector (a scenario wiring error: only
+a @ecCollector = True@ environment has one to read).
+-}
+awaitCollectorLog :: E2E -> (Text -> Bool) -> Int -> IO Bool
+awaitCollectorLog e2e matches attempts =
+    case e2eCollectorContainer e2e of
+        Nothing -> fail "awaitCollectorLog: this environment was booted without a collector"
+        Just coll -> awaitContainerLog coll matches attempts
+
+{- | Whether any @dd@ object across the given log text carries a __populated__ (digit-
+leading) @trace_id@ — the active-span correlation, present only when telemetry is on and
+a span is in scope. Split on the @"trace_id":"@ prefix and require a value that begins
+with a digit, so an absent or empty id does not satisfy it.
+-}
+hasPopulatedTraceId :: Text -> Bool
+hasPopulatedTraceId logs =
+    any leadsWithDigit (drop 1 (T.splitOn "\"trace_id\":\"" logs))
+  where
+    leadsWithDigit seg = maybe False (isDigit . fst) (T.uncons seg)
 
 -- ── npm driver ──────────────────────────────────────────────────────────────
 
