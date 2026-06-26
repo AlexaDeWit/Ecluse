@@ -28,6 +28,7 @@ trust substitutes for crypto strength there (see
 -}
 module Ecluse.Package.Integrity (
     -- * Algorithm strength
+    Strength,
     integrityStrength,
     assertedAlg,
 
@@ -55,14 +56,41 @@ import Ecluse.Package (
 
 -- ── algorithm strength ───────────────────────────────────────────────────────
 
-{- | The collision-resistance strength rank of an algorithm; __higher is stronger__.
+{- | The collision-resistance tier of a hash algorithm, with constructors ordered
+__weakest to strongest__ so the derived 'Ord' /is/ the strength ranking: two tiers
+compare by collision resistance, and equal-strength algorithms share a tier (so they
+compare 'EQ'). This is the one named ranking the worker's tamper gate and the serve
+layer's admission floor both consult.
+-}
+data Strength
+    = {- | A bare 'SRI' wrapper asserts no algorithm at all — below every real
+      digest, so an unresolved SRI never wins a strongest-digest comparison.
+      -}
+      Unasserted
+    | -- | MD5: practical collisions; the weakest real algorithm.
+      Weakest
+    | -- | SHA-1: practical collisions.
+      Weak
+    | -- A future weak-but-not-broken algorithm would slot a new tier here, between
+      -- the broken algorithms and the SHA-256 floor — an enum needs no renumbering,
+      -- unlike the old Int ranking, which reserved a numeric gap for exactly this.
+
+      -- | SHA-256: collision-resistant; the public-integrity floor.
+      Floor
+    | -- | The modern long digests SHA-512 and Blake2b — equal strength, the top tier.
+      Strongest
+    deriving stock (Eq, Ord, Show)
+
+{- | The collision-resistance 'Strength' tier of an algorithm; __a stronger algorithm
+ranks higher__ under 'Strength''s 'Ord'.
 
 The broken algorithms rank below the SHA-256 floor (@'integrityStrength' 'SHA256'@):
 MD5 and SHA-1 have practical collisions, so a match on one cannot prove the bytes
-were not substituted. SHA-256 and the modern long digests rank at or above the floor.
-A bare 'SRI' ranks @0@ — it is a wrapper, not an algorithm, so resolve it with
-'assertedAlg' before ranking; @0@ is below every real algorithm, so an unresolved
-SRI never wins a strongest-digest comparison.
+were not substituted. SHA-256 and the modern long digests rank at or above the floor,
+with SHA-512 and Blake2b sharing the top tier (equal strength). A bare 'SRI' ranks
+lowest of all — it is a wrapper, not an algorithm, so resolve it with 'assertedAlg'
+before ranking; ranking below every real algorithm, an unresolved SRI never wins a
+strongest-digest comparison.
 
 >>> integrityStrength SHA512 > integrityStrength SHA256
 True
@@ -70,17 +98,14 @@ True
 >>> integrityStrength SHA1 >= integrityStrength SHA256
 False
 -}
-integrityStrength :: HashAlg -> Int
+integrityStrength :: HashAlg -> Strength
 integrityStrength = \case
-    MD5 -> 1
-    SHA1 -> 2
-    -- Rank 3 is intentionally left unused: it reserves a gap between the broken
-    -- algorithms (SHA-1, MD5) and the floor (SHA-256) for a future weak-but-not-broken
-    -- algorithm, without renumbering. Do not "close" it.
-    SHA256 -> 4
-    SHA512 -> 5
-    Blake2b -> 5
-    SRI -> 0
+    SRI -> Unasserted
+    MD5 -> Weakest
+    SHA1 -> Weak
+    SHA256 -> Floor
+    SHA512 -> Strongest
+    Blake2b -> Strongest
 
 {- | The algorithm a 'Hash' asserts: its tag directly, or — for an 'SRI' string — the
 algorithm named in its @\<alg\>-\<base64\>@ prefix. The SRI prefixes resolved are

@@ -50,6 +50,22 @@ spec = do
         it "ranks a bare SRI below every real algorithm (resolve it first)" $
             (integrityStrength SRI < integrityStrength MD5) `shouldBe` True
 
+        it "ranks SHA-512 and Blake2b as EQUAL — the modern long digests share the top tier" $
+            -- The load-bearing invariant of the tier representation: a naive
+            -- one-constructor-per-algorithm enum would make these distinct and
+            -- silently change which digest wins a strongest-digest comparison. The
+            -- worker's tamper gate picks the strongest present digest, so a spurious
+            -- tie-break here could prefer the wrong algorithm. They must compare EQ.
+            (integrityStrength SHA512 `compare` integrityStrength Blake2b) `shouldBe` EQ
+
+        it "is strictly increasing weakest-to-strongest: SRI < MD5 < SHA1 < SHA256 < SHA512" $ do
+            -- Pins the whole ranking in one assertion, so the tier representation can
+            -- never drift from the order the tamper gate and the admission floor rely
+            -- on. (Blake2b shares SHA-512's tier, asserted above, so it is left out of
+            -- this strict chain.)
+            let ranks = map integrityStrength [SRI, MD5, SHA1, SHA256, SHA512]
+            and (zipWith (<) ranks (drop 1 ranks)) `shouldBe` True
+
     describe "assertedAlg" $ do
         it "reads a plain tag directly" $
             assertedAlg (Hash SHA256 "abc") `shouldBe` Just SHA256

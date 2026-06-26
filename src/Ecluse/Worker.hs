@@ -89,7 +89,7 @@ import Ecluse.Env (
     recordPoll,
  )
 import Ecluse.Package (Hash (hashAlg, hashValue), HashAlg (Blake2b, MD5, SHA1, SHA256, SHA512, SRI), renderPackageName)
-import Ecluse.Package.Integrity (assertedAlg, integrityStrength)
+import Ecluse.Package.Integrity (Strength, assertedAlg, integrityStrength)
 import Ecluse.Queue (
     MirrorArtifact (maFilename, maHashes),
     MirrorJob (jobArtifact, jobArtifactUrl, jobPackage, jobVersion),
@@ -487,7 +487,7 @@ verifyIntegrity hashes bytes =
     -- fails closed in 'matchStrongest', rather than downgrading to a weaker computable
     -- digest an attacker who also controls it could forge; it stays below a computable
     -- sha512, so a real sha512, when co-present, is still preferred and verified.
-    authority :: Hash -> Int
+    authority :: Hash -> Strength
     authority = maybe (integrityStrength SHA256) integrityStrength . assertedAlg
 
     -- Whether the fetched bytes match the chosen digest, compared in that digest's
