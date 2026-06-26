@@ -167,11 +167,21 @@ every refusal (a policy `403`, a forwarded `404`, a transient `503`, an internal
 mirror job** — mirroring stays demand-driven on the `GET` path, since a `HEAD` serves
 no bytes to back-fill.
 
-(`HEAD` on the **packument** route is not yet special-cased: a packument body is built
-locally rather than streamed from upstream, so it carries no artifact-pump
-amplification — the lever this control closes. A future refinement may answer a
-packument `HEAD` without materialising the merged body; it is a metadata-only cost,
-not the artifact-egress one.)
+`HEAD` on the **packument** route is handled the same way — explicitly in dispatch, not
+by re-running the `GET` handler. It runs the **identical pipeline and gating** as the
+packument `GET` (the same fetch, cross-upstream merge, rule filter, and no-survivors
+decision, so a `HEAD` that a `GET` would answer `403`/`503`/`502`/`500` returns that
+same status) and emits the **identical status and headers** — including the
+`Content-Length` of the would-be merged body and the **own `ETag`** the
+conditional-request machinery computes (a conditional `HEAD` whose `If-None-Match`
+matches answers a bodiless `304`, exactly as the `GET` would) — with the body suppressed
+by the same bodiless wrapper the tarball `HEAD` uses. What it defends differs from the
+tarball case: a packument body is assembled **locally** (a metadata fetch plus the
+merge), so answering it triggers **no artifact egress** — this is an HTTP-correctness
+fix (a `HEAD` reply must carry no body), not the DoS-amplification control the tarball
+`HEAD` closes. The merged body is still materialised, to size it and compute its `ETag`;
+answering a packument `HEAD` without building the body is a possible future refinement, a
+metadata-only cost rather than the artifact-egress one.
 
 ## Metadata cache
 
@@ -294,8 +304,8 @@ wire contract.**
   balancer), and `Timeout`, composed around the `Application`. Two it
   deliberately does *not* use: `Autohead` — it answers HEAD by running the GET
   handler and discarding the body, which on a tarball route would open the
-  upstream and stream a whole artifact to nowhere; a HEAD on the tarball route is
-  instead handled explicitly in dispatch (see [HEAD on artifacts](#head-on-artifacts));
+  upstream and stream a whole artifact to nowhere; a HEAD on the tarball or packument
+  route is instead handled explicitly in dispatch (see [HEAD on artifacts](#head-on-artifacts));
   and `Gzip` — artifacts are already compressed, and re-compressing the stream
   would fight the backpressure above.
 - **Adopt — `unliftio`** for the whole shell, where `ReaderT Env IO` runs: it lifts

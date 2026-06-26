@@ -692,6 +692,24 @@ getThingWith :: [Header] -> Application -> IO SResponse
 getThingWith extra =
     runSession (request (setPath defaultRequest{requestHeaders = extra} "/npm/thing"))
 
+{- | A @HEAD /npm/thing@ request carrying the given (optional) bearer credential — the
+same packument coordinate as 'getThing', issued as a HEAD so the serve path must answer
+with the GET's status and headers but no body.
+-}
+headThing :: Maybe Text -> Application -> IO SResponse
+headThing bearer =
+    runSession (request (setPath baseRequest "/npm/thing"){requestMethod = methodHead})
+  where
+    baseRequest =
+        defaultRequest{requestHeaders = maybe [] (\t -> [(hAuthorization, "Bearer " <> encodeUtf8 t)]) bearer}
+
+{- | A @HEAD /npm/thing@ with no credential and the given extra request headers (e.g. a
+conditional @If-None-Match@), to drive the own-ETag conditional on the HEAD path.
+-}
+headThingWith :: [Header] -> Application -> IO SResponse
+headThingWith extra =
+    runSession (request (setPath defaultRequest{requestHeaders = extra} "/npm/thing"){requestMethod = methodHead})
+
 {- | A @GET /npm/thing/-/thing-{version}.tgz@ artifact request carrying the given
 (optional) bearer credential — the tarball path for @thing@ at one version.
 -}
@@ -789,6 +807,7 @@ spec = do
     noSurvivorsSpec
     edgeAuthSpec
     conditionalSpec
+    packumentHeadSpec
     losslessSpec
     tarballSpec
     effectfulSpec
@@ -1367,6 +1386,109 @@ conditionalSpec = describe "own ETag over the served bytes" $ do
             status secondResp `shouldBe` 304
             -- A 304 carries no body.
             simpleBody secondResp `shouldBe` ""
+
+-- ── HEAD on a packument route ─────────────────────────────────────────────────
+
+{- | HEAD on a packument route runs the __identical pipeline and gating__ as the GET
+but answers bodiless (HTTP semantics: a HEAD reply carries no message body). Unlike the
+tarball HEAD, a packument body is assembled locally, so this is an HTTP-correctness fix,
+not the artifact-egress amplification the tarball HEAD guards against. Each case mirrors
+a GET case to prove the gating is unchanged — asserting the same status and an empty
+body, and (on the @200@) that the GET's status, ETag, and would-be @Content-Length@ are
+all reproduced.
+-}
+packumentHeadSpec :: Spec
+packumentHeadSpec = describe "HEAD on a packument route (same gating as GET, no body)" $ do
+    it "answers a 200 HEAD with the GET's status, ETag, and Content-Length but no body" $ do
+        (privateUp, publicUp) <- twoServingUpstreams
+        withProxy privateUp publicUp Nothing $ \app -> do
+            getResp <- getThing Nothing app
+            headResp <- headThing Nothing app
+            -- Same status as the GET would render.
+            status getResp `shouldBe` 200
+            status headResp `shouldBe` 200
+            -- A HEAD reply carries no body.
+            simpleBody headResp `shouldBe` ""
+            -- The own ETag is present and identical to the GET's.
+            header "ETag" headResp `shouldSatisfy` isJust
+            header "ETag" headResp `shouldBe` header "ETag" getResp
+            -- The would-be body's Content-Length is advertised: the length the GET
+            -- actually served.
+            header "Content-Length" headResp
+                `shouldBe` Just (show (LBS.length (simpleBody getResp)))
+
+    it "answers a conditional HEAD that matches our ETag with a bodiless 304" $ do
+        (privateUp, publicUp) <- twoServingUpstreams
+        withProxy privateUp publicUp Nothing $ \app -> do
+            firstResp <- getThing Nothing app
+            etag <- maybe (throwString "no ETag on the 200 response") pure (header "ETag" firstResp)
+            headResp <- headThingWith [("If-None-Match", etag)] app
+            -- Consistent with the GET conditional path: a bodiless 304.
+            status headResp `shouldBe` 304
+            simpleBody headResp `shouldBe` ""
+
+    it "403s a HEAD identically to the GET when every version is withheld by policy" $ do
+        -- Mirrors the GET no-survivors 403: the private upstream resolves but holds no
+        -- versions, and the only public version declares an install script (denied).
+        privateUp <- servingUpstream (encodePackument (privatePackument [] "0.0.0"))
+        publicUp <-
+            servingUpstream
+                ( encodePackument
+                    ( packument
+                        [("2.0.0", versionObject "2.0.0" "sha512-x" True)]
+                        "2.0.0"
+                        [("2.0.0", publishedDaysAgo 30)]
+                    )
+                )
+        withProxy privateUp publicUp Nothing $ \app -> do
+            resp <- headThing Nothing app
+            status resp `shouldBe` 403
+            -- Never a 404, and bodiless.
+            status resp `shouldNotBe` 404
+            simpleBody resp `shouldBe` ""
+
+    it "503s a HEAD identically to the GET when a needed upstream is unavailable (transient)" $ do
+        -- Mirrors the GET no-survivors 503: the private upstream is down and every
+        -- public version is too new to clear the quarantine.
+        privateUp <- failingUpstream
+        publicUp <-
+            servingUpstream
+                ( encodePackument
+                    ( packument
+                        [("1.0.0", plainVersion "1.0.0"), ("2.0.0", plainVersion "2.0.0")]
+                        "2.0.0"
+                        [("1.0.0", publishedDaysAgo 1), ("2.0.0", publishedDaysAgo 1)]
+                    )
+                )
+        withProxy privateUp publicUp Nothing $ \app -> do
+            resp <- headThing Nothing app
+            status resp `shouldBe` 503
+            simpleBody resp `shouldBe` ""
+
+    it "502s a HEAD identically to the GET when every responding origin reports a different package" $ do
+        -- Mirrors the GET 502: both upstreams answer but self-report `other`, so no
+        -- valid contribution remains.
+        privateUp <-
+            servingUpstream
+                (encodePackument (packumentNamed "other" [("1.0.0", plainVersion "1.0.0")] "1.0.0" [("1.0.0", publishedDaysAgo 30)]))
+        publicUp <-
+            servingUpstream
+                (encodePackument (packumentNamed "other" [("2.0.0", plainVersion "2.0.0")] "2.0.0" [("2.0.0", publishedDaysAgo 30)]))
+        withProxy privateUp publicUp Nothing $ \app -> do
+            resp <- headThing Nothing app
+            status resp `shouldBe` 502
+            simpleBody resp `shouldBe` ""
+
+    it "401s a HEAD with a bad edge token before touching any upstream (gating identical to GET)" $ do
+        privateUp <- servingUpstream (encodePackument (privatePackument [("1.0.0", plainVersion "1.0.0")] "1.0.0"))
+        publicUp <- servingUpstream (encodePackument (packument [] "0.0.0" []))
+        withProxy privateUp publicUp (Just "edge-secret") $ \app -> do
+            resp <- headThing (Just "wrong-token") app
+            status resp `shouldBe` 401
+            simpleBody resp `shouldBe` ""
+            -- The edge rejected before any upstream fetch, exactly as the GET path does.
+            seenAuth privateUp `shouldReturn` []
+            seenAuth publicUp `shouldReturn` []
 
 -- ── losslessness (decision surface vs served surface) ─────────────────────────
 
