@@ -249,15 +249,15 @@ reads) **and** the `dd` log object, so logs and traces share one identity whiche
 dialect was used. `DD_API_KEY`/`DD_SITE` are **never read** — Écluse exports to a
 node-local collector/Agent, never agentless to a vendor's cloud.
 
-**Public-egress is opt-in.** Export defaults to **Agent-only**. The resolved endpoint
-is classified against the same internal-range check the data plane's SSRF guard uses
-([Egress safety](#cardinality-and-attributes) / `Ecluse.Security`): a loopback/private
-target (including a node-local `DD_AGENT_HOST`) exports freely, while a **public**
-endpoint is **refused fail-loud at boot** unless `PROXY_TELEMETRY_ALLOW_PUBLIC_EGRESS=true`
-— the supported route for deliberate remote/agentless export, authenticated out of
-band via `OTEL_EXPORTER_OTLP_HEADERS`. An endpoint that cannot be resolved to a
-verifiably-private address at boot is allowed with a warning rather than blocked:
-telemetry never makes the inline proxy fail to start.
+**The OTLP endpoint is an operator-declared destination, not classified.** Like the
+mirror-queue endpoint, the collector/Agent address is configuration the operator
+chooses — not attacker-influenced input — so Écluse does **not** range-check or gate
+it. (The internal-range/SSRF classifier guards the *untrusted package-download* path,
+where the target is upstream-supplied; the telemetry endpoint is neither.) The only
+real footgun — agentless export to a vendor's SaaS — is already excluded structurally:
+`DD_API_KEY`/`DD_SITE` are never read, so there is no path to off-cluster auto-egress;
+the endpoint is always explicitly declared. Deliberate remote export is just a declared
+endpoint, authenticated out of band via `OTEL_EXPORTER_OTLP_HEADERS`.
 
 **Export failures never touch the request path.** The SDK's batch exporter runs
 asynchronously, so an unreachable collector never blocks a served request. An absent
@@ -274,7 +274,7 @@ count — rather than a per-flush stderr flood.
 | `OTEL_EXPORTER_OTLP_ENDPOINT` / `DD_AGENT_HOST` | OTLP receiver — a Collector or the Datadog Agent (`http://$(HOST_IP):4318`). `DD_AGENT_HOST` wins (as `:4318`). |
 | `OTEL_EXPORTER_OTLP_PROTOCOL` | `http/protobuf` (the only transport built; gRPC/`grapesy` flag is off). |
 | `OTEL_TRACES_SAMPLER` / `…_ARG` | SDK sampler — default always-on; ratio lever for non-Datadog backends. |
-| `PROXY_TELEMETRY_ALLOW_PUBLIC_EGRESS` | `false` by default — set `true` to allow exporting to a public (off-cluster) endpoint. |
+| `OTEL_EXPORTER_OTLP_HEADERS` | Out-of-band auth for a remote collector/Agent (read by the SDK, never by Écluse). |
 | `OTEL_METRICS_EXPORTER` | `otlp` (default). `prometheus` is recognised but the scrape endpoint is **deferred** (#288). |
 | `PROXY_LOG_FORMAT` | `json` (one-line JSONL to stdout, default) or `console` (human-readable, dev). |
 

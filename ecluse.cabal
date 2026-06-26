@@ -225,7 +225,6 @@ test-suite ecluse-unit
     , http-types        ^>=0.12
     , hs-opentelemetry-api  ^>=1.0
     , hs-opentelemetry-sdk  ^>=1.0
-    , iproute           ^>=1.7
     , katip             ^>=0.8.8
     , ecluse
     , memory            ^>=0.18

@@ -1,6 +1,5 @@
-{- | Telemetry configuration resolution, egress safety, and export-failure routing
-— the boot-time substrate that sits between the operator's environment and the
-OpenTelemetry SDK.
+{- | Telemetry configuration resolution and export-failure routing — the boot-time
+substrate that sits between the operator's environment and the OpenTelemetry SDK.
 
 Écluse's maintainer runs Datadog, but the project is vendor-neutral, so an operator
 may describe the same telemetry identity in either dialect: a Datadog shop sets the
@@ -15,27 +14,17 @@ traces share a single identity whichever dialect was provided.
 endpoint — each resolved __Datadog-value-wins → vanilla OpenTelemetry → default__.
 It is deliberately /not/ a general per-variable merge: only these four cross between
 the dialects, and only their fixed precedence is encoded. The @DD_API_KEY@ \/
-@DD_SITE@ agentless-SaaS credentials are __never read__ — Écluse exports to a
-node-local collector\/Agent, never directly to a vendor's cloud, so there is no path
-by which a key in the environment turns into off-cluster egress.
+@DD_SITE@ agentless-SaaS credentials are __never read__ — Écluse exports to an
+__operator-declared__, node-local collector\/Agent, never directly to a vendor's
+cloud, so there is no path by which a key in the environment turns into off-cluster
+egress. The endpoint itself is a declared destination (like the mirror queue), not an
+attack surface, so it is normalised and used as given, not classified or gated.
 
 The resolved 'ResolvedTelemetry' is the __single source of truth__ for both halves
 of the telemetry stack: 'otelEnvironmentOverrides' projects it back to the canonical
 @OTEL_*@ variables the env-driven SDK reads (so a @DD_*@-only deployment still
 configures the exporter), and the same record feeds the @dd@ log object that stitches
 a log line to its trace.
-
-== Egress safety
-
-Export defaults to __Agent-only__. 'classifyResolved' classifies the resolved
-endpoint against the same internal-range check the data plane's SSRF guard uses
-("Ecluse.Security"): a loopback\/private target passes freely, a __public__ endpoint
-is refused __fail-loud at boot__ unless the operator deliberately opts in with
-@PROXY_TELEMETRY_ALLOW_PUBLIC_EGRESS=true@ (the supported route for remote\/agentless
-export, authenticated out of band via @OTEL_EXPORTER_OTLP_HEADERS@). An endpoint that
-cannot be resolved to a verifiably-private address at boot is __allowed with a
-warning__ rather than blocked: telemetry must never make the inline proxy fail to
-start, so only a /verified-public/ endpoint blocks boot.
 
 == Export-failure routing
 
@@ -58,13 +47,6 @@ module Ecluse.Telemetry.Resolve (
     -- * Canonical @OTEL_*@ projection
     otelEnvironmentOverrides,
 
-    -- * Public-egress classification
-    EndpointEgress (..),
-    classifyResolved,
-    EgressDecision (..),
-    egressDecision,
-    readAllowPublicEgress,
-
     -- * Export-failure throttle (pure core)
     ThrottleState (..),
     ThrottleEmit (..),
@@ -82,15 +64,11 @@ import Data.Text qualified as T
 import Data.Time (NominalDiffTime, UTCTime, diffUTCTime, getCurrentTime)
 import System.Environment (setEnv)
 
-import Data.IP (IP, fromSockAddr)
 import Katip (LogEnv, Severity (WarningS), logFM, ls)
 import Katip.Monadic (runKatipContextT)
-import Network.Socket (AddrInfo (addrAddress), defaultHints, getAddrInfo)
 import OpenTelemetry.Internal.Logging (setGlobalErrorHandler)
-import UnliftIO (tryAny)
 
 import Ecluse.Log (moduleField)
-import Ecluse.Security (hostAddress, isBlockedIP)
 
 -- ── the resolved telemetry identity ──────────────────────────────────────────
 
@@ -185,8 +163,7 @@ defaultEndpointUrl = "http://localhost:4318"
 {- Build the OTLP HTTP\/protobuf endpoint URL for a Datadog Agent host: the Agent's
 OTLP receiver listens on 4318 for HTTP\/protobuf, the only transport we build. A
 literal IPv6 host is bracketed so the authority is well-formed — @http:\/\/[fd00::1]:4318@,
-not the invalid @http:\/\/fd00::1:4318@ — which also keeps 'hostAddress' (and so the
-egress classification) extracting the right host rather than a truncated one. A host
+not the invalid @http:\/\/fd00::1:4318@ the SDK exporter would fail to parse. A host
 that already carries a scheme is used verbatim, and one already carrying a port is not
 given a second, so a deliberately-qualified @DD_AGENT_HOST@ is never mangled. Colon
 count disambiguates: a bare IPv6 literal has two or more colons, a @host:port@ exactly
@@ -266,111 +243,11 @@ renderResourceAttributes :: Map Text Text -> Text
 renderResourceAttributes =
     T.intercalate "," . map (\(key, value) -> key <> "=" <> value) . Map.toList
 
--- ── public-egress classification ─────────────────────────────────────────────
-
-{- | The egress classification of a resolved endpoint, decided from the addresses
-its host resolves to (see 'classifyResolved').
--}
-data EndpointEgress
-    = -- | Resolves entirely to internal\/loopback addresses: safe, exports freely.
-      EgressInternal
-    | -- | Resolves to at least one public address: gated behind the opt-in.
-      EgressPublic
-    | {- | Could not be resolved to any address at boot, so it cannot be confirmed
-      private. Allowed with a warning rather than blocked.
-      -}
-      EgressUnverified
-    deriving stock (Eq, Show)
-
-{- | Classify resolved endpoint addresses against the data plane's internal-range
-block ("Ecluse.Security.isBlockedIP"). A name resolving entirely to internal
-addresses (loopback, RFC1918, link-local, the cloud-metadata ranges) is
-'EgressInternal'; any public address makes it 'EgressPublic'; no addresses at all
-('Nothing' or an empty list — an unresolvable host) is 'EgressUnverified'.
-
-Pure over the resolved addresses so the decision is unit-tested without DNS; the
-resolution itself is performed once at boot by 'prepareTelemetry'.
--}
-classifyResolved :: Maybe [IP] -> EndpointEgress
-classifyResolved = \case
-    Just addrs@(_ : _) -> if all isBlockedIP addrs then EgressInternal else EgressPublic
-    _ -> EgressUnverified
-
-{- | What the boot path should do about a classified endpoint, given whether public
-egress was opted in. A 'EgressFailBoot' carries the operator-facing reason for the
-fail-loud refusal; a 'EgressAllowWithWarning' the reason it is being allowed despite
-not being a silent loopback target.
--}
-data EgressDecision
-    = -- | Export freely, no message (the loopback\/private common case).
-      EgressAllow
-    | -- | Export, but log the carried warning first.
-      EgressAllowWithWarning Text
-    | -- | Refuse to start; the carried message is the fail-loud boot reason.
-      EgressFailBoot Text
-    deriving stock (Eq, Show)
-
-{- | Decide what to do about a classified endpoint. An internal target exports
-silently; an unverifiable one exports with a warning (telemetry never blocks boot);
-a public one fails boot unless @PROXY_TELEMETRY_ALLOW_PUBLIC_EGRESS@ opted in, in
-which case it exports with a warning that off-cluster egress is deliberate.
--}
-egressDecision :: Bool -> Text -> EndpointEgress -> EgressDecision
-egressDecision allowPublic endpointUrl = \case
-    EgressInternal -> EgressAllow
-    EgressUnverified -> EgressAllowWithWarning (unverifiedMessage endpointUrl)
-    EgressPublic
-        | allowPublic -> EgressAllowWithWarning (publicAllowedMessage endpointUrl)
-        | otherwise -> EgressFailBoot (publicBlockedMessage endpointUrl)
-
-publicBlockedMessage :: Text -> Text
-publicBlockedMessage url =
-    "telemetry export endpoint "
-        <> url
-        <> " resolves to a public address; refusing to export off-cluster. Point it at a"
-        <> " node-local collector or Agent, or set PROXY_TELEMETRY_ALLOW_PUBLIC_EGRESS=true to"
-        <> " allow deliberate remote export (authenticate with OTEL_EXPORTER_OTLP_HEADERS)."
-
-publicAllowedMessage :: Text -> Text
-publicAllowedMessage url =
-    "telemetry export endpoint "
-        <> url
-        <> " is a public address; exporting off-cluster because PROXY_TELEMETRY_ALLOW_PUBLIC_EGRESS=true."
-
-unverifiedMessage :: Text -> Text
-unverifiedMessage url =
-    "telemetry export endpoint "
-        <> url
-        <> " could not be resolved to a verifiably-private address at boot; exporting anyway"
-        <> " (telemetry never blocks proxy start-up). Confirm it is your node-local collector or Agent."
-
 defaultedEndpointMessage :: Text -> Text
 defaultedEndpointMessage url =
     "no telemetry export endpoint configured (DD_AGENT_HOST / OTEL_EXPORTER_OTLP_ENDPOINT unset); defaulting to "
         <> url
         <> "."
-
-{- | Read the @PROXY_TELEMETRY_ALLOW_PUBLIC_EGRESS@ opt-in from the environment.
-Absent or blank is 'False' (the secure default); a malformed value is a 'Left'
-reason so the boot fails loud rather than silently coercing a typo to off.
--}
-readAllowPublicEgress :: [(String, String)] -> Either Text Bool
-readAllowPublicEgress environment =
-    case nonBlank . toText =<< lookup "PROXY_TELEMETRY_ALLOW_PUBLIC_EGRESS" environment of
-        Nothing -> Right False
-        Just raw -> case T.toLower (T.strip raw) of
-            "true" -> Right True
-            "false" -> Right False
-            "1" -> Right True
-            "0" -> Right False
-            "yes" -> Right True
-            "no" -> Right False
-            _ ->
-                Left
-                    ( "PROXY_TELEMETRY_ALLOW_PUBLIC_EGRESS: expected a boolean (true/false), got \""
-                        <> raw
-                        <> "\""
-                    )
 
 -- ── export-failure throttle ──────────────────────────────────────────────────
 
@@ -423,58 +300,23 @@ throttleStep interval now st = case tsLastLogged st of
 -- ── boot wiring ──────────────────────────────────────────────────────────────
 
 {- | Prepare the telemetry substrate at boot, before the SDK initialises: resolve
-the identity, classify the endpoint's egress, and — on success — normalise the
-@OTEL_*@ environment and install the throttled export-error handler.
+the identity, normalise the canonical @OTEL_*@ environment the env-driven SDK reads
+(so a @DD_*@-only deployment still configures the exporter), and install the throttled
+export-error handler.
 
-Returns @'Left' reason@ when boot must fail loud: a malformed
-@PROXY_TELEMETRY_ALLOW_PUBLIC_EGRESS@, or a public endpoint without the opt-in. On
-@'Right' ()@ the environment has been normalised and the error handler installed, so
-the caller may initialise the SDK. A defaulted endpoint and an allowed-but-warned
-endpoint are surfaced through @katip@ as warnings, not failures.
-
-Only the four mapped variables cross dialects here; @PROXY_TELEMETRY_ALLOW_PUBLIC_EGRESS@
-is read directly in this boot phase (like @PROXY_CONFIG@) rather than through the
-central environment parser, since it gates only this phase.
+A defaulted endpoint — neither @DD_AGENT_HOST@ nor @OTEL_EXPORTER_OTLP_ENDPOINT@ set —
+is surfaced through @katip@ as one boot warning and falls back to
+@http:\/\/localhost:4318@; it is never a failure. The OTLP endpoint is an
+__operator-declared destination__ (like the mirror queue), so it is normalised and used
+as given, not classified or gated.
 -}
-prepareTelemetry :: LogEnv -> [(String, String)] -> IO (Either Text ())
-prepareTelemetry logEnv environment =
-    case readAllowPublicEgress environment of
-        Left reason -> pure (Left reason)
-        Right allowPublic -> do
-            let resolved = resolveTelemetry environment
-                endpointUrl = teUrl (rtEndpoint resolved)
-            when (teSource (rtEndpoint resolved) == DefaultedEndpoint) $
-                logResolve logEnv WarningS (defaultedEndpointMessage endpointUrl)
-            egress <- classifyEndpointEgress endpointUrl
-            case egressDecision allowPublic endpointUrl egress of
-                EgressFailBoot reason -> pure (Left reason)
-                EgressAllow -> commit
-                EgressAllowWithWarning message -> logResolve logEnv WarningS message >> commit
-  where
-    commit :: IO (Either Text ())
-    commit = do
-        mapM_ (uncurry setEnv) (otelEnvironmentOverrides environment)
-        installThrottledErrorHandler logEnv
-        pure (Right ())
-
--- Resolve an endpoint URL's host and classify the addresses it resolves to. A
--- resolution failure (or a URL with no recognisable host) is 'EgressUnverified',
--- never an exception that aborts boot.
-classifyEndpointEgress :: Text -> IO EndpointEgress
-classifyEndpointEgress endpointUrl = do
-    let host = hostAddress endpointUrl
-    if T.null host
-        then pure EgressUnverified
-        else classifyResolved <$> resolveHostAddresses host
-
--- Resolve a host to its IP addresses, 'Nothing' on any resolution failure. Mirrors
--- the data plane's connection-time resolution ("Ecluse.Security.Egress"); the
--- non-IP socket addresses 'fromSockAddr' cannot decode are dropped.
-resolveHostAddresses :: Text -> IO (Maybe [IP])
-resolveHostAddresses host =
-    tryAny (getAddrInfo (Just defaultHints) (Just (toString host)) Nothing) >>= \case
-        Left _ -> pure Nothing
-        Right addrs -> pure (Just (map fst (mapMaybe (fromSockAddr . addrAddress) addrs)))
+prepareTelemetry :: LogEnv -> [(String, String)] -> IO ()
+prepareTelemetry logEnv environment = do
+    let resolved = resolveTelemetry environment
+    when (teSource (rtEndpoint resolved) == DefaultedEndpoint) $
+        logResolve logEnv WarningS (defaultedEndpointMessage (teUrl (rtEndpoint resolved)))
+    mapM_ (uncurry setEnv) (otelEnvironmentOverrides environment)
+    installThrottledErrorHandler logEnv
 
 {- Install a process-global handler for the SDK's diagnostic stream that routes its
 export errors through @katip@ under a throttle, so a persistently unreachable

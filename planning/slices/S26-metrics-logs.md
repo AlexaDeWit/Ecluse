@@ -61,20 +61,18 @@ The architect ratified a **Datadog-Agent-first, OTLP-push** transport (no Promet
 exporter dependency, no DogStatsD). The slice is delivered as **two stacked PRs**, the
 substrate-config part split out per the orchestration's stacked-PR pattern:
 
-- **PR1 — telemetry substrate config & egress safety (this PR).** A small, pure,
-  self-aligning **config resolver** (`Ecluse.Telemetry.Resolve`): a bounded
-  precedence table over four fields — `service.name`, `deployment.environment`,
-  `service.version`, OTLP endpoint — resolved **DD-value-wins → vanilla OTEL → default**
+- **PR1 — telemetry substrate config (this PR).** A small, pure, self-aligning
+  **config resolver** (`Ecluse.Telemetry.Resolve`): a bounded precedence table over
+  four fields — `service.name`, `deployment.environment`, `service.version`, OTLP
+  endpoint — resolved **DD-value-wins → vanilla OTEL → default**
   (`DD_SERVICE`/`DD_ENV`/`DD_VERSION`/`DD_AGENT_HOST` over `OTEL_SERVICE_NAME` /
   `OTEL_RESOURCE_ATTRIBUTES` / `OTEL_EXPORTER_OTLP_ENDPOINT`, default `ecluse` /
   `http://localhost:4318`). The resolved identity is the single source of truth for
   both the SDK (via env normalization) and the `dd` log object (PR2). `DD_API_KEY` /
-  `DD_SITE` are deliberately **not** read (no agentless SaaS auto-egress). Plus the
-  **public-egress guard** (default Agent-only; a public endpoint fail-loud at boot
-  unless `PROXY_TELEMETRY_ALLOW_PUBLIC_EGRESS=true`, reusing the data-plane
-  `Ecluse.Security` internal-range check) and **export-failure handling** (absent
-  endpoint → default + one boot warning; SDK export failures routed through katip,
-  throttled, via the SDK's settable global error handler).
+  `DD_SITE` are deliberately **not** read (no agentless SaaS auto-egress). Plus
+  **export-failure handling** (absent endpoint → default + one boot warning; SDK export
+  failures routed through katip, throttled, via the SDK's settable global error
+  handler). The OTLP endpoint is normalized and used as declared, not classified.
 - **PR2 — `ecluse.*` catalogue + bounded-label guard + `dd` correlation** (AC1/AC2/AC4),
   stacked on PR1.
 
@@ -87,12 +85,17 @@ substrate-config part split out per the orchestration's stacked-PR pattern:
 - *Export-failure routing.* `OpenTelemetry.Internal.Logging.setGlobalErrorHandler ::
   (String -> IO ()) -> IO ()` is settable and compatible with `withOpenTelemetry`, so
   no exporter wrapping / programmatic path is needed.
-- *Public-egress classification of a DNS-name endpoint* resolves the host once at boot
-  and classifies by the resolved IPs (the same internal-range check the data plane
-  uses). An endpoint that cannot be resolved to a verifiably-private address at boot is
-  **allowed with a loud warning** rather than failing boot — telemetry is never allowed
-  to make the inline proxy fail to start; only a *verified-public* endpoint fail-loud
-  blocks boot. (Surfaced to the team lead.)
+- *Public-egress guard removed (architect decision).* An earlier revision classified the
+  resolved OTLP endpoint against the data-plane internal-range check and fail-booted a
+  public endpoint unless `PROXY_TELEMETRY_ALLOW_PUBLIC_EGRESS=true`. That was removed: the
+  internal-range classifier is an **SSRF control for the untrusted package-download path**,
+  where the target is upstream-supplied; the OTLP endpoint — like the mirror-queue endpoint
+  — is an **operator-declared destination**, not an attack surface, so classifying it is
+  over-reach. The only real footgun (agentless export to a vendor's SaaS) is already
+  excluded structurally — `DD_API_KEY`/`DD_SITE` are never read — so the endpoint is always
+  explicitly declared. `prepareTelemetry` now collapses to *resolve identity → normalize
+  `OTEL_*` → install the throttled error handler*; the `PROXY_TELEMETRY_ALLOW_PUBLIC_EGRESS`
+  knob and the `Ecluse.Security` coupling are gone.
 
 **Deferrals.**
 - **Advisory-sync metrics** (`ecluse.advisory.sync.*`) are deferred: the CVE/OSV sync

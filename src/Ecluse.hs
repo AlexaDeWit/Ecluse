@@ -187,9 +187,9 @@ run = do
     metadataCache <- newMetadataCache (Composition.cacheConfigFor env)
     logEnv <- newLogEnv (cfgLogFormat env) (Environment "production")
     heartbeat <- newWorkerHeartbeat
-    -- Resolve the telemetry identity, gate public egress, and normalise the OTEL_*
-    -- environment the SDK reads — all before the substrate initialises. A no-op when
-    -- telemetry is off; a fail-loud boot abort on a public endpoint without the opt-in.
+    -- Resolve the telemetry identity (DD_* / OTEL_*) and normalise the OTEL_*
+    -- environment the SDK reads, before the substrate initialises. A no-op when
+    -- telemetry is off.
     prepareTelemetryBoot (cfgTelemetry env) logEnv
     withTelemetry (cfgTelemetry env) $ \telemetry ->
         withEnv publishClient queue (mirrorWriteProvider providers) manager privateManager metadataCache logEnv telemetry heartbeat (runServices serverConfig)
@@ -239,17 +239,16 @@ orExit render = \case
     Left err -> TIO.hPutStrLn stderr (render err) >> throwIO BootAborted
 
 {- Prepare the telemetry substrate before the SDK initialises: when enabled, resolve
-the identity, gate public egress, normalise the @OTEL_*@ environment, and install the
-throttled export-error handler ("Ecluse.Telemetry.Resolve.prepareTelemetry"); a
-fail-loud reason (a public endpoint without the opt-in, or a malformed flag) aborts
-the boot. A no-op when telemetry is off, so an unset @PROXY_TELEMETRY@ reads no
-process environment and gates nothing. -}
+the identity, normalise the @OTEL_*@ environment the SDK reads, and install the
+throttled export-error handler ("Ecluse.Telemetry.Resolve.prepareTelemetry"). A no-op
+when telemetry is off, so an unset @PROXY_TELEMETRY@ reads no process environment and
+configures nothing. -}
 prepareTelemetryBoot :: TelemetrySwitch -> LogEnv -> IO ()
 prepareTelemetryBoot switch logEnv = case switch of
     TelemetryOff -> pass
     TelemetryOn -> do
         environment <- getEnvironment
-        prepareTelemetry logEnv environment >>= orExit identity
+        prepareTelemetry logEnv environment
 
 {- Run the server and the mirror worker concurrently over one composition-root
 'Env', the shape the single-process program uses. The two are independent (each

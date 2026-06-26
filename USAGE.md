@@ -292,11 +292,11 @@ the **private** (trusted) upstream slot, not the public one. See
   wins where both are present, and the same resolved identity stamps both your traces and the
   `dd` object on every log line. `DD_API_KEY`/`DD_SITE` are deliberately ignored: Écluse only
   ever exports to a node-local collector or Agent.
-  - **Agent-only by default.** Export goes to `http://localhost:4318` (or your
-    `DD_AGENT_HOST`/`OTEL_EXPORTER_OTLP_ENDPOINT`). A telemetry endpoint that resolves to a
-    **public** address makes the proxy refuse to start — set
-    `PROXY_TELEMETRY_ALLOW_PUBLIC_EGRESS=true` to deliberately export off-cluster
-    (authenticate with `OTEL_EXPORTER_OTLP_HEADERS`).
+  - **You declare the destination.** Export goes to `http://localhost:4318` by default, or
+    wherever you point `DD_AGENT_HOST`/`OTEL_EXPORTER_OTLP_ENDPOINT` — a node-local collector
+    or Agent in the usual deployment. The endpoint is yours to declare (like the mirror
+    queue), so Écluse does not gate it; for a remote collector, authenticate out of band with
+    `OTEL_EXPORTER_OTLP_HEADERS`.
   - **Never on the request path.** Export is asynchronous and batched, so an unreachable
     collector never slows or fails a served request; an absent endpoint logs one boot warning
     and falls back to localhost, and persistent export errors are logged once and then
