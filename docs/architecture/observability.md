@@ -313,10 +313,14 @@ endpoint, authenticated out of band via `OTEL_EXPORTER_OTLP_HEADERS`.
 
 **Export failures never touch the request path.** The SDK's batch exporter runs
 asynchronously, so an unreachable collector never blocks a served request. An absent
-endpoint defaults to `http://localhost:4318` with one boot warning (not a hard fail),
-and the SDK's own export-error diagnostics are routed through `katip` under a throttle
-— the first failure logged plainly, then a periodic heartbeat carrying the suppressed
-count — rather than a per-flush stderr flood.
+endpoint defaults to `http://localhost:4318` with one boot warning (not a hard fail).
+A failed export is made **visible**: `hs-opentelemetry 1.0.0.0` drops a failed OTLP
+export silently (the batch span processor and the periodic metric reader both discard
+the result), so Écluse **wraps both OTLP exporters** to observe that result and route a
+failure through `katip` under a shared throttle — the first failure logged plainly, then
+a periodic heartbeat carrying the suppressed count — rather than a silent stop or a
+per-flush flood. The wrappers only *observe*; export semantics are unchanged, so the
+failure still degrades off the request path.
 
 | Variable | Purpose |
 |---|---|

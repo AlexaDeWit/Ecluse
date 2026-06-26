@@ -8,9 +8,9 @@ traced. Every entry point takes the 'Telemetry' handle and, when it is
 'Ecluse.Telemetry.TelemetryDisabled', adds nothing and emits nothing: the
 middleware is 'id', the manager settings are returned untouched, and a domain-span
 bracket runs its body against no span. When telemetry is enabled, the handle's
-provider __is__ the process-global provider the substrate installed (the SDK's
-@withOpenTelemetry@ calls @initializeGlobalTracerProvider@, which also installs the
-global text-map propagator), so the WAI and http-client instrumentation — which read
+provider __is__ the process-global provider the substrate installed (when enabled,
+"Ecluse.Telemetry.withTelemetry" calls @initializeGlobalTracerProvider@, which also
+installs the global text-map propagator), so the WAI and http-client instrumentation — which read
 the process globals — and the hand-added spans, which read the handle, all hang off
 one coherent tracer and join into one trace.
 

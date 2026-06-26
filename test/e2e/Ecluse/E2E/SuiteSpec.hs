@@ -134,23 +134,28 @@ telemetryScenarios = do
 
     -- #325(b) — OTLP on but the collector unreachable/absent: the SAME proxy config as the
     -- healthy #324 case, only the collector is never stood up (ecCollector = False), so its
-    -- network alias does not resolve. The proxy must still boot, serve, and log, and KEEP
-    -- serving: the SDK's batch exporter fails asynchronously off the request path and the
-    -- failure is swallowed by the library (it never reaches the request or the process), so
-    -- the absent collector can never take the proxy down. (hs-opentelemetry 1.0.0.0 drops a
-    -- failed export silently rather than routing it through the global error handler, so
-    -- there is deliberately no export-warning line to assert on — see the PR discussion.)
+    -- network alias does not resolve. The proxy must still boot, serve, and KEEP serving:
+    -- the SDK's batch exporter fails asynchronously off the request path, so the absent
+    -- collector can never take the proxy down or block a request. Écluse wraps the OTLP span
+    -- and metric exporters (hs-opentelemetry 1.0.0.0 would otherwise drop the failed export
+    -- silently), so the failure is OBSERVED and surfaced through katip under a throttle —
+    -- the first failure is the "telemetry export error" line this asserts on, on top of the
+    -- keeps-serving proof.
     describe "telemetry — OTLP on but the collector unreachable (#325)" $
         around (withE2EWith E2EConfig{ecCollector = False, ecExtraEnv = otlpCollectorEnv}) $
-            it "still starts, serves, and keeps serving — an absent collector degrades silently, no crash" $ \e2e -> do
+            it "surfaces a throttled export-failure warning yet keeps serving — an absent collector degrades visibly, no crash" $ \e2e -> do
                 firstInstall <- npmInstall e2e (psName allowPkg)
                 npmExit firstInstall `shouldBe` ExitSuccess
                 logged <- awaitProxyLog e2e (T.isInfixOf "\"msg\":") 80
                 logged `shouldBe` True
-                -- After the first install's spans/metrics have been exported-and-failed (the
-                -- worker's async publish, awaited above, is well past the 1s export window),
-                -- the proxy is still ready and still serves a fresh install — proving the
-                -- unreachable collector never took it down or blocked a request.
+                -- The first install's spans (1s batch flush) and metrics (1s reader) export
+                -- and fail against the unreachable endpoint; the wrapped exporters route that
+                -- failure through katip, so the throttle's first-failure warning lands in the
+                -- proxy's JSONL — the operator signal that telemetry has stopped flowing.
+                exportWarned <- awaitProxyLog e2e (T.isInfixOf "telemetry export error") 80
+                exportWarned `shouldBe` True
+                -- And it KEEPS serving: still ready and still serves a fresh install, proving
+                -- the failed-and-surfaced export never took the proxy down or blocked a request.
                 stillReady <- proxyStatus e2e "/readyz"
                 stillReady `shouldBe` 200
                 secondInstall <- npmInstall e2e (psName mirrorPkg)

@@ -110,7 +110,8 @@ With telemetry off, 'tracedApplication' adds no middleware, so nothing is emitte
 driveRequest :: Collector -> TelemetrySwitch -> Text -> IO ()
 driveRequest collector switch marker = do
     pointSdkAt (collectorEndpoint collector)
-    withTelemetry switch $ \telemetry -> do
+    logEnv <- initLogEnv (Namespace ["itest"]) (Environment "test")
+    withTelemetry switch logEnv $ \telemetry -> do
         env <- buildEnv telemetry
         app <- tracedApplication npmServerConfig env
         Warp.testWithApplication (pure app) $ \port -> do
@@ -169,7 +170,8 @@ delivery. -}
 ddContextWithinSpan :: Collector -> IO DdContext
 ddContextWithinSpan collector = do
     pointSdkAt (collectorEndpoint collector)
-    withTelemetry TelemetryOn $ \telemetry ->
+    logEnv <- initLogEnv (Namespace ["itest"]) (Environment "test")
+    withTelemetry TelemetryOn logEnv $ \telemetry ->
         case telemetryTracerProvider telemetry of
             Nothing -> fail "telemetry on must provide a tracer provider"
             Just tracerProvider -> do

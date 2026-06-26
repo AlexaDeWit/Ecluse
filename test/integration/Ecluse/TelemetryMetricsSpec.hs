@@ -5,6 +5,7 @@ import System.Environment (setEnv, unsetEnv)
 import Test.Hspec
 import UnliftIO (bracket)
 
+import Katip (Environment (Environment), Namespace (Namespace), initLogEnv)
 import OpenTelemetry.Metric.Core (forceFlushMeterProvider)
 import TestContainers (Container, containerAddress)
 import TestContainers qualified as TC
@@ -74,9 +75,10 @@ at the collector, then force-flush the meter provider so the export does not wai
 periodic reader's window. With telemetry off, 'newMetrics' builds against the no-op
 meter and there is no provider to flush, so nothing is emitted. -}
 driveMetrics :: Collector -> TelemetrySwitch -> IO ()
-driveMetrics collector switch =
+driveMetrics collector switch = do
+    logEnv <- initLogEnv (Namespace ["itest"]) (Environment "test")
     withSdkEnv (collectorEndpoint collector) $
-        withTelemetry switch $ \telemetry -> do
+        withTelemetry switch logEnv $ \telemetry -> do
             metrics <- newMetrics telemetry
             -- A representative spread across instrument kinds and bounded labels.
             recordServeDecision metrics Admit

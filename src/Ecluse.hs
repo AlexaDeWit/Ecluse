@@ -217,7 +217,7 @@ run = do
     -- environment the SDK reads, before the substrate initialises. A no-op when
     -- telemetry is off.
     prepareTelemetryBoot (cfgTelemetry env) logEnv
-    withTelemetry (cfgTelemetry env) $ \telemetry -> do
+    withTelemetry (cfgTelemetry env) logEnv $ \telemetry -> do
         -- Two data-plane managers, split by trust. The guarded one rechecks every
         -- resolved outbound IP against the internal-range block (DNS-rebinding /
         -- resolve-to-internal SSRF) and serves the untrusted upstreams — the public
