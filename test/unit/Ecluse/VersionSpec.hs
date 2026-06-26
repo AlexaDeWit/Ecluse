@@ -1,5 +1,6 @@
 module Ecluse.VersionSpec (spec) where
 
+import Data.Text qualified as T
 import Hedgehog (Gen, assert, forAll, (===))
 import Hedgehog qualified as H
 import Hedgehog.Gen qualified as Gen
@@ -61,6 +62,17 @@ spec = do
             mustReject PyPI "1.0²" -- superscript two (a Unicode "number")
             mustReject RubyGems "１.２.３" -- fullwidth digits
             mustReject RubyGems "١.٢.٣" -- Arabic-Indic digits
+
+        describe "numeric run length bound (DoS)" $ do
+            -- A numeric segment is read into an 'Integer' with 'readMaybe', which is
+            -- quadratic in the digit count, so an unbounded run in hostile registry
+            -- metadata would be an algorithmic-complexity DoS. An over-long version is
+            -- rejected (and so served raw, without an ordering key) rather than parsed;
+            -- a long-but-sane numeric segment still parses.
+            mustReject PyPI ("1." <> T.replicate 5000 "9")
+            mustReject RubyGems ("1." <> T.replicate 5000 "9")
+            mustParse PyPI ("1." <> T.replicate 100 "9")
+            mustParse RubyGems ("1." <> T.replicate 100 "9")
     describe "compareVersions" $ do
         let cmp eco a b = compareVersions (mkVersion eco a) (mkVersion eco b)
         it "npm orders release numbers numerically (10 > 9)" $

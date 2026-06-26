@@ -15,6 +15,7 @@ module Ecluse.Core.Version.Token (
     parseNumSeg,
     numOr0,
     isAsciiAlphaNum,
+    maxVersionLength,
 ) where
 
 import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
@@ -33,6 +34,19 @@ instance Ord VToken where
     compare (VStr s) (VStr t) = compare s t
     compare (VNum _) (VStr _) = GT
     compare (VStr _) (VNum _) = LT
+
+{- | The maximum length of a version string the hand-rolled numeric grammars
+("Ecluse.Core.Version.Pep440" and "Ecluse.Core.Version.Gem") will parse. It bounds
+the cost of reading numeric segments: a segment is turned into an 'Integer' with
+'readMaybe', which is quadratic in the digit count, so an unbounded digit run in
+hostile registry metadata would be an algorithmic-complexity DoS. Real version
+strings are tiny — npm caps its own version field at 256 characters — so this far
+larger bound rejects only adversarial input. A version past it fails to parse and is
+served raw without an ordering key (the total-by-design @mkVersion@ path in
+"Ecluse.Core.Version": a version is never dropped over a parser gap).
+-}
+maxVersionLength :: Int
+maxVersionLength = 1024
 
 -- | Parse a non-empty, all-digit segment as an integer.
 parseNumSeg :: Text -> Maybe Integer
