@@ -2,7 +2,7 @@
 
 > Part of the [Écluse architecture overview](../architecture.md).
 
-Écluse is an inline dependency in someone else's build path, so when it is slow
+Écluse sits in the install path of someone else's build, so when it is slow
 or refuses a package the operator needs to see *why* without attaching a
 debugger. Observability is therefore **opt-in and vendor-neutral**: the substrate
 is **OpenTelemetry**, emitting **OTLP**, which any compatible backend can receive

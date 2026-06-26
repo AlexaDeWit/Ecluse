@@ -1,6 +1,6 @@
 {- | The structured-logging pipeline.
 
-Écluse is an inline dependency in someone else's build path, so when it refuses a
+Écluse sits in the install path of someone else's build, so when it refuses a
 package or runs slow the operator must see /why/ from the logs alone. This module
 stands up a @katip@ 'LogEnv' — the single log stream every layer attaches context
 to — and chooses its on-the-wire shape:

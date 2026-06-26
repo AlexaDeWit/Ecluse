@@ -2,9 +2,9 @@
 proxy will hang spans and metrics on, behind a master switch that defaults to
 __off__.
 
-Écluse is an inline dependency in someone else's build, so observability is
-__opt-in and vendor-neutral__: the substrate is OpenTelemetry, emitting OTLP that
-any compatible backend can receive. The maintainer's choice of backend (Datadog)
+Écluse is a self-hosted proxy operators run inside their own infrastructure, so
+observability is __opt-in and vendor-neutral__: the substrate is OpenTelemetry,
+emitting OTLP that any compatible backend can receive. The maintainer's choice of backend (Datadog)
 must never become every consumer's obligation, so __with @PROXY_TELEMETRY@ unset
 nothing is wired and no telemetry is emitted__ — the SDK is not even initialised.
 
