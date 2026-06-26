@@ -1,0 +1,39 @@
+name: Project priority sync
+
+# Mirror an issue's priority:* label onto the Bug Triage board's Priority
+# single-select field (labels are the source of truth). Logic lives in
+# scripts/project-priority-sync.sh. Requires a repo secret PROJECTS_PAT — a PAT with
+# `project` scope — because the default GITHUB_TOKEN can neither read nor write
+# user-owned Projects v2. See the script header for the full rationale.
+on:
+  issues:
+    types: [labeled, unlabeled]
+
+permissions:
+  contents: read # checkout only; the project write uses PROJECTS_PAT, not GITHUB_TOKEN
+
+concurrency:
+  # Serialize per issue so a burst of label toggles settles on the final state.
+  group: priority-sync-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    name: priority label -> board field
+    # Only priority:* label churn is relevant; skip every other label event.
+    if: ${{ startsWith(github.event.label.name, 'priority:') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Mirror priority:* label onto the board Priority field
+        env:
+          GH_TOKEN: ${{ secrets.PROJECTS_PAT }}
+          REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_NODE_ID: ${{ github.event.issue.node_id }}
+        run: bash scripts/project-priority-sync.sh
