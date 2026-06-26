@@ -278,7 +278,9 @@ registerObservedSpanExporter sink =
 exporters wrapped for failure observation, mirroring @hs-opentelemetry-sdk@'s own
 @initializeOpenTelemetry@. The tracer picks up the observed span exporter through the
 registry ('registerObservedSpanExporter', run before this); the meter is built here
-because the SDK's metric init exposes no registry hook for its exporter. -}
+because the SDK's metric init exposes no registry hook for its exporter. This and
+'initializeObservedMeterProvider' are pinned to @hs-opentelemetry-sdk 1.0.0.0@; re-diff
+both against the SDK on any version bump. -}
 initializeObservedOpenTelemetry :: ExportFailureSink -> IO OTelSignals
 initializeObservedOpenTelemetry sink = do
     tracerProvider <- initializeGlobalTracerProvider
@@ -301,7 +303,8 @@ initializeObservedOpenTelemetry sink = do
 observation. Mirrors @hs-opentelemetry-sdk@'s @initializeGlobalMeterProvider@ exactly,
 differing only in wrapping the exporter the periodic reader drives — the SDK's metric
 init takes the exporter directly ('resolveMetricExporter') with no registry injection
-point, unlike the span path. -}
+point, unlike the span path. Pinned to @hs-opentelemetry-sdk 1.0.0.0@; re-verify against
+the SDK's @initializeGlobalMeterProvider@ on any version bump. -}
 initializeObservedMeterProvider :: ExportFailureSink -> IO MeterProvider
 initializeObservedMeterProvider sink = do
     disabled <- lookupBooleanEnv "OTEL_SDK_DISABLED"
