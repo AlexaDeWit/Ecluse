@@ -58,6 +58,7 @@ import Data.Aeson.Types (Parser, parseEither)
 import Data.Text qualified as T
 import Lens.Micro ((?~), (^.))
 
+import Ecluse.Credential (Secret, unSecret)
 import Ecluse.Ecosystem (ecosystemName, parseEcosystem)
 import Ecluse.Package (
     Hash (Hash, hashAlg, hashValue),
@@ -97,8 +98,11 @@ data SqsEndpoint = SqsEndpoint
     -- ^ The port to connect to (e.g. @4566@ for ministack).
     , endpointAccessKey :: Text
     -- ^ A throwaway access key id the emulator accepts (real SQS uses the chain).
-    , endpointSecretKey :: Text
-    -- ^ The matching throwaway secret key.
+    , endpointSecretKey :: Secret
+    {- ^ The matching secret key, held as a redacted 'Secret' so it never reaches the
+    derived 'Show' of this record (the secret-redaction guarantee must survive even on
+    an off-path log\/error).
+    -}
     }
     deriving stock (Eq, Show)
 
@@ -189,7 +193,9 @@ mkEnv cfg = case sqsEndpoint cfg of
     regioned env = env{AWS.region = AWS.Region' (sqsRegion cfg)}
 
     accessKey ep = AWS.AccessKey (encodeUtf8 (endpointAccessKey ep))
-    secretKey ep = AWS.SecretKey (encodeUtf8 (endpointSecretKey ep))
+    -- The secret is recovered from its redacted 'Secret' only here, at the point of
+    -- use (building the signer), never rendered.
+    secretKey ep = AWS.SecretKey (encodeUtf8 (unSecret (endpointSecretKey ep)))
 
     configured :: SqsEndpoint -> AWS.Env -> AWS.Env
     configured ep =

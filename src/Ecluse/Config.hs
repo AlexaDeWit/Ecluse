@@ -54,6 +54,8 @@ module Ecluse.Config (
     CredentialBackend (..),
     parseCredentialBackend,
     renderCredentialBackend,
+    parseMirrorCredentialProvider,
+    renderMirrorCredentialProvider,
 
     -- * Network values
     Url,
@@ -238,6 +240,41 @@ renderCredentialBackend = \case
     StaticCredential -> "static"
     AdcCredential -> "adc"
 
+{- | Parse the process-level mirror-target write-credential provider selector
+('cfgMirrorTargetCredentialProvider', from @MIRROR_TARGET_CREDENTIAL_PROVIDER@) onto
+a 'CredentialBackend'. This is the credential-provider axis for the single-mount
+mirror-target write — distinct from the per-mount document @credential@ field, so it
+has its own operator-facing vocabulary naming the managed registry: @static@,
+@codeartifact@, and @gcp-artifact-registry@ (the GCP arm, which maps to the
+'AdcCredential' token source and is recognised but not built in this binary).
+
+>>> parseMirrorCredentialProvider "codeartifact"
+Right CodeArtifactCredential
+
+>>> parseMirrorCredentialProvider "vault"
+Left "unknown mirror-target credential provider \"vault\" (expected one of: static, codeartifact, gcp-artifact-registry)"
+-}
+parseMirrorCredentialProvider :: Text -> Either Text CredentialBackend
+parseMirrorCredentialProvider = \case
+    "static" -> Right StaticCredential
+    "codeartifact" -> Right CodeArtifactCredential
+    "gcp-artifact-registry" -> Right AdcCredential
+    other ->
+        Left
+            ( "unknown mirror-target credential provider "
+                <> quote other
+                <> " (expected one of: static, codeartifact, gcp-artifact-registry)"
+            )
+
+{- | The wire name of a mirror-target credential provider selector (the inverse of
+'parseMirrorCredentialProvider'); the GCP arm renders as @gcp-artifact-registry@.
+-}
+renderMirrorCredentialProvider :: CredentialBackend -> Text
+renderMirrorCredentialProvider = \case
+    StaticCredential -> "static"
+    CodeArtifactCredential -> "codeartifact"
+    AdcCredential -> "gcp-artifact-registry"
+
 -- ── environment layer ────────────────────────────────────────────────────────
 
 {- | The flat, process-level configuration read from environment variables. These
@@ -257,14 +294,40 @@ data EnvConfig = EnvConfig
     {- ^ The public upstream registry (@PUBLIC_UPSTREAM_URL@, default
     @https:\/\/registry.npmjs.org@).
     -}
-    , cfgMirrorTarget :: Url
-    -- ^ Where approved packages are mirrored to (@MIRROR_TARGET_URL@, required).
+    , cfgMirrorTarget :: Maybe Url
+    {- ^ Where approved packages are mirrored to (@MIRROR_TARGET_URL@). __Optional__:
+    'Nothing' folds the mirror target onto 'cfgPrivateUpstream' (a single registry
+    that is both read as the private upstream and written as the mirror target), so
+    the private upstream is the one hard-required endpoint. The write __credential__
+    does not fold — it stays the explicit 'cfgMirrorTargetCredentialProvider'.
+    -}
     , cfgQueueBackend :: QueueBackend
     -- ^ The mirror-queue backend (@MIRROR_QUEUE_PROVIDER@, default @sqs@).
     , cfgQueueUrl :: Url
     -- ^ The queue identifier for mirror jobs (@MIRROR_QUEUE_URL@, required).
     , cfgAwsRegion :: Maybe Text
     -- ^ The AWS region for SQS\/CodeArtifact (@AWS_REGION@, AWS backends only).
+    , cfgAwsEndpointUrlSqs :: Maybe Text
+    {- ^ A service-specific SQS endpoint override (@AWS_ENDPOINT_URL_SQS@, the
+    AWS-SDK-standard variable). When set, the SQS backend targets this endpoint
+    instead of AWS's default resolution — pointing the released image at a local
+    emulator (@ministack@) or a VPC endpoint. Takes precedence over
+    'cfgAwsEndpointUrl'.
+    -}
+    , cfgAwsEndpointUrl :: Maybe Text
+    {- ^ The generic AWS endpoint override (@AWS_ENDPOINT_URL@, the AWS-SDK-standard
+    variable), used for SQS when 'cfgAwsEndpointUrlSqs' is unset.
+    -}
+    , cfgAwsAccessKeyId :: Maybe Text
+    {- ^ The AWS access key id (@AWS_ACCESS_KEY_ID@), read only to sign requests to an
+    endpoint override (an emulator is off the ambient credential chain). With no
+    override, AWS's own discovery resolves credentials and this is unused.
+    -}
+    , cfgAwsSecretAccessKey :: Maybe Secret
+    {- ^ The AWS secret access key (@AWS_SECRET_ACCESS_KEY@), the counterpart to
+    'cfgAwsAccessKeyId' for an endpoint override. Held as a redacted 'Secret' so it
+    never reaches the derived 'Show' of this record.
+    -}
     , cfgGoogleProject :: Maybe Text
     {- ^ The GCP project for Pub\/Sub\/Artifact Registry (@GOOGLE_CLOUD_PROJECT@,
     GCP backends only).
@@ -290,6 +353,36 @@ data EnvConfig = EnvConfig
     initialized, so a mount that names @static@ then fails the boot-time
     credential-reference check. Held as a redacted 'Secret' so the token text
     never reaches the derived 'Show' of this record.
+    -}
+    , cfgMirrorTargetCredentialProvider :: CredentialBackend
+    {- ^ How the mirror-target write bearer token is obtained
+    (@MIRROR_TARGET_CREDENTIAL_PROVIDER@, default @static@). @static@ uses
+    'cfgMirrorTargetToken'; @codeartifact@ mints a short-lived token via
+    CodeArtifact (its inputs resolved from the @MIRROR_TARGET_CODEARTIFACT_*@ keys
+    below, or parsed from the mirror-target URL); @gcp-artifact-registry@ is
+    recognised but not built in this binary. This is the credential-provider axis,
+    not the per-mount serve strategy (@passthrough@\/@service@), which is separate.
+    -}
+    , cfgMirrorCodeArtifactDomain :: Maybe Text
+    {- ^ The CodeArtifact domain scoping the mirror-target token
+    (@MIRROR_TARGET_CODEARTIFACT_DOMAIN@). Optional here: when the mirror-target URL
+    is a CodeArtifact endpoint the domain is parsed from its host instead.
+    -}
+    , cfgMirrorCodeArtifactDomainOwner :: Maybe Text
+    {- ^ The 12-digit account number owning the CodeArtifact domain
+    (@MIRROR_TARGET_CODEARTIFACT_DOMAIN_OWNER@). Optional: parsed from the
+    mirror-target host when absent.
+    -}
+    , cfgMirrorCodeArtifactRegion :: Maybe Text
+    {- ^ The AWS region of the CodeArtifact domain
+    (@MIRROR_TARGET_CODEARTIFACT_REGION@). Resolution order: this key, then
+    'cfgAwsRegion', then the mirror-target host.
+    -}
+    , cfgMirrorCodeArtifactTokenDuration :: Maybe Natural
+    {- ^ The requested CodeArtifact token lifetime in seconds
+    (@MIRROR_TARGET_CODEARTIFACT_TOKEN_DURATION_SECONDS@), capped at 12 hours
+    (43200). 'Nothing' lets CodeArtifact default it to the caller's role-credential
+    expiry, which the refresh policy adapts to.
     -}
     , cfgHelpMessage :: Maybe Text
     -- ^ A custom string appended to every denial message (@PROXY_HELP_MESSAGE@).
@@ -390,16 +483,27 @@ envParser =
         <$> Env.var Env.auto "PROXY_PORT" (Env.def 4873)
         <*> Env.var urlReader "PRIVATE_UPSTREAM_URL" mempty
         <*> Env.var urlReader "PUBLIC_UPSTREAM_URL" (Env.def defaultPublicUpstream)
-        <*> Env.var urlReader "MIRROR_TARGET_URL" mempty
+        -- Optional: an unset mirror target folds onto the private upstream in
+        -- 'loadConfig', so only the private upstream is a hard-required endpoint.
+        <*> optionalUrl "MIRROR_TARGET_URL"
         <*> Env.var queueBackendReader "MIRROR_QUEUE_PROVIDER" (Env.def SqsQueue)
         <*> Env.var urlReader "MIRROR_QUEUE_URL" mempty
         <*> optionalText "AWS_REGION"
+        <*> optionalText "AWS_ENDPOINT_URL_SQS"
+        <*> optionalText "AWS_ENDPOINT_URL"
+        <*> optionalText "AWS_ACCESS_KEY_ID"
+        <*> (fmap mkSecret <$> Env.sensitive (optionalText "AWS_SECRET_ACCESS_KEY"))
         <*> optionalText "GOOGLE_CLOUD_PROJECT"
         <*> (fmap mkSecret <$> Env.sensitive (optionalText "PROXY_AUTH_TOKEN"))
         -- Defaults to the secure value (do not honour a cross-host dist.tarball):
         -- an unset or empty variable is the tightest reading of the allowlist.
         <*> Env.var boolReader "PROXY_RESPECT_UPSTREAM_TARBALL_HOST" (Env.def False)
         <*> (fmap mkSecret <$> Env.sensitive (optionalText "MIRROR_TARGET_TOKEN"))
+        <*> Env.var mirrorCredentialProviderReader "MIRROR_TARGET_CREDENTIAL_PROVIDER" (Env.def StaticCredential)
+        <*> optionalText "MIRROR_TARGET_CODEARTIFACT_DOMAIN"
+        <*> optionalText "MIRROR_TARGET_CODEARTIFACT_DOMAIN_OWNER"
+        <*> optionalText "MIRROR_TARGET_CODEARTIFACT_REGION"
+        <*> optionalCodeArtifactDuration "MIRROR_TARGET_CODEARTIFACT_TOKEN_DURATION_SECONDS"
         <*> optionalText "PROXY_HELP_MESSAGE"
         <*> Env.var cveIntervalReader "CVE_SYNC_INTERVAL_SECONDS" (Env.def defaultCveSyncInterval)
         -- The graceful-drain bound in seconds: strictly positive (a zero or negative
@@ -457,6 +561,13 @@ envParser =
     optionalUrl :: String -> Env.Parser Env.Error (Maybe Url)
     optionalUrl name = Env.var ((fmap . fmap) Just urlReader) name (Env.def Nothing)
 
+    -- An optional capped CodeArtifact token-lifetime variable: absent yields
+    -- 'Nothing' (CodeArtifact defaults the lifetime). Same shape as 'optionalUrl',
+    -- through 'codeArtifactDurationReader'.
+    optionalCodeArtifactDuration :: String -> Env.Parser Env.Error (Maybe Natural)
+    optionalCodeArtifactDuration name =
+        Env.var ((fmap . fmap) Just codeArtifactDurationReader) name (Env.def Nothing)
+
 -- Build a failing 'Env.Reader' from a 'Text'-parsing function, turning its
 -- reason into an @envparse@ unread error tagged against the variable. Written
 -- directly (rather than via @Env.eitherReader@) so it depends only on the
@@ -471,6 +582,19 @@ urlReader = textReader mkUrl
 -- An 'Env.Reader' for the queue backend enum.
 queueBackendReader :: Env.Reader Env.Error QueueBackend
 queueBackendReader = textReader parseQueueBackend
+
+-- An 'Env.Reader' for the mirror-target credential-provider selector enum.
+mirrorCredentialProviderReader :: Env.Reader Env.Error CredentialBackend
+mirrorCredentialProviderReader = textReader parseMirrorCredentialProvider
+
+-- An 'Env.Reader' for a CodeArtifact token lifetime: a positive integer count of
+-- seconds capped at 12 hours (43200), CodeArtifact's maximum. A value past the cap
+-- is rejected loudly rather than silently clamped, so an operator's intent is never
+-- quietly overridden.
+codeArtifactDurationReader :: Env.Reader Env.Error Natural
+codeArtifactDurationReader = textReader $ \t -> case readMaybe (toString t) :: Maybe Natural of
+    Just n | n > 0 && n <= 43200 -> Right n
+    _ -> Left ("expected a positive integer count of seconds no greater than 43200 (12h), got " <> quote t)
 
 -- An 'Env.Reader' for the CVE sync interval: a non-negative integer count of
 -- seconds, read as a 'NominalDiffTime'.
@@ -1029,11 +1153,13 @@ loadConfig env mDoc = case mDoc of
                     , regPublicUpstream = cfgPublicUpstream env
                     , regMirrorTarget =
                         MirrorTarget
-                            { mtUrl = cfgMirrorTarget env
-                            , -- Env-only launch authenticates the mirror write with a
-                              -- static token (the documented MIRROR_TARGET_TOKEN path);
-                              -- a cloud-managed target names its backend in the document.
-                              mtCredential = StaticCredential
+                            { -- An unset MIRROR_TARGET_URL folds the mirror target onto
+                              -- the private upstream (one registry, both read and written).
+                              mtUrl = fromMaybe (cfgPrivateUpstream env) (cfgMirrorTarget env)
+                            , -- The write credential is selected by the process-level
+                              -- provider (static / codeartifact / gcp-artifact-registry);
+                              -- it does not fold onto the private upstream's credential.
+                              mtCredential = cfgMirrorTargetCredentialProvider env
                             , mtQueue = cfgQueueBackend env
                             }
                     }

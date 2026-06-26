@@ -68,11 +68,17 @@ operator reference. **Keep the two in sync** when either changes.
 | `PUBLIC_UPSTREAM_URL` | No (default `https://registry.npmjs.org`) | URL of the public upstream, queried anonymously and gated by the rules. |
 | `PROXY_PUBLIC_URL` | Recommended | The proxy's own externally-reachable base URL (e.g. `https://registry.example.com`), used to rewrite each served `dist.tarball` to an **absolute** URL clients fetch back through the proxy. **Unset, tarball URLs are path-relative, which the `npm` CLI cannot install from** — it reads a leading-slash `dist.tarball` as a local `file:` path — so set this for any deployment that serves real `npm install`s. |
 | `PUBLIC_UPSTREAM_TOKEN` | No | Écluse's own token for a public mirror that itself requires auth. Never the client's. |
-| `MIRROR_TARGET_URL` | **Yes** | Registry that approved packages are mirrored to. |
-| `MIRROR_TARGET_TOKEN` | No | Static write token for the mirror target, when not using a cloud-managed credential. |
-| `MIRROR_QUEUE_PROVIDER` | No (default `sqs`) | Mirror-queue backend: `sqs` (AWS) or `pubsub` (GCP). **(planned backends)** |
+| `MIRROR_TARGET_URL` | No (default `PRIVATE_UPSTREAM_URL`) | Registry that approved packages are mirrored to. Unset ⇒ folds onto the private upstream (one registry, read and written). The write credential does **not** fold — set `MIRROR_TARGET_CREDENTIAL_PROVIDER`. |
+| `MIRROR_TARGET_CREDENTIAL_PROVIDER` | No (default `static`) | Mirror-target write credential: `static` (`MIRROR_TARGET_TOKEN`) or `codeartifact` (mints under the container/task role). `gcp-artifact-registry` is recognised but not yet built. |
+| `MIRROR_TARGET_TOKEN` | No | Static write token, when `MIRROR_TARGET_CREDENTIAL_PROVIDER=static` (the default). |
+| `MIRROR_TARGET_CODEARTIFACT_DOMAIN` | `codeartifact` only | CodeArtifact domain — or parsed from a CodeArtifact `MIRROR_TARGET_URL` host. |
+| `MIRROR_TARGET_CODEARTIFACT_DOMAIN_OWNER` | `codeartifact` only | 12-digit owning account id — or parsed from the host (a non-account-id value is rejected at boot). |
+| `MIRROR_TARGET_CODEARTIFACT_REGION` | `codeartifact` only | Region — this key, else the host (its authoritative region), else `AWS_REGION`. |
+| `MIRROR_TARGET_CODEARTIFACT_TOKEN_DURATION_SECONDS` | No | Token lifetime in seconds, capped at `43200` (12 h). |
+| `MIRROR_QUEUE_PROVIDER` | No (default `sqs`) | Mirror-queue backend: `sqs` (AWS). `pubsub` (GCP) is recognised but not yet built. |
 | `MIRROR_QUEUE_URL` | **Yes** | Queue identifier: an SQS queue URL or a Pub/Sub `projects/<p>/topics/<t>` resource. |
 | `AWS_REGION` | AWS backends only | Region for SQS and CodeArtifact. |
+| `AWS_ENDPOINT_URL_SQS` / `AWS_ENDPOINT_URL` | No | SQS endpoint override (AWS-SDK-standard). Point at a local emulator (`ministack`) or VPC endpoint; with one set, requests are signed with `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`. Unset ⇒ normal AWS resolution. |
 | `GOOGLE_CLOUD_PROJECT` | GCP backends only | Project for Pub/Sub and Artifact Registry (credentials via ADC). |
 | `PROXY_AUTH_TOKEN` | No | If set, clients must present this token (`Bearer` / `_authToken`). Omit for network-secured deployments. |
 | `PROXY_RESPECT_UPSTREAM_TARBALL_HOST` | No (default `false`) | Secure default. When `false`, a tarball is fetched only from the **same allowlisted upstream that served the packument**; set `true` only for a registry that serves tarballs from a separate CDN/files host (widens the fetch surface to any allowlisted host). See [Securing network egress](#securing-network-egress-required). |

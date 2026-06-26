@@ -17,6 +17,7 @@ module Ecluse.Integration.Ministack (
 
     -- * Per-test queue
     freshQueue,
+    freshQueueUrl,
     QueueOptions (..),
     defaultQueueOptions,
     receiveUntil,
@@ -39,6 +40,7 @@ import TestContainers.Hspec (withContainers)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (try)
 
+import Ecluse.Credential (mkSecret, unSecret)
 import Ecluse.Queue (MirrorQueue (receive), QueueMessage, Seconds (Seconds))
 import Ecluse.Queue.Sqs (SqsConfig (..), SqsEndpoint (..), defaultSqsConfig, newSqsQueue)
 
@@ -70,10 +72,11 @@ ministack =
             & TC.setWaitingFor (TC.waitUntilTimeout 120 (TC.waitUntilMappedPortReachable ministackPort))
             & TC.setRm True
 
--- ministack with an ASCII description label (see 'withMinistack' for why).
+-- ministack (pinned by digest; tag 1.3-full) with an ASCII description label
+-- (see 'withMinistack' for why).
 ministackDockerfile :: Text
 ministackDockerfile =
-    "FROM ministackorg/ministack:latest\n\
+    "FROM ministackorg/ministack@sha256:5164592def36af01b8ac76364028e27c5ecd8f1494c8a53d5fcd811cc7dfb594\n\
     \LABEL description=\"Local AWS Service Emulator\"\n"
 
 -- ── endpoint ──────────────────────────────────────────────────────────────────
@@ -90,7 +93,7 @@ endpointFor container =
             , endpointHost = host
             , endpointPort = mappedPort
             , endpointAccessKey = "test"
-            , endpointSecretKey = "test"
+            , endpointSecretKey = mkSecret "test"
             }
 
 -- ── per-test queue ────────────────────────────────────────────────────────────
@@ -119,15 +122,24 @@ up the instant the port opens, so the @CreateQueue@ call is retried.
 -}
 freshQueue :: Container -> Text -> QueueOptions -> IO MirrorQueue
 freshQueue container queueName options = do
-    let endpoint = endpointFor container
-    env <- envFor endpoint
-    queueUrl <- createQueueWithRetry env queueName 30
+    queueUrl <- freshQueueUrl container queueName
     newSqsQueue
         (defaultSqsConfig queueUrl "us-east-1")
-            { sqsEndpoint = Just endpoint
+            { sqsEndpoint = Just (endpointFor container)
             , sqsWaitSeconds = qoWaitSeconds options
             , sqsVisibilityTimeout = qoVisibilityTimeout options
             }
+
+{- | Create a fresh SQS queue in the @ministack@ container and return its queue URL
+(without binding a 'MirrorQueue' to it), so a test can drive the queue through the
+config-driven composition root ('Ecluse.Composition.planMirrorQueue') and the
+endpoint-override key rather than the direct backend constructor. ministack may not
+have the SQS service up the instant the port opens, so @CreateQueue@ is retried.
+-}
+freshQueueUrl :: Container -> Text -> IO Text
+freshQueueUrl container queueName = do
+    env <- envFor (endpointFor container)
+    createQueueWithRetry env queueName 30
 
 -- A region-scoped, endpoint-overridden amazonka Env with the throwaway keys.
 envFor :: SqsEndpoint -> IO AWS.Env
@@ -135,7 +147,7 @@ envFor endpoint = do
     base <-
         AWS.Auth.fromKeys
             (AWS.AccessKey (encodeUtf8 (endpointAccessKey endpoint)))
-            (AWS.SecretKey (encodeUtf8 (endpointSecretKey endpoint)))
+            (AWS.SecretKey (encodeUtf8 (unSecret (endpointSecretKey endpoint))))
             <$> AWS.newEnvNoAuth
     let regioned = base{AWS.region = AWS.Region' "us-east-1"}
     pure $

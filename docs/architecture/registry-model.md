@@ -39,8 +39,10 @@ upstream wants on the wire* (credential supply). The strategies are detailed in 
   needs auth, that is Écluse's *own* configured credential — never the client's.)
 - **Mirror target (write)** — always Écluse's own credential: the
   [`CredentialProvider`](cloud-backends.md#credential-provider) mints the token to
-  publish approved packages. Often the same registry as the private upstream, but a
-  different identity on it: the *client* reads it, *Écluse* writes it.
+  publish approved packages. Often the same registry as the private upstream — so its
+  URL **defaults to `PRIVATE_UPSTREAM_URL`** when unset — but a different identity on
+  it: the *client* reads it, *Écluse* writes it, and the write credential is selected
+  explicitly (it does not fold with the URL).
 - **Publication target (write)** — the **client's own forwarded credential**
   (`passthrough`): a `npm publish` is relayed to the publication target, which
   authorises the publisher. Symmetric with the private-upstream read under

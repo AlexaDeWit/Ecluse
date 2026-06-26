@@ -107,6 +107,7 @@ import Ecluse.Composition (
     CredentialProviders,
     PublishTarget (ptCredentials, ptEcosystem, ptMirrorUrl),
     initCredentialProviders,
+    planMirrorQueue,
     planMounts,
     planPublishTargets,
     renderBootError,
@@ -114,8 +115,8 @@ import Ecluse.Composition (
 import Ecluse.Composition qualified as Composition
 import Ecluse.Config (
     ConfigDoc,
-    CredentialBackend (StaticCredential),
-    EnvConfig (cfgLogFormat, cfgPort, cfgShutdownDrainTimeout, cfgTelemetry),
+    CredentialBackend,
+    EnvConfig (cfgLogFormat, cfgMirrorTargetCredentialProvider, cfgPort, cfgShutdownDrainTimeout, cfgTelemetry),
     decodeDocument,
     parseEnv,
     renderEnvErrors,
@@ -124,7 +125,7 @@ import Ecluse.Credential (AuthToken (..), CredentialProvider, currentToken, mkSe
 import Ecluse.Ecosystem (Ecosystem (Npm), prefixFor)
 import Ecluse.Env (Env, newWorkerHeartbeat, withEnv)
 import Ecluse.Log (newLogEnv)
-import Ecluse.Queue (newInMemoryQueue)
+import Ecluse.Queue.Sqs (newSqsQueue)
 import Ecluse.Registry (
     ParseError (..),
     RegistryClient (..),
@@ -146,11 +147,13 @@ import Ecluse.Worker qualified as Worker
 It assembles the composition root from configuration: it parses the environment
 layer and the optional config document, __validates everything and fails fast at
 boot__ on any problem (a malformed env, an unresolved rule policy, a configured
-mount with no adapter, a credential reference that does not resolve), aggregating
-the failures so a single run reports them all. On success it builds the handles —
-the shared HTTP @Manager@, the metadata cache, the logger, the process-global
-credential provider, and the telemetry substrate (off unless @PROXY_TELEMETRY@
-enables it) — into an 'Env', derives the served mount bindings, then runs the
+mount with no adapter, a credential reference that does not resolve, or a
+mirror-queue backend that is not built in this binary), aggregating the failures so
+a single run reports them all. On success it builds the handles — the shared HTTP
+@Manager@, the config-selected mirror queue, the metadata cache, the logger, the
+process-global credential provider, and the telemetry substrate (off unless
+@PROXY_TELEMETRY@ enables it) — into an 'Env', derives the served mount bindings,
+then runs the
 server and the mirror worker __concurrently__ over that single 'Env' ('runServer'
 and 'runWorker'). Bracketing the 'Env' (and the telemetry providers) for the
 lifetime of both means their shared resources are torn down along every exit path.
@@ -159,9 +162,16 @@ run :: IO ()
 run = do
     env <- parseEnv >>= orExit renderEnvErrors
     mDoc <- loadDocument
-    providers <- initCredentialProviders env
+    -- Build the process-global mirror-target write provider(s) selected by config:
+    -- the static token, or the CodeArtifact mint (whose inputs are validated and which
+    -- mints once eagerly, so a misconfiguration fails loudly here at boot).
+    providers <- initCredentialProviders env >>= orExit (T.unlines . map renderBootError)
     bindings <- orExit (T.unlines . map renderBootError) (planMounts mountBindingFor getCurrentTime providers env mDoc)
     publishTargets <- orExit (T.unlines . map renderBootError) (planPublishTargets providers env mDoc)
+    -- Select the mirror-queue backend from config (the GCP arm is a fail-loud
+    -- "not built" boot error, never a silent fall-through); the resulting SqsConfig
+    -- is handed to the one newSqsQueue call below.
+    sqsConfig <- orExit (T.unlines . map renderBootError) (planMirrorQueue env)
     let serverConfig =
             (mkServerConfig bindings)
                 { scPort = cfgPort env
@@ -181,12 +191,14 @@ run = do
     -- operator-configured, trusted mirror target, so it uses the trusted private
     -- manager (no resolved-IP recheck — that guards only the untrusted public fetch).
     publishClient <- resolvePublishClient privateManager publishTargets
-    queue <- newInMemoryQueue
+    -- The config-selected mirror queue: the AWS SQS backend, built once here (the
+    -- single SDK-constructor call) from the validated SqsConfig and captured in Env.
+    queue <- newSqsQueue sqsConfig
     metadataCache <- newMetadataCache (Composition.cacheConfigFor env)
     logEnv <- newLogEnv (cfgLogFormat env) (Environment "production")
     heartbeat <- newWorkerHeartbeat
     withTelemetry (cfgTelemetry env) $ \telemetry ->
-        withEnv publishClient queue (mirrorWriteProvider providers) manager privateManager metadataCache logEnv telemetry heartbeat (runServices serverConfig)
+        withEnv publishClient queue (mirrorWriteProvider (cfgMirrorTargetCredentialProvider env) providers) manager privateManager metadataCache logEnv telemetry heartbeat (runServices serverConfig)
 
 {- | Read the optional structured config document from the @PROXY_CONFIG@ env blob,
 decoding it strictly. 'Nothing' when unset — an env-only deployment supplies no
@@ -204,14 +216,15 @@ loadDocument =
         Just blob -> Just <$> orExit ("PROXY_CONFIG: " <>) (decodeDocument (encodeUtf8 blob))
 
 {- The process-global mirror-write credential provider stored in 'Env' for the
-worker. In the collapses-to-one common case there is a single provider; the
-@static@ leaf is selected when a static write token is configured, else the
-no-backend placeholder holds the slot for the worker, its only consumer. A mount
-that references an uninitialized provider has already failed the boot-time
-credential check by this point. -}
-mirrorWriteProvider :: CredentialProviders -> CredentialProvider
-mirrorWriteProvider providers =
-    fromMaybe unconfiguredCredentials (Composition.lookupProvider StaticCredential providers)
+worker, selected by the configured provider backend
+('Ecluse.Config.cfgMirrorTargetCredentialProvider'): the static token or the
+CodeArtifact mint. In the common case there is a single provider; the no-backend
+placeholder only holds the slot when the selected provider was not built — a mount
+that references it has already failed the boot-time credential check by this point,
+so the worker (the slot's only consumer) never reaches the placeholder. -}
+mirrorWriteProvider :: CredentialBackend -> CredentialProviders -> CredentialProvider
+mirrorWriteProvider backend providers =
+    fromMaybe unconfiguredCredentials (Composition.lookupProvider backend providers)
 
 {- | Raised to abort start-up after a boot phase has reported its aggregated
 failure to stderr. A distinct type — rather than a bare 'exitFailure' — so the

@@ -2,12 +2,21 @@
 the real @npm@ CLI, and tear it all down.
 
 The topology runs the __real OCI image__ (the artifact we publish), an __nginx__
-public-upstream stub, and a __Verdaccio__ private upstream + mirror target on a docker
-network whose subnet is RFC 5737 documentation space (@203.0.113.0\/24@). That range
-is __not__ in the egress guard's internal-range block, so the proxy reaches the stub
-at a non-internal address with no production code change — see
-@planning\/slices\/S53-e2e-ecosystem.md@. Custom-subnet networks are beyond
-@testcontainers-hs@, so the harness drives @docker@ directly through @typed-process@.
+public-upstream stub, a __Verdaccio__ private upstream + mirror target, and a
+__ministack__ SQS emulator on a docker network whose subnet is RFC 5737 documentation
+space (@203.0.113.0\/24@). That range is __not__ in the egress guard's internal-range
+block, so the proxy reaches the stub at a non-internal address with no production code
+change — see @planning\/slices\/S53-e2e-ecosystem.md@. Custom-subnet networks are
+beyond @testcontainers-hs@, so the harness drives @docker@ directly through
+@typed-process@.
+
+The proxy's mirror queue is the __real AWS SQS backend__ pointed at ministack through
+the production @AWS_ENDPOINT_URL_SQS@ override (no test-only seam — the released image
+is exercised exactly as deployed, just with the endpoint aimed at the emulator). The
+harness creates the queue in ministack over the plain SQS query API (the emulator
+needs no signed request) and passes its URL to the proxy; the proxy reaches the
+emulator by its network alias while routing by the queue's path, so the queue URL's
+host is immaterial.
 
 The suite only runs when @ECLUSE_E2E_IMAGE@ names a loaded image and a docker daemon
 is reachable; 'e2eUnavailable' reports the reason otherwise so the spec can mark its
@@ -126,6 +135,7 @@ withE2E action = do
     let net = "ecluse-e2e-net-" <> sfx
         stub = "ecluse-e2e-stub-" <> sfx
         verd = "ecluse-e2e-verd-" <> sfx
+        mini = "ecluse-e2e-mini-" <> sfx
         prox = "ecluse-e2e-proxy-" <> sfx
         workDir = tmpRoot </> ("ecluse-e2e-" <> sfx)
         htmlDir = workDir </> "html"
@@ -133,7 +143,7 @@ withE2E action = do
         nginxConf = workDir </> "nginx.conf"
     bracket
         (pure ())
-        (\_ -> teardown net [prox, verd, stub] workDir)
+        (\_ -> teardown net [prox, verd, stub, mini] workDir)
         ( \_ -> do
             createDirectoryIfMissing True htmlDir
             buildFixtures htmlDir fixturePackages
@@ -174,11 +184,34 @@ withE2E action = do
                 , verdConf <> ":/verdaccio/conf/config.yaml:ro"
                 , "verdaccio/verdaccio:5"
                 ]
+            -- ministack SQS emulator, reachable by the proxy as `ministack` and by the
+            -- harness on a published host port (to create the queue). The image is used
+            -- directly (no testcontainers-hs label-parsing workaround needed here).
+            dockerOk
+                [ "run"
+                , "-d"
+                , "--name"
+                , mini
+                , "--network"
+                , net
+                , "--network-alias"
+                , "ministack"
+                , "-p"
+                , "127.0.0.1:0:4566"
+                , "ministackorg/ministack@sha256:5164592def36af01b8ac76364028e27c5ecd8f1494c8a53d5fcd811cc7dfb594"
+                ]
+            manager <- newManager defaultManagerSettings
+            -- Create the mirror queue in ministack and learn its URL. The proxy routes to
+            -- ministack via AWS_ENDPOINT_URL_SQS and matches the queue by its path, so the
+            -- URL's host (here ministack's own `localhost:4566`) is immaterial.
+            miniPort <- publishedPort mini "4566/tcp"
+            queueUrl <- createMinistackQueue manager miniPort "ecluse-e2e"
             -- Pick the host port up front so PROXY_PUBLIC_URL (which makes the proxy
             -- rewrite dist.tarball to an absolute, npm-fetchable URL) is known before
             -- the container starts — the assigned port is only readable after.
             proxyPort <- freeHostPort
-            -- The real proxy image: server ‖ worker over the in-memory queue.
+            -- The real proxy image: server ‖ worker over the real SQS backend, pointed
+            -- at ministack through the production AWS_ENDPOINT_URL_SQS override.
             dockerOk $
                 [ "run"
                 , "-d"
@@ -189,10 +222,9 @@ withE2E action = do
                 , "-p"
                 , "127.0.0.1:" <> show proxyPort <> ":4873"
                 ]
-                    <> concatMap (\(k, v) -> ["-e", toString (k <> "=" <> v)]) (proxyEnv proxyPort)
+                    <> concatMap (\(k, v) -> ["-e", toString (k <> "=" <> v)]) (proxyEnv proxyPort queueUrl)
                     <> [image]
-            verdPort <- publishedPort verd
-            manager <- newManager defaultManagerSettings
+            verdPort <- publishedPort verd "4873/tcp"
             let base = "http://127.0.0.1:" <> show proxyPort
                 e2e =
                     E2E
@@ -207,22 +239,30 @@ withE2E action = do
             action e2e
         )
 
-{- | The proxy's environment, given the host port it is published on. The in-memory
-queue means the SQS settings are inert, but the loader still requires the URLs, so
-dummies stand in. Both upstream legs and the mirror target point at the two stub
-containers by their network aliases. @PROXY_PUBLIC_URL@ is the host-loopback address
-npm reaches the proxy on, so each served @dist.tarball@ is rewritten to an absolute
-URL npm can fetch.
+{- | The proxy's environment, given the host port it is published on and the mirror
+queue URL created in ministack. The real SQS backend is pointed at ministack through
+the production @AWS_ENDPOINT_URL_SQS@ override and signs with the standard
+@AWS_ACCESS_KEY_ID@\/@AWS_SECRET_ACCESS_KEY@ (the emulator ignores them). Both upstream
+legs and the mirror target point at the stub containers by their network aliases.
+@PROXY_PUBLIC_URL@ is the host-loopback address npm reaches the proxy on, so each
+served @dist.tarball@ is rewritten to an absolute URL npm can fetch.
 -}
-proxyEnv :: Int -> [(Text, Text)]
-proxyEnv hostPort =
+proxyEnv :: Int -> Text -> [(Text, Text)]
+proxyEnv hostPort queueUrl =
     [ ("PROXY_PORT", "4873")
     , ("PROXY_PUBLIC_URL", "http://127.0.0.1:" <> show hostPort)
     , ("PUBLIC_UPSTREAM_URL", "http://upstream/")
     , ("PRIVATE_UPSTREAM_URL", "http://mirror:4873/")
     , ("MIRROR_TARGET_URL", "http://mirror:4873/")
     , ("MIRROR_TARGET_TOKEN", "e2e-publish-token")
-    , ("MIRROR_QUEUE_URL", "http://queue.invalid/q")
+    , ("MIRROR_QUEUE_PROVIDER", "sqs")
+    , ("MIRROR_QUEUE_URL", queueUrl)
+    , -- The production endpoint override (AWS-SDK-standard), aimed at the ministack
+      -- alias; the dummy keys sign the request the emulator does not validate.
+      ("AWS_ENDPOINT_URL_SQS", "http://ministack:4566")
+    , ("AWS_REGION", "us-east-1")
+    , ("AWS_ACCESS_KEY_ID", "test")
+    , ("AWS_SECRET_ACCESS_KEY", "test")
     , ("PROXY_LOG_FORMAT", "json")
     , -- Add DenyInstallTimeExecution to the default min-age policy so the deny
       -- scenario has a rule to fire; the document carries only this rule patch.
@@ -403,16 +443,56 @@ dockerOk args = do
     unless (code == ExitSuccess) $
         fail ("docker command " <> show args <> " failed: " <> toString (decodeUtf8 (LBS.toStrict err) :: Text))
 
--- | The host loopback port a container's @4873@ is published to.
-publishedPort :: String -> IO Int
-publishedPort cname = do
-    (_, out) <- readProcessStdout (proc "docker" ["port", cname, "4873/tcp"])
+-- | The host loopback port a container's given @\<port\>\/tcp@ is published to.
+publishedPort :: String -> String -> IO Int
+publishedPort cname containerPort = do
+    (_, out) <- readProcessStdout (proc "docker" ["port", cname, containerPort])
     let firstLine = fromMaybe "" (listToMaybe (lines (decodeUtf8 (LBS.toStrict out))))
         portText = T.takeWhileEnd (/= ':') (T.strip firstLine)
     maybe
         (fail ("could not parse published port from " <> show firstLine))
         pure
         (readMaybe (toString portText))
+
+{- | Create (idempotently) the mirror queue in the ministack SQS emulator on its
+host-published port and return the queue URL. Uses the plain SQS query API — the
+emulator needs no signed request — and retries while the emulator's SQS service warms
+up. @CreateQueue@ is idempotent (a repeat returns the existing URL), so the retry is
+safe. The returned URL's host is the emulator's own (@localhost:4566@); the proxy
+routes to ministack via @AWS_ENDPOINT_URL_SQS@ and matches the queue by its path, so
+that host is never dialled.
+-}
+createMinistackQueue :: Manager -> Int -> Text -> IO Text
+createMinistackQueue manager hostPort queueName = go (60 :: Int)
+  where
+    endpoint =
+        "http://127.0.0.1:"
+            <> show hostPort
+            <> "/?Action=CreateQueue&QueueName="
+            <> queueName
+            <> "&Version=2012-11-05"
+    go :: Int -> IO Text
+    go 0 = fail "ministack SQS CreateQueue never succeeded within the timeout"
+    go n =
+        handleAny (\_ -> retry n) $ do
+            base <- parseRequest (toString endpoint)
+            resp <- httpLbs base{method = "POST"} manager
+            let body = decodeUtf8 (LBS.toStrict (responseBody resp)) :: Text
+            case (statusCode (responseStatus resp), between "<QueueUrl>" "</QueueUrl>" body) of
+                (200, Just url) | not (T.null url) -> pure url
+                _ -> retry n
+    retry :: Int -> IO Text
+    retry n = threadDelay 500000 >> go (n - 1)
+
+-- | The text between the first @opening@ and the following @closing@ marker, or 'Nothing'.
+between :: Text -> Text -> Text -> Maybe Text
+between opening closing t =
+    let afterOpen = snd (T.breakOn opening t)
+     in if T.null afterOpen
+            then Nothing
+            else
+                let (inner, rest) = T.breakOn closing (T.drop (T.length opening) afterOpen)
+                 in if T.null rest then Nothing else Just inner
 
 -- ── waiting ───────────────────────────────────────────────────────────────────
 

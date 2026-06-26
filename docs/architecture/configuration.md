@@ -47,14 +47,21 @@ registries derive short-lived tokens from ambient cloud credentials (see
 | `PROXY_PORT` | No (default: 4873) | Port the proxy listens on. |
 | `PRIVATE_UPSTREAM_URL` | Yes | URL of the private upstream registry. |
 | `PUBLIC_UPSTREAM_URL` | No (default: `https://registry.npmjs.org`) | URL of the public upstream. |
-| `MIRROR_TARGET_URL` | Yes | URL of the registry to mirror approved packages to. |
-| `MIRROR_TARGET_TOKEN` | No | Static write token for the mirror target, used when it is reached with a fixed credential rather than a cloud-managed one. |
+| `MIRROR_TARGET_URL` | No (default: `PRIVATE_UPSTREAM_URL`) | URL of the registry to mirror approved packages to. Unset ⇒ folds onto the private upstream (one registry, both read and written), so the private upstream is the only hard-required endpoint. The write **credential** does not fold — it stays `MIRROR_TARGET_CREDENTIAL_PROVIDER`. |
+| `MIRROR_TARGET_CREDENTIAL_PROVIDER` | No (default: `static`) | How the mirror-target write token is obtained: `static` (uses `MIRROR_TARGET_TOKEN`), `codeartifact` (mints via CodeArtifact `GetAuthorizationToken` under the ambient task role), or `gcp-artifact-registry` (recognised but not yet built — a fail-loud boot error). This is the credential-**provider** axis, distinct from the per-mount serve **strategy** (`passthrough`/`service`). See [Cloud Backends → Credential Provider](cloud-backends.md#credential-provider). |
+| `MIRROR_TARGET_TOKEN` | No | Static write token for the mirror target, used when `MIRROR_TARGET_CREDENTIAL_PROVIDER=static` (the default). |
+| `MIRROR_TARGET_CODEARTIFACT_DOMAIN` | `codeartifact` provider only | The CodeArtifact domain that scopes the minted token. Resolved from this key, else parsed from a CodeArtifact `MIRROR_TARGET_URL` host (`{domain}-{owner}.d.codeartifact.{region}.amazonaws.com`); unresolvable ⇒ fail-loud at boot. |
+| `MIRROR_TARGET_CODEARTIFACT_DOMAIN_OWNER` | `codeartifact` provider only | The 12-digit AWS account id owning the domain. Resolved from this key, else parsed from the mirror-target host; a value that is not a 12-digit account id is rejected at boot. |
+| `MIRROR_TARGET_CODEARTIFACT_REGION` | `codeartifact` provider only | The region of the CodeArtifact domain. Resolution order: this key → the mirror-target host (its authoritative region) → `AWS_REGION`. |
+| `MIRROR_TARGET_CODEARTIFACT_TOKEN_DURATION_SECONDS` | No | Requested CodeArtifact token lifetime in seconds, capped at `43200` (12 h). Unset ⇒ CodeArtifact ties it to the caller's role-credential expiry. |
 | `PUBLICATION_TARGET_URL` | No | URL the proxy writes client `npm publish` (first-party packages) to. **Unset ⇒ the proxy refuses publishes with `405`.** May be the same registry as the private upstream (so published packages are then readable via the private leg). See [Registry roles → publication target](registry-model.md#publishing-first-party-packages-the-publication-target). |
 | `PUBLICATION_TARGET_TOKEN` | No | Static credential for the publication target when it is not reached with the client's forwarded token. The default publish credential model is **passthrough** — the publisher's own token; see [Access model](access-model.md#publishing-the-publication-target-passthrough-write). |
 | `PUBLISH_SCOPES` | Required when `PUBLICATION_TARGET_URL` is set | Comma-separated allow-list of package scopes a client may publish (e.g. `@acme`). A publish whose name is outside the list is refused — the anti-shadowing guard against publishing a name that collides with a public package. |
 | `MIRROR_QUEUE_PROVIDER` | No (default: `sqs`) | Mirror-queue backend: `sqs` (AWS) or `pubsub` (GCP). See [Cloud Backends](cloud-backends.md#cloud-backends). |
 | `MIRROR_QUEUE_URL` | Yes | Queue identifier for mirror jobs: an SQS queue URL, or a Pub/Sub `projects/<project>/topics/<topic>` resource, per provider. |
 | `AWS_REGION` | AWS backends only | Region for SQS and CodeArtifact. |
+| `AWS_ENDPOINT_URL_SQS` | No | SQS endpoint override (the AWS-SDK-standard variable). Set to target a local emulator (`ministack`) or a VPC endpoint; the released image uses the same key with no test-only seam. Takes precedence over `AWS_ENDPOINT_URL`. With an override set, requests are signed with `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` (an emulator is off the ambient role chain). |
+| `AWS_ENDPOINT_URL` | No | Generic AWS endpoint override (the AWS-SDK-standard variable), used for SQS when `AWS_ENDPOINT_URL_SQS` is unset. |
 | `GOOGLE_CLOUD_PROJECT` | GCP backends only | Project for Pub/Sub and Artifact Registry. Credentials come from Application Default Credentials (ADC). |
 | `PROXY_AUTH_TOKEN` | No | If set, clients must supply this token as `Bearer` or `_authToken`. Omit for open/network-secured deployments. |
 | `PROXY_RESPECT_UPSTREAM_TARBALL_HOST` | No (default: `false`) | When `false`, a tarball is fetched only from the same allowlisted upstream that served the packument; a `dist.tarball` pointing at a different host is refused. See [Outbound egress safety](#outbound-egress-safety). |
@@ -90,6 +97,20 @@ one for **reading** the private upstream. Each such endpoint selects a
 (CodeArtifact / Artifact Registry, token derived from the ambient cloud
 credentials above: `AWS_REGION` / instance role, or ADC / `GOOGLE_CLOUD_PROJECT`)
 or a static token.
+
+**Selecting the mirror-target write provider.** `MIRROR_TARGET_CREDENTIAL_PROVIDER`
+chooses how that one always-held write credential is obtained — `static` (a
+`MIRROR_TARGET_TOKEN`) or `codeartifact` (a token minted under the ambient task role,
+its domain/owner/region from the `MIRROR_TARGET_CODEARTIFACT_*` keys or parsed from the
+mirror-target host). The write credential is **explicit and does not fold** when
+`MIRROR_TARGET_URL` folds onto the private upstream: under the default `passthrough`
+the private upstream carries no Écluse credential, while the mirror write runs on the
+async worker under Écluse's own identity, so the two are independent. (When the
+`service` strategy later gives the private-upstream read its own Écluse credential, a
+write to the same registry **may** inherit it — that is the `service` slice's concern,
+not this one.) The read-side providers (`PRIVATE_UPSTREAM_*`) and the publish-target
+provider (`PUBLICATION_TARGET_*`) will follow the **same prefixed-provider pattern**
+when those slices land, so the shape is set once here.
 
 **How reads are credentialled is the credential strategy** (see
 [Access & Credential Model](access-model.md)). Under the default **`passthrough`**,

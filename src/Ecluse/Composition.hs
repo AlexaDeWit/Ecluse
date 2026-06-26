@@ -37,11 +37,18 @@ module Ecluse.Composition (
     initializedBackends,
     lookupProvider,
 
+    -- * Mirror-target credential provider selection
+    planMirrorCredential,
+    resolveCodeArtifactConfig,
+
     -- * Boot-time wiring
     BootError (..),
     renderBootError,
     planMounts,
     composeBindings,
+
+    -- * Mirror-queue backend selection
+    planMirrorQueue,
 
     -- * Publish-side wiring
     PublishTarget (..),
@@ -51,10 +58,12 @@ module Ecluse.Composition (
     cacheConfigFor,
 ) where
 
+import Data.Char (isDigit)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Time (UTCTime)
+import UnliftIO (tryAny)
 
 import Ecluse.Config (
     Config (..),
@@ -65,15 +74,20 @@ import Ecluse.Config (
     Mount (..),
     MountRegistries (..),
     PolicyError,
+    QueueBackend (..),
     loadConfig,
     renderCredentialBackend,
+    renderMirrorCredentialProvider,
     renderPolicyError,
+    renderQueueBackend,
     unUrl,
  )
-import Ecluse.Credential (AuthToken (..), CredentialProvider, Secret, staticProvider)
+import Ecluse.Credential (AuthToken (..), CredentialProvider, Secret, mkSecret, staticProvider)
+import Ecluse.Credential.CodeArtifact (CodeArtifactConfig (..), newCodeArtifactProvider)
 import Ecluse.Ecosystem (Ecosystem, ecosystemName, prefixFor)
 import Ecluse.Package.Integrity (MinIntegrity)
-import Ecluse.Security (Limits (Limits, maxBodyBytes, maxNestingDepth, maxVersionCount), TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), lowerCaseHosts)
+import Ecluse.Queue.Sqs (SqsConfig (sqsEndpoint), SqsEndpoint (..), defaultSqsConfig)
+import Ecluse.Security (Limits (Limits, maxBodyBytes, maxNestingDepth, maxVersionCount), TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), hostAddress, lowerCaseHosts)
 import Ecluse.Server.Cache (CacheConfig (..))
 import Ecluse.Server.Context (MountBinding, PackumentDeps (..))
 import Ecluse.Server.Response (HelpMessage, mkHelpMessage)
@@ -89,23 +103,49 @@ that names a backend absent from it has an unresolved credential reference.
 -}
 newtype CredentialProviders = CredentialProviders (Map CredentialBackend CredentialProvider)
 
-{- | Build the global credential providers from the environment layer. Only the
-backends whose leaf can be constructed from ambient credentials are
-initialized:
+{- | Build the global credential providers from the environment layer, or the
+aggregated boot errors that block them. The mirror-target write provider is
+selected by 'cfgMirrorTargetCredentialProvider' (see 'planMirrorCredential'):
 
 * @static@ — built from @MIRROR_TARGET_TOKEN@ ('cfgMirrorTargetToken') when set;
   absent, no static provider is initialized, so a mount naming @static@ fails the
   boot-time credential-reference check.
+* @codeartifact@ — the CodeArtifact inputs are resolved
+  ('resolveCodeArtifactConfig'); a required input that resolves by neither an
+  explicit key nor the mirror-target host is a fail-loud boot error. On success the
+  generic refresh\/cache wrapper around the CodeArtifact mint leaf
+  ('newCodeArtifactProvider') is built, which mints once eagerly — so a misconfigured
+  identity fails here at boot. AWS credentials are the ambient container\/task role
+  (the standard chain), never an Écluse key. A mint that throws at boot (a transient
+  AWS error, or a permanent one like a bad domain\/region or missing permission) is
+  caught and rendered as a 'CodeArtifactMintFailed' boot error rather than escaping as
+  a raw exception, so it joins the aggregated failure block.
+* @gcp-artifact-registry@ — recognised but not built in this binary, so selecting
+  it is a fail-loud boot error rather than a silent fall-through.
 
-@codeartifact@ and @adc@ have no mint leaf, so they are deliberately __not__
-initialized here: a mount naming one is an honest boot failure — the unresolved
-credential reference the boot check rejects — which is the fail-fast mechanism
-working, not a gap.
+The @static@ provider is also built whenever @MIRROR_TARGET_TOKEN@ is present,
+independent of the selector, so a static token never goes unused.
 -}
-initCredentialProviders :: EnvConfig -> IO CredentialProviders
-initCredentialProviders env =
-    pure (CredentialProviders (Map.fromList (catMaybes [staticEntry])))
+initCredentialProviders :: EnvConfig -> IO (Either [BootError] CredentialProviders)
+initCredentialProviders env = case planMirrorCredential env of
+    Left errs -> pure (Left errs)
+    Right Nothing -> pure (Right (providersFrom Nothing))
+    Right (Just caConfig) ->
+        -- The CodeArtifact leaf mints once eagerly at construction, so an unreachable
+        -- or unauthorised identity fails the boot here rather than on the first write.
+        -- Catch that mint so its failure renders through the aggregated boot block
+        -- instead of escaping as a raw amazonka exception.
+        tryAny (newCodeArtifactProvider caConfig) <&> \case
+            Left err -> Left [CodeArtifactMintFailed (toText (displayException err))]
+            Right provider -> Right (providersFrom (Just provider))
   where
+    -- Assemble the provider map from the static leaf (when a token is present) plus
+    -- the optionally-built CodeArtifact provider.
+    providersFrom :: Maybe CredentialProvider -> CredentialProviders
+    providersFrom mCodeArtifact =
+        CredentialProviders
+            (Map.fromList (catMaybes [staticEntry] <> maybeToList ((CodeArtifactCredential,) <$> mCodeArtifact)))
+
     -- The static provider, when a static write token is supplied. A static token
     -- never expires, so the in-memory 'staticProvider' leaf is the whole policy.
     staticEntry :: Maybe (CredentialBackend, CredentialProvider)
@@ -128,6 +168,113 @@ initialized (the unresolved-reference case the boot check rejects).
 lookupProvider :: CredentialBackend -> CredentialProviders -> Maybe CredentialProvider
 lookupProvider backend (CredentialProviders ps) = Map.lookup backend ps
 
+-- ── mirror-target credential provider selection ───────────────────────────────
+
+{- | Decide what mirror-target write provider the environment layer selects, as the
+pure half of 'initCredentialProviders': 'Nothing' when the @static@ provider is
+selected (its leaf is the @MIRROR_TARGET_TOKEN@ already handled there), 'Just' a
+resolved 'CodeArtifactConfig' when @codeartifact@ is selected, or the aggregated
+boot errors that block the selection.
+
+The @gcp-artifact-registry@ arm is recognised but not built in this binary, so it is
+a fail-loud 'MirrorCredentialProviderUnavailable' boot error — never a silent
+fall-through to a different provider, mirroring how 'planMirrorQueue' treats the GCP
+queue arm.
+-}
+planMirrorCredential :: EnvConfig -> Either [BootError] (Maybe CodeArtifactConfig)
+planMirrorCredential env = case cfgMirrorTargetCredentialProvider env of
+    StaticCredential -> Right Nothing
+    CodeArtifactCredential -> Just <$> resolveCodeArtifactConfig env
+    AdcCredential -> Left [MirrorCredentialProviderUnavailable AdcCredential]
+
+{- | Resolve the CodeArtifact inputs for the mirror-target token, or the aggregated
+boot errors naming each input that could not be resolved.
+
+Each required input is resolved __(a) from its explicit @MIRROR_TARGET_CODEARTIFACT_*@
+key, else (b) by parsing the mirror-target URL host__ of the form
+@{domain}-{owner}.d.codeartifact.{region}.amazonaws.com@ (the documented host
+fallback). The region resolves explicit key → host → @AWS_REGION@: the endpoint host
+encodes the domain's authoritative region, so it outranks the process-wide
+@AWS_REGION@ (a cross-region deploy mints against the domain's region, not the
+caller's). The mirror-target URL is the resolved one — an unset @MIRROR_TARGET_URL@
+has already folded onto the private upstream — so a private-upstream CodeArtifact
+endpoint is parsed too. The optional token-duration carries through
+('cfgMirrorCodeArtifactTokenDuration').
+
+The @{owner}@ is a 12-digit AWS account id: a resolved owner (from either source)
+that is not 12 digits is a fail-loud 'CodeArtifactConfigInvalid' error, and a host
+whose tail after the last hyphen is not an account id is not a CodeArtifact endpoint
+at all (so it falls through to the named-key check). If a required input resolves by
+__neither__ source, that is a fail-loud 'CodeArtifactConfigMissing' boot error naming
+the exact key the operator must set, aggregated so one run reports every problem.
+-}
+resolveCodeArtifactConfig :: EnvConfig -> Either [BootError] CodeArtifactConfig
+resolveCodeArtifactConfig env =
+    case partitionEithers [domainE, ownerE, regionE] of
+        ([], [domain, owner, region]) ->
+            Right
+                CodeArtifactConfig
+                    { caRegion = region
+                    , caDomain = domain
+                    , caDomainOwner = Just owner
+                    , caDurationSeconds = cfgMirrorCodeArtifactTokenDuration env
+                    }
+        (errs, _) -> Left errs
+  where
+    -- The parsed (domain, owner, region) of the resolved mirror-target host, when it
+    -- is a CodeArtifact endpoint — the (b) fallback source for each input.
+    parsed :: Maybe (Text, Text, Text)
+    parsed = parseCodeArtifactHost (hostAddress mirrorTargetUrl)
+
+    mirrorTargetUrl :: Text
+    mirrorTargetUrl = maybe (unUrl (cfgPrivateUpstream env)) unUrl (cfgMirrorTarget env)
+
+    -- The first non-blank of the precedence-ordered candidates, or the named-key
+    -- boot error. Each candidate is trimmed, so a blank explicit value falls through.
+    resolve :: Text -> [Maybe Text] -> Either BootError Text
+    resolve key candidates =
+        maybe (Left (CodeArtifactConfigMissing key)) Right (asum (map (>>= nonBlank) candidates))
+
+    domainE = resolve "MIRROR_TARGET_CODEARTIFACT_DOMAIN" [cfgMirrorCodeArtifactDomain env, fst3 <$> parsed]
+    ownerE =
+        resolve "MIRROR_TARGET_CODEARTIFACT_DOMAIN_OWNER" [cfgMirrorCodeArtifactDomainOwner env, snd3 <$> parsed]
+            >>= validateAccountId "MIRROR_TARGET_CODEARTIFACT_DOMAIN_OWNER"
+    regionE = resolve "MIRROR_TARGET_CODEARTIFACT_REGION" [cfgMirrorCodeArtifactRegion env, thd3 <$> parsed, cfgAwsRegion env]
+
+    -- A resolved owner must be a 12-digit AWS account id (an explicit key can supply a
+    -- malformed one; a host owner is already validated by 'parseCodeArtifactHost').
+    validateAccountId :: Text -> Text -> Either BootError Text
+    validateAccountId key owner
+        | isAccountId owner = Right owner
+        | otherwise = Left (CodeArtifactConfigInvalid key "expected a 12-digit AWS account id")
+
+    fst3 (a, _, _) = a
+    snd3 (_, b, _) = b
+    thd3 (_, _, c) = c
+
+-- Whether a value is a 12-digit AWS account id.
+isAccountId :: Text -> Bool
+isAccountId t = T.length t == 12 && T.all isDigit t
+
+{- Parse a CodeArtifact npm endpoint host into its (domain, owner, region). The host
+shape is @{domain}-{owner}.d.codeartifact.{region}.amazonaws.com@; the @{owner}@ is the
+12-digit account id after the __last__ hyphen of the first label, so a domain may
+itself contain hyphens. 'Nothing' for any host that is not this shape — including one
+whose tail after the last hyphen is not an account id, so a hyphen-bearing
+non-CodeArtifact host never mis-parses into a bogus owner. -}
+parseCodeArtifactHost :: Text -> Maybe (Text, Text, Text)
+parseCodeArtifactHost host = do
+    [domainOwner, regionTail] <- Just (T.splitOn ".d.codeartifact." host)
+    region <- nonBlank =<< T.stripSuffix ".amazonaws.com" regionTail
+    let (domainDash, owner) = T.breakOnEnd "-" domainOwner
+    domain <- nonBlank (T.dropEnd 1 domainDash)
+    guard (isAccountId owner)
+    pure (domain, owner, region)
+
+-- A 'Text' that is non-empty after trimming, or 'Nothing'.
+nonBlank :: Text -> Maybe Text
+nonBlank t = let trimmed = T.strip t in if T.null trimmed then Nothing else Just trimmed
+
 -- ── boot-time wiring ──────────────────────────────────────────────────────────
 
 {- | A reason the composition root refuses to start. Every case is a __fail-loud__
@@ -145,6 +292,38 @@ data BootError
       the ecosystem of the mount and the unresolved backend.
       -}
       UnresolvedCredential Ecosystem CredentialBackend
+    | {- | The configured mirror-queue backend has no implementation compiled into
+      this binary, so no queue can be built for it. Carries the unavailable backend.
+      An honest refusal — never a silent fall-through to a different backend.
+      -}
+      QueueProviderUnavailable QueueBackend
+    | {- | The SQS mirror-queue backend was selected but no AWS region was supplied
+      (@AWS_REGION@), so the queue cannot be scoped to a region.
+      -}
+      QueueRegionMissing
+    | {- | The configured SQS endpoint override (@AWS_ENDPOINT_URL_SQS@ \/
+      @AWS_ENDPOINT_URL@) is not a parseable endpoint URL. Carries the offending value.
+      -}
+      QueueEndpointMalformed Text
+    | {- | The selected mirror-target credential provider has no implementation
+      compiled into this binary. Carries the unavailable provider. An honest refusal,
+      never a silent fall-through.
+      -}
+      MirrorCredentialProviderUnavailable CredentialBackend
+    | {- | A required CodeArtifact input for the mirror-target token could not be
+      resolved from either its explicit key or the mirror-target host. Carries the
+      name of the key the operator must set.
+      -}
+      CodeArtifactConfigMissing Text
+    | {- | A CodeArtifact input resolved but is malformed (e.g. a domain owner that is
+      not a 12-digit AWS account id). Carries the key and a reason.
+      -}
+      CodeArtifactConfigInvalid Text Text
+    | {- | The eager boot-time CodeArtifact mint threw — a transient AWS error (worth a
+      retry) or a permanent one (a bad domain\/region or missing permission, to be
+      fixed). Carries the rendered exception so the cause is legible and aggregated.
+      -}
+      CodeArtifactMintFailed Text
     deriving stock (Eq, Show)
 
 -- | Render a 'BootError' as a human-facing line for the aggregated failure block.
@@ -159,6 +338,30 @@ renderBootError = \case
             <> " names credential source "
             <> renderCredentialBackend backend
             <> ", not initialized in this build"
+    QueueProviderUnavailable backend ->
+        "mirror queue provider "
+            <> renderQueueBackend backend
+            <> " is not available in this build"
+    QueueRegionMissing ->
+        "mirror queue provider "
+            <> renderQueueBackend SqsQueue
+            <> " requires AWS_REGION to be set"
+    QueueEndpointMalformed url ->
+        "the SQS endpoint override (AWS_ENDPOINT_URL_SQS / AWS_ENDPOINT_URL) is not a valid endpoint URL: " <> url
+    MirrorCredentialProviderUnavailable backend ->
+        "mirror-target credential provider "
+            <> renderMirrorCredentialProvider backend
+            <> " is not available in this build"
+    CodeArtifactConfigMissing key ->
+        "mirror-target credential provider codeartifact requires "
+            <> key
+            <> " (set it explicitly, or use a CodeArtifact MIRROR_TARGET_URL it can be parsed from)"
+    CodeArtifactConfigInvalid key reason ->
+        "mirror-target credential provider codeartifact: " <> key <> " is invalid (" <> reason <> ")"
+    CodeArtifactMintFailed detail ->
+        "mirror-target credential provider codeartifact failed to mint an initial token at boot: "
+            <> detail
+            <> " (a transient AWS error may clear on retry; a permanent one — bad domain/region or missing permission — must be fixed)"
 
 {- | Validate the environment layer and optional document into the served mount
 bindings, or the aggregated boot errors. The composition root's single entry: it
@@ -365,6 +568,89 @@ composePublishTargets providers config =
                             }
                 Nothing ->
                     Left [UnresolvedCredential (mountEcosystem mount) backend]
+
+-- ── mirror-queue backend selection ────────────────────────────────────────────
+
+{- | Select the mirror-queue backend from the environment layer, yielding the
+'SqsConfig' the composition root builds the AWS SQS queue from, or the aggregated
+boot errors that block it.
+
+This is the pure half of the queue's backend choice — the single place that knows
+which backends this binary can build. The AWS @sqs@ backend resolves to an
+'SqsConfig' (the queue URL and region, with the provider knobs at their defaults);
+the composition root passes that to @Ecluse.Queue.Sqs.newSqsQueue@, so the one SDK
+constructor call lives there while the decision lives here. The GCP @pubsub@ arm is
+recognised but not built, so it is a fail-loud 'QueueProviderUnavailable' boot error
+rather than a silent fall-through; a missing @AWS_REGION@ under @sqs@ is a
+'QueueRegionMissing' boot error. Errors are returned as a list so they aggregate
+with the rest of the boot-time validation.
+
+When an endpoint override is configured (@AWS_ENDPOINT_URL_SQS@, else
+@AWS_ENDPOINT_URL@ — the AWS-SDK-standard variables), it is parsed into the
+backend's 'SqsEndpoint' so the released image can target a local emulator
+(@ministack@) or a VPC endpoint without a test-only seam; a malformed override URL is
+a fail-loud 'QueueEndpointMalformed' boot error. With no override, the SQS backend
+uses AWS's default endpoint and credential resolution.
+-}
+planMirrorQueue :: EnvConfig -> Either [BootError] SqsConfig
+planMirrorQueue env = case cfgQueueBackend env of
+    PubSubQueue -> Left [QueueProviderUnavailable PubSubQueue]
+    SqsQueue -> case T.strip <$> cfgAwsRegion env of
+        Just region | not (T.null region) -> do
+            endpoint <- resolveSqsEndpoint env
+            Right (defaultSqsConfig (unUrl (cfgQueueUrl env)) region){sqsEndpoint = endpoint}
+        _ -> Left [QueueRegionMissing]
+
+{- Resolve the optional SQS endpoint override into an 'SqsEndpoint', or 'Nothing' for
+AWS's default resolution. The AWS-SDK-standard @AWS_ENDPOINT_URL_SQS@ takes precedence
+over the generic @AWS_ENDPOINT_URL@; the override URL is parsed into its TLS flag,
+host, and port, and the request signing keys are taken from the standard
+@AWS_ACCESS_KEY_ID@\/@AWS_SECRET_ACCESS_KEY@ (an emulator is off the ambient chain).
+A malformed override URL is a fail-loud boot error. -}
+resolveSqsEndpoint :: EnvConfig -> Either [BootError] (Maybe SqsEndpoint)
+resolveSqsEndpoint env =
+    case nonBlank =<< (cfgAwsEndpointUrlSqs env <|> cfgAwsEndpointUrl env) of
+        Nothing -> Right Nothing
+        Just url -> case parseEndpointUrl url of
+            Just (secure, host, port) ->
+                Right
+                    ( Just
+                        SqsEndpoint
+                            { endpointSecure = secure
+                            , endpointHost = host
+                            , endpointPort = port
+                            , endpointAccessKey = fromMaybe "" (cfgAwsAccessKeyId env)
+                            , -- Carried as a redacted 'Secret' end to end (never unwrapped here).
+                              endpointSecretKey = fromMaybe (mkSecret "") (cfgAwsSecretAccessKey env)
+                            }
+                    )
+            Nothing -> Left [QueueEndpointMalformed url]
+
+{- Parse an endpoint URL into its (TLS flag, host, port). The scheme picks the TLS
+flag and the default port (443\/80) when none is given; an absent scheme or a
+non-numeric port yields 'Nothing'. A bracketed IPv6 literal authority
+(@[::1]:4566@) is split on the closing bracket, not on an inner colon, and the host
+is returned without brackets. -}
+parseEndpointUrl :: Text -> Maybe (Bool, Text, Int)
+parseEndpointUrl raw = do
+    (secure, afterScheme) <-
+        ((True,) <$> T.stripPrefix "https://" raw) <|> ((False,) <$> T.stripPrefix "http://" raw)
+    let authority = T.takeWhile (`notElem` ['/', '?', '#']) afterScheme
+    (hostText, portText) <- splitAuthority authority
+    host <- nonBlank hostText
+    port <- case T.stripPrefix ":" portText of
+        Nothing -> Just (if secure then 443 else 80)
+        Just digits -> readMaybe (toString digits)
+    pure (secure, host, port)
+  where
+    -- Split an authority into (host, "":port"|""). A @[…]@ IPv6 literal splits on the
+    -- closing bracket so an inner colon is never mistaken for the port separator.
+    splitAuthority :: Text -> Maybe (Text, Text)
+    splitAuthority authority = case T.stripPrefix "[" authority of
+        Just rest -> case T.breakOn "]" rest of
+            (_, "") -> Nothing -- an opening bracket with no close: malformed
+            (inner, afterBracket) -> Just (inner, T.drop 1 afterBracket)
+        Nothing -> Just (T.breakOn ":" authority)
 
 -- ── config-derived runtime settings ───────────────────────────────────────────
 

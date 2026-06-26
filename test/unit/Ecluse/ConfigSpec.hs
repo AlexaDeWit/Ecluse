@@ -150,13 +150,25 @@ fullEnv =
     , ("PROXY_PUBLIC_URL", "https://proxy.example.test")
     ]
 
--- The minimum valid environment: only the three required URLs, everything else
--- defaulted.
+-- The minimum valid environment: only the two required URLs, everything else
+-- defaulted (MIRROR_TARGET_URL is optional — it folds onto the private upstream).
 minimalEnv :: [(String, String)]
 minimalEnv =
     [ ("PRIVATE_UPSTREAM_URL", "https://private.example.test")
     , ("MIRROR_TARGET_URL", "https://mirror.example.test")
     , ("MIRROR_QUEUE_URL", "https://sqs.example.test/q")
+    ]
+
+-- The CodeArtifact mirror-target credential keys and an SQS endpoint override,
+-- layered over a base env to exercise the new explicit AWS settings.
+codeArtifactEnv :: [(String, String)]
+codeArtifactEnv =
+    [ ("MIRROR_TARGET_CREDENTIAL_PROVIDER", "codeartifact")
+    , ("MIRROR_TARGET_CODEARTIFACT_DOMAIN", "my-domain")
+    , ("MIRROR_TARGET_CODEARTIFACT_DOMAIN_OWNER", "111122223333")
+    , ("MIRROR_TARGET_CODEARTIFACT_REGION", "us-east-1")
+    , ("MIRROR_TARGET_CODEARTIFACT_TOKEN_DURATION_SECONDS", "3600")
+    , ("AWS_ENDPOINT_URL_SQS", "http://localhost:4566")
     ]
 
 -- The names that failed to parse, regardless of their error kind.
@@ -172,7 +184,7 @@ envLayerSpec = describe "parseEnvPure" $ do
                 cfgPort cfg `shouldBe` 8080
                 unUrl (cfgPrivateUpstream cfg) `shouldBe` "https://private.example.test"
                 unUrl (cfgPublicUpstream cfg) `shouldBe` "https://public.example.test"
-                unUrl (cfgMirrorTarget cfg) `shouldBe` "https://mirror.example.test"
+                fmap unUrl (cfgMirrorTarget cfg) `shouldBe` Just "https://mirror.example.test"
                 cfgQueueBackend cfg `shouldBe` PubSubQueue
                 unUrl (cfgQueueUrl cfg) `shouldBe` "projects/p/topics/t"
                 cfgAwsRegion cfg `shouldBe` Just "eu-west-1"
@@ -233,10 +245,45 @@ envLayerSpec = describe "parseEnvPure" $ do
             `shouldBe` ["PRIVATE_UPSTREAM_URL"]
 
     it "aggregates every missing required variable in one run (not fail-fast)" $
-        -- The whole point of the env layer: all three required-but-absent
-        -- variables surface at once, so an operator fixes them in a single pass.
+        -- The whole point of the env layer: the required-but-absent variables surface
+        -- at once, so an operator fixes them in a single pass. MIRROR_TARGET_URL is no
+        -- longer required — it folds onto the private upstream when unset.
         failedNames (parseEnvPure [])
-            `shouldMatchList` ["PRIVATE_UPSTREAM_URL", "MIRROR_TARGET_URL", "MIRROR_QUEUE_URL"]
+            `shouldMatchList` ["PRIVATE_UPSTREAM_URL", "MIRROR_QUEUE_URL"]
+
+    it "leaves the mirror target unset (to fold onto the private upstream) when MIRROR_TARGET_URL is absent" $
+        case parseEnvPure (without "MIRROR_TARGET_URL" minimalEnv) of
+            Left errs -> expectationFailure ("unexpected errors: " <> show errs)
+            Right cfg -> cfgMirrorTarget cfg `shouldBe` Nothing
+
+    it "defaults the mirror-target credential provider to static" $
+        case parseEnvPure minimalEnv of
+            Left errs -> expectationFailure ("unexpected errors: " <> show errs)
+            Right cfg -> cfgMirrorTargetCredentialProvider cfg `shouldBe` StaticCredential
+
+    it "parses the mirror-target credential provider, CodeArtifact inputs, and SQS endpoint override" $
+        case parseEnvPure (codeArtifactEnv <> minimalEnv) of
+            Left errs -> expectationFailure ("unexpected errors: " <> show errs)
+            Right cfg -> do
+                cfgMirrorTargetCredentialProvider cfg `shouldBe` CodeArtifactCredential
+                cfgMirrorCodeArtifactDomain cfg `shouldBe` Just "my-domain"
+                cfgMirrorCodeArtifactDomainOwner cfg `shouldBe` Just "111122223333"
+                cfgMirrorCodeArtifactRegion cfg `shouldBe` Just "us-east-1"
+                cfgMirrorCodeArtifactTokenDuration cfg `shouldBe` Just 3600
+                cfgAwsEndpointUrlSqs cfg `shouldBe` Just "http://localhost:4566"
+
+    it "maps gcp-artifact-registry onto the GCP (ADC) credential backend" $
+        case parseEnvPure (("MIRROR_TARGET_CREDENTIAL_PROVIDER", "gcp-artifact-registry") : minimalEnv) of
+            Left errs -> expectationFailure ("unexpected errors: " <> show errs)
+            Right cfg -> cfgMirrorTargetCredentialProvider cfg `shouldBe` AdcCredential
+
+    it "rejects an unknown mirror-target credential provider" $
+        failedNames (parseEnvPure (("MIRROR_TARGET_CREDENTIAL_PROVIDER", "vault") : minimalEnv))
+            `shouldBe` ["MIRROR_TARGET_CREDENTIAL_PROVIDER"]
+
+    it "rejects a CodeArtifact token duration above the 12-hour cap" $
+        failedNames (parseEnvPure (("MIRROR_TARGET_CODEARTIFACT_TOKEN_DURATION_SECONDS", "50000") : minimalEnv))
+            `shouldBe` ["MIRROR_TARGET_CODEARTIFACT_TOKEN_DURATION_SECONDS"]
 
     it "aggregates malformed values alongside missing ones" $
         -- A non-integer port and an unknown queue provider both fail, together
@@ -250,7 +297,6 @@ envLayerSpec = describe "parseEnvPure" $ do
             )
             `shouldMatchList` [ "PROXY_PORT"
                               , "MIRROR_QUEUE_PROVIDER"
-                              , "MIRROR_TARGET_URL"
                               , "MIRROR_QUEUE_URL"
                               ]
 
@@ -333,7 +379,6 @@ envLayerSpec = describe "parseEnvPure" $ do
         -- is actionable from the logs alone.
         let rendered = either renderEnvErrors (const "") (parseEnvPure [])
         rendered `shouldSatisfy` ("PRIVATE_UPSTREAM_URL" `isInfix`)
-        rendered `shouldSatisfy` ("MIRROR_TARGET_URL" `isInfix`)
         rendered `shouldSatisfy` ("MIRROR_QUEUE_URL" `isInfix`)
 
     it "renders each error kind (unset, empty, unread) with its own phrasing" $ do
@@ -656,6 +701,21 @@ desugarSpec = describe "loadConfig" $ do
                         unUrl (regPrivateUpstream reg) `shouldBe` "https://private.example.test"
                         mtCredential (regMirrorTarget reg) `shouldBe` StaticCredential
                         mtQueue (regMirrorTarget reg) `shouldBe` SqsQueue
+                        -- The explicit MIRROR_TARGET_URL in minimalEnv is used verbatim.
+                        unUrl (mtUrl (regMirrorTarget reg)) `shouldBe` "https://mirror.example.test"
+
+    it "folds an unset MIRROR_TARGET_URL onto the private upstream" $ do
+        -- N7a: with MIRROR_TARGET_URL absent, the mirror target IS the private
+        -- upstream (one registry, read and written) — the write credential does not fold.
+        env <- expectEnv (without "MIRROR_TARGET_URL" minimalEnv)
+        case loadConfig env Nothing of
+            Left errs -> expectationFailure ("unexpected policy errors: " <> show errs)
+            Right cfg -> case Map.lookup Npm (configMounts cfg) of
+                Nothing -> expectationFailure "expected the npm mount"
+                Just mount -> do
+                    let reg = mountRegistries mount
+                    unUrl (mtUrl (regMirrorTarget reg)) `shouldBe` "https://private.example.test"
+                    unUrl (regPrivateUpstream reg) `shouldBe` "https://private.example.test"
 
     it "desugars the env single-mount onto a document-only policy patch" $ do
         -- A document with a rule policy but no mounts still produces the env

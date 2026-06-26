@@ -20,10 +20,13 @@ bootstrapping phase, behind a documented review process and a strict CI gate. Se
 it rather than trust it.
 
 > **Status: pre-launch, under active development; no GA release yet.** The functional core,
-> the npm **packument** and **tarball** paths, and the **mirror worker** are in place; the
-> **cloud backends** — the AWS composition root that wires them into a runnable deployment —
-> are still landing, so Écluse isn't yet a proxy you can put in front
-> of a build. Pre-release candidates are published and attested, but expect breaking changes
+> the npm **packument** and **tarball** paths, the **mirror worker**, and the
+> **AWS-backed composition root** are in place: an AWS deployment (an SQS mirror queue,
+> the demand-driven worker, and a mirror-target write credential — a static token or
+> automatic CodeArtifact token minting) is wired end to end, so Écluse runs as an
+> AWS-backed npm proxy. Some backends are still landing — the GCP backends are follow-ups
+> and the deployment runbook is pending — so check the per-slice status before you rely on
+> a given capability. Pre-release candidates are published and attested, but expect breaking changes
 > before `v0.1.0`. What's actually shipped is tracked slice by slice in the
 > [delivery plan](planning/delivery-plan.md) (the per-slice `status:` is the source of
 > truth); [`USAGE.md`](USAGE.md) is the deployment **contract**, not a claim that every
