@@ -31,6 +31,7 @@ import Ecluse.Integration.Ministack (
     freshQueueUrl,
     withMinistack,
  )
+import Ecluse.Package.Integrity (defaultMinIntegrity)
 import Ecluse.Queue (MirrorQueue)
 import Ecluse.Queue.Sqs (SqsConfig (sqsWaitSeconds), SqsEndpoint (endpointHost, endpointPort), newSqsQueue)
 import Ecluse.Registry.Npm (NpmClientConfig (NpmClientConfig, npmBaseUrl, npmLimits, npmManager, npmToken), newNpmClient)
@@ -196,6 +197,7 @@ mountBinding privateUrl publicUrl mirrorUrl =
             , pdInboundToken = Nothing
             , pdNow = pure fixedNow
             , pdHelp = Nothing
+            , pdMinIntegrity = defaultMinIntegrity
             }
 
 -- ── WAI stubs ─────────────────────────────────────────────────────────────────
