@@ -95,6 +95,22 @@ resolveSpec = describe "resolveTelemetry" $ do
         teUrl (rtEndpoint (resolveTelemetry [("DD_AGENT_HOST", "10.0.0.9:4317")]))
             `shouldBe` "http://10.0.0.9:4317"
 
+    it "recognises an IPv6 host by parse, covering compressed, IPv4-mapped, and bracketed forms" $ do
+        let agentUrl host = teUrl (rtEndpoint (resolveTelemetry [("DD_AGENT_HOST", host)]))
+        -- A bare IPv6 literal is bracketed and given the default port — the
+        -- @::@-compressed and IPv4-mapped forms parse as IPv6, which counting colons
+        -- could not tell from a name and the parse now resolves.
+        agentUrl "::1" `shouldBe` "http://[::1]:4318"
+        agentUrl "::ffff:10.0.0.9" `shouldBe` "http://[::ffff:10.0.0.9]:4318"
+        -- An already-bracketed host keeps its brackets; the default port is added only
+        -- when it carries none.
+        agentUrl "[fd00::1]" `shouldBe` "http://[fd00::1]:4318"
+        agentUrl "[fd00::1]:4317" `shouldBe` "http://[fd00::1]:4317"
+        -- A bare hostname and a DNS @host:port@ are not IPv6: one takes the default
+        -- port, the other keeps the port it already carries.
+        agentUrl "collector" `shouldBe` "http://collector:4318"
+        agentUrl "agent.internal:4318" `shouldBe` "http://agent.internal:4318"
+
     it "keeps a bracketed IPv6 endpoint host extractable (a well-formed authority)" $
         -- Regression: an unbracketed IPv6 authority truncates under 'hostAddress'
         -- ("fd00::1:4318" → "fd00") and would hand the SDK exporter a malformed URL.

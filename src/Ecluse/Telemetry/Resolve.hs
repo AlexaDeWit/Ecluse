@@ -58,6 +58,7 @@ module Ecluse.Telemetry.Resolve (
     prepareTelemetry,
 ) where
 
+import Data.IP (IPv6)
 import Data.List (lookup)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
@@ -165,9 +166,10 @@ OTLP receiver listens on 4318 for HTTP\/protobuf, the only transport we build. A
 literal IPv6 host is bracketed so the authority is well-formed — @http:\/\/[fd00::1]:4318@,
 not the invalid @http:\/\/fd00::1:4318@ the SDK exporter would fail to parse. A host
 that already carries a scheme is used verbatim, and one already carrying a port is not
-given a second, so a deliberately-qualified @DD_AGENT_HOST@ is never mangled. Colon
-count disambiguates: a bare IPv6 literal has two or more colons, a @host:port@ exactly
-one, and a bare host or IPv4 none. -}
+given a second, so a deliberately-qualified @DD_AGENT_HOST@ is never mangled. A bare
+IPv6 literal is recognised by parsing it with @iproute@'s 'IPv6' reader rather than by
+counting colons, so the @::@-compressed and IPv4-mapped (@::ffff:a.b.c.d@) forms are
+bracketed while an IPv4 and a @host:port@ are not. -}
 agentHostUrl :: Text -> Text
 agentHostUrl raw
     | "://" `T.isInfixOf` host = host
@@ -176,9 +178,16 @@ agentHostUrl raw
     host = T.strip raw
     authority
         | "[" `T.isPrefixOf` host = if "]:" `T.isInfixOf` host then host else host <> ":4318"
-        | T.count ":" host >= 2 = "[" <> host <> "]:4318"
-        | T.count ":" host == 1 = host
+        | isIPv6Literal host = "[" <> host <> "]:4318"
+        | ":" `T.isInfixOf` host = host
         | otherwise = host <> ":4318"
+
+-- A bare (unbracketed) IPv6 literal, decided by parsing rather than counting colons:
+-- @iproute@'s 'IPv6' reader accepts the full, @::@-compressed, and IPv4-mapped forms
+-- and rejects IPv4 and @host:port@ — exactly the hosts that must be bracketed for the
+-- authority to be well-formed.
+isIPv6Literal :: Text -> Bool
+isIPv6Literal host = isJust (readMaybe (toString host) :: Maybe IPv6)
 
 -- ── canonical OTEL_* projection ──────────────────────────────────────────────
 
