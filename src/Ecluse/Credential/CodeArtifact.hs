@@ -35,6 +35,7 @@ import UnliftIO.Exception (throwIO)
 
 import Ecluse.Credential (AuthToken (..), CredentialProvider, mkSecret)
 import Ecluse.Credential.Refresh (
+    CredentialReporters (..),
     RefreshConfig (..),
     defaultRefreshConfig,
     refreshingProvider,
@@ -80,24 +81,31 @@ data CodeArtifactConfig = CodeArtifactConfig
 Mints once eagerly to seed the cache, so a misconfiguration (bad region, missing
 credentials, no permission) fails here at construction rather than on the first
 mirror write.
+
+The 'CredentialReporters' carry the telemetry observers the refresh policy records
+through (the mint breaker's state and each refresh outcome); pass
+'Ecluse.Credential.Refresh.noCredentialReporters' for an unobserved provider.
 -}
-newCodeArtifactProvider :: CodeArtifactConfig -> IO CredentialProvider
-newCodeArtifactProvider cfg = AWS.newEnv AWS.discover >>= \env -> providerForEnv env cfg
+newCodeArtifactProvider :: CredentialReporters -> CodeArtifactConfig -> IO CredentialProvider
+newCodeArtifactProvider reporters cfg =
+    AWS.newEnv AWS.discover >>= \env -> providerForEnv reporters env cfg
 
 {- | Build the provider over a caller-supplied @amazonka@ 'Env' — the boundary the
 production 'newCodeArtifactProvider' wraps with credential discovery. The config's
 region is applied to the 'Env', and each mint calls @GetAuthorizationToken@ through
 it under the cache\/proactive-refresh\/single-flight\/breaker policy of
-"Ecluse.Credential.Refresh" (so the token API is not re-hit per request). Exposed
-so a test can drive the real mint against an 'Env' aimed at a stub endpoint, with
-no live AWS.
+"Ecluse.Credential.Refresh" (so the token API is not re-hit per request), reporting its
+refresh and breaker signals through the given 'CredentialReporters'. Exposed so a test
+can drive the real mint against an 'Env' aimed at a stub endpoint, with no live AWS.
 -}
-providerForEnv :: AWS.Env -> CodeArtifactConfig -> IO CredentialProvider
-providerForEnv env cfg =
+providerForEnv :: CredentialReporters -> AWS.Env -> CodeArtifactConfig -> IO CredentialProvider
+providerForEnv reporters env cfg =
     refreshingProvider
         defaultRefreshConfig
             { rcMint = mint (regioned env)
             , rcClock = getCurrentTime
+            , rcBreakerReporter = crBreakerReporter reporters
+            , rcRefreshReporter = crRefreshReporter reporters
             }
   where
     regioned :: AWS.Env -> AWS.Env

@@ -20,6 +20,11 @@ module Ecluse.Breaker (
     admit,
     recordSuccess,
     recordFailure,
+
+    -- * Observing transitions
+    BreakerReporter (..),
+    noBreakerReporter,
+    reportBreakerChange,
 ) where
 
 import Data.Time (NominalDiffTime, UTCTime, addUTCTime)
@@ -80,3 +85,40 @@ recordFailure threshold cooldown now = \case
     _ -> tripped
   where
     tripped = Open (addUTCTime cooldown now)
+
+-- ── observing transitions ─────────────────────────────────────────────────────
+
+{- | An observer of breaker state changes: invoked with the breaker's new state
+after a transition commits, so a layer that cares (a state gauge) can record it.
+
+Deliberately __telemetry-agnostic__ — it is just a @'Breaker' -> IO ()@ callback, so
+the breaker and its callers ("Ecluse.Rules.Effectful", the credential refresher) stay
+free of any metric dependency; the composition root supplies the bridge to the
+instruments. 'noBreakerReporter' is the inert default: a breaker observed by it records
+nothing, which is also how a breaker constructed before the telemetry substrate exists
+behaves until the live observer is installed.
+-}
+newtype BreakerReporter = BreakerReporter (Breaker -> IO ())
+
+-- | The inert reporter: discards the state, recording nothing.
+noBreakerReporter :: BreakerReporter
+noBreakerReporter = BreakerReporter (const pass)
+
+{- | Report a transition through the observer, but only when @old@ and @new@ differ in
+their __observable__ state — 'Closed' carries a failure tally that is not itself
+observable, so a failure that merely advances the count within 'Closed' is not a state
+change and fires nothing. A genuine change (a trip, a recovery probe, a reset) fires the
+reporter with the new state.
+-}
+reportBreakerChange :: BreakerReporter -> Breaker -> Breaker -> IO ()
+reportBreakerChange (BreakerReporter report) old new
+    | observable old == observable new = pass
+    | otherwise = report new
+  where
+    -- The coarse, observable state — the failure tally inside 'Closed' is elided, so
+    -- two 'Closed' states compare equal however many failures each has counted.
+    observable :: Breaker -> Int
+    observable = \case
+        Closed{} -> 0
+        HalfOpen -> 1
+        Open{} -> 2

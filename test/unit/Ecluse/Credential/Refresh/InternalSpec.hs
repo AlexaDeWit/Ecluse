@@ -20,7 +20,7 @@ import UnliftIO (async, cancel, timeout, wait)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (throwString, try)
 
-import Ecluse.Breaker (Breaker (..), initialBreaker)
+import Ecluse.Breaker (Breaker (..), BreakerReporter (..), initialBreaker)
 import Ecluse.Credential
 import Ecluse.Credential.Refresh
 import Ecluse.Credential.Refresh.Internal (
@@ -103,6 +103,38 @@ defaults, which these helpers never touch.
 -}
 breakerCfg :: RefreshConfig
 breakerCfg = defaultRefreshConfig{rcBreakerThreshold = 3, rcBreakerCooldown = 30}
+
+{- | A refresh outcome captured by a test 'RefreshReporter': the result and the
+remaining-lifetime seconds it carried.
+-}
+data RefreshEvent = ReportedSuccess (Maybe Int) | ReportedFailure (Maybe Int)
+    deriving stock (Eq, Show)
+
+{- | A pair of capturing reporters appending to their own logs (oldest first), so a
+test can assert exactly which breaker transitions and refresh outcomes a provider
+recorded, in order.
+-}
+capturingReporters :: IO (IORef [Breaker], IORef [RefreshEvent], BreakerReporter, RefreshReporter)
+capturingReporters = do
+    breakerLog <- newIORef []
+    refreshLog <- newIORef []
+    let breakerR = BreakerReporter (\b -> modifyIORef' breakerLog (<> [b]))
+        refreshR =
+            RefreshReporter
+                { onRefreshSucceeded = \mttl -> modifyIORef' refreshLog (<> [ReportedSuccess mttl])
+                , onRefreshFailed = \mttl -> modifyIORef' refreshLog (<> [ReportedFailure mttl])
+                }
+    pure (breakerLog, refreshLog, breakerR, refreshR)
+
+{- | A mint that runs the next scripted action on each call (the head is consumed by
+the eager construction mint), so a test drives a deterministic sequence of mint
+outcomes — successes and failures — past the provider.
+-}
+scriptedMint :: IORef [IO AuthToken] -> IO AuthToken
+scriptedMint ref = join (atomicModifyIORef' ref next)
+  where
+    next (a : rest) = (rest, a)
+    next [] = ([], throwString "scriptedMint: exhausted")
 
 spec :: Spec
 spec = do
@@ -531,6 +563,51 @@ spec = do
             releaseSingleFlight stateVar
             releaseSingleFlight stateVar
             csRefreshing <$> readTVarIO stateVar `shouldReturn` False
+
+    describe "refresh telemetry reporting" $ do
+        it "reports each refresh outcome and the breaker trip → probe → reset transitions" $ do
+            (clock, setClock) <- newClock t0
+            (breakerLog, refreshLog, breakerR, refreshR) <- capturingReporters
+            script <-
+                newIORef
+                    [ pure (tokenExpiringIn "eager" 10) -- the eager construction mint
+                    , throwString "mint down" -- the next mint fails, tripping the breaker
+                    , pure (tokenExpiringIn "recovered" 200) -- the probe mint recovers it
+                    ]
+            let cfg =
+                    (testConfig clock (scriptedMint script))
+                        { rcBreakerThreshold = 1
+                        , rcBreakerReporter = breakerR
+                        , rcRefreshReporter = refreshR
+                        }
+            provider <- refreshingProvider cfg
+            -- Construction's eager mint records nothing: the reporters fire on refreshes.
+            readIORef breakerLog `shouldReturn` []
+            readIORef refreshLog `shouldReturn` []
+            -- The eager token (expires t0+10) is expired at t0+20: a synchronous mint
+            -- that fails, tripping the breaker open and recording the failed refresh with
+            -- the still-cached token's (now zero) remaining lifetime.
+            setClock (addUTCTime 20 t0)
+            currentToken provider `shouldThrow` anyException
+            readIORef breakerLog `shouldReturn` [Open (addUTCTime 50 t0)]
+            readIORef refreshLog `shouldReturn` [ReportedFailure (Just 0)]
+            -- The 30s cooldown elapses by t0+51: the next mint is admitted as a half-open
+            -- probe and succeeds, resetting the breaker and recording the fresh token's ttl.
+            setClock (addUTCTime 51 t0)
+            recovered <- currentToken provider
+            unSecret (authSecret recovered) `shouldBe` "recovered"
+            readIORef breakerLog `shouldReturn` [Open (addUTCTime 50 t0), HalfOpen, Closed 0]
+            readIORef refreshLog
+                `shouldReturn` [ReportedFailure (Just 0), ReportedSuccess (Just 149)]
+
+        it "is silent and never throws on that account when wired with the default no-op reporters" $ do
+            (clock, setClock) <- newClock t0
+            script <- newIORef [pure (tokenExpiringIn "eager" 10), throwString "mint down"]
+            -- 'defaultRefreshConfig' (via 'testConfig') wires 'noBreakerReporter' /
+            -- 'noRefreshReporter': a refresh that trips the breaker records nothing.
+            provider <- refreshingProvider (testConfig clock (scriptedMint script)){rcBreakerThreshold = 1}
+            setClock (addUTCTime 20 t0)
+            currentToken provider `shouldThrow` anyException
 
     describe "decide" $ do
         it "serves the cached token when it is valid and no refresh is due" $ do

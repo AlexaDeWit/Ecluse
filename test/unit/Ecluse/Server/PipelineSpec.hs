@@ -58,6 +58,7 @@ import Ecluse.Rules.Effectful (
     PrecededEffectfulRule (PrecededEffectfulRule),
     defaultEffectfulConfig,
     newBreaker,
+    noBreakerReporter,
  )
 import Ecluse.Rules.Types (
     PrecededRule,
@@ -2239,6 +2240,7 @@ downEffectfulRule = do
                 , erConfig = defaultEffectfulConfig{ecBackoff = []}
                 , erOnError = OnUnavailable
                 , erBreaker = breaker
+                , erBreakerReporter = noBreakerReporter
                 }
     pure (PrecededEffectfulRule 400 rule)
 
@@ -2255,6 +2257,7 @@ denyingEffectfulRule = do
                 , erConfig = defaultEffectfulConfig
                 , erOnError = OnUnavailable
                 , erBreaker = breaker
+                , erBreakerReporter = noBreakerReporter
                 }
     pure (PrecededEffectfulRule 400 rule)
 
@@ -2271,6 +2274,7 @@ allowingEffectfulRule = do
                 , erConfig = defaultEffectfulConfig
                 , erOnError = OnUnavailable
                 , erBreaker = breaker
+                , erBreakerReporter = noBreakerReporter
                 }
     pure (PrecededEffectfulRule 400 rule)
 

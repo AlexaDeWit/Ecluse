@@ -11,6 +11,7 @@ import Amazonka.Auth (fromKeys)
 
 import Ecluse.Credential (AuthToken (..), CredentialProvider (..), unSecret)
 import Ecluse.Credential.CodeArtifact (CodeArtifactConfig (..), providerForEnv)
+import Ecluse.Credential.Refresh (noCredentialReporters)
 
 {- | Component test for the CodeArtifact credential leaf with __no live AWS__: an
 in-process HTTP stub answers @GetAuthorizationToken@ with a canned response (the
@@ -27,7 +28,7 @@ spec = describe "CodeArtifact GetAuthorizationToken (stubbed endpoint)" $
     it "mints the token and expiry the endpoint returns, without live AWS" $
         testWithApplication (pure stubApp) $ \port -> do
             env <- stubEnv port
-            token <- providerForEnv env config >>= currentToken
+            token <- providerForEnv noCredentialReporters env config >>= currentToken
             unSecret (authSecret token) `shouldBe` "the-canned-token"
             authExpiresAt token `shouldBe` Just (posixSecondsToUTCTime 2000000000)
   where

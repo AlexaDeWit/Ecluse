@@ -9,6 +9,7 @@ import Ecluse.Credential.CodeArtifact (
     CodeArtifactConfig (..),
     newCodeArtifactProvider,
  )
+import Ecluse.Credential.Refresh (noCredentialReporters)
 
 {- | Smoke test for the one outbound-credential surface no emulator covers:
 CodeArtifact @GetAuthorizationToken@. It makes a __live__ AWS call, so — like the
@@ -43,7 +44,7 @@ spec = describe "live CodeArtifact GetAuthorizationToken" $
                             , caDomainOwner = T.pack <$> mOwner
                             , caDurationSeconds = Nothing
                             }
-                outcome <- try (newCodeArtifactProvider config >>= currentToken)
+                outcome <- try (newCodeArtifactProvider noCredentialReporters config >>= currentToken)
                 case outcome of
                     Left (e :: SomeException) ->
                         expectationFailure ("CodeArtifact mint failed: " <> show e)
