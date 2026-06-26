@@ -102,6 +102,7 @@ library
     Ecluse.Server.Route
     Ecluse.Server.Stream
     Ecluse.Telemetry
+    Ecluse.Telemetry.Metrics
     Ecluse.Telemetry.Resolve
     Ecluse.Telemetry.Tracing
     Ecluse.Version
@@ -208,6 +209,7 @@ test-suite ecluse-unit
     Ecluse.Server.ResponseSpec
     Ecluse.Server.RouteSpec
     Ecluse.Server.StreamSpec
+    Ecluse.Telemetry.MetricsSpec
     Ecluse.Telemetry.ResolveSpec
     Ecluse.Telemetry.TracingSpec
     Ecluse.TelemetrySpec
