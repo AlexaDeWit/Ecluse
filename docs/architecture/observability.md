@@ -229,6 +229,17 @@ and logs are scraped from stdout.
 3. **Logs** need no extra wiring: Écluse writes JSONL to stdout and the Agent's
    container log collection picks it up.
 
+> **Runtime (CPU) — pin the RTS capability count to the container's CPU limit.**
+> The image runs the **threaded RTS** (required: with telemetry enabled the OTel SDK
+> runs a batch span processor on a background thread, which aborts under the
+> non-threaded runtime), and the binary defaults to `-N` (use every core). But GHC's
+> `-N` reads the **host** core count and **ignores the cgroup CPU quota** — so in a
+> CPU-limited container it over-subscribes capabilities to the node's cores, and the
+> resulting GC/scheduler contention shows up as **tail latency**, which an inline
+> proxy pays on its critical path. Pin the capability count to the container's CPU
+> limit instead — set `GHCRTS=-Nx` (or pass `+RTS -Nx -RTS`) where `x` matches the
+> pod's CPU `limit` — so the RTS schedules to the cores it is actually allotted.
+
 ## Configuration
 
 Telemetry uses the **standard `OTEL_*` variables** (read directly by

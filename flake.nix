@@ -118,6 +118,28 @@
               ver = "1.0.0.0";
               sha256 = "sha256-rHgsisH2d45CI9woEDb/j0WnTzllxaE2Mkx5/OmWn0c=";
             } { };
+          # Request-lifecycle instrumentation (S25): the WAI server span and the
+          # http-client data-plane child spans. The http-client instrumentation pulls
+          # the conduit instrumentation as a 1.0 dependency, so it travels on the line
+          # too; their only OTel deps (api, semantic-conventions) are above.
+          hs-opentelemetry-instrumentation-wai =
+            hself.callHackageDirect {
+              pkg = "hs-opentelemetry-instrumentation-wai";
+              ver = "1.0.0.0";
+              sha256 = "sha256-gPU9k2H1MpMEGh0F1Oi5ri8gdsZMCvQBRTnXgDhVAa0=";
+            } { };
+          hs-opentelemetry-instrumentation-conduit =
+            hself.callHackageDirect {
+              pkg = "hs-opentelemetry-instrumentation-conduit";
+              ver = "1.0.0.0";
+              sha256 = "sha256-J4iv0uTsnmntoXOb6tf8CBnKa0KsspomwLN/mJ2ypTA=";
+            } { };
+          hs-opentelemetry-instrumentation-http-client =
+            hself.callHackageDirect {
+              pkg = "hs-opentelemetry-instrumentation-http-client";
+              ver = "1.0.0.0";
+              sha256 = "sha256-/+XwCJzMYtmBoHBuDGkmHR8ETKkxpMMtWNNWpbAGPYQ=";
+            } { };
         };
 
         hpkgs = pkgs.haskell.packages.ghc910.override {

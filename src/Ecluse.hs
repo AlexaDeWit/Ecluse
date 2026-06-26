@@ -100,7 +100,8 @@ import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
 import Data.Time (getCurrentTime)
 import Katip (Environment (Environment), LogEnv)
-import Network.HTTP.Client (Manager)
+import Network.HTTP.Client (Manager, newManager)
+import Network.HTTP.Client.TLS (tlsManagerSettings)
 import System.Environment (getEnvironment)
 import UnliftIO (concurrently_, throwIO)
 
@@ -135,13 +136,14 @@ import Ecluse.Registry.Npm (NpmClientConfig (NpmClientConfig, npmBaseUrl, npmLim
 import Ecluse.Registry.Npm.Route qualified as Npm
 import Ecluse.Registry.Npm.Serve (npmRenderer)
 import Ecluse.Security (defaultLimits, lowerCaseHosts)
-import Ecluse.Security.Egress (newGuardedTlsManager, newTrustedTlsManager)
+import Ecluse.Security.Egress (guardedManagerSettings)
 import Ecluse.Server (MountBinding (..), ServerConfig (scDrainTimeout, scPort), ShutdownDrainTimeout (ShutdownDrainTimeout), mkServerConfig)
 import Ecluse.Server qualified as Server
 import Ecluse.Server.Cache (newMetadataCache)
 import Ecluse.Server.Context (PackumentDeps)
 import Ecluse.Telemetry (TelemetrySwitch (TelemetryOff, TelemetryOn), withTelemetry)
 import Ecluse.Telemetry.Resolve (prepareTelemetry)
+import Ecluse.Telemetry.Tracing (instrumentDataPlaneManagerSettings)
 import Ecluse.Worker qualified as Worker
 
 {- | Start Écluse: the entry point the @ecluse@ executable runs (see "Main").
@@ -179,20 +181,6 @@ run = do
                 { scPort = cfgPort env
                 , scDrainTimeout = ShutdownDrainTimeout (cfgShutdownDrainTimeout env)
                 }
-    -- Two data-plane managers, split by trust. The guarded one rechecks every
-    -- resolved outbound IP against the internal-range block (DNS-rebinding /
-    -- resolve-to-internal SSRF) and serves the untrusted upstreams — the public upstream
-    -- and every artifact stream — blocking every internal resolved address (an empty
-    -- opt-in: the secure default). The trusted one serves the private origin only: the
-    -- private base URL is operator-configured and may legitimately resolve to an
-    -- internal address, so it is deliberately not rechecked.
-    manager <- newGuardedTlsManager (lowerCaseHosts Set.empty)
-    privateManager <- newTrustedTlsManager
-    -- The mirror worker's publish-side registry client, resolved per ecosystem from
-    -- the configured mirror target and its write credential. It writes to the
-    -- operator-configured, trusted mirror target, so it uses the trusted private
-    -- manager (no resolved-IP recheck — that guards only the untrusted public fetch).
-    publishClient <- resolvePublishClient privateManager publishTargets
     -- The config-selected mirror queue: the AWS SQS backend, built once here (the
     -- single SDK-constructor call) from the validated SqsConfig and captured in Env.
     queue <- newSqsQueue sqsConfig
@@ -203,7 +191,26 @@ run = do
     -- environment the SDK reads, before the substrate initialises. A no-op when
     -- telemetry is off.
     prepareTelemetryBoot (cfgTelemetry env) logEnv
-    withTelemetry (cfgTelemetry env) $ \telemetry ->
+    withTelemetry (cfgTelemetry env) $ \telemetry -> do
+        -- Two data-plane managers, split by trust. The guarded one rechecks every
+        -- resolved outbound IP against the internal-range block (DNS-rebinding /
+        -- resolve-to-internal SSRF) and serves the untrusted upstreams — the public
+        -- upstream and every artifact stream — blocking every internal resolved address
+        -- (an empty opt-in: the secure default). The trusted one serves the private
+        -- origin only: the private base URL is operator-configured and may legitimately
+        -- resolve to an internal address, so it is deliberately not rechecked. Both are
+        -- built inside the telemetry bracket so that, with telemetry enabled, each
+        -- carries the http-client instrumentation (child spans + W3C context
+        -- propagation) hung off the substrate's installed providers; with it off the
+        -- instrumentation step is the identity, so the managers are exactly the guarded
+        -- and trusted ones.
+        manager <- newManager =<< instrumentDataPlaneManagerSettings telemetry (guardedManagerSettings (lowerCaseHosts Set.empty) tlsManagerSettings)
+        privateManager <- newManager =<< instrumentDataPlaneManagerSettings telemetry tlsManagerSettings
+        -- The mirror worker's publish-side registry client, resolved per ecosystem from
+        -- the configured mirror target and its write credential. It writes to the
+        -- operator-configured, trusted mirror target, so it uses the trusted private
+        -- manager (no resolved-IP recheck — that guards only the untrusted public fetch).
+        publishClient <- resolvePublishClient privateManager publishTargets
         withEnv publishClient queue (mirrorWriteProvider (cfgMirrorTargetCredentialProvider env) providers) manager privateManager metadataCache logEnv telemetry heartbeat (runServices serverConfig)
 
 {- | Read the optional structured config document from the @PROXY_CONFIG@ env blob,

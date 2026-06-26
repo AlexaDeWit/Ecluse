@@ -53,6 +53,7 @@ module Ecluse.Server (
     defaultPort,
     MountBinding (..),
     application,
+    tracedApplication,
 
     -- * Running the server
     runServer,
@@ -91,7 +92,7 @@ import System.Posix.Process (exitImmediately)
 import System.Posix.Signals (Handler (CatchOnce), installHandler, sigINT, sigTERM)
 import UnliftIO.Async (withAsync)
 
-import Ecluse.Env (Env, envWorkerHeartbeat)
+import Ecluse.Env (Env, envTelemetry, envWorkerHeartbeat)
 import Ecluse.Server.Context (
     MountBinding (..),
     RequestCtx (RequestCtx),
@@ -100,6 +101,7 @@ import Ecluse.Server.Context (
 import Ecluse.Server.Pipeline (headPackument, headTarball, servePackument, serveTarball)
 import Ecluse.Server.Response (MountRenderer, RenderedBody (RenderedBody), renderError)
 import Ecluse.Server.Route (Route (..))
+import Ecluse.Telemetry.Tracing (telemetryWaiMiddleware)
 import Ecluse.Worker (heartbeatHealthyNow)
 
 -- ── server configuration ─────────────────────────────────────────────────────
@@ -319,6 +321,19 @@ client-IP recovery, timeout).
 -}
 application :: ServerConfig -> Env -> Application
 application cfg env = serverMiddleware cfg (dispatch cfg env)
+
+{- | Build the proxy 'Application' with the OpenTelemetry server-span middleware
+wrapped __outermost__ around 'application', so one server span covers the whole
+request (the other middlewares included). When telemetry is disabled the wrapper is
+'id', so this is exactly 'application' — additive and inert off (see
+"Ecluse.Telemetry.Tracing"). 'runServer' serves through this; a caller embedding the
+proxy that wants the request trace builds its application here rather than through
+the bare 'application'.
+-}
+tracedApplication :: ServerConfig -> Env -> IO Application
+tracedApplication cfg env = do
+    traceMiddleware <- telemetryWaiMiddleware (envTelemetry env)
+    pure (traceMiddleware (application cfg env))
 
 {- Dispatch a request to its handler. Top-level health probes are answered first,
 above any mount. Otherwise the leading path segments are matched to a mount: a
@@ -587,7 +602,8 @@ runServer cfg0 env = do
                 . Warp.setInstallShutdownHandler (installShutdownHandler drain)
                 . Warp.setGracefulShutdownTimeout (Just timeoutSecs)
                 $ Warp.defaultSettings
-    withInteractiveHalt defaultInteractiveHalt (Warp.runSettings settings (application cfg env))
+    app <- tracedApplication cfg env
+    withInteractiveHalt defaultInteractiveHalt (Warp.runSettings settings app)
 
 {- Install the OS shutdown handler @warp@ asks for: on @SIGTERM@\/@SIGINT@, raise the
 drain (flip readiness to @503@ and start stamping @Connection: close@) and then run

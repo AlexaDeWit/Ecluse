@@ -83,7 +83,7 @@ import UnliftIO.Exception (try)
 
 import Ecluse.App (App, runApp)
 import Ecluse.Env (
-    Env (envManager, envQueue, envRegistry, envWorkerHeartbeat),
+    Env (envManager, envQueue, envRegistry, envTelemetry, envWorkerHeartbeat),
     WorkerHeartbeat,
     lastPoll,
     recordPoll,
@@ -109,6 +109,7 @@ import Ecluse.Registry.Npm (
     npmPublishDocument,
  )
 import Ecluse.Security (Limits (maxBodyBytes), boundedRead, defaultLimits)
+import Ecluse.Telemetry.Tracing (JobSpanOutcome (JobSpanOutcome), withMirrorJobSpan)
 import Ecluse.Version (renderVersion)
 
 -- ── entry point ───────────────────────────────────────────────────────────────
@@ -265,20 +266,31 @@ job was gated at serve time.
 -}
 processJob :: ReceiptHandle -> MirrorJob -> App JobOutcome
 processJob receipt job = katipAddNamespace "job" $ do
-    fetched <- fetchArtifactBytes (jobArtifactUrl job)
-    case fetched of
-        Left reason -> pure (Retried reason)
-        Right bytes ->
-            case verifyIntegrity (maHashes artifact) bytes of
-                IntegrityMismatch detail -> do
-                    -- The security crux: a tampered or corrupt artifact must never
-                    -- reach the private upstream, which is served without rules. Fail
-                    -- the job with no publish and alarm.
-                    logFM ErrorS (ls ("artifact integrity mismatch, refusing to publish: " <> detail))
-                    pure (Dropped ("integrity mismatch: " <> detail))
-                IntegrityVerified -> publishVerified receipt job bytes
+    telemetry <- asks envTelemetry
+    withMirrorJobSpan telemetry (jobPackage job) (jobVersion job) jobSpanOutcome $ do
+        fetched <- fetchArtifactBytes (jobArtifactUrl job)
+        case fetched of
+            Left reason -> pure (Retried reason)
+            Right bytes ->
+                case verifyIntegrity (maHashes artifact) bytes of
+                    IntegrityMismatch detail -> do
+                        -- The security crux: a tampered or corrupt artifact must never
+                        -- reach the private upstream, which is served without rules. Fail
+                        -- the job with no publish and alarm.
+                        logFM ErrorS (ls ("artifact integrity mismatch, refusing to publish: " <> detail))
+                        pure (Dropped ("integrity mismatch: " <> detail))
+                    IntegrityVerified -> publishVerified receipt job bytes
   where
     artifact = jobArtifact job
+
+    -- Project a terminal job outcome onto the worker-job span: the bounded outcome
+    -- label always, and the failure detail (which marks the span errored) when the
+    -- job did not publish.
+    jobSpanOutcome :: JobOutcome -> JobSpanOutcome
+    jobSpanOutcome = \case
+        Succeeded -> JobSpanOutcome "succeeded" Nothing
+        Dropped reason -> JobSpanOutcome "dropped" (Just reason)
+        Retried reason -> JobSpanOutcome "retried" (Just reason)
 
 -- Publish already-verified bytes to the mirror target: hold the message past the
 -- visibility window (a large-artifact publish may run long), assemble the npm

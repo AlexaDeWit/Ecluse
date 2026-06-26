@@ -10,9 +10,43 @@ arch-refs:
   - docs/architecture/observability.md#sampling
   - docs/architecture/observability.md#verifying-it--smoke-test-plan
 pr: null
+status: in-progress
 ---
 
 # S25 — WAI/http-client + domain spans
+
+> **As-built (in-progress).**
+> - WAI server span wired into the S12 middleware stack as the outermost layer via
+>   `Ecluse.Server.tracedApplication` (`runServer` uses it); http-client child spans
+>   + W3C context propagation come from instrumenting the two data-plane `Manager`s
+>   at the composition root (`Ecluse.run`), gated on telemetry being enabled so the
+>   data plane is untouched when off. The instrumentation packages drive the
+>   process-global tracer/meter/propagator the S24 substrate installs through
+>   `withOpenTelemetry` (`initializeGlobalTracerProvider` sets the global propagator),
+>   so the handle's provider and the instrumentation's globals are one and the same.
+> - Domain spans (`Ecluse.Telemetry.Tracing`): **rule evaluation** (`ecluse.rule.eval`,
+>   on the single-version tarball gate where a denial → 403 is explainable from the
+>   trace; carries the verdict and, on denial, the rule name + reason class + message),
+>   **mirror enqueue** (`ecluse.mirror.enqueue`, a Producer span on the serve-time
+>   enqueue), **mirror worker job** (`ecluse.mirror.job`, a Consumer span around
+>   `processJob`, outcome label + Error status on a failed/dropped job). The pure
+>   verdict→attribute mapping (`ruleVerdictFields`) is unit-tested.
+> - Secret scrubbing is load-bearing and proven by dedicated unit tests driving a real
+>   `Authorization: Bearer …` request through both the instrumented http-client
+>   `Manager` and the WAI middleware against an in-memory span exporter, asserting the
+>   token appears in no captured span attribute (the default instrumentation config
+>   records no headers).
+> - Sampling is head-based and always-on by default (the SDK default
+>   `parentbased_always_on`), with the standard `OTEL_TRACES_SAMPLER` lever read
+>   directly by the SDK — no code in this slice overrides it.
+> - **Deferred (tracked in #307):** the *advisory-sync* domain span lands with S22 (the
+>   CVE sync module does not exist yet). True cross-async **span links** between the
+>   enqueue span and the worker-job span need trace context carried on the `MirrorJob`
+>   payload (the shared queue type, out of this slice's scope); the two spans currently
+>   correlate by package@version attributes and are deferred for the link itself.
+> - Deps added to the pinned set: `hs-opentelemetry-instrumentation-wai`,
+>   `-http-client`, and the transitive `-instrumentation-conduit`, all 1.0.0.0 (cabal
+>   freeze + the flake OTel overlay).
 
 > Milestone **M6** · depends on: [S12](S12-wai-app-middleware.md), [S19](S19-mirror-worker.md), [S24](S24-otel-substrate.md) · tier: unit, integration
 
