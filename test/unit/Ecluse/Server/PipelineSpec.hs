@@ -477,6 +477,26 @@ hashlessVersion version =
         , "_unmodeled" .= ("kept" :: Text)
         ]
 
+{- | A version object whose @dist@ carries __empty-string__ @integrity@ and @shasum@ (a
+present-but-content-empty digest pair). The projection normalises an empty digest to
+absent, so this projects to an artifact with empty @artHashes@ — identical to
+'hashlessVersion' — and the integrity-presence admission policy refuses it from a public
+upstream (classified 'NoIntegrity', not 'BelowFloor').
+-}
+emptyDigestVersion :: Text -> Value
+emptyDigestVersion version =
+    object
+        [ "name" .= ("thing" :: Text)
+        , "version" .= version
+        , "dist"
+            .= object
+                [ "tarball" .= ("https://upstream.example/thing/-/thing-" <> version <> ".tgz")
+                , "integrity" .= ("" :: Text)
+                , "shasum" .= ("" :: Text)
+                ]
+        , "_unmodeled" .= ("kept" :: Text)
+        ]
+
 {- | A hashless version object whose @dist.tarball@ points at @baseUrl@ — the
 self-hosting form the artifact path fetches, but with neither @integrity@ nor
 @shasum@. The artifact-gate refusal must fire before this URL is ever fetched.
@@ -503,6 +523,24 @@ selfHostedShasumOnly baseUrl version =
             .= object
                 [ "tarball" .= (baseUrl <> "/thing/-/thing-" <> version <> ".tgz")
                 , "shasum" .= ("deadbeef" :: Text)
+                ]
+        , "_unmodeled" .= ("kept" :: Text)
+        ]
+
+{- | A self-hosting version object whose @dist@ carries __empty-string__ @integrity@ and
+@shasum@, so it projects to no digest at all. The artifact-gate refusal ('MissingIntegrity')
+must fire before its @dist.tarball@ is ever fetched.
+-}
+selfHostedEmptyDigest :: Text -> Text -> Value
+selfHostedEmptyDigest baseUrl version =
+    object
+        [ "name" .= ("thing" :: Text)
+        , "version" .= version
+        , "dist"
+            .= object
+                [ "tarball" .= (baseUrl <> "/thing/-/thing-" <> version <> ".tgz")
+                , "integrity" .= ("" :: Text)
+                , "shasum" .= ("" :: Text)
                 ]
         , "_unmodeled" .= ("kept" :: Text)
         ]
@@ -891,6 +929,28 @@ mergeSpec = describe "multi-upstream merge (not fallback)" $ do
                 ( encodePackument
                     ( packument
                         [("1.0.0", plainVersion "1.0.0"), ("2.0.0", hashlessVersion "2.0.0")]
+                        "1.0.0"
+                        [("1.0.0", publishedDaysAgo 30), ("2.0.0", publishedDaysAgo 30)]
+                    )
+                )
+        withProxy privateUp publicUp Nothing $ \app -> do
+            resp <- getThing Nothing app
+            status resp `shouldBe` 200
+            servedVersions resp `shouldBe` ["1.0.0"]
+
+    it "filters an empty-digest public version out of the served listing (a content-empty digest is no digest)" $ do
+        -- Public 2.0.0 carries `integrity:""`/`shasum:""` — present-but-content-empty
+        -- digests the projection normalises to none, so the integrity-presence policy
+        -- drops it from the served packument exactly as a truly hashless one. 1.0.0 has a
+        -- real digest → kept. Proves the projection fix composes with the existing gate
+        -- (no parallel check); without it the empty strings would project to degenerate
+        -- empty Hashes and 2.0.0 would leak into the listing.
+        privateUp <- failingUpstream
+        publicUp <-
+            servingUpstream
+                ( encodePackument
+                    ( packument
+                        [("1.0.0", plainVersion "1.0.0"), ("2.0.0", emptyDigestVersion "2.0.0")]
                         "1.0.0"
                         [("1.0.0", publishedDaysAgo 30), ("2.0.0", publishedDaysAgo 30)]
                     )
@@ -1736,6 +1796,26 @@ tarballSpec = describe "artifact (tarball) path" $ do
             status resp `shouldBe` 403
             reason resp `shouldBe` "Forbidden"
             -- The artifact itself was never fetched: only the gating packument was requested.
+            seenAuth publicUp `shouldReturn` [Nothing]
+            drainJobs env `shouldReturn` []
+
+    it "refuses an empty-digest public version with 403 MissingIntegrity before fetching the artifact" $ do
+        -- 1.0.0 clears the rules but its public dist carries `integrity:""`/`shasum:""`.
+        -- The projection normalises those to no digest, so the artifact gate classifies
+        -- the version NoIntegrity and refuses it with the MissingIntegrity 403 — the same
+        -- path a truly hashless version takes, the existing gate firing on the fixed
+        -- projection. The MissingIntegrity message (not BelowIntegrityFloor) pins that the
+        -- empty strings became NO digest, not a present-but-weak one; the tarball is never
+        -- fetched and nothing is enqueued.
+        privateUp <- privateArtifactMiss
+        let emptyDigest base = packument [("1.0.0", selfHostedEmptyDigest base "1.0.0")] "1.0.0" [("1.0.0", publishedDaysAgo 30)]
+        publicUp <- artifactUpstreamServing (encodePackument . emptyDigest) publicTarballBytes
+        withProxyEnv privateUp publicUp Nothing $ \app env -> do
+            resp <- getTarball "1.0.0" Nothing app
+            status resp `shouldBe` 403
+            reason resp `shouldBe` "Forbidden"
+            decodedBody resp
+                `shouldBe` object ["error" .= ("this version carries no integrity digest and cannot be served from a public upstream" :: Text)]
             seenAuth publicUp `shouldReturn` [Nothing]
             drainJobs env `shouldReturn` []
 

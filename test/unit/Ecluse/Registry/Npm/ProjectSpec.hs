@@ -293,6 +293,24 @@ integritySpec = describe "dist → Artifact integrity" $ do
         d <- projectVersionOf shasumOnlyPackument (mkVersion Npm "1.0.0")
         artHashes (soleArtifact d) `shouldBe` [Hash SHA1 "deadbeef"]
 
+    it "treats an empty-string shasum as no digest (a content-empty digest is absent)" $ do
+        -- An empty `shasum` decodes to a present `Just ""`, but it ties the version to no
+        -- tamper-evident fingerprint. It must project to NO Hash — not a degenerate
+        -- `Hash SHA1 ""` that would pass the list-emptiness admission gate.
+        d <- projectVersionOf emptyShasumPackument (mkVersion Npm "1.0.0")
+        artHashes (soleArtifact d) `shouldBe` []
+
+    it "treats an empty-string integrity as no digest (a content-empty digest is absent)" $ do
+        d <- projectVersionOf emptyIntegrityPackument (mkVersion Npm "1.0.0")
+        artHashes (soleArtifact d) `shouldBe` []
+
+    it "yields a truly hashless artifact when both digests are empty strings" $ do
+        -- Both digests empty → empty artHashes → the version contributes no integrity
+        -- fingerprint at all (rather than a degenerate empty one) to the cross-upstream
+        -- divergence check, and classifies as NoIntegrity for the admission gate.
+        d <- projectVersionOf emptyBothPackument (mkVersion Npm "1.0.0")
+        artHashes (soleArtifact d) `shouldBe` []
+
 -- ── parseVersionDetails ──────────────────────────────────────────────────────
 
 versionDetailsSpec :: Spec
@@ -606,6 +624,30 @@ shasumOnlyPackument :: ByteString
 shasumOnlyPackument =
     "{\"name\":\"sha\",\"versions\":{\"1.0.0\":{\"name\":\"sha\",\"version\":\"1.0.0\",\
     \\"dist\":{\"tarball\":\"https://r/sha/-/sha-1.0.0.tgz\",\"shasum\":\"deadbeef\"}}}}"
+
+{- | A packument whose version's @dist@ carries an __empty-string__ @shasum@ (and no
+@integrity@): a present-but-content-empty digest the projection must treat as absent.
+-}
+emptyShasumPackument :: ByteString
+emptyShasumPackument =
+    "{\"name\":\"es\",\"versions\":{\"1.0.0\":{\"name\":\"es\",\"version\":\"1.0.0\",\
+    \\"dist\":{\"tarball\":\"https://r/es/-/es-1.0.0.tgz\",\"shasum\":\"\"}}}}"
+
+{- | A packument whose version's @dist@ carries an __empty-string__ @integrity@ (and no
+@shasum@): a present-but-content-empty digest the projection must treat as absent.
+-}
+emptyIntegrityPackument :: ByteString
+emptyIntegrityPackument =
+    "{\"name\":\"ei\",\"versions\":{\"1.0.0\":{\"name\":\"ei\",\"version\":\"1.0.0\",\
+    \\"dist\":{\"tarball\":\"https://r/ei/-/ei-1.0.0.tgz\",\"integrity\":\"\"}}}}"
+
+{- | A packument whose version's @dist@ carries __both__ digests as empty strings: the
+artifact projects to no 'Hash' at all (a truly hashless version).
+-}
+emptyBothPackument :: ByteString
+emptyBothPackument =
+    "{\"name\":\"eb\",\"versions\":{\"1.0.0\":{\"name\":\"eb\",\"version\":\"1.0.0\",\
+    \\"dist\":{\"tarball\":\"https://r/eb/-/eb-1.0.0.tgz\",\"shasum\":\"\",\"integrity\":\"\"}}}}"
 
 -- | A packument with three versions, to check version-list extraction.
 multiVersionPackument :: ByteString
