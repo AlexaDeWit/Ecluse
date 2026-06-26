@@ -305,6 +305,14 @@ let it flag genuine gaps — don't pre-run `make coverage` and parse
 a per-PR bar (chasing it is wasteful); see
 [Testing Strategy → Coverage](../docs/testing.md).
 
+> **Coverage comes only from the unit ∪ integration tiers.** The **E2E and Smoke
+> suites surface no coverage** (not built with HPC, no Codecov flag) — by design.
+> So when `codecov/patch` flags changed lines, **reach for a unit or integration
+> test**: a path exercised only by an e2e/smoke run still reads as uncovered, on the
+> dashboard and in any local `make coverage`. Don't conclude "the e2e test covers it"
+> — it does not count. (Equally, a single-tier local read under-counts the other
+> tier; `make coverage` merges both — see [CONTRIBUTING → Coverage](../CONTRIBUTING.md#coverage).)
+
 **Scale verification to the change.** Light by default. Reserve heavier local
 reproduction _and_ exhaustive case-enumeration for the genuinely risky surfaces —
 the parsers and identifier canonicalisation, the credential path, deny-by-default

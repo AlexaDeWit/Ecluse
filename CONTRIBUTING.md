@@ -67,6 +67,17 @@ commands are:
   (`ecluse-unit`, `ecluse-integration`) writes its own `coverage/<tier>.json`, uploaded under
   its own Codecov flag. Keep this shape — the per-flag uploads depend on it.
 
+**Only the two gating tiers surface coverage.** Codecov's total is `ecluse-unit ∪
+ecluse-integration` and **nothing else** — the **E2E and Smoke suites are deliberately
+excluded** (they are not built with HPC and upload no flag). That is by design: E2E is a
+slow end-to-end smoke of the assembled binary and Smoke hits live third-party registries
+off the gate, so neither is a coverage instrument. The practical consequence: **a line
+exercised only by E2E or Smoke still reads as uncovered**, both locally and on the
+dashboard. So do not reason "the e2e test covers it" — if a path needs coverage, it needs
+a **unit or integration** test. (This is the inverse trap of the per-tier partial above:
+there a real path looks uncovered because you ran one tier; here it looks uncovered
+because the tier that exercises it never counts.)
+
 **Reporting divergence is not a coverage gap.** This combined command exists to kill a
 *reporting* confusion (a local single-tier read disagreeing with the merged dashboard). It does
 not move real coverage: if the **merged** report still shows a module's error arms red, that is
