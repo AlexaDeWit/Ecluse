@@ -93,7 +93,7 @@ import Ecluse.Ecosystem (Ecosystem, ecosystemName, prefixFor)
 import Ecluse.Package.Integrity (MinIntegrity)
 import Ecluse.Queue (MemoryQueueConfig, defaultMemoryQueueConfig)
 import Ecluse.Queue.Sqs (SqsConfig (sqsEndpoint), SqsEndpoint (..), defaultSqsConfig)
-import Ecluse.Security (Limits (Limits, maxBodyBytes, maxNestingDepth, maxVersionCount), TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), hostAddress, lowerCaseHosts)
+import Ecluse.Security (Limits (Limits, maxBodyBytes, maxNestingDepth, maxVersionCount), TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), hostAddress, lowerCaseHosts, splitHostPort)
 import Ecluse.Server.Cache (CacheConfig (..))
 import Ecluse.Server.Context (MountBinding, PackumentDeps (..))
 import Ecluse.Server.Response (HelpMessage, mkHelpMessage)
@@ -716,29 +716,22 @@ resolveSqsEndpoint env =
 
 {- Parse an endpoint URL into its (TLS flag, host, port). The scheme picks the TLS
 flag and the default port (443\/80) when none is given; an absent scheme or a
-non-numeric port yields 'Nothing'. A bracketed IPv6 literal authority
-(@[::1]:4566@) is split on the closing bracket, not on an inner colon, and the host
-is returned without brackets. -}
+non-numeric port yields 'Nothing'. The @host[:port]@ authority is split by the
+shared bracket-aware 'Ecluse.Security.splitHostPort', so a bracketed IPv6 literal
+(@[::1]:4566@) is split on its closing bracket, not on an inner colon, and the host
+is returned without brackets — the same primitive the data-plane host extractor
+uses, so the two cannot drift on an authority edge case. -}
 parseEndpointUrl :: Text -> Maybe (Bool, Text, Int)
 parseEndpointUrl raw = do
     (secure, afterScheme) <-
         ((True,) <$> T.stripPrefix "https://" raw) <|> ((False,) <$> T.stripPrefix "http://" raw)
     let authority = T.takeWhile (`notElem` ['/', '?', '#']) afterScheme
-    (hostText, portText) <- splitAuthority authority
+    (hostText, portText) <- splitHostPort authority
     host <- nonBlank hostText
     port <- case T.stripPrefix ":" portText of
         Nothing -> Just (if secure then 443 else 80)
         Just digits -> readMaybe (toString digits)
     pure (secure, host, port)
-  where
-    -- Split an authority into (host, "":port"|""). A @[…]@ IPv6 literal splits on the
-    -- closing bracket so an inner colon is never mistaken for the port separator.
-    splitAuthority :: Text -> Maybe (Text, Text)
-    splitAuthority authority = case T.stripPrefix "[" authority of
-        Just rest -> case T.breakOn "]" rest of
-            (_, "") -> Nothing -- an opening bracket with no close: malformed
-            (inner, afterBracket) -> Just (inner, T.drop 1 afterBracket)
-        Nothing -> Just (T.breakOn ":" authority)
 
 -- ── config-derived runtime settings ───────────────────────────────────────────
 

@@ -44,6 +44,7 @@ import Ecluse.Security (
     isAllowedUpstreamHost,
     isBlockedTarget,
     lowerCaseHosts,
+    splitHostPort,
     tarballHostAllowed,
     upstreamUrlFor,
  )
@@ -142,6 +143,7 @@ spec = do
     internalRangeSpec
     classificationCorpusSpec
     hostAddressSpec
+    splitHostPortSpec
     ssrfGateSpec
     tarballHostPolicySpec
     upstreamUrlSpec
@@ -496,6 +498,30 @@ hostAddressSpec = describe "hostAddress" $ do
         let h = hostAddress "http://169.254.169.254/latest/meta-data/"
          in (isBlockedTarget (lowerCaseHosts Set.empty) h, isAllowedUpstreamHost upstreams h)
                 `shouldBe` (True, False)
+
+-- ── canonical authority split ────────────────────────────────────────────────
+
+-- The bracket-aware @host[:port]@ split shared by 'hostAddress' and the SQS
+-- endpoint parser. These assert host/port extraction only — the split is purely
+-- structural and carries no classification or gating (the OTLP and SQS endpoints
+-- are trusted, operator-declared destinations; see #326).
+splitHostPortSpec :: Spec
+splitHostPortSpec = describe "splitHostPort" $ do
+    it "splits a bracketed IPv6 literal with a port on the closing bracket" $
+        -- The #292/#296 edge: an inner '::' is never read as the port separator.
+        splitHostPort "[::1]:4566" `shouldBe` Just ("::1", ":4566")
+    it "splits a longer bracketed IPv6 literal with a port" $
+        splitHostPort "[fd00::1]:4318" `shouldBe` Just ("fd00::1", ":4318")
+    it "keeps a bare bracketed IPv6 literal (no port) with an empty remainder" $
+        splitHostPort "[fe80::1]" `shouldBe` Just ("fe80::1", "")
+    it "splits a bare host with a port" $
+        splitHostPort "localhost:4566" `shouldBe` Just ("localhost", ":4566")
+    it "leaves a bare host (no port) with an empty remainder" $
+        splitHostPort "localhost" `shouldBe` Just ("localhost", "")
+    it "splits an IPv4 host with a port" $
+        splitHostPort "127.0.0.1:8080" `shouldBe` Just ("127.0.0.1", ":8080")
+    it "rejects an opening bracket with no close as malformed" $
+        splitHostPort "[::1" `shouldBe` Nothing
 
 -- ── composed SSRF gate ───────────────────────────────────────────────────────
 
