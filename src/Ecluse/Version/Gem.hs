@@ -41,13 +41,20 @@ compareGemTokens (x : xs) [] = compare x (VNum 0) <> compareGemTokens xs []
 compareGemTokens [] (y : ys) = compare (VNum 0) y <> compareGemTokens [] ys
 
 {- | Parse a @Gem::Version@: dot-separated alphanumeric segments, each split into
-maximal digit and letter runs. Fails on empty or non-alphanumeric segments.
+maximal digit and letter runs. Hyphens are first rewritten to a prerelease marker
+(a global @gsub("-", ".pre.")@, the way @Gem::Version@ canonicalises), so
+@1.0.0-1@ parses as @1.0.0.pre.1@ and orders below @1.0.0@. Fails on empty or
+non-alphanumeric segments.
 -}
 parseGem :: Text -> Maybe GemKey
 parseGem raw = do
-    let trimmed = T.strip raw
-        segs = T.splitOn "." trimmed
-    guard (not (T.null trimmed))
+    let stripped = T.strip raw
+        -- Gem::Version canonicalises hyphens to a prerelease marker via a global
+        -- gsub("-", ".pre.") before segmenting, so e.g. "1.0.0-1" parses as the
+        -- prerelease "1.0.0.pre.1" and orders below "1.0.0". Non-hyphenated input
+        -- is untouched, so existing orderings are unchanged.
+        segs = T.splitOn "." (T.replace "-" ".pre." stripped)
+    guard (not (T.null stripped))
     guard (all validSeg segs)
     let toks = concatMap segTokens segs
     guard (not (null toks))

@@ -94,6 +94,15 @@ spec = do
             cmp RubyGems "2.0.a" "2.a" `shouldBe` Just EQ
         it "RubyGems strips a release trailing zero (2.0 == 2)" $
             cmp RubyGems "2.0" "2" `shouldBe` Just EQ
+        -- Gem::Version canonicalises hyphens to a prerelease marker (a global
+        -- gsub("-", ".pre.")), so "1.0.0-1" parses as "1.0.0.pre.1": it ranks
+        -- below "1.0.0" and equates with the explicit .pre. spelling.
+        it "RubyGems accepts a hyphenated version (1.0.0-1 parses)" $
+            parseVersionKey RubyGems "1.0.0-1" `shouldSatisfy` isRight
+        it "RubyGems ranks a hyphenated version below its release (1.0.0-1 < 1.0.0)" $
+            cmp RubyGems "1.0.0-1" "1.0.0" `shouldBe` Just LT
+        it "RubyGems equates a hyphen with the .pre. spelling (1.0.0-1 == 1.0.0.pre.1)" $
+            cmp RubyGems "1.0.0-1" "1.0.0.pre.1" `shouldBe` Just EQ
         it "is Nothing when a version cannot be parsed" $
             cmp Npm "not a version" "1.0.0" `shouldBe` Nothing
         it "is reflexive — EQ when parseable, Nothing otherwise" $
