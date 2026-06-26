@@ -56,7 +56,7 @@ module Ecluse.Package.Integrity (
 import Ecluse.Package (
     Artifact (artHashes),
     Hash,
-    HashAlg (Blake2b, MD5, SHA1, SHA256, SHA512, SRI),
+    HashAlg (Blake2b, MD5, SHA1, SHA256, SHA384, SHA512, SRI),
     hashAlg,
     hashValue,
     parseHashAlg,
@@ -89,6 +89,11 @@ data Strength
 
       -- | SHA-256: collision-resistant; the public-integrity floor.
       Floor
+    | {- | SHA-384: above the floor but below the top tier. It is SHA-512 truncated, so
+      its 192-bit collision resistance sits below SHA-512's 256-bit and above SHA-256's
+      128-bit — a tier of its own.
+      -}
+      Strong
     | -- | The modern long digests SHA-512 and Blake2b — equal strength, the top tier.
       Strongest
     deriving stock (Eq, Ord, Show)
@@ -98,11 +103,11 @@ ranks higher__ under 'Strength''s 'Ord'.
 
 The broken algorithms rank below the SHA-256 floor (@'integrityStrength' 'SHA256'@):
 MD5 and SHA-1 have practical collisions, so a match on one cannot prove the bytes
-were not substituted. SHA-256 and the modern long digests rank at or above the floor,
-with SHA-512 and Blake2b sharing the top tier (equal strength). A bare 'SRI' ranks
-lowest of all — it is a wrapper, not an algorithm, so resolve it with 'assertedAlg'
-before ranking; ranking below every real algorithm, an unresolved SRI never wins a
-strongest-digest comparison.
+were not substituted. SHA-256 and the longer digests rank at or above the floor:
+SHA-384 above it in a tier of its own, then SHA-512 and Blake2b sharing the top tier
+(equal strength). A bare 'SRI' ranks lowest of all — it is a wrapper, not an algorithm,
+so resolve it with 'assertedAlg' before ranking; ranking below every real algorithm, an
+unresolved SRI never wins a strongest-digest comparison.
 
 >>> integrityStrength SHA512 > integrityStrength SHA256
 True
@@ -116,14 +121,15 @@ integrityStrength = \case
     MD5 -> Weakest
     SHA1 -> Weak
     SHA256 -> Floor
+    SHA384 -> Strong
     SHA512 -> Strongest
     Blake2b -> Strongest
 
 {- | The algorithm a 'Hash' asserts: its tag directly, or — for an 'SRI' string — the
 algorithm named in its @\<alg\>-\<base64\>@ prefix. The SRI prefixes resolved are
-@sha256@ and @sha512@ (the long digests the model represents and a registry serves);
-an unrecognised or malformed prefix yields 'Nothing', so it asserts no algorithm and
-clears no floor (the fail-closed reading).
+@sha256@, @sha384@ and @sha512@ (every long digest the model represents and a registry
+serves); an unrecognised or malformed prefix yields 'Nothing', so it asserts no
+algorithm and clears no floor (the fail-closed reading).
 
 >>> import Ecluse.Package (mkHash, HashAlg (SHA1, SRI))
 >>> assertedAlg <$> mkHash SRI "sha512-z4PhNX7vuL3xVChQ1m2AB9Yg5AULVxXcg/SpIdNs6c5H0NE8XYXysP+DGNKHfuwvY7kxvUdBeoGlODJ6+SfaPg=="
@@ -133,7 +139,7 @@ Right (Just SHA512)
 Right (Just SHA1)
 
 >>> assertedAlg <$> mkHash SRI "sha384-OLBgp1GsljhM2TJ+sbHjaiH9txEUvgdDTAzHv2P24donTt6/529l+9Ua0vFImLlb"
-Right Nothing
+Right (Just SHA384)
 -}
 assertedAlg :: Hash -> Maybe HashAlg
 assertedAlg h = case hashAlg h of

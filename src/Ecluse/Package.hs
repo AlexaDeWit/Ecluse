@@ -240,6 +240,7 @@ data Availability
 data HashAlg
     = SHA1
     | SHA256
+    | SHA384
     | SHA512
     | MD5
     | Blake2b
@@ -312,6 +313,7 @@ hexDigestOk :: HashAlg -> ByteString -> Bool
 hexDigestOk alg bytes = case alg of
     SHA1 -> isJust (digestFromByteString @SHA1 bytes)
     SHA256 -> isJust (digestFromByteString @SHA256 bytes)
+    SHA384 -> isJust (digestFromByteString @SHA384 bytes)
     SHA512 -> isJust (digestFromByteString @SHA512 bytes)
     MD5 -> isJust (digestFromByteString @MD5 bytes)
     Blake2b -> isJust (digestFromByteString @Blake2b_512 bytes)
@@ -334,9 +336,8 @@ wellFormedSriComponent comp
 
 -- The SRI algorithms recognised are exactly the Subresource-Integrity set
 -- (sha256/sha384/sha512); the base64 body must decode to that algorithm's digest
--- length. sha384 is validated and accepted even though it is not a modelled 'HashAlg':
--- it is a well-formed digest, and floor-admission ('assertedAlg') decides separately
--- that an unmodelled alg clears no floor.
+-- length. Each is a modelled 'HashAlg', so a well-formed component both constructs and
+-- resolves to an algorithm the strength tier ranks ('assertedAlg').
 sriBodyOk :: Text -> Text -> Bool
 sriBodyOk algName body =
     case convertFromBase Base64 (encodeUtf8 body :: ByteString) :: Either String ByteString of
@@ -369,6 +370,7 @@ renderHashAlg = \case
     MD5 -> "md5"
     SHA1 -> "sha1"
     SHA256 -> "sha256"
+    SHA384 -> "sha384"
     SHA512 -> "sha512"
     Blake2b -> "blake2b"
     SRI -> "sri"
@@ -389,6 +391,7 @@ parseHashAlg raw = case T.filter (/= '-') (T.toLower (T.strip raw)) of
     "md5" -> Right MD5
     "sha1" -> Right SHA1
     "sha256" -> Right SHA256
+    "sha384" -> Right SHA384
     "sha512" -> Right SHA512
     "blake2b" -> Right Blake2b
     _ -> Left ("unknown integrity algorithm: " <> raw)
@@ -412,19 +415,21 @@ sriBody :: Text -> Text
 sriBody = T.drop 1 . snd . T.breakOn "-"
 
 {- | The 'HashAlg' a Subresource-Integrity string names, read from its @\<alg\>@ prefix.
-The prefixes resolved are @sha256@ and @sha512@ (the long digests the model represents
-and a registry serves); an unrecognised or malformed prefix yields 'Nothing', so the
-string asserts no algorithm and clears no floor (the fail-closed reading).
+The prefixes resolved are the Subresource-Integrity set @sha256@, @sha384@ and @sha512@
+(every long digest the model represents and a registry serves); an unrecognised or
+malformed prefix yields 'Nothing', so the string asserts no algorithm and clears no
+floor (the fail-closed reading).
 
 >>> sriAlgorithm "sha512-Zm9vYmFy"
 Just SHA512
 
 >>> sriAlgorithm "sha384-Zm9vYmFy"
-Nothing
+Just SHA384
 -}
 sriAlgorithm :: Text -> Maybe HashAlg
 sriAlgorithm sri = case sriPrefix sri of
     "sha256" -> Just SHA256
+    "sha384" -> Just SHA384
     "sha512" -> Just SHA512
     _ -> Nothing
 

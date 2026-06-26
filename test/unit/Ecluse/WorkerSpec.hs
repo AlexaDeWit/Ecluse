@@ -1,6 +1,6 @@
 module Ecluse.WorkerSpec (spec) where
 
-import Crypto.Hash (Digest, SHA1, SHA512, hashlazy)
+import Crypto.Hash (Digest, SHA1, SHA384, SHA512, hashlazy)
 import Data.Aeson (Key, Value (Object, String), eitherDecodeStrict')
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteArray.Encoding (Base (Base16, Base64), convertToBase)
@@ -74,6 +74,22 @@ digest carries (as opposed to the base64 inside an SRI string).
 -}
 trueSha512Hex :: Text
 trueSha512Hex = decodeUtf8 (convertToBase Base16 (hashlazy (toLazy tarballBytes) :: Digest SHA512) :: ByteString)
+
+-- | The SRI (@sha384-<base64>@) of 'tarballBytes' — a genuine sha384 the worker computes.
+trueSha384Sri :: Text
+trueSha384Sri = "sha384-" <> decodeUtf8 (convertToBase Base64 (hashlazy (toLazy tarballBytes) :: Digest SHA384) :: ByteString)
+
+{- | The lower-cased hex SHA-384 of 'tarballBytes' — the form a __raw 'SHA384'-tagged__
+digest carries (as opposed to the base64 inside an SRI string).
+-}
+trueSha384Hex :: Text
+trueSha384Hex = decodeUtf8 (convertToBase Base16 (hashlazy (toLazy tarballBytes) :: Digest SHA384) :: ByteString)
+
+{- | A well-formed sha384 SRI that does NOT match 'tarballBytes' (it is the digest of
+different bytes) — the sha384 tamper-direction fixture: a real sha384 that fails.
+-}
+falseSha384Sri :: Text
+falseSha384Sri = "sha384-" <> decodeUtf8 (convertToBase Base64 (hashlazy "completely-different-bytes" :: Digest SHA384) :: ByteString)
 
 {- | A well-formed sha512 SRI that does NOT match 'tarballBytes' (it is the digest of
 different bytes) — for the tamper-direction regression: a real sha512 that fails.
@@ -278,6 +294,28 @@ spec = do
         it "verifies an SRI (sha512)-only artifact against its sha512" $
             verifyIntegrity (unsafeHash SRI trueSri :| []) tarballBytes `shouldBe` IntegrityVerified
 
+        it "verifies an SRI (sha384)-only artifact against its sha384 (the worker computes sha384)" $
+            -- The whole point of modelling sha384: the worker must be able to RECOMPUTE it,
+            -- so a sha384-admitted artifact is verifiable rather than admit-but-uncomputable.
+            verifyIntegrity (unsafeHash SRI trueSha384Sri :| []) tarballBytes `shouldBe` IntegrityVerified
+
+        it "verifies a raw SHA384-tagged digest against its hex sha384 (the tag arm, not SRI)" $
+            -- A digest carried under the raw 'SHA384' tag (hex), distinct from the same hash
+            -- inside an SRI string: the worker computes hex SHA-384 and matches it.
+            verifyIntegrity (unsafeHash Pkg.SHA384 trueSha384Hex :| []) tarballBytes `shouldBe` IntegrityVerified
+
+        it "REJECTS a sha384 SRI that does not match the fetched bytes (tamper guard)" $
+            -- The tamper direction for the new compute path: a real, well-formed sha384 that
+            -- is the digest of OTHER bytes must fail closed, naming the algorithm.
+            verifyIntegrity (unsafeHash SRI falseSha384Sri :| []) tarballBytes
+                `shouldBe` IntegrityMismatch "the SRI sha384 digest did not match the fetched bytes"
+
+        it "prefers and verifies a co-present sha384 over a matching sha1 (strongest wins, and is computable)" $
+            -- sha384 outranks sha1, so the gate selects it; because the worker can now compute
+            -- sha384 it verifies against it rather than failing closed or downgrading to sha1.
+            verifyIntegrity (unsafeHash SHA1 trueSha1 :| [unsafeHash SRI trueSha384Sri]) tarballBytes
+                `shouldBe` IntegrityVerified
+
         it "verifies a raw SHA512-tagged digest against its hex sha512 (the tag arm, not SRI)" $
             -- A digest carried under the raw 'SHA512' tag (hex), distinct from the same
             -- hash inside an SRI string: the worker computes hex SHA-512 and matches it,
@@ -379,6 +417,17 @@ spec = do
             withUpstream $ \url ->
                 withWorkerEnv (Right ()) $ \env queue logRef -> do
                     (receipt, job) <- enqueueAndReceive queue (jobWith url (unsafeHash SHA1 trueSha1 :| []))
+                    outcome <- runApp env (processJob receipt job)
+                    outcome `shouldBe` Succeeded
+                    published <- plDocuments <$> readIORef logRef
+                    length published `shouldBe` 1
+
+        it "publishes a sha384-only job end to end (fetch, compute sha384, verify, publish)" $
+            -- The end-to-end proof that a sha384-admitted artifact is not admit-but-
+            -- uncomputable: the worker fetches, recomputes sha384, matches, and publishes.
+            withUpstream $ \url ->
+                withWorkerEnv (Right ()) $ \env queue logRef -> do
+                    (receipt, job) <- enqueueAndReceive queue (jobWith url (unsafeHash SRI trueSha384Sri :| []))
                     outcome <- runApp env (processJob receipt job)
                     outcome `shouldBe` Succeeded
                     published <- plDocuments <$> readIORef logRef

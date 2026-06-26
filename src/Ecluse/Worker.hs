@@ -69,7 +69,7 @@ module Ecluse.Worker (
     verifyIntegrity,
 ) where
 
-import Crypto.Hash (Digest, SHA1, SHA512, hashlazy)
+import Crypto.Hash (Digest, SHA1, SHA384, SHA512, hashlazy)
 import Data.ByteArray.Encoding (Base (Base16, Base64), convertToBase)
 import Data.Foldable (maximumBy)
 import Data.List.NonEmpty qualified as NE
@@ -88,7 +88,7 @@ import Ecluse.Env (
     lastPoll,
     recordPoll,
  )
-import Ecluse.Package (Hash (hashAlg, hashValue), HashAlg (Blake2b, MD5, SHA1, SHA256, SHA512, SRI), renderPackageName)
+import Ecluse.Package (Hash (hashAlg, hashValue), HashAlg (Blake2b, MD5, SHA1, SHA256, SHA384, SHA512, SRI), renderPackageName)
 import Ecluse.Package.Integrity (Strength, assertedAlg, integrityStrength, sriAlgorithm, sriBody, sriPrefix)
 import Ecluse.Queue (
     MirrorArtifact (maFilename, maHashes),
@@ -470,8 +470,9 @@ A real npm version carries both a modern SRI @sha512@ digest and the legacy SHA-
 @shasum@. Passing on /any/ match would let an artifact that matches the weak SHA-1
 but fails the strong @sha512@ through — and SHA-1 collision resistance is broken, so
 that is exploitable. So the gate ranks the admitted digests by algorithm authority
-(strongest first: @sha512@ \/ @blake2b@ > @sha256@ > @sha1@ > @md5@), and checks the
-bytes against the strongest one present: the bytes pass __iff__ that digest matches.
+(strongest first: @sha512@ \/ @blake2b@ > @sha384@ > @sha256@ > @sha1@ > @md5@), and
+checks the bytes against the strongest one present: the bytes pass __iff__ that digest
+matches.
 A weaker digest can neither override nor rescue a failed strong one.
 
 If the strongest digest present is in an algorithm the worker cannot compute, the
@@ -530,18 +531,21 @@ verifyIntegrity hashes bytes =
     matchStrongest :: Hash -> Maybe Bool
     matchStrongest h = case hashAlg h of
         SHA1 -> Just (hexLower (hashlazy lazyBytes :: Digest SHA1) == T.toLower (hashValue h))
+        SHA384 -> Just (hexLower (hashlazy lazyBytes :: Digest SHA384) == T.toLower (hashValue h))
         SHA512 -> Just (hexLower (hashlazy lazyBytes :: Digest SHA512) == T.toLower (hashValue h))
         SRI -> matchSri (hashValue h)
         SHA256 -> Nothing
         MD5 -> Nothing
         Blake2b -> Nothing
 
-    -- A Subresource-Integrity string is @"<alg>-<base64>"@; only @sha512@ (npm's
-    -- @dist.integrity@) is computable here. Recompute SHA-512, base64-encode it, and
-    -- compare against the SRI's base64 body __exactly__ — base64 is case-sensitive.
-    -- Any other SRI algorithm is uncomputable, so it fails closed rather than passing.
+    -- A Subresource-Integrity string is @"<alg>-<base64>"@; the computable inner
+    -- algorithms are @sha384@ and @sha512@ (@sha512@ is npm's @dist.integrity@).
+    -- Recompute that digest, base64-encode it, and compare against the SRI's base64
+    -- body __exactly__ — base64 is case-sensitive. Any other SRI algorithm is
+    -- uncomputable, so it fails closed rather than passing.
     matchSri :: Text -> Maybe Bool
     matchSri sri = case sriAlgorithm sri of
+        Just SHA384 -> Just (base64 (hashlazy lazyBytes :: Digest SHA384) == sriBody sri)
         Just SHA512 -> Just (base64 (hashlazy lazyBytes :: Digest SHA512) == sriBody sri)
         _ -> Nothing
 

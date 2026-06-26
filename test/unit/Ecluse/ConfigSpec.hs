@@ -11,7 +11,7 @@ import Ecluse.Config
 import Ecluse.Credential (mkSecret)
 import Ecluse.Ecosystem (Ecosystem (..))
 import Ecluse.Log (LogFormat (..))
-import Ecluse.Package (HashAlg (SHA512), mkScope)
+import Ecluse.Package (HashAlg (SHA384, SHA512), mkScope)
 import Ecluse.Package.Integrity (defaultMinIntegrity, unMinIntegrity)
 import Ecluse.Rules.Types (
     PrecededRule (..),
@@ -351,6 +351,11 @@ envLayerSpec = describe "parseEnvPure" $ do
         case parseEnvPure (set "PROXY_MIN_PUBLIC_INTEGRITY" "sha512" minimalEnv) of
             Left errs -> expectationFailure ("unexpected errors: " <> show errs)
             Right cfg -> (unMinIntegrity . cfgMinPublicIntegrity) cfg `shouldBe` SHA512
+
+    it "parses sha384 as a raised public-integrity floor (above the SHA-256 minimum)" $
+        case parseEnvPure (set "PROXY_MIN_PUBLIC_INTEGRITY" "sha384" minimalEnv) of
+            Left errs -> expectationFailure ("unexpected errors: " <> show errs)
+            Right cfg -> (unMinIntegrity . cfgMinPublicIntegrity) cfg `shouldBe` SHA384
 
     it "rejects a sub-floor public-integrity algorithm (below SHA-256) against its own name" $
         -- A SHA-1 floor would admit collision-broken public versions; a sub-floor value

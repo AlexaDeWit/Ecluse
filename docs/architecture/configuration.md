@@ -74,7 +74,7 @@ registries derive short-lived tokens from ambient cloud credentials (see
 | `PROXY_MAX_RESPONSE_BYTES` | No (default: `16777216` — 16 MiB) | Largest upstream **metadata** body the proxy buffers before aborting the fetch fail-closed. Bounds memory against a hostile upstream returning a multi-gigabyte body. Must be a positive integer. See [Response bounds](#response-bounds). |
 | `PROXY_MAX_VERSION_COUNT` | No (default: `100000`) | Largest number of versions a parsed packument may carry before it is refused. Bounds per-version rule evaluation against a version-flood document. Must be a positive integer. See [Response bounds](#response-bounds). |
 | `PROXY_MAX_NESTING_DEPTH` | No (default: `64`) | Deepest JSON nesting a decoded upstream document may reach before it is refused. Bounds stack/CPU against a pathologically nested payload. Must be a positive integer. See [Response bounds](#response-bounds). |
-| `PROXY_MIN_PUBLIC_INTEGRITY` | No (default: `sha256`) | Minimum integrity algorithm a **public** (untrusted) version's digest must meet to be admitted: `sha256`, `sha512`, or `blake2b`. A public version whose strongest digest is weaker (e.g. a legacy SHA-1 `shasum` only) is refused with a `403`. **Hard-floored at SHA-256** — a value below it (`sha1`, `md5`) or an unknown name is rejected at load, not clamped. The trusted private upstream is exempt. See [Public integrity floor](#public-integrity-floor) and [Security → asymmetric integrity trust](security.md#invariants). |
+| `PROXY_MIN_PUBLIC_INTEGRITY` | No (default: `sha256`) | Minimum integrity algorithm a **public** (untrusted) version's digest must meet to be admitted: `sha256`, `sha384`, `sha512`, or `blake2b`. A public version whose strongest digest is weaker (e.g. a legacy SHA-1 `shasum` only) is refused with a `403`. **Hard-floored at SHA-256** — a value below it (`sha1`, `md5`) or an unknown name is rejected at load, not clamped. The trusted private upstream is exempt. See [Public integrity floor](#public-integrity-floor) and [Security → asymmetric integrity trust](security.md#invariants). |
 | `PROXY_CONFIG` | No | The structured config document as an inline JSON blob, the alternate to a mounted config file for an env-only deployment. |
 
 ### Upstream composition (optional)
@@ -189,7 +189,8 @@ or an unknown name is a configuration error rejected at load, never silently cla
 | Value | Effect |
 |-------|--------|
 | `sha256` | The default and hard minimum: a public version must carry a SHA-256 (or stronger) digest. |
-| `sha512` / `blake2b` | A raised floor: a public version must carry a SHA-512 / BLAKE2b digest; a SHA-256-only version is then refused. |
+| `sha384` | A raised floor: a public version must carry a SHA-384 (or stronger) digest; a SHA-256-only version is then refused. |
+| `sha512` / `blake2b` | A raised floor: a public version must carry a SHA-512 / BLAKE2b digest; a SHA-256-only or SHA-384-only version is then refused. |
 | `sha1` / `md5` / unknown | **Rejected at load** — a sub-floor or unrecognised algorithm fails the configuration parse. |
 
 ### Rule policy
