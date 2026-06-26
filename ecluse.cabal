@@ -87,6 +87,8 @@ library
     Ecluse.Registry.Npm.Route
     Ecluse.Registry.Npm.Serve
     Ecluse.Registry.Npm.Wire
+    Ecluse.Registry.Pypi.Wire
+    Ecluse.Registry.Rubygems.Wire
     Ecluse.Rules
     Ecluse.Rules.Effectful
     Ecluse.Rules.Types
@@ -211,6 +213,8 @@ test-suite ecluse-unit
     Ecluse.Registry.Npm.RouteSpec
     Ecluse.Registry.Npm.ServeSpec
     Ecluse.Registry.Npm.WireSpec
+    Ecluse.Registry.Pypi.WireSpec
+    Ecluse.Registry.Rubygems.WireSpec
     Ecluse.Rules.EffectfulSpec
     Ecluse.RulesSpec
     Ecluse.SecuritySpec

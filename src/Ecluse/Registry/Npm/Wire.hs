@@ -16,7 +16,7 @@ The shapes here are reverse-engineered from live captures of
 == Lenient on input
 
 The public registry has drifted from its own spec and is inconsistent across
-endpoints, so every decoder here is forgiving in three specific ways, matching
+endpoints, so every decoder here is forgiving in four specific ways, matching
 the documented reality:
 
 * __Unknown keys are ignored.__ Manifests carry arbitrary author keys
@@ -31,6 +31,11 @@ the documented reality:
 * __The bare-string error body.__ npm's per-version 404 is a bare JSON
   __string__ (@"version not found: ^3.0.0"@), not the documented
   @{error|message}@ object. 'ErrorResponse' tolerates both.
+* __The string-or-boolean @deprecated@ flag.__ @deprecated@ is conventionally the
+  deprecation message string, but some published versions carry a boolean instead
+  (@true@ = deprecated without a message, @false@ = not deprecated). 'vmDeprecated'
+  reads every form, so a boolean never fails the whole packument decode (a real
+  packument such as react's mixes the string and boolean forms across versions).
 
 == Faithful on the rule-decisive fields
 
@@ -274,8 +279,10 @@ data VersionManifest = VersionManifest
     , vmDist :: Dist
     -- ^ The artifact descriptor (always present).
     , vmDeprecated :: Maybe Text
-    {- ^ A deprecation notice, present only when the version is deprecated. The
-    @deprecated@ field is a string message (npm sets it by re-publishing).
+    {- ^ The deprecation message when the version is deprecated, else 'Nothing'.
+    npm sends @deprecated@ as the message string, or as a boolean (@true@ =
+    deprecated with no message, captured as @""@; @false@ = not deprecated); an
+    absent, @null@, @false@, or otherwise-shaped value reads as 'Nothing'.
     -}
     , vmHasInstallScript :: Maybe Bool
     {- ^ Whether the version declares install scripts. Present in the
@@ -311,7 +318,7 @@ instance FromJSON VersionManifest where
             <$> o .: "name"
             <*> o .: "version"
             <*> o .: "dist"
-            <*> o .:? "deprecated"
+            <*> (deprecatedNotice <$> o .:? "deprecated")
             <*> o .:? "hasInstallScript"
             <*> o .:? "scripts" .!= mempty
             <*> o .:? "license"
@@ -320,6 +327,16 @@ instance FromJSON VersionManifest where
             <*> o .:? "devDependencies" .!= mempty
             <*> o .:? "peerDependencies" .!= mempty
             <*> o .:? "optionalDependencies" .!= mempty
+
+{- Decode the @deprecated@ field leniently (see the module header's "string-or-boolean
+@deprecated@ flag"): a string is the deprecation message, the boolean @true@ a
+deprecated version with no message ('Just' @""@), and @false@, @null@, absence, or any
+other shape a non-deprecated one ('Nothing'). Total, so a boolean never fails the decode. -}
+deprecatedNotice :: Maybe Value -> Maybe Text
+deprecatedNotice = \case
+    Just (String message) -> Just message
+    Just (Bool True) -> Just ""
+    _ -> Nothing
 
 -- ── packuments ───────────────────────────────────────────────────────────────
 
