@@ -2,7 +2,7 @@
 id: S20
 title: AWS composition root + config wiring (launch-ready)
 milestone: M4 — AWS cloud backends & worker
-status: in-progress
+status: merged
 depends-on: [S03, S15, S17, S18, S19]
 test-tier: [integration]
 arch-refs:
@@ -10,7 +10,7 @@ arch-refs:
   - docs/architecture/configuration.md#outbound-registry-credentials
   - docs/architecture/cloud-backends.md#service-mapping
   - docs/architecture/access-model.md#credential-strategies-per-mount
-pr: null
+pr: 292
 ---
 
 # S20 — AWS composition root + config wiring (**launch-ready**)

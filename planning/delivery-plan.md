@@ -81,17 +81,21 @@ Per-slice files are deliberate: parallel agents (and their status updates) touch
 - Pulled in early: **S16** (the `CredentialProvider` generic wrapper + static leaf,
   M4) and **S31** (SLSA provenance + SBOM attestation, M8).
 
-**Merged onto the skeleton — M3 closed and M4 / M5 / M6 partially landed:**
+**Merged onto the skeleton — M3 + M4 closed and M5 / M6 partially landed:**
 
 - **M3 (complete)** — the tarball path + demand-driven mirror enqueue (S15): the
   bounded-memory artifact stream and the enqueue-on-miss that hands a mirror request
   to the `MirrorQueue` double.
-- **M4 (partial)** — the AWS credential leaf (CodeArtifact `mintToken`, S17) and the
-  SQS `MirrorQueue` backend (S18), each behind its handle; plus egress / SSRF
-  hardening — per-context resolved-IP recheck on the untrusted public / artifact
-  path, a disallow-by-default `dist.tarball`-host policy, and behaviour-level metadata
-  protection (S40), plus the mirror worker (S19) — fetch → verify → publish → ack.
-  _Remaining for launch-ready: the AWS composition root (S20)._
+- **M4 (complete — AWS launch-ready)** — the AWS credential leaf (CodeArtifact
+  `mintToken`, S17) and the SQS `MirrorQueue` backend (S18), each behind its handle;
+  egress / SSRF hardening — per-context resolved-IP recheck on the untrusted public /
+  artifact path, a disallow-by-default `dist.tarball`-host policy, and behaviour-level
+  metadata protection (S40); the mirror worker (S19) — fetch → verify → publish → ack;
+  and the **AWS composition root (S20,
+  [#292](https://github.com/AlexaDeWit/Ecluse/pull/292))** that ties the backends into
+  the single config-driven composition root, making Écluse a deployable AWS-backed npm
+  proxy. _Off the launch critical path, still open under M4: the first-party publish
+  path (S52) and the `service` / `delegated-cache` read strategies (S44 / S45)._
 - **M5 (partial)** — the effectful rule tier: `Unavailable`, with per-source
   timeout / retry / circuit-breaker (S21). _Remaining: the CVE tier (S22 / S23)._
 - **M6 (partial)** — the OpenTelemetry substrate + telemetry config, off by default
@@ -108,12 +112,12 @@ Per-slice files are deliberate: parallel agents (and their status updates) touch
 > so a root mount is unrepresentable) and moved npm's `{"error": …}` body out of the
 > agnostic serve layer into the adapter renderer.
 
-**Remaining — what this plan still delivers:** the AWS composition root (S20) that
-closes **M4** to launch-ready (the mirror worker, S19, is merged); the non-default credential
-strategies (`service` / `delegated-cache`, S43–S45); the CVE tier (S22 / S23) on top
-of the merged effectful tier (**M5**); the tracing spans (S25) and metrics / log
-correlation (S26) on top of the merged OTel substrate (**M6**); the GCP backends
-(M7); the launch docs + release-hardening tail (M8); the capability manifest
+**Remaining — what this plan still delivers:** on top of the launch-ready AWS base
+(**M4**, closed by S20), the first-party publish path (S52) and the non-default
+credential strategies (`service` / `delegated-cache`, S43–S45); the CVE tier
+(S22 / S23) on top of the merged effectful tier (**M5**); the tracing spans (S25) and
+metrics / log correlation (S26) on top of the merged OTel substrate (**M6**); the GCP
+backends (M7); the launch docs + release-hardening tail (M8); the capability manifest
 (S34 / S35); and the informational benchmark track (M9).
 
 > **Base-hardening before S15.** The config / mount / credential / Reader-context
@@ -319,29 +323,31 @@ ordered. The live pointer to current work is [In flight](#in-flight)._
 ### Critical path to AWS launch
 
 `S02 → S01 → S12 → S13 → S14 → S15 → S20`, with `S06→S07→S08→S09`, `S07→S33`, and
-`S16→{S17,S18}→S19` feeding the join at S20. _Merged through **S19** — the tarball
-path (S15) and the full `S16→{S17,S18}→S19` worker feed are in; the live frontier is
-**S20** (the launch-ready composition join) — see [In flight](#in-flight)._
+`S16→{S17,S18}→S19` feeding the join at S20. _**Fully merged through S20**
+([#292](https://github.com/AlexaDeWit/Ecluse/pull/292)) — the AWS launch path is live
+end to end: the tarball path (S15), the `S16→{S17,S18}→S19` worker feed, and the
+composition join (S20) are all in. See [In flight](#in-flight) for what now leads._
 
 ---
 
 ## In flight
 
-_Nothing in flight — **between waves**. The previous wave is fully **merged**:
-**S19** (mirror worker, [#255](https://github.com/AlexaDeWit/Ecluse/pull/255)) and
-**S53** (the end-to-end testing ecosystem — the new non-gating `e2e` tier that boots
-the whole system through the real composition root and drives it with the real `npm`
-CLI, [#276](https://github.com/AlexaDeWit/Ecluse/pull/276), built on `runServices`
-ahead of S20), on top of the S15 → S40 wave — the tarball path (S15), the
-CodeArtifact credential leaf (S17), the SQS `MirrorQueue` (S18), the effectful rule
-tier (S21), the OTel substrate (S24), and egress / SSRF hardening (S40) — closing M3
-and landing M4 / M5 / M6 partially; see
+_**M4 is closed — the AWS launch path is live.** S20 (AWS composition root + SQS
+mirror-queue wiring, [#292](https://github.com/AlexaDeWit/Ecluse/pull/292)) merged on
+2026-06-26, tying the AWS backends into the single config-driven composition root. With
+the tarball path (S15), the `S16→{S17,S18}→S19` worker feed, the effectful rule tier
+(S21), the OTel substrate (S24), and egress / SSRF hardening (S40) already in — and the
+non-gating `e2e` tier (S53, [#276](https://github.com/AlexaDeWit/Ecluse/pull/276))
+booting the whole system through the real composition root — the core product now works
+on AWS end to end; see
 [Current state](#current-state-the-baseline-this-plan-builds-on)._
 
-_The critical path to AWS launch now resumes at **S20** (the launch-ready AWS
-composition), with **S25 / S26** (telemetry spans + metrics) layering onto the merged
-S24 substrate. The [inter-wave quality & alignment pass](orchestration-strategy.md#inter-wave-quality--alignment-pass)
-continues to clear the issue tracker and carried tech-debt alongside._
+_**In flight — M6 observability:** S25 (WAI/http-client + domain spans,
+[#293](https://github.com/AlexaDeWit/Ecluse/pull/293), draft) and S26 PR2 (the
+`ecluse.*` metric catalogue + bounded-label guard, stacked on the merged substrate-config
+PR1, [#296](https://github.com/AlexaDeWit/Ecluse/pull/296)) layer onto the S24 substrate.
+The [inter-wave quality & alignment pass](orchestration-strategy.md#inter-wave-quality--alignment-pass)
+runs alongside, clearing the documentation-steward backlog and carried tech-debt._
 
 ---
 
