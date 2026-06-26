@@ -134,14 +134,15 @@ spec = do
             traverse_ (unsetEnv . fst) awsRunEnv
             outcome `shouldBe` Left BootAborted
 
-        it "boots under the in-memory mirror-queue backend (no AWS settings) and serves" $ do
-            -- The explicit memory backend needs no cloud queue: it boots from the base
-            -- env alone — no AWS_REGION or credentials — emitting its loud non-durable
-            -- boot warning and constructing the bounded in-memory queue. The idle
-            -- worker simply parks on the empty queue rather than hot-looping.
+        it "boots under the in-memory mirror-queue backend (no AWS settings, no MIRROR_QUEUE_URL) and serves" $ do
+            -- The explicit memory backend needs no cloud queue: it boots with no
+            -- AWS_REGION/credentials AND no MIRROR_QUEUE_URL — emitting its loud
+            -- non-durable boot warning and constructing the bounded in-memory queue. The
+            -- idle worker simply parks on the empty queue rather than hot-looping.
             unsetEnv "PROXY_CONFIG"
             unsetEnv "AWS_REGION"
-            traverse_ (uncurry setEnv) runEnv
+            unsetEnv "MIRROR_QUEUE_URL"
+            traverse_ (uncurry setEnv) (filter ((/= "MIRROR_QUEUE_URL") . fst) runEnv)
             setEnv "MIRROR_QUEUE_PROVIDER" "memory"
             outcome <- timeout 100000 run
             unsetEnv "MIRROR_QUEUE_PROVIDER"
@@ -158,6 +159,17 @@ spec = do
             traverse_ (uncurry setEnv) runEnv
             outcome <- try (timeout 100000 run) :: IO (Either BootAborted (Maybe ()))
             traverse_ (unsetEnv . fst) runEnv
+            outcome `shouldBe` Left BootAborted
+
+        it "aborts fast at boot when the sqs backend has no MIRROR_QUEUE_URL" $ do
+            -- MIRROR_QUEUE_URL is optional at the env layer but required for sqs;
+            -- absent, the composition root fails loud rather than building a queue with
+            -- no target.
+            unsetEnv "PROXY_CONFIG"
+            traverse_ (uncurry setEnv) awsRunEnv
+            unsetEnv "MIRROR_QUEUE_URL"
+            outcome <- try (timeout 100000 run) :: IO (Either BootAborted (Maybe ()))
+            traverse_ (unsetEnv . fst) awsRunEnv
             outcome `shouldBe` Left BootAborted
 
         it "aborts fast at boot when the gcp-artifact-registry credential provider is selected (not built)" $ do

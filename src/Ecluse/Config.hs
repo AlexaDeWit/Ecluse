@@ -312,8 +312,13 @@ data EnvConfig = EnvConfig
     -}
     , cfgQueueBackend :: QueueBackend
     -- ^ The mirror-queue backend (@MIRROR_QUEUE_PROVIDER@, default @sqs@).
-    , cfgQueueUrl :: Url
-    -- ^ The queue identifier for mirror jobs (@MIRROR_QUEUE_URL@, required).
+    , cfgQueueUrl :: Maybe Url
+    {- ^ The queue identifier for mirror jobs (@MIRROR_QUEUE_URL@). __Optional at the
+    env layer__; whether it is required depends on the selected backend, enforced at
+    provider resolution ('Ecluse.Composition.planMirrorQueue'): the @sqs@ \/ @pubsub@
+    backends require it (an absent one is a fail-loud boot error), while the @memory@
+    backend has no external queue and ignores it entirely.
+    -}
     , cfgQueueMemoryMaxDepth :: Int
     {- ^ The cap on the in-memory mirror queue's depth
     (@MIRROR_QUEUE_MEMORY_MAX_DEPTH@, default 50000), used only when
@@ -507,7 +512,10 @@ envParser =
         -- 'loadConfig', so only the private upstream is a hard-required endpoint.
         <*> optionalUrl "MIRROR_TARGET_URL"
         <*> Env.var queueBackendReader "MIRROR_QUEUE_PROVIDER" (Env.def SqsQueue)
-        <*> Env.var urlReader "MIRROR_QUEUE_URL" mempty
+        -- Optional at the env layer: the requiredness is provider-dependent and
+        -- enforced at provider resolution (planMirrorQueue) — required for the cloud
+        -- backends, ignored by the in-memory one (which has no external queue).
+        <*> optionalUrl "MIRROR_QUEUE_URL"
         -- The in-memory queue's cap. Strictly positive: a cap of zero would drop
         -- every job (the queue could never accept a write), a degenerate setting, so
         -- it is rejected loudly rather than silently disabling all mirroring.

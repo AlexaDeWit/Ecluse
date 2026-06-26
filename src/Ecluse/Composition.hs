@@ -79,6 +79,7 @@ import Ecluse.Config (
     MountRegistries (..),
     PolicyError,
     QueueBackend (..),
+    Url,
     loadConfig,
     renderCredentialBackend,
     renderMirrorCredentialProvider,
@@ -306,6 +307,11 @@ data BootError
       (@AWS_REGION@), so the queue cannot be scoped to a region.
       -}
       QueueRegionMissing
+    | {- | A cloud mirror-queue backend (e.g. @sqs@) was selected but no
+      @MIRROR_QUEUE_URL@ was supplied, so there is no queue to send jobs to. The
+      in-memory backend does not raise this — it has no external queue.
+      -}
+      QueueUrlMissing QueueBackend
     | {- | The configured SQS endpoint override (@AWS_ENDPOINT_URL_SQS@ \/
       @AWS_ENDPOINT_URL@) is not a parseable endpoint URL. Carries the offending value.
       -}
@@ -351,6 +357,10 @@ renderBootError = \case
         "mirror queue provider "
             <> renderQueueBackend SqsQueue
             <> " requires AWS_REGION to be set"
+    QueueUrlMissing backend ->
+        "mirror queue provider "
+            <> renderQueueBackend backend
+            <> " requires MIRROR_QUEUE_URL to be set"
     QueueEndpointMalformed url ->
         "the SQS endpoint override (AWS_ENDPOINT_URL_SQS / AWS_ENDPOINT_URL) is not a valid endpoint URL: " <> url
     MirrorCredentialProviderUnavailable backend ->
@@ -606,9 +616,12 @@ single-node, or air-gapped deployment, never an automatic fallback (which would
 soften the fail-loud-on-misconfig posture); the composition root emits the
 'memoryQueueBootWarning' on selection. The GCP @pubsub@ arm is recognised but not
 built, so it is a fail-loud 'QueueProviderUnavailable' boot error rather than a
-silent fall-through; a missing @AWS_REGION@ under @sqs@ is a 'QueueRegionMissing'
-boot error. Errors are returned as a list so they aggregate with the rest of the
-boot-time validation.
+silent fall-through. @MIRROR_QUEUE_URL@ is optional at the env layer; it is required
+__here__ for @sqs@ (the jobs need a queue), so a missing one is a fail-loud
+'QueueUrlMissing' boot error, and a missing @AWS_REGION@ under @sqs@ is a
+'QueueRegionMissing' boot error — the @sqs@ arm aggregates the region, queue-URL, and
+endpoint failures, and the whole result is a list so it aggregates with the rest of
+the boot-time validation.
 
 When an endpoint override is configured (@AWS_ENDPOINT_URL_SQS@, else
 @AWS_ENDPOINT_URL@ — the AWS-SDK-standard variables), it is parsed into the
@@ -620,12 +633,27 @@ uses AWS's default endpoint and credential resolution.
 planMirrorQueue :: EnvConfig -> Either [BootError] MirrorQueuePlan
 planMirrorQueue env = case cfgQueueBackend env of
     PubSubQueue -> Left [QueueProviderUnavailable PubSubQueue]
+    -- The in-memory backend needs no cloud queue: MIRROR_QUEUE_URL and AWS_REGION are
+    -- not consulted, so it can never fail on a missing one.
     MemoryQueue -> Right (MemoryBackend (defaultMemoryQueueConfig (cfgQueueMemoryMaxDepth env)))
-    SqsQueue -> case T.strip <$> cfgAwsRegion env of
-        Just region | not (T.null region) -> do
-            endpoint <- resolveSqsEndpoint env
-            Right (SqsBackend (defaultSqsConfig (unUrl (cfgQueueUrl env)) region){sqsEndpoint = endpoint})
-        _ -> Left [QueueRegionMissing]
+    SqsQueue -> case (regionE, urlE, resolveSqsEndpoint env) of
+        (Right region, Right url, Right endpoint) ->
+            Right (SqsBackend (defaultSqsConfig (unUrl url) region){sqsEndpoint = endpoint})
+        (_, _, endpointE) ->
+            -- Aggregate every SQS-resolution failure (missing region, missing queue
+            -- URL, malformed endpoint) so one boot reports them all at once.
+            Left (lefts [void regionE, void urlE] <> fromLeft [] endpointE)
+  where
+    -- AWS_REGION, required to scope the SQS queue; a blank value is treated as absent.
+    regionE :: Either BootError Text
+    regionE = case T.strip <$> cfgAwsRegion env of
+        Just region | not (T.null region) -> Right region
+        _ -> Left QueueRegionMissing
+
+    -- MIRROR_QUEUE_URL is optional at the env layer; it is required here for SQS (the
+    -- jobs need a queue to be sent to), an absent one being a fail-loud boot error.
+    urlE :: Either BootError Url
+    urlE = maybe (Left (QueueUrlMissing SqsQueue)) Right (cfgQueueUrl env)
 
 {- | The loud boot warning a 'MirrorQueuePlan' warrants before its queue is built, or
 'Nothing' for a durable backend that needs none. The composition root logs the

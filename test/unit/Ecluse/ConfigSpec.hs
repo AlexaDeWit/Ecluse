@@ -189,7 +189,7 @@ envLayerSpec = describe "parseEnvPure" $ do
                 unUrl (cfgPublicUpstream cfg) `shouldBe` "https://public.example.test"
                 fmap unUrl (cfgMirrorTarget cfg) `shouldBe` Just "https://mirror.example.test"
                 cfgQueueBackend cfg `shouldBe` PubSubQueue
-                unUrl (cfgQueueUrl cfg) `shouldBe` "projects/p/topics/t"
+                fmap unUrl (cfgQueueUrl cfg) `shouldBe` Just "projects/p/topics/t"
                 cfgQueueMemoryMaxDepth cfg `shouldBe` 777
                 cfgAwsRegion cfg `shouldBe` Just "eu-west-1"
                 cfgGoogleProject cfg `shouldBe` Nothing
@@ -250,12 +250,18 @@ envLayerSpec = describe "parseEnvPure" $ do
         failedNames (parseEnvPure (without "PRIVATE_UPSTREAM_URL" minimalEnv))
             `shouldBe` ["PRIVATE_UPSTREAM_URL"]
 
-    it "aggregates every missing required variable in one run (not fail-fast)" $
-        -- The whole point of the env layer: the required-but-absent variables surface
-        -- at once, so an operator fixes them in a single pass. MIRROR_TARGET_URL is no
-        -- longer required — it folds onto the private upstream when unset.
-        failedNames (parseEnvPure [])
-            `shouldMatchList` ["PRIVATE_UPSTREAM_URL", "MIRROR_QUEUE_URL"]
+    it "reports the one hard-required variable (PRIVATE_UPSTREAM_URL) when nothing is set" $
+        -- PRIVATE_UPSTREAM_URL is the single env-layer-required variable. MIRROR_TARGET_URL
+        -- folds onto it when unset, and MIRROR_QUEUE_URL is now provider-conditional
+        -- (required for sqs at planMirrorQueue, ignored by memory), so neither is
+        -- required at the env layer. (Aggregation across multiple failures is covered by
+        -- the malformed-values test below.)
+        failedNames (parseEnvPure []) `shouldBe` ["PRIVATE_UPSTREAM_URL"]
+
+    it "leaves the mirror-queue URL unset (provider-conditional) when MIRROR_QUEUE_URL is absent" $
+        case parseEnvPure (without "MIRROR_QUEUE_URL" minimalEnv) of
+            Left errs -> expectationFailure ("unexpected errors: " <> show errs)
+            Right cfg -> cfgQueueUrl cfg `shouldBe` Nothing
 
     it "leaves the mirror target unset (to fold onto the private upstream) when MIRROR_TARGET_URL is absent" $
         case parseEnvPure (without "MIRROR_TARGET_URL" minimalEnv) of
@@ -296,18 +302,19 @@ envLayerSpec = describe "parseEnvPure" $ do
             `shouldBe` ["MIRROR_QUEUE_MEMORY_MAX_DEPTH"]
 
     it "aggregates malformed values alongside missing ones" $
-        -- A non-integer port and an unknown queue provider both fail, together
-        -- with the still-missing required URLs — every problem in one report.
+        -- A non-integer port and an unknown queue provider both fail, together with
+        -- the still-missing required PRIVATE_UPSTREAM_URL — every problem in one report.
+        -- MIRROR_QUEUE_URL is absent here but no longer an env-layer failure (it is
+        -- provider-conditional), so it is not among the reported names.
         failedNames
             ( parseEnvPure
                 [ ("PROXY_PORT", "not-a-number")
                 , ("MIRROR_QUEUE_PROVIDER", "kafka")
-                , ("PRIVATE_UPSTREAM_URL", "https://private.example.test")
                 ]
             )
             `shouldMatchList` [ "PROXY_PORT"
                               , "MIRROR_QUEUE_PROVIDER"
-                              , "MIRROR_QUEUE_URL"
+                              , "PRIVATE_UPSTREAM_URL"
                               ]
 
     it "rejects an empty required URL rather than accepting a blank" $
@@ -385,11 +392,12 @@ envLayerSpec = describe "parseEnvPure" $ do
                 Right cfg -> cfgRespectUpstreamTarballHost cfg `shouldBe` expected
 
     it "renders every aggregated error in the failure block" $ do
-        -- The rendered block names each offending variable, so a launch failure
-        -- is actionable from the logs alone.
-        let rendered = either renderEnvErrors (const "") (parseEnvPure [])
+        -- The rendered block names each offending variable, so a launch failure is
+        -- actionable from the logs alone. Two failures at once — a malformed port and
+        -- the missing required upstream — both appear.
+        let rendered = either renderEnvErrors (const "") (parseEnvPure [("PROXY_PORT", "not-a-number")])
         rendered `shouldSatisfy` ("PRIVATE_UPSTREAM_URL" `isInfix`)
-        rendered `shouldSatisfy` ("MIRROR_QUEUE_URL" `isInfix`)
+        rendered `shouldSatisfy` ("PROXY_PORT" `isInfix`)
 
     it "renders each error kind (unset, empty, unread) with its own phrasing" $ do
         -- The renderer maps every envparse Error constructor to a distinct line,

@@ -94,6 +94,11 @@ noTokenEnvVars = filter ((/= "MIRROR_TARGET_TOKEN") . fst) staticEnvVars
 withoutMirrorTargetUrl :: [(String, String)] -> [(String, String)]
 withoutMirrorTargetUrl = filter ((/= "MIRROR_TARGET_URL") . fst)
 
+-- Drop the MIRROR_QUEUE_URL entry, so a test can exercise a backend with no queue URL
+-- set (memory needs none; sqs fails loud without one).
+withoutQueueUrl :: [(String, String)] -> [(String, String)]
+withoutQueueUrl = filter ((/= "MIRROR_QUEUE_URL") . fst)
+
 expectEnv :: [(String, String)] -> IO EnvConfig
 expectEnv = either (\errs -> fail ("env parse failed: " <> show errs)) pure . parseEnvPure
 
@@ -210,16 +215,32 @@ mirrorQueueSpec = describe "planMirrorQueue" $ do
         env <- expectEnv (("AWS_REGION", "   ") : staticEnvVars)
         planMirrorQueue env `shouldBe` Left [QueueRegionMissing]
 
+    it "fails fast when the SQS backend has no MIRROR_QUEUE_URL" $ do
+        -- MIRROR_QUEUE_URL is optional at the env layer but required for sqs here: the
+        -- jobs need a queue to be sent to, so an absent one is a fail-loud boot error.
+        env <- expectEnv (("AWS_REGION", "us-east-1") : withoutQueueUrl staticEnvVars)
+        planMirrorQueue env `shouldBe` Left [QueueUrlMissing SqsQueue]
+
+    it "aggregates a missing region and a missing queue URL under sqs in one report" $ do
+        env <- expectEnv (withoutQueueUrl staticEnvVars)
+        planMirrorQueue env `shouldBe` Left [QueueRegionMissing, QueueUrlMissing SqsQueue]
+
     it "refuses the GCP pubsub backend as not built in this binary (no silent fallback)" $ do
         -- The pubsub arm is recognised by config (S03) but has no backend compiled in;
         -- it must route to a clear "not built" error, never quietly to a different queue.
         env <- expectEnv (("MIRROR_QUEUE_PROVIDER", "pubsub") : ("AWS_REGION", "us-east-1") : staticEnvVars)
         planMirrorQueue env `shouldBe` Left [QueueProviderUnavailable PubSubQueue]
 
-    it "selects the bounded in-memory backend with the configured cap (no AWS settings needed)" $ do
+    it "selects the bounded in-memory backend with the configured cap (no AWS_REGION or MIRROR_QUEUE_URL needed)" $ do
         -- The memory backend is an explicit operator choice that needs no cloud queue:
-        -- it carries only its depth cap, and AWS_REGION is irrelevant to it.
-        env <- expectEnv (("MIRROR_QUEUE_PROVIDER", "memory") : ("MIRROR_QUEUE_MEMORY_MAX_DEPTH", "1234") : staticEnvVars)
+        -- it carries only its depth cap, and neither AWS_REGION nor MIRROR_QUEUE_URL is
+        -- consulted, so it resolves cleanly with both absent.
+        env <-
+            expectEnv
+                ( ("MIRROR_QUEUE_PROVIDER", "memory")
+                    : ("MIRROR_QUEUE_MEMORY_MAX_DEPTH", "1234")
+                    : withoutQueueUrl staticEnvVars
+                )
         planMirrorQueue env `shouldBe` Right (MemoryBackend (defaultMemoryQueueConfig 1234))
 
     it "defaults the in-memory backend's cap when MIRROR_QUEUE_MEMORY_MAX_DEPTH is unset" $ do
@@ -607,6 +628,7 @@ renderSpec = describe "renderBootError" $
             `shouldSatisfy` infixed "not initialized"
         renderBootError (QueueProviderUnavailable PubSubQueue) `shouldSatisfy` infixed "not available"
         renderBootError QueueRegionMissing `shouldSatisfy` infixed "AWS_REGION"
+        renderBootError (QueueUrlMissing SqsQueue) `shouldSatisfy` infixed "MIRROR_QUEUE_URL"
         renderBootError (QueueEndpointMalformed "x") `shouldSatisfy` infixed "endpoint"
         renderBootError (MirrorCredentialProviderUnavailable AdcCredential)
             `shouldSatisfy` infixed "gcp-artifact-registry"
