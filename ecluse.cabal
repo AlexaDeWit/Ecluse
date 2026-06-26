@@ -102,6 +102,7 @@ library
     Ecluse.Server.Route
     Ecluse.Server.Stream
     Ecluse.Telemetry
+    Ecluse.Telemetry.Resolve
     Ecluse.Version
     Ecluse.Worker
 
@@ -129,6 +130,7 @@ library
     , http-client                     ^>=0.7
     , http-client-tls                 ^>=0.3.6
     , http-types                      ^>=0.12
+    , hs-opentelemetry-api            ^>=1.0
     , hs-opentelemetry-exporter-otlp  ^>=1.0
     , hs-opentelemetry-sdk            ^>=1.0
     , iproute                         ^>=1.7
@@ -199,6 +201,7 @@ test-suite ecluse-unit
     Ecluse.Server.ResponseSpec
     Ecluse.Server.RouteSpec
     Ecluse.Server.StreamSpec
+    Ecluse.Telemetry.ResolveSpec
     Ecluse.TelemetrySpec
     Ecluse.VersionOrderingSpec
     Ecluse.VersionSpec

@@ -120,9 +120,14 @@ domain signals. The catalogue:
   `ecluse.credential.token.ttl.seconds` (gauge) ← alarms a stuck refresh.
 - **Runtime** — the GHC runtime-metrics instrumentation (GC pauses, heap).
 
-**Transport.** Metrics export over **OTLP** (the same pipeline as traces) by
-default; the built-in **Prometheus scrape** endpoint is config-selectable
-(`OTEL_METRICS_EXPORTER=prometheus`) for pull-based stacks.
+**Transport.** Metrics export over **OTLP push** (the same pipeline as traces) to a
+node-local collector or the **Datadog Agent's OTLP receiver**, which auto-maps OTLP
+to the backend's metric format — the launch transport. A Prometheus **scrape**
+endpoint (`OTEL_METRICS_EXPORTER=prometheus`) is a **deferred** pull alternative
+([#288](https://github.com/AlexaDeWit/Ecluse/issues/288)): the SDK honours the
+selection but the pinned OpenTelemetry set ships no scrape-endpoint renderer, so the
+endpoint itself is not yet wired. DogStatsD is intentionally not used (no maintained
+GHC 9.10 client).
 
 ### Cardinality and attributes
 
@@ -231,16 +236,46 @@ Telemetry uses the **standard `OTEL_*` variables** (read directly by
 [Configuration](configuration.md). With `PROXY_TELEMETRY` unset nothing is wired
 and no telemetry is emitted.
 
+**Self-aligning configuration.** An operator may describe the telemetry identity in
+either dialect: a Datadog shop sets the `DD_*` variables, a vanilla OpenTelemetry
+shop sets the `OTEL_*` ones. A small **bounded resolver** collapses both into one
+answer over exactly four fields — `service.name`, `deployment.environment`,
+`service.version`, and the OTLP endpoint — each resolved **Datadog-value-wins →
+vanilla OpenTelemetry → default** (e.g. `DD_SERVICE` → `OTEL_SERVICE_NAME` →
+`service.name` in `OTEL_RESOURCE_ATTRIBUTES` → `ecluse`; `DD_AGENT_HOST` →
+`OTEL_EXPORTER_OTLP_ENDPOINT` → `http://localhost:4318`). The one resolved identity
+feeds **both** the SDK (projected back to the canonical `OTEL_*` the env-driven SDK
+reads) **and** the `dd` log object, so logs and traces share one identity whichever
+dialect was used. `DD_API_KEY`/`DD_SITE` are **never read** — Écluse exports to a
+node-local collector/Agent, never agentless to a vendor's cloud.
+
+**The OTLP endpoint is an operator-declared destination, not classified.** Like the
+mirror-queue endpoint, the collector/Agent address is configuration the operator
+chooses — not attacker-influenced input — so Écluse does **not** range-check or gate
+it. (The internal-range/SSRF classifier guards the *untrusted package-download* path,
+where the target is upstream-supplied; the telemetry endpoint is neither.) The only
+real footgun — agentless export to a vendor's SaaS — is already excluded structurally:
+`DD_API_KEY`/`DD_SITE` are never read, so there is no path to off-cluster auto-egress;
+the endpoint is always explicitly declared. Deliberate remote export is just a declared
+endpoint, authenticated out of band via `OTEL_EXPORTER_OTLP_HEADERS`.
+
+**Export failures never touch the request path.** The SDK's batch exporter runs
+asynchronously, so an unreachable collector never blocks a served request. An absent
+endpoint defaults to `http://localhost:4318` with one boot warning (not a hard fail),
+and the SDK's own export-error diagnostics are routed through `katip` under a throttle
+— the first failure logged plainly, then a periodic heartbeat carrying the suppressed
+count — rather than a per-flush stderr flood.
+
 | Variable | Purpose |
 |---|---|
 | `PROXY_TELEMETRY` | Master switch (`off` by default — telemetry is opt-in). |
-| `OTEL_SERVICE_NAME` | Service identity (`ecluse`); also `dd.service`. |
-| `OTEL_RESOURCE_ATTRIBUTES` | `deployment.environment`, `service.version`, … (feed `dd.env`/`dd.version`). |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | Any OTLP receiver — a Collector, Jaeger, the Datadog Agent (`http://$(HOST_IP):4318`). |
-| `OTEL_EXPORTER_OTLP_PROTOCOL` | `http/protobuf` (default; avoids the gRPC/`grapesy` flag). |
+| `OTEL_SERVICE_NAME` / `DD_SERVICE` | Service identity (`ecluse`); also `dd.service`. `DD_SERVICE` wins. |
+| `OTEL_RESOURCE_ATTRIBUTES` / `DD_ENV` / `DD_VERSION` | `deployment.environment`, `service.version` (feed `dd.env`/`dd.version`). `DD_*` win. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` / `DD_AGENT_HOST` | OTLP receiver — a Collector or the Datadog Agent (`http://$(HOST_IP):4318`). `DD_AGENT_HOST` wins (as `:4318`). |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` | `http/protobuf` (the only transport built; gRPC/`grapesy` flag is off). |
 | `OTEL_TRACES_SAMPLER` / `…_ARG` | SDK sampler — default always-on; ratio lever for non-Datadog backends. |
-| `OTEL_METRICS_EXPORTER` | `otlp` (default) or `prometheus` (scrape). |
-| `OTEL_EXPORTER_PROMETHEUS_HOST` / `…_PORT` | Bind address for the Prometheus scrape endpoint, when selected. |
+| `OTEL_EXPORTER_OTLP_HEADERS` | Out-of-band auth for a remote collector/Agent (read by the SDK, never by Écluse). |
+| `OTEL_METRICS_EXPORTER` | `otlp` (default). `prometheus` is recognised but the scrape endpoint is **deferred** (#288). |
 | `PROXY_LOG_FORMAT` | `json` (one-line JSONL to stdout, default) or `console` (human-readable, dev). |
 
 ## Verifying it — smoke-test plan
