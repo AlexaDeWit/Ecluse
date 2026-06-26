@@ -18,8 +18,8 @@ model is deliberately ecosystem-agnostic so that PyPI and RubyGems can follow.
 
 == How a request is cleared
 
-Écluse speaks a registry's native protocol across three registries — the
-client's, a /private upstream/ of already-vetted packages, and the /public/
+Écluse speaks a registry's native protocol across three read-path registries —
+the client's, a /private upstream/ of already-vetted packages, and the /public/
 registry — and the two request shapes use them differently:
 
 * A __tarball__ request is gated for that one version: a private-upstream hit is

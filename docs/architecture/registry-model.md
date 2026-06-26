@@ -276,7 +276,9 @@ so losslessness survives the whole pipeline.
 ### Registry-level composition (optional, never required)
 
 The merge is an **Écluse-level capability**, so a correct deployment needs nothing
-more than the three endpoints above. Some operators will *additionally* compose at
+more than the three endpoints above (private upstream, public upstream, and mirror
+target — the fourth role, the publication target, is only for first-party publishing).
+Some operators will *additionally* compose at
 the **registry** level — e.g. AWS CodeArtifact upstream relationships, where
 `PRIVATE_UPSTREAM_URL` points at an aggregating repository that itself draws from a
 mirror-target repo and a first-party "published-by-us" repo. The private upstream
