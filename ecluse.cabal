@@ -281,6 +281,7 @@ test-suite ecluse-integration
     Ecluse.Security.EgressOriginSpec
     Ecluse.Server.GracefulShutdownSpec
     Ecluse.Server.TarballHostSpec
+    Ecluse.TelemetryMetricsSpec
     Ecluse.TelemetryTracingSpec
     Ecluse.WorkerSpec
 

@@ -20,7 +20,7 @@ proven end to end in the integration tier; the id /format/ is covered by
 spec :: Spec
 spec = describe "Ecluse.Telemetry.Correlation" $ do
     it "projects a resolved telemetry identity to a span-less dd context" $
-        ddIdentity identity `shouldBe` DdContext "ecluse" (Just "prod") (Just "1.4.2") Nothing
+        ddIdentity fullIdentity `shouldBe` DdContext "ecluse" (Just "prod") (Just "1.4.2") Nothing
 
     it "carries no env/version when the resolution left them unset" $
         ddIdentity bareIdentity `shouldBe` DdContext "ecluse" Nothing Nothing Nothing
@@ -30,12 +30,12 @@ spec = describe "Ecluse.Telemetry.Correlation" $ do
         active `shouldBe` Nothing
 
     it "fills no span ids onto the identity when none is active" $ do
-        ctx <- ddContextNow (ddIdentity identity)
+        ctx <- ddContextNow (ddIdentity fullIdentity)
         ctx `shouldBe` DdContext "ecluse" (Just "prod") (Just "1.4.2") Nothing
 
 -- A fully-populated resolved identity (service, env, version).
-identity :: ResolvedTelemetry
-identity =
+fullIdentity :: ResolvedTelemetry
+fullIdentity =
     ResolvedTelemetry
         { rtServiceName = "ecluse"
         , rtEnvironment = Just "prod"
@@ -46,4 +46,4 @@ identity =
 -- An identity with the optional environment/version unset, as a vanilla deployment
 -- that named neither leaves them.
 bareIdentity :: ResolvedTelemetry
-bareIdentity = identity{rtEnvironment = Nothing, rtVersion = Nothing}
+bareIdentity = fullIdentity{rtEnvironment = Nothing, rtVersion = Nothing}

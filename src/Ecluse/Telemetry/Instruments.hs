@@ -228,8 +228,9 @@ recordUpstreamFetch :: (MonadIO m) => Metrics -> Upstream -> StatusClass -> Doub
 recordUpstreamFetch m upstream statusClass seconds =
     record (mUpstreamFetchDuration m) seconds [LUpstream upstream, LStatusClass statusClass]
 
--- | Record one upstream metadata-fetch error (@ecluse.upstream.fetch.errors@) by
--- which upstream and the bounded cause.
+{- | Record one upstream metadata-fetch error (@ecluse.upstream.fetch.errors@) by
+which upstream and the bounded cause.
+-}
 recordUpstreamFetchError :: (MonadIO m) => Metrics -> Upstream -> Cause -> m ()
 recordUpstreamFetchError m upstream cause =
     addOne (mUpstreamFetchErrors m) [LUpstream upstream, LCause cause]

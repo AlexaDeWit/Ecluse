@@ -2,7 +2,6 @@ module Ecluse.Telemetry.InstrumentsSpec (spec) where
 
 import Test.Hspec
 
-import Ecluse.Ecosystem (Ecosystem (Npm))
 import Ecluse.Telemetry (telemetryDisabled)
 import Ecluse.Telemetry.Instruments (
     newMetrics,
@@ -32,7 +31,7 @@ import Ecluse.Telemetry.Metrics (
     Decision (Admit, Deny, Unavailable),
     MirrorResult (AlreadyExists, Failed, Published),
     Provider (Adc, CodeArtifact, Static),
-    ReasonClass (ReasonMissingIntegrity, ReasonPolicy, ReasonUnavailable),
+    ReasonClass (ReasonMissingIntegrity, ReasonPolicy),
     StatusClass (Status2xx, Status5xx),
     Tier (Effectful, Structural),
     Upstream (Private, Public),
@@ -79,8 +78,6 @@ spec = describe "Ecluse.Telemetry.Instruments (inert when telemetry is off)" $ d
         recordCredentialRefresh m Static RefreshFailed
         recordCredentialRefresh m Adc Refreshed
         recordCredentialTokenTtl m CodeArtifact 3600
-        -- A label value that need not be a serve label still records cleanly.
-        recordCacheEntries m (fromEnum Npm)
         pure () :: Expectation
 
     it "times an action on the monotonic clock, never returning a negative duration" $ do
