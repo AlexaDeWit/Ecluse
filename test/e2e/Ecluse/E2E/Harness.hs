@@ -385,10 +385,10 @@ telemetryExportTuning =
 
 {- | Proxy environment for the vanilla-OpenTelemetry dialect: telemetry __on__, the OTLP
 endpoint named by @OTEL_EXPORTER_OTLP_ENDPOINT@. Paired with @ecCollector = True@ the
-collector is up and receives (the #324 healthy-publication path); paired with
+collector is up and receives (the healthy-publication path); paired with
 @ecCollector = False@ the named endpoint resolves to nothing, exercising the
-missing-collector graceful-degradation path (#325b) — the same proxy configuration, only
-the collector's presence differs.
+missing-collector graceful-degradation path — the same proxy configuration, only the
+collector's presence differs.
 -}
 otlpCollectorEnv :: [(Text, Text)]
 otlpCollectorEnv =
@@ -397,7 +397,7 @@ otlpCollectorEnv =
     ]
         <> telemetryExportTuning
 
-{- | The Datadog unified-service-tag identity the #323 scenario configures __and__
+{- | The Datadog unified-service-tag identity the Datadog scenario configures __and__
 asserts on — exported as resource attributes and stamped onto the @dd@ log object. Named
 constants so the proxy environment and the assertions cannot drift apart.
 -}
@@ -406,8 +406,8 @@ ddTagService = "ecluse-e2e-dd"
 ddTagEnv = "e2e-staging"
 ddTagVersion = "9.9.9-e2e"
 
-{- | Proxy environment for the Datadog dialect (#323): @DD_SERVICE@\/@DD_ENV@\/@DD_VERSION@
-(the unified-service tags) plus @DD_AGENT_HOST@ pointing the self-aligning resolver at the
+{- | Proxy environment for the Datadog dialect: @DD_SERVICE@\/@DD_ENV@\/@DD_VERSION@ (the
+unified-service tags) plus @DD_AGENT_HOST@ pointing the self-aligning resolver at the
 collector. The resolver projects these onto @service.name@\/@deployment.environment@\/
 @service.version@ resource attributes and the @dd@ log object. Pair with @ecCollector = True@.
 -}
@@ -421,10 +421,13 @@ datadogCollectorEnv =
     ]
         <> telemetryExportTuning
 
--- A pinned OTLP Collector image, matching the integration tier; the core distribution
--- carries the OTLP receiver and the `debug` exporter the assertions read.
+-- The OTLP Collector image, version 0.119.0 (matching the integration tier), pinned by
+-- its multi-arch manifest-list digest like the ministack pin above: the scenarios assert
+-- on this image's exact `debug`-exporter output and its readiness line, so its surface
+-- must be immutable, not a movable tag. The core distribution carries the OTLP receiver
+-- and the `debug` exporter the assertions read.
 collectorImage :: String
-collectorImage = "otel/opentelemetry-collector:0.119.0"
+collectorImage = "otel/opentelemetry-collector@sha256:3805724e26351df55a45032a793c9b64a2117ac9a58f13f070674a9723fab373"
 
 {- The whole collector configuration as a single-line (flow-style) YAML document, passed
 through the @env:@ config provider so no shell, file, or bind mount is needed on the
@@ -443,7 +446,7 @@ collectorConfig =
 
 {- | The proxy container's combined stdout+stderr as docker has captured it so far — the
 JSONL stream the proxy writes (@PROXY_LOG_FORMAT=json@), so a test can assert the proxy
-logs at all (the #325 stdout\/stderr property) and inspect the @dd@ object on its lines.
+logs at all (the stdout\/stderr property) and inspect the @dd@ object on its lines.
 -}
 proxyContainerLogs :: E2E -> IO Text
 proxyContainerLogs = containerLogs . e2eProxyContainer

@@ -93,12 +93,12 @@ scenarios = do
             mirrored <- verdaccioHasVersion e2e (psName headPkg) (psVersion headPkg)
             mirrored `shouldBe` False
 
-{- | The whole-system telemetry scenarios (#323/#324/#325). Each gets its __own__
-freshly booted environment with the telemetry topology it needs — an OTLP collector and
-the proxy's telemetry dialect ('E2EConfig') — under its own 'around', still per-test
-isolated like 'scenarios'. The collector validation keys on the collector's @debug@
-exporter output (no Datadog SaaS); the stdout/log validation keys on the proxy
-container's own JSONL stream. See @planning\/slices\/S53-e2e-ecosystem.md@.
+{- | The whole-system telemetry scenarios. Each gets its __own__ freshly booted
+environment with the telemetry topology it needs — an OTLP collector and the proxy's
+telemetry dialect ('E2EConfig') — under its own 'around', still per-test isolated like
+'scenarios'. The collector validation keys on the collector's @debug@ exporter output (no
+Datadog SaaS); the stdout/log validation keys on the proxy container's own JSONL stream.
+See @planning\/slices\/S53-e2e-ecosystem.md@.
 -}
 telemetryScenarios :: Spec
 telemetryScenarios = do
@@ -127,25 +127,34 @@ telemetryScenarios = do
                 res <- npmInstall e2e (psName allowPkg)
                 npmExit res `shouldBe` ExitSuccess
                 -- It still writes structured JSONL to its stdout/stderr (docker captures
-                -- both); the worker's publish line is the asynchronous one we await.
+                -- both): await any log object (keyed on the `msg` field every katip JSONL
+                -- line carries) — the worker's async publish line reliably provides one.
                 logged <- awaitProxyLog e2e (T.isInfixOf "\"msg\":") 80
                 logged `shouldBe` True
 
-    -- #325(b) — OTLP on but the collector unreachable/absent: still boots, serves, and
-    -- logs; the missing collector is the Option-B graceful default (a throttled warning),
-    -- never a crash or a blocked request.
+    -- #325(b) — OTLP on but the collector unreachable/absent: the SAME proxy config as the
+    -- healthy #324 case, only the collector is never stood up (ecCollector = False), so its
+    -- network alias does not resolve. The proxy must still boot, serve, and log, and KEEP
+    -- serving: the SDK's batch exporter fails asynchronously off the request path and the
+    -- failure is swallowed by the library (it never reaches the request or the process), so
+    -- the absent collector can never take the proxy down. (hs-opentelemetry 1.0.0.0 drops a
+    -- failed export silently rather than routing it through the global error handler, so
+    -- there is deliberately no export-warning line to assert on — see the PR discussion.)
     describe "telemetry — OTLP on but the collector unreachable (#325)" $
         around (withE2EWith E2EConfig{ecCollector = False, ecExtraEnv = otlpCollectorEnv}) $
-            it "still starts, serves, and logs — the missing collector degrades to a warning, not a crash" $ \e2e -> do
-                res <- npmInstall e2e (psName allowPkg)
-                npmExit res `shouldBe` ExitSuccess
+            it "still starts, serves, and keeps serving — an absent collector degrades silently, no crash" $ \e2e -> do
+                firstInstall <- npmInstall e2e (psName allowPkg)
+                npmExit firstInstall `shouldBe` ExitSuccess
                 logged <- awaitProxyLog e2e (T.isInfixOf "\"msg\":") 80
                 logged `shouldBe` True
-                -- The unreachable endpoint surfaces through katip as a throttled export
-                -- warning (the SDK's batch exporter fails asynchronously, off the request
-                -- path) — proving the missing collector never took the proxy down.
-                warned <- awaitProxyLog e2e (T.isInfixOf "telemetry export") 80
-                warned `shouldBe` True
+                -- After the first install's spans/metrics have been exported-and-failed (the
+                -- worker's async publish, awaited above, is well past the 1s export window),
+                -- the proxy is still ready and still serves a fresh install — proving the
+                -- unreachable collector never took it down or blocked a request.
+                stillReady <- proxyStatus e2e "/readyz"
+                stillReady `shouldBe` 200
+                secondInstall <- npmInstall e2e (psName mirrorPkg)
+                npmExit secondInstall `shouldBe` ExitSuccess
 
     -- #323 — Datadog pattern: DD_SERVICE/DD_ENV/DD_VERSION (+ DD_AGENT_HOST) flow through
     -- the self-aligning resolver to Datadog unified-service-tag resource attributes on the
