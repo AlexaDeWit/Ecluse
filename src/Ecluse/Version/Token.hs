@@ -14,9 +14,10 @@ module Ecluse.Version.Token (
     VToken (..),
     parseNumSeg,
     numOr0,
+    isAsciiAlphaNum,
 ) where
 
-import Data.Char (isDigit)
+import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
 import Data.Text qualified as T
 
 {- | A version token: a numeric run or a textual run. Its 'Ord' is the RubyGems
@@ -42,3 +43,14 @@ parseNumSeg t
 -- | Read an all-digit (already validated) run as an integer, defaulting to 0.
 numOr0 :: Text -> Integer
 numOr0 t = if T.null t then 0 else fromMaybe 0 (readMaybe (toString t))
+
+{- | ASCII-only \"alphanumeric\" predicate: an ASCII letter or ASCII digit. Use
+this — not 'Data.Char.isAlphaNum', which is Unicode-aware — wherever the PEP 440
+and @Gem::Version@ grammars gate \"alphanumeric\" characters: Python's
+@packaging@ and Ruby's @Gem::Version@ are ASCII-only, so a Unicode-aware gate
+both over-accepts (fullwidth\/Arabic-Indic digits, @1.0+café@) and mis-orders
+(a Unicode \"digit\" that is not an ASCII digit gets classified as text).
+'Data.Char.isDigit' is already ASCII-only, so it is reused directly.
+-}
+isAsciiAlphaNum :: Char -> Bool
+isAsciiAlphaNum c = isAsciiUpper c || isAsciiLower c || isDigit c
