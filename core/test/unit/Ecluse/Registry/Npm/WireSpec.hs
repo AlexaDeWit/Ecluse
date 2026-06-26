@@ -29,7 +29,7 @@ import Test.Hspec.Hedgehog (hedgehog)
 import Ecluse.Core.Registry.Npm.Wire
 
 {- | Decoding tests for the npm wire types. Every fixture under
-@test\/unit\/fixtures\/npm\/@ is a body derived from the real captures documented
+@core\/test\/unit\/fixtures\/npm\/@ is a body derived from the real captures documented
 in @docs\/research\/reverse-engineering\/npm.md@ (§4 full packument, §5
 abbreviated, §6 manifest, §3 errors). The suite is pure and offline — it never
 touches the network; protocol drift is surfaced separately by the non-gating
@@ -625,13 +625,13 @@ genKey = Key.fromText <$> Gen.choice [Gen.element wireKeys, genJsonText]
 
 -- ── helpers ──────────────────────────────────────────────────────────────────
 
-{- | Decode a committed fixture by file name (under @test\/unit\/fixtures\/npm\/@,
+{- | Decode a committed fixture by file name (under @core\/test\/unit\/fixtures\/npm\/@,
 a path relative to the package root that Cabal runs tests from), failing the
 example with the aeson error on a decode failure.
 -}
 decodeFixture :: forall a. (FromJSON a) => FilePath -> IO a
 decodeFixture name = do
-    bytes <- readFileBS ("test/unit/fixtures/npm/" <> name)
+    bytes <- readFileBS ("core/test/unit/fixtures/npm/" <> name)
     case eitherDecodeStrict bytes of
         Right a -> pure a
         Left e -> fail ("failed to decode " <> name <> ": " <> e)

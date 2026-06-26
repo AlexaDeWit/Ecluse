@@ -36,9 +36,10 @@ outdir="coverage"
 # the merged total itself.
 if [ -z "${ECLUSE_COVERAGE_QUIET_PARTIAL:-}" ]; then
   case "$suite" in
-    ecluse-unit) other="ecluse-integration" ;;
-    ecluse-integration) other="ecluse-unit" ;;
-    *) other="the other gating tier" ;;
+    ecluse-core-unit) other="ecluse-unit and ecluse-integration" ;;
+    ecluse-unit) other="ecluse-core-unit and ecluse-integration" ;;
+    ecluse-integration) other="ecluse-core-unit and ecluse-unit" ;;
+    *) other="the other gating tiers" ;;
   esac
   {
     echo "coverage: PARTIAL VIEW — measuring '$suite' ONLY."
@@ -100,39 +101,56 @@ hpc-codecov "${mix_args[@]}" \
 # Completeness guard. HPC only emits a module that was linked into the suite's
 # .tix, so a library module the suite never imports is silently *absent* from the
 # report (not reported as 0%), which quietly inflates the percentage. Fail loudly
-# when a src/ module is missing, so a dropped module is caught here rather than
+# when a module is missing, so a dropped module is caught here rather than
 # hidden: the fix is a test that exercises it (so it links), or — for a module
-# with genuinely nothing to cover yet — an entry in `unscoped` below. See
-# CONTRIBUTING.md -> "Coverage".
+# with genuinely nothing to cover yet — an entry in the suite's `unscoped` list
+# below. See CONTRIBUTING.md -> "Coverage".
 #
-# This whole-library expectation holds only for the unit suite, the one tier meant
-# to link every module. A focused suite (e.g. ecluse-integration, which links only
-# the cloud-backed modules its emulator tests exercise) legitimately reports a
-# subset; its partial view is merged into the Codecov total under its own flag, so
-# the guard would only produce false positives there. Skip it for non-unit suites.
-if [ "$suite" != "ecluse-unit" ]; then
-  echo "coverage: wrote $out"
-  exit 0
-fi
+# This whole-library expectation holds only for the two unit suites, each meant to
+# link every module in its respective source tree:
+#   ecluse-core-unit → every core/src/*.hs module must be linked
+#   ecluse-unit      → every src/*.hs module must be linked
+# A focused suite (e.g. ecluse-integration, which links only the cloud-backed
+# modules its emulator tests exercise) legitimately reports a subset; its partial
+# view is merged into the Codecov total under its own flag, so the guard would only
+# produce false positives there. Skip it for non-unit suites.
+case "$suite" in
+  ecluse-core-unit)
+    src_dir="core/src"
+    src_prefix="./core/src/"
+    # Intentionally unscoped in ecluse-core-unit: pure types/handles with no
+    # executable logic yet. Each entry states why and when it returns, so this
+    # stays a reviewed decision and not a silent escape hatch.
+    unscoped=(
+      # pure re-export shim: the curated public surface only; implementation and
+      # coverage live in Ecluse.Core.Credential.Refresh.Internal.
+      ./core/src/Ecluse/Core/Credential/Refresh.hs
+      # pure protocol Handle (#16): the RegistryClient record + error newtypes, no
+      # logic. Remove when S06 (npm-wire) adds real fetch/parse code and tests that
+      # link it.
+      ./core/src/Ecluse/Core/Registry.hs
+    )
+    ;;
+  ecluse-unit)
+    src_dir="src"
+    src_prefix="./src/"
+    # Intentionally unscoped in ecluse-unit: pure types/handles with no executable
+    # logic yet. Each entry states why and when it returns, so this stays a reviewed
+    # decision and not a silent escape hatch. Paths use the ./src/... form the
+    # report emits.
+    unscoped=()
+    ;;
+  *)
+    echo "coverage: wrote $out"
+    exit 0
+    ;;
+esac
 
-# Intentionally unscoped: pure Handles/types with no executable logic yet. Each
-# entry states why and when it returns, so this stays a reviewed decision and not
-# a silent escape hatch. Paths use the ./src/... form the report emits.
-unscoped=(
-  # pure protocol Handle (#16): the RegistryClient record + error newtypes, no
-  # logic. Remove when S06 (npm-wire) adds real fetch/parse code and tests that
-  # link it.
-  ./src/Ecluse/Registry.hs
-  # pure re-export shim: the curated public surface only; implementation and
-  # coverage live in Ecluse.Credential.Refresh.Internal.
-  ./src/Ecluse/Credential/Refresh.hs
-)
-
-expected="$(find src -name '*.hs' | sed 's#^#./#' | sort)"
+expected="$(find "$src_dir" -name '*.hs' | sed 's#^#./#' | sort)"
 if [ ${#unscoped[@]} -gt 0 ]; then
   expected="$(comm -23 <(echo "$expected") <(printf '%s\n' "${unscoped[@]}" | sort))"
 fi
-present="$(grep -oE '"\./src/[^"]+\.hs"' "$out" | tr -d '"' | sort -u || true)"
+present="$(grep -oE "\"${src_prefix}[^\"]+"'\.hs"' "$out" | tr -d '"' | sort -u || true)"
 missing="$(comm -23 <(echo "$expected") <(echo "$present"))"
 if [ -n "$missing" ]; then
   {

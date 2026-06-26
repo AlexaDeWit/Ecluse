@@ -69,8 +69,8 @@ freeze: ## Regenerate cabal.project.freeze at the latest index-state
 build: ## Build library, executable, and all test suites
 	$(NIX) cabal build all --enable-tests
 
-test: ## Run the fast, gating unit suite
-	$(NIX) cabal test ecluse-unit --test-show-details=direct
+test: ## Run the fast, gating unit suites (core + app)
+	$(NIX) cabal test ecluse-core-unit ecluse-unit --test-show-details=direct
 
 test-integration: ## Run the integration suite (requires a Docker daemon)
 	$(NIX) cabal test ecluse-integration --test-show-details=direct
