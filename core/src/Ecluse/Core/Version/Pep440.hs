@@ -31,7 +31,7 @@ module Ecluse.Core.Version.Pep440 (
 import Data.Char (isDigit)
 import Data.Text qualified as T
 
-import Ecluse.Core.Version.Token (VToken (..), isAsciiAlphaNum, numOr0, parseNumSeg)
+import Ecluse.Core.Version.Token (VToken (..), isAsciiAlphaNum, maxVersionLength, numOr0, parseNumSeg)
 
 {- | A parsed PEP 440 version as its canonical ordering key:
 @(epoch, release, pre, post, dev, local)@. Release has trailing zeros stripped
@@ -61,6 +61,10 @@ PEP 440 version (e.g. no release, or unrecognised trailing text).
 -}
 parsePep440 :: Text -> Maybe Pep440Key
 parsePep440 raw = do
+    -- Bound the input length before any numeric parsing: a segment is read into an
+    -- 'Integer' with 'readMaybe', which is quadratic in the digit count, so an
+    -- unbounded run in hostile metadata would be an algorithmic-complexity DoS.
+    guard (T.length raw <= maxVersionLength)
     let lowered = T.toLower (T.strip raw)
         noV = fromMaybe lowered (T.stripPrefix "v" lowered)
         (mainPart, localRaw) = T.breakOn "+" noV

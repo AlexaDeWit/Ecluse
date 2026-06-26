@@ -22,7 +22,7 @@ module Ecluse.Core.Version.Gem (
 import Data.Char (isDigit)
 import Data.Text qualified as T
 
-import Ecluse.Core.Version.Token (VToken (..), isAsciiAlphaNum, numOr0)
+import Ecluse.Core.Version.Token (VToken (..), isAsciiAlphaNum, maxVersionLength, numOr0)
 
 {- | A parsed @Gem::Version@: a flat token list compared with zero-padding, with
 numeric tokens outranking textual ones (see 'VToken').
@@ -48,6 +48,10 @@ non-alphanumeric segments.
 -}
 parseGem :: Text -> Maybe GemKey
 parseGem raw = do
+    -- Bound the input length before any numeric parsing: a digit run is read into an
+    -- 'Integer' with 'readMaybe', which is quadratic in the digit count, so an
+    -- unbounded run in hostile metadata would be an algorithmic-complexity DoS.
+    guard (T.length raw <= maxVersionLength)
     let stripped = T.strip raw
         -- Gem::Version canonicalises hyphens to a prerelease marker via a global
         -- gsub("-", ".pre.") before segmenting, so e.g. "1.0.0-1" parses as the
