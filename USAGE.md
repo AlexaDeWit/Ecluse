@@ -67,7 +67,6 @@ operator reference. **Keep the two in sync** when either changes.
 | `PRIVATE_UPSTREAM_URL` | **Yes** | URL of the private upstream registry (the authority for reads under the default `passthrough` strategy). |
 | `PUBLIC_UPSTREAM_URL` | No (default `https://registry.npmjs.org`) | URL of the public upstream, queried anonymously and gated by the rules. |
 | `PROXY_PUBLIC_URL` | Recommended | The proxy's own externally-reachable base URL (e.g. `https://registry.example.com`), used to rewrite each served `dist.tarball` to an **absolute** URL clients fetch back through the proxy. **Unset, tarball URLs are path-relative, which the `npm` CLI cannot install from** — it reads a leading-slash `dist.tarball` as a local `file:` path — so set this for any deployment that serves real `npm install`s. |
-| `PUBLIC_UPSTREAM_TOKEN` | No | Écluse's own token for a public mirror that itself requires auth. Never the client's. |
 | `MIRROR_TARGET_URL` | No (default `PRIVATE_UPSTREAM_URL`) | Registry that approved packages are mirrored to. Unset ⇒ folds onto the private upstream (one registry, read and written). The write credential does **not** fold — set `MIRROR_TARGET_CREDENTIAL_PROVIDER`. |
 | `MIRROR_TARGET_CREDENTIAL_PROVIDER` | No (default `static`) | Mirror-target write credential: `static` (`MIRROR_TARGET_TOKEN`) or `codeartifact` (mints under the container/task role). `gcp-artifact-registry` is recognised but not yet built. |
 | `MIRROR_TARGET_TOKEN` | No | Static write token, when `MIRROR_TARGET_CREDENTIAL_PROVIDER=static` (the default). |
