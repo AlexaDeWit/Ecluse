@@ -44,6 +44,7 @@ module Ecluse.Security (
     isBlockedIP,
     hostOptedIn,
     hostAddress,
+    splitHostPort,
 
     -- * Tarball-host policy
     TarballHostPolicy (..),
@@ -292,14 +293,17 @@ and any @\/path@\/@?query@\/@#fragment@ tail, lower-casing the result. It is a
 pragmatic extractor for comparison, __not__ a full RFC 3986 parser; a value with
 no recognisable host yields the empty string, which both guards treat as
 not-allowed. IPv6 literals in brackets (@[::1]:443@) are returned without the
-brackets.
+brackets — the bracket-aware @host[:port]@ split is 'splitHostPort', shared with
+the SQS endpoint parser so the two cannot drift on an authority edge case; a
+malformed authority (an opening bracket with no close) yields the empty string,
+the same fail-safe the guards apply to it.
 -}
 hostAddress :: Text -> Text
 hostAddress raw =
     let afterScheme = afterLast "://" raw
         authority = T.takeWhile (`notElem` ['/', '?', '#']) afterScheme
         afterUserinfo = afterLast "@" authority
-     in T.toLower (stripPort afterUserinfo)
+     in T.toLower (maybe "" fst (splitHostPort afterUserinfo))
   where
     -- The text after @needle@'s last occurrence, or all of @hay@ if absent.
     -- ('T.breakOnEnd' yields @(hay, "")@ when the needle is absent — its prefix
@@ -309,12 +313,26 @@ hostAddress raw =
         let (pre, post) = T.breakOnEnd needle hay
          in if T.null pre then hay else post
 
-    -- Drop a ':port' suffix. A bracketed IPv6 literal keeps its colons: strip
-    -- the brackets and any trailing ':port', but never split on the inner ':'.
-    stripPort :: Text -> Text
-    stripPort h = case T.stripPrefix "[" h of
-        Just rest -> T.takeWhile (/= ']') rest
-        Nothing -> T.takeWhile (/= ':') h
+{- | Split a @host[:port]@ authority into its bare host and the raw @":port"@
+remainder (empty when no port is present), bracket-aware so an IPv6 literal's
+inner colons are never mistaken for the port separator.
+
+The single canonical authority split feeding both the data-plane host extractor
+('hostAddress') and the SQS endpoint parser ('Ecluse.Composition.parseEndpointUrl'),
+so the two re-implementations the @[::1]:port@ edge cases tripped on cannot drift
+again. A @[…]@ IPv6 literal is split on its closing bracket — the host is returned
+without the brackets and the remainder is whatever follows (a @":port"@ or empty) —
+so an inner @::@ is never read as the port separator; a bare authority is split on
+its first @':'@. An opening bracket with __no__ close is a malformed authority and
+yields 'Nothing', which 'hostAddress' folds to the empty (not-allowed) host and the
+endpoint parser surfaces as a malformed-URL boot error.
+-}
+splitHostPort :: Text -> Maybe (Text, Text)
+splitHostPort authority = case T.stripPrefix "[" authority of
+    Just rest -> case T.breakOn "]" rest of
+        (_, "") -> Nothing -- an opening bracket with no close: malformed
+        (inner, afterBracket) -> Just (inner, T.drop 1 afterBracket)
+    Nothing -> Just (T.breakOn ":" authority)
 
 {- Parse a host as an IP literal, or 'Nothing' for a DNS name. Handles dotted-
 quad IPv4 and the IPv6 forms a host realistically carries — full eight-group form,
