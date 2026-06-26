@@ -39,13 +39,14 @@ import Katip.Monadic (KatipContextT, runKatipContextT)
 import UnliftIO (MonadUnliftIO)
 
 import Ecluse.Credential (Secret)
-import Ecluse.Env (Env, envLogEnv)
+import Ecluse.Env (Env, envDdContext, envLogEnv)
 import Ecluse.Package.Integrity (MinIntegrity)
 import Ecluse.Rules.Effectful (PrecededEffectfulRule)
 import Ecluse.Rules.Types (PrecededRule)
 import Ecluse.Security (Limits, LoweredHostSet, TarballHostPolicy)
 import Ecluse.Server.Response (HelpMessage, MountRenderer)
 import Ecluse.Server.Route (Classifier)
+import Ecluse.Telemetry.Correlation (ddPayloadNow)
 
 -- ── packument-serve dependencies ──────────────────────────────────────────────
 
@@ -209,10 +210,13 @@ newtype Handler a = Handler
 yielding the underlying 'IO' action Warp's continuation runs in. This is the
 boundary where the serve path's 'Handler' code is discharged to 'IO'.
 
-The @katip@ context is initialised empty under the namespace the request's 'LogEnv'
-(read from 'ctxEnv') already carries; a handler narrows the namespace or adds
-package\/version\/rule context with @katip@'s combinators as it logs.
+The @katip@ context is initialised with the request's @dd@ object (the resolved
+service identity and, since the WAI server span is active by now, its trace\/span ids
+— see "Ecluse.Telemetry.Correlation"), so every line a handler emits carries @dd@ for
+trace-to-log correlation; a handler narrows the namespace or adds
+package\/version\/rule context with @katip@'s combinators on top as it logs.
 -}
 runHandler :: RequestCtx -> Handler a -> IO a
-runHandler ctx action =
-    runKatipContextT (envLogEnv (ctxEnv ctx)) () mempty (runReaderT (unHandler action) ctx)
+runHandler ctx action = do
+    dd <- ddPayloadNow (envDdContext (ctxEnv ctx))
+    runKatipContextT (envLogEnv (ctxEnv ctx)) dd mempty (runReaderT (unHandler action) ctx)

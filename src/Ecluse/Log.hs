@@ -17,10 +17,12 @@ JSON line is always valid JSON. The selected format is parsed from @PROXY_LOG_FO
 at the configuration boundary ("Ecluse.Config") and the resulting 'LogEnv' is held
 in the composition root ("Ecluse.Env").
 
-Trace-ID correlation (the @dd@ object that stitches a line to its span) is __not__
-added here; it layers on top of this stream once the tracing substrate exists.
-The scribe is kept additive precisely so that correlation can be attached without
-reworking the format.
+Trace-ID correlation rides this stream as the @dd@ object ('ddField'): @service@\/
+@env@\/@version@ from the resolved telemetry identity, plus the active span's
+@trace_id@\/@span_id@ in the id format Datadog expects ('formatDdTraceId'). The object
+is built here but stays free of any OpenTelemetry dependency — the active span is read
+and the ids rendered by "Ecluse.Telemetry.Correlation", which composes 'ddField' into a
+log site's payload.
 
 == Secrets
 
@@ -47,10 +49,20 @@ module Ecluse.Log (
     auditContext,
     moduleField,
 
+    -- * Datadog trace correlation
+    DdContext (..),
+    DdSpan (..),
+    ddField,
+    ddObject,
+    formatDdTraceId,
+    formatDdSpanId,
+
     -- * Rendering (for serialise-and-assert)
     renderLogLine,
 ) where
 
+import Data.Aeson (Value, object, (.=))
+import Data.ByteString qualified as BS
 import Data.Text.Lazy qualified as TL
 import Data.Text.Lazy.Builder qualified as TB
 import Katip (
@@ -188,6 +200,84 @@ opens its own context through the composition-root 'LogEnv').
 -}
 moduleField :: Text -> SimpleLogPayload
 moduleField = sl "module"
+
+-- ── Datadog trace correlation ──────────────────────────────────────────────────
+
+{- | The unified-service identity stamped onto every log line as the @dd@ object, plus
+the active span's ids when one is in scope. @service@\/@env@\/@version@ come from the
+same resolved telemetry identity as the traces ("Ecluse.Telemetry.Resolve"), so logs
+and traces share one identity; the trace\/span ids are present only when a span is
+active (filled by "Ecluse.Telemetry.Correlation" off the OpenTelemetry context).
+-}
+data DdContext = DdContext
+    { ddService :: Text
+    -- ^ @dd.service@ — the resolved service name.
+    , ddEnv :: Maybe Text
+    -- ^ @dd.env@ — the deployment environment, when configured.
+    , ddVersion :: Maybe Text
+    -- ^ @dd.version@ — the service version, when configured.
+    , ddSpan :: Maybe DdSpan
+    -- ^ The active span's correlation ids, when a span is in scope.
+    }
+    deriving stock (Eq, Show)
+
+{- | The active span's ids, __already in the id format Datadog expects__ (see
+'formatDdTraceId' \/ 'formatDdSpanId'). Held as rendered 'Text' so this type stays free
+of any OpenTelemetry dependency.
+-}
+data DdSpan = DdSpan
+    { ddTraceId :: Text
+    -- ^ @dd.trace_id@ — the trace id in Datadog form.
+    , ddSpanId :: Text
+    -- ^ @dd.span_id@ — the span id in Datadog form.
+    }
+    deriving stock (Eq, Show)
+
+{- | The @dd@ object as JSON: @service@ always, @env@\/@version@ when configured, and
+@trace_id@\/@span_id@ only when a span is active. This is the object a log collector's
+unified-service tagging and trace-to-log correlation read.
+-}
+ddObject :: DdContext -> Value
+ddObject ctx =
+    object $
+        catMaybes
+            [ Just ("service" .= ddService ctx)
+            , ("env" .=) <$> ddEnv ctx
+            , ("version" .=) <$> ddVersion ctx
+            , ("trace_id" .=) . ddTraceId <$> ddSpan ctx
+            , ("span_id" .=) . ddSpanId <$> ddSpan ctx
+            ]
+
+{- | The @dd@ object as a @katip@ structured payload, nested under the @dd@ key. Compose
+it into a log site's payload so the rendered JSON line carries
+@"dd":{"service":…,"trace_id":…}@ for trace-to-log correlation.
+-}
+ddField :: DdContext -> SimpleLogPayload
+ddField = sl "dd" . ddObject
+
+{- | Render a raw 16-byte trace id into the id format Datadog correlates on: the
+__unsigned decimal of the low 64 bits__. Datadog's log↔trace correlation matches
+@dd.trace_id@ as a decimal 64-bit value (the low half of an OpenTelemetry 128-bit id);
+the full-128-bit-hex form is a separate opt-in not used here. Reads the last eight bytes
+big-endian, so a shorter id is taken whole and a longer one is truncated to its low 64
+bits — never a partial-byte misread.
+-}
+formatDdTraceId :: ByteString -> Text
+formatDdTraceId = show . low64Bits
+
+{- | Render a raw 8-byte span id into the Datadog form: the __unsigned decimal__ of the
+64-bit id (read big-endian), matching @dd.span_id@.
+-}
+formatDdSpanId :: ByteString -> Text
+formatDdSpanId = show . low64Bits
+
+-- The unsigned 64-bit value of the last (up to) eight bytes, big-endian. Shared by the
+-- trace-id low-64 truncation and the span-id read so both decode identically.
+low64Bits :: ByteString -> Word64
+low64Bits = BS.foldl' (\acc byte -> acc * 256 + fromIntegral byte) 0 . lastBytes 8
+  where
+    lastBytes :: Int -> ByteString -> ByteString
+    lastBytes n bytes = BS.drop (max 0 (BS.length bytes - n)) bytes
 
 -- ── rendering ────────────────────────────────────────────────────────────────
 

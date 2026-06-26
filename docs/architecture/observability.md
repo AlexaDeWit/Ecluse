@@ -20,9 +20,18 @@ recipe, the Datadog trace propagator, the `dd.*` log fields, and the Agent-side
 sampling) are all clearly marked as optional add-ons on top of the neutral OTLP
 baseline.
 
-This is designed but not yet built — the web layer's middleware stack leaves a
-slot for it (see
-[Web Layer → Middleware](web-layer.md#middleware-and-helper-libraries)).
+This is **built**: the OpenTelemetry substrate and its self-aligning configuration
+(`Ecluse.Telemetry`, `Ecluse.Telemetry.Resolve`), the request-lifecycle tracing
+(`Ecluse.Telemetry.Tracing` — the WAI server span, the http-client data-plane spans,
+and the hand-added domain spans), the `ecluse.*` metric catalogue under its
+bounded-label discipline (`Ecluse.Telemetry.Metrics`) with the runtime instruments and
+their hot-path emits (`Ecluse.Telemetry.Instruments`), and the logs↔traces `dd`
+correlation (`Ecluse.Telemetry.Correlation` over the `dd` object in `Ecluse.Log`). It
+slots into the web layer's middleware stack (see
+[Web Layer → Middleware](web-layer.md#middleware-and-helper-libraries)). Everything
+stays **inert when `PROXY_TELEMETRY` is unset** — the SDK is not initialised, spans are
+not opened, and the metric instruments are built on the no-op meter so an emit is a
+discarded measurement, not a branch.
 
 ## OpenTelemetry as the substrate
 
@@ -115,10 +124,23 @@ domain signals. The catalogue:
   → hit rate; `ecluse.metadata_cache.entries` (gauge).
 - **Mirror** (what we know, not queue depth) — `ecluse.mirror.enqueued`,
   `ecluse.mirror.enqueue.failures`, `ecluse.mirror.jobs.processed`
-  (result published/already-exists/failed), `ecluse.mirror.publish.duration`.
+  (result published/failed — the idempotent already-present 409 counts as published),
+  `ecluse.mirror.publish.duration`.
 - **Credentials** — `ecluse.credential.refresh` (counter; result, provider);
   `ecluse.credential.token.ttl.seconds` (gauge) ← alarms a stuck refresh.
 - **Runtime** — the GHC runtime-metrics instrumentation (GC pauses, heap).
+
+`http.server.request.duration` is emitted by the **WAI instrumentation**
+(`Ecluse.Telemetry.Tracing`), not re-emitted by hand. The `ecluse.*` catalogue is the
+typed `MetricName` enumeration in `Ecluse.Telemetry.Metrics`; the live instruments and
+the one typed `record*` helper per signal live in `Ecluse.Telemetry.Instruments`, built
+once from the meter provider and recorded from the serve path
+(`Ecluse.Server.Pipeline`), the metadata cache (`Ecluse.Server.Cache`), and the mirror
+worker (`Ecluse.Worker`). Two catalogue signals are **defined but not yet wired**: the
+circuit-breaker state gauge and the credential refresh/ttl signals — the breaker and the
+refreshing credential provider are constructed before the telemetry substrate and sit
+off the composition root, so emitting them is a boot-sequencing follow-up. The
+**advisory-sync** metrics remain deferred with the CVE subsystem (S22).
 
 **Transport.** Metrics export over **OTLP push** (the same pipeline as traces) to a
 node-local collector or the **Datadog Agent's OTLP receiver**, which auto-maps OTLP
@@ -142,7 +164,14 @@ An inline proxy sees thousands of distinct packages, so the failure mode is a
   `reason_class`, `ecosystem`, `mount`, `upstream`, `status_class`, `result`,
   `provider`, `cause`/`error_class`, breaker `source`, `tier`. Every one has a
   small, fixed domain. (Any PR adding a label whose domain is not obviously finite
-  is rejected.)
+  is rejected.) This is **enforced by the type system**: the closed set is the `Label`
+  sum in `Ecluse.Telemetry.Metrics`, whose every constructor pairs a bounded-domain key
+  with a bounded value — `package`, `version`, `scope`, and a denial `message` have **no
+  constructor at all**, so a high-cardinality identifier *cannot* be made into a label;
+  `rule` is the one operator-bounded label (a deployment's small, fixed rule set). A
+  label-domain guard test (`Ecluse.Telemetry.MetricsSpec`) pins the closed key set and
+  rejects the high-cardinality keys. Those identifiers live on the rule-eval **span** and
+  the structured **log line** instead — see the `dd`/audit context in `Ecluse.Log`.
 - **Secrets/PII never appear in any signal** — no tokens, no `Authorization`,
   anywhere. In particular a **forwarded client token** (present under the
   `passthrough` / `delegated-cache` [strategies](access-model.md); see
@@ -183,6 +212,18 @@ in-container default) or **`console`** (human-readable, for the dev ecosystem).
 > the **id format Datadog expects** for the OTLP-ingested traces to line up —
 > historically the low-64-bits-as-decimal, full 128-bit hex where enabled. Verify
 > against the Agent's trace-id handling; it is the one fiddly correlation detail.
+
+**As built.** The `dd` object lives in `Ecluse.Log` (free of any OpenTelemetry
+dependency): `formatDdTraceId`/`formatDdSpanId` render the **unsigned decimal of the low
+64 bits** of the trace id and the 64-bit span id (the format above; the 128-bit-hex form
+is a separate opt-in). `Ecluse.Telemetry.Correlation` is the IO half — it reads the
+active span off the OpenTelemetry context and fills its ids onto the resolved
+`service`/`env`/`version` identity (the same `Ecluse.Telemetry.Resolve` answer the
+exporter uses). That `dd` object is installed as the **initial `katip` context** at the
+request entry (`runHandler`, where the WAI server span is already active) and the worker
+entry (`runApp`, re-stamped inside a job span), so **every line carries `dd`**; the
+trace/span ids are present only when a span is in scope, and absent (never all-zero)
+otherwise.
 
 ## Datadog deployment (Operator)
 

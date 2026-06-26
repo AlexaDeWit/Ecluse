@@ -21,21 +21,22 @@ Prometheus-scrape alternative), under a strict bounded-label discipline, and sti
 logs to traces via trace-ID injection into the JSONL `dd` object.
 
 **Acceptance criteria.**
-- [ ] The `ecluse.*` metric catalogue (serve decision, rule denials/eval-duration/
+- [x] The `ecluse.*` metric catalogue (serve decision, rule denials/eval-duration/
   effectful-failures/breaker-state, advisory sync age/failures/last-good, upstream
   fetch, metadata-cache, mirror, credential refresh/ttl) plus OTel HTTP semantic
-  conventions. — _observability.md#metrics_
-- [ ] **Bounded-label discipline**: metric labels are a closed set of bounded enums
+  conventions. — _observability.md#metrics_ — _catalogue + emits delivered; breaker-state
+  + credential refresh/ttl emits and advisory-sync deferred (see As-built)._
+- [x] **Bounded-label discipline**: metric labels are a closed set of bounded enums
   only; high-cardinality identifiers (package/version/scope/message) never become
   labels — a label-domain guard test rejects an unbounded label. — _observability.md#cardinality-and-attributes_
-- [ ] Transport: **OTLP push to the Datadog Agent's OTLP receiver is the launch
+- [x] Transport: **OTLP push to the Datadog Agent's OTLP receiver is the launch
   transport** (the already-pinned `hs-opentelemetry-exporter-otlp`; the Agent
   auto-maps OTLP → Datadog metric format). A Prometheus `/metrics` scrape is a
   deferred pull alternative ([#288](https://github.com/AlexaDeWit/Ecluse/issues/288)):
   the SDK honours `OTEL_METRICS_EXPORTER=prometheus` but the pinned set ships no
   scrape-endpoint renderer, so the actual endpoint is out of scope here.
   DogStatsD is out (no maintained GHC 9.10 client). — _observability.md#metrics_
-- [ ] **Logs ↔ traces**: katip JSONL (S04) gains a populated `dd` object
+- [x] **Logs ↔ traces**: katip JSONL (S04) gains a populated `dd` object
   (`trace_id`/`span_id`/`service`/`env`/`version`) in the id format Datadog expects;
   one compact line per record. — _observability.md#logs_
 
@@ -97,7 +98,55 @@ substrate-config part split out per the orchestration's stacked-PR pattern:
   `OTEL_*` → install the throttled error handler*; the `PROXY_TELEMETRY_ALLOW_PUBLIC_EGRESS`
   knob and the `Ecluse.Security` coupling are gone.
 
+### PR2 — `ecluse.*` catalogue + bounded-label guard + `dd` correlation (#312)
+
+The headline metrics work, stacked on PR1, built incrementally:
+
+- **AC2 (bounded-label discipline) — delivered.** `Ecluse.Telemetry.Metrics`: a closed
+  `Label` sum whose every constructor pairs a bounded-domain key with a bounded value;
+  high-cardinality identifiers (`package`/`version`/`scope`/`message`) have no
+  constructor (the type system forbids them as labels). `rule` is the one
+  operator-bounded label. The label-domain guard (`Ecluse.Telemetry.MetricsSpec`)
+  rejects the high-cardinality keys and proves the series space is a small fixed product.
+- **AC1 (catalogue + emits) — delivered.** The typed `MetricName` catalogue +
+  `metricAttributes` + `statusClassOf`/`breakerStateCode` (`Ecluse.Telemetry.Metrics`),
+  plus the runtime layer (`Ecluse.Telemetry.Instruments`): the `Metrics` instrument
+  handle and one typed `record*` helper per signal, built once from the meter provider
+  in `newEnv` and held on `Env` as `envMetrics`. Built on the SDK's **no-op meter when
+  telemetry is off**, so every emit is unconditional and inert. Call-site emits, landed
+  surgically over the S25/S20/#313 rebase: serve decision, rule denials, rule
+  eval-duration (by tier) and effectful failures (`Ecluse.Server.Pipeline`); upstream
+  fetch duration/errors (wrapping the real fetch so the cached public path records only
+  on a miss); mirror enqueued/enqueue-failures; metadata-cache requests (hit/miss) and
+  occupancy gauge (`Ecluse.Server.Cache`); mirror jobs-processed and publish-duration
+  (`Ecluse.Worker`). `http.server.request.duration` is the S25 WAI instrumentation's, not
+  re-emitted. **Two signals defined-but-not-wired:** the breaker-state gauge and the
+  credential refresh/ttl signals — the breaker and the refreshing provider are
+  constructed before the telemetry substrate and sit off the composition root, so wiring
+  them is a boot-sequencing follow-up (the `record*` helpers exist and are unit-tested).
+- **AC4 (`dd` correlation) — delivered.** `Ecluse.Log` carries the `dd` object
+  (`DdContext`/`DdSpan`/`ddObject`/`ddField`), OTel-free; `formatDdTraceId`/
+  `formatDdSpanId` render the **unsigned decimal of the low 64 bits** of the trace id and
+  the 64-bit span id (verified in `Ecluse.LogSpec`). The IO glue (`Ecluse.Telemetry.Correlation`,
+  AC4's remaining half) reads the active span off the OpenTelemetry context — real now
+  that S25's tracer rides the hot path — and fills its ids onto the resolved
+  `service`/`env`/`version` identity. The `dd` object is installed as the initial `katip`
+  context at the request entry (`runHandler`, where the WAI server span is active) and
+  the worker entry (`runApp`, re-stamped inside a job span), so **every line carries
+  `dd`**; ids are present only within a span, never all-zero.
+- **Integration (gating) — delivered.** `Ecluse.TelemetryMetricsSpec` drives a spread of
+  `ecluse.*` signals into a real OTLP **Collector** container (metrics pipeline → `debug`
+  exporter) and asserts the metric name is accepted; the off case proves nothing is
+  exported. No Datadog SaaS. The marker is the metric *name*, never a label (a
+  unique-per-run label would breach the bounded-label discipline).
+
 **Deferrals.**
+- **Breaker-state + credential refresh/ttl emits** — the catalogue signals and `record*`
+  helpers exist, but the breaker (`Ecluse.Breaker`, used by `Ecluse.Rules.Effectful` and
+  the credential refresher) and the refreshing credential provider are built before the
+  telemetry substrate and detached from `Env`, so wiring their emits needs a
+  boot-sequence reorder / a reporter injected into the boot-time provider — a focused
+  follow-up, escalated rather than rushed.
 - **Advisory-sync metrics** (`ecluse.advisory.sync.*`) are deferred: the CVE/OSV sync
   module (S22) is not built — there is no `src/Ecluse/Cve/`. Not stubbed.
 - **Prometheus `/metrics` scrape endpoint** (old AC3) is deferred to #288; the pinned

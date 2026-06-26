@@ -102,6 +102,9 @@ library
     Ecluse.Server.Route
     Ecluse.Server.Stream
     Ecluse.Telemetry
+    Ecluse.Telemetry.Correlation
+    Ecluse.Telemetry.Instruments
+    Ecluse.Telemetry.Metrics
     Ecluse.Telemetry.Resolve
     Ecluse.Telemetry.Tracing
     Ecluse.Version
@@ -208,6 +211,9 @@ test-suite ecluse-unit
     Ecluse.Server.ResponseSpec
     Ecluse.Server.RouteSpec
     Ecluse.Server.StreamSpec
+    Ecluse.Telemetry.CorrelationSpec
+    Ecluse.Telemetry.InstrumentsSpec
+    Ecluse.Telemetry.MetricsSpec
     Ecluse.Telemetry.ResolveSpec
     Ecluse.Telemetry.TracingSpec
     Ecluse.TelemetrySpec
@@ -275,6 +281,7 @@ test-suite ecluse-integration
     Ecluse.Security.EgressOriginSpec
     Ecluse.Server.GracefulShutdownSpec
     Ecluse.Server.TarballHostSpec
+    Ecluse.TelemetryMetricsSpec
     Ecluse.TelemetryTracingSpec
     Ecluse.WorkerSpec
 
