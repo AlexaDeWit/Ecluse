@@ -186,7 +186,7 @@ import Ecluse.Registry.Npm (
 import Ecluse.Registry.Npm.Filter (FilterResult (Filtered, NoSurvivors), applyFilterPlan, rewriteTarballUrls)
 import Ecluse.Registry.Npm.Project (Projection (NameMismatch, Projected), parsePackageInfoFromValue)
 import Ecluse.Rules.Effectful (evalRulesEffectful)
-import Ecluse.Rules.Types (Decision (Undecidable), EvalContext (EvalContext))
+import Ecluse.Rules.Types (Decision, EvalContext (EvalContext))
 import Ecluse.Security (
     LimitError (BodyTooLarge, TooDeeplyNested, TooManyVersions),
     Limits,
@@ -210,18 +210,23 @@ import Ecluse.Server.Context (
 import Ecluse.Server.Pipeline.Internal (
     PackumentNameMismatch (PackumentNameMismatch),
     PackumentUndecodable (PackumentUndecodable),
+    evalTier,
+    fetchCause,
     logDecodeFailure,
     logNameMismatch,
+    packumentServeDecision,
+    recordDenials,
+    recordEffectfulFailures,
+    serveDecisionClass,
  )
 import Ecluse.Server.Response (
     ArtifactStatus (Forbidden, NotFound, Ok, ServerError, Unavailable'),
     MountRenderer,
     PackumentStatus (PackumentBadGateway, PackumentForbidden, PackumentOk, PackumentServerError, PackumentUnavailable),
-    RejectReason (BelowIntegrityFloor, ByPolicy, MissingIntegrity, Unavailable, UpstreamInvalid),
+    RejectReason (BelowIntegrityFloor, MissingIntegrity, Unavailable, UpstreamInvalid),
     Rejection (Rejection, rejectionMessage),
     RenderedBody (RenderedBody),
     RetryAfter (RetryAfter),
-    RuleName (RuleName),
     ServeDecision (Admit, Reject),
     Transience (WillResolve, WontResolve),
     artifactStatus,
@@ -237,8 +242,6 @@ import Ecluse.Telemetry.Instruments (
     Metrics,
     recordMirrorEnqueueFailure,
     recordMirrorEnqueued,
-    recordRuleDenial,
-    recordRuleEffectfulFailure,
     recordRuleEvalDuration,
     recordServeDecision,
     recordUpstreamFetch,
@@ -688,7 +691,7 @@ gatePublic metrics deps ctx = \case
     Just (info, value) -> do
         let (admissible, integrityRefusals) = admitByIntegrity (pdMinIntegrity deps) info
         (decisions, seconds) <- timedSeconds (decideVersions deps ctx admissible)
-        recordRuleEvalDuration metrics (evalTier deps) seconds
+        recordRuleEvalDuration metrics (evalTier (pdEffectfulRules deps)) seconds
         recordEffectfulFailures metrics (Map.elems decisions)
         let plan = filterPlanFromDecisions decisions admissible
         pure $ case applyFilterPlan (pdMountBaseUrl deps) plan value of
@@ -1279,7 +1282,7 @@ gatePublicVersion env deps name version file = do
                 -- branches above are not rule evaluations and carry no span.
                 withRuleEvalSpan (envTelemetry env) name version $ do
                     (gate, seconds) <- timedSeconds (gateVersion evalCtx deps file details)
-                    recordRuleEvalDuration (envMetrics env) (evalTier deps) seconds
+                    recordRuleEvalDuration (envMetrics env) (evalTier (pdEffectfulRules deps)) seconds
                     pure (gate, gateVerdict gate)
 
 -- The serve verdict a public-artifact gate outcome carries, for the rule-eval span:
@@ -1618,87 +1621,3 @@ recordedFetch metrics upstream action = do
         Left err -> do
             recordUpstreamFetchError metrics upstream (fetchCause err)
             throwIO err
-
-{- Classify a caught metadata-fetch failure into the bounded error cause: an
-undecodable or name-mismatched body is a decode fault, a transport error a connection
-fault, and a response-bound breach or anything else is the catch-all other. The cause
-is bounded by construction — never the exception text. -}
-fetchCause :: SomeException -> Metric.Cause
-fetchCause err
-    | Just PackumentUndecodable <- fromException err = Metric.Decode
-    | Just PackumentNameMismatch <- fromException err = Metric.Decode
-    | Just (ResponseBoundExceeded _) <- fromException err = Metric.OtherCause
-    | Just (_ :: HTTP.HttpException) <- fromException err = Metric.Connection
-    | otherwise = Metric.OtherCause
-
-{- Classify a no-survivors packument outcome into the bounded serve decision a metric
-records: a forbidden set is a denial, any other non-served status a transient
-unavailability. (A served set is recorded as an admit at the call site, not here.) -}
-packumentServeDecision :: [ServeDecision] -> Metric.Decision
-packumentServeDecision decisions = case packumentStatus decisions of
-    PackumentForbidden -> Metric.Deny
-    PackumentOk -> Metric.Admit
-    _ -> Metric.Unavailable
-
-{- Classify a single artifact-path serve decision into the bounded metric decision: a
-policy or integrity refusal is a denial, an upstream outage or invalid response an
-unavailability. -}
-serveDecisionClass :: ServeDecision -> Metric.Decision
-serveDecisionClass = \case
-    Admit -> Metric.Admit
-    Reject (Rejection reason _) -> case reason of
-        ByPolicy{} -> Metric.Deny
-        MissingIntegrity -> Metric.Deny
-        BelowIntegrityFloor -> Metric.Deny
-        Unavailable{} -> Metric.Unavailable
-        UpstreamInvalid -> Metric.Unavailable
-
-{- Record the @ecluse.rule.denials@ counter for each rejected decision, labelled by the
-bounded reason class and — for a policy denial — the deciding rule name. An admit
-records nothing. The rule name is the one operator-bounded label; a non-policy refusal
-names none. -}
-recordDenials :: Metrics -> [ServeDecision] -> IO ()
-recordDenials metrics = traverse_ recordOne
-  where
-    recordOne :: ServeDecision -> IO ()
-    recordOne = \case
-        Admit -> pass
-        Reject (Rejection reason _) ->
-            let (rule, reasonClass) = denialLabels reason
-             in recordRuleDenial metrics rule reasonClass
-
-{- Map a reject reason to the @ecluse.rule.denials@ labels: the deciding rule (only a
-policy denial names one) and the bounded reason class. -}
-denialLabels :: RejectReason -> (Maybe Text, Metric.ReasonClass)
-denialLabels = \case
-    ByPolicy (RuleName name) -> (Just name, Metric.ReasonPolicy)
-    MissingIntegrity -> (Nothing, Metric.ReasonMissingIntegrity)
-    BelowIntegrityFloor -> (Nothing, Metric.ReasonMissingIntegrity)
-    Unavailable _ -> (Nothing, Metric.ReasonUnavailable)
-    UpstreamInvalid -> (Nothing, Metric.ReasonUnavailable)
-
-{- The rule-evaluation tier a duration is attributed to: a mount with effectful rules
-configured runs the effectful tier (the pure tier first, the effectful tier only where
-it could change the outcome), otherwise the evaluation reduces to the structural tier. -}
-evalTier :: PackumentDeps -> Metric.Tier
-evalTier deps = if null (pdEffectfulRules deps) then Metric.Structural else Metric.Effectful
-
-{- Count each effectful-rule failure among a packument's per-version decisions: an
-'Undecidable' is an effectful rule whose source could not be consulted, so it is the
-effectful-failure signal, classified to a bounded cause by its transience. A decided
-version (allowed or denied) is not a failure. -}
-recordEffectfulFailures :: Metrics -> [Decision] -> IO ()
-recordEffectfulFailures metrics = traverse_ recordOne
-  where
-    recordOne :: Decision -> IO ()
-    recordOne = \case
-        Undecidable transience _ -> recordRuleEffectfulFailure metrics (transienceCause transience)
-        _ -> pass
-
-{- Map an undecidable verdict's transience to the bounded effectful-failure cause: a
-retryable cause is a connection-class fault (the source was unreachable now), a
-permanent one the catch-all other. -}
-transienceCause :: Transience -> Metric.Cause
-transienceCause = \case
-    WillResolve _ -> Metric.Connection
-    WontResolve -> Metric.OtherCause

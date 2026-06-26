@@ -7,10 +7,47 @@ import Test.Hspec
 import UnliftIO (bracket)
 import UnliftIO.Temporary (withSystemTempFile)
 
+import Network.HTTP.Client (HttpException (InvalidUrlException))
+
 import Ecluse.Ecosystem (Ecosystem (Npm))
 import Ecluse.Log (LogFormat (JsonLog), newLogEnv)
 import Ecluse.Package (mkPackageName)
-import Ecluse.Server.Pipeline.Internal (PackumentNameMismatch (PackumentNameMismatch), logDecodeFailure, logNameMismatch)
+import Ecluse.Registry.Npm (ResponseBoundExceeded (ResponseBoundExceeded))
+import Ecluse.Rules.Types (Decision (DeniedByDefault, Undecidable))
+import Ecluse.Security (LimitError (BodyTooLarge))
+import Ecluse.Server.Pipeline.Internal (
+    PackumentNameMismatch (PackumentNameMismatch),
+    PackumentUndecodable (PackumentUndecodable),
+    denialLabels,
+    evalTier,
+    fetchCause,
+    logDecodeFailure,
+    logNameMismatch,
+    packumentServeDecision,
+    recordDenials,
+    recordEffectfulFailures,
+    serveDecisionClass,
+    transienceCause,
+ )
+import Ecluse.Server.Response (
+    RejectReason (BelowIntegrityFloor, ByPolicy, MissingIntegrity, Unavailable, UpstreamInvalid),
+    Rejection (Rejection),
+    RuleName (RuleName),
+    ServeDecision (Admit, Reject),
+    Transience (WillResolve, WontResolve),
+ )
+import Ecluse.Telemetry (telemetryDisabled)
+import Ecluse.Telemetry.Instruments (newMetrics)
+import Ecluse.Telemetry.Metrics qualified as Metric
+
+{- | A stand-in exception 'fetchCause' does not specifically classify, so the
+catch-all @other@ arm is exercised with a typed throw rather than a restricted
+@userError@.
+-}
+data OtherFetchFault = OtherFetchFault
+    deriving stock (Show)
+
+instance Exception OtherFetchFault
 
 spec :: Spec
 spec = do
@@ -51,6 +88,84 @@ spec = do
             -- 'fromException'; its derived instances back the catch and any audit show.
             show PackumentNameMismatch `shouldBe` ("PackumentNameMismatch" :: Text)
             PackumentNameMismatch `shouldBe` PackumentNameMismatch
+
+    -- The pure metric-label projections that classify a serve outcome into the bounded
+    -- labels the catalogue records. Every branch is asserted directly, so the
+    -- bounded-cardinality mapping is pinned independently of the serve path that drives
+    -- it (the call sites are exercised in PipelineSpec).
+    describe "fetchCause (upstream-fetch error class)" $ do
+        it "classifies an undecodable or name-mismatched body as a decode fault" $ do
+            fetchCause (toException PackumentUndecodable) `shouldBe` Metric.Decode
+            fetchCause (toException PackumentNameMismatch) `shouldBe` Metric.Decode
+        it "classifies a response-bound breach as the catch-all other" $
+            fetchCause (toException (ResponseBoundExceeded (BodyTooLarge 1))) `shouldBe` Metric.OtherCause
+        it "classifies a transport error as a connection fault" $
+            fetchCause (toException (InvalidUrlException "http://x" "bad")) `shouldBe` Metric.Connection
+        it "classifies anything else as the catch-all other" $
+            fetchCause (toException OtherFetchFault) `shouldBe` Metric.OtherCause
+
+    describe "packumentServeDecision (no-survivors -> decision)" $ do
+        it "an admit in the set is an admit" $
+            packumentServeDecision [Admit] `shouldBe` Metric.Admit
+        it "an all-policy-denial set is a deny" $
+            packumentServeDecision [Reject (Rejection (ByPolicy (RuleName "min-age")) "denied")]
+                `shouldBe` Metric.Deny
+        it "a transient-outage set is an unavailability" $
+            packumentServeDecision [Reject (Rejection (Unavailable (WillResolve Nothing)) "down")]
+                `shouldBe` Metric.Unavailable
+
+    describe "serveDecisionClass (artifact-path decision)" $ do
+        it "maps an admit to admit" $
+            serveDecisionClass Admit `shouldBe` Metric.Admit
+        it "maps a policy or integrity refusal to deny" $ do
+            serveDecisionClass (Reject (Rejection (ByPolicy (RuleName "r")) "m")) `shouldBe` Metric.Deny
+            serveDecisionClass (Reject (Rejection MissingIntegrity "m")) `shouldBe` Metric.Deny
+            serveDecisionClass (Reject (Rejection BelowIntegrityFloor "m")) `shouldBe` Metric.Deny
+        it "maps an upstream outage or invalid response to unavailability" $ do
+            serveDecisionClass (Reject (Rejection (Unavailable (WillResolve Nothing)) "m")) `shouldBe` Metric.Unavailable
+            serveDecisionClass (Reject (Rejection UpstreamInvalid "m")) `shouldBe` Metric.Unavailable
+
+    describe "denialLabels (rule-denial labels)" $ do
+        it "carries the deciding rule name only for a policy denial" $ do
+            denialLabels (ByPolicy (RuleName "min-age")) `shouldBe` (Just "min-age", Metric.ReasonPolicy)
+            denialLabels MissingIntegrity `shouldBe` (Nothing, Metric.ReasonMissingIntegrity)
+            denialLabels BelowIntegrityFloor `shouldBe` (Nothing, Metric.ReasonMissingIntegrity)
+            denialLabels (Unavailable (WillResolve Nothing)) `shouldBe` (Nothing, Metric.ReasonUnavailable)
+            denialLabels UpstreamInvalid `shouldBe` (Nothing, Metric.ReasonUnavailable)
+
+    describe "evalTier (rule-evaluation tier)" $ do
+        it "is the structural tier when no effectful rule is configured" $
+            evalTier ([] :: [Int]) `shouldBe` Metric.Structural
+        it "is the effectful tier when an effectful rule is configured" $
+            evalTier [()] `shouldBe` Metric.Effectful
+
+    describe "transienceCause (effectful-failure cause)" $ do
+        it "maps a retryable cause to a connection fault" $
+            transienceCause (WillResolve Nothing) `shouldBe` Metric.Connection
+        it "maps a permanent cause to the catch-all other" $
+            transienceCause WontResolve `shouldBe` Metric.OtherCause
+
+    -- The thin emit helpers that fold a serve outcome into the catalogue counters,
+    -- driven against an inert (telemetry-off) handle: they exercise the per-decision
+    -- branches (record vs skip) and the projection calls without an SDK or a network.
+    describe "recordDenials" $
+        it "records a denial per reject and nothing for an admit" $ do
+            metrics <- newMetrics telemetryDisabled
+            recordDenials
+                metrics
+                [ Admit
+                , Reject (Rejection (ByPolicy (RuleName "min-age")) "denied")
+                , Reject (Rejection (Unavailable (WillResolve Nothing)) "down")
+                ]
+
+    describe "recordEffectfulFailures" $
+        it "records a failure per undecidable verdict, skipping decided ones" $ do
+            metrics <- newMetrics telemetryDisabled
+            recordEffectfulFailures
+                metrics
+                [ Undecidable (WillResolve Nothing) "unreachable"
+                , DeniedByDefault []
+                ]
 
 {- | Run an 'IO' action with 'stdout' redirected to a temporary file, returning
 everything written — so a scribe's output is assertable with no network. The original
