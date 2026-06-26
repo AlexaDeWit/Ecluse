@@ -1413,11 +1413,11 @@ enqueueMirror env deps name version artifact =
                         }
                 }
 
--- ── the egress gate at the serve seam ─────────────────────────────────────────
+-- ── the egress gate at the serve boundary ─────────────────────────────────────────
 
 {- Whether an artifact's authoritative @url@ may be fetched, given the origin's trust,
 the mount's tarball-host policy, and the host that served the packument it came from.
-Connects the pure 'tarballHostAllowed' at the serve seam: the @url@'s host must be on
+Connects the pure 'tarballHostAllowed' at the serve boundary: the @url@'s host must be on
 the upstream allowlist and — under the secure-default
 'Ecluse.Security.SameHostAsPackument' — equal to the packument host; the opt-in
 'Ecluse.Security.AnyAllowlistedHost' relaxes that last clause to any allowlisted host.

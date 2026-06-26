@@ -367,7 +367,7 @@ spec = do
     describe "withInteractiveHalt (local-dev quit key)" $ do
         -- The real wiring (TTY guard, stdin EOF, _exit) is process-global and not
         -- deterministically drivable in-process — the same boundary the OS-signal
-        -- path has. So the three seams are injected and the combinator's logic is
+        -- path has. So the three injection points are wired and the combinator's logic is
         -- tested: armed only when interactive, halts when the signal fires, and the
         -- watcher is torn down with the action (never fires after it returns).
 
@@ -381,7 +381,7 @@ spec = do
                         }
             result <- withInteractiveHalt ih (pure "served")
             result `shouldBe` ("served" :: Text)
-            -- No watcher was installed, so the halt seam was never reached.
+            -- No watcher was installed, so the halt path was never reached.
             readIORef halted `shouldReturn` False
 
         it "halts when interactive and the halt signal fires (Ctrl-D)" $ do

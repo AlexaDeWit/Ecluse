@@ -317,7 +317,7 @@ spec = do
         it "retries a transiently failing rule and succeeds within the budget" $ do
             -- The rule fails once then succeeds; one retry (one backoff) is enough.
             -- A near-zero backoff keeps the retry delay free; the invocation count is
-            -- the seam-independent witness that exactly one retry ran.
+            -- an independent witness that exactly one retry ran.
             attempts <- newIORef (0 :: Int)
             let pd = pkg Nothing 0
                 cfg = fastConfig{ecBackoff = [0]}

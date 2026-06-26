@@ -43,7 +43,7 @@ noted below.
    canonical case being a once-decoded segment carrying a literal `%2e%2e%2f`) is
    therefore re-encoded (`%2e%2e%2f` → `%252e%252e%252f`) rather than reaching the
    upstream raw, where a decode-and-normalise CDN could resolve it to traversal or a
-   `?`/`#` could inject an upstream query/fragment. Both seams that compose an
+   `?`/`#` could inject an upstream query/fragment. Both points that compose an
    upstream URL from a name, the data-plane request builders (`Ecluse.Registry.Npm`)
    and the defence-in-depth re-check (`Ecluse.Security.upstreamUrlFor`), apply the
    same encoder.
@@ -170,7 +170,7 @@ not by URL reconstruction:
   (invariant 2), with the internal-range block (invariant 3) as defence-in-depth.
 
 The load-bearing guard is thus `isAllowedUpstreamHost`; the IP-range block is its
-backstop. That block has two parts with a deliberate seam between them. Recognising
+backstop. That block has two parts with a deliberate boundary between them. Recognising
 whether a host **is** an IP literal stays a **hand-rolled, intentionally lenient**
 parser; testing a recognised address for **membership** of the blocked CIDR ranges
 is delegated to the `iproute` library (one shared predicate, `isBlockedIP`, for

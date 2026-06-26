@@ -205,7 +205,7 @@ spec = do
             -- that handoff — before the runner takes ownership — must still release
             -- the flag, or every later expired caller wedges on the STM retry.
             --
-            -- The window is otherwise a seam-less, interruptible point in pure
+            -- The window is otherwise a seamless, interruptible point in pure
             -- dispatch (an empirical ~0.15% of naive cancels land there), so it is
             -- driven deterministically through the 'afterClaim' hook, which runs on
             -- the serving thread at exactly that handoff: it signals it has reached

@@ -20,7 +20,7 @@ override with static credentials. This drives the real mint path — request bui
 SigV4 signing, response parse, token + expiry extraction — that the secret-gated
 smoke test can only reach against the real service. (The token is a control-plane
 AWS API call, not the npm protocol, so an npm-registry emulator cannot stand in;
-the endpoint shim is the seam.)
+the endpoint shim is the injection point.)
 -}
 spec :: Spec
 spec = describe "CodeArtifact GetAuthorizationToken (stubbed endpoint)" $
