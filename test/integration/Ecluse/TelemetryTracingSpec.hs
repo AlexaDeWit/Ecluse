@@ -78,12 +78,18 @@ driveRequest collector switch marker = do
             void (forceFlushTracerProvider tracerProvider Nothing)
 
 -- Point the SDK's OTLP exporter at the collector via the standard environment, with
--- metrics and logs export off (the collector here carries only a traces pipeline).
+-- traces export ON and metrics and logs export off (the collector here carries only a
+-- traces pipeline). Every signal's exporter is pinned explicitly — including
+-- @OTEL_TRACES_EXPORTER@ — because @setEnv@ is process-global and the integration suite
+-- runs every spec in one process: a sibling spec exporting a different signal (e.g. the
+-- metrics spec, which sets @OTEL_TRACES_EXPORTER=none@) would otherwise leave traces
+-- disabled here. Pinning all three makes this spec independent of run order.
 pointSdkAt :: Text -> IO ()
 pointSdkAt endpoint = do
     setEnv "OTEL_EXPORTER_OTLP_ENDPOINT" (toString endpoint)
     setEnv "OTEL_EXPORTER_OTLP_PROTOCOL" "http/protobuf"
     setEnv "OTEL_SERVICE_NAME" "ecluse-itest"
+    setEnv "OTEL_TRACES_EXPORTER" "otlp"
     setEnv "OTEL_METRICS_EXPORTER" "none"
     setEnv "OTEL_LOGS_EXPORTER" "none"
     setEnv "OTEL_BSP_SCHEDULE_DELAY" "200"
