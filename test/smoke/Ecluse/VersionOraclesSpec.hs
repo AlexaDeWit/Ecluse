@@ -1,9 +1,8 @@
 module Ecluse.VersionOraclesSpec (spec) where
 
 import Control.Exception (IOException, try)
-import Data.Aeson (Value (Array, Object, String), eitherDecode)
-import Data.Aeson.Key qualified as Key
-import Data.Aeson.KeyMap qualified as KeyMap
+import Data.Aeson (FromJSON, eitherDecode)
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Hedgehog (Gen)
 import Hedgehog qualified as H
@@ -27,6 +26,9 @@ import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
 import Ecluse.Ecosystem (Ecosystem (..), ecosystemName)
+import Ecluse.Registry.Npm.Wire (Packument (pkmtVersions))
+import Ecluse.Registry.Pypi.Wire qualified as Pypi
+import Ecluse.Registry.Rubygems.Wire qualified as Rubygems
 import Ecluse.Version
 
 {- | Smoke tier: validate 'Ecluse.Version.compareVersions' against the /live/
@@ -270,26 +272,21 @@ fetchRegistryVersions manager eco pkg = do
         Left (_ :: SomeException) -> Nothing
         Right body -> parseRegistryVersions eco body
 
-{- | Extract the published version strings from a registry's JSON listing:
-npm packument @.versions@ keys, PyPI @.releases@ keys, or each RubyGems entry's
-@.number@. 'Nothing' if the document does not decode or lacks the expected shape.
+{- | Extract the published version strings from a registry's response via each
+ecosystem's __canonical__ wire decoder, rather than re-parsing the JSON here: the
+npm packument ('Ecluse.Registry.Npm.Wire.Packument'), the PyPI project JSON
+('Ecluse.Registry.Pypi.Wire.ProjectJson'), or the RubyGems versions array
+('Ecluse.Registry.Rubygems.Wire.VersionListing'). 'Nothing' if the body does not
+decode for that ecosystem.
 -}
 parseRegistryVersions :: Ecosystem -> LByteString -> Maybe [Text]
-parseRegistryVersions eco body = case eitherDecode body :: Either String Value of
-    Left _ -> Nothing
-    Right value -> case eco of
-        Npm -> objectKeys "versions" value
-        PyPI -> objectKeys "releases" value
-        RubyGems -> case value of
-            Array entries ->
-                Just [n | Object o <- toList entries, Just (String n) <- [KeyMap.lookup "number" o]]
-            _ -> Nothing
+parseRegistryVersions eco body = case eco of
+    Npm -> Map.keys . pkmtVersions <$> decode' body
+    PyPI -> Pypi.projectVersions <$> decode' body
+    RubyGems -> Rubygems.listingVersions <$> decode' body
   where
-    objectKeys field = \case
-        Object top -> case KeyMap.lookup field top of
-            Just (Object versions) -> Just (map Key.toText (KeyMap.keys versions))
-            _ -> Nothing
-        _ -> Nothing
+    decode' :: (FromJSON a) => LByteString -> Maybe a
+    decode' = rightToMaybe . eitherDecode
 
 {- | Sort a version list with the live reference tool for @eco@, keeping only the
 versions that tool considers valid (node @semver.valid@, Python @packaging@, Ruby
