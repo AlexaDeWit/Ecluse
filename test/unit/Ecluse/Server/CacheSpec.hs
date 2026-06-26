@@ -21,9 +21,25 @@ import Ecluse.Server.Cache (
     cachedMetadata,
     defaultCacheConfig,
     newMetadataCache,
-    resolveMetadata,
-    resolveMetadataWith,
  )
+import Ecluse.Server.Cache qualified as Cache
+import Ecluse.Telemetry (telemetryDisabled)
+import Ecluse.Telemetry.Instruments (newMetrics)
+
+{- | Resolve through the cache with an inert (telemetry-off) metric handle, so these
+tests assert the cache's hit\/miss and single-flight behaviour without an SDK. A fresh
+disabled handle per call is a no-op meter, so it neither records nor affects the cache.
+-}
+resolveMetadata :: MetadataCache -> Source -> PackageName -> IO CacheEntry -> IO CacheEntry
+resolveMetadata cache source name fetch = do
+    metrics <- newMetrics telemetryDisabled
+    Cache.resolveMetadata metrics cache source name fetch
+
+-- | As 'resolveMetadata', threading the single-flight handoff hook (an inert metric handle).
+resolveMetadataWith :: IO () -> MetadataCache -> Source -> PackageName -> IO CacheEntry -> IO CacheEntry
+resolveMetadataWith afterClaim cache source name fetch = do
+    metrics <- newMetrics telemetryDisabled
+    Cache.resolveMetadataWith afterClaim metrics cache source name fetch
 
 -- | A package name fixture; the metadata cache keys on package identity.
 pkg :: Text -> PackageName

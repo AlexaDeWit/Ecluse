@@ -83,7 +83,7 @@ import UnliftIO.Exception (try)
 
 import Ecluse.App (App, runApp)
 import Ecluse.Env (
-    Env (envManager, envQueue, envRegistry, envTelemetry, envWorkerHeartbeat),
+    Env (envManager, envMetrics, envQueue, envRegistry, envTelemetry, envWorkerHeartbeat),
     WorkerHeartbeat,
     lastPoll,
     recordPoll,
@@ -109,6 +109,8 @@ import Ecluse.Registry.Npm (
     npmPublishDocument,
  )
 import Ecluse.Security (Limits (maxBodyBytes), boundedRead, defaultLimits)
+import Ecluse.Telemetry.Instruments (recordMirrorJobProcessed, recordMirrorPublishDuration, timedSeconds)
+import Ecluse.Telemetry.Metrics qualified as Metric
 import Ecluse.Telemetry.Tracing (JobSpanOutcome (JobSpanOutcome), withMirrorJobSpan)
 import Ecluse.Version (renderVersion)
 
@@ -215,8 +217,11 @@ processBatch = traverse_ processMessage
 -- non-retryable drop). A transient failure leaves the message un-acked so the queue
 -- redelivers it ("retry is don't ack").
 processMessage :: QueueMessage -> App ()
-processMessage message =
-    processJob (msgReceipt message) (msgJob message) >>= \case
+processMessage message = do
+    metrics <- asks envMetrics
+    outcome <- processJob (msgReceipt message) (msgJob message)
+    recordMirrorJobProcessed metrics (jobResultMetric outcome)
+    case outcome of
         Succeeded -> ackMessage (msgReceipt message)
         Dropped reason -> do
             -- A non-retryable fault (a tampered artifact, an unformable URL): the
@@ -230,6 +235,15 @@ processMessage message =
             -- window lapses, while the in-memory backend (no redelivery) simply
             -- re-mirrors it on the next demand. Either way it is not lost.
             logFM WarningS (ls ("leaving mirror job un-acked for retry (redelivered by a durable queue, re-mirrored on next demand by the in-memory one): " <> reason))
+
+-- Classify a terminal job outcome into the bounded @ecluse.mirror.jobs.processed@
+-- result: a successful publish (the idempotent already-present 409 surfaces here too)
+-- is published, a dropped or retried job is a failure.
+jobResultMetric :: JobOutcome -> Metric.MirrorResult
+jobResultMetric = \case
+    Succeeded -> Metric.Published
+    Dropped _ -> Metric.Failed
+    Retried _ -> Metric.Failed
 
 ackMessage :: ReceiptHandle -> App ()
 ackMessage receipt = do
@@ -303,6 +317,7 @@ publishVerified :: ReceiptHandle -> MirrorJob -> ByteString -> App JobOutcome
 publishVerified receipt job bytes = do
     holdForLongPublish receipt
     client <- asks envRegistry
+    metrics <- asks envMetrics
     let document =
             npmPublishDocument
                 (jobPackage job)
@@ -311,7 +326,10 @@ publishVerified receipt job bytes = do
                 (sriOf artifact)
                 (sha1Of artifact)
                 bytes
-    result <- liftIO (publishArtifact client (jobPackage job) (jobVersion job) document)
+    -- The publish is the long, network-bound step; time it for the publish-latency
+    -- histogram whichever way the registry responds.
+    (result, seconds) <- timedSeconds (liftIO (publishArtifact client (jobPackage job) (jobVersion job) document))
+    recordMirrorPublishDuration metrics seconds
     case result of
         Right () -> do
             logFM InfoS (ls ("mirrored artifact published: " <> renderJob job))

@@ -52,6 +52,7 @@ import Ecluse.Queue (MirrorQueue)
 import Ecluse.Registry (RegistryClient)
 import Ecluse.Server.Cache (MetadataCache)
 import Ecluse.Telemetry (Telemetry)
+import Ecluse.Telemetry.Instruments (Metrics, newMetrics)
 
 {- | The composition-root record: the handles plus the shared HTTP manager and the
 metadata cache, from which the whole effectful shell is reached. See the module
@@ -109,6 +110,12 @@ data Env = Env
     @PROXY_TELEMETRY@ unset — the inert no-op that emits nothing. Its provider
     lifecycle is bracketed by the composition root that supplies it.
     -}
+    , envMetrics :: Metrics
+    {- ^ The @ecluse.*@ metric instruments (see "Ecluse.Telemetry.Instruments"),
+    built once from 'envTelemetry' so every layer records through the same
+    instruments. Inert when telemetry is off (the instruments are created on the
+    SDK's no-op meter), so a layer records unconditionally.
+    -}
     , envWorkerHeartbeat :: WorkerHeartbeat
     {- ^ The mirror worker's consume-loop heartbeat: the time of its
     last-successful-poll. Distinct from the server's HTTP readiness — it is the
@@ -162,7 +169,12 @@ selection happens in the handle smart constructors that produce the arguments;
 this only gathers them.
 -}
 newEnv :: RegistryClient -> MirrorQueue -> CredentialProvider -> Manager -> Manager -> MetadataCache -> LogEnv -> Telemetry -> WorkerHeartbeat -> IO Env
-newEnv registry queue credentials manager privateManager metadataCache logEnv telemetry heartbeat =
+newEnv registry queue credentials manager privateManager metadataCache logEnv telemetry heartbeat = do
+    -- The metric instruments are built once here from the telemetry handle: created on
+    -- its meter provider when enabled, on the SDK's no-op meter when off (so they are
+    -- inert without an SDK). Building them in 'newEnv' keeps the construction the single
+    -- source of telemetry-derived state, so no caller threads a separate handle.
+    metrics <- newMetrics telemetry
     pure
         Env
             { envRegistry = registry
@@ -173,6 +185,7 @@ newEnv registry queue credentials manager privateManager metadataCache logEnv te
             , envMetadataCache = metadataCache
             , envLogEnv = logEnv
             , envTelemetry = telemetry
+            , envMetrics = metrics
             , envWorkerHeartbeat = heartbeat
             }
 

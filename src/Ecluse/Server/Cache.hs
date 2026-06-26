@@ -104,6 +104,8 @@ import Ecluse.Package (
     pkgNamespace,
     renderScope,
  )
+import Ecluse.Telemetry.Instruments (Metrics, recordCacheEntries, recordCacheRequest)
+import Ecluse.Telemetry.Metrics qualified as Metric
 
 -- ── configuration ────────────────────────────────────────────────────────────
 
@@ -253,8 +255,12 @@ never cached, so a shared entry can never serve one client another's private doc
 
 The result is always re-decided by the caller's rules on each request — only the
 fetch+parse is memoised, never the verdict.
+
+Each resolution records the @ecluse.metadata_cache.requests@ hit\/miss counter (a
+coalescing follower counts as a miss, like the leader it waits on), and a leader's
+insert refreshes the @ecluse.metadata_cache.entries@ occupancy gauge.
 -}
-resolveMetadata :: MetadataCache -> Source -> PackageName -> IO CacheEntry -> IO CacheEntry
+resolveMetadata :: Metrics -> MetadataCache -> Source -> PackageName -> IO CacheEntry -> IO CacheEntry
 resolveMetadata = resolveMetadataWith (pure ())
 
 {- | As 'resolveMetadata', but with a hook run on the leading thread at the
@@ -264,8 +270,8 @@ the marker. It exists only so a test can deterministically park a leader in that
 window and cancel it there, exercising the orphan-window guarantee; production always
 passes @pure ()@ via 'resolveMetadata'.
 -}
-resolveMetadataWith :: IO () -> MetadataCache -> Source -> PackageName -> IO CacheEntry -> IO CacheEntry
-resolveMetadataWith afterClaim cache source name fetch = mask $ \restore -> do
+resolveMetadataWith :: IO () -> Metrics -> MetadataCache -> Source -> PackageName -> IO CacheEntry -> IO CacheEntry
+resolveMetadataWith afterClaim metrics cache source name fetch = mask $ \restore -> do
     let key = cacheKey source name
     nowT <- getTime Monotonic
     -- One atomic decision point: a fresh hit short-circuits; otherwise become the
@@ -277,9 +283,17 @@ resolveMetadataWith afterClaim cache source name fetch = mask $ \restore -> do
     -- interruptible.
     decision <- atomically (decide key nowT)
     case decision of
-        Hit entry -> pure entry
-        Follow marker -> restore (either throwIO pure =<< atomically (readTMVar marker))
-        Lead marker -> runLeader restore key marker
+        Hit entry -> do
+            recordCacheRequest metrics Metric.Hit
+            pure entry
+        Follow marker -> do
+            -- A follower coalesced onto an in-flight fetch is a miss for this caller
+            -- (no fresh entry was present), exactly as the leader's miss is.
+            recordCacheRequest metrics Metric.Miss
+            restore (either throwIO pure =<< atomically (readTMVar marker))
+        Lead marker -> do
+            recordCacheRequest metrics Metric.Miss
+            runLeader restore key marker
   where
     decide :: CacheKey -> TimeSpec -> STM Decision
     decide key nowT = do
@@ -322,6 +336,9 @@ resolveMetadataWith afterClaim cache source name fetch = mask $ \restore -> do
             Right entry -> do
                 insertBounded cache key entry
                 atomically (deregister key)
+                -- The leader inserted, so the occupancy gauge is refreshed off the
+                -- post-insert size (a follower never inserts, so it never re-records).
+                recordCacheEntries metrics =<< cacheSize cache
                 pure entry
             Left err -> do
                 atomically (deregister key)

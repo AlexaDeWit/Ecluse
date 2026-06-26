@@ -148,7 +148,7 @@ import UnliftIO (concurrently)
 import UnliftIO.Exception (handle, throwIO, tryAny)
 
 import Ecluse.Credential (Secret, mkSecret)
-import Ecluse.Env (Env (envLogEnv, envManager, envMetadataCache, envPrivateManager, envQueue, envTelemetry))
+import Ecluse.Env (Env (envLogEnv, envManager, envMetadataCache, envMetrics, envPrivateManager, envQueue, envTelemetry))
 import Ecluse.Log (moduleField)
 import Ecluse.Package (
     Artifact (artFilename, artHashes, artSize, artUrl),
@@ -186,7 +186,7 @@ import Ecluse.Registry.Npm (
 import Ecluse.Registry.Npm.Filter (FilterResult (Filtered, NoSurvivors), applyFilterPlan, rewriteTarballUrls)
 import Ecluse.Registry.Npm.Project (Projection (NameMismatch, Projected), parsePackageInfoFromValue)
 import Ecluse.Rules.Effectful (evalRulesEffectful)
-import Ecluse.Rules.Types (Decision, EvalContext (EvalContext))
+import Ecluse.Rules.Types (Decision (Undecidable), EvalContext (EvalContext))
 import Ecluse.Security (
     LimitError (BodyTooLarge, TooDeeplyNested, TooManyVersions),
     Limits,
@@ -217,10 +217,11 @@ import Ecluse.Server.Response (
     ArtifactStatus (Forbidden, NotFound, Ok, ServerError, Unavailable'),
     MountRenderer,
     PackumentStatus (PackumentBadGateway, PackumentForbidden, PackumentOk, PackumentServerError, PackumentUnavailable),
-    RejectReason (BelowIntegrityFloor, MissingIntegrity, Unavailable, UpstreamInvalid),
+    RejectReason (BelowIntegrityFloor, ByPolicy, MissingIntegrity, Unavailable, UpstreamInvalid),
     Rejection (Rejection, rejectionMessage),
     RenderedBody (RenderedBody),
     RetryAfter (RetryAfter),
+    RuleName (RuleName),
     ServeDecision (Admit, Reject),
     Transience (WillResolve, WontResolve),
     artifactStatus,
@@ -232,6 +233,19 @@ import Ecluse.Server.Response (
  )
 import Ecluse.Server.Route (Filename (Filename))
 import Ecluse.Server.Stream (probeUpstreamWhen, streamUpstreamWhen)
+import Ecluse.Telemetry.Instruments (
+    Metrics,
+    recordMirrorEnqueueFailure,
+    recordMirrorEnqueued,
+    recordRuleDenial,
+    recordRuleEffectfulFailure,
+    recordRuleEvalDuration,
+    recordServeDecision,
+    recordUpstreamFetch,
+    recordUpstreamFetchError,
+    timedSeconds,
+ )
+import Ecluse.Telemetry.Metrics qualified as Metric
 import Ecluse.Telemetry.Tracing (withMirrorEnqueueSpan, withRuleEvalSpan)
 import Ecluse.Version (Version, renderVersion)
 
@@ -338,18 +352,25 @@ serveWithDeps mode renderer deps name request respond
     | otherwise = do
         env <- asks ctxEnv
         liftIO $ do
+            let metrics = envMetrics env
             evalCtx <- EvalContext <$> pdNow deps
             let clientToken = forwardedToken request
             (privResult, pubResult) <-
                 concurrently
                     (fetchPrivateOrigin (pdLimits deps) env (pdPrivateBaseUrl deps) clientToken name)
                     (fetchPublicOrigin (pdLimits deps) env (pdPublicBaseUrl deps) name)
-            (public, publicExclusions) <- gatePublic deps evalCtx (originPackument pubResult)
+            (public, publicExclusions) <- gatePublic metrics deps evalCtx (originPackument pubResult)
             let private = trustedSource <$> originPackument privResult
                 sources = catMaybes [private, public]
             case assemble deps sources of
-                Just body -> respond (servePackumentBody mode request body)
-                Nothing -> respond (noSurvivors renderer deps (collectDecisions privResult pubResult publicExclusions))
+                Just body -> do
+                    recordServeDecision metrics Metric.Admit
+                    respond (servePackumentBody mode request body)
+                Nothing -> do
+                    let decisions = collectDecisions privResult pubResult publicExclusions
+                    recordServeDecision metrics (packumentServeDecision decisions)
+                    recordDenials metrics decisions
+                    respond (noSurvivors renderer deps decisions)
 
 -- A recognised-but-unserved packument route: a @501@ in the mount's surface, for a
 -- mount whose packument-serve dependencies are not wired. The decision to serve or
@@ -459,7 +480,13 @@ origin safely is the serve-time authorisation it adds — see
 @docs\/architecture\/access-model.md@.) -}
 fetchPrivateOrigin :: Limits -> Env -> Text -> Maybe Secret -> PackageName -> IO OriginResult
 fetchPrivateOrigin limits env baseUrl token name = do
-    resolved <- tryAny (fetchEntry (envLogEnv env) limits (envPrivateManager env) baseUrl token name)
+    resolved <-
+        tryAny
+            ( recordedFetch
+                (envMetrics env)
+                Metric.Private
+                (fetchEntry (envLogEnv env) limits (envPrivateManager env) baseUrl token name)
+            )
     pure (originResultFrom resolved)
 
 {- Resolve the public (gated, anonymous) upstream origin through the metadata cache,
@@ -475,7 +502,16 @@ decision over it stay coherent across the TTL, and concurrent resolutions of a
 popular package __collapse to one upstream call__. -}
 fetchPublicOrigin :: Limits -> Env -> Text -> PackageName -> IO OriginResult
 fetchPublicOrigin limits env baseUrl name = do
-    resolved <- tryAny (resolveMetadata (envMetadataCache env) (Source baseUrl) name (fetchEntry (envLogEnv env) limits (envManager env) baseUrl Nothing name))
+    let metrics = envMetrics env
+    resolved <-
+        tryAny
+            ( resolveMetadata
+                metrics
+                (envMetadataCache env)
+                (Source baseUrl)
+                name
+                (recordedFetch metrics Metric.Public (fetchEntry (envLogEnv env) limits (envManager env) baseUrl Nothing name))
+            )
     pure (originResultFrom resolved)
 
 {- Fetch one upstream's full packument (the @Full@ form, for the @time@ map a
@@ -646,12 +682,14 @@ let a denied version reach the merge plan (and skew the reconciled @latest@\/@ti
 
 The trusted private upstream is exempt: this gate runs on the public path only, so a
 weak-digest private version still enters the merge unfiltered. -}
-gatePublic :: PackumentDeps -> EvalContext -> Maybe (PackageInfo, Value) -> IO (Maybe Contribution, [ServeDecision])
-gatePublic deps ctx = \case
+gatePublic :: Metrics -> PackumentDeps -> EvalContext -> Maybe (PackageInfo, Value) -> IO (Maybe Contribution, [ServeDecision])
+gatePublic metrics deps ctx = \case
     Nothing -> pure (Nothing, [])
     Just (info, value) -> do
         let (admissible, integrityRefusals) = admitByIntegrity (pdMinIntegrity deps) info
-        decisions <- decideVersions deps ctx admissible
+        (decisions, seconds) <- timedSeconds (decideVersions deps ctx admissible)
+        recordRuleEvalDuration metrics (evalTier deps) seconds
+        recordEffectfulFailures metrics (Map.elems decisions)
         let plan = filterPlanFromDecisions decisions admissible
         pure $ case applyFilterPlan (pdMountBaseUrl deps) plan value of
             Filtered filtered ->
@@ -1093,7 +1131,12 @@ serveTarballWithDeps mode renderer deps name version (Filename file) request res
                 validators = forwardValidators (requestHeaders request)
             privateHit <- streamPrivateArtifact mode env deps clientToken validators name version file respond
             case privateHit of
-                Just received -> pure received
+                Just received -> do
+                    -- A private hit is an admit served from the trusted upstream (no rule
+                    -- gate runs); a private miss falls through to the gated public path,
+                    -- which records its own decision.
+                    recordServeDecision (envMetrics env) Metric.Admit
+                    pure received
                 Nothing -> servePublicArtifact mode env renderer deps validators name version file respond
 
 {- Stream the artifact from the __trusted__ private upstream at its __authoritative
@@ -1186,10 +1229,16 @@ servePublicArtifact ::
     (Response -> IO ResponseReceived) ->
     IO ResponseReceived
 servePublicArtifact mode env renderer deps validators name version file respond = do
+    let metrics = envMetrics env
     gated <- gatePublicVersion env deps name version file
     case gated of
-        Admitted artifact -> streamPublicArtifact mode env renderer deps validators name version artifact respond
-        Refused decision -> respond (artifactError renderer deps (artifactStatus decision) decision)
+        Admitted artifact -> do
+            recordServeDecision metrics Metric.Admit
+            streamPublicArtifact mode env renderer deps validators name version artifact respond
+        Refused decision -> do
+            recordServeDecision metrics (serveDecisionClass decision)
+            recordDenials metrics [decision]
+            respond (artifactError renderer deps (artifactStatus decision) decision)
 
 {- The outcome of gating a single requested artifact on the public path: either the
 chosen 'Artifact' to fetch, or the serve decision the error model renders. The
@@ -1229,7 +1278,8 @@ gatePublicVersion env deps name version file = do
                 -- explainable from the trace; the upstream-outage and version-absent
                 -- branches above are not rule evaluations and carry no span.
                 withRuleEvalSpan (envTelemetry env) name version $ do
-                    gate <- gateVersion evalCtx deps file details
+                    (gate, seconds) <- timedSeconds (gateVersion evalCtx deps file details)
+                    recordRuleEvalDuration (envMetrics env) (evalTier deps) seconds
                     pure (gate, gateVerdict gate)
 
 -- The serve verdict a public-artifact gate outcome carries, for the rule-eval span:
@@ -1415,20 +1465,24 @@ serve) is not enqueued, since there would be no digest to verify against. -}
 enqueueMirror :: Env -> PackumentDeps -> PackageName -> Version -> Artifact -> IO ()
 enqueueMirror env deps name version artifact =
     whenJust (nonEmpty (artHashes artifact)) $ \hashes ->
-        withMirrorEnqueueSpan (envTelemetry env) name version (artUrl artifact) $
-            void . tryAny . enqueue (envQueue env) $
-                MirrorJob
-                    { jobPackage = name
-                    , jobVersion = version
-                    , jobArtifactUrl = artUrl artifact
-                    , jobMirrorTarget = pdMirrorTarget deps
-                    , jobArtifact =
-                        MirrorArtifact
-                            { maFilename = artFilename artifact
-                            , maHashes = hashes
-                            , maSize = artSize artifact
-                            }
-                    }
+        withMirrorEnqueueSpan (envTelemetry env) name version (artUrl artifact) $ do
+            enqueued <-
+                tryAny . enqueue (envQueue env) $
+                    MirrorJob
+                        { jobPackage = name
+                        , jobVersion = version
+                        , jobArtifactUrl = artUrl artifact
+                        , jobMirrorTarget = pdMirrorTarget deps
+                        , jobArtifact =
+                            MirrorArtifact
+                                { maFilename = artFilename artifact
+                                , maHashes = hashes
+                                , maSize = artSize artifact
+                                }
+                        }
+            -- Best-effort: the enqueue outcome is counted but never propagated, so a
+            -- queue outage records a failure rather than failing or delaying the serve.
+            either (const (recordMirrorEnqueueFailure (envMetrics env))) (const (recordMirrorEnqueued (envMetrics env))) enqueued
 
 -- ── the egress gate at the serve boundary ─────────────────────────────────────────
 
@@ -1545,3 +1599,106 @@ from the rule\/upstream outcomes 'artifactError' renders. -}
 internalArtifactError :: Response
 internalArtifactError =
     responseLBS (mkStatus 500 "Internal Server Error") [(hContentType, "application/json")] "{\"error\":\"could not form the upstream artifact URL\"}"
+
+-- ── metric emits ───────────────────────────────────────────────────────────────
+
+{- Record an upstream metadata fetch around the real fetch action: its latency on a
+successful resolve (a 2xx body was read and decoded), or a bounded-cause error
+otherwise, before re-raising so the caller's degrade is unchanged. Wrapping the fetch
+action means the public path — fetched through the cache — records only on a miss (a
+hit never runs the action), so the histogram counts real upstream calls, not cache
+hits (those are the metadata-cache metric's concern). -}
+recordedFetch :: Metrics -> Metric.Upstream -> IO CacheEntry -> IO CacheEntry
+recordedFetch metrics upstream action = do
+    (result, seconds) <- timedSeconds (tryAny action)
+    case result of
+        Right entry -> do
+            recordUpstreamFetch metrics upstream Metric.Status2xx seconds
+            pure entry
+        Left err -> do
+            recordUpstreamFetchError metrics upstream (fetchCause err)
+            throwIO err
+
+{- Classify a caught metadata-fetch failure into the bounded error cause: an
+undecodable or name-mismatched body is a decode fault, a transport error a connection
+fault, and a response-bound breach or anything else is the catch-all other. The cause
+is bounded by construction — never the exception text. -}
+fetchCause :: SomeException -> Metric.Cause
+fetchCause err
+    | Just PackumentUndecodable <- fromException err = Metric.Decode
+    | Just PackumentNameMismatch <- fromException err = Metric.Decode
+    | Just (ResponseBoundExceeded _) <- fromException err = Metric.OtherCause
+    | Just (_ :: HTTP.HttpException) <- fromException err = Metric.Connection
+    | otherwise = Metric.OtherCause
+
+{- Classify a no-survivors packument outcome into the bounded serve decision a metric
+records: a forbidden set is a denial, any other non-served status a transient
+unavailability. (A served set is recorded as an admit at the call site, not here.) -}
+packumentServeDecision :: [ServeDecision] -> Metric.Decision
+packumentServeDecision decisions = case packumentStatus decisions of
+    PackumentForbidden -> Metric.Deny
+    PackumentOk -> Metric.Admit
+    _ -> Metric.Unavailable
+
+{- Classify a single artifact-path serve decision into the bounded metric decision: a
+policy or integrity refusal is a denial, an upstream outage or invalid response an
+unavailability. -}
+serveDecisionClass :: ServeDecision -> Metric.Decision
+serveDecisionClass = \case
+    Admit -> Metric.Admit
+    Reject (Rejection reason _) -> case reason of
+        ByPolicy{} -> Metric.Deny
+        MissingIntegrity -> Metric.Deny
+        BelowIntegrityFloor -> Metric.Deny
+        Unavailable{} -> Metric.Unavailable
+        UpstreamInvalid -> Metric.Unavailable
+
+{- Record the @ecluse.rule.denials@ counter for each rejected decision, labelled by the
+bounded reason class and — for a policy denial — the deciding rule name. An admit
+records nothing. The rule name is the one operator-bounded label; a non-policy refusal
+names none. -}
+recordDenials :: Metrics -> [ServeDecision] -> IO ()
+recordDenials metrics = traverse_ recordOne
+  where
+    recordOne :: ServeDecision -> IO ()
+    recordOne = \case
+        Admit -> pass
+        Reject (Rejection reason _) ->
+            let (rule, reasonClass) = denialLabels reason
+             in recordRuleDenial metrics rule reasonClass
+
+{- Map a reject reason to the @ecluse.rule.denials@ labels: the deciding rule (only a
+policy denial names one) and the bounded reason class. -}
+denialLabels :: RejectReason -> (Maybe Text, Metric.ReasonClass)
+denialLabels = \case
+    ByPolicy (RuleName name) -> (Just name, Metric.ReasonPolicy)
+    MissingIntegrity -> (Nothing, Metric.ReasonMissingIntegrity)
+    BelowIntegrityFloor -> (Nothing, Metric.ReasonMissingIntegrity)
+    Unavailable _ -> (Nothing, Metric.ReasonUnavailable)
+    UpstreamInvalid -> (Nothing, Metric.ReasonUnavailable)
+
+{- The rule-evaluation tier a duration is attributed to: a mount with effectful rules
+configured runs the effectful tier (the pure tier first, the effectful tier only where
+it could change the outcome), otherwise the evaluation reduces to the structural tier. -}
+evalTier :: PackumentDeps -> Metric.Tier
+evalTier deps = if null (pdEffectfulRules deps) then Metric.Structural else Metric.Effectful
+
+{- Count each effectful-rule failure among a packument's per-version decisions: an
+'Undecidable' is an effectful rule whose source could not be consulted, so it is the
+effectful-failure signal, classified to a bounded cause by its transience. A decided
+version (allowed or denied) is not a failure. -}
+recordEffectfulFailures :: Metrics -> [Decision] -> IO ()
+recordEffectfulFailures metrics = traverse_ recordOne
+  where
+    recordOne :: Decision -> IO ()
+    recordOne = \case
+        Undecidable transience _ -> recordRuleEffectfulFailure metrics (transienceCause transience)
+        _ -> pass
+
+{- Map an undecidable verdict's transience to the bounded effectful-failure cause: a
+retryable cause is a connection-class fault (the source was unreachable now), a
+permanent one the catch-all other. -}
+transienceCause :: Transience -> Metric.Cause
+transienceCause = \case
+    WillResolve _ -> Metric.Connection
+    WontResolve -> Metric.OtherCause
