@@ -38,7 +38,7 @@ import Ecluse.Credential.CodeArtifact (CodeArtifactConfig (caDomain, caDomainOwn
 import Ecluse.Ecosystem (Ecosystem (..))
 import Ecluse.Package (HashAlg (SHA512))
 import Ecluse.Package.Integrity (defaultMinIntegrity, mkMinIntegrity)
-import Ecluse.Queue (MemoryQueueConfig (..))
+import Ecluse.Queue (defaultMemoryQueueConfig)
 import Ecluse.Queue.Sqs (SqsConfig (sqsEndpoint, sqsQueueUrl, sqsRegion), SqsEndpoint (endpointHost, endpointPort, endpointSecure))
 import Ecluse.Security (Limits (maxBodyBytes, maxNestingDepth, maxVersionCount), TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), defaultLimits)
 import Ecluse.Server.Cache (CacheConfig (cacheMaxEntries, cacheTtl))
@@ -220,11 +220,11 @@ mirrorQueueSpec = describe "planMirrorQueue" $ do
         -- The memory backend is an explicit operator choice that needs no cloud queue:
         -- it carries only its depth cap, and AWS_REGION is irrelevant to it.
         env <- expectEnv (("MIRROR_QUEUE_PROVIDER", "memory") : ("MIRROR_QUEUE_MEMORY_MAX_DEPTH", "1234") : staticEnvVars)
-        planMirrorQueue env `shouldBe` Right (MemoryBackend (MemoryQueueConfig{memQueueMaxDepth = 1234}))
+        planMirrorQueue env `shouldBe` Right (MemoryBackend (defaultMemoryQueueConfig 1234))
 
     it "defaults the in-memory backend's cap when MIRROR_QUEUE_MEMORY_MAX_DEPTH is unset" $ do
         env <- expectEnv (("MIRROR_QUEUE_PROVIDER", "memory") : staticEnvVars)
-        planMirrorQueue env `shouldBe` Right (MemoryBackend (MemoryQueueConfig{memQueueMaxDepth = 50000}))
+        planMirrorQueue env `shouldBe` Right (MemoryBackend (defaultMemoryQueueConfig 50000))
 
     it "warns loudly on selecting the in-memory backend, and not on the durable SQS one" $ do
         -- AC3: selecting memory emits a loud non-durable/best-effort boot warning;

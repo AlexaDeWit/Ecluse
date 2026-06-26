@@ -225,8 +225,11 @@ processMessage message =
             logFM ErrorS (ls ("dropping unrecoverable mirror job: " <> reason))
             ackMessage (msgReceipt message)
         Retried reason ->
-            -- A transient fault: leave the message un-acked so it redelivers.
-            logFM WarningS (ls ("leaving mirror job for redelivery: " <> reason))
+            -- A transient fault: leave the message un-acked. How it is retried is
+            -- backend-dependent — a durable queue redelivers it once the visibility
+            -- window lapses, while the in-memory backend (no redelivery) simply
+            -- re-mirrors it on the next demand. Either way it is not lost.
+            logFM WarningS (ls ("leaving mirror job un-acked for retry (redelivered by a durable queue, re-mirrored on next demand by the in-memory one): " <> reason))
 
 ackMessage :: ReceiptHandle -> App ()
 ackMessage receipt = do

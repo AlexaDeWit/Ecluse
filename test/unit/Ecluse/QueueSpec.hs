@@ -15,6 +15,7 @@ import Hedgehog (
 import Hedgehog qualified as H
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
+import System.Timeout (timeout)
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
@@ -171,6 +172,16 @@ spec = do
             hedgehog queueModelProperty
 
     describe "newBoundedInMemoryQueue" $ do
+        it "returns [] on an idle queue within the poll window (never blocks forever)" $ do
+            -- The load-bearing liveness property: the worker advances its heartbeat
+            -- only when receive returns, so an idle receive MUST return [] (a healthy
+            -- empty poll) within its bounded window rather than blocking indefinitely.
+            -- The helper uses a 50ms window; the 2s timeout is a generous regression
+            -- guard that fails loudly if receive ever reverts to blocking forever.
+            (q, _drops) <- boundedQueue 4
+            result <- timeout 2_000_000 (receive q)
+            result `shouldBe` Just []
+
         it "carries a job from enqueue through receive to ack (round-trip)" $ do
             -- A cap well above the one job, so nothing is dropped: the job arrives
             -- unchanged and ack (a no-op on this backend) completes without error.
@@ -211,11 +222,14 @@ spec = do
   where
     -- A bounded in-memory queue at the given cap, paired with an 'IORef' that records
     -- (in order) the running drop totals its drop callback was invoked with — so a
-    -- test can assert both the cap behaviour and the rate-limited drop reporting.
+    -- test can assert both the cap behaviour and the rate-limited drop reporting. The
+    -- idle poll window is shortened to 50ms (the production default is ~20s) so an
+    -- idle-receive test returns promptly rather than waiting out a real long-poll.
     boundedQueue :: Int -> IO (MirrorQueue, IORef [Int])
     boundedQueue cap = do
         drops <- newIORef []
-        q <- newBoundedInMemoryQueue MemoryQueueConfig{memQueueMaxDepth = cap} (\n -> modifyIORef' drops (<> [n]))
+        let cfg = MemoryQueueConfig{memQueueMaxDepth = cap, memQueuePollWaitMicros = 50_000}
+        q <- newBoundedInMemoryQueue cfg (\n -> modifyIORef' drops (<> [n]))
         pure (q, drops)
 
     -- Receive repeatedly, acking everything, until the queue is empty; returns

@@ -70,6 +70,7 @@ module Ecluse.Queue (
 
     -- * Bounded in-memory production backend
     MemoryQueueConfig (..),
+    defaultMemoryQueueConfig,
     newBoundedInMemoryQueue,
     memoryQueueBatchSize,
     memoryQueueDropReportInterval,
@@ -78,6 +79,7 @@ module Ecluse.Queue (
 import Control.Concurrent.STM.TBQueue (TBQueue, isFullTBQueue, newTBQueueIO, readTBQueue, tryReadTBQueue, writeTBQueue)
 import Data.Map.Strict qualified as Map
 import Data.Sequence qualified as Seq
+import System.Timeout (timeout)
 
 import Ecluse.Package (Hash, PackageName)
 import Ecluse.Version (Version)
@@ -335,17 +337,39 @@ newInMemoryQueue = do
 
 -- ── bounded in-memory production backend ─────────────────────────────────────
 
-{- | What the bounded in-memory backend needs: just its depth cap. A record (like
-'Ecluse.Queue.Sqs.SqsConfig') so the one knob is named rather than a bare 'Int'.
+{- | What the bounded in-memory backend needs: its depth cap and its idle-poll
+window. A record (like 'Ecluse.Queue.Sqs.SqsConfig') so each knob is named rather
+than a bare 'Int'; build it with 'defaultMemoryQueueConfig' for the production poll
+window.
 -}
-newtype MemoryQueueConfig = MemoryQueueConfig
+data MemoryQueueConfig = MemoryQueueConfig
     { memQueueMaxDepth :: Int
     {- ^ The maximum number of jobs the queue holds. A fresh 'enqueue' past this cap
     is __dropped-newest__ (the enqueue is rejected); a dropped job is safe, as it is
     re-enqueued on the next demand. Must be positive (the config layer enforces it).
     -}
+    , memQueuePollWaitMicros :: Int
+    {- ^ The idle long-poll window in microseconds: how long a 'receive' waits for a
+    job before returning @[]@ (an empty, healthy poll). Bounds the idle wait so the
+    worker's liveness heartbeat keeps advancing — see 'newBoundedInMemoryQueue'.
+    -}
     }
     deriving stock (Eq, Show)
+
+{- | A 'MemoryQueueConfig' for a given depth cap with the idle-poll window at its
+production default — @20s@, mirroring the SQS long-poll cadence
+('Ecluse.Queue.Sqs.defaultSqsConfig') and comfortably under the worker's @120s@
+heartbeat-staleness budget ('Ecluse.Worker.workerHeartbeatStaleAfter'), so an idle
+'receive' returns a healthy empty poll long before @\/livez@ would flag the loop
+stalled. The depth cap stays the operator-tunable knob; the poll window is a fixed
+cadence, exposed on the record only so a test can shorten it.
+-}
+defaultMemoryQueueConfig :: Int -> MemoryQueueConfig
+defaultMemoryQueueConfig maxDepth =
+    MemoryQueueConfig
+        { memQueueMaxDepth = maxDepth
+        , memQueuePollWaitMicros = 20_000_000
+        }
 
 {- | The most jobs one 'receive' delivers from the bounded in-memory backend. Held
 at the SQS batch cap so the worker — which processes a batch __sequentially__ and
@@ -388,9 +412,15 @@ That admits two deliberate departures from the cloud backends' contract:
   bounds memory hardest (nothing is retained after delivery) and is admissible
   precisely because a lost job is safe.
 
-'receive' __blocks until at least one job is available__, then drains up to
-'memoryQueueBatchSize' without blocking — the in-process analogue of the cloud
-long-poll, so an idle worker waits rather than hot-looping on empty polls.
+'receive' is a __bounded long-poll__: it waits up to 'memQueuePollWaitMicros' for a
+job, then drains up to 'memoryQueueBatchSize' without blocking, or returns @[]@ when
+the window lapses — the in-process analogue of the cloud long-poll. The bound is
+load-bearing: the worker advances its liveness heartbeat only when 'receive' returns
+(an empty poll is a healthy idle), so an idle 'receive' that blocked forever would
+let the heartbeat go stale and @\/livez@ flag the loop stalled. The wait is the
+@timeout@-over-@atomically@ idiom rather than @registerDelay@ so it works on the
+non-threaded RTS too; an interrupted poll aborts the STM transaction, consuming
+nothing.
 -}
 newBoundedInMemoryQueue ::
     -- | The depth cap (and any future knobs).
@@ -421,7 +451,10 @@ newBoundedInMemoryQueue cfg onDrop = do
                             pure (if shouldReport n then Just n else Nothing)
                         else writeTBQueue queue job $> Nothing
                 whenJust report onDrop
-            , receive = atomically (receiveBatch queue nextReceipt)
+            , -- A bounded long-poll: wait up to the poll window for a batch, else return
+              -- [] so the worker's heartbeat keeps advancing on an idle queue. The
+              -- timeout aborts the blocked STM transaction, so no job is consumed.
+              receive = fromMaybe [] <$> timeout (memQueuePollWaitMicros cfg) (atomically (receiveBatch queue nextReceipt))
             , -- A delivered job is already gone from the queue, so there is nothing to
               -- retire and a failed job redelivers via the next demand, not here.
               ack = const pass
@@ -433,9 +466,11 @@ newBoundedInMemoryQueue cfg onDrop = do
     shouldReport :: Int -> Bool
     shouldReport n = n == 1 || n `mod` memoryQueueDropReportInterval == 0
 
-{- Take a bounded batch: block until at least one job is available (so an idle
-worker waits rather than hot-looping), then drain up to 'memoryQueueBatchSize' total
-without blocking. Each delivery is assigned a fresh receipt from a monotonic counter
+{- Take a bounded batch within one STM transaction: block (retry) until at least one
+job is available, then drain up to 'memoryQueueBatchSize' total without blocking. The
+caller bounds the initial block with a timeout (so an idle queue yields @[]@ rather
+than hanging the worker); if that timeout fires, this transaction is aborted and
+consumes nothing. Each delivery is assigned a fresh receipt from a monotonic counter
 so messages stay distinct, even though 'ack' on this backend is a no-op. -}
 receiveBatch :: TBQueue MirrorJob -> TVar Word64 -> STM [QueueMessage]
 receiveBatch queue nextReceipt = do

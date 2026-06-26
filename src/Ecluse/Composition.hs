@@ -90,7 +90,7 @@ import Ecluse.Credential (AuthToken (..), CredentialProvider, Secret, mkSecret, 
 import Ecluse.Credential.CodeArtifact (CodeArtifactConfig (..), newCodeArtifactProvider)
 import Ecluse.Ecosystem (Ecosystem, ecosystemName, prefixFor)
 import Ecluse.Package.Integrity (MinIntegrity)
-import Ecluse.Queue (MemoryQueueConfig (..))
+import Ecluse.Queue (MemoryQueueConfig, defaultMemoryQueueConfig)
 import Ecluse.Queue.Sqs (SqsConfig (sqsEndpoint), SqsEndpoint (..), defaultSqsConfig)
 import Ecluse.Security (Limits (Limits, maxBodyBytes, maxNestingDepth, maxVersionCount), TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), hostAddress, lowerCaseHosts)
 import Ecluse.Server.Cache (CacheConfig (..))
@@ -620,7 +620,7 @@ uses AWS's default endpoint and credential resolution.
 planMirrorQueue :: EnvConfig -> Either [BootError] MirrorQueuePlan
 planMirrorQueue env = case cfgQueueBackend env of
     PubSubQueue -> Left [QueueProviderUnavailable PubSubQueue]
-    MemoryQueue -> Right (MemoryBackend (MemoryQueueConfig{memQueueMaxDepth = cfgQueueMemoryMaxDepth env}))
+    MemoryQueue -> Right (MemoryBackend (defaultMemoryQueueConfig (cfgQueueMemoryMaxDepth env)))
     SqsQueue -> case T.strip <$> cfgAwsRegion env of
         Just region | not (T.null region) -> do
             endpoint <- resolveSqsEndpoint env
