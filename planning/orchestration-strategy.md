@@ -241,6 +241,17 @@ spent worktrees and their merged branches so `git worktree list` stays an accura
 map of live work. Prune only the merged-and-clean ones — a worktree carrying
 uncommitted or not-yet-merged work is surfaced to the architect, never force-removed.
 
+Housekeeping also **closes out the tracker**. A PR that resolves an issue declares it
+with a `Closes #N` keyword (per the [Definition of done](#definition-of-done)) so the
+merge closes it automatically — but a **squash-merge can drop that keyword**, leaving
+the issue open even though its work shipped. Closing resolved issues is therefore a
+standing part of the team lead's role: **as each PR lands**, confirm its issue closed
+and, if the keyword did not fire, close it manually; and **as a backstop in this
+sweep**, scan the open issues against the wave's merged PRs and close any whose fix has
+merged — each with a `Resolved by #PR` reference. An issue left open for a real reason
+(only partially addressed, or a follow-on tracked separately) is **not** closed; it is
+left with a note on what remains.
+
 The pass **gates the next wave**: the integrated base a wave builds on is made
 coherent first. It is recorded in the
 [delivery plan](delivery-plan.md#parallelization--3-slices-in-flight)'s wave sequence.
@@ -321,6 +332,7 @@ A PR reaches the architect only when **all** hold:
 - [ ] Semgrep clean (no new ignores)
 - [ ] CI `gate` (and every job it needs) green on the PR
 - [ ] Docs updated in the same PR; changes limited to the slice's file scope (other files only with strong justification)
+- [ ] Any GitHub issue the PR resolves is named in its description with a closing keyword (`Closes #N`), so the merge closes it — the tracker must not accrue resolved-but-open issues
 - [ ] Slice file `status:` advanced to `merged` (true once this PR lands) and any as-built delta — design decisions, discoveries, deviations from the acceptance criteria — recorded in it; the slice's `planning/slices/SNN-*.md` is part of the slice's file scope
 - [ ] Commits GPG-signed + DCO `Signed-off-by` (`git commit -s`) + Conventional Commits
 - [ ] PR taken **out of draft and marked ready for review** — the hand-off itself, done only once every box above holds; until then the PR stays a **draft** so it is never mistaken for review-ready
