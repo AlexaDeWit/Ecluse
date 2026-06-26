@@ -1,8 +1,9 @@
 module Ecluse.LogSpec (spec) where
 
-import Data.Aeson (Object, Value (Object), eitherDecodeStrict, withObject, (.:))
+import Data.Aeson (Object, Value (Object), eitherDecodeStrict, object, withObject, (.:), (.=))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.Types (parseMaybe)
+import Data.ByteString qualified as BS
 import Data.Text qualified as T
 import Data.Time (UTCTime (..), fromGregorian)
 import GHC.IO.Handle (hClose, hDuplicate, hDuplicateTo)
@@ -27,8 +28,14 @@ import UnliftIO.Temporary (withSystemTempFile)
 
 import Ecluse.Credential (mkSecret)
 import Ecluse.Log (
+    DdContext (..),
+    DdSpan (..),
     LogFormat (..),
     auditContext,
+    ddField,
+    ddObject,
+    formatDdSpanId,
+    formatDdTraceId,
     newLogEnv,
     newScribe,
     parseLogFormat,
@@ -81,6 +88,17 @@ dataField key logItem = do
 -- | The structured-context fields the audit trail attaches to a denial.
 deniedContext :: SimpleLogPayload
 deniedContext = auditContext "@evil/pkg" "1.0.0" "DenyInstallTimeExecution"
+
+-- | The nested @dd@ correlation object of a serialised item's @data@ payload.
+ddObjectOf :: Item SimpleLogPayload -> Maybe Object
+ddObjectOf logItem = do
+    o <- itemObject logItem
+    dat <- parseMaybe (.: "data") o
+    parseMaybe (.: "dd") dat
+
+-- | A string field of a @dd@ object.
+ddStr :: Text -> Object -> Maybe Text
+ddStr key = parseMaybe (\ob -> ob .: Key.fromText key)
 
 {- | Run an 'IO' action with the process 'stdout' redirected to a temporary file,
 returning everything written. The original 'stdout' is restored on every exit
@@ -223,6 +241,41 @@ spec = do
                 pure ()
             captured `shouldSatisfy` T.isInfixOf "[Warning]"
             captured `shouldSatisfy` T.isInfixOf "denied"
+
+    describe "dd trace correlation (Datadog id format + dd object)" $ do
+        it "renders a trace id as the unsigned decimal of its low 64 bits (high bits ignored)" $ do
+            formatDdTraceId (BS.pack (replicate 8 0xFF <> [0, 0, 0, 0, 0, 0, 0, 42])) `shouldBe` "42"
+            formatDdTraceId (BS.pack (replicate 8 0x00 <> [0, 0, 0, 0, 0, 0, 1, 0])) `shouldBe` "256"
+
+        it "renders a span id as the unsigned decimal of its 64 bits (big-endian)" $ do
+            formatDdSpanId (BS.pack [0, 0, 0, 0, 0, 0, 0, 1]) `shouldBe` "1"
+            formatDdSpanId (BS.pack [1, 0, 0, 0, 0, 0, 0, 0]) `shouldBe` "72057594037927936"
+
+        it "builds the dd object: service always, env/version when set, ids only with a span" $ do
+            ddObject (DdContext "ecluse" (Just "prod") (Just "1.4.2") (Just (DdSpan "42" "7")))
+                `shouldBe` object
+                    [ "service" .= ("ecluse" :: Text)
+                    , "env" .= ("prod" :: Text)
+                    , "version" .= ("1.4.2" :: Text)
+                    , "trace_id" .= ("42" :: Text)
+                    , "span_id" .= ("7" :: Text)
+                    ]
+            ddObject (DdContext "ecluse" Nothing Nothing Nothing)
+                `shouldBe` object ["service" .= ("ecluse" :: Text)]
+
+        it "carries the dd object on one compact JSON line under data.dd" $ do
+            let logItem =
+                    item
+                        (ddField (DdContext "ecluse" (Just "prod") (Just "1.4.2") (Just (DdSpan "42" "7"))))
+                        "denied"
+                rendered = renderLogLine JsonLog logItem
+                dd = ddObjectOf logItem
+            length (T.lines rendered) `shouldBe` 1
+            (dd >>= ddStr "service") `shouldBe` Just "ecluse"
+            (dd >>= ddStr "env") `shouldBe` Just "prod"
+            (dd >>= ddStr "version") `shouldBe` Just "1.4.2"
+            (dd >>= ddStr "trace_id") `shouldBe` Just "42"
+            (dd >>= ddStr "span_id") `shouldBe` Just "7"
   where
     -- Whether a decoded JSON result is a single object (the JSONL contract).
     isObjectValue :: Either String Value -> Bool

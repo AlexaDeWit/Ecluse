@@ -65,9 +65,9 @@ catalogueSpec = describe "metric-name catalogue" $ do
                             ]
         names `shouldContain` ["http.server.request.duration"]
 
-    it "namespaces every metric under ecluse.* or the OTel http.* convention" $
-        all (\n -> "ecluse." `T.isPrefixOf` n || "http." `T.isPrefixOf` n) (map metricName allMetricNames)
-            `shouldBe` True
+    it "namespaces every metric under ecluse.* or the OTel http.* convention" $ do
+        let names = map metricName allMetricNames
+        all (\n -> "ecluse." `T.isPrefixOf` n || "http." `T.isPrefixOf` n) names `shouldBe` True
 
     it "does not re-emit cloud-native queue metrics" $
         map metricName allMetricNames
@@ -122,7 +122,8 @@ boundedDomainSpec = describe "bounded label value domains" $ do
             allBoundedLabels
             `shouldBe` True
 
-    it "materialises OpenTelemetry attributes for every bounded label without error" $
+    it
+        "materialises OpenTelemetry attributes for every bounded label without error"
         (traverse_ (evaluateWHNF . metricAttributes . (: [])) allBoundedLabels :: IO ())
 
     it "encodes breaker state as a small ordinal gauge value, not a label" $
