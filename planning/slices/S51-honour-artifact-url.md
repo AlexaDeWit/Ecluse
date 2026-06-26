@@ -53,7 +53,7 @@ currently plumbed but never consulted — load-bearing.
    living in the npm adapter, per the adapter-owns-its-URL-model principle — rather
    than reconstructing. The client-facing rewrite to the proxy stays unchanged
    (the proxy must still mediate / cache / mirror).
-3. Apply the egress gate at the seam, by trust context:
+3. Apply the egress gate at the egress point, by trust context:
    - **Public origin:** guarded `envManager` (resolved-IP recheck, already live)
      **plus** `tarballHostAllowed` with `PROXY_RESPECT_UPSTREAM_TARBALL_HOST`
      semantics — default `SameHostAsPackument` refuses a tarball host ≠ the
@@ -85,7 +85,7 @@ currently plumbed but never consulted — load-bearing.
 
 - `src/Ecluse/Server/Pipeline.hs` — thread the `Artifact` from gate → stream, both legs.
 - `src/Ecluse/Registry/Npm.hs` — `artifactRequestByUrl` (fetch by authoritative URL).
-- `src/Ecluse/Security.hs` — connect the existing `tarballHostAllowed` at the seam.
+- `src/Ecluse/Security.hs` — connect the existing `tarballHostAllowed` at the egress point.
 - Tests (unit + integration); docs (`security.md`, `configuration.md`).
 
 ## Out of scope / do not touch
@@ -93,7 +93,7 @@ currently plumbed but never consulted — load-bearing.
 - The parser / projection — `Artifact.artUrl` is already correct.
 - The private-first / public-fallback dispatch — already correct.
 - The PyPI adapter — this slice delivers npm + the general mechanism; a future PyPI
-  adapter rides the same seam.
+  adapter rides the same boundary.
 
 ## Notes
 

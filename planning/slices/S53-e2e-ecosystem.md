@@ -34,7 +34,7 @@ to end. The headline flow no current tier exercises:
   exactly as production is. The single process runs `runServer ‖ runWorker` over
   one `Env` with the in-memory queue (`Ecluse.hs` `newInMemoryQueue`), so the
   server→worker hand-off is exercised for real without a queue emulator. **No
-  test-only code path, cabal flag, or composition seam** — the binary under test is
+  test-only code path, cabal flag, or composition hook** — the binary under test is
   byte-for-byte the release binary.
 - **Reaching the stub past the egress guard — a TEST-NET docker network, not a
   code escape hatch.** S40's guard rechecks every resolved outbound IP on the
