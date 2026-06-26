@@ -40,9 +40,10 @@ common shared
   -- (we use open imports for internal modules), and -Wmissing-local-signatures
   -- (where-helpers are allowed to be inferred).
   ghc-options:
-    -Wall -Wcompat -Widentities -Wincomplete-record-updates
-    -Wincomplete-uni-patterns -Wmissing-deriving-strategies
-    -Wmissing-export-lists -Wpartial-fields -Wredundant-constraints
+    -Wall -Wcompat -Widentities -Wincomplete-record-selectors
+    -Wincomplete-record-updates -Wincomplete-uni-patterns
+    -Wmissing-deriving-strategies -Wmissing-export-lists -Wname-shadowing
+    -Wpartial-fields -Wredundant-bang-patterns -Wredundant-constraints
 
   default-language:   GHC2021
   default-extensions:

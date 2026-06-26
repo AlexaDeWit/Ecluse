@@ -165,14 +165,17 @@ Enabled on top of `-Wall`, each reinforcing a rule in this guide:
 |------|--------|
 | `-Wcompat` | Upcoming breaking changes — fix them early. |
 | `-Widentities` | Redundant numeric/`id` conversions. |
+| `-Wincomplete-record-selectors` | A partial record selector at the *use* site — catches dependency-defined ones `-Wpartial-fields` cannot see. |
 | `-Wincomplete-record-updates` | Record updates that could fail. |
 | `-Wincomplete-uni-patterns` | Partial patterns in lambdas/`let` (totality). |
 | `-Wmissing-deriving-strategies` | Forces the `deriving stock` style of §7. |
 | `-Wmissing-export-lists` | Forces explicit export lists (§5). |
-| `-Wpartial-fields` | Partial record selectors on sum types. |
+| `-Wname-shadowing` | A local binding that shadows a name already in scope. |
+| `-Wpartial-fields` | Partial record selectors on sum types, at the *definition* site. |
+| `-Wredundant-bang-patterns` | A `!` pattern that forces nothing (already strict/irrefutable). |
 | `-Wredundant-constraints` | Constraints a signature does not use. |
 
-**`-Werror` makes _every_ warning fatal — not only the eight above.** That
+**`-Werror` makes _every_ warning fatal — not only the ones tabled above.** That
 includes the full `-Wall` set (unused imports and bindings, incomplete and
 overlapping patterns, missing top-level type signatures, type defaulting, …)
 *and* relude's own `WARNING` pragmas. In particular **`undefined` and the
@@ -506,6 +509,16 @@ Represent "this might not exist" in the type (`Maybe`, `Either`, a sum type),
 and let the caller decide — see `Decision`/`RuleOutcome`, which carry a human
 reason for every branch precisely so failures are explainable rather than
 thrown.
+
+**Partial record selectors and updates fall under the same ban**, caught at
+compile time rather than by `.hlint.yaml`. A field that is not present in every
+constructor of a sum type yields a selector — and a record update — that throws
+on the other constructors, even though its type looks total. `-Wpartial-fields`
+rejects *defining* one, `-Wincomplete-record-selectors` rejects a *use* site
+that could fail (including selectors defined in a dependency), and
+`-Wincomplete-record-updates` rejects the update form — all fatal under
+`-Werror` (§3). Keep selectors total: give each constructor its own nested
+record, or hoist the shared fields out of the sum.
 
 ### `error` and the unreachable-branch escape hatch
 
