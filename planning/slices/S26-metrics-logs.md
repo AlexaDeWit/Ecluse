@@ -97,6 +97,29 @@ substrate-config part split out per the orchestration's stacked-PR pattern:
   `OTEL_*` → install the throttled error handler*; the `PROXY_TELEMETRY_ALLOW_PUBLIC_EGRESS`
   knob and the `Ecluse.Security` coupling are gone.
 
+### PR2 — `ecluse.*` catalogue + bounded-label guard + `dd` correlation (#312)
+
+The headline metrics work, stacked on PR1, built incrementally:
+
+- **AC2 (bounded-label discipline) — delivered.** `Ecluse.Telemetry.Metrics`: a closed
+  `Label` sum whose every constructor pairs a bounded-domain key with a bounded value;
+  high-cardinality identifiers (`package`/`version`/`scope`/`message`) have no
+  constructor (the type system forbids them as labels). `rule` is the one
+  operator-bounded label. The label-domain guard (`Ecluse.Telemetry.MetricsSpec`)
+  rejects the high-cardinality keys and proves the series space is a small fixed product.
+- **AC1 (catalogue) — definitions delivered; emits pending.** The typed `MetricName`
+  catalogue + `metricAttributes` + `statusClassOf`/`breakerStateCode`. The runtime
+  instrument handles and **call-site emits** (`Pipeline`/`Worker`/`Cache`/`Breaker`/
+  `Credential`) + the integration test remain — the part that touches the S25-contended
+  `Pipeline`/`Worker`, to be landed surgically with the expected S25 rebase.
+- **AC4 (`dd` correlation) — delivered.** `Ecluse.Log` gains the `dd` object
+  (`DdContext`/`DdSpan`/`ddObject`/`ddField`), OTel-free. `formatDdTraceId`/
+  `formatDdSpanId` render the **unsigned decimal of the low 64 bits** of the trace id and
+  the 64-bit span id (verified in `Ecluse.LogSpec`); the 128-bit-hex form is a separate
+  opt-in. The IO glue that reads the active span (`Ecluse.Telemetry.Correlation`) lands
+  with S25's spans (until then there is no active span, so trace ids are correctly
+  absent while `service`/`env`/`version` still stamp every line).
+
 **Deferrals.**
 - **Advisory-sync metrics** (`ecluse.advisory.sync.*`) are deferred: the CVE/OSV sync
   module (S22) is not built — there is no `src/Ecluse/Cve/`. Not stubbed.
