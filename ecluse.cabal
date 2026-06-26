@@ -110,6 +110,7 @@ library
     Ecluse.Telemetry.Reporters
     Ecluse.Telemetry.Resolve
     Ecluse.Telemetry.Tracing
+    Ecluse.Text
     Ecluse.Version
     Ecluse.Worker
 
@@ -235,6 +236,7 @@ test-suite ecluse-unit
     Ecluse.Telemetry.TracingSpec
     Ecluse.TelemetrySpec
     Ecluse.Test.SupportLinkageSpec
+    Ecluse.TextSpec
     Ecluse.VersionOrderingSpec
     Ecluse.VersionSpec
     Ecluse.WorkerSpec

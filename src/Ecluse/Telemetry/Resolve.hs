@@ -69,6 +69,7 @@ import Katip.Monadic (runKatipContextT)
 import OpenTelemetry.Internal.Logging (setGlobalErrorHandler)
 
 import Ecluse.Log (moduleField)
+import Ecluse.Text (nonBlank)
 
 -- ── the resolved telemetry identity ──────────────────────────────────────────
 
@@ -359,7 +360,3 @@ logResolve :: LogEnv -> Severity -> Text -> IO ()
 logResolve logEnv severity message =
     runKatipContextT logEnv (moduleField "Ecluse.Telemetry.Resolve") mempty $
         logFM severity (ls message)
-
--- A present-but-blank environment value is treated as unset.
-nonBlank :: Text -> Maybe Text
-nonBlank value = if T.null (T.strip value) then Nothing else Just value

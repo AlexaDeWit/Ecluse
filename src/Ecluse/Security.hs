@@ -82,6 +82,7 @@ import Data.Vector qualified as V
 
 import Ecluse.Package (PackageInfo, PackageName, infoVersions, renderPackageName)
 import Ecluse.Server.Route (encodeComponent, isSafeComponent)
+import Ecluse.Text (joinUrlPath)
 
 -- ── outbound host allowlist ──────────────────────────────────────────────────
 
@@ -591,15 +592,12 @@ upstreamUrlFor baseUrl name
     | T.null baseUrl = Left EmptyBaseUrl
     | otherwise = case firstUnsafe (componentsOf parts) of
         Just bad -> Left (UnsafeComponent bad)
-        Nothing -> Right (joinUrl baseUrl (encodePath parts))
+        Nothing -> Right (joinUrlPath baseUrl (encodePath parts))
   where
     parts = nameParts name
 
     firstUnsafe :: [Text] -> Maybe Text
     firstUnsafe = find (not . isSafeComponent)
-
-    joinUrl :: Text -> Text -> Text
-    joinUrl b path = fromMaybe b (T.stripSuffix "/" b) <> "/" <> path
 
 {- The structural decomposition of a package name for URL building: a scope with a
 base name, or a single component, recovered by splitting the rendered name on the
