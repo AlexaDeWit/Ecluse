@@ -22,6 +22,13 @@ handle's closures, so the backend's state never reaches the proxy's @Env@\/@App@
 fails to parse is dropped rather than yielded as a partial, so — like any message
 left unprocessed — it is not 'ack'ed and SQS redelivers it, ultimately to the
 dead-letter queue.
+
+The SQS queue is a __trusted, operator-declared destination__ (the configured queue
+URL, or an endpoint override): like the OTLP telemetry endpoint (see
+"Ecluse.Telemetry.Resolve"), it is reached through @amazonka@'s own client and is
+__not__ subject to the data-plane egress controls (the host allowlist, the
+internal-range block, or the resolved-IP recheck of "Ecluse.Security.Egress"), which
+guard only untrusted package downloads — never a destination the operator configured.
 -}
 module Ecluse.Queue.Sqs (
     -- * Configuration

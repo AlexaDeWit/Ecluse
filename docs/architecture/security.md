@@ -58,12 +58,14 @@ noted below.
    loopback-equivalent on Linux), RFC1918, CGNAT shared space (`100.64.0.0/10`), and
    IPv6 unique-local `fc00::/7` (incl. the AWS IMDSv6 endpoint `fd00:ec2::254`). The
    block is **origin-aware**: it guards the **untrusted** egress — the public-upstream
-   fetch and every artifact (`dist.tarball`) fetch — and is **re-applied to every
-   resolved IP** at connection time (so an allowlisted name that resolves to an
+   fetch and every **untrusted** artifact (`dist.tarball`) fetch (a public
+   `dist.tarball` stream and the mirror worker's back-fill fetch) — and is **re-applied
+   to every resolved IP** at connection time (so an allowlisted name that resolves to an
    internal address is refused — the DNS-rebinding backstop). The **trusted private
-   origin** (the operator-configured private upstream) is deliberately *exempt*: a
-   private registry may legitimately live on an internal address, and only an
-   untrusted target can be steered by an attacker. This is **defence-in-depth behind
+   origin** (the operator-configured private upstream) is deliberately *exempt* — its
+   packument *and* its same-host `dist.tarball` alike: a private registry may
+   legitimately live on an internal address, and only an untrusted target can be steered
+   by an attacker. This is **defence-in-depth behind
    invariant 2**: the host allowlist is the load-bearing control, and the
    internal-range block is the second gate for an untrusted allowlisted name that
    resolves to an internal literal (see
@@ -192,6 +194,50 @@ internal address — which the pure layer cannot see — is refused at connect t
 This narrows the resolve-then-connect (DNS-rebinding) window the pure layer leaves
 open.
 
+## Egress scope: what the outbound controls guard, and what they do not
+
+The outbound egress controls — the host allowlist (`isAllowedUpstreamHost`), the
+internal-range block (`isBlockedTarget`), and the connection-time resolved-IP recheck
+(`Ecluse.Security.Egress`) — exist to constrain **one** thing: an **untrusted package
+download** whose target an attacker can influence (the public packument and every
+public `dist.tarball`). They are therefore scoped to exactly the **untrusted** egress
+and are deliberately **absent** from every **trusted, operator-declared destination**.
+Conflating the two is over-restriction: a control aimed at attacker-steered fetches
+that fired on a destination the operator themselves configured would break legitimate
+function — telemetry export, the mirror-queue publish, or a private registry that lives
+on an internal address — for no security gain, since none of those targets is
+attacker-influenced.
+
+Every outbound connection Écluse makes, and the controls it carries:
+
+| Outbound connection | Trust | Manager / client | Internal-range block + resolved-IP recheck |
+|---|---|---|---|
+| Public-upstream **packument** fetch | Untrusted | `envManager` (guarded) | **Yes** |
+| Public `dist.tarball` **artifact** stream | Untrusted | `envManager` (guarded) | **Yes** (plus the tarball-host policy) |
+| Mirror worker's public **artifact** back-fill fetch | Untrusted | `envManager` (guarded) | **Yes** |
+| Private-upstream **packument** fetch | Trusted | `envPrivateManager` (unguarded) | **No** |
+| Private `dist.tarball` **artifact** stream | Trusted origin | `envPrivateManager` (unguarded) | **No** — but the allowlist + same-host policy still apply |
+| Mirror-target **publish** (npm `PUT`) | Trusted declared destination | `envPrivateManager` (unguarded) | **No** |
+| OTLP **telemetry** export | Trusted declared destination | OpenTelemetry SDK's own client | **No** — the endpoint is declared, not classified (see `Ecluse.Telemetry.Resolve`) |
+| **SQS** mirror-queue publish / poll | Trusted declared destination | `amazonka`'s own client | **No** (see `Ecluse.Queue.Sqs`) |
+| **IMDS** instance-role credential minting | Required internal | `amazonka`'s own client (separate from the data plane) | **No** — must reach `169.254.169.254`; never routed through the data-plane manager |
+
+The host allowlist gates only the targets built from **upstream-supplied** data (the
+public packument host and every `dist.tarball`). A destination that is
+**configuration** — the private base URL, the mirror target, the OTLP endpoint, the SQS
+queue — is the operator's declared intent, used as given rather than re-validated
+against an allowlist it would itself define. The internal-range block and its
+resolved-IP recheck likewise guard the untrusted origins alone (invariant 3): the
+trusted private origin, the telemetry export, the queue, and IMDS credential minting
+all reach an internal address by design.
+
+The private origin's tarball is the one subtlety: it is served over the unguarded
+trusted manager and is **exempt from the internal-range block** as a `TrustedOrigin`
+(so a private registry on an internal address serves its same-host `dist.tarball`),
+yet it stays constrained by the host allowlist and the same-host tarball policy — see
+[Why `dist.tarball` is honoured](#why-disttarball-is-honoured-and-what-bounds-it). It
+is treated as part of the trusted private origin, not as an untrusted download.
+
 ## Network egress is a shared responsibility
 
 Écluse's outbound guards are the **primary, application-layer** control; a
@@ -200,8 +246,9 @@ standard arrangement for any service that fetches on a client's behalf.
 
 **The cloud-metadata SSRF is handled at the service-behaviour level, not by blocking
 metadata at the network.** Écluse only follows an internal-resolving location on the
-**trusted private origin** (invariant 3) — never on a public-upstream or
-`dist.tarball`-derived target, which are exactly the attacker-influenced ones — so an
+**trusted private origin** (invariant 3) — its packument *and* its same-host
+`dist.tarball` — never on a **public-upstream-derived** target (the public packument or
+a public `dist.tarball`), which are exactly the attacker-influenced ones — so an
 SSRF cannot steer it at `169.254.169.254` or `fd00:ec2::254`. At the same time Écluse
 **needs** the metadata endpoint to mint its instance-role credentials
 (`AWS.newEnv AWS.discover`, which builds amazonka's **own** HTTP client, separate from
