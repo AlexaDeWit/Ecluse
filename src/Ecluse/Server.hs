@@ -97,7 +97,7 @@ import Ecluse.Server.Context (
     RequestCtx (RequestCtx),
     runHandler,
  )
-import Ecluse.Server.Pipeline (headTarball, servePackument, serveTarball)
+import Ecluse.Server.Pipeline (headPackument, headTarball, servePackument, serveTarball)
 import Ecluse.Server.Response (MountRenderer, RenderedBody (RenderedBody), renderError)
 import Ecluse.Server.Route (Route (..))
 import Ecluse.Worker (heartbeatHealthyNow)
@@ -346,11 +346,18 @@ A @HEAD@ on the 'Tarball' route is dispatched to 'headTarball', which gates the
 artifact identically to the @GET@ path but probes the upstream as a @HEAD@ and relays
 the headers with no body — so a bodiless @HEAD@ can never open and pump the full
 artifact body (the reason @Autohead@ is deliberately not used; see 'serverMiddleware').
+A @HEAD@ on the 'Packument' route is likewise dispatched to 'headPackument', which runs
+the identical gating and merge as the @GET@ path and emits the same status and headers
+(the would-be body's @Content-Length@ and the own @ETag@) with no body — the
+HTTP-correctness half of explicit-@HEAD@ handling (a packument body is assembled
+locally, so it carries no artifact-egress amplification).
 -}
 serve :: Env -> MountBinding -> Route -> Request -> (Response -> IO ResponseReceived) -> IO ResponseReceived
 serve env binding classified request respond =
     case classified of
-        Packument name -> runHandler ctx (servePackument name request respond)
+        Packument name
+            | isHead -> runHandler ctx (headPackument name request respond)
+            | otherwise -> runHandler ctx (servePackument name request respond)
         Tarball name version filename
             | isHead -> runHandler ctx (headTarball name version filename request respond)
             | otherwise -> runHandler ctx (serveTarball name version filename request respond)
@@ -501,10 +508,12 @@ mesh's connection pool) does not reuse a socket on an instance that is shutting 
 
 Two @wai-extra@ middlewares are deliberately __not__ used. @Autohead@ answers a
 HEAD by running the GET handler and discarding the body, which on a tarball route
-would open the upstream and stream a whole artifact to nowhere; instead a HEAD on
-the tarball route is handled explicitly (in 'serve'), gating the artifact exactly as
-the GET path does but probing the upstream as a HEAD and relaying the headers with no
-body, so a bodiless HEAD can never trigger a full-artifact upstream fetch. @Gzip@
+would open the upstream and stream a whole artifact to nowhere; instead a HEAD on the
+tarball or packument route is handled explicitly (in 'serve'), gating exactly as the
+GET path does but suppressing the body — the tarball probing the upstream as a HEAD so
+a bodiless HEAD can never trigger a full-artifact upstream fetch, the packument
+emitting the same status and headers as the GET with the locally-built body withheld.
+@Gzip@
 would re-compress already compressed artifacts and fight the streaming backpressure
 the serve path relies on.
 -}

@@ -118,6 +118,7 @@ tarball — the cheap freshness check on the hot artifact path.
 module Ecluse.Server.Pipeline (
     -- * The packument handler
     servePackument,
+    headPackument,
 
     -- * The tarball handler
     serveTarball,
@@ -129,6 +130,7 @@ import Data.Aeson qualified as Aeson
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap (KeyMap)
 import Data.Aeson.KeyMap qualified as KeyMap
+import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
@@ -140,7 +142,7 @@ import Lens.Micro ((^?))
 import Lens.Micro.Aeson (key, _Object)
 import Network.HTTP.Client (Manager)
 import Network.HTTP.Client qualified as HTTP
-import Network.HTTP.Types (RequestHeaders, ResponseHeaders, Status, hAuthorization, hContentType, methodHead, mkStatus, status200, status401, status501, statusIsSuccessful)
+import Network.HTTP.Types (RequestHeaders, ResponseHeaders, Status, hAuthorization, hContentLength, hContentType, methodHead, mkStatus, status200, status401, status501, statusIsSuccessful)
 import Network.Wai (Request, Response, ResponseReceived, requestHeaders, responseHeaders, responseLBS, responseStatus)
 import UnliftIO (concurrently)
 import UnliftIO.Exception (handle, throwIO, tryAny)
@@ -265,23 +267,72 @@ servePackument ::
     Request ->
     (Response -> IO ResponseReceived) ->
     Handler ResponseReceived
-servePackument name request respond = do
+servePackument = packumentWith PackumentFull
+
+{- | Serve a @HEAD \/{pkg}@ packument request: the __identical pipeline and gating__ as
+'servePackument' — the same fetch, merge, filter, rule decision, and no-survivors
+status — answered with the __identical status and headers__ as the @GET@ (the would-be
+merged body's @Content-Length@ and the own @ETag@ the conditional-request machinery
+computes), but with the body suppressed ('bodiless'), as HTTP semantics require of a
+@HEAD@ reply.
+
+A packument body is assembled __locally__ (a metadata fetch plus the cross-upstream
+merge), so — unlike the tarball @HEAD@ ('headTarball') — answering it pumps __no
+artifact body__ and carries no egress-amplification risk: this is the HTTP-correctness
+half of the explicit-@HEAD@ handling, not the DoS lever the tarball path closes. The
+merged body is still materialised, to size it and compute its @ETag@; only the bytes
+are withheld from the reply.
+-}
+headPackument ::
+    PackageName ->
+    Request ->
+    (Response -> IO ResponseReceived) ->
+    Handler ResponseReceived
+headPackument name request respond =
+    packumentWith PackumentHead name request (respond . bodiless)
+
+{- The packument serve mode threaded through the handler: a full @GET@ that serves the
+merged body, or a @HEAD@ that answers the identical status and headers with the body
+suppressed. It changes exactly one thing in the pipeline — whether the @200@ success
+path stamps the would-be body's @Content-Length@ (a @HEAD@ does, so a client sees the
+framing a @GET@ would; a @GET@ leaves that to the serving layer, which frames the body
+it actually writes). The body itself is withheld uniformly by the 'bodiless' wrapper
+'headPackument' applies, and the gating is byte-for-byte identical between the two. -}
+data PackumentServe
+    = -- A @GET@: serve the merged packument body.
+      PackumentFull
+    | -- A @HEAD@: serve the identical status and headers (the would-be body's
+      -- @Content-Length@ and the own @ETag@) with no body.
+      PackumentHead
+
+-- Dispatch shared by 'servePackument' and 'headPackument': resolve the mount's
+-- dependencies (or the recognised-but-unserved @501@ stub) and serve in the given mode.
+packumentWith ::
+    PackumentServe ->
+    PackageName ->
+    Request ->
+    (Response -> IO ResponseReceived) ->
+    Handler ResponseReceived
+packumentWith mode name request respond = do
     renderer <- asks (bindingRenderer . ctxMount)
     asks (bindingPackumentDeps . ctxMount) >>= \case
         Nothing -> liftIO (respond (recognisedButUnserved renderer))
-        Just deps -> serveWithDeps renderer deps name request respond
+        Just deps -> serveWithDeps mode renderer deps name request respond
 
 -- Serve a packument once the mount's dependencies are known: fetch, gate, merge,
 -- and answer — the credential-authority and merge logic the module header
--- describes. The composition-root 'Env' is read from the request context.
+-- describes. The composition-root 'Env' is read from the request context. The
+-- 'PackumentServe' mode is threaded to the success path so a @HEAD@ stamps the
+-- would-be body's @Content-Length@ (the 'bodiless' wrapper withholds the bytes).
 serveWithDeps ::
+    PackumentServe ->
     MountRenderer ->
     PackumentDeps ->
     PackageName ->
     Request ->
     (Response -> IO ResponseReceived) ->
     Handler ResponseReceived
-serveWithDeps renderer deps name request respond
+serveWithDeps mode renderer deps name request respond
     | not (edgeAuthorised deps request) = liftIO (respond (edgeUnauthorised renderer))
     | otherwise = do
         env <- asks ctxEnv
@@ -296,7 +347,7 @@ serveWithDeps renderer deps name request respond
             let private = trustedSource <$> originPackument privResult
                 sources = catMaybes [private, public]
             case assemble deps sources of
-                Just body -> respond (servePackumentBody request body)
+                Just body -> respond (servePackumentBody mode request body)
                 Nothing -> respond (noSurvivors renderer deps (collectDecisions privResult pubResult publicExclusions))
 
 -- A recognised-but-unserved packument route: a @501@ in the mount's surface, for a
@@ -836,17 +887,32 @@ collectDecisions privResult pubResult publicExclusions =
 {- Render the served packument body: @200@ with our own ETag over the served
 bytes, or a @304@ when the client's conditional validator already matches. The
 ETag is computed over exactly the bytes served, so it changes iff the served
-document changes. -}
-servePackumentBody :: Request -> ServedBody -> Response
-servePackumentBody request body =
+document changes.
+
+On a 'PackumentHead' the @200@ additionally carries the would-be body's
+@Content-Length@ (the 'bodiless' wrapper then withholds the bytes), so the @HEAD@ reply
+advertises the same framing a @GET@ would; a 'PackumentFull' leaves the @Content-Length@
+to the serving layer, which frames the body it actually writes. The @304@ carries no
+body either way, so it is identical between the two. -}
+servePackumentBody :: PackumentServe -> Request -> ServedBody -> Response
+servePackumentBody mode request body =
     case evaluateOwnETag (requestHeaders request) encoded of
         NotModified etag ->
             jsonResponse (mkStatus 304 "Not Modified") [etagHeader etag] ""
         Modified etag ->
-            jsonResponse status200 [etagHeader etag] encoded
+            jsonResponse status200 (etagHeader etag : headContentLength mode encoded) encoded
   where
     encoded :: LByteString
     encoded = Aeson.encode (servedValue body)
+
+{- The @Content-Length@ header a packument @200@ carries: on a 'PackumentHead', the
+length of the would-be merged body, so the @HEAD@ reply advertises the framing a @GET@
+would (the body itself is withheld by 'bodiless'); on a 'PackumentFull', none — the
+serving layer frames the body it actually writes. -}
+headContentLength :: PackumentServe -> LByteString -> ResponseHeaders
+headContentLength = \case
+    PackumentFull -> const []
+    PackumentHead -> \bytes -> [(hContentLength, show (LBS.length bytes))]
 
 {- Render the no-survivors outcome: the status 'packumentStatus' chose over the
 exclusions, with a denial body collecting the reasons. Never a @404@ — the package
