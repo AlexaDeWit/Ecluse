@@ -69,21 +69,30 @@ Each rule, applied to a `PackageDetails`, yields a `RuleOutcome`:
 Each rule also carries a **precedence** (an integer; higher wins). `evalRules`
 selects the **highest-precedence non-abstaining rule** and takes its position —
 `Approved rule reason` or `Denied rule reason`. At equal precedence a `Deny`
-beats an `Allow`. If every rule abstains, the result is `DeniedByDefault reasons`
-— deny-by-default, with each abstaining rule's reason collected (in order) so the
-denial response can explain what was considered.
+beats an `Allow`; any remaining equal-precedence tie among same-position rules (an
+allow-vs-allow tie, say two equally-ranked allows that both fire) is broken
+**deterministically by rule identity** — the lexicographically-smallest `ruleName`
+is credited — **not by list position**, so the credited rule is the same whatever
+order the rules were supplied in. If every rule abstains, the result is
+`DeniedByDefault reasons` — deny-by-default, with each abstaining rule's reason
+collected (in order) so the denial response can explain what was considered.
 
 A rule that does not fire **abstains rather than deciding**, yielding the floor to
 others rather than admitting or blocking on its own. Because **precedence — not
-list order — decides**, the rule set is order-independent except for the
-equal-precedence deny tiebreak and the order in which abstain reasons are gathered
-for the audit trail.
+list order — decides**, and every equal-precedence tie (deny-over-allow first,
+then by rule identity) is resolved the same way regardless of input order, the
+rule set is fully order-independent **except** for the order in which abstain
+reasons are gathered for the audit trail.
 
 Precedence is a **field, not an `Ord Rule` instance**: selection is a `maximumBy`
-over a `(precedence, deny-before-allow)` comparator. Equal precedence is allowed
-(it is the tiebreak), so a derived total `Ord` would be unlawful (non-antisymmetric)
-and misleading — the same reason `Version` carries no derived `Ord` (see
-[Internal Domain Model](domain-model.md)).
+over a `(precedence, deny-before-allow, rule-identity)` comparator — precedence
+then the deny-over-allow rank decide the winner, and the rule-identity component
+(the smallest `ruleName`) is the order-independent tiebreak for an otherwise exact
+tie. Equal precedence is legal (it is what the tiebreak resolves), so a derived
+total `Ord Rule` ranking *by priority* would be unlawful (non-antisymmetric) and
+misleading — the same reason `Version` carries no derived `Ord` (see
+[Internal Domain Model](domain-model.md)). The identity tiebreak is a separate,
+deterministic disambiguator that carries no priority meaning.
 
 ### Effectful-rule failure
 

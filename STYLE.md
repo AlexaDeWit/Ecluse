@@ -661,11 +661,10 @@ three-tier strategy are in `CONTRIBUTING.md`; this is style.)
 - **Add small predicate/extractor helpers** instead of inlining pattern matches
   in assertions: `isAllow`, `approvedBy`, `deniedBy`.
 - **Express invariants as `hedgehog` properties**, grouped under
-  `describe "properties"`, using `forAll` generators and `(===)`. Properties are
-  where the rules engine's guarantees (deny-by-default, deny-precedence,
-  first-allow-wins) are pinned down.
-- Comment a non-obvious case with the reasoning it encodes (as the
-  first-allowing-rule test does).
+  `describe "properties"`, using `forAll` generators and `(===)`. An invariant
+  that must hold for *every* input — not just the handful an example covers —
+  belongs here (e.g. an order-independence or round-trip law).
+- Comment a non-obvious case with the reasoning it encodes.
 
 ---
 
