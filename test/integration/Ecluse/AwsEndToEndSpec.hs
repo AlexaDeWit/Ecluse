@@ -22,7 +22,7 @@ import UnliftIO (race_, timeout)
 import UnliftIO.Concurrent (threadDelay)
 
 import Ecluse.App (runApp)
-import Ecluse.Composition (planMirrorQueue, renderBootError)
+import Ecluse.Composition (MirrorQueuePlan (MemoryBackend, SqsBackend), planMirrorQueue, renderBootError)
 import Ecluse.Config (parseEnvPure)
 import Ecluse.Credential (AuthToken (AuthToken, authExpiresAt, authSecret), CredentialProvider, mkSecret, staticProvider)
 import Ecluse.Env (Env, newEnv, newWorkerHeartbeat)
@@ -131,8 +131,10 @@ configDrivenQueue container queueName = do
     let endpoint = endpointFor container
         endpointUrl = "http://" <> endpointHost endpoint <> ":" <> show (endpointPort endpoint)
     env <- either (fail . ("AwsEndToEndSpec fixture env: " <>) . show) pure (parseEnvPure (sqsEnvVars queueUrl endpointUrl))
-    sqsConfig <- either (fail . toString . T.unlines . map renderBootError) pure (planMirrorQueue env)
-    newSqsQueue sqsConfig{sqsWaitSeconds = 1}
+    plan <- either (fail . toString . T.unlines . map renderBootError) pure (planMirrorQueue env)
+    case plan of
+        SqsBackend sqsConfig -> newSqsQueue sqsConfig{sqsWaitSeconds = 1}
+        MemoryBackend _ -> fail "AwsEndToEndSpec fixture: expected the SQS backend, got the in-memory one"
 
 -- The environment layer the released image would run with to target a ministack SQS:
 -- the standard endpoint override and credential keys, plus the required upstreams.

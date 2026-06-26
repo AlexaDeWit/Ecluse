@@ -89,11 +89,13 @@ backendSpec = describe "backend selection" $ do
         it "round-trips each backend through parse/render" $ do
             parseQueueBackend "sqs" `shouldBe` Right SqsQueue
             parseQueueBackend "pubsub" `shouldBe` Right PubSubQueue
+            parseQueueBackend "memory" `shouldBe` Right MemoryQueue
             renderQueueBackend SqsQueue `shouldBe` "sqs"
             renderQueueBackend PubSubQueue `shouldBe` "pubsub"
+            renderQueueBackend MemoryQueue `shouldBe` "memory"
         it "rejects an unknown name, naming the accepted set" $
             parseQueueBackend "kafka"
-                `shouldBe` Left "unknown queue provider \"kafka\" (expected one of: sqs, pubsub)"
+                `shouldBe` Left "unknown queue provider \"kafka\" (expected one of: sqs, pubsub, memory)"
 
     describe "CredentialBackend" $ do
         it "round-trips each backend through parse/render" $ do
@@ -134,6 +136,7 @@ fullEnv =
     , ("MIRROR_TARGET_URL", "https://mirror.example.test")
     , ("MIRROR_QUEUE_PROVIDER", "pubsub")
     , ("MIRROR_QUEUE_URL", "projects/p/topics/t")
+    , ("MIRROR_QUEUE_MEMORY_MAX_DEPTH", "777")
     , ("AWS_REGION", "eu-west-1")
     , ("PROXY_AUTH_TOKEN", "s3cr3t")
     , ("MIRROR_TARGET_TOKEN", "mirror-write")
@@ -187,6 +190,7 @@ envLayerSpec = describe "parseEnvPure" $ do
                 fmap unUrl (cfgMirrorTarget cfg) `shouldBe` Just "https://mirror.example.test"
                 cfgQueueBackend cfg `shouldBe` PubSubQueue
                 unUrl (cfgQueueUrl cfg) `shouldBe` "projects/p/topics/t"
+                cfgQueueMemoryMaxDepth cfg `shouldBe` 777
                 cfgAwsRegion cfg `shouldBe` Just "eu-west-1"
                 cfgGoogleProject cfg `shouldBe` Nothing
                 cfgAuthToken cfg `shouldBe` Just (mkSecret "s3cr3t")
@@ -217,6 +221,8 @@ envLayerSpec = describe "parseEnvPure" $ do
                 cfgPort cfg `shouldBe` 4873
                 unUrl (cfgPublicUpstream cfg) `shouldBe` "https://registry.npmjs.org"
                 cfgQueueBackend cfg `shouldBe` SqsQueue
+                -- The in-memory queue cap defaults to a generous, memory-bounded depth.
+                cfgQueueMemoryMaxDepth cfg `shouldBe` 50000
                 cfgCveSyncInterval cfg `shouldBe` (3600 :: NominalDiffTime)
                 cfgCacheTtl cfg `shouldBe` (60 :: NominalDiffTime)
                 cfgCacheMaxEntries cfg `shouldBe` 1024
@@ -284,6 +290,10 @@ envLayerSpec = describe "parseEnvPure" $ do
     it "rejects a CodeArtifact token duration above the 12-hour cap" $
         failedNames (parseEnvPure (("MIRROR_TARGET_CODEARTIFACT_TOKEN_DURATION_SECONDS", "50000") : minimalEnv))
             `shouldBe` ["MIRROR_TARGET_CODEARTIFACT_TOKEN_DURATION_SECONDS"]
+
+    it "rejects a non-positive in-memory queue cap (a zero cap would drop every job)" $
+        failedNames (parseEnvPure (("MIRROR_QUEUE_MEMORY_MAX_DEPTH", "0") : minimalEnv))
+            `shouldBe` ["MIRROR_QUEUE_MEMORY_MAX_DEPTH"]
 
     it "aggregates malformed values alongside missing ones" $
         -- A non-integer port and an unknown queue provider both fail, together

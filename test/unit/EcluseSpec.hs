@@ -134,6 +134,20 @@ spec = do
             traverse_ (unsetEnv . fst) awsRunEnv
             outcome `shouldBe` Left BootAborted
 
+        it "boots under the in-memory mirror-queue backend (no AWS settings) and serves" $ do
+            -- The explicit memory backend needs no cloud queue: it boots from the base
+            -- env alone — no AWS_REGION or credentials — emitting its loud non-durable
+            -- boot warning and constructing the bounded in-memory queue. The idle
+            -- worker simply parks on the empty queue rather than hot-looping.
+            unsetEnv "PROXY_CONFIG"
+            unsetEnv "AWS_REGION"
+            traverse_ (uncurry setEnv) runEnv
+            setEnv "MIRROR_QUEUE_PROVIDER" "memory"
+            outcome <- timeout 100000 run
+            unsetEnv "MIRROR_QUEUE_PROVIDER"
+            traverse_ (unsetEnv . fst) runEnv
+            outcome `shouldBe` Nothing
+
         it "aborts fast at boot when the sqs backend has no AWS_REGION" $ do
             -- The default sqs backend needs a region to be scoped to; absent, the
             -- composition root fails fast rather than building an unscoped queue.

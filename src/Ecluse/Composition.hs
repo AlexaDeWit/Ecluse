@@ -48,7 +48,11 @@ module Ecluse.Composition (
     composeBindings,
 
     -- * Mirror-queue backend selection
+    MirrorQueuePlan (..),
     planMirrorQueue,
+    mirrorQueuePlanWarning,
+    memoryQueueBootWarning,
+    memoryQueueDropWarning,
 
     -- * Publish-side wiring
     PublishTarget (..),
@@ -86,6 +90,7 @@ import Ecluse.Credential (AuthToken (..), CredentialProvider, Secret, mkSecret, 
 import Ecluse.Credential.CodeArtifact (CodeArtifactConfig (..), newCodeArtifactProvider)
 import Ecluse.Ecosystem (Ecosystem, ecosystemName, prefixFor)
 import Ecluse.Package.Integrity (MinIntegrity)
+import Ecluse.Queue (MemoryQueueConfig (..))
 import Ecluse.Queue.Sqs (SqsConfig (sqsEndpoint), SqsEndpoint (..), defaultSqsConfig)
 import Ecluse.Security (Limits (Limits, maxBodyBytes, maxNestingDepth, maxVersionCount), TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), hostAddress, lowerCaseHosts)
 import Ecluse.Server.Cache (CacheConfig (..))
@@ -571,19 +576,39 @@ composePublishTargets providers config =
 
 -- ── mirror-queue backend selection ────────────────────────────────────────────
 
+{- | Which mirror-queue backend the composition root will build, resolved from
+config: the durable AWS @sqs@ backend (with its 'SqsConfig'), or the bounded
+best-effort in-memory backend (with its 'MemoryQueueConfig'). The pure decision
+'planMirrorQueue' yields; the composition root pattern-matches it to make the one
+constructor call, and 'mirrorQueuePlanWarning' tells it whether a boot warning is due.
+-}
+data MirrorQueuePlan
+    = -- | The durable AWS SQS backend, built by @Ecluse.Queue.Sqs.newSqsQueue@.
+      SqsBackend SqsConfig
+    | {- | The bounded in-memory backend, built by
+      'Ecluse.Queue.newBoundedInMemoryQueue'. Non-durable and best-effort — boot warns.
+      -}
+      MemoryBackend MemoryQueueConfig
+    deriving stock (Eq, Show)
+
 {- | Select the mirror-queue backend from the environment layer, yielding the
-'SqsConfig' the composition root builds the AWS SQS queue from, or the aggregated
-boot errors that block it.
+'MirrorQueuePlan' the composition root builds the queue from, or the aggregated boot
+errors that block it.
 
 This is the pure half of the queue's backend choice — the single place that knows
-which backends this binary can build. The AWS @sqs@ backend resolves to an
-'SqsConfig' (the queue URL and region, with the provider knobs at their defaults);
-the composition root passes that to @Ecluse.Queue.Sqs.newSqsQueue@, so the one SDK
-constructor call lives there while the decision lives here. The GCP @pubsub@ arm is
-recognised but not built, so it is a fail-loud 'QueueProviderUnavailable' boot error
-rather than a silent fall-through; a missing @AWS_REGION@ under @sqs@ is a
-'QueueRegionMissing' boot error. Errors are returned as a list so they aggregate
-with the rest of the boot-time validation.
+which backends this binary can build. The AWS @sqs@ backend resolves to a
+'SqsBackend' carrying its 'SqsConfig' (the queue URL and region, with the provider
+knobs at their defaults); the composition root passes that to
+@Ecluse.Queue.Sqs.newSqsQueue@. The @memory@ backend resolves to a 'MemoryBackend'
+carrying its depth cap, built in-process with no cloud queue (@MIRROR_QUEUE_URL@ and
+@AWS_REGION@ are not consulted for it) — an explicit operator choice for a simple,
+single-node, or air-gapped deployment, never an automatic fallback (which would
+soften the fail-loud-on-misconfig posture); the composition root emits the
+'memoryQueueBootWarning' on selection. The GCP @pubsub@ arm is recognised but not
+built, so it is a fail-loud 'QueueProviderUnavailable' boot error rather than a
+silent fall-through; a missing @AWS_REGION@ under @sqs@ is a 'QueueRegionMissing'
+boot error. Errors are returned as a list so they aggregate with the rest of the
+boot-time validation.
 
 When an endpoint override is configured (@AWS_ENDPOINT_URL_SQS@, else
 @AWS_ENDPOINT_URL@ — the AWS-SDK-standard variables), it is parsed into the
@@ -592,14 +617,49 @@ backend's 'SqsEndpoint' so the released image can target a local emulator
 a fail-loud 'QueueEndpointMalformed' boot error. With no override, the SQS backend
 uses AWS's default endpoint and credential resolution.
 -}
-planMirrorQueue :: EnvConfig -> Either [BootError] SqsConfig
+planMirrorQueue :: EnvConfig -> Either [BootError] MirrorQueuePlan
 planMirrorQueue env = case cfgQueueBackend env of
     PubSubQueue -> Left [QueueProviderUnavailable PubSubQueue]
+    MemoryQueue -> Right (MemoryBackend (MemoryQueueConfig{memQueueMaxDepth = cfgQueueMemoryMaxDepth env}))
     SqsQueue -> case T.strip <$> cfgAwsRegion env of
         Just region | not (T.null region) -> do
             endpoint <- resolveSqsEndpoint env
-            Right (defaultSqsConfig (unUrl (cfgQueueUrl env)) region){sqsEndpoint = endpoint}
+            Right (SqsBackend (defaultSqsConfig (unUrl (cfgQueueUrl env)) region){sqsEndpoint = endpoint})
         _ -> Left [QueueRegionMissing]
+
+{- | The loud boot warning a 'MirrorQueuePlan' warrants before its queue is built, or
+'Nothing' for a durable backend that needs none. The composition root logs the
+'Just' at @WarningS@ on selection, so an operator who chose the in-memory backend is
+told plainly that the mirror is non-durable — never a silent surprise.
+-}
+mirrorQueuePlanWarning :: MirrorQueuePlan -> Maybe Text
+mirrorQueuePlanWarning = \case
+    SqsBackend _ -> Nothing
+    MemoryBackend _ -> Just memoryQueueBootWarning
+
+{- | The boot warning emitted when the in-memory mirror-queue backend is selected: it
+states plainly that the mirror is in-memory, non-durable, and best-effort, and that a
+lost job is re-mirrored on the next demand (so there is no data loss, only deferred
+mirroring), so the choice is never mistaken for a durable cloud backend.
+-}
+memoryQueueBootWarning :: Text
+memoryQueueBootWarning =
+    "mirror queue provider 'memory' selected: the mirror queue is IN-MEMORY, NON-DURABLE, and BEST-EFFORT. "
+        <> "Jobs are dropped on cap overflow and lost on restart or redeploy; each is re-mirrored on the next "
+        <> "demand (no data loss, only deferred mirroring). Use a durable backend ('sqs') for a production mirror "
+        <> "that must not shed under load."
+
+{- | The cap-overflow drop warning for the in-memory backend, carrying the running
+total of dropped jobs (this report is rate-limited at the queue, so it does not fire
+per dropped job). A note on a one-line follow-up: a drop __metric__
+(@ecluse.mirror.*@, S26 PR2) hooks in alongside this log once that catalogue lands.
+-}
+memoryQueueDropWarning :: Int -> Text
+memoryQueueDropWarning dropped =
+    "mirror queue at capacity: dropped a mirror job (drop-newest); "
+        <> show dropped
+        <> " job(s) dropped so far. Each is re-mirrored on the next demand; raise "
+        <> "MIRROR_QUEUE_MEMORY_MAX_DEPTH to shed fewer under load."
 
 {- Resolve the optional SQS endpoint override into an 'SqsEndpoint', or 'Nothing' for
 AWS's default resolution. The AWS-SDK-standard @AWS_ENDPOINT_URL_SQS@ takes precedence

@@ -8,11 +8,14 @@ import Ecluse (mirrorWriteProvider, mountBindingFor)
 import Ecluse.Composition (
     BootError (..),
     CredentialProviders,
+    MirrorQueuePlan (..),
     cacheConfigFor,
     composeBindings,
     initCredentialProviders,
     initializedBackends,
     lookupProvider,
+    memoryQueueBootWarning,
+    mirrorQueuePlanWarning,
     planMirrorCredential,
     planMirrorQueue,
     planMounts,
@@ -35,6 +38,7 @@ import Ecluse.Credential.CodeArtifact (CodeArtifactConfig (caDomain, caDomainOwn
 import Ecluse.Ecosystem (Ecosystem (..))
 import Ecluse.Package (HashAlg (SHA512))
 import Ecluse.Package.Integrity (defaultMinIntegrity, mkMinIntegrity)
+import Ecluse.Queue (MemoryQueueConfig (..))
 import Ecluse.Queue.Sqs (SqsConfig (sqsEndpoint, sqsQueueUrl, sqsRegion), SqsEndpoint (endpointHost, endpointPort, endpointSecure))
 import Ecluse.Security (Limits (maxBodyBytes, maxNestingDepth, maxVersionCount), TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), defaultLimits)
 import Ecluse.Server.Cache (CacheConfig (cacheMaxEntries, cacheTtl))
@@ -192,11 +196,9 @@ mirrorQueueSpec :: Spec
 mirrorQueueSpec = describe "planMirrorQueue" $ do
     it "selects the SQS backend from the configured queue URL and region" $ do
         env <- expectEnv (("AWS_REGION", "us-east-1") : staticEnvVars)
-        case planMirrorQueue env of
-            Right cfg -> do
-                sqsQueueUrl cfg `shouldBe` "https://sqs.example.test/q"
-                sqsRegion cfg `shouldBe` "us-east-1"
-            Left errs -> expectationFailure ("expected an SQS config, got boot errors: " <> show errs)
+        cfg <- expectSqsBackend env
+        sqsQueueUrl cfg `shouldBe` "https://sqs.example.test/q"
+        sqsRegion cfg `shouldBe` "us-east-1"
 
     it "fails fast when the SQS backend has no AWS_REGION" $ do
         -- AWS_REGION is required for the AWS queue; absent, the backend cannot be
@@ -214,6 +216,27 @@ mirrorQueueSpec = describe "planMirrorQueue" $ do
         env <- expectEnv (("MIRROR_QUEUE_PROVIDER", "pubsub") : ("AWS_REGION", "us-east-1") : staticEnvVars)
         planMirrorQueue env `shouldBe` Left [QueueProviderUnavailable PubSubQueue]
 
+    it "selects the bounded in-memory backend with the configured cap (no AWS settings needed)" $ do
+        -- The memory backend is an explicit operator choice that needs no cloud queue:
+        -- it carries only its depth cap, and AWS_REGION is irrelevant to it.
+        env <- expectEnv (("MIRROR_QUEUE_PROVIDER", "memory") : ("MIRROR_QUEUE_MEMORY_MAX_DEPTH", "1234") : staticEnvVars)
+        planMirrorQueue env `shouldBe` Right (MemoryBackend (MemoryQueueConfig{memQueueMaxDepth = 1234}))
+
+    it "defaults the in-memory backend's cap when MIRROR_QUEUE_MEMORY_MAX_DEPTH is unset" $ do
+        env <- expectEnv (("MIRROR_QUEUE_PROVIDER", "memory") : staticEnvVars)
+        planMirrorQueue env `shouldBe` Right (MemoryBackend (MemoryQueueConfig{memQueueMaxDepth = 50000}))
+
+    it "warns loudly on selecting the in-memory backend, and not on the durable SQS one" $ do
+        -- AC3: selecting memory emits a loud non-durable/best-effort boot warning;
+        -- a durable backend warrants none. The composition root logs the Just.
+        memEnv <- expectEnv (("MIRROR_QUEUE_PROVIDER", "memory") : staticEnvVars)
+        sqsEnv <- expectEnv (("AWS_REGION", "us-east-1") : staticEnvVars)
+        (mirrorQueuePlanWarning <$> planMirrorQueue memEnv) `shouldBe` Right (Just memoryQueueBootWarning)
+        (mirrorQueuePlanWarning <$> planMirrorQueue sqsEnv) `shouldBe` Right Nothing
+        -- The warning names the load-bearing caveats so an operator cannot miss them.
+        memoryQueueBootWarning `shouldSatisfy` ("NON-DURABLE" `T.isInfixOf`)
+        memoryQueueBootWarning `shouldSatisfy` ("BEST-EFFORT" `T.isInfixOf`)
+
     it "honours the AWS-standard SQS endpoint override (AWS_ENDPOINT_URL_SQS)" $ do
         env <-
             expectEnv
@@ -223,19 +246,18 @@ mirrorQueueSpec = describe "planMirrorQueue" $ do
                     : ("AWS_SECRET_ACCESS_KEY", "sqs-secret-xyz")
                     : staticEnvVars
                 )
-        case planMirrorQueue env of
-            Right cfg -> case sqsEndpoint cfg of
-                Just ep -> do
-                    endpointSecure ep `shouldBe` False
-                    endpointHost ep `shouldBe` "localhost"
-                    endpointPort ep `shouldBe` 4566
-                    -- N2: the endpoint secret key is a redacted Secret — its plaintext
-                    -- must never reach the derived Show of the config/endpoint.
-                    let rendered = show cfg :: Text
-                    rendered `shouldNotSatisfy` ("sqs-secret-xyz" `T.isInfixOf`)
-                    rendered `shouldSatisfy` ("REDACTED" `T.isInfixOf`)
-                Nothing -> expectationFailure "expected the endpoint override to resolve"
-            Left errs -> expectationFailure ("expected an SQS config, got boot errors: " <> show errs)
+        cfg <- expectSqsBackend env
+        case sqsEndpoint cfg of
+            Just ep -> do
+                endpointSecure ep `shouldBe` False
+                endpointHost ep `shouldBe` "localhost"
+                endpointPort ep `shouldBe` 4566
+                -- N2: the endpoint secret key is a redacted Secret — its plaintext
+                -- must never reach the derived Show of the config/endpoint.
+                let rendered = show cfg :: Text
+                rendered `shouldNotSatisfy` ("sqs-secret-xyz" `T.isInfixOf`)
+                rendered `shouldSatisfy` ("REDACTED" `T.isInfixOf`)
+            Nothing -> expectationFailure "expected the endpoint override to resolve"
 
     it "falls back to the generic AWS_ENDPOINT_URL when the SQS-specific one is unset" $ do
         env <-
@@ -244,17 +266,24 @@ mirrorQueueSpec = describe "planMirrorQueue" $ do
                     : ("AWS_ENDPOINT_URL", "https://sqs.vpce.example:8443")
                     : staticEnvVars
                 )
-        case planMirrorQueue env of
-            Right cfg -> ((endpointSecure &&& endpointPort) <$> sqsEndpoint cfg) `shouldBe` Just (True, 8443)
-            Left errs -> expectationFailure ("expected an SQS config, got boot errors: " <> show errs)
+        cfg <- expectSqsBackend env
+        ((endpointSecure &&& endpointPort) <$> sqsEndpoint cfg) `shouldBe` Just (True, 8443)
 
     it "uses AWS default resolution (no endpoint) when no override is set" $ do
         env <- expectEnv (("AWS_REGION", "us-east-1") : staticEnvVars)
-        (sqsEndpoint <$> rightToMaybe (planMirrorQueue env)) `shouldBe` Just Nothing
+        cfg <- expectSqsBackend env
+        sqsEndpoint cfg `shouldBe` Nothing
 
     it "fails fast on a malformed SQS endpoint override" $ do
         env <- expectEnv (("AWS_REGION", "us-east-1") : ("AWS_ENDPOINT_URL_SQS", "not-a-url") : staticEnvVars)
         planMirrorQueue env `shouldBe` Left [QueueEndpointMalformed "not-a-url"]
+  where
+    -- Resolve the SQS config from a plan that must select the SQS backend, failing
+    -- the example with the actual plan / boot errors otherwise.
+    expectSqsBackend :: EnvConfig -> IO SqsConfig
+    expectSqsBackend env = case planMirrorQueue env of
+        Right (SqsBackend cfg) -> pure cfg
+        other -> fail ("expected an SQS mirror-queue plan, got: " <> show other)
 
 -- ── mirror-target credential provider selection ───────────────────────────────
 

@@ -99,7 +99,8 @@ import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
 import Data.Time (getCurrentTime)
-import Katip (Environment (Environment), LogEnv)
+import Katip (Environment (Environment), LogEnv, Severity (WarningS), logFM, ls)
+import Katip.Monadic (runKatipContextT)
 import Network.HTTP.Client (Manager, newManager)
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 import System.Environment (getEnvironment)
@@ -107,8 +108,11 @@ import UnliftIO (concurrently_, throwIO)
 
 import Ecluse.Composition (
     CredentialProviders,
+    MirrorQueuePlan (MemoryBackend, SqsBackend),
     PublishTarget (ptCredentials, ptEcosystem, ptMirrorUrl),
     initCredentialProviders,
+    memoryQueueDropWarning,
+    mirrorQueuePlanWarning,
     planMirrorQueue,
     planMounts,
     planPublishTargets,
@@ -126,7 +130,8 @@ import Ecluse.Config (
 import Ecluse.Credential (AuthToken (..), CredentialProvider, currentToken, mkSecret, staticProvider)
 import Ecluse.Ecosystem (Ecosystem (Npm), prefixFor)
 import Ecluse.Env (Env, newWorkerHeartbeat, withEnv)
-import Ecluse.Log (newLogEnv)
+import Ecluse.Log (moduleField, newLogEnv)
+import Ecluse.Queue (MirrorQueue, newBoundedInMemoryQueue)
 import Ecluse.Queue.Sqs (newSqsQueue)
 import Ecluse.Registry (
     ParseError (..),
@@ -173,19 +178,21 @@ run = do
     bindings <- orExit (T.unlines . map renderBootError) (planMounts mountBindingFor getCurrentTime providers env mDoc)
     publishTargets <- orExit (T.unlines . map renderBootError) (planPublishTargets providers env mDoc)
     -- Select the mirror-queue backend from config (the GCP arm is a fail-loud
-    -- "not built" boot error, never a silent fall-through); the resulting SqsConfig
-    -- is handed to the one newSqsQueue call below.
-    sqsConfig <- orExit (T.unlines . map renderBootError) (planMirrorQueue env)
+    -- "not built" boot error, never a silent fall-through); the resulting plan is
+    -- handed to the one queue-construction site below.
+    queuePlan <- orExit (T.unlines . map renderBootError) (planMirrorQueue env)
     let serverConfig =
             (mkServerConfig bindings)
                 { scPort = cfgPort env
                 , scDrainTimeout = ShutdownDrainTimeout (cfgShutdownDrainTimeout env)
                 }
-    -- The config-selected mirror queue: the AWS SQS backend, built once here (the
-    -- single SDK-constructor call) from the validated SqsConfig and captured in Env.
-    queue <- newSqsQueue sqsConfig
-    metadataCache <- newMetadataCache (Composition.cacheConfigFor env)
     logEnv <- newLogEnv (cfgLogFormat env) (Environment "production")
+    -- The config-selected mirror queue, built once here (the single constructor
+    -- call) from the validated plan and captured in Env: the durable AWS SQS backend,
+    -- or the bounded in-memory backend — which first emits a loud boot warning (it is
+    -- non-durable / best-effort) and logs each rate-limited cap-overflow drop.
+    queue <- buildMirrorQueue logEnv queuePlan
+    metadataCache <- newMetadataCache (Composition.cacheConfigFor env)
     heartbeat <- newWorkerHeartbeat
     -- Resolve the telemetry identity (DD_* / OTEL_*) and normalise the OTEL_*
     -- environment the SDK reads, before the substrate initialises. A no-op when
@@ -227,6 +234,27 @@ loadDocument =
     lookupEnv "PROXY_CONFIG" >>= \case
         Nothing -> pure Nothing
         Just blob -> Just <$> orExit ("PROXY_CONFIG: " <>) (decodeDocument (encodeUtf8 blob))
+
+{- Build the config-selected mirror queue from its plan: the durable AWS SQS backend,
+or the bounded in-memory backend. The in-memory arm first emits the loud boot warning
+('mirrorQueuePlanWarning' — it is non-durable / best-effort) through the
+composition-root logger, then constructs the bounded queue with a drop callback that
+logs each rate-limited cap-overflow drop at a warning. (A drop /metric/ hooks in
+alongside the log once the @ecluse.mirror.*@ catalogue lands.) -}
+buildMirrorQueue :: LogEnv -> MirrorQueuePlan -> IO MirrorQueue
+buildMirrorQueue logEnv plan = do
+    whenJust (mirrorQueuePlanWarning plan) (logBootWarning logEnv)
+    case plan of
+        SqsBackend sqsConfig -> newSqsQueue sqsConfig
+        MemoryBackend memoryConfig ->
+            newBoundedInMemoryQueue memoryConfig (logBootWarning logEnv . memoryQueueDropWarning)
+
+{- Log one line at 'WarningS' through the composition-root 'LogEnv', tagged with this
+module — the plain-'IO' katip path the boot phase uses (it holds no @Handler@ reader),
+the same shape "Ecluse.Telemetry.Resolve" and "Ecluse.Server.Pipeline.Internal" use. -}
+logBootWarning :: LogEnv -> Text -> IO ()
+logBootWarning logEnv message =
+    runKatipContextT logEnv (moduleField "Ecluse") mempty (logFM WarningS (ls message))
 
 {- The process-global mirror-write credential provider stored in 'Env' for the
 worker, selected by the configured provider backend

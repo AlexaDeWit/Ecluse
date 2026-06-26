@@ -37,9 +37,16 @@ handle's contract reflects that:
   past the visibility window. It is an /optimization/, not correctness-critical,
   since idempotency already makes redelivery harmless.
 
-This module provides the handle and its payload types. 'newInMemoryQueue' is an
-STM-backed in-memory implementation honouring the receive → ack \/
-redeliver-on-no-ack semantics above.
+This module provides the handle and its payload types, plus two STM-backed
+in-memory implementations:
+
+* 'newInMemoryQueue' — the __test double__ that models the cloud backends'
+  visibility-timeout semantics (receive → ack \/ redeliver-on-no-ack), used to
+  exercise the worker's retry path without a cloud queue.
+* 'newBoundedInMemoryQueue' — the __bounded, best-effort production backend__
+  selected by @MIRROR_QUEUE_PROVIDER=memory@. See its own Haddock for why it is
+  correctness-safe (a dropped job is re-enqueued on the next demand) and why it
+  deliberately does __not__ redeliver.
 -}
 module Ecluse.Queue (
     -- * Queue handle
@@ -60,8 +67,15 @@ module Ecluse.Queue (
 
     -- * In-memory double
     newInMemoryQueue,
+
+    -- * Bounded in-memory production backend
+    MemoryQueueConfig (..),
+    newBoundedInMemoryQueue,
+    memoryQueueBatchSize,
+    memoryQueueDropReportInterval,
 ) where
 
+import Control.Concurrent.STM.TBQueue (TBQueue, isFullTBQueue, newTBQueueIO, readTBQueue, tryReadTBQueue, writeTBQueue)
 import Data.Map.Strict qualified as Map
 import Data.Sequence qualified as Seq
 
@@ -318,3 +332,127 @@ newInMemoryQueue = do
             , next'
             , Map.insert next (InFlight{inFlightJob = job, inFlightHeld = False}) inFlight
             )
+
+-- ── bounded in-memory production backend ─────────────────────────────────────
+
+{- | What the bounded in-memory backend needs: just its depth cap. A record (like
+'Ecluse.Queue.Sqs.SqsConfig') so the one knob is named rather than a bare 'Int'.
+-}
+newtype MemoryQueueConfig = MemoryQueueConfig
+    { memQueueMaxDepth :: Int
+    {- ^ The maximum number of jobs the queue holds. A fresh 'enqueue' past this cap
+    is __dropped-newest__ (the enqueue is rejected); a dropped job is safe, as it is
+    re-enqueued on the next demand. Must be positive (the config layer enforces it).
+    -}
+    }
+    deriving stock (Eq, Show)
+
+{- | The most jobs one 'receive' delivers from the bounded in-memory backend. Held
+at the SQS batch cap so the worker — which processes a batch __sequentially__ and
+advances its liveness heartbeat once per poll — sees the same bounded batch shape
+regardless of backend, rather than one poll returning a whole cold-cache burst and
+starving the heartbeat past its staleness window.
+-}
+memoryQueueBatchSize :: Int
+memoryQueueBatchSize = 10
+
+{- | How many cap-overflow drops the bounded in-memory backend absorbs between
+warning reports. The first drop is always reported, then every multiple of this, so
+a sustained flood logs at most about one line per this many drops rather than one
+per dropped job.
+-}
+memoryQueueDropReportInterval :: Int
+memoryQueueDropReportInterval = 1000
+
+{- | Build a bounded, best-effort in-memory 'MirrorQueue' — the production backend
+behind @MIRROR_QUEUE_PROVIDER=memory@, a 'TBQueue' shared between the serve path's
+'enqueue' and the worker's 'receive'.
+
+It is __correctness-safe despite being lossy__: mirroring is a demand-driven
+optimization over the always-available public upstream, so a job lost to the cap or
+to process teardown just means the package is served from public again and
+re-enqueued on the next pull — a deferred performance win, never a correctness loss.
+That admits two deliberate departures from the cloud backends' contract:
+
+* __Bounded, drop-newest on overflow.__ The queue holds at most 'memQueueMaxDepth'
+  jobs; an 'enqueue' that would exceed the cap is rejected (the newest job is
+  dropped) rather than growing memory without bound — the load-bearing constraint,
+  since a cold-cache @npm ci@ enqueues thousands of jobs at once. 'enqueue' never
+  throws (it runs on the serve hot path), and each report-worthy drop invokes the
+  injected drop callback with the running drop count, rate-limited by
+  'memoryQueueDropReportInterval' so a flood does not spam.
+* __No redelivery; 'ack' \/ 'extendVisibility' are no-ops.__ Unlike the cloud
+  backends (and 'newInMemoryQueue'), there is no visibility-timeout in-flight
+  tracking: a 'receive' removes a job for good. A job whose processing fails is
+  therefore __not__ redelivered — it is simply re-enqueued on the next demand. This
+  bounds memory hardest (nothing is retained after delivery) and is admissible
+  precisely because a lost job is safe.
+
+'receive' __blocks until at least one job is available__, then drains up to
+'memoryQueueBatchSize' without blocking — the in-process analogue of the cloud
+long-poll, so an idle worker waits rather than hot-looping on empty polls.
+-}
+newBoundedInMemoryQueue ::
+    -- | The depth cap (and any future knobs).
+    MemoryQueueConfig ->
+    {- | Invoked on each report-worthy cap-overflow drop with the running total drops,
+    so the composition root can log it (and, once the @ecluse.mirror.*@ metric
+    catalogue lands, increment a drop counter alongside).
+    -}
+    (Int -> IO ()) ->
+    IO MirrorQueue
+newBoundedInMemoryQueue cfg onDrop = do
+    -- A capacity of at least one: the config layer enforces a positive cap, but guard
+    -- so a directly-constructed queue can never be the degenerate always-full zero.
+    queue <- newTBQueueIO (fromIntegral (max 1 (memQueueMaxDepth cfg)))
+    dropCount <- newTVarIO (0 :: Int)
+    nextReceipt <- newTVarIO (0 :: Word64)
+    pure
+        MirrorQueue
+            { enqueue = \job -> do
+                report <- atomically $ do
+                    full <- isFullTBQueue queue
+                    if full
+                        then do
+                            -- Drop-newest: at the cap, reject this enqueue rather than
+                            -- grow memory. Safe — the job is re-enqueued on next demand.
+                            n <- (+ 1) <$> readTVar dropCount
+                            writeTVar dropCount n
+                            pure (if shouldReport n then Just n else Nothing)
+                        else writeTBQueue queue job $> Nothing
+                whenJust report onDrop
+            , receive = atomically (receiveBatch queue nextReceipt)
+            , -- A delivered job is already gone from the queue, so there is nothing to
+              -- retire and a failed job redelivers via the next demand, not here.
+              ack = const pass
+            , extendVisibility = \_ _ -> pass
+            }
+  where
+    -- Report the first drop, then every interval-th, so the first shed is always
+    -- visible while a sustained flood is rate-limited.
+    shouldReport :: Int -> Bool
+    shouldReport n = n == 1 || n `mod` memoryQueueDropReportInterval == 0
+
+{- Take a bounded batch: block until at least one job is available (so an idle
+worker waits rather than hot-looping), then drain up to 'memoryQueueBatchSize' total
+without blocking. Each delivery is assigned a fresh receipt from a monotonic counter
+so messages stay distinct, even though 'ack' on this backend is a no-op. -}
+receiveBatch :: TBQueue MirrorJob -> TVar Word64 -> STM [QueueMessage]
+receiveBatch queue nextReceipt = do
+    headJob <- readTBQueue queue
+    rest <- drainUpTo (memoryQueueBatchSize - 1)
+    traverse assignReceipt (headJob : rest)
+  where
+    drainUpTo :: Int -> STM [MirrorJob]
+    drainUpTo budget
+        | budget <= 0 = pure []
+        | otherwise =
+            tryReadTBQueue queue >>= \case
+                Nothing -> pure []
+                Just job -> (job :) <$> drainUpTo (budget - 1)
+
+    assignReceipt :: MirrorJob -> STM QueueMessage
+    assignReceipt job = do
+        n <- readTVar nextReceipt
+        writeTVar nextReceipt (n + 1)
+        pure QueueMessage{msgJob = job, msgReceipt = mkReceiptHandle (show n)}

@@ -160,6 +160,13 @@ data QueueBackend
       SqsQueue
     | -- | GCP Cloud Pub\/Sub (wire name @"pubsub"@).
       PubSubQueue
+    | {- | A bounded, in-process queue (wire name @"memory"@): no cloud queue, at the
+      cost of a non-durable, best-effort mirror. An explicit operator choice for a
+      simple \/ single-node \/ air-gapped deployment, never an automatic fallback —
+      see "Ecluse.Queue" for why a lost job is correctness-safe (re-enqueued on the
+      next demand) and 'Ecluse.Composition.planMirrorQueue' for the boot warning.
+      -}
+      MemoryQueue
     deriving stock (Eq, Show)
 
 {- | Parse a 'QueueBackend' from its wire name, naming the accepted set on
@@ -169,17 +176,18 @@ failure.
 Right SqsQueue
 
 >>> parseQueueBackend "kafka"
-Left "unknown queue provider \"kafka\" (expected one of: sqs, pubsub)"
+Left "unknown queue provider \"kafka\" (expected one of: sqs, pubsub, memory)"
 -}
 parseQueueBackend :: Text -> Either Text QueueBackend
 parseQueueBackend = \case
     "sqs" -> Right SqsQueue
     "pubsub" -> Right PubSubQueue
+    "memory" -> Right MemoryQueue
     other ->
         Left
             ( "unknown queue provider "
                 <> quote other
-                <> " (expected one of: sqs, pubsub)"
+                <> " (expected one of: sqs, pubsub, memory)"
             )
 
 -- | The wire name of a 'QueueBackend' (the inverse of 'parseQueueBackend').
@@ -187,6 +195,7 @@ renderQueueBackend :: QueueBackend -> Text
 renderQueueBackend = \case
     SqsQueue -> "sqs"
     PubSubQueue -> "pubsub"
+    MemoryQueue -> "memory"
 
 {- | How the bearer token that writes to a mount's mirror target is obtained — the
 credential axis of the backend matrix (see
@@ -305,6 +314,17 @@ data EnvConfig = EnvConfig
     -- ^ The mirror-queue backend (@MIRROR_QUEUE_PROVIDER@, default @sqs@).
     , cfgQueueUrl :: Url
     -- ^ The queue identifier for mirror jobs (@MIRROR_QUEUE_URL@, required).
+    , cfgQueueMemoryMaxDepth :: Int
+    {- ^ The cap on the in-memory mirror queue's depth
+    (@MIRROR_QUEUE_MEMORY_MAX_DEPTH@, default 50000), used only when
+    @MIRROR_QUEUE_PROVIDER=memory@. A cold-cache @npm ci@ on a large project enqueues
+    thousands of mirror jobs at once, so the queue is hard-bounded against an
+    out-of-memory burst: a fresh enqueue past the cap is dropped (drop-newest, safe —
+    re-enqueued on the next demand). Must be a positive integer. The default
+    comfortably covers a large install's burst while bounding worst-case retained
+    memory to tens of MiB; raise it to shed fewer jobs under load, lower it to bound
+    memory tighter. Ignored by the durable @sqs@ \/ @pubsub@ backends.
+    -}
     , cfgAwsRegion :: Maybe Text
     -- ^ The AWS region for SQS\/CodeArtifact (@AWS_REGION@, AWS backends only).
     , cfgAwsEndpointUrlSqs :: Maybe Text
@@ -488,6 +508,10 @@ envParser =
         <*> optionalUrl "MIRROR_TARGET_URL"
         <*> Env.var queueBackendReader "MIRROR_QUEUE_PROVIDER" (Env.def SqsQueue)
         <*> Env.var urlReader "MIRROR_QUEUE_URL" mempty
+        -- The in-memory queue's cap. Strictly positive: a cap of zero would drop
+        -- every job (the queue could never accept a write), a degenerate setting, so
+        -- it is rejected loudly rather than silently disabling all mirroring.
+        <*> Env.var positiveIntReader "MIRROR_QUEUE_MEMORY_MAX_DEPTH" (Env.def defaultMemoryQueueMaxDepth)
         <*> optionalText "AWS_REGION"
         <*> optionalText "AWS_ENDPOINT_URL_SQS"
         <*> optionalText "AWS_ENDPOINT_URL"
@@ -549,6 +573,14 @@ envParser =
 
     defaultShutdownDrainTimeout :: Int
     defaultShutdownDrainTimeout = 30
+
+    -- The in-memory mirror-queue cap default: generous enough to hold a large
+    -- cold-cache install's burst of mirror jobs, small enough to keep worst-case
+    -- retained memory bounded to tens of MiB. Drops past it are safe (re-enqueued on
+    -- the next demand), so this trades a few re-fetches under extreme load for a hard
+    -- memory bound; operators raise it to shed fewer jobs or lower it to bound tighter.
+    defaultMemoryQueueMaxDepth :: Int
+    defaultMemoryQueueMaxDepth = 50000
 
     -- An optional 'Text' variable: absent yields 'Nothing', present yields the
     -- value. 'def' makes the parser total (it never fails on absence). The reader
