@@ -7,8 +7,10 @@ that does not abstain wins. At equal precedence a deny beats an allow, and the
 built-in deny defaults sit strictly above the allow defaults
 ('defaultPrecedence'), so "any deny overrides any allow" holds out of the box.
 If every rule abstains the package is denied by default. Because precedence —
-not list order — decides, the rule set is order-independent except for the
-equal-precedence deny tiebreak and the order abstain reasons are gathered.
+not list order — decides, and every remaining equal-precedence tie is broken by
+rule identity ('ruleName') rather than list position, the credited rule is fully
+order-independent; only the order in which abstain reasons are gathered for the
+audit trail follows the input list.
 
 The initial rule set is pure (no IO). Effectful rules (CVE lookups, etc.) are a
 later tier layered on top of this one; see @docs\/architecture.md@. The rule
@@ -80,11 +82,14 @@ evalRule _ DenyInstallTimeExecution pd =
 
 __Precedence decides.__ Every rule that does not abstain is a candidate, and the
 __highest-precedence candidate wins__; at equal precedence a 'Deny' beats an
-'Allow'. The winner yields 'Approved' or 'Denied'. If no rule takes a position —
-every rule abstains, including the empty rule set — the package is
+'Allow', and any remaining equal-precedence tie (e.g. two allows) is broken by
+rule identity — the lexicographically-smallest 'ruleName' is credited — not by
+list position. The winner yields 'Approved' or 'Denied'. If no rule takes a
+position — every rule abstains, including the empty rule set — the package is
 'DeniedByDefault', with every abstain reason collected in list order for the
-audit trail and denial message. Only that reason order, and which of two equally
-ranked rules is reported, depend on list order; the decision itself does not.
+audit trail and denial message. The decision, and the rule credited for it, are
+independent of the input rule order; only the gathered abstain-reason order
+follows the list.
 -}
 evalRules :: EvalContext -> [PrecededRule] -> PackageDetails -> Decision
 evalRules ctx rules pd = snd (evalRulesWithPrecedence ctx rules pd)
@@ -121,9 +126,12 @@ evalRulesWithPrecedence ctx rules pd =
         Unavailable _ reason -> Left reason
 
     -- Highest precedence wins; at equal precedence a deny (rank 'True') outranks
-    -- an allow (rank 'False'), since 'maximumBy' takes the greatest key.
-    sortKey :: Candidate -> (Int, Bool)
-    sortKey c = (candPrecedence c, candIsDeny c)
+    -- an allow (rank 'False'), since 'maximumBy' takes the greatest key. Any
+    -- remaining exact tie is broken by rule identity — 'Down' so the greatest key
+    -- is the *smallest* 'ruleIdentity' — so the credited rule never depends on the
+    -- input list position.
+    sortKey :: Candidate -> (Int, Bool, Down (Text, Text))
+    sortKey c = (candPrecedence c, candIsDeny c, Down (ruleIdentity (candRule c)))
 
     winningDecision :: Candidate -> Decision
     winningDecision c =
@@ -140,6 +148,15 @@ data Candidate = Candidate
     , candRule :: Rule
     , candReason :: Text
     }
+
+-- A deterministic, total identity ordering over rules, used only to break an
+-- exact equal-precedence tie so the credited rule is independent of the input
+-- list order. It carries no priority meaning — precedence decides who wins; this
+-- only disambiguates an otherwise dead tie (e.g. two equally-ranked allows). The
+-- key is the human 'ruleName' first (so the lexicographically-smallest name is
+-- credited), then the rule's full structural form to make the order total.
+ruleIdentity :: Rule -> (Text, Text)
+ruleIdentity r = (ruleName r, show r)
 
 {- | A human-readable summary of a decision, suitable for logs and the denial
 response body.

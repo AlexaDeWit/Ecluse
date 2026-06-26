@@ -1,6 +1,5 @@
 module Ecluse.RulesSpec (spec) where
 
-import Data.List (nub)
 import Data.Text qualified as T
 import Data.Time (UTCTime (..), addUTCTime, fromGregorian, nominalDay)
 import Hedgehog (Gen, forAll, (===))
@@ -109,9 +108,9 @@ genFiringRule scopeTxt =
 
 {- | Canonicalise a decision for order-independence comparison: the audit-reason
 list of a 'DeniedByDefault' is sorted, since reasons are gathered in list order
-and a permutation only reorders them. 'Approved' \/ 'Denied' are left as-is —
-the generators that feed this give every rule a distinct precedence, so the
-winner is unique regardless of order.
+and a permutation only reorders them. 'Approved' \/ 'Denied' are left as-is — a
+permutation cannot change the credited rule, because every equal-precedence tie
+(deny-over-allow, then rule identity) is resolved independently of list position.
 -}
 canonical :: Decision -> Decision
 canonical (DeniedByDefault reasons) = DeniedByDefault (sort reasons)
@@ -182,6 +181,29 @@ spec = do
                 p = withInstallScripts (pkg (Just "myorg") 99)
             deniedBy (evalRules ctx rs p) `shouldBe` Just DenyInstallTimeExecution
             deniedBy (evalRules ctx (reverse rs) p) `shouldBe` Just DenyInstallTimeExecution
+        it "breaks an equal-precedence allow-vs-allow tie by rule identity, regardless of order" $ do
+            -- Two allows fire at the *same* precedence; the tie is resolved by rule
+            -- identity (the smallest ruleName), not list position, so the same rule
+            -- is credited whichever order it is supplied in.
+            -- "AllowIfPublishedBefore" sorts before "AllowScope", so it is credited.
+            let allows =
+                    [ at 150 (AllowScope (mkScope "myorg"))
+                    , at 150 (AllowIfPublishedBefore (7 * nominalDay))
+                    ]
+                p = pkg (Just "myorg") 30
+            approvedBy (evalRules ctx allows p) `shouldBe` Just (AllowIfPublishedBefore (7 * nominalDay))
+            approvedBy (evalRules ctx (reverse allows) p) `shouldBe` Just (AllowIfPublishedBefore (7 * nominalDay))
+        it "resolves an equal-precedence same-name allow tie deterministically, regardless of order" $ do
+            -- Two AllowIfPublishedBefore thresholds both clear the same 30-day-old
+            -- package at one precedence; the identity tiebreak's total-order
+            -- completion credits the same one whichever order it is supplied in.
+            let allows =
+                    [ at 150 (AllowIfPublishedBefore (1 * nominalDay))
+                    , at 150 (AllowIfPublishedBefore (7 * nominalDay))
+                    ]
+                p = pkg Nothing 30
+            approvedBy (evalRules ctx allows p)
+                `shouldBe` approvedBy (evalRules ctx (reverse allows) p)
         it "an operator-elevated allow outranks a higher-default deny" $
             -- The scope allow is lifted above the deny's default precedence, so a
             -- trusted internal scope is admitted despite running install scripts.
@@ -261,18 +283,20 @@ spec = do
                     p = withInstallScripts (pkg (Just scopeTxt) ageDays)
                 approvedBy (evalRules ctx rules p) === Just (AllowScope (mkScope scopeTxt))
 
-        it "the decision is independent of rule order" $
+        it "the decision and credited rule are invariant under shuffling the rule list" $
             hedgehog $ do
-                -- Build a rule set whose firing rules all have distinct
-                -- precedences, so a unique rule wins and the decision is fully
-                -- determined; then any permutation must yield the same decision
-                -- (modulo the order abstain reasons are gathered).
+                -- Precedences may collide, so equal-precedence ties — including an
+                -- allow-vs-allow tie where two firing allows share a precedence —
+                -- are exercised. The identity tiebreak makes the credited winner
+                -- (and the whole 'Decision') order-independent regardless; only the
+                -- gathered abstain-reason order tracks the input list, so
+                -- 'canonical' sorts it before comparing.
                 scopeTxt <- forAll genScope
                 ageDays <- forAll genAgeDays
                 n <- forAll (Gen.int (Range.linear 0 6))
                 rules <- forAll (Gen.list (Range.singleton n) (genFiringRule scopeTxt))
-                distinctPrecs <- forAll (distinctPrecedences n)
-                let preceded = zipWith PrecededRule distinctPrecs rules
+                precs <- forAll (Gen.list (Range.singleton n) genPrecedence)
+                let preceded = zipWith PrecededRule precs rules
                     p = withInstallScripts (pkg (Just scopeTxt) ageDays)
                 perm <- forAll (Gen.shuffle preceded)
                 canonical (evalRules ctx preceded p) === canonical (evalRules ctx perm p)
@@ -301,10 +325,3 @@ spec = do
         it "renders an undecidable outcome explaining it could not be evaluated" $
             renderDecision pd (Undecidable (WillResolve Nothing) "the advisory source is down")
                 `shouldSatisfy` (\t -> T.isInfixOf "could not be evaluated" t && T.isInfixOf "advisory source is down" t)
-  where
-    -- A list of @n@ distinct precedences, so each rule competes at its own rank.
-    distinctPrecedences :: Int -> Gen [Int]
-    distinctPrecedences n =
-        Gen.filter
-            (\xs -> length (nub xs) == n)
-            (Gen.list (Range.singleton n) genPrecedence)
