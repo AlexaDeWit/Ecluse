@@ -27,11 +27,30 @@ HADDOCK_FLAGS := --haddock-hyperlink-source --haddock-quickjump
         coverage coverage-unit freeze gen-version-fixtures new-worktree format format-check lint sast \
         cabal-check lint-workflows lint-scripts weeder check gate run docs \
         docs-check docs-site site nix-build nix-check docker-build docker-push sbom scan \
-        scan-vulnix clean
+        scan-vulnix clean version tag
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
 	  | awk 'BEGIN{FS=":.*?## "}{printf "  %-16s %s\n", $$1, $$2}'
+
+# The single source of truth for the release version is ecluse.cabal's `version:`
+# field (semver, e.g. 0.1.0). Everything downstream derives from it: `make tag` cuts
+# the git tag from it, and release.yml asserts the pushed tag matches it (the release
+# fails on drift). Read through `cabal info` — cabal's own parser of the package
+# description, not a hand-grep of the file — then strip the `<name>-` off its
+# `* ecluse-<version>` line. (cabal info needs the toolchain, so unlike a raw grep
+# this enters the Nix shell; CI's guard job pays that, but releases are infrequent.)
+version: ## Print the release version (ecluse.cabal `version:`, via `cabal info` — the source of truth)
+	@v="$$($(NIX) cabal info ./ecluse.cabal 2>/dev/null | sed -n -E 's/^\* ecluse-([0-9.]+).*/\1/p' | head -n1)"; \
+	  [ -n "$$v" ] && echo "$$v" || { echo "make version: could not read the version from 'cabal info'" >&2; exit 1; }
+
+# Cut a GPG-signed, annotated release tag vX.Y.Z FROM the cabal version, so the tag
+# can never be mistyped. Does NOT push — releasing is deliberate: it prints the push
+# command, and pushing the tag is what triggers release.yml.
+tag: ## Create signed tag v<version> from the cabal version (then push it to release)
+	@v="v$$($(MAKE) -s version)"; \
+	  git tag -s -m "Release $$v" "$$v" \
+	  && echo "created $$v — push to release:  git push origin $$v"
 
 update: ## Refresh the cabal package index
 	$(NIX) cabal update

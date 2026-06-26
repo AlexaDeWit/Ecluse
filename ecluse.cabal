@@ -1,6 +1,6 @@
 cabal-version: 3.0
 name:          ecluse
-version:       0.1.0.0
+version:       0.1.0
 synopsis:      Supply-chain resilience proxy for package registries
 description:
   Écluse is a controlled passage in front of package registries (npm, PyPI, …):
