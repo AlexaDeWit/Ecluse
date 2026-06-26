@@ -46,7 +46,7 @@ import Ecluse.Server.Context (PackumentDeps (..))
 import Ecluse.Telemetry (telemetryDisabled)
 import Ecluse.Worker (workerLoop)
 
-{- | The whole AWS-backed path through the __real composition seam__, end to end: an
+{- | The whole AWS-backed path through the __real composition root__, end to end: an
 in-process Écluse — the real 'Ecluse.Server.application' serve path and the real
 'Ecluse.Worker.workerLoop' — over a __real SQS queue__ (a @ministack@ container,
 shared through "Ecluse.Integration.Ministack") and WAI npm stubs for the public
@@ -109,7 +109,7 @@ serve 'Application' over them, then run the body against the assembled proxy.
 The queue is built through the __config-driven composition root__
 ('Ecluse.Composition.planMirrorQueue' → 'Ecluse.Queue.Sqs.newSqsQueue'), driven by the
 AWS-SDK-standard @AWS_ENDPOINT_URL_SQS@ override pointed at the container — the same
-production path the released image runs, with no test-only seam. -}
+production path the released image runs, with no test-only code path. -}
 withAwsProxy :: Container -> Text -> (TestProxy -> IO a) -> IO a
 withAwsProxy container queueName body =
     withPrivateUpstream $ \privateUrl ->

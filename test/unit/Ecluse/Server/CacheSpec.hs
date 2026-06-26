@@ -215,7 +215,7 @@ spec = do
             -- landing on the leader between claiming the in-flight slot and completing
             -- must still fill the marker with the error and free the slot, or the
             -- waiting follower parks on the marker forever and the key wedges until
-            -- restart. The window is otherwise a seam-less, interruptible point, so it
+            -- restart. The window is otherwise a seamless, interruptible point, so it
             -- is driven deterministically through the 'resolveMetadataWith' hook, which
             -- runs on the leading thread at exactly the claim -> fetch-runner handoff:
             -- it signals it has reached the window, then parks, so the test can cancel

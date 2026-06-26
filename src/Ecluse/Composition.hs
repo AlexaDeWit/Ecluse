@@ -588,7 +588,7 @@ with the rest of the boot-time validation.
 When an endpoint override is configured (@AWS_ENDPOINT_URL_SQS@, else
 @AWS_ENDPOINT_URL@ — the AWS-SDK-standard variables), it is parsed into the
 backend's 'SqsEndpoint' so the released image can target a local emulator
-(@ministack@) or a VPC endpoint without a test-only seam; a malformed override URL is
+(@ministack@) or a VPC endpoint without a test-only code path; a malformed override URL is
 a fail-loud 'QueueEndpointMalformed' boot error. With no override, the SQS backend
 uses AWS's default endpoint and credential resolution.
 -}

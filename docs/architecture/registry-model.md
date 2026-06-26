@@ -216,7 +216,7 @@ the served packument's `name` is always a value an upstream *genuinely reported*
 (which, having passed validation, equals the route name) — never a substituted,
 manufactured, or empty value the proxy invented.
 
-The check is applied **per origin, at the serve seam**, as the upstream packument is
+The check is applied **per origin, at the serve boundary**, as the upstream packument is
 projected:
 
 - If an origin's self-reported `name` **agrees** with the route name, its

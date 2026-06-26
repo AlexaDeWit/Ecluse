@@ -11,7 +11,7 @@ beyond @testcontainers-hs@, so the harness drives @docker@ directly through
 @typed-process@.
 
 The proxy's mirror queue is the __real AWS SQS backend__ pointed at ministack through
-the production @AWS_ENDPOINT_URL_SQS@ override (no test-only seam — the released image
+the production @AWS_ENDPOINT_URL_SQS@ override (no test-only code path — the released image
 is exercised exactly as deployed, just with the endpoint aimed at the emulator). The
 harness creates the queue in ministack over the plain SQS query API (the emulator
 needs no signed request) and passes its URL to the proxy; the proxy reaches the

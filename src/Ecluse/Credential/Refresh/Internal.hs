@@ -1,5 +1,5 @@
 {- | The implementation behind 'Ecluse.Credential.Refresh'. This module exposes
-the provider's innards — including the 'refreshingProviderWith' test seam — that
+the provider's innards — including the 'refreshingProviderWith' test hook — that
 the curated public module deliberately keeps hidden. Importing it opts out of the
 module's stability promises (the same convention @text@ and @bytestring@ use for
 their @.Internal@ modules); production code imports 'Ecluse.Credential.Refresh'

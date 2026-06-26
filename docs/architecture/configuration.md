@@ -60,7 +60,7 @@ registries derive short-lived tokens from ambient cloud credentials (see
 | `MIRROR_QUEUE_PROVIDER` | No (default: `sqs`) | Mirror-queue backend: `sqs` (AWS) or `pubsub` (GCP). See [Cloud Backends](cloud-backends.md#cloud-backends). |
 | `MIRROR_QUEUE_URL` | Yes | Queue identifier for mirror jobs: an SQS queue URL, or a Pub/Sub `projects/<project>/topics/<topic>` resource, per provider. |
 | `AWS_REGION` | AWS backends only | Region for SQS and CodeArtifact. |
-| `AWS_ENDPOINT_URL_SQS` | No | SQS endpoint override (the AWS-SDK-standard variable). Set to target a local emulator (`ministack`) or a VPC endpoint; the released image uses the same key with no test-only seam. Takes precedence over `AWS_ENDPOINT_URL`. With an override set, requests are signed with `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` (an emulator is off the ambient role chain). |
+| `AWS_ENDPOINT_URL_SQS` | No | SQS endpoint override (the AWS-SDK-standard variable). Set to target a local emulator (`ministack`) or a VPC endpoint; the released image uses the same key with no test-only code path. Takes precedence over `AWS_ENDPOINT_URL`. With an override set, requests are signed with `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` (an emulator is off the ambient role chain). |
 | `AWS_ENDPOINT_URL` | No | Generic AWS endpoint override (the AWS-SDK-standard variable), used for SQS when `AWS_ENDPOINT_URL_SQS` is unset. |
 | `GOOGLE_CLOUD_PROJECT` | GCP backends only | Project for Pub/Sub and Artifact Registry. Credentials come from Application Default Credentials (ADC). |
 | `PROXY_AUTH_TOKEN` | No | If set, clients must supply this token as `Bearer` or `_authToken`. Omit for open/network-secured deployments. |

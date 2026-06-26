@@ -239,7 +239,7 @@ defaultShutdownDrainTimeout = ShutdownDrainTimeout 30
 
 -- ── local-dev immediate halt ─────────────────────────────────────────────────
 
-{- | The local-development immediate-halt wiring, as three injectable seams so its
+{- | The local-development immediate-halt wiring, as three injection points so its
 logic is exercised without a real terminal. It exists only to give an interactive
 session a "quit now" key: when the server is attached to a TTY, closing standard
 input (Ctrl-D) forces an __immediate__ process exit, aborting any in-progress drain
