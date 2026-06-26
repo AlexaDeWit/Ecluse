@@ -16,6 +16,7 @@ import Data.Aeson (
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Map.Strict qualified as Map
+import Data.Scientific (Scientific, scientific)
 import Data.Time (UTCTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.Vector qualified as V
@@ -47,6 +48,7 @@ spec = do
     fullPackumentSpec
     versionManifestSpec
     distSpec
+    advisoryFieldLeniencySpec
     lenientScalarSpec
     errorResponseSpec
     jsonListSpec
@@ -252,6 +254,107 @@ distSpec = describe "Dist" $ do
                 , distSignatures = []
                 }
             )
+
+-- ── advisory dist-field leniency ─────────────────────────────────────────────
+
+{- | A regression guard for the whole-packument denial defect: the __advisory__
+@dist@ sub-fields (@unpackedSize@, @fileCount@, @signatures@) decide no rule and
+no serve, so a single hostile value in one version must degrade that field alone,
+never failing the decode of the entire packument. The load-bearing integrity
+fields (@tarball@, @integrity@) stay strict and intact, and healthy sibling
+versions still decode in full.
+-}
+advisoryFieldLeniencySpec :: Spec
+advisoryFieldLeniencySpec = describe "advisory dist-field leniency (whole-packument survival)" $ do
+    describe "an undecodable advisory number degrades to Nothing rather than failing the Dist" $ do
+        it "maps an out-of-range unpackedSize (1e400) to Nothing" $
+            decodesTo @Dist
+                "{\"tarball\":\"https://e.test/x.tgz\",\"unpackedSize\":1e400}"
+                (bareDist "https://e.test/x.tgz")
+        it "maps an Int-overflowing unpackedSize to Nothing" $
+            decodesTo @Dist
+                "{\"tarball\":\"https://e.test/x.tgz\",\"unpackedSize\":99999999999999999999}"
+                (bareDist "https://e.test/x.tgz")
+        it "maps a fractional unpackedSize to Nothing" $
+            decodesTo @Dist
+                "{\"tarball\":\"https://e.test/x.tgz\",\"unpackedSize\":1.5}"
+                (bareDist "https://e.test/x.tgz")
+        it "maps a fractional fileCount to Nothing" $
+            decodesTo @Dist
+                "{\"tarball\":\"https://e.test/x.tgz\",\"fileCount\":1.5}"
+                (bareDist "https://e.test/x.tgz")
+        it "maps a wrong-typed unpackedSize (a string) to Nothing" $
+            decodesTo @Dist
+                "{\"tarball\":\"https://e.test/x.tgz\",\"unpackedSize\":\"big\"}"
+                (bareDist "https://e.test/x.tgz")
+        it "still reads a well-formed unpackedSize" $
+            decodesTo @Dist
+                "{\"tarball\":\"https://e.test/x.tgz\",\"unpackedSize\":4096}"
+                (bareDist "https://e.test/x.tgz"){distUnpackedSize = Just 4096}
+
+    describe "signatures degrade element-wise rather than failing the array" $ do
+        it "skips a signature element missing its keyid" $
+            decodesTo @Dist
+                "{\"tarball\":\"https://e.test/x.tgz\",\"signatures\":[{\"sig\":\"x\"}]}"
+                (bareDist "https://e.test/x.tgz")
+        it "treats a non-array signatures value (5) as empty" $
+            decodesTo @Dist
+                "{\"tarball\":\"https://e.test/x.tgz\",\"signatures\":5}"
+                (bareDist "https://e.test/x.tgz")
+        it "keeps the well-formed elements and drops only the junk ones" $
+            decodesTo @Dist
+                "{\"tarball\":\"https://e.test/x.tgz\",\"signatures\":\
+                \[{\"sig\":\"a\",\"keyid\":\"k1\"},{\"sig\":\"x\"},{\"sig\":\"b\",\"keyid\":\"k2\"}]}"
+                (bareDist "https://e.test/x.tgz")
+                    { distSignatures = [Signature "a" "k1", Signature "b" "k2"]
+                    }
+
+    -- The headline regression: a single version stacked with every junk advisory
+    -- vector once denied the WHOLE package. The poisoned "1.0.0" carries an
+    -- out-of-range unpackedSize, a fractional fileCount, and a signature missing
+    -- its keyid; "2.0.0" carries a non-array signatures value; "3.0.0" is a
+    -- healthy sibling. All three must survive, each with its load-bearing
+    -- tarball/integrity intact and only the advisory fields degraded.
+    it "decodes the whole packument despite a version carrying every junk advisory vector" $ do
+        pk <-
+            decodeOrFail @AbbreviatedPackument
+                "{\"name\":\"poisoned\",\"modified\":\"2026-01-01T00:00:00.000Z\"\
+                \,\"dist-tags\":{\"latest\":\"3.0.0\"},\"versions\":{\
+                \\"1.0.0\":{\"name\":\"poisoned\",\"version\":\"1.0.0\",\"dist\":{\
+                \\"tarball\":\"https://e.test/poisoned-1.0.0.tgz\"\
+                \,\"integrity\":\"sha512-AAAA\"\
+                \,\"unpackedSize\":1e400,\"fileCount\":1.5\
+                \,\"signatures\":[{\"sig\":\"x\"}]}},\
+                \\"2.0.0\":{\"name\":\"poisoned\",\"version\":\"2.0.0\",\"dist\":{\
+                \\"tarball\":\"https://e.test/poisoned-2.0.0.tgz\",\"signatures\":5}},\
+                \\"3.0.0\":{\"name\":\"poisoned\",\"version\":\"3.0.0\",\"dist\":{\
+                \\"tarball\":\"https://e.test/poisoned-3.0.0.tgz\"\
+                \,\"integrity\":\"sha512-BBBB\",\"unpackedSize\":4096\
+                \,\"signatures\":[{\"sig\":\"s\",\"keyid\":\"k\"}]}}}}"
+
+        -- Every version is present — not just the healthy one.
+        Map.keys (apkmtVersions pk) `shouldBe` ["1.0.0", "2.0.0", "3.0.0"]
+
+        -- The poisoned 1.0.0 keeps its load-bearing integrity fields; its advisory
+        -- fields degrade to absent/empty rather than denying the version.
+        let d1 = vmDist <$> Map.lookup "1.0.0" (apkmtVersions pk)
+        (distTarball <$> d1) `shouldBe` Just "https://e.test/poisoned-1.0.0.tgz"
+        (distIntegrity <$> d1) `shouldBe` Just (Just "sha512-AAAA")
+        (distUnpackedSize <$> d1) `shouldBe` Just Nothing
+        (distFileCount <$> d1) `shouldBe` Just Nothing
+        (distSignatures <$> d1) `shouldBe` Just []
+
+        -- 2.0.0's non-array signatures collapses to empty; its tarball is intact.
+        let d2 = vmDist <$> Map.lookup "2.0.0" (apkmtVersions pk)
+        (distTarball <$> d2) `shouldBe` Just "https://e.test/poisoned-2.0.0.tgz"
+        (distSignatures <$> d2) `shouldBe` Just []
+
+        -- The healthy sibling decodes in full: both its advisory and integrity fields.
+        let d3 = vmDist <$> Map.lookup "3.0.0" (apkmtVersions pk)
+        (distTarball <$> d3) `shouldBe` Just "https://e.test/poisoned-3.0.0.tgz"
+        (distIntegrity <$> d3) `shouldBe` Just (Just "sha512-BBBB")
+        (distUnpackedSize <$> d3) `shouldBe` Just (Just 4096)
+        (distSignatures <$> d3) `shouldBe` Just [Signature "s" "k"]
 
 -- ── lenient string-or-object scalars ─────────────────────────────────────────
 
@@ -569,7 +672,7 @@ genValue =
         -- non-recursive (leaf) generators — also the shrink targets
         [ pure Null
         , Bool <$> Gen.bool
-        , Number . fromInteger <$> genInteger
+        , Number <$> genNumber
         , String <$> genJsonText
         ]
         -- recursive generators — small fan-out so the tree stays bounded
@@ -583,6 +686,21 @@ genValue =
 -}
 genInteger :: H.Gen Integer
 genInteger = Gen.integral (Range.linearFrom 0 (-100000) 100000)
+
+{- | A small arbitrary JSON number. Most draws are modest integers (cheap to
+'Show'), but a deliberate minority are hostile to a strict 'Int' decode —
+fractional or far outside 'Int' range (built from a bounded coefficient and a
+wide base-10 exponent, so the magnitude is astronomical yet the value stays cheap
+to render). This reaches the fractional\/huge\/overflowing shapes a plain integer
+generator never produces, so the totality fuzz exercises the lenient numeric
+@dist@ decoders' graceful degradation, not merely the absence of a crash.
+-}
+genNumber :: H.Gen Scientific
+genNumber =
+    Gen.frequency
+        [ (3, fromInteger <$> genInteger)
+        , (1, scientific <$> genInteger <*> Gen.int (Range.linearFrom 0 (-20) 400))
+        ]
 
 -- | A short arbitrary JSON string value (unicode, to probe text handling).
 genJsonText :: H.Gen Text
@@ -641,6 +759,21 @@ lenient-form cases to a single readable line.
 -}
 decodesTo :: forall a. (FromJSON a, Eq a, Show a) => LByteString -> a -> Expectation
 decodesTo json expected = eitherDecode json `shouldBe` Right expected
+
+{- | A 'Dist' carrying only its required tarball, every advisory field at its
+absent\/empty default. The expected shape when a poisoned advisory field has
+degraded; record-update one selector for the cases that keep a good value.
+-}
+bareDist :: Text -> Dist
+bareDist tarball =
+    Dist
+        { distTarball = tarball
+        , distShasum = Nothing
+        , distIntegrity = Nothing
+        , distFileCount = Nothing
+        , distUnpackedSize = Nothing
+        , distSignatures = []
+        }
 
 {- | Decode a JSON literal, failing the example with the aeson error rather than
 returning an 'Either', so an example can go on to read selectors off the value.
