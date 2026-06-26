@@ -1,8 +1,9 @@
 module Ecluse.TelemetryMetricsSpec (spec) where
 
 import Data.ByteString qualified as BS
-import System.Environment (setEnv)
+import System.Environment (setEnv, unsetEnv)
 import Test.Hspec
+import UnliftIO (bracket)
 
 import OpenTelemetry.Metric.Core (forceFlushMeterProvider)
 import TestContainers (Container, containerAddress)
@@ -73,33 +74,57 @@ at the collector, then force-flush the meter provider so the export does not wai
 periodic reader's window. With telemetry off, 'newMetrics' builds against the no-op
 meter and there is no provider to flush, so nothing is emitted. -}
 driveMetrics :: Collector -> TelemetrySwitch -> IO ()
-driveMetrics collector switch = do
-    pointSdkAt (collectorEndpoint collector)
-    withTelemetry switch $ \telemetry -> do
-        metrics <- newMetrics telemetry
-        -- A representative spread across instrument kinds and bounded labels.
-        recordServeDecision metrics Admit
-        recordServeDecision metrics Deny
-        recordRuleDenial metrics (Just "min-age") ReasonPolicy
-        recordUpstreamFetch metrics Public Status2xx 0.012
-        recordCacheRequest metrics Hit
-        recordCacheRequest metrics Miss
-        recordMirrorJobProcessed metrics Published
-        whenJust (telemetryMeterProvider telemetry) $ \meterProvider ->
-            void (forceFlushMeterProvider meterProvider Nothing)
+driveMetrics collector switch =
+    withSdkEnv (collectorEndpoint collector) $
+        withTelemetry switch $ \telemetry -> do
+            metrics <- newMetrics telemetry
+            -- A representative spread across instrument kinds and bounded labels.
+            recordServeDecision metrics Admit
+            recordServeDecision metrics Deny
+            recordRuleDenial metrics (Just "min-age") ReasonPolicy
+            recordUpstreamFetch metrics Public Status2xx 0.012
+            recordCacheRequest metrics Hit
+            recordCacheRequest metrics Miss
+            recordMirrorJobProcessed metrics Published
+            whenJust (telemetryMeterProvider telemetry) $ \meterProvider ->
+                void (forceFlushMeterProvider meterProvider Nothing)
 
-{- Point the SDK's OTLP exporter at the collector via the standard environment, with the
-metrics exporter on (the collector here carries a metrics pipeline) and traces\/logs off
-so the SDK does not also try to ship signals the collector has no pipeline for. -}
-pointSdkAt :: Text -> IO ()
-pointSdkAt endpoint = do
-    setEnv "OTEL_EXPORTER_OTLP_ENDPOINT" (toString endpoint)
-    setEnv "OTEL_EXPORTER_OTLP_PROTOCOL" "http/protobuf"
-    setEnv "OTEL_SERVICE_NAME" "ecluse-itest"
-    setEnv "OTEL_METRICS_EXPORTER" "otlp"
-    setEnv "OTEL_TRACES_EXPORTER" "none"
-    setEnv "OTEL_LOGS_EXPORTER" "none"
-    setEnv "OTEL_METRIC_EXPORT_INTERVAL" "200"
+{- Run an action with the SDK pointed at the collector through the standard @OTEL_*@
+environment — metrics exporter on (the collector carries a metrics pipeline), traces and
+logs off so the SDK does not ship signals the collector has no pipeline for — and
+__restore the prior environment on exit__. @setEnv@ is process-global and the integration
+suite runs every spec in one process, so without this restore these values (e.g.
+@OTEL_TRACES_EXPORTER=none@) would leak into a later spec; every key this sets is saved
+and put back (or unset if it was absent). -}
+withSdkEnv :: Text -> IO a -> IO a
+withSdkEnv endpoint act = bracket saveKeys restoreKeys (const (apply >> act))
+  where
+    keys :: [String]
+    keys =
+        [ "OTEL_EXPORTER_OTLP_ENDPOINT"
+        , "OTEL_EXPORTER_OTLP_PROTOCOL"
+        , "OTEL_SERVICE_NAME"
+        , "OTEL_METRICS_EXPORTER"
+        , "OTEL_TRACES_EXPORTER"
+        , "OTEL_LOGS_EXPORTER"
+        , "OTEL_METRIC_EXPORT_INTERVAL"
+        ]
+
+    saveKeys :: IO [(String, Maybe String)]
+    saveKeys = traverse (\k -> (k,) <$> lookupEnv k) keys
+
+    restoreKeys :: [(String, Maybe String)] -> IO ()
+    restoreKeys = traverse_ (\(k, mv) -> maybe (unsetEnv k) (setEnv k) mv)
+
+    apply :: IO ()
+    apply = do
+        setEnv "OTEL_EXPORTER_OTLP_ENDPOINT" (toString endpoint)
+        setEnv "OTEL_EXPORTER_OTLP_PROTOCOL" "http/protobuf"
+        setEnv "OTEL_SERVICE_NAME" "ecluse-itest"
+        setEnv "OTEL_METRICS_EXPORTER" "otlp"
+        setEnv "OTEL_TRACES_EXPORTER" "none"
+        setEnv "OTEL_LOGS_EXPORTER" "none"
+        setEnv "OTEL_METRIC_EXPORT_INTERVAL" "200"
 
 -- ── the collector container ────────────────────────────────────────────────────
 

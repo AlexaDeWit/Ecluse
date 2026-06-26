@@ -29,7 +29,7 @@ import Ecluse.Telemetry.Metrics (
     Cause (Connection, Decode, Timeout),
     CredentialResult (RefreshFailed, Refreshed),
     Decision (Admit, Deny, Unavailable),
-    MirrorResult (AlreadyExists, Failed, Published),
+    MirrorResult (Failed, Published),
     Provider (Adc, CodeArtifact, Static),
     ReasonClass (ReasonMissingIntegrity, ReasonPolicy),
     StatusClass (Status2xx, Status5xx),
@@ -72,7 +72,7 @@ spec = describe "Ecluse.Telemetry.Instruments (inert when telemetry is off)" $ d
         recordCacheEntries m 1024
         recordMirrorEnqueued m
         recordMirrorEnqueueFailure m
-        traverse_ (recordMirrorJobProcessed m) [Published, AlreadyExists, Failed]
+        traverse_ (recordMirrorJobProcessed m) [Published, Failed]
         recordMirrorPublishDuration m 2.5
         recordCredentialRefresh m CodeArtifact Refreshed
         recordCredentialRefresh m Static RefreshFailed

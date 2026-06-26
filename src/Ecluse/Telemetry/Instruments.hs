@@ -15,7 +15,10 @@ telemetry is enabled, and from the SDK's __no-op meter provider__ when it is not
 no-op instrument discards every measurement, so the @record*@ helpers are called
 __unconditionally__ on the hot path and are genuinely inert when telemetry is off — no
 per-call branch, no provider fabricated at the edge. The 'Metrics' handle is therefore
-total: every signal has a real instrument whichever posture the proxy is in.
+total: every signal has a real instrument whichever posture the proxy is in. The no-op
+recording function ignores its arguments, so the 'metricAttributes' a call passes is
+never forced — no attribute set is materialised when telemetry is off, only a thunk that
+is discarded.
 
 The catalogue and the cardinality rule are described in
 @docs\/architecture\/observability.md@.

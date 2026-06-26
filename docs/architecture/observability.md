@@ -124,7 +124,8 @@ domain signals. The catalogue:
   → hit rate; `ecluse.metadata_cache.entries` (gauge).
 - **Mirror** (what we know, not queue depth) — `ecluse.mirror.enqueued`,
   `ecluse.mirror.enqueue.failures`, `ecluse.mirror.jobs.processed`
-  (result published/already-exists/failed), `ecluse.mirror.publish.duration`.
+  (result published/failed — the idempotent already-present 409 counts as published),
+  `ecluse.mirror.publish.duration`.
 - **Credentials** — `ecluse.credential.refresh` (counter; result, provider);
   `ecluse.credential.token.ttl.seconds` (gauge) ← alarms a stuck refresh.
 - **Runtime** — the GHC runtime-metrics instrumentation (GC pauses, heap).

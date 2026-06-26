@@ -228,8 +228,11 @@ data Tier = Structural | Effectful
 data CacheResult = Hit | Miss
     deriving stock (Bounded, Enum, Eq, Show)
 
--- | A processed mirror job's result.
-data MirrorResult = Published | AlreadyExists | Failed
+{- | A processed mirror job's result. The idempotent "already present" outcome (a
+registry @409@) is __not__ a distinct value: the worker treats it as a success, so it is
+counted as 'Published' — a series that could never emit is not published.
+-}
+data MirrorResult = Published | Failed
     deriving stock (Bounded, Enum, Eq, Show)
 
 -- | A credential-refresh result.
@@ -331,7 +334,6 @@ renderLabel label = (labelKeyName (labelKey label), labelValue label)
             Miss -> "miss"
         LMirrorResult m -> case m of
             Published -> "published"
-            AlreadyExists -> "already_exists"
             Failed -> "failed"
         LCredentialResult c -> case c of
             Refreshed -> "refreshed"
