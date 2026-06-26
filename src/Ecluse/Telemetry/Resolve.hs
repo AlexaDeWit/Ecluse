@@ -213,14 +213,22 @@ otelEnvironmentOverrides environment =
             parseResourceAttributes
             (nonBlank . toText =<< lookup "OTEL_RESOURCE_ATTRIBUTES" environment)
 
+    -- Left-biased union: a resolved attribute must win over an inherited
+    -- OTEL_RESOURCE_ATTRIBUTES value of the same key, so the resolved map sits on the
+    -- LEFT of (<>) ('Map.union' is left-biased). Reversing the operands would let a
+    -- stale operator-set value silently override the resolution.
     mergedAttrs :: Map Text Text
-    mergedAttrs =
-        foldl'
-            (\acc (key, mValue) -> maybe acc (\value -> Map.insert key value acc) mValue)
-            existing
-            [ ("service.name", Just (rtServiceName resolved))
-            , ("deployment.environment", rtEnvironment resolved)
-            , ("service.version", rtVersion resolved)
+    mergedAttrs = resolvedAttrs <> existing
+
+    resolvedAttrs :: Map Text Text
+    resolvedAttrs =
+        Map.fromList
+            [ (key, value)
+            | (key, Just value) <-
+                [ ("service.name", Just (rtServiceName resolved))
+                , ("deployment.environment", rtEnvironment resolved)
+                , ("service.version", rtVersion resolved)
+                ]
             ]
 
 -- Parse the @key1=value1,key2=value2@ resource-attribute string into a map,
