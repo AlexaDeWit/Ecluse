@@ -53,13 +53,23 @@ module Ecluse.Credential.Refresh (
     -- * The refreshing provider
     refreshingProvider,
 
+    -- * Telemetry reporters
+    RefreshReporter (..),
+    noRefreshReporter,
+    CredentialReporters (..),
+    noCredentialReporters,
+
     -- * Failure
     CredentialError (..),
 ) where
 
 import Ecluse.Credential.Refresh.Internal (
     CredentialError (..),
+    CredentialReporters (..),
     RefreshConfig (..),
+    RefreshReporter (..),
     defaultRefreshConfig,
+    noCredentialReporters,
+    noRefreshReporter,
     refreshingProvider,
  )

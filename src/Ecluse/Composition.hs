@@ -89,6 +89,7 @@ import Ecluse.Config (
  )
 import Ecluse.Credential (AuthToken (..), CredentialProvider, Secret, mkSecret, staticProvider)
 import Ecluse.Credential.CodeArtifact (CodeArtifactConfig (..), newCodeArtifactProvider)
+import Ecluse.Credential.Refresh (CredentialReporters)
 import Ecluse.Ecosystem (Ecosystem, ecosystemName, prefixFor)
 import Ecluse.Package.Integrity (MinIntegrity)
 import Ecluse.Queue (MemoryQueueConfig, defaultMemoryQueueConfig)
@@ -131,9 +132,14 @@ selected by 'cfgMirrorTargetCredentialProvider' (see 'planMirrorCredential'):
 
 The @static@ provider is also built whenever @MIRROR_TARGET_TOKEN@ is present,
 independent of the selector, so a static token never goes unused.
+
+The 'CredentialReporters' are handed to the refreshing CodeArtifact provider so its
+mint breaker and refresh outcomes record to telemetry; the static provider never
+refreshes, so they do not concern it. The composition root supplies the deferred
+reporters that go live once the telemetry substrate exists.
 -}
-initCredentialProviders :: EnvConfig -> IO (Either [BootError] CredentialProviders)
-initCredentialProviders env = case planMirrorCredential env of
+initCredentialProviders :: CredentialReporters -> EnvConfig -> IO (Either [BootError] CredentialProviders)
+initCredentialProviders reporters env = case planMirrorCredential env of
     Left errs -> pure (Left errs)
     Right Nothing -> pure (Right (providersFrom Nothing))
     Right (Just caConfig) ->
@@ -141,7 +147,7 @@ initCredentialProviders env = case planMirrorCredential env of
         -- or unauthorised identity fails the boot here rather than on the first write.
         -- Catch that mint so its failure renders through the aggregated boot block
         -- instead of escaping as a raw amazonka exception.
-        tryAny (newCodeArtifactProvider caConfig) <&> \case
+        tryAny (newCodeArtifactProvider reporters caConfig) <&> \case
             Left err -> Left [CodeArtifactMintFailed (toText (displayException err))]
             Right provider -> Right (providersFrom (Just provider))
   where

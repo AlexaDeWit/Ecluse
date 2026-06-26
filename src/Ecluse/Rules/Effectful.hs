@@ -49,6 +49,8 @@ module Ecluse.Rules.Effectful (
     backoffPolicy,
     Breaker (..),
     newBreaker,
+    BreakerReporter (..),
+    noBreakerReporter,
 
     -- * Evaluation
     evalRulesEffectful,
@@ -64,7 +66,16 @@ import Data.List (maximumBy)
 import Data.Time (NominalDiffTime, UTCTime)
 import UnliftIO (timeout, tryAny)
 
-import Ecluse.Breaker (Breaker (..), admit, initialBreaker, recordFailure, recordSuccess)
+import Ecluse.Breaker (
+    Breaker (..),
+    BreakerReporter (..),
+    admit,
+    initialBreaker,
+    noBreakerReporter,
+    recordFailure,
+    recordSuccess,
+    reportBreakerChange,
+ )
 import Ecluse.Package (PackageDetails)
 import Ecluse.Rules (evalRulesWithPrecedence)
 import Ecluse.Rules.Types (
@@ -117,6 +128,11 @@ data EffectfulRule = EffectfulRule
     -- ^ Whether an exhausted evaluation fails closed ('OnUnavailable') or open ('OnAbstain').
     , erBreaker :: TVar Breaker
     -- ^ This rule's per-source circuit-breaker state, shared across evaluations.
+    , erBreakerReporter :: BreakerReporter
+    {- ^ The observer this rule's breaker reports its state transitions to
+    (@ecluse.rule.breaker.state@). Inert ('Ecluse.Breaker.noBreakerReporter') for an
+    unobserved rule; the composition root installs the live one.
+    -}
     }
 
 {- | An 'EffectfulRule' paired with the integer precedence at which it competes
@@ -194,7 +210,7 @@ Total — it never throws; a rule failure becomes an outcome.
 runEffectfulRule :: EvalContext -> EffectfulRule -> PackageDetails -> IO RuleOutcome
 runEffectfulRule ctx rule pd = do
     let now = ctxNow ctx
-    admitted <- atomically (admitProbe (erBreaker rule) now)
+    admitted <- admitProbe rule now
     if not admitted
         then -- Breaker open and still cooling down: fast-fail without running the
         -- rule's IO, the cheap path a sustained outage stays on.
@@ -203,10 +219,10 @@ runEffectfulRule ctx rule pd = do
             result <- attemptWithRetry rule pd
             case result of
                 Just outcome -> do
-                    atomically (modifyTVar' (erBreaker rule) recordSuccess)
+                    commitBreaker rule recordSuccess
                     pure outcome
                 Nothing -> do
-                    atomically (modifyTVar' (erBreaker rule) (tripOnFailure (erConfig rule) now))
+                    commitBreaker rule (tripOnFailure (erConfig rule) now)
                     pure (exhausted rule "the rule could not be evaluated")
 
 {- Attempt the rule's IO under the per-attempt timeout, retrying with backoff until
@@ -256,15 +272,30 @@ exhausted rule reason = case erOnError rule of
 -- ── the breaker gate ──────────────────────────────────────────────────────────
 
 {- The breaker admission gate: defer the decision to 'Ecluse.Breaker.admit' and
-commit the breaker state it returns. While open and cooling down it denies; once the
-cooldown elapses it moves to half-open and admits a single probe; a closed or
-half-open breaker always admits. -}
-admitProbe :: TVar Breaker -> UTCTime -> STM Bool
-admitProbe breaker now = do
-    st <- readTVar breaker
-    let (permitted, st') = admit now st
-    writeTVar breaker st'
+commit the breaker state it returns, reporting any change (a half-open recovery probe).
+While open and cooling down it denies; once the cooldown elapses it moves to half-open
+and admits a single probe; a closed or half-open breaker always admits. -}
+admitProbe :: EffectfulRule -> UTCTime -> IO Bool
+admitProbe rule now = do
+    (permitted, old, new) <- atomically $ do
+        st <- readTVar (erBreaker rule)
+        let (p, st') = admit now st
+        writeTVar (erBreaker rule) st'
+        pure (p, st, st')
+    reportBreakerChange (erBreakerReporter rule) old new
     pure permitted
+
+{- Commit a breaker fold to this rule's breaker and report any observable state change
+it makes (a trip, a reset). Reads the breaker before and after in one transaction so the
+report reflects exactly the transition committed. -}
+commitBreaker :: EffectfulRule -> (Breaker -> Breaker) -> IO ()
+commitBreaker rule step = do
+    (old, new) <- atomically $ do
+        st <- readTVar (erBreaker rule)
+        let st' = step st
+        writeTVar (erBreaker rule) st'
+        pure (st, st')
+    reportBreakerChange (erBreakerReporter rule) old new
 
 {- Advance the breaker on a failed evaluation per this rule's configured threshold
 and cooldown ('Ecluse.Breaker.recordFailure'). -}

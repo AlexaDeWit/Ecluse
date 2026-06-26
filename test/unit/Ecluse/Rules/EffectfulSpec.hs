@@ -85,6 +85,7 @@ mkRule name cfg policy eval = do
             , erConfig = cfg
             , erOnError = policy
             , erBreaker = breaker
+            , erBreakerReporter = noBreakerReporter
             }
 
 -- | An effectful rule that always returns the given pure outcome (no IO failure).
@@ -97,6 +98,19 @@ failingRule name cfg policy = mkRule name cfg policy (\_ -> throwString "source 
 
 at :: Int -> EffectfulRule -> PrecededEffectfulRule
 at = PrecededEffectfulRule
+
+-- | A capturing breaker reporter appending each reported state to its log (oldest first).
+capturingBreakerReporter :: IO (IORef [Breaker], BreakerReporter)
+capturingBreakerReporter = do
+    breakerLog <- newIORef []
+    pure (breakerLog, BreakerReporter (\b -> modifyIORef' breakerLog (<> [b])))
+
+-- | As 'mkRule', but observing the rule's breaker through the given reporter.
+mkReportingRule ::
+    BreakerReporter -> Text -> EffectfulConfig -> FailurePolicy -> (PackageDetails -> IO RuleOutcome) -> IO EffectfulRule
+mkReportingRule reporter name cfg policy eval = do
+    rule <- mkRule name cfg policy eval
+    pure rule{erBreakerReporter = reporter}
 
 -- | Mark the version as running code on install, so the install-script deny fires.
 withInstallScripts :: PackageDetails -> PackageDetails
@@ -433,6 +447,33 @@ spec = do
                 throwString "down"
             outcome <- runEffectfulRule ctx rule pd
             outcome `shouldBe` Unavailable (WillResolve Nothing) "Down: the rule could not be evaluated"
+
+        it "reports the breaker trip → probe → reset transitions through its reporter" $ do
+            (breakerLog, reporter) <- capturingBreakerReporter
+            recovered <- newIORef False
+            let pd = pkg Nothing 0
+                cfg = fastConfig{ecBreakerThreshold = 1, ecBreakerCooldown = 30}
+            rule <- mkReportingRule reporter "Down" cfg OnUnavailable $ \_ ->
+                readIORef recovered >>= \case
+                    False -> throwString "down"
+                    True -> pure (Allow "recovered")
+            -- A failed evaluation at 'now' trips the breaker open (threshold 1).
+            _ <- runEffectfulRule ctx rule pd
+            readIORef breakerLog `shouldReturn` [Open (addUTCTime 30 now)]
+            -- The cooldown elapses by now+31 and the source recovers: the next call is
+            -- admitted as a half-open probe and succeeds, resetting the breaker.
+            writeIORef recovered True
+            outcome <- runEffectfulRule (ctxAt (addUTCTime 31 now)) rule pd
+            outcome `shouldBe` Allow "recovered"
+            readIORef breakerLog `shouldReturn` [Open (addUTCTime 30 now), HalfOpen, Closed 0]
+
+        it "records nothing through the default no-op reporter, still resolving fail-closed" $ do
+            -- 'mkRule' wires 'noBreakerReporter': tripping the breaker records nothing
+            -- and the evaluation still resolves to a fail-closed Unavailable.
+            let pd = pkg Nothing 0
+            rule <- mkRule "Down" fastConfig{ecBreakerThreshold = 1} OnUnavailable (\_ -> throwString "down")
+            outcome <- runEffectfulRule ctx rule pd
+            outcome `shouldSatisfy` isUnavailableOutcome
 
     describe "properties" $ do
         it "an effectful rule strictly below the pure winner never changes the decision" $

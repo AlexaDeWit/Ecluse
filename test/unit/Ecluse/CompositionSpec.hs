@@ -35,6 +35,7 @@ import Ecluse.Config (
  )
 import Ecluse.Credential (authSecret, currentToken, unSecret)
 import Ecluse.Credential.CodeArtifact (CodeArtifactConfig (caDomain, caDomainOwner, caDurationSeconds, caRegion))
+import Ecluse.Credential.Refresh (noCredentialReporters)
 import Ecluse.Ecosystem (Ecosystem (..))
 import Ecluse.Package (HashAlg (SHA512))
 import Ecluse.Package.Integrity (defaultMinIntegrity, mkMinIntegrity)
@@ -106,7 +107,7 @@ expectEnv = either (\errs -> fail ("env parse failed: " <> show errs)) pure . pa
 -- examples expect a clean build).
 expectProviders :: EnvConfig -> IO CredentialProviders
 expectProviders env =
-    initCredentialProviders env >>= either (\errs -> fail ("provider init failed: " <> show errs)) pure
+    initCredentialProviders noCredentialReporters env >>= either (\errs -> fail ("provider init failed: " <> show errs)) pure
 
 expectDoc :: ByteString -> IO ConfigDoc
 expectDoc = either (\e -> fail ("document decode failed: " <> toString e)) pure . decodeDocument
@@ -129,7 +130,7 @@ mountDoc eco credential =
 -- with the real adapter resolver, the fixed clock, and the env's static providers.
 planFrom :: EnvConfig -> Maybe ConfigDoc -> IO (Either [BootError] [MountBinding])
 planFrom env mDoc =
-    initCredentialProviders env >>= \case
+    initCredentialProviders noCredentialReporters env >>= \case
         Left errs -> pure (Left errs)
         Right providers -> pure (planMounts mountBindingFor (pure fixedNow) providers env mDoc)
 
@@ -165,14 +166,14 @@ credentialProvidersSpec = describe "initCredentialProviders" $ do
     it "refuses to build when the gcp-artifact-registry provider is selected (not built)" $ do
         -- 'CredentialProviders' has no 'Show', so the Left is extracted to compare.
         env <- expectEnv (("MIRROR_TARGET_CREDENTIAL_PROVIDER", "gcp-artifact-registry") : staticEnvVars)
-        result <- initCredentialProviders env
+        result <- initCredentialProviders noCredentialReporters env
         leftToMaybe result `shouldBe` Just [MirrorCredentialProviderUnavailable AdcCredential]
 
     it "refuses to build when codeartifact is selected but its domain cannot be resolved" $ do
         -- A non-CodeArtifact MIRROR_TARGET_URL and no explicit keys: domain and owner
         -- resolve by neither route, so both are named in the aggregated boot failure.
         env <- expectEnv (("MIRROR_TARGET_CREDENTIAL_PROVIDER", "codeartifact") : ("AWS_REGION", "us-east-1") : staticEnvVars)
-        result <- initCredentialProviders env
+        result <- initCredentialProviders noCredentialReporters env
         leftToMaybe result
             `shouldBe` Just
                 [ CodeArtifactConfigMissing "MIRROR_TARGET_CODEARTIFACT_DOMAIN"

@@ -128,8 +128,9 @@ import Ecluse.Config (
     renderEnvErrors,
  )
 import Ecluse.Credential (AuthToken (..), CredentialProvider, currentToken, mkSecret, staticProvider)
+import Ecluse.Credential.Refresh (CredentialReporters (CredentialReporters, crBreakerReporter, crRefreshReporter))
 import Ecluse.Ecosystem (Ecosystem (Npm), prefixFor)
-import Ecluse.Env (Env, newWorkerHeartbeat, withEnv)
+import Ecluse.Env (Env, envMetrics, newWorkerHeartbeat, withEnv)
 import Ecluse.Log (moduleField, newLogEnv)
 import Ecluse.Queue (MirrorQueue, newBoundedInMemoryQueue)
 import Ecluse.Queue.Sqs (newSqsQueue)
@@ -147,6 +148,13 @@ import Ecluse.Server qualified as Server
 import Ecluse.Server.Cache (newMetadataCache)
 import Ecluse.Server.Context (PackumentDeps)
 import Ecluse.Telemetry (TelemetrySwitch (TelemetryOff, TelemetryOn), withTelemetry)
+import Ecluse.Telemetry.Metrics (BreakerSource (CredentialMint), Provider (CodeArtifact))
+import Ecluse.Telemetry.Reporters (
+    deferredBreakerReporter,
+    deferredRefreshReporter,
+    installMetrics,
+    newDeferredMetrics,
+ )
 import Ecluse.Telemetry.Resolve (prepareTelemetry)
 import Ecluse.Telemetry.Tracing (instrumentDataPlaneManagerSettings)
 import Ecluse.Worker qualified as Worker
@@ -171,10 +179,21 @@ run :: IO ()
 run = do
     env <- parseEnv >>= orExit renderEnvErrors
     mDoc <- loadDocument
+    -- The metric instruments do not exist until the telemetry substrate is built, well
+    -- below; this deferred handle lets the credential provider (constructed here, at
+    -- boot) record through reporters that stay inert until 'installMetrics' makes them
+    -- live (in the 'withEnv' body). With telemetry off the eventual instruments are the
+    -- no-op-meter ones, so the reporters are inert either way.
+    deferredMetrics <- newDeferredMetrics
+    let credentialReporters =
+            CredentialReporters
+                { crBreakerReporter = deferredBreakerReporter deferredMetrics CredentialMint
+                , crRefreshReporter = deferredRefreshReporter deferredMetrics CodeArtifact
+                }
     -- Build the process-global mirror-target write provider(s) selected by config:
     -- the static token, or the CodeArtifact mint (whose inputs are validated and which
     -- mints once eagerly, so a misconfiguration fails loudly here at boot).
-    providers <- initCredentialProviders env >>= orExit (T.unlines . map renderBootError)
+    providers <- initCredentialProviders credentialReporters env >>= orExit (T.unlines . map renderBootError)
     bindings <- orExit (T.unlines . map renderBootError) (planMounts mountBindingFor getCurrentTime providers env mDoc)
     publishTargets <- orExit (T.unlines . map renderBootError) (planPublishTargets providers env mDoc)
     -- Select the mirror-queue backend from config (the GCP arm is a fail-loud
@@ -218,7 +237,13 @@ run = do
         -- operator-configured, trusted mirror target, so it uses the trusted private
         -- manager (no resolved-IP recheck — that guards only the untrusted public fetch).
         publishClient <- resolvePublishClient privateManager publishTargets
-        withEnv publishClient queue (mirrorWriteProvider (cfgMirrorTargetCredentialProvider env) providers) manager privateManager metadataCache logEnv telemetry heartbeat (runServices serverConfig)
+        withEnv publishClient queue (mirrorWriteProvider (cfgMirrorTargetCredentialProvider env) providers) manager privateManager metadataCache logEnv telemetry heartbeat $ \builtEnv -> do
+            -- The instruments now exist (built in 'withEnv' from the telemetry handle);
+            -- install them so the credential provider's deferred reporters go live for
+            -- the rest of the run. They are the no-op-meter instruments when telemetry
+            -- is off, so this is inert in that posture.
+            installMetrics deferredMetrics (envMetrics builtEnv)
+            runServices serverConfig builtEnv
 
 {- | Read the optional structured config document from the @PROXY_CONFIG@ env blob,
 decoding it strictly. 'Nothing' when unset — an env-only deployment supplies no
