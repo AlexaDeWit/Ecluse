@@ -104,7 +104,7 @@ than reimplementing it:
 - **SQS endpoint override (AWS-SDK-standard).** `planMirrorQueue` honours
   `AWS_ENDPOINT_URL_SQS` (else `AWS_ENDPOINT_URL`), parsing it into the backend's
   `SqsEndpoint` (signed with `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`) so the
-  **released image** can target a local `ministack` SQS with no test-only seam
+  **released image** can target a local `ministack` SQS with no test-only code path
   (preserving ship==test for the e2e tier); a malformed override is a fail-loud boot
   error; unset ⇒ normal AWS resolution.
 - **Static credential path is the AWS launch path.** A deployment with
@@ -115,7 +115,7 @@ than reimplementing it:
   drives an in-process Écluse (the real `Ecluse.Server.application` + the real
   `Ecluse.Worker.workerLoop`) over a **real SQS queue** built through the
   config-driven composition root (`planMirrorQueue` → `newSqsQueue`, driven by the
-  `AWS_ENDPOINT_URL_SQS` prod key against a `ministack` container — no test-only seam)
+  `AWS_ENDPOINT_URL_SQS` prod key against a `ministack` container — no test-only code path)
   and WAI npm stubs: a packument request is filtered by the rules, a tarball request is
   gated and enqueues a real SQS job, and the worker fetches → verifies the integrity
   digest → publishes it to the mirror-target stub.

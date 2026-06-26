@@ -404,12 +404,11 @@ Escalations arrive **decision-ready**:
   escalating, name a piece of work by what is visible to the architect — its slice ID
   (`S19`), PR or issue number (`#168`), or a short descriptive title — never an
   internal task-tracker ID (the architect's view does not render those).
-- **"The term Seam" is retired.** The records-of-functions abstraction (`RegistryClient`,
-  `MirrorQueue`, `CredentialProvider`) is **the Handle pattern**. Don't reintroduce
-  "seam" — not even in the generic "integration boundary" sense, which re-muddies the
-  rename. Say **"the Handle pattern"** for the abstraction and **"integration
-  boundary" / "interface contract"** for where components meet, refer to it simply as "an abstraction boundary"
-  or similar terminology as appropriate.
+- **The Handle pattern is the canonical name for the records-of-functions
+  abstraction.** `RegistryClient`, `MirrorQueue`, and `CredentialProvider` are **the
+  Handle pattern**. Say **"the Handle pattern"** for the abstraction and **"integration
+  boundary" / "interface contract" / "abstraction boundary"** for where components
+  meet, as fits the context.
 
 ## What lives under `planning/`
 
