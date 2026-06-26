@@ -12,11 +12,11 @@ import Hedgehog.Range qualified as Range
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
-import Ecluse.Ecosystem (Ecosystem (Npm))
-import Ecluse.Package
-import Ecluse.Rules.Effectful
-import Ecluse.Rules.Types
-import Ecluse.Version (mkVersion)
+import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Package
+import Ecluse.Core.Rules.Effectful
+import Ecluse.Core.Rules.Types
+import Ecluse.Core.Version (mkVersion)
 
 -- | A fixed "now" so the breaker's cooldown arithmetic is deterministic.
 now :: UTCTime

@@ -3,7 +3,7 @@ module Ecluse.Telemetry.MetricsSpec (spec) where
 import Data.Text qualified as T
 import Test.Hspec
 
-import Ecluse.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
+import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
 import Ecluse.Telemetry.Metrics (
     BreakerState (Closed, HalfOpen, Open),
     CacheResult (..),

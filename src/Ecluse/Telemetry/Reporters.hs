@@ -2,8 +2,8 @@
 to the live @ecluse.*@ instruments — and the deferral that lets a provider built before
 the meter exists record once it does.
 
-The circuit breaker ("Ecluse.Breaker") and the refreshing credential provider
-("Ecluse.Credential.Refresh") are constructed at boot __before__ the telemetry substrate
+The circuit breaker ("Ecluse.Core.Breaker") and the refreshing credential provider
+("Ecluse.Core.Credential.Refresh") are constructed at boot __before__ the telemetry substrate
 (the meter provider) exists, so they cannot be handed a 'Metrics' at construction. Each
 instead carries a small, telemetry-agnostic reporter callback. This module supplies those
 callbacks, backed by a 'DeferredMetrics' cell: __inert__ (recording nothing) until the
@@ -29,8 +29,8 @@ module Ecluse.Telemetry.Reporters (
     breakerStateOf,
 ) where
 
-import Ecluse.Breaker (Breaker (..), BreakerReporter (..))
-import Ecluse.Credential.Refresh (RefreshReporter (..))
+import Ecluse.Core.Breaker (Breaker (..), BreakerReporter (..))
+import Ecluse.Core.Credential.Refresh (RefreshReporter (..))
 import Ecluse.Telemetry.Instruments (
     Metrics,
     recordBreakerState,
@@ -99,7 +99,7 @@ deferredRefreshReporter deferred provider =
 
 -- ── breaker-state projection ──────────────────────────────────────────────────
 
-{- | Project the breaker's runtime state ("Ecluse.Breaker") onto the bounded gauge value
+{- | Project the breaker's runtime state ("Ecluse.Core.Breaker") onto the bounded gauge value
 the catalogue records ("Ecluse.Telemetry.Metrics"). The consecutive-failure tally a
 'Closed' breaker carries is not observable, so it collapses to the single closed value.
 -}

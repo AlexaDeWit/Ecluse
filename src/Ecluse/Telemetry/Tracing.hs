@@ -77,7 +77,8 @@ import OpenTelemetry.Trace (
  )
 import UnliftIO (MonadUnliftIO)
 
-import Ecluse.Package (PackageName, renderPackageName)
+import Ecluse.Core.Package (PackageName, renderPackageName)
+import Ecluse.Core.Version (Version, renderVersion)
 import Ecluse.Server.Response (
     RejectReason (BelowIntegrityFloor, ByPolicy, MissingIntegrity, Unavailable, UpstreamInvalid),
     Rejection (rejectionMessage, rejectionReason),
@@ -89,7 +90,6 @@ import Ecluse.Telemetry (
     telemetryMeterProvider,
     telemetryTracerProvider,
  )
-import Ecluse.Version (Version, renderVersion)
 
 -- ── WAI server span ───────────────────────────────────────────────────────────
 

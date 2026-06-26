@@ -21,8 +21,8 @@ import Hedgehog.Range qualified as Range
 import Test.Hspec (Spec, describe, it, shouldBe, shouldNotSatisfy, shouldSatisfy)
 import Test.Hspec.Hedgehog (hedgehog)
 
-import Ecluse.Ecosystem (Ecosystem (Npm))
-import Ecluse.Package (
+import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Package (
     Artifact (artFilename, artHashes, artInterpreter, artKind, artProvenance, artSize, artUrl, artYanked),
     ArtifactKind (Tarball),
     Availability (Available, Deprecated),
@@ -41,16 +41,16 @@ import Ecluse.Package (
     pkgNamespace,
     renderScope,
  )
-import Ecluse.Registry (ParseError, RegistryResponse (RegistryResponse))
-import Ecluse.Registry.Npm.Project (
+import Ecluse.Core.Registry (ParseError, RegistryResponse (RegistryResponse))
+import Ecluse.Core.Registry.Npm.Project (
     Projection (NameMismatch, Projected),
     parsePackageInfo,
     parsePackageInfoFromValue,
     parseVersionDetails,
     parseVersionList,
  )
+import Ecluse.Core.Version (Version, mkVersion, renderVersion, unVersion)
 import Ecluse.Test.Package (unsafeHash)
-import Ecluse.Version (Version, mkVersion, renderVersion, unVersion)
 
 {- | Projection tests for the npm adapter. They assert the __domain__ values a
 fetched packument projects into — the second half of the boundary that
@@ -63,7 +63,7 @@ The cases pin down the signal-mapping table: install-script presence (flagged,
 derived, and absent) onto 'CodeExecSignal'; @deprecated@ onto 'Availability';
 the @dist@ integrity pair onto __both__ a 'SHA1' and an 'SRI' 'Hash'; @_npmUser@
 onto 'pkgPublisher'; @time[version]@ onto 'pkgPublishedAt'; and scoped names onto
-'Ecluse.Package.Scope'.
+'Ecluse.Core.Package.Scope'.
 -}
 spec :: Spec
 spec = do

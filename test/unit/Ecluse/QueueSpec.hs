@@ -19,11 +19,11 @@ import System.Timeout (timeout)
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
-import Ecluse.Ecosystem (Ecosystem (..))
-import Ecluse.Package (HashAlg (SHA1), mkPackageName)
-import Ecluse.Queue
+import Ecluse.Core.Ecosystem (Ecosystem (..))
+import Ecluse.Core.Package (HashAlg (SHA1), mkPackageName)
+import Ecluse.Core.Queue
+import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Package (unsafeHash, validSha1)
-import Ecluse.Version (mkVersion)
 
 {- | A sample mirror job. The in-memory queue under test does not inspect a
 job's contents — it only carries it from 'enqueue' to 'receive' — so one fixed
@@ -287,7 +287,7 @@ initialQModel = QModel{mVisible = [], mInFlight = []}
 reclaimed to the front (in delivery order), every still-held one stays in flight
 with its hold cleared, and all visible jobs follow. Returns the jobs the receive
 should deliver (reclaimed ++ visible, in order) and the entries that remain in
-flight. Mirrors 'Ecluse.Queue's @deliver@ / @reclaim@ exactly.
+flight. Mirrors 'Ecluse.Core.Queue's @deliver@ / @reclaim@ exactly.
 -}
 predictReceive :: QModel v -> ([MirrorJob], [InFlightEntry v])
 predictReceive m =

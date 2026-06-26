@@ -10,8 +10,8 @@ import UnliftIO (async, cancel, catchAny, concurrently, mapConcurrently, timeout
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (throwString, try)
 
-import Ecluse.Ecosystem (Ecosystem (Npm))
-import Ecluse.Package (PackageInfo (..), PackageName, mkPackageName)
+import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Package (PackageInfo (..), PackageName, mkPackageName)
 import Ecluse.Server.Cache (
     CacheConfig (..),
     CacheEntry (..),

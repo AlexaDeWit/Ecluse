@@ -38,12 +38,12 @@ import Katip (Katip, KatipContext)
 import Katip.Monadic (KatipContextT, runKatipContextT)
 import UnliftIO (MonadUnliftIO)
 
-import Ecluse.Credential (Secret)
+import Ecluse.Core.Credential (Secret)
+import Ecluse.Core.Package.Integrity (MinIntegrity)
+import Ecluse.Core.Rules.Effectful (PrecededEffectfulRule)
+import Ecluse.Core.Rules.Types (PrecededRule)
+import Ecluse.Core.Security (Limits, LoweredHostSet, TarballHostPolicy)
 import Ecluse.Env (Env, envDdContext, envLogEnv)
-import Ecluse.Package.Integrity (MinIntegrity)
-import Ecluse.Rules.Effectful (PrecededEffectfulRule)
-import Ecluse.Rules.Types (PrecededRule)
-import Ecluse.Security (Limits, LoweredHostSet, TarballHostPolicy)
 import Ecluse.Server.Response (HelpMessage, MountRenderer)
 import Ecluse.Server.Route (Classifier)
 import Ecluse.Telemetry.Correlation (ddPayloadNow)
@@ -74,29 +74,29 @@ data PackumentDeps = PackumentDeps
     , pdMirrorTarget :: Text
     {- ^ The mount's mirror-target endpoint — where the demand-driven mirror worker
     publishes an approved artifact. Carried on the enqueued
-    'Ecluse.Queue.MirrorJob' as its publish destination; the serve path never reads
+    'Ecluse.Core.Queue.MirrorJob' as its publish destination; the serve path never reads
     or writes it itself.
     -}
     , pdRules :: [PrecededRule]
     -- ^ The mount's resolved pure rule policy, evaluated against every public version.
     , pdEffectfulRules :: [PrecededEffectfulRule]
     {- ^ The mount's effectful rule policy (advisory lookups, per-version fetches),
-    layered on the pure tier per "Ecluse.Rules.Effectful". Empty when no effectful
+    layered on the pure tier per "Ecluse.Core.Rules.Effectful". Empty when no effectful
     rule is configured, in which case the effectful tier is skipped and gating
     reduces exactly to the pure tier.
     -}
     , pdTarballHostPolicy :: TarballHostPolicy
     {- ^ Whether a tarball may be fetched from a @dist.tarball@ host that differs
     from the upstream that served the packument
-    ('Ecluse.Security.SameHostAsPackument' by default, the secure reading of the
-    host allowlist; relaxed to 'Ecluse.Security.AnyAllowlistedHost' by
+    ('Ecluse.Core.Security.SameHostAsPackument' by default, the secure reading of the
+    host allowlist; relaxed to 'Ecluse.Core.Security.AnyAllowlistedHost' by
     @PROXY_RESPECT_UPSTREAM_TARBALL_HOST@).
     -}
     , pdAllowedInternalHosts :: LoweredHostSet
     {- ^ The hosts deliberately opted in to the internal-range block when gating an
-    honoured artifact location ('Ecluse.Security.tarballHostAllowed'). This is the
+    honoured artifact location ('Ecluse.Core.Security.tarballHostAllowed'). This is the
     same per-host opt-in the guarded manager's resolved-IP recheck honours (see
-    "Ecluse.Security.Egress"), carried here so the pure tarball-host gate and the
+    "Ecluse.Core.Security.Egress"), carried here so the pure tarball-host gate and the
     connection-time recheck agree on which internal hosts are deliberate. Empty by
     default — the secure reading, matching the composition root's guarded manager.
     -}
@@ -104,10 +104,10 @@ data PackumentDeps = PackumentDeps
     {- ^ The response-bound budget enforced on every upstream metadata fetch and
     decode (@PROXY_MAX_RESPONSE_BYTES@\/@PROXY_MAX_VERSION_COUNT@\/@PROXY_MAX_NESTING_DEPTH@):
     the body-size, version-count, and JSON-nesting ceilings of
-    'Ecluse.Security.Limits'. The data plane reads the metadata body through
-    'Ecluse.Security.boundedRead' against @maxBodyBytes@, checks
-    'Ecluse.Security.checkNestingDepth' at the JSON-decode boundary, and
-    'Ecluse.Security.checkVersionCount' after projection; a breach degrades the
+    'Ecluse.Core.Security.Limits'. The data plane reads the metadata body through
+    'Ecluse.Core.Security.boundedRead' against @maxBodyBytes@, checks
+    'Ecluse.Core.Security.checkNestingDepth' at the JSON-decode boundary, and
+    'Ecluse.Core.Security.checkVersionCount' after projection; a breach degrades the
     contribution to nothing (the fail-closed parse-failure path), so a pathological
     upstream document is refused, never partially served (security.md invariant 4).
     -}
@@ -116,7 +116,7 @@ data PackumentDeps = PackumentDeps
     'Nothing' leaves the edge open (the network layer guards it).
     -}
     , pdNow :: IO UTCTime
-    {- ^ The wall-clock "now" for the rules' 'Ecluse.Rules.Types.EvalContext'.
+    {- ^ The wall-clock "now" for the rules' 'Ecluse.Core.Rules.Types.EvalContext'.
     Injected so the time-sensitive age gate is deterministic under test.
     -}
     , pdHelp :: Maybe HelpMessage
@@ -125,7 +125,7 @@ data PackumentDeps = PackumentDeps
     {- ^ The minimum integrity algorithm a __public__ version's digest must meet to be
     admitted (the global @PROXY_MIN_PUBLIC_INTEGRITY@ floor, default SHA-256). The
     public gate refuses a version whose strongest digest is below this; the trusted
-    private path never consults it (see "Ecluse.Package.Integrity").
+    private path never consults it (see "Ecluse.Core.Package.Integrity").
     -}
     }
 

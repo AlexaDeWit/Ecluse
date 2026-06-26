@@ -34,6 +34,7 @@ import TestContainers.Hspec (withContainers)
 import UnliftIO.Concurrent (threadDelay)
 
 import Ecluse (npmServerConfig, unconfiguredCredentials, unconfiguredRegistry)
+import Ecluse.Core.Queue (newInMemoryQueue)
 import Ecluse.Env (Env, newEnv, newWorkerHeartbeat)
 import Ecluse.Log (
     DdContext (..),
@@ -42,7 +43,6 @@ import Ecluse.Log (
     ddField,
     renderLogLine,
  )
-import Ecluse.Queue (newInMemoryQueue)
 import Ecluse.Server (tracedApplication)
 import Ecluse.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Telemetry (

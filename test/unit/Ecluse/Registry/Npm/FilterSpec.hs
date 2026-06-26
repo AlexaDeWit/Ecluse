@@ -17,17 +17,17 @@ import Hedgehog.Range qualified as Range
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
-import Ecluse.Ecosystem (Ecosystem (Npm))
-import Ecluse.Package (PackageInfo, PackageName, mkPackageName, mkScope)
-import Ecluse.Package.Filter (filterPlan)
-import Ecluse.Registry (ParseError, RegistryResponse (RegistryResponse))
-import Ecluse.Registry.Npm.Filter (
+import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Package (PackageInfo, PackageName, mkPackageName, mkScope)
+import Ecluse.Core.Package.Filter (filterPlan)
+import Ecluse.Core.Registry (ParseError, RegistryResponse (RegistryResponse))
+import Ecluse.Core.Registry.Npm.Filter (
     FilterResult (Filtered, NoSurvivors),
     applyFilterPlan,
     rewriteTarballUrls,
  )
-import Ecluse.Registry.Npm.Project (parsePackageInfo)
-import Ecluse.Rules.Types (
+import Ecluse.Core.Registry.Npm.Project (parsePackageInfo)
+import Ecluse.Core.Rules.Types (
     Decision (Approved),
     EvalContext (EvalContext),
     PrecededRule,
@@ -682,7 +682,7 @@ loadPackument bs = do
     info <- orFailParse (parsePackageInfo (fixtureName v) (RegistryResponse bs))
     pure (info, v)
 
-{- | Decide the plan ('Ecluse.Package.Filter.filterPlan') over the typed view and
+{- | Decide the plan ('Ecluse.Core.Package.Filter.filterPlan') over the typed view and
 replay it ('applyFilterPlan') onto the raw body — the composition the serve layer
 performs. The mount 'base' is supplied so the replay's tarball rewrite is exercised.
 -}

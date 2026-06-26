@@ -26,7 +26,7 @@ import Test.Hspec
 import UnliftIO (bracket, evaluate)
 import UnliftIO.Temporary (withSystemTempFile)
 
-import Ecluse.Credential (mkSecret)
+import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Log (
     DdContext (..),
     DdSpan (..),

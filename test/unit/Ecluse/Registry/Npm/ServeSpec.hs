@@ -5,7 +5,7 @@ import Data.Aeson qualified as Aeson
 import Data.Aeson.KeyMap qualified as KeyMap
 import Test.Hspec
 
-import Ecluse.Registry.Npm.Serve (npmDenialBody, npmRenderer)
+import Ecluse.Core.Registry.Npm.Serve (npmDenialBody, npmRenderer)
 import Ecluse.Server.Response (RenderedBody (..), mkHelpMessage, renderError)
 
 {- | Decode a denial body and read its @error@ string. 'Right' the string when the

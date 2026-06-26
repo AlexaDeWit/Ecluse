@@ -1,6 +1,6 @@
 {- | Internal guts of the serve pipeline ("Ecluse.Server.Pipeline"), exposed for tests
 without widening that module's two-handler public API — the @.Internal@ convention, as
-"Ecluse.Credential.Refresh.Internal" uses. Importing it opts out of the public
+"Ecluse.Core.Credential.Refresh.Internal" uses. Importing it opts out of the public
 module's stability promise.
 
 It holds the degrade signalling for two bad-upstream conditions the response-bound
@@ -34,10 +34,10 @@ import Katip (LogEnv, Severity (WarningS), logFM, ls, sl)
 import Katip.Monadic (runKatipContextT)
 import Network.HTTP.Client qualified as HTTP
 
+import Ecluse.Core.Package (PackageName, renderPackageName)
+import Ecluse.Core.Registry.Npm (ResponseBoundExceeded (ResponseBoundExceeded))
+import Ecluse.Core.Rules.Types (Decision (Undecidable))
 import Ecluse.Log (moduleField)
-import Ecluse.Package (PackageName, renderPackageName)
-import Ecluse.Registry.Npm (ResponseBoundExceeded (ResponseBoundExceeded))
-import Ecluse.Rules.Types (Decision (Undecidable))
 import Ecluse.Server.Response (
     PackumentStatus (PackumentForbidden, PackumentOk),
     RejectReason (BelowIntegrityFloor, ByPolicy, MissingIntegrity, Unavailable, UpstreamInvalid),

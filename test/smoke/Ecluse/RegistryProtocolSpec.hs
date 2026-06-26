@@ -12,8 +12,8 @@ import System.Process (readProcessWithExitCode)
 import Test.Hspec
 import UnliftIO.Exception (throwString)
 
-import Ecluse.Ecosystem (Ecosystem (Npm))
-import Ecluse.Package (
+import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Package (
     HashAlg (SHA1, SRI),
     PackageInfo (infoDistTags, infoName, infoVersions),
     PackageName,
@@ -23,8 +23,8 @@ import Ecluse.Package (
     mkScope,
     renderPackageName,
  )
-import Ecluse.Registry (RegistryClient (fetchMetadata, parsePackageInfo), RegistryResponse (responseBody))
-import Ecluse.Registry.Npm (
+import Ecluse.Core.Registry (RegistryClient (fetchMetadata, parsePackageInfo), RegistryResponse (responseBody))
+import Ecluse.Core.Registry.Npm (
     MetadataForm (Full),
     NpmClientConfig (npmLimits, npmManager),
     defaultNpmConfig,
@@ -32,11 +32,11 @@ import Ecluse.Registry.Npm (
     newNpmClient,
     noValidators,
  )
-import Ecluse.Registry.Npm.Project (Projection (NameMismatch, Projected), parsePackageInfoFromValue)
-import Ecluse.Registry.Npm.Wire (
+import Ecluse.Core.Registry.Npm.Project (Projection (NameMismatch, Projected), parsePackageInfoFromValue)
+import Ecluse.Core.Registry.Npm.Wire (
     AbbreviatedPackument (apkmtDistTags, apkmtName, apkmtVersions),
  )
-import Ecluse.Security (Limits (maxVersionCount), checkNestingDepth, checkVersionCount, defaultLimits)
+import Ecluse.Core.Security (Limits (maxVersionCount), checkNestingDepth, checkVersionCount, defaultLimits)
 
 {- | Smoke tests make __live__ calls to public registries (npm, PyPI) to confirm
 our JSON decoding and protocol handling match reality.
@@ -47,9 +47,9 @@ failure is a prompt to investigate — protocol drift, or just flakiness — not
 automatic blocker.
 
 Two cases run against the public @registry.npmjs.org@. The first fetches a real
-__abbreviated__ packument and decodes it through "Ecluse.Registry.Npm.Wire"
+__abbreviated__ packument and decodes it through "Ecluse.Core.Registry.Npm.Wire"
 (shelling out to @curl@), pinning the lenient decoder to reality. The second
-drives the full data plane — "Ecluse.Registry.Npm"'s 'newNpmClient' and
+drives the full data plane — "Ecluse.Core.Registry.Npm"'s 'newNpmClient' and
 'fetchMetadata' over real @http-client@ — and projects the response to the domain
 'PackageInfo', so a protocol or projection drift surfaces end-to-end. Both
 __pend__ rather than fail when the network (or @curl@) is unavailable, so a bare
@@ -165,7 +165,7 @@ spec = describe "live registry protocol (npm / PyPI)" $ do
 {- | Run the exact response-bound sequence the data plane applies in
 @Ecluse.Server.Pipeline.fetchEntry@ over a live full packument under the default
 'Limits', returning the projected @(name, versionCount)@ on success. Throws (the
-bounded read's 'Ecluse.Registry.Npm.ResponseBoundExceeded', a decode error, or a
+bounded read's 'Ecluse.Core.Registry.Npm.ResponseBoundExceeded', a decode error, or a
 projection error) if any bound or step refuses the document — so a default that was
 accidentally too tight surfaces as a failure, not a silent pass.
 -}

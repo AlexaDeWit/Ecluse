@@ -31,8 +31,9 @@ import OpenTelemetry.Trace.Core (
     SpanHot (hotAttributes, hotName),
  )
 
-import Ecluse.Ecosystem (Ecosystem (Npm))
-import Ecluse.Package (mkPackageName)
+import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Package (mkPackageName)
+import Ecluse.Core.Version (mkVersion)
 import Ecluse.Server.Response (
     RejectReason (BelowIntegrityFloor, ByPolicy, MissingIntegrity, Unavailable, UpstreamInvalid),
     Rejection (Rejection),
@@ -46,7 +47,6 @@ import Ecluse.Telemetry.Tracing (
     ruleVerdictFields,
     withRuleEvalSpan,
  )
-import Ecluse.Version (mkVersion)
 
 {- | Tests for the request-lifecycle tracing layer. They prove the three promises
 this slice carries that can be proven at the pure\/offline tier: the verdict

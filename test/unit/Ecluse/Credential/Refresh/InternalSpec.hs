@@ -20,10 +20,10 @@ import UnliftIO (async, cancel, timeout, wait)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (throwString, try)
 
-import Ecluse.Breaker (Breaker (..), BreakerReporter (..), initialBreaker)
-import Ecluse.Credential
-import Ecluse.Credential.Refresh
-import Ecluse.Credential.Refresh.Internal (
+import Ecluse.Core.Breaker (Breaker (..), BreakerReporter (..), initialBreaker)
+import Ecluse.Core.Credential
+import Ecluse.Core.Credential.Refresh
+import Ecluse.Core.Credential.Refresh.Internal (
     CacheState (..),
     ServeAction (..),
     admitMint,
@@ -674,7 +674,7 @@ tokenLiving :: Text -> UTCTime -> NominalDiffTime -> AuthToken
 tokenLiving s issuedAt ttl =
     AuthToken{authSecret = mkSecret s, authExpiresAt = Just (addUTCTime ttl issuedAt)}
 
-{- | The breaker, modelled exactly as 'Ecluse.Credential.Refresh's private one:
+{- | The breaker, modelled exactly as 'Ecluse.Core.Credential.Refresh's private one:
 healthy with a consecutive-failure count, open until an instant, or half-open.
 -}
 data MBreaker
@@ -718,7 +718,7 @@ mRefreshNeeded now m = case rmRefreshDue m of
     Just due -> now >= due
 
 {- | The refresh instant for a freshly minted token, with zero jitter — the exact
-arithmetic of 'Ecluse.Credential.Refresh's @refreshDueAt@ for the shared knobs.
+arithmetic of 'Ecluse.Core.Credential.Refresh's @refreshDueAt@ for the shared knobs.
 -}
 mRefreshDueAt :: UTCTime -> AuthToken -> Maybe UTCTime
 mRefreshDueAt issuedAt token = case authExpiresAt token of

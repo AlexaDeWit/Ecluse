@@ -61,40 +61,43 @@ common shared
 
 library
   import:          shared
-  hs-source-dirs:  src
+  hs-source-dirs:  src core/src
   exposed-modules:
     Ecluse
     Ecluse.App
-    Ecluse.Breaker
     Ecluse.Composition
     Ecluse.Config
-    Ecluse.Credential
-    Ecluse.Credential.CodeArtifact
-    Ecluse.Credential.Refresh
-    Ecluse.Credential.Refresh.Internal
-    Ecluse.Ecosystem
+    Ecluse.Core.Breaker
+    Ecluse.Core.Credential
+    Ecluse.Core.Credential.CodeArtifact
+    Ecluse.Core.Credential.Refresh
+    Ecluse.Core.Credential.Refresh.Internal
+    Ecluse.Core.Ecosystem
+    Ecluse.Core.Package
+    Ecluse.Core.Package.Filter
+    Ecluse.Core.Package.Integrity
+    Ecluse.Core.Package.Merge
+    Ecluse.Core.Queue
+    Ecluse.Core.Queue.Sqs
+    Ecluse.Core.Registry
+    Ecluse.Core.Registry.Npm
+    Ecluse.Core.Registry.Npm.Filter
+    Ecluse.Core.Registry.Npm.Project
+    Ecluse.Core.Registry.Npm.Route
+    Ecluse.Core.Registry.Npm.Serve
+    Ecluse.Core.Registry.Npm.Wire
+    Ecluse.Core.Registry.Pypi.Wire
+    Ecluse.Core.Registry.Rubygems.Wire
+    Ecluse.Core.Rules
+    Ecluse.Core.Rules.Effectful
+    Ecluse.Core.Rules.Types
+    Ecluse.Core.Security
+    Ecluse.Core.Security.Egress
+    Ecluse.Core.Text
+    Ecluse.Core.Version
+    Ecluse.Core.Wire
     Ecluse.Env
     Ecluse.Log
-    Ecluse.Package
-    Ecluse.Package.Filter
-    Ecluse.Package.Integrity
-    Ecluse.Package.Merge
-    Ecluse.Queue
-    Ecluse.Queue.Sqs
-    Ecluse.Registry
-    Ecluse.Registry.Npm
-    Ecluse.Registry.Npm.Filter
-    Ecluse.Registry.Npm.Project
-    Ecluse.Registry.Npm.Route
-    Ecluse.Registry.Npm.Serve
-    Ecluse.Registry.Npm.Wire
-    Ecluse.Registry.Pypi.Wire
-    Ecluse.Registry.Rubygems.Wire
-    Ecluse.Rules
-    Ecluse.Rules.Effectful
-    Ecluse.Rules.Types
-    Ecluse.Security
-    Ecluse.Security.Egress
     Ecluse.Server
     Ecluse.Server.Cache
     Ecluse.Server.Conditional
@@ -111,19 +114,16 @@ library
     Ecluse.Telemetry.Reporters
     Ecluse.Telemetry.Resolve
     Ecluse.Telemetry.Tracing
-    Ecluse.Text
-    Ecluse.Version
-    Ecluse.Wire
     Ecluse.Worker
 
   -- Per-ecosystem version grammars and their shared lexical atoms. Internal to
   -- the library: VersionKey is opaque, so callers reach these only through the
-  -- agnostic Ecluse.Version API.
+  -- agnostic Ecluse.Core.Version API.
   other-modules:
-    Ecluse.Version.Gem
-    Ecluse.Version.Pep440
-    Ecluse.Version.Semver
-    Ecluse.Version.Token
+    Ecluse.Core.Version.Gem
+    Ecluse.Core.Version.Pep440
+    Ecluse.Core.Version.Semver
+    Ecluse.Core.Version.Token
 
   build-depends:
     , aeson                           ^>=2.2

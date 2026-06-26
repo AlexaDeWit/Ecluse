@@ -47,10 +47,10 @@ import Katip (LogEnv)
 import Network.HTTP.Client (Manager)
 import UnliftIO (MonadUnliftIO, bracket)
 
-import Ecluse.Credential (CredentialProvider)
+import Ecluse.Core.Credential (CredentialProvider)
+import Ecluse.Core.Queue (MirrorQueue)
+import Ecluse.Core.Registry (RegistryClient)
 import Ecluse.Log (DdContext)
-import Ecluse.Queue (MirrorQueue)
-import Ecluse.Registry (RegistryClient)
 import Ecluse.Server.Cache (MetadataCache)
 import Ecluse.Telemetry (Telemetry)
 import Ecluse.Telemetry.Correlation (ddIdentityFromEnvironment)
@@ -82,7 +82,7 @@ data Env = Env
     {- ^ The shared @http-client@ 'Manager' for the __untrusted__ data plane — the
     public-upstream metadata fetch and every artifact stream — so connection pooling
     and TLS are established once and reused across requests. This manager carries the
-    resolved-IP SSRF recheck (see "Ecluse.Security.Egress"): a public fetch whose host
+    resolved-IP SSRF recheck (see "Ecluse.Core.Security.Egress"): a public fetch whose host
     resolves to an internal address is refused at connect time, since a public
     @dist.tarball@ is upstream-chosen and could otherwise steer the proxy at an
     internal target.

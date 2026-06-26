@@ -8,7 +8,7 @@ import UnliftIO (bracket_)
 
 import Katip (Environment (Environment), LogEnv, Namespace (Namespace), initLogEnv)
 
-import Ecluse.Security (hostAddress)
+import Ecluse.Core.Security (hostAddress)
 import Ecluse.Telemetry.Resolve (
     EndpointSource (..),
     ResolvedTelemetry (..),

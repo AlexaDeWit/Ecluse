@@ -20,11 +20,11 @@ import Hedgehog.Range qualified as Range
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
-import Ecluse.Ecosystem (Ecosystem (..))
-import Ecluse.Package
-import Ecluse.Package.Merge
+import Ecluse.Core.Ecosystem (Ecosystem (..))
+import Ecluse.Core.Package
+import Ecluse.Core.Package.Merge
+import Ecluse.Core.Version (mkVersion, unVersion)
 import Ecluse.Test.Package (unsafeHash)
-import Ecluse.Version (mkVersion, unVersion)
 
 -- ── fixtures ─────────────────────────────────────────────────────────────────
 
@@ -440,7 +440,7 @@ spec = do
                 `shouldBe` Just tTrusted
 
     describe "latest via the shared selector" $ do
-        -- latest is resolved by Ecluse.Version.selectLatest, so the merge inherits
+        -- latest is resolved by Ecluse.Core.Version.selectLatest, so the merge inherits
         -- keep-unless-denied + stable-preferring + unparseable-safe behaviour.
         -- selectLatest is exhaustively unit-tested in its own spec; these only
         -- check that it is wired into the merge correctly.

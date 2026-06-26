@@ -8,17 +8,17 @@ import System.Environment (setEnv, unsetEnv)
 import Test.Hspec
 
 import Ecluse.Config
-import Ecluse.Credential (mkSecret)
-import Ecluse.Ecosystem (Ecosystem (..))
-import Ecluse.Log (LogFormat (..))
-import Ecluse.Package (HashAlg (SHA384, SHA512), mkScope)
-import Ecluse.Package.Integrity (defaultMinIntegrity, unMinIntegrity)
-import Ecluse.Rules.Types (
+import Ecluse.Core.Credential (mkSecret)
+import Ecluse.Core.Ecosystem (Ecosystem (..))
+import Ecluse.Core.Package (HashAlg (SHA384, SHA512), mkScope)
+import Ecluse.Core.Package.Integrity (defaultMinIntegrity, unMinIntegrity)
+import Ecluse.Core.Rules.Types (
     PrecededRule (..),
     Rule (..),
     defaultAllowIfPublishedBeforePrecedence,
     defaultDenyInstallTimeExecutionPrecedence,
  )
+import Ecluse.Log (LogFormat (..))
 import Ecluse.Telemetry (TelemetrySwitch (..))
 
 {- | Tests for the configuration boundary. They exercise the three promises of the
@@ -209,7 +209,7 @@ envLayerSpec = describe "parseEnvPure" $ do
                 -- Secret-redaction regression: the tokens are parsed and held,
                 -- but must never reach a Show-based signal (a log, an error, a
                 -- deriving Show) — they are redacted Secrets, not raw Text. See
-                -- Ecluse.Credential.Secret.
+                -- Ecluse.Core.Credential.Secret.
                 showText cfg `shouldNotSatisfy` ("s3cr3t" `isInfix`)
                 showText cfg `shouldNotSatisfy` ("mirror-write" `isInfix`)
                 showText cfg `shouldSatisfy` ("REDACTED" `isInfix`)
@@ -226,7 +226,7 @@ envLayerSpec = describe "parseEnvPure" $ do
                 cfgCveSyncInterval cfg `shouldBe` (3600 :: NominalDiffTime)
                 cfgCacheTtl cfg `shouldBe` (60 :: NominalDiffTime)
                 cfgCacheMaxEntries cfg `shouldBe` 1024
-                -- The response-bound budget defaults to Ecluse.Security.defaultLimits:
+                -- The response-bound budget defaults to Ecluse.Core.Security.defaultLimits:
                 -- a 16 MiB body, 100k versions, 64 levels of nesting.
                 cfgMaxResponseBytes cfg `shouldBe` 16 * 1024 * 1024
                 cfgMaxVersionCount cfg `shouldBe` 100000

@@ -10,8 +10,8 @@ import Hedgehog.Range qualified as Range
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
-import Ecluse.Ecosystem (Ecosystem (Npm))
-import Ecluse.Package (
+import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Package (
     Artifact (..),
     ArtifactKind (Tarball),
     Availability (Available),
@@ -22,15 +22,15 @@ import Ecluse.Package (
     Trust (Untrusted),
     mkPackageName,
  )
-import Ecluse.Package.Filter (FilterPlan (..), filterPlan)
-import Ecluse.Rules.Types (
+import Ecluse.Core.Package.Filter (FilterPlan (..), filterPlan)
+import Ecluse.Core.Rules.Types (
     Decision (Approved),
     EvalContext (EvalContext),
     PrecededRule,
     Rule (AllowIfPublishedBefore, DenyInstallTimeExecution),
     atDefaultPrecedence,
  )
-import Ecluse.Version (compareVersions, isStable, mkVersion, parseVersionKey, unVersion)
+import Ecluse.Core.Version (compareVersions, isStable, mkVersion, parseVersionKey, unVersion)
 
 spec :: Spec
 spec = do

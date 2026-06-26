@@ -25,14 +25,14 @@ import System.Process (readProcessWithExitCode)
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
-import Ecluse.Ecosystem (Ecosystem (..), ecosystemName)
-import Ecluse.Registry.Npm.Wire (Packument (pkmtVersions))
-import Ecluse.Registry.Pypi.Wire qualified as Pypi
-import Ecluse.Registry.Rubygems.Wire qualified as Rubygems
+import Ecluse.Core.Ecosystem (Ecosystem (..), ecosystemName)
+import Ecluse.Core.Registry.Npm.Wire (Packument (pkmtVersions))
+import Ecluse.Core.Registry.Pypi.Wire qualified as Pypi
+import Ecluse.Core.Registry.Rubygems.Wire qualified as Rubygems
+import Ecluse.Core.Version
 import Ecluse.Test.Version qualified as V
-import Ecluse.Version
 
-{- | Smoke tier: validate 'Ecluse.Version.compareVersions' against the /live/
+{- | Smoke tier: validate 'Ecluse.Core.Version.compareVersions' against the /live/
 reference oracles (node-semver, Python @packaging@, Ruby @Gem::Version@). Three
 complementary checks:
 
@@ -275,9 +275,9 @@ fetchRegistryVersions manager eco pkg = do
 
 {- | Extract the published version strings from a registry's response via each
 ecosystem's __canonical__ wire decoder, rather than re-parsing the JSON here: the
-npm packument ('Ecluse.Registry.Npm.Wire.Packument'), the PyPI project JSON
-('Ecluse.Registry.Pypi.Wire.ProjectJson'), or the RubyGems versions array
-('Ecluse.Registry.Rubygems.Wire.VersionListing'). 'Nothing' if the body does not
+npm packument ('Ecluse.Core.Registry.Npm.Wire.Packument'), the PyPI project JSON
+('Ecluse.Core.Registry.Pypi.Wire.ProjectJson'), or the RubyGems versions array
+('Ecluse.Core.Registry.Rubygems.Wire.VersionListing'). 'Nothing' if the body does not
 decode for that ecosystem.
 -}
 parseRegistryVersions :: Ecosystem -> LByteString -> Maybe [Text]

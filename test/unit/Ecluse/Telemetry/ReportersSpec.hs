@@ -3,8 +3,8 @@ module Ecluse.Telemetry.ReportersSpec (spec) where
 import Data.Time (UTCTime (UTCTime), fromGregorian)
 import Test.Hspec
 
-import Ecluse.Breaker (Breaker (Closed, HalfOpen, Open), BreakerReporter (BreakerReporter))
-import Ecluse.Credential.Refresh (RefreshReporter (onRefreshFailed, onRefreshSucceeded))
+import Ecluse.Core.Breaker (Breaker (Closed, HalfOpen, Open), BreakerReporter (BreakerReporter))
+import Ecluse.Core.Credential.Refresh (RefreshReporter (onRefreshFailed, onRefreshSucceeded))
 import Ecluse.Telemetry (telemetryDisabled)
 import Ecluse.Telemetry.Instruments (newMetrics)
 import Ecluse.Telemetry.Metrics (BreakerSource (CredentialMint), Provider (CodeArtifact))

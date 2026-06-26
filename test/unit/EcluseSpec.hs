@@ -13,11 +13,11 @@ import UnliftIO.Exception (throwString)
 import System.Environment (setEnv, unsetEnv)
 
 import Ecluse (BootAborted (..), mountBindingFor, npmServerConfig, orExit, run)
-import Ecluse.Credential (AuthToken (..), CredentialProvider, mkSecret, staticProvider)
-import Ecluse.Ecosystem (Ecosystem (..))
+import Ecluse.Core.Credential (AuthToken (..), CredentialProvider, mkSecret, staticProvider)
+import Ecluse.Core.Ecosystem (Ecosystem (..))
+import Ecluse.Core.Queue (newInMemoryQueue)
+import Ecluse.Core.Registry (ParseError (..), RegistryClient (..))
 import Ecluse.Env (Env, newEnv, newWorkerHeartbeat)
-import Ecluse.Queue (newInMemoryQueue)
-import Ecluse.Registry (ParseError (..), RegistryClient (..))
 import Ecluse.Server (MountBinding (..), application)
 import Ecluse.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Telemetry (telemetryDisabled)
@@ -85,7 +85,7 @@ runEnv =
 {- | 'runEnv' extended with the AWS settings the default @sqs@ mirror-queue backend
 needs to be built: a region, and throwaway credentials in the environment so
 @amazonka@'s discovery resolves from env vars (no instance-metadata round-trip) and
-'Ecluse.Queue.Sqs.newSqsQueue' constructs without touching the network. The bogus
+'Ecluse.Core.Queue.Sqs.newSqsQueue' constructs without touching the network. The bogus
 queue URL is never reached on the boot-and-serve path — the worker's failing polls
 are caught by its own supervision — so this stays hermetic.
 -}

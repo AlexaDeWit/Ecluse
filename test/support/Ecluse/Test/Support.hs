@@ -9,7 +9,7 @@ under test, and is reachable from each suite's discovered specs.
 -}
 module Ecluse.Test.Support (supportLinkageSpec) where
 
-import Ecluse.Package (HashAlg (SHA256), renderHashAlg)
+import Ecluse.Core.Package (HashAlg (SHA256), renderHashAlg)
 import Test.Hspec (Spec, describe, it, shouldBe)
 
 {- | A trivial spec that touches a stable export of the library under test, so a

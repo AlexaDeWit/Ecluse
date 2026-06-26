@@ -41,10 +41,10 @@ import Test.Hspec (
  )
 import UnliftIO (evaluate)
 
-import Ecluse.Credential (mkSecret)
-import Ecluse.Ecosystem (Ecosystem (Npm))
-import Ecluse.Package (PackageInfo (infoName), PackageName, mkPackageName, mkScope, renderPackageName)
-import Ecluse.Registry (
+import Ecluse.Core.Credential (mkSecret)
+import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Package (PackageInfo (infoName), PackageName, mkPackageName, mkScope, renderPackageName)
+import Ecluse.Core.Registry (
     PublishError (publishErrorMessage),
     PublishFault (PublishRejected, PublishUrlUnformable),
     RegistryClient (
@@ -58,9 +58,9 @@ import Ecluse.Registry (
     RegistryResponse (RegistryResponse, responseBody),
     UrlFormationError (EmptyBaseUrl, UnparseableUrl),
  )
-import Ecluse.Security (Limits (maxBodyBytes), defaultLimits)
+import Ecluse.Core.Security (Limits (maxBodyBytes), defaultLimits)
 
-import Ecluse.Registry.Npm (
+import Ecluse.Core.Registry.Npm (
     MetadataForm (Abbreviated, Full),
     NpmClientConfig (..),
     Validators (..),
@@ -77,7 +77,7 @@ import Ecluse.Registry.Npm (
     publicRegistryBaseUrl,
     publishRequest,
  )
-import Ecluse.Version (Version, mkVersion)
+import Ecluse.Core.Version (Version, mkVersion)
 
 {- | Request-shaping tests for the npm data plane. They drive 'newNpmClient' and
 the exposed request builders against an __in-process WAI stub__ standing in for a

@@ -9,7 +9,7 @@ import Hedgehog.Range qualified as Range
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
-import Ecluse.Breaker
+import Ecluse.Core.Breaker
 
 -- | A fixed instant so the cooldown arithmetic is deterministic.
 now :: UTCTime

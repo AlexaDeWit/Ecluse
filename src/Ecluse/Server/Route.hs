@@ -9,7 +9,7 @@ is a 'Classifier', injected at the composition root, so this module stays free o
 any one ecosystem's path conventions while the dispatcher routes through whatever
 classifier its mount carries.
 
-The model is __deny by default__, mirroring the rules engine ("Ecluse.Rules"):
+The model is __deny by default__, mirroring the rules engine ("Ecluse.Core.Rules"):
 the agnostic default 'denyAll' classifies every path as 'Unsupported' (a @404@ at
 the edge), so a deployment that wires no ecosystem router serves nothing rather
 than guessing. An ecosystem adapter supplies a 'Classifier' that recognises its
@@ -36,8 +36,8 @@ import Data.ByteString qualified as BS
 import Data.Char (intToDigit, isControl, toUpper)
 import Data.Text qualified as T
 
-import Ecluse.Package (PackageName)
-import Ecluse.Version (Version)
+import Ecluse.Core.Package (PackageName)
+import Ecluse.Core.Version (Version)
 
 {- | A classified request. Everything the front door is willing to serve is one
 of these; an unrecognised path is 'Unsupported' (deny by default).
@@ -118,7 +118,7 @@ underscores, digits, or uppercase all pass.
 
 It lives in the agnostic layer because the threat — interpolating a hostile
 segment into an upstream URL — is ecosystem-independent; both an ecosystem's path
-classifier and the defence-in-depth check in "Ecluse.Security" share this one
+classifier and the defence-in-depth check in "Ecluse.Core.Security" share this one
 rule.
 
 This gate is __structural__: it stops a component that would change the upstream

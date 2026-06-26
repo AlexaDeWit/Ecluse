@@ -1,7 +1,7 @@
-{- | Test helpers and fixtures for "Ecluse.Package".
+{- | Test helpers and fixtures for "Ecluse.Core.Package".
 
 This mirrors the module under test: helpers that support exercising
-@Ecluse.Package@ live here, under the @Ecluse.X → Ecluse.Test.X@ convention this
+@Ecluse.Core.Package@ live here, under the @Ecluse.X → Ecluse.Test.X@ convention this
 support library follows. It carries the digest plumbing every suite reuses —
 'unsafeHash', which lifts a known-good digest into a 'Hash', and the canonical
 well-formed digest fixtures (each the empty-input digest of its algorithm) that
@@ -23,7 +23,7 @@ module Ecluse.Test.Package (
     validSha512Sri,
 ) where
 
-import Ecluse.Package (Hash, HashAlg, mkHash)
+import Ecluse.Core.Package (Hash, HashAlg, mkHash)
 
 {- HLINT ignore unsafeHash "Avoid restricted function" -}
 

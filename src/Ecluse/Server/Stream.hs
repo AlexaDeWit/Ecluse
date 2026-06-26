@@ -18,7 +18,7 @@ artifact size__ with backpressure for free. No @ResourceT@, no conduit on the ho
 path (see @docs\/architecture\/web-layer.md@ → "Streaming and resource lifetime").
 
 This is the serve path; it __streams, never buffers__. The whole-artifact-in-memory
-'Ecluse.Registry.fetchArtifact' is the separate mirroring concern, not this.
+'Ecluse.Core.Registry.fetchArtifact' is the separate mirroring concern, not this.
 -}
 module Ecluse.Server.Stream (
     -- * Streaming a response through

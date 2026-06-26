@@ -98,7 +98,7 @@ import Ecluse.Telemetry.Resolve (
     observeExportResult,
  )
 
-import Ecluse.Wire (WireVocab (..), parseWire, renderWire)
+import Ecluse.Core.Wire (WireVocab (..), parseWire, renderWire)
 
 -- ── master switch ────────────────────────────────────────────────────────────
 

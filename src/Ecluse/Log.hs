@@ -26,7 +26,7 @@ log site's payload.
 
 == Secrets
 
-A bearer token is carried as the redacted @Secret@ of "Ecluse.Credential", whose
+A bearer token is carried as the redacted @Secret@ of "Ecluse.Core.Credential", whose
 'Show' renders only a placeholder, so token material cannot reach a log field
 through any structured payload or message built from it (see
 @docs\/architecture\/observability.md@). This module adds no field that would
@@ -84,7 +84,7 @@ import Katip (
  )
 import Katip.Scribes.Handle (ItemFormatter, bracketFormat, jsonFormat, mkHandleScribeWithFormatter)
 
-import Ecluse.Wire (WireVocab (..), parseWire, renderWire)
+import Ecluse.Core.Wire (WireVocab (..), parseWire, renderWire)
 
 -- ── log format ───────────────────────────────────────────────────────────────
 

@@ -3,10 +3,10 @@ module Ecluse.Registry.Rubygems.WireSpec (spec) where
 import Data.Aeson (eitherDecode)
 import Test.Hspec
 
-import Ecluse.Registry.Rubygems.Wire (VersionListing, listingVersions)
+import Ecluse.Core.Registry.Rubygems.Wire (VersionListing, listingVersions)
 
 spec :: Spec
-spec = describe "Ecluse.Registry.Rubygems.Wire" $ do
+spec = describe "Ecluse.Core.Registry.Rubygems.Wire" $ do
     it "reads each entry's number, preserving order" $ do
         let body = "[{\"number\":\"7.1.0\",\"platform\":\"ruby\"},{\"number\":\"7.0.8\"}]"
         (listingVersions <$> eitherDecode body) `shouldBe` Right ["7.1.0", "7.0.8"]

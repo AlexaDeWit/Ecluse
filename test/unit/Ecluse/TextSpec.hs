@@ -2,7 +2,7 @@ module Ecluse.TextSpec (spec) where
 
 import Test.Hspec
 
-import Ecluse.Text (joinUrlPath, nonBlank, stripTrailingSlash)
+import Ecluse.Core.Text (joinUrlPath, nonBlank, stripTrailingSlash)
 
 {- | Tests for the shared text helpers. They pin the two promises callers depend on:
 'nonBlank' treats an empty or all-whitespace value as absent and returns the surviving

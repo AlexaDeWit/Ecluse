@@ -2,13 +2,13 @@ module Ecluse.Package.IntegritySpec (spec) where
 
 import Test.Hspec
 
-import Ecluse.Package (
+import Ecluse.Core.Package (
     Artifact (..),
     ArtifactKind (Tarball),
     Hash,
     HashAlg (Blake2b, MD5, SHA1, SHA256, SHA384, SHA512, SRI),
  )
-import Ecluse.Package.Integrity (
+import Ecluse.Core.Package.Integrity (
     VersionIntegrity (BelowFloor, MeetsFloor, NoIntegrity),
     assertedAlg,
     classifyArtifacts,

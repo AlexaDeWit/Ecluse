@@ -26,7 +26,7 @@ import Hedgehog.Range qualified as Range
 import Test.Hspec (Expectation, Spec, describe, it, shouldBe)
 import Test.Hspec.Hedgehog (hedgehog)
 
-import Ecluse.Registry.Npm.Wire
+import Ecluse.Core.Registry.Npm.Wire
 
 {- | Decoding tests for the npm wire types. Every fixture under
 @test\/unit\/fixtures\/npm\/@ is a body derived from the real captures documented

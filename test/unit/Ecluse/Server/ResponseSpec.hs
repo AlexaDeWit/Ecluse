@@ -4,8 +4,8 @@ import Data.Text qualified as T
 import Data.Time (UTCTime (..), addUTCTime, fromGregorian, nominalDay)
 import Test.Hspec
 
-import Ecluse.Ecosystem (Ecosystem (Npm))
-import Ecluse.Package (
+import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Package (
     Artifact (..),
     ArtifactKind (Tarball),
     Availability (Available),
@@ -15,13 +15,14 @@ import Ecluse.Package (
     mkPackageName,
     mkScope,
  )
-import Ecluse.Rules (evalRules)
-import Ecluse.Rules.Types (
+import Ecluse.Core.Rules (evalRules)
+import Ecluse.Core.Rules.Types (
     Decision (ApprovedEffectful, DeniedEffectful, Undecidable),
     EvalContext (EvalContext),
     Rule (AllowScope, DenyInstallTimeExecution),
     atDefaultPrecedence,
  )
+import Ecluse.Core.Version (mkVersion)
 import Ecluse.Server.Response (
     ArtifactStatus (..),
     PackumentStatus (..),
@@ -40,7 +41,6 @@ import Ecluse.Server.Response (
     serveDecisionOf,
     unHelpMessage,
  )
-import Ecluse.Version (mkVersion)
 
 -- | A fixed "now" so age-based fixtures are deterministic.
 now :: UTCTime

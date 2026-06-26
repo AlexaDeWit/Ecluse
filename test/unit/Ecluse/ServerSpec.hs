@@ -22,12 +22,12 @@ import UnliftIO.Timeout (timeout)
 
 import Data.Time (addUTCTime, getCurrentTime)
 
-import Ecluse.Credential (AuthToken (..), CredentialProvider, mkSecret, staticProvider)
+import Ecluse.Core.Credential (AuthToken (..), CredentialProvider, mkSecret, staticProvider)
+import Ecluse.Core.Queue (newInMemoryQueue)
+import Ecluse.Core.Registry (ParseError (..), RegistryClient (..))
+import Ecluse.Core.Registry.Npm.Route qualified as Npm
+import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
 import Ecluse.Env (Env, envWorkerHeartbeat, newEnv, newWorkerHeartbeat, recordPoll)
-import Ecluse.Queue (newInMemoryQueue)
-import Ecluse.Registry (ParseError (..), RegistryClient (..))
-import Ecluse.Registry.Npm.Route qualified as Npm
-import Ecluse.Registry.Npm.Serve (npmRenderer)
 import Ecluse.Server (
     DrainSignal,
     InteractiveHalt (..),
