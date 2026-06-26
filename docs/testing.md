@@ -62,7 +62,7 @@ registry calls it needs real external access (here, cloud credentials), so it's 
 fail and stays isolated to one small function per cloud, an accepted residual risk,
 consistent with the rest of this tier.
 
-## End-to-end tests: `ecluse-e2e` (non-gating)
+## End-to-end tests: `ecluse-e2e` (gating)
 
 The only tier that assembles the **whole system through the real composition root** and
 drives it with the **real `npm` CLI**. It runs the actual published OCI image
@@ -75,9 +75,13 @@ tampered artifact fails the integrity gate and never publishes. It is the tier t
 that the path-relative `dist.tarball` rewrite was not installable by `npm` (now fixed by
 `PROXY_PUBLIC_URL`).
 
-It is **non-gating** — far heavier than the gate (an image build, multiple containers, the
-npm CLI) — and runs pre-merge for visibility and nightly, like the smoke tier; the CI `gate`
-never depends on it. The egress guard refuses internal addresses on the public path, so the
+It **gates** — it runs as its own parallel job that the CI `gate` depends on. Although it is
+far heavier than the rest of the gate (an image build, multiple containers, the npm CLI), it
+is **hermetic** — the nginx + Verdaccio upstreams are local, so unlike the live-registry smoke
+tier it has no external dependency to flake on — and has been reliably green, which is what
+makes gating on it safe. It runs on every PR and nightly. Because of its weight it is kept out
+of the local `make gate`/`check` targets (run `make test-e2e` on demand). The egress guard
+refuses internal addresses on the public path, so the
 containers run on an RFC 5737 documentation subnet (`203.0.113.0/24`) the guard treats as
 external — **no production escape hatch**, the real default-build image runs unmodified. Run
 `make test-e2e` (it builds + loads the image, then runs the suite); it needs a Docker daemon

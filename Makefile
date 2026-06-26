@@ -60,10 +60,12 @@ test-smoke: ## Run the smoke suite (live registries; non-gating)
 	$(NIX) cabal test ecluse-smoke --test-show-details=direct
 
 # End-to-end: builds the real OCI image, loads it, and runs the whole system as
-# containers driven by the real npm CLI. Heavy and NON-GATING — never wired into
-# `check`/`gate`. Needs a Docker daemon + the npm CLI. See scripts/e2e.sh and
+# containers driven by the real npm CLI. The CI `e2e` job GATES on this, but it is
+# kept out of the local `check`/`gate` targets — too heavy for routine pre-push (an
+# image build + containers + npm), and it skips vacuously without a Docker daemon +
+# the npm CLI. Run it explicitly. See scripts/e2e.sh and
 # planning/slices/S53-e2e-ecosystem.md.
-test-e2e: ## Run the end-to-end suite (builds + runs the real image; non-gating)
+test-e2e: ## Run the end-to-end suite (builds + runs the real image; CI-gating)
 	$(NIX) bash scripts/e2e.sh
 
 test-all: test test-integration test-smoke ## Run every test suite
@@ -178,10 +180,11 @@ check: build test doctest format-check lint sast cabal-check lint-workflows lint
 
 # The faithful local mirror of the CI gate: everything `check` runs, plus the two
 # tiers it omits — the integration suite (needs a Docker daemon, exactly like the
-# gate's build-test job) and the Haddock build (docs-check). Together these are every
-# pass/fail check the gate runs; the one gate input that can't be reproduced locally
-# is the Codecov coverage upload/status, which is computed server-side.
-gate: check test-integration docs-check ## Reproduce the full CI gate locally (integration tier needs Docker)
+# gate's build-test job) and the Haddock build (docs-check). Two CI-gating inputs are
+# deliberately NOT reproduced here: the Codecov coverage upload/status (computed
+# server-side) and the e2e suite (an OCI image build + containers + npm — too heavy
+# for routine pre-push; run `make test-e2e` before a risky composition-root change).
+gate: check test-integration docs-check ## Reproduce the full CI gate locally (sans the heavy e2e tier; integration needs Docker)
 
 run: ## Run the proxy
 	$(NIX) cabal run ecluse
