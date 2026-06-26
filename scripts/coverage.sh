@@ -69,16 +69,30 @@ done < <(find "$builddir" -type d -path '*/hpc/vanilla/mix')
 mkdir -p "$outdir"
 out="$outdir/${suite}.json"
 
-# -s .            resolve source paths relative to the repo root (./src/..., ./test/...)
-# -x Main         drop the hspec-discover entry module (no real source)
-# -x Paths_ecluse drop the cabal-generated path module
-# -f codecov      Codecov's native JSON: leanest for Codecov to ingest (no conversion)
-# Library-vs-test scoping is done by codecov.yml `ignore`, not here, so new
-# spec modules need no change to this script.
+# Exclude every module of the ecluse-test-support library. It is a first-class
+# local library, so the instrumented build measures it and its Ecluse.Test.*
+# modules (linked into the suite) would otherwise land in the uploaded report —
+# but it is shared test scaffolding, not the software under test. The exclusions
+# are derived from test/support/ so a NEW Ecluse.Test.* module is dropped here
+# automatically. codecov.yml `ignore` also drops test/support/** as a second,
+# report-side line of defence.
+support_exclude=()
+while IFS= read -r module; do
+  support_exclude+=(-x "$module")
+done < <(find test/support -name '*.hs' | sed -e 's#^test/support/##' -e 's#/#.#g' -e 's#\.hs$##')
+
+# -s .              resolve source paths relative to the repo root (./src/...)
+# -x Main           drop the hspec-discover entry module (no real source)
+# -x Paths_ecluse   drop the cabal-generated path module
+# -x Ecluse.Test.*  drop the ecluse-test-support library (support_exclude, above)
+# -f codecov        Codecov's native JSON: leanest for Codecov to ingest (no conversion)
+# Library-vs-test scoping is otherwise done by codecov.yml `ignore`, so new spec
+# modules need no change to this script.
 hpc-codecov "${mix_args[@]}" \
   -s . \
   -x Main \
   -x Paths_ecluse \
+  "${support_exclude[@]}" \
   -f codecov \
   -o "$out" \
   "$tix"

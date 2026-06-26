@@ -29,14 +29,12 @@ import Ecluse.Package (
     CodeExecSignal (NoCodeOnInstall, RunsCodeOnInstall),
     DepKind (Dev, Optional, Peer, Runtime),
     Dependency (depConstraint, depKind, depMarker, depName),
-    Hash,
     HashAlg (SHA1, SRI),
     PackageDetails (..),
     PackageInfo (..),
     PackageName,
     Person (Person),
     Trust (TrustUnknown),
-    mkHash,
     mkPackageName,
     mkScope,
     pkgCanonical,
@@ -51,6 +49,7 @@ import Ecluse.Registry.Npm.Project (
     parseVersionDetails,
     parseVersionList,
  )
+import Ecluse.Test.Package (unsafeHash)
 import Ecluse.Version (Version, mkVersion, renderVersion, unVersion)
 
 {- | Projection tests for the npm adapter. They assert the __domain__ values a
@@ -671,14 +670,6 @@ the 'NonEmpty' is total.
 -}
 soleArtifact :: PackageDetails -> Artifact
 soleArtifact d = let (art :| _) = pkgArtifacts d in art
-
-{- HLINT ignore unsafeHash "Avoid restricted function" -}
-
-{- | Build a 'Hash' from a known-valid digest, for asserting a projected artifact's
-hashes. Errors on a malformed digest, so a typo in a fixture fails loudly.
--}
-unsafeHash :: HashAlg -> Text -> Hash
-unsafeHash alg = either error id . mkHash alg
 
 -- | Whether a 'CodeExecSignal' is one of the @RunsCodeOnInstall@ determinations.
 runsCode :: CodeExecSignal -> Bool

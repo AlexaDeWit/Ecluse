@@ -160,7 +160,14 @@ Codecov to ingest. See [`scripts/coverage.sh`](../scripts/coverage.sh) (one tier
   `CODECOV_TOKEN` secret to store or leak, the same keyless posture as the release image
   signing.
 - **What's measured.** Library code only; `app/` (the thin entry point) and `test/` are
-  ignored (see [`codecov.yml`](../codecov.yml)).
+  ignored (see [`codecov.yml`](../codecov.yml)). The shared `ecluse-test-support` library
+  (`test/support/`, the `Ecluse.Test.*` modules) is excluded end to end: it is a first-class
+  cabal component, so the instrumented build measures it, but it is test scaffolding rather than
+  software under test. Generation drops every `Ecluse.Test.*` module from the HPC report (the
+  `hpc-codecov` exclusions in [`scripts/coverage.sh`](../scripts/coverage.sh) and
+  [`scripts/coverage-combined.sh`](../scripts/coverage-combined.sh), derived from `test/support/`
+  so a new module is dropped automatically), and `codecov.yml` `ignore` lists `test/support/**`
+  as a second, report-side line of defence.
 
 The gate itself is Codecov's two commit statuses: `codecov/project` (no regression versus the
 PR base, within a 1% threshold) and `codecov/patch` (new/changed lines ≥ 85%, a floor that

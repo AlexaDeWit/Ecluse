@@ -23,6 +23,7 @@ import Test.Hspec.Hedgehog (hedgehog)
 import Ecluse.Ecosystem (Ecosystem (..))
 import Ecluse.Package
 import Ecluse.Package.Merge
+import Ecluse.Test.Package (unsafeHash)
 import Ecluse.Version (mkVersion, unVersion)
 
 -- ── fixtures ─────────────────────────────────────────────────────────────────
@@ -95,16 +96,6 @@ packument :: [(Text, Text)] -> PackageInfo
 packument vs = packumentWith [(v, [unsafeHash SRI d]) | (v, d) <- vs]
 
 -- ── digest fixtures ────────────────────────────────────────────────────────────
-
-{- HLINT ignore unsafeHash "Avoid restricted function" -}
-
-{- | Build a 'Hash' from a known-valid digest. The merge fold compares digests as
-opaque values, so the tests use mnemonic tokens mapped to well-formed digests via
-'validSriOf' \/ 'validSha1Of' \/ 'validSha256Of'; this errors on a malformed one so a
-fixture typo fails loudly rather than silently.
--}
-unsafeHash :: HashAlg -> Text -> Hash
-unsafeHash alg = either error id . mkHash alg
 
 -- A well-formed sha512 SRI deterministically derived from a mnemonic label, so distinct
 -- labels yield distinct well-formed digests and the same label always yields the same one.

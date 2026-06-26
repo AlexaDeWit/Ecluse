@@ -21,7 +21,7 @@ import Ecluse.Integration.Ministack (
     freshQueue,
     withMinistack,
  )
-import Ecluse.Package (Hash, HashAlg (SHA1), mkHash, mkPackageName)
+import Ecluse.Package (HashAlg (SHA1), mkPackageName)
 import Ecluse.Queue (
     MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize),
     MirrorJob (..),
@@ -31,6 +31,7 @@ import Ecluse.Registry.Npm (NpmClientConfig (NpmClientConfig, npmBaseUrl, npmLim
 import Ecluse.Security (defaultLimits)
 import Ecluse.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Telemetry (telemetryDisabled)
+import Ecluse.Test.Package (unsafeHash)
 import Ecluse.Version (mkVersion)
 import Ecluse.Worker (workerLoop)
 
@@ -181,14 +182,6 @@ job upstreamUrl sha1 =
                 , maSize = Nothing
                 }
         }
-
-{- HLINT ignore unsafeHash "Avoid restricted function" -}
-
-{- | Build a 'Hash' from a known-valid digest; errors on a malformed one. The job's
-digest round-trips through the real queue, which validates it on decode.
--}
-unsafeHash :: HashAlg -> Text -> Hash
-unsafeHash alg = either error id . mkHash alg
 
 {- | A well-formed SHA-1 digest (sha1 of the empty string) that does not match the
 served tarball — the tamper fixture, distinct from a malformed digest the queue would

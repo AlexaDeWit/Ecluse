@@ -7,7 +7,6 @@ import Ecluse.Package (
     ArtifactKind (Tarball),
     Hash,
     HashAlg (Blake2b, MD5, SHA1, SHA256, SHA384, SHA512, SRI),
-    mkHash,
  )
 import Ecluse.Package.Integrity (
     VersionIntegrity (BelowFloor, MeetsFloor, NoIntegrity),
@@ -20,6 +19,14 @@ import Ecluse.Package.Integrity (
     parseMinIntegrity,
     renderMinIntegrity,
     unMinIntegrity,
+ )
+import Ecluse.Test.Package (
+    unsafeHash,
+    validSha1,
+    validSha256,
+    validSha256Sri,
+    validSha384Sri,
+    validSha512Sri,
  )
 
 -- A tarball carrying a chosen set of integrity digests; everything else is inert.
@@ -171,20 +178,3 @@ spec = do
 -- Local: assert a 'Right' and return its value, failing the example otherwise.
 expectRight :: (Show e) => Either e a -> IO a
 expectRight = either (\e -> fail ("expected Right, got Left " <> show e)) pure
-
-{- HLINT ignore unsafeHash "Avoid restricted function" -}
-
-{- | Build a 'Hash' from a known-valid digest; only the algorithm (or SRI prefix)
-matters to the strength/floor logic under test here, so the value is a canonical
-well-formed digest. Errors on a malformed one, so a fixture typo fails loudly.
--}
-unsafeHash :: HashAlg -> Text -> Hash
-unsafeHash alg = either error id . mkHash alg
-
--- Canonical well-formed digests (each the empty-input digest of its algorithm).
-validSha1, validSha256, validSha256Sri, validSha384Sri, validSha512Sri :: Text
-validSha1 = "da39a3ee5e6b4b0d3255bfef95601890afd80709"
-validSha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-validSha256Sri = "sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU="
-validSha384Sri = "sha384-OLBgp1GsljhM2TJ+sbHjaiH9txEUvgdDTAzHv2P24donTt6/529l+9Ua0vFImLlb"
-validSha512Sri = "sha512-z4PhNX7vuL3xVChQ1m2AB9Yg5AULVxXcg/SpIdNs6c5H0NE8XYXysP+DGNKHfuwvY7kxvUdBeoGlODJ6+SfaPg=="
