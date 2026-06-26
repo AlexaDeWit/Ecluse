@@ -44,7 +44,7 @@ which is the working directory Cabal runs the tests from).
 loadFixture :: IO [Row]
 loadFixture = mapMaybe parseRow . lines . decodeUtf8 <$> readFileBS fixturePath
   where
-    fixturePath = "test/unit/fixtures/version-ordering.txt"
+    fixturePath = "core/test/unit/fixtures/version-ordering.txt"
 
 parseRow :: Text -> Maybe Row
 parseRow line

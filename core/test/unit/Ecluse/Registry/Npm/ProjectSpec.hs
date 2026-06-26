@@ -55,7 +55,7 @@ import Ecluse.Test.Package (unsafeHash)
 {- | Projection tests for the npm adapter. They assert the __domain__ values a
 fetched packument projects into — the second half of the boundary that
 "Ecluse.Registry.Npm.WireSpec" tests the decode half of. The fixtures under
-@test\/unit\/fixtures\/npm\/@ are the same captures the wire suite uses; a few
+@core\/test\/unit\/fixtures\/npm\/@ are the same captures the wire suite uses; a few
 edge cases (a full-form install-script derivation, a missing @time@ entry, a
 malformed body) are inline JSON literals.
 
@@ -677,11 +677,11 @@ runsCode = \case
     RunsCodeOnInstall _ -> True
     _ -> False
 
-{- | Read a committed fixture body by name (under @test\/unit\/fixtures\/npm\/@,
+{- | Read a committed fixture body by name (under @core\/test\/unit\/fixtures\/npm\/@,
 the path Cabal runs tests from).
 -}
 readFixture :: FilePath -> IO ByteString
-readFixture name = readFileBS ("test/unit/fixtures/npm/" <> name)
+readFixture name = readFileBS ("core/test/unit/fixtures/npm/" <> name)
 
 {- | Project a fixture into a 'PackageInfo' under the given route-requested name,
 failing the example with the 'ParseError' message on a projection (or name-validation)

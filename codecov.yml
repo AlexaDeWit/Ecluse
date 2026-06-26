@@ -6,17 +6,18 @@
 # upload, each under its own flag. The smoke tier is excluded (non-gating,
 # network-bound).
 
-# Two coverage reports are uploaded per commit — the `unit` and `integration`
-# flags below — both from the single gating build-test job. Wait for BOTH before
-# computing statuses: with the default (1), Codecov computes the project total
-# off whichever upload lands first and fires a transient "coverage decreased"
-# status, then re-computes when the second arrives. build-test always emits
-# exactly these two, so a fixed wait is deterministic and safe here. (Were the
-# count ever variable, notify.manual_trigger + an explicit send-notifications
-# step would be the robust alternative.)
+# Three coverage reports are uploaded per commit — `ecluse-core-unit` (flag:
+# unit), `ecluse-unit` (flag: unit), and `ecluse-integration` (flag: integration)
+# — all from the single gating build-test job. Wait for all THREE before computing
+# statuses: with the default (1), Codecov computes the project total off whichever
+# upload lands first and fires a transient "coverage decreased" status, then
+# re-computes when the others arrive. build-test always emits exactly these three,
+# so a fixed wait is deterministic and safe here. (Were the count ever variable,
+# notify.manual_trigger + an explicit send-notifications step would be the robust
+# alternative.)
 codecov:
   notify:
-    after_n_builds: 2
+    after_n_builds: 3
 
 coverage:
   status:
@@ -38,28 +39,31 @@ coverage:
 # Flags let one combined gate span multiple suites. carryforward keeps a suite's
 # last-known coverage on runs that don't re-upload it (e.g. a job that skipped).
 #
+# Three uploads land per commit: ecluse-core-unit (flag: unit), ecluse-unit (flag:
+# unit), and ecluse-integration (flag: integration). Both unit suites upload under
+# the same `unit` flag so Codecov merges their reports into one flag total; the
+# `unit` paths now cover both src/ (app modules) and core/src/ (core modules) so
+# neither layer is silently excluded from the merged flag view.
+#
 # carryforward is a SAFETY NET here, not an active path — settled, not a defect.
 # The concern was: on a PR that *adds* a module, could a carried-forward stale flag
 # report (one predating the module) make the merged view show the new module
-# uncovered? It can't, because both flags re-upload on EVERY commit: the single
-# `build-test` job runs `Coverage (unit)` and `Coverage (integration)`
-# unconditionally (no `if:` guard, `fail_ci_if_error: true`), so each flag always
-# lands a fresh report and carryforward never substitutes. It would only kick in if
-# an upload were genuinely missing (a flag's job removed/skipped), and then keeping
-# the last-known number beats dropping the flag to 0% and firing a false regression.
-# Concretely, `Worker.hs` (added in #255) is linked AND exercised by BOTH tiers —
-# each suite has its own `Ecluse.WorkerSpec` — so both flags attribute it correctly
-# the moment it lands. (Worker.hs has genuinely uncovered error arms even in the
-# merged view; that's a real test gap, addressed by a test, not a carryforward
-# artifact — see docs/testing.md → "Coverage".)
+# uncovered? It can't, because all flags re-upload on EVERY commit: the single
+# `build-test` job runs all three Coverage steps unconditionally (no `if:` guard,
+# `fail_ci_if_error: true`), so each flag always lands a fresh report and
+# carryforward never substitutes. It would only kick in if an upload were genuinely
+# missing (a flag's job removed/skipped), and then keeping the last-known number
+# beats dropping the flag to 0% and firing a false regression.
 flags:
   unit:
     paths:
       - src/
+      - core/src/
     carryforward: true
   integration:
     paths:
       - src/
+      - core/src/
     carryforward: true
 
 # Out of scope for coverage: the thin executable entry point and the tests. The
@@ -67,14 +71,17 @@ flags:
 # test/support/, but it is called out explicitly below because that library is a
 # first-class cabal component (its Ecluse.Test.* modules are instrumented by the
 # coverage build), so it must never be attributed as software under test. The
-# generation side enforces this too: scripts/coverage.sh and
+# core/test/unit/** glob covers the new ecluse-core-unit spec files (under test,
+# not under test). The generation side enforces this too: scripts/coverage.sh and
 # scripts/coverage-combined.sh exclude every Ecluse.Test.* module from the HPC
 # report, so the support library never reaches Codecov in the first place. The
-# `src/`-scoped `flags.*.paths` above are the matching positive constraint.
+# `src/` and `core/src/` paths in `flags.*.paths` above are the matching positive
+# constraint.
 ignore:
   - "app/**"
   - "test/**"
   - "test/support/**"
+  - "core/test/**"
 
 comment:
   layout: "reach, diff, flags, files"

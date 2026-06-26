@@ -36,7 +36,7 @@ permissions:
 # copies). build-test is the single writer. See AGENTS.md → "CI & Security" and the setup-toolchain action.
 jobs:
   build-test:
-    name: Build & tests (unit + integration)
+    name: Build & tests (core-unit + app-unit + integration)
     # One job builds the project ONCE (library, executable, all three test
     # suites) and then runs every Haskell test tier against those same on-disk
     # artifacts — unit, integration, doctest, coverage. Previously build-and-test
@@ -75,7 +75,7 @@ jobs:
       - name: Build (library, executable, all test suites)
         run: nix develop .#ci --command make build
 
-      - name: Unit tests
+      - name: Unit tests (core + app)
         run: nix develop .#ci --command make test
 
       # Same warm build dir, so the integration tier costs only its own (small)
@@ -89,17 +89,27 @@ jobs:
       - name: Doctest (Haddock examples)
         run: nix develop .#ci --command make doctest
 
-      # Instrumented re-run of the unit suite in a separate build dir, emitting
-      # Codecov-native JSON. Only our small package recompiles (-fhpc); deps come
-      # from the cached cabal store, so this is cheap. EXPLICIT SUITE=ecluse-unit:
-      # bare `make coverage` is now the COMBINED (unit ∪ integration) report for
-      # local use, so each CI step names its tier to keep emitting that tier's own
-      # per-flag JSON (coverage/ecluse-unit.json) — the unit-flag upload depends on
-      # it. See CONTRIBUTING.md → "Coverage".
-      - name: Coverage (unit)
+      # Instrumented re-runs of the unit suites in a separate build dir, each
+      # emitting Codecov-native JSON. Only our small package recompiles (-fhpc);
+      # deps come from the cached cabal store, so this is cheap. Both suites upload
+      # under the `unit` flag; Codecov merges them into one flag total. This is the
+      # fix for the phase 2a regression where core modules silently dropped from
+      # Codecov attribution (PR2b). See CONTRIBUTING.md → "Coverage".
+      - name: Coverage (core unit)
+        run: nix develop .#ci --command make coverage SUITE=ecluse-core-unit
+
+      - name: Upload core unit coverage to Codecov
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        with:
+          use_oidc: true # tokenless upload via GitHub OIDC; no CODECOV_TOKEN secret
+          files: coverage/ecluse-core-unit.json
+          flags: unit
+          fail_ci_if_error: true # a lost upload must not silently skip the gate
+
+      - name: Coverage (app unit)
         run: nix develop .#ci --command make coverage SUITE=ecluse-unit
 
-      - name: Upload unit coverage to Codecov
+      - name: Upload app unit coverage to Codecov
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
           use_oidc: true # tokenless upload via GitHub OIDC; no CODECOV_TOKEN secret
@@ -108,9 +118,9 @@ jobs:
           fail_ci_if_error: true # a lost upload must not silently skip the gate
 
       # Instrumented re-run of the integration suite (against the same ministack
-      # tier as above), so the cloud-backed modules the unit suite cannot exercise
+      # tier as above), so the cloud-backed modules the unit suites cannot exercise
       # — the SQS MirrorQueue backend — count toward the merged Codecov total. Like
-      # the unit pass, only our package recompiles under -fhpc.
+      # the unit passes, only our package recompiles under -fhpc.
       - name: Coverage (integration)
         run: nix develop .#ci --command make coverage SUITE=ecluse-integration
 

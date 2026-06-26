@@ -401,10 +401,16 @@
         };
 
         checks = {
-          # Pure, gating test tier. Builds the package and runs ONLY the unit
-          # suite (testTarget), so this hermetic check never executes the Docker-
-          # or network-dependent suites even once their real cases land.
-          unit = hlib.overrideCabal ecluseRaw (_: {
+          # Pure, gating test tiers. Each builds the package and runs ONE unit
+          # suite (testTarget), so these hermetic checks never execute the Docker-
+          # or network-dependent suites. Both are required by the gate (`make
+          # nix-check` runs both; CI's static-checks job runs both via `nix build
+          # .#checks.x86_64-linux.unit-core .#checks.x86_64-linux.unit-app`).
+          unit-core = hlib.overrideCabal ecluseRaw (_: {
+            doCheck = true;
+            testTarget = "ecluse-core-unit";
+          });
+          unit-app = hlib.overrideCabal ecluseRaw (_: {
             doCheck = true;
             testTarget = "ecluse-unit";
           });

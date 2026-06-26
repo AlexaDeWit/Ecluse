@@ -878,7 +878,7 @@ __current__ data without committing megabytes.
 realPackumentSpec :: Spec
 realPackumentSpec = describe "default Limits admit a real large trusted packument (no false positive)" $ do
     it "express: bounded read, decode, depth, projection, and version count all clear the defaults" $ do
-        body <- readFileBS "test/unit/fixtures/npm/express.full.json"
+        body <- readFileBS "core/test/unit/fixtures/npm/express.full.json"
         -- 1. Body size: the bounded read returns the whole body (within maxBodyBytes).
         bounded <- case runBounded defaultLimits [body] of
             Left err -> expectationFailure ("real packument refused by the body bound: " <> show err) >> pure ""
