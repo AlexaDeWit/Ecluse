@@ -124,8 +124,8 @@ forwarding the client's token, so it needs no read credential. (What lets the pr
 origin be *cached* is the strategy's serve-time authorisation — the edge or a probe —
 not the populate; see [Access & Credential Model → Caching](access-model.md#caching).)
 The public upstream is anonymous under every strategy — and the client's token is
-**never** forwarded there. (If a public mirror itself requires auth, set a separate
-`PUBLIC_UPSTREAM_TOKEN` — Écluse's own, never the client's.) Minting these
+**never** forwarded there. The public-origin fetch is built with no token at all:
+there is deliberately no Écluse credential for the public upstream. Minting these
 credentials from a cloud identity keeps long-lived secrets out of config.
 
 ### Outbound egress safety
