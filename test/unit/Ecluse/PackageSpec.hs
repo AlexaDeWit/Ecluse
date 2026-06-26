@@ -63,11 +63,21 @@ spec = do
                 "sha512-z4PhNX7vuL3xVChQ1m2AB9Yg5AULVxXcg/SpIdNs6c5H0NE8XYXysP+DGNKHfuwvY7kxvUdBeoGlODJ6+SfaPg== sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU="
                 `shouldSatisfy` isRight
 
-        it "accepts a well-formed sha384 SRI (validated by length, accepted though unmodelled)" $
-            -- sha384 is a real SRI algorithm: it is validated and accepted as well-formed.
-            -- Whether it clears the integrity floor is a separate decision (it does not).
+        it "accepts a well-formed sha384 SRI (a modelled algorithm)" $
+            -- sha384 is a real, modelled SRI algorithm: validated and accepted as
+            -- well-formed, and it resolves to 'SHA384' for the strength/floor logic.
             mkHash SRI "sha384-OLBgp1GsljhM2TJ+sbHjaiH9txEUvgdDTAzHv2P24donTt6/529l+9Ua0vFImLlb"
                 `shouldSatisfy` isRight
+
+        it "accepts a well-formed 96-hex SHA-384 digest" $
+            (hashAlg <$> mkHash SHA384 "38b060a751ac96384cd9327eb1b1e36a21fdb71114be07434c0cc7bf63f6e1da274edebfe76f65fbd51ad2f14898b95b")
+                `shouldBe` Right SHA384
+
+        it "rejects a 94-character (wrong-length) hex SHA-384" $
+            mkHash SHA384 "38b060a751ac96384cd9327eb1b1e36a21fdb71114be07434c0cc7bf63f6e1da274edebfe76f65fbd51ad2f14898b" `shouldSatisfy` isLeft
+
+        it "rejects a non-hex SHA-384" $
+            mkHash SHA384 "zzb060a751ac96384cd9327eb1b1e36a21fdb71114be07434c0cc7bf63f6e1da274edebfe76f65fbd51ad2f14898b95b" `shouldSatisfy` isLeft
 
         it "preserves the original (upper-case) hex value while validating case-insensitively" $
             (hashValue <$> mkHash SHA1 "DA39A3EE5E6B4B0D3255BFEF95601890AFD80709")
@@ -108,9 +118,20 @@ spec = do
             -- The fail-closed property: a value built only from characters outside the hex
             -- and base64 alphabets is never a well-formed digest of any algorithm.
             hedgehog $ do
-                alg <- forAll (Gen.element [SHA1, SHA256, SHA512, MD5, Blake2b, SRI])
+                alg <- forAll (Gen.element [SHA1, SHA256, SHA384, SHA512, MD5, Blake2b, SRI])
                 junk <- forAll (Gen.text (Range.linear 0 80) (Gen.element ("!@#$%& *()" :: String)))
                 isLeft (mkHash alg junk) === True
+
+    describe "algorithm vocabulary" $ do
+        it "round-trips sha384 through render/parse" $ do
+            renderHashAlg SHA384 `shouldBe` "sha384"
+            parseHashAlg "sha384" `shouldBe` Right SHA384
+            parseHashAlg "SHA-384" `shouldBe` Right SHA384
+            parseHashAlg (renderHashAlg SHA384) `shouldBe` Right SHA384
+
+        it "resolves a sha384 SRI prefix to SHA384 (was Nothing before it was modelled)" $
+            sriAlgorithm "sha384-OLBgp1GsljhM2TJ+sbHjaiH9txEUvgdDTAzHv2P24donTt6/529l+9Ua0vFImLlb"
+                `shouldBe` Just SHA384
 
     describe "Scope" $ do
         it "mkScope strips a leading '@'" $

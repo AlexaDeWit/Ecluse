@@ -4,7 +4,7 @@ import Data.Text qualified as T
 import Test.Hspec
 
 import Ecluse.Ecosystem (Ecosystem (Npm, PyPI))
-import Ecluse.Package (Hash, HashAlg (Blake2b, MD5, SHA1, SHA256, SHA512, SRI), mkHash, mkPackageName, mkScope)
+import Ecluse.Package (Hash, HashAlg (Blake2b, MD5, SHA1, SHA256, SHA384, SHA512, SRI), mkHash, mkPackageName, mkScope)
 import Ecluse.Queue (MirrorArtifact (..), MirrorJob (..), Seconds (..))
 import Ecluse.Queue.Sqs (
     SqsConfig (..),
@@ -91,7 +91,7 @@ spec = do
         it "round-trips every hash algorithm's wire name (encode/decode are inverse over all algs)" $
             -- A job whose artifact carries one digest of EACH algorithm exercises both
             -- directions of the wire mapping (renderHashAlg on encode, parseHashAlg on
-            -- decode) for sha1/sha256/sha512/md5/blake2b/sri — so a future algorithm
+            -- decode) for sha1/sha256/sha384/sha512/md5/blake2b/sri — so a future algorithm
             -- whose two halves disagree is caught here rather than silently dropping a
             -- digest the worker would later need to verify against.
             let allAlgsJob =
@@ -101,6 +101,7 @@ spec = do
                                 { maHashes =
                                     unsafeHash SHA1 validSha1
                                         :| [ unsafeHash SHA256 validSha256
+                                           , unsafeHash SHA384 validSha384Hex
                                            , unsafeHash SHA512 validSha512Hex
                                            , unsafeHash MD5 validMd5
                                            , unsafeHash Blake2b validBlake2b
@@ -196,9 +197,10 @@ unsafeHash alg = either error id . mkHash alg
 
 -- Well-formed digests of each algorithm (the empty-input digest), so every fixture
 -- 'Hash' is 'mkHash'-constructible and survives the validated decode round-trip.
-validSha1, validSha256, validSha512Hex, validMd5, validBlake2b, validSha512Sri :: Text
+validSha1, validSha256, validSha384Hex, validSha512Hex, validMd5, validBlake2b, validSha512Sri :: Text
 validSha1 = "da39a3ee5e6b4b0d3255bfef95601890afd80709"
 validSha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+validSha384Hex = "38b060a751ac96384cd9327eb1b1e36a21fdb71114be07434c0cc7bf63f6e1da274edebfe76f65fbd51ad2f14898b95b"
 validSha512Hex = "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e"
 validMd5 = "d41d8cd98f00b204e9800998ecf8427e"
 validBlake2b = "786a02f742015903c6c6fd852552d272912f4740e15847618a86e217f71f5419d25e1031afee585313896444934eb04b903a685b1448b755d56f701afe9be2ce"

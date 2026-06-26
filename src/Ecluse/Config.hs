@@ -476,8 +476,8 @@ data EnvConfig = EnvConfig
     must meet to be admitted (@PROXY_MIN_PUBLIC_INTEGRITY@, default @sha256@). A
     public version whose strongest digest is weaker than this floor (e.g. a SHA-1
     shasum only) is refused, since a collision-broken digest cannot tie its bytes to
-    a tamper-evident fingerprint. The floor may be raised (@sha512@, @blake2b@) but
-    never set below SHA-256 — a sub-floor value is rejected at load. The trusted
+    a tamper-evident fingerprint. The floor may be raised (@sha384@, @sha512@,
+    @blake2b@) but never set below SHA-256 — a sub-floor value is rejected at load. The trusted
     private upstream is exempt (see "Ecluse.Package.Integrity").
     -}
     }

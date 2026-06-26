@@ -69,7 +69,7 @@ import Ecluse.Credential (Secret, unSecret)
 import Ecluse.Ecosystem (ecosystemName, parseEcosystem)
 import Ecluse.Package (
     Hash,
-    HashAlg (Blake2b, MD5, SHA1, SHA256, SHA512, SRI),
+    HashAlg (Blake2b, MD5, SHA1, SHA256, SHA384, SHA512, SRI),
     PackageName,
     hashAlg,
     hashValue,
@@ -346,6 +346,7 @@ parseHashAlg :: Text -> Maybe HashAlg
 parseHashAlg = \case
     "sha1" -> Just SHA1
     "sha256" -> Just SHA256
+    "sha384" -> Just SHA384
     "sha512" -> Just SHA512
     "md5" -> Just MD5
     "blake2b" -> Just Blake2b
