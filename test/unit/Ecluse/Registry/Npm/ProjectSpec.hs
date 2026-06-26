@@ -54,7 +54,7 @@ import Ecluse.Test.Package (unsafeHash)
 
 {- | Projection tests for the npm adapter. They assert the __domain__ values a
 fetched packument projects into — the second half of the boundary that
-"Ecluse.Core.Registry.Npm.WireSpec" tests the decode half of. The fixtures under
+"Ecluse.Registry.Npm.WireSpec" tests the decode half of. The fixtures under
 @test\/unit\/fixtures\/npm\/@ are the same captures the wire suite uses; a few
 edge cases (a full-form install-script derivation, a missing @time@ entry, a
 malformed body) are inline JSON literals.
@@ -374,7 +374,7 @@ bounded-but-arbitrary 'Value' (encoded to a body) and a run of arbitrary bytes,
 then fully evaluate the result so a partial function anywhere in the projection
 surfaces as a caught exception rather than a pass. They are the projection-layer
 companion to the wire-decoder totality properties in
-"Ecluse.Core.Registry.Npm.WireSpec".
+"Ecluse.Registry.Npm.WireSpec".
 -}
 totalitySpec :: Spec
 totalitySpec = describe "projection totality (arbitrary input never bottoms)" $ do
@@ -452,7 +452,7 @@ encodeToBody :: Value -> ByteString
 encodeToBody = BL.toStrict . encode
 
 {- | A recursive, depth- and breadth-__bounded__ arbitrary 'Aeson.Value' (the same
-shape as "Ecluse.Core.Registry.Npm.WireSpec"'s generator, kept in-file to avoid a new
+shape as "Ecluse.Registry.Npm.WireSpec"'s generator, kept in-file to avoid a new
 module): the JSON scalar kinds plus small arrays and objects of recursively-
 generated values, shrinking toward the scalars so it terminates. Object keys are
 biased toward the real packument field names (@name@, @versions@, @dist-tags@, …)

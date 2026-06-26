@@ -452,7 +452,7 @@ each 'FromJSON' instance a bounded-but-arbitrary 'Value' and a run of arbitrary
 bytes and assert the result is fully evaluable without an exception — the
 totality half of /parse, don't validate/ that the fixture suite above only spot-
 checks. (The companion projection-layer properties live in
-"Ecluse.Core.Registry.Npm.ProjectSpec".)
+"Ecluse.Registry.Npm.ProjectSpec".)
 -}
 totalitySpec :: Spec
 totalitySpec = describe "decoder totality (arbitrary input never bottoms)" $ do

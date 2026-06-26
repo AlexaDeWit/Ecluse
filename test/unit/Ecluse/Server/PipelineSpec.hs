@@ -1093,7 +1093,7 @@ mergeSpec = describe "multi-upstream merge (not fallback)" $ do
     it "serves the private copy on an integrity divergence (private wins; flagged in the merge)" $ do
         -- Same version key, differing integrity across upstreams: the private copy
         -- wins the served document. The divergence is recorded in the MergePlan
-        -- (asserted directly in Ecluse.Core.Package.MergeSpec); here we pin that the
+        -- (asserted directly in Ecluse.Package.MergeSpec); here we pin that the
         -- served bytes are the trusted copy's, never the public one's.
         privateUp <-
             servingUpstream
