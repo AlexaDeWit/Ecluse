@@ -9,12 +9,12 @@ import UnliftIO.Temporary (withSystemTempFile)
 
 import Network.HTTP.Client (HttpException (InvalidUrlException))
 
-import Ecluse.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Package (mkPackageName)
+import Ecluse.Core.Registry.Npm (ResponseBoundExceeded (ResponseBoundExceeded))
+import Ecluse.Core.Rules.Types (Decision (DeniedByDefault, Undecidable))
+import Ecluse.Core.Security (LimitError (BodyTooLarge))
 import Ecluse.Log (LogFormat (JsonLog), newLogEnv)
-import Ecluse.Package (mkPackageName)
-import Ecluse.Registry.Npm (ResponseBoundExceeded (ResponseBoundExceeded))
-import Ecluse.Rules.Types (Decision (DeniedByDefault, Undecidable))
-import Ecluse.Security (LimitError (BodyTooLarge))
 import Ecluse.Server.Pipeline.Internal (
     PackumentNameMismatch (PackumentNameMismatch),
     PackumentUndecodable (PackumentUndecodable),

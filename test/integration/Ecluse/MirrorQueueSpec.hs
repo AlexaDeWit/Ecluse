@@ -2,7 +2,16 @@ module Ecluse.MirrorQueueSpec (spec) where
 
 import Test.Hspec
 
-import Ecluse.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Package (HashAlg (SHA1), mkPackageName)
+import Ecluse.Core.Queue (
+    MirrorArtifact (..),
+    MirrorJob (..),
+    MirrorQueue (..),
+    QueueMessage (..),
+    Seconds (..),
+ )
+import Ecluse.Core.Version (mkVersion)
 import Ecluse.Integration.Ministack (
     QueueOptions (qoVisibilityTimeout),
     defaultQueueOptions,
@@ -10,16 +19,7 @@ import Ecluse.Integration.Ministack (
     receiveUntil,
     withMinistack,
  )
-import Ecluse.Package (HashAlg (SHA1), mkPackageName)
-import Ecluse.Queue (
-    MirrorArtifact (..),
-    MirrorJob (..),
-    MirrorQueue (..),
-    QueueMessage (..),
-    Seconds (..),
- )
 import Ecluse.Test.Package (unsafeHash, validSha1)
-import Ecluse.Version (mkVersion)
 
 {- | Integration tests exercise the SQS 'MirrorQueue' backend against a real
 endpoint provided by a @ministack@ container (launched via @testcontainers@, shared

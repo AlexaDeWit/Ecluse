@@ -21,8 +21,8 @@ import Hedgehog.Range qualified as Range
 import Test.Hspec (Spec, describe, it, shouldBe, shouldNotSatisfy, shouldSatisfy)
 import Test.Hspec.Hedgehog (hedgehog)
 
-import Ecluse.Ecosystem (Ecosystem (Npm))
-import Ecluse.Package (
+import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Package (
     Artifact (artFilename, artHashes, artInterpreter, artKind, artProvenance, artSize, artUrl, artYanked),
     ArtifactKind (Tarball),
     Availability (Available, Deprecated),
@@ -41,20 +41,20 @@ import Ecluse.Package (
     pkgNamespace,
     renderScope,
  )
-import Ecluse.Registry (ParseError, RegistryResponse (RegistryResponse))
-import Ecluse.Registry.Npm.Project (
+import Ecluse.Core.Registry (ParseError, RegistryResponse (RegistryResponse))
+import Ecluse.Core.Registry.Npm.Project (
     Projection (NameMismatch, Projected),
     parsePackageInfo,
     parsePackageInfoFromValue,
     parseVersionDetails,
     parseVersionList,
  )
+import Ecluse.Core.Version (Version, mkVersion, renderVersion, unVersion)
 import Ecluse.Test.Package (unsafeHash)
-import Ecluse.Version (Version, mkVersion, renderVersion, unVersion)
 
 {- | Projection tests for the npm adapter. They assert the __domain__ values a
 fetched packument projects into — the second half of the boundary that
-"Ecluse.Registry.Npm.WireSpec" tests the decode half of. The fixtures under
+"Ecluse.Core.Registry.Npm.WireSpec" tests the decode half of. The fixtures under
 @test\/unit\/fixtures\/npm\/@ are the same captures the wire suite uses; a few
 edge cases (a full-form install-script derivation, a missing @time@ entry, a
 malformed body) are inline JSON literals.
@@ -63,7 +63,7 @@ The cases pin down the signal-mapping table: install-script presence (flagged,
 derived, and absent) onto 'CodeExecSignal'; @deprecated@ onto 'Availability';
 the @dist@ integrity pair onto __both__ a 'SHA1' and an 'SRI' 'Hash'; @_npmUser@
 onto 'pkgPublisher'; @time[version]@ onto 'pkgPublishedAt'; and scoped names onto
-'Ecluse.Package.Scope'.
+'Ecluse.Core.Package.Scope'.
 -}
 spec :: Spec
 spec = do
@@ -374,7 +374,7 @@ bounded-but-arbitrary 'Value' (encoded to a body) and a run of arbitrary bytes,
 then fully evaluate the result so a partial function anywhere in the projection
 surfaces as a caught exception rather than a pass. They are the projection-layer
 companion to the wire-decoder totality properties in
-"Ecluse.Registry.Npm.WireSpec".
+"Ecluse.Core.Registry.Npm.WireSpec".
 -}
 totalitySpec :: Spec
 totalitySpec = describe "projection totality (arbitrary input never bottoms)" $ do
@@ -452,7 +452,7 @@ encodeToBody :: Value -> ByteString
 encodeToBody = BL.toStrict . encode
 
 {- | A recursive, depth- and breadth-__bounded__ arbitrary 'Aeson.Value' (the same
-shape as "Ecluse.Registry.Npm.WireSpec"'s generator, kept in-file to avoid a new
+shape as "Ecluse.Core.Registry.Npm.WireSpec"'s generator, kept in-file to avoid a new
 module): the JSON scalar kinds plus small arrays and objects of recursively-
 generated values, shrinking toward the scalars so it terminates. Object keys are
 biased toward the real packument field names (@name@, @versions@, @dist-tags@, …)

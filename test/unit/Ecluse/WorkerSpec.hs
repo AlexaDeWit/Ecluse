@@ -17,12 +17,11 @@ import UnliftIO (timeout)
 import UnliftIO.Exception (throwString)
 
 import Ecluse.App (runApp)
-import Ecluse.Credential (AuthToken (..), CredentialProvider, mkSecret, staticProvider)
-import Ecluse.Ecosystem (Ecosystem (Npm))
-import Ecluse.Env (Env, envWorkerHeartbeat, lastPoll, newEnv, newWorkerHeartbeat)
-import Ecluse.Package (Hash, HashAlg (Blake2b, MD5, SHA1, SHA256, SRI), PackageName, mkPackageName)
-import Ecluse.Package qualified as Pkg
-import Ecluse.Queue (
+import Ecluse.Core.Credential (AuthToken (..), CredentialProvider, mkSecret, staticProvider)
+import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Package (Hash, HashAlg (Blake2b, MD5, SHA1, SHA256, SRI), PackageName, mkPackageName)
+import Ecluse.Core.Package qualified as Pkg
+import Ecluse.Core.Queue (
     MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize),
     MirrorJob (..),
     MirrorQueue (receive),
@@ -31,18 +30,19 @@ import Ecluse.Queue (
     enqueue,
     newInMemoryQueue,
  )
-import Ecluse.Registry (
+import Ecluse.Core.Registry (
     ParseError (ParseError),
     PublishError (PublishError),
     PublishFault (PublishRejected, PublishUrlUnformable),
     RegistryClient (..),
     UrlFormationError (EmptyBaseUrl),
  )
-import Ecluse.Registry.Npm (npmPublishDocument)
+import Ecluse.Core.Registry.Npm (npmPublishDocument)
+import Ecluse.Core.Version (Version, mkVersion)
+import Ecluse.Env (Env, envWorkerHeartbeat, lastPoll, newEnv, newWorkerHeartbeat)
 import Ecluse.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Telemetry (telemetryDisabled)
 import Ecluse.Test.Package (unsafeHash)
-import Ecluse.Version (Version, mkVersion)
 import Ecluse.Worker (
     IntegrityResult (IntegrityMismatch, IntegrityVerified),
     JobOutcome (Dropped, Retried, Succeeded),

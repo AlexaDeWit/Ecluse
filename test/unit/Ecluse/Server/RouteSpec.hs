@@ -7,10 +7,10 @@ import Hedgehog.Range qualified as Range
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
-import Ecluse.Ecosystem (Ecosystem (Npm))
-import Ecluse.Package (PackageName, mkPackageName)
+import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Package (PackageName, mkPackageName)
+import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Server.Route (Filename (Filename), Route (..), denyAll, encodeComponent, isSafeComponent)
-import Ecluse.Version (Version, mkVersion)
 
 -- | An unscoped package identity, for building 'Tarball' routes in the assertions.
 unscoped :: Text -> PackageName
@@ -24,7 +24,7 @@ npmVersion = mkVersion Npm
 classifier, and the ecosystem-independent component-safety gate.
 
 No ecosystem path grammar lives here — that is each adapter's classifier (e.g.
-"Ecluse.Registry.Npm.Route"). These specs pin the neutral routing boundary: the
+"Ecluse.Core.Registry.Npm.Route"). These specs pin the neutral routing boundary: the
 default classifier denies everything, and 'isSafeComponent' is the shared
 traversal gate.
 -}

@@ -33,15 +33,15 @@ import Ecluse.Config (
     loadConfig,
     parseEnvPure,
  )
-import Ecluse.Credential (authSecret, currentToken, unSecret)
-import Ecluse.Credential.CodeArtifact (CodeArtifactConfig (caDomain, caDomainOwner, caDurationSeconds, caRegion))
-import Ecluse.Credential.Refresh (noCredentialReporters)
-import Ecluse.Ecosystem (Ecosystem (..))
-import Ecluse.Package (HashAlg (SHA512))
-import Ecluse.Package.Integrity (defaultMinIntegrity, mkMinIntegrity)
-import Ecluse.Queue (defaultMemoryQueueConfig)
-import Ecluse.Queue.Sqs (SqsConfig (sqsEndpoint, sqsQueueUrl, sqsRegion), SqsEndpoint (endpointHost, endpointPort, endpointSecure))
-import Ecluse.Security (Limits (maxBodyBytes, maxNestingDepth, maxVersionCount), TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), defaultLimits)
+import Ecluse.Core.Credential (authSecret, currentToken, unSecret)
+import Ecluse.Core.Credential.CodeArtifact (CodeArtifactConfig (caDomain, caDomainOwner, caDurationSeconds, caRegion))
+import Ecluse.Core.Credential.Refresh (noCredentialReporters)
+import Ecluse.Core.Ecosystem (Ecosystem (..))
+import Ecluse.Core.Package (HashAlg (SHA512))
+import Ecluse.Core.Package.Integrity (defaultMinIntegrity, mkMinIntegrity)
+import Ecluse.Core.Queue (defaultMemoryQueueConfig)
+import Ecluse.Core.Queue.Sqs (SqsConfig (sqsEndpoint, sqsQueueUrl, sqsRegion), SqsEndpoint (endpointHost, endpointPort, endpointSecure))
+import Ecluse.Core.Security (Limits (maxBodyBytes, maxNestingDepth, maxVersionCount), TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), defaultLimits)
 import Ecluse.Server.Cache (CacheConfig (cacheMaxEntries, cacheTtl))
 import Ecluse.Server.Context (
     MountBinding (bindingPackumentDeps, bindingPrefix),
@@ -511,7 +511,7 @@ composeBindingsSpec = describe "planMounts / composeBindings (config-driven serv
             other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
 
     it "defaults the response-bound budget to the secure defaults" $ do
-        -- With no PROXY_MAX_* set, the deps carry Ecluse.Security.defaultLimits — the
+        -- With no PROXY_MAX_* set, the deps carry Ecluse.Core.Security.defaultLimits — the
         -- secure-default body/version/nesting ceilings (security.md invariant 4).
         env <- expectEnv staticEnvVars
         planFrom env Nothing >>= \case

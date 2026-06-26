@@ -9,8 +9,8 @@ import Hedgehog.Range qualified as Range
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
-import Ecluse.Ecosystem (Ecosystem (Npm))
-import Ecluse.Package (
+import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Package (
     PackageName,
     mkPackageName,
     mkScope,
@@ -18,9 +18,9 @@ import Ecluse.Package (
     renderPackageName,
     unScope,
  )
-import Ecluse.Registry.Npm.Route (classify)
+import Ecluse.Core.Registry.Npm.Route (classify)
+import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Server.Route (Filename (Filename), Route (..))
-import Ecluse.Version (Version, mkVersion)
 
 -- | An unscoped npm package identity, for building expected 'Route's.
 unscoped :: Text -> PackageName

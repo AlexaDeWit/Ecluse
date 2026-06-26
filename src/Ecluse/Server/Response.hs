@@ -20,7 +20,7 @@ A 'ServeDecision' is 'Admit' or 'Reject' with a 'Rejection' carrying a
 'RejectReason'. A rejection is either __by policy__ (a rule denied the version,
 including deny-by-default) or __unavailable__ — the version could not be decided,
 carrying its 'Transience': whether the evaluator believes the condition will
-self-heal. The whole verdict pipeline ("Ecluse.Rules") feeds this: a rules
+self-heal. The whole verdict pipeline ("Ecluse.Core.Rules") feeds this: a rules
 'Decision' projects to a 'ServeDecision' via 'serveDecisionOf'.
 
 == Status follows the cause
@@ -71,9 +71,9 @@ module Ecluse.Server.Response (
 import Data.Semigroup (Max (Max, getMax))
 import Data.Text qualified as T
 
-import Ecluse.Package (PackageDetails)
-import Ecluse.Rules (renderDecision, ruleName)
-import Ecluse.Rules.Types (
+import Ecluse.Core.Package (PackageDetails)
+import Ecluse.Core.Rules (renderDecision, ruleName)
+import Ecluse.Core.Rules.Types (
     Decision (Approved, ApprovedEffectful, Denied, DeniedByDefault, DeniedEffectful, Undecidable),
     RetryAfter (..),
     Transience (..),
@@ -156,13 +156,13 @@ data RejectReason
     deriving stock (Eq, Show)
 
 {- | The name of the rule that decided a refusal, carried for the audit trail and
-the denial body. A 'newtype' over the 'Ecluse.Rules.ruleName' text so a rule
+the denial body. A 'newtype' over the 'Ecluse.Core.Rules.ruleName' text so a rule
 identity is not just any string.
 -}
 newtype RuleName = RuleName Text
     deriving stock (Eq, Ord, Show)
 
-{- | Project a rules 'Decision' (see "Ecluse.Rules") into a serve outcome. Pure
+{- | Project a rules 'Decision' (see "Ecluse.Core.Rules") into a serve outcome. Pure
 and total.
 
 An 'Approved' decision admits; a 'Denied' or 'DeniedByDefault' decision rejects

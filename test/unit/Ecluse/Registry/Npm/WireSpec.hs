@@ -26,7 +26,7 @@ import Hedgehog.Range qualified as Range
 import Test.Hspec (Expectation, Spec, describe, it, shouldBe)
 import Test.Hspec.Hedgehog (hedgehog)
 
-import Ecluse.Registry.Npm.Wire
+import Ecluse.Core.Registry.Npm.Wire
 
 {- | Decoding tests for the npm wire types. Every fixture under
 @test\/unit\/fixtures\/npm\/@ is a body derived from the real captures documented
@@ -452,7 +452,7 @@ each 'FromJSON' instance a bounded-but-arbitrary 'Value' and a run of arbitrary
 bytes and assert the result is fully evaluable without an exception — the
 totality half of /parse, don't validate/ that the fixture suite above only spot-
 checks. (The companion projection-layer properties live in
-"Ecluse.Registry.Npm.ProjectSpec".)
+"Ecluse.Core.Registry.Npm.ProjectSpec".)
 -}
 totalitySpec :: Spec
 totalitySpec = describe "decoder totality (arbitrary input never bottoms)" $ do

@@ -1,9 +1,9 @@
 {- | Hedgehog generators of structurally valid version strings, per ecosystem.
 
 This mirrors the module under test: generators that support exercising
-@Ecluse.Version@ live here, under the @Ecluse.X → Ecluse.Test.X@ convention this
+@Ecluse.Core.Version@ live here, under the @Ecluse.X → Ecluse.Test.X@ convention this
 support library follows. Each generator emits a /structurally valid/ version
-string for its ecosystem — one 'Ecluse.Version.mkVersion' parses to a key — drawn
+string for its ecosystem — one 'Ecluse.Core.Version.mkVersion' parses to a key — drawn
 from a deliberately small space so two independent draws collide often enough to
 exercise the @EQ@ branch of an ordering law, while still ranging widely enough to
 span @LT@\/@GT@.

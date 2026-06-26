@@ -36,22 +36,20 @@ import UnliftIO (bracket)
 import UnliftIO.Exception (throwString, try)
 import UnliftIO.Temporary (withSystemTempFile)
 
-import Ecluse.Credential (AuthToken (..), CredentialProvider, mkSecret, staticProvider)
-import Ecluse.Ecosystem (Ecosystem (Npm))
-import Ecluse.Env (Env (envQueue), newEnv, newWorkerHeartbeat)
-import Ecluse.Log (LogFormat (JsonLog), newLogEnv)
-import Ecluse.Package (HashAlg (SHA512), PackageName, mkPackageName)
-import Ecluse.Package.Integrity (defaultMinIntegrity, mkMinIntegrity)
-import Ecluse.Queue (
+import Ecluse.Core.Credential (AuthToken (..), CredentialProvider, mkSecret, staticProvider)
+import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Package (HashAlg (SHA512), PackageName, mkPackageName)
+import Ecluse.Core.Package.Integrity (defaultMinIntegrity, mkMinIntegrity)
+import Ecluse.Core.Queue (
     MirrorJob (jobArtifactUrl, jobMirrorTarget, jobPackage, jobVersion),
     MirrorQueue (enqueue, receive),
     QueueMessage (msgJob),
     newInMemoryQueue,
  )
-import Ecluse.Registry (ParseError (..), RegistryClient (..))
-import Ecluse.Registry.Npm.Route qualified as Npm
-import Ecluse.Registry.Npm.Serve (npmRenderer)
-import Ecluse.Rules.Effectful (
+import Ecluse.Core.Registry (ParseError (..), RegistryClient (..))
+import Ecluse.Core.Registry.Npm.Route qualified as Npm
+import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
+import Ecluse.Core.Rules.Effectful (
     EffectfulConfig (..),
     EffectfulRule (..),
     FailurePolicy (OnUnavailable),
@@ -60,13 +58,16 @@ import Ecluse.Rules.Effectful (
     newBreaker,
     noBreakerReporter,
  )
-import Ecluse.Rules.Types (
+import Ecluse.Core.Rules.Types (
     PrecededRule,
     Rule (AllowIfPublishedBefore, DenyInstallTimeExecution),
     RuleOutcome (Allow, Deny),
     atDefaultPrecedence,
  )
-import Ecluse.Security (Limits (maxBodyBytes, maxNestingDepth, maxVersionCount), TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), defaultLimits, lowerCaseHosts)
+import Ecluse.Core.Security (Limits (maxBodyBytes, maxNestingDepth, maxVersionCount), TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), defaultLimits, lowerCaseHosts)
+import Ecluse.Core.Version (Version, mkVersion)
+import Ecluse.Env (Env (envQueue), newEnv, newWorkerHeartbeat)
+import Ecluse.Log (LogFormat (JsonLog), newLogEnv)
 import Ecluse.Server (
     MountBinding (..),
     application,
@@ -75,7 +76,6 @@ import Ecluse.Server (
 import Ecluse.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Server.Context (PackumentDeps (..))
 import Ecluse.Telemetry (telemetryDisabled)
-import Ecluse.Version (Version, mkVersion)
 
 -- ── a fixed clock and the quarantine policy ───────────────────────────────────
 
@@ -604,7 +604,7 @@ internal-range block for the __public__ leg's honoured-tarball gate — the unit
 analogue of an operator deliberately opting an internal /public/ host in. The
 __private__ leg needs no opt-in: it gates as the trusted origin, exempt from the
 internal-range block (the serve-path mirror of
-'Ecluse.Security.Egress.newTrustedTlsManager'); a test empties this set to assert that
+'Ecluse.Core.Security.Egress.newTrustedTlsManager'); a test empties this set to assert that
 exemption directly. The default tarball-host policy is the secure 'SameHostAsPackument';
 a test overrides it where it exercises the cross-host relaxation.
 -}
@@ -1093,7 +1093,7 @@ mergeSpec = describe "multi-upstream merge (not fallback)" $ do
     it "serves the private copy on an integrity divergence (private wins; flagged in the merge)" $ do
         -- Same version key, differing integrity across upstreams: the private copy
         -- wins the served document. The divergence is recorded in the MergePlan
-        -- (asserted directly in Ecluse.Package.MergeSpec); here we pin that the
+        -- (asserted directly in Ecluse.Core.Package.MergeSpec); here we pin that the
         -- served bytes are the trusted copy's, never the public one's.
         privateUp <-
             servingUpstream

@@ -12,8 +12,17 @@ import UnliftIO (race_, timeout)
 import UnliftIO.Concurrent (threadDelay)
 
 import Ecluse.App (runApp)
-import Ecluse.Credential (AuthToken (..), CredentialProvider, mkSecret, staticProvider)
-import Ecluse.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Credential (AuthToken (..), CredentialProvider, mkSecret, staticProvider)
+import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Package (HashAlg (SHA1), mkPackageName)
+import Ecluse.Core.Queue (
+    MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize),
+    MirrorJob (..),
+    MirrorQueue (enqueue, receive),
+ )
+import Ecluse.Core.Registry.Npm (NpmClientConfig (NpmClientConfig, npmBaseUrl, npmLimits, npmManager, npmToken), newNpmClient)
+import Ecluse.Core.Security (defaultLimits)
+import Ecluse.Core.Version (mkVersion)
 import Ecluse.Env (Env, envWorkerHeartbeat, lastPoll, newEnv, newWorkerHeartbeat)
 import Ecluse.Integration.Ministack (
     QueueOptions (qoWaitSeconds),
@@ -21,18 +30,9 @@ import Ecluse.Integration.Ministack (
     freshQueue,
     withMinistack,
  )
-import Ecluse.Package (HashAlg (SHA1), mkPackageName)
-import Ecluse.Queue (
-    MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize),
-    MirrorJob (..),
-    MirrorQueue (enqueue, receive),
- )
-import Ecluse.Registry.Npm (NpmClientConfig (NpmClientConfig, npmBaseUrl, npmLimits, npmManager, npmToken), newNpmClient)
-import Ecluse.Security (defaultLimits)
 import Ecluse.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Telemetry (telemetryDisabled)
 import Ecluse.Test.Package (unsafeHash)
-import Ecluse.Version (mkVersion)
 import Ecluse.Worker (workerLoop)
 
 {- | The mirror worker, end to end against real SQS (a @ministack@ container, shared

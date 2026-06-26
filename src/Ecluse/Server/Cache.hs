@@ -45,7 +45,7 @@ but serves the raw document edited in place, and the two must describe the same 
 
 What is cached is the __metadata, not the verdict__. The rules are re-evaluated on
 the cached metadata each request, so time-sensitive rules
-('Ecluse.Rules.Types.AllowIfPublishedBefore') and the separately-synced advisory
+('Ecluse.Core.Rules.Types.AllowIfPublishedBefore') and the separately-synced advisory
 tier stay correct — only each upstream's fetch+parse is memoised, never a
 decision. The TTL is short and brief staleness is benign and even aligned with the
 resilience posture: a brand-new publish need not appear instantly (see
@@ -96,7 +96,7 @@ import Data.Time (NominalDiffTime)
 import System.Clock (Clock (Monotonic), TimeSpec (TimeSpec), getTime)
 import UnliftIO.Exception (mask, throwIO, try, withException)
 
-import Ecluse.Package (
+import Ecluse.Core.Package (
     PackageInfo,
     PackageName,
     pkgCanonical,

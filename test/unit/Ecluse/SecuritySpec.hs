@@ -14,8 +14,8 @@ import Hedgehog.Range qualified as Range
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
-import Ecluse.Ecosystem (Ecosystem (Npm))
-import Ecluse.Package (
+import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Package (
     Artifact (..),
     ArtifactKind (Tarball),
     Availability (Available),
@@ -28,8 +28,8 @@ import Ecluse.Package (
     mkScope,
     renderPackageName,
  )
-import Ecluse.Registry.Npm.Project (Projection (NameMismatch, Projected), parsePackageInfoFromValue)
-import Ecluse.Security (
+import Ecluse.Core.Registry.Npm.Project (Projection (NameMismatch, Projected), parsePackageInfoFromValue)
+import Ecluse.Core.Security (
     LimitError (..),
     Limits (..),
     LoweredHostSet,
@@ -48,7 +48,7 @@ import Ecluse.Security (
     tarballHostAllowed,
     upstreamUrlFor,
  )
-import Ecluse.Version (Version, mkVersion)
+import Ecluse.Core.Version (Version, mkVersion)
 
 -- ── fixtures ─────────────────────────────────────────────────────────────────
 

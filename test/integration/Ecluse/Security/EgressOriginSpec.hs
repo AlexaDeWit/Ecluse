@@ -8,17 +8,17 @@ import Network.Wai.Handler.Warp (Port, testWithApplication)
 import Test.Hspec
 import UnliftIO.Exception (try)
 
-import Ecluse.Ecosystem (Ecosystem (Npm))
-import Ecluse.Package (PackageName, mkPackageName)
-import Ecluse.Registry (RegistryResponse (responseBody))
-import Ecluse.Registry.Npm (
+import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Package (PackageName, mkPackageName)
+import Ecluse.Core.Registry (RegistryResponse (responseBody))
+import Ecluse.Core.Registry.Npm (
     MetadataForm (Abbreviated),
     NpmClientConfig (NpmClientConfig, npmBaseUrl, npmLimits, npmManager, npmToken),
     fetchMetadataForm,
     noValidators,
  )
-import Ecluse.Security (defaultLimits, lowerCaseHosts)
-import Ecluse.Security.Egress (
+import Ecluse.Core.Security (defaultLimits, lowerCaseHosts)
+import Ecluse.Core.Security.Egress (
     BlockedTarget (BlockedTarget),
     newGuardedTlsManager,
     newTrustedTlsManager,

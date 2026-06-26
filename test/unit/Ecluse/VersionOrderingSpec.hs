@@ -3,8 +3,8 @@ module Ecluse.VersionOrderingSpec (spec) where
 import Data.Text qualified as T
 import Test.Hspec
 
-import Ecluse.Ecosystem (Ecosystem (..))
-import Ecluse.Version
+import Ecluse.Core.Ecosystem (Ecosystem (..))
+import Ecluse.Core.Version
 
 {- | Differential test: our 'compareVersions' must agree with the canonical
 reference implementations (node-semver, Python @packaging@, Ruby

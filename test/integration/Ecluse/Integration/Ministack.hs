@@ -1,7 +1,7 @@
 {- | Shared @ministack@ bootstrapping for the integration suite.
 
 The mirror-queue and mirror-worker specs both exercise the real AWS SQS
-'Ecluse.Queue.MirrorQueue' backend against a @ministack@ container (launched via
+'Ecluse.Core.Queue.MirrorQueue' backend against a @ministack@ container (launched via
 @testcontainers@), pointed at the emulator with throwaway credentials — hermetic
 and gating, but requiring a Docker daemon and no real AWS. This module stands the
 bootstrapping up __once__ (the container, its ASCII-relabelled image, the
@@ -40,9 +40,9 @@ import TestContainers.Hspec (withContainers)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (try)
 
-import Ecluse.Credential (mkSecret, unSecret)
-import Ecluse.Queue (MirrorQueue (receive), QueueMessage, Seconds (Seconds))
-import Ecluse.Queue.Sqs (SqsConfig (..), SqsEndpoint (..), defaultSqsConfig, newSqsQueue)
+import Ecluse.Core.Credential (mkSecret, unSecret)
+import Ecluse.Core.Queue (MirrorQueue (receive), QueueMessage, Seconds (Seconds))
+import Ecluse.Core.Queue.Sqs (SqsConfig (..), SqsEndpoint (..), defaultSqsConfig, newSqsQueue)
 
 -- ── container lifecycle ───────────────────────────────────────────────────────
 

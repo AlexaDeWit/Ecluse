@@ -81,8 +81,8 @@ import Katip.Monadic (runKatipContextT)
 import OpenTelemetry.Exporter.Span (ExportResult (..))
 import OpenTelemetry.Internal.Logging (setGlobalErrorHandler)
 
+import Ecluse.Core.Text (nonBlank)
 import Ecluse.Log (moduleField)
-import Ecluse.Text (nonBlank)
 
 -- ── the resolved telemetry identity ──────────────────────────────────────────
 

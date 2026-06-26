@@ -2,7 +2,7 @@ module Ecluse.WireSpec (spec) where
 
 import Test.Hspec
 
-import Ecluse.Wire (WireVocab (..), parseWire, renderWire)
+import Ecluse.Core.Wire (WireVocab (..), parseWire, renderWire)
 
 {- | A throwaway enum standing in for the real wire vocabularies, exercising the
 class in isolation from any one call site. Its 'wireTable' lists every constructor

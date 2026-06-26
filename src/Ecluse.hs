@@ -47,18 +47,18 @@ implementation behind an existing handle, not a structural change.
 
 The library's vocabulary, roughly from the pure core outward:
 
-* __Domain model__ — "Ecluse.Package" (the ecosystem-agnostic package vocabulary
-  the rules reason over), "Ecluse.Version" (version identity and per-ecosystem
-  ordering), and "Ecluse.Ecosystem" (the ecosystem tag the rest dispatches on).
-* __Policy__ — "Ecluse.Rules" (deny-by-default evaluation) over the rule types
-  in "Ecluse.Rules.Types".
-* __Protocol boundary__ — "Ecluse.Registry" (the registry-protocol handle),
-  "Ecluse.Registry.Npm.Wire" and "Ecluse.Registry.Npm.Project" (the lenient npm
+* __Domain model__ — "Ecluse.Core.Package" (the ecosystem-agnostic package vocabulary
+  the rules reason over), "Ecluse.Core.Version" (version identity and per-ecosystem
+  ordering), and "Ecluse.Core.Ecosystem" (the ecosystem tag the rest dispatches on).
+* __Policy__ — "Ecluse.Core.Rules" (deny-by-default evaluation) over the rule types
+  in "Ecluse.Core.Rules.Types".
+* __Protocol boundary__ — "Ecluse.Core.Registry" (the registry-protocol handle),
+  "Ecluse.Core.Registry.Npm.Wire" and "Ecluse.Core.Registry.Npm.Project" (the lenient npm
   wire decoders and their projection onto the domain model),
-  "Ecluse.Registry.Npm.Route" (the npm path grammar), and "Ecluse.Server.Route"
+  "Ecluse.Core.Registry.Npm.Route" (the npm path grammar), and "Ecluse.Server.Route"
   (the shared serve-action 'Route' set and the injected route classifier).
-* __Cloud handles__ — "Ecluse.Credential" (minting the mirror-target write token)
-  and "Ecluse.Queue" (the durable mirror-job hand-off to the worker).
+* __Cloud handles__ — "Ecluse.Core.Credential" (minting the mirror-target write token)
+  and "Ecluse.Core.Queue" (the durable mirror-job hand-off to the worker).
 * __Mirror worker__ — "Ecluse.Worker" (the supervised consume loop that fetches,
   verifies against the job's integrity digest, and publishes an approved artifact).
 
@@ -127,22 +127,22 @@ import Ecluse.Config (
     parseEnv,
     renderEnvErrors,
  )
-import Ecluse.Credential (AuthToken (..), CredentialProvider, currentToken, mkSecret, staticProvider)
-import Ecluse.Credential.Refresh (CredentialReporters (CredentialReporters, crBreakerReporter, crRefreshReporter))
-import Ecluse.Ecosystem (Ecosystem (Npm), prefixFor)
-import Ecluse.Env (Env, envMetrics, newWorkerHeartbeat, withEnv)
-import Ecluse.Log (moduleField, newLogEnv)
-import Ecluse.Queue (MirrorQueue, newBoundedInMemoryQueue)
-import Ecluse.Queue.Sqs (newSqsQueue)
-import Ecluse.Registry (
+import Ecluse.Core.Credential (AuthToken (..), CredentialProvider, currentToken, mkSecret, staticProvider)
+import Ecluse.Core.Credential.Refresh (CredentialReporters (CredentialReporters, crBreakerReporter, crRefreshReporter))
+import Ecluse.Core.Ecosystem (Ecosystem (Npm), prefixFor)
+import Ecluse.Core.Queue (MirrorQueue, newBoundedInMemoryQueue)
+import Ecluse.Core.Queue.Sqs (newSqsQueue)
+import Ecluse.Core.Registry (
     ParseError (..),
     RegistryClient (..),
  )
-import Ecluse.Registry.Npm (NpmClientConfig (NpmClientConfig, npmBaseUrl, npmLimits, npmManager, npmToken), newNpmClient)
-import Ecluse.Registry.Npm.Route qualified as Npm
-import Ecluse.Registry.Npm.Serve (npmRenderer)
-import Ecluse.Security (defaultLimits, lowerCaseHosts)
-import Ecluse.Security.Egress (guardedManagerSettings)
+import Ecluse.Core.Registry.Npm (NpmClientConfig (NpmClientConfig, npmBaseUrl, npmLimits, npmManager, npmToken), newNpmClient)
+import Ecluse.Core.Registry.Npm.Route qualified as Npm
+import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
+import Ecluse.Core.Security (defaultLimits, lowerCaseHosts)
+import Ecluse.Core.Security.Egress (guardedManagerSettings)
+import Ecluse.Env (Env, envMetrics, newWorkerHeartbeat, withEnv)
+import Ecluse.Log (moduleField, newLogEnv)
 import Ecluse.Server (MountBinding (..), ServerConfig (scDrainTimeout, scPort), ShutdownDrainTimeout (ShutdownDrainTimeout), mkServerConfig)
 import Ecluse.Server qualified as Server
 import Ecluse.Server.Cache (newMetadataCache)
@@ -337,8 +337,8 @@ runServices serverConfig env = concurrently_ (runServer serverConfig env) (runWo
 config-derived 'ServerConfig'.
 
 This is the npm-aware composition site: 'mountBindingFor' mounts npm — its path
-grammar ("Ecluse.Registry.Npm.Route") and its denial renderer
-("Ecluse.Registry.Npm.Serve") — into the otherwise ecosystem-neutral web layer
+grammar ("Ecluse.Core.Registry.Npm.Route") and its denial renderer
+("Ecluse.Core.Registry.Npm.Serve") — into the otherwise ecosystem-neutral web layer
 ('Ecluse.Server.runServer'), so the agnostic server stays closed over the shared
 'Ecluse.Server.Route.Route' set and only this one place names an ecosystem.
 Splitting the server into its own binary later reuses this same entry.

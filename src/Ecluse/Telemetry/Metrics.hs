@@ -70,7 +70,7 @@ import OpenTelemetry.Attributes (
     emptyAttributes,
  )
 
-import Ecluse.Ecosystem (Ecosystem, ecosystemName)
+import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 
 -- ── the metric-name catalogue ────────────────────────────────────────────────
 

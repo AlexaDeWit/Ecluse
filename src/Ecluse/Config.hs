@@ -24,7 +24,7 @@ variables into a one-entry 'MountMap' (the npm ecosystem, the env-only default)
 and __merges__ the document's rule policy over the built-in 'defaultPolicy'. An
 env-only launch with no document still runs on that default policy.
 
-The rule-policy merge is a named-map patch sourced from "Ecluse.Rules.Types" —
+The rule-policy merge is a named-map patch sourced from "Ecluse.Core.Rules.Types" —
 config selects and refines rules, it does not re-encode their semantics. See
 @docs\/architecture\/configuration.md@ and @docs\/architecture\/hosting.md@.
 
@@ -103,22 +103,22 @@ import Env qualified
 import System.Environment (getEnvironment)
 import Validation (eitherToValidation, validationToEither)
 
-import Ecluse.Credential (Secret, mkSecret)
-import Ecluse.Ecosystem (Ecosystem (Npm), parseEcosystem)
-import Ecluse.Log (LogFormat (..), parseLogFormat)
-import Ecluse.Package (mkScope)
-import Ecluse.Package.Integrity (MinIntegrity, defaultMinIntegrity, parseMinIntegrity)
-import Ecluse.Rules.Types (
+import Ecluse.Core.Credential (Secret, mkSecret)
+import Ecluse.Core.Ecosystem (Ecosystem (Npm), parseEcosystem)
+import Ecluse.Core.Package (mkScope)
+import Ecluse.Core.Package.Integrity (MinIntegrity, defaultMinIntegrity, parseMinIntegrity)
+import Ecluse.Core.Rules.Types (
     PrecededRule (..),
     Rule (..),
     defaultPrecedence,
  )
-import Ecluse.Security (
+import Ecluse.Core.Security (
     Limits (maxBodyBytes, maxNestingDepth, maxVersionCount),
     defaultLimits,
  )
+import Ecluse.Core.Wire (WireVocab (..), parseWire, renderWire)
+import Ecluse.Log (LogFormat (..), parseLogFormat)
 import Ecluse.Telemetry (TelemetrySwitch (..), parseTelemetrySwitch)
-import Ecluse.Wire (WireVocab (..), parseWire, renderWire)
 
 -- ── network values ───────────────────────────────────────────────────────────
 
@@ -153,7 +153,7 @@ unUrl (Url u) = u
 -- ── backend selection ────────────────────────────────────────────────────────
 
 {- | The mirror-queue backend a mount publishes jobs to. The cloud axis the queue
-Handle ("Ecluse.Queue") is constructed for; selected by name in config so the
+Handle ("Ecluse.Core.Queue") is constructed for; selected by name in config so the
 composition root can build the matching backend.
 -}
 data QueueBackend
@@ -164,7 +164,7 @@ data QueueBackend
     | {- | A bounded, in-process queue (wire name @"memory"@): no cloud queue, at the
       cost of a non-durable, best-effort mirror. An explicit operator choice for a
       simple \/ single-node \/ air-gapped deployment, never an automatic fallback —
-      see "Ecluse.Queue" for why a lost job is correctness-safe (re-enqueued on the
+      see "Ecluse.Core.Queue" for why a lost job is correctness-safe (re-enqueued on the
       next demand) and 'Ecluse.Composition.planMirrorQueue' for the boot warning.
       -}
       MemoryQueue
@@ -441,7 +441,7 @@ data EnvConfig = EnvConfig
     , cfgMaxResponseBytes :: Int
     {- ^ The largest upstream metadata body, in bytes, the data plane buffers before
     aborting the fetch (@PROXY_MAX_RESPONSE_BYTES@, default 16 MiB — 'maxBodyBytes'
-    of 'Ecluse.Security.defaultLimits'). Bounds memory against a hostile upstream
+    of 'Ecluse.Core.Security.defaultLimits'). Bounds memory against a hostile upstream
     returning a multi-gigabyte body; the metadata path streams a bounded read, so a
     body past the cap is refused fail-closed rather than buffered whole (artifacts
     stream and are not subject to this).
@@ -449,13 +449,13 @@ data EnvConfig = EnvConfig
     , cfgMaxVersionCount :: Int
     {- ^ The largest number of versions a parsed packument may carry before it is
     refused (@PROXY_MAX_VERSION_COUNT@, default 100000 — 'maxVersionCount' of
-    'Ecluse.Security.defaultLimits'). Bounds per-version rule evaluation against a
+    'Ecluse.Core.Security.defaultLimits'). Bounds per-version rule evaluation against a
     version-flood document.
     -}
     , cfgMaxNestingDepth :: Int
     {- ^ The deepest JSON nesting a decoded upstream document may reach before it is
     refused (@PROXY_MAX_NESTING_DEPTH@, default 64 — 'maxNestingDepth' of
-    'Ecluse.Security.defaultLimits'). Bounds stack\/CPU against a pathologically
+    'Ecluse.Core.Security.defaultLimits'). Bounds stack\/CPU against a pathologically
     nested payload.
     -}
     , cfgLogFormat :: LogFormat
@@ -484,7 +484,7 @@ data EnvConfig = EnvConfig
     shasum only) is refused, since a collision-broken digest cannot tie its bytes to
     a tamper-evident fingerprint. The floor may be raised (@sha384@, @sha512@,
     @blake2b@) but never set below SHA-256 — a sub-floor value is rejected at load. The trusted
-    private upstream is exempt (see "Ecluse.Package.Integrity").
+    private upstream is exempt (see "Ecluse.Core.Package.Integrity").
     -}
     }
     deriving stock (Eq, Show)
@@ -556,7 +556,7 @@ envParser =
         <*> Env.var secondsReader "METADATA_CACHE_TTL_SECONDS" (Env.def defaultCacheTtl)
         <*> Env.var positiveIntReader "METADATA_CACHE_MAX_ENTRIES" (Env.def defaultCacheMaxEntries)
         -- The response-bound budget (security.md invariant 4), each defaulting to the
-        -- corresponding field of 'Ecluse.Security.defaultLimits'. Every one must be a
+        -- corresponding field of 'Ecluse.Core.Security.defaultLimits'. Every one must be a
         -- strictly positive integer: a zero or negative ceiling is a degenerate budget
         -- (a body limit of 0 refuses every body, a version/depth limit of 0 refuses
         -- every document), so it is rejected loudly rather than silently fail-closing
@@ -745,7 +745,7 @@ data MirrorTarget = MirrorTarget
 binds the served 'Ecosystem' (a runtime value, not a type parameter), its three
 registry endpoints, and an __already-resolved__ rule policy — the shared policy,
 optionally refined for this mount. The path prefix is __not__ stored: it is
-derived from 'mountEcosystem' (see @Ecluse.Ecosystem.prefixFor@), so it can
+derived from 'mountEcosystem' (see @Ecluse.Core.Ecosystem.prefixFor@), so it can
 neither collide nor be mistyped. Holding the resolved rules (not the raw patch) is
 the parse-don't-validate payoff: the dispatcher evaluates them directly with no
 further merge.
@@ -785,7 +785,7 @@ newtype RulePolicy = RulePolicy
     }
     deriving stock (Eq, Show)
 
-{- | The built-in default rule policy, sourced from "Ecluse.Rules.Types" so config
+{- | The built-in default rule policy, sourced from "Ecluse.Core.Rules.Types" so config
 never re-encodes rule semantics — it only selects and refines.
 
 The shipped default is a single rule, @min-age@: 'AllowIfPublishedBefore' a 7-day

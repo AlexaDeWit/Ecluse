@@ -18,8 +18,8 @@ import Network.Wai.Handler.Warp (testWithApplication)
 import Test.Hspec
 import UnliftIO.Exception (try)
 
-import Ecluse.Security (lowerCaseHosts)
-import Ecluse.Security.Egress (
+import Ecluse.Core.Security (lowerCaseHosts)
+import Ecluse.Core.Security.Egress (
     BlockedTarget (..),
     blockedResolvedAddrs,
     newGuardedTlsManager,

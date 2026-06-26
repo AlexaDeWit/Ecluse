@@ -7,9 +7,9 @@ import Hedgehog.Range qualified as Range
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
-import Ecluse.Ecosystem (Ecosystem (..))
+import Ecluse.Core.Ecosystem (Ecosystem (..))
+import Ecluse.Core.Version
 import Ecluse.Test.Version (genGem, genNpm, genPyPI)
-import Ecluse.Version
 
 spec :: Spec
 spec = do

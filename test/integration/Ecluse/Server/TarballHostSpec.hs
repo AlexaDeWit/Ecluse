@@ -23,16 +23,16 @@ import Network.Wai.Test (
 import Test.Hspec
 import UnliftIO.Exception (try)
 
-import Ecluse.Credential (AuthToken (AuthToken, authExpiresAt, authSecret), CredentialProvider, mkSecret, staticProvider)
+import Ecluse.Core.Credential (AuthToken (AuthToken, authExpiresAt, authSecret), CredentialProvider, mkSecret, staticProvider)
+import Ecluse.Core.Package.Integrity (defaultMinIntegrity)
+import Ecluse.Core.Queue (newInMemoryQueue)
+import Ecluse.Core.Registry (ParseError (ParseError), RegistryClient (..))
+import Ecluse.Core.Registry.Npm.Route qualified as Npm
+import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
+import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfPublishedBefore), atDefaultPrecedence)
+import Ecluse.Core.Security (LoweredHostSet, TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), defaultLimits, lowerCaseHosts)
+import Ecluse.Core.Security.Egress (newGuardedTlsManager)
 import Ecluse.Env (newEnv, newWorkerHeartbeat)
-import Ecluse.Package.Integrity (defaultMinIntegrity)
-import Ecluse.Queue (newInMemoryQueue)
-import Ecluse.Registry (ParseError (ParseError), RegistryClient (..))
-import Ecluse.Registry.Npm.Route qualified as Npm
-import Ecluse.Registry.Npm.Serve (npmRenderer)
-import Ecluse.Rules.Types (PrecededRule, Rule (AllowIfPublishedBefore), atDefaultPrecedence)
-import Ecluse.Security (LoweredHostSet, TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), defaultLimits, lowerCaseHosts)
-import Ecluse.Security.Egress (newGuardedTlsManager)
 import Ecluse.Server (MountBinding (..), application, mkServerConfig)
 import Ecluse.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Server.Context (PackumentDeps (..))
@@ -40,7 +40,7 @@ import Ecluse.Telemetry (telemetryDisabled)
 
 {- | The tarball-host policy and the resolved-IP recheck, exercised together through
 the __real serve path__ — the coverage S40 (which only unit-tested the pure
-'Ecluse.Security.tarballHostAllowed') lacked.
+'Ecluse.Core.Security.tarballHostAllowed') lacked.
 
 A cross-host @dist.tarball@ is driven through the proxy against an in-process upstream
 on loopback. The packument is served on @127.0.0.1@ but names its artifact on a

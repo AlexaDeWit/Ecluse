@@ -10,7 +10,7 @@ kept pure of IO.
 
 == Global providers, per-mount reference
 
-A 'Ecluse.Credential.CredentialProvider' is the service's own cloud identity,
+A 'Ecluse.Core.Credential.CredentialProvider' is the service's own cloud identity,
 built __once__ from the environment layer ('initCredentialProviders') and held
 process-global; a mount does not carry a provider, it only __names__ which backend
 it draws on (its @mtCredential@). The boot-time check is the resolution of that
@@ -87,18 +87,18 @@ import Ecluse.Config (
     renderQueueBackend,
     unUrl,
  )
-import Ecluse.Credential (AuthToken (..), CredentialProvider, Secret, mkSecret, staticProvider)
-import Ecluse.Credential.CodeArtifact (CodeArtifactConfig (..), newCodeArtifactProvider)
-import Ecluse.Credential.Refresh (CredentialReporters)
-import Ecluse.Ecosystem (Ecosystem, ecosystemName, prefixFor)
-import Ecluse.Package.Integrity (MinIntegrity)
-import Ecluse.Queue (MemoryQueueConfig, defaultMemoryQueueConfig)
-import Ecluse.Queue.Sqs (SqsConfig (sqsEndpoint), SqsEndpoint (..), defaultSqsConfig)
-import Ecluse.Security (Limits (Limits, maxBodyBytes, maxNestingDepth, maxVersionCount), TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), hostAddress, lowerCaseHosts, splitHostPort)
+import Ecluse.Core.Credential (AuthToken (..), CredentialProvider, Secret, mkSecret, staticProvider)
+import Ecluse.Core.Credential.CodeArtifact (CodeArtifactConfig (..), newCodeArtifactProvider)
+import Ecluse.Core.Credential.Refresh (CredentialReporters)
+import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName, prefixFor)
+import Ecluse.Core.Package.Integrity (MinIntegrity)
+import Ecluse.Core.Queue (MemoryQueueConfig, defaultMemoryQueueConfig)
+import Ecluse.Core.Queue.Sqs (SqsConfig (sqsEndpoint), SqsEndpoint (..), defaultSqsConfig)
+import Ecluse.Core.Security (Limits (Limits, maxBodyBytes, maxNestingDepth, maxVersionCount), TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), hostAddress, lowerCaseHosts, splitHostPort)
+import Ecluse.Core.Text (nonBlank)
 import Ecluse.Server.Cache (CacheConfig (..))
 import Ecluse.Server.Context (MountBinding, PackumentDeps (..))
 import Ecluse.Server.Response (HelpMessage, mkHelpMessage)
-import Ecluse.Text (nonBlank)
 
 -- ── global credential providers ───────────────────────────────────────────────
 
@@ -596,10 +596,10 @@ best-effort in-memory backend (with its 'MemoryQueueConfig'). The pure decision
 constructor call, and 'mirrorQueuePlanWarning' tells it whether a boot warning is due.
 -}
 data MirrorQueuePlan
-    = -- | The durable AWS SQS backend, built by @Ecluse.Queue.Sqs.newSqsQueue@.
+    = -- | The durable AWS SQS backend, built by @Ecluse.Core.Queue.Sqs.newSqsQueue@.
       SqsBackend SqsConfig
     | {- | The bounded in-memory backend, built by
-      'Ecluse.Queue.newBoundedInMemoryQueue'. Non-durable and best-effort — boot warns.
+      'Ecluse.Core.Queue.newBoundedInMemoryQueue'. Non-durable and best-effort — boot warns.
       -}
       MemoryBackend MemoryQueueConfig
     deriving stock (Eq, Show)
@@ -612,7 +612,7 @@ This is the pure half of the queue's backend choice — the single place that kn
 which backends this binary can build. The AWS @sqs@ backend resolves to a
 'SqsBackend' carrying its 'SqsConfig' (the queue URL and region, with the provider
 knobs at their defaults); the composition root passes that to
-@Ecluse.Queue.Sqs.newSqsQueue@. The @memory@ backend resolves to a 'MemoryBackend'
+@Ecluse.Core.Queue.Sqs.newSqsQueue@. The @memory@ backend resolves to a 'MemoryBackend'
 carrying its depth cap, built in-process with no cloud queue (@MIRROR_QUEUE_URL@ and
 @AWS_REGION@ are not consulted for it) — an explicit operator choice for a simple,
 single-node, or air-gapped deployment, never an automatic fallback (which would
@@ -720,7 +720,7 @@ resolveSqsEndpoint env =
 {- Parse an endpoint URL into its (TLS flag, host, port). The scheme picks the TLS
 flag and the default port (443\/80) when none is given; an absent scheme or a
 non-numeric port yields 'Nothing'. The @host[:port]@ authority is split by the
-shared bracket-aware 'Ecluse.Security.splitHostPort', so a bracketed IPv6 literal
+shared bracket-aware 'Ecluse.Core.Security.splitHostPort', so a bracketed IPv6 literal
 (@[::1]:4566@) is split on its closing bracket, not on an inner colon, and the host
 is returned without brackets — the same primitive the data-plane host extractor
 uses, so the two cannot drift on an authority edge case. -}

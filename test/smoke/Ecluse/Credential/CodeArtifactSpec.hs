@@ -4,12 +4,12 @@ import Data.Text qualified as T
 import Test.Hspec
 import UnliftIO.Exception (try)
 
-import Ecluse.Credential (AuthToken (..), CredentialProvider (..), unSecret)
-import Ecluse.Credential.CodeArtifact (
+import Ecluse.Core.Credential (AuthToken (..), CredentialProvider (..), unSecret)
+import Ecluse.Core.Credential.CodeArtifact (
     CodeArtifactConfig (..),
     newCodeArtifactProvider,
  )
-import Ecluse.Credential.Refresh (noCredentialReporters)
+import Ecluse.Core.Credential.Refresh (noCredentialReporters)
 
 {- | Smoke test for the one outbound-credential surface no emulator covers:
 CodeArtifact @GetAuthorizationToken@. It makes a __live__ AWS call, so — like the

@@ -2,14 +2,14 @@
 mirrored packages.
 
 The worker is the consumer end of the demand-driven mirror queue (see
-"Ecluse.Queue"). 'runWorker' long-polls the queue, and for each received job:
+"Ecluse.Core.Queue"). 'runWorker' long-polls the queue, and for each received job:
 
 1. fetches the artifact bytes from the public upstream named on the job,
 2. __verifies__ those bytes against the integrity digest the job carries — the
    digest the rules admitted at serve time, not a fresh re-fetch,
 3. assembles the npm publish document and publishes it to the mirror target
    ('Ecluse.Env.envRegistry', resolved at the composition root with the bearer from
-   the "Ecluse.Credential" provider), and
+   the "Ecluse.Core.Credential" provider), and
 4. acknowledges the job.
 
 == The integrity gate is the security crux
@@ -42,7 +42,7 @@ publishing is idempotent (a version already present is success).
 
 A received message is hidden only for the queue's visibility window. The worker
 acks on success; before a publish that may run long it
-'Ecluse.Queue.extendVisibility' to hold the message before the window lapses; on a
+'Ecluse.Core.Queue.extendVisibility' to hold the message before the window lapses; on a
 transient failure it does __not__ ack, so the message redelivers. A batch is
 processed __sequentially__, so each job has the full visibility budget rather than
 competing with its batch-mates for it.
@@ -82,15 +82,9 @@ import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (try)
 
 import Ecluse.App (App, runApp)
-import Ecluse.Env (
-    Env (envDdContext, envManager, envMetrics, envQueue, envRegistry, envTelemetry, envWorkerHeartbeat),
-    WorkerHeartbeat,
-    lastPoll,
-    recordPoll,
- )
-import Ecluse.Package (Hash (hashAlg, hashValue), HashAlg (Blake2b, MD5, SHA1, SHA256, SHA384, SHA512, SRI), renderPackageName)
-import Ecluse.Package.Integrity (Strength, assertedAlg, integrityStrength, sriAlgorithm, sriBody, sriPrefix)
-import Ecluse.Queue (
+import Ecluse.Core.Package (Hash (hashAlg, hashValue), HashAlg (Blake2b, MD5, SHA1, SHA256, SHA384, SHA512, SRI), renderPackageName)
+import Ecluse.Core.Package.Integrity (Strength, assertedAlg, integrityStrength, sriAlgorithm, sriBody, sriPrefix)
+import Ecluse.Core.Queue (
     MirrorArtifact (maFilename, maHashes),
     MirrorJob (jobArtifact, jobArtifactUrl, jobPackage, jobVersion),
     MirrorQueue (ack, extendVisibility, receive),
@@ -98,22 +92,28 @@ import Ecluse.Queue (
     ReceiptHandle,
     Seconds (Seconds),
  )
-import Ecluse.Registry (
+import Ecluse.Core.Registry (
     PublishFault (PublishRejected, PublishUrlUnformable),
     RegistryClient (publishArtifact),
  )
-import Ecluse.Registry.Npm (
+import Ecluse.Core.Registry.Npm (
     NpmClientConfig (NpmClientConfig, npmBaseUrl, npmLimits, npmManager, npmToken),
     ResponseBoundExceeded (ResponseBoundExceeded),
     artifactRequestByUrl,
     npmPublishDocument,
  )
-import Ecluse.Security (Limits (maxBodyBytes), boundedRead, defaultLimits)
+import Ecluse.Core.Security (Limits (maxBodyBytes), boundedRead, defaultLimits)
+import Ecluse.Core.Version (renderVersion)
+import Ecluse.Env (
+    Env (envDdContext, envManager, envMetrics, envQueue, envRegistry, envTelemetry, envWorkerHeartbeat),
+    WorkerHeartbeat,
+    lastPoll,
+    recordPoll,
+ )
 import Ecluse.Telemetry.Correlation (ddPayloadNow)
 import Ecluse.Telemetry.Instruments (recordMirrorJobProcessed, recordMirrorPublishDuration, timedSeconds)
 import Ecluse.Telemetry.Metrics qualified as Metric
 import Ecluse.Telemetry.Tracing (JobSpanOutcome (JobSpanOutcome), withMirrorJobSpan)
-import Ecluse.Version (renderVersion)
 
 -- ── entry point ───────────────────────────────────────────────────────────────
 
@@ -166,7 +166,7 @@ backoff = threadDelay 1_000_000
 considered stalled — the staleness threshold the liveness probe applies.
 
 It is a generous multiple of the long-poll cadence: a healthy idle worker still
-completes a poll at least every 'Ecluse.Queue.Sqs.sqsWaitSeconds' (≤ 20s by
+completes a poll at least every 'Ecluse.Core.Queue.Sqs.sqsWaitSeconds' (≤ 20s by
 default), so a gap several times that is a genuine stall, not an idle queue. Set
 well above one poll window so liveness never flaps on normal scheduling jitter.
 -}
@@ -259,7 +259,7 @@ message is acked or left to redeliver.
 data JobOutcome
     = {- | The publish succeeded, so the job is acked. This covers an idempotent
       redelivery too: a version already present at the mirror target is a @409@ the
-      registry handle treats as success ('Ecluse.Registry.publishArtifact'), so it
+      registry handle treats as success ('Ecluse.Core.Registry.publishArtifact'), so it
       surfaces here as 'Succeeded' rather than a distinct case.
       -}
       Succeeded
@@ -278,7 +278,7 @@ data JobOutcome
 job's serve-time-admitted integrity digest, and — only on a match — publish it to
 the mirror target. Returns the 'JobOutcome' that decides ack vs. redeliver.
 
-The receipt handle is taken so a long publish can 'Ecluse.Queue.extendVisibility'
+The receipt handle is taken so a long publish can 'Ecluse.Core.Queue.extendVisibility'
 to hold the message before its window lapses. The rules are __not__ re-run: the
 job was gated at serve time.
 -}
@@ -406,7 +406,7 @@ boundedFetch manager request =
             Left limitErr -> pure (Left (ResponseBoundExceeded limitErr))
 
 {- The response-bound budget for an __artifact__ fetch. The metadata-path
-'Ecluse.Security.defaultLimits' caps bodies at 16 MiB, which is fine for a packument
+'Ecluse.Core.Security.defaultLimits' caps bodies at 16 MiB, which is fine for a packument
 but far too small for a real tarball, so the artifact cap is raised to a realistic
 ceiling while the other limits (version count, nesting depth) stay at their defaults
 (they do not apply to an opaque tarball). A body past this is refused fail-closed
@@ -482,7 +482,7 @@ artifact must never be admitted on the strength of a hash an attacker could forg
 This is the tamper gate before a publish: a mismatch fails the job and never
 publishes a corrupt or substituted artifact into the private upstream.
 
->>> import Ecluse.Package (mkHash, HashAlg (SHA1))
+>>> import Ecluse.Core.Package (mkHash, HashAlg (SHA1))
 >>> fmap (\h -> verifyIntegrity (h :| []) "Hello World") (mkHash SHA1 "0a4d55a8d778e5022fab701977c5d840bbc486d0")
 Right IntegrityVerified
 

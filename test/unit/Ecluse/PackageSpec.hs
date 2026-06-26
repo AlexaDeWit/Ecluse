@@ -8,9 +8,9 @@ import Hedgehog.Range qualified as Range
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
-import Ecluse.Ecosystem (Ecosystem (..))
-import Ecluse.Package
-import Ecluse.Version (Version, mkVersion)
+import Ecluse.Core.Ecosystem (Ecosystem (..))
+import Ecluse.Core.Package
+import Ecluse.Core.Version (Version, mkVersion)
 
 -- | A single inert artifact; the packument-level tests do not inspect artifacts.
 sampleArtifact :: Artifact

@@ -3,9 +3,9 @@
 
 This is the data-plane handler module. It composes the
 slices that decide /what/ to serve — the registry client
-("Ecluse.Registry.Npm"), the per-version rules ("Ecluse.Rules"), the structural
-filter ("Ecluse.Registry.Npm.Filter"), the cross-upstream merge
-("Ecluse.Package.Merge"), the metadata cache ("Ecluse.Server.Cache"), the
+("Ecluse.Core.Registry.Npm"), the per-version rules ("Ecluse.Core.Rules"), the structural
+filter ("Ecluse.Core.Registry.Npm.Filter"), the cross-upstream merge
+("Ecluse.Core.Package.Merge"), the metadata cache ("Ecluse.Server.Cache"), the
 own-ETag conditional ("Ecluse.Server.Conditional"), and the serve-outcome status
 ("Ecluse.Server.Response") — into one action in the
 'Ecluse.Server.Context.Handler' reader, reading its mount's serve dependencies and
@@ -83,7 +83,7 @@ location is what lets the proxy front a registry that serves its artifacts from 
 separate host or an off-convention path (a CDN\/files host, a signed URL); a
 reconstruction would silently fetch the wrong place. The location is gated, not
 trusted: it is fetched only when the tarball-host policy
-('Ecluse.Security.tarballHostAllowed', per @PROXY_RESPECT_UPSTREAM_TARBALL_HOST@)
+('Ecluse.Core.Security.tarballHostAllowed', per @PROXY_RESPECT_UPSTREAM_TARBALL_HOST@)
 admits its host — the default refuses a cross-host @dist.tarball@ — and the
 untrusted egress additionally carries the resolved-IP recheck.
 
@@ -96,7 +96,7 @@ filename, the policy refusing the host, a non-@2xx@ — falls through. The publi
 origin is anonymous: it gates __that one version__ against the rules (the same
 machinery the packument path gates the whole set with) and selects the artifact, and
 on an admit __streams the public bytes from @artUrl@ and enqueues a
-'Ecluse.Queue.MirrorJob'__ (naming that authoritative URL) for the worker to
+'Ecluse.Core.Queue.MirrorJob'__ (naming that authoritative URL) for the worker to
 back-fill the mirror target; on a reject — including a host the tarball-host policy
 refuses — it renders the serve error model (@403@\/@503@\/@500@\/@404@) through the
 mount's renderer. The enqueue is __serve-then-enqueue, best-effort and
@@ -147,35 +147,33 @@ import Network.Wai (Request, Response, ResponseReceived, requestHeaders, respons
 import UnliftIO (concurrently)
 import UnliftIO.Exception (handle, throwIO, tryAny)
 
-import Ecluse.Credential (Secret, mkSecret)
-import Ecluse.Env (Env (envLogEnv, envManager, envMetadataCache, envMetrics, envPrivateManager, envQueue, envTelemetry))
-import Ecluse.Log (moduleField)
-import Ecluse.Package (
+import Ecluse.Core.Credential (Secret, mkSecret)
+import Ecluse.Core.Package (
     Artifact (artFilename, artHashes, artSize, artUrl),
     PackageDetails (pkgArtifacts),
     PackageInfo (infoDistTags, infoPublishedAt, infoVersions),
     PackageName,
     renderPackageName,
  )
-import Ecluse.Package.Filter (filterPlanFromDecisions, fpSurvivors)
-import Ecluse.Package.Integrity (
+import Ecluse.Core.Package.Filter (filterPlanFromDecisions, fpSurvivors)
+import Ecluse.Core.Package.Integrity (
     MinIntegrity,
     VersionIntegrity (BelowFloor, MeetsFloor, NoIntegrity),
     classifyArtifacts,
  )
-import Ecluse.Package.Merge (
+import Ecluse.Core.Package.Merge (
     MergePlan (mpDistTags, mpSurvivors, mpTime),
     Provenance (GatedSource, TrustedSource),
     SourceId,
     mergePackuments,
  )
-import Ecluse.Queue (
+import Ecluse.Core.Queue (
     MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize),
     MirrorJob (MirrorJob, jobArtifact, jobArtifactUrl, jobMirrorTarget, jobPackage, jobVersion),
     enqueue,
  )
-import Ecluse.Registry (RegistryResponse (responseBody))
-import Ecluse.Registry.Npm (
+import Ecluse.Core.Registry (RegistryResponse (responseBody))
+import Ecluse.Core.Registry.Npm (
     MetadataForm (Full),
     NpmClientConfig (..),
     ResponseBoundExceeded (ResponseBoundExceeded),
@@ -183,11 +181,11 @@ import Ecluse.Registry.Npm (
     fetchMetadataForm,
     noValidators,
  )
-import Ecluse.Registry.Npm.Filter (FilterResult (Filtered, NoSurvivors), applyFilterPlan, rewriteTarballUrls)
-import Ecluse.Registry.Npm.Project (Projection (NameMismatch, Projected), parsePackageInfoFromValue)
-import Ecluse.Rules.Effectful (evalRulesEffectful)
-import Ecluse.Rules.Types (Decision, EvalContext (EvalContext))
-import Ecluse.Security (
+import Ecluse.Core.Registry.Npm.Filter (FilterResult (Filtered, NoSurvivors), applyFilterPlan, rewriteTarballUrls)
+import Ecluse.Core.Registry.Npm.Project (Projection (NameMismatch, Projected), parsePackageInfoFromValue)
+import Ecluse.Core.Rules.Effectful (evalRulesEffectful)
+import Ecluse.Core.Rules.Types (Decision, EvalContext (EvalContext))
+import Ecluse.Core.Security (
     LimitError (BodyTooLarge, TooDeeplyNested, TooManyVersions),
     Limits,
     LoweredHostSet,
@@ -198,6 +196,9 @@ import Ecluse.Security (
     lowerCaseHosts,
     tarballHostAllowed,
  )
+import Ecluse.Core.Version (Version, renderVersion)
+import Ecluse.Env (Env (envLogEnv, envManager, envMetadataCache, envMetrics, envPrivateManager, envQueue, envTelemetry))
+import Ecluse.Log (moduleField)
 import Ecluse.Server.Cache (CacheEntry (CacheEntry, entryInfo, entryRaw), Source (Source), resolveMetadata)
 import Ecluse.Server.Conditional (Conditional (Modified, NotModified), etagHeader, evaluateOwnETag, forwardValidators, isNotModified)
 import Ecluse.Server.Context (
@@ -250,7 +251,6 @@ import Ecluse.Telemetry.Instruments (
  )
 import Ecluse.Telemetry.Metrics qualified as Metric
 import Ecluse.Telemetry.Tracing (withMirrorEnqueueSpan, withRuleEvalSpan)
-import Ecluse.Version (Version, renderVersion)
 
 -- ── the handler ─────────────────────────────────────────────────────────────
 
@@ -533,16 +533,16 @@ package and the ceiling it crossed, so an operator can tell a hostile\/oversized
 upstream (or a too-tight cap) from an ordinary parse failure:
 
 \* __body size__ — 'fetchMetadataForm' reads the body through
-  'Ecluse.Security.boundedRead' against the budget's @maxBodyBytes@, so an oversized
+  'Ecluse.Core.Security.boundedRead' against the budget's @maxBodyBytes@, so an oversized
   body raises a 'ResponseBoundExceeded' from the fetch before it is ever buffered
   whole; it is caught here, logged, and re-raised;
-\* __nesting depth__ — 'Ecluse.Security.checkNestingDepth' is applied on the decoded
+\* __nesting depth__ — 'Ecluse.Core.Security.checkNestingDepth' is applied on the decoded
   @Value@, before it is projected or deeply traversed, so a pathologically nested
   payload is refused before any deep walk. (The structure is already
   /bounded-by-body-size/ at the parser — the @maxBodyBytes@ cap above precedes the
   decode — so this guard bounds the /traversal/ cost of a within-size-but-deep
   document, not an unbounded one.)
-\* __version count__ — 'Ecluse.Security.checkVersionCount' is applied after projection,
+\* __version count__ — 'Ecluse.Core.Security.checkVersionCount' is applied after projection,
   before the document threads into rule evaluation, so a version-flood packument is
   refused before per-version rules run.
 
@@ -670,7 +670,7 @@ could change the outcome), the resulting decisions handed to the agnostic
 'filterPlanFromDecisions', and that plan replayed by 'applyFilterPlan' onto the raw
 @Value@: 'Filtered' yields a gated 'Contribution' over the surviving versions;
 'NoSurvivors' yields no contribution and the per-version 'ServeDecision's, each excluded
-version's decision projected (a fail-closed 'Ecluse.Rules.Types.Undecidable' carrying
+version's decision projected (a fail-closed 'Ecluse.Core.Rules.Types.Undecidable' carrying
 its transient\/permanent cause, so the no-survivors status is a @503@\/@500@ rather than
 a @403@). The dropped below-floor versions are projected as 'MissingIntegrity' (no digest
 at all) or 'BelowIntegrityFloor' (a digest, but too weak) refusals and appended to those
@@ -732,14 +732,14 @@ admitByIntegrity minIntegrity info =
 {- Decide every version of a public packument against both rule tiers, keyed by raw
 version string (the map 'filterPlanFromDecisions' consumes). Each version is run
 through 'evalRulesEffectful', so a needed effectful rule that cannot be consulted
-yields a fail-closed 'Ecluse.Rules.Types.Undecidable' decision. With no effectful
+yields a fail-closed 'Ecluse.Core.Rules.Types.Undecidable' decision. With no effectful
 rules the per-version call collapses to the pure tier. -}
 decideVersions :: PackumentDeps -> EvalContext -> PackageInfo -> IO (Map Text Decision)
 decideVersions deps ctx info =
     traverse (evalRulesEffectful ctx (pdRules deps) (pdEffectfulRules deps)) (infoVersions info)
 
 {- Restrict a 'PackageInfo' to the version keys that survived filtering — the
-'Ecluse.Package.Filter.FilterPlan'\'s own 'fpSurvivors', which 'applyFilterPlan' kept
+'Ecluse.Core.Package.Filter.FilterPlan'\'s own 'fpSurvivors', which 'applyFilterPlan' kept
 in the filtered @Value@'s @versions@, so the typed view handed to the merge matches
 the filtered document. Taking the survivor set from the plan reuses the 'Set' the
 filter already built rather than re-deriving it from the filtered @Value@'s keys (a
@@ -1157,7 +1157,7 @@ upstream artifact body never read.
 
 The private upstream is operator-configured and trusted, so its fetch carries no
 resolved-IP recheck ('envPrivateManager') and its tarball-host gate is the
-'Ecluse.Security.TrustedOrigin' one — __exempt from the internal-range block__, the
+'Ecluse.Core.Security.TrustedOrigin' one — __exempt from the internal-range block__, the
 serve-path mirror of that unguarded manager (security.md invariant 3): a private
 registry on an internal address (e.g. @http:\/\/10.0.0.5\/@) serves its same-host
 @dist.tarball@ rather than having it refused while same-host metadata succeeds. The
@@ -1361,7 +1361,7 @@ an unformable URL is the internal-error path.
 
 The fetch keeps the open phase distinct from the committed stream, the same split the
 private origin uses: opening the connection is the recoverable phase, so a transient
-network failure or a connection-time 'Ecluse.Security.BlockedTarget' (the resolved-IP
+network failure or a connection-time 'Ecluse.Core.Security.BlockedTarget' (the resolved-IP
 recheck refusing an allowlisted name that resolves internal) yields no committed
 response and is rendered as the transient upstream-unavailable @503@ through the
 mount's renderer — not left to escape as a bare @500@. Any upstream status is relayed
@@ -1493,19 +1493,19 @@ enqueueMirror env deps name version artifact =
 the mount's tarball-host policy, and the host that served the packument it came from.
 Connects the pure 'tarballHostAllowed' at the serve boundary: the @url@'s host must be on
 the upstream allowlist and — under the secure-default
-'Ecluse.Security.SameHostAsPackument' — equal to the packument host; the opt-in
-'Ecluse.Security.AnyAllowlistedHost' relaxes that last clause to any allowlisted host.
+'Ecluse.Core.Security.SameHostAsPackument' — equal to the packument host; the opt-in
+'Ecluse.Core.Security.AnyAllowlistedHost' relaxes that last clause to any allowlisted host.
 This is the policy half of the @dist.tarball@ defence; for an
-'Ecluse.Security.UntrustedOrigin' the resolved-IP recheck on the guarded manager is
+'Ecluse.Core.Security.UntrustedOrigin' the resolved-IP recheck on the guarded manager is
 its connection-time backstop (an allowlisted name that resolves to an internal address
 is still refused there).
 
 The internal-range block is __origin-aware__, mirroring the connection layer's trusted
-vs guarded manager split: an 'Ecluse.Security.UntrustedOrigin' (the public path) is
+vs guarded manager split: an 'Ecluse.Core.Security.UntrustedOrigin' (the public path) is
 gated against it (subject to the empty opt-in here, the composition root's secure
-default), while an 'Ecluse.Security.TrustedOrigin' (the operator-configured private
+default), while an 'Ecluse.Core.Security.TrustedOrigin' (the operator-configured private
 upstream) is exempt — a private registry may legitimately live on an internal address,
-just as its connections use the unguarded 'Ecluse.Security.Egress.newTrustedTlsManager'
+just as its connections use the unguarded 'Ecluse.Core.Security.Egress.newTrustedTlsManager'
 (security.md invariant 3). The allowlist and same-host clauses still gate the trusted
 origin identically. -}
 tarballHostHonoured :: Origin -> PackumentDeps -> Text -> Text -> Bool
@@ -1538,7 +1538,7 @@ artifactFor file details =
     find ((== file) . artFilename) (pkgArtifacts details)
 
 {- A @403@ for an artifact whose authoritative @url@ the tarball-host policy refuses:
-a cross-host @dist.tarball@ under the secure-default 'Ecluse.Security.SameHostAsPackument',
+a cross-host @dist.tarball@ under the secure-default 'Ecluse.Core.Security.SameHostAsPackument',
 or a host off the upstream allowlist. A policy denial, not a serve outcome the rules
 produced — the same @403@ surface a rule denial renders, with a fixed reason. -}
 crossHostRefused :: Response

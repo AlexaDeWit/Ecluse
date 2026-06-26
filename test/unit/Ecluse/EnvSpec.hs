@@ -9,7 +9,7 @@ import UnliftIO.Exception (StringException, throwString)
 
 import Ecluse (npmServerConfig, runServer, runWorker, unconfiguredCredentials, unconfiguredRegistry)
 import Ecluse.App (App, runApp)
-import Ecluse.Credential (
+import Ecluse.Core.Credential (
     AuthToken (..),
     CredentialProvider,
     currentToken,
@@ -17,16 +17,16 @@ import Ecluse.Credential (
     staticProvider,
     unSecret,
  )
-import Ecluse.Ecosystem (Ecosystem (..))
+import Ecluse.Core.Ecosystem (Ecosystem (..))
+import Ecluse.Core.Package (HashAlg (..), PackageName, mkPackageName)
+import Ecluse.Core.Queue (MirrorArtifact (..), MirrorJob (..), enqueue, msgJob, newInMemoryQueue, receive)
+import Ecluse.Core.Registry (ParseError (..), RegistryClient (..), RegistryResponse (..))
+import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Env (Env (..), newEnv, newWorkerHeartbeat, withEnv)
-import Ecluse.Package (HashAlg (..), PackageName, mkPackageName)
-import Ecluse.Queue (MirrorArtifact (..), MirrorJob (..), enqueue, msgJob, newInMemoryQueue, receive)
-import Ecluse.Registry (ParseError (..), RegistryClient (..), RegistryResponse (..))
 import Ecluse.Server (scPort)
 import Ecluse.Server.Cache (MetadataCache, defaultCacheConfig, newMetadataCache)
 import Ecluse.Telemetry (telemetryDisabled, telemetryMeterProvider, telemetryTracerProvider)
 import Ecluse.Test.Package (unsafeHash, validSha1)
-import Ecluse.Version (Version, mkVersion)
 
 {- | A registry-handle double: the @parse*@ fields return fixed pure results and
 the effectful fields are never invoked by these tests, so they refuse loudly if

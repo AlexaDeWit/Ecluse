@@ -3,15 +3,16 @@ module Ecluse.Queue.SqsSpec (spec) where
 import Data.Text qualified as T
 import Test.Hspec
 
-import Ecluse.Ecosystem (Ecosystem (Npm, PyPI))
-import Ecluse.Package (HashAlg (Blake2b, MD5, SHA1, SHA256, SHA384, SHA512, SRI), mkPackageName, mkScope)
-import Ecluse.Queue (MirrorArtifact (..), MirrorJob (..), Seconds (..))
-import Ecluse.Queue.Sqs (
+import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
+import Ecluse.Core.Package (HashAlg (Blake2b, MD5, SHA1, SHA256, SHA384, SHA512, SRI), mkPackageName, mkScope)
+import Ecluse.Core.Queue (MirrorArtifact (..), MirrorJob (..), Seconds (..))
+import Ecluse.Core.Queue.Sqs (
     SqsConfig (..),
     decodeJob,
     defaultSqsConfig,
     encodeJob,
  )
+import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Package (
     unsafeHash,
     validBlake2b,
@@ -22,7 +23,6 @@ import Ecluse.Test.Package (
     validSha512Hex,
     validSha512Sri,
  )
-import Ecluse.Version (mkVersion)
 
 {- | An unscoped npm job fixture, carrying both an SRI and a SHA-1 digest so the
 multi-digest arm of the artifact wire mapping is exercised.

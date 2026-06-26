@@ -4,7 +4,7 @@ import Data.Text qualified as T
 import Data.Time (UTCTime (..), fromGregorian)
 import Test.Hspec
 
-import Ecluse.Credential
+import Ecluse.Core.Credential
 
 -- | A fixed expiry instant for the static-provider test.
 anExpiry :: UTCTime

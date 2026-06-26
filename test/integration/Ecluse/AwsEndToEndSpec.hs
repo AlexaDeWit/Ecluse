@@ -24,22 +24,22 @@ import UnliftIO.Concurrent (threadDelay)
 import Ecluse.App (runApp)
 import Ecluse.Composition (MirrorQueuePlan (MemoryBackend, SqsBackend), planMirrorQueue, renderBootError)
 import Ecluse.Config (parseEnvPure)
-import Ecluse.Credential (AuthToken (AuthToken, authExpiresAt, authSecret), CredentialProvider, mkSecret, staticProvider)
+import Ecluse.Core.Credential (AuthToken (AuthToken, authExpiresAt, authSecret), CredentialProvider, mkSecret, staticProvider)
+import Ecluse.Core.Package.Integrity (defaultMinIntegrity)
+import Ecluse.Core.Queue (MirrorQueue)
+import Ecluse.Core.Queue.Sqs (SqsConfig (sqsWaitSeconds), SqsEndpoint (endpointHost, endpointPort), newSqsQueue)
+import Ecluse.Core.Registry.Npm (NpmClientConfig (NpmClientConfig, npmBaseUrl, npmLimits, npmManager, npmToken), newNpmClient)
+import Ecluse.Core.Registry.Npm.Route qualified as Npm
+import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
+import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfPublishedBefore), atDefaultPrecedence)
+import Ecluse.Core.Security (LoweredHostSet, TarballHostPolicy (SameHostAsPackument), defaultLimits, lowerCaseHosts)
+import Ecluse.Core.Security.Egress (newGuardedTlsManager)
 import Ecluse.Env (Env, newEnv, newWorkerHeartbeat)
 import Ecluse.Integration.Ministack (
     endpointFor,
     freshQueueUrl,
     withMinistack,
  )
-import Ecluse.Package.Integrity (defaultMinIntegrity)
-import Ecluse.Queue (MirrorQueue)
-import Ecluse.Queue.Sqs (SqsConfig (sqsWaitSeconds), SqsEndpoint (endpointHost, endpointPort), newSqsQueue)
-import Ecluse.Registry.Npm (NpmClientConfig (NpmClientConfig, npmBaseUrl, npmLimits, npmManager, npmToken), newNpmClient)
-import Ecluse.Registry.Npm.Route qualified as Npm
-import Ecluse.Registry.Npm.Serve (npmRenderer)
-import Ecluse.Rules.Types (PrecededRule, Rule (AllowIfPublishedBefore), atDefaultPrecedence)
-import Ecluse.Security (LoweredHostSet, TarballHostPolicy (SameHostAsPackument), defaultLimits, lowerCaseHosts)
-import Ecluse.Security.Egress (newGuardedTlsManager)
 import Ecluse.Server (MountBinding (..), application, mkServerConfig)
 import Ecluse.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Server.Context (PackumentDeps (..))
@@ -107,7 +107,7 @@ target), a fresh real SQS queue in the container, and the composition-root 'Env'
 serve 'Application' over them, then run the body against the assembled proxy.
 
 The queue is built through the __config-driven composition root__
-('Ecluse.Composition.planMirrorQueue' → 'Ecluse.Queue.Sqs.newSqsQueue'), driven by the
+('Ecluse.Composition.planMirrorQueue' → 'Ecluse.Core.Queue.Sqs.newSqsQueue'), driven by the
 AWS-SDK-standard @AWS_ENDPOINT_URL_SQS@ override pointed at the container — the same
 production path the released image runs, with no test-only code path. -}
 withAwsProxy :: Container -> Text -> (TestProxy -> IO a) -> IO a
