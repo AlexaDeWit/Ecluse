@@ -48,10 +48,12 @@ import Network.HTTP.Client (Manager)
 import UnliftIO (MonadUnliftIO, bracket)
 
 import Ecluse.Credential (CredentialProvider)
+import Ecluse.Log (DdContext)
 import Ecluse.Queue (MirrorQueue)
 import Ecluse.Registry (RegistryClient)
 import Ecluse.Server.Cache (MetadataCache)
 import Ecluse.Telemetry (Telemetry)
+import Ecluse.Telemetry.Correlation (ddIdentityFromEnvironment)
 import Ecluse.Telemetry.Instruments (Metrics, newMetrics)
 
 {- | The composition-root record: the handles plus the shared HTTP manager and the
@@ -116,6 +118,12 @@ data Env = Env
     instruments. Inert when telemetry is off (the instruments are created on the
     SDK's no-op meter), so a layer records unconditionally.
     -}
+    , envDdContext :: DdContext
+    {- ^ The resolved @dd@ log identity (@service@\/@env@\/@version@, see
+    "Ecluse.Telemetry.Correlation"), installed as the initial @katip@ context at the
+    request and worker entry points so every line carries the @dd@ object; the active
+    span's trace\/span ids are filled per line on top of it.
+    -}
     , envWorkerHeartbeat :: WorkerHeartbeat
     {- ^ The mirror worker's consume-loop heartbeat: the time of its
     last-successful-poll. Distinct from the server's HTTP readiness — it is the
@@ -175,6 +183,9 @@ newEnv registry queue credentials manager privateManager metadataCache logEnv te
     -- inert without an SDK). Building them in 'newEnv' keeps the construction the single
     -- source of telemetry-derived state, so no caller threads a separate handle.
     metrics <- newMetrics telemetry
+    -- The dd log identity is resolved from the (already-normalised) OTEL_* environment,
+    -- the same precedence table the exporter uses, so logs and traces share one identity.
+    ddContext <- ddIdentityFromEnvironment
     pure
         Env
             { envRegistry = registry
@@ -186,6 +197,7 @@ newEnv registry queue credentials manager privateManager metadataCache logEnv te
             , envLogEnv = logEnv
             , envTelemetry = telemetry
             , envMetrics = metrics
+            , envDdContext = ddContext
             , envWorkerHeartbeat = heartbeat
             }
 

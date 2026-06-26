@@ -28,7 +28,8 @@ import Katip (Katip, KatipContext)
 import Katip.Monadic (KatipContextT, runKatipContextT)
 import UnliftIO (MonadUnliftIO)
 
-import Ecluse.Env (Env, envLogEnv)
+import Ecluse.Env (Env, envDdContext, envLogEnv)
+import Ecluse.Telemetry.Correlation (ddPayloadNow)
 
 {- | The effectful orchestration monad: a reader over the composition-root 'Env'
 layered on @katip@'s logging context.
@@ -65,10 +66,14 @@ underlying 'IO' action. This is the boundary where the shell's 'App' code is
 discharged to 'IO' — for instance where a plain-'IO' entry point runs a
 service-layer action over the 'Env' it built.
 
-The @katip@ context is initialised empty under the namespace the 'Env''s 'LogEnv'
-already carries; a service-layer action narrows the namespace or adds context with
-@katip@'s @katipAddNamespace@\/@katipAddContext@ as it logs.
+The @katip@ context is initialised with the @dd@ object (the resolved service
+identity, plus the active span's ids when one is in scope — see
+"Ecluse.Telemetry.Correlation"), so every line a service-layer action emits carries
+@dd@; an action narrows the namespace or adds context with @katip@'s
+@katipAddNamespace@\/@katipAddContext@ on top as it logs (the worker re-stamps the
+@dd@ ids inside a job span, where a tighter span is active).
 -}
 runApp :: Env -> App a -> IO a
-runApp env action =
-    runKatipContextT (envLogEnv env) () mempty (runReaderT (unApp action) env)
+runApp env action = do
+    dd <- ddPayloadNow (envDdContext env)
+    runKatipContextT (envLogEnv env) dd mempty (runReaderT (unApp action) env)

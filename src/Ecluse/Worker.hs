@@ -75,7 +75,7 @@ import Data.Foldable (maximumBy)
 import Data.List.NonEmpty qualified as NE
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, UTCTime, diffUTCTime, getCurrentTime)
-import Katip (Severity (ErrorS, InfoS, WarningS), katipAddNamespace, logFM, ls)
+import Katip (Severity (ErrorS, InfoS, WarningS), katipAddContext, katipAddNamespace, logFM, ls)
 import Network.HTTP.Client (HttpException, Manager, Request, brRead, responseBody, withResponse)
 import UnliftIO (tryAny)
 import UnliftIO.Concurrent (threadDelay)
@@ -83,7 +83,7 @@ import UnliftIO.Exception (try)
 
 import Ecluse.App (App, runApp)
 import Ecluse.Env (
-    Env (envManager, envMetrics, envQueue, envRegistry, envTelemetry, envWorkerHeartbeat),
+    Env (envDdContext, envManager, envMetrics, envQueue, envRegistry, envTelemetry, envWorkerHeartbeat),
     WorkerHeartbeat,
     lastPoll,
     recordPoll,
@@ -109,6 +109,7 @@ import Ecluse.Registry.Npm (
     npmPublishDocument,
  )
 import Ecluse.Security (Limits (maxBodyBytes), boundedRead, defaultLimits)
+import Ecluse.Telemetry.Correlation (ddPayloadNow)
 import Ecluse.Telemetry.Instruments (recordMirrorJobProcessed, recordMirrorPublishDuration, timedSeconds)
 import Ecluse.Telemetry.Metrics qualified as Metric
 import Ecluse.Telemetry.Tracing (JobSpanOutcome (JobSpanOutcome), withMirrorJobSpan)
@@ -284,7 +285,7 @@ job was gated at serve time.
 processJob :: ReceiptHandle -> MirrorJob -> App JobOutcome
 processJob receipt job = katipAddNamespace "job" $ do
     telemetry <- asks envTelemetry
-    withMirrorJobSpan telemetry (jobPackage job) (jobVersion job) jobSpanOutcome $ do
+    withMirrorJobSpan telemetry (jobPackage job) (jobVersion job) jobSpanOutcome $ stampJobDd $ do
         fetched <- fetchArtifactBytes (jobArtifactUrl job)
         case fetched of
             Left reason -> pure (Retried reason)
@@ -299,6 +300,15 @@ processJob receipt job = katipAddNamespace "job" $ do
                     IntegrityVerified -> publishVerified receipt job bytes
   where
     artifact = jobArtifact job
+
+    -- Stamp the worker-job span's trace/span ids onto the dd object for this job's log
+    -- lines: read inside the span, so a job log correlates to its own span (the
+    -- service identity is already on every line via 'runApp'; this tightens the ids to
+    -- the active job span). Inert when telemetry is off (no span -> no ids).
+    stampJobDd :: App a -> App a
+    stampJobDd body = do
+        dd <- ddPayloadNow =<< asks envDdContext
+        katipAddContext dd body
 
     -- Project a terminal job outcome onto the worker-job span: the bounded outcome
     -- label always, and the failure detail (which marks the span errored) when the
