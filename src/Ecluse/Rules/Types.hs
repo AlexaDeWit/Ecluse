@@ -52,7 +52,8 @@ data Rule
 
 {- | A 'Rule' paired with the integer precedence at which it competes (higher
 wins). 'Ecluse.Rules.evalRules' selects the highest-precedence non-abstaining
-rule; at equal precedence a deny beats an allow.
+rule; at equal precedence a deny beats an allow, and any remaining tie is broken
+by rule identity rather than list order (see 'Ecluse.Rules.evalRules').
 
 Precedence is a __field, not an @Ord Rule@ instance__: equal precedence between
 two rules is legal (it is the deny-over-allow tiebreak), so a total derived 'Ord'
