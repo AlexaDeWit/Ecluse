@@ -98,6 +98,7 @@ import Ecluse.Security (Limits (Limits, maxBodyBytes, maxNestingDepth, maxVersio
 import Ecluse.Server.Cache (CacheConfig (..))
 import Ecluse.Server.Context (MountBinding, PackumentDeps (..))
 import Ecluse.Server.Response (HelpMessage, mkHelpMessage)
+import Ecluse.Text (nonBlank)
 
 -- ── global credential providers ───────────────────────────────────────────────
 
@@ -282,10 +283,6 @@ parseCodeArtifactHost host = do
     domain <- nonBlank (T.dropEnd 1 domainDash)
     guard (isAccountId owner)
     pure (domain, owner, region)
-
--- A 'Text' that is non-empty after trimming, or 'Nothing'.
-nonBlank :: Text -> Maybe Text
-nonBlank t = let trimmed = T.strip t in if T.null trimmed then Nothing else Just trimmed
 
 -- ── boot-time wiring ──────────────────────────────────────────────────────────
 

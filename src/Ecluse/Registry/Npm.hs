@@ -146,6 +146,7 @@ import Ecluse.Security (
     defaultLimits,
  )
 import Ecluse.Server.Route (encodeComponent)
+import Ecluse.Text (joinUrlPath)
 import Ecluse.Version (Version, renderVersion)
 
 -- ── configuration ────────────────────────────────────────────────────────────
@@ -654,9 +655,7 @@ unformable URL is never mislabelled as a publish failure.
 joinPath :: Text -> Text -> Either UrlFormationError Text
 joinPath baseUrl path
     | T.null baseUrl = Left EmptyBaseUrl
-    | otherwise = Right (stripTrailingSlash baseUrl <> "/" <> path)
-  where
-    stripTrailingSlash b = fromMaybe b (T.stripSuffix "/" b)
+    | otherwise = Right (joinUrlPath baseUrl path)
 
 {- Encode a package name as its on-the-wire path segment. Each name component
 (scope, base name) is percent-encoded ('Ecluse.Server.Route.encodeComponent')

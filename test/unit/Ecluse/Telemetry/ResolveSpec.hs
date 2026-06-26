@@ -123,6 +123,18 @@ overridesSpec = describe "otelEnvironmentOverrides" $ do
             )
             `shouldBe` Just "deployment.environment=prod,service.name=api,service.version=1.2.3,team=core"
 
+    it "lets a resolved attribute win over a same-key inherited OTEL_RESOURCE_ATTRIBUTES value" $
+        -- The merge is a left-biased union with the resolved map on the left, so a
+        -- stale operator-set value of the same key never overrides the resolution.
+        lookup
+            "OTEL_RESOURCE_ATTRIBUTES"
+            ( otelEnvironmentOverrides
+                [ ("DD_SERVICE", "api")
+                , ("OTEL_RESOURCE_ATTRIBUTES", "service.name=stale,team=core")
+                ]
+            )
+            `shouldBe` Just "service.name=api,team=core"
+
 -- ── the boot normalisation ───────────────────────────────────────────────────
 
 prepareSpec :: Spec
