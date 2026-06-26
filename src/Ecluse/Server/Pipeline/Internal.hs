@@ -37,8 +37,7 @@ import Network.HTTP.Client qualified as HTTP
 import Ecluse.Core.Package (PackageName, renderPackageName)
 import Ecluse.Core.Registry.Npm (ResponseBoundExceeded (ResponseBoundExceeded))
 import Ecluse.Core.Rules.Types (Decision (Undecidable))
-import Ecluse.Log (moduleField)
-import Ecluse.Server.Response (
+import Ecluse.Core.Server.Response (
     PackumentStatus (PackumentForbidden, PackumentOk),
     RejectReason (BelowIntegrityFloor, ByPolicy, MissingIntegrity, Unavailable, UpstreamInvalid),
     Rejection (Rejection),
@@ -47,8 +46,9 @@ import Ecluse.Server.Response (
     Transience (WillResolve, WontResolve),
     packumentStatus,
  )
+import Ecluse.Core.Telemetry.Metrics qualified as Metric
+import Ecluse.Log (moduleField)
 import Ecluse.Telemetry.Instruments (Metrics, recordRuleDenial, recordRuleEffectfulFailure)
-import Ecluse.Telemetry.Metrics qualified as Metric
 
 {- | Raised when an upstream packument does not decode into both the typed view and the
 raw document the serve path needs. A (typed) throw, not a stringly one, caught by the

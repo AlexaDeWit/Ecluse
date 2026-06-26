@@ -2,6 +2,20 @@ module Ecluse.Telemetry.InstrumentsSpec (spec) where
 
 import Test.Hspec
 
+import Ecluse.Core.Telemetry.Metrics (
+    BreakerSource (CredentialMint, EffectfulRule),
+    BreakerState (Closed, HalfOpen, Open),
+    CacheResult (Hit, Miss),
+    Cause (Connection, Decode, Timeout),
+    CredentialResult (RefreshFailed, Refreshed),
+    Decision (Admit, Deny, Unavailable),
+    MirrorResult (Failed, Published),
+    Provider (Adc, CodeArtifact, Static),
+    ReasonClass (ReasonMissingIntegrity, ReasonPolicy),
+    StatusClass (Status2xx, Status5xx),
+    Tier (Effectful, Structural),
+    Upstream (Private, Public),
+ )
 import Ecluse.Telemetry (telemetryDisabled)
 import Ecluse.Telemetry.Instruments (
     newMetrics,
@@ -21,20 +35,6 @@ import Ecluse.Telemetry.Instruments (
     recordUpstreamFetch,
     recordUpstreamFetchError,
     timedSeconds,
- )
-import Ecluse.Telemetry.Metrics (
-    BreakerSource (CredentialMint, EffectfulRule),
-    BreakerState (Closed, HalfOpen, Open),
-    CacheResult (Hit, Miss),
-    Cause (Connection, Decode, Timeout),
-    CredentialResult (RefreshFailed, Refreshed),
-    Decision (Admit, Deny, Unavailable),
-    MirrorResult (Failed, Published),
-    Provider (Adc, CodeArtifact, Static),
-    ReasonClass (ReasonMissingIntegrity, ReasonPolicy),
-    StatusClass (Status2xx, Status5xx),
-    Tier (Effectful, Structural),
-    Upstream (Private, Public),
  )
 
 {- | Tests for the runtime instrument layer. With telemetry off, 'newMetrics' builds

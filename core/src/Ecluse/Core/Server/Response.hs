@@ -38,7 +38,7 @@ An operator help message, when configured, is appended to every denial
 ('appendHelp') so clients are told where to ask; how the joined text is then
 wrapped into bytes is the mount renderer's.
 -}
-module Ecluse.Server.Response (
+module Ecluse.Core.Server.Response (
     -- * Serve outcomes
     ServeDecision (..),
     Rejection (..),

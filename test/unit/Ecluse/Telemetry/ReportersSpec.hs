@@ -5,10 +5,10 @@ import Test.Hspec
 
 import Ecluse.Core.Breaker (Breaker (Closed, HalfOpen, Open), BreakerReporter (BreakerReporter))
 import Ecluse.Core.Credential.Refresh (RefreshReporter (onRefreshFailed, onRefreshSucceeded))
+import Ecluse.Core.Telemetry.Metrics (BreakerSource (CredentialMint), Provider (CodeArtifact))
+import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Telemetry (telemetryDisabled)
 import Ecluse.Telemetry.Instruments (newMetrics)
-import Ecluse.Telemetry.Metrics (BreakerSource (CredentialMint), Provider (CodeArtifact))
-import Ecluse.Telemetry.Metrics qualified as Metric
 import Ecluse.Telemetry.Reporters (
     breakerStateOf,
     deferredBreakerReporter,

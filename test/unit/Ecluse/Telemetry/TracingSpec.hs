@@ -33,14 +33,14 @@ import OpenTelemetry.Trace.Core (
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (mkPackageName)
-import Ecluse.Core.Version (mkVersion)
-import Ecluse.Server.Response (
+import Ecluse.Core.Server.Response (
     RejectReason (BelowIntegrityFloor, ByPolicy, MissingIntegrity, Unavailable, UpstreamInvalid),
     Rejection (Rejection),
     RuleName (RuleName),
     ServeDecision (Admit, Reject),
     Transience (WontResolve),
  )
+import Ecluse.Core.Version (mkVersion)
 import Ecluse.Telemetry (telemetryDisabled)
 import Ecluse.Telemetry.Tracing (
     dataPlaneInstrumentationConfig,

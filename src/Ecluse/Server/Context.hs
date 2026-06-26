@@ -43,9 +43,9 @@ import Ecluse.Core.Package.Integrity (MinIntegrity)
 import Ecluse.Core.Rules.Effectful (PrecededEffectfulRule)
 import Ecluse.Core.Rules.Types (PrecededRule)
 import Ecluse.Core.Security (Limits, LoweredHostSet, TarballHostPolicy)
+import Ecluse.Core.Server.Response (HelpMessage, MountRenderer)
+import Ecluse.Core.Server.Route (Classifier)
 import Ecluse.Env (Env, envDdContext, envLogEnv)
-import Ecluse.Server.Response (HelpMessage, MountRenderer)
-import Ecluse.Server.Route (Classifier)
 import Ecluse.Telemetry.Correlation (ddPayloadNow)
 
 -- ── packument-serve dependencies ──────────────────────────────────────────────
@@ -147,7 +147,7 @@ data MountBinding = MountBinding
     { bindingPrefix :: NonEmpty Text
     -- ^ The leading path segments this mount is served under; never empty.
     , bindingClassifier :: Classifier
-    -- ^ The ecosystem path grammar mapping this mount's native path to an 'Ecluse.Server.Route.Route'.
+    -- ^ The ecosystem path grammar mapping this mount's native path to an 'Ecluse.Core.Server.Route.Route'.
     , bindingPackumentDeps :: Maybe PackumentDeps
     {- ^ The packument-serve dependencies, when wired; 'Nothing' leaves the
     packument route recognised-but-unserved (the @501@ stub).

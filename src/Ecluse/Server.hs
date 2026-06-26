@@ -12,10 +12,10 @@ keeps the encoded-slash handling and the streaming control the proxy depends on
 
 * __Mount dispatch__ — match a request's leading path segments to a configured
   'MountBinding', strip the prefix, and hand the remainder (an ecosystem-native
-  path) to that mount's 'Ecluse.Server.Route.Classifier'. A binding carries a
+  path) to that mount's 'Ecluse.Core.Server.Route.Classifier'. A binding carries a
   mount's __complete__ ecosystem wiring — its classifier, its packument-serve
-  dependencies, and its error 'Ecluse.Server.Response.MountRenderer' — so the web
-  layer is closed over the shared 'Route' set ("Ecluse.Server.Route") and holds no
+  dependencies, and its error 'Ecluse.Core.Server.Response.MountRenderer' — so the web
+  layer is closed over the shared 'Route' set ("Ecluse.Core.Server.Route") and holds no
   ecosystem's path grammar or body shape of its own. Every registry is
   __path-mounted__ (e.g. @\/npm@); there is no root mount, so adding an ecosystem
   never changes an existing consumer's URLs. A mount prefix is accepted with or
@@ -29,7 +29,7 @@ Responses split into __two tiers__:
   ecosystem to shape it.
 
 * __Within a matched mount — the mount's renderer.__ The classified 'Route'
-  renders through that mount's 'Ecluse.Server.Response.MountRenderer', in the
+  renders through that mount's 'Ecluse.Core.Server.Response.MountRenderer', in the
   ecosystem's own error surface: @\/-\/ping@ is answered locally with @200 {}@,
   @\/-\/v1\/search@ is @501@ (search is not an install path), an unrecognised
   in-mount path is @404@ (deny by default), and the package\/artifact routes
@@ -92,6 +92,8 @@ import System.Posix.Process (exitImmediately)
 import System.Posix.Signals (Handler (CatchOnce), installHandler, sigINT, sigTERM)
 import UnliftIO.Async (withAsync)
 
+import Ecluse.Core.Server.Response (MountRenderer, RenderedBody (RenderedBody), renderError)
+import Ecluse.Core.Server.Route (Route (..))
 import Ecluse.Env (Env, envTelemetry, envWorkerHeartbeat)
 import Ecluse.Server.Context (
     MountBinding (..),
@@ -99,8 +101,6 @@ import Ecluse.Server.Context (
     runHandler,
  )
 import Ecluse.Server.Pipeline (headPackument, headTarball, servePackument, serveTarball)
-import Ecluse.Server.Response (MountRenderer, RenderedBody (RenderedBody), renderError)
-import Ecluse.Server.Route (Route (..))
 import Ecluse.Telemetry.Tracing (telemetryWaiMiddleware)
 import Ecluse.Worker (heartbeatHealthyNow)
 

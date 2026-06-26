@@ -68,7 +68,7 @@ Carries the host name that was being dialled and the blocked resolved literals, 
 a refusal is diagnosable (the operator sees /which/ name resolved to /what/
 internal address). It is thrown from the connection hook before the socket is used,
 so it surfaces to the fetch caller exactly as a connection failure would —
-'Ecluse.Server.Stream.streamUpstreamWhen' treats it as a recoverable miss on the
+'Ecluse.Core.Server.Stream.streamUpstreamWhen' treats it as a recoverable miss on the
 private-origin fetch, and the buffered fetches as an upstream error — never a served body.
 -}
 data BlockedTarget = BlockedTarget

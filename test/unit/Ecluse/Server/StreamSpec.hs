@@ -19,8 +19,8 @@ import Network.Wai.Handler.Warp (testWithApplication)
 import Test.Hspec
 import UnliftIO (concurrently)
 
-import Ecluse.Server.Conditional (isNotModified)
-import Ecluse.Server.Stream (probeUpstreamWhen, pumpBody, streamUpstream, streamUpstreamWhen)
+import Ecluse.Core.Server.Conditional (isNotModified)
+import Ecluse.Core.Server.Stream (probeUpstreamWhen, pumpBody, streamUpstream, streamUpstreamWhen)
 
 {- | A chunk source over a fixed list of chunks: each pull returns the next chunk
 and an empty 'ByteString' once exhausted (the @http-client@ @BodyReader@

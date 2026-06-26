@@ -5,7 +5,7 @@ import Network.HTTP.Types (status200, status304, status404)
 import Network.HTTP.Types.Header (hIfModifiedSince, hIfNoneMatch)
 import Test.Hspec
 
-import Ecluse.Server.Conditional (
+import Ecluse.Core.Server.Conditional (
     Conditional (Modified, NotModified),
     etagHeader,
     evaluateOwnETag,

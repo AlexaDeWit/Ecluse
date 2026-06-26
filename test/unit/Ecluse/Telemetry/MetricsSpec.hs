@@ -4,7 +4,7 @@ import Data.Text qualified as T
 import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
-import Ecluse.Telemetry.Metrics (
+import Ecluse.Core.Telemetry.Metrics (
     BreakerState (Closed, HalfOpen, Open),
     CacheResult (..),
     CredentialResult (..),

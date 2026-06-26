@@ -104,8 +104,8 @@ import Ecluse.Core.Package (
     pkgNamespace,
     renderScope,
  )
+import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Telemetry.Instruments (Metrics, recordCacheEntries, recordCacheRequest)
-import Ecluse.Telemetry.Metrics qualified as Metric
 
 -- ── configuration ────────────────────────────────────────────────────────────
 

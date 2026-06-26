@@ -22,8 +22,7 @@ import Ecluse.Core.Rules.Types (
     Rule (AllowScope, DenyInstallTimeExecution),
     atDefaultPrecedence,
  )
-import Ecluse.Core.Version (mkVersion)
-import Ecluse.Server.Response (
+import Ecluse.Core.Server.Response (
     ArtifactStatus (..),
     PackumentStatus (..),
     RejectReason (..),
@@ -41,6 +40,7 @@ import Ecluse.Server.Response (
     serveDecisionOf,
     unHelpMessage,
  )
+import Ecluse.Core.Version (mkVersion)
 
 -- | A fixed "now" so age-based fixtures are deterministic.
 now :: UTCTime

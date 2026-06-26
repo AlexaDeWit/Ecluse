@@ -18,7 +18,7 @@ own paths and falls back to 'Unsupported' for the rest.
 'Route' is a small sum so the whole routing table is unit-testable with __no
 server__: feed a 'Classifier' some segments, assert the 'Route'.
 -}
-module Ecluse.Server.Route (
+module Ecluse.Core.Server.Route (
     -- * Routes
     Route (..),
     Filename (..),

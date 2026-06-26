@@ -30,7 +30,7 @@ polymorphic over the producing monad so the streaming data plane can run it in
 layers compose them at the boundary (see @docs\/architecture\/registry-model.md@
 → "Registry Abstraction", @docs\/architecture\/web-layer.md@, and
 @docs\/architecture\/hosting.md@ → "URL rewriting"). Path-component safety is
-shared with the router's "Ecluse.Server.Route" ('isSafeComponent'); the threat
+shared with the router's "Ecluse.Core.Server.Route" ('isSafeComponent'); the threat
 model these guards answer is recorded there too.
 -}
 module Ecluse.Core.Security (
@@ -81,8 +81,8 @@ import Data.Text qualified as T
 import Data.Vector qualified as V
 
 import Ecluse.Core.Package (PackageInfo, PackageName, infoVersions, renderPackageName)
+import Ecluse.Core.Server.Route (encodeComponent, isSafeComponent)
 import Ecluse.Core.Text (joinUrlPath)
-import Ecluse.Server.Route (encodeComponent, isSafeComponent)
 
 -- ── outbound host allowlist ──────────────────────────────────────────────────
 
@@ -555,7 +555,7 @@ tarballHostAllowed origin policy allowed allowedInternal packumentHost tarballHo
 -- | Why building an upstream URL from an identifier was refused.
 data UrlError
     = {- | A name component (scope or base name) is unsafe to interpolate — see
-      'Ecluse.Server.Route.isSafeComponent'. Carries the offending component.
+      'Ecluse.Core.Server.Route.isSafeComponent'. Carries the offending component.
       -}
       UnsafeComponent Text
     | -- | The configured base URL is empty, so no URL can be formed.
@@ -575,10 +575,10 @@ request cannot steer the fetch elsewhere (see the module header).
 The path is built with two complementary defences. First, although a 'PackageName'
 is normally produced by the router's already-safe parse, its smart constructor does
 no validation, so this __re-checks every structural component__ (scope and base
-name) with the router's own 'Ecluse.Server.Route.isSafeComponent' — a name carrying
+name) with the router's own 'Ecluse.Core.Server.Route.isSafeComponent' — a name carrying
 a @\'\/\'@, @\'\\\\\'@, control character, or a @"."@\/@".."@ component is refused
 with 'UnsafeComponent' rather than interpolated. Second, each accepted component is
-then __percent-encoded__ ('Ecluse.Server.Route.encodeComponent') around the
+then __percent-encoded__ ('Ecluse.Core.Server.Route.encodeComponent') around the
 structural @\'\@\'@ sigil and @%2F@ scope separator this builder writes — so a
 @\'%\'@, @\'?\'@, @\'#\'@, or other reserved byte the denylist accepts (notably a
 once-decoded @%2e%2e%2f@) cannot reach the upstream URL raw. A scoped

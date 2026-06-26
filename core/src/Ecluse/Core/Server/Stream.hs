@@ -20,7 +20,7 @@ path (see @docs\/architecture\/web-layer.md@ → "Streaming and resource lifetim
 This is the serve path; it __streams, never buffers__. The whole-artifact-in-memory
 'Ecluse.Core.Registry.fetchArtifact' is the separate mirroring concern, not this.
 -}
-module Ecluse.Server.Stream (
+module Ecluse.Core.Server.Stream (
     -- * Streaming a response through
     streamUpstream,
     streamUpstreamWhen,
@@ -40,7 +40,7 @@ import Network.HTTP.Types (ResponseHeaders, Status)
 import Network.Wai (Response, ResponseReceived, responseLBS, responseStream)
 import UnliftIO.Exception (finally, tryAny)
 
-import Ecluse.Server.Conditional (isNotModified)
+import Ecluse.Core.Server.Conditional (isNotModified)
 
 {- | Stream an upstream response through to the client with constant memory.
 
