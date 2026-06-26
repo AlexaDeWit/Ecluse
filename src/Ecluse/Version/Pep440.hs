@@ -28,10 +28,10 @@ module Ecluse.Version.Pep440 (
     isPep440Stable,
 ) where
 
-import Data.Char (isAlphaNum, isDigit)
+import Data.Char (isDigit)
 import Data.Text qualified as T
 
-import Ecluse.Version.Token (VToken (..), numOr0, parseNumSeg)
+import Ecluse.Version.Token (VToken (..), isAsciiAlphaNum, numOr0, parseNumSeg)
 
 {- | A parsed PEP 440 version as its canonical ordering key:
 @(epoch, release, pre, post, dev, local)@. Release has trailing zeros stripped
@@ -72,7 +72,13 @@ parsePep440 raw = do
     epoch <- if T.null epochText then pure 0 else parseNumSeg epochText
     let releaseText = T.takeWhile (\c -> isDigit c || c == '.') afterEpoch
         suffix = T.drop (T.length releaseText) afterEpoch
-    release <- traverse parseNumSeg (filter (not . T.null) (T.splitOn "." releaseText))
+        -- 'releaseText' greedily grabs the dot that separates the release from a
+        -- suffix ("1.0.dev1" → "1.0." → ["1","0",""]), so drop *one* trailing
+        -- empty segment — but only one, and reject any remaining empty segment so
+        -- interior/leading blanks ("1..0", ".1.0", "1.0..dev1") are not accepted.
+        relSegs = dropTrailingEmpty (T.splitOn "." releaseText)
+    guard (not (any T.null relSegs))
+    release <- traverse parseNumSeg relSegs
     guard (not (null release))
     (mPre, mPost, mDev) <- parsePep440Suffix suffix
     localToks <- parseLocal localRaw
@@ -97,13 +103,17 @@ parsePep440 raw = do
             , p440Local = localToks
             }
   where
-    isMainChar c = isAlphaNum c || c == '.' || c == '!' || c == '-' || c == '_'
+    isMainChar c = isAsciiAlphaNum c || c == '.' || c == '!' || c == '-' || c == '_'
+    -- Drop at most one trailing empty segment (the release/suffix separator dot).
+    dropTrailingEmpty segs = case reverse segs of
+        s : rest | T.null s -> reverse rest
+        _ -> segs
     stripTrailingZeros = reverse . dropWhile (== 0) . reverse
     parseLocal lr
         | T.null lr = Just []
         | otherwise =
             let segs = T.split (`elem` ['.', '-', '_']) (T.drop 1 lr)
-             in if all (\s -> not (T.null s) && T.all isAlphaNum s) segs
+             in if all (\s -> not (T.null s) && T.all isAsciiAlphaNum s) segs
                     then Just (map localTok segs)
                     else Nothing
     localTok s = if T.all isDigit s then VNum (numOr0 s) else VStr s

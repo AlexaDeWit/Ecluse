@@ -27,6 +27,40 @@ spec = do
         it "parseVersionKey reports an error for invalid input" $
             parseVersionKey Npm "nope" `shouldSatisfy` isLeft
 
+    -- Strictness regressions: inputs the hand-rolled PEP 440 / Gem parsers used
+    -- to over-accept must now be rejected (Left). The ordering fixture can only
+    -- express *ranking*, so rejection is asserted explicitly here. The valid
+    -- spellings each fix must keep parsing are pinned alongside as Right.
+    describe "parser strictness (#279, #280)" $ do
+        let mustReject eco raw =
+                it (show eco <> " rejects " <> show raw) $
+                    parseVersionKey eco raw `shouldSatisfy` isLeft
+            mustParse eco raw =
+                it (show eco <> " parses " <> show raw) $
+                    parseVersionKey eco raw `shouldSatisfy` isRight
+
+        describe "PEP 440 empty release segments (#279)" $ do
+            -- An interior or leading empty segment is rejected (only the single
+            -- trailing release/suffix separator dot is allowed to be empty).
+            mustReject PyPI "1..0"
+            mustReject PyPI ".1.0"
+            mustReject PyPI "1.0..dev1"
+            -- The regression the fix must protect: the dev separator's dot lands
+            -- in the release text as a legitimate single trailing empty.
+            mustParse PyPI "1.0.dev1"
+            -- And the existing normalisation of a bare trailing dot is preserved.
+            mustParse PyPI "1.0."
+
+        describe "non-ASCII alphanumerics (#280)" $ do
+            -- Python's packaging / Ruby's Gem::Version are ASCII-only; a
+            -- Unicode-aware gate both over-accepts and (for "digits" outside
+            -- ASCII) mis-classifies as text, corrupting the order.
+            mustReject PyPI "1.0+café" -- Latin-1 letter in a local segment
+            mustReject PyPI "１.２.３" -- fullwidth digits
+            mustReject PyPI "١.٢.٣" -- Arabic-Indic digits
+            mustReject PyPI "1.0²" -- superscript two (a Unicode "number")
+            mustReject RubyGems "１.２.３" -- fullwidth digits
+            mustReject RubyGems "١.٢.٣" -- Arabic-Indic digits
     describe "compareVersions" $ do
         let cmp eco a b = compareVersions (mkVersion eco a) (mkVersion eco b)
         it "npm orders release numbers numerically (10 > 9)" $

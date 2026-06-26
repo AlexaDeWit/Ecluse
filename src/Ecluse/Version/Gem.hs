@@ -19,10 +19,10 @@ module Ecluse.Version.Gem (
     isGemStable,
 ) where
 
-import Data.Char (isAlphaNum, isDigit)
+import Data.Char (isDigit)
 import Data.Text qualified as T
 
-import Ecluse.Version.Token (VToken (..), numOr0)
+import Ecluse.Version.Token (VToken (..), isAsciiAlphaNum, numOr0)
 
 {- | A parsed @Gem::Version@: a flat token list compared with zero-padding, with
 numeric tokens outranking textual ones (see 'VToken').
@@ -53,7 +53,7 @@ parseGem raw = do
     guard (not (null toks))
     pure (GemKey (canonicalSegments toks))
   where
-    validSeg s = not (T.null s) && T.all isAlphaNum s
+    validSeg s = not (T.null s) && T.all isAsciiAlphaNum s
     segTokens = map classify . T.groupBy (\c1 c2 -> isDigit c1 == isDigit c2)
     classify g = if T.all isDigit g then VNum (numOr0 g) else VStr g
 
