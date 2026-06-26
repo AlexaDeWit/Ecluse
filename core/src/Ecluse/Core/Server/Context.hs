@@ -1,24 +1,30 @@
 {- | The per-request context the serve path reads through, and the handler monad
 over it.
 
-Mount dispatch ("Ecluse.Server") matches a request to one 'MountBinding' — a
-mount's __complete__ ecosystem wiring — then runs the route's handler in 'Handler',
-a reader over a 'RequestCtx' pairing that binding with the composition-root 'Env'.
-A handler reads its per-mount dependencies (the classifier, the packument-serve
-dependencies, the error renderer, the path prefix) and the shared composition root
-from that one context, rather than taking them as explicit arguments threaded down
-the pipeline.
+Mount dispatch matches a request to one 'MountBinding' — a mount's __complete__
+ecosystem wiring — then runs the route's handler in 'Handler', a reader over a
+'RequestCtx' pairing that binding with the request runtime 'ServeRuntime'. A handler
+reads its per-mount dependencies (the classifier, the packument-serve dependencies,
+the error renderer, the path prefix) and the shared runtime from that one context,
+rather than taking them as explicit arguments threaded down the pipeline.
 
-'RequestCtx' is a concrete record with plain accessors ('ctxEnv', 'ctxMount'),
-matching the concrete 'App' newtype: there is no @Has@-class indirection. The
-handler monad layers over the same @katip@ base as 'Ecluse.App.App', so a
-structured log call composes uniformly across the service and request layers.
+'ServeRuntime' is the __runtime interface__ the serve path is closed over: the two
+data-plane HTTP managers, the metadata cache, the mirror queue, and the abstract
+metric- and tracing-recording ports. It holds precisely what the pipeline needs to
+serve a request and nothing more; the application's composition root constructs it
+(wiring the concrete OpenTelemetry-backed ports), and a test constructs it over
+doubles. Logging is __not__ a field: a handler logs through the ambient @katip@
+context, which the dispatch boundary establishes (with the structured-log scribes and
+the trace-correlation @dd@ object) when it runs the handler.
 
-This module sits below "Ecluse.Server" (dispatch) and "Ecluse.Server.Pipeline"
-(the packument handler) so both can share these types without an import cycle; the
-binding is __constructed__ at the composition root (see "Ecluse").
+'RequestCtx' is a concrete record with plain accessors ('ctxRuntime', 'ctxMount'). The
+handler monad layers over @katip@'s logging context, so a structured log call composes
+uniformly across the serve path.
 -}
-module Ecluse.Server.Context (
+module Ecluse.Core.Server.Context (
+    -- * Request runtime
+    ServeRuntime (..),
+
     -- * Packument-serve dependencies
     PackumentDeps (..),
 
@@ -29,30 +35,72 @@ module Ecluse.Server.Context (
     RequestCtx (..),
 
     -- * The handler monad
-    Handler (..),
+    Handler,
     runHandler,
 ) where
 
 import Data.Time (UTCTime)
-import Katip (Katip, KatipContext)
+import Katip (Katip, KatipContext, LogEnv, SimpleLogPayload)
 import Katip.Monadic (KatipContextT, runKatipContextT)
+import Network.HTTP.Client (Manager)
 import UnliftIO (MonadUnliftIO)
 
 import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Package.Integrity (MinIntegrity)
+import Ecluse.Core.Queue (MirrorQueue)
 import Ecluse.Core.Rules.Effectful (PrecededEffectfulRule)
 import Ecluse.Core.Rules.Types (PrecededRule)
 import Ecluse.Core.Security (Limits, LoweredHostSet, TarballHostPolicy)
+import Ecluse.Core.Server.Cache (MetadataCache)
 import Ecluse.Core.Server.Response (HelpMessage, MountRenderer)
 import Ecluse.Core.Server.Route (Classifier)
-import Ecluse.Env (Env, envDdContext, envLogEnv)
-import Ecluse.Telemetry.Correlation (ddPayloadNow)
+import Ecluse.Core.Telemetry.Record (MetricsPort)
+import Ecluse.Core.Telemetry.Span (TracingPort)
+
+-- ── request runtime ───────────────────────────────────────────────────────────
+
+{- | The runtime backends the serve path is closed over: exactly the effectful
+capabilities a request needs to fetch, gate, serve, and record. A record of concrete
+handles and abstract ports (the Handle pattern), assembled by the composition root and
+read by every handler through the 'RequestCtx'.
+
+The two HTTP managers carry the trust split: the public manager guards the untrusted
+public-upstream and artifact egress (the resolved-IP recheck), the private manager is
+the trusted private-upstream path. The metadata cache and mirror queue are the shared
+data-plane handles. The metric and tracing ports are the abstract recording interfaces
+("Ecluse.Core.Telemetry.Record", "Ecluse.Core.Telemetry.Span"); the application supplies
+their OpenTelemetry-backed implementations, so the serve path records without naming a
+telemetry backend. There is no log field — handlers log through the ambient @katip@
+context.
+-}
+data ServeRuntime = ServeRuntime
+    { srPublicManager :: Manager
+    {- ^ The guarded data-plane manager for the __untrusted__ public-upstream metadata
+    fetch and every artifact stream; it carries the resolved-IP SSRF recheck.
+    -}
+    , srPrivateManager :: Manager
+    {- ^ The manager for the __trusted__ private upstream, which may legitimately
+    resolve to an internal address, so it does not carry the resolved-IP recheck.
+    -}
+    , srMetadataCache :: MetadataCache
+    {- ^ The short-TTL, size-bounded metadata cache shared by the serve paths
+    (see "Ecluse.Core.Server.Cache").
+    -}
+    , srQueue :: MirrorQueue
+    {- ^ The mirror-queue handle: the durable, best-effort hand-off from the serve
+    path to the mirror worker.
+    -}
+    , srMetrics :: MetricsPort
+    -- ^ The metric-recording port the serve path emits the @ecluse.*@ catalogue through.
+    , srTracing :: TracingPort
+    -- ^ The tracing port the serve path opens its hand-added domain spans through.
+    }
 
 -- ── packument-serve dependencies ──────────────────────────────────────────────
 
-{- | The per-mount inputs the serve handlers need beyond the composition-root
-'Env': the two upstream endpoints, the mount's externally-visible base URL, the
-mirror-target endpoint, its resolved rule policy, the edge auth token, the
+{- | The per-mount inputs the serve handlers need beyond the request runtime
+'ServeRuntime': the two upstream endpoints, the mount's externally-visible base URL,
+the mirror-target endpoint, its resolved rule policy, the edge auth token, the
 wall-clock source, and the operator help message.
 
 These are a mount-level concern, resolved at the composition root (a separate
@@ -134,7 +182,7 @@ data PackumentDeps = PackumentDeps
 {- | A mount: a path prefix bound to a registry, carrying that registry's
 __complete__ ecosystem wiring. Dispatch matches a request's leading path segments
 to 'bindingPrefix', strips them, and routes the remainder through the rest of the
-binding (see "Ecluse.Server").
+binding.
 
 The prefix is a 'NonEmpty' list of segments (@"npm" :| []@ for a @\/npm@ mount):
 every registry is path-mounted, so a root mount — which would force a URL change
@@ -160,17 +208,16 @@ data MountBinding = MountBinding
 
 -- ── per-request context ───────────────────────────────────────────────────────
 
-{- | The context one request is served through: the composition-root 'Env' paired
-with the 'MountBinding' the request matched. A concrete record with plain
-accessors — 'ctxEnv' and 'ctxMount' — so a handler reads the shared root and its
+{- | The context one request is served through: the request runtime 'ServeRuntime'
+paired with the 'MountBinding' the request matched. A concrete record with plain
+accessors — 'ctxRuntime' and 'ctxMount' — so a handler reads the shared runtime and its
 per-mount wiring from one place rather than as explicit arguments.
 
-Dispatch builds it once per request (see "Ecluse.Server"); the handler reads it
-through the 'Handler' reader.
+Dispatch builds it once per request; the handler reads it through the 'Handler' reader.
 -}
 data RequestCtx = RequestCtx
-    { ctxEnv :: Env
-    -- ^ The composition root — the handles, the shared HTTP manager, the caches, the logger.
+    { ctxRuntime :: ServeRuntime
+    -- ^ The request runtime — the data-plane managers, the caches and queue, the recording ports.
     , ctxMount :: MountBinding
     -- ^ The mount the request matched, carrying its complete ecosystem wiring.
     }
@@ -185,8 +232,8 @@ are this module's to control and call sites name one concrete monad. The derived
 instances give reader access to the context ('MonadReader' 'RequestCtx'), arbitrary
 effects ('MonadIO'), the unlift capability ('MonadUnliftIO') the serve path's
 @concurrently@\/@bracket@ need, and the @katip@ classes ('Katip', 'KatipContext')
-so a structured log call composes — over the same base as 'Ecluse.App.App', so the
-service and request layers log uniformly.
+so a structured log call composes through the ambient context the dispatch boundary
+establishes.
 
 The @katip@ base is a reader, never a 'StateT', so logging context behaves
 correctly across the serve path's concurrent fetches (see
@@ -206,17 +253,18 @@ newtype Handler a = Handler
         , KatipContext
         )
 
-{- | Run a 'Handler' against the 'RequestCtx' dispatch built for the request,
-yielding the underlying 'IO' action Warp's continuation runs in. This is the
+{- | Run a 'Handler' against the 'RequestCtx' dispatch built for the request and the
+@katip@ logging environment and initial context the dispatch boundary supplies,
+yielding the underlying 'IO' action the server's continuation runs in. This is the
 boundary where the serve path's 'Handler' code is discharged to 'IO'.
 
-The @katip@ context is initialised with the request's @dd@ object (the resolved
-service identity and, since the WAI server span is active by now, its trace\/span ids
-— see "Ecluse.Telemetry.Correlation"), so every line a handler emits carries @dd@ for
-trace-to-log correlation; a handler narrows the namespace or adds
-package\/version\/rule context with @katip@'s combinators on top as it logs.
+The 'LogEnv' (the structured-log scribes) and the initial context payload are passed
+in rather than read from the runtime, so the application owns the log stream and the
+trace-correlation @dd@ enrichment: it resolves the @dd@ object for the request and
+hands it here as the initial context, so every line a handler emits carries @dd@ for
+trace-to-log correlation. A handler narrows the namespace or adds package\/version\/rule
+context with @katip@'s combinators on top as it logs.
 -}
-runHandler :: RequestCtx -> Handler a -> IO a
-runHandler ctx action = do
-    dd <- ddPayloadNow (envDdContext (ctxEnv ctx))
-    runKatipContextT (envLogEnv (ctxEnv ctx)) dd mempty (runReaderT (unHandler action) ctx)
+runHandler :: LogEnv -> SimpleLogPayload -> RequestCtx -> Handler a -> IO a
+runHandler logEnv initialContext ctx action =
+    runKatipContextT logEnv initialContext mempty (runReaderT (unHandler action) ctx)

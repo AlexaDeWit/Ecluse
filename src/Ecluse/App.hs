@@ -9,7 +9,7 @@ log stream composes through it without hand-threaded plumbing. It derives
 the supervised worker and the advisory-sync task rely on (see "Ecluse.Env").
 
 The request hot path runs in its own reader over a per-request context — see
-'Ecluse.Server.Context.Handler' — so a handler reads the matched mount and the
+'Ecluse.Core.Server.Context.Handler' — so a handler reads the matched mount and the
 composition root from one place rather than taking them as explicit arguments.
 Both monads layer over the same @katip@ base, so logging composes uniformly across
 the service and request layers.

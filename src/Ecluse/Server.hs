@@ -41,10 +41,10 @@ Cross-cutting concerns are applied as middleware composed around the
 'Application' (see @docs\/architecture\/web-layer.md@ → "Middleware"): a
 defensive request-body size cap, correct client-IP recovery behind a load
 balancer, and a request timeout. Dispatch builds a per-request
-'Ecluse.Server.Context.RequestCtx' — the composition-root 'Env' paired with the
-matched 'MountBinding' — and the effectful routes run in the
-'Ecluse.Server.Context.Handler' reader over it, so a handler reads its mount's
-wiring and the composition root from context rather than as threaded arguments.
+'Ecluse.Core.Server.Context.RequestCtx' — the request runtime ('serveRuntimeOf')
+paired with the matched 'MountBinding' — and the effectful routes run in the
+'Ecluse.Core.Server.Context.Handler' reader over it, so a handler reads its mount's
+wiring and the request runtime from context rather than as threaded arguments.
 -}
 module Ecluse.Server (
     -- * The WAI application
@@ -92,15 +92,16 @@ import System.Posix.Process (exitImmediately)
 import System.Posix.Signals (Handler (CatchOnce), installHandler, sigINT, sigTERM)
 import UnliftIO.Async (withAsync)
 
-import Ecluse.Core.Server.Response (MountRenderer, RenderedBody (RenderedBody), renderError)
-import Ecluse.Core.Server.Route (Route (..))
-import Ecluse.Env (Env, envTelemetry, envWorkerHeartbeat)
-import Ecluse.Server.Context (
+import Ecluse.Core.Server.Context (
     MountBinding (..),
     RequestCtx (RequestCtx),
     runHandler,
  )
-import Ecluse.Server.Pipeline (headPackument, headTarball, servePackument, serveTarball)
+import Ecluse.Core.Server.Pipeline (headPackument, headTarball, servePackument, serveTarball)
+import Ecluse.Core.Server.Response (MountRenderer, RenderedBody (RenderedBody), renderError)
+import Ecluse.Core.Server.Route (Route (..))
+import Ecluse.Env (Env, envDdContext, envLogEnv, envTelemetry, envWorkerHeartbeat, serveRuntimeOf)
+import Ecluse.Telemetry.Correlation (ddPayloadNow)
 import Ecluse.Telemetry.Tracing (telemetryWaiMiddleware)
 import Ecluse.Worker (heartbeatHealthyNow)
 
@@ -350,8 +351,8 @@ dispatch cfg env request respond =
             Just (binding, classified) -> serve env binding classified request respond
 
 {- Serve a classified route under its matched mount. Dispatch builds the
-per-request 'RequestCtx' once — the composition-root 'Env' paired with the matched
-'MountBinding' — and the effectful 'Packument' and 'Tarball' routes run in the
+per-request 'RequestCtx' once — the request runtime ('serveRuntimeOf') paired with the
+matched 'MountBinding' — and the effectful 'Packument' and 'Tarball' routes run in the
 'Handler' reader over it, so the handler reads the mount's serve dependencies and
 renderer from context rather than as threaded arguments (the deps-or-@501@ decision
 is the handler's). Every other route renders to a pure 'Response' through the
@@ -371,15 +372,24 @@ serve :: Env -> MountBinding -> Route -> Request -> (Response -> IO ResponseRece
 serve env binding classified request respond =
     case classified of
         Packument name
-            | isHead -> runHandler ctx (headPackument name request respond)
-            | otherwise -> runHandler ctx (servePackument name request respond)
+            | isHead -> run (headPackument name request respond)
+            | otherwise -> run (servePackument name request respond)
         Tarball name version filename
-            | isHead -> runHandler ctx (headTarball name version filename request respond)
-            | otherwise -> runHandler ctx (serveTarball name version filename request respond)
+            | isHead -> run (headTarball name version filename request respond)
+            | otherwise -> run (serveTarball name version filename request respond)
         _ -> respond (renderRoute (bindingRenderer binding) classified)
   where
+    -- Discharge a 'Handler' to 'IO' over the per-request context, establishing the
+    -- @katip@ logging context the application owns: the composition root's 'LogEnv'
+    -- (scribes) and the resolved trace-correlation @dd@ object as the initial context,
+    -- so every serve-path line carries @dd@. The request runtime the handler reads is
+    -- projected from 'Env' ('serveRuntimeOf').
+    run action = do
+        dd <- ddPayloadNow (envDdContext env)
+        runHandler (envLogEnv env) dd ctx action
+
     ctx :: RequestCtx
-    ctx = RequestCtx env binding
+    ctx = RequestCtx (serveRuntimeOf env) binding
 
     isHead :: Bool
     isHead = requestMethod request == methodHead

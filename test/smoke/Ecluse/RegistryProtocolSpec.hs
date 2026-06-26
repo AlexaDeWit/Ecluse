@@ -163,7 +163,7 @@ spec = describe "live registry protocol (npm / PyPI)" $ do
         _ -> Nothing
 
 {- | Run the exact response-bound sequence the data plane applies in
-@Ecluse.Server.Pipeline.fetchEntry@ over a live full packument under the default
+@Ecluse.Core.Server.Pipeline.fetchEntry@ over a live full packument under the default
 'Limits', returning the projected @(name, versionCount)@ on success. Throws (the
 bounded read's 'Ecluse.Core.Registry.Npm.ResponseBoundExceeded', a decode error, or a
 projection error) if any bound or step refuses the document — so a default that was

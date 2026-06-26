@@ -430,7 +430,7 @@ data EnvConfig = EnvConfig
     , cfgCacheTtl :: NominalDiffTime
     {- ^ How long a parsed packument stays fresh in the metadata cache
     (@METADATA_CACHE_TTL_SECONDS@, default 60). Short by design — brief staleness
-    is benign and conditional-GET revalidates (see "Ecluse.Server.Cache"). A
+    is benign and conditional-GET revalidates (see "Ecluse.Core.Server.Cache"). A
     non-positive value disables caching: every entry is born already expired, so
     each request re-fetches (a deliberate "off" knob).
     -}

@@ -12,7 +12,7 @@ import UnliftIO.Exception (throwString, try)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageInfo (..), PackageName, mkPackageName)
-import Ecluse.Server.Cache (
+import Ecluse.Core.Server.Cache (
     CacheConfig (..),
     CacheEntry (..),
     MetadataCache,
@@ -22,24 +22,19 @@ import Ecluse.Server.Cache (
     defaultCacheConfig,
     newMetadataCache,
  )
-import Ecluse.Server.Cache qualified as Cache
-import Ecluse.Telemetry (telemetryDisabled)
-import Ecluse.Telemetry.Instruments (newMetrics)
+import Ecluse.Core.Server.Cache qualified as Cache
+import Ecluse.Test.Port (noopMetricsPort)
 
-{- | Resolve through the cache with an inert (telemetry-off) metric handle, so these
-tests assert the cache's hit\/miss and single-flight behaviour without an SDK. A fresh
-disabled handle per call is a no-op meter, so it neither records nor affects the cache.
+{- | Resolve through the cache with an inert metrics port, so these tests assert the
+cache's hit\/miss and single-flight behaviour without a telemetry backend. The inert
+port discards every recording, so it neither records nor affects the cache.
 -}
 resolveMetadata :: MetadataCache -> Source -> PackageName -> IO CacheEntry -> IO CacheEntry
-resolveMetadata cache source name fetch = do
-    metrics <- newMetrics telemetryDisabled
-    Cache.resolveMetadata metrics cache source name fetch
+resolveMetadata = Cache.resolveMetadata noopMetricsPort
 
--- | As 'resolveMetadata', threading the single-flight handoff hook (an inert metric handle).
+-- | As 'resolveMetadata', threading the single-flight handoff hook (an inert metrics port).
 resolveMetadataWith :: IO () -> MetadataCache -> Source -> PackageName -> IO CacheEntry -> IO CacheEntry
-resolveMetadataWith afterClaim cache source name fetch = do
-    metrics <- newMetrics telemetryDisabled
-    Cache.resolveMetadataWith afterClaim metrics cache source name fetch
+resolveMetadataWith afterClaim = Cache.resolveMetadataWith afterClaim noopMetricsPort
 
 -- | A package name fixture; the metadata cache keys on package identity.
 pkg :: Text -> PackageName

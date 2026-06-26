@@ -27,6 +27,7 @@ import Ecluse.Core.Queue (newInMemoryQueue)
 import Ecluse.Core.Registry (ParseError (..), RegistryClient (..))
 import Ecluse.Core.Registry.Npm.Route qualified as Npm
 import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
+import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Core.Server.Route (Classifier, Route (..))
 import Ecluse.Env (Env, envWorkerHeartbeat, newEnv, newWorkerHeartbeat, recordPoll)
 import Ecluse.Server (
@@ -47,7 +48,6 @@ import Ecluse.Server (
     serverMiddleware,
     withInteractiveHalt,
  )
-import Ecluse.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Telemetry (telemetryDisabled)
 import Ecluse.Worker (workerHeartbeatStaleAfter)
 

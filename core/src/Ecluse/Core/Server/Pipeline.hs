@@ -5,12 +5,12 @@ This is the data-plane handler module. It composes the
 slices that decide /what/ to serve — the registry client
 ("Ecluse.Core.Registry.Npm"), the per-version rules ("Ecluse.Core.Rules"), the structural
 filter ("Ecluse.Core.Registry.Npm.Filter"), the cross-upstream merge
-("Ecluse.Core.Package.Merge"), the metadata cache ("Ecluse.Server.Cache"), the
+("Ecluse.Core.Package.Merge"), the metadata cache ("Ecluse.Core.Server.Cache"), the
 own-ETag conditional ("Ecluse.Core.Server.Conditional"), and the serve-outcome status
 ("Ecluse.Core.Server.Response") — into one action in the
-'Ecluse.Server.Context.Handler' reader, reading its mount's serve dependencies and
-the composition-root 'Ecluse.Env.Env' from the request's
-'Ecluse.Server.Context.RequestCtx'.
+'Ecluse.Core.Server.Context.Handler' reader, reading its mount's serve dependencies and
+the request runtime 'Ecluse.Core.Server.Context.ServeRuntime' from the request's
+'Ecluse.Core.Server.Context.RequestCtx'.
 
 == Credential authority
 
@@ -67,7 +67,7 @@ get our __own ETag__, since a merged\/filtered body matches no single upstream's
 
 This is the __npm__ packument pipeline: it reaches for the npm registry
 client, projection, and structural filter directly, so it is the one
-@Ecluse.Server.*@ module that depends on a concrete adapter. The coupling is
+serve-path module that depends on a concrete adapter. The coupling is
 expedient, not intended — the agnostic handles that would let it dispatch through an
 adapter (a per-adapter router, and an ecosystem-neutral filter\/projection) would
 let a second ecosystem reuse this orchestration unchanged.
@@ -115,7 +115,7 @@ and an upstream @304 Not Modified@ is relayed straight back to the client as a b
 @304@ ('isNotModified' via the relay's accept predicate) rather than re-downloading the
 tarball — the cheap freshness check on the hot artifact path.
 -}
-module Ecluse.Server.Pipeline (
+module Ecluse.Core.Server.Pipeline (
     -- * The packument handler
     servePackument,
     headPackument,
@@ -136,15 +136,14 @@ import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
-import Katip (LogEnv, Severity (WarningS), logFM, ls, sl)
-import Katip.Monadic (runKatipContextT)
+import Katip (KatipContext, Severity (WarningS), katipAddContext, logFM, ls, sl)
 import Lens.Micro ((^?))
 import Lens.Micro.Aeson (key, _Object)
 import Network.HTTP.Client (Manager)
 import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types (RequestHeaders, ResponseHeaders, Status, hAuthorization, hContentLength, hContentType, methodHead, mkStatus, status200, status401, status501, statusIsSuccessful)
 import Network.Wai (Request, Response, ResponseReceived, requestHeaders, responseHeaders, responseLBS, responseStatus)
-import UnliftIO (concurrently)
+import UnliftIO (concurrently, withRunInIO)
 import UnliftIO.Exception (handle, throwIO, tryAny)
 
 import Ecluse.Core.Credential (Secret, mkSecret)
@@ -196,7 +195,28 @@ import Ecluse.Core.Security (
     lowerCaseHosts,
     tarballHostAllowed,
  )
+import Ecluse.Core.Server.Cache (CacheEntry (CacheEntry, entryInfo, entryRaw), Source (Source), resolveMetadata)
 import Ecluse.Core.Server.Conditional (Conditional (Modified, NotModified), etagHeader, evaluateOwnETag, forwardValidators, isNotModified)
+import Ecluse.Core.Server.Context (
+    Handler,
+    MountBinding (bindingPackumentDeps, bindingRenderer),
+    PackumentDeps (..),
+    ServeRuntime (..),
+    ctxMount,
+    ctxRuntime,
+ )
+import Ecluse.Core.Server.Pipeline.Internal (
+    PackumentNameMismatch (PackumentNameMismatch),
+    PackumentUndecodable (PackumentUndecodable),
+    evalTier,
+    fetchCause,
+    logDecodeFailure,
+    logNameMismatch,
+    packumentServeDecision,
+    recordDenials,
+    recordEffectfulFailures,
+    serveDecisionClass,
+ )
 import Ecluse.Core.Server.Response (
     ArtifactStatus (Forbidden, NotFound, Ok, ServerError, Unavailable'),
     MountRenderer,
@@ -217,40 +237,9 @@ import Ecluse.Core.Server.Response (
 import Ecluse.Core.Server.Route (Filename (Filename))
 import Ecluse.Core.Server.Stream (probeUpstreamWhen, streamUpstreamWhen)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
+import Ecluse.Core.Telemetry.Record (MetricsPort (..), timedSeconds)
+import Ecluse.Core.Telemetry.Span (spanMirrorEnqueue, spanRuleEval)
 import Ecluse.Core.Version (Version, renderVersion)
-import Ecluse.Env (Env (envLogEnv, envManager, envMetadataCache, envMetrics, envPrivateManager, envQueue, envTelemetry))
-import Ecluse.Log (moduleField)
-import Ecluse.Server.Cache (CacheEntry (CacheEntry, entryInfo, entryRaw), Source (Source), resolveMetadata)
-import Ecluse.Server.Context (
-    Handler,
-    MountBinding (bindingPackumentDeps, bindingRenderer),
-    PackumentDeps (..),
-    ctxEnv,
-    ctxMount,
- )
-import Ecluse.Server.Pipeline.Internal (
-    PackumentNameMismatch (PackumentNameMismatch),
-    PackumentUndecodable (PackumentUndecodable),
-    evalTier,
-    fetchCause,
-    logDecodeFailure,
-    logNameMismatch,
-    packumentServeDecision,
-    recordDenials,
-    recordEffectfulFailures,
-    serveDecisionClass,
- )
-import Ecluse.Telemetry.Instruments (
-    Metrics,
-    recordMirrorEnqueueFailure,
-    recordMirrorEnqueued,
-    recordRuleEvalDuration,
-    recordServeDecision,
-    recordUpstreamFetch,
-    recordUpstreamFetchError,
-    timedSeconds,
- )
-import Ecluse.Telemetry.Tracing (withMirrorEnqueueSpan, withRuleEvalSpan)
 
 -- ── the handler ─────────────────────────────────────────────────────────────
 
@@ -339,7 +328,7 @@ packumentWith mode name request respond = do
 
 -- Serve a packument once the mount's dependencies are known: fetch, gate, merge,
 -- and answer — the credential-authority and merge logic the module header
--- describes. The composition-root 'Env' is read from the request context. The
+-- describes. The request runtime is read from the request context. The
 -- 'PackumentServe' mode is threaded to the success path so a @HEAD@ stamps the
 -- would-be body's @Content-Length@ (the 'bodiless' wrapper withholds the bytes).
 serveWithDeps ::
@@ -353,27 +342,26 @@ serveWithDeps ::
 serveWithDeps mode renderer deps name request respond
     | not (edgeAuthorised deps request) = liftIO (respond (edgeUnauthorised renderer))
     | otherwise = do
-        env <- asks ctxEnv
-        liftIO $ do
-            let metrics = envMetrics env
-            evalCtx <- EvalContext <$> pdNow deps
-            let clientToken = forwardedToken request
-            (privResult, pubResult) <-
-                concurrently
-                    (fetchPrivateOrigin (pdLimits deps) env (pdPrivateBaseUrl deps) clientToken name)
-                    (fetchPublicOrigin (pdLimits deps) env (pdPublicBaseUrl deps) name)
-            (public, publicExclusions) <- gatePublic metrics deps evalCtx (originPackument pubResult)
-            let private = trustedSource <$> originPackument privResult
-                sources = catMaybes [private, public]
-            case assemble deps sources of
-                Just body -> do
-                    recordServeDecision metrics Metric.Admit
-                    respond (servePackumentBody mode request body)
-                Nothing -> do
-                    let decisions = collectDecisions privResult pubResult publicExclusions
-                    recordServeDecision metrics (packumentServeDecision decisions)
-                    recordDenials metrics decisions
-                    respond (noSurvivors renderer deps decisions)
+        rt <- asks ctxRuntime
+        let metrics = srMetrics rt
+        evalCtx <- liftIO (EvalContext <$> pdNow deps)
+        let clientToken = forwardedToken request
+        (privResult, pubResult) <-
+            concurrently
+                (fetchPrivateOrigin (pdLimits deps) rt (pdPrivateBaseUrl deps) clientToken name)
+                (fetchPublicOrigin (pdLimits deps) rt (pdPublicBaseUrl deps) name)
+        (public, publicExclusions) <- liftIO (gatePublic metrics deps evalCtx (originPackument pubResult))
+        let private = trustedSource <$> originPackument privResult
+            sources = catMaybes [private, public]
+        case assemble deps sources of
+            Just body -> do
+                liftIO (mpServeDecision metrics Metric.Admit)
+                liftIO (respond (servePackumentBody mode request body))
+            Nothing -> do
+                let decisions = collectDecisions privResult pubResult publicExclusions
+                liftIO (mpServeDecision metrics (packumentServeDecision decisions))
+                liftIO (recordDenials metrics decisions)
+                liftIO (respond (noSurvivors renderer deps decisions))
 
 -- A recognised-but-unserved packument route: a @501@ in the mount's surface, for a
 -- mount whose packument-serve dependencies are not wired. The decision to serve or
@@ -481,14 +469,14 @@ origin is therefore deliberately kept out of the metadata cache; only the anonym
 public origin is cached. (How a non-@passthrough@ strategy can instead share the private
 origin safely is the serve-time authorisation it adds — see
 @docs\/architecture\/access-model.md@.) -}
-fetchPrivateOrigin :: Limits -> Env -> Text -> Maybe Secret -> PackageName -> IO OriginResult
-fetchPrivateOrigin limits env baseUrl token name = do
+fetchPrivateOrigin :: Limits -> ServeRuntime -> Text -> Maybe Secret -> PackageName -> Handler OriginResult
+fetchPrivateOrigin limits rt baseUrl token name = do
     resolved <-
         tryAny
             ( recordedFetch
-                (envMetrics env)
+                (srMetrics rt)
                 Metric.Private
-                (fetchEntry (envLogEnv env) limits (envPrivateManager env) baseUrl token name)
+                (fetchEntry limits (srPrivateManager rt) baseUrl token name)
             )
     pure (originResultFrom resolved)
 
@@ -503,18 +491,22 @@ to preserve, only one shared anonymous document. A hit returns the cached pair
 (typed view and the exact bytes it was decoded from), so the served document and the
 decision over it stay coherent across the TTL, and concurrent resolutions of a
 popular package __collapse to one upstream call__. -}
-fetchPublicOrigin :: Limits -> Env -> Text -> PackageName -> IO OriginResult
-fetchPublicOrigin limits env baseUrl name = do
-    let metrics = envMetrics env
+fetchPublicOrigin :: Limits -> ServeRuntime -> Text -> PackageName -> Handler OriginResult
+fetchPublicOrigin limits rt baseUrl name = do
+    let metrics = srMetrics rt
     resolved <-
-        tryAny
-            ( resolveMetadata
-                metrics
-                (envMetadataCache env)
-                (Source baseUrl)
-                name
-                (recordedFetch metrics Metric.Public (fetchEntry (envLogEnv env) limits (envManager env) baseUrl Nothing name))
-            )
+        tryAny $
+            -- The cache runs the fetch action in plain 'IO' (its single-flight leader
+            -- under @mask@); 'withRunInIO' discharges the 'Handler' fetch to 'IO' while
+            -- capturing the ambient @katip@ context, so a breach\/decode warning the
+            -- leader logs still rides the request's trace-correlated context.
+            withRunInIO $ \runInIO ->
+                resolveMetadata
+                    metrics
+                    (srMetadataCache rt)
+                    (Source baseUrl)
+                    name
+                    (runInIO (recordedFetch metrics Metric.Public (fetchEntry limits (srPublicManager rt) baseUrl Nothing name)))
     pure (originResultFrom resolved)
 
 {- Fetch one upstream's full packument (the @Full@ form, for the @time@ map a
@@ -547,14 +539,14 @@ upstream (or a too-tight cap) from an ordinary parse failure:
   refused before per-version rules run.
 
 A pathological document is therefore refused outright, never partially served. -}
-fetchEntry :: LogEnv -> Limits -> Manager -> Text -> Maybe Secret -> PackageName -> IO CacheEntry
-fetchEntry logEnv limits manager baseUrl token name = do
+fetchEntry :: Limits -> Manager -> Text -> Maybe Secret -> PackageName -> Handler CacheEntry
+fetchEntry limits manager baseUrl token name = do
     -- The body-size breach is raised from the bounded read as a typed
     -- 'ResponseBoundExceeded'; log it (which ceiling, observed-vs-cap) before letting
     -- it propagate to the origin fetcher's @tryAny@, the same fail-closed degrade.
     response <-
-        handle (\(ResponseBoundExceeded err) -> logBreach logEnv name err *> throwIO (ResponseBoundExceeded err)) $
-            fetchMetadataForm (clientConfig limits manager baseUrl token) Full noValidators name
+        handle (\(ResponseBoundExceeded err) -> logBreach name err *> throwIO (ResponseBoundExceeded err)) $
+            liftIO (fetchMetadataForm (clientConfig limits manager baseUrl token) Full noValidators name)
     -- Decode the body once into the raw @Value@, then project the typed view from
     -- that same parse: aeson decodes bytes to a 'Value' and runs the 'FromJSON'
     -- instance either way, so projecting from the @Value@ reuses the one parse
@@ -576,17 +568,17 @@ fetchEntry logEnv limits manager baseUrl token name = do
   where
     -- A nesting/version breach: log which ceiling was crossed, then fail closed as a
     -- typed 'ResponseBoundExceeded' (caught by the origin fetcher's @tryAny@).
-    boundBreach :: LimitError -> IO CacheEntry
-    boundBreach err = logBreach logEnv name err *> throwIO (ResponseBoundExceeded err)
+    boundBreach :: LimitError -> Handler CacheEntry
+    boundBreach err = logBreach name err *> throwIO (ResponseBoundExceeded err)
 
-    decodeFailure :: IO CacheEntry
-    decodeFailure = logDecodeFailure logEnv name *> throwIO PackumentUndecodable
+    decodeFailure :: Handler CacheEntry
+    decodeFailure = logDecodeFailure name *> throwIO PackumentUndecodable
 
     -- The origin answered with a packument self-reporting a different package's name:
     -- log it (both names + this origin) and degrade like a decode failure, but with a
     -- distinct typed throw so the no-valid-origin status can render a @502@.
-    nameMismatch :: Text -> IO CacheEntry
-    nameMismatch reported = logNameMismatch logEnv name baseUrl reported *> throwIO PackumentNameMismatch
+    nameMismatch :: Text -> Handler CacheEntry
+    nameMismatch reported = logNameMismatch name baseUrl reported *> throwIO PackumentNameMismatch
 
 unpair :: CacheEntry -> (PackageInfo, Value)
 unpair entry = (entryInfo entry, entryRaw entry)
@@ -596,18 +588,18 @@ fail-closed, so an operator can distinguish a bound breach (a hostile\/oversized
 upstream, or a too-tight cap) from an ordinary parse failure or upstream outage. The
 structured payload names the package, which @bound@ was crossed, and the observed
 value against its @cap@ — the high-cardinality identifiers that belong on the log
-line, not a metric label. Run through the composition-root 'LogEnv' since the fetch
-path is plain 'IO' (off the 'Handler' reader), under the same @ecluse@ namespace the
-rest of the stream uses. -}
-logBreach :: LogEnv -> PackageName -> LimitError -> IO ()
-logBreach logEnv name err =
-    runKatipContextT logEnv payload mempty $
+line, not a metric label. Emitted through the ambient @katip@ context (the request's,
+so the line carries its trace-correlation @dd@), under the @ecluse@ namespace the rest
+of the stream uses. -}
+logBreach :: (KatipContext m) => PackageName -> LimitError -> m ()
+logBreach name err =
+    katipAddContext payload $
         logFM WarningS (ls message)
   where
     -- The package the refused document was for, plus the breach detail, as the
     -- structured @data@ object on the line.
     payload =
-        moduleField pipelineModule
+        sl "module" pipelineModule
             <> sl "package" (renderPackageName name)
             <> sl "bound" boundName
             <> sl "observed" observed
@@ -627,9 +619,11 @@ logBreach logEnv name err =
         TooManyVersions seen c -> ("version-count", show seen, show c)
         TooDeeplyNested c -> ("nesting-depth", "over " <> show c <> " levels", show c <> " levels")
 
--- The module the breach log is emitted from, tagged on the line via
--- 'Ecluse.Log.moduleField' so the stream can be filtered by emitter. (The decode
--- failure's log lives in "Ecluse.Server.Pipeline.Internal", tagged with its own path.)
+-- The @module@ tag this module's breach log carries — the operator-facing log filter
+-- key, held stable as the current value rather than the source module path, so an
+-- operator's saved filter keeps matching across the move into ecluse-core (the only
+-- change to these lines is the trace-correlation @dd@ the ambient context adds). The
+-- decode-failure log lives in "Ecluse.Core.Server.Pipeline.Internal", tagged likewise.
 pipelineModule :: Text
 pipelineModule = "Ecluse.Server.Pipeline"
 
@@ -637,7 +631,7 @@ pipelineModule = "Ecluse.Server.Pipeline"
 URL, and injected token (the client's credential for the private origin, 'Nothing'
 for the anonymous public origin). The client never originates a token; the authority
 model is decided here. The 'Manager' is passed explicitly per fetch — the trusted
-'envPrivateManager' for the private upstream, the guarded 'envManager' for the
+'srPrivateManager' for the private upstream, the guarded 'srPublicManager' for the
 public\/artifact fetches — so the resolved-IP SSRF recheck applies only to the
 untrusted egress. The 'Limits' carries the mount's @maxBodyBytes@ to the bounded
 metadata read in 'fetchMetadataForm'. -}
@@ -685,13 +679,13 @@ let a denied version reach the merge plan (and skew the reconciled @latest@\/@ti
 
 The trusted private upstream is exempt: this gate runs on the public path only, so a
 weak-digest private version still enters the merge unfiltered. -}
-gatePublic :: Metrics -> PackumentDeps -> EvalContext -> Maybe (PackageInfo, Value) -> IO (Maybe Contribution, [ServeDecision])
+gatePublic :: MetricsPort -> PackumentDeps -> EvalContext -> Maybe (PackageInfo, Value) -> IO (Maybe Contribution, [ServeDecision])
 gatePublic metrics deps ctx = \case
     Nothing -> pure (Nothing, [])
     Just (info, value) -> do
         let (admissible, integrityRefusals) = admitByIntegrity (pdMinIntegrity deps) info
         (decisions, seconds) <- timedSeconds (decideVersions deps ctx admissible)
-        recordRuleEvalDuration metrics (evalTier (pdEffectfulRules deps)) seconds
+        mpRuleEvalDuration metrics (evalTier (pdEffectfulRules deps)) seconds
         recordEffectfulFailures metrics (Map.elems decisions)
         let plan = filterPlanFromDecisions decisions admissible
         pure $ case applyFilterPlan (pdMountBaseUrl deps) plan value of
@@ -1109,8 +1103,8 @@ tarballWith mode name version filename request respond = do
         Just deps -> serveTarballWithDeps mode renderer deps name version filename request respond
 
 -- Serve a tarball once the mount's dependencies are known: edge auth, then the
--- private-hit / public-miss fetches the module header describes. The composition-root
--- 'Env' is read from the request context. The 'ArtifactServe' mode is threaded into
+-- private-hit / public-miss fetches the module header describes. The request runtime
+-- is read from the request context. The 'ArtifactServe' mode is threaded into
 -- both legs so a HEAD takes the identical gating as a GET, probing bodiless.
 serveTarballWithDeps ::
     ArtifactServe ->
@@ -1125,22 +1119,21 @@ serveTarballWithDeps ::
 serveTarballWithDeps mode renderer deps name version (Filename file) request respond
     | not (edgeAuthorised deps request) = liftIO (respond (edgeUnauthorised renderer))
     | otherwise = do
-        env <- asks ctxEnv
-        liftIO $ do
-            let clientToken = forwardedToken request
-                -- The client's conditional validators, relayed onto the upstream
-                -- artifact request on both legs so upstream can answer a 304 for a
-                -- pass-through body we serve unchanged (the conditional-GET contract).
-                validators = forwardValidators (requestHeaders request)
-            privateHit <- streamPrivateArtifact mode env deps clientToken validators name version file respond
-            case privateHit of
-                Just received -> do
-                    -- A private hit is an admit served from the trusted upstream (no rule
-                    -- gate runs); a private miss falls through to the gated public path,
-                    -- which records its own decision.
-                    recordServeDecision (envMetrics env) Metric.Admit
-                    pure received
-                Nothing -> servePublicArtifact mode env renderer deps validators name version file respond
+        rt <- asks ctxRuntime
+        let clientToken = forwardedToken request
+            -- The client's conditional validators, relayed onto the upstream
+            -- artifact request on both legs so upstream can answer a 304 for a
+            -- pass-through body we serve unchanged (the conditional-GET contract).
+            validators = forwardValidators (requestHeaders request)
+        privateHit <- streamPrivateArtifact mode rt deps clientToken validators name version file respond
+        case privateHit of
+            Just received -> do
+                -- A private hit is an admit served from the trusted upstream (no rule
+                -- gate runs); a private miss falls through to the gated public path,
+                -- which records its own decision.
+                liftIO (mpServeDecision (srMetrics rt) Metric.Admit)
+                pure received
+            Nothing -> servePublicArtifact mode rt renderer deps validators name version file respond
 
 {- Stream the artifact from the __trusted__ private upstream at its __authoritative
 location__: fetch the private packument (uncached, forwarding the client's credential
@@ -1156,7 +1149,7 @@ connection — yields 'Nothing' so the caller falls through to the public origin
 upstream artifact body never read.
 
 The private upstream is operator-configured and trusted, so its fetch carries no
-resolved-IP recheck ('envPrivateManager') and its tarball-host gate is the
+resolved-IP recheck ('srPrivateManager') and its tarball-host gate is the
 'Ecluse.Core.Security.TrustedOrigin' one — __exempt from the internal-range block__, the
 serve-path mirror of that unguarded manager (security.md invariant 3): a private
 registry on an internal address (e.g. @http:\/\/10.0.0.5\/@) serves its same-host
@@ -1178,7 +1171,7 @@ straight back to the client (bodiless) rather than treated as a private miss
 falling through to the public origin. -}
 streamPrivateArtifact ::
     ArtifactServe ->
-    Env ->
+    ServeRuntime ->
     PackumentDeps ->
     Maybe Secret ->
     RequestHeaders ->
@@ -1186,11 +1179,11 @@ streamPrivateArtifact ::
     Version ->
     Text ->
     (Response -> IO ResponseReceived) ->
-    IO (Maybe ResponseReceived)
-streamPrivateArtifact mode env deps token validators name version file respond = do
-    selected <- selectPrivateArtifact env deps token name version file
+    Handler (Maybe ResponseReceived)
+streamPrivateArtifact mode rt deps token validators name version file respond = do
+    selected <- selectPrivateArtifact rt deps token name version file
     case privateRequestFor =<< selected of
-        Just req -> relayUpstreamWhen mode (envPrivateManager env) req acceptArtifact relayArtifact respond
+        Just req -> liftIO (relayUpstreamWhen mode (srPrivateManager rt) req acceptArtifact relayArtifact respond)
         Nothing -> pure Nothing
   where
     -- Form the honoured-URL request for a selected private artifact, when its host
@@ -1201,16 +1194,16 @@ streamPrivateArtifact mode env deps token validators name version file respond =
     privateRequestFor :: Artifact -> Maybe HTTP.Request
     privateRequestFor artifact =
         if tarballHostHonoured TrustedOrigin deps (pdPrivateBaseUrl deps) (artUrl artifact)
-            then withValidators validators . withMethod mode <$> rightToMaybe (artifactRequestByUrl (clientConfig (pdLimits deps) (envPrivateManager env) (pdPrivateBaseUrl deps) token) (artUrl artifact))
+            then withValidators validators . withMethod mode <$> rightToMaybe (artifactRequestByUrl (clientConfig (pdLimits deps) (srPrivateManager rt) (pdPrivateBaseUrl deps) token) (artUrl artifact))
             else Nothing
 
 {- Fetch the private packument (uncached, with the client's credential) and select
 the requested version's 'Artifact' by its preserved filename. 'Nothing' when the
 private origin does not resolve, the version is absent, or no artifact matches the
 filename — each a clean private miss the caller falls through on. -}
-selectPrivateArtifact :: Env -> PackumentDeps -> Maybe Secret -> PackageName -> Version -> Text -> IO (Maybe Artifact)
-selectPrivateArtifact env deps token name version file = do
-    resolved <- originPackument <$> fetchPrivateOrigin (pdLimits deps) env (pdPrivateBaseUrl deps) token name
+selectPrivateArtifact :: ServeRuntime -> PackumentDeps -> Maybe Secret -> PackageName -> Version -> Text -> Handler (Maybe Artifact)
+selectPrivateArtifact rt deps token name version file = do
+    resolved <- originPackument <$> fetchPrivateOrigin (pdLimits deps) rt (pdPrivateBaseUrl deps) token name
     pure $ do
         (info, _value) <- resolved
         details <- Map.lookup (renderVersion version) (infoVersions info)
@@ -1222,7 +1215,7 @@ single requested version against the rules, and on an admit stream the public by
 The public version metadata is fetched anonymously to decide. -}
 servePublicArtifact ::
     ArtifactServe ->
-    Env ->
+    ServeRuntime ->
     MountRenderer ->
     PackumentDeps ->
     RequestHeaders ->
@@ -1230,16 +1223,16 @@ servePublicArtifact ::
     Version ->
     Text ->
     (Response -> IO ResponseReceived) ->
-    IO ResponseReceived
-servePublicArtifact mode env renderer deps validators name version file respond = do
-    let metrics = envMetrics env
-    gated <- gatePublicVersion env deps name version file
+    Handler ResponseReceived
+servePublicArtifact mode rt renderer deps validators name version file respond = do
+    let metrics = srMetrics rt
+    gated <- gatePublicVersion rt deps name version file
     case gated of
         Admitted artifact -> do
-            recordServeDecision metrics Metric.Admit
-            streamPublicArtifact mode env renderer deps validators name version artifact respond
-        Refused decision -> do
-            recordServeDecision metrics (serveDecisionClass decision)
+            liftIO (mpServeDecision metrics Metric.Admit)
+            liftIO (streamPublicArtifact mode rt renderer deps validators name version artifact respond)
+        Refused decision -> liftIO $ do
+            mpServeDecision metrics (serveDecisionClass decision)
             recordDenials metrics [decision]
             respond (artifactError renderer deps (artifactStatus decision) decision)
 
@@ -1267,10 +1260,10 @@ metadata is a genuine miss (a @404@ forwarded absence, projected as 'Unavailable
 'artifactError'); a metadata fetch that fails is a transient upstream outage (@503@);
 a present version is decided by the rules, where a needed effectful rule that cannot
 be consulted fail-closes to an 'Unavailable' @503@\/@500@. -}
-gatePublicVersion :: Env -> PackumentDeps -> PackageName -> Version -> Text -> IO PublicArtifactGate
-gatePublicVersion env deps name version file = do
-    evalCtx <- EvalContext <$> pdNow deps
-    resolved <- originPackument <$> fetchPublicOrigin (pdLimits deps) env (pdPublicBaseUrl deps) name
+gatePublicVersion :: ServeRuntime -> PackumentDeps -> PackageName -> Version -> Text -> Handler PublicArtifactGate
+gatePublicVersion rt deps name version file = do
+    evalCtx <- liftIO (EvalContext <$> pdNow deps)
+    resolved <- originPackument <$> fetchPublicOrigin (pdLimits deps) rt (pdPublicBaseUrl deps) name
     case resolved of
         Nothing -> pure (Refused upstreamUnavailable)
         Just (info, _value) -> case Map.lookup (renderVersion version) (infoVersions info) of
@@ -1280,10 +1273,11 @@ gatePublicVersion env deps name version file = do
                 -- the version exists), recording the verdict so a denial → 403 is
                 -- explainable from the trace; the upstream-outage and version-absent
                 -- branches above are not rule evaluations and carry no span.
-                withRuleEvalSpan (envTelemetry env) name version $ do
-                    (gate, seconds) <- timedSeconds (gateVersion evalCtx deps file details)
-                    recordRuleEvalDuration (envMetrics env) (evalTier (pdEffectfulRules deps)) seconds
-                    pure (gate, gateVerdict gate)
+                liftIO $
+                    spanRuleEval (srTracing rt) name version $ do
+                        (gate, seconds) <- timedSeconds (gateVersion evalCtx deps file details)
+                        mpRuleEvalDuration (srMetrics rt) (evalTier (pdEffectfulRules deps)) seconds
+                        pure (gate, gateVerdict gate)
 
 -- The serve verdict a public-artifact gate outcome carries, for the rule-eval span:
 -- an admitted version admits; a refused one carries the decision the serve error
@@ -1355,7 +1349,7 @@ __anonymously__ (the client credential is never sent to the public upstream), an
 __after__ the response is begun — enqueue a best-effort mirror job. The chosen
 'Artifact''s 'artUrl' is honoured directly rather than reconstructed; the
 tarball-host policy gates whether that location may be fetched (the public packument
-host is the reference), and the resolved-IP recheck on 'envManager' is the
+host is the reference), and the resolved-IP recheck on 'srPublicManager' is the
 defence-in-depth backstop. A host the policy refuses is the @403@ policy-denial path;
 an unformable URL is the internal-error path.
 
@@ -1377,7 +1371,7 @@ upstream @304 Not Modified@ is relayed straight back to the client (bodiless, vi
 credential and the public fetch stays anonymous. -}
 streamPublicArtifact ::
     ArtifactServe ->
-    Env ->
+    ServeRuntime ->
     MountRenderer ->
     PackumentDeps ->
     RequestHeaders ->
@@ -1386,15 +1380,15 @@ streamPublicArtifact ::
     Artifact ->
     (Response -> IO ResponseReceived) ->
     IO ResponseReceived
-streamPublicArtifact mode env renderer deps validators name version artifact respond =
+streamPublicArtifact mode rt renderer deps validators name version artifact respond =
     if tarballHostHonoured UntrustedOrigin deps (pdPublicBaseUrl deps) (artUrl artifact)
-        then case withValidators validators . withMethod mode <$> artifactRequestByUrl (clientConfig (pdLimits deps) (envManager env) (pdPublicBaseUrl deps) Nothing) (artUrl artifact) of
+        then case withValidators validators . withMethod mode <$> artifactRequestByUrl (clientConfig (pdLimits deps) (srPublicManager rt) (pdPublicBaseUrl deps) Nothing) (artUrl artifact) of
             Right req ->
-                relayUpstreamWhen mode (envManager env) req (const True) relayArtifact respond >>= \case
+                relayUpstreamWhen mode (srPublicManager rt) req (const True) relayArtifact respond >>= \case
                     Just received -> do
                         -- Mirroring is demand-driven on the GET path only: a HEAD serves
                         -- no bytes, so there is nothing to back-fill.
-                        enqueueOnFull mode (enqueueMirror env deps name version artifact)
+                        enqueueOnFull mode (enqueueMirror rt deps name version artifact)
                         pure received
                     Nothing -> respond (artifactError renderer deps (artifactStatus upstreamUnavailable) upstreamUnavailable)
             Left _ -> respond internalArtifactError
@@ -1465,12 +1459,12 @@ enqueue → process window) and can assemble the publish document without re-fet
 The artifact reached this point through the integrity-presence admission policy, so
 'artHashes' is non-empty; a hashless artifact (which that policy already refuses to
 serve) is not enqueued, since there would be no digest to verify against. -}
-enqueueMirror :: Env -> PackumentDeps -> PackageName -> Version -> Artifact -> IO ()
-enqueueMirror env deps name version artifact =
+enqueueMirror :: ServeRuntime -> PackumentDeps -> PackageName -> Version -> Artifact -> IO ()
+enqueueMirror rt deps name version artifact =
     whenJust (nonEmpty (artHashes artifact)) $ \hashes ->
-        withMirrorEnqueueSpan (envTelemetry env) name version (artUrl artifact) $ do
+        spanMirrorEnqueue (srTracing rt) name version (artUrl artifact) $ do
             enqueued <-
-                tryAny . enqueue (envQueue env) $
+                tryAny . enqueue (srQueue rt) $
                     MirrorJob
                         { jobPackage = name
                         , jobVersion = version
@@ -1485,7 +1479,7 @@ enqueueMirror env deps name version artifact =
                         }
             -- Best-effort: the enqueue outcome is counted but never propagated, so a
             -- queue outage records a failure rather than failing or delaying the serve.
-            either (const (recordMirrorEnqueueFailure (envMetrics env))) (const (recordMirrorEnqueued (envMetrics env))) enqueued
+            either (const (mpMirrorEnqueueFailure (srMetrics rt))) (const (mpMirrorEnqueued (srMetrics rt))) enqueued
 
 -- ── the egress gate at the serve boundary ─────────────────────────────────────────
 
@@ -1611,13 +1605,13 @@ otherwise, before re-raising so the caller's degrade is unchanged. Wrapping the 
 action means the public path — fetched through the cache — records only on a miss (a
 hit never runs the action), so the histogram counts real upstream calls, not cache
 hits (those are the metadata-cache metric's concern). -}
-recordedFetch :: Metrics -> Metric.Upstream -> IO CacheEntry -> IO CacheEntry
+recordedFetch :: MetricsPort -> Metric.Upstream -> Handler CacheEntry -> Handler CacheEntry
 recordedFetch metrics upstream action = do
     (result, seconds) <- timedSeconds (tryAny action)
     case result of
         Right entry -> do
-            recordUpstreamFetch metrics upstream Metric.Status2xx seconds
+            liftIO (mpUpstreamFetch metrics upstream Metric.Status2xx seconds)
             pure entry
         Left err -> do
-            recordUpstreamFetchError metrics upstream (fetchCause err)
+            liftIO (mpUpstreamFetchError metrics upstream (fetchCause err))
             throwIO err
