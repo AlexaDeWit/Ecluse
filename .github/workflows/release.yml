@@ -27,8 +27,44 @@ permissions:
   contents: read
 
 jobs:
+  # The single source of truth for the version is ecluse.cabal's `version:` field.
+  # A pushed tag (or the workflow_dispatch `tag` input) must match it — a release
+  # fails fast HERE, before the expensive multi-arch build, on any drift. Pre-release
+  # suffixes (e.g. -rc1) are stripped before comparing, so v0.1.0-rc1 still matches
+  # 0.1.0. `make version` reads it via `cabal info`, so this needs the toolchain —
+  # cheap insurance on the infrequent release path.
+  verify-version:
+    name: Verify tag matches cabal version
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Set up toolchain
+        uses: ./.github/actions/setup-toolchain
+        with:
+          cabal-cache: "true"
+
+      - name: Assert the release tag matches ecluse.cabal version
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          if [ -n "$INPUT_TAG" ]; then tag="$INPUT_TAG"; else tag="${REF_NAME#v}"; fi
+          base="${tag%%-*}" # strip any -rc / -pre suffix
+          want="$(nix develop .#ci --command make version)"
+          if [ "$base" != "$want" ]; then
+            echo "::error::release tag '$tag' (base '$base') != ecluse.cabal version '$want' — bump the cabal version or fix the tag"
+            exit 1
+          fi
+          echo "OK: tag base '$base' == ecluse.cabal version '$want'"
+
   build:
     name: Build image (${{ matrix.platform.arch }})
+    needs: verify-version
     # Native per-arch builds: amd64 on the standard runner, arm64 on GitHub's free
     # public-repo arm64 runner — so GHC compiles natively on each target and we
     # avoid cross-compilation entirely. fail-fast off so one arch failing still
