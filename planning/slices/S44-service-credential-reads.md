@@ -6,7 +6,7 @@ status: not-started
 depends-on: [S43, S16, S13]
 test-tier: [unit, integration]
 arch-refs:
-  - docs/architecture/access-model.md#service--the-edge-authenticates-écluse-brokers
+  - docs/architecture/access-model.md#service--the-edge-authenticates-écluse-reads-with-its-own-identity
   - docs/architecture/access-model.md#caching
   - docs/architecture/access-model.md#credential-supply-the-credentialprovider-generalised
 pr: null
@@ -17,27 +17,29 @@ pr: null
 > Milestone **M4** · depends on: [S43](S43-credential-strategy.md), [S16](S16-credential-wrapper.md), [S13](S13-streaming-cache.md) · tier: unit, integration
 >
 > _Access-model enhancement; **off the launch critical path.** Implements the
-> `service` strategy: private-upstream **reads** via a `CredentialProvider`, which
-> makes the private leg of the metadata cache shareable._
+> `service` strategy: private-upstream **reads** via a `CredentialProvider` (Écluse's
+> own identity), per-request and **uncached** — Écluse forbids a shared private cache._
 
 **Goal.** Under the `service` strategy, fetch the private upstream with **Écluse's
 own** credential (the existing [`CredentialProvider`](S16-credential-wrapper.md), now
-used for reads, not only the mirror write) instead of forwarding the caller's token,
-and **admit the private leg into the shared cache**. The caller is authenticated at
-the edge (S43); the upstream sees one identity.
+used for reads, not only the mirror write) instead of forwarding the caller's token.
+The private leg is read **per request and not cached** — Écluse
+[forbids a shared private cache](../../docs/architecture/access-model.md#why-écluse-never-caches-the-private-origin)
+under every strategy. The caller is authenticated at the edge (S43); the upstream sees
+one identity.
 
 **Acceptance criteria.**
 - [ ] When a mount's strategy is `service`, the private-upstream fetch uses a
   configured **read** `CredentialProvider` (reusing the S16 wrapper + an S17/S29 leaf
   or `static`), never the caller's forwarded token. — _access-model.md#credential-supply-the-credentialprovider-generalised_
-- [ ] The private leg becomes **cache-eligible** under `service`: the cache admits a
-  private entry, keyed by source + package (never a credential), and concurrent
-  resolutions collapse to one upstream fetch — matching the public leg's sharing. —
+- [ ] The private leg is **not** cached under `service` (as under `passthrough`): the
+  shared cache holds only the anonymous public origin, and the `service` private read is
+  per-request with Écluse's identity. There is no private-cache admission path to build. —
   _access-model.md#caching, web-layer.md#metadata-cache_
 - [ ] `passthrough` behaviour is unchanged (no read credential; private leg not
-  cached). The cache-admission witness from S43 gates whether a shared **private**
-  entry is **admitted to serving**, independent of how it was populated — population
-  is an orthogonal operational choice (#129), since every serve is freshly authorised. —
+  cached). The only difference `service` introduces is **whose credential** fetches the
+  private leg — the caller's forwarded token (`passthrough`) versus Écluse's own
+  identity (`service`) — never whether it is cached (it is not, either way). —
   _access-model.md#caching_
 - [ ] A read-credential refresh failure degrades **reads** (surfaced per the
   [serve error model](../../docs/architecture/web-layer.md#error-model)); document that, unlike the
@@ -57,5 +59,6 @@ the edge (S43); the upstream sees one identity.
 **Notes / risks.** Reuses S16/S17 with **no change to the provider machinery** — only
 its point of use widens from write to read. Coordinate the per-mount read-provider
 wiring with **S20** (composition) so backend selection stays in one place. This is
-the slice that makes the `service` half of the access model real; `delegated-cache`
-(S45) layers the per-request probe on top.
+the slice that makes the `service` half of the access model real. (The former
+`delegated-cache` follow-up, S45, is **superseded** — Écluse forbids a shared private
+cache.)

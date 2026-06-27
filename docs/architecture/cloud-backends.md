@@ -160,13 +160,12 @@ data AuthToken = AuthToken { secret :: Secret, expiresAt :: Maybe UTCTime }
 ```
 
 A `CredentialProvider` mints the token for any upstream that needs one: the
-**mirror-target write** always, and — under `service` (and a **service-populated**
-`delegated-cache`) — the **private-upstream read** as well. Under the default
-`passthrough` strategy a deployment configures **one** provider (for the mirror
-target) and reads forward the client's own credential; the same holds for a
-**caller-populated** `delegated-cache`, while `service` and a service-populated
-`delegated-cache` add a **read** provider for the private upstream. The public
-upstream is anonymous under every strategy. See [Access & Credential Model](access-model.md) and
+**mirror-target write** always, and — under `service` — the **private-upstream read**
+as well. Under the default `passthrough` strategy a deployment configures **one**
+provider (for the mirror target) and reads forward the client's own credential;
+`service` adds a **read** provider for the private upstream (reads use Écluse's own
+identity, **per-request and uncached** — Écluse forbids a shared private cache). The
+public upstream is anonymous under every strategy. See [Access & Credential Model](access-model.md) and
 [Credential flow and authority](registry-model.md#credential-flow-and-authority).
 
 **Providers are global; mounts reference them.** A `CredentialProvider` is the
@@ -175,7 +174,7 @@ service's own cloud identity — typically a single **container task role** (AWS
 composition root**, not per mount. A mount carries no provider of its own; it
 **names which configured provider** its strategy draws on. In the common deployment
 those references collapse to **one** identity: the same container role both writes
-the mirror target and (under `service` / a service-populated `delegated-cache`)
+the mirror target and (under `service`)
 reads the private upstream — Écluse acts as one consistent entity. A multi-cloud
 process holds one provider per cloud, keyed by cloud; the region/project scoping
 each (`AWS_REGION` / `GOOGLE_CLOUD_PROJECT`) are likewise process-global. **A mount
@@ -214,12 +213,10 @@ effectful tier — see
 and alarms; only if the token has actually **expired *and* mint still fails** does
 the dependent operation fail. For a **mirror-write** credential that is the publish —
 the job is left un-acked and retries / dead-letters (see [Mirror Queue](#mirror-queue)),
-never touching the client serve path. For a **read** credential — under `service`, and
-a **service-populated** `delegated-cache` — the dependent operation *is* a client
+never touching the client serve path. For a **read** credential — under `service` — the dependent operation *is* a client
 read, so an exhausted read credential degrades serving (surfaced per the
-[serve error model](web-layer.md#error-model)) — one reason `passthrough` (and a
-caller-populated `delegated-cache`), which hold no read credential, stay the simplest
-options. The `static`
+[serve error model](web-layer.md#error-model)) — one reason `passthrough`, which holds
+no read credential, stays the simplest option. The `static`
 provider has no expiry and never refreshes. The clock is injected, so the whole
 policy is unit-tested deterministically.
 

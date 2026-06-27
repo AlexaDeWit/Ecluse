@@ -2,7 +2,7 @@
 id: S45
 title: Delegated-cache authorisation probe
 milestone: M4 — AWS cloud backends & worker
-status: not-started
+status: superseded
 depends-on: [S44]
 test-tier: [unit, integration]
 arch-refs:
@@ -16,9 +16,13 @@ pr: null
 
 > Milestone **M4** · depends on: [S44](S44-service-credential-reads.md) · tier: unit, integration
 >
-> _Access-model enhancement; **off the launch critical path.** Implements the
-> `delegated-cache` strategy: keep the upstream as the authority for retrievability,
-> but reuse the cached compute — "the upstream decides; we cache the result."_
+> **SUPERSEDED (2026-06-27).** Écluse now [forbids a shared private
+> cache](../../docs/architecture/access-model.md#why-écluse-never-caches-the-private-origin):
+> it is a thin network broker and delegates caching to the upstreams it fronts, so the
+> `delegated-cache` strategy this slice would have built is **rejected by design**.
+> There is no private-cache implementation to remove (the serve path is
+> `passthrough`-only), so this slice is retired, not reworked. The original plan is kept
+> below for history.
 
 **Goal.** Under `delegated-cache`, the private leg is **shared**, and **every cache
 hit is gated by a fresh per-request authorisation probe** against the upstream before

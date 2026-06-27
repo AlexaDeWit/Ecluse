@@ -348,8 +348,8 @@ its private upstream's internal range. Recommended, in rough order of leverage:
     `REGISTRY_ONLY`, declare each upstream as an explicit `ServiceEntry`, and
     constrain it with a `Sidecar` egress listener and egress `AuthorizationPolicy`.
 - **Run the proxy with no ambient cloud credentials it does not need.** Écluse holds
-  a mirror-**write** credential, and — under `service` (and a service-populated
-  `delegated-cache`) — a private-upstream **read** credential; scope the instance role
+  a mirror-**write** credential, and — under `service` — a private-upstream **read**
+  credential; scope the instance role
   to exactly those it is configured to use and no more (see
   [Configuration](configuration.md#outbound-registry-credentials)).
 

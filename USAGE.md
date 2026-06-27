@@ -176,7 +176,7 @@ of config entirely. Écluse always holds a mirror-target **write** credential; h
 are credentialled is the mount's
 [credential strategy](docs/architecture/access-model.md): the default `passthrough` forwards
 the *client's* own token to the private upstream (and strips it before the public one),
-while `service` / `delegated-cache` read with Écluse's own credential. See
+while `service` reads with Écluse's own credential. See
 [Outbound Registry Credentials](docs/architecture/configuration.md#outbound-registry-credentials).
 
 ## Connecting your clients
@@ -255,7 +255,7 @@ catching anything the application layer doesn't:
     `REGISTRY_ONLY`, declare each upstream as a `ServiceEntry`, and constrain it
     with a `Sidecar` egress listener and an egress `AuthorizationPolicy`.
 - **Grant the proxy only the cloud permissions it needs**: the mirror-write
-  credential (and, under the `service` / `delegated-cache` strategies, the
+  credential (and, under the `service` strategy, the
   private-read credential), nothing more.
 
 **The `dist.tarball` host policy.** A version's `dist.tarball` is upstream-chosen data, so

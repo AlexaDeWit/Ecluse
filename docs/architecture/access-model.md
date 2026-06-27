@@ -11,42 +11,55 @@ like one — "auth" — are kept deliberately apart:
 
 The simplest design fuses all three into a single act: forward the caller's
 credential to the private upstream and let the upstream answer all three, on every
-request. That is correct and builds no auth machinery, but it forbids sharing the
-private origin of the [metadata cache](web-layer.md#metadata-cache) across callers
-([issue #115](https://github.com/AlexaDeWit/Ecluse/issues/115)) and pins every read
-to a per-request upstream round-trip. Separating the concerns turns "how Écluse
-handles credentials" into a **per-mount credential strategy** — a universally-safe
-default plus two opt-in strategies that recover caching.
+request. That is correct and builds no auth machinery; its only costs are a
+per-request upstream round-trip and no sharing of the private origin across callers.
+**Écluse accepts both costs by design** — it is a thin network broker, efficient
+caching is already the upstreams' job, and the gain from a shared *private* cache does
+not justify the re-authorisation machinery it would demand (see
+[Why Écluse never caches the private origin](#why-écluse-never-caches-the-private-origin),
+and [issue #115](https://github.com/AlexaDeWit/Ecluse/issues/115)). Separating the
+concerns turns "how Écluse handles credentials" into a **per-mount credential
+strategy** — but the strategies differ only in *where authority sits and whose
+credential reaches the upstream*, never in what may be cached.
 
 **Écluse never builds an authentication system.** Authorisation is always
 *delegated* — to the upstream (its native authority) or to the deployment edge
 (network / service mesh / gateway). The strategies differ only in *where* authority
 sits and *what may be cached as a result*.
 
-## The four-corner trade-off
+## Why Écluse never caches the private origin
 
-Four properties are all desirable; **a strategy can hold at most three:**
+A shared cache of the *private* origin is tempting — one fetch + parse + merge could
+serve many callers — but it is never safe for free. A cache key carries no credential
+dimension, so a shared private entry can be served safely only if **either** every hit
+is re-authorised against the upstream on each request (a per-request authorisation
+**probe**) **or** authority is moved off the upstream to the deployment edge so that
+everyone past the edge is entitled to the same view. Both buy cache-sharing with
+standing **threat-mitigation overhead**: a probe whose granularity must exactly match
+the upstream's (or it over-grants), or an edge that becomes the sole authority.
 
-- **Delegate authority** — the upstream stays the authority for retrievability;
-  nothing to build.
-- **Shareable cache** — one fetch + parse + merge serves many callers.
-- **No client-credential state** — Écluse retains nothing derived from a caller's
-  credential beyond the request that bears it.
-- **No per-request round-trip** — a cache hit is served without consulting an
-  upstream (lowest latency; tolerant of an upstream blip).
+**Écluse declines that trade.** It is a thin network broker, and efficient caching of
+package metadata and artifacts is already handled well by the upstreams it fronts, so
+the private origin is read **per request** and **never entered into the shared cache**.
+This keeps the [#115](https://github.com/AlexaDeWit/Ecluse/issues/115) cross-client
+disclosure hazard *unrepresentable by construction* rather than fenced off by a probe,
+and keeps hot-path work minimal. Only the anonymous **public-gated** origin is cached
+(one shared document, no per-caller authority to preserve).
 
-| Strategy | Delegate authority | Shareable cache | No client-cred state | No per-request round-trip |
-|---|:--:|:--:|:--:|:--:|
-| **`passthrough`** (default) | ✓ | ✗ | ✓ | ✗ |
-| **`delegated-cache`** | ✓ | ✓ | ✓ | ✗ |
-| **`service`** | edge | ✓ | ✓ | ✓ |
-| _`memoised` (deferred)_ | ✓ | ✓ | ✗ | ✓ |
+The per-mount **credential strategy** therefore varies only in *where authority sits
+and whose credential reaches the private upstream* — never in what may be cached. Two
+strategies ship:
 
-`passthrough` gives up two corners — it is the simplest and the only one safe under
-*any* upstream authorisation model. Each other strategy gives up exactly one. Which
-to choose is a property of the **operator's environment** — chiefly their upstream's
-authorisation model — not something Écluse can settle for everyone, so it is
-configured per mount with `passthrough` as the floor.
+| Strategy | Authority | Caller credential forwarded | Private origin cached |
+|---|:--:|:--:|:--:|
+| **`passthrough`** (default) | upstream | yes (transiently) | no |
+| **`service`** | edge | no | no |
+
+`passthrough` is the floor — the simplest, and the only one safe under *any* upstream
+authorisation model. `service` is an opt-in for deployments that authorise at the edge
+and prefer Écluse forward no caller credentials at all. The cache-recovering designs
+`delegated-cache` and `memoised` are **rejected**: both exist only to share the private
+cache Écluse forbids (see [Rejected: the cache-recovering strategies](#rejected-the-cache-recovering-strategies)).
 
 ## Credential strategies (per mount)
 
@@ -56,57 +69,46 @@ configured per mount with `passthrough` as the floor.
 authorises each request; the public upstream is queried anonymously with the
 caller's credential stripped. The private origin is **fetched per request and never
 entered into the shared cache** (see [Caching](#caching), and
-[the private upstream's metadata is not cached across clients](registry-model.md#the-private-upstreams-metadata-is-not-cached-across-clients-under-passthrough)).
+[the private upstream's metadata is never cached across clients](registry-model.md#the-private-upstreams-metadata-is-never-cached-across-clients)).
 This is what the [walking skeleton](../../planning/delivery-plan.md) ships, and it
 is correct regardless of whether the upstream's read authorisation is coarse or
 fine-grained — the upstream re-decides every request.
 
-### `delegated-cache` — the upstream decides retrievability; Écluse caches the compute
-
-The defining move is on the **read** side: the expensive compute — the merged,
-filtered packument, or the verified artifact bytes — is held in the **shared** cache,
-and **before any cache hit is served the request is authorised against the upstream
-with a cheap probe** (e.g. an authenticated `whoami`/`HEAD` that succeeds iff the
-caller may read the mount). The upstream therefore remains the authority for *who may
-retrieve what*, while the costly fetch + parse + merge is reused across callers.
-
-This holds **no client-credential state** (the probe forwards the caller's credential
-transiently, exactly as `passthrough` does) and costs a per-request probe — which
-must be **cheaper than the fetch it replaces**, and is only available where the
-upstream offers such a probe. The probe's **granularity must match the upstream's**
-(see [Authorisation granularity](#authorisation-granularity)); a probe coarser than
-the upstream's authorisation would over-grant, and the proxy must not.
-
-**How the shared entry is *populated* is orthogonal to this** — an operational
-choice, not a safety one, because the per-request probe (not the fetch's provenance)
-is what authorises each serve (see [Caching](#caching)). The compute may be
-**caller-populated** — filled lazily by the first authorised caller's own forwarded
-token, holding **no Écluse read credential at all** — or **service-populated** —
-filled with Écluse's own [`CredentialProvider`](cloud-backends.md#credential-provider)
-token, which costs a read credential but lets Écluse warm or refresh an entry
-proactively rather than waiting for an authorised caller. Either way the bytes are the
-same canonical document, so either way the probe gates retrievability identically.
-
-### `service` — the edge authenticates; Écluse brokers
+### `service` — the edge authenticates; Écluse reads with its own identity
 
 The caller is authenticated at the **edge** (network, mesh, or a gateway — see
-[Edge authentication](#edge-authentication)); Écluse then reads **all** upstreams
-with its **own workload identity** via the [`CredentialProvider`](cloud-backends.md#credential-provider).
-Everyone who passes the edge sees the same view, so the cache is fully shared, and
-Écluse holds the **smallest credential surface of any strategy** — one short-lived,
-least-privilege service token, and **no caller credentials at all**. The trade is
-that the **edge, not the upstream, is the authority** for who may use the proxy;
-selecting `service` is an explicit operator assertion to that effect.
+[Edge authentication](#edge-authentication)); Écluse then reads the upstreams with its
+**own workload identity** via the [`CredentialProvider`](cloud-backends.md#credential-provider),
+forwarding **no caller credentials at all** — the smallest credential surface of any
+strategy (one short-lived, least-privilege token). Like `passthrough`, the private
+origin is read **per request and never shared-cached**; `service` differs only in
+*whose* identity makes that read and *where* authority sits: the **edge, not the
+upstream, is the authority** for who may use the proxy, so selecting `service` is an
+explicit operator assertion to that effect. It is the choice for deployments that
+authorise at the edge and do not want caller credentials flowing through the proxy at
+all (sidestepping the credential-aggregation surface `passthrough` carries — see
+[Security → trust assumptions & credential posture](security.md#trust-assumptions--credential-posture)).
 
-### `memoised` — deferred, documented for completeness
+### Rejected: the cache-recovering strategies
 
-A fourth point caches the upstream's authorisation **verdict**, keyed by a hash of
-the caller's credential, to drop the per-request round-trip *without* a service
-credential. It is **not in the shipping set**: it holds credential-derived state (a
-honeypot to threat-model) and serves within a self-chosen revalidation window
-(revocation latency), and no upstream exposes a token TTL we could lean on. Recorded
-so the design space is explicit; it would require an explicit opt-in that names the
-trade.
+Two further designs were considered and **rejected**, because both exist only to share
+the private origin across callers — the one thing Écluse
+[forbids](#why-écluse-never-caches-the-private-origin):
+
+- **`delegated-cache`** would hold the merged/filtered compute in the shared cache and
+  gate each hit with a per-request authorisation **probe** against the upstream. Safe
+  in principle, but it buys cache-sharing with standing overhead — a probe whose
+  granularity must exactly match the upstream's, or it over-grants — that the broker
+  model does not justify.
+- **`memoised`** would cache the upstream's authorisation *verdict*, keyed by a hash of
+  the caller's credential, to drop the round-trip without a service credential.
+  Rejected outright: it holds **credential-derived state** (a honeypot to
+  threat-model) and serves within a self-chosen revalidation window (revocation
+  latency), with no upstream token TTL to lean on.
+
+Reintroducing a shared private cache later would be a deliberate design change that
+must first re-establish per-hit authorisation (the `delegated-cache` probe) — never a
+config toggle.
 
 ## Publishing: the publication target (passthrough write)
 
@@ -170,29 +172,26 @@ where the strategies above are not.
 
 ## Authorisation granularity
 
-The available strategies depend on the upstream's authorisation granularity:
-
-- **Coarse (repo-level)** — a valid token ⇒ the caller may read the whole mount. GCP
-  Artifact Registry is always repo-level; AWS CodeArtifact is, in the common case
-  (repo-scoped IAM and a repo-scoped authorisation token). A **per-mount** probe
-  suffices for `delegated-cache`.
-- **Fine (per-package)** — different callers may read different packages (e.g.
-  CodeArtifact resource policies). `delegated-cache` then needs a **per-resource**
-  probe before serving a hit — more probes, but it still caches the expensive
-  compute. A probe coarser than the upstream's authorisation would over-grant.
-
-`passthrough` is safe under either, because the upstream re-decides every request.
+With no shared private cache, upstream authorisation granularity is **not Écluse's
+concern**. Under `passthrough` the upstream re-decides every request against the
+caller's own token — coarse (repo-level, e.g. GCP Artifact Registry, or repo-scoped
+CodeArtifact) or fine (per-package, e.g. CodeArtifact resource policies), it just
+works. Under `service` the **edge** is the per-caller authority and the upstream sees a
+single workload identity. The granularity-matching burden only arises for a per-hit
+probe over a shared private cache — the `delegated-cache` design Écluse
+[rejects](#rejected-the-cache-recovering-strategies).
 
 ## Safe defaults and unrepresentable unsafe combinations
 
 - **The default is `passthrough`.** A correct deployment needs nothing else.
-- **A shared private-origin cache under `passthrough` is forbidden by construction**,
-  not merely documented against: the metadata cache admits a private entry **only**
-  under `service` / `delegated-cache`. This makes the
+- **A shared private-origin cache is forbidden by construction**, not merely documented
+  against: under **no** strategy does the metadata cache admit a private entry — only
+  the anonymous public-gated origin is cached, and the private origin is read per
+  request. This makes the
   [#115](https://github.com/AlexaDeWit/Ecluse/issues/115) cross-client disclosure
   hazard *unrepresentable* rather than a discipline.
 - **`service` requires an explicit "the edge authorises callers" assertion** in
-  config — it is the one strategy that moves authority off the upstream.
+  config — it is the strategy that moves authority off the upstream.
 - **`trusted-edge` requires a verifiable edge binding** (mutual TLS from the edge, or
   a shared secret / HMAC on the asserted identity); a `trusted-edge` mount configured
   with **neither** is **rejected at startup**, not merely discouraged — a bare trusted
@@ -204,61 +203,37 @@ The available strategies depend on the upstream's authorisation granularity:
 
 ## Caching
 
-What makes a shared private cache safe is **two invariants**; the strategy only
-decides how the second is met:
+Écluse caches **only the anonymous public-gated origin** of the
+[metadata cache](web-layer.md#metadata-cache) — one shared document per package, with
+no per-caller authority to preserve. The **private origin is never entered into the
+shared cache, under any strategy**; it is read per request:
 
-1. **The cache stores no credential-derived state.** A cache key carries **no
-   credential dimension** (it is the upstream base URL plus the package), and a cache
-   value is the canonical document — never a credential or a credential-derived
-   verdict. (This invariant is exactly what rules `memoised` out of the shipping set.)
-2. **A shared *private* entry is served only after freshly authorising *that*
-   caller.** No caller ever receives a private document without that request being
-   authorised first.
+- under **`passthrough`**, with the caller's own forwarded token (the upstream
+  re-authorises each read);
+- under **`service`**, with Écluse's own workload identity (the edge has already
+  authorised the caller).
 
-Given those, the **serve-time authorisation method** — not how the bytes were
-populated — is what governs sharing of the private origin of the
-[metadata cache](web-layer.md#metadata-cache):
+This *is* the resolution of [#115](https://github.com/AlexaDeWit/Ecluse/issues/115):
+there is no shared private entry to leak across callers — by construction, not by
+discipline. On the **tarball leg** the per-request read is the credentialed
+[conventional read](registry-model.md#serving-a-tarball-a-conventional-private-read-an-honoured-public-location)
+of the artifact itself — no packument round-trip — so the private upstream (under
+`passthrough`) or the service identity (under `service`) authorises each artifact read.
 
-- **`passthrough`** — serve-time authorisation *is* the per-request fetch with the
-  caller's token, so there is no shared private entry at all; only the anonymous
-  public (gated) origin is cached. (This *is* the resolution of #115 in the default:
-  there is no shared private entry to leak.) On the **tarball leg** that per-request
-  fetch is the credentialed
-  [conventional read](registry-model.md#serving-a-tarball-a-conventional-private-read-an-honoured-public-location)
-  of the artifact itself — no packument round-trip — so the private upstream still
-  authorises each artifact read with the caller's own token.
-- **`delegated-cache`** — the private origin is **shared**, and every hit is gated by a
-  fresh per-request authorisation **probe** with the caller's token; the upstream
-  re-decides retrievability on each serve.
-- **`service`** — the edge has already authorised the caller, so a shared private
-  entry is served with no per-request upstream check.
-
-**Population is orthogonal to all of this.** Because invariant 2 authorises *every*
-serve, it does not matter whether a shared entry was filled by a caller's own fetch
-or by Écluse's service identity — no caller is served bytes they have not just been
-authorised for. Population is therefore an operational choice (lazy/caller-populated,
-holding no read credential, versus proactively warmed/service-populated), not a
-security boundary.
-
-This rests on one precondition: the cached document is **identity-independent in
-content** — a packument is canonical *per package*, and artifact bytes are
-content-addressed by `dist.integrity`, so authorisation governs *whether* a caller
-may read an entry, never *what* its bytes are. The probe gates **retrievability**,
-not **content**. (Were an upstream ever to return identity-specific *content* rather
-than a plain allow/deny, population would re-enter the safety picture; npm upstreams
-do not.)
+The one cache that exists — the anonymous public origin — stores **no
+credential-derived state**: its key carries no credential dimension (the upstream base
+URL plus the package), and its value is the canonical public document, never a
+credential or a credential-derived verdict.
 
 ## Credential supply: the `CredentialProvider`, generalised
 
 The [`CredentialProvider`](cloud-backends.md#credential-provider) handle mints and
 refreshes a bearer for **any upstream endpoint that requires one** — the
-mirror-target **write** always, and the private-upstream **read** under `service`
-(always) and a **service-populated** `delegated-cache`. `passthrough` reads — and a
-**caller-populated** `delegated-cache` — use the forwarded caller token and no read
-provider. A mount that needs a private-upstream read credential configures a **read**
-provider in addition to its mirror-target one; both are the same handle, the same
-refresh/single-flight/breaker policy, differing only in the per-cloud `mintToken`
-leaf.
+mirror-target **write** always, and the private-upstream **read** under `service`.
+`passthrough` reads use the forwarded caller token and need no read provider. A
+`service` mount therefore configures a **read** provider in addition to its
+mirror-target one; both are the same handle, the same refresh/single-flight/breaker
+policy, differing only in the per-cloud `mintToken` leaf.
 
 ## Multi-instance is an isolation tool, not an authorisation mechanism
 
@@ -276,5 +251,5 @@ distinct policy per tenant, not to avoid choosing a strategy.
 - Public versions are **always** gated by the [rules engine](rules-engine.md);
   trusted private versions enter the
   [packument merge](registry-model.md#packument-merge-across-upstreams) unfiltered.
-  A strategy changes *how the private origin is fetched and cached* — never *whether
-  public versions are gated*.
+  A strategy changes *whose credential fetches the private origin* — never *whether it
+  is cached* (it never is) or *whether public versions are gated*.

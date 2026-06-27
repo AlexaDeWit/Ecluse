@@ -324,7 +324,7 @@
             "id": "0ec10e5e-0000-4000-8000-000000000030",
             "data": {
               "name": "Metadata cache\n(public-gated only)",
-              "description": "Shared in-proxy cache. Under passthrough it holds only the anonymous public (gated) origin; the per-caller private origin is never entered.",
+              "description": "Shared in-proxy cache. It holds only the anonymous public (gated) origin; the per-caller private origin is never entered, under any strategy.",
               "type": "tm.Store",
               "isTrustBoundary": false,
               "outOfScope": false,
@@ -342,7 +342,7 @@
                   "title": "Cross-client disclosure of a private package via shared cache (#115)",
                   "type": "Information disclosure",
                   "description": "A cache key carries no credential dimension, so were a private-origin document cached, one caller could warm an entry and another, differently-authorised caller could be served it without their own request being authorised upstream.",
-                  "mitigation": "Under passthrough the private origin is never entered into the shared cache, made unrepresentable by construction; only the anonymous public-gated origin is cached, and the private upstream is re-consulted per request with the caller's own token. The service / delegated-cache strategies (post-launch) re-authorise every shared hit.",
+                  "mitigation": "The private origin is never entered into the shared cache, under any strategy, made unrepresentable by construction; only the anonymous public-gated origin is cached, and the private origin is re-consulted per request (with the caller's own token under passthrough, or Écluse's own workload identity under service). The cache-recovering designs that would have shared a private entry (delegated-cache, memoised) are rejected by design, so no shared private cache exists to leak.",
                   "modelType": "STRIDE",
                   "id": "0ec10e5e-0000-4000-8000-000000000109"
                 }

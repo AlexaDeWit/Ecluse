@@ -183,7 +183,7 @@ An inline proxy sees thousands of distinct packages, so the failure mode is a
   the structured **log line** instead — see the `dd`/audit context in `Ecluse.Log`.
 - **Secrets/PII never appear in any signal** — no tokens, no `Authorization`,
   anywhere. In particular a **forwarded client token** (present under the
-  `passthrough` / `delegated-cache` [strategies](access-model.md); see
+  `passthrough` [strategy](access-model.md); see
   [Credential flow](registry-model.md#credential-flow-and-authority)) must be
   scrubbed from anything the WAI / http-client instrumentation might capture.
 - **Exemplars** (trace-ID samples attached to metric buckets, for dashboard→trace
