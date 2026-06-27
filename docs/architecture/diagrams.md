@@ -203,22 +203,23 @@ sequenceDiagram
 
 ## 5. Rules-engine decision flow
 
-Each version is evaluated against the rule set. The two tiers are a **performance
-ordering, not a precedence ordering**: pure rules run first because they are cheap,
-then effectful rules run only where they could still change the winner — and
-**precedence decides** (highest-precedence non-abstaining rule wins; deny beats
-allow at a tie; all-abstain is denied by default). A needed-but-undecidable rule
-yields `Unavailable` and fails closed. See [Rules Engine](rules-engine.md).
+Each version is evaluated against the rule set. There is **one engine** over a
+single **boot-ordered list** (highest precedence first, then rule name): evaluation
+walks it and takes the **first decisive result** (allow, deny, or a fail-closed
+unavailability), so effectful IO runs only up to that result — and MAY run
+speculatively in parallel while staying as-if sequential by boot order. If no rule
+is decisive, the package is denied by default. At equal precedence the name decides,
+not a deny-over-allow priority. A fail-closed unavailable that wins becomes
+`Undecidable`; a fail-open one is a no-op. See [Rules Engine](rules-engine.md).
 
 ```mermaid
 flowchart TD
-    IN["PackageDetails (one version)"] --> PURE["Pure tier — evaluate rules<br/>(no IO): allow / deny / abstain"]
-    PURE --> EFF["Effectful tier — only where it could<br/>still change the winner<br/>(CVE, extra fetch; timeout, retry, breaker)"]
-    EFF --> SEL{"highest-precedence<br/>non-abstaining rule"}
-    EFF -->|"needed rule cannot decide"| UNAV["Unavailable<br/>(fail-closed)"]
-    SEL -->|"allow"| APP["Approved"]
-    SEL -->|"deny (or deny beats allow at a tie)"| DEN["Denied"]
-    SEL -->|"all abstain"| DBD["DeniedByDefault"]
+    IN["PackageDetails (one version)"] --> ORD["Boot-ordered rule list<br/>(precedence desc, then name)"]
+    ORD --> SEL{"first decisive result<br/>in boot order"}
+    SEL -->|"allow"| APP["Admitted"]
+    SEL -->|"deny"| DEN["Blocked"]
+    SEL -->|"unavailable (fail-closed)"| UNAV["Undecidable"]
+    SEL -->|"no rule decisive<br/>(no-decision / fail-open)"| DBD["BlockedByDefault"]
 
     AP{{"apply verdict to the request"}}
     APP --> AP
