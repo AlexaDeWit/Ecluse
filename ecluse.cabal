@@ -431,6 +431,7 @@ test-suite ecluse-smoke
   other-modules:
     Ecluse.Credential.CodeArtifactSpec
     Ecluse.RegistryProtocolSpec
+    Ecluse.SecurityResolverOracleSpec
     Ecluse.Test.SupportLinkageSpec
     Ecluse.VersionOraclesSpec
 
@@ -447,6 +448,8 @@ test-suite ecluse-smoke
     , hspec-hedgehog   ^>=0.3
     , http-client      ^>=0.7
     , http-client-tls  ^>=0.3.6
+    , iproute          ^>=1.7
+    , network          ^>=3.2
     , process          ^>=1.6
     , text             ^>=2.1
     , unliftio         ^>=0.2.25

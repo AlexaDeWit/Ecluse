@@ -42,6 +42,7 @@ module Ecluse.Core.Security (
     -- * Internal-range block
     isBlockedTarget,
     isBlockedIP,
+    parseIpLiteral,
     hostOptedIn,
     hostAddress,
     splitHostPort,
@@ -335,7 +336,7 @@ splitHostPort authority = case T.stripPrefix "[" authority of
         (inner, afterBracket) -> Just (inner, T.drop 1 afterBracket)
     Nothing -> Just (T.breakOn ":" authority)
 
-{- Parse a host as an IP literal, or 'Nothing' for a DNS name. Handles dotted-
+{- | Parse a host as an IP literal, or 'Nothing' for a DNS name. Handles dotted-
 quad IPv4 and the IPv6 forms a host realistically carries — full eight-group form,
 @::@-compressed forms (including @::1@), and a trailing embedded IPv4 (the
 @a.b.c.d@ in @::ffff:a.b.c.d@) — which is enough to recognise the loopback,
@@ -345,33 +346,81 @@ as a name, which the host allowlist still constrains.
 
 Only range __membership__ is delegated to @iproute@ ('isBlockedIP'); recognising
 the literal stays hand-rolled __on purpose__. This recogniser is deliberately
-__lenient__ — it accepts ambiguous bypass spellings a strict IP library rejects,
-notably leading-zero octets (@0127.0.0.1@, @010.0.0.1@), and __blocks__ them by
-parsing them as the address they coerce to on a typical resolver. A stricter
-parser would reject those spellings as non-literals, so they would skip the
-internal-range block and reach the resolving fetch as names — silently
-__narrowing__ the SSRF gate. Conversely a malformed group that overflows 16 bits
-(@fe80::1ffff@) is __not__ a literal here, so it stays a name the allowlist
-constrains. Delegating literal /parsing/ to a library would change both of these,
-so it is kept here.
+__lenient__ on the IPv4 dotted-quad: it accepts the ambiguous octet spellings a
+strict IP library rejects and coerces each octet exactly as @inet_aton@ — and
+hence a libc resolver — does, so the block tests the address that would actually be
+dialled. A @0x@\/@0X@-prefixed octet is hexadecimal, a leading-zero octet is
+__octal__, and anything else is decimal. A leading-zero octet is therefore /not/
+its decimal digits: @0012.0.0.1@ is octal @10.0.0.1@ (RFC1918, blocked), whereas
+@010.0.0.1@ is octal @8.0.0.1@ and @0127.0.0.1@ is octal @87.0.0.1@ (both public,
+not blocked) — matching the resolver rather than a decimal misreading. A stricter
+parser that rejected these spellings would let an octal\/hex spelling of an
+internal address skip the block and reach the resolving fetch as a name, silently
+__narrowing__ the SSRF gate.
+
+Two residual boundaries are deliberately left to the connection-time resolved-IP
+recheck in "Ecluse.Core.Security.Egress" (which resolves through the same
+@getAddrInfo@ and re-applies 'isBlockedIP') rather than modelled here. First, the
+__short__ @inet_aton@ forms with fewer than four parts — a bare 32-bit number
+(@2130706433@, @0x7f000001@) or a @127.1@ — are not literals here. Second, a
+malformed octet — an invalid-octal @08@ (8 is not an octal digit) or an
+overflowing @0400@\/@256@\/@0x100@ — is not a literal, exactly as a resolver
+rejects it; both stay names the allowlist constrains. A malformed IPv6 group that
+overflows 16 bits (@fe80::1ffff@) is likewise not a literal here. Delegating
+literal /parsing/ to a library would change this lenient/strict boundary, so it is
+kept here.
 -}
 parseIpLiteral :: Text -> Maybe IpAddr
 parseIpLiteral host = case T.uncons host of
     Nothing -> Nothing -- empty host: not a literal
-    Just _ -> if T.any (== ':') host then parseIPv6 host else parseIPv4 host
+    Just _ -> if T.any (== ':') host then parseIPv6 host else parseIPv4 octetInetAton host
 
--- Parse a strict dotted-quad @a.b.c.d@ with each octet in @0..255@.
-parseIPv4 :: Text -> Maybe IpAddr
-parseIPv4 host = case T.splitOn "." host of
+{- Parse a four-part dotted-quad @a.b.c.d@ into its octets, each coerced to @0..255@
+by the supplied octet parser. The top-level host literal passes the
+@inet_aton@-faithful 'octetInetAton' (leading-zero octal and @0x@ hex), and the
+embedded IPv4-in-IPv6 form passes the strict-decimal 'octetDecimal'; only the
+four-part form is recognised (see 'parseIpLiteral' for the short forms left to the
+connection-time recheck).
+-}
+parseIPv4 :: (Text -> Maybe Word8) -> Text -> Maybe IpAddr
+parseIPv4 octet host = case T.splitOn "." host of
     [a, b, c, d] -> IpV4 <$> octet a <*> octet b <*> octet c <*> octet d
     _ -> Nothing
+
+{- An IPv4 octet under @inet_aton@'s per-part base rules — the coercion a libc
+resolver ('getAddrInfo') applies, so the internal-range block tests the address a
+resolver would actually dial. A @0x@\/@0X@ prefix is hexadecimal, a leading @0@
+(with at least one more digit) is octal, and anything else is decimal; the parsed
+value must still fit @0..255@, so an overflowing part (@0400@ = 256, @0x100@ = 256)
+is rejected exactly as a resolver rejects it. The base-digit check keeps 'readMaybe'
+from accepting signs or whitespace and rejects a digit outside the chosen base (the
+@8@ in @08@ is not octal), so such a spelling is not a literal — matching glibc,
+which refuses it rather than coercing it.
+-}
+octetInetAton :: Text -> Maybe Word8
+octetInetAton tok = do
+    n <- value
+    if n <= 255 then Just (fromInteger n) else Nothing
   where
-    -- An octet is a non-empty all-decimal run in 0..255. The digit check keeps
-    -- 'readMaybe' from accepting signs/whitespace, so a parsed value is >= 0.
-    octet :: Text -> Maybe Word8
-    octet t = do
-        n <- if isDecimal t then readMaybe (toString t) else Nothing :: Maybe Integer
-        if n <= 255 then Just (fromInteger n) else Nothing
+    value :: Maybe Integer
+    value = case T.uncons tok of
+        Just ('0', rest)
+            | T.toLower (T.take 1 rest) == "x" ->
+                let hex = T.drop 1 rest
+                 in if isHex hex then readMaybe ("0x" <> toString hex) else Nothing
+            | not (T.null rest) ->
+                if isOctal tok then readMaybe ("0o" <> toString tok) else Nothing
+        _ -> if isDecimal tok then readMaybe (toString tok) else Nothing
+
+{- An IPv4 octet as a non-empty all-decimal run in @0..255@: the strict spelling
+used inside an IPv4-in-IPv6 literal (@::ffff:a.b.c.d@), where the embedded form is
+not subject to @inet_aton@'s base coercion. The digit check keeps 'readMaybe' from
+accepting signs\/whitespace, so a parsed value is >= 0.
+-}
+octetDecimal :: Text -> Maybe Word8
+octetDecimal t = do
+    n <- if isDecimal t then readMaybe (toString t) else Nothing :: Maybe Integer
+    if n <= 255 then Just (fromInteger n) else Nothing
 
 {- Parse an IPv6 literal — either the full eight-group form or a @::@-compressed
 form (at most one @::@), optionally ending in an embedded dotted-quad IPv4 — into
@@ -413,7 +462,7 @@ parseIPv6 host =
 
     -- A trailing dotted-quad IPv4 as its two 16-bit groups (high pair, low pair).
     embeddedV4 :: Text -> Maybe [Word16]
-    embeddedV4 t = case parseIPv4 t of
+    embeddedV4 t = case parseIPv4 octetDecimal t of
         Just (IpV4 a b c d) -> Just [pair a b, pair c d]
         _ -> Nothing
       where
@@ -432,6 +481,10 @@ parseIPv6 host =
 -- Whether @t@ is a non-empty run of decimal digits (no sign or whitespace).
 isDecimal :: Text -> Bool
 isDecimal t = not (T.null t) && T.all (`elem` ['0' .. '9']) t
+
+-- Whether @t@ is a non-empty run of octal digits (0..7).
+isOctal :: Text -> Bool
+isOctal t = not (T.null t) && T.all (`elem` ['0' .. '7']) t
 
 -- Whether @t@ is a non-empty run of hexadecimal digits.
 isHex :: Text -> Bool
