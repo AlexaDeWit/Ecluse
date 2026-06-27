@@ -163,6 +163,7 @@ jobWith url hashes =
                 , maHashes = hashes
                 , maSize = Just (BS.length tarballBytes)
                 }
+        , jobTraceContext = Nothing
         }
 
 -- ── a recording publish client ─────────────────────────────────────────────────

@@ -88,6 +88,7 @@ import Ecluse.Core.Queue (
     MirrorJob (..),
     MirrorQueue (..),
     QueueMessage (..),
+    RemoteSpanContext (RemoteSpanContext, rscTraceparent, rscTracestate),
     Seconds (..),
     mkReceiptHandle,
     unReceiptHandle,
@@ -267,9 +268,21 @@ encodeJob job =
             , "artifactUrl" .= jobArtifactUrl job
             , "mirrorTarget" .= jobMirrorTarget job
             , "artifact" .= encodeArtifact (jobArtifact job)
+            , "traceContext" .= (encodeTraceContext <$> jobTraceContext job)
             ]
   where
     name = jobPackage job
+
+-- Encode the optional enqueue-span trace-context carrier: the W3C traceparent and
+-- tracestate verbatim, so the worker can re-establish the cross-async span link. A
+-- 'Nothing' carrier (tracing was off at enqueue) serialises to a JSON null and
+-- round-trips back to 'Nothing'.
+encodeTraceContext :: RemoteSpanContext -> Aeson.Value
+encodeTraceContext rsc =
+    object
+        [ "traceparent" .= rscTraceparent rsc
+        , "tracestate" .= rscTracestate rsc
+        ]
 
 -- Encode the serve-time-admitted artifact descriptor: filename, the integrity
 -- digests (each an algorithm-tagged value), and the declared size when known.
@@ -302,6 +315,10 @@ decodeJob body =
         artifactUrl <- o .: "artifactUrl"
         mirrorTarget <- o .: "mirrorTarget"
         artifact <- o .: "artifact" >>= parseArtifact
+        -- The trace-context carrier is optional: a job from an older producer (or one
+        -- enqueued with tracing off) carries no "traceContext", which decodes to
+        -- 'Nothing' and simply yields no span link in the worker.
+        traceContext <- o .:? "traceContext" >>= traverse parseTraceContext
         pure
             MirrorJob
                 { jobPackage = mkPackageName eco (mkScope <$> scope) rawName
@@ -309,8 +326,17 @@ decodeJob body =
                 , jobArtifactUrl = artifactUrl
                 , jobMirrorTarget = mirrorTarget
                 , jobArtifact = artifact
+                , jobTraceContext = traceContext
                 }
     unknownEcosystem n = "unknown ecosystem " <> show (n :: Text)
+
+-- Parse the optional trace-context carrier back into a 'RemoteSpanContext': the W3C
+-- traceparent and tracestate verbatim. The carrier is untrusted opaque transport, so
+-- both fields are taken as-is — an unparseable W3C value is the tracing port's concern
+-- (it yields no link), never a decode failure that would strand a serviceable job.
+parseTraceContext :: Aeson.Value -> Parser RemoteSpanContext
+parseTraceContext = withObject "RemoteSpanContext" $ \t ->
+    RemoteSpanContext <$> t .: "traceparent" <*> t .: "tracestate"
 
 -- Parse the nested artifact descriptor, failing on an empty hash list (the
 -- 'NonEmpty' invariant the serve path upholds — a job must carry a digest to verify

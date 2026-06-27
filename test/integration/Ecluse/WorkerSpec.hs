@@ -181,6 +181,7 @@ job upstreamUrl sha1 =
                 , maHashes = unsafeHash SHA1 sha1 :| []
                 , maSize = Nothing
                 }
+        , jobTraceContext = Nothing
         }
 
 {- | A well-formed SHA-1 digest (sha1 of the empty string) that does not match the

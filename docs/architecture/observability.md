@@ -71,10 +71,19 @@ hand because they carry the decisions an operator cares about:
 - **rule evaluation** — attributes for the verdict and, on denial, the
   `RuleName` and `RejectReason` (mirrors the [error model](web-layer.md#error-model)),
   so a 403 is explainable from the trace alone.
-- **mirror enqueue** — links the synchronous request to the asynchronous mirror
-  job (see [Cloud Backends](cloud-backends.md#cloud-backends)).
-- **mirror worker job** — the async fetch→verify→publish, linked from the enqueue
-  span, so background work is not invisible.
+- **mirror enqueue** — a producer span over the synchronous serve-time hand-off to
+  the asynchronous mirror (see [Cloud Backends](cloud-backends.md#cloud-backends)). It
+  captures its own W3C trace context onto the `MirrorJob` so the worker can link back,
+  and a **swallowed best-effort enqueue failure** is recorded on this span's status
+  (the trace says *why* the mirror did not happen, beyond the
+  `ecluse.mirror.enqueue.failures` counter).
+- **mirror worker job** — the async fetch→verify→publish consumer span. It carries an
+  OpenTelemetry **span link** to the enqueue (producer) span, re-established from the
+  W3C trace context the job carries, so the asynchronous hop is navigable in a trace —
+  a true cross-async link, not merely a `package@version` correlation. Batch-robust: a
+  worker poll may mix jobs from many originating requests, so each job links to its own
+  producer rather than parenting under an arbitrary one. A job enqueued with tracing off
+  carries no context and its span simply bears no link.
 - **advisory sync** — one span per [advisory-dataset sync](rules-engine.md#cve-subsystem)
   run.
 

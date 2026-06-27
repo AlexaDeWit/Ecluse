@@ -27,7 +27,12 @@ one coherent tracer and join into one trace.
 * __Domain spans__ — 'withRuleEvalSpan' (the per-version verdict, so a @403@ is
   explainable from the trace alone), 'withMirrorEnqueueSpan' (the synchronous serve
   handing off to the asynchronous mirror), and 'withMirrorJobSpan' (the worker's
-  fetch → verify → publish).
+  fetch → verify → publish). The enqueue span captures its own W3C trace context onto
+  the mirror job, and the worker-job span re-establishes it as an OpenTelemetry __span
+  link__ to that producer span, so the asynchronous mirror hand-off is navigable in a
+  trace rather than only correlated by package\/version. A swallowed best-effort
+  enqueue failure is recorded on the enqueue span's status, so the trace explains why
+  the mirror did not happen.
 
 == Secret discipline
 
@@ -69,9 +74,11 @@ import OpenTelemetry.Instrumentation.HttpClient (
  )
 import OpenTelemetry.Instrumentation.Wai (newOpenTelemetryWaiMiddleware')
 import OpenTelemetry.Metric.Core (getMeter)
+import OpenTelemetry.Propagator.W3CTraceContext (decodeSpanContext, encodeSpanContext)
 import OpenTelemetry.Trace (
+    NewLink (NewLink, linkAttributes, linkContext),
     Span,
-    SpanArguments (kind),
+    SpanArguments (kind, links),
     SpanKind (Consumer, Internal, Producer),
     SpanStatus (Error),
     addAttribute,
@@ -84,6 +91,7 @@ import OpenTelemetry.Trace (
 import UnliftIO (MonadUnliftIO)
 
 import Ecluse.Core.Package (PackageName, renderPackageName)
+import Ecluse.Core.Queue (RemoteSpanContext (RemoteSpanContext, rscTraceparent, rscTracestate))
 import Ecluse.Core.Server.Response (
     RejectReason (BelowIntegrityFloor, ByPolicy, MissingIntegrity, Unavailable, UpstreamInvalid),
     Rejection (rejectionMessage, rejectionReason),
@@ -163,7 +171,7 @@ withRuleEvalSpan ::
     m (a, ServeDecision) ->
     m a
 withRuleEvalSpan telemetry name version action =
-    withDomainSpan telemetry Internal "ecluse.rule.eval" $ \mSpan -> do
+    withDomainSpan telemetry Internal [] "ecluse.rule.eval" $ \mSpan -> do
         recordFields mSpan (coordinateFields name version)
         (result, verdict) <- action
         recordFields mSpan (ruleVerdictFields verdict)
@@ -171,8 +179,17 @@ withRuleEvalSpan telemetry name version action =
 
 {- | Run a mirror-enqueue domain span around the serve-time hand-off to the
 asynchronous mirror, carrying the package, version, and the artifact's authoritative
-URL. A 'Producer' span, since it produces the work the worker later consumes. Inert
-when telemetry is disabled.
+URL. A 'Producer' span, since it produces the work the worker later consumes.
+
+The body is handed this span's own W3C trace context ('RemoteSpanContext') — or
+'Nothing' when telemetry is disabled — to stamp onto the mirror job, so the worker's
+per-job span can __link__ back to this producer span across the asynchronous hop. The
+@project@ function maps the body's result onto an optional failure detail: a 'Just'
+sets the span status to 'Error', so a swallowed best-effort enqueue failure is still
+explained by the trace.
+
+Inert when telemetry is disabled: the body runs against no span and is handed no trace
+context.
 -}
 withMirrorEnqueueSpan ::
     (MonadUnliftIO m) =>
@@ -180,29 +197,40 @@ withMirrorEnqueueSpan ::
     PackageName ->
     Version ->
     Text ->
-    m a ->
+    (a -> Maybe Text) ->
+    (Maybe RemoteSpanContext -> m a) ->
     m a
-withMirrorEnqueueSpan telemetry name version artifactUrl action =
-    withDomainSpan telemetry Producer "ecluse.mirror.enqueue" $ \mSpan -> do
+withMirrorEnqueueSpan telemetry name version artifactUrl project body =
+    withDomainSpan telemetry Producer [] "ecluse.mirror.enqueue" $ \mSpan -> do
         recordFields mSpan (coordinateFields name version <> [("ecluse.mirror.artifact_url", artifactUrl)])
-        action
+        carrier <- traverse captureRemoteContext mSpan
+        result <- body carrier
+        whenJust mSpan $ \theSpan -> whenJust (project result) (setStatus theSpan . Error)
+        pure result
 
 {- | Run a mirror-worker-job domain span around the worker's fetch → verify →
 publish, carrying the package and version and, once the job finishes, its outcome.
 A 'Consumer' span (it consumes the enqueued work); the outcome projection names the
 bounded outcome label and, for a non-success, the detail that sets the span status to
-'Error'. Inert when telemetry is disabled.
+'Error'.
+
+The carried trace context ('RemoteSpanContext', captured by 'withMirrorEnqueueSpan'
+and threaded through the job) re-establishes the cross-async relationship as a span
+__link__ to the enqueueing producer span, so a trace navigates from the request to the
+mirror it triggered and back. A 'Nothing' context (or one that does not parse) simply
+yields no link. Inert when telemetry is disabled.
 -}
 withMirrorJobSpan ::
     (MonadUnliftIO m) =>
     Telemetry ->
     PackageName ->
     Version ->
+    Maybe RemoteSpanContext ->
     (a -> JobSpanOutcome) ->
     m a ->
     m a
-withMirrorJobSpan telemetry name version project action =
-    withDomainSpan telemetry Consumer "ecluse.mirror.job" $ \mSpan -> do
+withMirrorJobSpan telemetry name version remoteContext project action =
+    withDomainSpan telemetry Consumer (mirrorJobLinks remoteContext) "ecluse.mirror.job" $ \mSpan -> do
         recordFields mSpan (coordinateFields name version)
         result <- action
         let JobSpanOutcome label mDetail = project result
@@ -273,24 +301,58 @@ ruleVerdictFields = \case
 
 -- ── internals ──────────────────────────────────────────────────────────────────
 
-{- Run an action within a domain span of the given kind, handing it the live 'Span'
-when telemetry is enabled and 'Nothing' when it is disabled. The disabled branch
+{- Run an action within a domain span of the given kind and links, handing it the live
+'Span' when telemetry is enabled and 'Nothing' when it is disabled. The disabled branch
 opens no span and creates no tracer, so the helper is genuinely inert off — not a
 recording span that is later dropped. The span is parented on the ambient context
-(the WAI server span on the request path), so a domain span nests under the request. -}
+(the WAI server span on the request path), so a domain span nests under the request; the
+links are independent cross-trace references (the producer→consumer mirror hop), set at
+creation. -}
 withDomainSpan ::
     (MonadUnliftIO m) =>
     Telemetry ->
     SpanKind ->
+    [NewLink] ->
     Text ->
     (Maybe Span -> m a) ->
     m a
-withDomainSpan telemetry spanKind name body =
+withDomainSpan telemetry spanKind spanLinks name body =
     case telemetryTracerProvider telemetry of
         Nothing -> body Nothing
         Just tracerProvider ->
             let tracer = makeTracer tracerProvider ecluseScope tracerOptions
-             in inSpan' tracer name defaultSpanArguments{kind = spanKind} (body . Just)
+             in inSpan' tracer name defaultSpanArguments{kind = spanKind, links = spanLinks} (body . Just)
+
+-- Capture a live span's W3C trace context as the carrier stamped onto the mirror job, so
+-- the worker can re-establish the link. The standard @traceparent@\/@tracestate@ wire
+-- encoding (the same the http-client instrumentation injects on outbound requests) is the
+-- carrier, so the propagation is W3C all the way through, with no Écluse-private format.
+captureRemoteContext :: (MonadIO m) => Span -> m RemoteSpanContext
+captureRemoteContext theSpan = do
+    (traceparent, tracestate) <- liftIO (encodeSpanContext theSpan)
+    pure
+        RemoteSpanContext
+            { rscTraceparent = decodeUtf8 traceparent
+            , rscTracestate = decodeUtf8 tracestate
+            }
+
+-- The span links for a worker-job span, decoded from the carried trace context: the
+-- single producer (enqueue) span the job links back to, or no link when none was carried
+-- or the carrier does not parse as a W3C context (an untrusted carrier never fails the
+-- job — it just loses the link). The link target is a remote span context, so the worker
+-- job stays the root of its own trace while still referencing the originating request.
+mirrorJobLinks :: Maybe RemoteSpanContext -> [NewLink]
+mirrorJobLinks Nothing = []
+mirrorJobLinks (Just remote) =
+    case decodeSpanContext (Just (encodeUtf8 (rscTraceparent remote))) tracestateHeader of
+        Nothing -> []
+        Just ctx -> [NewLink{linkContext = ctx, linkAttributes = mempty}]
+  where
+    -- An empty tracestate is passed as absent rather than an empty header value.
+    tracestateHeader :: Maybe ByteString
+    tracestateHeader
+        | rscTracestate remote == "" = Nothing
+        | otherwise = Just (encodeUtf8 (rscTracestate remote))
 
 -- Record a set of text attribute fields on a span when one is present; a no-op when
 -- telemetry is disabled (the 'Nothing' span).

@@ -186,6 +186,7 @@ library
     , hs-opentelemetry-exporter-otlp  ^>=1.0
     , hs-opentelemetry-instrumentation-http-client  ^>=1.0
     , hs-opentelemetry-instrumentation-wai          ^>=1.0
+    , hs-opentelemetry-propagator-w3c ^>=1.0
     , hs-opentelemetry-sdk            ^>=1.0
     , iproute                         ^>=1.7
     , katip                           ^>=0.8.8
@@ -358,6 +359,7 @@ test-suite ecluse-unit
     , hs-opentelemetry-exporter-in-memory  ^>=1.0
     , hs-opentelemetry-instrumentation-http-client  ^>=1.0
     , hs-opentelemetry-instrumentation-wai          ^>=1.0
+    , hs-opentelemetry-propagator-w3c     ^>=1.0
     , hs-opentelemetry-sdk  ^>=1.0
     , katip             ^>=0.8.8
     , memory            ^>=0.18

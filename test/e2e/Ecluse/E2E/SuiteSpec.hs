@@ -119,6 +119,34 @@ telemetryScenarios = do
                         80
                 delivered `shouldBe` True
 
+    -- #307(2) — domain-span emission proven end to end: a real mirror round-trip drives the
+    -- hand-added domain spans (rule eval on the public tarball gate, the mirror-enqueue
+    -- producer span, and the mirror-job consumer span the worker opens), and all three reach
+    -- the collector's debug exporter — so the domain instrumentation is exercised end to end,
+    -- not only the WAI/http-client spans the #324 case proves.
+    describe "telemetry — domain-span emission (#307)" $
+        around (withE2EWith E2EConfig{ecCollector = True, ecExtraEnv = otlpCollectorEnv}) $
+            it "emits the rule-eval, mirror-enqueue, and mirror-job domain spans to the collector on a mirror round-trip" $ \e2e -> do
+                -- A public-served install gates the version (rule-eval span) and enqueues a
+                -- mirror (enqueue span); the worker then mirrors it (job span).
+                withNpmProject e2e $ \proj -> do
+                    installed <- npmInstallIn proj (psName mirrorPkg)
+                    npmExit installed `shouldBe` ExitSuccess
+                -- The worker mirrors asynchronously, so the mirror-job span lands after the
+                -- install returns; the published mirror is the cue the job has run.
+                mirrored <- verdaccioHasVersion e2e (psName mirrorPkg) (psVersion mirrorPkg)
+                mirrored `shouldBe` True
+                emitted <-
+                    awaitCollectorLog
+                        e2e
+                        ( \logs ->
+                            all
+                                (`T.isInfixOf` logs)
+                                ["ecluse.rule.eval", "ecluse.mirror.enqueue", "ecluse.mirror.job"]
+                        )
+                        120
+                emitted `shouldBe` True
+
     -- #325(a) — OTLP absent / telemetry off: the real image still boots, serves a real
     -- install, and logs JSONL to stdout/stderr, with no collector anywhere.
     describe "telemetry — OTLP off, no collector (#325)" $
