@@ -2,11 +2,13 @@
 process-global credential providers into the served 'MountBinding's, failing fast
 and __aggregated__ on any boot problem.
 
-This is the pure, IO-free heart of the composition root ("Ecluse" calls it): it
+This is the __listener-free__ heart of the composition root ("Ecluse" calls it): it
 holds no sockets, no network, and no real clock of its own — the clock and the
 ecosystem-to-adapter resolver are injected — so the boot-time validation is
-unit-tested without opening a listener, mirroring how 'Ecluse.Env' assembly is
-kept pure of IO.
+unit-tested without opening a listener. Its one effect is preparing each mount's rule
+set ('Ecluse.Core.Rules.prepare'), which allocates per-rule engine state once at boot
+(a breaker for a resilient rule; the built-in rules need none today), so binding
+assembly is 'IO'; everything else stays a pure function of the validated config.
 
 == Global providers, per-mount reference
 
@@ -94,7 +96,7 @@ import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName, prefixFor)
 import Ecluse.Core.Package.Integrity (MinIntegrity, MinTrustedIntegrity)
 import Ecluse.Core.Queue (MemoryQueueConfig, defaultMemoryQueueConfig)
 import Ecluse.Core.Queue.Sqs (SqsConfig (sqsEndpoint), SqsEndpoint (..), defaultSqsConfig)
-import Ecluse.Core.Rules (liftPolicy)
+import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Security (Limits (Limits, maxBodyBytes, maxNestingDepth, maxVersionCount), TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), hostAddress, lowerCaseHosts, splitHostPort)
 import Ecluse.Core.Server.Cache (CacheConfig (..))
 import Ecluse.Core.Server.Context (MountBinding, PackumentDeps (..), PublishDeps (..))
@@ -399,7 +401,8 @@ all surface from one call.
 
 The ecosystem-to-adapter resolver and the wall-clock source are injected (the
 composition root supplies @mountBindingFor@ and 'Data.Time.getCurrentTime'), so
-this validation is pure of IO and unit-testable without a socket.
+this validation opens no socket. It is 'IO' only because 'composeBindings' 'prepare's
+each mount's rules (allocating per-rule engine state once at boot).
 -}
 planMounts ::
     (Ecosystem -> Maybe PackumentDeps -> Maybe PublishDeps -> Maybe MountBinding) ->
@@ -407,10 +410,11 @@ planMounts ::
     CredentialProviders ->
     EnvConfig ->
     Maybe ConfigDoc ->
-    Either [BootError] [MountBinding]
+    IO (Either [BootError] [MountBinding])
 planMounts resolveAdapter clock providers env mDoc =
-    first (map PolicyBootError) (loadConfig env mDoc)
-        >>= composeBindings resolveAdapter clock providers
+    case first (map PolicyBootError) (loadConfig env mDoc) of
+        Left errs -> pure (Left errs)
+        Right config -> composeBindings resolveAdapter clock providers config
 
 {- | Turn a validated 'Config' into the served 'MountBinding's, or the aggregated
 boot errors. For each mount, in ecosystem order: its credential reference must
@@ -423,14 +427,17 @@ composeBindings ::
     IO UTCTime ->
     CredentialProviders ->
     Config ->
-    Either [BootError] [MountBinding]
-composeBindings resolveAdapter clock providers config =
+    IO (Either [BootError] [MountBinding])
+composeBindings resolveAdapter clock providers config = do
     -- The publish-deps validation is global (env-level), so its error aggregates with
     -- the per-mount errors rather than short-circuiting: one boot reports every problem.
     let (pubErrs, pubDeps) = either (,Nothing) ([],) publishDepsResult
-     in case (pubErrs, partitionEithers (map (bindingFor pubDeps) (Map.elems (configMounts config)))) of
-            ([], ([], bindings)) -> Right bindings
-            (_, (errs, _)) -> Left (pubErrs <> concat errs)
+    -- 'bindingFor' is 'IO' (it 'prepare's the mount's rules), so the per-mount results
+    -- are gathered with 'traverse' and then partitioned exactly as before.
+    bindingResults <- traverse (bindingFor pubDeps) (Map.elems (configMounts config))
+    pure $ case (pubErrs, partitionEithers bindingResults) of
+        ([], ([], bindings)) -> Right bindings
+        (_, (errs, _)) -> Left (pubErrs <> concat errs)
   where
     inboundToken :: Maybe Secret
     inboundToken = cfgAuthToken (configEnv config)
@@ -513,9 +520,10 @@ composeBindings resolveAdapter clock providers config =
     so a mount missing both reports both in one run rather than one at a time. The
     resolved publish dependencies (shared across mounts) are passed to the adapter so
     the binding carries the first-party publish wiring. -}
-    bindingFor :: Maybe PublishDeps -> Mount -> Either [BootError] MountBinding
-    bindingFor pubDeps mount =
-        case (credentialError mount, resolveAdapter (mountEcosystem mount) (Just (packumentDepsFor mount)) pubDeps) of
+    bindingFor :: Maybe PublishDeps -> Mount -> IO (Either [BootError] MountBinding)
+    bindingFor pubDeps mount = do
+        deps <- packumentDepsFor mount
+        pure $ case (credentialError mount, resolveAdapter (mountEcosystem mount) (Just deps) pubDeps) of
             (Nothing, Just binding) -> Right binding
             (mCredErr, mBinding) ->
                 Left (maybeToList mCredErr <> [MissingAdapter (mountEcosystem mount) | isNothing mBinding])
@@ -539,19 +547,21 @@ composeBindings resolveAdapter clock providers config =
     reads a leading slash as a @file:@ path), so a real install path must set
     @PROXY_PUBLIC_URL@ (see @mountBaseUrl@ and
     @docs\/architecture\/hosting.md@ → "URL rewriting"). -}
-    packumentDepsFor :: Mount -> PackumentDeps
-    packumentDepsFor mount =
+    packumentDepsFor :: Mount -> IO PackumentDeps
+    packumentDepsFor mount = do
+        -- Prepare the resolved policy into the engine's runtime rules. No effectful rule
+        -- type is wired into the policy model yet, so every rule here is built-in and
+        -- 'prepare' allocates no breaker; an effectful rule would carry a resilience
+        -- policy (and its breaker, allocated here once).
+        prepared <- prepare (mountPolicy mount)
         let regs = mountRegistries mount
-         in PackumentDeps
+        pure
+            PackumentDeps
                 { pdPrivateBaseUrl = unUrl (regPrivateUpstream regs)
                 , pdPublicBaseUrl = unUrl (regPublicUpstream regs)
                 , pdMountBaseUrl = mountBaseUrl (mountEcosystem mount)
                 , pdMirrorTarget = unUrl (mtUrl (regMirrorTarget regs))
-                , -- Lift the resolved pure policy into the engine's one uniform rule
-                  -- representation. No effectful rule type is wired into the policy model
-                  -- yet, so every rule here is pure and evaluation short-circuits without
-                  -- launching IO; an effectful rule would simply carry a resilience policy.
-                  pdRules = liftPolicy (mountPolicy mount)
+                , pdRules = prepared
                 , pdTarballHostPolicy = tarballHostPolicy
                 , -- The internal-range opt-in for an honoured tarball host is empty —
                   -- the composition root's secure default, matching the guarded
