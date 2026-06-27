@@ -1,8 +1,8 @@
 ---
 id: S37
-title: Benchmark harness + Layer A work-per-request benches + CI baseline (informational)
+title: Benchmark harness + Layer A work-per-request benches + PR-run CI (informational)
 milestone: M9 — Benchmarking & load testing
-status: not-started
+status: merged
 depends-on: []
 test-tier: [bench]
 arch-refs:
@@ -11,10 +11,10 @@ arch-refs:
   - docs/architecture/observability.md
   - docs/architecture/rules-engine.md#applying-verdicts-to-a-packument
   - docs/architecture/registry-model.md#packument-merge-across-upstreams
-pr: null
+pr: 385
 ---
 
-# S37 — Benchmark harness + Layer A work-per-request benches + CI baseline (informational)
+# S37 — Benchmark harness + Layer A work-per-request benches + PR-run CI (informational)
 
 > Milestone **M9** · depends on: — (runs against the already-merged pure core) · tier: bench
 
@@ -34,45 +34,47 @@ error, harness crash, non-zero exit) — it **never** computes a perf-regression
 change may knowingly trade performance for correctness and still merge.
 
 **Acceptance criteria.**
-- [ ] **`ecluse-bench` component.** A cabal `benchmark` stanza (`import: shared` + the
+- [x] **`ecluse-bench` component.** A cabal `benchmark` stanza (`import: shared` + the
   relude mixin, like the test suites) using
   [`tasty-bench`](https://hackage.haskell.org/package/tasty-bench) (one module; only
   `tasty`), `-Werror`-clean, run via `make bench` from the Nix shell. `criterion` is
   rejected (50+ transitive deps) per the lean-dependency posture. The component is
   kept **out of the library's dependency closure**. — _technology-stack.md#key-decisions_
-- [ ] **Micro-benches over the pure hot paths**, each on a realistic input from the
+- [x] **Micro-benches over the pure hot paths**, each on a realistic input from the
   corpus below: npm wire decode + projection (`Registry.Npm.Wire` / `.Project`);
   `Rules.evalRules` scaled across version counts; packument `Package.Merge`; the npm
   URL-rewrite + ETag / re-serialise; `Version.compareVersions` / `parseVersionKey`;
   `Server.Route.classify`; the `Security` bounded-read / nesting-depth guards.
   — _rules-engine.md · registry-model.md · security.md_
-- [ ] **Time *and* allocations captured** (`+RTS -T`). **Allocations are the tracked,
+- [x] **Time *and* allocations captured** (`+RTS -T`). **Allocations are the tracked,
   machine-independent signal**; CPU time is recorded but informational — documented as
   such. (GC pressure drives an inline proxy's tail latency — _observability.md_.)
-- [ ] **Complexity assertions via `tasty-bench-fit`** on the version-count-scaled
+- [x] **Complexity assertions via `tasty-bench-fit`** on the version-count-scaled
   paths (merge, rules-over-versions, the serve filter): flag worse-than-linear. This
   is the CI-stable guard against the accidentally-quadratic class
   ([#373](https://github.com/AlexaDeWit/Ecluse/issues/373) /
   [#374](https://github.com/AlexaDeWit/Ecluse/issues/374) /
   [#299](https://github.com/AlexaDeWit/Ecluse/issues/299)).
-- [ ] **Realistic corpus.** Reuse `core/test/unit/fixtures/npm/*.json` (incl. the real
+- [x] **Realistic corpus.** Reuse `core/test/unit/fixtures/npm/*.json` (incl. the real
   large `express.full.json`) and add a **synthetic ~100k-version packument generator**
   to stress scaling. Bench inputs are supplied via `env`, never top-level thunks.
-- [ ] **Informational CI workflow.** `.github/workflows/bench.yml` on
-  **`workflow_dispatch` only** (iteration 1, until run-time is known — D3), **not** a
-  `gate` dependency, runs `make bench` in a lean `.#bench` dev shell, and renders the
-  results to the run summary. **First-party SHA-pinned actions only** (no third-party
-  Node action this iteration).
-- [ ] **`main` baseline artifact.** A dispatch on `main` uploads its results as a
-  durable, commit-keyed artifact (`actions/upload-artifact`, SHA-pinned) — the
-  `before:` baseline a later run fetches to compare against. _(The before/after **PR
-  comment** waits for a later iteration that adds a `pull_request` trigger — D3.)_
-- [ ] **`make bench-profile`** — a profiling build → flamegraph target, so a
+- [x] **Informational CI workflow.** `.github/workflows/bench.yml` on **`pull_request`
+  + `workflow_dispatch`** (D3), **not** a `gate` dependency, runs `make bench` in a lean
+  `.#bench` dev shell, and renders the results to the run summary. **First-party
+  SHA-pinned actions only** (no third-party Node action). Superseded PR runs are
+  cancelled; a dispatch is never cancelled.
+- [x] **Per-run results, no cross-run baseline.** Each run uploads its own results
+  (`actions/upload-artifact`, SHA-pinned, `bench-results-<sha>`) — downloadable from
+  that run, **not** a cross-run baseline (an artifact is scoped to its run, and a
+  durable cross-run store would need write permissions we deliberately do not take on).
+  Comparison is by hand (allocations are machine-independent). _No before/after PR
+  comment: it would need that same write access — out of scope (D2/D3)._
+- [x] **`make bench-profile`** — a profiling build → flamegraph target, so a
   regression localises to a cost centre.
-- [ ] **Strategy documented in the same PR** — `docs/architecture/performance.md`
+- [x] **Strategy documented in the same PR** — `docs/architecture/performance.md`
   authored here: the two-layer model, allocations-vs-time, **never-gates-except-on-
-  failure**, the baseline / (future) PR-comment flow, the consistency posture (D2),
-  and how to run `make bench` / `make bench-profile` locally.
+  failure**, the per-run-results flow (no cross-run baseline), the consistency posture
+  (D2), and how to run `make bench` / `make bench-profile` locally.
 
 **File scope.**
 - `bench/Main.hs` (+ `bench/Ecluse/Core/*Bench.hs`) — the `tasty-bench` suite.
@@ -101,6 +103,16 @@ tiny unit check may cover any results-formatting shim if it grows logic.
 - **D2** — measure on the **shared public** GitHub-hosted runner; trustworthy
   absolutes come from **local deep-dives**. Self-hosted rejected (PR-code supply-chain
   risk); larger hosted runners deferred (need a paid org plan).
-- **D3** — `workflow_dispatch` only for iteration 1.
+- **D3** — runs on `pull_request` + `workflow_dispatch`. No cross-run baseline and no
+  before/after PR comment (each would need a durable cross-run store / write access this
+  project deliberately avoids); comparison is by hand.
 - RTS hygiene: a larger nursery (`-A32m`) and `-fproc-alignment=64` cut GC / layout
   noise. **Never wire any of this into `gate`.**
+- **As-built (rebased onto the settled engine).** Rule evaluation became `IO` (the
+  `PreparedRule` engine, #381 → #394): the rule-sweep and serve benches `prepare` rules
+  once and measure the `IO` action (`whnfAppIO`), with an `IO` complexity-fit variant
+  (`notWorseThanLinearIO`). `RouteBench` threads the HTTP method (the S52 publish path,
+  #379, made `classify` method-aware and added the `Publish` route). The bench stanza
+  adds `http-types`; `cabal.project` carries a narrow `allow-newer: regression-simple:base`
+  (a stale `base < 4.20` cap on a `tasty-bench-fit` transitive, the cabal-path analogue
+  of the Nix set's jailbreak). `codecov.yml` ignores `bench/` (not application code).

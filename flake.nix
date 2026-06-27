@@ -552,6 +552,19 @@
           buildInputs = [ pkgs.bashInteractive pkgs.regclient pkgs.jq ] ++ releaseInputs;
         });
 
+        # Shell for the benchmark harness (`make bench` / `make bench-profile`). The
+        # benches themselves need no extra *shell* tool beyond the GHC toolchain — the
+        # tasty-bench / tasty-bench-fit libraries come via cabal from the pin, exactly
+        # like every other Hackage dependency — so `make bench` only needs the lean CI
+        # set. `make bench-profile` adds two tools that turn a GHC cost-centre profile
+        # into a flame graph: ghc-prof-flamegraph (folds a `.prof` into collapsed
+        # stacks) and the FlameGraph scripts (renders them to SVG). CI enters it with
+        # `nix develop .#bench`. See docs/architecture/performance.md.
+        devShells.bench = pkgs.mkShell (shellEnv // {
+          name = "ecluse-bench";
+          buildInputs = ciInputs ++ [ pkgs.haskellPackages.ghc-prof-flamegraph pkgs.flamegraph ];
+        });
+
         # LSP<->MCP bridge shell (HLS + agent-lsp). Opt-in only: not
         # built by CI (the gate runs no `nix flake check`) and not part of the
         # default dev shell. Enter with `nix develop .#mcp`, or let `.mcp.json`

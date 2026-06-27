@@ -18,6 +18,9 @@ http_cache.sqlite
 .hie/
 dist-weeder/
 dist-stan/
+dist-bench-prof/
+/ecluse-bench.prof
+/ecluse-bench.svg
 *.hi
 *.o
 scratchpad/

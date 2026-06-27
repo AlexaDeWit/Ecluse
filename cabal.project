@@ -34,7 +34,7 @@ source-repository-package
 -- the separate Nix path that builds the shipped artifact (callCabal2nix; it does
 -- not read these files). Bump both together via `make freeze`; see CONTRIBUTING
 -- → "Dependency locking".
-index-state: 2026-06-26T21:57:10Z
+index-state: 2026-06-27T14:35:20Z
 
 -- Enable the test suites in the solver for *every* command, so a bare
 -- `cabal test <suite>` (as `make test` runs) resolves a tests-inclusive plan
@@ -44,6 +44,13 @@ index-state: 2026-06-26T21:57:10Z
 -- `cabal build --enable-tests` succeeds. Keeping it here makes `make build` and
 -- `make test` resolve identically.
 tests: True
+
+-- Enable the benchmark component in the solver for *every* command, so a bare
+-- `cabal bench ecluse-bench` (as `make bench` runs) resolves a benchmarks-inclusive
+-- plan instead of failing with Cabal-7043 — the same reason `tests: True` is set
+-- above. Without it `cabal bench` does not pass `--enable-benchmarks` to the solver
+-- and can pick a benchmarks-disabled plan.
+benchmarks: True
 
 -- Cap warp below 3.4.10. warp 3.4.10 ("Using newest dependencies") regressed
 -- connection handling so that its `testWithApplication` helper — which the unit
@@ -71,6 +78,16 @@ constraints: hs-opentelemetry-api ==1.0.*,
              hs-opentelemetry-api-types ==1.0.*,
              hs-opentelemetry-sdk ==1.0.*,
              hs-opentelemetry-exporter-otlp ==1.0.*
+
+-- Relax one over-tight upper bound for the benchmark path only: tasty-bench-fit
+-- pulls regression-simple, whose every release caps base < 4.20, which excludes our
+-- pinned GHC 9.10 (base 4.20). regression-simple is a small pure-Haskell numeric
+-- library that builds clean against base 4.20 — the bound is stale, not a real
+-- incompatibility — so we allow the newer base, scoped narrowly to that one
+-- package's base dependency. This mirrors what the Nix/Hackage haskell set already
+-- does for the package; the constraint is the cabal-path equivalent. Drop it once
+-- regression-simple widens its bound upstream, then re-freeze.
+allow-newer: regression-simple:base
 
 -- Warnings are errors for our own package, in CI and locally. GHC is pinned by
 -- flake.lock, so there is no "new compiler surfaces new warnings" surprise to
