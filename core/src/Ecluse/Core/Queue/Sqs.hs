@@ -360,7 +360,7 @@ encode/decode an exact round-trip. -}
 bareName :: PackageName -> Text
 bareName name =
     case pkgNamespace name of
-        Just scope -> T.drop (T.length (renderScope scope) + 1) display
+        Just scope -> fromMaybe display (T.stripPrefix (renderScope scope <> "/") display)
         Nothing -> display
   where
     display = renderPackageName name

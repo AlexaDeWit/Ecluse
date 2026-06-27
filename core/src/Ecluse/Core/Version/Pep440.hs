@@ -29,6 +29,7 @@ module Ecluse.Core.Version.Pep440 (
 ) where
 
 import Data.Char (isDigit)
+import Data.List (dropWhileEnd, unsnoc)
 import Data.Text qualified as T
 
 import Ecluse.Core.Version.Token (VToken (..), isAsciiAlphaNum, maxVersionLength, numOr0, parseNumSeg)
@@ -64,7 +65,7 @@ parsePep440 raw = do
     -- Bound the input length before any numeric parsing: a segment is read into an
     -- 'Integer' with 'readMaybe', which is quadratic in the digit count, so an
     -- unbounded run in hostile metadata would be an algorithmic-complexity DoS.
-    guard (T.length raw <= maxVersionLength)
+    guard (T.compareLength raw maxVersionLength /= GT)
     let lowered = T.toLower (T.strip raw)
         noV = fromMaybe lowered (T.stripPrefix "v" lowered)
         (mainPart, localRaw) = T.breakOn "+" noV
@@ -74,8 +75,7 @@ parsePep440 raw = do
                 | T.null rest -> ("", mainPart)
                 | otherwise -> (e, T.drop 1 rest)
     epoch <- if T.null epochText then pure 0 else parseNumSeg epochText
-    let releaseText = T.takeWhile (\c -> isDigit c || c == '.') afterEpoch
-        suffix = T.drop (T.length releaseText) afterEpoch
+    let (releaseText, suffix) = T.span (\c -> isDigit c || c == '.') afterEpoch
         -- 'releaseText' greedily grabs the dot that separates the release from a
         -- suffix ("1.0.dev1" → "1.0." → ["1","0",""]), so drop *one* trailing
         -- empty segment — but only one, and reject any remaining empty segment so
@@ -109,10 +109,12 @@ parsePep440 raw = do
   where
     isMainChar c = isAsciiAlphaNum c || c == '.' || c == '!' || c == '-' || c == '_'
     -- Drop at most one trailing empty segment (the release/suffix separator dot).
-    dropTrailingEmpty segs = case reverse segs of
-        s : rest | T.null s -> reverse rest
+    -- Only the final segment is dropped, so a doubled trailing blank ("1.0..dev1")
+    -- leaves an empty segment behind for the 'any T.null' guard above to reject.
+    dropTrailingEmpty segs = case unsnoc segs of
+        Just (initSegs, lastSeg) | T.null lastSeg -> initSegs
         _ -> segs
-    stripTrailingZeros = reverse . dropWhile (== 0) . reverse
+    stripTrailingZeros = dropWhileEnd (== 0)
     parseLocal lr
         | T.null lr = Just []
         | otherwise =

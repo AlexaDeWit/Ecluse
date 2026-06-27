@@ -33,6 +33,7 @@ module Ecluse.Core.Server.Route (
 ) where
 
 import Data.ByteString qualified as BS
+import Data.ByteString.Internal (w2c)
 import Data.Char (intToDigit, isControl, toUpper)
 import Data.Text qualified as T
 
@@ -181,7 +182,7 @@ encodeComponent = T.concat . map encodeByte . BS.unpack . encodeUtf8
 
     -- An unreserved byte is ASCII, so its 'Char' is its code point.
     chr8 :: Word8 -> Char
-    chr8 = toEnum . fromIntegral
+    chr8 = w2c
 
     hexDigit :: Word8 -> Char
     hexDigit = toUpper . intToDigit . fromIntegral

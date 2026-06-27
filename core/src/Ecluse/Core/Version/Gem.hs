@@ -20,6 +20,7 @@ module Ecluse.Core.Version.Gem (
 ) where
 
 import Data.Char (isDigit)
+import Data.List (dropWhileEnd)
 import Data.Text qualified as T
 
 import Ecluse.Core.Version.Token (VToken (..), isAsciiAlphaNum, maxVersionLength, numOr0)
@@ -51,7 +52,7 @@ parseGem raw = do
     -- Bound the input length before any numeric parsing: a digit run is read into an
     -- 'Integer' with 'readMaybe', which is quadratic in the digit count, so an
     -- unbounded run in hostile metadata would be an algorithmic-complexity DoS.
-    guard (T.length raw <= maxVersionLength)
+    guard (T.compareLength raw maxVersionLength /= GT)
     let stripped = T.strip raw
         -- Gem::Version canonicalises hyphens to a prerelease marker via a global
         -- gsub("-", ".pre.") before segmenting, so e.g. "1.0.0-1" parses as the
@@ -83,7 +84,7 @@ canonicalSegments toks =
     isText = \case
         VStr _ -> True
         VNum _ -> False
-    dropTrailingZeros = reverse . dropWhile (== VNum 0) . reverse
+    dropTrailingZeros = dropWhileEnd (== VNum 0)
 
 {- | Whether a gem version is stable: every token is numeric (no letter segment).
 So @1.0.0@ is stable; @1.0.0.pre@ and @1.2.0.rc1@ are not.

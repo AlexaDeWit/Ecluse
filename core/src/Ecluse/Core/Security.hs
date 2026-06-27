@@ -68,6 +68,8 @@ module Ecluse.Core.Security (
 import Data.Aeson (Value (Array, Bool, Null, Number, Object, String))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
+import Data.ByteString.Builder (byteString, toLazyByteString)
+import Data.ByteString.Lazy qualified as BSL
 import Data.IP (
     IP (IPv4, IPv6),
     IPRange (IPv4Range, IPv6Range),
@@ -754,18 +756,20 @@ zero or negative 'maxBodyBytes' rejects any non-empty body. The bound is checked
 __before__ a chunk is retained, so memory never exceeds the limit plus one chunk.
 -}
 boundedRead :: (Monad m) => Limits -> m ByteString -> m (Either LimitError ByteString)
-boundedRead limits readChunk = go 0 []
+boundedRead limits readChunk = go 0 mempty
   where
     cap = maxBodyBytes limits
+    -- Accumulate the body in a forward-built 'Builder' (chunks appended in arrival
+    -- order), finalised once at EOF — no reversed chunk list to undo.
     go !seen acc = do
         chunk <- readChunk
         if BS.null chunk
-            then pure (Right (BS.concat (reverse acc)))
+            then pure (Right (BSL.toStrict (toLazyByteString acc)))
             else
                 let seen' = seen + BS.length chunk
                  in if seen' > cap
                         then pure (Left (BodyTooLarge cap))
-                        else go seen' (chunk : acc)
+                        else go seen' (acc <> byteString chunk)
 
 {- | Reject a parsed packument carrying more than 'maxVersionCount' versions,
 returning it unchanged when within budget.

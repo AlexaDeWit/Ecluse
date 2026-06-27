@@ -388,7 +388,7 @@ off the request path). @signal@ names the failing exporter (@span@ \/ @metric@).
 observeExportResult :: ExportFailureSink -> Text -> ExportResult -> IO ()
 observeExportResult sink signal = \case
     Success -> pass
-    Failure mErr -> routeExportFailure sink (signal <> " export failed" <> foldMap ((": " <>) . show) mErr)
+    Failure mErr -> routeExportFailure sink (signal <> " export failed" <> maybe "" ((": " <>) . show) mErr)
 
 {- | Install a process-global handler for the SDK's own diagnostic stream, routed through
 the shared sink so it coalesces with the exporter-failure feed. In @hs-opentelemetry
