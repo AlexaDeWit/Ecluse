@@ -741,7 +741,7 @@ gatePublic metrics deps ctx = \case
         mpRuleEvalDuration metrics (evalTier (pdRules deps)) seconds
         recordEffectfulFailures metrics (Map.elems decisions)
         let plan = filterPlanFromDecisions decisions admissible
-        pure $ case applyFilterPlan (pdMountBaseUrl deps) plan value of
+        pure $ case applyFilterPlan plan value of
             Filtered filtered ->
                 (Just (Contribution GatedSource (restrictToSurvivors (fpSurvivors plan) admissible) filtered), integrityRefusals)
             NoSurvivors leftover -> (Nothing, projectDecisions admissible leftover <> integrityRefusals)

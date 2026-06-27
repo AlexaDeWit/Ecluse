@@ -69,15 +69,15 @@ rewriteServeDepth value =
      in T.length (renderETag (ownETag body)) + fromIntegral (BSL.length body)
 
 {- | The full serve transform: build the filter plan over the versions (the engine's
-effectful rule sweep), replay it onto the body (restrict to survivors + rewrite URLs),
-re-serialise, and ETag the result.
+effectful rule sweep), replay it onto the body (restrict to survivors), rewrite the
+surviving tarball URLs once at assembly, re-serialise, and ETag the result.
 -}
 serveDepth :: (Value, PackageInfo) -> IO Int
 serveDepth (value, info) = do
     plan <- filterPlan benchEvalContext serveRules info
-    pure $ case applyFilterPlan syntheticProxyBase plan value of
+    pure $ case applyFilterPlan plan value of
         Filtered served ->
-            let body = encode served
+            let body = encode (rewriteTarballUrls syntheticProxyBase served)
              in T.length (renderETag (ownETag body)) + fromIntegral (BSL.length body)
         NoSurvivors _ -> 0
 

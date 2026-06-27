@@ -190,11 +190,14 @@ filterSpec = describe "applyFilterPlan (replay)" $ do
         (info, _) <- loadPackument oneVersionPackument
         applyTo ctx quarantine info (Array mempty) >>= (`shouldBe` NoSurvivors [])
 
-    it "rewrites surviving versions' dist.tarball under the mount base during replay" $ do
-        -- The replay rewrites tarballs as part of the wire-shape contract; a surviving
-        -- version's tarball lands under {base}/{pkg}/-/{file} (idempotent at assembly).
+    it "relays a surviving version's dist.tarball as the upstream bytes; the single assembly rewrite lands it under the mount base" $ do
+        -- The replay no longer rewrites tarballs: it relays the upstream URL, and the
+        -- one assembly-stage 'rewriteTarballUrls' pass lands it under {base}/{pkg}/-/{file}.
+        -- Asserting both halves pins the rewrite to a single pass (issue #299).
         filtered <- filterTo twoVersions
         tarballAt "1.0.0" (Object (rawObject filtered))
+            `shouldBe` Just "https://upstream.test/thing/-/thing-1.0.0.tgz"
+        tarballAt "1.0.0" (rewriteTarballUrls base (Object (rawObject filtered)))
             `shouldBe` Just "https://proxy.test/npm/thing/-/thing-1.0.0.tgz"
 
     it "drops a version broken in a required field from the served body, keeping the healthy one" $ do
@@ -712,12 +715,13 @@ loadPackument bs = do
 
 {- | Decide the plan ('Ecluse.Core.Package.Filter.filterPlan') over the typed view and
 replay it ('applyFilterPlan') onto the raw body — the composition the serve layer
-performs. The mount 'base' is supplied so the replay's tarball rewrite is exercised.
+performs. The replay no longer rewrites tarball URLs (that is 'rewriteTarballUrls',
+the assembly stage's single pass), so it carries no mount base.
 -}
 applyTo :: EvalContext -> [PrecededRule] -> PackageInfo -> Value -> IO FilterResult
 applyTo c rules info value = do
     plan <- filterPlan c rules info
-    pure (applyFilterPlan base plan value)
+    pure (applyFilterPlan plan value)
 
 -- | Filter a fixture body, requiring survivors; returns the filtered packument.
 filterTo :: ByteString -> IO FilteredPackument
