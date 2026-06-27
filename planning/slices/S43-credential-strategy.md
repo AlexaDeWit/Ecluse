@@ -20,10 +20,10 @@ pr: null
 >
 > _Access-model enhancement; **off the launch critical path** — the `passthrough`
 > default is what S14/S15 already ship. This slice adds the framework and the
-> non-default strategies' selection + edge-auth, ahead of S44/S45 wiring them._
+> non-default `service` strategy's selection + edge-auth, ahead of S44 wiring it._
 
 **Goal.** Introduce the per-mount **credential strategy** as a first-class config
-choice — `passthrough` (default) | `service` | `delegated-cache` — and the **edge
+choice — `passthrough` (default) | `service` — and the **edge
 authentication** modes that feed it (`open` | `static` | `trusted-edge`). Make the
 safe default the floor and the **unsafe combinations unrepresentable** — including
 `trusted-edge`, which Écluse accepts **only over a verifiable binding to the edge**
@@ -50,10 +50,11 @@ validation, and the verified edge-identity extraction.
   trusted header is forgeable into granted access wherever Écluse is reachable other
   than through the edge, so this is closed in code, not left to a deployment hope. —
   _access-model.md#safe-defaults-and-unrepresentable-unsafe-combinations, security.md#trust-assumptions--credential-posture_
-- [ ] **Unrepresentable unsafe combination**: a shared private-leg cache entry is
-  reachable **only** under `service`/`delegated-cache`; the types/config make
-  "`passthrough` + shared private cache" impossible to express, not merely rejected
-  at runtime. — _access-model.md#safe-defaults-and-unrepresentable-unsafe-combinations_
+- [ ] **Unrepresentable unsafe combination**: **no** strategy admits a shared
+  private-leg cache entry; the types/config make a shared private cache impossible to
+  express under **any** strategy (`passthrough` or `service`), not merely rejected at
+  runtime — Écluse forbids a private cache outright. —
+  _access-model.md#safe-defaults-and-unrepresentable-unsafe-combinations_
 - [ ] `service` requires an explicit "the edge authorises callers" acknowledgement in
   config; omitting it is a fail-fast startup error. — _access-model.md#safe-defaults-and-unrepresentable-unsafe-combinations_
 - [ ] The caller's edge identity (when present) is available to the request pipeline
@@ -81,9 +82,10 @@ validation, and the verified edge-identity extraction.
 **Test tier.** Unit — config decode/validation and the cache-admission witness are pure.
 
 **Notes / risks.** This formalises what `passthrough` (S14) already does as the
-default and opens the door for S44 (`service` read path) and S45 (`delegated-cache`
-probe). Keep `passthrough` behaviour **byte-identical** to today — this slice must
-not change the default path, only add the selection and guard. The
+default and opens the door for S44 (`service` read path). (S45/`delegated-cache` is
+**superseded** — Écluse forbids a shared private cache.) Keep `passthrough` behaviour
+**byte-identical** to today — this slice must not change the default path, only add the
+selection and guard. The
 "reachable-only-via-edge" network topology for `trusted-edge` remains a deployment
 invariant Écluse cannot enforce alone, but the **escalation it once flagged is
 resolved (DECIDED 2026-06-27): code-level enforcement _is_ expected.** Écluse must not

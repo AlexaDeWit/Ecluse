@@ -119,12 +119,9 @@ when those slices land, so the shape is set once here.
 [Access & Credential Model](access-model.md)). Under the default **`passthrough`**,
 reads carry **no Écluse credential**: the private upstream receives the **client's**
 forwarded token (it is the authority for reads) and the public upstream is queried
-anonymously with the client's token **stripped**. Under **`service`** — and a
-**service-populated `delegated-cache`** — Écluse reads the private upstream with its
-**own** `CredentialProvider` token; a **caller-populated `delegated-cache`** keeps
-forwarding the client's token, so it needs no read credential. (What lets the private
-origin be *cached* is the strategy's serve-time authorisation — the edge or a probe —
-not the populate; see [Access & Credential Model → Caching](access-model.md#caching).)
+anonymously with the client's token **stripped**. Under **`service`**, Écluse reads the private upstream with its
+**own** `CredentialProvider` token — per-request and **never cached** (Écluse forbids a
+shared private cache; see [Access & Credential Model → Caching](access-model.md#caching)).
 The public upstream is anonymous under every strategy — and the client's token is
 **never** forwarded there. The public-origin fetch is built with no token at all:
 there is deliberately no Écluse credential for the public upstream. Minting these
@@ -302,7 +299,7 @@ Crucially, **unknown is an error, not a silent skip**:
   mistype a rule out of existence.
 - **Credential references must resolve.** A mount whose
   [credential strategy](access-model.md) draws on a provider the deployment has not
-  initialized — e.g. a `service` (or service-populated `delegated-cache`) mount with
+  initialized — e.g. a `service` mount with
   no read provider, or a mirror target naming a backend whose ambient cloud identity
   is absent — is **rejected at boot**. Credential providers are
   [process-global](cloud-backends.md#credential-provider) and a mount only references

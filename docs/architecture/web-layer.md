@@ -97,8 +97,7 @@ control-plane work, while the npm data plane is unchanged `http-client` (see
 
 On the data plane, credential handling follows the mount's
 [credential strategy](access-model.md): under the default `passthrough` the client's
-`Authorization` is **forwarded to the private upstream**; under `service` (and a
-service-populated `delegated-cache`) the private fetch uses Écluse's own
+`Authorization` is **forwarded to the private upstream**; under `service` the private fetch uses Écluse's own
 [`CredentialProvider`](cloud-backends.md#credential-provider) token instead. The
 client's `Authorization` is **always stripped before any public-upstream fetch** —
 an internal token must never leave for the public registry — regardless of strategy.
@@ -206,22 +205,17 @@ benign and even aligned with the resilience posture — a brand-new publish need
 appear instantly. This is **in-memory metadata only**; on-disk artifact caching
 stays out of scope, and the mirror remains the durable store.
 
-What the cache may hold on the private origin is set by the mount's
-[credential strategy](access-model.md#caching). Under the default `passthrough` the
-cache holds the **anonymous public (gated) origin only**: the trusted **private
-upstream** is the **per-client authority** — it re-authorises each request with that
-client's own forwarded credential — so its metadata is **fetched per request, never
-cached**, because a cache key carries no credential dimension and a shared private
-entry would let one client's document be served to another within the TTL, bypassing
-the upstream's per-client authorisation (see
-[the private upstream's metadata is not cached across clients](registry-model.md#the-private-upstreams-metadata-is-not-cached-across-clients-under-passthrough)).
-Under `service` / `delegated-cache` the private origin is **cached and shared** like the
-public origin — made safe not by how it was populated but by how each serve is
-authorised: the edge under `service`, and a fresh per-request probe under
-`delegated-cache` (whose shared entry may be caller- or service-populated; see
-[Access & Credential Model → Caching](access-model.md#caching)). The public origin is
-anonymous under every strategy, so a single shared entry crosses no trust boundary and
-is cached freely.
+The cache holds the **anonymous public (gated) origin only**, under **every** strategy:
+the **private origin is never cached**. The private upstream is the per-client authority
+(`passthrough` re-authorises each request with the client's own forwarded credential;
+`service` reads with Écluse's own identity behind the edge), and a cache key carries no
+credential dimension — so a shared private entry would let one client's document be
+served to another within the TTL, bypassing per-client authorisation. Écluse therefore
+[forbids a shared private cache](access-model.md#why-écluse-never-caches-the-private-origin)
+outright and reads the private origin **per request** (see
+[the private upstream's metadata is never cached across clients](registry-model.md#the-private-upstreams-metadata-is-never-cached-across-clients)).
+The public origin is anonymous under every strategy, so a single shared entry crosses no
+trust boundary and is cached freely.
 
 ## Error model
 

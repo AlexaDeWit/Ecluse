@@ -236,9 +236,8 @@ A `CredentialProvider` refreshes a registry token off its own `expiresAt`,
 proactively and single-flight, so the request hot path never blocks on a mint in
 the common case. Under the default `passthrough` strategy credentials are
 **mirror-write only**, so even a fully failed refresh never touches the client serve
-path — only the mirror publish; under `service` (and a service-populated
-`delegated-cache`) a read credential sits on the serve path, so its failure does
-degrade serving. See
+path — only the mirror publish; under `service` a read credential sits on the serve
+path, so its failure does degrade serving. See
 [Cloud Backends → Credential Provider](cloud-backends.md#credential-provider).
 
 ```mermaid
@@ -255,8 +254,8 @@ stateDiagram-v2
         Under passthrough the mirror publish is the only
         dependent op: the job is left un-acked and retries /
         dead-letters, never touching the client serve path.
-        (Under service / a service-populated delegated-cache
-        a read credential sits on the serve path — see access-model.md.)
+        (Under service a read credential sits on the serve
+        path — see access-model.md.)
     end note
 ```
 
@@ -265,7 +264,7 @@ stateDiagram-v2
 The diagram shows the default **`passthrough`** strategy. The invariant that holds
 under **every** strategy is narrower: the client's credential is **never** sent to
 the public upstream. Whether it reaches the private upstream is strategy-specific —
-it does under `passthrough`; under `service` / `delegated-cache` Écluse reads with
+it does under `passthrough`; under `service` Écluse reads with
 its own credential instead. The fourth role, the **publication target**, receives the
 client's *forwarded* publish credential (the write symmetric of the private read); the
 public upstream still never sees the client's token. See

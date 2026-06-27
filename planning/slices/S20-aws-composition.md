@@ -36,7 +36,7 @@ npm proxy.
   provider(s) **once** (a single container task role in the common case) and each
   mount *names* which it draws on — always a mirror-target write provider; under the
   default `passthrough`, reads forward the client token / are anonymous (no Écluse
-  read credential); the `service` / `delegated-cache` read provider is wired by
+  read credential); the `service` read provider is wired by
   **S44**. A mount referencing an uninitialized provider **fails fast at boot**. —
   _access-model.md, cloud-backends.md#credential-provider, configuration.md#validation-fail-fast-reject-the-unknown_
 - [ ] End-to-end integration test: a request through an in-process Écluse with a

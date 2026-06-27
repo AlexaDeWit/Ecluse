@@ -71,6 +71,6 @@ smoke-tier only.
 - Surfaced one typed failure, `CredentialError(BreakerOpen)` — the only case that
   reaches the caller (expired token + open breaker); a still-valid token is always
   served, so this never touches the client serve path (credentials are
-  mirror-write only **under the default `passthrough` strategy**; `service` — and a
-  service-populated `delegated-cache` — put a read credential on the serve path — see
-  [access-model](../../docs/architecture/access-model.md) and S44/S45).
+  mirror-write only **under the default `passthrough` strategy**; `service` puts a
+  read credential on the serve path — see
+  [access-model](../../docs/architecture/access-model.md) and S44).

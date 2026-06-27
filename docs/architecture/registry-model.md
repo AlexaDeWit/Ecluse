@@ -29,9 +29,7 @@ upstream wants on the wire* (credential supply). The strategies are detailed in 
   (`Authorization` / `_authToken`) verbatim and the upstream authorises each request
   (Écluse substitutes no identity). Under **`service`**, Écluse reads with its **own**
   [`CredentialProvider`](cloud-backends.md#credential-provider) token and authority
-  moves to the edge. Under **`delegated-cache`** the upstream stays the authority via
-  a cheap per-request probe, and the shared entry is filled either by the caller's
-  forwarded token or by Écluse's own token — an orthogonal population choice (see
+  moves to the edge — still **per-request and uncached**, like `passthrough` (see
   [credential strategies](access-model.md#credential-strategies-per-mount)).
 - **Public upstream (read/fallback)** — queried **anonymously** under every strategy.
   The client's credential is **never** forwarded here; sending an internal token to
@@ -54,19 +52,17 @@ The non-negotiable invariant, under **every** strategy: **the client's credentia
 never sent to the public upstream.** (Whether it reaches the private upstream is
 strategy-specific — it does under `passthrough`, not under `service`.)
 
-#### The private upstream's metadata is not cached across clients (under `passthrough`)
+#### The private upstream's metadata is never cached across clients
 
-Under the default **`passthrough`** strategy the private upstream is the
-**per-client authority** for who may read what, so its packument metadata is **not
-cached across clients**: it is re-consulted on **every request**, with that client's
-**own** forwarded credential, so the upstream re-authorises each client itself. Only
-the **anonymous public (gated) origin** is held in the
-[metadata cache](web-layer.md#metadata-cache). (The **`service`** and
-**`delegated-cache`** strategies *do* share the private origin — safely, because the
-bytes are identity-independent and each serve is freshly authorised: the edge under
-`service`, a per-request probe under `delegated-cache`. How the shared entry is
-populated is an orthogonal choice; see
-[Access & Credential Model → Caching](access-model.md#caching).)
+The private upstream is the **per-client authority** for who may read what, so its
+packument metadata is **never cached across clients** under any strategy: it is
+re-consulted on **every request** — with the client's **own** forwarded credential
+under `passthrough`, or Écluse's own identity behind the edge under `service` — so the
+read is freshly authorised each time. Only the **anonymous public (gated) origin** is
+held in the [metadata cache](web-layer.md#metadata-cache). Écluse
+[forbids a shared private cache](access-model.md#why-écluse-never-caches-the-private-origin)
+outright — it is a thin broker and leaves caching to the upstreams — so no strategy
+shares the private origin.
 
 The reason is a cross-client disclosure hazard. The cache key carries **no
 credential dimension** (it is the upstream base URL plus the package — a credential
