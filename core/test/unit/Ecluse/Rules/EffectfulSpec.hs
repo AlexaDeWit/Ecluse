@@ -16,9 +16,10 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package
 import Ecluse.Core.Rules
 
--- This spec builds engine 'Rule' records, whose @rulePrecedence@ field would clash
--- with config's 'PrecededRule' field of the same name; the latter is hidden here.
-import Ecluse.Core.Rules.Types hiding (rulePrecedence)
+-- This spec builds 'PreparedRule's directly — with a fake 'prepEval' and a chosen
+-- 'prepName' — to exercise the resilience harness and the parallel engine without any
+-- evaluation closure on the closed 'Rule' data.
+import Ecluse.Core.Rules.Types
 import Ecluse.Core.Version (mkVersion)
 
 -- | A fixed "now" so the breaker's cooldown arithmetic is deterministic.
@@ -75,37 +76,45 @@ fastConfig =
         , ecBreakerCooldown = 30
         }
 
-{- | Build a resilient (effectful) rule with a fresh breaker, the given precedence,
-config, failure alignment, and eval, observed through the given breaker reporter. The
-eval ignores the evaluation context (the rules under test read only the package).
+{- | Build a resilient (effectful) prepared rule with a fresh breaker, the given
+precedence, config, failure alignment, and (fake) evaluator, observed through the given
+breaker reporter. The evaluator ignores the evaluation context (the rules under test
+read only the package). This is the engine's injection point — an arbitrary 'prepEval'
+and a chosen 'prepName', without widening the closed 'Rule' vocabulary.
 -}
 mkRuleR ::
-    BreakerReporter -> Text -> Int -> EffectfulConfig -> FailureAlignment -> (PackageDetails -> IO RuleResult) -> IO (Rule IO)
+    BreakerReporter -> Text -> Int -> EffectfulConfig -> FailureAlignment -> (PackageDetails -> IO RuleResult) -> IO PreparedRule
 mkRuleR reporter name prec cfg align eval = do
     breaker <- newBreaker
     pure
-        Rule
-            { rulePrecedence = prec
-            , ruleName = name
-            , ruleEval = \_ pd -> eval pd
-            , ruleResilience = Just (Resilience cfg align breaker reporter)
+        PreparedRule
+            { prepName = name
+            , prepPrecedence = prec
+            , prepResilience = Just (Resilience cfg align breaker reporter)
+            , prepEval = \_ pd -> eval pd
             }
 
 -- | As 'mkRuleR', through the inert default reporter.
-mkRule :: Text -> Int -> EffectfulConfig -> FailureAlignment -> (PackageDetails -> IO RuleResult) -> IO (Rule IO)
+mkRule :: Text -> Int -> EffectfulConfig -> FailureAlignment -> (PackageDetails -> IO RuleResult) -> IO PreparedRule
 mkRule = mkRuleR noBreakerReporter
 
 -- | An effectful rule that always returns the given clean result (no IO failure).
-constRule :: Text -> Int -> EffectfulConfig -> FailureAlignment -> RuleResult -> IO (Rule IO)
+constRule :: Text -> Int -> EffectfulConfig -> FailureAlignment -> RuleResult -> IO PreparedRule
 constRule name prec cfg align outcome = mkRule name prec cfg align (\_ -> pure outcome)
 
 -- | An effectful rule whose IO always throws (its source is down).
-failingRule :: Text -> Int -> EffectfulConfig -> FailureAlignment -> IO (Rule IO)
+failingRule :: Text -> Int -> EffectfulConfig -> FailureAlignment -> IO PreparedRule
 failingRule name prec cfg align = mkRule name prec cfg align (\_ -> throwString "source down")
 
--- | A pure rule lifted into the engine's rule shape at a precedence.
-pureAt :: Int -> PureRule -> Rule IO
-pureAt prec pr = liftPureRule (PrecededRule prec pr)
+-- | A built-in rule prepared (no resilience) at a precedence, evaluated via 'evalRule'.
+pureAt :: Int -> Rule -> PreparedRule
+pureAt prec rule =
+    PreparedRule
+        { prepName = ruleName rule
+        , prepPrecedence = prec
+        , prepResilience = Nothing
+        , prepEval = (`evalRule` rule)
+        }
 
 -- | A capturing breaker reporter appending each reported state to its log (oldest first).
 capturingBreakerReporter :: IO (IORef [Breaker], BreakerReporter)

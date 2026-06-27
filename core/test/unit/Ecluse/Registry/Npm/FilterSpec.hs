@@ -31,7 +31,7 @@ import Ecluse.Core.Rules.Types (
     Decision (Admitted),
     EvalContext (EvalContext),
     PrecededRule,
-    PureRule (AllowIfPublishedBefore),
+    Rule (AllowIfPublishedBefore),
     atDefaultPrecedence,
  )
 
@@ -180,7 +180,7 @@ filterSpec = describe "applyFilterPlan (replay)" $ do
     it "signals NoSurvivors, carrying each denied version's decision, when nothing survives" $ do
         -- Both versions are 1 day old: neither clears the quarantine.
         (info, v) <- loadPackument allYoung
-        case applyTo ctx quarantine info v of
+        applyTo ctx quarantine info v >>= \case
             NoSurvivors decisions -> do
                 length decisions `shouldBe` 2
                 any isApproved decisions `shouldBe` False
@@ -188,7 +188,7 @@ filterSpec = describe "applyFilterPlan (replay)" $ do
 
     it "treats a non-object body as having no survivors and no decisions" $ do
         (info, _) <- loadPackument oneVersionPackument
-        applyTo ctx quarantine info (Array mempty) `shouldBe` NoSurvivors []
+        applyTo ctx quarantine info (Array mempty) >>= (`shouldBe` NoSurvivors [])
 
     it "rewrites surviving versions' dist.tarball under the mount base during replay" $ do
         -- The replay rewrites tarballs as part of the wire-shape contract; a surviving
@@ -272,7 +272,7 @@ propertiesSpec = describe "properties" $ do
             spec' <- forAll genPackumentSpec
             (info, v) <- loadOrFail (renderPackument spec')
             let denied = deniedVersions spec'
-            case applyTo ctx quarantine info v of
+            liftIO (applyTo ctx quarantine info v) >>= \case
                 NoSurvivors _ -> success
                 Filtered out -> do
                     let o = asObject out
@@ -289,7 +289,7 @@ propertiesSpec = describe "properties" $ do
         hedgehog $ do
             spec' <- forAll genPackumentSpec
             (info, v) <- loadOrFail (renderPackument spec')
-            case applyTo ctx quarantine info v of
+            liftIO (applyTo ctx quarantine info v) >>= \case
                 NoSurvivors _ -> success
                 Filtered out -> do
                     let o = asObject out
@@ -714,14 +714,16 @@ loadPackument bs = do
 replay it ('applyFilterPlan') onto the raw body — the composition the serve layer
 performs. The mount 'base' is supplied so the replay's tarball rewrite is exercised.
 -}
-applyTo :: EvalContext -> [PrecededRule] -> PackageInfo -> Value -> FilterResult
-applyTo c rules info = applyFilterPlan base (filterPlan c rules info)
+applyTo :: EvalContext -> [PrecededRule] -> PackageInfo -> Value -> IO FilterResult
+applyTo c rules info value = do
+    plan <- filterPlan c rules info
+    pure (applyFilterPlan base plan value)
 
 -- | Filter a fixture body, requiring survivors; returns the filtered packument.
 filterTo :: ByteString -> IO FilteredPackument
 filterTo bs = do
     (info, v) <- loadPackument bs
-    case applyTo ctx quarantine info v of
+    applyTo ctx quarantine info v >>= \case
         Filtered out -> pure (FilteredPackument (asObject out))
         NoSurvivors _ -> fail "expected survivors, got NoSurvivors"
 

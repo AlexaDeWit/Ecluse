@@ -35,8 +35,8 @@ import Ecluse.Core.Package.Integrity (defaultMinIntegrity, defaultMinTrustedInte
 import Ecluse.Core.Queue (newInMemoryQueue)
 import Ecluse.Core.Registry.Npm.Route qualified as Npm
 import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
-import Ecluse.Core.Rules (liftPolicy)
-import Ecluse.Core.Rules.Types (PrecededRule, PureRule (AllowIfPublishedBefore), atDefaultPrecedence)
+import Ecluse.Core.Rules (prepare)
+import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfPublishedBefore), atDefaultPrecedence)
 import Ecluse.Core.Security (TarballHostPolicy (SameHostAsPackument), defaultLimits, lowerCaseHosts)
 import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Core.Server.Context (
@@ -60,7 +60,8 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
         testWithApplication (pure upstreamApp) $ \port -> do
             (metricsPort, decisions) <- recordingMetricsPort
             rt <- mkRuntime metricsPort
-            resp <- captureServe rt (mountWith (Just (depsFor port))) (servePackument leftpad defaultRequest)
+            deps <- depsFor port
+            resp <- captureServe rt (mountWith (Just deps)) (servePackument leftpad defaultRequest)
             statusCode (responseStatus resp) `shouldBe` 200
             decisions >>= (`shouldBe` [Admit])
 
@@ -68,7 +69,8 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
         (metricsPort, decisions) <- recordingMetricsPort
         rt <- mkRuntime metricsPort
         -- 'depsFor 1' points both origins at a closed port, so each fetch is refused.
-        resp <- captureServe rt (mountWith (Just (depsFor 1))) (servePackument leftpad defaultRequest)
+        deps <- depsFor 1
+        resp <- captureServe rt (mountWith (Just deps)) (servePackument leftpad defaultRequest)
         statusCode (responseStatus resp) `shouldBe` 503
         decisions >>= (`shouldBe` [Unavailable])
 
@@ -82,10 +84,11 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
         testWithApplication (pure upstreamApp) $ \port -> do
             (metricsPort, decisions) <- recordingMetricsPort
             rt <- mkRuntime metricsPort
+            deps <- depsFor port
             resp <-
                 captureServe
                     rt
-                    (mountWith (Just (depsFor port)))
+                    (mountWith (Just deps))
                     (serveTarball leftpad (mkVersion Npm "1.0.0") (Filename "leftpad-1.0.0.tgz") defaultRequest)
             statusCode (responseStatus resp) `shouldBe` 200
             decisions >>= (`shouldBe` [Admit])
@@ -136,23 +139,25 @@ mountWith deps =
 and the merge serves the public contribution). @127.0.0.1@ is opted in to the
 internal-range block so the loopback tarball host is honoured on the artifact leg.
 -}
-depsFor :: Int -> PackumentDeps
-depsFor publicPort =
-    PackumentDeps
-        { pdPrivateBaseUrl = "http://127.0.0.1:1"
-        , pdPublicBaseUrl = "http://127.0.0.1:" <> show publicPort
-        , pdMountBaseUrl = "http://proxy.test"
-        , pdMirrorTarget = "http://mirror.test"
-        , pdRules = liftPolicy allowPolicy
-        , pdTarballHostPolicy = SameHostAsPackument
-        , pdAllowedInternalHosts = lowerCaseHosts (Set.singleton "127.0.0.1")
-        , pdLimits = defaultLimits
-        , pdInboundToken = Nothing
-        , pdNow = pure fixedNow
-        , pdHelp = Nothing
-        , pdMinIntegrity = defaultMinIntegrity
-        , pdMinTrustedIntegrity = defaultMinTrustedIntegrity
-        }
+depsFor :: Int -> IO PackumentDeps
+depsFor publicPort = do
+    prepared <- prepare allowPolicy
+    pure
+        PackumentDeps
+            { pdPrivateBaseUrl = "http://127.0.0.1:1"
+            , pdPublicBaseUrl = "http://127.0.0.1:" <> show publicPort
+            , pdMountBaseUrl = "http://proxy.test"
+            , pdMirrorTarget = "http://mirror.test"
+            , pdRules = prepared
+            , pdTarballHostPolicy = SameHostAsPackument
+            , pdAllowedInternalHosts = lowerCaseHosts (Set.singleton "127.0.0.1")
+            , pdLimits = defaultLimits
+            , pdInboundToken = Nothing
+            , pdNow = pure fixedNow
+            , pdHelp = Nothing
+            , pdMinIntegrity = defaultMinIntegrity
+            , pdMinTrustedIntegrity = defaultMinTrustedIntegrity
+            }
 
 {- | A pure rule policy that admits the fixture version: the rules engine is
 deny-by-default, so an empty policy denies every version ("no rule allowed it"). The

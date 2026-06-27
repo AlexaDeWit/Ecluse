@@ -31,8 +31,8 @@ import Ecluse.Core.Queue.Sqs (SqsConfig (sqsWaitSeconds), SqsEndpoint (endpointH
 import Ecluse.Core.Registry.Npm (NpmClientConfig (NpmClientConfig, npmBaseUrl, npmLimits, npmManager, npmToken), newNpmClient)
 import Ecluse.Core.Registry.Npm.Route qualified as Npm
 import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
-import Ecluse.Core.Rules (liftPolicy)
-import Ecluse.Core.Rules.Types (PrecededRule, PureRule (AllowIfPublishedBefore), atDefaultPrecedence)
+import Ecluse.Core.Rules (prepare)
+import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfPublishedBefore), atDefaultPrecedence)
 import Ecluse.Core.Security (LoweredHostSet, TarballHostPolicy (SameHostAsPackument), defaultLimits, lowerCaseHosts)
 import Ecluse.Core.Security.Egress (newGuardedTlsManager)
 import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
@@ -117,7 +117,8 @@ withAwsProxy container queueName body =
             withMirrorTarget $ \mirrorUrl mirrorLog -> do
                 queue <- configDrivenQueue container queueName
                 env <- buildEnv queue mirrorUrl
-                let app = application (mkServerConfig [mountBinding privateUrl publicUrl mirrorUrl]) env
+                binding <- mountBinding privateUrl publicUrl mirrorUrl
+                let app = application (mkServerConfig [binding]) env
                 body TestProxy{tpApp = app, tpEnv = env, tpMirrorLog = mirrorLog}
 
 {- Build the SQS-backed mirror queue through the production composition root: create a
@@ -175,32 +176,32 @@ buildEnv queue mirrorUrl = do
 -- origin is the 404 stub (so every request misses to public), and the mirror target is
 -- the publish stub. The fixed clock and the week-long quarantine make the rule gate
 -- deterministic.
-mountBinding :: Text -> Text -> Text -> MountBinding
-mountBinding privateUrl publicUrl mirrorUrl =
-    MountBinding
-        { bindingPrefix = "npm" :| []
-        , bindingClassifier = Npm.classify
-        , bindingPackumentDeps = Just deps
-        , bindingPublishDeps = Nothing
-        , bindingRenderer = npmRenderer
-        }
-  where
-    deps :: PackumentDeps
-    deps =
-        PackumentDeps
-            { pdPrivateBaseUrl = privateUrl
-            , pdPublicBaseUrl = publicUrl
-            , pdMountBaseUrl = "https://proxy.test/npm"
-            , pdMirrorTarget = mirrorUrl
-            , pdRules = liftPolicy admitOldEnough
-            , pdTarballHostPolicy = SameHostAsPackument
-            , pdAllowedInternalHosts = loopbackOptIn
-            , pdLimits = defaultLimits
-            , pdInboundToken = Nothing
-            , pdNow = pure fixedNow
-            , pdHelp = Nothing
-            , pdMinIntegrity = defaultMinIntegrity
-            , pdMinTrustedIntegrity = defaultMinTrustedIntegrity
+mountBinding :: Text -> Text -> Text -> IO MountBinding
+mountBinding privateUrl publicUrl mirrorUrl = do
+    prepared <- prepare admitOldEnough
+    let deps =
+            PackumentDeps
+                { pdPrivateBaseUrl = privateUrl
+                , pdPublicBaseUrl = publicUrl
+                , pdMountBaseUrl = "https://proxy.test/npm"
+                , pdMirrorTarget = mirrorUrl
+                , pdRules = prepared
+                , pdTarballHostPolicy = SameHostAsPackument
+                , pdAllowedInternalHosts = loopbackOptIn
+                , pdLimits = defaultLimits
+                , pdInboundToken = Nothing
+                , pdNow = pure fixedNow
+                , pdHelp = Nothing
+                , pdMinIntegrity = defaultMinIntegrity
+                , pdMinTrustedIntegrity = defaultMinTrustedIntegrity
+                }
+    pure
+        MountBinding
+            { bindingPrefix = "npm" :| []
+            , bindingClassifier = Npm.classify
+            , bindingPackumentDeps = Just deps
+            , bindingPublishDeps = Nothing
+            , bindingRenderer = npmRenderer
             }
 
 -- ── WAI stubs ─────────────────────────────────────────────────────────────────

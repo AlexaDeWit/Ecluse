@@ -139,7 +139,7 @@ planFrom :: EnvConfig -> Maybe ConfigDoc -> IO (Either [BootError] [MountBinding
 planFrom env mDoc =
     initCredentialProviders noCredentialReporters env >>= \case
         Left errs -> pure (Left errs)
-        Right providers -> pure (planMounts mountBindingFor (pure fixedNow) providers env mDoc)
+        Right providers -> planMounts mountBindingFor (pure fixedNow) providers env mDoc
 
 -- ── credential providers ──────────────────────────────────────────────────────
 
@@ -478,8 +478,8 @@ composeBindingsSpec = describe "planMounts / composeBindings (config-driven serv
         env <- expectEnv staticEnvVars
         planFrom env Nothing >>= \case
             Right [binding] -> case bindingPackumentDeps binding of
-                -- 'Rule IO' has no 'Show' (it carries a function), so assert on the
-                -- count rather than the rules themselves.
+                -- 'PreparedRule' has no 'Show' (it carries an evaluator), so assert on
+                -- the count rather than the rules themselves.
                 Just deps -> null (pdRules deps) `shouldBe` False
                 Nothing -> expectationFailure "expected packument deps wired"
             other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
@@ -491,7 +491,7 @@ composeBindingsSpec = describe "planMounts / composeBindings (config-driven serv
         env <- expectEnv (("PROXY_AUTH_TOKEN", "edge-secret") : ("PROXY_HELP_MESSAGE", "ask #platform") : staticEnvVars)
         providers <- expectProviders env
         config <- expectConfig env Nothing
-        case composeBindings mountBindingFor (pure fixedNow) providers config of
+        composeBindings mountBindingFor (pure fixedNow) providers config >>= \case
             Right [binding] -> case bindingPackumentDeps binding of
                 Just deps -> do
                     fmap unSecret (pdInboundToken deps) `shouldBe` Just "edge-secret"
@@ -587,13 +587,14 @@ composeBindingsSpec = describe "planMounts / composeBindings (config-driven serv
                 Nothing -> expectationFailure "expected packument deps wired"
             other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
 
-    it "composeBindings is the pure Config -> [MountBinding] builder under planMounts" $ do
-        -- The pure builder over an already-loaded Config is the testable core;
-        -- planMounts is just loadConfig sequenced into it.
+    it "composeBindings is the listener-free Config -> [MountBinding] builder under planMounts" $ do
+        -- The builder over an already-loaded Config is the testable core (it opens no
+        -- listener, only 'prepare's each mount's rules); planMounts is just loadConfig
+        -- sequenced into it.
         env <- expectEnv staticEnvVars
         providers <- expectProviders env
         config <- expectConfig env Nothing
-        case composeBindings mountBindingFor (pure fixedNow) providers config of
+        composeBindings mountBindingFor (pure fixedNow) providers config >>= \case
             Right bindings -> map bindingPrefix bindings `shouldBe` ["npm" :| []]
             Left errs -> expectationFailure ("unexpected boot errors: " <> show errs)
 

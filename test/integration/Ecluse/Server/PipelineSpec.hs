@@ -51,17 +51,17 @@ import Ecluse.Core.Registry.Npm.Route qualified as Npm
 import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
 import Ecluse.Core.Rules (
     EffectfulConfig (..),
+    PreparedRule (..),
     Resilience (Resilience),
-    Rule (Rule, ruleEval, ruleName, rulePrecedence, ruleResilience),
     defaultEffectfulConfig,
-    liftPolicy,
     newBreaker,
     noBreakerReporter,
+    prepare,
  )
 import Ecluse.Core.Rules.Types (
     FailureAlignment (FailDeny, FailNoDecision),
     PrecededRule,
-    PureRule (AllowIfPublishedBefore, DenyInstallTimeExecution),
+    Rule (AllowIfPublishedBefore, DenyInstallTimeExecution),
     RuleResult (Allow, Deny),
     atDefaultPrecedence,
  )
@@ -630,31 +630,35 @@ internal-range block (the serve-path mirror of
 exemption directly. The default tarball-host policy is the secure 'SameHostAsPackument';
 a test overrides it where it exercises the cross-host relaxation.
 -}
-deps :: Int -> Int -> Maybe Text -> PackumentDeps
-deps privatePort publicPort inbound =
-    PackumentDeps
-        { pdPrivateBaseUrl = localhost privatePort
-        , pdPublicBaseUrl = localhost publicPort
-        , pdMountBaseUrl = "https://proxy.test"
-        , pdMirrorTarget = "https://mirror.test"
-        , pdRules = liftPolicy policy
-        , pdTarballHostPolicy = SameHostAsPackument
-        , pdAllowedInternalHosts = lowerCaseHosts (Set.singleton "127.0.0.1")
-        , pdLimits = defaultLimits
-        , pdInboundToken = mkSecret <$> inbound
-        , pdNow = pure now
-        , pdHelp = Nothing
-        , pdMinIntegrity = defaultMinIntegrity
-        , pdMinTrustedIntegrity = defaultMinTrustedIntegrity
-        }
+deps :: Int -> Int -> Maybe Text -> IO PackumentDeps
+deps privatePort publicPort inbound = do
+    prepared <- prepare policy
+    pure
+        PackumentDeps
+            { pdPrivateBaseUrl = localhost privatePort
+            , pdPublicBaseUrl = localhost publicPort
+            , pdMountBaseUrl = "https://proxy.test"
+            , pdMirrorTarget = "https://mirror.test"
+            , pdRules = prepared
+            , pdTarballHostPolicy = SameHostAsPackument
+            , pdAllowedInternalHosts = lowerCaseHosts (Set.singleton "127.0.0.1")
+            , pdLimits = defaultLimits
+            , pdInboundToken = mkSecret <$> inbound
+            , pdNow = pure now
+            , pdHelp = Nothing
+            , pdMinIntegrity = defaultMinIntegrity
+            , pdMinTrustedIntegrity = defaultMinTrustedIntegrity
+            }
 
-{- | The packument-serve dependencies as 'deps', but with the given effectful rules
-appended to the pure policy, so a test can drive an effectful rule end to end through
-the unified engine.
+{- | The packument-serve dependencies as 'deps', but with the given effectful prepared
+rules appended to the prepared policy, so a test can drive an effectful rule end to end
+through the unified engine.
 -}
-depsWith :: [Rule IO] -> Int -> Int -> PackumentDeps
-depsWith effectful privatePort publicPort =
-    (deps privatePort publicPort Nothing){pdRules = liftPolicy policy <> effectful}
+depsWith :: [PreparedRule] -> Int -> Int -> IO PackumentDeps
+depsWith effectful privatePort publicPort = do
+    base <- deps privatePort publicPort Nothing
+    prepared <- prepare policy
+    pure base{pdRules = prepared <> effectful}
 
 localhost :: Int -> Text
 localhost port = "http://127.0.0.1:" <> show port
@@ -692,12 +696,13 @@ withProxyEnvQueueDeps queue privateUp publicUp inbound tweakDeps k =
         testWithApplication (pure (upApp publicUp)) $ \publicPort -> do
             manager <- newManager defaultManagerSettings
             env <- newTestEnvWithQueue queue manager
+            baseDeps <- deps privatePort publicPort inbound
             let cfg =
                     mkServerConfig
                         [ MountBinding
                             { bindingPrefix = "npm" :| []
                             , bindingClassifier = Npm.classify
-                            , bindingPackumentDeps = Just (tweakDeps (deps privatePort publicPort inbound))
+                            , bindingPackumentDeps = Just (tweakDeps baseDeps)
                             , bindingPublishDeps = Nothing
                             , bindingRenderer = npmRenderer
                             }
@@ -734,7 +739,7 @@ rules, so a request flows through the unified engine. The two upstream doubles a
 hosted on ephemeral ports as elsewhere; the effectful rules see the public version.
 -}
 withProxyEffectful ::
-    [Rule IO] ->
+    [PreparedRule] ->
     Upstream ->
     Upstream ->
     (forall a. (Application -> IO a) -> IO a)
@@ -744,12 +749,13 @@ withProxyEffectful effectful privateUp publicUp k = do
         testWithApplication (pure (upApp publicUp)) $ \publicPort -> do
             manager <- newManager defaultManagerSettings
             env <- newTestEnvWithQueue queue manager
+            effectfulDeps <- depsWith effectful privatePort publicPort
             let cfg =
                     mkServerConfig
                         [ MountBinding
                             { bindingPrefix = "npm" :| []
                             , bindingClassifier = Npm.classify
-                            , bindingPackumentDeps = Just (depsWith effectful privatePort publicPort)
+                            , bindingPackumentDeps = Just effectfulDeps
                             , bindingPublishDeps = Nothing
                             , bindingRenderer = npmRenderer
                             }
@@ -2289,39 +2295,41 @@ headTarballSpec = describe "HEAD on a tarball route (no full-artifact body pump)
 
 -- ── the effectful rule path through the pipeline ───────────────────────────────
 
-{- Build an effectful rule (a fresh breaker, an inert reporter) at the given
-precedence, config, and failure alignment, whose eval is the given IO. The eval
-ignores the evaluation context (these rules read only the public version). -}
-mkEffectful :: Text -> Int -> EffectfulConfig -> FailureAlignment -> (PackageDetails -> IO RuleResult) -> IO (Rule IO)
+{- Build an effectful prepared rule (a fresh breaker, an inert reporter) at the given
+precedence, config, and failure alignment, whose evaluator is the given IO. The
+evaluator ignores the evaluation context (these rules read only the public version).
+This is the engine's injection point — a fake 'prepEval' and a chosen 'prepName',
+without widening the closed 'Rule' vocabulary. -}
+mkEffectful :: Text -> Int -> EffectfulConfig -> FailureAlignment -> (PackageDetails -> IO RuleResult) -> IO PreparedRule
 mkEffectful name prec cfg align eval = do
     breaker <- newBreaker
     pure
-        Rule
-            { rulePrecedence = prec
-            , ruleName = name
-            , ruleEval = \_ pd -> eval pd
-            , ruleResilience = Just (Resilience cfg align breaker noBreakerReporter)
+        PreparedRule
+            { prepName = name
+            , prepPrecedence = prec
+            , prepResilience = Just (Resilience cfg align breaker noBreakerReporter)
+            , prepEval = \_ pd -> eval pd
             }
 
 {- | An effectful rule, fresh breaker and a no-retry fast config, that always fails
 its IO (its source is down). Wired at a precedence above the pure quarantine, it is
 consulted on an otherwise-admitted version and, exhausted, fail-closes it.
 -}
-downEffectfulRule :: IO (Rule IO)
+downEffectfulRule :: IO PreparedRule
 downEffectfulRule =
     mkEffectful "DownAdvisory" 400 defaultEffectfulConfig{ecBackoff = []} FailDeny (\_ -> throwString "advisory source down")
 
 {- | An effectful rule that denies the version outright (its source is reachable and
 returns a verdict), wired above the pure rules so its deny stands.
 -}
-denyingEffectfulRule :: IO (Rule IO)
+denyingEffectfulRule :: IO PreparedRule
 denyingEffectfulRule =
     mkEffectful "DenyAdvisory" 400 defaultEffectfulConfig FailDeny (\_ -> pure (Deny "affected by a known advisory"))
 
 {- | An effectful rule that admits the version (its source vouches for it), wired
 above the pure rules so it lifts a version the pure quarantine would otherwise hold.
 -}
-allowingEffectfulRule :: IO (Rule IO)
+allowingEffectfulRule :: IO PreparedRule
 allowingEffectfulRule =
     mkEffectful "AllowAdvisory" 400 defaultEffectfulConfig FailNoDecision (\_ -> pure (Allow "remediates a known advisory"))
 
@@ -2582,12 +2590,13 @@ captureBreachLog privateBody = do
             logEnv <- newLogEnv JsonLog (Environment "test")
             heartbeat <- newWorkerHeartbeat
             env <- newEnv fakeRegistry queue fakeCredentials manager manager metadataCache logEnv telemetryDisabled heartbeat
+            baseDeps <- deps privatePort publicPort Nothing
             let cfg =
                     mkServerConfig
                         [ MountBinding
                             { bindingPrefix = "npm" :| []
                             , bindingClassifier = Npm.classify
-                            , bindingPackumentDeps = Just (withLimits tightLimits (deps privatePort publicPort Nothing))
+                            , bindingPackumentDeps = Just (withLimits tightLimits baseDeps)
                             , bindingPublishDeps = Nothing
                             , bindingRenderer = npmRenderer
                             }
