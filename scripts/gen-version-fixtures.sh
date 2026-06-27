@@ -21,7 +21,7 @@
 #
 set -euo pipefail
 
-out="${1:-test/unit/fixtures/version-ordering.txt}"
+out="${1:-core/test/unit/fixtures/version-ordering.txt}"
 mkdir -p "$(dirname "$out")"
 
 # Curated version lists chosen to exercise the fiddly corners of each grammar:

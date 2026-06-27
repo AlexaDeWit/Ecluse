@@ -108,7 +108,7 @@ Two things about the split are easy to get backwards, so I'll state them plainly
   confirms the deterministic model still matches the live world. Two cases already follow this
   shape and are the template to copy:
   - **Version ordering** is gated offline against a committed fixture
-    (`Ecluse.VersionOrderingSpec` vs `test/unit/fixtures/version-ordering.txt`); the smoke
+    (`Ecluse.VersionOrderingSpec` vs `core/test/unit/fixtures/version-ordering.txt`); the smoke
     suite (`Ecluse.VersionOraclesSpec`) *additionally* regenerates that fixture from the live
     oracles and runs a generative differential, a check *on* the fixture, not the only check.
   - **Credential acquisition** has its refresh/cache/expiry policy unit-tested with an

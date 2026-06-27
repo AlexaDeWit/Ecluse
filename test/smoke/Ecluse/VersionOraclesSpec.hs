@@ -151,7 +151,7 @@ spec = do
                                                     expectationFailure (renderDivergences eco pkg refSorted ds)
   where
     generatorScript = "scripts/gen-version-fixtures.sh"
-    committedFixture = "test/unit/fixtures/version-ordering.txt"
+    committedFixture = "core/test/unit/fixtures/version-ordering.txt"
 
 -- ── live oracle invocation ──────────────────────────────────────────────────
 
