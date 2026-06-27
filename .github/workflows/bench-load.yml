@@ -1,0 +1,91 @@
+name: Load test
+
+# Layer B of the benchmark strategy: throughput & latency under concurrent load against
+# the real composed proxy, driven by `oha`. Deliberately NOT run per pull request —
+# shared-runner throughput is too noisy to be a useful per-PR signal, and a load run is
+# heavier than the per-PR Layer A benches. It runs on a nightly schedule and on manual
+# dispatch only.
+#
+# Like the Layer A benches it is a standalone, INFORM-ONLY tier: it is NOT wired into
+# ci.yml's `gate`, so it never blocks a merge, and its only red state is a LITERAL
+# failure (the harness cannot boot, `oha` cannot run, or a scenario served nothing). It
+# never computes a perf-regression fail — throughput and latency are reported in the run
+# summary for a human to read and trend, never compared to a threshold. There is no
+# cross-run baseline: a run's results are downloadable from its own page but consumed by
+# no other run. See docs/architecture/performance.md.
+on:
+  workflow_dispatch:
+    inputs:
+      duration-seconds:
+        description: "Seconds each scenario applies load"
+        required: false
+        default: "30"
+      concurrency:
+        description: "Concurrent connections oha holds open"
+        required: false
+        default: "50"
+  schedule:
+    # Nightly, off-peak UTC. A trend a human reads in the morning, never a gate.
+    - cron: "17 4 * * *"
+
+# One run per ref; never cancel a scheduled or dispatched run mid-flight.
+concurrency:
+  group: bench-load-${{ github.ref }}
+  cancel-in-progress: false
+
+# Least privilege: a read-only token is all this workflow needs. Artifact upload uses
+# the run's own artifact service (the runtime token), not the GITHUB_TOKEN.
+permissions:
+  contents: read
+
+jobs:
+  bench-load:
+    name: Throughput & latency load test (inform-only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      # Pin the cabal store to a deterministic, cacheable location, as the other
+      # Haskell jobs do.
+      CABAL_DIR: ${{ github.workspace }}/.cabal
+      # The load knobs, from the dispatch inputs (defaulted for a scheduled run). Passed
+      # through the environment, never interpolated into a shell command, so a malformed
+      # value can only mis-size a measurement, never inject.
+      BENCH_LOAD_DURATION_SECONDS: ${{ github.event.inputs.duration-seconds || '30' }}
+      BENCH_LOAD_CONCURRENCY: ${{ github.event.inputs.concurrency || '50' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Set up toolchain
+        uses: ./.github/actions/setup-toolchain
+        with:
+          # Restore the warm cabal store (this job compiles the harness).
+          cabal-cache: "true"
+          # Restore the shared Nix store but never write it: build-test on main is the
+          # single writer, and this job realizes the `.#bench` closure, so saving here
+          # would race and bloat the canonical entry. Restore-only.
+          save-nix-store: "false"
+
+      - name: Update package index
+        run: nix develop .#bench --command make update
+
+      # Run the load tests. The harness renders its per-scenario tables to the run
+      # summary itself (via $GITHUB_STEP_SUMMARY); `tee` also captures them as this run's
+      # downloadable results. `make bench-load` never gates on performance; this step
+      # fails only on a genuine harness failure (a non-zero exit).
+      - name: Run load tests
+        run: |
+          nix develop .#bench --command make bench-load 2>&1 | tee bench-load-results.md
+
+      # This run's results, downloadable from the run page. A convenience for a human
+      # comparing by hand — there is no cross-run baseline store. Uploaded even on a
+      # failed run, so the partial output survives.
+      - name: Upload this run's results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bench-load-results-${{ github.sha }}
+          path: bench-load-results.md
+          if-no-files-found: warn

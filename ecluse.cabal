@@ -544,3 +544,42 @@ benchmark ecluse-bench
     , tasty-hunit      ^>=0.10
     , text             ^>=2.1
     , time             ^>=1.12
+
+-- Layer B load harness (S38): throughput & latency under concurrent load against the
+-- real composed proxy. A separate EXECUTABLE (not a tasty-bench component): it boots
+-- Ecluse.Server.application on warp over in-process stub upstreams and the in-memory
+-- queue/credential doubles, drives the HTTP scenarios with `oha` (a subprocess, via
+-- typed-process) and the worker scenario in-process, and captures RTS stats (peak
+-- residency, GC pauses, allocations/request) — so it needs the threaded RTS (-threaded,
+-- real warp + concurrency), -N (every core), and -T baked in (GHC.Stats). It links the
+-- `ecluse` app library for the composed Application; kept out of the library closure.
+-- INFORM-ONLY and not part of the gate. See docs/architecture/performance.md.
+executable bench-load
+  import:          shared
+  main-is:         Main.hs
+  hs-source-dirs:  bench/load
+  ghc-options:     -threaded -rtsopts "-with-rtsopts=-T -N"
+  other-modules:
+    Ecluse.BenchLoad.Error
+    Ecluse.BenchLoad.Harness
+    Ecluse.BenchLoad.Npm
+    Ecluse.BenchLoad.Oha
+
+  build-depends:
+    , ecluse
+    , ecluse:ecluse-core
+    , ecluse:ecluse-test-support
+    , aeson          ^>=2.2
+    , bytestring     ^>=0.12
+    , containers     ^>=0.7
+    , crypton        ^>=1.0
+    , http-client    ^>=0.7
+    , http-types     ^>=0.12
+    , katip          ^>=0.8.8
+    , memory         ^>=0.18
+    , text           ^>=2.1
+    , time           ^>=1.12
+    , typed-process  ^>=0.2.13
+    , unliftio       ^>=0.2.25
+    , wai            ^>=3.2
+    , warp           ^>=3.4

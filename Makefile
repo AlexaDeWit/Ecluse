@@ -32,7 +32,7 @@ HADDOCK_FLAGS := --haddock-hyperlink-source --haddock-quickjump
         coverage coverage-unit freeze gen-version-fixtures new-worktree format format-check lint sast \
         cabal-check lint-workflows lint-scripts weeder check gate run docs \
         docs-check docs-site site nix-build nix-check docker-build docker-push sbom scan \
-        scan-vulnix clean version tag stan stan-all bench bench-profile
+        scan-vulnix clean version tag stan stan-all bench bench-profile bench-load
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -123,6 +123,17 @@ bench-profile: ## Profiling build -> run -> cost-centre flame graph (ecluse-benc
 	  "$$bin" $(BENCH_PROFILE_OPTS) +RTS -p -RTS; \
 	  ghc-prof-flamegraph ecluse-bench.prof -o ecluse-bench.svg; \
 	  echo "flame graph: ecluse-bench.svg  (cost-centre profile: ecluse-bench.prof)"'
+
+# The throughput-under-load (Layer B) harness: boots the real composed proxy on warp
+# over in-process stub upstreams and drives it with `oha` (so it needs the `.#bench`
+# shell, which carries oha). Reports throughput, latency percentiles, peak residency, GC
+# stats, and allocations/request per scenario. INFORM-ONLY: it never computes a
+# perf-regression fail; the only red state is a literal failure (the harness cannot boot,
+# oha cannot run, or a scenario served nothing). Override the load knobs through the
+# environment, e.g. BENCH_LOAD_DURATION_SECONDS=10 make bench-load. See
+# docs/architecture/performance.md.
+bench-load: ## Run the throughput & latency load tests (inform-only, never gates on perf)
+	$(NIX_BENCH) cabal run -v0 bench-load
 
 # doctest runs the >>> examples embedded in Haddock comments as tests, so the
 # documentation cannot drift from the code. It runs via
