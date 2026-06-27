@@ -2,7 +2,7 @@
 id: S52
 title: First-party publish path → publication target
 milestone: M4 — AWS cloud backends & worker
-status: not-started
+status: merged
 depends-on: [S03, S08, S12, S20]
 test-tier: [unit, integration]
 arch-refs:
@@ -97,3 +97,43 @@ configured as its own role.
 Depends on the **publication-target role being reserved in S20's composition root**
 (config + credential) — encoded ahead of the build so it is not retrofitted. The
 ratified design of record is in `docs/architecture/registry-model.md`.
+
+## As-built (merged — [#379](https://github.com/AlexaDeWit/Ecluse/pull/379), closes [#163](https://github.com/AlexaDeWit/Ecluse/issues/163))
+
+Delivered against the acceptance criteria above, with these design decisions recorded
+as built:
+
+- **Route model.** The agnostic `Route` sum gained `Publish PackageName`, and the
+  `Classifier` was generalised from `[Text] -> Route` to `Method -> [Text] -> Route` —
+  a classifier now maps a *request* (method + path), so `PUT /{pkg}` classifies as
+  `Publish` while `HEAD` still renders like its `GET`.
+- **Body relay, not the write verdict.** First-party publish is a **body relay** — the
+  publication target's own status and body are forwarded to the client verbatim — which
+  is distinct from the mirror worker's `RegistryClient.publishArtifact` (a
+  success/`PublishFault` verdict). The npm adapter gained `relayPublishDocument` over a
+  per-request `NpmClientConfig` carrying the forwarded client token; the agnostic
+  `RegistryClient` is unchanged. `PUBLICATION_TARGET_TOKEN` is the static fallback when a
+  client sends no token.
+- **Config.** `PUBLICATION_TARGET_URL`, `PUBLICATION_TARGET_TOKEN`, `PUBLISH_SCOPES`
+  (global env, single-ecosystem desugaring). `PUBLISH_SCOPES` is **required when a target
+  is set** (a fail-loud `PublishScopesMissing` boot error); `bindingPublishDeps :: Maybe
+  PublishDeps` models the opt-in (`Nothing` ⇒ `405`). The scope guard keys on the
+  **route** name; the document's self-reported name is the registry's concern (a future
+  richer-grammar item, per Out of scope).
+- **Credential-redirect invariant (security, application-wide).** Promoted out of this
+  slice during review and made a correctness rule: any outbound request carrying a
+  forwarded bearer credential MUST NOT follow HTTP redirects, enforced structurally at the
+  single attachment point (`withToken` sets `redirectCount = 0`) — covering every npm
+  data-plane builder, the publish relay, and the mirror-worker publish. See
+  `docs/architecture/security.md`.
+- **Bounded relay read.** The publish relay reads the target response through the npm byte
+  cap (`readBoundedBody`); an over-cap relay fails closed to `502` rather than buffering
+  unbounded.
+- **Tests as built:** core-unit route specs (PUT → `Publish`; method decides read vs
+  write), app-unit `ServerSpec` (405 / 403 scoped + unscoped / 502 unreachable / 500
+  unformable / 401 edge-gate) and `CompositionSpec` (publish-deps wiring, scope parsing,
+  `PublishScopesMissing`), and a hermetic in-process Warp integration `PublishSpec`
+  (success relay + forwarded credential + static fallback + refuse-before-write + 405 +
+  409-relay). **E2E coverage of the publish flow is a fast-follow** on the `ecluse-e2e`
+  tier (`test/e2e`); the merged slice carried unit + integration only — hence the
+  `test-tier` frontmatter is unchanged here and advances when the e2e PR lands.

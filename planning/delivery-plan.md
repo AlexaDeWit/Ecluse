@@ -373,14 +373,23 @@ with the PyPI / RubyGems version-wire arms ([#337](https://github.com/AlexaDeWit
 the helper dedupe ([#339](https://github.com/AlexaDeWit/Ecluse/pull/339)); and the
 retired-terminology cleanup ([#333](https://github.com/AlexaDeWit/Ecluse/pull/333))._
 
-_**In flight: M9 — benchmarking & load testing (off the critical path).** The
-ecluse-core / app package split has landed (#350–#372). M9 was re-cut (architect-approved
-2026-06-27; see the [M9 slice index](#m9--benchmarking--load-testing-informational-never-gates))
-and **S37** (harness + Layer A work-per-request benches + CI baseline) is dispatched to a
-build agent; **S38** (Layer B load + the mandatory traffic scenarios) follows once S37 merges.
-Critical-path work proceeds in parallel under a separate effort. After M9 the queue is the CVE
-tier (S22 / S23, **M5**) and the first-party publish path (S52, **M4**), per the architect's
-sequencing._
+_**Latest — the first-party publish path (S52, M4) is merged**
+([#379](https://github.com/AlexaDeWit/Ecluse/pull/379), closes
+[#163](https://github.com/AlexaDeWit/Ecluse/issues/163)): `npm publish` (`PUT /{pkg}`) is
+accepted at a mount, gated by the anti-shadowing publish-scope allow-list **before any
+upstream write**, then relayed to the publication target with the publisher's forwarded
+credential — under the application-wide **credential-redirect invariant** (`redirectCount = 0`
+at `withToken`; see the [S52 as-built notes](slices/S52-publish-path.md)).
+**E2E coverage of the publish flow is the one item in flight**; nothing else is open._
+
+_**The forward queue**, per the architect's sequencing: the **CVE tier** (S22 / S23, **M5**)
+and the **credential-strategy framework** (S43 → S44 / S45 — the non-default `service` /
+`delegated-cache` read strategies), then the pre-release tail — configuration re-evaluation,
+the API / contract stability pass, the audit, and the 0.1.0 cut. **M9 — benchmarking & load
+testing** (S37 → S38) remains an independent, informational, off-critical-path track (re-cut
+architect-approved 2026-06-27; see the
+[M9 slice index](#m9--benchmarking--load-testing-informational-never-gates)), not yet
+started._
 
 ---
 
