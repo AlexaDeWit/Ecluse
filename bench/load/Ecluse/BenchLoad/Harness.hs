@@ -84,7 +84,7 @@ the harness when it drives the load.
 
 The defaults model a realistic cache-miss on a chunky package; override them through the
 environment ('loadKnobsFromEnv') to probe a different operating point. Absolutes are
-runner-dependent and noisy (decision D2) — the work-normalized counters (allocations per
+runner-dependent and noisy (decision D2) — the work-normalised counters (allocations per
 request) are the cross-runner-stable signal.
 -}
 data LoadKnobs = LoadKnobs
@@ -191,8 +191,9 @@ boundary (each scenario runs in its own process; the driver collects the reports
 carries JSON instances.
 
 Latencies are milliseconds; @Nothing@ when the run recorded no successful request.
-Allocations per request is the work-normalized, cross-runner-stable signal; throughput
-and the percentiles are runner-dependent and read coarsely.
+Allocations per request is the work-normalised, cross-runner-stable signal; throughput
+and the percentiles are runner-dependent and read coarsely. See 'srAllocPerReqBytes' for
+what that allocation figure does and does not include.
 -}
 data ScenarioReport = ScenarioReport
     { srName :: Text
@@ -206,9 +207,18 @@ data ScenarioReport = ScenarioReport
     , srP50Ms, srP90Ms, srP99Ms, srP999Ms :: Maybe Double
     -- ^ Latency percentiles, in milliseconds.
     , srAllocPerReqBytes :: Double
-    -- ^ Bytes allocated per request — the machine-independent signal.
+    {- ^ Bytes allocated per request — the machine-independent signal. The allocation
+    delta is measured over the whole bench process, which for the HTTP scenarios also
+    runs the two in-process stub upstreams and the proxy (only @oha@, a subprocess, is
+    excluded), so the stubs' own per-request allocations are folded in. It is therefore a
+    consistent __over-count__ — fine for trending across commits, but __not__ a pure proxy
+    per-request cost, and not directly comparable to Layer A's pure per-call allocations.
+    -}
     , srPeakResidencyBytes :: Word64
-    -- ^ Peak live heap over this scenario's process (RTS @max_live_bytes@).
+    {- ^ Peak live heap over this scenario's process (RTS @max_live_bytes@). A process
+    high-water mark, so it spans the warm-up as well as the measured window — a wider
+    window than the allocation and GC deltas.
+    -}
     , srRetainedBytes :: Word64
     -- ^ Live heap retained after a major GC at the scenario's end.
     , srGcs :: Word32
@@ -239,18 +249,21 @@ runScenario knobs scenario = do
     rtsOn <- getRTSStatsEnabled
     unless rtsOn $
         benchFail "bench-load needs the RTS stats (build with -with-rtsopts=-T); getRTSStatsEnabled is False"
-    scenarioBoot scenario knobs (measure scenario)
+    scenarioBoot scenario knobs (measure knobs scenario)
 
 -- Apply the load over a booted fixture and assemble the report. A short warm-up runs
 -- first (JIT, connection pool, and the metadata cache settle, so the measured window is
 -- steady-state); then a major GC zeroes the residual heap, the before-snapshot is taken,
--- the measured load runs, and the after-snapshot closes the window.
-measure :: Scenario -> Driver -> IO ScenarioReport
-measure scenario driver = do
+-- the measured load runs, and the after-snapshot closes the window. The allocation and GC
+-- figures are before/after deltas over that window (warm-up excluded); peak residency
+-- ('max_live_bytes') is a process high-water mark, so it also spans the warm-up — a wider
+-- window than the deltas, noted on the field.
+measure :: LoadKnobs -> Scenario -> Driver -> IO ScenarioReport
+measure knobs scenario driver = do
     warmUp driver
     performMajorGC
     before <- getRTSStats
-    (requests, throughput, successRate, percentilesMs, note) <- drive driver
+    (requests, throughput, successRate, percentilesMs, note) <- drive knobs driver
     after <- getRTSStats
     when (requests <= 0) $
         benchFail ("scenario " <> scenarioName scenario <> " served no requests — a harness failure, not a result")
@@ -295,10 +308,10 @@ warmUp = \case
 -- Apply the measured load and return the figures the RTS capture is paired with: the
 -- request count, throughput, success rate, the four percentiles in milliseconds, and a
 -- distribution note.
-drive :: Driver -> IO (Int, Double, Double, (Maybe Double, Maybe Double, Maybe Double, Maybe Double), Text)
-drive = \case
+drive :: LoadKnobs -> Driver -> IO (Int, Double, Double, (Maybe Double, Maybe Double, Maybe Double, Maybe Double), Text)
+drive knobs = \case
     DriveHttp url -> do
-        report <- runOhaForKnobs url
+        report <- runOha (lkConcurrency knobs) (lkDurationSeconds knobs) url
         let requests = sum (Map.elems (ohaStatusCounts report))
             percentilesMs = (toMs (ohaP50 report), toMs (ohaP90 report), toMs (ohaP99 report), toMs (ohaP999 report))
         pure (requests, ohaRequestsPerSec report, ohaSuccessRate report, percentilesMs, distributionNote report)
@@ -320,13 +333,6 @@ drive = \case
   where
     toMs :: Maybe Double -> Maybe Double
     toMs = fmap (* 1_000)
-
--- The oha invocation is closed over the harness's knobs; re-read them so the driver
--- needs no extra plumbing. The driver and the warm-up share the same concurrency/duration.
-runOhaForKnobs :: Text -> IO OhaReport
-runOhaForKnobs url = do
-    knobs <- loadKnobsFromEnv
-    runOha (lkConcurrency knobs) (lkDurationSeconds knobs) url
 
 -- A nearest-rank percentile of a sorted, non-empty list; 'Nothing' for an empty one.
 percentile :: Double -> [Double] -> Maybe Double
@@ -363,6 +369,8 @@ renderReports knobs ecosystem reports =
         [ "## Load test — throughput & latency (Layer B) over " <> ecosystemName ecosystem
         , ""
         , "Inform-only: the figures are reported for a human to read and trend, never compared to a threshold (decision D1). Throughput and latency are runner-dependent and read coarsely; allocations per request is the machine-independent signal. The in-process residency and GC stats are per scenario (each runs in its own process)."
+        , ""
+        , "Caveat on the numbers: allocations / request is measured over the whole bench process, which for the HTTP scenarios also runs the two in-process stub upstreams and the proxy (only oha, a subprocess, is excluded), so it folds in the stubs' own per-request allocations — a consistent over-count, fine for trending, but NOT a pure proxy per-request cost and NOT directly comparable to Layer A's pure per-call allocations. Peak residency is a process high-water mark that also spans the warm-up; the allocation and GC figures are before/after deltas over the measured window only."
         , ""
         , "Operating point: "
             <> show (lkConcurrency knobs)

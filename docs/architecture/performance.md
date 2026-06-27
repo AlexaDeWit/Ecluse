@@ -194,9 +194,18 @@ no SLO, no "10% slower than `main`" threshold, no allocation ceiling. Its only r
 is a **literal failure** — the harness cannot boot, `oha` cannot run, or a scenario
 served nothing — surfaced as a non-zero exit. Throughput and latency are runner-dependent
 and read coarsely; **allocations per request** is the machine-independent signal that
-trends cleanly across runners (decision D2), exactly as in Layer A. There is **no
+trends cleanly across runners (decision D2). There is **no
 cross-run baseline**: a run uploads its own results, consumed by no other run, so
 comparison is by hand.
+
+> **What "allocations / request" includes.** The figure is the RTS `allocated_bytes`
+> delta over the whole bench process, which for the HTTP scenarios also runs the two
+> in-process stub upstreams and the proxy (only `oha`, a subprocess, is excluded). It
+> therefore folds in the stubs' own per-request allocations — a *consistent over-count*,
+> fine for trending across commits, but **not** a pure proxy per-request cost, and so
+> **not directly comparable** to Layer A's pure per-call allocations. Peak residency is a
+> process high-water mark that also spans the warm-up; the allocation and GC figures are
+> before/after deltas over the measured window only.
 
 ### The three scenarios
 
@@ -205,7 +214,7 @@ residency, GC stats, and allocations per request.
 
 | Scenario | Shape | What it isolates |
 |---|---|---|
-| `merge-cold` | `GET /{pkg}` fanning to both upstreams → merge → rule-filter → URL-rewrite → ETag → re-serialise, **metadata cache disabled** | the expensive headline path: a full fetch + decode of both origins and a merge on every request |
+| `merge-cold` | `GET /{pkg}` fanning to both upstreams → merge → rule-filter → URL-rewrite → ETag → re-serialise, **public cache disabled (TTL 0)** | the expensive headline path: the live private fetch, the cross-upstream merge, the rule sweep, and the re-serialise on every request (the public leg's fetch + decode is single-flight-amortised under concurrency, not per-request) |
 | `cached-public-hit` | the same `GET`, with the anonymous public origin served from the **warm metadata cache** | the cheap, common high-throughput path: the public fetch and decode are elided |
 | `worker-mirroring` | the mirror worker's `fetch → verify → publish → ack` loop, driven **in-process** (no HTTP surface) | the mirror hot path: an artifact fetch, an integrity recompute-and-verify, and a publish |
 
@@ -213,12 +222,20 @@ A note on the cache scenarios. The default `passthrough` posture caches only the
 **anonymous public** origin; the trusted private origin is the per-client authority and
 is fetched per request, never cached (see
 [Registry Model](registry-model.md) and `Ecluse.Core.Server.Pipeline`). So the two
-packument scenarios differ purely in the cache TTL: `merge-cold` uses a zero TTL (every
-public fetch re-runs), while `cached-public-hit` uses a long TTL and a warm-up pass, so
-the public fetch and decode are elided and only the live private leg plus the
-cache-served merge runs. A literal "private-only cache hit" is not a shape the
-passthrough model has; this is its faithful realization of the cheap, no-public-fetch
-path.
+packument scenarios differ in the cache TTL: `merge-cold` uses a zero TTL, while
+`cached-public-hit` uses a long TTL and a warm-up pass.
+
+A zero TTL does **not** make the public fetch+decode a per-request cost, though. The
+public leg resolves through the cache's **single-flight** path (`resolveMetadata`): even
+at a zero TTL, concurrent misses coalesce onto one in-flight fetch and share the leader's
+parsed packument, so followers skip both the fetch and the ~40 ms decode. Under
+concurrency the public fetch+decode is therefore **amortised across followers**, which
+narrows the contrast with `cached-public-hit` — both amortise the public fetch, one via
+the cache, one via single-flight. `merge-cold`'s per-request cost is the live private
+leg, the merge, the rule sweep, and the re-serialise. (This is real production behaviour;
+the scenario does not defeat coalescing.) A literal "private-only cache hit" is not a
+shape the passthrough model has; `cached-public-hit` is its faithful realisation of the
+cheap, no-public-fetch path.
 
 ### How it measures
 

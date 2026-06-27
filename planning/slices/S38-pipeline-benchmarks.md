@@ -43,8 +43,11 @@ concurrency. Two sides of one coin.
   architect-specified):
   1. **`merge-cold`** — public download path with the private + public packument MERGE
      in the loop: `GET /{pkg}` fanning to both upstreams → merge → rule-filter →
-     URL-rewrite → ETag → re-serialise, with the metadata cache disabled so every
-     request pays the full fetch + decode + merge. The expensive headline path.
+     URL-rewrite → ETag → re-serialise, with the public metadata cache disabled (TTL 0).
+     The public leg is single-flight, so concurrent misses coalesce onto one in-flight
+     fetch+decode (the ~40 ms decode is amortised under load, not per-request); each
+     request pays the live private fetch, the merge, the rule sweep, and the re-serialise.
+     The expensive headline path.
      — _registry-model.md#packument-merge-across-upstreams · rules-engine.md_
   2. **`cached-public-hit`** — the cheap, common high-throughput path: the same `GET`
      with the anonymous public origin served from the warm metadata cache (no public
@@ -52,9 +55,13 @@ concurrency. Two sides of one coin.
   3. **`worker-mirroring`** — the fetch → verify → publish → ack loop, driven in-process
      (no HTTP surface). — _cloud-backends.md#mirror-queue_
 - [x] **Metrics captured per scenario:** throughput; latency distribution
-  **p50/p90/p99/p99.9**; **peak residency**; GC-pause stats; **and work-normalized
+  **p50/p90/p99/p99.9**; **peak residency**; GC-pause stats; **and work-normalised
   per-request counters** (allocations/request) — the host-independent signal that stays
-  meaningful on a shared runner.
+  meaningful on a shared runner. (Caveat, disclosed in the report and performance.md: the
+  allocations/request figure is measured over the whole bench process, so for the HTTP
+  scenarios it folds in the in-process stub upstreams' allocations — a consistent
+  over-count for trending, not a pure proxy per-request cost, not directly comparable to
+  Layer A. Peak residency is a process high-water mark that also spans the warm-up.)
 - [x] **Inform-only flow (D1/D2/D3).** Results render to **stdout and the run summary**
   and upload as a **per-run downloadable artifact**; **no `gate` wiring**, never fails on
   a regression. There is **no cross-run baseline and no PR-comparison comment** — both
@@ -94,10 +101,14 @@ failure), but it is not part of the gate.
 - **The "private-only cache hit" became `cached-public-hit`.** The default `passthrough`
   posture caches only the anonymous **public** origin; the trusted private origin is the
   per-client authority and is fetched per request, never cached. So a literal
-  "private-only cache hit" is not a shape the proxy has. The faithful realization of the
+  "private-only cache hit" is not a shape the proxy has. The faithful realisation of the
   issue's cheap, *no-public-fetch* path is the same `GET` with the public origin served
-  warm from cache while the live private leg merges in. The two packument scenarios
-  therefore differ purely in cache TTL (cold = TTL 0; hit = long TTL + warm-up). This is a
+  warm from cache while the live private leg merges in. The two packument scenarios differ
+  in cache TTL (cold = TTL 0; hit = long TTL + warm-up) — but note `merge-cold` is not a
+  strict per-request worst case: the public leg's `resolveMetadata` is single-flight, so
+  even at TTL 0 concurrent misses coalesce onto one in-flight fetch+decode (the ~40 ms
+  decode amortised under load), which narrows the contrast with `cached-public-hit` (both
+  amortise the public fetch — one via the cache, one via single-flight). This is a
   spec-vs-architecture reconciliation surfaced for review.
 - **Per-scenario process isolation.** Peak residency is a process-wide RTS high-water
   mark, so the driver re-execs the binary once per scenario (each prints its report as a
@@ -114,5 +125,5 @@ failure), but it is not part of the gate.
   them over plain (no-TLS, unguarded) managers with `127.0.0.1` opted into the
   internal-range allowance, exactly as the integration suite does — no external socket, no
   Docker. Throughput/latency absolutes are **noisy on the shared runner (D2)** — read the
-  trend coarsely, use the work-normalized per-request counters as the steady signal, and
+  trend coarsely, use the work-normalised per-request counters as the steady signal, and
   take trustworthy absolutes from **local deep-dives**. **Never wired into `gate`.**

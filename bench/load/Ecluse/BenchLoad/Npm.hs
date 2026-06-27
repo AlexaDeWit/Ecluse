@@ -5,8 +5,10 @@ It implements npm's three mandatory traffic scenarios over stub upstreams and th
 composed 'Ecluse.Server.application':
 
   1. __merge (cold)__ — a packument @GET@ that fans to both upstreams, merges, gates,
-     rewrites, and re-serialises on __every__ request (the metadata cache is disabled,
-     so the expensive headline path runs each time);
+     rewrites, and re-serialises, with the public metadata cache disabled (a zero TTL).
+     Every request pays the live private fetch, the merge, the rule sweep, and the
+     re-serialise; the public leg's fetch and ~40 ms decode are __single-flight-amortised__
+     under concurrency (see below), not paid per request;
   2. __cached-public hit__ — the same @GET@ with the public origin served from the warm
      metadata cache (no public fetch or decode), the cheap high-throughput path;
   3. __worker mirroring__ — the @fetch → verify → publish → ack@ loop, driven in-process
@@ -22,12 +24,23 @@ and the reporting — is reused unchanged; a second ecosystem (PyPI, RubyGems) i
 
 The proxy's default @passthrough@ posture caches only the __anonymous public__ origin;
 the trusted private origin is the per-client authority and is fetched per request, never
-cached (see "Ecluse.Core.Server.Pipeline"). So the two packument scenarios differ purely
-in the cache TTL: the cold merge uses a zero TTL (every public fetch re-runs), while the
-cached-public hit uses a long TTL and a warm-up pass, so the public fetch and decode are
-elided and only the live private leg plus the cache-served merge runs. A literal
-"private-only cache hit" is not a shape the passthrough model has; this is its faithful
-realization of the issue's cheap, no-public-fetch path.
+cached (see "Ecluse.Core.Server.Pipeline"). So the two packument scenarios differ in the
+cache TTL: the cold merge uses a zero TTL, while the cached-public hit uses a long TTL and
+a warm-up pass.
+
+A zero TTL does __not__ mean the public fetch+decode is paid once per request, though.
+The public leg resolves through the metadata cache's __single-flight__ path
+('Ecluse.Core.Server.Cache.resolveMetadata'): even at a zero TTL, concurrent misses
+coalesce onto one in-flight fetch and share the leader's parsed packument, so followers
+skip both the fetch and the ~40 ms decode. At the default concurrency the public
+fetch+decode is therefore __amortised across followers__, not paid per request — which
+narrows the contrast with the cached-public hit (both amortise the public fetch: one via
+the cache, one via single-flight). The cold merge's per-request cost is the live private
+leg, the merge, the rule sweep, and the re-serialise. This is real production behaviour;
+the scenario does not defeat coalescing.
+
+A literal "private-only cache hit" is not a shape the passthrough model has; the
+cached-public hit is its faithful realisation of the issue's cheap, no-public-fetch path.
 
 == Hermeticity
 
@@ -123,16 +136,19 @@ npmFixture =
 -- ── packument scenarios ────────────────────────────────────────────────────────
 
 {- | The expensive headline path: a packument @GET@ that fans to both upstreams and
-merges, gated, rewritten, and re-serialised on every request. The metadata cache is
-disabled (a zero TTL), so the public fetch and decode re-run each time — the worst-case
-cost a public download path pays.
+merges, gated, rewritten, and re-serialised. The public metadata cache is disabled (a zero
+TTL). Each request pays the live private fetch, the merge, the rule sweep, and the
+re-serialise; the public leg's fetch and decode are single-flight-amortised under
+concurrency (concurrent misses coalesce onto one in-flight fetch), not paid per request —
+so this narrows the contrast with the cached-public hit rather than being a strict
+per-request worst case.
 -}
 mergeScenario :: Scenario
 mergeScenario =
     Scenario
         { scenarioName = "merge-cold"
         , scenarioDescription =
-            "Public download path with the private + public packument merge in the loop: GET /{pkg} fans to both upstreams -> merge -> rule-filter -> URL-rewrite -> ETag -> re-serialise, with the metadata cache disabled so every request pays the full fetch + decode + merge."
+            "Public download path with the private + public packument merge in the loop: GET /{pkg} fans to both upstreams -> merge -> rule-filter -> URL-rewrite -> ETag -> re-serialise, with the public metadata cache disabled (TTL 0). The public leg is single-flight, so concurrent misses coalesce onto one in-flight fetch+decode and followers share the leader's parsed packument: the public fetch+decode is amortised under load, not paid per request. Every request still pays the live private fetch, the merge, the rule sweep, and the re-serialise."
         , scenarioBoot = \knobs k -> withNpmProxy knobs 0 (k . DriveHttp)
         }
 
@@ -406,14 +422,21 @@ versionObject version =
                 ]
         ]
 
--- Approximate the requested public payload size by a version count, at a rough
--- bytes-per-version estimate; at least one version.
+{- | Approximate the requested public payload size by a version count, at a rough
+bytes-per-version estimate; at least one version. The estimate is deliberately close to
+the real serialised size (a version manifest — name, version, long tarball URL, sha512
+SRI, sha1 — plus its @time@ entry encodes to ~325 bytes compact), so the served packument
+is approximately @BENCH_LOAD_PAYLOAD_BYTES@. It is an approximation, not an exact target:
+the top-level fields (@name@, @dist-tags@, @_id@) add a small fixed overhead, so the body
+runs a little over the requested size.
+-}
 publicVersionCount :: LoadKnobs -> Int
 publicVersionCount knobs = max 1 (lkPayloadBytes knobs `div` bytesPerVersion)
   where
-    -- A version manifest plus its time entry serialises to roughly this many bytes.
+    -- A version manifest plus its time entry serialises (compact) to roughly this many
+    -- bytes; measured against the canned shape above.
     bytesPerVersion :: Int
-    bytesPerVersion = 300
+    bytesPerVersion = 340
 
 -- ── shared values ──────────────────────────────────────────────────────────────
 
