@@ -123,7 +123,21 @@ The universal invariant holds: the client's token reaches only the private upstr
 read, under `passthrough`) and the publication target (on publish) — **never** the
 public upstream. Before any forward, the publish path enforces the **publish scope
 allow-list** (the anti-shadowing guard): a name outside the operator's configured scopes
-is refused with no upstream write attempted.
+is refused with no upstream write attempted. The forwarded credential is also **never
+carried across a redirect** — like every credential-bearing request, the publish relay
+disables redirect-following, so a `3xx` from the publication target returns to the client
+rather than chasing the credential to the `Location` (see
+[Security → a credential-bearing request never follows a redirect](security.md#egress-scope-what-the-outbound-controls-guard-and-what-they-do-not)).
+
+> ⚠️ **The publish surface authorises *names*, not *callers* — protect it.** The scope
+> allow-list limits **which package names** a publish may target; it is **not**
+> authentication. If a static `PUBLICATION_TARGET_TOKEN` is configured **and** the edge is
+> open (no `PROXY_AUTH_TOKEN`), **any unauthenticated client can publish** under the
+> operator's credential within the allowed scopes. Écluse does **not** block this — it
+> cannot see environment-level protections (gateway, mesh/mTLS, network policy) — so
+> protecting the publish surface (with `PROXY_AUTH_TOKEN` **or** an external layer) is an
+> **operator-architecture responsibility** (see
+> [Security → the first-party publish surface must be protected](security.md#the-first-party-publish-surface-must-be-protected-a-shared-responsibility)).
 
 ## Edge authentication
 

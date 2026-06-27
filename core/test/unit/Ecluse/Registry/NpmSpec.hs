@@ -41,7 +41,7 @@ import Test.Hspec (
  )
 import UnliftIO (evaluate)
 
-import Ecluse.Core.Credential (mkSecret)
+import Ecluse.Core.Credential (Secret, mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageInfo (infoName), PackageName, mkPackageName, mkScope, renderPackageName)
 import Ecluse.Core.Registry (
@@ -97,6 +97,7 @@ spec = do
     boundedBodySpec
     pathEncodingSpec
     authSpec
+    redirectSpec
     artifactSpec
     publishSpec
     urlFailureSpec
@@ -336,6 +337,42 @@ authSpec =
                 _ <- fetchMetadataForm config Abbreviated noValidators isOdd
                 cap <- lastCaptured stub
                 headerValue "Authorization" cap `shouldBe` Nothing
+
+-- ── redirect posture (a credential never follows a redirect) ───────────────────
+
+{- | The single credential-attachment point ('withToken') disables redirect following
+on any request it puts a bearer on, so a forwarded\/minted credential can never be
+carried across a @3xx@ to a redirect target (especially over the unguarded private
+manager). A credential-less request keeps http-client's default redirect budget. These
+pin the invariant at the request-builder boundary, across the read and write builders.
+-}
+redirectSpec :: Spec
+redirectSpec = describe "credential-bearing requests do not follow redirects" $ do
+    it "a token-bearing metadata request has redirectCount 0" $ do
+        config <- tokened (Just (mkSecret "tok"))
+        expectRedirectCount 0 (metadataRequest config Abbreviated noValidators isOdd)
+
+    it "a credential-less metadata request keeps the default redirect budget (10)" $ do
+        config <- tokened Nothing
+        expectRedirectCount 10 (metadataRequest config Abbreviated noValidators isOdd)
+
+    it "a token-bearing artifact request has redirectCount 0" $ do
+        config <- tokened (Just (mkSecret "tok"))
+        expectRedirectCount 0 (artifactRequest config isOdd v1)
+
+    it "a token-bearing publish relay request has redirectCount 0" $ do
+        config <- tokened (Just (mkSecret "tok"))
+        expectRedirectCount 0 (publishRequest config isOdd "{}")
+  where
+    tokened :: Maybe Secret -> IO NpmClientConfig
+    tokened token = do
+        manager <- newManager defaultManagerSettings
+        pure NpmClientConfig{npmBaseUrl = "https://reg.test", npmManager = manager, npmToken = token, npmLimits = defaultLimits}
+
+    expectRedirectCount :: Int -> Either UrlFormationError Client.Request -> IO ()
+    expectRedirectCount want = \case
+        Left err -> fail ("request building failed: " <> show err)
+        Right req -> Client.redirectCount req `shouldBe` want
 
 -- ── artifacts ──────────────────────────────────────────────────────────────────
 

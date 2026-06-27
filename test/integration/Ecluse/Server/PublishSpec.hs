@@ -197,6 +197,25 @@ spec = describe "first-party publish path → publication target (S52)" $ do
             status resp `shouldBe` 403
             targetSaw target `shouldReturn` []
 
+    it "refuses a scope that only prefixes an allowed one (@acme-evil vs the allowed @acme) — exact match" $
+        withTarget 201 "{\"success\":true}" $ \targetPort target -> do
+            -- The guard compares scopes exactly, so a look-alike scope is not admitted by
+            -- prefix; the publication target is never contacted.
+            app <- proxyWith (Just (publishDepsAt targetPort Nothing))
+            resp <- putPublish "/npm/@acme-evil/widget" (Just "publisher-token") publishBody app
+            status resp `shouldBe` 403
+            targetSaw target `shouldReturn` []
+
+    it "sends NO Authorization header to the target for a fully anonymous in-scope publish (no client token, no static fallback)" $
+        withTarget 201 "{\"success\":true}" $ \targetPort target -> do
+            app <- proxyWith (Just (publishDepsAt targetPort Nothing))
+            resp <- putPublish "/npm/@acme/widget" Nothing publishBody app
+            status resp `shouldBe` 201
+            -- passthrough with no client token and no static fallback ⇒ the relay carries
+            -- no credential at all
+            seen <- targetSaw target
+            map fst seen `shouldBe` [Nothing]
+
     it "405s a publish when no publication target is configured (the opt-in is off)" $
         withTarget 201 "{\"success\":true}" $ \_targetPort target -> do
             app <- proxyWith Nothing
