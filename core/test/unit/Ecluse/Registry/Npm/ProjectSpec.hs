@@ -2,6 +2,7 @@ module Ecluse.Registry.Npm.ProjectSpec (spec) where
 
 import Data.Aeson (
     Value (Array, Bool, Null, Number, Object, String),
+    eitherDecodeStrict,
     encode,
     object,
     (.=),
@@ -381,6 +382,29 @@ versionLevelLeniencySpec = describe "version-level graceful degradation (one bro
         parseVersionDetails (RegistryResponse mixedHealthAndBrokenPackument) (mkVersion Npm "2.0.0")
             `shouldSatisfy` isLeft
 
+    it "keeps a version carrying junk advisory fields, degrading the field (production Value path)" $ do
+        -- The complement to the drop cases: advisory junk degrades the field but the
+        -- version SURVIVES. 2.0.0 carries an out-of-range unpackedSize and a signature
+        -- missing its keyid; 3.0.0 a non-array signatures. Both must remain — the
+        -- degraded unpackedSize projecting to no artifact size, the load-bearing
+        -- tarball/integrity intact. Driven through parsePackageInfoFromValue, the very
+        -- entry the serve path projects the decoded body with, so the field-level and
+        -- version-level leniency are proven to compose on the production decode path.
+        value <- decodeValue advisoryJunkPackument
+        case parsePackageInfoFromValue (unscoped "adv") value of
+            Right (Projected info) -> do
+                Map.keys (infoVersions info) `shouldBe` ["1.0.0", "2.0.0", "3.0.0"]
+                case Map.lookup "2.0.0" (infoVersions info) of
+                    Just d -> do
+                        let art = soleArtifact d
+                        artSize art `shouldBe` Nothing
+                        artUrl art `shouldBe` "https://r/adv/-/adv-2.0.0.tgz"
+                        artHashes art
+                            `shouldBe` [unsafeHash SRI "sha512-z4PhNX7vuL3xVChQ1m2AB9Yg5AULVxXcg/SpIdNs6c5H0NE8XYXysP+DGNKHfuwvY7kxvUdBeoGlODJ6+SfaPg=="]
+                    Nothing -> fail "the advisory-junk version 2.0.0 must survive"
+                Map.member "3.0.0" (infoVersions info) `shouldBe` True
+            other -> fail ("expected a Projected packument, got: " <> show other)
+
 -- ── failure handling ─────────────────────────────────────────────────────────
 
 failureSpec :: Spec
@@ -709,6 +733,22 @@ mixedHealthAndBrokenPackument =
     \\"3.0.0\":{\"name\":\"mix\",\"version\":\"3.0.0\",\"dist\":{\"shasum\":\"abc\"}},\
     \\"4.0.0\":42}}"
 
+{- | A packument whose 1.0.0 is healthy, 2.0.0 carries an out-of-range
+@unpackedSize@ (@1e400@) and a signature missing its @keyid@, and 3.0.0 carries a
+non-array @signatures@. Every version must __survive__ the production decode with
+its advisory fields degraded — the complement to a required-field-broken version
+being dropped. 2.0.0's @integrity@ is a well-formed SRI so the load-bearing digest
+projects intact alongside the degraded size.
+-}
+advisoryJunkPackument :: ByteString
+advisoryJunkPackument =
+    "{\"name\":\"adv\",\"dist-tags\":{\"latest\":\"1.0.0\"},\"versions\":{\
+    \\"1.0.0\":{\"name\":\"adv\",\"version\":\"1.0.0\",\"dist\":{\"tarball\":\"https://r/adv/-/adv-1.0.0.tgz\"}},\
+    \\"2.0.0\":{\"name\":\"adv\",\"version\":\"2.0.0\",\"dist\":{\"tarball\":\"https://r/adv/-/adv-2.0.0.tgz\",\
+    \\"integrity\":\"sha512-z4PhNX7vuL3xVChQ1m2AB9Yg5AULVxXcg/SpIdNs6c5H0NE8XYXysP+DGNKHfuwvY7kxvUdBeoGlODJ6+SfaPg==\",\
+    \\"unpackedSize\":1e400,\"signatures\":[{\"sig\":\"x\"}]}},\
+    \\"3.0.0\":{\"name\":\"adv\",\"version\":\"3.0.0\",\"dist\":{\"tarball\":\"https://r/adv/-/adv-3.0.0.tgz\",\"signatures\":5}}}}"
+
 -- | A packument with three versions, to check version-list extraction.
 multiVersionPackument :: ByteString
 multiVersionPackument =
@@ -735,6 +775,13 @@ runsCode :: CodeExecSignal -> Bool
 runsCode = \case
     RunsCodeOnInstall _ -> True
     _ -> False
+
+{- | Decode a JSON literal into a 'Value', failing the example on an undecodable
+literal. Used to drive 'parsePackageInfoFromValue' — the entry the serve path
+projects an already-decoded body with — directly from an inline packument.
+-}
+decodeValue :: ByteString -> IO Value
+decodeValue bs = either (\e -> fail ("decode failure: " <> e)) pure (eitherDecodeStrict bs)
 
 {- | Read a committed fixture body by name (under @core\/test\/unit\/fixtures\/npm\/@,
 the path Cabal runs tests from).
