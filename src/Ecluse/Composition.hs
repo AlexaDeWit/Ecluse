@@ -267,7 +267,7 @@ resolveCodeArtifactConfig env =
 
 -- Whether a value is a 12-digit AWS account id.
 isAccountId :: Text -> Bool
-isAccountId t = T.length t == 12 && T.all isDigit t
+isAccountId t = T.compareLength t 12 == EQ && T.all isDigit t
 
 {- Parse a CodeArtifact npm endpoint host into its (domain, owner, region). The host
 shape is @{domain}-{owner}.d.codeartifact.{region}.amazonaws.com@; the @{owner}@ is the
