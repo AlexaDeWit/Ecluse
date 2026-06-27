@@ -438,7 +438,7 @@
                   "title": "Undetected artifact substitution across upstreams",
                   "type": "Tampering",
                   "description": "The merge flags an integrity divergence when private and public copies of a version contradict on a shared digest algorithm. A weak-only or absent digest, or a flaw in how divergence is keyed, could let a substituted artifact pass undetected and be served as the trusted copy.",
-                  "mitigation": "A public version must carry a digest meeting the integrity floor (default SHA-256, hard-floored) to be admitted; divergence is compared on each digest's asserted algorithm, not a bucketed tag. Residual to verify: divergence keys on the asserted algorithm (issue #376) and the operator-loosenable trusted-floor path.",
+                  "mitigation": "A public version must carry a digest meeting the integrity floor (uniform default SHA-256, hard-floored) to be admitted, and divergence is compared on each digest's asserted algorithm rather than a bucketed tag; the asserted-algorithm keying landed in #380 (closing #376). Residual: the deliberately operator-loosenable trusted-floor path, which trades strictness for availability and is the remaining way a weak digest could be accepted.",
                   "modelType": "STRIDE",
                   "id": "0ec10e5e-0000-4000-8000-00000000010b"
                 }
@@ -812,7 +812,7 @@
                   "title": "Package shadowing via first-party publish",
                   "type": "Tampering",
                   "description": "A publish is relayed to the private store with the publisher's own token, and the packument merge serves private versions as trusted, winning collisions over public. A compromised-CI or insider publisher who clears (or slips past) the publish-scope check could publish a name that the merge then serves as a trusted version over the public package, a dependency-confusion path through Écluse's own trust model.",
-                  "mitigation": "The PUBLISH_SCOPES allow-list refuses any name outside the operator's scopes before any upstream write (the anti-shadowing guard). Residual to verify: scope-matching must be robust against the same identifier-normalisation tricks as the read path (canonicalisation correctness).",
+                  "mitigation": "The PUBLISH_SCOPES allow-list refuses any name outside the operator's scopes before any upstream write (the anti-shadowing guard); the scope match is exact on the parsed namespace, so a prefix such as @acme-evil does not satisfy an @acme allow-list. Soundness requires the authorised identity to be the written identity: the publish document's own declared name and _id (and per-version names) are validated equal to the scope-guarded URL-path name before the relay, and the write URL is built from that same canonical name, so the guarded name, the written name, and the merge collision key are one identity by construction. Residual: shadowing within an allow-listed scope and allow-precedence choices remain the operator's risk (least-privilege the publisher's target credential).",
                   "modelType": "STRIDE",
                   "id": "0ec10e5e-0000-4000-8000-000000000106"
                 }
@@ -1124,7 +1124,7 @@
                   "title": "Mirror-write credential is a standing privilege over the trusted store",
                   "type": "Elevation of privilege",
                   "description": "The mirror worker holds Écluse's only standing self-minted credential, with write access to the mirror store (Registry B) that feeds the trusted read path. A worker compromise, or any bypass of the admission gate, could write attacker-chosen bytes into the trusted store, poisoning future reads.",
-                  "mitigation": "Scope the minted token to write-only on Registry B, prefer container-role minting over static credentials, and minimise its TTL (CodeArtifact caps at 12h). The worker verifies artifact bytes against dist.integrity before publishing, and the publish request runs with redirectCount=0. Operator: least-privilege the instance role.",
+                  "mitigation": "Containment of this standing privilege is least-privilege IAM on the container/task role (write to Registry B only; CodeArtifact tokens bear the role's own permissions, so this is an IAM policy rather than a token-level scope), container-role minting over static credentials, and a minimal TTL (CodeArtifact caps at 12h); the publish runs with redirectCount=0 (the mint token is attached at withToken, the single bearer-attach point). The worker's dist.integrity check is anti-tamper-in-transit and anti-downgrade (it fails closed when the strongest present digest is in an uncomputable algorithm, never downgrading to a forgeable weaker one): it proves the bytes match the upstream's asserted digest, so it catches back-fill corruption but not a hostile upstream or a worker compromise. The poisoning-of-future-reads consequence is therefore bounded by admission-gate soundness (the trusted store is only as clean as what the gate admits) and the role's blast radius, not by the integrity check.",
                   "modelType": "STRIDE",
                   "id": "0ec10e5e-0000-4000-8000-000000000107"
                 }
