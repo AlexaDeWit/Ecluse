@@ -502,3 +502,45 @@ test-suite ecluse-e2e
     , time           ^>=1.12
     , typed-process  ^>=0.2.13
     , unliftio       ^>=0.2.25
+
+-- Benchmarks: the work-per-request (Layer A) micro-benches over the pure
+-- ecluse-core hot paths, plus the synthetic-corpus generator's correctness tests
+-- and the complexity assertions that guard the accidentally-quadratic class.
+-- tasty-bench (not criterion) is the harness: it reports time AND allocations
+-- (the machine-independent signal, captured from GC stats under +RTS -T, baked in
+-- below). It links ecluse:ecluse-core and ecluse:ecluse-test-support but is kept
+-- OUT of the library's own dependency closure. See docs/architecture/performance.md.
+benchmark ecluse-bench
+  import:          shared
+  type:            exitcode-stdio-1.0
+  main-is:         Main.hs
+  hs-source-dirs:  bench
+  -- Built at the package's default optimisation (-O1), like every other component,
+  -- so the numbers reflect the shipped build rather than a benchmark-only setting.
+  -- -T (baked into the RTS opts) makes tasty-bench report allocated bytes from GC
+  -- stats on every run, with no caller flag.
+  ghc-options:     -rtsopts "-with-rtsopts=-T"
+  other-modules:
+    Ecluse.Bench.Corpus
+    Ecluse.Bench.Fit
+    Ecluse.Core.MergeBench
+    Ecluse.Core.RouteBench
+    Ecluse.Core.RulesBench
+    Ecluse.Core.SecurityBench
+    Ecluse.Core.ServeBench
+    Ecluse.Core.VersionBench
+    Ecluse.Core.WireBench
+
+  build-depends:
+    , ecluse:ecluse-core
+    , ecluse:ecluse-test-support
+    , aeson            ^>=2.2
+    , bytestring       ^>=0.12
+    , containers       ^>=0.7
+    , http-types       ^>=0.12
+    , tasty            ^>=1.5
+    , tasty-bench      ^>=0.4
+    , tasty-bench-fit  ^>=0.1
+    , tasty-hunit      ^>=0.10
+    , text             ^>=2.1
+    , time             ^>=1.12

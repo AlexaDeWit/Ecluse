@@ -9,6 +9,11 @@
 # Empty inside the dev shell; the wrapper otherwise.
 NIX := $(if $(IN_NIX_SHELL),,nix develop --command)
 
+# The benchmark targets run from the lean `.#bench` shell (the CI toolchain plus the
+# flame-graph tooling), not the default shell. Empty inside a dev shell (CI enters
+# `.#bench` itself); otherwise it enters `.#bench`. See flake.nix `devShells.bench`.
+NIX_BENCH := $(if $(IN_NIX_SHELL),,nix develop .#bench --command)
+
 # Tracked Haskell sources, for the formatter and linter.
 HS := $(shell git ls-files '*.hs')
 
@@ -27,7 +32,7 @@ HADDOCK_FLAGS := --haddock-hyperlink-source --haddock-quickjump
         coverage coverage-unit freeze gen-version-fixtures new-worktree format format-check lint sast \
         cabal-check lint-workflows lint-scripts weeder check gate run docs \
         docs-check docs-site site nix-build nix-check docker-build docker-push sbom scan \
-        scan-vulnix clean version tag stan stan-all
+        scan-vulnix clean version tag stan stan-all bench bench-profile
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -88,6 +93,36 @@ test-e2e: ## Run the end-to-end suite (builds + runs the real image; CI-gating)
 	$(NIX) bash scripts/e2e.sh
 
 test-all: test test-integration test-smoke ## Run every test suite
+
+# The work-per-request (Layer A) benchmarks over the pure ecluse-core hot paths
+# (tasty-bench). Reports time AND allocations — allocations from GC stats via the
+# component's baked-in `+RTS -T`, the machine-independent signal the baseline tracks;
+# time is informational. INFORM-ONLY: it never computes a perf-regression fail, so the
+# only red state is a literal benchmark failure (a build error, a crashed harness, or
+# a tripped complexity assertion). Pass tasty-bench options through BENCH_OPTS, e.g.
+#   make bench BENCH_OPTS='-p serve --csv bench.csv'
+# (`--baseline before.csv` compares against a prior run for the human reading the log;
+# it still never gates). See docs/architecture/performance.md.
+BENCH_OPTS ?=
+bench: ## Run the work-per-request benchmarks (time + allocations; inform-only, never gates on perf)
+	$(NIX_BENCH) cabal bench ecluse-bench --benchmark-options='$(BENCH_OPTS)'
+
+# Profiling build -> run under the cost-centre profiler -> render a flame graph, so a
+# regression localises to a cost centre. Uses GHC's late cost-centre profiling
+# (`--profiling-detail=late`: centres inserted after optimisation, so the flame graph
+# reflects the optimised code with low skew), then ghc-prof-flamegraph renders the
+# .prof to an SVG. Built into its own dist-bench-prof so it never disturbs the normal
+# build. Override the profiled selection with BENCH_PROFILE_OPTS (a single bench keeps
+# the .prof focused), e.g. make bench-profile BENCH_PROFILE_OPTS='-p "serve"'.
+BENCH_PROFILE_DIR := dist-bench-prof
+BENCH_PROFILE_OPTS ?= -p express
+bench-profile: ## Profiling build -> run -> cost-centre flame graph (ecluse-bench.svg)
+	$(NIX_BENCH) cabal build ecluse-bench --enable-profiling --profiling-detail=late --builddir=$(BENCH_PROFILE_DIR)
+	$(NIX_BENCH) bash -c 'set -euo pipefail; \
+	  bin=$$(cabal list-bin ecluse-bench --enable-profiling --builddir=$(BENCH_PROFILE_DIR)); \
+	  "$$bin" $(BENCH_PROFILE_OPTS) +RTS -p -RTS; \
+	  ghc-prof-flamegraph ecluse-bench.prof -o ecluse-bench.svg; \
+	  echo "flame graph: ecluse-bench.svg  (cost-centre profile: ecluse-bench.prof)"'
 
 # doctest runs the >>> examples embedded in Haddock comments as tests, so the
 # documentation cannot drift from the code. It runs via
@@ -333,4 +368,5 @@ scan-vulnix: ## Secondary Nix-native cross-check (vulnix; comprehensive, no seve
 	-$(NIX) bash -c 'vulnix -C "$$(nix build .#ecluse-bin --no-link --print-out-paths)"'
 
 clean: ## Remove build artifacts
-	rm -rf dist-newstyle result sbom grype.json grype.sarif
+	rm -rf dist-newstyle dist-bench-prof result sbom grype.json grype.sarif \
+	  ecluse-bench.prof ecluse-bench.svg

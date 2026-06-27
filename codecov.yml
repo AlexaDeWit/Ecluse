@@ -66,7 +66,10 @@ flags:
       - core/src/
     carryforward: true
 
-# Out of scope for coverage: the thin executable entry point and the tests. The
+# Out of scope for coverage: the thin executable entry point, the inform-only
+# benchmark harness (bench/ — measured for time and allocations, never application
+# code under test, so its new files must not count toward project or patch
+# coverage), and the tests. The
 # `test/**` glob already covers the shared ecluse-test-support library under
 # test/support/, but it is called out explicitly below because that library is a
 # first-class cabal component (its Ecluse.Test.* modules are instrumented by the
@@ -79,6 +82,7 @@ flags:
 # constraint.
 ignore:
   - "app/**"
+  - "bench/**"
   - "test/**"
   - "test/support/**"
   - "core/test/**"
