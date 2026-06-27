@@ -332,6 +332,16 @@ envLayerSpec = describe "parseEnvPure" $ do
         failedNames (parseEnvPure (set "CVE_SYNC_INTERVAL_SECONDS" "-5" minimalEnv))
             `shouldBe` ["CVE_SYNC_INTERVAL_SECONDS"]
 
+    it "rejects a non-positive port against its own name rather than crashing Warp at bind" $
+        -- Port 0 is not a listenable TCP port; like every other numeric variable it
+        -- fails loudly at the config boundary instead of being handed to setPort.
+        failedNames (parseEnvPure (set "PROXY_PORT" "0" minimalEnv))
+            `shouldBe` ["PROXY_PORT"]
+
+    it "rejects an out-of-range port (above 65535) against its own name" $
+        failedNames (parseEnvPure (set "PROXY_PORT" "70000" minimalEnv))
+            `shouldBe` ["PROXY_PORT"]
+
     it "rejects an unknown log format against its own name" $
         failedNames (parseEnvPure (set "PROXY_LOG_FORMAT" "yaml" minimalEnv))
             `shouldBe` ["PROXY_LOG_FORMAT"]

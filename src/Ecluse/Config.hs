@@ -552,7 +552,7 @@ parseEnvPure = Env.parsePure envParser
 envParser :: Env.Parser Env.Error EnvConfig
 envParser =
     EnvConfig
-        <$> Env.var Env.auto "PROXY_PORT" (Env.def 4873)
+        <$> Env.var portReader "PROXY_PORT" (Env.def 4873)
         <*> Env.var urlReader "PRIVATE_UPSTREAM_URL" mempty
         <*> Env.var urlReader "PUBLIC_UPSTREAM_URL" (Env.def defaultPublicUpstream)
         -- Optional: an unset mirror target folds onto the private upstream in
@@ -712,6 +712,16 @@ positiveIntReader :: Env.Reader Env.Error Int
 positiveIntReader = textReader $ \t -> case readMaybe (toString t) :: Maybe Int of
     Just n | n > 0 -> Right n
     _ -> Left ("expected a positive integer, got " <> quote t)
+
+-- An 'Env.Reader' for a TCP port: an integer in the valid @1..65535@ range. A value
+-- outside it (zero, negative, or above 65535) is rejected loudly at the config
+-- boundary — like every other numeric variable here — rather than coerced and handed
+-- to 'Network.Wai.Handler.Warp.setPort', where it would crash the listener at bind()
+-- past the aggregated boot-error report.
+portReader :: Env.Reader Env.Error Int
+portReader = textReader $ \t -> case readMaybe (toString t) :: Maybe Int of
+    Just n | n >= 1 && n <= 65535 -> Right n
+    _ -> Left ("expected a TCP port in 1..65535, got " <> quote t)
 
 -- An 'Env.Reader' for the log-format enum, surfacing 'parseLogFormat's reason.
 logFormatReader :: Env.Reader Env.Error LogFormat

@@ -113,7 +113,7 @@ operator reference. **Keep the two in sync** when either changes.
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `PROXY_PORT` | No (default `4873`) | TCP port the proxy listens on. |
+| `PROXY_PORT` | No (default `4873`) | TCP port the proxy listens on. Must be in `1..65535`; an out-of-range value is rejected at load. |
 | `PRIVATE_UPSTREAM_URL` | **Yes** | URL of the private upstream registry (the authority for reads under the default `passthrough` strategy). |
 | `PUBLIC_UPSTREAM_URL` | No (default `https://registry.npmjs.org`) | URL of the public upstream, queried anonymously and gated by the rules. |
 | `PROXY_PUBLIC_URL` | Recommended | The proxy's own externally-reachable base URL (e.g. `https://registry.example.com`), used to rewrite each served `dist.tarball` to an **absolute** URL clients fetch back through the proxy. **Unset, tarball URLs are path-relative, which the `npm` CLI cannot install from** — it reads a leading-slash `dist.tarball` as a local `file:` path — so set this for any deployment that serves real `npm install`s. |
