@@ -73,9 +73,9 @@ hasOverlongNumericRun :: Text -> Bool
 hasOverlongNumericRun = any overlong . T.groupBy sameClass
   where
     sameClass a b = isDigit a == isDigit b
-    overlong run = case T.uncons run of
-        Just (c, _) -> isDigit c && T.compareLength run maxNumericRun == GT
-        Nothing -> False
+    -- A run is homogeneous by 'sameClass', so 'T.all' 'isDigit' identifies a
+    -- digit run; an over-long one fails the bound.
+    overlong run = T.all isDigit run && T.compareLength run maxNumericRun == GT
 
 {- | Whether a semver version is stable: a final release with no prerelease
 component. So @1.0.0@ is stable; @1.0.0-rc.1@ and @2.0.0-beta@ are not.
