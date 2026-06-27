@@ -56,8 +56,17 @@ module Ecluse.E2E.Harness (
     proxyStatus,
     proxyGet,
     proxyHead,
+    proxyPut,
     verdaccioHasVersion,
     verdaccioHasVersionNow,
+
+    -- * First-party publish
+    publishTargetEnv,
+    publishInScopeName,
+    publishOutOfScopeName,
+    publishVersion,
+    withPublishProject,
+    npmPublishIn,
 ) where
 
 import Data.ByteString qualified as BS
@@ -517,11 +526,22 @@ data NpmProject = NpmProject
     , npEnv :: [(String, String)]
     }
 
-{- | Bracket an isolated npm project (see 'NpmProject'): create the dirs and the pinned
-environment, run the action, then remove the project tree on every exit path.
+{- | Bracket an isolated npm consumer project (see 'NpmProject'): a fixed consumer
+@package.json@ and an __empty__ @.npmrc@, the pinned isolated environment, run the
+action, then remove the project tree on every exit path. For a publish-capable project
+(a scoped name plus an authorising @.npmrc@), see 'withPublishProject'.
 -}
 withNpmProject :: E2E -> (NpmProject -> IO a) -> IO a
-withNpmProject e2e use = do
+withNpmProject e2e = withProjectContents e2e consumerPackageJson ""
+
+{- An isolated npm project with the given @package.json@ and @.npmrc@ contents — the
+shared body behind 'withNpmProject' (a consumer project, empty @.npmrc@) and
+'withPublishProject' (a publishable project, an authorising @.npmrc@). Creates the dirs
+and the pinned, fully isolated environment (own cache, userconfig, prefix, @HOME@ — no
+developer global state leaks in, the only registry is the proxy), runs the action, then
+removes the tree on every exit path. -}
+withProjectContents :: E2E -> Text -> Text -> (NpmProject -> IO a) -> IO a
+withProjectContents e2e packageJson npmrcContents use = do
     sfx <- uniqueSuffix
     tmpRoot <- getTemporaryDirectory
     let projectDir = tmpRoot </> ("ecluse-e2e-npm-" <> sfx)
@@ -532,8 +552,8 @@ withNpmProject e2e use = do
         ( do
             createDirectoryIfMissing True cacheDir
             createDirectoryIfMissing True prefixDir
-            writeFileText (projectDir </> "package.json") consumerPackageJson
-            writeFileText npmrc ""
+            writeFileText (projectDir </> "package.json") packageJson
+            writeFileText npmrc npmrcContents
             baseEnv <- getEnvironment
             let overrides =
                     [ ("npm_config_registry", toString (e2eRegistry e2e))
@@ -555,6 +575,22 @@ withNpmProject e2e use = do
         )
         (\_ -> handleAny (const pass) (removePathForcibly projectDir))
         use
+
+{- | Bracket an isolated, __publishable__ npm project: a @package.json@ carrying the
+given scoped name and version (npm packs the project directory, so no prebuilt tarball
+fixture is needed) and an @.npmrc@ authorising the proxy registry with a bearer token.
+The token satisfies npm's client-side publish gate — without one npm refuses the publish
+with @ENEEDAUTH@ before it reaches the proxy — and is forwarded through the publish
+relay. The publication target accepts the publish on its own terms, so the token's
+identity is immaterial here (asserting the forwarded-credential identity is the
+integration tier's concern); the @.npmrc@ exists to exercise the forward, not to prove it.
+-}
+withPublishProject :: E2E -> Text -> Text -> (NpmProject -> IO a) -> IO a
+withPublishProject e2e name version =
+    withProjectContents
+        e2e
+        (publishPackageJson name version)
+        (npmAuthLine (e2eRegistry e2e) publishAuthToken)
 
 -- | Run @npm@ with the given args in a project, capturing its exit and output.
 runNpm :: NpmProject -> [String] -> IO NpmResult
@@ -582,6 +618,15 @@ mirrored it never contacts the public upstream.
 npmCiIn :: NpmProject -> IO NpmResult
 npmCiIn proj = runNpm proj ["ci"]
 
+{- | @npm publish@ in a publishable project (see 'withPublishProject') — packs the
+project directory and @PUT \/{pkg}@s the publish document to the proxy, which gates it on
+the publish-scope allow-list before relaying it to the publication target. The exit code
+reflects what the proxy returned: success when the publish was admitted and the target
+accepted it, non-zero when the anti-shadowing guard refused the name (a @403@).
+-}
+npmPublishIn :: NpmProject -> IO NpmResult
+npmPublishIn proj = runNpm proj ["publish"]
+
 {- | @npm install \<pkg\>@ against the proxy in a throwaway project (see 'withNpmProject'),
 for the one-shot cases that only need the install's outcome.
 -}
@@ -601,6 +646,68 @@ withUpstreamPaused e2e =
     bracket_
         (dockerOk ["pause", e2eStubContainer e2e])
         (dockerOk ["unpause", e2eStubContainer e2e])
+
+-- ── first-party publish ───────────────────────────────────────────────────────
+
+{- | The extra proxy environment that turns the first-party publish path __on__, layered
+over the base 'proxyEnv' through 'E2EConfig'\'s @ecExtraEnv@ — so only the scenarios that
+ask for it see a publication target, and the base topology keeps the implicit
+publish→@405@ default. The target is Verdaccio, the same registry the base topology reads
+as the private upstream (@mirror@), so a published package is then readable back over the
+private leg. @PUBLISH_SCOPES@ is the anti-shadowing allow-list, required once a target is
+set; the static token is the fallback the relay forwards only for a client that sends none.
+-}
+publishTargetEnv :: [(Text, Text)]
+publishTargetEnv =
+    [ ("PUBLICATION_TARGET_URL", "http://mirror:4873/")
+    , ("PUBLICATION_TARGET_TOKEN", "e2e-publication-token")
+    , ("PUBLISH_SCOPES", publishScope)
+    ]
+
+-- The publish-scope allow-list value 'publishTargetEnv' configures. 'publishInScopeName'
+-- is derived from it, so the configured scope and the in-scope name cannot drift apart.
+publishScope :: Text
+publishScope = "@acme"
+
+{- | A first-party package __within__ the configured 'publishTargetEnv' scope: an
+@npm publish@ of it is admitted by the anti-shadowing guard and relayed to the
+publication target.
+-}
+publishInScopeName :: Text
+publishInScopeName = publishScope <> "/e2e-publish"
+
+{- | A package in a scope __outside__ the allow-list: an @npm publish@ of it must be
+refused by the anti-shadowing guard __before__ any upstream write — the security
+property the refuse-before-write scenario proves.
+-}
+publishOutOfScopeName :: Text
+publishOutOfScopeName = "@rogue/e2e-shadow"
+
+-- | The single version the publish scenarios publish (and read back).
+publishVersion :: Text
+publishVersion = "1.0.0"
+
+-- The bearer token written into a publishable project's @.npmrc@. Its only job is to
+-- satisfy npm's client-side publish gate (no token ⇒ @ENEEDAUTH@) and exercise the
+-- forward; the publication target accepts the publish regardless, so the identity is
+-- immaterial at this tier (the forwarded-credential identity is integration-tier work).
+publishAuthToken :: Text
+publishAuthToken = "e2e-publisher-token"
+
+-- A publishable project's @package.json@: the scoped name and version npm packs and
+-- publishes. Deliberately not @private@ — npm refuses to publish a private package.
+publishPackageJson :: Text -> Text -> Text
+publishPackageJson name version =
+    "{\"name\":\"" <> name <> "\",\"version\":\"" <> version <> "\"}\n"
+
+-- The npm @.npmrc@ line authorising a registry with a bearer token. npm keys auth by the
+-- registry URL's host and path with the scheme stripped and a leading @\/\/@, so a
+-- publish to the proxy registry carries this token.
+npmAuthLine :: Text -> Text -> Text
+npmAuthLine registry token =
+    "//" <> withoutScheme registry <> ":_authToken=" <> token <> "\n"
+  where
+    withoutScheme u = fromMaybe u (T.stripPrefix "http://" u <|> T.stripPrefix "https://" u)
 
 -- ── HTTP probes ─────────────────────────────────────────────────────────────
 
@@ -629,6 +736,17 @@ proxyHead e2e path = do
                 raw <- lookup hContentLength (responseHeaders resp)
                 readMaybe (toString (decodeUtf8 raw :: Text))
         pure (statusCode (responseStatus resp), declared, sum (map BS.length chunks))
+
+{- | @PUT@ a proxy path with an empty body, returning the status — the raw publish probe.
+A publish on a mount with __no__ publication target configured is refused (@405@) before
+the request body is read, so an empty @PUT@ is enough to assert the opt-in posture without
+driving the @npm@ CLI.
+-}
+proxyPut :: E2E -> Text -> IO Int
+proxyPut e2e path = do
+    base <- parseRequest (toString (e2eBaseUrl e2e <> path))
+    resp <- httpLbs base{method = "PUT"} (e2eManager e2e)
+    pure (statusCode (responseStatus resp))
 
 {- | Poll Verdaccio (the mirror) until it serves the given version of a package, or
 the timeout lapses. Used to await an asynchronous mirror, and to assert one never
