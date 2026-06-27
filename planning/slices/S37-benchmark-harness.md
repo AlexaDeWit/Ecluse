@@ -1,84 +1,106 @@
 ---
 id: S37
-title: Benchmark harness + pure-core micro-benchmarks (informational)
-milestone: M9 — Performance benchmarking
+title: Benchmark harness + Layer A work-per-request benches + CI baseline (informational)
+milestone: M9 — Benchmarking & load testing
 status: not-started
 depends-on: []
 test-tier: [bench]
 arch-refs:
+  - docs/architecture/performance.md
   - docs/architecture/technology-stack.md#key-decisions
   - docs/architecture/observability.md
   - docs/architecture/rules-engine.md#applying-verdicts-to-a-packument
   - docs/architecture/registry-model.md#packument-merge-across-upstreams
-  - docs/architecture/security.md
 pr: null
 ---
 
-# S37 — Benchmark harness + pure-core micro-benchmarks (informational)
+# S37 — Benchmark harness + Layer A work-per-request benches + CI baseline (informational)
 
 > Milestone **M9** · depends on: — (runs against the already-merged pure core) · tier: bench
 
-**Goal.** Stand up the benchmarking harness and the first micro-benchmarks over
-the **pure core already on `main`** (version ordering, rules, the npm wire
-decoders / projection, the router, the security guards), wired into CI as an
-**informational, non-gating** trend compared against prior baselines. Benchmarks
-**inform; they never gate** — no `gate` dependency, no build-failing
-`--fail-if-slower` — so a change may knowingly trade performance for correctness
-and still merge; the trend just records it. Because every target is already
-merged, this slice lands before the MVP and **de-risks the perf-CI pipeline
-early** — a natural companion to the inter-wave
-[quality & alignment pass](../orchestration-strategy.md#inter-wave-quality--alignment-pass),
-which can then *measure* the regressions it currently eyeballs.
+**Goal.** Stand up the benchmarking harness and the **work-per-request** layer over the
+pure `ecluse-core` already on `main`, plus the informational CI plumbing the whole
+milestone hangs off. M9 is **one capability, two layers** (see
+[performance.md](../../docs/architecture/performance.md)): this slice is **Layer A —
+work per request**, the *deterministic, machine-independent* signal (allocations /
+instructions). [S38](S38-pipeline-benchmarks.md) adds **Layer B — throughput &
+latency under load**. Because every target here is already merged, S37 lands early and
+**de-risks the perf-CI pipeline** before Layer B builds on it.
+
+**Posture (the whole milestone).** **Informational; never gates.** Not a `gate.needs`
+dependency. The workflow's *only* red state is a **literal benchmark failure** (build
+error, harness crash, non-zero exit) — it **never** computes a perf-regression fail
+(no `fail-on-alert`, no `--fail-if-slower`). A slow result is data, not a failure. A
+change may knowingly trade performance for correctness and still merge.
 
 **Acceptance criteria.**
-- [ ] **`ecluse-bench` component.** A cabal `benchmark` stanza (`import: shared` +
-  the relude mixin, like the test suites) using
-  [`tasty-bench`](https://hackage.haskell.org/package/tasty-bench) — featherweight
-  (one module, only `tasty`), GHC 9.10, CPU-time by default — builds `-Werror`-clean
-  and runs via `make bench` from the Nix shell. `criterion` is **rejected** (50+
-  transitive deps) per the lean-dependency posture. — _technology-stack.md#key-decisions_
-- [ ] **Micro-benches over the pure hot paths**, each on a realistic input (reuse
-  `test/unit/fixtures/npm/*.json` — e.g. `core-js`, `webpack-cli`): npm wire decode +
-  projection (`Registry.Npm.Wire` / `.Project`); `Rules.evalRules` scaled across
-  version counts; `Version.compareVersions` / `parseVersionKey`;
+- [ ] **`ecluse-bench` component.** A cabal `benchmark` stanza (`import: shared` + the
+  relude mixin, like the test suites) using
+  [`tasty-bench`](https://hackage.haskell.org/package/tasty-bench) (one module; only
+  `tasty`), `-Werror`-clean, run via `make bench` from the Nix shell. `criterion` is
+  rejected (50+ transitive deps) per the lean-dependency posture. The component is
+  kept **out of the library's dependency closure**. — _technology-stack.md#key-decisions_
+- [ ] **Micro-benches over the pure hot paths**, each on a realistic input from the
+  corpus below: npm wire decode + projection (`Registry.Npm.Wire` / `.Project`);
+  `Rules.evalRules` scaled across version counts; packument `Package.Merge`; the npm
+  URL-rewrite + ETag / re-serialise; `Version.compareVersions` / `parseVersionKey`;
   `Server.Route.classify`; the `Security` bounded-read / nesting-depth guards.
-  — _rules-engine.md#applying-verdicts-to-a-packument · registry-model.md · security.md_
-- [ ] **Time *and* allocations captured** (`+RTS -T`). The dashboard tracks
-  **allocations** as the stable, machine-independent signal and CPU time as the
-  noisier one — documented as such, and **neither gates**. (GC pauses drive an
-  inline proxy's tail latency — _observability.md_.)
-- [ ] **Informational CI only.** A non-gating workflow on its own lifecycle (like
-  `security.yml` / `pages.yml`, *not* a `gate` dependency) runs the benches and
-  publishes to a
-  [`github-action-benchmark`](https://github.com/benchmark-action/github-action-benchmark)
-  trend dashboard with **`fail-on-alert: false`** — it *comments* on a threshold
-  regression but never fails the build.
-- [ ] **No Pages contention.** Trend data is stored on a **dedicated branch** by
-  `github-action-benchmark` (a Node action — **accepted**, SHA-pinned,
-  Dependabot-bumped), kept off the Haddock GitHub-Pages artifact deploy
-  (single-concurrency group) so the two publish paths never contend.
+  — _rules-engine.md · registry-model.md · security.md_
+- [ ] **Time *and* allocations captured** (`+RTS -T`). **Allocations are the tracked,
+  machine-independent signal**; CPU time is recorded but informational — documented as
+  such. (GC pressure drives an inline proxy's tail latency — _observability.md_.)
+- [ ] **Complexity assertions via `tasty-bench-fit`** on the version-count-scaled
+  paths (merge, rules-over-versions, the serve filter): flag worse-than-linear. This
+  is the CI-stable guard against the accidentally-quadratic class
+  ([#373](https://github.com/AlexaDeWit/Ecluse/issues/373) /
+  [#374](https://github.com/AlexaDeWit/Ecluse/issues/374) /
+  [#299](https://github.com/AlexaDeWit/Ecluse/issues/299)).
+- [ ] **Realistic corpus.** Reuse `core/test/unit/fixtures/npm/*.json` (incl. the real
+  large `express.full.json`) and add a **synthetic ~100k-version packument generator**
+  to stress scaling. Bench inputs are supplied via `env`, never top-level thunks.
+- [ ] **Informational CI workflow.** `.github/workflows/bench.yml` on
+  **`workflow_dispatch` only** (iteration 1, until run-time is known — D3), **not** a
+  `gate` dependency, runs `make bench` in a lean `.#bench` dev shell, and renders the
+  results to the run summary. **First-party SHA-pinned actions only** (no third-party
+  Node action this iteration).
+- [ ] **`main` baseline artifact.** A dispatch on `main` uploads its results as a
+  durable, commit-keyed artifact (`actions/upload-artifact`, SHA-pinned) — the
+  `before:` baseline a later run fetches to compare against. _(The before/after **PR
+  comment** waits for a later iteration that adds a `pull_request` trigger — D3.)_
+- [ ] **`make bench-profile`** — a profiling build → flamegraph target, so a
+  regression localises to a cost centre.
 - [ ] **Strategy documented in the same PR** — `docs/architecture/performance.md`
-  (or a CONTRIBUTING "Performance benchmarking" section): what is measured,
-  allocations-vs-time, **never-gates**, how to read the dashboard, and how to run
-  `make bench` locally.
+  authored here: the two-layer model, allocations-vs-time, **never-gates-except-on-
+  failure**, the baseline / (future) PR-comment flow, the consistency posture (D2),
+  and how to run `make bench` / `make bench-profile` locally.
 
 **File scope.**
-- `bench/Main.hs` (+ `bench/Ecluse/*Bench.hs`) — the `tasty-bench` suite.
-- `ecluse.cabal` — `benchmark ecluse-bench` stanza (adds `tasty-bench` + `tasty`,
-  benchmark-component-only; never in the library's dependency closure).
-- `Makefile` — `bench` target (`$(NIX) cabal bench …`, RTS `-T`).
-- `flake.nix` — `tasty-bench` in the package set / dev shell if not already present.
-- `scripts/bench-to-json.{sh,hs}` — `tasty-bench` CSV → `customSmallerIsBetter` JSON.
-- `.github/workflows/bench.yml` — the informational, non-gating workflow.
-- `docs/architecture/performance.md` — the strategy doc (the home of the
-  *informational, never-gates* and *Node-accepted, own-branch* decisions).
+- `bench/Main.hs` (+ `bench/Ecluse/Core/*Bench.hs`) — the `tasty-bench` suite.
+- `bench/fixtures/` — the synthetic large-packument generator (if not derivable from
+  the existing npm fixtures).
+- `ecluse.cabal` — `benchmark ecluse-bench` stanza (`tasty-bench`, `tasty`,
+  `tasty-bench-fit`, `ecluse:ecluse-core`, `ecluse:ecluse-test-support`); never in the
+  library closure.
+- `cabal.project.freeze` — regenerated via `make freeze` to pin the new deps; possibly
+  `benchmarks: True` in `cabal.project` (mirror of the existing `tests: True`).
+- `flake.nix` — a lean `devShells.bench` (`ciInputs ++ [ tasty tooling ]`, cf
+  `.#weeder` / `.#stan`).
+- `Makefile` — `bench` (RTS `-T`) and `bench-profile` targets.
+- `.github/workflows/bench.yml` — the informational, non-gating, `workflow_dispatch`
+  workflow.
+- `docs/architecture/performance.md` — the strategy doc (home of the *inform-only*,
+  *never-gates-except-on-failure*, *D1/D2/D3* decisions).
 
-**Test tier.** Bench — informational; **not** a gating suite and **not** wired into
-`gate`. A tiny unit check may cover the CSV→JSON shim if it grows logic.
+**Test tier.** Bench — informational; **not** gating, **not** wired into `gate`. A
+tiny unit check may cover any results-formatting shim if it grows logic.
 
-**Notes / risks.** Confirm `tasty-bench` (+ `tasty`) is in the pinned package set;
-**escalate** if absent (a real toolchain dependency). Keep the benchmark component
-out of the library's dependency closure. RTS hygiene: a larger nursery (`-A32m`)
-and `-fproc-alignment=64` cut GC / layout noise; supply inputs via `env`, not
-top-level thunks. This track is **off the launch critical path** — pull it in
-opportunistically. **Never wire any of it into `gate`.**
+**Notes / decisions.**
+- Tooling confirmed present in the pin (nixpkgs 26.05 / ghc910, 2026-06-27):
+  `tasty-bench` 0.4.1, `tasty` 1.5.4, `tasty-bench-fit` 0.1.1.
+- **D1** — no SLO; inform-only (this milestone never asserts a pass/fail throughput).
+- **D2** — measure on the **shared public** GitHub-hosted runner; trustworthy
+  absolutes come from **local deep-dives**. Self-hosted rejected (PR-code supply-chain
+  risk); larger hosted runners deferred (need a paid org plan).
+- **D3** — `workflow_dispatch` only for iteration 1.
+- RTS hygiene: a larger nursery (`-A32m`) and `-fproc-alignment=64` cut GC / layout
+  noise. **Never wire any of this into `gate`.**
