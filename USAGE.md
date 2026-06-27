@@ -17,6 +17,7 @@ here.
 
 - [What Écluse does](#what-écluse-does)
 - [Deployment model](#deployment-model)
+- [The Golden Path](#the-golden-path)
 - [Configuration](#configuration)
   - [Environment variables](#environment-variables)
   - [The configuration document](#the-configuration-document)
@@ -47,6 +48,55 @@ mirror worker. Point your package manager at it as a registry (see
 Before you run a published image, **verify its provenance and SBOM attestations**: the
 recipe (keyless Sigstore + Rekor, pinned by digest) is in the
 [README](README.md#verifying-the-image).
+
+## The Golden Path
+
+The sections below cover every knob; this is the **recommended, most resilient way to run
+Écluse** — the posture the [threat model](threat-modelling/ecluse.json) treats as canonical,
+and the one to aim for unless you have a specific reason to diverge. Each step links to its
+detail.
+
+1. **Run three registries, not one.** Configure distinct backends for the three internal
+   roles: a **first-party** store (the publication target), a **public-derived mirror**
+   store (the mirror target), and a **pull-through** read endpoint that aggregates both
+   (`PRIVATE_UPSTREAM_URL`). Keeping first-party and public-derived inventory physically
+   separate lets you apply distinct storage-level policy and scanning per provenance and
+   keeps your package inventory auditable; collapsing them onto fewer registries still
+   works, but muddies auditing and post-incident scoping. See [registry-level
+   composition](docs/architecture/registry-model.md#registry-level-composition-optional-never-required).
+2. **Let callers use their own identity (passthrough).** The default credential strategy
+   forwards each caller's own registry token to the private upstream and the publication
+   target, so access stays exactly what your registry's IAM already grants — no privilege
+   escalation or compression — and Écluse holds no standing read credential. This is the
+   launch default; nothing to set. See [access model](docs/architecture/access-model.md).
+3. **Mint the mirror-write token from the container role.** Set
+   `MIRROR_TARGET_CREDENTIAL_PROVIDER=codeartifact` so the worker mints a short-lived write
+   token under the task/instance role rather than carrying a static secret (`static` is
+   supported but discouraged). Scope that role **write-only** to the mirror store and keep
+   the token duration short (`MIRROR_TARGET_CODEARTIFACT_TOKEN_DURATION_SECONDS`). It is
+   Écluse's only standing credential and it writes the trusted store, so least-privilege it
+   hardest.
+4. **Let the edge own access; leave `PROXY_AUTH_TOKEN` off.** Écluse is not your access
+   boundary: front it with a gateway / service mesh / IAP that admits only the networks you
+   intend (office ranges, a VPN tunnel), and restrict **both** north-south *and* east-west
+   (pod-to-pod) reachability — an ingress-only allow-list that still leaves the pod
+   reachable from inside the cluster is the common gap. See [Connecting your
+   clients](#connecting-your-clients).
+5. **Fence egress, keep metadata reachable.** Default-deny outbound, allowing only your
+   upstreams, the mirror target, and the metadata endpoint; reach CodeArtifact over **VPC
+   endpoints**; require **IMDSv2 with hop limit 1**. Do **not** block the metadata endpoint
+   — Écluse needs it to mint credentials. See [Securing network
+   egress](#securing-network-egress-required).
+6. **Make the proxy unbypassable.** Deny your CI runners (and, where practical,
+   workstations) outbound access to the public registries so the only route to a package is
+   through Écluse. This is what turns the policy from *default* into *unbypassable*. See
+   [Locking down CI egress](#locking-down-ci-egress-recommended).
+7. **Verify what you run.** Pin the image by digest and verify its provenance + SBOM
+   attestations before deploying (see [Verifying the image](README.md#verifying-the-image)).
+
+The *why* behind each choice — and the residual risks the canonical posture knowingly
+accepts — is in the [threat model](threat-modelling/ecluse.json) and
+[Security invariants](docs/architecture/security.md#trust-assumptions--credential-posture).
 
 ## Configuration
 
@@ -355,6 +405,7 @@ The internal design, for when you need the *why*:
 - [Architecture overview](docs/architecture.md)
 - [Configuration & Authentication](docs/architecture/configuration.md)
 - [Security invariants & network egress](docs/architecture/security.md)
+- [Threat model (OWASP Threat Dragon)](threat-modelling/ecluse.json) — the STRIDE model of the canonical deployment
 - [Rules engine](docs/architecture/rules-engine.md)
 - [Multi-ecosystem hosting & URL rewriting](docs/architecture/hosting.md)
 - [Release & supply-chain operations](docs/architecture/release-supply-chain.md)

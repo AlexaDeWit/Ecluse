@@ -1,0 +1,1255 @@
+{
+  "version": "2.6.2",
+  "summary": {
+    "title": "Écluse",
+    "owner": "Alexandra de Wit",
+    "description": "Initial STRIDE threat model for Écluse, a supply-chain resilience proxy for package registries. The 'High Level' diagram captures the canonical deployment posture: per-caller passthrough credentials, the three-registry topology (first-party private store, public-derived mirror store, and a pull-through read endpoint), and AWS CodeArtifact reached over VPC endpoints, with the demand-driven mirror worker minting its own write token under the container role. Edge access control and storage-layer scanning are operator responsibilities and are out of scope (recorded as trust assumptions). This is an iterative sketch, refined collaboratively; the .json is the single source of truth and Threat Dragon renders it.",
+    "id": 0
+  },
+  "detail": {
+    "contributors": [
+      {
+        "name": "Alexandra de Wit"
+      }
+    ],
+    "diagrams": [
+      {
+        "id": 0,
+        "title": "High Level",
+        "diagramType": "STRIDE",
+        "placeholder": "New STRIDE diagram description",
+        "thumbnail": "./public/content/images/thumbnail.stride.jpg",
+        "version": "2.6.2",
+        "cells": [
+          {
+            "position": {
+              "x": 240,
+              "y": 40
+            },
+            "size": {
+              "width": 1180,
+              "height": 1180
+            },
+            "attrs": {
+              "label": {
+                "text": "Operator trust zone (VPC / mesh) — access edge enforced here"
+              }
+            },
+            "visible": true,
+            "shape": "trust-boundary-box",
+            "id": "0ec10e5e-0000-4000-8000-000000000001",
+            "zIndex": -1,
+            "data": {
+              "type": "tm.BoundaryBox",
+              "description": "",
+              "isTrustBoundary": true,
+              "hasOpenThreats": false
+            }
+          },
+          {
+            "position": {
+              "x": 1500,
+              "y": 440
+            },
+            "size": {
+              "width": 240,
+              "height": 200
+            },
+            "attrs": {
+              "label": {
+                "text": "Public internet (untrusted)"
+              }
+            },
+            "visible": true,
+            "shape": "trust-boundary-box",
+            "id": "0ec10e5e-0000-4000-8000-000000000002",
+            "zIndex": -1,
+            "data": {
+              "type": "tm.BoundaryBox",
+              "description": "",
+              "isTrustBoundary": true,
+              "hasOpenThreats": false
+            }
+          },
+          {
+            "position": {
+              "x": 40,
+              "y": 500
+            },
+            "size": {
+              "width": 170,
+              "height": 90
+            },
+            "attrs": {
+              "text": {
+                "text": "npm client\n(developer / CI)"
+              },
+              "body": {
+                "stroke": "#333333",
+                "strokeWidth": 1,
+                "strokeDasharray": null
+              }
+            },
+            "shape": "actor",
+            "zIndex": 1,
+            "id": "0ec10e5e-0000-4000-8000-000000000010",
+            "data": {
+              "name": "npm client\n(developer / CI)",
+              "description": "The caller. Presents its own CodeArtifact bearer token; authenticated to the proxy by the operator's access edge, not by Écluse.",
+              "type": "tm.Actor",
+              "isTrustBoundary": false,
+              "outOfScope": false,
+              "reasonOutOfScope": "",
+              "threats": [],
+              "hasOpenThreats": false,
+              "providesAuthentication": true
+            }
+          },
+          {
+            "position": {
+              "x": 1530,
+              "y": 495
+            },
+            "size": {
+              "width": 180,
+              "height": 90
+            },
+            "attrs": {
+              "text": {
+                "text": "Public npm registry"
+              },
+              "body": {
+                "stroke": "#333333",
+                "strokeWidth": 1,
+                "strokeDasharray": null
+              }
+            },
+            "shape": "actor",
+            "zIndex": 1,
+            "id": "0ec10e5e-0000-4000-8000-000000000011",
+            "data": {
+              "name": "Public npm registry",
+              "description": "The untrusted public upstream. Consulted but never trusted blindly; queried anonymously (caller credential stripped).",
+              "type": "tm.Actor",
+              "isTrustBoundary": false,
+              "outOfScope": false,
+              "reasonOutOfScope": "",
+              "threats": [],
+              "hasOpenThreats": false,
+              "providesAuthentication": false
+            }
+          },
+          {
+            "position": {
+              "x": 960,
+              "y": 1010
+            },
+            "size": {
+              "width": 190,
+              "height": 90
+            },
+            "attrs": {
+              "text": {
+                "text": "AWS IMDS + STS"
+              },
+              "body": {
+                "stroke": "#333333",
+                "strokeWidth": 1,
+                "strokeDasharray": null
+              }
+            },
+            "shape": "actor",
+            "zIndex": 1,
+            "id": "0ec10e5e-0000-4000-8000-000000000012",
+            "data": {
+              "name": "AWS IMDS + STS",
+              "description": "Instance-metadata + token endpoint. Source of the container-role credentials the worker exchanges for a CodeArtifact write token. Reached over amazonka's own client, off the guarded data-plane manager.",
+              "type": "tm.Actor",
+              "isTrustBoundary": false,
+              "outOfScope": false,
+              "reasonOutOfScope": "",
+              "threats": [],
+              "hasOpenThreats": false,
+              "providesAuthentication": true
+            }
+          },
+          {
+            "position": {
+              "x": 380,
+              "y": 460
+            },
+            "size": {
+              "width": 130,
+              "height": 130
+            },
+            "attrs": {
+              "text": {
+                "text": "Écluse proxy"
+              },
+              "body": {
+                "stroke": "#333333",
+                "strokeWidth": 1,
+                "strokeDasharray": null
+              }
+            },
+            "shape": "process",
+            "zIndex": 2,
+            "id": "0ec10e5e-0000-4000-8000-000000000020",
+            "data": {
+              "name": "Écluse proxy",
+              "description": "The request pipeline: router, parallel upstream fetch, packument merge, deny-by-default rules + integrity gate, and serve. Relays publishes. Holds forwarded caller credentials transiently.",
+              "type": "tm.Process",
+              "isTrustBoundary": false,
+              "outOfScope": false,
+              "reasonOutOfScope": "",
+              "hasOpenThreats": true,
+              "threats": [
+                {
+                  "number": 1,
+                  "status": "Open",
+                  "severity": "High",
+                  "title": "Forwarded caller credentials aggregated in proxy memory",
+                  "type": "Information disclosure",
+                  "description": "Under the canonical passthrough strategy the proxy transiently holds every caller's own CodeArtifact bearer in process memory while relaying reads and publishes. A single proxy compromise (a heap/memory dump, a log-field leak, or a malicious dependency in Écluse's own supply chain) therefore harvests the credentials of all callers in transit, not one. Passthrough distributes credential exposure across every user, where a service identity would concentrate it in one short-lived token.",
+                  "mitigation": "Tokens are carried as a redacted type so they never reach a log field, and retention is request-scoped. Residual: a GC'd runtime cannot guarantee prompt erasure from the heap, so harden Écluse's own runtime and supply chain (the attested, reproducible image) as a first-class control. The service strategy (post-launch) is available to operators who want the smallest credential surface.",
+                  "modelType": "STRIDE",
+                  "id": "0ec10e5e-0000-4000-8000-000000000101"
+                },
+                {
+                  "number": 2,
+                  "status": "Open",
+                  "severity": "Medium",
+                  "title": "Chokepoint exhaustion via pathological upstream payload",
+                  "type": "Denial of service",
+                  "description": "Écluse is a mandatory chokepoint, so degrading its availability is itself a supply-chain attack: builds either fail or operators are tempted to bypass the gate. A hostile or compromised upstream, or a pathological public package, could return an oversized, version-flooded, or deeply-nested packument whose parsing and per-version rule evaluation exhaust CPU or memory.",
+                  "mitigation": "Response bounds fail closed past a body-size, version-count, and nesting-depth cap (PROXY_MAX_RESPONSE_BYTES / PROXY_MAX_VERSION_COUNT / PROXY_MAX_NESTING_DEPTH). Residual to verify and bound: within-budget documents can still drive super-linear serve-path work (issues #373/#374).",
+                  "modelType": "STRIDE",
+                  "id": "0ec10e5e-0000-4000-8000-000000000102"
+                }
+              ]
+            }
+          },
+          {
+            "position": {
+              "x": 400,
+              "y": 800
+            },
+            "size": {
+              "width": 130,
+              "height": 130
+            },
+            "attrs": {
+              "text": {
+                "text": "Mirror worker"
+              },
+              "body": {
+                "stroke": "#333333",
+                "strokeWidth": 1,
+                "strokeDasharray": null
+              }
+            },
+            "shape": "process",
+            "zIndex": 2,
+            "id": "0ec10e5e-0000-4000-8000-000000000021",
+            "data": {
+              "name": "Mirror worker",
+              "description": "Demand-driven async worker: polls the mirror queue, back-fills the approved artifact from the public upstream, verifies bytes against dist.integrity, and publishes to the mirror store with Écluse's own minted write token.",
+              "type": "tm.Process",
+              "isTrustBoundary": false,
+              "outOfScope": false,
+              "reasonOutOfScope": "",
+              "hasOpenThreats": false,
+              "threats": []
+            }
+          },
+          {
+            "position": {
+              "x": 650,
+              "y": 1000
+            },
+            "size": {
+              "width": 140,
+              "height": 140
+            },
+            "attrs": {
+              "text": {
+                "text": "Credential provider"
+              },
+              "body": {
+                "stroke": "#333333",
+                "strokeWidth": 1,
+                "strokeDasharray": null
+              }
+            },
+            "shape": "process",
+            "zIndex": 2,
+            "id": "0ec10e5e-0000-4000-8000-000000000022",
+            "data": {
+              "name": "Credential provider",
+              "description": "Mints and refreshes the mirror-target write token under the container/task role (CodeArtifact GetAuthorizationToken), with single-flight + breaker. Écluse's only standing credential.",
+              "type": "tm.Process",
+              "isTrustBoundary": false,
+              "outOfScope": false,
+              "reasonOutOfScope": "",
+              "hasOpenThreats": false,
+              "threats": []
+            }
+          },
+          {
+            "position": {
+              "x": 360,
+              "y": 110
+            },
+            "size": {
+              "width": 180,
+              "height": 90
+            },
+            "attrs": {
+              "text": {
+                "text": "Metadata cache\n(public-gated only)"
+              },
+              "topLine": {
+                "stroke": "#333333",
+                "strokeWidth": 1,
+                "strokeDasharray": null
+              },
+              "bottomLine": {
+                "stroke": "#333333",
+                "strokeWidth": 1,
+                "strokeDasharray": null
+              }
+            },
+            "shape": "store",
+            "zIndex": 3,
+            "id": "0ec10e5e-0000-4000-8000-000000000030",
+            "data": {
+              "name": "Metadata cache\n(public-gated only)",
+              "description": "Shared in-proxy cache. Under passthrough it holds only the anonymous public (gated) origin; the per-caller private origin is never entered.",
+              "type": "tm.Store",
+              "isTrustBoundary": false,
+              "outOfScope": false,
+              "reasonOutOfScope": "",
+              "hasOpenThreats": false,
+              "isALog": false,
+              "storesCredentials": false,
+              "isEncrypted": false,
+              "isSigned": false,
+              "threats": [
+                {
+                  "number": 9,
+                  "status": "Mitigated",
+                  "severity": "High",
+                  "title": "Cross-client disclosure of a private package via shared cache (#115)",
+                  "type": "Information disclosure",
+                  "description": "A cache key carries no credential dimension, so were a private-origin document cached, one caller could warm an entry and another, differently-authorised caller could be served it without their own request being authorised upstream.",
+                  "mitigation": "Under passthrough the private origin is never entered into the shared cache, made unrepresentable by construction; only the anonymous public-gated origin is cached, and the private upstream is re-consulted per request with the caller's own token. The service / delegated-cache strategies (post-launch) re-authorise every shared hit.",
+                  "modelType": "STRIDE",
+                  "id": "0ec10e5e-0000-4000-8000-000000000109"
+                }
+              ]
+            }
+          },
+          {
+            "position": {
+              "x": 720,
+              "y": 110
+            },
+            "size": {
+              "width": 180,
+              "height": 90
+            },
+            "attrs": {
+              "text": {
+                "text": "Mirror queue (SQS)"
+              },
+              "topLine": {
+                "stroke": "#333333",
+                "strokeWidth": 1,
+                "strokeDasharray": null
+              },
+              "bottomLine": {
+                "stroke": "#333333",
+                "strokeWidth": 1,
+                "strokeDasharray": null
+              }
+            },
+            "shape": "store",
+            "zIndex": 3,
+            "id": "0ec10e5e-0000-4000-8000-000000000031",
+            "data": {
+              "name": "Mirror queue (SQS)",
+              "description": "Demand-driven mirror job queue. A job is enqueued when an artifact is accepted on the tarball path. A trusted, operator-declared destination (amazonka's own client).",
+              "type": "tm.Store",
+              "isTrustBoundary": false,
+              "outOfScope": false,
+              "reasonOutOfScope": "",
+              "hasOpenThreats": false,
+              "isALog": false,
+              "storesCredentials": false,
+              "isEncrypted": false,
+              "isSigned": false,
+              "threats": []
+            }
+          },
+          {
+            "position": {
+              "x": 1120,
+              "y": 470
+            },
+            "size": {
+              "width": 200,
+              "height": 90
+            },
+            "attrs": {
+              "text": {
+                "text": "Registry C:\npull-through read endpoint"
+              },
+              "topLine": {
+                "stroke": "#333333",
+                "strokeWidth": 1,
+                "strokeDasharray": null
+              },
+              "bottomLine": {
+                "stroke": "#333333",
+                "strokeWidth": 1,
+                "strokeDasharray": null
+              }
+            },
+            "shape": "store",
+            "zIndex": 3,
+            "id": "0ec10e5e-0000-4000-8000-000000000032",
+            "data": {
+              "name": "Registry C:\npull-through read endpoint",
+              "description": "The trusted private-upstream read view (PRIVATE_UPSTREAM_URL). A pull-through aggregator over the first-party store (A) and the mirror store (B); what the proxy reads.",
+              "type": "tm.Store",
+              "isTrustBoundary": false,
+              "outOfScope": false,
+              "reasonOutOfScope": "",
+              "hasOpenThreats": true,
+              "isALog": false,
+              "storesCredentials": false,
+              "isEncrypted": false,
+              "isSigned": false,
+              "threats": [
+                {
+                  "number": 11,
+                  "status": "Open",
+                  "severity": "High",
+                  "title": "Undetected artifact substitution across upstreams",
+                  "type": "Tampering",
+                  "description": "The merge flags an integrity divergence when private and public copies of a version contradict on a shared digest algorithm. A weak-only or absent digest, or a flaw in how divergence is keyed, could let a substituted artifact pass undetected and be served as the trusted copy.",
+                  "mitigation": "A public version must carry a digest meeting the integrity floor (default SHA-256, hard-floored) to be admitted; divergence is compared on each digest's asserted algorithm, not a bucketed tag. Residual to verify: divergence keys on the asserted algorithm (issue #376) and the operator-loosenable trusted-floor path.",
+                  "modelType": "STRIDE",
+                  "id": "0ec10e5e-0000-4000-8000-00000000010b"
+                }
+              ]
+            }
+          },
+          {
+            "position": {
+              "x": 1120,
+              "y": 130
+            },
+            "size": {
+              "width": 200,
+              "height": 90
+            },
+            "attrs": {
+              "text": {
+                "text": "Registry A:\nprivate store (first-party)"
+              },
+              "topLine": {
+                "stroke": "#333333",
+                "strokeWidth": 1,
+                "strokeDasharray": null
+              },
+              "bottomLine": {
+                "stroke": "#333333",
+                "strokeWidth": 1,
+                "strokeDasharray": null
+              }
+            },
+            "shape": "store",
+            "zIndex": 3,
+            "id": "0ec10e5e-0000-4000-8000-000000000033",
+            "data": {
+              "name": "Registry A:\nprivate store (first-party)",
+              "description": "First-party / internal packages, written by client npm publish (passthrough). Trusted; served unfiltered. The publication target.",
+              "type": "tm.Store",
+              "isTrustBoundary": false,
+              "outOfScope": false,
+              "reasonOutOfScope": "",
+              "hasOpenThreats": false,
+              "isALog": false,
+              "storesCredentials": false,
+              "isEncrypted": false,
+              "isSigned": false,
+              "threats": []
+            }
+          },
+          {
+            "position": {
+              "x": 1120,
+              "y": 820
+            },
+            "size": {
+              "width": 200,
+              "height": 90
+            },
+            "attrs": {
+              "text": {
+                "text": "Registry B:\nmirror store (public-derived)"
+              },
+              "topLine": {
+                "stroke": "#333333",
+                "strokeWidth": 1,
+                "strokeDasharray": null
+              },
+              "bottomLine": {
+                "stroke": "#333333",
+                "strokeWidth": 1,
+                "strokeDasharray": null
+              }
+            },
+            "shape": "store",
+            "zIndex": 3,
+            "id": "0ec10e5e-0000-4000-8000-000000000034",
+            "data": {
+              "name": "Registry B:\nmirror store (public-derived)",
+              "description": "Public packages approved by the rules and replicated by the worker. The mirror target. Kept distinct from A so first-party vs public-derived inventory stays separable.",
+              "type": "tm.Store",
+              "isTrustBoundary": false,
+              "outOfScope": false,
+              "reasonOutOfScope": "",
+              "hasOpenThreats": true,
+              "isALog": false,
+              "storesCredentials": false,
+              "isEncrypted": false,
+              "isSigned": false,
+              "threats": [
+                {
+                  "number": 10,
+                  "status": "Open",
+                  "severity": "Medium",
+                  "title": "Registry collapse erases provenance and per-store policy",
+                  "type": "Repudiation",
+                  "description": "Écluse supports 1 to 3 distinct internal registries. Collapsing the public-derived mirror store (B) into the first-party private store (A) / pull-through (C) loses the physical separation between first-party and public-derived inventory: distinct storage-level rule-sets and scanning per provenance become impossible, and post-disclosure incident scoping ('which mirrored public packages did we hold?') is muddied, weakening the arithmetic-not-forensics response.",
+                  "mitigation": "Deploy the three-registry topology (the Golden Path): a first-party store, a public-derived mirror store, and a pull-through aggregator read endpoint, each independently governable. The trade is auditability and defence-in-depth, not a perimeter change.",
+                  "modelType": "STRIDE",
+                  "id": "0ec10e5e-0000-4000-8000-00000000010a"
+                }
+              ]
+            }
+          },
+          {
+            "shape": "flow",
+            "attrs": {
+              "line": {
+                "stroke": "#333333",
+                "strokeWidth": 1,
+                "targetMarker": {
+                  "name": "block"
+                },
+                "strokeDasharray": null
+              }
+            },
+            "width": 200,
+            "height": 100,
+            "zIndex": 10,
+            "connector": "smooth",
+            "data": {
+              "type": "tm.Flow",
+              "name": "npm read / publish (passthrough CodeArtifact token)",
+              "description": "The caller's request, carrying its own CodeArtifact bearer. Crosses the operator access edge.",
+              "outOfScope": false,
+              "reasonOutOfScope": "",
+              "protocol": "HTTPS",
+              "isEncrypted": true,
+              "isPublicNetwork": false,
+              "hasOpenThreats": true,
+              "isTrustBoundary": false,
+              "threats": [
+                {
+                  "number": 3,
+                  "status": "Open",
+                  "severity": "Medium",
+                  "title": "Off-by-default edge auth assumes a sound network boundary",
+                  "type": "Spoofing",
+                  "description": "PROXY_AUTH_TOKEN is off by default: Écluse delegates 'who may reach the proxy' to the operator's access edge (gateway / mesh / network policy). If that boundary fails, notably east-west (a compromised neighbour reaching the pod directly, bypassing an ingress-only IP allow-list), an unauthenticated caller can drive the proxy.",
+                  "mitigation": "Compensating control: under passthrough no forwarded token means no private read and no publish, so a breach exposes only the public-gated view plus the untrusted-egress and DoS surface, never private packages. Operators must restrict both north-south and east-west access (the Golden Path documents this). The future trusted-edge-identity mode must require a verifiable edge (mTLS / shared secret), never a bare spoofable header.",
+                  "modelType": "STRIDE",
+                  "id": "0ec10e5e-0000-4000-8000-000000000103"
+                }
+              ]
+            },
+            "id": "0ec10e5e-0000-4000-8000-000000000040",
+            "labels": [
+              {
+                "position": 0.5,
+                "attrs": {
+                  "label": {
+                    "text": "npm read / publish (passthrough token)"
+                  }
+                }
+              }
+            ],
+            "source": {
+              "cell": "0ec10e5e-0000-4000-8000-000000000010"
+            },
+            "target": {
+              "cell": "0ec10e5e-0000-4000-8000-000000000020"
+            },
+            "vertices": []
+          },
+          {
+            "shape": "flow",
+            "attrs": {
+              "line": {
+                "stroke": "#333333",
+                "strokeWidth": 1,
+                "targetMarker": {
+                  "name": "block"
+                },
+                "strokeDasharray": null
+              }
+            },
+            "width": 200,
+            "height": 100,
+            "zIndex": 10,
+            "connector": "smooth",
+            "data": {
+              "type": "tm.Flow",
+              "name": "read packument / tarball (caller token forwarded)",
+              "description": "Per-request private read with the caller's own token; the upstream re-authorises each request. Never shared-cached under passthrough.",
+              "outOfScope": false,
+              "reasonOutOfScope": "",
+              "protocol": "HTTPS",
+              "isEncrypted": true,
+              "isPublicNetwork": false,
+              "hasOpenThreats": false,
+              "isTrustBoundary": false,
+              "threats": []
+            },
+            "id": "0ec10e5e-0000-4000-8000-000000000041",
+            "labels": [
+              {
+                "position": 0.5,
+                "attrs": {
+                  "label": {
+                    "text": "read (caller token)"
+                  }
+                }
+              }
+            ],
+            "source": {
+              "cell": "0ec10e5e-0000-4000-8000-000000000020"
+            },
+            "target": {
+              "cell": "0ec10e5e-0000-4000-8000-000000000032"
+            },
+            "vertices": []
+          },
+          {
+            "shape": "flow",
+            "attrs": {
+              "line": {
+                "stroke": "#333333",
+                "strokeWidth": 1,
+                "targetMarker": {
+                  "name": "block"
+                },
+                "strokeDasharray": null
+              }
+            },
+            "width": 200,
+            "height": 100,
+            "zIndex": 10,
+            "connector": "smooth",
+            "data": {
+              "type": "tm.Flow",
+              "name": "cache public-gated metadata",
+              "description": "Read/write of the anonymous public (gated) origin only.",
+              "outOfScope": false,
+              "reasonOutOfScope": "",
+              "protocol": "in-process",
+              "isEncrypted": false,
+              "isPublicNetwork": false,
+              "hasOpenThreats": false,
+              "isTrustBoundary": false,
+              "threats": []
+            },
+            "id": "0ec10e5e-0000-4000-8000-000000000042",
+            "labels": [
+              {
+                "position": 0.5,
+                "attrs": {
+                  "label": {
+                    "text": "cache (public-gated)"
+                  }
+                }
+              }
+            ],
+            "source": {
+              "cell": "0ec10e5e-0000-4000-8000-000000000020"
+            },
+            "target": {
+              "cell": "0ec10e5e-0000-4000-8000-000000000030"
+            },
+            "vertices": []
+          },
+          {
+            "shape": "flow",
+            "attrs": {
+              "line": {
+                "stroke": "#333333",
+                "strokeWidth": 1,
+                "targetMarker": {
+                  "name": "block"
+                },
+                "strokeDasharray": null
+              }
+            },
+            "width": 200,
+            "height": 100,
+            "zIndex": 10,
+            "connector": "smooth",
+            "data": {
+              "type": "tm.Flow",
+              "name": "anonymous packument / tarball fetch (caller token stripped)",
+              "description": "Untrusted egress to the public upstream. Attacker-influenceable target; caller credential stripped. Crosses to the public internet.",
+              "outOfScope": false,
+              "reasonOutOfScope": "",
+              "protocol": "HTTPS",
+              "isEncrypted": true,
+              "isPublicNetwork": true,
+              "hasOpenThreats": false,
+              "isTrustBoundary": false,
+              "threats": [
+                {
+                  "number": 4,
+                  "status": "Mitigated",
+                  "severity": "High",
+                  "title": "Caller credential leak to the public upstream",
+                  "type": "Information disclosure",
+                  "description": "The public upstream is attacker-influenceable and must never receive a caller's credential. A failure to strip the caller token on the public fetch, or following a cross-host 3xx with the bearer attached, would disclose a live CodeArtifact token to public npm or an attacker-chosen redirect target, over the unguarded private manager.",
+                  "mitigation": "The caller credential is stripped before every public fetch (queried anonymously). Credential-bearing requests never follow redirects: redirectCount=0 is set structurally at withToken, the single bearer-attach point (the in-use http-client does not drop Authorization on a cross-host redirect).",
+                  "modelType": "STRIDE",
+                  "id": "0ec10e5e-0000-4000-8000-000000000104"
+                },
+                {
+                  "number": 5,
+                  "status": "Mitigated",
+                  "severity": "High",
+                  "title": "SSRF via crafted identifier or upstream-declared dist.tarball",
+                  "type": "Elevation of privilege",
+                  "description": "Outbound URLs are built from client-supplied package identifiers and upstream-declared artifact locations. A traversal / encoded-slash / absolute-URL name, or a dist.tarball pointing at an internal or attacker-chosen host, could steer a fetch to an unintended target (cloud metadata, the private network).",
+                  "mitigation": "Identifier canonicalisation with encode-on-build; an outbound host allow-list (the load-bearing control); an internal-range block re-applied to every resolved IP at connect time (the DNS-rebinding backstop); and a disallow-by-default same-host dist.tarball policy. The trusted private origin is the only internal-resolving target honoured.",
+                  "modelType": "STRIDE",
+                  "id": "0ec10e5e-0000-4000-8000-000000000105"
+                }
+              ]
+            },
+            "id": "0ec10e5e-0000-4000-8000-000000000043",
+            "labels": [
+              {
+                "position": 0.5,
+                "attrs": {
+                  "label": {
+                    "text": "anonymous fetch (token stripped)"
+                  }
+                }
+              }
+            ],
+            "source": {
+              "cell": "0ec10e5e-0000-4000-8000-000000000020"
+            },
+            "target": {
+              "cell": "0ec10e5e-0000-4000-8000-000000000011"
+            },
+            "vertices": [
+              {
+                "x": 580,
+                "y": 340
+              },
+              {
+                "x": 1400,
+                "y": 340
+              }
+            ]
+          },
+          {
+            "shape": "flow",
+            "attrs": {
+              "line": {
+                "stroke": "#333333",
+                "strokeWidth": 1,
+                "targetMarker": {
+                  "name": "block"
+                },
+                "strokeDasharray": null
+              }
+            },
+            "width": 200,
+            "height": 100,
+            "zIndex": 10,
+            "connector": "smooth",
+            "data": {
+              "type": "tm.Flow",
+              "name": "relay npm publish (publisher token forwarded)",
+              "description": "First-party publish relayed to the private store with the publisher's own token. Gated by the publish-scope allow-list before any write.",
+              "outOfScope": false,
+              "reasonOutOfScope": "",
+              "protocol": "HTTPS",
+              "isEncrypted": true,
+              "isPublicNetwork": false,
+              "hasOpenThreats": true,
+              "isTrustBoundary": false,
+              "threats": [
+                {
+                  "number": 6,
+                  "status": "Open",
+                  "severity": "High",
+                  "title": "Package shadowing via first-party publish",
+                  "type": "Tampering",
+                  "description": "A publish is relayed to the private store with the publisher's own token, and the packument merge serves private versions as trusted, winning collisions over public. A compromised-CI or insider publisher who clears (or slips past) the publish-scope check could publish a name that the merge then serves as a trusted version over the public package, a dependency-confusion path through Écluse's own trust model.",
+                  "mitigation": "The PUBLISH_SCOPES allow-list refuses any name outside the operator's scopes before any upstream write (the anti-shadowing guard). Residual to verify: scope-matching must be robust against the same identifier-normalisation tricks as the read path (canonicalisation correctness).",
+                  "modelType": "STRIDE",
+                  "id": "0ec10e5e-0000-4000-8000-000000000106"
+                }
+              ]
+            },
+            "id": "0ec10e5e-0000-4000-8000-000000000044",
+            "labels": [
+              {
+                "position": 0.5,
+                "attrs": {
+                  "label": {
+                    "text": "publish relay (publisher token)"
+                  }
+                }
+              }
+            ],
+            "source": {
+              "cell": "0ec10e5e-0000-4000-8000-000000000020"
+            },
+            "target": {
+              "cell": "0ec10e5e-0000-4000-8000-000000000033"
+            },
+            "vertices": []
+          },
+          {
+            "shape": "flow",
+            "attrs": {
+              "line": {
+                "stroke": "#333333",
+                "strokeWidth": 1,
+                "targetMarker": {
+                  "name": "block"
+                },
+                "strokeDasharray": null
+              }
+            },
+            "width": 200,
+            "height": 100,
+            "zIndex": 10,
+            "connector": "smooth",
+            "data": {
+              "type": "tm.Flow",
+              "name": "enqueue mirror job (demand-driven)",
+              "description": "On tarball-path acceptance, a mirror job is enqueued (non-blocking).",
+              "outOfScope": false,
+              "reasonOutOfScope": "",
+              "protocol": "AWS SQS",
+              "isEncrypted": true,
+              "isPublicNetwork": false,
+              "hasOpenThreats": false,
+              "isTrustBoundary": false,
+              "threats": []
+            },
+            "id": "0ec10e5e-0000-4000-8000-000000000045",
+            "labels": [
+              {
+                "position": 0.5,
+                "attrs": {
+                  "label": {
+                    "text": "enqueue mirror job"
+                  }
+                }
+              }
+            ],
+            "source": {
+              "cell": "0ec10e5e-0000-4000-8000-000000000020"
+            },
+            "target": {
+              "cell": "0ec10e5e-0000-4000-8000-000000000031"
+            },
+            "vertices": []
+          },
+          {
+            "shape": "flow",
+            "attrs": {
+              "line": {
+                "stroke": "#333333",
+                "strokeWidth": 1,
+                "targetMarker": {
+                  "name": "block"
+                },
+                "strokeDasharray": null
+              }
+            },
+            "width": 200,
+            "height": 100,
+            "zIndex": 10,
+            "connector": "smooth",
+            "data": {
+              "type": "tm.Flow",
+              "name": "poll jobs",
+              "description": "The worker polls the mirror queue for demand-driven jobs.",
+              "outOfScope": false,
+              "reasonOutOfScope": "",
+              "protocol": "AWS SQS",
+              "isEncrypted": true,
+              "isPublicNetwork": false,
+              "hasOpenThreats": false,
+              "isTrustBoundary": false,
+              "threats": []
+            },
+            "id": "0ec10e5e-0000-4000-8000-000000000046",
+            "labels": [
+              {
+                "position": 0.5,
+                "attrs": {
+                  "label": {
+                    "text": "poll jobs"
+                  }
+                }
+              }
+            ],
+            "source": {
+              "cell": "0ec10e5e-0000-4000-8000-000000000021"
+            },
+            "target": {
+              "cell": "0ec10e5e-0000-4000-8000-000000000031"
+            },
+            "vertices": []
+          },
+          {
+            "shape": "flow",
+            "attrs": {
+              "line": {
+                "stroke": "#333333",
+                "strokeWidth": 1,
+                "targetMarker": {
+                  "name": "block"
+                },
+                "strokeDasharray": null
+              }
+            },
+            "width": 200,
+            "height": 100,
+            "zIndex": 10,
+            "connector": "smooth",
+            "data": {
+              "type": "tm.Flow",
+              "name": "back-fill artifact fetch (untrusted)",
+              "description": "The worker fetches the approved artifact from the public upstream to mirror it. Untrusted egress; bytes verified against dist.integrity before publish.",
+              "outOfScope": false,
+              "reasonOutOfScope": "",
+              "protocol": "HTTPS",
+              "isEncrypted": true,
+              "isPublicNetwork": true,
+              "hasOpenThreats": false,
+              "isTrustBoundary": false,
+              "threats": []
+            },
+            "id": "0ec10e5e-0000-4000-8000-000000000047",
+            "labels": [
+              {
+                "position": 0.5,
+                "attrs": {
+                  "label": {
+                    "text": "back-fill fetch (untrusted)"
+                  }
+                }
+              }
+            ],
+            "source": {
+              "cell": "0ec10e5e-0000-4000-8000-000000000021"
+            },
+            "target": {
+              "cell": "0ec10e5e-0000-4000-8000-000000000011"
+            },
+            "vertices": []
+          },
+          {
+            "shape": "flow",
+            "attrs": {
+              "line": {
+                "stroke": "#333333",
+                "strokeWidth": 1,
+                "targetMarker": {
+                  "name": "block"
+                },
+                "strokeDasharray": null
+              }
+            },
+            "width": 200,
+            "height": 100,
+            "zIndex": 10,
+            "connector": "smooth",
+            "data": {
+              "type": "tm.Flow",
+              "name": "request mirror-write token",
+              "description": "The worker asks the credential provider for a mirror-target write token.",
+              "outOfScope": false,
+              "reasonOutOfScope": "",
+              "protocol": "in-process",
+              "isEncrypted": false,
+              "isPublicNetwork": false,
+              "hasOpenThreats": false,
+              "isTrustBoundary": false,
+              "threats": []
+            },
+            "id": "0ec10e5e-0000-4000-8000-000000000048",
+            "labels": [
+              {
+                "position": 0.5,
+                "attrs": {
+                  "label": {
+                    "text": "request write token"
+                  }
+                }
+              }
+            ],
+            "source": {
+              "cell": "0ec10e5e-0000-4000-8000-000000000021"
+            },
+            "target": {
+              "cell": "0ec10e5e-0000-4000-8000-000000000022"
+            },
+            "vertices": []
+          },
+          {
+            "shape": "flow",
+            "attrs": {
+              "line": {
+                "stroke": "#333333",
+                "strokeWidth": 1,
+                "targetMarker": {
+                  "name": "block"
+                },
+                "strokeDasharray": null
+              }
+            },
+            "width": 200,
+            "height": 100,
+            "zIndex": 10,
+            "connector": "smooth",
+            "data": {
+              "type": "tm.Flow",
+              "name": "mint via container role (IMDSv2 / STS)",
+              "description": "The credential provider exchanges container-role credentials for a CodeArtifact write token. Reaches an internal address by design.",
+              "outOfScope": false,
+              "reasonOutOfScope": "",
+              "protocol": "HTTPS",
+              "isEncrypted": true,
+              "isPublicNetwork": false,
+              "hasOpenThreats": false,
+              "isTrustBoundary": false,
+              "threats": [
+                {
+                  "number": 8,
+                  "status": "Mitigated",
+                  "severity": "Medium",
+                  "title": "SSRF to the instance-metadata credential endpoint",
+                  "type": "Elevation of privilege",
+                  "description": "Container-role token minting must reach the instance-metadata endpoint (169.254.169.254 / STS). An SSRF that reached metadata could mint the worker's CodeArtifact credential.",
+                  "mitigation": "Écluse only follows internal-resolving locations on the trusted private origin, never on a client- or upstream-influenced target, so the data plane cannot be steered at metadata; minting uses amazonka's own client off the guarded data-plane manager. Operator defence-in-depth: require IMDSv2 and set the hop limit to 1; do not block metadata outright.",
+                  "modelType": "STRIDE",
+                  "id": "0ec10e5e-0000-4000-8000-000000000108"
+                }
+              ]
+            },
+            "id": "0ec10e5e-0000-4000-8000-000000000049",
+            "labels": [
+              {
+                "position": 0.5,
+                "attrs": {
+                  "label": {
+                    "text": "mint token (container role)"
+                  }
+                }
+              }
+            ],
+            "source": {
+              "cell": "0ec10e5e-0000-4000-8000-000000000022"
+            },
+            "target": {
+              "cell": "0ec10e5e-0000-4000-8000-000000000012"
+            },
+            "vertices": []
+          },
+          {
+            "shape": "flow",
+            "attrs": {
+              "line": {
+                "stroke": "#333333",
+                "strokeWidth": 1,
+                "targetMarker": {
+                  "name": "block"
+                },
+                "strokeDasharray": null
+              }
+            },
+            "width": 200,
+            "height": 100,
+            "zIndex": 10,
+            "connector": "smooth",
+            "data": {
+              "type": "tm.Flow",
+              "name": "publish mirrored artifact (minted write token)",
+              "description": "The worker writes the verified, approved artifact to the mirror store with Écluse's own minted token.",
+              "outOfScope": false,
+              "reasonOutOfScope": "",
+              "protocol": "HTTPS",
+              "isEncrypted": true,
+              "isPublicNetwork": false,
+              "hasOpenThreats": true,
+              "isTrustBoundary": false,
+              "threats": [
+                {
+                  "number": 7,
+                  "status": "Open",
+                  "severity": "High",
+                  "title": "Mirror-write credential is a standing privilege over the trusted store",
+                  "type": "Elevation of privilege",
+                  "description": "The mirror worker holds Écluse's only standing self-minted credential, with write access to the mirror store (Registry B) that feeds the trusted read path. A worker compromise, or any bypass of the admission gate, could write attacker-chosen bytes into the trusted store, poisoning future reads.",
+                  "mitigation": "Scope the minted token to write-only on Registry B, prefer container-role minting over static credentials, and minimise its TTL (CodeArtifact caps at 12h). The worker verifies artifact bytes against dist.integrity before publishing, and the publish request runs with redirectCount=0. Operator: least-privilege the instance role.",
+                  "modelType": "STRIDE",
+                  "id": "0ec10e5e-0000-4000-8000-000000000107"
+                }
+              ]
+            },
+            "id": "0ec10e5e-0000-4000-8000-00000000004a",
+            "labels": [
+              {
+                "position": 0.5,
+                "attrs": {
+                  "label": {
+                    "text": "publish mirrored artifact"
+                  }
+                }
+              }
+            ],
+            "source": {
+              "cell": "0ec10e5e-0000-4000-8000-000000000021"
+            },
+            "target": {
+              "cell": "0ec10e5e-0000-4000-8000-000000000034"
+            },
+            "vertices": []
+          },
+          {
+            "shape": "flow",
+            "attrs": {
+              "line": {
+                "stroke": "#333333",
+                "strokeWidth": 1,
+                "targetMarker": {
+                  "name": "block"
+                },
+                "strokeDasharray": null
+              }
+            },
+            "width": 200,
+            "height": 100,
+            "zIndex": 10,
+            "connector": "smooth",
+            "data": {
+              "type": "tm.Flow",
+              "name": "pull-through (first-party)",
+              "description": "Registry C aggregates the first-party store A on read. Trusted, registry-level composition.",
+              "outOfScope": false,
+              "reasonOutOfScope": "",
+              "protocol": "HTTPS",
+              "isEncrypted": true,
+              "isPublicNetwork": false,
+              "hasOpenThreats": false,
+              "isTrustBoundary": false,
+              "threats": []
+            },
+            "id": "0ec10e5e-0000-4000-8000-00000000004b",
+            "labels": [
+              {
+                "position": 0.5,
+                "attrs": {
+                  "label": {
+                    "text": "pull-through (first-party)"
+                  }
+                }
+              }
+            ],
+            "source": {
+              "cell": "0ec10e5e-0000-4000-8000-000000000032"
+            },
+            "target": {
+              "cell": "0ec10e5e-0000-4000-8000-000000000033"
+            },
+            "vertices": []
+          },
+          {
+            "shape": "flow",
+            "attrs": {
+              "line": {
+                "stroke": "#333333",
+                "strokeWidth": 1,
+                "targetMarker": {
+                  "name": "block"
+                },
+                "strokeDasharray": null
+              }
+            },
+            "width": 200,
+            "height": 100,
+            "zIndex": 10,
+            "connector": "smooth",
+            "data": {
+              "type": "tm.Flow",
+              "name": "pull-through (mirrored)",
+              "description": "Registry C aggregates the mirror store B on read. Trusted, registry-level composition.",
+              "outOfScope": false,
+              "reasonOutOfScope": "",
+              "protocol": "HTTPS",
+              "isEncrypted": true,
+              "isPublicNetwork": false,
+              "hasOpenThreats": false,
+              "isTrustBoundary": false,
+              "threats": []
+            },
+            "id": "0ec10e5e-0000-4000-8000-00000000004c",
+            "labels": [
+              {
+                "position": 0.5,
+                "attrs": {
+                  "label": {
+                    "text": "pull-through (mirrored)"
+                  }
+                }
+              }
+            ],
+            "source": {
+              "cell": "0ec10e5e-0000-4000-8000-000000000032"
+            },
+            "target": {
+              "cell": "0ec10e5e-0000-4000-8000-000000000034"
+            },
+            "vertices": []
+          }
+        ]
+      }
+    ],
+    "diagramTop": 1,
+    "reviewer": "",
+    "threatTop": 11
+  }
+}
