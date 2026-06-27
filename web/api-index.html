@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Écluse: API reference</title>
+    <meta name="description" content="Écluse API reference: Haddock for the ecluse-core capability library and the ecluse application library." />
+    <link rel="icon" href="../favicon-32.png" sizes="32x32" />
+    <link rel="stylesheet" href="../style.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="../index.html"><img src="../logo.svg" alt="" height="28" /> Écluse</a>
+      <nav>
+        <a href="../motivation.html">Why</a>
+        <a href="../alternatives.html">Alternatives</a>
+        <a href="../usage.html">Operating</a>
+        <a href="index.html">API</a>
+        <a href="https://github.com/AlexaDeWit/Ecluse">GitHub</a>
+      </nav>
+    </header>
+    <main class="home">
+      <section class="hero">
+        <h1>API reference</h1>
+        <p class="lead">
+          Écluse is built as two libraries: a pure capability core and a thin
+          application layer that wires it to the outside world. Each publishes its
+          own Haddock, auto-generated from <code>main</code>.
+        </p>
+      </section>
+      <div class="cards">
+        <a class="card" href="ecluse-core/index.html">
+          <h3><code>ecluse-core</code></h3>
+          <p>The capability core: the registry protocol, the rules engine, the
+          queue and credential handles, version and integrity, and the request
+          pipeline. It names no backend and reads no environment.</p>
+        </a>
+        <a class="card" href="ecluse/index.html">
+          <h3><code>ecluse</code></h3>
+          <p>The application layer: the composition root and <code>run</code>
+          entry point, the server and worker, configuration, and the telemetry and
+          logging that back the core's ports.</p>
+        </a>
+      </div>
+    </main>
+    <footer class="site-footer">
+      <p>
+        <a href="../index.html">Home</a> &middot;
+        <a href="https://github.com/AlexaDeWit/Ecluse">Source repository</a>
+      </p>
+      <p>Écluse is free and open source &middot; pre-launch, under active development.</p>
+      <p class="made-in">Proudly built in Québec&nbsp;⚜</p>
+    </footer>
+  </body>
+</html>
