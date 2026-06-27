@@ -72,6 +72,15 @@ spec = do
             mustReject RubyGems ("1." <> T.replicate 5000 "9")
             mustParse PyPI ("1." <> T.replicate 100 "9")
             mustParse RubyGems ("1." <> T.replicate 100 "9")
+            -- Npm/semver is parsed by the @versions@ library, whose numeric
+            -- components are fixed-width words, not unbounded 'Integer'. Beyond
+            -- the shared length bound, an over-long numeric run is refused so a
+            -- silent word overflow cannot key a huge version as a small one and
+            -- corrupt ordering (e.g. a 25-digit major wrapping mod 2^64).
+            mustReject Npm ("1.0." <> T.replicate 5000 "9")
+            mustReject Npm (T.replicate 25 "9" <> ".0.0")
+            mustParse Npm "1.2.3"
+            mustParse Npm ("1.0." <> T.replicate 15 "9")
     describe "compareVersions" $ do
         let cmp eco a b = compareVersions (mkVersion eco a) (mkVersion eco b)
         it "npm orders release numbers numerically (10 > 9)" $
