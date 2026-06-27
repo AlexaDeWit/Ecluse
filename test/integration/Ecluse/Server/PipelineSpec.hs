@@ -1635,6 +1635,17 @@ losslessSpec = describe "lossless served surface (raw Value edited in place)" $ 
             resp <- getThing Nothing app
             servedTarball "1.0.0" resp `shouldBe` Just "https://proxy.test/thing/-/thing-1.0.0.tgz"
 
+    it "rewrites a gated public version's dist.tarball under the mount base (rewritten once at assembly)" $ do
+        -- The gated public path is the one #299 rewrote twice (in 'applyFilterPlan' and
+        -- again at assembly). The served tarball must still land under the mount base —
+        -- rewritten exactly once, now solely by the assembly-stage 'rewriteTarballUrls'.
+        privateUp <- failingUpstream
+        publicUp <- servingUpstream (encodePackument (admittingPublic "1.0.0"))
+        withProxy privateUp publicUp Nothing $ \app -> do
+            resp <- getThing Nothing app
+            status resp `shouldBe` 200
+            servedTarball "1.0.0" resp `shouldBe` Just "https://proxy.test/thing/-/thing-1.0.0.tgz"
+
 -- ── the artifact (tarball) path ───────────────────────────────────────────────
 
 -- The opaque bytes a tarball double serves, distinct per origin so a test can pin

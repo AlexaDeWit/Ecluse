@@ -16,10 +16,11 @@ rebuilding the body from "Ecluse.Core.Package" would silently drop them.
 /Which/ versions survive, where @dist-tags.latest@ resolves, and each version's
 denial 'Decision' is the ecosystem-agnostic filtering decision, taken over the
 typed 'Ecluse.Core.Package.PackageInfo' by "Ecluse.Core.Package.Filter" and handed here as a
-'Ecluse.Core.Package.Filter.FilterPlan'. This module owns only the __npm wire-shape
-replay__: restrict @versions@\/@time@ to the surviving keys, rebuild @dist-tags@,
-and rewrite tarball URLs over the raw upstream bytes. The npm wire knowledge lives
-here; the decision logic does not (it is reused by every ecosystem). See
+'Ecluse.Core.Package.Filter.FilterPlan'. This module owns the __npm wire-shape
+transforms__: the plan replay (restrict @versions@\/@time@ to the surviving keys and
+rebuild @dist-tags@) and the tarball-URL rewrite over the raw upstream bytes. The npm
+wire knowledge lives here; the decision logic does not (it is reused by every
+ecosystem). See
 @docs\/architecture\/registry-model.md@ → "Decision surface vs served surface".
 
 == URL rewriting
@@ -31,8 +32,8 @@ and bypassing the gate (see @docs\/architecture\/hosting.md@ → "The load-beari
 requirement: URL rewriting"). Keeping artifacts same-host also keeps npm's auth
 flowing, which a separate artifact host would silently drop. The mount's
 externally-visible base URL is __supplied by the caller__; this
-transform performs no IO. It is __idempotent__, so a later assembly pass that
-rewrites the merged body again is a no-op on an already-rewritten URL.
+transform performs no IO. It is __idempotent__: re-deriving @{pkg}@ and @{file}@ from
+an already-rewritten URL yields the same URL, so applying it more than once is safe.
 
 == Replaying the filter plan
 
@@ -41,9 +42,10 @@ plan's survivors is removed from both @versions@ and @time@, so a client's resol
 only ever sees admitted versions (presence in the packument /is/ availability — see
 @docs\/research\/reverse-engineering\/npm.md@ §8). @dist-tags.latest@ is repointed
 at the plan's resolved @latest@, and any other tag whose target did not survive is
-__dropped__, never repointed. Finally tarball URLs are rewritten under the mount
-base. The result is coherent: @dist-tags.latest@ is always a key of @versions@, and
-@time@ has an entry for exactly the surviving versions.
+__dropped__, never repointed. The replay does __not__ rewrite tarball URLs — that is
+'rewriteTarballUrls', applied once to the assembled body. The replay's result is
+coherent: @dist-tags.latest@ is always a key of @versions@, and @time@ has an entry
+for exactly the surviving versions.
 
 When the plan has __no survivors__, the replay returns 'NoSurvivors' carrying the
 plan's per-version denial 'Decision's; the serve layer maps that to a status, which
@@ -176,8 +178,7 @@ data FilterResult
     deriving stock (Eq, Show)
 
 {- | Replay a 'FilterPlan' onto the raw packument @Value@, removing every
-non-surviving version, repairing cross-field coherence, and rewriting tarball URLs
-under @base@ (the mount's externally-visible base URL).
+non-surviving version and repairing cross-field coherence.
 
 The plan was decided over the projected 'Ecluse.Core.Package.PackageInfo' (the typed
 view of the /same/ document), but the edits land on the raw 'Value', so unmodelled
@@ -193,20 +194,22 @@ When survivors remain the body is returned 'Filtered' with:
   kept upstream @latest@, or its downward repoint when the upstream @latest@ was
   denied;
 * every other @dist-tags@ entry whose target did not survive __dropped__ (never
-  repointed — repointing @beta@ at a stable release would misrepresent it);
-* every surviving version's @dist.tarball@ rewritten under @base@. The rewrite is
-  idempotent, so a later cross-upstream assembly pass that rewrites the merged body
-  again leaves these URLs unchanged.
+  repointed — repointing @beta@ at a stable release would misrepresent it).
+
+Surviving versions' @dist.tarball@ URLs are __not__ rewritten here — they are
+relayed as the upstream bytes. Rewriting them under the mount base is
+'rewriteTarballUrls', applied once to the assembled body uniformly across every
+contributing source, so the replay carries no base URL.
 
 When the plan has no survivors, 'NoSurvivors' carries its per-version decisions. A
 non-object body is not a packument we can replay onto; with no versions it has no
 survivors and no decisions to report.
 -}
-applyFilterPlan :: Text -> FilterPlan -> Value -> FilterResult
-applyFilterPlan base plan = \case
+applyFilterPlan :: FilterPlan -> Value -> FilterResult
+applyFilterPlan plan = \case
     Object o
         | Set.null (fpSurvivors plan) -> NoSurvivors (fpDecisions plan)
-        | otherwise -> Filtered (rewriteTarballUrls base (Object (repairTags plan (restrict plan o))))
+        | otherwise -> Filtered (Object (repairTags plan (restrict plan o)))
     -- A non-object body is not a packument we can replay onto; with no versions to
     -- serve it has no survivors and no decisions to report.
     _ -> NoSurvivors []
