@@ -35,30 +35,40 @@ deny-by-default is the sensible no-op, never a per-ecosystem configuration error
 Rule **names** track the agnostic concept, not one ecosystem's mechanism (the
 install-time code-execution signal, not npm's `hasInstallScript`).
 
-**One representation, one engine.** A rule is a single record — its precedence, a
-stable name, an evaluation function, and an optional **resilience policy** — and
-there is one evaluation engine over the boot-ordered list
-([`core/src/Ecluse/Core/Rules.hs`](../../core/src/Ecluse/Core/Rules.hs)). A rule is
-**pure** or **effectful** by whether it carries a resilience policy, not by which of
-two tiers it lives in:
+**A rule is evaluation-agnostic data; one engine evaluates it.** A rule is a value of
+the closed, `Eq`/`Show` data type `Rule` — *what* a rule is, carrying no evaluation.
+*How* a rule decides is a separate concern: `evalRule` is the single dispatch over
+that data ([`core/src/Ecluse/Core/Rules.hs`](../../core/src/Ecluse/Core/Rules.hs)). At
+boot `prepare` turns each configured rule into the engine's runtime structure, a
+**`PreparedRule`** — its precedence, a stable name (`ruleName`, derived from the data),
+an optional **resilience policy**, and the bound per-version evaluator — and one engine
+walks the boot-ordered list. A prepared rule is **pure** or **effectful** by whether it
+carries a resilience policy, not by which of two tiers it lives in:
 
 1. **Pure rules** — evaluated against `PackageDetails` with no IO. Fast and
-   deterministic; they lift into the rule shape at no cost (`ruleResilience =
-   Nothing`).
+   deterministic; `prepare` attaches no resilience (`prepResilience = Nothing`) and the
+   engine runs them directly.
 2. **Effectful rules** — may perform IO (advisory lookups, external policy checks).
    They carry a resilience policy (timeout / bounded retry+backoff / per-source
    circuit breaker) applied by the harness `runEffectfulRule`.
 
+Keeping the `Rule` data closed is also a **security boundary**: untrusted config only
+ever names built-in `Rule` constructors (`prepare` binds their evaluator from
+`evalRule`); an arbitrary evaluator is a code-layer capability on `PreparedRule`, never
+reachable from config.
+
 There is no separate performance *tier*: the engine walks the boot order and takes
 the first decisive result, so an effectful rule's IO runs **only up to the first
 decisive result** — exactly the short-circuit the old two-tier skip gave, now a
-consequence of the basic design. Evaluation MAY run effectful rules speculatively
-**in parallel**, but the result is always **as-if sequential by boot order**: the
-winner is the *earliest-in-order* decisive rule, never the first to return in
-wall-clock time, and once the winner is known every still-running strictly-later
-evaluation is cancelled. The cheap pure prefix is evaluated directly, so no IO an
-earlier pure decisive result would moot is ever launched. Determinism is
-non-negotiable: the boot order is the published contract.
+consequence of the basic design. Evaluation is `IO`-typed throughout (a rule's
+evaluator may do IO), so there is **no pure evaluation entry point**; a pure policy
+simply launches no IO. Evaluation MAY run effectful rules speculatively **in
+parallel**, but the result is always **as-if sequential by boot order**: the winner is
+the *earliest-in-order* decisive rule, never the first to return in wall-clock time,
+and once the winner is known every still-running strictly-later evaluation is
+cancelled. The cheap pure prefix is evaluated directly, so no IO an earlier decisive
+result would moot is ever launched. Determinism is non-negotiable: the boot order is
+the published contract.
 
 **Whether a rule is pure or effectful is determined by where its signal lives, not
 only by whether it "feels" like IO.** Many inputs are already present in the
