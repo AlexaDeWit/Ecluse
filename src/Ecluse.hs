@@ -99,7 +99,7 @@ import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
 import Data.Time (getCurrentTime)
-import Katip (Environment (Environment), LogEnv, Severity (WarningS), katipAddNamespace, logFM, ls)
+import Katip (Environment (Environment), LogEnv, Severity (InfoS, WarningS), katipAddNamespace, logFM, ls)
 import Katip.Monadic (runKatipContextT)
 import Network.HTTP.Client (Manager, newManager)
 import Network.HTTP.Client.TLS (tlsManagerSettings)
@@ -139,10 +139,11 @@ import Ecluse.Core.Registry (
 import Ecluse.Core.Registry.Npm (NpmClientConfig (NpmClientConfig, npmBaseUrl, npmLimits, npmManager, npmToken), newNpmClient)
 import Ecluse.Core.Registry.Npm.Route qualified as Npm
 import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
+import Ecluse.Core.Rules (renderBootOrder)
 import Ecluse.Core.Security (defaultLimits, lowerCaseHosts)
 import Ecluse.Core.Security.Egress (guardedManagerSettings)
 import Ecluse.Core.Server.Cache (newMetadataCache)
-import Ecluse.Core.Server.Context (PackumentDeps, PublishDeps)
+import Ecluse.Core.Server.Context (PackumentDeps, PublishDeps, pdRules)
 import Ecluse.Core.Telemetry.Metrics (BreakerSource (CredentialMint), Provider (CodeArtifact))
 import Ecluse.Core.Worker (runWorkerM, workerLoop)
 import Ecluse.Env (Env, envDdContext, envLogEnv, envMetrics, newWorkerHeartbeat, withEnv, workerRuntimeOf)
@@ -207,6 +208,9 @@ run = do
                 , scDrainTimeout = ShutdownDrainTimeout (cfgShutdownDrainTimeout env)
                 }
     logEnv <- newLogEnv (cfgLogFormat env) (Environment "production")
+    -- Log each mount's resolved rule boot order so an operator sees at start-up exactly
+    -- how their policy will resolve (highest precedence first, then name).
+    logRuleBootOrder logEnv bindings
     -- The config-selected mirror queue, built once here (the single constructor
     -- call) from the validated plan and captured in Env: the durable AWS SQS backend,
     -- or the bounded in-memory backend — which first emits a loud boot warning (it is
@@ -281,6 +285,24 @@ the same shape "Ecluse.Telemetry.Resolve" and "Ecluse.Core.Server.Pipeline.Inter
 logBootWarning :: LogEnv -> Text -> IO ()
 logBootWarning logEnv message =
     runKatipContextT logEnv (moduleField "Ecluse") mempty (logFM WarningS (ls message))
+
+{- Log one line at 'InfoS' through the composition-root 'LogEnv', the same plain-'IO'
+katip path 'logBootWarning' uses, for non-warning boot diagnostics. -}
+logBootInfo :: LogEnv -> Text -> IO ()
+logBootInfo logEnv message =
+    runKatipContextT logEnv (moduleField "Ecluse") mempty (logFM InfoS (ls message))
+
+{- Log every wired mount's resolved rule boot order ('renderBootOrder' — the single
+total order evaluation walks), one line per rule, so an operator can read the
+effective policy resolution straight from the start-up log. A mount with no packument
+deps (the unserved stub) contributes nothing. -}
+logRuleBootOrder :: LogEnv -> [MountBinding] -> IO ()
+logRuleBootOrder logEnv = traverse_ logMount
+  where
+    logMount binding = whenJust (bindingPackumentDeps binding) $ \deps -> do
+        let label = T.intercalate "/" (toList (bindingPrefix binding))
+        logBootInfo logEnv ("rule boot order for mount " <> label <> ":")
+        traverse_ (logBootInfo logEnv) (renderBootOrder (pdRules deps))
 
 {- The process-global mirror-write credential provider stored in 'Env' for the
 worker, selected by the configured provider backend

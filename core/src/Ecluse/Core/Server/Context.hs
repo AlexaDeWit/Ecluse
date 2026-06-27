@@ -52,8 +52,7 @@ import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Package (Scope)
 import Ecluse.Core.Package.Integrity (MinIntegrity, MinTrustedIntegrity)
 import Ecluse.Core.Queue (MirrorQueue)
-import Ecluse.Core.Rules.Effectful (PrecededEffectfulRule)
-import Ecluse.Core.Rules.Types (PrecededRule)
+import Ecluse.Core.Rules (Rule)
 import Ecluse.Core.Security (Limits, LoweredHostSet, TarballHostPolicy)
 import Ecluse.Core.Server.Cache (MetadataCache)
 import Ecluse.Core.Server.Response (HelpMessage, MountRenderer)
@@ -129,13 +128,11 @@ data PackumentDeps = PackumentDeps
     'Ecluse.Core.Queue.MirrorJob' as its publish destination; the serve path never reads
     or writes it itself.
     -}
-    , pdRules :: [PrecededRule]
-    -- ^ The mount's resolved pure rule policy, evaluated against every public version.
-    , pdEffectfulRules :: [PrecededEffectfulRule]
-    {- ^ The mount's effectful rule policy (advisory lookups, per-version fetches),
-    layered on the pure tier per "Ecluse.Core.Rules.Effectful". Empty when no effectful
-    rule is configured, in which case the effectful tier is skipped and gating
-    reduces exactly to the pure tier.
+    , pdRules :: [Rule IO]
+    {- ^ The mount's resolved rule set in the engine's one uniform representation
+    ("Ecluse.Core.Rules"), evaluated against every public version. A pure policy lifts
+    in directly; an effectful rule carries a resilience policy. The composition root
+    builds it (and logs its boot order) once.
     -}
     , pdTarballHostPolicy :: TarballHostPolicy
     {- ^ Whether a tarball may be fetched from a @dist.tarball@ host that differs

@@ -94,6 +94,7 @@ import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName, prefixFor)
 import Ecluse.Core.Package.Integrity (MinIntegrity, MinTrustedIntegrity)
 import Ecluse.Core.Queue (MemoryQueueConfig, defaultMemoryQueueConfig)
 import Ecluse.Core.Queue.Sqs (SqsConfig (sqsEndpoint), SqsEndpoint (..), defaultSqsConfig)
+import Ecluse.Core.Rules (liftPolicy)
 import Ecluse.Core.Security (Limits (Limits, maxBodyBytes, maxNestingDepth, maxVersionCount), TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), hostAddress, lowerCaseHosts, splitHostPort)
 import Ecluse.Core.Server.Cache (CacheConfig (..))
 import Ecluse.Core.Server.Context (MountBinding, PackumentDeps (..), PublishDeps (..))
@@ -546,10 +547,11 @@ composeBindings resolveAdapter clock providers config =
                 , pdPublicBaseUrl = unUrl (regPublicUpstream regs)
                 , pdMountBaseUrl = mountBaseUrl (mountEcosystem mount)
                 , pdMirrorTarget = unUrl (mtUrl (regMirrorTarget regs))
-                , pdRules = mountPolicy mount
-                , -- No effectful rule type is wired into the policy model yet, so the
-                  -- effectful tier is empty here and gating reduces to the pure tier.
-                  pdEffectfulRules = []
+                , -- Lift the resolved pure policy into the engine's one uniform rule
+                  -- representation. No effectful rule type is wired into the policy model
+                  -- yet, so every rule here is pure and evaluation short-circuits without
+                  -- launching IO; an effectful rule would simply carry a resilience policy.
+                  pdRules = liftPolicy (mountPolicy mount)
                 , pdTarballHostPolicy = tarballHostPolicy
                 , -- The internal-range opt-in for an honoured tarball host is empty —
                   -- the composition root's secure default, matching the guarded

@@ -13,7 +13,7 @@ surface vs served surface".
 __Decision, not served surface.__ A 'FilterPlan' carries exactly the decisions the
 filter owns:
 
-* __Survivors.__ A version key survives iff the rules engine 'Approved' it; every
+* __Survivors.__ A version key survives iff the rules engine 'Admitted' it; every
   other verdict — a denial, deny-by-default, or an undecidable outcome — drops it.
   Presence in the served packument /is/ availability (see
   @docs\/research\/reverse-engineering\/npm.md@ §8), so a non-approved version is
@@ -48,8 +48,8 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 
 import Ecluse.Core.Package (PackageInfo (infoDistTags, infoVersions), pkgVersion)
-import Ecluse.Core.Rules (evalRules)
-import Ecluse.Core.Rules.Types (Decision (Approved, ApprovedEffectful), EvalContext, PrecededRule)
+import Ecluse.Core.Rules (evalRulesPure)
+import Ecluse.Core.Rules.Types (Decision (Admitted), EvalContext, PrecededRule)
 import Ecluse.Core.Version (Version, selectLatest, unVersion)
 
 {- | The decisions filtering a single public packument owns, for the adapter to
@@ -81,7 +81,7 @@ data FilterPlan = FilterPlan
 where @latest@ resolves, and every version's decision. Pure and total — it reasons
 over the typed 'PackageInfo' alone, with no registry wire format in sight.
 
-A version survives iff 'evalRules' 'Approved' it; every other verdict drops it.
+A version survives iff 'evalRulesPure' 'Admitted' it; every other verdict drops it.
 @latest@ is resolved by 'Ecluse.Core.Version.selectLatest' from the upstream-tagged
 @latest@ (looked up among the versions, so a tag aimed at an absent version
 contributes nothing) and the surviving versions — kept while it survives, else
@@ -91,7 +91,7 @@ nothing survives.
 -}
 filterPlan :: EvalContext -> [PrecededRule] -> PackageInfo -> FilterPlan
 filterPlan ctx rules info =
-    filterPlanFromDecisions (Map.map (evalRules ctx rules) (infoVersions info)) info
+    filterPlanFromDecisions (Map.map (evalRulesPure ctx rules) (infoVersions info)) info
 
 {- | Build a 'FilterPlan' from per-version 'Decision's already taken, rather than
 evaluating the pure tier here. This is the path the __effectful__ tier feeds: it
@@ -100,7 +100,7 @@ here for the same pure survivor\/@latest@ resolution 'filterPlan' performs. The
 decision map is keyed by raw version string and __must__ cover exactly the
 packument's versions; a version with no decision is treated as not surviving.
 
-A version survives iff its decision is an approval (pure or effectful); every other
+A version survives iff its decision is an 'Admitted'; every other
 verdict — denial, deny-by-default, or 'Ecluse.Core.Rules.Types.Undecidable' — drops it,
 so a fail-closed undecidable version is filtered out exactly like a denial, while its
 decision is still carried in 'fpDecisions' for the no-survivors status.
@@ -120,8 +120,7 @@ filterPlanFromDecisions decisions info =
 
     isApproved :: Decision -> Bool
     isApproved = \case
-        Approved{} -> True
-        ApprovedEffectful{} -> True
+        Admitted{} -> True
         _ -> False
 
     -- The parsed 'Version' a raw key projects to, if present in the packument.
