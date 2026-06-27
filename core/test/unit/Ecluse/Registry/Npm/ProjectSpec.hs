@@ -12,6 +12,7 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString.Lazy qualified as BL
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Data.Text.Short qualified as TS
 import Data.Time (UTCTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.Vector qualified as V
@@ -761,7 +762,7 @@ multiVersionPackument =
 
 -- | The canonical key of a 'PackageName' (verbatim for npm).
 renderName :: PackageName -> Text
-renderName = pkgCanonical
+renderName = TS.toText . pkgCanonical
 
 {- | The first projected 'Artifact' of a version. npm projects exactly one
 artifact per version, so this is the whole of @pkgArtifacts@; taking the head of

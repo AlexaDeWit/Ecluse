@@ -81,6 +81,8 @@ module Ecluse.Core.Package (
 import Crypto.Hash (Blake2b_512, MD5, SHA1, SHA256, SHA384, SHA512, digestFromByteString)
 import Data.ByteArray.Encoding (Base (Base16, Base64), convertFromBase)
 import Data.Text qualified as T
+import Data.Text.Short (ShortText)
+import Data.Text.Short qualified as TS
 import Data.Time (UTCTime)
 
 import Ecluse.Core.Ecosystem (Ecosystem (..))
@@ -89,21 +91,26 @@ import Ecluse.Core.Version (Version)
 {- | An npm scope, stored without its leading @\'\@\'@ (the scope of
 @\@myorg\/pkg@ is @"myorg"@). Construct via 'mkScope', which normalises away
 a leading @\'\@\'@ so equality is independent of how the scope was written.
+
+A scope is a bulk-stored, equality-only identifier (an allow-list key and part
+of 'PackageName' identity), so it is held as 'ShortText': the @'Text' -> 'ShortText'@
+conversion happens once in 'mkScope' and the reverse once in 'unScope'\/'renderScope',
+never in a hot loop (see STYLE.md §6).
 -}
-newtype Scope = Scope Text
+newtype Scope = Scope ShortText
     deriving stock (Eq, Ord, Show)
 
 -- | Build a 'Scope', tolerating an optional leading @\'\@\'@.
 mkScope :: Text -> Scope
-mkScope raw = Scope (fromMaybe raw (T.stripPrefix "@" raw))
+mkScope raw = Scope (TS.fromText (fromMaybe raw (T.stripPrefix "@" raw)))
 
 -- | The bare scope text, without the leading @\'\@\'@.
 unScope :: Scope -> Text
-unScope (Scope s) = s
+unScope (Scope s) = TS.toText s
 
 -- | Render a scope in npm wire form, with the leading @\'\@\'@.
 renderScope :: Scope -> Text
-renderScope (Scope s) = "@" <> s
+renderScope (Scope s) = "@" <> TS.toText s
 
 {- | A package identity, decoupled from any registry's wire format.
 
@@ -120,17 +127,20 @@ data PackageName = PackageName
     -- ^ The ecosystem this name belongs to.
     , pkgNamespace :: Maybe Scope
     -- ^ The scope, if scoped (npm @\@scope\/name@). 'Nothing' for PyPI/RubyGems.
-    , pkgCanonical :: Text
+    , pkgCanonical :: ShortText
     {- ^ The normalised key for equality and matching (PEP 503 for PyPI;
-    verbatim for npm/RubyGems).
+    verbatim for npm/RubyGems). Held as 'ShortText': it is an equality\/'Ord' key
+    that is normalised once at 'mkPackageName' and never sliced afterwards.
     -}
-    , pkgDisplay :: Text
-    -- ^ The name as published, for rendering and round-tripping.
+    , pkgDisplay :: ShortText
+    {- ^ The name as published, for rendering and round-tripping. Held as
+    'ShortText'; read it back as 'Text' through 'renderPackageName'.
+    -}
     }
     deriving stock (Show)
 
 -- The fields that constitute identity (the display form is excluded).
-nameKey :: PackageName -> (Ecosystem, Maybe Scope, Text)
+nameKey :: PackageName -> (Ecosystem, Maybe Scope, ShortText)
 nameKey n = (pkgEcosystem n, pkgNamespace n, pkgCanonical n)
 
 instance Eq PackageName where
@@ -150,8 +160,8 @@ mkPackageName eco ns raw =
     PackageName
         { pkgEcosystem = eco
         , pkgNamespace = ns
-        , pkgCanonical = canonicalise eco display
-        , pkgDisplay = display
+        , pkgCanonical = TS.fromText (canonicalise eco display)
+        , pkgDisplay = TS.fromText display
         }
   where
     display = case ns of
@@ -177,7 +187,7 @@ normalisePyPI t =
 
 -- | Render a package name in its native wire form (the display name).
 renderPackageName :: PackageName -> Text
-renderPackageName = pkgDisplay
+renderPackageName = TS.toText . pkgDisplay
 
 -- ── normalised signals ───────────────────────────────────────────────────────
 
@@ -484,8 +494,12 @@ data DepKind
 parsed only if a rule ever needs to compare it.
 -}
 data Dependency = Dependency
-    { depName :: Text
-    -- ^ The dependency's name.
+    { depName :: ShortText
+    {- ^ The dependency's name. Held as 'ShortText': dependency names repeat
+    across every version's dependency list and are only ever stored and compared
+    (never parsed or rewritten), so the @'Text' -> 'ShortText'@ conversion happens
+    once at projection (see STYLE.md §6).
+    -}
     , depConstraint :: Text
     -- ^ The raw version constraint, as declared.
     , depKind :: DepKind

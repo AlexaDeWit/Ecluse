@@ -92,6 +92,7 @@ import Data.Aeson (Value)
 import Data.Cache (Cache)
 import Data.Cache qualified as Cache
 import Data.Map.Strict qualified as Map
+import Data.Text.Short qualified as TS
 import Data.Time (NominalDiffTime)
 import System.Clock (Clock (Monotonic), TimeSpec (TimeSpec), getTime)
 import UnliftIO.Exception (mask, throwIO, try, withException)
@@ -191,7 +192,7 @@ cacheKey (Source source) name =
             <> "\x1f"
             <> maybe "" renderScope (pkgNamespace name)
             <> "\x1f"
-            <> pkgCanonical name
+            <> TS.toText (pkgCanonical name)
         )
 
 {- | The metadata-cache handle: the TTL store, the size bound, and the in-flight
