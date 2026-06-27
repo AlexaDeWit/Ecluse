@@ -30,6 +30,7 @@ spec = do
         Nothing -> do
             around withE2E scenarios
             telemetryScenarios
+            publishScenarios
             pendingScenarios
 
 {- | The active scenarios. Under 'around' each @it@ gets its own freshly booted
@@ -232,6 +233,55 @@ telemetryScenarios = do
                         )
                         80
                 correlated `shouldBe` True
+
+{- | The first-party publish scenarios. The round-trip and the anti-shadowing refusal each
+get their __own__ freshly booted environment with the publication target enabled
+('publishTargetEnv', layered through 'E2EConfig' so only these scenarios see it) — Verdaccio
+is both the publication target and the private upstream, the architected "publish, then read
+back over the private leg" model. The opt-in @405@ posture runs on the base topology (no
+publication target). Each is per-test isolated like 'scenarios'. See
+@planning\/slices\/S52-publish-path.md@.
+-}
+publishScenarios :: Spec
+publishScenarios = do
+    describe "first-party publish — publication target enabled" $
+        around (withE2EWith E2EConfig{ecCollector = False, ecExtraEnv = publishTargetEnv}) $ do
+            it "publishes an in-scope package, then installs it back through the private leg" $ \e2e -> do
+                let name = publishInScopeName
+                    ver = publishVersion
+                -- An in-scope `npm publish` is admitted by the anti-shadowing guard and
+                -- relayed to the publication target (Verdaccio), so the version is then
+                -- present there...
+                published <- withPublishProject e2e name ver npmPublishIn
+                npmExit published `shouldBe` ExitSuccess
+                onTarget <- verdaccioHasVersion e2e name ver
+                onTarget `shouldBe` True
+                -- ...and readable back: the proxy serves it over the private (trusted) leg,
+                -- so a fresh install through the proxy resolves and succeeds — publish →
+                -- publication target → readable-back, end to end through the real image.
+                installed <- npmInstall e2e name
+                npmExit installed `shouldBe` ExitSuccess
+
+            it "refuses an out-of-scope publish before any upstream write (anti-shadowing guard)" $ \e2e -> do
+                let name = publishOutOfScopeName
+                    ver = publishVersion
+                -- A name outside PUBLISH_SCOPES is refused with a 403 BEFORE the relay, so
+                -- npm exits non-zero and the publication target never receives it — the write
+                -- is refused before it reaches the target (a False after the patience window
+                -- confirms the absence). This is the anti-shadowing security property.
+                published <- withPublishProject e2e name ver npmPublishIn
+                npmExit published `shouldNotBe` ExitSuccess
+                reached <- verdaccioHasVersion e2e name ver
+                reached `shouldBe` False
+
+    describe "first-party publish — opt-in posture" $
+        around withE2E $
+            it "answers a publish with 405 when no publication target is configured" $ \e2e -> do
+                -- The base topology sets no PUBLICATION_TARGET_URL, so the publish path is
+                -- off: a PUT /{pkg} is not an allowed method (no implicit write path). A raw
+                -- PUT is enough — the 405 precedes any body read — so npm need not be driven.
+                status <- proxyPut e2e ("/npm/" <> publishInScopeName)
+                status `shouldBe` 405
 
 {- | Placeholders for not-yet-implemented work, kept outside 'around' so they boot no
 environment. Graceful drain (#160) @SIGTERM@s the proxy, so when written it belongs in the
