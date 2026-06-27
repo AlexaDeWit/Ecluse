@@ -10,6 +10,9 @@ name: Benchmarks
 # docs/architecture/performance.md.
 on:
   pull_request:
+  push:
+    branches:
+      - main
   workflow_dispatch:
 
 # One run per ref. Cancel a superseded PR run when a newer commit is pushed (only the
