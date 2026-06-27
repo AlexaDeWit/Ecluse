@@ -50,6 +50,7 @@ common shared
     DerivingStrategies
     LambdaCase
     OverloadedStrings
+    StrictData
 
   build-depends:
     , base    ^>=4.20
