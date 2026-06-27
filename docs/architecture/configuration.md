@@ -44,7 +44,7 @@ registries derive short-lived tokens from ambient cloud credentials (see
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `PROXY_PORT` | No (default: 4873) | Port the proxy listens on. Must be in `1..65535`; an out-of-range value is rejected at load. |
+| `PROXY_PORT` | No (default: 4873) | Port the proxy listens on. Must be in `0..65535` (`0` binds an OS-assigned ephemeral port); an out-of-range value is rejected at load. |
 | `PRIVATE_UPSTREAM_URL` | Yes | URL of the private upstream registry. |
 | `PUBLIC_UPSTREAM_URL` | No (default: `https://registry.npmjs.org`) | URL of the public upstream. |
 | `MIRROR_TARGET_URL` | No (default: `PRIVATE_UPSTREAM_URL`) | URL of the registry to mirror approved packages to. Unset ⇒ folds onto the private upstream (one registry, both read and written), so the private upstream is the only hard-required endpoint. The write **credential** does not fold — it stays `MIRROR_TARGET_CREDENTIAL_PROVIDER`. |
