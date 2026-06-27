@@ -32,10 +32,10 @@ import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
 import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfPublishedBefore), atDefaultPrecedence)
 import Ecluse.Core.Security (LoweredHostSet, TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), defaultLimits, lowerCaseHosts)
 import Ecluse.Core.Security.Egress (newGuardedTlsManager)
+import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
+import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Env (newEnv, newWorkerHeartbeat)
 import Ecluse.Server (MountBinding (..), application, mkServerConfig)
-import Ecluse.Server.Cache (defaultCacheConfig, newMetadataCache)
-import Ecluse.Server.Context (PackumentDeps (..))
 import Ecluse.Telemetry (telemetryDisabled)
 
 {- | The tarball-host policy and the resolved-IP recheck, exercised together through

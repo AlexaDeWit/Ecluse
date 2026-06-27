@@ -364,6 +364,35 @@ internalRangeSpec = describe "isBlockedTarget" $ do
         it "leaves an IPv4 opt-in unaffected by canonicalisation" $
             isBlockedTarget (lowerCaseHosts (Set.singleton "10.0.0.5")) "10.0.0.5" `shouldBe` False
 
+    describe "coerces an IPv4 octet as inet_aton does (leading-zero octal, 0x hex)" $ do
+        -- The literal block reads each octet in the base a libc resolver would, so it
+        -- tests the address actually dialled rather than a decimal misreading. These
+        -- expectations are validated against the real 'getAddrInfo' in the non-gating
+        -- smoke oracle ("Ecluse.SecurityResolverOracleSpec").
+        it "blocks 0012.0.0.1 — octal 0012 = 10.0.0.1, an RFC1918 address" $
+            -- The reported under-block: a decimal reading sees 12 (public) and lets it
+            -- through; octal reads 10, the internal address the resolver actually dials.
+            isBlockedTarget noOptIn "0012.0.0.1" `shouldBe` True
+        it "blocks 0177.0.0.1 — octal 0177 = 127.0.0.1, loopback" $
+            isBlockedTarget noOptIn "0177.0.0.1" `shouldBe` True
+        it "blocks 0x7f.0.0.1 — hex 0x7f = 127.0.0.1, loopback" $
+            isBlockedTarget noOptIn "0x7f.0.0.1" `shouldBe` True
+        it "does not block 010.0.0.1 — octal 010 = 8.0.0.1, a public address" $
+            -- A decimal misreading over-blocks this as 10.0.0.1; octal is 8.0.0.1, which
+            -- the resolver confirms is public, so the literal layer must not block it.
+            isBlockedTarget noOptIn "010.0.0.1" `shouldBe` False
+        it "does not block 0127.0.0.1 — octal 0127 = 87.0.0.1, a public address" $
+            isBlockedTarget noOptIn "0127.0.0.1" `shouldBe` False
+        it "treats 08.0.0.1 as a name — 8 is not an octal digit (a resolver rejects it)" $
+            isBlockedTarget noOptIn "08.0.0.1" `shouldBe` False
+        it "treats 0400.0.0.1 as a name — octal 0400 = 256 overflows an octet" $
+            isBlockedTarget noOptIn "0400.0.0.1" `shouldBe` False
+        it "leaves the short 32-bit form 2130706433 to the connect-time recheck (not a literal here)" $
+            -- inet_aton resolves this to 127.0.0.1, but the four-part recogniser does not
+            -- model the short forms; the resolved-IP recheck in Ecluse.Core.Security.Egress
+            -- is the backstop for it.
+            isBlockedTarget noOptIn "2130706433" `shouldBe` False
+
 -- ── classification corpus (the equivalence bar) ──────────────────────────────
 
 {- | The blocked-vs-allowed classification of 'isBlockedTarget', pinned against an
@@ -374,12 +403,15 @@ guards that the gate neither narrows nor widens: every internal range blocks, th
 IPv4-mapped smuggling forms decode and block, and the lenient/strict boundary
 spellings classify exactly as documented.
 
-The boundary cases are the load-bearing ones. @0127.0.0.1@ and @010.0.0.1@ are
-__blocked__: the recogniser accepts leading-zero octets and treats them as the
-address they coerce to on a typical resolver, so they cannot skip the block as
-unparsed names — a stricter parser that rejected them would narrow the gate.
-@fe80::1ffff@ is __not__ blocked: its final group overflows 16 bits, so it is not
-a literal here and stays a name the allowlist constrains.
+The boundary cases are the load-bearing ones. A leading-zero octet is coerced as
+__octal__, exactly as a libc resolver does, so it is /not/ its decimal digits:
+@0012.0.0.1@ is octal @10.0.0.1@ and is __blocked__ (RFC1918), whereas @010.0.0.1@
+(octal @8.0.0.1@) and @0127.0.0.1@ (octal @87.0.0.1@) coerce to __public__
+addresses and are __not__ blocked — a decimal misreading would over-block those two
+and, worse, /under/-block a sibling like @0012.0.0.1@. A @0x@ octet is hexadecimal
+(@0x7f.0.0.1@ is @127.0.0.1@, blocked). @fe80::1ffff@ is __not__ blocked: its final
+group overflows 16 bits, so it is not a literal here and stays a name the allowlist
+constrains.
 -}
 classificationCorpusSpec :: Spec
 classificationCorpusSpec =
@@ -435,8 +467,13 @@ classificationCorpusSpec =
         ]
 
     lenientBoundary =
-        [ ("0127.0.0.1", True) -- leading-zero octet still blocks
-        , ("010.0.0.1", True) -- leading-zero octet still blocks
+        [ ("0012.0.0.1", True) -- octal 0012 = 10.0.0.1 (RFC1918) is blocked
+        , ("0177.0.0.1", True) -- octal 0177 = 127.0.0.1 (loopback) is blocked
+        , ("0x7f.0.0.1", True) -- hex 0x7f = 127.0.0.1 (loopback) is blocked
+        , ("010.0.0.1", False) -- octal 010 = 8.0.0.1 is public, not blocked
+        , ("0127.0.0.1", False) -- octal 0127 = 87.0.0.1 is public, not blocked
+        , ("08.0.0.1", False) -- 8 is not an octal digit: not a literal here
+        , ("0400.0.0.1", False) -- octal 0400 = 256 overflows an octet: not a literal
         , ("fe80::1ffff", False) -- over-16-bit group is not a literal
         ]
 
@@ -460,6 +497,7 @@ classificationCorpusSpec =
         , ("10.0.0.256", False) -- octet out of range → not a literal
         , ("10.0.0.x", False) -- non-numeric octet → not a literal
         , ("10.0.0", False) -- too few octets → not a literal
+        , ("2130706433", False) -- a bare 32-bit number: a short inet_aton form, not modelled here
         , ("1::2::3", False) -- two "::" → malformed
         , ("::ffff:1.2.3.4.5", False) -- mapped form with a bad embedded IPv4
         ]
@@ -861,7 +899,7 @@ nestingDepthSpec = describe "checkNestingDepth" $ do
 
 {- | The whole point of the default 'Limits' (16 MiB body, 100k versions, depth 64)
 is that they must __never__ refuse a legitimate trusted package. This drives the
-exact sequence the data plane applies in @Ecluse.Server.Pipeline.fetchEntry@ —
+exact sequence the data plane applies in @Ecluse.Core.Server.Pipeline.fetchEntry@ —
 bounded read, depth check on the decoded document, projection, then version-count
 check — over a __real, untrimmed__ packument committed under the fixtures directory,
 and asserts the document is __admissible__ under the default budget at every step.

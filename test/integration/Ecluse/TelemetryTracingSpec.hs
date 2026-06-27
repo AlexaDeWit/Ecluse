@@ -35,6 +35,7 @@ import UnliftIO.Concurrent (threadDelay)
 
 import Ecluse (npmServerConfig, unconfiguredCredentials, unconfiguredRegistry)
 import Ecluse.Core.Queue (newInMemoryQueue)
+import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Env (Env, newEnv, newWorkerHeartbeat)
 import Ecluse.Log (
     DdContext (..),
@@ -44,7 +45,6 @@ import Ecluse.Log (
     renderLogLine,
  )
 import Ecluse.Server (tracedApplication)
-import Ecluse.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Telemetry (
     Telemetry,
     TelemetrySwitch (TelemetryOff, TelemetryOn),

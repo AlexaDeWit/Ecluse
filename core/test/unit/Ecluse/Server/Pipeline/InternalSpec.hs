@@ -2,7 +2,22 @@ module Ecluse.Server.Pipeline.InternalSpec (spec) where
 
 import Data.Text qualified as T
 import GHC.IO.Handle (hClose, hDuplicate, hDuplicateTo)
-import Katip (Environment (Environment), closeScribes)
+import Katip (
+    ColorStrategy (ColorLog),
+    Environment (Environment),
+    LogEnv,
+    Namespace (Namespace),
+    Severity (DebugS),
+    SimpleLogPayload,
+    Verbosity (V2),
+    closeScribes,
+    defaultScribeSettings,
+    initLogEnv,
+    permitItem,
+    registerScribe,
+ )
+import Katip.Monadic (runKatipContextT)
+import Katip.Scribes.Handle (jsonFormat, mkHandleScribeWithFormatter)
 import Test.Hspec
 import UnliftIO (bracket)
 import UnliftIO.Temporary (withSystemTempFile)
@@ -14,16 +29,7 @@ import Ecluse.Core.Package (mkPackageName)
 import Ecluse.Core.Registry.Npm (ResponseBoundExceeded (ResponseBoundExceeded))
 import Ecluse.Core.Rules.Types (Decision (DeniedByDefault, Undecidable))
 import Ecluse.Core.Security (LimitError (BodyTooLarge))
-import Ecluse.Core.Server.Response (
-    RejectReason (BelowIntegrityFloor, ByPolicy, MissingIntegrity, Unavailable, UpstreamInvalid),
-    Rejection (Rejection),
-    RuleName (RuleName),
-    ServeDecision (Admit, Reject),
-    Transience (WillResolve, WontResolve),
- )
-import Ecluse.Core.Telemetry.Metrics qualified as Metric
-import Ecluse.Log (LogFormat (JsonLog), newLogEnv)
-import Ecluse.Server.Pipeline.Internal (
+import Ecluse.Core.Server.Pipeline.Internal (
     PackumentNameMismatch (PackumentNameMismatch),
     PackumentUndecodable (PackumentUndecodable),
     denialLabels,
@@ -37,8 +43,15 @@ import Ecluse.Server.Pipeline.Internal (
     serveDecisionClass,
     transienceCause,
  )
-import Ecluse.Telemetry (telemetryDisabled)
-import Ecluse.Telemetry.Instruments (newMetrics)
+import Ecluse.Core.Server.Response (
+    RejectReason (BelowIntegrityFloor, ByPolicy, MissingIntegrity, Unavailable, UpstreamInvalid),
+    Rejection (Rejection),
+    RuleName (RuleName),
+    ServeDecision (Admit, Reject),
+    Transience (WillResolve, WontResolve),
+ )
+import Ecluse.Core.Telemetry.Metrics qualified as Metric
+import Ecluse.Test.Port (noopMetricsPort)
 
 {- | A stand-in exception 'fetchCause' does not specifically classify, so the
 catch-all @other@ arm is exercised with a typed throw rather than a restricted
@@ -57,8 +70,8 @@ spec = do
             -- structured `module` / `package` fields and the severity are asserted on
             -- the exact bytes an operator would see.
             logged <- captureStdout $ do
-                logEnv <- newLogEnv JsonLog (Environment "test")
-                logDecodeFailure logEnv (mkPackageName Npm Nothing "is-odd")
+                logEnv <- jsonLogEnv
+                runKatipContextT logEnv (mempty :: SimpleLogPayload) mempty (logDecodeFailure (mkPackageName Npm Nothing "is-odd"))
                 void (closeScribes logEnv)
             logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Warning\""
             logged `shouldSatisfy` T.isInfixOf "\"module\":\"Ecluse.Server.Pipeline.Internal\""
@@ -67,13 +80,15 @@ spec = do
 
     describe "logNameMismatch" $
         it "logs a WARNING carrying both names and the origin when an upstream reports a different package" $ do
-            -- The serve path drives this with a scribe-less LogEnv (katip then never
-            -- forces the structured payload), so the warning's actual bytes — the
-            -- requested name, the upstream's reported name, and the origin — are pinned
-            -- here against the real JSONL scribe an operator reads.
+            -- The serve path drives this through the request's ambient katip context;
+            -- here it is run against a real JSONL scribe so the warning's actual bytes —
+            -- the requested name, the upstream's reported name, and the origin — are
+            -- pinned against what an operator reads. No span is active, so no @dd@ object
+            -- is added: the dd-correlation that goes live on the serve path is the only
+            -- delta to these lines.
             logged <- captureStdout $ do
-                logEnv <- newLogEnv JsonLog (Environment "test")
-                logNameMismatch logEnv (mkPackageName Npm Nothing "thing") "http://upstream.test" "other"
+                logEnv <- jsonLogEnv
+                runKatipContextT logEnv (mempty :: SimpleLogPayload) mempty (logNameMismatch (mkPackageName Npm Nothing "thing") "http://upstream.test" "other")
                 void (closeScribes logEnv)
             logged `shouldSatisfy` T.isInfixOf "\"sev\":\"Warning\""
             logged `shouldSatisfy` T.isInfixOf "\"module\":\"Ecluse.Server.Pipeline.Internal\""
@@ -146,23 +161,21 @@ spec = do
             transienceCause WontResolve `shouldBe` Metric.OtherCause
 
     -- The thin emit helpers that fold a serve outcome into the catalogue counters,
-    -- driven against an inert (telemetry-off) handle: they exercise the per-decision
-    -- branches (record vs skip) and the projection calls without an SDK or a network.
+    -- driven against an inert metrics port: they exercise the per-decision branches
+    -- (record vs skip) and the projection calls without a telemetry backend.
     describe "recordDenials" $
-        it "records a denial per reject and nothing for an admit" $ do
-            metrics <- newMetrics telemetryDisabled
+        it "records a denial per reject and nothing for an admit" $
             recordDenials
-                metrics
+                noopMetricsPort
                 [ Admit
                 , Reject (Rejection (ByPolicy (RuleName "min-age")) "denied")
                 , Reject (Rejection (Unavailable (WillResolve Nothing)) "down")
                 ]
 
     describe "recordEffectfulFailures" $
-        it "records a failure per undecidable verdict, skipping decided ones" $ do
-            metrics <- newMetrics telemetryDisabled
+        it "records a failure per undecidable verdict, skipping decided ones" $
             recordEffectfulFailures
-                metrics
+                noopMetricsPort
                 [ Undecidable (WillResolve Nothing) "unreachable"
                 , DeniedByDefault []
                 ]
@@ -187,3 +200,14 @@ captureStdout act =
         hFlush stdout
         hDuplicateTo saved stdout
         hClose saved
+
+{- | A @katip@ 'LogEnv' with a single stdout scribe in the compact one-line JSON form,
+built from @katip@ directly (the application's "Ecluse.Log".@newLogEnv@ is not on the
+core side of the boundary). It reproduces that scribe — colour off, every severity
+admitted — so a warning's serialised bytes are assertable here.
+-}
+jsonLogEnv :: IO LogEnv
+jsonLogEnv = do
+    scribe <- mkHandleScribeWithFormatter jsonFormat (ColorLog False) stdout (permitItem DebugS) V2
+    base <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
+    registerScribe "stdout" scribe defaultScribeSettings base

@@ -22,6 +22,7 @@ import Ecluse.Core.Queue (
  )
 import Ecluse.Core.Registry.Npm (NpmClientConfig (NpmClientConfig, npmBaseUrl, npmLimits, npmManager, npmToken), newNpmClient)
 import Ecluse.Core.Security (defaultLimits)
+import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Env (Env, envWorkerHeartbeat, lastPoll, newEnv, newWorkerHeartbeat)
 import Ecluse.Integration.Ministack (
@@ -30,7 +31,6 @@ import Ecluse.Integration.Ministack (
     freshQueue,
     withMinistack,
  )
-import Ecluse.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Telemetry (telemetryDisabled)
 import Ecluse.Test.Package (unsafeHash)
 import Ecluse.Worker (workerLoop)

@@ -141,13 +141,13 @@ import Ecluse.Core.Registry.Npm.Route qualified as Npm
 import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
 import Ecluse.Core.Security (defaultLimits, lowerCaseHosts)
 import Ecluse.Core.Security.Egress (guardedManagerSettings)
+import Ecluse.Core.Server.Cache (newMetadataCache)
+import Ecluse.Core.Server.Context (PackumentDeps)
 import Ecluse.Core.Telemetry.Metrics (BreakerSource (CredentialMint), Provider (CodeArtifact))
 import Ecluse.Env (Env, envMetrics, newWorkerHeartbeat, withEnv)
 import Ecluse.Log (moduleField, newLogEnv)
 import Ecluse.Server (MountBinding (..), ServerConfig (scDrainTimeout, scPort), ShutdownDrainTimeout (ShutdownDrainTimeout), mkServerConfig)
 import Ecluse.Server qualified as Server
-import Ecluse.Server.Cache (newMetadataCache)
-import Ecluse.Server.Context (PackumentDeps)
 import Ecluse.Telemetry (TelemetrySwitch (TelemetryOff, TelemetryOn), withTelemetry)
 import Ecluse.Telemetry.Reporters (
     deferredBreakerReporter,
@@ -276,7 +276,7 @@ buildMirrorQueue logEnv plan = do
 
 {- Log one line at 'WarningS' through the composition-root 'LogEnv', tagged with this
 module — the plain-'IO' katip path the boot phase uses (it holds no @Handler@ reader),
-the same shape "Ecluse.Telemetry.Resolve" and "Ecluse.Server.Pipeline.Internal" use. -}
+the same shape "Ecluse.Telemetry.Resolve" and "Ecluse.Core.Server.Pipeline.Internal" use. -}
 logBootWarning :: LogEnv -> Text -> IO ()
 logBootWarning logEnv message =
     runKatipContextT logEnv (moduleField "Ecluse") mempty (logFM WarningS (ls message))
