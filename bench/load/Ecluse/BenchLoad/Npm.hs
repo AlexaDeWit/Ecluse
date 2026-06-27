@@ -94,7 +94,7 @@ import Ecluse.Core.Registry (ParseError (ParseError), RegistryClient (..))
 import Ecluse.Core.Registry.Npm.Route qualified as Npm
 import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
 import Ecluse.Core.Rules (prepare)
-import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfPublishedBefore), atDefaultPrecedence)
+import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan), atDefaultPrecedence)
 import Ecluse.Core.Security (TarballHostPolicy (SameHostAsPackument), defaultLimits, lowerCaseHosts)
 import Ecluse.Core.Server.Cache (CacheConfig (cacheTtl), defaultCacheConfig, newMetadataCache)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
@@ -239,7 +239,7 @@ admitted, so the merge and rewrite run over the whole packument rather than
 short-circuiting to a denial — the full serve-path cost the scenario means to measure.
 -}
 benchPolicy :: [PrecededRule]
-benchPolicy = [atDefaultPrecedence (AllowIfPublishedBefore nominalDay)]
+benchPolicy = [atDefaultPrecedence (AllowIfOlderThan nominalDay)]
 
 -- ── worker mirroring scenario ──────────────────────────────────────────────────
 
