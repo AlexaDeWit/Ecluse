@@ -117,7 +117,11 @@ out-of-band flow.
 
 A **packument** (package metadata) is not served by first-hit short-circuit the
 way a tarball is. A tarball is one concrete version from one source, so a
-private-upstream hit is streamed and we are done. A packument is the *set of
+private-upstream hit is streamed and we are done — the private leg resolves the
+requested artifact by projecting **only that one version** out of the private
+packument (the trusted-floor gate and honoured `dist.tarball` are unchanged), never
+the whole version history, since the per-request, uncached private metadata would
+otherwise pay to project every version only to consume one. A packument is the *set of
 available versions*, and that set is spread across upstreams: the private upstream
 holds what has been vetted/mirrored, the public upstream holds the full history —
 including **new versions not yet mirrored**. Serving only the private packument

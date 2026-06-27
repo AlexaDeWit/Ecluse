@@ -189,7 +189,12 @@ import Ecluse.Core.Registry.Npm (
     relayPublishDocument,
  )
 import Ecluse.Core.Registry.Npm.Filter (FilterResult (Filtered, NoSurvivors), applyFilterPlan, rewriteTarballUrls)
-import Ecluse.Core.Registry.Npm.Project (Projection (NameMismatch, Projected), parsePackageInfoFromValue)
+import Ecluse.Core.Registry.Npm.Project (
+    Projection (NameMismatch, Projected),
+    VersionProjection (VersionNameMismatch, VersionProjected),
+    parsePackageInfoFromValue,
+    parseVersionDetailsFromValue,
+ )
 import Ecluse.Core.Rules (evalRules)
 import Ecluse.Core.Rules.Types (Decision, EvalContext (EvalContext))
 import Ecluse.Core.Security (
@@ -198,6 +203,7 @@ import Ecluse.Core.Security (
     LoweredHostSet,
     Origin (TrustedOrigin, UntrustedOrigin),
     checkNestingDepth,
+    checkProjectedVersionCount,
     checkVersionCount,
     hostAddress,
     lowerCaseHosts,
@@ -497,6 +503,30 @@ fetchPrivateOrigin limits rt baseUrl token name = do
             )
     pure (originResultFrom resolved)
 
+{- Resolve the requested version's trusted-artifact details from the private (trusted)
+upstream — the version-targeted counterpart of 'fetchPrivateOrigin' for the tarball
+serve leg, __uncached__ and forwarding the client's own credential (the @passthrough@
+posture, for the per-client-authority reason 'fetchPrivateOrigin' documents). It
+projects __only__ the requested version (through 'fetchVersionEntry'), not the whole
+packument, because the trusted-tarball leg consumes exactly one version's artifact.
+
+'Nothing' on a degraded fetch — an outage, a response-bound breach, an undecodable body,
+or a name mismatch, each caught here and mapped to a private miss exactly as
+'fetchPrivateOrigin' degrades — /and/ on a clean fetch whose packument simply does not
+carry the requested version. The two collapse to the same 'Nothing' the caller falls
+through to the public origin on, and the fetch is metered through 'recordedFetch' as the
+full private fetch is. -}
+fetchPrivateVersionDetails :: Limits -> ServeRuntime -> Text -> Maybe Secret -> PackageName -> Version -> Handler (Maybe PackageDetails)
+fetchPrivateVersionDetails limits rt baseUrl token name version = do
+    resolved <-
+        tryAny
+            ( recordedFetch
+                (srMetrics rt)
+                Metric.Private
+                (fetchVersionEntry limits (srPrivateManager rt) baseUrl token name version)
+            )
+    pure (fromRight Nothing resolved)
+
 {- Resolve the public (gated, anonymous) upstream origin through the metadata cache,
 keyed by the origin's base URL as its 'Source', returning its coherent (parsed
 packument, raw @Value@) pair — or 'Nothing' when the origin is unavailable or its body
@@ -595,6 +625,48 @@ fetchEntry limits manager baseUrl token name = do
     -- log it (both names + this origin) and degrade like a decode failure, but with a
     -- distinct typed throw so the no-valid-origin status can render a @502@.
     nameMismatch :: Text -> Handler CacheEntry
+    nameMismatch reported = logNameMismatch name baseUrl reported *> throwIO PackumentNameMismatch
+
+{- Fetch one upstream's full packument and project __only the requested version__'s
+'PackageDetails' from it — the version-targeted counterpart of 'fetchEntry' for the
+trusted-tarball serve leg ('selectPrivateArtifact'), which consumes exactly one
+version's artifact and runs no rules on a private hit. The response bounds are enforced
+__identically__ to 'fetchEntry': the body-size cap on the bounded read, the
+nesting-depth guard on the decoded @Value@, and the version-count guard
+('checkProjectedVersionCount', the same bound 'checkVersionCount' applies, taken on the
+count the targeted projection reports). Each breach is logged at 'WarningS' and
+degraded fail-closed through the same typed throw the origin fetcher's @tryAny@ catches,
+and a name mismatch or an undecodable body degrades the same way.
+
+The one difference from 'fetchEntry' is that only the requested version is projected to
+a 'PackageDetails' (the others are never projected, the work this path exists to skip):
+a successful fetch returns 'Just' that version's details, or 'Nothing' when the version
+is absent from the packument — a clean miss reported without a throw, exactly as the
+whole-packument path's @version absent@ lookup is, so the fetch still meters as a
+successful resolve. -}
+fetchVersionEntry :: Limits -> Manager -> Text -> Maybe Secret -> PackageName -> Version -> Handler (Maybe PackageDetails)
+fetchVersionEntry limits manager baseUrl token name version = do
+    response <-
+        handle (\(ResponseBoundExceeded err) -> logBreach name err *> throwIO (ResponseBoundExceeded err)) $
+            liftIO (fetchMetadataForm (clientConfig limits manager baseUrl token) Full noValidators name)
+    case Aeson.eitherDecodeStrict (responseBody response) of
+        Right value -> case checkNestingDepth limits value of
+            Right bounded -> case parseVersionDetailsFromValue name bounded version of
+                Right (VersionProjected count details) -> case checkProjectedVersionCount limits count of
+                    Right () -> pure details
+                    Left err -> boundBreach err
+                Right (VersionNameMismatch reported) -> nameMismatch reported
+                Left _ -> decodeFailure
+            Left err -> boundBreach err
+        Left _ -> decodeFailure
+  where
+    boundBreach :: LimitError -> Handler (Maybe PackageDetails)
+    boundBreach err = logBreach name err *> throwIO (ResponseBoundExceeded err)
+
+    decodeFailure :: Handler (Maybe PackageDetails)
+    decodeFailure = logDecodeFailure name *> throwIO PackumentUndecodable
+
+    nameMismatch :: Text -> Handler (Maybe PackageDetails)
     nameMismatch reported = logNameMismatch name baseUrl reported *> throwIO PackumentNameMismatch
 
 unpair :: CacheEntry -> (PackageInfo, Value)
@@ -1241,11 +1313,17 @@ streamPrivateArtifact mode rt deps token validators name version file respond = 
             then withValidators validators . withMethod mode <$> rightToMaybe (artifactRequestByUrl (clientConfig (pdLimits deps) (srPrivateManager rt) (pdPrivateBaseUrl deps) token) (artUrl artifact))
             else Nothing
 
-{- Fetch the private packument (uncached, with the client's credential) and select
-the requested version's 'Artifact' by its preserved filename. 'Nothing' when the
-private origin does not resolve, the version is absent, no artifact matches the
-filename, or the selected artifact's strongest digest is below the trusted integrity
-floor — each a clean private miss the caller falls through on.
+{- Fetch the private packument (uncached, with the client's credential), projecting
+__only__ the requested version ('fetchPrivateVersionDetails'), and select that version's
+'Artifact' by its preserved filename. 'Nothing' when the private origin does not resolve,
+the version is absent, no artifact matches the filename, or the selected artifact's
+strongest digest is below the trusted integrity floor — each a clean private miss the
+caller falls through on.
+
+Only the requested version is projected (the others' integrity\/semver\/details are not),
+since this leg consumes exactly one version's artifact and the private metadata is
+re-fetched per request; the artifact selected and the floor decision below are over the
+identical 'PackageDetails' the whole-packument projection would hold at this version.
 
 The trusted floor ('pdMinTrustedIntegrity', default SHA-256) gates the private artifact
 serve, mirroring the packument path's listing drop: by default a SHA-1-only or hashless
@@ -1253,11 +1331,10 @@ private artifact is a miss (served from the public origin instead if it admits t
 an operator who loosens the trusted floor serves it from the private origin again. -}
 selectPrivateArtifact :: ServeRuntime -> PackumentDeps -> Maybe Secret -> PackageName -> Version -> Text -> Handler (Maybe Artifact)
 selectPrivateArtifact rt deps token name version file = do
-    resolved <- originPackument <$> fetchPrivateOrigin (pdLimits deps) rt (pdPrivateBaseUrl deps) token name
+    details <- fetchPrivateVersionDetails (pdLimits deps) rt (pdPrivateBaseUrl deps) token name version
     pure $ do
-        (info, _value) <- resolved
-        details <- Map.lookup (renderVersion version) (infoVersions info)
-        artifact <- artifactFor file details
+        versionDetails <- details
+        artifact <- artifactFor file versionDetails
         guard (classifyArtifacts (pdMinTrustedIntegrity deps) (artifact :| []) == MeetsFloor)
         pure artifact
 
@@ -1688,8 +1765,13 @@ successful resolve (a 2xx body was read and decoded), or a bounded-cause error
 otherwise, before re-raising so the caller's degrade is unchanged. Wrapping the fetch
 action means the public path — fetched through the cache — records only on a miss (a
 hit never runs the action), so the histogram counts real upstream calls, not cache
-hits (those are the metadata-cache metric's concern). -}
-recordedFetch :: MetricsPort -> Metric.Upstream -> Handler CacheEntry -> Handler CacheEntry
+hits (those are the metadata-cache metric's concern).
+
+Polymorphic in the fetch's result so the same latency\/error recording wraps both the
+whole-packument fetch (a 'CacheEntry') and the version-targeted tarball-leg fetch (the
+requested version's details): a successful read records the @2xx@ latency whatever the
+projected shape, and the throw paths classify by exception ('fetchCause') alike. -}
+recordedFetch :: MetricsPort -> Metric.Upstream -> Handler a -> Handler a
 recordedFetch metrics upstream action = do
     (result, seconds) <- timedSeconds (tryAny action)
     case result of

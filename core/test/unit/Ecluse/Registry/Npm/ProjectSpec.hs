@@ -16,7 +16,7 @@ import Data.Text.Short qualified as TS
 import Data.Time (UTCTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.Vector qualified as V
-import Hedgehog (PropertyT, annotateShow, forAll)
+import Hedgehog (PropertyT, annotateShow, forAll, (===))
 import Hedgehog qualified as H
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
@@ -46,9 +46,11 @@ import Ecluse.Core.Package (
 import Ecluse.Core.Registry (ParseError, RegistryResponse (RegistryResponse))
 import Ecluse.Core.Registry.Npm.Project (
     Projection (NameMismatch, Projected),
+    VersionProjection (VersionNameMismatch, VersionProjected),
     parsePackageInfo,
     parsePackageInfoFromValue,
     parseVersionDetails,
+    parseVersionDetailsFromValue,
     parseVersionList,
  )
 import Ecluse.Core.Version (Version, mkVersion, renderVersion, unVersion)
@@ -74,6 +76,7 @@ spec = do
     signalMappingSpec
     integritySpec
     versionDetailsSpec
+    targetedVersionParitySpec
     versionListSpec
     versionLevelLeniencySpec
     failureSpec
@@ -328,6 +331,90 @@ versionDetailsSpec = describe "parseVersionDetails" $ do
         body <- readFixture "is-odd.full.json"
         parseVersionDetails (RegistryResponse body) (mkVersion Npm "99.99.99")
             `shouldSatisfy` isLeft
+
+-- ── targeted single-version projection parity ────────────────────────────────
+
+{- | 'parseVersionDetailsFromValue' is the version-__targeted__ projector the
+trusted-tarball serve leg uses: it projects only the requested version from an
+already-decoded packument @Value@, never the others. This block is the proof that
+narrowing the private leg that way leaves the security-decisive gate __unchanged__:
+for the same @Value@, requested name, and version, the targeted projector must yield
+the __same__ outcome the whole-packument projection does — the same projected version
+count (so the version-count response bound fires identically), the same name-mismatch
+verdict, and the __same 'PackageDetails'__ (or the same absence) the full projection
+holds at that version.
+
+Because the trusted-tarball gate downstream — the artifact selected by filename
+('artifactFor', mirrored here as 'selectArtifact') and the trusted-integrity-floor
+decision over it — is a __pure function of that 'PackageDetails'__, identical details
+entail an identical selected 'Artifact' and an identical floor outcome for every
+filename and floor. The cases pin the representative shapes the task enumerates
+(multi-version, the requested version present and absent, a below-trusted-floor
+SHA-1-only artifact, a hashless artifact, a non-conventional trailing-slash @artUrl@,
+and a filename that matches and one that does not), and a generative property confirms
+the equivalence over arbitrary fuzzed bodies on all three arms (present, absent,
+mismatched name).
+-}
+targetedVersionParitySpec :: Spec
+targetedVersionParitySpec = describe "parseVersionDetailsFromValue (targeted) parity with the full projection" $ do
+    it "matches a full-projection lookup for a present version (multi-version)" $ do
+        v <- decodeValue multiVersionPackument
+        targetedOutcome (unscoped "multi") v (mkVersion Npm "1.2.0")
+            `shouldBe` fullOutcome (unscoped "multi") v (mkVersion Npm "1.2.0")
+        targetedDetails (unscoped "multi") v (mkVersion Npm "1.2.0") `shouldSatisfy` isJust
+
+    it "agrees on an absent version (no details, same projected count)" $ do
+        v <- decodeValue multiVersionPackument
+        targetedOutcome (unscoped "multi") v (mkVersion Npm "99.99.99")
+            `shouldBe` fullOutcome (unscoped "multi") v (mkVersion Npm "99.99.99")
+        targetedDetails (unscoped "multi") v (mkVersion Npm "99.99.99") `shouldBe` Nothing
+
+    it "reports a name mismatch exactly as the full projection does" $ do
+        let v = packumentValueNamed "other"
+        targetedOutcome (unscoped "thing") v (mkVersion Npm "1.0.0")
+            `shouldBe` fullOutcome (unscoped "thing") v (mkVersion Npm "1.0.0")
+        targetedOutcome (unscoped "thing") v (mkVersion Npm "1.0.0") `shouldBe` Mismatch "other"
+
+    it "agrees on a below-trusted-floor (SHA-1-only) artifact's details" $ do
+        v <- decodeValue shasumOnlyPackument
+        targetedOutcome (unscoped "sha") v (mkVersion Npm "1.0.0")
+            `shouldBe` fullOutcome (unscoped "sha") v (mkVersion Npm "1.0.0")
+
+    it "agrees on a hashless artifact's details" $ do
+        v <- decodeValue emptyBothPackument
+        targetedOutcome (unscoped "eb") v (mkVersion Npm "1.0.0")
+            `shouldBe` fullOutcome (unscoped "eb") v (mkVersion Npm "1.0.0")
+
+    it "agrees on a non-conventional (trailing-slash) tarball URL's details" $ do
+        v <- decodeValue trailingSlashPackument
+        targetedOutcome (unscoped "slash") v (mkVersion Npm "1.0.0")
+            `shouldBe` fullOutcome (unscoped "slash") v (mkVersion Npm "1.0.0")
+
+    it "selects the same Artifact by filename — a match and a miss — as the full path" $ do
+        v <- decodeValue multiVersionPackument
+        let ver = mkVersion Npm "1.2.0"
+        selectArtifact "b.tgz" (targetedDetails (unscoped "multi") v ver)
+            `shouldBe` selectArtifact "b.tgz" (fullDetails (unscoped "multi") v ver)
+        selectArtifact "nope.tgz" (targetedDetails (unscoped "multi") v ver)
+            `shouldBe` selectArtifact "nope.tgz" (fullDetails (unscoped "multi") v ver)
+        selectArtifact "b.tgz" (targetedDetails (unscoped "multi") v ver) `shouldSatisfy` isJust
+
+    it "agrees with the full projection over arbitrary fuzzed bodies (present, absent, mismatched)" $
+        hedgehog $ do
+            v <- forAll genBody
+            annotateShow v
+            let route = routeNameOf v
+                -- 'genPackumentish' keys its versions map by 1.0.0; this requests it.
+                present = mkVersion Npm "1.0.0"
+                absent = mkVersion Npm "7.7.7-absent"
+            -- The body's own self-reported name drives the success (Projected) arm…
+            fullOutcome route v present === targetedOutcome route v present
+            fullOutcome route v absent === targetedOutcome route v absent
+            -- …and a deliberately different requested name drives the mismatch arm.
+            fullOutcome (unscoped "definitely-not-the-name") v present
+                === targetedOutcome (unscoped "definitely-not-the-name") v present
+            H.cover 3 "selects a present version" (isMatchedJust (targetedOutcome route v present))
+            H.cover 3 "the requested version is absent" (isMatchedNothing (targetedOutcome route v absent))
 
 -- ── parseVersionList ─────────────────────────────────────────────────────────
 
@@ -770,6 +857,67 @@ the 'NonEmpty' is total.
 -}
 soleArtifact :: PackageDetails -> Artifact
 soleArtifact d = let (art :| _) = pkgArtifacts d in art
+
+{- | A path-independent view of a projection outcome, so the whole-packument projection
+('parsePackageInfoFromValue' then a version lookup) and the version-targeted projection
+('parseVersionDetailsFromValue') can be compared for __exact__ agreement. A decode\/name
+'ParseError', a name mismatch, and a match (carrying the projected version count and the
+requested version's details, or its absence) are the three arms both paths share.
+-}
+data Outcome
+    = LeftErr ParseError
+    | Mismatch Text
+    | Matched Int (Maybe PackageDetails)
+    deriving stock (Eq, Show)
+
+{- | The whole-packument projection's outcome at a requested version: project the full
+'PackageInfo', then read the version out of @infoVersions@ (the exact path the serve
+layer's @selectPrivateArtifact@ took before it was narrowed).
+-}
+fullOutcome :: PackageName -> Value -> Version -> Outcome
+fullOutcome route v ver = case parsePackageInfoFromValue route v of
+    Left e -> LeftErr e
+    Right (NameMismatch reported) -> Mismatch reported
+    Right (Projected info) ->
+        Matched (Map.size (infoVersions info)) (Map.lookup (renderVersion ver) (infoVersions info))
+
+-- | The version-targeted projection's outcome at a requested version.
+targetedOutcome :: PackageName -> Value -> Version -> Outcome
+targetedOutcome route v ver = case parseVersionDetailsFromValue route v ver of
+    Left e -> LeftErr e
+    Right (VersionNameMismatch reported) -> Mismatch reported
+    Right (VersionProjected count details) -> Matched count details
+
+-- | The 'PackageDetails' the whole-packument projection holds at a version, if any.
+fullDetails :: PackageName -> Value -> Version -> Maybe PackageDetails
+fullDetails route v ver = case parsePackageInfoFromValue route v of
+    Right (Projected info) -> Map.lookup (renderVersion ver) (infoVersions info)
+    _ -> Nothing
+
+-- | The 'PackageDetails' the version-targeted projection yields for a version, if any.
+targetedDetails :: PackageName -> Value -> Version -> Maybe PackageDetails
+targetedDetails route v ver = case parseVersionDetailsFromValue route v ver of
+    Right (VersionProjected _ details) -> details
+    _ -> Nothing
+
+{- | Select the artifact a filename names from a version's details — the pure gate
+@selectPrivateArtifact@\/@gatePublicVersion@ run downstream ('artifactFor'),
+replicated here to show identical details entail an identical selected 'Artifact'.
+-}
+selectArtifact :: Text -> Maybe PackageDetails -> Maybe Artifact
+selectArtifact file = (>>= find ((== file) . artFilename) . pkgArtifacts)
+
+-- | Whether a targeted outcome is a match that selected a present version.
+isMatchedJust :: Outcome -> Bool
+isMatchedJust = \case
+    Matched _ (Just _) -> True
+    _ -> False
+
+-- | Whether a targeted outcome is a match for which the requested version was absent.
+isMatchedNothing :: Outcome -> Bool
+isMatchedNothing = \case
+    Matched _ Nothing -> True
+    _ -> False
 
 -- | Whether a 'CodeExecSignal' is one of the @RunsCodeOnInstall@ determinations.
 runsCode :: CodeExecSignal -> Bool
