@@ -552,17 +552,19 @@
           buildInputs = [ pkgs.bashInteractive pkgs.regclient pkgs.jq ] ++ releaseInputs;
         });
 
-        # Shell for the benchmark harness (`make bench` / `make bench-profile`). The
-        # benches themselves need no extra *shell* tool beyond the GHC toolchain — the
-        # tasty-bench / tasty-bench-fit libraries come via cabal from the pin, exactly
-        # like every other Hackage dependency — so `make bench` only needs the lean CI
-        # set. `make bench-profile` adds two tools that turn a GHC cost-centre profile
-        # into a flame graph: ghc-prof-flamegraph (folds a `.prof` into collapsed
-        # stacks) and the FlameGraph scripts (renders them to SVG). CI enters it with
-        # `nix develop .#bench`. See docs/architecture/performance.md.
+        # Shell for the benchmark harness (`make bench` / `make bench-profile` /
+        # `make bench-load`). The Layer-A benches themselves need no extra *shell* tool
+        # beyond the GHC toolchain — the tasty-bench / tasty-bench-fit libraries come via
+        # cabal from the pin, exactly like every other Hackage dependency. `make
+        # bench-profile` adds two tools that turn a GHC cost-centre profile into a flame
+        # graph: ghc-prof-flamegraph (folds a `.prof` into collapsed stacks) and the
+        # FlameGraph scripts (renders them to SVG). `make bench-load` (Layer B) drives the
+        # running proxy with `oha`, a single-binary HTTP load generator with clean `--json`
+        # output the harness parses. CI enters it with `nix develop .#bench`. See
+        # docs/architecture/performance.md.
         devShells.bench = pkgs.mkShell (shellEnv // {
           name = "ecluse-bench";
-          buildInputs = ciInputs ++ [ pkgs.haskellPackages.ghc-prof-flamegraph pkgs.flamegraph ];
+          buildInputs = ciInputs ++ [ pkgs.haskellPackages.ghc-prof-flamegraph pkgs.flamegraph pkgs.oha ];
         });
 
         # LSP<->MCP bridge shell (HLS + agent-lsp). Opt-in only: not

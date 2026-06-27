@@ -16,7 +16,7 @@ Performance has two distinct shapes, measured by two distinct mechanisms:
 ```mermaid
 flowchart LR
     A["Layer A — work-per-request<br/>pure ecluse-core hot paths<br/>(tasty-bench micro-benches)"]
-    B["Layer B — throughput-under-load<br/>the whole server under concurrent load<br/>(load harness, future)"]
+    B["Layer B — throughput-under-load<br/>the whole server under concurrent load<br/>(load harness, oha)"]
     A -->|"localises a regression to a<br/>function and an allocation count"| Cost["cost centre"]
     B -->|"localises a regression to<br/>saturation, latency tails, GC pauses"| Sys["system behaviour"]
 ```
@@ -30,11 +30,15 @@ flowchart LR
   it is still the per-request computation, not a kernel scheduler or a socket. It is the
   layer where an accidentally-quadratic fold or a doubled allocation is caught.
 - **Layer B — throughput-under-load.** The whole system under concurrent load —
-  request rate, latency tails, GC pause behaviour, memory under sustained traffic.
-  This needs a load generator against the running server and is a separate, later
-  harness; it is named here so the boundary is explicit, not because it exists yet.
+  request rate, latency tails, GC pause behaviour, memory under sustained traffic. A load
+  generator ([`oha`](https://github.com/hatoo/oha)) drives the real composed server, so
+  this measures system behaviour — saturation and the latency tail — rather than a pure
+  function's cost. Allocations per request (Layer A) are the *leading indicator* of the
+  p99 Layer B measures: GC pauses are tail latency for an inline proxy, so the two layers
+  are complementary, not redundant.
 
-The rest of this document is about Layer A.
+The next sections cover Layer A; the [final section](#layer-b--throughput--latency-under-load)
+covers Layer B.
 
 ## What we measure: allocations and time
 
@@ -173,4 +177,126 @@ The realistic input corpus reuses the committed npm fixtures under
 `core/test/unit/fixtures/npm/` (the same captures the unit suite decodes), and the
 synthetic generator's invariants are pinned by test cases that run as part of the
 benchmark, so a malformed corpus stops the run rather than benching a degenerate input.
+
+## Layer B — throughput & latency under load
+
+Layer B is the *host-sensitive* counterpart to Layer A's deterministic work-per-request
+figures: it boots the **real composed server** (`Ecluse.Server.application`) on `warp`
+and drives it under concurrent load, so it answers "does the proxy keep up with traffic?"
+— throughput, the latency tail, GC pause behaviour, residency under sustained load. It is
+a separate `bench-load` **executable** (not a `tasty-bench` component), because it opens
+sockets and spawns a load generator.
+
+### Posture: inform-only, never gates
+
+Layer B characterises and trends; it **never asserts a throughput pass/fail**. There is
+no SLO, no "10% slower than `main`" threshold, no allocation ceiling. Its only red state
+is a **literal failure** — the harness cannot boot, `oha` cannot run, or a scenario
+served nothing — surfaced as a non-zero exit. Throughput and latency are runner-dependent
+and read coarsely; **allocations per request** is the machine-independent signal that
+trends cleanly across runners (decision D2). There is **no
+cross-run baseline**: a run uploads its own results, consumed by no other run, so
+comparison is by hand.
+
+> **What "allocations / request" includes.** The figure is the RTS `allocated_bytes`
+> delta over the whole bench process, which for the HTTP scenarios also runs the two
+> in-process stub upstreams and the proxy (only `oha`, a subprocess, is excluded). It
+> therefore folds in the stubs' own per-request allocations — a *consistent over-count*,
+> fine for trending across commits, but **not** a pure proxy per-request cost, and so
+> **not directly comparable** to Layer A's pure per-call allocations. Peak residency is a
+> process high-water mark that also spans the warm-up; the allocation and GC figures are
+> before/after deltas over the measured window only.
+
+### The three scenarios
+
+Each scenario reports throughput, the p50/p90/p99/p99.9 latency distribution, peak
+residency, GC stats, and allocations per request.
+
+| Scenario | Shape | What it isolates |
+|---|---|---|
+| `merge-cold` | `GET /{pkg}` fanning to both upstreams → merge → rule-filter → URL-rewrite → ETag → re-serialise, **public cache disabled (TTL 0)** | the expensive headline path: the live private fetch, the cross-upstream merge, the rule sweep, and the re-serialise on every request (the public leg's fetch + decode is single-flight-amortised under concurrency, not per-request) |
+| `cached-public-hit` | the same `GET`, with the anonymous public origin served from the **warm metadata cache** | the cheap, common high-throughput path: the public fetch and decode are elided |
+| `worker-mirroring` | the mirror worker's `fetch → verify → publish → ack` loop, driven **in-process** (no HTTP surface) | the mirror hot path: an artifact fetch, an integrity recompute-and-verify, and a publish |
+
+A note on the cache scenarios. The default `passthrough` posture caches only the
+**anonymous public** origin; the trusted private origin is the per-client authority and
+is fetched per request, never cached (see
+[Registry Model](registry-model.md) and `Ecluse.Core.Server.Pipeline`). So the two
+packument scenarios differ in the cache TTL: `merge-cold` uses a zero TTL, while
+`cached-public-hit` uses a long TTL and a warm-up pass.
+
+A zero TTL does **not** make the public fetch+decode a per-request cost, though. The
+public leg resolves through the cache's **single-flight** path (`resolveMetadata`): even
+at a zero TTL, concurrent misses coalesce onto one in-flight fetch and share the leader's
+parsed packument, so followers skip both the fetch and the ~40 ms decode. Under
+concurrency the public fetch+decode is therefore **amortised across followers**, which
+narrows the contrast with `cached-public-hit` — both amortise the public fetch, one via
+the cache, one via single-flight. `merge-cold`'s per-request cost is the live private
+leg, the merge, the rule sweep, and the re-serialise. (This is real production behaviour;
+the scenario does not defeat coalescing.) A literal "private-only cache hit" is not a
+shape the passthrough model has; `cached-public-hit` is its faithful realisation of the
+cheap, no-public-fetch path.
+
+### How it measures
+
+- **The real server over stub upstreams.** The composed `application` is booted on
+  loopback with `Network.Wai.Handler.Warp.testWithApplication`, over the in-memory mirror
+  queue and credential doubles (`newInMemoryQueue`, `staticProvider`). Each upstream is an
+  in-process `warp` stub serving a canned payload after an **injectable latency**, so the
+  *real* data plane runs — the `http-client` fetch and the JSON decode — minus the WAN.
+  Everything is loopback, so the harness opens no external socket and needs no Docker.
+- **`oha` drives the HTTP scenarios.** It is spawned via `typed-process` with
+  `--output-format json`, whose report yields the throughput and the latency percentiles.
+  The worker scenario has no HTTP surface, so its loop is driven and timed in-process.
+- **RTS statistics frame each run.** `GHC.Stats.getRTSStats` is snapshotted before and
+  after the measured window (the executable bakes in `+RTS -T`), giving allocations per
+  request, peak residency, and GC-pause stats. Each scenario runs in its **own process**
+  (the driver re-execs the binary once per scenario), because peak residency is a
+  process-wide high-water mark — a fresh process keeps each scenario's residency its own.
+
+### Built to extend across ecosystems
+
+Today only npm is served, but the proxy is built to front several upstream ecosystems
+(PyPI, RubyGems, …). The harness is split so adding one is cheap:
+
+- the reusable **structure** — the `oha` driver (`Ecluse.BenchLoad.Oha`), the RTS capture,
+  the scenario runner, and the report rendering (`Ecluse.BenchLoad.Harness`) — is the same
+  whatever ecosystem a scenario drives;
+- the per-ecosystem **interface** is an `UpstreamFixture` (the Handle pattern: a record of
+  an ecosystem and its `Scenario`s). A `Scenario` holds only the ecosystem-specific setup
+  and teardown — booting that ecosystem's stub upstreams with the injected latency and
+  payload, wiring the proxy mount, and yielding a `Driver` that tells the harness what to
+  drive.
+
+npm is the first and only instance (`Ecluse.BenchLoad.Npm`). Adding PyPI is "write
+`pypiFixture` and register its scenarios", not "rewrite the harness".
+
+### Load knobs
+
+The operating point is set by four knobs, each overridable through the environment, with
+runner-sane defaults:
+
+| Knob | Environment variable | Default |
+|---|---|---|
+| concurrency | `BENCH_LOAD_CONCURRENCY` | 50 |
+| duration (seconds) | `BENCH_LOAD_DURATION_SECONDS` | 30 |
+| injected upstream latency (ms) | `BENCH_LOAD_UPSTREAM_LATENCY_MS` | 5 |
+| payload size (bytes) | `BENCH_LOAD_PAYLOAD_BYTES` | 262144 |
+
+### Running it
+
+Everything runs from the lean `.#bench` dev shell (which carries `oha`); the `make`
+target enters it for you.
+
+```sh
+make bench-load                               # all scenarios, default operating point
+BENCH_LOAD_DURATION_SECONDS=10 make bench-load # a quicker local pass
 ```
+
+Each scenario's table is rendered to stdout and, in CI, to the run summary. The CI job
+([`.github/workflows/bench-load.yml`](../../.github/workflows/bench-load.yml)) is a
+standalone, **non-gating** tier: it runs on a **nightly schedule and on manual dispatch**
+(never per pull request — shared-runner throughput is too noisy for a per-PR signal), is
+not wired into `ci.yml`'s `gate`, and uploads its results as a downloadable artifact with
+no cross-run baseline. Trustworthy absolutes come from **local deep-dives** on a quiet
+machine, never from a shared-runner figure.
