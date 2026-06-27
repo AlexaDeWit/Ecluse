@@ -130,6 +130,7 @@ import Ecluse.Core.Package (
     pkgNamespace,
     renderPackageName,
     unScope,
+    unscopedName,
  )
 import Ecluse.Core.Registry (
     PublishError (..),
@@ -445,14 +446,14 @@ npmPublishDocument ::
 npmPublishDocument name version filename integrity shasum tarball =
     toStrict . Aeson.encode $
         object
-            [ "_id" .= renderPackageName name
-            , "name" .= renderPackageName name
+            [ "_id" .= rendered
+            , "name" .= rendered
             , "dist-tags" .= object ["latest" .= versionText]
             , "versions"
                 .= object
                     [ Key.fromText versionText
                         .= object
-                            [ "name" .= renderPackageName name
+                            [ "name" .= rendered
                             , "version" .= versionText
                             , "dist"
                                 .= object
@@ -474,6 +475,7 @@ npmPublishDocument name version filename integrity shasum tarball =
             ]
   where
     versionText = renderVersion version
+    rendered = renderPackageName name
     -- The npm attachment carries the raw tarball bytes, standard-base64-encoded.
     encodedTarball :: Text
     encodedTarball = decodeUtf8 (convertToBase Base64 tarball :: ByteString)
@@ -670,19 +672,8 @@ double-encoding the structural separator.
 -}
 encodePackagePath :: PackageName -> Text
 encodePackagePath name = case pkgNamespace name of
-    Just scope -> "@" <> encodeComponent (unScope scope) <> "%2F" <> encodeComponent (baseName name)
+    Just scope -> "@" <> encodeComponent (unScope scope) <> "%2F" <> encodeComponent (unscopedName name)
     Nothing -> encodeComponent (renderPackageName name)
-
-{- The bare (unscoped) package name — the path segment after the scope, or the
-whole rendered name when unscoped. Used both for the @%2F@-encoded path and the
-tarball filename.
--}
-baseName :: PackageName -> Text
-baseName name =
-    let rendered = renderPackageName name
-     in case pkgNamespace name of
-            Just _ -> T.drop 1 (snd (T.breakOn "/" rendered))
-            Nothing -> rendered
 
 {- The conventional npm tarball filename for a version: @{base}-{version}.tgz@.
 The base name and version are percent-encoded as components around the structural
@@ -690,7 +681,7 @@ The base name and version are percent-encoded as components around the structura
 the upstream URL raw. -}
 tarballFile :: PackageName -> Version -> Text
 tarballFile name version =
-    encodeComponent (baseName name) <> "-" <> encodeComponent (renderVersion version) <> ".tgz"
+    encodeComponent (unscopedName name) <> "-" <> encodeComponent (renderVersion version) <> ".tgz"
 
 -- Attach a bearer token to a request when one is injected; otherwise leave it.
 withToken :: Maybe Secret -> Request -> Request

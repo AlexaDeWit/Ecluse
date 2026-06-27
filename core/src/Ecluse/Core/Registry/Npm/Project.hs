@@ -96,6 +96,7 @@ import Data.Aeson (FromJSON (parseJSON), Object, Value, eitherDecodeStrict, with
 import Data.Aeson.Types (Parser, parseEither, parseMaybe)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Data.Text.Short qualified as TS
 import Data.Time (UTCTime)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
@@ -363,7 +364,7 @@ projectDependencies vm =
   where
     depsOfKind (kind, deps) =
         [ Dependency
-            { depName = name
+            { depName = TS.fromText name
             , depConstraint = constraint
             , depKind = kind
             , depMarker = Nothing

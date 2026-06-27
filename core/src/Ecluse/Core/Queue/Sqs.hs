@@ -62,7 +62,6 @@ import Data.Aeson (
  )
 import Data.Aeson qualified as Aeson
 import Data.Aeson.Types (Parser, parseEither)
-import Data.Text qualified as T
 import Lens.Micro ((?~), (^.))
 
 import Ecluse.Core.Credential (Secret, unSecret)
@@ -70,7 +69,6 @@ import Ecluse.Core.Ecosystem (ecosystemName, parseEcosystem)
 import Ecluse.Core.Package (
     Hash,
     HashAlg (Blake2b, MD5, SHA1, SHA256, SHA384, SHA512, SRI),
-    PackageName,
     hashAlg,
     hashValue,
     mkHash,
@@ -78,9 +76,8 @@ import Ecluse.Core.Package (
     mkScope,
     pkgEcosystem,
     pkgNamespace,
-    renderPackageName,
-    renderScope,
     unScope,
+    unscopedName,
  )
 import Ecluse.Core.Package.Integrity (renderHashAlg)
 import Ecluse.Core.Queue (
@@ -263,7 +260,7 @@ encodeJob job =
         object
             [ "ecosystem" .= ecosystemName (pkgEcosystem name)
             , "scope" .= (unScope <$> pkgNamespace name)
-            , "name" .= bareName name
+            , "name" .= unscopedName name
             , "version" .= renderVersion (jobVersion job)
             , "artifactUrl" .= jobArtifactUrl job
             , "mirrorTarget" .= jobMirrorTarget job
@@ -378,15 +375,3 @@ parseHashAlg = \case
     "blake2b" -> Just Blake2b
     "sri" -> Just SRI
     _ -> Nothing
-
-{- The bare (scope-stripped) package name: the third argument 'mkPackageName'
-took. When scoped, 'mkPackageName' builds the display form as @scope/name@, so
-dropping that exact @scope/@ prefix length recovers the bare name and keeps
-encode/decode an exact round-trip. -}
-bareName :: PackageName -> Text
-bareName name =
-    case pkgNamespace name of
-        Just scope -> fromMaybe display (T.stripPrefix (renderScope scope <> "/") display)
-        Nothing -> display
-  where
-    display = renderPackageName name

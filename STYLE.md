@@ -150,6 +150,18 @@ naming, decomposition, and totality.
     `head`, `tail`, `fromJust`, etc. Keep it that way (see §6, Totality).
   - `containers`, `text`, `bytestring`, and `stm` are re-exported, so common
     types like `Map` are in scope without an import.
+- **String types — pick by role; strict over lazy by default.**
+  - Strict **`Data.Text`** is the working and API default (UTF-8, `text ≥ 2.0`).
+    It is what functions take and return unless there is a reason otherwise.
+  - Strict **`ByteString`** holds raw bytes (digests, request/response bodies you
+    keep). Reserve **lazy `ByteString`** for streaming passthrough — the tarball
+    body the proxy relays — never for held state.
+  - **`ShortText`** (`text-short`) is for **bulk-stored, equality-only
+    identifiers** — values held in quantity that are only compared, keyed, or
+    rendered, and never sliced, parsed, or rewritten. Convert only at the `mk` /
+    `render` boundary, never in a hot loop (see §6, Rule 6.5).
+  - Fall back to **`String`** only at an unavoidable library edge (an API that
+    speaks `String`); convert to `Text` at once and keep it out of the core.
 
 ---
 
@@ -368,12 +380,14 @@ value that already carries its invariant.
   from the stored form).
 
 ```haskell
-newtype Scope = Scope Text
+-- 'Scope' is an equality-only identifier, so it is stored as ShortText and the
+-- Text <-> ShortText conversion happens once, here at the boundary (see 6.5).
+newtype Scope = Scope ShortText
     deriving stock (Eq, Ord, Show)
 
 -- | Build a 'Scope', tolerating an optional leading @\@@ sigil.
 mkScope :: Text -> Scope
-mkScope raw = Scope (fromMaybe raw (T.stripPrefix "@" raw))
+mkScope raw = Scope (TS.fromText (fromMaybe raw (T.stripPrefix "@" raw)))
 
 unScope :: Scope -> Text          -- bare value
 renderScope :: Scope -> Text      -- wire form, here with the leading '@'
@@ -391,6 +405,25 @@ for `EvalContext`.
 **Rule 6.4 — Names read as domain language.** Constructors are verbs/phrases of
 intent (`AllowScope`, `DenyInstallTimeExecution`, `DeniedByDefault`); booleans and
 predicates read as assertions (`pkgHasInstallScripts`, `isAllow`).
+
+**Rule 6.5 — Store bulk equality-only identifiers as `ShortText`, converting only
+at the boundary.** When an identifier is held in quantity — repeated across every
+version of a packument, or every entry of a dependency list — and is only ever
+compared, used as a `Map`/`Hashable` key, or rendered (never sliced, parsed, or
+rewritten), store it as `ShortText` rather than `Text`. It is more compact and has
+no slice-sharing surprises. Do the conversion *once* at the type's boundary: `mkX`
+does the single `Text -> ShortText` (`Data.Text.Short.fromText`), and
+`unX` / `renderX` the single `ShortText -> Text` (`toText`). Derive `Eq` / `Ord` /
+`Hashable` so interior compares, dedup, and `Map` keys run `ShortText`-native with
+no conversion. The discipline that earns the win: **never convert in a hot loop**
+(per-version, per-dependency, per-rule) — a `renderX`/`unX` on a bulk identifier
+inside an inner loop defeats the purpose, so reach for `Eq`/`Ord` on the value
+instead. If a value is *ever* sliced, parsed, pattern-matched, or rewritten after
+construction (a URL rewritten at serve, an SRI digest parsed, a version range),
+keep it `Text` — the conversion churn is not worth it and the value is not
+equality-only. `Scope`, `PackageName`'s `pkgCanonical`/`pkgDisplay`, and
+`Dependency`'s `depName` are `ShortText`; `Hash.hashValue`, `Artifact.artUrl`, and
+`Dependency.depConstraint` stay `Text`.
 
 ---
 
