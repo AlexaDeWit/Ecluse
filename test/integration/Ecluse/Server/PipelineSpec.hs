@@ -65,6 +65,8 @@ import Ecluse.Core.Rules.Types (
     atDefaultPrecedence,
  )
 import Ecluse.Core.Security (Limits (maxBodyBytes, maxNestingDepth, maxVersionCount), TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), defaultLimits, lowerCaseHosts)
+import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
+import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Env (Env (envQueue), newEnv, newWorkerHeartbeat)
 import Ecluse.Log (LogFormat (JsonLog), newLogEnv)
@@ -73,8 +75,6 @@ import Ecluse.Server (
     application,
     mkServerConfig,
  )
-import Ecluse.Server.Cache (defaultCacheConfig, newMetadataCache)
-import Ecluse.Server.Context (PackumentDeps (..))
 import Ecluse.Telemetry (telemetryDisabled)
 
 -- ── a fixed clock and the quarantine policy ───────────────────────────────────

@@ -68,7 +68,7 @@ Two properties the @cache@ library does not provide on its own are layered here:
   finds either the store entry or the marker (never a gap) and never re-leads a
   redundant fetch.
 -}
-module Ecluse.Server.Cache (
+module Ecluse.Core.Server.Cache (
     -- * Configuration
     CacheConfig (..),
     defaultCacheConfig,
@@ -105,13 +105,13 @@ import Ecluse.Core.Package (
     renderScope,
  )
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
-import Ecluse.Telemetry.Instruments (Metrics, recordCacheEntries, recordCacheRequest)
+import Ecluse.Core.Telemetry.Record (MetricsPort, mpCacheEntries, mpCacheRequest)
 
 -- ── configuration ────────────────────────────────────────────────────────────
 
-{- | The metadata cache's tunables, sourced from configuration (see
-"Ecluse.Config"): how long a parsed packument stays fresh, and how many distinct
-@(source, package)@ entries the cache holds before it evicts.
+{- | The metadata cache's tunables, sourced from configuration: how long a parsed
+packument stays fresh, and how many distinct @(source, package)@ entries the cache
+holds before it evicts.
 -}
 data CacheConfig = CacheConfig
     { cacheTtl :: NominalDiffTime
@@ -196,7 +196,7 @@ cacheKey (Source source) name =
 
 {- | The metadata-cache handle: the TTL store, the size bound, and the in-flight
 map that gives single-flight. Opaque — built with 'newMetadataCache' and reached
-only through the accessors. Lives in 'Ecluse.Env.Env' (one per process), so every
+only through the accessors. Lives in the composition root (one per process), so every
 request shares the same cache and its connection-collapsing.
 -}
 data MetadataCache = MetadataCache
@@ -260,7 +260,7 @@ Each resolution records the @ecluse.metadata_cache.requests@ hit\/miss counter (
 coalescing follower counts as a miss, like the leader it waits on), and a leader's
 insert refreshes the @ecluse.metadata_cache.entries@ occupancy gauge.
 -}
-resolveMetadata :: Metrics -> MetadataCache -> Source -> PackageName -> IO CacheEntry -> IO CacheEntry
+resolveMetadata :: MetricsPort -> MetadataCache -> Source -> PackageName -> IO CacheEntry -> IO CacheEntry
 resolveMetadata = resolveMetadataWith (pure ())
 
 {- | As 'resolveMetadata', but with a hook run on the leading thread at the
@@ -270,7 +270,7 @@ the marker. It exists only so a test can deterministically park a leader in that
 window and cancel it there, exercising the orphan-window guarantee; production always
 passes @pure ()@ via 'resolveMetadata'.
 -}
-resolveMetadataWith :: IO () -> Metrics -> MetadataCache -> Source -> PackageName -> IO CacheEntry -> IO CacheEntry
+resolveMetadataWith :: IO () -> MetricsPort -> MetadataCache -> Source -> PackageName -> IO CacheEntry -> IO CacheEntry
 resolveMetadataWith afterClaim metrics cache source name fetch = mask $ \restore -> do
     let key = cacheKey source name
     nowT <- getTime Monotonic
@@ -284,15 +284,15 @@ resolveMetadataWith afterClaim metrics cache source name fetch = mask $ \restore
     decision <- atomically (decide key nowT)
     case decision of
         Hit entry -> do
-            recordCacheRequest metrics Metric.Hit
+            mpCacheRequest metrics Metric.Hit
             pure entry
         Follow marker -> do
             -- A follower coalesced onto an in-flight fetch is a miss for this caller
             -- (no fresh entry was present), exactly as the leader's miss is.
-            recordCacheRequest metrics Metric.Miss
+            mpCacheRequest metrics Metric.Miss
             restore (either throwIO pure =<< atomically (readTMVar marker))
         Lead marker -> do
-            recordCacheRequest metrics Metric.Miss
+            mpCacheRequest metrics Metric.Miss
             runLeader restore key marker
   where
     decide :: CacheKey -> TimeSpec -> STM Decision
@@ -338,7 +338,7 @@ resolveMetadataWith afterClaim metrics cache source name fetch = mask $ \restore
                 atomically (deregister key)
                 -- The leader inserted, so the occupancy gauge is refreshed off the
                 -- post-insert size (a follower never inserts, so it never re-records).
-                recordCacheEntries metrics =<< cacheSize cache
+                mpCacheEntries metrics =<< cacheSize cache
                 pure entry
             Left err -> do
                 atomically (deregister key)

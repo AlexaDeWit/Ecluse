@@ -1,3 +1,5 @@
+{-# LANGUAGE RankNTypes #-}
+
 {- | The request-lifecycle tracing layer on top of the OpenTelemetry substrate
 ("Ecluse.Telemetry"): the WAI server span, the http-client child spans on the data
 plane, and the hand-added domain spans that carry the decisions an operator cares
@@ -50,6 +52,9 @@ module Ecluse.Telemetry.Tracing (
     withMirrorJobSpan,
     JobSpanOutcome (..),
 
+    -- * The core tracing port
+    tracingPortOf,
+
     -- * Verdict attribute mapping
     ruleVerdictFields,
 ) where
@@ -84,6 +89,7 @@ import Ecluse.Core.Server.Response (
     RuleName (RuleName),
     ServeDecision (Admit, Reject),
  )
+import Ecluse.Core.Telemetry.Span (TracingPort (..))
 import Ecluse.Core.Version (Version, renderVersion)
 import Ecluse.Telemetry (
     Telemetry,
@@ -215,6 +221,23 @@ data JobSpanOutcome = JobSpanOutcome
     -- ^ The failure detail when the job did not publish; 'Nothing' on success.
     }
     deriving stock (Eq, Show)
+
+-- ── the core tracing port ──────────────────────────────────────────────────────
+
+{- | Project the OpenTelemetry-backed domain spans onto the core 'TracingPort' the
+serve path ("Ecluse.Core.Server.Pipeline") brackets through: the per-version rule
+verdict and the serve-time mirror-enqueue hand-off. Each field is the matching
+@with*Span@ bracket closed over the 'Telemetry' handle, so the port is exactly this
+module's tracing behind the core interface — inert when telemetry is off. The
+worker's 'withMirrorJobSpan' is not in the port: the worker stays on the application
+tracing layer, so the port carries only the two serve-path spans.
+-}
+tracingPortOf :: Telemetry -> TracingPort
+tracingPortOf telemetry =
+    TracingPort
+        { spanRuleEval = withRuleEvalSpan telemetry
+        , spanMirrorEnqueue = withMirrorEnqueueSpan telemetry
+        }
 
 -- ── verdict attribute mapping ──────────────────────────────────────────────────
 

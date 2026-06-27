@@ -17,9 +17,9 @@ import Ecluse.Core.Credential (AuthToken (..), CredentialProvider, mkSecret, sta
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Queue (newInMemoryQueue)
 import Ecluse.Core.Registry (ParseError (..), RegistryClient (..))
+import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Env (Env, newEnv, newWorkerHeartbeat)
 import Ecluse.Server (MountBinding (..), application)
-import Ecluse.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Telemetry (telemetryDisabled)
 
 {- | A registry-handle double whose effectful fields are never invoked — the

@@ -1,6 +1,6 @@
-{- | Internal guts of the serve pipeline ("Ecluse.Server.Pipeline"), exposed for tests
-without widening that module's two-handler public API — the @.Internal@ convention, as
-"Ecluse.Core.Credential.Refresh.Internal" uses. Importing it opts out of the public
+{- | Internal guts of the serve pipeline ("Ecluse.Core.Server.Pipeline"), exposed for
+tests without widening that module's two-handler public API — the @.Internal@ convention,
+as "Ecluse.Core.Credential.Refresh.Internal" uses. Importing it opts out of the public
 module's stability promise.
 
 It holds the degrade signalling for two bad-upstream conditions the response-bound
@@ -8,10 +8,10 @@ guards leave silent: 'PackumentUndecodable' (the upstream answered, but its body
 not decode into a usable packument) and 'PackumentNameMismatch' (the upstream
 answered with a packument whose self-reported name is for a /different/ package).
 Each is a typed throw raised at the fetch and caught by the origin fetcher's
-@tryAny@, with a paired @log*@ surfacing it at a 'WarningS' before the contribution
-degrades.
+@tryAny@, with a paired @log*@ surfacing it at a 'WarningS' through the ambient
+@katip@ context before the contribution degrades.
 -}
-module Ecluse.Server.Pipeline.Internal (
+module Ecluse.Core.Server.Pipeline.Internal (
     PackumentUndecodable (..),
     PackumentNameMismatch (..),
     logDecodeFailure,
@@ -30,8 +30,7 @@ module Ecluse.Server.Pipeline.Internal (
     recordEffectfulFailures,
 ) where
 
-import Katip (LogEnv, Severity (WarningS), logFM, ls, sl)
-import Katip.Monadic (runKatipContextT)
+import Katip (KatipContext, Severity (WarningS), katipAddContext, logFM, ls, sl)
 import Network.HTTP.Client qualified as HTTP
 
 import Ecluse.Core.Package (PackageName, renderPackageName)
@@ -47,8 +46,7 @@ import Ecluse.Core.Server.Response (
     packumentStatus,
  )
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
-import Ecluse.Log (moduleField)
-import Ecluse.Telemetry.Instruments (Metrics, recordRuleDenial, recordRuleEffectfulFailure)
+import Ecluse.Core.Telemetry.Record (MetricsPort, mpRuleDenial, mpRuleEffectfulFailure)
 
 {- | Raised when an upstream packument does not decode into both the typed view and the
 raw document the serve path needs. A (typed) throw, not a stringly one, caught by the
@@ -72,19 +70,26 @@ data PackumentNameMismatch = PackumentNameMismatch
 
 instance Exception PackumentNameMismatch
 
+-- The @module@ tag this module's warnings carry. It is the operator-facing log
+-- filter key, not the source module path, so it is held stable across the move into
+-- ecluse-core: an operator's saved filter on this value keeps matching, and the only
+-- change to these lines is the trace-correlation @dd@ object the ambient context adds.
+pipelineInternalModule :: Text
+pipelineInternalModule = "Ecluse.Server.Pipeline.Internal"
+
 {- | Log a parse failure at 'WarningS' — the one bad-upstream condition the
 response-bound guards leave silent: the upstream answered, but its body did not decode
 into the typed view and raw document the serve path needs. Same fail-closed degrade and
 the same @module@\/@package@ payload convention as the breach log in
-"Ecluse.Server.Pipeline", so an operator sees an undecodable upstream distinctly rather
-than as silence. The @module@ tag names this module's own path.
+"Ecluse.Core.Server.Pipeline", so an operator sees an undecodable upstream distinctly
+rather than as silence. Emitted through the ambient @katip@ context (the request's, so
+the line carries its trace-correlation @dd@).
 -}
-logDecodeFailure :: LogEnv -> PackageName -> IO ()
-logDecodeFailure logEnv name =
-    runKatipContextT logEnv payload mempty $
-        logFM WarningS (ls message)
+logDecodeFailure :: (KatipContext m) => PackageName -> m ()
+logDecodeFailure name =
+    katipAddContext payload $ logFM WarningS (ls message)
   where
-    payload = moduleField "Ecluse.Server.Pipeline.Internal" <> sl "package" (renderPackageName name)
+    payload = sl "module" pipelineInternalModule <> sl "package" (renderPackageName name)
     message :: Text
     message = "refused an upstream metadata document: it did not decode into a usable packument"
 
@@ -96,13 +101,12 @@ identifiers that belong on the log line — so an operator can tell a misconfigu
 hostile upstream from an ordinary outage. Same fail-closed degrade and payload
 convention as 'logDecodeFailure'.
 -}
-logNameMismatch :: LogEnv -> PackageName -> Text -> Text -> IO ()
-logNameMismatch logEnv requested origin reported =
-    runKatipContextT logEnv payload mempty $
-        logFM WarningS (ls message)
+logNameMismatch :: (KatipContext m) => PackageName -> Text -> Text -> m ()
+logNameMismatch requested origin reported =
+    katipAddContext payload $ logFM WarningS (ls message)
   where
     payload =
-        moduleField "Ecluse.Server.Pipeline.Internal"
+        sl "module" pipelineInternalModule
             <> sl "package" (renderPackageName requested)
             <> sl "origin" origin
             <> sl "upstreamName" reported
@@ -181,7 +185,7 @@ transienceCause = \case
 the bounded reason class and — for a policy denial — the deciding rule name
 ('denialLabels'). An admit records nothing.
 -}
-recordDenials :: Metrics -> [ServeDecision] -> IO ()
+recordDenials :: MetricsPort -> [ServeDecision] -> IO ()
 recordDenials metrics = traverse_ recordOne
   where
     recordOne :: ServeDecision -> IO ()
@@ -189,17 +193,17 @@ recordDenials metrics = traverse_ recordOne
         Admit -> pass
         Reject (Rejection reason _) ->
             let (rule, reasonClass) = denialLabels reason
-             in recordRuleDenial metrics rule reasonClass
+             in mpRuleDenial metrics rule reasonClass
 
 {- | Count each effectful-rule failure among a packument's per-version decisions: an
 'Undecidable' is an effectful rule whose source could not be consulted, so it is the
 effectful-failure signal, classified to a bounded cause by its transience
 ('transienceCause'). A decided version (allowed or denied) is not a failure.
 -}
-recordEffectfulFailures :: Metrics -> [Decision] -> IO ()
+recordEffectfulFailures :: MetricsPort -> [Decision] -> IO ()
 recordEffectfulFailures metrics = traverse_ recordOne
   where
     recordOne :: Decision -> IO ()
     recordOne = \case
-        Undecidable transience _ -> recordRuleEffectfulFailure metrics (transienceCause transience)
+        Undecidable transience _ -> mpRuleEffectfulFailure metrics (transienceCause transience)
         _ -> pass

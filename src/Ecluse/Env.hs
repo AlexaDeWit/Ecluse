@@ -26,7 +26,7 @@ Two invariants make this hold together:
   @docs\/architecture\/cloud-backends.md@ → "Process model").
 
 Request handlers read this 'Env' through a per-request
-'Ecluse.Server.Context.RequestCtx' that pairs it with the matched mount; the
+'Ecluse.Core.Server.Context.RequestCtx' that pairs it with the matched mount; the
 worker\/service layer reads it through "Ecluse.App"'s @App@ monad.
 -}
 module Ecluse.Env (
@@ -34,6 +34,9 @@ module Ecluse.Env (
     Env (..),
     newEnv,
     withEnv,
+
+    -- * Request runtime projection
+    serveRuntimeOf,
 
     -- * Worker heartbeat
     WorkerHeartbeat,
@@ -50,11 +53,13 @@ import UnliftIO (MonadUnliftIO, bracket)
 import Ecluse.Core.Credential (CredentialProvider)
 import Ecluse.Core.Queue (MirrorQueue)
 import Ecluse.Core.Registry (RegistryClient)
+import Ecluse.Core.Server.Cache (MetadataCache)
+import Ecluse.Core.Server.Context (ServeRuntime (..))
 import Ecluse.Log (DdContext)
-import Ecluse.Server.Cache (MetadataCache)
 import Ecluse.Telemetry (Telemetry)
 import Ecluse.Telemetry.Correlation (ddIdentityFromEnvironment)
-import Ecluse.Telemetry.Instruments (Metrics, newMetrics)
+import Ecluse.Telemetry.Instruments (Metrics, metricsPortOf, newMetrics)
+import Ecluse.Telemetry.Tracing (tracingPortOf)
 
 {- | The composition-root record: the handles plus the shared HTTP manager and the
 metadata cache, from which the whole effectful shell is reached. See the module
@@ -96,7 +101,7 @@ data Env = Env
     (see @docs\/architecture\/security.md@).
     -}
     , envMetadataCache :: MetadataCache
-    {- ^ The short-TTL, size-bounded metadata cache (see "Ecluse.Server.Cache")
+    {- ^ The short-TTL, size-bounded metadata cache (see "Ecluse.Core.Server.Cache")
     shared by the serve paths: one parsed packument is reused across the packument
     and tarball-gating fetches, and concurrent resolutions of a hot package
     collapse to a single upstream call.
@@ -231,3 +236,22 @@ withEnv registry queue credentials manager privateManager metadataCache logEnv t
     -- root has nothing of its own to release.
     teardown :: (MonadUnliftIO m) => Env -> m ()
     teardown _ = pure ()
+
+{- | Project the request runtime ("Ecluse.Core.Server.Context.ServeRuntime") the serve
+path is closed over from the composition root: the two data-plane managers, the
+metadata cache and mirror queue, and the OpenTelemetry-backed metric and tracing ports
+('Ecluse.Telemetry.Instruments.metricsPortOf', 'Ecluse.Telemetry.Tracing.tracingPortOf').
+Built at dispatch per request — it gathers existing handles and wraps the instrument and
+telemetry handles in their ports — so the core pipeline reads its backends through the
+core interface without depending on this application 'Env'.
+-}
+serveRuntimeOf :: Env -> ServeRuntime
+serveRuntimeOf env =
+    ServeRuntime
+        { srPublicManager = envManager env
+        , srPrivateManager = envPrivateManager env
+        , srMetadataCache = envMetadataCache env
+        , srQueue = envQueue env
+        , srMetrics = metricsPortOf (envMetrics env)
+        , srTracing = tracingPortOf (envTelemetry env)
+        }

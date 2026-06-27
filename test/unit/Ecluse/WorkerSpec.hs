@@ -38,9 +38,9 @@ import Ecluse.Core.Registry (
     UrlFormationError (EmptyBaseUrl),
  )
 import Ecluse.Core.Registry.Npm (npmPublishDocument)
+import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Env (Env, envWorkerHeartbeat, lastPoll, newEnv, newWorkerHeartbeat)
-import Ecluse.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Telemetry (telemetryDisabled)
 import Ecluse.Test.Package (unsafeHash)
 import Ecluse.Worker (

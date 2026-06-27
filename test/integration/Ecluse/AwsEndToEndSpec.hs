@@ -34,6 +34,8 @@ import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
 import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfPublishedBefore), atDefaultPrecedence)
 import Ecluse.Core.Security (LoweredHostSet, TarballHostPolicy (SameHostAsPackument), defaultLimits, lowerCaseHosts)
 import Ecluse.Core.Security.Egress (newGuardedTlsManager)
+import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
+import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Env (Env, newEnv, newWorkerHeartbeat)
 import Ecluse.Integration.Ministack (
     endpointFor,
@@ -41,8 +43,6 @@ import Ecluse.Integration.Ministack (
     withMinistack,
  )
 import Ecluse.Server (MountBinding (..), application, mkServerConfig)
-import Ecluse.Server.Cache (defaultCacheConfig, newMetadataCache)
-import Ecluse.Server.Context (PackumentDeps (..))
 import Ecluse.Telemetry (telemetryDisabled)
 import Ecluse.Worker (workerLoop)
 

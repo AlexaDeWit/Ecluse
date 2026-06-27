@@ -861,7 +861,7 @@ nestingDepthSpec = describe "checkNestingDepth" $ do
 
 {- | The whole point of the default 'Limits' (16 MiB body, 100k versions, depth 64)
 is that they must __never__ refuse a legitimate trusted package. This drives the
-exact sequence the data plane applies in @Ecluse.Server.Pipeline.fetchEntry@ —
+exact sequence the data plane applies in @Ecluse.Core.Server.Pipeline.fetchEntry@ —
 bounded read, depth check on the decoded document, projection, then version-count
 check — over a __real, untrimmed__ packument committed under the fixtures directory,
 and asserts the document is __admissible__ under the default budget at every step.

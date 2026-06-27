@@ -28,6 +28,9 @@ module Ecluse.Telemetry.Instruments (
     Metrics,
     newMetrics,
 
+    -- * The core recording port
+    metricsPortOf,
+
     -- * Timing
     timedSeconds,
 
@@ -58,8 +61,6 @@ module Ecluse.Telemetry.Instruments (
     recordCredentialRefresh,
     recordCredentialTokenTtl,
 ) where
-
-import GHC.Clock (getMonotonicTime)
 
 import OpenTelemetry.Metric.Core (
     Counter (counterAdd),
@@ -94,6 +95,7 @@ import Ecluse.Core.Telemetry.Metrics (
     metricAttributes,
     metricName,
  )
+import Ecluse.Core.Telemetry.Record (MetricsPort (..), timedSeconds)
 import Ecluse.Telemetry (Telemetry, telemetryMeterProvider)
 
 -- ── the instrument handle ─────────────────────────────────────────────────────
@@ -175,18 +177,29 @@ newMetrics telemetry = do
 ecluseScope :: (IsString s) => s
 ecluseScope = "ecluse"
 
--- ── timing ─────────────────────────────────────────────────────────────────────
+-- ── the core recording port ──────────────────────────────────────────────────
 
-{- | Run an action and return its result alongside the wall-clock seconds it took,
-measured on the monotonic clock so a system-clock step never yields a negative or
-absurd duration. The seconds are what the latency histograms record.
+{- | Project the OpenTelemetry-backed instruments onto the core 'MetricsPort' the
+serve path ("Ecluse.Core.Server.Pipeline") records through. Each field is the matching
+@record*@ helper partially applied to the instrument handle, so the port is exactly
+this module's recording behaviour behind the core interface — inert when telemetry is
+off, since the instruments are. ('timedSeconds' is re-exported from the port module, so
+the data-plane timing util has one home beside the durations it feeds.)
 -}
-timedSeconds :: (MonadIO m) => m a -> m (a, Double)
-timedSeconds action = do
-    start <- liftIO getMonotonicTime
-    result <- action
-    end <- liftIO getMonotonicTime
-    pure (result, end - start)
+metricsPortOf :: Metrics -> MetricsPort
+metricsPortOf m =
+    MetricsPort
+        { mpServeDecision = recordServeDecision m
+        , mpRuleDenial = recordRuleDenial m
+        , mpRuleEvalDuration = recordRuleEvalDuration m
+        , mpRuleEffectfulFailure = recordRuleEffectfulFailure m
+        , mpUpstreamFetch = recordUpstreamFetch m
+        , mpUpstreamFetchError = recordUpstreamFetchError m
+        , mpCacheRequest = recordCacheRequest m
+        , mpCacheEntries = recordCacheEntries m
+        , mpMirrorEnqueued = recordMirrorEnqueued m
+        , mpMirrorEnqueueFailure = recordMirrorEnqueueFailure m
+        }
 
 -- ── serve decision ───────────────────────────────────────────────────────────
 

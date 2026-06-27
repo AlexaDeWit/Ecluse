@@ -95,10 +95,10 @@ import Ecluse.Core.Package.Integrity (MinIntegrity)
 import Ecluse.Core.Queue (MemoryQueueConfig, defaultMemoryQueueConfig)
 import Ecluse.Core.Queue.Sqs (SqsConfig (sqsEndpoint), SqsEndpoint (..), defaultSqsConfig)
 import Ecluse.Core.Security (Limits (Limits, maxBodyBytes, maxNestingDepth, maxVersionCount), TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), hostAddress, lowerCaseHosts, splitHostPort)
+import Ecluse.Core.Server.Cache (CacheConfig (..))
+import Ecluse.Core.Server.Context (MountBinding, PackumentDeps (..))
 import Ecluse.Core.Server.Response (HelpMessage, mkHelpMessage)
 import Ecluse.Core.Text (nonBlank)
-import Ecluse.Server.Cache (CacheConfig (..))
-import Ecluse.Server.Context (MountBinding, PackumentDeps (..))
 
 -- ── global credential providers ───────────────────────────────────────────────
 
@@ -740,7 +740,7 @@ parseEndpointUrl raw = do
 
 {- | The metadata-cache tunables drawn from the validated environment layer — its
 TTL and entry bound — so a deployment's cache settings flow from config rather than
-the built-in defaults (see "Ecluse.Server.Cache").
+the built-in defaults (see "Ecluse.Core.Server.Cache").
 -}
 cacheConfigFor :: EnvConfig -> CacheConfig
 cacheConfigFor env =
