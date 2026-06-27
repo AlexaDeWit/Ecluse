@@ -74,6 +74,7 @@ library ecluse-core
     Ecluse.Core.Credential.Refresh
     Ecluse.Core.Credential.Refresh.Internal
     Ecluse.Core.Ecosystem
+    Ecluse.Core.InFlight
     Ecluse.Core.Package
     Ecluse.Core.Package.Filter
     Ecluse.Core.Package.Integrity
@@ -247,6 +248,7 @@ test-suite ecluse-core-unit
     Ecluse.CredentialSpec
     Ecluse.Credential.CodeArtifactSpec
     Ecluse.Credential.Refresh.InternalSpec
+    Ecluse.InFlightSpec
     Ecluse.Package.FilterSpec
     Ecluse.Package.IntegritySpec
     Ecluse.Package.MergeSpec

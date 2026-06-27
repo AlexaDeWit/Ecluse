@@ -94,8 +94,9 @@ import Data.Cache qualified as Cache
 import Data.Map.Strict qualified as Map
 import Data.Time (NominalDiffTime)
 import System.Clock (Clock (Monotonic), TimeSpec (TimeSpec), getTime)
-import UnliftIO.Exception (mask, throwIO, try, withException)
+import UnliftIO.Exception (mask, throwIO)
 
+import Ecluse.Core.InFlight (guardInFlight)
 import Ecluse.Core.Package (
     PackageInfo,
     PackageName,
@@ -238,13 +239,13 @@ re-raised to every waiter.
 
 A claimed in-flight slot is __always eventually filled and de-registered__, even if
 the leader is hit by an async exception (a request timeout, a killed handler thread)
-between claiming the slot and completing: the claim and the leader's cleanup-armed
-run live under __one mask__, so no interruptible point sits in the gap, and any
-exception before normal completion fills the marker with that error — unblocking
-every waiting follower with it rather than leaving them parked forever — and frees
-the slot so a later call re-leads. This closes the single-flight orphan window
-(without it, a cancelled leader would wedge that @(source, package)@ key until
-restart). A follower's own wait on the marker stays interruptible.
+between claiming the slot and completing: the claim commits under a 'mask' and the
+leader's run is handed straight to 'Ecluse.Core.InFlight.guardInFlight', which frees the
+slot on every exit and, on any exception before the marker is filled, hands that error
+to every waiting follower rather than leaving them parked forever. This closes the
+single-flight orphan window (without it, a cancelled leader would wedge that
+@(source, package)@ key until restart). A follower's own wait on the marker stays
+interruptible.
 
 The 'Source' partitions the cache: distinct upstreams of the same package resolve
 under distinct keys and never cross-contaminate. The fetch action supplies the origin's
@@ -272,16 +273,15 @@ passes @pure ()@ via 'resolveMetadata'.
 -}
 resolveMetadataWith :: IO () -> MetricsPort -> MetadataCache -> Source -> PackageName -> IO CacheEntry -> IO CacheEntry
 resolveMetadataWith afterClaim metrics cache source name fetch = mask $ \restore -> do
-    let key = cacheKey source name
     nowT <- getTime Monotonic
     -- One atomic decision point: a fresh hit short-circuits; otherwise become the
     -- leader (install an empty marker) or a follower (take the existing one). The
     -- decision and — for a leader — the run that owns the freshly claimed marker
-    -- are under one 'mask', so no interruptible point sits between claiming the
-    -- slot and arming the cleanup that always fills and de-registers it. A 'Hit' or
-    -- 'Follow' claims nothing, so its wait runs under @restore@ and stays
+    -- are under one 'mask', so no interruptible point sits between claiming the slot
+    -- and handing the run to 'guardInFlight', which always fills and de-registers it.
+    -- A 'Hit' or 'Follow' claims nothing, so its wait runs under @restore@ and stays
     -- interruptible.
-    decision <- atomically (decide key nowT)
+    decision <- atomically (decide nowT)
     case decision of
         Hit entry -> do
             mpCacheRequest metrics Metric.Hit
@@ -293,10 +293,34 @@ resolveMetadataWith afterClaim metrics cache source name fetch = mask $ \restore
             restore (either throwIO pure =<< atomically (readTMVar marker))
         Lead marker -> do
             mpCacheRequest metrics Metric.Miss
-            runLeader restore key marker
+            -- Lead the fetch. Only the fetch runs under @restore@ (cancellable); the
+            -- publish + store insert run under the enclosing 'mask', so the tail is
+            -- uninterruptible — a successful fetch is always delivered to followers and
+            -- inserted even if a cancel lands after it returns. 'guardInFlight' is
+            -- therefore passed 'id' (not @restore@); it still frees the slot on every
+            -- exit and, on a failure before the marker is filled, hands the error to
+            -- followers via 'orphan'. The result is inserted __before__ the slot is
+            -- de-registered, so a late caller in 'decide' becomes a follower on the
+            -- marker rather than finding neither store hit nor in-flight slot and
+            -- re-leading a redundant fetch — so "collapse to one upstream call" holds
+            -- even for a caller arriving the instant the fetch returns. A failed fetch
+            -- never reaches the fill or insert, so nothing is cached and the slot is
+            -- freed for a later retry.
+            entry <- guardInFlight id (orphan marker) (atomically deregister) $ do
+                fetched <- restore (afterClaim >> fetch)
+                atomically (putTMVar marker (Right fetched))
+                insertBounded cache key fetched
+                pure fetched
+            -- The leader inserted, so the occupancy gauge is refreshed off the
+            -- post-insert size (a follower never inserts, so it never re-records).
+            mpCacheEntries metrics =<< cacheSize cache
+            pure entry
   where
-    decide :: CacheKey -> TimeSpec -> STM Decision
-    decide key nowT = do
+    key :: CacheKey
+    key = cacheKey source name
+
+    decide :: TimeSpec -> STM Decision
+    decide nowT = do
         hit <- Cache.lookupSTM False key (mcStore cache) nowT
         case hit of
             Just entry -> pure (Hit entry)
@@ -309,57 +333,18 @@ resolveMetadataWith afterClaim metrics cache source name fetch = mask $ \restore
                         writeTVar (mcInFlight cache) (Map.insert key marker inFlight)
                         pure (Lead marker)
 
-    -- The leader fetches once, fills the marker, and de-registers itself. The claim
-    -- is made under the caller's 'mask' and this run is reached with no interruptible
-    -- point in between, so the 'withException' guard is armed before anything can
-    -- interrupt. A synchronous fetch error is caught by 'try' and folded to a 'Left'
-    -- that the normal failure path fills and de-registers; an __asynchronous__
-    -- exception (a request timeout, a killed handler thread, 'ThreadKilled') landing
-    -- anywhere in the claim → completion window is re-raised by 'try', so the guard
-    -- fills the still-empty marker with that exception — unblocking every waiting
-    -- follower with it, never a forever-park — and frees the slot so a later call
-    -- re-leads, before the exception propagates to this (cancelled) thread. The fetch
-    -- runs under @restore@ so it stays cancellable; the marker fill, store insert, and
-    -- de-register run masked and never block, so the tail is uninterruptible.
-    --
-    -- On success the result is __inserted into the store before the in-flight slot
-    -- is de-registered__: until 'insertBounded' completes the slot still exists, so
-    -- a late caller in 'decide' becomes a follower on the marker rather than finding
-    -- neither store hit nor in-flight slot and re-leading a redundant fetch. Insert
-    -- then deregister thus makes "collapse to one upstream call" hold even for a
-    -- caller arriving in the instant after the fetch returns. On failure nothing is
-    -- cached and the slot is freed so a later retry re-fetches.
-    runLeader restore key marker = do
-        result <- try (restore (afterClaim >> fetch)) `withException` orphan key marker
-        atomically (putTMVar marker result)
-        case result of
-            Right entry -> do
-                insertBounded cache key entry
-                atomically (deregister key)
-                -- The leader inserted, so the occupancy gauge is refreshed off the
-                -- post-insert size (a follower never inserts, so it never re-records).
-                mpCacheEntries metrics =<< cacheSize cache
-                pure entry
-            Left err -> do
-                atomically (deregister key)
-                throwIO err
-
-    -- The exception guard for the claim → completion window. 'withException' runs it
-    -- with the offending exception, then re-raises that exception to the leader's own
-    -- thread. Fill the still-empty marker with it (so blocked followers unblock with
-    -- the error rather than parking forever), then free the slot so a later call
-    -- re-leads. Fills only when empty: a synchronous fetch error is folded to a 'Left'
-    -- by 'try' rather than re-raised, so the guard runs only for an exception 'try'
-    -- did not record — and the empty check keeps it correct even so.
-    orphan :: CacheKey -> TMVar (Either SomeException CacheEntry) -> SomeException -> IO ()
-    orphan key marker err =
+    -- The orphan hand-off: a failure (synchronous or asynchronous) before the marker
+    -- was filled. Fill it with the error so blocked followers unblock with it rather
+    -- than parking forever; 'guardInFlight' frees the slot separately. Fills only when
+    -- empty, so a failure after a successful publish never clobbers the result.
+    orphan :: TMVar (Either SomeException CacheEntry) -> SomeException -> IO ()
+    orphan marker err =
         atomically $ do
             unfilled <- isEmptyTMVar marker
             when unfilled (putTMVar marker (Left err))
-            deregister key
 
-    deregister :: CacheKey -> STM ()
-    deregister key = do
+    deregister :: STM ()
+    deregister = do
         inFlight <- readTVar (mcInFlight cache)
         writeTVar (mcInFlight cache) (Map.delete key inFlight)
 

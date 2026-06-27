@@ -37,7 +37,7 @@ module Ecluse.Core.Credential.Refresh.Internal (
 import Control.Concurrent.STM (retry)
 import Data.Time (NominalDiffTime, UTCTime, addUTCTime, diffUTCTime)
 import UnliftIO (asyncWithUnmask, throwIO, try)
-import UnliftIO.Exception (finally, mask)
+import UnliftIO.Exception (mask)
 
 import Ecluse.Core.Breaker (
     Breaker,
@@ -50,6 +50,7 @@ import Ecluse.Core.Breaker (
     reportBreakerChange,
  )
 import Ecluse.Core.Credential (AuthToken (..), CredentialProvider (..))
+import Ecluse.Core.InFlight (guardInFlight)
 
 {- | A failure surfaced from the credential-refresh layer.
 
@@ -226,16 +227,16 @@ refreshingProviderWith afterClaim cfg = do
 token has expired — minting synchronously. The decision is made in one STM
 transaction so single-flight holds across a concurrent cohort.
 
-The claim of the single-flight flag (inside 'decide') and the installation of the
-scope that releases it (the background 'Async' for a proactive refresh; this
-function's own 'finally' for a synchronous mint) are kept in __one masked
-scope__: 'mask' holds async exceptions off the pure handoff between the STM
-commit and that release scope, so a cancellation \/ timeout cannot land in the
-gap and orphan the flag (which would wedge every later expired caller on the
-'decide' 'retry'). The mint work itself runs under @restore@\/unmasked, so it
-stays interruptible — the flag is simply guaranteed to have an owner first. The
-@afterClaim@ hook marks exactly this window for a test (see
-'refreshingProviderWith'); it is @pure ()@ in production.
+The claim of the single-flight flag (inside 'decide') and the run that releases it
+are kept in __one masked scope__: 'mask' holds async exceptions off the pure handoff
+between the STM commit and 'guardInFlight' (which owns the release), so a cancellation
+\/ timeout cannot land in the gap and orphan the flag (which would wedge every later
+expired caller on the 'decide' 'retry'). The mint work runs under @restore@ (and a
+proactive refresh under the forked child's unmask), so it stays interruptible — the
+flag is simply guaranteed to have an owner first. The refresher's waiters re-decide
+against the freed flag, not on a result promise, so 'guardInFlight's orphan hand-off
+is a no-op here — the release is the whole signal. The @afterClaim@ hook marks exactly
+this window for a test (see 'refreshingProviderWith'); it is @pure ()@ in production.
 -}
 serve :: IO () -> RefreshConfig -> TVar CacheState -> IO AuthToken
 serve afterClaim cfg stateVar = mask $ \restore -> do
@@ -245,20 +246,26 @@ serve afterClaim cfg stateVar = mask $ \restore -> do
         ServeCached token -> pure token
         ServeAndRefresh token -> do
             -- Fire-and-forget: the refresh runs in the background and the caller
-            -- gets the still-valid cached token immediately. The refresh catches
-            -- its own failures, so the discarded 'Async' can never surface one.
-            -- The flag was claimed under 'mask'; forking is not interruptible, so
-            -- the releasing child ('backgroundRefresh' owns the 'finally') is
-            -- always installed before this thread can be interrupted again. The
-            -- child runs unmasked, so the background mint stays cancellable.
-            _ <- asyncWithUnmask (\unmask -> unmask (afterClaim >> backgroundRefresh cfg stateVar))
+            -- gets the still-valid cached token immediately. The refresh catches its
+            -- own failures, so the discarded 'Async' can never surface one. The flag
+            -- was claimed under 'mask'; forking is not interruptible, so the releasing
+            -- child is installed before this thread can be interrupted again. The child
+            -- runs unmasked, so the background mint stays cancellable, and 'guardInFlight'
+            -- releases the flag on the child's every exit.
+            _ <-
+                asyncWithUnmask $ \unmask ->
+                    guardInFlight unmask noWaiter (releaseSingleFlight stateVar) (afterClaim >> backgroundRefresh cfg stateVar)
             pure token
         MintNow ->
-            -- The flag was claimed under 'mask'; install its release 'finally'
-            -- before anything interruptible runs, then do the mint work under
-            -- @restore@ so the synchronous mint stays cancellable.
-            restore (afterClaim >> mintSynchronously cfg stateVar)
-                `finally` releaseSingleFlight stateVar
+            -- The flag was claimed under 'mask'; 'guardInFlight' releases it on every
+            -- exit and runs the synchronous mint under @restore@ so it stays cancellable.
+            guardInFlight restore noWaiter (releaseSingleFlight stateVar) (afterClaim >> mintSynchronously cfg stateVar)
+  where
+    -- The refresher's waiters re-decide against the freed flag (the 'decide' STM
+    -- retry), not on a result promise, so there is nothing for the orphan hand-off to
+    -- unblock — releasing the flag is the whole signal.
+    noWaiter :: SomeException -> IO ()
+    noWaiter = const pass
 
 {- | The single-flight decision over the current cache state, made atomically so it
 holds across a concurrent cohort: serve the still-valid token, claim the flag and
@@ -300,27 +307,27 @@ data ServeAction
 the result into the cache; otherwise (breaker open) skip it. Never throws — a
 failure leaves the still-valid token in place and advances the breaker, and a
 suppressed refresh just keeps serving the cached token, so the request hot path is
-unaffected either way.
+unaffected either way. The single-flight flag is released by the 'guardInFlight' that
+wraps this run (see 'serve'), not here, so it clears on every exit including an async
+cancel.
 -}
 backgroundRefresh :: RefreshConfig -> TVar CacheState -> IO ()
-backgroundRefresh cfg stateVar = refresh `finally` releaseSingleFlight stateVar
-  where
-    refresh = do
-        now <- rcClock cfg
-        permitted <- gatedMint cfg stateVar now
-        when permitted $ do
-            result <- try (rcMint cfg)
-            now' <- rcClock cfg
-            case result of
-                Right token -> recordMintSuccess cfg stateVar now' token
-                Left (_ :: SomeException) -> recordMintFailure cfg stateVar now'
+backgroundRefresh cfg stateVar = do
+    now <- rcClock cfg
+    permitted <- gatedMint cfg stateVar now
+    when permitted $ do
+        result <- try (rcMint cfg)
+        now' <- rcClock cfg
+        case result of
+            Right token -> recordMintSuccess cfg stateVar now' token
+            Left (_ :: SomeException) -> recordMintFailure cfg stateVar now'
 
 {- The synchronous (expired-token) path: the caller blocks on a mint because
 there is no valid token to serve. The breaker gates it — when open and still in
 cooldown the call fast-fails with 'BreakerOpen' without minting; otherwise it
 mints, and an expired token plus a failing mint is the one case that surfaces to
-the caller. The single-flight flag is released by 'serve's 'finally' around this
-call (claimed and released in one masked scope), not here.
+the caller. The single-flight flag is released by the 'guardInFlight' that 'serve'
+wraps around this call (claimed and released in one masked scope), not here.
 -}
 mintSynchronously :: RefreshConfig -> TVar CacheState -> IO AuthToken
 mintSynchronously cfg stateVar = do
@@ -339,10 +346,10 @@ mintSynchronously cfg stateVar = do
                     recordMintFailure cfg stateVar now'
                     throwIO e
 
-{- | Release the single-flight flag. It is run in a 'finally' that is installed in
-the __same masked scope__ that claimed the flag — 'serve's own 'finally' for the
-synchronous mint, the background 'Async' for a proactive refresh — so the flag is
-cleared on __every__ exit: success, a synchronous mint failure, or an
+{- | Release the single-flight flag. It is run as the release of the 'guardInFlight'
+that 'serve' installs in the __same masked scope__ that claimed the flag — directly
+for the synchronous mint, inside the forked child for a proactive refresh — so the
+flag is cleared on __every__ exit: success, a synchronous mint failure, or an
 __asynchronous__ exception (cancellation \/ timeout) at any point from the claim
 onward, including the handoff between the STM commit and the mint runner. Without
 this an orphaned flag would wedge every later expired caller on the STM 'retry'.
@@ -422,8 +429,9 @@ ttlSecondsOf now token = case authExpiresAt token of
     Just expiry -> Just (max 0 (floor (diffUTCTime expiry now)))
 
 {- | Fold a successful mint into the cache: install the token and reset the
-breaker. The single-flight flag is released by 'releaseSingleFlight' in the
-'finally' around the mint (not here), so it clears even on an async exception.
+breaker. The single-flight flag is released by 'releaseSingleFlight' as the
+'guardInFlight' release around the mint (not here), so it clears even on an async
+exception.
 -}
 onMintSuccess :: AuthToken -> Maybe UTCTime -> CacheState -> CacheState
 onMintSuccess token due st =
