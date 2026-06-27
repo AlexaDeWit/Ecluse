@@ -103,6 +103,14 @@ live with their functions, one `Ecluse.<Area>` namespace per area, and when a `.
 is justified) live in [`STYLE.md`](../STYLE.md) → "Module organization". This section records
 the *current* concrete layout and the one project-specific pattern below.
 
+- **Two libraries behind one `ecluse.cabal`.** The pure capability core is the `ecluse-core`
+  library (`core/src`, modules under `Ecluse.Core.*`); the application shell that composes it
+  into a running proxy — config, the `Env` composition root, logging, the WAI `Application`, and
+  the telemetry SDK/OTLP wiring — is the `ecluse` library (`src`, modules under `Ecluse.*`), with
+  `app/Main.hs` as the executable. The boundary is build-enforced: the core's unit suite cannot
+  depend on the app library. See
+  [architecture → Codebase decomposition](architecture.md#codebase-decomposition).
+
 - **Handles are records of functions, selected at one composition root.** A swappable backend
   (registry protocol, mirror queue, credential provider) is modelled as a record whose fields
   are functions (the *Handle pattern*), built by a per-backend smart constructor (e.g.
@@ -117,7 +125,7 @@ is its header) and the root [`Ecluse`](../src/Ecluse.hs) module's "How the code 
 synopsis for the narrative grouping. Both live with the code and update with it, so they can't
 drift; this guide deliberately doesn't duplicate the list here.
 
-Tests mirror this hierarchy within each suite's source dir (e.g. the unit specs for
-`Ecluse.Rules` and `Ecluse.Version` are `test/unit/Ecluse/RulesSpec.hs` and
-`test/unit/Ecluse/VersionSpec.hs`; version ordering additionally has a differential suite,
+Tests mirror this hierarchy within each suite's source dir (e.g. the core unit specs for
+`Ecluse.Core.Rules` and `Ecluse.Core.Version` are `core/test/unit/Ecluse/RulesSpec.hs` and
+`core/test/unit/Ecluse/VersionSpec.hs`; version ordering additionally has a differential suite,
 `Ecluse.VersionOrderingSpec`, against reference oracles).

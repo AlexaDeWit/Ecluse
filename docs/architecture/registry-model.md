@@ -356,7 +356,7 @@ substituted.
 Nothing above the registry layer imports registry-specific types. The proxy core
 operates only on `PackageInfo` (the packument-level view) and `PackageDetails`
 (the per-version snapshot the rules engine evaluates — see
-[`src/Ecluse/Package.hs`](../../src/Ecluse/Package.hs)). A registry
+[`core/src/Ecluse/Core/Package.hs`](../../core/src/Ecluse/Core/Package.hs)). A registry
 adapter is responsible for projecting its wire format into these types.
 
 **Supported implementations at launch:** npm registry protocol only. The

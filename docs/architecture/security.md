@@ -36,7 +36,7 @@ noted below.
    rejects traversal, encoded-slash, and control-character path components — see
    [Web Layer](web-layer.md#raw-wai-not-a-web-framework). That structural gate is a
    denylist, so it is paired with **encode-on-build**: every accepted name component
-   is percent-encoded (`Ecluse.Server.Route.encodeComponent`) when the upstream URL
+   is percent-encoded (`Ecluse.Core.Server.Route.encodeComponent`) when the upstream URL
    is composed, around the structural `@` sigil and `%2F` scope separator the
    builder writes itself, so a legitimate scoped name still yields exactly one
    `%2F`. A reserved byte the denylist admits (a `%`, `?`, `#`, `;`, or space; the
@@ -44,8 +44,8 @@ noted below.
    therefore re-encoded (`%2e%2e%2f` → `%252e%252e%252f`) rather than reaching the
    upstream raw, where a decode-and-normalise CDN could resolve it to traversal or a
    `?`/`#` could inject an upstream query/fragment. Both points that compose an
-   upstream URL from a name, the data-plane request builders (`Ecluse.Registry.Npm`)
-   and the defence-in-depth re-check (`Ecluse.Security.upstreamUrlFor`), apply the
+   upstream URL from a name, the data-plane request builders (`Ecluse.Core.Registry.Npm`)
+   and the defence-in-depth re-check (`Ecluse.Core.Security.upstreamUrlFor`), apply the
    same encoder.
 2. **Outbound fetches are restricted to the configured upstream hosts** (an
    allowlist). Artifact bytes are fetched only from the upstream-declared
@@ -74,9 +74,9 @@ noted below.
 4. **Parsed upstream responses are bounded** — maximum body size, version count,
    and JSON nesting depth — and **fail closed** past any bound: an oversized or
    pathological document is refused, never partially served. The bounds are
-   **wired into the live metadata data plane**: `Ecluse.Registry.Npm.fetchMetadataForm`
-   reads the body through `Ecluse.Security.boundedRead` at the `http-client` boundary
-   (so a body past the cap aborts before it is buffered whole), `Ecluse.Server.Pipeline.fetchEntry`
+   **wired into the live metadata data plane**: `Ecluse.Core.Registry.Npm.fetchMetadataForm`
+   reads the body through `Ecluse.Core.Security.boundedRead` at the `http-client` boundary
+   (so a body past the cap aborts before it is buffered whole), `Ecluse.Core.Server.Pipeline.fetchEntry`
    applies `checkNestingDepth` on the decoded document and `checkVersionCount`
    after projection, and **every breach degrades the contribution to nothing** — the
    same fail-closed path a parse failure takes, and **logged at `WARNING`** (which
@@ -189,7 +189,7 @@ behaviours, so only membership is delegated.
 This literal-form coverage earns its keep because the fetch layer also re-checks
 **resolved** IPs: the shared HTTP manager's connection hook resolves every outbound
 host and re-applies the same internal-range block to each resolved address before
-the socket is used (`Ecluse.Security.Egress`), so a DNS name that resolves to an
+the socket is used (`Ecluse.Core.Security.Egress`), so a DNS name that resolves to an
 internal address — which the pure layer cannot see — is refused at connect time.
 This narrows the resolve-then-connect (DNS-rebinding) window the pure layer leaves
 open.
@@ -198,7 +198,7 @@ open.
 
 The outbound egress controls — the host allowlist (`isAllowedUpstreamHost`), the
 internal-range block (`isBlockedTarget`), and the connection-time resolved-IP recheck
-(`Ecluse.Security.Egress`) — exist to constrain **one** thing: an **untrusted package
+(`Ecluse.Core.Security.Egress`) — exist to constrain **one** thing: an **untrusted package
 download** whose target an attacker can influence (the public packument and every
 public `dist.tarball`). They are therefore scoped to exactly the **untrusted** egress
 and are deliberately **absent** from every **trusted, operator-declared destination**.
@@ -219,7 +219,7 @@ Every outbound connection Écluse makes, and the controls it carries:
 | Private `dist.tarball` **artifact** stream | Trusted origin | `envPrivateManager` (unguarded) | **No** — but the allowlist + same-host policy still apply |
 | Mirror-target **publish** (npm `PUT`) | Trusted declared destination | `envPrivateManager` (unguarded) | **No** |
 | OTLP **telemetry** export | Trusted declared destination | OpenTelemetry SDK's own client | **No** — the endpoint is declared, not classified (see `Ecluse.Telemetry.Resolve`) |
-| **SQS** mirror-queue publish / poll | Trusted declared destination | `amazonka`'s own client | **No** (see `Ecluse.Queue.Sqs`) |
+| **SQS** mirror-queue publish / poll | Trusted declared destination | `amazonka`'s own client | **No** (see `Ecluse.Core.Queue.Sqs`) |
 | **IMDS** instance-role credential minting | Required internal | `amazonka`'s own client (separate from the data plane) | **No** — must reach `169.254.169.254`; never routed through the data-plane manager |
 
 The host allowlist gates only the targets built from **upstream-supplied** data (the
@@ -295,8 +295,8 @@ guards follow that principle, and it is made concrete for the tarball path:
   gates *where* that location may be: by default it is fetched only from the **same
   allowlisted upstream that served the packument**, refusing a `dist.tarball` that
   points at a *different* host even if it is otherwise on the allowlist — the safest
-  reading of invariant 2 (`Ecluse.Security.tarballHostAllowed` with
-  `SameHostAsPackument`, applied on the serve path in `Ecluse.Server.Pipeline`). A
+  reading of invariant 2 (`Ecluse.Core.Security.tarballHostAllowed` with
+  `SameHostAsPackument`, applied on the serve path in `Ecluse.Core.Server.Pipeline`). A
   cross-host `dist.tarball` is refused with a `403` before any artifact fetch. An
   operator whose registry legitimately serves tarballs from a separate CDN (the
   PyPI-files-host shape above) **opts in** to honouring the upstream-declared host
