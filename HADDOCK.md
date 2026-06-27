@@ -188,7 +188,7 @@ data Rule
     | -- | Allow a version only if it was published at least this long ago.
       -- Guards against race-to-publish attacks: an attacker publishes a
       -- malicious version hoping it is consumed before takedown.
-      AllowIfPublishedBefore NominalDiffTime
+      AllowIfOlderThan NominalDiffTime
     deriving stock (Eq, Show)
 ```
 
@@ -293,7 +293,7 @@ renderDuration :: NominalDiffTime -> Text
 ## 10. Explain the *why* — especially the security rationale
 
 Écluse is a supply-chain resilience tool. A comment that explains the **threat a
-rule defends against** (as `AllowIfPublishedBefore` does in §6) is worth far more
+rule defends against** (as `AllowIfOlderThan` does in §6) is worth far more
 than one describing the mechanics. This is the single most valuable thing a
 Haddock comment here can carry, because it is exactly what a type signature, a
 test, or a later reader cannot reconstruct on their own.

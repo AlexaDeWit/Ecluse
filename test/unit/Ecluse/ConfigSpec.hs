@@ -20,7 +20,7 @@ import Ecluse.Core.Package.Integrity (
 import Ecluse.Core.Rules.Types (
     PrecededRule (..),
     Rule (..),
-    defaultAllowIfPublishedBeforePrecedence,
+    defaultAllowIfOlderThanPrecedence,
     defaultDenyInstallTimeExecutionPrecedence,
  )
 import Ecluse.Log (LogFormat (..))
@@ -80,7 +80,7 @@ instancesSpec = describe "derived instances and accessors" $ do
 
     it "shows a policy error and the default policy" $ do
         showText (UnknownRuleType "n" "T") `shouldSatisfy` ("UnknownRuleType" `isInfix`)
-        showText defaultPolicy `shouldSatisfy` ("AllowIfPublishedBefore" `isInfix`)
+        showText defaultPolicy `shouldSatisfy` ("AllowIfOlderThan" `isInfix`)
 
     it "keys a decoded mount by its ecosystem (the mount map's key)" $ do
         doc <- expectDoc singleMountDoc
@@ -586,7 +586,7 @@ mixedBase :: RulePolicy
 mixedBase =
     RulePolicy
         ( Map.fromList
-            [ ("min-age", PrecededRule 100 (AllowIfPublishedBefore (7 * 86400)))
+            [ ("min-age", PrecededRule 100 (AllowIfOlderThan (7 * 86400)))
             , ("trusted", PrecededRule 200 (AllowScope (mkScope "myorg")))
             , ("deny-scripts", PrecededRule 300 DenyInstallTimeExecution)
             ]
@@ -596,29 +596,29 @@ rulePolicySpec :: Spec
 rulePolicySpec = describe "resolvePolicy" $ do
     it "applies the default policy unchanged with an empty patch" $
         sortOn rulePrecedence (Map.elems (policyRules defaultPolicy))
-            `shouldBe` [PrecededRule defaultAllowIfPublishedBeforePrecedence (AllowIfPublishedBefore (7 * 86400))]
+            `shouldBe` [PrecededRule defaultAllowIfOlderThanPrecedence (AllowIfOlderThan (7 * 86400))]
 
     it "overrides a default rule's value, keeping its precedence (a partial patch)" $
         -- `min-age` names the default, so {ageSeconds} widens its window to 14
         -- days while leaving its precedence untouched.
         resolveJson "{\"rules\":{\"min-age\":{\"ageSeconds\":1209600}}}"
-            `shouldBe` Right [PrecededRule defaultAllowIfPublishedBeforePrecedence (AllowIfPublishedBefore 1209600)]
+            `shouldBe` Right [PrecededRule defaultAllowIfOlderThanPrecedence (AllowIfOlderThan 1209600)]
 
     it "overrides a default rule's precedence" $
         resolveJson "{\"rules\":{\"min-age\":{\"precedence\":150}}}"
-            `shouldBe` Right [PrecededRule 150 (AllowIfPublishedBefore (7 * 86400))]
+            `shouldBe` Right [PrecededRule 150 (AllowIfOlderThan (7 * 86400))]
 
     it "adds a new rule that carries a full type at its type's default precedence" $
         resolveJson "{\"rules\":{\"deny-scripts\":{\"type\":\"DenyInstallTimeExecution\"}}}"
             `shouldBe` Right
-                [ PrecededRule defaultAllowIfPublishedBeforePrecedence (AllowIfPublishedBefore (7 * 86400))
+                [ PrecededRule defaultAllowIfOlderThanPrecedence (AllowIfOlderThan (7 * 86400))
                 , PrecededRule defaultDenyInstallTimeExecutionPrecedence DenyInstallTimeExecution
                 ]
 
     it "adds a new rule with an explicit precedence" $
         resolveJson "{\"rules\":{\"deny-scripts\":{\"type\":\"DenyInstallTimeExecution\",\"precedence\":250}}}"
             `shouldBe` Right
-                [ PrecededRule defaultAllowIfPublishedBeforePrecedence (AllowIfPublishedBefore (7 * 86400))
+                [ PrecededRule defaultAllowIfOlderThanPrecedence (AllowIfOlderThan (7 * 86400))
                 , PrecededRule 250 DenyInstallTimeExecution
                 ]
 
@@ -630,22 +630,22 @@ rulePolicySpec = describe "resolvePolicy" $ do
         resolveJson "{\"rules\":{\"trusted\":{\"type\":\"AllowScope\",\"scope\":\"myorg\"}}}"
             `shouldSatisfy` containsAllowScope
 
-    it "adds a new AllowIfPublishedBefore rule from a valid ageSeconds" $
-        -- The success arm of *building* (not patching) an AllowIfPublishedBefore:
+    it "adds a new AllowIfOlderThan rule from a valid ageSeconds" $
+        -- The success arm of *building* (not patching) an AllowIfOlderThan:
         -- a fresh min-age rule under a new name is constructed with the given
         -- window at the type's default precedence, beside the existing default.
         -- (Adding with a negative or absent ageSeconds is rejected below; this
         -- pins the valid-construction path.)
-        resolveJson "{\"rules\":{\"young\":{\"type\":\"AllowIfPublishedBefore\",\"ageSeconds\":100}}}"
+        resolveJson "{\"rules\":{\"young\":{\"type\":\"AllowIfOlderThan\",\"ageSeconds\":100}}}"
             `shouldSatisfy` either
                 (const False)
-                (elem (PrecededRule defaultAllowIfPublishedBeforePrecedence (AllowIfPublishedBefore 100)))
+                (elem (PrecededRule defaultAllowIfOlderThanPrecedence (AllowIfOlderThan 100)))
 
     it "accepts a restated type on a patch that matches the default's kind" $
         -- Naming the default's own type alongside an override is allowed; it must
         -- match the rule it patches.
-        resolveJson "{\"rules\":{\"min-age\":{\"type\":\"AllowIfPublishedBefore\",\"ageSeconds\":100}}}"
-            `shouldBe` Right [PrecededRule defaultAllowIfPublishedBeforePrecedence (AllowIfPublishedBefore 100)]
+        resolveJson "{\"rules\":{\"min-age\":{\"type\":\"AllowIfOlderThan\",\"ageSeconds\":100}}}"
+            `shouldBe` Right [PrecededRule defaultAllowIfOlderThanPrecedence (AllowIfOlderThan 100)]
 
     it "rejects a restated type on a patch that changes the default's kind" $
         -- Re-typing min-age to a different known rule is a loud error, not a
@@ -658,16 +658,16 @@ rulePolicySpec = describe "resolvePolicy" $ do
             `shouldBe` Left [UnknownRuleType "min-age" "Bogus"]
 
     it "rejects a negative ageSeconds when adding a rule" $
-        resolveJson "{\"rules\":{\"young\":{\"type\":\"AllowIfPublishedBefore\",\"ageSeconds\":-1}}}"
+        resolveJson "{\"rules\":{\"young\":{\"type\":\"AllowIfOlderThan\",\"ageSeconds\":-1}}}"
             `shouldBe` Left [MalformedRule "young" "\"ageSeconds\" must be non-negative"]
 
     it "rejects a negative ageSeconds when patching the default" $
         resolveJson "{\"rules\":{\"min-age\":{\"ageSeconds\":-1}}}"
             `shouldBe` Left [MalformedRule "min-age" "\"ageSeconds\" must be non-negative"]
 
-    it "rejects adding an AllowIfPublishedBefore without ageSeconds" $
-        resolveJson "{\"rules\":{\"young\":{\"type\":\"AllowIfPublishedBefore\"}}}"
-            `shouldBe` Left [MalformedRule "young" "\"AllowIfPublishedBefore\" requires \"ageSeconds\""]
+    it "rejects adding an AllowIfOlderThan without ageSeconds" $
+        resolveJson "{\"rules\":{\"young\":{\"type\":\"AllowIfOlderThan\"}}}"
+            `shouldBe` Left [MalformedRule "young" "\"AllowIfOlderThan\" requires \"ageSeconds\""]
 
     describe "merging over a multi-rule shared policy" $ do
         -- A per-mount refinement merges over a shared policy that may hold any
@@ -699,7 +699,7 @@ rulePolicySpec = describe "resolvePolicy" $ do
         it "suppresses one rule from a multi-rule base, keeping the rest" $
             resolveJsonOver mixedBase "{\"rules\":{\"trusted\":{\"enabled\":false}}}"
                 `shouldBe` Right
-                    [ PrecededRule 100 (AllowIfPublishedBefore (7 * 86400))
+                    [ PrecededRule 100 (AllowIfOlderThan (7 * 86400))
                     , PrecededRule 300 DenyInstallTimeExecution
                     ]
 
@@ -765,7 +765,7 @@ desugarSpec = describe "loadConfig" $ do
                     Just mount -> do
                         mountEcosystem mount `shouldBe` Npm
                         mountPolicy mount
-                            `shouldBe` [PrecededRule defaultAllowIfPublishedBeforePrecedence (AllowIfPublishedBefore (7 * 86400))]
+                            `shouldBe` [PrecededRule defaultAllowIfOlderThanPrecedence (AllowIfOlderThan (7 * 86400))]
                         let reg = mountRegistries mount
                         unUrl (regPrivateUpstream reg) `shouldBe` "https://private.example.test"
                         mtCredential (regMirrorTarget reg) `shouldBe` StaticCredential

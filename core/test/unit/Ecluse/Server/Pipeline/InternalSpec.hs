@@ -38,7 +38,7 @@ import Ecluse.Core.Rules (
 import Ecluse.Core.Rules.Types (
     Decision (BlockedByDefault, Undecidable),
     FailureAlignment (FailDeny),
-    Rule (AllowIfPublishedBefore),
+    Rule (AllowIfOlderThan),
     RuleResult (NoDecision),
     atDefaultPrecedence,
  )
@@ -166,7 +166,7 @@ spec = do
         it "is the structural tier for an empty rule set" $
             evalTier ([] :: [PreparedRule]) `shouldBe` Metric.Structural
         it "is the structural tier for a purely-pure rule set" $ do
-            rules <- prepare [atDefaultPrecedence (AllowIfPublishedBefore 0)]
+            rules <- prepare [atDefaultPrecedence (AllowIfOlderThan 0)]
             evalTier rules `shouldBe` Metric.Structural
         it "is the effectful tier when any rule carries a resilience policy" $ do
             breaker <- newBreaker

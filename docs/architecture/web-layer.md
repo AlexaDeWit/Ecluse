@@ -194,7 +194,7 @@ single fetch+parse instead of repeating it, and concurrent resolutions of a
 popular package collapse to one upstream call.
 
 What is cached is the **metadata, not the verdict**: rules are re-evaluated on the
-cached metadata each request, so time-sensitive rules (`AllowIfPublishedBefore`)
+cached metadata each request, so time-sensitive rules (`AllowIfOlderThan`)
 and the separately-cached advisory tier stay correct — only each upstream's
 fetch+parse is memoised (per source, since a packument is
 [merged across upstreams](registry-model.md#packument-merge-across-upstreams)); the

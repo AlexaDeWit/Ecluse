@@ -27,7 +27,7 @@ import Ecluse.Core.Rules.Types (
     Decision (Admitted),
     EvalContext (EvalContext),
     PrecededRule,
-    Rule (AllowIfPublishedBefore, DenyInstallTimeExecution),
+    Rule (AllowIfOlderThan, DenyInstallTimeExecution),
     atDefaultPrecedence,
  )
 import Ecluse.Core.Version (compareVersions, isStable, mkVersion, parseVersionKey, unVersion)
@@ -55,7 +55,7 @@ rules engine over the domain model (no @Value@ in sight).
 -}
 policy :: [PrecededRule]
 policy =
-    [ atDefaultPrecedence (AllowIfPublishedBefore (7 * nominalDay))
+    [ atDefaultPrecedence (AllowIfOlderThan (7 * nominalDay))
     , atDefaultPrecedence DenyInstallTimeExecution
     ]
 

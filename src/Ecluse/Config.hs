@@ -867,14 +867,14 @@ newtype RulePolicy = RulePolicy
 {- | The built-in default rule policy, sourced from "Ecluse.Core.Rules.Types" so config
 never re-encodes rule semantics — it only selects and refines.
 
-The shipped default is a single rule, @min-age@: 'AllowIfPublishedBefore' a 7-day
+The shipped default is a single rule, @min-age@: 'AllowIfOlderThan' a 7-day
 quarantine window, at its type's 'defaultPrecedence'. This admits public versions
 that have survived the window, the core defence against race-to-publish
 typosquatting — a floor to extend, not a wall.
 -}
 defaultPolicy :: RulePolicy
 defaultPolicy =
-    RulePolicy (Map.singleton "min-age" (atDefault (AllowIfPublishedBefore sevenDays)))
+    RulePolicy (Map.singleton "min-age" (atDefault (AllowIfOlderThan sevenDays)))
   where
     sevenDays :: NominalDiffTime
     sevenDays = 7 * 86400
@@ -982,11 +982,11 @@ config cannot conjure a rule the engine does not implement.
 -}
 buildRule :: Text -> Text -> RuleEntry -> Either [PolicyError] Rule
 buildRule name ty entry = case ty of
-    "AllowIfPublishedBefore" -> case entryAgeSeconds entry of
+    "AllowIfOlderThan" -> case entryAgeSeconds entry of
         Just secs
-            | secs >= 0 -> Right (AllowIfPublishedBefore (fromInteger secs))
+            | secs >= 0 -> Right (AllowIfOlderThan (fromInteger secs))
             | otherwise -> Left [MalformedRule name "\"ageSeconds\" must be non-negative"]
-        Nothing -> Left [MalformedRule name "\"AllowIfPublishedBefore\" requires \"ageSeconds\""]
+        Nothing -> Left [MalformedRule name "\"AllowIfOlderThan\" requires \"ageSeconds\""]
     "AllowScope" -> case entryScope entry of
         Just scope -> Right (AllowScope (mkScope scope))
         Nothing -> Left [MalformedRule name "\"AllowScope\" requires \"scope\""]
@@ -1001,11 +1001,11 @@ patchRuleValue :: Text -> RuleEntry -> Rule -> Either [PolicyError] Rule
 patchRuleValue name entry rule = do
     () <- checkRestatedType name entry rule
     case rule of
-        AllowIfPublishedBefore d -> case entryAgeSeconds entry of
+        AllowIfOlderThan d -> case entryAgeSeconds entry of
             Just secs
-                | secs >= 0 -> Right (AllowIfPublishedBefore (fromInteger secs))
+                | secs >= 0 -> Right (AllowIfOlderThan (fromInteger secs))
                 | otherwise -> Left [MalformedRule name "\"ageSeconds\" must be non-negative"]
-            Nothing -> Right (AllowIfPublishedBefore d)
+            Nothing -> Right (AllowIfOlderThan d)
         AllowScope s -> Right (AllowScope (maybe s mkScope (entryScope entry)))
         DenyInstallTimeExecution -> Right DenyInstallTimeExecution
 
@@ -1023,13 +1023,13 @@ checkRestatedType name entry rule = case entryType entry of
 ruleTypeName :: Rule -> Text
 ruleTypeName = \case
     AllowScope{} -> "AllowScope"
-    AllowIfPublishedBefore{} -> "AllowIfPublishedBefore"
+    AllowIfOlderThan{} -> "AllowIfOlderThan"
     DenyInstallTimeExecution -> "DenyInstallTimeExecution"
 
 -- The rule @type@ names config can build. @AllowIfRemediatesCve@ is deliberately
 -- absent: it is effectful and not part of this rule model, so it is unknown here.
 knownRuleTypes :: [Text]
-knownRuleTypes = ["AllowScope", "AllowIfPublishedBefore", "DenyInstallTimeExecution"]
+knownRuleTypes = ["AllowScope", "AllowIfOlderThan", "DenyInstallTimeExecution"]
 
 -- ── the structured document ──────────────────────────────────────────────────
 
@@ -1085,7 +1085,7 @@ data RuleEntry = RuleEntry
     , entryEnabled :: Maybe Bool
     -- ^ @false@ __suppresses__ a default rule; otherwise the rule is in force.
     , entryAgeSeconds :: Maybe Integer
-    -- ^ The quarantine window for an @AllowIfPublishedBefore@ rule, in seconds.
+    -- ^ The quarantine window for an @AllowIfOlderThan@ rule, in seconds.
     , entryScope :: Maybe Text
     -- ^ The scope for an @AllowScope@ rule.
     }

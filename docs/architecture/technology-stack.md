@@ -17,7 +17,7 @@
 | Config | `envparse` | Applicative env-var parser; aggregates all missing/invalid vars into one error rather than failing on the first. |
 | Caching | `cache` | STM-backed TTL cache for the short-TTL packument metadata cache; handles expiry/eviction. (Advisory data is a synced in-memory index, not a TTL cache — see [CVE Subsystem](rules-engine.md#cve-subsystem).) |
 | Concurrency | `async` + `stm` | Non-blocking mirror enqueue; shared cache/state. |
-| Time | `time` | `AllowIfPublishedBefore` age calculations. |
+| Time | `time` | `AllowIfOlderThan` age calculations. |
 | Unit tests | `hspec` (+ `hspec-wai`) | `hspec-wai` drives the proxy `Application` end-to-end. |
 | Property tests | `hedgehog` (+ `hspec-hedgehog`) | Integrated shrinking; used heavily against the pure rules engine. |
 | Integration tests | `testcontainers` | Launches ephemeral Docker containers from the test suite (lifecycle + readiness). GHC 9.10-compatible, actively maintained. |

@@ -18,7 +18,7 @@ module Ecluse.Core.Rules.Types (
     PrecededRule (..),
     defaultPrecedence,
     atDefaultPrecedence,
-    defaultAllowIfPublishedBeforePrecedence,
+    defaultAllowIfOlderThanPrecedence,
     defaultAllowScopePrecedence,
     defaultDenyInstallTimeExecutionPrecedence,
 
@@ -61,7 +61,7 @@ data Rule
       Guards against race-to-publish supply-chain attacks where an attacker
       publishes a malicious version and hopes it is consumed before takedown.
       -}
-      AllowIfPublishedBefore NominalDiffTime
+      AllowIfOlderThan NominalDiffTime
     | {- | Deny any package version that runs code at install time — npm install
       scripts, a RubyGems native-extension build, a PyPI sdist build backend — a
       common arbitrary-code-execution vector. Yields no decision otherwise.
@@ -75,7 +75,7 @@ boot-order tiebreak and the credited identity in logs and denial messages.
 ruleName :: Rule -> Text
 ruleName = \case
     AllowScope{} -> "AllowScope"
-    AllowIfPublishedBefore{} -> "AllowIfPublishedBefore"
+    AllowIfOlderThan{} -> "AllowIfOlderThan"
     DenyInstallTimeExecution -> "DenyInstallTimeExecution"
 
 {- | A 'Rule' paired with the integer precedence at which it competes (higher
@@ -103,7 +103,7 @@ explicit precedence for a rule.
 
 __Every deny type defaults strictly above every allow type__, so "any deny
 overrides any allow" holds out of the box. The three rule types occupy two
-bands: the allow band (@AllowIfPublishedBefore@ <
+bands: the allow band (@AllowIfOlderThan@ <
 'defaultAllowScopePrecedence'), then the deny band
 ('defaultDenyInstallTimeExecutionPrecedence') strictly above both. An operator may
 still elevate a /specific/ allow above a /specific/ deny by giving it a higher
@@ -111,7 +111,7 @@ explicit precedence — the per-type defaults set only the out-of-the-box orderi
 -}
 defaultPrecedence :: Rule -> Int
 defaultPrecedence = \case
-    AllowIfPublishedBefore{} -> defaultAllowIfPublishedBeforePrecedence
+    AllowIfOlderThan{} -> defaultAllowIfOlderThanPrecedence
     AllowScope{} -> defaultAllowScopePrecedence
     DenyInstallTimeExecution -> defaultDenyInstallTimeExecutionPrecedence
 
@@ -119,11 +119,11 @@ defaultPrecedence = \case
 atDefaultPrecedence :: Rule -> PrecededRule
 atDefaultPrecedence r = PrecededRule (defaultPrecedence r) r
 
-{- | Default precedence of 'AllowIfPublishedBefore': the lowest band, a passive
+{- | Default precedence of 'AllowIfOlderThan': the lowest band, a passive
 quarantine that yields to an explicit allow-list and to every deny.
 -}
-defaultAllowIfPublishedBeforePrecedence :: Int
-defaultAllowIfPublishedBeforePrecedence = 100
+defaultAllowIfOlderThanPrecedence :: Int
+defaultAllowIfOlderThanPrecedence = 100
 
 {- | Default precedence of 'AllowScope': above the passive age quarantine — an
 explicit allow-list of a trusted internal scope is a stronger statement than the
