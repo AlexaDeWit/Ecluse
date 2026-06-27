@@ -15,11 +15,11 @@ import Ecluse.Core.Package (
     mkPackageName,
     mkScope,
  )
-import Ecluse.Core.Rules (evalRules)
+import Ecluse.Core.Rules (evalRulesPure)
 import Ecluse.Core.Rules.Types (
-    Decision (ApprovedEffectful, DeniedEffectful, Undecidable),
+    Decision (Admitted, Blocked, Undecidable),
     EvalContext (EvalContext),
-    Rule (AllowScope, DenyInstallTimeExecution),
+    PureRule (AllowScope, DenyInstallTimeExecution),
     atDefaultPrecedence,
  )
 import Ecluse.Core.Server.Response (
@@ -193,7 +193,7 @@ spec = do
     describe "serveDecisionOf — a rules Decision becomes a serve outcome" $ do
         it "a deny-rule decision rejects ByPolicy, naming the rule, with the rendered why" $ do
             let pd = pkg "public" 30 (RunsCodeOnInstall "preinstall hook")
-                decision = evalRules (EvalContext now) [atDefaultPrecedence DenyInstallTimeExecution] pd
+                decision = evalRulesPure (EvalContext now) [atDefaultPrecedence DenyInstallTimeExecution] pd
             case serveDecisionOf pd decision of
                 Reject rej -> do
                     rejectionReason rej `shouldBe` ByPolicy (RuleName "DenyInstallTimeExecution")
@@ -202,24 +202,24 @@ spec = do
                 Admit -> expectationFailure "a deny decision must reject, not admit"
         it "a deny-by-default decision rejects ByPolicy (no rule allowed it)" $ do
             let pd = pkg "public" 30 NoCodeOnInstall
-                decision = evalRules (EvalContext now) [] pd
+                decision = evalRulesPure (EvalContext now) [] pd
             case serveDecisionOf pd decision of
                 Reject rej -> do
-                    rejectionReason rej `shouldBe` ByPolicy (RuleName "DeniedByDefault")
+                    rejectionReason rej `shouldBe` ByPolicy (RuleName "BlockedByDefault")
                     rejectionMessage rej `shouldSatisfy` T.isInfixOf "denied"
                 Admit -> expectationFailure "deny-by-default must reject, not admit"
         it "an approved decision admits — only denials reject" $ do
             let pd = pkg "internal" 30 NoCodeOnInstall
-                decision = evalRules (EvalContext now) [atDefaultPrecedence (AllowScope (mkScope "internal"))] pd
+                decision = evalRulesPure (EvalContext now) [atDefaultPrecedence (AllowScope (mkScope "internal"))] pd
             serveDecisionOf pd decision `shouldBe` Admit
 
         it "an effectful approval admits, like a pure approval" $ do
             let pd = pkg "public" 30 NoCodeOnInstall
-            serveDecisionOf pd (ApprovedEffectful "AllowAdvisory" "remediates") `shouldBe` Admit
+            serveDecisionOf pd (Admitted "AllowAdvisory" "remediates") `shouldBe` Admit
 
         it "an effectful denial rejects ByPolicy, naming the effectful rule" $ do
             let pd = pkg "public" 30 NoCodeOnInstall
-            case serveDecisionOf pd (DeniedEffectful "DenyAdvisory" "affected by an advisory") of
+            case serveDecisionOf pd (Blocked "DenyAdvisory" "affected by an advisory") of
                 Reject rej -> do
                     rejectionReason rej `shouldBe` ByPolicy (RuleName "DenyAdvisory")
                     rejectionMessage rej `shouldSatisfy` T.isInfixOf "DenyAdvisory"

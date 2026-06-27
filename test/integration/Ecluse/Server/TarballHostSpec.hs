@@ -29,7 +29,8 @@ import Ecluse.Core.Queue (newInMemoryQueue)
 import Ecluse.Core.Registry (ParseError (ParseError), RegistryClient (..))
 import Ecluse.Core.Registry.Npm.Route qualified as Npm
 import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
-import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfPublishedBefore), atDefaultPrecedence)
+import Ecluse.Core.Rules (liftPolicy)
+import Ecluse.Core.Rules.Types (PrecededRule, PureRule (AllowIfPublishedBefore), atDefaultPrecedence)
 import Ecluse.Core.Security (LoweredHostSet, TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), defaultLimits, lowerCaseHosts)
 import Ecluse.Core.Security.Egress (newGuardedTlsManager)
 import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
@@ -145,8 +146,7 @@ deps policy internalOptIn port =
         , pdPublicBaseUrl = "http://127.0.0.1:" <> show port
         , pdMountBaseUrl = "https://proxy.test"
         , pdMirrorTarget = "http://localhost:9" -- puts localhost on the upstream allowlist
-        , pdRules = admitOldEnough
-        , pdEffectfulRules = []
+        , pdRules = liftPolicy admitOldEnough
         , pdTarballHostPolicy = policy
         , pdAllowedInternalHosts = internalOptIn
         , pdLimits = defaultLimits

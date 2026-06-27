@@ -16,6 +16,16 @@ pr: null
 
 > Milestone **M0** · depends on: — (root) · tier: unit
 
+> **As-built (superseded by #381).** This slice's `maximumBy`
+> `(precedence, deny-before-allow, identity)` selection has been replaced by a single
+> **boot-ordered list** the engine walks to the first decisive result (see
+> [Rules Engine → Evaluation model](../../docs/architecture/rules-engine.md#evaluation-model)).
+> The equal-precedence **deny-over-allow** runtime tiebreak is **dropped**: at equal
+> explicit precedence the rule **name** decides (deny-over-allow still holds out of
+> the box via the higher deny defaults). `Abstain` is renamed `NoDecision`. The
+> order-independence and shuffle properties this slice established are retained,
+> re-expressed against the unified engine.
+
 **Goal.** Bring `Ecluse.Rules` to the end-state evaluation model: each rule carries
 an integer **precedence**, and selection is the **highest-precedence
 non-abstaining rule** (deny beats allow at equal precedence), making the rule set

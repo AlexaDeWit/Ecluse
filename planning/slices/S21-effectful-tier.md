@@ -16,6 +16,19 @@ pr: null
 
 > Milestone **M5** · depends on: [S05](S05-rules-precedence.md), [S14](S14-packument-path.md) · tier: unit
 
+> **As-built (superseded by #381).** The separate effectful **tier**
+> (`Ecluse.Core.Rules.Effectful`, `evalRulesEffectful`, `PrecededEffectfulRule`,
+> `FailurePolicy`) is gone: pure and effectful rules are now **one representation**
+> (`Rule`) evaluated by **one engine**. The "performance ordering" is now an
+> intrinsic property — the boot-ordered walk runs effectful IO only up to the first
+> decisive result, MAY speculate in parallel, and is deterministic (as-if sequential
+> by boot order, later evaluations cancelled once the winner is known). The
+> resilience harness (timeout / bounded retry+backoff / per-source breaker) is
+> retained as a per-rule wrapper (`runEffectfulRule`). `FailurePolicy` is folded into
+> the result's **`FailureAlignment`** (`FailDeny` | `FailNoDecision`) on
+> `Unavailable`. See
+> [Rules Engine](../../docs/architecture/rules-engine.md#rules-engine).
+
 **Goal.** Add the effectful rule tier on top of the pure one: rules that may do IO,
 evaluated as a **performance ordering** (pure first; effectful only where it could
 still change the outcome), with the fourth outcome `Unavailable` and per-source

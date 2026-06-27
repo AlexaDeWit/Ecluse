@@ -190,7 +190,7 @@ import Ecluse.Core.Registry.Npm (
  )
 import Ecluse.Core.Registry.Npm.Filter (FilterResult (Filtered, NoSurvivors), applyFilterPlan, rewriteTarballUrls)
 import Ecluse.Core.Registry.Npm.Project (Projection (NameMismatch, Projected), parsePackageInfoFromValue)
-import Ecluse.Core.Rules.Effectful (evalRulesEffectful)
+import Ecluse.Core.Rules (evalRules)
 import Ecluse.Core.Rules.Types (Decision, EvalContext (EvalContext))
 import Ecluse.Core.Security (
     LimitError (BodyTooLarge, TooDeeplyNested, TooManyVersions),
@@ -681,7 +681,7 @@ admitTrusted minTrusted = \case
                 then (Nothing, integrityRefusals)
                 else (Just (Contribution TrustedSource admissible value), integrityRefusals)
 
-{- Gate a public-upstream contribution through both rule tiers and the structural
+{- Gate a public-upstream contribution through the rules engine and the structural
 filter, returning the surviving 'Contribution' (if any survived) and the per-version
 exclusion outcomes (for the no-survivors status when nothing survives anywhere).
 
@@ -690,9 +690,9 @@ origin first has the __integrity-floor admission policy__ applied: any version w
 strongest digest does not meet the configured floor ('pdMinIntegrity') is dropped from
 the gated set up front ('admitByIntegrity'), so a below-floor public version is never
 listed (a client cannot fetch it — the artifact gate would refuse it anyway) and never
-contributes its fingerprint to the merge. The remaining versions are decided by both
-tiers ('evalRulesEffectful' — the pure tier first, the effectful tier only where it
-could change the outcome), the resulting decisions handed to the agnostic
+contributes its fingerprint to the merge. The remaining versions are decided by the
+rules engine ('Ecluse.Core.Rules.evalRules' — the boot order walked to the first decisive
+result), the resulting decisions handed to the agnostic
 'filterPlanFromDecisions', and that plan replayed by 'applyFilterPlan' onto the raw
 @Value@: 'Filtered' yields a gated 'Contribution' over the surviving versions;
 'NoSurvivors' yields no contribution and the per-version 'ServeDecision's, each excluded
@@ -701,8 +701,8 @@ its transient\/permanent cause, so the no-survivors status is a @503@\/@500@ rat
 a @403@). The dropped below-floor versions are projected as 'MissingIntegrity' (no digest
 at all) or 'BelowIntegrityFloor' (a digest, but too weak) refusals and appended to those
 exclusions, so a packument with /only/ inadmissible public versions is a @403@ rather
-than an empty success. The effectful tier is IO, so this gate is IO; with no effectful
-rules configured it reduces exactly to the pure tier.
+than an empty success. Evaluation is IO (an effectful rule may do IO), so this gate is
+IO; with only pure rules it short-circuits without launching any IO.
 
 The gated contribution's typed 'PackageInfo' is __restricted to the survivors__ to
 match its filtered @Value@: 'mergePackuments' treats a 'GatedSource' as the
@@ -718,7 +718,7 @@ gatePublic metrics deps ctx = \case
     Just (info, value) -> do
         let (admissible, integrityRefusals) = admitByIntegrity (pdMinIntegrity deps) integrityBelowFloor integrityMissing info
         (decisions, seconds) <- timedSeconds (decideVersions deps ctx admissible)
-        mpRuleEvalDuration metrics (evalTier (pdEffectfulRules deps)) seconds
+        mpRuleEvalDuration metrics (evalTier (pdRules deps)) seconds
         recordEffectfulFailures metrics (Map.elems decisions)
         let plan = filterPlanFromDecisions decisions admissible
         pure $ case applyFilterPlan (pdMountBaseUrl deps) plan value of
@@ -767,14 +767,14 @@ admitByIntegrity floorSpec belowFloorRefusal missingRefusal info =
     admissibleKeys :: Set Text
     admissibleKeys = Map.keysSet (Map.filter (== MeetsFloor) classified)
 
-{- Decide every version of a public packument against both rule tiers, keyed by raw
+{- Decide every version of a public packument against the rules engine, keyed by raw
 version string (the map 'filterPlanFromDecisions' consumes). Each version is run
-through 'evalRulesEffectful', so a needed effectful rule that cannot be consulted
-yields a fail-closed 'Ecluse.Core.Rules.Types.Undecidable' decision. With no effectful
-rules the per-version call collapses to the pure tier. -}
+through 'Ecluse.Core.Rules.evalRules', so a fail-closed rule that cannot be computed
+yields a 'Ecluse.Core.Rules.Types.Undecidable' decision. With only pure rules the
+per-version call short-circuits without launching any IO. -}
 decideVersions :: PackumentDeps -> EvalContext -> PackageInfo -> IO (Map Text Decision)
 decideVersions deps ctx info =
-    traverse (evalRulesEffectful ctx (pdRules deps) (pdEffectfulRules deps)) (infoVersions info)
+    traverse (evalRules ctx (pdRules deps)) (infoVersions info)
 
 {- Restrict a 'PackageInfo' to the version keys that survived filtering — the
 'Ecluse.Core.Package.Filter.FilterPlan'\'s own 'fpSurvivors', which 'applyFilterPlan' kept
@@ -1298,10 +1298,10 @@ data PublicArtifactGate
     | -- | The version was refused (policy denial, upstream outage, or absence).
       Refused ServeDecision
 
-{- Gate the single requested version against both rule tiers and select its
+{- Gate the single requested version against the rules engine and select its
 artifact, returning the gate outcome. The public packument is fetched anonymously
 and parsed; the requested version's 'PackageDetails' is evaluated through
-'evalRulesEffectful' (the same engine the packument path gates with). On an admit the
+'Ecluse.Core.Rules.evalRules' (the same engine the packument path gates with). On an admit the
 artifact matching the requested filename is selected ('artifactFor'); a filename
 absent from an otherwise-admitted version is a forwarded miss, the same @404@ as an
 absent version.
@@ -1328,7 +1328,7 @@ gatePublicVersion rt deps name version file = do
                 liftIO $
                     spanRuleEval (srTracing rt) name version $ do
                         (gate, seconds) <- timedSeconds (gateVersion evalCtx deps file details)
-                        mpRuleEvalDuration (srMetrics rt) (evalTier (pdEffectfulRules deps)) seconds
+                        mpRuleEvalDuration (srMetrics rt) (evalTier (pdRules deps)) seconds
                         pure (gate, gateVerdict gate)
 
 -- The serve verdict a public-artifact gate outcome carries, for the rule-eval span:
@@ -1339,7 +1339,7 @@ gateVerdict = \case
     Admitted _ -> Admit
     Refused decision -> decision
 
-{- Project a single version's two-tier rule decision to a gate outcome, selecting the
+{- Project a single version's rule decision to a gate outcome, selecting the
 artifact by filename on an admit. A denied version is 'Refused' with its decision; an
 admitted version whose requested filename matches no artifact is a forwarded miss
 ('versionAbsent', rendered @404@).
@@ -1353,7 +1353,7 @@ serve is gated separately by the trusted floor in 'selectPrivateArtifact' and ne
 reaches this gate. -}
 gateVersion :: EvalContext -> PackumentDeps -> Text -> PackageDetails -> IO PublicArtifactGate
 gateVersion ctx deps file details = do
-    decision <- serveDecisionOf details <$> evalRulesEffectful ctx (pdRules deps) (pdEffectfulRules deps) details
+    decision <- serveDecisionOf details <$> evalRules ctx (pdRules deps) details
     pure $ case decision of
         Admit -> maybe (Refused versionAbsent) admitWithIntegrity (artifactFor file details)
         Reject _ -> Refused decision

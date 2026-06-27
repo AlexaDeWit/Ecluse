@@ -72,9 +72,9 @@ import Data.Semigroup (Max (Max, getMax))
 import Data.Text qualified as T
 
 import Ecluse.Core.Package (PackageDetails)
-import Ecluse.Core.Rules (renderDecision, ruleName)
+import Ecluse.Core.Rules (renderDecision)
 import Ecluse.Core.Rules.Types (
-    Decision (Approved, ApprovedEffectful, Denied, DeniedByDefault, DeniedEffectful, Undecidable),
+    Decision (Admitted, Blocked, BlockedByDefault, Undecidable),
     RetryAfter (..),
     Transience (..),
  )
@@ -165,21 +165,19 @@ newtype RuleName = RuleName Text
 {- | Project a rules 'Decision' (see "Ecluse.Core.Rules") into a serve outcome. Pure
 and total.
 
-An 'Approved' decision admits; a 'Denied' or 'DeniedByDefault' decision rejects
+An 'Admitted' decision admits; a 'Blocked' or 'BlockedByDefault' decision rejects
 'ByPolicy', naming the deciding rule and carrying the human-readable
-'renderDecision' as the message. An 'Undecidable' decision (a needed effectful rule
-could not be consulted) rejects as 'Unavailable', carrying its 'Transience' so the
+'renderDecision' as the message. An 'Undecidable' decision (a fail-closed rule that
+could not be computed) rejects as 'Unavailable', carrying its 'Transience' so the
 status mapping can choose @503@ vs @500@ — __fail-closed__, exactly as a denial
 removes a version, but flagged retryable when the cause may self-heal. Only an
-approval admits.
+admission admits.
 -}
 serveDecisionOf :: PackageDetails -> Decision -> ServeDecision
 serveDecisionOf pd decision = case decision of
-    Approved{} -> Admit
-    ApprovedEffectful{} -> Admit
-    Denied rule _ -> Reject (rejectAs (ByPolicy (RuleName (ruleName rule))))
-    DeniedEffectful name _ -> Reject (rejectAs (ByPolicy (RuleName name)))
-    DeniedByDefault{} -> Reject (rejectAs (ByPolicy (RuleName "DeniedByDefault")))
+    Admitted{} -> Admit
+    Blocked name _ -> Reject (rejectAs (ByPolicy (RuleName name)))
+    BlockedByDefault{} -> Reject (rejectAs (ByPolicy (RuleName "BlockedByDefault")))
     Undecidable transience _ -> Reject (rejectAs (Unavailable transience))
   where
     rejectAs :: RejectReason -> Rejection

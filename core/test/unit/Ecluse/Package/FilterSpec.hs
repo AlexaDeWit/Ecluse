@@ -24,10 +24,10 @@ import Ecluse.Core.Package (
  )
 import Ecluse.Core.Package.Filter (FilterPlan (..), filterPlan)
 import Ecluse.Core.Rules.Types (
-    Decision (Approved),
+    Decision (Admitted),
     EvalContext (EvalContext),
     PrecededRule,
-    Rule (AllowIfPublishedBefore, DenyInstallTimeExecution),
+    PureRule (AllowIfPublishedBefore, DenyInstallTimeExecution),
     atDefaultPrecedence,
  )
 import Ecluse.Core.Version (compareVersions, isStable, mkVersion, parseVersionKey, unVersion)
@@ -275,7 +275,7 @@ latestRaw = fmap unVersion . fpLatest
 
 isApproved :: Decision -> Bool
 isApproved = \case
-    Approved{} -> True
+    Admitted{} -> True
     _ -> False
 
 -- | Whether a raw npm version string parses to a stable (non-prerelease) release.

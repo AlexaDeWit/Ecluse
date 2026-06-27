@@ -14,8 +14,8 @@ two principles govern it:
   `hasInstallScript`, `packagetype`, or `extensions`.
 - **Signal availability is explicit.** A signal the adapter has not (or cannot
   cheaply) determined is represented as such (`CodeExecUnknown`, `TrustUnknown`,
-  `Nothing`), so a pure rule abstains rather than guessing and the effectful tier
-  can resolve it later (see [Rules Engine](rules-engine.md#rules-engine)).
+  `Nothing`), so a pure rule yields no decision rather than guessing and an
+  effectful rule can resolve it later (see [Rules Engine](rules-engine.md#rules-engine)).
 
 ## The shared vocabulary
 

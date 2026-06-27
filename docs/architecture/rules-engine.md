@@ -4,14 +4,24 @@
 
 ## Rules Engine
 
-**Deny by default; precedence decides.** Each rule carries a configurable
-integer **precedence**. Every rule yields *allow*, *deny*, or *abstain* for a
-given version, and the **highest-precedence rule that does not abstain wins**; at
-equal precedence, a deny beats an allow. If every rule abstains, the package is
-denied by default. Built-in deny rules default to a higher precedence than allow
-rules, so out of the box "any deny overrides any allow" holds — but an operator
-can rank a specific allow above a specific deny (e.g. to let a trusted internal
-scope through an install-script deny).
+**Deny by default; the boot order decides.** Each rule carries a configurable
+integer **precedence**. At boot the configured rule set is arranged **once** into
+a single total order — **highest precedence first, then rule name ascending** as
+the deterministic tiebreak — and evaluation walks that order and takes the **first
+decisive result**. Every rule yields *allow*, *deny*, *no-decision*, or
+*unavailable* for a given version; *allow*, *deny*, and a fail-closed *unavailable*
+are **decisive**, while *no-decision* and a fail-open *unavailable* are no-ops. If
+no rule is decisive, the package is denied by default. Built-in deny rules default
+to a higher precedence than allow rules, so out of the box "any deny overrides any
+allow" holds — but an operator can rank a specific allow above a specific deny
+(e.g. to let a trusted internal scope through an install-script deny).
+
+At **equal explicit precedence** the tie is resolved by **rule name** (the boot
+order's deterministic tiebreak), **not** by a deny-over-allow priority. There is no
+runtime comparison of results: the order *is* the tiebreak. Deny-over-allow still
+holds in the default configuration, where the deny defaults sit strictly above the
+allow defaults; only an operator who sets an allow and a deny to the *same* explicit
+precedence sees that tie resolved by name instead.
 
 Rules evaluate a single `PackageDetails` snapshot — the ecosystem-agnostic
 per-version view produced by a registry adapter. A rule never sees registry wire
@@ -20,79 +30,97 @@ formats.
 **Rules are ecosystem-agnostic by design.** A rule reasons only over the agnostic
 `PackageDetails`; modelling an *ecosystem-specific* rule is out of scope. Where a
 signal a rule reads is simply absent for an ecosystem — a declared scope on an
-ecosystem with no namespacing, say — the rule **abstains**, which under
+ecosystem with no namespacing, say — the rule yields **no decision**, which under
 deny-by-default is the sensible no-op, never a per-ecosystem configuration error.
 Rule **names** track the agnostic concept, not one ecosystem's mechanism (the
 install-time code-execution signal, not npm's `hasInstallScript`).
 
-Rules are evaluated in two tiers:
+**One representation, one engine.** A rule is a single record — its precedence, a
+stable name, an evaluation function, and an optional **resilience policy** — and
+there is one evaluation engine over the boot-ordered list
+([`core/src/Ecluse/Core/Rules.hs`](../../core/src/Ecluse/Core/Rules.hs)). A rule is
+**pure** or **effectful** by whether it carries a resilience policy, not by which of
+two tiers it lives in:
 
 1. **Pure rules** — evaluated against `PackageDetails` with no IO. Fast and
-   deterministic. Evaluated first. This is the tier implemented today
-   ([`core/src/Ecluse/Core/Rules.hs`](../../core/src/Ecluse/Core/Rules.hs)).
-2. **Effectful rules** — may perform IO (advisory lookups, external policy
-   checks). A later phase, layered on top of the pure tier.
+   deterministic; they lift into the rule shape at no cost (`ruleResilience =
+   Nothing`).
+2. **Effectful rules** — may perform IO (advisory lookups, external policy checks).
+   They carry a resilience policy (timeout / bounded retry+backoff / per-source
+   circuit breaker) applied by the harness `runEffectfulRule`.
 
-The two tiers are a **performance ordering, not a precedence ordering**: pure
-rules run first because they are cheap, then effectful rules run only where they
-could still change the outcome. Once the pure tier yields a winning position at
-precedence *P*, any effectful rule ranked below *P* is skipped (it cannot
-outrank), and the effectful tier is skipped entirely when no effectful rule is
-ranked at or above *P*. Precedence — not tier — decides who wins.
+There is no separate performance *tier*: the engine walks the boot order and takes
+the first decisive result, so an effectful rule's IO runs **only up to the first
+decisive result** — exactly the short-circuit the old two-tier skip gave, now a
+consequence of the basic design. Evaluation MAY run effectful rules speculatively
+**in parallel**, but the result is always **as-if sequential by boot order**: the
+winner is the *earliest-in-order* decisive rule, never the first to return in
+wall-clock time, and once the winner is known every still-running strictly-later
+evaluation is cancelled. The cheap pure prefix is evaluated directly, so no IO an
+earlier pure decisive result would moot is ever launched. Determinism is
+non-negotiable: the boot order is the published contract.
 
-**A rule's tier is determined by where its signal lives, not only by whether it
-"feels" like IO.** Many inputs are already present in the metadata an adapter
-fetches for resolution — publish age, declared scope, npm's `hasInstallScript`,
-a PyPI file's `packagetype == sdist` — and support **pure** rules. Others are
-*not* exposed in any metadata response and must be fetched and parsed per
-version. RubyGems is the motivating case: a gem's native `extensions` — its
-install-time code-execution signal, the analogue of npm's install scripts — appears
-only in the gemspec inside the `.gem` (or the legacy `quick` Marshal spec), never
-in the Compact Index or the JSON API (see
+**Whether a rule is pure or effectful is determined by where its signal lives, not
+only by whether it "feels" like IO.** Many inputs are already present in the
+metadata an adapter fetches for resolution — publish age, declared scope, npm's
+`hasInstallScript`, a PyPI file's `packagetype == sdist` — and support **pure**
+rules. Others are *not* exposed in any metadata response and must be fetched and
+parsed per version. RubyGems is the motivating case: a gem's native `extensions` —
+its install-time code-execution signal, the analogue of npm's install scripts —
+appears only in the gemspec inside the `.gem` (or the legacy `quick` Marshal spec),
+never in the Compact Index or the JSON API (see
 [`research/reverse-engineering/rubygems.md`](../research/reverse-engineering/rubygems.md)).
 A rule over such a signal is necessarily **effectful**, even though it is
 conceptually a simple per-version predicate. Guidance: `parseVersionDetails`
 populates `PackageDetails` from the cheap metadata path; a signal that needs an
-extra fetch belongs in the effectful tier alongside advisory lookups, and the
-same logical rule (e.g. `DenyInstallTimeExecution`) may therefore land in different
-tiers for different ecosystems.
+extra fetch carries a resilience policy alongside advisory lookups, and the same
+logical rule (e.g. `DenyInstallTimeExecution`) may therefore be pure for one
+ecosystem and effectful for another.
 
 ### Evaluation model
 
-Each rule, applied to a `PackageDetails`, yields a `RuleOutcome`:
+Each rule, applied to a `PackageDetails`, yields a `RuleResult`:
 
 - **`Allow reason`** — the rule takes the position that this version is admissible.
+  **Decisive.**
 - **`Deny reason`** — the rule takes the position that it must be blocked.
-- **`Abstain reason`** — the rule has no opinion. The reason is retained for the
-  audit trail.
+  **Decisive.**
+- **`NoDecision reason`** — the rule has no opinion. A no-op; the reason is retained
+  for the audit trail. (Renamed from `Abstain`.)
+- **`Unavailable transience alignment reason`** — the rule could not be computed (its
+  IO failed, timed out, or its source breaker is open). It carries its own **failure
+  alignment**: a fail-closed (`FailDeny`) `Unavailable` is **decisive**, a fail-open
+  (`FailNoDecision`) `Unavailable` is a **no-op**. There is deliberately no
+  fail-allow alignment — a failed check must never *admit* unvetted bytes.
 
-Each rule also carries a **precedence** (an integer; higher wins). `evalRules`
-selects the **highest-precedence non-abstaining rule** and takes its position —
-`Approved rule reason` or `Denied rule reason`. At equal precedence a `Deny`
-beats an `Allow`; any remaining equal-precedence tie among same-position rules (an
-allow-vs-allow tie, say two equally-ranked allows that both fire) is broken
-**deterministically by rule identity** — the lexicographically-smallest `ruleName`
-is credited — **not by list position**, so the credited rule is the same whatever
-order the rules were supplied in. If every rule abstains, the result is
-`DeniedByDefault reasons` — deny-by-default, with each abstaining rule's reason
-collected (in order) so the denial response can explain what was considered.
+Each rule carries a **precedence** (an integer; higher wins). The engine arranges
+the rule set into the boot order (`bootOrder` — `(precedence descending, name
+ascending)`), walks it, and takes the **first decisive result**, crediting the rule
+by **name**: `Admitted name reason`, `Blocked name reason`, or `Undecidable
+transience reason` (a fail-closed `Unavailable` that won). If no rule is decisive,
+the result is `BlockedByDefault reasons` — deny-by-default, with each non-decisive
+rule's reason collected **in boot order** so the denial response can explain what
+was considered.
 
-A rule that does not fire **abstains rather than deciding**, yielding the floor to
-others rather than admitting or blocking on its own. Because **precedence — not
-list order — decides**, and every equal-precedence tie (deny-over-allow first,
-then by rule identity) is resolved the same way regardless of input order, the
-rule set is fully order-independent **except** for the order in which abstain
-reasons are gathered for the audit trail.
+A rule that does not fire is a **no-op** (`NoDecision`, or a fail-open
+`Unavailable`), yielding the floor to others rather than admitting or blocking on its
+own. Because the **boot order** — not list position — decides, and it resolves every
+equal-precedence tie by name, the decision and the credited rule are fully
+order-independent: shuffling the configured rule set yields the same boot order and
+hence the same `Decision`. Only the order in which the no-op reasons are gathered for
+the audit trail follows the boot order.
 
-Precedence is a **field, not an `Ord Rule` instance**: selection is a `maximumBy`
-over a `(precedence, deny-before-allow, rule-identity)` comparator — precedence
-then the deny-over-allow rank decide the winner, and the rule-identity component
-(the smallest `ruleName`) is the order-independent tiebreak for an otherwise exact
-tie. Equal precedence is legal (it is what the tiebreak resolves), so a derived
-total `Ord Rule` ranking *by priority* would be unlawful (non-antisymmetric) and
-misleading — the same reason `Version` carries no derived `Ord` (see
-[Internal Domain Model](domain-model.md)). The identity tiebreak is a separate,
-deterministic disambiguator that carries no priority meaning.
+Precedence is a **field, not an `Ord` instance**: the boot order sorts on a
+`(precedence descending, name ascending)` key — there is **one comparator**,
+expressed once as the construction of the ordered list, and **no runtime comparison
+of competing results**. Equal precedence is legal (the boot order resolves it by
+name), so a derived total `Ord` ranking *by priority* would be unlawful
+(non-antisymmetric) and misleading — the same reason `Version` carries no derived
+`Ord` (see [Internal Domain Model](domain-model.md)). The name tiebreak carries no
+priority meaning; it only makes the order total and deterministic. The boot order is
+**logged at start-up** (see
+[Configuration → rule policy](configuration.md#rule-policy)) so an operator sees
+exactly how their policy will resolve.
 
 ### Effectful-rule failure
 
@@ -103,15 +131,25 @@ after repeated failures the breaker trips and the rule fast-fails for a cooldown
 (with periodic half-open probes), so a sustained outage neither adds latency to
 every request nor hammers a down service.
 
-When a rule the evaluator *needed* to consult cannot be evaluated, it yields
-**`Unavailable`** — a fourth outcome alongside allow/deny/abstain — carrying its
-**transience** (will-resolve vs not). This is **fail-closed**: an `Unavailable`
-version is not admitted, because a never-vetted package should not be let in just
-because the scanner is down. The blast radius is small — only packages *not yet in
+When a rule cannot be evaluated, it yields **`Unavailable transience alignment
+reason`** — a fourth `RuleResult` alongside allow/deny/no-decision — carrying its
+**transience** (will-resolve vs not) and its **failure alignment**. The alignment is
+the rule's own — folded into the result rather than carried as a separate failure
+policy:
+
+- **`FailDeny` (fail-closed, the default)** — the `Unavailable` is **decisive**: a
+  version a needed rule could not vet is not admitted just because the scanner is
+  down. A fail-closed `Unavailable` that wins becomes `Undecidable`.
+- **`FailNoDecision` (fail-open)** — the `Unavailable` is a **no-op**: where a missing
+  signal should not block availability (a remediation/allow-direction rule), the rule
+  simply does not fire, yielding the floor to the rest. There is deliberately **no
+  fail-allow** — fail-open never *admits* on its own, it only declines to decide.
+
+The blast radius of a fail-closed `Unavailable` is small — only packages *not yet in
 the private mirror* reach this path; already-approved versions are served from the
 private upstream with no rules.
 
-How `Unavailable` surfaces depends on the request shape:
+How a fail-closed `Undecidable` surfaces depends on the request shape:
 
 - **Packument (metadata)** — the version is simply **filtered out**, exactly like a
   denied one (see [Applying verdicts to a packument](#applying-verdicts-to-a-packument)).
@@ -121,9 +159,9 @@ How `Unavailable` surfaces depends on the request shape:
   via the serve [Error model](web-layer.md#error-model): `503` (+`Retry-After`) when
   transient/will-resolve, `500` when not.
 
-Every `Unavailable` and breaker trip emits an ERROR log + metric so infra can
-detect and respond. The default is fail-closed; a rule may set `onError: abstain`
-where availability must beat safety.
+Every fail-closed `Undecidable` and breaker trip emits an ERROR log + metric so infra
+can detect and respond. The default is fail-closed; a rule sets its alignment to
+fail-open where availability must beat safety.
 
 ### Applying verdicts to a packument
 
@@ -178,7 +216,7 @@ filtered body rather than relaying upstream's (see
 |------|------|-------------|
 | `AllowIfPublishedBefore ageSeconds` | Pure | Allows a package version if it was published more than `ageSeconds` seconds ago. Default: 604800 (7 days). Guards against typosquatting and dependency confusion attacks where attackers race to publish before detection. |
 | `AllowScope scope` | Pure | Unconditionally allows all packages under a given npm scope (e.g. `@myorg`). Use for internal scopes that bypass public-registry rules. |
-| `DenyInstallTimeExecution` | Pure | Denies any version flagged with an install-time code-execution signal (npm's `hasInstallScript`, a RubyGems native extension, a PyPI sdist) — a common arbitrary-code-execution vector. Abstains otherwise. As a deny rule it overrides any allow. |
+| `DenyInstallTimeExecution` | Pure | Denies any version flagged with an install-time code-execution signal (npm's `hasInstallScript`, a RubyGems native extension, a PyPI sdist) — a common arbitrary-code-execution vector. Yields no decision otherwise. As a deny rule it overrides any allow at its higher default precedence. |
 
 Further rules are added as later phases — the **effectful** CVE rules
 [`DenyIfCVE` and `AllowIfRemediatesCve`](#cve-subsystem), and effectful per-version
@@ -187,7 +225,7 @@ checks like RubyGems native `extensions` (see [above](#rules-engine)).
 Which rules ship **enabled by default** is a policy choice documented with the
 [default policy](configuration.md#the-default-policy): at launch only the pure
 `AllowIfPublishedBefore` quarantine is on; `AllowIfRemediatesCve` joins the default
-when the CVE tier lands; the install-script and CVE *denies* stay available but
+when the CVE rules land; the install-script and CVE *denies* stay available but
 opt-in.
 
 ## CVE Subsystem
@@ -210,10 +248,11 @@ typosquats. `AllowIfRemediatesCve` removes that tension. For version *V* of pack
 - **`Allow`** when an advisory affects an **earlier** version of *P* and *V* falls
   **outside** that advisory's affected range — i.e. *V* is the fix. The reason
   names the remediated advisory IDs (audit trail).
-- **`Abstain`** otherwise — **including when the lookup itself fails.** This is the
-  deliberate inverse of `DenyIfCVE`'s failure mode: a deny that cannot confirm
-  *safety* fails **closed** (`Unavailable`, [below](#effectful-rule-failure)), but
-  an allow that cannot confirm a *remediation* simply **does not fire** — the
+- **`NoDecision`** otherwise, and a **fail-open** (`FailNoDecision`) `Unavailable`
+  **when the lookup itself fails.** This is the deliberate inverse of `DenyIfCVE`'s
+  failure mode: a deny that cannot confirm *safety* fails **closed**
+  (`FailDeny` → `Undecidable`, [below](#effectful-rule-failure)), but an allow that
+  cannot confirm a *remediation* fails **open** — it simply does not fire, so the
   version falls back to the normal quarantine path rather than being admitted on an
   unverified claim. A CVE-source outage thus costs security patches their fast lane
   (they wait out `min-age`) but never admits anything it could not vouch for.
