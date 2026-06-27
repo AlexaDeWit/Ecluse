@@ -16,7 +16,7 @@ The shapes here are reverse-engineered from live captures of
 == Lenient on input
 
 The public registry has drifted from its own spec and is inconsistent across
-endpoints, so every decoder here is forgiving in four specific ways, matching
+endpoints, so every decoder here is forgiving in five specific ways, matching
 the documented reality:
 
 * __Unknown keys are ignored.__ Manifests carry arbitrary author keys
@@ -36,6 +36,12 @@ the documented reality:
   (@true@ = deprecated without a message, @false@ = not deprecated). 'vmDeprecated'
   reads every form, so a boolean never fails the whole packument decode (a real
   packument such as react's mixes the string and boolean forms across versions).
+* __Advisory @dist@ sub-fields degrade rather than deny.__ @fileCount@,
+  @unpackedSize@, and @signatures@ are advisory — they decide no rule and no
+  serve — so a hostile value in one (a fractional\/huge\/@Int@-overflowing number,
+  a wrong-typed field, or a malformed\/non-array @signatures@) reads as
+  absent\/empty rather than failing the version. One poisoned value therefore
+  cannot deny the whole packument ('Dist').
 
 == Faithful on the rule-decisive fields
 
@@ -75,13 +81,16 @@ module Ecluse.Core.Registry.Npm.Wire (
 
 import Data.Aeson (
     FromJSON (parseJSON),
+    Object,
     Value (Array, Bool, Null, Number, Object, String),
     withObject,
     (.!=),
     (.:),
     (.:?),
  )
-import Data.Aeson.Types (Parser)
+import Data.Aeson.Key (Key)
+import Data.Aeson.Types (Parser, parseMaybe)
+import Data.Map.Strict qualified as Map
 import Data.Time (UTCTime)
 
 -- ── shared scalars ───────────────────────────────────────────────────────────
@@ -220,6 +229,15 @@ rule-decisive and serving-decisive — a client __fails the install__ if the
 downloaded bytes do not match @integrity@\/@shasum@, so any mirror or URL rewrite
 must preserve these byte-for-byte. Prefer 'distIntegrity' (SRI) over the legacy
 SHA-1 'distShasum'.
+
+The remaining sub-fields ('distFileCount', 'distUnpackedSize',
+'distSignatures') are __advisory__ — they inform reporting but decide no rule and
+no serve — and so are decoded __leniently__: a present-but-undecodable number
+(fractional, huge, or 'Int'-overflowing) reads as absent ('Nothing'), a malformed
+signature element is skipped rather than failing the array, and a
+@signatures@ value that is not even an array reads as empty. A hostile value in
+one version therefore degrades that field alone, never denying the whole
+packument.
 -}
 data Dist = Dist
     { distTarball :: Text
@@ -245,9 +263,32 @@ instance FromJSON Dist where
             <$> o .: "tarball"
             <*> o .:? "shasum"
             <*> o .:? "integrity"
-            <*> o .:? "fileCount"
-            <*> o .:? "unpackedSize"
-            <*> o .:? "signatures" .!= []
+            <*> lenientOptional o "fileCount"
+            <*> lenientOptional o "unpackedSize"
+            <*> lenientSignatures o
+
+{- Decode an optional field __leniently__: an absent, @null@, or
+present-but-undecodable value all yield 'Nothing'. Where @(.:?)@ fails the whole
+decode on a present-but-wrong value, this degrades a hostile value (wrong-typed,
+fractional, or outside the target's range) to 'Nothing' instead. Reserved for the
+advisory @dist@ sub-fields, so one poisoned value cannot deny the whole packument;
+the load-bearing integrity fields keep @(.:?)@\/@(.:)@. -}
+lenientOptional :: (FromJSON a) => Object -> Key -> Parser (Maybe a)
+lenientOptional o k = do
+    mv <- o .:? k -- Parser (Maybe Value): a present junk value still arrives here
+    pure (mv >>= parseMaybe parseJSON) -- but a Value that will not decode becomes Nothing
+
+{- Decode the advisory @signatures@ array __leniently__: skip any element that
+does not parse as a 'Signature' rather than failing the array, and treat a
+present-but-non-array value (or absence\/@null@) as no signatures. The 'Signature'
+instance itself stays strict; only its aggregation here tolerates a malformed
+entry, so one bad signature cannot deny the version. -}
+lenientSignatures :: Object -> Parser [Signature]
+lenientSignatures o = do
+    mv <- o .:? "signatures"
+    pure $ case mv of
+        Just (Array xs) -> mapMaybe (parseMaybe parseJSON) (toList xs)
+        _ -> []
 
 -- ── version manifest ─────────────────────────────────────────────────────────
 
@@ -338,6 +379,18 @@ deprecatedNotice = \case
     Just (Bool True) -> Just ""
     _ -> Nothing
 
+{- Decode the @versions@ map __element-wise leniently__: read it as a raw map of
+version key to 'Value', then keep only the entries that parse as a 'VersionManifest',
+dropping any that do not. A version whose manifest is missing or malformed in a
+required field (no @dist@\/@tarball@, an unusable @name@\/@version@) is __dropped__
+rather than failing the whole packument, so one poisoned version cannot deny the
+others. An absent @versions@ is the empty map; a @versions@ that is not an object at
+all still fails the decode (the document is not a usable packument). -}
+lenientVersionMap :: Object -> Parser (Map Text VersionManifest)
+lenientVersionMap o = do
+    raw <- o .:? "versions" .!= mempty -- Map Text Value: each version object kept raw
+    pure (Map.mapMaybe (parseMaybe parseJSON) raw) -- drop the entries that will not decode
+
 -- ── packuments ───────────────────────────────────────────────────────────────
 
 {- | The __full__ packument: @GET \/{pkg}@ with @Accept: application\/json@ (or
@@ -360,7 +413,10 @@ data Packument = Packument
     , pkmtDistTags :: Map Text Text
     -- ^ The @dist-tags@ map (tag to version); __always__ includes @"latest"@.
     , pkmtVersions :: Map Text VersionManifest
-    -- ^ Every published version, keyed by its exact version string.
+    {- ^ Every published version that decodes, keyed by its exact version string. A
+    version whose manifest is malformed in a required field is __dropped__ (see
+    'lenientVersionMap'), so one poisoned version never denies the rest.
+    -}
     , pkmtTime :: Map Text UTCTime
     {- ^ Publish timestamps: @"created"@, @"modified"@, and one entry per
     version key. The source of truth for publish age.
@@ -387,7 +443,7 @@ instance FromJSON Packument where
         Packument
             <$> o .: "name"
             <*> o .:? "dist-tags" .!= mempty
-            <*> o .:? "versions" .!= mempty
+            <*> lenientVersionMap o
             <*> o .:? "time" .!= mempty
             <*> o .:? "maintainers" .!= []
             <*> o .:? "description"
@@ -417,8 +473,9 @@ data AbbreviatedPackument = AbbreviatedPackument
     , apkmtDistTags :: Map Text Text
     -- ^ The @dist-tags@ map (tag to version), as in the full form.
     , apkmtVersions :: Map Text VersionManifest
-    {- ^ Every published version (abbreviated subset of fields), keyed by exact
-    version string.
+    {- ^ Every published version that decodes (abbreviated subset of fields), keyed
+    by exact version string. As in the full form, a version whose manifest is
+    malformed in a required field is __dropped__ (see 'lenientVersionMap').
     -}
     }
     deriving stock (Eq, Show)
@@ -429,7 +486,7 @@ instance FromJSON AbbreviatedPackument where
             <$> o .: "name"
             <*> o .: "modified"
             <*> o .:? "dist-tags" .!= mempty
-            <*> o .:? "versions" .!= mempty
+            <*> lenientVersionMap o
 
 -- ── errors ───────────────────────────────────────────────────────────────────
 

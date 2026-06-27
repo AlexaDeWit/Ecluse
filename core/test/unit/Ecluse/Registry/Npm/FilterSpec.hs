@@ -197,6 +197,16 @@ filterSpec = describe "applyFilterPlan (replay)" $ do
         tarballAt "1.0.0" (Object (rawObject filtered))
             `shouldBe` Just "https://proxy.test/npm/thing/-/thing-1.0.0.tgz"
 
+    it "drops a version broken in a required field from the served body, keeping the healthy one" $ do
+        -- End-to-end version-level graceful degradation: 2.0.0's `dist` is a scalar (a
+        -- malformed required field) yet it is 30 days old, so it would clear the
+        -- quarantine if it decoded. It is absent from the served versions/time purely
+        -- because the decode dropped it from the decision surface — a healthy package
+        -- keeps serving its good versions despite one poisoned one.
+        filtered <- filterTo healthyPlusBroken
+        Map.keys (versionsOf filtered) `shouldBe` ["1.0.0"]
+        Map.keys (timeKeysOf filtered) `shouldBe` ["1.0.0"]
+
 -- ── coherence ────────────────────────────────────────────────────────────────
 
 coherenceSpec :: Spec
@@ -375,6 +385,24 @@ twoVersionsStableTag =
         , versionLit "thing" "2.0.0" "https://upstream.test/thing/-/thing-2.0.0.tgz" []
         ]
         [("1.0.0", publishedDaysAgo 30), ("2.0.0", publishedDaysAgo 1)]
+
+{- | A healthy 1.0.0 alongside a 2.0.0 whose @dist@ is a scalar (a malformed
+required field). Both are 30 days old, so the broken one would clear the
+quarantine if it decoded — proving its absence from the served body is the
+__decode__ dropping it from the decision surface, not the age policy. The broken
+version's object literal is supplied raw (the 'versionLit' builder only makes
+well-formed versions).
+-}
+healthyPlusBroken :: ByteString
+healthyPlusBroken =
+    encodePackument
+        "thing"
+        Nothing
+        [("latest", "1.0.0")]
+        [ versionLit "thing" "1.0.0" "https://upstream.test/thing/-/thing-1.0.0.tgz" []
+        , ("2.0.0", "{\"name\":\"thing\", \"version\":\"2.0.0\", \"dist\":5}")
+        ]
+        [("1.0.0", publishedDaysAgo 30), ("2.0.0", publishedDaysAgo 30)]
 
 -- | Both versions too young: nothing survives.
 allYoung :: ByteString

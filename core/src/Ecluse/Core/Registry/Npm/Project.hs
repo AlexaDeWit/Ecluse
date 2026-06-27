@@ -13,6 +13,21 @@ throws), the execution half of /parse, don't validate/ — once a response has
 been projected, downstream code holds precise domain types and never re-inspects
 the wire shape.
 
+== Per-version graceful degradation
+
+The @versions@ map is decoded __element-wise__: a version whose manifest is
+missing or malformed in a required\/security-decisive field (no @dist@ or
+@tarball@, an unusable @version@) is __dropped__ from the projected
+'PackageInfo' rather than failing the whole packument. Because presence in the
+decision surface is what makes a version a serve-candidate, a dropped version is
+automatically never served — fail-closed for that one version (a version that
+cannot be decoded cannot be evaluated for integrity, CVEs, or rules) while every
+healthy version still resolves. Only a document whose /top-level/ structure is
+unusable (a @versions@ that is not an object, an absent\/empty @name@) is denied
+wholesale. A version's purely __advisory__ fields degrade in the wire layer
+("Ecluse.Core.Registry.Npm.Wire") without dropping the version. The per-version
+drop is currently silent; surfacing it as telemetry is a noted follow-up.
+
 == Signal mapping
 
 The npm-specific fields collapse onto the normalised, ecosystem-blind signals:
@@ -77,8 +92,8 @@ module Ecluse.Core.Registry.Npm.Project (
     Projection (..),
 ) where
 
-import Data.Aeson (FromJSON (parseJSON), Value, eitherDecodeStrict, withObject, (.!=), (.:?))
-import Data.Aeson.Types (parseEither)
+import Data.Aeson (FromJSON (parseJSON), Object, Value, eitherDecodeStrict, withObject, (.!=), (.:?))
+import Data.Aeson.Types (Parser, parseEither, parseMaybe)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime)
@@ -131,8 +146,23 @@ instance FromJSON WirePackument where
         WirePackument
             <$> o .:? "name" .!= ""
             <*> o .:? "dist-tags" .!= mempty
-            <*> o .:? "versions" .!= mempty
+            <*> lenientVersionMap o
             <*> o .:? "time" .!= mempty
+
+{- Decode the @versions@ map __element-wise leniently__: read it as a raw map of
+version key to 'Value', then keep only the entries that project to a 'VersionEntry',
+dropping any that do not. A version whose manifest is missing or malformed in a
+required\/security-decisive field (no @dist@\/@tarball@, an unusable @version@) is
+__dropped from the decision surface__ rather than failing the whole packument —
+fail-closed for that version (a version that cannot be decoded cannot be evaluated
+for integrity, CVEs, or rules, so it must never be served) while every healthy
+version still decodes. An absent @versions@ is the empty map; a @versions@ that is
+not an object at all still fails the decode (the document is not a usable packument).
+-}
+lenientVersionMap :: Object -> Parser (Map Text VersionEntry)
+lenientVersionMap o = do
+    raw <- o .:? "versions" .!= mempty -- Map Text Value: each version object kept raw
+    pure (Map.mapMaybe (parseMaybe parseJSON) raw) -- drop the entries that will not project
 
 {- A decoded version object: the wire 'VersionManifest' plus its @_npmUser@
 publisher. Both are decoded from the /same/ object in one pass, so there is a

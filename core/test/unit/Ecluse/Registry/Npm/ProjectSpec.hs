@@ -2,6 +2,7 @@ module Ecluse.Registry.Npm.ProjectSpec (spec) where
 
 import Data.Aeson (
     Value (Array, Bool, Null, Number, Object, String),
+    eitherDecodeStrict,
     encode,
     object,
     (.=),
@@ -73,6 +74,7 @@ spec = do
     integritySpec
     versionDetailsSpec
     versionListSpec
+    versionLevelLeniencySpec
     failureSpec
     totalitySpec
 
@@ -338,6 +340,71 @@ versionListSpec = describe "parseVersionList" $ do
         vs <- orFailParse (parseVersionList (RegistryResponse multiVersionPackument))
         map unVersion vs `shouldBe` ["1.0.0", "1.2.0", "2.0.0"]
 
+-- ── version-level graceful degradation ───────────────────────────────────────
+
+{- | One version broken in a required\/security-decisive field must be __dropped__
+from the decision surface, never deny the whole package. A version that cannot be
+decoded cannot be evaluated for integrity, CVEs, or rules, so dropping it is
+fail-closed for that version while every healthy sibling still projects. This is
+the projection-layer (production serve path) guard for the wholesale-denial DoS;
+the served-surface end is proven in "Ecluse.Registry.Npm.FilterSpec".
+-}
+versionLevelLeniencySpec :: Spec
+versionLevelLeniencySpec = describe "version-level graceful degradation (one broken version never denies the package)" $ do
+    it "drops every version broken in a distinct required field, keeping the healthy one" $ do
+        info <- orFailParse (parsePackageInfo (unscoped "mix") (RegistryResponse mixedHealthAndBrokenPackument))
+        Map.keys (infoVersions info) `shouldBe` ["1.0.0"]
+
+    it "keeps the surviving version's load-bearing artifact intact" $ do
+        info <- orFailParse (parsePackageInfo (unscoped "mix") (RegistryResponse mixedHealthAndBrokenPackument))
+        case Map.lookup "1.0.0" (infoVersions info) of
+            Just d -> artUrl (soleArtifact d) `shouldBe` "https://r/mix/-/mix-1.0.0.tgz"
+            Nothing -> fail "the healthy version 1.0.0 must survive"
+
+    it "drops a bare-scalar version entry rather than failing the packument" $ do
+        -- A version whose value is a scalar (not even an object) is dropped, not a
+        -- wholesale parse failure — the old policy this case used to assert.
+        info <-
+            orFailParse
+                ( parsePackageInfo
+                    (unscoped "x")
+                    (RegistryResponse "{\"name\":\"x\",\"versions\":{\"1.0.0\":42}}")
+                )
+        Map.keys (infoVersions info) `shouldBe` []
+
+    it "lists only the versions that decode (parseVersionList)" $
+        fmap (map unVersion) (parseVersionList (RegistryResponse mixedHealthAndBrokenPackument))
+            `shouldBe` Right ["1.0.0"]
+
+    it "resolves a surviving version's details while a broken sibling is absent" $ do
+        d <- projectVersionOf mixedHealthAndBrokenPackument (mkVersion Npm "1.0.0")
+        renderVersion (pkgVersion d) `shouldBe` "1.0.0"
+        parseVersionDetails (RegistryResponse mixedHealthAndBrokenPackument) (mkVersion Npm "2.0.0")
+            `shouldSatisfy` isLeft
+
+    it "keeps a version carrying junk advisory fields, degrading the field (production Value path)" $ do
+        -- The complement to the drop cases: advisory junk degrades the field but the
+        -- version SURVIVES. 2.0.0 carries an out-of-range unpackedSize and a signature
+        -- missing its keyid; 3.0.0 a non-array signatures. Both must remain — the
+        -- degraded unpackedSize projecting to no artifact size, the load-bearing
+        -- tarball/integrity intact. Driven through parsePackageInfoFromValue, the very
+        -- entry the serve path projects the decoded body with, so the field-level and
+        -- version-level leniency are proven to compose on the production decode path.
+        value <- decodeValue advisoryJunkPackument
+        case parsePackageInfoFromValue (unscoped "adv") value of
+            Right (Projected info) -> do
+                Map.keys (infoVersions info) `shouldBe` ["1.0.0", "2.0.0", "3.0.0"]
+                case Map.lookup "2.0.0" (infoVersions info) of
+                    Just d -> do
+                        let art = soleArtifact d
+                        artSize art `shouldBe` Nothing
+                        artUrl art `shouldBe` "https://r/adv/-/adv-2.0.0.tgz"
+                        artHashes art
+                            `shouldBe` [unsafeHash SRI "sha512-z4PhNX7vuL3xVChQ1m2AB9Yg5AULVxXcg/SpIdNs6c5H0NE8XYXysP+DGNKHfuwvY7kxvUdBeoGlODJ6+SfaPg=="]
+                    Nothing -> fail "the advisory-junk version 2.0.0 must survive"
+                Map.member "3.0.0" (infoVersions info) `shouldBe` True
+            other -> fail ("expected a Projected packument, got: " <> show other)
+
 -- ── failure handling ─────────────────────────────────────────────────────────
 
 failureSpec :: Spec
@@ -354,10 +421,12 @@ failureSpec = describe "malformed input" $ do
         -- Valid JSON of the wrong shape (here an array) is reported, not crashed.
         parsePackageInfo (unscoped "thing") (RegistryResponse "[1,2,3]") `shouldSatisfy` isLeft
 
-    it "reports a ParseError when a versions entry is not an object" $
-        -- Each version must be an object; a scalar there is a parse failure, not
-        -- a dropped version.
-        parsePackageInfo (unscoped "x") (RegistryResponse "{\"name\":\"x\",\"versions\":{\"1.0.0\":42}}")
+    it "reports a ParseError when versions itself is not an object" $
+        -- The top-level `versions` must be an object to enumerate versions at all; a
+        -- scalar there leaves the document unusable, so it fails wholesale (distinct
+        -- from a single malformed version ENTRY, which is dropped — see the
+        -- version-level graceful degradation block).
+        parsePackageInfo (unscoped "x") (RegistryResponse "{\"name\":\"x\",\"versions\":5}")
             `shouldSatisfy` isLeft
 
     it "fails parseVersionList on a non-JSON body too" $
@@ -650,6 +719,36 @@ emptyBothPackument =
     "{\"name\":\"eb\",\"versions\":{\"1.0.0\":{\"name\":\"eb\",\"version\":\"1.0.0\",\
     \\"dist\":{\"tarball\":\"https://r/eb/-/eb-1.0.0.tgz\",\"shasum\":\"\",\"integrity\":\"\"}}}}"
 
+{- | A packument whose 1.0.0 is healthy and three siblings are each broken in a
+distinct required\/security-decisive field: 2.0.0's @dist@ is a scalar (not an
+object), 3.0.0's @dist@ carries no @tarball@, and 4.0.0 is a bare scalar (not even
+a version object). Under version-level graceful degradation each broken sibling is
+dropped while the healthy 1.0.0 survives.
+-}
+mixedHealthAndBrokenPackument :: ByteString
+mixedHealthAndBrokenPackument =
+    "{\"name\":\"mix\",\"dist-tags\":{\"latest\":\"1.0.0\"},\"versions\":{\
+    \\"1.0.0\":{\"name\":\"mix\",\"version\":\"1.0.0\",\"dist\":{\"tarball\":\"https://r/mix/-/mix-1.0.0.tgz\"}},\
+    \\"2.0.0\":{\"name\":\"mix\",\"version\":\"2.0.0\",\"dist\":5},\
+    \\"3.0.0\":{\"name\":\"mix\",\"version\":\"3.0.0\",\"dist\":{\"shasum\":\"abc\"}},\
+    \\"4.0.0\":42}}"
+
+{- | A packument whose 1.0.0 is healthy, 2.0.0 carries an out-of-range
+@unpackedSize@ (@1e400@) and a signature missing its @keyid@, and 3.0.0 carries a
+non-array @signatures@. Every version must __survive__ the production decode with
+its advisory fields degraded — the complement to a required-field-broken version
+being dropped. 2.0.0's @integrity@ is a well-formed SRI so the load-bearing digest
+projects intact alongside the degraded size.
+-}
+advisoryJunkPackument :: ByteString
+advisoryJunkPackument =
+    "{\"name\":\"adv\",\"dist-tags\":{\"latest\":\"1.0.0\"},\"versions\":{\
+    \\"1.0.0\":{\"name\":\"adv\",\"version\":\"1.0.0\",\"dist\":{\"tarball\":\"https://r/adv/-/adv-1.0.0.tgz\"}},\
+    \\"2.0.0\":{\"name\":\"adv\",\"version\":\"2.0.0\",\"dist\":{\"tarball\":\"https://r/adv/-/adv-2.0.0.tgz\",\
+    \\"integrity\":\"sha512-z4PhNX7vuL3xVChQ1m2AB9Yg5AULVxXcg/SpIdNs6c5H0NE8XYXysP+DGNKHfuwvY7kxvUdBeoGlODJ6+SfaPg==\",\
+    \\"unpackedSize\":1e400,\"signatures\":[{\"sig\":\"x\"}]}},\
+    \\"3.0.0\":{\"name\":\"adv\",\"version\":\"3.0.0\",\"dist\":{\"tarball\":\"https://r/adv/-/adv-3.0.0.tgz\",\"signatures\":5}}}}"
+
 -- | A packument with three versions, to check version-list extraction.
 multiVersionPackument :: ByteString
 multiVersionPackument =
@@ -676,6 +775,13 @@ runsCode :: CodeExecSignal -> Bool
 runsCode = \case
     RunsCodeOnInstall _ -> True
     _ -> False
+
+{- | Decode a JSON literal into a 'Value', failing the example on an undecodable
+literal. Used to drive 'parsePackageInfoFromValue' — the entry the serve path
+projects an already-decoded body with — directly from an inline packument.
+-}
+decodeValue :: ByteString -> IO Value
+decodeValue bs = either (\e -> fail ("decode failure: " <> e)) pure (eitherDecodeStrict bs)
 
 {- | Read a committed fixture body by name (under @core\/test\/unit\/fixtures\/npm\/@,
 the path Cabal runs tests from).

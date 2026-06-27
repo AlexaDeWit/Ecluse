@@ -297,6 +297,7 @@ test-suite ecluse-core-unit
     , memory            ^>=0.18
     , network           ^>=3.2
     , retry             ^>=0.9
+    , scientific        ^>=0.3
     , text              ^>=2.1
     , time              ^>=1.12
     , unliftio          ^>=0.2.25
