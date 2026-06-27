@@ -17,6 +17,7 @@ http_cache.sqlite
 /sbom.spdx.json
 .hie/
 dist-weeder/
+dist-stan/
 *.hi
 *.o
 scratchpad/

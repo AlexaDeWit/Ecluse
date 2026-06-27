@@ -1,0 +1,23 @@
+# Stan configuration for Écluse. The `stan` CI job runs Stan at this floor and FAILS
+# on any finding (a visible red signal), but it is NOT a CI-gate dependency, so it
+# never blocks a merge. `make stan` reproduces it; `make stan-all` shows the full set,
+# including the Performance/Style findings this floor drops.
+#
+# This file only EXCLUDES whole inspections. It does NOT `ignore` individual findings:
+# real findings are meant to fail the job and be triaged (fixed, or ignored only by an
+# explicit, recorded decision), never silently suppressed.
+#
+# Floor: drop the Style and Performance severities. Those are micro-perf / space-leak
+# style opinions (STAN-0206 "non-strict fields" alone fired ~492x) we have not adopted;
+# they are not correctness. What stays armed across the whole tree is the safety signal:
+# partial functions (#Partial) and potential bugs (#Infinite, Foldable footguns;
+# #PotentialBug).
+#
+# STAN-0213 (wildcard `_` on sum types) is excluded by explicit decision: reviewed, its
+# findings here are correct deny-by-default catch-alls on lists / Maybe / aeson Value,
+# and enforcing "no `_` on sum types" is totality-maximalism we deliberately don't adopt.
+check =
+  [ { type = "Exclude", severity = "Style", scope = "all" }
+  , { type = "Exclude", severity = "Performance", scope = "all" }
+  , { type = "Exclude", id = "STAN-0213", scope = "all" }
+  ]
