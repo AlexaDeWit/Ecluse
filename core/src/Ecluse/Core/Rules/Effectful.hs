@@ -18,8 +18,9 @@ ranked below /P/ cannot outrank it and is __skipped__ (its IO never runs), and t
 effectful tier is skipped __entirely__ when no effectful rule is ranked at or above
 /P/. Precedence — not tier — still decides who wins: the surviving effectful
 candidates compete against the pure winner under the same
-@(precedence, deny-before-allow)@ comparator the pure tier uses, so a higher-ranked
-effectful deny overrides a lower pure allow and vice versa.
+@(precedence, deny-before-allow, rule-identity)@ comparator the pure tier uses, so a
+higher-ranked effectful deny overrides a lower pure allow and vice versa, and an
+otherwise exact tie is broken by rule identity rather than by input list position.
 
 == Resilience
 
@@ -333,8 +334,9 @@ cannot outrank the pure winner — and the effectful tier is skipped entirely (n
 when none qualifies, so a rule set with no effectful rules, or none ranked high
 enough, behaves __exactly__ as the pure tier. The qualifying effectful rules are run
 through 'runEffectfulRule' (timeout, retry, breaker), and the resulting candidates
-compete against the pure winner under the same @(precedence, deny-before-allow)@
-comparator. An effectful 'Unavailable' that wins is __fail-closed__ to 'Undecidable'.
+compete against the pure winner under the same
+@(precedence, deny-before-allow, rule-identity)@ comparator. An effectful
+'Unavailable' that wins is __fail-closed__ to 'Undecidable'.
 -}
 evalRulesEffectful ::
     EvalContext ->
@@ -371,15 +373,19 @@ denial\/audit message), and the harness-resolved outcome. -}
 data ECandidate = ECandidate Int Text RuleOutcome
 
 {- Select the overall decision from the pure winner and the effectful candidates,
-under the shared @(precedence, deny-before-allow)@ comparator. The pure winner is
-seeded as the incumbent at its precedence; each effectful candidate that took a
-position (anything but 'Abstain') competes against it, an 'Unavailable' ranking with
-the denies (it is fail-closed). An effectful candidate must __strictly outrank__ the
-pure winner to displace it: 'maximumBy' keeps the /last/ entry on a rank tie, so the
-pure entry is seeded last and wins any equal-rank tie — an equal-precedence effectful
-allow leaves the pure 'Approved' standing, and an equal-precedence effectful
-'Unavailable' leaves a pure denial as a permanent deny rather than flipping it to a
-retryable 'Undecidable'. -}
+under the shared @(precedence, deny-before-allow, rule-identity)@ comparator. The
+pure winner is seeded as a ranked entry at its precedence; each effectful candidate
+that took a position (anything but 'Abstain') competes against it, an 'Unavailable'
+ranking with the denies (it is fail-closed).
+
+The comparator's third component is an explicit tiebreak, so the credited winner
+never depends on input list position. Among effectful entries an otherwise exact
+@(precedence, isDeny)@ tie is broken by the rule's name — the smallest name wins,
+mirroring the pure tier's identity tiebreak — and the seeded pure entry outranks
+every effectful entry at a full tie, so a tie with the pure winner resolves to the
+pure decision: an equal-precedence effectful allow leaves the pure 'Approved'
+standing, and an equal-precedence effectful 'Unavailable' leaves a pure denial a
+permanent deny rather than flipping it to a retryable 'Undecidable'. -}
 selectDecision :: Maybe Int -> Decision -> [ECandidate] -> Decision
 selectDecision pureWinPrec pureDecision candidates =
     case nonEmpty (positions <> pureEntry) of
@@ -387,28 +393,34 @@ selectDecision pureWinPrec pureDecision candidates =
         Just entries -> entryDecision (maximumBy (comparing rank) entries)
   where
     -- The pure winner as a ranked entry, so the effectful candidates compete
-    -- against it directly. A deny-by-default has no precedence floor of its own, so
-    -- it seeds nothing and any effectful position wins it.
+    -- against it directly. It carries the 'PureSeed' tiebreak, which outranks every
+    -- effectful name, so a full @(precedence, isDeny)@ tie resolves to the pure
+    -- decision. A deny-by-default has no precedence floor of its own, so it seeds
+    -- nothing and any effectful position wins it.
     pureEntry :: [Entry]
     pureEntry = case pureWinPrec of
         Nothing -> []
-        Just p -> [Entry p (pureIsDeny pureDecision) pureDecision]
+        Just p -> [Entry p (pureIsDeny pureDecision) PureSeed pureDecision]
 
     positions :: [Entry]
     positions = mapMaybe entryOf candidates
 
     -- An effectful candidate becomes a ranked entry unless it abstained (no
-    -- position). An 'Unavailable' ranks as a deny (fail-closed) and resolves to an
-    -- 'Undecidable' decision if it wins.
+    -- position). It carries its rule's name as the identity tiebreak (under 'Down',
+    -- so the smallest name is the greatest key — the pure tier's convention). An
+    -- 'Unavailable' ranks as a deny (fail-closed) and resolves to an 'Undecidable'
+    -- decision if it wins.
     entryOf :: ECandidate -> Maybe Entry
     entryOf (ECandidate prec name outcome) = case outcome of
         Abstain _ -> Nothing
-        Allow reason -> Just (Entry prec False (ApprovedEffectful name reason))
-        Deny reason -> Just (Entry prec True (DeniedEffectful name reason))
-        Unavailable transience reason -> Just (Entry prec True (Undecidable transience reason))
+        Allow reason -> Just (Entry prec False (named name) (ApprovedEffectful name reason))
+        Deny reason -> Just (Entry prec True (named name) (DeniedEffectful name reason))
+        Unavailable transience reason -> Just (Entry prec True (named name) (Undecidable transience reason))
+      where
+        named = EffectfulName . Down
 
-    rank :: Entry -> (Int, Bool)
-    rank e = (entryPrecedence e, entryIsDeny e)
+    rank :: Entry -> (Int, Bool, Tiebreak)
+    rank e = (entryPrecedence e, entryIsDeny e, entryTiebreak e)
 
     -- The pure tier never yields an effectful decision, so only its own approval is
     -- the allow case; everything else (denial, deny-by-default, undecidable) ranks
@@ -419,10 +431,23 @@ selectDecision pureWinPrec pureDecision candidates =
         _ -> True
 
 {- A ranked competitor in the cross-tier selection: its precedence, whether it ranks
-as a deny (so a deny beats an allow at equal precedence), and the decision it
-resolves to if it wins. -}
+as a deny (so a deny beats an allow at equal precedence), the identity tiebreak that
+resolves an otherwise exact tie without recourse to list position, and the decision
+it resolves to if it wins. -}
 data Entry = Entry
     { entryPrecedence :: Int
     , entryIsDeny :: Bool
+    , entryTiebreak :: Tiebreak
     , entryDecision :: Decision
     }
+
+{- The order-independent tiebreak for an otherwise exact @(precedence, isDeny)@ tie
+in the cross-tier selection. An effectful entry carries its rule's name under 'Down',
+so the lexicographically-smallest name is the greatest key (mirroring the pure
+tier's identity tiebreak); the seeded pure entry carries 'PureSeed', which the
+constructor order ranks strictly above every 'EffectfulName', so a full tie with the
+pure winner resolves to the pure decision. -}
+data Tiebreak
+    = EffectfulName (Down Text)
+    | PureSeed
+    deriving stock (Eq, Ord)

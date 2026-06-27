@@ -5,7 +5,7 @@ import Data.Time (UTCTime (..), addUTCTime, fromGregorian, nominalDay)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (throwString)
 
-import Hedgehog (forAll, (===))
+import Hedgehog (Gen, forAll, (===))
 import Hedgehog qualified as H
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
@@ -72,6 +72,14 @@ fastConfig =
         , ecBreakerCooldown = 30
         }
 
+{- | As 'fastConfig', but with a breaker that effectively never trips, for the
+order-independence tests that evaluate the same rules more than once: a high
+threshold keeps each rule's outcome identical across evaluations, so a difference
+in result can only come from the cross-tier tiebreak, never from breaker state.
+-}
+tieConfig :: EffectfulConfig
+tieConfig = fastConfig{ecBreakerThreshold = 1000}
+
 {- | Build an effectful rule with a fresh breaker, a fixed-outcome (or failing) eval,
 and the given precedence and failure policy. The eval ignores the version.
 -}
@@ -131,6 +139,23 @@ isUndecidable :: Decision -> Bool
 isUndecidable = \case
     Undecidable{} -> True
     _ -> False
+
+isDeniedEffectful :: Decision -> Bool
+isDeniedEffectful = \case
+    DeniedEffectful{} -> True
+    _ -> False
+
+{- | An outcome for the equal-precedence tie tests: an allow, a deny, or a
+self-reported unavailability — the three positions that compete in the cross-tier
+selection (an abstain would take no position).
+-}
+genTieOutcome :: Gen RuleOutcome
+genTieOutcome =
+    Gen.element
+        [ Allow "vetted clean"
+        , Deny "known-bad version"
+        , Unavailable (WillResolve Nothing) "source unreachable"
+        ]
 
 spec :: Spec
 spec = do
@@ -273,6 +298,40 @@ spec = do
             rule <- failingRule "EffDeny" fastConfig OnUnavailable
             decision <- evalRulesEffectful ctx pureRules [at 400 rule] pd
             decision `shouldSatisfy` isUndecidable
+
+    describe "evalRulesEffectful — order-independent cross-tier tie" $ do
+        it "an equal-precedence effectful deny and unavailable resolve to the same decision regardless of order" $ do
+            -- The sharpest case from the bug: with no higher pure winner, an
+            -- effectful Deny (a permanent 403) and an effectful Unavailable (a
+            -- retryable 503) tie on both precedence and deny-rank. The credited
+            -- identity and the status class must be settled by the rule-identity
+            -- tiebreak, never by input list position — so reversing the list cannot
+            -- flip the decision.
+            let pd = pkg Nothing 0 -- deny-by-default floor: the effectful tie alone decides
+            denyRule <- constRule "EffDeny" tieConfig OnUnavailable (Deny "known-bad version")
+            unavailRule <- failingRule "EffUnavail" tieConfig OnUnavailable
+            let rules = [at 300 denyRule, at 300 unavailRule]
+            forward <- evalRulesEffectful ctx [] rules pd
+            backward <- evalRulesEffectful ctx [] (reverse rules) pd
+            forward `shouldBe` backward
+            forward `shouldSatisfy` (\d -> isDeniedEffectful d || isUndecidable d)
+
+        it "the cross-tier decision is invariant under shuffling equal-precedence effectful rules" $
+            hedgehog $ do
+                -- The analogue of the pure tier's shuffle property: a list of
+                -- equal-precedence effectful rules (a mix of allow/deny/unavailable),
+                -- with no higher pure winner so the tie itself decides. A distinct
+                -- name per rule gives the identity tiebreak a single winner, so the
+                -- whole 'Decision' is invariant under any permutation of the list.
+                outcomes <- forAll (Gen.list (Range.linear 2 6) genTieOutcome)
+                let tagged = zip [0 :: Int ..] outcomes -- a distinct name per rule
+                perm <- forAll (Gen.shuffle tagged)
+                let pd = pkg Nothing 0
+                    build = traverse (\(i, o) -> at 300 <$> constRule ("eff" <> show i) tieConfig OnUnavailable o)
+                    decide rs = build rs >>= \rules -> evalRulesEffectful ctx [] rules pd
+                original <- liftIO (decide tagged)
+                shuffled <- liftIO (decide perm)
+                original === shuffled
 
     describe "evalRulesEffectful — fail-closed (Unavailable)" $ do
         it "a failing effectful rule that could change the outcome is Undecidable" $ do
