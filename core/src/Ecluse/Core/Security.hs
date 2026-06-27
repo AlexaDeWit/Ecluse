@@ -62,6 +62,7 @@ module Ecluse.Core.Security (
     LimitError (..),
     boundedRead,
     checkVersionCount,
+    checkProjectedVersionCount,
     checkNestingDepth,
 ) where
 
@@ -783,12 +784,25 @@ pipeline.
 -}
 checkVersionCount :: Limits -> PackageInfo -> Either LimitError PackageInfo
 checkVersionCount limits info =
+    info <$ checkProjectedVersionCount limits (Map.size (infoVersions info))
+
+{- | Reject a projected version count exceeding 'maxVersionCount', the bound
+'checkVersionCount' applies, factored to take the count directly.
+
+A path that already knows how many versions a packument projects to — without
+building the whole 'Ecluse.Core.Package.PackageInfo' — applies the identical bound by
+passing that count here, so the threshold and its 'TooManyVersions' breach are
+defined in exactly one place. The count is the number of versions that survive the
+projection (the @versions@ entries that decode), the same quantity
+@'Data.Map.Strict.size' . 'Ecluse.Core.Package.infoVersions'@ yields.
+-}
+checkProjectedVersionCount :: Limits -> Int -> Either LimitError ()
+checkProjectedVersionCount limits count =
     if count > cap
         then Left (TooManyVersions count cap)
-        else Right info
+        else Right ()
   where
     cap = maxVersionCount limits
-    count = Map.size (infoVersions info)
 
 {- | Reject a decoded JSON document nested deeper than 'maxNestingDepth',
 returning it unchanged when within budget.

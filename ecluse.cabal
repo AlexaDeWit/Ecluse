@@ -272,6 +272,7 @@ test-suite ecluse-core-unit
     Ecluse.Server.ConditionalSpec
     Ecluse.Server.Pipeline.InternalSpec
     Ecluse.Server.PipelineSpec
+    Ecluse.Server.PublicGateParitySpec
     Ecluse.Server.ResponseSpec
     Ecluse.Server.RouteSpec
     Ecluse.Server.StreamSpec

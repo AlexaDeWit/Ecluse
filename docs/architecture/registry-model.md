@@ -149,6 +149,22 @@ from a separate host (the PyPI-files-host shape) or a signed CDN URL. That locat
 gated, not trusted: the tarball-host policy and the resolved-IP recheck bound *where* it
 may be fetched (see [Why `dist.tarball` is honoured](security.md#why-disttarball-is-honoured-and-what-bounds-it)).
 
+The public leg **gates only the requested version.** It does a **dedicated,
+one-version** fetch+project — the full packument bytes (npm ships the publish `time` a
+publish-age rule needs only in the full packument), with the same response bounds
+(body-size/nesting-depth/version-count) and degrade-to-miss behaviour the merge-path
+fetch uses, but projecting **only the requested version** out of the decoded document
+(including its `time[version]`) rather than every version. That one version is then gated
+with the **identical** machinery the packument route gates the whole set with — the
+rules, the integrity floor, and the artifact selection by filename — so the admit/refuse
+decision and the selected artifact are unchanged; only the wasted projection of every
+*other* version is dropped. The fetch is deliberately **uncached** (it does **not** use
+the shared metadata cache the packument route keeps): the fallback **enqueues a mirror on
+admit**, so a package is public-fallback'd once and thereafter served by the private leg —
+there is no reuse for a cache to amortise. A version absent from the public metadata is a
+`404` forwarded miss; a degraded fetch is the transient `503`; a refused version is the
+policy `403` (the same surface as the packument route's denial).
+
 ## Packument merge across upstreams
 
 A **packument** (package metadata) is not served by first-hit short-circuit the

@@ -165,8 +165,12 @@ How a fail-closed `Undecidable` surfaces depends on the request shape:
   denied one (see [Applying verdicts to a packument](#applying-verdicts-to-a-packument)).
   The client's resolver just picks an admitted version; no error is raised unless
   *nothing* survives.
-- **Concrete artifact** — there is one specific version, so it surfaces as an error
-  via the serve [Error model](web-layer.md#error-model): `503` (+`Retry-After`) when
+- **Concrete artifact** — there is one specific version, so the public tarball fallback
+  gates **only that one version**, off a dedicated one-version projection (see
+  [Registry Model → Serving a tarball](registry-model.md#serving-a-tarball-a-conventional-private-read-an-honoured-public-location)),
+  with the **identical** rule, integrity-floor, and artifact-selection machinery the
+  packument path uses. A fail-closed `Undecidable` surfaces as an error via the serve
+  [Error model](web-layer.md#error-model): `503` (+`Retry-After`) when
   transient/will-resolve, `500` when not.
 
 Every fail-closed `Undecidable` and breaker trip emits an ERROR log + metric so infra

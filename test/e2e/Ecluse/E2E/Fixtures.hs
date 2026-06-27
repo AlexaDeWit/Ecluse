@@ -6,7 +6,8 @@ artifact whose __sha-512 SRI is computed from the bytes actually written__, so t
 proxy's serve path, the worker's integrity gate, and npm's own SRI check all see a
 consistent (or, for the tamper case, deliberately inconsistent) digest. Versions are
 backdated well past the default @min-age@ quarantine so the allow path is not gated
-shut by the age rule.
+shut by the age rule — except a 'psFresh' spec, published at build time to sit
+__inside__ the window and exercise the publish-age refusal.
 
 The tree mirrors the npm registry layout the stub serves over HTTP:
 
@@ -21,6 +22,7 @@ module Ecluse.E2E.Fixtures (
     defaultPkgSpec,
     allowPkg,
     denyPkg,
+    quarantinePkg,
     mirrorPkg,
     tamperPkg,
     headPkg,
@@ -34,6 +36,8 @@ import Data.Aeson qualified as Aeson
 import Data.Aeson.Types (Pair)
 import Data.ByteArray.Encoding (Base (Base64), convertToBase)
 import Data.ByteString qualified as BS
+import Data.Time.Clock (getCurrentTime)
+import Data.Time.Format.ISO8601 (iso8601Show)
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath ((</>))
 import System.Process.Typed (proc, runProcess_)
@@ -54,13 +58,18 @@ data PkgSpec = PkgSpec
     {- ^ Corrupt the artifact bytes after the packument's SRI is computed, so the
     served bytes no longer match the declared integrity.
     -}
+    , psFresh :: Bool
+    {- ^ Publish the version at __build time__ (recently) rather than backdated, so it
+    is __inside__ the default @min-age@ quarantine window — the @AllowIfOlderThan@
+    (publish-age) refusal trigger on the public-fallback gate.
+    -}
     }
     deriving stock (Eq, Show)
 
 -- | A benign package: one backdated version, no install script, untampered bytes.
 defaultPkgSpec :: Text -> PkgSpec
 defaultPkgSpec name =
-    PkgSpec{psName = name, psVersion = "1.0.0", psInstallScript = False, psTamper = False}
+    PkgSpec{psName = name, psVersion = "1.0.0", psInstallScript = False, psTamper = False, psFresh = False}
 
 -- | An allow-listed package: installs cleanly end to end.
 allowPkg :: PkgSpec
@@ -69,6 +78,13 @@ allowPkg = defaultPkgSpec "e2e-allow"
 -- | A package with an install script: denied at the public surface.
 denyPkg :: PkgSpec
 denyPkg = (defaultPkgSpec "e2e-deny"){psInstallScript = True}
+
+{- | A package whose single version is published __at build time__ (recently), so it is
+inside the default @min-age@ quarantine window. The public-fallback one-version gate must
+refuse it on the @AllowIfOlderThan@ (publish-age) rule, deciding over its @time[version]@.
+-}
+quarantinePkg :: PkgSpec
+quarantinePkg = (defaultPkgSpec "e2e-quarantine"){psFresh = True}
 
 -- | A package used to exercise the mirror round-trip (served, then mirrored).
 mirrorPkg :: PkgSpec
@@ -88,7 +104,7 @@ headPkg = defaultPkgSpec "e2e-head"
 
 -- | The full fixture set the stub serves.
 fixturePackages :: [PkgSpec]
-fixturePackages = [allowPkg, denyPkg, mirrorPkg, tamperPkg, headPkg]
+fixturePackages = [allowPkg, denyPkg, quarantinePkg, mirrorPkg, tamperPkg, headPkg]
 
 {- | Write every fixture package under @root@ (the directory bind-mounted into the
 nginx stub as its document root). Creates the packument and the gzipped artifact and
@@ -129,15 +145,25 @@ buildOne root spec = do
             ]
     bytes <- BS.readFile tgzPath
     let sri = sha512Sri bytes
+    -- A fresh spec is published at build time (inside the quarantine window); every
+    -- other spec is backdated well past it. The publish time drives the
+    -- @AllowIfOlderThan@ (publish-age) gate over @time[version]@.
+    publishTime <- if psFresh spec then toText . iso8601Show <$> getCurrentTime else pure backdatedTime
     -- The packument is served at @/\<name\>@ but the tarball lives under
     -- @/\<name\>/-/@, so @\<name\>@ cannot be both a file and a directory. The
     -- packument is therefore stored *inside* the package directory and the nginx
     -- stub config (see "Ecluse.E2E.Harness") maps @/\<name\>@ to it.
-    writeFileLBS (pkgDir </> "packument.json") (Aeson.encode (packument spec sri))
+    writeFileLBS (pkgDir </> "packument.json") (Aeson.encode (packument spec sri publishTime))
     when (psTamper spec) $
         -- Corrupt the served artifact after the SRI is fixed: the integrity gate
         -- (worker) and npm's own check must now reject these bytes.
         BS.appendFile tgzPath "tampered"
+
+{- | The backdated publish time for every non-'psFresh' spec: well past the default
+7-day @min-age@ quarantine, so the publish-age gate admits it.
+-}
+backdatedTime :: Text
+backdatedTime = "2020-01-01T00:00:00.000Z"
 
 -- | @sha512-<base64>@ Subresource-Integrity string over the given bytes.
 sha512Sri :: ByteString -> Text
@@ -155,27 +181,26 @@ tarballPackageJson spec =
         ]
             <> ["scripts" .= object ["install" .= ("node -e \"\"" :: Text)] | psInstallScript spec]
 
-{- | The npm packument the stub serves for a package: a single backdated version
-pointing its artifact at the stub, with the integrity fixed to the real digest and
-(for the deny case) @hasInstallScript@ + a declared install script so the rule fires.
+{- | The npm packument the stub serves for a package: a single version published at
+@publishTime@ (backdated past the quarantine for most specs, or build-time-fresh for a
+'psFresh' one) pointing its artifact at the stub, with the integrity fixed to the real
+digest and (for the deny case) @hasInstallScript@ + a declared install script so the rule
+fires.
 -}
-packument :: PkgSpec -> Text -> Value
-packument spec sri =
+packument :: PkgSpec -> Text -> Text -> Value
+packument spec sri publishTime =
     object
         [ "name" .= psName spec
         , "dist-tags" .= object ["latest" .= psVersion spec]
         , "versions" .= object [fromString (toString (psVersion spec)) .= versionMeta]
         , "time"
             .= object
-                [ "created" .= backdated
-                , "modified" .= backdated
-                , fromString (toString (psVersion spec)) .= backdated
+                [ "created" .= publishTime
+                , "modified" .= publishTime
+                , fromString (toString (psVersion spec)) .= publishTime
                 ]
         ]
   where
-    backdated :: Text
-    backdated = "2020-01-01T00:00:00.000Z"
-
     versionMeta :: Value
     versionMeta =
         object $

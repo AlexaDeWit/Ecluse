@@ -86,10 +86,12 @@ module Ecluse.Core.Registry.Npm.Project (
     parsePackageInfo,
     parsePackageInfoFromValue,
     parseVersionDetails,
+    parseVersionDetailsFromValue,
     parseVersionList,
 
     -- * Name validation
     Projection (..),
+    VersionProjection (..),
 ) where
 
 import Data.Aeson (FromJSON (parseJSON), Object, Value, eitherDecodeStrict, withObject, (.!=), (.:?))
@@ -194,6 +196,26 @@ data Projection
       NameMismatch Text
     deriving stock (Eq, Show)
 
+{- | The outcome of projecting __one requested version__ out of a packument @Value@
+against the requested name ('parseVersionDetailsFromValue') — the single-version
+counterpart of 'Projection', for a caller that needs only that version's
+'PackageDetails' and must not pay to project the others.
+
+A matched document yields 'VersionProjected' carrying the count of versions the
+packument projects to (the same quantity the whole-packument projection would expose
+as @'Data.Map.Strict.size' . 'Ecluse.Core.Package.infoVersions'@, so the version-count
+response bound applies identically) and the requested version's 'PackageDetails', or
+'Nothing' when that version is absent from the decision surface. A document whose
+self-reported name disagrees is a 'VersionNameMismatch', exactly as the full
+projection reports it.
+-}
+data VersionProjection
+    = -- | Name matched: the projected version count, and the requested version's details ('Nothing' if absent).
+      VersionProjected Int (Maybe PackageDetails)
+    | -- | The document decoded but self-reported this /different/ name (carried verbatim for the audit log).
+      VersionNameMismatch Text
+    deriving stock (Eq, Show)
+
 {- | Project a fetched metadata response into the packument-level 'PackageInfo' for
 the requested package. Pure and total: a body that is not a decodable npm packument
 is reported as a 'ParseError', never thrown.
@@ -225,6 +247,32 @@ some upstream genuinely reported.
 parsePackageInfoFromValue :: PackageName -> Value -> Either ParseError Projection
 parsePackageInfoFromValue requestedName value =
     decodePackumentValue value >>= projectValidated requestedName
+
+{- | Project __only the requested version__ out of an already-decoded packument
+@Value@, validating the self-reported @name@ against the request exactly as
+'parsePackageInfoFromValue' does, but __without projecting the other versions__. The
+parse to the wire 'WirePackument' is shared (so the version count and name validation
+are unchanged), and only the requested version is taken the rest of the way to a
+'PackageDetails' — through the /same/ per-version projection the whole-packument path
+runs ('projectVersionEntry'), so a version reached this way is identical to the same
+version reached through 'parsePackageInfoFromValue'. Pure and total — a @Value@ that
+is not a decodable npm packument is a 'ParseError', exactly as
+'parsePackageInfoFromValue' reports it.
+
+This is the entry point the __public tarball fallback__ uses: it gates exactly one
+version's artifact, and its public metadata fetch is uncached (the demand-driven
+mirror-on-admit makes the fallback one-shot per package), so projecting every version's
+integrity\/semver\/details only to consult one is wasted work on that path. The
+version-count bound still applies via the count 'VersionProjected' carries.
+-}
+parseVersionDetailsFromValue :: PackageName -> Value -> Version -> Either ParseError VersionProjection
+parseVersionDetailsFromValue requestedName value version = do
+    pkmt <- decodePackumentValue value
+    name <- projectName (wpName pkmt)
+    pure $
+        if name == requestedName
+            then VersionProjected (Map.size (wpVersions pkmt)) (projectRequestedVersion name pkmt version)
+            else VersionNameMismatch (renderPackageName name)
 
 {- Project + validate a decoded packument against the requested name. The genuine
 self-reported name (from 'projectPackageInfo', which fails an absent\/empty name as
@@ -312,13 +360,33 @@ decodePackumentValue =
 -}
 projectVersions :: PackageName -> WirePackument -> Map Text PackageDetails
 projectVersions name pkmt =
-    Map.mapWithKey projectAt (wpVersions pkmt)
+    Map.mapWithKey (projectVersionEntry name pkmt) (wpVersions pkmt)
+
+{- Project __one__ decoded version entry, keyed by its raw version string, into a
+'PackageDetails'. The single per-version projection step both the whole-packument
+projection ('projectVersions') and the single-version accessor
+('projectRequestedVersion') route through, so a version reached either way is
+projected identically — its publish time is read from the same packument @time@ map
+by the same key, and its 'Version' parsed from the same raw key.
+-}
+projectVersionEntry :: PackageName -> WirePackument -> Text -> VersionEntry -> PackageDetails
+projectVersionEntry name pkmt rawVersion =
+    projectDetails
+        name
+        (mkVersion Npm rawVersion)
+        (Map.lookup rawVersion (wpTime pkmt))
+
+{- Project __only__ the requested version's entry, or 'Nothing' when that version is
+absent from the (leniently decoded) @versions@ map — the single-version analogue of a
+@'Map.lookup' . 'projectVersions'@, sharing 'projectVersionEntry' so the result equals
+what the whole-packument projection holds at that key. The other versions' entries are
+never projected.
+-}
+projectRequestedVersion :: PackageName -> WirePackument -> Version -> Maybe PackageDetails
+projectRequestedVersion name pkmt version =
+    projectVersionEntry name pkmt rawVersion <$> Map.lookup rawVersion (wpVersions pkmt)
   where
-    projectAt rawVersion =
-        projectDetails
-            name
-            (mkVersion Npm rawVersion)
-            (Map.lookup rawVersion (wpTime pkmt))
+    rawVersion = renderVersion version
 
 {- Build a 'PackageDetails' from one projected version entry and its publish
 time (if the packument's @time@ map carried one).

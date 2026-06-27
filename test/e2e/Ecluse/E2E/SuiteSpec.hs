@@ -19,7 +19,7 @@ import Data.Text qualified as T
 import System.Exit (ExitCode (ExitSuccess))
 import Test.Hspec
 
-import Ecluse.E2E.Fixtures (PkgSpec, allowPkg, denyPkg, headPkg, mirrorPkg, psName, psVersion, tamperPkg)
+import Ecluse.E2E.Fixtures (PkgSpec, allowPkg, denyPkg, headPkg, mirrorPkg, psName, psVersion, quarantinePkg, tamperPkg)
 import Ecluse.E2E.Harness
 
 spec :: Spec
@@ -47,6 +47,49 @@ scenarios = do
             res <- npmInstall e2e (psName denyPkg)
             npmExit res `shouldNotBe` ExitSuccess
             mirrored <- verdaccioHasVersion e2e (psName denyPkg) (psVersion denyPkg)
+            mirrored `shouldBe` False
+
+    describe "public tarball fallback — the one-version gate" $ do
+        -- The public tarball fallback gates only the requested version off a dedicated,
+        -- uncached, one-version projection (#392 pattern, now on the public leg). These
+        -- cases prove that gate is correct end to end: a package present on the public
+        -- stub but absent from the private mirror misses the private leg and reaches
+        -- `gatePublicVersion`, which decides over only that version's projected details.
+        it "serves an aged, policy-clean version through the fallback and mirrors it (admit + mirror-on-admit)" $ \e2e -> do
+            -- An `npm install` resolves the version and fetches its tarball, which misses
+            -- the private mirror and is admitted by the one-version gate (aged past the
+            -- quarantine, no install script, at-floor integrity); the admit streams the
+            -- bytes and enqueues the demand-driven mirror, so Verdaccio ends up with it.
+            let name = psName allowPkg
+                ver = psVersion allowPkg
+            absentBefore <- verdaccioHasVersionNow e2e name ver
+            absentBefore `shouldBe` False
+            installed <- npmInstall e2e name
+            npmExit installed `shouldBe` ExitSuccess
+            mirrored <- verdaccioHasVersion e2e name ver
+            mirrored `shouldBe` True
+
+        it "refuses a too-young version on the publish-age quarantine (AllowIfOlderThan over time[version]), and never mirrors it" $ \e2e -> do
+            -- e2e-quarantine is published at build time — inside the default 7-day
+            -- min-age window — so the one-version gate's AllowIfOlderThan rule, deciding
+            -- over the version's projected time[version], yields no decision and the
+            -- version is denied by default. A direct tarball GET drives the public
+            -- fallback gate (bypassing packument resolution); it is a 403 policy refusal,
+            -- and — refused, never served — nothing is enqueued to mirror.
+            let name = psName quarantinePkg
+                ver = psVersion quarantinePkg
+            status <- proxyStatus e2e (tarballPath quarantinePkg)
+            status `shouldBe` 403
+            mirrored <- verdaccioHasVersion e2e name ver
+            mirrored `shouldBe` False
+
+        it "fails a real npm install of a too-young version (the quarantine refuses it)" $ \e2e -> do
+            -- The same publish-age refusal seen through the real npm client: the version
+            -- is inside the quarantine window, so the install cannot resolve an admitted
+            -- version and exits non-zero, and the package is never mirrored.
+            res <- npmInstall e2e (psName quarantinePkg)
+            npmExit res `shouldNotBe` ExitSuccess
+            mirrored <- verdaccioHasVersion e2e (psName quarantinePkg) (psVersion quarantinePkg)
             mirrored `shouldBe` False
 
     describe "server↔worker — the integrity gate" $

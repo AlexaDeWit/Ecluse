@@ -145,6 +145,18 @@ module Ecluse.Core.Server.Pipeline (
 
     -- * The first-party publish handler
     servePublish,
+
+    -- * Exposed for the public-tarball gate-parity test (the serve security boundary)
+
+    {- | The single-version gate the public tarball fallback runs is a __security
+    boundary__: the admit\/refuse decision and the selected 'Artifact' must be
+    provably identical whether the version is reached by the one-version projection
+    ('gatePublicVersion') or by projecting the whole 'PackageInfo' and looking it up.
+    The gate itself ('gateVersion') is exposed so a parity test can drive both
+    projection paths through it and compare the 'PublicArtifactGate' directly.
+    -}
+    PublicArtifactGate (..),
+    gateVersion,
 ) where
 
 import Data.Aeson (Value (Object, String))
@@ -209,7 +221,12 @@ import Ecluse.Core.Registry.Npm (
     relayPublishDocument,
  )
 import Ecluse.Core.Registry.Npm.Filter (FilterResult (Filtered, NoSurvivors), applyFilterPlan, rewriteTarballUrls)
-import Ecluse.Core.Registry.Npm.Project (Projection (NameMismatch, Projected), parsePackageInfoFromValue)
+import Ecluse.Core.Registry.Npm.Project (
+    Projection (NameMismatch, Projected),
+    VersionProjection (VersionNameMismatch, VersionProjected),
+    parsePackageInfoFromValue,
+    parseVersionDetailsFromValue,
+ )
 import Ecluse.Core.Rules (evalRules)
 import Ecluse.Core.Rules.Types (Decision, EvalContext (EvalContext))
 import Ecluse.Core.Security (
@@ -218,6 +235,7 @@ import Ecluse.Core.Security (
     LoweredHostSet,
     Origin (TrustedOrigin, UntrustedOrigin),
     checkNestingDepth,
+    checkProjectedVersionCount,
     checkVersionCount,
     hostAddress,
     lowerCaseHosts,
@@ -615,6 +633,48 @@ fetchEntry limits manager baseUrl token name = do
     -- log it (both names + this origin) and degrade like a decode failure, but with a
     -- distinct typed throw so the no-valid-origin status can render a @502@.
     nameMismatch :: Text -> Handler CacheEntry
+    nameMismatch reported = logNameMismatch name baseUrl reported *> throwIO PackumentNameMismatch
+
+{- Fetch one upstream's full packument and project __only the requested version__'s
+'PackageDetails' from it — the version-targeted counterpart of 'fetchEntry' for the
+public tarball fallback ('gatePublicVersion'), which gates exactly one version's
+artifact. The response bounds are enforced __identically__ to 'fetchEntry': the
+body-size cap on the bounded read, the nesting-depth guard on the decoded @Value@, and
+the version-count guard ('checkProjectedVersionCount', the same bound 'checkVersionCount'
+applies, taken on the count the targeted projection reports). Each breach is logged at
+'WarningS' and degraded fail-closed through the same typed throw the origin fetcher's
+@tryAny@ catches, and a name mismatch or an undecodable body degrades the same way.
+
+The one difference from 'fetchEntry' is that only the requested version is projected to
+a 'PackageDetails' (the others are never projected, the work this path exists to skip):
+a successful fetch returns 'Just' that version's details, or 'Nothing' when the version
+is absent from the packument — a clean miss reported without a throw, exactly as the
+whole-packument path's @version absent@ lookup is, so the fetch still meters as a
+successful resolve. The injected token is the fetch's credential posture ('Nothing' for
+the anonymous public origin). -}
+fetchVersionEntry :: Limits -> Manager -> Text -> Maybe Secret -> PackageName -> Version -> Handler (Maybe PackageDetails)
+fetchVersionEntry limits manager baseUrl token name version = do
+    response <-
+        handle (\(ResponseBoundExceeded err) -> logBreach name err *> throwIO (ResponseBoundExceeded err)) $
+            liftIO (fetchMetadataForm (clientConfig limits manager baseUrl token) Full noValidators name)
+    case Aeson.eitherDecodeStrict (responseBody response) of
+        Right value -> case checkNestingDepth limits value of
+            Right bounded -> case parseVersionDetailsFromValue name bounded version of
+                Right (VersionProjected count details) -> case checkProjectedVersionCount limits count of
+                    Right () -> pure details
+                    Left err -> boundBreach err
+                Right (VersionNameMismatch reported) -> nameMismatch reported
+                Left _ -> decodeFailure
+            Left err -> boundBreach err
+        Left _ -> decodeFailure
+  where
+    boundBreach :: LimitError -> Handler (Maybe PackageDetails)
+    boundBreach err = logBreach name err *> throwIO (ResponseBoundExceeded err)
+
+    decodeFailure :: Handler (Maybe PackageDetails)
+    decodeFailure = logDecodeFailure name *> throwIO PackumentUndecodable
+
+    nameMismatch :: Text -> Handler (Maybe PackageDetails)
     nameMismatch reported = logNameMismatch name baseUrl reported *> throwIO PackumentNameMismatch
 
 unpair :: CacheEntry -> (PackageInfo, Value)
@@ -1304,14 +1364,69 @@ data PublicArtifactGate
       Admitted Artifact
     | -- | The version was refused (policy denial, upstream outage, or absence).
       Refused ServeDecision
+    deriving stock (Eq, Show)
+
+{- The outcome of the public fallback's __dedicated, uncached, one-version__ metadata
+fetch ('fetchPublicVersionDetails'): the requested version's details, its clean absence,
+or a degraded fetch. The three reproduce exactly the terminal outcomes the previous
+cached full-projection path produced — a present version is gated, an absent one is the
+@404@ forwarded miss, a degraded fetch (outage, bound breach, undecodable body, or name
+mismatch) the @503@ transient outage — so the admit\/refuse decision and the rendered
+status are unchanged by narrowing the projection to one version. -}
+data PublicVersionFetch
+    = -- | The requested version projected to these details.
+      VersionFound PackageDetails
+    | -- | The fetch succeeded but the packument did not carry the requested version.
+      VersionMissing
+    | -- | The fetch degraded (outage, bound breach, undecodable body, or name mismatch).
+      VersionUnavailable
+
+{- Resolve the requested version's details from the public (gated, anonymous) upstream
+for the tarball fallback — a __dedicated, uncached, one-version__ fetch+project, not the
+shared metadata cache the packument route uses. Only the requested version is projected
+out of the fetched packument ('fetchVersionEntry'), with the same response bounds and the
+same degrade-to-miss behaviour 'fetchEntry'\/'fetchPublicOrigin' apply; the fetch is
+metered through 'recordedFetch'.
+
+Uncached is correct here, not an omission: the public fallback __enqueues a mirror on
+admit__, so a package is public-fallback'd once and thereafter served by the private leg —
+there is no reuse for a cache to amortise, and caching credential-free public metadata
+just to discard it would be wasted state. (The packument route keeps the shared cache via
+'fetchPublicOrigin', where repeated resolutions of a popular package do reuse it.)
+
+The three outcomes are kept distinct — a degraded fetch ('VersionUnavailable', from the
+@tryAny@-caught throw) is the transient @503@; a clean fetch missing the version
+('VersionMissing') is the @404@ forwarded absence; a present version ('VersionFound') is
+gated — matching the previous path's @no-resolve → 503@ vs @absent → 404@ split exactly,
+rather than collapsing both into one miss. -}
+fetchPublicVersionDetails :: ServeRuntime -> PackumentDeps -> PackageName -> Version -> Handler PublicVersionFetch
+fetchPublicVersionDetails rt deps name version = do
+    resolved <-
+        tryAny
+            ( recordedFetch
+                (srMetrics rt)
+                Metric.Public
+                (fetchVersionEntry (pdLimits deps) (srPublicManager rt) (pdPublicBaseUrl deps) Nothing name version)
+            )
+    pure $ case resolved of
+        Left _ -> VersionUnavailable
+        Right Nothing -> VersionMissing
+        Right (Just details) -> VersionFound details
 
 {- Gate the single requested version against the rules engine and select its
 artifact, returning the gate outcome. The public packument is fetched anonymously
-and parsed; the requested version's 'PackageDetails' is evaluated through
-'Ecluse.Core.Rules.evalRules' (the same engine the packument path gates with). On an admit the
-artifact matching the requested filename is selected ('artifactFor'); a filename
-absent from an otherwise-admitted version is a forwarded miss, the same @404@ as an
-absent version.
+through the __dedicated, uncached, one-version fetch__ ('fetchPublicVersionDetails'),
+projecting only the requested version's 'PackageDetails', which is then evaluated
+through 'Ecluse.Core.Rules.evalRules' (the same engine the packument path gates with) by
+'gateVersion'. On an admit the artifact matching the requested filename is selected
+('artifactFor'); a filename absent from an otherwise-admitted version is a forwarded
+miss, the same @404@ as an absent version.
+
+The gate over the one-version projection is __provably identical__ to projecting the
+whole 'PackageInfo' and gating the looked-up version: the targeted projection shares the
+per-version projector ('Ecluse.Core.Registry.Npm.Project.projectVersionEntry'), so the
+'PackageDetails' at this version equals what the full projection holds at this key, and
+'gateVersion' is unchanged.
 
 The refusal causes the error model maps: a version (or file) absent from the public
 metadata is a genuine miss (a @404@ forwarded absence, projected as 'Unavailable'
@@ -1322,21 +1437,20 @@ be consulted fail-closes to an 'Unavailable' @503@\/@500@. -}
 gatePublicVersion :: ServeRuntime -> PackumentDeps -> PackageName -> Version -> Text -> Handler PublicArtifactGate
 gatePublicVersion rt deps name version file = do
     evalCtx <- liftIO (EvalContext <$> pdNow deps)
-    resolved <- originPackument <$> fetchPublicOrigin (pdLimits deps) rt (pdPublicBaseUrl deps) name
-    case resolved of
-        Nothing -> pure (Refused upstreamUnavailable)
-        Just (info, _value) -> case Map.lookup (renderVersion version) (infoVersions info) of
-            Nothing -> pure (Refused versionAbsent)
-            Just details ->
-                -- The rule-eval domain span wraps the actual decision (only reached once
-                -- the version exists), recording the verdict so a denial → 403 is
-                -- explainable from the trace; the upstream-outage and version-absent
-                -- branches above are not rule evaluations and carry no span.
-                liftIO $
-                    spanRuleEval (srTracing rt) name version $ do
-                        (gate, seconds) <- timedSeconds (gateVersion evalCtx deps file details)
-                        mpRuleEvalDuration (srMetrics rt) (evalTier (pdRules deps)) seconds
-                        pure (gate, gateVerdict gate)
+    fetched <- fetchPublicVersionDetails rt deps name version
+    case fetched of
+        VersionUnavailable -> pure (Refused upstreamUnavailable)
+        VersionMissing -> pure (Refused versionAbsent)
+        VersionFound details ->
+            -- The rule-eval domain span wraps the actual decision (only reached once
+            -- the version exists), recording the verdict so a denial → 403 is
+            -- explainable from the trace; the upstream-outage and version-absent
+            -- branches above are not rule evaluations and carry no span.
+            liftIO $
+                spanRuleEval (srTracing rt) name version $ do
+                    (gate, seconds) <- timedSeconds (gateVersion evalCtx deps file details)
+                    mpRuleEvalDuration (srMetrics rt) (evalTier (pdRules deps)) seconds
+                    pure (gate, gateVerdict gate)
 
 -- The serve verdict a public-artifact gate outcome carries, for the rule-eval span:
 -- an admitted version admits; a refused one carries the decision the serve error
@@ -1695,8 +1809,13 @@ successful resolve (a 2xx body was read and decoded), or a bounded-cause error
 otherwise, before re-raising so the caller's degrade is unchanged. Wrapping the fetch
 action means the public path — fetched through the cache — records only on a miss (a
 hit never runs the action), so the histogram counts real upstream calls, not cache
-hits (those are the metadata-cache metric's concern). -}
-recordedFetch :: MetricsPort -> Metric.Upstream -> Handler CacheEntry -> Handler CacheEntry
+hits (those are the metadata-cache metric's concern).
+
+Polymorphic in the fetch's result so the same latency\/error recording wraps both the
+whole-packument fetch (a 'CacheEntry') and the version-targeted public-fallback fetch (the
+requested version's details): a successful read records the @2xx@ latency whatever the
+projected shape, and the throw paths classify by exception ('fetchCause') alike. -}
+recordedFetch :: MetricsPort -> Metric.Upstream -> Handler a -> Handler a
 recordedFetch metrics upstream action = do
     (result, seconds) <- timedSeconds (tryAny action)
     case result of
