@@ -360,6 +360,13 @@ redirectSpec = describe "credential-bearing requests do not follow redirects" $ 
         config <- tokened (Just (mkSecret "tok"))
         expectRedirectCount 0 (artifactRequest config isOdd v1)
 
+    it "a token-bearing by-filename artifact request has redirectCount 0 (the private tarball leg)" $ do
+        -- The private tarball leg builds its conventional-URL request through
+        -- 'artifactRequestByFile' carrying the forwarded client credential, so the
+        -- credential-redirect invariant must hold on this builder too.
+        config <- tokened (Just (mkSecret "tok"))
+        expectRedirectCount 0 (artifactRequestByFile config isOdd "is-odd-1.0.0.tgz")
+
     it "a token-bearing publish relay request has redirectCount 0" $ do
         config <- tokened (Just (mkSecret "tok"))
         expectRedirectCount 0 (publishRequest config isOdd "{}")

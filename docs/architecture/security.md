@@ -69,7 +69,7 @@ noted below.
    to every resolved IP** at connection time (so an allowlisted name that resolves to an
    internal address is refused — the DNS-rebinding backstop). The **trusted private
    origin** (the operator-configured private upstream) is deliberately *exempt* — its
-   packument *and* its same-host `dist.tarball` alike: a private registry may
+   packument *and* its same-host conventional tarball read alike: a private registry may
    legitimately live on an internal address, and only an untrusted target can be steered
    by an attacker. This is **defence-in-depth behind
    invariant 2**: the host allowlist is the load-bearing control, and the
@@ -125,9 +125,12 @@ noted below.
      mirror**, where **trust in the operator's own vetted source substitutes for
      cryptographic strength**. Loosening the trusted floor is the **only** way Écluse will
      serve a sub-SHA-256 digest, and **only on the trusted private origin** — never on
-     untrusted public bytes. On the serve path the trusted floor both filters the private
-     listing and gates the private artifact serve (a below-floor private artifact is a
-     private miss that falls through to the public origin).
+     untrusted public bytes. On the serve path the trusted floor filters the **private
+     listing** (the packument route); the **private tarball serve leg** is a
+     [conventional stable read](registry-model.md#serving-a-tarball-a-conventional-private-read-an-honoured-public-location)
+     that applies **no serve-time floor**, so a below-floor private *artifact* is still
+     served from the private origin — its bytes verified client-side by npm and by the
+     mirror worker, with an opt-in metadata-resolution mode (#395) restoring the floor here.
 
    The asymmetry is the point: **trust may substitute for cryptographic strength on the
    operator's own vetted (private) source, but never on untrusted public bytes.** This is
@@ -183,14 +186,17 @@ server-chosen data, not a derivable fact:**
   npm third-party registries (CodeArtifact, Artifactory, GitHub Packages) commonly
   return `dist.tarball` on a distinct CDN, frequently with server-generated path
   segments or short-lived **signed query strings** that cannot be reconstructed.
-- **The private upstream serves its tarball directly** ([Registry Model](registry-model.md#registry-abstraction)),
-  exactly the path where the location is most opaque.
+This reasoning is the **public** leg's. The **private** serve leg is instead a
+[conventional stable read](registry-model.md#serving-a-tarball-a-conventional-private-read-an-honoured-public-location)
+(`{base}/{pkg}/-/{file}`, no `dist.tarball` consulted), so honouring the upstream-declared
+location is the public leg's behaviour. A **nonstandard** private upstream that serves
+its tarball off-convention is therefore **not reached** by that read — the accepted
+limitation tracked by **#395** (an opt-in metadata-resolution mode restores it).
 
-So "reconstruct or fail" would reduce Écluse to registries whose tarball layout
-equals their metadata layout — dropping the private-registry support that is a
-core goal. The minimum necessary trust is therefore "honour the upstream-declared
-location," and the residual risk is bounded by two **differently-shaped** controls,
-not by URL reconstruction:
+So for the public leg "reconstruct or fail" would reduce Écluse to public registries
+whose tarball layout equals their metadata layout. The minimum necessary trust there is
+"honour the upstream-declared location," and the residual risk is bounded by two
+**differently-shaped** controls, not by URL reconstruction:
 
 - **Wrong bytes** are caught by the **client-side integrity** check — the proxy
   streams artifacts through without rehashing, relying on the packument's
@@ -246,7 +252,7 @@ Every outbound connection Écluse makes, and the controls it carries:
 | Public `dist.tarball` **artifact** stream | Untrusted | `envManager` (guarded) | **Yes** (plus the tarball-host policy) |
 | Mirror worker's public **artifact** back-fill fetch | Untrusted | `envManager` (guarded) | **Yes** |
 | Private-upstream **packument** fetch | Trusted | `envPrivateManager` (unguarded) | **No** |
-| Private `dist.tarball` **artifact** stream | Trusted origin | `envPrivateManager` (unguarded) | **No** — but the allowlist + same-host policy still apply |
+| Private **conventional** tarball read (`{base}/{pkg}/-/{file}`) | Trusted origin | `envPrivateManager` (unguarded) | **No** — same-host by construction; the allowlist + same-host policy still apply (trivially satisfied) |
 | Mirror-target **publish** (npm `PUT`) | Trusted declared destination | `envPrivateManager` (unguarded) | **No** |
 | **First-party publish** relay (client `npm publish` → publication target) | Trusted declared destination | `envPrivateManager` (unguarded) | **No** — the destination is configuration (`PUBLICATION_TARGET_URL`); it carries the client's **forwarded** credential, which is **never redirect-followed** (see below) |
 | OTLP **telemetry** export | Trusted declared destination | OpenTelemetry SDK's own client | **No** — the endpoint is declared, not classified (see `Ecluse.Telemetry.Resolve`) |
@@ -262,12 +268,14 @@ resolved-IP recheck likewise guard the untrusted origins alone (invariant 3): th
 trusted private origin, the telemetry export, the queue, and IMDS credential minting
 all reach an internal address by design.
 
-The private origin's tarball is the one subtlety: it is served over the unguarded
-trusted manager and is **exempt from the internal-range block** as a `TrustedOrigin`
-(so a private registry on an internal address serves its same-host `dist.tarball`),
-yet it stays constrained by the host allowlist and the same-host tarball policy — see
-[Why `dist.tarball` is honoured](#why-disttarball-is-honoured-and-what-bounds-it). It
-is treated as part of the trusted private origin, not as an untrusted download.
+The private origin's tarball is the one subtlety: the
+[conventional stable read](registry-model.md#serving-a-tarball-a-conventional-private-read-an-honoured-public-location)
+is served over the unguarded trusted manager and is **exempt from the internal-range
+block** as a `TrustedOrigin` (so a private registry on an internal address serves its
+same-host tarball). The constructed URL is on the private base host, so the host
+allowlist and same-host tarball policy are **satisfied by construction** — still applied,
+simply trivially met. It is treated as part of the trusted private origin, not as an
+untrusted download.
 
 **A credential-bearing request never follows a redirect.** Every outbound request that
 carries a bearer — the private-upstream read under `passthrough`, the credential-bearing
@@ -415,14 +423,18 @@ Verdaccio differ), and is the operator's to configure.
 explicit control — the consumer decides their own threat tolerance.** The egress
 guards follow that principle, and it is made concrete for the tarball path:
 
-- **`dist.tarball` host, disallow-by-default.** The serve path fetches each tarball
-  from its **authoritative upstream location** (the preserved `dist.tarball`), but
-  gates *where* that location may be: by default it is fetched only from the **same
-  allowlisted upstream that served the packument**, refusing a `dist.tarball` that
-  points at a *different* host even if it is otherwise on the allowlist — the safest
-  reading of invariant 2 (`Ecluse.Core.Security.tarballHostAllowed` with
-  `SameHostAsPackument`, applied on the serve path in `Ecluse.Core.Server.Pipeline`). A
-  cross-host `dist.tarball` is refused with a `403` before any artifact fetch. An
+- **`dist.tarball` host, disallow-by-default (the public leg).** The **public** serve
+  leg fetches each tarball from its **authoritative upstream location** (the preserved
+  `dist.tarball`), but gates *where* that location may be: by default it is fetched only
+  from the **same allowlisted upstream that served the packument**, refusing a
+  `dist.tarball` that points at a *different* host even if it is otherwise on the
+  allowlist — the safest reading of invariant 2
+  (`Ecluse.Core.Security.tarballHostAllowed` with `SameHostAsPackument`, applied on the
+  serve path in `Ecluse.Core.Server.Pipeline`). A cross-host `dist.tarball` is refused
+  with a `403` before any artifact fetch. (The **private** leg never consults
+  `dist.tarball` — it does a same-host
+  [conventional read](registry-model.md#serving-a-tarball-a-conventional-private-read-an-honoured-public-location)
+  — so the same-host gate is satisfied by construction there.) An
   operator whose registry legitimately serves tarballs from a separate CDN (the
   PyPI-files-host shape above) **opts in** to honouring the upstream-declared host
   (still constrained to the allowlist) by setting

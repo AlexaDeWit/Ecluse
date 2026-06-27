@@ -11,7 +11,7 @@ private upstream):
 
 | Role | Purpose |
 |------|---------|
-| **Private upstream** | Authoritative, already-vetted source. A **tarball** found here is served immediately, unfiltered. A **packument**'s versions are trusted and **merged** with the gated public set (see [Packument merge](#packument-merge-across-upstreams)) rather than short-circuiting the public fetch. |
+| **Private upstream** | Authoritative, already-vetted source. A **tarball** is served by a **conventional stable read** at `{base}/{pkg}/-/{file}` — no packument fetch, no serve-time integrity floor (see [Serving a tarball](#serving-a-tarball-a-conventional-private-read-an-honoured-public-location)). A **packument**'s versions are trusted and **merged** with the gated public set (see [Packument merge](#packument-merge-across-upstreams)) rather than short-circuiting the public fetch. |
 | **Public upstream** | Source of versions not (yet) in the private upstream; rules are applied to everything from here. For a **tarball** it is the fallback on a private miss; for a **packument** it is fetched **alongside** the private upstream and merged in. |
 | **Mirror target** | Where approved public packages are written after passing rules. May be the same registry as the private upstream (most common) or a different one (e.g. separate internal/public stores). |
 | **Publication target** | Where **client-published first-party packages** are written (`npm publish` through the proxy). The write counterpart to the private read role; may be the same registry as the private upstream (so published packages are then readable via the private leg) or a different one. Distinct from the mirror target: *client*-driven first-party content vs *proxy*-driven approved-public content. See [Publishing first-party packages](#publishing-first-party-packages-the-publication-target). |
@@ -113,6 +113,46 @@ out-of-band flow.
 - **Opt-in.** The path exists only when `PUBLICATION_TARGET_URL` is configured; with no
   publication target a `PUT /{pkg}` is rejected with **`405 Method Not Allowed`**.
 
+## Serving a tarball: a conventional private read, an honoured public location
+
+A tarball is one concrete version from one source, so — unlike a packument — a
+private-upstream hit is streamed straight through and we are done. The two serve legs
+locate the bytes differently, by the trust of their origin.
+
+The **private leg is a conventional stable read.** It fetches the tarball directly at
+`{private-base}/{pkg}/-/{file}` by the client's requested filename — the same stable,
+cacheable URL an `npm ci` install issues — **without first fetching the private
+packument**. On a worst-case lockfile fan-out this is the hot-path win: a tarball request
+pays one artifact round-trip, not a per-tarball private-packument fetch+decode it would
+only discard. The client's credential is forwarded (the `passthrough` posture), so the
+private upstream still authorises each artifact read; the request is built with
+redirect-following disabled, so the forwarded credential never follows a `3xx`
+([credential-redirect invariant](security.md#egress-scope-what-the-outbound-controls-guard-and-what-they-do-not)).
+A `2xx` streams the bytes through; a non-`2xx` or a connection failure is a clean
+**private miss** that falls through to the public leg.
+
+The private leg applies **no serve-time integrity floor.** An established version already
+pinned in a consumer's lockfile and served from an operator-**trusted** private registry
+is fast-tracked: its bytes are still verified **client-side by npm** (against the
+`dist.integrity` it resolved over the packument route, unchanged) and by the **mirror
+worker** on ingestion, so fast-tracking gives up only the proactive "refuse
+weak-integrity" stance, not tamper-evidence. The packument route's listing-side trusted
+floor ([invariant 5](security.md#invariants)) is unchanged; an operator who wants the
+floor back on the tarball leg uses the opt-in metadata-resolution mode (#395).
+
+One **accepted limitation** rides with the conventional read: a **nonstandard** private
+upstream that serves its tarball **off-convention** — a separate files host, a CDN or
+presigned URL the `/-/` path cannot rebuild — is **not reached** by the conventional URL,
+so it becomes a private miss that falls through to the public origin. Restoring such an
+upstream is the opt-in metadata-resolution mode tracked by **#395**.
+
+The **public leg** instead honours the **authoritative upstream location** — the
+`dist.tarball` the gated version declares, fetched at exactly that URL rather than a
+reconstructed `/-/` path — so Écluse can front a public registry that serves artifacts
+from a separate host (the PyPI-files-host shape) or a signed CDN URL. That location is
+gated, not trusted: the tarball-host policy and the resolved-IP recheck bound *where* it
+may be fetched (see [Why `dist.tarball` is honoured](security.md#why-disttarball-is-honoured-and-what-bounds-it)).
+
 ## Packument merge across upstreams
 
 A **packument** (package metadata) is not served by first-hit short-circuit the
@@ -173,9 +213,14 @@ deduplicating.
   fingerprint-collide so a divergence goes undetected. Écluse resolves this **at admission,
   not in the merge**, and **by default in both contexts**: a version whose strongest digest
   does not meet its **integrity floor** is **refused before it reaches the merge** — the
-  served listing drops it and the artifact gate `403`s it (or, on the trusted artifact
-  path, falls a below-floor private artifact through to the public origin), as
-  `MissingIntegrity` (no digest) or `BelowIntegrityFloor` (a too-weak one). The **public
+  served listing drops it (in both trust contexts) and, on the **public** artifact path,
+  the gate `403`s it — as `MissingIntegrity` (no digest) or `BelowIntegrityFloor` (a
+  too-weak one). The **private tarball serve leg** is the exception: it is a
+  [conventional stable read](#serving-a-tarball-a-conventional-private-read-an-honoured-public-location)
+  that skips the packument and applies **no serve-time floor**, so a below-floor private
+  *artifact* is still served from the private origin (the listing-side trusted floor on
+  the packument route is unchanged; the bytes stay client- and worker-verified, and the
+  opt-in metadata-resolution mode #395 restores the floor here). The **public
   floor** (`PROXY_MIN_PUBLIC_INTEGRITY`, default SHA-256) is **hard-floored** and never
   lowerable; the **trusted floor** (`PROXY_MIN_TRUSTED_INTEGRITY`, default SHA-256) shares
   that default but is **operator-loosenable below SHA-256** for a legacy private mirror.

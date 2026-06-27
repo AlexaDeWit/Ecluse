@@ -74,37 +74,56 @@ let a second ecosystem reuse this orchestration unchanged.
 
 == Artifact path
 
-The tarball handler ('serveTarball') is the demand-driven artifact relay. It fetches
-each tarball from its __authoritative upstream location__ — the @Artifact.artUrl@ the
-projection preserved from the upstream @dist.tarball@, selected from the gated
-version by the requested filename — rather than reconstructing
-@{base}\/{pkg}\/-\/{file}@ by npm convention. Honouring the upstream-declared
-location is what lets the proxy front a registry that serves its artifacts from a
-separate host or an off-convention path (a CDN\/files host, a signed URL); a
-reconstruction would silently fetch the wrong place. The location is gated, not
+The tarball handler ('serveTarball') is the demand-driven artifact relay. Its two legs
+locate the tarball differently, by the trust of their origin.
+
+The __private__ leg is a __conventional stable read__: it fetches the tarball at
+@{pdPrivateBaseUrl}\/{pkg}\/-\/{file}@ ('artifactRequestByFile'), addressed by the
+client's requested filename, __without a private-packument fetch__ — the stable,
+cacheable shape an @npm ci@ install issues, so a worst-case lockfile fan-out pays one
+artifact round-trip per tarball rather than a packument fetch+decode per tarball it
+would only discard. The request __forwards the client's credential__ over the
+__trusted__ manager, attached at the single bearer-attach point
+('Ecluse.Core.Registry.Npm.withToken'), which pins @redirectCount = 0@: this
+credential-bearing read __never follows a redirect__ (a private CDN @302@ is returned to
+the serve path, not chased with the bearer). The constructed URL is on the private base
+host, so the 'Ecluse.Core.Security.TrustedOrigin' tarball-host gate is satisfied
+__same-host__, and the trusted origin is exempt from the internal-range block (a private
+registry on an internal address still serves). A @2xx@ streams the artifact through with
+__bounded memory__ (the @withResponse@\/@responseStream@ relay, never a buffering fetch)
+and __answers the request__; a non-@2xx@ status or a connection failure is a __clean
+miss__ that falls through to the public leg.
+
+The private leg applies __no serve-time integrity floor__. An established version pinned
+in a consumer's lockfile and served from an operator-__trusted__ private registry is
+fast-tracked: its bytes are still verified __client-side by @npm@__ (against the
+@dist.integrity@ it resolved over the packument route) and by the __mirror worker__ on
+ingestion, so fast-tracking gives up only the proactive "refuse weak-integrity" stance,
+not tamper-evidence. A consequence of the conventional read: a private upstream that
+serves its tarball __off the conventional @\/-\/@ path__ (a separate files host, a signed
+CDN URL the convention cannot rebuild) is not reached by this leg, so it is a private
+miss that falls through to the public origin.
+
+The __public__ leg honours the __authoritative upstream location__ — the
+@Artifact.artUrl@ the projection preserved from the gated version's @dist.tarball@,
+selected by the requested filename — rather than reconstructing the conventional path,
+so the proxy can front a public registry that serves its artifacts from a separate host
+or an off-convention path (a CDN\/files host, a signed URL). That location is gated, not
 trusted: it is fetched only when the tarball-host policy
 ('Ecluse.Core.Security.tarballHostAllowed', per @PROXY_RESPECT_UPSTREAM_TARBALL_HOST@)
-admits its host — the default refuses a cross-host @dist.tarball@ — and the
-untrusted egress additionally carries the resolved-IP recheck.
-
-The private origin is tried first, __uncached__, forwarding the client's credential:
-its packument is fetched, the requested artifact selected, and its @artUrl@ fetched
-over the __trusted__ manager; a hit streams the artifact through with __bounded
-memory__ (the @withResponse@\/@responseStream@ relay, never a buffering fetch), and
-any non-served outcome — the packument not resolving, no artifact matching the
-filename, the policy refusing the host, a non-@2xx@ — falls through. The public
-origin is anonymous: it gates __that one version__ against the rules (the same
-machinery the packument path gates the whole set with) and selects the artifact, and
-on an admit __streams the public bytes from @artUrl@ and enqueues a
-'Ecluse.Core.Queue.MirrorJob'__ (naming that authoritative URL) for the worker to
-back-fill the mirror target; on a reject — including a host the tarball-host policy
-refuses — it renders the serve error model (@403@\/@503@\/@500@\/@404@) through the
-mount's renderer. The enqueue is __serve-then-enqueue, best-effort and
-non-blocking__: the artifact reaches the client first, and an enqueue failure is
-swallowed rather than failing or delaying the response. Mirroring is
-__demand-driven__ — a job is enqueued only here, on a tarball-path admit, never when
-a packument is filtered. The serve path does __not__ verify @dist.integrity@; the
-client checks the artifact's own hash and the worker re-verifies before publishing.
+admits its host — the default refuses a cross-host @dist.tarball@ — and the untrusted
+egress additionally carries the resolved-IP recheck. The public leg is anonymous: it
+gates __that one version__ against the rules (the same machinery the packument path
+gates the whole set with) and selects the artifact, and on an admit __streams the public
+bytes from @artUrl@ and enqueues a 'Ecluse.Core.Queue.MirrorJob'__ (naming that
+authoritative URL) for the worker to back-fill the mirror target; on a reject —
+including a host the tarball-host policy refuses — it renders the serve error model
+(@403@\/@503@\/@500@\/@404@) through the mount's renderer. The enqueue is
+__serve-then-enqueue, best-effort and non-blocking__: the artifact reaches the client
+first, and an enqueue failure is swallowed rather than failing or delaying the response.
+Mirroring is __demand-driven__ — a job is enqueued only here, on a tarball-path admit,
+never when a packument is filtered. The serve path does __not__ verify @dist.integrity@;
+the client checks the artifact's own hash and the worker re-verifies before publishing.
 
 An artifact is a __pass-through__ body — served byte-identical to upstream's — so its
 conditional-GET handling __relays__ rather than computing an own ETag (see
@@ -183,6 +202,7 @@ import Ecluse.Core.Registry.Npm (
     NpmClientConfig (..),
     PublishRelayResponse (PublishRelayResponse),
     ResponseBoundExceeded (ResponseBoundExceeded),
+    artifactRequestByFile,
     artifactRequestByUrl,
     fetchMetadataForm,
     noValidators,
@@ -1055,17 +1075,20 @@ request's 'RequestCtx'.
 
 The mount's 'PackumentDeps' and error renderer are read from the matched
 'MountBinding'; an unwired mount is the recognised-but-unserved @501@ stub (as for
-'servePackument'). With dependencies wired and the edge token (if any) validated,
-the artifact is fetched __by the preserved 'Filename'__ — never a name rebuilt from
-the coordinate:
+'servePackument'). With dependencies wired and the edge token (if any) validated, the
+two legs locate the tarball by the trust of their origin:
 
-* the __private__ upstream is tried first, __uncached__, forwarding the client's
-  credential; a @2xx@ streams the bytes through with bounded memory, any other
-  status falls through;
-* on a private miss the __public__ version metadata is fetched anonymously and
-  __that one version__ gated against the rules; an admit streams the public bytes
-  __and enqueues a 'MirrorJob'__ (serve-then-enqueue, the enqueue best-effort and
-  non-blocking), a reject renders the serve error model
+* the __private__ leg is a __conventional stable read__: it fetches
+  @{pdPrivateBaseUrl}\/{pkg}\/-\/{file}@ by the requested filename
+  ('artifactRequestByFile'), __forwarding the client's credential__ and __without a
+  private-packument fetch__; a @2xx@ streams the bytes through with bounded memory and
+  answers the request, any other status (or a connection failure) is a clean miss that
+  falls through. It applies no serve-time integrity floor — the bytes are still verified
+  client-side and by the mirror worker (see the module header → "Artifact path");
+* on a private miss the __public__ leg fetches that one version's metadata anonymously
+  and gates it against the rules; an admit honours the gated @dist.tarball@, streaming
+  the public bytes __and enqueuing a 'MirrorJob'__ (serve-then-enqueue, the enqueue
+  best-effort and non-blocking), a reject renders the serve error model
   (@403@\/@503@\/@500@\/@404@) through the mount's renderer.
 
 The public-upstream fetch is always anonymous (the client credential is never sent to the
@@ -1169,7 +1192,7 @@ serveTarballWithDeps mode renderer deps name version (Filename file) request res
             -- artifact request on both legs so upstream can answer a 304 for a
             -- pass-through body we serve unchanged (the conditional-GET contract).
             validators = forwardValidators (requestHeaders request)
-        privateHit <- streamPrivateArtifact mode rt deps clientToken validators name version file respond
+        privateHit <- streamPrivateArtifact mode rt deps clientToken validators name file respond
         case privateHit of
             Just received -> do
                 -- A private hit is an admit served from the trusted upstream (no rule
@@ -1179,40 +1202,43 @@ serveTarballWithDeps mode renderer deps name version (Filename file) request res
                 pure received
             Nothing -> servePublicArtifact mode rt renderer deps validators name version file respond
 
-{- Stream the artifact from the __trusted__ private upstream at its __authoritative
-location__: fetch the private packument (uncached, forwarding the client's credential
-— the @passthrough@ private-origin posture), select the requested version's 'Artifact'
-by its preserved filename, and fetch that artifact's 'artUrl' directly, rather than
-reconstructing @{base}\/{pkg}\/-\/{file}@. Honouring the preserved location is what
-lets the private upstream serve a tarball wherever it chooses (a separate files host,
-a path the npm convention cannot rebuild). A @2xx@ is streamed through with bounded
-memory and yields 'Just'; anything that does not produce a served body — the
-packument not resolving, no artifact matching the filename, the host policy refusing
-the @artUrl@, an unformable URL, a non-@2xx@ status, or a failure opening the
-connection — yields 'Nothing' so the caller falls through to the public origin, the
-upstream artifact body never read.
+{- Stream the artifact from the __trusted__ private upstream as a __conventional stable
+read__: build the tarball request at @{pdPrivateBaseUrl}\/{pkg}\/-\/{file}@ by the
+client's requested filename ('artifactRequestByFile') and fetch it directly, __without
+fetching the private packument first__. This is the stable, cacheable shape an @npm ci@
+install issues; a worst-case lockfile fan-out therefore pays one artifact round-trip per
+tarball rather than an uncached packument fetch+decode it would only discard.
 
-The private upstream is operator-configured and trusted, so its fetch carries no
-resolved-IP recheck ('srPrivateManager') and its tarball-host gate is the
-'Ecluse.Core.Security.TrustedOrigin' one — __exempt from the internal-range block__, the
-serve-path mirror of that unguarded manager (security.md invariant 3): a private
-registry on an internal address (e.g. @http:\/\/10.0.0.5\/@) serves its same-host
-@dist.tarball@ rather than having it refused while same-host metadata succeeds. The
-configured tarball-host policy still gates the @artUrl@ host against the upstream
-allowlist and (under the secure default) to the private base URL's own host, so a
-same-host private tarball is admitted by default and a cross-host one refused.
+The request __forwards the client's credential__ over the trusted manager, attached at
+the single bearer-attach point ('Ecluse.Core.Registry.Npm.withToken'), which pins
+@redirectCount = 0@: the credential-bearing read __never follows a redirect__ (a private
+CDN @302@ is returned here, not chased with the bearer). The constructed URL is on the
+private base host, so the 'Ecluse.Core.Security.TrustedOrigin' tarball-host gate is
+satisfied __same-host__ — the host check is still applied, simply trivially met — and the
+trusted origin is __exempt from the internal-range block__ ('srPrivateManager', the
+serve-path mirror of that unguarded manager, security.md invariant 3): a private registry
+on an internal address (e.g. @http:\/\/10.0.0.5\/@) still serves its same-host tarball.
+
+A @2xx@ is streamed through with bounded memory and yields 'Just' (the request is
+answered); a non-@2xx@ status, an unformable URL, or a failure opening the connection
+yields 'Nothing' so the caller falls through to the public origin, the upstream artifact
+body never read. The client's conditional @validators@ are relayed onto the request
+('forwardValidators' filtered them upstream), and the relay accepts an upstream @304 Not
+Modified@ ('acceptArtifact') as well as a @2xx@: a private tarball is a pass-through body,
+so a @304@ is relayed straight back to the client (bodiless) rather than treated as a
+private miss falling through to the public origin.
 
 A failure that strikes __after__ a @2xx@ has begun streaming is unrecoverable — the
-response is already on the wire — so 'streamUpstreamWhen' lets it propagate rather
-than reporting a miss: the request fails internally (the connection is torn down)
-instead of responding a second time over a half-sent artifact.
+response is already on the wire — so 'streamUpstreamWhen' lets it propagate rather than
+reporting a miss: the request fails internally (the connection is torn down) instead of
+responding a second time over a half-sent artifact.
 
-The client's conditional @validators@ are relayed onto the upstream artifact request
-('forwardValidators' filtered them upstream), and the relay accepts an upstream @304
-Not Modified@ ('acceptArtifact') as well as a @2xx@: a private tarball is a
-pass-through body, so upstream's own validator is authoritative and a @304@ is relayed
-straight back to the client (bodiless) rather than treated as a private miss
-falling through to the public origin. -}
+This leg applies __no serve-time integrity floor__: an established version pinned in a
+consumer's lockfile and served from an operator-trusted private registry is fast-tracked,
+its bytes still verified client-side by @npm@ and by the mirror worker on ingestion. A
+private upstream that serves its tarball off the conventional @\/-\/@ path (a separate
+files host, a signed CDN URL) is not reached by this leg and is a clean miss that falls
+through to the public origin. -}
 streamPrivateArtifact ::
     ArtifactServe ->
     ServeRuntime ->
@@ -1220,46 +1246,27 @@ streamPrivateArtifact ::
     Maybe Secret ->
     RequestHeaders ->
     PackageName ->
-    Version ->
     Text ->
     (Response -> IO ResponseReceived) ->
     Handler (Maybe ResponseReceived)
-streamPrivateArtifact mode rt deps token validators name version file respond = do
-    selected <- selectPrivateArtifact rt deps token name version file
-    case privateRequestFor =<< selected of
+streamPrivateArtifact mode rt deps token validators name file respond =
+    case privateRequest of
         Just req -> liftIO (relayUpstreamWhen mode (srPrivateManager rt) req acceptArtifact relayArtifact respond)
         Nothing -> pure Nothing
   where
-    -- Form the honoured-URL request for a selected private artifact, when its host
-    -- passes the tarball-host policy and its URL parses. 'Nothing' on either refusal —
-    -- a private miss the caller falls through on, never a fabricated reconstruction.
-    -- The request is marked with the serve mode's method (GET / HEAD) so a HEAD probes
-    -- bodiless, and carries the client's relayed conditional validators.
-    privateRequestFor :: Artifact -> Maybe HTTP.Request
-    privateRequestFor artifact =
-        if tarballHostHonoured TrustedOrigin deps (pdPrivateBaseUrl deps) (artUrl artifact)
-            then withValidators validators . withMethod mode <$> rightToMaybe (artifactRequestByUrl (clientConfig (pdLimits deps) (srPrivateManager rt) (pdPrivateBaseUrl deps) token) (artUrl artifact))
+    -- Build the conventional-URL private tarball request {base}/{pkg}/-/{file} by the
+    -- requested filename, when its (same-)host passes the tarball-host policy and the URL
+    -- forms. 'Nothing' on either refusal — a private miss the caller falls through on. The
+    -- constructed URL is on the private base host, so the host gate is trivially
+    -- satisfied; it is kept applied rather than dropped. The request is marked with the
+    -- serve mode's method (GET / HEAD) and carries the client's relayed conditional
+    -- validators; 'artifactRequestByFile' attaches the forwarded credential with
+    -- redirectCount = 0 (the credential-redirect invariant).
+    privateRequest :: Maybe HTTP.Request
+    privateRequest =
+        if tarballHostHonoured TrustedOrigin deps (pdPrivateBaseUrl deps) (pdPrivateBaseUrl deps)
+            then withValidators validators . withMethod mode <$> rightToMaybe (artifactRequestByFile (clientConfig (pdLimits deps) (srPrivateManager rt) (pdPrivateBaseUrl deps) token) name file)
             else Nothing
-
-{- Fetch the private packument (uncached, with the client's credential) and select
-the requested version's 'Artifact' by its preserved filename. 'Nothing' when the
-private origin does not resolve, the version is absent, no artifact matches the
-filename, or the selected artifact's strongest digest is below the trusted integrity
-floor — each a clean private miss the caller falls through on.
-
-The trusted floor ('pdMinTrustedIntegrity', default SHA-256) gates the private artifact
-serve, mirroring the packument path's listing drop: by default a SHA-1-only or hashless
-private artifact is a miss (served from the public origin instead if it admits there);
-an operator who loosens the trusted floor serves it from the private origin again. -}
-selectPrivateArtifact :: ServeRuntime -> PackumentDeps -> Maybe Secret -> PackageName -> Version -> Text -> Handler (Maybe Artifact)
-selectPrivateArtifact rt deps token name version file = do
-    resolved <- originPackument <$> fetchPrivateOrigin (pdLimits deps) rt (pdPrivateBaseUrl deps) token name
-    pure $ do
-        (info, _value) <- resolved
-        details <- Map.lookup (renderVersion version) (infoVersions info)
-        artifact <- artifactFor file details
-        guard (classifyArtifacts (pdMinTrustedIntegrity deps) (artifact :| []) == MeetsFloor)
-        pure artifact
 
 {- Serve the artifact from the public upstream after a private miss: gate the
 single requested version against the rules, and on an admit stream the public bytes
@@ -1349,8 +1356,8 @@ the artifact is selected: a public version whose selected artifact carries no di
 meeting the floor ('pdMinIntegrity') is inadmissible — 'integrityMissing' (no digest at
 all) or 'integrityBelowFloor' (a digest, but too weak), both rendered @403@ — and
 refused outright, never fetched. This is the public path; the trusted (private) artifact
-serve is gated separately by the trusted floor in 'selectPrivateArtifact' and never
-reaches this gate. -}
+serve is a conventional stable read in 'streamPrivateArtifact' that applies no serve-time
+integrity floor, so it never reaches this gate. -}
 gateVersion :: EvalContext -> PackumentDeps -> Text -> PackageDetails -> IO PublicArtifactGate
 gateVersion ctx deps file details = do
     decision <- serveDecisionOf details <$> evalRules ctx (pdRules deps) details
