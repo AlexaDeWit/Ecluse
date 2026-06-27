@@ -264,7 +264,7 @@ blanket bans** — a floor to extend, not a wall:
 
 | Default rule (name) | Rule | Status | Why |
 |---|---|---|---|
-| `min-age` | `AllowIfPublishedBefore` (7 days) | **On at launch** | Admit public versions that have survived a quarantine window — the core defence against race-to-publish typosquatting and dependency confusion. |
+| `min-age` | `AllowIfOlderThan` (7 days) | **On at launch** | Admit public versions that have survived a quarantine window — the core defence against race-to-publish typosquatting and dependency confusion. |
 | `remediation-fast-track` | `AllowIfRemediatesCve` | **On once the [CVE rules](rules-engine.md#cve-subsystem) land** | Ranked **above** `min-age` so a release that fixes a known CVE is admitted **immediately** — a quarantine must never delay a security patch (see [Rules Engine](rules-engine.md#allowifremediatescve--remediation-fast-track)). |
 
 Deliberately **not** in the default: `DenyInstallTimeExecution` (plenty of legitimate

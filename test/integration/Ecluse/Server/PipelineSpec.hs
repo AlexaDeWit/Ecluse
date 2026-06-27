@@ -61,7 +61,7 @@ import Ecluse.Core.Rules (
 import Ecluse.Core.Rules.Types (
     FailureAlignment (FailDeny, FailNoDecision),
     PrecededRule,
-    Rule (AllowIfPublishedBefore, DenyInstallTimeExecution),
+    Rule (AllowIfOlderThan, DenyInstallTimeExecution),
     RuleResult (Allow, Deny),
     atDefaultPrecedence,
  )
@@ -97,7 +97,7 @@ install script; anything else is excluded.
 -}
 policy :: [PrecededRule]
 policy =
-    [ atDefaultPrecedence (AllowIfPublishedBefore (7 * nominalDay))
+    [ atDefaultPrecedence (AllowIfOlderThan (7 * nominalDay))
     , atDefaultPrecedence DenyInstallTimeExecution
     ]
 

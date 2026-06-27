@@ -68,7 +68,7 @@ import Ecluse.Core.Registry.Npm.Project (Projection (Projected), parsePackageInf
 import Ecluse.Core.Rules.Types (
     EvalContext (EvalContext),
     PrecededRule,
-    Rule (AllowIfPublishedBefore, AllowScope, DenyInstallTimeExecution),
+    Rule (AllowIfOlderThan, AllowScope, DenyInstallTimeExecution),
     atDefaultPrecedence,
  )
 import Ecluse.Test.Package (validSha1, validSha512Sri)
@@ -243,7 +243,7 @@ benchRules :: [PrecededRule]
 benchRules =
     [ atDefaultPrecedence (AllowScope (mkScope "trusted-scope"))
     , atDefaultPrecedence DenyInstallTimeExecution
-    , atDefaultPrecedence (AllowIfPublishedBefore (30 * nominalDay))
+    , atDefaultPrecedence (AllowIfOlderThan (30 * nominalDay))
     ]
 
 -- | Encode a 'Value' to a strict 'ByteString'.

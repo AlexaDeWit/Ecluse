@@ -32,7 +32,7 @@ import Ecluse.Core.Registry.Npm (NpmClientConfig (NpmClientConfig, npmBaseUrl, n
 import Ecluse.Core.Registry.Npm.Route qualified as Npm
 import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
 import Ecluse.Core.Rules (prepare)
-import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfPublishedBefore), atDefaultPrecedence)
+import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan), atDefaultPrecedence)
 import Ecluse.Core.Security (LoweredHostSet, TarballHostPolicy (SameHostAsPackument), defaultLimits, lowerCaseHosts)
 import Ecluse.Core.Security.Egress (newGuardedTlsManager)
 import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
@@ -296,7 +296,7 @@ fixedNow = UTCTime (fromGregorian 2026 6 1) 0
 
 -- The shipped quarantine: admit a version only once it is older than a week.
 admitOldEnough :: [PrecededRule]
-admitOldEnough = [atDefaultPrecedence (AllowIfPublishedBefore (7 * nominalDay))]
+admitOldEnough = [atDefaultPrecedence (AllowIfOlderThan (7 * nominalDay))]
 
 -- Loopback is an internal address, so it is opted into both the guarded manager's
 -- resolved-IP recheck and the deps' tarball-host gate to let the in-process fetches land.

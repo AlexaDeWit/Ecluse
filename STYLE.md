@@ -517,7 +517,7 @@ only there to be matched:
 ruleName :: Rule -> Text
 ruleName = \case
     AllowScope{} -> "AllowScope"
-    AllowIfPublishedBefore{} -> "AllowIfPublishedBefore"
+    AllowIfOlderThan{} -> "AllowIfOlderThan"
     DenyInstallTimeExecution -> "DenyInstallTimeExecution"
 ```
 

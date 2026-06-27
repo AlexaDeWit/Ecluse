@@ -30,7 +30,7 @@ import Ecluse.Core.Registry (ParseError (ParseError), RegistryClient (..))
 import Ecluse.Core.Registry.Npm.Route qualified as Npm
 import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
 import Ecluse.Core.Rules (prepare)
-import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfPublishedBefore), atDefaultPrecedence)
+import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan), atDefaultPrecedence)
 import Ecluse.Core.Security (LoweredHostSet, TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), defaultLimits, lowerCaseHosts)
 import Ecluse.Core.Security.Egress (newGuardedTlsManager)
 import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
@@ -289,7 +289,7 @@ fixedNow = UTCTime (fromGregorian 2026 1 1) 0
 -- A permissive rule policy: admit any version older than a week. The fixture version
 -- (published 2020) clears it, so every artifact reaches the tarball-host gate.
 admitOldEnough :: [PrecededRule]
-admitOldEnough = [atDefaultPrecedence (AllowIfPublishedBefore (7 * nominalDay))]
+admitOldEnough = [atDefaultPrecedence (AllowIfOlderThan (7 * nominalDay))]
 
 -- ── handle doubles (the serve path talks to upstreams directly) ───────────────
 

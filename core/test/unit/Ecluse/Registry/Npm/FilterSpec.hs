@@ -31,7 +31,7 @@ import Ecluse.Core.Rules.Types (
     Decision (Admitted),
     EvalContext (EvalContext),
     PrecededRule,
-    Rule (AllowIfPublishedBefore),
+    Rule (AllowIfOlderThan),
     atDefaultPrecedence,
  )
 
@@ -57,7 +57,7 @@ deny-by-default — so a version's survival is controlled purely by its @time@ i
 the fixture, exercising the real rules engine rather than a stub.
 -}
 quarantine :: [PrecededRule]
-quarantine = [atDefaultPrecedence (AllowIfPublishedBefore (7 * nominalDay))]
+quarantine = [atDefaultPrecedence (AllowIfOlderThan (7 * nominalDay))]
 
 {- | An ISO-8601 instant @ageDays@ before 'now', as the bare npm @time@ string
 (no surrounding quotes — the literal builders add those), parseable by the
