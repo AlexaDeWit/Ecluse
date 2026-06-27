@@ -168,7 +168,7 @@ import Ecluse.Core.Package.Merge (
  )
 import Ecluse.Core.Queue (
     MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize),
-    MirrorJob (MirrorJob, jobArtifact, jobArtifactUrl, jobMirrorTarget, jobPackage, jobVersion),
+    MirrorJob (MirrorJob, jobArtifact, jobArtifactUrl, jobMirrorTarget, jobPackage, jobTraceContext, jobVersion),
     enqueue,
  )
 import Ecluse.Core.Registry (RegistryResponse (responseBody))
@@ -1462,7 +1462,7 @@ serve) is not enqueued, since there would be no digest to verify against. -}
 enqueueMirror :: ServeRuntime -> PackumentDeps -> PackageName -> Version -> Artifact -> IO ()
 enqueueMirror rt deps name version artifact =
     whenJust (nonEmpty (artHashes artifact)) $ \hashes ->
-        spanMirrorEnqueue (srTracing rt) name version (artUrl artifact) $ do
+        void . spanMirrorEnqueue (srTracing rt) name version (artUrl artifact) enqueueErrorDetail $ \traceContext -> do
             enqueued <-
                 tryAny . enqueue (srQueue rt) $
                     MirrorJob
@@ -1476,10 +1476,25 @@ enqueueMirror rt deps name version artifact =
                                 , maHashes = hashes
                                 , maSize = artSize artifact
                                 }
+                        , -- The enqueueing span's trace context, captured by the span
+                          -- bracket, so the worker's per-job span links back across the hop.
+                          jobTraceContext = traceContext
                         }
             -- Best-effort: the enqueue outcome is counted but never propagated, so a
             -- queue outage records a failure rather than failing or delaying the serve.
             either (const (mpMirrorEnqueueFailure (srMetrics rt))) (const (mpMirrorEnqueued (srMetrics rt))) enqueued
+            -- Hand the outcome back so the span bracket can mark a swallowed failure
+            -- errored on the producer span (the metric counts it; the span explains it).
+            pure enqueued
+  where
+    -- Project the swallowed enqueue outcome onto the producer span's status: a failure
+    -- records the cause (so a trace explains why the mirror was not enqueued), a success
+    -- leaves the status unset.
+    enqueueErrorDetail :: Either SomeException () -> Maybe Text
+    enqueueErrorDetail = either (Just . enqueueFailureDetail) (const Nothing)
+
+    enqueueFailureDetail :: SomeException -> Text
+    enqueueFailureDetail e = "mirror enqueue failed: " <> toText (displayException e)
 
 -- ── the egress gate at the serve boundary ─────────────────────────────────────────
 

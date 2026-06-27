@@ -59,7 +59,9 @@ passthroughTracingPort :: TracingPort
 passthroughTracingPort =
     TracingPort
         { spanRuleEval = \_ _ action -> fst <$> action
-        , spanMirrorEnqueue = \_ _ _ action -> action
+        , -- Open no span: hand the body no captured trace context and ignore the
+          -- error projection, just running the enqueue body.
+          spanMirrorEnqueue = \_ _ _ _project body -> body Nothing
         }
 
 -- ── worker ports ────────────────────────────────────────────────────────────────
@@ -91,5 +93,7 @@ inert double for a spec that drives the worker's per-job span site without a tra
 passthroughWorkerTracingPort :: WorkerTracingPort
 passthroughWorkerTracingPort =
     WorkerTracingPort
-        { wtpMirrorJobSpan = \_ _ _ action -> action
+        { -- Open no span and establish no link: ignore the carried trace context and the
+          -- outcome projection, just running the job body.
+          wtpMirrorJobSpan = \_ _ _ _ action -> action
         }

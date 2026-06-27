@@ -42,6 +42,7 @@ sampleJob =
                 , maHashes = unsafeHash SHA1 validSha1 :| []
                 , maSize = Just 7
                 }
+        , jobTraceContext = Nothing
         }
 
 {- | A second, distinct job, used to assert FIFO ordering across two enqueues.

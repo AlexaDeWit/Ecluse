@@ -81,4 +81,5 @@ sampleJob =
                 , maHashes = unsafeHash SHA1 validSha1 :| []
                 , maSize = Just 256
                 }
+        , jobTraceContext = Nothing
         }

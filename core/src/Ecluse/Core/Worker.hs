@@ -94,7 +94,7 @@ import Ecluse.Core.Package (Hash (hashAlg, hashValue), HashAlg (Blake2b, MD5, SH
 import Ecluse.Core.Package.Integrity (Strength, assertedAlg, integrityStrength, sriAlgorithm, sriBody, sriPrefix)
 import Ecluse.Core.Queue (
     MirrorArtifact (maFilename, maHashes),
-    MirrorJob (jobArtifact, jobArtifactUrl, jobPackage, jobVersion),
+    MirrorJob (jobArtifact, jobArtifactUrl, jobPackage, jobTraceContext, jobVersion),
     MirrorQueue (ack, extendVisibility, receive),
     QueueMessage (msgJob, msgReceipt),
     ReceiptHandle,
@@ -385,14 +385,16 @@ job was gated at serve time.
 
 The per-job domain span (the worker tracing port) wraps the whole fetch → verify →
 publish, projecting the terminal outcome onto the span so a refused publish is
-explainable from the trace. The span body is discharged to 'IO' through the unlift, so
-the loop's structured log lines still compose through the ambient @katip@ context.
+explainable from the trace, and __linking__ back to the request that enqueued the job
+through the trace context the job carries ('jobTraceContext'). The span body is
+discharged to 'IO' through the unlift, so the loop's structured log lines still compose
+through the ambient @katip@ context.
 -}
 processJob :: ReceiptHandle -> MirrorJob -> WorkerM JobOutcome
 processJob receipt job = katipAddNamespace "job" $ do
     tracing <- asks wrTracing
     withRunInIO $ \runInIO ->
-        wtpMirrorJobSpan tracing (jobPackage job) (jobVersion job) jobSpanOutcome $
+        wtpMirrorJobSpan tracing (jobPackage job) (jobVersion job) (jobTraceContext job) jobSpanOutcome $
             runInIO $ do
                 fetched <- fetchArtifactBytes (jobArtifactUrl job)
                 case fetched of

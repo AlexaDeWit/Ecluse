@@ -27,6 +27,7 @@ module Ecluse.Core.Telemetry.Span (
 ) where
 
 import Ecluse.Core.Package (PackageName)
+import Ecluse.Core.Queue (RemoteSpanContext)
 import Ecluse.Core.Server.Response (ServeDecision)
 import Ecluse.Core.Version (Version)
 
@@ -42,9 +43,21 @@ data TracingPort = TracingPort
     verdict to record on the span (the decision and, on a denial, the deciding rule,
     reason class, and message), so a refusal is explainable from the trace alone.
     -}
-    , spanMirrorEnqueue :: forall a. PackageName -> Version -> Text -> IO a -> IO a
+    , spanMirrorEnqueue ::
+        forall a.
+        PackageName ->
+        Version ->
+        Text ->
+        (a -> Maybe Text) ->
+        (Maybe RemoteSpanContext -> IO a) ->
+        IO a
     {- ^ Bracket the serve-time hand-off to the asynchronous mirror, carrying the
-    package, version, and the artifact's authoritative URL.
+    package, version, and the artifact's authoritative URL. The body is handed the
+    enqueueing span's trace context (or 'Nothing' when tracing is off) to stamp onto
+    the mirror job, so the worker's per-job span can link back across the async hop.
+    The projection maps the body's result onto an optional failure detail: a 'Just'
+    marks the span errored, so a swallowed best-effort enqueue failure is still
+    explainable from the trace.
     -}
     }
 
@@ -56,10 +69,19 @@ port value serves the call site whatever the body yields. The implementation is 
 when tracing is off, so the worker brackets unconditionally.
 -}
 newtype WorkerTracingPort = WorkerTracingPort
-    { wtpMirrorJobSpan :: forall a. PackageName -> Version -> (a -> JobSpanOutcome) -> IO a -> IO a
+    { wtpMirrorJobSpan ::
+        forall a.
+        PackageName ->
+        Version ->
+        Maybe RemoteSpanContext ->
+        (a -> JobSpanOutcome) ->
+        IO a ->
+        IO a
     {- ^ Bracket the worker's per-job fetch → verify → publish, carrying the package and
-    version and, once the job finishes, the projected outcome (the bounded outcome label
-    always, and a failure detail that marks the span errored when the job did not
+    version, the trace context the job was enqueued under (to __link__ the per-job span
+    back to the enqueueing request across the async hop, or 'Nothing' for a job that
+    carried none), and, once the job finishes, the projected outcome (the bounded outcome
+    label always, and a failure detail that marks the span errored when the job did not
     publish).
     -}
     }

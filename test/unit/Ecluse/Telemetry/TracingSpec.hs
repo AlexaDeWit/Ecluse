@@ -12,14 +12,17 @@ import Network.HTTP.Client (
     requestHeaders,
  )
 import Network.HTTP.Types (status200)
-import Network.HTTP.Types.Header (hAuthorization, hUserAgent)
+import Network.HTTP.Types.Header (HeaderName, hAuthorization, hUserAgent)
 import Network.Wai (Application, responseLBS)
+import Network.Wai qualified as Wai
 import Network.Wai.Handler.Warp qualified as Warp
 import OpenTelemetry.Exporter.InMemory.Span (inMemoryListExporter)
 import OpenTelemetry.Instrumentation.HttpClient (instrumentManagerSettings)
 import OpenTelemetry.Instrumentation.Wai (newOpenTelemetryWaiMiddleware')
 import OpenTelemetry.Metric (noopMeterProvider)
 import OpenTelemetry.Metric.Core (getMeter)
+import OpenTelemetry.Propagator (setGlobalTextMapPropagator)
+import OpenTelemetry.Propagator.W3CTraceContext (w3cTraceContextPropagator)
 import OpenTelemetry.Trace (
     createTracerProvider,
     emptyTracerProviderOptions,
@@ -27,12 +30,16 @@ import OpenTelemetry.Trace (
     setGlobalTracerProvider,
  )
 import OpenTelemetry.Trace.Core (
-    ImmutableSpan (spanHot),
-    SpanHot (hotAttributes, hotName),
+    ImmutableSpan (spanContext, spanHot),
+    Link (frozenLinkContext),
+    SpanHot (hotAttributes, hotLinks, hotName, hotStatus),
+    SpanStatus (Error, Unset),
  )
+import OpenTelemetry.Trace.Core qualified as TraceCore
+import OpenTelemetry.Util (appendOnlyBoundedCollectionValues)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Package (mkPackageName)
+import Ecluse.Core.Package (PackageName, mkPackageName)
 import Ecluse.Core.Server.Response (
     RejectReason (BelowIntegrityFloor, ByPolicy, MissingIntegrity, Unavailable, UpstreamInvalid),
     Rejection (Rejection),
@@ -40,11 +47,18 @@ import Ecluse.Core.Server.Response (
     ServeDecision (Admit, Reject),
     Transience (WontResolve),
  )
-import Ecluse.Core.Version (mkVersion)
-import Ecluse.Telemetry (telemetryDisabled)
+import Ecluse.Core.Version (Version, mkVersion)
+import Ecluse.Telemetry (
+    Telemetry (TelemetryEnabled),
+    TelemetryProviders (TelemetryProviders),
+    telemetryDisabled,
+ )
 import Ecluse.Telemetry.Tracing (
+    JobSpanOutcome (JobSpanOutcome),
     dataPlaneInstrumentationConfig,
     ruleVerdictFields,
+    withMirrorEnqueueSpan,
+    withMirrorJobSpan,
     withRuleEvalSpan,
  )
 
@@ -66,6 +80,9 @@ spec = do
     verdictMappingSpec
     gatingSpec
     scrubSpec
+    crossAsyncLinkSpec
+    enqueueStatusSpec
+    traceparentInjectionSpec
 
 -- A distinctive secret that must never surface on a span; the scrub assertions search
 -- the captured spans for it.
@@ -190,3 +207,126 @@ attributeDump ref = do
         hot <- readIORef (spanHot theSpan)
         pure (hotName hot <> " " <> show (hotAttributes hot))
     pure (T.intercalate "\n" parts)
+
+-- ── cross-async span link ───────────────────────────────────────────────────────
+
+-- The package/version coordinates the domain spans carry — fixed, since these tests
+-- assert on the trace structure (links, status), not the coordinate attributes.
+samplePackage :: PackageName
+samplePackage = mkPackageName Npm Nothing "left-pad"
+
+sampleVersion :: Version
+sampleVersion = mkVersion Npm "1.3.0"
+
+{- The true cross-async span link: capture the originating request's (enqueue) span
+context exactly as the serve path does, hand it to the worker's per-job span exactly as
+the worker does, and assert — through the in-memory exporter — that the @ecluse.mirror.job@
+span carries a span __link__ whose trace id is the @ecluse.mirror.enqueue@ span's. This is
+the deterministic proof that the worker job is linked to the request that enqueued it,
+not merely correlated by package\/version. -}
+crossAsyncLinkSpec :: Spec
+crossAsyncLinkSpec = describe "cross-async span link (enqueue → worker job)" $ do
+    it "links the worker-job span back to the enqueueing span's trace" $ do
+        (processor, ref) <- inMemoryListExporter
+        tracerProvider <- createTracerProvider [processor] emptyTracerProviderOptions
+        let telemetry = TelemetryEnabled (TelemetryProviders tracerProvider noopMeterProvider)
+        -- The serve path captures the enqueue span's context; carry it across the hop.
+        carrier <-
+            withMirrorEnqueueSpan telemetry samplePackage sampleVersion "https://artifact" (const Nothing) pure
+        -- The worker re-establishes it as a link on its per-job span.
+        withMirrorJobSpan telemetry samplePackage sampleVersion carrier (const (JobSpanOutcome "succeeded" Nothing)) pass
+        _ <- forceFlushTracerProvider tracerProvider Nothing
+
+        enqueueSpan <- findSpan ref "ecluse.mirror.enqueue"
+        jobSpan <- findSpan ref "ecluse.mirror.job"
+        jobHot <- readIORef (spanHot jobSpan)
+        let jobLinks = toList (appendOnlyBoundedCollectionValues (hotLinks jobHot))
+        -- Exactly one link, pointing at the enqueue span's trace.
+        map (TraceCore.traceId . frozenLinkContext) jobLinks
+            `shouldBe` [TraceCore.traceId (spanContext enqueueSpan)]
+
+    it "carries no link when the job carried no trace context" $ do
+        (processor, ref) <- inMemoryListExporter
+        tracerProvider <- createTracerProvider [processor] emptyTracerProviderOptions
+        let telemetry = TelemetryEnabled (TelemetryProviders tracerProvider noopMeterProvider)
+        -- A job enqueued with no context (tracing was off at enqueue) yields an unlinked
+        -- worker span — still emitted, just not linked.
+        withMirrorJobSpan telemetry samplePackage sampleVersion Nothing (const (JobSpanOutcome "succeeded" Nothing)) pass
+        _ <- forceFlushTracerProvider tracerProvider Nothing
+        jobSpan <- findSpan ref "ecluse.mirror.job"
+        jobHot <- readIORef (spanHot jobSpan)
+        toList (appendOnlyBoundedCollectionValues (hotLinks jobHot)) `shouldSatisfy` null
+
+-- ── span status on a swallowed enqueue failure ──────────────────────────────────
+
+{- The producer span must explain a swallowed best-effort enqueue failure: when the
+enqueue-result projection reports a failure detail, the @ecluse.mirror.enqueue@ span's
+status is set to 'Error' carrying that detail; a success leaves it 'Unset'. This is what
+lets a trace say /why/ the mirror was not enqueued, even though the client response was
+never affected. -}
+enqueueStatusSpec :: Spec
+enqueueStatusSpec = describe "enqueue span status on a swallowed failure" $ do
+    it "marks the enqueue span errored with the failure detail" $ do
+        (processor, ref) <- inMemoryListExporter
+        tracerProvider <- createTracerProvider [processor] emptyTracerProviderOptions
+        let telemetry = TelemetryEnabled (TelemetryProviders tracerProvider noopMeterProvider)
+        -- The body's result projects to a failure detail, as the swallowed-failure path does.
+        withMirrorEnqueueSpan telemetry samplePackage sampleVersion "https://artifact" (const (Just "mirror enqueue failed: queue unreachable")) (const pass)
+        _ <- forceFlushTracerProvider tracerProvider Nothing
+        enqueueSpan <- findSpan ref "ecluse.mirror.enqueue"
+        hot <- readIORef (spanHot enqueueSpan)
+        hotStatus hot `shouldBe` Error "mirror enqueue failed: queue unreachable"
+
+    it "leaves the enqueue span status unset on a successful enqueue" $ do
+        (processor, ref) <- inMemoryListExporter
+        tracerProvider <- createTracerProvider [processor] emptyTracerProviderOptions
+        let telemetry = TelemetryEnabled (TelemetryProviders tracerProvider noopMeterProvider)
+        withMirrorEnqueueSpan telemetry samplePackage sampleVersion "https://artifact" (const Nothing) (const pass)
+        _ <- forceFlushTracerProvider tracerProvider Nothing
+        enqueueSpan <- findSpan ref "ecluse.mirror.enqueue"
+        hot <- readIORef (spanHot enqueueSpan)
+        hotStatus hot `shouldBe` Unset
+
+-- ── W3C traceparent injection on outbound data-plane requests ────────────────────
+
+{- The data-plane instrumentation must inject a W3C @traceparent@ on each outbound
+request, so a downstream service continues the trace. Drive a request through the very
+instrumented manager the proxy installs (under the global W3C propagator the SDK installs
+in production) at a stub that records the headers it received, and assert @traceparent@
+arrived. -}
+traceparentInjectionSpec :: Spec
+traceparentInjectionSpec = describe "W3C traceparent injection on the data plane" $
+    it "injects a traceparent header on an outbound data-plane request" $ do
+        (processor, _ref) <- inMemoryListExporter
+        tracerProvider <- createTracerProvider [processor] emptyTracerProviderOptions
+        setGlobalTracerProvider tracerProvider
+        -- The production posture: the SDK installs the W3C propagator globally, which is
+        -- what the http-client instrumentation injects through.
+        setGlobalTextMapPropagator w3cTraceContextPropagator
+        settings <- instrumentManagerSettings dataPlaneInstrumentationConfig defaultManagerSettings
+        manager <- newManager settings
+        headersRef <- newIORef []
+        Warp.testWithApplication (pure (captureHeadersApp headersRef)) $ \port -> do
+            req <- parseRequest ("http://127.0.0.1:" <> show port <> "/some/package")
+            _ <- httpLbs req manager
+            pass
+        _ <- forceFlushTracerProvider tracerProvider Nothing
+        received <- readIORef headersRef
+        find ((== "traceparent") . fst) received `shouldSatisfy` isJust
+
+-- A WAI application that records the headers of the request it received, then answers
+-- @200@ — the downstream stub the traceparent-injection assertion inspects.
+captureHeadersApp :: IORef [(HeaderName, ByteString)] -> Application
+captureHeadersApp ref req respond = do
+    writeIORef ref (Wai.requestHeaders req)
+    respond (responseLBS status200 [] "ok")
+
+-- Read the captured span with the given name, failing the test loudly if none was
+-- exported (so a missing emission is a clear failure, not a pattern-match crash).
+findSpan :: IORef [ImmutableSpan] -> Text -> IO ImmutableSpan
+findSpan ref name = do
+    spans <- readIORef ref
+    named <- filterM (fmap ((== name) . hotName) . readIORef . spanHot) spans
+    case named of
+        (s : _) -> pure s
+        [] -> fail ("no captured span named " <> toString name)

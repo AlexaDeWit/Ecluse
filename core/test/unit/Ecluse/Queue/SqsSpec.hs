@@ -5,7 +5,7 @@ import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Package (HashAlg (Blake2b, MD5, SHA1, SHA256, SHA384, SHA512, SRI), mkPackageName, mkScope)
-import Ecluse.Core.Queue (MirrorArtifact (..), MirrorJob (..), Seconds (..))
+import Ecluse.Core.Queue (MirrorArtifact (..), MirrorJob (..), RemoteSpanContext (..), Seconds (..))
 import Ecluse.Core.Queue.Sqs (
     SqsConfig (..),
     decodeJob,
@@ -40,6 +40,14 @@ npmJob =
                 , maHashes = unsafeHash SRI validSha512Sri :| [unsafeHash SHA1 validSha1]
                 , maSize = Just 1234
                 }
+        , -- A populated trace-context carrier, so the round-trip proves the W3C
+          -- traceparent/tracestate survive the wire mapping.
+          jobTraceContext =
+            Just
+                RemoteSpanContext
+                    { rscTraceparent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+                    , rscTracestate = "ecluse=1"
+                    }
         }
 
 -- | A scoped npm job fixture, to exercise the scope arm of the wire mapping.
@@ -56,6 +64,8 @@ scopedJob =
                 , maHashes = unsafeHash SRI validSha512Sri :| []
                 , maSize = Nothing
                 }
+        , -- The absent-carrier case (tracing off at enqueue), so both arms round-trip.
+          jobTraceContext = Nothing
         }
 
 -- | A PyPI job fixture: a different ecosystem, no scope.
@@ -72,6 +82,7 @@ pypiJob =
                 , maHashes = unsafeHash SHA1 validSha1 :| []
                 , maSize = Just 9001
                 }
+        , jobTraceContext = Nothing
         }
 
 spec :: Spec
@@ -97,6 +108,7 @@ spec = do
                     jobArtifactUrl job `shouldBe` jobArtifactUrl npmJob
                     jobMirrorTarget job `shouldBe` jobMirrorTarget npmJob
                     jobArtifact job `shouldBe` jobArtifact npmJob
+                    jobTraceContext job `shouldBe` jobTraceContext npmJob
 
         it "round-trips every hash algorithm's wire name (encode/decode are inverse over all algs)" $
             -- A job whose artifact carries one digest of EACH algorithm exercises both

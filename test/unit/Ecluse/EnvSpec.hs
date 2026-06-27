@@ -94,6 +94,7 @@ sampleJob =
                 , maHashes = unsafeHash SHA1 validSha1 :| []
                 , maSize = Just 42
                 }
+        , jobTraceContext = Nothing
         }
 
 -- | A sample package name and version, for the registry-handle assertions.

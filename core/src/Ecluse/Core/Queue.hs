@@ -55,6 +55,7 @@ module Ecluse.Core.Queue (
     -- * Payloads
     MirrorJob (..),
     MirrorArtifact (..),
+    RemoteSpanContext (..),
     QueueMessage (..),
 
     -- * Opaque receipt
@@ -111,6 +112,13 @@ data MirrorJob = MirrorJob
     fetched bytes are verified against, plus the filename and declared size the
     publish document is assembled from.
     -}
+    , jobTraceContext :: Maybe RemoteSpanContext
+    {- ^ The trace context of the serve-time span that enqueued the job, captured
+    at enqueue time so the worker's per-job span can __link__ back to the request
+    that produced the work across the asynchronous hop. 'Nothing' when tracing was
+    off at enqueue time (or for a job from a producer that carried none). The queue
+    treats it as opaque transport; only the tracing port reads it.
+    -}
     }
     deriving stock (Eq, Show)
 
@@ -135,6 +143,26 @@ data MirrorArtifact = MirrorArtifact
     -}
     , maSize :: Maybe Int
     -- ^ The declared artifact size in bytes, if the registry reported it.
+    }
+    deriving stock (Eq, Show)
+
+{- | A serialized W3C trace-context carrier riding on a 'MirrorJob': the
+@traceparent@ (and any @tracestate@) of the span that enqueued the job, in the
+standard wire encoding. It is captured at enqueue time and read back by the worker's
+tracing port to re-establish a span __link__ from the per-job span to the enqueueing
+request, so the asynchronous mirror hand-off is navigable in a trace.
+
+The two fields are the W3C header values verbatim; the queue carries them opaquely
+(it neither parses nor validates them — an unparseable carrier simply yields no link),
+so this type names what is carried without coupling the queue to any tracing backend.
+-}
+data RemoteSpanContext = RemoteSpanContext
+    { rscTraceparent :: Text
+    -- ^ The W3C @traceparent@ header value of the enqueueing span.
+    , rscTracestate :: Text
+    {- ^ The W3C @tracestate@ header value (possibly empty) carried alongside, so
+    vendor trace state survives the hop.
+    -}
     }
     deriving stock (Eq, Show)
 
