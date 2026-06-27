@@ -84,7 +84,7 @@ import Ecluse.Core.Rules.Types (
     PrecededRule,
     RetryAfter,
     RuleOutcome (Abstain, Allow, Deny, Unavailable),
-    Transience (WillResolve),
+    Transience (WillResolve, WontResolve),
  )
 
 -- ── effectful rules ───────────────────────────────────────────────────────────
@@ -213,28 +213,33 @@ runEffectfulRule ctx rule pd = do
     admitted <- admitProbe rule now
     if not admitted
         then -- Breaker open and still cooling down: fast-fail without running the
-        -- rule's IO, the cheap path a sustained outage stays on.
-            pure (exhausted rule "the rule source circuit breaker is open")
+        -- rule's IO, the cheap path a sustained outage stays on. An open breaker is
+        -- an infrastructural outage, so it is transient.
+            pure (exhausted rule (transientCause (erConfig rule)) "the rule source circuit breaker is open")
         else do
             result <- attemptWithRetry rule pd
             case result of
-                Just outcome -> do
+                Right outcome -> do
                     commitBreaker rule recordSuccess
                     pure outcome
-                Nothing -> do
+                Left transience -> do
                     commitBreaker rule (tripOnFailure (erConfig rule) now)
-                    pure (exhausted rule "the rule could not be evaluated")
+                    pure (exhausted rule transience "the rule could not be evaluated")
 
 {- Attempt the rule's IO under the per-attempt timeout, retrying with backoff until
-the retry budget is spent. 'Just' a clean verdict on success; 'Nothing' when every
-attempt failed (an exception, a timeout, or the rule yielding its own 'Unavailable').
-A rule that returns 'Allow'\/'Deny'\/'Abstain' is taken at face value and not
-retried — 'retrying' stops as soon as the attempt yields 'Just'. -}
-attemptWithRetry :: EffectfulRule -> PackageDetails -> IO (Maybe RuleOutcome)
+the retry budget is spent. 'Right' a clean verdict on success; 'Left' the 'Transience'
+of the last failing attempt when every attempt failed (an exception, a timeout, or
+the rule yielding its own 'Unavailable'). 'retrying' returns the final value the
+action produced, so the surfaced transience is the last attempt's: a permanent
+('WontResolve') self-report on that attempt is honoured through to the serve mapping,
+while any other failure stays transient. A rule that returns
+'Allow'\/'Deny'\/'Abstain' is taken at face value and not retried — 'retrying' stops
+as soon as the attempt yields 'Right'. -}
+attemptWithRetry :: EffectfulRule -> PackageDetails -> IO (Either Transience RuleOutcome)
 attemptWithRetry rule pd =
     retrying (backoffPolicy (ecBackoff (erConfig rule))) shouldRetry (\_ -> attemptOnce rule pd)
   where
-    shouldRetry _ = pure . isNothing
+    shouldRetry _ = pure . isLeft
 
 {- | An 'ecBackoff' schedule compiled to a "Control.Retry" policy: the retry at
 iteration n waits the n-th delay (microseconds) before it, and the policy stops
@@ -245,29 +250,43 @@ the resulting delays without sleeping with 'Control.Retry.simulatePolicy'.
 backoffPolicy :: [Int] -> RetryPolicyM IO
 backoffPolicy backoffs = RetryPolicyM (\rs -> pure (backoffs !!? rsIterNumber rs))
 
-{- One attempt: run the rule's IO under the timeout, catching any exception. 'Just'
-a clean verdict; 'Nothing' on a timeout, an exception, or the rule yielding
-'Unavailable' (which counts as a failed attempt so the harness retries and trips the
-breaker rather than trusting an unavailability the rule reported itself). -}
-attemptOnce :: EffectfulRule -> PackageDetails -> IO (Maybe RuleOutcome)
+{- One attempt: run the rule's IO under the timeout, catching any exception. 'Right'
+a clean verdict; 'Left' the 'Transience' to surface should the retry budget be
+exhausted on this attempt. A timeout, an exception, or a rule reporting its own
+transient unavailability is 'WillResolve' (an infrastructural outage the configured
+'RetryAfter' applies to); a rule reporting its own /permanent/ ('WontResolve')
+unavailability keeps that distinction so an internal\/parse fault is not later
+dressed up as retryable. Either way a self-reported 'Unavailable' still counts as a
+failed attempt — the harness retries and trips the breaker rather than trusting a
+single self-report — only the transience it carries on exhaustion differs. -}
+attemptOnce :: EffectfulRule -> PackageDetails -> IO (Either Transience RuleOutcome)
 attemptOnce rule pd = do
     result <- tryAny (timeout (ecTimeout (erConfig rule)) (erEval rule pd))
     pure $ case result of
-        Left _ -> Nothing -- the rule's IO threw
-        Right Nothing -> Nothing -- the attempt timed out
-        Right (Just (Unavailable _ _)) -> Nothing -- the rule reported unavailability
-        Right (Just clean) -> Just clean
+        Left _ -> Left transient -- the rule's IO threw
+        Right Nothing -> Left transient -- the attempt timed out
+        Right (Just (Unavailable WontResolve _)) -> Left WontResolve -- a permanent self-report, honoured
+        Right (Just (Unavailable (WillResolve _) _)) -> Left transient -- a transient self-report
+        Right (Just clean) -> Right clean
+  where
+    transient = transientCause (erConfig rule)
 
 {- The outcome an exhausted rule resolves to, per its failure policy: 'Unavailable'
-(fail-closed, the default) carrying the configured 'Transience' — always transient
-('WillResolve'), since an exhausted source is expected to recover — or 'Abstain'
+(fail-closed, the default) carrying the given 'Transience' — 'WillResolve' for an
+infrastructural failure (a timeout, an exception, an open breaker) or a self-reported
+transient, 'WontResolve' for a self-reported permanent fault — or 'Abstain'
 (fail-open). The reason is carried for the audit trail either way. -}
-exhausted :: EffectfulRule -> Text -> RuleOutcome
-exhausted rule reason = case erOnError rule of
-    OnUnavailable -> Unavailable (WillResolve (ecRetryAfter (erConfig rule))) detail
+exhausted :: EffectfulRule -> Transience -> Text -> RuleOutcome
+exhausted rule transience reason = case erOnError rule of
+    OnUnavailable -> Unavailable transience detail
     OnAbstain -> Abstain detail
   where
     detail = erName rule <> ": " <> reason
+
+{- The transient 'Transience' an infrastructural failure (a timeout, an exception, an
+open breaker) surfaces: retryable, carrying the rule's configured 'RetryAfter'. -}
+transientCause :: EffectfulConfig -> Transience
+transientCause cfg = WillResolve (ecRetryAfter cfg)
 
 -- ── the breaker gate ──────────────────────────────────────────────────────────
 

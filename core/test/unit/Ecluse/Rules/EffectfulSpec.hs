@@ -290,11 +290,50 @@ spec = do
                 Undecidable transience _ -> transience `shouldBe` WillResolve (Just (RetryAfter 15))
                 other -> expectationFailure ("expected Undecidable, got " <> show other)
 
-        it "a rule that itself returns Unavailable is treated as a failed attempt (fail-closed)" $ do
+        it "honours a self-reported permanent (WontResolve) fault through to Undecidable WontResolve" $ do
+            -- The rule detects an internal/parse fault (a corrupt advisory index) and
+            -- reports its own permanent unavailability. The harness still retries it (it
+            -- does not trust a single self-report), but the exhausted outcome must
+            -- preserve the permanent distinction so the serve mapping yields a 500, not
+            -- a retryable 503.
             let pd = pkg (Just "myorg") 0
-            rule <- constRule "EffDeny" fastConfig OnUnavailable (Unavailable WontResolve "self-reported")
+            rule <- constRule "EffDeny" fastConfig OnUnavailable (Unavailable WontResolve "corrupt advisory index")
             decision <- evalRulesEffectful ctx [] [at 300 rule] pd
-            decision `shouldSatisfy` isUndecidable
+            case decision of
+                Undecidable transience _ -> transience `shouldBe` WontResolve
+                other -> expectationFailure ("expected Undecidable WontResolve, got " <> show other)
+
+        it "keeps a self-reported transient (WillResolve) transient, with the configured Retry-After" $ do
+            -- A self-reported transient unavailability stays retryable; the surfaced
+            -- Retry-After is the harness's configured one, not whatever the rule
+            -- reported for itself — so the fix narrows nothing on the transient path.
+            let pd = pkg (Just "myorg") 0
+                cfg = fastConfig{ecRetryAfter = Just (RetryAfter 20)}
+            rule <- constRule "EffDeny" cfg OnUnavailable (Unavailable (WillResolve (Just (RetryAfter 99))) "rate limited")
+            decision <- evalRulesEffectful ctx [] [at 300 rule] pd
+            case decision of
+                Undecidable transience _ -> transience `shouldBe` WillResolve (Just (RetryAfter 20))
+                other -> expectationFailure ("expected Undecidable WillResolve, got " <> show other)
+
+        it "retries a self-reported fault to the budget and surfaces the last attempt's transience" $ do
+            -- The harness does not short-circuit on a self-report: it runs the full
+            -- retry budget. The transience that survives is the last failing attempt's,
+            -- so a rule that ends on a permanent fault surfaces WontResolve even though
+            -- earlier attempts reported a transient one.
+            attempts <- newIORef (0 :: Int)
+            let pd = pkg (Just "myorg") 0
+                cfg = fastConfig{ecBackoff = [0, 0]} -- two retries: three attempts in all
+            rule <- mkRule "EffDeny" cfg OnUnavailable $ \_ -> do
+                n <- atomicModifyIORef' attempts (\k -> (k + 1, k + 1))
+                pure $
+                    if n < 3
+                        then Unavailable (WillResolve Nothing) "still warming"
+                        else Unavailable WontResolve "corrupt advisory index"
+            decision <- evalRulesEffectful ctx [] [at 300 rule] pd
+            readIORef attempts `shouldReturn` 3 -- the full budget ran (no short-circuit)
+            case decision of
+                Undecidable transience _ -> transience `shouldBe` WontResolve
+                other -> expectationFailure ("expected Undecidable WontResolve, got " <> show other)
 
         it "fail-closed undecidable is not admitted (no survivor)" $ do
             let pd = pkg Nothing 0
