@@ -33,6 +33,27 @@ The proxy is not a registry. It delegates storage to whatever backend the
 operator chooses (e.g. AWS CodeArtifact or GCP Artifact Registry), and enforces a
 configurable policy on what may be fetched and mirrored from the public registry.
 
+## Codebase decomposition
+
+Écluse builds as two libraries behind one [`ecluse.cabal`](../ecluse.cabal), drawing a
+hard boundary between the **pure capability core** and the **composition shell**:
+
+- **`ecluse-core`** (`core/src`, modules under `Ecluse.Core.*`) — the
+  ecosystem-agnostic core: the domain model, registry adapters, version grammars, the
+  pure and effectful rule tiers, credential refresh, the queue and security primitives,
+  the agnostic server layer (routing, response model, streaming, conditional-GET, the
+  metadata cache, the request pipeline), the telemetry instrument catalogue, and the
+  mirror worker. It depends on the OpenTelemetry **API** only — never the SDK — so the
+  core carries no process-global wiring.
+- **`ecluse`** (`src`, modules under `Ecluse.*`) — the application shell that composes
+  the core into a running proxy: the configuration loader, the `Env` composition root,
+  logging, the WAI `Application`, and the telemetry **SDK** / OTLP export wiring.
+- **`ecluse` executable** (`app/Main.hs`) — the entrypoint.
+
+The boundary is **enforced by the build graph**: the core's unit suite does not depend
+on the application library, so a core module that reached into composition would fail to
+compile. The authoritative component and module map is [`ecluse.cabal`](../ecluse.cabal).
+
 ## Request Lifecycle
 
 The three request shapes diverge in how they use the upstreams — a tarball

@@ -29,7 +29,7 @@ Rules are evaluated in two tiers:
 
 1. **Pure rules** — evaluated against `PackageDetails` with no IO. Fast and
    deterministic. Evaluated first. This is the tier implemented today
-   ([`src/Ecluse/Rules.hs`](../../src/Ecluse/Rules.hs)).
+   ([`core/src/Ecluse/Core/Rules.hs`](../../core/src/Ecluse/Core/Rules.hs)).
 2. **Effectful rules** — may perform IO (advisory lookups, external policy
    checks). A later phase, layered on top of the pure tier.
 
@@ -146,7 +146,7 @@ merge unions it with the trusted set:
   unchanged. Only when the chosen `latest` is itself denied or removed is it
   repointed — to the highest *stable* surviving version, falling back to the highest
   *prerelease* survivor only if no stable version survives. "Stable vs prerelease"
-  is ecosystem-specific (`Ecluse.Version.isStable`: semver prerelease tags, PEP 440
+  is ecosystem-specific (`Ecluse.Core.Version.isStable`: semver prerelease tags, PEP 440
   pre/dev segments, RubyGems letter segments), so the packument core stays
   ecosystem-agnostic by calling the predicate. Other tags (`next`, `beta`, …) that
   point at a removed version are **dropped** rather than repointed — aiming `beta`
@@ -284,7 +284,7 @@ When a request is denied (no allow rule matched, or a deny rule fired):
 - The response **body shape is the mount's** — its
   [error renderer](hosting.md#mounts) shapes the bytes in the ecosystem's surface,
   so the agnostic layer holds no body shape of its own. For npm the renderer
-  (`Ecluse.Registry.Npm.Serve`) emits the npm error object:
+  (`Ecluse.Core.Registry.Npm.Serve`) emits the npm error object:
   ```json
   {
     "error": "Package @evil/pkg@1.0.0 was denied: AllowIfPublishedBefore — published 3 hours ago, minimum age is 7 days. Contact #platform-eng on Slack for assistance."

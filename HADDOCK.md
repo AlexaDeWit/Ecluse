@@ -6,8 +6,8 @@ and the compiler flags) and is written to be followed directly by both newcomers
 to Haskell and coding agents.
 
 > **The golden rule still applies: when in doubt, match the nearest existing
-> module.** [`src/Ecluse/Package.hs`](src/Ecluse/Package.hs) and
-> [`src/Ecluse/Rules.hs`](src/Ecluse/Rules.hs) are the reference implementations.
+> module.** [`core/src/Ecluse/Core/Package.hs`](core/src/Ecluse/Core/Package.hs) and
+> [`core/src/Ecluse/Core/Rules.hs`](core/src/Ecluse/Core/Rules.hs) are the reference implementations.
 
 ## What Haddock is for
 
@@ -130,7 +130,7 @@ Conventions:
 
 Every module opens with a `{- | … -}` header stating what it is for and how it
 fits the system — the model and the load-bearing decisions, not a list of the
-type names. Cross-reference sibling modules (`"Ecluse.Rules.Types"`) and the
+type names. Cross-reference sibling modules (`"Ecluse.Core.Rules.Types"`) and the
 architecture docs.
 
 ```haskell
@@ -141,9 +141,9 @@ A rule set is evaluated against a single 'PackageDetails' snapshot to produce a
 highest-precedence rule that does not abstain wins, and at equal precedence a
 deny beats an allow.
 
-The rule data types live in "Ecluse.Rules.Types".
+The rule data types live in "Ecluse.Core.Rules.Types".
 -}
-module Ecluse.Rules ( ... ) where
+module Ecluse.Core.Rules ( ... ) where
 ```
 
 **We do not use the `Module:/Copyright:/License:/Maintainer:/…` header fields.**
@@ -214,7 +214,7 @@ the page's table of contents — the single biggest aid to a newcomer. (See also
 [`STYLE.md`](STYLE.md) → "Exports".)
 
 ```haskell
-module Ecluse.Package (
+module Ecluse.Core.Package (
     -- * Scopes
     Scope,
     mkScope,
@@ -239,7 +239,7 @@ render, and match how a sibling module does it.
 | Want | Write | Renders as |
 |---|---|---|
 | Link an identifier | `'mkScope'` | a link to `mkScope` |
-| Link a module | `"Ecluse.Rules.Types"` | a link to the module |
+| Link a module | `"Ecluse.Core.Rules.Types"` | a link to the module |
 | Inline code / a literal | `@"1.2.3"@` | `1.2.3` in monospace |
 | Load-bearing emphasis | `__deny by default__` | **deny by default** |
 | Italic (sparingly) | `/why/` | *why* |
@@ -281,8 +281,8 @@ renderDuration :: NominalDiffTime -> Text
   configuration (crucially the `relude` prelude), so examples see the same names
   the module does.
 - **Keep examples pure, total, and deterministic** — they run in a plain GHCi
-  session with no `IO` setup. The pure core (`Ecluse.Rules`, `Ecluse.Version`,
-  `Ecluse.Package`) is the natural home for them.
+  session with no `IO` setup. The pure core (`Ecluse.Core.Rules`, `Ecluse.Core.Version`,
+  `Ecluse.Core.Package`) is the natural home for them.
 - Output is compared to GHCi's printed form: a `Text` shows **with quotes**
   (`"7 days"`).
 - Haddock also supports `prop>` properties, but Écluse pins invariants with

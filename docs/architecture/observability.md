@@ -132,10 +132,10 @@ domain signals. The catalogue:
 
 `http.server.request.duration` is emitted by the **WAI instrumentation**
 (`Ecluse.Telemetry.Tracing`), not re-emitted by hand. The `ecluse.*` catalogue is the
-typed `MetricName` enumeration in `Ecluse.Telemetry.Metrics`; the live instruments and
+typed `MetricName` enumeration in `Ecluse.Core.Telemetry.Metrics`; the live instruments and
 the one typed `record*` helper per signal live in `Ecluse.Telemetry.Instruments`, built
 once from the meter provider and recorded from the serve path
-(`Ecluse.Server.Pipeline`), the metadata cache (`Ecluse.Server.Cache`), and the mirror
+(`Ecluse.Core.Server.Pipeline`), the metadata cache (`Ecluse.Core.Server.Cache`), and the mirror
 worker (`Ecluse.Core.Worker`). Two catalogue signals are **defined but not yet wired**: the
 circuit-breaker state gauge and the credential refresh/ttl signals — the breaker and the
 refreshing credential provider are constructed before the telemetry substrate and sit
