@@ -1,14 +1,12 @@
 module Ecluse.EnvSpec (spec) where
 
-import Data.Text qualified as T
 import Katip (Environment (Environment), LogEnv, Namespace (Namespace), initLogEnv)
 import Network.HTTP.Client (Manager, defaultManagerSettings, newManager)
 import Test.Hspec
-import UnliftIO (bracket, evaluate, timeout, try)
+import UnliftIO (evaluate, timeout, try)
 import UnliftIO.Exception (StringException, throwString)
 
 import Ecluse (npmServerConfig, runServer, runWorker, unconfiguredCredentials, unconfiguredRegistry)
-import Ecluse.App (App, runApp)
 import Ecluse.Core.Credential (
     AuthToken (..),
     CredentialProvider,
@@ -210,32 +208,6 @@ spec = do
             env <- newTestEnv
             timeout 100000 (runWorker env) `shouldReturn` Nothing
 
-    describe "App / runApp" $ do
-        it "reads the Env through the reader and runs effects in IO" $ do
-            -- A round-trip through the orchestration monad: the action reaches a
-            -- handle via the reader ('asks') and uses it in 'IO' ('liftIO'), then
-            -- 'runApp' discharges it against the composition root.
-            env <- newTestEnv
-            result <- runApp env readToken
-            result `shouldBe` "env-spec-token"
-
-        it "lifts bracket into the reader (MonadUnliftIO)" $ do
-            -- The reason 'App' adopts @unliftio@: @bracket@ must run in 'App', not
-            -- only 'IO'. The acquire result threads through to the body.
-            env <- newTestEnv
-            result <- runApp env (bracket (pure "resource") (const (pure ())) pure)
-            result `shouldBe` ("resource" :: Text)
-
-        it "composes through its Functor and Applicative instances" $ do
-            -- Exercises the derived 'Functor'\/'Applicative' over a real reader
-            -- action (not a bare 'pure'): map a function over the token read, and
-            -- combine two reads applicatively.
-            env <- newTestEnv
-            mapped <- runApp env (fmap T.length readToken)
-            mapped `shouldBe` T.length "env-spec-token"
-            combined <- runApp env (liftA2 (\a b -> T.length a + T.length b) readToken readToken)
-            combined `shouldBe` 2 * T.length "env-spec-token"
-
     describe "unconfiguredRegistry" $ do
         it "refuses every effectful call loudly rather than fabricating a result" $ do
             -- A no-backend handle must not silently return a fake success: every
@@ -264,14 +236,6 @@ spec = do
 
     currentTokenSecret :: Env -> IO AuthToken
     currentTokenSecret env = currentToken (envCredentials env)
-
-    -- An 'App' action that reaches the credential handle through the reader and
-    -- uses it in IO, exercising the monad's MonadReader + MonadIO instances.
-    readToken :: App Text
-    readToken = do
-        provider <- asks envCredentials
-        tok <- liftIO (currentToken provider)
-        pure (unSecret (authSecret tok))
 
     -- Assert an effectful handle call throws rather than returning a value.
     shouldRefuse :: IO a -> Expectation

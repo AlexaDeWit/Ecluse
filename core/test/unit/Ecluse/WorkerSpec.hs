@@ -16,8 +16,6 @@ import Test.Hspec
 import UnliftIO (timeout)
 import UnliftIO.Exception (throwString)
 
-import Ecluse.App (runApp)
-import Ecluse.Core.Credential (AuthToken (..), CredentialProvider, mkSecret, staticProvider)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (Hash, HashAlg (Blake2b, MD5, SHA1, SHA256, SRI), PackageName, mkPackageName)
 import Ecluse.Core.Package qualified as Pkg
@@ -38,21 +36,40 @@ import Ecluse.Core.Registry (
     UrlFormationError (EmptyBaseUrl),
  )
 import Ecluse.Core.Registry.Npm (npmPublishDocument)
-import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
+import Ecluse.Core.Telemetry.Metrics (MirrorResult (Failed, Published))
+import Ecluse.Core.Telemetry.Record (WorkerMetricsPort)
 import Ecluse.Core.Version (Version, mkVersion)
-import Ecluse.Env (Env, envWorkerHeartbeat, lastPoll, newEnv, newWorkerHeartbeat)
-import Ecluse.Telemetry (telemetryDisabled)
-import Ecluse.Test.Package (unsafeHash)
-import Ecluse.Worker (
+import Ecluse.Core.Worker (
     IntegrityResult (IntegrityMismatch, IntegrityVerified),
     JobOutcome (Dropped, Retried, Succeeded),
+    WorkerM,
+    WorkerRuntime (WorkerRuntime, wrHeartbeat, wrManager, wrMetrics, wrQueue, wrRegistry, wrTracing),
     heartbeatHealthy,
+    lastPoll,
+    newWorkerHeartbeat,
     processBatch,
     processJob,
+    runWorkerM,
     verifyIntegrity,
     workerHeartbeatStaleAfter,
     workerLoop,
  )
+import Ecluse.Test.Package (unsafeHash)
+import Ecluse.Test.Port (noopWorkerMetricsPort, passthroughWorkerTracingPort, recordingWorkerMetricsPort)
+
+{- | Unit cover for the core mirror worker ("Ecluse.Core.Worker") driven __directly__
+over a 'WorkerRuntime' of test doubles — no application 'Ecluse.Env.Env', no
+OpenTelemetry SDK.
+
+This is the partition's proof that the worker is genuinely core: it constructs the worker
+runtime from a recording publish client, an in-memory queue, a real HTTP manager, a fresh
+heartbeat, and the worker metric/tracing port doubles, then runs the loop and the per-job
+processing through the core 'runWorkerM' against a scribe-less @katip@ environment. The
+integrity gate, the publish/ack/redeliver outcomes, the heartbeat, and the loop's
+catch-log-backoff supervision are all exercised over those doubles. The same paths are
+covered through a __real SQS queue__ in the integration suite's @Ecluse.WorkerSpec@; this
+pins that the loop runs over the ports.
+-}
 
 -- ── fixtures ──────────────────────────────────────────────────────────────────
 
@@ -175,60 +192,63 @@ recordingClient logRef outcome =
     refuse :: Text -> IO a
     refuse field = throwString (toString ("recordingClient: the worker must not use the handle field " <> field))
 
-{- | Build an 'Env' with the recording publish client, a real no-TLS manager (for the
-stub upstream), and a fresh queue + heartbeat, then run the body against it. The
-queue and the publish log are returned so a test can drive and inspect them.
+-- ── building a worker runtime over doubles ──────────────────────────────────────
+
+{- | Build a 'WorkerRuntime' with the recording publish client, a real no-TLS manager
+(for the stub upstream), a fresh queue + heartbeat, and the given worker metrics port,
+then run the body against it. The queue and the publish log are returned so a test can
+drive and inspect them.
 -}
-withWorkerEnv :: Either PublishFault () -> (Env -> MirrorQueue -> IORef PublishLog -> IO a) -> IO a
-withWorkerEnv outcome body = do
+withRuntimeWith :: WorkerMetricsPort -> Either PublishFault () -> (WorkerRuntime -> MirrorQueue -> IORef PublishLog -> IO a) -> IO a
+withRuntimeWith metricsPort outcome body = do
     logRef <- newIORef (PublishLog [])
     queue <- newInMemoryQueue
     manager <- newManager defaultManagerSettings
-    metadataCache <- newMetadataCache defaultCacheConfig
-    logEnv <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
     heartbeat <- newWorkerHeartbeat
-    env <-
-        newEnv
-            (recordingClient logRef outcome)
-            queue
-            credentials
-            manager
-            manager
-            metadataCache
-            logEnv
-            telemetryDisabled
-            heartbeat
-    body env queue logRef
-  where
-    credentials :: CredentialProvider
-    credentials = staticProvider AuthToken{authSecret = mkSecret "tok", authExpiresAt = Nothing}
+    let runtime =
+            WorkerRuntime
+                { wrQueue = queue
+                , wrRegistry = recordingClient logRef outcome
+                , wrManager = manager
+                , wrHeartbeat = heartbeat
+                , wrMetrics = metricsPort
+                , wrTracing = passthroughWorkerTracingPort
+                }
+    body runtime queue logRef
 
-{- | Build an 'Env' over a caller-supplied queue (the publish client is the
+-- | 'withRuntimeWith' with the inert worker metrics port — the common case.
+withRuntime :: Either PublishFault () -> (WorkerRuntime -> MirrorQueue -> IORef PublishLog -> IO a) -> IO a
+withRuntime = withRuntimeWith noopWorkerMetricsPort
+
+{- | Build a 'WorkerRuntime' over a caller-supplied queue (the publish client is the
 never-succeeding recording double, unused here) and run the body against it. Lets a
 test drive the supervised loop against a queue whose @receive@ misbehaves.
 -}
-withQueueEnv :: MirrorQueue -> (Env -> IO a) -> IO a
-withQueueEnv queue body = do
+withQueueRuntime :: MirrorQueue -> (WorkerRuntime -> IO a) -> IO a
+withQueueRuntime queue body = do
     logRef <- newIORef (PublishLog [])
     manager <- newManager defaultManagerSettings
-    metadataCache <- newMetadataCache defaultCacheConfig
-    logEnv <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
     heartbeat <- newWorkerHeartbeat
-    env <-
-        newEnv
-            (recordingClient logRef (Right ()))
-            queue
-            credentials
-            manager
-            manager
-            metadataCache
-            logEnv
-            telemetryDisabled
-            heartbeat
-    body env
-  where
-    credentials :: CredentialProvider
-    credentials = staticProvider AuthToken{authSecret = mkSecret "tok", authExpiresAt = Nothing}
+    let runtime =
+            WorkerRuntime
+                { wrQueue = queue
+                , wrRegistry = recordingClient logRef (Right ())
+                , wrManager = manager
+                , wrHeartbeat = heartbeat
+                , wrMetrics = noopWorkerMetricsPort
+                , wrTracing = passthroughWorkerTracingPort
+                }
+    body runtime
+
+{- | Discharge a 'WorkerM' to 'IO' over the worker runtime against a scribe-less @katip@
+environment (its log lines have nowhere to go, which is what these tests want) and an
+empty initial context (no @dd@). This is the core 'runWorkerM' boundary the application
+entry point uses.
+-}
+runWM :: WorkerRuntime -> WorkerM a -> IO a
+runWM runtime action = do
+    logEnv <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
+    runWorkerM logEnv mempty runtime action
 
 {- | A queue whose @receive@ always throws, counting each call. Stands in for a
 persistently-failing dependency so the supervised loop's catch-log-backoff arm can
@@ -408,9 +428,9 @@ spec = do
     describe "processJob — the integrity gate" $ do
         it "publishes and reports success when the bytes match the admitted digest" $
             withUpstream $ \url ->
-                withWorkerEnv (Right ()) $ \env queue logRef -> do
+                withRuntime (Right ()) $ \runtime queue logRef -> do
                     (receipt, job) <- enqueueAndReceive queue (jobWith url (unsafeHash SHA1 trueSha1 :| []))
-                    outcome <- runApp env (processJob receipt job)
+                    outcome <- runWM runtime (processJob receipt job)
                     outcome `shouldBe` Succeeded
                     published <- plDocuments <$> readIORef logRef
                     length published `shouldBe` 1
@@ -419,20 +439,20 @@ spec = do
             -- The end-to-end proof that a sha384-admitted artifact is not admit-but-
             -- uncomputable: the worker fetches, recomputes sha384, matches, and publishes.
             withUpstream $ \url ->
-                withWorkerEnv (Right ()) $ \env queue logRef -> do
+                withRuntime (Right ()) $ \runtime queue logRef -> do
                     (receipt, job) <- enqueueAndReceive queue (jobWith url (unsafeHash SRI trueSha384Sri :| []))
-                    outcome <- runApp env (processJob receipt job)
+                    outcome <- runWM runtime (processJob receipt job)
                     outcome `shouldBe` Succeeded
                     published <- plDocuments <$> readIORef logRef
                     length published `shouldBe` 1
 
         it "refuses to publish (no publish) when the bytes do not match the digest" $
             withUpstream $ \url ->
-                withWorkerEnv (Right ()) $ \env queue logRef -> do
+                withRuntime (Right ()) $ \runtime queue logRef -> do
                     -- A tampered/substituted artifact: the threaded digest does not match
                     -- the fetched bytes, so the worker must NOT publish.
                     (receipt, job) <- enqueueAndReceive queue (jobWith url (unsafeHash SHA1 wrongSha1 :| []))
-                    outcome <- runApp env (processJob receipt job)
+                    outcome <- runWM runtime (processJob receipt job)
                     outcome `shouldSatisfy` isDropped
                     published <- plDocuments <$> readIORef logRef
                     published `shouldBe` []
@@ -440,27 +460,27 @@ spec = do
         it "leaves the job for redelivery on a transient fetch failure (no publish)" $
             -- An unreachable upstream (connection refused) is a transient fault: the
             -- fetch throws, so the job is left for redelivery and nothing is published.
-            withWorkerEnv (Right ()) $ \env queue logRef -> do
+            withRuntime (Right ()) $ \runtime queue logRef -> do
                 (receipt, job) <- enqueueAndReceive queue (jobWith unreachableUrl (unsafeHash SHA1 trueSha1 :| []))
-                outcome <- runApp env (processJob receipt job)
+                outcome <- runWM runtime (processJob receipt job)
                 outcome `shouldSatisfy` isRetried
                 published <- plDocuments <$> readIORef logRef
                 published `shouldBe` []
 
         it "treats a registry rejection as retryable (job left for redelivery)" $
             withUpstream $ \url ->
-                withWorkerEnv (Left (PublishRejected (PublishError "503"))) $ \env queue _logRef -> do
+                withRuntime (Left (PublishRejected (PublishError "503"))) $ \runtime queue _logRef -> do
                     (receipt, job) <- enqueueAndReceive queue (jobWith url (unsafeHash SHA1 trueSha1 :| []))
-                    outcome <- runApp env (processJob receipt job)
+                    outcome <- runWM runtime (processJob receipt job)
                     outcome `shouldSatisfy` isRetried
 
         it "leaves the job for redelivery when the artifact URL is unformable (no publish)" $
             -- A job whose artifact URL cannot be parsed into a request never reaches a
             -- fetch: the by-URL build fails, which the worker treats as a transient
             -- reason (Retried) rather than crashing the iteration. Nothing is published.
-            withWorkerEnv (Right ()) $ \env queue logRef -> do
+            withRuntime (Right ()) $ \runtime queue logRef -> do
                 (receipt, job) <- enqueueAndReceive queue (jobWith unformableUrl (unsafeHash SHA1 trueSha1 :| []))
-                outcome <- runApp env (processJob receipt job)
+                outcome <- runWM runtime (processJob receipt job)
                 outcome `shouldSatisfy` isRetried
                 published <- plDocuments <$> readIORef logRef
                 published `shouldBe` []
@@ -471,18 +491,18 @@ spec = do
             -- DROPS the job rather than re-enqueueing it forever — the non-retryable
             -- terminal outcome, distinct from a retryable registry rejection.
             withUpstream $ \url ->
-                withWorkerEnv (Left (PublishUrlUnformable EmptyBaseUrl)) $ \env queue _logRef -> do
+                withRuntime (Left (PublishUrlUnformable EmptyBaseUrl)) $ \runtime queue _logRef -> do
                     (receipt, job) <- enqueueAndReceive queue (jobWith url (unsafeHash SHA1 trueSha1 :| []))
-                    outcome <- runApp env (processJob receipt job)
+                    outcome <- runWM runtime (processJob receipt job)
                     outcome `shouldSatisfy` isDropped
 
     describe "processBatch — ack semantics over the in-memory queue" $ do
         it "acks a successfully-mirrored job so it is not redelivered" $
             withUpstream $ \url ->
-                withWorkerEnv (Right ()) $ \env queue _logRef -> do
+                withRuntime (Right ()) $ \runtime queue _logRef -> do
                     enqueue queue (jobWith url (unsafeHash SHA1 trueSha1 :| []))
                     messages <- receive queue
-                    runApp env (processBatch messages)
+                    runWM runtime (processBatch messages)
                     -- A redelivery pass past the (immediate) visibility window yields
                     -- nothing: the job was acked.
                     redelivered <- receive queue
@@ -490,10 +510,10 @@ spec = do
 
         it "does not ack a transiently-failed job, so it redelivers" $
             withUpstream $ \url ->
-                withWorkerEnv (Left (PublishRejected (PublishError "503"))) $ \env queue _logRef -> do
+                withRuntime (Left (PublishRejected (PublishError "503"))) $ \runtime queue _logRef -> do
                     enqueue queue (jobWith url (unsafeHash SHA1 trueSha1 :| []))
                     messages <- receive queue
-                    runApp env (processBatch messages)
+                    runWM runtime (processBatch messages)
                     -- The publish was rejected (retryable), so the job is left un-acked
                     -- and redelivers. The worker extended the message's visibility before
                     -- the (failing) publish, so the in-memory double holds it past one
@@ -507,10 +527,10 @@ spec = do
             -- (having alarmed at the mismatch) rather than leave it to redeliver
             -- indefinitely. A second poll past the visibility window yields nothing.
             withUpstream $ \url ->
-                withWorkerEnv (Right ()) $ \env queue logRef -> do
+                withRuntime (Right ()) $ \runtime queue logRef -> do
                     enqueue queue (jobWith url (unsafeHash SHA1 wrongSha1 :| []))
                     messages <- receive queue
-                    runApp env (processBatch messages)
+                    runWM runtime (processBatch messages)
                     -- Nothing was published (the mismatch refused the publish)...
                     published <- plDocuments <$> readIORef logRef
                     published `shouldBe` []
@@ -518,16 +538,37 @@ spec = do
                     redelivered <- pollUntilRedelivered queue 5
                     redelivered `shouldBe` False
 
+    describe "the worker metrics port" $ do
+        it "records a Published result for a successfully-mirrored job, through the port" $
+            -- Drive the recording 'WorkerMetricsPort' and assert the worker classified the
+            -- terminal outcome and recorded it through the interface — proof the port is wired.
+            withUpstream $ \url -> do
+                (metricsPort, readResults) <- recordingWorkerMetricsPort
+                withRuntimeWith metricsPort (Right ()) $ \runtime queue _logRef -> do
+                    enqueue queue (jobWith url (unsafeHash SHA1 trueSha1 :| []))
+                    messages <- receive queue
+                    runWM runtime (processBatch messages)
+                    readResults >>= (`shouldBe` [Published])
+
+        it "records a Failed result for a tampered job, through the port" $
+            withUpstream $ \url -> do
+                (metricsPort, readResults) <- recordingWorkerMetricsPort
+                withRuntimeWith metricsPort (Right ()) $ \runtime queue _logRef -> do
+                    enqueue queue (jobWith url (unsafeHash SHA1 wrongSha1 :| []))
+                    messages <- receive queue
+                    runWM runtime (processBatch messages)
+                    readResults >>= (`shouldBe` [Failed])
+
     describe "heartbeat" $ do
         it "advances the last-successful-poll once the loop has polled the queue" $
-            withWorkerEnv (Right ()) $ \env _queue _logRef -> do
-                pollBefore <- lastPoll (envWorkerHeartbeat env)
+            withRuntime (Right ()) $ \runtime _queue _logRef -> do
+                pollBefore <- lastPoll (wrHeartbeat runtime)
                 pollBefore `shouldBe` Nothing
                 -- Run the consume loop briefly against the (empty) queue, then cancel
                 -- it. Even an empty long-poll is a healthy poll, so the heartbeat must
                 -- have advanced from 'Nothing'.
-                _ <- timeout 200000 (runApp env workerLoop)
-                pollAfter <- lastPoll (envWorkerHeartbeat env)
+                _ <- timeout 200000 (runWM runtime workerLoop)
+                pollAfter <- lastPoll (wrHeartbeat runtime)
                 pollAfter `shouldSatisfy` isJust
 
     describe "workerLoop — supervision (one bad iteration must not kill the loop)" $
@@ -539,10 +580,10 @@ spec = do
             -- AGAIN after the first throw (it recovered), rather than dying on it.
             calls <- newIORef (0 :: Int)
             queue <- throwingReceiveQueue calls
-            withQueueEnv queue $ \env -> do
+            withQueueRuntime queue $ \runtime -> do
                 -- The backoff after a failed iteration is ~1s, so a ~2.5s window admits a
                 -- couple of attempts; assert at least a second poll occurred.
-                _ <- timeout 2_500_000 (runApp env workerLoop)
+                _ <- timeout 2_500_000 (runWM runtime workerLoop)
                 attempts <- readIORef calls
                 attempts `shouldSatisfy` (>= 2)
 

@@ -29,6 +29,7 @@ import Ecluse.Core.Registry.Npm.Route qualified as Npm
 import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
 import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Core.Server.Route (Classifier, Route (..))
+import Ecluse.Core.Worker (workerHeartbeatStaleAfter)
 import Ecluse.Env (Env, envWorkerHeartbeat, newEnv, newWorkerHeartbeat, recordPoll)
 import Ecluse.Server (
     DrainSignal,
@@ -49,7 +50,6 @@ import Ecluse.Server (
     withInteractiveHalt,
  )
 import Ecluse.Telemetry (telemetryDisabled)
-import Ecluse.Worker (workerHeartbeatStaleAfter)
 
 {- | A registry-handle double whose effectful fields are never invoked: the web
 layer only routes, classifies, and renders — it never fetches — so a handle that

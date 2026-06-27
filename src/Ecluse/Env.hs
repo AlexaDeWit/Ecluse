@@ -14,7 +14,7 @@ Two invariants make this hold together:
 
 * __No backend SDK appears here.__ 'Env' imports only the handle /records/, never a
   cloud SDK (no @amazonka@, no GCP client). Each handle's effectful fields return
-  'IO' (not 'Ecluse.App.App'), so an adapter never imports back into this module —
+  'IO' (not an application monad), so an adapter never imports back into this module —
   there is no import cycle and no recursive @Env@-holds-a-handle-whose-methods-need-@Env@
   knot (see @docs\/architecture\/technology-stack.md@ → "Key Decisions").
 
@@ -26,8 +26,9 @@ Two invariants make this hold together:
   @docs\/architecture\/cloud-backends.md@ → "Process model").
 
 Request handlers read this 'Env' through a per-request
-'Ecluse.Core.Server.Context.RequestCtx' that pairs it with the matched mount; the
-worker\/service layer reads it through "Ecluse.App"'s @App@ monad.
+'Ecluse.Core.Server.Context.RequestCtx' — the request runtime projected by
+'serveRuntimeOf', paired with the matched mount; the mirror worker reads it through the
+'Ecluse.Core.Worker.WorkerRuntime' projected by 'workerRuntimeOf'.
 -}
 module Ecluse.Env (
     -- * Composition root
@@ -35,17 +36,17 @@ module Ecluse.Env (
     newEnv,
     withEnv,
 
-    -- * Request runtime projection
+    -- * Runtime projections
     serveRuntimeOf,
+    workerRuntimeOf,
 
-    -- * Worker heartbeat
+    -- * Worker heartbeat (re-exported from "Ecluse.Core.Worker")
     WorkerHeartbeat,
     newWorkerHeartbeat,
     recordPoll,
     lastPoll,
 ) where
 
-import Data.Time (UTCTime)
 import Katip (LogEnv)
 import Network.HTTP.Client (Manager)
 import UnliftIO (MonadUnliftIO, bracket)
@@ -55,11 +56,12 @@ import Ecluse.Core.Queue (MirrorQueue)
 import Ecluse.Core.Registry (RegistryClient)
 import Ecluse.Core.Server.Cache (MetadataCache)
 import Ecluse.Core.Server.Context (ServeRuntime (..))
+import Ecluse.Core.Worker (WorkerHeartbeat, WorkerRuntime (..), lastPoll, newWorkerHeartbeat, recordPoll)
 import Ecluse.Log (DdContext)
 import Ecluse.Telemetry (Telemetry)
 import Ecluse.Telemetry.Correlation (ddIdentityFromEnvironment)
-import Ecluse.Telemetry.Instruments (Metrics, metricsPortOf, newMetrics)
-import Ecluse.Telemetry.Tracing (tracingPortOf)
+import Ecluse.Telemetry.Instruments (Metrics, metricsPortOf, newMetrics, workerMetricsPortOf)
+import Ecluse.Telemetry.Tracing (tracingPortOf, workerTracingPortOf)
 
 {- | The composition-root record: the handles plus the shared HTTP manager and the
 metadata cache, from which the whole effectful shell is reached. See the module
@@ -133,40 +135,9 @@ data Env = Env
     {- ^ The mirror worker's consume-loop heartbeat: the time of its
     last-successful-poll. Distinct from the server's HTTP readiness — it is the
     worker's own liveness surface — and read by the liveness probe so a stalled
-    worker is visible in single-process health (see "Ecluse.Worker").
+    worker is visible in single-process health (see "Ecluse.Core.Worker").
     -}
     }
-
-{- | The mirror worker's consume-loop heartbeat: the wall-clock time of the
-worker's __last successful poll__ of the queue.
-
-It is the worker's own liveness signal, kept apart from the server's HTTP
-readiness so single-process health reflects a stalled worker today and a future
-standalone worker binary keeps the same probe. The worker 'recordPoll's after each
-successful @receive@ (whether or not the batch was empty — an empty long-poll is a
-healthy idle, not a stall); a liveness probe reads 'lastPoll' and compares it
-against the wall clock to decide whether the loop has gone quiet for too long.
--}
-newtype WorkerHeartbeat = WorkerHeartbeat (TVar (Maybe UTCTime))
-
-{- | Build a fresh 'WorkerHeartbeat' with no poll yet recorded ('lastPoll' is
-'Nothing' until the worker's first successful @receive@).
--}
-newWorkerHeartbeat :: IO WorkerHeartbeat
-newWorkerHeartbeat = WorkerHeartbeat <$> newTVarIO Nothing
-
-{- | Record the time of a successful queue poll, advancing the heartbeat. Called
-by the worker after each @receive@ returns (the loop is alive even on an empty
-batch).
--}
-recordPoll :: WorkerHeartbeat -> UTCTime -> IO ()
-recordPoll (WorkerHeartbeat var) now = atomically (writeTVar var (Just now))
-
-{- | The time of the worker's last successful poll, or 'Nothing' before its first.
-A liveness probe reads this and compares it against the wall clock.
--}
-lastPoll :: WorkerHeartbeat -> IO (Maybe UTCTime)
-lastPoll (WorkerHeartbeat var) = readTVarIO var
 
 {- | Assemble an 'Env' from its constructed handles and the two data-plane HTTP
 'Manager's — the guarded one for the untrusted public\/artifact fetches and the
@@ -254,4 +225,25 @@ serveRuntimeOf env =
         , srQueue = envQueue env
         , srMetrics = metricsPortOf (envMetrics env)
         , srTracing = tracingPortOf (envTelemetry env)
+        }
+
+{- | Project the worker runtime ("Ecluse.Core.Worker.WorkerRuntime") the mirror worker
+is closed over from the composition root: the mirror queue, the publish-side registry
+client, the guarded data-plane manager, the consume-loop heartbeat, and the
+OpenTelemetry-backed worker metric and tracing ports
+('Ecluse.Telemetry.Instruments.workerMetricsPortOf',
+'Ecluse.Telemetry.Tracing.workerTracingPortOf'). Built at the worker entry point — it
+gathers existing handles and wraps the instrument and telemetry handles in their worker
+ports — so the core loop reads its backends through the core interface without depending
+on this application 'Env' (the analogue of 'serveRuntimeOf' for the serve path).
+-}
+workerRuntimeOf :: Env -> WorkerRuntime
+workerRuntimeOf env =
+    WorkerRuntime
+        { wrQueue = envQueue env
+        , wrRegistry = envRegistry env
+        , wrManager = envManager env
+        , wrHeartbeat = envWorkerHeartbeat env
+        , wrMetrics = workerMetricsPortOf (envMetrics env)
+        , wrTracing = workerTracingPortOf (envTelemetry env)
         }

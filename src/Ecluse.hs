@@ -59,7 +59,7 @@ The library's vocabulary, roughly from the pure core outward:
   (the shared serve-action 'Route' set and the injected route classifier).
 * __Cloud handles__ — "Ecluse.Core.Credential" (minting the mirror-target write token)
   and "Ecluse.Core.Queue" (the durable mirror-job hand-off to the worker).
-* __Mirror worker__ — "Ecluse.Worker" (the supervised consume loop that fetches,
+* __Mirror worker__ — "Ecluse.Core.Worker" (the supervised consume loop that fetches,
   verifies against the job's integrity digest, and publishes an approved artifact).
 
 'run' is the entry point the @ecluse@ executable invokes (see "Main"). It lives
@@ -99,7 +99,7 @@ import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
 import Data.Time (getCurrentTime)
-import Katip (Environment (Environment), LogEnv, Severity (WarningS), logFM, ls)
+import Katip (Environment (Environment), LogEnv, Severity (WarningS), katipAddNamespace, logFM, ls)
 import Katip.Monadic (runKatipContextT)
 import Network.HTTP.Client (Manager, newManager)
 import Network.HTTP.Client.TLS (tlsManagerSettings)
@@ -144,11 +144,13 @@ import Ecluse.Core.Security.Egress (guardedManagerSettings)
 import Ecluse.Core.Server.Cache (newMetadataCache)
 import Ecluse.Core.Server.Context (PackumentDeps)
 import Ecluse.Core.Telemetry.Metrics (BreakerSource (CredentialMint), Provider (CodeArtifact))
-import Ecluse.Env (Env, envMetrics, newWorkerHeartbeat, withEnv)
+import Ecluse.Core.Worker (runWorkerM, workerLoop)
+import Ecluse.Env (Env, envDdContext, envLogEnv, envMetrics, newWorkerHeartbeat, withEnv, workerRuntimeOf)
 import Ecluse.Log (moduleField, newLogEnv)
 import Ecluse.Server (MountBinding (..), ServerConfig (scDrainTimeout, scPort), ShutdownDrainTimeout (ShutdownDrainTimeout), mkServerConfig)
 import Ecluse.Server qualified as Server
 import Ecluse.Telemetry (TelemetrySwitch (TelemetryOff, TelemetryOn), withTelemetry)
+import Ecluse.Telemetry.Correlation (ddPayloadNow)
 import Ecluse.Telemetry.Reporters (
     deferredBreakerReporter,
     deferredRefreshReporter,
@@ -157,7 +159,6 @@ import Ecluse.Telemetry.Reporters (
  )
 import Ecluse.Telemetry.Resolve (prepareTelemetry)
 import Ecluse.Telemetry.Tracing (instrumentDataPlaneManagerSettings)
-import Ecluse.Worker qualified as Worker
 
 {- | Start Écluse: the entry point the @ecluse@ executable runs (see "Main").
 
@@ -391,12 +392,20 @@ npmMount packumentDeps =
 
 {- | Run the supervised mirror worker over the composition-root 'Env': the
 consume → fetch → verify → publish → ack loop against the queue, the publish-side
-registry client, and the credential handle, in the @App@ orchestration monad. The
-loop logic lives in "Ecluse.Worker"; this is the composition-root entry the
-single-process program runs alongside 'runServer'.
+registry client, and the credential handle, in the worker monad
+('Ecluse.Core.Worker.WorkerM') over the worker runtime ('Ecluse.Env.workerRuntimeOf').
+
+This is the composition-root __hoist point__: it resolves the request-independent @dd@
+correlation object (the service identity; no span is active at the worker entry) and
+installs it as the worker's initial @katip@ context, then discharges the loop to 'IO'
+through 'Ecluse.Core.Worker.runWorkerM' — the worker analogue of the serve path's
+'Ecluse.Core.Server.Context.runHandler' boundary. The loop logic lives in
+"Ecluse.Core.Worker"; the single-process program runs this alongside 'runServer'.
 -}
 runWorker :: Env -> IO ()
-runWorker = Worker.runWorker
+runWorker env = do
+    dd <- ddPayloadNow (envDdContext env)
+    runWorkerM (envLogEnv env) dd (workerRuntimeOf env) (katipAddNamespace "worker" workerLoop)
 
 {- Build the worker's publish-side registry client from the resolved per-ecosystem
 publish targets, over the given (trusted) manager.

@@ -52,8 +52,9 @@ module Ecluse.Telemetry.Tracing (
     withMirrorJobSpan,
     JobSpanOutcome (..),
 
-    -- * The core tracing port
+    -- * The core tracing ports
     tracingPortOf,
+    workerTracingPortOf,
 
     -- * Verdict attribute mapping
     ruleVerdictFields,
@@ -89,7 +90,7 @@ import Ecluse.Core.Server.Response (
     RuleName (RuleName),
     ServeDecision (Admit, Reject),
  )
-import Ecluse.Core.Telemetry.Span (TracingPort (..))
+import Ecluse.Core.Telemetry.Span (JobSpanOutcome (..), TracingPort (..), WorkerTracingPort (..))
 import Ecluse.Core.Version (Version, renderVersion)
 import Ecluse.Telemetry (
     Telemetry,
@@ -209,34 +210,32 @@ withMirrorJobSpan telemetry name version project action =
         whenJust mSpan $ \theSpan -> whenJust mDetail (setStatus theSpan . Error)
         pure result
 
-{- | The projection a caller supplies for the mirror-job span: the bounded outcome
-label always, and, for a job that did not publish, the detail that marks the span
-'Error'. Kept a small record here — rather than the worker's own outcome type — so
-the tracing layer does not depend on "Ecluse.Worker".
--}
-data JobSpanOutcome = JobSpanOutcome
-    { jobSpanLabel :: Text
-    -- ^ The bounded outcome label (e.g. @succeeded@ \/ @dropped@ \/ @retried@).
-    , jobSpanError :: Maybe Text
-    -- ^ The failure detail when the job did not publish; 'Nothing' on success.
-    }
-    deriving stock (Eq, Show)
-
--- ── the core tracing port ──────────────────────────────────────────────────────
+-- ── the core tracing ports ─────────────────────────────────────────────────────
 
 {- | Project the OpenTelemetry-backed domain spans onto the core 'TracingPort' the
 serve path ("Ecluse.Core.Server.Pipeline") brackets through: the per-version rule
 verdict and the serve-time mirror-enqueue hand-off. Each field is the matching
 @with*Span@ bracket closed over the 'Telemetry' handle, so the port is exactly this
-module's tracing behind the core interface — inert when telemetry is off. The
-worker's 'withMirrorJobSpan' is not in the port: the worker stays on the application
-tracing layer, so the port carries only the two serve-path spans.
+module's tracing behind the core interface — inert when telemetry is off. The worker's
+mirror-job span is projected separately by 'workerTracingPortOf' onto a
+'WorkerTracingPort', so this port carries only the two serve-path spans.
 -}
 tracingPortOf :: Telemetry -> TracingPort
 tracingPortOf telemetry =
     TracingPort
         { spanRuleEval = withRuleEvalSpan telemetry
         , spanMirrorEnqueue = withMirrorEnqueueSpan telemetry
+        }
+
+{- | Project the OpenTelemetry-backed mirror-job span onto the core 'WorkerTracingPort'
+the worker loop ("Ecluse.Core.Worker") brackets through. The single field is
+'withMirrorJobSpan' closed over the 'Telemetry' handle, so the port is exactly this
+module's tracing behind the core interface — inert when telemetry is off.
+-}
+workerTracingPortOf :: Telemetry -> WorkerTracingPort
+workerTracingPortOf telemetry =
+    WorkerTracingPort
+        { wtpMirrorJobSpan = withMirrorJobSpan telemetry
         }
 
 -- ── verdict attribute mapping ──────────────────────────────────────────────────

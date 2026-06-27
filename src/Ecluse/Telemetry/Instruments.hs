@@ -28,8 +28,9 @@ module Ecluse.Telemetry.Instruments (
     Metrics,
     newMetrics,
 
-    -- * The core recording port
+    -- * The core recording ports
     metricsPortOf,
+    workerMetricsPortOf,
 
     -- * Timing
     timedSeconds,
@@ -95,7 +96,7 @@ import Ecluse.Core.Telemetry.Metrics (
     metricAttributes,
     metricName,
  )
-import Ecluse.Core.Telemetry.Record (MetricsPort (..), timedSeconds)
+import Ecluse.Core.Telemetry.Record (MetricsPort (..), WorkerMetricsPort (..), timedSeconds)
 import Ecluse.Telemetry (Telemetry, telemetryMeterProvider)
 
 -- ── the instrument handle ─────────────────────────────────────────────────────
@@ -199,6 +200,19 @@ metricsPortOf m =
         , mpCacheEntries = recordCacheEntries m
         , mpMirrorEnqueued = recordMirrorEnqueued m
         , mpMirrorEnqueueFailure = recordMirrorEnqueueFailure m
+        }
+
+{- | Project the OpenTelemetry-backed instruments onto the core 'WorkerMetricsPort' the
+mirror worker ("Ecluse.Core.Worker") records through. Each field is the matching
+@record*@ helper partially applied to the instrument handle, so the port is exactly this
+module's recording behaviour behind the core interface — inert when telemetry is off,
+since the instruments are.
+-}
+workerMetricsPortOf :: Metrics -> WorkerMetricsPort
+workerMetricsPortOf m =
+    WorkerMetricsPort
+        { wmpMirrorJobProcessed = recordMirrorJobProcessed m
+        , wmpMirrorPublishDuration = recordMirrorPublishDuration m
         }
 
 -- ── serve decision ───────────────────────────────────────────────────────────

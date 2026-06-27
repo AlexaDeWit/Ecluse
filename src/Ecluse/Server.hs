@@ -100,10 +100,10 @@ import Ecluse.Core.Server.Context (
 import Ecluse.Core.Server.Pipeline (headPackument, headTarball, servePackument, serveTarball)
 import Ecluse.Core.Server.Response (MountRenderer, RenderedBody (RenderedBody), renderError)
 import Ecluse.Core.Server.Route (Route (..))
+import Ecluse.Core.Worker (heartbeatHealthyNow)
 import Ecluse.Env (Env, envDdContext, envLogEnv, envTelemetry, envWorkerHeartbeat, serveRuntimeOf)
 import Ecluse.Telemetry.Correlation (ddPayloadNow)
 import Ecluse.Telemetry.Tracing (telemetryWaiMiddleware)
-import Ecluse.Worker (heartbeatHealthyNow)
 
 -- ── server configuration ─────────────────────────────────────────────────────
 
@@ -478,7 +478,7 @@ notFound =
 {- Liveness (@\/livez@): @200@ while the process is responsive, @503@ once the
 single-process mirror worker has stalled. The architecture folds the worker's
 consume-loop heartbeat into single-process liveness, so a worker whose loop has gone
-quiet past the staleness threshold ('Ecluse.Worker.workerHeartbeatStaleAfter') fails
+quiet past the staleness threshold ('Ecluse.Core.Worker.workerHeartbeatStaleAfter') fails
 liveness here (see @docs\/architecture\/cloud-backends.md@ → "Process model"); a
 worker still starting (no poll yet) or polling normally stays @200@.
 

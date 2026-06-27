@@ -1,23 +1,29 @@
 {-# LANGUAGE RankNTypes #-}
 
-{- | The domain-span tracing port: the abstract interface the core serve path opens
-its hand-added spans through, decoupled from any tracing backend.
+{- | The domain-span tracing ports: the abstract interfaces the core serve path and
+mirror worker open their hand-added spans through, decoupled from any tracing backend.
 
 The serve path brackets two domain spans an operator cares about — the per-version
-rule verdict and the synchronous-to-asynchronous mirror hand-off. This module defines
-those two bracket operations as a record of functions (the Handle pattern), each
-parametric in the bracketed action's result so the span wraps the real work without
-seeing its shape. The core records through this port and never names an OpenTelemetry
-tracer; the application supplies the OTel-backed implementation behind it (see
-@Ecluse.Telemetry.Tracing@), and a test supplies a pass-through double that simply
-runs the body.
+rule verdict and the synchronous-to-asynchronous mirror hand-off — and the mirror
+worker brackets one — the per-job fetch → verify → publish. This module defines those
+bracket operations as records of functions (the Handle pattern), each parametric in the
+bracketed action's result so the span wraps the real work without seeing its shape. A
+consumer records through its port and never names an OpenTelemetry tracer; the
+application supplies the OTel-backed implementations behind them (see
+@Ecluse.Telemetry.Tracing@), and a test supplies a pass-through double that simply runs
+the body.
 
-Only the two serve-path spans are present; the worker's mirror-job span stays in the
-application tracing layer, so the port carries exactly what the pipeline uses.
+Two ports are defined: 'TracingPort' for the serve path's two spans and
+'WorkerTracingPort' for the worker's mirror-job span; each carries exactly the spans its
+consumer opens.
 -}
 module Ecluse.Core.Telemetry.Span (
-    -- * The tracing port
+    -- * The serve-path tracing port
     TracingPort (..),
+
+    -- * The worker tracing port
+    WorkerTracingPort (..),
+    JobSpanOutcome (..),
 ) where
 
 import Ecluse.Core.Package (PackageName)
@@ -41,3 +47,32 @@ data TracingPort = TracingPort
     package, version, and the artifact's authoritative URL.
     -}
     }
+
+{- | The mirror worker's domain-span tracing port — the worker analogue of 'TracingPort',
+kept a separate record so the worker brackets exactly its own span. The single field
+brackets the per-job fetch → verify → publish, projecting the job's terminal result onto
+the span's outcome ('JobSpanOutcome'); it is rank-2 (parametric in the result) so one
+port value serves the call site whatever the body yields. The implementation is inert
+when tracing is off, so the worker brackets unconditionally.
+-}
+newtype WorkerTracingPort = WorkerTracingPort
+    { wtpMirrorJobSpan :: forall a. PackageName -> Version -> (a -> JobSpanOutcome) -> IO a -> IO a
+    {- ^ Bracket the worker's per-job fetch → verify → publish, carrying the package and
+    version and, once the job finishes, the projected outcome (the bounded outcome label
+    always, and a failure detail that marks the span errored when the job did not
+    publish).
+    -}
+    }
+
+{- | The projection a caller supplies for the mirror-job span: the bounded outcome label
+always, and, for a job that did not publish, the detail that marks the span errored. A
+small record (rather than the worker's own outcome type) so the tracing port does not
+depend on the worker loop.
+-}
+data JobSpanOutcome = JobSpanOutcome
+    { jobSpanLabel :: Text
+    -- ^ The bounded outcome label (e.g. @succeeded@ \/ @dropped@ \/ @retried@).
+    , jobSpanError :: Maybe Text
+    -- ^ The failure detail when the job did not publish; 'Nothing' on success.
+    }
+    deriving stock (Eq, Show)
