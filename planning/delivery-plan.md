@@ -152,7 +152,7 @@ effectful tier (**M5**); the GCP backends (M7); the launch docs + release-harden
 | **M6** | Observability | Opt-in, vendor-neutral OpenTelemetry/OTLP: tracing, the `ecluse.*` metrics catalog, JSONL `dd` log correlation. |
 | **M7** | GCP backends | The Pub/Sub de-risking spike → Pub/Sub `MirrorQueue`, the ADC credential leaf, GCP wiring. **Scheduled after AWS launch.** |
 | **M8** | Release hardening | SLSA build provenance + SBOM attestation; the launch docs & deployment runbook. |
-| **M9** | Performance benchmarking | The benchmark harness + micro / pipeline / load benchmarks, wired into CI as an **informational, non-gating** trend compared against prior baselines. **Never blocks a merge** — a correctness change may knowingly accept a regression. Off the launch critical path. |
+| **M9** | Benchmarking & load testing | **Two layers, one capability:** (A) deterministic **work-per-request** micro / allocation benches over the pure core; (B) **throughput & latency under load** driving the real `Application` over in-memory doubles, with the mandatory traffic scenarios (merge-in-loop, private cache hit, worker mirroring). **Inform-only — no SLO, never gates** (the workflow reds only on a literal benchmark failure). Off the launch critical path. |
 | **M10** | Azure backends | The Service-Bus-vs-Storage-Queues de-risking spike → Azure `MirrorQueue`, the Entra ID credential leaf, Azure composition wiring. **Lowest priority — furthest-out; after AWS *and* GCP.** |
 
 ---
@@ -257,13 +257,18 @@ owes also owes a deterministic `U`/`I` test (see [Testing Strategy](../docs/test
 | [S46](slices/S46-dockerhub-org-account.md) | Docker Hub org account + repo-scoped publish token (retire account-wide personal PAT) — _accepted risk pre-MVP; harden before GA_ | — | — |
 | [S53](slices/S53-e2e-ecosystem.md) | End-to-end testing ecosystem — whole-system through the real composition root, real `npm` CLI on the public surface, server↔worker round-trip; real Verdaccio + scriptable upstream stub — _new **non-gating** `e2e` tier (pre-merge + nightly); built now on `runServices`, rebased onto S20 when it lands; [#271](https://github.com/AlexaDeWit/Ecluse/issues/271)_ | S15, S19 | E2E |
 
-### M9 — Performance benchmarking (informational; never gates)
+### M9 — Benchmarking & load testing (informational; never gates)
+
+Re-cut 2026-06-27 (architect-approved): one capability, two layers; **inform-only, no
+SLO**; the workflow reds only on a literal benchmark failure. Measured on the **shared
+public** runner with **local deep-dives** for trustworthy absolutes; `workflow_dispatch`
+for the first iteration. See [`docs/architecture/performance.md`](../docs/architecture/performance.md).
 
 | ID | Slice | Depends on | Tier |
 |----|-------|------------|------|
-| [S37](slices/S37-benchmark-harness.md) | Benchmark harness + pure-core micro-benchmarks | — | B |
-| [S38](slices/S38-pipeline-benchmarks.md) | End-to-end pipeline benchmarks (in-process) | S14, S33, S37 | B |
-| [S39](slices/S39-load-and-memory.md) | Macro load + bounded-memory streaming observations | S15, S37 | B |
+| [S37](slices/S37-benchmark-harness.md) | Harness + Layer A work-per-request benches + CI baseline | — | B |
+| [S38](slices/S38-pipeline-benchmarks.md) | Layer B — throughput & latency under load + mandatory traffic scenarios | S37 | B |
+| [S39](slices/S39-load-and-memory.md) | ~~Macro load + bounded-memory~~ — **superseded** (load folded into S38; bounded-memory lifted out as a gating correctness item) | — | — |
 
 ### M10 — Azure backends (lowest priority; after AWS & GCP)
 
@@ -367,9 +372,14 @@ with the PyPI / RubyGems version-wire arms ([#337](https://github.com/AlexaDeWit
 the helper dedupe ([#339](https://github.com/AlexaDeWit/Ecluse/pull/339)); and the
 retired-terminology cleanup ([#333](https://github.com/AlexaDeWit/Ecluse/pull/333))._
 
-_**Nothing is in flight.** The next dispatchable work is a package split (in progress
-elsewhere); after it the queue is the CVE tier (S22 / S23, **M5**) and the first-party publish
-path (S52, **M4**), per the architect's sequencing._
+_**In flight: M9 — benchmarking & load testing (off the critical path).** The
+ecluse-core / app package split has landed (#350–#372). M9 was re-cut (architect-approved
+2026-06-27; see the [M9 slice index](#m9--benchmarking--load-testing-informational-never-gates))
+and **S37** (harness + Layer A work-per-request benches + CI baseline) is dispatched to a
+build agent; **S38** (Layer B load + the mandatory traffic scenarios) follows once S37 merges.
+Critical-path work proceeds in parallel under a separate effort. After M9 the queue is the CVE
+tier (S22 / S23, **M5**) and the first-party publish path (S52, **M4**), per the architect's
+sequencing._
 
 ---
 
