@@ -91,37 +91,61 @@ noted below.
    [Configuration → Response bounds](configuration.md#response-bounds)). Artifacts are
    streamed with constant memory and are not subject to the body-size bound; the
    inbound client→proxy request-body cap is the separate `sizeLimitMiddleware`.
-5. **A public version must carry a *strong* integrity digest to be served
-   (asymmetric integrity trust).** Écluse trusts a digest only as far as its algorithm
-   is collision-resistant, and it trusts the two upstreams **asymmetrically**:
+5. **Every served version must carry a *strong* integrity digest — by default, in both
+   trust contexts (uniform integrity floor, asymmetric loosenability).** Écluse trusts a
+   digest only as far as its algorithm is collision-resistant. By default **both** upstream
+   contexts require a **SHA-256-or-stronger** digest; the two floors differ only in **how
+   far they may move**:
 
-   - A version from an **untrusted (public)** upstream is **inadmissible** unless its
-     selected artifact carries at least one digest whose algorithm meets a configurable
-     **integrity floor** (`PROXY_MIN_PUBLIC_INTEGRITY`, default **SHA-256**; the floor
-     may be raised to `sha384`/`sha512`/`blake2b` but [never set below
-     SHA-256](configuration.md#public-integrity-floor)). A version with **no** digest
+   - The **public (untrusted) floor** is a **hard SHA-256 boundary**
+     (`PROXY_MIN_PUBLIC_INTEGRITY`, default **SHA-256**). It may be **raised** to
+     `sha384`/`sha512`/`blake2b` as cryptanalysis ages an algorithm, but **never lowered
+     below SHA-256** — a sub-floor or unknown value is [rejected at config
+     load](configuration.md#public-integrity-floor), never clamped. **There is no
+     escape-hatch:** Écluse will not accept a sub-SHA-256 digest from an untrusted public
+     upstream under any configuration. A public version with **no** digest
      (`MissingIntegrity`) or only a digest **below the floor** — e.g. a legacy SHA-1
      `dist.shasum` with no SRI (`BelowIntegrityFloor`) — is refused: the artifact gate
-     answers `403` (the tarball is never fetched), and the packument path **filters it
-     out of the served listing** (so a client never sees a version it could not safely
-     verify). SHA-1 and MD5 have practical collisions, so a match on one cannot prove
-     the bytes were not substituted; admitting on such a digest would let a colliding
-     artifact pass the tamper gate, and two differing-byte copies that share only a weak
-     digest could fingerprint-collide so a
-     [cross-upstream divergence](registry-model.md#packument-merge-across-upstreams)
-     went **undetected**. Refusing at admission closes that gap before the version
-     reaches serve or contributes its fingerprint to the merge.
-   - The **trusted private origin is exempt** — its versions are admitted unfiltered,
-     so a SHA-1-only private version is served. Trust (the private upstream is the
-     operator's own vetted source) substitutes for cryptographic strength there. A
-     private-weak / public-strong pair can still cross-check on a shared weak digest
-     (private `{sha1}` vs public `{sha1, sha256}` compare on `sha1`) because the public
-     copy independently meets the floor on its `sha256`.
+     answers `403` (the tarball is never fetched), and the packument path **filters it out
+     of the served listing** (so a client never sees a version it could not safely verify).
+     SHA-1 and MD5 have practical collisions, so a match on one cannot prove the bytes were
+     not substituted; admitting on such a digest would let a colliding artifact pass the
+     tamper gate.
+   - The **trusted (private) floor** carries the **same SHA-256 default**
+     (`PROXY_MIN_TRUSTED_INTEGRITY`, default **SHA-256**), so by default a SHA-1-only or
+     hashless **private** version is **dropped** exactly as a public one is — the old
+     "trusted private path is exempt" model is gone as a default. But this floor is
+     **operator-loosenable below SHA-256** (down to `sha1`/`md5`) for a **legacy private
+     mirror**, where **trust in the operator's own vetted source substitutes for
+     cryptographic strength**. Loosening the trusted floor is the **only** way Écluse will
+     serve a sub-SHA-256 digest, and **only on the trusted private origin** — never on
+     untrusted public bytes. On the serve path the trusted floor both filters the private
+     listing and gates the private artifact serve (a below-floor private artifact is a
+     private miss that falls through to the public origin).
+
+   The asymmetry is the point: **trust may substitute for cryptographic strength on the
+   operator's own vetted (private) source, but never on untrusted public bytes.** This is
+   enforced in the types — `MinIntegrity` (public) cannot be constructed below SHA-256,
+   while `MinTrustedIntegrity` (trusted) can — so no config or constructor path can lower
+   the public floor.
+
+   **The shared-weak-digest divergence cross-check is a consequence of loosening the
+   trusted floor, not a default posture.** A
+   [cross-upstream divergence](registry-model.md#packument-merge-across-upstreams) is
+   detected when two copies of a version **contradict on a shared algorithm**. By default
+   (uniform SHA-256) every admitted version anchors that comparison on a **strong**
+   (≥ SHA-256) digest, so a weak shared digest never carries it. Only when an operator
+   **explicitly loosens the trusted floor below SHA-256** can a private version be admitted
+   on, say, a lone `sha1`; a private `{sha1}` vs public `{sha1, sha256}` pair then
+   cross-checks on the shared `sha1` (the public copy still independently meets its own
+   hard SHA-256 floor on its `sha256`). That weak cross-check is therefore the
+   **opted-into** behaviour of a loosened trusted floor, never something the default model
+   relies on.
 
    The shared notion of algorithm strength and the floor predicate live in one module,
    `Ecluse.Core.Package.Integrity`, reused by the worker's tamper gate
-   (`Ecluse.Core.Worker.verifyIntegrity`) so the admission floor and the publish-time
-   verification rank algorithms identically.
+   (`Ecluse.Core.Worker.verifyIntegrity`) so the public floor, the trusted floor, and the
+   publish-time verification rank algorithms identically.
 
 ## Posture
 

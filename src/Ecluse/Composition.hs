@@ -91,7 +91,7 @@ import Ecluse.Core.Credential (AuthToken (..), CredentialProvider, Secret, mkSec
 import Ecluse.Core.Credential.CodeArtifact (CodeArtifactConfig (..), newCodeArtifactProvider)
 import Ecluse.Core.Credential.Refresh (CredentialReporters)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName, prefixFor)
-import Ecluse.Core.Package.Integrity (MinIntegrity)
+import Ecluse.Core.Package.Integrity (MinIntegrity, MinTrustedIntegrity)
 import Ecluse.Core.Queue (MemoryQueueConfig, defaultMemoryQueueConfig)
 import Ecluse.Core.Queue.Sqs (SqsConfig (sqsEndpoint), SqsEndpoint (..), defaultSqsConfig)
 import Ecluse.Core.Security (Limits (Limits, maxBodyBytes, maxNestingDepth, maxVersionCount), TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), hostAddress, lowerCaseHosts, splitHostPort)
@@ -453,6 +453,12 @@ composeBindings resolveAdapter clock providers config =
     minIntegrity :: MinIntegrity
     minIntegrity = cfgMinPublicIntegrity (configEnv config)
 
+    -- The global trusted-integrity admission floor (default SHA-256, loosenable below it),
+    -- carried onto every mount's deps so the trusted gate drops a below-floor private
+    -- version from the listing and gates the private artifact serve.
+    minTrustedIntegrity :: MinTrustedIntegrity
+    minTrustedIntegrity = cfgMinTrustedIntegrity (configEnv config)
+
     -- A mount's externally-visible base URL for the dist.tarball rewrite. Absolute
     -- under PROXY_PUBLIC_URL when set (so a served tarball is a full URL an npm
     -- client can fetch); otherwise the relative prefix path, retained for
@@ -515,6 +521,7 @@ composeBindings resolveAdapter clock providers config =
                 , pdNow = clock
                 , pdHelp = helpMessage
                 , pdMinIntegrity = minIntegrity
+                , pdMinTrustedIntegrity = minTrustedIntegrity
                 }
 
 -- The mount's externally-visible base path, derived from its ecosystem prefix

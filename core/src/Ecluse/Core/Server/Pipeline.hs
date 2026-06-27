@@ -156,7 +156,8 @@ import Ecluse.Core.Package (
  )
 import Ecluse.Core.Package.Filter (filterPlanFromDecisions, fpSurvivors)
 import Ecluse.Core.Package.Integrity (
-    MinIntegrity,
+    IntegrityFloor,
+    MinTrustedIntegrity,
     VersionIntegrity (BelowFloor, MeetsFloor, NoIntegrity),
     classifyArtifacts,
  )
@@ -351,14 +352,14 @@ serveWithDeps mode renderer deps name request respond
                 (fetchPrivateOrigin (pdLimits deps) rt (pdPrivateBaseUrl deps) clientToken name)
                 (fetchPublicOrigin (pdLimits deps) rt (pdPublicBaseUrl deps) name)
         (public, publicExclusions) <- liftIO (gatePublic metrics deps evalCtx (originPackument pubResult))
-        let private = trustedSource <$> originPackument privResult
+        let (private, privateExclusions) = admitTrusted (pdMinTrustedIntegrity deps) (originPackument privResult)
             sources = catMaybes [private, public]
         case assemble deps sources of
             Just body -> do
                 liftIO (mpServeDecision metrics Metric.Admit)
                 liftIO (respond (servePackumentBody mode request body))
             Nothing -> do
-                let decisions = collectDecisions privResult pubResult publicExclusions
+                let decisions = collectDecisions privResult pubResult (privateExclusions <> publicExclusions)
                 liftIO (mpServeDecision metrics (packumentServeDecision decisions))
                 liftIO (recordDenials metrics decisions)
                 liftIO (respond (noSurvivors renderer deps decisions))
@@ -644,10 +645,25 @@ clientConfig limits manager baseUrl token =
         , npmLimits = limits
         }
 
--- A trusted (private) source enters the merge unfiltered, its raw @Value@ kept as
--- fetched (tarball URLs are rewritten at assembly, uniformly across sources).
-trustedSource :: (PackageInfo, Value) -> Contribution
-trustedSource (info, value) = Contribution TrustedSource info value
+{- Apply the __trusted integrity floor__ to a private (trusted) contribution before it
+enters the merge, returning the surviving 'Contribution' (if any version survived) and the
+per-version exclusions for the dropped ones (for the no-survivors status). This is the
+trusted-path mirror of 'gatePublic': a private version whose strongest digest is below the
+trusted floor ('pdMinTrustedIntegrity') is dropped from the served listing, so by default
+(floor = SHA-256) a SHA-1-only or hashless private version is not listed, while an operator
+who loosens the trusted floor admits it again. Trusted versions stay __unfiltered by the
+rules__ (the trust split is the caller's); only the integrity floor applies. The raw
+@Value@ is kept whole — the merge replays only surviving keys onto it, so a dropped version
+is never taken from it; tarball URLs are rewritten at assembly, uniformly across sources. -}
+admitTrusted :: MinTrustedIntegrity -> Maybe (PackageInfo, Value) -> (Maybe Contribution, [ServeDecision])
+admitTrusted minTrusted = \case
+    Nothing -> (Nothing, [])
+    Just (info, value) ->
+        let (admissible, integrityRefusals) =
+                admitByIntegrity minTrusted trustedIntegrityBelowFloor trustedIntegrityMissing info
+         in if Map.null (infoVersions admissible)
+                then (Nothing, integrityRefusals)
+                else (Just (Contribution TrustedSource admissible value), integrityRefusals)
 
 {- Gate a public-upstream contribution through both rule tiers and the structural
 filter, returning the surviving 'Contribution' (if any survived) and the per-version
@@ -677,13 +693,14 @@ match its filtered @Value@: 'mergePackuments' treats a 'GatedSource' as the
 already-filtered set and never re-filters, so feeding it the unfiltered view would
 let a denied version reach the merge plan (and skew the reconciled @latest@\/@time@).
 
-The trusted private upstream is exempt: this gate runs on the public path only, so a
-weak-digest private version still enters the merge unfiltered. -}
+This gate runs on the public path only; the trusted (private) contribution is admitted
+separately by 'admitTrusted' against the trusted integrity floor (the rules never run on
+it — the trust split is the caller's). -}
 gatePublic :: MetricsPort -> PackumentDeps -> EvalContext -> Maybe (PackageInfo, Value) -> IO (Maybe Contribution, [ServeDecision])
 gatePublic metrics deps ctx = \case
     Nothing -> pure (Nothing, [])
     Just (info, value) -> do
-        let (admissible, integrityRefusals) = admitByIntegrity (pdMinIntegrity deps) info
+        let (admissible, integrityRefusals) = admitByIntegrity (pdMinIntegrity deps) integrityBelowFloor integrityMissing info
         (decisions, seconds) <- timedSeconds (decideVersions deps ctx admissible)
         mpRuleEvalDuration metrics (evalTier (pdEffectfulRules deps)) seconds
         recordEffectfulFailures metrics (Map.elems decisions)
@@ -693,32 +710,43 @@ gatePublic metrics deps ctx = \case
                 (Just (Contribution GatedSource (restrictToSurvivors (fpSurvivors plan) admissible) filtered), integrityRefusals)
             NoSurvivors leftover -> (Nothing, projectDecisions admissible leftover <> integrityRefusals)
 
-{- Apply the integrity-floor admission policy to a public 'PackageInfo', keeping only
-the versions whose strongest digest meets the floor and projecting the rest to refusals.
-A version whose digests are all weaker than the floor (or absent) cannot be tied to a
-tamper-evident fingerprint, so it is inadmissible from an untrusted public upstream —
-dropped from the gated set (and from the served listing) rather than served a client
-could never safely verify. Returns the admissible 'PackageInfo' (with
-@dist-tags@\/@time@ pruned to the kept keys, exactly as 'restrictToSurvivors' prunes for
-the rules) and the refusals for the dropped versions: 'BelowIntegrityFloor' for a
+{- Apply an integrity-floor admission policy to a 'PackageInfo', keeping only the versions
+whose strongest digest meets the floor and projecting the rest to refusals. A version
+whose digests are all weaker than the floor (or absent) cannot be tied to a
+floor-strength tamper-evident fingerprint, so it is dropped from the served listing rather
+than served a client could never safely verify. Used by both gates: the public gate
+('gatePublic') with the hard-floored 'Ecluse.Core.Package.Integrity.MinIntegrity', and the
+trusted gate ('admitTrusted') with the loosenable
+'Ecluse.Core.Package.Integrity.MinTrustedIntegrity'. Returns the admissible 'PackageInfo'
+(with @dist-tags@\/@time@ pruned to the kept keys, exactly as 'restrictToSurvivors' prunes
+for the rules) and the refusals for the dropped versions: 'BelowIntegrityFloor' for a
 too-weak digest, 'MissingIntegrity' for none at all, each feeding the no-survivors
 status. -}
-admitByIntegrity :: MinIntegrity -> PackageInfo -> (PackageInfo, [ServeDecision])
-admitByIntegrity minIntegrity info =
+admitByIntegrity ::
+    (IntegrityFloor floor) =>
+    floor ->
+    -- The refusal projected for a present-but-too-weak digest ('BelowFloor') …
+    ServeDecision ->
+    -- … and for a version carrying no digest at all ('NoIntegrity'); the public and
+    -- trusted gates pass their own context-worded decisions.
+    ServeDecision ->
+    PackageInfo ->
+    (PackageInfo, [ServeDecision])
+admitByIntegrity floorSpec belowFloorRefusal missingRefusal info =
     ( info
         { infoVersions = Map.restrictKeys (infoVersions info) admissibleKeys
         , infoDistTags = Map.filter ((`Set.member` admissibleKeys) . renderVersion) (infoDistTags info)
         , infoPublishedAt = Map.restrictKeys (infoPublishedAt info) admissibleKeys
         }
-    , [integrityBelowFloor | (_, BelowFloor) <- Map.toList classified]
-        <> [integrityMissing | (_, NoIntegrity) <- Map.toList classified]
+    , [belowFloorRefusal | (_, BelowFloor) <- Map.toList classified]
+        <> [missingRefusal | (_, NoIntegrity) <- Map.toList classified]
     )
   where
     -- Classify each version against the floor exactly once (the up-to-100k-version map
     -- is walked a single time); the admissible keys and the two refusal buckets are
     -- then read off the small class map.
     classified :: Map Text VersionIntegrity
-    classified = Map.map (classifyArtifacts minIntegrity . pkgArtifacts) (infoVersions info)
+    classified = Map.map (classifyArtifacts floorSpec . pkgArtifacts) (infoVersions info)
 
     admissibleKeys :: Set Text
     admissibleKeys = Map.keysSet (Map.filter (== MeetsFloor) classified)
@@ -1199,15 +1227,23 @@ streamPrivateArtifact mode rt deps token validators name version file respond = 
 
 {- Fetch the private packument (uncached, with the client's credential) and select
 the requested version's 'Artifact' by its preserved filename. 'Nothing' when the
-private origin does not resolve, the version is absent, or no artifact matches the
-filename — each a clean private miss the caller falls through on. -}
+private origin does not resolve, the version is absent, no artifact matches the
+filename, or the selected artifact's strongest digest is below the trusted integrity
+floor — each a clean private miss the caller falls through on.
+
+The trusted floor ('pdMinTrustedIntegrity', default SHA-256) gates the private artifact
+serve, mirroring the packument path's listing drop: by default a SHA-1-only or hashless
+private artifact is a miss (served from the public origin instead if it admits there);
+an operator who loosens the trusted floor serves it from the private origin again. -}
 selectPrivateArtifact :: ServeRuntime -> PackumentDeps -> Maybe Secret -> PackageName -> Version -> Text -> Handler (Maybe Artifact)
 selectPrivateArtifact rt deps token name version file = do
     resolved <- originPackument <$> fetchPrivateOrigin (pdLimits deps) rt (pdPrivateBaseUrl deps) token name
     pure $ do
         (info, _value) <- resolved
         details <- Map.lookup (renderVersion version) (infoVersions info)
-        artifactFor file details
+        artifact <- artifactFor file details
+        guard (classifyArtifacts (pdMinTrustedIntegrity deps) (artifact :| []) == MeetsFloor)
+        pure artifact
 
 {- Serve the artifact from the public upstream after a private miss: gate the
 single requested version against the rules, and on an admit stream the public bytes
@@ -1296,8 +1332,9 @@ The __integrity-floor admission policy__ is enforced here, after the rules admit
 the artifact is selected: a public version whose selected artifact carries no digest
 meeting the floor ('pdMinIntegrity') is inadmissible — 'integrityMissing' (no digest at
 all) or 'integrityBelowFloor' (a digest, but too weak), both rendered @403@ — and
-refused outright, never fetched. This is the public path; the trusted private upstream
-('selectPrivateArtifact') is exempt and never reaches this gate. -}
+refused outright, never fetched. This is the public path; the trusted (private) artifact
+serve is gated separately by the trusted floor in 'selectPrivateArtifact' and never
+reaches this gate. -}
 gateVersion :: EvalContext -> PackumentDeps -> Text -> PackageDetails -> IO PublicArtifactGate
 gateVersion ctx deps file details = do
     decision <- serveDecisionOf details <$> evalRulesEffectful ctx (pdRules deps) (pdEffectfulRules deps) details
@@ -1325,24 +1362,40 @@ versionAbsent :: ServeDecision
 versionAbsent =
     Reject (Rejection (Unavailable WontResolve) "the requested version was not found upstream")
 
-{- A public version refused by the integrity-presence admission policy: its selected
+{- A __public__ version refused by the integrity-presence admission policy: its selected
 artifact carries no integrity digest of any kind, so it cannot be tied to a
 tamper-evident fingerprint. A deliberate deny-by-default policy refusal ('MissingIntegrity',
-rendered @403@), not a rule denial and not a retryable outage. The trusted private
-upstream is exempt, so this never arises on the private path. -}
+rendered @403@), not a rule denial and not a retryable outage. The trusted (private) path
+uses 'trustedIntegrityMissing' instead, worded for its own context. -}
 integrityMissing :: ServeDecision
 integrityMissing =
     Reject (Rejection MissingIntegrity "this version carries no integrity digest and cannot be served from a public upstream")
 
-{- A public version refused by the integrity-floor admission policy: its selected
+{- A __public__ version refused by the integrity-floor admission policy: its selected
 artifact carries an integrity digest, but the strongest one is weaker than the configured
 minimum algorithm, so its bytes cannot be tied to a collision-resistant fingerprint. A
 deliberate deny-by-default policy refusal ('BelowIntegrityFloor', rendered @403@),
-distinct from 'integrityMissing' so the audit trail says which. The trusted private
-upstream is exempt, so this never arises on the private path. -}
+distinct from 'integrityMissing' so the audit trail says which. The trusted (private) path
+uses 'trustedIntegrityBelowFloor' instead. -}
 integrityBelowFloor :: ServeDecision
 integrityBelowFloor =
     Reject (Rejection BelowIntegrityFloor "this version's integrity digest is weaker than the configured minimum and cannot be served from a public upstream")
+
+{- A __trusted__ (private) version dropped by the trusted integrity floor for carrying no
+integrity digest at all. The same 'MissingIntegrity' @403@ as the public refusal, but
+worded for the private path; it surfaces only in the no-survivors body when no version
+(private or public) is admissible. -}
+trustedIntegrityMissing :: ServeDecision
+trustedIntegrityMissing =
+    Reject (Rejection MissingIntegrity "this private version carries no integrity digest and was not served")
+
+{- A __trusted__ (private) version dropped by the trusted integrity floor: its strongest
+digest is weaker than the configured trusted minimum (which an operator may loosen below
+SHA-256). The same 'BelowIntegrityFloor' @403@ as the public refusal, worded for the
+private path. -}
+trustedIntegrityBelowFloor :: ServeDecision
+trustedIntegrityBelowFloor =
+    Reject (Rejection BelowIntegrityFloor "this private version's integrity digest is weaker than the configured trusted minimum and was not served")
 
 {- Stream the artifact from the public upstream at its __authoritative location__,
 __anonymously__ (the client credential is never sent to the public upstream), and —

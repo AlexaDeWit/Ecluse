@@ -157,28 +157,33 @@ deduplicating.
   (an algorithm both carry whose digests disagree) for that version, that divergence
   is exactly the supply-chain tampering Écluse exists to catch: it is **detected,
   logged, and metered** (and may fail-closed on that version), never silently
-  reconciled. An **asymmetric** digest set — one upstream also carrying a legacy
-  digest the other omits, with no disagreement on any *shared* algorithm — describes
-  the same bytes and is **not** a divergence: a weak digest agreeing never suppresses
-  a contradicting strong one, and a strong digest agreeing makes the asymmetric weak
-  one irrelevant.
-- **A below-floor public version is inadmissible (admission, not merge).** Divergence
-  detection compares a version's integrity fingerprint across upstreams, so a public
-  version whose strongest digest is too weak (or absent) is a blind spot: two
-  differing-byte copies that carry no digest, or only a collision-broken one, can
-  fingerprint-collide so a divergence goes undetected. Écluse resolves this **at
-  admission, not in the merge**: a public version whose strongest digest does not meet
-  the configurable **integrity floor** (`PROXY_MIN_PUBLIC_INTEGRITY`, default SHA-256)
-  is **refused before it reaches the merge** — the artifact gate `403`s it
-  (`MissingIntegrity` for no digest, `BelowIntegrityFloor` for a too-weak one) and the
-  gated set drops it from the served listing — so it never contributes a weak
-  fingerprint and a client never sees a version it could not safely verify. With the
-  floor enforced at admission, a below-floor public version never reaches the merge, so
-  the cross-upstream divergence reasons over fingerprints that are each anchored on a
-  strong digest; the **private-weak / public-strong** cross-check on a shared weak
-  digest stays valid because the public copy independently cleared the floor. The
-  **trusted private upstream is exempt** (its versions enter unfiltered, so a SHA-1-only
-  private version is still served). This is
+  reconciled. The algorithm compared is the one each digest **asserts** — an SRI is
+  resolved to its embedded algorithm, never bucketed under an opaque `SRI` tag — so the
+  same algorithm expressed as a hex digest or as an SRI is cross-checked **together**,
+  while two *different* algorithms over the same bytes (e.g. a recomputing mirror's
+  `sha256` vs npm's `sha512`) form an asymmetric set, **not** a divergence. An
+  **asymmetric** digest set — one upstream also carrying a digest the other omits, with no
+  disagreement on any *shared* algorithm — describes the same bytes and is **not** a
+  divergence: a weak digest agreeing never suppresses a contradicting strong one, and a
+  strong digest agreeing makes the asymmetric weak one irrelevant.
+- **A below-floor version is inadmissible (admission, not merge) — by default in both
+  trust contexts.** Divergence detection compares a version's integrity fingerprint across
+  upstreams, so a version whose strongest digest is too weak (or absent) is a blind spot:
+  two differing-byte copies that carry no digest, or only a collision-broken one, can
+  fingerprint-collide so a divergence goes undetected. Écluse resolves this **at admission,
+  not in the merge**, and **by default in both contexts**: a version whose strongest digest
+  does not meet its **integrity floor** is **refused before it reaches the merge** — the
+  served listing drops it and the artifact gate `403`s it (or, on the trusted artifact
+  path, falls a below-floor private artifact through to the public origin), as
+  `MissingIntegrity` (no digest) or `BelowIntegrityFloor` (a too-weak one). The **public
+  floor** (`PROXY_MIN_PUBLIC_INTEGRITY`, default SHA-256) is **hard-floored** and never
+  lowerable; the **trusted floor** (`PROXY_MIN_TRUSTED_INTEGRITY`, default SHA-256) shares
+  that default but is **operator-loosenable below SHA-256** for a legacy private mirror.
+  With the floors enforced at admission, the cross-upstream divergence reasons over
+  fingerprints each anchored on a strong digest **by default**; the **private-weak /
+  public-strong** cross-check on a shared weak digest arises **only when an operator
+  explicitly loosens the trusted floor** below SHA-256 (the public copy still independently
+  meets its own hard floor on its strong digest). This is
   [security invariant 5](security.md#invariants).
 - **Reconcile over the union.** `dist-tags.latest` follows the **keep-unless-denied,
   stable-preferring** rule (see

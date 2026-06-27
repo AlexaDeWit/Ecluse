@@ -24,7 +24,7 @@ import Test.Hspec
 import UnliftIO.Exception (try)
 
 import Ecluse.Core.Credential (AuthToken (AuthToken, authExpiresAt, authSecret), CredentialProvider, mkSecret, staticProvider)
-import Ecluse.Core.Package.Integrity (defaultMinIntegrity)
+import Ecluse.Core.Package.Integrity (defaultMinIntegrity, defaultMinTrustedIntegrity)
 import Ecluse.Core.Queue (newInMemoryQueue)
 import Ecluse.Core.Registry (ParseError (ParseError), RegistryClient (..))
 import Ecluse.Core.Registry.Npm.Route qualified as Npm
@@ -153,6 +153,7 @@ deps policy internalOptIn port =
         , pdNow = pure fixedNow
         , pdHelp = Nothing
         , pdMinIntegrity = defaultMinIntegrity
+        , pdMinTrustedIntegrity = defaultMinTrustedIntegrity
         }
 
 -- ── the upstream double ───────────────────────────────────────────────────────

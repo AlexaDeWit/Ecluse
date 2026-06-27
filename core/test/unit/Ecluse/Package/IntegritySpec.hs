@@ -13,12 +13,17 @@ import Ecluse.Core.Package.Integrity (
     assertedAlg,
     classifyArtifacts,
     defaultMinIntegrity,
+    defaultMinTrustedIntegrity,
     integrityStrength,
     meetsFloor,
     mkMinIntegrity,
+    mkMinTrustedIntegrity,
     parseMinIntegrity,
+    parseMinTrustedIntegrity,
     renderMinIntegrity,
+    renderMinTrustedIntegrity,
     unMinIntegrity,
+    unMinTrustedIntegrity,
  )
 import Ecluse.Test.Package (
     unsafeHash,
@@ -148,6 +153,58 @@ spec = do
             parseMinIntegrity (renderMinIntegrity sha384Floor) `shouldBe` Right sha384Floor
             parseMinIntegrity (renderMinIntegrity sha512Floor) `shouldBe` Right sha512Floor
             parseMinIntegrity (renderMinIntegrity blake2bFloor) `shouldBe` Right blake2bFloor
+
+    describe "mkMinTrustedIntegrity / parseMinTrustedIntegrity (the loosenable trusted floor)" $ do
+        it "defaults to SHA-256, the same secure default as the public floor" $
+            unMinTrustedIntegrity defaultMinTrustedIntegrity `shouldBe` SHA256
+
+        it "accepts any concrete algorithm — including the broken SHA-1 and MD5 (loosenable)" $ do
+            -- The trusted floor has NO hard minimum: an operator may loosen it below
+            -- SHA-256 for a legacy private mirror, where trust substitutes for strength.
+            (unMinTrustedIntegrity <$> mkMinTrustedIntegrity SHA1) `shouldBe` Right SHA1
+            (unMinTrustedIntegrity <$> mkMinTrustedIntegrity MD5) `shouldBe` Right MD5
+            (unMinTrustedIntegrity <$> mkMinTrustedIntegrity SHA256) `shouldBe` Right SHA256
+            (unMinTrustedIntegrity <$> mkMinTrustedIntegrity SHA512) `shouldBe` Right SHA512
+
+        it "rejects the bare SRI wrapper (it names no concrete algorithm)" $
+            mkMinTrustedIntegrity SRI
+                `shouldBe` Left "the minimum trusted integrity algorithm must name a concrete algorithm, not a bare SRI"
+
+        it "parses sub-SHA-256 names (sha1, md5) that the public floor would reject" $ do
+            (unMinTrustedIntegrity <$> parseMinTrustedIntegrity "sha1") `shouldBe` Right SHA1
+            (unMinTrustedIntegrity <$> parseMinTrustedIntegrity "md5") `shouldBe` Right MD5
+            (unMinTrustedIntegrity <$> parseMinTrustedIntegrity "SHA-256") `shouldBe` Right SHA256
+
+        it "rejects an unknown algorithm name" $
+            parseMinTrustedIntegrity "frobnicate" `shouldBe` Left "unknown integrity algorithm: frobnicate"
+
+        it "round-trips render and parse" $ do
+            sha1Floor <- expectRight (mkMinTrustedIntegrity SHA1)
+            parseMinTrustedIntegrity (renderMinTrustedIntegrity defaultMinTrustedIntegrity)
+                `shouldBe` Right defaultMinTrustedIntegrity
+            parseMinTrustedIntegrity (renderMinTrustedIntegrity sha1Floor) `shouldBe` Right sha1Floor
+
+    describe "meetsFloor / classifyArtifacts over the trusted floor (one ranking backs both floors)" $ do
+        it "a loosened (SHA-1) trusted floor admits SHA-1 but not MD5" $ do
+            sha1Floor <- expectRight (mkMinTrustedIntegrity SHA1)
+            meetsFloor sha1Floor SHA1 `shouldBe` True
+            meetsFloor sha1Floor SHA256 `shouldBe` True
+            meetsFloor sha1Floor MD5 `shouldBe` False
+
+        it "the default (SHA-256) trusted floor rejects a SHA-1 digest" $
+            meetsFloor defaultMinTrustedIntegrity SHA1 `shouldBe` False
+
+        it "classifies a SHA-1-only version BelowFloor by default, MeetsFloor when loosened to SHA-1" $ do
+            sha1Floor <- expectRight (mkMinTrustedIntegrity SHA1)
+            classifyArtifacts defaultMinTrustedIntegrity (artifactWith [unsafeHash SHA1 validSha1] :| [])
+                `shouldBe` BelowFloor
+            classifyArtifacts sha1Floor (artifactWith [unsafeHash SHA1 validSha1] :| [])
+                `shouldBe` MeetsFloor
+
+        it "a hashless version is NoIntegrity under any trusted floor (no digest can meet a floor)" $ do
+            sha1Floor <- expectRight (mkMinTrustedIntegrity SHA1)
+            classifyArtifacts defaultMinTrustedIntegrity (artifactWith [] :| []) `shouldBe` NoIntegrity
+            classifyArtifacts sha1Floor (artifactWith [] :| []) `shouldBe` NoIntegrity
 
     describe "classifyArtifacts" $ do
         let classify floorAlg hs =

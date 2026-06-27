@@ -10,8 +10,13 @@ import Test.Hspec
 import Ecluse.Config
 import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
-import Ecluse.Core.Package (HashAlg (SHA384, SHA512), mkScope)
-import Ecluse.Core.Package.Integrity (defaultMinIntegrity, unMinIntegrity)
+import Ecluse.Core.Package (HashAlg (MD5, SHA1, SHA384, SHA512), mkScope)
+import Ecluse.Core.Package.Integrity (
+    defaultMinIntegrity,
+    defaultMinTrustedIntegrity,
+    unMinIntegrity,
+    unMinTrustedIntegrity,
+ )
 import Ecluse.Core.Rules.Types (
     PrecededRule (..),
     Rule (..),
@@ -245,6 +250,8 @@ envLayerSpec = describe "parseEnvPure" $ do
                 cfgRespectUpstreamTarballHost cfg `shouldBe` False
                 -- The public-integrity floor defaults to SHA-256 (the hard minimum).
                 cfgMinPublicIntegrity cfg `shouldBe` defaultMinIntegrity
+                -- The trusted-integrity floor also defaults to SHA-256 (loosenable below it).
+                cfgMinTrustedIntegrity cfg `shouldBe` defaultMinTrustedIntegrity
 
     it "reports a single missing required variable against its own name" $
         failedNames (parseEnvPure (without "PRIVATE_UPSTREAM_URL" minimalEnv))
@@ -366,6 +373,30 @@ envLayerSpec = describe "parseEnvPure" $ do
     it "rejects an unknown public-integrity algorithm against its own name" $
         failedNames (parseEnvPure (set "PROXY_MIN_PUBLIC_INTEGRITY" "frobnicate" minimalEnv))
             `shouldBe` ["PROXY_MIN_PUBLIC_INTEGRITY"]
+
+    it "parses a loosened trusted-integrity floor (sha1) the public floor would reject" $
+        -- The trusted floor is operator-loosenable below SHA-256 (a legacy private
+        -- mirror, where trust substitutes for crypto strength) — the asymmetry from the
+        -- hard-floored public floor.
+        case parseEnvPure (set "PROXY_MIN_TRUSTED_INTEGRITY" "sha1" minimalEnv) of
+            Left errs -> expectationFailure ("unexpected errors: " <> show errs)
+            Right cfg -> (unMinTrustedIntegrity . cfgMinTrustedIntegrity) cfg `shouldBe` SHA1
+
+    it "parses md5 as a loosened trusted-integrity floor" $
+        case parseEnvPure (set "PROXY_MIN_TRUSTED_INTEGRITY" "md5" minimalEnv) of
+            Left errs -> expectationFailure ("unexpected errors: " <> show errs)
+            Right cfg -> (unMinTrustedIntegrity . cfgMinTrustedIntegrity) cfg `shouldBe` MD5
+
+    it "parses a raised trusted-integrity floor (sha512)" $
+        case parseEnvPure (set "PROXY_MIN_TRUSTED_INTEGRITY" "sha512" minimalEnv) of
+            Left errs -> expectationFailure ("unexpected errors: " <> show errs)
+            Right cfg -> (unMinTrustedIntegrity . cfgMinTrustedIntegrity) cfg `shouldBe` SHA512
+
+    it "rejects an unknown trusted-integrity algorithm against its own name" $
+        -- A sub-SHA-256 value is accepted (loosenable), but an unrecognised name is still
+        -- a configuration error.
+        failedNames (parseEnvPure (set "PROXY_MIN_TRUSTED_INTEGRITY" "frobnicate" minimalEnv))
+            `shouldBe` ["PROXY_MIN_TRUSTED_INTEGRITY"]
 
     it "parses the tarball-host toggle as a boolean" $
         -- The opt-in to honour a cross-host dist.tarball; "false" is the secure
