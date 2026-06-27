@@ -41,6 +41,7 @@ module Ecluse.Core.Package (
     pkgCanonical,
     pkgDisplay,
     renderPackageName,
+    unscopedName,
 
     -- * Normalised signals
     CodeExecSignal (..),
@@ -188,6 +189,16 @@ normalisePyPI t =
 -- | Render a package name in its native wire form (the display name).
 renderPackageName :: PackageName -> Text
 renderPackageName = TS.toText . pkgDisplay
+
+{- | The unscoped (base) name: the display name with any @\@scope/@ prefix dropped
+(@\@babel\/code-frame@ → @code-frame@). The single home for the bare-name derivation
+the npm tarball/path layer and the mirror queue all need — they previously each
+reconstructed it by rendering then string-stripping the scope.
+-}
+unscopedName :: PackageName -> Text
+unscopedName name = case pkgNamespace name of
+    Just _ -> T.drop 1 (snd (T.breakOn "/" (renderPackageName name)))
+    Nothing -> renderPackageName name
 
 -- ── normalised signals ───────────────────────────────────────────────────────
 

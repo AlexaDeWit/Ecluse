@@ -48,7 +48,7 @@ module Ecluse.Core.Registry.Npm.Route (
 import Data.Text qualified as T
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Package (PackageName, mkPackageName, mkScope, pkgNamespace, renderPackageName, unScope)
+import Ecluse.Core.Package (PackageName, mkPackageName, mkScope, unscopedName)
 import Ecluse.Core.Server.Route (Classifier, Filename (Filename), Route (..), isSafeComponent)
 import Ecluse.Core.Version (mkVersion)
 
@@ -152,12 +152,3 @@ tarballRoute name file =
         Just version
             | not (T.null version) -> Tarball name (mkVersion Npm version) (Filename file)
         _ -> Unsupported
-
-{- The unscoped (base) name of a package — the file segment npm names a tarball
-after, with any scope dropped (@\@babel\/code-frame@ → @code-frame@). -}
-unscopedName :: PackageName -> Text
-unscopedName name = case pkgNamespace name of
-    Just scope ->
-        let rendered = renderPackageName name
-         in fromMaybe rendered (T.stripPrefix ("@" <> unScope scope <> "/") rendered)
-    Nothing -> renderPackageName name
