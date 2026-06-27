@@ -104,14 +104,14 @@ genPrecedence = Gen.int (Range.linear 0 1000)
 
 {- | A rule that takes a position against the package the order-independence
 property builds (scoped @scopeTxt@, old, running install scripts): a matching
-'AllowScope', an 'AllowIfPublishedBefore' it is old enough for, or
+'AllowScope', an 'AllowIfOlderThan' it is old enough for, or
 'DenyInstallTimeExecution'. None yields no decision, so every generated rule competes.
 -}
 genFiringRule :: Text -> Gen Rule
 genFiringRule scopeTxt =
     Gen.element
         [ AllowScope (mkScope scopeTxt)
-        , AllowIfPublishedBefore (7 * nominalDay)
+        , AllowIfOlderThan (7 * nominalDay)
         , DenyInstallTimeExecution
         ]
 
@@ -137,11 +137,11 @@ spec = do
         it "AllowScope yields no decision on an unscoped package" $
             evalRule ctx (AllowScope (mkScope "myorg")) (pkg Nothing 0)
                 >>= (`shouldSatisfy` isNoDecision)
-        it "AllowIfPublishedBefore allows a version older than the threshold" $
-            evalRule ctx (AllowIfPublishedBefore (7 * nominalDay)) (pkg Nothing 30)
+        it "AllowIfOlderThan allows a version older than the threshold" $
+            evalRule ctx (AllowIfOlderThan (7 * nominalDay)) (pkg Nothing 30)
                 >>= (`shouldSatisfy` isAllow)
-        it "AllowIfPublishedBefore yields no decision on a too-young version" $
-            evalRule ctx (AllowIfPublishedBefore (7 * nominalDay)) (pkg Nothing 1)
+        it "AllowIfOlderThan yields no decision on a too-young version" $
+            evalRule ctx (AllowIfOlderThan (7 * nominalDay)) (pkg Nothing 1)
                 >>= (`shouldSatisfy` isNoDecision)
         it "DenyInstallTimeExecution denies a package that runs install scripts" $
             evalRule ctx DenyInstallTimeExecution (withInstallScripts (pkg Nothing 99))
@@ -164,7 +164,7 @@ spec = do
         it "ranks every deny default strictly above every allow default" $
             -- The out-of-the-box invariant: a matching deny overrides any allow.
             defaultPrecedence DenyInstallTimeExecution
-                `shouldSatisfy` (\d -> d > defaultPrecedence (AllowScope (mkScope "x")) && d > defaultPrecedence (AllowIfPublishedBefore 0))
+                `shouldSatisfy` (\d -> d > defaultPrecedence (AllowScope (mkScope "x")) && d > defaultPrecedence (AllowIfOlderThan 0))
         it "atDefaultPrecedence pairs a rule with its type default" $
             atDefaultPrecedence DenyInstallTimeExecution
                 `shouldBe` PrecededRule defaultDenyInstallTimeExecutionPrecedence DenyInstallTimeExecution
@@ -175,31 +175,31 @@ spec = do
             -- descending, then name as the deterministic tiebreak.
             rules <-
                 prepare
-                    [ at 100 (AllowIfPublishedBefore (7 * nominalDay))
+                    [ at 100 (AllowIfOlderThan (7 * nominalDay))
                     , at 300 DenyInstallTimeExecution
                     , at 200 (AllowScope (mkScope "myorg"))
                     ]
             map prepName (bootOrder rules)
-                `shouldBe` ["DenyInstallTimeExecution", "AllowScope", "AllowIfPublishedBefore"]
+                `shouldBe` ["DenyInstallTimeExecution", "AllowScope", "AllowIfOlderThan"]
         it "breaks an equal-precedence tie by name ascending" $ do
             rules <-
                 prepare
                     [ at 200 (AllowScope (mkScope "myorg"))
-                    , at 200 (AllowIfPublishedBefore (7 * nominalDay))
+                    , at 200 (AllowIfOlderThan (7 * nominalDay))
                     ]
             map prepName (bootOrder rules)
-                `shouldBe` ["AllowIfPublishedBefore", "AllowScope"]
+                `shouldBe` ["AllowIfOlderThan", "AllowScope"]
 
     describe "renderBootOrder" $ do
         it "emits one line per rule, in boot order, with each precedence" $ do
             rules <-
                 prepare
-                    [ at 100 (AllowIfPublishedBefore (7 * nominalDay))
+                    [ at 100 (AllowIfOlderThan (7 * nominalDay))
                     , at 300 DenyInstallTimeExecution
                     ]
             renderBootOrder rules
                 `shouldBe` [ "rule 1: DenyInstallTimeExecution (precedence 300)"
-                           , "rule 2: AllowIfPublishedBefore (precedence 100)"
+                           , "rule 2: AllowIfOlderThan (precedence 100)"
                            ]
         it "is empty for an empty rule set" $
             prepare [] >>= \rules -> renderBootOrder rules `shouldBe` []
@@ -214,7 +214,7 @@ spec = do
             -- The version is too young for the age rule, but the scope rule
             -- matches; at default precedences the scope allow outranks it anyway.
             decide
-                (map atDefaultPrecedence [AllowIfPublishedBefore (7 * nominalDay), AllowScope (mkScope "myorg")])
+                (map atDefaultPrecedence [AllowIfOlderThan (7 * nominalDay), AllowScope (mkScope "myorg")])
                 (pkg (Just "myorg") 0)
                 >>= \d -> admittedBy d `shouldBe` Just "AllowScope"
         it "a matching deny rule overrides an allow at default precedence, whatever the order" $ do
@@ -237,14 +237,14 @@ spec = do
             -- Two allows fire at the *same* precedence; the tie is resolved by name
             -- (the smallest ruleName), not list position, so the same rule is
             -- credited whichever order it is supplied in.
-            -- "AllowIfPublishedBefore" sorts before "AllowScope", so it is credited.
+            -- "AllowIfOlderThan" sorts before "AllowScope", so it is credited.
             let allows =
                     [ at 150 (AllowScope (mkScope "myorg"))
-                    , at 150 (AllowIfPublishedBefore (7 * nominalDay))
+                    , at 150 (AllowIfOlderThan (7 * nominalDay))
                     ]
                 p = pkg (Just "myorg") 30
-            decide allows p >>= \d -> admittedBy d `shouldBe` Just "AllowIfPublishedBefore"
-            decide (reverse allows) p >>= \d -> admittedBy d `shouldBe` Just "AllowIfPublishedBefore"
+            decide allows p >>= \d -> admittedBy d `shouldBe` Just "AllowIfOlderThan"
+            decide (reverse allows) p >>= \d -> admittedBy d `shouldBe` Just "AllowIfOlderThan"
         it "an operator-elevated allow outranks a higher-default deny" $
             -- The scope allow is lifted above the deny's default precedence, so a
             -- trusted internal scope is admitted despite running install scripts.
@@ -257,9 +257,9 @@ spec = do
         it "denies by default when every rule is non-decisive, collecting each reason in boot order" $
             -- The audit trail carries each non-decisive rule's actual reason, in
             -- boot order (highest precedence first): AllowScope (200) then
-            -- AllowIfPublishedBefore (100).
+            -- AllowIfOlderThan (100).
             decide
-                (map atDefaultPrecedence [AllowIfPublishedBefore (7 * nominalDay), AllowScope (mkScope "myorg")])
+                (map atDefaultPrecedence [AllowIfOlderThan (7 * nominalDay), AllowScope (mkScope "myorg")])
                 (pkg (Just "other") 1)
                 >>= \case
                     BlockedByDefault reasons ->
@@ -289,7 +289,7 @@ spec = do
                         zipWith
                             PrecededRule
                             precs
-                            [AllowScope (mkScope scopeTxt), AllowIfPublishedBefore (7 * nominalDay), DenyInstallTimeExecution]
+                            [AllowScope (mkScope scopeTxt), AllowIfOlderThan (7 * nominalDay), DenyInstallTimeExecution]
                 liftIO (decide rules (pkg (Just otherTxt) 1)) >>= \case
                     BlockedByDefault _ -> H.success
                     other -> H.annotateShow other >> H.failure

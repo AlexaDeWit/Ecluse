@@ -36,7 +36,7 @@ import Ecluse.Core.Queue (newInMemoryQueue)
 import Ecluse.Core.Registry.Npm.Route qualified as Npm
 import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
 import Ecluse.Core.Rules (prepare)
-import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfPublishedBefore), atDefaultPrecedence)
+import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan), atDefaultPrecedence)
 import Ecluse.Core.Security (TarballHostPolicy (SameHostAsPackument), defaultLimits, lowerCaseHosts)
 import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Core.Server.Context (
@@ -165,7 +165,7 @@ quarantine rule admits a version published more than a week before @now@, which 
 fixture (published 2019, @now@ 2020) clears.
 -}
 allowPolicy :: [PrecededRule]
-allowPolicy = [atDefaultPrecedence (AllowIfPublishedBefore (7 * nominalDay))]
+allowPolicy = [atDefaultPrecedence (AllowIfOlderThan (7 * nominalDay))]
 
 -- | A fixed wall clock against which the fixture version reads as well-aged.
 fixedNow :: UTCTime

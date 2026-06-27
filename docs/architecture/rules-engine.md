@@ -224,7 +224,7 @@ filtered body rather than relaying upstream's (see
 
 | Rule | Type | Description |
 |------|------|-------------|
-| `AllowIfPublishedBefore ageSeconds` | Pure | Allows a package version if it was published more than `ageSeconds` seconds ago. Default: 604800 (7 days). Guards against typosquatting and dependency confusion attacks where attackers race to publish before detection. |
+| `AllowIfOlderThan ageSeconds` | Pure | Allows a package version if it was published more than `ageSeconds` seconds ago. Default: 604800 (7 days). Guards against typosquatting and dependency confusion attacks where attackers race to publish before detection. |
 | `AllowScope scope` | Pure | Unconditionally allows all packages under a given npm scope (e.g. `@myorg`). Use for internal scopes that bypass public-registry rules. |
 | `DenyInstallTimeExecution` | Pure | Denies any version flagged with an install-time code-execution signal (npm's `hasInstallScript`, a RubyGems native extension, a PyPI sdist) — a common arbitrary-code-execution vector. Yields no decision otherwise. As a deny rule it overrides any allow at its higher default precedence. |
 
@@ -234,7 +234,7 @@ checks like RubyGems native `extensions` (see [above](#rules-engine)).
 
 Which rules ship **enabled by default** is a policy choice documented with the
 [default policy](configuration.md#the-default-policy): at launch only the pure
-`AllowIfPublishedBefore` quarantine is on; `AllowIfRemediatesCve` joins the default
+`AllowIfOlderThan` quarantine is on; `AllowIfRemediatesCve` joins the default
 when the CVE rules land; the install-script and CVE *denies* stay available but
 opt-in.
 
@@ -249,7 +249,7 @@ handle reads a local index, never the network, on the hot path.
 
 ### `AllowIfRemediatesCve` — remediation fast-track
 
-A publish-age quarantine (`AllowIfPublishedBefore`) has one perverse failure mode:
+A publish-age quarantine (`AllowIfOlderThan`) has one perverse failure mode:
 left alone it would also hold back the **security patch** that fixes an in-the-wild
 vulnerability, delaying remediation by exactly the window meant to catch
 typosquats. `AllowIfRemediatesCve` removes that tension. For version *V* of package
@@ -336,7 +336,7 @@ When a request is denied (no allow rule matched, or a deny rule fired):
   (`Ecluse.Core.Registry.Npm.Serve`) emits the npm error object:
   ```json
   {
-    "error": "Package @evil/pkg@1.0.0 was denied: AllowIfPublishedBefore — published 3 hours ago, minimum age is 7 days. Contact #platform-eng on Slack for assistance."
+    "error": "Package @evil/pkg@1.0.0 was denied: AllowIfOlderThan — published 3 hours ago, minimum age is 7 days. Contact #platform-eng on Slack for assistance."
   }
   ```
 - The denial reason (which rule decided, and why) is always included.

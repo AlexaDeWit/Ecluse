@@ -108,7 +108,7 @@ evalRule _ (AllowScope scope) pd =
                 Allow ("scope " <> renderScope scope <> " is allow-listed")
         _ ->
             NoDecision ("scope is not the allow-listed " <> renderScope scope)
-evalRule ctx (AllowIfPublishedBefore minAge) pd =
+evalRule ctx (AllowIfOlderThan minAge) pd =
     pure $ case pkgPublishedAt pd of
         Nothing -> NoDecision "publish time is unknown"
         Just publishedAt ->

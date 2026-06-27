@@ -35,7 +35,7 @@ import Ecluse.Core.Registry.Npm.Filter (
     applyFilterPlan,
     rewriteTarballUrls,
  )
-import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfPublishedBefore), atDefaultPrecedence)
+import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan), atDefaultPrecedence)
 import Ecluse.Core.Server.Conditional (ownETag, renderETag)
 import Test.Tasty.Bench (Benchmark, bench, bgroup, env, whnf, whnfAppIO)
 
@@ -86,7 +86,7 @@ and re-serialise path is exercised over the whole packument rather than short-ci
 to a no-survivors denial.
 -}
 serveRules :: [PrecededRule]
-serveRules = [atDefaultPrecedence (AllowIfPublishedBefore nominalDay)]
+serveRules = [atDefaultPrecedence (AllowIfOlderThan nominalDay)]
 
 -- | A synthetic packument of the given version count, paired with its projection.
 syntheticServeInput :: Word -> (Value, PackageInfo)
