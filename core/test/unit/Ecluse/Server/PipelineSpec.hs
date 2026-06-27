@@ -31,7 +31,7 @@ import UnliftIO.Exception (throwString)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageName, mkPackageName)
-import Ecluse.Core.Package.Integrity (defaultMinIntegrity)
+import Ecluse.Core.Package.Integrity (defaultMinIntegrity, defaultMinTrustedIntegrity)
 import Ecluse.Core.Queue (newInMemoryQueue)
 import Ecluse.Core.Registry.Npm.Route qualified as Npm
 import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
@@ -150,6 +150,7 @@ depsFor publicPort =
         , pdNow = pure fixedNow
         , pdHelp = Nothing
         , pdMinIntegrity = defaultMinIntegrity
+        , pdMinTrustedIntegrity = defaultMinTrustedIntegrity
         }
 
 {- | A pure rule policy that admits the fixture version: the rules engine is

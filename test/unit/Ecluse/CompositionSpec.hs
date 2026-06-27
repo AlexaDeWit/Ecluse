@@ -37,8 +37,13 @@ import Ecluse.Core.Credential (authSecret, currentToken, unSecret)
 import Ecluse.Core.Credential.CodeArtifact (CodeArtifactConfig (caDomain, caDomainOwner, caDurationSeconds, caRegion))
 import Ecluse.Core.Credential.Refresh (noCredentialReporters)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
-import Ecluse.Core.Package (HashAlg (SHA512))
-import Ecluse.Core.Package.Integrity (defaultMinIntegrity, mkMinIntegrity)
+import Ecluse.Core.Package (HashAlg (SHA1, SHA512))
+import Ecluse.Core.Package.Integrity (
+    defaultMinIntegrity,
+    defaultMinTrustedIntegrity,
+    mkMinIntegrity,
+    mkMinTrustedIntegrity,
+ )
 import Ecluse.Core.Queue (defaultMemoryQueueConfig)
 import Ecluse.Core.Queue.Sqs (SqsConfig (sqsEndpoint, sqsQueueUrl, sqsRegion), SqsEndpoint (endpointHost, endpointPort, endpointSecure))
 import Ecluse.Core.Security (Limits (maxBodyBytes, maxNestingDepth, maxVersionCount), TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), defaultLimits)
@@ -555,6 +560,26 @@ composeBindingsSpec = describe "planMounts / composeBindings (config-driven serv
         planFrom env Nothing >>= \case
             Right [binding] -> case bindingPackumentDeps binding of
                 Just deps -> pdMinIntegrity deps `shouldBe` sha512Floor
+                Nothing -> expectationFailure "expected packument deps wired"
+            other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
+
+    it "defaults the trusted-integrity floor to SHA-256 onto the deps" $ do
+        env <- expectEnv staticEnvVars
+        planFrom env Nothing >>= \case
+            Right [binding] -> case bindingPackumentDeps binding of
+                Just deps -> pdMinTrustedIntegrity deps `shouldBe` defaultMinTrustedIntegrity
+                Nothing -> expectationFailure "expected packument deps wired"
+            other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
+
+    it "threads a loosened trusted-integrity floor (sha1) onto the deps" $ do
+        -- The trusted floor is loosenable below SHA-256, so a SHA-1 value flows from
+        -- config to the deps the trusted gate consults — the asymmetry with the public
+        -- floor's hard SHA-256 minimum.
+        sha1Floor <- either (fail . toString) pure (mkMinTrustedIntegrity SHA1)
+        env <- expectEnv (("PROXY_MIN_TRUSTED_INTEGRITY", "sha1") : staticEnvVars)
+        planFrom env Nothing >>= \case
+            Right [binding] -> case bindingPackumentDeps binding of
+                Just deps -> pdMinTrustedIntegrity deps `shouldBe` sha1Floor
                 Nothing -> expectationFailure "expected packument deps wired"
             other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
 

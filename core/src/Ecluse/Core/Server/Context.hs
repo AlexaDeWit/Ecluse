@@ -46,7 +46,7 @@ import Network.HTTP.Client (Manager)
 import UnliftIO (MonadUnliftIO)
 
 import Ecluse.Core.Credential (Secret)
-import Ecluse.Core.Package.Integrity (MinIntegrity)
+import Ecluse.Core.Package.Integrity (MinIntegrity, MinTrustedIntegrity)
 import Ecluse.Core.Queue (MirrorQueue)
 import Ecluse.Core.Rules.Effectful (PrecededEffectfulRule)
 import Ecluse.Core.Rules.Types (PrecededRule)
@@ -170,10 +170,19 @@ data PackumentDeps = PackumentDeps
     , pdHelp :: Maybe HelpMessage
     -- ^ The operator help message appended to every denial body, if configured.
     , pdMinIntegrity :: MinIntegrity
-    {- ^ The minimum integrity algorithm a __public__ version's digest must meet to be
-    admitted (the global @PROXY_MIN_PUBLIC_INTEGRITY@ floor, default SHA-256). The
-    public gate refuses a version whose strongest digest is below this; the trusted
-    private path never consults it (see "Ecluse.Core.Package.Integrity").
+    {- ^ The minimum integrity algorithm a __public__ (untrusted) version's digest must
+    meet to be admitted (the global @PROXY_MIN_PUBLIC_INTEGRITY@ floor, default SHA-256).
+    The public gate refuses a version whose strongest digest is below this; it is
+    __hard-floored at SHA-256__ and never lowerable (see "Ecluse.Core.Package.Integrity").
+    The trusted private path consults 'pdMinTrustedIntegrity' instead.
+    -}
+    , pdMinTrustedIntegrity :: MinTrustedIntegrity
+    {- ^ The minimum integrity algorithm a __trusted__ (private) version's digest must
+    meet to be served (the global @PROXY_MIN_TRUSTED_INTEGRITY@ floor, default SHA-256).
+    The trusted gate drops a private version whose strongest digest is below this from the
+    served listing and falls a below-floor private artifact through to the public origin.
+    Unlike 'pdMinIntegrity' it is __operator-loosenable below SHA-256__ (down to SHA-1 /
+    MD5) for a legacy private mirror, where trust substitutes for cryptographic strength.
     -}
     }
 

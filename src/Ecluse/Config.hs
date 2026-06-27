@@ -106,7 +106,14 @@ import Validation (eitherToValidation, validationToEither)
 import Ecluse.Core.Credential (Secret, mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm), parseEcosystem)
 import Ecluse.Core.Package (mkScope)
-import Ecluse.Core.Package.Integrity (MinIntegrity, defaultMinIntegrity, parseMinIntegrity)
+import Ecluse.Core.Package.Integrity (
+    MinIntegrity,
+    MinTrustedIntegrity,
+    defaultMinIntegrity,
+    defaultMinTrustedIntegrity,
+    parseMinIntegrity,
+    parseMinTrustedIntegrity,
+ )
 import Ecluse.Core.Rules.Types (
     PrecededRule (..),
     Rule (..),
@@ -483,8 +490,17 @@ data EnvConfig = EnvConfig
     public version whose strongest digest is weaker than this floor (e.g. a SHA-1
     shasum only) is refused, since a collision-broken digest cannot tie its bytes to
     a tamper-evident fingerprint. The floor may be raised (@sha384@, @sha512@,
-    @blake2b@) but never set below SHA-256 — a sub-floor value is rejected at load. The trusted
-    private upstream is exempt (see "Ecluse.Core.Package.Integrity").
+    @blake2b@) but never set below SHA-256 — a sub-floor value is rejected at load,
+    never clamped, and there is no escape-hatch to admit a sub-SHA-256 digest from an
+    untrusted public upstream (see "Ecluse.Core.Package.Integrity").
+    -}
+    , cfgMinTrustedIntegrity :: MinTrustedIntegrity
+    {- ^ The minimum integrity algorithm a __trusted__ (private) version's digest must
+    meet to be served (@PROXY_MIN_TRUSTED_INTEGRITY@, default @sha256@). Like the public
+    floor it defaults to SHA-256, but unlike it is __operator-loosenable below SHA-256__
+    (down to @sha1@ \/ @md5@) for a legacy private mirror, where trust in the operator's
+    own vetted source substitutes for cryptographic strength. An unknown algorithm name is
+    still rejected at load (see "Ecluse.Core.Package.Integrity").
     -}
     }
     deriving stock (Eq, Show)
@@ -572,6 +588,10 @@ envParser =
         -- value below SHA-256 or an unknown algorithm is rejected loudly here rather
         -- than clamped, so a misconfiguration cannot silently weaken admission.
         <*> Env.var minIntegrityReader "PROXY_MIN_PUBLIC_INTEGRITY" (Env.def defaultMinIntegrity)
+        -- The trusted-integrity admission floor (default sha256). Unlike the public
+        -- floor it is loosenable below SHA-256 (sha1/md5 accepted) for a legacy private
+        -- mirror; only an unknown algorithm is rejected at load.
+        <*> Env.var minTrustedIntegrityReader "PROXY_MIN_TRUSTED_INTEGRITY" (Env.def defaultMinTrustedIntegrity)
   where
     defaultPublicUpstream :: Url
     defaultPublicUpstream = Url "https://registry.npmjs.org"
@@ -674,6 +694,12 @@ telemetrySwitchReader = textReader parseTelemetrySwitch
 -- unknown or weaker than SHA-256 (the hard minimum).
 minIntegrityReader :: Env.Reader Env.Error MinIntegrity
 minIntegrityReader = textReader parseMinIntegrity
+
+-- An 'Env.Reader' for the trusted-integrity floor: an algorithm name, rejected only if
+-- unknown. Unlike 'minIntegrityReader' it accepts a sub-SHA-256 algorithm (sha1/md5) —
+-- the trusted floor is loosenable.
+minTrustedIntegrityReader :: Env.Reader Env.Error MinTrustedIntegrity
+minTrustedIntegrityReader = textReader parseMinTrustedIntegrity
 
 -- An 'Env.Reader' for a boolean flag. Accepts the conventional spellings
 -- case-insensitively and rejects anything else loudly (fail-fast, never a silent

@@ -25,7 +25,7 @@ import Ecluse (runWorker)
 import Ecluse.Composition (MirrorQueuePlan (MemoryBackend, SqsBackend), planMirrorQueue, renderBootError)
 import Ecluse.Config (parseEnvPure)
 import Ecluse.Core.Credential (AuthToken (AuthToken, authExpiresAt, authSecret), CredentialProvider, mkSecret, staticProvider)
-import Ecluse.Core.Package.Integrity (defaultMinIntegrity)
+import Ecluse.Core.Package.Integrity (defaultMinIntegrity, defaultMinTrustedIntegrity)
 import Ecluse.Core.Queue (MirrorQueue)
 import Ecluse.Core.Queue.Sqs (SqsConfig (sqsWaitSeconds), SqsEndpoint (endpointHost, endpointPort), newSqsQueue)
 import Ecluse.Core.Registry.Npm (NpmClientConfig (NpmClientConfig, npmBaseUrl, npmLimits, npmManager, npmToken), newNpmClient)
@@ -199,6 +199,7 @@ mountBinding privateUrl publicUrl mirrorUrl =
             , pdNow = pure fixedNow
             , pdHelp = Nothing
             , pdMinIntegrity = defaultMinIntegrity
+            , pdMinTrustedIntegrity = defaultMinTrustedIntegrity
             }
 
 -- ── WAI stubs ─────────────────────────────────────────────────────────────────

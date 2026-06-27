@@ -38,8 +38,8 @@ import UnliftIO.Temporary (withSystemTempFile)
 
 import Ecluse.Core.Credential (AuthToken (..), CredentialProvider, mkSecret, staticProvider)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Package (HashAlg (SHA512), PackageName, mkPackageName)
-import Ecluse.Core.Package.Integrity (defaultMinIntegrity, mkMinIntegrity)
+import Ecluse.Core.Package (HashAlg (SHA1, SHA512), PackageName, mkPackageName)
+import Ecluse.Core.Package.Integrity (defaultMinIntegrity, defaultMinTrustedIntegrity, mkMinIntegrity, mkMinTrustedIntegrity)
 import Ecluse.Core.Queue (
     MirrorJob (jobArtifactUrl, jobMirrorTarget, jobPackage, jobVersion),
     MirrorQueue (enqueue, receive),
@@ -350,6 +350,27 @@ privateArtifactHitHashless version tarballBody = do
                                 (packument [(version, selfHostedHashless (selfBaseUrl req) version)] version [(version, publishedDaysAgo 1)])
     mkUpstream seen app
 
+{- | A private upstream double that has a __SHA-1-only__ artifact: the packument fetch
+returns a single-version packument whose @dist@ carries a @tarball@ pointing back at this
+double and a legacy @shasum@ but no SRI @integrity@ (@200@), and a tarball-slot path @200@
+with the given bytes. Below the default SHA-256 trusted floor, so a private hit on it is
+served only when the operator loosens the trusted floor; by default it is a private miss.
+-}
+privateArtifactHitShasumOnly :: Text -> LByteString -> IO Upstream
+privateArtifactHitShasumOnly version tarballBody = do
+    seen <- newIORef []
+    let app :: Application
+        app req respond = do
+            modifyIORef' seen (lookupAuth (requestHeaders req) :)
+            respond $
+                if isTarballPath (rawPathInfo req)
+                    then responseLBS status200 [] tarballBody
+                    else
+                        responseLBS status200 [] $
+                            encodePackument
+                                (packument [(version, selfHostedShasumOnly (selfBaseUrl req) version)] version [(version, publishedDaysAgo 1)])
+    mkUpstream seen app
+
 {- | A private upstream double that resolves the packument but does __not__ hold the
 artifact bytes: the packument fetch is a self-referential single-version packument
 (@200@), but a tarball-slot path is a @404@ miss — so the serve path's honour fetch
@@ -624,6 +645,7 @@ deps privatePort publicPort inbound =
         , pdNow = pure now
         , pdHelp = Nothing
         , pdMinIntegrity = defaultMinIntegrity
+        , pdMinTrustedIntegrity = defaultMinTrustedIntegrity
         }
 
 {- | The packument-serve dependencies as 'deps', but with the given effectful rules
@@ -978,18 +1000,19 @@ mergeSpec = describe "multi-upstream merge (not fallback)" $ do
             status resp `shouldBe` 200
             servedVersions resp `shouldBe` ["1.0.0"]
 
-    it "lists a hashless version from the trusted private upstream (the private path is exempt)" $ do
-        -- The private upstream is trusted: its versions enter unfiltered, so a
-        -- hashless private 1.0.0 is still served in the listing. The
-        -- integrity-presence policy applies to public versions only.
+    it "drops a hashless trusted-private version from the listing by default (uniform floor)" $ do
+        -- The trusted floor now defaults to SHA-256, so a hashless private version no
+        -- longer enters the merge (a hashless version meets no floor at all). With no
+        -- public copy nothing survives, so the request is a 403 rather than serving a
+        -- version a client could not verify — the uniform-floor default replacing the old
+        -- private-path exemption.
         privateUp <-
             servingUpstream
                 (encodePackument (privatePackumentWith [("1.0.0", hashlessVersion "1.0.0")] "1.0.0"))
         publicUp <- failingUpstream
         withProxy privateUp publicUp Nothing $ \app -> do
             resp <- getThing Nothing app
-            status resp `shouldBe` 200
-            servedVersions resp `shouldBe` ["1.0.0"]
+            status resp `shouldBe` 403
 
     it "rejects a public version whose only digest is below the floor (SHA-1 shasum)" $ do
         -- Public 2.0.0 carries only a legacy SHA-1 shasum (below the default SHA-256
@@ -1030,14 +1053,29 @@ mergeSpec = describe "multi-upstream merge (not fallback)" $ do
             status resp `shouldBe` 200
             servedVersions resp `shouldBe` ["1.0.0"]
 
-    it "lists a SHA-1-only version from the trusted private upstream (the floor is public-only)" $ do
-        -- The integrity floor applies to public versions only: a trusted private version
-        -- carrying just a legacy SHA-1 shasum still enters the merge and is served.
+    it "drops a SHA-1-only trusted-private version from the listing by default (trusted floor SHA-256)" $ do
+        -- A trusted private version carrying only a legacy SHA-1 shasum is below the
+        -- default SHA-256 trusted floor, so it is dropped from the served listing — the
+        -- uniform default. (Loosening the trusted floor re-admits it; see the next case.)
         privateUp <-
             servingUpstream
                 (encodePackument (privatePackumentWith [("1.0.0", shasumOnlyVersion "1.0.0")] "1.0.0"))
         publicUp <- failingUpstream
         withProxy privateUp publicUp Nothing $ \app -> do
+            resp <- getThing Nothing app
+            status resp `shouldBe` 403
+
+    it "lists a SHA-1-only trusted-private version when the trusted floor is loosened to SHA-1" $ do
+        -- The trusted floor is operator-loosenable below SHA-256: with it set to SHA-1, the
+        -- legacy private version clears the floor and is served again. This is the only
+        -- way a sub-SHA-256 digest reaches serve, and only on the trusted (private) source.
+        sha1Floor <- either (fail . toString) pure (mkMinTrustedIntegrity SHA1)
+        privateUp <-
+            servingUpstream
+                (encodePackument (privatePackumentWith [("1.0.0", shasumOnlyVersion "1.0.0")] "1.0.0"))
+        publicUp <- failingUpstream
+        queue <- newInMemoryQueue
+        withProxyEnvQueueDeps queue privateUp publicUp Nothing (\d -> d{pdMinTrustedIntegrity = sha1Floor}) $ \app _env _port -> do
             resp <- getThing Nothing app
             status resp `shouldBe` 200
             servedVersions resp `shouldBe` ["1.0.0"]
@@ -1862,18 +1900,41 @@ tarballSpec = describe "artifact (tarball) path" $ do
             status resp `shouldBe` 200
             simpleBody resp `shouldBe` publicTarballBytes
 
-    it "serves a hashless version from the trusted private upstream (the private path is exempt)" $ do
-        -- The private upstream is trusted, so the integrity-presence policy does
-        -- not apply to it: a private hit with no integrity digest still streams
-        -- through, the public origin never consulted.
+    it "gates a hashless private artifact by the trusted floor, falling through to the public origin (default)" $ do
+        -- The trusted floor now defaults to SHA-256, so a hashless private artifact is a
+        -- private miss: the serve falls through to the public origin (which has a
+        -- digest-bearing copy) rather than streaming the unverifiable private bytes. The
+        -- served bytes are the public copy's.
         privateUp <- privateArtifactHitHashless "1.0.0" privateTarballBytes
         publicUp <- artifactUpstream "1.0.0" publicTarballBytes
-        withProxyEnv privateUp publicUp Nothing $ \app env -> do
+        withProxyEnv privateUp publicUp Nothing $ \app _env -> do
+            resp <- getTarball "1.0.0" (Just "client-token") app
+            status resp `shouldBe` 200
+            simpleBody resp `shouldBe` publicTarballBytes
+
+    it "gates a SHA-1-only private artifact by the trusted floor, falling through to the public origin (default)" $ do
+        -- A legacy SHA-1-only private artifact is below the default SHA-256 trusted floor,
+        -- so it is a private miss and the serve falls through to the public origin.
+        privateUp <- privateArtifactHitShasumOnly "1.0.0" privateTarballBytes
+        publicUp <- artifactUpstream "1.0.0" publicTarballBytes
+        withProxyEnv privateUp publicUp Nothing $ \app _env -> do
+            resp <- getTarball "1.0.0" (Just "client-token") app
+            status resp `shouldBe` 200
+            simpleBody resp `shouldBe` publicTarballBytes
+
+    it "serves a SHA-1-only private artifact from the private origin when the trusted floor is loosened" $ do
+        -- Loosening the trusted floor to SHA-1 re-admits a legacy private artifact: the
+        -- private hit streams its own bytes and the public origin is never consulted —
+        -- the trusted-only escape-hatch, on the operator's own vetted source.
+        sha1Floor <- either (fail . toString) pure (mkMinTrustedIntegrity SHA1)
+        privateUp <- privateArtifactHitShasumOnly "1.0.0" privateTarballBytes
+        publicUp <- artifactUpstream "1.0.0" publicTarballBytes
+        queue <- newInMemoryQueue
+        withProxyEnvQueueDeps queue privateUp publicUp Nothing (\d -> d{pdMinTrustedIntegrity = sha1Floor}) $ \app _env _port -> do
             resp <- getTarball "1.0.0" (Just "client-token") app
             status resp `shouldBe` 200
             simpleBody resp `shouldBe` privateTarballBytes
             seenAuth publicUp `shouldReturn` []
-            drainJobs env `shouldReturn` []
 
     it "503s when the public upstream is unavailable (transient), enqueuing nothing" $ do
         privateUp <- privateArtifactMiss
