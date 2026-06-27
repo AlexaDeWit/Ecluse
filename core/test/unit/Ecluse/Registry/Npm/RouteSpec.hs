@@ -18,9 +18,27 @@ import Ecluse.Core.Package (
     renderPackageName,
     unScope,
  )
-import Ecluse.Core.Registry.Npm.Route (classify)
+import Network.HTTP.Types.Method (methodGet, methodPut)
+
+import Ecluse.Core.Registry.Npm.Route qualified as Route
 import Ecluse.Core.Server.Route (Filename (Filename), Route (..))
 import Ecluse.Core.Version (Version, mkVersion)
+
+{- | The read classification (a @GET@) of an npm path, the existing routing table's
+subject: 'Route.classify' restricted to a read method, so each @pathInfo → Route@
+assertion below reads as before now that the classifier is method-aware. A @HEAD@
+classifies identically (the dispatcher answers it bodiless), so @GET@ stands for every
+read method here.
+-}
+classify :: [Text] -> Route
+classify = Route.classify methodGet
+
+{- | The __publish__ classification (a @PUT@) of an npm path: 'Route.classify' at the
+publish method, so the publish routing cases assert @PUT \/{pkg} → Publish@ apart from
+the read table.
+-}
+publish :: [Text] -> Route
+publish = Route.classify methodPut
 
 -- | An unscoped npm package identity, for building expected 'Route's.
 unscoped :: Text -> PackageName
@@ -94,6 +112,34 @@ spec = do
             classify ["-", "whoami"] `shouldBe` Unsupported
         it "treats the dist-tags meta-route as Unsupported" $
             classify ["-", "package", "is-odd", "dist-tags"] `shouldBe` Unsupported
+
+    describe "classify — publish (PUT /{pkg}, the method-aware write route)" $ do
+        it "routes a PUT of an unscoped package to Publish" $
+            publish ["is-odd"] `shouldBe` Publish (unscoped "is-odd")
+        it "routes a PUT of a scoped package (two segments) to Publish" $
+            publish ["@acme", "widget"] `shouldBe` Publish (scoped "acme" "widget")
+        it "routes a PUT of a scoped package (one decoded segment) to Publish" $
+            publish ["@acme/widget"] `shouldBe` Publish (scoped "acme" "widget")
+        it "agrees on the same Publish route for both scoped encodings" $
+            publish ["@acme", "widget"] `shouldBe` publish ["@acme/widget"]
+        it "denies a PUT to a tarball slot (a publish is a bare-package path only)" $
+            -- The version lives in the body, not the path; a PUT to /{pkg}/-/{file}.tgz
+            -- is not a publish.
+            publish ["is-odd", "-", "is-odd-3.0.1.tgz"] `shouldBe` Unsupported
+        it "denies a PUT to a meta-route" $
+            publish ["-", "ping"] `shouldBe` Unsupported
+        it "denies a PUT with trailing junk after the package" $
+            publish ["is-odd", "extra"] `shouldBe` Unsupported
+        it "denies a PUT to the empty path" $
+            publish [] `shouldBe` Unsupported
+        it "denies a PUT of an unsafe name (embedded slash) — the same component gate as reads" $
+            publish ["foo/bar"] `shouldBe` Unsupported
+        it "denies a PUT of a bare scope with no package name" $
+            publish ["@acme"] `shouldBe` Unsupported
+        it "does not publish a GET of the same package (a GET /{pkg} is a Packument)" $
+            -- The method, not just the path, decides: the same /{pkg} reads under GET and
+            -- publishes under PUT.
+            classify ["is-odd"] `shouldBe` Packument (unscoped "is-odd")
 
     describe "classify — unrecognised paths deny by default" $ do
         it "routes the empty path to Unsupported" $

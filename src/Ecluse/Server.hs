@@ -80,7 +80,7 @@ module Ecluse.Server (
     defaultRequestSizeLimit,
 ) where
 
-import Network.HTTP.Types (Status, hConnection, hContentType, methodHead, status200, status404, status501, status503)
+import Network.HTTP.Types (Method, Status, hConnection, hContentType, methodHead, status200, status404, status501, status503)
 import Network.Wai (Application, Middleware, Request, Response, ResponseReceived, mapResponseHeaders, modifyResponse, pathInfo, requestMethod, responseLBS)
 import Network.Wai.Handler.Warp qualified as Warp
 import Network.Wai.Middleware.RealIp (realIp)
@@ -97,7 +97,7 @@ import Ecluse.Core.Server.Context (
     RequestCtx (RequestCtx),
     runHandler,
  )
-import Ecluse.Core.Server.Pipeline (headPackument, headTarball, servePackument, serveTarball)
+import Ecluse.Core.Server.Pipeline (headPackument, headTarball, servePackument, servePublish, serveTarball)
 import Ecluse.Core.Server.Response (MountRenderer, RenderedBody (RenderedBody), renderError)
 import Ecluse.Core.Server.Route (Route (..))
 import Ecluse.Core.Worker (heartbeatHealthyNow)
@@ -346,7 +346,7 @@ dispatch cfg env request respond =
     case pathInfo request of
         ["livez"] -> liveness env >>= respond
         ["readyz"] -> readiness (scDrain cfg) >>= respond
-        segments -> case matchMount (scMounts cfg) segments of
+        segments -> case matchMount (requestMethod request) (scMounts cfg) segments of
             Nothing -> respond notFound
             Just (binding, classified) -> serve env binding classified request respond
 
@@ -367,6 +367,12 @@ the identical gating and merge as the @GET@ path and emits the same status and h
 (the would-be body's @Content-Length@ and the own @ETag@) with no body — the
 HTTP-correctness half of explicit-@HEAD@ handling (a packument body is assembled
 locally, so it carries no artifact-egress amplification).
+
+The 'Publish' route (a @PUT \/{pkg}@, recognised by the method-aware classifier) is
+dispatched to 'servePublish', the first-party publish relay: it enforces the
+anti-shadowing scope guard before any write and relays the publish to the publication
+target with the publisher's own forwarded credential, or @405@ when no publication
+target is configured (the opt-in is off).
 -}
 serve :: Env -> MountBinding -> Route -> Request -> (Response -> IO ResponseReceived) -> IO ResponseReceived
 serve env binding classified request respond =
@@ -377,6 +383,7 @@ serve env binding classified request respond =
         Tarball name version filename
             | isHead -> run (headTarball name version filename request respond)
             | otherwise -> run (serveTarball name version filename request respond)
+        Publish name -> run (servePublish name request respond)
         _ -> respond (renderRoute (bindingRenderer binding) classified)
   where
     -- Discharge a 'Handler' to 'IO' over the per-request context, establishing the
@@ -400,14 +407,15 @@ with, paired with the remainder classified through that mount's classifier.
 @404@. A mount prefix is accepted with or without a trailing slash, so @\/npm\/pkg@
 and a bare @\/npm@ both match the @\/npm@ mount.
 -}
-matchMount :: [MountBinding] -> [Text] -> Maybe (MountBinding, Route)
-matchMount mounts segments = asum (map match mounts)
+matchMount :: Method -> [MountBinding] -> [Text] -> Maybe (MountBinding, Route)
+matchMount method mounts segments = asum (map match mounts)
   where
     -- The binding whose prefix the path begins with, paired with the classified
-    -- remainder. 'Nothing' for a non-matching prefix.
+    -- remainder — the method threaded so a 'Publish' (a @PUT@) is told apart from a
+    -- read over the same path. 'Nothing' for a non-matching prefix.
     match :: MountBinding -> Maybe (MountBinding, Route)
     match binding =
-        (binding,) . bindingClassifier binding
+        (binding,) . bindingClassifier binding method
             <$> stripPrefixSegments (toList (bindingPrefix binding)) segments
 
 {- Strip a mount's prefix segments off the front of a request path. The root
@@ -435,9 +443,9 @@ dropTrailingSlash [] = []
 {- Render a non-effectful in-mount classified 'Route' to a pure response through
 the mount's renderer. @\/-\/ping@ is answered locally with @200 {}@;
 @\/-\/v1\/search@ is a @501@ pointer; an unrecognised in-mount path is a @404@ —
-every error in the mount's own surface. The effectful 'Packument' and 'Tarball'
-routes are dispatched to the 'Handler' by 'serve' before reaching here; their
-branches below are the defensive @501@ fallback should that routing ever change.
+every error in the mount's own surface. The effectful 'Packument', 'Tarball', and
+'Publish' routes are dispatched to the 'Handler' by 'serve' before reaching here;
+their branches below are the defensive @501@ fallback should that routing ever change.
 -}
 renderRoute :: MountRenderer -> Route -> Response
 renderRoute renderer = \case
@@ -445,6 +453,7 @@ renderRoute renderer = \case
     Search -> renderedError renderer status501 "search is not supported by this proxy; use the public registry's website to discover packages"
     Packument _ -> renderedError renderer status501 notYetServedMessage
     Tarball{} -> renderedError renderer status501 notYetServedMessage
+    Publish _ -> renderedError renderer status501 notYetServedMessage
     Unsupported -> renderedError renderer status404 "not found"
   where
     notYetServedMessage :: Text

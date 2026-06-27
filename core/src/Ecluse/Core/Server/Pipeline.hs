@@ -123,6 +123,9 @@ module Ecluse.Core.Server.Pipeline (
     -- * The tarball handler
     serveTarball,
     headTarball,
+
+    -- * The first-party publish handler
+    servePublish,
 ) where
 
 import Data.Aeson (Value (Object, String))
@@ -141,8 +144,8 @@ import Lens.Micro ((^?))
 import Lens.Micro.Aeson (key, _Object)
 import Network.HTTP.Client (Manager)
 import Network.HTTP.Client qualified as HTTP
-import Network.HTTP.Types (RequestHeaders, ResponseHeaders, Status, hAuthorization, hContentLength, hContentType, methodHead, mkStatus, status200, status401, status501, statusIsSuccessful)
-import Network.Wai (Request, Response, ResponseReceived, requestHeaders, responseHeaders, responseLBS, responseStatus)
+import Network.HTTP.Types (RequestHeaders, ResponseHeaders, Status, hAuthorization, hContentLength, hContentType, methodHead, mkStatus, status200, status401, status403, status405, status500, status501, status502, statusIsSuccessful)
+import Network.Wai (Request, Response, ResponseReceived, consumeRequestBodyStrict, requestHeaders, responseHeaders, responseLBS, responseStatus)
 import UnliftIO (concurrently, withRunInIO)
 import UnliftIO.Exception (handle, throwIO, tryAny)
 
@@ -152,6 +155,8 @@ import Ecluse.Core.Package (
     PackageDetails (pkgArtifacts),
     PackageInfo (infoDistTags, infoPublishedAt, infoVersions),
     PackageName,
+    Scope,
+    pkgNamespace,
     renderPackageName,
  )
 import Ecluse.Core.Package.Filter (filterPlanFromDecisions, fpSurvivors)
@@ -172,14 +177,16 @@ import Ecluse.Core.Queue (
     MirrorJob (MirrorJob, jobArtifact, jobArtifactUrl, jobMirrorTarget, jobPackage, jobTraceContext, jobVersion),
     enqueue,
  )
-import Ecluse.Core.Registry (RegistryResponse (responseBody))
+import Ecluse.Core.Registry (RegistryResponse (responseBody), UrlFormationError)
 import Ecluse.Core.Registry.Npm (
     MetadataForm (Full),
     NpmClientConfig (..),
+    PublishRelayResponse (PublishRelayResponse),
     ResponseBoundExceeded (ResponseBoundExceeded),
     artifactRequestByUrl,
     fetchMetadataForm,
     noValidators,
+    relayPublishDocument,
  )
 import Ecluse.Core.Registry.Npm.Filter (FilterResult (Filtered, NoSurvivors), applyFilterPlan, rewriteTarballUrls)
 import Ecluse.Core.Registry.Npm.Project (Projection (NameMismatch, Projected), parsePackageInfoFromValue)
@@ -200,8 +207,9 @@ import Ecluse.Core.Server.Cache (CacheEntry (CacheEntry, entryInfo, entryRaw), S
 import Ecluse.Core.Server.Conditional (Conditional (Modified, NotModified), etagHeader, evaluateOwnETag, forwardValidators, isNotModified)
 import Ecluse.Core.Server.Context (
     Handler,
-    MountBinding (bindingPackumentDeps, bindingRenderer),
+    MountBinding (bindingPackumentDeps, bindingPublishDeps, bindingRenderer),
     PackumentDeps (..),
+    PublishDeps (..),
     ServeRuntime (..),
     ctxMount,
     ctxRuntime,
@@ -380,9 +388,17 @@ token is rejected. The token match is constant-time: 'Secret' equality compares
 over the full UTF-8 bytes without a content-dependent early out, so this gate
 does not leak the configured token's prefix length through timing. -}
 edgeAuthorised :: PackumentDeps -> Request -> Bool
-edgeAuthorised deps request = case pdInboundToken deps of
+edgeAuthorised deps = edgeTokenAuthorised (pdInboundToken deps)
+
+{- The shared edge gate against a configured inbound token: with none configured the
+edge is open; with one configured the request's bearer must match it exactly
+(deny-by-default, constant-time over the full 'Secret' bytes). The packument, tarball,
+and publish paths all apply the same gate, so it is factored here rather than
+duplicated per route. -}
+edgeTokenAuthorised :: Maybe Secret -> Request -> Bool
+edgeTokenAuthorised expected request = case expected of
     Nothing -> True
-    Just expected -> forwardedToken request == Just expected
+    Just want -> forwardedToken request == Just want
 
 -- A @401@ for a request that failed edge authentication, before any upstream
 -- fetch; the body is shaped by the mount's renderer.
@@ -1683,3 +1699,135 @@ recordedFetch metrics upstream action = do
         Left err -> do
             liftIO (mpUpstreamFetchError metrics upstream (fetchCause err))
             throwIO err
+
+-- ── the first-party publish handler ───────────────────────────────────────────
+
+{- | Serve a @PUT \/{pkg}@ first-party publish request end to end, over the request's
+'RequestCtx'.
+
+The mount's 'PublishDeps' and error renderer are read from the matched 'MountBinding'
+in context. The path is __opt-in__: a mount with no publish dependencies wired
+('bindingPublishDeps' is 'Nothing') has no publication target, so a publish is
+@405 Method Not Allowed@ — there is no implicit write path.
+
+With a publication target configured, the order is load-bearing — every refusal happens
+__before any upstream write is attempted__:
+
+1. the edge token (if configured) is validated, exactly as the read paths gate
+   ('edgeTokenAuthorised'); a missing\/mismatched token is a @401@;
+2. the __anti-shadowing scope guard__ ('inPublishScope') is enforced — a name outside
+   the configured @PUBLISH_SCOPES@ allow-list is a @403@ with a clear message, so a
+   client cannot publish a name that shadows an existing public package
+   (dependency confusion);
+3. only then is the body read and relayed to the publication target
+   ('relayPublishDocument'), with the publisher's __own forwarded credential__
+   (passthrough; the static 'pubStaticToken' is the fallback for a client that sends
+   none) — never Écluse's own token, and never to the public upstream.
+
+The publication target's own status and body are relayed back to the @npm@ client
+verbatim, so the publisher sees exactly what the registry said. A target that cannot be
+reached (a transport failure) is a @502@; an unformable target URL (misconfiguration) a
+@500@. The package URL and the scope guard both key on the __route's__ 'PackageName',
+never the document's self-reported name (see
+@docs\/architecture\/registry-model.md@ → "Publishing first-party packages").
+-}
+servePublish ::
+    PackageName ->
+    Request ->
+    (Response -> IO ResponseReceived) ->
+    Handler ResponseReceived
+servePublish name request respond = do
+    renderer <- asks (bindingRenderer . ctxMount)
+    asks (bindingPublishDeps . ctxMount) >>= \case
+        Nothing -> liftIO (respond (publishDisabled renderer))
+        Just deps -> publishWithDeps renderer deps name request respond
+
+-- Serve a publish once the mount's publication target is known: the edge gate, then
+-- the anti-shadowing scope guard (both before any write), then the relay to the
+-- publication target with the publisher's forwarded credential.
+publishWithDeps ::
+    MountRenderer ->
+    PublishDeps ->
+    PackageName ->
+    Request ->
+    (Response -> IO ResponseReceived) ->
+    Handler ResponseReceived
+publishWithDeps renderer deps name request respond
+    | not (edgeTokenAuthorised (pubInboundToken deps) request) =
+        liftIO (respond (edgeUnauthorised renderer))
+    | not (inPublishScope (pubScopes deps) name) =
+        liftIO (respond (outOfScope renderer deps name))
+    | otherwise = do
+        rt <- asks ctxRuntime
+        -- The body is bounded by the client→proxy request-size cap (the size-limit
+        -- middleware), read here only after the scope guard has admitted the name, so a
+        -- refused publish never even buffers its (potentially large, base64-tarball)
+        -- body.
+        body <- liftIO (consumeRequestBodyStrict request)
+        -- @consumeRequestBodyStrict@ reads the whole body but returns it lazy; the
+        -- publish builder ('relayPublishDocument') puts it on the wire as a strict
+        -- @RequestBodyBS@, so materialise it strict here. The body is already bounded by
+        -- the client→proxy request-size cap.
+        outcome <- tryAny (liftIO (relayPublishDocument (publishConfig rt deps request) name (LBS.toStrict body)))
+        liftIO (respond (renderRelay renderer deps outcome))
+
+{- The per-request npm client config for the publish relay: the publication target as
+its base URL, the trusted private manager (the target is operator-configured, like the
+private upstream, so it is reached over the trusted path without the untrusted-egress
+resolved-IP recheck), the response-bound budget, and the __forwarded__ publisher token
+— the client's own ('forwardedToken'), falling back to the static
+'pubStaticToken' only when the client sends none (the passthrough credential model). -}
+publishConfig :: ServeRuntime -> PublishDeps -> Request -> NpmClientConfig
+publishConfig rt deps request =
+    NpmClientConfig
+        { npmBaseUrl = pubTargetUrl deps
+        , npmManager = srPrivateManager rt
+        , npmToken = forwardedToken request <|> pubStaticToken deps
+        , npmLimits = pubLimits deps
+        }
+
+{- Whether a package name falls within the configured publish-scope allow-list — the
+anti-shadowing guard. A __scoped__ name is admitted iff its scope is one of the
+configured scopes; an __unscoped__ name is never in any scope, so it is refused (the
+MVP allow-list is scope-based, e.g. @\@acme@). The scope equality is exact, so
+@\@acme-evil@ does not match an @\@acme@ allow-list entry. -}
+inPublishScope :: [Scope] -> PackageName -> Bool
+inPublishScope scopes name = case pkgNamespace name of
+    Just scope -> scope `elem` scopes
+    Nothing -> False
+
+{- Render the relay outcome: the publication target's own status and body forwarded to
+the client on success (so the publisher sees the registry's real answer — a success
+shape, a @409@, a @403@ the registry's own authorisation produced); a @502@ when the
+target could not be reached; a @500@ when its URL is unformable (misconfiguration). -}
+renderRelay ::
+    MountRenderer ->
+    PublishDeps ->
+    Either SomeException (Either UrlFormationError PublishRelayResponse) ->
+    Response
+renderRelay renderer deps = \case
+    Right (Right (PublishRelayResponse code relayed)) ->
+        jsonResponse (mkStatus code "") [] relayed
+    Right (Left _urlErr) ->
+        renderedResponse status500 [] (renderError renderer (pubHelp deps) "the publication target URL is misconfigured")
+    Left _exc ->
+        renderedResponse status502 [] (renderError renderer (pubHelp deps) "the publication target could not be reached")
+
+-- A @405@ for a publish on a mount with no publication target configured: the
+-- opt-in path is off, so a @PUT \/{pkg}@ is not an allowed method here. The @Allow@
+-- header advertises the read methods the package route does serve.
+publishDisabled :: MountRenderer -> Response
+publishDisabled renderer =
+    renderedResponse status405 [("Allow", "GET, HEAD")] (renderError renderer Nothing "publishing is not enabled on this proxy (no publication target is configured)")
+
+-- A @403@ for a publish whose name is outside the configured publish-scope
+-- allow-list — the anti-shadowing guard, refused before any upstream write.
+outOfScope :: MountRenderer -> PublishDeps -> PackageName -> Response
+outOfScope renderer deps name =
+    renderedResponse status403 [] (renderError renderer (pubHelp deps) message)
+  where
+    message :: Text
+    message =
+        "refusing to publish '"
+            <> renderPackageName name
+            <> "': its name is outside the configured publish-scope allow-list (the anti-shadowing guard against publishing a name that shadows a public package)"

@@ -142,7 +142,7 @@ import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
 import Ecluse.Core.Security (defaultLimits, lowerCaseHosts)
 import Ecluse.Core.Security.Egress (guardedManagerSettings)
 import Ecluse.Core.Server.Cache (newMetadataCache)
-import Ecluse.Core.Server.Context (PackumentDeps)
+import Ecluse.Core.Server.Context (PackumentDeps, PublishDeps)
 import Ecluse.Core.Telemetry.Metrics (BreakerSource (CredentialMint), Provider (CodeArtifact))
 import Ecluse.Core.Worker (runWorkerM, workerLoop)
 import Ecluse.Env (Env, envDdContext, envLogEnv, envMetrics, newWorkerHeartbeat, withEnv, workerRuntimeOf)
@@ -348,14 +348,15 @@ runServer :: ServerConfig -> Env -> IO ()
 runServer = Server.runServer
 
 {- | The fallback server settings: a single npm mount with __no__ packument-serve
-dependencies, so the packument route is the recognised-but-unserved @501@ stub.
-Exposed so the composed front door can be driven directly without binding a socket
-(e.g. embedded in another @wai@ application, or exercised in tests through
-'Ecluse.Server.application') to assert the routing and the unwired-mount surface; a
-real launch derives its bindings from configuration in 'run'.
+or publish dependencies, so the packument route is the recognised-but-unserved @501@
+stub and a publish is @405@ (no publication target). Exposed so the composed front
+door can be driven directly without binding a socket (e.g. embedded in another @wai@
+application, or exercised in tests through 'Ecluse.Server.application') to assert the
+routing and the unwired-mount surface; a real launch derives its bindings from
+configuration in 'run'.
 -}
 npmServerConfig :: ServerConfig
-npmServerConfig = mkServerConfig [npmMount Nothing]
+npmServerConfig = mkServerConfig [npmMount Nothing Nothing]
 
 {- | Resolve an 'Ecosystem' to its complete 'MountBinding', or 'Nothing' when that
 ecosystem has no adapter wired. The ecosystem selects its path
@@ -371,22 +372,24 @@ npm is the only ecosystem with an adapter; the others have no registry
 client or renderer, so they resolve to 'Nothing' — a loud miss at the call
 site rather than a silently half-wired mount.
 -}
-mountBindingFor :: Ecosystem -> Maybe PackumentDeps -> Maybe MountBinding
-mountBindingFor eco packumentDeps = case eco of
-    Npm -> Just (npmMount packumentDeps)
+mountBindingFor :: Ecosystem -> Maybe PackumentDeps -> Maybe PublishDeps -> Maybe MountBinding
+mountBindingFor eco packumentDeps publishDeps = case eco of
+    Npm -> Just (npmMount packumentDeps publishDeps)
     _ -> Nothing
 
 {- The npm mount: npm's complete wiring under its derived @\/npm@ prefix — its path
-grammar and its denial renderer — taking the packument-serve dependencies the
-composition root supplies ('Nothing' leaves the packument route the
-recognised-but-unserved @501@ stub).
+grammar and its denial renderer — taking the packument-serve and first-party publish
+dependencies the composition root supplies ('Nothing' packument deps leave the
+packument route the recognised-but-unserved @501@ stub; 'Nothing' publish deps leave a
+@PUT \/{pkg}@ the @405@ opt-out — no publication target).
 -}
-npmMount :: Maybe PackumentDeps -> MountBinding
-npmMount packumentDeps =
+npmMount :: Maybe PackumentDeps -> Maybe PublishDeps -> MountBinding
+npmMount packumentDeps publishDeps =
     MountBinding
         { bindingPrefix = prefixFor Npm
         , bindingClassifier = Npm.classify
         , bindingPackumentDeps = packumentDeps
+        , bindingPublishDeps = publishDeps
         , bindingRenderer = npmRenderer
         }
 

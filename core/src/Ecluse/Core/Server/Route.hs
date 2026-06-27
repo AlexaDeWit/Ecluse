@@ -3,11 +3,19 @@ default router.
 
 A 'Route' is one classified request — everything the proxy is willing to serve,
 named independently of any ecosystem's URL grammar. The /actions/ are common
-across registries (fetch a packument, stream a tarball, answer a liveness probe,
-deny a search); only the URL→action mapping is ecosystem-specific. That mapping
-is a 'Classifier', injected at the composition root, so this module stays free of
-any one ecosystem's path conventions while the dispatcher routes through whatever
+across registries (fetch a packument, stream a tarball, publish a first-party
+package, answer a liveness probe, deny a search); only the
+__(method, URL)→action__ mapping is ecosystem-specific. That mapping is a
+'Classifier', injected at the composition root, so this module stays free of any
+one ecosystem's path conventions while the dispatcher routes through whatever
 classifier its mount carries.
+
+The classifier is __method-aware__ because the same path can name different
+actions by HTTP method: @GET \/{pkg}@ reads a packument, @PUT \/{pkg}@ publishes
+one. A read and a write are genuinely distinct serve actions (not a rendering
+variation the way a @HEAD@ is a bodiless @GET@), so the method is part of what the
+classifier maps, and a write earns its own 'Route' rather than being inferred at
+dispatch.
 
 The model is __deny by default__, mirroring the rules engine ("Ecluse.Core.Rules"):
 the agnostic default 'denyAll' classifies every path as 'Unsupported' (a @404@ at
@@ -36,6 +44,7 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Internal (w2c)
 import Data.Char (intToDigit, isControl, toUpper)
 import Data.Text qualified as T
+import Network.HTTP.Types.Method (Method)
 
 import Ecluse.Core.Package (PackageName)
 import Ecluse.Core.Version (Version)
@@ -59,6 +68,16 @@ data Route
       rebuilt from @(package, version)@, is authoritative for fetching the bytes.
       -}
       Tarball PackageName Version Filename
+    | {- | A first-party __publish__ request — @PUT \/{pkg}@. The one client-driven
+      /write/ action: the publisher's own publish document (the version manifest plus
+      the base64 tarball) is relayed to the configured /publication target/ after the
+      anti-shadowing scope guard, with the publisher's own forwarded credential (see
+      @docs\/architecture\/registry-model.md@ → "Publishing first-party packages"). The
+      'PackageName' is the route's authoritative identity — the scope guard and the
+      upstream write path both key on it, never on the document's self-reported name.
+      The version lives inside the relayed document, so the route carries none.
+      -}
+      Publish PackageName
     | -- | A registry liveness probe, answered locally.
       Ping
     | -- | Package search (unsupported).
@@ -83,26 +102,29 @@ is safe to interpolate into a downstream URL.
 newtype Filename = Filename Text
     deriving stock (Eq, Show)
 
-{- | The mapping from an ecosystem-native request path to a 'Route'.
+{- | The mapping from an ecosystem-native request to a 'Route'.
 
-A classifier sees the already-mount-stripped, percent-decoded path segments and
-returns the serve action. Each ecosystem adapter contributes its own —
-recognising its path grammar and denying everything else — so the agnostic
-dispatcher stays closed while every mount routes through its ecosystem's
-template. Dispatch chooses the classifier per matched mount (see
-"Ecluse.Server"), so the same shape carries either a single ecosystem or a
-mount-keyed selection.
+A classifier sees the request's HTTP 'Method' and the already-mount-stripped,
+percent-decoded path segments and returns the serve action. The method is part of
+the mapping because the same path names different actions by method (@GET \/{pkg}@
+reads, @PUT \/{pkg}@ publishes); a @HEAD@, by contrast, classifies like its @GET@
+(it is a bodiless variation the dispatcher handles, not a distinct action). Each
+ecosystem adapter contributes its own classifier — recognising its
+(method, path) grammar and denying everything else — so the agnostic dispatcher
+stays closed while every mount routes through its ecosystem's template. Dispatch
+chooses the classifier per matched mount (see "Ecluse.Server"), so the same shape
+carries either a single ecosystem or a mount-keyed selection.
 -}
-type Classifier = [Text] -> Route
+type Classifier = Method -> [Text] -> Route
 
-{- | The agnostic default classifier: every path is 'Unsupported'.
+{- | The agnostic default classifier: every request is 'Unsupported'.
 
 This is the deny-by-default base a deployment runs with until a composition root
 wires an ecosystem's classifier in, so an unwired server serves nothing rather
 than guessing a grammar. It deliberately knows no path conventions of its own.
 -}
 denyAll :: Classifier
-denyAll _segments = Unsupported
+denyAll _method _segments = Unsupported
 
 {- | Whether a single decoded path component is __safe to interpolate__ into a
 downstream upstream URL — the deny-by-default gate a classifier applies to every

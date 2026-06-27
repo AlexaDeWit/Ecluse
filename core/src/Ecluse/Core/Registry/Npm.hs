@@ -85,6 +85,10 @@ module Ecluse.Core.Registry.Npm (
     artifactFileUrl,
     publishRequest,
 
+    -- * First-party publish relay
+    PublishRelayResponse (..),
+    relayPublishDocument,
+
     -- * Publish-document assembly
     npmPublishDocument,
 
@@ -100,11 +104,12 @@ import Data.Aeson qualified as Aeson
 import Data.Aeson.Key qualified as Key
 import Data.ByteArray.Encoding (Base (Base64), convertToBase)
 import Data.ByteString qualified as BS
+import Data.ByteString.Lazy qualified as LBS
 import Data.Text qualified as T
 import Network.HTTP.Client (
     BodyReader,
     Manager,
-    Request (decompress, method, requestBody, requestHeaders),
+    Request (decompress, method, redirectCount, requestBody, requestHeaders),
     RequestBody (RequestBodyBS),
     Response (responseStatus),
     applyBearerAuth,
@@ -406,6 +411,74 @@ publishRequest config name document = do
                     : requestHeaders base
             }
 
+-- ── first-party publish relay ─────────────────────────────────────────────────
+
+{- | The publication target's response to a relayed first-party publish: the HTTP
+status __code__ and the response __body__, so the front door can forward the
+registry's own answer to the @npm@ client verbatim.
+
+This is deliberately distinct from the mirror worker's
+'Ecluse.Core.Registry.publishArtifact', which collapses the registry's reply into a
+success-or-'Ecluse.Core.Registry.PublishFault' verdict (the worker only needs to know
+whether to ack or retry the job). A first-party publish is a __relay__: the client
+publishes through the proxy and must see exactly what the registry said — a success
+shape, a @409@ "version exists", a @403@ the registry's own authorisation produced —
+so the status and body are carried through rather than reduced to a verdict.
+-}
+data PublishRelayResponse = PublishRelayResponse
+    { relayStatus :: Int
+    -- ^ The HTTP status code the publication target returned.
+    , relayBody :: LByteString
+    -- ^ The publication target's response body, relayed to the client unchanged.
+    }
+    deriving stock (Eq, Show)
+
+{- | Relay a client's npm publish document to the publication target and return the
+target's own response — the first-party publish primitive behind the @PUT \/{pkg}@
+serve path.
+
+The @document@ is the publisher's own @PUT@ body, relayed __verbatim__ (the proxy
+does not re-assemble it the way the mirror worker assembles 'npmPublishDocument' from
+verified bytes). The request is built by 'publishRequest', so it carries the
+config's injected bearer — for this path the publisher's __own forwarded token__
+(passthrough), put on the per-request 'NpmClientConfig' by the serve layer — and the
+@Content-Type: application\/json@ the npm publish protocol requires. The package URL
+is formed from the route's 'PackageName', never the document's self-reported name.
+
+The response body is read __bounded__ through 'Ecluse.Core.Security.boundedRead' against
+the config's 'npmLimits' (the same @maxBodyBytes@ budget the metadata path enforces), via
+'withResponse' rather than an unbounded 'httpLbs' — so a hostile or compromised
+publication target cannot exhaust the proxy with a multi-gigabyte response. A body past
+the cap aborts fail-closed as a 'ResponseBoundExceeded' throw, which the serve layer's
+@tryAny@ turns into a gateway error.
+
+Returns the publication target's status and bounded body ('PublishRelayResponse'), or a
+'UrlFormationError' when the request URL cannot be formed (a misconfigured base URL). A
+transport failure (the target unreachable) throws, as the serve layer's @tryAny@ expects
+— it renders a gateway error rather than a relayed status. Unlike
+'Ecluse.Core.Registry.publishArtifact', a @409@ is __not__ folded into success here: a
+first-party publisher re-publishing an existing version should see the registry's @409@,
+not a fabricated @200@.
+-}
+relayPublishDocument ::
+    NpmClientConfig ->
+    PackageName ->
+    ByteString ->
+    IO (Either UrlFormationError PublishRelayResponse)
+relayPublishDocument config name document =
+    case publishRequest config name document of
+        Left urlErr -> pure (Left urlErr)
+        Right request ->
+            withResponse request (npmManager config) $ \response -> do
+                RegistryResponse body <- readBoundedBody (npmLimits config) (responseBody response)
+                pure
+                    ( Right
+                        PublishRelayResponse
+                            { relayStatus = statusCode (responseStatus response)
+                            , relayBody = LBS.fromStrict body
+                            }
+                    )
+
 -- ── publish-document assembly ─────────────────────────────────────────────────
 
 {- | Assemble the npm publish document for one version from its verified tarball
@@ -683,11 +756,35 @@ tarballFile :: PackageName -> Version -> Text
 tarballFile name version =
     encodeComponent (unscopedName name) <> "-" <> encodeComponent (renderVersion version) <> ".tgz"
 
--- Attach a bearer token to a request when one is injected; otherwise leave it.
+{- Attach a bearer token to a request when one is injected, and — crucially —
+__disable redirect following__ on that request ('redirectCount' = 0); otherwise leave
+the request untouched.
+
+This is the single credential-attachment point for the whole npm data plane (the only
+'applyBearerAuth'), so disabling redirects here pins one invariant across __every__
+builder and call site: __a credential-bearing request never follows a 3xx to a redirect
+target.__ http-client's default ('redirectCount' = 10) re-sends the @Authorization@
+header to the redirect's @Location@, and its @shouldStripHeaderOnRedirect@ does not
+strip it cross-host — so a hostile or misconfigured upstream could @302@ a
+forwarded\/minted credential to an attacker-chosen host. That is especially dangerous on
+the __trusted private manager__, which carries no resolved-IP SSRF recheck (it may
+legitimately resolve to an internal address), so a redirect there could exfiltrate the
+credential to an internal target with no egress guard at all.
+
+The accepted consequence: a credential-bearing artifact (tarball) read no longer follows
+a private registry's CDN @302@ — it returns the @3xx@ to the serve path rather than
+chasing it with the credential. That is the safer posture (the proxy already honours the
+__packument's__ @dist.tarball@ location explicitly, gated by the egress policy, rather
+than relying on redirects). Anonymous public reads keep the default redirect budget — no
+credential is at risk there, so following a public registry's redirect is fine.
+
+(Out of scope here: amazonka — CodeArtifact\/SQS — and the OTLP exporter build their own
+requests outside this function, so this invariant does not reach them; that is a separate
+follow-up.) -}
 withToken :: Maybe Secret -> Request -> Request
 withToken Nothing request = request
 withToken (Just secret) request =
-    applyBearerAuth (encodeUtf8 (unSecret secret)) request
+    applyBearerAuth (encodeUtf8 (unSecret secret)) request{redirectCount = 0}
 
 -- Add the present conditional-GET validators as request headers.
 addValidators :: Validators -> Request -> Request

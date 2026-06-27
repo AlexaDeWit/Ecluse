@@ -128,6 +128,7 @@ proxyApp policy internalOptIn port = do
                     { bindingPrefix = "npm" :| []
                     , bindingClassifier = Npm.classify
                     , bindingPackumentDeps = Just (deps policy internalOptIn port)
+                    , bindingPublishDeps = Nothing
                     , bindingRenderer = npmRenderer
                     }
                 ]

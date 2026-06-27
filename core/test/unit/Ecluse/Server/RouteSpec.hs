@@ -4,6 +4,7 @@ import Hedgehog (forAll)
 import Hedgehog qualified as H
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
+import Network.HTTP.Types.Method (methodGet, methodPut)
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
@@ -32,15 +33,18 @@ spec :: Spec
 spec = do
     describe "denyAll — the agnostic default classifier" $ do
         it "denies a package-shaped path (no ecosystem grammar is built in)" $
-            denyAll ["is-odd"] `shouldBe` Unsupported
+            denyAll methodGet ["is-odd"] `shouldBe` Unsupported
         it "denies a meta-route-shaped path" $
-            denyAll ["-", "ping"] `shouldBe` Unsupported
+            denyAll methodGet ["-", "ping"] `shouldBe` Unsupported
         it "denies the empty path" $
-            denyAll [] `shouldBe` Unsupported
-        it "denies every path it is given (deny by default)" $
+            denyAll methodGet [] `shouldBe` Unsupported
+        it "denies a PUT (a publish) too — it knows no write grammar either" $
+            denyAll methodPut ["is-odd"] `shouldBe` Unsupported
+        it "denies every path it is given, under any method (deny by default)" $
             hedgehog $ do
+                method <- forAll (Gen.element [methodGet, methodPut, "HEAD", "DELETE"])
                 segs <- forAll (Gen.list (Range.linear 0 5) (Gen.text (Range.linear 0 8) Gen.unicode))
-                denyAll segs H.=== Unsupported
+                denyAll method segs H.=== Unsupported
 
     describe "Filename — the agnostic artifact-name type" $ do
         -- The verbatim on-the-wire name a 'Tarball' route carries is held as a

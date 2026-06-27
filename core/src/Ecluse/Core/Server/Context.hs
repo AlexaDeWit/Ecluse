@@ -28,6 +28,9 @@ module Ecluse.Core.Server.Context (
     -- * Packument-serve dependencies
     PackumentDeps (..),
 
+    -- * Publish-serve dependencies
+    PublishDeps (..),
+
     -- * Mount binding
     MountBinding (..),
 
@@ -46,6 +49,7 @@ import Network.HTTP.Client (Manager)
 import UnliftIO (MonadUnliftIO)
 
 import Ecluse.Core.Credential (Secret)
+import Ecluse.Core.Package (Scope)
 import Ecluse.Core.Package.Integrity (MinIntegrity, MinTrustedIntegrity)
 import Ecluse.Core.Queue (MirrorQueue)
 import Ecluse.Core.Rules.Effectful (PrecededEffectfulRule)
@@ -186,6 +190,57 @@ data PackumentDeps = PackumentDeps
     -}
     }
 
+-- ── publish-serve dependencies ────────────────────────────────────────────────
+
+{- | The per-mount inputs the first-party publish handler needs: the publication
+target endpoint, the publish-scope allow-list (the anti-shadowing guard), the
+optional static fallback credential, the edge token, the response-bound budget, and
+the operator help message.
+
+The mere __presence__ of these deps is the publish path's opt-in: a mount carries a
+'PublishDeps' only when a publication target is configured, so the binding's
+@bindingPublishDeps@ being 'Nothing' is exactly the "no publication target ⇒ a
+@PUT \/{pkg}@ is @405 Method Not Allowed@" rule, modelled in the type rather than
+re-derived at the handler (see
+@docs\/architecture\/registry-model.md@ → "Publishing first-party packages").
+
+The credential posture is __passthrough__, symmetric with the private-upstream read
+under @passthrough@: the publisher's own forwarded token is what reaches the
+publication target, the static 'pubStaticToken' only a fallback for a client that
+sends none. Écluse mints no token of its own here — unlike the mirror target — so this
+record carries no 'Ecluse.Core.Credential.CredentialProvider' (see
+@docs\/architecture\/access-model.md@ → "Publishing: the publication target").
+-}
+data PublishDeps = PublishDeps
+    { pubTargetUrl :: Text
+    {- ^ The publication target endpoint (@PUBLICATION_TARGET_URL@) a client
+    @npm publish@ is relayed to. The package path is appended to it.
+    -}
+    , pubScopes :: [Scope]
+    {- ^ The configured publish-scope allow-list (@PUBLISH_SCOPES@) — the
+    anti-shadowing guard. A publish whose package name is not within one of these
+    scopes is refused __before any upstream write__, so a client cannot publish a name
+    that shadows an existing public package (a dependency-confusion vector). Never
+    empty when a publication target is configured (config validation rejects that).
+    -}
+    , pubStaticToken :: Maybe Secret
+    {- ^ The static fallback credential (@PUBLICATION_TARGET_TOKEN@) forwarded to the
+    publication target __only when the client sends no token of its own__. The default
+    model is passthrough — the publisher's own token — so this is 'Nothing' on the
+    common path.
+    -}
+    , pubInboundToken :: Maybe Secret
+    {- ^ The optional inbound edge token a client must present (@PROXY_AUTH_TOKEN@),
+    the same gate the read paths apply; 'Nothing' leaves the edge open.
+    -}
+    , pubLimits :: Limits
+    {- ^ The response-bound budget enforced on the publication target's response,
+    carried for symmetry with the read paths.
+    -}
+    , pubHelp :: Maybe HelpMessage
+    -- ^ The operator help message appended to a publish denial, if configured.
+    }
+
 -- ── mount binding ─────────────────────────────────────────────────────────────
 
 {- | A mount: a path prefix bound to a registry, carrying that registry's
@@ -208,6 +263,11 @@ data MountBinding = MountBinding
     , bindingPackumentDeps :: Maybe PackumentDeps
     {- ^ The packument-serve dependencies, when wired; 'Nothing' leaves the
     packument route recognised-but-unserved (the @501@ stub).
+    -}
+    , bindingPublishDeps :: Maybe PublishDeps
+    {- ^ The first-party publish dependencies, when a publication target is
+    configured; 'Nothing' is the opt-out — a @PUT \/{pkg}@ is then @405@ (no implicit
+    write path).
     -}
     , bindingRenderer :: MountRenderer
     {- ^ This mount's renderer for error\/denial bodies — the ecosystem surface an

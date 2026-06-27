@@ -105,7 +105,7 @@ import Validation (eitherToValidation, validationToEither)
 
 import Ecluse.Core.Credential (Secret, mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm), parseEcosystem)
-import Ecluse.Core.Package (mkScope)
+import Ecluse.Core.Package (Scope, mkScope)
 import Ecluse.Core.Package.Integrity (
     MinIntegrity,
     MinTrustedIntegrity,
@@ -502,6 +502,31 @@ data EnvConfig = EnvConfig
     own vetted source substitutes for cryptographic strength. An unknown algorithm name is
     still rejected at load (see "Ecluse.Core.Package.Integrity").
     -}
+    , cfgPublicationTarget :: Maybe Url
+    {- ^ Where client @npm publish@ (first-party packages) are written
+    (@PUBLICATION_TARGET_URL@). __Optional__ and __opt-in__: 'Nothing' means no
+    publication target, so a @PUT \/{pkg}@ is refused with @405@ — there is no implicit
+    write path. May be the same registry as the private upstream (so published packages
+    are then readable via the private leg). See
+    @docs\/architecture\/registry-model.md@ → "Publishing first-party packages".
+    -}
+    , cfgPublicationTargetToken :: Maybe Secret
+    {- ^ The static fallback credential for the publication target
+    (@PUBLICATION_TARGET_TOKEN@), forwarded only when a publishing client sends no
+    token of its own. The default publish credential model is __passthrough__ — the
+    publisher's own token — so this is unset on the common path. Held as a redacted
+    'Secret' so the token text never reaches the derived 'Show' of this record.
+    -}
+    , cfgPublishScopes :: [Scope]
+    {- ^ The publish-scope allow-list (@PUBLISH_SCOPES@, comma-separated, e.g.
+    @\@acme,\@beta@) — the anti-shadowing guard. A publish whose package name is
+    outside these scopes is refused before any upstream write, so a client cannot
+    publish a name that shadows an existing public package (dependency confusion).
+    __Required when 'cfgPublicationTarget' is set__ (an empty list with a publication
+    target configured is a fail-loud boot error, enforced at
+    'Ecluse.Composition.composeBindings'); ignored when no publication target is
+    configured.
+    -}
     }
     deriving stock (Eq, Show)
 
@@ -592,6 +617,13 @@ envParser =
         -- floor it is loosenable below SHA-256 (sha1/md5 accepted) for a legacy private
         -- mirror; only an unknown algorithm is rejected at load.
         <*> Env.var minTrustedIntegrityReader "PROXY_MIN_TRUSTED_INTEGRITY" (Env.def defaultMinTrustedIntegrity)
+        -- The first-party publish path is opt-in: an unset publication target leaves it
+        -- off (a PUT /{pkg} is then 405). When set, PUBLISH_SCOPES is required — the
+        -- cross-field check is at the composition root (composeBindings), where the
+        -- two are validated together with the rest of the boot-time wiring.
+        <*> optionalUrl "PUBLICATION_TARGET_URL"
+        <*> (fmap mkSecret <$> Env.sensitive (optionalText "PUBLICATION_TARGET_TOKEN"))
+        <*> Env.var publishScopesReader "PUBLISH_SCOPES" (Env.def [])
   where
     defaultPublicUpstream :: Url
     defaultPublicUpstream = Url "https://registry.npmjs.org"
@@ -700,6 +732,15 @@ minIntegrityReader = textReader parseMinIntegrity
 -- the trusted floor is loosenable.
 minTrustedIntegrityReader :: Env.Reader Env.Error MinTrustedIntegrity
 minTrustedIntegrityReader = textReader parseMinTrustedIntegrity
+
+-- An 'Env.Reader' for the publish-scope allow-list: a comma-separated list of
+-- scopes (e.g. @\@acme,\@beta@), parsed into 'Scope's through 'mkScope' (which
+-- tolerates the leading @\'\@\'@). Each entry is trimmed and blanks are dropped, so
+-- a trailing comma or stray whitespace is forgiving; the result may be empty (which
+-- the composition root rejects only when a publication target is configured).
+publishScopesReader :: Env.Reader Env.Error [Scope]
+publishScopesReader = textReader $ \t ->
+    Right (map mkScope (filter (not . T.null) (map T.strip (T.splitOn "," t))))
 
 -- An 'Env.Reader' for a boolean flag. Accepts the conventional spellings
 -- case-insensitively and rejects anything else loudly (fail-fast, never a silent

@@ -242,6 +242,7 @@ Every outbound connection Écluse makes, and the controls it carries:
 | Private-upstream **packument** fetch | Trusted | `envPrivateManager` (unguarded) | **No** |
 | Private `dist.tarball` **artifact** stream | Trusted origin | `envPrivateManager` (unguarded) | **No** — but the allowlist + same-host policy still apply |
 | Mirror-target **publish** (npm `PUT`) | Trusted declared destination | `envPrivateManager` (unguarded) | **No** |
+| **First-party publish** relay (client `npm publish` → publication target) | Trusted declared destination | `envPrivateManager` (unguarded) | **No** — the destination is configuration (`PUBLICATION_TARGET_URL`); it carries the client's **forwarded** credential, which is **never redirect-followed** (see below) |
 | OTLP **telemetry** export | Trusted declared destination | OpenTelemetry SDK's own client | **No** — the endpoint is declared, not classified (see `Ecluse.Telemetry.Resolve`) |
 | **SQS** mirror-queue publish / poll | Trusted declared destination | `amazonka`'s own client | **No** (see `Ecluse.Core.Queue.Sqs`) |
 | **IMDS** instance-role credential minting | Required internal | `amazonka`'s own client (separate from the data plane) | **No** — must reach `169.254.169.254`; never routed through the data-plane manager |
@@ -261,6 +262,39 @@ trusted manager and is **exempt from the internal-range block** as a `TrustedOri
 yet it stays constrained by the host allowlist and the same-host tarball policy — see
 [Why `dist.tarball` is honoured](#why-disttarball-is-honoured-and-what-bounds-it). It
 is treated as part of the trusted private origin, not as an untrusted download.
+
+**A credential-bearing request never follows a redirect.** Every outbound request that
+carries a bearer — the private-upstream read under `passthrough`, the credential-bearing
+artifact reads, the first-party publish relay, and the mirror-target publish — is built
+with redirect-following **disabled** (`redirectCount = 0`) at the single
+credential-attachment point (`Ecluse.Core.Registry.Npm.withToken`). http-client's default
+re-sends the `Authorization` header to a `3xx` `Location` (and does not strip it
+cross-host), so a hostile or misconfigured upstream could `302` a forwarded/minted
+credential to an attacker-chosen host — and on the **unguarded** private manager that
+target carries no resolved-IP recheck, so the credential could reach an internal address
+with no egress guard at all. Disabling redirects forecloses that exfiltration: a
+credential-bearing read returns the `3xx` to the serve path rather than chasing it (the
+proxy already honours the **packument's** `dist.tarball` location explicitly, gated by the
+egress policy, rather than relying on redirects). **Anonymous** public reads keep the
+default redirect budget — no credential is at risk there. The invariant is enforced for
+the npm data plane; `amazonka` (CodeArtifact / SQS) and the OTLP exporter build their own
+requests outside `withToken`, so extending it there is a noted follow-up.
+
+## The first-party publish surface must be protected (a shared responsibility)
+
+The [first-party publish path](registry-model.md#publishing-first-party-packages-the-publication-target)
+relays a client `npm publish` to the publication target. Its scope allow-list
+(`PUBLISH_SCOPES`) constrains **which package names** may be published — it is **not** an
+authentication control and says nothing about **who** may publish. So a static
+`PUBLICATION_TARGET_TOKEN` paired with an **open edge** (no `PROXY_AUTH_TOKEN`) lets **any
+unauthenticated client** publish under the operator's credential, within the allowed
+scopes. Écluse deliberately does **not** fail closed on this combination — it cannot see
+the deployment's environment-level protections (an API gateway, a service mesh with mTLS,
+a `NetworkPolicy`), so blocking it would break legitimate closed-network deployments — but
+**the publish surface MUST be protected**, by Écluse's own edge auth (`PROXY_AUTH_TOKEN`)
+**or** an external layer. Treat this as an operator-architecture responsibility, the same
+way [network egress](#network-egress-is-a-shared-responsibility) is (see also
+[Access & Credential Model → Publishing](access-model.md#publishing-the-publication-target-passthrough-write)).
 
 ## Network egress is a shared responsibility
 

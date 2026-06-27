@@ -126,6 +126,7 @@ mountWith deps =
         { bindingPrefix = "npm" :| []
         , bindingClassifier = Npm.classify
         , bindingPackumentDeps = deps
+        , bindingPublishDeps = Nothing
         , bindingRenderer = npmRenderer
         }
 

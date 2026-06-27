@@ -74,6 +74,9 @@ operator reference. **Keep the two in sync** when either changes.
 | `MIRROR_TARGET_CODEARTIFACT_DOMAIN_OWNER` | `codeartifact` only | 12-digit owning account id — or parsed from the host (a non-account-id value is rejected at boot). |
 | `MIRROR_TARGET_CODEARTIFACT_REGION` | `codeartifact` only | Region — this key, else the host (its authoritative region), else `AWS_REGION`. |
 | `MIRROR_TARGET_CODEARTIFACT_TOKEN_DURATION_SECONDS` | No | Token lifetime in seconds, capped at `43200` (12 h). |
+| `PUBLICATION_TARGET_URL` | No | Where client `npm publish` (first-party packages) is written. **Opt-in: unset ⇒ a `PUT /{pkg}` is `405`** (no implicit write path). May be the same registry as the private upstream (so published packages are then readable via the private leg). **Protect this surface — see the warning below.** |
+| `PUBLICATION_TARGET_TOKEN` | No | Static fallback credential for the publication target, forwarded only when a publishing client sends no token of its own. The default model is **passthrough** — the publisher's own forwarded token. **⚠️ A static token with an open edge lets any unauthenticated client publish under it — see the warning below.** |
+| `PUBLISH_SCOPES` | Required when `PUBLICATION_TARGET_URL` is set | Comma-separated allow-list of package scopes a client may publish (e.g. `@acme,@beta`) — the anti-shadowing guard. A publish whose name is outside the list is refused **before any upstream write**, so a client cannot publish a name that shadows a public package. It limits **names, not callers** — it is not authentication. An empty list with a publication target set is a fail-loud boot error. |
 | `MIRROR_QUEUE_PROVIDER` | No (default `sqs`) | Mirror-queue backend: `sqs` (AWS), or `memory` (a bounded in-process queue — no cloud queue, at the cost of a **non-durable, best-effort** mirror; an explicit choice for a simple/single-node/air-gapped deployment, never an automatic fallback — selecting it warns loudly at boot). `pubsub` (GCP) is recognised but not yet built. |
 | `MIRROR_QUEUE_URL` | Cloud backends only (`sqs`/`pubsub`) | Queue identifier: an SQS queue URL or a Pub/Sub `projects/<p>/topics/<t>` resource. **Required for the cloud backends** (absent ⇒ fail-loud at boot); **not needed for `memory`** (no external queue — ignored). |
 | `MIRROR_QUEUE_MEMORY_MAX_DEPTH` | No (default `50000`) | `memory` only. Cap on the in-process queue depth. A cold-cache `npm ci` enqueues thousands of jobs at once, so the queue is hard-bounded: an enqueue past the cap is **dropped (drop-newest)** — safe, since a dropped job is re-mirrored on the next demand — and rate-limit-logged. Positive integer. |
@@ -94,6 +97,17 @@ operator reference. **Keep the two in sync** when either changes.
 Configuration is **validated in full at startup, and the process refuses to start on any
 problem**: an unknown rule type, a bad URL, an unresolved policy reference. A
 misconfiguration is a loud, immediate failure, never a quietly mis-enforced policy.
+
+> ⚠️ **Protect the first-party publish surface.** If you enable publishing
+> (`PUBLICATION_TARGET_URL`), the `PUBLISH_SCOPES` allow-list limits **which package
+> names** may be published — it is **not** authentication and says nothing about **who**
+> may publish. A static `PUBLICATION_TARGET_TOKEN` combined with an **open edge** (no
+> `PROXY_AUTH_TOKEN`) therefore lets **any unauthenticated client publish** under the
+> operator's credential, within the allowed scopes. Écluse intentionally does **not**
+> block this (it cannot see your gateway / mesh / network policy), so **you must** protect
+> the publish surface — set `PROXY_AUTH_TOKEN`, **or** front Écluse with an authenticating
+> edge (API gateway, service mesh / mTLS, network policy). See
+> [Access model → Publishing](docs/architecture/access-model.md#publishing-the-publication-target-passthrough-write).
 
 ### The configuration document
 

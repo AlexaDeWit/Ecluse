@@ -5,11 +5,17 @@
 {- | The npm path grammar: the request router that maps an npm-native request
 path to a shared "Ecluse.Core.Server.Route".
 
-'classify' turns an npm request path — the already-mount-stripped, percent-decoded
-path segments — into a 'Route', so the whole npm routing table is unit-testable
-with __no server__: feed it segments, assert the 'Route'. The agnostic dispatcher
-carries a route classifier per mount; this module is npm's, wired in at the
-composition root.
+'classify' turns an npm request — its HTTP method and the already-mount-stripped,
+percent-decoded path segments — into a 'Route', so the whole npm routing table is
+unit-testable with __no server__: feed it a method and segments, assert the
+'Route'. The agnostic dispatcher carries a route classifier per mount; this module
+is npm's, wired in at the composition root.
+
+A @PUT \/{pkg}@ is the npm __publish__ request, so the method is part of the match:
+a @PUT@ over a bare-package path is a 'Publish', while every read method (@GET@,
+@HEAD@, …) over the same path is a 'Packument'. The read grammar below is otherwise
+method-independent — a @HEAD@ classifies like its @GET@, the dispatcher answering it
+bodiless.
 
 The model is __deny by default__: anything not explicitly recognised is
 'Unsupported' (a @404@ at the edge). Three npm-specific facts shape the matching,
@@ -37,7 +43,7 @@ all from the protocol research (see @docs\/research\/reverse-engineering\/npm.md
 
 Mount dispatch / prefix-stripping and the liveness\/readiness routes are handled
 in the agnostic web layer (see @docs\/architecture\/web-layer.md@); 'classify'
-only ever sees the npm-native path, so it models exactly the five 'Route's the
+only ever sees the npm-native request, so it models exactly the 'Route's the
 proxy serves.
 -}
 module Ecluse.Core.Registry.Npm.Route (
@@ -46,22 +52,45 @@ module Ecluse.Core.Registry.Npm.Route (
 ) where
 
 import Data.Text qualified as T
+import Network.HTTP.Types.Method (methodPut)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageName, mkPackageName, mkScope, unscopedName)
 import Ecluse.Core.Server.Route (Classifier, Filename (Filename), Route (..), isSafeComponent)
 import Ecluse.Core.Version (mkVersion)
 
-{- | Classify an npm-native request path into a shared 'Route'.
+{- | Classify an npm-native request (its method and path) into a shared 'Route'.
 
-Matching order is significant: reserved meta-routes (a leading @"-"@ segment)
-are tried first, since a real package name can never begin with @\'-\'@; only
-then is the path read as a package request. See the module header for the npm
-conventions this encodes.
+A @PUT@ is the publish method, so it is dispatched first: a @PUT@ over a
+bare-package path is a 'Publish', everything else under @PUT@ denies. Every other
+method reads, taking the path through the read grammar where matching order is
+significant — reserved meta-routes (a leading @"-"@ segment) are tried first, since
+a real package name can never begin with @\'-\'@; only then is the path read as a
+package request. See the module header for the npm conventions this encodes.
 -}
 classify :: Classifier
-classify ("-" : meta) = classifyMeta meta
-classify segments = classifyPackage segments
+classify method segments
+    | method == methodPut = classifyPublish segments
+    | otherwise = classifyRead segments
+
+{- Classify a read request's path (any non-@PUT@ method): reserved meta-routes
+first, then a package request. A @HEAD@ takes this same path as its @GET@ — the
+dispatcher answers it bodiless — so the read grammar is method-independent. -}
+classifyRead :: [Text] -> Route
+classifyRead ("-" : meta) = classifyMeta meta
+classifyRead segments = classifyPackage segments
+
+{- Classify a @PUT@ as an npm publish. npm publishes a package with @PUT \/{pkg}@,
+the version manifest and tarball carried in the body, so a publish is exactly a
+__bare-package__ path (no trailing segments) — both scoped encodings handled by
+'takePackage'. A @PUT@ to anything else (a tarball slot, a meta-route, trailing
+junk) is 'Unsupported' (deny by default); the version is /not/ read from the path
+here — it lives in the relayed document. -}
+classifyPublish :: [Text] -> Route
+classifyPublish segments =
+    case takePackage segments of
+        Just (name, []) -> Publish name
+        _ -> Unsupported
 
 {- Classify a reserved meta-route — the segments __after__ the leading @"-"@.
 Only the routes the proxy actually serves are recognised; every other meta-route

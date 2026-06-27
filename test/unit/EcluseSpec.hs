@@ -224,10 +224,10 @@ spec = do
         it "resolves npm to a binding whose prefix is derived from the ecosystem (/npm)" $
             -- The path prefix is derived from the ecosystem, never configured, so
             -- the npm binding is served under its own /npm prefix.
-            (bindingPrefix <$> mountBindingFor Npm Nothing) `shouldBe` Just ("npm" :| [])
+            (bindingPrefix <$> mountBindingFor Npm Nothing Nothing) `shouldBe` Just ("npm" :| [])
 
         it "has no binding for an ecosystem with no adapter wired (loud Nothing, not a stub)" $ do
             -- PyPI and RubyGems have no registry client or renderer yet, so resolving
             -- one is a Nothing the caller must handle — never a silently half-wired mount.
-            (bindingPrefix <$> mountBindingFor PyPI Nothing) `shouldBe` Nothing
-            (bindingPrefix <$> mountBindingFor RubyGems Nothing) `shouldBe` Nothing
+            (bindingPrefix <$> mountBindingFor PyPI Nothing Nothing) `shouldBe` Nothing
+            (bindingPrefix <$> mountBindingFor RubyGems Nothing Nothing) `shouldBe` Nothing
