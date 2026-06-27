@@ -341,7 +341,7 @@ A PR reaches the architect only when **all** hold:
 - [ ] CI `gate` (and every job it needs) green on the PR
 - [ ] Docs updated in the same PR; changes limited to the slice's file scope (other files only with strong justification)
 - [ ] Any GitHub issue the PR resolves is named in its description with a closing keyword (`Closes #N`), so the merge closes it — the tracker must not accrue resolved-but-open issues
-- [ ] Slice file `status:` advanced to `merged` (true once this PR lands) and any as-built delta — design decisions, discoveries, deviations from the acceptance criteria — recorded in it; the slice's `planning/slices/SNN-*.md` is part of the slice's file scope
+- [ ] **The slice-completing PR flips its own slice `status:` to `merged` in this same PR** — the merge is what makes `merged` true, so the flip and the as-built reconciliation **ride with the code**, never deferred to a later sweep — and folds in the as-built delta (design decisions, discoveries, deviations from the acceptance criteria); the slice's `planning/slices/SNN-*.md` is part of the slice's file scope. A slice left reading `not-started`/`in-review` after its PR merged is a hand-off defect, caught at GATE.
 - [ ] Commits GPG-signed + DCO `Signed-off-by` (`git commit -s`) + Conventional Commits
 - [ ] PR taken **out of draft and marked ready for review** — the hand-off itself, done only once every box above holds; until then the PR stays a **draft** so it is never mistaken for review-ready
 
@@ -384,7 +384,13 @@ Escalations arrive **decision-ready**:
   the repo's `DCO` status check gates on it), **Conventional Commits** (`type(scope): summary`).
 - **Semgrep clean** before every push; ignores need the architect's approval.
 - GitHub Actions **SHA-pinned**; workflows kept **injection-free**.
-- Documentation updated in the **same** PR as the change it describes.
+- Documentation updated in the **same** PR as the change it describes — and that
+  includes the **planning record**: a PR that completes a slice **flips that slice's
+  `status:` to `merged` and folds in its as-built delta in the very same PR**, because the
+  merge is precisely what makes `merged` true. The slice file, the affected architecture /
+  `docs/` pages, and any `delivery-plan.md` "In flight" pointer move **with** the code, not
+  in a follow-up reconciliation. The team lead verifies this at GATE; a merged slice still
+  reading `not-started` is drift the per-PR loop was supposed to prevent.
 - Generated artifacts (e.g. version-ordering fixtures via
   `make gen-version-fixtures`) are regenerated with their tooling, never
   hand-edited.
