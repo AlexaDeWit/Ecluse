@@ -467,12 +467,12 @@
           docs = hlib.doHaddock (hlib.dontCheck ecluseRaw);
         };
 
-        # Full shell for humans: lean CI set + IDE + release + scan + workflow-lint + weeder.
+        # Full shell for humans: lean CI set + IDE + release + scan + workflow-lint + weeder + stan.
         devShells.default = pkgs.mkShell (shellEnv // {
           name = "ecluse";
           buildInputs =
             ciInputs ++ ideInputs ++ releaseInputs ++ scanInputs ++ workflowLintInputs
-            ++ docsInputs ++ [ hpkgs.weeder ];
+            ++ docsInputs ++ [ hpkgs.weeder hpkgs.stan ];
           # Path to the pinned Mermaid bundle; `make site` copies it into _site/vendor.
           MERMAID_JS = "${mermaidJs}";
         });
@@ -522,6 +522,15 @@
         devShells.weeder = pkgs.mkShell (shellEnv // {
           name = "ecluse-weeder";
           buildInputs = ciInputs ++ [ hpkgs.weeder ];
+        });
+
+        # Shell for the `stan` job: the CI toolchain (to build the .hie files Stan
+        # reads) plus Stan itself from the same GHC 9.10 set as the compiler that
+        # produced them, and jq (the `make stan` fail-wrapper counts findings from
+        # Stan's JSON output). CI enters it with `nix develop .#stan`.
+        devShells.stan = pkgs.mkShell (shellEnv // {
+          name = "ecluse-stan";
+          buildInputs = ciInputs ++ [ hpkgs.stan pkgs.jq ];
         });
 
         # Lean shell for the release workflow. release.yml enters it with

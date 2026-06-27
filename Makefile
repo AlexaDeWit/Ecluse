@@ -27,7 +27,7 @@ HADDOCK_FLAGS := --haddock-hyperlink-source --haddock-quickjump
         coverage coverage-unit freeze gen-version-fixtures new-worktree format format-check lint sast \
         cabal-check lint-workflows lint-scripts weeder check gate run docs \
         docs-check docs-site site nix-build nix-check docker-build docker-push sbom scan \
-        scan-vulnix clean version tag
+        scan-vulnix clean version tag stan stan-all
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -194,6 +194,25 @@ lint-scripts: ## Lint shell scripts (shellcheck)
 weeder: ## Report app-unreachable library code (weeder; informational, non-gating)
 	$(NIX) cabal build exe:ecluse --builddir=dist-weeder --ghc-options=-fwrite-ide-info
 	$(NIX) weeder --hie-directory dist-weeder
+
+# Stan: Haskell static analysis over GHC HIE files — partial functions and potential
+# bugs that Semgrep (no Haskell) and hlint (no type info) miss. Scoped by .stan.toml
+# to a Warning floor (Style/Performance space-leak noise excluded). FAILS on any
+# finding (a visible signal); the CI `stan` job runs this but is NOT a `gate`
+# dependency, so it never blocks a merge. `make stan-all` shows the full set. Like
+# weeder it reads .hie, built once here into dist-stan.
+stan: ## Haskell static analysis (stan; FAILS on findings, never gates; perf detail: stan-all)
+	$(NIX) cabal build exe:ecluse --builddir=dist-stan --ghc-options=-fwrite-ide-info
+	$(NIX) stan --hiedir dist-stan
+	@n="$$($(NIX) bash -c 'stan --hiedir dist-stan --json-output | jq ".observations | length"')"; \
+	  if [ "$$n" -gt 0 ]; then echo "stan: $$n finding(s) above the configured floor (non-gating job fails)"; exit 1; fi; \
+	  echo "stan: clean at the configured floor"
+
+# The full Stan report: every severity, including the Performance/space-leak findings
+# the .stan.toml floor hides (e.g. STAN-0206 non-strict fields). Informational only.
+stan-all: ## Full stan report incl Performance/space-leak (informational; ignores .stan.toml)
+	$(NIX) cabal build exe:ecluse --builddir=dist-stan --ghc-options=-fwrite-ide-info
+	$(NIX) stan --hiedir dist-stan --no-default
 
 check: build test doctest format-check lint sast cabal-check lint-workflows lint-scripts ## Fast pre-push checks: the gate minus its Docker integration + Haddock tiers (see gate)
 
