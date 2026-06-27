@@ -92,6 +92,17 @@ abbreviatedPackumentSpec = describe "AbbreviatedPackument" $ do
         b <- decodeFixture @AbbreviatedPackument "is-odd.abbreviated.json"
         a `shouldBe` b
 
+    it "drops a version broken in a required field, keeping the healthy one" $ do
+        -- The abbreviated form degrades element-wise too: 2.0.0 carries no dist
+        -- (a required field), so it is dropped while 1.0.0 still decodes.
+        pk <-
+            decodeOrFail @AbbreviatedPackument
+                "{\"name\":\"mix\",\"modified\":\"2026-01-01T00:00:00.000Z\"\
+                \,\"dist-tags\":{\"latest\":\"1.0.0\"},\"versions\":{\
+                \\"1.0.0\":{\"name\":\"mix\",\"version\":\"1.0.0\",\"dist\":{\"tarball\":\"https://r/mix-1.0.0.tgz\"}},\
+                \\"2.0.0\":{\"name\":\"mix\",\"version\":\"2.0.0\"}}}"
+        Map.keys (apkmtVersions pk) `shouldBe` ["1.0.0"]
+
 -- ── full packument ───────────────────────────────────────────────────────────
 
 fullPackumentSpec :: Spec
@@ -151,6 +162,18 @@ fullPackumentSpec = describe "Packument (full)" $ do
         a <- decodeFixture @Packument "is-odd.full.json"
         b <- decodeFixture @Packument "is-odd.full.json"
         a `shouldBe` b
+
+    it "drops a version broken in a required field, keeping the healthy one" $ do
+        -- A version with a non-object dist and another that is a bare scalar are
+        -- each dropped element-wise, so the healthy 1.0.0 still decodes: one
+        -- poisoned version never denies the whole packument.
+        pk <-
+            decodeOrFail @Packument
+                "{\"name\":\"mix\",\"dist-tags\":{\"latest\":\"1.0.0\"},\"versions\":{\
+                \\"1.0.0\":{\"name\":\"mix\",\"version\":\"1.0.0\",\"dist\":{\"tarball\":\"https://r/mix-1.0.0.tgz\"}},\
+                \\"2.0.0\":{\"name\":\"mix\",\"version\":\"2.0.0\",\"dist\":5},\
+                \\"3.0.0\":42}}"
+        Map.keys (pkmtVersions pk) `shouldBe` ["1.0.0"]
 
 -- ── version manifest ─────────────────────────────────────────────────────────
 

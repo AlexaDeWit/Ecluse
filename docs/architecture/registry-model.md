@@ -273,6 +273,39 @@ than a finished typed document the serve layer would have to re-encode (which wo
 drop unmodeled fields). Each stage carries its raw `Value` alongside the typed view
 so losslessness survives the whole pipeline.
 
+### Graceful degradation: per-version, not per-package
+
+Écluse is a resilience proxy: a hostile or malformed upstream must not be able to
+take a healthy package **offline**. Decoding the upstream packument into the
+decision surface is therefore deliberately **lenient at the version granularity**,
+with a clear fail-closed boundary:
+
+- **Advisory fields degrade, the version survives.** A version's non-rule-decisive,
+  non-serving-decisive `dist` sub-fields (`unpackedSize`, `fileCount`,
+  `signatures`) are decoded leniently in the wire layer: a present-but-undecodable
+  value (a fractional/huge/`Int`-overflowing number, a wrong-typed field, a
+  malformed or non-array `signatures`) reads as absent/empty rather than failing
+  the version.
+- **A version broken in a required/security-decisive field is dropped.** If a
+  version's manifest cannot be decoded in a load-bearing field (no `dist` or
+  `tarball`, an unusable `version`), that **single version** is dropped from the
+  decision surface. Because presence in the decision surface is what makes a
+  version a serve-candidate, a dropped version is automatically excluded from the
+  served body (`applyFilterPlan` restricts `versions`/`time` to the survivors). This
+  is **fail-closed for that version**: a version that cannot be decoded cannot be
+  evaluated for integrity, CVEs, or rules, so it is never served unverifiable —
+  while every healthy sibling version keeps serving.
+- **The package is denied wholesale only if the top-level document is unusable.**
+  A body that is not a JSON object, an absent/empty top-level `name`, or a
+  `versions` that is not an object at all leaves nothing identifiable to serve, so
+  it degrades exactly like the existing undecodable-packument path (and, for a
+  *present-but-different* name, the name-mismatch degrade above).
+
+This turns the general "one poisoned version denies the whole package"
+denial-of-service class into a per-version drop. Per-version drops are currently
+**silent**; surfacing them as telemetry (comparing the raw versus decoded version
+count) is a noted follow-up.
+
 ### Registry-level composition (optional, never required)
 
 The merge is an **Écluse-level capability**, so a correct deployment needs nothing

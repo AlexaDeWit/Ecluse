@@ -90,6 +90,7 @@ import Data.Aeson (
  )
 import Data.Aeson.Key (Key)
 import Data.Aeson.Types (Parser, parseMaybe)
+import Data.Map.Strict qualified as Map
 import Data.Time (UTCTime)
 
 -- ── shared scalars ───────────────────────────────────────────────────────────
@@ -378,6 +379,18 @@ deprecatedNotice = \case
     Just (Bool True) -> Just ""
     _ -> Nothing
 
+{- Decode the @versions@ map __element-wise leniently__: read it as a raw map of
+version key to 'Value', then keep only the entries that parse as a 'VersionManifest',
+dropping any that do not. A version whose manifest is missing or malformed in a
+required field (no @dist@\/@tarball@, an unusable @name@\/@version@) is __dropped__
+rather than failing the whole packument, so one poisoned version cannot deny the
+others. An absent @versions@ is the empty map; a @versions@ that is not an object at
+all still fails the decode (the document is not a usable packument). -}
+lenientVersionMap :: Object -> Parser (Map Text VersionManifest)
+lenientVersionMap o = do
+    raw <- o .:? "versions" .!= mempty -- Map Text Value: each version object kept raw
+    pure (Map.mapMaybe (parseMaybe parseJSON) raw) -- drop the entries that will not decode
+
 -- ── packuments ───────────────────────────────────────────────────────────────
 
 {- | The __full__ packument: @GET \/{pkg}@ with @Accept: application\/json@ (or
@@ -400,7 +413,10 @@ data Packument = Packument
     , pkmtDistTags :: Map Text Text
     -- ^ The @dist-tags@ map (tag to version); __always__ includes @"latest"@.
     , pkmtVersions :: Map Text VersionManifest
-    -- ^ Every published version, keyed by its exact version string.
+    {- ^ Every published version that decodes, keyed by its exact version string. A
+    version whose manifest is malformed in a required field is __dropped__ (see
+    'lenientVersionMap'), so one poisoned version never denies the rest.
+    -}
     , pkmtTime :: Map Text UTCTime
     {- ^ Publish timestamps: @"created"@, @"modified"@, and one entry per
     version key. The source of truth for publish age.
@@ -427,7 +443,7 @@ instance FromJSON Packument where
         Packument
             <$> o .: "name"
             <*> o .:? "dist-tags" .!= mempty
-            <*> o .:? "versions" .!= mempty
+            <*> lenientVersionMap o
             <*> o .:? "time" .!= mempty
             <*> o .:? "maintainers" .!= []
             <*> o .:? "description"
@@ -457,8 +473,9 @@ data AbbreviatedPackument = AbbreviatedPackument
     , apkmtDistTags :: Map Text Text
     -- ^ The @dist-tags@ map (tag to version), as in the full form.
     , apkmtVersions :: Map Text VersionManifest
-    {- ^ Every published version (abbreviated subset of fields), keyed by exact
-    version string.
+    {- ^ Every published version that decodes (abbreviated subset of fields), keyed
+    by exact version string. As in the full form, a version whose manifest is
+    malformed in a required field is __dropped__ (see 'lenientVersionMap').
     -}
     }
     deriving stock (Eq, Show)
@@ -469,7 +486,7 @@ instance FromJSON AbbreviatedPackument where
             <$> o .: "name"
             <*> o .: "modified"
             <*> o .:? "dist-tags" .!= mempty
-            <*> o .:? "versions" .!= mempty
+            <*> lenientVersionMap o
 
 -- ── errors ───────────────────────────────────────────────────────────────────
 
