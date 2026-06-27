@@ -1,5 +1,9 @@
 module Ecluse.WireSpec (spec) where
 
+import Prelude hiding (universe)
+
+import Data.Universe.Class (Universe (..))
+import Data.Universe.Generic (universeGeneric)
 import Test.Hspec
 
 import Ecluse.Core.Wire (WireVocab (..), parseWire, renderWire)
@@ -15,7 +19,9 @@ data Direction
     | South
     | East
     | West
-    deriving stock (Bounded, Enum, Eq, Show)
+    deriving stock (Eq, Generic, Show)
+
+instance Universe Direction where universe = universeGeneric
 
 instance WireVocab Direction where
     wireKind = "direction"
@@ -60,7 +66,7 @@ spec = do
 
     describe "round trip" $
         it "parseWire . renderWire is the identity for every value" $
-            for_ [minBound .. maxBound] $ \d ->
+            for_ universe $ \d ->
                 parseWire (renderWire d) `shouldBe` Right (d :: Direction)
 
 {- | A deliberately incomplete vocabulary: 'Two' is absent from the table, so it
