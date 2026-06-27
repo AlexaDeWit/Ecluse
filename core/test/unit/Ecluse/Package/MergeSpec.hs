@@ -110,6 +110,13 @@ validSha1Of label =
 validSha256Of label =
     decodeUtf8 (convertToBase Base16 (hash (encodeUtf8 label :: ByteString) :: Digest SHA256) :: ByteString)
 
+-- A well-formed sha256 SRI (@sha256-\<base64\>@) deterministically derived from a label —
+-- the SRI encoding of a sha256 digest a recomputing mirror serves in place of, or beside,
+-- npm's sha512.
+validSha256SriOf :: Text -> Text
+validSha256SriOf label =
+    "sha256-" <> decodeUtf8 (convertToBase Base64 (hash (encodeUtf8 label :: ByteString) :: Digest SHA256) :: ByteString)
+
 -- Mnemonic SRI tokens (each a distinct, well-formed sha512 SRI), named for the role
 -- each plays in the collision / divergence tests.
 sriAaa, sriBbb, sriCcc, sriPriv, sriPrivate, sriPub, sriPublic, sriSame :: Text
@@ -139,6 +146,13 @@ sha1Abc, sha1Dead, sha256Def :: Text
 sha1Abc = validSha1Of "abc"
 sha1Dead = validSha1Of "deadbeef"
 sha256Def = validSha256Of "def"
+
+-- The fingerprint pair an SRI digest resolves to under the merge's keying: its embedded
+-- algorithm (via 'sriAlgorithm') and its base64 body (via 'sriBody'), as 'integrityHashes'
+-- reads them back. The mnemonic fixtures are all well-formed SRIs, so the algorithm is
+-- always 'Just'.
+sriPair :: Text -> (Maybe HashAlg, Text)
+sriPair s = (sriAlgorithm s, sriBody s)
 
 -- ── small accessors ──────────────────────────────────────────────────────────
 
@@ -315,8 +329,8 @@ spec = do
             case Set.toList . mpDivergences <$> plan of
                 Just [d] -> do
                     divVersion d `shouldBe` "1.0.0"
-                    integrityHashes (divWinning d) `shouldBe` [(SRI, sriPrivate)]
-                    integrityHashes (divLosing d) `shouldBe` [(SRI, sriPublic)]
+                    integrityHashes (divWinning d) `shouldBe` [sriPair sriPrivate]
+                    integrityHashes (divLosing d) `shouldBe` [sriPair sriPublic]
                 other -> expectationFailure ("expected exactly one divergence, got " <> show other)
 
     describe "divergence compares on shared algorithms, not the whole digest set" $ do
@@ -386,9 +400,35 @@ spec = do
              in case Set.toList . mpDivergences <$> mergePackuments [trusted, gated] of
                     Just [d] -> do
                         divVersion d `shouldBe` "1.0.0"
-                        integrityHashes (divWinning d) `shouldBe` [(SRI, sriX), (SRI, sriY)]
-                        integrityHashes (divLosing d) `shouldBe` [(SRI, sriX)]
+                        integrityHashes (divWinning d) `shouldBe` sort [sriPair sriX, sriPair sriY]
+                        integrityHashes (divLosing d) `shouldBe` [sriPair sriX]
                     other -> expectationFailure ("expected exactly one divergence, got " <> show other)
+
+    describe "divergence keys on the resolved algorithm, not the raw digest tag" $ do
+        -- The comparison resolves each digest to the algorithm it asserts and compares
+        -- the digest body under that resolved key, so an SRI is bucketed by its embedded
+        -- algorithm rather than the opaque SRI wrapper tag. This closes a live false
+        -- positive (different algorithms over the same bytes) and a latent false negative
+        -- (one algorithm expressed two ways).
+
+        it "a sha256 SRI and a sha512 SRI for the same bytes are asymmetric, not a divergence" $ do
+            -- A private mirror that recomputes integrity as sha256 and a public copy
+            -- serving sha512 over the same bytes share NO resolved algorithm, so the
+            -- digest sets are asymmetric — not a contradiction. (Keying on the raw SRI tag
+            -- bucketed both under one tag with differing strings and spuriously diverged.)
+            let trusted = (TrustedSource, packumentWith [("1.0.0", [unsafeHash SRI (validSha256SriOf "same")])])
+                gated = (GatedSource, packumentWith [("1.0.0", [unsafeHash SRI (validSriOf "same")])])
+            (mpDivergences <$> mergePackuments [trusted, gated]) `shouldBe` Just Set.empty
+
+        it "a hex SHA-256 and an sha256 SRI that disagree are a divergence (same resolved algorithm)" $ do
+            -- One upstream expresses SHA-256 as a hex Hash, the other as an sha256 SRI,
+            -- with different digests. Both resolve to SHA-256, so the contradiction is
+            -- caught. (Keying on the raw tag put them under different tags — SHA256 vs SRI
+            -- — so a genuine same-algorithm contradiction was silently missed.)
+            let trusted = (TrustedSource, packumentWith [("1.0.0", [unsafeHash SHA256 (validSha256Of "aaa")])])
+                gated = (GatedSource, packumentWith [("1.0.0", [unsafeHash SRI (validSha256SriOf "bbb")])])
+                plan = mergePackuments [trusted, gated]
+            (map divVersion . Set.toList . mpDivergences <$> plan) `shouldBe` Just ["1.0.0"]
 
     describe "precedence is by provenance, not input order" $ do
         -- dist-tags and time must resolve collisions by provenance (trusted wins),
@@ -670,8 +710,8 @@ spec = do
             case Set.toList . mpDivergences <$> plan of
                 Just [d] -> do
                     divVersion d `shouldBe` "1.0.0"
-                    integrityHashes (divWinning d) `shouldBe` [(SRI, sriPriv)]
-                    integrityHashes (divLosing d) `shouldBe` [(SRI, sriPub)]
+                    integrityHashes (divWinning d) `shouldBe` [sriPair sriPriv]
+                    integrityHashes (divLosing d) `shouldBe` [sriPair sriPub]
                 other -> expectationFailure ("expected one divergence, got " <> show other)
 
         it "the merged set is the mixed-provenance union trusted ∪ filtered(public)" $ do
@@ -700,8 +740,8 @@ spec = do
             (winnerOf "1.0.0" =<< plan) `shouldBe` Just 0
             let expected =
                     Set.fromList
-                        [ ("1.0.0", [(SRI, sriT)], [(SRI, sriG1)])
-                        , ("1.0.0", [(SRI, sriT)], [(SRI, sriG2)])
+                        [ ("1.0.0", [sriPair sriT], [sriPair sriG1])
+                        , ("1.0.0", [sriPair sriT], [sriPair sriG2])
                         ]
                 actual =
                     Set.map
@@ -800,8 +840,8 @@ spec = do
                 b = (GatedSource, packument [("1.0.0", sriCapB)])
                 forward = Set.toList . mpDivergences <$> mergePackuments [a, b]
                 backward = Set.toList . mpDivergences <$> mergePackuments [b, a]
-            (map (integrityHashes . divWinning) <$> forward) `shouldBe` Just [[(SRI, sriCapA)]]
-            (map (integrityHashes . divWinning) <$> backward) `shouldBe` Just [[(SRI, sriCapB)]]
+            (map (integrityHashes . divWinning) <$> forward) `shouldBe` Just [[sriPair sriCapA]]
+            (map (integrityHashes . divWinning) <$> backward) `shouldBe` Just [[sriPair sriCapB]]
 
 {- | Sources with pairwise-disjoint version keys, so the merge is a pure set union
 with no collisions — the regime in which order cannot matter at all.

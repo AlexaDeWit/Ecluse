@@ -75,13 +75,16 @@ import Data.Time (UTCTime)
 
 import Ecluse.Core.Package (
     Artifact (..),
-    HashAlg,
+    Hash,
+    HashAlg (SRI),
     PackageDetails (..),
     PackageInfo (..),
     PackageName,
     hashAlg,
     hashValue,
+    sriBody,
  )
+import Ecluse.Core.Package.Integrity (assertedAlg)
 import Ecluse.Core.Version (Version, selectLatest, unVersion)
 
 {- | The trust provenance of an upstream's contribution to the merge. The split
@@ -186,30 +189,44 @@ data MergePlan = MergePlan
     }
     deriving stock (Eq, Show)
 
-{- | An order-independent fingerprint of a version's artifact integrity: the
-sorted multiset of @(algorithm, digest)@ pairs across all of the version's
-artifacts. The comparison ignores artifact ordering and non-integrity fields
-(filename, URL, size) that legitimately vary between mirrors of the same bytes.
+{- | An order-independent fingerprint of a version's artifact integrity: the sorted
+multiset of @(resolved algorithm, comparable digest body)@ pairs across all of the
+version's artifacts. Each digest is keyed by the algorithm it /asserts/
+('Ecluse.Core.Package.Integrity.assertedAlg' — a hex 'Ecluse.Core.Package.Hash''s tag, or
+the algorithm an SRI string embeds), __not__ by its raw 'HashAlg' wrapper tag, so an
+@sha256-…@ SRI and a hex SHA-256 digest bucket together under 'SHA256' while an @sha256-…@
+and an @sha512-…@ SRI bucket apart. A digest that asserts no algorithm (a bare or
+malformed SRI) keys under 'Nothing' — its own bucket — so an unknown digest never merges
+with a real algorithm (the fail-closed reading). The /body/ is the comparable digest: an
+SRI's base64 body (without its @\<alg\>-@ prefix) or a hex digest's raw value, which is
+uniform within any shared resolved algorithm, so comparing bodies is sound. The
+comparison ignores artifact ordering and non-integrity fields (filename, URL, size) that
+legitimately vary between mirrors of the same bytes.
 
-Two copies /diverge/ when they __contradict on a shared algorithm__: an algorithm
-present in both carries disagreeing digests. An /asymmetric/ pair — one copy
-exposing an algorithm the other omits — does __not__ diverge on that account; only a
-shared algorithm whose digests disagree does. So a mirror serving a modern digest
-alongside a legacy one agrees with a mirror serving only the modern digest, as long
-as that shared digest matches.
+Two copies /diverge/ when they __contradict on a shared resolved algorithm__: an
+algorithm both assert carries disagreeing bodies. An /asymmetric/ pair — one copy
+asserting an algorithm the other omits, including a mirror that recomputed integrity
+under a /different/ algorithm — does __not__ diverge on that account; only a shared
+resolved algorithm whose bodies disagree does. So a mirror serving a modern digest
+alongside a legacy one agrees with a mirror serving only the modern digest, as long as
+that shared digest matches.
 
-Opaque so the comparison used for divergence detection cannot be sidestepped; read
-the pairs back with 'integrityHashes' when logging or metering a 'Divergence'. 'Ord'
-is derived (structurally, over the sorted pairs) only so a 'Divergence' may live in a
+Opaque so the comparison used for divergence detection cannot be sidestepped; read the
+pairs back with 'integrityHashes' when logging or metering a 'Divergence'. 'Ord' is
+derived (structurally, over the sorted pairs) only so a 'Divergence' may live in a
 'Set'; it carries no domain meaning beyond that, and in particular is __not__ the
 divergence test (which is the shared-algorithm contradiction above, never structural
 inequality of the whole set).
 -}
-newtype IntegrityFingerprint = IntegrityFingerprint [(HashAlg, Text)]
+newtype IntegrityFingerprint = IntegrityFingerprint [(Maybe HashAlg, Text)]
     deriving stock (Eq, Ord, Show)
 
--- | The @(algorithm, digest)@ pairs of a fingerprint, sorted, for an audit trail.
-integrityHashes :: IntegrityFingerprint -> [(HashAlg, Text)]
+{- | The @(resolved algorithm, comparable digest body)@ pairs of a fingerprint, sorted,
+for an audit trail. The algorithm is the one each digest /asserts/ ('Nothing' when it
+asserts none); the body is its comparable form (an SRI's base64 body, a hex digest's
+raw value).
+-}
+integrityHashes :: IntegrityFingerprint -> [(Maybe HashAlg, Text)]
 integrityHashes (IntegrityFingerprint hs) = hs
 
 {- | The trust-then-position rank of a contribution, the strict total order the
@@ -525,8 +542,11 @@ planFrom acc = do
         Map.filterWithKey (\k _ -> survives k) (Map.map rankedValue (mergeTime acc))
 
 -- The order-independent integrity fingerprint of a version: every artifact's
--- @(algorithm, digest)@ pairs, gathered across all artifacts and sorted, so the
--- comparison is stable regardless of artifact or hash ordering on the wire.
+-- @(resolved algorithm, comparable digest body)@ pairs, gathered across all artifacts
+-- and sorted, so the comparison is stable regardless of artifact or hash ordering on the
+-- wire. Each digest is keyed by the algorithm it asserts ('assertedAlg'), not its raw
+-- wrapper tag, and compared by its body ('comparableBody'), so the divergence test
+-- reasons over what each digest actually claims, never over the opaque SRI tag.
 fingerprint :: PackageDetails -> IntegrityFingerprint
 fingerprint =
     IntegrityFingerprint
@@ -535,21 +555,35 @@ fingerprint =
         . toList
         . pkgArtifacts
   where
-    artHashPairs art = [(hashAlg h, hashValue h) | h <- artHashes art]
+    artHashPairs art = [(assertedAlg h, comparableBody h) | h <- artHashes art]
 
--- Whether two fingerprints contradict: some algorithm carried by /both/ has
--- disagreeing digests. This is the divergence test. Only a shared algorithm whose
--- digests disagree counts — an asymmetric pair that merely adds or omits an algorithm
--- one side lacks does not contradict, because the same bytes can be described by
--- different sets of digests (an older mirror serving only a legacy shasum, a newer one
--- serving that shasum alongside a modern SRI). The comparison is per algorithm over the
--- set of digests offered for it, so it is symmetric and ignores algorithms present on
--- only one side; a weak digest agreeing therefore never suppresses a contradicting
--- strong one, and a strong digest agreeing makes the asymmetric weak one irrelevant.
+-- The comparable digest body for keying: an SRI's base64 body (the bytes its algorithm
+-- digests, without the @\<alg\>-@ prefix) or a hex digest's raw value. Within a shared
+-- resolved algorithm the encoding is uniform in practice (sha1 hex on both sides,
+-- sha256\/sha512 SRI base64 on both sides), so comparing bodies is correct.
+comparableBody :: Hash -> Text
+comparableBody h = case hashAlg h of
+    SRI -> sriBody (hashValue h)
+    _ -> hashValue h
+
+-- Whether two fingerprints contradict: some /resolved algorithm/ carried by /both/ has
+-- disagreeing digest bodies. This is the divergence test. The key is the algorithm each
+-- digest asserts ('assertedAlg'), so a digest is compared only against another that
+-- claims the same algorithm; 'Nothing' (a digest asserting no algorithm) is its own key,
+-- so an unknown digest only ever compares with another unknown one and never collapses
+-- onto a real algorithm. Only a shared resolved algorithm whose bodies disagree counts —
+-- an asymmetric pair that merely adds or omits an algorithm one side lacks (including a
+-- mirror that recomputed integrity under a different algorithm) does not contradict,
+-- because the same bytes can be described by different sets of digests (an older mirror
+-- serving only a legacy shasum, a newer one serving that shasum alongside a modern SRI).
+-- The comparison is per resolved algorithm over the set of bodies offered for it, so it
+-- is symmetric and ignores algorithms present on only one side; a weak digest agreeing
+-- therefore never suppresses a contradicting strong one, and a strong digest agreeing
+-- makes the asymmetric weak one irrelevant.
 contradicts :: IntegrityFingerprint -> IntegrityFingerprint -> Bool
 contradicts a b =
     or (Map.intersectionWith (/=) (digestsByAlg a) (digestsByAlg b))
   where
-    digestsByAlg :: IntegrityFingerprint -> Map HashAlg (Set Text)
+    digestsByAlg :: IntegrityFingerprint -> Map (Maybe HashAlg) (Set Text)
     digestsByAlg (IntegrityFingerprint pairs) =
         Map.fromListWith Set.union [(alg, Set.singleton digest) | (alg, digest) <- pairs]
