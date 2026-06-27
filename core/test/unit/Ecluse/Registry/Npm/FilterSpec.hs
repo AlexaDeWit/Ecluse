@@ -28,10 +28,10 @@ import Ecluse.Core.Registry.Npm.Filter (
  )
 import Ecluse.Core.Registry.Npm.Project (parsePackageInfo)
 import Ecluse.Core.Rules.Types (
-    Decision (Approved),
+    Decision (Admitted),
     EvalContext (EvalContext),
     PrecededRule,
-    Rule (AllowIfPublishedBefore),
+    PureRule (AllowIfPublishedBefore),
     atDefaultPrecedence,
  )
 
@@ -739,7 +739,7 @@ distTag tag = lookupTag tag . rawObject
 
 isApproved :: Decision -> Bool
 isApproved = \case
-    Approved{} -> True
+    Admitted{} -> True
     _ -> False
 
 -- ── hedgehog lift helpers ────────────────────────────────────────────────────

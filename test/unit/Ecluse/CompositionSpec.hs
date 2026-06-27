@@ -478,7 +478,9 @@ composeBindingsSpec = describe "planMounts / composeBindings (config-driven serv
         env <- expectEnv staticEnvVars
         planFrom env Nothing >>= \case
             Right [binding] -> case bindingPackumentDeps binding of
-                Just deps -> pdRules deps `shouldSatisfy` (not . null)
+                -- 'Rule IO' has no 'Show' (it carries a function), so assert on the
+                -- count rather than the rules themselves.
+                Just deps -> null (pdRules deps) `shouldBe` False
                 Nothing -> expectationFailure "expected packument deps wired"
             other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
 

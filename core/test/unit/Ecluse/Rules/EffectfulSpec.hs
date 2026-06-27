@@ -5,7 +5,7 @@ import Data.Time (UTCTime (..), addUTCTime, fromGregorian, nominalDay)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (throwString)
 
-import Hedgehog (forAll, (===))
+import Hedgehog (Gen, forAll, (===))
 import Hedgehog qualified as H
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
@@ -14,8 +14,11 @@ import Test.Hspec.Hedgehog (hedgehog)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package
-import Ecluse.Core.Rules.Effectful
-import Ecluse.Core.Rules.Types
+import Ecluse.Core.Rules
+
+-- This spec builds engine 'Rule' records, whose @rulePrecedence@ field would clash
+-- with config's 'PrecededRule' field of the same name; the latter is hidden here.
+import Ecluse.Core.Rules.Types hiding (rulePrecedence)
 import Ecluse.Core.Version (mkVersion)
 
 -- | A fixed "now" so the breaker's cooldown arithmetic is deterministic.
@@ -44,7 +47,7 @@ sampleArtifact =
         }
 
 {- | A package version under an optional npm scope, published @ageDays@ days before
-'now'. The pure-rule signals (scope, age, install-code) are the axes the tiers gate
+'now'. The pure-rule signals (scope, age, install-code) are the axes evaluation gates
 on; everything else is fixed.
 -}
 pkg :: Maybe Text -> Integer -> PackageDetails
@@ -72,32 +75,37 @@ fastConfig =
         , ecBreakerCooldown = 30
         }
 
-{- | Build an effectful rule with a fresh breaker, a fixed-outcome (or failing) eval,
-and the given precedence and failure policy. The eval ignores the version.
+{- | Build a resilient (effectful) rule with a fresh breaker, the given precedence,
+config, failure alignment, and eval, observed through the given breaker reporter. The
+eval ignores the evaluation context (the rules under test read only the package).
 -}
-mkRule :: Text -> EffectfulConfig -> FailurePolicy -> (PackageDetails -> IO RuleOutcome) -> IO EffectfulRule
-mkRule name cfg policy eval = do
+mkRuleR ::
+    BreakerReporter -> Text -> Int -> EffectfulConfig -> FailureAlignment -> (PackageDetails -> IO RuleResult) -> IO (Rule IO)
+mkRuleR reporter name prec cfg align eval = do
     breaker <- newBreaker
     pure
-        EffectfulRule
-            { erName = name
-            , erEval = eval
-            , erConfig = cfg
-            , erOnError = policy
-            , erBreaker = breaker
-            , erBreakerReporter = noBreakerReporter
+        Rule
+            { rulePrecedence = prec
+            , ruleName = name
+            , ruleEval = \_ pd -> eval pd
+            , ruleResilience = Just (Resilience cfg align breaker reporter)
             }
 
--- | An effectful rule that always returns the given pure outcome (no IO failure).
-constRule :: Text -> EffectfulConfig -> FailurePolicy -> RuleOutcome -> IO EffectfulRule
-constRule name cfg policy outcome = mkRule name cfg policy (\_ -> pure outcome)
+-- | As 'mkRuleR', through the inert default reporter.
+mkRule :: Text -> Int -> EffectfulConfig -> FailureAlignment -> (PackageDetails -> IO RuleResult) -> IO (Rule IO)
+mkRule = mkRuleR noBreakerReporter
+
+-- | An effectful rule that always returns the given clean result (no IO failure).
+constRule :: Text -> Int -> EffectfulConfig -> FailureAlignment -> RuleResult -> IO (Rule IO)
+constRule name prec cfg align outcome = mkRule name prec cfg align (\_ -> pure outcome)
 
 -- | An effectful rule whose IO always throws (its source is down).
-failingRule :: Text -> EffectfulConfig -> FailurePolicy -> IO EffectfulRule
-failingRule name cfg policy = mkRule name cfg policy (\_ -> throwString "source down")
+failingRule :: Text -> Int -> EffectfulConfig -> FailureAlignment -> IO (Rule IO)
+failingRule name prec cfg align = mkRule name prec cfg align (\_ -> throwString "source down")
 
-at :: Int -> EffectfulRule -> PrecededEffectfulRule
-at = PrecededEffectfulRule
+-- | A pure rule lifted into the engine's rule shape at a precedence.
+pureAt :: Int -> PureRule -> Rule IO
+pureAt prec pr = liftPureRule (PrecededRule prec pr)
 
 -- | A capturing breaker reporter appending each reported state to its log (oldest first).
 capturingBreakerReporter :: IO (IORef [Breaker], BreakerReporter)
@@ -105,38 +113,48 @@ capturingBreakerReporter = do
     breakerLog <- newIORef []
     pure (breakerLog, BreakerReporter (\b -> modifyIORef' breakerLog (<> [b])))
 
--- | As 'mkRule', but observing the rule's breaker through the given reporter.
-mkReportingRule ::
-    BreakerReporter -> Text -> EffectfulConfig -> FailurePolicy -> (PackageDetails -> IO RuleOutcome) -> IO EffectfulRule
-mkReportingRule reporter name cfg policy eval = do
-    rule <- mkRule name cfg policy eval
-    pure rule{erBreakerReporter = reporter}
-
 -- | Mark the version as running code on install, so the install-script deny fires.
 withInstallScripts :: PackageDetails -> PackageDetails
 withInstallScripts pd = pd{pkgInstallCode = RunsCodeOnInstall "postinstall hook"}
 
--- | The pure deny rule a winning pure deny is identified by, for the cross-tier tie.
-deniedBy :: Decision -> Maybe Rule
-deniedBy (Denied r _) = Just r
-deniedBy _ = Nothing
+admittedBy :: Decision -> Maybe Text
+admittedBy (Admitted name _) = Just name
+admittedBy _ = Nothing
 
-isApproved :: Decision -> Bool
-isApproved = \case
-    Approved{} -> True
-    ApprovedEffectful{} -> True
-    _ -> False
+blockedBy :: Decision -> Maybe Text
+blockedBy (Blocked name _) = Just name
+blockedBy _ = Nothing
+
+isAdmitted :: Decision -> Bool
+isAdmitted = isJust . admittedBy
 
 isUndecidable :: Decision -> Bool
 isUndecidable = \case
     Undecidable{} -> True
     _ -> False
 
+isUnavailableResult :: RuleResult -> Bool
+isUnavailableResult = \case
+    Unavailable{} -> True
+    _ -> False
+
+{- | An outcome for the equal-precedence tie tests: an allow, a deny, or a
+self-reported (fail-closed) unavailability — the three decisive positions that
+compete in the boot order.
+-}
+genTieOutcome :: Gen RuleResult
+genTieOutcome =
+    Gen.element
+        [ Allow "vetted clean"
+        , Deny "known-bad version"
+        , Unavailable (WillResolve Nothing) FailDeny "source unreachable"
+        ]
+
 spec :: Spec
 spec = do
     describe "defaultEffectfulConfig — the shipped resilience knobs" $
         it "pins the documented defaults (timeout, backoff schedule, breaker, no Retry-After)" $ do
-            -- The shipped policy a caller inherits when it overrides only 'erEval':
+            -- The shipped policy a caller inherits when it overrides only the eval:
             -- a 2s per-attempt timeout, two backoffs (100ms, 250ms), a breaker
             -- tripping after 5 failures and cooling for 30s, and no suggested delay.
             ecTimeout defaultEffectfulConfig `shouldBe` 2_000_000
@@ -151,8 +169,6 @@ spec = do
         -- waits the n-th 'ecBackoff' delay, and the policy stops (yields 'Nothing')
         -- once the list is exhausted — its length being the retry budget.
         it "the default schedule retries twice, at 100ms then 250ms, then stops" $ do
-            -- 'simulatePolicy n' walks iterations 0..n; the first two yield the two
-            -- backoffs, and the schedule is then exhausted (a 'Nothing' stop).
             delays <- simulatePolicy 2 (backoffPolicy [100_000, 250_000])
             map snd delays `shouldBe` [Just 100_000, Just 250_000, Nothing]
 
@@ -160,392 +176,271 @@ spec = do
             delays <- simulatePolicy 0 (backoffPolicy [])
             map snd delays `shouldBe` [Nothing]
 
-    describe "evalRulesEffectful — tier is performance, not precedence" $ do
-        it "with no effectful rules, agrees with the pure tier exactly" $ do
-            let pd = pkg (Just "myorg") 0
-                pureRules = [atDefaultPrecedence (AllowScope (mkScope "myorg"))]
-            decision <- evalRulesEffectful ctx pureRules [] pd
-            decision `shouldBe` Approved (AllowScope (mkScope "myorg")) "scope @myorg is allow-listed"
-
-        it "skips an effectful rule ranked below the pure winner (its IO never runs)" $ do
-            -- The pure tier allows at precedence 200 (AllowScope default). An
-            -- effectful deny ranked at 100 cannot outrank it, so it must not even be
-            -- consulted — the counter proves the IO never ran.
+    describe "evalRules — one engine over pure and effectful rules" $ do
+        it "an effectful rule below a pure decisive prefix is never launched (short-circuit)" $ do
+            -- A pure deny at precedence 300 decides first; an effectful rule ranked
+            -- below it is mooted, so its IO must never run — the counter (and its
+            -- throw) prove it.
             ran <- newIORef (0 :: Int)
-            let pd = pkg (Just "myorg") 0
-                pureRules = [atDefaultPrecedence (AllowScope (mkScope "myorg"))]
-            rule <- mkRule "EffDeny" fastConfig OnUnavailable $ \_ -> do
+            effLater <- mkRule "EffAfter" 200 fastConfig FailDeny $ \_ -> do
                 modifyIORef' ran (+ 1)
-                pure (Deny "blocked")
-            decision <- evalRulesEffectful ctx pureRules [at 100 rule] pd
-            decision `shouldBe` Approved (AllowScope (mkScope "myorg")) "scope @myorg is allow-listed"
+                throwString "should never run"
+            decision <- evalRules ctx [effLater, pureAt 300 DenyInstallTimeExecution] (withInstallScripts (pkg Nothing 0))
+            blockedBy decision `shouldBe` Just "DenyInstallTimeExecution"
             readIORef ran `shouldReturn` 0
 
-        it "consults an effectful rule ranked at or above the pure winner" $ do
-            -- The same allow at 200, but the effectful deny is ranked at 300, so it
-            -- outranks the pure allow and its IO runs.
+        it "an effectful deny outranks a lower pure allow (boot order decides)" $ do
+            rule <- constRule "EffDeny" 300 fastConfig FailDeny (Deny "known-bad version")
+            decision <- evalRules ctx [pureAt 200 (AllowScope (mkScope "myorg")), rule] (pkg (Just "myorg") 0)
+            blockedBy decision `shouldBe` Just "EffDeny"
+
+        it "a lower-ranked effectful rule never displaces a higher pure allow" $ do
             ran <- newIORef (0 :: Int)
-            let pd = pkg (Just "myorg") 0
-                pureRules = [atDefaultPrecedence (AllowScope (mkScope "myorg"))]
-            rule <- mkRule "EffDeny" fastConfig OnUnavailable $ \_ -> do
+            rule <- mkRule "EffDeny" 100 fastConfig FailDeny $ \_ -> do
                 modifyIORef' ran (+ 1)
-                pure (Deny "known-bad version")
-            decision <- evalRulesEffectful ctx pureRules [at 300 rule] pd
-            decision `shouldBe` DeniedEffectful "EffDeny" "known-bad version"
-            readIORef ran `shouldReturn` 1
+                pure (Deny "blocked")
+            decision <- evalRules ctx [pureAt 200 (AllowScope (mkScope "myorg")), rule] (pkg (Just "myorg") 0)
+            admittedBy decision `shouldBe` Just "AllowScope"
+            readIORef ran `shouldReturn` 0
 
-        it "consults every effectful rule when the pure tier denies by default" $ do
-            -- No pure winner means any-precedence effectful rule could still change
-            -- the outcome, so even a low-ranked one is consulted and can admit.
-            let pd = pkg (Just "myorg") 0
-            rule <- constRule "EffAllow" fastConfig OnUnavailable (Allow "vetted clean")
-            decision <- evalRulesEffectful ctx [] [at 1 rule] pd
-            decision `shouldBe` ApprovedEffectful "EffAllow" "vetted clean"
+        it "an effectful allow lifts a version the pure rules would deny by default" $ do
+            rule <- constRule "EffAllow" 500 fastConfig FailNoDecision (Allow "remediates an advisory")
+            decision <- evalRules ctx [pureAt 200 (AllowScope (mkScope "myorg")), rule] (pkg Nothing 0)
+            admittedBy decision `shouldBe` Just "EffAllow"
 
-    describe "evalRulesEffectful — cross-tier precedence" $ do
-        it "an effectful deny outranks a lower pure allow" $ do
-            let pd = pkg (Just "myorg") 0
-                pureRules = [PrecededRule 100 (AllowScope (mkScope "myorg"))]
-            rule <- constRule "EffDeny" fastConfig OnUnavailable (Deny "cve")
-            decision <- evalRulesEffectful ctx pureRules [at 200 rule] pd
-            decision `shouldBe` DeniedEffectful "EffDeny" "cve"
+    describe "evalRules — deny-by-default with reasons in boot order" $
+        it "collects every non-decisive reason, highest precedence first" $ do
+            -- A losing fail-open unavailability (its source down), a NoDecision, and a
+            -- pure NoDecision: none is decisive, so the package is BlockedByDefault
+            -- carrying each reason in boot order (300, 200, 100) — including the
+            -- fail-open Unavailable's, so a fail-open loss is still surfaced.
+            high <- failingRule "EffHigh" 300 fastConfig FailNoDecision
+            mid <- constRule "EffMid" 200 fastConfig FailNoDecision (NoDecision "mid no opinion")
+            decision <- evalRules ctx [mid, pureAt 100 (AllowScope (mkScope "myorg")), high] (pkg Nothing 0)
+            case decision of
+                BlockedByDefault reasons ->
+                    reasons
+                        `shouldBe` [ "EffHigh: the rule could not be evaluated"
+                                   , "mid no opinion"
+                                   , "scope is not the allow-listed @myorg"
+                                   ]
+                other -> expectationFailure ("expected BlockedByDefault, got " <> show other)
 
-        it "at equal precedence an effectful deny beats the pure allow" $ do
-            let pd = pkg (Just "myorg") 0
-                pureRules = [PrecededRule 200 (AllowScope (mkScope "myorg"))]
-            rule <- constRule "EffDeny" fastConfig OnUnavailable (Deny "cve")
-            decision <- evalRulesEffectful ctx pureRules [at 200 rule] pd
-            decision `shouldBe` DeniedEffectful "EffDeny" "cve"
-
-        it "an effectful allow can lift a version the pure tier denied by default" $ do
-            let pd = pkg Nothing 0 -- no scope, too young: pure tier denies by default
-                pureRules = [atDefaultPrecedence (AllowScope (mkScope "myorg"))]
-            rule <- constRule "EffAllow" fastConfig OnUnavailable (Allow "remediates an advisory")
-            decision <- evalRulesEffectful ctx pureRules [at 500 rule] pd
-            decision `shouldBe` ApprovedEffectful "EffAllow" "remediates an advisory"
-
-        it "an abstaining effectful rule leaves the pure decision standing" $ do
-            let pd = pkg (Just "myorg") 0
-                pureRules = [atDefaultPrecedence (AllowScope (mkScope "myorg"))]
-            rule <- constRule "EffAbstain" fastConfig OnUnavailable (Abstain "no opinion")
-            decision <- evalRulesEffectful ctx pureRules [at 500 rule] pd
-            decision `shouldBe` Approved (AllowScope (mkScope "myorg")) "scope @myorg is allow-listed"
-
-        it "a lower-ranked effectful allow does not displace an equal-precedence pure deny" $ do
-            -- The pure tier denies (install scripts) at precedence 300; an effectful
-            -- allow at the same 300 ranks below the deny (deny-before-allow), so the
-            -- pure deny stands rather than the effectful allow lifting it.
-            let pd = withInstallScripts (pkg (Just "myorg") 0)
-                pureRules = [atDefaultPrecedence DenyInstallTimeExecution] -- denies at 300
-            rule <- constRule "EffAllow" fastConfig OnUnavailable (Allow "vouched")
-            decision <- evalRulesEffectful ctx pureRules [at 300 rule] pd
-            deniedBy decision `shouldBe` Just DenyInstallTimeExecution
-
-        it "an equal-precedence effectful allow does not displace the pure allow" $ do
-            -- An effectful allow at the same precedence as a pure allow does not
-            -- outrank it (the contract is strict-greater), so the credited decision
-            -- stays the pure rule's own 'Approved', not 'ApprovedEffectful'.
-            let pd = pkg (Just "myorg") 0
-                pureRules = [PrecededRule 200 (AllowScope (mkScope "myorg"))]
-            rule <- constRule "EffAllow" fastConfig OnUnavailable (Allow "also vouched")
-            decision <- evalRulesEffectful ctx pureRules [at 200 rule] pd
-            decision `shouldBe` Approved (AllowScope (mkScope "myorg")) "scope @myorg is allow-listed"
-
-        it "an equal-precedence effectful Unavailable does not flip a pure deny to undecidable" $ do
-            -- The security-relevant tie: a pure deny at precedence 300 and a failing
-            -- effectful rule (ranking as a deny, fail-closed) at the same 300. The
-            -- effectful candidate does not outrank the pure deny, so the decision
-            -- stays the permanent policy denial (403) rather than flipping to a
-            -- retryable 'Undecidable' (503).
-            let pd = withInstallScripts (pkg (Just "myorg") 0)
-                pureRules = [atDefaultPrecedence DenyInstallTimeExecution] -- denies at 300
-            rule <- failingRule "EffDeny" fastConfig OnUnavailable -- yields Unavailable at 300
-            decision <- evalRulesEffectful ctx pureRules [at 300 rule] pd
-            isUndecidable decision `shouldBe` False
-            deniedBy decision `shouldBe` Just DenyInstallTimeExecution
-
-        it "a strictly-higher effectful Unavailable still outranks the pure deny (fail-closed)" $ do
-            -- The guarded path the tie fix must not regress: an effectful failure
-            -- ranked strictly above the pure deny still wins and is fail-closed to
-            -- 'Undecidable'.
-            let pd = withInstallScripts (pkg (Just "myorg") 0)
-                pureRules = [atDefaultPrecedence DenyInstallTimeExecution] -- denies at 300
-            rule <- failingRule "EffDeny" fastConfig OnUnavailable
-            decision <- evalRulesEffectful ctx pureRules [at 400 rule] pd
+    describe "evalRules — fail-closed vs fail-open alignment" $ do
+        it "a failing FailDeny rule that could decide is Undecidable (fail-closed)" $ do
+            rule <- failingRule "EffDeny" 300 fastConfig FailDeny
+            decision <- evalRules ctx [pureAt 200 (AllowScope (mkScope "myorg")), rule] (pkg (Just "myorg") 0)
             decision `shouldSatisfy` isUndecidable
 
-    describe "evalRulesEffectful — fail-closed (Unavailable)" $ do
-        it "a failing effectful rule that could change the outcome is Undecidable" $ do
-            let pd = pkg (Just "myorg") 0
-                pureRules = [atDefaultPrecedence (AllowScope (mkScope "myorg"))]
-            rule <- failingRule "EffDeny" fastConfig OnUnavailable
-            decision <- evalRulesEffectful ctx pureRules [at 300 rule] pd
-            decision `shouldSatisfy` isUndecidable
-
-        it "an Undecidable carries a transient (WillResolve) cause an exhausted source can recover from" $ do
-            let pd = pkg (Just "myorg") 0
-            rule <- failingRule "EffDeny" fastConfig{ecRetryAfter = Just (RetryAfter 15)} OnUnavailable
-            decision <- evalRulesEffectful ctx [] [at 300 rule] pd
+        it "an Undecidable preserves a transient (WillResolve) cause with the configured Retry-After" $ do
+            rule <- failingRule "EffDeny" 300 fastConfig{ecRetryAfter = Just (RetryAfter 15)} FailDeny
+            decision <- evalRules ctx [rule] (pkg (Just "myorg") 0)
             case decision of
                 Undecidable transience _ -> transience `shouldBe` WillResolve (Just (RetryAfter 15))
                 other -> expectationFailure ("expected Undecidable, got " <> show other)
 
         it "honours a self-reported permanent (WontResolve) fault through to Undecidable WontResolve" $ do
-            -- The rule detects an internal/parse fault (a corrupt advisory index) and
-            -- reports its own permanent unavailability. The harness still retries it (it
-            -- does not trust a single self-report), but the exhausted outcome must
-            -- preserve the permanent distinction so the serve mapping yields a 500, not
-            -- a retryable 503.
-            let pd = pkg (Just "myorg") 0
-            rule <- constRule "EffDeny" fastConfig OnUnavailable (Unavailable WontResolve "corrupt advisory index")
-            decision <- evalRulesEffectful ctx [] [at 300 rule] pd
+            rule <- constRule "EffDeny" 300 fastConfig FailDeny (Unavailable WontResolve FailDeny "corrupt advisory index")
+            decision <- evalRules ctx [rule] (pkg (Just "myorg") 0)
             case decision of
                 Undecidable transience _ -> transience `shouldBe` WontResolve
                 other -> expectationFailure ("expected Undecidable WontResolve, got " <> show other)
 
-        it "keeps a self-reported transient (WillResolve) transient, with the configured Retry-After" $ do
-            -- A self-reported transient unavailability stays retryable; the surfaced
-            -- Retry-After is the harness's configured one, not whatever the rule
-            -- reported for itself — so the fix narrows nothing on the transient path.
-            let pd = pkg (Just "myorg") 0
-                cfg = fastConfig{ecRetryAfter = Just (RetryAfter 20)}
-            rule <- constRule "EffDeny" cfg OnUnavailable (Unavailable (WillResolve (Just (RetryAfter 99))) "rate limited")
-            decision <- evalRulesEffectful ctx [] [at 300 rule] pd
-            case decision of
-                Undecidable transience _ -> transience `shouldBe` WillResolve (Just (RetryAfter 20))
-                other -> expectationFailure ("expected Undecidable WillResolve, got " <> show other)
+        it "a failing FailNoDecision rule is a no-op (fail-open), leaving a pure allow standing" $ do
+            rule <- failingRule "EffAllow" 300 fastConfig FailNoDecision
+            decision <- evalRules ctx [pureAt 200 (AllowScope (mkScope "myorg")), rule] (pkg (Just "myorg") 0)
+            admittedBy decision `shouldBe` Just "AllowScope"
 
-        it "retries a self-reported fault to the budget and surfaces the last attempt's transience" $ do
-            -- The harness does not short-circuit on a self-report: it runs the full
-            -- retry budget. The transience that survives is the last failing attempt's,
-            -- so a rule that ends on a permanent fault surfaces WontResolve even though
-            -- earlier attempts reported a transient one.
-            attempts <- newIORef (0 :: Int)
-            let pd = pkg (Just "myorg") 0
-                cfg = fastConfig{ecBackoff = [0, 0]} -- two retries: three attempts in all
-            rule <- mkRule "EffDeny" cfg OnUnavailable $ \_ -> do
-                n <- atomicModifyIORef' attempts (\k -> (k + 1, k + 1))
-                pure $
-                    if n < 3
-                        then Unavailable (WillResolve Nothing) "still warming"
-                        else Unavailable WontResolve "corrupt advisory index"
-            decision <- evalRulesEffectful ctx [] [at 300 rule] pd
-            readIORef attempts `shouldReturn` 3 -- the full budget ran (no short-circuit)
-            case decision of
-                Undecidable transience _ -> transience `shouldBe` WontResolve
-                other -> expectationFailure ("expected Undecidable WontResolve, got " <> show other)
+        it "a failing FailNoDecision rule never admits on its own" $ do
+            -- Fail-open means 'does not fire', not 'admit': with no allow the version
+            -- still falls back to deny-by-default, never admitted blind.
+            rule <- failingRule "EffAllow" 300 fastConfig FailNoDecision
+            decision <- evalRules ctx [rule] (pkg Nothing 0)
+            isAdmitted decision `shouldBe` False
 
-        it "fail-closed undecidable is not admitted (no survivor)" $ do
-            let pd = pkg Nothing 0
-            rule <- failingRule "EffDeny" fastConfig OnUnavailable
-            decision <- evalRulesEffectful ctx [] [at 300 rule] pd
-            isApproved decision `shouldBe` False
+        it "a fail-closed undecidable is not admitted (no survivor)" $ do
+            rule <- failingRule "EffDeny" 300 fastConfig FailDeny
+            decision <- evalRules ctx [rule] (pkg Nothing 0)
+            isAdmitted decision `shouldBe` False
 
-    describe "evalRulesEffectful — onError: abstain (availability beats safety)" $ do
-        it "an exhausted abstain-policy rule abstains, leaving the pure decision" $ do
-            let pd = pkg (Just "myorg") 0
-                pureRules = [atDefaultPrecedence (AllowScope (mkScope "myorg"))]
-            rule <- failingRule "EffAllow" fastConfig OnAbstain
-            decision <- evalRulesEffectful ctx pureRules [at 300 rule] pd
-            decision `shouldBe` Approved (AllowScope (mkScope "myorg")) "scope @myorg is allow-listed"
+    describe "evalRules — deterministic speculative parallelism" $ do
+        it "credits the earliest-in-boot-order decisive rule, not the first to return" $ do
+            -- The higher-precedence deny is slow; the lower-precedence allow returns
+            -- first in wall-clock time. The decision must still be the deny (earliest
+            -- in boot order), so the result never depends on evaluation timing.
+            slowDeny <- mkRule "EffDeny" 300 fastConfig FailDeny (\_ -> threadDelay 40_000 >> pure (Deny "slow deny"))
+            fastAllow <- constRule "EffAllow" 200 fastConfig FailNoDecision (Allow "fast allow")
+            decision <- evalRules ctx [fastAllow, slowDeny] (pkg Nothing 0)
+            blockedBy decision `shouldBe` Just "EffDeny"
 
-        it "an exhausted abstain-policy rule does not admit on its own" $ do
-            -- Fail-open means 'does not fire', not 'admit': with no pure allow the
-            -- version still falls back to deny-by-default, never admitted blind.
-            let pd = pkg Nothing 0
-            rule <- failingRule "EffAllow" fastConfig OnAbstain
-            decision <- evalRulesEffectful ctx [] [at 300 rule] pd
-            isApproved decision `shouldBe` False
+        it "cancels a strictly-later evaluation once the winner is known" $ do
+            -- The winner (precedence 300) decides immediately; a strictly-later rule
+            -- (200) would take seconds and only then set its 'done' flag. The engine
+            -- must cancel it the moment the winner is known, so 'done' stays False.
+            done <- newIORef False
+            winner <- constRule "EffWinner" 300 fastConfig FailDeny (Deny "blocked")
+            laggard <- mkRule "EffLaggard" 200 fastConfig FailNoDecision $ \_ -> do
+                threadDelay 10_000_000
+                writeIORef done True
+                pure (Allow "too late")
+            decision <- evalRules ctx [laggard, winner] (pkg Nothing 0)
+            blockedBy decision `shouldBe` Just "EffWinner"
+            readIORef done `shouldReturn` False
 
-    describe "runEffectfulRule — timeout, retry, breaker" $ do
-        it "times out a hanging rule and resolves per policy (fail-closed)" $ do
+    describe "evalRules — order-independent boot order (carried from #377/#378)" $ do
+        it "an equal-precedence effectful deny and unavailable resolve to the same decision regardless of order" $ do
+            -- The sharpest case from the original bug: an effectful Deny (a permanent
+            -- 403) and an effectful fail-closed Unavailable (a retryable 503) tie on
+            -- precedence. The boot order settles it by name, so reversing the
+            -- configured list cannot flip the decision.
+            let mk =
+                    sequence
+                        [ constRule "EffDeny" 300 fastConfig FailDeny (Deny "known-bad version")
+                        , failingRule "EffUnavail" 300 fastConfig FailDeny
+                        ]
+            forward <- mk >>= \rules -> evalRules ctx rules (pkg Nothing 0)
+            backward <- mk >>= \rules -> evalRules ctx (reverse rules) (pkg Nothing 0)
+            forward `shouldBe` backward
+            forward `shouldSatisfy` (\d -> isJust (blockedBy d) || isUndecidable d)
+
+        it "the decision is invariant under shuffling equal-precedence effectful rules" $
+            hedgehog $ do
+                -- The analogue of the pure tier's shuffle property, now over effectful
+                -- rules: a list of equal-precedence rules (a mix of allow/deny/
+                -- unavailable) with a distinct name each. Shuffling the configured set
+                -- yields the same boot order, hence the same 'Decision'.
+                outcomes <- forAll (Gen.list (Range.linear 2 6) genTieOutcome)
+                let tagged = zip [0 :: Int ..] outcomes
+                perm <- forAll (Gen.shuffle tagged)
+                let build = traverse (\(i, o) -> constRule ("eff" <> show i) 300 fastConfig FailDeny o)
+                    decide rs = build rs >>= \rules -> evalRules ctx rules (pkg Nothing 0)
+                original <- liftIO (decide tagged)
+                shuffled <- liftIO (decide perm)
+                original === shuffled
+
+    describe "runEffectfulRule — the per-rule resilience wrapper" $ do
+        it "runs a pure rule directly (no resilience)" $ do
+            outcome <- runEffectfulRule ctx (pureAt 200 (AllowScope (mkScope "myorg"))) (pkg (Just "myorg") 0)
+            outcome `shouldSatisfy` (\case Allow{} -> True; _ -> False)
+
+        it "times out a hanging rule and resolves per alignment (fail-closed)" $ do
             -- A 5ms timeout against a rule that sleeps far longer: the attempt is a
-            -- failure, so an OnUnavailable rule yields Unavailable.
-            let pd = pkg Nothing 0
-                cfg = fastConfig{ecTimeout = 5_000}
-            rule <- mkRule "Slow" cfg OnUnavailable $ \_ -> threadDelay 1_000_000 >> pure (Allow "late")
-            outcome <- runEffectfulRule ctx rule pd
-            outcome `shouldSatisfy` isUnavailableOutcome
+            -- failure, so a FailDeny rule yields Unavailable.
+            rule <- mkRule "Slow" 1 fastConfig{ecTimeout = 5_000} FailDeny (\_ -> threadDelay 1_000_000 >> pure (Allow "late"))
+            outcome <- runEffectfulRule ctx rule (pkg Nothing 0)
+            outcome `shouldSatisfy` isUnavailableResult
 
         it "retries a transiently failing rule and succeeds within the budget" $ do
-            -- The rule fails once then succeeds; one retry (one backoff) is enough.
-            -- A near-zero backoff keeps the retry delay free; the invocation count is
-            -- an independent witness that exactly one retry ran.
             attempts <- newIORef (0 :: Int)
-            let pd = pkg Nothing 0
-                cfg = fastConfig{ecBackoff = [0]}
-            rule <- mkRule "Flaky" cfg OnUnavailable $ \_ -> do
+            rule <- mkRule "Flaky" 1 fastConfig{ecBackoff = [0]} FailDeny $ \_ -> do
                 n <- atomicModifyIORef' attempts (\k -> (k + 1, k + 1))
                 if n < 2 then throwString "blip" else pure (Allow "recovered")
-            outcome <- runEffectfulRule ctx rule pd
+            outcome <- runEffectfulRule ctx rule (pkg Nothing 0)
             outcome `shouldBe` Allow "recovered"
             readIORef attempts `shouldReturn` 2 -- the initial attempt plus one retry
         it "gives up after the retry budget is spent" $ do
             attempts <- newIORef (0 :: Int)
-            let pd = pkg Nothing 0
-                cfg = fastConfig{ecBackoff = [0, 0]}
-            rule <- mkRule "Down" cfg OnUnavailable $ \_ -> do
+            rule <- mkRule "Down" 1 fastConfig{ecBackoff = [0, 0]} FailDeny $ \_ -> do
                 modifyIORef' attempts (+ 1)
                 throwString "still down"
-            outcome <- runEffectfulRule ctx rule pd
-            outcome `shouldSatisfy` isUnavailableOutcome
+            outcome <- runEffectfulRule ctx rule (pkg Nothing 0)
+            outcome `shouldSatisfy` isUnavailableResult
             readIORef attempts `shouldReturn` 3 -- the initial attempt plus two retries
         it "trips the breaker after the threshold, then fast-fails without running the rule" $ do
-            -- Threshold 2: two exhausted evaluations trip it; the third is denied at
-            -- the gate, so the rule's IO does not run a third time.
             attempts <- newIORef (0 :: Int)
-            let pd = pkg Nothing 0
-                cfg = fastConfig{ecBreakerThreshold = 2, ecBreakerCooldown = 30}
-            rule <- mkRule "Down" cfg OnUnavailable $ \_ -> do
+            rule <- mkRule "Down" 1 fastConfig{ecBreakerThreshold = 2, ecBreakerCooldown = 30} FailDeny $ \_ -> do
                 modifyIORef' attempts (+ 1)
                 throwString "down"
-            _ <- runEffectfulRule ctx rule pd
-            _ <- runEffectfulRule ctx rule pd
-            afterTrip <- readIORef attempts
-            afterTrip `shouldBe` 2
-            -- Breaker open now: the next evaluation fast-fails without an attempt,
-            -- and its reason names the open breaker (and the rule).
-            fastFail <- runEffectfulRule ctx rule pd
-            fastFail `shouldBe` Unavailable (WillResolve Nothing) "Down: the rule source circuit breaker is open"
+            _ <- runEffectfulRule ctx rule (pkg Nothing 0)
+            _ <- runEffectfulRule ctx rule (pkg Nothing 0)
+            readIORef attempts `shouldReturn` 2
+            -- Breaker open now: the next evaluation fast-fails without an attempt, and
+            -- its reason names the open breaker (and the rule), at the rule's alignment.
+            fastFail <- runEffectfulRule ctx rule (pkg Nothing 0)
+            fastFail `shouldBe` Unavailable (WillResolve Nothing) FailDeny "Down: the rule source circuit breaker is open"
             readIORef attempts `shouldReturn` 2
 
         it "half-opens after the cooldown and recovers on a successful probe" $ do
             attempts <- newIORef (0 :: Int)
             failRef <- newIORef True
-            let pd = pkg Nothing 0
-                cfg = fastConfig{ecBreakerThreshold = 2, ecBreakerCooldown = 30}
-            rule <- mkRule "Recover" cfg OnUnavailable $ \_ -> do
+            rule <- mkRule "Recover" 1 fastConfig{ecBreakerThreshold = 2, ecBreakerCooldown = 30} FailDeny $ \_ -> do
                 modifyIORef' attempts (+ 1)
                 bad <- readIORef failRef
                 if bad then throwString "down" else pure (Deny "now reachable")
-            -- Trip the breaker at 'now'.
-            _ <- runEffectfulRule ctx rule pd
-            _ <- runEffectfulRule ctx rule pd
-            -- Source recovers; advance the clock past the cooldown so a half-open
-            -- probe is admitted, and it succeeds.
+            _ <- runEffectfulRule ctx rule (pkg Nothing 0)
+            _ <- runEffectfulRule ctx rule (pkg Nothing 0)
             writeIORef failRef False
-            let later = ctxAt (addUTCTime 31 now)
-            recovered <- runEffectfulRule later rule pd
+            recovered <- runEffectfulRule (ctxAt (addUTCTime 31 now)) rule (pkg Nothing 0)
             recovered `shouldBe` Deny "now reachable"
 
-        it "an exhausted abstain-policy rule abstains with a named reason" $ do
-            let pd = pkg Nothing 0
-            rule <- failingRule "EffAllow" fastConfig OnAbstain
-            outcome <- runEffectfulRule ctx rule pd
-            outcome `shouldBe` Abstain "EffAllow: the rule could not be evaluated"
-
-        it "an abstain-policy rule fast-fails to Abstain when its breaker is open" $ do
-            let pd = pkg Nothing 0
-                cfg = fastConfig{ecBreakerThreshold = 1}
-            rule <- failingRule "EffAllow" cfg OnAbstain
-            _ <- runEffectfulRule ctx rule pd -- trips the breaker (threshold 1)
-            outcome <- runEffectfulRule ctx rule pd -- open: fast-fail
-            outcome `shouldSatisfy` isAbstainOutcome
+        it "an exhausted FailNoDecision rule resolves to a fail-open Unavailable with a named reason" $ do
+            rule <- failingRule "EffAllow" 1 fastConfig FailNoDecision
+            outcome <- runEffectfulRule ctx rule (pkg Nothing 0)
+            outcome `shouldBe` Unavailable (WillResolve Nothing) FailNoDecision "EffAllow: the rule could not be evaluated"
 
         it "re-opens the breaker when the half-open probe also fails" $ do
             attempts <- newIORef (0 :: Int)
-            let pd = pkg Nothing 0
-                cfg = fastConfig{ecBreakerThreshold = 2, ecBreakerCooldown = 30}
-            rule <- mkRule "Down" cfg OnUnavailable $ \_ -> do
+            rule <- mkRule "Down" 1 fastConfig{ecBreakerThreshold = 2, ecBreakerCooldown = 30} FailDeny $ \_ -> do
                 modifyIORef' attempts (+ 1)
                 throwString "still down"
-            -- Trip the breaker at 'now' (two failures).
-            _ <- runEffectfulRule ctx rule pd
-            _ <- runEffectfulRule ctx rule pd
-            -- Cooldown elapsed: the next call is admitted as a half-open probe; it
-            -- runs (attempt count rises) but fails, re-opening the breaker.
+            _ <- runEffectfulRule ctx rule (pkg Nothing 0)
+            _ <- runEffectfulRule ctx rule (pkg Nothing 0)
             let later = ctxAt (addUTCTime 31 now)
-            _ <- runEffectfulRule later rule pd
-            afterProbe <- readIORef attempts
-            afterProbe `shouldBe` 3 -- two trips plus the half-open probe
-            -- Re-opened: an immediate further call (still within the new cooldown)
-            -- fast-fails without another attempt.
-            _ <- runEffectfulRule later rule pd
-            readIORef attempts `shouldReturn` 3
-
+            _ <- runEffectfulRule later rule (pkg Nothing 0)
+            readIORef attempts `shouldReturn` 3 -- two trips plus the half-open probe
+            _ <- runEffectfulRule later rule (pkg Nothing 0)
+            readIORef attempts `shouldReturn` 3 -- re-opened: no further attempt
         it "retries then succeeds under the shipped default config (real backoff)" $ do
-            -- The unmodified defaultEffectfulConfig: a rule that fails its first
-            -- attempt then succeeds recovers within the default two-retry budget,
-            -- exercising the shipped backoff schedule and sleep (not a test override).
             attempts <- newIORef (0 :: Int)
-            let pd = pkg Nothing 0
-            rule <- mkRule "Flaky" defaultEffectfulConfig OnUnavailable $ \_ -> do
+            rule <- mkRule "Flaky" 1 defaultEffectfulConfig FailDeny $ \_ -> do
                 n <- atomicModifyIORef' attempts (\k -> (k + 1, k + 1))
                 if n < 2 then throwString "blip" else pure (Allow "recovered")
-            outcome <- runEffectfulRule ctx rule pd
+            outcome <- runEffectfulRule ctx rule (pkg Nothing 0)
             outcome `shouldBe` Allow "recovered"
             readIORef attempts `shouldReturn` 2
 
-        it "exhausts and trips under the shipped default config (no suggested Retry-After)" $ do
-            -- Drive the default config to exhaustion and past its trip threshold so
-            -- the shipped breaker cooldown and the default 'Nothing' Retry-After are
-            -- both exercised: each exhausted call yields a transient Unavailable with
-            -- no suggested delay, and after the default threshold the breaker fast-fails.
-            let pd = pkg Nothing 0
-            rule <- mkRule "Down" defaultEffectfulConfig{ecBackoff = []} OnUnavailable $ \_ ->
-                throwString "down"
-            outcome <- runEffectfulRule ctx rule pd
-            outcome `shouldBe` Unavailable (WillResolve Nothing) "Down: the rule could not be evaluated"
+        it "exhausts under the shipped default config (no suggested Retry-After)" $ do
+            rule <- mkRule "Down" 1 defaultEffectfulConfig{ecBackoff = []} FailDeny (\_ -> throwString "down")
+            outcome <- runEffectfulRule ctx rule (pkg Nothing 0)
+            outcome `shouldBe` Unavailable (WillResolve Nothing) FailDeny "Down: the rule could not be evaluated"
 
         it "reports the breaker trip → probe → reset transitions through its reporter" $ do
             (breakerLog, reporter) <- capturingBreakerReporter
             recovered <- newIORef False
-            let pd = pkg Nothing 0
-                cfg = fastConfig{ecBreakerThreshold = 1, ecBreakerCooldown = 30}
-            rule <- mkReportingRule reporter "Down" cfg OnUnavailable $ \_ ->
+            rule <- mkRuleR reporter "Down" 1 fastConfig{ecBreakerThreshold = 1, ecBreakerCooldown = 30} FailDeny $ \_ ->
                 readIORef recovered >>= \case
                     False -> throwString "down"
                     True -> pure (Allow "recovered")
-            -- A failed evaluation at 'now' trips the breaker open (threshold 1).
-            _ <- runEffectfulRule ctx rule pd
+            _ <- runEffectfulRule ctx rule (pkg Nothing 0)
             readIORef breakerLog `shouldReturn` [Open (addUTCTime 30 now)]
-            -- The cooldown elapses by now+31 and the source recovers: the next call is
-            -- admitted as a half-open probe and succeeds, resetting the breaker.
             writeIORef recovered True
-            outcome <- runEffectfulRule (ctxAt (addUTCTime 31 now)) rule pd
+            outcome <- runEffectfulRule (ctxAt (addUTCTime 31 now)) rule (pkg Nothing 0)
             outcome `shouldBe` Allow "recovered"
             readIORef breakerLog `shouldReturn` [Open (addUTCTime 30 now), HalfOpen, Closed 0]
 
         it "records nothing through the default no-op reporter, still resolving fail-closed" $ do
-            -- 'mkRule' wires 'noBreakerReporter': tripping the breaker records nothing
-            -- and the evaluation still resolves to a fail-closed Unavailable.
-            let pd = pkg Nothing 0
-            rule <- mkRule "Down" fastConfig{ecBreakerThreshold = 1} OnUnavailable (\_ -> throwString "down")
-            outcome <- runEffectfulRule ctx rule pd
-            outcome `shouldSatisfy` isUnavailableOutcome
+            rule <- mkRule "Down" 1 fastConfig{ecBreakerThreshold = 1} FailDeny (\_ -> throwString "down")
+            outcome <- runEffectfulRule ctx rule (pkg Nothing 0)
+            outcome `shouldSatisfy` isUnavailableResult
 
     describe "properties" $ do
-        it "an effectful rule strictly below the pure winner never changes the decision" $
+        it "a failing FailDeny rule that could decide is always fail-closed (Undecidable)" $
             hedgehog $ do
-                -- For any effectful outcome and any precedence below the pure
-                -- winner's, the effectful tier returns exactly the pure decision.
+                effPrec <- forAll (Gen.int (Range.linear 201 1000)) -- strictly above the pure allow
+                let p = pkg (Just "myorg") 0
+                rule <- liftIO (failingRule "Eff" effPrec fastConfig FailDeny)
+                decision <- liftIO (evalRules ctx [pureAt 200 (AllowScope (mkScope "myorg")), rule] p)
+                H.assert (isUndecidable decision)
+
+        it "a non-decisive effectful rule below a pure allow never changes the decision" $
+            hedgehog $ do
                 ageDays <- forAll (Gen.integral (Range.linear 0 3650))
                 effPrec <- forAll (Gen.int (Range.linear 0 199)) -- strictly below 200
                 outcome <-
                     forAll $
                         Gen.element
-                            [Allow "a", Deny "d", Abstain "x", Unavailable WontResolve "u"]
-                let pd = pkg (Just "myorg") ageDays
-                    pureRules = [atDefaultPrecedence (AllowScope (mkScope "myorg"))] -- allows at 200
-                rule <- liftIO (constRule "Eff" fastConfig OnUnavailable outcome)
-                decision <- liftIO (evalRulesEffectful ctx pureRules [at effPrec rule] pd)
-                decision === Approved (AllowScope (mkScope "myorg")) "scope @myorg is allow-listed"
-
-        it "a failing rule that could change the outcome is always fail-closed" $
-            hedgehog $ do
-                effPrec <- forAll (Gen.int (Range.linear 200 1000)) -- at or above the pure allow
-                let pd = pkg (Just "myorg") 0
-                    pureRules = [atDefaultPrecedence (AllowScope (mkScope "myorg"))]
-                rule <- liftIO (failingRule "Eff" fastConfig OnUnavailable)
-                decision <- liftIO (evalRulesEffectful ctx pureRules [at effPrec rule] pd)
-                H.assert (isUndecidable decision)
-  where
-    isUnavailableOutcome :: RuleOutcome -> Bool
-    isUnavailableOutcome = \case
-        Unavailable{} -> True
-        _ -> False
-
-    isAbstainOutcome :: RuleOutcome -> Bool
-    isAbstainOutcome = \case
-        Abstain{} -> True
-        _ -> False
+                            [NoDecision "x", Unavailable WontResolve FailNoDecision "u"]
+                let p = pkg (Just "myorg") ageDays
+                rule <- liftIO (constRule "Eff" effPrec fastConfig FailNoDecision outcome)
+                decision <- liftIO (evalRules ctx [pureAt 200 (AllowScope (mkScope "myorg")), rule] p)
+                admittedBy decision === Just "AllowScope"

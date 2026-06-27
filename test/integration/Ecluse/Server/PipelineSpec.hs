@@ -38,7 +38,7 @@ import UnliftIO.Temporary (withSystemTempFile)
 
 import Ecluse.Core.Credential (AuthToken (..), CredentialProvider, mkSecret, staticProvider)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Package (HashAlg (SHA1, SHA512), PackageName, mkPackageName)
+import Ecluse.Core.Package (HashAlg (SHA1, SHA512), PackageDetails, PackageName, mkPackageName)
 import Ecluse.Core.Package.Integrity (defaultMinIntegrity, defaultMinTrustedIntegrity, mkMinIntegrity, mkMinTrustedIntegrity)
 import Ecluse.Core.Queue (
     MirrorJob (jobArtifactUrl, jobMirrorTarget, jobPackage, jobVersion),
@@ -49,19 +49,20 @@ import Ecluse.Core.Queue (
 import Ecluse.Core.Registry (ParseError (..), RegistryClient (..))
 import Ecluse.Core.Registry.Npm.Route qualified as Npm
 import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
-import Ecluse.Core.Rules.Effectful (
+import Ecluse.Core.Rules (
     EffectfulConfig (..),
-    EffectfulRule (..),
-    FailurePolicy (OnUnavailable),
-    PrecededEffectfulRule (PrecededEffectfulRule),
+    Resilience (Resilience),
+    Rule (Rule, ruleEval, ruleName, rulePrecedence, ruleResilience),
     defaultEffectfulConfig,
+    liftPolicy,
     newBreaker,
     noBreakerReporter,
  )
 import Ecluse.Core.Rules.Types (
+    FailureAlignment (FailDeny, FailNoDecision),
     PrecededRule,
-    Rule (AllowIfPublishedBefore, DenyInstallTimeExecution),
-    RuleOutcome (Allow, Deny),
+    PureRule (AllowIfPublishedBefore, DenyInstallTimeExecution),
+    RuleResult (Allow, Deny),
     atDefaultPrecedence,
  )
 import Ecluse.Core.Security (Limits (maxBodyBytes, maxNestingDepth, maxVersionCount), TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), defaultLimits, lowerCaseHosts)
@@ -636,8 +637,7 @@ deps privatePort publicPort inbound =
         , pdPublicBaseUrl = localhost publicPort
         , pdMountBaseUrl = "https://proxy.test"
         , pdMirrorTarget = "https://mirror.test"
-        , pdRules = policy
-        , pdEffectfulRules = []
+        , pdRules = liftPolicy policy
         , pdTarballHostPolicy = SameHostAsPackument
         , pdAllowedInternalHosts = lowerCaseHosts (Set.singleton "127.0.0.1")
         , pdLimits = defaultLimits
@@ -649,12 +649,12 @@ deps privatePort publicPort inbound =
         }
 
 {- | The packument-serve dependencies as 'deps', but with the given effectful rules
-wired into the policy, so a test can drive the effectful tier end to end through the
-pipeline.
+appended to the pure policy, so a test can drive an effectful rule end to end through
+the unified engine.
 -}
-depsWith :: [PrecededEffectfulRule] -> Int -> Int -> PackumentDeps
+depsWith :: [Rule IO] -> Int -> Int -> PackumentDeps
 depsWith effectful privatePort publicPort =
-    (deps privatePort publicPort Nothing){pdEffectfulRules = effectful}
+    (deps privatePort publicPort Nothing){pdRules = liftPolicy policy <> effectful}
 
 localhost :: Int -> Text
 localhost port = "http://127.0.0.1:" <> show port
@@ -730,11 +730,11 @@ withProxy privateUp publicUp inbound k =
     withProxyEnv privateUp publicUp inbound (\app _env -> k app)
 
 {- | Run an assertion against a proxy whose npm mount carries the given effectful
-rules, so a request flows through both rule tiers. The two upstream doubles are
+rules, so a request flows through the unified engine. The two upstream doubles are
 hosted on ephemeral ports as elsewhere; the effectful rules see the public version.
 -}
 withProxyEffectful ::
-    [PrecededEffectfulRule] ->
+    [Rule IO] ->
     Upstream ->
     Upstream ->
     (forall a. (Application -> IO a) -> IO a)
@@ -2287,59 +2287,43 @@ headTarballSpec = describe "HEAD on a tarball route (no full-artifact body pump)
             seenArtifactMethods publicUp `shouldReturn` []
             drainJobs env `shouldReturn` []
 
--- ── the effectful rule tier through the pipeline ───────────────────────────────
+-- ── the effectful rule path through the pipeline ───────────────────────────────
+
+{- Build an effectful rule (a fresh breaker, an inert reporter) at the given
+precedence, config, and failure alignment, whose eval is the given IO. The eval
+ignores the evaluation context (these rules read only the public version). -}
+mkEffectful :: Text -> Int -> EffectfulConfig -> FailureAlignment -> (PackageDetails -> IO RuleResult) -> IO (Rule IO)
+mkEffectful name prec cfg align eval = do
+    breaker <- newBreaker
+    pure
+        Rule
+            { rulePrecedence = prec
+            , ruleName = name
+            , ruleEval = \_ pd -> eval pd
+            , ruleResilience = Just (Resilience cfg align breaker noBreakerReporter)
+            }
 
 {- | An effectful rule, fresh breaker and a no-retry fast config, that always fails
 its IO (its source is down). Wired at a precedence above the pure quarantine, it is
 consulted on an otherwise-admitted version and, exhausted, fail-closes it.
 -}
-downEffectfulRule :: IO PrecededEffectfulRule
-downEffectfulRule = do
-    breaker <- newBreaker
-    let rule =
-            EffectfulRule
-                { erName = "DownAdvisory"
-                , erEval = \_ -> throwString "advisory source down"
-                , erConfig = defaultEffectfulConfig{ecBackoff = []}
-                , erOnError = OnUnavailable
-                , erBreaker = breaker
-                , erBreakerReporter = noBreakerReporter
-                }
-    pure (PrecededEffectfulRule 400 rule)
+downEffectfulRule :: IO (Rule IO)
+downEffectfulRule =
+    mkEffectful "DownAdvisory" 400 defaultEffectfulConfig{ecBackoff = []} FailDeny (\_ -> throwString "advisory source down")
 
 {- | An effectful rule that denies the version outright (its source is reachable and
-returns a verdict), wired above the pure tier so its deny stands.
+returns a verdict), wired above the pure rules so its deny stands.
 -}
-denyingEffectfulRule :: IO PrecededEffectfulRule
-denyingEffectfulRule = do
-    breaker <- newBreaker
-    let rule =
-            EffectfulRule
-                { erName = "DenyAdvisory"
-                , erEval = \_ -> pure (Deny "affected by a known advisory")
-                , erConfig = defaultEffectfulConfig
-                , erOnError = OnUnavailable
-                , erBreaker = breaker
-                , erBreakerReporter = noBreakerReporter
-                }
-    pure (PrecededEffectfulRule 400 rule)
+denyingEffectfulRule :: IO (Rule IO)
+denyingEffectfulRule =
+    mkEffectful "DenyAdvisory" 400 defaultEffectfulConfig FailDeny (\_ -> pure (Deny "affected by a known advisory"))
 
 {- | An effectful rule that admits the version (its source vouches for it), wired
-above the pure tier so it lifts a version the pure quarantine would otherwise hold.
+above the pure rules so it lifts a version the pure quarantine would otherwise hold.
 -}
-allowingEffectfulRule :: IO PrecededEffectfulRule
-allowingEffectfulRule = do
-    breaker <- newBreaker
-    let rule =
-            EffectfulRule
-                { erName = "AllowAdvisory"
-                , erEval = \_ -> pure (Allow "remediates a known advisory")
-                , erConfig = defaultEffectfulConfig
-                , erOnError = OnUnavailable
-                , erBreaker = breaker
-                , erBreakerReporter = noBreakerReporter
-                }
-    pure (PrecededEffectfulRule 400 rule)
+allowingEffectfulRule :: IO (Rule IO)
+allowingEffectfulRule =
+    mkEffectful "AllowAdvisory" 400 defaultEffectfulConfig FailNoDecision (\_ -> pure (Allow "remediates a known advisory"))
 
 effectfulSpec :: Spec
 effectfulSpec = describe "effectful rule tier" $ do

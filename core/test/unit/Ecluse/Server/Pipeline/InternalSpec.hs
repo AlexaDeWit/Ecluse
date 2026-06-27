@@ -27,7 +27,21 @@ import Network.HTTP.Client (HttpException (InvalidUrlException))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (mkPackageName)
 import Ecluse.Core.Registry.Npm (ResponseBoundExceeded (ResponseBoundExceeded))
-import Ecluse.Core.Rules.Types (Decision (DeniedByDefault, Undecidable))
+import Ecluse.Core.Rules (
+    Resilience (Resilience),
+    Rule (Rule, ruleEval, ruleName, rulePrecedence, ruleResilience),
+    defaultEffectfulConfig,
+    liftPolicy,
+    newBreaker,
+    noBreakerReporter,
+ )
+import Ecluse.Core.Rules.Types (
+    Decision (BlockedByDefault, Undecidable),
+    FailureAlignment (FailDeny),
+    PureRule (AllowIfPublishedBefore),
+    RuleResult (NoDecision),
+    atDefaultPrecedence,
+ )
 import Ecluse.Core.Security (LimitError (BodyTooLarge))
 import Ecluse.Core.Server.Pipeline.Internal (
     PackumentNameMismatch (PackumentNameMismatch),
@@ -149,10 +163,22 @@ spec = do
             denialLabels UpstreamInvalid `shouldBe` (Nothing, Metric.ReasonUnavailable)
 
     describe "evalTier (rule-evaluation tier)" $ do
-        it "is the structural tier when no effectful rule is configured" $
-            evalTier ([] :: [Int]) `shouldBe` Metric.Structural
-        it "is the effectful tier when an effectful rule is configured" $
-            evalTier [()] `shouldBe` Metric.Effectful
+        it "is the structural tier for an empty rule set" $
+            evalTier ([] :: [Rule IO]) `shouldBe` Metric.Structural
+        it "is the structural tier for a purely-pure rule set" $
+            evalTier (liftPolicy [atDefaultPrecedence (AllowIfPublishedBefore 0)] :: [Rule IO])
+                `shouldBe` Metric.Structural
+        it "is the effectful tier when any rule carries a resilience policy" $ do
+            breaker <- newBreaker
+            let effectful :: Rule IO
+                effectful =
+                    Rule
+                        { rulePrecedence = 300
+                        , ruleName = "EffRule"
+                        , ruleEval = \_ _ -> pure (NoDecision "noop")
+                        , ruleResilience = Just (Resilience defaultEffectfulConfig FailDeny breaker noBreakerReporter)
+                        }
+            evalTier [effectful] `shouldBe` Metric.Effectful
 
     describe "transienceCause (effectful-failure cause)" $ do
         it "maps a retryable cause to a connection fault" $
@@ -177,7 +203,7 @@ spec = do
             recordEffectfulFailures
                 noopMetricsPort
                 [ Undecidable (WillResolve Nothing) "unreachable"
-                , DeniedByDefault []
+                , BlockedByDefault []
                 ]
 
 {- | Run an 'IO' action with 'stdout' redirected to a temporary file, returning

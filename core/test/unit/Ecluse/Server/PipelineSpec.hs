@@ -35,7 +35,8 @@ import Ecluse.Core.Package.Integrity (defaultMinIntegrity, defaultMinTrustedInte
 import Ecluse.Core.Queue (newInMemoryQueue)
 import Ecluse.Core.Registry.Npm.Route qualified as Npm
 import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
-import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfPublishedBefore), atDefaultPrecedence)
+import Ecluse.Core.Rules (liftPolicy)
+import Ecluse.Core.Rules.Types (PrecededRule, PureRule (AllowIfPublishedBefore), atDefaultPrecedence)
 import Ecluse.Core.Security (TarballHostPolicy (SameHostAsPackument), defaultLimits, lowerCaseHosts)
 import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Core.Server.Context (
@@ -142,8 +143,7 @@ depsFor publicPort =
         , pdPublicBaseUrl = "http://127.0.0.1:" <> show publicPort
         , pdMountBaseUrl = "http://proxy.test"
         , pdMirrorTarget = "http://mirror.test"
-        , pdRules = allowPolicy
-        , pdEffectfulRules = []
+        , pdRules = liftPolicy allowPolicy
         , pdTarballHostPolicy = SameHostAsPackument
         , pdAllowedInternalHosts = lowerCaseHosts (Set.singleton "127.0.0.1")
         , pdLimits = defaultLimits

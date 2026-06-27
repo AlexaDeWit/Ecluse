@@ -31,7 +31,8 @@ import Ecluse.Core.Queue.Sqs (SqsConfig (sqsWaitSeconds), SqsEndpoint (endpointH
 import Ecluse.Core.Registry.Npm (NpmClientConfig (NpmClientConfig, npmBaseUrl, npmLimits, npmManager, npmToken), newNpmClient)
 import Ecluse.Core.Registry.Npm.Route qualified as Npm
 import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
-import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfPublishedBefore), atDefaultPrecedence)
+import Ecluse.Core.Rules (liftPolicy)
+import Ecluse.Core.Rules.Types (PrecededRule, PureRule (AllowIfPublishedBefore), atDefaultPrecedence)
 import Ecluse.Core.Security (LoweredHostSet, TarballHostPolicy (SameHostAsPackument), defaultLimits, lowerCaseHosts)
 import Ecluse.Core.Security.Egress (newGuardedTlsManager)
 import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
@@ -191,8 +192,7 @@ mountBinding privateUrl publicUrl mirrorUrl =
             , pdPublicBaseUrl = publicUrl
             , pdMountBaseUrl = "https://proxy.test/npm"
             , pdMirrorTarget = mirrorUrl
-            , pdRules = admitOldEnough
-            , pdEffectfulRules = []
+            , pdRules = liftPolicy admitOldEnough
             , pdTarballHostPolicy = SameHostAsPackument
             , pdAllowedInternalHosts = loopbackOptIn
             , pdLimits = defaultLimits
