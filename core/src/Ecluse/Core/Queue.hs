@@ -146,7 +146,7 @@ data MirrorArtifact = MirrorArtifact
     }
     deriving stock (Eq, Show)
 
-{- | A serialized W3C trace-context carrier riding on a 'MirrorJob': the
+{- | A serialised W3C trace-context carrier riding on a 'MirrorJob': the
 @traceparent@ (and any @tracestate@) of the span that enqueued the job, in the
 standard wire encoding. It is captured at enqueue time and read back by the worker's
 tracing port to re-establish a span __link__ from the per-job span to the enqueueing

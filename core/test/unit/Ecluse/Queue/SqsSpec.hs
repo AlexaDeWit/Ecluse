@@ -85,6 +85,19 @@ pypiJob =
         , jobTraceContext = Nothing
         }
 
+{- | A job body in the wire shape an older producer emits: every required field, a
+valid artifact digest, and __no @traceContext@ key at all__ — the literal "legacy"
+shape the optional-carrier decode must accept (decoding it to a 'Nothing' carrier).
+-}
+legacyNoTraceContextBody :: Text
+legacyNoTraceContextBody =
+    "{\"ecosystem\":\"npm\",\"scope\":null,\"name\":\"left-pad\",\
+    \\"version\":\"1.3.0\",\"artifactUrl\":\"u\",\"mirrorTarget\":\"m\",\
+    \\"artifact\":{\"filename\":\"left-pad-1.3.0.tgz\",\
+    \\"hashes\":[{\"alg\":\"sha1\",\"value\":\""
+        <> validSha1
+        <> "\"}],\"size\":null}}"
+
 spec :: Spec
 spec = do
     describe "encodeJob / decodeJob round-trip" $ do
@@ -132,6 +145,18 @@ spec = do
                                 }
                         }
              in decodeJob (encodeJob allAlgsJob) `shouldBe` Right allAlgsJob
+
+        it "decodes a legacy job body with no traceContext key to a Nothing carrier (back-compat)" $
+            -- A producer from before the carrier field existed emits no "traceContext" key
+            -- at all (not even a null). It must decode to a valid job with no carrier — the
+            -- '.:?'-absent path — rather than fail, so the field is additive and a job
+            -- already on the wire keeps processing across the upgrade.
+            case decodeJob legacyNoTraceContextBody of
+                Left err -> expectationFailure (toString err)
+                Right job -> do
+                    jobTraceContext job `shouldBe` Nothing
+                    jobPackage job `shouldBe` mkPackageName Npm Nothing "left-pad"
+                    jobVersion job `shouldBe` mkVersion Npm "1.3.0"
 
     describe "decodeJob rejects a malformed body" $ do
         it "rejects non-JSON" $

@@ -40,6 +40,7 @@ import OpenTelemetry.Util (appendOnlyBoundedCollectionValues)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageName, mkPackageName)
+import Ecluse.Core.Queue (RemoteSpanContext (RemoteSpanContext))
 import Ecluse.Core.Server.Response (
     RejectReason (BelowIntegrityFloor, ByPolicy, MissingIntegrity, Unavailable, UpstreamInvalid),
     Rejection (Rejection),
@@ -252,6 +253,19 @@ crossAsyncLinkSpec = describe "cross-async span link (enqueue → worker job)" $
         -- A job enqueued with no context (tracing was off at enqueue) yields an unlinked
         -- worker span — still emitted, just not linked.
         withMirrorJobSpan telemetry samplePackage sampleVersion Nothing (const (JobSpanOutcome "succeeded" Nothing)) pass
+        _ <- forceFlushTracerProvider tracerProvider Nothing
+        jobSpan <- findSpan ref "ecluse.mirror.job"
+        jobHot <- readIORef (spanHot jobSpan)
+        toList (appendOnlyBoundedCollectionValues (hotLinks jobHot)) `shouldSatisfy` null
+
+    it "carries no link, and does not crash, when the carried context is not a valid W3C traceparent" $ do
+        (processor, ref) <- inMemoryListExporter
+        tracerProvider <- createTracerProvider [processor] emptyTracerProviderOptions
+        let telemetry = TelemetryEnabled (TelemetryProviders tracerProvider noopMeterProvider)
+        -- The carrier is untrusted transport: a present-but-unparseable traceparent must
+        -- decode to no link and never fail the job (the worker mirrors regardless of trace).
+        let garbled = RemoteSpanContext "not-a-w3c-traceparent" ""
+        withMirrorJobSpan telemetry samplePackage sampleVersion (Just garbled) (const (JobSpanOutcome "succeeded" Nothing)) pass
         _ <- forceFlushTracerProvider tracerProvider Nothing
         jobSpan <- findSpan ref "ecluse.mirror.job"
         jobHot <- readIORef (spanHot jobSpan)
