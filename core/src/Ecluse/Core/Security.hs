@@ -42,6 +42,7 @@ module Ecluse.Core.Security (
     -- * Internal-range block
     isBlockedTarget,
     isBlockedIP,
+    parseIpLiteral,
     hostOptedIn,
     hostAddress,
     splitHostPort,
@@ -335,7 +336,7 @@ splitHostPort authority = case T.stripPrefix "[" authority of
         (inner, afterBracket) -> Just (inner, T.drop 1 afterBracket)
     Nothing -> Just (T.breakOn ":" authority)
 
-{- Parse a host as an IP literal, or 'Nothing' for a DNS name. Handles dotted-
+{- | Parse a host as an IP literal, or 'Nothing' for a DNS name. Handles dotted-
 quad IPv4 and the IPv6 forms a host realistically carries — full eight-group form,
 @::@-compressed forms (including @::1@), and a trailing embedded IPv4 (the
 @a.b.c.d@ in @::ffff:a.b.c.d@) — which is enough to recognise the loopback,
