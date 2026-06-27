@@ -265,10 +265,17 @@ publishScenarios = do
             it "refuses an out-of-scope publish before any upstream write (anti-shadowing guard)" $ \e2e -> do
                 let name = publishOutOfScopeName
                     ver = publishVersion
-                -- A name outside PUBLISH_SCOPES is refused with a 403 BEFORE the relay, so
-                -- npm exits non-zero and the publication target never receives it — the write
-                -- is refused before it reaches the target (a False after the patience window
-                -- confirms the absence). This is the anti-shadowing security property.
+                -- Precondition: the freshly booted, sealed Verdaccio has never seen it, so the
+                -- post-publish absence below is attributable to the refusal, not a stale state.
+                absentBefore <- verdaccioHasVersionNow e2e name ver
+                absentBefore `shouldBe` False
+                -- A name outside PUBLISH_SCOPES is refused with a 403 BEFORE the relay, so npm
+                -- exits non-zero and the publication target never receives it. The absence is a
+                -- sound proof of refused-before-write *because* the harness configures Verdaccio
+                -- to accept anonymous publishes: had the document reached the target it would
+                -- have been stored and visible — exactly as the in-scope scenario, under the
+                -- identical relay and ACL, shows it is (that scenario is the control). So a
+                -- False after the patience window can only mean the write never left the proxy.
                 published <- withPublishProject e2e name ver npmPublishIn
                 npmExit published `shouldNotBe` ExitSuccess
                 reached <- verdaccioHasVersion e2e name ver
