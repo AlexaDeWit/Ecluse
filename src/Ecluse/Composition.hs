@@ -96,7 +96,7 @@ import Ecluse.Core.Queue (MemoryQueueConfig, defaultMemoryQueueConfig)
 import Ecluse.Core.Queue.Sqs (SqsConfig (sqsEndpoint), SqsEndpoint (..), defaultSqsConfig)
 import Ecluse.Core.Security (Limits (Limits, maxBodyBytes, maxNestingDepth, maxVersionCount), TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), hostAddress, lowerCaseHosts, splitHostPort)
 import Ecluse.Core.Server.Cache (CacheConfig (..))
-import Ecluse.Core.Server.Context (MountBinding, PackumentDeps (..))
+import Ecluse.Core.Server.Context (MountBinding, PackumentDeps (..), PublishDeps (..))
 import Ecluse.Core.Server.Response (HelpMessage, mkHelpMessage)
 import Ecluse.Core.Text (nonBlank)
 
@@ -338,6 +338,13 @@ data BootError
       fixed). Carries the rendered exception so the cause is legible and aggregated.
       -}
       CodeArtifactMintFailed Text
+    | {- | A publication target was configured (@PUBLICATION_TARGET_URL@) but no
+      publish-scope allow-list (@PUBLISH_SCOPES@) was supplied, so the anti-shadowing
+      guard would have nothing to enforce. Refused at boot rather than defaulting to an
+      empty allow-list (which would deny every publish) or an open one (which would let
+      a client shadow any public name).
+      -}
+      PublishScopesMissing
     deriving stock (Eq, Show)
 
 -- | Render a 'BootError' as a human-facing line for the aggregated failure block.
@@ -380,6 +387,8 @@ renderBootError = \case
         "mirror-target credential provider codeartifact failed to mint an initial token at boot: "
             <> detail
             <> " (a transient AWS error may clear on retry; a permanent one — bad domain/region or missing permission — must be fixed)"
+    PublishScopesMissing ->
+        "PUBLICATION_TARGET_URL is set but PUBLISH_SCOPES is empty: a publication target needs a publish-scope allow-list (e.g. @acme) for the anti-shadowing guard. Set PUBLISH_SCOPES, or unset PUBLICATION_TARGET_URL to disable publishing."
 
 {- | Validate the environment layer and optional document into the served mount
 bindings, or the aggregated boot errors. The composition root's single entry: it
@@ -392,7 +401,7 @@ composition root supplies @mountBindingFor@ and 'Data.Time.getCurrentTime'), so
 this validation is pure of IO and unit-testable without a socket.
 -}
 planMounts ::
-    (Ecosystem -> Maybe PackumentDeps -> Maybe MountBinding) ->
+    (Ecosystem -> Maybe PackumentDeps -> Maybe PublishDeps -> Maybe MountBinding) ->
     IO UTCTime ->
     CredentialProviders ->
     EnvConfig ->
@@ -409,18 +418,46 @@ resolve to an initialized provider, and its ecosystem must resolve to an adapter
 served rather than the @501@ stub). Errors aggregate across every mount.
 -}
 composeBindings ::
-    (Ecosystem -> Maybe PackumentDeps -> Maybe MountBinding) ->
+    (Ecosystem -> Maybe PackumentDeps -> Maybe PublishDeps -> Maybe MountBinding) ->
     IO UTCTime ->
     CredentialProviders ->
     Config ->
     Either [BootError] [MountBinding]
 composeBindings resolveAdapter clock providers config =
-    case partitionEithers (map bindingFor (Map.elems (configMounts config))) of
-        ([], bindings) -> Right bindings
-        (errs, _) -> Left (concat errs)
+    -- The publish-deps validation is global (env-level), so its error aggregates with
+    -- the per-mount errors rather than short-circuiting: one boot reports every problem.
+    let (pubErrs, pubDeps) = either (,Nothing) ([],) publishDepsResult
+     in case (pubErrs, partitionEithers (map (bindingFor pubDeps) (Map.elems (configMounts config)))) of
+            ([], ([], bindings)) -> Right bindings
+            (_, (errs, _)) -> Left (pubErrs <> concat errs)
   where
     inboundToken :: Maybe Secret
     inboundToken = cfgAuthToken (configEnv config)
+
+    {- The first-party publish dependencies, shared across the (single-ecosystem)
+    mounts: 'Nothing' when no publication target is configured (the publish path is
+    off — a @PUT \/{pkg}@ is then @405@), 'Just' when one is set, or a fail-loud
+    'PublishScopesMissing' when a target is set without a publish-scope allow-list. The
+    target's URL, the scopes, and the static fallback credential are the publish env
+    layer; the edge token, response bounds, and help message are shared with the read
+    paths. -}
+    publishDepsResult :: Either [BootError] (Maybe PublishDeps)
+    publishDepsResult = case cfgPublicationTarget (configEnv config) of
+        Nothing -> Right Nothing
+        Just url
+            | null (cfgPublishScopes (configEnv config)) -> Left [PublishScopesMissing]
+            | otherwise ->
+                Right
+                    ( Just
+                        PublishDeps
+                            { pubTargetUrl = unUrl url
+                            , pubScopes = cfgPublishScopes (configEnv config)
+                            , pubStaticToken = cfgPublicationTargetToken (configEnv config)
+                            , pubInboundToken = inboundToken
+                            , pubLimits = limits
+                            , pubHelp = helpMessage
+                            }
+                    )
 
     -- The resolved tarball-host policy for every mount, from the secure-default
     -- environment toggle: honour a cross-host dist.tarball only when explicitly
@@ -472,10 +509,12 @@ composeBindings resolveAdapter clock providers config =
 
     {- Resolve one mount to its binding, or the boot errors that block it. Both the
     credential reference and the adapter are checked even when one already failed,
-    so a mount missing both reports both in one run rather than one at a time. -}
-    bindingFor :: Mount -> Either [BootError] MountBinding
-    bindingFor mount =
-        case (credentialError mount, resolveAdapter (mountEcosystem mount) (Just (packumentDepsFor mount))) of
+    so a mount missing both reports both in one run rather than one at a time. The
+    resolved publish dependencies (shared across mounts) are passed to the adapter so
+    the binding carries the first-party publish wiring. -}
+    bindingFor :: Maybe PublishDeps -> Mount -> Either [BootError] MountBinding
+    bindingFor pubDeps mount =
+        case (credentialError mount, resolveAdapter (mountEcosystem mount) (Just (packumentDepsFor mount)) pubDeps) of
             (Nothing, Just binding) -> Right binding
             (mCredErr, mBinding) ->
                 Left (maybeToList mCredErr <> [MissingAdapter (mountEcosystem mount) | isNothing mBinding])

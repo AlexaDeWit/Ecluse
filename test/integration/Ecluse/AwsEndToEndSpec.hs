@@ -180,6 +180,7 @@ mountBinding privateUrl publicUrl mirrorUrl =
         { bindingPrefix = "npm" :| []
         , bindingClassifier = Npm.classify
         , bindingPackumentDeps = Just deps
+        , bindingPublishDeps = Nothing
         , bindingRenderer = npmRenderer
         }
   where

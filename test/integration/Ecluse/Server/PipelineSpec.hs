@@ -698,6 +698,7 @@ withProxyEnvQueueDeps queue privateUp publicUp inbound tweakDeps k =
                             { bindingPrefix = "npm" :| []
                             , bindingClassifier = Npm.classify
                             , bindingPackumentDeps = Just (tweakDeps (deps privatePort publicPort inbound))
+                            , bindingPublishDeps = Nothing
                             , bindingRenderer = npmRenderer
                             }
                         ]
@@ -749,6 +750,7 @@ withProxyEffectful effectful privateUp publicUp k = do
                             { bindingPrefix = "npm" :| []
                             , bindingClassifier = Npm.classify
                             , bindingPackumentDeps = Just (depsWith effectful privatePort publicPort)
+                            , bindingPublishDeps = Nothing
                             , bindingRenderer = npmRenderer
                             }
                         ]
@@ -2602,6 +2604,7 @@ captureBreachLog privateBody = do
                             { bindingPrefix = "npm" :| []
                             , bindingClassifier = Npm.classify
                             , bindingPackumentDeps = Just (withLimits tightLimits (deps privatePort publicPort Nothing))
+                            , bindingPublishDeps = Nothing
                             , bindingRenderer = npmRenderer
                             }
                         ]

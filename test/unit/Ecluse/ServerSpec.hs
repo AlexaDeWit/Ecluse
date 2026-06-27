@@ -4,7 +4,7 @@ import Prelude hiding (get)
 
 import Katip (Environment (Environment), Namespace (Namespace), initLogEnv)
 import Network.HTTP.Client (Manager, defaultManagerSettings, newManager)
-import Network.HTTP.Types (hConnection, methodPost, status200, statusCode)
+import Network.HTTP.Types (hConnection, methodPost, methodPut, status200, statusCode)
 import Network.Wai (
     Application,
     Request (requestBodyLength, requestMethod),
@@ -23,11 +23,14 @@ import UnliftIO.Timeout (timeout)
 import Data.Time (addUTCTime, getCurrentTime)
 
 import Ecluse.Core.Credential (AuthToken (..), CredentialProvider, mkSecret, staticProvider)
+import Ecluse.Core.Package (mkScope)
 import Ecluse.Core.Queue (newInMemoryQueue)
 import Ecluse.Core.Registry (ParseError (..), RegistryClient (..))
 import Ecluse.Core.Registry.Npm.Route qualified as Npm
 import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
+import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
+import Ecluse.Core.Server.Context (PublishDeps (..))
 import Ecluse.Core.Server.Route (Classifier, Route (..))
 import Ecluse.Core.Worker (workerHeartbeatStaleAfter)
 import Ecluse.Env (Env, envWorkerHeartbeat, newEnv, newWorkerHeartbeat, recordPoll)
@@ -97,10 +100,19 @@ unserved @501@ stub).
 -}
 mountAt :: NonEmpty Text -> Classifier -> MountBinding
 mountAt prefix classifier =
+    publishMountAt prefix classifier Nothing
+
+{- | A test mount binding like 'mountAt' but with the given (optional) first-party
+publish dependencies — 'Nothing' leaves a @PUT \/{pkg}@ the @405@ opt-out, 'Just'
+enables the publish path (the scope guard and the relay).
+-}
+publishMountAt :: NonEmpty Text -> Classifier -> Maybe PublishDeps -> MountBinding
+publishMountAt prefix classifier publishDeps =
     MountBinding
         { bindingPrefix = prefix
         , bindingClassifier = classifier
         , bindingPackumentDeps = Nothing
+        , bindingPublishDeps = publishDeps
         , bindingRenderer = npmRenderer
         }
 
@@ -110,6 +122,36 @@ classifier the composition root wires in.
 -}
 npmMountApp :: IO Application
 npmMountApp = application (mkServerConfig [mountAt ("npm" :| []) Npm.classify]) <$> newTestEnv
+
+{- | The 'application' under a single @\/npm@ mount with the first-party publish path
+__enabled__: a publish-scope allow-list of @\@acme@ and a publication target pointed at
+an __unconnectable__ address. So an in-scope publish passes the anti-shadowing guard and
+attempts the relay (which then fails to connect — a @502@, proving the write was
+reached), while an out-of-scope publish is refused at the guard (a @403@) before any
+connection — the assertion that the guard fires before any upstream write.
+-}
+publishMountApp :: IO Application
+publishMountApp = publishAppWith basePublishDeps
+
+{- | The base first-party publish dependencies the publish tests build on: an @\@acme@
+scope allow-list and a publication target at an unconnectable port (so an in-scope
+publish reaches the relay and fails to connect — a @502@).
+-}
+basePublishDeps :: PublishDeps
+basePublishDeps =
+    PublishDeps
+        { pubTargetUrl = "http://127.0.0.1:1" -- an unconnectable port
+        , pubScopes = [mkScope "acme"]
+        , pubStaticToken = Nothing
+        , pubInboundToken = Nothing
+        , pubLimits = defaultLimits
+        , pubHelp = Nothing
+        }
+
+-- | The 'application' under a single @\/npm@ mount carrying the given publish deps.
+publishAppWith :: PublishDeps -> IO Application
+publishAppWith deps =
+    application (mkServerConfig [publishMountAt ("npm" :| []) Npm.classify (Just deps)]) <$> newTestEnv
 
 {- | The 'application' under a single @\/npm@ mount whose classifier is a __fake__
 grammar (not npm's), proving dispatch routes through the binding's classifier
@@ -122,10 +164,12 @@ fakeClassifierApp = application (mkServerConfig [mountAt ("npm" :| []) fakeClass
   where
     -- A deliberately non-npm grammar: @beep@ is the (locally answered) Ping route,
     -- every other path is denied. npm's @is-odd@ would be a Packument; here it is
-    -- Unsupported, so the two grammars give observably different routes.
-    fakeClassify :: [Text] -> Route
-    fakeClassify ["beep"] = Ping
-    fakeClassify _ = Unsupported
+    -- Unsupported, so the two grammars give observably different routes. The grammar
+    -- ignores the method (it recognises no write route), proving dispatch routes
+    -- through the injected method-aware classifier.
+    fakeClassify :: Classifier
+    fakeClassify _method ["beep"] = Ping
+    fakeClassify _method _ = Unsupported
 
 {- | The 'application' with __no mounts__: every path but the control-plane health
 probes matches no mount and is the neutral @404@.
@@ -272,6 +316,41 @@ spec = do
             it "404s a hostile traversal path rather than routing it" $
                 -- @%2F@ decodes to one segment carrying a slash; the router denies it.
                 get "/npm/foo%2Fbar" `shouldRespondWith` 404
+
+    describe "first-party publish path (PUT /{pkg})" $ do
+        with npmMountApp $
+            it "405s a publish when no publication target is configured (the opt-in is off)" $
+                -- No publish dependencies are wired on this mount, so there is no implicit
+                -- write path; a PUT /{pkg} is Method Not Allowed.
+                request methodPut "/npm/widget" [] "" `shouldRespondWith` 405
+
+        with publishMountApp $ do
+            it "refuses an out-of-scope publish with 403, before any upstream write (anti-shadowing)" $
+                -- @other is outside the @acme allow-list, so the guard fires before the
+                -- relay: the unconnectable target is never contacted (a 403, not the 502 an
+                -- attempted write to it would yield).
+                request methodPut "/npm/@other/widget" [] "" `shouldRespondWith` 403
+
+            it "refuses an unscoped publish with 403 (an unscoped name is within no scope)" $
+                request methodPut "/npm/widget" [] "" `shouldRespondWith` 403
+
+            it "lets an in-scope publish through the guard to the relay (502 when the target is unreachable)" $
+                -- @acme is in scope, so the guard admits the publish and the relay is
+                -- attempted; the target is unconnectable, so it fails with 502 — proving the
+                -- guard let the write through rather than refusing it at the scope check.
+                request methodPut "/npm/@acme/widget" [] "" `shouldRespondWith` 502
+
+        with (publishAppWith basePublishDeps{pubTargetUrl = ""}) $
+            it "500s an in-scope publish when the publication target URL is unformable (misconfig)" $
+                -- An empty target URL cannot form a request, a configuration fault rather
+                -- than a transient outage, so the publish is a 500 (not a 502).
+                request methodPut "/npm/@acme/widget" [] "" `shouldRespondWith` 500
+
+        with (publishAppWith basePublishDeps{pubInboundToken = Just (mkSecret "edge-token")}) $ do
+            it "401s a publish that fails the edge token gate (before the scope guard)" $
+                -- With an edge token configured, a publish carrying none is rejected at the
+                -- edge — the same gate the read paths apply.
+                request methodPut "/npm/@acme/widget" [] "" `shouldRespondWith` 401
 
     describe "the two response tiers (neutral above mounts, mount renderer within)" $
         with npmMountApp $ do

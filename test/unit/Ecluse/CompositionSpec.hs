@@ -37,7 +37,7 @@ import Ecluse.Core.Credential (authSecret, currentToken, unSecret)
 import Ecluse.Core.Credential.CodeArtifact (CodeArtifactConfig (caDomain, caDomainOwner, caDurationSeconds, caRegion))
 import Ecluse.Core.Credential.Refresh (noCredentialReporters)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
-import Ecluse.Core.Package (HashAlg (SHA1, SHA512))
+import Ecluse.Core.Package (HashAlg (SHA1, SHA512), mkScope)
 import Ecluse.Core.Package.Integrity (
     defaultMinIntegrity,
     defaultMinTrustedIntegrity,
@@ -49,8 +49,9 @@ import Ecluse.Core.Queue.Sqs (SqsConfig (sqsEndpoint, sqsQueueUrl, sqsRegion), S
 import Ecluse.Core.Security (Limits (maxBodyBytes, maxNestingDepth, maxVersionCount), TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), defaultLimits)
 import Ecluse.Core.Server.Cache (CacheConfig (cacheMaxEntries, cacheTtl))
 import Ecluse.Core.Server.Context (
-    MountBinding (bindingPackumentDeps, bindingPrefix),
+    MountBinding (bindingPackumentDeps, bindingPrefix, bindingPublishDeps),
     PackumentDeps (..),
+    PublishDeps (..),
  )
 import Ecluse.Core.Server.Response (unHelpMessage)
 
@@ -71,6 +72,7 @@ spec = do
     cacheConfigSpec
     composeBindingsSpec
     bootErrorSpec
+    publishWiringSpec
     renderSpec
 
 -- ── fixtures ──────────────────────────────────────────────────────────────────
@@ -643,6 +645,44 @@ bootErrorSpec = describe "planMounts (fail fast at boot)" $ do
             Left errs -> errs `shouldBe` [UnresolvedCredential Npm StaticCredential]
             Right _ -> expectationFailure "expected an unresolved-credential boot error"
 
+    it "fails when a publication target is set without a publish-scope allow-list" $ do
+        -- PUBLICATION_TARGET_URL set but PUBLISH_SCOPES empty: the anti-shadowing guard
+        -- would have nothing to enforce, so the boot refuses rather than defaulting.
+        env <- expectEnv (("PUBLICATION_TARGET_URL", "https://publish.example.test") : staticEnvVars)
+        planFrom env Nothing >>= \case
+            Left errs -> errs `shouldBe` [PublishScopesMissing]
+            Right _ -> expectationFailure "expected a publish-scopes-missing boot error"
+
+-- ── first-party publish wiring ────────────────────────────────────────────────
+
+publishWiringSpec :: Spec
+publishWiringSpec = describe "planMounts (first-party publish deps)" $ do
+    it "wires the publication target and scope allow-list onto the mount when configured" $ do
+        env <-
+            expectEnv
+                ( [ ("PUBLICATION_TARGET_URL", "https://publish.example.test")
+                  , ("PUBLISH_SCOPES", "@acme, @beta")
+                  ]
+                    <> staticEnvVars
+                )
+        planFrom env Nothing >>= \case
+            Right [binding] -> case bindingPublishDeps binding of
+                Just deps -> do
+                    pubTargetUrl deps `shouldBe` "https://publish.example.test"
+                    pubScopes deps `shouldBe` [mkScope "acme", mkScope "beta"]
+                Nothing -> expectationFailure "expected the mount to carry publish deps"
+            _ -> expectationFailure "expected a single wired binding"
+
+    it "leaves the publish path off (no publish deps) when no publication target is configured" $ do
+        -- The opt-out: with no PUBLICATION_TARGET_URL the mount carries no publish deps,
+        -- so a PUT /{pkg} is 405 — there is no implicit write path.
+        env <- expectEnv staticEnvVars
+        planFrom env Nothing >>= \case
+            Right [binding] -> case bindingPublishDeps binding of
+                Nothing -> pure ()
+                Just _ -> expectationFailure "expected no publish deps when no publication target is configured"
+            _ -> expectationFailure "expected a single wired binding"
+
 -- ── rendering ─────────────────────────────────────────────────────────────────
 
 renderSpec :: Spec
@@ -664,6 +704,7 @@ renderSpec = describe "renderBootError" $
             `shouldSatisfy` infixed "12-digit"
         -- The mint-failure render makes the transient-vs-permanent distinction legible.
         renderBootError (CodeArtifactMintFailed "AccessDenied") `shouldSatisfy` infixed "transient"
+        renderBootError PublishScopesMissing `shouldSatisfy` infixed "PUBLISH_SCOPES"
   where
     infixed :: Text -> Text -> Bool
     infixed needle hay = needle `T.isInfixOf` hay
