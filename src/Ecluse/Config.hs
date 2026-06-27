@@ -116,7 +116,7 @@ import Ecluse.Core.Package.Integrity (
  )
 import Ecluse.Core.Rules.Types (
     PrecededRule (..),
-    PureRule (..),
+    Rule (..),
     defaultPrecedence,
  )
 import Ecluse.Core.Security (
@@ -968,7 +968,7 @@ The effectful @AllowIfRemediatesCve@ rule type is __not__ a member of the rule
 model here, so naming it decodes as a clean 'UnknownRuleType' rather than a crash:
 config cannot conjure a rule the engine does not implement.
 -}
-buildRule :: Text -> Text -> RuleEntry -> Either [PolicyError] PureRule
+buildRule :: Text -> Text -> RuleEntry -> Either [PolicyError] Rule
 buildRule name ty entry = case ty of
     "AllowIfPublishedBefore" -> case entryAgeSeconds entry of
         Just secs
@@ -985,7 +985,7 @@ buildRule name ty entry = case ty of
 only the type's own value field may be overridden, and a restated @type@ must
 match the existing rule's type.
 -}
-patchRuleValue :: Text -> RuleEntry -> PureRule -> Either [PolicyError] PureRule
+patchRuleValue :: Text -> RuleEntry -> Rule -> Either [PolicyError] Rule
 patchRuleValue name entry rule = do
     () <- checkRestatedType name entry rule
     case rule of
@@ -999,7 +999,7 @@ patchRuleValue name entry rule = do
 
 -- A restated @type@ on a patch must match the existing rule's kind, so a typo
 -- there (changing the rule's identity by accident) is caught loudly.
-checkRestatedType :: Text -> RuleEntry -> PureRule -> Either [PolicyError] ()
+checkRestatedType :: Text -> RuleEntry -> Rule -> Either [PolicyError] ()
 checkRestatedType name entry rule = case entryType entry of
     Nothing -> Right ()
     Just ty
@@ -1008,7 +1008,7 @@ checkRestatedType name entry rule = case entryType entry of
         | otherwise -> Left [UnknownRuleType name ty]
 
 -- The wire @type@ name of a rule constructor.
-ruleTypeName :: PureRule -> Text
+ruleTypeName :: Rule -> Text
 ruleTypeName = \case
     AllowScope{} -> "AllowScope"
     AllowIfPublishedBefore{} -> "AllowIfPublishedBefore"
@@ -1308,7 +1308,7 @@ rulesOf = Map.elems . policyRules
 -- ── small shared helpers ─────────────────────────────────────────────────────
 
 -- Pair a rule with its type's default precedence (the omitted-precedence case).
-atDefault :: PureRule -> PrecededRule
+atDefault :: Rule -> PrecededRule
 atDefault r = PrecededRule (defaultPrecedence r) r
 
 -- Wrap text in double quotes for a human-facing message.

@@ -28,17 +28,17 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (mkPackageName)
 import Ecluse.Core.Registry.Npm (ResponseBoundExceeded (ResponseBoundExceeded))
 import Ecluse.Core.Rules (
+    PreparedRule (..),
     Resilience (Resilience),
-    Rule (Rule, ruleEval, ruleName, rulePrecedence, ruleResilience),
     defaultEffectfulConfig,
-    liftPolicy,
     newBreaker,
     noBreakerReporter,
+    prepare,
  )
 import Ecluse.Core.Rules.Types (
     Decision (BlockedByDefault, Undecidable),
     FailureAlignment (FailDeny),
-    PureRule (AllowIfPublishedBefore),
+    Rule (AllowIfPublishedBefore),
     RuleResult (NoDecision),
     atDefaultPrecedence,
  )
@@ -164,19 +164,19 @@ spec = do
 
     describe "evalTier (rule-evaluation tier)" $ do
         it "is the structural tier for an empty rule set" $
-            evalTier ([] :: [Rule IO]) `shouldBe` Metric.Structural
-        it "is the structural tier for a purely-pure rule set" $
-            evalTier (liftPolicy [atDefaultPrecedence (AllowIfPublishedBefore 0)] :: [Rule IO])
-                `shouldBe` Metric.Structural
+            evalTier ([] :: [PreparedRule]) `shouldBe` Metric.Structural
+        it "is the structural tier for a purely-pure rule set" $ do
+            rules <- prepare [atDefaultPrecedence (AllowIfPublishedBefore 0)]
+            evalTier rules `shouldBe` Metric.Structural
         it "is the effectful tier when any rule carries a resilience policy" $ do
             breaker <- newBreaker
-            let effectful :: Rule IO
+            let effectful :: PreparedRule
                 effectful =
-                    Rule
-                        { rulePrecedence = 300
-                        , ruleName = "EffRule"
-                        , ruleEval = \_ _ -> pure (NoDecision "noop")
-                        , ruleResilience = Just (Resilience defaultEffectfulConfig FailDeny breaker noBreakerReporter)
+                    PreparedRule
+                        { prepName = "EffRule"
+                        , prepPrecedence = 300
+                        , prepResilience = Just (Resilience defaultEffectfulConfig FailDeny breaker noBreakerReporter)
+                        , prepEval = \_ _ -> pure (NoDecision "noop")
                         }
             evalTier [effectful] `shouldBe` Metric.Effectful
 

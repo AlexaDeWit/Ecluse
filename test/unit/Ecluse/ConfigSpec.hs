@@ -19,7 +19,7 @@ import Ecluse.Core.Package.Integrity (
  )
 import Ecluse.Core.Rules.Types (
     PrecededRule (..),
-    PureRule (..),
+    Rule (..),
     defaultAllowIfPublishedBeforePrecedence,
     defaultDenyInstallTimeExecutionPrecedence,
  )
@@ -927,7 +927,7 @@ containsAllowScope _ = False
 
 -- Whether the resolved rule set contains exactly the given rule at the given
 -- precedence.
-hasRuleAtPrec :: Int -> PureRule -> Either [PolicyError] [PrecededRule] -> Bool
+hasRuleAtPrec :: Int -> Rule -> Either [PolicyError] [PrecededRule] -> Bool
 hasRuleAtPrec prec rule (Right rs) = PrecededRule prec rule `elem` rs
 hasRuleAtPrec _ _ _ = False
 

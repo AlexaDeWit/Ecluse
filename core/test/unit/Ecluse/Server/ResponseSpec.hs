@@ -15,11 +15,12 @@ import Ecluse.Core.Package (
     mkPackageName,
     mkScope,
  )
-import Ecluse.Core.Rules (evalRulesPure)
+import Ecluse.Core.Rules (evalRules, prepare)
 import Ecluse.Core.Rules.Types (
     Decision (Admitted, Blocked, Undecidable),
     EvalContext (EvalContext),
-    PureRule (AllowScope, DenyInstallTimeExecution),
+    PrecededRule,
+    Rule (AllowScope, DenyInstallTimeExecution),
     atDefaultPrecedence,
  )
 import Ecluse.Core.Server.Response (
@@ -45,6 +46,10 @@ import Ecluse.Core.Version (mkVersion)
 -- | A fixed "now" so age-based fixtures are deterministic.
 now :: UTCTime
 now = UTCTime (fromGregorian 2026 6 20) 0
+
+-- | Decide a built-in policy through the one engine ('prepare' then 'evalRules') at 'now'.
+decideAt :: [PrecededRule] -> PackageDetails -> IO Decision
+decideAt prs pd = prepare prs >>= \prepared -> evalRules (EvalContext now) prepared pd
 
 -- | A single inert artifact; the response model does not inspect artifacts.
 sampleArtifact :: Artifact
@@ -193,7 +198,7 @@ spec = do
     describe "serveDecisionOf — a rules Decision becomes a serve outcome" $ do
         it "a deny-rule decision rejects ByPolicy, naming the rule, with the rendered why" $ do
             let pd = pkg "public" 30 (RunsCodeOnInstall "preinstall hook")
-                decision = evalRulesPure (EvalContext now) [atDefaultPrecedence DenyInstallTimeExecution] pd
+            decision <- decideAt [atDefaultPrecedence DenyInstallTimeExecution] pd
             case serveDecisionOf pd decision of
                 Reject rej -> do
                     rejectionReason rej `shouldBe` ByPolicy (RuleName "DenyInstallTimeExecution")
@@ -202,7 +207,7 @@ spec = do
                 Admit -> expectationFailure "a deny decision must reject, not admit"
         it "a deny-by-default decision rejects ByPolicy (no rule allowed it)" $ do
             let pd = pkg "public" 30 NoCodeOnInstall
-                decision = evalRulesPure (EvalContext now) [] pd
+            decision <- decideAt [] pd
             case serveDecisionOf pd decision of
                 Reject rej -> do
                     rejectionReason rej `shouldBe` ByPolicy (RuleName "BlockedByDefault")
@@ -210,7 +215,7 @@ spec = do
                 Admit -> expectationFailure "deny-by-default must reject, not admit"
         it "an approved decision admits — only denials reject" $ do
             let pd = pkg "internal" 30 NoCodeOnInstall
-                decision = evalRulesPure (EvalContext now) [atDefaultPrecedence (AllowScope (mkScope "internal"))] pd
+            decision <- decideAt [atDefaultPrecedence (AllowScope (mkScope "internal"))] pd
             serveDecisionOf pd decision `shouldBe` Admit
 
         it "an effectful approval admits, like a pure approval" $ do

@@ -35,7 +35,7 @@ import Network.HTTP.Client qualified as HTTP
 
 import Ecluse.Core.Package (PackageName, renderPackageName)
 import Ecluse.Core.Registry.Npm (ResponseBoundExceeded (ResponseBoundExceeded))
-import Ecluse.Core.Rules (Rule (ruleResilience))
+import Ecluse.Core.Rules (PreparedRule (prepResilience))
 import Ecluse.Core.Rules.Types (Decision (Undecidable))
 import Ecluse.Core.Server.Response (
     PackumentStatus (PackumentForbidden, PackumentOk),
@@ -166,12 +166,12 @@ denialLabels = \case
 
 {- | The rule-evaluation tier a duration is attributed to, from the mount's rule set:
 a mount with any __resilient__ (effectful) rule is attributed to the effectful tier;
-a purely-pure rule set reduces to the structural tier. The resilience policy a rule
-carries — not a separate list — is what distinguishes an effectful rule now that the
-two tiers are one engine.
+a purely-pure rule set reduces to the structural tier. The resilience policy a prepared
+rule carries — not a separate list — is what distinguishes an effectful rule now that
+the two tiers are one engine.
 -}
-evalTier :: [Rule m] -> Metric.Tier
-evalTier rules = if any (isJust . ruleResilience) rules then Metric.Effectful else Metric.Structural
+evalTier :: [PreparedRule] -> Metric.Tier
+evalTier rules = if any (isJust . prepResilience) rules then Metric.Effectful else Metric.Structural
 
 {- | Map an undecidable verdict's transience to the bounded
 @ecluse.rule.effectful.failures@ cause: a retryable cause is a connection-class fault (the

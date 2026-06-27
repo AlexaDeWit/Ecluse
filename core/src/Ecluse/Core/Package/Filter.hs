@@ -48,7 +48,7 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 
 import Ecluse.Core.Package (PackageInfo (infoDistTags, infoVersions), pkgVersion)
-import Ecluse.Core.Rules (evalRulesPure)
+import Ecluse.Core.Rules (evalRules, prepare)
 import Ecluse.Core.Rules.Types (Decision (Admitted), EvalContext, PrecededRule)
 import Ecluse.Core.Version (Version, selectLatest, unVersion)
 
@@ -78,10 +78,12 @@ data FilterPlan = FilterPlan
     deriving stock (Eq, Show)
 
 {- | Decide a single public packument against a rule set: which versions survive,
-where @latest@ resolves, and every version's decision. Pure and total — it reasons
-over the typed 'PackageInfo' alone, with no registry wire format in sight.
+where @latest@ resolves, and every version's decision. 'IO' and total — it reasons
+over the typed 'PackageInfo' alone, with no registry wire format in sight, deciding
+each version through the one engine ('Ecluse.Core.Rules.evalRules', over the
+'prepare'd policy), so the filter's per-version decision and the serve path share it.
 
-A version survives iff 'evalRulesPure' 'Admitted' it; every other verdict drops it.
+A version survives iff the engine 'Admitted' it; every other verdict drops it.
 @latest@ is resolved by 'Ecluse.Core.Version.selectLatest' from the upstream-tagged
 @latest@ (looked up among the versions, so a tag aimed at an absent version
 contributes nothing) and the surviving versions — kept while it survives, else
@@ -89,9 +91,11 @@ repointed downward to the highest stable survivor. The decisions are returned fo
 __every__ version in key order, so the adapter has each denial's reason when
 nothing survives.
 -}
-filterPlan :: EvalContext -> [PrecededRule] -> PackageInfo -> FilterPlan
-filterPlan ctx rules info =
-    filterPlanFromDecisions (Map.map (evalRulesPure ctx rules) (infoVersions info)) info
+filterPlan :: EvalContext -> [PrecededRule] -> PackageInfo -> IO FilterPlan
+filterPlan ctx rules info = do
+    prepared <- prepare rules
+    decisions <- traverse (evalRules ctx prepared) (infoVersions info)
+    pure (filterPlanFromDecisions decisions info)
 
 {- | Build a 'FilterPlan' from per-version 'Decision's already taken, rather than
 evaluating the pure tier here. This is the path the __effectful__ tier feeds: it

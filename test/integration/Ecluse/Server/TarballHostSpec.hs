@@ -29,8 +29,8 @@ import Ecluse.Core.Queue (newInMemoryQueue)
 import Ecluse.Core.Registry (ParseError (ParseError), RegistryClient (..))
 import Ecluse.Core.Registry.Npm.Route qualified as Npm
 import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
-import Ecluse.Core.Rules (liftPolicy)
-import Ecluse.Core.Rules.Types (PrecededRule, PureRule (AllowIfPublishedBefore), atDefaultPrecedence)
+import Ecluse.Core.Rules (prepare)
+import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfPublishedBefore), atDefaultPrecedence)
 import Ecluse.Core.Security (LoweredHostSet, TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), defaultLimits, lowerCaseHosts)
 import Ecluse.Core.Security.Egress (newGuardedTlsManager)
 import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
@@ -123,12 +123,13 @@ proxyApp policy internalOptIn port = do
     logEnv <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
     heartbeat <- newWorkerHeartbeat
     env <- newEnv fakeRegistry queue fakeCredentials guardedManager trusted metadataCache logEnv telemetryDisabled heartbeat
+    mountDeps <- deps policy internalOptIn port
     let cfg =
             mkServerConfig
                 [ MountBinding
                     { bindingPrefix = "npm" :| []
                     , bindingClassifier = Npm.classify
-                    , bindingPackumentDeps = Just (deps policy internalOptIn port)
+                    , bindingPackumentDeps = Just mountDeps
                     , bindingPublishDeps = Nothing
                     , bindingRenderer = npmRenderer
                     }
@@ -139,23 +140,25 @@ proxyApp policy internalOptIn port = do
 upstream on @127.0.0.1@; @localhost@ (the cross-host the packument names) is added to
 the allowlist via the mirror target's host, so it is allowlisted yet distinct from the
 packument host. The private origin is an unreachable loopback port. -}
-deps :: TarballHostPolicy -> LoweredHostSet -> Port -> PackumentDeps
-deps policy internalOptIn port =
-    PackumentDeps
-        { pdPrivateBaseUrl = "http://127.0.0.1:1" -- unreachable: forces a public miss
-        , pdPublicBaseUrl = "http://127.0.0.1:" <> show port
-        , pdMountBaseUrl = "https://proxy.test"
-        , pdMirrorTarget = "http://localhost:9" -- puts localhost on the upstream allowlist
-        , pdRules = liftPolicy admitOldEnough
-        , pdTarballHostPolicy = policy
-        , pdAllowedInternalHosts = internalOptIn
-        , pdLimits = defaultLimits
-        , pdInboundToken = Nothing
-        , pdNow = pure fixedNow
-        , pdHelp = Nothing
-        , pdMinIntegrity = defaultMinIntegrity
-        , pdMinTrustedIntegrity = defaultMinTrustedIntegrity
-        }
+deps :: TarballHostPolicy -> LoweredHostSet -> Port -> IO PackumentDeps
+deps policy internalOptIn port = do
+    prepared <- prepare admitOldEnough
+    pure
+        PackumentDeps
+            { pdPrivateBaseUrl = "http://127.0.0.1:1" -- unreachable: forces a public miss
+            , pdPublicBaseUrl = "http://127.0.0.1:" <> show port
+            , pdMountBaseUrl = "https://proxy.test"
+            , pdMirrorTarget = "http://localhost:9" -- puts localhost on the upstream allowlist
+            , pdRules = prepared
+            , pdTarballHostPolicy = policy
+            , pdAllowedInternalHosts = internalOptIn
+            , pdLimits = defaultLimits
+            , pdInboundToken = Nothing
+            , pdNow = pure fixedNow
+            , pdHelp = Nothing
+            , pdMinIntegrity = defaultMinIntegrity
+            , pdMinTrustedIntegrity = defaultMinTrustedIntegrity
+            }
 
 -- ── the upstream double ───────────────────────────────────────────────────────
 

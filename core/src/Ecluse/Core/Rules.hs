@@ -10,29 +10,38 @@ and @'Unavailable' _ 'FailNoDecision' _@ are non-decisive no-ops whose reasons a
 collected, in boot order, for the deny-by-default audit trail. If no rule is decisive
 the package is 'BlockedByDefault'.
 
-There is __one rule representation__ ('Rule') and __one engine__. A pure rule lifts
-into the rule shape at no cost ('liftPureRule', evaluating directly); an effectful
-rule carries a 'Resilience' policy (a per-attempt timeout, bounded retry with
-backoff, and a per-source 'Ecluse.Core.Breaker.Breaker') applied by the harness
-'runEffectfulRule'. The order /is/ the tiebreak: there is no runtime comparison of
-results, so the duplicated winner-selection the two-tier design once carried is gone.
+__A rule is evaluation-agnostic data; how it is evaluated is a separate concern.__ The
+closed built-in vocabulary ('Ecluse.Core.Rules.Types.Rule') says /what/ a rule is;
+'evalRule' is the single dispatch that says /how/ each built-in rule decides. The
+engine's runtime structure is the 'PreparedRule': it pairs a rule's boot-order
+identity (precedence and name) with the raw per-version evaluator and an optional
+'Resilience' policy. 'prepare' builds one per configured rule; the built-in rules are
+pure, so they carry no 'Resilience' and run directly, while an effectful rule would
+carry a 'Resilience' (a per-attempt timeout, bounded retry with backoff, and a
+per-source 'Ecluse.Core.Breaker.Breaker') applied by the harness 'runEffectfulRule'.
+The order /is/ the tiebreak: there is no runtime comparison of results.
+
+The evaluator on a 'PreparedRule' is __not__ reachable from config: 'prepare' only
+ever binds 'evalRule' over closed 'Rule' data, so untrusted config can express only
+the built-in vocabulary. Supplying an arbitrary evaluator is a code-layer capability
+(the engine's own tests today; a rule DSL or plugin later), never a config surface.
 
 'evalRules' may evaluate effectful rules speculatively in parallel, but the result is
 always __as-if sequential by boot order__: the winner is the earliest-in-order
 decisive rule, never the first to return in wall-clock time, and once the winner is
 known every still-running strictly-later evaluation is cancelled. The cheap pure
-prefix is evaluated directly, so no IO an earlier pure decisive result would moot is
-ever launched. 'evalRulesPure' is the pure entry point over the configuration
-vocabulary. The rule data types live in "Ecluse.Core.Rules.Types".
+prefix is evaluated directly, so no IO an earlier decisive result would moot is ever
+launched. Evaluation is 'IO'-typed (a rule's evaluator may do IO), so there is no pure
+entry point. The rule data types live in "Ecluse.Core.Rules.Types".
 -}
 module Ecluse.Core.Rules (
-    -- * The uniform rule
-    Rule (..),
+    -- * The built-in rule dispatch
+    evalRule,
+
+    -- * The engine's prepared rule
+    PreparedRule (..),
     Resilience (..),
-    liftPureRule,
-    liftPolicy,
-    pureRuleName,
-    evalPureRule,
+    prepare,
 
     -- * Boot-time ordering
     bootOrder,
@@ -40,7 +49,6 @@ module Ecluse.Core.Rules (
 
     -- * Evaluation
     evalRules,
-    evalRulesPure,
     renderDecision,
     renderDuration,
 
@@ -77,96 +85,31 @@ import Ecluse.Core.Breaker (
     reportBreakerChange,
  )
 import Ecluse.Core.Package
-
--- 'PrecededRule' carries its own @rulePrecedence@ field (config's resolved-policy
--- element); the engine 'Rule' record below carries one too. They are distinct fields
--- on distinct types, so the config one is hidden here and read by pattern match.
-import Ecluse.Core.Rules.Types hiding (rulePrecedence)
+import Ecluse.Core.Rules.Types
 import Ecluse.Core.Version (renderVersion)
 
--- ── the uniform rule ────────────────────────────────────────────────────────────
+-- ── the built-in rule dispatch ──────────────────────────────────────────────────
 
-{- | The engine's __one__ rule representation: a rule carries only its definition —
-the precedence it competes at, a stable name (its identity, and the boot-order
-tiebreak), the IO that evaluates it for one version, and an optional 'Resilience'
-policy.
+{- | Evaluate a single built-in rule against a single package version — the one place
+"how a rule decides" lives. The dispatch over the closed 'Rule' data: each built-in
+constructor reasons over the 'PackageDetails' alone and 'pure's its result, never
+yielding 'Unavailable'. A future effectful rule (e.g. a CVE lookup) would be a new
+'Rule' constructor whose arm reads its dependency from the 'EvalContext' and does IO.
 
-It declares no allow\/deny "direction": admit vs block is simply what 'ruleEval'
-returns. A pure rule lifts in via 'liftPureRule' with @ruleResilience = Nothing@ and
-runs directly; an effectful rule sets a 'Resilience' and is wrapped by
-'runEffectfulRule'. @m@ is the monad evaluation runs in — 'IO' for 'evalRules'.
+'IO'-typed so the dispatch is uniform across pure and (future) effectful rules. Total
+over the built-ins — a malformed rule or package yields a result, never an exception,
+so hostile metadata cannot crash the gate.
 -}
-data Rule m = Rule
-    { rulePrecedence :: Int
-    -- ^ The precedence at which this rule competes; higher wins in the boot order.
-    , ruleName :: Text
-    -- ^ The stable, human-facing name; the boot-order tiebreak and the credited identity.
-    , ruleEval :: EvalContext -> PackageDetails -> m RuleResult
-    {- ^ The rule's verdict for one version. For a resilient rule it may perform IO
-    that fails or hangs; 'runEffectfulRule' wraps it.
-    -}
-    , ruleResilience :: Maybe Resilience
-    -- ^ The resilience policy, or 'Nothing' for a pure rule run directly.
-    }
-
-{- | The resilience policy wrapped around an effectful rule's IO: the timeout\/retry\/
-breaker knobs, the per-source circuit-breaker state, its observer, and the
-__failure alignment__ an exhausted evaluation resolves to (fail-closed 'FailDeny' or
-fail-open 'FailNoDecision'). The alignment rides on the rule, folding away the
-separate failure-policy the two-tier design once carried.
--}
-data Resilience = Resilience
-    { resConfig :: EffectfulConfig
-    -- ^ The per-attempt timeout, retry budget\/backoff, and breaker threshold\/cooldown.
-    , resAlignment :: FailureAlignment
-    -- ^ Whether an exhausted evaluation fails closed ('FailDeny') or open ('FailNoDecision').
-    , resBreaker :: TVar Breaker
-    -- ^ This rule's per-source circuit-breaker state, shared across evaluations.
-    , resBreakerReporter :: BreakerReporter
-    {- ^ The observer this rule's breaker reports its state transitions to
-    (@ecluse.rule.breaker.state@). Inert ('Ecluse.Core.Breaker.noBreakerReporter') for an
-    unobserved rule; the composition root installs the live one.
-    -}
-    }
-
-{- | Lift a configured pure rule ('PrecededRule') into the engine's rule shape: it
-evaluates directly ('evalPureRule') and carries no 'Resilience', so it runs at no
-cost — pure and effectful rules thereafter share one representation and one engine.
--}
-liftPureRule :: (Applicative m) => PrecededRule -> Rule m
-liftPureRule (PrecededRule prec pr) =
-    Rule
-        { rulePrecedence = prec
-        , ruleName = pureRuleName pr
-        , ruleEval = \ctx pd -> pure (evalPureRule ctx pr pd)
-        , ruleResilience = Nothing
-        }
-
--- | Lift a whole resolved pure policy into the engine's rule list.
-liftPolicy :: (Applicative m) => [PrecededRule] -> [Rule m]
-liftPolicy = map liftPureRule
-
--- | A stable, human-facing name for a pure rule (for logs and denial messages).
-pureRuleName :: PureRule -> Text
-pureRuleName = \case
-    AllowScope{} -> "AllowScope"
-    AllowIfPublishedBefore{} -> "AllowIfPublishedBefore"
-    DenyInstallTimeExecution -> "DenyInstallTimeExecution"
-
-{- | Evaluate a single pure rule against a single package version. Total — a
-malformed rule or package yields a result, never an exception, so hostile metadata
-cannot crash the gate. A pure rule never yields 'Unavailable'.
--}
-evalPureRule :: EvalContext -> PureRule -> PackageDetails -> RuleResult
-evalPureRule _ (AllowScope scope) pd =
-    case pkgNamespace (pkgName pd) of
+evalRule :: EvalContext -> Rule -> PackageDetails -> IO RuleResult
+evalRule _ (AllowScope scope) pd =
+    pure $ case pkgNamespace (pkgName pd) of
         Just s
             | s == scope ->
                 Allow ("scope " <> renderScope scope <> " is allow-listed")
         _ ->
             NoDecision ("scope is not the allow-listed " <> renderScope scope)
-evalPureRule ctx (AllowIfPublishedBefore minAge) pd =
-    case pkgPublishedAt pd of
+evalRule ctx (AllowIfPublishedBefore minAge) pd =
+    pure $ case pkgPublishedAt pd of
         Nothing -> NoDecision "publish time is unknown"
         Just publishedAt ->
             let age = diffUTCTime (ctxNow ctx) publishedAt
@@ -186,11 +129,90 @@ evalPureRule ctx (AllowIfPublishedBefore minAge) pd =
                                 <> " ago, minimum age is "
                                 <> renderDuration minAge
                             )
-evalPureRule _ DenyInstallTimeExecution pd =
-    case pkgInstallCode pd of
+evalRule _ DenyInstallTimeExecution pd =
+    pure $ case pkgInstallCode pd of
         RunsCodeOnInstall how -> Deny ("runs code on install: " <> how)
         NoCodeOnInstall -> NoDecision "no install-time code execution"
         CodeExecUnknown -> NoDecision "install-time code execution not yet determined"
+
+-- ── the engine's prepared rule ──────────────────────────────────────────────────
+
+{- | A rule prepared for the engine to evaluate: its boot-order identity (precedence
+and name), an optional 'Resilience' policy, and the raw per-version evaluator the
+engine runs. This is the engine's __one__ runtime structure — and its only injection
+point.
+
+For a configured rule 'prepare' builds it: the name from the rule data ('ruleName'),
+the evaluator from 'evalRule', and (today) no 'Resilience'. Because the evaluator is a
+plain function field — not a closed 'Rule' — it is also where an arbitrary evaluator
+can be supplied without widening the closed 'Rule' vocabulary: the engine's own tests
+build a 'PreparedRule' directly with a fake evaluator (one that throws, hangs, or
+returns a chosen 'RuleResult') and a chosen name to exercise the resilience harness
+and the parallel walk. That escape hatch is a code-layer capability; config only ever
+reaches the closed data path through 'prepare', so it cannot supply one.
+
+It declares no allow\/deny "direction": admit vs block is simply what 'prepEval'
+returns. With @'prepResilience' = 'Nothing'@ the rule runs directly; with a
+'Resilience' it is wrapped by 'runEffectfulRule'.
+-}
+data PreparedRule = PreparedRule
+    { prepName :: Text
+    -- ^ The stable, human-facing name; the boot-order tiebreak and the credited identity.
+    , prepPrecedence :: Int
+    -- ^ The precedence at which this rule competes; higher wins in the boot order.
+    , prepResilience :: Maybe Resilience
+    -- ^ The resilience policy, or 'Nothing' for a rule run directly.
+    , prepEval :: EvalContext -> PackageDetails -> IO RuleResult
+    {- ^ The rule's raw verdict for one version. For a resilient rule it may perform IO
+    that fails or hangs; 'runEffectfulRule' wraps it.
+    -}
+    }
+
+{- | The resilience policy wrapped around an effectful rule's IO: the timeout\/retry\/
+breaker knobs, the per-source circuit-breaker state, its observer, and the
+__failure alignment__ an exhausted evaluation resolves to (fail-closed 'FailDeny' or
+fail-open 'FailNoDecision'). The alignment rides on the prepared rule, folding away the
+separate failure-policy the two-tier design once carried.
+-}
+data Resilience = Resilience
+    { resConfig :: EffectfulConfig
+    -- ^ The per-attempt timeout, retry budget\/backoff, and breaker threshold\/cooldown.
+    , resAlignment :: FailureAlignment
+    -- ^ Whether an exhausted evaluation fails closed ('FailDeny') or open ('FailNoDecision').
+    , resBreaker :: TVar Breaker
+    -- ^ This rule's per-source circuit-breaker state, shared across evaluations.
+    , resBreakerReporter :: BreakerReporter
+    {- ^ The observer this rule's breaker reports its state transitions to
+    (@ecluse.rule.breaker.state@). Inert ('Ecluse.Core.Breaker.noBreakerReporter') for an
+    unobserved rule; the composition root installs the live one.
+    -}
+    }
+
+{- | Prepare a resolved policy ('PrecededRule's) into the engine's runtime rules: each
+rule's name comes from its data ('ruleName'), its evaluator from 'evalRule', and its
+'Resilience' from whether the rule needs one. The built-in vocabulary is pure, so
+every rule prepared today carries no 'Resilience' (@'prepResilience' = 'Nothing'@) and
+runs directly.
+
+'IO'-typed because preparing a resilient rule allocates its per-source breaker
+('newBreaker') — once, at the composition root, shared across evaluations. No built-in
+rule needs one yet, so 'prepare' does no IO today; the signature is where breaker
+allocation lands when the first effectful rule arrives.
+-}
+prepare :: [PrecededRule] -> IO [PreparedRule]
+prepare = traverse prepareRule
+
+-- Prepare one configured rule. The built-in rules are pure, so this attaches no
+-- 'Resilience' and no breaker; an effectful rule would allocate its breaker here.
+prepareRule :: PrecededRule -> IO PreparedRule
+prepareRule (PrecededRule prec rule) =
+    pure
+        PreparedRule
+            { prepName = ruleName rule
+            , prepPrecedence = prec
+            , prepResilience = Nothing
+            , prepEval = (`evalRule` rule)
+            }
 
 -- ── boot-time ordering ──────────────────────────────────────────────────────────
 
@@ -201,12 +223,12 @@ configured in — so shuffling the configured set yields the same order and henc
 same 'Decision'. The order /is/ the tiebreak; there is no runtime comparison of
 results.
 -}
-bootOrder :: [Rule m] -> [Rule m]
-bootOrder = sortOn (\r -> bootKey (rulePrecedence r) (ruleName r))
+bootOrder :: [PreparedRule] -> [PreparedRule]
+bootOrder = sortOn (\r -> bootKey (prepPrecedence r) (prepName r))
 
 -- The single boot-order comparator key: precedence descending (highest first), then
--- name ascending. Both the pure entry point and the IO engine order through this one
--- key, so the tiebreak is expressed exactly once.
+-- name ascending. Both 'bootOrder' and the engine order through this one key, so the
+-- tiebreak is expressed exactly once.
 bootKey :: Int -> Text -> (Down Int, Text)
 bootKey prec name = (Down prec, name)
 
@@ -214,16 +236,16 @@ bootKey prec name = (Down prec, name)
 an operator sees at boot exactly how their policy will resolve. Empty for an empty
 rule set.
 -}
-renderBootOrder :: [Rule m] -> [Text]
+renderBootOrder :: [PreparedRule] -> [Text]
 renderBootOrder rules = zipWith line [1 :: Int ..] (bootOrder rules)
   where
     line i r =
         "rule "
             <> show i
             <> ": "
-            <> ruleName r
+            <> prepName r
             <> " (precedence "
-            <> show (rulePrecedence r)
+            <> show (prepPrecedence r)
             <> ")"
 
 -- ── evaluation ──────────────────────────────────────────────────────────────────
@@ -234,75 +256,58 @@ reason gathered in boot order.
 
 The engine evaluates effectful rules speculatively in parallel but the decision is
 always __as-if sequential by boot order__ — the earliest-in-order decisive rule wins,
-never the first to return in wall-clock time. The cheap pure prefix is evaluated
-directly; a contiguous run of effectful rules is launched concurrently, then awaited
+never the first to return in wall-clock time. A rule with no 'Resilience' is evaluated
+directly; a contiguous run of resilient rules is launched concurrently, then awaited
 in boot order, and the moment the earliest decisive one is known every still-running
-strictly-later evaluation is cancelled. No IO an earlier pure decisive result would
-moot is ever launched, because an effectful run is started only once every rule
-before it is known non-decisive.
+strictly-later evaluation is cancelled. No IO an earlier decisive result would moot is
+ever launched, because a resilient run is started only once every rule before it is
+known non-decisive.
 -}
-evalRules :: EvalContext -> [Rule IO] -> PackageDetails -> IO Decision
+evalRules :: EvalContext -> [PreparedRule] -> PackageDetails -> IO Decision
 evalRules ctx rules pd = step (bootOrder rules) []
   where
     -- 'reasons' accumulates non-decisive reasons in reverse boot order; the final
     -- deny-by-default list is reversed back into boot order.
-    step :: [Rule IO] -> [Reason] -> IO Decision
+    step :: [PreparedRule] -> [Reason] -> IO Decision
     step [] reasons = pure (BlockedByDefault (reverse reasons))
     step (r : rs) reasons
-        | isNothing (ruleResilience r) = do
-            -- A pure rule is zero-cost: run it directly. Reaching it means every
+        | isNothing (prepResilience r) = do
+            -- A direct rule is zero-cost: run it in place. Reaching it means every
             -- earlier rule was non-decisive, so no speculated IO has been mooted.
-            res <- ruleEval r ctx pd
-            case decisive (ruleName r) res of
+            res <- prepEval r ctx pd
+            case decisive (prepName r) res of
                 Just d -> pure d
                 Nothing -> step rs (reasonOf res : reasons)
         | otherwise =
-            -- A maximal contiguous block of effectful rules: launch it concurrently
-            -- and resolve it in boot order. Stopping the block at the next pure rule
-            -- keeps the "no mooted IO" guarantee — a later pure rule is evaluated, and
-            -- may decide, before any effectful rule beyond it is launched.
-            let (block, rest) = span (isJust . ruleResilience) (r : rs)
+            -- A maximal contiguous block of resilient rules: launch it concurrently
+            -- and resolve it in boot order. Stopping the block at the next direct rule
+            -- keeps the "no mooted IO" guarantee — a later direct rule is evaluated, and
+            -- may decide, before any resilient rule beyond it is launched.
+            let (block, rest) = span (isJust . prepResilience) (r : rs)
              in evalBlock block >>= \case
                     Left d -> pure d
                     Right blockReasons -> step rest (reverse blockReasons <> reasons)
 
-    -- Launch a contiguous effectful block concurrently, then await in boot order:
+    -- Launch a contiguous resilient block concurrently, then await in boot order:
     -- 'Left' the earliest decisive winner (with every strictly-later evaluation
     -- cancelled), or 'Right' the block's non-decisive reasons in boot order. 'bracket'
     -- guarantees every launched evaluation is cancelled on any exit.
-    evalBlock :: [Rule IO] -> IO (Either Decision [Reason])
+    evalBlock :: [PreparedRule] -> IO (Either Decision [Reason])
     evalBlock block =
         bracket
             (traverse (\r -> async (runEffectfulRule ctx r pd)) block)
             (traverse_ uninterruptibleCancel)
             (\asyncs -> awaitInOrder (zip block asyncs) [])
 
-    awaitInOrder :: [(Rule IO, Async RuleResult)] -> [Reason] -> IO (Either Decision [Reason])
+    awaitInOrder :: [(PreparedRule, Async RuleResult)] -> [Reason] -> IO (Either Decision [Reason])
     awaitInOrder [] reasons = pure (Right (reverse reasons))
     awaitInOrder ((r, a) : rest) reasons = do
         res <- wait a
-        case decisive (ruleName r) res of
+        case decisive (prepName r) res of
             Just d -> do
                 traverse_ (cancel . snd) rest
                 pure (Left d)
             Nothing -> awaitInOrder rest (reasonOf res : reasons)
-
-{- | Evaluate a package version against a __resolved pure policy__, with no IO. The
-pure entry point: it walks the same boot order 'evalRules' does (lifting each pure
-rule in) and takes the first decisive result, else 'BlockedByDefault' with the
-non-decisive reasons in boot order. Used where the rule set is known pure (the
-packument filter's typed decision).
--}
-evalRulesPure :: EvalContext -> [PrecededRule] -> PackageDetails -> Decision
-evalRulesPure ctx prs pd = go ordered []
-  where
-    ordered = sortOn (\(PrecededRule prec pr) -> bootKey prec (pureRuleName pr)) prs
-    go [] reasons = BlockedByDefault (reverse reasons)
-    go (PrecededRule _ pr : rest) reasons =
-        let res = evalPureRule ctx pr pd
-         in case decisive (pureRuleName pr) res of
-                Just d -> d
-                Nothing -> go rest (reasonOf res : reasons)
 
 -- Map a rule result to the 'Decision' it credits if decisive, or 'Nothing' if it is a
 -- no-op (the only runtime classification — there is no comparison of competing
@@ -325,21 +330,21 @@ reasonOf = \case
 
 -- ── the resilience harness ──────────────────────────────────────────────────────
 
-{- | Run one rule through its resilience policy. A pure rule (@ruleResilience =
-Nothing@) runs directly. A resilient rule's IO runs under its circuit-breaker gate,
-a per-attempt timeout, and bounded retry with backoff: a clean verdict
-('Allow'\/'Deny'\/'NoDecision') resets the breaker and is returned; an exhausted rule
-(timeout, exception, the breaker open, or the rule self-reporting 'Unavailable' on
-every attempt) advances the breaker and resolves to @'Unavailable' transience
-alignment reason@ — the alignment from the rule's 'Resilience' (fail-closed or
-fail-open), the transience from the last failing attempt.
+{- | Run one prepared rule through its resilience policy. A rule with no 'Resilience'
+(@'prepResilience' = 'Nothing'@) runs directly. A resilient rule's IO runs under its
+circuit-breaker gate, a per-attempt timeout, and bounded retry with backoff: a clean
+verdict ('Allow'\/'Deny'\/'NoDecision') resets the breaker and is returned; an
+exhausted rule (timeout, exception, the breaker open, or the rule self-reporting
+'Unavailable' on every attempt) advances the breaker and resolves to @'Unavailable'
+transience alignment reason@ — the alignment from the rule's 'Resilience' (fail-closed
+or fail-open), the transience from the last failing attempt.
 
 The breaker timing reads the 'EvalContext' clock, so it is deterministic under test.
 Total — it never throws; a rule failure becomes a result.
 -}
-runEffectfulRule :: EvalContext -> Rule IO -> PackageDetails -> IO RuleResult
-runEffectfulRule ctx rule pd = case ruleResilience rule of
-    Nothing -> ruleEval rule ctx pd
+runEffectfulRule :: EvalContext -> PreparedRule -> PackageDetails -> IO RuleResult
+runEffectfulRule ctx rule pd = case prepResilience rule of
+    Nothing -> prepEval rule ctx pd
     Just res -> do
         let now = ctxNow ctx
         admitted <- admitProbe res now
@@ -347,16 +352,16 @@ runEffectfulRule ctx rule pd = case ruleResilience rule of
             then -- Breaker open and still cooling down: fast-fail without running the
             -- rule's IO, the cheap path a sustained outage stays on. An open breaker
             -- is an infrastructural outage, so it is transient.
-                pure (exhausted res (ruleName rule) (transientCause (resConfig res)) "the rule source circuit breaker is open")
+                pure (exhausted res (prepName rule) (transientCause (resConfig res)) "the rule source circuit breaker is open")
             else do
-                result <- attemptWithRetry res (ruleEval rule ctx) pd
+                result <- attemptWithRetry res (prepEval rule ctx) pd
                 case result of
                     Right outcome -> do
                         commitBreaker res recordSuccess
                         pure outcome
                     Left transience -> do
                         commitBreaker res (tripOnFailure (resConfig res) now)
-                        pure (exhausted res (ruleName rule) transience "the rule could not be evaluated")
+                        pure (exhausted res (prepName rule) transience "the rule could not be evaluated")
 
 {- Attempt the rule's IO under the per-attempt timeout, retrying with backoff until
 the retry budget is spent. 'Right' a clean verdict on success; 'Left' the 'Transience'

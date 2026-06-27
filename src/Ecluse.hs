@@ -196,7 +196,7 @@ run = do
     -- the static token, or the CodeArtifact mint (whose inputs are validated and which
     -- mints once eagerly, so a misconfiguration fails loudly here at boot).
     providers <- initCredentialProviders credentialReporters env >>= orExit (T.unlines . map renderBootError)
-    bindings <- orExit (T.unlines . map renderBootError) (planMounts mountBindingFor getCurrentTime providers env mDoc)
+    bindings <- planMounts mountBindingFor getCurrentTime providers env mDoc >>= orExit (T.unlines . map renderBootError)
     publishTargets <- orExit (T.unlines . map renderBootError) (planPublishTargets providers env mDoc)
     -- Select the mirror-queue backend from config (the GCP arm is a fail-loud
     -- "not built" boot error, never a silent fall-through); the resulting plan is

@@ -1,12 +1,18 @@
 {- | Data types for the policy rules engine.
 
 The evaluation model lives in "Ecluse.Core.Rules"; this module holds only the
-dependency-light types it operates on — the pure-rule vocabulary config selects
-from, a rule's per-version result, and the overall decision.
+dependency-light types it operates on — the closed built-in rule vocabulary config
+selects from, a rule's per-version result, and the overall decision.
+
+A 'Rule' is __evaluation-agnostic data__: it says /what/ a rule is, never /how/ it is
+evaluated. How a rule decides is a separate concern that lives in "Ecluse.Core.Rules"
+('Ecluse.Core.Rules.evalRule' dispatches over this data; the engine wraps it in a
+'Ecluse.Core.Rules.PreparedRule' to run it).
 -}
 module Ecluse.Core.Rules.Types (
-    -- * The pure-rule vocabulary
-    PureRule (..),
+    -- * The built-in rule vocabulary
+    Rule (..),
+    ruleName,
 
     -- * Precedence
     PrecededRule (..),
@@ -31,17 +37,24 @@ module Ecluse.Core.Rules.Types (
 import Data.Time (NominalDiffTime, UTCTime)
 import Ecluse.Core.Package (Scope)
 
-{- | The closed vocabulary of __pure__ rules an operator selects and refines in
-config. A pure rule reasons only over the 'Ecluse.Core.Package.PackageDetails' an
-adapter already fetched, with no IO.
+{- | The closed, evaluation-agnostic vocabulary of __built-in__ rules an operator
+selects and refines in config. A built-in rule reasons only over the
+'Ecluse.Core.Package.PackageDetails' an adapter already fetched.
 
-This is a configuration vocabulary, not the engine's rule representation: it is a
-small, inspectable, @Eq@\/@Show@ enum so config can parse, patch (override a rule's
-parameters), and name each rule. "Ecluse.Core.Rules" lifts it into the engine's one
-uniform rule record for evaluation. It carries no allow\/deny "direction" — whether
-a rule admits or blocks is simply what its evaluation returns.
+This is __data, not the engine's runtime representation__: a small, inspectable,
+@Eq@\/@Show@ enum so config can parse, patch (override a rule's parameters), and name
+each rule. "Ecluse.Core.Rules" turns it into the engine's runtime
+'Ecluse.Core.Rules.PreparedRule' (binding /how/ it is evaluated) for evaluation. It
+carries no allow\/deny "direction" — whether a rule admits or blocks is simply what
+its evaluation returns.
+
+It is also the __security boundary__ on what config can express: untrusted config only
+ever yields closed 'Rule' data, never arbitrary computation. A rule whose evaluation
+performs IO (a future advisory\/CVE lookup) is added here as a plain constructor that
+'Ecluse.Core.Rules.evalRule' dispatches on; arbitrary evaluation closures are a
+code-layer capability, never reachable from config.
 -}
-data PureRule
+data Rule
     = -- | Unconditionally allow every package under the given scope.
       AllowScope Scope
     | {- | Allow a version only if it was published at least this long ago.
@@ -56,9 +69,18 @@ data PureRule
       DenyInstallTimeExecution
     deriving stock (Eq, Show)
 
-{- | A 'PureRule' paired with the integer precedence at which it competes (higher
-wins). This is config's resolved-policy element; "Ecluse.Core.Rules" lifts it into
-the engine's uniform rule record, whose boot-time ordering ('Ecluse.Core.Rules.bootOrder')
+{- | A stable, human-facing name for a rule — its identity, derived from the data: the
+boot-order tiebreak and the credited identity in logs and denial messages.
+-}
+ruleName :: Rule -> Text
+ruleName = \case
+    AllowScope{} -> "AllowScope"
+    AllowIfPublishedBefore{} -> "AllowIfPublishedBefore"
+    DenyInstallTimeExecution -> "DenyInstallTimeExecution"
+
+{- | A 'Rule' paired with the integer precedence at which it competes (higher
+wins). This is config's resolved-policy element; "Ecluse.Core.Rules" prepares it into
+the engine's runtime rule, whose boot-time ordering ('Ecluse.Core.Rules.bootOrder')
 turns precedence — and, at equal precedence, the rule name — into the single total
 order the engine walks.
 
@@ -71,7 +93,7 @@ than a derived instance.
 data PrecededRule = PrecededRule
     { rulePrecedence :: Int
     -- ^ The precedence at which this rule competes; higher wins.
-    , prRule :: PureRule
+    , prRule :: Rule
     -- ^ The rule itself.
     }
     deriving stock (Eq, Show)
@@ -87,14 +109,14 @@ bands: the allow band (@AllowIfPublishedBefore@ <
 still elevate a /specific/ allow above a /specific/ deny by giving it a higher
 explicit precedence — the per-type defaults set only the out-of-the-box ordering.
 -}
-defaultPrecedence :: PureRule -> Int
+defaultPrecedence :: Rule -> Int
 defaultPrecedence = \case
     AllowIfPublishedBefore{} -> defaultAllowIfPublishedBeforePrecedence
     AllowScope{} -> defaultAllowScopePrecedence
     DenyInstallTimeExecution -> defaultDenyInstallTimeExecutionPrecedence
 
 -- | Pair a rule with its type's 'defaultPrecedence'.
-atDefaultPrecedence :: PureRule -> PrecededRule
+atDefaultPrecedence :: Rule -> PrecededRule
 atDefaultPrecedence r = PrecededRule (defaultPrecedence r) r
 
 {- | Default precedence of 'AllowIfPublishedBefore': the lowest band, a passive
@@ -144,7 +166,7 @@ data RuleResult
       circuit breaker is open. It carries its own __failure alignment__: a
       'FailDeny' rule is decisive (fail-closed, → 'Undecidable'), a 'FailNoDecision'
       rule is a no-op (fail-open). The 'Transience' records whether a retry can help;
-      the 'Reason' is the audit reason. A pure rule never yields this.
+      the 'Reason' is the audit reason. The built-in rules never yield this.
       -}
       Unavailable Transience FailureAlignment Reason
     deriving stock (Eq, Show)
@@ -165,8 +187,8 @@ data FailureAlignment
 
 {- | The overall decision for a package version against a whole rule set.
 
-The deciding rule is credited by __name__ ('Text'): every rule — once pure and
-effectful collapse into one representation — has only a name as its stable identity.
+The deciding rule is credited by __name__ ('Text'): a rule's stable identity is its
+name (see 'ruleName'), independent of how it is evaluated.
 -}
 data Decision
     = -- | Admitted by the named rule, with its reason (was @Approved@\/@ApprovedEffectful@).
