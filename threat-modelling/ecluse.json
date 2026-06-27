@@ -743,7 +743,7 @@
                   "title": "SSRF via crafted identifier or upstream-declared dist.tarball",
                   "type": "Elevation of privilege",
                   "description": "Outbound URLs are built from client-supplied package identifiers and upstream-declared artifact locations. A traversal / encoded-slash / absolute-URL name, or a dist.tarball pointing at an internal or attacker-chosen host, could steer a fetch to an unintended target (cloud metadata, the private network).",
-                  "mitigation": "Identifier canonicalisation with encode-on-build; an outbound host allow-list (the load-bearing control); an internal-range block re-applied to every resolved IP at connect time (the DNS-rebinding backstop); and a disallow-by-default same-host dist.tarball policy. The trusted private origin is the only internal-resolving target honoured.",
+                  "mitigation": "Identifier canonicalisation with encode-on-build; an outbound host allow-list (the load-bearing control) enforced at URL build and re-applied on each redirect hop; on the untrusted manager, an internal-range block tested against the connection's pinned resolved IP (resolve-once-then-connect, so the checked address is the dialled address: the DNS-rebinding backstop); credential-bearing requests never follow redirects (redirectCount=0); and a disallow-by-default same-host dist.tarball policy. The trusted private origin is the only internal-resolving target honoured.",
                   "modelType": "STRIDE",
                   "id": "0ec10e5e-0000-4000-8000-000000000105"
                 }
