@@ -222,7 +222,11 @@ populated — is what governs sharing of the private origin of the
 - **`passthrough`** — serve-time authorisation *is* the per-request fetch with the
   caller's token, so there is no shared private entry at all; only the anonymous
   public (gated) origin is cached. (This *is* the resolution of #115 in the default:
-  there is no shared private entry to leak.)
+  there is no shared private entry to leak.) On the **tarball leg** that per-request
+  fetch is the credentialed
+  [conventional read](registry-model.md#serving-a-tarball-a-conventional-private-read-an-honoured-public-location)
+  of the artifact itself — no packument round-trip — so the private upstream still
+  authorises each artifact read with the caller's own token.
 - **`delegated-cache`** — the private origin is **shared**, and every hit is gated by a
   fresh per-request authorisation **probe** with the caller's token; the upstream
   re-decides retrievability on each serve.

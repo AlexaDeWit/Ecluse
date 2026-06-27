@@ -20,7 +20,7 @@ import Data.Time.Format.ISO8601 (iso8601Show)
 import GHC.IO.Handle (hClose, hDuplicate, hDuplicateTo)
 import Katip (Environment (Environment), Namespace (Namespace), closeScribes, initLogEnv)
 import Network.HTTP.Client (Manager, defaultManagerSettings, newManager)
-import Network.HTTP.Types (Header, hAuthorization, methodHead, status200, status304, status404, status500, statusCode, statusMessage)
+import Network.HTTP.Types (Header, hAuthorization, methodGet, methodHead, status200, status304, status404, status500, statusCode, statusMessage)
 import Network.HTTP.Types.Header (hETag, hHost, hIfNoneMatch)
 import Network.Wai (Application, Request (rawPathInfo, requestHeaders, requestMethod), Response, responseLBS, responseRaw)
 import Network.Wai.Handler.Warp (testWithApplication)
@@ -294,11 +294,11 @@ artifactUpstreamServing packumentFor tarballBody = do
                     else responseLBS status200 [] (packumentFor (selfBaseUrl req))
     mkUpstream seen app
 
-{- | A private upstream double that has the artifact: it answers the packument fetch
-with a single-version packument whose @dist.tarball@ points back at this double
-(@200@), and a tarball-slot path with @200@ and the given bytes (a __private hit__).
-The serve path honours the private @dist.tarball@, so the double must serve a
-packument naming itself.
+{- | A private upstream double that has the artifact: it answers the conventional
+tarball slot (@\/…\/-\/….tgz@) with @200@ and the given bytes (a __private hit__). The
+private tarball leg reads that conventional URL directly (no packument fetch); the
+double also serves a self-referential single-version packument on other paths, which the
+tarball leg never requests.
 -}
 privateArtifactHit :: Text -> LByteString -> IO Upstream
 privateArtifactHit version = privateArtifactHitWith version []
@@ -312,10 +312,10 @@ privateArtifactHitWithHeader :: ByteString -> ByteString -> Text -> LByteString 
 privateArtifactHitWithHeader headerName headerValue version =
     privateArtifactHitWith version [(CI.mk headerName, headerValue)]
 
-{- | The shared private-hit double: the packument fetch returns a self-hosted
-single-version packument (@200@), a tarball-slot path returns @200@ with the given
-artifact bytes and extra headers. A private hit thus honours the private
-@dist.tarball@ — the double names itself as the tarball host.
+{- | The shared private-hit double: a tarball-slot path returns @200@ with the given
+artifact bytes and extra headers (a __private hit__ on the conventional read); a
+non-tarball path returns a self-referential single-version packument the tarball leg
+never requests.
 -}
 privateArtifactHitWith :: Text -> [Header] -> LByteString -> IO Upstream
 privateArtifactHitWith version extraHeaders tarballBody = do
@@ -329,12 +329,11 @@ privateArtifactHitWith version extraHeaders tarballBody = do
                     else responseLBS status200 [] (encodePackument (selfHostedAdmitting (selfBaseUrl req) version))
     mkUpstream seen app
 
-{- | A private upstream double that has a __hashless__ artifact: the packument fetch
-returns a single-version packument whose @dist@ carries a @tarball@ pointing back at
-this double but neither @integrity@ nor @shasum@ (@200@), and a tarball-slot path
-@200@ with the given bytes. A private hit on a version with no integrity digest — the
-trusted private path is exempt from the integrity-presence policy, so this still
-streams through.
+{- | A private upstream double that has a __hashless__ artifact: a tarball-slot path
+returns @200@ with the given bytes, and a non-tarball path a single-version packument
+carrying neither @integrity@ nor @shasum@. The private tarball leg reads the conventional
+URL and applies no serve-time integrity floor, so a hashless private artifact streams
+through (no fall-through to public).
 -}
 privateArtifactHitHashless :: Text -> LByteString -> IO Upstream
 privateArtifactHitHashless version tarballBody = do
@@ -351,11 +350,11 @@ privateArtifactHitHashless version tarballBody = do
                                 (packument [(version, selfHostedHashless (selfBaseUrl req) version)] version [(version, publishedDaysAgo 1)])
     mkUpstream seen app
 
-{- | A private upstream double that has a __SHA-1-only__ artifact: the packument fetch
-returns a single-version packument whose @dist@ carries a @tarball@ pointing back at this
-double and a legacy @shasum@ but no SRI @integrity@ (@200@), and a tarball-slot path @200@
-with the given bytes. Below the default SHA-256 trusted floor, so a private hit on it is
-served only when the operator loosens the trusted floor; by default it is a private miss.
+{- | A private upstream double that has a __SHA-1-only__ artifact: a tarball-slot path
+returns @200@ with the given bytes, and a non-tarball path a single-version packument
+carrying a legacy @shasum@ but no SRI @integrity@ (a digest below the default SHA-256
+floor). The private tarball leg reads the conventional URL and applies no serve-time
+integrity floor, so this is served from the private origin regardless of the floor.
 -}
 privateArtifactHitShasumOnly :: Text -> LByteString -> IO Upstream
 privateArtifactHitShasumOnly version tarballBody = do
@@ -372,10 +371,10 @@ privateArtifactHitShasumOnly version tarballBody = do
                                 (packument [(version, selfHostedShasumOnly (selfBaseUrl req) version)] version [(version, publishedDaysAgo 1)])
     mkUpstream seen app
 
-{- | A private upstream double that resolves the packument but does __not__ hold the
-artifact bytes: the packument fetch is a self-referential single-version packument
-(@200@), but a tarball-slot path is a @404@ miss — so the serve path's honour fetch
-to the private tarball location misses and falls through to the public origin.
+{- | A private upstream double that does __not__ hold the artifact bytes: a tarball-slot
+path is a @404@ miss, so the private tarball leg's conventional read misses and the
+request falls through to the public origin. (It also answers a non-tarball path with a
+self-referential packument, unused by the tarball leg.)
 -}
 privateArtifactMiss :: IO Upstream
 privateArtifactMiss = do
@@ -1704,6 +1703,24 @@ honouredPathUpstream version filename tarballBody = do
              in packument [(version, vo)] version [(version, publishedDaysAgo 30)]
     mkUpstream seen app
 
+{- | A private upstream double whose tarball lives __only__ at an off-convention
+@\/files\/{filename}@ path (a separate files host / CDN shape), @404@ing every other
+path including the conventional @\/-\/@ tarball slot. The private tarball leg reads the
+conventional @{base}\/{pkg}\/-\/{file}@ URL directly, so it never reaches these bytes:
+the conventional read @404@s and the request falls through to the public origin.
+-}
+offConventionPrivateUpstream :: Text -> LByteString -> IO Upstream
+offConventionPrivateUpstream filename tarballBody = do
+    seen <- newIORef []
+    let app :: Application
+        app req respond = do
+            modifyIORef' seen (lookupAuth (requestHeaders req) :)
+            respond $
+                if rawPathInfo req == encodeUtf8 ("/files/" <> filename)
+                    then responseLBS status200 [] tarballBody
+                    else responseLBS status404 [] "not found"
+    mkUpstream seen app
+
 {- | A path-aware upstream double that honours a conditional artifact request: its
 packument fetch is a self-referential single-version admitting packument (@200@), and
 a tarball-slot path answers a bodiless @304 Not Modified@ (carrying an @ETag@) when
@@ -1739,20 +1756,43 @@ jobShape job = (jobPackage job, jobVersion job, jobArtifactUrl job, jobMirrorTar
 
 tarballSpec :: Spec
 tarballSpec = describe "artifact (tarball) path" $ do
-    it "streams the private artifact unfiltered on a private hit (public never consulted)" $ do
-        -- The private upstream has the artifact: it is streamed straight through,
-        -- the public origin never queried and no mirror job enqueued (the bytes are
-        -- already vetted; mirroring is for public-sourced artifacts).
+    it "streams the private artifact on a private hit (a conventional stable read, public never consulted)" $ do
+        -- The private leg is a conventional stable read: it fetches the tarball at
+        -- {base}/{pkg}/-/{file} directly (no packument fetch) and streams a 2xx straight
+        -- through, the public origin never queried and no mirror job enqueued (the bytes
+        -- are already vetted; mirroring is for public-sourced artifacts).
         privateUp <- privateArtifactHit "1.0.0" privateTarballBytes
         publicUp <- artifactUpstream "1.0.0" publicTarballBytes
         withProxyEnv privateUp publicUp Nothing $ \app env -> do
             resp <- getTarball "1.0.0" (Just "client-token") app
             status resp `shouldBe` 200
             simpleBody resp `shouldBe` privateTarballBytes
+            -- Exactly one private request, and it was the tarball slot — no preceding
+            -- packument fetch on the private leg.
+            seenAuth privateUp `shouldReturn` [Just "Bearer client-token"]
+            seenArtifactMethods privateUp `shouldReturn` [methodGet]
             -- The public upstream was never touched on a private hit.
             seenAuth publicUp `shouldReturn` []
             -- A private hit enqueues nothing — only a public-sourced admit does.
             drainJobs env `shouldReturn` []
+
+    it "does not fetch the private packument on a tarball request (no metadata round-trip)" $ do
+        -- The whole point of the fast path: a tarball request resolves the private leg
+        -- without ever hitting the private metadata endpoint. The private double records
+        -- every request it sees; the tarball-slot recorder records only /-/….tgz paths.
+        -- A single request that is the tarball slot proves the packument route was never
+        -- consulted on the private leg.
+        privateUp <- privateArtifactHit "1.0.0" privateTarballBytes
+        publicUp <- artifactUpstream "1.0.0" publicTarballBytes
+        withProxyEnv privateUp publicUp Nothing $ \app _env -> do
+            resp <- getTarball "1.0.0" (Just "client-token") app
+            status resp `shouldBe` 200
+            allRequests <- seenAuth privateUp
+            tarballRequests <- seenArtifactMethods privateUp
+            -- One request total, and that one request was the tarball slot: no
+            -- (non-tarball) private metadata request was made.
+            length allRequests `shouldBe` 1
+            length tarballRequests `shouldBe` 1
 
     it "relays the upstream status and content headers through on a private hit" $ do
         -- The relay forwards the artifact's own status and content headers verbatim
@@ -1796,19 +1836,18 @@ tarballSpec = describe "artifact (tarball) path" $ do
 
     it "forwards the client credential to the private origin, never to the public" $ do
         -- On a private MISS the artifact still comes from public, but the gating
-        -- packument and artifact fetches must be anonymous; the private origin saw the
-        -- client's bearer on BOTH its requests — the packument (to find the artifact's
-        -- authoritative URL) and the honoured tarball fetch (which misses, falling
-        -- through to public).
+        -- packument and artifact fetches must be anonymous; the private leg makes a
+        -- single conventional-URL tarball request (no packument fetch), and it carried
+        -- the client's bearer (the request misses, falling through to public).
         privateUp <- privateArtifactMiss
         publicUp <- artifactUpstream "1.0.0" publicTarballBytes
         withProxyEnv privateUp publicUp Nothing $ \app _env -> do
             _ <- getTarball "1.0.0" (Just "client-secret-token") app
             privAuth <- seenAuth privateUp
             pubAuth <- seenAuth publicUp
-            -- Both private-origin requests (packument + honoured tarball) carried the
-            -- client's bearer credential.
-            privAuth `shouldBe` [Just "Bearer client-secret-token", Just "Bearer client-secret-token"]
+            -- The single private-leg request (the conventional tarball fetch) carried the
+            -- client's bearer credential — and there is no second, packument request.
+            privAuth `shouldBe` [Just "Bearer client-secret-token"]
             -- Both public-origin requests (packument gate + artifact fetch) were anonymous.
             pubAuth `shouldBe` [Nothing, Nothing]
 
@@ -1908,41 +1947,41 @@ tarballSpec = describe "artifact (tarball) path" $ do
             status resp `shouldBe` 200
             simpleBody resp `shouldBe` publicTarballBytes
 
-    it "gates a hashless private artifact by the trusted floor, falling through to the public origin (default)" $ do
-        -- The trusted floor now defaults to SHA-256, so a hashless private artifact is a
-        -- private miss: the serve falls through to the public origin (which has a
-        -- digest-bearing copy) rather than streaming the unverifiable private bytes. The
-        -- served bytes are the public copy's.
+    it "serves a hashless private artifact from the private origin (no serve-time floor on the private leg)" $ do
+        -- NEW POSTURE: the private tarball leg is a conventional stable read that applies
+        -- no serve-time integrity floor. A hashless private artifact is therefore SERVED
+        -- from the private origin (its own bytes), not a fall-through to the public origin
+        -- as it was while the leg fetched the packument and gated on the trusted floor.
+        -- The bytes are still verified client-side by npm and by the mirror worker, so no
+        -- silent-tamper hole opens — only the proactive weak-integrity refusal is given up.
         privateUp <- privateArtifactHitHashless "1.0.0" privateTarballBytes
         publicUp <- artifactUpstream "1.0.0" publicTarballBytes
-        withProxyEnv privateUp publicUp Nothing $ \app _env -> do
+        withProxyEnv privateUp publicUp Nothing $ \app env -> do
             resp <- getTarball "1.0.0" (Just "client-token") app
             status resp `shouldBe` 200
-            simpleBody resp `shouldBe` publicTarballBytes
-
-    it "gates a SHA-1-only private artifact by the trusted floor, falling through to the public origin (default)" $ do
-        -- A legacy SHA-1-only private artifact is below the default SHA-256 trusted floor,
-        -- so it is a private miss and the serve falls through to the public origin.
-        privateUp <- privateArtifactHitShasumOnly "1.0.0" privateTarballBytes
-        publicUp <- artifactUpstream "1.0.0" publicTarballBytes
-        withProxyEnv privateUp publicUp Nothing $ \app _env -> do
-            resp <- getTarball "1.0.0" (Just "client-token") app
-            status resp `shouldBe` 200
-            simpleBody resp `shouldBe` publicTarballBytes
-
-    it "serves a SHA-1-only private artifact from the private origin when the trusted floor is loosened" $ do
-        -- Loosening the trusted floor to SHA-1 re-admits a legacy private artifact: the
-        -- private hit streams its own bytes and the public origin is never consulted —
-        -- the trusted-only escape-hatch, on the operator's own vetted source.
-        sha1Floor <- either (fail . toString) pure (mkMinTrustedIntegrity SHA1)
-        privateUp <- privateArtifactHitShasumOnly "1.0.0" privateTarballBytes
-        publicUp <- artifactUpstream "1.0.0" publicTarballBytes
-        queue <- newInMemoryQueue
-        withProxyEnvQueueDeps queue privateUp publicUp Nothing (\d -> d{pdMinTrustedIntegrity = sha1Floor}) $ \app _env _port -> do
-            resp <- getTarball "1.0.0" (Just "client-token") app
-            status resp `shouldBe` 200
+            -- Served from the private origin, not fallen through to public.
             simpleBody resp `shouldBe` privateTarballBytes
             seenAuth publicUp `shouldReturn` []
+            drainJobs env `shouldReturn` []
+
+    it "serves a SHA-1-only private artifact from the private origin under the default trusted floor" $ do
+        -- NEW POSTURE: a legacy SHA-1-only private artifact is below the default SHA-256
+        -- trusted floor, yet it is now SERVED from the private origin — the serve-time
+        -- trusted floor no longer gates the private tarball leg (it still filters the
+        -- packument route's listing). This subsumes the old "served only when the operator
+        -- loosens the trusted floor" assertion: loosening is no longer needed, because the
+        -- floor is not consulted on this leg at all. (The packument-route trusted floor is
+        -- unchanged; an opt-in metadata-resolution mode restores the floor here — see the
+        -- architecture docs, #395.)
+        privateUp <- privateArtifactHitShasumOnly "1.0.0" privateTarballBytes
+        publicUp <- artifactUpstream "1.0.0" publicTarballBytes
+        withProxyEnv privateUp publicUp Nothing $ \app env -> do
+            resp <- getTarball "1.0.0" (Just "client-token") app
+            status resp `shouldBe` 200
+            -- Served from the private origin at the default (strict) trusted floor.
+            simpleBody resp `shouldBe` privateTarballBytes
+            seenAuth publicUp `shouldReturn` []
+            drainJobs env `shouldReturn` []
 
     it "503s when the public upstream is unavailable (transient), enqueuing nothing" $ do
         privateUp <- privateArtifactMiss
@@ -2100,31 +2139,36 @@ tarballSpec = describe "artifact (tarball) path" $ do
             status resp `shouldBe` 200
             simpleBody resp `shouldBe` publicTarballBytes
 
-    it "honours the private dist.tarball location on a private hit (not a reconstructed URL)" $ do
-        -- The private packument's dist.tarball sits at a non-conventional /files/ path;
-        -- the serve path honours that exact URL (the private upstream is trusted), so
-        -- the private bytes stream through and the public origin is never consulted.
-        privateUp <- honouredPathUpstream "1.0.0" "thing-1.0.0.tgz" privateTarballBytes
+    it "does not reach an off-convention private tarball (a files-host/CDN path): a miss that falls through to public" $ do
+        -- ACCEPTED LIMITATION: the private leg reads the conventional URL
+        -- {base}/{pkg}/-/{file} directly, so a private upstream that serves its tarball
+        -- ONLY off-convention (a separate files host, a /files/ path, a signed CDN URL the
+        -- /-/ convention cannot rebuild) is not reached — the conventional read 404s, the
+        -- private leg is a clean miss, and the artifact is served from the public origin.
+        -- An opt-in metadata-resolution mode restores resolving such an upstream (#395).
+        privateUp <- offConventionPrivateUpstream "thing-1.0.0.tgz" privateTarballBytes
         publicUp <- artifactUpstream "1.0.0" publicTarballBytes
-        withProxyEnv privateUp publicUp Nothing $ \app env -> do
+        withProxyEnv privateUp publicUp Nothing $ \app _env -> do
             resp <- getTarball "1.0.0" Nothing app
             status resp `shouldBe` 200
-            simpleBody resp `shouldBe` privateTarballBytes
-            seenAuth publicUp `shouldReturn` []
-            drainJobs env `shouldReturn` []
+            -- Served from public: the off-convention private location was never reached.
+            simpleBody resp `shouldBe` publicTarballBytes
 
-    it "refuses a cross-host private dist.tarball under the default and falls through to public" $ do
-        -- The private packument (on 127.0.0.1) names its dist.tarball on a different
-        -- host (localhost). The tarball-host policy gates the private leg too: under the
-        -- secure default the cross-host private location is refused, so the private leg
-        -- is a clean miss and the artifact is served from the public origin instead.
+    it "reads the same-host conventional URL, ignoring the private packument's declared dist.tarball" $ do
+        -- The private leg constructs the conventional {base}/{pkg}/-/{file} URL on the
+        -- private base host and never consults the packument's dist.tarball, so a private
+        -- upstream whose (now-unread) packument would name a cross-host tarball is simply
+        -- served from its OWN same-host conventional slot — there is no cross-host private
+        -- dist.tarball to refuse anymore. The double serves the bytes at its tarball slot
+        -- (on 127.0.0.1); the "localhost" its packument names is irrelevant.
         privateUp <- crossHostPublicUpstream "localhost" "1.0.0" privateTarballBytes
         publicUp <- artifactUpstream "1.0.0" publicTarballBytes
         withProxyEnv privateUp publicUp Nothing $ \app _env -> do
             resp <- getTarball "1.0.0" Nothing app
             status resp `shouldBe` 200
-            -- Served from public: the private cross-host location was refused, never fetched.
-            simpleBody resp `shouldBe` publicTarballBytes
+            -- Served from the private origin's same-host conventional slot.
+            simpleBody resp `shouldBe` privateTarballBytes
+            seenAuth publicUp `shouldReturn` []
 
     it "serves a same-host private dist.tarball on an internal-IP private origin with no opt-in (trusted-origin exempt)" $ do
         -- The trusted private origin lives on an internal IP literal (127.0.0.1, the
