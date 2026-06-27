@@ -1,6 +1,9 @@
 module Ecluse.Telemetry.MetricsSpec (spec) where
 
+import Prelude hiding (universe)
+
 import Data.Text qualified as T
+import Data.Universe.Class (universe)
 import Test.Hspec
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems))
@@ -110,7 +113,7 @@ boundedDomainSpec = describe "bounded label value domains" $ do
         -- Excluding the operator-bounded `rule` (a deployment's small fixed rule set),
         -- the entire space of metric label values is this handful — never the unbounded
         -- space of package identifiers. A label whose domain was not finite could not
-        -- appear in this enumeration (it has no Bounded/Enum instance to enumerate).
+        -- appear in this enumeration (it has no Universe instance to enumerate).
         length allBoundedLabels `shouldSatisfy` (< 64)
 
     it "renders every bounded label to a non-empty value under a closed key" $
@@ -162,19 +165,19 @@ renderSpec = describe "renderLabel" $ do
 allBoundedLabels :: [Label]
 allBoundedLabels =
     concat
-        [ LDecision <$> [minBound .. maxBound]
-        , LReasonClass <$> [minBound .. maxBound]
+        [ LDecision <$> universe
+        , LReasonClass <$> universe
         , LEcosystem <$> ecosystems
         , LMount <$> ecosystems
-        , LUpstream <$> [minBound .. maxBound]
-        , LStatusClass <$> [Status2xx, Status3xx, Status4xx, Status5xx, StatusOther]
-        , LCacheResult <$> [minBound .. maxBound]
-        , LMirrorResult <$> [minBound .. maxBound]
-        , LCredentialResult <$> [minBound .. maxBound]
-        , LProvider <$> [minBound .. maxBound]
-        , LCause <$> [minBound .. maxBound]
-        , LBreakerSource <$> [minBound .. maxBound]
-        , LTier <$> [minBound .. maxBound]
+        , LUpstream <$> universe
+        , LStatusClass <$> universe
+        , LCacheResult <$> universe
+        , LMirrorResult <$> universe
+        , LCredentialResult <$> universe
+        , LProvider <$> universe
+        , LCause <$> universe
+        , LBreakerSource <$> universe
+        , LTier <$> universe
         ]
   where
     ecosystems :: [Ecosystem]

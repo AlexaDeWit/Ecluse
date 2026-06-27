@@ -142,6 +142,7 @@ library ecluse-core
     , stm                   ^>=2.5
     , text                  ^>=2.1
     , time                  ^>=1.12
+    , universe-base         ^>=1.1
     , unliftio              ^>=0.2.25
     , vector                ^>=0.13
     , versions              ^>=6.0
@@ -300,6 +301,7 @@ test-suite ecluse-core-unit
     , scientific        ^>=0.3
     , text              ^>=2.1
     , time              ^>=1.12
+    , universe-base     ^>=1.1
     , unliftio          ^>=0.2.25
     , vector            ^>=0.13
     , wai               ^>=3.2

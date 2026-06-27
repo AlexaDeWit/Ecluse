@@ -62,6 +62,10 @@ module Ecluse.Core.Telemetry.Metrics (
     metricAttributes,
 ) where
 
+-- relude's prelude exports a Bounded/Enum-based `universe`; hide it so the
+-- Generic-derived `Data.Universe.Class.universe` is the one in scope here.
+import Prelude hiding (universe)
+
 import OpenTelemetry.Attributes (
     Attributes,
     addAttributesFromBuilder,
@@ -69,6 +73,9 @@ import OpenTelemetry.Attributes (
     defaultAttributeLimits,
     emptyAttributes,
  )
+
+import Data.Universe.Class (Universe (..))
+import Data.Universe.Generic (universeGeneric)
 
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 
@@ -116,7 +123,9 @@ data MetricName
       CredentialRefresh
     | -- | @ecluse.credential.token.ttl.seconds@ — remaining token lifetime by provider (gauge).
       CredentialTokenTtlSeconds
-    deriving stock (Bounded, Enum, Eq, Ord, Show)
+    deriving stock (Eq, Generic, Ord, Show)
+
+instance Universe MetricName where universe = universeGeneric
 
 -- | The wire name of a 'MetricName'.
 metricName :: MetricName -> Text
@@ -138,9 +147,9 @@ metricName = \case
     CredentialRefresh -> "ecluse.credential.refresh"
     CredentialTokenTtlSeconds -> "ecluse.credential.token.ttl.seconds"
 
--- | Every metric in the catalogue (the 'Bounded'\/'Enum' enumeration).
+-- | Every metric in the catalogue (the Generic-derived 'Universe' enumeration).
 allMetricNames :: [MetricName]
-allMetricNames = [minBound .. maxBound]
+allMetricNames = universe
 
 -- ── label keys ───────────────────────────────────────────────────────────────
 
@@ -162,7 +171,9 @@ data LabelKey
     | KeyCause
     | KeyBreakerSource
     | KeyTier
-    deriving stock (Bounded, Enum, Eq, Ord, Show)
+    deriving stock (Eq, Generic, Ord, Show)
+
+instance Universe LabelKey where universe = universeGeneric
 
 -- | The wire name of a 'LabelKey'.
 labelKeyName :: LabelKey -> Text
@@ -182,7 +193,7 @@ labelKeyName = \case
 
 -- | Every label key in the closed set.
 allLabelKeys :: [LabelKey]
-allLabelKeys = [minBound .. maxBound]
+allLabelKeys = universe
 
 {- | The high-cardinality identifiers that must __never__ be metric labels: they live
 on spans and the structured log line instead. The label-domain guard asserts none of
@@ -195,53 +206,75 @@ highCardinalityKeys = ["package", "version", "scope", "message"]
 
 -- | The serve decision (@ecluse.serve.decision@).
 data Decision = Admit | Deny | Unavailable
-    deriving stock (Bounded, Enum, Eq, Show)
+    deriving stock (Eq, Generic, Show)
+
+instance Universe Decision where universe = universeGeneric
 
 {- | The bucketed class of a denial reason — a bounded summary of
 "Ecluse.Core.Server.Response.RejectReason", __not__ the rule name or the message (those are
 high-cardinality and stay on the log line).
 -}
 data ReasonClass = ReasonPolicy | ReasonMissingIntegrity | ReasonUnavailable | ReasonLimit
-    deriving stock (Bounded, Enum, Eq, Show)
+    deriving stock (Eq, Generic, Show)
+
+instance Universe ReasonClass where universe = universeGeneric
 
 -- | Which upstream a data-plane fetch targeted.
 data Upstream = Private | Public
-    deriving stock (Bounded, Enum, Eq, Show)
+    deriving stock (Eq, Generic, Show)
+
+instance Universe Upstream where universe = universeGeneric
 
 -- | The HTTP status class of an upstream response (the bounded summary of the code).
 data StatusClass = Status2xx | Status3xx | Status4xx | Status5xx | StatusOther
-    deriving stock (Bounded, Enum, Eq, Show)
+    deriving stock (Eq, Generic, Show)
+
+instance Universe StatusClass where universe = universeGeneric
 
 -- | The outbound-credential provider a refresh\/ttl signal concerns.
 data Provider = CodeArtifact | Static | Adc
-    deriving stock (Bounded, Enum, Eq, Show)
+    deriving stock (Eq, Generic, Show)
+
+instance Universe Provider where universe = universeGeneric
 
 -- | A bounded error class for a failure signal (never the exception text).
 data Cause = Timeout | Connection | Decode | UpstreamStatus | OtherCause
-    deriving stock (Bounded, Enum, Eq, Show)
+    deriving stock (Eq, Generic, Show)
+
+instance Universe Cause where universe = universeGeneric
 
 -- | The rule-evaluation tier a duration is measured at.
 data Tier = Structural | Effectful
-    deriving stock (Bounded, Enum, Eq, Show)
+    deriving stock (Eq, Generic, Show)
+
+instance Universe Tier where universe = universeGeneric
 
 -- | A metadata-cache lookup result.
 data CacheResult = Hit | Miss
-    deriving stock (Bounded, Enum, Eq, Show)
+    deriving stock (Eq, Generic, Show)
+
+instance Universe CacheResult where universe = universeGeneric
 
 {- | A processed mirror job's result. The idempotent "already present" outcome (a
 registry @409@) is __not__ a distinct value: the worker treats it as a success, so it is
 counted as 'Published' — a series that could never emit is not published.
 -}
 data MirrorResult = Published | Failed
-    deriving stock (Bounded, Enum, Eq, Show)
+    deriving stock (Eq, Generic, Show)
+
+instance Universe MirrorResult where universe = universeGeneric
 
 -- | A credential-refresh result.
 data CredentialResult = Refreshed | RefreshFailed
-    deriving stock (Bounded, Enum, Eq, Show)
+    deriving stock (Eq, Generic, Show)
+
+instance Universe CredentialResult where universe = universeGeneric
 
 -- | Which circuit breaker a state gauge concerns.
 data BreakerSource = EffectfulRule | CredentialMint
-    deriving stock (Bounded, Enum, Eq, Show)
+    deriving stock (Eq, Generic, Show)
+
+instance Universe BreakerSource where universe = universeGeneric
 
 -- ── breaker state (a bounded gauge value) ────────────────────────────────────
 
@@ -249,7 +282,9 @@ data BreakerSource = EffectfulRule | CredentialMint
 gauge (labelled by 'BreakerSource'). It is a bounded measurement, not a label.
 -}
 data BreakerState = Closed | HalfOpen | Open
-    deriving stock (Bounded, Enum, Eq, Show)
+    deriving stock (Eq, Generic, Show)
+
+instance Universe BreakerState where universe = universeGeneric
 
 {- | The gauge code for a breaker state: @0@ closed, @1@ half-open, @2@ open — a small
 ordinal so a dashboard can alarm on "not closed" without a high-cardinality label.
