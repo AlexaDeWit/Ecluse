@@ -119,8 +119,8 @@ noted below.
      copy independently meets the floor on its `sha256`.
 
    The shared notion of algorithm strength and the floor predicate live in one module,
-   `Ecluse.Package.Integrity`, reused by the worker's tamper gate
-   (`Ecluse.Worker.verifyIntegrity`) so the admission floor and the publish-time
+   `Ecluse.Core.Package.Integrity`, reused by the worker's tamper gate
+   (`Ecluse.Core.Worker.verifyIntegrity`) so the admission floor and the publish-time
    verification rank algorithms identically.
 
 ## Posture

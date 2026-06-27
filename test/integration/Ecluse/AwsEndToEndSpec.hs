@@ -21,7 +21,7 @@ import TestContainers (Container)
 import UnliftIO (race_, timeout)
 import UnliftIO.Concurrent (threadDelay)
 
-import Ecluse.App (runApp)
+import Ecluse (runWorker)
 import Ecluse.Composition (MirrorQueuePlan (MemoryBackend, SqsBackend), planMirrorQueue, renderBootError)
 import Ecluse.Config (parseEnvPure)
 import Ecluse.Core.Credential (AuthToken (AuthToken, authExpiresAt, authSecret), CredentialProvider, mkSecret, staticProvider)
@@ -44,11 +44,10 @@ import Ecluse.Integration.Ministack (
  )
 import Ecluse.Server (MountBinding (..), application, mkServerConfig)
 import Ecluse.Telemetry (telemetryDisabled)
-import Ecluse.Worker (workerLoop)
 
 {- | The whole AWS-backed path through the __real composition root__, end to end: an
 in-process Écluse — the real 'Ecluse.Server.application' serve path and the real
-'Ecluse.Worker.workerLoop' — over a __real SQS queue__ (a @ministack@ container,
+mirror worker ('Ecluse.runWorker') — over a __real SQS queue__ (a @ministack@ container,
 shared through "Ecluse.Integration.Ministack") and WAI npm stubs for the public
 upstream, the (missing) private upstream, and the mirror target.
 
@@ -336,13 +335,13 @@ newTestLogEnv = initLogEnv (Namespace ["ecluse"]) (Environment "test")
 
 -- ── driving the worker loop ────────────────────────────────────────────────────
 
-{- Run the supervised 'workerLoop' against the real queue until a condition holds,
-then tear it down. The loop never returns on its own, so it is raced against a
-condition-poller ('race_'); a hard timeout bounds the whole thing so a failing test
-cannot hang. -}
+{- Run the supervised mirror worker ('runWorker') against the real queue until a
+condition holds, then tear it down. The loop never returns on its own, so it is raced
+against a condition-poller ('race_'); a hard timeout bounds the whole thing so a failing
+test cannot hang. -}
 runLoopUntil :: Env -> IO Bool -> IO ()
 runLoopUntil env done =
-    void $ timeout loopHardTimeout $ race_ (runApp env workerLoop) (waitFor done)
+    void $ timeout loopHardTimeout $ race_ (runWorker env) (waitFor done)
 
 -- A generous hard ceiling, far above a healthy fetch → verify → publish cycle even
 -- under @-fhpc@ instrumentation, so it only ever fires on a genuine hang.

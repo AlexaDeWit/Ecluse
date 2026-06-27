@@ -2,14 +2,14 @@
 mirrored packages.
 
 The worker is the consumer end of the demand-driven mirror queue (see
-"Ecluse.Core.Queue"). 'runWorker' long-polls the queue, and for each received job:
+"Ecluse.Core.Queue"). The consume loop long-polls the queue, and for each received job:
 
 1. fetches the artifact bytes from the public upstream named on the job,
 2. __verifies__ those bytes against the integrity digest the job carries — the
    digest the rules admitted at serve time, not a fresh re-fetch,
-3. assembles the npm publish document and publishes it to the mirror target
-   ('Ecluse.Env.envRegistry', resolved at the composition root with the bearer from
-   the "Ecluse.Core.Credential" provider), and
+3. assembles the npm publish document and publishes it to the mirror target (the
+   publish-side registry handle on the 'WorkerRuntime', resolved at the composition
+   root with the bearer from the "Ecluse.Core.Credential" provider), and
 4. acknowledges the job.
 
 == The integrity gate is the security crux
@@ -30,12 +30,12 @@ separate concern — it governs whether one message redelivers; it does not prot
 the loop, since an escaping exception would still tear the thread down.) The
 composition root holds the worker under @concurrently_@ alongside the server, so a
 genuinely fatal error propagates and takes the process down (fail-stop), while
-transient faults self-recover here. A successful poll advances the
-'Ecluse.Env.WorkerHeartbeat', so a stalled loop is visible to the liveness probe.
+transient faults self-recover here. A successful poll advances the 'WorkerHeartbeat',
+so a stalled loop is visible to the liveness probe.
 
 Shutdown tears the loop down cleanly: the composition root runs it under
-@concurrently_@ within the @withEnv@ resource bracket, so process teardown cancels
-the loop thread and an in-flight, un-acked message simply redelivers — safe, because
+@concurrently_@ within its resource bracket, so process teardown cancels the loop
+thread and an in-flight, un-acked message simply redelivers — safe, because
 publishing is idempotent (a version already present is success).
 
 == Ack within the visibility budget
@@ -49,9 +49,13 @@ competing with its batch-mates for it.
 
 See @docs\/architecture\/cloud-backends.md@ → "Mirror Queue" and "Process model".
 -}
-module Ecluse.Worker (
-    -- * Entry point
-    runWorker,
+module Ecluse.Core.Worker (
+    -- * Worker runtime
+    WorkerRuntime (..),
+
+    -- * The worker monad
+    WorkerM,
+    runWorkerM,
 
     -- * Loop and job processing (exposed for direct testing)
     workerLoop,
@@ -60,6 +64,10 @@ module Ecluse.Worker (
     JobOutcome (..),
 
     -- * Liveness
+    WorkerHeartbeat,
+    newWorkerHeartbeat,
+    recordPoll,
+    lastPoll,
     workerHeartbeatStaleAfter,
     heartbeatHealthy,
     heartbeatHealthyNow,
@@ -75,13 +83,13 @@ import Data.Foldable (maximumBy)
 import Data.List.NonEmpty qualified as NE
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, UTCTime, diffUTCTime, getCurrentTime)
-import Katip (Severity (ErrorS, InfoS, WarningS), katipAddContext, katipAddNamespace, logFM, ls)
+import Katip (Katip, KatipContext, LogEnv, Severity (ErrorS, InfoS, WarningS), SimpleLogPayload, katipAddNamespace, logFM, ls)
+import Katip.Monadic (KatipContextT, runKatipContextT)
 import Network.HTTP.Client (HttpException, Manager, Request, brRead, responseBody, withResponse)
-import UnliftIO (tryAny)
+import UnliftIO (MonadUnliftIO, tryAny, withRunInIO)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (try)
 
-import Ecluse.App (App, runApp)
 import Ecluse.Core.Package (Hash (hashAlg, hashValue), HashAlg (Blake2b, MD5, SHA1, SHA256, SHA384, SHA512, SRI), renderPackageName)
 import Ecluse.Core.Package.Integrity (Strength, assertedAlg, integrityStrength, sriAlgorithm, sriBody, sriPrefix)
 import Ecluse.Core.Queue (
@@ -104,28 +112,90 @@ import Ecluse.Core.Registry.Npm (
  )
 import Ecluse.Core.Security (Limits (maxBodyBytes), boundedRead, defaultLimits)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
+import Ecluse.Core.Telemetry.Record (WorkerMetricsPort (..), timedSeconds)
+import Ecluse.Core.Telemetry.Span (JobSpanOutcome (JobSpanOutcome), WorkerTracingPort (..))
 import Ecluse.Core.Version (renderVersion)
-import Ecluse.Env (
-    Env (envDdContext, envManager, envMetrics, envQueue, envRegistry, envTelemetry, envWorkerHeartbeat),
-    WorkerHeartbeat,
-    lastPoll,
-    recordPoll,
- )
-import Ecluse.Telemetry.Correlation (ddPayloadNow)
-import Ecluse.Telemetry.Instruments (recordMirrorJobProcessed, recordMirrorPublishDuration, timedSeconds)
-import Ecluse.Telemetry.Tracing (JobSpanOutcome (JobSpanOutcome), withMirrorJobSpan)
 
--- ── entry point ───────────────────────────────────────────────────────────────
+-- ── worker runtime ────────────────────────────────────────────────────────────
 
-{- | Run the supervised mirror worker over the composition-root 'Env': the
-consume → fetch → verify → publish → ack loop, in the @App@ orchestration monad.
+{- | The runtime backends the mirror worker is closed over: exactly the effectful
+capabilities the consume loop needs to poll, fetch, verify, publish, and record. A
+record of concrete handles and abstract ports (the Handle pattern), assembled by the
+composition root ('Ecluse.Env.workerRuntimeOf') and read by the loop through the
+'WorkerM' reader.
 
-This is a self-contained service entry over the shared 'Env' (the split-ready
-shape the single-process program runs alongside the server). It does not return
-under normal operation; its caller brackets it for shutdown.
+The mirror queue is the demand-driven hand-off the loop consumes; the publish-side
+registry client writes approved artifacts to the mirror target; the guarded data-plane
+manager fetches the artifact bytes (the untrusted public fetch, carrying the resolved-IP
+SSRF recheck); the heartbeat is the loop's liveness surface. The metric and tracing
+ports are the abstract recording interfaces ("Ecluse.Core.Telemetry.Record",
+"Ecluse.Core.Telemetry.Span"); the application supplies their OpenTelemetry-backed
+implementations, so the loop records without naming a telemetry backend. There is no log
+field — the loop logs through the ambient @katip@ context the entry point establishes.
 -}
-runWorker :: Env -> IO ()
-runWorker env = runApp env (katipAddNamespace "worker" workerLoop)
+data WorkerRuntime = WorkerRuntime
+    { wrQueue :: MirrorQueue
+    -- ^ The mirror-queue handle the consume loop long-polls and acks against.
+    , wrRegistry :: RegistryClient
+    {- ^ The publish-side registry handle approved artifacts are written to the mirror
+    target through.
+    -}
+    , wrManager :: Manager
+    {- ^ The guarded data-plane manager for the __untrusted__ artifact fetch; it carries
+    the resolved-IP SSRF recheck.
+    -}
+    , wrHeartbeat :: WorkerHeartbeat
+    {- ^ The consume-loop heartbeat, advanced on every successful poll and read by the
+    liveness probe.
+    -}
+    , wrMetrics :: WorkerMetricsPort
+    -- ^ The metric-recording port the worker emits its @ecluse.mirror.*@ job signals through.
+    , wrTracing :: WorkerTracingPort
+    -- ^ The tracing port the worker opens its per-job span through.
+    }
+
+-- ── the worker monad ──────────────────────────────────────────────────────────
+
+{- | The mirror worker's monad: a reader over the 'WorkerRuntime' layered on @katip@'s
+logging context.
+
+A @newtype@ over @'ReaderT' 'WorkerRuntime' ('KatipContextT' 'IO')@ so its instances are
+this module's to control and call sites name one concrete monad. The derived instances
+give reader access to the runtime ('MonadReader' 'WorkerRuntime'), arbitrary effects
+('MonadIO'), the unlift capability ('MonadUnliftIO') the loop's @tryAny@ and the per-job
+span bracket need, and the @katip@ classes ('Katip', 'KatipContext') so a structured log
+call composes through the ambient context the entry point establishes.
+
+The @katip@ base is a reader, never a 'StateT', so the logging context behaves correctly
+across the loop (see @docs\/architecture\/technology-stack.md@ → "Key Decisions").
+-}
+newtype WorkerM a = WorkerM
+    { unWorkerM :: ReaderT WorkerRuntime (KatipContextT IO) a
+    }
+    deriving newtype
+        ( Functor
+        , Applicative
+        , Monad
+        , MonadIO
+        , MonadReader WorkerRuntime
+        , MonadUnliftIO
+        , Katip
+        , KatipContext
+        )
+
+{- | Run a 'WorkerM' against the 'WorkerRuntime' and the @katip@ logging environment and
+initial context the entry point supplies, yielding the underlying 'IO' action. This is
+the boundary where the worker's 'WorkerM' code is discharged to 'IO'.
+
+The 'LogEnv' (the structured-log scribes) and the initial context payload are passed in
+rather than read from the runtime, so the application owns the log stream and the
+trace-correlation @dd@ enrichment: it resolves the @dd@ identity and hands it here as the
+initial context, so every line the loop emits carries @dd@. The loop narrows the
+namespace with @katip@'s combinators on top as it logs.
+-}
+runWorkerM :: LogEnv -> SimpleLogPayload -> WorkerRuntime -> WorkerM a -> IO a
+runWorkerM logEnv initialContext runtime action =
+    runKatipContextT logEnv initialContext mempty (runReaderT (unWorkerM action) runtime)
 
 -- ── the consume loop ──────────────────────────────────────────────────────────
 
@@ -138,29 +208,60 @@ successful poll advances the heartbeat (whether or not the batch was empty), so 
 liveness probe sees the loop is alive; an idle queue is a healthy empty poll, not a
 stall.
 -}
-workerLoop :: App ()
+workerLoop :: WorkerM ()
 workerLoop = forever $ do
     outcome <- tryAny pollAndProcess
     whenLeft_ outcome $ \err -> do
         logFM ErrorS (ls ("worker iteration failed, backing off: " <> displayExceptionT err))
         backoff
   where
-    pollAndProcess :: App ()
+    pollAndProcess :: WorkerM ()
     pollAndProcess = do
-        queue <- asks envQueue
+        queue <- asks wrQueue
         messages <- liftIO (receive queue)
         -- Heartbeat on every successful poll — an empty long-poll is a healthy idle.
-        heartbeat <- asks envWorkerHeartbeat
+        heartbeat <- asks wrHeartbeat
         now <- liftIO getCurrentTime
         liftIO (recordPoll heartbeat now)
         processBatch messages
 
 -- The fixed pause after a failed iteration, so a persistently failing dependency
 -- (queue, upstream) is retried at a bounded rate rather than hot-looping.
-backoff :: App ()
+backoff :: WorkerM ()
 backoff = threadDelay 1_000_000
 
 -- ── liveness ──────────────────────────────────────────────────────────────────
+
+{- | The mirror worker's consume-loop heartbeat: the wall-clock time of the
+worker's __last successful poll__ of the queue.
+
+It is the worker's own liveness signal, kept apart from the server's HTTP
+readiness so single-process health reflects a stalled worker today and a future
+standalone worker binary keeps the same probe. The worker 'recordPoll's after each
+successful @receive@ (whether or not the batch was empty — an empty long-poll is a
+healthy idle, not a stall); a liveness probe reads 'lastPoll' and compares it
+against the wall clock to decide whether the loop has gone quiet for too long.
+-}
+newtype WorkerHeartbeat = WorkerHeartbeat (TVar (Maybe UTCTime))
+
+{- | Build a fresh 'WorkerHeartbeat' with no poll yet recorded ('lastPoll' is
+'Nothing' until the worker's first successful @receive@).
+-}
+newWorkerHeartbeat :: IO WorkerHeartbeat
+newWorkerHeartbeat = WorkerHeartbeat <$> newTVarIO Nothing
+
+{- | Record the time of a successful queue poll, advancing the heartbeat. Called
+by the worker after each @receive@ returns (the loop is alive even on an empty
+batch).
+-}
+recordPoll :: WorkerHeartbeat -> UTCTime -> IO ()
+recordPoll (WorkerHeartbeat var) now = atomically (writeTVar var (Just now))
+
+{- | The time of the worker's last successful poll, or 'Nothing' before its first.
+A liveness probe reads this and compares it against the wall clock.
+-}
+lastPoll :: WorkerHeartbeat -> IO (Maybe UTCTime)
+lastPoll (WorkerHeartbeat var) = readTVarIO var
 
 {- | How long the worker's last successful poll may be stale before the loop is
 considered stalled — the staleness threshold the liveness probe applies.
@@ -211,17 +312,17 @@ visibility budget rather than competing with its batch-mates for it. A batch is 
 most the queue's configured batch size (≤ 10), so sequential processing is a
 deliberate throughput-vs-budget choice, not a scaling bottleneck.
 -}
-processBatch :: [QueueMessage] -> App ()
+processBatch :: [QueueMessage] -> WorkerM ()
 processBatch = traverse_ processMessage
 
 -- Process one message: run the job, and ack on any terminal outcome (success, or a
 -- non-retryable drop). A transient failure leaves the message un-acked so the queue
 -- redelivers it ("retry is don't ack").
-processMessage :: QueueMessage -> App ()
+processMessage :: QueueMessage -> WorkerM ()
 processMessage message = do
-    metrics <- asks envMetrics
+    metrics <- asks wrMetrics
     outcome <- processJob (msgReceipt message) (msgJob message)
-    recordMirrorJobProcessed metrics (jobResultMetric outcome)
+    liftIO (wmpMirrorJobProcessed metrics (jobResultMetric outcome))
     case outcome of
         Succeeded -> ackMessage (msgReceipt message)
         Dropped reason -> do
@@ -246,9 +347,9 @@ jobResultMetric = \case
     Dropped _ -> Metric.Failed
     Retried _ -> Metric.Failed
 
-ackMessage :: ReceiptHandle -> App ()
+ackMessage :: ReceiptHandle -> WorkerM ()
 ackMessage receipt = do
-    queue <- asks envQueue
+    queue <- asks wrQueue
     liftIO (ack queue receipt)
 
 -- ── per-job processing ──────────────────────────────────────────────────────────
@@ -281,34 +382,32 @@ the mirror target. Returns the 'JobOutcome' that decides ack vs. redeliver.
 The receipt handle is taken so a long publish can 'Ecluse.Core.Queue.extendVisibility'
 to hold the message before its window lapses. The rules are __not__ re-run: the
 job was gated at serve time.
+
+The per-job domain span (the worker tracing port) wraps the whole fetch → verify →
+publish, projecting the terminal outcome onto the span so a refused publish is
+explainable from the trace. The span body is discharged to 'IO' through the unlift, so
+the loop's structured log lines still compose through the ambient @katip@ context.
 -}
-processJob :: ReceiptHandle -> MirrorJob -> App JobOutcome
+processJob :: ReceiptHandle -> MirrorJob -> WorkerM JobOutcome
 processJob receipt job = katipAddNamespace "job" $ do
-    telemetry <- asks envTelemetry
-    withMirrorJobSpan telemetry (jobPackage job) (jobVersion job) jobSpanOutcome $ stampJobDd $ do
-        fetched <- fetchArtifactBytes (jobArtifactUrl job)
-        case fetched of
-            Left reason -> pure (Retried reason)
-            Right bytes ->
-                case verifyIntegrity (maHashes artifact) bytes of
-                    IntegrityMismatch detail -> do
-                        -- The security crux: a tampered or corrupt artifact must never
-                        -- reach the private upstream, which is served without rules. Fail
-                        -- the job with no publish and alarm.
-                        logFM ErrorS (ls ("artifact integrity mismatch, refusing to publish: " <> detail))
-                        pure (Dropped ("integrity mismatch: " <> detail))
-                    IntegrityVerified -> publishVerified receipt job bytes
+    tracing <- asks wrTracing
+    withRunInIO $ \runInIO ->
+        wtpMirrorJobSpan tracing (jobPackage job) (jobVersion job) jobSpanOutcome $
+            runInIO $ do
+                fetched <- fetchArtifactBytes (jobArtifactUrl job)
+                case fetched of
+                    Left reason -> pure (Retried reason)
+                    Right bytes ->
+                        case verifyIntegrity (maHashes artifact) bytes of
+                            IntegrityMismatch detail -> do
+                                -- The security crux: a tampered or corrupt artifact must never
+                                -- reach the private upstream, which is served without rules. Fail
+                                -- the job with no publish and alarm.
+                                logFM ErrorS (ls ("artifact integrity mismatch, refusing to publish: " <> detail))
+                                pure (Dropped ("integrity mismatch: " <> detail))
+                            IntegrityVerified -> publishVerified receipt job bytes
   where
     artifact = jobArtifact job
-
-    -- Stamp the worker-job span's trace/span ids onto the dd object for this job's log
-    -- lines: read inside the span, so a job log correlates to its own span (the
-    -- service identity is already on every line via 'runApp'; this tightens the ids to
-    -- the active job span). Inert when telemetry is off (no span -> no ids).
-    stampJobDd :: App a -> App a
-    stampJobDd body = do
-        dd <- ddPayloadNow =<< asks envDdContext
-        katipAddContext dd body
 
     -- Project a terminal job outcome onto the worker-job span: the bounded outcome
     -- label always, and the failure detail (which marks the span errored) when the
@@ -323,11 +422,11 @@ processJob receipt job = katipAddNamespace "job" $ do
 -- visibility window (a large-artifact publish may run long), assemble the npm
 -- publish document, publish through the composition-root publish client, and
 -- classify the registry outcome into a 'JobOutcome'.
-publishVerified :: ReceiptHandle -> MirrorJob -> ByteString -> App JobOutcome
+publishVerified :: ReceiptHandle -> MirrorJob -> ByteString -> WorkerM JobOutcome
 publishVerified receipt job bytes = do
     holdForLongPublish receipt
-    client <- asks envRegistry
-    metrics <- asks envMetrics
+    client <- asks wrRegistry
+    metrics <- asks wrMetrics
     let document =
             npmPublishDocument
                 (jobPackage job)
@@ -339,7 +438,7 @@ publishVerified receipt job bytes = do
     -- The publish is the long, network-bound step; time it for the publish-latency
     -- histogram whichever way the registry responds.
     (result, seconds) <- timedSeconds (liftIO (publishArtifact client (jobPackage job) (jobVersion job) document))
-    recordMirrorPublishDuration metrics seconds
+    liftIO (wmpMirrorPublishDuration metrics seconds)
     case result of
         Right () -> do
             logFM InfoS (ls ("mirrored artifact published: " <> renderJob job))
@@ -368,9 +467,9 @@ is capped (see 'workerArtifactLimits'), so an upstream returning an unbounded bo
 is refused fail-closed rather than exhausting memory. A network failure is returned
 as a transient reason ('Retried' at the call site), not thrown, so a flaky upstream
 redelivers rather than killing the iteration. -}
-fetchArtifactBytes :: Text -> App (Either Text ByteString)
+fetchArtifactBytes :: Text -> WorkerM (Either Text ByteString)
 fetchArtifactBytes url = do
-    manager <- asks envManager
+    manager <- asks wrManager
     case artifactRequestByUrl (fetchConfig manager) url of
         Left urlErr -> pure (Left ("unformable artifact URL: " <> show urlErr))
         Right request ->
@@ -421,9 +520,9 @@ workerArtifactLimits = defaultLimits{maxBodyBytes = 512 * 1024 * 1024}
 -- waste a full re-fetch and re-publish of a (potentially large) artifact. The hold is
 -- an optimization (idempotency makes a redelivery harmless), so a failure to extend
 -- is swallowed rather than failing the job.
-holdForLongPublish :: ReceiptHandle -> App ()
+holdForLongPublish :: ReceiptHandle -> WorkerM ()
 holdForLongPublish receipt = do
-    queue <- asks envQueue
+    queue <- asks wrQueue
     _ <- tryAny (liftIO (extendVisibility queue receipt extendBy))
     pass
   where
@@ -442,9 +541,9 @@ holdForLongPublish receipt = do
 -- once rather than waiting out the long success-path hold ('holdForLongPublish'). A
 -- best-effort optimization (a missed reset just means the message redelivers after the
 -- hold instead), so a failure to reset is swallowed.
-releaseForRetry :: ReceiptHandle -> App ()
+releaseForRetry :: ReceiptHandle -> WorkerM ()
 releaseForRetry receipt = do
-    queue <- asks envQueue
+    queue <- asks wrQueue
     _ <- tryAny (liftIO (extendVisibility queue receipt (Seconds 0)))
     pass
 

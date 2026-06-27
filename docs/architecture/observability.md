@@ -136,7 +136,7 @@ typed `MetricName` enumeration in `Ecluse.Telemetry.Metrics`; the live instrumen
 the one typed `record*` helper per signal live in `Ecluse.Telemetry.Instruments`, built
 once from the meter provider and recorded from the serve path
 (`Ecluse.Server.Pipeline`), the metadata cache (`Ecluse.Server.Cache`), and the mirror
-worker (`Ecluse.Worker`). Two catalogue signals are **defined but not yet wired**: the
+worker (`Ecluse.Core.Worker`). Two catalogue signals are **defined but not yet wired**: the
 circuit-breaker state gauge and the credential refresh/ttl signals — the breaker and the
 refreshing credential provider are constructed before the telemetry substrate and sit
 off the composition root, so emitting them is a boot-sequencing follow-up. The
@@ -221,9 +221,9 @@ active span off the OpenTelemetry context and fills its ids onto the resolved
 `service`/`env`/`version` identity (the same `Ecluse.Telemetry.Resolve` answer the
 exporter uses). That `dd` object is installed as the **initial `katip` context** at the
 request entry (`runHandler`, where the WAI server span is already active) and the worker
-entry (`runApp`, re-stamped inside a job span), so **every line carries `dd`**; the
-trace/span ids are present only when a span is in scope, and absent (never all-zero)
-otherwise.
+entry (`runWorkerM`, the service identity — no span is active at the worker entry), so
+**every line carries `dd`**; the trace/span ids are present only when a span is in scope,
+and absent (never all-zero) otherwise.
 
 ## Datadog deployment (Operator)
 

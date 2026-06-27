@@ -107,6 +107,7 @@ library ecluse-core
     Ecluse.Core.Text
     Ecluse.Core.Version
     Ecluse.Core.Wire
+    Ecluse.Core.Worker
 
   -- Per-ecosystem version grammars and their shared lexical atoms. Internal to
   -- ecluse-core: VersionKey is opaque, so callers reach these only through the
@@ -152,7 +153,6 @@ library
   hs-source-dirs:  src
   exposed-modules:
     Ecluse
-    Ecluse.App
     Ecluse.Composition
     Ecluse.Config
     Ecluse.Env
@@ -164,7 +164,6 @@ library
     Ecluse.Telemetry.Reporters
     Ecluse.Telemetry.Resolve
     Ecluse.Telemetry.Tracing
-    Ecluse.Worker
 
   build-depends:
     , ecluse:ecluse-core
@@ -277,6 +276,7 @@ test-suite ecluse-core-unit
     Ecluse.VersionOrderingSpec
     Ecluse.VersionSpec
     Ecluse.WireSpec
+    Ecluse.WorkerSpec
 
   build-tool-depends: hspec-discover:hspec-discover ^>=2.11
   build-depends:
@@ -332,7 +332,6 @@ test-suite ecluse-unit
     Ecluse.Telemetry.ReportersSpec
     Ecluse.Telemetry.ResolveSpec
     Ecluse.Telemetry.TracingSpec
-    Ecluse.WorkerSpec
 
   build-tool-depends: hspec-discover:hspec-discover ^>=2.11
   build-depends:

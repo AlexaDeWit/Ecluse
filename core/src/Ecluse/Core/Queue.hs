@@ -359,7 +359,7 @@ data MemoryQueueConfig = MemoryQueueConfig
 {- | A 'MemoryQueueConfig' for a given depth cap with the idle-poll window at its
 production default — @20s@, mirroring the SQS long-poll cadence
 ('Ecluse.Core.Queue.Sqs.defaultSqsConfig') and comfortably under the worker's @120s@
-heartbeat-staleness budget ('Ecluse.Worker.workerHeartbeatStaleAfter'), so an idle
+heartbeat-staleness budget ('Ecluse.Core.Worker.workerHeartbeatStaleAfter'), so an idle
 'receive' returns a healthy empty poll long before @\/livez@ would flag the loop
 stalled. The depth cap stays the operator-tunable knob; the poll window is a fixed
 cadence, exposed on the record only so a test can shorten it.

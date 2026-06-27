@@ -1,23 +1,27 @@
-{- | The metric-recording port: the abstract interface the core serve path records
-through, decoupled from any telemetry backend.
+{- | The metric-recording ports: the abstract interfaces the core serve path and
+mirror worker record through, decoupled from any telemetry backend.
 
 "Ecluse.Core.Telemetry.Metrics" defines /what/ the @ecluse.*@ catalogue is (the names
-and the closed set of bounded labels). This module defines the __recording interface__
-over that catalogue as a record of @IO@ functions (the Handle pattern, as
-"Ecluse.Core.Registry" and "Ecluse.Core.Queue" use): one field per signal the serve
-path emits, each taking only the bounded label values its metric carries. The core
-serve path records through this port and never names an OpenTelemetry instrument; the
-application supplies the OTel-backed implementation behind it (see
-@Ecluse.Telemetry.Instruments@). A test supplies an inert or recording double.
+and the closed set of bounded labels). This module defines the __recording interfaces__
+over that catalogue as records of @IO@ functions (the Handle pattern, as
+"Ecluse.Core.Registry" and "Ecluse.Core.Queue" use): one field per signal a consumer
+emits, each taking only the bounded label values its metric carries. A consumer records
+through its port and never names an OpenTelemetry instrument; the application supplies
+the OTel-backed implementations behind them (see @Ecluse.Telemetry.Instruments@). A test
+supplies an inert or recording double.
 
-Only the signals the serve path emits are present — serve decisions, the rule gate,
-the data-plane upstream fetch, the metadata cache, and mirror enqueue. The
-worker-only and credential signals stay in the application instrument set; the port
-carries exactly what the pipeline uses.
+Two ports are defined: 'MetricsPort' for the serve path (serve decisions, the rule gate,
+the data-plane upstream fetch, the metadata cache, and mirror enqueue) and
+'WorkerMetricsPort' for the mirror worker (jobs processed, publish latency). The
+credential signals stay in the application instrument set; each port carries exactly the
+signals its consumer emits.
 -}
 module Ecluse.Core.Telemetry.Record (
-    -- * The recording port
+    -- * The serve-path recording port
     MetricsPort (..),
+
+    -- * The worker recording port
+    WorkerMetricsPort (..),
 
     -- * Timing
     timedSeconds,
@@ -29,6 +33,7 @@ import Ecluse.Core.Telemetry.Metrics (
     CacheResult,
     Cause,
     Decision,
+    MirrorResult,
     ReasonClass,
     StatusClass,
     Tier,
@@ -71,6 +76,22 @@ data MetricsPort = MetricsPort
     -- ^ Record one mirror job enqueued (@ecluse.mirror.enqueued@).
     , mpMirrorEnqueueFailure :: IO ()
     -- ^ Record one mirror enqueue failure (@ecluse.mirror.enqueue.failures@).
+    }
+
+{- | The mirror worker's metric-recording port — the worker analogue of 'MetricsPort',
+kept a separate record so the worker records exactly its own signals and the serve path
+exactly its own (the two consumers share no field). Both fields return 'IO', so the
+worker loop records through the port without naming a telemetry backend; the application
+supplies the OTel-backed implementation (see @Ecluse.Telemetry.Instruments@) and a test
+an inert or recording double.
+-}
+data WorkerMetricsPort = WorkerMetricsPort
+    { wmpMirrorJobProcessed :: MirrorResult -> IO ()
+    {- ^ Record one processed mirror job (@ecluse.mirror.jobs.processed@) by its
+    terminal result (published, or failed).
+    -}
+    , wmpMirrorPublishDuration :: Double -> IO ()
+    -- ^ Record one mirror publish-latency sample (@ecluse.mirror.publish.duration@).
     }
 
 {- | Run an action and return its result alongside the wall-clock seconds it took,

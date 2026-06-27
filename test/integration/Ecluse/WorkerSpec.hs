@@ -11,7 +11,7 @@ import Test.Hspec
 import UnliftIO (race_, timeout)
 import UnliftIO.Concurrent (threadDelay)
 
-import Ecluse.App (runApp)
+import Ecluse (runWorker)
 import Ecluse.Core.Credential (AuthToken (..), CredentialProvider, mkSecret, staticProvider)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (HashAlg (SHA1), mkPackageName)
@@ -33,13 +33,13 @@ import Ecluse.Integration.Ministack (
  )
 import Ecluse.Telemetry (telemetryDisabled)
 import Ecluse.Test.Package (unsafeHash)
-import Ecluse.Worker (workerLoop)
 
 {- | The mirror worker, end to end against real SQS (a @ministack@ container, shared
 through "Ecluse.Integration.Ministack") and WAI upstream/mirror stubs. These cases
 exercise the queue semantics the in-memory double cannot faithfully reproduce —
 real visibility timeouts, redelivery, @extendVisibility@-held messages, and the
-supervised 'workerLoop' itself polling a real queue (heartbeat included).
+supervised worker loop ('Ecluse.runWorker') itself polling a real queue (heartbeat
+included).
 
 Hermetic and gating, but requires a Docker daemon (for ministack) and no real AWS.
 -}
@@ -217,14 +217,14 @@ newTestLogEnv = initLogEnv (Namespace ["ecluse"]) (Environment "test")
 
 -- ── driving the supervised loop ────────────────────────────────────────────────
 
-{- Run the supervised 'workerLoop' against the real queue until a condition holds,
-then tear it down. The loop never returns on its own, so it is raced against a
-condition-poller ('race_'): when the poller observes the condition, 'race_' cancels
-the loop — the same cooperative cancellation process shutdown uses. A hard timeout
-bounds the whole thing so a failing test cannot hang. -}
+{- Run the supervised mirror worker ('runWorker') against the real queue until a
+condition holds, then tear it down. The loop never returns on its own, so it is raced
+against a condition-poller ('race_'): when the poller observes the condition, 'race_'
+cancels the loop — the same cooperative cancellation process shutdown uses. A hard
+timeout bounds the whole thing so a failing test cannot hang. -}
 runLoopUntil :: Env -> IO Bool -> IO ()
 runLoopUntil env done =
-    void $ timeout loopHardTimeout $ race_ (runApp env workerLoop) (waitFor done)
+    void $ timeout loopHardTimeout $ race_ (runWorker env) (waitFor done)
 
 {- The hard ceiling on a 'runLoopUntil' run, sized so even the slowest positive
 condition (the redelivery case waiting on a /second/ publish — two full
@@ -236,11 +236,11 @@ and only ever fires on a genuine hang. -}
 loopHardTimeout :: Int
 loopHardTimeout = 45_000_000
 
-{- Run the supervised 'workerLoop' for a fixed wall-clock window, then cancel it —
-for the cases that assert a /negative/ (nothing published, an idle heartbeat) where
-there is no positive condition to wait on. -}
+{- Run the supervised mirror worker ('runWorker') for a fixed wall-clock window, then
+cancel it — for the cases that assert a /negative/ (nothing published, an idle
+heartbeat) where there is no positive condition to wait on. -}
 runLoopFor :: Env -> Int -> IO ()
-runLoopFor env micros = void (timeout micros (runApp env workerLoop))
+runLoopFor env micros = void (timeout micros (runWorker env))
 
 -- Poll a condition until it holds, bounded so a failing test does not hang. The
 -- bound (~40s of 200ms ticks) sits just under 'loopHardTimeout' so that ceiling, not

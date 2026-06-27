@@ -1,21 +1,28 @@
-{- | Test doubles for the core serve-path recording ports
+{- | Test doubles for the core serve-path and worker recording ports
 ("Ecluse.Core.Telemetry.Record", "Ecluse.Core.Telemetry.Span").
 
-The core pipeline records through abstract ports rather than a telemetry backend, so a
-suite can drive it over inert or recording doubles with no OpenTelemetry SDK. These are
-the shared doubles every suite reaches for: an inert metrics port, a metrics port that
-captures the serve decisions it is handed (to assert the pipeline recorded an admit or a
-denial), and a pass-through tracing port that simply runs the bracketed body.
+The core pipeline and the mirror worker record through abstract ports rather than a
+telemetry backend, so a suite can drive them over inert or recording doubles with no
+OpenTelemetry SDK. These are the shared doubles every suite reaches for: an inert metrics
+port, a metrics port that captures the signals it is handed (to assert what was
+recorded), and a pass-through tracing port that simply runs the bracketed body — one set
+for the serve path, one for the worker.
 -}
 module Ecluse.Test.Port (
+    -- * Serve-path ports
     noopMetricsPort,
     recordingMetricsPort,
     passthroughTracingPort,
+
+    -- * Worker ports
+    noopWorkerMetricsPort,
+    recordingWorkerMetricsPort,
+    passthroughWorkerTracingPort,
 ) where
 
-import Ecluse.Core.Telemetry.Metrics (Decision)
-import Ecluse.Core.Telemetry.Record (MetricsPort (..))
-import Ecluse.Core.Telemetry.Span (TracingPort (..))
+import Ecluse.Core.Telemetry.Metrics (Decision, MirrorResult)
+import Ecluse.Core.Telemetry.Record (MetricsPort (..), WorkerMetricsPort (..))
+import Ecluse.Core.Telemetry.Span (TracingPort (..), WorkerTracingPort (..))
 
 {- | A 'MetricsPort' whose every field discards its measurement — the inert double for a
 spec that drives the serve path but asserts nothing about metrics.
@@ -53,4 +60,36 @@ passthroughTracingPort =
     TracingPort
         { spanRuleEval = \_ _ action -> fst <$> action
         , spanMirrorEnqueue = \_ _ _ action -> action
+        }
+
+-- ── worker ports ────────────────────────────────────────────────────────────────
+
+{- | A 'WorkerMetricsPort' whose every field discards its measurement — the inert double
+for a spec that drives the worker loop but asserts nothing about metrics.
+-}
+noopWorkerMetricsPort :: WorkerMetricsPort
+noopWorkerMetricsPort =
+    WorkerMetricsPort
+        { wmpMirrorJobProcessed = const pass
+        , wmpMirrorPublishDuration = const pass
+        }
+
+{- | A 'WorkerMetricsPort' that captures the per-job results it records, alongside a
+reader for the results seen so far (in record order). The publish-duration field is
+inert. Lets a spec assert that the worker recorded the expected processed-job result
+through the port.
+-}
+recordingWorkerMetricsPort :: IO (WorkerMetricsPort, IO [MirrorResult])
+recordingWorkerMetricsPort = do
+    seen <- newTVarIO []
+    let port = noopWorkerMetricsPort{wmpMirrorJobProcessed = \r -> atomically (modifyTVar' seen (<> [r]))}
+    pure (port, readTVarIO seen)
+
+{- | A 'WorkerTracingPort' that opens no span and simply runs the bracketed body — the
+inert double for a spec that drives the worker's per-job span site without a tracer.
+-}
+passthroughWorkerTracingPort :: WorkerTracingPort
+passthroughWorkerTracingPort =
+    WorkerTracingPort
+        { wtpMirrorJobSpan = \_ _ _ action -> action
         }
