@@ -128,8 +128,9 @@ participation is governed by the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 | Path        | Purpose                                                                                                                  |
 | ----------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `core/`     | `ecluse-core` library: the pure, ecosystem-agnostic capability core (`Ecluse.Core.*`)                                    |
+| `src/`      | `ecluse` library: the application shell that composes the core into a running proxy (`Ecluse.*`)                         |
 | `app/`      | Executable entry point, thin wiring only                                                                                  |
-| `src/`      | Library: all business logic                                                                                              |
 | `test/`     | Unit and integration tests                                                                                               |
 | `docs/`     | Architecture and design documents                                                                                        |
 | `flake.nix` | Nix dev shell (GHC 9.10, cabal, HLS, ghcid) **and** the package build (`nix build`) + hermetic checks (`nix flake check`) |

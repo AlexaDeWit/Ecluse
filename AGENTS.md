@@ -17,16 +17,17 @@ The full strategy — decomposition, the per-PR build → evaluate → gate → 
 ## Project Structure
 
 ```
+core/      — ecluse-core library: the pure, ecosystem-agnostic capability core (Ecluse.Core.*)
+src/       — ecluse library: the application shell that composes the core (Ecluse.*)
 app/       — executable entry point (Main.hs only; keep thin)
-src/       — library code (all business logic lives here)
-test/      — unit and integration tests (mirror src/ module structure)
+test/      — unit and integration tests (mirror the library module structure)
 docs/      — architecture and design documents
 ```
 
 ## Code Conventions
 
 - **Follow [`STYLE.md`](STYLE.md) for all Haskell coding style** — naming, function design, totality, imports, and the compiler-flag set — and **[`HADDOCK.md`](HADDOCK.md) for documentation/Haddock conventions** (what to document, how much, and the doctest-backed examples). Both are written to be followed directly by agents; read them before writing or changing code. The points below are the structural essentials only.
-- Separate concerns: application wiring in `app/`, logic in `src/`, tests in `test/`.
+- Separate concerns: the capability core in `core/`, the application shell in `src/`, executable wiring in `app/`, tests in `test/`.
 - Tests mirror the library module hierarchy (e.g. `src/Foo/Bar.hs` → `test/Foo/BarSpec.hs`).
 - Keep `app/Main.hs` thin — it should only parse config and call into the library.
 - **Keep modules fit-to-purpose with idiomatic namespacing.** Organise vertically (a type lives with the functions on it), one `Ecluse.<Area>` namespace per area, and split a `.Types` module only when it earns it. The full principles are in [`STYLE.md`](STYLE.md) → "Module organization"; the current concrete module list is the published Haddock module index, and [`docs/getting-started.md`](docs/getting-started.md) → "Codebase Layout" records the project-specific layout patterns.
