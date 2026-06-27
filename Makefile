@@ -213,8 +213,8 @@ run: ## Run the proxy
 # Output lands under dist-newstyle (git-ignored). We open it in the browser via
 # xdg-open when present, and always print the path so the target stays usable in
 # headless/CI contexts.
-docs: ## Build hyperlinked, searchable Haddock HTML for the library and open it
-	$(NIX) cabal haddock lib:ecluse $(HADDOCK_FLAGS)
+docs: ## Build hyperlinked, searchable Haddock HTML for both libraries and open it
+	$(NIX) cabal haddock lib:ecluse lib:ecluse-core $(HADDOCK_FLAGS)
 	@html=$$(find dist-newstyle -path '*/doc/html/ecluse/index.html' | head -n1); \
 	  echo "Haddock: $$html"; \
 	  command -v xdg-open >/dev/null 2>&1 && xdg-open "$$html" >/dev/null 2>&1 &
@@ -222,24 +222,35 @@ docs: ## Build hyperlinked, searchable Haddock HTML for the library and open it
 # Faster Haddock build for the CI gate, scoped to our own library. Two changes
 # vs docs-site: it drops --haddock-hyperlink-source (the per-module source render),
 # and adds --disable-documentation so cabal does NOT (re)build the ~130-package
-# dependency haddock closure — it documents only lib:ecluse, which is all the gate
+# dependency haddock closure — it documents only our own libraries, which is all the gate
 # needs to validate (our doc comments compile; no broken modules). The dropped
 # dependency cross-links matter only for the published site, which the Pages
 # publish (docs-site, full flags) still builds on main. A gate failure here still
 # means our docs are broken. See CONTRIBUTING.md → "Continuous Integration".
-docs-check: ## Build Haddock for the CI gate (our library only; no dep docs, no source links)
-	$(NIX) cabal haddock lib:ecluse --haddock-quickjump --disable-documentation
+docs-check: ## Build Haddock for the CI gate (both libraries; no dep docs, no source links)
+	$(NIX) cabal haddock lib:ecluse lib:ecluse-core --haddock-quickjump --disable-documentation
 
-# Build the library Haddock and stage it under ./_site/api for the GitHub Pages
+# Build both libraries' Haddock and stage them under ./_site/api for the GitHub Pages
 # workflow to upload — the site root is left free for the home page (see `site`).
 # The Haddock output path embeds the arch + GHC version, so we locate it rather
 # than hard-code it. .nojekyll (at the _site root) keeps Pages from touching the
 # static assets.
-docs-site: ## Build Haddock and stage it under ./_site/api for GitHub Pages
-	$(NIX) cabal haddock lib:ecluse $(HADDOCK_FLAGS)
-	@src=$$(find dist-newstyle -path '*/doc/html/ecluse' -type d | head -n1); \
-	  rm -rf _site && mkdir -p _site/api && cp -R "$$src"/. _site/api/ && touch _site/.nojekyll; \
-	  echo "Staged Haddock into ./_site/api"
+docs-site: ## Build both libraries' Haddock and stage them under ./_site/api for GitHub Pages
+	$(NIX) cabal haddock lib:ecluse lib:ecluse-core $(HADDOCK_FLAGS)
+	@rm -rf _site && mkdir -p _site/api && touch _site/.nojekyll
+	@appidx=$$(find dist-newstyle -path '*/doc/html/ecluse/index.html' | grep -v '/l/' | head -n1); \
+	  coreidx=$$(find dist-newstyle -path '*/l/ecluse-core/doc/html/*/index.html' | head -n1); \
+	  for pair in "ecluse:$$appidx" "ecluse-core:$$coreidx"; do \
+	    name=$${pair%%:*}; idx=$${pair#*:}; \
+	    if [ -z "$$idx" ] || [ ! -f "$$idx" ]; then \
+	      echo "docs-site: no Haddock index for '$$name' (multi-component output path changed?)" >&2; \
+	      exit 1; \
+	    fi; \
+	    mkdir -p "_site/api/$$name" && cp -R "$$(dirname "$$idx")"/. "_site/api/$$name/"; \
+	    echo "Staged $$name -> _site/api/$$name"; \
+	  done
+	@cp web/api-index.html _site/api/index.html
+	@echo "Staged both libraries' Haddock under ./_site/api (parent index + per-library subpages)"
 
 # Assemble the full Pages site that the workflow uploads:
 #   /       the landing page + the user docs rendered from Markdown (pandoc)
