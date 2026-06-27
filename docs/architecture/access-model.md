@@ -152,9 +152,16 @@ bearer, or be handled by infrastructure in front of Écluse. The modes:
    `_authToken`. Standard npm tooling supports it directly.
 3. **Trusted edge identity** — a fronting authenticating proxy / cloud IAP / service
    mesh performs SSO or mTLS and asserts a verified identity (a signed header / mTLS
-   SAN) that Écluse trusts. Sound **only** if Écluse is reachable *exclusively*
-   through that edge — otherwise the assertion is spoofable (a network invariant the
-   deployment must hold).
+   SAN) that Écluse trusts. Écluse honours the assertion **only over a verifiable
+   binding to that edge** — mutual TLS from the edge, or a shared secret / HMAC the
+   edge signs the assertion with — and **fails fast** on a `trusted-edge` mount that
+   configures neither (an [unrepresentable unsafe
+   combination](#safe-defaults-and-unrepresentable-unsafe-combinations)). A *bare*
+   trusted header is forgeable into **granted** access anywhere Écluse is reachable
+   other than through the edge — strictly worse than `open`'s "no token, no access" —
+   so the binding, not trust alone, is what makes the assertion unspoofable. Reaching
+   Écluse *exclusively* through that edge remains the deployment's part, but is no
+   longer the sole protection.
 
 Validating **cloud IAM at the npm edge** is out: the npm client cannot speak it (it
 remains a gateway concern). Richer per-user token issuance (`npm login` web SSO, CI
@@ -186,6 +193,12 @@ The available strategies depend on the upstream's authorisation granularity:
   hazard *unrepresentable* rather than a discipline.
 - **`service` requires an explicit "the edge authorises callers" assertion** in
   config — it is the one strategy that moves authority off the upstream.
+- **`trusted-edge` requires a verifiable edge binding** (mutual TLS from the edge, or
+  a shared secret / HMAC on the asserted identity); a `trusted-edge` mount configured
+  with **neither** is **rejected at startup**, not merely discouraged — a bare trusted
+  header is forgeable into granted access wherever Écluse is reachable other than
+  through the edge, so the unsafe combination is made unrepresentable rather than left
+  to a network hope.
 - Unknown or contradictory strategy configuration **fails fast at startup**,
   consistent with [config validation](configuration.md#validation-fail-fast-reject-the-unknown).
 

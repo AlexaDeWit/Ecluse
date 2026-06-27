@@ -199,9 +199,13 @@ are then credentialled):
 2. **Static token**: `PROXY_AUTH_TOKEN` set; clients send it as
    `Authorization: Bearer <token>` or `.npmrc` `_authToken`.
 3. **Trusted edge identity**: a fronting gateway / IAP / mesh asserts a verified identity
-   Écluse trusts, sound only where Écluse is reachable solely through that edge. Validating
-   cloud IAM at the npm edge directly stays a gateway concern (the npm client can't speak it;
-   let the managed mirror target enforce write IAM).
+   Écluse trusts. Écluse honours the assertion **only over a verifiable binding to that
+   edge** — mutual TLS from the edge, or a shared secret / HMAC on the asserted identity —
+   and **refuses to start** a `trusted-edge` mount configured with neither: a bare trusted
+   header is forgeable into access wherever the proxy is reachable other than through the
+   edge, so restrict reachability to the edge **east-west as well as north-south**.
+   Validating cloud IAM at the npm edge directly stays a gateway concern (the npm client
+   can't speak it; let the managed mirror target enforce write IAM).
 
 ## Securing network egress (required)
 
