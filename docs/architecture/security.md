@@ -368,10 +368,13 @@ publish, so an edge breach exposes only the public-gated view plus the untrusted
 DoS surface — never private packages. (The publish-specific corollary — an open edge plus a
 static publication token — is
 [The first-party publish surface must be protected](#the-first-party-publish-surface-must-be-protected-a-shared-responsibility).)
-The future **trusted-edge-identity** mode (a signed header / mTLS SAN) inverts the posture
-and must refuse to enable unless the edge is *verifiable* (mTLS or a shared secret): a bare
-trusted header under an open edge is forgeable into *granted* access, strictly worse than
-today's "no token, no access".
+The future **trusted-edge-identity** mode (a signed header / mTLS SAN) inverts the posture:
+a bare trusted header under an open edge is forgeable into *granted* access, strictly worse
+than today's "no token, no access". So Écluse **fails fast** on a `trusted-edge` mount that
+lacks a *verifiable* binding to the edge (mutual TLS, or a shared secret / HMAC on the
+assertion) — an [unrepresentable unsafe
+combination](access-model.md#safe-defaults-and-unrepresentable-unsafe-combinations), not a
+runtime hope — landing with [`S43`](../../planning/slices/S43-credential-strategy.md).
 
 **Passthrough relocates credential risk to the proxy runtime.** Forwarding each caller's
 own credential ([access model](access-model.md)) buys no privilege escalation or compression

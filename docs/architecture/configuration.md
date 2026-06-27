@@ -331,8 +331,13 @@ client's constraints, in [access-model](access-model.md#edge-authentication)):
    `Bearer <token>` in the `Authorization` header or as `_authToken` in
    `.npmrc`. Standard npm tooling supports this out of the box.
 3. **Trusted edge identity** — a fronting authenticating proxy / cloud IAP / service
-   mesh performs SSO or mTLS and asserts a verified identity Écluse trusts — sound
-   only where Écluse is reachable *exclusively* through that edge. Validating cloud
-   IAM at the npm edge directly is out (the npm client cannot speak it); it stays a
-   gateway concern, and a managed registry can independently enforce write IAM on the
-   mirror target.
+   mesh performs SSO or mTLS and asserts a verified identity Écluse trusts. Écluse
+   honours the assertion **only over a verifiable binding to that edge** — mutual TLS
+   from the edge, or a shared secret / HMAC on the asserted identity — and **fails
+   fast** on a `trusted-edge` mount configured with neither (consistent with
+   [Validation](#validation-fail-fast-reject-the-unknown)); a bare trusted header is
+   forgeable into granted access wherever Écluse is reachable other than through the
+   edge. Reaching Écluse *exclusively* through the edge remains the deployment's part.
+   Validating cloud IAM at the npm edge directly is out (the npm client cannot speak
+   it); it stays a gateway concern, and a managed registry can independently enforce
+   write IAM on the mirror target.
