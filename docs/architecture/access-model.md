@@ -42,8 +42,9 @@ the upstream's (or it over-grants), or an edge that becomes the sole authority.
 package metadata and artifacts is already handled well by the upstreams it fronts, so
 the private origin is read **per request** and **never entered into the shared cache**.
 This keeps the [#115](https://github.com/AlexaDeWit/Ecluse/issues/115) cross-client
-disclosure hazard *unrepresentable by construction* rather than fenced off by a probe,
-and keeps hot-path work minimal. Only the anonymous **public-gated** origin is cached
+disclosure hazard (catalogued as
+[threat #9](https://alexadewit.github.io/Ecluse/threat-model.html)) *unrepresentable by
+construction* rather than fenced off by a probe, and keeps hot-path work minimal. Only the anonymous **public-gated** origin is cached
 (one shared document, no per-caller authority to preserve).
 
 The per-mount **credential strategy** therefore varies only in *where authority sits
@@ -149,7 +150,8 @@ mTLS, or interactive OIDC. So edge authentication must terminate into a storable
 bearer, or be handled by infrastructure in front of Écluse. The modes:
 
 1. **Open** — no app-level check; access is gated entirely at the network layer
-   (VPC, mesh). Appropriate on a closed network.
+   (VPC, mesh). Appropriate on a closed network; the assumption this rests on is
+   [threat #3](https://alexadewit.github.io/Ecluse/threat-model.html).
 2. **Static token** — `PROXY_AUTH_TOKEN`; the caller presents it as `Bearer` /
    `_authToken`. Standard npm tooling supports it directly.
 3. **Trusted edge identity** — a fronting authenticating proxy / cloud IAP / service
