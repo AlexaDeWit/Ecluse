@@ -130,6 +130,7 @@ import Ecluse.Core.Worker (
         wrHeartbeat,
         wrManager,
         wrMetrics,
+        wrPolicies,
         wrQueue,
         wrRegistry,
         wrTracing
@@ -143,6 +144,7 @@ import Ecluse.Server (MountBinding (..), application, mkServerConfig)
 import Ecluse.Telemetry (telemetryDisabled)
 import Ecluse.Test.Package (unsafeHash, validSha1, validSha512Sri)
 import Ecluse.Test.Port (noopWorkerMetricsPort, passthroughWorkerTracingPort)
+import Ecluse.Test.Worker (admitAllPolicies)
 
 -- ── the fixture ──────────────────────────────────────────────────────────────────
 
@@ -362,6 +364,7 @@ workerScenario =
                             , wrHeartbeat = heartbeat
                             , wrMetrics = noopWorkerMetricsPort
                             , wrTracing = passthroughWorkerTracingPort
+                            , wrPolicies = admitAllPolicies
                             }
                     artUrl = localhost artPort <> "/" <> packageText <> "/-/" <> packageText <> "-1.0.0.tgz"
                     job = mirrorJob artUrl (jobHashes bytes) size

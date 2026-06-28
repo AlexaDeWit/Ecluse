@@ -33,6 +33,7 @@ import Ecluse.Integration.Ministack (
  )
 import Ecluse.Telemetry (telemetryDisabled)
 import Ecluse.Test.Package (unsafeHash)
+import Ecluse.Test.Worker (admitAllPolicies)
 
 {- | The mirror worker, end to end against real SQS (a @ministack@ container, shared
 through "Ecluse.Integration.Ministack") and WAI upstream/mirror stubs. These cases
@@ -225,7 +226,7 @@ cancels the loop — the same cooperative cancellation process shutdown uses. A 
 timeout bounds the whole thing so a failing test cannot hang. -}
 runLoopUntil :: Env -> IO Bool -> IO ()
 runLoopUntil env done =
-    void $ timeout loopHardTimeout $ race_ (runWorker env) (waitFor done)
+    void $ timeout loopHardTimeout $ race_ (runWorker admitAllPolicies env) (waitFor done)
 
 {- The hard ceiling on a 'runLoopUntil' run, sized so even the slowest positive
 condition (the redelivery case waiting on a /second/ publish — two full
@@ -241,7 +242,7 @@ loopHardTimeout = 45_000_000
 cancel it — for the cases that assert a /negative/ (nothing published, an idle
 heartbeat) where there is no positive condition to wait on. -}
 runLoopFor :: Env -> Int -> IO ()
-runLoopFor env micros = void (timeout micros (runWorker env))
+runLoopFor env micros = void (timeout micros (runWorker admitAllPolicies env))
 
 -- Poll a condition until it holds, bounded so a failing test does not hang. The
 -- bound (~40s of 200ms ticks) sits just under 'loopHardTimeout' so that ceiling, not

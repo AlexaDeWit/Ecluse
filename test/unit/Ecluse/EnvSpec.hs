@@ -207,7 +207,9 @@ spec = do
             -- 'timeout' yields 'Nothing'. The loop logic itself is asserted
             -- socket-free in "Ecluse.WorkerSpec".
             env <- newTestEnv
-            timeout 100000 (runWorker env) `shouldReturn` Nothing
+            -- No re-evaluation policies are needed here: the queue is empty, so the loop
+            -- only ever long-polls (no job to re-evaluate), which is what this asserts.
+            timeout 100000 (runWorker mempty env) `shouldReturn` Nothing
 
     describe "unconfiguredRegistry" $ do
         it "refuses every effectful call loudly rather than fabricating a result" $ do

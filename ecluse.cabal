@@ -279,6 +279,7 @@ library ecluse-test-support
     Ecluse.Test.RegistryCapture
     Ecluse.Test.Support
     Ecluse.Test.Version
+    Ecluse.Test.Worker
 
   build-depends:
     , ecluse:ecluse-core
@@ -289,6 +290,7 @@ library ecluse-test-support
     , hspec        ^>=2.11
     , http-client  ^>=0.7
     , text         ^>=2.1
+    , time         ^>=1.12
 
 -- Core unit tests: cover every Ecluse.Core.* module. Pure, fast, deterministic. Gating.
 -- MUST NOT list the `ecluse` app library in build-depends: its absence is the partition
