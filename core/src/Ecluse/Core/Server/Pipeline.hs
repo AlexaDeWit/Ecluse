@@ -209,7 +209,7 @@ import Ecluse.Core.Registry.Npm (
     relayPublishDocument,
  )
 import Ecluse.Core.Registry.Npm.Filter (FilterResult (Filtered, NoSurvivors), applyFilterPlan, rewriteTarballUrls)
-import Ecluse.Core.Registry.Npm.Project (Projection (NameMismatch, Projected), parsePackageInfoFromValue)
+import Ecluse.Core.Registry.Npm.Project (Projection (NameMismatch, Projected), parsePackageInfoFromValue, projectName)
 import Ecluse.Core.Rules (evalRules)
 import Ecluse.Core.Rules.Types (Decision, EvalContext (EvalContext))
 import Ecluse.Core.Security (
@@ -1726,16 +1726,21 @@ __before any upstream write is attempted__:
    the configured @PUBLISH_SCOPES@ allow-list is a @403@ with a clear message, so a
    client cannot publish a name that shadows an existing public package
    (dependency confusion);
-3. only then is the body read and relayed to the publication target
-   ('relayPublishDocument'), with the publisher's __own forwarded credential__
-   (passthrough; the static 'pubStaticToken' is the fallback for a client that sends
-   none) — never Écluse's own token, and never to the public upstream.
+3. the body is read and its __declared identity is validated__
+   ('bodyNameDisagreement'): the publish document carries its own @_id@, top-level
+   @name@, and per-version @name@s, so any present declared name that disagrees with the
+   URL-path name is a @403@ — holding the __guard-name ≡ write-name ≡ body-name__
+   invariant, so a crafted body cannot write a name the scope guard never authorised;
+4. only then is the body relayed to the publication target ('relayPublishDocument'),
+   with the publisher's __own forwarded credential__ (passthrough; the static
+   'pubStaticToken' is the fallback for a client that sends none) — never Écluse's own
+   token, and never to the public upstream.
 
 The publication target's own status and body are relayed back to the @npm@ client
 verbatim, so the publisher sees exactly what the registry said. A target that cannot be
 reached (a transport failure) is a @502@; an unformable target URL (misconfiguration) a
-@500@. The package URL and the scope guard both key on the __route's__ 'PackageName',
-never the document's self-reported name (see
+@500@. The package URL and the scope guard both key on the __route's__ 'PackageName', and
+the body's declared name is validated to __agree__ with it, never substituted for it (see
 @docs\/architecture\/registry-model.md@ → "Publishing first-party packages").
 -}
 servePublish ::
@@ -1749,9 +1754,9 @@ servePublish name request respond = do
         Nothing -> liftIO (respond (publishDisabled renderer))
         Just deps -> publishWithDeps renderer deps name request respond
 
--- Serve a publish once the mount's publication target is known: the edge gate, then
--- the anti-shadowing scope guard (both before any write), then the relay to the
--- publication target with the publisher's forwarded credential.
+-- Serve a publish once the mount's publication target is known: the edge gate, the
+-- anti-shadowing scope guard, then the body-name agreement check (all before any write),
+-- then the relay to the publication target with the publisher's forwarded credential.
 publishWithDeps ::
     MountRenderer ->
     PublishDeps ->
@@ -1771,12 +1776,20 @@ publishWithDeps renderer deps name request respond
         -- refused publish never even buffers its (potentially large, base64-tarball)
         -- body.
         body <- liftIO (consumeRequestBodyStrict request)
-        -- @consumeRequestBodyStrict@ reads the whole body but returns it lazy; the
-        -- publish builder ('relayPublishDocument') puts it on the wire as a strict
-        -- @RequestBodyBS@, so materialise it strict here. The body is already bounded by
-        -- the client→proxy request-size cap.
-        outcome <- tryAny (liftIO (relayPublishDocument (publishConfig rt deps request) name (LBS.toStrict body)))
-        liftIO (respond (renderRelay renderer deps outcome))
+        -- The body-name agreement leg of the anti-shadowing guard (issue #391): the scope
+        -- guard authorised the URL-path name, but the publish document carries its own
+        -- declared identity, so a crafted body could otherwise write a name the guard never
+        -- saw. Refuse — before the relay — any present declared name that disagrees with the
+        -- URL-path name, so the identity authorised is provably the identity written.
+        case bodyNameDisagreement name body of
+            Just declared -> liftIO (respond (bodyNameMismatch renderer deps name declared))
+            -- @consumeRequestBodyStrict@ reads the whole body but returns it lazy; the
+            -- publish builder ('relayPublishDocument') puts it on the wire as a strict
+            -- @RequestBodyBS@, so materialise it strict here. The body is already bounded by
+            -- the client→proxy request-size cap.
+            Nothing -> do
+                outcome <- tryAny (liftIO (relayPublishDocument (publishConfig rt deps request) name (LBS.toStrict body)))
+                liftIO (respond (renderRelay renderer deps outcome))
 
 {- The per-request npm client config for the publish relay: the publication target as
 its base URL, the trusted private manager (the target is operator-configured, like the
@@ -1838,3 +1851,59 @@ outOfScope renderer deps name =
         "refusing to publish '"
             <> renderPackageName name
             <> "': its name is outside the configured publish-scope allow-list (the anti-shadowing guard against publishing a name that shadows a public package)"
+
+-- A @403@ for a publish whose document body declares a package name — its @_id@,
+-- top-level @name@, or a @versions[].name@ — that disagrees with the scope-guarded
+-- URL-path name. The body-name agreement leg of the anti-shadowing guard (issue #391),
+-- refused before any upstream write so the identity the guard authorises is the
+-- identity written.
+bodyNameMismatch :: MountRenderer -> PublishDeps -> PackageName -> Text -> Response
+bodyNameMismatch renderer deps name declared =
+    renderedResponse status403 [] (renderError renderer (pubHelp deps) message)
+  where
+    message :: Text
+    message =
+        "refusing to publish '"
+            <> renderPackageName name
+            <> "': the document body declares the name '"
+            <> declared
+            <> "', which disagrees with the URL-path package name the scope guard authorised (the anti-shadowing guard against publishing a name the allow-list never saw)"
+
+{- The first declared body name that disagrees with the URL-path name, or 'Nothing'
+when the body declares no disagreeing name. The publish document carries its own
+identity — a top-level @_id@ and @name@, and a @name@ per entry in @versions@ — so a
+relay that keyed the write off the body could otherwise write a name the scope guard
+never authorised. Each __present__ declared name is canonicalised the same way the
+route builds its 'PackageName' ('projectName') and compared by 'PackageName' equality
+(ecosystem-aware, so an encoding variant of the same name cannot disagree silently); a
+present name that does not equal the URL-path name is a disagreement. Only the names
+are read — the base64 @_attachments@ are never decoded. An __absent__ name is not a
+claim, so it is not a disagreement (a legitimate npm client always sends matching
+names); a body that does not decode to a JSON object likewise declares no readable
+name and raises none, leaving the relay to meet the target's own validation. -}
+bodyNameDisagreement :: PackageName -> LByteString -> Maybe Text
+bodyNameDisagreement name body =
+    case Aeson.decode body of
+        Nothing -> Nothing
+        Just document -> find disagrees (declaredNames document)
+  where
+    disagrees :: Text -> Bool
+    disagrees declared = case projectName declared of
+        Right declaredName -> declaredName /= name
+        Left _ -> True
+
+-- Every package-name string a publish document declares as its own identity: the
+-- top-level @_id@ and @name@, and each @versions.<v>.name@. Only string-valued name
+-- slots are read (a non-string slot is no name claim); the base64 @_attachments@ are
+-- never touched.
+declaredNames :: Value -> [Text]
+declaredNames document =
+    [ declared
+    | slot <-
+        [document ^? key "_id", document ^? key "name"]
+            <> [ versionDoc ^? key "name"
+               | versions <- toList (document ^? key "versions" . _Object)
+               , versionDoc <- KeyMap.elems versions
+               ]
+    , Just (String declared) <- [slot]
+    ]

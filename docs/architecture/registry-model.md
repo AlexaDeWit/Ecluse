@@ -97,7 +97,17 @@ out-of-band flow.
   (the MVP mechanism — e.g. `@acme/*`). This is what stops a client publishing a name
   that shadows an existing public package — a dependency-confusion vector the proxy must
   not enable. (Future work may add richer name grammars or live collision resolution;
-  the allow-list is the MVP.)
+  the allow-list is the MVP.) The guard holds the **guard-name ≡ write-name ≡ body-name**
+  invariant: the scope check keys on the **URL-path** name, and — because the npm publish
+  document carries its own declared identity (`_id`, top-level `name`, every
+  `versions[].name`) that a publication target may key the write off — the body's
+  **declared names are validated too**. Any present declared name that disagrees with the
+  URL-path name is a **`403` before any relay**, compared with the same name
+  canonicalisation the route applies (`PackageName` equality, ecosystem-aware — never a
+  byte-for-byte string compare), so a crafted body cannot publish a name the allow-list
+  never authorised. An **absent** declared name is no claim and is not refused (a
+  legitimate npm client always sends matching names); only the names are read — the
+  base64 `_attachments` are never decoded.
 - **Credential — passthrough.** The publisher's own token is forwarded to the
   publication target (see [Credential flow and authority](#credential-flow-and-authority));
   Écluse authorises nothing itself and mints no token here.

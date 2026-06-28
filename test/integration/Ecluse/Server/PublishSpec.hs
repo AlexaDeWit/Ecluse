@@ -155,10 +155,32 @@ putPublish path bearer body =
 status :: SResponse -> Int
 status = statusCode . simpleStatus
 
--- A representative npm publish document body (its shape is irrelevant to the relay,
--- which forwards the bytes verbatim).
+-- A representative npm publish document body whose declared identity (@_id@,
+-- top-level @name@) agrees with the @\@acme\/widget@ URL the tests publish to.
 publishBody :: LByteString
 publishBody = "{\"_id\":\"@acme/widget\",\"name\":\"@acme/widget\",\"versions\":{}}"
+
+-- A populated single-version publish whose body identity — its @_id@, top-level
+-- @name@, and the one @versions[].name@ — all agree with the @\@acme\/widget@ URL: a
+-- legitimate npm client's shape, which the body-name agreement check must still relay.
+matchingVersionBody :: LByteString
+matchingVersionBody =
+    "{\"_id\":\"@acme/widget\",\"name\":\"@acme/widget\",\"versions\":{\"1.0.0\":{\"name\":\"@acme/widget\",\"version\":\"1.0.0\"}}}"
+
+-- Publish documents whose declared body identity disagrees with the in-scope URL name
+-- @\@acme\/widget@ on exactly one field — the anti-shadowing bypass of issue #391: a
+-- crafted body names a package the scope guard never authorised.
+mismatchedIdBody :: LByteString
+mismatchedIdBody =
+    "{\"_id\":\"@victim/target\",\"name\":\"@acme/widget\",\"versions\":{}}"
+
+mismatchedNameBody :: LByteString
+mismatchedNameBody =
+    "{\"_id\":\"@acme/widget\",\"name\":\"@victim/target\",\"versions\":{}}"
+
+mismatchedVersionNameBody :: LByteString
+mismatchedVersionNameBody =
+    "{\"_id\":\"@acme/widget\",\"name\":\"@acme/widget\",\"versions\":{\"1.0.0\":{\"name\":\"@victim/target\",\"version\":\"1.0.0\"}}}"
 
 spec :: Spec
 spec = describe "first-party publish path → publication target (S52)" $ do
@@ -230,3 +252,39 @@ spec = describe "first-party publish path → publication target (S52)" $ do
             -- a first-party publisher sees the registry's real 409, not a fabricated success
             status resp `shouldBe` 409
             simpleBody resp `shouldBe` "{\"error\":\"version already exists\"}"
+
+    -- The body-name agreement leg of the anti-shadowing guard (issue #391): the URL path
+    -- is in-scope and passes 'inPublishScope', but the document body declares a DIFFERENT
+    -- package name, so the relay would publish a name the scope guard never authorised.
+    -- Each present declared name — @_id@, top-level @name@, and @versions[].name@ — is
+    -- checked, and a disagreement is a 403 before any upstream write.
+    it "refuses a publish whose body _id disagrees with the in-scope URL name (403 before any relay)" $
+        withTarget 201 "{\"success\":true}" $ \targetPort target -> do
+            app <- proxyWith (Just (publishDepsAt targetPort Nothing))
+            resp <- putPublish "/npm/@acme/widget" (Just "publisher-token") mismatchedIdBody app
+            status resp `shouldBe` 403
+            -- the agreement check fired before the relay: the target was never contacted
+            targetSaw target `shouldReturn` []
+
+    it "refuses a publish whose body top-level name disagrees with the in-scope URL name (403 before any relay)" $
+        withTarget 201 "{\"success\":true}" $ \targetPort target -> do
+            app <- proxyWith (Just (publishDepsAt targetPort Nothing))
+            resp <- putPublish "/npm/@acme/widget" (Just "publisher-token") mismatchedNameBody app
+            status resp `shouldBe` 403
+            targetSaw target `shouldReturn` []
+
+    it "refuses a publish whose body versions[].name disagrees with the in-scope URL name (403 before any relay)" $
+        withTarget 201 "{\"success\":true}" $ \targetPort target -> do
+            app <- proxyWith (Just (publishDepsAt targetPort Nothing))
+            resp <- putPublish "/npm/@acme/widget" (Just "publisher-token") mismatchedVersionNameBody app
+            status resp `shouldBe` 403
+            targetSaw target `shouldReturn` []
+
+    it "relays an in-scope publish whose body _id / name / versions[].name all agree with the URL name" $
+        withTarget 201 "{\"success\":true}" $ \targetPort target -> do
+            app <- proxyWith (Just (publishDepsAt targetPort Nothing))
+            resp <- putPublish "/npm/@acme/widget" (Just "publisher-token") matchingVersionBody app
+            -- a body whose every declared name matches the URL still relays (no over-refusal)
+            status resp `shouldBe` 201
+            seen <- targetSaw target
+            map fst seen `shouldBe` [Just "Bearer publisher-token"]

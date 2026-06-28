@@ -90,6 +90,7 @@ module Ecluse.Core.Registry.Npm.Project (
 
     -- * Name validation
     Projection (..),
+    projectName,
 ) where
 
 import Data.Aeson (FromJSON (parseJSON), Object, Value, eitherDecodeStrict, withObject, (.!=), (.:?))
@@ -460,9 +461,16 @@ projectPublishTimes pkmt =
 
 -- ── name and person projection ───────────────────────────────────────────────
 
-{- Parse an npm package name into the domain 'PackageName', splitting a scoped
+{- | Parse an npm package name into the domain 'PackageName', splitting a scoped
 @\@scope\/name@ into its 'Scope' and bare name. Fails with a 'ParseError' on an
 empty name; a non-scoped or well-formed scoped name always succeeds.
+
+This is the npm name canonicaliser: equality on the resulting 'PackageName' is
+ecosystem-aware (npm is case-sensitive), so it is the agreement test both the read
+path (an upstream's self-reported @name@ against the request) and the publish path (a
+document body's declared @_id@\/@name@\/@versions[].name@ against the URL-path name)
+compare against — never a byte-for-byte string compare, so an encoding variant of the
+same name cannot disagree silently.
 -}
 projectName :: Text -> Either ParseError PackageName
 projectName raw

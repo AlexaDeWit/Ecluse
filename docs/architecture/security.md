@@ -310,6 +310,32 @@ a `NetworkPolicy`), so blocking it would break legitimate closed-network deploym
 way [network egress](#network-egress-is-a-shared-responsibility) is (see also
 [Access & Credential Model → Publishing](access-model.md#publishing-the-publication-target-passthrough-write)).
 
+### The guard-name ≡ write-name ≡ body-name invariant
+
+The anti-shadowing guard would be **bypassable** if it validated only the URL-path name
+while the relay forwarded the publish document byte-for-byte: the npm publish document
+canonically carries its **own** declared identity — a top-level `_id` and `name`, and a
+`name` per entry in `versions` — and a publication target that resolves the written
+package from the **body** (the npm-protocol norm) would then write a name the scope guard
+never saw. A crafted `PUT /@acme/anything` whose body declares `@victim/target` would
+publish outside the allow-list, shadowing a public package through Écluse's own trust
+model.
+
+So the guard holds **guard-name ≡ write-name ≡ body-name**: the name the scope check
+authorises is the name relayed and the name the body declares. After the scope check
+admits the URL-path name and the body is read, **every present declared body name** —
+`_id`, top-level `name`, and each `versions[].name` — is compared to the URL-path name,
+and any disagreement is a **`403` before any upstream write**. The comparison is by
+`PackageName` equality using the **same name canonicalisation the route applies**
+(ecosystem-aware — npm is case-sensitive — never a byte-for-byte string compare), so an
+encoding variant of the same name (`@acme%2ffoo` vs `@acme/foo`) cannot disagree
+silently. Only the names are parsed; the base64 `_attachments` are **never decoded**, and
+the body is already bounded by the client→proxy request-size cap. An **absent** declared
+name is **not** a bypass-grant — only a *present, mismatching* name is refused, since a
+legitimate npm client always sends names that match its publish URL. This makes Écluse's
+defence-in-depth control sound on its own, independent of whether the downstream target
+keys the write off the body or the URL.
+
 ## Network egress is a shared responsibility
 
 Écluse's outbound guards are the **primary, application-layer** control; a
