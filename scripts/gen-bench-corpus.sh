@@ -4,7 +4,10 @@
 # (docs/architecture/performance.md) from pinned npm registry packuments.
 #
 # The corpus packages and their capture pins live in bench/corpus/pins.json (a plain
-# data file — NOT an npm project, NOT Renovate-managed). The committed captures are
+# data file — NOT an npm project, NOT Renovate-managed). That file is the shared
+# registry catalogue: this script reads its `pins` (npm name -> captured version),
+# while the Haskell Ecluse.Test.RegistryCapture reads the same file (its `pins` and
+# its `smokeNames`) — one curated source for both. The committed captures are
 # FROZEN benchmark data: this script is the regeneration tool (the analogue of
 # scripts/gen-version-fixtures.sh), run DELIBERATELY when the pins or the capture
 # policy change — never on an automatic bump. Its output (bench/corpus/npm/*.full.json)

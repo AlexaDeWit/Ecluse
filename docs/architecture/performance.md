@@ -206,6 +206,16 @@ cache — so they are **deliberately excluded**; the corpus leans large.
   implementation*, is a different case and stays Renovate-managed.) `express` is the
   pre-existing untrimmed anchor under `core/test/unit/fixtures/npm/`, reused in place and
   shared with the unit suite — the one untrimmed capture.
+- **One shared catalogue.** `bench/corpus/pins.json` is the single curated source the
+  capture script and the live test tiers both read: alongside the `pins` (the capture
+  pins above) it carries `smokeNames`, the curated gnarly-version package names per
+  ecosystem that drive the non-gating version-oracle smoke differential
+  ([Testing Strategy](../testing.md)). The Haskell `Ecluse.Test.RegistryCapture` reads
+  this catalogue and provides the one live-registry fetch path; `make gen-bench-corpus`
+  (Node) reads the same file's `pins`. The corpus capture stays in Node deliberately —
+  its version selection uses real `node-semver`, keeping the frozen corpus independent of
+  Écluse's own version engine (the system under test). Smoke keeps every published
+  version (ordering is the point); the bench trims to stable releases.
 - **Trimmed for size, not shape.** `make gen-bench-corpus` re-captures from the pins: for
   each package it keeps every **stable** release at or below the pin with its full
   per-version manifest — the heterogeneous dependency / `peerDependencies` / `engines` /

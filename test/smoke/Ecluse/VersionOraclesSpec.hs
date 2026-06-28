@@ -1,23 +1,12 @@
 module Ecluse.VersionOraclesSpec (spec) where
 
 import Control.Exception (IOException, try)
-import Data.Aeson (FromJSON, eitherDecode)
-import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Hedgehog (Gen)
 import Hedgehog qualified as H
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
-import Network.HTTP.Client (
-    Manager,
-    httpLbs,
-    newManager,
-    parseUrlThrow,
-    requestHeaders,
-    responseBody,
-    responseTimeout,
-    responseTimeoutMicro,
- )
+import Network.HTTP.Client (newManager)
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 import System.Directory (getTemporaryDirectory)
 import System.Exit (ExitCode (ExitFailure, ExitSuccess))
@@ -26,10 +15,8 @@ import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
 import Ecluse.Core.Ecosystem (Ecosystem (..), ecosystemName)
-import Ecluse.Core.Registry.Npm.Wire (Packument (pkmtVersions))
-import Ecluse.Core.Registry.Pypi.Wire qualified as Pypi
-import Ecluse.Core.Registry.Rubygems.Wire qualified as Rubygems
 import Ecluse.Core.Version
+import Ecluse.Test.RegistryCapture (fetchVersions, loadCatalogue, smokeRegistryPackages)
 import Ecluse.Test.Version qualified as V
 
 {- | Smoke tier: validate 'Ecluse.Core.Version.compareVersions' against the /live/
@@ -57,6 +44,10 @@ unavailable. A red here is a real disagreement worth investigating.
 -}
 spec :: Spec
 spec = do
+    -- The curated package names come from the shared catalogue
+    -- ("Ecluse.Test.RegistryCapture"), the one source the benchmark corpus capture
+    -- reads too.
+    catalogue <- runIO loadCatalogue
     describe "version-ordering fixtures vs the live reference oracles" $
         it "regenerating from node-semver / packaging / Gem::Version reproduces the committed fixture" $ do
             tmpDir <- getTemporaryDirectory
@@ -109,7 +100,7 @@ spec = do
     -- to packages with thousands of versions. Registry/network/tool failures
     -- pend rather than fail — only a genuine disagreement reddens.
     describe "compareVersions agrees with the reference oracle on live registry versions" $
-        for_ registryPackages $ \(eco, pkgs) -> do
+        for_ (smokeRegistryPackages catalogue) $ \(eco, pkgs) -> do
             -- Probe the oracle once; if its interpreter/library is missing, pend
             -- the whole ecosystem rather than letting every package skip.
             available <- runIO (oracleAvailable eco)
@@ -122,7 +113,7 @@ spec = do
                     manager <- runIO (newManager tlsManagerSettings)
                     for_ pkgs $ \pkg ->
                         it (show eco <> " — " <> toString pkg <> " (live registry versions)") $ do
-                            mVersions <- fetchRegistryVersions manager eco pkg
+                            mVersions <- fetchVersions manager eco pkg
                             case mVersions of
                                 Nothing ->
                                     pendingWith
@@ -231,63 +222,9 @@ parseOrdInt = \case
 
 -- ── real-registry differential ──────────────────────────────────────────────
 
-{- | A curated handful of real packages per ecosystem, favouring gnarly-versioned
-ones (long histories, pre\/post\/dev releases, scoped names). Only the __names__
-are pinned here; their version lists are fetched __live__ from the registry, so
-the corpus tracks reality and keeps surfacing shapes the curated\/random sets
-never imagined.
--}
-registryPackages :: [(Ecosystem, [Text])]
-registryPackages =
-    [ (Npm, ["typescript", "eslint", "@types/node", "react", "webpack", "next", "rxjs", "lodash"])
-    , (PyPI, ["numpy", "requests", "django", "boto3", "urllib3", "setuptools", "pip"])
-    , (RubyGems, ["rails", "bundler", "nokogiri", "rspec", "activesupport"])
-    ]
-
-{- | The registry JSON endpoint that lists a package's published versions. Scoped
-npm names are URL-encoded (@\@types/node@ → @\@types%2Fnode@); the other forms
-take a bare name.
--}
-versionsUrl :: Ecosystem -> Text -> Text
-versionsUrl eco pkg = case eco of
-    Npm -> "https://registry.npmjs.org/" <> T.replace "/" "%2F" pkg
-    PyPI -> "https://pypi.org/pypi/" <> pkg <> "/json"
-    RubyGems -> "https://rubygems.org/api/v1/versions/" <> pkg <> ".json"
-
-{- | Fetch a package's published version strings from its registry. 'Nothing' on
-any network failure, non-2xx status (a 404 throws via 'parseUrlThrow'), or a body
-that does not decode — the caller then pends, since registry flakiness must never
-hard-fail the (non-gating) smoke tier.
--}
-fetchRegistryVersions :: Manager -> Ecosystem -> Text -> IO (Maybe [Text])
-fetchRegistryVersions manager eco pkg = do
-    result <- try $ do
-        req0 <- parseUrlThrow (toString (versionsUrl eco pkg))
-        let req =
-                req0
-                    { requestHeaders = [("User-Agent", "ecluse-version-oracle-smoke")]
-                    , responseTimeout = responseTimeoutMicro (30 * 1000 * 1000)
-                    }
-        responseBody <$> httpLbs req manager
-    pure $ case result of
-        Left (_ :: SomeException) -> Nothing
-        Right body -> parseRegistryVersions eco body
-
-{- | Extract the published version strings from a registry's response via each
-ecosystem's __canonical__ wire decoder, rather than re-parsing the JSON here: the
-npm packument ('Ecluse.Core.Registry.Npm.Wire.Packument'), the PyPI project JSON
-('Ecluse.Core.Registry.Pypi.Wire.ProjectJson'), or the RubyGems versions array
-('Ecluse.Core.Registry.Rubygems.Wire.VersionListing'). 'Nothing' if the body does not
-decode for that ecosystem.
--}
-parseRegistryVersions :: Ecosystem -> LByteString -> Maybe [Text]
-parseRegistryVersions eco body = case eco of
-    Npm -> Map.keys . pkmtVersions <$> decode' body
-    PyPI -> Pypi.projectVersions <$> decode' body
-    RubyGems -> Rubygems.listingVersions <$> decode' body
-  where
-    decode' :: (FromJSON a) => LByteString -> Maybe a
-    decode' = rightToMaybe . eitherDecode
+-- The curated package names and the live registry fetch ('fetchVersions') are the
+-- shared "Ecluse.Test.RegistryCapture"; what stays here is the reference-oracle
+-- sort and the divergence analysis specific to the ordering differential.
 
 {- | Sort a version list with the live reference tool for @eco@, keeping only the
 versions that tool considers valid (node @semver.valid@, Python @packaging@, Ruby
