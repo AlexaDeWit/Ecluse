@@ -77,7 +77,10 @@ detail.
    supported but discouraged). Scope that role **write-only** to the mirror store and keep
    the token duration short (`MIRROR_TARGET_CODEARTIFACT_TOKEN_DURATION_SECONDS`). It is
    Écluse's only standing credential and it writes the trusted store, so least-privilege it
-   hardest.
+   hardest. **Scope the mirror queue the same way** — it is part of the same trust boundary:
+   a job directs the worker to fetch-and-publish, so grant only the serve role `SendMessage`
+   (enqueue) and only the worker `ReceiveMessage`/delete. Anyone who can write the queue can
+   make the worker write the trusted store.
 4. **Let the edge own access; leave `PROXY_AUTH_TOKEN` off.** Écluse is not your access
    boundary: front it with a gateway / service mesh / IAP that admits only the networks you
    intend (office ranges, a VPN tunnel), and restrict **both** north-south *and* east-west

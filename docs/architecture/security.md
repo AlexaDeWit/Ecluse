@@ -432,7 +432,11 @@ and the **token-stripping** boundary and the
 
 **The mirror-target write token is the one standing credential Écluse holds** and its
 sharpest privilege, because it writes the trusted store: scope it write-only, prefer
-container-role minting over a static secret, and minimise its TTL (register threat #7).
+container-role minting over a static secret, and minimise its TTL. The mirror **queue** is
+part of the same trust boundary — a job is unauthenticated and directs the worker to
+fetch-and-publish, so an attacker who can enqueue can make the worker write the trusted
+store; scope its IAM too (only the serve role enqueues, only the worker consumes) (register
+threat #7).
 
 **Registry separation is defence-in-depth and auditability, not the perimeter** (register
 threat #10). The three-registry topology
