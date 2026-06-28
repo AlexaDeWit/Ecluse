@@ -436,7 +436,7 @@ container-role minting over a static secret, and minimise its TTL (register thre
 
 **Registry separation is defence-in-depth and auditability, not the perimeter** (register
 threat #10). The three-registry topology
-([registry-level composition](registry-model.md#registry-level-composition-optional-never-required))
+([registry-level composition](registry-model.md#registry-level-composition-the-recommended-topology))
 keeps first-party and public-derived inventory physically separable — distinct storage-level
 rule-sets and scanning per provenance, and clean post-disclosure scoping — while collapsing
 toward a single registry degrades auditability and mitigation depth but does **not** move the

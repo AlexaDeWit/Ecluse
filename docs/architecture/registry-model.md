@@ -5,16 +5,19 @@
 ## Registry roles
 
 The proxy is configured with **four registry roles** — two reads and two writes. They
-are distinct roles, configured separately, but several may map to the *same* physical
-registry (the publication target and the mirror target are each, most commonly, the
-private upstream):
+are distinct roles, configured separately. Several *may* map to the same physical
+registry — collapsing them onto one store is the simplest setup — but the
+**recommended** topology keeps the first-party and public-derived stores separate and
+unions them at the registry level (see [Registry-level
+composition](#registry-level-composition-the-recommended-topology)). A single shared
+registry is the degenerate floor, not the goal:
 
 | Role | Purpose |
 |------|---------|
 | **Private upstream** | Authoritative, already-vetted source. A **tarball** is served by a **conventional stable read** at `{base}/{pkg}/-/{file}` — no packument fetch, no serve-time integrity floor (see [Serving a tarball](#serving-a-tarball-a-conventional-private-read-an-honoured-public-location)). A **packument**'s versions are trusted and **merged** with the gated public set (see [Packument merge](#packument-merge-across-upstreams)) rather than short-circuiting the public fetch. |
 | **Public upstream** | Source of versions not (yet) in the private upstream; rules are applied to everything from here. For a **tarball** it is the fallback on a private miss; for a **packument** it is fetched **alongside** the private upstream and merged in. |
-| **Mirror target** | Where approved public packages are written after passing rules. May be the same registry as the private upstream (most common) or a different one (e.g. separate internal/public stores). |
-| **Publication target** | Where **client-published first-party packages** are written (`npm publish` through the proxy). The write counterpart to the private read role; may be the same registry as the private upstream (so published packages are then readable via the private leg) or a different one. Distinct from the mirror target: *client*-driven first-party content vs *proxy*-driven approved-public content. See [Publishing first-party packages](#publishing-first-party-packages-the-publication-target). |
+| **Mirror target** | Where approved public packages are written after passing rules. May be the same registry as the private upstream (the simplest, degenerate setup), but is **recommended** to be a distinct store unioned into the private-upstream read path at the registry level — so public-derived inventory stays separable from first-party. |
+| **Publication target** | Where **client-published first-party packages** are written (`npm publish` through the proxy). The write counterpart to the private read role; may be the same registry as the private upstream, but is **recommended** to be a distinct first-party store unioned into the private-upstream read path (so first-party content stays separable from approved-public). Distinct from the mirror target: *client*-driven first-party content vs *proxy*-driven approved-public content. See [Publishing first-party packages](#publishing-first-party-packages-the-publication-target). |
 
 ### Credential flow and authority
 
@@ -361,24 +364,45 @@ denial-of-service class into a per-version drop. Per-version drops are currently
 **silent**; surfacing them as telemetry (comparing the raw versus decoded version
 count) is a noted follow-up.
 
-### Registry-level composition (optional, never required)
+### Registry-level composition (the recommended topology)
 
-The merge is an **Écluse-level capability**, so a correct deployment needs nothing
-more than the three endpoints above (private upstream, public upstream, and mirror
-target — the fourth role, the publication target, is only for first-party publishing).
-Some operators will *additionally* compose at
-the **registry** level — e.g. AWS CodeArtifact upstream relationships, where
+The **recommended** deployment keeps the first-party store and the public-derived
+mirror store **physically separate** and unions them at the **registry** level into the
+private-upstream read path — e.g. AWS CodeArtifact upstream relationships, where
 `PRIVATE_UPSTREAM_URL` points at an aggregating repository that itself draws from a
-mirror-target repo and a first-party "published-by-us" repo. The private upstream
-then behaves as an aggregator and returns a richer trusted set in one fetch.
+mirror-target repo and a first-party "published-by-us" repo. The private upstream then
+behaves as a read-only union of two trusted stores and returns the full trusted set in
+one fetch, while each store stays independently governable — distinct storage-level
+scanning and policy per provenance, and clean post-disclosure scoping. Managed
+registries (CodeArtifact, Artifact Registry, …) provide exactly this aggregation
+primitive; Écluse is designed to lean on it.
 
-This is a supported topology, **not a requirement**: Écluse's own fold gives the
-same correctness to operators who cannot or do not compose at the registry level.
-One caveat makes it safe — registry composition aggregates the **trusted** sources
-only (mirror + first-party); it must **not** include a direct external connection
-to the public registry, because that would let unvetted public packages reach
-clients *through the private upstream, bypassing the gate*. The public upstream is
-always fetched and gated by Écluse itself.
+Composing at the registry level is the recommended way to get that separation, but it is
+**not the only one**: Écluse's own merge gives the same *correctness* to operators who
+cannot compose at the registry level, and collapsing the roles onto a single store
+remains supported as the **degenerate floor** — it trades away auditability and
+defence-in-depth, not the perimeter (register
+[threat #10](https://alexadewit.github.io/Ecluse/threat-model.html)). What is **not**
+optional is the rule below.
+
+#### The one rule of registry composition: Écluse is the only path from public
+
+Écluse exists to apply ingestion-time policy — freshness / time-gating, integrity
+floors, and the rule algebra — that managed registries do not themselves provide. That
+value holds only if **public packages enter your ecosystem through Écluse and nowhere
+else.**
+
+So the aggregating read endpoint (the private upstream) must union **trusted stores
+only** — your first-party publications and Écluse's sanitized mirror — and must **not**
+carry a direct upstream connection to the public registry. Such a connection would let
+raw, ungated public packages reach clients through the trusted path — *behind* Écluse's
+gate rather than *through* it — the one configuration that silently nullifies the
+protection Écluse is there to provide. Écluse cannot detect this from the outside (the
+private upstream is trusted by construction, and its upstream wiring is invisible to the
+proxy), so keeping the internal registry disconnected from public is an
+**operator-architecture invariant** (register
+[threat #15](https://alexadewit.github.io/Ecluse/threat-model.html)). The public
+upstream is always fetched and gated by Écluse itself.
 
 ## Registry Abstraction
 
