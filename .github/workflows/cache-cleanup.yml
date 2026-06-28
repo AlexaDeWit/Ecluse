@@ -5,7 +5,7 @@ name: Cache cleanup
 # The CI workflow already does the heavy lifting by SAVING caches only on main
 # (PRs restore but never write — see setup-toolchain), so the day-to-day churn of
 # branch-scoped copies is gone. This workflow is the housekeeping backstop that
-# handles what that policy can't, on a schedule:
+# handles what that policy can't:
 #
 #   * stragglers on non-main refs — anything a non-main run left behind (e.g. an
 #     entry from a deleted/after-merge branch); and
@@ -13,18 +13,38 @@ name: Cache cleanup
 #     cabal.project / cabal.project.freeze change), the previous epoch's
 #     immutable-keyed cabal-store / dist-* / nix entries are dead weight.
 #
+# It runs on two triggers. The primary one is a push to main restricted to the
+# dependency-plan files (flake.lock / flake.nix / cabal.project[.freeze]) — the only
+# commits that mint a new epoch — so each bump reaps its predecessors right when it
+# lands, rather than letting a day's worth stack against the 10 GB ceiling between
+# sweeps. That push fires ~before build-test saves the bump's own epoch, so it reaps
+# one bump behind (steady state ~2 nix epochs); the daily `schedule` trims that to one
+# and is also the only reaper of off-main stragglers (tied to no main run). Keeping to
+# a plain `push` avoids the `workflow_run` / pull_request_target hazard and leaves the
+# privileged `actions: write` token in this single-purpose workflow — ci.yml, the
+# always-on PR workflow, stays at its minimal `contents: read`.
+#
 # It keeps the newest KEEP_PER_PREFIX entries per key prefix on main (current +
 # one fallback for in-flight runs and quick rollback) and deletes the rest. The
 # heavy single-epoch caches keep only KEEP_DOCS instead — the Pages doc-variant
 # caches (`-docs-` prefixes) and the Nix-store closures (`nix-*` prefixes, incl. the
 # docs job's `nix-docs-*` doc closure): they are the biggest entries (~1 GB each),
 # change only on a dependency/flake bump, and each has a single writer, so a second
-# epoch buys little (see prune-caches.sh). Deleting caches needs `actions: write`;
-# everything else is least-privilege.
+# epoch buys little (see prune-caches.sh). Everything else is least-privilege.
 
 on:
+  # Primary: a dependency bump on main is the only commit that mints a new epoch;
+  # reap on exactly those pushes (see the note above).
+  push:
+    branches: [main]
+    paths:
+      - flake.lock
+      - flake.nix
+      - cabal.project
+      - cabal.project.freeze
+  # Heartbeat, and the only reaper of off-main stragglers.
   schedule:
-    - cron: "42 3 * * *" # daily, 03:42 UTC (before the 04:17 CI nightly)
+    - cron: "42 3 * * *" # daily, 03:42 UTC
   workflow_dispatch:
 
 concurrency:
