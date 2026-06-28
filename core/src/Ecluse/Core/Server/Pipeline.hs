@@ -180,7 +180,6 @@ import Ecluse.Core.Package (
  )
 import Ecluse.Core.Package.Filter (filterPlanFromDecisions, fpSurvivors)
 import Ecluse.Core.Package.Integrity (
-    IntegrityFloor,
     MinTrustedIntegrity,
     VersionIntegrity (BelowFloor, MeetsFloor, NoIntegrity),
     classifyArtifacts,
@@ -237,6 +236,7 @@ import Ecluse.Core.Server.Context (
 import Ecluse.Core.Server.Pipeline.Internal (
     PackumentNameMismatch (PackumentNameMismatch),
     PackumentUndecodable (PackumentUndecodable),
+    admitByIntegrity,
     evalTier,
     fetchCause,
     logDecodeFailure,
@@ -745,47 +745,6 @@ gatePublic metrics deps ctx = \case
             Filtered filtered ->
                 (Just (Contribution GatedSource (restrictToSurvivors (fpSurvivors plan) admissible) filtered), integrityRefusals)
             NoSurvivors leftover -> (Nothing, projectDecisions admissible leftover <> integrityRefusals)
-
-{- Apply an integrity-floor admission policy to a 'PackageInfo', keeping only the versions
-whose strongest digest meets the floor and projecting the rest to refusals. A version
-whose digests are all weaker than the floor (or absent) cannot be tied to a
-floor-strength tamper-evident fingerprint, so it is dropped from the served listing rather
-than served a client could never safely verify. Used by both gates: the public gate
-('gatePublic') with the hard-floored 'Ecluse.Core.Package.Integrity.MinIntegrity', and the
-trusted gate ('admitTrusted') with the loosenable
-'Ecluse.Core.Package.Integrity.MinTrustedIntegrity'. Returns the admissible 'PackageInfo'
-(with @dist-tags@\/@time@ pruned to the kept keys, exactly as 'restrictToSurvivors' prunes
-for the rules) and the refusals for the dropped versions: 'BelowIntegrityFloor' for a
-too-weak digest, 'MissingIntegrity' for none at all, each feeding the no-survivors
-status. -}
-admitByIntegrity ::
-    (IntegrityFloor floor) =>
-    floor ->
-    -- The refusal projected for a present-but-too-weak digest ('BelowFloor') …
-    ServeDecision ->
-    -- … and for a version carrying no digest at all ('NoIntegrity'); the public and
-    -- trusted gates pass their own context-worded decisions.
-    ServeDecision ->
-    PackageInfo ->
-    (PackageInfo, [ServeDecision])
-admitByIntegrity floorSpec belowFloorRefusal missingRefusal info =
-    ( info
-        { infoVersions = Map.restrictKeys (infoVersions info) admissibleKeys
-        , infoDistTags = Map.filter ((`Set.member` admissibleKeys) . renderVersion) (infoDistTags info)
-        , infoPublishedAt = Map.restrictKeys (infoPublishedAt info) admissibleKeys
-        }
-    , [belowFloorRefusal | (_, BelowFloor) <- Map.toList classified]
-        <> [missingRefusal | (_, NoIntegrity) <- Map.toList classified]
-    )
-  where
-    -- Classify each version against the floor exactly once (the up-to-100k-version map
-    -- is walked a single time); the admissible keys and the two refusal buckets are
-    -- then read off the small class map.
-    classified :: Map Text VersionIntegrity
-    classified = Map.map (classifyArtifacts floorSpec . pkgArtifacts) (infoVersions info)
-
-    admissibleKeys :: Set Text
-    admissibleKeys = Map.keysSet (Map.filter (== MeetsFloor) classified)
 
 {- Decide every version of a public packument against the rules engine, keyed by raw
 version string (the map 'filterPlanFromDecisions' consumes). Each version is run

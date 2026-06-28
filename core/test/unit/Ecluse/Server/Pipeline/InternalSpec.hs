@@ -1,5 +1,6 @@
 module Ecluse.Server.Pipeline.InternalSpec (spec) where
 
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import GHC.IO.Handle (hClose, hDuplicate, hDuplicateTo)
 import Katip (
@@ -25,7 +26,20 @@ import UnliftIO.Temporary (withSystemTempFile)
 import Network.HTTP.Client (HttpException (InvalidUrlException))
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Package (mkPackageName)
+import Ecluse.Core.Package (
+    Artifact (..),
+    ArtifactKind (Tarball),
+    Availability (Available),
+    CodeExecSignal (NoCodeOnInstall),
+    Hash,
+    HashAlg (SHA1, SHA256),
+    PackageDetails (..),
+    PackageInfo (..),
+    PackageName,
+    Trust (Untrusted),
+    mkPackageName,
+ )
+import Ecluse.Core.Package.Integrity (defaultMinIntegrity)
 import Ecluse.Core.Registry.Npm (ResponseBoundExceeded (ResponseBoundExceeded))
 import Ecluse.Core.Rules (
     PreparedRule (..),
@@ -46,6 +60,7 @@ import Ecluse.Core.Security (LimitError (BodyTooLarge))
 import Ecluse.Core.Server.Pipeline.Internal (
     PackumentNameMismatch (PackumentNameMismatch),
     PackumentUndecodable (PackumentUndecodable),
+    admitByIntegrity,
     denialLabels,
     evalTier,
     fetchCause,
@@ -65,6 +80,8 @@ import Ecluse.Core.Server.Response (
     Transience (WillResolve, WontResolve),
  )
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
+import Ecluse.Core.Version (mkVersion)
+import Ecluse.Test.Package (unsafeHash, validSha1, validSha256)
 import Ecluse.Test.Port (noopMetricsPort)
 
 {- | A stand-in exception 'fetchCause' does not specifically classify, so the
@@ -205,6 +222,89 @@ spec = do
                 [ Undecidable (WillResolve Nothing) "unreachable"
                 , BlockedByDefault []
                 ]
+
+    -- The integrity-floor admission policy buckets the dropped versions into two refusal
+    -- lists in a single pass over the class map. This pins the contract that pass must
+    -- preserve: every below-floor refusal precedes every missing-integrity refusal,
+    -- regardless of how the two classes interleave by version key.
+    describe "admitByIntegrity (integrity-floor admission)" $
+        it "buckets refusals below-floor before missing-integrity, keeping the floor-clearing versions" $ do
+            let (admissible, refusals) =
+                    admitByIntegrity defaultMinIntegrity belowFloorMarker missingMarker mixedIntegrityInfo
+            -- Only the SHA-256 version clears the default floor; the SHA-1 and digestless
+            -- versions are dropped from the served listing.
+            Map.keys (infoVersions admissible) `shouldBe` ["1.5.0"]
+            -- Two below-floor (SHA-1) versions, then two missing-integrity (no digest)
+            -- versions — the bucket order the fold must hold, not the key order.
+            refusals `shouldBe` [belowFloorMarker, belowFloorMarker, missingMarker, missingMarker]
+
+-- ── the integrity-admission fixture ──────────────────────────────────────────────
+
+{- | A packument whose versions interleave the three integrity classes by key: two clear
+the floor only with SHA-1 (below floor), two carry no digest at all (missing), and one
+carries a SHA-256 digest (admissible). The keys are arranged so the two refused classes
+alternate in ascending order, so the assertion pins the /bucket/ order (below floor before
+missing) rather than incidentally tracking the key order.
+-}
+mixedIntegrityInfo :: PackageInfo
+mixedIntegrityInfo =
+    PackageInfo
+        { infoName = mixedPkg
+        , infoVersions =
+            Map.fromList
+                [ ("0.9.0", detailsWith "0.9.0" []) -- missing integrity
+                , ("1.0.0", detailsWith "1.0.0" [unsafeHash SHA1 validSha1]) -- below floor
+                , ("1.5.0", detailsWith "1.5.0" [unsafeHash SHA256 validSha256]) -- admissible
+                , ("2.0.0", detailsWith "2.0.0" [unsafeHash SHA1 validSha1]) -- below floor
+                , ("2.5.0", detailsWith "2.5.0" []) -- missing integrity
+                ]
+        , infoDistTags = Map.empty
+        , infoPublishedAt = Map.empty
+        }
+
+-- | The package the admission fixture is built around; its identity is inert to the gate.
+mixedPkg :: PackageName
+mixedPkg = mkPackageName Npm Nothing "leftpad"
+
+{- | The two context-worded refusals admitByIntegrity projects the dropped versions to;
+kept distinct so the bucket order is observable in the refusal list.
+-}
+belowFloorMarker, missingMarker :: ServeDecision
+belowFloorMarker = Reject (Rejection BelowIntegrityFloor "below the integrity floor")
+missingMarker = Reject (Rejection MissingIntegrity "no integrity digest")
+
+{- | A per-version snapshot carrying exactly the given integrity digests; every other field
+is an inert default, since admitByIntegrity reads only the version's artifacts.
+-}
+detailsWith :: Text -> [Hash] -> PackageDetails
+detailsWith raw hashes =
+    PackageDetails
+        { pkgName = mixedPkg
+        , pkgVersion = mkVersion Npm raw
+        , pkgPublishedAt = Nothing
+        , pkgInstallCode = NoCodeOnInstall
+        , pkgTrust = Untrusted
+        , pkgAvailability = Available
+        , pkgArtifacts = artifactWith hashes :| []
+        , pkgLicenses = []
+        , pkgPublisher = Nothing
+        , pkgMaintainers = []
+        , pkgDependencies = []
+        }
+
+-- | A single inert tarball carrying the given integrity digests and nothing else.
+artifactWith :: [Hash] -> Artifact
+artifactWith hashes =
+    Artifact
+        { artFilename = "leftpad.tgz"
+        , artUrl = "https://example.test/leftpad.tgz"
+        , artKind = Tarball
+        , artHashes = hashes
+        , artSize = Nothing
+        , artInterpreter = Nothing
+        , artYanked = False
+        , artProvenance = Nothing
+        }
 
 {- | Run an 'IO' action with 'stdout' redirected to a temporary file, returning
 everything written — so a scribe's output is assertable with no network. The original
