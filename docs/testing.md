@@ -87,6 +87,19 @@ external — **no production escape hatch**, the real default-build image runs u
 `make test-e2e` (it builds + loads the image, then runs the suite); it needs a Docker daemon
 and the npm CLI, and **skips** (every case `pending`) when `ECLUSE_E2E_IMAGE` is unset.
 
+Because this is the only tier that runs the **real `npm` CLI** against real packages, it is
+also where an upstream lifecycle script (`preinstall`/`install`/`postinstall`/`prepare`/…)
+could execute arbitrary code inside our own CI. For a supply-chain-security tool that is
+unacceptable, so the harness disables lifecycle scripts for **every** npm child it spawns by
+setting `npm_config_ignore_scripts` in the child environment (the committed root `.npmrc`
+carries the same `ignore-scripts=true` for in-repo npm and Renovate, but cannot reach the
+harness's throwaway projects outside the repo tree). A gating case installs a probe project
+whose own `postinstall` would write a sentinel and asserts the sentinel never appears, so the
+guard cannot silently rot. `ignore-scripts` skips lifecycle scripts only; it does not change
+install/fetch/lockfile behaviour, so the resilience scenarios are unaffected. The version
+oracles (`test/oracles`) need no such guard: their `node_modules` is materialised by Nix from
+the lockfile (`importNpmLock`), a pure materialisation that runs no npm CLI and no scripts.
+
 ## What gates, and what doesn't
 
 Two things about the split are easy to get backwards, so I'll state them plainly:
