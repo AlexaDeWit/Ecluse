@@ -70,14 +70,18 @@ noted below.
    block is **origin-aware**: it guards the **untrusted** egress — the public-upstream
    fetch and every **untrusted** artifact (`dist.tarball`) fetch (a public
    `dist.tarball` stream and the mirror worker's back-fill fetch) — and is **re-applied
-   to every resolved IP** at connection time (so an allowlisted name that resolves to an
-   internal address is refused). The recheck **pins** the vetted address: the connection
-   dials the very IP the recheck just tested rather than re-resolving the name, so
-   time-of-check equals time-of-use and the DNS-rebinding race is closed for an IPv4 (or
-   dual-stack) host. An IPv6-only host cannot be pinned through the connector's IPv4-only
-   address parameter and falls back to its own resolution — the one residual rebinding
-   window, narrow and IPv6-only (tracked by #426). The **trusted private
-   origin** (the operator-configured private upstream) is deliberately *exempt* — its
+   to every resolved IP** at connection time. The **full** resolved set is vetted and the
+   connection then dials **only vetted addresses**, **failing over** among them: if any
+   resolved address is internal the whole answer is refused (so an attacker cannot smuggle
+   an internal IP among public siblings and have the proxy dial the siblings), and
+   otherwise the connection is pinned to the vetted IPs — the socket opens to an address
+   the recheck just tested rather than to an independent re-resolution, so time-of-check
+   equals time-of-use and the DNS-rebinding race is closed, while a multi-IP upstream with
+   frequent DNS rotation keeps connection-time failover. An IPv6-only host cannot be pinned
+   through the connector's IPv4-only address parameter and falls back to its own resolution
+   — the one residual rebinding window, narrow and IPv6-only (tracked by #426). The
+   **trusted private origin** (the operator-configured private upstream) is deliberately
+   *exempt* — its
    packument *and* its same-host conventional tarball read alike: a private registry may
    legitimately live on an internal address, and only an untrusted target can be steered
    by an attacker. This is **defence-in-depth behind
