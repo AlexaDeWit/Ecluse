@@ -1,6 +1,6 @@
-name: Performance acceptance (Context B)
+name: Performance Acceptance
 
-# The live performance-acceptance harness (Context B): it fetches LIVE packuments for
+# The live performance-acceptance harness: it fetches LIVE packuments for
 # the curated catalogue set and checks Écluse's work-per-request overhead against the
 # version-controlled acceptance budget (acceptance/criteria.json).
 #
