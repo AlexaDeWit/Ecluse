@@ -459,8 +459,14 @@ machine, never from a shared-runner figure.
 
 Everything above is **Context A**: *deterministic regression* benchmarking over
 **committed, pinned** data (Layer A's work-per-request, Layer B's load harness, the
-frozen corpus). The input is frozen, so the only variable is the code, and allocations
-are the machine-independent signal. Context A answers *"did the code regress?"*.
+frozen corpus). Its machine-independent regression signal is **allocations-per-request**,
+frozen against the committed corpus — a change in allocated bytes is the code, not the
+environment. Absolute latency and throughput stay the **live, read-coarsely** signal,
+never a regression gate: Layer A's clock is machine-dependent, and Layer B's **default**
+run live-probes the public registry for its upstream-latency operating point (set
+`BENCH_LOAD_PROBE_RTT=0` for a deterministic fixed mode), so its latency reflects today's
+network, not the code alone. Context A answers *"did the code regress?"* — read its
+allocations, not its clock.
 
 **Context B** is the complementary need: a **live performance-acceptance** harness that
 answers *"do we meet our performance acceptance criteria under **today's** real-world

@@ -374,7 +374,7 @@ drive knobs = \case
             , fromIntegral requests / elapsed
             , 1.0
             , (pctl 0.50, pctl 0.90, pctl 0.99, pctl 0.999)
-            , 0
+            , 0 -- no deadline-bounded generator here, so the deadline-abort count is explicitly zero
             , "in-process worker loop (no HTTP surface)"
             )
   where
@@ -393,10 +393,15 @@ drive knobs = \case
     toMs :: Maybe Double -> Maybe Double
     toMs = fmap (* 1_000)
 
--- The count of requests the generator abandoned at the run's deadline: the sum of the
--- oha error-distribution entries whose label names the deadline. oha reports these as a
--- transport error ("aborted due to deadline"), distinct from a non-2xx status — under
--- load it is the backlog the proxy never drained before the window closed.
+-- The count of requests the generator abandoned at the run's deadline — a best-effort
+-- saturation signal, never an exact one and never a gate. oha labels a deadline
+-- abandonment as a transport error "aborted due to deadline" (distinct from a non-2xx
+-- status), so the count sums the error-distribution entries whose label names the deadline;
+-- under load it is the backlog the proxy never drained before the window closed. The label
+-- is oha's, and oha is nix-pinned, so the substring match is stable until a deliberate oha
+-- bump (a reviewed flake.lock change). The default is an explicit zero: no matching label —
+-- no deadline aborts, or a future oha that renamed it — yields 0, an accepted, safe default
+-- for an inform-only figure.
 deadlineAbortsOf :: OhaReport -> Int
 deadlineAbortsOf report =
     sum [n | (label, n) <- Map.toList (ohaErrorCounts report), "deadline" `T.isInfixOf` T.toLower label]
