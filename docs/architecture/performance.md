@@ -350,6 +350,49 @@ cheap, no-public-fetch path.
   (the driver re-execs the binary once per scenario), because peak residency is a
   process-wide high-water mark — a fresh process keeps each scenario's residency its own.
 
+### Service-time attribution and load saturation
+
+The raw per-scenario table reports a latency; it does not say how much of it is *upstream*
+(an unavoidable floor) and how much is *Écluse's own overhead* (the achievable-gain part),
+nor how much is *queuing* under load (a capacity signal, neither of the other two). Two
+derived views answer those, both driven from the same run — the driver makes **two passes**
+over every scenario, each scenario still in its own process:
+
+- a **concurrency-1 service pass**, where no request queues, so a measured latency is
+  cleanly `upstream baseline + Écluse overhead`;
+- the **loaded pass** at the configured concurrency, whose p50 above the service p50 is the
+  queuing delay.
+
+**Measure-then-seed baseline.** Before the passes, the driver probes the **live public
+registry** for the corpus packages — reusing `Ecluse.Test.RegistryCapture.fetchPackumentBody`,
+the same live fetch the Context B harness uses — and takes the steady-state **mean round
+trip** as the upstream baseline. That round trip is injected as *both* passes' stub-upstream
+latency, so the service pass measures real-world-shaped service time and the loaded-minus-
+service difference is queuing alone. The probe is **non-gating**: if the registry is
+unreachable (or the probe is switched off with `BENCH_LOAD_PROBE_RTT=0`) the configured
+`BENCH_LOAD_UPSTREAM_LATENCY_MS` stands in, labelled as a fallback, and both passes still run.
+
+**Service-time attribution** (the concurrency-1 pass). Per scenario, the measured latency is
+split into the **upstream baseline** — the public round trip, subtracted **once** per request
+(the legs fan out concurrently and the public leg is single-flight, so a request waits one
+round trip; re-checked when another ecosystem's fixtures land) — and the **Écluse overhead**,
+everything Écluse adds on top of just hitting the public registry: the private leg, the merge,
+the rule sweep, the decode, the re-serialise. Reported absolute and as a percentage of the
+total, at **p50** (primary) and **p99** (the tail, GC included).
+
+**Load saturation** (the loaded pass against the service pass). The **queuing delay** is
+`loaded p50 − concurrency-1 service p50` (both at the same injected round trip), so it is the
+time a request spends waiting in line — neither upstream nor per-request overhead, but a
+backlog signal. Reported alongside the achieved throughput (the plateau) and the
+**deadline-abort count** (requests the generator abandoned at the window's close, a backlog
+never drained), and **flagged loudly** when the queuing delay exceeds half the loaded p50 —
+a pointer at connection-pool and admission-bound work, never at a per-request cost. Like the
+rest of Layer B it is **inform-only**: a flag is read by a human, never a gate.
+
+The attribution and saturation maths are a pure module (`Ecluse.BenchLoad.Normalise`,
+unit-tested in the gating `ecluse-unit` suite); the live probe and the two-pass orchestration
+are the `bench-load` executable's shell, mirroring the Layer A / Context B pure-core split.
+
 ### Built to extend across ecosystems
 
 Today only npm is served, but the proxy is built to front several upstream ecosystems
@@ -374,12 +417,19 @@ runner-sane defaults:
 
 | Knob | Environment variable | Default |
 |---|---|---|
-| concurrency | `BENCH_LOAD_CONCURRENCY` | 50 |
+| concurrency (loaded pass) | `BENCH_LOAD_CONCURRENCY` | 50 |
 | duration (seconds) | `BENCH_LOAD_DURATION_SECONDS` | 30 |
 | injected upstream latency (ms) | `BENCH_LOAD_UPSTREAM_LATENCY_MS` | 5 |
+| probe the live public RTT | `BENCH_LOAD_PROBE_RTT` | on |
 | worker artifact size (bytes) | `BENCH_LOAD_PAYLOAD_BYTES` | 262144 |
 | cache-eviction bound (entries) | `BENCH_LOAD_CACHE_MAX_ENTRIES` | 3 |
 | cache-eviction working set | `BENCH_LOAD_WORKING_SET` | 64 (capped to the corpus) |
+
+`BENCH_LOAD_UPSTREAM_LATENCY_MS` is the **fallback** upstream latency: when the live RTT
+probe runs (the default) the measured mean round trip overrides it for both passes; it is
+used only when the probe is off (`BENCH_LOAD_PROBE_RTT=0`, for a deterministic offline run)
+or the registry is unreachable. The service pass always runs at concurrency 1;
+`BENCH_LOAD_CONCURRENCY` sets the loaded pass alone.
 
 The packument scenarios derive their payloads from the real-world corpus captures, so
 `BENCH_LOAD_PAYLOAD_BYTES` sizes only the worker scenario's synthetic artifact.

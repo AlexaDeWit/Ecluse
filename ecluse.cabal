@@ -382,6 +382,7 @@ test-suite ecluse-unit
   other-modules:
     EcluseSpec
     Ecluse.AcceptanceSpec
+    Ecluse.BenchLoad.NormaliseSpec
     Ecluse.CompositionSpec
     Ecluse.ConfigSpec
     Ecluse.EnvSpec
@@ -399,6 +400,7 @@ test-suite ecluse-unit
   build-depends:
     , ecluse
     , ecluse:ecluse-acceptance
+    , ecluse:ecluse-bench-load
     , ecluse:ecluse-core
     , ecluse:ecluse-manifest
     , ecluse:ecluse-test-support
@@ -629,22 +631,36 @@ executable bench-load
 
   build-depends:
     , ecluse
+    , ecluse:ecluse-bench-load
     , ecluse:ecluse-core
     , ecluse:ecluse-test-support
-    , aeson          ^>=2.2
-    , bytestring     ^>=0.12
-    , containers     ^>=0.7
-    , crypton        ^>=1.0
-    , http-client    ^>=0.7
-    , http-types     ^>=0.12
-    , katip          ^>=0.8.8
-    , memory         ^>=0.18
-    , text           ^>=2.1
-    , time           ^>=1.12
-    , typed-process  ^>=0.2.13
-    , unliftio       ^>=0.2.25
-    , wai            ^>=3.2
-    , warp           ^>=3.4
+    , aeson            ^>=2.2
+    , bytestring       ^>=0.12
+    , containers       ^>=0.7
+    , crypton          ^>=1.0
+    , http-client      ^>=0.7
+    , http-client-tls  ^>=0.3.6
+    , http-types       ^>=0.12
+    , katip            ^>=0.8.8
+    , memory           ^>=0.18
+    , text             ^>=2.1
+    , time             ^>=1.12
+    , typed-process    ^>=0.2.13
+    , unliftio         ^>=0.2.25
+    , wai              ^>=3.2
+    , warp             ^>=3.4
+
+-- Layer B normalisation core: the PURE attribution and saturation maths the load
+-- harness's two analysis views are built from (service-time upstream-vs-overhead split,
+-- and the load-saturation queuing-delay flag). An INTERNAL sublibrary (the
+-- ecluse-acceptance pattern) so the gating unit suite tests the maths deterministically,
+-- while the live RTT probe + two-pass orchestration stay in the bench-load executable.
+-- Carries no socket or load-generator dependency. See docs/architecture/performance.md.
+library ecluse-bench-load
+  import:          shared
+  hs-source-dirs:  bench/load/src
+  exposed-modules: Ecluse.BenchLoad.Normalise
+  build-depends:   text ^>=2.1
 
 -- Live performance-acceptance harness (Context B): the PURE evaluation core. The
 -- version-controlled acceptance criteria, the per-package budget verdict, and the
