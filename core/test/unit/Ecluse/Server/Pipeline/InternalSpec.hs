@@ -225,7 +225,7 @@ mixedIntegrityInfo =
                 , ("2.5.0", detailsWith "2.5.0" []) -- missing integrity
                 ]
         , infoDistTags = Map.empty
-        , infoPublishedAt = Map.empty
+        , infoInvalidEntries = []
         }
 
 -- | The package the admission fixture is built around; its identity is inert to the gate.

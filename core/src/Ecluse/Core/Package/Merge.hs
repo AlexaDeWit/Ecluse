@@ -173,8 +173,11 @@ data MergePlan = MergePlan
     tags dropped.
     -}
     , mpTime :: Map Text UTCTime
-    {- ^ The @time@ union restricted to surviving versions; publish times for
-    versions that did not survive are dropped.
+    {- ^ The served @time@ map, __reconstructed from the survivors__: each surviving
+    version's publish instant taken from the /same/ winning candidate whose manifest
+    is served, so a version's served time always comes from the source that won its
+    manifest, never fabricated from a different source. A winner with no known publish
+    time contributes no entry, so this is keyed by a subset of the survivors.
     -}
     , mpDivergences :: Set Divergence
     {- ^ Every distinct same-version integrity conflict found. A 'Set' because
@@ -275,11 +278,12 @@ instance Eq Candidate where
 instance Ord Candidate where
     compare a b = compare (candKey a) (candKey b)
 
-{- | One source's tagged value (a @dist-tags@ target or a @time@ instant) for a
-single key, paired with the rank of the source that offered it, so the projection
-can pick the precedence-winning value the same way version collisions are
-resolved. Ordered by rank alone — the winner is the minimum — so a left-biased
-@Map.unions@ of singletons resolves the collision by provenance, not position.
+{- | One source's tagged @dist-tags@ target for a single tag, paired with the rank of
+the source that offered it, so the projection can pick the precedence-winning target
+the same way version collisions are resolved. Ordered by rank alone (the winner is the
+minimum), so a left-biased @Map.unions@ of singletons resolves the collision by
+provenance, not position. (Per-version time needs no parallel ranked axis: it rides
+inside each version 'Candidate' and is read off the /same/ winner the manifest is.)
 -}
 data Ranked a = Ranked
     { rankedRank :: (Provenance, SourceId)
@@ -309,9 +313,11 @@ real input position. See the 'Semigroup' instance for the law domain (associativ
 -}
 
 {- | The monoidal accumulator the merge folds into. It holds, /unresolved/, every
-candidate offered for every version key, plus the ranked @dist-tags@ and @time@
-contributions; resolution to a single winner per key, and the divergence set,
-happens once in 'planFrom'. Keeping candidates unresolved is what makes @(<>)@
+candidate offered for every version key, plus the ranked @dist-tags@ contributions;
+resolution to a single winner per key, and the divergence set, happens once in
+'planFrom'. The served @time@ map needs no axis here: each version's publish instant
+rides inside its 'Candidate' (on 'candDetails'), so 'planFrom' reads it off the same
+winner the manifest is taken from. Keeping candidates unresolved is what makes @(<>)@
 associative: a pairwise winner-vs-loser decision taken /during/ the fold is not
 associative once three or more copies of a key collide, because divergence is a
 property of the whole /set/ of distinct fingerprints, not of any one step.
@@ -329,8 +335,6 @@ data Merge = Merge
     -- ^ Every candidate offered for each version key, unresolved.
     , mergeDistTags :: Map Text (Ranked Version)
     -- ^ The precedence-winning @dist-tags@ target offered for each tag.
-    , mergeTime :: Map Text (Ranked UTCTime)
-    -- ^ The precedence-winning publish instant offered for each version key.
     , mergeName :: Maybe PackageName
     {- ^ The package identity. Every contribution carries the same name — each has been
     validated against the requested name before reaching the merge — so the left-biased
@@ -346,7 +350,7 @@ narrowing is load-bearing, not an accident:
 
 * __Associative__ — @(a '<>' b) '<>' c@ '==' @a '<>' (b '<>' c)@. The 'SourceId'
   re-indexing offsets compose additively, and every per-key combiner (set union
-  for candidates, "keep the smaller rank" for tags\/time, "left name wins" for the
+  for candidates, "keep the smaller rank" for tags, "left name wins" for the
   identity) is itself associative, so the whole is.
 * __Identity__ — 'mempty' (the empty merge) is both a left and a right unit.
 * __Intentionally NOT commutative__ — @a '<>' b@ '/=' @b '<>' a@ in general. @(<>)@
@@ -359,8 +363,9 @@ The order-independence guarantee, stated precisely (and the reason commutativity
 the wrong law): precedence is resolved __by provenance__, so the surviving key set
 and the winning /provenance/ per key are invariant under any permutation of the
 inputs, and the value-level reconciliations (the survivor a key resolves to, the
-divergence fingerprint-pairs, the @dist-tags@\/@time@ targets) are invariant under
-any permutation that keeps each collision __cross-provenance__ — which the npm
+divergence fingerprint-pairs, the @dist-tags@ targets, and the served @time@ read off
+each survivor) are invariant under any permutation that keeps each collision
+__cross-provenance__, which the npm
 topology (exactly one trusted, one gated upstream) always does, so every observable
 decision is order-independent there. The /sole/ residual order-dependence is the
 positional tiebreak between two inputs of the __same__ provenance: provenance cannot
@@ -376,8 +381,6 @@ instance Semigroup Merge where
                 Map.unionWith Set.union (mergeVersions a) (shiftVersions (mergeVersions b))
             , mergeDistTags =
                 Map.unionWith keepBetter (mergeDistTags a) (shiftRanked <$> mergeDistTags b)
-            , mergeTime =
-                Map.unionWith keepBetter (mergeTime a) (shiftRanked <$> mergeTime b)
             , mergeName = mergeName a <|> mergeName b
             }
       where
@@ -395,16 +398,15 @@ instance Monoid Merge where
             { mergeCount = 0
             , mergeVersions = Map.empty
             , mergeDistTags = Map.empty
-            , mergeTime = Map.empty
             , mergeName = Nothing
             }
 
 {- | One input's contribution to the accumulator, at local 'SourceId' @0@: every
-version becomes a candidate, every @dist-tags@ target and @time@ instant a ranked
-value at this input's provenance, and the package name is offered as the identity.
-@foldMap contribute@ over the inputs then re-indexes each to its list position via
-the 'Semigroup' offset, so the absolute 'SourceId' of a single-input contribution
-is its index in the @foldMap@.
+version becomes a candidate (carrying its own publish time on 'candDetails'), every
+@dist-tags@ target a ranked value at this input's provenance, and the package name is
+offered as the identity. @foldMap contribute@ over the inputs then re-indexes each to
+its list position via the 'Semigroup' offset, so the absolute 'SourceId' of a
+single-input contribution is its index in the @foldMap@.
 -}
 contribute :: Provenance -> PackageInfo -> Merge
 contribute prov info =
@@ -412,7 +414,6 @@ contribute prov info =
         { mergeCount = 1
         , mergeVersions = Map.map candidateFor (infoVersions info)
         , mergeDistTags = Map.map (Ranked here) (infoDistTags info)
-        , mergeTime = Map.map (Ranked here) (infoPublishedAt info)
         , mergeName = Just (infoName info)
         }
   where
@@ -447,8 +448,10 @@ deployments need no special case. It is realised as a 'foldMap' of each input's
   dropped. Collisions on the same tag are resolved __by provenance__ (trusted
   wins), consistent with the version fold, so the plan does not depend on caller
   input order.
-* __@time@ restricted to the union__, with per-version collisions also resolved by
-  provenance — publish times for versions that did not survive are dropped.
+* __@time@ reconstructed from the survivors__: each survivor's publish instant is
+  read off the /same/ winning candidate whose manifest is served, so a version's
+  served time always comes from the source that won its manifest, never fabricated
+  from a different source. A winner with no known publish time contributes no entry.
 
 The plan's identity ('mpName') is carried from the contributions; callers fetch one
 package across its upstreams and each contribution's name has been validated against
@@ -462,10 +465,10 @@ mergePackuments inputs = planFrom (foldMap (uncurry contribute) inputs)
 
 {- | Project the resolved 'MergePlan' from a folded 'Merge'. Resolves each version
 key to its precedence winner, derives the divergence 'Set' from the shared-algorithm
-contradictions among each key's distinct fingerprints, and reconciles
-@dist-tags@\/@time@ over the survivors. Returns
-'Nothing' only for the empty merge ('mempty'), which has no name and so nothing to
-serve — equivalently, the empty input list.
+contradictions among each key's distinct fingerprints, reconciles @dist-tags@ over the
+survivors, and reconstructs the served @time@ map from each survivor's winning
+candidate. Returns 'Nothing' only for the empty merge ('mempty'), which has no name and
+so nothing to serve; equivalently, the empty input list.
 -}
 planFrom :: Merge -> Maybe MergePlan
 planFrom acc = do
@@ -535,11 +538,14 @@ planFrom acc = do
     chosenLatest :: Maybe Version
     chosenLatest = rankedValue <$> Map.lookup "latest" (mergeDistTags acc)
 
-    -- @time@ over the union: each key's publish instant (collisions already
-    -- resolved by provenance in the accumulator) restricted to surviving versions.
+    -- @time@ reconstructed from the survivors: each surviving version's publish instant
+    -- taken from the /same/ winning candidate whose manifest is served, so the manifest
+    -- and its timestamp always come from one authoritative source (never a timestamp
+    -- fabricated from a different source than the manifest). A winner with no known
+    -- publish time drops out, so this is keyed by a subset of the survivors.
     reconciledTimes :: Map Text UTCTime
     reconciledTimes =
-        Map.filterWithKey (\k _ -> survives k) (Map.map rankedValue (mergeTime acc))
+        Map.mapMaybe (pkgPublishedAt . candDetails . winnerOf) (mergeVersions acc)
 
 -- The order-independent integrity fingerprint of a version: every artifact's
 -- @(resolved algorithm, comparable digest body)@ pairs, gathered across all artifacts

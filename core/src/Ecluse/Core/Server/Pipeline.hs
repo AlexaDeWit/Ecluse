@@ -152,10 +152,12 @@ import Data.Aeson qualified as Aeson
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap (KeyMap)
 import Data.Aeson.KeyMap qualified as KeyMap
+import Data.Aeson.Text (encodeToLazyText)
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
+import Data.Text.Lazy qualified as TL
 import Data.Time (UTCTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Katip (KatipContext, Severity (WarningS), katipAddContext, logFM, ls, sl)
@@ -171,8 +173,10 @@ import UnliftIO.Exception (tryAny)
 import Ecluse.Core.Credential (Secret, mkSecret)
 import Ecluse.Core.Package (
     Artifact (artFilename, artHashes, artSize, artUrl),
+    InvalidEntry (invalidKey, invalidKind, invalidReason, invalidValue),
+    InvalidEntryKind (InvalidDistTag, InvalidPublishTime, InvalidVersionManifest),
     PackageDetails (pkgArtifacts),
-    PackageInfo (infoDistTags, infoPublishedAt, infoVersions),
+    PackageInfo (infoDistTags, infoVersions),
     PackageName,
     Scope,
     pkgNamespace,
@@ -535,11 +539,12 @@ fetchPublicOrigin limits rt baseUrl name = do
 ambient @katip@ context captured into the handle's failure log.
 
 The handle's operations run the fetch in plain 'IO' (the public origin's cache leader runs
-under @mask@); 'withRunInIO' discharges the 'Handler' failure log to 'IO' while capturing
-the request's trace-correlated context, so a breach\/decode\/name-mismatch warning the
-leader logs still rides that context. The npm origin's credential posture, manager, base
-URL, and response budget are the per-fetch 'NpmClientConfig'; the 'ManifestCaching' decides
-whether the origin resolves through the shared metadata cache.
+under @mask@); 'withRunInIO' discharges the 'Handler' logs to 'IO' while capturing the
+request's trace-correlated context, so a breach\/decode\/name-mismatch warning, or the
+dropped-entry warning a successful-but-degraded projection emits ('logInvalidEntries'),
+still rides that context. The npm origin's credential posture, manager, base URL, and
+response budget are the per-fetch 'NpmClientConfig'; the 'ManifestCaching' decides whether
+the origin resolves through the shared metadata cache.
 
 Every response bound (security.md invariant 4) is enforced inside the handle's fetch
 against the mount's 'Limits' budget — a body-size, nesting-depth, or version-count breach
@@ -564,6 +569,7 @@ withMetadataClient rt upstream caching limits manager baseUrl token k =
                 upstream
                 caching
                 (\nm err -> runInIO (logMetadataFailure nm baseUrl err))
+                (\nm entries -> runInIO (logInvalidEntries nm baseUrl entries))
                 (clientConfig limits manager baseUrl token)
 
 {- The public origin's read handle: anonymous (no token), resolved through the shared
@@ -620,6 +626,76 @@ logBreach name err =
         BodyTooLarge c -> ("body-size", "over " <> show c <> " bytes", show c <> " bytes")
         TooManyVersions seen c -> ("version-count", show seen, show c)
         TooDeeplyNested c -> ("nesting-depth", "over " <> show c <> " levels", show c <> " levels")
+
+{- Log the malformed packument entries an upstream served that the projection dropped
+rather than failing the whole document on, at 'WarningS', so an operator can see that an
+upstream served a malformed entry, which kind (a version manifest, a dist-tag, or a
+per-version publish time), and __the raw value it sent__. The structured payload names the
+package, the per-kind drop counts, and a bounded sample of the dropped entries each
+rendering its raw 'Aeson.Value' (truncated if large, and capped to 'maxRenderedDrops'
+entries so a flood of drops cannot bloat the line). The dropped versions are still served
+minus those entries (graceful degradation), so this is an observability signal, not a
+refusal. Emitted once per real fetch (inside the cache leader, so a coalesced follower
+never re-logs) through the request's @katip@ context. The caller guards on a non-empty
+list, so this never logs for a clean document. -}
+logInvalidEntries :: (KatipContext m) => PackageName -> Text -> [InvalidEntry] -> m ()
+logInvalidEntries name baseUrl entries =
+    katipAddContext payload $
+        logFM WarningS (ls message)
+  where
+    payload =
+        sl "module" pipelineModule
+            <> sl "package" (renderPackageName name)
+            <> sl "upstream" baseUrl
+            <> sl "droppedVersionManifests" (countOf InvalidVersionManifest)
+            <> sl "droppedDistTags" (countOf InvalidDistTag)
+            <> sl "droppedPublishTimes" (countOf InvalidPublishTime)
+            <> sl "droppedEntries" (map renderDrop (take maxRenderedDrops entries))
+
+    countOf :: InvalidEntryKind -> Int
+    countOf kind = length (filter ((== kind) . invalidKind) entries)
+
+    -- One dropped entry rendered for the operator: its kind, key, reason, and the raw
+    -- value the upstream sent (truncated), so the actual offending bytes are visible.
+    renderDrop :: InvalidEntry -> Text
+    renderDrop e =
+        renderKind (invalidKind e)
+            <> " "
+            <> invalidKey e
+            <> " = "
+            <> truncated (invalidValue e)
+            <> " ("
+            <> invalidReason e
+            <> ")"
+
+    renderKind :: InvalidEntryKind -> Text
+    renderKind = \case
+        InvalidVersionManifest -> "version-manifest"
+        InvalidDistTag -> "dist-tag"
+        InvalidPublishTime -> "publish-time"
+
+    -- The raw value as compact JSON, truncated to 'maxRenderedValueChars' (only that many
+    -- characters are ever forced, so a huge value never balloons the log line).
+    truncated :: Value -> Text
+    truncated v =
+        let rendered = TL.toStrict (TL.take (fromIntegral maxRenderedValueChars + 1) (encodeToLazyText v))
+         in if T.length rendered > maxRenderedValueChars
+                then T.take maxRenderedValueChars rendered <> "…"
+                else rendered
+
+    message :: Text
+    message =
+        "dropped " <> show (length entries) <> " malformed entr" <> plural <> " from an upstream packument (the rest is served)"
+    plural = if length entries == 1 then "y" else "ies"
+
+-- How many dropped entries the drop-tracking log renders in full, and how many characters
+-- of each raw value, so an unbounded flood of malformed entries (or one huge value) cannot
+-- bloat a single log line. The per-kind counts in the payload still report the full totals.
+maxRenderedDrops :: Int
+maxRenderedDrops = 20
+
+maxRenderedValueChars :: Int
+maxRenderedValueChars = 200
 
 -- The @module@ tag this module's breach log carries — the operator-facing log filter
 -- key, held stable as the current value rather than the source module path, so an
@@ -726,15 +802,16 @@ in the filtered @Value@'s @versions@, so the typed view handed to the merge matc
 the filtered document. Taking the survivor set from the plan reuses the 'Set' the
 filter already built rather than re-deriving it from the filtered @Value@'s keys (a
 @Set.fromList@ of every survivor key, each 'Key.toText'-converted, over a packument of
-up to the version cap). @dist-tags@ and @time@ are pruned to the surviving keys
-likewise (the merge reconciles them over the union); @dist-tags@ targets absent from
-the survivors are dropped. -}
+up to the version cap). @dist-tags@ is pruned to the surviving keys likewise (the merge
+reconciles tags over the union); @dist-tags@ targets absent from the survivors are
+dropped. Each surviving version carries its own publish time, so restricting the
+versions carries the times with it (the merge reconstructs the served @time@ from the
+survivors). -}
 restrictToSurvivors :: Set Text -> PackageInfo -> PackageInfo
 restrictToSurvivors survivors info =
     info
         { infoVersions = Map.restrictKeys (infoVersions info) survivors
         , infoDistTags = Map.filter ((`Set.member` survivors) . renderVersion) (infoDistTags info)
-        , infoPublishedAt = Map.restrictKeys (infoPublishedAt info) survivors
         }
 
 {- Project each excluded version's 'Decision' to a 'ServeDecision' for the

@@ -15,18 +15,23 @@ the wire shape.
 
 == Per-version graceful degradation
 
-The @versions@ map is decoded __element-wise__: a version whose manifest is
-missing or malformed in a required\/security-decisive field (no @dist@ or
-@tarball@, an unusable @version@) is __dropped__ from the projected
-'PackageInfo' rather than failing the whole packument. Because presence in the
+The @versions@, @dist-tags@, and @time@ maps are decoded __element-wise__: a
+version whose manifest is missing or malformed in a required\/security-decisive
+field (no @dist@ or @tarball@, an unusable @version@), a @dist-tags@ entry whose
+value is not a string, or a @time@ entry that is not a decodable instant is
+__dropped__ rather than failing the whole packument. Because presence in the
 decision surface is what makes a version a serve-candidate, a dropped version is
 automatically never served — fail-closed for that one version (a version that
 cannot be decoded cannot be evaluated for integrity, CVEs, or rules) while every
-healthy version still resolves. Only a document whose /top-level/ structure is
-unusable (a @versions@ that is not an object, an absent\/empty @name@) is denied
-wholesale. A version's purely __advisory__ fields degrade in the wire layer
-("Ecluse.Core.Registry.Npm.Wire") without dropping the version. The per-version
-drop is currently silent; surfacing it as telemetry is a noted follow-up.
+healthy version still resolves; a dropped date is simply a version with no known
+publish time, and a dropped tag loses only that one tag. Only a document whose
+/top-level/ structure is unusable (a @versions@ that is not an object, an
+absent\/empty @name@) is denied wholesale. A version's purely __advisory__ fields
+degrade in the wire layer ("Ecluse.Core.Registry.Npm.Wire") without dropping the
+version. Every drop is __recorded__ as an 'Ecluse.Core.Package.InvalidEntry' in
+'Ecluse.Core.Package.infoInvalidEntries' (a version-manifest, dist-tag, or
+publish-time drop, each carrying its key and reason), so the serve path can log
+what an upstream served malformed rather than dropping it silently.
 
 == Signal mapping
 
@@ -97,6 +102,7 @@ module Ecluse.Core.Registry.Npm.Project (
 import Data.Aeson (FromJSON (parseJSON), Object, Value, eitherDecodeStrict, withObject, (.!=), (.:?))
 import Data.Aeson.Types (Parser, parseEither, parseMaybe)
 import Data.Map.Strict qualified as Map
+import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Text.Short qualified as TS
 import Data.Time (UTCTime)
@@ -111,6 +117,8 @@ import Ecluse.Core.Package (
     Dependency (..),
     Hash,
     HashAlg (SHA1, SRI),
+    InvalidEntry (..),
+    InvalidEntryKind (InvalidDistTag, InvalidPublishTime, InvalidVersionManifest),
     PackageDetails (..),
     PackageInfo (..),
     PackageName,
@@ -142,30 +150,81 @@ data WirePackument = WirePackument
     , wpDistTags :: Map Text Text
     , wpVersions :: Map Text VersionEntry
     , wpTime :: Map Text UTCTime
+    , wpInvalidEntries :: [InvalidEntry]
+    -- ^ The malformed @versions@\/@dist-tags@\/@time@ entries dropped during decode.
     }
 
 instance FromJSON WirePackument where
-    parseJSON = withObject "npm packument" $ \o ->
-        WirePackument
-            <$> o .:? "name" .!= ""
-            <*> o .:? "dist-tags" .!= mempty
-            <*> lenientVersionMap o
-            <*> o .:? "time" .!= mempty
+    parseJSON = withObject "npm packument" $ \o -> do
+        name <- o .:? "name" .!= ""
+        (distTags, distTagDrops) <- lenientDistTags o
+        (versions, versionDrops) <- lenientVersionMap o
+        (time, timeDrops) <- lenientTimeMap (Map.keysSet versions) o
+        pure
+            WirePackument
+                { wpName = name
+                , wpDistTags = distTags
+                , wpVersions = versions
+                , wpTime = time
+                , -- Deterministic order (versions, then dist-tags, then time), each
+                  -- already in ascending-key order, so the dropped-entry list is stable.
+                  wpInvalidEntries = versionDrops <> distTagDrops <> timeDrops
+                }
+
+{- Partition a raw @key -> 'Value'@ map into the entries that decode and the ones that
+do not: each undecodable entry is dropped and recorded as an 'InvalidEntry' of the given
+'InvalidEntryKind', carrying its key, the __raw offending 'Value'__ (verbatim, for
+diagnostics), and the aeson decode error as the reason. The dropped list is in
+ascending-key order ('Map.foldrWithKey' visits keys ascending and each step prepends), so
+it is deterministic. This is the one place per-entry leniency and drop-tracking are
+realised, shared by the @dist-tags@\/@time@ axes (the @versions@ axis layers a domain
+decode on top). -}
+partitionLenient :: InvalidEntryKind -> (Value -> Either String a) -> Map Text Value -> (Map Text a, [InvalidEntry])
+partitionLenient kind decode =
+    Map.foldrWithKey step (Map.empty, [])
+  where
+    step key value (kept, dropped) = case decode value of
+        Right a -> (Map.insert key a kept, dropped)
+        Left err -> (kept, InvalidEntry kind key value (toText err) : dropped)
 
 {- Decode the @versions@ map __element-wise leniently__: read it as a raw map of
 version key to 'Value', then keep only the entries that project to a 'VersionEntry',
-dropping any that do not. A version whose manifest is missing or malformed in a
-required\/security-decisive field (no @dist@\/@tarball@, an unusable @version@) is
-__dropped from the decision surface__ rather than failing the whole packument —
-fail-closed for that version (a version that cannot be decoded cannot be evaluated
-for integrity, CVEs, or rules, so it must never be served) while every healthy
-version still decodes. An absent @versions@ is the empty map; a @versions@ that is
-not an object at all still fails the decode (the document is not a usable packument).
--}
-lenientVersionMap :: Object -> Parser (Map Text VersionEntry)
+dropping any that do not and recording each as an 'InvalidVersionManifest'. A version
+whose manifest is missing or malformed in a required\/security-decisive field (no
+@dist@\/@tarball@, an unusable @version@) is __dropped from the decision surface__
+rather than failing the whole packument: fail-closed for that version (a version that
+cannot be decoded cannot be evaluated for integrity, CVEs, or rules, so it must never
+be served) while every healthy version still decodes. An absent @versions@ is the empty
+map; a @versions@ that is not an object at all still fails the decode (the document is
+not a usable packument). -}
+lenientVersionMap :: Object -> Parser (Map Text VersionEntry, [InvalidEntry])
 lenientVersionMap o = do
     raw <- o .:? "versions" .!= mempty -- Map Text Value: each version object kept raw
-    pure (Map.mapMaybe (parseMaybe parseJSON) raw) -- drop the entries that will not project
+    pure (partitionLenient InvalidVersionManifest (parseEither parseJSON) raw)
+
+{- Decode the @dist-tags@ map __element-wise leniently__: read it as a raw map of tag
+name to 'Value', keeping each entry whose value is a JSON string and dropping any that
+is not (recording it as an 'InvalidDistTag'). A single non-string tag value therefore
+loses only that tag rather than failing the whole document. A string that is not a
+valid version is still kept here ('mkVersion' is total, so dist-tag /targeting/ is
+reconciled later, never a decode failure). -}
+lenientDistTags :: Object -> Parser (Map Text Text, [InvalidEntry])
+lenientDistTags o = do
+    raw <- o .:? "dist-tags" .!= mempty
+    pure (partitionLenient InvalidDistTag (parseEither parseJSON) raw)
+
+{- Decode the @time@ map __element-wise leniently__: read it as a raw map of key to
+'Value', keeping each entry that decodes as an instant and dropping any that does not.
+With the publish time folded onto each version, a malformed sibling date is simply a
+version with no known publish time, never a document failure. Only a drop keyed by a
+__present version__ is recorded (as an 'InvalidPublishTime'); the @created@\/@modified@
+bookkeeping keys are package-level, not a version's publish time, so a malformed one is
+not a per-version drop and is left untracked. -}
+lenientTimeMap :: Set Text -> Object -> Parser (Map Text UTCTime, [InvalidEntry])
+lenientTimeMap versionKeys o = do
+    raw <- o .:? "time" .!= mempty
+    let (kept, dropped) = partitionLenient InvalidPublishTime (parseEither parseJSON) raw
+    pure (kept, filter ((`Set.member` versionKeys) . invalidKey) dropped)
 
 {- A decoded version object: the wire 'VersionManifest' plus its @_npmUser@
 publisher. Both are decoded from the /same/ object in one pass, so there is a
@@ -264,7 +323,7 @@ projectPackageInfo pkmt = do
             { infoName = name
             , infoVersions = projectVersions name pkmt
             , infoDistTags = projectDistTags pkmt
-            , infoPublishedAt = projectPublishTimes pkmt
+            , infoInvalidEntries = wpInvalidEntries pkmt
             }
 
 {- | Project a fetched metadata response into the 'PackageDetails' for a single
@@ -470,14 +529,6 @@ to parsed 'Version'.
 -}
 projectDistTags :: WirePackument -> Map Text Version
 projectDistTags = Map.map (mkVersion Npm) . wpDistTags
-
-{- Project the per-version publish timestamps from the packument's @time@ map,
-keeping only the entries keyed by a version present in @versions@ (dropping the
-@created@\/@modified@ bookkeeping keys).
--}
-projectPublishTimes :: WirePackument -> Map Text UTCTime
-projectPublishTimes pkmt =
-    Map.restrictKeys (wpTime pkmt) (Map.keysSet (wpVersions pkmt))
 
 -- ── name and person projection ───────────────────────────────────────────────
 

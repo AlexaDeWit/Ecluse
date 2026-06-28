@@ -119,7 +119,7 @@ packumentWith n =
                     | i <- [1 .. n]
                     ]
             , infoDistTags = Map.empty
-            , infoPublishedAt = Map.empty
+            , infoInvalidEntries = []
             }
 
 {- | Drive 'boundedRead' purely: a 'State'-monad chunk producer that pops one
@@ -954,7 +954,7 @@ emptyInfo =
         { infoName = unscoped "unused"
         , infoVersions = Map.empty
         , infoDistTags = Map.empty
-        , infoPublishedAt = Map.empty
+        , infoInvalidEntries = []
         }
 
 -- ── lowerCaseHosts (the LoweredHostSet parser) ───────────────────────────────

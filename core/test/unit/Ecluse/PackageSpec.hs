@@ -161,17 +161,18 @@ spec = do
 
     describe "PackageInfo" $ do
         -- A packument-level fixture: one package, one published version "1.0.0"
-        -- tagged "latest", with a known publish time. The map is keyed by the raw
-        -- version string, as the type documents.
+        -- tagged "latest", carrying its own publish time on the version snapshot. The
+        -- map is keyed by the raw version string, as the type documents.
         let name = mkPackageName Npm Nothing "thing"
             version = mkVersion Npm "1.0.0"
             publishedAt = UTCTime (fromGregorian 2026 6 21) 0
+            versionDetails = (details name version){pkgPublishedAt = Just publishedAt}
             info =
                 PackageInfo
                     { infoName = name
-                    , infoVersions = Map.singleton "1.0.0" (details name version)
+                    , infoVersions = Map.singleton "1.0.0" versionDetails
                     , infoDistTags = Map.singleton "latest" version
-                    , infoPublishedAt = Map.singleton "1.0.0" publishedAt
+                    , infoInvalidEntries = []
                     }
         it "round-trips the package identity through infoName" $
             infoName info `shouldBe` name
@@ -181,11 +182,13 @@ spec = do
             (pkgVersion <$> Map.lookup "1.0.0" (infoVersions info)) `shouldBe` Just version
         it "resolves a dist-tag to the version it points at" $
             Map.lookup "latest" (infoDistTags info) `shouldBe` Just version
-        it "records the per-version publish time under the raw version-string key" $
-            Map.lookup "1.0.0" (infoPublishedAt info) `shouldBe` Just publishedAt
+        it "carries the per-version publish time on the version snapshot" $
+            -- The publish time is folded onto the version's own 'PackageDetails', not a
+            -- sibling map; the npm wire @time@ object is reconstructed at serialisation.
+            (pkgPublishedAt <$> Map.lookup "1.0.0" (infoVersions info)) `shouldBe` Just (Just publishedAt)
         it "is equal exactly when every field agrees" $ do
-            -- Equality is structural over all four fields: an identically-built
-            -- document is equal, and changing a single field (here the version a
-            -- dist-tag resolves to) makes it unequal.
+            -- Equality is structural over all fields: an identically-built document is
+            -- equal, and changing a single field (here the version a dist-tag resolves
+            -- to) makes it unequal.
             info `shouldBe` info{infoDistTags = Map.singleton "latest" version}
             info `shouldNotBe` info{infoDistTags = Map.singleton "latest" (mkVersion Npm "2.0.0")}

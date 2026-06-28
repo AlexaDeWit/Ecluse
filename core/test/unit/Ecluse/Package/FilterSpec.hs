@@ -110,7 +110,7 @@ infoOf latest vs =
         { infoName = name
         , infoVersions = Map.fromList [(v, detailsAt v age install) | (v, age, install) <- vs]
         , infoDistTags = maybe Map.empty (Map.singleton "latest" . mkVersion Npm) latest
-        , infoPublishedAt = Map.fromList [(v, publishedDaysAgo age) | (v, age, _) <- vs]
+        , infoInvalidEntries = []
         }
 
 -- ── survivors ────────────────────────────────────────────────────────────────

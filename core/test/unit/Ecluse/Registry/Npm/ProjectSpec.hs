@@ -32,6 +32,8 @@ import Ecluse.Core.Package (
     DepKind (Dev, Optional, Peer, Runtime),
     Dependency (depConstraint, depKind, depMarker, depName),
     HashAlg (SHA1, SRI),
+    InvalidEntry (invalidKey, invalidKind, invalidValue),
+    InvalidEntryKind (InvalidDistTag, InvalidPublishTime, InvalidVersionManifest),
     PackageDetails (..),
     PackageInfo (..),
     PackageName,
@@ -76,6 +78,7 @@ spec = do
     versionDetailsSpec
     versionListSpec
     versionLevelLeniencySpec
+    gracefulDegradationSpec
     failureSpec
     totalitySpec
 
@@ -89,24 +92,24 @@ packageInfoSpec = describe "parsePackageInfo" $ do
         Map.keys (infoVersions info) `shouldBe` ["3.0.1"]
         fmap renderVersion (Map.lookup "latest" (infoDistTags info)) `shouldBe` Just "3.0.1"
 
-    it "keys the publish-time map by raw version, dropping created/modified" $ do
-        -- The packument `time` map also carries `created`/`modified`; only the
-        -- per-version entries are publish times, so those bookkeeping keys must
-        -- not leak into the projected map.
+    it "folds the per-version publish time onto the version, ignoring created/modified" $ do
+        -- The packument `time` map also carries `created`/`modified` bookkeeping; those
+        -- are not version keys, so the per-version lookup never reads them; only the
+        -- version's own entry folds onto its 'pkgPublishedAt'.
         info <- projectFixture (unscoped "is-odd") "is-odd.full.json"
         published <- readUTC "2018-05-31T20:04:53.306Z"
-        infoPublishedAt info `shouldBe` Map.singleton "3.0.1" published
+        (pkgPublishedAt =<< Map.lookup "3.0.1" (infoVersions info)) `shouldBe` Just published
 
     it "splits a scoped name into scope and bare name (@babel/code-frame)" $ do
         info <- projectFixture (mkPackageName Npm (Just (mkScope "babel")) "code-frame") "babel-code-frame.abbreviated.json"
         fmap renderScope (pkgNamespace (infoName info)) `shouldBe` Just "@babel"
         pkgCanonical (infoName info) `shouldBe` "@babel/code-frame"
 
-    it "leaves the publish-time map empty for an abbreviated document (no time)" $ do
+    it "leaves every version's publish time unknown for an abbreviated document (no time)" $ do
         -- The abbreviated form omits the `time` map entirely, so every version's
-        -- publish time is unknown.
+        -- publish time folds to 'Nothing'.
         info <- projectFixture (unscoped "core-js") "core-js.abbreviated.json"
-        infoPublishedAt info `shouldBe` Map.empty
+        all (isNothing . pkgPublishedAt) (Map.elems (infoVersions info)) `shouldBe` True
 
 -- ── name as a validation input (route name is the authority) ──────────────────
 
@@ -405,6 +408,49 @@ versionLevelLeniencySpec = describe "version-level graceful degradation (one bro
                     Nothing -> fail "the advisory-junk version 2.0.0 must survive"
                 Map.member "3.0.0" (infoVersions info) `shouldBe` True
             other -> fail ("expected a Projected packument, got: " <> show other)
+
+-- ── graceful per-entry degradation with typed drop-tracking ──────────────────
+
+{- | A sound requested version next to a malformed sibling in each of the three
+per-entry-lenient axes (an undecodable sibling version manifest, a non-string
+@dist-tags@ value, and an un-decodable per-version @time@ entry) must serve the sound
+version, drop the bad entries (never failing the whole document), and __record__ each
+drop in 'infoInvalidEntries' carrying its kind, key, and the raw offending value.
+-}
+gracefulDegradationSpec :: Spec
+gracefulDegradationSpec = describe "graceful per-entry degradation with typed drop-tracking" $ do
+    it "serves the sound version while dropping malformed dist-tags/time/version siblings" $ do
+        info <- orFailParse (parsePackageInfo (unscoped "mix") (RegistryResponse gracefulDegradationPackument))
+        Map.keys (infoVersions info) `shouldBe` ["1.0.0"]
+
+    it "records each dropped entry's kind and key in infoInvalidEntries" $ do
+        -- Deterministic order: version-manifest drops, then dist-tag, then publish-time,
+        -- each ascending by key.
+        info <- orFailParse (parsePackageInfo (unscoped "mix") (RegistryResponse gracefulDegradationPackument))
+        map (\e -> (invalidKind e, invalidKey e)) (infoInvalidEntries info)
+            `shouldBe` [ (InvalidVersionManifest, "2.0.0")
+                       , (InvalidDistTag, "broken")
+                       , (InvalidPublishTime, "1.0.0")
+                       ]
+
+    it "preserves each dropped entry's raw offending value for diagnostics" $ do
+        -- The raw value an operator needs to see what the upstream sent, not erased to a
+        -- reason string. The publish-time drop keeps its raw bad date even though the
+        -- version's parsed publish time is Nothing.
+        info <- orFailParse (parsePackageInfo (unscoped "mix") (RegistryResponse gracefulDegradationPackument))
+        let valueOf k = invalidValue <$> find ((== k) . invalidKind) (infoInvalidEntries info)
+        valueOf InvalidDistTag `shouldBe` Just (Number 5)
+        valueOf InvalidPublishTime `shouldBe` Just (String "not-a-date")
+
+    it "folds the sound version's own malformed time to no publish time (still served)" $ do
+        info <- orFailParse (parsePackageInfo (unscoped "mix") (RegistryResponse gracefulDegradationPackument))
+        (pkgPublishedAt =<< Map.lookup "1.0.0" (infoVersions info)) `shouldBe` Nothing
+
+    it "does not track a malformed bookkeeping (created) time as a per-version drop" $ do
+        -- 'created' is package-level, not a version's publish time, so a malformed one is
+        -- not an InvalidPublishTime; every tracked publish-time drop is a real version.
+        info <- orFailParse (parsePackageInfo (unscoped "bk") (RegistryResponse malformedBookkeepingTimePackument))
+        filter ((== InvalidPublishTime) . invalidKind) (infoInvalidEntries info) `shouldBe` []
 
 -- ── failure handling ─────────────────────────────────────────────────────────
 
@@ -733,6 +779,29 @@ mixedHealthAndBrokenPackument =
     \\"2.0.0\":{\"name\":\"mix\",\"version\":\"2.0.0\",\"dist\":5},\
     \\"3.0.0\":{\"name\":\"mix\",\"version\":\"3.0.0\",\"dist\":{\"shasum\":\"abc\"}},\
     \\"4.0.0\":42}}"
+
+{- | A packument whose requested version 1.0.0 is sound but which carries a malformed
+sibling in every per-entry-lenient axis: 2.0.0's manifest is undecodable (a scalar
+@dist@), the @broken@ @dist-tags@ value is a non-string ('Number'), and 1.0.0's own
+@time@ entry is a non-ISO string. The sound 1.0.0 is served (with no publish time); each
+bad entry is dropped and recorded in @infoInvalidEntries@ with its raw value.
+-}
+gracefulDegradationPackument :: ByteString
+gracefulDegradationPackument =
+    "{\"name\":\"mix\",\"dist-tags\":{\"latest\":\"1.0.0\",\"broken\":5},\"versions\":{\
+    \\"1.0.0\":{\"name\":\"mix\",\"version\":\"1.0.0\",\"dist\":{\"tarball\":\"https://r/mix/-/mix-1.0.0.tgz\"}},\
+    \\"2.0.0\":{\"name\":\"mix\",\"version\":\"2.0.0\",\"dist\":5}},\
+    \\"time\":{\"created\":\"2018-01-01T00:00:00.000Z\",\"1.0.0\":\"not-a-date\"}}"
+
+{- | A packument with a sound version and a malformed @created@ bookkeeping time (a
+non-ISO string) but no malformed /per-version/ time, so the @created@ drop must __not__ be
+tracked as an 'InvalidPublishTime' (it is not a version's publish time).
+-}
+malformedBookkeepingTimePackument :: ByteString
+malformedBookkeepingTimePackument =
+    "{\"name\":\"bk\",\"versions\":{\
+    \\"1.0.0\":{\"name\":\"bk\",\"version\":\"1.0.0\",\"dist\":{\"tarball\":\"https://r/bk/-/bk-1.0.0.tgz\"}}},\
+    \\"time\":{\"created\":\"not-a-date\",\"1.0.0\":\"2018-01-01T00:00:00.000Z\"}}"
 
 {- | A packument whose 1.0.0 is healthy, 2.0.0 carries an out-of-range
 @unpackedSize@ (@1e400@) and a signature missing its @keyid@, and 3.0.0 carries a

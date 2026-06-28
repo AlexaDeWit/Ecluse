@@ -77,9 +77,12 @@ module Ecluse.Core.Package (
 
     -- * Packument-level view
     PackageInfo (..),
+    InvalidEntry (..),
+    InvalidEntryKind (..),
 ) where
 
 import Crypto.Hash (Blake2b_512, MD5, SHA1, SHA256, SHA384, SHA512, digestFromByteString)
+import Data.Aeson (Value)
 import Data.ByteArray.Encoding (Base (Base16, Base64), convertFromBase)
 import Data.Text qualified as T
 import Data.Text.Short (ShortText)
@@ -582,9 +585,51 @@ data PackageInfo = PackageInfo
     {- ^ Distribution tags (e.g. @"latest"@, @"next"@) to the 'Version' they
     point at.
     -}
-    , infoPublishedAt :: Map Text UTCTime
-    {- ^ Per-version publish times (the npm @time@ object), keyed by raw version
-    string, when known.
+    , infoInvalidEntries :: [InvalidEntry]
+    {- ^ The malformed entries the projection __dropped__ rather than failing the
+    whole document on, retained so the serve path can surface them to an operator.
+    A version's publish time lives on its 'PackageDetails.pkgPublishedAt' (the npm
+    @time@ object is reconstructed at serialisation), so it is __not__ duplicated
+    here; only the /dropped/ entries are.
     -}
     }
+    deriving stock (Eq, Show)
+
+{- | A single packument entry a registry projection __dropped__ as malformed rather
+than failing the entire document, kept so the drop is observable rather than silent
+(an operator can see that an upstream served a malformed entry, and which). Each
+ecosystem's projection populates this from its own wire shape, so the
+drop-and-track contract is the same across npm, PyPI, and RubyGems.
+-}
+data InvalidEntry = InvalidEntry
+    { invalidKind :: InvalidEntryKind
+    -- ^ Which kind of packument entry was dropped.
+    , invalidKey :: Text
+    {- ^ The map key the dropped entry sat under: the raw version string for a
+    version manifest or publish time, the tag name for a dist-tag.
+    -}
+    , invalidValue :: Value
+    {- ^ The __raw offending value__, preserved verbatim ('Value' is lossless), so an
+    operator can see exactly what the upstream sent rather than only a reason string. A
+    dropped publish time keeps its raw bad date here even though the version's
+    'pkgPublishedAt' folds to 'Nothing'; the gating value (absent) and the diagnostic
+    (the raw bytes) are kept separate. Render it (truncating if large) at log time.
+    -}
+    , invalidReason :: Text
+    -- ^ Why the entry could not be projected (the decode error), for the operator log.
+    }
+    deriving stock (Eq, Show)
+
+{- | Which part of a packument a dropped 'InvalidEntry' came from. A version
+manifest drop removes a serve candidate (fail-closed for that one version); a
+dist-tag or publish-time drop loses only that advisory datum while the version it
+referred to still resolves.
+-}
+data InvalidEntryKind
+    = -- | A @versions@ entry whose manifest did not project (no @dist@\/@tarball@, an unusable @version@).
+      InvalidVersionManifest
+    | -- | A @dist-tags@ entry whose target was not a usable version string.
+      InvalidDistTag
+    | -- | A @time@ entry, keyed by a present version, that was not a decodable instant.
+      InvalidPublishTime
     deriving stock (Eq, Show)
