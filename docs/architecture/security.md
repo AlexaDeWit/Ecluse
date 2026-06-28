@@ -10,28 +10,33 @@ They are implemented as the guard primitives of
 [`S36`](../../planning/slices/S36-security-guards.md) and enforced at the points
 noted below.
 
-> A companion **STRIDE threat model** (OWASP Threat Dragon) enumerates these and the
-> broader system threats as a living register:
-> [`threat-modelling/ecluse.json`](../../threat-modelling/ecluse.json). This document is
-> the *why* behind the outbound/input guards; the deployment assumptions the model rests on
-> are in [Trust assumptions & credential posture](#trust-assumptions--credential-posture).
+> The system's full **STRIDE threat register** lives in the OWASP Threat Dragon model
+> ([`threat-modelling/ecluse.json`](../../threat-modelling/ecluse.json)) and is published,
+> readably, at [Threat model](threat-model.md). This document is the *why* behind the
+> outbound/input guards; the deployment assumptions the model rests on are in
+> [Trust assumptions & credential posture](#trust-assumptions--credential-posture).
 
-## Threat model
+## Threats these guards address
 
-- **SSRF / unintended fetch targets.** A crafted name or path — `../` traversal,
-  percent-encoded slashes, an absolute URL, `@scope%2f..%2f`, CRLF — could steer
-  the proxy to an attacker-chosen host or an internal-only address reachable from
-  the proxy's network position (cloud instance-metadata endpoints, the private
-  upstream's network).
-- **Client-controlled artifact source.** On the tarball path (notably `npm ci`,
-  which hits tarball URLs directly with no preceding packument request), the
-  artifact location must come from the **upstream-declared `dist.tarball`**, not a
-  client-controlled path — otherwise the client chooses what bytes Écluse fetches
-  and serves.
-- **Algorithmic-complexity DoS via upstream payloads.** A hostile or compromised
-  upstream (or a pathological public package) could return a huge packument
-  (millions of versions, deeply nested JSON); parsing and per-version rule
-  evaluation over it could exhaust CPU/memory.
+These outbound-request and input-validation guards address three of the modelled threat
+classes in particular; the full register is generated from the model (see the
+threat-model callout above):
+
+- **SSRF / unintended fetch targets** — a crafted name or path (traversal, encoded
+  slashes, an absolute URL, CRLF) steering the proxy to an attacker-chosen host or an
+  internal-only address (cloud metadata, the private upstream's network).
+- **Client-controlled artifact source** — on the tarball path (notably `npm ci`), the
+  artifact location must come from the upstream-declared `dist.tarball`, never a
+  client-supplied path.
+- **Algorithmic-complexity DoS via upstream payloads** — a hostile or pathological
+  upstream packument (huge version count, deep nesting) exhausting CPU or memory.
+
+<!--
+  Do not re-grow this into a full threat enumeration. The authoritative register is
+  the Threat Dragon model (threat-modelling/ecluse.json), rendered at
+  docs/architecture/threat-model.md. Keep this a short pointer to the threat classes
+  these guards address; add or revise threats in the model, not in prose here.
+-->
 
 ## Invariants
 
