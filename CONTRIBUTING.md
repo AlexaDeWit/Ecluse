@@ -12,8 +12,8 @@ repository's requirements. This file is policy; the practical guides live alongs
 
 ## Working language
 
-Issues and discussion are in **English**, so the whole community (and any future maintainer)
-can search, find, and help with them. You don't need perfect English: rough English, or your
+Issues and discussion are in **English**, so the next person with the same problem (and any
+future maintainer) can search, find, and help with them. You don't need perfect English: rough English, or your
 own language run through a translator like Google Translate, is genuinely welcome, and it
 keeps your report findable for the next person with the same problem. If English is a real
 barrier, I also read **French** and **Swedish**, so write in one of those and I'll manage;
