@@ -475,23 +475,34 @@ real-world acceptance.
 
 For each package in the shared curated catalogue (`bench/corpus/pins.json`'s `pins`, read
 through `Ecluse.Test.RegistryCapture`, the same one-fetch-path the smoke differential
-uses), the harness fetches the **live** packument and times two legs separately:
+uses), the harness fetches the **live** packument and times three legs separately:
 
-- **upstream**, how long the registry took to serve the packument (the fetch), and
-- **Écluse overhead**, how long Écluse's work-per-request takes over it (decode →
-  project → rule sweep → filter / URL-rewrite → re-serialise → ETag), the median of a few
-  passes to damp noise.
+- **upstream**, how long the registry took to serve the packument (the fetch);
+- **full-packument overhead**, how long Écluse's work-per-request takes over the whole
+  document (decode → project → rule sweep → filter / URL-rewrite → re-serialise → ETag),
+  the median of a few passes to damp noise; and
+- **single-version overhead**, the cold tarball gate's selective decode of one version's
+  snapshot (its latest) from the raw packument, parsing only that version rather than the
+  whole document. It is tracked on its own because a whole-document decode dominates it on
+  the heavy many-version packuments and a selective decode does not, so an improvement to
+  the single-version path would otherwise hide behind the full-packument figure. Measured
+  by a single forced evaluation, not a median: the leg is a pure, deterministic
+  computation, so replicating it would let the compiler share one evaluation across the
+  repetitions and time nothing on the rest.
 
 Separating the legs keeps an upstream-bound cost from being mistaken for an Écluse one,
-and the run summary's two columns leave room for a later **upstream-normalisation** column
-(e.g. overhead as a share of total) to slot in, a parallel design; the summary is built
-not to couple to it.
+keeps the cheap single-version serve path visible next to the full read, and the run
+summary's columns leave room for a later **upstream-normalisation** column (e.g. overhead
+as a share of total) to slot in, a parallel design; the summary is built not to couple to
+it.
 
 ### The acceptance criteria, version-controlled
 
 The budget lives in a **version-controlled** config,
 [`acceptance/criteria.json`](../../acceptance/criteria.json): a `defaultBudgetMs` plus
-per-package overrides for the heavy, many-version packuments. It is version-controlled on
+per-package overrides for the full-packument leg, and a `defaultSingleVersionBudgetMs`
+plus its own per-package overrides for the single-version leg, with either leg over its
+budget reddening the run. It is version-controlled on
 purpose, **moving the bar is an explicit, reviewed act**, not a silent drift. The
 committed budgets are calibrated from a first real run, with deliberately generous (~3×)
 headroom over the measured overhead to absorb shared-runner noise and packument growth;

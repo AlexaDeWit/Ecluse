@@ -1,5 +1,5 @@
 {
-  "_note": "Acceptance criteria for the live performance-acceptance harness (Context B; cabal executable perf-acceptance, make perf-acceptance). Version-controlled on purpose: moving the bar is an explicit, reviewed act. `defaultBudgetMs` is the maximum Ecluse work-per-request overhead (decode -> project -> rule sweep -> filter/rewrite -> re-serialise) over a single live packument before the run reds; `perPackageBudgetMs` raises it for the heavy, many-version packuments whose processing is legitimately costlier. A breach reds the (non-required) check to prompt a human decision — code regression vs reality outgrew the budget — and never blocks merge. These bounds are calibrated from a first real run with deliberately generous headroom (roughly 3x or more over the measured overhead) to absorb shared-runner noise and real-world packument growth; tighten or relax them as the real runs accrue — that is what version-controlling them is for. See docs/architecture/performance.md.",
+  "_note": "Acceptance criteria for the live performance-acceptance harness (Context B; cabal executable perf-acceptance, make perf-acceptance). Version-controlled on purpose: moving the bar is an explicit, reviewed act. Two overheads are budgeted per package. `defaultBudgetMs`/`perPackageBudgetMs` bound the full-packument work-per-request (decode -> project -> rule sweep -> filter/rewrite -> re-serialise) over a single live packument. `defaultSingleVersionBudgetMs`/`perPackageSingleVersionBudgetMs` bound the single-version selective decode the cold tarball gate consults to serve one package version (its latest) — the per-package overhead a whole-document decode dominates and a selective decode does not, tracked on its own so a single-version improvement stays visible. A breach of either leg reds the (non-required) check to prompt a human decision — code regression vs reality outgrew the budget — and never blocks merge. These bounds are calibrated from a first real run with deliberately generous headroom (roughly 3x or more over the measured overhead) to absorb shared-runner noise and real-world packument growth; tighten or relax them as the real runs accrue — that is what version-controlling them is for. See docs/architecture/performance.md.",
   "defaultBudgetMs": 250.0,
   "perPackageBudgetMs": {
     "@types/node": 1500.0,
@@ -7,5 +7,13 @@
     "react": 600.0,
     "webpack": 600.0,
     "@aws-sdk/client-s3": 600.0
+  },
+  "defaultSingleVersionBudgetMs": 80.0,
+  "perPackageSingleVersionBudgetMs": {
+    "@types/node": 250.0,
+    "typescript": 250.0,
+    "react": 120.0,
+    "webpack": 120.0,
+    "@aws-sdk/client-s3": 120.0
   }
 }
