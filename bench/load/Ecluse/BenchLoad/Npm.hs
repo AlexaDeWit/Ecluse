@@ -508,7 +508,7 @@ data CorpusPackage = CorpusPackage
 and weighted __large-emphasis__ so the heavy many-version packuments are the primary
 drivers of the merge/cache scenarios, not a trivial path. The leading entries are also
 the cache-eviction working set ('workingSet'). The pins and captures are shared with
-Layer A (@bench\/corpus\/package.json@, @bench\/corpus\/npm\/*.full.json@); @express@ is
+Layer A (@bench\/corpus\/pins.json@, @bench\/corpus\/npm\/*.full.json@); @express@ is
 the reused in-place anchor. See @docs\/architecture\/performance.md@.
 -}
 serveCorpus :: [CorpusPackage]

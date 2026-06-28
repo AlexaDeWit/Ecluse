@@ -197,10 +197,13 @@ cache — so they are **deliberately excluded**; the corpus leans large.
 | large | `@babel/core` (161), `express` (anchor), `react` (135), `typescript` (168) |
 | heavy | `@aws-sdk/client-s3` (668), `webpack` (569), `@types/node` (2339) |
 
-- **Pinned and committed.** Each package is pinned by `package@version` in
-  `bench/corpus/package.json` and captured to `bench/corpus/npm/<pkg>.full.json`. The
-  pins are kept fresh by Renovate's npm manager exactly as the `test/oracles/`
-  version-ordering reference is (a bump is the signal to re-capture). `express` is the
+- **Pinned and committed — frozen data.** Each package is pinned by `package@version` in
+  `bench/corpus/pins.json` (a plain data file, **not** an npm project) and captured to
+  `bench/corpus/npm/<pkg>.full.json`. The captures are **frozen benchmark data, not a
+  dependency**: Renovate ignores `bench/corpus/**`, and refresh is a **deliberate, manual
+  re-capture** — edit a pin and rerun `make gen-bench-corpus`, then review the diff —
+  never an automatic bump. (`test/oracles/`, which tracks the node-semver *reference
+  implementation*, is a different case and stays Renovate-managed.) `express` is the
   pre-existing untrimmed anchor under `core/test/unit/fixtures/npm/`, reused in place and
   shared with the unit suite — the one untrimmed capture.
 - **Trimmed for size, not shape.** `make gen-bench-corpus` re-captures from the pins: for
@@ -211,8 +214,8 @@ cache — so they are **deliberately excluded**; the corpus leans large.
   day-to-day builds that are the bulk of `typescript`/`react`'s size and add no real
   shape — the synthetic generator's degeneracy), and (b) pure-noise fields no hot path
   reads (`readme`, npm operational internals). Capturing at or below the pin makes a
-  re-run reproduce the same fixture until Renovate moves a pin, so the dataset stays
-  deterministic and committed without silently drifting from what npm serves.
+  re-run reproduce the same fixture until a pin is deliberately changed, so the dataset
+  stays deterministic and committed without silently drifting from what npm serves.
 - **Synthetic generator: stress only.** `syntheticPackumentValue` is retained **only**
   for the complexity-scaling (O(n) curve fit) assertions — the version-count stress
   input, not a realistic case. The realistic distribution is the corpus.

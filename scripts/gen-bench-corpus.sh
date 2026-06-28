@@ -3,22 +3,22 @@
 # Capture the real-world packument corpus that drives both benchmark layers
 # (docs/architecture/performance.md) from pinned npm registry packuments.
 #
-# The corpus packages and their capture pins live in bench/corpus/package.json,
-# kept fresh by Renovate's npm manager exactly as test/oracles is. This script is
-# the analogue of scripts/gen-version-fixtures.sh: it is the regeneration tool, run
-# only when the pins change (a Renovate bump) or a capture-policy change. Its output
-# (bench/corpus/npm/*.full.json) is committed and read at run time by the Layer A
-# micro-benches (Ecluse.Bench.Corpus) and the Layer B load harness
-# (Ecluse.BenchLoad.Npm).
+# The corpus packages and their capture pins live in bench/corpus/pins.json (a plain
+# data file — NOT an npm project, NOT Renovate-managed). The committed captures are
+# FROZEN benchmark data: this script is the regeneration tool (the analogue of
+# scripts/gen-version-fixtures.sh), run DELIBERATELY when the pins or the capture
+# policy change — never on an automatic bump. Its output (bench/corpus/npm/*.full.json)
+# is committed and read at run time by the Layer A micro-benches (Ecluse.Bench.Corpus)
+# and the Layer B load harness (Ecluse.BenchLoad.Npm).
 #
 # Usage:  make gen-bench-corpus   (runs inside the Nix dev shell, which carries
 #                                  node + node-semver on NODE_PATH)
 #
 # Determinism w.r.t. the pin: for each package@version pin, the live full packument
 # is fetched and reduced to the versions at or below the pinned version, so a re-run
-# without a pin bump reproduces the same fixture (versions published after the pin
-# are excluded) — the dataset stays committed and deterministic and only moves when
-# Renovate moves a pin.
+# without a pin change reproduces the same fixture (versions published after the pin
+# are excluded) — the dataset stays committed and deterministic and only moves when a
+# pin is deliberately edited and the script re-run.
 #
 # Capture policy (preserve real shape; trim only noise):
 #   * KEEP every stable release (no prerelease tag) at or below the pin, with its
@@ -34,19 +34,18 @@
 # and shared with the unit suite.
 set -euo pipefail
 
-manifest="${1:-bench/corpus/package.json}"
+pins_file="${1:-bench/corpus/pins.json}"
 outdir="${2:-bench/corpus/npm}"
 mkdir -p "$outdir"
 
-node - "$manifest" "$outdir" <<'JS'
+node - "$pins_file" "$outdir" <<'JS'
 const fs = require("fs");
 const https = require("https");
 const path = require("path");
 const semver = require("semver");
 
-const [manifestPath, outDir] = process.argv.slice(2);
-const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-const pins = manifest.dependencies || {};
+const [pinsPath, outDir] = process.argv.slice(2);
+const pins = JSON.parse(fs.readFileSync(pinsPath, "utf8")).pins || {};
 
 // The package name as a filesystem-safe fixture stem: drop the leading scope '@'
 // and turn the scope separator '/' into '-' (so '@types/node' -> 'types-node').

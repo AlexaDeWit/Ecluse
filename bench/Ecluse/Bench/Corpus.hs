@@ -10,8 +10,9 @@ Two sources feed the benches, with distinct jobs:
     packages stress nothing, so they are deliberately excluded). The captures live under
     @bench\/corpus\/npm\/@ (plus the
     pre-existing untrimmed @express@ anchor reused in place under
-    @core\/test\/unit\/fixtures\/npm\/@); they are sourced from pinned registry
-    captures kept fresh by Renovate and regenerated with @make gen-bench-corpus@ (see
+    @core\/test\/unit\/fixtures\/npm\/@); they are __frozen data__ — committed captures
+    pinned in @bench\/corpus\/pins.json@ and re-captured deliberately with
+    @make gen-bench-corpus@ (not dependency-tracked; see
     @docs\/architecture\/performance.md@). Each retains its real heterogeneous shape —
     varied dependency sets, @peerDependencies@\/@engines@\/@deprecated@, many
     @dist-tags@, large per-version manifests — trimmed only of pure noise; and

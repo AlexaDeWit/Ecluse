@@ -24,8 +24,8 @@ build-type:    Simple
 -- proven not to false-positive on a legitimate large package.
 --
 -- bench/corpus/npm/*.json is the curated real-world packument corpus the benchmarks
--- read at run time (pinned by bench/corpus/package.json, regenerated with
--- `make gen-bench-corpus`; see docs/architecture/performance.md).
+-- read at run time (frozen data, pinned by bench/corpus/pins.json and re-captured
+-- deliberately with `make gen-bench-corpus`; see docs/architecture/performance.md).
 extra-source-files:
   bench/corpus/npm/*.json
   core/test/unit/fixtures/npm/*.json
