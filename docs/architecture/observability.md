@@ -93,7 +93,7 @@ Note the traffic shape: the **high-volume path is boring** (private-mirror hits,
 served fast and rule-free) and the **low-volume path is the interesting one**
 (public fallback → rules → denial/mirror). The ideal — "keep every error/denial,
 downsample the boring" — is **tail sampling**, which needs a collector and so is a
-**fast-follow**, not a launch item.
+planned follow-up, not a launch item.
 
 For launch, sampling is **head-based and lives in two places**:
 
@@ -149,13 +149,13 @@ worker (`Ecluse.Core.Worker`). Two catalogue signals are **defined but not yet w
 circuit-breaker state gauge and the credential refresh/ttl signals — the breaker and the
 refreshing credential provider are constructed before the telemetry substrate and sit
 off the composition root, so emitting them is a boot-sequencing follow-up. The
-**advisory-sync** metrics remain deferred with the CVE subsystem (S22).
+**advisory-sync** metrics remain deferred with the CVE subsystem.
 
 **Transport.** Metrics export over **OTLP push** (the same pipeline as traces) to a
 node-local collector or the **Datadog Agent's OTLP receiver**, which auto-maps OTLP
 to the backend's metric format — the launch transport. A Prometheus **scrape**
-endpoint (`OTEL_METRICS_EXPORTER=prometheus`) is a **deferred** pull alternative
-([#288](https://github.com/AlexaDeWit/Ecluse/issues/288)): the SDK honours the
+endpoint (`OTEL_METRICS_EXPORTER=prometheus`) is a **deferred** pull alternative:
+the SDK honours the
 selection but the pinned OpenTelemetry set ships no scrape-endpoint renderer, so the
 endpoint itself is not yet wired. DogStatsD is intentionally not used (no maintained
 GHC 9.10 client).
@@ -340,7 +340,7 @@ failure still degrades off the request path.
 | `OTEL_EXPORTER_OTLP_PROTOCOL` | `http/protobuf` (the only transport built; gRPC/`grapesy` flag is off). |
 | `OTEL_TRACES_SAMPLER` / `…_ARG` | SDK sampler — default always-on; ratio lever for non-Datadog backends. |
 | `OTEL_EXPORTER_OTLP_HEADERS` | Out-of-band auth for a remote collector/Agent (read by the SDK, never by Écluse). |
-| `OTEL_METRICS_EXPORTER` | `otlp` (default). `prometheus` is recognised but the scrape endpoint is **deferred** (#288). |
+| `OTEL_METRICS_EXPORTER` | `otlp` (default). `prometheus` is recognised but the scrape endpoint is **deferred**. |
 | `PROXY_LOG_FORMAT` | `json` (one-line JSONL to stdout, default) or `console` (human-readable, dev). |
 
 ## Verifying it — smoke-test plan

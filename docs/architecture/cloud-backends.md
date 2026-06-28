@@ -311,9 +311,8 @@ how `ecluse-smoke` is already treated.
 
 Azure is the **worked third backend**: it slots into the same two handles with **no
 structural change**, but it sits **last in the priority queue** — after AWS and GCP —
-because its queue side carries a risk sharper than GCP's. The roadmap reflects this:
-Azure is milestone **M10**, the furthest-out track (slices S47–S50; see the
-[delivery plan](../../planning/delivery-plan.md)).
+because its queue side carries a risk sharper than GCP's. Azure is therefore the
+**furthest-out track** — designed for, but sequenced after AWS and GCP.
 
 Its arms split cleanly into *easy* and *risky*:
 
@@ -353,6 +352,5 @@ over REST, smoke-tested only, vs Storage Queues on Azurite) — exactly as GCP i
 on the Pub/Sub spike (see
 [Haskell client maturity](#haskell-client-maturity--a-design-risk-to-retire-early)
 for the pattern). The credential and registry arms need no spike. Because the queue
-risk is the steepest of the three clouds and AWS + GCP already cover the launch and
-its first fast-follow, Azure is sequenced **last** — M10, the lowest priority in the
-queue.
+risk is the steepest of the three clouds and AWS and GCP already cover the launch and
+the first follow-on, Azure is sequenced **last**, the lowest priority in the queue.

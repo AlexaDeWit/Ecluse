@@ -16,8 +16,8 @@ per-request upstream round-trip and no sharing of the private origin across call
 **Écluse accepts both costs by design** — it is a thin network broker, efficient
 caching is already the upstreams' job, and the gain from a shared *private* cache does
 not justify the re-authorisation machinery it would demand (see
-[Why Écluse never caches the private origin](#why-écluse-never-caches-the-private-origin),
-and [issue #115](https://github.com/AlexaDeWit/Ecluse/issues/115)). Separating the
+[Why Écluse never caches the private origin](#why-écluse-never-caches-the-private-origin)).
+Separating the
 concerns turns "how Écluse handles credentials" into a **per-mount credential
 strategy** — but the strategies differ only in *where authority sits and whose
 credential reaches the upstream*, never in what may be cached.
@@ -41,7 +41,7 @@ the upstream's (or it over-grants), or an edge that becomes the sole authority.
 **Écluse declines that trade.** It is a thin network broker, and efficient caching of
 package metadata and artifacts is already handled well by the upstreams it fronts, so
 the private origin is read **per request** and **never entered into the shared cache**.
-This keeps the [#115](https://github.com/AlexaDeWit/Ecluse/issues/115) cross-client
+This keeps the cross-client
 disclosure hazard (catalogued as
 [threat #9](https://alexadewit.github.io/Ecluse/threat-model.html)) *unrepresentable by
 construction* rather than fenced off by a probe, and keeps hot-path work minimal. Only the anonymous **public-gated** origin is cached
@@ -71,7 +71,7 @@ authorises each request; the public upstream is queried anonymously with the
 caller's credential stripped. The private origin is **fetched per request and never
 entered into the shared cache** (see [Caching](#caching), and
 [the private upstream's metadata is never cached across clients](registry-model.md#the-private-upstreams-metadata-is-never-cached-across-clients)).
-This is what the [walking skeleton](../../planning/delivery-plan.md) ships, and it
+This is the proxy's default behaviour, and it
 is correct regardless of whether the upstream's read authorisation is coarse or
 fine-grained — the upstream re-decides every request.
 
@@ -189,8 +189,7 @@ probe over a shared private cache — the `delegated-cache` design Écluse
 - **A shared private-origin cache is forbidden by construction**, not merely documented
   against: under **no** strategy does the metadata cache admit a private entry — only
   the anonymous public-gated origin is cached, and the private origin is read per
-  request. This makes the
-  [#115](https://github.com/AlexaDeWit/Ecluse/issues/115) cross-client disclosure
+  request. This makes the cross-client disclosure
   hazard *unrepresentable* rather than a discipline.
 - **`service` requires an explicit "the edge authorises callers" assertion** in
   config — it is the strategy that moves authority off the upstream.
@@ -215,7 +214,7 @@ shared cache, under any strategy**; it is read per request:
 - under **`service`**, with Écluse's own workload identity (the edge has already
   authorised the caller).
 
-This *is* the resolution of [#115](https://github.com/AlexaDeWit/Ecluse/issues/115):
+This removes the cross-client disclosure hazard:
 there is no shared private entry to leak across callers — by construction, not by
 discipline. On the **tarball leg** the per-request read is the credentialed
 [conventional read](registry-model.md#serving-a-tarball-a-conventional-private-read-an-honoured-public-location)

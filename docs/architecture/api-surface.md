@@ -94,10 +94,8 @@ must not be mistaken for a proof that the filtered document is internally cohere
 ## Contract drift controls
 
 > **Planned enhancement.** This is the intended end-state for keeping the manifest
-> honest; it lands *after* the manifest itself (tracked by
-> [S35](../../planning/slices/S35-openapi-drift-controls.md)) and is **not on the
-> launch critical path**. The "Confidence without a fuzzer" note above is the
-> baseline this hardens.
+> honest; it lands *after* the manifest itself. The "Confidence without a fuzzer"
+> note above is the baseline this hardens.
 
 The manifest is only worth publishing if it cannot quietly diverge from the server
 it describes. Drift has **two independent axes**, and they need different mechanisms — no
@@ -113,8 +111,8 @@ single library covers both for a raw-WAI server (the trade we accept for
   autodocodec representation, so it carries a **hand-written partial `ToSchema`**.
   There, "drift" means "did we drop a field we promised to relay," which only the
   **lossless round-trip property test** can answer (see
-  [Packument merge](registry-model.md#packument-merge-across-upstreams) and the S06
-  wire round-trip) — a schema validator cannot.
+  [Packument merge](registry-model.md#packument-merge-across-upstreams) and the wire
+  round-trip property) — a schema validator cannot.
 - **Backstop everywhere:** `Data.OpenApi.Schema.Validation.validateToJSON` as a
   `hedgehog` property per owned type (generate → encode → validate against the
   schema). This catches schema-vs-serialization drift *regardless of how the schema
