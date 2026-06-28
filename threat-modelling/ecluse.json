@@ -983,7 +983,19 @@
               "isPublicNetwork": true,
               "hasOpenThreats": false,
               "isTrustBoundary": false,
-              "threats": []
+              "threats": [
+                {
+                  "number": 14,
+                  "status": "Mitigated",
+                  "severity": "Low",
+                  "title": "SSRF via the worker back-fill fetch (a blind sink)",
+                  "type": "Elevation of privilege",
+                  "description": "The mirror worker fetches the approved artifact from an upstream-declared dist.tarball location to replicate it. Like the serve-path public fetch this is untrusted egress to an attacker-influenceable target, so in principle it carries the same SSRF surface — a dist.tarball steered at an internal or cloud-metadata address.",
+                  "mitigation": "The fetch runs on the same guarded data-plane manager as the serve path (the internal-range block against the connection's resolved IP), and the location's host was admitted by the outbound allow-list at serve time before the job was enqueued. Decisively, it is a blind sink: the bytes are verified against dist.integrity and published, never returned to a caller, and an internal or metadata response cannot match the asserted digest, so the job fails closed (dropped) rather than exfiltrating — its impact is well below the serve-path fetch. The residual is the shared anonymous-egress hardening (pin the resolved IP into the connector against a rebinding race, widened here by the enqueue-to-fetch async gap, and re-apply the allow-list across redirect hops), the same control that closes the serve path.",
+                  "modelType": "STRIDE",
+                  "id": "0ec10e5e-0000-4000-8000-00000000010e"
+                }
+              ]
             },
             "id": "0ec10e5e-0000-4000-8000-000000000047",
             "labels": [
@@ -1273,6 +1285,6 @@
     ],
     "diagramTop": 1,
     "reviewer": "",
-    "threatTop": 13
+    "threatTop": 14
   }
 }
