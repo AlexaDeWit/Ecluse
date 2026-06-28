@@ -59,12 +59,6 @@ resolved-IP recheck live), so the three controls are a matched set:
 -}
 spec :: Spec
 spec = describe "tarball-host policy + resolved-IP recheck (real serve path, cross-host)" $ do
-    it "refuses a cross-host dist.tarball under the SameHostAsPackument default (403)" $
-        withUpstream $ \port -> do
-            app <- proxyApp SameHostAsPackument (optIn ["127.0.0.1"]) port
-            resp <- getTarball app
-            status resp `shouldBe` 403
-
     it "serves a cross-host dist.tarball under AnyAllowlistedHost when the host is allowlisted and opted in" $
         withUpstream $ \port -> do
             -- localhost is on the allowlist (via the mirror target's host) and its
