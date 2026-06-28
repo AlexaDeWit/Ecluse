@@ -5,7 +5,7 @@ name: Cache cleanup
 # The CI workflow already does the heavy lifting by SAVING caches only on main
 # (PRs restore but never write — see setup-toolchain), so the day-to-day churn of
 # branch-scoped copies is gone. This workflow is the housekeeping backstop that
-# handles what that policy can't, on a schedule:
+# handles what that policy can't:
 #
 #   * stragglers on non-main refs — anything a non-main run left behind (e.g. an
 #     entry from a deleted/after-merge branch); and
@@ -13,18 +13,44 @@ name: Cache cleanup
 #     cabal.project / cabal.project.freeze change), the previous epoch's
 #     immutable-keyed cabal-store / dist-* / nix entries are dead weight.
 #
+# It runs on two triggers. The primary one is `workflow_run` on CI's completion on
+# main: each dependency bump mints a fresh ~1 GB nix epoch (+ matching doc / cabal /
+# dist epochs), and several bumps can land in a day, so a once-daily sweep lets
+# superseded epochs stack against the 10 GB ceiling — risking eviction of the very
+# entry every PR restores. Reaping right after each main run that may have written a
+# new epoch holds the cache steady. The daily `schedule` stays as an idle heartbeat
+# and the only reaper of off-main stragglers (those are tied to no main run).
+#
+# Why `workflow_run` rather than a prune job inside ci.yml: deleting caches needs
+# `actions: write`, and ci.yml — the always-on PR workflow — must keep its minimal
+# `contents: read` token. A `workflow_run` handler runs this file's DEFAULT-BRANCH
+# version with this workflow's own permissions, so the privileged token stays in this
+# single-purpose workflow and a PR can neither widen ci.yml's token nor alter what
+# runs here. It reads only the triggering run's conclusion and never checks out or
+# executes PR code.
+#
 # It keeps the newest KEEP_PER_PREFIX entries per key prefix on main (current +
 # one fallback for in-flight runs and quick rollback) and deletes the rest. The
 # heavy single-epoch caches keep only KEEP_DOCS instead — the Pages doc-variant
 # caches (`-docs-` prefixes) and the Nix-store closures (`nix-*` prefixes, incl. the
 # docs job's `nix-docs-*` doc closure): they are the biggest entries (~1 GB each),
 # change only on a dependency/flake bump, and each has a single writer, so a second
-# epoch buys little (see prune-caches.sh). Deleting caches needs `actions: write`;
-# everything else is least-privilege.
+# epoch buys little (see prune-caches.sh). Everything else is least-privilege.
 
 on:
+  # Primary: reap right after each CI run finishes on main (see the note above).
+  # The `dangerous-triggers` audit is suppressed deliberately: the workflow_run
+  # hazard it guards against is running untrusted PR code with elevated privileges,
+  # but this handler executes only main's own scripts/prune-caches.sh (no PR
+  # checkout), reads only the triggering run's conclusion, and touches nothing
+  # PR-controlled. See the rationale block above.
+  workflow_run: # zizmor: ignore[dangerous-triggers]
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  # Heartbeat, and the only reaper of off-main stragglers.
   schedule:
-    - cron: "42 3 * * *" # daily, 03:42 UTC (before the 04:17 CI nightly)
+    - cron: "42 3 * * *" # daily, 03:42 UTC
   workflow_dispatch:
 
 concurrency:
