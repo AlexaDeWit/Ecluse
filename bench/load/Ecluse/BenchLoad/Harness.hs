@@ -101,14 +101,26 @@ data LoadKnobs = LoadKnobs
     scenarios serve the real-world corpus, so their payloads come from the captures, not
     from this knob.
     -}
+    , lkCacheMaxEntries :: Int
+    {- ^ Metadata-cache entry bound for the cache-eviction scenario. Set below the working
+    set so the cache cannot hold it all and continually evicts and re-derives; the
+    fits-in-cache baseline scenario instead bounds at the working-set size.
+    -}
+    , lkWorkingSet :: Int
+    {- ^ Number of distinct large packages in the cache-eviction working set (taken from
+    the head of the corpus, heaviest first). The default exceeds the corpus, so the whole
+    corpus is the working set unless narrowed.
+    -}
     }
     deriving stock (Eq, Show)
 
 {- | The default operating point: 50 concurrent clients for 30 seconds against an
 upstream with a 5 ms injected latency. The packument scenarios serve the real-world
 corpus (their payloads come from the captures); the ~256 KiB payload sizes the worker
-scenario's synthetic artifact. Sane for a shared runner: enough load to saturate the
-proxy without a load the generator itself cannot sustain.
+scenario's synthetic artifact. The cache-eviction scenario bounds the cache at 3 entries
+against the whole-corpus working set (default 64, capped to the corpus), so it evicts.
+Sane for a shared runner: enough load to saturate the proxy without a load the generator
+itself cannot sustain.
 -}
 defaultLoadKnobs :: LoadKnobs
 defaultLoadKnobs =
@@ -117,13 +129,16 @@ defaultLoadKnobs =
         , lkDurationSeconds = 30
         , lkUpstreamLatencyMicros = 5_000
         , lkPayloadBytes = 256 * 1024
+        , lkCacheMaxEntries = 3
+        , lkWorkingSet = 64
         }
 
 {- | Read the load knobs from the environment, each falling back to its
 'defaultLoadKnobs' value: @BENCH_LOAD_CONCURRENCY@, @BENCH_LOAD_DURATION_SECONDS@,
 @BENCH_LOAD_UPSTREAM_LATENCY_MS@ (milliseconds, converted to the microseconds the stub
-delays by), and @BENCH_LOAD_PAYLOAD_BYTES@. A malformed value falls back to the default
-rather than failing, since the knobs only shape an inform-only measurement.
+delays by), @BENCH_LOAD_PAYLOAD_BYTES@, @BENCH_LOAD_CACHE_MAX_ENTRIES@, and
+@BENCH_LOAD_WORKING_SET@. A malformed value falls back to the default rather than
+failing, since the knobs only shape an inform-only measurement.
 -}
 loadKnobsFromEnv :: IO LoadKnobs
 loadKnobsFromEnv = do
@@ -131,12 +146,16 @@ loadKnobsFromEnv = do
     duration <- readEnvInt "BENCH_LOAD_DURATION_SECONDS" (lkDurationSeconds defaultLoadKnobs)
     latencyMs <- readEnvInt "BENCH_LOAD_UPSTREAM_LATENCY_MS" (lkUpstreamLatencyMicros defaultLoadKnobs `div` 1_000)
     payload <- readEnvInt "BENCH_LOAD_PAYLOAD_BYTES" (lkPayloadBytes defaultLoadKnobs)
+    cacheMax <- readEnvInt "BENCH_LOAD_CACHE_MAX_ENTRIES" (lkCacheMaxEntries defaultLoadKnobs)
+    workingSetSize <- readEnvInt "BENCH_LOAD_WORKING_SET" (lkWorkingSet defaultLoadKnobs)
     pure
         LoadKnobs
             { lkConcurrency = max 1 concurrency
             , lkDurationSeconds = max 1 duration
             , lkUpstreamLatencyMicros = max 0 latencyMs * 1_000
             , lkPayloadBytes = max 1 payload
+            , lkCacheMaxEntries = max 1 cacheMax
+            , lkWorkingSet = max 1 workingSetSize
             }
   where
     readEnvInt :: String -> Int -> IO Int
@@ -399,7 +418,11 @@ renderReports knobs ecosystem reports =
             <> show (lkDurationSeconds knobs)
             <> "s · "
             <> fmt1 (fromIntegral (lkUpstreamLatencyMicros knobs) / 1_000)
-            <> " ms injected upstream latency · packument scenarios serve the real-world corpus · ~"
+            <> " ms injected upstream latency · packument scenarios serve the real-world corpus · cache-eviction bound "
+            <> show (lkCacheMaxEntries knobs)
+            <> " entries over a working set of up to "
+            <> show (lkWorkingSet knobs)
+            <> " · ~"
             <> fmtKiB (lkPayloadBytes knobs)
             <> " worker artifact."
         , ""

@@ -3,10 +3,12 @@
 Two sources feed the benches, with distinct jobs:
 
   * a __curated real-world packument corpus__ ('corpus') — a pinned set of real npm
-    captures spanning the small (@is-odd@, @left-pad@) to heavy (@typescript@,
-    @\@types\/node@, an @aws-sdk@-class package) size\/shape spectrum, so the
-    work-per-request figures sample the real distribution of package sizes and shapes
-    rather than one anchor. The captures live under @bench\/corpus\/npm\/@ (plus the
+    captures of substantial, many-version packages spanning the medium (@lodash@,
+    @request@) to heavy (@typescript@, @\@types\/node@, an @aws-sdk@-class package)
+    size\/shape spectrum, so the work-per-request figures sample the real distribution
+    of large package sizes and shapes rather than one anchor (trivial few-version
+    packages stress nothing, so they are deliberately excluded). The captures live under
+    @bench\/corpus\/npm\/@ (plus the
     pre-existing untrimmed @express@ anchor reused in place under
     @core\/test\/unit\/fixtures\/npm\/@); they are sourced from pinned registry
     captures kept fresh by Renovate and regenerated with @make gen-bench-corpus@ (see
@@ -93,7 +95,7 @@ import Ecluse.Test.Package (validSha1, validSha512Sri)
 labelling the rendered benchmark groups so a reader can see where on the distribution
 a figure sits.
 -}
-data CorpusTier = Small | Medium | Large | Heavy
+data CorpusTier = Medium | Large | Heavy
     deriving stock (Eq, Show)
 
 {- | One curated real-world packument capture: the name the projection validates the
@@ -124,14 +126,12 @@ in place and shared with the unit suite.
 -}
 corpus :: [CorpusEntry]
 corpus =
-    [ entry Small "is-odd" (unscoped "is-odd") (corpusRoot <> "is-odd.full.json")
-    , entry Small "left-pad" (unscoped "left-pad") (corpusRoot <> "left-pad.full.json")
-    , entry Medium "lodash" (unscoped "lodash") (corpusRoot <> "lodash.full.json")
+    [ entry Medium "lodash" (unscoped "lodash") (corpusRoot <> "lodash.full.json")
     , entry Medium "request" (unscoped "request") (corpusRoot <> "request.full.json")
     , entry Large "@babel/core" (scoped "babel" "core") (corpusRoot <> "babel-core.full.json")
     , entry Large "express" (unscoped "express") "core/test/unit/fixtures/npm/express.full.json"
-    , entry Heavy "react" (unscoped "react") (corpusRoot <> "react.full.json")
-    , entry Heavy "typescript" (unscoped "typescript") (corpusRoot <> "typescript.full.json")
+    , entry Large "react" (unscoped "react") (corpusRoot <> "react.full.json")
+    , entry Large "typescript" (unscoped "typescript") (corpusRoot <> "typescript.full.json")
     , entry Heavy "@aws-sdk/client-s3" (scoped "aws-sdk" "client-s3") (corpusRoot <> "aws-sdk-client-s3.full.json")
     , entry Heavy "webpack" (unscoped "webpack") (corpusRoot <> "webpack.full.json")
     , entry Heavy "@types/node" (scoped "types" "node") (corpusRoot <> "types-node.full.json")
@@ -186,7 +186,6 @@ entryName :: LoadedEntry -> String
 entryName (ce, _, _) = toString (ceLabel ce) <> " (" <> tierName (ceTier ce) <> ")"
   where
     tierName = \case
-        Small -> "small"
         Medium -> "medium"
         Large -> "large"
         Heavy -> "heavy"
