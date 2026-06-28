@@ -87,6 +87,7 @@ module Ecluse.Core.Registry.Npm.Project (
     parsePackageInfoFromValue,
     parseVersionDetails,
     parseVersionList,
+    projectVersionEntry,
 
     -- * Name validation
     Projection (..),
@@ -277,6 +278,25 @@ parseVersionDetails resp version = do
         Just details -> Right details
         Nothing ->
             Left (ParseError ("version not present in packument: " <> renderVersion version))
+
+{- | Project a __single version object__ — one entry of a packument's @versions@ map,
+as a raw 'Value' — into its 'PackageDetails', given the requested package name, the
+version key it sits under, and its publish time (the packument's @time[version]@, if
+present). 'Nothing' when the version object does not decode in a required\/security-
+decisive field, exactly the per-version drop the full packument projection applies.
+
+This is the per-version projection step factored out so a __selective__ single-version
+decode (see "Ecluse.Core.Registry.Npm.SelectiveDecode"), which extracts only the one
+version object and its publish time from the packument bytes, projects it through the
+__same__ code the whole-packument path runs over every version — so the resulting
+'PackageDetails' is identical to @'Map.lookup'@-ing the version out of a full
+'parsePackageInfo'. The element-wise leniency is identical too: a version object missing
+its @dist@\/@tarball@ (or otherwise unprojectable) yields 'Nothing', i.e. a genuine
+absence, never a half-built snapshot.
+-}
+projectVersionEntry :: PackageName -> Version -> Maybe UTCTime -> Value -> Maybe PackageDetails
+projectVersionEntry name version publishedAt value =
+    projectDetails name version publishedAt <$> parseMaybe parseJSON value
 
 {- | Extract the list of available versions from a fetched metadata response, in
 the packument's @versions@ key order. Fails with a 'ParseError' only if the body

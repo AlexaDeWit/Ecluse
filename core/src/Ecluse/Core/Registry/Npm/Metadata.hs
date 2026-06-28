@@ -4,31 +4,50 @@ packument and project it into the domain manifest, reporting every failure as a 
 
 npm satisfies both serve-path needs from the /same/ full-packument endpoint: the
 publish-age rules require the packument's @time@ map, which npm exposes only in the
-full form, so even the single-version need fetches the full bytes. This module owns
-the npm side of 'Ecluse.Core.Registry.Metadata.fetchFullManifest' — the fetch and the
-projection; the cache, metrics, and single-version selection are wired around it by
-the serve layer ("Ecluse.Core.Server.Metadata"), which is where the cross-cutting
-caching policy belongs.
+full form, so even the single-version need fetches the full bytes. This module owns the
+npm side of both serve-path operations — the fetch and the projection — while the cache,
+metrics, and single-version cache topology are wired around them by the serve layer
+("Ecluse.Core.Server.Metadata"), which is where the cross-cutting caching policy belongs:
 
-The projection is the same sequence the serve path has always applied to a fetched
-packument — decode, bound the nesting depth, project and validate the self-reported
-name, bound the version count — re-expressed as a total 'Either' so the serve path
-maps each cause onto a response rather than catching a typed throw. Keeping the
-current full-decode behaviour is deliberate: a selective single-version parse is a
-later optimization the stable boundary admits without disturbing this projection.
+  * 'fetchNpmManifest' \/ 'projectNpmManifest' back the full-manifest operation. The
+    projection is the sequence the serve path has always applied to a fetched packument —
+    decode, bound the nesting depth, project and validate the self-reported name, bound the
+    version count — re-expressed as a total 'Either' so the serve path maps each cause onto
+    a response rather than catching a typed throw.
+
+  * 'fetchNpmVersion' \/ 'projectNpmVersion' back the single-version operation. The full
+    bytes are still fetched (npm carries @time@ only in the full form), but they are parsed
+    __selectively__ ("Ecluse.Core.Registry.Npm.SelectiveDecode"): only the requested
+    version's object and @time@ entry are materialised, the others skipped unallocated, so
+    a cold tarball gate no longer pays a whole-packument decode to consult one version. The
+    selected version is projected through the /same/ per-version code the full path runs, so
+    its 'Ecluse.Core.Package.PackageDetails' is identical to selecting it out of a full
+    projection — the optimization the stable boundary was always meant to admit.
 -}
 module Ecluse.Core.Registry.Npm.Metadata (
     -- * npm full-manifest fetch
     fetchNpmManifest,
 
+    -- * npm single-version fetch
+    fetchNpmVersion,
+
     -- * Pure projection
     projectNpmManifest,
+    projectNpmVersion,
 ) where
 
-import Data.Aeson (Value, eitherDecodeStrict)
+import Data.Aeson (Value, eitherDecodeStrict, parseJSON)
+import Data.Aeson.Types (parseEither, parseMaybe)
+import Data.Time (UTCTime)
 import UnliftIO.Exception (handle)
 
-import Ecluse.Core.Package (PackageInfo, PackageName)
+import Ecluse.Core.Ecosystem (Ecosystem (Npm))
+import Ecluse.Core.Package (
+    PackageDetails,
+    PackageInfo,
+    PackageName,
+    renderPackageName,
+ )
 import Ecluse.Core.Registry (RegistryResponse (responseBody))
 import Ecluse.Core.Registry.Metadata (
     MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable),
@@ -43,8 +62,23 @@ import Ecluse.Core.Registry.Npm (
 import Ecluse.Core.Registry.Npm.Project (
     Projection (NameMismatch, Projected),
     parsePackageInfoFromValue,
+    projectName,
+    projectVersionEntry,
  )
-import Ecluse.Core.Security (Limits, checkNestingDepth, checkVersionCount)
+import Ecluse.Core.Registry.Npm.SelectiveDecode (
+    SelectedVersion (svName, svTime, svVersion, svVersionCount),
+    SelectiveError (SelectiveTooDeeplyNested, SelectiveUndecodable),
+    selectVersionFromPackument,
+ )
+import Ecluse.Core.Security (
+    LimitError (TooDeeplyNested, TooManyVersions),
+    Limits,
+    checkNestingDepth,
+    checkVersionCount,
+    maxNestingDepth,
+    maxVersionCount,
+ )
+import Ecluse.Core.Version (Version, mkVersion, renderVersion)
 
 {- | Fetch a package's full packument and project it into @(manifest, raw document)@,
 or the typed 'MetadataError' for why it could not.
@@ -83,3 +117,86 @@ projectNpmManifest limits name body = do
         Right (Projected projected) -> Right projected
     boundedInfo <- first MetadataBoundExceeded (checkVersionCount limits info)
     pure (boundedInfo, bounded)
+
+{- | Fetch a package's full packument and project __only the requested version__ into its
+'PackageDetails', or the typed 'MetadataError' for why it could not — the cheap counterpart
+to 'fetchNpmManifest' for the single-version serve operation.
+
+npm carries the @time@ map only in the full document, so the __full bytes are still
+fetched__ (bounded against the config's budget, exactly as 'fetchNpmManifest'); the win is
+that they are parsed __selectively__ ('projectNpmVersion'), materialising the one requested
+version rather than every version. A 'Nothing' is a version genuinely absent from a sound
+document (a forwarded miss); a 'MetadataError' is metadata that could not be obtained at all.
+A transport fault is left to throw, as 'fetchNpmManifest'.
+-}
+fetchNpmVersion :: NpmClientConfig -> PackageName -> Version -> IO (Either MetadataError (Maybe PackageDetails))
+fetchNpmVersion config name version =
+    handle (\(ResponseBoundExceeded err) -> pure (Left (MetadataBoundExceeded err))) $ do
+        response <- fetchMetadataForm config Full noValidators name
+        pure (projectNpmVersion (npmLimits config) name version (responseBody response))
+
+{- | Project a fetched packument's bytes into __one version's__ 'PackageDetails' (or the
+typed 'MetadataError'), without decoding the other versions. Pure and total.
+
+The outcome is the same the whole-document path would reach for that one version, computed
+selectively: 'Ecluse.Core.Registry.Npm.SelectiveDecode.selectVersionFromPackument' walks the
+token stream — depth-bounding every value (the 'maxNestingDepth' ceiling
+'projectNpmManifest' applies through 'checkNestingDepth') and reporting malformed JSON as
+'MetadataUndecodable' — and materialises only the document @name@, the requested version's
+object, and its @time@ entry. Those are then validated and projected exactly as
+'projectNpmManifest' would:
+
+  * the self-reported @name@ is validated against the request — an absent\/undecodable name
+    is 'MetadataUndecodable', a self-reported /different/ name is 'MetadataNameMismatch' (the
+    anti-shadowing distinction);
+  * the @versions@ count is bounded against 'maxVersionCount' (the raw entry count — a
+    fail-closed defence-in-depth backstop on this path, which evaluates only the one version
+    regardless, so it never needs the projected count the full path bounds);
+  * the requested version's object is projected through
+    'Ecluse.Core.Registry.Npm.Project.projectVersionEntry' — the same per-version projection
+    the full path runs — so a present version yields a 'PackageDetails' identical to
+    @'Data.Map.Strict.lookup'@-ing it out of a full 'projectNpmManifest', and an
+    absent\/unprojectable version yields 'Nothing'.
+-}
+projectNpmVersion :: Limits -> PackageName -> Version -> ByteString -> Either MetadataError (Maybe PackageDetails)
+projectNpmVersion limits name version body = do
+    selected <- first (selectiveError limits) (selectVersionFromPackument (maxNestingDepth limits) version body)
+    -- The self-reported name is the validation authority (anti-shadowing), checked before
+    -- the version-count backstop — the same order 'projectNpmManifest' validates the name
+    -- before bounding the count.
+    reported <- validateName (svName selected)
+    when (reported /= name) (Left (MetadataNameMismatch (renderPackageName reported)))
+    when
+        (svVersionCount selected > maxVersionCount limits)
+        (Left (MetadataBoundExceeded (TooManyVersions (svVersionCount selected) (maxVersionCount limits))))
+    publishedAt <- parsePublishTime (svTime selected)
+    -- 'mkVersion' over the requested version's rendered key matches the whole-document path,
+    -- which keys 'projectVersions' by that same string and so projects the version under it.
+    pure (svVersion selected >>= projectVersionEntry name (mkVersion Npm (renderVersion version)) publishedAt)
+  where
+    -- The document's self-reported name, validated as the whole-document decode does: an
+    -- absent name defaults to the empty string and so fails 'projectName' (undecodable), a
+    -- present non-string fails the @Text@ decode (undecodable), and a well-formed name is
+    -- the 'PackageName' the request is matched against.
+    validateName :: Maybe Value -> Either MetadataError PackageName
+    validateName = \case
+        Nothing -> Left MetadataUndecodable
+        Just nameValue -> case parseMaybe parseJSON nameValue of
+            Nothing -> Left MetadataUndecodable
+            Just raw -> first (const MetadataUndecodable) (projectName raw)
+
+    -- The requested version's publish stamp: absent is no stamp ('Nothing'); a present
+    -- but un-decodable stamp fails the whole document for the full path (it decodes @time@
+    -- as @Map Text UTCTime@), so it is 'MetadataUndecodable' here too.
+    parsePublishTime :: Maybe Value -> Either MetadataError (Maybe UTCTime)
+    parsePublishTime = \case
+        Nothing -> Right Nothing
+        Just timeValue -> first (const MetadataUndecodable) (Just <$> parseEither parseJSON timeValue)
+
+-- Map a selective-decode refusal onto the 'MetadataError' the whole-document path raises
+-- for the same cause: malformed\/non-object bytes are 'MetadataUndecodable', a depth breach
+-- is the 'maxNestingDepth' bound 'checkNestingDepth' reports.
+selectiveError :: Limits -> SelectiveError -> MetadataError
+selectiveError limits = \case
+    SelectiveUndecodable -> MetadataUndecodable
+    SelectiveTooDeeplyNested -> MetadataBoundExceeded (TooDeeplyNested (maxNestingDepth limits))

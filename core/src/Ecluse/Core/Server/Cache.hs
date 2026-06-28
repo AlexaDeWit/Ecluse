@@ -67,6 +67,31 @@ Two properties the @cache@ library does not provide on its own are layered here:
   its in-flight marker, so a caller arriving in the instant the fetch returns still
   finds either the store entry or the marker (never a gap) and never re-leads a
   redundant fetch.
+
+== Two coherent stores: the full packument and one version
+
+This handle owns __two__ stores of the same shape (the TTL + size-bound + single-flight
+machinery, 'SingleFlight', is shared between them):
+
+  * the __full-packument__ store ('resolveMetadata' \/ 'cachedMetadata'), keyed by
+    @(source, package)@, holding the 'CacheEntry' described above; and
+
+  * a __single-version__ store ('resolveVersion' \/ 'cachedVersion'), keyed by
+    @(source, package, version)__, holding just one version's
+    'Ecluse.Core.Package.PackageDetails' (or its determined absence, a cached
+    'Nothing') — the cold tarball gate's selectively-parsed result.
+
+They are __isolated on writes__: a single-version resolution caches under its own key and
+__never writes back__ to the full-packument store, so a cold tarball gate cannot
+materialise a whole packument into the shared full cache (the residency the single-version
+path exists to avoid). The serve path's single-version read consults the warm
+full-packument store __read-only__ first (a packument @GET@ followed by its tarball gate
+still collapses to one upstream call), and only falls back to leading its own
+selective fetch into the version store when the full entry is cold — so the version store
+holds entries for versions whose packument was never fetched in full, sized to the same
+short TTL and bound. The single-version store is not yet separately metered (the
+@ecluse.metadata_cache.*@ instruments stay about the full-packument store); that is a
+noted follow-up.
 -}
 module Ecluse.Core.Server.Cache (
     -- * Configuration
@@ -86,6 +111,11 @@ module Ecluse.Core.Server.Cache (
     resolveMetadataWith,
     cachedMetadata,
     cacheSize,
+
+    -- * Single-version resolution
+    resolveVersion,
+    resolveVersionWith,
+    cachedVersion,
 ) where
 
 import Data.Aeson (Value)
@@ -99,6 +129,7 @@ import UnliftIO.Exception (mask, throwIO)
 
 import Ecluse.Core.InFlight (guardInFlight)
 import Ecluse.Core.Package (
+    PackageDetails,
     PackageInfo,
     PackageName,
     pkgCanonical,
@@ -108,6 +139,7 @@ import Ecluse.Core.Package (
  )
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort, mpCacheEntries, mpCacheRequest)
+import Ecluse.Core.Version (Version, renderVersion)
 
 -- ── configuration ────────────────────────────────────────────────────────────
 
@@ -181,50 +213,86 @@ newtype CacheKey = CacheKey Text
     deriving stock (Eq, Ord, Show)
     deriving newtype (Hashable)
 
-{- | Project a 'Source' and a 'PackageName' to their cache key (the source's base URL
-joined with the package's identity, not its display form).
+{- The @(source, package)@ identity rendered to a stable 'Text': the source's base URL
+joined with the package's identity (not its display form). The shared prefix of both
+cache keys — the full-packument key is exactly this, the single-version key appends the
+version — so the two stores partition on the same source\/package identity. -}
+keyText :: Source -> PackageName -> Text
+keyText (Source source) name =
+    source
+        <> "\x1f"
+        <> show (pkgEcosystem name)
+        <> "\x1f"
+        <> maybe "" renderScope (pkgNamespace name)
+        <> "\x1f"
+        <> TS.toText (pkgCanonical name)
+
+{- | Project a 'Source' and a 'PackageName' to their full-packument cache key (the
+source's base URL joined with the package's identity, not its display form).
 -}
 cacheKey :: Source -> PackageName -> CacheKey
-cacheKey (Source source) name =
-    CacheKey
-        ( source
-            <> "\x1f"
-            <> show (pkgEcosystem name)
-            <> "\x1f"
-            <> maybe "" renderScope (pkgNamespace name)
-            <> "\x1f"
-            <> TS.toText (pkgCanonical name)
-        )
+cacheKey source name = CacheKey (keyText source name)
 
-{- | The metadata-cache handle: the TTL store, the size bound, and the in-flight
-map that gives single-flight. Opaque — built with 'newMetadataCache' and reached
-only through the accessors. Lives in the composition root (one per process), so every
-request shares the same cache and its connection-collapsing.
+{- | The key a single-version entry is cached under: the @(source, package)@ identity
+'cacheKey' uses, with the rendered 'Version' appended — so distinct versions of one
+package hold distinct entries, and the version store partitions on the same source as the
+full store.
 -}
-data MetadataCache = MetadataCache
-    { mcStore :: Cache CacheKey CacheEntry
+newtype VersionKey = VersionKey Text
+    deriving stock (Eq, Ord, Show)
+    deriving newtype (Hashable)
+
+versionKey :: Source -> PackageName -> Version -> VersionKey
+versionKey source name version = VersionKey (keyText source name <> "\x1f" <> renderVersion version)
+
+{- | One TTL- and STM-backed store with the size bound and the in-flight map that gives
+single-flight — the shape both the full-packument and single-version caches take, factored
+so the resolution machinery ('resolveSingleFlight') is written once over either.
+-}
+data SingleFlight k v = SingleFlight
+    { sfStore :: Cache k v
     -- ^ The TTL- and STM-backed store (the @cache@ library).
-    , mcMaxEntries :: Int
+    , sfMaxEntries :: Int
     -- ^ The entry-count bound enforced on insert.
-    , mcInFlight :: TVar (Map CacheKey (TMVar (Either SomeException CacheEntry)))
+    , sfInFlight :: TVar (Map k (TMVar (Either SomeException v)))
     {- ^ Entries currently being fetched, so concurrent misses coalesce onto one
     fetch rather than each launching their own.
     -}
     }
 
-{- | Build a metadata cache from its configuration. The TTL is converted to the
-@cache@ library's monotonic 'TimeSpec'; the in-flight map starts empty.
--}
-newMetadataCache :: CacheConfig -> IO MetadataCache
-newMetadataCache cfg = do
+-- Build a 'SingleFlight' store from the cache configuration. The TTL is converted to the
+-- @cache@ library's monotonic 'TimeSpec'; the in-flight map starts empty.
+newSingleFlight :: CacheConfig -> IO (SingleFlight k v)
+newSingleFlight cfg = do
     store <- Cache.newCache (Just (toTimeSpec (cacheTtl cfg)))
     inFlight <- newTVarIO Map.empty
     pure
-        MetadataCache
-            { mcStore = store
-            , mcMaxEntries = max 1 (cacheMaxEntries cfg)
-            , mcInFlight = inFlight
+        SingleFlight
+            { sfStore = store
+            , sfMaxEntries = max 1 (cacheMaxEntries cfg)
+            , sfInFlight = inFlight
             }
+
+{- | The metadata-cache handle: the two single-flight stores (the full-packument cache and
+the single-version cache). Opaque — built with 'newMetadataCache' and reached only through
+the accessors. Lives in the composition root (one per process), so every request shares the
+same caches and their connection-collapsing.
+-}
+data MetadataCache = MetadataCache
+    { mcFull :: SingleFlight CacheKey CacheEntry
+    -- ^ The full-packument store, keyed by @(source, package)@.
+    , mcVersion :: SingleFlight VersionKey (Maybe PackageDetails)
+    {- ^ The single-version store, keyed by @(source, package, version)@, holding one
+    version's 'PackageDetails' (or its determined absence) — written only by the
+    single-version path, never the full path.
+    -}
+    }
+
+{- | Build a metadata cache from its configuration: the full-packument store and the
+single-version store, each over the same TTL and size bound.
+-}
+newMetadataCache :: CacheConfig -> IO MetadataCache
+newMetadataCache cfg = MetadataCache <$> newSingleFlight cfg <*> newSingleFlight cfg
 
 -- ── resolution ───────────────────────────────────────────────────────────────
 
@@ -273,72 +341,111 @@ window and cancel it there, exercising the orphan-window guarantee; production a
 passes @pure ()@ via 'resolveMetadata'.
 -}
 resolveMetadataWith :: IO () -> MetricsPort -> MetadataCache -> Source -> PackageName -> IO CacheEntry -> IO CacheEntry
-resolveMetadataWith afterClaim metrics cache source name fetch = mask $ \restore -> do
+resolveMetadataWith afterClaim metrics cache source name =
+    resolveSingleFlight
+        afterClaim
+        (mpCacheRequest metrics)
+        (mpCacheEntries metrics =<< Cache.size (sfStore (mcFull cache)))
+        (mcFull cache)
+        (cacheKey source name)
+
+{- | Resolve __one version's__ 'PackageDetails' (or its determined absence) from the
+single-version cache, leading a selective fetch on a miss and collapsing concurrent misses
+exactly as 'resolveMetadata' does for the full packument. The cached value is the
+@'Maybe' 'PackageDetails'@ the fetch yields, so a version determined __absent__ over sound
+metadata is cached as 'Nothing' (a negative entry) and re-served without a re-fetch within
+the TTL.
+
+This writes to the single-version store only — never the full-packument store — so a cold
+tarball gate's selective parse cannot materialise a whole packument into the shared full
+cache. Unlike 'resolveMetadata', the single-version store is not separately metered (a
+noted follow-up), so this records no cache counter.
+-}
+resolveVersion :: MetadataCache -> Source -> PackageName -> Version -> IO (Maybe PackageDetails) -> IO (Maybe PackageDetails)
+resolveVersion = resolveVersionWith (pure ())
+
+{- | As 'resolveVersion', with the single-flight claim → fetch-runner handoff hook
+'resolveMetadataWith' exposes, for the same orphan-window test (production passes @pure ()@
+via 'resolveVersion').
+-}
+resolveVersionWith :: IO () -> MetadataCache -> Source -> PackageName -> Version -> IO (Maybe PackageDetails) -> IO (Maybe PackageDetails)
+resolveVersionWith afterClaim cache source name version =
+    resolveSingleFlight afterClaim (const pass) pass (mcVersion cache) (versionKey source name version)
+
+{- The single-flight resolution shared by the full-packument and single-version caches: a
+fresh hit short-circuits; otherwise the caller leads one fetch (installing an in-flight
+marker) or follows an in-flight one. @recordRequest@ records the hit\/miss counter (or
+ignores it) and @recordInsert@ refreshes the occupancy gauge after a leader insert (or
+ignores it), so each store wires its own telemetry without the resolution logic knowing
+which it serves.
+
+On a miss the fetch runs exactly once even under concurrent callers; a successful fetch is
+cached (subject to the TTL and size bound), a failed fetch caches __nothing__ and is
+re-raised to every waiter. A claimed slot is __always eventually filled and de-registered__
+even under an async exception in the claim → runner window: the claim commits under a
+'mask' and the run is handed straight to 'Ecluse.Core.InFlight.guardInFlight', which frees
+the slot on every exit and hands the orphaning error to any waiting follower (closing the
+single-flight orphan window). A follower's own wait stays interruptible. The result is
+inserted __before__ the slot is de-registered, so a caller arriving the instant the fetch
+returns becomes a follower rather than re-leading a redundant fetch. -}
+resolveSingleFlight ::
+    (Hashable k, Ord k) =>
+    IO () ->
+    (Metric.CacheResult -> IO ()) ->
+    IO () ->
+    SingleFlight k v ->
+    k ->
+    IO v ->
+    IO v
+resolveSingleFlight afterClaim recordRequest recordInsert sf key fetch = mask $ \restore -> do
     nowT <- getTime Monotonic
-    -- One atomic decision point: a fresh hit short-circuits; otherwise become the
-    -- leader (install an empty marker) or a follower (take the existing one). The
-    -- decision and — for a leader — the run that owns the freshly claimed marker
-    -- are under one 'mask', so no interruptible point sits between claiming the slot
-    -- and handing the run to 'guardInFlight', which always fills and de-registers it.
-    -- A 'Hit' or 'Follow' claims nothing, so its wait runs under @restore@ and stays
-    -- interruptible.
+    -- One atomic decision point under the enclosing 'mask': a 'Hit' or 'Follow' claims
+    -- nothing (its wait runs under @restore@, interruptible); a 'Lead' installs the marker
+    -- and hands the run to 'guardInFlight' with no interruptible point between.
     decision <- atomically (decide nowT)
     case decision of
         Hit entry -> do
-            mpCacheRequest metrics Metric.Hit
+            recordRequest Metric.Hit
             pure entry
         Follow marker -> do
             -- A follower coalesced onto an in-flight fetch is a miss for this caller
             -- (no fresh entry was present), exactly as the leader's miss is.
-            mpCacheRequest metrics Metric.Miss
+            recordRequest Metric.Miss
             restore (either throwIO pure =<< atomically (readTMVar marker))
         Lead marker -> do
-            mpCacheRequest metrics Metric.Miss
-            -- Lead the fetch. Only the fetch runs under @restore@ (cancellable); the
-            -- publish + store insert run under the enclosing 'mask', so the tail is
-            -- uninterruptible — a successful fetch is always delivered to followers and
-            -- inserted even if a cancel lands after it returns. 'guardInFlight' is
-            -- therefore passed 'id' (not @restore@); it still frees the slot on every
-            -- exit and, on a failure before the marker is filled, hands the error to
-            -- followers via 'orphan'. The result is inserted __before__ the slot is
-            -- de-registered, so a late caller in 'decide' becomes a follower on the
-            -- marker rather than finding neither store hit nor in-flight slot and
-            -- re-leading a redundant fetch — so "collapse to one upstream call" holds
-            -- even for a caller arriving the instant the fetch returns. A failed fetch
-            -- never reaches the fill or insert, so nothing is cached and the slot is
-            -- freed for a later retry.
+            recordRequest Metric.Miss
+            -- Only the fetch runs under @restore@ (cancellable); the publish + insert run
+            -- under the enclosing 'mask' so a cancel after the fetch returns still delivers
+            -- and inserts. 'guardInFlight' is passed 'id'; it frees the slot on every exit
+            -- and, on a failure before the marker is filled, hands the error to followers
+            -- via 'orphan'. The insert precedes de-registration, so "collapse to one fetch"
+            -- holds even for a caller arriving the instant the fetch returns.
             entry <- guardInFlight id (orphan marker) (atomically deregister) $ do
                 fetched <- restore (afterClaim >> fetch)
                 atomically (putTMVar marker (Right fetched))
-                insertBounded cache key fetched
+                insertBounded sf key fetched
                 pure fetched
-            -- The leader inserted, so the occupancy gauge is refreshed off the
-            -- post-insert size (a follower never inserts, so it never re-records).
-            mpCacheEntries metrics =<< cacheSize cache
+            -- The leader inserted, so refresh the occupancy gauge (a follower never does).
+            recordInsert
             pure entry
   where
-    key :: CacheKey
-    key = cacheKey source name
-
-    decide :: TimeSpec -> STM Decision
     decide nowT = do
-        hit <- Cache.lookupSTM False key (mcStore cache) nowT
+        hit <- Cache.lookupSTM False key (sfStore sf) nowT
         case hit of
             Just entry -> pure (Hit entry)
             Nothing -> do
-                inFlight <- readTVar (mcInFlight cache)
+                inFlight <- readTVar (sfInFlight sf)
                 case Map.lookup key inFlight of
                     Just marker -> pure (Follow marker)
                     Nothing -> do
                         marker <- newEmptyTMVar
-                        writeTVar (mcInFlight cache) (Map.insert key marker inFlight)
+                        writeTVar (sfInFlight sf) (Map.insert key marker inFlight)
                         pure (Lead marker)
 
-    -- The orphan hand-off: a failure (synchronous or asynchronous) before the marker
-    -- was filled. Fill it with the error so blocked followers unblock with it rather
-    -- than parking forever; 'guardInFlight' frees the slot separately. Fills only when
-    -- empty, so a failure after a successful publish never clobbers the result.
-    orphan :: TMVar (Either SomeException CacheEntry) -> SomeException -> IO ()
+    -- The orphan hand-off: a failure before the marker was filled. Fill it with the error
+    -- so blocked followers unblock rather than parking forever; 'guardInFlight' frees the
+    -- slot separately. Fills only when empty, so a failure after a successful publish never
+    -- clobbers the result.
     orphan marker err =
         atomically $ do
             unfilled <- isEmptyTMVar marker
@@ -346,50 +453,58 @@ resolveMetadataWith afterClaim metrics cache source name fetch = mask $ \restore
 
     deregister :: STM ()
     deregister = do
-        inFlight <- readTVar (mcInFlight cache)
-        writeTVar (mcInFlight cache) (Map.delete key inFlight)
+        inFlight <- readTVar (sfInFlight sf)
+        writeTVar (sfInFlight sf) (Map.delete key inFlight)
 
-{- | Insert a freshly fetched entry, enforcing the size bound. Expired entries are
-purged first (the cheap reclaim); if the cache is still at capacity, surplus
-entries are evicted before the insert so the bound holds. The new entry is always
-admitted.
+{- | Insert a freshly fetched entry into a store, enforcing the size bound. Expired entries
+are purged first (the cheap reclaim); if the store is still at capacity, surplus entries are
+evicted before the insert so the bound holds. The new entry is always admitted.
 -}
-insertBounded :: MetadataCache -> CacheKey -> CacheEntry -> IO ()
-insertBounded cache key entry = do
-    Cache.purgeExpired (mcStore cache)
-    n <- Cache.size (mcStore cache)
-    when (n >= mcMaxEntries cache) (evictSurplus cache)
-    Cache.insert (mcStore cache) key entry
+insertBounded :: (Hashable k) => SingleFlight k v -> k -> v -> IO ()
+insertBounded sf key entry = do
+    Cache.purgeExpired (sfStore sf)
+    n <- Cache.size (sfStore sf)
+    when (n >= sfMaxEntries sf) (evictSurplus sf)
+    Cache.insert (sfStore sf) key entry
 
--- Evict entries until there is room for one more, keeping the cache at or below
--- its bound. Eviction order among live entries is unspecified (the store is a
--- hash map): this is a flood safety valve, not a precision LRU.
-evictSurplus :: MetadataCache -> IO ()
-evictSurplus cache = do
-    ks <- Cache.keys (mcStore cache)
-    let surplus = length ks - (mcMaxEntries cache - 1)
-    when (surplus > 0) (mapM_ (Cache.delete (mcStore cache)) (take surplus ks))
+-- Evict entries until there is room for one more, keeping the store at or below its bound.
+-- Eviction order among live entries is unspecified (the store is a hash map): this is a
+-- flood safety valve, not a precision LRU.
+evictSurplus :: (Hashable k) => SingleFlight k v -> IO ()
+evictSurplus sf = do
+    ks <- Cache.keys (sfStore sf)
+    let surplus = length ks - (sfMaxEntries sf - 1)
+    when (surplus > 0) (mapM_ (Cache.delete (sfStore sf)) (take surplus ks))
 
-{- | Look up a package's cached entry for one 'Source' without fetching on a miss —
-the cache's read-only view, for inspection and tests. A 'Nothing' is a miss or an
-expired entry; this never triggers a fetch and never collapses (use 'resolveMetadata'
-for the serve path).
+{- | Look up a package's cached full-packument entry for one 'Source' without fetching on a
+miss — the cache's read-only view, for inspection and tests. A 'Nothing' is a miss or an
+expired entry; this never triggers a fetch and never collapses (use 'resolveMetadata' for
+the serve path).
 -}
 cachedMetadata :: MetadataCache -> Source -> PackageName -> IO (Maybe CacheEntry)
-cachedMetadata cache source name = Cache.lookup (mcStore cache) (cacheKey source name)
+cachedMetadata cache source name = Cache.lookup (sfStore (mcFull cache)) (cacheKey source name)
 
--- | The number of entries currently held (including any not-yet-purged expired).
+{- | Look up a single-version cached entry for one @(source, package, version)@ without
+fetching on a miss — the version store's read-only view (the hybrid serve path's negative\/
+positive lookup before it leads a selective fetch). The outer 'Maybe' is the cache hit\/miss
+(an expired or absent entry is 'Nothing'); the inner @'Maybe' 'PackageDetails'@ is the
+cached result (a version determined absent is a cached @'Just' 'Nothing'@).
+-}
+cachedVersion :: MetadataCache -> Source -> PackageName -> Version -> IO (Maybe (Maybe PackageDetails))
+cachedVersion cache source name version = Cache.lookup (sfStore (mcVersion cache)) (versionKey source name version)
+
+-- | The number of full-packument entries currently held (including any not-yet-purged expired).
 cacheSize :: MetadataCache -> IO Int
-cacheSize cache = Cache.size (mcStore cache)
+cacheSize cache = Cache.size (sfStore (mcFull cache))
 
 -- ── internals ────────────────────────────────────────────────────────────────
 
 -- The outcome of the one atomic resolve decision: a fresh hit, follow an in-flight
 -- fetch, or lead a new one.
-data Decision
-    = Hit CacheEntry
-    | Follow (TMVar (Either SomeException CacheEntry))
-    | Lead (TMVar (Either SomeException CacheEntry))
+data Decision v
+    = Hit v
+    | Follow (TMVar (Either SomeException v))
+    | Lead (TMVar (Either SomeException v))
 
 -- Convert a 'NominalDiffTime' (seconds) to the @cache@ library's monotonic
 -- 'TimeSpec' (whole seconds + nanoseconds), clamping a negative TTL to zero.
