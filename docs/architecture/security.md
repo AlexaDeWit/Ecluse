@@ -299,25 +299,15 @@ requests outside `withToken`, so extending it there is a noted follow-up.
 The [first-party publish path](registry-model.md#publishing-first-party-packages-the-publication-target)
 relays a client `npm publish` to the publication target. Its scope allow-list
 (`PUBLISH_SCOPES`) constrains **which package names** may be published — it is **not** an
-authentication control and says nothing about **who** may publish.
-
-The one combination Écluse can make unrepresentable, it does. A static
-`PUBLICATION_TARGET_TOKEN` substitutes Écluse's **own** credential for a caller who
-forwards none, so pairing it with an **open edge** (no `PROXY_AUTH_TOKEN`) would let **any
-unauthenticated client** publish under that credential within the allowed scopes. Because
-that combination is fully visible in Écluse's own configuration, it is **refused at boot**
-(a fail-loud `BootError`): a `PUBLICATION_TARGET_TOKEN` requires a verifiable inbound edge
-(`PROXY_AUTH_TOKEN`) — the write-side counterpart of the fail-closed read identity. Écluse
-can only couple the static credential to an edge it can **verify**, so an external layer it
-cannot see does not unlock the static fallback.
-
-What remains a **shared responsibility** is protecting the edge itself. Écluse cannot see
-the deployment's environment-level protections (an API gateway, a service mesh with mTLS, a
-`NetworkPolicy`); under **passthrough** (no static token) the publication target authorises
-the publisher's own forwarded credential, and if a deployment relies on an external auth
-layer instead of `PROXY_AUTH_TOKEN`, keeping Écluse reachable only through it is the
-operator's to own — the same way [network egress](#network-egress-is-a-shared-responsibility)
-is (see also
+authentication control and says nothing about **who** may publish. So a static
+`PUBLICATION_TARGET_TOKEN` paired with an **open edge** (no `PROXY_AUTH_TOKEN`) lets **any
+unauthenticated client** publish under the operator's credential, within the allowed
+scopes. Écluse deliberately does **not** fail closed on this combination — it cannot see
+the deployment's environment-level protections (an API gateway, a service mesh with mTLS,
+a `NetworkPolicy`), so blocking it would break legitimate closed-network deployments — but
+**the publish surface MUST be protected**, by Écluse's own edge auth (`PROXY_AUTH_TOKEN`)
+**or** an external layer. Treat this as an operator-architecture responsibility, the same
+way [network egress](#network-egress-is-a-shared-responsibility) is (see also
 [Access & Credential Model → Publishing](access-model.md#publishing-the-publication-target-passthrough-write)).
 
 ## Network egress is a shared responsibility
