@@ -46,7 +46,7 @@ model, the deny-by-default rules engine, the mirror queue, and the configuration
 
 The system's **threat model** (OWASP Threat Dragon, STRIDE) is the single source of truth for
 its threats — [`threat-modelling/ecluse.json`](threat-modelling/ecluse.json) — and is published
-as a readable register at [Threat Model](docs/architecture/threat-model.md), regenerated from
+as a readable register at [Threat Model](https://alexadewit.github.io/Ecluse/threat-model.html), regenerated from
 the model on every site build. Record threats in the model, not as prose duplicated across the
 docs.
 

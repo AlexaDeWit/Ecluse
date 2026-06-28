@@ -85,6 +85,19 @@ local function overview_table(threats)
     pandoc.SimpleTable({}, aligns, widths, headers, rows))
 end
 
+-- The description/mitigation fields are authored as Markdown so the register corpus
+-- can carry emphasis, `code` identifiers, and links; parse them to inlines (a labelled
+-- run is prepended) rather than dropping the raw string in verbatim.
+local function md_inlines(s)
+  return pandoc.utils.blocks_to_inlines(pandoc.read(s, "markdown").blocks)
+end
+
+local function labelled_para(label, body)
+  local inlines = { pandoc.Strong({ pandoc.Str(label) }), pandoc.Space() }
+  for _, i in ipairs(md_inlines(body)) do inlines[#inlines + 1] = i end
+  return pandoc.Para(inlines)
+end
+
 -- Per-threat detail: an anchored heading, a badge line, then description + mitigation.
 local function detail_blocks(threats)
   local blocks = {}
@@ -101,12 +114,10 @@ local function detail_blocks(threats)
       pandoc.Emph({ pandoc.Str(t._element) }),
     })
     if t.description and t.description ~= "" then
-      blocks[#blocks + 1] = pandoc.Para({ pandoc.Strong({ pandoc.Str("Threat.") }),
-        pandoc.Space(), pandoc.Str(t.description) })
+      blocks[#blocks + 1] = labelled_para("Threat.", t.description)
     end
     if t.mitigation and t.mitigation ~= "" then
-      blocks[#blocks + 1] = pandoc.Para({ pandoc.Strong({ pandoc.Str("Mitigation.") }),
-        pandoc.Space(), pandoc.Str(t.mitigation) })
+      blocks[#blocks + 1] = labelled_para("Mitigation.", t.mitigation)
     end
   end
   return blocks
