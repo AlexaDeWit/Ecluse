@@ -17,6 +17,9 @@ module Ecluse.Core.Server.Pipeline.Internal (
     logDecodeFailure,
     logNameMismatch,
 
+    -- * Integrity-floor admission (pure)
+    admitByIntegrity,
+
     -- * Metric-label projections (pure)
     fetchCause,
     packumentServeDecision,
@@ -30,10 +33,22 @@ module Ecluse.Core.Server.Pipeline.Internal (
     recordEffectfulFailures,
 ) where
 
+import Data.Map.Strict qualified as Map
+import Data.Set qualified as Set
 import Katip (KatipContext, Severity (WarningS), katipAddContext, logFM, ls, sl)
 import Network.HTTP.Client qualified as HTTP
 
-import Ecluse.Core.Package (PackageName, renderPackageName)
+import Ecluse.Core.Package (
+    PackageDetails (pkgArtifacts),
+    PackageInfo (infoDistTags, infoPublishedAt, infoVersions),
+    PackageName,
+    renderPackageName,
+ )
+import Ecluse.Core.Package.Integrity (
+    IntegrityFloor,
+    VersionIntegrity (BelowFloor, MeetsFloor, NoIntegrity),
+    classifyArtifacts,
+ )
 import Ecluse.Core.Registry.Npm (ResponseBoundExceeded (ResponseBoundExceeded))
 import Ecluse.Core.Rules (PreparedRule (prepResilience))
 import Ecluse.Core.Rules.Types (Decision (Undecidable))
@@ -48,6 +63,7 @@ import Ecluse.Core.Server.Response (
  )
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort, mpRuleDenial, mpRuleEffectfulFailure)
+import Ecluse.Core.Version (renderVersion)
 
 {- | Raised when an upstream packument does not decode into both the typed view and the
 raw document the serve path needs. A (typed) throw, not a stringly one, caught by the
@@ -113,6 +129,60 @@ logNameMismatch requested origin reported =
             <> sl "upstreamName" reported
     message :: Text
     message = "dropped an upstream contribution: its packument self-reported a name for a different package"
+
+-- ── integrity-floor admission ────────────────────────────────────────────────
+
+{- | Apply an integrity-floor admission policy to a 'PackageInfo', keeping only the versions
+whose strongest digest meets the floor and projecting the rest to refusals. A version
+whose digests are all weaker than the floor (or absent) cannot be tied to a
+floor-strength tamper-evident fingerprint, so it is dropped from the served listing rather
+than served a client could never safely verify. Used by both gates: the public gate
+(@gatePublic@) with the hard-floored 'Ecluse.Core.Package.Integrity.MinIntegrity', and the
+trusted gate (@admitTrusted@) with the loosenable
+'Ecluse.Core.Package.Integrity.MinTrustedIntegrity'. Returns the admissible 'PackageInfo'
+(with @dist-tags@\/@time@ pruned to the kept keys, exactly as @restrictToSurvivors@ prunes
+for the rules) and the refusals for the dropped versions: 'BelowIntegrityFloor' for a
+too-weak digest, 'MissingIntegrity' for none at all, each feeding the no-survivors
+status.
+-}
+admitByIntegrity ::
+    (IntegrityFloor floor) =>
+    floor ->
+    -- The refusal projected for a present-but-too-weak digest ('BelowFloor') …
+    ServeDecision ->
+    -- … and for a version carrying no digest at all ('NoIntegrity'); the public and
+    -- trusted gates pass their own context-worded decisions.
+    ServeDecision ->
+    PackageInfo ->
+    (PackageInfo, [ServeDecision])
+admitByIntegrity floorSpec belowFloorRefusal missingRefusal info =
+    ( info
+        { infoVersions = Map.restrictKeys (infoVersions info) admissibleKeys
+        , infoDistTags = Map.filter ((`Set.member` admissibleKeys) . renderVersion) (infoDistTags info)
+        , infoPublishedAt = Map.restrictKeys (infoPublishedAt info) admissibleKeys
+        }
+    , refusals
+    )
+  where
+    -- Classify each version against the floor exactly once — the up-to-100k-version map is
+    -- walked a single time, and the admissible keys and both refusal buckets are read off
+    -- the resulting class map (itself the size of the version map, not small).
+    classified :: Map Text VersionIntegrity
+    classified = Map.map (classifyArtifacts floorSpec . pkgArtifacts) (infoVersions info)
+
+    admissibleKeys :: Set Text
+    admissibleKeys = Map.keysSet (Map.filter (== MeetsFloor) classified)
+
+    -- The dropped versions projected to refusals in one pass over the class map: 'Map.foldr'
+    -- visits ascending-key order and each arm prepends, so the below-floor refusals precede
+    -- the missing-integrity refusals, each in key order.
+    refusals :: [ServeDecision]
+    refusals = below <> missing
+      where
+        (below, missing) = Map.foldr bucket ([], []) classified
+        bucket BelowFloor (b, m) = (belowFloorRefusal : b, m)
+        bucket NoIntegrity (b, m) = (b, missingRefusal : m)
+        bucket MeetsFloor acc = acc
 
 -- ── metric-label projections ─────────────────────────────────────────────────
 
