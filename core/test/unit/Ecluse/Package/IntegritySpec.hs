@@ -7,6 +7,7 @@ import Ecluse.Core.Package (
     ArtifactKind (Tarball),
     Hash,
     HashAlg (Blake2b, MD5, SHA1, SHA256, SHA384, SHA512, SRI),
+    isComputable,
  )
 import Ecluse.Core.Package.Integrity (
     VersionIntegrity (BelowFloor, MeetsFloor, NoIntegrity),
@@ -50,6 +51,25 @@ artifactWith hs =
 
 spec :: Spec
 spec = do
+    describe "the worker verifies what the public floor admits (the #409 invariant)" $ do
+        it "every algorithm that meets the default public floor is computable" $
+            -- The load-bearing cross-module invariant: the floor admits by strength
+            -- ('meetsFloor'\/'integrityStrength'), the worker verifies by computation
+            -- ('isComputable'\/'Ecluse.Core.Package.computeDigest'), and the second set must
+            -- cover the first or an admitted public artifact is enqueued then permanently
+            -- dropped (issue #409). 'computeDigest''s totality forces a compute arm for any
+            -- new 'HashAlg'; this pins that the arm is actually present for every
+            -- floor-clearing algorithm. Enumerated over the whole 'HashAlg' set, so a new
+            -- constructor is checked automatically.
+            [alg | alg <- [minBound .. maxBound], meetsFloor defaultMinIntegrity alg, not (isComputable alg)]
+                `shouldBe` []
+
+        it "the bare SRI wrapper neither clears the floor nor is computable (it names no algorithm)" $ do
+            -- The one constructor that is correctly excluded from both sides: SRI is a
+            -- wrapper resolved via 'assertedAlg', never a floor candidate or a compute target.
+            meetsFloor defaultMinIntegrity SRI `shouldBe` False
+            isComputable SRI `shouldBe` False
+
     describe "integrityStrength" $ do
         it "ranks the broken algorithms below SHA-256" $ do
             (integrityStrength SHA1 < integrityStrength SHA256) `shouldBe` True

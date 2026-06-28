@@ -65,6 +65,10 @@ module Ecluse.Core.Package (
     sriBody,
     sriAlgorithm,
 
+    -- * Digest computation
+    computeDigest,
+    isComputable,
+
     -- * Dependencies
     Dependency (..),
     DepKind (..),
@@ -81,8 +85,9 @@ module Ecluse.Core.Package (
     InvalidEntryKind (..),
 ) where
 
-import Crypto.Hash (Blake2b_512, MD5, SHA1, SHA256, SHA384, SHA512, digestFromByteString)
+import Crypto.Hash (Blake2b_512, Digest, MD5, SHA1, SHA256, SHA384, SHA512, digestFromByteString, hashlazy)
 import Data.Aeson (Value)
+import Data.ByteArray (convert)
 import Data.ByteArray.Encoding (Base (Base16, Base64), convertFromBase)
 import Data.Text qualified as T
 import Data.Text.Short (ShortText)
@@ -272,7 +277,7 @@ data HashAlg
       @"sha512-…"@, carried whole.
       -}
       SRI
-    deriving stock (Eq, Ord, Show)
+    deriving stock (Bounded, Enum, Eq, Ord, Show)
 
 {- | An integrity digest of an artifact. __Opaque__: a 'Hash' is built only through
 'mkHash', which validates that the digest is well-formed, so every value of this type
@@ -342,6 +347,49 @@ hexDigestOk alg bytes = case alg of
     MD5 -> isJust (digestFromByteString @MD5 bytes)
     Blake2b -> isJust (digestFromByteString @Blake2b_512 bytes)
     SRI -> False
+
+-- ── digest computation ───────────────────────────────────────────────────────
+
+{- | Compute the digest of bytes in a given algorithm, as the raw digest bytes, or
+'Nothing' for an algorithm Écluse will not verify against. The computable algorithms are
+exactly the collision-resistant ones: 'SHA1', 'SHA256', 'SHA384', 'SHA512', and
+Blake2b-512. 'MD5' is deliberately uncomputable here (a match on a broken hash cannot prove
+the bytes were not substituted, so the tamper gate never verifies against it), as is the
+bare 'SRI' wrapper, which names no algorithm of its own (resolve it with 'sriAlgorithm'
+first).
+
+This is the sibling of 'hexDigestOk': both dispatch on the same per-algorithm crypto type,
+so they live together and a new 'HashAlg' must be given an arm in each (the 'case' is total,
+and the package builds with @-Wincomplete-patterns@ as an error). It is the one place that
+defines /which algorithms the worker can verify/; the integrity floor admits by /strength/
+("Ecluse.Core.Package.Integrity"), and the invariant that every floor-clearing algorithm is
+computable here keeps the worker able to verify whatever the floor admits.
+-}
+computeDigest :: HashAlg -> Maybe (LByteString -> ByteString)
+computeDigest = \case
+    SHA1 -> Just (digestBytes . hashlazy @SHA1)
+    SHA256 -> Just (digestBytes . hashlazy @SHA256)
+    SHA384 -> Just (digestBytes . hashlazy @SHA384)
+    SHA512 -> Just (digestBytes . hashlazy @SHA512)
+    Blake2b -> Just (digestBytes . hashlazy @Blake2b_512)
+    MD5 -> Nothing
+    SRI -> Nothing
+  where
+    digestBytes :: Digest a -> ByteString
+    digestBytes = convert
+
+{- | Whether the worker can compute (and so verify a digest in) the given algorithm: the
+predicate form of 'computeDigest', taken from the same single definition so the computable
+set cannot drift from what 'computeDigest' actually computes.
+
+>>> isComputable SHA256
+True
+
+>>> isComputable MD5
+False
+-}
+isComputable :: HashAlg -> Bool
+isComputable = isJust . computeDigest
 
 {- A Subresource-Integrity string is one or more whitespace-separated
 @\<alg\>-\<base64\>@ components (npm's @dist.integrity@ is usually one); every

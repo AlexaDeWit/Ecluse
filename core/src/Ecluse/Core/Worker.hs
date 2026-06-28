@@ -81,7 +81,6 @@ module Ecluse.Core.Worker (
     verifyIntegrity,
 ) where
 
-import Crypto.Hash (Digest, SHA1, SHA384, SHA512, hashlazy)
 import Data.ByteArray.Encoding (Base (Base16, Base64), convertToBase)
 import Data.Foldable (maximumBy)
 import Data.List.NonEmpty qualified as NE
@@ -96,8 +95,8 @@ import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (try)
 
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
-import Ecluse.Core.Package (Hash (hashAlg, hashValue), HashAlg (Blake2b, MD5, SHA1, SHA256, SHA384, SHA512, SRI), PackageName, pkgEcosystem, renderPackageName)
-import Ecluse.Core.Package.Integrity (Strength, assertedAlg, integrityStrength, sriAlgorithm, sriBody, sriPrefix)
+import Ecluse.Core.Package (Hash (hashAlg, hashValue), HashAlg (SHA1, SHA256, SRI), PackageName, computeDigest, pkgEcosystem, renderPackageName)
+import Ecluse.Core.Package.Integrity (Strength, assertedAlg, integrityStrength, sriBody, sriPrefix)
 import Ecluse.Core.Queue (
     MirrorArtifact (maFilename, maHashes),
     MirrorJob (jobArtifact, jobArtifactUrl, jobPackage, jobTraceContext, jobVersion),
@@ -706,9 +705,13 @@ checks the bytes against the strongest one present: the bytes pass __iff__ that 
 matches.
 A weaker digest can neither override nor rescue a failed strong one.
 
-If the strongest digest present is in an algorithm the worker cannot compute, the
-gate __fails closed__ rather than falling back to a weaker digest — a tampered
-artifact must never be admitted on the strength of a hash an attacker could forge.
+The bytes are recomputed in the strongest digest's own algorithm through the shared
+'Ecluse.Core.Package.computeDigest', the one definition of which algorithms Écluse can
+verify. That computable set covers every algorithm the public integrity floor admits, so an
+admitted artifact is always verifiable here. If the strongest digest is nonetheless in an
+algorithm 'computeDigest' declines (MD5, a forgeable hash) or an SRI whose inner algorithm
+does not resolve, the gate __fails closed__ rather than falling back to a weaker digest: a
+tampered artifact must never be admitted on the strength of a hash an attacker could forge.
 
 This is the tamper gate before a publish: a mismatch fails the job and never
 publishes a corrupt or substituted artifact into the private upstream.
@@ -743,54 +746,42 @@ verifyIntegrity hashes bytes =
     -- must be proven against. It reuses the shared 'integrityStrength' ranking so the
     -- tamper gate and the serve-admission floor agree on which algorithms are strong.
     -- An SRI is ranked by the algorithm it asserts ('assertedAlg' — npm's @sha512-…@
-    -- ranks as 'SHA512'); an SRI whose inner alg is unrecognised is a strong digest the
-    -- worker cannot recompute, so it asserts nothing and ranks at the SHA-256 strong
-    -- tier (above the legacy SHA-1/MD5). It therefore WINS the 'maximumBy' and the gate
-    -- fails closed in 'matchStrongest', rather than downgrading to a weaker computable
-    -- digest an attacker who also controls it could forge; it stays below a computable
-    -- sha512, so a real sha512, when co-present, is still preferred and verified.
+    -- ranks as 'SHA512'); an SRI whose inner alg is unrecognised asserts nothing and ranks
+    -- at the SHA-256 floor tier (above the legacy SHA-1/MD5). It therefore WINS the
+    -- 'maximumBy' and, unresolvable, the gate fails closed in 'matchStrongest' rather than
+    -- downgrading to a weaker computable digest an attacker who also controls it could
+    -- forge; it stays below a computable sha512, so a real sha512, when co-present, is
+    -- still preferred and verified.
     authority :: Hash -> Strength
     authority = maybe (integrityStrength SHA256) integrityStrength . assertedAlg
 
-    -- Whether the fetched bytes match the chosen digest, compared in that digest's
-    -- own wire encoding. A hex digest (SHA-1, hex SHA-512) compares
-    -- case-insensitively, since hex is; an SRI's base64 body compares
-    -- case-sensitively, since base64 is — folding its case would admit a digest that
-    -- matches the bytes only after a case change, silently weakening the gate.
-    -- 'Nothing' for an algorithm the worker cannot compute (the fail-closed case
-    -- above).
+    -- Whether the fetched bytes match the chosen digest: resolve its algorithm
+    -- ('assertedAlg', 'Nothing' for an unresolvable SRI), recompute the bytes in that
+    -- algorithm ('computeDigest', 'Nothing' for one the worker will not verify against),
+    -- and compare in the digest's own wire encoding. A hex tag compares case-insensitively
+    -- (hex is); an SRI's base64 body compares case-sensitively (base64 is; folding its case
+    -- would admit a digest that matches the bytes only after a case change). Either 'Nothing'
+    -- is the fail-closed case above.
     matchStrongest :: Hash -> Maybe Bool
-    matchStrongest h = case hashAlg h of
-        SHA1 -> Just (hexLower (hashlazy lazyBytes :: Digest SHA1) == T.toLower (hashValue h))
-        SHA384 -> Just (hexLower (hashlazy lazyBytes :: Digest SHA384) == T.toLower (hashValue h))
-        SHA512 -> Just (hexLower (hashlazy lazyBytes :: Digest SHA512) == T.toLower (hashValue h))
-        SRI -> matchSri (hashValue h)
-        SHA256 -> Nothing
-        MD5 -> Nothing
-        Blake2b -> Nothing
-
-    -- A Subresource-Integrity string is @"<alg>-<base64>"@; the computable inner
-    -- algorithms are @sha384@ and @sha512@ (@sha512@ is npm's @dist.integrity@).
-    -- Recompute that digest, base64-encode it, and compare against the SRI's base64
-    -- body __exactly__ — base64 is case-sensitive. Any other SRI algorithm is
-    -- uncomputable, so it fails closed rather than passing.
-    matchSri :: Text -> Maybe Bool
-    matchSri sri = case sriAlgorithm sri of
-        Just SHA384 -> Just (base64 (hashlazy lazyBytes :: Digest SHA384) == sriBody sri)
-        Just SHA512 -> Just (base64 (hashlazy lazyBytes :: Digest SHA512) == sriBody sri)
-        _ -> Nothing
+    matchStrongest h = do
+        alg <- assertedAlg h
+        digestOf <- computeDigest alg
+        let digest = digestOf lazyBytes
+        pure $ case hashAlg h of
+            SRI -> base64 digest == sriBody (hashValue h)
+            _ -> hexLower digest == T.toLower (hashValue h)
 
     describe :: Hash -> Text
     describe h = case hashAlg h of
         SRI -> "SRI " <> sriPrefix (hashValue h)
         alg -> show alg
 
--- The lower-cased hex encoding of a digest (matching npm's hex shasum form).
-hexLower :: Digest a -> Text
+-- The lower-cased hex encoding of raw digest bytes (matching npm's hex shasum form).
+hexLower :: ByteString -> Text
 hexLower d = T.toLower (decodeUtf8 (convertToBase Base16 d :: ByteString))
 
--- The standard-base64 encoding of a digest (matching the SRI @<base64>@ body).
-base64 :: Digest a -> Text
+-- The standard-base64 encoding of raw digest bytes (matching the SRI @<base64>@ body).
+base64 :: ByteString -> Text
 base64 d = decodeUtf8 (convertToBase Base64 d :: ByteString)
 
 -- ── small helpers ───────────────────────────────────────────────────────────────

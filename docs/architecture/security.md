@@ -161,10 +161,15 @@ here.
    **opted-into** behaviour of a loosened trusted floor, never something the default model
    relies on.
 
-   The shared notion of algorithm strength and the floor predicate live in one module,
-   `Ecluse.Core.Package.Integrity`, reused by the worker's tamper gate
-   (`Ecluse.Core.Worker.verifyIntegrity`) so the public floor, the trusted floor, and the
-   publish-time verification rank algorithms identically.
+   Algorithm strength and the floor predicate live in `Ecluse.Core.Package.Integrity`
+   (`integrityStrength`, `meetsFloor`); the digest computation the worker verifies with sits
+   beside the digest validation in `Ecluse.Core.Package` (`computeDigest`). The floor admits
+   by **strength** and the worker's tamper gate (`Ecluse.Core.Worker.verifyIntegrity`)
+   verifies by **computation**, and the computable set **covers every algorithm the public
+   floor admits**, so an admitted public artifact is always verifiable here and reaches the
+   mirror, never admitted-then-dropped. That coverage holds **by construction**:
+   `computeDigest` is total over the algorithm set, so a new algorithm cannot be added
+   without a compute arm, and a test pins that every floor-clearing algorithm is computable.
 
 ## Posture
 
