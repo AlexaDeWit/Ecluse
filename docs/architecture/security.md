@@ -12,30 +12,23 @@ noted below.
 
 > The system's full **STRIDE threat register** lives in the OWASP Threat Dragon model
 > ([`threat-modelling/ecluse.json`](../../threat-modelling/ecluse.json)) and is published,
-> readably, at [Threat model](threat-model.md). This document is the *why* behind the
+> readably, at [Threat model](https://alexadewit.github.io/Ecluse/threat-model.html). This document is the *why* behind the
 > outbound/input guards; the deployment assumptions the model rests on are in
 > [Trust assumptions & credential posture](#trust-assumptions--credential-posture).
 
 ## Threats these guards address
 
-These outbound-request and input-validation guards address three of the modelled threat
-classes in particular; the full register is generated from the model (see the
-threat-model callout above):
-
-- **SSRF / unintended fetch targets** — a crafted name or path (traversal, encoded
-  slashes, an absolute URL, CRLF) steering the proxy to an attacker-chosen host or an
-  internal-only address (cloud metadata, the private upstream's network).
-- **Client-controlled artifact source** — on the tarball path (notably `npm ci`), the
-  artifact location must come from the upstream-declared `dist.tarball`, never a
-  client-supplied path.
-- **Algorithmic-complexity DoS via upstream payloads** — a hostile or pathological
-  upstream packument (huge version count, deep nesting) exhausting CPU or memory.
+These outbound-request and input-validation guards implement the register's mitigations for
+**SSRF / unintended fetch targets** and **client-controlled artifact source** (register
+threat #5) and **algorithmic-complexity DoS via upstream payloads** (register threat #2).
+The threat statements and their dispositions live in the [register](https://alexadewit.github.io/Ecluse/threat-model.html), not
+here.
 
 <!--
   Do not re-grow this into a full threat enumeration. The authoritative register is
-  the Threat Dragon model (threat-modelling/ecluse.json), rendered at
-  docs/architecture/threat-model.md. Keep this a short pointer to the threat classes
-  these guards address; add or revise threats in the model, not in prose here.
+  the Threat Dragon model (threat-modelling/ecluse.json), rendered to the Pages site
+  from docs/architecture/threat-model.md. Keep this a short pointer to the threat
+  classes these guards address; add or revise threats in the model, not in prose here.
 -->
 
 ## Invariants
@@ -390,63 +383,47 @@ this section is the security rationale they implement.
 ## Trust assumptions & credential posture
 
 The guards above constrain Écluse's *own* requests; this section records the **deployment
-assumptions** the [threat model](../../threat-modelling/ecluse.json) rests on and the
-security consequences of the **canonical posture** (per-caller passthrough credentials, the
-three-registry topology, and CodeArtifact over VPC endpoints).
+assumptions** the [threat model](https://alexadewit.github.io/Ecluse/threat-model.html) rests on and the security consequences of
+the **canonical posture** (per-caller passthrough credentials, the three-registry topology,
+and CodeArtifact over VPC endpoints). The posture's threats — and their dispositions — are
+modelled in the [register](https://alexadewit.github.io/Ecluse/threat-model.html); this is the assumptions framing, with the
+detail deferred to the threats noted, not a second copy of them.
 
-**Edge access is an operator concern.** Écluse builds no access boundary: app-level auth
-(`PROXY_AUTH_TOKEN`) is **off by default**, and *who may reach the proxy* is delegated to
-the deployment's access edge (gateway / mesh / network policy) — the same
-shared-responsibility split as [network egress](#network-egress-is-a-shared-responsibility).
-This rests on one assumption the deployment must hold: **Écluse is reachable only through
-that edge, east-west as well as north-south.** An ingress-only allow-list that leaves
-pod-to-pod traffic open is the usual gap — a compromised neighbour reaching the pod directly
-steps around it. The assumption is **softened** (not carried alone) by the credential model
-below: under passthrough a caller with no forwarded token gets no private read and no
-publish, so an edge breach exposes only the public-gated view plus the untrusted-egress and
-DoS surface — never private packages. (The publish-specific corollary — an open edge plus a
-static publication token — is
+**Edge access is an operator concern** (register threat #3). `PROXY_AUTH_TOKEN` is **off by
+default**; *who may reach the proxy* is delegated to the deployment's access edge, which must
+hold **east-west as well as north-south** (an ingress-only allow-list that leaves pod-to-pod
+traffic open is the usual gap). Under passthrough this is **softened** — a caller with no
+forwarded token gets no private read or publish — so an edge breach exposes only the
+public-gated view plus the untrusted-egress and DoS surface, never private packages. (The
+publish corollary — an open edge plus a static publication token — is
 [The first-party publish surface must be protected](#the-first-party-publish-surface-must-be-protected-a-shared-responsibility).)
-The future **trusted-edge-identity** mode (a signed header / mTLS SAN) inverts the posture:
-a bare trusted header under an open edge is forgeable into *granted* access, strictly worse
-than today's "no token, no access". So Écluse **fails fast** on a `trusted-edge` mount that
-lacks a *verifiable* binding to the edge (mutual TLS, or a shared secret / HMAC on the
-assertion) — an [unrepresentable unsafe
+The future **trusted-edge-identity** mode must require a *verifiable* binding to the edge
+(mutual TLS, or a shared secret / HMAC on the assertion) — an [unrepresentable unsafe
 combination](access-model.md#safe-defaults-and-unrepresentable-unsafe-combinations), not a
 runtime hope — landing with [`S43`](../../planning/slices/S43-credential-strategy.md).
 
-**Passthrough relocates credential risk to the proxy runtime.** Forwarding each caller's
-own credential ([access model](access-model.md)) buys no privilege escalation or compression
-and leaves Écluse holding no standing read/publish credential — but the proxy **transiently
-holds every in-transit caller's credential in memory**. The highest-value asset in the model
-is therefore *forwarded credentials in proxy memory*: a single proxy compromise (a heap
-dump, a log-field leak, or a malicious dependency in Écluse's *own* supply chain) harvests
-every caller in transit, not one. Two consequences follow:
+**Passthrough relocates credential risk to the proxy runtime** (register threat #1).
+Forwarding each caller's own credential ([access model](access-model.md)) leaves Écluse
+holding no standing read/publish credential but **transiently holding every in-transit
+caller's in memory** — so Écluse's own runtime and supply-chain integrity are a first-class
+control (the attested, reproducible image, [release supply chain](release-supply-chain.md)),
+and the **token-stripping** boundary and the
+[no-redirect-with-credential invariant](#egress-scope-what-the-outbound-controls-guard-and-what-they-do-not)
+(register threat #4) are load-bearing because real caller credentials cross them.
 
-- Écluse's **own runtime and supply-chain integrity are a first-class control** — hence the
-  attested, reproducible image ([release supply chain](release-supply-chain.md)); a
-  garbage-collected runtime cannot promise prompt heap erasure of a forwarded secret.
-- The **token-stripping** boundary (the caller credential is dropped on every public fetch)
-  and the **no-redirect-with-credential** invariant
-  ([a credential-bearing request never follows a redirect](#egress-scope-what-the-outbound-controls-guard-and-what-they-do-not))
-  become load-bearing, since real caller credentials cross them.
-
-The one standing credential Écluse *does* hold — the mirror-target **write** token — is its
+**The mirror-target write token is the one standing credential Écluse holds** and its
 sharpest privilege, because it writes the trusted store: scope it write-only, prefer
-container-role minting over a static secret, and minimise its TTL.
+container-role minting over a static secret, and minimise its TTL (register threat #7).
 
-**Registry separation is defence-in-depth and auditability, not the perimeter.** The
-three-registry topology — a first-party store, a public-derived mirror store, and a
-pull-through read endpoint
+**Registry separation is defence-in-depth and auditability, not the perimeter** (register
+threat #10). The three-registry topology
 ([registry-level composition](registry-model.md#registry-level-composition-optional-never-required))
-— is **preferred** because it keeps first-party and public-derived inventory physically
-separable: distinct storage-level rule-sets and scanning per provenance, and clean
-post-disclosure scoping (*which mirrored public packages did we hold?*). Collapsing toward a
-single registry **degrades auditability (a Repudiation-class loss) and mitigation depth**,
-but does **not** move the trust perimeter — the public→trusted admission gate is identical
-at one registry or three. **Storage-layer scanning is itself out of scope** for Écluse: it
-is ecosystem- and backend-specific (CodeArtifact, GCP Artifact Registry, and a self-hosted
-Verdaccio differ), and is the operator's to configure.
+keeps first-party and public-derived inventory physically separable — distinct storage-level
+rule-sets and scanning per provenance, and clean post-disclosure scoping — while collapsing
+toward a single registry degrades auditability and mitigation depth but does **not** move the
+trust perimeter (the public→trusted admission gate is identical at one registry or three).
+**Storage-layer scanning is itself out of scope** for Écluse: it is ecosystem- and
+backend-specific, and is the operator's to configure.
 
 ## Configurable threat tolerance (secure defaults, configurable overrides)
 
