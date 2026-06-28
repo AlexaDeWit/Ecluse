@@ -656,6 +656,39 @@ bootErrorSpec = describe "planMounts (fail fast at boot)" $ do
             Left errs -> errs `shouldBe` [PublishScopesMissing]
             Right _ -> expectationFailure "expected a publish-scopes-missing boot error"
 
+    it "fails when a static publish credential is set without a verifiable inbound edge" $ do
+        -- PUBLICATION_TARGET_TOKEN set with PROXY_AUTH_TOKEN unset (the default open edge):
+        -- Écluse would substitute its own write credential for a caller who forwards none,
+        -- so any unauthenticated client could publish within scope. The boot refuses rather
+        -- than leaving the internal credential coupled to no edge.
+        env <-
+            expectEnv
+                ( [ ("PUBLICATION_TARGET_URL", "https://publish.example.test")
+                  , ("PUBLISH_SCOPES", "@acme")
+                  , ("PUBLICATION_TARGET_TOKEN", "publish-write-token")
+                  ]
+                    <> staticEnvVars
+                )
+        planFrom env Nothing >>= \case
+            Left errs -> errs `shouldBe` [PublishStaticCredentialNeedsEdge]
+            Right _ -> expectationFailure "expected a publish-static-credential-needs-edge boot error"
+
+    it "accumulates both publish boot errors when scopes are missing and the static credential has no edge" $ do
+        -- A publication target with no PUBLISH_SCOPES and a static credential behind an
+        -- open edge trips both couplings at once: they surface together, in a stable order
+        -- (scopes first, then the edge requirement), so the operator fixes both before the
+        -- next boot rather than swatting them one reboot at a time.
+        env <-
+            expectEnv
+                ( [ ("PUBLICATION_TARGET_URL", "https://publish.example.test")
+                  , ("PUBLICATION_TARGET_TOKEN", "publish-write-token")
+                  ]
+                    <> staticEnvVars
+                )
+        planFrom env Nothing >>= \case
+            Left errs -> errs `shouldBe` [PublishScopesMissing, PublishStaticCredentialNeedsEdge]
+            Right _ -> expectationFailure "expected both publish boot errors, accumulated"
+
 -- ── first-party publish wiring ────────────────────────────────────────────────
 
 publishWiringSpec :: Spec
@@ -673,6 +706,25 @@ publishWiringSpec = describe "planMounts (first-party publish deps)" $ do
                 Just deps -> do
                     pubTargetUrl deps `shouldBe` "https://publish.example.test"
                     pubScopes deps `shouldBe` [mkScope "acme", mkScope "beta"]
+                Nothing -> expectationFailure "expected the mount to carry publish deps"
+            _ -> expectationFailure "expected a single wired binding"
+
+    it "boots a static publish credential when a verifiable inbound edge is configured" $ do
+        -- The safe pairing — the positive control for the fail-loud boot test above: the
+        -- same static publish credential boots once PROXY_AUTH_TOKEN gates the edge, so the
+        -- internal credential is only ever reachable behind edge authentication.
+        env <-
+            expectEnv
+                ( [ ("PUBLICATION_TARGET_URL", "https://publish.example.test")
+                  , ("PUBLISH_SCOPES", "@acme")
+                  , ("PUBLICATION_TARGET_TOKEN", "publish-write-token")
+                  , ("PROXY_AUTH_TOKEN", "edge-token")
+                  ]
+                    <> staticEnvVars
+                )
+        planFrom env Nothing >>= \case
+            Right [binding] -> case bindingPublishDeps binding of
+                Just deps -> pubTargetUrl deps `shouldBe` "https://publish.example.test"
                 Nothing -> expectationFailure "expected the mount to carry publish deps"
             _ -> expectationFailure "expected a single wired binding"
 
@@ -708,6 +760,7 @@ renderSpec = describe "renderBootError" $
         -- The mint-failure render makes the transient-vs-permanent distinction legible.
         renderBootError (CodeArtifactMintFailed "AccessDenied") `shouldSatisfy` infixed "transient"
         renderBootError PublishScopesMissing `shouldSatisfy` infixed "PUBLISH_SCOPES"
+        renderBootError PublishStaticCredentialNeedsEdge `shouldSatisfy` infixed "PUBLICATION_TARGET_TOKEN"
   where
     infixed :: Text -> Text -> Bool
     infixed needle hay = needle `T.isInfixOf` hay

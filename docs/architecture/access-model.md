@@ -133,12 +133,15 @@ rather than chasing the credential to the `Location` (see
 
 > ⚠️ **The publish surface authorises *names*, not *callers* — protect it.** The scope
 > allow-list limits **which package names** a publish may target; it is **not**
-> authentication. If a static `PUBLICATION_TARGET_TOKEN` is configured **and** the edge is
-> open (no `PROXY_AUTH_TOKEN`), **any unauthenticated client can publish** under the
-> operator's credential within the allowed scopes. Écluse does **not** block this — it
-> cannot see environment-level protections (gateway, mesh/mTLS, network policy) — so
-> protecting the publish surface (with `PROXY_AUTH_TOKEN` **or** an external layer) is an
-> **operator-architecture responsibility** (see
+> authentication. A static `PUBLICATION_TARGET_TOKEN` makes Écluse substitute its **own**
+> credential for a caller who forwards none, so it must never sit behind an open edge.
+> Écluse **refuses to boot** when `PUBLICATION_TARGET_TOKEN` is set without
+> `PROXY_AUTH_TOKEN` — "internal publish credential + open edge" is an [unrepresentable
+> unsafe combination](#safe-defaults-and-unrepresentable-unsafe-combinations), not a
+> documented hazard. Écluse can only couple the static credential to an edge it can
+> **verify**: an external layer (gateway, mesh/mTLS, network policy) it cannot see does
+> **not** unlock the static fallback — pair the token with `PROXY_AUTH_TOKEN`, or leave it
+> unset and forward the publisher's own credential (see
 > [Security → the first-party publish surface must be protected](security.md#the-first-party-publish-surface-must-be-protected-a-shared-responsibility)).
 
 ## Edge authentication
@@ -198,6 +201,12 @@ probe over a shared private cache — the `delegated-cache` design Écluse
   header is forgeable into granted access wherever Écluse is reachable other than
   through the edge, so the unsafe combination is made unrepresentable rather than left
   to a network hope.
+- **A static publish credential requires a verifiable inbound edge.** A
+  `PUBLICATION_TARGET_TOKEN` set without `PROXY_AUTH_TOKEN` is **rejected at startup**:
+  the static token makes Écluse publish under its **own** credential for a caller who
+  forwards none, so behind an open edge any unauthenticated client could write within the
+  configured scopes. Coupling the internal credential to a verifiable edge at boot makes
+  that combination unrepresentable rather than an operator footgun.
 - Unknown or contradictory strategy configuration **fails fast at startup**,
   consistent with [config validation](configuration.md#validation-fail-fast-reject-the-unknown).
 

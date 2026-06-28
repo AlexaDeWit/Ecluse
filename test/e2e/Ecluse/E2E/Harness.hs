@@ -655,12 +655,12 @@ ask for it see a publication target, and the base topology keeps the implicit
 publish→@405@ default. The target is Verdaccio, the same registry the base topology reads
 as the private upstream (@mirror@), so a published package is then readable back over the
 private leg. @PUBLISH_SCOPES@ is the anti-shadowing allow-list, required once a target is
-set; the static token is the fallback the relay forwards only for a client that sends none.
+set. The publish is __passthrough__: the relay forwards the client's own bearer (the
+project @.npmrc@\'s 'publishAuthToken'), so no static publication-target token is configured.
 -}
 publishTargetEnv :: [(Text, Text)]
 publishTargetEnv =
     [ ("PUBLICATION_TARGET_URL", "http://mirror:4873/")
-    , ("PUBLICATION_TARGET_TOKEN", "e2e-publication-token")
     , ("PUBLISH_SCOPES", publishScope)
     ]
 
