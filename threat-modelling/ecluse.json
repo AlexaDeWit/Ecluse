@@ -218,12 +218,12 @@
               "threats": [
                 {
                   "number": 1,
-                  "status": "Open",
+                  "status": "Mitigated",
                   "severity": "High",
                   "title": "Forwarded caller credentials aggregated in proxy memory",
                   "type": "Information disclosure",
                   "description": "Under the canonical passthrough strategy the proxy transiently holds every caller's own CodeArtifact bearer in process memory while relaying reads and publishes. A single proxy compromise (a heap/memory dump, a log-field leak, or a malicious dependency in Écluse's own supply chain) therefore harvests the credentials of all callers in transit, not one. Passthrough distributes credential exposure across every user, where a service identity would concentrate it in one short-lived token.",
-                  "mitigation": "Tokens are carried as a redacted type so they never reach a log field, and retention is request-scoped. Residual: a GC'd runtime cannot guarantee prompt erasure from the heap, so harden Écluse's own runtime and supply chain (the attested, reproducible image) as a first-class control. The service strategy (post-launch) is available to operators who want the smallest credential surface.",
+                  "mitigation": "Tokens are carried as a redacted type (the Secret newtype, whose Show renders a fixed placeholder) so they never reach a log field, and retention is request-scoped; the token is unwrapped only at the point of use, to attach the bearer to an outbound request. The data-plane and WAI span instrumentation records no request or response headers, so an Authorization header is never lifted onto a span (regression-tested). Residual: a GC'd runtime cannot guarantee prompt erasure from the heap, so hardening Écluse's own runtime and supply chain — the attested, reproducible image, kept clean by the image vulnerability-scan gate — is the first-class compensating control. The service strategy (post-launch) is available to operators who want the smallest credential surface.",
                   "modelType": "STRIDE",
                   "id": "0ec10e5e-0000-4000-8000-000000000101"
                 },
