@@ -318,13 +318,16 @@ docs-site: ## Build both libraries' Haddock and stage them under ./_site/api for
 	@echo "Staged both libraries' Haddock under ./_site/api (parent index + per-library subpages)"
 
 # Assemble the full Pages site that the workflow uploads:
-#   /       the landing page + the user docs rendered from Markdown (pandoc)
-#   /api    the library Haddock (via docs-site)
+#   /                  the landing page + the user docs rendered from Markdown (pandoc)
+#   /threat-model.html the threat register, generated from the Threat Dragon model
+#   /api               the library Haddock (via docs-site)
 # Kept separate from docs-site so the gate-repro / local Haddock build stays about
 # the docs alone. Build inputs (template, Lua filters) live in web/; only web/static
 # is published. Mermaid renders client-side from a hash-pinned bundle vendored into
 # _site/vendor (the flake's `mermaidJs`), so the published site has no external
-# runtime dependency.
+# runtime dependency. The threat-model page expands a `threat-register` fence from
+# threat-modelling/ecluse.json at build time (web/threat-register.lua) — the model
+# is the single source of truth; the register is never committed back to the repo.
 PANDOC_FLAGS := --standalone --from gfm --template web/template.html --lua-filter web/mermaid.lua --lua-filter web/links.lua
 site: docs-site ## Assemble the Pages site (landing + rendered docs at /, Haddock under /api)
 	@cp -R web/static/. _site/
@@ -334,6 +337,7 @@ site: docs-site ## Assemble the Pages site (landing + rendered docs at /, Haddoc
 	$(NIX) pandoc ALTERNATIVES.md -o _site/alternatives.html $(PANDOC_FLAGS) -M title="Alternatives"
 	$(NIX) pandoc USAGE.md        -o _site/usage.html        $(PANDOC_FLAGS) -M title="Operator Manual"
 	$(NIX) pandoc AI-DISCLOSURE.md -o _site/ai-disclosure.html $(PANDOC_FLAGS) -M title="Built with AI"
+	$(NIX) pandoc docs/architecture/threat-model.md -o _site/threat-model.html $(PANDOC_FLAGS) --lua-filter web/threat-register.lua -M title="Threat Model"
 	@echo "Assembled ./_site (landing + rendered docs at /, Haddock under /api)"
 
 nix-build: ## Build the release artifact via Nix (hermetic)
