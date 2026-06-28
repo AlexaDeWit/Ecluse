@@ -129,12 +129,24 @@
             "id": "0ec10e5e-0000-4000-8000-000000000011",
             "data": {
               "name": "Public npm registry",
-              "description": "The untrusted public upstream. Consulted but never trusted blindly; queried anonymously (caller credential stripped).",
+              "description": "The public upstream. Its tarball bytes and author-supplied manifest fields are untrusted — gated by the rules engine and the integrity floor, never served blindly. The fields the registry itself asserts are trusted only to the floor that the registry is an honest operator: the per-version publish time is server-stamped (npm/PyPI/RubyGems record it server-side and it is absent from the publish document, so a publisher cannot backdate it), as is server-side integrity. A compromised or malicious registry operator forging those is below this necessary trust floor and out of scope. Queried anonymously (caller credential stripped).",
               "type": "tm.Actor",
               "isTrustBoundary": false,
               "outOfScope": false,
               "reasonOutOfScope": "",
-              "threats": [],
+              "threats": [
+                {
+                  "number": 12,
+                  "status": "NA",
+                  "severity": "High",
+                  "title": "Upstream registry forges its own server-asserted metadata (e.g. a backdated publish time)",
+                  "type": "Tampering",
+                  "description": "Écluse's freshness quarantine and integrity reasoning consume fields the upstream registry asserts — notably the per-version publish time and server-side integrity. A registry that asserted forged values (a backdated time to defeat the age quarantine, or a manufactured digest) could admit content the proxy's age- and integrity-based gates would otherwise hold back.",
+                  "mitigation": "Out of scope by trust assumption. The primary registries stamp these fields server-side — the publish time is not part of the publish document, so a publisher cannot forge it — and Écluse necessarily extends a floor of trust to the registry operator's honesty: it reads the registry's metadata, so a hostile operator is an adversary the model cannot counter (the same class as 'what if npm itself is malicious'). What is untrusted here are the tarball contents and author-supplied fields, which the rules engine and integrity floor do gate. A narrower, in-scope variant — a permissive or non-canonical upstream that accepts a client-supplied time — is a separate defence-in-depth consideration (anchoring age to Écluse's first observation), not addressed here.",
+                  "modelType": "STRIDE",
+                  "id": "0ec10e5e-0000-4000-8000-00000000010c"
+                }
+              ],
               "hasOpenThreats": false,
               "providesAuthentication": false
             }
@@ -1250,6 +1262,6 @@
     ],
     "diagramTop": 1,
     "reviewer": "",
-    "threatTop": 11
+    "threatTop": 12
   }
 }
