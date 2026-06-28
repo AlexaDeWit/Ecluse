@@ -47,7 +47,7 @@ import Ecluse.Core.Package.Integrity (
 import Ecluse.Core.Queue (defaultMemoryQueueConfig)
 import Ecluse.Core.Queue.Sqs (SqsConfig (sqsEndpoint, sqsQueueUrl, sqsRegion), SqsEndpoint (endpointHost, endpointPort, endpointSecure))
 import Ecluse.Core.Security (Limits (maxBodyBytes, maxNestingDepth, maxVersionCount), TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), defaultLimits)
-import Ecluse.Core.Server.Cache (CacheConfig (cacheMaxEntries, cacheTtl))
+import Ecluse.Core.Server.Cache (CacheConfig (cacheMaxBytes, cacheMaxEntries, cacheTtl))
 import Ecluse.Core.Server.Context (
     MountBinding (bindingPackumentDeps, bindingPrefix, bindingPublishDeps),
     PackumentDeps (..),
@@ -428,9 +428,16 @@ mirrorCredentialSpec = describe "planMirrorCredential / resolveCodeArtifactConfi
 cacheConfigSpec :: Spec
 cacheConfigSpec = describe "cacheConfigFor" $
     it "maps the env cache tunables onto the metadata CacheConfig" $ do
-        env <- expectEnv (("METADATA_CACHE_TTL_SECONDS", "45") : ("METADATA_CACHE_MAX_ENTRIES", "256") : staticEnvVars)
+        env <-
+            expectEnv
+                ( ("METADATA_CACHE_TTL_SECONDS", "45")
+                    : ("METADATA_CACHE_MAX_ENTRIES", "256")
+                    : ("METADATA_CACHE_MAX_BYTES", "1048576")
+                    : staticEnvVars
+                )
         cacheTtl (cacheConfigFor env) `shouldBe` (45 :: NominalDiffTime)
         cacheMaxEntries (cacheConfigFor env) `shouldBe` 256
+        cacheMaxBytes (cacheConfigFor env) `shouldBe` 1048576
 
 -- ── config-driven serving ─────────────────────────────────────────────────────
 

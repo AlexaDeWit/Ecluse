@@ -121,6 +121,8 @@ data Metrics = Metrics
     , mUpstreamFetchErrors :: Counter Int64
     , mMetadataCacheRequests :: Counter Int64
     , mMetadataCacheEntries :: Gauge Int64
+    , mMetadataCacheResidentBytes :: Gauge Int64
+    , mSingleVersionCacheResidentBytes :: Gauge Int64
     , mMirrorEnqueued :: Counter Int64
     , mMirrorEnqueueFailures :: Counter Int64
     , mMirrorJobsProcessed :: Counter Int64
@@ -152,6 +154,8 @@ newMetrics telemetry = do
         <*> counter meter UpstreamFetchErrors "{error}" "upstream metadata-fetch errors by upstream and cause"
         <*> counter meter MetadataCacheRequests "{request}" "metadata-cache lookups by hit/miss"
         <*> gauge meter MetadataCacheEntries "metadata-cache occupancy"
+        <*> gauge meter MetadataCacheResidentBytes "full-packument metadata-cache resident bytes"
+        <*> gauge meter SingleVersionCacheResidentBytes "single-version metadata-cache resident bytes"
         <*> counter meter MirrorEnqueued "{job}" "mirror jobs enqueued"
         <*> counter meter MirrorEnqueueFailures "{failure}" "mirror enqueue failures"
         <*> counter meter MirrorJobsProcessed "{job}" "mirror jobs processed by result"
@@ -198,6 +202,8 @@ metricsPortOf m =
         , mpUpstreamFetchError = recordUpstreamFetchError m
         , mpCacheRequest = recordCacheRequest m
         , mpCacheEntries = recordCacheEntries m
+        , mpCacheResidentBytes = recordCacheResidentBytes m
+        , mpVersionCacheResidentBytes = recordVersionCacheResidentBytes m
         , mpMirrorEnqueued = recordMirrorEnqueued m
         , mpMirrorEnqueueFailure = recordMirrorEnqueueFailure m
         }
@@ -276,6 +282,20 @@ recordCacheRequest m result =
 recordCacheEntries :: (MonadIO m) => Metrics -> Int -> m ()
 recordCacheEntries m entries =
     set (mMetadataCacheEntries m) (fromIntegral entries) []
+
+{- | Record the full-packument metadata cache's resident bytes
+(@ecluse.metadata_cache.resident_bytes@).
+-}
+recordCacheResidentBytes :: (MonadIO m) => Metrics -> Int -> m ()
+recordCacheResidentBytes m bytes =
+    set (mMetadataCacheResidentBytes m) (fromIntegral bytes) []
+
+{- | Record the single-version metadata cache's resident bytes
+(@ecluse.metadata_cache.version.resident_bytes@).
+-}
+recordVersionCacheResidentBytes :: (MonadIO m) => Metrics -> Int -> m ()
+recordVersionCacheResidentBytes m bytes =
+    set (mSingleVersionCacheResidentBytes m) (fromIntegral bytes) []
 
 -- ── mirror ─────────────────────────────────────────────────────────────────────
 

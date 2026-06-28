@@ -21,8 +21,10 @@ import Ecluse.Core.Server.Cache (
     cachedMetadata,
     defaultCacheConfig,
     newMetadataCache,
+    weighCacheEntry,
  )
 import Ecluse.Core.Server.Cache qualified as Cache
+import Ecluse.Core.Telemetry.Record (MetricsPort (..))
 import Ecluse.Test.Port (noopMetricsPort)
 
 {- | Resolve through the cache with an inert metrics port, so these tests assert the
@@ -63,9 +65,31 @@ so a test can assert which exact (typed view, raw bytes) pair a hit returned.
 entry :: PackageName -> Text -> CacheEntry
 entry name marker = CacheEntry{entryInfo = info name, entryRaw = String marker}
 
--- | A cache config with the given TTL (seconds) and maximum entry count.
+{- | A cache config with the given TTL (seconds) and maximum entry count, with a resident
+budget generous enough that the entry count is the binding bound.
+-}
 config :: NominalDiffTime -> Int -> CacheConfig
-config ttl size = CacheConfig{cacheTtl = ttl, cacheMaxEntries = size}
+config ttl size = configBytes ttl size (1024 * 1024 * 1024)
+
+-- | A cache config with the given TTL (seconds), entry count, and resident-byte budget.
+configBytes :: NominalDiffTime -> Int -> Int -> CacheConfig
+configBytes ttl size bytes = CacheConfig{cacheTtl = ttl, cacheMaxEntries = size, cacheMaxBytes = bytes}
+
+{- | The resident weight a single empty-versions cache entry is estimated at, so a byte
+budget can be expressed as a count of these entries.
+-}
+entryWeight :: Int
+entryWeight = weighCacheEntry (entry (pkg "weight-probe") "raw")
+
+{- | A metrics port that captures the most-recent full-packument residency-gauge value it
+is handed, alongside a reader for it. Every other field is inert. Lets a test assert the
+residency the cache last reported on a leader insert.
+-}
+recordingResidencyPort :: IO (MetricsPort, IO (Maybe Int))
+recordingResidencyPort = do
+    seen <- newIORef Nothing
+    let port = noopMetricsPort{mpCacheResidentBytes = writeIORef seen . Just}
+    pure (port, readIORef seen)
 
 -- | A fresh cache with a generous TTL and ample room.
 freshCache :: IO MetadataCache
@@ -317,9 +341,55 @@ spec = do
             result <- resolveMetadata c publicSource (pkg "final") (pure (entry (pkg "final") "raw"))
             infoName (entryInfo result) `shouldBe` pkg "final"
 
+    describe "resident-byte budget" $ do
+        it "evicts to keep the resident estimate under the byte budget" $ do
+            -- A budget that holds three entries (the entry count is generous, so the byte
+            -- budget is the binding bound): resolving many distinct packages must not let
+            -- the resident estimate exceed it.
+            let held = 3
+            c <- newMetadataCache (configBytes 60 1000 (held * entryWeight + entryWeight `div` 2))
+            for_ [1 .. 20 :: Int] $ \i ->
+                resolveMetadata c publicSource (pkg (show i)) (pure (entry (pkg (show i)) "raw"))
+            n <- cacheSize c
+            (n * entryWeight) `shouldSatisfy` (<= held * entryWeight + entryWeight `div` 2)
+            n `shouldSatisfy` (<= held)
+
+        it "retains a repeatedly-accessed entry while evicting the one-shot tail" $ do
+            -- The hot head survives pressure: a budget that holds a few entries, a hot key
+            -- re-accessed on every round, and a long tail of one-shot keys. The hot key is
+            -- most-recently-used each round, so the least-recently-used eviction sheds the
+            -- cold tail and never the head.
+            let held = 3
+            c <- newMetadataCache (configBytes 60 1000 (held * entryWeight + entryWeight `div` 2))
+            _ <- resolveMetadata c publicSource (pkg "hot") (pure (entry (pkg "hot") "raw"))
+            for_ [1 .. 30 :: Int] $ \i -> do
+                -- Touch the hot key (a hit, bumping its recency), then insert a one-shot.
+                _ <- resolveMetadata c publicSource (pkg "hot") (pure (entry (pkg "hot") "unused"))
+                resolveMetadata c publicSource (pkg ("cold-" <> show i)) (pure (entry (pkg ("cold-" <> show i)) "raw"))
+            hot <- cachedMetadata c publicSource (pkg "hot")
+            firstCold <- cachedMetadata c publicSource (pkg "cold-1")
+            fmap (infoName . entryInfo) hot `shouldBe` Just (pkg "hot")
+            firstCold `shouldBe` Nothing
+
+        it "reports the resident bytes through the residency gauge" $ do
+            -- The residency gauge reflects the held entries' summed weight: after resolving
+            -- a few distinct packages (under both bounds), the last reported value equals the
+            -- entry count times the per-entry weight.
+            (port, readResidency) <- recordingResidencyPort
+            c <- newMetadataCache (config 60 100)
+            for_ [1 .. 4 :: Int] $ \i ->
+                Cache.resolveMetadata port c publicSource (pkg (show i)) (pure (entry (pkg (show i)) "raw"))
+            residency <- readResidency
+            n <- cacheSize c
+            residency `shouldBe` Just (n * entryWeight)
+            n `shouldBe` 4
+
     describe "defaultCacheConfig" $ do
         it "uses a short, non-zero TTL" $
             cacheTtl defaultCacheConfig `shouldSatisfy` (> 0)
 
         it "bounds the cache to a positive entry count" $
             cacheMaxEntries defaultCacheConfig `shouldSatisfy` (> 0)
+
+        it "bounds the cache to a positive resident-byte budget" $
+            cacheMaxBytes defaultCacheConfig `shouldSatisfy` (> 0)

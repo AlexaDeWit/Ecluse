@@ -162,7 +162,7 @@ newMetadataClient metrics upstream caching logFailure logInvalid rawFetch rawFet
                     case warm of
                         Just entry -> pure (Right (selectVersion version (entryInfo entry)))
                         -- (3) Cold: lead the selective fetch through the version cache.
-                        Nothing -> runVersion (resolveVersion cache source name version (versionLeader name version))
+                        Nothing -> runVersion (resolveVersion metrics cache source name version (versionLeader name version))
 
     selectVersion :: Version -> PackageInfo -> Maybe PackageDetails
     selectVersion version info = Map.lookup (renderVersion version) (infoVersions info)
