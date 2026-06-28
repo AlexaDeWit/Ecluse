@@ -19,7 +19,7 @@ enforced at the points noted below.
 
 These outbound-request and input-validation guards implement the register's mitigations for
 **SSRF / unintended fetch targets** and **client-controlled artifact source** (register
-threat #5) and **algorithmic-complexity DoS via upstream payloads** (register threat #2).
+threat #5) and **resource-amplification DoS via pathological upstream payloads** (register threat #2).
 The threat statements and their dispositions live in the [register](https://alexadewit.github.io/Ecluse/threat-model.html), not
 here.
 
