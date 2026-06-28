@@ -24,7 +24,7 @@ it rather than trust it.
 > **AWS-backed deployment** (an SQS mirror queue with a demand-driven worker, writing under
 > a container-role credential) is wired end to end. The **GCP backends** and the deployment
 > runbook are still to come. Pre-release candidates are published and attested, but expect
-> breaking changes before `v0.1.0`. [`USAGE.md`](USAGE.md) is the deployment **contract** —
+> breaking changes before `v0.1.0`. [`USAGE.md`](USAGE.md) is the deployment **contract**:
 > what is actually wired today.
 
 **API documentation:** [Haddock for the library](https://alexadewit.github.io/Ecluse/api/), auto-published from `main`.

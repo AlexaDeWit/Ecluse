@@ -31,9 +31,9 @@ designed behaviour.
 
 A package version served from a **public** (untrusted) upstream **must carry an integrity
 digest whose algorithm meets the integrity floor** (`PROXY_MIN_PUBLIC_INTEGRITY`, default
-**SHA-256**). A public version whose strongest digest is **absent**, or **below the floor** —
-for example only a legacy SHA-1 `dist.shasum`, with no `sha256`/`sha512` SRI `dist.integrity`
-— is **inadmissible**: it's refused outright, never served.
+**SHA-256**). A public version whose strongest digest is **absent**, or **below the floor**
+(for example only a legacy SHA-1 `dist.shasum`, with no `sha256`/`sha512` SRI `dist.integrity`)
+is **inadmissible**: it's refused outright, never served.
 
 - On the **artifact** (tarball) path, a request for such a version is refused with a `403`
   before the tarball is ever fetched.
@@ -42,7 +42,7 @@ for example only a legacy SHA-1 `dist.shasum`, with no `sha256`/`sha512` SRI `di
   are inadmissible, the packument request is a `403`.)
 
 **Why.** SHA-1/MD5 have practical collisions, so a match can't prove bytes weren't
-substituted, and a weak or absent digest can't anchor the cross-upstream tamper check —
+substituted, and a weak or absent digest can't anchor the cross-upstream tamper check:
 admitting on one would let a substituted artifact pass undetected. This is the public
 **integrity floor**; its full contract (the hard SHA-256 boundary, the trusted-floor
 asymmetry, the divergence cross-check) is
@@ -54,7 +54,7 @@ trusted and enter unfiltered, so a SHA-1-only *private* version is still served 
 substitutes for cryptographic strength). The floor applies only to untrusted public upstreams.
 
 **Gotcha.** If a public registry serves a version whose strongest digest is below the floor
-(no `integrity`, or only a legacy `shasum` — rare for npm, but possible for an off-spec mirror
+(no `integrity`, or only a legacy `shasum`, rare for npm, but possible for an off-spec mirror
 or custom upstream), that version will be missing from what Écluse serves and a direct fetch
 of it will `403`. This is deliberate: point such a source at the *private* (trusted) upstream
 slot if you genuinely intend to serve it.

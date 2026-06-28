@@ -51,29 +51,29 @@ flag uploads (unit ∪ integration) into one project total. The full strategy, g
 Codecov knobs live in [Testing Strategy](docs/testing.md) → "Coverage"; the contributor-facing
 commands are:
 
-- **`make coverage` — the canonical command.** Builds *both* gating tiers instrumented
+- **`make coverage`: the canonical command.** Builds *both* gating tiers instrumented
   (HPC, in an isolated `dist-coverage/`), `hpc combine --union`s their `.tix`, and writes the
   combined Codecov JSON to `coverage/combined.json`. This reproduces the **merged total Codecov
   shows**, so a local read agrees with the dashboard. It runs the integration tier, so it
   **needs a running Docker daemon** (the ministack containers; the Nix shell ships the
   toolchain, not the daemon). With no daemon it fails with a clear message pointing at the fast
   path.
-- **`make coverage-unit` (≡ `make coverage SUITE=ecluse-unit`) — the fast, Docker-free loop.**
+- **`make coverage-unit` (≡ `make coverage SUITE=ecluse-unit`): the fast, Docker-free loop.**
   Measures the **unit tier only**. It is a **partial view** Codecov merges with the integration
-  tier — the run prints this loudly — so it under-counts every module the integration tier
+  tier (the run prints this loudly), so it under-counts every module the integration tier
   exercises (the SQS `MirrorQueue` backend, the worker's real fetch/publish path). Reach for it
   for a quick local number; reach for bare `make coverage` for the honest, Codecov-matching one.
-- **`make coverage SUITE=<tier>` — one tier's report.** The per-flag form CI uses: each tier
+- **`make coverage SUITE=<tier>`: one tier's report.** The per-flag form CI uses: each tier
   (`ecluse-unit`, `ecluse-integration`) writes its own `coverage/<tier>.json`, uploaded under
-  its own Codecov flag. Keep this shape — the per-flag uploads depend on it.
+  its own Codecov flag. Keep this shape: the per-flag uploads depend on it.
 
 **Only the two gating tiers surface coverage.** Codecov's total is `ecluse-unit ∪
-ecluse-integration` and **nothing else** — the **E2E and Smoke suites are deliberately
+ecluse-integration` and **nothing else**: the **E2E and Smoke suites are deliberately
 excluded** (they are not built with HPC and upload no flag). That is by design: E2E is a
 slow end-to-end smoke of the assembled binary and Smoke hits live third-party registries
 off the gate, so neither is a coverage instrument. The practical consequence: **a line
 exercised only by E2E or Smoke still reads as uncovered**, both locally and on the
-dashboard. So do not reason "the e2e test covers it" — if a path needs coverage, it needs
+dashboard. So do not reason "the e2e test covers it"; if a path needs coverage, it needs
 a **unit or integration** test. (This is the inverse trap of the per-tier partial above:
 there a real path looks uncovered because you ran one tier; here it looks uncovered
 because the tier that exercises it never counts.)
@@ -81,7 +81,7 @@ because the tier that exercises it never counts.)
 **Reporting divergence is not a coverage gap.** This combined command exists to kill a
 *reporting* confusion (a local single-tier read disagreeing with the merged dashboard). It does
 not move real coverage: if the **merged** report still shows a module's error arms red, that is
-a genuine uncovered path the tests owe — fix it with a test, not with tooling.
+a genuine uncovered path the tests owe: fix it with a test, not with tooling.
 
 The generators are [`scripts/coverage.sh`](scripts/coverage.sh) (one tier) and
 [`scripts/coverage-combined.sh`](scripts/coverage-combined.sh) (the merged view).
