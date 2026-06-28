@@ -49,6 +49,17 @@ scenarios = do
             mirrored <- verdaccioHasVersion e2e (psName denyPkg) (psVersion denyPkg)
             mirrored `shouldBe` False
 
+        it "runs no package lifecycle script during a harness install (defence in depth)" $ \e2e -> do
+            -- Distinct from the rules-engine block above: that proves the *proxy* refuses to
+            -- serve a package declaring an install script; this proves our *own* npm CLI
+            -- executes no lifecycle script even when one is present, the guard that closes the
+            -- arbitrary-code-execution surface in our supply-chain-security tool's own CI. The
+            -- probe project's own `postinstall` would create a sentinel; a successful install
+            -- that creates none proves npm_config_ignore_scripts held.
+            (installed, scriptRan) <- installWithLifecycleProbe e2e
+            npmExit installed `shouldBe` ExitSuccess
+            scriptRan `shouldBe` False
+
     describe "server↔worker — the integrity gate" $
         it "refuses to mirror an artifact whose bytes fail the integrity gate" $ \e2e -> do
             -- A tarball request enqueues a mirror (S15 demand-driven). The proxy serves

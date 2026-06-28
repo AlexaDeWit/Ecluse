@@ -49,6 +49,7 @@ module Ecluse.E2E.Harness (
     NpmResult (..),
     NpmProject,
     npmInstall,
+    installWithLifecycleProbe,
     withNpmProject,
     npmInstallIn,
     npmCiIn,
@@ -101,7 +102,7 @@ import Network.Socket (
     socket,
     tupleToHostAddress,
  )
-import System.Directory (createDirectoryIfMissing, getTemporaryDirectory, removePathForcibly)
+import System.Directory (createDirectoryIfMissing, doesFileExist, getTemporaryDirectory, removePathForcibly)
 import System.Exit (ExitCode (ExitSuccess))
 import System.FilePath ((</>))
 import System.Process.Typed (proc, readProcess, readProcessStdout, setEnv, setWorkingDir)
@@ -564,6 +565,12 @@ withProjectContents e2e packageJson npmrcContents use = do
                     , ("npm_config_fund", "false")
                     , ("npm_config_update_notifier", "false")
                     , ("npm_config_progress", "false")
+                    , -- Écluse is a supply-chain-security proxy, so no npm child it spawns may
+                      -- execute an upstream package's lifecycle scripts (an arbitrary-code-
+                      -- execution surface). This project lives outside the repo tree, where the
+                      -- committed root @.npmrc@'s @ignore-scripts@ is unreachable, so the guard
+                      -- is set in the child environment instead — unconditionally, every npm call.
+                      ("npm_config_ignore_scripts", "true")
                     , ("HOME", projectDir)
                     ]
                 cleanEnv =
@@ -632,6 +639,34 @@ for the one-shot cases that only need the install's outcome.
 -}
 npmInstall :: E2E -> Text -> IO NpmResult
 npmInstall e2e pkg = withNpmProject e2e (`npmInstallIn` pkg)
+
+{- | Install an isolated project whose own @postinstall@ would create a sentinel file in the
+project root, returning the install result and whether that sentinel was created. npm runs a
+root package's lifecycle scripts on @npm install@ unless they are disabled, and the harness
+disables them for every npm child it spawns, so a faithful harness creates no sentinel — the
+returned 'Bool' is 'False' even on a successful install. The regression guard that script
+suppression holds: were the guard dropped, the @postinstall@ would run and the 'Bool' flip to
+'True'.
+-}
+installWithLifecycleProbe :: E2E -> IO (NpmResult, Bool)
+installWithLifecycleProbe e2e =
+    withProjectContents e2e lifecycleProbePackageJson "" $ \proj -> do
+        res <- runNpm proj ["install"]
+        ran <- doesFileExist (npDir proj </> lifecycleSentinel)
+        pure (res, ran)
+
+-- The file a lifecycle script would create; its absence after an install proves no script
+-- ran. Relative, so it lands in the project root — npm's working directory for a root
+-- package's own lifecycle scripts.
+lifecycleSentinel :: FilePath
+lifecycleSentinel = "lifecycle-script-ran"
+
+-- A minimal project whose own @postinstall@ would @touch@ 'lifecycleSentinel'. npm runs a
+-- root package's lifecycle scripts on @npm install@ unless they are disabled, so the
+-- sentinel is a faithful probe for whether script execution was suppressed.
+lifecycleProbePackageJson :: Text
+lifecycleProbePackageJson =
+    "{\"name\":\"e2e-lifecycle-probe\",\"version\":\"1.0.0\",\"private\":true,\"scripts\":{\"postinstall\":\"touch lifecycle-script-ran\"}}\n"
 
 consumerPackageJson :: Text
 consumerPackageJson = "{\"name\":\"e2e-consumer\",\"version\":\"1.0.0\",\"private\":true}\n"
