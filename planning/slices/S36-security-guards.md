@@ -19,7 +19,7 @@ pr: null
 
 **Goal.** Écluse builds outbound HTTP requests from **client-supplied package
 identifiers** and **upstream-supplied artifact locations**, so it needs explicit,
-testable SSRF / input-validation / resource-bound defences — not implementer
+testable SSRF / input-validation / resource-bound defences, not implementer
 discretion. This slice delivers those as **pure guard primitives** (plus the
 `Limits` config + bounded reader/decoder), to be **wired into** the data plane
 (S08) and serve path (S14/S15) as they land. It is the gate before the request
@@ -96,7 +96,7 @@ layer cannot resolve names).
 - **IPv4-mapped IPv6 *is* decoded** (no longer deferred). `isBlockedTarget` parses
   the IPv4-mapped form `::ffff:a.b.c.d` (both the hex `::ffff:a9fe:a9fe` and the
   canonical dotted `::ffff:169.254.169.254` spellings), recovers the embedded IPv4,
-  and re-runs the internal-range test on it — so an attacker cannot smuggle an
+  and re-runs the internal-range test on it, so an attacker cannot smuggle an
   internal IPv4 (e.g. the metadata address) past the per-IPv4-range checks inside an
   IPv6 literal. This closes the gap the original "Deferred" note left open (done in
   PR #38). Octal-form octets remain undecoded (still covered only by the allowlist),

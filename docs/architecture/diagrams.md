@@ -206,7 +206,7 @@ sequenceDiagram
 Each version is evaluated against the rule set. There is **one engine** over a
 single **boot-ordered list** (highest precedence first, then rule name): evaluation
 walks it and takes the **first decisive result** (allow, deny, or a fail-closed
-unavailability), so effectful IO runs only up to that result — and MAY run
+unavailability), so effectful IO runs only up to that result, and MAY run
 speculatively in parallel while staying as-if sequential by boot order. If no rule
 is decisive, the package is denied by default. At equal precedence the name decides,
 not a deny-over-allow priority. A fail-closed unavailable that wins becomes
@@ -255,7 +255,7 @@ stateDiagram-v2
         dependent op: the job is left un-acked and retries /
         dead-letters, never touching the client serve path.
         (Under service a read credential sits on the serve
-        path — see access-model.md.)
+        path; see access-model.md.)
     end note
 ```
 

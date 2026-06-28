@@ -9,7 +9,7 @@ passes the rules (the tarball path on a private-upstream miss), the proxy:
 
 1. Enqueues a mirror job (the mirror target URL, package name, version, and
    artifact location) to the configured **mirror queue**.
-2. Returns the artifact to the client **immediately** — no blocking on mirror
+2. Returns the artifact to the client **immediately**, no blocking on mirror
    completion.
 
 Metadata (packument) requests filter but do **not** mirror — only versions a
@@ -59,7 +59,7 @@ out.
 
 The split is kept **trivial for later**. The server and worker are each a
 self-contained entry function over the shared, handle-based `Env` —
-`runServer :: Env -> IO ()` and `runWorker :: Env -> IO ()` — and the
+`runServer :: Env -> IO ()` and `runWorker :: Env -> IO ()`, and the
 single-process `Main` simply runs both concurrently. Splitting into two binaries
 is then two thin `Main`s calling the same functions, no rearchitecting, because
 neither depends on the other — only on the handles in `Env`. The worker carries its
@@ -80,7 +80,7 @@ handle is **publish-side only**.
 ## Cloud Backends
 
 Écluse couples to a cloud provider in exactly **two handles**, both records of
-functions (the Handle pattern — see [Handles](#handles-records-of-functions)) so that
+functions (the Handle pattern; see [Handles](#handles-records-of-functions)) so that
 a provider is an additive backend rather than a structural change, the same
 posture as [`RegistryClient`](registry-model.md#registry-abstraction):
 
@@ -93,13 +93,13 @@ posture as [`RegistryClient`](registry-model.md#registry-abstraction):
 
 These two are the **cloud axis**. The **ecosystem axis** is
 [`RegistryClient`](registry-model.md#registry-abstraction), which is
-cloud-agnostic — so the npm protocol/data plane, **including publish**, is written
+cloud-agnostic, so the npm protocol/data plane, **including publish**, is written
 once and reused across every cloud (a managed registry is just an npm endpoint
 plus a token; there is no per-cloud publish path and no object-store handle).
 Everything else — the proxy core, rules engine, web layer, CVE subsystem — is
 cloud-agnostic too. **AWS and GCP are both first-class targets**; the design
 admits a third provider by adding backends behind these two handles — **Azure is
-the worked example** (designed-for, furthest-out — see
+the worked example** (designed-for, furthest-out; see
 [Azure backends](#azure-backends-designed-for-furthest-out)).
 
 ### Handles: records of functions
@@ -127,7 +127,7 @@ runtime by config, the per-op work lives in the interpreter either way, and both
 would mean a heavier dependency than the `ReaderT Env IO` baseline. Records of
 functions give the same swappability and trivial test doubles (an in-memory
 record) with none of that. The free monad would earn its keep only if we needed to
-inspect/rewrite mirror programs (e.g. batch enqueues) — and that has a contained
+inspect/rewrite mirror programs (e.g. batch enqueues), and that has a contained
 answer behind the existing handle if it ever arises.
 
 ### Service mapping
@@ -170,7 +170,7 @@ public upstream is anonymous under every strategy. See [Access & Credential Mode
 
 **Providers are global; mounts reference them.** A `CredentialProvider` is the
 service's own cloud identity — typically a single **container task role** (AWS) or
-**workload identity** (GCP), available process-wide — so it is built **once at the
+**workload identity** (GCP), available process-wide, so it is built **once at the
 composition root**, not per mount. A mount carries no provider of its own; it
 **names which configured provider** its strategy draws on. In the common deployment
 those references collapse to **one** identity: the same container role both writes
@@ -179,7 +179,7 @@ reads the private upstream — Écluse acts as one consistent entity. A multi-cl
 process holds one provider per cloud, keyed by cloud; the region/project scoping
 each (`AWS_REGION` / `GOOGLE_CLOUD_PROJECT`) are likewise process-global. **A mount
 that names a credential source with no initialized provider is a boot-time failure**
-(aggregated with other config errors — see
+(aggregated with other config errors; see
 [Configuration → Validation](configuration.md#validation-fail-fast-reject-the-unknown)),
 never a runtime surprise.
 
@@ -208,7 +208,7 @@ case. Refresh is **single-flight** per provider (an STM flag / `TMVar`): at most
 one mint is ever in flight, so a cohort of requests never stampedes the cloud
 token API. On mint failure the wrapper keeps serving the still-valid token,
 **retries with backoff behind a circuit breaker** (the same machinery as the
-effectful tier — see
+effectful tier; see
 [Rules Engine → Effectful-rule failure](rules-engine.md#effectful-rule-failure)),
 and alarms; only if the token has actually **expired *and* mint still fails** does
 the dependent operation fail. For a **mirror-write** credential that is the publish —
@@ -295,7 +295,7 @@ cloud account or credentials; the Pub/Sub emulator ignores auth entirely), so th
 `MirrorQueue` handle is verified per provider.
 
 The managed-registry backends need no emulator — neither CodeArtifact nor
-Artifact Registry has a usable one — and the handle split is what makes that a
+Artifact Registry has a usable one, and the handle split is what makes that a
 non-problem. The npm **protocol** is just HTTPS+JSON, so it is exercised **once**
 against a real npm-speaking registry (e.g. Verdaccio) or an in-process WAI stub,
 and that single suite covers every managed registry because they share the
@@ -326,7 +326,7 @@ Its arms split cleanly into *easy* and *risky*:
   `499b84ac-1321-427f-aa17-267ca6975798`.
 - **Managed registry — unchanged.** **Azure Artifacts** feeds speak the npm protocol
   over HTTPS (`https://pkgs.dev.azure.com/{org}/{project}/_packaging/{feed}/npm/registry/`),
-  so they ride the existing npm `RegistryClient` plus an Entra bearer — no per-cloud
+  so they ride the existing npm `RegistryClient` plus an Entra bearer, no per-cloud
   publish path. (Azure Artifacts' own *upstream sources* are a registry-composition
   feature, the analog of CodeArtifact external connections — the same
   [registry composition — don't bypass the gate](registry-model.md#registry-level-composition-the-recommended-topology)
@@ -338,10 +338,10 @@ Its arms split cleanly into *easy* and *risky*:
     **no** client (the `amqp` package is AMQP 0.9.1 / RabbitMQ), and the only Service
     Bus Hackage package is **deprecated (2014)**. A hand-rolled **REST** client works
     against the *real* service, but the **official Service Bus emulator is AMQP-only**
-    (messaging on 5672; its HTTP port is management-only) — so REST messaging **cannot
+    (messaging on 5672; its HTTP port is management-only), so REST messaging **cannot
     be tested against the emulator**.
   - The testable alternative is **Storage Queues over REST**, which **Azurite** (the
-    official storage emulator) serves — so a hand-rolled client *is*
+    official storage emulator) serves, so a hand-rolled client *is*
     `testcontainers`-testable. The cost is **no native dead-letter** (emulate via a
     poison-queue keyed on `DequeueCount`) and a thinner feature set.
   - Service Bus's lock duration also **caps at 5 min** (vs SQS 12h / Pub/Sub 10min),

@@ -85,7 +85,7 @@ Keep the pure tier's behaviour unchanged when no effectful rules are configured.
   precedence). Tier-skip, fail-closed, cross-tier precedence, timeout/retry/breaker
   trip-half-open-reopen, and `onError: abstain` are all property-/example-tested in
   `test/unit/Ecluse/Rules/EffectfulSpec.hs` with an injected clock (`ctxNow`) and an
-  injected backoff sleep — no real time passes.
+  injected backoff sleep, no real time passes.
 - **Breaker reuse — pattern, not module (flagged decision).** S16 left its breaker
   __private__ to `Ecluse.Credential.Refresh` and explicitly deferred the
   shared-module decision to S21. To avoid editing a merged out-of-scope file (and
@@ -93,7 +93,7 @@ Keep the pure tier's behaviour unchanged when no effectful rules are configured.
   shape and `admit`/`trip` gates in `Rules.Effectful` rather than extracting a shared
   `Ecluse.Breaker`. Extracting a common module remains a clean, deferrable refactor.
 - **Pipeline wiring.** `PackumentDeps` gained `pdEffectfulRules :: [PrecededEffectfulRule]`
-  (empty at the composition root — no effectful rule type is configurable until S23).
+  (empty at the composition root, no effectful rule type is configurable until S23).
   `Ecluse.Package.Filter.filterPlanFromDecisions` was split out so the (IO) effectful
   decisions feed the same pure survivor/`latest` replay. Both serve paths now gate via
   `evalRulesEffectful`; an `Undecidable` version is filtered out of a packument like a

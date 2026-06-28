@@ -22,7 +22,7 @@ package, or a specific `package@version` — that is a **hard deny**: top preced
 precedence of #13). It is the post-mirror **revocation** enabler: it halts re-admission
 of a known-bad version on the serve path and re-mirroring at the worker ingest re-check
 ([#414](https://github.com/AlexaDeWit/Ecluse/issues/414)), so an operator can revoke a
-version *before* — or without — an upstream yank. Paired with an operator **purge** of the
+version *before*, or without — an upstream yank. Paired with an operator **purge** of the
 version from Registry B (which removes the already-mirrored *trusted* copy, since the rules
 never run on trusted content), it is the complete revocation path. Detection is out of
 scope — delegated to operator scanning / upstream advisories; *what* to revoke is the
@@ -35,7 +35,7 @@ operator's decision (see threat #13, Registry B).
   allow-listed scope cannot override a revocation — the one deliberate exception to
   allow-over-deny (a revocation an allow-list could outrank is not a revocation). —
   _rules-engine.md#rule-precedence_
-- [ ] Pure — no IO; evaluated on the serve path, and honoured by the worker mirror-job
+- [ ] Pure, no IO; evaluated on the serve path, and honoured by the worker mirror-job
   ingest re-evaluation (#414) so a revoked identity is **neither served nor (re-)mirrored**.
 - [ ] Wired into the rule config decoder (S03): a revocation list via config (additive).
 - [ ] Does **not** reach an already-mirrored trusted copy (rules do not run on trusted, by

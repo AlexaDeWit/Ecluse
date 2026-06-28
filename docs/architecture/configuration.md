@@ -18,7 +18,7 @@ Of the two, the **rule policy is what earns the document its keep**: a set of ru
 with per-rule precedence and value overrides, layered over a built-in default (see
 [Rule policy](#rule-policy)). **Mounts are comparatively flat** — three registry
 endpoints and a queue backend, under a prefix
-[derived from the ecosystem](hosting.md#mounts), not configured — so the
+[derived from the ecosystem](hosting.md#mounts), not configured, so the
 **single-ecosystem environment variables (below) desugar to a one-entry mount map**,
 and the common launch case (one npm mount on the default policy) needs no document
 at all. Multi-ecosystem deployments (see
@@ -57,7 +57,7 @@ registries derive short-lived tokens from ambient cloud credentials (see
 | `PUBLICATION_TARGET_URL` | No | URL the proxy writes client `npm publish` (first-party packages) to. **Unset ⇒ the proxy refuses publishes with `405`.** May be the same registry as the private upstream (so published packages are then readable via the private leg). See [Registry roles → publication target](registry-model.md#publishing-first-party-packages-the-publication-target). |
 | `PUBLICATION_TARGET_TOKEN` | No (but **requires `PROXY_AUTH_TOKEN`** when set) | Static credential for the publication target when it is not reached with the client's forwarded token. The default publish credential model is **passthrough** — the publisher's own token; see [Access model](access-model.md#publishing-the-publication-target-passthrough-write). Because a static credential makes Écluse publish under its **own** identity, it is fail-closed: set without `PROXY_AUTH_TOKEN`, the proxy **refuses to boot** (`PublishStaticCredentialNeedsEdge`). |
 | `PUBLISH_SCOPES` | Required when `PUBLICATION_TARGET_URL` is set | Comma-separated allow-list of package scopes a client may publish (e.g. `@acme`). A publish whose name is outside the list is refused — the anti-shadowing guard against publishing a name that collides with a public package. |
-| `MIRROR_QUEUE_PROVIDER` | No (default: `sqs`) | Mirror-queue backend: `sqs` (AWS), `memory` (a bounded in-process queue — no cloud queue, at the cost of a **non-durable, best-effort** mirror; an explicit choice for a simple/single-node/air-gapped deployment, **never** an automatic fallback), or `pubsub` (GCP, recognised but not yet built). Selecting `memory` emits a loud boot warning. See [Cloud Backends](cloud-backends.md#cloud-backends). |
+| `MIRROR_QUEUE_PROVIDER` | No (default: `sqs`) | Mirror-queue backend: `sqs` (AWS), `memory` (a bounded in-process queue, no cloud queue, at the cost of a **non-durable, best-effort** mirror; an explicit choice for a simple/single-node/air-gapped deployment, **never** an automatic fallback), or `pubsub` (GCP, recognised but not yet built). Selecting `memory` emits a loud boot warning. See [Cloud Backends](cloud-backends.md#cloud-backends). |
 | `MIRROR_QUEUE_URL` | Cloud backends only (`sqs`/`pubsub`) | Queue identifier for mirror jobs: an SQS queue URL, or a Pub/Sub `projects/<project>/topics/<topic>` resource, per provider. **Required for the cloud backends** (an absent one fails loud at boot); **not needed for `memory`**, which has no external queue and ignores it. |
 | `MIRROR_QUEUE_MEMORY_MAX_DEPTH` | No (default: `50000`) | `memory` provider only. The cap on the in-process queue's depth. A cold-cache `npm ci` enqueues thousands of mirror jobs at once, so the queue is hard-bounded against an out-of-memory burst: an enqueue past the cap is dropped (**drop-newest**), which is safe — a dropped job is re-mirrored on the next demand. Each rate-limited drop is logged. Must be a positive integer; raise it to shed fewer jobs under load, lower it to bound memory tighter. |
 | `AWS_REGION` | AWS backends only | Region for SQS and CodeArtifact. |
@@ -75,13 +75,13 @@ registries derive short-lived tokens from ambient cloud credentials (see
 | `PROXY_MAX_VERSION_COUNT` | No (default: `100000`) | Largest number of versions a parsed packument may carry before it is refused. Bounds per-version rule evaluation against a version-flood document. Must be a positive integer. See [Response bounds](#response-bounds). |
 | `PROXY_MAX_NESTING_DEPTH` | No (default: `64`) | Deepest JSON nesting a decoded upstream document may reach before it is refused. Bounds stack/CPU against a pathologically nested payload. Must be a positive integer. See [Response bounds](#response-bounds). |
 | `PROXY_MIN_PUBLIC_INTEGRITY` | No (default: `sha256`) | Minimum integrity algorithm a **public** (untrusted) version's digest must meet to be admitted: `sha256`, `sha384`, `sha512`, or `blake2b`. A public version whose strongest digest is weaker (e.g. a legacy SHA-1 `shasum` only) is refused with a `403`. **Hard-floored at SHA-256** — a value below it (`sha1`, `md5`) or an unknown name is rejected at load, not clamped, and there is **no escape-hatch** to admit a sub-SHA-256 digest from an untrusted upstream. The trusted private path has its own, loosenable floor (`PROXY_MIN_TRUSTED_INTEGRITY`). See [Public integrity floor](#public-integrity-floor) and [Security → asymmetric integrity trust](security.md#invariants). |
-| `PROXY_MIN_TRUSTED_INTEGRITY` | No (default: `sha256`) | Minimum integrity algorithm a **trusted** (private) version's digest must meet to be served. Defaults to `sha256` — so by default a SHA-1-only or hashless private version is dropped, exactly like a public one — but unlike the public floor is **loosenable below SHA-256**: `sha1`/`md5` are accepted for a legacy private mirror, where trust substitutes for cryptographic strength. An unknown name is still rejected at load. See [Trusted integrity floor](#trusted-integrity-floor) and [Security → asymmetric integrity trust](security.md#invariants). |
+| `PROXY_MIN_TRUSTED_INTEGRITY` | No (default: `sha256`) | Minimum integrity algorithm a **trusted** (private) version's digest must meet to be served. Defaults to `sha256`, so by default a SHA-1-only or hashless private version is dropped, exactly like a public one, but unlike the public floor is **loosenable below SHA-256**: `sha1`/`md5` are accepted for a legacy private mirror, where trust substitutes for cryptographic strength. An unknown name is still rejected at load. See [Trusted integrity floor](#trusted-integrity-floor) and [Security → asymmetric integrity trust](security.md#invariants). |
 | `PROXY_CONFIG` | No | The structured config document as an inline JSON blob, the alternate to a mounted config file for an env-only deployment. |
 
 ### Upstream composition (optional)
 
 `PRIVATE_UPSTREAM_URL` may point at a single registry **or** at one that itself
-aggregates others — e.g. an AWS CodeArtifact repository with upstream
+aggregates others; e.g. an AWS CodeArtifact repository with upstream
 relationships to a mirror-target repo and a first-party "published-by-us" repo, so
 one fetch returns the whole trusted set. This is a supported topology but **never
 required**: Écluse
@@ -122,7 +122,7 @@ forwarded token (it is the authority for reads) and the public upstream is queri
 anonymously with the client's token **stripped**. Under **`service`**, Écluse reads the private upstream with its
 **own** `CredentialProvider` token — per-request and **never cached** (Écluse forbids a
 shared private cache; see [Access & Credential Model → Caching](access-model.md#caching)).
-The public upstream is anonymous under every strategy — and the client's token is
+The public upstream is anonymous under every strategy, and the client's token is
 **never** forwarded there. The public-origin fetch is built with no token at all:
 there is deliberately no Écluse credential for the public upstream. Minting these
 credentials from a cloud identity keeps long-lived secrets out of config.
@@ -187,7 +187,7 @@ carries at least one integrity digest whose algorithm meets the **public integri
 match on one cannot prove an artifact was not substituted; a public version whose
 strongest digest is below the floor is refused (`403`) and filtered from the served
 listing. The trusted private path is governed by its own, **loosenable** floor
-([Trusted integrity floor](#trusted-integrity-floor)) — but the public floor here is
+([Trusted integrity floor](#trusted-integrity-floor)), but the public floor here is
 **never** loosenable.
 
 `PROXY_MIN_PUBLIC_INTEGRITY` sets the floor (default `sha256`). It may be **raised** as
@@ -208,7 +208,7 @@ upstream.
 A **trusted** (private) upstream's version is served only if its selected artifact carries
 at least one integrity digest whose algorithm meets the **trusted integrity floor**
 ([invariant 5](security.md#invariants)). It defaults to `sha256` — the **same** secure
-default as the public floor — so by default a SHA-1-only or hashless private version is
+default as the public floor, so by default a SHA-1-only or hashless private version is
 **dropped** (filtered from the served listing, and a private miss on the artifact path that
 falls through to the public origin). The old "trusted private path is exempt" behaviour is
 no longer the default.
@@ -255,11 +255,11 @@ a stricter policy on npm than on PyPI).
 
 Each rule may set an integer `precedence` (higher wins); omit it to use the rule
 type's default. At boot the rules are arranged **once** into a single total order —
-**highest precedence first, then rule name ascending** — and evaluation walks that
+**highest precedence first, then rule name ascending**, and evaluation walks that
 order and takes the **first decisive result** (an allow, a deny, or a fail-closed
 unavailability); if no rule is decisive, the package is denied by default. At
 **equal explicit precedence** the tie is resolved by **rule name**, *not* by a
-deny-over-allow priority — so two rules an operator gives the same precedence resolve
+deny-over-allow priority, so two rules an operator gives the same precedence resolve
 deterministically by name. Deny-over-allow still holds out of the box, because the
 deny defaults sit strictly above the allow defaults. The resolved boot order is
 **logged at start-up** (one line per rule, per mount), so the effective resolution is
@@ -308,7 +308,7 @@ Crucially, **unknown is an error, not a silent skip**:
   mistype a rule out of existence.
 - **Credential references must resolve.** A mount whose
   [credential strategy](access-model.md) draws on a provider the deployment has not
-  initialized — e.g. a `service` mount with
+  initialized; e.g. a `service` mount with
   no read provider, or a mirror target naming a backend whose ambient cloud identity
   is absent — is **rejected at boot**. Credential providers are
   [process-global](cloud-backends.md#credential-provider) and a mount only references
@@ -344,7 +344,7 @@ client's constraints, in [access-model](access-model.md#edge-authentication)):
 3. **Trusted edge identity** — a fronting authenticating proxy / cloud IAP / service
    mesh performs SSO or mTLS and asserts a verified identity Écluse trusts. Écluse
    honours the assertion **only over a verifiable binding to that edge** — mutual TLS
-   from the edge, or a shared secret / HMAC on the asserted identity — and **fails
+   from the edge, or a shared secret / HMAC on the asserted identity, and **fails
    fast** on a `trusted-edge` mount configured with neither (consistent with
    [Validation](#validation-fail-fast-reject-the-unknown)); a bare trusted header is
    forgeable into granted access wherever Écluse is reachable other than through the

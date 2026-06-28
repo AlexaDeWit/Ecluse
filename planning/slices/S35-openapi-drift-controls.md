@@ -32,14 +32,14 @@ that were contemplated; none are built.
 
 > Milestone **M2** · depends on: [S34](S34-capability-manifest.md) · tier: unit
 >
-> **(Historical — not built.)** Hardens the S34 manifest against divergence from
+> **(Historical, not built.)** Hardens the S34 manifest against divergence from
 > the server's actual routes and behaviour. **Not on the launch critical path** —
 > sequence after S34. Purely additive: introduces **no** change to S34's manifest
 > output, only guards around it. (S34 **statically generates and publishes** the
-> spec — it is not served — so these guards would bind the generated artifact to the
+> spec — it is not served, so these guards would bind the generated artifact to the
 > live server, not a served endpoint.)
 
-**Goal (historical — not built).** Make it structurally hard for the
+**Goal (historical, not built).** Make it structurally hard for the
 [capability manifest](../../docs/architecture/api-surface.md) to drift from the
 server without a test failing — across **both** drift axes (schema; path/operation)
 — plus PR-visible change detection. See

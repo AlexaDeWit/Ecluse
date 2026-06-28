@@ -16,7 +16,7 @@ pr: null
 > Milestone **M2** · depends on: [S05](S05-rules-precedence.md), [S10](S10-router.md) · tier: unit
 
 **Goal.** The serve-outcome type and its rendering to npm-shaped responses, so every
-client-facing error maps to the right status and an intuitive body — not a generic
+client-facing error maps to the right status and an intuitive body, not a generic
 403/500.
 
 **Acceptance criteria.**

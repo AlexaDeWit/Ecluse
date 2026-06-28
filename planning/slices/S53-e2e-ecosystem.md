@@ -64,7 +64,7 @@ to end. The headline flow no current tier exercises:
   shell (the version oracle), so no new build-time dependency is introduced. (npm →
   proxy is inbound, so it is unaffected by the egress guard.)
 - **Gating: non-gating.** Runs **pre-merge (visibility) + nightly**, like the smoke
-  tier — never a `gate` dependency (image build + containers + npm is heavy).
+  tier, never a `gate` dependency (image build + containers + npm is heavy).
   Promote to gating later if it proves stable. Wired into CI as its own
   `continue-on-error`-style job, **never** a `gate` dependency. _Resource caveat:
   the container topology is the safest, most consumer-portable option but the
@@ -113,7 +113,7 @@ defects no unit/integration test could (none drives a real client), both fixed h
    (`Ecluse.Config`, `Ecluse.Composition`); `USAGE.md` documents it as required for
    real installs.
 2. **The mirror worker's publish omitted `Content-Type: application/json`**, which a
-   spec-compliant registry (Verdaccio) rejects with `415` — so no artifact ever
+   spec-compliant registry (Verdaccio) rejects with `415`, so no artifact ever
    mirrored. Fixed in `Ecluse.Registry.Npm.publishRequest` (the docstring already
    promised the header; the code never set it).
 

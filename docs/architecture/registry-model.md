@@ -6,7 +6,7 @@
 
 The proxy is configured with **four registry roles** — two reads and two writes. They
 are distinct roles, configured separately. Several *may* map to the same physical
-registry — collapsing them onto one store is the simplest setup — but the
+registry — collapsing them onto one store is the simplest setup, but the
 **recommended** topology keeps the first-party and public-derived stores separate and
 unions them at the registry level (see [Registry-level
 composition](#registry-level-composition-the-recommended-topology)). A single shared
@@ -14,9 +14,9 @@ registry is the degenerate floor, not the goal:
 
 | Role | Purpose |
 |------|---------|
-| **Private upstream** | Authoritative, already-vetted source. A **tarball** is served by a **conventional stable read** at `{base}/{pkg}/-/{file}` — no packument fetch, no serve-time integrity floor (see [Serving a tarball](#serving-a-tarball-a-conventional-private-read-an-honoured-public-location)). A **packument**'s versions are trusted and **merged** with the gated public set (see [Packument merge](#packument-merge-across-upstreams)) rather than short-circuiting the public fetch. |
+| **Private upstream** | Authoritative, already-vetted source. A **tarball** is served by a **conventional stable read** at `{base}/{pkg}/-/{file}`, no packument fetch, no serve-time integrity floor (see [Serving a tarball](#serving-a-tarball-a-conventional-private-read-an-honoured-public-location)). A **packument**'s versions are trusted and **merged** with the gated public set (see [Packument merge](#packument-merge-across-upstreams)) rather than short-circuiting the public fetch. |
 | **Public upstream** | Source of versions not (yet) in the private upstream; rules are applied to everything from here. For a **tarball** it is the fallback on a private miss; for a **packument** it is fetched **alongside** the private upstream and merged in. |
-| **Mirror target** | Where approved public packages are written after passing rules. May be the same registry as the private upstream (the simplest, degenerate setup), but is **recommended** to be a distinct store unioned into the private-upstream read path at the registry level — so public-derived inventory stays separable from first-party. |
+| **Mirror target** | Where approved public packages are written after passing rules. May be the same registry as the private upstream (the simplest, degenerate setup), but is **recommended** to be a distinct store unioned into the private-upstream read path at the registry level, so public-derived inventory stays separable from first-party. |
 | **Publication target** | Where **client-published first-party packages** are written (`npm publish` through the proxy). The write counterpart to the private read role; may be the same registry as the private upstream, but is **recommended** to be a distinct first-party store unioned into the private-upstream read path (so first-party content stays separable from approved-public). Distinct from the mirror target: *client*-driven first-party content vs *proxy*-driven approved-public content. See [Publishing first-party packages](#publishing-first-party-packages-the-publication-target). |
 
 ### Credential flow and authority
@@ -37,11 +37,11 @@ upstream wants on the wire* (credential supply). The strategies are detailed in 
 - **Public upstream (read/fallback)** — queried **anonymously** under every strategy.
   The client's credential is **never** forwarded here; sending an internal token to
   the public registry would be a credential disclosure. (If a public mirror itself
-  needs auth, that is Écluse's *own* configured credential — never the client's.)
+  needs auth, that is Écluse's *own* configured credential, never the client's.)
 - **Mirror target (write)** — always Écluse's own credential: the
   [`CredentialProvider`](cloud-backends.md#credential-provider) mints the token to
-  publish approved packages. Often the same registry as the private upstream — so its
-  URL **defaults to `PRIVATE_UPSTREAM_URL`** when unset — but a different identity on
+  publish approved packages. Often the same registry as the private upstream, so its
+  URL **defaults to `PRIVATE_UPSTREAM_URL`** when unset, but a different identity on
   it: the *client* reads it, *Écluse* writes it, and the write credential is selected
   explicitly (it does not fold with the URL).
 - **Publication target (write)** — the **client's own forwarded credential**
@@ -60,11 +60,11 @@ strategy-specific — it does under `passthrough`, not under `service`.)
 The private upstream is the **per-client authority** for who may read what, so its
 packument metadata is **never cached across clients** under any strategy: it is
 re-consulted on **every request** — with the client's **own** forwarded credential
-under `passthrough`, or Écluse's own identity behind the edge under `service` — so the
+under `passthrough`, or Écluse's own identity behind the edge under `service`, so the
 read is freshly authorised each time. Only the **anonymous public (gated) origin** is
 held in the [metadata cache](web-layer.md#metadata-cache). Écluse
 [forbids a shared private cache](access-model.md#why-écluse-never-caches-the-private-origin)
-outright — it is a thin broker and leaves caching to the upstreams — so no strategy
+outright — it is a thin broker and leaves caching to the upstreams, so no strategy
 shares the private origin.
 
 The reason is a **cross-client disclosure hazard** — a credential-blind cache key would
@@ -95,7 +95,7 @@ out-of-band flow.
   `RegistryClient.publishArtifact` primitive; different trigger, content, and credential.
 - **Anti-shadowing guard (the load-bearing control).** A publish is **refused** unless
   its package name falls within the operator's configured **publish scope allow-list**
-  (the MVP mechanism — e.g. `@acme/*`). This is what stops a client publishing a name
+  (the MVP mechanism; e.g. `@acme/*`). This is what stops a client publishing a name
   that shadows an existing public package — a dependency-confusion vector the proxy must
   not enable. (Future work may add richer name grammars or live collision resolution;
   the allow-list is the MVP.) The guard holds the **guard-name ≡ write-name ≡ body-name**
@@ -104,7 +104,7 @@ out-of-band flow.
   `versions[].name`) that a publication target may key the write off — the body's
   **declared names are validated too**. Any present declared name that disagrees with the
   URL-path name is a **`403` before any relay**, compared with the same name
-  canonicalisation the route applies (`PackageName` equality, ecosystem-aware — never a
+  canonicalisation the route applies (`PackageName` equality, ecosystem-aware, never a
   byte-for-byte string compare), so a crafted body cannot publish a name the allow-list
   never authorised. An **absent** declared name is no claim and is not refused (a
   legitimate npm client always sends matching names); only the names are read — the
@@ -113,7 +113,7 @@ out-of-band flow.
   publication target (see [Credential flow and authority](#credential-flow-and-authority));
   Écluse authorises nothing itself and mints no token here.
 - **No read-back role.** The publication target is **write-only** from the proxy's view.
-  Published packages are read back through the **private upstream** — so to serve what
+  Published packages are read back through the **private upstream**, so to serve what
   was published, the operator configures the publication target to be the *same
   registry* as the private upstream (or has the private upstream aggregate it). This
   keeps the read model at two sources.
@@ -155,7 +155,7 @@ upstream is the opt-in metadata-resolution mode.
 
 The **public leg** instead honours the **authoritative upstream location** — the
 `dist.tarball` the gated version declares, fetched at exactly that URL rather than a
-reconstructed `/-/` path — so Écluse can front a public registry that serves artifacts
+reconstructed `/-/` path, so Écluse can front a public registry that serves artifacts
 from a separate host (the PyPI-files-host shape) or a signed CDN URL. That location is
 gated, not trusted: the tarball-host policy and the resolved-IP recheck bound *where* it
 may be fetched (see [Why `dist.tarball` is honoured](security.md#why-disttarball-is-honoured-and-what-bounds-it)).
@@ -206,7 +206,7 @@ deduplicating.
   ([threat #11](https://alexadewit.github.io/Ecluse/threat-model.html)): it is
   **detected, logged, and metered** (and may fail-closed on that version), never
   silently reconciled. The algorithm compared is the one each digest **asserts** — an SRI is
-  resolved to its embedded algorithm, never bucketed under an opaque `SRI` tag — so the
+  resolved to its embedded algorithm, never bucketed under an opaque `SRI` tag, so the
   same algorithm expressed as a hex digest or as an SRI is cross-checked **together**,
   while two *different* algorithms over the same bytes (e.g. a recomputing mirror's
   `sha256` vs npm's `sha512`) form an asymmetric set, **not** a divergence. An
@@ -262,7 +262,7 @@ an adapter. The handle stays single-registry (`fetchMetadata` fetches one regist
 upstreams, parses each, and folds the results. So a new ecosystem's adapter does
 not re-implement merging, and the merge is unit-tested over hand-built
 `PackageInfo` with no network. The merged document is something **no single
-upstream produces** — Écluse authors it — which is why its served schema is owned
+upstream produces** — Écluse authors it, which is why its served schema is owned
 (see [API Surface](api-surface.md#the-synthesized-packument-schema--the-trust-boundary)).
 
 ### The route name is the served name's validation authority
@@ -271,7 +271,7 @@ The proxy always knows the requested package name from the **route**, so an upst
 packument's self-reported top-level `name` is at most a **cross-check**, never the
 served authority. The route name is the authority for **validation, not rewriting**:
 the served packument's `name` is always a value an upstream *genuinely reported*
-(which, having passed validation, equals the route name) — never a substituted,
+(which, having passed validation, equals the route name), never a substituted,
 manufactured, or empty value the proxy invented.
 
 The check is applied **per origin, at the serve boundary**, as the upstream packument is
@@ -282,7 +282,7 @@ projected:
   gated-public rule-filtered).
 - If an origin's self-reported `name` **disagrees**, that origin is treated as
   **untrusted for this request**: its contribution is **dropped from the merge** —
-  degraded exactly like the existing undecodable-packument path — and the mismatch is
+  degraded exactly like the existing undecodable-packument path, and the mismatch is
   **logged** (a katip warning carrying the requested name, the upstream's reported
   name, and the origin). An *absent* or otherwise undecodable name remains an
   undecodable-packument degrade, as before; only a *present-but-different* name is a
@@ -311,12 +311,12 @@ The merge reasons over the **typed** `PackageInfo` domain model, but the documen
 Écluse **serves** is the raw upstream JSON (`Value`), edited in place. These are two
 distinct surfaces, and the boundary between them is load-bearing:
 
-- The **typed `PackageInfo`** is the *decision* surface — which versions survive,
+- The **typed `PackageInfo`** is the *decision* surface, which versions survive,
   which source wins a collision, what `latest` resolves to, which integrity
   divergences exist.
 - The **raw `Value`** is the *served* surface. Those decisions are computed on the
   typed model but **applied structurally to the raw bytes** — denied versions
-  removed, tarball URLs rewritten, `latest` repointed — so every unmodeled wire key
+  removed, tarball URLs rewritten, `latest` repointed, so every unmodeled wire key
   is relayed unchanged. The served body is **never re-serialised from the lossy
   typed model** (see
   [API Surface → synthesized-packument schema](api-surface.md#the-synthesized-packument-schema--the-trust-boundary)).
@@ -368,7 +368,7 @@ count) is a noted follow-up.
 
 The **recommended** deployment keeps the first-party store and the public-derived
 mirror store **physically separate** and unions them at the **registry** level into the
-private-upstream read path — e.g. AWS CodeArtifact upstream relationships, where
+private-upstream read path; e.g. AWS CodeArtifact upstream relationships, where
 `PRIVATE_UPSTREAM_URL` points at an aggregating repository that itself draws from a
 mirror-target repo and a first-party "published-by-us" repo. The private upstream then
 behaves as a read-only union of two trusted stores and returns the full trusted set in
@@ -393,7 +393,7 @@ value holds only if **public packages enter your ecosystem through Écluse and n
 else.**
 
 So the aggregating read endpoint (the private upstream) must union **trusted stores
-only** — your first-party publications and Écluse's sanitized mirror — and must **not**
+only** — your first-party publications and Écluse's sanitized mirror, and must **not**
 carry a direct upstream connection to the public registry. Such a connection would let
 raw, ungated public packages reach clients through the trusted path — *behind* Écluse's
 gate rather than *through* it — the one configuration that silently nullifies the
@@ -429,12 +429,12 @@ backends stay decoupled from the core. The `parse*` fields are pure. See
 the proxy always knows it, so the adapter validates the upstream's self-reported name
 against it rather than trusting the self-report (see
 [The route name is the served name's validation authority](#the-route-name-is-the-served-names-validation-authority)).
-The served name is therefore always one an upstream genuinely reported — never
+The served name is therefore always one an upstream genuinely reported, never
 substituted.
 
 Nothing above the registry layer imports registry-specific types. The proxy core
 operates only on `PackageInfo` (the packument-level view) and `PackageDetails`
-(the per-version snapshot the rules engine evaluates — see
+(the per-version snapshot the rules engine evaluates; see
 [`core/src/Ecluse/Core/Package.hs`](../../core/src/Ecluse/Core/Package.hs)). A registry
 adapter is responsible for projecting its wire format into these types.
 

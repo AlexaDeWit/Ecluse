@@ -39,7 +39,7 @@ one identity.
 - [ ] `passthrough` behaviour is unchanged (no read credential; private leg not
   cached). The only difference `service` introduces is **whose credential** fetches the
   private leg — the caller's forwarded token (`passthrough`) versus Écluse's own
-  identity (`service`) — never whether it is cached (it is not, either way). —
+  identity (`service`), never whether it is cached (it is not, either way). —
   _access-model.md#caching_
 - [ ] A read-credential refresh failure degrades **reads** (surfaced per the
   [serve error model](../../docs/architecture/web-layer.md#error-model)); document that, unlike the

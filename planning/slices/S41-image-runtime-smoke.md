@@ -29,7 +29,7 @@ one real proxied request, turning the static guarantee into belt-and-suspenders.
 
 **Priority: low (deliberate backlog).** cabal2nix captures _declared_ C FFI deps
 automatically — a package's `extra-libraries` / `pkgconfig-depends` become nixpkgs
-inputs, get `RUNPATH`'d, and land in the closure — so the realistic exposure is
+inputs, get `RUNPATH`'d, and land in the closure, so the realistic exposure is
 narrow: an _undeclared_ runtime `dlopen`, essentially just NSS/DNS, which works in
 practice (the `libnss_*` modules live inside the glibc store path that is wholly
 in the closure). This slice is defence-in-depth and future-proofing against a dep

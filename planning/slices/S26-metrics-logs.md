@@ -102,7 +102,7 @@ substrate-config part split out per the orchestration's stacked-PR pattern:
   where the target is upstream-supplied; the OTLP endpoint — like the mirror-queue endpoint
   — is an **operator-declared destination**, not an attack surface, so classifying it is
   over-reach. The only real footgun (agentless export to a vendor's SaaS) is already
-  excluded structurally — `DD_API_KEY`/`DD_SITE` are never read — so the endpoint is always
+  excluded structurally — `DD_API_KEY`/`DD_SITE` are never read, so the endpoint is always
   explicitly declared. `prepareTelemetry` now collapses to *resolve identity → normalize
   `OTEL_*` → install the throttled error handler*; the `PROXY_TELEMETRY_ALLOW_PUBLIC_EGRESS`
   knob and the `Ecluse.Security` coupling are gone.
@@ -138,7 +138,7 @@ The headline metrics work, stacked on PR1, built incrementally:
   `formatDdSpanId` render the **unsigned decimal of the low 64 bits** of the trace id and
   the 64-bit span id (verified in `Ecluse.LogSpec`). The IO glue (`Ecluse.Telemetry.Correlation`,
   AC4's remaining half) reads the active span off the OpenTelemetry context — real now
-  that S25's tracer rides the hot path — and fills its ids onto the resolved
+  that S25's tracer rides the hot path, and fills its ids onto the resolved
   `service`/`env`/`version` identity. The `dd` object is installed as the initial `katip`
   context at the request entry (`runHandler`, where the WAI server span is active) and
   the worker entry (`runApp`, re-stamped inside a job span), so **every line carries

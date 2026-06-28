@@ -108,7 +108,7 @@ as built:
   a classifier now maps a *request* (method + path), so `PUT /{pkg}` classifies as
   `Publish` while `HEAD` still renders like its `GET`.
 - **Body relay, not the write verdict.** First-party publish is a **body relay** — the
-  publication target's own status and body are forwarded to the client verbatim — which
+  publication target's own status and body are forwarded to the client verbatim, which
   is distinct from the mirror worker's `RegistryClient.publishArtifact` (a
   success/`PublishFault` verdict). The npm adapter gained `relayPublishDocument` over a
   per-request `NpmClientConfig` carrying the forwarded client token; the agnostic

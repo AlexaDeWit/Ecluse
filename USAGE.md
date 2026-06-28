@@ -62,14 +62,14 @@ detail.
    separate lets you apply distinct storage-level policy and scanning per provenance and
    keeps your package inventory auditable; collapsing them onto fewer registries still
    works, but muddies auditing and post-incident scoping. **The one hard rule:** that
-   aggregating endpoint must union your **trusted** stores only — never a direct public
-   upstream — or raw, ungated public packages reach clients as trusted, *behind* Écluse's
+   aggregating endpoint must union your **trusted** stores only, never a direct public
+   upstream, or raw, ungated public packages reach clients as trusted, *behind* Écluse's
    gate instead of through it. See [registry-level
    composition](docs/architecture/registry-model.md#registry-level-composition-the-recommended-topology).
 2. **Let callers use their own identity (passthrough).** The default credential strategy
    forwards each caller's own registry token to the private upstream and the publication
-   target, so access stays exactly what your registry's IAM already grants — no privilege
-   escalation or compression — and Écluse holds no standing read credential. This is the
+   target, so access stays exactly what your registry's IAM already grants, no privilege
+   escalation or compression, and Écluse holds no standing read credential. This is the
    launch default; nothing to set. See [access model](docs/architecture/access-model.md).
 3. **Mint the mirror-write token from the container role.** Set
    `MIRROR_TARGET_CREDENTIAL_PROVIDER=codeartifact` so the worker mints a short-lived write
@@ -99,14 +99,14 @@ detail.
 7. **Verify what you run.** Pin the image by digest and verify its provenance + SBOM
    attestations before deploying (see [Verifying the image](README.md#verifying-the-image)).
 
-The *why* behind each choice — and the residual risks the canonical posture knowingly
+The *why* behind each choice, and the residual risks the canonical posture knowingly
 accepts — is in the [threat model](https://alexadewit.github.io/Ecluse/threat-model.html) and
 [Security invariants](docs/architecture/security.md#trust-assumptions--credential-posture).
 
 ## Deviating from the Golden Path
 
 The [Golden Path](#the-golden-path) is the posture the threat model treats as canonical. Écluse still
-*runs* if you diverge, but each deviation trades away a specific protection — and a couple are **silent**,
+*runs* if you diverge, but each deviation trades away a specific protection, and a couple are **silent**,
 in that Écluse cannot detect them, so nothing warns you. The registry-topology deviations are the sharpest:
 
 - **Collapsing the registries onto one store** — the default if you leave `MIRROR_TARGET_URL` /
@@ -115,7 +115,7 @@ in that Écluse cannot detect them, so nothing warns you. The registry-topology 
   longer apply distinct per-provenance scanning or policy, and post-incident scoping — *"which mirrored
   public packages did we hold?"* — is muddied. You give up auditability and defence-in-depth, not the gate.
   (Register [threat #10](https://alexadewit.github.io/Ecluse/threat-model.html).)
-- **Pointing the private upstream at a registry that itself draws from public** — e.g. a CodeArtifact repo
+- **Pointing the private upstream at a registry that itself draws from public**; e.g. a CodeArtifact repo
   carrying the stock `npm-store` upstream to npmjs. This is the **dangerous one.** Raw, ungated public
   packages then reach clients through the *trusted* read path — *behind* Écluse's gate instead of through
   it — silently nullifying the rules, integrity floor, and freshness quarantine that are the entire reason
@@ -149,20 +149,20 @@ operator reference. **Keep the two in sync** when either changes.
 | `PROXY_PORT` | No (default `4873`) | TCP port the proxy listens on. Must be in `0..65535` (`0` binds an OS-assigned ephemeral port); an out-of-range value is rejected at load. |
 | `PRIVATE_UPSTREAM_URL` | **Yes** | URL of the private upstream registry (the authority for reads under the default `passthrough` strategy). |
 | `PUBLIC_UPSTREAM_URL` | No (default `https://registry.npmjs.org`) | URL of the public upstream, queried anonymously and gated by the rules. |
-| `PROXY_PUBLIC_URL` | Recommended | The proxy's own externally-reachable base URL (e.g. `https://registry.example.com`), used to rewrite each served `dist.tarball` to an **absolute** URL clients fetch back through the proxy. **Unset, tarball URLs are path-relative, which the `npm` CLI cannot install from** — it reads a leading-slash `dist.tarball` as a local `file:` path — so set this for any deployment that serves real `npm install`s. |
+| `PROXY_PUBLIC_URL` | Recommended | The proxy's own externally-reachable base URL (e.g. `https://registry.example.com`), used to rewrite each served `dist.tarball` to an **absolute** URL clients fetch back through the proxy. **Unset, tarball URLs are path-relative, which the `npm` CLI cannot install from** — it reads a leading-slash `dist.tarball` as a local `file:` path, so set this for any deployment that serves real `npm install`s. |
 | `MIRROR_TARGET_URL` | No (default `PRIVATE_UPSTREAM_URL`) | Registry that approved packages are mirrored to. Unset ⇒ folds onto the private upstream (one registry, read and written). The write credential does **not** fold — set `MIRROR_TARGET_CREDENTIAL_PROVIDER`. |
 | `MIRROR_TARGET_CREDENTIAL_PROVIDER` | No (default `static`) | Mirror-target write credential: `static` (`MIRROR_TARGET_TOKEN`) or `codeartifact` (mints under the container/task role). `gcp-artifact-registry` is recognised but not yet built. |
 | `MIRROR_TARGET_TOKEN` | No | Static write token, when `MIRROR_TARGET_CREDENTIAL_PROVIDER=static` (the default). |
-| `MIRROR_TARGET_CODEARTIFACT_DOMAIN` | `codeartifact` only | CodeArtifact domain — or parsed from a CodeArtifact `MIRROR_TARGET_URL` host. |
-| `MIRROR_TARGET_CODEARTIFACT_DOMAIN_OWNER` | `codeartifact` only | 12-digit owning account id — or parsed from the host (a non-account-id value is rejected at boot). |
+| `MIRROR_TARGET_CODEARTIFACT_DOMAIN` | `codeartifact` only | CodeArtifact domain, or parsed from a CodeArtifact `MIRROR_TARGET_URL` host. |
+| `MIRROR_TARGET_CODEARTIFACT_DOMAIN_OWNER` | `codeartifact` only | 12-digit owning account id, or parsed from the host (a non-account-id value is rejected at boot). |
 | `MIRROR_TARGET_CODEARTIFACT_REGION` | `codeartifact` only | Region — this key, else the host (its authoritative region), else `AWS_REGION`. |
 | `MIRROR_TARGET_CODEARTIFACT_TOKEN_DURATION_SECONDS` | No | Token lifetime in seconds, capped at `43200` (12 h). |
-| `PUBLICATION_TARGET_URL` | No | Where client `npm publish` (first-party packages) is written. **Opt-in: unset ⇒ a `PUT /{pkg}` is `405`** (no implicit write path). May be the same registry as the private upstream (so published packages are then readable via the private leg). **Protect this surface — see the warning below.** |
-| `PUBLICATION_TARGET_TOKEN` | No | Static fallback credential for the publication target, forwarded only when a publishing client sends no token of its own. The default model is **passthrough** — the publisher's own forwarded token. **⚠️ A static token with an open edge lets any unauthenticated client publish under it — see the warning below.** |
+| `PUBLICATION_TARGET_URL` | No | Where client `npm publish` (first-party packages) is written. **Opt-in: unset ⇒ a `PUT /{pkg}` is `405`** (no implicit write path). May be the same registry as the private upstream (so published packages are then readable via the private leg). **Protect this surface; see the warning below.** |
+| `PUBLICATION_TARGET_TOKEN` | No | Static fallback credential for the publication target, forwarded only when a publishing client sends no token of its own. The default model is **passthrough** — the publisher's own forwarded token. **⚠️ A static token with an open edge lets any unauthenticated client publish under it; see the warning below.** |
 | `PUBLISH_SCOPES` | Required when `PUBLICATION_TARGET_URL` is set | Comma-separated allow-list of package scopes a client may publish (e.g. `@acme,@beta`) — the anti-shadowing guard. A publish whose name is outside the list is refused **before any upstream write**, so a client cannot publish a name that shadows a public package. It limits **names, not callers** — it is not authentication. An empty list with a publication target set is a fail-loud boot error. |
-| `MIRROR_QUEUE_PROVIDER` | No (default `sqs`) | Mirror-queue backend: `sqs` (AWS), or `memory` (a bounded in-process queue — no cloud queue, at the cost of a **non-durable, best-effort** mirror; an explicit choice for a simple/single-node/air-gapped deployment, never an automatic fallback — selecting it warns loudly at boot). `pubsub` (GCP) is recognised but not yet built. |
+| `MIRROR_QUEUE_PROVIDER` | No (default `sqs`) | Mirror-queue backend: `sqs` (AWS), or `memory` (a bounded in-process queue, no cloud queue, at the cost of a **non-durable, best-effort** mirror; an explicit choice for a simple/single-node/air-gapped deployment, never an automatic fallback — selecting it warns loudly at boot). `pubsub` (GCP) is recognised but not yet built. |
 | `MIRROR_QUEUE_URL` | Cloud backends only (`sqs`/`pubsub`) | Queue identifier: an SQS queue URL or a Pub/Sub `projects/<p>/topics/<t>` resource. **Required for the cloud backends** (absent ⇒ fail-loud at boot); **not needed for `memory`** (no external queue — ignored). |
-| `MIRROR_QUEUE_MEMORY_MAX_DEPTH` | No (default `50000`) | `memory` only. Cap on the in-process queue depth. A cold-cache `npm ci` enqueues thousands of jobs at once, so the queue is hard-bounded: an enqueue past the cap is **dropped (drop-newest)** — safe, since a dropped job is re-mirrored on the next demand — and rate-limit-logged. Positive integer. |
+| `MIRROR_QUEUE_MEMORY_MAX_DEPTH` | No (default `50000`) | `memory` only. Cap on the in-process queue depth. A cold-cache `npm ci` enqueues thousands of jobs at once, so the queue is hard-bounded: an enqueue past the cap is **dropped (drop-newest)** — safe, since a dropped job is re-mirrored on the next demand, and rate-limit-logged. Positive integer. |
 | `AWS_REGION` | AWS backends only | Region for SQS and CodeArtifact. |
 | `AWS_ENDPOINT_URL_SQS` / `AWS_ENDPOINT_URL` | No | SQS endpoint override (AWS-SDK-standard). Point at a local emulator (`ministack`) or VPC endpoint; with one set, requests are signed with `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`. Unset ⇒ normal AWS resolution. |
 | `GOOGLE_CLOUD_PROJECT` | GCP backends only | Project for Pub/Sub and Artifact Registry (credentials via ADC). |
@@ -187,7 +187,7 @@ misconfiguration is a loud, immediate failure, never a quietly mis-enforced poli
 > **who** may publish. So a static `PUBLICATION_TARGET_TOKEN` (Écluse's own credential, used
 > only when a publisher forwards none) is **fail-closed**: set it without `PROXY_AUTH_TOKEN`
 > and Écluse **refuses to start** (`PublishStaticCredentialNeedsEdge`), making "static
-> publish credential + open edge" — which would otherwise let **any unauthenticated client
+> publish credential + open edge", which would otherwise let **any unauthenticated client
 > publish** under the operator's credential — an unrepresentable state rather than a footgun.
 > `PROXY_AUTH_TOKEN` is the verifiable edge Écluse can check itself; an external layer
 > (gateway, service mesh / mTLS, network policy) is good defence-in-depth but does **not**
@@ -426,7 +426,7 @@ knob you must not lower below SHA-256. See
   the public registry yanks or security-holds the bad version, its bytes change or vanish,
   re-mirroring can no longer reproduce them, and you purge the stale copy from Registry B at your
   leisure. For the **atypical case where your own scanning is ahead of the public yank**, revoke in
-  this order: **(1)** deny the identity (the planned `DenyByIdentity` revocation rule — see Planned
+  this order: **(1)** deny the identity (the planned `DenyByIdentity` revocation rule; see Planned
   controls) so the serve path stops admitting it and the worker stops re-mirroring it, then **(2)**
   purge that version from Registry B to remove the already-mirrored copy. **Order matters:** purge
   alone is a treadmill — while the version is still live upstream, the next install re-admits and

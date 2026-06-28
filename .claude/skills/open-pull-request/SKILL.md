@@ -21,14 +21,14 @@ mistakes that have actually cost us reword-and-force-push round-trips.
 Two non-negotiables up front, because they are the two that bite:
 
 1. **The `Signed-off-by:` trailer must name the _author_ — `Alexandra DeWit
-   <alexa.dewit@gmail.com>` — never Claude.** The DCO check (a probot) gates on a
+   <alexa.dewit@gmail.com>`, never Claude.** The DCO check (a probot) gates on a
    `Signed-off-by` matching the commit author's email. `Signed-off-by: Claude
    <noreply@anthropic.com>` red-fails it. AI assistance is disclosed *separately*, via
    the `Assisted-by:` trailer (below) — the two never substitute for each other.
 2. **Every non-trivial PR body must include a plain-language section** (`## In plain
    terms`). The architect reviews every PR and routinely asks for an "explain it like
    I'm 5" of the change and its threat/behaviour model, so writing that *into the PR
-   body up front* pre-empts the round-trip. A self-evident change may omit it — see §2
+   body up front* pre-empts the round-trip. A self-evident change may omit it; see §2
    for what counts as trivial; when in doubt, include it.
 
 ## 1. Commits — the exact recipe
@@ -99,7 +99,7 @@ another team** — the "explain it like I'm 5" the architect asks for at review 
 it a throughline (what was going on → what changed → what we chose not to do, and why),
 not a flat summary and not a diff walk-through. **Make it scan:** short paragraphs (2–4
 sentences), a bold lead-in or `###` sub-heading per beat, a tight bullet list when you
-are enumerating cases — never one dense block. Lead with the human point; reach for an
+are enumerating cases, never one dense block. Lead with the human point; reach for an
 analogy where it genuinely illuminates. It answers "what does this mean and why should I
 trust it" for a reader with no familiarity with the file being changed. Canadian spelling
 throughout (as in all repo prose).
@@ -115,10 +115,10 @@ change) is itself a trivial one, and omits the section.
 - **Open the PR as a draft:** `gh pr create --draft …`. It stays draft while work or
   review is still moving.
 - **Ready-for-review means exactly: independent review passed (reviewer APPROVE +
-  team-lead diff-read) AND the gating CI is green.** Nothing else gates the flip — not
+  team-lead diff-read) AND the gating CI is green.** Nothing else gates the flip, not
   optional polish, not a nice-to-have test someone floated. The instant both hold,
   `gh pr ready`.
-- **Verify the gate authoritatively with `gh pr checks` — not `gh run watch`'s exit
+- **Verify the gate authoritatively with `gh pr checks`, not `gh run watch`'s exit
   code** (it is unreliable; it can exit 0 on failure). The gating jobs are *Build &
   tests, CI gate, End-to-end tests, Haddock builds, Static checks*. **`codecov/patch`
   and `codecov/project` are non-gating** backstops (they read integration-tier-covered

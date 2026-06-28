@@ -33,7 +33,7 @@ a supervised concurrent thread, split-ready.
   publish client **per ecosystem** (the mirror-target endpoint paired with the global
   `CredentialProvider`) at the composition root, replacing the refusing
   `Env.envRegistry` placeholder (`unconfiguredRegistry`). `envRegistry` is currently
-  consumed by nothing — the serve path builds its own per-leg clients — so this slice
+  consumed by nothing — the serve path builds its own per-leg clients, so this slice
   is its first real consumer and retires/repurposes the single global slot. —
   _cloud-backends.md#process-model_
 - [ ] **Idempotent publish**: a redelivered job whose version already exists is

@@ -19,7 +19,7 @@ not justify the re-authorisation machinery it would demand (see
 [Why Écluse never caches the private origin](#why-écluse-never-caches-the-private-origin)).
 Separating the
 concerns turns "how Écluse handles credentials" into a **per-mount credential
-strategy** — but the strategies differ only in *where authority sits and whose
+strategy**, but the strategies differ only in *where authority sits and whose
 credential reaches the upstream*, never in what may be cached.
 
 **Écluse never builds an authentication system.** Authorisation is always
@@ -30,7 +30,7 @@ sits and *what may be cached as a result*.
 ## Why Écluse never caches the private origin
 
 A shared cache of the *private* origin is tempting — one fetch + parse + merge could
-serve many callers — but it is never safe for free. A cache key carries no credential
+serve many callers, but it is never safe for free. A cache key carries no credential
 dimension, so a shared private entry can be served safely only if **either** every hit
 is re-authorised against the upstream on each request (a per-request authorisation
 **probe**) **or** authority is moved off the upstream to the deployment edge so that
@@ -48,7 +48,7 @@ construction* rather than fenced off by a probe, and keeps hot-path work minimal
 (one shared document, no per-caller authority to preserve).
 
 The per-mount **credential strategy** therefore varies only in *where authority sits
-and whose credential reaches the private upstream* — never in what may be cached. Two
+and whose credential reaches the private upstream*, never in what may be cached. Two
 strategies ship:
 
 | Strategy | Authority | Caller credential forwarded | Private origin cached |
@@ -77,7 +77,7 @@ fine-grained — the upstream re-decides every request.
 
 ### `service` — the edge authenticates; Écluse reads with its own identity
 
-The caller is authenticated at the **edge** (network, mesh, or a gateway — see
+The caller is authenticated at the **edge** (network, mesh, or a gateway; see
 [Edge authentication](#edge-authentication)); Écluse then reads the upstreams with its
 **own workload identity** via the [`CredentialProvider`](cloud-backends.md#credential-provider),
 forwarding **no caller credentials at all** — the smallest credential surface of any
@@ -87,7 +87,7 @@ origin is read **per request and never shared-cached**; `service` differs only i
 upstream, is the authority** for who may use the proxy, so selecting `service` is an
 explicit operator assertion to that effect. It is the choice for deployments that
 authorise at the edge and do not want caller credentials flowing through the proxy at
-all (sidestepping the credential-aggregation surface `passthrough` carries — see
+all (sidestepping the credential-aggregation surface `passthrough` carries; see
 [Security → trust assumptions & credential posture](security.md#trust-assumptions--credential-posture)).
 
 ### Rejected: the cache-recovering strategies
@@ -108,7 +108,7 @@ the private origin across callers — the one thing Écluse
   latency), with no upstream token TTL to lean on.
 
 Reintroducing a shared private cache later would be a deliberate design change that
-must first re-establish per-hit authorisation (the `delegated-cache` probe) — never a
+must first re-establish per-hit authorisation (the `delegated-cache` probe), never a
 config toggle.
 
 ## Publishing: the publication target (passthrough write)
@@ -151,7 +151,7 @@ The npm client authenticates to a registry with an **opaque bearer** in `.npmrc`
 mTLS, or interactive OIDC. So edge authentication must terminate into a storable
 bearer, or be handled by infrastructure in front of Écluse. The modes:
 
-1. **Open** — no app-level check; access is gated entirely at the network layer
+1. **Open**, no app-level check; access is gated entirely at the network layer
    (VPC, mesh). Appropriate on a closed network; the assumption this rests on is
    [threat #3](https://alexadewit.github.io/Ecluse/threat-model.html).
 2. **Static token** — `PROXY_AUTH_TOKEN`; the caller presents it as `Bearer` /
@@ -160,7 +160,7 @@ bearer, or be handled by infrastructure in front of Écluse. The modes:
    mesh performs SSO or mTLS and asserts a verified identity (a signed header / mTLS
    SAN) that Écluse trusts. Écluse honours the assertion **only over a verifiable
    binding to that edge** — mutual TLS from the edge, or a shared secret / HMAC the
-   edge signs the assertion with — and **fails fast** on a `trusted-edge` mount that
+   edge signs the assertion with, and **fails fast** on a `trusted-edge` mount that
    configures neither (an [unrepresentable unsafe
    combination](#safe-defaults-and-unrepresentable-unsafe-combinations)). A *bare*
    trusted header is forgeable into **granted** access anywhere Écluse is reachable
@@ -220,7 +220,7 @@ This removes the cross-client disclosure hazard:
 there is no shared private entry to leak across callers — by construction, not by
 discipline. On the **tarball leg** the per-request read is the credentialed
 [conventional read](registry-model.md#serving-a-tarball-a-conventional-private-read-an-honoured-public-location)
-of the artifact itself — no packument round-trip — so the private upstream (under
+of the artifact itself, no packument round-trip, so the private upstream (under
 `passthrough`) or the service identity (under `service`) authorises each artifact read.
 
 The one cache that exists — the anonymous public origin — stores **no
@@ -242,7 +242,7 @@ policy, differing only in the per-cloud `mintToken` leaf.
 
 Running separate Écluse instances per tenant (each a flat `service`/edge deployment)
 is a legitimate **blast-radius / policy** isolation choice, orthogonal to the
-credential strategy — but it is not a substitute for one, and it scales to **team**
+credential strategy, but it is not a substitute for one, and it scales to **team**
 granularity, never per-developer. Reach for it when you want hard isolation or a
 distinct policy per tenant, not to avoid choosing a strategy.
 
@@ -254,5 +254,5 @@ distinct policy per tenant, not to avoid choosing a strategy.
 - Public versions are **always** gated by the [rules engine](rules-engine.md);
   trusted private versions enter the
   [packument merge](registry-model.md#packument-merge-across-upstreams) unfiltered.
-  A strategy changes *whose credential fetches the private origin* — never *whether it
+  A strategy changes *whose credential fetches the private origin*, never *whether it
   is cached* (it never is) or *whether public versions are gated*.

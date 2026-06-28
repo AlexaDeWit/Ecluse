@@ -28,7 +28,7 @@ Per-slice files are deliberate: parallel agents (and their status updates) touch
   records any as-built delta, with the `planning/slices/` file inside the slice's
   file scope; the
   [inter-wave pass](orchestration-strategy.md#inter-wave-quality--alignment-pass)
-  then reconciles every merged slice — and the architecture doc it derives from —
+  then reconciles every merged slice, and the architecture doc it derives from —
   against what actually shipped. The git history of those files *is* the milestone
   log. This index deliberately does **not** duplicate per-slice status (that would
   reintroduce the merge conflict the per-slice split avoids); the
@@ -145,14 +145,14 @@ effectful tier (**M5**); the GCP backends (M7); the launch docs + release-harden
 |---|---|---|
 | **M0** | Shell, handles & foundations | The imperative shell + the three handle interfaces with in-memory doubles; config loader; logging; rules-precedence alignment. Unblocks every downstream track. |
 | **M1** | npm protocol adapter | The npm `RegistryClient`: wire decoders, projection to the domain model, data-plane fetch/publish, URL rewrite + packument filtering. |
-| **M2** | Web front door | The raw-WAI `Application`: pure router, error/denial model, meta-routes, middleware, bounded-memory streaming, conditional-GET/ETag, and the metadata cache. (The OpenAPI capability manifest is **statically generated and published to the docs site**, not a served meta-route — see S34.) |
+| **M2** | Web front door | The raw-WAI `Application`: pure router, error/denial model, meta-routes, middleware, bounded-memory streaming, conditional-GET/ETag, and the metadata cache. (The OpenAPI capability manifest is **statically generated and published to the docs site**, not a served meta-route; see S34.) |
 | **M3** | Request pipeline (**walking skeleton**) | The thin end-to-end path: multi-upstream packument merge, the `passthrough` credential default (forward/strip) and the per-mount [credential-strategy](../docs/architecture/access-model.md) framework, packument + tarball serving, demand-driven mirror enqueue (against in-memory cloud doubles). |
 | **M4** | AWS cloud backends & worker | `CredentialProvider` (CodeArtifact / static) — the mirror-target write, and private-upstream reads under the `service` [strategy](../docs/architecture/access-model.md) — SQS `MirrorQueue`, the mirror worker, the AWS composition root. **AWS launch-ready.** |
 | **M5** | Effectful rules & CVE | The effectful tier (timeout / retry / circuit-breaker, `Unavailable`), the OSV local-sync in-memory advisory index, and the CVE rules — `DenyIfCVE` (block affected) and `AllowIfRemediatesCve` (fast-track fixes past the quarantine). |
 | **M6** | Observability | Opt-in, vendor-neutral OpenTelemetry/OTLP: tracing, the `ecluse.*` metrics catalog, JSONL `dd` log correlation. |
 | **M7** | GCP backends | The Pub/Sub de-risking spike → Pub/Sub `MirrorQueue`, the ADC credential leaf, GCP wiring. **Scheduled after AWS launch.** |
 | **M8** | Release hardening | SLSA build provenance + SBOM attestation; the launch docs & deployment runbook. |
-| **M9** | Benchmarking & load testing | **Two layers, one capability:** (A) deterministic **work-per-request** micro / allocation benches over the pure core; (B) **throughput & latency under load** driving the real `Application` over in-memory doubles, with the mandatory traffic scenarios (merge-in-loop, private cache hit, worker mirroring). **Inform-only — no SLO, never gates** (the workflow reds only on a literal benchmark failure). Off the launch critical path. |
+| **M9** | Benchmarking & load testing | **Two layers, one capability:** (A) deterministic **work-per-request** micro / allocation benches over the pure core; (B) **throughput & latency under load** driving the real `Application` over in-memory doubles, with the mandatory traffic scenarios (merge-in-loop, private cache hit, worker mirroring). **Inform-only, no SLO, never gates** (the workflow reds only on a literal benchmark failure). Off the launch critical path. |
 | **M10** | Azure backends | The Service-Bus-vs-Storage-Queues de-risking spike → Azure `MirrorQueue`, the Entra ID credential leaf, Azure composition wiring. **Lowest priority — furthest-out; after AWS *and* GCP.** |
 
 ---
@@ -308,7 +308,7 @@ ordered. The live pointer to current work is [In flight](#in-flight)._
 - **Between waves — quality & alignment pass.** Once a wave's PRs are all merged,
   and before the next wave is dispatched, run the codebase-wide
   [quality & alignment pass](orchestration-strategy.md#inter-wave-quality--alignment-pass)
-  (structural / Haddock / performance — e.g. needless `String`↔`Text`↔`ByteString`
+  (structural / Haddock / performance; e.g. needless `String`↔`Text`↔`ByteString`
   conversions). **Wave 3 does not start until Wave 2 (S01, S05, S07) is merged and
   this pass is done.**
 - **Wave 3:** `S03` + `S04` (config/logging), `S08` (npm fetch/publish), `S11`
@@ -322,7 +322,7 @@ ordered. The live pointer to current work is [In flight](#in-flight)._
   is the gate on committing the GCP backends. `S34` (capability manifest) is a
   **fast-follow** after `S14` (so it documents a packument the server actually
   serves) and does not gate the launch path; it **concludes the capability-manifest
-  epic** (the once-planned `S35` drift controls are **dropped** — see the S35 slice).
+  epic** (the once-planned `S35` drift controls are **dropped**; see the S35 slice).
 - **Performance benchmarking (M9) is an independent, informational track, off the
   critical path.** `S37` depends on nothing pending — it runs against the
   already-merged pure core and is the natural companion to the inter-wave quality

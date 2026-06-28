@@ -26,7 +26,7 @@ flowchart LR
   input. This is what the benchmark harness in this repository measures today: the
   hot-path computations of [`ecluse-core`](../../core), with no server and no network.
   Most are pure; the rule sweep and the serve filter run through the engine's effectful
-  evaluator (rule evaluation is `IO`), so those benches measure that `IO` action — but
+  evaluator (rule evaluation is `IO`), so those benches measure that `IO` action, but
   it is still the per-request computation, not a kernel scheduler or a socket. It is the
   layer where an accidentally-quadratic fold or a doubled allocation is caught.
 - **Layer B — throughput-under-load.** The whole system under concurrent load —
@@ -64,7 +64,7 @@ measured curve and require it to be no worse than linear in the version count. T
 a different kind of check from a timing comparison. A packument with tens of thousands
 of versions going quadratic in a fold is an *algorithmic* bug (the class the
 accidentally-quadratic regressions in this codebase have fallen into), not a slow
-machine — so a failed complexity assertion is a real failure, and it fails the
+machine, so a failed complexity assertion is a real failure, and it fails the
 benchmark run. The synthetic generator that drives these scales toward ~100k versions,
 the size at which a super-linear term bites.
 
@@ -121,7 +121,7 @@ Comparable numbers need a comparable environment:
 - **Local runs are for deep-dives, not for comparison against CI.** Run the benches on
   your own machine to iterate on a change and to profile a regression to a cost centre
   (`make bench-profile`), but compare a local time figure only against another local
-  figure on the same machine — never against a CI baseline.
+  figure on the same machine, never against a CI baseline.
 
 ## Running locally
 
@@ -161,9 +161,9 @@ widest frames — those are where the time and allocations go.
 
 The Layer A benches cover the pure hot paths a metadata request exercises, each
 **per package across the curated real-world corpus** (see
-[The real-world corpus](#the-real-world-corpus)) — so the work-per-request figures
+[The real-world corpus](#the-real-world-corpus)), so the work-per-request figures
 sample the real distribution of package sizes and shapes, small (`is-odd`) to heavy
-(`@types/node`), rather than one anchor — and, where growth matters, over a synthetic
+(`@types/node`), rather than one anchor, and, where growth matters, over a synthetic
 packument scaled toward ~100k versions for the complexity assertion only:
 
 | Hot path | Module | Scaled complexity assertion |
@@ -178,18 +178,18 @@ packument scaled toward ~100k versions for the complexity assertion only:
 
 The corpus is loaded once and validated up front (a corrupt or mis-pinned capture stops
 the run before any benching), and the synthetic generator's invariants are pinned by test
-cases that run as part of the benchmark — so a malformed corpus or generator stops the
+cases that run as part of the benchmark, so a malformed corpus or generator stops the
 run rather than benching a degenerate input.
 
 ### The real-world corpus
 
 The M9 benches once ran on a thin, partly-synthetic corpus — one real anchor (`express`)
-plus a synthetic packument whose versions are structurally identical — which did **not**
+plus a synthetic packument whose versions are structurally identical, which did **not**
 sample the heavy, heterogeneous tail (`typescript` / `react` / `@types/node` / `@babel/*`
 / an `aws-sdk`-class package) that dominates the real-world cost. The corpus now spans
 that spectrum with **pinned real captures** of substantial, many-version packages.
 Trivial few-version packages stress nothing — neither the hot paths nor the metadata
-cache — so they are **deliberately excluded**; the corpus leans large.
+cache, so they are **deliberately excluded**; the corpus leans large.
 
 | Tier | Packages (versions) |
 |---|---|
@@ -219,7 +219,7 @@ cache — so they are **deliberately excluded**; the corpus leans large.
 - **Trimmed for size, not shape.** `make gen-bench-corpus` re-captures from the pins: for
   each package it keeps every **stable** release at or below the pin with its full
   per-version manifest — the heterogeneous dependency / `peerDependencies` / `engines` /
-  `deprecated` / `scripts` / `dist` shape the hot paths read and re-serialise — and drops
+  `deprecated` / `scripts` / `dist` shape the hot paths read and re-serialise, and drops
   only (a) the degenerate nightly/canary/dev **prerelease** versions (near-identical
   day-to-day builds that are the bulk of `typescript`/`react`'s size and add no real
   shape — the synthetic generator's degeneracy), and (b) pure-noise fields no hot path
@@ -365,7 +365,7 @@ over every scenario, each scenario still in its own process:
 
 **Measure-then-seed baseline.** Before the passes, the driver probes the **live public
 registry** for the corpus packages — reusing `Ecluse.Test.RegistryCapture.fetchPackumentBody`,
-the same live fetch the Context B harness uses — and takes the steady-state **mean round
+the same live fetch the Context B harness uses, and takes the steady-state **mean round
 trip** as the upstream baseline. That round trip is injected as *both* passes' stub-upstream
 latency, so the service pass measures real-world-shaped service time and the loaded-minus-
 service difference is queuing alone. The probe is **non-gating**: if the registry is
@@ -375,7 +375,7 @@ unreachable (or the probe is switched off with `BENCH_LOAD_PROBE_RTT=0`) the con
 **Service-time attribution** (the concurrency-1 pass). Per scenario, the measured latency is
 split into the **upstream baseline** — the public round trip, subtracted **once** per request
 (the legs fan out concurrently and the public leg is single-flight, so a request waits one
-round trip; re-checked when another ecosystem's fixtures land) — and the **Écluse overhead**,
+round trip; re-checked when another ecosystem's fixtures land), and the **Écluse overhead**,
 everything Écluse adds on top of just hitting the public registry: the private leg, the merge,
 the rule sweep, the decode, the re-serialise. Reported absolute and as a percentage of the
 total, at **p50** (primary) and **p99** (the tail, GC included).

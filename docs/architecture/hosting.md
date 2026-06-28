@@ -19,7 +19,7 @@ under paths, several ecosystems side by side.
 **One mount per ecosystem.** The served ecosystem is a mount's identity: there is
 exactly one mount per ecosystem, and its path prefix is **derived from the
 ecosystem, not configured** (npm → `/npm`, PyPI → `/pypi`). An operator chooses
-*which* ecosystems to serve, never how they are addressed — so a prefix can neither
+*which* ecosystems to serve, never how they are addressed, so a prefix can neither
 collide nor be mistyped.
 
 A **mount** binds its ecosystem to:

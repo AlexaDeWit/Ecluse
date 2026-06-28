@@ -19,7 +19,7 @@ pr: null
 **Goal.** Retire Azure's named queue risk before committing a backend. It is sharper
 than GCP's: the only Haskell Service Bus package is deprecated (2014), there is no
 AMQP 1.0 Haskell client, and the **official Service Bus emulator serves AMQP only**
-(messaging on 5672; the HTTP port is management-only) — so a hand-rolled **REST**
+(messaging on 5672; the HTTP port is management-only), so a hand-rolled **REST**
 Service Bus client **cannot** be tested against the emulator. The spike picks the
 queue product by which one a Haskell client can actually drive *and* test:
 

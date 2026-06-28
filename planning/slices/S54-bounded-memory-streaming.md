@@ -28,7 +28,7 @@ machine-dependent and flaky — exactly why this was kept informational in M9. T
 must instead assert the **invariant, not an absolute**: residency is *independent of
 artifact size*. Stream a small artifact and a very large one through the same path,
 measure peak live bytes for each (`GHC.Stats` after a `performGC`, RTS `-T`), and assert
-the **delta stays within a small constant margin** — i.e. memory does not scale with the
+the **delta stays within a small constant margin**, i.e. memory does not scale with the
 body. That is deterministic enough to gate. **If a non-flaky gating assertion proves
 infeasible in practice, do not force a flaky gate — keep it informational and escalate.**
 

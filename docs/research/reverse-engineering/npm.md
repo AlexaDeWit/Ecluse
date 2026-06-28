@@ -55,7 +55,7 @@ That heritage leaks through the protocol everywhere (`_id`, `_rev`,
 - **Resolution is the client's job.** The registry stores discrete versions and
   named tags; it does **not** understand semver ranges. `npm install lodash`
   works because the *client* downloads the packument and picks a version. This
-  is the single most important fact for a proxy — see §8.
+  is the single most important fact for a proxy; see §8.
 
 Three request shapes cover ~all of install traffic:
 
@@ -179,7 +179,7 @@ shape" rather than assuming `{error}`.
 | `GET` ✓ | `/-/v1/search?text=…` | Search | none |
 | `POST` ✓ | `/-/npm/v1/security/advisories/bulk` | Bulk advisories (CVE subsystem) | none |
 
-### Auth & account (theory — no token available)
+### Auth & account (theory, no token available)
 
 | Method | Path | Purpose |
 |--------|------|---------|
@@ -352,7 +352,7 @@ registry-injected fields. Fields divide into three groups:
 `directories`, `scripts`, `engines`, `dependencies`, `devDependencies`,
 `peerDependencies`, `peerDependenciesMeta`, `optionalDependencies`,
 `bundleDependencies`, `funding`, `cpu`, `os`, `type`, `exports`, `gitHead`, …
-(arbitrary extra keys appear too — e.g. `is-odd` ships a `verb` tool-config
+(arbitrary extra keys appear too; e.g. `is-odd` ships a `verb` tool-config
 block; a decoder must ignore unknown keys).
 
 ### (b) Registry-injected (recognisable by the `_` prefix)
@@ -522,7 +522,7 @@ No token is available, so this section is grounded in the official
 | 2FA one-time pass | `npm-otp: <code>` | Six-digit TOTP (30 s window) **or** a recovery code, sent *alongside* Basic/Bearer. |
 
 In `.npmrc`, the bearer token is stored against a **"nerf dart"** — the
-registry URL minus scheme — so credentials are scoped per registry:
+registry URL minus scheme, so credentials are scoped per registry:
 
 ```ini
 //registry.npmjs.org/:_authToken=npm_xxxxxxxx
@@ -531,7 +531,7 @@ registry URL minus scheme — so credentials are scoped per registry:
 
 The CLI turns `//host/:_authToken=…` into `Authorization: Bearer …` on requests
 to that host. (`_auth` = base64 user:pass for Basic; `username`/`_password`
-also exist — see `npm-registry-fetch` options `token`, `_authToken`,
+also exist; see `npm-registry-fetch` options `token`, `_authToken`,
 `username`, `password`/`_password`, `otp`, `forceAuth`, `alwaysAuth`.)
 
 ### 2FA modes
@@ -605,7 +605,7 @@ separate concern), but documented so "act as an npm server" is complete.
   package returns `404` (the registry obscures rather than `401`s).
 - **dist-tags** — `PUT`/`DELETE /-/package/{pkg}/dist-tags/{tag}` to move/remove
   named tags (`npm dist-tag add/rm`).
-- **deprecate** — no dedicated endpoint; `npm deprecate` re-publishes the
+- **deprecate**, no dedicated endpoint; `npm deprecate` re-publishes the
   packument with `deprecated: "<msg>"` set on the targeted versions (which is
   why `deprecated` surfaces in the abbreviated manifest, §5).
 - **unpublish** — CouchDB-style `DELETE` against the package/revision.

@@ -52,7 +52,7 @@ builds and the cost of a forged tag stops being theoretical.
 with a paid-plan dependency** (OATs require a Docker Team/Business plan) and a
 **namespace change** (`alexadewit/ecluse` → `<org>/ecluse`) that ripples through
 the workflow, the README verify recipe, and the docs. It is cheap to do *now*
-(pre-MVP, ~zero downstream pullers) and expensive after GA — but it is a discrete
+(pre-MVP, ~zero downstream pullers) and expensive after GA, but it is a discrete
 ops change with an external billing decision, so it is parked here to be done
 deliberately rather than mid-feature.
 
@@ -106,5 +106,5 @@ for doing it before launch. The org plan is a **recurring cost**; GHCR is the
 zero-cost alternative that also deletes the static-secret weakness, so the billing
 decision and the registry-choice decision are coupled and should be made together.
 No product code is touched; this is release-ops only, off the PR gate. The current
-posture is a **deliberate, bounded accepted risk** for the pre-MVP window — see
-the "Authentication (Docker Hub)" guarantees above — not an oversight.
+posture is a **deliberate, bounded accepted risk** for the pre-MVP window; see
+the "Authentication (Docker Hub)" guarantees above, not an oversight.

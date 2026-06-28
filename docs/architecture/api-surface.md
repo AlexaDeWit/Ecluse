@@ -7,11 +7,11 @@ designed-for), not a bespoke HTTP API. Clients — `npm`, `pnpm`, `yarn` — har
 the registry protocol and never read an API description, so an OpenAPI document
 here is **not a client-integration contract**. It is a **capability manifest**: a
 single, human-facing statement of *which protocols this one server speaks and
-exactly what is — and isn't — supported*, per ecosystem. As mounts multiply
+exactly what is, and isn't — supported*, per ecosystem. As mounts multiply
 (`/npm`, `/pypi`, …) "what's supported where" stops being self-evident, and the
 manifest is where it becomes legible — for operators, contributors, and future us.
 
-## What the manifest covers — and what it doesn't
+## What the manifest covers, and what it doesn't
 
 Écluse documents **its coverage of** each protocol, not the protocol itself. The
 distinction maps onto how each route is handled:
@@ -42,7 +42,7 @@ enumerating those constructors across the configured **mounts**
 ([Hosting](hosting.md#multi-ecosystem-hosting)); each mount's adapter contributes
 the per-ecosystem **path template** and **support status** for each route. So the
 manifest cannot drift from what the server actually routes — one closed
-enumeration drives dispatch, the manifest, and the `501`s — and adding PyPI is
+enumeration drives dispatch, the manifest, and the `501`s, and adding PyPI is
 adding a mount, not re-describing a protocol.
 
 In the rendered docs, **tags = ecosystems**: Redoc / Swagger UI group operations
@@ -69,7 +69,7 @@ must not be mistaken for a proof that the filtered document is internally cohere
 
 - **Code-first owned schemas, no drift.** Owned types (error envelope, synthesized
   packument, config) define their JSON via **`autodocodec`**, which derives the
-  `aeson` instances *and* the OpenAPI / JSON-Schema from one codec — so the wire
+  `aeson` instances *and* the OpenAPI / JSON-Schema from one codec, so the wire
   format and the documented schema cannot diverge. The document is assembled with
   **`openapi3`**, its paths folded from the `Route` × mount enumeration above.
   (npm's *inbound* wire decoding stays lenient hand-rolled `aeson` — autodocodec is
@@ -119,7 +119,7 @@ Those guards can flag *that* the documented surface changed, but the thing actua
 worth gating — **is a change breaking or safe-additive for an external consumer?** —
 they cannot classify; that needs a **semantic OpenAPI differ** (oasdiff-class).
 Écluse has **no external consumers reading this manifest** (registry clients hardcode
-the protocol and never read an API description — see the top of this page), so the
+the protocol and never read an API description; see the top of this page), so the
 differ is **deferred** until a consumer needs it, and `openapi.json` stays **derived
 build data**: regenerated from the fixed canonical config at publish time, **not
 committed**, with no stored golden to diff against. External contract fuzzers

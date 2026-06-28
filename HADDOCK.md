@@ -19,13 +19,13 @@ a how-to, or an explanation. So:
 
 - **Narrative and onboarding** ("how the proxy fits together", "how to add a
   registry") belong in [`README.md`](README.md) and
-  [`docs/architecture.md`](docs/architecture.md) — not spread across every
+  [`docs/architecture.md`](docs/architecture.md), not spread across every
   function.
 - **Haddock answers the focused question** at each type and function: its
   contract, its caveats, and the reasoning a type signature can't carry.
 
 The aim is a manual a Haskeller who is *new to this codebase* can navigate
-quickly — which comes from **structure and one-line summaries**, not from a wall
+quickly, which comes from **structure and one-line summaries**, not from a wall
 of prose on every binding.
 
 ---
@@ -74,7 +74,7 @@ changeable internals of the current one.
 
 ---
 
-## 3. How much to document — and what to skip
+## 3. How much to document, and what to skip
 
 The balance, in one line:
 
@@ -86,7 +86,7 @@ The balance, in one line:
 | **Module** | Always | Header: what it is for and how it fits the system (§5). |
 | **Exported function** | Always (≥ 1 line) | Purpose; preconditions, totality, failure modes; an example if non-obvious. |
 | **Exported type / `newtype`** | Always | What it represents and any invariant it protects. |
-| **Sum constructors** | Usually | A `-- \|` per constructor where the name isn't self-evident — and for `Rule`/`RuleOutcome`-style domain types, *always* (this is where the domain knowledge lives). |
+| **Sum constructors** | Usually | A `-- \|` per constructor where the name isn't self-evident, and for `Rule`/`RuleOutcome`-style domain types, *always* (this is where the domain knowledge lives). |
 | **Record fields** | Usually | `-- ^` per field: units, ranges, invariants. |
 | **Type class + methods** | Always | The abstraction and any laws; default behaviour. |
 | **Instances** | Rarely | Only when behaviour is surprising. |
@@ -151,7 +151,7 @@ Those are ceremony for libraries published standalone to Hackage; Écluse is one
 application whose licence (`MIT`) lives in the cabal file and `LICENSE`, so
 repeating it atop every module is bloat. A plain prose header is the convention
 here. (If we ever split a module set out as its own Hackage package, add the
-fields there — in their fixed order — and nowhere else.)
+fields there — in their fixed order, and nowhere else.)
 
 **Structure a long header with subsection headings.** When a header covers
 several distinct points, `==` / `===` headings render as real, quick-jump
@@ -250,7 +250,7 @@ render, and match how a sibling module does it.
 
 **Don't over-escape.** Only `@`, `<`, and `>` are active characters (plus `'`
 when wrapped tightly around an identifier). Write prose apostrophes and
-punctuation **bare** — `npm's`, `the package's name`, `a/b` — never `npm\'s`.
+punctuation **bare** — `npm's`, `the package's name`, `a/b`, never `npm\'s`.
 Escaping ordinary prose is the noise that makes a page look untrustworthy. To
 show an active character literally, escape just it: `\@`, `\<`, `\>`. If a
 literal needs a thicket of backslashes to render, rephrase instead.
@@ -276,7 +276,7 @@ renderDuration :: NominalDiffTime -> Text
 ```
 
 - **`make doctest`** runs every `>>>` example as a test, and the CI gate runs it
-  too — so an example that disagrees with the code fails the build. It works via
+  too, so an example that disagrees with the code fails the build. It works via
   `cabal repl --with-ghc=doctest`, which inherits the package's exact build
   configuration (crucially the `relude` prelude), so examples see the same names
   the module does.

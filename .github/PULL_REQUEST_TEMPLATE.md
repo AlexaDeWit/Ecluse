@@ -1,6 +1,6 @@
 <!--
 Keep it short. The "why" matters more than a play-by-play of the diff.
-Security fixes: coordinate privately first — see SECURITY.md.
+Security fixes: coordinate privately first; see SECURITY.md.
 -->
 
 ## Summary

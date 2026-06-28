@@ -10,7 +10,7 @@ is **OpenTelemetry**, emitting **OTLP**, which any compatible backend can receiv
 scrape, and so on.
 
 **Datadog is a first-class, fully supported target** — it is what the maintainer
-runs, so it gets a documented, tested deployment path — but it is **never
+runs, so it gets a documented, tested deployment path, but it is **never
 required**: nothing in the core depends on it, switching backends is a
 configuration change, and telemetry is **off by default**. The Datadog-specific
 pieces below (the Operator recipe, the trace propagator, the `dd.*` log fields, and
@@ -164,7 +164,7 @@ An inline proxy sees thousands of distinct packages, so the failure mode is a
 - **High-cardinality identifiers live on spans and logs, never on metric labels.**
   `package`, `version`, `scope`, and the full denial *message* go on the rule-eval
   **span** and the structured **log line** — that is where you debug a specific
-  decision — and must never become metric labels.
+  decision, and must never become metric labels.
 - **Metric labels are a closed set of bounded enums only:** `rule`, `decision`,
   `reason_class`, `ecosystem`, `mount`, `upstream`, `status_class`, `result`,
   `provider`, `cause`/`error_class`, breaker `source`, `tier`. Every one has a
@@ -176,8 +176,8 @@ An inline proxy sees thousands of distinct packages, so the failure mode is a
   `rule` is the one operator-bounded label (a deployment's small, fixed rule set). A
   label-domain guard test (`Ecluse.Telemetry.MetricsSpec`) pins the closed key set and
   rejects the high-cardinality keys. Those identifiers live on the rule-eval **span** and
-  the structured **log line** instead — see the `dd`/audit context in `Ecluse.Log`.
-- **Secrets/PII never appear in any signal** — no tokens, no `Authorization`,
+  the structured **log line** instead; see the `dd`/audit context in `Ecluse.Log`.
+- **Secrets/PII never appear in any signal**, no tokens, no `Authorization`,
   anywhere. In particular a **forwarded client token** (present under the
   `passthrough` [strategy](access-model.md); see
   [Credential flow](registry-model.md#credential-flow-and-authority)) must be
@@ -196,7 +196,7 @@ home and re-plumbing buys nothing). They are stitched to traces by **trace-ID
 injection**.
 
 The production format is **one compact JSON object per line to stdout** (JSONL):
-the whole line *is* the JSON — no pretty-printing, no level/timestamp prefix
+the whole line *is* the JSON, no pretty-printing, no level/timestamp prefix
 outside the object, embedded newlines escaped as `\n` so a record never spans
 physical lines. This is exactly what the Datadog Agent's stdout/stderr
 autodiscovery JSON parsing consumes. Each line carries a populated **`dd` object**
@@ -226,7 +226,7 @@ active span off the OpenTelemetry context and fills its ids onto the resolved
 `service`/`env`/`version` identity (the same `Ecluse.Telemetry.Resolve` answer the
 exporter uses). That `dd` object is installed as the **initial `katip` context** at the
 request entry (`runHandler`, where the WAI server span is already active) and the worker
-entry (`runWorkerM`, the service identity — no span is active at the worker entry), so
+entry (`runWorkerM`, the service identity, no span is active at the worker entry), so
 **every line carries `dd`**; the trace/span ids are present only when a span is in scope,
 and absent (never all-zero) otherwise.
 
@@ -279,12 +279,12 @@ and logs are scraped from stdout.
 > The image runs the **threaded RTS** (required: with telemetry enabled the OTel SDK
 > runs a batch span processor on a background thread, which aborts under the
 > non-threaded runtime), and the binary defaults to `-N` (use every core). But GHC's
-> `-N` reads the **host** core count and **ignores the cgroup CPU quota** — so in a
+> `-N` reads the **host** core count and **ignores the cgroup CPU quota**, so in a
 > CPU-limited container it over-subscribes capabilities to the node's cores, and the
 > resulting GC/scheduler contention shows up as **tail latency**, which an inline
 > proxy pays on its critical path. Pin the capability count to the container's CPU
 > limit instead — set `GHCRTS=-Nx` (or pass `+RTS -Nx -RTS`) where `x` matches the
-> pod's CPU `limit` — so the RTS schedules to the cores it is actually allotted.
+> pod's CPU `limit`, so the RTS schedules to the cores it is actually allotted.
 
 ## Configuration
 
@@ -308,7 +308,7 @@ node-local collector/Agent, never agentless to a vendor's cloud.
 
 **The OTLP endpoint is an operator-declared destination, not classified.** Like the
 mirror-queue endpoint, the collector/Agent address is configuration the operator
-chooses — not attacker-influenced input — so Écluse does **not** range-check or gate
+chooses, not attacker-influenced input, so Écluse does **not** range-check or gate
 it. (The internal-range/SSRF classifier guards the *untrusted package-download* path,
 where the target is upstream-supplied; the telemetry endpoint is neither.) The only
 real footgun — agentless export to a vendor's SaaS — is already excluded structurally:

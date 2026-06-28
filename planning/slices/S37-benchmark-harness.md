@@ -99,7 +99,7 @@ tiny unit check may cover any results-formatting shim if it grows logic.
 **Notes / decisions.**
 - Tooling confirmed present in the pin (nixpkgs 26.05 / ghc910, 2026-06-27):
   `tasty-bench` 0.4.1, `tasty` 1.5.4, `tasty-bench-fit` 0.1.1.
-- **D1** — no SLO; inform-only (this milestone never asserts a pass/fail throughput).
+- **D1**, no SLO; inform-only (this milestone never asserts a pass/fail throughput).
 - **D2** — measure on the **shared public** GitHub-hosted runner; trustworthy
   absolutes come from **local deep-dives**. Self-hosted rejected (PR-code supply-chain
   risk); larger hosted runners deferred (need a paid org plan).

@@ -62,7 +62,7 @@ release number. Two consequences dominate the design:
 - **Resolution is the client's job** (as in npm). The index returns every file;
   `pip` parses versions (PEP 440), filters by Python compatibility, wheel tags,
   and yank status, then picks. PyPI resolves *no* version specifiers server-side
-  — see §8.
+ ; see §8.
 
 ### npm ↔ PyPI correspondence
 
@@ -141,7 +141,7 @@ The Simple API speaks three media types, chosen by `Accept`:
 > `Accept: application/vnd.pypi.simple.v1+json, application/vnd.pypi.simple.v1+html;q=0.1, text/html;q=0.01`.
 
 The **JSON API** (`/pypi/…/json`) is a *separate* endpoint, always
-`application/json` — not content-negotiated.
+`application/json`, not content-negotiated.
 
 ### Caching & conditional requests
 
@@ -188,7 +188,7 @@ the file/version (§8) or return `403`.
 | `GET` ✓ | `{file-url}.metadata` (files.pythonhosted.org) | Wheel core metadata (PEP 658) | none |
 | `GET` ▢ | `/integrity/{p}/{v}/{file}/provenance` (pypi.org) | PEP 740 attestations | none |
 
-### Auth & write path (theory — no token)
+### Auth & write path (theory, no token)
 
 | Method | Path | Purpose |
 |--------|------|---------|
@@ -244,7 +244,7 @@ The install-critical ones:
 | `provides_extra` | string[] | Declared extras (e.g. `socks`). |
 | `license` / `license_expression` | string | SPDX expression (`license_expression`) is the modern PEP 639 form. |
 | `classifiers` | string[] | Trove classifiers (incl. `Development Status`, license, supported Pythons). |
-| `yanked` / `yanked_reason` | bool / string | PEP 592 — see §8. |
+| `yanked` / `yanked_reason` | bool / string | PEP 592; see §8. |
 
 ### Real example (trimmed — `requests`)
 

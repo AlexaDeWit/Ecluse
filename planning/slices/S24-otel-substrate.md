@@ -57,7 +57,7 @@ posture: the maintainer's Datadog choice must not become every consumer's obliga
 - **Nix path needed an overlay**, since the pinned nixpkgs (26.05) ships only the
   0.x line (sdk `0.1.0.1`, api `0.3.1.0`, and no `hs-opentelemetry-api-types` at
   all). `flake.nix` adds an `otelOverlay` (`callHackageDirect`, version + tarball
-  sha256 pinned — no new flake input) bumping the full stack to 1.0: api-types,
+  sha256 pinned, no new flake input) bumping the full stack to 1.0: api-types,
   api, otlp, semantic-conventions (1.40), the five propagators (b3/datadog/
   jaeger/w3c/xray), exporter-handle, exporter-in-memory, sdk, exporter-otlp. The
   in-memory exporter and propagators had to move too: the 0.x ones don't compile

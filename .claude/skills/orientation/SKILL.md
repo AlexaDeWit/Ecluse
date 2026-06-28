@@ -15,7 +15,7 @@ working context.
 
 It is deliberately a **map to where knowledge lives, not a copy of it.** The durable
 state of this project lives in **files** — the repo docs, the planning DAG, and agent
-memory — and those are authoritative over any conversation or summary. Read the
+memory, and those are authoritative over any conversation or summary. Read the
 sources; don't trust a paraphrase (including this one — if the map and a file
 disagree, the file wins, and fix the map).
 
@@ -75,7 +75,7 @@ Status, milestones, and "what shipped" **drift** — derive them live, never fro
 - `gh pr list --state open --json number,title,headRefName,isDraft` · `gh issue list --state open`
 
 The real per-slice status is each slice file's `status:` frontmatter reconciled against
-the git log — not the delivery-plan prose, which is a single-writer summary that can
+the git log, not the delivery-plan prose, which is a single-writer summary that can
 lag.
 
 ## 3. Read agent memory

@@ -115,7 +115,7 @@ than reimplementing it:
   drives an in-process Écluse (the real `Ecluse.Server.application` + the real
   `Ecluse.Worker.workerLoop`) over a **real SQS queue** built through the
   config-driven composition root (`planMirrorQueue` → `newSqsQueue`, driven by the
-  `AWS_ENDPOINT_URL_SQS` prod key against a `ministack` container — no test-only code path)
+  `AWS_ENDPOINT_URL_SQS` prod key against a `ministack` container, no test-only code path)
   and WAI npm stubs: a packument request is filtered by the rules, a tarball request is
   gated and enqueues a real SQS job, and the worker fetches → verifies the integrity
   digest → publishes it to the mirror-target stub.

@@ -104,7 +104,7 @@ failure), but it is not part of the gate.
   "private-only cache hit" is not a shape the proxy has. The faithful realisation of the
   issue's cheap, *no-public-fetch* path is the same `GET` with the public origin served
   warm from cache while the live private leg merges in. The two packument scenarios differ
-  in cache TTL (cold = TTL 0; hit = long TTL + warm-up) — but note `merge-cold` is not a
+  in cache TTL (cold = TTL 0; hit = long TTL + warm-up), but note `merge-cold` is not a
   strict per-request worst case: the public leg's `resolveMetadata` is single-flight, so
   even at TTL 0 concurrent misses coalesce onto one in-flight fetch+decode (the ~40 ms
   decode amortised under load), which narrows the contrast with `cached-public-hit` (both
@@ -123,7 +123,7 @@ failure), but it is not part of the gate.
   `perf_event_open`, so CPU-instruction counts are not captured for now.
 - **Hermeticity.** All upstreams are loopback `warp` stubs; the proxy and worker fetch
   them over plain (no-TLS, unguarded) managers with `127.0.0.1` opted into the
-  internal-range allowance, exactly as the integration suite does — no external socket, no
+  internal-range allowance, exactly as the integration suite does, no external socket, no
   Docker. Throughput/latency absolutes are **noisy on the shared runner (D2)** — read the
   trend coarsely, use the work-normalised per-request counters as the steady signal, and
   take trustworthy absolutes from **local deep-dives**. **Never wired into `gate`.**

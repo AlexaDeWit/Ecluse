@@ -90,7 +90,7 @@ This matters most for CodeArtifact. Its npm repository is a **standard HTTPS npm
 endpoint**: obtain a bearer token from `GetAuthorizationToken` (control plane,
 `amazonka`), then fetch packuments and tarballs with ordinary `http-client` (data
 plane). The streaming path therefore never touches `amazonka`'s
-conduit/`ResourceT` machinery — which is exactly where naive
+conduit/`ResourceT` machinery, which is exactly where naive
 streaming-through-a-proxy goes wrong.
 
 The same split holds on GCP — Pub/Sub and the Artifact Registry token are
@@ -114,7 +114,7 @@ the classic trap, and it is why frameworks that hide the response continuation
 make memory-bounded artifact streaming awkward.
 
 Raw WAI avoids it by construction. `Application` is continuation-passing — *you*
-call `respond` — so the resource acquisition can bracket the `respond` call
+call `respond`, so the resource acquisition can bracket the `respond` call
 itself:
 
 ```haskell
@@ -156,7 +156,7 @@ handler. The contract: a `HEAD` on the tarball route goes through the **identica
 gating and upstream-request construction** as the `GET` path — edge authentication,
 the host allowlist and internal-range block, the same-host `dist.tarball`
 [tarball-host policy](#streaming-and-resource-lifetime), the trusted/untrusted
-[origin trust split](access-model.md), and the honoured-tarball-host resolution — but
+[origin trust split](access-model.md), and the honoured-tarball-host resolution, but
 issues the upstream request as a **`HEAD`** and relays its status and safe response
 headers (`Content-Type`, `Content-Length`, `ETag`, `Last-Modified`, `Accept-Ranges`
 where present) with **no body**. It is the correct, non-amplifying reverse-proxy
@@ -211,7 +211,7 @@ The cache holds the **anonymous public (gated) origin only**, under **every** st
 the **private origin is never cached**. The private upstream is the per-client authority
 (`passthrough` re-authorises each request with the client's own forwarded credential;
 `service` reads with Écluse's own identity behind the edge), and a cache key carries no
-credential dimension — so a shared private entry would let one client's document be
+credential dimension, so a shared private entry would let one client's document be
 served to another within the TTL, bypassing per-client authorisation. Écluse therefore
 [forbids a shared private cache](access-model.md#why-écluse-never-caches-the-private-origin)
 outright and reads the private origin **per request** (see
@@ -282,7 +282,7 @@ The serve-outcome model and the per-outcome status mapping live in
 `Ecluse.Core.Server.Response`, which decides an error's *status* but holds **no body
 shape of its own**. Each mount supplies a `MountRenderer` that shapes the error
 bytes in its ecosystem's surface — npm's `{"error": …}` object lives in
-`Ecluse.Core.Registry.Npm.Serve` — so the agnostic layer carries no ecosystem body.
+`Ecluse.Core.Registry.Npm.Serve`, so the agnostic layer carries no ecosystem body.
 Rendering therefore splits into **two tiers**: a request matching **no mount** is a
 neutral `404 Not Found` in `text/plain` (there is no ecosystem to render it), while
 every in-mount error — a policy `403`, an unrecognised-path `404`, a `501` — renders

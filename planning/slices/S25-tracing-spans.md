@@ -37,7 +37,7 @@ pr: 293
 >   records no headers).
 > - Sampling is head-based and always-on by default (the SDK default
 >   `parentbased_always_on`), with the standard `OTEL_TRACES_SAMPLER` lever read
->   directly by the SDK — no code in this slice overrides it.
+>   directly by the SDK, no code in this slice overrides it.
 > - **Deferred (tracked in #307):** the *advisory-sync* domain span lands with S22 (the
 >   CVE sync module does not exist yet). True cross-async **span links** between the
 >   enqueue span and the worker-job span need trace context carried on the `MirrorJob`

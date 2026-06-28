@@ -23,7 +23,7 @@ pr: null
 > non-default `service` strategy's selection + edge-auth, ahead of S44 wiring it._
 
 **Goal.** Introduce the per-mount **credential strategy** as a first-class config
-choice — `passthrough` (default) | `service` — and the **edge
+choice — `passthrough` (default) | `service`, and the **edge
 authentication** modes that feed it (`open` | `static` | `trusted-edge`). Make the
 safe default the floor and the **unsafe combinations unrepresentable** — including
 `trusted-edge`, which Écluse accepts **only over a verifiable binding to the edge**

@@ -13,7 +13,7 @@ detail behind them. The consumer-side verify recipe is in the
 Écluse ships as a lean OCI image built **by Nix**
 (`dockerTools.buildLayeredImage`, see [`flake.nix`](../../flake.nix)), not a
 Dockerfile. The image is the stripped binary's runtime closure plus CA
-certificates and nothing else — no shell, no package manager, runs **non-root**
+certificates and nothing else, no shell, no package manager, runs **non-root**
 (uid 65532), and is **bit-for-bit reproducible** (a fitting property for a
 supply-chain tool). Build it locally with `make docker-build` (→ `./result`, a
 `docker-archive`).
@@ -38,7 +38,7 @@ and the auto-generated changelog
 `make docker-push` remain the **single-arch, host-architecture** path for local
 builds and manual pushes; the cross-arch assembly is CI-only.)
 
-**Immutable tags — no `latest`.** The target repo
+**Immutable tags, no `latest`.** The target repo
 ([`alexadewit/ecluse`](https://hub.docker.com/r/alexadewit/ecluse)) enforces
 immutable tags, so every push is a fresh, never-reused tag: the release publishes
 `ecluse:X.Y.Z` (from the git tag) and nothing else — a **single canonical
@@ -58,7 +58,7 @@ covers both.
 
 Each architecture is **built natively, not cross-compiled.** A matrix `build` job
 runs the Nix image build on its own runner — amd64 on `ubuntu-latest`, arm64 on
-GitHub's free public-repo `ubuntu-24.04-arm` runner — so GHC compiles natively on
+GitHub's free public-repo `ubuntu-24.04-arm` runner, so GHC compiles natively on
 each target and the per-arch image stays bit-for-bit reproducible. This sidesteps
 GHC cross-compilation (fragile with Template Haskell) entirely. The build legs are
 **credential-free**: each only uploads its image archive and per-arch SBOM as a
@@ -111,7 +111,7 @@ its own.
   keyless signing identity (the release workflow's OIDC cert).
 - **SBOM** (`actions/attest-sbom`, content from `make sbom`). Generated with
   [`sbomnix`](https://github.com/tiiuae/sbomnix) from the **Nix closure of the
-  exact binary the image ships** (`.#ecluse-bin`, stripped/static) — not a scan
+  exact binary the image ships** (`.#ecluse-bin`, stripped/static), not a scan
   of the image, which couldn't see the statically-linked Haskell deps. So it
   lists the real contents (~23 components: the `ecluse` binary plus its C closure
   — glibc, zlib, and the curl/openssl/krb5 chunk that rides in via the GHC
@@ -122,7 +122,7 @@ its own.
 
 > **Why the GitHub attest-actions, not cosign?** cosign stores attestations under
 > a single mutable `.att` tag (a second attestation must *update* it), which the
-> repo's immutable tags forbid — and cosign has no referrer mode for attestations
+> repo's immutable tags forbid, and cosign has no referrer mode for attestations
 > at any version (only for signatures). The attest-actions store each attestation
 > as its own immutable referrer, so the storage is immutable too. A separate
 > image signature is unnecessary: the provenance attestation already binds the
@@ -178,7 +178,7 @@ The [`security.yml`](../../.github/workflows/security.yml) workflow is
 `flake.lock` bump, not an in-PR change. On a PR it runs only when the flake
 changes; on a **daily schedule** it scans `main` and opens/updates a single
 tracking issue (label `security:vuln-scan`) when grype reports CVEs, closing it
-when clean — so CVEs disclosed *after* a release still surface.
+when clean, so CVEs disclosed *after* a release still surface.
 
 **Freshness — Renovate.** [`renovate.json5`](../../.github/renovate.json5) runs one
 bot across every ecosystem the repo has — the **flake inputs** (`nix`), **GitHub
@@ -193,7 +193,7 @@ Renovate PR.
 [Haskell Security Response Team](https://github.com/haskell/security-advisories)
 database) are exported to [OSV.dev](https://osv.dev), and Renovate maps the
 `hackage` datasource it extracts from `ecluse.cabal` to the OSV `Hackage`
-ecosystem — so `osvVulnerabilityAlerts: true` (set in
+ecosystem, so `osvVulnerabilityAlerts: true` (set in
 [`renovate.json5`](../../.github/renovate.json5)) raises a fix-PR when an advisory
 affects one of our cabal deps. It must be the OSV-based opt-in: the default
 platform `vulnerabilityAlerts` (the GitHub Advisory Database) has no Hackage

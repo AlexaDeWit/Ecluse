@@ -23,7 +23,7 @@ packuments to decide the one document Écluse serves: a fold over
 `dist-tags`/`time`, and the detected divergences), **not** a re-serialised
 `PackageInfo` (the typed model is lossy; the serve layer replays the plan onto the
 raw upstream `Value`s so unmodeled keys survive). This is **core domain logic over
-`PackageInfo`**, above the `RegistryClient` handle — *not* npm-adapter code — so it
+`PackageInfo`**, above the `RegistryClient` handle — *not* npm-adapter code, so it
 is written once and reused by every ecosystem. The packument lifecycle is now a **merge**, not a
 private-hit short-circuit (see
 [registry-model.md#packument-merge-across-upstreams](../../docs/architecture/registry-model.md#packument-merge-across-upstreams)

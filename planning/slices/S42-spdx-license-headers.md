@@ -18,7 +18,7 @@ pr: null
 an `SPDX-License-Identifier: MIT` tag (plus a copyright line) to the top of each
 `.hs` file, with a lint that keeps new files honest. The root [`LICENSE`](../../LICENSE)
 answers "what is the license of this _repository_", but source files get copied,
-vendored, snippeted, and extracted — and lose the root file the moment they
+vendored, snippeted, and extracted, and lose the root file the moment they
 travel. A per-file SPDX tag attaches the license to the unit that actually moves,
 makes it deterministically parseable by SBOM / license-compliance tooling, and
 disambiguates any future non-MIT file. It is the source-level analogue of the

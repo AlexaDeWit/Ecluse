@@ -21,7 +21,7 @@ unit-testable with no server.
 
 **Acceptance criteria.**
 - [ ] `Route = Packument PackageName | Tarball PackageName Text | Ping | Search | Unsupported`
-  (and the liveness/readiness routes — see S12) and `classify :: [Text] -> Route`,
+  (and the liveness/readiness routes; see S12) and `classify :: [Text] -> Route`,
   pure. — _web-layer.md#raw-wai-not-a-web-framework_
 - [ ] Encoded-slash handling: a scoped name arriving as one already-decoded segment
   (`@scope/pkg`) **and** as two segments (`@scope`,`pkg`) both classify correctly

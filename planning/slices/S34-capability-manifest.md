@@ -46,7 +46,7 @@ full rationale (a capability manifest, **not** a client-integration contract).
 > openapi-gen`, not committed); and unit tests (`test/unit/Ecluse/ManifestSpec.hs`).
 > The Redoc render + `make site`/Pages publishing is **PR 2** (which runs the
 > generator at publish time, since the artifact is not committed) and **concludes the
-> capability-manifest epic** — see the PR 2 as-built below. (The once-planned S35
+> capability-manifest epic**; see the PR 2 as-built below. (The once-planned S35
 > structural drift controls — `validateToJSON`, `Route`↔operation exhaustiveness, an
 > `hspec-wai` live-status contract — are **retired**, not built: see the PR 2
 > as-built and the dropped S35 slice.)
@@ -64,7 +64,7 @@ full rationale (a capability manifest, **not** a client-integration contract).
 > vendored bundle and points at the published spec; a **link card** from
 > `web/api-index.html` to the manifest. `make docs-site` now **generates the spec at
 > publish time** — `cabal run openapi-gen -- _site/api/openapi.json` (the artifact is
-> git-ignored, never committed) — and stages the Redoc page to
+> git-ignored, never committed), and stages the Redoc page to
 > **`_site/api/openapi/index.html`**, and `make site` vendors the Redoc bundle to
 > **`_site/vendor/redoc.standalone.js`** alongside Mermaid. **Publish layout:**
 > `_site/api/openapi.json` (raw spec, stable URL), `_site/api/openapi/` (Redoc page),
@@ -72,7 +72,7 @@ full rationale (a capability manifest, **not** a client-integration contract).
 > index). **No `pages.yml` change** was needed — it already runs `make site` and
 > deploys `_site`, so the generation + staging ride inside that target. The lean
 > `.#docs` shell builds `openapi-gen` (its `openapi3`/`autodocodec` deps resolve via
-> cabal from the pin — no Node, no extra shell tool); `make site` was verified
+> cabal from the pin, no Node, no extra shell tool); `make site` was verified
 > locally to emit the Redoc page, `openapi.json`, and the vendored bundle.
 >
 > **This PR concludes the capability-manifest epic, and S35 is dropped** (architect
@@ -120,7 +120,7 @@ full rationale (a capability manifest, **not** a client-integration contract).
   render the spec to a static **Redoc** page and stage it into `./_site` next to the
   Haddock, and `openapi.json` itself is published at a stable URL. The Redoc bundle is
   **vendored and hash-pinned as a flake input** — mirroring the existing `mermaidJs`
-  `fetchurl` pattern (`flake.nix` → `_site/vendor`) — so the lean `.#docs` shell needs
+  `fetchurl` pattern (`flake.nix` → `_site/vendor`), so the lean `.#docs` shell needs
   **no Node** and the published site has **no external runtime dependency**. The
   `pages.yml` workflow publishes it on push to `main` with the rest of the site.
 
@@ -161,7 +161,7 @@ consumes (no longer because the manifest mounts into the app — it does not); *
 supplies the config model for config-as-JSON-Schema and the fixed canonical config the
 generator runs against.
 
-**Notes / risks — and findings on the _how_.**
+**Notes / risks, and findings on the _how_.**
 - **Raw-WAI, not Servant → assembled, not derived.** There is no Servant route table
   to reflect, so the document is **assembled by hand** from the closed `Route` sum ×
   mounts (a total `Route → Operation` fold) plus `autodocodec`-derived schemas for the
@@ -170,7 +170,7 @@ generator runs against.
 - **Generator-as-executable** mirrors the benchmark components: a non-library
   component, out of the app's dependency closure, run at build time. Static generation
   means the *only* consumers of the assembly function are this generator and the unit
-  tests — no runtime surface.
+  tests, no runtime surface.
 - **Determinism is load-bearing.** `openapi3` keeps paths/definitions in insertion
   order (`InsOrdHashMap`), but the JSON encode must pin object-key ordering (e.g.
   `aeson-pretty` with `confCompare = compare`, or an explicit ordering) so the
@@ -186,7 +186,7 @@ generator runs against.
   `fetchurl` flake input, copied into `_site/vendor`, with a tiny static HTML wrapper
   pointing at the published `openapi.json`) — zero Node, consistent with the vendored
   Mermaid bundle. `redocly` (2.17.0, packaged in nixpkgs) is a fallback if a
-  build-time self-contained-HTML transform is later preferred — but it adds Node to the
+  build-time self-contained-HTML transform is later preferred, but it adds Node to the
   `.#docs` shell, against the lean/node-free posture.
 - **Scope guard.** Do **not** model npm's full packument or registry protocol (that is
   npm's contract). The manifest documents Écluse's *coverage*; pass-through bodies link

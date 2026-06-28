@@ -48,7 +48,7 @@ the S02 in-memory doubles; real AWS backends arrive in M4.
   _rules-engine.md#applying-verdicts-to-a-packument, registry-model.md#packument-merge-across-upstreams_
 - [x] Optional inbound `PROXY_AUTH_TOKEN` validated at the edge before proxying (S03).
 - [x] Uses the metadata cache (S13) so the fetch+parse is shared/collapsed (the
-  **public** leg only — see as-built notes).
+  **public** leg only; see as-built notes).
 
 **File scope.**
 - `src/Ecluse/Server/Pipeline.hs` — the packument handler: fetch orchestration, credential forward/strip, rules+filter+serve.
@@ -72,7 +72,7 @@ here (packument requests don't mirror) — that is the tarball path, S15.
   mount-level inputs (private/public base URLs, mount base URL, resolved
   `[PrecededRule]`, optional inbound token, `IO UTCTime` clock, help message) as a
   record. The two legs are built per-request as `NpmClientConfig`s over the shared
-  `Manager` — private with the client's forwarded token, public anonymous — so the
+  `Manager` — private with the client's forwarded token, public anonymous, so the
   credential authority lives in one place. Fetched in parallel via
   `UnliftIO.concurrently`.
 - **Decision-surface replay.** Each leg yields `(PackageInfo, raw Value)`. Public is

@@ -20,7 +20,7 @@ see [`docs/architecture.md`](docs/architecture.md).
 Écluse follows the [**Simple Haskell**](https://www.simplehaskell.org/)
 philosophy: prefer the boring, readable subset of the language over clever or
 advanced features. The goal is code that an engineer who is *new to Haskell* can
-read, reason about, and change safely — and that an automated agent can extend
+read, reason about, and change safely, and that an automated agent can extend
 without inventing exotic machinery. Simplicity here is a feature, not a
 limitation.
 
@@ -28,13 +28,13 @@ In practice:
 
 - **Favour concrete types and plain functions** over type-level programming.
   Prefer a sum type or a record to a fancy generic encoding.
-- **Be conservative with language extensions** — see §2. The simpler the
+- **Be conservative with language extensions**; see §2. The simpler the
   language you write in, the smaller the surface a reader must learn.
 - **Avoid the advanced toolbox unless it clearly pays for itself:** heavy
   type-level features (`GADTs`, `TypeFamilies`, `DataKinds`), deep typeclass
   hierarchies and `MultiParamTypeClasses`/`FunctionalDependencies`, lawless or
   overly abstract typeclasses, and `TemplateHaskell` (which has two sanctioned
-  exceptions — see §2). Each adds power but also cognitive load and compile-time
+  exceptions; see §2). Each adds power but also cognitive load and compile-time
   cost; reach for one only when the simple encoding is genuinely worse, and
   justify it (see §2).
 - **Optimise for the reader, not the writer.** A few more lines of obvious code
@@ -86,7 +86,7 @@ because a parsed, precise type removes the case that would otherwise crash.
 
 ---
 
-## 1. Formatting is mechanical — never do it by hand
+## 1. Formatting is mechanical, never do it by hand
 
 Layout (indentation, commas, line breaks, import alignment) is owned entirely by
 **fourmolu**, configured by [`fourmolu.yaml`](fourmolu.yaml). Do not argue with
@@ -155,7 +155,7 @@ naming, decomposition, and totality.
     It is what functions take and return unless there is a reason otherwise.
   - Strict **`ByteString`** holds raw bytes (digests, request/response bodies you
     keep). Reserve **lazy `ByteString`** for streaming passthrough — the tarball
-    body the proxy relays — never for held state.
+    body the proxy relays, never for held state.
   - **`ShortText`** (`text-short`) is for **bulk-stored, equality-only
     identifiers** — values held in quantity that are only compared, keyed, or
     rendered, and never sliced, parsed, or rewritten. Convert only at the `mk` /
@@ -187,7 +187,7 @@ Enabled on top of `-Wall`, each reinforcing a rule in this guide:
 | `-Wredundant-bang-patterns` | A `!` pattern that forces nothing (already strict/irrefutable). |
 | `-Wredundant-constraints` | Constraints a signature does not use. |
 
-**`-Werror` makes _every_ warning fatal — not only the ones tabled above.** That
+**`-Werror` makes _every_ warning fatal, not only the ones tabled above.** That
 includes the full `-Wall` set (unused imports and bindings, incomplete and
 overlapping patterns, missing top-level type signatures, type defaulting, …)
 *and* relude's own `WARNING` pragmas. In particular **`undefined` and the
@@ -195,7 +195,7 @@ overlapping patterns, missing top-level type signatures, type defaulting, …)
 warnings under `-Werror` — at build time, before the `.hlint.yaml` ban (§10)
 even runs. So a `trace` you drop in to debug will break `make build`; remove it
 (use `katip` for real logging). `error` is the one relude deliberately leaves
-warning-free — see §10 for its policy.
+warning-free; see §10 for its policy.
 
 Deliberately **not** enabled: `-Wunused-packages` (the relude mixin defeats its
 attribution), `-Wmissing-import-lists` (we use open imports for internal
@@ -204,7 +204,7 @@ inference). Test suites add `-Wno-missing-export-lists` because `hspec-discover`
 generates a `Main` without one.
 
 If a refactor makes warnings unbearable for a moment, relax locally with an
-untracked `cabal.project.local` (see the comment in `cabal.project`) — never by
+untracked `cabal.project.local` (see the comment in `cabal.project`), never by
 weakening the committed flags.
 
 ---
@@ -282,7 +282,7 @@ shape (cf. Matt Parsons' *Three Layer Haskell Cake*):
 - **Keep the dependency arrow pointing inward:** pure modules must never import
   the effectful shell.
 
-### 4.5 Put instances with the type or the class — no orphans
+### 4.5 Put instances with the type or the class, no orphans
 
 Define a typeclass instance in the module that defines the data type, or the one
 that defines the class. *Orphan instances* (in a third module) are a maintenance
@@ -327,7 +327,7 @@ module Ecluse.Core.Package (
 
 Export an abstract type with its constructor hidden — `Scope`, or `PackageName`
 (callers build it with `mkPackageName` and read it through the exposed
-accessors) — or with its constructors and fields exposed, as `PackageDetails
+accessors), or with its constructors and fields exposed, as `PackageDetails
 (..)`, deliberately; the choice encodes whether the type has invariants to
 protect (see §6), and pairs with the `.Internal` escape hatch in 4.6.
 
@@ -337,18 +337,18 @@ protect (see §6), and pairs with the `.Internal` escape hatch in 4.6.
 
 Documentation is not optional here, and it is the rule agents most often skip.
 Its conventions have their own focused, example-driven reference —
-**[`HADDOCK.md`](HADDOCK.md)** — which you should read before writing doc
+**[`HADDOCK.md`](HADDOCK.md)**, which you should read before writing doc
 comments. The essentials:
 
 - **Every module** opens with a prose `{- | … -}` header saying what it is for
   and how it fits the system. **Every exported type and function** gets a Haddock
   comment; sum constructors and record fields are documented where they carry
-  domain meaning. Non-exported helpers get a plain `--` comment at most — never
+  domain meaning. Non-exported helpers get a plain `--` comment at most, never
   Haddock.
 - **Document the *why*, not the *what*** the signature already states —
   especially the security rationale of a rule, the most valuable thing a comment
   here can carry.
-- **Keep Haddock free of project narration** — no status/roadmap, no slice / PR /
+- **Keep Haddock free of project narration**, no status/roadmap, no slice / PR /
   issue references. It is the durable contract, read long after any PR.
 - **Examples run.** Prefer a `>>>` example to prose; `make doctest` (part of the
   CI gate) executes them, so they cannot drift from the code.
@@ -408,7 +408,7 @@ predicates read as assertions (`pkgHasInstallScripts`, `isAllow`).
 
 **Rule 6.5 — Store bulk equality-only identifiers as `ShortText`, converting only
 at the boundary.** When an identifier is held in quantity — repeated across every
-version of a packument, or every entry of a dependency list — and is only ever
+version of a packument, or every entry of a dependency list, and is only ever
 compared, used as a `Map`/`Hashable` key, or rendered (never sliced, parsed, or
 rewritten), store it as `ShortText` rather than `Text`. It is more compact and has
 no slice-sharing surprises. Do the conversion *once* at the type's boundary: `mkX`
@@ -527,7 +527,7 @@ flag you the day a new constructor is added — useful for exhaustive logic like
 
 ---
 
-## 10. Totality — no partial functions
+## 10. Totality, no partial functions
 
 A resilience proxy must not crash on hostile input, so **partial functions are
 banned** (enforced by `.hlint.yaml`; most are already hidden by relude). Do not
@@ -540,13 +540,13 @@ Instead:
   `viaNonEmpty head`, `Map.lookup`, `(!!?)`.
 
 Represent "this might not exist" in the type (`Maybe`, `Either`, a sum type),
-and let the caller decide — see `Decision`/`RuleOutcome`, which carry a human
+and let the caller decide; see `Decision`/`RuleOutcome`, which carry a human
 reason for every branch precisely so failures are explainable rather than
 thrown.
 
 **Partial record selectors and updates fall under the same ban**, caught at
 compile time rather than by `.hlint.yaml`. A field that is not present in every
-constructor of a sum type yields a selector — and a record update — that throws
+constructor of a sum type yields a selector, and a record update — that throws
 on the other constructors, even though its type looks total. `-Wpartial-fields`
 rejects *defining* one, `-Wincomplete-record-selectors` rejects a *use* site
 that could fail (including selectors defined in a dependency), and
@@ -709,7 +709,7 @@ three-tier strategy are in `CONTRIBUTING.md`; this is style.)
   in assertions: `isAllow`, `approvedBy`, `deniedBy`.
 - **Express invariants as `hedgehog` properties**, grouped under
   `describe "properties"`, using `forAll` generators and `(===)`. An invariant
-  that must hold for *every* input — not just the handful an example covers —
+  that must hold for *every* input, not just the handful an example covers —
   belongs here (e.g. an order-independence or round-trip law).
 - Comment a non-obvious case with the reasoning it encodes.
 - **Share cross-suite helpers through `ecluse-test-support`**: a helper or fixture

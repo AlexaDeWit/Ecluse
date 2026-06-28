@@ -10,7 +10,7 @@ two principles govern it:
 
 - **The rules engine is ecosystem-blind.** It never branches on npm vs PyPI vs
   RubyGems. Adapters project each ecosystem's wire format into *normalised
-  signals*; a rule sees `CodeExecSignal`, `Trust`, `Availability` — never
+  signals*; a rule sees `CodeExecSignal`, `Trust`, `Availability`, never
   `hasInstallScript`, `packagetype`, or `extensions`.
 - **Signal availability is explicit.** A signal the adapter has not (or cannot
   cheaply) determined is represented as such (`CodeExecUnknown`, `TrustUnknown`,
@@ -22,7 +22,7 @@ two principles govern it:
 | Concern | Representation | Why |
 |---|---|---|
 | **Identity** | `PackageName`: ecosystem tag + optional namespace (npm scope) + a normalised `canonical` key + a `display` form; equality is on the canonical key only. | npm is case-sensitive with scopes, PyPI normalises (PEP 503), RubyGems is verbatim — matching must use one canonical key while rendering stays faithful. |
-| **Version** | (in [`Ecluse.Core.Version`](../../core/src/Ecluse/Core/Version.hs)) opaque; holds the raw text (round-trip) **plus** a `Maybe VersionKey` parsed at construction. `parseVersionKey :: Ecosystem -> Text -> Either VersionError VersionKey` is the only way to obtain a `VersionKey`, and `compareVersions` is defined *only* on keys — so non-canonical text cannot reach the comparator (parse, don't validate). Unparseable ⇒ no key ⇒ ordering rules abstain, but the version is still served. | Lexicographic ordering is wrong for every grammar (`"10.0.0" < "9.0.0"`); and a proxy must keep serving a version even when our hand-rolled parser can't order it. |
+| **Version** | (in [`Ecluse.Core.Version`](../../core/src/Ecluse/Core/Version.hs)) opaque; holds the raw text (round-trip) **plus** a `Maybe VersionKey` parsed at construction. `parseVersionKey :: Ecosystem -> Text -> Either VersionError VersionKey` is the only way to obtain a `VersionKey`, and `compareVersions` is defined *only* on keys, so non-canonical text cannot reach the comparator (parse, don't validate). Unparseable ⇒ no key ⇒ ordering rules abstain, but the version is still served. | Lexicographic ordering is wrong for every grammar (`"10.0.0" < "9.0.0"`); and a proxy must keep serving a version even when our hand-rolled parser can't order it. |
 | **Install-time code execution** | `CodeExecSignal = NoCodeOnInstall \| RunsCodeOnInstall reason \| CodeExecUnknown`. | Unifies npm install scripts, PyPI sdist builds, and RubyGems native extensions; `Unknown` carries the gemspec-fetch case. |
 | **Trust / provenance** | `Trust = Trusted (NonEmpty TrustEvidence) \| Untrusted \| TrustUnknown`; `TrustEvidence = Signed \| Attested \| MfaPublished \| OtherEvidence text`. | Signing/attestation/MFA differ per ecosystem but reduce to one signal; the evidence captures the *how* without leaking the ecosystem. |
 | **Availability** | `Availability = Available \| Deprecated msg \| Yanked (Maybe reason)`, plus a per-artifact `artYanked`. | npm deprecates (advisory) and RubyGems yanks whole versions; PyPI yanks individual *files* — the per-file flag preserves PyPI's "listed-but-yanked" so exact pins still resolve. |
@@ -64,7 +64,7 @@ through one at a time):
    [Registry Model → Packument merge](registry-model.md#packument-merge-across-upstreams)).
    This is a **pure operation over the domain model**, living above the
    `RegistryClient` handle in its own module (`Ecluse.Core.Package.Merge`), never in an
-   adapter — so a new ecosystem inherits merging for free. **Provenance** (trusted
+   adapter, so a new ecosystem inherits merging for free. **Provenance** (trusted
    vs gated) is a **merge-time parameter**, not a persisted `PackageDetails` field,
    so identity/equality stay unchanged; if threaded through for observability it is
    kept out of the equality key.

@@ -7,13 +7,13 @@
 **Deny by default; the boot order decides.** Each rule carries a configurable
 integer **precedence**. At boot the configured rule set is arranged **once** into
 a single total order — **highest precedence first, then rule name ascending** as
-the deterministic tiebreak — and evaluation walks that order and takes the **first
+the deterministic tiebreak, and evaluation walks that order and takes the **first
 decisive result**. Every rule yields *allow*, *deny*, *no-decision*, or
 *unavailable* for a given version; *allow*, *deny*, and a fail-closed *unavailable*
 are **decisive**, while *no-decision* and a fail-open *unavailable* are no-ops. If
 no rule is decisive, the package is denied by default. Built-in deny rules default
 to a higher precedence than allow rules, so out of the box "any deny overrides any
-allow" holds — but an operator can rank a specific allow above a specific deny
+allow" holds, but an operator can rank a specific allow above a specific deny
 (e.g. to let a trusted internal scope through an install-script deny).
 
 At **equal explicit precedence** the tie is resolved by **rule name** (the boot
@@ -41,7 +41,7 @@ the closed, `Eq`/`Show` data type `Rule` — *what* a rule is, carrying no evalu
 that data ([`core/src/Ecluse/Core/Rules.hs`](../../core/src/Ecluse/Core/Rules.hs)). At
 boot `prepare` turns each configured rule into the engine's runtime structure, a
 **`PreparedRule`** — its precedence, a stable name (`ruleName`, derived from the data),
-an optional **resilience policy**, and the bound per-version evaluator — and one engine
+an optional **resilience policy**, and the bound per-version evaluator, and one engine
 walks the boot-ordered list. A prepared rule is **pure** or **effectful** by whether it
 carries a resilience policy, not by which of two tiers it lives in:
 
@@ -73,7 +73,7 @@ the published contract.
 **Whether a rule is pure or effectful is determined by where its signal lives, not
 only by whether it "feels" like IO.** Many inputs are already present in the
 metadata an adapter fetches for resolution — publish age, declared scope, npm's
-`hasInstallScript`, a PyPI file's `packagetype == sdist` — and support **pure**
+`hasInstallScript`, a PyPI file's `packagetype == sdist`, and support **pure**
 rules. Others are *not* exposed in any metadata response and must be fetched and
 parsed per version. RubyGems is the motivating case: a gem's native `extensions` —
 its install-time code-execution signal, the analogue of npm's install scripts —
@@ -114,7 +114,7 @@ was considered.
 
 A rule that does not fire is a **no-op** (`NoDecision`, or a fail-open
 `Unavailable`), yielding the floor to others rather than admitting or blocking on its
-own. Because the **boot order** — not list position — decides, and it resolves every
+own. Because the **boot order**, not list position — decides, and it resolves every
 equal-precedence tie by name, the decision and the credited rule are fully
 order-independent: shuffling the configured rule set yields the same boot order and
 hence the same `Decision`. Only the order in which the no-op reasons are gathered for
@@ -200,7 +200,7 @@ merge unions it with the trusted set:
   point at a removed version are **dropped** rather than repointed — aiming `beta`
   at a stable release would misrepresent it.
 - **No survivors → 403, 503, or 500.** If **nothing survives in the merged
-  document** — no trusted private versions, and every gated public version was
+  document**, no trusted private versions, and every gated public version was
   rejected — the status follows the most recoverable cause: **403** with the
   collected denial reasons when every rejection is by policy; **503**
   (+`Retry-After`) when any rejection was transient/undecidable, **or when an
@@ -214,7 +214,7 @@ and it is the resilience posture — a not-yet-cleared (or actively bad) release
 not silently remain the default install once it has been withheld. The rule never
 *promotes*, though: a higher prerelease is not elevated over a maintainer's chosen
 stable `latest` (npm keeps `latest` on the last stable release even when a higher
-prerelease exists), and a surviving `latest` is left exactly as published — so the
+prerelease exists), and a surviving `latest` is left exactly as published, so the
 single-source case is the identity. Because the filtered body differs from
 upstream's, the proxy computes its **own** response validators (`ETag`) over the
 filtered body rather than relaying upstream's (see
@@ -242,7 +242,7 @@ opt-in.
 
 Effectful rules read the **same synced advisory data in two directions**: a
 **deny** direction — `DenyIfCVE` blocks a version that *is* affected by a known
-advisory — and an **allow** direction — `AllowIfRemediatesCve` *fast-tracks* a
+advisory, and an **allow** direction — `AllowIfRemediatesCve` *fast-tracks* a
 version that **fixes** one. Rather than call an advisory API per evaluation, Écluse
 **syncs a local copy of the dataset and queries it in memory**: the `CVELookup`
 handle reads a local index, never the network, on the hot path.
@@ -256,7 +256,7 @@ typosquats. `AllowIfRemediatesCve` removes that tension. For version *V* of pack
 *P* it consults `CVELookup` and takes a position:
 
 - **`Allow`** when an advisory affects an **earlier** version of *P* and *V* falls
-  **outside** that advisory's affected range — i.e. *V* is the fix. The reason
+  **outside** that advisory's affected range, i.e. *V* is the fix. The reason
   names the remediated advisory IDs (audit trail).
 - **`NoDecision`** otherwise, and a **fail-open** (`FailNoDecision`) `Unavailable`
   **when the lookup itself fails.** This is the deliberate inverse of `DenyIfCVE`'s
@@ -277,7 +277,7 @@ the fix boundary?" instead of "is *V* inside the affected range?".
 
 A supervised in-process background task periodically pulls **OSV's per-ecosystem
 advisory exports** (`gs://osv-vulnerabilities/<ecosystem>/all.zip`) — one dataset
-per supported ecosystem, under one schema — and parses each into a compact
+per supported ecosystem, under one schema, and parses each into a compact
 in-memory index (package → affected version-ranges + advisory IDs), which is
 **atomically swapped** in. The download is transient (stream-unzipped, or a temp
 file deleted immediately), so there is **no persistent writable-disk requirement**
@@ -309,7 +309,7 @@ versions, not requests.
 ### Point-in-time gating — a known limitation
 
 CVE gating happens **at ingestion**: a version is checked once, before it enters
-the mirror, and the private upstream serves it rule-free thereafter — so a CVE
+the mirror, and the private upstream serves it rule-free thereafter, so a CVE
 disclosed *after* a version is mirrored is **not** caught by the gate. The
 post-ingestion disposition (operator scanning, a hard deny-by-identity revocation,
 and operator purge — *deny-then-purge*) is catalogued as
@@ -320,7 +320,7 @@ advisory dataset locally keeps a periodic mirror re-scan straightforward to add 
 
 Because the index is in memory and refreshed on a schedule, tests assert a
 **bounded, self-cleaning footprint**: memory stays bounded across repeated syncs
-(the old index is released — no growth or leak), the swap is atomic (no torn reads
+(the old index is released, no growth or leak), the swap is atomic (no torn reads
 mid-refresh), a failed sync retains the last-good index (and alarms), readiness
 gates on first sync, and any transient download scratch is cleaned up. (A future
 on-disk cache would instead add rotation / bounded-disk tests.)

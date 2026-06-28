@@ -42,7 +42,7 @@ verdicts across all versions (the deny-by-default filtered projection).
   not drop wire keys Écluse does not model (the synthesized-packument
   `additionalProperties: true` passthrough): operate **structurally over the raw
   `Value`** (or carry a `KeyMap Value` remainder), removing denied versions and
-  rewriting `dist.tarball` in place — never rebuild the served body from a lossy typed
+  rewriting `dist.tarball` in place, never rebuild the served body from a lossy typed
   model. — _api-surface.md#the-synthesized-packument-schema--the-trust-boundary_
 
 **File scope.**

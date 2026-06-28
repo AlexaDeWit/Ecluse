@@ -181,7 +181,7 @@ index the natural denial is to **omit** the version line (§8) or `403`.
 > The legacy Marshal **dependency API** (`/api/v1/dependencies?gems=…`) was
 > superseded by the Compact Index and should not be used by new integrations.
 
-### Auth & write path (theory — no token)
+### Auth & write path (theory, no token)
 
 | Method | Path | Purpose |
 |--------|------|---------|
@@ -311,7 +311,7 @@ and a platform-split, dependency-free gem (`bcrypt`):
 | `created_at:` | Per-version publish timestamp (the age signal). |
 
 ⚠️ **No `extensions` token.** The Compact Index carries deps, checksum, ruby
-requirement, and timestamp — but *nothing* about whether the gem builds native
+requirement, and timestamp, but *nothing* about whether the gem builds native
 code. That signal requires the gemspec (§6).
 
 ### `GET /names`
@@ -481,7 +481,7 @@ exact pins. So in RubyGems a yank is closer to a soft-delete than PyPI's
 - **Policy shapes availability.** To deny a version, **omit its `/info` line**
   (Bundler simply never sees it) and update the `/versions` MD5 accordingly; to
   hard-block, serve the index but `403` the `.gem`. A deny-by-default served
-  index is, as elsewhere, a **filtered projection** of upstream — but here the
+  index is, as elsewhere, a **filtered projection** of upstream, but here the
   projection must also keep the append-only/checksum invariants intact, which is
   more delicate than rewriting a JSON blob.
 - **`created_at` (per version, in `/info` and JSON) is the age signal** for an
@@ -650,7 +650,7 @@ GemJsonVersion  = GemJsonLatest-shaped, one version -- GET /api/v2/rubygems/{n}/
 > by platform); (b) the publish timestamp is per-file/per-version (here right
 > inside `/info`, no separate time map); (c) the install-risk signal is
 > ecosystem-specific (`hasInstallScript` / `packagetype==sdist` / `extensions`)
-> — and adds a fourth: that signal may live **outside the metadata API**, so a
+>, and adds a fourth: that signal may live **outside the metadata API**, so a
 > resolver needs a path to *fetch* per-version detail, not just read it.
 
 ---

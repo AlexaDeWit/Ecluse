@@ -60,7 +60,7 @@ upstreams as a supply-chain signal, so neither hash may be dropped in projection
 
 **As-built notes.**
 - **`PackageInfo` lives in `Ecluse.Package`** (alongside `PackageDetails`), the
-  preferred placement — no sibling module or `.hs-boot` was needed; the import graph
+  preferred placement, no sibling module or `.hs-boot` was needed; the import graph
   stays acyclic. Its fields are `infoName` / `infoVersions` (a `Map Text
   PackageDetails`) / `infoDistTags` / `infoPublishedAt`.
 - **A thin projection-local wire wrapper recovers `_npmUser`.** S06's

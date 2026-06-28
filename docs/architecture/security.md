@@ -5,7 +5,7 @@
 Écluse builds outbound HTTP requests (private upstream, public upstream, mirror
 target) from **client-supplied package identifiers** and **upstream-supplied
 artifact locations**. For a supply-chain security tool the defences against
-abusing that are **stated, testable invariants** — not implementer discretion.
+abusing that are **stated, testable invariants**, not implementer discretion.
 They are implemented as outbound-request and input-validation guard primitives,
 enforced at the points noted below.
 
@@ -36,7 +36,7 @@ here.
    that does not match the ecosystem's grammar is rejected; an upstream URL is
    built from the canonical identifier and the configured base, **never** from raw
    client path segments. The router's `classify` / `isSafeComponent` already
-   rejects traversal, encoded-slash, and control-character path components — see
+   rejects traversal, encoded-slash, and control-character path components; see
    [Web Layer](web-layer.md#raw-wai-not-a-web-framework). That structural gate is a
    denylist, so it is paired with **encode-on-build**: every accepted name component
    is percent-encoded (`Ecluse.Core.Server.Route.encodeComponent`) when the upstream URL
@@ -52,7 +52,7 @@ here.
    same encoder.
 2. **Outbound fetches are restricted to the configured upstream hosts** (an
    allowlist). Artifact bytes are fetched only from the upstream-declared
-   `dist.tarball`, after the allowlist check — never from a client-supplied URL.
+   `dist.tarball`, after the allowlist check, never from a client-supplied URL.
    The allowlist is enforced when the URL is built, and **Écluse never follows an
    upstream redirect** (`redirectCount = 0` for every data-plane request, anonymous and
    credentialed alike — `Ecluse.Core.Registry.Npm.withToken`), so an allowlisted upstream
@@ -66,7 +66,7 @@ here.
    IPv6 unique-local `fc00::/7` (incl. the AWS IMDSv6 endpoint `fd00:ec2::254`). The
    block is **origin-aware**: it guards the **untrusted** egress — the public-upstream
    fetch and every **untrusted** artifact (`dist.tarball`) fetch (a public
-   `dist.tarball` stream and the mirror worker's back-fill fetch) — and is **re-applied
+   `dist.tarball` stream and the mirror worker's back-fill fetch), and is **re-applied
    to every resolved IP** at connection time. The **full** resolved set is vetted and the
    connection then dials **only vetted addresses**, **failing over** among them: if any
    resolved address is internal the whole answer is refused (so an attacker cannot smuggle
@@ -88,7 +88,7 @@ here.
    [Why `dist.tarball` is honoured](#why-disttarball-is-honoured-and-what-bounds-it)
    and [Network egress is a shared responsibility](#network-egress-is-a-shared-responsibility)).
 4. **Parsed upstream responses are bounded** — maximum body size, version count,
-   and JSON nesting depth — and **fail closed** past any bound: an oversized or
+   and JSON nesting depth, and **fail closed** past any bound: an oversized or
    pathological document is refused, never partially served. The bounds are
    **wired into the live metadata data plane**: `Ecluse.Core.Registry.Npm.fetchMetadataForm`
    reads the body through `Ecluse.Core.Security.boundedRead` at the `http-client` boundary
@@ -97,7 +97,7 @@ here.
    after projection, and **every breach degrades the contribution to nothing** — the
    same fail-closed path a parse failure takes, and **logged at `WARNING`** (which
    ceiling, observed-vs-cap) so a bound breach is distinguishable from an ordinary
-   parse failure — so the merge serves the best-effort union of whatever resolved
+   parse failure, so the merge serves the best-effort union of whatever resolved
    within budget and a pathological document never reaches serve. (The body-size cap
    is what bounds an *unbounded* structure — it precedes the decode, so the document
    reaching the depth check is already bounded-by-body-size; the depth check then
@@ -120,7 +120,7 @@ here.
      load](configuration.md#public-integrity-floor), never clamped. **There is no
      escape-hatch:** Écluse will not accept a sub-SHA-256 digest from an untrusted public
      upstream under any configuration. A public version with **no** digest
-     (`MissingIntegrity`) or only a digest **below the floor** — e.g. a legacy SHA-1
+     (`MissingIntegrity`) or only a digest **below the floor**; e.g. a legacy SHA-1
      `dist.shasum` with no SRI (`BelowIntegrityFloor`) — is refused: the artifact gate
      answers `403` (the tarball is never fetched), and the packument path **filters it out
      of the served listing** (so a client never sees a version it could not safely verify).
@@ -134,7 +134,7 @@ here.
      **operator-loosenable below SHA-256** (down to `sha1`/`md5`) for a **legacy private
      mirror**, where **trust in the operator's own vetted source substitutes for
      cryptographic strength**. Loosening the trusted floor is the **only** way Écluse will
-     serve a sub-SHA-256 digest, and **only on the trusted private origin** — never on
+     serve a sub-SHA-256 digest, and **only on the trusted private origin**, never on
      untrusted public bytes. On the serve path the trusted floor filters the **private
      listing** (the packument route); the **private tarball serve leg** is a
      [conventional stable read](registry-model.md#serving-a-tarball-a-conventional-private-read-an-honoured-public-location)
@@ -145,7 +145,7 @@ here.
    The asymmetry is the point: **trust may substitute for cryptographic strength on the
    operator's own vetted (private) source, but never on untrusted public bytes.** This is
    enforced in the types — `MinIntegrity` (public) cannot be constructed below SHA-256,
-   while `MinTrustedIntegrity` (trusted) can — so no config or constructor path can lower
+   while `MinTrustedIntegrity` (trusted) can, so no config or constructor path can lower
    the public floor.
 
    **The shared-weak-digest divergence cross-check is a consequence of loosening the
@@ -234,7 +234,7 @@ This literal-form coverage earns its keep because the fetch layer also re-checks
 **resolved** IPs: the shared HTTP manager's connection hook resolves every outbound
 host and re-applies the same internal-range block to each resolved address before
 the socket is used (`Ecluse.Core.Security.Egress`), so a DNS name that resolves to an
-internal address — which the pure layer cannot see — is refused at connect time.
+internal address, which the pure layer cannot see — is refused at connect time.
 This narrows the resolve-then-connect (DNS-rebinding) window the pure layer leaves
 open.
 
@@ -293,7 +293,7 @@ relay, and the mirror-target publish) — is built with redirect-following **dis
 (`Ecluse.Core.Registry.Npm.withToken`). This forecloses a danger on each plane. On the
 **credentialed** plane: http-client's default re-sends the `Authorization` header to a
 `3xx` `Location` (and does not strip it cross-host), so a hostile or misconfigured upstream
-could `302` a forwarded/minted credential to an attacker-chosen host — and on the
+could `302` a forwarded/minted credential to an attacker-chosen host, and on the
 **unguarded** private manager that target carries no resolved-IP recheck, so the credential
 could reach an internal address with no egress guard at all. On the **anonymous** plane:
 the host allowlist is enforced when the URL is built, not per redirect hop, so following a
@@ -316,13 +316,13 @@ authentication control and says nothing about **who** may publish. So a static
 `PUBLICATION_TARGET_TOKEN` — Écluse substituting its **own** credential for a publisher who
 forwards none — **requires a verifiable inbound edge**: the composition root **refuses to
 boot** when it is set without one (`PublishStaticCredentialNeedsEdge`). That makes "static
-publish credential + open edge" — which would otherwise let **any unauthenticated client**
+publish credential + open edge", which would otherwise let **any unauthenticated client**
 publish under the operator's credential within the allowed scopes — an **unrepresentable**
 state rather than an operator-beware footgun. `PROXY_AUTH_TOKEN` is the verifiable edge
 Écluse checks today; an external layer (an API gateway, a service mesh with mTLS, a
 `NetworkPolicy`) is defence-in-depth but **cannot substitute** for it, since Écluse can only
 verify its own edge. Pure **passthrough** (no static token) carries no such floor — the
-publisher's forwarded token is the authority — and the **read** path is untouched, since it
+publisher's forwarded token is the authority, and the **read** path is untouched, since it
 never substitutes a credential. This is the write-side of the principle the (planned)
 trusted-edge read identity follows; the threat is catalogued as register
 [threat #3](https://alexadewit.github.io/Ecluse/threat-model.html).
@@ -332,7 +332,7 @@ trusted-edge read identity follows; the threat is catalogued as register
 The anti-shadowing guard would be **bypassable** if it validated only the URL-path name
 while the relay forwarded the publish document byte-for-byte: the npm publish document
 canonically carries its **own** declared identity — a top-level `_id` and `name`, and a
-`name` per entry in `versions` — and a publication target that resolves the written
+`name` per entry in `versions`, and a publication target that resolves the written
 package from the **body** (the npm-protocol norm) would then write a name the scope guard
 never saw. A crafted `PUT /@acme/anything` whose body declares `@victim/target` would
 publish outside the allow-list, shadowing a public package through Écluse's own trust
@@ -344,7 +344,7 @@ admits the URL-path name and the body is read, **every present declared body nam
 `_id`, top-level `name`, and each `versions[].name` — is compared to the URL-path name,
 and any disagreement is a **`403` before any upstream write**. The comparison is by
 `PackageName` equality using the **same name canonicalisation the route applies**
-(ecosystem-aware — npm is case-sensitive — never a byte-for-byte string compare), so an
+(ecosystem-aware — npm is case-sensitive, never a byte-for-byte string compare), so an
 encoding variant of the same name (`@acme%2ffoo` vs `@acme/foo`) cannot disagree
 silently. Only the names are parsed; the base64 `_attachments` are **never decoded**, and
 the body is already bounded by the client→proxy request-size cap. An **absent** declared
@@ -362,12 +362,12 @@ standard arrangement for any service that fetches on a client's behalf.
 **The cloud-metadata SSRF is handled at the service-behaviour level, not by blocking
 metadata at the network.** Écluse only follows an internal-resolving location on the
 **trusted private origin** (invariant 3) — its packument *and* its same-host
-`dist.tarball` — never on a **public-upstream-derived** target (the public packument or
-a public `dist.tarball`), which are exactly the attacker-influenced ones — so an
+`dist.tarball`, never on a **public-upstream-derived** target (the public packument or
+a public `dist.tarball`), which are exactly the attacker-influenced ones, so an
 SSRF cannot steer it at `169.254.169.254` or `fd00:ec2::254`. At the same time Écluse
 **needs** the metadata endpoint to mint its instance-role credentials
 (`AWS.newEnv AWS.discover`, which builds amazonka's **own** HTTP client, separate from
-the guarded data-plane manager — so credential minting reaches IMDS regardless of the
+the guarded data-plane manager, so credential minting reaches IMDS regardless of the
 data-plane guard). The platform controls below therefore protect the **data targets**
 and add defence-in-depth; they must **not** cut the proxy off from metadata or from
 its private upstream's internal range. Recommended, in rough order of leverage:
@@ -404,7 +404,7 @@ implement.
 The guards above constrain Écluse's *own* requests; this section records the **deployment
 assumptions** the [threat model](https://alexadewit.github.io/Ecluse/threat-model.html) rests on and the security consequences of
 the **canonical posture** (per-caller passthrough credentials, the three-registry topology,
-and CodeArtifact over VPC endpoints). The posture's threats — and their dispositions — are
+and CodeArtifact over VPC endpoints). The posture's threats, and their dispositions — are
 modelled in the [register](https://alexadewit.github.io/Ecluse/threat-model.html); this is the assumptions framing, with the
 detail deferred to the threats noted, not a second copy of them.
 
@@ -412,7 +412,7 @@ detail deferred to the threats noted, not a second copy of them.
 default**; *who may reach the proxy* is delegated to the deployment's access edge, which must
 hold **east-west as well as north-south** (an ingress-only allow-list that leaves pod-to-pod
 traffic open is the usual gap). Under passthrough this is **softened** — a caller with no
-forwarded token gets no private read or publish — so an edge breach exposes only the
+forwarded token gets no private read or publish, so an edge breach exposes only the
 public-gated view plus the untrusted-egress and DoS surface, never private packages. (The
 publish corollary is stronger — a static publication token **requires** `PROXY_AUTH_TOKEN`,
 enforced at boot: [a static publish credential is fail-closed](#a-static-publish-credential-is-fail-closed).)
@@ -424,7 +424,7 @@ runtime hope. It is a planned mode, not yet shipped.
 **Passthrough relocates credential risk to the proxy runtime** (register threat #1).
 Forwarding each caller's own credential ([access model](access-model.md)) leaves Écluse
 holding no standing read/publish credential but **transiently holding every in-transit
-caller's in memory** — so Écluse's own runtime and supply-chain integrity are a first-class
+caller's in memory**, so Écluse's own runtime and supply-chain integrity are a first-class
 control (the attested, reproducible image, [release supply chain](release-supply-chain.md)),
 and the **token-stripping** boundary and the
 [no-redirect-with-credential invariant](#egress-scope-what-the-outbound-controls-guard-and-what-they-do-not)
@@ -465,7 +465,7 @@ guards follow that principle, and it is made concrete for the tarball path:
   with a `403` before any artifact fetch. (The **private** leg never consults
   `dist.tarball` — it does a same-host
   [conventional read](registry-model.md#serving-a-tarball-a-conventional-private-read-an-honoured-public-location)
-  — so the same-host gate is satisfied by construction there.) An
+ , so the same-host gate is satisfied by construction there.) An
   operator whose registry legitimately serves tarballs from a separate CDN (the
   PyPI-files-host shape above) **opts in** to honouring the upstream-declared host
   (still constrained to the allowlist) by setting

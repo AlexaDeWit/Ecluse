@@ -5,13 +5,13 @@ request flows end to end, and what is out of scope; the detailed design of each
 concern lives in the linked documents under [`architecture/`](architecture/).
 Development practices — codebase layout, testing strategy, and CI / repo
 requirements — live in [`../CONTRIBUTING.md`](../CONTRIBUTING.md). For *why* Écluse
-exists — the problem it solves and the reasoning behind these decisions — see
+exists — the problem it solves and the reasoning behind these decisions; see
 [`../MOTIVATION.md`](../MOTIVATION.md); this document and those it links are the *how*.
 
 > These documents describe the **intended target design** (the design of record),
 > not necessarily the current state of the code. Implementation tracks toward them, and
 > a document is reconciled where the built reality has diverged from it.
-> Read them as the destination — and check `git` and the `planning/` DAG for what has
+> Read them as the destination, and check `git` and the `planning/` DAG for what has
 > actually shipped.
 
 ## Vision
@@ -43,7 +43,7 @@ hard boundary between the **pure capability core** and the **composition shell**
   pure and effectful rule tiers, credential refresh, the queue and security primitives,
   the agnostic server layer (routing, response model, streaming, conditional-GET, the
   metadata cache, the request pipeline), the telemetry instrument catalogue, and the
-  mirror worker. It depends on the OpenTelemetry **API** only — never the SDK — so the
+  mirror worker. It depends on the OpenTelemetry **API** only, never the SDK, so the
   core carries no process-global wiring.
 - **`ecluse`** (`src`, modules under `Ecluse.*`) — the application shell that composes
   the core into a running proxy: the configuration loader, the `Env` composition root,
@@ -92,7 +92,7 @@ it from public **and enqueues a mirror job** or returns the serve
 installs (`npm ci`) hit tarball URLs directly, often with no preceding packument
 request, so the artifact path gates on its own. **Mirroring is demand-driven** — a
 job is enqueued when an artifact is *accepted on the tarball path*, not when a
-packument is filtered — so only versions actually pulled are mirrored.
+packument is filtered, so only versions actually pulled are mirrored.
 
 A **packument** request is not a private-then-public fallback but a **merge**: the
 private and public upstreams are fetched in parallel, public versions are filtered
@@ -124,7 +124,7 @@ with Écluse's own credential. See
 | [Internal Domain Model](architecture/domain-model.md) | `PackageDetails` and the ecosystem-agnostic signal vocabulary the rules engine consumes. |
 | [Multi-Ecosystem Hosting](architecture/hosting.md) | Mounting ecosystems under path prefixes, URL rewriting, and dispatch. |
 | [Web Layer](architecture/web-layer.md) | The raw-WAI front door: routing, the control/data-plane split, streaming, middleware. |
-| [API Surface & Capability Manifest](architecture/api-surface.md) | The OpenAPI **capability manifest** — which protocols Écluse speaks and what is / isn't supported — generated from the route enumeration × mounts; the synthesized-packument schema. |
+| [API Surface & Capability Manifest](architecture/api-surface.md) | The OpenAPI **capability manifest**, which protocols Écluse speaks and what is / isn't supported — generated from the route enumeration × mounts; the synthesized-packument schema. |
 | [Rules Engine & Responses](architecture/rules-engine.md) | Deny-by-default evaluation, the rule tiers, the CVE subsystem, and denial responses. |
 | [Cloud Backends & Mirroring](architecture/cloud-backends.md) | The mirror queue and the two cloud handles (`MirrorQueue`, `CredentialProvider`); AWS & GCP. |
 | [Configuration & Authentication](architecture/configuration.md) | Environment configuration, outbound registry credentials, and inbound client authentication. |
@@ -144,7 +144,7 @@ with Écluse's own credential. See
 - Web UI or admin API.
 - **Re-specifying upstream registry protocols** in the
   [capability manifest](architecture/api-surface.md). Écluse documents *its
-  coverage* of each protocol — and what is unsupported — not npm's full
+  coverage* of each protocol, and what is unsupported, not npm's full
   packument / registry contract: clients hardcode that, and it is npm's to specify.
 - PyPI and other non-npm **adapters** — the hosting model and `RegistryClient`
   handle are designed to accommodate them (see

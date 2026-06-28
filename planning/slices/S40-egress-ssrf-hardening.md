@@ -23,7 +23,7 @@ pr: null
 **Goal.** Take the SSRF posture from "pure primitives + host allowlist" to a fetch
 path that is hardened against the cases the pure layer structurally cannot see —
 DNS resolving to an internal address, and a `dist.tarball` host that differs from
-the packument's source — and document the operator-side egress controls the
+the packument's source, and document the operator-side egress controls the
 application guards assume.
 
 **Acceptance criteria.**
@@ -37,7 +37,7 @@ application guards assume.
       from the **same allowlisted upstream that served the packument** unless the
       operator opts in via `PROXY_RESPECT_UPSTREAM_TARBALL_HOST` (see
       [Configuration → Outbound egress safety](../../docs/architecture/configuration.md#outbound-egress-safety)),
-      which relaxes to "any allowlisted host" — never escaping the allowlist or the
+      which relaxes to "any allowlisted host", never escaping the allowlist or the
       internal-range block. Secure default; configurable override. — _security.md_
 - [ ] **Config surface + validation.** The new setting is parsed at the config
       boundary with the same fail-fast posture as the rest (S03), defaulting to the
@@ -63,7 +63,7 @@ application guards assume.
 - `test/unit/Ecluse/SecuritySpec.hs`, `test/integration/...` — the extended corpus.
 
 **Notes / risks.** The resolved-IP recheck must run **after** DNS resolution but
-**before** the connection is used — i.e. at the `http-client` connection hook, not
+**before** the connection is used, i.e. at the `http-client` connection hook, not
 in pure code. Confirm the chosen client exposes that handle abstraction; escalate if it forces a
 custom `Manager`. The tarball-host policy is a behaviour change for any deployment
 relying on a separate tarball CDN — it is gated behind the opt-in precisely so the

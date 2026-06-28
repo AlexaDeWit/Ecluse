@@ -39,5 +39,5 @@ S20.
 
 **Notes / risks.** This closes the "AWS and GCP are both first-class" goal. The whole
 point of the handle design is that this slice touches only the composition root + a new
-test — no core changes. If S27/S28 surfaced client limitations, reflect any residual
+test, no core changes. If S27/S28 surfaced client limitations, reflect any residual
 caveats here and **escalate** material ones.

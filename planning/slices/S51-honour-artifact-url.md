@@ -64,7 +64,7 @@ currently plumbed but never consulted — load-bearing.
 
 ## Acceptance criteria
 
-- Same-host (npm.js) tarballs still served — no regression on the shipped path.
+- Same-host (npm.js) tarballs still served, no regression on the shipped path.
 - **Cross-host artifact exercised through the real request path** (the coverage S40
   lacked): under the `SameHostAsPackument` default a cross-host `dist.tarball` is
   **refused**; with `AnyAllowlistedHost` and the host allow-listed it is **served**; a

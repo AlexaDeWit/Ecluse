@@ -60,14 +60,14 @@ The architect signs off on this breakdown **before any code is written**.
 ## Convergence slices: contract before construction
 
 The DAG encodes _ordering_ (`depends-on`) but not the **shape** of what crosses
-each edge. Where several producer slices converge on one consumer — e.g.
+each edge. Where several producer slices converge on one consumer; e.g.
 `S09 + S33 → S14` (the packument pipeline) or `S15/S17/S18/S19 → S20` (launch
 composition) — specify the **consumer's interface, the types that flow across the
 boundary, before building the producers**. Producers then build _to_ a known
 contract instead of the consumer reverse-engineering whatever they happened to
 emit. A convergence slice's interface is a deliverable of **this planning pass**,
 not a discovery of the build pass. (Skipping it is how the packument pipeline's
-typed-decision-vs-served-`Value` contract surfaced late — see
+typed-decision-vs-served-`Value` contract surfaced late; see
 [Registry Model → decision vs served surface](../docs/architecture/registry-model.md#decision-surface-vs-served-surface).)
 
 ## The per-PR loop
@@ -87,7 +87,7 @@ it out of draft — **marking it ready for review** — is the hand-off signal: 
 _ready for the architect to review and potentially merge_, nothing less. A PR still
 building, mid-review, gate-red, or that the team lead is simply not yet sure of stays
 a **draft**, so "ready for review" is never ambiguous and the architect never spends
-attention on — or merges — work that was not deliberately offered.
+attention on, or merges — work that was not deliberately offered.
 
 **Fix routing.** A reviewer's "changes required" is routed one of three ways. A
 **background** implementer agent can be **resumed** (`SendMessage` to its agent ID):
@@ -126,8 +126,8 @@ typechecks don't thrash the CPU. After a post-merge rebase, re-run `make build` 
 re-warm incrementally.
 
 **Pin the model; there is no effort dial.** The Agent tool's `model` argument, left
-unset, takes the general-purpose agent's default — which may be **lighter than the
-team lead's own model** — and the tool exposes **no** thinking-effort parameter, so
+unset, takes the general-purpose agent's default, which may be **lighter than the
+team lead's own model**, and the tool exposes **no** thinking-effort parameter, so
 `model` is the only capability lever the dispatcher controls. A lighter default tends
 to head straight to implementation and skip the exploration a slice needs (e.g. it
 will name a tool but not bootstrap into it; see below). For **design-bearing or
@@ -154,7 +154,7 @@ into the agent's environment when you rely on it.
 long-lived agent session enters a `nix develop` once and holds it for the whole
 session; if a flake upgrade merges _mid-session_ (a new GHC, fourmolu, or
 dependency pin), that ambient shell goes stale while the code on disk moves on.
-The Makefile trusts `IN_NIX_SHELL` and runs tools directly when it is set — which
+The Makefile trusts `IN_NIX_SHELL` and runs tools directly when it is set, which
 is silently wrong for a stale agent shell (e.g. a 0.14 fourmolu reflowing a 0.19
 codebase's Haddock). So agents and the team lead run every build/format/gate
 command as `env -u IN_NIX_SHELL nix develop --command make <target>`, which
@@ -197,7 +197,7 @@ Per-PR review judges each slice **in isolation**; it cannot see the whole that
 parallel slices compose into. Slices built concurrently against the handles drift —
 divergent idioms, duplicated helpers, inconsistent Haddock, and type-conversion
 churn at the boundaries (bouncing a value through `String` / `Text` /
-`ByteString`) — and none of that fails a single-slice review. So **between waves**,
+`ByteString`), and none of that fails a single-slice review. So **between waves**,
 once a wave's PRs are all merged and before the next wave is dispatched, the team
 lead runs a codebase-wide **quality & alignment pass**.
 
@@ -243,7 +243,7 @@ uncommitted or not-yet-merged work is surfaced to the architect, never force-rem
 
 Housekeeping also **closes out the tracker**. A PR that resolves an issue declares it
 with a `Closes #N` keyword (per the [Definition of done](#definition-of-done)) so the
-merge closes it automatically — but a **squash-merge can drop that keyword**, leaving
+merge closes it automatically, but a **squash-merge can drop that keyword**, leaving
 the issue open even though its work shipped. Closing resolved issues is therefore a
 standing part of the team lead's role: **as each PR lands**, confirm its issue closed
 and, if the keyword did not fire, close it manually; and **as a backstop in this
@@ -260,7 +260,7 @@ coherent first. It is recorded in the
 
 CI **is** the gate; local verification is for _fast feedback_, not a pre-push
 ceremony. Every CI job just calls `make`, and CI runs the tiers **in parallel** on
-its own runners — so reproducing the slow, parallelizable ones (Docker
+its own runners, so reproducing the slow, parallelizable ones (Docker
 integration, the hermetic `nix-check`, Haddock) serially on one contended host is
 wasted work CI does anyway, and the team lead reproducing the whole gate before
 pushing is **running it twice**.
@@ -311,7 +311,7 @@ a per-PR bar (chasing it is wasteful); see
 > test**: a path exercised only by an e2e/smoke run still reads as uncovered, on the
 > dashboard and in any local `make coverage`. Don't conclude "the e2e test covers it"
 > — it does not count. (Equally, a single-tier local read under-counts the other
-> tier; `make coverage` merges both — see [CONTRIBUTING → Coverage](../CONTRIBUTING.md#coverage).)
+> tier; `make coverage` merges both; see [CONTRIBUTING → Coverage](../CONTRIBUTING.md#coverage).)
 
 **Scale verification to the change.** Light by default. Reserve heavier local
 reproduction _and_ exhaustive case-enumeration for the genuinely risky surfaces —
@@ -334,14 +334,14 @@ A PR reaches the architect only when **all** hold:
 
 - [ ] All acceptance criteria met, each with passing **deterministic, gating** (unit/integration) test evidence — a non-gating smoke test never stands in for a criterion
 - [ ] Independent review (Stage A + B) passed; no open critical issues
-- [ ] Fast local checks pass before pushing (`make check` — the gate minus its Docker + Haddock tiers) — not the full gate
-- [ ] Foreseeable branches tested by intent; `codecov/patch` green (≥ 85%, a CI backstop — not a number chased locally)
-- [ ] Comments are contract + why only — no roadmap / slice / PR references (HADDOCK.md §11)
+- [ ] Fast local checks pass before pushing (`make check` — the gate minus its Docker + Haddock tiers), not the full gate
+- [ ] Foreseeable branches tested by intent; `codecov/patch` green (≥ 85%, a CI backstop, not a number chased locally)
+- [ ] Comments are contract + why only, no roadmap / slice / PR references (HADDOCK.md §11)
 - [ ] Semgrep clean (no new ignores)
 - [ ] CI `gate` (and every job it needs) green on the PR
 - [ ] Docs updated in the same PR; changes limited to the slice's file scope (other files only with strong justification)
 - [ ] Any GitHub issue the PR resolves is named in its description with a closing keyword (`Closes #N`), so the merge closes it — the tracker must not accrue resolved-but-open issues
-- [ ] **The slice-completing PR flips its own slice `status:` to `merged` in this same PR** — the merge is what makes `merged` true, so the flip and the as-built reconciliation **ride with the code**, never deferred to a later sweep — and folds in the as-built delta (design decisions, discoveries, deviations from the acceptance criteria); the slice's `planning/slices/SNN-*.md` is part of the slice's file scope. A slice left reading `not-started`/`in-review` after its PR merged is a hand-off defect, caught at GATE.
+- [ ] **The slice-completing PR flips its own slice `status:` to `merged` in this same PR** — the merge is what makes `merged` true, so the flip and the as-built reconciliation **ride with the code**, never deferred to a later sweep, and folds in the as-built delta (design decisions, discoveries, deviations from the acceptance criteria); the slice's `planning/slices/SNN-*.md` is part of the slice's file scope. A slice left reading `not-started`/`in-review` after its PR merged is a hand-off defect, caught at GATE.
 - [ ] Commits GPG-signed + DCO `Signed-off-by` (`git commit -s`) + Conventional Commits
 - [ ] PR taken **out of draft and marked ready for review** — the hand-off itself, done only once every box above holds; until then the PR stays a **draft** so it is never mistaken for review-ready
 
@@ -384,7 +384,7 @@ Escalations arrive **decision-ready**:
   the repo's `DCO` status check gates on it), **Conventional Commits** (`type(scope): summary`).
 - **Semgrep clean** before every push; ignores need the architect's approval.
 - GitHub Actions **SHA-pinned**; workflows kept **injection-free**.
-- Documentation updated in the **same** PR as the change it describes — and that
+- Documentation updated in the **same** PR as the change it describes, and that
   includes the **planning record**: a PR that completes a slice **flips that slice's
   `status:` to `merged` and folds in its as-built delta in the very same PR**, because the
   merge is precisely what makes `merged` true. The slice file, the affected architecture /
@@ -408,7 +408,7 @@ Escalations arrive **decision-ready**:
   a flood.
 - **Reference work by identifiers the architect can see.** When surfacing or
   escalating, name a piece of work by what is visible to the architect — its slice ID
-  (`S19`), PR or issue number (`#168`), or a short descriptive title — never an
+  (`S19`), PR or issue number (`#168`), or a short descriptive title, never an
   internal task-tracker ID (the architect's view does not render those).
 - **The Handle pattern is the canonical name for the records-of-functions
   abstraction.** `RegistryClient`, `MirrorQueue`, and `CredentialProvider` are **the
