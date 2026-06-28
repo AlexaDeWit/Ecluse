@@ -232,8 +232,8 @@ envLayerSpec = describe "parseEnvPure" $ do
                 cfgCacheTtl cfg `shouldBe` (60 :: NominalDiffTime)
                 cfgCacheMaxEntries cfg `shouldBe` 1024
                 -- The response-bound budget defaults to Ecluse.Core.Security.defaultLimits:
-                -- a 16 MiB body, 100k versions, 64 levels of nesting.
-                cfgMaxResponseBytes cfg `shouldBe` 16 * 1024 * 1024
+                -- a 12 MiB body, 100k versions, 64 levels of nesting.
+                cfgMaxResponseBytes cfg `shouldBe` 12 * 1024 * 1024
                 cfgMaxVersionCount cfg `shouldBe` 100000
                 cfgMaxNestingDepth cfg `shouldBe` 64
                 cfgAwsRegion cfg `shouldBe` Nothing

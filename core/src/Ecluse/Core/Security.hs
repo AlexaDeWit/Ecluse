@@ -701,6 +701,14 @@ ceiling enforced fail-closed: exceeding one aborts with a 'LimitError' rather
 than returning a truncated or partially-parsed result. These bound the
 algorithmic-complexity DoS a hostile or compromised upstream can inflict by
 returning a huge or pathological document.
+
+The metadata ceilings are layered. 'maxBodyBytes' (through 'boundedRead') is the
+__primary, pre-decode__ bound: it caps the parse spend before aeson runs, so a
+hostile body is aborted while still streaming and never reaches the decoder whole.
+The post-projection 'maxVersionCount' ('checkVersionCount') is a __deliberate
+defence-in-depth__ semantic backstop /behind/ it — it refuses an over-versioned
+packument after projection, bounding per-version work the byte cap already keeps
+finite.
 -}
 data Limits = Limits
     { maxBodyBytes :: Int
@@ -720,13 +728,13 @@ data Limits = Limits
     deriving stock (Eq, Show)
 
 {- | Sane defaults for 'Limits'. Generous enough for real registry documents and
-tight enough to fail closed on pathological input: a 16 MiB metadata body, 100k
+tight enough to fail closed on pathological input: a 12 MiB metadata body, 100k
 versions, and 64 levels of JSON nesting. Override per deployment as needed.
 -}
 defaultLimits :: Limits
 defaultLimits =
     Limits
-        { maxBodyBytes = 16 * 1024 * 1024
+        { maxBodyBytes = 12 * 1024 * 1024
         , maxVersionCount = 100_000
         , maxNestingDepth = 64
         }

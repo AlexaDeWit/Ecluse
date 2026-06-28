@@ -71,7 +71,7 @@ registries derive short-lived tokens from ambient cloud credentials (see
 | `PROXY_TELEMETRY` | No (default: `off`) | OpenTelemetry master switch. With it `off`, nothing is wired and no telemetry is emitted. When `on`, the SDK reads the standard `OTEL_*` (or `DD_*`) variables. See [Observability](observability.md#configuration). |
 | `CVE_SYNC_INTERVAL_SECONDS` | No (default: 3600) | How often to refresh the in-memory advisory index from OSV (see [CVE Subsystem](rules-engine.md#cve-subsystem)). |
 | `PROXY_SHUTDOWN_DRAIN_TIMEOUT` | No (default: 30) | Seconds the graceful shutdown waits for in-flight requests and in-progress artifact streams to finish after the listen socket closes, before the process exits regardless. Must be a positive integer. See [Graceful rollover](hosting.md#graceful-rollover). |
-| `PROXY_MAX_RESPONSE_BYTES` | No (default: `16777216` — 16 MiB) | Largest upstream **metadata** body the proxy buffers before aborting the fetch fail-closed. Bounds memory against a hostile upstream returning a multi-gigabyte body. Must be a positive integer. See [Response bounds](#response-bounds). |
+| `PROXY_MAX_RESPONSE_BYTES` | No (default: `12582912` — 12 MiB) | Largest upstream **metadata** body the proxy buffers before aborting the fetch fail-closed. Bounds memory against a hostile upstream returning a multi-gigabyte body. Must be a positive integer. See [Response bounds](#response-bounds). |
 | `PROXY_MAX_VERSION_COUNT` | No (default: `100000`) | Largest number of versions a parsed packument may carry before it is refused. Bounds per-version rule evaluation against a version-flood document. Must be a positive integer. See [Response bounds](#response-bounds). |
 | `PROXY_MAX_NESTING_DEPTH` | No (default: `64`) | Deepest JSON nesting a decoded upstream document may reach before it is refused. Bounds stack/CPU against a pathologically nested payload. Must be a positive integer. See [Response bounds](#response-bounds). |
 | `PROXY_MIN_PUBLIC_INTEGRITY` | No (default: `sha256`) | Minimum integrity algorithm a **public** (untrusted) version's digest must meet to be admitted: `sha256`, `sha384`, `sha512`, or `blake2b`. A public version whose strongest digest is weaker (e.g. a legacy SHA-1 `shasum` only) is refused with a `403`. **Hard-floored at SHA-256** — a value below it (`sha1`, `md5`) or an unknown name is rejected at load, not clamped, and there is **no escape-hatch** to admit a sub-SHA-256 digest from an untrusted upstream. The trusted private path has its own, loosenable floor (`PROXY_MIN_TRUSTED_INTEGRITY`). See [Public integrity floor](#public-integrity-floor) and [Security → asymmetric integrity trust](security.md#invariants). |
@@ -166,9 +166,18 @@ degenerate budget and is rejected at startup).
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PROXY_MAX_RESPONSE_BYTES` | `16777216` (16 MiB) | Largest metadata body buffered before the bounded read aborts the fetch. |
+| `PROXY_MAX_RESPONSE_BYTES` | `12582912` (12 MiB) | Largest metadata body buffered before the bounded read aborts the fetch. |
 | `PROXY_MAX_VERSION_COUNT` | `100000` | Largest version count a packument may carry before it is refused (bounds per-version rule evaluation). |
 | `PROXY_MAX_NESTING_DEPTH` | `64` | Deepest JSON nesting a decoded document may reach before it is refused (bounds stack/CPU on a pathological payload). |
+
+The metadata ceilings are layered. `PROXY_MAX_RESPONSE_BYTES` (default **12 MiB** —
+the largest packuments seen today are ~4 MiB, so this leaves years of headroom) is
+the **primary, pre-decode** bound: the body is bounded as it streams, **before** the
+JSON is decoded, so the parse spend is fixed before aeson runs and a hostile body is
+aborted while still streaming. `PROXY_MAX_VERSION_COUNT`, checked **after** the
+packument is projected, is a deliberate **defence-in-depth** semantic backstop behind
+it — it bounds per-version work the byte cap already keeps finite, rather than a
+streaming early-reject (the byte cap makes that unnecessary).
 
 ### Public integrity floor
 
