@@ -337,8 +337,8 @@ A PR reaches the architect only when **all** hold:
 - [ ] Semgrep clean (no new ignores)
 - [ ] CI `gate` (and every job it needs) green on the PR
 - [ ] Docs updated in the same PR; changes limited to the slice's file scope (other files only with strong justification)
-- [ ] Any GitHub issue the PR resolves is named in its description with a closing keyword (`Closes #N`), so the merge closes it, the tracker must not accrue resolved-but-open issues
-- [ ] **The slice-completing PR flips its own slice `status:` to `merged` in this same PR**, the merge is what makes `merged` true, so the flip and the as-built reconciliation **ride with the code**, never deferred to a later sweep, and folds in the as-built delta (design decisions, discoveries, deviations from the acceptance criteria); the slice's `planning/slices/SNN-*.md` is part of the slice's file scope. A slice left reading `not-started`/`in-review` after its PR merged is a hand-off defect, caught at GATE.
+- [ ] Any GitHub issue the PR resolves is named in its description with a closing keyword (`Closes #N`), so the merge closes it; the tracker must not accrue resolved-but-open issues
+- [ ] **The slice-completing PR flips its own slice `status:` to `merged` in this same PR**; the merge is what makes `merged` true, so the flip and the as-built reconciliation **ride with the code**, never deferred to a later sweep, and folds in the as-built delta (design decisions, discoveries, deviations from the acceptance criteria); the slice's `planning/slices/SNN-*.md` is part of the slice's file scope. A slice left reading `not-started`/`in-review` after its PR merged is a hand-off defect, caught at GATE.
 - [ ] Commits GPG-signed + DCO `Signed-off-by` (`git commit -s`) + Conventional Commits
 - [ ] PR taken **out of draft and marked ready for review**, the hand-off itself, done only once every box above holds; until then the PR stays a **draft** so it is never mistaken for review-ready
 

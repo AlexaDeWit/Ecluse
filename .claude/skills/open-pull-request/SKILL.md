@@ -12,7 +12,7 @@ description: >-
 # Open a pull request
 
 This is the **checklist that gets a PR through this repo's gates on the first try.** It
-is deliberately prescriptive, the value is in the literal commands and trailers, not a
+is deliberately prescriptive; the value is in the literal commands and trailers, not a
 paraphrase. The full rationale lives in `CONTRIBUTING.md` (→ *Developer Certificate of
 Origin*, *Conventional Commits*, *AI-assisted contributions*) and the on-disk
 `.github/PULL_REQUEST_TEMPLATE.md`; this skill is the operational distillation of the
@@ -50,7 +50,7 @@ git commit -S -s -m "<conventional subject>" -m "<body…>" -m "Assisted-by: Cla
 - **This machine's git has no `--trailer` flag.** Put trailers as literal lines in the
   message body (a trailing `-m` block, as above, or in a message file via `-F`). Don't
   reach for `--trailer`; it errors here.
-- **We squash-merge, so _every_ commit on the branch needs the sign-off**, the squash
+- **We squash-merge, so _every_ commit on the branch needs the sign-off**; the squash
   message is assembled from the branch commits, so a `Signed-off-by` only reaches `main`
   if each commit carries one. Sign off as you go; never trim sign-offs from the final
   message.
@@ -121,7 +121,7 @@ change) is itself a trivial one, and omits the section.
   code** (it is unreliable; it can exit 0 on failure). The gating jobs are *Build &
   tests, CI gate, End-to-end tests, Haddock builds, Static checks*. **`codecov/patch`
   and `codecov/project` are non-gating** backstops (they read integration-tier-covered
-  code as under-covered); a red there does not block the hand-off, note it and proceed.
+  code as under-covered); a red there does not block the hand-off; note it and proceed.
 
 ## 4. If the DCO check goes red anyway
 

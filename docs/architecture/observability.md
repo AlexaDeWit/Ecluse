@@ -24,7 +24,7 @@ their hot-path emits (`Ecluse.Telemetry.Instruments`), and the logs↔traces `dd
 correlation (`Ecluse.Telemetry.Correlation` over the `dd` object in `Ecluse.Log`). It
 slots into the web layer's middleware stack (see
 [Web Layer → Middleware](web-layer.md#middleware-and-helper-libraries)). Everything
-stays **inert when `PROXY_TELEMETRY` is unset**, the SDK is not initialised, spans are
+stays **inert when `PROXY_TELEMETRY` is unset**; the SDK is not initialised, spans are
 not opened, and the metric instruments are built on the no-op meter so an emit is a
 discarded measurement, not a branch.
 

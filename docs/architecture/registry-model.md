@@ -53,7 +53,7 @@ upstream wants on the wire* (credential supply). The strategies are detailed in 
 
 The non-negotiable invariant, under **every** strategy: **the client's credential is
 never sent to the public upstream.** (Whether it reaches the private upstream is
-strategy-specific, it does under `passthrough`, not under `service`.)
+strategy-specific; it does under `passthrough`, not under `service`.)
 
 #### The private upstream's metadata is never cached across clients
 
@@ -64,7 +64,7 @@ under `passthrough`, or Écluse's own identity behind the edge under `service`, 
 read is freshly authorised each time. Only the **anonymous public (gated) origin** is
 held in the [metadata cache](web-layer.md#metadata-cache). Écluse
 [forbids a shared private cache](access-model.md#why-écluse-never-caches-the-private-origin)
-outright, it is a thin broker and leaves caching to the upstreams, so no strategy
+outright; it is a thin broker and leaves caching to the upstreams, so no strategy
 shares the private origin.
 
 The reason is a **cross-client disclosure hazard**, a credential-blind cache key would

@@ -55,7 +55,7 @@ server without a test failing, across **both** drift axes (schema; path/operatio
 - [ ] **Live status contract**: `hspec-wai` drives the real `Application` and asserts
   each documented operation's status, boundaries included (`Search` → `501`, unknown →
   `404`, a denial → `403`). This ties the **statically generated** spec to the
-  server's live behaviour, the manifest is not served, but the statuses it documents
+  server's live behaviour; the manifest is not served, but the statuses it documents
   must match what the routes actually return., _api-surface.md#contract-drift-controls_
 - [ ] **Golden snapshot**: the spec emitted by **S34's build-time generator** from a
   **fixed canonical config** is committed and compared in CI; a mismatch fails until

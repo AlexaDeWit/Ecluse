@@ -39,7 +39,7 @@ case later served without rules.
 
 This means there is a window between a package being approved and it appearing
 in the private upstream. Subsequent requests for the same package during this
-window will fall through to the public upstream again and re-run rules, this is
+window will fall through to the public upstream again and re-run rules; this is
 acceptable; the rules are deterministic for a given package version.
 
 ### Process model
@@ -243,7 +243,7 @@ deadline, batch limits, dead-letter wiring) stay behind the handle, and
 
 - **`enqueue` is best-effort.** It runs on the request hot path (enqueue, then
   serve immediately), so a failure is logged/metered and **never fails the client
-  response**, the artifact is already served, and a later pull re-enqueues.
+  response**; the artifact is already served, and a later pull re-enqueues.
 - **Retry is "don't ack."** A job that fails processing is simply not acked; the
   visibility timeout / ack deadline redelivers it, and the backend's native
   **dead-letter** path (max-receive-count) catches the persistently failing ones.

@@ -145,7 +145,7 @@ naming, decomposition, and totality.
   architecture doc). Practical consequences you must internalise:
   - **`Text`, not `String`.** String literals are `Text` via `OverloadedStrings`;
     concatenate with `<>`. Use `putTextLn` (not `putStrLn`).
-  - **Partial functions are hidden by default**, relude removes the partial
+  - **Partial functions are hidden by default**: relude removes the partial
     `head`, `tail`, `fromJust`, etc. Keep it that way (see §6, Totality).
   - `containers`, `text`, `bytestring`, and `stm` are re-exported, so common
     types like `Map` are in scope without an import.
@@ -255,9 +255,9 @@ Because vertical organization (4.1) is the default, a separate
    `.hs-boot` files, which we avoid). When two modules would otherwise need each
    other, extract the shared data types into a `.Types` module they both import.
    This is the canonical reason a types module exists.
-2. **A shared vocabulary**, the types are a stable contract imported by several
+2. **A shared vocabulary**: the types are a stable contract imported by several
    modules, while the functions over them are many and varied.
-3. **Size**, the implementation has grown enough that separating the data
+3. **Size**: the implementation has grown enough that separating the data
    declarations genuinely aids navigation.
 
 `Ecluse.Core.Rules.Types` (the `Rule`/`Decision`/… types) is split from `Ecluse.Core.Rules`
@@ -270,7 +270,7 @@ the three applies, as with `Ecluse.Core.Package`, keep types and functions toget
 Let the module layout mirror the system's "functional core, imperative shell"
 shape (cf. Matt Parsons' *Three Layer Haskell Cake*):
 
-- **Domain/leaf modules are pure**, the rules engine, parsers, renderers
+- **Domain/leaf modules are pure**: the rules engine, parsers, renderers
   (`Ecluse.Core.Rules`, `Ecluse.Core.Version`, `Ecluse.Core.Package`). No `IO`; trivially
   testable.
 - **Effects live at the boundary**, `app/Main.hs`, the server, and the worker
@@ -632,7 +632,7 @@ publishArtifact :: PackageName -> Version -> ByteString -> IO (Either PublishFau
 refuse = throwIO RegistryUnconfigured
 ```
 
-**Rule 11.2, If you throw, throw a typed `Exception`, never a stringly one.**
+**Rule 11.2: If you throw, throw a typed `Exception`, never a stringly one.**
 `stringException`, `throwString`, and `userError` are banned (`.hlint.yaml`):
 they erase the type, so nothing downstream can catch the condition by category or
 read its cause, and a `try` decays into grepping a message. Give the condition a

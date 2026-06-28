@@ -47,7 +47,7 @@ registries derive short-lived tokens from ambient cloud credentials (see
 | `PROXY_PORT` | No (default: 4873) | Port the proxy listens on. Must be in `0..65535` (`0` binds an OS-assigned ephemeral port); an out-of-range value is rejected at load. |
 | `PRIVATE_UPSTREAM_URL` | Yes | URL of the private upstream registry. |
 | `PUBLIC_UPSTREAM_URL` | No (default: `https://registry.npmjs.org`) | URL of the public upstream. |
-| `MIRROR_TARGET_URL` | No (default: `PRIVATE_UPSTREAM_URL`) | URL of the registry to mirror approved packages to. Unset ⇒ folds onto the private upstream (one registry, both read and written), so the private upstream is the only hard-required endpoint. The write **credential** does not fold, it stays `MIRROR_TARGET_CREDENTIAL_PROVIDER`. |
+| `MIRROR_TARGET_URL` | No (default: `PRIVATE_UPSTREAM_URL`) | URL of the registry to mirror approved packages to. Unset ⇒ folds onto the private upstream (one registry, both read and written), so the private upstream is the only hard-required endpoint. The write **credential** does not fold; it stays `MIRROR_TARGET_CREDENTIAL_PROVIDER`. |
 | `MIRROR_TARGET_CREDENTIAL_PROVIDER` | No (default: `static`) | How the mirror-target write token is obtained: `static` (uses `MIRROR_TARGET_TOKEN`), `codeartifact` (mints via CodeArtifact `GetAuthorizationToken` under the ambient task role), or `gcp-artifact-registry` (recognised but not yet built, a fail-loud boot error). This is the credential-**provider** axis, distinct from the per-mount serve **strategy** (`passthrough`/`service`). See [Cloud Backends → Credential Provider](cloud-backends.md#credential-provider). |
 | `MIRROR_TARGET_TOKEN` | No | Static write token for the mirror target, used when `MIRROR_TARGET_CREDENTIAL_PROVIDER=static` (the default). |
 | `MIRROR_TARGET_CODEARTIFACT_DOMAIN` | `codeartifact` provider only | The CodeArtifact domain that scopes the minted token. Resolved from this key, else parsed from a CodeArtifact `MIRROR_TARGET_URL` host (`{domain}-{owner}.d.codeartifact.{region}.amazonaws.com`); unresolvable ⇒ fail-loud at boot. |
@@ -55,7 +55,7 @@ registries derive short-lived tokens from ambient cloud credentials (see
 | `MIRROR_TARGET_CODEARTIFACT_REGION` | `codeartifact` provider only | The region of the CodeArtifact domain. Resolution order: this key → the mirror-target host (its authoritative region) → `AWS_REGION`. |
 | `MIRROR_TARGET_CODEARTIFACT_TOKEN_DURATION_SECONDS` | No | Requested CodeArtifact token lifetime in seconds, capped at `43200` (12 h). Unset ⇒ CodeArtifact ties it to the caller's role-credential expiry. |
 | `PUBLICATION_TARGET_URL` | No | URL the proxy writes client `npm publish` (first-party packages) to. **Unset ⇒ the proxy refuses publishes with `405`.** May be the same registry as the private upstream (so published packages are then readable via the private leg). See [Registry roles → publication target](registry-model.md#publishing-first-party-packages-the-publication-target). |
-| `PUBLICATION_TARGET_TOKEN` | No (but **requires `PROXY_AUTH_TOKEN`** when set) | Static credential for the publication target when it is not reached with the client's forwarded token. The default publish credential model is **passthrough**, the publisher's own token; see [Access model](access-model.md#publishing-the-publication-target-passthrough-write). Because a static credential makes Écluse publish under its **own** identity, it is fail-closed: set without `PROXY_AUTH_TOKEN`, the proxy **refuses to boot** (`PublishStaticCredentialNeedsEdge`). |
+| `PUBLICATION_TARGET_TOKEN` | No (but **requires `PROXY_AUTH_TOKEN`** when set) | Static credential for the publication target when it is not reached with the client's forwarded token. The default publish credential model is **passthrough**, the publisher's own token; see [Access model](access-model.md#publishing-the-publication-target-passthrough-write). Because a static credential makes Écluse publish under its **own** identity; it is fail-closed: set without `PROXY_AUTH_TOKEN`, the proxy **refuses to boot** (`PublishStaticCredentialNeedsEdge`). |
 | `PUBLISH_SCOPES` | Required when `PUBLICATION_TARGET_URL` is set | Comma-separated allow-list of package scopes a client may publish (e.g. `@acme`). A publish whose name is outside the list is refused, the anti-shadowing guard against publishing a name that collides with a public package. |
 | `MIRROR_QUEUE_PROVIDER` | No (default: `sqs`) | Mirror-queue backend: `sqs` (AWS), `memory` (a bounded in-process queue, no cloud queue, at the cost of a **non-durable, best-effort** mirror; an explicit choice for a simple/single-node/air-gapped deployment, **never** an automatic fallback), or `pubsub` (GCP, recognised but not yet built). Selecting `memory` emits a loud boot warning. See [Cloud Backends](cloud-backends.md#cloud-backends). |
 | `MIRROR_QUEUE_URL` | Cloud backends only (`sqs`/`pubsub`) | Queue identifier for mirror jobs: an SQS queue URL, or a Pub/Sub `projects/<project>/topics/<topic>` resource, per provider. **Required for the cloud backends** (an absent one fails loud at boot); **not needed for `memory`**, which has no external queue and ignores it. |
@@ -87,7 +87,7 @@ one fetch returns the whole trusted set. This is a supported topology but **neve
 required**: Écluse
 [merges packuments across upstreams](registry-model.md#packument-merge-across-upstreams)
 itself, so registry-level composition is an optimization, not a precondition. The
-one rule that keeps it safe, the aggregator must **not** add a direct external
+one rule that keeps it safe: the aggregator must **not** add a direct external
 connection to the public registry (that would route unvetted packages around the
 gate); the public upstream is always fetched and gated by Écluse.
 
@@ -109,7 +109,7 @@ mirror-target host). The write credential is **explicit and does not fold** when
 the private upstream carries no Écluse credential, while the mirror write runs on the
 async worker under Écluse's own identity, so the two are independent. (When the
 `service` strategy later gives the private-upstream read its own Écluse credential, a
-write to the same registry **may** inherit it, that is the `service` slice's concern,
+write to the same registry **may** inherit it; that is the `service` slice's concern,
 not this one.) The read-side providers (`PRIVATE_UPSTREAM_*`) and the publish-target
 provider (`PUBLICATION_TARGET_*`) will follow the **same prefixed-provider pattern**
 when those slices land, so the shape is set once here.
@@ -131,7 +131,7 @@ credentials from a cloud identity keeps long-lived secrets out of config.
 Écluse constrains its own outbound fetches (host allowlist + internal-range block,
 **re-applied to every resolved IP** at connection time; see
 [Security Invariants](security.md)), but **network egress is a shared
-responsibility**, the deployment must also fence egress at the platform layer
+responsibility**: the deployment must also fence egress at the platform layer
 (security groups, `NetworkPolicy`, Istio `ServiceEntry`/egress policy, and blocking
 the `169.254.169.254` metadata endpoint). See
 [Network egress is a shared responsibility](security.md#network-egress-is-a-shared-responsibility).

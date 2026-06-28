@@ -69,7 +69,7 @@ one-shot long-poll `receive` (a batch, or `[]` after `sqsWaitSeconds`); the
 *continuous* loop, concurrency, and supervision are this slice's responsibility.
 Decide and document each here when building:
 
-- **Loop robustness, the loop must not die on a single bad iteration.** Wrap each
+- **Loop robustness: the loop must not die on a single bad iteration.** Wrap each
   iteration so a transient `receive`/fetch/publish error or an undecodable body is
   caught, logged/metered, and backed-off, then the loop continues. ("Retry-is-don't-
   ack" is *job-level* semantics; it does not protect the loop itself, an escaping

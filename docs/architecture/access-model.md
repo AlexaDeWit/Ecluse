@@ -13,7 +13,7 @@ The simplest design fuses all three into a single act: forward the caller's
 credential to the private upstream and let the upstream answer all three, on every
 request. That is correct and builds no auth machinery; its only costs are a
 per-request upstream round-trip and no sharing of the private origin across callers.
-**Écluse accepts both costs by design**, it is a thin network broker, efficient
+**Écluse accepts both costs by design**: it is a thin network broker, efficient
 caching is already the upstreams' job, and the gain from a shared *private* cache does
 not justify the re-authorisation machinery it would demand (see
 [Why Écluse never caches the private origin](#why-écluse-never-caches-the-private-origin)).
@@ -144,7 +144,7 @@ rather than chasing the credential to the `Location` (see
 ## Edge authentication
 
 The npm client authenticates to a registry with an **opaque bearer** in `.npmrc`
-(`//host/:_authToken=`) or via `npm login`, it does **not** speak SigV4, per-request
+(`//host/:_authToken=`) or via `npm login`; it does **not** speak SigV4, per-request
 mTLS, or interactive OIDC. So edge authentication must terminate into a storable
 bearer, or be handled by infrastructure in front of Écluse. The modes:
 
@@ -190,7 +190,7 @@ probe over a shared private cache, the `delegated-cache` design Écluse
   request. This makes the cross-client disclosure
   hazard *unrepresentable* rather than a discipline.
 - **`service` requires an explicit "the edge authorises callers" assertion** in
-  config, it is the strategy that moves authority off the upstream.
+  config; it is the strategy that moves authority off the upstream.
 - **`trusted-edge` requires a verifiable edge binding** (mutual TLS from the edge, or
   a shared secret / HMAC on the asserted identity); a `trusted-edge` mount configured
   with **neither** is **rejected at startup**, not merely discouraged, a bare trusted

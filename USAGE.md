@@ -77,7 +77,7 @@ detail.
    supported but discouraged). Scope that role **write-only** to the mirror store and keep
    the token duration short (`MIRROR_TARGET_CODEARTIFACT_TOKEN_DURATION_SECONDS`). It is
    Écluse's only standing credential and it writes the trusted store, so least-privilege it
-   hardest. **Scope the mirror queue the same way**, it is part of the same trust boundary:
+   hardest. **Scope the mirror queue the same way**; it is part of the same trust boundary:
    a job directs the worker to fetch-and-publish, so grant only the serve role `SendMessage`
    (enqueue) and only the worker `ReceiveMessage`/delete. Anyone who can write the queue can
    make the worker write the trusted store.
@@ -149,7 +149,7 @@ operator reference. **Keep the two in sync** when either changes.
 | `PROXY_PORT` | No (default `4873`) | TCP port the proxy listens on. Must be in `0..65535` (`0` binds an OS-assigned ephemeral port); an out-of-range value is rejected at load. |
 | `PRIVATE_UPSTREAM_URL` | **Yes** | URL of the private upstream registry (the authority for reads under the default `passthrough` strategy). |
 | `PUBLIC_UPSTREAM_URL` | No (default `https://registry.npmjs.org`) | URL of the public upstream, queried anonymously and gated by the rules. |
-| `PROXY_PUBLIC_URL` | Recommended | The proxy's own externally-reachable base URL (e.g. `https://registry.example.com`), used to rewrite each served `dist.tarball` to an **absolute** URL clients fetch back through the proxy. **Unset, tarball URLs are path-relative, which the `npm` CLI cannot install from**, it reads a leading-slash `dist.tarball` as a local `file:` path, so set this for any deployment that serves real `npm install`s. |
+| `PROXY_PUBLIC_URL` | Recommended | The proxy's own externally-reachable base URL (e.g. `https://registry.example.com`), used to rewrite each served `dist.tarball` to an **absolute** URL clients fetch back through the proxy. **Unset, tarball URLs are path-relative, which the `npm` CLI cannot install from**; it reads a leading-slash `dist.tarball` as a local `file:` path, so set this for any deployment that serves real `npm install`s. |
 | `MIRROR_TARGET_URL` | No (default `PRIVATE_UPSTREAM_URL`) | Registry that approved packages are mirrored to. Unset ⇒ folds onto the private upstream (one registry, read and written). The write credential does **not** fold, set `MIRROR_TARGET_CREDENTIAL_PROVIDER`. |
 | `MIRROR_TARGET_CREDENTIAL_PROVIDER` | No (default `static`) | Mirror-target write credential: `static` (`MIRROR_TARGET_TOKEN`) or `codeartifact` (mints under the container/task role). `gcp-artifact-registry` is recognised but not yet built. |
 | `MIRROR_TARGET_TOKEN` | No | Static write token, when `MIRROR_TARGET_CREDENTIAL_PROVIDER=static` (the default). |
@@ -159,7 +159,7 @@ operator reference. **Keep the two in sync** when either changes.
 | `MIRROR_TARGET_CODEARTIFACT_TOKEN_DURATION_SECONDS` | No | Token lifetime in seconds, capped at `43200` (12 h). |
 | `PUBLICATION_TARGET_URL` | No | Where client `npm publish` (first-party packages) is written. **Opt-in: unset ⇒ a `PUT /{pkg}` is `405`** (no implicit write path). May be the same registry as the private upstream (so published packages are then readable via the private leg). **Protect this surface; see the warning below.** |
 | `PUBLICATION_TARGET_TOKEN` | No | Static fallback credential for the publication target, forwarded only when a publishing client sends no token of its own. The default model is **passthrough**, the publisher's own forwarded token. **⚠️ A static token with an open edge lets any unauthenticated client publish under it; see the warning below.** |
-| `PUBLISH_SCOPES` | Required when `PUBLICATION_TARGET_URL` is set | Comma-separated allow-list of package scopes a client may publish (e.g. `@acme,@beta`), the anti-shadowing guard. A publish whose name is outside the list is refused **before any upstream write**, so a client cannot publish a name that shadows a public package. It limits **names, not callers**, it is not authentication. An empty list with a publication target set is a fail-loud boot error. |
+| `PUBLISH_SCOPES` | Required when `PUBLICATION_TARGET_URL` is set | Comma-separated allow-list of package scopes a client may publish (e.g. `@acme,@beta`), the anti-shadowing guard. A publish whose name is outside the list is refused **before any upstream write**, so a client cannot publish a name that shadows a public package. It limits **names, not callers**; it is not authentication. An empty list with a publication target set is a fail-loud boot error. |
 | `MIRROR_QUEUE_PROVIDER` | No (default `sqs`) | Mirror-queue backend: `sqs` (AWS), or `memory` (a bounded in-process queue, no cloud queue, at the cost of a **non-durable, best-effort** mirror; an explicit choice for a simple/single-node/air-gapped deployment, never an automatic fallback, selecting it warns loudly at boot). `pubsub` (GCP) is recognised but not yet built. |
 | `MIRROR_QUEUE_URL` | Cloud backends only (`sqs`/`pubsub`) | Queue identifier: an SQS queue URL or a Pub/Sub `projects/<p>/topics/<t>` resource. **Required for the cloud backends** (absent ⇒ fail-loud at boot); **not needed for `memory`** (no external queue, ignored). |
 | `MIRROR_QUEUE_MEMORY_MAX_DEPTH` | No (default `50000`) | `memory` only. Cap on the in-process queue depth. A cold-cache `npm ci` enqueues thousands of jobs at once, so the queue is hard-bounded: an enqueue past the cap is **dropped (drop-newest)**, safe, since a dropped job is re-mirrored on the next demand, and rate-limit-logged. Positive integer. |
@@ -183,7 +183,7 @@ misconfiguration is a loud, immediate failure, never a quietly mis-enforced poli
 
 > ⚠️ **The first-party publish surface authorises *names*, not *callers*.** If you enable
 > publishing (`PUBLICATION_TARGET_URL`), the `PUBLISH_SCOPES` allow-list limits **which
-> package names** may be published, it is **not** authentication and says nothing about
+> package names** may be published; it is **not** authentication and says nothing about
 > **who** may publish. So a static `PUBLICATION_TARGET_TOKEN` (Écluse's own credential, used
 > only when a publisher forwards none) is **fail-closed**: set it without `PROXY_AUTH_TOKEN`
 > and Écluse **refuses to start** (`PublishStaticCredentialNeedsEdge`), making "static

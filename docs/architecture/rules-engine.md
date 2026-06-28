@@ -159,7 +159,7 @@ private upstream with no rules.
 
 How a fail-closed `Undecidable` surfaces depends on the request shape:
 
-- **Packument (metadata)**, the version is simply **filtered out**, exactly like a
+- **Packument (metadata)**: the version is simply **filtered out**, exactly like a
   denied one (see [Applying verdicts to a packument](#applying-verdicts-to-a-packument)).
   The client's resolver just picks an admitted version; no error is raised unless
   *nothing* survives.
@@ -317,7 +317,7 @@ advisory dataset locally keeps a periodic mirror re-scan straightforward to add 
 
 Because the index is in memory and refreshed on a schedule, tests assert a
 **bounded, self-cleaning footprint**: memory stays bounded across repeated syncs
-(the old index is released, no growth or leak), the swap is atomic (no torn reads
+(the old index is released, no growth or leak); the swap is atomic (no torn reads
 mid-refresh), a failed sync retains the last-good index (and alarms), readiness
 gates on first sync, and any transient download scratch is cleaned up. (A future
 on-disk cache would instead add rotation / bounded-disk tests.)

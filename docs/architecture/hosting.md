@@ -170,7 +170,7 @@ The same single process could instead distinguish ecosystems by **hostname**
 (`npm.registry.example.com`, `pypi.registry.example.com`), dispatching on the
 request's host rather than a path prefix. This yields root-path URLs (rewriting
 only swaps the host, never injects a prefix) at the cost of a DNS name and TLS
-coverage per ecosystem. It is still one instance, the choice is routing *style*,
+coverage per ecosystem. It is still one instance; the choice is routing *style*,
 not instance count. **Path-prefix mounting is the default** (one name, one
 certificate, no DNS choreography); host-based routing is available where
 per-ecosystem hostnames are specifically wanted.

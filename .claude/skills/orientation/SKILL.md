@@ -68,7 +68,7 @@ HLS, the MCP bridge) per AGENTS.md → Build & Tooling.
 
 ## 2. Sync ground truth (trust this over any summary)
 
-Status, milestones, and "what shipped" **drift**, derive them live, never from a doc:
+Status, milestones, and "what shipped" **drift**; derive them live, never from a doc:
 
 - `git checkout main && git pull --ff-only`
 - `git log --oneline -20` · `git worktree list`

@@ -57,7 +57,7 @@ totality, failure behaviour, and, for Écluse especially, the security rationale
 
 **Let the types carry their weight.** Haddock already prints every signature and
 data declaration. Never restate one in prose ("takes a `Scope` and returns
-`Text`"), that is pure noise.
+`Text`"); that is pure noise.
 
 **Document the exported surface; leave internals alone.** A module's export list
 *is* its public contract (`-Wmissing-export-lists`). Document everything in it;
@@ -119,7 +119,7 @@ The marker goes on the first line only. -}
 
 Conventions:
 
-- **Default to `-- |`** before a declaration, it reads top-down.
+- **Default to `-- |`** before a declaration; it reads top-down.
 - **Use `-- ^`** inline, for function arguments, constructor arguments, and
   record fields, where the comment naturally sits after the thing.
 - **Use `{- | … -}`** for module headers and long multi-paragraph blocks.
@@ -280,7 +280,7 @@ renderDuration :: NominalDiffTime -> Text
   `cabal repl --with-ghc=doctest`, which inherits the package's exact build
   configuration (crucially the `relude` prelude), so examples see the same names
   the module does.
-- **Keep examples pure, total, and deterministic**, they run in a plain GHCi
+- **Keep examples pure, total, and deterministic**: they run in a plain GHCi
   session with no `IO` setup. The pure core (`Ecluse.Core.Rules`, `Ecluse.Core.Version`,
   `Ecluse.Core.Package`) is the natural home for them.
 - Output is compared to GHCi's printed form: a `Text` shows **with quotes**
@@ -305,12 +305,12 @@ test, or a later reader cannot reconstruct on their own.
 Haddock is the durable contract, read long after any PR. Keep project-management
 narration out of it:
 
-- **No status or roadmap**, drop "for now", "currently", "at launch", "a later
+- **No status or roadmap**: drop "for now", "currently", "at launch", "a later
   slice will…". Describe what *is*, in the present tense.
 - **No slice / PR / issue references**, "(see S07)", "added in #42",
   "TODO(after the spike)" belong in git history and
   [`planning/`](planning/), not the source.
-- **No test-plumbing narration**, document a test double where it is defined, by
+- **No test-plumbing narration**: document a test double where it is defined, by
   what it does, not in the production module it stands in for.
 
 The test: if a sentence would read as false or pointless a year from now, once
