@@ -69,11 +69,18 @@ Skeleton:
 
 ## In plain terms
 
-<The same change explained for a reader who is NOT steeped in this subsystem.
- - What was wrong / missing / risky, in concrete terms (for a security or
-   behaviour change: who could do what, under what conditions, and what now stops it).
- - Why this approach, and the trade-off accepted.
- - Define any unavoidable jargon in one clause. No internal slice/PR shorthand.>
+<Lead with one or two plain sentences — what this change means for someone outside this
+ subsystem, the human point before the mechanism. Then a few short, signposted beats:
+ bold a lead-in, or use `###` sub-headings for a larger change. Use the beats that fit;
+ not every PR has all three. Keep each to 1–3 sentences.>
+
+**The situation / the risk.** <What was wrong, missing, or risky, concretely — for a
+security or behaviour change, who could do what, under what conditions.>
+
+**What changed.** <The key idea in everyday terms; define any unavoidable term in a
+clause. An analogy is welcome where it genuinely illuminates. No internal slice/PR shorthand.>
+
+**The trade-off.** <What was deliberately accepted, or chosen against, and the honest reason.>
 
 ## Checklist
 - [ ] `make check` passes locally (build, unit tests, fourmolu, hlint, Semgrep)
@@ -87,14 +94,21 @@ Skeleton:
       relevant commits. Author reviewed and is responsible for every line.
 ```
 
-The `## In plain terms` section is **prose, not a diff walk-through** — it answers
-"what does this mean and why should I trust it" for the architect's review, in language
-that needs no familiarity with the file being changed. Canadian spelling throughout
-(as in all repo prose). **Omit the section only when the change is self-evident from the
-Summary** — a process-doc or typo fix, a dependency bump, a mechanical no-behaviour
-rename. Anything with a security, behaviour, interface, or design-rationale dimension —
-anything you can picture the architect asking you to "explain simply" — keeps it. This
-PR (a process-doc addition) is itself a trivial one, and omits the section.
+Write the section the way you would **explain the change aloud to a sharp colleague on
+another team** — the "explain it like I'm 5" the architect asks for at review time. Give
+it a throughline (what was going on → what changed → what we chose not to do, and why),
+not a flat summary and not a diff walk-through. **Make it scan:** short paragraphs (2–4
+sentences), a bold lead-in or `###` sub-heading per beat, a tight bullet list when you
+are enumerating cases — never one dense block. Lead with the human point; reach for an
+analogy where it genuinely illuminates. It answers "what does this mean and why should I
+trust it" for a reader with no familiarity with the file being changed. Canadian spelling
+throughout (as in all repo prose).
+
+**Omit the section only when the change is self-evident from the Summary** — a
+process-doc or typo fix, a dependency bump, a mechanical no-behaviour rename. Anything
+with a security, behaviour, interface, or design-rationale dimension — anything you can
+picture the architect asking you to "explain simply" — keeps it. This PR (a process-doc
+change) is itself a trivial one, and omits the section.
 
 ## 3. Open as a draft; flip to ready only at hand-off
 
