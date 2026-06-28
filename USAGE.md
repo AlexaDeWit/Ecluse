@@ -143,7 +143,7 @@ operator reference. **Keep the two in sync** when either changes.
 | `PROXY_HELP_MESSAGE` | No | String appended to every denial message (e.g. a support channel). |
 | `PROXY_LOG_FORMAT` | No (default `json`) | Log shape: `json` (one JSON object per line, for log collectors) or `console` (human-readable). |
 | `CVE_SYNC_INTERVAL_SECONDS` | No (default `3600`) | How often the in-memory advisory index refreshes from OSV. **(with the CVE tier)** |
-| `PROXY_MAX_RESPONSE_BYTES` | No (default `16777216`, 16 MiB) | Largest upstream **metadata** body buffered before the fetch aborts fail-closed. Bounds memory against a hostile upstream returning a giant body. Positive integer. |
+| `PROXY_MAX_RESPONSE_BYTES` | No (default `12582912`, 12 MiB) | Largest upstream **metadata** body buffered before the fetch aborts fail-closed. Bounds memory against a hostile upstream returning a giant body. Positive integer. |
 | `PROXY_MAX_VERSION_COUNT` | No (default `100000`) | Largest version count a packument may carry before it is refused. Bounds per-version rule evaluation against a version flood. Positive integer. |
 | `PROXY_MAX_NESTING_DEPTH` | No (default `64`) | Deepest JSON nesting a decoded upstream document may reach before it is refused. Bounds CPU/stack against a pathologically nested payload. Positive integer. |
 | `PROXY_MIN_PUBLIC_INTEGRITY` | No (default `sha256`) | Minimum integrity algorithm a **public** version's digest must meet to be served: `sha256`, `sha512`, or `blake2b`. A public version whose strongest digest is weaker (e.g. a legacy SHA-1 `shasum` only) is refused with a `403`. **Hard-floored at SHA-256** — `sha1`/`md5`/an unknown name is rejected at startup. The trusted private upstream is exempt. |

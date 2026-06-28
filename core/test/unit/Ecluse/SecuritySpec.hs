@@ -172,7 +172,7 @@ showInstancesSpec = describe "Show instances" $ do
         show AnyAllowlistedHost `shouldBe` ("AnyAllowlistedHost" :: Text)
     it "renders Limits" $
         show defaultLimits
-            `shouldBe` ( "Limits {maxBodyBytes = 16777216, maxVersionCount = 100000, maxNestingDepth = 64}" ::
+            `shouldBe` ( "Limits {maxBodyBytes = 12582912, maxVersionCount = 100000, maxNestingDepth = 64}" ::
                             Text
                        )
 
@@ -811,7 +811,7 @@ boundedReadSpec = describe "boundedRead" $ do
         runBounded limits ["ab", "", "cd"] `shouldBe` Right "ab"
 
     it "passes a small body under the generous default budget" $
-        -- Exercises 'defaultLimits' (the 16 MiB cap) directly.
+        -- Exercises 'defaultLimits' (the 12 MiB cap) directly.
         runBounded defaultLimits ["small", "body"] `shouldBe` Right "smallbody"
 
     it "stops reading once the budget is breached (does not drain the reader)" $ do
@@ -897,7 +897,7 @@ nestingDepthSpec = describe "checkNestingDepth" $ do
 
 -- ── real-world admissibility (the defaults must not false-positive) ──────────
 
-{- | The whole point of the default 'Limits' (16 MiB body, 100k versions, depth 64)
+{- | The whole point of the default 'Limits' (12 MiB body, 100k versions, depth 64)
 is that they must __never__ refuse a legitimate trusted package. This drives the
 exact sequence the data plane applies in @Ecluse.Core.Server.Pipeline.fetchEntry@ —
 bounded read, depth check on the decoded document, projection, then version-count

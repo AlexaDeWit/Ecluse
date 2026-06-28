@@ -447,7 +447,7 @@ data EnvConfig = EnvConfig
     -}
     , cfgMaxResponseBytes :: Int
     {- ^ The largest upstream metadata body, in bytes, the data plane buffers before
-    aborting the fetch (@PROXY_MAX_RESPONSE_BYTES@, default 16 MiB — 'maxBodyBytes'
+    aborting the fetch (@PROXY_MAX_RESPONSE_BYTES@, default 12 MiB — 'maxBodyBytes'
     of 'Ecluse.Core.Security.defaultLimits'). Bounds memory against a hostile upstream
     returning a multi-gigabyte body; the metadata path streams a bounded read, so a
     body past the cap is refused fail-closed rather than buffered whole (artifacts

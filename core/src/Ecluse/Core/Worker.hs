@@ -507,7 +507,7 @@ boundedFetch manager request =
             Left limitErr -> pure (Left (ResponseBoundExceeded limitErr))
 
 {- The response-bound budget for an __artifact__ fetch. The metadata-path
-'Ecluse.Core.Security.defaultLimits' caps bodies at 16 MiB, which is fine for a packument
+'Ecluse.Core.Security.defaultLimits' caps bodies at 12 MiB, which is fine for a packument
 but far too small for a real tarball, so the artifact cap is raised to a realistic
 ceiling while the other limits (version count, nesting depth) stay at their defaults
 (they do not apply to an opaque tarball). A body past this is refused fail-closed
