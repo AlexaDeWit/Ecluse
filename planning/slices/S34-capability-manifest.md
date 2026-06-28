@@ -9,7 +9,7 @@ arch-refs:
   - docs/architecture/api-surface.md
   - docs/architecture/web-layer.md#capability-manifest
   - docs/architecture/hosting.md#capability-manifest
-pr: null
+pr: 427
 ---
 
 # S34 — Capability manifest (OpenAPI) — static generation + docs publish
@@ -32,6 +32,23 @@ full rationale (a capability manifest, **not** a client-integration contract).
 > produced at build time from a fixed canonical config and shipped as static content
 > on the docs site, exactly like the rendered Markdown and the Haddock. This removes
 > `/openapi.json` from M2's web front door.
+
+> **As-built (PR 1 of the S34 delivery — generation core).** Delivered: the deps
+> (`autodocodec`/`autodocodec-openapi3`/`openapi3`, plus `aeson-pretty`,
+> `insert-ordered-containers`, `http-media`); the pure `Ecluse.Manifest` assembly
+> (`buildOpenApi :: ManifestSource -> OpenApi`) folding the closed `Route` over the
+> mounts; the owned `ErrorEnvelope` schema (one `autodocodec` codec → `aeson` + OpenAPI)
+> and the hand-written partial synthesized-packument `ToSchema`; the `openapi-gen`
+> executable (out of the library closure); the committed deterministic artifact at
+> **`openapi/openapi.json`**; and unit tests (`test/unit/Ecluse/ManifestSpec.hs`). The
+> Redoc render + `make site`/Pages publishing is **PR 2**; the drift controls
+> (`validateToJSON`, `Route`↔operation exhaustiveness, the `hspec-wai` live-status
+> contract, the CI golden-regen gate) are **S35 (PR 3)**. Status stays `not-started`
+> until PR 2 closes the render/publish half (the repo has no in-progress status value).
+> **Config-as-JSON-Schema is deferred**: the config decoders are strict hand-rolled
+> `aeson` (they reject unknown keys), and making them `autodocodec`-backed would change
+> that runtime decode behaviour — a design fork for its own PR rather than PR 1's
+> generation core.
 
 **Acceptance criteria.**
 - [ ] **Owned schemas via `autodocodec`.** The error/denial envelope (S11, via S12),

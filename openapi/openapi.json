@@ -1,0 +1,399 @@
+{
+  "components": {
+    "schemas": {
+      "ErrorEnvelope": {
+        "properties": {
+          "error": {
+            "description": "the human-facing reason the request was refused",
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "type": "object"
+      },
+      "SynthesizedPackument": {
+        "additionalProperties": true,
+        "description": "Écluse's merged-and-filtered view of a package's metadata. Versions are merged across upstreams and gated (private versions trusted, public versions admitted only by policy), and each version's `dist.tarball` is rewritten to resolve back through this proxy. Only the fields Écluse reads and transforms are modelled; every other field is relayed unchanged from the contributing upstream (the private upstream wins on a collision).",
+        "properties": {
+          "dist-tags": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Tag to version string. `latest` is repointed to the newest surviving version after the gate.",
+            "type": "object"
+          },
+          "name": {
+            "description": "The package name.",
+            "type": "string"
+          },
+          "time": {
+            "additionalProperties": {
+              "format": "date-time",
+              "type": "string"
+            },
+            "description": "Publish timestamps: `created`, `modified`, and one entry per version.",
+            "type": "object"
+          },
+          "versions": {
+            "additionalProperties": {
+              "additionalProperties": true,
+              "description": "A single version's manifest. Only the fields Écluse reads or transforms are modelled; the rest are relayed unchanged.",
+              "properties": {
+                "dist": {
+                  "additionalProperties": true,
+                  "description": "The artifact descriptor. `tarball` is rewritten to resolve through the proxy; `integrity`/`shasum` are preserved byte-for-byte so the client's own check still holds.",
+                  "properties": {
+                    "integrity": {
+                      "description": "Subresource-Integrity string, preserved from upstream.",
+                      "type": "string"
+                    },
+                    "shasum": {
+                      "description": "Legacy SHA-1 digest, preserved from upstream.",
+                      "type": "string"
+                    },
+                    "tarball": {
+                      "description": "Rewritten artifact URL, under this mount's prefix.",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "tarball"
+                  ],
+                  "type": "object"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "version": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "version",
+                "dist"
+              ],
+              "type": "object"
+            },
+            "description": "Surviving versions, keyed by version string.",
+            "type": "object"
+          }
+        },
+        "required": [
+          "name",
+          "versions"
+        ],
+        "title": "Synthesized packument",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "description": "Which registry protocols this Écluse server speaks, and exactly what is and is not supported, per ecosystem. A capability manifest for operators and contributors — not a client-integration contract: registry clients hardcode the protocol and never read this document. Generated statically from the closed serve-route enumeration; it is not served.",
+    "title": "Écluse capability manifest",
+    "version": "0.1.0"
+  },
+  "openapi": "3.0.0",
+  "paths": {
+    "/npm/-/ping": {
+      "get": {
+        "description": "Answered locally with `200` and an empty object; `npm ping` checks the endpoint it talks to is up, so there is no reason to round-trip upstream.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "description": "An empty object.",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "An empty object."
+          }
+        },
+        "summary": "Liveness probe",
+        "tags": [
+          "npm"
+        ]
+      }
+    },
+    "/npm/-/v1/search": {
+      "get": {
+        "description": "Search is a first-class documented boundary: a discovery convenience, not an install path, so Écluse returns `501` and points to the public registry's website rather than scope-creeping a filtered or pass-through search.",
+        "responses": {
+          "501": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Not implemented: search is not supported."
+          }
+        },
+        "summary": "Package search (not supported)",
+        "tags": [
+          "npm"
+        ]
+      }
+    },
+    "/npm/{package}": {
+      "get": {
+        "description": "Returns Écluse's merged-and-filtered packument: versions merged across upstreams and gated, each `dist.tarball` rewritten to resolve back through this proxy. With no surviving version the status follows the most recoverable cause.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SynthesizedPackument"
+                }
+              }
+            },
+            "description": "The synthesized packument."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Every version was withheld by policy or admission, and none survived the merge."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No such package upstream (a forwarded miss)."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "A permanent or internal inability to decide."
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "A responding upstream returned a packument for a different package."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "A transient upstream or advisory condition; retry (see `Retry-After`)."
+          }
+        },
+        "summary": "Fetch a package's metadata (packument)",
+        "tags": [
+          "npm"
+        ]
+      },
+      "parameters": [
+        {
+          "description": "The package name, URL-encoded; a scoped name is `@scope%2Fname`.",
+          "in": "path",
+          "name": "package",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "put": {
+        "description": "Relays the publish document to the configured publication target after the anti-shadowing scope guard. Écluse keys the write on the route's package name, never the document's self-reported name.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "description": "The npm publish document, relayed to the publication target (its full shape is npm's, not re-specified here).",
+                "type": "object"
+              }
+            }
+          },
+          "description": "The npm publish document (the version manifest plus the base64-encoded tarball in `_attachments`).",
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The publication target accepted the package (its response is relayed)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The package name is outside the configured publish scopes (anti-shadowing), or refused by policy."
+          },
+          "405": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Publishing is not configured (no publication target)."
+          }
+        },
+        "summary": "Publish a first-party package",
+        "tags": [
+          "npm"
+        ]
+      }
+    },
+    "/npm/{package}/-/{filename}": {
+      "get": {
+        "description": "The artifact bytes are streamed verbatim with bounded memory; the manifest documents the media type and links out rather than re-specifying the upstream artifact protocol. The client verifies the bytes against the packument's preserved integrity digest.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "description": "Opaque artifact bytes, streamed verbatim.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The artifact bytes."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Refused by policy, or by admission (a missing or below-floor integrity digest)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The upstream did not have the artifact (a forwarded miss)."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "A permanent or internal inability to serve."
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "A transient upstream condition; retry (see `Retry-After`)."
+          }
+        },
+        "summary": "Stream a package artifact (tarball)",
+        "tags": [
+          "npm"
+        ]
+      },
+      "parameters": [
+        {
+          "description": "The package name, URL-encoded; a scoped name is `@scope%2Fname`.",
+          "in": "path",
+          "name": "package",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        {
+          "description": "The artifact's on-the-wire file name, e.g. `lodash-4.17.21.tgz`.",
+          "in": "path",
+          "name": "filename",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ]
+    },
+    "/npm/{unsupportedPath}": {
+      "get": {
+        "description": "Any request under this mount matched by none of the routes above is denied with `404` — deny by default at the routing layer.",
+        "responses": {
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unrecognised path; deny by default."
+          }
+        },
+        "summary": "Deny by default (unsupported path)",
+        "tags": [
+          "npm"
+        ]
+      },
+      "parameters": [
+        {
+          "description": "Any path under this mount matched by none of the routes above.",
+          "in": "path",
+          "name": "unsupportedPath",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ]
+    }
+  },
+  "servers": [
+    {
+      "description": "The proxy's externally-reachable base URL; served artifact URLs resolve against it.",
+      "url": "https://registry.ecluse.example"
+    }
+  ],
+  "tags": [
+    {
+      "description": "npm registry protocol coverage",
+      "name": "npm"
+    }
+  ]
+}
