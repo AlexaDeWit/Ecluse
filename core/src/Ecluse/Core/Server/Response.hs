@@ -306,28 +306,51 @@ Never @404@: the versions existed and were withheld (see 'PackumentStatus').
 -}
 packumentStatus :: [ServeDecision] -> PackumentStatus
 packumentStatus decisions
-    | any isAdmit decisions = PackumentOk
+    | tallyAdmit tally = PackumentOk
     | not (null willResolveDelays) = PackumentUnavailable (longestRetry willResolveDelays)
-    | anyUpstreamInvalid = PackumentBadGateway
-    | anyWontResolve = PackumentServerError
+    | tallyUpstreamInvalid tally = PackumentBadGateway
+    | tallyWontResolve tally = PackumentServerError
     | otherwise = PackumentForbidden
   where
-    reasons :: [RejectReason]
-    reasons = [rejectionReason rej | Reject rej <- decisions]
+    -- One strict pass over the outcomes collects every signal the guards weigh, so
+    -- the all-denied path no longer walks the exclusions once per guard.
+    tally :: PackumentTally
+    tally = foldl' weigh (PackumentTally False [] False False) decisions
 
     willResolveDelays :: [Maybe RetryAfter]
-    willResolveDelays = [delay | Unavailable (WillResolve delay) <- reasons]
+    willResolveDelays = tallyWillResolveDelays tally
 
-    anyUpstreamInvalid :: Bool
-    anyUpstreamInvalid = not (null [() | UpstreamInvalid <- reasons])
+    weigh :: PackumentTally -> ServeDecision -> PackumentTally
+    weigh acc = \case
+        Admit -> acc{tallyAdmit = True}
+        Reject rej -> case rejectionReason rej of
+            Unavailable (WillResolve delay) ->
+                acc{tallyWillResolveDelays = delay : tallyWillResolveDelays acc}
+            UpstreamInvalid -> acc{tallyUpstreamInvalid = True}
+            Unavailable WontResolve -> acc{tallyWontResolve = True}
+            -- A deny-by-default cause (policy or admission refusal): it leaves no
+            -- signal of its own; an empty tally is exactly the @403@ floor.
+            ByPolicy{} -> acc
+            MissingIntegrity -> acc
+            BelowIntegrityFloor -> acc
 
-    anyWontResolve :: Bool
-    anyWontResolve = not (null [() | Unavailable WontResolve <- reasons])
-
-    isAdmit :: ServeDecision -> Bool
-    isAdmit = \case
-        Admit -> True
-        Reject{} -> False
+{- | The signals 'packumentStatus' weighs over the per-version serve outcomes,
+accumulated in a single pass: whether any version was admitted, the suggested
+retry delays of every transient exclusion (consumed by 'longestRetry'), and
+whether a gateway fault or a permanent inability to decide was seen among the
+exclusions. The fields are strict ('StrictData'), so the booleans are forced as
+the tally is built rather than thunking across a large survivor set.
+-}
+data PackumentTally = PackumentTally
+    { tallyAdmit :: Bool
+    -- ^ At least one 'Admit' was seen, so the merged document has a survivor.
+    , tallyWillResolveDelays :: [Maybe RetryAfter]
+    -- ^ The suggested delay of every transient ('WillResolve') exclusion.
+    , tallyUpstreamInvalid :: Bool
+    -- ^ A responding upstream returned a packument naming a different package.
+    , tallyWontResolve :: Bool
+    -- ^ An exclusion was a permanent ('WontResolve') inability to decide.
+    }
 
 {- | The longest suggested 'RetryAfter' among transient causes, or 'Nothing' when
 none of them suggested a delay.

@@ -169,6 +169,16 @@ spec = do
             packumentStatus [invalid, broken] `shouldBe` PackumentBadGateway
         it "prefers 502 over 403: a misreporting upstream outranks a deny-by-default" $
             packumentStatus [invalid, denied] `shouldBe` PackumentBadGateway
+        -- The single-pass tally is weighed in strict guard order; pin the whole
+        -- precedence ladder at once with every reason present, so a reordering or a
+        -- miscategorized signal in the fold cannot slip past the pairwise cases above.
+        it "weighs every signal in one pass: a survivor outranks all exclusions" $
+            packumentStatus [denied, transient (Just (RetryAfter 5)), invalid, broken, Admit]
+                `shouldBe` PackumentOk
+        it "with no survivor, the longest transient delay outranks 502, 500, and 403 together" $
+            packumentStatus
+                [denied, broken, invalid, transient (Just (RetryAfter 5)), transient (Just (RetryAfter 30))]
+                `shouldBe` PackumentUnavailable (Just (RetryAfter 30))
 
     describe "longestRetry — the longest suggested delay, or none" $ do
         it "is Nothing for an empty list" $
