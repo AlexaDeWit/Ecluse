@@ -9,16 +9,12 @@ is **OpenTelemetry**, emitting **OTLP**, which any compatible backend can receiv
 — an OpenTelemetry Collector, Jaeger, Honeycomb, Grafana Tempo, a Prometheus
 scrape, and so on.
 
-**Datadog is a first-class, fully supported target** — it is what this project's
-maintainer runs, so it gets a documented, tested deployment path — but it is
-**never required**. Nothing in the core takes a hard dependency on Datadog;
-switching backends is a configuration change, not a code change; and Écluse runs
-perfectly with telemetry switched **off entirely, which is the default**. This is
-a FOSS project: the maintainer's choice of backend must not become every
-consumer's obligation. The Datadog-specific pieces below (the Operator deployment
-recipe, the Datadog trace propagator, the `dd.*` log fields, and the Agent-side
-sampling) are all clearly marked as optional add-ons on top of the neutral OTLP
-baseline.
+**Datadog is a first-class, fully supported target** — it is what the maintainer
+runs, so it gets a documented, tested deployment path — but it is **never
+required**: nothing in the core depends on it, switching backends is a
+configuration change, and telemetry is **off by default**. The Datadog-specific
+pieces below (the Operator recipe, the trace propagator, the `dd.*` log fields, and
+Agent-side sampling) are optional add-ons on the neutral OTLP baseline.
 
 This is **built**: the OpenTelemetry substrate and its self-aligning configuration
 (`Ecluse.Telemetry`, `Ecluse.Telemetry.Resolve`), the request-lifecycle tracing
