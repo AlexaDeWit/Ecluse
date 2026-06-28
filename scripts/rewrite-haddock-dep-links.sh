@@ -32,15 +32,30 @@ set -euo pipefail
 
 # A dependency package directory is "<name>-<version>[-<hash>]". <name> may itself
 # contain hyphens (e.g. amazonka-core), so the version is pinned as the first
-# trailing "-<digits-and-dots>" group and the optional store/unit-id <hash> after
-# it is consumed but not re-emitted.
+# trailing "-<digits-and-dots>" group and the store/unit-id <hash> after it is
+# consumed but not re-emitted.
+#
+# The <hash> match must be MANDATORY, not optional: GNU sed is POSIX
+# leftmost-longest, which maximizes the version group first, so an all-digit
+# abbreviated hash (GHC emits these -- e.g. process-1.6.26.1-2190) would be folded
+# INTO the version by "[0-9][0-9.]*" and ship a 404 Hackage link. A mandatory
+# trailing "-<hash>/" forces that "-<digits>" to the hash group instead. The
+# legacy unhashed GHC layout is then handled by a separate fallback expression,
+# applied AFTER the hashed one so it only ever sees genuinely hash-less links (a
+# rewritten URL no longer contains /libraries/ or /store/, so it cannot re-match).
 
-# GHC boot libraries: <prefix>/share/doc/ghc/html/libraries/<name>-<ver>[-<hash>]/<page>.
+# GHC boot libraries, hashed dir: <prefix>/share/doc/ghc/html/libraries/<name>-<ver>-<hash>/<page>.
 # The whole <prefix> (pkgroot/.. or a store path) and its Nix hash are dropped.
-boot='s#[^"]*/share/doc/ghc/html/libraries/([^/"]+-[0-9][0-9.]*)(-[0-9a-f]+)?/([^"]+)#https://hackage.haskell.org/package/\1/docs/\3#g'
+boot_h='s#[^"]*/share/doc/ghc/html/libraries/([^/"]+-[0-9][0-9.]*)-[0-9a-f]+/([^"]+)#https://hackage.haskell.org/package/\1/docs/\2#g'
+
+# GHC boot libraries, legacy unhashed dir (older GHC layouts): no -<hash> segment.
+boot_n='s#[^"]*/share/doc/ghc/html/libraries/([^/"]+-[0-9][0-9.]*)/([^"]+)#https://hackage.haskell.org/package/\1/docs/\2#g'
 
 # cabal-store dependencies: <prefix>/store/<ghc>/<name>-<ver>-<hash>/share/doc/html/<page>.
-store='s#[^"]*/store/[^/"]+/([^/"]+-[0-9][0-9.]*)(-[0-9a-f]+)?/share/doc/html/([^"]+)#https://hackage.haskell.org/package/\1/docs/\3#g'
+# A store unit-id dir always carries its <hash>, so there is no unhashed fallback;
+# an impossible unhashed form is left for the docs-site guard to fail on, loudly,
+# rather than be silently mis-rewritten.
+store_h='s#[^"]*/store/[^/"]+/([^/"]+-[0-9][0-9.]*)-[0-9a-f]+/share/doc/html/([^"]+)#https://hackage.haskell.org/package/\1/docs/\2#g'
 
 usage() {
   echo "usage: $0 <dir> | --filter" >&2
@@ -51,7 +66,7 @@ usage() {
 
 case "$1" in
   --filter)
-    exec sed -E -e "$boot" -e "$store"
+    exec sed -E -e "$boot_h" -e "$boot_n" -e "$store_h"
     ;;
   -*)
     usage
@@ -65,6 +80,6 @@ case "$1" in
     # Rewrite every generated page and the JSON search index in place. Other file
     # types (CSS, JS bundles, images) never carry these links.
     find "$dir" -type f \( -name '*.html' -o -name '*.json' \) -print0 |
-      xargs -0 -r sed -E -i -e "$boot" -e "$store"
+      xargs -0 -r sed -E -i -e "$boot_h" -e "$boot_n" -e "$store_h"
     ;;
 esac
