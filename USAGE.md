@@ -384,6 +384,18 @@ knob you must not lower below SHA-256. See
     throttled to a periodic heartbeat rather than flooding your logs.
 - **Search.** `GET /-/v1/search` returns `501` by design: search is a discovery convenience,
   not an install path. Use the public registry's website to discover packages.
+- **Revoking a mirrored version (internal yank).** The mirror store (Registry B) deliberately
+  resists upstream yanks — a benign yank (a maintainer rage-deletes, a name dispute) does not
+  break your installs. The flip side: a version *later found malicious* is not removed
+  automatically, and Écluse never re-gates trusted content. The **typical case resolves itself** —
+  the public registry yanks or security-holds the bad version, its bytes change or vanish,
+  re-mirroring can no longer reproduce them, and you purge the stale copy from Registry B at your
+  leisure. For the **atypical case where your own scanning is ahead of the public yank**, revoke in
+  this order: **(1)** deny the identity (the planned `DenyByIdentity` revocation rule — see Planned
+  controls) so the serve path stops admitting it and the worker stops re-mirroring it, then **(2)**
+  purge that version from Registry B to remove the already-mirrored copy. **Order matters:** purge
+  alone is a treadmill — while the version is still live upstream, the next install re-admits and
+  re-mirrors it. Until `DenyByIdentity` ships, purge is the only lever, with that caveat.
 
 ## Planned controls
 
@@ -398,6 +410,10 @@ control: you decide your threat tolerance.**
   (milestone M7).
 - **Effectful CVE rules**: `DenyIfCVE` / `AllowIfRemediatesCve` over a local OSV advisory
   index (milestone M5).
+- **Revocation denylist**: a hard-deny `DenyByIdentity` rule (deny a specific package or
+  `package@version`, at a precedence above the scope allow-list) — the enforcement half of
+  revoking a mirrored version ahead of an upstream yank, paired with purging Registry B
+  ([S55](planning/slices/S55-revocation-denylist.md), milestone M8).
 
 The full deployment runbook ships with the launch
 ([S32](planning/slices/S32-launch-docs.md)).
