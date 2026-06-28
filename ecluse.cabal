@@ -99,6 +99,7 @@ library ecluse-core
     Ecluse.Core.Registry.Npm.Metadata
     Ecluse.Core.Registry.Npm.Project
     Ecluse.Core.Registry.Npm.Route
+    Ecluse.Core.Registry.Npm.SelectiveDecode
     Ecluse.Core.Registry.Npm.Serve
     Ecluse.Core.Registry.Npm.Wire
     Ecluse.Core.Registry.Pypi.Wire
@@ -596,6 +597,7 @@ benchmark ecluse-bench
     Ecluse.Core.RouteBench
     Ecluse.Core.RulesBench
     Ecluse.Core.SecurityBench
+    Ecluse.Core.SelectiveBench
     Ecluse.Core.ServeBench
     Ecluse.Core.VersionBench
     Ecluse.Core.WireBench

@@ -63,6 +63,7 @@ module Ecluse.Core.Security (
     boundedRead,
     checkVersionCount,
     checkNestingDepth,
+    withinNestingBudget,
 ) where
 
 import Data.Aeson (Value (Array, Bool, Null, Number, Object, String))
@@ -817,20 +818,27 @@ the ceiling to reject.
 -}
 checkNestingDepth :: Limits -> Value -> Either LimitError Value
 checkNestingDepth limits value =
-    if within cap value
+    if withinNestingBudget (maxNestingDepth limits) value
         then Right value
-        else Left (TooDeeplyNested cap)
-  where
-    cap = maxNestingDepth limits
+        else Left (TooDeeplyNested (maxNestingDepth limits))
 
-    -- True iff @v@ fits within @budget@ remaining levels. Decrement per nested
-    -- container and fail fast at zero, so a huge subtree is not fully walked.
-    within :: Int -> Value -> Bool
-    within budget v =
-        budget >= 1 && case v of
-            Object o -> all (within (budget - 1)) (KeyMap.elems o)
-            Array xs -> V.all (within (budget - 1)) xs
-            String _ -> True
-            Number _ -> True
-            Bool _ -> True
-            Null -> True
+{- | True iff @value@ nests no deeper than @budget@ levels — the depth predicate
+'checkNestingDepth' decides against 'maxNestingDepth', exposed so a /selective/ decode
+that never materialises the whole 'Value' (see
+"Ecluse.Core.Registry.Npm.SelectiveDecode") can bound each sub-tree it walks at the same
+budget and so reproduce 'checkNestingDepth' over the document exactly.
+
+Depth counts container nesting: a scalar is depth @1@, an empty container is a leaf
+(depth @1@, it forces no descent), and each enclosing 'Object'\/'Array' adds one.
+Decrements per nested container and fails fast at zero, so a huge sub-tree is not fully
+walked.
+-}
+withinNestingBudget :: Int -> Value -> Bool
+withinNestingBudget budget v =
+    budget >= 1 && case v of
+        Object o -> all (withinNestingBudget (budget - 1)) (KeyMap.elems o)
+        Array xs -> V.all (withinNestingBudget (budget - 1)) xs
+        String _ -> True
+        Number _ -> True
+        Bool _ -> True
+        Null -> True

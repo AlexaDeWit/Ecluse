@@ -20,56 +20,78 @@ import Ecluse.Core.Registry.Metadata (
     MetadataClient (fetchFullManifest, fetchVersionMetadata),
     MetadataError (MetadataUndecodable),
  )
-import Ecluse.Core.Server.Cache (MetadataCache, Source (Source), defaultCacheConfig, newMetadataCache)
+import Ecluse.Core.Server.Cache (MetadataCache, Source (Source), cachedMetadata, defaultCacheConfig, newMetadataCache)
 import Ecluse.Core.Server.Metadata (ManifestCaching (Cached, Uncached), newMetadataClient)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
-import Ecluse.Core.Version (Version, mkVersion)
+import Ecluse.Core.Version (Version, mkVersion, renderVersion)
 import Ecluse.Test.Port (noopMetricsPort)
 
-{- | Tests for the serve-path read handle's wiring: that both intent operations resolve
-through one shared cache entry (so the tarball gate's single-version read does not
-re-fetch a packument the @GET@ path already resolved), that the single-version op
-selects the right version (or reports a genuine absence as 'Nothing'), that an uncached
-handle re-fetches every call, and that a failure propagates and caches nothing.
+{- | Tests for the serve-path read handle's wiring: the full-manifest op resolving through
+the shared cache, and the single-version op's __hybrid__ topology — the small
+@(package, version)@ cache, then the warm full-packument cache read-only (so a @GET@ then
+its tarball gate stay one upstream call), then a cold selective fetch that populates the
+version cache without writing the whole packument back to the shared one. Also that an
+uncached handle re-fetches, and that a failure propagates and caches nothing.
 
-The handle is exercised over an __injected counting fetch__ (not real HTTP), so the
-cache-sharing and failure semantics are asserted directly, without a registry.
+The handle is exercised over __injected counting fetches__ (not real HTTP), one per leg,
+so the cache-sharing and failure semantics are asserted directly. The two fetches share one
+call counter, so an assertion on it is the total number of upstream calls across both legs.
 -}
 spec :: Spec
 spec = do
-    describe "newMetadataClient — shared cache across the two operations" $ do
-        it "serves the single-version op from the full manifest's cache entry (one upstream call)" $ do
+    describe "newMetadataClient — single-version hybrid topology" $ do
+        it "reuses the warm full-packument cache: a GET then its version select is one upstream call" $ do
             calls <- newIORef (0 :: Int)
             cache <- newMetadataCache defaultCacheConfig
-            let name = unscoped "is-odd"
-                client = publicClient cache (countingFetch calls (manifest name ["1.0.0", "2.0.0"]))
-            full <- fetchFullManifest client name
-            case full of
-                Right (info, raw) -> do
-                    Map.keys (infoVersions info) `shouldBe` ["1.0.0", "2.0.0"]
-                    raw `shouldBe` String "raw"
-                Left err -> expectationFailure ("expected the full manifest, got: " <> show err)
+            let info = manifest name ["1.0.0", "2.0.0"]
+                client = publicClient cache (countingFull calls info) (countingVersion calls info)
+            -- Populate the full cache (one upstream call) ...
+            _ <- fetchFullManifest client name
             readIORef calls `shouldReturn` 1
-            -- The single-version read shares the cache the full op populated: no second
-            -- upstream call, and it picks the requested version.
+            -- ... then the single-version op selects from that warm entry: no second call,
+            -- and no selective version fetch.
             found <- fetchVersionMetadata client name (ver "1.0.0")
             fmap (fmap pkgVersion) found `shouldBe` Right (Just (ver "1.0.0"))
             readIORef calls `shouldReturn` 1
 
-        it "reports a version absent from the resolved manifest as Nothing (a forwarded miss, not an error)" $ do
+        it "cold: leads a selective single-version fetch, caches it, and a repeat hits the version cache" $ do
             calls <- newIORef (0 :: Int)
             cache <- newMetadataCache defaultCacheConfig
-            let name = unscoped "is-odd"
-                client = publicClient cache (countingFetch calls (manifest name ["1.0.0"]))
+            let info = manifest name ["1.0.0"]
+                client = publicClient cache (countingFull calls info) (countingVersion calls info)
+            -- No preceding GET: the version op leads its own selective fetch (one call) ...
+            cold <- fetchVersionMetadata client name (ver "1.0.0")
+            fmap (fmap pkgVersion) cold `shouldBe` Right (Just (ver "1.0.0"))
+            readIORef calls `shouldReturn` 1
+            -- ... and a repeat is served from the version cache, no second call.
+            warmHit <- fetchVersionMetadata client name (ver "1.0.0")
+            fmap (fmap pkgVersion) warmHit `shouldBe` Right (Just (ver "1.0.0"))
+            readIORef calls `shouldReturn` 1
+            -- The cold single-version path stays isolated on writes: it never populated the
+            -- shared full-packument cache (only the version cache).
+            cachedMetadata cache source name `shouldReturn` Nothing
+
+        it "caches a determined absence: an absent version is a Nothing re-served without a re-fetch" $ do
+            calls <- newIORef (0 :: Int)
+            cache <- newMetadataCache defaultCacheConfig
+            let info = manifest name ["1.0.0"]
+                client = publicClient cache (countingFull calls info) (countingVersion calls info)
+            -- A version the metadata does not carry is a forwarded miss (a 404), and it is
+            -- cached as a determined absence ...
             absent <- fetchVersionMetadata client name (ver "2.0.0")
             fmap (fmap pkgVersion) absent `shouldBe` Right Nothing
+            readIORef calls `shouldReturn` 1
+            -- ... so a repeat is served from the negative cache entry, no second call.
+            absentHit <- fetchVersionMetadata client name (ver "2.0.0")
+            fmap (fmap pkgVersion) absentHit `shouldBe` Right Nothing
+            readIORef calls `shouldReturn` 1
 
     describe "newMetadataClient — caching policy" $
         it "an uncached handle fetches on every call (the per-client private origin)" $ do
             calls <- newIORef (0 :: Int)
-            let name = unscoped "is-odd"
+            let info = manifest name ["1.0.0"]
                 client =
-                    newMetadataClient noopMetricsPort Metric.Private Uncached noLog (countingFetch calls (manifest name ["1.0.0"]))
+                    newMetadataClient noopMetricsPort Metric.Private Uncached noLog (countingFull calls info) (countingVersion calls info)
             _ <- fetchFullManifest client name
             _ <- fetchFullManifest client name
             readIORef calls `shouldReturn` 2
@@ -78,8 +100,7 @@ spec = do
         it "propagates a MetadataError from both operations and caches nothing on failure" $ do
             calls <- newIORef (0 :: Int)
             cache <- newMetadataCache defaultCacheConfig
-            let name = unscoped "is-odd"
-                client = publicClient cache (failingFetch calls)
+            let client = publicClient cache (failingFull calls) (failingVersion calls)
             full <- fetchFullManifest client name
             case full of
                 Left err -> err `shouldBe` MetadataUndecodable
@@ -88,10 +109,14 @@ spec = do
             case single of
                 Left err -> err `shouldBe` MetadataUndecodable
                 Right _ -> expectationFailure "expected the failure to propagate"
-            -- A failed fetch caches nothing, so each of the two calls re-ran the fetch.
+            -- A failed fetch caches nothing, so each op (the full leg, then the cold
+            -- single-version leg) re-ran its fetch.
             readIORef calls `shouldReturn` 2
 
 -- ── fixtures ──────────────────────────────────────────────────────────────────
+
+name :: PackageName
+name = unscoped "is-odd"
 
 unscoped :: Text -> PackageName
 unscoped = mkPackageName Npm Nothing
@@ -99,43 +124,66 @@ unscoped = mkPackageName Npm Nothing
 ver :: Text -> Version
 ver = mkVersion Npm
 
+source :: Source
+source = Source "https://public.example"
+
 noLog :: PackageName -> MetadataError -> IO ()
 noLog _ _ = pure ()
 
--- | A public (cached, anonymous) read handle over an injected raw fetch.
-publicClient :: MetadataCache -> (PackageName -> IO (Either MetadataError (PackageInfo, Value))) -> MetadataClient
-publicClient cache =
-    newMetadataClient noopMetricsPort Metric.Public (Cached cache (Source "https://public.example")) noLog
-
-{- | A counting raw fetch: bumps the call counter, then yields the given manifest paired
-with a marker raw 'Value' (so a test can confirm a hit returned the cached pair).
+{- | A public (cached, anonymous) read handle over an injected full and single-version
+fetch.
 -}
-countingFetch :: IORef Int -> PackageInfo -> PackageName -> IO (Either MetadataError (PackageInfo, Value))
-countingFetch calls info _name = do
+publicClient ::
+    MetadataCache ->
+    (PackageName -> IO (Either MetadataError (PackageInfo, Value))) ->
+    (PackageName -> Version -> IO (Either MetadataError (Maybe PackageDetails))) ->
+    MetadataClient
+publicClient cache =
+    newMetadataClient noopMetricsPort Metric.Public (Cached cache source) noLog
+
+{- | A counting full-manifest fetch: bumps the call counter, then yields the given manifest
+paired with a marker raw 'Value' (so a test can confirm a hit returned the cached pair).
+-}
+countingFull :: IORef Int -> PackageInfo -> PackageName -> IO (Either MetadataError (PackageInfo, Value))
+countingFull calls info _name = do
     atomicModifyIORef' calls (\n -> (n + 1, ()))
     pure (Right (info, String "raw"))
 
--- | A counting raw fetch that always fails, so a test can assert nothing is cached.
-failingFetch :: IORef Int -> PackageName -> IO (Either MetadataError (PackageInfo, Value))
-failingFetch calls _name = do
+{- | A counting single-version fetch: bumps the call counter, then selects the version from
+the given manifest (so an absent version is a 'Nothing'), as the npm selective fetch would.
+-}
+countingVersion :: IORef Int -> PackageInfo -> PackageName -> Version -> IO (Either MetadataError (Maybe PackageDetails))
+countingVersion calls info _name version = do
+    atomicModifyIORef' calls (\n -> (n + 1, ()))
+    pure (Right (Map.lookup (renderVersion version) (infoVersions info)))
+
+-- | A counting full-manifest fetch that always fails, so a test can assert nothing is cached.
+failingFull :: IORef Int -> PackageName -> IO (Either MetadataError (PackageInfo, Value))
+failingFull calls _name = do
+    atomicModifyIORef' calls (\n -> (n + 1, ()))
+    pure (Left MetadataUndecodable)
+
+-- | A counting single-version fetch that always fails.
+failingVersion :: IORef Int -> PackageName -> Version -> IO (Either MetadataError (Maybe PackageDetails))
+failingVersion calls _name _version = do
     atomicModifyIORef' calls (\n -> (n + 1, ()))
     pure (Left MetadataUndecodable)
 
 -- | A manifest self-reporting @name@ with the given versions, each an inert snapshot.
 manifest :: PackageName -> [Text] -> PackageInfo
-manifest name versions =
+manifest who versions =
     PackageInfo
-        { infoName = name
-        , infoVersions = Map.fromList [(v, details name v) | v <- versions]
+        { infoName = who
+        , infoVersions = Map.fromList [(v, details who v) | v <- versions]
         , infoDistTags = Map.empty
         , infoPublishedAt = Map.empty
         }
 
 -- | A minimal per-version snapshot, identifiable by its parsed version.
 details :: PackageName -> Text -> PackageDetails
-details name rawVer =
+details who rawVer =
     PackageDetails
-        { pkgName = name
+        { pkgName = who
         , pkgVersion = ver rawVer
         , pkgPublishedAt = Nothing
         , pkgInstallCode = NoCodeOnInstall

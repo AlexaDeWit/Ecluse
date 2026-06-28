@@ -35,6 +35,7 @@ import Ecluse.Core.Registry.Npm.Wire (Packument (pkmtVersions))
 import Ecluse.Core.RouteBench qualified as RouteBench
 import Ecluse.Core.RulesBench qualified as RulesBench
 import Ecluse.Core.SecurityBench qualified as SecurityBench
+import Ecluse.Core.SelectiveBench qualified as SelectiveBench
 import Ecluse.Core.ServeBench qualified as ServeBench
 import Ecluse.Core.VersionBench qualified as VersionBench
 import Ecluse.Core.WireBench qualified as WireBench
@@ -55,6 +56,7 @@ main = do
             "ecluse-core (work-per-request)"
             [ RouteBench.benchmarks
             , WireBench.benchmarks corpusEntries
+            , SelectiveBench.benchmarks corpusEntries
             , VersionBench.benchmarks corpusEntries
             , RulesBench.benchmarks corpusEntries
             , MergeBench.benchmarks corpusEntries
