@@ -406,17 +406,14 @@ control: you decide your threat tolerance.**
 - **GCP backends**: the Pub/Sub `MirrorQueue` and the ADC credential leaf. The AWS backends —
   the SQS `MirrorQueue`, the CodeArtifact credential leaf, the mirror worker, and the
   composition root that wires them into a config-driven deployment — are **built and wired**;
-  the GCP equivalents are landing per the [delivery plan](planning/delivery-plan.md)
-  (milestone M7).
+  the GCP equivalents are **planned**.
 - **Effectful CVE rules**: `DenyIfCVE` / `AllowIfRemediatesCve` over a local OSV advisory
-  index (milestone M5).
+  index (**planned**).
 - **Revocation denylist**: a hard-deny `DenyByIdentity` rule (deny a specific package or
   `package@version`, at a precedence above the scope allow-list) — the enforcement half of
-  revoking a mirrored version ahead of an upstream yank, paired with purging Registry B
-  ([S55](planning/slices/S55-revocation-denylist.md), milestone M8).
+  revoking a mirrored version ahead of an upstream yank, paired with purging Registry B.
 
-The full deployment runbook ships with the launch
-([S32](planning/slices/S32-launch-docs.md)).
+The full deployment runbook ships with the launch.
 
 ## Learn more
 

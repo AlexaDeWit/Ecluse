@@ -6,9 +6,8 @@
 target) from **client-supplied package identifiers** and **upstream-supplied
 artifact locations**. For a supply-chain security tool the defences against
 abusing that are **stated, testable invariants** — not implementer discretion.
-They are implemented as the guard primitives of
-[`S36`](../../planning/slices/S36-security-guards.md) and enforced at the points
-noted below.
+They are implemented as outbound-request and input-validation guard primitives,
+enforced at the points noted below.
 
 > The system's full **STRIDE threat register** lives in the OWASP Threat Dragon model
 > ([`threat-modelling/ecluse.json`](../../threat-modelling/ecluse.json)) and is published,
@@ -128,7 +127,7 @@ here.
      [conventional stable read](registry-model.md#serving-a-tarball-a-conventional-private-read-an-honoured-public-location)
      that applies **no serve-time floor**, so a below-floor private *artifact* is still
      served from the private origin — its bytes verified client-side by npm and by the
-     mirror worker, with an opt-in metadata-resolution mode (#395) restoring the floor here.
+     mirror worker, with an opt-in metadata-resolution mode restoring the floor here.
 
    The asymmetry is the point: **trust may substitute for cryptographic strength on the
    operator's own vetted (private) source, but never on untrusted public bytes.** This is
@@ -157,13 +156,11 @@ here.
 ## Posture
 
 Every guard is **deny-by-default** and **fail-closed**, consistent with the rules
-engine. The invariants are verified by a **hostile-input corpus** (`S36`) —
+engine. The invariants are verified by a **hostile-input corpus** —
 traversal, encoded slashes, alternate-host and absolute URLs, CRLF, metadata and
 RFC1918 targets, oversized and deeply-nested payloads — asserted against the pure
-guards and exercised **through the real request path** now that the fetch
-([`S08`](../../planning/slices/S08-npm-data-plane.md)) and serve
-([`S14`](../../planning/slices/S14-packument-path.md)/[`S15`](../../planning/slices/S15-tarball-path.md))
-paths have landed: an oversized body, a version flood, and a deeply-nested document
+guards and exercised **through the real request path**: an oversized body, a version
+flood, and a deeply-nested document
 each drive a fail-closed refusal (a degraded contribution, never a partial serve) in
 `Ecluse.Server.PipelineSpec`, and the bounded body read is unit-tested at the
 `http-client` boundary in `Ecluse.Registry.NpmSpec`.
@@ -188,8 +185,8 @@ This reasoning is the **public** leg's. The **private** serve leg is instead a
 [conventional stable read](registry-model.md#serving-a-tarball-a-conventional-private-read-an-honoured-public-location)
 (`{base}/{pkg}/-/{file}`, no `dist.tarball` consulted), so honouring the upstream-declared
 location is the public leg's behaviour. A **nonstandard** private upstream that serves
-its tarball off-convention is therefore **not reached** by that read — the accepted
-limitation tracked by **#395** (an opt-in metadata-resolution mode restores it).
+its tarball off-convention is therefore **not reached** by that read — an accepted
+limitation (an opt-in metadata-resolution mode restores it).
 
 So for the public leg "reconstruct or fail" would reduce Écluse to public registries
 whose tarball layout equals their metadata layout. The minimum necessary trust there is
@@ -377,8 +374,8 @@ its private upstream's internal range. Recommended, in rough order of leverage:
   to exactly those it is configured to use and no more (see
   [Configuration](configuration.md#outbound-registry-credentials)).
 
-These belong in the deployment runbook ([`S32`](../../planning/slices/S32-launch-docs.md));
-this section is the security rationale they implement.
+These belong in the deployment runbook; this section is the security rationale they
+implement.
 
 ## Trust assumptions & credential posture
 
@@ -400,7 +397,7 @@ publish corollary — an open edge plus a static publication token — is
 The future **trusted-edge-identity** mode must require a *verifiable* binding to the edge
 (mutual TLS, or a shared secret / HMAC on the assertion) — an [unrepresentable unsafe
 combination](access-model.md#safe-defaults-and-unrepresentable-unsafe-combinations), not a
-runtime hope — landing with [`S43`](../../planning/slices/S43-credential-strategy.md).
+runtime hope. It is a planned mode, not yet shipped.
 
 **Passthrough relocates credential risk to the proxy runtime** (register threat #1).
 Forwarding each caller's own credential ([access model](access-model.md)) leaves Écluse

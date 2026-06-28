@@ -9,8 +9,8 @@ exists — the problem it solves and the reasoning behind these decisions — se
 [`../MOTIVATION.md`](../MOTIVATION.md); this document and those it links are the *how*.
 
 > These documents describe the **intended target design** (the design of record),
-> not necessarily the current state of the code. Implementation tracks toward them
-> slice by slice; a slice's PR reconciles the doc where its as-built reality diverges.
+> not necessarily the current state of the code. Implementation tracks toward them, and
+> a document is reconciled where the built reality has diverged from it.
 > Read them as the destination — and check `git` and the `planning/` DAG for what has
 > actually shipped.
 
@@ -129,7 +129,7 @@ with Écluse's own credential. See
 | [Cloud Backends & Mirroring](architecture/cloud-backends.md) | The mirror queue and the two cloud handles (`MirrorQueue`, `CredentialProvider`); AWS & GCP. |
 | [Configuration & Authentication](architecture/configuration.md) | Environment configuration, outbound registry credentials, and inbound client authentication. |
 | [Access & Credential Model](architecture/access-model.md) | The per-mount credential strategy (`passthrough` / `service`), edge authentication, and the no-private-cache posture. |
-| [Security Invariants](architecture/security.md) | Outbound-request & input-validation defences — identifier canonicalisation, the outbound host allowlist, internal-range blocking, and response bounds (issue #11). |
+| [Security Invariants](architecture/security.md) | Outbound-request & input-validation defences — identifier canonicalisation, the outbound host allowlist, internal-range blocking, and response bounds. |
 | [Threat Model](https://alexadewit.github.io/Ecluse/threat-model.html) | The STRIDE threat register — generated from the OWASP Threat Dragon model (`threat-modelling/ecluse.json`) and published to the site; the single source of truth for the system's threats. |
 | [Observability](architecture/observability.md) | Opt-in, vendor-neutral OpenTelemetry/OTLP tracing & metrics; Datadog as a first-class but optional target. |
 | [Technology Stack](architecture/technology-stack.md) | Library choices and the key cross-cutting decisions. |

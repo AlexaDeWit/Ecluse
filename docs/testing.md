@@ -85,8 +85,7 @@ refuses internal addresses on the public path, so the
 containers run on an RFC 5737 documentation subnet (`203.0.113.0/24`) the guard treats as
 external — **no production escape hatch**, the real default-build image runs unmodified. Run
 `make test-e2e` (it builds + loads the image, then runs the suite); it needs a Docker daemon
-and the npm CLI, and **skips** (every case `pending`) when `ECLUSE_E2E_IMAGE` is unset. The
-design is in [`planning/slices/S53-e2e-ecosystem.md`](../planning/slices/S53-e2e-ecosystem.md).
+and the npm CLI, and **skips** (every case `pending`) when `ECLUSE_E2E_IMAGE` is unset.
 
 ## What gates, and what doesn't
 

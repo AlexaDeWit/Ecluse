@@ -76,7 +76,7 @@ Outbound requests are further constrained by the
 [security invariants](security.md): an **outbound host allowlist**,
 **internal-range blocking**, **identifier canonicalisation**, and **bounded
 responses**, so a crafted identifier or a hostile upstream can neither steer a
-fetch to an unintended target nor exhaust the proxy (issue #11).
+fetch to an unintended target nor exhaust the proxy.
 
 ## Publishing first-party packages (the publication target)
 
@@ -142,13 +142,13 @@ is fast-tracked: its bytes are still verified **client-side by npm** (against th
 worker** on ingestion, so fast-tracking gives up only the proactive "refuse
 weak-integrity" stance, not tamper-evidence. The packument route's listing-side trusted
 floor ([invariant 5](security.md#invariants)) is unchanged; an operator who wants the
-floor back on the tarball leg uses the opt-in metadata-resolution mode (#395).
+floor back on the tarball leg uses the opt-in metadata-resolution mode.
 
 One **accepted limitation** rides with the conventional read: a **nonstandard** private
 upstream that serves its tarball **off-convention** — a separate files host, a CDN or
 presigned URL the `/-/` path cannot rebuild — is **not reached** by the conventional URL,
 so it becomes a private miss that falls through to the public origin. Restoring such an
-upstream is the opt-in metadata-resolution mode tracked by **#395**.
+upstream is the opt-in metadata-resolution mode.
 
 The **public leg** instead honours the **authoritative upstream location** — the
 `dist.tarball` the gated version declares, fetched at exactly that URL rather than a
@@ -225,7 +225,7 @@ deduplicating.
   that skips the packument and applies **no serve-time floor**, so a below-floor private
   *artifact* is still served from the private origin (the listing-side trusted floor on
   the packument route is unchanged; the bytes stay client- and worker-verified, and the
-  opt-in metadata-resolution mode #395 restores the floor here). The **public
+  opt-in metadata-resolution mode restores the floor here). The **public
   floor** (`PROXY_MIN_PUBLIC_INTEGRITY`, default SHA-256) is **hard-floored** and never
   lowerable; the **trusted floor** (`PROXY_MIN_TRUSTED_INTEGRITY`, default SHA-256) shares
   that default but is **operator-loosenable below SHA-256** for a legacy private mirror.
