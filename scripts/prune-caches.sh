@@ -23,6 +23,16 @@
 # epoch of one logical cache groups together. N defaults to 2 (current + one fallback for
 # in-flight runs / quick rollback); override via KEEP_PER_PREFIX.
 #
+# The Pages doc-variant caches (prefixes containing `-docs-`: cabal-store-docs-*,
+# dist-docs-*) keep only KEEP_DOCS (default 1) per prefix instead. They are the
+# heaviest entries (the documentation-variant dependency closure ~ a few hundred MB),
+# change only on a real dependency bump, and Pages is their serial single writer (the
+# `pages` concurrency group never runs two at once), so the "fallback for an in-flight
+# parallel run" that justifies keeping 2 elsewhere does not apply — keeping one steady
+# epoch holds the ~10 GB Actions-cache quota comfortably. The previous epoch survives
+# as a restore-keys fallback until this daily sweep runs, so a dep-bump push still gets
+# partial warmth before the stale epoch is pruned.
+#
 # Bash + awk/sort (no interval regexes) so it runs on the plain runner without the Nix
 # shell. Try it against a sample:
 #
@@ -30,14 +40,16 @@
 set -euo pipefail
 
 keep="${KEEP_PER_PREFIX:-2}"
+keep_docs="${KEEP_DOCS:-1}"
 rows="$(cat)"
 
 # Off-main rows are stragglers — delete them all (emitted in input order).
 printf '%s\n' "$rows" | awk -F'\t' '$1 != "" && $2 != "refs/heads/main" { print $1 }'
 
-# On-main rows: keep the newest $keep per key prefix, delete the rest. Emit
-# "prefix<TAB>created<TAB>id", sort by prefix then created (id breaks created ties)
-# descending, then drop everything past the newest $keep of each prefix.
+# On-main rows: keep the newest per key prefix ($keep, or $keep_docs for the
+# `-docs-` prefixes), delete the rest. Emit "prefix<TAB>created<TAB>id", sort by
+# prefix then created (id breaks created ties) descending, then drop everything past
+# the newest allowance of each prefix.
 printf '%s\n' "$rows" | awk -F'\t' '
   $1 == "" || $2 != "refs/heads/main" { next }
   {
@@ -49,6 +61,9 @@ printf '%s\n' "$rows" | awk -F'\t' '
     print key "\t" $4 "\t" $1
   }' \
   | LC_ALL=C sort -t$'\t' -k1,1 -k2,2r -k3,3r \
-  | awk -F'\t' -v keep="$keep" '
+  | awk -F'\t' -v keep="$keep" -v keep_docs="$keep_docs" '
       $1 != prev { prev = $1; n = 0 }
-      { if (++n > keep) print $3 }'
+      {
+        k = ($1 ~ /-docs-/) ? keep_docs : keep        # docs caches: thinner retention
+        if (++n > k) print $3
+      }'

@@ -22,6 +22,7 @@ http_cache.sqlite
 .hie/
 dist-weeder/
 dist-stan/
+dist-docs/
 dist-bench-prof/
 /ecluse-bench.prof
 /ecluse-bench.svg

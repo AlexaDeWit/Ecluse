@@ -27,6 +27,14 @@ IMAGE ?= docker.io/alexadewit/ecluse
 # target: hyperlinked source (clickable identifiers) + the quick-jump overlay.
 HADDOCK_FLAGS := --haddock-hyperlink-source --haddock-quickjump
 
+# The build directory `docs-site` builds Haddock + the OpenAPI manifest into.
+# Defaults to the regular dist-newstyle, so a local `make docs-site` / `make site`
+# is unchanged. The Pages publish overrides it (`make site DOCS_BUILDDIR=dist-docs`)
+# so its build products — including the documentation-variant dependency closure,
+# which differs from the regular build variant `cabal build` produces — land in a
+# tree cached under their own key, never colliding with the gate's dist-newstyle.
+DOCS_BUILDDIR ?= dist-newstyle
+
 .DEFAULT_GOAL := help
 .PHONY: help update build test test-integration test-smoke test-e2e test-all doctest \
         coverage coverage-unit freeze gen-version-fixtures new-worktree format format-check lint sast \
@@ -309,10 +317,10 @@ docs-check: ## Build Haddock for the CI gate (both libraries; no dep docs, no so
 # Node, no external runtime dependency. .nojekyll (at the _site root) keeps Pages
 # from touching the static assets.
 docs-site: ## Build both libraries' Haddock + the OpenAPI manifest and stage them under ./_site/api
-	$(NIX) cabal haddock lib:ecluse lib:ecluse-core $(HADDOCK_FLAGS)
+	$(NIX) cabal haddock lib:ecluse lib:ecluse-core --builddir=$(DOCS_BUILDDIR) $(HADDOCK_FLAGS)
 	@rm -rf _site && mkdir -p _site/api && touch _site/.nojekyll
-	@appidx=$$(find dist-newstyle -path '*/doc/html/ecluse/index.html' | grep -v '/l/' | head -n1); \
-	  coreidx=$$(find dist-newstyle -path '*/l/ecluse-core/doc/html/*/index.html' | head -n1); \
+	@appidx=$$(find $(DOCS_BUILDDIR) -path '*/doc/html/ecluse/index.html' | grep -v '/l/' | head -n1); \
+	  coreidx=$$(find $(DOCS_BUILDDIR) -path '*/l/ecluse-core/doc/html/*/index.html' | head -n1); \
 	  for pair in "ecluse:$$appidx" "ecluse-core:$$coreidx"; do \
 	    name=$${pair%%:*}; idx=$${pair#*:}; \
 	    if [ -z "$$idx" ] || [ ! -f "$$idx" ]; then \
@@ -323,7 +331,7 @@ docs-site: ## Build both libraries' Haddock + the OpenAPI manifest and stage the
 	    echo "Staged $$name -> _site/api/$$name"; \
 	  done
 	@cp web/api-index.html _site/api/index.html
-	$(NIX) cabal run -v0 openapi-gen -- _site/api/openapi.json
+	$(NIX) cabal run -v0 --builddir=$(DOCS_BUILDDIR) openapi-gen -- _site/api/openapi.json
 	@mkdir -p _site/api/openapi && cp web/redoc.html _site/api/openapi/index.html
 	@echo "Staged both libraries' Haddock + the OpenAPI manifest under ./_site/api (Haddock subpages, openapi.json, Redoc page at /api/openapi/)"
 
