@@ -41,6 +41,19 @@ check "boot lib, no hash (legacy GHC dir layout)" \
   'href="${pkgroot}/../../../../1nf74pkvqh2222f62f6a5gmy24miipxp-ghc-9.6.6-doc/share/doc/ghc/html/libraries/base-4.18.2.1/Data-Bool.html#t:Bool"' \
   'href="https://hackage.haskell.org/package/base-4.18.2.1/docs/Data-Bool.html#t:Bool"'
 
+# All-digit abbreviated hash: the version group must NOT swallow it (regression for
+# #468 -- real on GHC 9.10.3: process-1.6.26.1-2190, haskeline-0.8.2.1-2435,
+# hpc-0.7.0.2-9331; an all-letter hash masked the bug, and the build guard cannot
+# catch it because the mis-rewrite is a well-formed-looking Hackage URL).
+
+check "boot lib, all-digit hash, contrived (version not folded)" \
+  'href="${pkgroot}/../../../../n36vfz6wsiv35jxmfybic39cpqq38vyi-ghc-9.10.3-doc/share/doc/ghc/html/libraries/base-4.20.2.0-1234/Data-Bool.html#t:Bool"' \
+  'href="https://hackage.haskell.org/package/base-4.20.2.0/docs/Data-Bool.html#t:Bool"'
+
+check "boot lib, all-digit hash, real (process-1.6.26.1-2190)" \
+  'href="${pkgroot}/../../../../n36vfz6wsiv35jxmfybic39cpqq38vyi-ghc-9.10.3-doc/share/doc/ghc/html/libraries/process-1.6.26.1-2190/System-Process.html#t:CreateProcess"' \
+  'href="https://hackage.haskell.org/package/process-1.6.26.1/docs/System-Process.html#t:CreateProcess"'
+
 # --- cabal-store Hackage dependencies (file:// prefix, CI runner path) ---
 
 check "store dep, simple name (CI runner path)" \
@@ -58,6 +71,10 @@ check "store dep, hash starting with a digit (version not eaten)" \
 check "store dep, hyperlinked-source (src/) page" \
   'href="file:///home/runner/work/Ecluse/Ecluse/.cabal/store/ghc-9.10.3/relude-1.2.2.2-2efbd1f48c44e2bba58392e4f621ea5c8b5be81616ff1ae27399bf05bcd58019/share/doc/html/src/Relude.Foldable.Fold.html#elem"' \
   'href="https://hackage.haskell.org/package/relude-1.2.2.2/docs/src/Relude.Foldable.Fold.html#elem"'
+
+check "store dep, all-digit unit-id hash (version not folded)" \
+  'href="file:///home/runner/work/Ecluse/Ecluse/.cabal/store/ghc-9.10.3/relude-1.2.2.2-1234567890123456789012345678901234567890123456789012345678901234/share/doc/html/Relude-String-Reexport.html#t:Text"' \
+  'href="https://hackage.haskell.org/package/relude-1.2.2.2/docs/Relude-String-Reexport.html#t:Text"'
 
 # --- JSON search index: the href is escaped (\"); the escape must survive ---
 
