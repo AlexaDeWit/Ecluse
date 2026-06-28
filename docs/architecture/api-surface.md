@@ -79,13 +79,15 @@ must not be mistaken for a proof that the filtered document is internally cohere
   **build time** by a small generator (kept out of the library closure, like the
   benchmark components) from a **fixed canonical config** — a **pure** function of
   (config, mounts), with **no `GET /openapi.json` route and no WAI wiring**.
-  `make docs-site` / `make site` render it to a static **Redoc** page and stage it —
-  together with `openapi.json` itself — into `./_site` for GitHub Pages, beside the
-  Haddock, published by `pages.yml` on push to `main`. The Redoc bundle is **vendored
-  and hash-pinned** (the existing `mermaidJs` `fetchurl` pattern), so the lean `.#docs`
-  shell needs **no Node** and the published site has **no external runtime
-  dependency**. Output is **deterministic** (pinned key ordering, fixed base URLs) so
-  the committed/published spec is byte-stable and a contract change is a reviewed diff.
+  `make docs-site` / `make site` **run the generator** and render its output to a
+  static **Redoc** page, staging it — together with `openapi.json` itself — into
+  `./_site` for GitHub Pages, beside the Haddock, published by `pages.yml` on push to
+  `main`. (The spec is **derived build data**, regenerated at publish time, **not
+  committed**.) The Redoc bundle is **vendored and hash-pinned** (the existing
+  `mermaidJs` `fetchurl` pattern), so the lean `.#docs` shell needs **no Node** and the
+  published site has **no external runtime dependency**. Output is **deterministic**
+  (pinned key ordering, fixed base URLs) so the published spec is byte-stable and a
+  regeneration is a reviewable diff.
 - **Confidence without a fuzzer.** External contract fuzzers (Schemathesis,
   Dredd / Prism) are Python / Node and clash with the node-free posture;
   autodocodec gives conformance largely *by construction*, backed by `hedgehog`
@@ -131,17 +133,18 @@ single library covers both for a raw-WAI server (the trade we accept for
   `501`, unknown → `404`, a denial → `403`). This is the node-free stand-in for an
   external contract fuzzer (Schemathesis / Dredd / Prism), which we avoid.
 
-**Change visibility — a golden snapshot.** The spec is generated at build time and
-**committed** (it is the same artifact the docs build publishes), so a contract change
-must show up as a diff or CI fails. A **golden snapshot** — the spec generated from a
-**fixed canonical config** (known mounts /
-base URLs, so it captures *code-level* changes and does not churn on per-environment
-config), committed and compared in CI — turns every contract change into a
-**reviewed, line-level diff** and fails CI until it is regenerated. It is a
-tripwire, not a correctness guarantee; but for a tool whose synthesized-packument
-schema *is* the documented trust boundary, a reviewer should see that schema move
-the day it moves. An `openapi-diff` step that classifies breaking vs additive
-changes is the natural upgrade — and still needs a stored prior, i.e. the golden.
+**Change visibility — structural, not a committed snapshot.** The spec is **derived
+build data** — a pure function of the `Route` enumeration and the owned schemas,
+regenerated from a **fixed canonical config** at publish time — so it is **not
+committed**, and there is no stored golden to diff against. Visibility comes instead
+from the structural controls above: the `Route` ↔ operation exhaustiveness check and
+the `validateToJSON` properties fail the day the documented surface or an owned schema
+diverges from the code, and the live-status contract ties the documented statuses to
+what the server actually returns. For a tool whose synthesized-packument schema *is*
+the documented trust boundary, that schema cannot move without a code change a
+reviewer already sees. An `openapi-diff` step classifying breaking vs additive changes
+remains a possible future addition, comparing a regenerated spec against a prior
+build rather than a committed file.
 
 ## Config as JSON Schema (a free corollary)
 

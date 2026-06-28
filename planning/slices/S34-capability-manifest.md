@@ -9,7 +9,7 @@ arch-refs:
   - docs/architecture/api-surface.md
   - docs/architecture/web-layer.md#capability-manifest
   - docs/architecture/hosting.md#capability-manifest
-pr: null
+pr: 427
 ---
 
 # S34 — Capability manifest (OpenAPI) — static generation + docs publish
@@ -33,14 +33,39 @@ full rationale (a capability manifest, **not** a client-integration contract).
 > on the docs site, exactly like the rendered Markdown and the Haddock. This removes
 > `/openapi.json` from M2's web front door.
 
+> **As-built (PR 1 of the S34 delivery — generation core).** Delivered: the deps
+> (`autodocodec`/`autodocodec-openapi3`/`openapi3`, plus `aeson-pretty`,
+> `insert-ordered-containers`, `http-media`); the pure `Ecluse.Manifest` assembly
+> (`buildOpenApi :: ManifestSource -> OpenApi`) folding the closed `Route` over the
+> mounts; the owned `ErrorEnvelope` schema (one `autodocodec` codec → `aeson` + OpenAPI)
+> and the hand-written partial synthesized-packument `ToSchema`; the `openapi-gen`
+> generator **plus the `ecluse-manifest` internal sublibrary that holds the assembly**
+> (so the OpenAPI dependency tree stays out of the shipped `ecluse` app / `exe:ecluse`
+> proxy closure); a deterministic artifact generated to **`openapi/openapi.json`**
+> (**git-ignored** — it is derived build data, regenerated on demand by `cabal run
+> openapi-gen`, not committed); and unit tests (`test/unit/Ecluse/ManifestSpec.hs`).
+> The Redoc render + `make site`/Pages publishing is **PR 2** (which runs the
+> generator at publish time, since the artifact is not committed); the structural
+> drift controls (`validateToJSON`, `Route`↔operation exhaustiveness, the `hspec-wai`
+> live-status contract) are **S35 (PR 3)**. Status stays `not-started` until PR 2
+> closes the render/publish half (the repo has no in-progress status value).
+> **Config-as-JSON-Schema is cut** (architect decision, recorded in the owned-schemas
+> AC): the manifest is config-agnostic, so the config model defines no `autodocodec`
+> codec and the strict hand-rolled config decoders are untouched.
+
 **Acceptance criteria.**
-- [ ] **Owned schemas via `autodocodec`.** The error/denial envelope (S11, via S12),
-  the **synthesized packument** (the served merged-and-filtered view — S14, over the
-  S06 wire type), and the config model (S03) define their JSON via `autodocodec`,
-  deriving `aeson` instances *and* the OpenAPI/JSON-Schema from one codec (no drift).
-  The synthesized packument is a **partial** schema: modelled known/transformed
-  fields + `additionalProperties: true` with the "relayed from upstream, private
-  wins" note. — _api-surface.md#the-synthesized-packument-schema--the-trust-boundary_
+- [ ] **Owned schemas.** The error/denial envelope (S11, via S12) is an owned
+  code-first type whose `aeson` instances *and* OpenAPI schema derive from one
+  `autodocodec` codec; the **synthesized packument** (the served merged-and-filtered
+  view — S14, over the S06 wire type) is a **partial, hand-written** schema: modelled
+  known/transformed fields + `additionalProperties: true` with the "relayed from
+  upstream, private wins" note. —
+  _api-surface.md#the-synthesized-packument-schema--the-trust-boundary_
+  - **Config-as-JSON-Schema is cut (architect decision):** the OpenAPI manifest is
+    **config-agnostic** — a config schema would be an orphan in `components.schemas`,
+    documenting no operation. If an operator config schema is ever wanted it is a
+    **separate artifact** (a hand-written `ToSchema`; the strict hand-rolled config
+    decoders stay untouched). The config model defines **no** `autodocodec` codec here.
 - [ ] **Paths derived from `Route` × mounts.** Operations are folded from the closed
   `Route` enumeration (`Ecluse.Core.Server.Route`) over the configured mounts; each
   mount contributes its per-ecosystem path template + support status. **`Search` is
@@ -54,8 +79,9 @@ full rationale (a capability manifest, **not** a client-integration contract).
   config** and writes `openapi.json`. The assembly is a **pure** function of (config,
   mounts) — **no WAI route, not wired into the running app.** Output is
   **deterministic** (stable key ordering, fixed base URLs) so the artifact is
-  byte-reproducible across machines and a committed copy yields a meaningful diff
-  (this is the same artifact S35's golden snapshot guards — the two converge).
+  byte-reproducible across machines. It is **derived build data** (a pure function of
+  the source), so it is **generated on demand, not committed**; drift is caught by
+  S35's structural controls, not a committed snapshot.
 - [ ] **Rendered & published in CI, node-free.** `make docs-site` / `make site`
   render the spec to a static **Redoc** page and stage it into `./_site` next to the
   Haddock, and `openapi.json` itself is published at a stable URL. The Redoc bundle is
@@ -65,18 +91,23 @@ full rationale (a capability manifest, **not** a client-integration contract).
   `pages.yml` workflow publishes it on push to `main` with the rest of the site.
 
 **File scope.**
-- `src/Ecluse/App/Manifest.hs` (app library) — assemble the `openapi3` document
-  (owned schemas + the `Route` × mount path fold) as a **pure** `Config -> OpenApi`
-  function. (Module name indicative; the exact home follows the `ecluse-core` /
-  `ecluse` split — the `Route` enumeration lives in `ecluse-core`, the config/mounts
-  in the app, so the assembly sits in the app library that composes both.) **No
+- `manifest/Ecluse/Manifest.hs` (the **`ecluse-manifest` internal sublibrary**) —
+  assemble the `openapi3` document (owned schemas + the `Route` × mount path fold) as a
+  **pure** `ManifestSource -> OpenApi` function. The sublibrary (the
+  `ecluse-test-support` pattern) carries the heavy OpenAPI dependency tree and is
+  depended on **only** by the generator and the unit test — **not** by the `ecluse`
+  app library, so `openapi3` never reaches the shipped proxy. It links `ecluse-core`
+  (the `Route` enumeration and the served types), not the app library. **No
   `/openapi.json` handler.**
-- `core/src/Ecluse/Core/Server/Response.hs`, the app config model, the npm served
-  view — *additive* `autodocodec` codecs for the owned types (no behaviour change to
-  existing decoders; keep npm **inbound** wire decoding lenient `aeson`).
-- `ecluse.cabal` — a `openapi-gen` executable component (the generator), kept out of
-  the library closure (cf the `ecluse-bench` / `bench-load` precedent).
-- `test/unit/Ecluse/App/ManifestSpec.hs` — the document validates; every `Route`
+- The owned error/denial envelope is a **new code-first type** in the sublibrary
+  (`ErrorEnvelope`, via one `autodocodec` codec). **No** `autodocodec` codecs are
+  added to `core/src/Ecluse/Core/Server/Response.hs`, the config model, or the npm
+  served view; npm **inbound** wire decoding stays lenient `aeson` and the renderer is
+  unchanged.
+- `ecluse.cabal` — the `ecluse-manifest` sublibrary plus an `openapi-gen` executable
+  (the generator), both kept out of the app-library closure (cf the `ecluse-bench` /
+  `bench-load` precedent and `ecluse-test-support`).
+- `test/unit/Ecluse/ManifestSpec.hs` — the document validates; every `Route`
   constructor × mount appears; `Search` carries `501`; `hedgehog` round-trips the
   owned codecs (conformance-by-construction in lieu of an external fuzzer). _No
   `hspec-wai` serving test for the manifest — it is not served._
@@ -104,13 +135,13 @@ generator runs against.
   [web-layer.md → raw WAI](../../docs/architecture/web-layer.md#raw-wai-not-a-web-framework).
 - **Generator-as-executable** mirrors the benchmark components: a non-library
   component, out of the app's dependency closure, run at build time. Static generation
-  means the *only* consumer of the assembly function is this generator (and the S35
-  golden) — no runtime surface.
+  means the *only* consumers of the assembly function are this generator and the unit
+  tests — no runtime surface.
 - **Determinism is load-bearing.** `openapi3` keeps paths/definitions in insertion
   order (`InsOrdHashMap`), but the JSON encode must pin object-key ordering (e.g.
   `aeson-pretty` with `confCompare = compare`, or an explicit ordering) so the
-  committed/published artifact is byte-stable and the S35 golden diff is meaningful.
-  Generate from a **fixed canonical config** (known mounts / base URLs), never a live
+  published artifact is byte-stable and a regeneration is a reviewable diff. Generate
+  from a **fixed canonical config** (known mounts / base URLs), never a live
   deployment, or it churns on per-environment values.
 - **New deps:** `autodocodec` (+ `autodocodec-openapi3`) and `openapi3` — record in
   [technology-stack.md](../../docs/architecture/technology-stack.md#technology-stack).

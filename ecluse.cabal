@@ -216,6 +216,42 @@ executable ecluse
   hs-source-dirs: app
   build-depends:  ecluse
 
+-- The capability-manifest assembly: the pure (ManifestSource -> OpenApi) builder
+-- and the owned schemas. An INTERNAL sublibrary (the ecluse-test-support pattern)
+-- so the heavy OpenAPI dependency tree (openapi3 + autodocodec + lens/optics/…)
+-- stays OUT of the shipped `library ecluse` / `executable ecluse` closure: it is
+-- depended on only by the openapi-gen generator and the ecluse-unit test suite,
+-- never by the app library. It links ecluse-core (the Route enumeration and the
+-- served types), not the app library.
+library ecluse-manifest
+  import:          shared
+  hs-source-dirs:  manifest
+  exposed-modules: Ecluse.Manifest
+  build-depends:
+    , ecluse:ecluse-core
+    , aeson                      ^>=2.2
+    , aeson-pretty               ^>=0.8
+    , autodocodec                ^>=0.5
+    , autodocodec-openapi3       ^>=0.3
+    , http-media                 ^>=0.8
+    , insert-ordered-containers  ^>=0.2
+    , openapi3                   ^>=3.2
+    , text                       ^>=2.1
+
+-- The capability-manifest generator: a build-time component that assembles the
+-- OpenAPI document (Ecluse.Manifest) from the fixed canonical source and writes
+-- the committed openapi.json. It depends on the ecluse-manifest sublibrary, NOT the
+-- app library, so the OpenAPI dependency tree never reaches the running proxy. Run
+-- with `cabal run openapi-gen`.
+executable openapi-gen
+  import:         shared
+  main-is:        Main.hs
+  hs-source-dirs: gen
+  build-depends:
+    , directory          ^>=1.3
+    , ecluse:ecluse-manifest
+    , filepath           ^>=1.5
+
 -- Internal test-support library shared by every suite below. The common home
 -- for cross-suite helpers, fixtures, and specs; it links against the library
 -- under test so shared fixtures can build domain values directly.
@@ -332,6 +368,7 @@ test-suite ecluse-unit
     Ecluse.ConfigSpec
     Ecluse.EnvSpec
     Ecluse.LogSpec
+    Ecluse.ManifestSpec
     Ecluse.ServerSpec
     Ecluse.TelemetrySpec
     Ecluse.Telemetry.CorrelationSpec
@@ -344,17 +381,23 @@ test-suite ecluse-unit
   build-depends:
     , ecluse
     , ecluse:ecluse-core
+    , ecluse:ecluse-manifest
     , ecluse:ecluse-test-support
     , aeson             ^>=2.2
+    , autodocodec       ^>=0.5
     , bytestring        ^>=0.12
     , cache             ^>=0.1.3
     , case-insensitive  ^>=1.2
     , containers        ^>=0.7
     , crypton           ^>=1.0
     , envparse          >=0.5 && <0.7
+    , hedgehog          ^>=1.5
     , hspec             ^>=2.11
+    , hspec-hedgehog    ^>=0.3
     , hspec-wai         ^>=0.11
     , http-client       ^>=0.7
+    , insert-ordered-containers  ^>=0.2
+    , openapi3          ^>=3.2
     , http-types        ^>=0.12
     , hs-opentelemetry-api  ^>=1.0
     , hs-opentelemetry-exporter-in-memory  ^>=1.0

@@ -5,6 +5,10 @@ dist-coverage/
 .hpc/
 .direnv/
 _site/
+# The OpenAPI capability manifest is derived build-artifact data — a pure function
+# of the Route enum + owned schemas — regenerated on demand by `cabal run openapi-gen`
+# (and at docs-publish time), so it is not committed.
+/openapi/
 result
 result-*
 /sbom/
