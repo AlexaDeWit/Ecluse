@@ -41,12 +41,14 @@ full rationale (a capability manifest, **not** a client-integration contract).
 > and the hand-written partial synthesized-packument `ToSchema`; the `openapi-gen`
 > generator **plus the `ecluse-manifest` internal sublibrary that holds the assembly**
 > (so the OpenAPI dependency tree stays out of the shipped `ecluse` app / `exe:ecluse`
-> proxy closure); the committed deterministic artifact at **`openapi/openapi.json`**;
-> and unit tests (`test/unit/Ecluse/ManifestSpec.hs`). The Redoc render + `make
-> site`/Pages publishing is **PR 2**; the drift controls (`validateToJSON`,
-> `Route`↔operation exhaustiveness, the `hspec-wai` live-status contract, the CI
-> golden-regen gate) are **S35 (PR 3)**. Status stays `not-started` until PR 2 closes
-> the render/publish half (the repo has no in-progress status value).
+> proxy closure); a deterministic artifact generated to **`openapi/openapi.json`**
+> (**git-ignored** — it is derived build data, regenerated on demand by `cabal run
+> openapi-gen`, not committed); and unit tests (`test/unit/Ecluse/ManifestSpec.hs`).
+> The Redoc render + `make site`/Pages publishing is **PR 2** (which runs the
+> generator at publish time, since the artifact is not committed); the structural
+> drift controls (`validateToJSON`, `Route`↔operation exhaustiveness, the `hspec-wai`
+> live-status contract) are **S35 (PR 3)**. Status stays `not-started` until PR 2
+> closes the render/publish half (the repo has no in-progress status value).
 > **Config-as-JSON-Schema is cut** (architect decision, recorded in the owned-schemas
 > AC): the manifest is config-agnostic, so the config model defines no `autodocodec`
 > codec and the strict hand-rolled config decoders are untouched.
@@ -77,8 +79,9 @@ full rationale (a capability manifest, **not** a client-integration contract).
   config** and writes `openapi.json`. The assembly is a **pure** function of (config,
   mounts) — **no WAI route, not wired into the running app.** Output is
   **deterministic** (stable key ordering, fixed base URLs) so the artifact is
-  byte-reproducible across machines and a committed copy yields a meaningful diff
-  (this is the same artifact S35's golden snapshot guards — the two converge).
+  byte-reproducible across machines. It is **derived build data** (a pure function of
+  the source), so it is **generated on demand, not committed**; drift is caught by
+  S35's structural controls, not a committed snapshot.
 - [ ] **Rendered & published in CI, node-free.** `make docs-site` / `make site`
   render the spec to a static **Redoc** page and stage it into `./_site` next to the
   Haddock, and `openapi.json` itself is published at a stable URL. The Redoc bundle is
@@ -132,13 +135,13 @@ generator runs against.
   [web-layer.md → raw WAI](../../docs/architecture/web-layer.md#raw-wai-not-a-web-framework).
 - **Generator-as-executable** mirrors the benchmark components: a non-library
   component, out of the app's dependency closure, run at build time. Static generation
-  means the *only* consumer of the assembly function is this generator (and the S35
-  golden) — no runtime surface.
+  means the *only* consumers of the assembly function are this generator and the unit
+  tests — no runtime surface.
 - **Determinism is load-bearing.** `openapi3` keeps paths/definitions in insertion
   order (`InsOrdHashMap`), but the JSON encode must pin object-key ordering (e.g.
   `aeson-pretty` with `confCompare = compare`, or an explicit ordering) so the
-  committed/published artifact is byte-stable and the S35 golden diff is meaningful.
-  Generate from a **fixed canonical config** (known mounts / base URLs), never a live
+  published artifact is byte-stable and a regeneration is a reviewable diff. Generate
+  from a **fixed canonical config** (known mounts / base URLs), never a live
   deployment, or it churns on per-environment values.
 - **New deps:** `autodocodec` (+ `autodocodec-openapi3`) and `openapi3` — record in
   [technology-stack.md](../../docs/architecture/technology-stack.md#technology-stack).
