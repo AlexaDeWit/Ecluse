@@ -7,14 +7,17 @@ name: Cache cleanup
 # branch-scoped copies is gone. This workflow is the housekeeping backstop that
 # handles what that policy can't, on a schedule:
 #
-#   * stragglers on non-main refs — e.g. the dist-docs cache a PR's docs job still
-#     writes, or anything left by a deleted/After-merge branch; and
+#   * stragglers on non-main refs — anything a non-main run left behind (e.g. an
+#     entry from a deleted/after-merge branch); and
 #   * superseded main entries — once a dependency epoch advances (flake.lock /
 #     cabal.project / cabal.project.freeze change), the previous epoch's
 #     immutable-keyed cabal-store / dist-* / nix entries are dead weight.
 #
 # It keeps the newest KEEP_PER_PREFIX entries per key prefix on main (current +
-# one fallback for in-flight runs and quick rollback) and deletes the rest.
+# one fallback for in-flight runs and quick rollback) and deletes the rest. The
+# Pages doc-variant caches (the `-docs-` prefixes) keep only KEEP_DOCS instead —
+# they are the heaviest entries, change only on a dependency bump, and Pages is
+# their serial single writer, so a second epoch buys little (see prune-caches.sh).
 # Deleting caches needs `actions: write`; everything else is least-privilege.
 
 on:
@@ -40,6 +43,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       REPO: ${{ github.repository }}
       KEEP_PER_PREFIX: "2" # newest N per key prefix to retain on main
+      KEEP_DOCS: "1" # the heavy Pages `-docs-` caches retain only the current epoch
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
