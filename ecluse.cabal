@@ -26,8 +26,11 @@ build-type:    Simple
 -- bench/corpus/npm/*.json is the curated real-world packument corpus the benchmarks
 -- read at run time (frozen data, pinned by bench/corpus/pins.json and re-captured
 -- deliberately with `make gen-bench-corpus`; see docs/architecture/performance.md).
+-- bench/corpus/pins.json is the shared registry catalogue (capture pins + the smoke
+-- curated names) read by the Node capture script and Ecluse.Test.RegistryCapture.
 extra-source-files:
   bench/corpus/npm/*.json
+  bench/corpus/pins.json
   core/test/unit/fixtures/npm/*.json
   core/test/unit/fixtures/version-ordering.txt
 
@@ -266,14 +269,19 @@ library ecluse-test-support
   exposed-modules:
     Ecluse.Test.Package
     Ecluse.Test.Port
+    Ecluse.Test.RegistryCapture
     Ecluse.Test.Support
     Ecluse.Test.Version
 
   build-depends:
     , ecluse:ecluse-core
-    , hedgehog  ^>=1.5
-    , hspec     ^>=2.11
-    , text      ^>=2.1
+    , aeson        ^>=2.2
+    , bytestring   ^>=0.12
+    , containers   ^>=0.7
+    , hedgehog     ^>=1.5
+    , hspec        ^>=2.11
+    , http-client  ^>=0.7
+    , text         ^>=2.1
 
 -- Core unit tests: cover every Ecluse.Core.* module. Pure, fast, deterministic. Gating.
 -- MUST NOT list the `ecluse` app library in build-depends: its absence is the partition
@@ -317,6 +325,7 @@ test-suite ecluse-core-unit
     Ecluse.Server.RouteSpec
     Ecluse.Server.StreamSpec
     Ecluse.Telemetry.MetricsSpec
+    Ecluse.Test.RegistryCaptureSpec
     Ecluse.Test.SupportLinkageSpec
     Ecluse.TextSpec
     Ecluse.VersionOrderingSpec

@@ -1,5 +1,5 @@
 {
-  "_note": "Frozen benchmark-corpus pins — NOT an npm project, NOT installed, and NOT Renovate-managed (Renovate ignores bench/corpus/**). Each entry pins a package@version; `make gen-bench-corpus` captures that packument into bench/corpus/npm/<pkg>.full.json. The captures are committed, frozen data; refresh is a deliberate, manual re-capture (rerun the script and review the diff), never an automatic bump. The set is substantial, many-version packages spanning medium->heavy (trivial few-version packages stress nothing, so they are excluded). See docs/architecture/performance.md.",
+  "_note": "Shared registry catalogue — the ONE curated source read by both the Node corpus-capture script (scripts/gen-bench-corpus.sh) and the Haskell Ecluse.Test.RegistryCapture. NOT an npm project, NOT installed, and NOT Renovate-managed (Renovate ignores bench/corpus/**). `pins`: frozen benchmark-corpus capture pins — each entry pins a package@version that `make gen-bench-corpus` captures into bench/corpus/npm/<pkg>.full.json; the captures are committed, frozen data, refreshed only by a deliberate, manual re-capture (rerun the script and review the diff), never an automatic bump. The set is substantial, many-version packages spanning medium->heavy (trivial few-version packages stress nothing, so they are excluded). `smokeNames`: curated gnarly-version package names per ecosystem for the non-gating version-oracle smoke differential — only the names are pinned here, their version lists are fetched live (prereleases kept, since ordering is the point). See docs/architecture/performance.md.",
   "pins": {
     "lodash": "4.18.1",
     "request": "2.88.2",
@@ -9,5 +9,10 @@
     "@aws-sdk/client-s3": "3.1075.0",
     "webpack": "5.108.1",
     "@types/node": "26.0.1"
+  },
+  "smokeNames": {
+    "npm": ["typescript", "eslint", "@types/node", "react", "webpack", "next", "rxjs", "lodash"],
+    "pypi": ["numpy", "requests", "django", "boto3", "urllib3", "setuptools", "pip"],
+    "rubygems": ["rails", "bundler", "nokogiri", "rspec", "activesupport"]
   }
 }
