@@ -72,6 +72,14 @@ data MetricsPort = MetricsPort
     -}
     , mpCacheEntries :: Int -> IO ()
     -- ^ Record the metadata cache's current occupancy (@ecluse.metadata_cache.entries@).
+    , mpCacheResidentBytes :: Int -> IO ()
+    {- ^ Record the full-packument metadata cache's resident bytes
+    (@ecluse.metadata_cache.resident_bytes@).
+    -}
+    , mpVersionCacheResidentBytes :: Int -> IO ()
+    {- ^ Record the single-version metadata cache's resident bytes
+    (@ecluse.metadata_cache.version.resident_bytes@).
+    -}
     , mpMirrorEnqueued :: IO ()
     -- ^ Record one mirror job enqueued (@ecluse.mirror.enqueued@).
     , mpMirrorEnqueueFailure :: IO ()

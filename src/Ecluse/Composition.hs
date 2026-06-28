@@ -844,4 +844,5 @@ cacheConfigFor env =
     CacheConfig
         { cacheTtl = cfgCacheTtl env
         , cacheMaxEntries = cfgCacheMaxEntries env
+        , cacheMaxBytes = cfgCacheMaxBytes env
         }

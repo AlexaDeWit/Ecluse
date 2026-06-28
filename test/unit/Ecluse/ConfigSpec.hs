@@ -149,6 +149,7 @@ fullEnv =
     , ("CVE_SYNC_INTERVAL_SECONDS", "60")
     , ("METADATA_CACHE_TTL_SECONDS", "30")
     , ("METADATA_CACHE_MAX_ENTRIES", "256")
+    , ("METADATA_CACHE_MAX_BYTES", "134217728")
     , ("PROXY_MAX_RESPONSE_BYTES", "1048576")
     , ("PROXY_MAX_VERSION_COUNT", "5000")
     , ("PROXY_MAX_NESTING_DEPTH", "32")
@@ -204,6 +205,7 @@ envLayerSpec = describe "parseEnvPure" $ do
                 cfgCveSyncInterval cfg `shouldBe` (60 :: NominalDiffTime)
                 cfgCacheTtl cfg `shouldBe` (30 :: NominalDiffTime)
                 cfgCacheMaxEntries cfg `shouldBe` 256
+                cfgCacheMaxBytes cfg `shouldBe` 134217728
                 cfgMaxResponseBytes cfg `shouldBe` 1048576
                 cfgMaxVersionCount cfg `shouldBe` 5000
                 cfgMaxNestingDepth cfg `shouldBe` 32
@@ -231,6 +233,8 @@ envLayerSpec = describe "parseEnvPure" $ do
                 cfgCveSyncInterval cfg `shouldBe` (3600 :: NominalDiffTime)
                 cfgCacheTtl cfg `shouldBe` (60 :: NominalDiffTime)
                 cfgCacheMaxEntries cfg `shouldBe` 1024
+                -- The resident-byte budget defaults to 256 MiB.
+                cfgCacheMaxBytes cfg `shouldBe` 256 * 1024 * 1024
                 -- The response-bound budget defaults to Ecluse.Core.Security.defaultLimits:
                 -- a 12 MiB body, 100k versions, 64 levels of nesting.
                 cfgMaxResponseBytes cfg `shouldBe` 12 * 1024 * 1024

@@ -445,6 +445,12 @@ data EnvConfig = EnvConfig
     {- ^ The metadata cache's bound on the number of distinct packages held before
     it evicts (@METADATA_CACHE_MAX_ENTRIES@, default 1024) — a flood safety valve.
     -}
+    , cfgCacheMaxBytes :: Int
+    {- ^ The metadata cache's resident-byte budget: the estimated resident size the held
+    entries are kept under before the least-recently-used are evicted
+    (@METADATA_CACHE_MAX_BYTES@, default 256 MiB). Bounds cache memory more faithfully
+    than the entry count, since a heavy packument costs many times its wire size.
+    -}
     , cfgMaxResponseBytes :: Int
     {- ^ The largest upstream metadata body, in bytes, the data plane buffers before
     aborting the fetch (@PROXY_MAX_RESPONSE_BYTES@, default 12 MiB — 'maxBodyBytes'
@@ -596,6 +602,10 @@ envParser =
         -- "off" setting; see cfgCacheTtl.
         <*> Env.var secondsReader "METADATA_CACHE_TTL_SECONDS" (Env.def defaultCacheTtl)
         <*> Env.var positiveIntReader "METADATA_CACHE_MAX_ENTRIES" (Env.def defaultCacheMaxEntries)
+        -- The cache's resident-byte budget: strictly positive, rejected loudly like
+        -- METADATA_CACHE_MAX_ENTRIES (a zero-byte cache could hold nothing, a bug rather
+        -- than a knob; the TTL is the deliberate "off" switch).
+        <*> Env.var positiveIntReader "METADATA_CACHE_MAX_BYTES" (Env.def defaultCacheMaxBytes)
         -- The response-bound budget (security.md invariant 4), each defaulting to the
         -- corresponding field of 'Ecluse.Core.Security.defaultLimits'. Every one must be a
         -- strictly positive integer: a zero or negative ceiling is a degenerate budget
@@ -633,6 +643,9 @@ envParser =
 
     defaultCacheMaxEntries :: Int
     defaultCacheMaxEntries = 1024
+
+    defaultCacheMaxBytes :: Int
+    defaultCacheMaxBytes = 256 * 1024 * 1024
 
     defaultCveSyncInterval :: NominalDiffTime
     defaultCveSyncInterval = 3600

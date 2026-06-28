@@ -53,11 +53,15 @@ resilience posture: a brand-new publish need not appear instantly (see
 
 Two properties the @cache@ library does not provide on its own are layered here:
 
-* __Size bound.__ @cache@ expires by TTL but never bounds entry count, so an
-  insert that would exceed 'cacheMaxEntries' first purges expired entries and then
-  evicts surplus ones — a safety valve against unbounded growth under a flood of
-  distinct packages, not a precision LRU (eviction order among live entries is
-  unspecified).
+* __Resident-byte budget with recency-aware eviction.__ @cache@ expires by TTL but bounds
+  neither entry count nor memory. Each entry is wrapped with an estimate of its resident
+  footprint (a heavy packument, parsed plus raw, costs many times its wire size) and a
+  last-access stamp bumped on every hit. An insert first purges expired entries, then evicts
+  the __least-recently-used__ entries until the incoming entry fits within both a
+  resident-byte budget ('cacheMaxBytes') and an entry count ('cacheMaxEntries'). Evicting by
+  recency keeps a re-accessed hot head resident under pressure while shedding the one-shot
+  tail; the byte budget bounds memory more faithfully than a count alone. The incoming entry
+  is always admitted (the per-entry ceiling is the upstream body cap, not this budget).
 
 * __Single-flight.__ @cache@'s own @fetchWithCache@ is lookup-then-fetch in plain
   'IO', so two concurrent misses would both fetch. 'resolveMetadata' instead
@@ -89,9 +93,10 @@ full-packument store __read-only__ first (a packument @GET@ followed by its tarb
 still collapses to one upstream call), and only falls back to leading its own
 selective fetch into the version store when the full entry is cold — so the version store
 holds entries for versions whose packument was never fetched in full, sized to the same
-short TTL and bound. The single-version store is not yet separately metered (the
-@ecluse.metadata_cache.*@ instruments stay about the full-packument store); that is a
-noted follow-up.
+short TTL and budget. Both stores enforce the resident-byte budget, and each reports its own
+residency gauge: the full-packument store under @ecluse.metadata_cache.resident_bytes@ and
+the single-version store under @ecluse.metadata_cache.version.resident_bytes@. The
+hit\/miss counter and the entry-count occupancy gauge stay about the full-packument store.
 -}
 module Ecluse.Core.Server.Cache (
     -- * Configuration
@@ -105,6 +110,7 @@ module Ecluse.Core.Server.Cache (
     -- * Cache entries
     Source (..),
     CacheEntry (..),
+    weighCacheEntry,
 
     -- * Resolution
     resolveMetadata,
@@ -118,7 +124,8 @@ module Ecluse.Core.Server.Cache (
     cachedVersion,
 ) where
 
-import Data.Aeson (Value)
+import Data.Aeson (Value, encode)
+import Data.ByteString.Lazy qualified as BSL
 import Data.Cache (Cache)
 import Data.Cache qualified as Cache
 import Data.Map.Strict qualified as Map
@@ -138,14 +145,20 @@ import Ecluse.Core.Package (
     renderScope,
  )
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
-import Ecluse.Core.Telemetry.Record (MetricsPort, mpCacheEntries, mpCacheRequest)
+import Ecluse.Core.Telemetry.Record (
+    MetricsPort,
+    mpCacheEntries,
+    mpCacheRequest,
+    mpCacheResidentBytes,
+    mpVersionCacheResidentBytes,
+ )
 import Ecluse.Core.Version (Version, renderVersion)
 
 -- ── configuration ────────────────────────────────────────────────────────────
 
 {- | The metadata cache's tunables, sourced from configuration: how long a parsed
-packument stays fresh, and how many distinct @(source, package)@ entries the cache
-holds before it evicts.
+packument stays fresh, how many distinct @(source, package)@ entries the cache holds,
+and the resident-byte budget it keeps the held entries under before it evicts.
 -}
 data CacheConfig = CacheConfig
     { cacheTtl :: NominalDiffTime
@@ -156,18 +169,27 @@ data CacheConfig = CacheConfig
     {- ^ The maximum number of distinct @(source, package)@ entries held; an insert
     past this evicts.
     -}
+    , cacheMaxBytes :: Int
+    {- ^ The resident-byte budget the held entries are kept under. Each entry is
+    weighted by an estimate of its resident footprint, and an insert past this evicts
+    the least-recently-used entries until the budget holds. A heavy packument (the
+    parsed view plus its raw document) costs many times its wire size, so this bounds
+    memory more faithfully than the entry count alone.
+    -}
     }
     deriving stock (Eq, Show)
 
-{- | The default cache tunables: a 60-second TTL and 1024 entries — short enough
-that a new publish appears promptly, large enough to absorb a normal install's
-working set of packages.
+{- | The default cache tunables: a 60-second TTL, 1024 entries, and a 256 MiB resident
+budget: short enough that a new publish appears promptly, and large enough to hold a
+normal install's working set of packages while capping the resident memory a handful of
+heavy packuments could otherwise dominate.
 -}
 defaultCacheConfig :: CacheConfig
 defaultCacheConfig =
     CacheConfig
         { cacheTtl = 60
         , cacheMaxEntries = 1024
+        , cacheMaxBytes = 256 * 1024 * 1024
         }
 
 -- ── cache entries ──────────────────────────────────────────────────────────────
@@ -198,6 +220,49 @@ data CacheEntry = CacheEntry
     -- ^ The raw upstream document the served body is built from, edited in place.
     }
     deriving stock (Eq, Show)
+
+{- | Estimate a 'CacheEntry'\'s resident footprint in bytes as a fixed multiple of its raw
+document's compact-encoded byte length. The resident cost (the parsed 'PackageInfo' plus the
+raw 'Value') is a near-constant multiple of the document's size, so re-encoding the raw
+'Value' and scaling it estimates the footprint without measuring the parsed structure. The
+encode is an @O(document)@ pass run only on a leader's insert (the cold path after a fetch),
+never on a hit. The multiplier is set at the high end of the observed resident-to-encoded
+ratio so the estimate is an upper bound: a memory budget must not systematically under-count.
+-}
+weighCacheEntry :: CacheEntry -> Int
+weighCacheEntry e = weighEncodedBytes (BSL.length (encode (entryRaw e)))
+
+{- | Estimate a single-version entry's resident footprint in bytes. A present version's
+'PackageDetails' is a single bounded manifest, so it is weighted at a flat per-version
+figure; a cached determined absence (a negative entry) carries only a small fixed overhead.
+The single-version store holds no raw document, so its weight is a fixed estimate rather than
+an encoded-size multiple.
+-}
+weighVersion :: Maybe PackageDetails -> Int
+weighVersion = \case
+    Just _ -> versionEntryBytes
+    Nothing -> negativeEntryBytes
+
+-- Scale a raw document's encoded byte length to an estimated resident footprint. The factor
+-- is 7.5 (applied as a halved integer to stay in 'Int' arithmetic): it sits at the high end
+-- of the measured resident-to-encoded ratio, so the estimate upper-bounds resident bytes and
+-- the budget never under-counts (leaner documents are over-estimated, which only over-evicts).
+weighEncodedBytes :: Int64 -> Int
+weighEncodedBytes encodedLen = fromIntegral (encodedLen * residentRatioNumerator `div` residentRatioDenominator)
+
+residentRatioNumerator :: Int64
+residentRatioNumerator = 15
+
+residentRatioDenominator :: Int64
+residentRatioDenominator = 2
+
+-- The flat resident estimate for a present single-version entry (one bounded manifest) and
+-- for a cached determined absence (a small negative entry).
+versionEntryBytes :: Int
+versionEntryBytes = 16 * 1024
+
+negativeEntryBytes :: Int
+negativeEntryBytes = 1024
 
 -- ── the cache handle ─────────────────────────────────────────────────────────
 
@@ -245,31 +310,61 @@ newtype VersionKey = VersionKey Text
 versionKey :: Source -> PackageName -> Version -> VersionKey
 versionKey source name version = VersionKey (keyText source name <> "\x1f" <> renderVersion version)
 
-{- | One TTL- and STM-backed store with the size bound and the in-flight map that gives
-single-flight — the shape both the full-packument and single-version caches take, factored
-so the resolution machinery ('resolveSingleFlight') is written once over either.
+{- | A stored value paired with the bookkeeping the resident-byte budget and the
+recency-aware eviction need: the value\'s estimated resident weight, fixed at insert, and
+its last-access stamp, a per-entry cell bumped on each hit. The stamp lives outside the
+STM store so a hit updates recency without writing the shared container, and eviction reads
+it to pick the least-recently-used victim.
+-}
+data Weighted v = Weighted
+    { wValue :: v
+    -- ^ The cached value.
+    , wWeight :: Int
+    -- ^ The value's estimated resident footprint in bytes, fixed at insert.
+    , wStamp :: IORef Word64
+    -- ^ The value's last-access stamp; bumped on every hit, read by eviction.
+    }
+
+{- | One TTL- and STM-backed store with the resident-byte budget, the entry-count bound,
+and the in-flight map that gives single-flight: the shape both the full-packument and
+single-version caches take, factored so the resolution machinery ('resolveSingleFlight') is
+written once over either. Entries are wrapped in 'Weighted' so the byte budget and the
+least-recently-used eviction have the weight and access stamp they need.
 -}
 data SingleFlight k v = SingleFlight
-    { sfStore :: Cache k v
-    -- ^ The TTL- and STM-backed store (the @cache@ library).
+    { sfStore :: Cache k (Weighted v)
+    -- ^ The TTL- and STM-backed store (the @cache@ library), holding weighted values.
     , sfMaxEntries :: Int
     -- ^ The entry-count bound enforced on insert.
+    , sfMaxBytes :: Int
+    -- ^ The resident-byte budget enforced on insert.
+    , sfWeigh :: v -> Int
+    -- ^ Estimate a value's resident footprint in bytes, fixed into its 'Weighted' at insert.
+    , sfClock :: IORef Word64
+    {- ^ The store's logical access clock, bumped to issue each entry's recency stamp on
+    insert and on every hit.
+    -}
     , sfInFlight :: TVar (Map k (TMVar (Either SomeException v)))
     {- ^ Entries currently being fetched, so concurrent misses coalesce onto one
     fetch rather than each launching their own.
     -}
     }
 
--- Build a 'SingleFlight' store from the cache configuration. The TTL is converted to the
--- @cache@ library's monotonic 'TimeSpec'; the in-flight map starts empty.
-newSingleFlight :: CacheConfig -> IO (SingleFlight k v)
-newSingleFlight cfg = do
+-- Build a 'SingleFlight' store from the cache configuration and a value weigher. The TTL is
+-- converted to the @cache@ library's monotonic 'TimeSpec'; the access clock starts at zero
+-- and the in-flight map empty.
+newSingleFlight :: CacheConfig -> (v -> Int) -> IO (SingleFlight k v)
+newSingleFlight cfg weigh = do
     store <- Cache.newCache (Just (toTimeSpec (cacheTtl cfg)))
+    clock <- newIORef 0
     inFlight <- newTVarIO Map.empty
     pure
         SingleFlight
             { sfStore = store
             , sfMaxEntries = max 1 (cacheMaxEntries cfg)
+            , sfMaxBytes = max 1 (cacheMaxBytes cfg)
+            , sfWeigh = weigh
+            , sfClock = clock
             , sfInFlight = inFlight
             }
 
@@ -292,7 +387,10 @@ data MetadataCache = MetadataCache
 single-version store, each over the same TTL and size bound.
 -}
 newMetadataCache :: CacheConfig -> IO MetadataCache
-newMetadataCache cfg = MetadataCache <$> newSingleFlight cfg <*> newSingleFlight cfg
+newMetadataCache cfg =
+    MetadataCache
+        <$> newSingleFlight cfg weighCacheEntry
+        <*> newSingleFlight cfg weighVersion
 
 -- ── resolution ───────────────────────────────────────────────────────────────
 
@@ -328,7 +426,8 @@ fetch+parse is memoised, never the verdict.
 
 Each resolution records the @ecluse.metadata_cache.requests@ hit\/miss counter (a
 coalescing follower counts as a miss, like the leader it waits on), and a leader's
-insert refreshes the @ecluse.metadata_cache.entries@ occupancy gauge.
+insert refreshes the @ecluse.metadata_cache.entries@ occupancy gauge and the
+@ecluse.metadata_cache.resident_bytes@ residency gauge.
 -}
 resolveMetadata :: MetricsPort -> MetadataCache -> Source -> PackageName -> IO CacheEntry -> IO CacheEntry
 resolveMetadata = resolveMetadataWith (pure ())
@@ -345,7 +444,10 @@ resolveMetadataWith afterClaim metrics cache source name =
     resolveSingleFlight
         afterClaim
         (mpCacheRequest metrics)
-        (mpCacheEntries metrics =<< Cache.size (sfStore (mcFull cache)))
+        ( \occ -> do
+            mpCacheEntries metrics (occEntries occ)
+            mpCacheResidentBytes metrics (occBytes occ)
+        )
         (mcFull cache)
         (cacheKey source name)
 
@@ -358,41 +460,51 @@ the TTL.
 
 This writes to the single-version store only — never the full-packument store — so a cold
 tarball gate's selective parse cannot materialise a whole packument into the shared full
-cache. Unlike 'resolveMetadata', the single-version store is not separately metered (a
-noted follow-up), so this records no cache counter.
+cache. Unlike 'resolveMetadata', the single-version store records no hit\/miss counter; a
+leader's insert does refresh the single-version residency gauge
+(@ecluse.metadata_cache.version.resident_bytes@), so the byte budget that bounds both
+stores is observable on each.
 -}
-resolveVersion :: MetadataCache -> Source -> PackageName -> Version -> IO (Maybe PackageDetails) -> IO (Maybe PackageDetails)
+resolveVersion :: MetricsPort -> MetadataCache -> Source -> PackageName -> Version -> IO (Maybe PackageDetails) -> IO (Maybe PackageDetails)
 resolveVersion = resolveVersionWith (pure ())
 
 {- | As 'resolveVersion', with the single-flight claim → fetch-runner handoff hook
 'resolveMetadataWith' exposes, for the same orphan-window test (production passes @pure ()@
 via 'resolveVersion').
 -}
-resolveVersionWith :: IO () -> MetadataCache -> Source -> PackageName -> Version -> IO (Maybe PackageDetails) -> IO (Maybe PackageDetails)
-resolveVersionWith afterClaim cache source name version =
-    resolveSingleFlight afterClaim (const pass) pass (mcVersion cache) (versionKey source name version)
+resolveVersionWith :: IO () -> MetricsPort -> MetadataCache -> Source -> PackageName -> Version -> IO (Maybe PackageDetails) -> IO (Maybe PackageDetails)
+resolveVersionWith afterClaim metrics cache source name version =
+    resolveSingleFlight
+        afterClaim
+        (const pass)
+        (mpVersionCacheResidentBytes metrics . occBytes)
+        (mcVersion cache)
+        (versionKey source name version)
 
 {- The single-flight resolution shared by the full-packument and single-version caches: a
 fresh hit short-circuits; otherwise the caller leads one fetch (installing an in-flight
 marker) or follows an in-flight one. @recordRequest@ records the hit\/miss counter (or
-ignores it) and @recordInsert@ refreshes the occupancy gauge after a leader insert (or
-ignores it), so each store wires its own telemetry without the resolution logic knowing
-which it serves.
+ignores it) and @recordInsert@ refreshes the occupancy gauges from the post-insert
+'CacheOccupancy' after a leader insert (or ignores it), so each store wires its own
+telemetry without the resolution logic knowing which it serves.
 
-On a miss the fetch runs exactly once even under concurrent callers; a successful fetch is
-cached (subject to the TTL and size bound), a failed fetch caches __nothing__ and is
-re-raised to every waiter. A claimed slot is __always eventually filled and de-registered__
-even under an async exception in the claim → runner window: the claim commits under a
-'mask' and the run is handed straight to 'Ecluse.Core.InFlight.guardInFlight', which frees
-the slot on every exit and hands the orphaning error to any waiting follower (closing the
-single-flight orphan window). A follower's own wait stays interruptible. The result is
-inserted __before__ the slot is de-registered, so a caller arriving the instant the fetch
-returns becomes a follower rather than re-leading a redundant fetch. -}
+A hit bumps the entry's recency stamp before returning it, done in plain 'IO' so recency is
+updated without writing the shared STM store (and so a hit never contends with a concurrent
+resolution). On a miss the fetch runs exactly once even under concurrent callers; a
+successful fetch is cached (subject to the TTL, the entry-count bound, and the resident-byte
+budget), a failed fetch caches __nothing__ and is re-raised to every waiter. A claimed slot
+is __always eventually filled and de-registered__ even under an async exception in the
+claim → runner window: the claim commits under a 'mask' and the run is handed straight to
+'Ecluse.Core.InFlight.guardInFlight', which frees the slot on every exit and hands the
+orphaning error to any waiting follower (closing the single-flight orphan window). A
+follower's own wait stays interruptible. The result is inserted __before__ the slot is
+de-registered, so a caller arriving the instant the fetch returns becomes a follower rather
+than re-leading a redundant fetch. -}
 resolveSingleFlight ::
     (Hashable k, Ord k) =>
     IO () ->
     (Metric.CacheResult -> IO ()) ->
-    IO () ->
+    (CacheOccupancy -> IO ()) ->
     SingleFlight k v ->
     k ->
     IO v ->
@@ -404,9 +516,12 @@ resolveSingleFlight afterClaim recordRequest recordInsert sf key fetch = mask $ 
     -- and hands the run to 'guardInFlight' with no interruptible point between.
     decision <- atomically (decide nowT)
     case decision of
-        Hit entry -> do
+        Hit weighted -> do
             recordRequest Metric.Hit
-            pure entry
+            -- Bump recency outside the STM transaction: a hit updates the per-entry stamp
+            -- without writing the shared store, so the least-recently-used eviction sees it.
+            touch sf weighted
+            pure (wValue weighted)
         Follow marker -> do
             -- A follower coalesced onto an in-flight fetch is a miss for this caller
             -- (no fresh entry was present), exactly as the leader's miss is.
@@ -420,19 +535,19 @@ resolveSingleFlight afterClaim recordRequest recordInsert sf key fetch = mask $ 
             -- and, on a failure before the marker is filled, hands the error to followers
             -- via 'orphan'. The insert precedes de-registration, so "collapse to one fetch"
             -- holds even for a caller arriving the instant the fetch returns.
-            entry <- guardInFlight id (orphan marker) (atomically deregister) $ do
+            (entry, occupancy) <- guardInFlight id (orphan marker) (atomically deregister) $ do
                 fetched <- restore (afterClaim >> fetch)
                 atomically (putTMVar marker (Right fetched))
-                insertBounded sf key fetched
-                pure fetched
-            -- The leader inserted, so refresh the occupancy gauge (a follower never does).
-            recordInsert
+                occupancy <- insertBounded sf key fetched
+                pure (fetched, occupancy)
+            -- The leader inserted, so refresh the occupancy gauges (a follower never does).
+            recordInsert occupancy
             pure entry
   where
     decide nowT = do
         hit <- Cache.lookupSTM False key (sfStore sf) nowT
         case hit of
-            Just entry -> pure (Hit entry)
+            Just weighted -> pure (Hit weighted)
             Nothing -> do
                 inFlight <- readTVar (sfInFlight sf)
                 case Map.lookup key inFlight of
@@ -456,25 +571,70 @@ resolveSingleFlight afterClaim recordRequest recordInsert sf key fetch = mask $ 
         inFlight <- readTVar (sfInFlight sf)
         writeTVar (sfInFlight sf) (Map.delete key inFlight)
 
-{- | Insert a freshly fetched entry into a store, enforcing the size bound. Expired entries
-are purged first (the cheap reclaim); if the store is still at capacity, surplus entries are
-evicted before the insert so the bound holds. The new entry is always admitted.
+{- | Insert a freshly fetched value into a store, enforcing the resident-byte budget and the
+entry-count bound. Expired entries are purged first (the cheap reclaim); then the
+least-recently-used entries are evicted until the incoming value fits within both bounds,
+and the value is inserted with its estimated weight and a fresh recency stamp. The incoming
+value is __always admitted__: a single value larger than the whole budget becomes the sole
+resident rather than being refused (the per-value ceiling is the upstream body cap, not this
+budget). Returns the store's occupancy after the insert, for the residency telemetry.
 -}
-insertBounded :: (Hashable k) => SingleFlight k v -> k -> v -> IO ()
-insertBounded sf key entry = do
+insertBounded :: (Hashable k) => SingleFlight k v -> k -> v -> IO CacheOccupancy
+insertBounded sf key value = do
     Cache.purgeExpired (sfStore sf)
-    n <- Cache.size (sfStore sf)
-    when (n >= sfMaxEntries sf) (evictSurplus sf)
-    Cache.insert (sfStore sf) key entry
+    let weight = sfWeigh sf value
+    evictToBudget sf weight
+    stamp <- nextStamp sf
+    stampRef <- newIORef stamp
+    Cache.insert (sfStore sf) key (Weighted{wValue = value, wWeight = weight, wStamp = stampRef})
+    occupancyOf sf
 
--- Evict entries until there is room for one more, keeping the store at or below its bound.
--- Eviction order among live entries is unspecified (the store is a hash map): this is a
--- flood safety valve, not a precision LRU.
-evictSurplus :: (Hashable k) => SingleFlight k v -> IO ()
-evictSurplus sf = do
-    ks <- Cache.keys (sfStore sf)
-    let surplus = length ks - (sfMaxEntries sf - 1)
-    when (surplus > 0) (mapM_ (Cache.delete (sfStore sf)) (take surplus ks))
+{- | Evict least-recently-used entries until an incoming value of the given weight would fit
+within both the resident-byte budget and the entry-count bound, or the store is empty. The
+store is scanned, entries are ordered by ascending recency stamp (oldest first), and the
+coldest are dropped one at a time until @resident + incoming@ is within the budget and the
+count leaves room for one more. Reaching an empty store stops the sweep, so the incoming
+value is always admitted afterwards. The scan runs only on a leader's insert (the cold path
+after a fetch), so iterating the held entries is off the hot path.
+-}
+evictToBudget :: (Hashable k) => SingleFlight k v -> Int -> IO ()
+evictToBudget sf incoming = do
+    held <- Cache.toList (sfStore sf)
+    stamped <- traverse stampOf held
+    let resident = sum [wWeight w | (_, w, _) <- held]
+        oldestFirst = sortOn (\(stamp, _, _) -> stamp) stamped
+    go oldestFirst resident (length held)
+  where
+    stampOf (k, w, _) = do
+        s <- readIORef (wStamp w)
+        pure (s, k, wWeight w)
+
+    fits resident count = resident + incoming <= sfMaxBytes sf && count < sfMaxEntries sf
+
+    go victims resident count
+        | fits resident count = pass
+        | otherwise = case victims of
+            [] -> pass
+            ((_, k, weight) : rest) -> do
+                Cache.delete (sfStore sf) k
+                go rest (resident - weight) (count - 1)
+
+-- The store's occupancy after an insert: the entry count and the summed resident weight of
+-- the held entries, the values the residency telemetry reports.
+occupancyOf :: SingleFlight k v -> IO CacheOccupancy
+occupancyOf sf = do
+    held <- Cache.toList (sfStore sf)
+    pure CacheOccupancy{occEntries = length held, occBytes = sum [wWeight w | (_, w, _) <- held]}
+
+-- Issue the next logical access stamp from the store's clock: a strictly increasing
+-- 'Word64', so a larger stamp is unambiguously more recent.
+nextStamp :: SingleFlight k v -> IO Word64
+nextStamp sf = atomicModifyIORef' (sfClock sf) (\n -> let n' = n + 1 in (n', n'))
+
+-- Bump a held entry's recency to the current logical time, marking it most-recently-used.
+-- Runs in plain 'IO' (never STM), so a hit refreshes recency without writing the store.
+touch :: SingleFlight k v -> Weighted v -> IO ()
+touch sf weighted = nextStamp sf >>= writeIORef (wStamp weighted)
 
 {- | Look up a package's cached full-packument entry for one 'Source' without fetching on a
 miss — the cache's read-only view, for inspection and tests. A 'Nothing' is a miss or an
@@ -482,7 +642,7 @@ expired entry; this never triggers a fetch and never collapses (use 'resolveMeta
 the serve path).
 -}
 cachedMetadata :: MetadataCache -> Source -> PackageName -> IO (Maybe CacheEntry)
-cachedMetadata cache source name = Cache.lookup (sfStore (mcFull cache)) (cacheKey source name)
+cachedMetadata cache source name = fmap wValue <$> Cache.lookup (sfStore (mcFull cache)) (cacheKey source name)
 
 {- | Look up a single-version cached entry for one @(source, package, version)@ without
 fetching on a miss — the version store's read-only view (the hybrid serve path's negative\/
@@ -491,7 +651,7 @@ positive lookup before it leads a selective fetch). The outer 'Maybe' is the cac
 cached result (a version determined absent is a cached @'Just' 'Nothing'@).
 -}
 cachedVersion :: MetadataCache -> Source -> PackageName -> Version -> IO (Maybe (Maybe PackageDetails))
-cachedVersion cache source name version = Cache.lookup (sfStore (mcVersion cache)) (versionKey source name version)
+cachedVersion cache source name version = fmap wValue <$> Cache.lookup (sfStore (mcVersion cache)) (versionKey source name version)
 
 -- | The number of full-packument entries currently held (including any not-yet-purged expired).
 cacheSize :: MetadataCache -> IO Int
@@ -499,12 +659,19 @@ cacheSize cache = Cache.size (sfStore (mcFull cache))
 
 -- ── internals ────────────────────────────────────────────────────────────────
 
--- The outcome of the one atomic resolve decision: a fresh hit, follow an in-flight
--- fetch, or lead a new one.
+-- The outcome of the one atomic resolve decision: a fresh hit (carrying the weighted entry
+-- so the caller can bump its recency), follow an in-flight fetch, or lead a new one.
 data Decision v
-    = Hit v
+    = Hit (Weighted v)
     | Follow (TMVar (Either SomeException v))
     | Lead (TMVar (Either SomeException v))
+
+-- A store's occupancy after a leader's insert: the held entry count and their summed
+-- resident weight, the values the occupancy and residency gauges report.
+data CacheOccupancy = CacheOccupancy
+    { occEntries :: Int
+    , occBytes :: Int
+    }
 
 -- Convert a 'NominalDiffTime' (seconds) to the @cache@ library's monotonic
 -- 'TimeSpec' (whole seconds + nanoseconds), clamping a negative TTL to zero.

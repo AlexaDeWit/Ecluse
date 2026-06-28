@@ -111,6 +111,10 @@ data MetricName
       MetadataCacheRequests
     | -- | @ecluse.metadata_cache.entries@ — metadata-cache occupancy (gauge).
       MetadataCacheEntries
+    | -- | @ecluse.metadata_cache.resident_bytes@: full-packument cache resident bytes (gauge).
+      MetadataCacheResidentBytes
+    | -- | @ecluse.metadata_cache.version.resident_bytes@: single-version cache resident bytes (gauge).
+      SingleVersionCacheResidentBytes
     | -- | @ecluse.mirror.enqueued@ — mirror jobs enqueued (counter).
       MirrorEnqueued
     | -- | @ecluse.mirror.enqueue.failures@ — mirror enqueue failures (counter).
@@ -140,6 +144,8 @@ metricName = \case
     UpstreamFetchErrors -> "ecluse.upstream.fetch.errors"
     MetadataCacheRequests -> "ecluse.metadata_cache.requests"
     MetadataCacheEntries -> "ecluse.metadata_cache.entries"
+    MetadataCacheResidentBytes -> "ecluse.metadata_cache.resident_bytes"
+    SingleVersionCacheResidentBytes -> "ecluse.metadata_cache.version.resident_bytes"
     MirrorEnqueued -> "ecluse.mirror.enqueued"
     MirrorEnqueueFailures -> "ecluse.mirror.enqueue.failures"
     MirrorJobsProcessed -> "ecluse.mirror.jobs.processed"

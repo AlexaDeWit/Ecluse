@@ -38,6 +38,8 @@ noopMetricsPort =
         , mpUpstreamFetchError = \_ _ -> pass
         , mpCacheRequest = const pass
         , mpCacheEntries = const pass
+        , mpCacheResidentBytes = const pass
+        , mpVersionCacheResidentBytes = const pass
         , mpMirrorEnqueued = pass
         , mpMirrorEnqueueFailure = pass
         }
