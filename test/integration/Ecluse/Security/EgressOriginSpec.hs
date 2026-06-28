@@ -141,6 +141,13 @@ spec = do
             vettedInetAddrs (lowerCaseHosts mempty) [inet (203, 0, 113, 10), inet (169, 254, 169, 254)]
                 `shouldBe` Left ["169.254.169.254"]
 
+        it "refuses the whole answer when the internal address is IPv6 (the IPv6 block branch)" $
+            -- The same wholesale block over an internal IPv6 sibling (loopback @::1@): the
+            -- public IPv4 must NOT leak through. Without the IPv6 branch of the internal-range
+            -- block this would return @Right [203.0.113.10]@, so this asserts that branch.
+            vettedInetAddrs (lowerCaseHosts mempty) [inet (203, 0, 113, 10), inet6 (0, 0, 0, 0, 0, 0, 0, 1)]
+                `shouldBe` Left ["::1"]
+
         it "yields an empty dial list for an IPv6-only (unpinnable) answer" $
             vettedInetAddrs (lowerCaseHosts mempty) [inet6 (0x2001, 0x0db8, 0, 0, 0, 0, 0, 1)]
                 `shouldBe` Right []
