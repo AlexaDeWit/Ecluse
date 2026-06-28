@@ -23,8 +23,6 @@ import Test.Hspec
 import UnliftIO (bracket)
 import UnliftIO.Temporary (withSystemTempFile)
 
-import Network.HTTP.Client (HttpException (InvalidUrlException))
-
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (
     Artifact (..),
@@ -40,7 +38,6 @@ import Ecluse.Core.Package (
     mkPackageName,
  )
 import Ecluse.Core.Package.Integrity (defaultMinIntegrity)
-import Ecluse.Core.Registry.Npm (ResponseBoundExceeded (ResponseBoundExceeded))
 import Ecluse.Core.Rules (
     PreparedRule (..),
     Resilience (Resilience),
@@ -56,14 +53,10 @@ import Ecluse.Core.Rules.Types (
     RuleResult (NoDecision),
     atDefaultPrecedence,
  )
-import Ecluse.Core.Security (LimitError (BodyTooLarge))
 import Ecluse.Core.Server.Pipeline.Internal (
-    PackumentNameMismatch (PackumentNameMismatch),
-    PackumentUndecodable (PackumentUndecodable),
     admitByIntegrity,
     denialLabels,
     evalTier,
-    fetchCause,
     logDecodeFailure,
     logNameMismatch,
     packumentServeDecision,
@@ -83,15 +76,6 @@ import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Package (unsafeHash, validSha1, validSha256)
 import Ecluse.Test.Port (noopMetricsPort)
-
-{- | A stand-in exception 'fetchCause' does not specifically classify, so the
-catch-all @other@ arm is exercised with a typed throw rather than a restricted
-@userError@.
--}
-data OtherFetchFault = OtherFetchFault
-    deriving stock (Show)
-
-instance Exception OtherFetchFault
 
 spec :: Spec
 spec = do
@@ -128,28 +112,10 @@ spec = do
             logged `shouldSatisfy` T.isInfixOf "\"origin\":\"http://upstream.test\""
             logged `shouldSatisfy` T.isInfixOf "different package"
 
-    describe "PackumentNameMismatch" $
-        it "has usable Eq/Show (the typed-throw contract)" $ do
-            -- A distinct typed exception, caught by the origin fetcher and recovered via
-            -- 'fromException'; its derived instances back the catch and any audit show.
-            show PackumentNameMismatch `shouldBe` ("PackumentNameMismatch" :: Text)
-            PackumentNameMismatch `shouldBe` PackumentNameMismatch
-
     -- The pure metric-label projections that classify a serve outcome into the bounded
     -- labels the catalogue records. Every branch is asserted directly, so the
     -- bounded-cardinality mapping is pinned independently of the serve path that drives
     -- it (the call sites are exercised in PipelineSpec).
-    describe "fetchCause (upstream-fetch error class)" $ do
-        it "classifies an undecodable or name-mismatched body as a decode fault" $ do
-            fetchCause (toException PackumentUndecodable) `shouldBe` Metric.Decode
-            fetchCause (toException PackumentNameMismatch) `shouldBe` Metric.Decode
-        it "classifies a response-bound breach as the catch-all other" $
-            fetchCause (toException (ResponseBoundExceeded (BodyTooLarge 1))) `shouldBe` Metric.OtherCause
-        it "classifies a transport error as a connection fault" $
-            fetchCause (toException (InvalidUrlException "http://x" "bad")) `shouldBe` Metric.Connection
-        it "classifies anything else as the catch-all other" $
-            fetchCause (toException OtherFetchFault) `shouldBe` Metric.OtherCause
-
     describe "packumentServeDecision (no-survivors -> decision)" $ do
         it "an admit in the set is an admit" $
             packumentServeDecision [Admit] `shouldBe` Metric.Admit

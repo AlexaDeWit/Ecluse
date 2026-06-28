@@ -162,12 +162,13 @@ spec = describe "live registry protocol (npm / PyPI)" $ do
         Just rest | (sc, rest') <- T.breakOn "/" rest, not (T.null rest') -> Just (mkScope sc)
         _ -> Nothing
 
-{- | Run the exact response-bound sequence the data plane applies in
-@Ecluse.Core.Server.Pipeline.fetchEntry@ over a live full packument under the default
-'Limits', returning the projected @(name, versionCount)@ on success. Throws (the
-bounded read's 'Ecluse.Core.Registry.Npm.ResponseBoundExceeded', a decode error, or a
-projection error) if any bound or step refuses the document — so a default that was
-accidentally too tight surfaces as a failure, not a silent pass.
+{- | Run the exact response-bound sequence the data plane applies on the serve path —
+a bounded fetch then the decode, nesting, projection, and version-count steps of
+@Ecluse.Core.Registry.Npm.Metadata.projectNpmManifest@ — over a live full packument
+under the default 'Limits', returning the projected @(name, versionCount)@ on success.
+Throws (the bounded read's 'Ecluse.Core.Registry.Npm.ResponseBoundExceeded', a decode
+error, or a projection error) if any bound or step refuses the document — so a default
+that was accidentally too tight surfaces as a failure, not a silent pass.
 -}
 admissibleUnderDefaults :: Manager -> PackageName -> IO (Text, Int)
 admissibleUnderDefaults manager name = do
@@ -175,7 +176,7 @@ admissibleUnderDefaults manager name = do
     -- 1. Body bound: fetchMetadataForm reads through boundedRead against npmLimits.
     response <- fetchMetadataForm config Full noValidators name
     -- 2. Decode, then 3. nesting bound, 4. projection, 5. version-count bound — the
-    -- same chain fetchEntry runs; any refusal throws and fails the smoke case.
+    -- same chain the serve-path projection runs; any refusal throws and fails the smoke case.
     value <- either (\e -> throwString ("decode failed: " <> e)) pure (eitherDecodeStrict (responseBody response))
     bounded <- either (\e -> throwString ("nesting bound refused a real package: " <> show e)) pure (checkNestingDepth defaultLimits value)
     info <- case parsePackageInfoFromValue name bounded of

@@ -3,17 +3,16 @@ tests without widening that module's two-handler public API — the @.Internal@ 
 as "Ecluse.Core.Credential.Refresh.Internal" uses. Importing it opts out of the public
 module's stability promise.
 
-It holds the degrade signalling for two bad-upstream conditions the response-bound
-guards leave silent: 'PackumentUndecodable' (the upstream answered, but its body did
-not decode into a usable packument) and 'PackumentNameMismatch' (the upstream
-answered with a packument whose self-reported name is for a /different/ package).
-Each is a typed throw raised at the fetch and caught by the origin fetcher's
-@tryAny@, with a paired @log*@ surfacing it at a 'WarningS' through the ambient
-@katip@ context before the contribution degrades.
+It holds the operator-facing warning helpers for two bad-upstream conditions the
+response-bound guards leave silent — an upstream whose body does not decode into a
+usable packument ('logDecodeFailure'), and one whose packument self-reports a name for
+a /different/ package ('logNameMismatch') — each surfaced at a 'WarningS' through the
+ambient @katip@ context before the contribution degrades. The conditions themselves are
+classified on the serve path as a typed 'Ecluse.Core.Registry.Metadata.MetadataError';
+this module only renders their warning lines. Alongside them sit the pure integrity-floor
+admission and the metric-label projections the serve path records.
 -}
 module Ecluse.Core.Server.Pipeline.Internal (
-    PackumentUndecodable (..),
-    PackumentNameMismatch (..),
     logDecodeFailure,
     logNameMismatch,
 
@@ -21,7 +20,6 @@ module Ecluse.Core.Server.Pipeline.Internal (
     admitByIntegrity,
 
     -- * Metric-label projections (pure)
-    fetchCause,
     packumentServeDecision,
     serveDecisionClass,
     denialLabels,
@@ -36,7 +34,6 @@ module Ecluse.Core.Server.Pipeline.Internal (
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Katip (KatipContext, Severity (WarningS), katipAddContext, logFM, ls, sl)
-import Network.HTTP.Client qualified as HTTP
 
 import Ecluse.Core.Package (
     PackageDetails (pkgArtifacts),
@@ -49,7 +46,6 @@ import Ecluse.Core.Package.Integrity (
     VersionIntegrity (BelowFloor, MeetsFloor, NoIntegrity),
     classifyArtifacts,
  )
-import Ecluse.Core.Registry.Npm (ResponseBoundExceeded (ResponseBoundExceeded))
 import Ecluse.Core.Rules (PreparedRule (prepResilience))
 import Ecluse.Core.Rules.Types (Decision (Undecidable))
 import Ecluse.Core.Server.Response (
@@ -64,28 +60,6 @@ import Ecluse.Core.Server.Response (
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort, mpRuleDenial, mpRuleEffectfulFailure)
 import Ecluse.Core.Version (renderVersion)
-
-{- | Raised when an upstream packument does not decode into both the typed view and the
-raw document the serve path needs. A (typed) throw, not a stringly one, caught by the
-origin fetcher's @tryAny@ and degraded to a missing contribution like a bound breach.
--}
-data PackumentUndecodable = PackumentUndecodable
-    deriving stock (Eq, Show)
-
-instance Exception PackumentUndecodable
-
-{- | Raised when an upstream answered with a packument whose self-reported top-level
-@name@ is for a /different/ package than the one requested. The route name is the
-validation authority, so a misreporting origin is untrusted for this request: its
-contribution is dropped from the merge. A (typed) throw, not a stringly one, caught
-by the origin fetcher's @tryAny@ and degraded like 'PackumentUndecodable' — but kept
-a distinct type so the serve layer can render the terminal no-valid-origin status as
-a @502@ (an upstream returned an invalid response), distinct from a genuine absence.
--}
-data PackumentNameMismatch = PackumentNameMismatch
-    deriving stock (Eq, Show)
-
-instance Exception PackumentNameMismatch
 
 -- The @module@ tag this module's warnings carry. It is the operator-facing log
 -- filter key, not the source module path, so it is held stable across the move into
@@ -185,19 +159,6 @@ admitByIntegrity floorSpec belowFloorRefusal missingRefusal info =
         bucket MeetsFloor acc = acc
 
 -- ── metric-label projections ─────────────────────────────────────────────────
-
-{- | Classify a caught metadata-fetch failure into the bounded
-@ecluse.upstream.fetch.errors@ cause: an undecodable or name-mismatched body is a decode
-fault, a transport error a connection fault, and a response-bound breach or anything else
-the catch-all other. The cause is bounded by construction — never the exception text.
--}
-fetchCause :: SomeException -> Metric.Cause
-fetchCause err
-    | Just PackumentUndecodable <- fromException err = Metric.Decode
-    | Just PackumentNameMismatch <- fromException err = Metric.Decode
-    | Just (ResponseBoundExceeded _) <- fromException err = Metric.OtherCause
-    | Just (_ :: HTTP.HttpException) <- fromException err = Metric.Connection
-    | otherwise = Metric.OtherCause
 
 {- | Classify a no-survivors packument outcome into the bounded @ecluse.serve.decision@
 value: a forbidden set is a denial, any other non-served status a transient
