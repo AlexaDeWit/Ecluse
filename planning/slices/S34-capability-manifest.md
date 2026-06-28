@@ -2,14 +2,14 @@
 id: S34
 title: Capability manifest (OpenAPI) — static generation + docs publish
 milestone: M2 — Web front door
-status: not-started
+status: merged
 depends-on: [S03, S12, S14]
 test-tier: [unit]
 arch-refs:
   - docs/architecture/api-surface.md
   - docs/architecture/web-layer.md#capability-manifest
   - docs/architecture/hosting.md#capability-manifest
-pr: 427
+pr: [427, 443]
 ---
 
 # S34 — Capability manifest (OpenAPI) — static generation + docs publish
@@ -45,16 +45,49 @@ full rationale (a capability manifest, **not** a client-integration contract).
 > (**git-ignored** — it is derived build data, regenerated on demand by `cabal run
 > openapi-gen`, not committed); and unit tests (`test/unit/Ecluse/ManifestSpec.hs`).
 > The Redoc render + `make site`/Pages publishing is **PR 2** (which runs the
-> generator at publish time, since the artifact is not committed); the structural
-> drift controls (`validateToJSON`, `Route`↔operation exhaustiveness, the `hspec-wai`
-> live-status contract) are **S35 (PR 3)**. Status stays `not-started` until PR 2
-> closes the render/publish half (the repo has no in-progress status value).
+> generator at publish time, since the artifact is not committed) and **concludes the
+> capability-manifest epic** — see the PR 2 as-built below. (The once-planned S35
+> structural drift controls — `validateToJSON`, `Route`↔operation exhaustiveness, an
+> `hspec-wai` live-status contract — are **retired**, not built: see the PR 2
+> as-built and the dropped S35 slice.)
 > **Config-as-JSON-Schema is cut** (architect decision, recorded in the owned-schemas
 > AC): the manifest is config-agnostic, so the config model defines no `autodocodec`
 > codec and the strict hand-rolled config decoders are untouched.
 
+> **As-built (PR 2 of the S34 delivery — render + publish; completes S34).** The
+> manifest is now rendered and published, node-free, through the existing docs
+> pipeline. Delivered: **Redoc's `redoc.standalone.js` vendored as a hash-pinned
+> `pkgs.fetchurl` flake input** (`redocJs`, redoc **2.5.3** from
+> `cdn.jsdelivr.net`, SRI `sha256-EyD0QhUcV8RH07cMf/xsT4bQhGQCD+NMjMXTFk6ZRPA=`),
+> mirroring `mermaidJs` exactly and exposed as `REDOC_JS` to the `.#docs` (and
+> default) shell; a small static **Redoc wrapper** (`web/redoc.html`) that loads the
+> vendored bundle and points at the published spec; a **link card** from
+> `web/api-index.html` to the manifest. `make docs-site` now **generates the spec at
+> publish time** — `cabal run openapi-gen -- _site/api/openapi.json` (the artifact is
+> git-ignored, never committed) — and stages the Redoc page to
+> **`_site/api/openapi/index.html`**, and `make site` vendors the Redoc bundle to
+> **`_site/vendor/redoc.standalone.js`** alongside Mermaid. **Publish layout:**
+> `_site/api/openapi.json` (raw spec, stable URL), `_site/api/openapi/` (Redoc page),
+> `_site/vendor/redoc.standalone.js` (bundle), linked from `_site/api/` (the API
+> index). **No `pages.yml` change** was needed — it already runs `make site` and
+> deploys `_site`, so the generation + staging ride inside that target. The lean
+> `.#docs` shell builds `openapi-gen` (its `openapi3`/`autodocodec` deps resolve via
+> cabal from the pin — no Node, no extra shell tool); `make site` was verified
+> locally to emit the Redoc page, `openapi.json`, and the vendored bundle.
+>
+> **This PR concludes the capability-manifest epic, and S35 is dropped** (architect
+> decision): the once-planned drift controls (`validateToJSON` properties, the
+> `Route`↔operation exhaustiveness check, an `hspec-wai` live-status contract) are
+> **retired, not built**. Rationale: those guards can flag *that* the documented
+> surface changed but cannot reliably classify a change as breaking vs safe-additive
+> for external consumers — that needs a semantic OpenAPI differ (oasdiff-class),
+> deferred until there are external consumers that need it. The manifest is generated
+> from the code (the closed `Route` enum + `autodocodec` schemas) and its ordinary
+> unit tests (`ManifestSpec`, #427) are the accepted guarantor against breaking
+> changes.
+
 **Acceptance criteria.**
-- [ ] **Owned schemas.** The error/denial envelope (S11, via S12) is an owned
+- [x] **Owned schemas.** The error/denial envelope (S11, via S12) is an owned
   code-first type whose `aeson` instances *and* OpenAPI schema derive from one
   `autodocodec` codec; the **synthesized packument** (the served merged-and-filtered
   view — S14, over the S06 wire type) is a **partial, hand-written** schema: modelled
@@ -66,23 +99,24 @@ full rationale (a capability manifest, **not** a client-integration contract).
     documenting no operation. If an operator config schema is ever wanted it is a
     **separate artifact** (a hand-written `ToSchema`; the strict hand-rolled config
     decoders stay untouched). The config model defines **no** `autodocodec` codec here.
-- [ ] **Paths derived from `Route` × mounts.** Operations are folded from the closed
+- [x] **Paths derived from `Route` × mounts.** Operations are folded from the closed
   `Route` enumeration (`Ecluse.Core.Server.Route`) over the configured mounts; each
   mount contributes its per-ecosystem path template + support status. **`Search` is
   documented as `501`** (a first-class boundary), tarballs as opaque streamed media.
   — _api-surface.md#source-of-truth-the-route-enumeration--mounts_
-- [ ] **Tags = ecosystems.** Operations grouped by mount so the rendered doc reads as
+- [x] **Tags = ecosystems.** Operations grouped by mount so the rendered doc reads as
   "one server, these protocols." — _hosting.md#capability-manifest_
-- [ ] **Statically generated, not served.** A build-time **generator** (a small
+- [x] **Statically generated, not served.** A build-time **generator** (a small
   executable / `cabal run`, kept **out of the library dependency closure** like the
   benchmark components) assembles the `openapi3` document from a **fixed canonical
   config** and writes `openapi.json`. The assembly is a **pure** function of (config,
   mounts) — **no WAI route, not wired into the running app.** Output is
   **deterministic** (stable key ordering, fixed base URLs) so the artifact is
   byte-reproducible across machines. It is **derived build data** (a pure function of
-  the source), so it is **generated on demand, not committed**; drift is caught by
-  S35's structural controls, not a committed snapshot.
-- [ ] **Rendered & published in CI, node-free.** `make docs-site` / `make site`
+  the source), so it is **generated on demand, not committed**; breaking-change
+  protection rests on the manifest's ordinary unit tests (`ManifestSpec`, #427), not a
+  committed snapshot.
+- [x] **Rendered & published in CI, node-free.** `make docs-site` / `make site`
   render the spec to a static **Redoc** page and stage it into `./_site` next to the
   Haddock, and `openapi.json` itself is published at a stable URL. The Redoc bundle is
   **vendored and hash-pinned as a flake input** — mirroring the existing `mermaidJs`

@@ -249,6 +249,17 @@
           hash = "sha256-cBN+d7snO7LvlyuG6LBADMqL5TyyW/xFkRoYbcmGZd4=";
         };
 
+        # Vendored Redoc bundle for the capability-manifest page: the self-contained
+        # standalone UMD build, pinned by hash and copied into the published site (see
+        # Makefile `site`) so the OpenAPI manifest renders client-side — no Node in the
+        # `.#docs` shell, no external CDN dependency. Mirrors `mermaidJs`; bump the
+        # version and hash together. See docs/architecture/api-surface.md →
+        # "How it's built and published".
+        redocJs = pkgs.fetchurl {
+          url = "https://cdn.jsdelivr.net/npm/redoc@2.5.3/bundles/redoc.standalone.js";
+          hash = "sha256-EyD0QhUcV8RH07cMf/xsT4bQhGQCD+NMjMXTFk6ZRPA=";
+        };
+
         # Interactive-only tooling: in the default (human) shell, never needed by
         # CI. HLS/ghcid for live feedback; hoogle/cabal-plan for API & build-plan
         # search (see AGENTS.md).
@@ -473,8 +484,10 @@
           buildInputs =
             ciInputs ++ ideInputs ++ releaseInputs ++ scanInputs ++ workflowLintInputs
             ++ docsInputs ++ [ hpkgs.weeder hpkgs.stan ];
-          # Path to the pinned Mermaid bundle; `make site` copies it into _site/vendor.
+          # Paths to the pinned vendored bundles; `make site` copies them into
+          # _site/vendor (Mermaid for the rendered docs, Redoc for the manifest page).
           MERMAID_JS = "${mermaidJs}";
+          REDOC_JS = "${redocJs}";
         });
 
         # Lean shell for CI: only what the gate jobs invoke through `make`. CI
@@ -491,14 +504,18 @@
         # pages, plus the build essentials (zlib/pkg-config) the library compiles
         # against. Far smaller than the default (human) shell the Pages job used to
         # enter — no IDE/release/scan/lint tooling — so the job realizes and caches a
-        # much smaller closure. MERMAID_JS points at the pinned bundle `make site`
-        # vendors into the site. CI enters it with `nix develop .#docs`.
+        # much smaller closure. MERMAID_JS / REDOC_JS point at the pinned bundles
+        # `make site` vendors into the site; the GHC toolchain + cabal also build the
+        # `openapi-gen` generator the docs build runs to emit `openapi.json` (its
+        # openapi3/autodocodec deps resolve via cabal from the pin, no extra shell
+        # tool). CI enters it with `nix develop .#docs`.
         devShells.docs = pkgs.mkShell (shellEnv // {
           name = "ecluse-docs";
           buildInputs =
             [ pkgs.bashInteractive hpkgs.ghc hpkgs.cabal-install pkgs.zlib pkgs.pkg-config ]
             ++ docsInputs;
           MERMAID_JS = "${mermaidJs}";
+          REDOC_JS = "${redocJs}";
         });
 
         # Lean shell for the security workflow: the vuln scanners only. CI enters

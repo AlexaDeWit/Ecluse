@@ -1,8 +1,8 @@
 ---
 id: S35
-title: OpenAPI contract drift controls
+title: OpenAPI contract drift controls (DROPPED — retired, not built)
 milestone: M2 — Web front door
-status: not-started
+status: dropped
 depends-on: [S34]
 test-tier: [unit]
 arch-refs:
@@ -11,18 +11,35 @@ arch-refs:
 pr: null
 ---
 
-# S35 — OpenAPI contract drift controls
+# S35 — OpenAPI contract drift controls (DROPPED)
+
+> **Dropped** (architect decision, 2026-06-28). Not a deliverable. The
+> capability-manifest epic is **S34 alone**, concluded by the S34 render+publish PR;
+> there is no follow-on drift-controls slice.
+>
+> **Why dropped.** These guards (`validateToJSON` properties, the `Route`↔operation
+> exhaustiveness check, an `hspec-wai` live-status contract, a committed golden
+> snapshot) can flag *that* the documented surface changed, but cannot reliably
+> classify a change as **breaking vs safe-additive** for external consumers — that
+> needs a **semantic OpenAPI differ** (oasdiff-class), which is **deferred** until
+> there are external consumers that need it. The manifest is generated directly from
+> the code (the closed `Route` enum + `autodocodec` schemas), and its **ordinary unit
+> tests (`ManifestSpec`, #427) are the accepted guarantor** against breaking changes,
+> so a separate drift-controls slice earns too little to justify the surface it adds.
+
+The remainder of this file is retained as the **historical record** of the controls
+that were contemplated; none are built.
 
 > Milestone **M2** · depends on: [S34](S34-capability-manifest.md) · tier: unit
 >
-> **Enhancement / fast-follow.** Hardens the S34 manifest against divergence from
+> **(Historical — not built.)** Hardens the S34 manifest against divergence from
 > the server's actual routes and behaviour. **Not on the launch critical path** —
 > sequence after S34. Purely additive: introduces **no** change to S34's manifest
-> output, only guards around it. (S34 now **statically generates and publishes** the
-> spec — it is not served — so these guards bind the generated artifact to the live
-> server, not a served endpoint.)
+> output, only guards around it. (S34 **statically generates and publishes** the
+> spec — it is not served — so these guards would bind the generated artifact to the
+> live server, not a served endpoint.)
 
-**Goal.** Make it structurally hard for the
+**Goal (historical — not built).** Make it structurally hard for the
 [capability manifest](../../docs/architecture/api-surface.md) to drift from the
 server without a test failing — across **both** drift axes (schema; path/operation)
 — plus PR-visible change detection. See

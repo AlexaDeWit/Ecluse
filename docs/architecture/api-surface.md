@@ -95,56 +95,35 @@ must not be mistaken for a proof that the filtered document is internally cohere
 
 ## Contract drift controls
 
-> **Planned enhancement.** This is the intended end-state for keeping the manifest
-> honest; it lands *after* the manifest itself. The "Confidence without a fuzzer"
-> note above is the baseline this hardens.
+The manifest is generated **directly from the code**, so it moves only when the code
+moves — a change a reviewer already sees in the diff. Its paths are the *total*
+`Route → Operation` fold over the closed `Route` sum × mounts
+([above](#source-of-truth-the-route-enumeration--mounts)), and its owned schemas are
+the `autodocodec` codecs that also back the `aeson` instances, so the documented
+schema and the wire format **cannot diverge by construction**. Because the assembly is
+a pure function of those inputs, the manifest's **ordinary unit tests**
+(`ManifestSpec`) are the accepted guarantor that it stays well-formed and covers the
+surface.
 
-The manifest is only worth publishing if it cannot quietly diverge from the server
-it describes. Drift has **two independent axes**, and they need different mechanisms — no
-single library covers both for a raw-WAI server (the trade we accept for
-[not adopting Servant](web-layer.md#raw-wai-not-a-web-framework) on the data plane).
+> **The synthesized packument is the schema exception.** It is an *open* schema
+> (`additionalProperties: true`, "relay unlisted fields"), so "drift" there means "did
+> we drop a field we promised to relay" — a question only the **lossless round-trip
+> property test** can answer (see
+> [Packument merge](registry-model.md#packument-merge-across-upstreams) and the wire
+> round-trip property), not a schema validator.
 
-**Axis 1 — schema (does the doc match how bodies serialize?).**
-
-- **Eliminated by construction** for the closed owned types: one `autodocodec`
-  codec derives both the `aeson` instances and the schema, so they cannot diverge.
-- **The synthesized packument is the exception.** It is an *open* schema
-  (`additionalProperties: true`, "relay unlisted fields"), which has no clean
-  autodocodec representation, so it carries a **hand-written partial `ToSchema`**.
-  There, "drift" means "did we drop a field we promised to relay," which only the
-  **lossless round-trip property test** can answer (see
-  [Packument merge](registry-model.md#packument-merge-across-upstreams) and the wire
-  round-trip property) — a schema validator cannot.
-- **Backstop everywhere:** `Data.OpenApi.Schema.Validation.validateToJSON` as a
-  `hedgehog` property per owned type (generate → encode → validate against the
-  schema). This catches schema-vs-serialization drift *regardless of how the schema
-  was derived*, so it also guards the hand-written packument schema.
-
-**Axis 2 — path / operation (does the doc match what the server routes and returns?).**
-
-- **Paths are generated from the closed `Route` enumeration**
-  ([above](#source-of-truth-the-route-enumeration--mounts)) via a *total*
-  `Route → Operation` fold per mount. Because `Route` is a closed sum, a
-  pattern-matching **exhaustiveness / coverage test** makes it a
-  **compile-time-or-test failure to add a route without a manifest operation** (and
-  asserts the 1:1 reverse).
-- **Live status contract** with `hspec-wai`: drive the actual `Application` and
-  assert each documented operation's status, the boundaries especially (`Search` →
-  `501`, unknown → `404`, a denial → `403`). This is the node-free stand-in for an
-  external contract fuzzer (Schemathesis / Dredd / Prism), which we avoid.
-
-**Change visibility — structural, not a committed snapshot.** The spec is **derived
-build data** — a pure function of the `Route` enumeration and the owned schemas,
-regenerated from a **fixed canonical config** at publish time — so it is **not
-committed**, and there is no stored golden to diff against. Visibility comes instead
-from the structural controls above: the `Route` ↔ operation exhaustiveness check and
-the `validateToJSON` properties fail the day the documented surface or an owned schema
-diverges from the code, and the live-status contract ties the documented statuses to
-what the server actually returns. For a tool whose synthesized-packument schema *is*
-the documented trust boundary, that schema cannot move without a code change a
-reviewer already sees. An `openapi-diff` step classifying breaking vs additive changes
-remains a possible future addition, comparing a regenerated spec against a prior
-build rather than a committed file.
+**No dedicated drift-controls layer (deferred).** A once-planned slice of structural
+guards — `validateToJSON` properties, a `Route`↔operation exhaustiveness test, an
+`hspec-wai` live-status contract, and a committed golden snapshot — was **dropped**.
+Those guards can flag *that* the documented surface changed, but the thing actually
+worth gating — **is a change breaking or safe-additive for an external consumer?** —
+they cannot classify; that needs a **semantic OpenAPI differ** (oasdiff-class).
+Écluse has **no external consumers reading this manifest** (registry clients hardcode
+the protocol and never read an API description — see the top of this page), so the
+differ is **deferred** until a consumer needs it, and `openapi.json` stays **derived
+build data**: regenerated from the fixed canonical config at publish time, **not
+committed**, with no stored golden to diff against. External contract fuzzers
+(Schemathesis, Dredd / Prism) stay out for the same node-free reason as above.
 
 ## Config as JSON Schema (a free corollary)
 
