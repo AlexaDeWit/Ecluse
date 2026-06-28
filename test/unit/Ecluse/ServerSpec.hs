@@ -340,6 +340,22 @@ spec = do
                 -- guard let the write through rather than refusing it at the scope check.
                 request methodPut "/npm/@acme/widget" [] "" `shouldRespondWith` 502
 
+            -- The body-name agreement leg of the anti-shadowing guard (issue #391). The
+            -- URL @acme/widget is in scope, but the document body declares a DIFFERENT name,
+            -- so a relay would write a name the scope guard never authorised. The refusal is
+            -- a 403 BEFORE the relay — distinguishable here from the 502 an attempted write
+            -- to the unconnectable target would yield, which is the proof the relay never ran.
+            it "refuses an in-scope publish whose body _id / name disagree with the URL with 403, before any relay" $
+                request methodPut "/npm/@acme/widget" [] "{\"_id\":\"@victim/target\",\"name\":\"@victim/target\",\"versions\":{}}" `shouldRespondWith` 403
+
+            it "refuses an in-scope publish whose body versions[].name disagrees with the URL with 403, before any relay" $
+                request methodPut "/npm/@acme/widget" [] "{\"_id\":\"@acme/widget\",\"name\":\"@acme/widget\",\"versions\":{\"1.0.0\":{\"name\":\"@victim/target\",\"version\":\"1.0.0\"}}}" `shouldRespondWith` 403
+
+            it "lets an in-scope publish whose body _id / name / versions[].name all agree with the URL through to the relay (502 when unreachable)" $
+                -- A body whose every declared name matches the URL is not over-refused: it
+                -- reaches the relay (502 to the unconnectable target), not a 403.
+                request methodPut "/npm/@acme/widget" [] "{\"_id\":\"@acme/widget\",\"name\":\"@acme/widget\",\"versions\":{\"1.0.0\":{\"name\":\"@acme/widget\",\"version\":\"1.0.0\"}}}" `shouldRespondWith` 502
+
         with (publishAppWith basePublishDeps{pubTargetUrl = ""}) $
             it "500s an in-scope publish when the publication target URL is unformable (misconfig)" $
                 -- An empty target URL cannot form a request, a configuration fault rather
