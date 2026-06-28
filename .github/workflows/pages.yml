@@ -11,11 +11,15 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# One Pages deploy at a time; let an in-flight publish finish rather than
-# cancelling it (a half-applied deploy is worse than a slightly stale one).
+# Only the most recent main commit's site matters, so cancel an in-progress
+# publish when a newer push lands rather than letting the now-superseded build run
+# to completion (wasted CI). The `pages` group already collapses queued runs to the
+# latest; cancel-in-progress drops the in-flight one too. Pages publishes
+# atomically, so a cancelled run simply leaves the prior deployment live until the
+# next one completes — there is no half-applied state.
 concurrency:
   group: pages
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 # Least privilege: read the repo, write the Pages artifact + deployment, and mint
 # the OIDC token the deploy step exchanges with the Pages service.
