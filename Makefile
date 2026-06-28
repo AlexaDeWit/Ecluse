@@ -40,7 +40,8 @@ DOCS_BUILDDIR ?= dist-newstyle
         coverage coverage-unit freeze gen-version-fixtures new-worktree format format-check lint sast \
         cabal-check lint-workflows lint-scripts test-scripts weeder check gate run docs \
         docs-check docs-site site nix-build nix-check docker-build docker-push sbom scan \
-        scan-vulnix clean version tag stan stan-all bench bench-profile bench-load
+        scan-vulnix clean version tag stan stan-all bench bench-profile bench-load \
+        perf-acceptance
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -142,6 +143,14 @@ bench-profile: ## Profiling build -> run -> cost-centre flame graph (ecluse-benc
 # docs/architecture/performance.md.
 bench-load: ## Run the throughput & latency load tests (inform-only, never gates on perf)
 	$(NIX_BENCH) cabal run -v0 bench-load
+
+# Context B: fetch LIVE packuments and check Ecluse's work-per-request overhead against
+# the version-controlled acceptance budget (acceptance/criteria.json). Live + non-
+# deterministic: exits non-zero ONLY on a real budget breach (a flaky registry is
+# reported, not a breach). Standalone and NON-REQUIRED — a breach informs, never blocks.
+# See docs/architecture/performance.md.
+perf-acceptance: ## Run the live performance-acceptance harness (Context B; live, reds on a budget breach, non-blocking)
+	$(NIX) cabal run -v0 perf-acceptance
 
 # doctest runs the >>> examples embedded in Haddock comments as tests, so the
 # documentation cannot drift from the code. It runs via

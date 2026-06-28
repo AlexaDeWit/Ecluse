@@ -404,3 +404,66 @@ standalone, **non-gating** tier: it runs on a **nightly schedule and on manual d
 not wired into `ci.yml`'s `gate`, and uploads its results as a downloadable artifact with
 no cross-run baseline. Trustworthy absolutes come from **local deep-dives** on a quiet
 machine, never from a shared-runner figure.
+
+## Context B — live performance-acceptance
+
+Everything above is **Context A**: *deterministic regression* benchmarking over
+**committed, pinned** data (Layer A's work-per-request, Layer B's load harness, the
+frozen corpus). The input is frozen, so the only variable is the code, and allocations
+are the machine-independent signal. Context A answers *"did the code regress?"*.
+
+**Context B** is the complementary need: a **live performance-acceptance** harness that
+answers *"do we meet our performance acceptance criteria under **today's** real-world
+conditions?"*. Here the input is **live real data** and input drift is **signal** (it
+informs the criteria — capacity planning), not noise. Same machinery, a **different
+determinism model per job**: Context A pins for comparability; Context B pulls live for
+real-world acceptance.
+
+### How it measures
+
+For each package in the shared curated catalogue (`bench/corpus/pins.json`'s `pins`, read
+through `Ecluse.Test.RegistryCapture` — the same one-fetch-path the smoke differential
+uses), the harness fetches the **live** packument and times two legs separately:
+
+- **upstream** — how long the registry took to serve the packument (the fetch), and
+- **Écluse overhead** — how long Écluse's work-per-request takes over it (decode →
+  project → rule sweep → filter / URL-rewrite → re-serialise → ETag), the median of a few
+  passes to damp noise.
+
+Separating the legs keeps an upstream-bound cost from being mistaken for an Écluse one,
+and the run summary's two columns leave room for a later **upstream-normalisation** column
+(e.g. overhead as a share of total) to slot in — a parallel design; the summary is built
+not to couple to it.
+
+### The acceptance criteria — version-controlled
+
+The budget lives in a **version-controlled** config,
+[`acceptance/criteria.json`](../../acceptance/criteria.json): a `defaultBudgetMs` plus
+per-package overrides for the heavy, many-version packuments. It is version-controlled on
+purpose — **moving the bar is an explicit, reviewed act**, not a silent drift. The
+committed budgets are calibrated from a first real run, with deliberately generous (~3×)
+headroom over the measured overhead to absorb shared-runner noise and packument growth;
+refining them as the real runs accrue is exactly what version-controlling them is for. The
+pure evaluation — budget resolution, the per-package
+verdict, the summary rendering — is `Ecluse.Acceptance`, unit-tested in the gating tier;
+the live fetch and timing are the `perf-acceptance` executable's shell.
+
+### Posture: inform-loudly, never blocks
+
+Unlike Context A (which reds only on a literal crash), Context B **reds the check on a
+budget breach** — a visible red on the pull request, naming the breached package and its
+margin — because it has explicit acceptance criteria and the whole point is to prompt a
+human decision. But the workflow
+([`.github/workflows/perf-acceptance.yml`](../../.github/workflows/perf-acceptance.yml))
+is **standalone and non-required**: it runs on pull requests, a daily schedule, and
+push-to-`main`, but is **not** wired into `ci.yml`'s `gate` and must not be a
+branch-protection required check, so the red **informs without ever blocking** merge —
+consistent with the project's never-gates-on-perf-noise posture. Live and
+non-deterministic, so a flaky registry is reported as **unavailable**, never a breach: the
+harness exits non-zero only on a genuine over-budget measurement. This deliberate
+acceptance of extra flakiness, in exchange for real-world fidelity, is the trade Context B
+exists to make.
+
+```sh
+make perf-acceptance   # fetch live packuments, check overhead against acceptance/criteria.json
+```

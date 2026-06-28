@@ -28,7 +28,10 @@ build-type:    Simple
 -- deliberately with `make gen-bench-corpus`; see docs/architecture/performance.md).
 -- bench/corpus/pins.json is the shared registry catalogue (capture pins + the smoke
 -- curated names) read by the Node capture script and Ecluse.Test.RegistryCapture.
+-- acceptance/criteria.json is the version-controlled acceptance budget for the live
+-- performance-acceptance harness (Ecluse.Acceptance / the perf-acceptance executable).
 extra-source-files:
+  acceptance/criteria.json
   bench/corpus/npm/*.json
   bench/corpus/pins.json
   core/test/unit/fixtures/npm/*.json
@@ -378,6 +381,7 @@ test-suite ecluse-unit
   hs-source-dirs:     test/unit
   other-modules:
     EcluseSpec
+    Ecluse.AcceptanceSpec
     Ecluse.CompositionSpec
     Ecluse.ConfigSpec
     Ecluse.EnvSpec
@@ -394,6 +398,7 @@ test-suite ecluse-unit
   build-tool-depends: hspec-discover:hspec-discover ^>=2.11
   build-depends:
     , ecluse
+    , ecluse:ecluse-acceptance
     , ecluse:ecluse-core
     , ecluse:ecluse-manifest
     , ecluse:ecluse-test-support
@@ -640,3 +645,43 @@ executable bench-load
     , unliftio       ^>=0.2.25
     , wai            ^>=3.2
     , warp           ^>=3.4
+
+-- Live performance-acceptance harness (Context B): the PURE evaluation core. The
+-- version-controlled acceptance criteria, the per-package budget verdict, and the
+-- run-summary rendering. An INTERNAL sublibrary (the ecluse-manifest pattern) so the
+-- gating unit suite can test the acceptance decision deterministically, while the
+-- live fetch + timing stay in the perf-acceptance executable. Links ecluse-core only;
+-- kept out of the shipped library closure. See docs/architecture/performance.md.
+library ecluse-acceptance
+  import:          shared
+  hs-source-dirs:  acceptance/src
+  exposed-modules: Ecluse.Acceptance
+  build-depends:
+    , ecluse:ecluse-core
+    , aeson       ^>=2.2
+    , bytestring  ^>=0.12
+    , containers  ^>=0.7
+    , text        ^>=2.1
+
+-- The live performance-acceptance harness (Context B): a separate EXECUTABLE that
+-- fetches LIVE packuments for the curated catalogue set (Ecluse.Test.RegistryCapture),
+-- times Ecluse's work-per-request over each, and evaluates the overhead against the
+-- version-controlled budget (ecluse-acceptance). Runs on demand / scheduled / per-PR,
+-- NEVER per-PR-gating: a budget breach reds the (non-required) check to inform a human
+-- decision, it never blocks merge. Kept out of the shipped library closure. See
+-- docs/architecture/performance.md.
+executable perf-acceptance
+  import:         shared
+  main-is:        Main.hs
+  hs-source-dirs: acceptance/app
+  build-depends:
+    , ecluse:ecluse-acceptance
+    , ecluse:ecluse-core
+    , ecluse:ecluse-test-support
+    , aeson            ^>=2.2
+    , bytestring       ^>=0.12
+    , containers       ^>=0.7
+    , http-client      ^>=0.7
+    , http-client-tls  ^>=0.3.6
+    , text             ^>=2.1
+    , time             ^>=1.12
