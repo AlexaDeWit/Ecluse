@@ -1,6 +1,6 @@
 module Ecluse.WorkerSpec (spec) where
 
-import Crypto.Hash (Digest, SHA1, SHA384, SHA512, hashlazy)
+import Crypto.Hash (Blake2b_512, Digest, SHA1, SHA256, SHA384, SHA512, hashlazy)
 import Data.Aeson (Key, Value (Object, String), eitherDecodeStrict')
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteArray.Encoding (Base (Base16, Base64), convertToBase)
@@ -115,6 +115,18 @@ digest carries (as opposed to the base64 inside an SRI string).
 trueSha512Hex :: Text
 trueSha512Hex = decodeUtf8 (convertToBase Base16 (hashlazy (toLazy tarballBytes) :: Digest SHA512) :: ByteString)
 
+-- | The lower-cased hex SHA-256 of 'tarballBytes' (a digest the worker now computes).
+trueSha256 :: Text
+trueSha256 = decodeUtf8 (convertToBase Base16 (hashlazy (toLazy tarballBytes) :: Digest SHA256) :: ByteString)
+
+-- | The SRI (@sha256-<base64>@) of 'tarballBytes', the resolved-and-computable SRI form.
+trueSha256Sri :: Text
+trueSha256Sri = "sha256-" <> decodeUtf8 (convertToBase Base64 (hashlazy (toLazy tarballBytes) :: Digest SHA256) :: ByteString)
+
+-- | The lower-cased hex Blake2b-512 of 'tarballBytes' (a digest the worker now computes).
+trueBlake2b :: Text
+trueBlake2b = decodeUtf8 (convertToBase Base16 (hashlazy (toLazy tarballBytes) :: Digest Blake2b_512) :: ByteString)
+
 -- | The SRI (@sha384-<base64>@) of 'tarballBytes' — a genuine sha384 the worker computes.
 trueSha384Sri :: Text
 trueSha384Sri = "sha384-" <> decodeUtf8 (convertToBase Base64 (hashlazy (toLazy tarballBytes) :: Digest SHA384) :: ByteString)
@@ -150,9 +162,10 @@ empty string) — the mismatch fixture, distinct from a malformed one.
 wrongSha1 :: Text
 wrongSha1 = "da39a3ee5e6b4b0d3255bfef95601890afd80709"
 
--- Well-formed digests of algorithms the worker cannot recompute (the empty-input
--- digest of each), so the fail-closed-on-uncomputable arm sees a real digest rather
--- than a malformed one; their values are immaterial since the worker never computes them.
+-- Well-formed digests of the EMPTY input (not of 'tarballBytes'), so each is a real digest
+-- of its algorithm that does not match the fetched bytes. 'someMd5' feeds the still-uncomputable
+-- MD5 arm (fail-closed); the others are the now-computable algorithms' tamper fixtures (a real,
+-- well-formed digest the worker recomputes and finds does not match).
 someBlake2b, someSha256, someMd5, someSha256Sri :: Text
 someBlake2b = "786a02f742015903c6c6fd852552d272912f4740e15847618a86e217f71f5419d25e1031afee585313896444934eb04b903a685b1448b755d56f701afe9be2ce"
 someSha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
@@ -483,47 +496,54 @@ spec = do
             verifyIntegrity (unsafeHash SHA1 wrongSha1 :| []) tarballBytes
                 `shouldSatisfy` isMismatch
 
-        it "fails closed when the strongest present digest is in an uncomputable algorithm" $
-            -- A blake2b ranks at the top but the worker cannot compute it, so it must
-            -- NOT fall back to the (matching) sha1 — fail closed.
-            verifyIntegrity (unsafeHash Blake2b someBlake2b :| [unsafeHash SHA1 trueSha1]) tarballBytes
-                `shouldSatisfy` isMismatch
+        it "verifies a blake2b-only digest (the worker now computes blake2b-512)" $
+            -- The #409 fix: blake2b ranks at the top tier and the worker now computes it,
+            -- so a blake2b-only artifact verifies rather than failing closed as uncomputable.
+            verifyIntegrity (unsafeHash Blake2b trueBlake2b :| []) tarballBytes `shouldBe` IntegrityVerified
 
-        it "names the uncomputable strongest algorithm in the fail-closed detail" $
-            -- The fail-closed detail is operator-facing: it must name WHICH algorithm
-            -- the worker could not verify, so a refused publish is diagnosable. Asserting
-            -- the message (not just the constructor) pins that diagnostic.
-            mismatchDetail (verifyIntegrity (unsafeHash Blake2b someBlake2b :| [unsafeHash SHA1 trueSha1]) tarballBytes)
-                `shouldBe` Just "the strongest admitted digest (Blake2b) is in an algorithm the worker cannot verify"
+        it "REJECTS a blake2b digest that does not match the fetched bytes (tamper guard, the new arm)" $
+            -- The tamper direction for the new blake2b compute path: a real, well-formed
+            -- blake2b of OTHER bytes must fail, naming the algorithm.
+            verifyIntegrity (unsafeHash Blake2b someBlake2b :| []) tarballBytes
+                `shouldBe` IntegrityMismatch "the Blake2b digest did not match the fetched bytes"
 
-        it "fails closed on a sha256-only digest (the worker cannot compute SHA-256)" $
-            -- SHA-256 outranks a SHA-1, but the worker has no SHA-256 computation, so a
-            -- sha256-only artifact must fail closed rather than be admitted unverified —
-            -- it must NOT silently fall through to a (non-present) weaker digest.
-            mismatchDetail (verifyIntegrity (unsafeHash SHA256 someSha256 :| []) tarballBytes)
-                `shouldBe` Just "the strongest admitted digest (SHA256) is in an algorithm the worker cannot verify"
+        it "prefers and verifies a co-present blake2b over a matching sha1 (strongest wins, now computable)" $
+            -- blake2b outranks sha1, so the gate selects it; it is now computable, so it
+            -- verifies against it rather than failing closed or downgrading to the sha1.
+            verifyIntegrity (unsafeHash SHA1 trueSha1 :| [unsafeHash Blake2b trueBlake2b]) tarballBytes
+                `shouldBe` IntegrityVerified
 
-        it "fails closed on an md5-only digest (the worker cannot compute MD5)" $
-            -- MD5 is cryptographically broken AND uncomputable here; an md5-only artifact
-            -- fails closed, never admitted on the strength of a forgeable hash.
+        it "verifies a sha256-only digest (the worker now computes sha256, the default floor)" $
+            -- The #409 fix on the default config: sha256 is the default public floor and is
+            -- now computable, so a sha256-only admitted artifact verifies rather than being
+            -- admitted then permanently dropped.
+            verifyIntegrity (unsafeHash SHA256 trueSha256 :| []) tarballBytes `shouldBe` IntegrityVerified
+
+        it "REJECTS a sha256 digest that does not match the fetched bytes (tamper guard)" $
+            verifyIntegrity (unsafeHash SHA256 someSha256 :| []) tarballBytes
+                `shouldBe` IntegrityMismatch "the SHA256 digest did not match the fetched bytes"
+
+        it "fails closed on an md5-only digest (the worker will not verify a broken hash)" $
+            -- MD5 is cryptographically broken, so the worker deliberately will not compute it:
+            -- an md5-only artifact fails closed, never admitted on the strength of a forgeable
+            -- hash. (MD5 is also below the public floor, so this never arises for an admitted
+            -- public job; the fail-closed stance is belt-and-suspenders.)
             mismatchDetail (verifyIntegrity (unsafeHash MD5 someMd5 :| []) tarballBytes)
                 `shouldBe` Just "the strongest admitted digest (MD5) is in an algorithm the worker cannot verify"
 
-        it "fails closed on an SRI whose inner algorithm is not sha512 (uncomputable)" $
-            -- An SRI string names its own algorithm; only sha512 is computable here. A
-            -- sha256 SRI ranks below everything (its inner alg does not resolve) and is
-            -- uncomputable, so it fails closed — and the detail names it as an SRI.
-            mismatchDetail (verifyIntegrity (unsafeHash SRI someSha256Sri :| []) tarballBytes)
-                `shouldBe` Just "the strongest admitted digest (SRI sha256) is in an algorithm the worker cannot verify"
+        it "verifies a sha256 SRI (the worker now computes the sha256 inner algorithm)" $
+            verifyIntegrity (unsafeHash SRI trueSha256Sri :| []) tarballBytes `shouldBe` IntegrityVerified
 
-        it "fails closed on an unrecognised SRI that outranks a matching weaker digest (no downgrade)" $
-            -- The downgrade guard, multi-digest: a present-but-uncomputable strong SRI
-            -- (sha256) must OUTRANK a co-present, matching SHA-1 the attacker also
-            -- controls, so the gate fails closed instead of admitting the artifact on
-            -- the weaker digest. The lone-SRI test above cannot see this — with no
-            -- weaker digest present there is nothing to downgrade to.
+        it "REJECTS a sha256 SRI that does not match the fetched bytes (tamper guard)" $
+            verifyIntegrity (unsafeHash SRI someSha256Sri :| []) tarballBytes
+                `shouldBe` IntegrityMismatch "the SRI sha256 digest did not match the fetched bytes"
+
+        it "does not downgrade to a matching sha1 when a co-present strong sha256 SRI fails" $
+            -- The downgrade guard, multi-digest: a co-present strong sha256 SRI that does NOT
+            -- match must OUTRANK a matching SHA-1 the attacker also controls, so the gate
+            -- reports the strong digest's mismatch rather than admitting on the weak one.
             mismatchDetail (verifyIntegrity (unsafeHash SRI someSha256Sri :| [unsafeHash SHA1 trueSha1]) tarballBytes)
-                `shouldBe` Just "the strongest admitted digest (SRI sha256) is in an algorithm the worker cannot verify"
+                `shouldBe` Just "the SRI sha256 digest did not match the fetched bytes"
 
         it "names the algorithm in a plain (computable) digest mismatch too" $
             -- The non-uncomputable mismatch branch: a sha512 SRI that simply does not
@@ -574,6 +594,29 @@ spec = do
             withUpstream $ \url ->
                 withRuntime (Right ()) $ \runtime queue logRef -> do
                     (receipt, job) <- enqueueAndReceive queue (jobWith url (unsafeHash SRI trueSha384Sri :| []))
+                    outcome <- runWM runtime (processJob receipt job)
+                    outcome `shouldBe` Succeeded
+                    published <- plDocuments <$> readIORef logRef
+                    length published `shouldBe` 1
+
+        it "publishes a sha256-only job end to end (the #409 fix on the default floor)" $
+            -- A sha256-only artifact is admitted by the default public floor; before #409 the
+            -- worker could not compute sha256 and Dropped it. Now it fetches, recomputes
+            -- sha256, matches, and publishes, never the admitted-but-dropped defect.
+            withUpstream $ \url ->
+                withRuntime (Right ()) $ \runtime queue logRef -> do
+                    (receipt, job) <- enqueueAndReceive queue (jobWith url (unsafeHash SHA256 trueSha256 :| []))
+                    outcome <- runWM runtime (processJob receipt job)
+                    outcome `shouldBe` Succeeded
+                    published <- plDocuments <$> readIORef logRef
+                    length published `shouldBe` 1
+
+        it "publishes a blake2b-only job end to end (the #409 fix, the top tier)" $
+            -- A blake2b-only artifact is admitted by the floor and was likewise Dropped before
+            -- #409; the worker now recomputes blake2b-512, matches, and publishes.
+            withUpstream $ \url ->
+                withRuntime (Right ()) $ \runtime queue logRef -> do
+                    (receipt, job) <- enqueueAndReceive queue (jobWith url (unsafeHash Blake2b trueBlake2b :| []))
                     outcome <- runWM runtime (processJob receipt job)
                     outcome `shouldBe` Succeeded
                     published <- plDocuments <$> readIORef logRef
