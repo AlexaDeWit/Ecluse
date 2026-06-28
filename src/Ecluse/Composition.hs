@@ -442,7 +442,7 @@ composeBindings ::
 composeBindings resolveAdapter clock providers config = do
     -- The publish-deps validation is global (env-level), so its error aggregates with
     -- the per-mount errors rather than short-circuiting: one boot reports every problem.
-    let (pubErrs, pubDeps) = either (,Nothing) ([],) publishDepsResult
+    let (pubErrs, pubDeps) = either (,Nothing) ([],) (publishDepsFor (configEnv config) limits helpMessage)
     -- 'bindingFor' is 'IO' (it 'prepare's the mount's rules), so the per-mount results
     -- are gathered with 'traverse' and then partitioned exactly as before.
     bindingResults <- traverse (bindingFor pubDeps) (Map.elems (configMounts config))
@@ -452,50 +452,6 @@ composeBindings resolveAdapter clock providers config = do
   where
     inboundToken :: Maybe Secret
     inboundToken = cfgAuthToken (configEnv config)
-
-    {- The first-party publish dependencies, shared across the (single-ecosystem)
-    mounts: 'Nothing' when no publication target is configured (the publish path is
-    off — a @PUT \/{pkg}@ is then @405@), 'Just' when one is set and valid, or the
-    accumulated fail-loud publish boot errors when not — 'PublishScopesMissing' when a
-    target is set without a publish-scope allow-list, and\/or
-    'PublishStaticCredentialNeedsEdge' when a static publish credential is set without a
-    verifiable inbound edge — reported together rather than one reboot at a time. The
-    target's URL, the scopes, and the static fallback credential are the publish env
-    layer; the edge token, response bounds, and help message are shared with the read
-    paths. -}
-    publishDepsResult :: Either [BootError] (Maybe PublishDeps)
-    publishDepsResult = case cfgPublicationTarget (configEnv config) of
-        Nothing -> Right Nothing
-        Just url -> case publishBootErrors of
-            [] ->
-                Right
-                    ( Just
-                        PublishDeps
-                            { pubTargetUrl = unUrl url
-                            , pubScopes = cfgPublishScopes (configEnv config)
-                            , pubStaticToken = staticToken
-                            , pubInboundToken = inboundToken
-                            , pubLimits = limits
-                            , pubHelp = helpMessage
-                            }
-                    )
-            errs -> Left errs
-      where
-        -- The static fallback publish credential (@PUBLICATION_TARGET_TOKEN@), forwarded
-        -- only when a publishing client sends none; its presence demands a verifiable edge.
-        staticToken :: Maybe Secret
-        staticToken = cfgPublicationTargetToken (configEnv config)
-
-        -- The publish boot couplings, accumulated so one boot reports every problem (the
-        -- same posture as the surrounding aggregation) rather than surfacing them one
-        -- reboot at a time: a target needs a publish-scope allow-list for the anti-shadowing
-        -- guard, and a static publish credential needs a verifiable inbound edge — without
-        -- one, Écluse would publish under its own standing credential for a caller who
-        -- forwards none, so internal credential + open edge is refused as unrepresentable.
-        publishBootErrors :: [BootError]
-        publishBootErrors =
-            [PublishScopesMissing | null (cfgPublishScopes (configEnv config))]
-                <> [PublishStaticCredentialNeedsEdge | isJust staticToken, isNothing inboundToken]
 
     -- The resolved tarball-host policy for every mount, from the secure-default
     -- environment toggle: honour a cross-host dist.tarball only when explicitly
@@ -610,6 +566,59 @@ composeBindings resolveAdapter clock providers config = do
 -- relative path a client's registry endpoint maps onto.
 mountBasePath :: Ecosystem -> Text
 mountBasePath eco = "/" <> T.intercalate "/" (toList (prefixFor eco))
+
+{- | Validate the first-party publish dependencies from the environment layer, shared
+across the (single-ecosystem) mounts: 'Nothing' when no publication target is configured
+(the publish path is off — a @PUT \/{pkg}@ is then @405@), 'Just' when one is set and
+valid, or the accumulated fail-loud publish boot errors when not — 'PublishScopesMissing'
+when a target is set without a publish-scope allow-list, and\/or
+'PublishStaticCredentialNeedsEdge' when a static publish credential is set without a
+verifiable inbound edge — reported together rather than one reboot at a time. The target's
+URL, the scopes, and the static fallback credential are the publish env layer; the
+response bounds ('Limits') and help message are shared with the read paths and passed in.
+-}
+publishDepsFor :: EnvConfig -> Limits -> Maybe HelpMessage -> Either [BootError] (Maybe PublishDeps)
+publishDepsFor env limits helpMessage = case cfgPublicationTarget env of
+    Nothing -> Right Nothing
+    Just url -> case bootErrors of
+        [] ->
+            Right
+                ( Just
+                    PublishDeps
+                        { pubTargetUrl = unUrl url
+                        , pubScopes = cfgPublishScopes env
+                        , pubStaticToken = staticToken
+                        , pubInboundToken = inboundToken
+                        , pubLimits = limits
+                        , pubHelp = helpMessage
+                        }
+                )
+        errs -> Left errs
+  where
+    -- The inbound edge token (@PROXY_AUTH_TOKEN@) and the static fallback publish
+    -- credential (@PUBLICATION_TARGET_TOKEN@, forwarded only when a publishing client
+    -- sends none) — the pair whose coupling the edge check below constrains.
+    inboundToken, staticToken :: Maybe Secret
+    inboundToken = cfgAuthToken env
+    staticToken = cfgPublicationTargetToken env
+
+    -- The publish boot couplings, accumulated so one boot reports every problem rather
+    -- than surfacing them one reboot at a time; each error sits next to the condition
+    -- that fires it.
+    bootErrors :: [BootError]
+    bootErrors = catMaybes [scopesError, edgeError]
+
+    scopesError, edgeError :: Maybe BootError
+    -- A publication target needs a publish-scope allow-list for the anti-shadowing guard.
+    scopesError
+        | null (cfgPublishScopes env) = Just PublishScopesMissing
+        | otherwise = Nothing
+    -- A static publish credential needs a verifiable inbound edge: without one, Écluse
+    -- would publish under its own standing credential for a caller who forwards none, so
+    -- internal credential + open edge is refused as unrepresentable.
+    edgeError
+        | isJust staticToken && isNothing inboundToken = Just PublishStaticCredentialNeedsEdge
+        | otherwise = Nothing
 
 -- ── publish-side wiring ───────────────────────────────────────────────────────
 
