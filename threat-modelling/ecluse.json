@@ -445,12 +445,12 @@
               "threats": [
                 {
                   "number": 11,
-                  "status": "Open",
+                  "status": "Mitigated",
                   "severity": "High",
                   "title": "Undetected artifact substitution across upstreams",
                   "type": "Tampering",
                   "description": "The merge flags an integrity divergence when private and public copies of a version contradict on a shared digest algorithm. A weak-only or absent digest, or a flaw in how divergence is keyed, could let a substituted artifact pass undetected and be served as the trusted copy.",
-                  "mitigation": "A public version must carry a digest meeting the integrity floor (uniform default SHA-256, hard-floored) to be admitted, and divergence is compared on each digest's asserted algorithm rather than a bucketed tag; the asserted-algorithm keying landed in #380 (closing #376). Residual: the deliberately operator-loosenable trusted-floor path, which trades strictness for availability and is the remaining way a weak digest could be accepted.",
+                  "mitigation": "A public version must carry a digest meeting the integrity floor (uniform default SHA-256, hard-floored) to be admitted, and divergence is compared on each digest's asserted algorithm rather than a bucketed tag; the asserted-algorithm keying landed in #380 (closing #376); a real same-version contradiction on a shared algorithm is then reported in the merge plan — and may be failed-closed on that version per policy — never silently reconciled, so a substitution is surfaced, not undetected. Residual: the deliberately operator-loosenable trusted-floor path, which trades strictness for availability and is the remaining way a weak digest could be accepted.",
                   "modelType": "STRIDE",
                   "id": "0ec10e5e-0000-4000-8000-00000000010b"
                 },
