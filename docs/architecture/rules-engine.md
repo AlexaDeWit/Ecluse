@@ -309,11 +309,12 @@ versions, not requests.
 ### Point-in-time gating — a known limitation
 
 CVE gating happens **at ingestion**: a version is checked once, before it enters
-the mirror. A CVE disclosed *after* a version is mirrored is **not** caught — the
-private upstream serves it rule-free thereafter. Catching post-mirror disclosures
-needs **periodically re-scanning the mirror** (quarantine/remove affected
-versions) against the same local dataset; that is its own feature and is
-**deferred**. Holding the dataset locally makes it straightforward to add later.
+the mirror, and the private upstream serves it rule-free thereafter — so a CVE
+disclosed *after* a version is mirrored is **not** caught by the gate. The
+post-ingestion disposition (operator scanning, a hard deny-by-identity revocation,
+and operator purge — *deny-then-purge*) is catalogued as
+[threat #13](https://alexadewit.github.io/Ecluse/threat-model.html); holding the
+advisory dataset locally keeps a periodic mirror re-scan straightforward to add later.
 
 ### Testing
 

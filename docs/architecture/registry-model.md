@@ -64,15 +64,13 @@ held in the [metadata cache](web-layer.md#metadata-cache). Écluse
 outright — it is a thin broker and leaves caching to the upstreams — so no strategy
 shares the private origin.
 
-The reason is a cross-client disclosure hazard. The cache key carries **no
-credential dimension** (it is the upstream base URL plus the package — a credential
-is never part of a cache key). So if the private origin were cached, one client could
-warm an entry for `@org/secret` and, within the TTL, a differently-scoped or
-unauthorised client would get a cache **hit** — served the first client's private
-document, their own token never validated upstream. Caching the private origin would
-therefore **bypass the upstream's per-client authorisation**. The public origin has no
-such hazard: it is fetched anonymously, so one shared entry serves every client
-without crossing any trust boundary — there is nothing per-client to preserve.
+The reason is a **cross-client disclosure hazard** — a credential-blind cache key would
+let one client warm a private entry that a differently-authorised client then gets as a
+hit, bypassing the upstream's per-client authorisation. The full mechanics live in
+[access model → why Écluse never caches the private origin](access-model.md#why-écluse-never-caches-the-private-origin),
+and it is catalogued as [threat #9](https://alexadewit.github.io/Ecluse/threat-model.html).
+The public origin has no such hazard: it is fetched anonymously, so one shared entry
+serves every client with nothing per-client to preserve.
 
 Outbound requests are further constrained by the
 [security invariants](security.md): an **outbound host allowlist**,
@@ -201,9 +199,10 @@ deduplicating.
   appears in both upstreams, the private copy wins (it is the authority). But if
   the public copy **contradicts the private one on a shared integrity algorithm**
   (an algorithm both carry whose digests disagree) for that version, that divergence
-  is exactly the supply-chain tampering Écluse exists to catch: it is **detected,
-  logged, and metered** (and may fail-closed on that version), never silently
-  reconciled. The algorithm compared is the one each digest **asserts** — an SRI is
+  is exactly the supply-chain tampering Écluse exists to catch
+  ([threat #11](https://alexadewit.github.io/Ecluse/threat-model.html)): it is
+  **detected, logged, and metered** (and may fail-closed on that version), never
+  silently reconciled. The algorithm compared is the one each digest **asserts** — an SRI is
   resolved to its embedded algorithm, never bucketed under an opaque `SRI` tag — so the
   same algorithm expressed as a hex digest or as an SRI is cross-checked **together**,
   while two *different* algorithms over the same bytes (e.g. a recomputing mirror's

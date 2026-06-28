@@ -41,14 +41,13 @@ for example only a legacy SHA-1 `dist.shasum`, with no `sha256`/`sha512` SRI `di
   client never sees a version it couldn't safely fetch. (If a package's *only* public versions
   are inadmissible, the packument request is a `403`.)
 
-**Why.** SHA-1 and MD5 have practical collisions, so a match on one can't prove an artifact
-wasn't substituted; a version with no strong digest can't be tied to a tamper-evident
-fingerprint. Écluse detects supply-chain tampering by comparing a version's integrity across
-upstreams; two differing-byte copies that share only a weak (or no) digest could
-fingerprint-collide and a divergence would go undetected. Refusing the version at admission
-closes that gap: it never reaches the serve path nor contributes a weak fingerprint to the
-cross-upstream merge. The floor may be raised (`sha512`, `blake2b`) but never set below
-SHA-256 — a sub-floor value is rejected at startup.
+**Why.** SHA-1/MD5 have practical collisions, so a match can't prove bytes weren't
+substituted, and a weak or absent digest can't anchor the cross-upstream tamper check —
+admitting on one would let a substituted artifact pass undetected. This is the public
+**integrity floor**; its full contract (the hard SHA-256 boundary, the trusted-floor
+asymmetry, the divergence cross-check) is
+[Security → invariant 5](docs/architecture/security.md#invariants), and the threat it closes
+is [#11, undetected artifact substitution](https://alexadewit.github.io/Ecluse/threat-model.html).
 
 **The trusted private upstream is exempt.** Versions from the configured private upstream are
 trusted and enter unfiltered, so a SHA-1-only *private* version is still served (trust
