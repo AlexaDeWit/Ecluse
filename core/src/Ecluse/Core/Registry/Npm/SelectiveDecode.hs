@@ -34,19 +34,20 @@ same 'Value').
 
 == What it deliberately does not re-validate
 
-For the document's __other__ versions' publish stamps and the @dist-tags@ map, the
-whole-document decode parses every entry strictly (@time@ as a @Map Text UTCTime@,
-@dist-tags@ as a @Map Text Text@), so a single malformed sibling entry there fails the
-/whole/ decode. The selective walk parses only the requested version's @time@ entry (a
-malformed one is still 'SelectiveUndecodable'), and skips the rest. The single
-divergence this leaves is narrow and __fail-safe__: a packument whose requested version
-is sound but which carries a structurally-valid-JSON-yet-schema-invalid sibling stamp
-(a non-ISO @time@ string for /another/ version, say, or a non-string @dist-tags@ value)
-is served here where the whole-document path would have refused it with a @503@. It is a
-hostile\/buggy-upstream shape that never occurs from a conforming registry, and serving
-the one sound version it was asked for — rather than letting an unrelated sibling
-malformation deny it — is the safer outcome (it also denies a one-byte sibling poison a
-lever to fail the gate).
+The selective walk reaches only the requested version's @time@ entry: a structurally
+malformed-JSON one anywhere is still 'SelectiveUndecodable' (the lexer reaches it), but a
+__schema-invalid__ sibling (a non-ISO @time@ string for /another/ version, a non-string
+@dist-tags@ value) is __skipped unallocated__ and never inspected. The whole-document
+decode degrades the same way: it drops a malformed @time@\/@dist-tags@ entry per-entry
+(graceful per-entry degradation) rather than failing the document, so neither path
+refuses a sound version over an unrelated sibling malformation. The two paths agree on
+__what is served__ (the one sound version, identically projected) and differ only in
+__tracking__: the whole-document projection records each dropped sibling as an
+'Ecluse.Core.Package.InvalidEntry' for the serve-path log, while this walk, skipping the
+siblings unallocated, cannot report them (the degenerate tracking a single-version read
+inherently has). The requested version's /own/ schema-invalid stamp folds, on both paths,
+to a version with no known publish time (the projecting caller's lenient parse), never a
+document failure.
 -}
 module Ecluse.Core.Registry.Npm.SelectiveDecode (
     -- * The selective decode

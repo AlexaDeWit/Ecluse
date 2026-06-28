@@ -33,7 +33,7 @@ import Data.Map.Strict qualified as Map
 import Network.HTTP.Client qualified as HTTP
 import UnliftIO.Exception (throwIO, try, tryAny)
 
-import Ecluse.Core.Package (PackageDetails, PackageInfo (infoVersions), PackageName)
+import Ecluse.Core.Package (InvalidEntry, PackageDetails, PackageInfo (infoInvalidEntries, infoVersions), PackageName)
 import Ecluse.Core.Registry.Metadata (
     MetadataClient (..),
     MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable),
@@ -94,17 +94,21 @@ consult, so the single-version op is the raw selective fetch, uncached, re-run e
 
 The failure log is invoked __once per real fetch__ (inside the cache's single-flight
 leader), in the caller's logging context, so a coalesced follower never re-logs a
-failure the leader already reported.
+failure the leader already reported. The dropped-entry log ('logInvalid') is invoked the
+same way (once per real full-manifest fetch, only when the projection dropped a
+malformed entry), so an operator sees a degraded-but-served document without it
+re-logging on every cache hit.
 -}
 newMetadataClient ::
     MetricsPort ->
     Metric.Upstream ->
     ManifestCaching ->
     (PackageName -> MetadataError -> IO ()) ->
+    (PackageName -> [InvalidEntry] -> IO ()) ->
     (PackageName -> IO (Either MetadataError (PackageInfo, Value))) ->
     (PackageName -> Version -> IO (Either MetadataError (Maybe PackageDetails))) ->
     MetadataClient
-newMetadataClient metrics upstream caching logFailure rawFetch rawFetchVersion =
+newMetadataClient metrics upstream caching logFailure logInvalid rawFetch rawFetchVersion =
     MetadataClient
         { fetchFullManifest = resolveFull
         , fetchVersionMetadata = resolveVersionHybrid
@@ -127,12 +131,16 @@ newMetadataClient metrics upstream caching logFailure rawFetch rawFetchVersion =
         Cached cache source -> resolveMetadata metrics cache source name (manifestLeader name)
 
     -- The full-manifest single-flight leader action: the real fetch, run only on a cache
-    -- miss, metered and (on failure) logged once before the carrier is raised.
+    -- miss, metered, with any dropped malformed entries logged on success and a fetch
+    -- failure logged once before the carrier is raised.
     manifestLeader :: PackageName -> IO CacheEntry
     manifestLeader name =
         recordedFetch metrics upstream $
             rawFetch name >>= \case
-                Right (info, raw) -> pure (CacheEntry info raw)
+                Right (info, raw) -> do
+                    let invalid = infoInvalidEntries info
+                    unless (null invalid) (logInvalid name invalid)
+                    pure (CacheEntry info raw)
                 Left err -> logFailure name err >> throwIO (ManifestFetchFailed err)
 
     -- The single-version hybrid: the small version cache, then the warm full cache
@@ -181,17 +189,19 @@ newMetadataClient metrics upstream caching logFailure rawFetch rawFetchVersion =
 
 {- | Build a per-request read handle for the npm protocol over one origin's fetch
 configuration: the npm full-manifest and single-version fetches as the raw primitives, with
-the serve-path caching, metrics, and failure log wired by 'newMetadataClient'.
+the serve-path caching, metrics, and the failure and dropped-entry logs wired by
+'newMetadataClient'.
 -}
 newNpmMetadataClient ::
     MetricsPort ->
     Metric.Upstream ->
     ManifestCaching ->
     (PackageName -> MetadataError -> IO ()) ->
+    (PackageName -> [InvalidEntry] -> IO ()) ->
     NpmClientConfig ->
     MetadataClient
-newNpmMetadataClient metrics upstream caching logFailure config =
-    newMetadataClient metrics upstream caching logFailure (fetchNpmManifest config) (fetchNpmVersion config)
+newNpmMetadataClient metrics upstream caching logFailure logInvalid config =
+    newMetadataClient metrics upstream caching logFailure logInvalid (fetchNpmManifest config) (fetchNpmVersion config)
 
 {- The in-band failure carrier for a full-manifest leader fetch: a 'MetadataError' raised
 so the shared metadata cache caches nothing on failure and re-raises it to coalesced

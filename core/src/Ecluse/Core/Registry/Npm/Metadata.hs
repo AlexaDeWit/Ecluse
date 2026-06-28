@@ -37,7 +37,7 @@ module Ecluse.Core.Registry.Npm.Metadata (
 ) where
 
 import Data.Aeson (Value, eitherDecodeStrict, parseJSON)
-import Data.Aeson.Types (parseEither, parseMaybe)
+import Data.Aeson.Types (parseMaybe)
 import Data.Time (UTCTime)
 import UnliftIO.Exception (handle)
 
@@ -185,13 +185,17 @@ projectNpmVersion limits name version body = do
             Nothing -> Left MetadataUndecodable
             Just raw -> first (const MetadataUndecodable) (projectName raw)
 
-    -- The requested version's publish stamp: absent is no stamp ('Nothing'); a present
-    -- but un-decodable stamp fails the whole document for the full path (it decodes @time@
-    -- as @Map Text UTCTime@), so it is 'MetadataUndecodable' here too.
+    -- The requested version's publish stamp, folded leniently to match the whole-document
+    -- path: absent is no stamp ('Nothing'), and a present-but-un-decodable stamp is also
+    -- 'Nothing' (the version has no known publish time) rather than a document failure:
+    -- the full path drops a malformed @time@ entry per-entry, so the requested version it
+    -- would project there carries no time, and the selective projection must agree. (A
+    -- structurally-malformed-JSON stamp is still a 'SelectiveUndecodable' from the walk, as
+    -- it is an 'eitherDecodeStrict' failure on the full path.)
     parsePublishTime :: Maybe Value -> Either MetadataError (Maybe UTCTime)
     parsePublishTime = \case
         Nothing -> Right Nothing
-        Just timeValue -> first (const MetadataUndecodable) (Just <$> parseEither parseJSON timeValue)
+        Just timeValue -> Right (parseMaybe parseJSON timeValue)
 
 -- Map a selective-decode refusal onto the 'MetadataError' the whole-document path raises
 -- for the same cause: malformed\/non-object bytes are 'MetadataUndecodable', a depth breach

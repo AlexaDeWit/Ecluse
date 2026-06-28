@@ -10,6 +10,7 @@ import Ecluse.Core.Package (
     ArtifactKind (Tarball),
     Availability (Available),
     CodeExecSignal (NoCodeOnInstall),
+    InvalidEntry,
     PackageDetails (..),
     PackageInfo (..),
     PackageName,
@@ -91,7 +92,7 @@ spec = do
             calls <- newIORef (0 :: Int)
             let info = manifest name ["1.0.0"]
                 client =
-                    newMetadataClient noopMetricsPort Metric.Private Uncached noLog (countingFull calls info) (countingVersion calls info)
+                    newMetadataClient noopMetricsPort Metric.Private Uncached noLog noInvalidLog (countingFull calls info) (countingVersion calls info)
             _ <- fetchFullManifest client name
             _ <- fetchFullManifest client name
             readIORef calls `shouldReturn` 2
@@ -130,6 +131,9 @@ source = Source "https://public.example"
 noLog :: PackageName -> MetadataError -> IO ()
 noLog _ _ = pure ()
 
+noInvalidLog :: PackageName -> [InvalidEntry] -> IO ()
+noInvalidLog _ _ = pure ()
+
 {- | A public (cached, anonymous) read handle over an injected full and single-version
 fetch.
 -}
@@ -139,7 +143,7 @@ publicClient ::
     (PackageName -> Version -> IO (Either MetadataError (Maybe PackageDetails))) ->
     MetadataClient
 publicClient cache =
-    newMetadataClient noopMetricsPort Metric.Public (Cached cache source) noLog
+    newMetadataClient noopMetricsPort Metric.Public (Cached cache source) noLog noInvalidLog
 
 {- | A counting full-manifest fetch: bumps the call counter, then yields the given manifest
 paired with a marker raw 'Value' (so a test can confirm a hit returned the cached pair).
@@ -176,7 +180,7 @@ manifest who versions =
         { infoName = who
         , infoVersions = Map.fromList [(v, details who v) | v <- versions]
         , infoDistTags = Map.empty
-        , infoPublishedAt = Map.empty
+        , infoInvalidEntries = []
         }
 
 -- | A minimal per-version snapshot, identifiable by its parsed version.

@@ -37,7 +37,7 @@ import Katip (KatipContext, Severity (WarningS), katipAddContext, logFM, ls, sl)
 
 import Ecluse.Core.Package (
     PackageDetails (pkgArtifacts),
-    PackageInfo (infoDistTags, infoPublishedAt, infoVersions),
+    PackageInfo (infoDistTags, infoVersions),
     PackageName,
     renderPackageName,
  )
@@ -114,8 +114,9 @@ than served a client could never safely verify. Used by both gates: the public g
 (@gatePublic@) with the hard-floored 'Ecluse.Core.Package.Integrity.MinIntegrity', and the
 trusted gate (@admitTrusted@) with the loosenable
 'Ecluse.Core.Package.Integrity.MinTrustedIntegrity'. Returns the admissible 'PackageInfo'
-(with @dist-tags@\/@time@ pruned to the kept keys, exactly as @restrictToSurvivors@ prunes
-for the rules) and the refusals for the dropped versions: 'BelowIntegrityFloor' for a
+(with @dist-tags@ pruned to the kept keys, exactly as @restrictToSurvivors@ prunes for the
+rules; each kept version carries its own publish time, so restricting the versions carries
+the times with it) and the refusals for the dropped versions: 'BelowIntegrityFloor' for a
 too-weak digest, 'MissingIntegrity' for none at all, each feeding the no-survivors
 status.
 -}
@@ -133,7 +134,6 @@ admitByIntegrity floorSpec belowFloorRefusal missingRefusal info =
     ( info
         { infoVersions = Map.restrictKeys (infoVersions info) admissibleKeys
         , infoDistTags = Map.filter ((`Set.member` admissibleKeys) . renderVersion) (infoDistTags info)
-        , infoPublishedAt = Map.restrictKeys (infoPublishedAt info) admissibleKeys
         }
     , refusals
     )

@@ -76,7 +76,7 @@ import Data.Map.Strict qualified as Map
 import Data.Time (UTCTime (UTCTime), fromGregorian, nominalDay, secondsToDiffTime)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (
-    PackageInfo (PackageInfo, infoDistTags, infoName, infoPublishedAt, infoVersions),
+    PackageInfo (PackageInfo, infoDistTags, infoInvalidEntries, infoName, infoVersions),
     PackageName,
     mkPackageName,
     mkScope,
@@ -315,7 +315,7 @@ projectInfo name value = case parsePackageInfoFromValue name value of
             { infoName = name
             , infoVersions = Map.empty
             , infoDistTags = Map.empty
-            , infoPublishedAt = Map.empty
+            , infoInvalidEntries = []
             }
 
 -- | The synthetic packument of the given version count, projected into 'PackageInfo'.

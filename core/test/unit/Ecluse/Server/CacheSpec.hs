@@ -54,7 +54,7 @@ info name =
         { infoName = name
         , infoVersions = Map.empty
         , infoDistTags = Map.empty
-        , infoPublishedAt = Map.empty
+        , infoInvalidEntries = []
         }
 
 {- | A cache entry pairing the named metadata with a raw 'Value' tagged by a marker,

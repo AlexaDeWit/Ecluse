@@ -57,7 +57,7 @@ detailsWith rawVer hs =
     PackageDetails
         { pkgName = name
         , pkgVersion = mkVersion Npm rawVer
-        , pkgPublishedAt = Nothing
+        , pkgPublishedAt = Just t0
         , pkgInstallCode = NoCodeOnInstall
         , pkgTrust = Untrusted
         , pkgAvailability = Available
@@ -68,12 +68,19 @@ detailsWith rawVer hs =
         , pkgDependencies = []
         }
 
+{- | The fixed publish instant every 'detailsWith' version carries (the folded
+per-version @time@); overridden per-version by 'withPublishedAt' where a test needs
+distinct cross-source instants.
+-}
+t0 :: UTCTime
+t0 = UTCTime (fromGregorian 2026 1 1) 0
+
 {- | Build a single-package packument from @(rawVersion, integrityDigests)@ pairs,
 each version carrying the given set of integrity hashes (so two copies of one key
 can expose asymmetric algorithm sets). @latest@ is pointed at the lexically-highest
 version (a coherent packument always tags its newest release), so a lone source is
-already a fixed point of the merge's @latest@ reconciliation; @time@ gives each
-version a fixed instant.
+already a fixed point of the merge's @latest@ reconciliation; every version carries the
+fixed publish instant 't0' on its own snapshot.
 -}
 packumentWith :: [(Text, [Hash])] -> PackageInfo
 packumentWith vs =
@@ -83,10 +90,15 @@ packumentWith vs =
         , infoDistTags = case sortOn Down (map fst vs) of
             [] -> Map.empty
             (hi : _) -> Map.singleton "latest" (mkVersion Npm hi)
-        , infoPublishedAt = Map.fromList [(v, t0) | (v, _) <- vs]
+        , infoInvalidEntries = []
         }
-  where
-    t0 = UTCTime (fromGregorian 2026 1 1) 0
+
+{- | Override the publish instant carried by every version of a packument: the per-version
+counterpart of the old sibling @time@ override, for tests pinning cross-source instants.
+-}
+withPublishedAt :: UTCTime -> PackageInfo -> PackageInfo
+withPublishedAt t info =
+    info{infoVersions = Map.map (\d -> d{pkgPublishedAt = Just t}) (infoVersions info)}
 
 {- | Build a packument whose every version carries a single SRI digest — the common
 case for the collision and reconciliation tests, where the algorithm set is uniform
@@ -435,17 +447,17 @@ spec = do
         -- so the plan is identical whichever order the caller passes the upstreams.
         let trusted =
                 ( TrustedSource
-                , (packument [("1.0.0", sriPriv)])
-                    { infoDistTags = Map.fromList [("latest", mkVersion Npm "1.0.0"), ("beta", mkVersion Npm "1.0.0")]
-                    , infoPublishedAt = Map.singleton "1.0.0" tTrusted
-                    }
+                , withPublishedAt tTrusted $
+                    (packument [("1.0.0", sriPriv)])
+                        { infoDistTags = Map.fromList [("latest", mkVersion Npm "1.0.0"), ("beta", mkVersion Npm "1.0.0")]
+                        }
                 )
             gated =
                 ( GatedSource
-                , (packument [("1.0.0", sriPub)])
-                    { infoDistTags = Map.fromList [("latest", mkVersion Npm "1.0.0"), ("beta", mkVersion Npm "1.0.0")]
-                    , infoPublishedAt = Map.singleton "1.0.0" tGated
-                    }
+                , withPublishedAt tGated $
+                    (packument [("1.0.0", sriPub)])
+                        { infoDistTags = Map.fromList [("latest", mkVersion Npm "1.0.0"), ("beta", mkVersion Npm "1.0.0")]
+                        }
                 )
             tTrusted = UTCTime (fromGregorian 2026 3 3) 0
             tGated = UTCTime (fromGregorian 2020 1 1) 0
@@ -478,6 +490,38 @@ spec = do
                 `shouldBe` Just tTrusted
             (Map.lookup "1.0.0" . mpTime =<< mergePackuments [gated, trusted])
                 `shouldBe` Just tTrusted
+
+    describe "a version's served time comes from the source that won its manifest" $ do
+        -- The correctness fix: the served publish time is read off the SAME winning
+        -- candidate whose manifest is served, so it can never be fabricated from a
+        -- different source than the bytes it stamps. The decisive case is a manifest
+        -- whose winning source carries NO time while a losing source does: the served
+        -- time must be ABSENT, not the loser's date applied to bytes it never described.
+        it "does not borrow a losing source's time for a winning manifest (no false time)" $ do
+            -- Trusted wins 1.0.0's manifest but knows no publish time for it; the gated
+            -- copy carries a date. The served time must not be that gated date.
+            let trustedNoTime =
+                    ( TrustedSource
+                    , (packument [("1.0.0", sriPriv)]){infoVersions = noTime (infoVersions (packument [("1.0.0", sriPriv)]))}
+                    )
+                gatedDated = (GatedSource, withPublishedAt tGated (packument [("1.0.0", sriPub)]))
+                tGated = UTCTime (fromGregorian 2019 9 9) 0
+                noTime = Map.map (\d -> d{pkgPublishedAt = Nothing})
+            (Map.lookup "1.0.0" . mpTime =<< mergePackuments [trustedNoTime, gatedDated])
+                `shouldBe` Nothing
+            (Map.lookup "1.0.0" . mpTime =<< mergePackuments [gatedDated, trustedNoTime])
+                `shouldBe` Nothing
+
+        it "serves the winning manifest's own time when it has one (not the loser's)" $ do
+            -- Both sources carry a date; trusted wins the manifest, so its date is served.
+            let tWin = UTCTime (fromGregorian 2026 4 4) 0
+                tLose = UTCTime (fromGregorian 2018 2 2) 0
+                trustedDated = (TrustedSource, withPublishedAt tWin (packument [("1.0.0", sriPriv)]))
+                gatedDated = (GatedSource, withPublishedAt tLose (packument [("1.0.0", sriPub)]))
+            (Map.lookup "1.0.0" . mpTime =<< mergePackuments [trustedDated, gatedDated])
+                `shouldBe` Just tWin
+            (Map.lookup "1.0.0" . mpTime =<< mergePackuments [gatedDated, trustedDated])
+                `shouldBe` Just tWin
 
     describe "latest via the shared selector" $ do
         -- latest is resolved by Ecluse.Core.Version.selectLatest, so the merge inherits
@@ -569,7 +613,9 @@ spec = do
                 -- its own versions.
                 Map.keys (mpSurvivors plan) === Map.keys (infoVersions info)
                 nub (Map.elems (mpSurvivors plan)) === ([0 | not (Map.null (infoVersions info))])
-                Map.keys (mpTime plan) === Map.keys (infoPublishedAt info)
+                -- Every test version carries a folded publish time, so the reconstructed
+                -- served @time@ keys are exactly the surviving version keys.
+                Map.keys (mpTime plan) === Map.keys (infoVersions info)
                 mpDivergences plan === Set.empty
 
         it "the surviving set and time union are order-independent" $
@@ -785,7 +831,9 @@ spec = do
                 plan <- H.evalMaybe (mergePackuments [src])
                 Map.keys (mpSurvivors plan) === Map.keys (infoVersions info)
                 nub (Map.elems (mpSurvivors plan)) === ([0 | not (Map.null (infoVersions info))])
-                Map.keys (mpTime plan) === Map.keys (infoPublishedAt info)
+                -- Every test version carries a folded publish time, so the reconstructed
+                -- served @time@ keys are exactly the surviving version keys.
+                Map.keys (mpTime plan) === Map.keys (infoVersions info)
                 mpDivergences plan === Set.empty
 
         it "the always-invariant decisions survive any permutation of any inputs" $
