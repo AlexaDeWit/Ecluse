@@ -337,7 +337,7 @@ site: docs-site ## Assemble the Pages site (landing + rendered docs at /, Haddoc
 	$(NIX) pandoc ALTERNATIVES.md -o _site/alternatives.html $(PANDOC_FLAGS) -M title="Alternatives"
 	$(NIX) pandoc USAGE.md        -o _site/usage.html        $(PANDOC_FLAGS) -M title="Operator Manual"
 	$(NIX) pandoc AI-DISCLOSURE.md -o _site/ai-disclosure.html $(PANDOC_FLAGS) -M title="Built with AI"
-	$(NIX) pandoc docs/architecture/threat-model.md -o _site/threat-model.html $(PANDOC_FLAGS) --lua-filter web/threat-register.lua -M title="Threat Model"
+	$(NIX) pandoc web/threat-model.md -o _site/threat-model.html $(PANDOC_FLAGS) --lua-filter web/threat-register.lua -M title="Threat Model"
 	@echo "Assembled ./_site (landing + rendered docs at /, Haddock under /api)"
 
 nix-build: ## Build the release artifact via Nix (hermetic)
