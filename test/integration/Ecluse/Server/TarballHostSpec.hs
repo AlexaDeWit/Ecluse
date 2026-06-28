@@ -9,8 +9,8 @@ import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian, nominalDay)
 import Katip (Environment (Environment), Namespace (Namespace), initLogEnv)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
-import Network.HTTP.Types (status200, statusCode)
-import Network.HTTP.Types.Header (hHost)
+import Network.HTTP.Types (status200, status302, statusCode)
+import Network.HTTP.Types.Header (hHost, hLocation)
 import Network.Wai (Application, Request (rawPathInfo), requestHeaders, responseLBS)
 import Network.Wai.Handler.Warp (Port, testWithApplication)
 import Network.Wai.Test (
@@ -89,6 +89,22 @@ spec = describe "tarball-host policy + resolved-IP recheck (real serve path, cro
             case outcome of
                 Left _ -> pass
                 Right resp -> status resp `shouldNotBe` 200
+
+    it "never follows an upstream tarball redirect on the anonymous plane (the redirect target is not contacted)" $
+        withAttacker $ \attackerHits attackerPort ->
+            withRedirectingTarballUpstream attackerPort $ \port -> do
+                -- localhost (the cross-host the packument names) is allowlisted via the
+                -- mirror target and its loopback addresses are opted in, so the artifact
+                -- fetch reaches the upstream; the upstream answers the @.tgz@ with a 302 to
+                -- a separate loopback server that is ALSO opted in — so the resolved-IP
+                -- recheck would not block it. The only thing between the proxy and that
+                -- server is the anonymous plane's disabled redirect-following: with it the
+                -- hop is never taken, the attacker is never contacted, and no 200 is served.
+                app <- proxyApp AnyAllowlistedHost (optIn ["127.0.0.1", "::1"]) port
+                resp <- getTarball app
+                hits <- readIORef attackerHits
+                hits `shouldBe` 0
+                status resp `shouldNotBe` 200
 
     it "renders the mount's 503 (not a bare 500) when the admitted artifact's upstream open fails" $
         withDeadTarballUpstream $ \livePort -> do
@@ -209,6 +225,33 @@ crossHostPackument port =
 
 tarballBytes :: LByteString
 tarballBytes = "CROSS-HOST-TGZ-BYTES"
+
+{- An in-process server standing in for a redirect target: it records every hit and
+would serve a 200 body, so a followed redirect is observable as a non-zero hit count
+and a served 200. The anonymous plane must never reach it. -}
+withAttacker :: (IORef Int -> Port -> IO a) -> IO a
+withAttacker k = do
+    hits <- newIORef (0 :: Int)
+    testWithApplication (pure (attackerApp hits)) (k hits)
+  where
+    attackerApp :: IORef Int -> Application
+    attackerApp hits _req respond = do
+        modifyIORef' hits (+ 1)
+        respond (responseLBS status200 [] "ATTACKER-TGZ-BYTES")
+
+{- An in-process upstream that serves the cross-host packument but answers the artifact
+@.tgz@ slot with a 302 to the attacker server — the redirect the anonymous plane must
+refuse to follow. -}
+withRedirectingTarballUpstream :: Port -> (Port -> IO a) -> IO a
+withRedirectingTarballUpstream attackerPort = testWithApplication (pure app)
+  where
+    app :: Application
+    app req respond =
+        respond $
+            if ".tgz" `BS.isSuffixOf` rawPathInfo req
+                then responseLBS status302 [(hLocation, attackerLocation)] ""
+                else responseLBS status200 [] (encode (crossHostPackument (selfPort req)))
+    attackerLocation = encodeUtf8 ("http://127.0.0.1:" <> show attackerPort <> "/thing/-/thing-1.0.0.tgz" :: Text)
 
 {- | A well-formed sha512 SRI (sha512 of the empty string) so the version clears the
 integrity gate and reaches the tarball-host policy under test. The bytes are never

@@ -756,33 +756,45 @@ tarballFile :: PackageName -> Version -> Text
 tarballFile name version =
     encodeComponent (unscopedName name) <> "-" <> encodeComponent (renderVersion version) <> ".tgz"
 
-{- Attach a bearer token to a request when one is injected, and — crucially —
-__disable redirect following__ on that request ('redirectCount' = 0); otherwise leave
-the request untouched.
+{- Finalize an npm data-plane request: __disable redirect following__ ('redirectCount'
+= 0) on __every__ request, and attach a bearer token when one is injected.
 
-This is the single credential-attachment point for the whole npm data plane (the only
-'applyBearerAuth'), so disabling redirects here pins one invariant across __every__
-builder and call site: __a credential-bearing request never follows a 3xx to a redirect
-target.__ http-client's default ('redirectCount' = 10) re-sends the @Authorization@
-header to the redirect's @Location@, and its @shouldStripHeaderOnRedirect@ does not
-strip it cross-host — so a hostile or misconfigured upstream could @302@ a
-forwarded\/minted credential to an attacker-chosen host. That is especially dangerous on
-the __trusted private manager__, which carries no resolved-IP SSRF recheck (it may
-legitimately resolve to an internal address), so a redirect there could exfiltrate the
-credential to an internal target with no egress guard at all.
+This is the single request-finalization point for the whole npm data plane — every
+builder and call site funnels through it (it is also the only 'applyBearerAuth') — so
+pinning @redirectCount = 0@ here makes one invariant universal: __Écluse never follows an
+upstream redirect__, on the credentialed and the anonymous plane alike.
 
-The accepted consequence: a credential-bearing artifact (tarball) read no longer follows
-a private registry's CDN @302@ — it returns the @3xx@ to the serve path rather than
-chasing it with the credential. That is the safer posture (the proxy already honours the
-__packument's__ @dist.tarball@ location explicitly, gated by the egress policy, rather
-than relying on redirects). Anonymous public reads keep the default redirect budget — no
-credential is at risk there, so following a public registry's redirect is fine.
+Two dangers it forecloses, one per plane:
+
+\* __Credential leakage__ (credentialed plane). http-client's default ('redirectCount' =
+  10) re-sends the @Authorization@ header to the redirect's @Location@, and its
+  @shouldStripHeaderOnRedirect@ does not strip it cross-host — so a hostile or
+  misconfigured upstream could @302@ a forwarded\/minted credential to an attacker-chosen
+  host. That is especially dangerous on the __trusted private manager__, which carries no
+  resolved-IP SSRF recheck (it may legitimately resolve to an internal address), so a
+  redirect there could exfiltrate the credential to an internal target with no egress
+  guard at all.
+
+\* __SSRF via redirect__ (anonymous plane). The host allowlist is enforced when the URL is
+  built, not per redirect hop, so following a @302@ would let an allowlisted upstream
+  steer an anonymous fetch to __any__ host — an internal\/cloud-metadata address or any
+  off-allowlist host — re-gated by nothing. Not following the redirect removes the hop
+  there is to gate.
+
+The accepted consequence, symmetric across both planes: a read no longer follows an
+upstream's CDN @302@ — it returns the @3xx@ to the serve path rather than chasing it. That
+is the safer posture, and the proxy already honours the __packument's__ @dist.tarball@
+location explicitly, gated by the egress policy, rather than relying on redirects.
+Redirect-following for a nonstandard upstream (a presigned\/redirecting object store) is an
+explicit, per-upstream opt-in, never the default.
 
 (Out of scope here: amazonka — CodeArtifact\/SQS — and the OTLP exporter build their own
 requests outside this function, so this invariant does not reach them; that is a separate
 follow-up.) -}
+-- The anonymous no-redirect-follow posture closes the SSRF leg of #397; the
+-- redirect-following opt-in for nonstandard upstreams is tracked by #395.
 withToken :: Maybe Secret -> Request -> Request
-withToken Nothing request = request
+withToken Nothing request = request{redirectCount = 0}
 withToken (Just secret) request =
     applyBearerAuth (encodeUtf8 (unSecret secret)) request{redirectCount = 0}
 

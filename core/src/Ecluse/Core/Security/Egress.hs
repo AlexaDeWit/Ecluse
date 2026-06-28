@@ -11,12 +11,19 @@ SSRF-via-DNS (and DNS-rebinding) gap.
 
 This module closes it at the one place it can be closed — the @http-client@
 __connection hook__. 'guardedManagerSettings' wraps the manager's connect function
-so that, for every outbound connection, the destination host is resolved and
+so that, for every outbound connection, the destination host is resolved __once__ and
 __every__ resolved address is tested against the same internal-range block before
-the socket is used; a connection to an internal address is refused with a
-'BlockedTarget' rather than opened. Because the check runs at connect time (not at
-URL-build time), it sees the address actually being dialled, narrowing the
-resolve-then-connect TOCTOU window a separate up-front resolution would leave wide.
+the socket is used; if any resolved address is internal the whole answer is refused with
+a 'BlockedTarget' rather than opened (so an attacker cannot smuggle an internal address
+among public siblings). The connection is then dialled over the __vetted__ addresses,
+handed to the connector as its pre-resolved dial targets and __failed over__ among them:
+the socket opens to an address the recheck just saw rather than to a fresh, independently
+re-resolved one, so time-of-check equals time-of-use and the resolve-then-connect
+rebinding race is closed — yet a multi-IP upstream with frequent DNS rotation keeps its
+connection-time failover, because the proxy only ever dials addresses it vetted. A host
+that resolves only over IPv6 cannot be pinned through the connector's IPv4-only address
+parameter, so it falls back to the connector's own resolution — the one residual rebinding
+window, narrow and IPv6-only.
 
 The host /allowlist/ stays where it belongs — gating the URL before a request is
 ever built (see "Ecluse.Server.Pipeline") — since at the connection hook only the
@@ -42,20 +49,27 @@ module Ecluse.Core.Security.Egress (
     -- * The connection-time refusal
     BlockedTarget (..),
 
+    -- * The connection-time dial (failover among vetted addresses)
+    dialVetted,
+
     -- * The resolved-IP decision (pure)
+    vettedInetAddrs,
     blockedResolvedAddrs,
 ) where
 
+import Control.Exception (IOException)
 import Data.IP (IP, fromSockAddr)
 import Network.HTTP.Client (Manager, ManagerSettings (managerRawConnection, managerTlsConnection), newManager)
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 import Network.Socket (
-    AddrInfo (addrAddress),
-    SockAddr,
+    AddrInfo (addrAddress, addrSocketType),
+    HostAddress,
+    SockAddr (SockAddrInet),
+    SocketType (Stream),
     defaultHints,
     getAddrInfo,
  )
-import UnliftIO.Exception (throwIO)
+import UnliftIO.Exception (catch, throwIO)
 
 import Ecluse.Core.Security (LoweredHostSet, hostOptedIn, isBlockedIP)
 
@@ -88,8 +102,16 @@ destination host resolves to a blocked internal address.
 
 Both the plain ('managerRawConnection') and TLS ('managerTlsConnection') connect
 functions are wrapped: before the base connector opens the socket, the host is
-resolved and 'blockedResolvedAddrs' tests every resolved address against the
-internal-range block; any hit throws 'BlockedTarget' and no socket is opened.
+resolved once and 'blockedResolvedAddrs' tests __every__ resolved address against the
+internal-range block; if any address is internal the whole answer is refused with a
+'BlockedTarget' and no socket is opened (so an attacker cannot smuggle an internal IP
+among public siblings). When the addresses pass, the connection is dialled over the
+vetted IPv4 set as the connector's pre-resolved dial targets, __failing over__ among them
+('dialVetted') — the socket opens to an address the recheck just saw rather than to a
+re-resolution, so a multi-IP upstream with DNS rotation keeps connection-time failover
+while the rebinding race stays closed (the proxy only ever dials addresses it vetted). An
+IPv6-only host, whose addresses are not pinnable through the connector's IPv4-only
+parameter, falls back to the connector's own resolution.
 
 @allowedInternal@ is the same per-host opt-in the pure block honours, so an
 operator who deliberately points the proxy at an internal upstream by /name/ can
@@ -104,12 +126,17 @@ guardedManagerSettings allowedInternal base =
         , managerTlsConnection = vet <$> managerTlsConnection base
         }
   where
-    -- Wrap one connector: vet the resolved addresses of @host@, then delegate. The
-    -- @Maybe HostAddress@ is the proxy-supplied pre-resolved address, passed
-    -- through untouched (a configured proxy is the operator's deliberate hop).
-    vet connect mAddr host port = do
-        checkResolved allowedInternal (toText host)
-        connect mAddr host port
+    -- Wrap one connector: resolve @host@ once, refuse the connection if any resolved
+    -- address is internal, and dial only the vetted addresses — failing over among them
+    -- ('dialVetted') so a multi-IP upstream with DNS rotation keeps connection-time
+    -- failover while never dialling an address the recheck did not see (the TOCTOU stays
+    -- closed). A caller-supplied address (a configured proxy is the operator's deliberate
+    -- hop) is honoured untouched.
+    vet connect mAddr host port = case mAddr of
+        Just _ -> connect mAddr host port
+        Nothing -> do
+            vetted <- checkResolved allowedInternal (toText host)
+            dialVetted connect host port vetted
 
 {- | Build a TLS-capable 'Manager' guarded by the resolved-IP recheck.
 
@@ -137,18 +164,75 @@ only those go through 'newGuardedTlsManager'.
 newTrustedTlsManager :: IO Manager
 newTrustedTlsManager = newManager tlsManagerSettings
 
--- Resolve @host@ and refuse the connection if any resolved address is internal.
--- A resolution failure is left to the base connector to surface as its own
--- connection error (the name simply will not connect); only a successful
--- resolution to a blocked address is turned into a 'BlockedTarget' here.
-checkResolved :: LoweredHostSet -> Text -> IO ()
+-- ── the connection-time dial (failover among vetted addresses) ────────────────
+
+{- | Dial @host@ at @port@ over a list of vetted addresses, __failing over__ among them:
+each is tried in turn as the connector's pinned 'HostAddress', and a connection failure
+(an 'IOException' — refused\/timed-out\/unreachable) moves on to the next; the first to
+connect wins, and if every address is exhausted the last error is rethrown. An empty list
+— an IPv6-only host, whose addresses are not pinnable through the connector's IPv4-only
+parameter — falls back to the connector's own resolution (@connect@ 'Nothing').
+
+Only 'IOException's are caught, so a dial that fails over is a genuine connection failure;
+an asynchronous exception (a request timeout, thread cancellation) is /not/ an
+'IOException', so it propagates and aborts the whole attempt rather than being mistaken for
+a dead address. The connector closes its own socket on a throw, so a failed attempt leaks
+nothing. Failover never falls back to a re-resolution mid-list (only a wholly empty vetted
+list does), so the proxy only ever dials an address the recheck vetted.
+
+Exposed so the failover decision can be exercised over a recording connector without
+performing DNS or opening real sockets. The result type is left polymorphic — the failover
+never inspects the connection it returns — so a test can stand in any connection value.
+-}
+dialVetted ::
+    (Maybe HostAddress -> String -> Int -> IO conn) ->
+    String ->
+    Int ->
+    [HostAddress] ->
+    IO conn
+dialVetted connect host port = go
+  where
+    go [] = connect Nothing host port
+    go [ip] = connect (Just ip) host port
+    go (ip : rest) = connect (Just ip) host port `catch` \(_ :: IOException) -> go rest
+
+-- Resolve @host@ once and refuse the connection if any resolved address is internal,
+-- returning the vetted IPv4 addresses to dial, in resolution order. A resolution failure
+-- is left to the base connector to surface as its own connection error (the name simply
+-- will not connect); only a successful resolution containing a blocked address is turned
+-- into a 'BlockedTarget' here, refusing the whole answer. An IPv6-only host yields an
+-- empty list — its addresses are not pinnable through the connector's IPv4-only parameter,
+-- so it falls back to the connector's own resolution (the residual rebinding window; see
+-- issue #426). The @Stream@ hint keeps the resolver from returning one entry per socket
+-- type, so each address appears once.
+checkResolved :: LoweredHostSet -> Text -> IO [HostAddress]
 checkResolved allowedInternal host = do
-    resolved <- getAddrInfo (Just defaultHints) (Just (toString host)) Nothing
-    case blockedResolvedAddrs allowedInternal (map addrAddress resolved) of
-        [] -> pass
-        blocked -> throwIO (BlockedTarget host blocked)
+    resolved <- map addrAddress <$> getAddrInfo (Just streamHints) (Just (toString host)) Nothing
+    either (throwIO . BlockedTarget host) pure (vettedInetAddrs allowedInternal resolved)
+  where
+    streamHints = defaultHints{addrSocketType = Stream}
 
 -- ── the resolved-IP decision (pure) ───────────────────────────────────────────
+
+{- | The connection decision over a resolved address set: 'Left' the blocked internal
+literals if __any__ resolved address (IPv4 or IPv6) is internal — a mixed public+internal
+answer is refused __wholesale__, so an attacker cannot smuggle an internal address among
+public siblings and have the proxy dial the siblings — otherwise 'Right' the vetted IPv4
+addresses to dial, in resolution order. IPv6 addresses are vetted by the block but not
+returned: the connector's pinned address parameter is IPv4-only, so an IPv6-only host
+yields 'Right' @[]@ and is left to the connector's own resolution.
+
+Exposed pure so the wholesale-block and address-extraction decision can be unit-tested over
+constructed addresses without performing DNS.
+-}
+vettedInetAddrs :: LoweredHostSet -> [SockAddr] -> Either [Text] [HostAddress]
+vettedInetAddrs allowedInternal addrs =
+    case blockedResolvedAddrs allowedInternal addrs of
+        [] -> Right (mapMaybe inetAddr addrs)
+        blocked -> Left blocked
+  where
+    inetAddr (SockAddrInet _ ha) = Just ha
+    inetAddr _ = Nothing
 
 {- | The blocked IP literals among a set of resolved socket addresses.
 
