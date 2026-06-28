@@ -56,7 +56,11 @@ noted below.
 2. **Outbound fetches are restricted to the configured upstream hosts** (an
    allowlist). Artifact bytes are fetched only from the upstream-declared
    `dist.tarball`, after the allowlist check — never from a client-supplied URL.
-   See [Registry Model](registry-model.md#registry-abstraction) and
+   The allowlist is enforced when the URL is built, and **Écluse never follows an
+   upstream redirect** (`redirectCount = 0` for every data-plane request, anonymous and
+   credentialed alike — `Ecluse.Core.Registry.Npm.withToken`), so an allowlisted upstream
+   cannot `302` a fetch to an off-allowlist host: the only host dialled is the one the
+   allowlist admitted. See [Registry Model](registry-model.md#registry-abstraction) and
    [URL rewriting](hosting.md#the-load-bearing-requirement-url-rewriting).
 3. **Internal address ranges are blocked on the untrusted origins** — link-local
    (incl. the `169.254.169.254` cloud-metadata endpoint), loopback, the
@@ -67,7 +71,12 @@ noted below.
    fetch and every **untrusted** artifact (`dist.tarball`) fetch (a public
    `dist.tarball` stream and the mirror worker's back-fill fetch) — and is **re-applied
    to every resolved IP** at connection time (so an allowlisted name that resolves to an
-   internal address is refused — the DNS-rebinding backstop). The **trusted private
+   internal address is refused). The recheck **pins** the vetted address: the connection
+   dials the very IP the recheck just tested rather than re-resolving the name, so
+   time-of-check equals time-of-use and the DNS-rebinding race is closed for an IPv4 (or
+   dual-stack) host. An IPv6-only host cannot be pinned through the connector's IPv4-only
+   address parameter and falls back to its own resolution — the one residual rebinding
+   window, narrow and IPv6-only (tracked by #426). The **trusted private
    origin** (the operator-configured private upstream) is deliberately *exempt* — its
    packument *and* its same-host conventional tarball read alike: a private registry may
    legitimately live on an internal address, and only an untrusted target can be steered
@@ -277,22 +286,27 @@ allowlist and same-host tarball policy are **satisfied by construction** — sti
 simply trivially met. It is treated as part of the trusted private origin, not as an
 untrusted download.
 
-**A credential-bearing request never follows a redirect.** Every outbound request that
-carries a bearer — the private-upstream read under `passthrough`, the credential-bearing
-artifact reads, the first-party publish relay, and the mirror-target publish — is built
-with redirect-following **disabled** (`redirectCount = 0`) at the single
-credential-attachment point (`Ecluse.Core.Registry.Npm.withToken`). http-client's default
-re-sends the `Authorization` header to a `3xx` `Location` (and does not strip it
-cross-host), so a hostile or misconfigured upstream could `302` a forwarded/minted
-credential to an attacker-chosen host — and on the **unguarded** private manager that
-target carries no resolved-IP recheck, so the credential could reach an internal address
-with no egress guard at all. Disabling redirects forecloses that exfiltration: a
-credential-bearing read returns the `3xx` to the serve path rather than chasing it (the
+**Écluse never follows an upstream redirect.** Every outbound npm data-plane request —
+the **anonymous** public reads *and* every credential-bearing request (the private-upstream
+read under `passthrough`, the credential-bearing artifact reads, the first-party publish
+relay, and the mirror-target publish) — is built with redirect-following **disabled**
+(`redirectCount = 0`) at the single request-finalization point
+(`Ecluse.Core.Registry.Npm.withToken`). This forecloses a danger on each plane. On the
+**credentialed** plane: http-client's default re-sends the `Authorization` header to a
+`3xx` `Location` (and does not strip it cross-host), so a hostile or misconfigured upstream
+could `302` a forwarded/minted credential to an attacker-chosen host — and on the
+**unguarded** private manager that target carries no resolved-IP recheck, so the credential
+could reach an internal address with no egress guard at all. On the **anonymous** plane:
+the host allowlist is enforced when the URL is built, not per redirect hop, so following a
+`302` would let an allowlisted upstream steer a fetch to an off-allowlist or internal /
+cloud-metadata host with nothing re-gating it. Not following the redirect removes the hop
+there is to gate: a read returns the `3xx` to the serve path rather than chasing it (the
 proxy already honours the **packument's** `dist.tarball` location explicitly, gated by the
-egress policy, rather than relying on redirects). **Anonymous** public reads keep the
-default redirect budget — no credential is at risk there. The invariant is enforced for
-the npm data plane; `amazonka` (CodeArtifact / SQS) and the OTLP exporter build their own
-requests outside `withToken`, so extending it there is a noted follow-up.
+egress policy, rather than relying on redirects; redirect-following for a nonstandard,
+presigned/redirecting upstream is an explicit per-upstream opt-in, never the default). The
+invariant is enforced for the npm data plane; `amazonka` (CodeArtifact / SQS) and the OTLP
+exporter build their own requests outside `withToken`, so extending it there is a noted
+follow-up.
 
 ## The first-party publish surface must be protected (a shared responsibility)
 

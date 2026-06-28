@@ -338,23 +338,25 @@ authSpec =
                 cap <- lastCaptured stub
                 headerValue "Authorization" cap `shouldBe` Nothing
 
--- ── redirect posture (a credential never follows a redirect) ───────────────────
+-- ── redirect posture (Écluse never follows an upstream redirect) ───────────────
 
-{- | The single credential-attachment point ('withToken') disables redirect following
-on any request it puts a bearer on, so a forwarded\/minted credential can never be
-carried across a @3xx@ to a redirect target (especially over the unguarded private
-manager). A credential-less request keeps http-client's default redirect budget. These
-pin the invariant at the request-builder boundary, across the read and write builders.
+{- | The single request-finalization point ('withToken') disables redirect following on
+__every__ request, anonymous and credential-bearing alike, so no request ever follows a
+@3xx@ to a redirect target. On the credential-bearing leg this keeps a forwarded\/minted
+credential from being carried across a redirect (especially over the unguarded private
+manager); on the anonymous leg it keeps an allowlisted upstream from steering a fetch to
+an off-allowlist or internal target the per-hop allowlist would not re-check. These pin
+the invariant at the request-builder boundary, across the read and write builders.
 -}
 redirectSpec :: Spec
-redirectSpec = describe "credential-bearing requests do not follow redirects" $ do
+redirectSpec = describe "no data-plane request follows an upstream redirect" $ do
     it "a token-bearing metadata request has redirectCount 0" $ do
         config <- tokened (Just (mkSecret "tok"))
         expectRedirectCount 0 (metadataRequest config Abbreviated noValidators isOdd)
 
-    it "a credential-less metadata request keeps the default redirect budget (10)" $ do
+    it "a credential-less metadata request also disables redirect following (0)" $ do
         config <- tokened Nothing
-        expectRedirectCount 10 (metadataRequest config Abbreviated noValidators isOdd)
+        expectRedirectCount 0 (metadataRequest config Abbreviated noValidators isOdd)
 
     it "a token-bearing artifact request has redirectCount 0" $ do
         config <- tokened (Just (mkSecret "tok"))

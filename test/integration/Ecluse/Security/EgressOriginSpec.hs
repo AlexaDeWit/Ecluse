@@ -1,12 +1,13 @@
 module Ecluse.Security.EgressOriginSpec (spec) where
 
 import Data.Aeson (Value, encode, object, (.=))
-import Network.HTTP.Client (Manager)
+import Network.HTTP.Client (Manager, ManagerSettings (managerRawConnection), defaultManagerSettings)
 import Network.HTTP.Types (status200)
+import Network.Socket (HostAddress, tupleToHostAddress)
 import Network.Wai (responseLBS)
 import Network.Wai.Handler.Warp (Port, testWithApplication)
 import Test.Hspec
-import UnliftIO.Exception (try)
+import UnliftIO.Exception (throwIO, try, tryAny)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageName, mkPackageName)
@@ -20,6 +21,7 @@ import Ecluse.Core.Registry.Npm (
 import Ecluse.Core.Security (defaultLimits, lowerCaseHosts)
 import Ecluse.Core.Security.Egress (
     BlockedTarget (BlockedTarget),
+    guardedManagerSettings,
     newGuardedTlsManager,
     newTrustedTlsManager,
  )
@@ -61,6 +63,37 @@ spec = describe "egress trust split (per-origin, against a loopback upstream)" $
             manager <- newTrustedTlsManager
             response <- fetchMetadata manager port
             responseBody response `shouldBe` toStrict (encode packument)
+
+    it "pins the vetted address: the guarded connector dials the resolved IP rather than re-resolving" $ do
+        -- A public IP literal (TEST-NET-3, RFC 5737) the internal-range block permits:
+        -- the guard resolves it (a literal, so no DNS), finds it not blocked, and pins it.
+        -- The recording base connector captures the @Maybe HostAddress@ the guard hands
+        -- it; a 'Just' of the vetted IPv4 proves the dial is pinned to the address that
+        -- was just checked (time-of-check = time-of-use), closing the rebinding race —
+        -- rather than left as 'Nothing' for the connector to re-resolve independently.
+        captured <- newIORef (Nothing :: Maybe (Maybe HostAddress))
+        let wrapped = guardedManagerSettings (lowerCaseHosts mempty) (recordingSettings captured)
+        connector <- managerRawConnection wrapped
+        _ <- tryAny (connector Nothing "203.0.113.10" 443)
+        seen <- readIORef captured
+        seen `shouldBe` Just (Just (tupleToHostAddress (203, 0, 113, 10)))
+
+-- A base 'ManagerSettings' whose raw connector records the @Maybe HostAddress@ it is
+-- handed and then aborts (it never opens a socket): the probe for what the guard pins.
+recordingSettings :: IORef (Maybe (Maybe HostAddress)) -> ManagerSettings
+recordingSettings ref =
+    defaultManagerSettings
+        { managerRawConnection = pure $ \mAddr _host _port -> do
+            writeIORef ref (Just mAddr)
+            throwIO StopConnect
+        }
+
+-- Raised by the recording connector once it has captured its address argument, so no
+-- socket is ever opened.
+data StopConnect = StopConnect
+    deriving stock (Show)
+
+instance Exception StopConnect
 
 -- Fetch the package's metadata through the npm client over the given manager — the
 -- exact primitive both serve fetches use, differing only in which manager they carry.

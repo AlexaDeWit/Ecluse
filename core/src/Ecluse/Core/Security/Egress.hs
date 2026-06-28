@@ -11,12 +11,16 @@ SSRF-via-DNS (and DNS-rebinding) gap.
 
 This module closes it at the one place it can be closed — the @http-client@
 __connection hook__. 'guardedManagerSettings' wraps the manager's connect function
-so that, for every outbound connection, the destination host is resolved and
+so that, for every outbound connection, the destination host is resolved __once__ and
 __every__ resolved address is tested against the same internal-range block before
 the socket is used; a connection to an internal address is refused with a
-'BlockedTarget' rather than opened. Because the check runs at connect time (not at
-URL-build time), it sees the address actually being dialled, narrowing the
-resolve-then-connect TOCTOU window a separate up-front resolution would leave wide.
+'BlockedTarget' rather than opened. The vetted address is then __pinned__: it is handed
+to the connector as the pre-resolved dial target, so the socket opens to the very
+address the recheck saw rather than to a fresh, independently re-resolved one. That
+makes time-of-check equal time-of-use and closes the resolve-then-connect rebinding race
+for an IPv4 (or dual-stack) host. A host that resolves only over IPv6 cannot be pinned
+through the connector's IPv4-only address parameter, so it falls back to the connector's
+own resolution — the one residual rebinding window, narrow and IPv6-only.
 
 The host /allowlist/ stays where it belongs — gating the URL before a request is
 ever built (see "Ecluse.Server.Pipeline") — since at the connection hook only the
@@ -51,7 +55,8 @@ import Network.HTTP.Client (Manager, ManagerSettings (managerRawConnection, mana
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 import Network.Socket (
     AddrInfo (addrAddress),
-    SockAddr,
+    HostAddress,
+    SockAddr (SockAddrInet),
     defaultHints,
     getAddrInfo,
  )
@@ -88,8 +93,12 @@ destination host resolves to a blocked internal address.
 
 Both the plain ('managerRawConnection') and TLS ('managerTlsConnection') connect
 functions are wrapped: before the base connector opens the socket, the host is
-resolved and 'blockedResolvedAddrs' tests every resolved address against the
-internal-range block; any hit throws 'BlockedTarget' and no socket is opened.
+resolved once and 'blockedResolvedAddrs' tests every resolved address against the
+internal-range block; any hit throws 'BlockedTarget' and no socket is opened. When the
+addresses pass, the vetted IPv4 address is pinned as the connector's pre-resolved dial
+target, so the socket opens to the checked address rather than a re-resolution (closing
+the rebinding race for an IPv4 or dual-stack host; an IPv6-only host falls back to the
+connector's resolution).
 
 @allowedInternal@ is the same per-host opt-in the pure block honours, so an
 operator who deliberately points the proxy at an internal upstream by /name/ can
@@ -104,12 +113,15 @@ guardedManagerSettings allowedInternal base =
         , managerTlsConnection = vet <$> managerTlsConnection base
         }
   where
-    -- Wrap one connector: vet the resolved addresses of @host@, then delegate. The
-    -- @Maybe HostAddress@ is the proxy-supplied pre-resolved address, passed
-    -- through untouched (a configured proxy is the operator's deliberate hop).
+    -- Wrap one connector: vet the resolved addresses of @host@, then dial the vetted
+    -- address rather than letting the connector re-resolve. 'checkResolved' resolves
+    -- once and returns the checked IPv4 address; passing it as the connector's
+    -- pre-resolved @HostAddress@ pins the dial to the very address the recheck saw, so
+    -- time-of-check equals time-of-use. A caller-supplied address (a configured proxy
+    -- is the operator's deliberate hop) takes precedence and is left untouched.
     vet connect mAddr host port = do
-        checkResolved allowedInternal (toText host)
-        connect mAddr host port
+        pinned <- checkResolved allowedInternal (toText host)
+        connect (mAddr <|> pinned) host port
 
 {- | Build a TLS-capable 'Manager' guarded by the resolved-IP recheck.
 
@@ -137,16 +149,32 @@ only those go through 'newGuardedTlsManager'.
 newTrustedTlsManager :: IO Manager
 newTrustedTlsManager = newManager tlsManagerSettings
 
--- Resolve @host@ and refuse the connection if any resolved address is internal.
--- A resolution failure is left to the base connector to surface as its own
--- connection error (the name simply will not connect); only a successful
--- resolution to a blocked address is turned into a 'BlockedTarget' here.
-checkResolved :: LoweredHostSet -> Text -> IO ()
+-- Resolve @host@ once and refuse the connection if any resolved address is internal,
+-- returning the vetted IPv4 address to pin the dial to. A resolution failure is left to
+-- the base connector to surface as its own connection error (the name simply will not
+-- connect); only a successful resolution to a blocked address is turned into a
+-- 'BlockedTarget' here. 'Nothing' when no IPv4 address resolves — an IPv6-only host
+-- cannot be pinned through the connector's IPv4-only address parameter, so it is dialled
+-- by the connector's own resolution (see 'firstInet').
+-- The IPv6-only pin is tracked separately; see issue #426.
+checkResolved :: LoweredHostSet -> Text -> IO (Maybe HostAddress)
 checkResolved allowedInternal host = do
-    resolved <- getAddrInfo (Just defaultHints) (Just (toString host)) Nothing
-    case blockedResolvedAddrs allowedInternal (map addrAddress resolved) of
-        [] -> pass
+    resolved <- map addrAddress <$> getAddrInfo (Just defaultHints) (Just (toString host)) Nothing
+    case blockedResolvedAddrs allowedInternal resolved of
+        [] -> pure (firstInet resolved)
         blocked -> throwIO (BlockedTarget host blocked)
+
+-- The first IPv4 address among a resolved set, as the connector's pre-resolved
+-- 'HostAddress'. http-client's connection address parameter is IPv4-only (it builds an
+-- @AF_INET@ socket address), so an IPv6 address cannot be carried through it; an
+-- IPv6-only host therefore yields 'Nothing' and is left to the connector's resolution.
+-- The vet has already refused if any resolved address is blocked, so any IPv4 returned
+-- here is a vetted target.
+firstInet :: [SockAddr] -> Maybe HostAddress
+firstInet = listToMaybe . mapMaybe inet
+  where
+    inet (SockAddrInet _ ha) = Just ha
+    inet _ = Nothing
 
 -- ── the resolved-IP decision (pure) ───────────────────────────────────────────
 
