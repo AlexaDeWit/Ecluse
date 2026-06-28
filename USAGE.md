@@ -147,15 +147,18 @@ Configuration is **validated in full at startup, and the process refuses to star
 problem**: an unknown rule type, a bad URL, an unresolved policy reference. A
 misconfiguration is a loud, immediate failure, never a quietly mis-enforced policy.
 
-> ⚠️ **Protect the first-party publish surface.** If you enable publishing
-> (`PUBLICATION_TARGET_URL`), the `PUBLISH_SCOPES` allow-list limits **which package
-> names** may be published — it is **not** authentication and says nothing about **who**
-> may publish. A static `PUBLICATION_TARGET_TOKEN` combined with an **open edge** (no
-> `PROXY_AUTH_TOKEN`) therefore lets **any unauthenticated client publish** under the
-> operator's credential, within the allowed scopes. Écluse intentionally does **not**
-> block this (it cannot see your gateway / mesh / network policy), so **you must** protect
-> the publish surface — set `PROXY_AUTH_TOKEN`, **or** front Écluse with an authenticating
-> edge (API gateway, service mesh / mTLS, network policy). See
+> ⚠️ **The first-party publish surface authorises *names*, not *callers*.** If you enable
+> publishing (`PUBLICATION_TARGET_URL`), the `PUBLISH_SCOPES` allow-list limits **which
+> package names** may be published — it is **not** authentication and says nothing about
+> **who** may publish. So a static `PUBLICATION_TARGET_TOKEN` (Écluse's own credential, used
+> only when a publisher forwards none) is **fail-closed**: set it without `PROXY_AUTH_TOKEN`
+> and Écluse **refuses to start** (`PublishStaticCredentialNeedsEdge`), making "static
+> publish credential + open edge" — which would otherwise let **any unauthenticated client
+> publish** under the operator's credential — an unrepresentable state rather than a footgun.
+> `PROXY_AUTH_TOKEN` is the verifiable edge Écluse can check itself; an external layer
+> (gateway, service mesh / mTLS, network policy) is good defence-in-depth but does **not**
+> satisfy this requirement. Pure **passthrough** (no static token — the default) needs none
+> of this: the publisher's own forwarded token is the authority. See
 > [Access model → Publishing](docs/architecture/access-model.md#publishing-the-publication-target-passthrough-write).
 
 ### The configuration document
