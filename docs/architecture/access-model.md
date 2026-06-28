@@ -132,15 +132,17 @@ disables redirect-following, so a `3xx` from the publication target returns to t
 rather than chasing the credential to the `Location` (see
 [Security → a credential-bearing request never follows a redirect](security.md#egress-scope-what-the-outbound-controls-guard-and-what-they-do-not)).
 
-> ⚠️ **The publish surface authorises *names*, not *callers* — protect it.** The scope
-> allow-list limits **which package names** a publish may target; it is **not**
-> authentication. If a static `PUBLICATION_TARGET_TOKEN` is configured **and** the edge is
-> open (no `PROXY_AUTH_TOKEN`), **any unauthenticated client can publish** under the
-> operator's credential within the allowed scopes. Écluse does **not** block this — it
-> cannot see environment-level protections (gateway, mesh/mTLS, network policy) — so
-> protecting the publish surface (with `PROXY_AUTH_TOKEN` **or** an external layer) is an
-> **operator-architecture responsibility** (see
-> [Security → the first-party publish surface must be protected](security.md#the-first-party-publish-surface-must-be-protected-a-shared-responsibility)).
+> ⚠️ **The publish surface authorises *names*, not *callers*.** The scope allow-list limits
+> **which package names** a publish may target; it is **not** authentication. A static
+> `PUBLICATION_TARGET_TOKEN` makes Écluse publish under its **own** credential, so it is
+> **fail-closed**: configured without `PROXY_AUTH_TOKEN`, Écluse **refuses to boot**
+> (`PublishStaticCredentialNeedsEdge`), making "static publish credential + open edge" —
+> which would otherwise let **any unauthenticated client publish** under the operator's
+> credential within the allowed scopes — unrepresentable. `PROXY_AUTH_TOKEN` is the
+> verifiable edge Écluse checks itself; an external layer (gateway, mesh/mTLS, network
+> policy) is defence-in-depth but does **not** satisfy this requirement. Pure passthrough
+> (no static token) needs none of it — the publisher's own forwarded token is the authority
+> (see [Security → a static publish credential is fail-closed](security.md#a-static-publish-credential-is-fail-closed)).
 
 ## Edge authentication
 

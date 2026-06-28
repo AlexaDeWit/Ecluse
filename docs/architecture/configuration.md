@@ -55,7 +55,7 @@ registries derive short-lived tokens from ambient cloud credentials (see
 | `MIRROR_TARGET_CODEARTIFACT_REGION` | `codeartifact` provider only | The region of the CodeArtifact domain. Resolution order: this key → the mirror-target host (its authoritative region) → `AWS_REGION`. |
 | `MIRROR_TARGET_CODEARTIFACT_TOKEN_DURATION_SECONDS` | No | Requested CodeArtifact token lifetime in seconds, capped at `43200` (12 h). Unset ⇒ CodeArtifact ties it to the caller's role-credential expiry. |
 | `PUBLICATION_TARGET_URL` | No | URL the proxy writes client `npm publish` (first-party packages) to. **Unset ⇒ the proxy refuses publishes with `405`.** May be the same registry as the private upstream (so published packages are then readable via the private leg). See [Registry roles → publication target](registry-model.md#publishing-first-party-packages-the-publication-target). |
-| `PUBLICATION_TARGET_TOKEN` | No | Static credential for the publication target when it is not reached with the client's forwarded token. The default publish credential model is **passthrough** — the publisher's own token; see [Access model](access-model.md#publishing-the-publication-target-passthrough-write). |
+| `PUBLICATION_TARGET_TOKEN` | No (but **requires `PROXY_AUTH_TOKEN`** when set) | Static credential for the publication target when it is not reached with the client's forwarded token. The default publish credential model is **passthrough** — the publisher's own token; see [Access model](access-model.md#publishing-the-publication-target-passthrough-write). Because a static credential makes Écluse publish under its **own** identity, it is fail-closed: set without `PROXY_AUTH_TOKEN`, the proxy **refuses to boot** (`PublishStaticCredentialNeedsEdge`). |
 | `PUBLISH_SCOPES` | Required when `PUBLICATION_TARGET_URL` is set | Comma-separated allow-list of package scopes a client may publish (e.g. `@acme`). A publish whose name is outside the list is refused — the anti-shadowing guard against publishing a name that collides with a public package. |
 | `MIRROR_QUEUE_PROVIDER` | No (default: `sqs`) | Mirror-queue backend: `sqs` (AWS), `memory` (a bounded in-process queue — no cloud queue, at the cost of a **non-durable, best-effort** mirror; an explicit choice for a simple/single-node/air-gapped deployment, **never** an automatic fallback), or `pubsub` (GCP, recognised but not yet built). Selecting `memory` emits a loud boot warning. See [Cloud Backends](cloud-backends.md#cloud-backends). |
 | `MIRROR_QUEUE_URL` | Cloud backends only (`sqs`/`pubsub`) | Queue identifier for mirror jobs: an SQS queue URL, or a Pub/Sub `projects/<project>/topics/<topic>` resource, per provider. **Required for the cloud backends** (an absent one fails loud at boot); **not needed for `memory`**, which has no external queue and ignores it. |
@@ -64,7 +64,7 @@ registries derive short-lived tokens from ambient cloud credentials (see
 | `AWS_ENDPOINT_URL_SQS` | No | SQS endpoint override (the AWS-SDK-standard variable). Set to target a local emulator (`ministack`) or a VPC endpoint; the released image uses the same key with no test-only code path. Takes precedence over `AWS_ENDPOINT_URL`. With an override set, requests are signed with `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` (an emulator is off the ambient role chain). |
 | `AWS_ENDPOINT_URL` | No | Generic AWS endpoint override (the AWS-SDK-standard variable), used for SQS when `AWS_ENDPOINT_URL_SQS` is unset. |
 | `GOOGLE_CLOUD_PROJECT` | GCP backends only | Project for Pub/Sub and Artifact Registry. Credentials come from Application Default Credentials (ADC). |
-| `PROXY_AUTH_TOKEN` | No | If set, clients must supply this token as `Bearer` or `_authToken`. Omit for open/network-secured deployments. |
+| `PROXY_AUTH_TOKEN` | No (but **required if `PUBLICATION_TARGET_TOKEN` is set**) | If set, clients must supply this token as `Bearer` or `_authToken`. Omit for open/network-secured deployments — except when a static `PUBLICATION_TARGET_TOKEN` is configured, which requires it (see that key). |
 | `PROXY_RESPECT_UPSTREAM_TARBALL_HOST` | No (default: `false`) | When `false`, a tarball is fetched only from the same allowlisted upstream that served the packument; a `dist.tarball` pointing at a different host is refused. See [Outbound egress safety](#outbound-egress-safety). |
 | `PROXY_HELP_MESSAGE` | No | Custom string appended to all denial messages (e.g. `"Contact #platform-eng on Slack for assistance."`). |
 | `PROXY_LOG_FORMAT` | No (default: `json`) | Structured-log output shape: `json` (one object per line, for log collectors) or `console` (human-readable). See [Observability](observability.md). |
@@ -304,6 +304,11 @@ Crucially, **unknown is an error, not a silent skip**:
   is absent — is **rejected at boot**. Credential providers are
   [process-global](cloud-backends.md#credential-provider) and a mount only references
   one, so an incompatible reference never reaches a request.
+- **A static publish credential requires a verifiable edge.** A `PUBLICATION_TARGET_TOKEN`
+  set without `PROXY_AUTH_TOKEN` is **rejected at boot** (`PublishStaticCredentialNeedsEdge`):
+  a static credential makes Écluse publish under its own identity, so coupling it to an open
+  edge would let any unauthenticated client publish under it — that combination is made
+  unrepresentable rather than left as an operator footgun.
 
 A bad config is thus a loud, immediate startup failure an operator sees and fixes,
 never a quietly mis-enforced policy.

@@ -307,21 +307,25 @@ invariant is enforced for the npm data plane; `amazonka` (CodeArtifact / SQS) an
 exporter build their own requests outside `withToken`, so extending it there is a noted
 follow-up.
 
-## The first-party publish surface must be protected (a shared responsibility)
+## A static publish credential is fail-closed
 
 The [first-party publish path](registry-model.md#publishing-first-party-packages-the-publication-target)
 relays a client `npm publish` to the publication target. Its scope allow-list
 (`PUBLISH_SCOPES`) constrains **which package names** may be published — it is **not** an
 authentication control and says nothing about **who** may publish. So a static
-`PUBLICATION_TARGET_TOKEN` paired with an **open edge** (no `PROXY_AUTH_TOKEN`) lets **any
-unauthenticated client** publish under the operator's credential, within the allowed
-scopes. Écluse deliberately does **not** fail closed on this combination — it cannot see
-the deployment's environment-level protections (an API gateway, a service mesh with mTLS,
-a `NetworkPolicy`), so blocking it would break legitimate closed-network deployments — but
-**the publish surface MUST be protected**, by Écluse's own edge auth (`PROXY_AUTH_TOKEN`)
-**or** an external layer. Treat this as an operator-architecture responsibility, the same
-way [network egress](#network-egress-is-a-shared-responsibility) is (see also
-[Access & Credential Model → Publishing](access-model.md#publishing-the-publication-target-passthrough-write)).
+`PUBLICATION_TARGET_TOKEN` — Écluse substituting its **own** credential for a publisher who
+forwards none — **requires a verifiable inbound edge**: the composition root **refuses to
+boot** when it is set without one (`PublishStaticCredentialNeedsEdge`). That makes "static
+publish credential + open edge" — which would otherwise let **any unauthenticated client**
+publish under the operator's credential within the allowed scopes — an **unrepresentable**
+state rather than an operator-beware footgun. `PROXY_AUTH_TOKEN` is the verifiable edge
+Écluse checks today; an external layer (an API gateway, a service mesh with mTLS, a
+`NetworkPolicy`) is defence-in-depth but **cannot substitute** for it, since Écluse can only
+verify its own edge. Pure **passthrough** (no static token) carries no such floor — the
+publisher's forwarded token is the authority — and the **read** path is untouched, since it
+never substitutes a credential. This is the write-side of the principle the (planned)
+trusted-edge read identity follows; the threat is catalogued as register
+[threat #3](https://alexadewit.github.io/Ecluse/threat-model.html).
 
 ### The guard-name ≡ write-name ≡ body-name invariant
 
@@ -410,8 +414,8 @@ hold **east-west as well as north-south** (an ingress-only allow-list that leave
 traffic open is the usual gap). Under passthrough this is **softened** — a caller with no
 forwarded token gets no private read or publish — so an edge breach exposes only the
 public-gated view plus the untrusted-egress and DoS surface, never private packages. (The
-publish corollary — an open edge plus a static publication token — is
-[The first-party publish surface must be protected](#the-first-party-publish-surface-must-be-protected-a-shared-responsibility).)
+publish corollary is stronger — a static publication token **requires** `PROXY_AUTH_TOKEN`,
+enforced at boot: [a static publish credential is fail-closed](#a-static-publish-credential-is-fail-closed).)
 The future **trusted-edge-identity** mode must require a *verifiable* binding to the edge
 (mutual TLS, or a shared secret / HMAC on the assertion) — an [unrepresentable unsafe
 combination](access-model.md#safe-defaults-and-unrepresentable-unsafe-combinations), not a
