@@ -207,10 +207,11 @@ later "cosmetic" refactor can silently move a contract. Three axes, one discrimi
   form never affects identity; a derived instance there would be a latent bug.
 - **Wire contract (`ToJSON`/`FromJSON`).** A derived JSON instance couples the external wire
   shape to the record's structure, so a field rename or re-nesting is a silent breaking change
-  for clients we can't recompile. For an **owned, externally-observable** response, guard it: a
-  golden snapshot of the encoded bytes plus a schema round-trip (the
-  [OpenAPI contract-drift controls](architecture/api-surface.md#contract-drift-controls):
-  `validateToJSON`, the golden manifest), and decode-against-real-fixtures on the input side.
+  for clients we can't recompile. For an **owned, externally-observable** response, guard it:
+  derive the documented schema from the *same* codec as the wire instances so the two cannot
+  diverge (the [OpenAPI capability manifest](architecture/api-surface.md#how-its-built-and-published)
+  takes this `autodocodec` route, its assembly covered by ordinary unit tests), and
+  decode-against-real-fixtures on the input side.
   Better still, design the coupling away: the served packument relays the **raw upstream
   `Value`**, edited in place
   ([decision vs served surface](architecture/registry-model.md#decision-surface-vs-served-surface)),

@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Écluse: capability manifest (OpenAPI)</title>
+    <meta
+      name="description"
+      content="Écluse capability manifest: which registry protocols this server speaks, and exactly what is and is not supported, rendered from the generated OpenAPI document."
+    />
+    <link rel="icon" href="../../favicon-32.png" sizes="32x32" />
+    <link rel="stylesheet" href="../../style.css" />
+    <style>
+      /* Redoc injects its own full-width layout; keep the site header above it
+         and let Redoc fill the rest of the viewport. */
+      redoc {
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="../../index.html"><img src="../../logo.svg" alt="" height="28" /> Écluse</a>
+      <nav>
+        <a href="../../motivation.html">Why</a>
+        <a href="../../alternatives.html">Alternatives</a>
+        <a href="../../usage.html">Operating</a>
+        <a href="../index.html">API</a>
+        <a href="https://github.com/AlexaDeWit/Ecluse">GitHub</a>
+      </nav>
+    </header>
+
+    <!--
+      The capability manifest is statically generated at publish time
+      (`make site` runs `cabal run openapi-gen`) and rendered client-side by a
+      vendored, hash-pinned Redoc bundle (the flake's `redocJs`, copied to
+      _site/vendor by `make site`). No Node, no external runtime dependency. The
+      spec sits one level up at _site/api/openapi.json.
+    -->
+    <redoc spec-url="../openapi.json" hide-download-button></redoc>
+    <script src="../../vendor/redoc.standalone.js"></script>
+  </body>
+</html>

@@ -298,12 +298,17 @@ docs: ## Build hyperlinked, searchable Haddock HTML for both libraries and open 
 docs-check: ## Build Haddock for the CI gate (both libraries; no dep docs, no source links)
 	$(NIX) cabal haddock lib:ecluse lib:ecluse-core --haddock-quickjump --disable-documentation
 
-# Build both libraries' Haddock and stage them under ./_site/api for the GitHub Pages
-# workflow to upload — the site root is left free for the home page (see `site`).
-# The Haddock output path embeds the arch + GHC version, so we locate it rather
-# than hard-code it. .nojekyll (at the _site root) keeps Pages from touching the
-# static assets.
-docs-site: ## Build both libraries' Haddock and stage them under ./_site/api for GitHub Pages
+# Assemble the API tree under ./_site/api for the GitHub Pages workflow to upload —
+# the site root is left free for the home page (see `site`). Two surfaces live here:
+# both libraries' Haddock, and the OpenAPI capability manifest. The Haddock output
+# path embeds the arch + GHC version, so we locate it rather than hard-code it. The
+# manifest is derived build data (git-ignored, never committed), so it is generated
+# here at publish time: `openapi-gen` writes openapi.json from the fixed canonical
+# source, and the Redoc wrapper (web/redoc.html) renders it client-side from the
+# vendored, hash-pinned bundle `site` copies into _site/vendor (like Mermaid) — no
+# Node, no external runtime dependency. .nojekyll (at the _site root) keeps Pages
+# from touching the static assets.
+docs-site: ## Build both libraries' Haddock + the OpenAPI manifest and stage them under ./_site/api
 	$(NIX) cabal haddock lib:ecluse lib:ecluse-core $(HADDOCK_FLAGS)
 	@rm -rf _site && mkdir -p _site/api && touch _site/.nojekyll
 	@appidx=$$(find dist-newstyle -path '*/doc/html/ecluse/index.html' | grep -v '/l/' | head -n1); \
@@ -318,7 +323,9 @@ docs-site: ## Build both libraries' Haddock and stage them under ./_site/api for
 	    echo "Staged $$name -> _site/api/$$name"; \
 	  done
 	@cp web/api-index.html _site/api/index.html
-	@echo "Staged both libraries' Haddock under ./_site/api (parent index + per-library subpages)"
+	$(NIX) cabal run -v0 openapi-gen -- _site/api/openapi.json
+	@mkdir -p _site/api/openapi && cp web/redoc.html _site/api/openapi/index.html
+	@echo "Staged both libraries' Haddock + the OpenAPI manifest under ./_site/api (Haddock subpages, openapi.json, Redoc page at /api/openapi/)"
 
 # Assemble the full Pages site that the workflow uploads:
 #   /                  the landing page + the user docs rendered from Markdown (pandoc)
@@ -326,16 +333,17 @@ docs-site: ## Build both libraries' Haddock and stage them under ./_site/api for
 #   /api               the library Haddock (via docs-site)
 # Kept separate from docs-site so the gate-repro / local Haddock build stays about
 # the docs alone. Build inputs (template, Lua filters) live in web/; only web/static
-# is published. Mermaid renders client-side from a hash-pinned bundle vendored into
-# _site/vendor (the flake's `mermaidJs`), so the published site has no external
-# runtime dependency. The threat-model page expands a `threat-register` fence from
+# is published. Mermaid (the rendered docs) and Redoc (the /api/openapi manifest page)
+# both render client-side from hash-pinned bundles vendored into _site/vendor (the
+# flake's `mermaidJs` / `redocJs`), so the published site has no external runtime
+# dependency. The threat-model page expands a `threat-register` fence from
 # threat-modelling/ecluse.json at build time (web/threat-register.lua) — the model
 # is the single source of truth; the register is never committed back to the repo.
 PANDOC_FLAGS := --standalone --from gfm --template web/template.html --lua-filter web/mermaid.lua --lua-filter web/links.lua
-site: docs-site ## Assemble the Pages site (landing + rendered docs at /, Haddock under /api)
+site: docs-site ## Assemble the Pages site (landing + rendered docs at /, Haddock + manifest under /api)
 	@cp -R web/static/. _site/
 	@cp docs/branding/logo.svg docs/branding/favicon-32.png docs/branding/lock-illustration.svg docs/social-preview.png _site/
-	@$(NIX) sh -c 'mkdir -p _site/vendor && cp "$$MERMAID_JS" _site/vendor/mermaid.min.js'
+	@$(NIX) sh -c 'mkdir -p _site/vendor && cp "$$MERMAID_JS" _site/vendor/mermaid.min.js && cp "$$REDOC_JS" _site/vendor/redoc.standalone.js'
 	$(NIX) pandoc MOTIVATION.md   -o _site/motivation.html   $(PANDOC_FLAGS) -M title="Why Écluse?"
 	$(NIX) pandoc ALTERNATIVES.md -o _site/alternatives.html $(PANDOC_FLAGS) -M title="Alternatives"
 	$(NIX) pandoc USAGE.md        -o _site/usage.html        $(PANDOC_FLAGS) -M title="Operator Manual"

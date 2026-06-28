@@ -72,7 +72,7 @@ Per-slice files are deliberate: parallel agents (and their status updates) touch
   (S06–S09).
 - **M2 (core)** — the raw-WAI `Application`: pure router, error/denial model,
   meta-routes + middleware + dispatch, bounded-memory streaming, conditional-GET /
-  ETag, and the metadata cache (S10–S13). _The capability manifest (S34/S35) is the
+  ETag, and the metadata cache (S10–S13). _The capability manifest (S34) is the
   remaining M2 work, off the launch critical path._
 - **M3 (core)** — the cross-upstream packument merge (S33) and the packument path
   end to end (S14): `GET /{pkg}` flows router → parallel multi-upstream fetch →
@@ -126,7 +126,7 @@ Per-slice files are deliberate: parallel agents (and their status updates) touch
 first-party publish path (S52) and the non-default credential strategies
 (`service`, S43–S44; `delegated-cache`/S45 superseded); the CVE tier (S22 / S23) on top of the merged
 effectful tier (**M5**); the GCP backends (M7); the launch docs + release-hardening tail
-(M8); the capability manifest (S34 / S35); and the informational benchmark track (M9).
+(M8); the capability manifest (S34; S35 dropped); and the informational benchmark track (M9).
 
 > **Base-hardening before S15.** The config / mount / credential / Reader-context
 > generalization decided across the **base-hardening track** (D1–D6) is now
@@ -196,7 +196,7 @@ owes also owes a deterministic `U`/`I` test (see [Testing Strategy](../docs/test
 | [S12](slices/S12-wai-app-middleware.md) | WAI app + meta-routes + middleware + dispatch | S01, S10, S11 | U |
 | [S13](slices/S13-streaming-cache.md) | Streaming + conditional-GET/ETag + metadata cache | S12 | U |
 | [S34](slices/S34-capability-manifest.md) | Capability manifest (OpenAPI) — static generation + docs publish (no served endpoint) — _not on the launch critical path_ | S03, S12, S14 | U |
-| [S35](slices/S35-openapi-drift-controls.md) | OpenAPI contract drift controls (`validateToJSON`, route↔op exhaustiveness, golden snapshot) — _enhancement; fast-follow after S34_ | S34 | U |
+| [S35](slices/S35-openapi-drift-controls.md) | ~~OpenAPI contract drift controls~~ — **dropped** (can't classify breaking-vs-additive without a semantic OpenAPI differ, deferred; the manifest's `ManifestSpec` unit tests in #427 are the accepted breaking-change guarantor) | S34 | — |
 
 ### M3 — Request pipeline (walking skeleton)
 
@@ -321,8 +321,8 @@ ordered. The live pointer to current work is [In flight](#in-flight)._
   tracks; **M7 (GCP) is scheduled after the AWS launch** (S20) — its spike (S27)
   is the gate on committing the GCP backends. `S34` (capability manifest) is a
   **fast-follow** after `S14` (so it documents a packument the server actually
-  serves) and does not gate the launch path; `S35` (manifest drift controls) is a
-  further enhancement layered on `S34`, also off the launch path.
+  serves) and does not gate the launch path; it **concludes the capability-manifest
+  epic** (the once-planned `S35` drift controls are **dropped** — see the S35 slice).
 - **Performance benchmarking (M9) is an independent, informational track, off the
   critical path.** `S37` depends on nothing pending — it runs against the
   already-merged pure core and is the natural companion to the inter-wave quality
