@@ -7,11 +7,10 @@ safe link in your supply chain. It's the consumer companion to the internal
 here.
 
 > **Status: pre-launch.** Écluse is under active development. This manual is the
-> **configuration and operational contract**: the env vars, the config schema, the client
-> setup, and the security responsibilities, documented as they stabilise. Features still
-> landing are marked **(planned)** with a pointer to the tracking slice; the end-to-end
-> request path is tracked in the [delivery plan](planning/delivery-plan.md). Treat this as
-> the deployment contract, not a claim that every capability below is wired today.
+> **configuration and operational contract** — the env vars, the config schema, the client
+> setup, and the security responsibilities. Features still landing are marked **(planned)**;
+> treat this as the deployment contract, not a claim that every capability below is wired
+> today.
 
 ## Contents
 
@@ -340,9 +339,8 @@ is **absent** or **below the floor** — for example only a legacy SHA-1 `shasum
 - it's **filtered out of the served packument listing**, so a client never sees a version it
   couldn't safely fetch.
 
-SHA-1 and MD5 have practical collisions, so a match on one can't prove the bytes weren't
-substituted; this closes a tamper-detection gap, since a divergence between two copies that
-share only a weak digest could go undetected. The floor may be **raised** (`sha512`,
+SHA-1 and MD5 have practical collisions, so admitting a weak-or-absent digest could let a
+substituted artifact pass undetected. The floor may be **raised** (`sha512`,
 `blake2b`) but never set below SHA-256 — a sub-floor value is rejected at startup. The
 **private** (trusted) upstream is **exempt**: its versions enter unfiltered, so a SHA-1-only
 private version is still served (trust substitutes for cryptographic strength there).
