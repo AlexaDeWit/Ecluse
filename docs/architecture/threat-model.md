@@ -8,12 +8,10 @@ when this site is built, so it cannot drift from the model and is never
 hand-copied into prose. Edit the model, not this page: the next Pages build
 re-renders the register.
 
-The model captures the canonical deployment posture — per-caller passthrough
-credentials, the three-registry topology (first-party private store,
-public-derived mirror store, and a pull-through read endpoint), and the
-demand-driven mirror worker minting its own write token under the container
-role. Edge access control and storage-layer scanning are operator
-responsibilities, recorded in the model as out-of-scope trust assumptions.
+The model also records the canonical deployment posture and the trust assumptions
+it rests on — including the operator responsibilities, such as edge access control
+and storage-layer scanning, that it places out of scope — rather than restating
+them here.
 
 For the security *invariants and posture* — the outbound-request and
 input-validation contract the code upholds, and why — see [Security

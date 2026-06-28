@@ -52,7 +52,7 @@ recipe (keyless Sigstore + Rekor, pinned by digest) is in the
 ## The Golden Path
 
 The sections below cover every knob; this is the **recommended, most resilient way to run
-Écluse** — the posture the [threat model](threat-modelling/ecluse.json) treats as canonical,
+Écluse** — the posture the [threat model](docs/architecture/threat-model.md) treats as canonical,
 and the one to aim for unless you have a specific reason to diverge. Each step links to its
 detail.
 
@@ -95,7 +95,7 @@ detail.
    attestations before deploying (see [Verifying the image](README.md#verifying-the-image)).
 
 The *why* behind each choice — and the residual risks the canonical posture knowingly
-accepts — is in the [threat model](threat-modelling/ecluse.json) and
+accepts — is in the [threat model](docs/architecture/threat-model.md) and
 [Security invariants](docs/architecture/security.md#trust-assumptions--credential-posture).
 
 ## Configuration
@@ -425,7 +425,7 @@ The internal design, for when you need the *why*:
 - [Architecture overview](docs/architecture.md)
 - [Configuration & Authentication](docs/architecture/configuration.md)
 - [Security invariants & network egress](docs/architecture/security.md)
-- [Threat model (OWASP Threat Dragon)](threat-modelling/ecluse.json) — the STRIDE model of the canonical deployment
+- [Threat model](docs/architecture/threat-model.md) — the STRIDE register, generated from the OWASP Threat Dragon model ([`threat-modelling/ecluse.json`](threat-modelling/ecluse.json))
 - [Rules engine](docs/architecture/rules-engine.md)
 - [Multi-ecosystem hosting & URL rewriting](docs/architecture/hosting.md)
 - [Release & supply-chain operations](docs/architecture/release-supply-chain.md)

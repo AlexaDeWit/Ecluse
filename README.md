@@ -44,6 +44,12 @@ applied, and mirrors approved packages asynchronously, all without hosting packa
 See [`docs/architecture.md`](docs/architecture.md) for the full design: the four-role registry
 model, the deny-by-default rules engine, the mirror queue, and the configuration reference.
 
+The system's **threat model** (OWASP Threat Dragon, STRIDE) is the single source of truth for
+its threats — [`threat-modelling/ecluse.json`](threat-modelling/ecluse.json) — and is published
+as a readable register at [Threat Model](docs/architecture/threat-model.md), regenerated from
+the model on every site build. Record threats in the model, not as prose duplicated across the
+docs.
+
 ## Using Écluse
 
 **Deploying or operating Écluse? Start with the [Operator Manual (`USAGE.md`)](USAGE.md).**
