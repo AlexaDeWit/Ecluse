@@ -111,8 +111,8 @@ so the proxy can front a public registry that serves its artifacts from a separa
 or an off-convention path (a CDN\/files host, a signed URL). That location is gated, not
 trusted: it is fetched only when the tarball-host policy
 ('Ecluse.Core.Security.tarballHostAllowed', per @PROXY_RESPECT_UPSTREAM_TARBALL_HOST@)
-admits its host — the default refuses a cross-host @dist.tarball@ — and the untrusted
-egress additionally carries the resolved-IP recheck. The public leg is anonymous: it
+admits its host (the default refuses a cross-host @dist.tarball@), and the untrusted
+egress is https-only with certificate validation. The public leg is anonymous: it
 gates __that one version__ against the rules (the same machinery the packument path
 gates the whole set with) and selects the artifact, and on an admit __streams the public
 bytes from @artUrl@ and enqueues a 'Ecluse.Core.Queue.MirrorJob'__ (naming that
@@ -710,10 +710,10 @@ pipelineModule = "Ecluse.Server.Pipeline"
 {- The npm client config for one fetch: its response-bound budget, 'Manager', base
 URL, and injected token (the client's credential for the private origin, 'Nothing'
 for the anonymous public origin). The client never originates a token; the authority
-model is decided here. The 'Manager' is passed explicitly per fetch — the trusted
-'srPrivateManager' for the private upstream, the guarded 'srPublicManager' for the
-public\/artifact fetches — so the resolved-IP SSRF recheck applies only to the
-untrusted egress. The 'Limits' carries the mount's @maxBodyBytes@ to the bounded
+model is decided here. The 'Manager' is passed explicitly per fetch: the trusted
+'srPrivateManager' for the private upstream, the 'srPublicManager' for the
+public\/artifact fetches, both the validating TLS manager over https-only egress. The
+'Limits' carries the mount's @maxBodyBytes@ to the bounded
 metadata read in 'fetchMetadataForm'. -}
 clientConfig :: Limits -> Manager -> Text -> Maybe Secret -> NpmClientConfig
 clientConfig limits manager baseUrl token =
@@ -1217,10 +1217,10 @@ the single bearer-attach point ('Ecluse.Core.Registry.Npm.withToken'), which pin
 @redirectCount = 0@: the credential-bearing read __never follows a redirect__ (a private
 CDN @302@ is returned here, not chased with the bearer). The constructed URL is on the
 private base host, so the 'Ecluse.Core.Security.TrustedOrigin' tarball-host gate is
-satisfied __same-host__ — the host check is still applied, simply trivially met — and the
-trusted origin is __exempt from the internal-range block__ ('srPrivateManager', the
-serve-path mirror of that unguarded manager, security.md invariant 3): a private registry
-on an internal address (e.g. @http:\/\/10.0.0.5\/@) still serves its same-host tarball.
+satisfied __same-host__ (the host check is still applied, simply trivially met), and the
+trusted origin is __exempt from the literal internal-range block__ (security.md
+invariant 3): a private registry on an internal address (e.g. @https:\/\/registry.internal\/@,
+served with a certificate the operator's image trusts) still serves its same-host tarball.
 
 A @2xx@ is streamed through with bounded memory and yields 'Just' (the request is
 answered); a non-@2xx@ status, an unformable URL, or a failure opening the connection
@@ -1431,18 +1431,18 @@ trustedIntegrityBelowFloor =
 {- Stream the artifact from the public upstream at its __authoritative location__,
 __anonymously__ (the client credential is never sent to the public upstream), and —
 __after__ the response is begun — enqueue a best-effort mirror job. The chosen
-'Artifact''s 'artUrl' is honoured directly rather than reconstructed; the
-tarball-host policy gates whether that location may be fetched (the public packument
-host is the reference), and the resolved-IP recheck on 'srPublicManager' is the
-defence-in-depth backstop. A host the policy refuses is the @403@ policy-denial path;
-an unformable URL is the internal-error path.
+'Artifact''s 'artUrl' is honoured directly rather than reconstructed (it is an
+https-only URL, normalised at projection); the tarball-host policy gates whether that
+location may be fetched (the public packument host is the reference), and certificate
+validation on 'srPublicManager' authenticates the host. A host the policy refuses is the
+@403@ policy-denial path; an unformable URL is the internal-error path.
 
 The fetch keeps the open phase distinct from the committed stream, the same split the
 private origin uses: opening the connection is the recoverable phase, so a transient
-network failure or a connection-time 'Ecluse.Core.Security.BlockedTarget' (the resolved-IP
-recheck refusing an allowlisted name that resolves internal) yields no committed
-response and is rendered as the transient upstream-unavailable @503@ through the
-mount's renderer — not left to escape as a bare @500@. Any upstream status is relayed
+network failure or a TLS handshake failure (a host that cannot present a CA-trusted
+certificate for the requested name) yields no committed response and is rendered as the
+transient upstream-unavailable @503@ through the mount's renderer, not left to escape as
+a bare @500@. Any upstream status is relayed
 verbatim (the @accept@ predicate is total); only a failure __after__ the stream is
 committed propagates, the connection torn down as it unwinds, so a half-sent artifact
 is never followed by a second response. The mirror enqueue runs only on the committed
@@ -1588,19 +1588,16 @@ Connects the pure 'tarballHostAllowed' at the serve boundary: the @url@'s host m
 the upstream allowlist and — under the secure-default
 'Ecluse.Core.Security.SameHostAsPackument' — equal to the packument host; the opt-in
 'Ecluse.Core.Security.AnyAllowlistedHost' relaxes that last clause to any allowlisted host.
-This is the policy half of the @dist.tarball@ defence; for an
-'Ecluse.Core.Security.UntrustedOrigin' the resolved-IP recheck on the guarded manager is
-its connection-time backstop (an allowlisted name that resolves to an internal address
-is still refused there).
+This is the policy half of the @dist.tarball@ defence; the egress itself is https-only
+with certificate validation authenticating the host (see "Ecluse.Core.Security.Egress").
 
-The internal-range block is __origin-aware__, mirroring the connection layer's trusted
-vs guarded manager split: an 'Ecluse.Core.Security.UntrustedOrigin' (the public path) is
-gated against it (subject to the empty opt-in here, the composition root's secure
-default), while an 'Ecluse.Core.Security.TrustedOrigin' (the operator-configured private
-upstream) is exempt — a private registry may legitimately live on an internal address,
-just as its connections use the unguarded 'Ecluse.Core.Security.Egress.newTrustedTlsManager'
-(security.md invariant 3). The allowlist and same-host clauses still gate the trusted
-origin identically. -}
+The literal internal-range block is __origin-aware__: an
+'Ecluse.Core.Security.UntrustedOrigin' (the public path) is gated against it (subject to
+the empty opt-in here, the composition root's secure default), while an
+'Ecluse.Core.Security.TrustedOrigin' (the operator-configured private upstream) is exempt,
+since a private registry may legitimately live on an internal address (security.md
+invariant 3). The allowlist and same-host clauses still gate the trusted origin
+identically. -}
 tarballHostHonoured :: Origin -> PackumentDeps -> Text -> Text -> Bool
 tarballHostHonoured origin deps packumentBaseUrl artifactUrl =
     tarballHostAllowed
@@ -1781,11 +1778,11 @@ publishWithDeps renderer deps name request respond
                 liftIO (respond (renderRelay renderer deps outcome))
 
 {- The per-request npm client config for the publish relay: the publication target as
-its base URL, the trusted private manager (the target is operator-configured, like the
-private upstream, so it is reached over the trusted path without the untrusted-egress
-resolved-IP recheck), the response-bound budget, and the __forwarded__ publisher token
-— the client's own ('forwardedToken'), falling back to the static
-'pubStaticToken' only when the client sends none (the passthrough credential model). -}
+its base URL (https by construction, like every registry endpoint), the trusted private
+manager (the target is operator-configured, like the private upstream, so it is reached
+over the trusted path), the response-bound budget, and the __forwarded__ publisher token,
+the client's own ('forwardedToken'), falling back to the static 'pubStaticToken' only
+when the client sends none (the passthrough credential model). -}
 publishConfig :: ServeRuntime -> PublishDeps -> Request -> NpmClientConfig
 publishConfig rt deps request =
     NpmClientConfig

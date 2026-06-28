@@ -98,6 +98,7 @@ import Ecluse.Core.Queue (MemoryQueueConfig, defaultMemoryQueueConfig)
 import Ecluse.Core.Queue.Sqs (SqsConfig (sqsEndpoint), SqsEndpoint (..), defaultSqsConfig)
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Security (Limits (Limits, maxBodyBytes, maxNestingDepth, maxVersionCount), TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), hostAddress, lowerCaseHosts, splitHostPort)
+import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Cache (CacheConfig (..))
 import Ecluse.Core.Server.Context (MountBinding, PackumentDeps (..), PublishDeps (..))
 import Ecluse.Core.Server.Response (HelpMessage, mkHelpMessage)
@@ -243,7 +244,7 @@ resolveCodeArtifactConfig env =
     parsed = parseCodeArtifactHost (hostAddress mirrorTargetUrl)
 
     mirrorTargetUrl :: Text
-    mirrorTargetUrl = maybe (unUrl (cfgPrivateUpstream env)) unUrl (cfgMirrorTarget env)
+    mirrorTargetUrl = maybe (registryUrlText (cfgPrivateUpstream env)) registryUrlText (cfgMirrorTarget env)
 
     -- The first non-blank of the precedence-ordered candidates, or the named-key
     -- boot error. Each candidate is trimmed, so a blank explicit value falls through.
@@ -543,15 +544,15 @@ composeBindings resolveAdapter clock providers config = do
         let regs = mountRegistries mount
         pure
             PackumentDeps
-                { pdPrivateBaseUrl = unUrl (regPrivateUpstream regs)
-                , pdPublicBaseUrl = unUrl (regPublicUpstream regs)
+                { pdPrivateBaseUrl = registryUrlText (regPrivateUpstream regs)
+                , pdPublicBaseUrl = registryUrlText (regPublicUpstream regs)
                 , pdMountBaseUrl = mountBaseUrl (mountEcosystem mount)
-                , pdMirrorTarget = unUrl (mtUrl (regMirrorTarget regs))
+                , pdMirrorTarget = registryUrlText (mtUrl (regMirrorTarget regs))
                 , pdRules = prepared
                 , pdTarballHostPolicy = tarballHostPolicy
-                , -- The internal-range opt-in for an honoured tarball host is empty —
-                  -- the composition root's secure default, matching the guarded
-                  -- manager's resolved-IP recheck (built with an empty opt-in too).
+                , -- The internal-range opt-in for an honoured tarball host is empty: the
+                  -- composition root's secure default for the pure literal-block
+                  -- defence-in-depth on the dist.tarball host gate.
                   pdAllowedInternalHosts = lowerCaseHosts mempty
                 , pdLimits = limits
                 , pdInboundToken = inboundToken
@@ -585,7 +586,7 @@ publishDepsFor env limits helpMessage = case cfgPublicationTarget env of
             Right
                 ( Just
                     PublishDeps
-                        { pubTargetUrl = unUrl url
+                        { pubTargetUrl = registryUrlText url
                         , pubScopes = cfgPublishScopes env
                         , pubStaticToken = staticToken
                         , pubInboundToken = inboundToken
@@ -678,7 +679,7 @@ composePublishTargets providers config =
                     Right
                         PublishTarget
                             { ptEcosystem = mountEcosystem mount
-                            , ptMirrorUrl = unUrl (mtUrl target)
+                            , ptMirrorUrl = registryUrlText (mtUrl target)
                             , ptCredentials = provider
                             }
                 Nothing ->

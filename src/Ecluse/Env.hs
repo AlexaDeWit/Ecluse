@@ -86,21 +86,20 @@ data Env = Env
     approved packages to the mirror target.
     -}
     , envManager :: Manager
-    {- ^ The shared @http-client@ 'Manager' for the __untrusted__ data plane — the
-    public-upstream metadata fetch and every artifact stream — so connection pooling
-    and TLS are established once and reused across requests. This manager carries the
-    resolved-IP SSRF recheck (see "Ecluse.Core.Security.Egress"): a public fetch whose host
-    resolves to an internal address is refused at connect time, since a public
-    @dist.tarball@ is upstream-chosen and could otherwise steer the proxy at an
-    internal target.
+    {- ^ The shared @http-client@ 'Manager' for the __untrusted__ data plane (the
+    public-upstream metadata fetch and every artifact stream), so connection pooling
+    and TLS are established once and reused across requests. The standard validating TLS
+    manager: registry egress is https-only by construction and certificate validation
+    authenticates the dialled host (see "Ecluse.Core.Security.Egress"), so a public
+    @dist.tarball@ cannot steer the proxy at an internal or rebound address, which has no
+    CA-trusted certificate for the requested name.
     -}
     , envPrivateManager :: Manager
-    {- ^ The @http-client@ 'Manager' for the __trusted__ private upstream. The
-    private base URL is operator-configured and deliberately trusted — it may
-    legitimately resolve to an internal address (a registry on the private network) —
-    so this manager does __not__ carry the resolved-IP recheck that 'envManager' does.
-    The trust split is by origin: only the untrusted public\/artifact fetches are guarded
-    (see @docs\/architecture\/security.md@).
+    {- ^ The @http-client@ 'Manager' for the __trusted__ private upstream. The private
+    base URL is operator-configured and is held to the same https-only requirement; this
+    manager is the same validating TLS manager as 'envManager'. The split is kept because
+    the two origins differ in credential handling and in the @dist.tarball@ host gate's
+    trust, not in the manager itself (see @docs\/architecture\/security.md@).
     -}
     , envMetadataCache :: MetadataCache
     {- ^ The short-TTL, size-bounded metadata cache (see "Ecluse.Core.Server.Cache")
@@ -140,8 +139,8 @@ data Env = Env
     }
 
 {- | Assemble an 'Env' from its constructed handles and the two data-plane HTTP
-'Manager's — the guarded one for the untrusted public\/artifact fetches and the
-trusted one for the private upstream.
+'Manager's (one per origin: the untrusted public\/artifact fetches and the trusted
+private upstream, both the validating TLS manager).
 
 The 'Manager's, 'MetadataCache', 'LogEnv', and 'Telemetry' handle are taken as
 arguments rather than built here: a 'Manager' owns a connection pool whose lifetime
@@ -229,7 +228,7 @@ serveRuntimeOf env =
 
 {- | Project the worker runtime ("Ecluse.Core.Worker.WorkerRuntime") the mirror worker
 is closed over from the composition root: the mirror queue, the publish-side registry
-client, the guarded data-plane manager, the consume-loop heartbeat, and the
+client, the untrusted data-plane manager, the consume-loop heartbeat, and the
 OpenTelemetry-backed worker metric and tracing ports
 ('Ecluse.Telemetry.Instruments.workerMetricsPortOf',
 'Ecluse.Telemetry.Tracing.workerTracingPortOf'). Built at the worker entry point — it

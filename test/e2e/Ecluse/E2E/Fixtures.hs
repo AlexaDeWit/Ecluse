@@ -13,7 +13,7 @@ The tree mirrors the npm registry layout the stub serves over HTTP:
 > \<name\>            — the packument JSON
 > \<name\>/-/\<name\>-\<version\>.tgz — the artifact
 
-so a packument's @dist.tarball@ (@http:\/\/upstream\/\<name\>\/-\/…@) resolves on the
+so a packument's @dist.tarball@ (@https:\/\/upstream\/\<name\>\/-\/…@) resolves on the
 same stub.
 -}
 module Ecluse.E2E.Fixtures (
@@ -191,7 +191,7 @@ packument spec sri =
 
     tarballUrl :: Text
     tarballUrl =
-        "http://upstream/"
+        "https://upstream/"
             <> psName spec
             <> "/-/"
             <> psName spec

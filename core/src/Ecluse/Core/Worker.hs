@@ -135,13 +135,13 @@ composition root ('Ecluse.Env.workerRuntimeOf') and read by the loop through the
 'WorkerM' reader.
 
 The mirror queue is the demand-driven hand-off the loop consumes; the publish-side
-registry client writes approved artifacts to the mirror target; the guarded data-plane
-manager fetches the artifact bytes (the untrusted public fetch, carrying the resolved-IP
-SSRF recheck); the heartbeat is the loop's liveness surface. The metric and tracing
-ports are the abstract recording interfaces ("Ecluse.Core.Telemetry.Record",
+registry client writes approved artifacts to the mirror target; the untrusted
+data-plane manager fetches the artifact bytes (the validating TLS manager, over an
+https-only @dist.tarball@); the heartbeat is the loop's liveness surface. The metric and
+tracing ports are the abstract recording interfaces ("Ecluse.Core.Telemetry.Record",
 "Ecluse.Core.Telemetry.Span"); the application supplies their OpenTelemetry-backed
 implementations, so the loop records without naming a telemetry backend. There is no log
-field — the loop logs through the ambient @katip@ context the entry point establishes.
+field: the loop logs through the ambient @katip@ context the entry point establishes.
 -}
 data WorkerRuntime = WorkerRuntime
     { wrQueue :: MirrorQueue
@@ -151,8 +151,8 @@ data WorkerRuntime = WorkerRuntime
     target through.
     -}
     , wrManager :: Manager
-    {- ^ The guarded data-plane manager for the __untrusted__ artifact fetch; it carries
-    the resolved-IP SSRF recheck.
+    {- ^ The validating-TLS data-plane manager for the __untrusted__ artifact fetch (over
+    an https-only @dist.tarball@).
     -}
     , wrHeartbeat :: WorkerHeartbeat
     {- ^ The consume-loop heartbeat, advanced on every successful poll and read by the
@@ -611,8 +611,8 @@ fetchArtifactBytes url = do
                 Right (Right bytes) -> Right bytes
   where
     -- The public artifact fetch is anonymous (the client credential is never sent
-    -- upstream) and uses the guarded data-plane manager, which carries the
-    -- resolved-IP SSRF recheck. The base URL is unused for the by-URL request form
+    -- upstream) and uses the untrusted data-plane manager, the validating TLS manager
+    -- over an https-only dist.tarball. The base URL is unused for the by-URL request form
     -- (the URL is absolute); the manager and anonymous posture are what matter.
     fetchConfig :: Manager -> NpmClientConfig
     fetchConfig manager =

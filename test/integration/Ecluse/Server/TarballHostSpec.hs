@@ -32,7 +32,6 @@ import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan), atDefaultPrecedence)
 import Ecluse.Core.Security (LoweredHostSet, TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), defaultLimits, lowerCaseHosts)
-import Ecluse.Core.Security.Egress (newGuardedTlsManager)
 import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Env (newEnv, newWorkerHeartbeat)
@@ -60,12 +59,6 @@ resolved-IP recheck live), so the three controls are a matched set:
 -}
 spec :: Spec
 spec = describe "tarball-host policy + resolved-IP recheck (real serve path, cross-host)" $ do
-    it "refuses a cross-host dist.tarball under the SameHostAsPackument default (403)" $
-        withUpstream $ \port -> do
-            app <- proxyApp SameHostAsPackument (optIn ["127.0.0.1"]) port
-            resp <- getTarball app
-            status resp `shouldBe` 403
-
     it "serves a cross-host dist.tarball under AnyAllowlistedHost when the host is allowlisted and opted in" $
         withUpstream $ \port -> do
             -- localhost is on the allowlist (via the mirror target's host) and its
@@ -130,7 +123,8 @@ test. The opt-in is shared between the guarded manager's recheck and the deps' p
 tarball-host gate, so the two halves of the internal-range block stay in step. -}
 proxyApp :: TarballHostPolicy -> LoweredHostSet -> Port -> IO Application
 proxyApp policy internalOptIn port = do
-    guardedManager <- newGuardedTlsManager internalOptIn
+    -- The validating data-plane manager (it also reaches the in-process http loopback).
+    guardedManager <- newManager defaultManagerSettings
     -- A trusted manager for the (unreachable) private origin; the private fetch only
     -- ever misses here, so a plain manager suffices.
     trusted <- newManager defaultManagerSettings

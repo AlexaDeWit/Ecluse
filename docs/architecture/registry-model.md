@@ -157,8 +157,10 @@ The **public leg** instead honours the **authoritative upstream location**, the
 `dist.tarball` the gated version declares, fetched at exactly that URL rather than a
 reconstructed `/-/` path, so Écluse can front a public registry that serves artifacts
 from a separate host (the PyPI-files-host shape) or a signed CDN URL. That location is
-gated, not trusted: the tarball-host policy and the resolved-IP recheck bound *where* it
-may be fetched (see [Why `dist.tarball` is honoured](security.md#why-disttarball-is-honoured-and-what-bounds-it)).
+gated, not trusted: the host allowlist and the tarball-host policy bound *where* it may
+be fetched, https-only egress with certificate validation authenticates the host, and a
+legacy `http` tarball is upgraded (same host) or dropped (see
+[Why `dist.tarball` is honoured](security.md#why-disttarball-is-honoured-and-what-bounds-it)).
 
 ## Packument merge across upstreams
 

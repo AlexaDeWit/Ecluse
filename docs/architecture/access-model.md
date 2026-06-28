@@ -245,8 +245,9 @@ distinct policy per tenant, not to avoid choosing a strategy.
 ## Universal invariants (every strategy)
 
 - The caller's credential is **never** sent to the public upstream.
-- Outbound fetches stay within the [security invariants](security.md): the host
-  allowlist, internal-range block, identifier canonicalisation, and bounded responses.
+- Outbound fetches stay within the [security invariants](security.md): https-only egress
+  with certificate validation, the host allowlist, identifier canonicalisation, and
+  bounded responses.
 - Public versions are **always** gated by the [rules engine](rules-engine.md);
   trusted private versions enter the
   [packument merge](registry-model.md#packument-merge-across-upstreams) unfiltered.

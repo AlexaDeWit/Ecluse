@@ -21,7 +21,6 @@ import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
 import Ecluse.Core.Security (LoweredHostSet, isBlockedIP, isBlockedTarget, lowerCaseHosts, parseIpLiteral)
-import Ecluse.Core.Security.Egress (blockedResolvedAddrs)
 
 {- | Smoke tier: a /generative, live/ differential between the SSRF literal
 recogniser's IPv4 octet coercion and the __real__ libc resolver. The hand-rolled
@@ -45,11 +44,9 @@ resolves numerically (@AI_NUMERICHOST@ — local, no DNS) and asserts:
 A 'H.cover' guard requires that blocked, not-blocked, and resolver-rejected results
 each appear across a run, so a degenerate generator cannot pass vacuously.
 
-A second, fixed check pins the __residual boundary__: the short @inet_aton@ forms
-(a bare 32-bit number, a @127.1@) are deliberately /not/ modelled by the four-part
-recogniser, so they are not blocked at the literal layer but are caught by the
-connection-time resolved-IP recheck in "Ecluse.Core.Security.Egress"
-('blockedResolvedAddrs') — the residual is covered, one layer down.
+The short @inet_aton@ forms (a bare 32-bit number, a @127.1@) are deliberately /not/
+modelled by the four-part recogniser; they are treated as names the host allowlist
+constrains, so this oracle covers only the four-part dotted-quad recogniser.
 
 Numeric resolution needs no network, so this is reliable rather than flaky, but it
 lives in the non-gating smoke tier because it depends on the host platform's
@@ -61,9 +58,7 @@ spec = describe "IPv4 literal classification vs the real resolver (getAddrInfo)"
     available <- runIO (isJust <$> resolveNumeric "127.0.0.1")
     if not available
         then it "resolver oracle" $ pendingWith "getAddrInfo numeric resolution unavailable on this host"
-        else do
-            generativeOracleSpec
-            residualBoundarySpec
+        else generativeOracleSpec
 
 -- ── the generative differential ──────────────────────────────────────────────
 
@@ -90,33 +85,6 @@ generativeOracleSpec =
                         Just a -> isBlockedTarget noOptIn spelling H.=== isBlockedIP a
                         -- The resolver rejected it: we must not claim a literal either.
                         Nothing -> H.assert (isNothing (parseIpLiteral spelling))
-
--- ── the residual boundary (fixed) ────────────────────────────────────────────
-
-{- | The short @inet_aton@ forms the recogniser does not model: not blocked at the
-literal layer, but caught by the connection-time resolved-IP recheck.
--}
-residualBoundarySpec :: Spec
-residualBoundarySpec =
-    describe "short inet_aton forms are the connect-time recheck's residual, not the literal layer's" $
-        for_ residualCorpus $ \host ->
-            it (toString (host <> " is missed by the literal layer but caught by the resolved-IP recheck")) $ do
-                resolved <- resolveNumeric host
-                case resolved of
-                    Nothing -> pendingWith (toString (host <> ": resolver did not resolve it"))
-                    Just sa -> do
-                        -- The four-part recogniser does not model the short form…
-                        isBlockedTarget noOptIn host `shouldBe` False
-                        -- …yet its resolved address is internal, and the Egress backstop catches it.
-                        blockedResolvedAddrs noOptIn [sa] `shouldSatisfy` (not . null)
-
--- | Short @inet_aton@ forms of @127.0.0.1@ — fewer than four parts, not modelled here.
-residualCorpus :: [Text]
-residualCorpus =
-    [ "2130706433" -- the 32-bit form of 127.0.0.1
-    , "0x7f000001" -- the hex 32-bit form of 127.0.0.1
-    , "127.1" -- the two-part short form of 127.0.0.1
-    ]
 
 -- ── generators ───────────────────────────────────────────────────────────────
 

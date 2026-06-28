@@ -67,23 +67,26 @@ capabilities a request needs to fetch, gate, serve, and record. A record of conc
 handles and abstract ports (the Handle pattern), assembled by the composition root and
 read by every handler through the 'RequestCtx'.
 
-The two HTTP managers carry the trust split: the public manager guards the untrusted
-public-upstream and artifact egress (the resolved-IP recheck), the private manager is
-the trusted private-upstream path. The metadata cache and mirror queue are the shared
-data-plane handles. The metric and tracing ports are the abstract recording interfaces
+The two HTTP managers carry the per-origin split: the public manager serves the
+untrusted public-upstream and artifact egress, the private manager the trusted
+private-upstream path. Both are the validating TLS manager (registry egress is
+https-only by construction; certificate validation authenticates the host), so the
+split is in credential handling and the @dist.tarball@ host gate's trust, not the
+manager. The metadata cache and mirror queue are the shared data-plane handles. The
+metric and tracing ports are the abstract recording interfaces
 ("Ecluse.Core.Telemetry.Record", "Ecluse.Core.Telemetry.Span"); the application supplies
 their OpenTelemetry-backed implementations, so the serve path records without naming a
-telemetry backend. There is no log field — handlers log through the ambient @katip@
+telemetry backend. There is no log field: handlers log through the ambient @katip@
 context.
 -}
 data ServeRuntime = ServeRuntime
     { srPublicManager :: Manager
-    {- ^ The guarded data-plane manager for the __untrusted__ public-upstream metadata
-    fetch and every artifact stream; it carries the resolved-IP SSRF recheck.
+    {- ^ The validating-TLS data-plane manager for the __untrusted__ public-upstream
+    metadata fetch and every artifact stream.
     -}
     , srPrivateManager :: Manager
-    {- ^ The manager for the __trusted__ private upstream, which may legitimately
-    resolve to an internal address, so it does not carry the resolved-IP recheck.
+    {- ^ The manager for the __trusted__ private upstream. The same validating TLS
+    manager; the private origin differs in credential handling, not in the manager.
     -}
     , srMetadataCache :: MetadataCache
     {- ^ The short-TTL, size-bounded metadata cache shared by the serve paths
@@ -142,12 +145,10 @@ data PackumentDeps = PackumentDeps
     @PROXY_RESPECT_UPSTREAM_TARBALL_HOST@).
     -}
     , pdAllowedInternalHosts :: LoweredHostSet
-    {- ^ The hosts deliberately opted in to the internal-range block when gating an
-    honoured artifact location ('Ecluse.Core.Security.tarballHostAllowed'). This is the
-    same per-host opt-in the guarded manager's resolved-IP recheck honours (see
-    "Ecluse.Core.Security.Egress"), carried here so the pure tarball-host gate and the
-    connection-time recheck agree on which internal hosts are deliberate. Empty by
-    default — the secure reading, matching the composition root's guarded manager.
+    {- ^ The hosts deliberately opted in to the literal internal-range block when gating
+    an honoured artifact location ('Ecluse.Core.Security.tarballHostAllowed'), the cheap
+    pure defence-in-depth that complements the host allowlist. Empty by default, the
+    secure reading.
     -}
     , pdLimits :: Limits
     {- ^ The response-bound budget enforced on every upstream metadata fetch and

@@ -623,10 +623,9 @@ with the given inbound edge token (usually 'Nothing').
 The in-process upstream doubles bind loopback, so @127.0.0.1@ is opted in to the
 internal-range block for the __public__ leg's honoured-tarball gate — the unit-test
 analogue of an operator deliberately opting an internal /public/ host in. The
-__private__ leg needs no opt-in: it gates as the trusted origin, exempt from the
-internal-range block (the serve-path mirror of
-'Ecluse.Core.Security.Egress.newTrustedTlsManager'); a test empties this set to assert that
-exemption directly. The default tarball-host policy is the secure 'SameHostAsPackument';
+__private__ leg needs no opt-in: it gates as the trusted origin, exempt from the literal
+internal-range block on the `dist.tarball` host gate; a test empties this set to assert
+that exemption directly. The default tarball-host policy is the secure 'SameHostAsPackument';
 a test overrides it where it exercises the cross-host relaxation.
 -}
 deps :: Int -> Int -> Maybe Text -> IO PackumentDeps
@@ -2185,8 +2184,7 @@ tarballSpec = describe "artifact (tarball) path" $ do
         -- The trusted private origin lives on an internal IP literal (127.0.0.1, the
         -- in-process double's loopback bind) and serves a same-host dist.tarball. With
         -- the internal-range opt-in empty, the private leg's tarball-host gate must STILL
-        -- admit it — the trusted origin is exempt from the internal-range block exactly as
-        -- the connection layer's newTrustedTlsManager carries no resolved-IP recheck
+        -- admit it: the trusted origin is exempt from the literal internal-range block
         -- (security.md invariant 3). Were the private path subject to the block, the gate
         -- would refuse the same-host private tarball and the request would fall through to
         -- public — an asymmetric, install-breaking failure (the same-host private metadata

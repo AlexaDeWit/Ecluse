@@ -100,3 +100,8 @@ allow-newer: regression-simple:base
 --       ghc-options: -Wwarn
 package ecluse
   ghc-options: -Werror
+  -- Compile the test-only plain-HTTP loopback egress constructor for the dev-shell /
+  -- CI cabal path, so the loopback integration suites build. callCabal2nix (the
+  -- Nix path that builds the shipped artifact) ignores cabal.project, so the release
+  -- `ecluse` keeps the flag's default (off) and carries no plaintext-egress constructor.
+  flags: +dev-http-egress

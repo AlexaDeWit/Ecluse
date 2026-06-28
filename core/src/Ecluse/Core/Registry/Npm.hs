@@ -67,6 +67,7 @@ module Ecluse.Core.Registry.Npm (
     NpmClientConfig (..),
     defaultNpmConfig,
     publicRegistryBaseUrl,
+    publicRegistryUrl,
     newNpmClient,
 
     -- * Content negotiation
@@ -138,6 +139,7 @@ import Ecluse.Core.Package (
     unscopedName,
  )
 import Ecluse.Core.Registry (
+    ParseError (ParseError),
     PublishError (..),
     PublishFault (PublishRejected, PublishUrlUnformable),
     RegistryClient (..),
@@ -151,6 +153,7 @@ import Ecluse.Core.Security (
     boundedRead,
     defaultLimits,
  )
+import Ecluse.Core.Security.Egress.Internal (RegistryUrl (RegistryUrl))
 import Ecluse.Core.Server.Route (encodeComponent)
 import Ecluse.Core.Text (joinUrlPath)
 import Ecluse.Core.Version (Version, renderVersion)
@@ -188,6 +191,13 @@ The default target when no managed backend is configured.
 -}
 publicRegistryBaseUrl :: Text
 publicRegistryBaseUrl = "https://registry.npmjs.org"
+
+{- | The canonical public npm registry as an https 'RegistryUrl': the
+'publicRegistryBaseUrl' text, https by construction. The default @PUBLIC_UPSTREAM_URL@
+when none is configured.
+-}
+publicRegistryUrl :: RegistryUrl
+publicRegistryUrl = RegistryUrl publicRegistryBaseUrl
 
 {- | An anonymous client config against the public registry ('publicRegistryBaseUrl'),
 using the given shared 'Manager' and the secure-default response bounds
@@ -357,10 +367,10 @@ cannot rebuild (a separate CDN\/files host, server-generated segments, a signed
 query string). Honouring the preserved location is what lets Écluse front those
 registries; the URL it fetches is the same one the served packument's
 @dist.integrity@ is paired with, so the bytes still verify. The egress gate
-('Ecluse.Core.Security.tarballHostAllowed' plus the resolved-IP recheck) decides
-__whether__ that location may be fetched; this builder only forms the request once
-it is permitted. The 'NpmClientConfig''s @npmBaseUrl@ is unused here (the URL is
-absolute) but its 'Manager' and token are not — the manager carries the trust
+('Ecluse.Core.Security.tarballHostAllowed', plus the https-only scheme normalisation at
+projection) decides __whether__ that location may be fetched; this builder only forms the
+request once it is permitted. The 'NpmClientConfig''s @npmBaseUrl@ is unused here (the URL
+is absolute) but its 'Manager' and token are not: the manager carries the trust
 context and the token the credential posture.
 
 The request is marked __non-decompressing__ for the same reason as 'artifactRequest':
@@ -572,10 +582,19 @@ newNpmClient config =
             { fetchMetadata = fetchMetadataForm config Abbreviated noValidators
             , fetchArtifact = fetchArtifact' config
             , publishArtifact = publishArtifact' config
-            , parsePackageInfo = Project.parsePackageInfo
-            , parseVersionDetails = Project.parseVersionDetails
+            , -- Each version's @dist.tarball@ scheme is normalised against the host this
+              -- client reads from (same-host http upgraded, foreign-host http dropped) as
+              -- a projection post-step; the Handle field types are unchanged.
+              parsePackageInfo = \name resp -> Project.enforceTarballScheme upstreamBaseUrl <$> Project.parsePackageInfo name resp
+            , parseVersionDetails = \resp version ->
+                Project.parseVersionDetails resp version
+                    >>= maybe (Left tarballNotHttps) Right . Project.enforceTarballSchemeDetails upstreamBaseUrl
             , parseVersionList = Project.parseVersionList
             }
+  where
+    upstreamBaseUrl = npmBaseUrl config
+    tarballNotHttps =
+        ParseError "the requested version's dist.tarball is not an https URL on the upstream host"
 
 {- | Fetch a package's metadata in the requested 'MetadataForm', relaying any
 conditional-GET 'Validators'. The bounded-read fetch used by the handle's
@@ -770,10 +789,9 @@ Two dangers it forecloses, one per plane:
   10) re-sends the @Authorization@ header to the redirect's @Location@, and its
   @shouldStripHeaderOnRedirect@ does not strip it cross-host — so a hostile or
   misconfigured upstream could @302@ a forwarded\/minted credential to an attacker-chosen
-  host. That is especially dangerous on the __trusted private manager__, which carries no
-  resolved-IP SSRF recheck (it may legitimately resolve to an internal address), so a
-  redirect there could exfiltrate the credential to an internal target with no egress
-  guard at all.
+  host. That is especially dangerous on the __trusted private manager__, where a redirect
+  could exfiltrate the credential to an attacker-chosen target; pinning @redirectCount = 0@
+  removes the hop entirely rather than relying on the per-hop egress controls.
 
 \* __SSRF via redirect__ (anonymous plane). The host allowlist is enforced when the URL is
   built, not per redirect hop, so following a @302@ would let an allowlisted upstream

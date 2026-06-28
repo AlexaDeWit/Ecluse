@@ -23,6 +23,7 @@ import Ecluse.Core.Rules.Types (
     defaultAllowIfOlderThanPrecedence,
     defaultDenyInstallTimeExecutionPrecedence,
  )
+import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Log (LogFormat (..))
 import Ecluse.Telemetry (TelemetrySwitch (..))
 
@@ -191,9 +192,9 @@ envLayerSpec = describe "parseEnvPure" $ do
             Left errs -> expectationFailure ("unexpected errors: " <> show errs)
             Right cfg -> do
                 cfgPort cfg `shouldBe` 8080
-                unUrl (cfgPrivateUpstream cfg) `shouldBe` "https://private.example.test"
-                unUrl (cfgPublicUpstream cfg) `shouldBe` "https://public.example.test"
-                fmap unUrl (cfgMirrorTarget cfg) `shouldBe` Just "https://mirror.example.test"
+                registryUrlText (cfgPrivateUpstream cfg) `shouldBe` "https://private.example.test"
+                registryUrlText (cfgPublicUpstream cfg) `shouldBe` "https://public.example.test"
+                fmap registryUrlText (cfgMirrorTarget cfg) `shouldBe` Just "https://mirror.example.test"
                 cfgQueueBackend cfg `shouldBe` PubSubQueue
                 fmap unUrl (cfgQueueUrl cfg) `shouldBe` Just "projects/p/topics/t"
                 cfgQueueMemoryMaxDepth cfg `shouldBe` 777
@@ -226,7 +227,7 @@ envLayerSpec = describe "parseEnvPure" $ do
             Left errs -> expectationFailure ("unexpected errors: " <> show errs)
             Right cfg -> do
                 cfgPort cfg `shouldBe` 4873
-                unUrl (cfgPublicUpstream cfg) `shouldBe` "https://registry.npmjs.org"
+                registryUrlText (cfgPublicUpstream cfg) `shouldBe` "https://registry.npmjs.org"
                 cfgQueueBackend cfg `shouldBe` SqsQueue
                 -- The in-memory queue cap defaults to a generous, memory-bounded depth.
                 cfgQueueMemoryMaxDepth cfg `shouldBe` 50000
@@ -331,6 +332,25 @@ envLayerSpec = describe "parseEnvPure" $ do
     it "rejects an empty required URL rather than accepting a blank" $
         failedNames (parseEnvPure (set "PRIVATE_UPSTREAM_URL" "   " minimalEnv))
             `shouldBe` ["PRIVATE_UPSTREAM_URL"]
+
+    it "fails closed at boot on a non-https private upstream (https-only by construction)" $
+        -- A1/A2: a plain-HTTP registry endpoint is not a supported configuration; it is
+        -- rejected at the config boundary, named, rather than dialled in plaintext.
+        failedNames (parseEnvPure (set "PRIVATE_UPSTREAM_URL" "http://private.example.test" minimalEnv))
+            `shouldBe` ["PRIVATE_UPSTREAM_URL"]
+
+    it "fails closed at boot on a non-https public upstream" $
+        failedNames (parseEnvPure (set "PUBLIC_UPSTREAM_URL" "http://public.example.test" minimalEnv))
+            `shouldBe` ["PUBLIC_UPSTREAM_URL"]
+
+    it "fails closed at boot on a non-https mirror target (the trusted origin too)" $
+        failedNames (parseEnvPure (set "MIRROR_TARGET_URL" "http://mirror.example.test" minimalEnv))
+            `shouldBe` ["MIRROR_TARGET_URL"]
+
+    it "names https in the rejection so the operator can fix it" $
+        case parseEnvPure (set "PRIVATE_UPSTREAM_URL" "http://private.example.test" minimalEnv) of
+            Right _ -> expectationFailure "expected the non-https private upstream to be rejected"
+            Left errs -> renderEnvErrors errs `shouldSatisfy` isInfix "https"
 
     it "rejects a negative CVE sync interval" $
         failedNames (parseEnvPure (set "CVE_SYNC_INTERVAL_SECONDS" "-5" minimalEnv))
@@ -475,7 +495,7 @@ envLayerSpec = describe "parseEnvPure" $ do
         traverse_ (unsetEnv . fst) minimalEnv
         case result of
             Left errs -> expectationFailure ("unexpected env errors: " <> show errs)
-            Right cfg -> unUrl (cfgPrivateUpstream cfg) `shouldBe` "https://private.example.test"
+            Right cfg -> registryUrlText (cfgPrivateUpstream cfg) `shouldBe` "https://private.example.test"
 
 -- ── document decoding ────────────────────────────────────────────────────────
 
@@ -562,10 +582,10 @@ documentDecodeSpec = describe "decodeDocument" $ do
                 Nothing -> expectationFailure "expected the npm mount"
                 Just mdoc -> do
                     let reg = mdocRegistries mdoc
-                    unUrl (regPrivateUpstream reg) `shouldBe` "https://private.example.test"
-                    unUrl (regPublicUpstream reg) `shouldBe` "https://registry.npmjs.org"
+                    registryUrlText (regPrivateUpstream reg) `shouldBe` "https://private.example.test"
+                    registryUrlText (regPublicUpstream reg) `shouldBe` "https://registry.npmjs.org"
                     let target = regMirrorTarget reg
-                    unUrl (mtUrl target) `shouldBe` "https://mirror.example.test"
+                    registryUrlText (mtUrl target) `shouldBe` "https://mirror.example.test"
                     mtCredential target `shouldBe` CodeArtifactCredential
                     mtQueue target `shouldBe` SqsQueue
 
@@ -771,11 +791,11 @@ desugarSpec = describe "loadConfig" $ do
                         mountPolicy mount
                             `shouldBe` [PrecededRule defaultAllowIfOlderThanPrecedence (AllowIfOlderThan (7 * 86400))]
                         let reg = mountRegistries mount
-                        unUrl (regPrivateUpstream reg) `shouldBe` "https://private.example.test"
+                        registryUrlText (regPrivateUpstream reg) `shouldBe` "https://private.example.test"
                         mtCredential (regMirrorTarget reg) `shouldBe` StaticCredential
                         mtQueue (regMirrorTarget reg) `shouldBe` SqsQueue
                         -- The explicit MIRROR_TARGET_URL in minimalEnv is used verbatim.
-                        unUrl (mtUrl (regMirrorTarget reg)) `shouldBe` "https://mirror.example.test"
+                        registryUrlText (mtUrl (regMirrorTarget reg)) `shouldBe` "https://mirror.example.test"
 
     it "folds an unset MIRROR_TARGET_URL onto the private upstream" $ do
         -- N7a: with MIRROR_TARGET_URL absent, the mirror target IS the private
@@ -787,8 +807,8 @@ desugarSpec = describe "loadConfig" $ do
                 Nothing -> expectationFailure "expected the npm mount"
                 Just mount -> do
                     let reg = mountRegistries mount
-                    unUrl (mtUrl (regMirrorTarget reg)) `shouldBe` "https://private.example.test"
-                    unUrl (regPrivateUpstream reg) `shouldBe` "https://private.example.test"
+                    registryUrlText (mtUrl (regMirrorTarget reg)) `shouldBe` "https://private.example.test"
+                    registryUrlText (regPrivateUpstream reg) `shouldBe` "https://private.example.test"
 
     it "desugars the env single-mount onto a document-only policy patch" $ do
         -- A document with a rule policy but no mounts still produces the env
