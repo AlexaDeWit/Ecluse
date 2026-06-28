@@ -10,27 +10,27 @@ description: >-
 
 # Resume orchestration
 
-The durable state of this project lives in **files** — the repo docs, the planning
+The durable state of this project lives in **files**, the repo docs, the planning
 DAG, and agent memory (`MEMORY.md` plus the memory files, which survive compaction).
 The conversation is the most disposable layer. This routine rebuilds working context
 from those authoritative sources rather than trusting a summary.
 
-## When invoked — the re-ingestion routine
+## When invoked, the re-ingestion routine
 
 Do this before acting on any task or summary:
 
 1. **Re-read the process + design canon** (the team-lead operating manual and the
    design of record):
-   - `planning/orchestration-strategy.md` — the per-PR loop, **Fix routing** (a
+   - `planning/orchestration-strategy.md`, the per-PR loop, **Fix routing** (a
      reviewer's "changes required" can resume the original background agent via
      `SendMessage`, or the team lead applies a small fix directly, or briefs a fresh
      agent), the **draft-until-ready**
      procedure (PRs open as draft; ready-for-review only at hand-off), the Definition
      of Done, the Guardrails.
-   - `planning/delivery-plan.md` — the slice DAG and wave state.
+   - `planning/delivery-plan.md`, the slice DAG and wave state.
    - `AGENTS.md`, `CONTRIBUTING.md`, `docs/testing.md`, `STYLE.md`, `HADDOCK.md`.
    - `docs/architecture.md` and `docs/architecture/{registry-model,web-layer,
-     rules-engine,domain-model}.md` — the design of record.
+     rules-engine,domain-model}.md`, the design of record.
    - the next slice file under `planning/slices/` (whatever the DAG marks next).
 2. **Sync ground truth** (trust this over any summary); run anything that builds
    through the current flake (`env -u IN_NIX_SHELL nix develop --command …`):
@@ -38,10 +38,10 @@ Do this before acting on any task or summary:
    - `git log --oneline -15` ; `git worktree list`
    - `gh pr list --state open --json number,title,headRefName,isDraft`
    - `gh issue list --state open`
-3. **Reconcile memory** — read `MEMORY.md` and the memory files; update or delete any
+3. **Reconcile memory**, read `MEMORY.md` and the memory files; update or delete any
    the merged state has made stale (a memory reflects what was true when written), and
    ensure none conflict with repository-level guidance (e.g. retired terminology).
-4. **Report and wait** — summarise what is merged, what is in review vs still draft,
+4. **Report and wait**, summarise what is merged, what is in review vs still draft,
    and the next dispatchable slice. Then **wait for the architect's kickoff** before
    dispatching any build (standing rule: dispatch implementers only on kickoff).
 
@@ -51,7 +51,7 @@ session, not only after `/compact`.
 
 ## The /compact prompt to use *before* compacting
 
-A skill cannot drive `/compact` — compaction summarises and resets the very context
+A skill cannot drive `/compact`, compaction summarises and resets the very context
 the skill runs in, so the continuation is a new context that never saw the skill run.
 Before compacting, therefore, run `/compact` with the template below: fill the
 bracketed CURRENT-STATE / NEXT / STALE-MEMORY slots from live state; the rest is

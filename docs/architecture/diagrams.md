@@ -122,7 +122,7 @@ sequenceDiagram
 
 A tarball is gated for that one version. A private hit is streamed unfiltered; a
 private miss fetches the version's metadata, runs the rules, and on acceptance
-streams from public **and** enqueues a demand-driven mirror job — non-blocking, so
+streams from public **and** enqueues a demand-driven mirror job, non-blocking, so
 the client is served immediately. See
 [Web Layer → Streaming](web-layer.md#streaming-and-resource-lifetime) and
 [Cloud Backends → Mirror Queue](cloud-backends.md#mirror-queue).
@@ -155,7 +155,7 @@ sequenceDiagram
             E-)Queue: enqueue mirror job (best-effort)
         end
     end
-    Note over E,Queue: demand-driven — enqueue only when a tarball is accepted
+    Note over E,Queue: demand-driven, enqueue only when a tarball is accepted
 ```
 
 ## 4. Mirror worker
@@ -236,7 +236,7 @@ A `CredentialProvider` refreshes a registry token off its own `expiresAt`,
 proactively and single-flight, so the request hot path never blocks on a mint in
 the common case. Under the default `passthrough` strategy credentials are
 **mirror-write only**, so even a fully failed refresh never touches the client serve
-path — only the mirror publish; under `service` a read credential sits on the serve
+path, only the mirror publish; under `service` a read credential sits on the serve
 path, so its failure does degrade serving. See
 [Cloud Backends → Credential Provider](cloud-backends.md#credential-provider).
 
@@ -263,8 +263,7 @@ stateDiagram-v2
 
 The diagram shows the default **`passthrough`** strategy. The invariant that holds
 under **every** strategy is narrower: the client's credential is **never** sent to
-the public upstream. Whether it reaches the private upstream is strategy-specific —
-it does under `passthrough`; under `service` Écluse reads with
+the public upstream. Whether it reaches the private upstream is strategy-specific,it does under `passthrough`; under `service` Écluse reads with
 its own credential instead. The fourth role, the **publication target**, receives the
 client's *forwarded* publish credential (the write symmetric of the private read); the
 public upstream still never sees the client's token. See
@@ -275,8 +274,8 @@ public upstream still never sees the client's token. See
 flowchart LR
     Client["Client (dev / CI)"]
     subgraph E["Écluse"]
-        SRV["Server — reads + publish"]
-        WK["Worker — writes"]
+        SRV["Server, reads + publish"]
+        WK["Worker, writes"]
     end
     Priv["Private upstream<br/>e.g. CodeArtifact"]
     Pub["Public upstream"]
@@ -285,7 +284,7 @@ flowchart LR
 
     Client -->|"client credential"| SRV
     SRV -->|"forwards the client credential"| Priv
-    SRV -->|"anonymous — client token stripped"| Pub
+    SRV -->|"anonymous, client token stripped"| Pub
     SRV -->|"forwards the client credential (publish)"| PubT
     WK -->|"Écluse's own token (CredentialProvider)"| Mirror
 ```
@@ -295,7 +294,7 @@ flowchart LR
 A client's `npm publish` (`PUT /{pkg}`) is mediated like any other request rather than
 pushed out-of-band. It is gated by the operator's **publish-scope allow-list** (the
 anti-shadowing guard, which rejects before any upstream write) and relayed to the
-**publication target** with the publisher's **own forwarded credential** — the write
+**publication target** with the publisher's **own forwarded credential**, the write
 counterpart to the private read, and distinct from the mirror target (which the worker
 writes with Écluse's own token). The path is opt-in: with no `PUBLICATION_TARGET_URL`,
 `PUT /{pkg}` is a `405`. Published packages are read back through the private upstream. See

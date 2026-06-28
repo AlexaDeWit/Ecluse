@@ -3,13 +3,13 @@
 > Part of the [Écluse architecture overview](../architecture.md).
 
 Écluse speaks **package-registry protocols** (npm at launch; PyPI/RubyGems
-designed-for), not a bespoke HTTP API. Clients — `npm`, `pnpm`, `yarn` — hardcode
+designed-for), not a bespoke HTTP API. Clients, `npm`, `pnpm`, `yarn`, hardcode
 the registry protocol and never read an API description, so an OpenAPI document
 here is **not a client-integration contract**. It is a **capability manifest**: a
 single, human-facing statement of *which protocols this one server speaks and
-exactly what is, and isn't — supported*, per ecosystem. As mounts multiply
+exactly what is, and isn't, supported*, per ecosystem. As mounts multiply
 (`/npm`, `/pypi`, …) "what's supported where" stops being self-evident, and the
-manifest is where it becomes legible — for operators, contributors, and future us.
+manifest is where it becomes legible, for operators, contributors, and future us.
 
 ## What the manifest covers, and what it doesn't
 
@@ -17,7 +17,7 @@ manifest is where it becomes legible — for operators, contributors, and future
 distinction maps onto how each route is handled:
 
 - **Owned / synthesized responses → fully modelled.** The error/denial envelope,
-  the health and meta routes, and — most importantly — the **synthesized
+  the health and meta routes, and, most importantly, the **synthesized
   packument** (Écluse parses, merges across upstreams, filters, and re-serialises
   it; see [Registry Model → Packument merge](registry-model.md#packument-merge-across-upstreams))
   are documents Écluse *authors*, so their schemas are owned and described in full.
@@ -29,7 +29,7 @@ distinction maps onto how each route is handled:
   `501` is stated explicitly, so a reader learns the limit *from the manifest*,
   not from an error response.
 
-Re-specifying npm's full packument or registry protocol is **out of scope** — that
+Re-specifying npm's full packument or registry protocol is **out of scope**, that
 is npm's contract, sprawling and loosely specified, and clients hardcode it.
 
 ## Source of truth: the `Route` enumeration × mounts
@@ -41,7 +41,7 @@ it is **derived**. The pure router already closes the surface to a small
 enumerating those constructors across the configured **mounts**
 ([Hosting](hosting.md#multi-ecosystem-hosting)); each mount's adapter contributes
 the per-ecosystem **path template** and **support status** for each route. So the
-manifest cannot drift from what the server actually routes — one closed
+manifest cannot drift from what the server actually routes, one closed
 enumeration drives dispatch, the manifest, and the `501`s, and adding PyPI is
 adding a mount, not re-describing a protocol.
 
@@ -52,14 +52,13 @@ supported and unsupported operations side by side.
 ## The synthesized-packument schema = the trust boundary
 
 The served packument is not any single upstream's document; it is Écluse's
-**merged-and-filtered** view (private versions trusted, public versions gated —
-see [Registry Model → Packument merge](registry-model.md#packument-merge-across-upstreams)).
+**merged-and-filtered** view (private versions trusted, public versions gated,see [Registry Model → Packument merge](registry-model.md#packument-merge-across-upstreams)).
 Its schema is therefore **owned**, and modelled as a *partial* schema: the fields
 Écluse reads and transforms (`versions`, `dist-tags`, `time`, `dist`) are
 described, and everything else carries `additionalProperties: true` with a note
 that **unlisted fields are relayed unchanged from the contributing upstream
 (private wins on collision).** That schema is a precise statement of the **trust
-boundary** — "here is exactly what the gate touches; everything else is upstream's,
+boundary**, "here is exactly what the gate touches; everything else is upstream's,
 untouched." Its cross-field coherence after merge + filter (every `dist-tags`
 target is a surviving `versions` key) is **not** schema-expressible and stays a
 [property test](rules-engine.md#applying-verdicts-to-a-packument); a green schema
@@ -72,15 +71,15 @@ must not be mistaken for a proof that the filtered document is internally cohere
   `aeson` instances *and* the OpenAPI / JSON-Schema from one codec, so the wire
   format and the documented schema cannot diverge. The document is assembled with
   **`openapi3`**, its paths folded from the `Route` × mount enumeration above.
-  (npm's *inbound* wire decoding stays lenient hand-rolled `aeson` — autodocodec is
+  (npm's *inbound* wire decoding stays lenient hand-rolled `aeson`, autodocodec is
   for what Écluse owns and emits, not for tolerantly parsing someone else's loose
   document; see [Technology Stack](technology-stack.md#technology-stack).)
 - **Statically generated and published, not served.** The document is produced at
   **build time** by a small generator (kept out of the library closure, like the
-  benchmark components) from a **fixed canonical config** — a **pure** function of
+  benchmark components) from a **fixed canonical config**, a **pure** function of
   (config, mounts), with **no `GET /openapi.json` route and no WAI wiring**.
   `make docs-site` / `make site` **run the generator** and render its output to a
-  static **Redoc** page, staging it — together with `openapi.json` itself — into
+  static **Redoc** page, staging it, together with `openapi.json` itself, into
   `./_site` for GitHub Pages, beside the Haddock, published by `pages.yml` on push to
   `main`. (The spec is **derived build data**, regenerated at publish time, **not
   committed**.) The Redoc bundle is **vendored and hash-pinned** (the existing
@@ -96,7 +95,7 @@ must not be mistaken for a proof that the filtered document is internally cohere
 ## Contract drift controls
 
 The manifest is generated **directly from the code**, so it moves only when the code
-moves — a change a reviewer already sees in the diff. Its paths are the *total*
+moves, a change a reviewer already sees in the diff. Its paths are the *total*
 `Route → Operation` fold over the closed `Route` sum × mounts
 ([above](#source-of-truth-the-route-enumeration--mounts)), and its owned schemas are
 the `autodocodec` codecs that also back the `aeson` instances, so the documented
@@ -107,17 +106,16 @@ surface.
 
 > **The synthesized packument is the schema exception.** It is an *open* schema
 > (`additionalProperties: true`, "relay unlisted fields"), so "drift" there means "did
-> we drop a field we promised to relay" — a question only the **lossless round-trip
+> we drop a field we promised to relay", a question only the **lossless round-trip
 > property test** can answer (see
 > [Packument merge](registry-model.md#packument-merge-across-upstreams) and the wire
 > round-trip property), not a schema validator.
 
 **No dedicated drift-controls layer (deferred).** A once-planned slice of structural
-guards — `validateToJSON` properties, a `Route`↔operation exhaustiveness test, an
-`hspec-wai` live-status contract, and a committed golden snapshot — was **dropped**.
+guards, `validateToJSON` properties, a `Route`↔operation exhaustiveness test, an
+`hspec-wai` live-status contract, and a committed golden snapshot, was **dropped**.
 Those guards can flag *that* the documented surface changed, but the thing actually
-worth gating — **is a change breaking or safe-additive for an external consumer?** —
-they cannot classify; that needs a **semantic OpenAPI differ** (oasdiff-class).
+worth gating, **is a change breaking or safe-additive for an external consumer?**,they cannot classify; that needs a **semantic OpenAPI differ** (oasdiff-class).
 Écluse has **no external consumers reading this manifest** (registry clients hardcode
 the protocol and never read an API description; see the top of this page), so the
 differ is **deferred** until a consumer needs it, and `openapi.json` stays **derived
@@ -129,5 +127,5 @@ committed**, with no stored golden to diff against. External contract fuzzers
 
 Because the [configuration](configuration.md#configuration) model is decoded from
 JSON, giving its owned types autodocodec codecs yields a **JSON Schema for the
-config** at the same cost — usable for editor validation and operator docs, and
+config** at the same cost, usable for editor validation and operator docs, and
 consistent with the fail-fast strict decoding already required.

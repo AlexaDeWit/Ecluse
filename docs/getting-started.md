@@ -105,8 +105,8 @@ the *current* concrete layout and the one project-specific pattern below.
 
 - **Two libraries behind one `ecluse.cabal`.** The pure capability core is the `ecluse-core`
   library (`core/src`, modules under `Ecluse.Core.*`); the application shell that composes it
-  into a running proxy — config, the `Env` composition root, logging, the WAI `Application`, and
-  the telemetry SDK/OTLP wiring — is the `ecluse` library (`src`, modules under `Ecluse.*`), with
+  into a running proxy, config, the `Env` composition root, logging, the WAI `Application`, and
+  the telemetry SDK/OTLP wiring, is the `ecluse` library (`src`, modules under `Ecluse.*`), with
   `app/Main.hs` as the executable. The boundary is build-enforced: the core's unit suite cannot
   depend on the app library. See
   [architecture → Codebase decomposition](architecture.md#codebase-decomposition).

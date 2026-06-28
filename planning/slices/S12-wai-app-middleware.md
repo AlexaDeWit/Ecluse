@@ -1,7 +1,7 @@
 ---
 id: S12
 title: WAI app + meta-routes + middleware + dispatch
-milestone: M2 — Web front door
+milestone: M2, Web front door
 status: merged
 depends-on: [S01, S10, S11]
 test-tier: [unit]
@@ -13,7 +13,7 @@ arch-refs:
 pr: null
 ---
 
-# S12 — WAI app + meta-routes + middleware + dispatch
+# S12, WAI app + meta-routes + middleware + dispatch
 
 > Milestone **M2** · depends on: [S01](S01-app-env-scaffold.md), [S10](S10-router.md), [S11](S11-response-model.md) · tier: unit
 
@@ -25,43 +25,43 @@ real pipeline.
 **Acceptance criteria.**
 - [ ] **Mount dispatch**: match the leading path segment to a mount, strip the
   prefix, hand the remainder to `classify` (S10); accept the prefix with/without a
-  trailing slash. — _hosting.md#dispatch_
+  trailing slash., _hosting.md#dispatch_
 - [ ] **Meta-routes**: `/-/ping`→200 `{}` (answered locally); `/livez`/`/readyz`
-  distinct — liveness reflects the worker heartbeat in single-process mode,
+  distinct, liveness reflects the worker heartbeat in single-process mode,
   readiness is **lenient about public-upstream reachability** and (later) gates on
   CVE first-sync (S22); `/-/v1/search`→501 with a pointer message; everything
-  unrecognised→404. — _web-layer.md#meta-routes-ping-health-and-search, cloud-backends.md#process-model_
+  unrecognised→404., _web-layer.md#meta-routes-ping-health-and-search, cloud-backends.md#process-model_
 - [ ] **Middleware stack** composed around the app: `RequestSizeLimit`, `RealIp`/
   forwarded-for, `Timeout`, and a thin `katip` logging middleware (S04). **Not**
-  `Autohead` or `Gzip` (documented why). — _web-layer.md#middleware-and-helper-libraries_
+  `Autohead` or `Gzip` (documented why)., _web-layer.md#middleware-and-helper-libraries_
 - [ ] `runServer :: Env -> IO ()` starts warp on the configured port; handlers run
-  in plain `IO` taking `Env`. — _cloud-backends.md#process-model_
+  in plain `IO` taking `Env`., _cloud-backends.md#process-model_
 - [ ] Handlers return `ServeDecision`/responses via S11; the real fetch→rules→serve
   body is deferred to S14/S15 (honest stub returning a clear "not yet wired" path
   for package routes, **not** a fake 200).
 
 **File scope.**
-- `src/Ecluse/Server.hs` — the `Application`, dispatch, meta-routes, middleware, `runServer`.
-- `src/Ecluse.hs` — wire `runServer` into `run` (additive to S01).
-- `ecluse.cabal` — add `warp`, `wai`, `wai-extra`.
-- `test/unit/Ecluse/ServerSpec.hs` — `hspec-wai` over the `Application`: ping/health/search/404, dispatch + prefix-strip, middleware (size limit).
+- `src/Ecluse/Server.hs`, the `Application`, dispatch, meta-routes, middleware, `runServer`.
+- `src/Ecluse.hs`, wire `runServer` into `run` (additive to S01).
+- `ecluse.cabal`, add `warp`, `wai`, `wai-extra`.
+- `test/unit/Ecluse/ServerSpec.hs`, `hspec-wai` over the `Application`: ping/health/search/404, dispatch + prefix-strip, middleware (size limit).
 
-**Test tier.** Unit — `hspec-wai` drives the `Application` end-to-end for routing,
+**Test tier.** Unit, `hspec-wai` drives the `Application` end-to-end for routing,
 meta-routes, and middleware (no upstream network).
 
 **Notes / risks.** Health semantics are subtle: readiness must not flap on a
 public-upstream blip (the proxy still serves private hits). Keep the package-route
 handler an explicit "wired in S14" path; do **not** return a placeholder success.
-The streaming/ETag/cache concerns are S13 — this slice is routing + meta + middleware.
+The streaming/ETag/cache concerns are S13, this slice is routing + meta + middleware.
 
 **As-built notes.**
 
 - **Server config is local, not `Ecluse.Config`.** S12 does not depend on S03 and
-  `Env` (S01) carries no port/mounts (its growth stays additive — caches in S13,
+  `Env` (S01) carries no port/mounts (its growth stays additive, caches in S13,
   composition-root config wiring in S20). So `Ecluse.Server` introduces a small
   local `ServerConfig` (port + `[Mount]` + `RequestSizeLimit`); `application ::
   ServerConfig -> Env -> Application` is the testable entry point, and `runServer :: Env
-  -> IO ()` uses `defaultServerConfig` (port **4873** — the documented
+  -> IO ()` uses `defaultServerConfig` (port **4873**, the documented
   `PROXY_PORT` default, and a single root mount). S20 supplies the real port and
   resolved `MountMap` at the composition root without changing this signature.
 - **Mount dispatch** matches the request's leading path segment(s) to a `Mount`
@@ -86,7 +86,7 @@ The streaming/ETag/cache concerns are S13 — this slice is routing + meta + mid
   return, which invalidated two pre-existing S01 assertions that asserted they
   return (`EnvSpec` "runServer … returns", `EcluseSpec` `run`). Those two specs
   (outside this slice's stated file scope) were updated to assert the server
-  *starts and keeps serving under a short timeout* — the correct test for a
+  *starts and keeps serving under a short timeout*, the correct test for a
   blocking listener. The routing/meta/middleware behaviour itself is covered
   socket-free in `Ecluse.ServerSpec`.
 

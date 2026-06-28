@@ -1,7 +1,7 @@
 ---
 id: S42
 title: Per-file SPDX license headers (REUSE-style) + new-file lint
-milestone: M8 — Release hardening
+milestone: M8, Release hardening
 status: not-started
 depends-on: []
 test-tier: []
@@ -10,9 +10,9 @@ arch-refs:
 pr: null
 ---
 
-# S42 — Per-file SPDX license headers + new-file lint
+# S42, Per-file SPDX license headers + new-file lint
 
-> Milestone **M8** · depends on: — (independent; tree-wide mechanical change) · tier: n/a (mechanical / workflow)
+> Milestone **M8** · depends on:, (independent; tree-wide mechanical change) · tier: n/a (mechanical / workflow)
 
 **Goal.** Give every source file unambiguous, machine-readable licensing by adding
 an `SPDX-License-Identifier: MIT` tag (plus a copyright line) to the top of each
@@ -29,34 +29,34 @@ silver (`license_per_file` / `copyright_per_file`, both _suggested_).
 **Why a dedicated slice (not done inline).** It touches **every** source file, so
 its conflict surface against in-flight feature slices is maximal. It must land as
 **one sweep at a quiet point** (e.g. an inter-wave pass) to avoid half-completion
-and merge churn — hence parked here rather than done opportunistically.
+and merge churn, hence parked here rather than done opportunistically.
 
 **Acceptance criteria.**
-- [ ] Every `.hs` under `src/` and `app/` (and `test/` — decide at implementation)
+- [ ] Every `.hs` under `src/` and `app/` (and `test/`, decide at implementation)
   carries `SPDX-License-Identifier: MIT` and a copyright line, as line comments
   **above** the module Haddock header so docs and the `-Werror` build are
   undisturbed.
 - [ ] A CI lint fails a PR that adds a source file without an SPDX tag (a small
   `grep`-based gate, or `reuse lint` if the REUSE layout is adopted), wired into
-  the `static-checks` job, off the product path. — _AGENTS.md (CI & Security)_
+  the `static-checks` job, off the product path., _AGENTS.md (CI & Security)_
 - [ ] The new-file header convention is documented in [`STYLE.md`](../../STYLE.md)
   and/or [`CONTRIBUTING.md`](../../CONTRIBUTING.md).
-- [ ] _(Optional)_ Full REUSE compliance — a `LICENSES/MIT.txt` copy and a green
-  `reuse lint` — decided at implementation; the dev shell gains `reuse` if so.
+- [ ] _(Optional)_ Full REUSE compliance, a `LICENSES/MIT.txt` copy and a green
+  `reuse lint`, decided at implementation; the dev shell gains `reuse` if so.
 
 **File scope.**
-- `src/**/*.hs`, `app/**/*.hs` (and possibly `test/**/*.hs`) — the headers themselves.
-- `.github/workflows/ci.yml` — the new-file SPDX lint step in `static-checks`.
-- `flake.nix` — add `reuse` to the dev shell **only if** the REUSE lint is chosen.
-- `STYLE.md` / `CONTRIBUTING.md` — the header convention for new files.
-- `LICENSES/MIT.txt` — only if full REUSE compliance is adopted.
+- `src/**/*.hs`, `app/**/*.hs` (and possibly `test/**/*.hs`), the headers themselves.
+- `.github/workflows/ci.yml`, the new-file SPDX lint step in `static-checks`.
+- `flake.nix`, add `reuse` to the dev shell **only if** the REUSE lint is chosen.
+- `STYLE.md` / `CONTRIBUTING.md`, the header convention for new files.
+- `LICENSES/MIT.txt`, only if full REUSE compliance is adopted.
 
-**Test tier.** None (mechanical) — comment-only headers are inert; correctness is
+**Test tier.** None (mechanical), comment-only headers are inert; correctness is
 "the build still passes and the lint is green." The PR gate is otherwise
 unaffected.
 
 **Notes / risks.** Low risk (comments only), high churn (every file). It is
-_suggested_, not required, for OpenSSF silver — do it for the supply-chain
+_suggested_, not required, for OpenSSF silver, do it for the supply-chain
 provenance value and to future-proof against a non-MIT file entering the tree, not
 to unblock the badge. The header must sit **above** the Haddock module block so it
 does not become the module's rendered documentation. Schedule for a quiet tree;
