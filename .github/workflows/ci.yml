@@ -349,16 +349,24 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     # Builds the library Haddock so broken doc comments / missing modules are caught
-    # on the PR, not after merge when the Pages deploy fails. SPIKE: builds it as the
+    # on the PR, not after merge when the Pages deploy fails. Builds it as the
     # `checks.docs` flake check (Nix Haskell builder) rather than `cabal haddock`
     # (`make docs-check`). The cabal path rebuilt the whole ~188-package dependency
     # closure every run (~12 min), because `cabal haddock` wants a documentation
     # variant of the deps that build-test's `cabal build` store lacks; the flake check
     # takes the deps prebuilt from the pinned Haskell set, so only ecluse compiles +
-    # haddocks (~44 s locally). Same validation — broken doc comments fail the build.
-    # Restore-only Nix store (build-test stays the single writer); no cabal cache (the
-    # build resolves deps via Nix, not cabal). The published, source-linked styling is
-    # still built by the Pages publish (`make site`) on main.
+    # haddocks. Same validation — broken doc comments fail the build. The published,
+    # source-linked styling is still built by the Pages publish (`make site`) on main.
+    #
+    # DEDICATED Nix-store cache. The shared "nix" entry build-test writes holds the
+    # `.#ci` shell closure, which lacks the dependency `-doc` outputs `checks.docs`
+    # links against — so on the shared, restore-only store this job rebuilt that whole
+    # doc closure every run (~6.7 min). It owns a separate "nix-docs" entry instead:
+    # the full doc-closure build is ~6.55 GB (measured), so the trim cap is raised to
+    # 7 G (the default 5 G would trim the closure away before saving, and it would
+    # never persist). This job is the single writer of that key (save on main only),
+    # so there is no race with build-test's "nix" entry. Warm runs then rebuild only
+    # ecluse + ecluse-core. The cache-cleanup sweep keeps one epoch per nix- prefix.
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -368,7 +376,10 @@ jobs:
       - name: Set up toolchain
         uses: ./.github/actions/setup-toolchain
         with:
-          save-nix-store: "false"
+          # Own the doc-closure cache (deps + their `-doc` outputs); single writer,
+          # save on main. Bigger than the `.#ci` shell, so raise the trim cap.
+          nix-cache-prefix: nix-docs
+          nix-gc-max-store-size: 7G
 
       - name: Build library Haddock (checks.docs flake check)
         run: nix build .#checks.x86_64-linux.docs --no-link --print-build-logs

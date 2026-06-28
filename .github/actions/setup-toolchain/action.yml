@@ -30,6 +30,24 @@ inputs:
       with build-test (the single writer) and must not race it for the one
       nix-<os>-<flakehash> entry.
     default: "true"
+  nix-cache-prefix:
+    description: >-
+      The Nix-store cache key prefix. Default "nix" — the shared store every gate
+      job realizes the `.#ci` shell into, written by build-test (the single
+      writer). A job that builds a LARGER, distinct closure sets its own prefix so
+      it neither collides with nor races that shared entry — e.g. the `docs` job
+      uses "nix-docs" for the Haddock doc-closure (the dependency `-doc` outputs
+      the `.#ci` store lacks), of which it is then the sole writer. The cache-cleanup
+      sweep keeps only the current epoch of every `nix-` prefix (see prune-caches.sh).
+    default: "nix"
+  nix-gc-max-store-size:
+    description: >-
+      Cap the Nix store is trimmed to before saving (cache-nix-action
+      gc-max-store-size-linux). Default "5G" — fits the `.#ci` dev-shell closure.
+      A job whose closure is larger raises it so the closure survives the trim and
+      actually persists; the `docs` job sets "7G" for the ~6.55 GB doc closure
+      (measured). Mind the 10 GB Actions-cache quota when raising it.
+    default: "5G"
 
 runs:
   using: composite
@@ -46,8 +64,10 @@ runs:
           download-attempts = 5
 
     # Restore /nix/store from the GitHub Actions cache, keyed on the flake, so
-    # warm runs are fast and immune to cache.nixos.org flakiness. Every gate job
-    # realizes the same `.#ci` shell, so one shared key serves them all.
+    # warm runs are fast and immune to cache.nixos.org flakiness. Most gate jobs
+    # realize the same `.#ci` shell, so the default "nix" prefix serves them from
+    # one shared entry; a job with a larger, distinct closure (the `docs` job's
+    # Haddock doc-closure) overrides nix-cache-prefix to own a separate entry.
     #
     # save is gated to main AND to the save-nix-store input: PR runs restore (from
     # main's entry, via the base-branch fallback) but never write, so they can't
@@ -55,16 +75,16 @@ runs:
     # save-nix-store: false) restores the shared store but never races build-test —
     # the single writer — for the one nix-<os>-<flakehash> entry. gc-max-store-size
     # trims the store to its live closure before saving, so the cached entry can't
-    # balloon past the dev-shell closure. Stale older-flake.lock entries are pruned
+    # balloon past that job's closure. Stale older-flake.lock entries are pruned
     # by the cache-cleanup workflow (this token is read-only; purging in-action
     # would need `actions: write`).
     - name: Cache Nix store
       uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7.0.2
       with:
-        primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.nix', 'flake.lock') }}
-        restore-prefixes-first-match: nix-${{ runner.os }}-
+        primary-key: ${{ inputs.nix-cache-prefix }}-${{ runner.os }}-${{ hashFiles('flake.nix', 'flake.lock') }}
+        restore-prefixes-first-match: ${{ inputs.nix-cache-prefix }}-${{ runner.os }}-
         save: ${{ inputs.save-nix-store == 'true' && github.ref == 'refs/heads/main' }}
-        gc-max-store-size-linux: 5G
+        gc-max-store-size-linux: ${{ inputs.nix-gc-max-store-size }}
 
     # Hackage deps are built by cabal into CABAL_DIR (the store + the package
     # index), outside /nix/store, so they need their own cache. RESTORE ONLY — the
