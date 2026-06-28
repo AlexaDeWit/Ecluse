@@ -61,16 +61,18 @@ routing layer).
 
 ## Capability manifest
 
-Beyond the per-request routes, Écluse serves a **capability manifest** — an
+Beyond the per-request routes, Écluse **publishes** a **capability manifest** — an
 OpenAPI 3 document stating which registry protocols this server speaks and what is
-/ isn't supported — at `GET /openapi.json`, a **control-plane meta-route** (not
-under any mount). It is generated from the closed `Route` enumeration above × the
-configured [mounts](hosting.md#capability-manifest), so it cannot drift from what
-the server actually routes (`Search` shows as `501`, tarballs as opaque streamed
-media), and the rendered docs group operations by ecosystem. The synthesized
-(merged + filtered) packument is an **owned** schema. The full rationale, the
-schema strategy (`autodocodec` + `openapi3`), and CI rendering (static Redoc on
-GitHub Pages, node-free at runtime) are in
+/ isn't supported. It is **statically generated at build time** (from the closed
+`Route` enumeration above × the configured
+[mounts](hosting.md#capability-manifest)) and published to the docs site — **it is
+not served; there is no `GET /openapi.json` route or any WAI wiring**. Generating it
+from the same `Route` enumeration the server routes on means it cannot drift from
+what the server actually routes (`Search` shows as `501`, tarballs as opaque
+streamed media), and the rendered docs group operations by ecosystem. The
+synthesized (merged + filtered) packument is an **owned** schema. The full
+rationale, the schema strategy (`autodocodec` + `openapi3`), and the build-time
+generation + CI publish (static Redoc on GitHub Pages, node-free) are in
 [API Surface & Capability Manifest](api-surface.md).
 
 ## Control plane vs. data plane

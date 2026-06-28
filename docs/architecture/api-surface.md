@@ -65,7 +65,7 @@ target is a surviving `versions` key) is **not** schema-expressible and stays a
 [property test](rules-engine.md#applying-verdicts-to-a-packument); a green schema
 must not be mistaken for a proof that the filtered document is internally coherent.
 
-## How it's built and served
+## How it's built and published
 
 - **Code-first owned schemas, no drift.** Owned types (error envelope, synthesized
   packument, config) define their JSON via **`autodocodec`**, which derives the
@@ -75,11 +75,17 @@ must not be mistaken for a proof that the filtered document is internally cohere
   (npm's *inbound* wire decoding stays lenient hand-rolled `aeson` — autodocodec is
   for what Écluse owns and emits, not for tolerantly parsing someone else's loose
   document; see [Technology Stack](technology-stack.md#technology-stack).)
-- **Served locally, rendered in CI.** `GET /openapi.json` returns the document from
-  a plain WAI route — a **control-plane meta-route, not under any mount**. Static
-  **Redoc** HTML is rendered in CI and published to GitHub Pages alongside the
-  Haddock — **node-free at runtime** (the renderer is pinned in the dev shell or
-  vendored, never a runtime dependency).
+- **Statically generated and published, not served.** The document is produced at
+  **build time** by a small generator (kept out of the library closure, like the
+  benchmark components) from a **fixed canonical config** — a **pure** function of
+  (config, mounts), with **no `GET /openapi.json` route and no WAI wiring**.
+  `make docs-site` / `make site` render it to a static **Redoc** page and stage it —
+  together with `openapi.json` itself — into `./_site` for GitHub Pages, beside the
+  Haddock, published by `pages.yml` on push to `main`. The Redoc bundle is **vendored
+  and hash-pinned** (the existing `mermaidJs` `fetchurl` pattern), so the lean `.#docs`
+  shell needs **no Node** and the published site has **no external runtime
+  dependency**. Output is **deterministic** (pinned key ordering, fixed base URLs) so
+  the committed/published spec is byte-stable and a contract change is a reviewed diff.
 - **Confidence without a fuzzer.** External contract fuzzers (Schemathesis,
   Dredd / Prism) are Python / Node and clash with the node-free posture;
   autodocodec gives conformance largely *by construction*, backed by `hedgehog`
@@ -93,8 +99,8 @@ must not be mistaken for a proof that the filtered document is internally cohere
 > launch critical path**. The "Confidence without a fuzzer" note above is the
 > baseline this hardens.
 
-The manifest is only worth serving if it cannot quietly diverge from the running
-server. Drift has **two independent axes**, and they need different mechanisms — no
+The manifest is only worth publishing if it cannot quietly diverge from the server
+it describes. Drift has **two independent axes**, and they need different mechanisms — no
 single library covers both for a raw-WAI server (the trade we accept for
 [not adopting Servant](web-layer.md#raw-wai-not-a-web-framework) on the data plane).
 
@@ -127,9 +133,10 @@ single library covers both for a raw-WAI server (the trade we accept for
   `501`, unknown → `404`, a denial → `403`). This is the node-free stand-in for an
   external contract fuzzer (Schemathesis / Dredd / Prism), which we avoid.
 
-**Change visibility — a golden snapshot.** Because `/openapi.json` is generated from
-the running process, a contract change produces *no diff in a PR*. A **golden
-snapshot** — the spec generated from a **fixed canonical config** (known mounts /
+**Change visibility — a golden snapshot.** The spec is generated at build time and
+**committed** (it is the same artifact the docs build publishes), so a contract change
+must show up as a diff or CI fails. A **golden snapshot** — the spec generated from a
+**fixed canonical config** (known mounts /
 base URLs, so it captures *code-level* changes and does not churn on per-environment
 config), committed and compared in CI — turns every contract change into a
 **reviewed, line-level diff** and fails CI until it is regenerated. It is a

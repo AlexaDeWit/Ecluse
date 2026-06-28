@@ -145,7 +145,7 @@ effectful tier (**M5**); the GCP backends (M7); the launch docs + release-harden
 |---|---|---|
 | **M0** | Shell, handles & foundations | The imperative shell + the three handle interfaces with in-memory doubles; config loader; logging; rules-precedence alignment. Unblocks every downstream track. |
 | **M1** | npm protocol adapter | The npm `RegistryClient`: wire decoders, projection to the domain model, data-plane fetch/publish, URL rewrite + packument filtering. |
-| **M2** | Web front door | The raw-WAI `Application`: pure router, error/denial model, meta-routes, middleware, bounded-memory streaming, conditional-GET/ETag, metadata cache, and the capability manifest (`/openapi.json`). |
+| **M2** | Web front door | The raw-WAI `Application`: pure router, error/denial model, meta-routes, middleware, bounded-memory streaming, conditional-GET/ETag, and the metadata cache. (The OpenAPI capability manifest is **statically generated and published to the docs site**, not a served meta-route — see S34.) |
 | **M3** | Request pipeline (**walking skeleton**) | The thin end-to-end path: multi-upstream packument merge, the `passthrough` credential default (forward/strip) and the per-mount [credential-strategy](../docs/architecture/access-model.md) framework, packument + tarball serving, demand-driven mirror enqueue (against in-memory cloud doubles). |
 | **M4** | AWS cloud backends & worker | `CredentialProvider` (CodeArtifact / static) — the mirror-target write, and private-upstream reads under the `service` [strategy](../docs/architecture/access-model.md) — SQS `MirrorQueue`, the mirror worker, the AWS composition root. **AWS launch-ready.** |
 | **M5** | Effectful rules & CVE | The effectful tier (timeout / retry / circuit-breaker, `Unavailable`), the OSV local-sync in-memory advisory index, and the CVE rules — `DenyIfCVE` (block affected) and `AllowIfRemediatesCve` (fast-track fixes past the quarantine). |
@@ -195,7 +195,7 @@ owes also owes a deterministic `U`/`I` test (see [Testing Strategy](../docs/test
 | [S11](slices/S11-response-model.md) | Error model + denial responses | S05, S10 | U |
 | [S12](slices/S12-wai-app-middleware.md) | WAI app + meta-routes + middleware + dispatch | S01, S10, S11 | U |
 | [S13](slices/S13-streaming-cache.md) | Streaming + conditional-GET/ETag + metadata cache | S12 | U |
-| [S34](slices/S34-capability-manifest.md) | Capability manifest (OpenAPI) + `/openapi.json` + docs render — _not on the launch critical path_ | S03, S12, S14 | U |
+| [S34](slices/S34-capability-manifest.md) | Capability manifest (OpenAPI) — static generation + docs publish (no served endpoint) — _not on the launch critical path_ | S03, S12, S14 | U |
 | [S35](slices/S35-openapi-drift-controls.md) | OpenAPI contract drift controls (`validateToJSON`, route↔op exhaustiveness, golden snapshot) — _enhancement; fast-follow after S34_ | S34 | U |
 
 ### M3 — Request pipeline (walking skeleton)
