@@ -19,18 +19,13 @@ bootstrapping phase, behind a documented review process and a strict CI gate. Se
 [`AI-DISCLOSURE.md`](AI-DISCLOSURE.md) for what's mine, what the AI did, and how to verify
 it rather than trust it.
 
-> **Status: pre-launch, under active development; no GA release yet.** The functional core,
-> the npm **packument** and **tarball** paths, the **mirror worker**, and the
-> **AWS-backed composition root** are in place: an AWS deployment (an SQS mirror queue,
-> the demand-driven worker, and a mirror-target write credential — a static token or
-> automatic CodeArtifact token minting) is wired end to end, so Écluse runs as an
-> AWS-backed npm proxy. Some backends are still landing — the GCP backends are follow-ups
-> and the deployment runbook is pending — so check the per-slice status before you rely on
-> a given capability. Pre-release candidates are published and attested, but expect breaking changes
-> before `v0.1.0`. What's actually shipped is tracked slice by slice in the
-> [delivery plan](planning/delivery-plan.md) (the per-slice `status:` is the source of
-> truth); [`USAGE.md`](USAGE.md) is the deployment **contract**, not a claim that every
-> capability is wired today.
+> **Status: pre-launch, under active development; no GA release yet.** The functional core
+> and the npm **packument**, **tarball**, and **publish** paths run today, and an
+> **AWS-backed deployment** (an SQS mirror queue with a demand-driven worker, writing under
+> a container-role credential) is wired end to end. The **GCP backends** and the deployment
+> runbook are still to come. Pre-release candidates are published and attested, but expect
+> breaking changes before `v0.1.0`. [`USAGE.md`](USAGE.md) is the deployment **contract** —
+> what is actually wired today.
 
 **API documentation:** [Haddock for the library](https://alexadewit.github.io/Ecluse/api/), auto-published from `main`.
 
@@ -45,36 +40,31 @@ See [`docs/architecture.md`](docs/architecture.md) for the full design: the four
 model, the deny-by-default rules engine, the mirror queue, and the configuration reference.
 
 The system's **threat model** (OWASP Threat Dragon, STRIDE) is the single source of truth for
-its threats — [`threat-modelling/ecluse.json`](threat-modelling/ecluse.json) — and is published
-as a readable register at [Threat Model](https://alexadewit.github.io/Ecluse/threat-model.html), regenerated from
-the model on every site build. Record threats in the model, not as prose duplicated across the
-docs.
+its risks, published as a readable
+[register](https://alexadewit.github.io/Ecluse/threat-model.html) generated from
+[`threat-modelling/ecluse.json`](threat-modelling/ecluse.json) on every build. Record threats
+in the model, not in prose.
 
 ## Using Écluse
 
 **Deploying or operating Écluse? Start with the [Operator Manual (`USAGE.md`)](USAGE.md).**
 It's the consumer-facing reference: configuration (environment variables and the config
 document), connecting your clients, the **network-egress safety** you're responsible for,
-the rule policy, and the health/observability endpoints. I've surfaced all of it out of the
-internal architecture docs so operators can find it; the `docs/architecture/` documents stay
-the home for the *why* behind each setting.
+the rule policy, and the health/observability endpoints. The
+[`docs/architecture/`](docs/architecture.md) documents are the *why* behind each setting.
 
 ## Verifying the image
 
-> **Pre-release.** No GA release is cut yet: no
-> [GitHub Releases](https://github.com/AlexaDeWit/Ecluse/releases) and no `v0.1.0` tag.
-> Pre-release candidates (e.g. `0.1.0-rc.2`) are published to Docker Hub and **already carry
-> the attestations below**, so this recipe works against an RC today (expect breaking
-> changes before `v0.1.0`). It's the verification contract every released image will meet.
+> **Pre-release.** No GA release is cut yet. Pre-release candidates (e.g. `0.1.0-rc.2`) are
+> published to Docker Hub and **already carry the attestations below**, so this recipe works
+> against an RC today (expect breaking changes before `v0.1.0`).
 
-Each published tag is a **single multi-arch image** (`linux/amd64` + `linux/arm64`): pull
-the one tag and the registry serves your architecture. Every image carries **provenance**
-and **SBOM** attestations, keyless (Sigstore), recorded in the public Rekor transparency
-log, and stored as **immutable OCI referrers** on the image (write-once; they can't be
-overwritten); provenance is attested on the index and each platform, the SBOM per platform.
-Once a release is cut, each version's digest will be published in its
-[GitHub Release](https://github.com/AlexaDeWit/Ecluse/releases); until then, pin a published
-tag by digest. Verify by **digest** with the GitHub CLI:
+Each published tag is a **single multi-arch image** (`linux/amd64` + `linux/arm64`). Every
+image carries keyless (Sigstore) **provenance** and **SBOM** attestations, recorded in the
+public Rekor transparency log. Once a
+release is cut its digest is published in the
+[GitHub Release](https://github.com/AlexaDeWit/Ecluse/releases); until then, pin a tag by
+digest. Verify by **digest** with the GitHub CLI:
 
 ```bash
 IMAGE=alexadewit/ecluse@sha256:…   # pin by digest
