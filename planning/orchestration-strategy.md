@@ -125,6 +125,21 @@ DB; and with 2–3 worktrees in flight, **stagger** the creations so parallel co
 typechecks don't thrash the CPU. After a post-merge rebase, re-run `make build` to
 re-warm incrementally.
 
+**Carry the architect's full acceptance criteria into the brief; a brief is not a
+summary.** An implementer never sees the alignment conversation that shaped a slice, so the
+brief is its only window into it. When requirements were settled through a back-and-forth with
+the architect (a type's exact fields, an edge case's disposition, a value that must be
+preserved verbatim, the _why_ behind a constraint), the brief transcribes **all of it in its
+final agreed form**, not a compressed paraphrase that quietly drops the nuance. A too-terse
+brief narrows the target without anyone deciding to: the implementer then either guesses past
+the gap (the very failure _escalate, don't guess_ exists to prevent, now displaced onto the
+team lead's own omission) or surfaces it late, costing a round-trip. When the architect has
+already done the alignment work, **over-specify rather than under-specify**: every refinement,
+edge case, and rationale that came out of the discussion belongs in the brief. The
+design-checkpoint (the implementer proposes its design and the team lead confirms before deep
+work) is a backstop for genuine forks, not licence to hand over a thin brief and let the
+checkpoint reconstruct what was already settled.
+
 **Pin the model; there is no effort dial.** The Agent tool's `model` argument, left
 unset, takes the general-purpose agent's default, which may be **lighter than the
 team lead's own model**, and the tool exposes **no** thinking-effort parameter, so
