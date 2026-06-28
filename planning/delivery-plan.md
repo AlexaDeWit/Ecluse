@@ -257,6 +257,7 @@ owes also owes a deterministic `U`/`I` test (see [Testing Strategy](../docs/test
 | [S46](slices/S46-dockerhub-org-account.md) | Docker Hub org account + repo-scoped publish token (retire account-wide personal PAT) — _accepted risk pre-MVP; harden before GA_ | — | — |
 | [S53](slices/S53-e2e-ecosystem.md) | End-to-end testing ecosystem — whole-system through the real composition root, real `npm` CLI on the public surface, server↔worker round-trip; real Verdaccio + scriptable upstream stub — _new **non-gating** `e2e` tier (pre-merge + nightly); built now on `runServices`, rebased onto S20 when it lands; [#271](https://github.com/AlexaDeWit/Ecluse/issues/271)_ | S15, S19 | E2E |
 | [S54](slices/S54-bounded-memory-streaming.md) | Bounded-memory streaming — residency-invariant **gating correctness** test (memory independent of artifact size; `maxBodyBytes` cap) — _split out of the M9 re-cut as a correctness test, not a perf bench; **last, lowest criticality**_ | S15 | I |
+| [S55](slices/S55-revocation-denylist.md) | Revocation denylist — `DenyByIdentity` hard-deny rule (operator yank-before-public-yank), paired with operator purge of Registry B — _post-mirror revocation enabler; pure rule; not launch-critical_ | S05 | U |
 
 ### M9 — Benchmarking & load testing (informational; never gates)
 

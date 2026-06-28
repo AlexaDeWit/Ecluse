@@ -549,6 +549,17 @@
                   "mitigation": "Deploy the three-registry topology (the Golden Path): a first-party store, a public-derived mirror store, and a pull-through aggregator read endpoint, each independently governable. The trade is auditability and defence-in-depth, not a perimeter change.",
                   "modelType": "STRIDE",
                   "id": "0ec10e5e-0000-4000-8000-00000000010a"
+                },
+                {
+                  "number": 13,
+                  "status": "Open",
+                  "severity": "Medium",
+                  "title": "Malicious mirrored version persists and is served as trusted (no automatic post-ingestion revocation)",
+                  "type": "Tampering",
+                  "description": "Écluse mirrors approved public versions into Registry B and, by design, resists upstream yanks so a benign yank does not break installs. The flip side: a version later found malicious persists in B and is served as trusted (the merge serves the private origin unfiltered by the rules), with no automatic removal — neither an upstream yank nor a rules change reaches an already-mirrored artifact.",
+                  "mitigation": "Detection is delegated (operator scanning of Registry B, plus upstream advisories and security-holding signals, decide what to revoke). Enforcement uses systems the operator owns: a hard deny-by-identity revocation rule (roadmapped) halts re-admission on the serve path and re-mirroring at the worker ingest re-check, and the operator purges the version from Registry B to remove the already-mirrored trusted copy (rules do not run on trusted content, so purge is what removes the existing copy). Ordered deny-then-purge so demand does not re-mirror during the purge; purge alone is a treadmill while the version is still live upstream. The typical pattern is the inverse — an upstream yank or security-hold changes or removes the bytes, after which re-mirroring cannot reproduce them and the operator purges the stale copy.",
+                  "modelType": "STRIDE",
+                  "id": "0ec10e5e-0000-4000-8000-00000000010d"
                 }
               ]
             }
@@ -1262,6 +1273,6 @@
     ],
     "diagramTop": 1,
     "reviewer": "",
-    "threatTop": 12
+    "threatTop": 13
   }
 }
