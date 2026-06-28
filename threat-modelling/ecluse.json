@@ -456,7 +456,7 @@
                 },
                 {
                   "number": 15,
-                  "status": "Open",
+                  "status": "Mitigated",
                   "severity": "High",
                   "title": "Private-upstream aggregation admits the public registry, bypassing the gate",
                   "type": "Tampering",
@@ -552,7 +552,7 @@
               "threats": [
                 {
                   "number": 10,
-                  "status": "Open",
+                  "status": "Mitigated",
                   "severity": "Medium",
                   "title": "Registry collapse erases provenance and per-store policy",
                   "type": "Repudiation",

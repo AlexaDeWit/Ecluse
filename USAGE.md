@@ -103,6 +103,34 @@ The *why* behind each choice — and the residual risks the canonical posture kn
 accepts — is in the [threat model](https://alexadewit.github.io/Ecluse/threat-model.html) and
 [Security invariants](docs/architecture/security.md#trust-assumptions--credential-posture).
 
+## Deviating from the Golden Path
+
+The [Golden Path](#the-golden-path) is the posture the threat model treats as canonical. Écluse still
+*runs* if you diverge, but each deviation trades away a specific protection — and a couple are **silent**,
+in that Écluse cannot detect them, so nothing warns you. The registry-topology deviations are the sharpest:
+
+- **Collapsing the registries onto one store** — the default if you leave `MIRROR_TARGET_URL` /
+  `PUBLICATION_TARGET_URL` unset. The *perimeter* still holds (public content is still gated), but you
+  lose **provenance separation**: first-party and public-derived packages share one store, so you can no
+  longer apply distinct per-provenance scanning or policy, and post-incident scoping — *"which mirrored
+  public packages did we hold?"* — is muddied. You give up auditability and defence-in-depth, not the gate.
+  (Register [threat #10](https://alexadewit.github.io/Ecluse/threat-model.html).)
+- **Pointing the private upstream at a registry that itself draws from public** — e.g. a CodeArtifact repo
+  carrying the stock `npm-store` upstream to npmjs. This is the **dangerous one.** Raw, ungated public
+  packages then reach clients through the *trusted* read path — *behind* Écluse's gate instead of through
+  it — silently nullifying the rules, integrity floor, and freshness quarantine that are the entire reason
+  to run Écluse. **Écluse cannot detect this**: the private upstream is trusted by construction and its
+  registry-level wiring is invisible to the proxy, so there is no boot error and no warning. Aggregate
+  **trusted stores only** (your first-party store + Écluse's sanitized mirror) into the private upstream,
+  and let Écluse's gated mirror be the *only* path public content takes in. (Register
+  [threat #15](https://alexadewit.github.io/Ecluse/threat-model.html).)
+
+The other steps carry smaller, self-announcing trade-offs: an open edge (`PROXY_AUTH_TOKEN` unset) leans
+entirely on your network boundary; a static publish credential *requires* that edge, and Écluse fails
+closed at boot if you set one without it; a `static` mirror-write secret forgoes the short-lived minted
+token. Each is described at its step above and in
+[Security invariants](docs/architecture/security.md#trust-assumptions--credential-posture).
+
 ## Configuration
 
 Configuration has two layers: **environment variables** for process-level and secret
