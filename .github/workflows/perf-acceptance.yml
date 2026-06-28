@@ -1,0 +1,68 @@
+name: Performance acceptance (Context B)
+
+# The live performance-acceptance harness (Context B): it fetches LIVE packuments for
+# the curated catalogue set and checks Écluse's work-per-request overhead against the
+# version-controlled acceptance budget (acceptance/criteria.json).
+#
+# Standalone and deliberately NON-REQUIRED. Unlike the deterministic Layer A/B
+# benchmarks (which red only on a literal crash), this job REDS on a real budget breach
+# — a visible red check on the pull request — so the team reacts when real-world
+# conditions degrade and decides: code regression, or reality outgrew the budget? But it
+# is NOT wired into ci.yml's `gate` and must not be a branch-protection required check,
+# so the red informs without ever blocking merge. Live + non-deterministic, so a flaky
+# registry is reported as unavailable, never a breach (the harness exits non-zero only
+# on an over-budget measurement). The run summary separates the upstream and Écluse
+# overhead legs, leaving room for a later upstream-normalization column. See
+# docs/architecture/performance.md.
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: "37 6 * * *"
+  workflow_dispatch:
+
+# One run per ref; a superseded PR run is cancelled when a newer commit lands (only the
+# latest commit's verdict matters). Never cancel a scheduled or dispatch run.
+concurrency:
+  group: perf-acceptance-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Least privilege: read-only is all this workflow needs.
+permissions:
+  contents: read
+
+jobs:
+  perf-acceptance:
+    name: Performance acceptance (live, non-blocking)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      # Pin the cabal store to a deterministic, cacheable location, as the other
+      # Haskell jobs do.
+      CABAL_DIR: ${{ github.workspace }}/.cabal
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Set up toolchain
+        uses: ./.github/actions/setup-toolchain
+        with:
+          # Restore the warm cabal store (this job compiles the harness).
+          cabal-cache: "true"
+          # Restore the shared Nix store but never write it: build-test on main is the
+          # single writer. Restore-only.
+          save-nix-store: "false"
+
+      - name: Update package index
+        run: nix develop .#ci --command make update
+
+      # Run the harness. It writes its summary to $GITHUB_STEP_SUMMARY itself, so this
+      # step needs no shell wrapping (keeping the workflow injection-free), and its exit
+      # code is preserved: non-zero ONLY on a real budget breach, which reds this
+      # (non-required) check.
+      - name: Run performance acceptance
+        run: nix develop .#ci --command make perf-acceptance
