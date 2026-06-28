@@ -61,8 +61,11 @@ detail.
    (`PRIVATE_UPSTREAM_URL`). Keeping first-party and public-derived inventory physically
    separate lets you apply distinct storage-level policy and scanning per provenance and
    keeps your package inventory auditable; collapsing them onto fewer registries still
-   works, but muddies auditing and post-incident scoping. See [registry-level
-   composition](docs/architecture/registry-model.md#registry-level-composition-optional-never-required).
+   works, but muddies auditing and post-incident scoping. **The one hard rule:** that
+   aggregating endpoint must union your **trusted** stores only — never a direct public
+   upstream — or raw, ungated public packages reach clients as trusted, *behind* Écluse's
+   gate instead of through it. See [registry-level
+   composition](docs/architecture/registry-model.md#registry-level-composition-the-recommended-topology).
 2. **Let callers use their own identity (passthrough).** The default credential strategy
    forwards each caller's own registry token to the private upstream and the publication
    target, so access stays exactly what your registry's IAM already grants — no privilege

@@ -453,6 +453,17 @@
                   "mitigation": "A public version must carry a digest meeting the integrity floor (uniform default SHA-256, hard-floored) to be admitted, and divergence is compared on each digest's asserted algorithm rather than a bucketed tag; the asserted-algorithm keying landed in #380 (closing #376). Residual: the deliberately operator-loosenable trusted-floor path, which trades strictness for availability and is the remaining way a weak digest could be accepted.",
                   "modelType": "STRIDE",
                   "id": "0ec10e5e-0000-4000-8000-00000000010b"
+                },
+                {
+                  "number": 15,
+                  "status": "Open",
+                  "severity": "High",
+                  "title": "Private-upstream aggregation admits the public registry, bypassing the gate",
+                  "type": "Tampering",
+                  "description": "The recommended topology unions the trusted stores (first-party A and the sanitized mirror B) into the pull-through read endpoint C at the registry level (e.g. CodeArtifact upstream relationships). If that aggregation also includes a direct connection to the public registry, raw public packages reach clients through C as a trusted source, skipping Écluse's gate (rules, integrity floor, freshness quarantine) entirely. The same upstream-merger mechanism that makes the ideal topology work makes this the natural misconfiguration: a CodeArtifact repository's default npm-store upstream to npmjs is exactly this shape.",
+                  "mitigation": "An operator-architecture invariant, documented in the registry model and the Golden Path: the aggregating private upstream composes trusted stores only (first-party plus Écluse's sanitized mirror) and never carries a direct public upstream — public content enters only through Écluse's gate. Écluse cannot detect a violation (the private upstream is trusted by construction, and its upstream wiring is external to the proxy), so the control is operator discipline plus this documented invariant rather than a structural check.",
+                  "modelType": "STRIDE",
+                  "id": "0ec10e5e-0000-4000-8000-00000000010f"
                 }
               ]
             }
@@ -545,8 +556,8 @@
                   "severity": "Medium",
                   "title": "Registry collapse erases provenance and per-store policy",
                   "type": "Repudiation",
-                  "description": "Écluse supports 1 to 3 distinct internal registries. Collapsing the public-derived mirror store (B) into the first-party private store (A) / pull-through (C) loses the physical separation between first-party and public-derived inventory: distinct storage-level rule-sets and scanning per provenance become impossible, and post-disclosure incident scoping ('which mirrored public packages did we hold?') is muddied, weakening the arithmetic-not-forensics response.",
-                  "mitigation": "Deploy the three-registry topology (the Golden Path): a first-party store, a public-derived mirror store, and a pull-through aggregator read endpoint, each independently governable. The trade is auditability and defence-in-depth, not a perimeter change.",
+                  "description": "Écluse supports collapsing its internal registry roles onto as few as one store. The recommended topology keeps the first-party store (A) and the public-derived mirror store (B) separate and unions them into the pull-through read endpoint (C) at the registry level; collapsing them onto a single shared store is the degenerate floor — and the configuration default, since an unset MIRROR_TARGET_URL folds the mirror onto the private upstream. Collapse loses the physical separation between first-party and public-derived inventory: distinct storage-level rule-sets and scanning per provenance become impossible, and post-disclosure incident scoping ('which mirrored public packages did we hold?') is muddied, weakening the arithmetic-not-forensics response.",
+                  "mitigation": "Deploy the recommended three-registry topology (the Golden Path): a first-party store, a public-derived mirror store, and a pull-through aggregator read endpoint unioning the two at the registry level, each independently governable. The single-registry collapse remains supported but is discouraged; the trade it makes is auditability and defence-in-depth, not the perimeter.",
                   "modelType": "STRIDE",
                   "id": "0ec10e5e-0000-4000-8000-00000000010a"
                 },

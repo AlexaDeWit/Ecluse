@@ -329,7 +329,7 @@ Its arms split cleanly into *easy* and *risky*:
   so they ride the existing npm `RegistryClient` plus an Entra bearer — no per-cloud
   publish path. (Azure Artifacts' own *upstream sources* are a registry-composition
   feature, the analog of CodeArtifact external connections — the same
-  [composition-optional, don't-bypass-the-gate](registry-model.md#registry-level-composition-optional-never-required)
+  [registry composition — don't bypass the gate](registry-model.md#registry-level-composition-the-recommended-topology)
   caveat applies.)
 - **Queue — the risk, and why Azure is last.** Sharper than the GCP gRPC-vs-REST gap:
   - The natural fit is **Service Bus** (peek-lock → `receive`, renew-lock →
