@@ -11,7 +11,7 @@ to Haskell and coding agents.
 
 ## What Haddock is for
 
-Haddock is our **Reference** documentation — the authoritative "what is this and
+Haddock is our **Reference** documentation, the authoritative "what is this and
 how do I call it?" for the public API, rendered to a browsable site by
 `make docs` and published from `main`. It is one of the
 [four kinds of documentation](https://diataxis.fr/): reference, not a tutorial,
@@ -19,13 +19,13 @@ a how-to, or an explanation. So:
 
 - **Narrative and onboarding** ("how the proxy fits together", "how to add a
   registry") belong in [`README.md`](README.md) and
-  [`docs/architecture.md`](docs/architecture.md) — not spread across every
+  [`docs/architecture.md`](docs/architecture.md), not spread across every
   function.
 - **Haddock answers the focused question** at each type and function: its
   contract, its caveats, and the reasoning a type signature can't carry.
 
 The aim is a manual a Haskeller who is *new to this codebase* can navigate
-quickly — which comes from **structure and one-line summaries**, not from a wall
+quickly, which comes from **structure and one-line summaries**, not from a wall
 of prose on every binding.
 
 ---
@@ -52,16 +52,16 @@ Use these words precisely; the rest of the guide relies on them.
 **Document the *why* and the *surprising*, not the *what*.** The signature
 already says `Scope -> Text`. Your sentence says what it is *for* and what a
 caller must know that the types cannot express: invariants, ordering/precedence,
-totality, failure behaviour, and — for Écluse especially — the security rationale
+totality, failure behaviour, and, for Écluse especially, the security rationale
 (§10).
 
 **Let the types carry their weight.** Haddock already prints every signature and
 data declaration. Never restate one in prose ("takes a `Scope` and returns
-`Text`") — that is pure noise.
+`Text`"); that is pure noise.
 
 **Document the exported surface; leave internals alone.** A module's export list
 *is* its public contract (`-Wmissing-export-lists`). Document everything in it;
-do **not** put Haddock on non-exported helpers — a plain `--` comment, only where
+do **not** put Haddock on non-exported helpers, a plain `--` comment, only where
 the *why* is unclear, is right there (§3).
 
 **Navigability over volume.** One crisp summary line on each export, grouped under
@@ -69,12 +69,12 @@ section headings, makes a module scannable. A paragraph on every binding does th
 opposite.
 
 **Point from the volatile to the stable.** When you cross-reference, link
-*upward* — to a sibling module or an architecture doc — rather than narrating the
+*upward*, to a sibling module or an architecture doc, rather than narrating the
 changeable internals of the current one.
 
 ---
 
-## 3. How much to document — and what to skip
+## 3. How much to document, and what to skip
 
 The balance, in one line:
 
@@ -86,14 +86,14 @@ The balance, in one line:
 | **Module** | Always | Header: what it is for and how it fits the system (§5). |
 | **Exported function** | Always (≥ 1 line) | Purpose; preconditions, totality, failure modes; an example if non-obvious. |
 | **Exported type / `newtype`** | Always | What it represents and any invariant it protects. |
-| **Sum constructors** | Usually | A `-- \|` per constructor where the name isn't self-evident — and for `Rule`/`RuleOutcome`-style domain types, *always* (this is where the domain knowledge lives). |
+| **Sum constructors** | Usually | A `-- \|` per constructor where the name isn't self-evident, and for `Rule`/`RuleOutcome`-style domain types, *always* (this is where the domain knowledge lives). |
 | **Record fields** | Usually | `-- ^` per field: units, ranges, invariants. |
 | **Type class + methods** | Always | The abstraction and any laws; default behaviour. |
 | **Instances** | Rarely | Only when behaviour is surprising. |
 | **Non-exported helper** | **No Haddock** | Plain `--` only where the *why* is unclear. |
 | **Trivial, self-evident export** | One line, no more | Don't pad it to look thorough. |
 
-**Anti-bloat checklist — don't:**
+**Anti-bloat checklist, don't:**
 
 - ❌ Restate the signature in words.
 - ❌ Haddock-document a `where` helper or any unexported binding.
@@ -119,7 +119,7 @@ The marker goes on the first line only. -}
 
 Conventions:
 
-- **Default to `-- |`** before a declaration — it reads top-down.
+- **Default to `-- |`** before a declaration; it reads top-down.
 - **Use `-- ^`** inline, for function arguments, constructor arguments, and
   record fields, where the comment naturally sits after the thing.
 - **Use `{- | … -}`** for module headers and long multi-paragraph blocks.
@@ -129,7 +129,7 @@ Conventions:
 ## 5. Module headers
 
 Every module opens with a `{- | … -}` header stating what it is for and how it
-fits the system — the model and the load-bearing decisions, not a list of the
+fits the system, the model and the load-bearing decisions, not a list of the
 type names. Cross-reference sibling modules (`"Ecluse.Core.Rules.Types"`) and the
 architecture docs.
 
@@ -151,7 +151,7 @@ Those are ceremony for libraries published standalone to Hackage; Écluse is one
 application whose licence (`MIT`) lives in the cabal file and `LICENSE`, so
 repeating it atop every module is bloat. A plain prose header is the convention
 here. (If we ever split a module set out as its own Hackage package, add the
-fields there — in their fixed order — and nowhere else.)
+fields there, in their fixed order, and nowhere else.)
 
 **Structure a long header with subsection headings.** When a header covers
 several distinct points, `==` / `===` headings render as real, quick-jump
@@ -163,11 +163,11 @@ single lead paragraph (optionally a `*` bullet list). Pick one shape per header.
 ## 6. Documenting declarations
 
 **Functions, with per-argument docs.** Annotate the contract the signature can't
-state — here, totality that is *load-bearing* (a crash would take down the gate),
+state, here, totality that is *load-bearing* (a crash would take down the gate),
 not a reflexive "pure and total" tag (STYLE.md §9.2):
 
 ```haskell
-{- | Evaluate a single rule against a single package version. Total — a
+{- | Evaluate a single rule against a single package version. Total, a
 malformed rule or package yields an outcome, never an exception, so hostile
 metadata cannot crash the gate.
 -}
@@ -178,7 +178,7 @@ evalRule
     -> RuleOutcome
 ```
 
-**Sum types — a `-- |` per constructor.** This is where Écluse's domain knowledge
+**Sum types, a `-- |` per constructor.** This is where Écluse's domain knowledge
 lives, so document each one (and the *why*, §10):
 
 ```haskell
@@ -192,7 +192,7 @@ data Rule
     deriving stock (Eq, Show)
 ```
 
-**Records — a `-- ^` per field**, carrying units and invariants:
+**Records, a `-- ^` per field**, carrying units and invariants:
 
 ```haskell
 data PackageDetails = PackageDetails
@@ -210,7 +210,7 @@ data PackageDetails = PackageDetails
 ## 7. Organising a module for navigation
 
 **Group the export list with section headings** (`-- *`, `-- **`). They become
-the page's table of contents — the single biggest aid to a newcomer. (See also
+the page's table of contents, the single biggest aid to a newcomer. (See also
 [`STYLE.md`](STYLE.md) → "Exports".)
 
 ```haskell
@@ -250,7 +250,7 @@ render, and match how a sibling module does it.
 
 **Don't over-escape.** Only `@`, `<`, and `>` are active characters (plus `'`
 when wrapped tightly around an identifier). Write prose apostrophes and
-punctuation **bare** — `npm's`, `the package's name`, `a/b` — never `npm\'s`.
+punctuation **bare**, `npm's`, `the package's name`, `a/b`, never `npm\'s`.
 Escaping ordinary prose is the noise that makes a page look untrustworthy. To
 show an active character literally, escape just it: `\@`, `\<`, `\>`. If a
 literal needs a thicket of backslashes to render, rephrase instead.
@@ -259,7 +259,7 @@ literal needs a thicket of backslashes to render, rephrase instead.
 
 ## 9. Examples that run (doctest)
 
-Prefer a `>>>` example to a paragraph — it teaches faster and, because we run it,
+Prefer a `>>>` example to a paragraph, it teaches faster and, because we run it,
 it cannot rot. An example is the expression plus its expected output:
 
 ```haskell
@@ -276,21 +276,21 @@ renderDuration :: NominalDiffTime -> Text
 ```
 
 - **`make doctest`** runs every `>>>` example as a test, and the CI gate runs it
-  too — so an example that disagrees with the code fails the build. It works via
+  too, so an example that disagrees with the code fails the build. It works via
   `cabal repl --with-ghc=doctest`, which inherits the package's exact build
   configuration (crucially the `relude` prelude), so examples see the same names
   the module does.
-- **Keep examples pure, total, and deterministic** — they run in a plain GHCi
+- **Keep examples pure, total, and deterministic**: they run in a plain GHCi
   session with no `IO` setup. The pure core (`Ecluse.Core.Rules`, `Ecluse.Core.Version`,
   `Ecluse.Core.Package`) is the natural home for them.
 - Output is compared to GHCi's printed form: a `Text` shows **with quotes**
   (`"7 days"`).
 - Haddock also supports `prop>` properties, but Écluse pins invariants with
-  `hedgehog` in the test suites (see [`docs/testing.md`](docs/testing.md))—use `>>>` here for illustration, not for property testing.
+  `hedgehog` in the test suites (see [`docs/testing.md`](docs/testing.md)); use `>>>` here for illustration, not for property testing.
 
 ---
 
-## 10. Explain the *why* — especially the security rationale
+## 10. Explain the *why*, especially the security rationale
 
 Écluse is a supply-chain resilience tool. A comment that explains the **threat a
 rule defends against** (as `AllowIfOlderThan` does in §6) is worth far more
@@ -305,16 +305,16 @@ test, or a later reader cannot reconstruct on their own.
 Haddock is the durable contract, read long after any PR. Keep project-management
 narration out of it:
 
-- **No status or roadmap** — drop "for now", "currently", "at launch", "a later
+- **No status or roadmap**: drop "for now", "currently", "at launch", "a later
   slice will…". Describe what *is*, in the present tense.
-- **No slice / PR / issue references** — "(see S07)", "added in #42",
+- **No slice / PR / issue references**, "(see S07)", "added in #42",
   "TODO(after the spike)" belong in git history and
   [`planning/`](planning/), not the source.
-- **No test-plumbing narration** — document a test double where it is defined, by
+- **No test-plumbing narration**: document a test double where it is defined, by
   what it does, not in the production module it stands in for.
 
-The test: if a sentence would read as false or pointless a year from now — once
-the "later" work has landed — it is project narration. Cut it. The model, the
+The test: if a sentence would read as false or pointless a year from now, once
+the "later" work has landed, it is project narration. Cut it. The model, the
 decisions, and the security *why* stay.
 
 ---
@@ -324,7 +324,7 @@ decisions, and the security *why* stay.
 ```sh
 make docs       # build the hyperlinked, searchable Haddock site and open it
 make doctest    # run every >>> example as a test (also in the CI gate)
-make check      # the full local gate — includes both of the above
+make check      # the full local gate, includes both of the above
 ```
 
 **Read the rendered page, not just the source.** A markup slip is invisible in
@@ -389,7 +389,7 @@ area (Circle r) = pi * r * r
 - [ ] Every new module has a prose `{- | … -}` header saying what it is for.
 - [ ] Every **exported** type and function has a Haddock comment (≥ 1 line);
       sum constructors and record fields are documented where they carry meaning.
-- [ ] The *why* is captured — especially the security rationale (§10).
+- [ ] The *why* is captured, especially the security rationale (§10).
 - [ ] No restating of signatures; no Haddock on non-exported helpers; no
       project / PR / status narration (§11).
 - [ ] Markup is minimal and unescaped in prose (§8).

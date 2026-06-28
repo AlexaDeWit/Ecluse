@@ -7,7 +7,7 @@ safe link in your supply chain. It's the consumer companion to the internal
 here.
 
 > **Status: pre-launch.** Écluse is under active development. This manual is the
-> **configuration and operational contract** — the env vars, the config schema, the client
+> **configuration and operational contract**, the env vars, the config schema, the client
 > setup, and the security responsibilities. Features still landing are marked **(planned)**;
 > treat this as the deployment contract, not a claim that every capability below is wired
 > today.
@@ -51,7 +51,7 @@ recipe (keyless Sigstore + Rekor, pinned by digest) is in the
 ## The Golden Path
 
 The sections below cover every knob; this is the **recommended, most resilient way to run
-Écluse** — the posture the [threat model](https://alexadewit.github.io/Ecluse/threat-model.html) treats as canonical,
+Écluse**, the posture the [threat model](https://alexadewit.github.io/Ecluse/threat-model.html) treats as canonical,
 and the one to aim for unless you have a specific reason to diverge. Each step links to its
 detail.
 
@@ -62,14 +62,14 @@ detail.
    separate lets you apply distinct storage-level policy and scanning per provenance and
    keeps your package inventory auditable; collapsing them onto fewer registries still
    works, but muddies auditing and post-incident scoping. **The one hard rule:** that
-   aggregating endpoint must union your **trusted** stores only — never a direct public
-   upstream — or raw, ungated public packages reach clients as trusted, *behind* Écluse's
+   aggregating endpoint must union your **trusted** stores only, never a direct public
+   upstream, or raw, ungated public packages reach clients as trusted, *behind* Écluse's
    gate instead of through it. See [registry-level
    composition](docs/architecture/registry-model.md#registry-level-composition-the-recommended-topology).
 2. **Let callers use their own identity (passthrough).** The default credential strategy
    forwards each caller's own registry token to the private upstream and the publication
-   target, so access stays exactly what your registry's IAM already grants — no privilege
-   escalation or compression — and Écluse holds no standing read credential. This is the
+   target, so access stays exactly what your registry's IAM already grants, no privilege
+   escalation or compression, and Écluse holds no standing read credential. This is the
    launch default; nothing to set. See [access model](docs/architecture/access-model.md).
 3. **Mint the mirror-write token from the container role.** Set
    `MIRROR_TARGET_CREDENTIAL_PROVIDER=codeartifact` so the worker mints a short-lived write
@@ -77,20 +77,20 @@ detail.
    supported but discouraged). Scope that role **write-only** to the mirror store and keep
    the token duration short (`MIRROR_TARGET_CODEARTIFACT_TOKEN_DURATION_SECONDS`). It is
    Écluse's only standing credential and it writes the trusted store, so least-privilege it
-   hardest. **Scope the mirror queue the same way** — it is part of the same trust boundary:
+   hardest. **Scope the mirror queue the same way**; it is part of the same trust boundary:
    a job directs the worker to fetch-and-publish, so grant only the serve role `SendMessage`
    (enqueue) and only the worker `ReceiveMessage`/delete. Anyone who can write the queue can
    make the worker write the trusted store.
 4. **Let the edge own access; leave `PROXY_AUTH_TOKEN` off.** Écluse is not your access
    boundary: front it with a gateway / service mesh / IAP that admits only the networks you
    intend (office ranges, a VPN tunnel), and restrict **both** north-south *and* east-west
-   (pod-to-pod) reachability — an ingress-only allow-list that still leaves the pod
+   (pod-to-pod) reachability, an ingress-only allow-list that still leaves the pod
    reachable from inside the cluster is the common gap. See [Connecting your
    clients](#connecting-your-clients).
 5. **Fence egress, keep metadata reachable.** Default-deny outbound, allowing only your
    upstreams, the mirror target, and the metadata endpoint; reach CodeArtifact over **VPC
    endpoints**; require **IMDSv2 with hop limit 1**. Do **not** block the metadata endpoint
-   — Écluse needs it to mint credentials. See [Securing network
+  , Écluse needs it to mint credentials. See [Securing network
    egress](#securing-network-egress-required).
 6. **Make the proxy unbypassable.** Deny your CI runners (and, where practical,
    workstations) outbound access to the public registries so the only route to a package is
@@ -99,26 +99,26 @@ detail.
 7. **Verify what you run.** Pin the image by digest and verify its provenance + SBOM
    attestations before deploying (see [Verifying the image](README.md#verifying-the-image)).
 
-The *why* behind each choice — and the residual risks the canonical posture knowingly
-accepts — is in the [threat model](https://alexadewit.github.io/Ecluse/threat-model.html) and
+The *why* behind each choice, and the residual risks the canonical posture knowingly
+accepts, is in the [threat model](https://alexadewit.github.io/Ecluse/threat-model.html) and
 [Security invariants](docs/architecture/security.md#trust-assumptions--credential-posture).
 
 ## Deviating from the Golden Path
 
 The [Golden Path](#the-golden-path) is the posture the threat model treats as canonical. Écluse still
-*runs* if you diverge, but each deviation trades away a specific protection — and a couple are **silent**,
+*runs* if you diverge, but each deviation trades away a specific protection, and a couple are **silent**,
 in that Écluse cannot detect them, so nothing warns you. The registry-topology deviations are the sharpest:
 
-- **Collapsing the registries onto one store** — the default if you leave `MIRROR_TARGET_URL` /
+- **Collapsing the registries onto one store**, the default if you leave `MIRROR_TARGET_URL` /
   `PUBLICATION_TARGET_URL` unset. The *perimeter* still holds (public content is still gated), but you
   lose **provenance separation**: first-party and public-derived packages share one store, so you can no
-  longer apply distinct per-provenance scanning or policy, and post-incident scoping — *"which mirrored
-  public packages did we hold?"* — is muddied. You give up auditability and defence-in-depth, not the gate.
+  longer apply distinct per-provenance scanning or policy, and post-incident scoping, *"which mirrored
+  public packages did we hold?"*, is muddied. You give up auditability and defence-in-depth, not the gate.
   (Register [threat #10](https://alexadewit.github.io/Ecluse/threat-model.html).)
-- **Pointing the private upstream at a registry that itself draws from public** — e.g. a CodeArtifact repo
+- **Pointing the private upstream at a registry that itself draws from public**; e.g. a CodeArtifact repo
   carrying the stock `npm-store` upstream to npmjs. This is the **dangerous one.** Raw, ungated public
-  packages then reach clients through the *trusted* read path — *behind* Écluse's gate instead of through
-  it — silently nullifying the rules, integrity floor, and freshness quarantine that are the entire reason
+  packages then reach clients through the *trusted* read path, *behind* Écluse's gate instead of through
+  it, silently nullifying the rules, integrity floor, and freshness quarantine that are the entire reason
   to run Écluse. **Écluse cannot detect this**: the private upstream is trusted by construction and its
   registry-level wiring is invisible to the proxy, so there is no boot error and no warning. Aggregate
   **trusted stores only** (your first-party store + Écluse's sanitized mirror) into the private upstream,
@@ -149,20 +149,20 @@ operator reference. **Keep the two in sync** when either changes.
 | `PROXY_PORT` | No (default `4873`) | TCP port the proxy listens on. Must be in `0..65535` (`0` binds an OS-assigned ephemeral port); an out-of-range value is rejected at load. |
 | `PRIVATE_UPSTREAM_URL` | **Yes** | URL of the private upstream registry (the authority for reads under the default `passthrough` strategy). |
 | `PUBLIC_UPSTREAM_URL` | No (default `https://registry.npmjs.org`) | URL of the public upstream, queried anonymously and gated by the rules. |
-| `PROXY_PUBLIC_URL` | Recommended | The proxy's own externally-reachable base URL (e.g. `https://registry.example.com`), used to rewrite each served `dist.tarball` to an **absolute** URL clients fetch back through the proxy. **Unset, tarball URLs are path-relative, which the `npm` CLI cannot install from** — it reads a leading-slash `dist.tarball` as a local `file:` path — so set this for any deployment that serves real `npm install`s. |
-| `MIRROR_TARGET_URL` | No (default `PRIVATE_UPSTREAM_URL`) | Registry that approved packages are mirrored to. Unset ⇒ folds onto the private upstream (one registry, read and written). The write credential does **not** fold — set `MIRROR_TARGET_CREDENTIAL_PROVIDER`. |
+| `PROXY_PUBLIC_URL` | Recommended | The proxy's own externally-reachable base URL (e.g. `https://registry.example.com`), used to rewrite each served `dist.tarball` to an **absolute** URL clients fetch back through the proxy. **Unset, tarball URLs are path-relative, which the `npm` CLI cannot install from**; it reads a leading-slash `dist.tarball` as a local `file:` path, so set this for any deployment that serves real `npm install`s. |
+| `MIRROR_TARGET_URL` | No (default `PRIVATE_UPSTREAM_URL`) | Registry that approved packages are mirrored to. Unset ⇒ folds onto the private upstream (one registry, read and written). The write credential does **not** fold, set `MIRROR_TARGET_CREDENTIAL_PROVIDER`. |
 | `MIRROR_TARGET_CREDENTIAL_PROVIDER` | No (default `static`) | Mirror-target write credential: `static` (`MIRROR_TARGET_TOKEN`) or `codeartifact` (mints under the container/task role). `gcp-artifact-registry` is recognised but not yet built. |
 | `MIRROR_TARGET_TOKEN` | No | Static write token, when `MIRROR_TARGET_CREDENTIAL_PROVIDER=static` (the default). |
-| `MIRROR_TARGET_CODEARTIFACT_DOMAIN` | `codeartifact` only | CodeArtifact domain — or parsed from a CodeArtifact `MIRROR_TARGET_URL` host. |
-| `MIRROR_TARGET_CODEARTIFACT_DOMAIN_OWNER` | `codeartifact` only | 12-digit owning account id — or parsed from the host (a non-account-id value is rejected at boot). |
-| `MIRROR_TARGET_CODEARTIFACT_REGION` | `codeartifact` only | Region — this key, else the host (its authoritative region), else `AWS_REGION`. |
+| `MIRROR_TARGET_CODEARTIFACT_DOMAIN` | `codeartifact` only | CodeArtifact domain, or parsed from a CodeArtifact `MIRROR_TARGET_URL` host. |
+| `MIRROR_TARGET_CODEARTIFACT_DOMAIN_OWNER` | `codeartifact` only | 12-digit owning account id, or parsed from the host (a non-account-id value is rejected at boot). |
+| `MIRROR_TARGET_CODEARTIFACT_REGION` | `codeartifact` only | Region, this key, else the host (its authoritative region), else `AWS_REGION`. |
 | `MIRROR_TARGET_CODEARTIFACT_TOKEN_DURATION_SECONDS` | No | Token lifetime in seconds, capped at `43200` (12 h). |
-| `PUBLICATION_TARGET_URL` | No | Where client `npm publish` (first-party packages) is written. **Opt-in: unset ⇒ a `PUT /{pkg}` is `405`** (no implicit write path). May be the same registry as the private upstream (so published packages are then readable via the private leg). **Protect this surface — see the warning below.** |
-| `PUBLICATION_TARGET_TOKEN` | No | Static fallback credential for the publication target, forwarded only when a publishing client sends no token of its own. The default model is **passthrough** — the publisher's own forwarded token. **⚠️ A static token with an open edge lets any unauthenticated client publish under it — see the warning below.** |
-| `PUBLISH_SCOPES` | Required when `PUBLICATION_TARGET_URL` is set | Comma-separated allow-list of package scopes a client may publish (e.g. `@acme,@beta`) — the anti-shadowing guard. A publish whose name is outside the list is refused **before any upstream write**, so a client cannot publish a name that shadows a public package. It limits **names, not callers** — it is not authentication. An empty list with a publication target set is a fail-loud boot error. |
-| `MIRROR_QUEUE_PROVIDER` | No (default `sqs`) | Mirror-queue backend: `sqs` (AWS), or `memory` (a bounded in-process queue — no cloud queue, at the cost of a **non-durable, best-effort** mirror; an explicit choice for a simple/single-node/air-gapped deployment, never an automatic fallback — selecting it warns loudly at boot). `pubsub` (GCP) is recognised but not yet built. |
-| `MIRROR_QUEUE_URL` | Cloud backends only (`sqs`/`pubsub`) | Queue identifier: an SQS queue URL or a Pub/Sub `projects/<p>/topics/<t>` resource. **Required for the cloud backends** (absent ⇒ fail-loud at boot); **not needed for `memory`** (no external queue — ignored). |
-| `MIRROR_QUEUE_MEMORY_MAX_DEPTH` | No (default `50000`) | `memory` only. Cap on the in-process queue depth. A cold-cache `npm ci` enqueues thousands of jobs at once, so the queue is hard-bounded: an enqueue past the cap is **dropped (drop-newest)** — safe, since a dropped job is re-mirrored on the next demand — and rate-limit-logged. Positive integer. |
+| `PUBLICATION_TARGET_URL` | No | Where client `npm publish` (first-party packages) is written. **Opt-in: unset ⇒ a `PUT /{pkg}` is `405`** (no implicit write path). May be the same registry as the private upstream (so published packages are then readable via the private leg). **Protect this surface; see the warning below.** |
+| `PUBLICATION_TARGET_TOKEN` | No | Static fallback credential for the publication target, forwarded only when a publishing client sends no token of its own. The default model is **passthrough**, the publisher's own forwarded token. **⚠️ A static token with an open edge lets any unauthenticated client publish under it; see the warning below.** |
+| `PUBLISH_SCOPES` | Required when `PUBLICATION_TARGET_URL` is set | Comma-separated allow-list of package scopes a client may publish (e.g. `@acme,@beta`), the anti-shadowing guard. A publish whose name is outside the list is refused **before any upstream write**, so a client cannot publish a name that shadows a public package. It limits **names, not callers**; it is not authentication. An empty list with a publication target set is a fail-loud boot error. |
+| `MIRROR_QUEUE_PROVIDER` | No (default `sqs`) | Mirror-queue backend: `sqs` (AWS), or `memory` (a bounded in-process queue, no cloud queue, at the cost of a **non-durable, best-effort** mirror; an explicit choice for a simple/single-node/air-gapped deployment, never an automatic fallback, selecting it warns loudly at boot). `pubsub` (GCP) is recognised but not yet built. |
+| `MIRROR_QUEUE_URL` | Cloud backends only (`sqs`/`pubsub`) | Queue identifier: an SQS queue URL or a Pub/Sub `projects/<p>/topics/<t>` resource. **Required for the cloud backends** (absent ⇒ fail-loud at boot); **not needed for `memory`** (no external queue, ignored). |
+| `MIRROR_QUEUE_MEMORY_MAX_DEPTH` | No (default `50000`) | `memory` only. Cap on the in-process queue depth. A cold-cache `npm ci` enqueues thousands of jobs at once, so the queue is hard-bounded: an enqueue past the cap is **dropped (drop-newest)**, safe, since a dropped job is re-mirrored on the next demand, and rate-limit-logged. Positive integer. |
 | `AWS_REGION` | AWS backends only | Region for SQS and CodeArtifact. |
 | `AWS_ENDPOINT_URL_SQS` / `AWS_ENDPOINT_URL` | No | SQS endpoint override (AWS-SDK-standard). Point at a local emulator (`ministack`) or VPC endpoint; with one set, requests are signed with `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`. Unset ⇒ normal AWS resolution. |
 | `GOOGLE_CLOUD_PROJECT` | GCP backends only | Project for Pub/Sub and Artifact Registry (credentials via ADC). |
@@ -174,7 +174,7 @@ operator reference. **Keep the two in sync** when either changes.
 | `PROXY_MAX_RESPONSE_BYTES` | No (default `12582912`, 12 MiB) | Largest upstream **metadata** body buffered before the fetch aborts fail-closed. Bounds memory against a hostile upstream returning a giant body. Positive integer. |
 | `PROXY_MAX_VERSION_COUNT` | No (default `100000`) | Largest version count a packument may carry before it is refused. Bounds per-version rule evaluation against a version flood. Positive integer. |
 | `PROXY_MAX_NESTING_DEPTH` | No (default `64`) | Deepest JSON nesting a decoded upstream document may reach before it is refused. Bounds CPU/stack against a pathologically nested payload. Positive integer. |
-| `PROXY_MIN_PUBLIC_INTEGRITY` | No (default `sha256`) | Minimum integrity algorithm a **public** version's digest must meet to be served: `sha256`, `sha512`, or `blake2b`. A public version whose strongest digest is weaker (e.g. a legacy SHA-1 `shasum` only) is refused with a `403`. **Hard-floored at SHA-256** — `sha1`/`md5`/an unknown name is rejected at startup. The trusted private upstream is exempt. |
+| `PROXY_MIN_PUBLIC_INTEGRITY` | No (default `sha256`) | Minimum integrity algorithm a **public** version's digest must meet to be served: `sha256`, `sha512`, or `blake2b`. A public version whose strongest digest is weaker (e.g. a legacy SHA-1 `shasum` only) is refused with a `403`. **Hard-floored at SHA-256**, `sha1`/`md5`/an unknown name is rejected at startup. The trusted private upstream is exempt. |
 | `PROXY_CONFIG` | No | The configuration document as an inline JSON blob, for an env-only deployment with no mounted file. |
 
 Configuration is **validated in full at startup, and the process refuses to start on any
@@ -183,15 +183,15 @@ misconfiguration is a loud, immediate failure, never a quietly mis-enforced poli
 
 > ⚠️ **The first-party publish surface authorises *names*, not *callers*.** If you enable
 > publishing (`PUBLICATION_TARGET_URL`), the `PUBLISH_SCOPES` allow-list limits **which
-> package names** may be published — it is **not** authentication and says nothing about
+> package names** may be published; it is **not** authentication and says nothing about
 > **who** may publish. So a static `PUBLICATION_TARGET_TOKEN` (Écluse's own credential, used
 > only when a publisher forwards none) is **fail-closed**: set it without `PROXY_AUTH_TOKEN`
 > and Écluse **refuses to start** (`PublishStaticCredentialNeedsEdge`), making "static
-> publish credential + open edge" — which would otherwise let **any unauthenticated client
-> publish** under the operator's credential — an unrepresentable state rather than a footgun.
+> publish credential + open edge", which would otherwise let **any unauthenticated client
+> publish** under the operator's credential, an unrepresentable state rather than a footgun.
 > `PROXY_AUTH_TOKEN` is the verifiable edge Écluse can check itself; an external layer
 > (gateway, service mesh / mTLS, network policy) is good defence-in-depth but does **not**
-> satisfy this requirement. Pure **passthrough** (no static token — the default) needs none
+> satisfy this requirement. Pure **passthrough** (no static token, the default) needs none
 > of this: the publisher's own forwarded token is the authority. See
 > [Access model → Publishing](docs/architecture/access-model.md#publishing-the-publication-target-passthrough-write).
 
@@ -236,8 +236,7 @@ are then credentialled):
    `Authorization: Bearer <token>` or `.npmrc` `_authToken`.
 3. **Trusted edge identity**: a fronting gateway / IAP / mesh asserts a verified identity
    Écluse trusts. Écluse honours the assertion **only over a verifiable binding to that
-   edge** — mutual TLS from the edge, or a shared secret / HMAC on the asserted identity —
-   and **refuses to start** a `trusted-edge` mount configured with neither: a bare trusted
+   edge**, mutual TLS from the edge, or a shared secret / HMAC on the asserted identity,   and **refuses to start** a `trusted-edge` mount configured with neither: a bare trusted
    header is forgeable into access wherever the proxy is reachable other than through the
    edge, so restrict reachability to the edge **east-west as well as north-south**.
    Validating cloud IAM at the npm edge directly stays a gateway concern (the npm client
@@ -369,8 +368,8 @@ Independent of the configurable rules above, Écluse enforces one **non-negotiab
 policy** on **public** (untrusted) upstreams: a version is served only if its `dist` carries
 at least one integrity digest whose algorithm meets the **integrity floor**
 (`PROXY_MIN_PUBLIC_INTEGRITY`, default **SHA-256**). A public version whose strongest digest
-is **absent** or **below the floor** — for example only a legacy SHA-1 `shasum`, with no
-`sha256`/`sha512` SRI `integrity` — is **inadmissible**:
+is **absent** or **below the floor**, for example only a legacy SHA-1 `shasum`, with no
+`sha256`/`sha512` SRI `integrity`, is **inadmissible**:
 
 - requesting its tarball returns a **`403`** (the artifact is never fetched), and
 - it's **filtered out of the served packument listing**, so a client never sees a version it
@@ -378,7 +377,7 @@ is **absent** or **below the floor** — for example only a legacy SHA-1 `shasum
 
 SHA-1 and MD5 have practical collisions, so admitting a weak-or-absent digest could let a
 substituted artifact pass undetected. The floor may be **raised** (`sha512`,
-`blake2b`) but never set below SHA-256 — a sub-floor value is rejected at startup. The
+`blake2b`) but never set below SHA-256, a sub-floor value is rejected at startup. The
 **private** (trusted) upstream is **exempt**: its versions enter unfiltered, so a SHA-1-only
 private version is still served (trust substitutes for cryptographic strength there).
 
@@ -386,7 +385,7 @@ private version is still served (trust substitutes for cryptographic strength th
 the floor (no `integrity`, or only a legacy `shasum`), those versions silently disappear from
 what Écluse serves and a direct fetch `403`s. This is deliberate. If you genuinely need to
 serve such a source, point it at the **private** (trusted) upstream slot, not the public one,
-or — only if the source is trustworthy and you accept the weaker digest — this is the one
+or, only if the source is trustworthy and you accept the weaker digest, this is the one
 knob you must not lower below SHA-256. See
 [Security Policy](SECURITY.md#a-public-version-must-carry-an-integrity-digest).
 
@@ -404,12 +403,12 @@ knob you must not lower below SHA-256. See
 - **Telemetry (opt-in).** OpenTelemetry traces and metrics are **off by default**; set
   `PROXY_TELEMETRY=on` to enable them. Identity and endpoint are **self-aligning across
   dialects**: set the `DD_*` variables (`DD_SERVICE`, `DD_ENV`, `DD_VERSION`, `DD_AGENT_HOST`)
-  if you run Datadog, or the standard `OTEL_*` ones for any other backend — the `DD_*` form
+  if you run Datadog, or the standard `OTEL_*` ones for any other backend, the `DD_*` form
   wins where both are present, and the same resolved identity stamps both your traces and the
   `dd` object on every log line. `DD_API_KEY`/`DD_SITE` are deliberately ignored: Écluse only
   ever exports to a node-local collector or Agent.
   - **You declare the destination.** Export goes to `http://localhost:4318` by default, or
-    wherever you point `DD_AGENT_HOST`/`OTEL_EXPORTER_OTLP_ENDPOINT` — a node-local collector
+    wherever you point `DD_AGENT_HOST`/`OTEL_EXPORTER_OTLP_ENDPOINT`, a node-local collector
     or Agent in the usual deployment. The endpoint is yours to declare (like the mirror
     queue), so Écluse does not gate it; for a remote collector, authenticate out of band with
     `OTEL_EXPORTER_OTLP_HEADERS`.
@@ -420,16 +419,15 @@ knob you must not lower below SHA-256. See
 - **Search.** `GET /-/v1/search` returns `501` by design: search is a discovery convenience,
   not an install path. Use the public registry's website to discover packages.
 - **Revoking a mirrored version (internal yank).** The mirror store (Registry B) deliberately
-  resists upstream yanks — a benign yank (a maintainer rage-deletes, a name dispute) does not
+  resists upstream yanks, a benign yank (a maintainer rage-deletes, a name dispute) does not
   break your installs. The flip side: a version *later found malicious* is not removed
-  automatically, and Écluse never re-gates trusted content. The **typical case resolves itself** —
-  the public registry yanks or security-holds the bad version, its bytes change or vanish,
+  automatically, and Écluse never re-gates trusted content. The **typical case resolves itself**,  the public registry yanks or security-holds the bad version, its bytes change or vanish,
   re-mirroring can no longer reproduce them, and you purge the stale copy from Registry B at your
   leisure. For the **atypical case where your own scanning is ahead of the public yank**, revoke in
-  this order: **(1)** deny the identity (the planned `DenyByIdentity` revocation rule — see Planned
+  this order: **(1)** deny the identity (the planned `DenyByIdentity` revocation rule; see Planned
   controls) so the serve path stops admitting it and the worker stops re-mirroring it, then **(2)**
   purge that version from Registry B to remove the already-mirrored copy. **Order matters:** purge
-  alone is a treadmill — while the version is still live upstream, the next install re-admits and
+  alone is a treadmill, while the version is still live upstream, the next install re-admits and
   re-mirrors it. Until `DenyByIdentity` ships, purge is the only lever, with that caveat.
 
 ## Planned controls
@@ -438,14 +436,13 @@ Documented here so the configuration surface and its security trade-off are know
 implementation. Écluse's posture is **secure by default, with overrides under your explicit
 control: you decide your threat tolerance.**
 
-- **GCP backends**: the Pub/Sub `MirrorQueue` and the ADC credential leaf. The AWS backends —
-  the SQS `MirrorQueue`, the CodeArtifact credential leaf, the mirror worker, and the
-  composition root that wires them into a config-driven deployment — are **built and wired**;
+- **GCP backends**: the Pub/Sub `MirrorQueue` and the ADC credential leaf. The AWS backends,  the SQS `MirrorQueue`, the CodeArtifact credential leaf, the mirror worker, and the
+  composition root that wires them into a config-driven deployment, are **built and wired**;
   the GCP equivalents are **planned**.
 - **Effectful CVE rules**: `DenyIfCVE` / `AllowIfRemediatesCve` over a local OSV advisory
   index (**planned**).
 - **Revocation denylist**: a hard-deny `DenyByIdentity` rule (deny a specific package or
-  `package@version`, at a precedence above the scope allow-list) — the enforcement half of
+  `package@version`, at a precedence above the scope allow-list), the enforcement half of
   revoking a mirrored version ahead of an upstream yank, paired with purging Registry B.
 
 The full deployment runbook ships with the launch.
@@ -457,7 +454,7 @@ The internal design, for when you need the *why*:
 - [Architecture overview](docs/architecture.md)
 - [Configuration & Authentication](docs/architecture/configuration.md)
 - [Security invariants & network egress](docs/architecture/security.md)
-- [Threat model](https://alexadewit.github.io/Ecluse/threat-model.html) — the STRIDE register, generated from the OWASP Threat Dragon model ([`threat-modelling/ecluse.json`](threat-modelling/ecluse.json))
+- [Threat model](https://alexadewit.github.io/Ecluse/threat-model.html), the STRIDE register, generated from the OWASP Threat Dragon model ([`threat-modelling/ecluse.json`](threat-modelling/ecluse.json))
 - [Rules engine](docs/architecture/rules-engine.md)
 - [Multi-ecosystem hosting & URL rewriting](docs/architecture/hosting.md)
 - [Release & supply-chain operations](docs/architecture/release-supply-chain.md)

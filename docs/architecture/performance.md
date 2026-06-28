@@ -6,7 +6,7 @@
 its own overhead matters: a metadata request fans out into decoding a packument,
 projecting it, sweeping the rule engine over every version, merging upstreams,
 filtering and rewriting the body, and re-serialising it. This document describes how
-that cost is measured, what the numbers mean, and — just as importantly — what the
+that cost is measured, what the numbers mean, and, just as importantly, what the
 measurements are *not* allowed to do (block a merge on a noisy timing).
 
 ## The two-layer model
@@ -15,24 +15,23 @@ Performance has two distinct shapes, measured by two distinct mechanisms:
 
 ```mermaid
 flowchart LR
-    A["Layer A — work-per-request<br/>pure ecluse-core hot paths<br/>(tasty-bench micro-benches)"]
-    B["Layer B — throughput-under-load<br/>the whole server under concurrent load<br/>(load harness, oha)"]
+    A["Layer A, work-per-request<br/>pure ecluse-core hot paths<br/>(tasty-bench micro-benches)"]
+    B["Layer B, throughput-under-load<br/>the whole server under concurrent load<br/>(load harness, oha)"]
     A -->|"localises a regression to a<br/>function and an allocation count"| Cost["cost centre"]
     B -->|"localises a regression to<br/>saturation, latency tails, GC pauses"| Sys["system behaviour"]
 ```
 
-- **Layer A — work-per-request.** The CPU and allocation cost of the
+- **Layer A, work-per-request.** The CPU and allocation cost of the
   transformations a single request triggers, benchmarked in isolation over realistic
   input. This is what the benchmark harness in this repository measures today: the
   hot-path computations of [`ecluse-core`](../../core), with no server and no network.
   Most are pure; the rule sweep and the serve filter run through the engine's effectful
-  evaluator (rule evaluation is `IO`), so those benches measure that `IO` action — but
+  evaluator (rule evaluation is `IO`), so those benches measure that `IO` action, but
   it is still the per-request computation, not a kernel scheduler or a socket. It is the
   layer where an accidentally-quadratic fold or a doubled allocation is caught.
-- **Layer B — throughput-under-load.** The whole system under concurrent load —
-  request rate, latency tails, GC pause behaviour, memory under sustained traffic. A load
+- **Layer B, throughput-under-load.** The whole system under concurrent load,  request rate, latency tails, GC pause behaviour, memory under sustained traffic. A load
   generator ([`oha`](https://github.com/hatoo/oha)) drives the real composed server, so
-  this measures system behaviour — saturation and the latency tail — rather than a pure
+  this measures system behaviour, saturation and the latency tail, rather than a pure
   function's cost. Allocations per request (Layer A) are the *leading indicator* of the
   p99 Layer B measures: GC pauses are tail latency for an inline proxy, so the two layers
   are complementary, not redundant.
@@ -48,7 +47,7 @@ Each micro-bench reports **two** numbers, and they are not equal in standing.
   statistics, enabled by `+RTS -T`, which the benchmark component bakes into its RTS
   options) are very nearly *deterministic* for a pure computation on fixed input:
   they barely depend on the machine, the load, or the wall clock. That makes
-  allocations the signal worth comparing across commits and across runners — a change
+  allocations the signal worth comparing across commits and across runners, a change
   in allocated bytes is almost always a change in the code, not the environment.
 - **Time is informational.** Wall-clock time is reported because it is what a human
   ultimately cares about, but it is machine-dependent and noisy: a shared CI runner's
@@ -57,20 +56,20 @@ Each micro-bench reports **two** numbers, and they are not equal in standing.
 
 ### Complexity assertions
 
-Three version-count-scaled benches — the rule sweep, the packument merge, and the
-serve-time filter/rewrite — additionally assert their **growth class** with
+Three version-count-scaled benches, the rule sweep, the packument merge, and the
+serve-time filter/rewrite, additionally assert their **growth class** with
 [`tasty-bench-fit`](https://hackage.haskell.org/package/tasty-bench-fit): they fit the
 measured curve and require it to be no worse than linear in the version count. This is
 a different kind of check from a timing comparison. A packument with tens of thousands
 of versions going quadratic in a fold is an *algorithmic* bug (the class the
 accidentally-quadratic regressions in this codebase have fallen into), not a slow
-machine — so a failed complexity assertion is a real failure, and it fails the
+machine, so a failed complexity assertion is a real failure, and it fails the
 benchmark run. The synthetic generator that drives these scales toward ~100k versions,
 the size at which a super-linear term bites.
 
 ## Posture: inform-only, never gates (except on failure)
 
-The benchmark workflow's **only red state is a literal benchmark failure** — a build
+The benchmark workflow's **only red state is a literal benchmark failure**, a build
 error, a crashed harness, or a tripped complexity assertion. It **never computes a
 perf-regression fail**: there is no "10% slower than `main`" threshold, no allocation
 ceiling that turns a measurement into a merge blocker.
@@ -80,13 +79,13 @@ The distinction is deliberate:
 | Kind of signal | Example | Gates? |
 |---|---|---|
 | A perf-regression comparison | "this is 12% slower / allocates 8% more than the baseline" | **Never.** Machine-dependent and noisy; reported for a human to read. |
-| An algorithmic-class assertion | "this fold is now O(n²) in version count" | **Yes — it fails the run.** A correctness signal, not a timing. |
-| A literal failure | the harness does not build / crashes | **Yes — it fails the run.** |
+| An algorithmic-class assertion | "this fold is now O(n²) in version count" | **Yes, it fails the run.** A correctness signal, not a timing. |
+| A literal failure | the harness does not build / crashes | **Yes, it fails the run.** |
 
 Concretely: the benchmarks are a **standalone workflow**
 ([`.github/workflows/bench.yml`](../../.github/workflows/bench.yml)) triggered on
 **every pull request and on manual dispatch**. They are **not** wired into `ci.yml`'s
-terminal `gate` job, so a benchmark result — fast, slow, or absent — can never block a
+terminal `gate` job, so a benchmark result, fast, slow, or absent, can never block a
 pull request. This mirrors the project's other inform-only tiers (weeder, stan):
 visible on the PR, never a gate.
 
@@ -104,7 +103,7 @@ the results CSV as a downloadable artifact (`bench-results-<sha>`) attached to t
 There is **no cross-run baseline**: a GitHub Actions artifact is scoped to its own run,
 so one run cannot read another's, and a durable cross-run store (a data branch or an
 external service) would need write permissions this project deliberately does not take
-on. Comparison is therefore **by hand** — read a PR run's allocations against `main`'s,
+on. Comparison is therefore **by hand**, read a PR run's allocations against `main`'s,
 or, locally, `make bench BENCH_OPTS='--baseline out.csv'` against a CSV you saved.
 Because allocations are machine-independent, an eyeballed allocation delta is a reliable
 signal even across different runners.
@@ -121,7 +120,7 @@ Comparable numbers need a comparable environment:
 - **Local runs are for deep-dives, not for comparison against CI.** Run the benches on
   your own machine to iterate on a change and to profile a regression to a cost centre
   (`make bench-profile`), but compare a local time figure only against another local
-  figure on the same machine — never against a CI baseline.
+  figure on the same machine, never against a CI baseline.
 
 ## Running locally
 
@@ -155,41 +154,41 @@ make bench-profile BENCH_PROFILE_OPTS='-p "serve"' # profile one bench for a foc
 (`--profiling-detail=late`, so the centres reflect the optimised code with low skew),
 runs it under the cost-centre profiler, and renders `ecluse-bench.svg` from the
 resulting `ecluse-bench.prof` with `ghc-prof-flamegraph`. Open the SVG and read the
-widest frames — those are where the time and allocations go.
+widest frames, those are where the time and allocations go.
 
 ## What is benched
 
 The Layer A benches cover the pure hot paths a metadata request exercises, each
 **per package across the curated real-world corpus** (see
-[The real-world corpus](#the-real-world-corpus)) — so the work-per-request figures
+[The real-world corpus](#the-real-world-corpus)), so the work-per-request figures
 sample the real distribution of package sizes and shapes, small (`is-odd`) to heavy
-(`@types/node`), rather than one anchor — and, where growth matters, over a synthetic
+(`@types/node`), rather than one anchor, and, where growth matters, over a synthetic
 packument scaled toward ~100k versions for the complexity assertion only:
 
 | Hot path | Module | Scaled complexity assertion |
 |---|---|---|
-| npm wire decode + projection | `Ecluse.Core.Registry.Npm.Wire` / `.Project` | — |
-| version parse / order / latest-selection | `Ecluse.Core.Version` | — |
-| request classification | `Ecluse.Core.Registry.Npm.Route` | — |
+| npm wire decode + projection | `Ecluse.Core.Registry.Npm.Wire` / `.Project` | - |
+| version parse / order / latest-selection | `Ecluse.Core.Version` | - |
+| request classification | `Ecluse.Core.Registry.Npm.Route` | - |
 | rule sweep over versions | `Ecluse.Core.Rules` | linear in version count |
 | packument merge | `Ecluse.Core.Package.Merge` | linear in version count |
 | filter + URL rewrite + re-serialise + ETag | `Ecluse.Core.Registry.Npm.Filter` / `.Serve`, `Ecluse.Core.Server.Conditional` | linear in version count |
-| bounded read / nesting / version-count guards | `Ecluse.Core.Security` | — |
+| bounded read / nesting / version-count guards | `Ecluse.Core.Security` | - |
 
 The corpus is loaded once and validated up front (a corrupt or mis-pinned capture stops
 the run before any benching), and the synthetic generator's invariants are pinned by test
-cases that run as part of the benchmark — so a malformed corpus or generator stops the
+cases that run as part of the benchmark, so a malformed corpus or generator stops the
 run rather than benching a degenerate input.
 
 ### The real-world corpus
 
-The M9 benches once ran on a thin, partly-synthetic corpus — one real anchor (`express`)
-plus a synthetic packument whose versions are structurally identical — which did **not**
+The M9 benches once ran on a thin, partly-synthetic corpus, one real anchor (`express`)
+plus a synthetic packument whose versions are structurally identical, which did **not**
 sample the heavy, heterogeneous tail (`typescript` / `react` / `@types/node` / `@babel/*`
 / an `aws-sdk`-class package) that dominates the real-world cost. The corpus now spans
 that spectrum with **pinned real captures** of substantial, many-version packages.
-Trivial few-version packages stress nothing — neither the hot paths nor the metadata
-cache — so they are **deliberately excluded**; the corpus leans large.
+Trivial few-version packages stress nothing, neither the hot paths nor the metadata
+cache, so they are **deliberately excluded**; the corpus leans large.
 
 | Tier | Packages (versions) |
 |---|---|
@@ -197,45 +196,43 @@ cache — so they are **deliberately excluded**; the corpus leans large.
 | large | `@babel/core` (161), `express` (anchor), `react` (135), `typescript` (168) |
 | heavy | `@aws-sdk/client-s3` (668), `webpack` (569), `@types/node` (2339) |
 
-- **Pinned and committed — frozen data.** Each package is pinned by `package@version` in
+- **Pinned and committed, frozen data.** Each package is pinned by `package@version` in
   `bench/corpus/pins.json` (a plain data file, **not** an npm project) and captured to
   `bench/corpus/npm/<pkg>.full.json`. The captures are **frozen benchmark data, not a
   dependency**: Renovate ignores `bench/corpus/**`, and refresh is a **deliberate, manual
-  re-capture** — edit a pin and rerun `make gen-bench-corpus`, then review the diff —
-  never an automatic bump. (`test/oracles/`, which tracks the node-semver *reference
+  re-capture**, edit a pin and rerun `make gen-bench-corpus`, then review the diff,  never an automatic bump. (`test/oracles/`, which tracks the node-semver *reference
   implementation*, is a different case and stays Renovate-managed.) `express` is the
   pre-existing untrimmed anchor under `core/test/unit/fixtures/npm/`, reused in place and
-  shared with the unit suite — the one untrimmed capture.
+  shared with the unit suite, the one untrimmed capture.
 - **One shared catalogue.** `bench/corpus/pins.json` is the single curated source the
   capture script and the live test tiers both read: alongside the `pins` (the capture
   pins above) it carries `smokeNames`, the curated gnarly-version package names per
   ecosystem that drive the non-gating version-oracle smoke differential
   ([Testing Strategy](../testing.md)). The Haskell `Ecluse.Test.RegistryCapture` reads
   this catalogue and provides the one live-registry fetch path; `make gen-bench-corpus`
-  (Node) reads the same file's `pins`. The corpus capture stays in Node deliberately —
-  its version selection uses real `node-semver`, keeping the frozen corpus independent of
+  (Node) reads the same file's `pins`. The corpus capture stays in Node deliberately,  its version selection uses real `node-semver`, keeping the frozen corpus independent of
   Écluse's own version engine (the system under test). Smoke keeps every published
   version (ordering is the point); the bench trims to stable releases.
 - **Trimmed for size, not shape.** `make gen-bench-corpus` re-captures from the pins: for
   each package it keeps every **stable** release at or below the pin with its full
-  per-version manifest — the heterogeneous dependency / `peerDependencies` / `engines` /
-  `deprecated` / `scripts` / `dist` shape the hot paths read and re-serialise — and drops
+  per-version manifest, the heterogeneous dependency / `peerDependencies` / `engines` /
+  `deprecated` / `scripts` / `dist` shape the hot paths read and re-serialise, and drops
   only (a) the degenerate nightly/canary/dev **prerelease** versions (near-identical
   day-to-day builds that are the bulk of `typescript`/`react`'s size and add no real
-  shape — the synthetic generator's degeneracy), and (b) pure-noise fields no hot path
+  shape, the synthetic generator's degeneracy), and (b) pure-noise fields no hot path
   reads (`readme`, npm operational internals). Capturing at or below the pin makes a
   re-run reproduce the same fixture until a pin is deliberately changed, so the dataset
   stays deterministic and committed without silently drifting from what npm serves.
 - **Synthetic generator: stress only.** `syntheticPackumentValue` is retained **only**
-  for the complexity-scaling (O(n) curve fit) assertions — the version-count stress
+  for the complexity-scaling (O(n) curve fit) assertions, the version-count stress
   input, not a realistic case. The realistic distribution is the corpus.
 
-## Layer B — throughput & latency under load
+## Layer B, throughput & latency under load
 
 Layer B is the *host-sensitive* counterpart to Layer A's deterministic work-per-request
 figures: it boots the **real composed server** (`Ecluse.Server.application`) on `warp`
-and drives it under concurrent load, so it answers "does the proxy keep up with traffic?"
-— throughput, the latency tail, GC pause behaviour, residency under sustained load. It is
+and drives it under concurrent load, so it answers "does the proxy keep up with traffic?",
+throughput, the latency tail, GC pause behaviour, residency under sustained load. It is
 a separate `bench-load` **executable** (not a `tasty-bench` component), because it opens
 sockets and spawns a load generator.
 
@@ -243,8 +240,8 @@ sockets and spawns a load generator.
 
 Layer B characterises and trends; it **never asserts a throughput pass/fail**. There is
 no SLO, no "10% slower than `main`" threshold, no allocation ceiling. Its only red state
-is a **literal failure** — the harness cannot boot, `oha` cannot run, or a scenario
-served nothing — surfaced as a non-zero exit. Throughput and latency are runner-dependent
+is a **literal failure**, the harness cannot boot, `oha` cannot run, or a scenario
+served nothing, surfaced as a non-zero exit. Throughput and latency are runner-dependent
 and read coarsely; **allocations per request** is the machine-independent signal that
 trends cleanly across runners (decision D2). There is **no
 cross-run baseline**: a run uploads its own results, consumed by no other run, so
@@ -253,7 +250,7 @@ comparison is by hand.
 > **What "allocations / request" includes.** The figure is the RTS `allocated_bytes`
 > delta over the whole bench process, which for the HTTP scenarios also runs the two
 > in-process stub upstreams and the proxy (only `oha`, a subprocess, is excluded). It
-> therefore folds in the stubs' own per-request allocations — a *consistent over-count*,
+> therefore folds in the stubs' own per-request allocations, a *consistent over-count*,
 > fine for trending across commits, but **not** a pure proxy per-request cost, and so
 > **not directly comparable** to Layer A's pure per-call allocations. Peak residency is a
 > process high-water mark that also spans the warm-up; the allocation and GC figures are
@@ -269,20 +266,20 @@ residency, GC stats, and allocations per request.
 | `merge-cold` | `GET /{pkg}` over the large-emphasis corpus mix fanning to both upstreams → merge → rule-filter → URL-rewrite → ETag → re-serialise, **public cache disabled (TTL 0)** | the expensive headline path: the live private fetch, the cross-upstream merge, the rule sweep, and the re-serialise on every request (the public leg's fetch + decode is single-flight-amortised under concurrency, not per-request) |
 | `cached-public-hit` | the same `GET` over the corpus mix, with the anonymous public origin served from the **warm metadata cache** (bound holds the whole set) | the cheap, common high-throughput path: the public fetch and decode are elided |
 | `cache-fits-large` | a **uniform** working set of large packuments, **TTL > 0**, cache bound **≥ working set** | the eviction-comparison baseline: after warm-up every entry stays resident, served warm with no re-derivation |
-| `cache-evicts-large` | the **same** uniform large working set, **TTL > 0**, cache bound **< working set** | **cache eviction under large datasets**: continual eviction + re-derivation — throughput/latency under churn, the alloc/request of re-deriving each evicted large packument, residency bounded by the bound |
+| `cache-evicts-large` | the **same** uniform large working set, **TTL > 0**, cache bound **< working set** | **cache eviction under large datasets**: continual eviction + re-derivation, throughput/latency under churn, the alloc/request of re-deriving each evicted large packument, residency bounded by the bound |
 | `worker-mirroring` | the mirror worker's `fetch → verify → publish → ack` loop, driven **in-process** (no HTTP surface) | the mirror hot path: an artifact fetch, an integrity recompute-and-verify, and a publish |
 
 #### The serve mix: a real-world corpus, large-emphasis
 
 The packument scenarios serve the **curated real-world corpus**, not one synthetic
 payload. The public upstream serves each package's real captured packument by the
-requested name (the full Layer A corpus, scoped packages included — the stub recovers
+requested name (the full Layer A corpus, scoped packages included, the stub recovers
 `@scope/name` from the request path); the private upstream serves a small disjoint overlay
 per package so every request still merges a genuine cross-upstream union.
 
 The `merge-cold` and `cached-public-hit` scenarios drive a **weighted mix** (`oha`'s
 `--urls-from-file`, each package's URL repeated by its weight) with the **large,
-many-version packuments as the primary drivers** — the heavy captures (`@types/node`,
+many-version packuments as the primary drivers**, the heavy captures (`@types/node`,
 `webpack`, `@aws-sdk/client-s3`, …) carry the most weight, since trivial packages stress
 nothing. This is a deliberate stress emphasis, not a traffic-realism model. The project
 documents no prior access-pattern model, so the weighting is the chosen default (it lives
@@ -294,18 +291,18 @@ payload-sized artifact (it mirrors a tarball, not a packument).
 The metadata cache (`Ecluse.Core.Server.Cache`) is size-bounded by `cacheMaxEntries`
 (default 1024) and holds a parsed `PackageInfo` + raw `Value` per `(Source, PackageName)`.
 A working set of large packuments larger than the bound forces continual eviction and
-re-derivation — the cost trivial packages never expose. Two paired scenarios isolate it,
+re-derivation, the cost trivial packages never expose. Two paired scenarios isolate it,
 serving the **same uniform working set** of large packuments at **TTL > 0** (so entries
 are removed by eviction, not expiry), differing only in the bound:
 
-- `cache-fits-large` bounds at the working-set size — everything stays resident, served
+- `cache-fits-large` bounds at the working-set size, everything stays resident, served
   warm: the **fits-in-cache** baseline (low alloc/request; residency ≈ the whole working
   set held at once).
-- `cache-evicts-large` bounds **below** the working set — the cache cannot hold it all and
+- `cache-evicts-large` bounds **below** the working set, the cache cannot hold it all and
   continually evicts and re-derives (re-fetch + decode + project) each evicted large
   packument on its next request: higher alloc/request and GC churn, lower throughput, and
-  a residency bounded by the bound (plus the transient re-derivation, which — because the
-  warm-up touches the whole set — keeps the peak high-water mark near the fits baseline;
+  a residency bounded by the bound (plus the transient re-derivation, which, because the
+  warm-up touches the whole set, keeps the peak high-water mark near the fits baseline;
   the alloc/request and GC deltas are the cleaner eviction-cost signal).
 
 Reading the two side by side isolates the eviction cost. Both the bound and the working
@@ -326,7 +323,7 @@ public leg resolves through the cache's **single-flight** path (`resolveMetadata
 at a zero TTL, concurrent misses coalesce onto one in-flight fetch and share the leader's
 parsed packument, so followers skip both the fetch and the ~40 ms decode. Under
 concurrency the public fetch+decode is therefore **amortised across followers**, which
-narrows the contrast with `cached-public-hit` — both amortise the public fetch, one via
+narrows the contrast with `cached-public-hit`, both amortise the public fetch, one via
 the cache, one via single-flight. `merge-cold`'s per-request cost is the live private
 leg, the merge, the rule sweep, and the re-serialise. (This is real production behaviour;
 the scenario does not defeat coalescing.) A literal "private-only cache hit" is not a
@@ -339,7 +336,7 @@ cheap, no-public-fetch path.
   loopback with `Network.Wai.Handler.Warp.testWithApplication`, over the in-memory mirror
   queue and credential doubles (`newInMemoryQueue`, `staticProvider`). Each upstream is an
   in-process `warp` stub serving a canned payload after an **injectable latency**, so the
-  *real* data plane runs — the `http-client` fetch and the JSON decode — minus the WAN.
+  *real* data plane runs, the `http-client` fetch and the JSON decode, minus the WAN.
   Everything is loopback, so the harness opens no external socket and needs no Docker.
 - **`oha` drives the HTTP scenarios.** It is spawned via `typed-process` with
   `--output-format json`, whose report yields the throughput and the latency percentiles.
@@ -348,14 +345,14 @@ cheap, no-public-fetch path.
   after the measured window (the executable bakes in `+RTS -T`), giving allocations per
   request, peak residency, and GC-pause stats. Each scenario runs in its **own process**
   (the driver re-execs the binary once per scenario), because peak residency is a
-  process-wide high-water mark — a fresh process keeps each scenario's residency its own.
+  process-wide high-water mark, a fresh process keeps each scenario's residency its own.
 
 ### Service-time attribution and load saturation
 
 The raw per-scenario table reports a latency; it does not say how much of it is *upstream*
 (an unavoidable floor) and how much is *Écluse's own overhead* (the achievable-gain part),
 nor how much is *queuing* under load (a capacity signal, neither of the other two). Two
-derived views answer those, both driven from the same run — the driver makes **two passes**
+derived views answer those, both driven from the same run, the driver makes **two passes**
 over every scenario, each scenario still in its own process:
 
 - a **concurrency-1 service pass**, where no request queues, so a measured latency is
@@ -364,8 +361,8 @@ over every scenario, each scenario still in its own process:
   queuing delay.
 
 **Measure-then-seed baseline.** Before the passes, the driver probes the **live public
-registry** for the corpus packages — reusing `Ecluse.Test.RegistryCapture.fetchPackumentBody`,
-the same live fetch the Context B harness uses — and takes the steady-state **mean round
+registry** for the corpus packages, reusing `Ecluse.Test.RegistryCapture.fetchPackumentBody`,
+the same live fetch the Context B harness uses, and takes the steady-state **mean round
 trip** as the upstream baseline. That round trip is injected as *both* passes' stub-upstream
 latency, so the service pass measures real-world-shaped service time and the loaded-minus-
 service difference is queuing alone. The probe is **non-gating**: if the registry is
@@ -373,20 +370,19 @@ unreachable (or the probe is switched off with `BENCH_LOAD_PROBE_RTT=0`) the con
 `BENCH_LOAD_UPSTREAM_LATENCY_MS` stands in, labelled as a fallback, and both passes still run.
 
 **Service-time attribution** (the concurrency-1 pass). Per scenario, the measured latency is
-split into the **upstream baseline** — the public round trip, subtracted **once** per request
+split into the **upstream baseline**, the public round trip, subtracted **once** per request
 (the legs fan out concurrently and the public leg is single-flight, so a request waits one
-round trip; re-checked when another ecosystem's fixtures land) — and the **Écluse overhead**,
+round trip; re-checked when another ecosystem's fixtures land), and the **Écluse overhead**,
 everything Écluse adds on top of just hitting the public registry: the private leg, the merge,
 the rule sweep, the decode, the re-serialise. Reported absolute and as a percentage of the
 total, at **p50** (primary) and **p99** (the tail, GC included).
 
 **Load saturation** (the loaded pass against the service pass). The **queuing delay** is
 `loaded p50 − concurrency-1 service p50` (both at the same injected round trip), so it is the
-time a request spends waiting in line — neither upstream nor per-request overhead, but a
+time a request spends waiting in line, neither upstream nor per-request overhead, but a
 backlog signal. Reported alongside the achieved throughput (the plateau) and the
 **deadline-abort count** (requests the generator abandoned at the window's close, a backlog
-never drained), and **flagged loudly** when the queuing delay exceeds half the loaded p50 —
-a pointer at connection-pool and admission-bound work, never at a per-request cost. Like the
+never drained), and **flagged loudly** when the queuing delay exceeds half the loaded p50,a pointer at connection-pool and admission-bound work, never at a per-request cost. Like the
 rest of Layer B it is **inform-only**: a flag is read by a human, never a gate.
 
 The attribution and saturation maths are a pure module (`Ecluse.BenchLoad.Normalise`,
@@ -398,12 +394,12 @@ are the `bench-load` executable's shell, mirroring the Layer A / Context B pure-
 Today only npm is served, but the proxy is built to front several upstream ecosystems
 (PyPI, RubyGems, …). The harness is split so adding one is cheap:
 
-- the reusable **structure** — the `oha` driver (`Ecluse.BenchLoad.Oha`), the RTS capture,
-  the scenario runner, and the report rendering (`Ecluse.BenchLoad.Harness`) — is the same
+- the reusable **structure**, the `oha` driver (`Ecluse.BenchLoad.Oha`), the RTS capture,
+  the scenario runner, and the report rendering (`Ecluse.BenchLoad.Harness`), is the same
   whatever ecosystem a scenario drives;
 - the per-ecosystem **interface** is an `UpstreamFixture` (the Handle pattern: a record of
   an ecosystem and its `Scenario`s). A `Scenario` holds only the ecosystem-specific setup
-  and teardown — booting that ecosystem's stub upstreams with the injected latency and
+  and teardown, booting that ecosystem's stub upstreams with the injected latency and
   payload, wiring the proxy mount, and yielding a `Driver` that tells the harness what to
   drive.
 
@@ -450,71 +446,70 @@ BENCH_LOAD_DURATION_SECONDS=10 make bench-load # a quicker local pass
 Each scenario's table is rendered to stdout and, in CI, to the run summary. The CI job
 ([`.github/workflows/bench-load.yml`](../../.github/workflows/bench-load.yml)) is a
 standalone, **non-gating** tier: it runs on a **nightly schedule and on manual dispatch**
-(never per pull request — shared-runner throughput is too noisy for a per-PR signal), is
+(never per pull request, shared-runner throughput is too noisy for a per-PR signal), is
 not wired into `ci.yml`'s `gate`, and uploads its results as a downloadable artifact with
 no cross-run baseline. Trustworthy absolutes come from **local deep-dives** on a quiet
 machine, never from a shared-runner figure.
 
-## Context B — live performance-acceptance
+## Context B, live performance-acceptance
 
 Everything above is **Context A**: *deterministic regression* benchmarking over
 **committed, pinned** data (Layer A's work-per-request, Layer B's load harness, the
 frozen corpus). Its machine-independent regression signal is **allocations-per-request**,
-frozen against the committed corpus — a change in allocated bytes is the code, not the
+frozen against the committed corpus, a change in allocated bytes is the code, not the
 environment. Absolute latency and throughput stay the **live, read-coarsely** signal,
 never a regression gate: Layer A's clock is machine-dependent, and Layer B's **default**
 run live-probes the public registry for its upstream-latency operating point (set
 `BENCH_LOAD_PROBE_RTT=0` for a deterministic fixed mode), so its latency reflects today's
-network, not the code alone. Context A answers *"did the code regress?"* — read its
+network, not the code alone. Context A answers *"did the code regress?"*, read its
 allocations, not its clock.
 
 **Context B** is the complementary need: a **live performance-acceptance** harness that
 answers *"do we meet our performance acceptance criteria under **today's** real-world
 conditions?"*. Here the input is **live real data** and input drift is **signal** (it
-informs the criteria — capacity planning), not noise. Same machinery, a **different
+informs the criteria, capacity planning), not noise. Same machinery, a **different
 determinism model per job**: Context A pins for comparability; Context B pulls live for
 real-world acceptance.
 
 ### How it measures
 
 For each package in the shared curated catalogue (`bench/corpus/pins.json`'s `pins`, read
-through `Ecluse.Test.RegistryCapture` — the same one-fetch-path the smoke differential
+through `Ecluse.Test.RegistryCapture`, the same one-fetch-path the smoke differential
 uses), the harness fetches the **live** packument and times two legs separately:
 
-- **upstream** — how long the registry took to serve the packument (the fetch), and
-- **Écluse overhead** — how long Écluse's work-per-request takes over it (decode →
+- **upstream**, how long the registry took to serve the packument (the fetch), and
+- **Écluse overhead**, how long Écluse's work-per-request takes over it (decode →
   project → rule sweep → filter / URL-rewrite → re-serialise → ETag), the median of a few
   passes to damp noise.
 
 Separating the legs keeps an upstream-bound cost from being mistaken for an Écluse one,
 and the run summary's two columns leave room for a later **upstream-normalisation** column
-(e.g. overhead as a share of total) to slot in — a parallel design; the summary is built
+(e.g. overhead as a share of total) to slot in, a parallel design; the summary is built
 not to couple to it.
 
-### The acceptance criteria — version-controlled
+### The acceptance criteria, version-controlled
 
 The budget lives in a **version-controlled** config,
 [`acceptance/criteria.json`](../../acceptance/criteria.json): a `defaultBudgetMs` plus
 per-package overrides for the heavy, many-version packuments. It is version-controlled on
-purpose — **moving the bar is an explicit, reviewed act**, not a silent drift. The
+purpose, **moving the bar is an explicit, reviewed act**, not a silent drift. The
 committed budgets are calibrated from a first real run, with deliberately generous (~3×)
 headroom over the measured overhead to absorb shared-runner noise and packument growth;
 refining them as the real runs accrue is exactly what version-controlling them is for. The
-pure evaluation — budget resolution, the per-package
-verdict, the summary rendering — is `Ecluse.Acceptance`, unit-tested in the gating tier;
+pure evaluation, budget resolution, the per-package
+verdict, the summary rendering, is `Ecluse.Acceptance`, unit-tested in the gating tier;
 the live fetch and timing are the `perf-acceptance` executable's shell.
 
 ### Posture: inform-loudly, never blocks
 
 Unlike Context A (which reds only on a literal crash), Context B **reds the check on a
-budget breach** — a visible red on the pull request, naming the breached package and its
-margin — because it has explicit acceptance criteria and the whole point is to prompt a
+budget breach**, a visible red on the pull request, naming the breached package and its
+margin, because it has explicit acceptance criteria and the whole point is to prompt a
 human decision. But the workflow
 ([`.github/workflows/perf-acceptance.yml`](../../.github/workflows/perf-acceptance.yml))
 is **standalone and non-required**: it runs on pull requests, a daily schedule, and
 push-to-`main`, but is **not** wired into `ci.yml`'s `gate` and must not be a
-branch-protection required check, so the red **informs without ever blocking** merge —
-consistent with the project's never-gates-on-perf-noise posture. Live and
+branch-protection required check, so the red **informs without ever blocking** merge,consistent with the project's never-gates-on-perf-noise posture. Live and
 non-deterministic, so a flaky registry is reported as **unavailable**, never a breach: the
 harness exits non-zero only on a genuine over-budget measurement. This deliberate
 acceptance of extra flakiness, in exchange for real-world fidelity, is the trade Context B

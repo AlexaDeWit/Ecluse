@@ -9,10 +9,10 @@ A reverse-engineering reference for the Python package registry, the companion t
 > **Terminology first.** `pip` is the *client* (installer), not a registry or a
 > protocol. The registry is **PyPI** (the Python Package Index), at
 > `https://pypi.org`. Two protocols matter:
-> - the **Simple / Index API** — the installer-facing index (PEP 503 HTML,
+> - the **Simple / Index API**, the installer-facing index (PEP 503 HTML,
 >   PEP 691 JSON, PEP 700 extensions). This is what `pip` actually uses; it is
 >   the analogue of npm's *abbreviated packument*.
-> - the **JSON API** — Warehouse's richer metadata (`/pypi/{p}/json`), the
+> - the **JSON API**, Warehouse's richer metadata (`/pypi/{p}/json`), the
 >   analogue of npm's *full packument*.
 >
 > Artifacts live on a **separate host**, `https://files.pythonhosted.org`, not
@@ -32,9 +32,9 @@ A reverse-engineering reference for the Python package registry, the companion t
 1. [Mental model & npm correspondence](#1-mental-model--npm-correspondence)
 2. [Transport & conventions](#2-transport--conventions)
 3. [Endpoint catalogue](#3-endpoint-catalogue)
-4. [Project metadata — the JSON API (rich)](#4-project-metadata--the-json-api-rich)
+4. [Project metadata, the JSON API (rich)](#4-project-metadata--the-json-api-rich)
 5. [The Simple / Index API (installer-facing)](#5-the-simple--index-api-installer-facing)
-6. [Package details — a release & its core metadata](#6-package-details--a-release--its-core-metadata)
+6. [Package details, a release & its core metadata](#6-package-details--a-release--its-core-metadata)
 7. [The file (distribution) object](#7-the-file-distribution-object)
 8. [Version & availability resolution](#8-version--availability-resolution)
 9. [Authentication (in theory)](#9-authentication-in-theory)
@@ -56,13 +56,12 @@ release number. Two consequences dominate the design:
 - **A version has *many* files, not one tarball.** Each release offers at most
   one **sdist** (`*.tar.gz`, a source distribution) and *zero or more*
   **wheels** (`*.whl`, pre-built, one per Python-version × platform combination).
-  Captured live: `markupsafe 3.0.3` ships **89 files** for the single version —
-  one sdist plus 88 platform/Python-tagged wheels. npm's single `dist.tarball`
+  Captured live: `markupsafe 3.0.3` ships **89 files** for the single version,  one sdist plus 88 platform/Python-tagged wheels. npm's single `dist.tarball`
   has no equivalent; the npm `Dist` becomes a **list** here.
 - **Resolution is the client's job** (as in npm). The index returns every file;
   `pip` parses versions (PEP 440), filters by Python compatibility, wheel tags,
   and yank status, then picks. PyPI resolves *no* version specifiers server-side
-  — see §8.
+ ; see §8.
 
 ### npm ↔ PyPI correspondence
 
@@ -76,7 +75,7 @@ release number. Two consequences dominate the design:
 | One version's metadata | `GET /{pkg}/{version}` | `GET /pypi/{p}/{v}/json` |
 | The artifact | one `.tgz` per version | **N** `.whl` + one `.tar.gz` per version |
 | Integrity | `dist.integrity` (SRI), `shasum` | `hashes.sha256` (+ `md5`, `blake2b`) |
-| "Current" pointer | `dist-tags.latest` (server-set) | **none on the wire** — client computes; `info.version` (JSON API) is latest |
+| "Current" pointer | `dist-tags.latest` (server-set) | **none on the wire**, client computes; `info.version` (JSON API) is latest |
 | Name identity | case-sensitive, scopes (`@s/n`) | **normalized** (PEP 503): lowercase, `[-_.]+`→`-` |
 | Dependency spec | semver range string | PEP 508 string (markers, extras) |
 | Version grammar | semver | PEP 440 |
@@ -100,7 +99,7 @@ Three request shapes cover ~all install traffic:
 
 - Metadata APIs: `https://pypi.org` (Simple at `/simple/…`, JSON at `/pypi/…`).
 - Artifacts **and** PEP 658 metadata files: `https://files.pythonhosted.org`.
-  A proxy must front (or rewrite to) **both** hosts — resolving metadata through
+  A proxy must front (or rewrite to) **both** hosts, resolving metadata through
   Écluse but pulling bytes straight from `files.pythonhosted.org` would bypass
   the gate.
 - Always HTTPS; the public endpoints negotiate HTTP/2.
@@ -108,7 +107,7 @@ Three request shapes cover ~all install traffic:
 ### Project-name normalization (PEP 503)
 
 > "The project is matched case-insensitively with the `_`, `-` and `.`
-> characters considered equal." — docs.pypi.org / PEP 503
+> characters considered equal.", docs.pypi.org / PEP 503
 
 The normalization function is:
 
@@ -141,7 +140,7 @@ The Simple API speaks three media types, chosen by `Accept`:
 > `Accept: application/vnd.pypi.simple.v1+json, application/vnd.pypi.simple.v1+html;q=0.1, text/html;q=0.01`.
 
 The **JSON API** (`/pypi/…/json`) is a *separate* endpoint, always
-`application/json` — not content-negotiated.
+`application/json`, not content-negotiated.
 
 ### Caching & conditional requests
 
@@ -155,13 +154,13 @@ The **JSON API** (`/pypi/…/json`) is a *separate* endpoint, always
 `X-PyPI-Last-Serial` is PyPI's cheap change-detector: a mirror compares the
 serial it last saw against the header to know whether to refetch. Artifacts on
 `files.pythonhosted.org` are **immutable** (a published file's content never
-changes — that's the hash guarantee) and cache effectively forever.
+changes, that's the hash guarantee) and cache effectively forever.
 
 ### Compression & User-Agent
 
 `Accept-Encoding: gzip` is honoured. PyPI explicitly asks clients to **set a
 descriptive `User-Agent`** (with contact info) and to prefer a mirror/cache for
-high volume — relevant for a proxy's upstream fetch.
+high volume, relevant for a proxy's upstream fetch.
 
 ### Errors
 
@@ -180,7 +179,7 @@ the file/version (§8) or return `403`.
 
 | Method | Path (host) | Purpose | Auth |
 |--------|-------------|---------|------|
-| `GET` ✓ | `/simple/` (pypi.org) | Root index — every project name | none |
+| `GET` ✓ | `/simple/` (pypi.org) | Root index, every project name | none |
 | `GET` ✓ | `/simple/{project}/` (pypi.org) | Project's files (HTML or JSON by `Accept`) | none |
 | `GET` ✓ | `/pypi/{project}/json` (pypi.org) | Rich metadata, all releases | none |
 | `GET` ✓ | `/pypi/{project}/{version}/json` (pypi.org) | Rich metadata, one release | none |
@@ -188,20 +187,20 @@ the file/version (§8) or return `403`.
 | `GET` ✓ | `{file-url}.metadata` (files.pythonhosted.org) | Wheel core metadata (PEP 658) | none |
 | `GET` ▢ | `/integrity/{p}/{v}/{file}/provenance` (pypi.org) | PEP 740 attestations | none |
 
-### Auth & write path (theory — no token)
+### Auth & write path (theory, no token)
 
 | Method | Path | Purpose |
 |--------|------|---------|
 | `POST` ▢ | `https://upload.pypi.org/legacy/` | Upload a distribution (twine) |
 | `POST` ▢ | `/_/oidc/mint-token` | Trusted Publishing: OIDC → short-lived token |
 
-There is **no** login/whoami/token-lifecycle API on the wire — API tokens are
+There is **no** login/whoami/token-lifecycle API on the wire, API tokens are
 minted in the web UI, and Trusted Publishing mints them from a CI OIDC identity
 (§9). This is a real divergence from npm.
 
 ---
 
-## 4. Project metadata — the JSON API (rich)
+## 4. Project metadata, the JSON API (rich)
 
 `GET /pypi/{project}/json` → `application/json`. The analogue of npm's full
 packument: one document covering the project and **all** its releases.
@@ -210,19 +209,19 @@ packument: one document covering the project and **all** its releases.
 
 | Key | Type | Notes |
 |-----|------|-------|
-| `info` | object | Project metadata (see below) — describes the **latest** release. |
+| `info` | object | Project metadata (see below), describes the **latest** release. |
 | `last_serial` | number | Serial of the last event; mirrors `X-PyPI-Last-Serial`. |
 | `releases` | object`<version, `[File](#7-the-file-distribution-object)`[]>` | **All** versions → their files. ⚠️ **Deprecated** (see below). |
 | `urls` | [File](#7-the-file-distribution-object)`[]` | Files for the **latest** release only. |
 | `vulnerabilities` | [Vulnerability](#vulnerability)`[]` | OSV advisories affecting this version. |
 | `ownership` | object | Project roles / org membership. |
 
-> **Deprecations** (per docs.pypi.org — treat as read-only relics):
-> - **`releases`** — "projects should shift to using the Index API"; may be
+> **Deprecations** (per docs.pypi.org, treat as read-only relics):
+> - **`releases`**, "projects should shift to using the Index API"; may be
 >   removed. Prefer the Simple API for the version/file list.
-> - **`downloads`** — always `-1`.
-> - **`has_sig`** — always `false`.
-> - **`bugtrack_url`** — always `null`.
+> - **`downloads`**, always `-1`.
+> - **`has_sig`**, always `false`.
+> - **`bugtrack_url`**, always `null`.
 
 ### The `info` object
 
@@ -239,14 +238,14 @@ The install-critical ones:
 | Field | Type | Meaning |
 |-------|------|---------|
 | `name` / `version` | string | Latest version (`info.version` is the closest thing to npm's `latest`). |
-| `requires_python` | string (PEP 440) | e.g. `">=3.10"` — gates which interpreters may install. |
+| `requires_python` | string (PEP 440) | e.g. `">=3.10"`, gates which interpreters may install. |
 | `requires_dist` | string[] (PEP 508) | Dependencies *with markers/extras*, e.g. `"PySocks!=1.5.7,>=1.5.6; extra == \"socks\""`. |
 | `provides_extra` | string[] | Declared extras (e.g. `socks`). |
 | `license` / `license_expression` | string | SPDX expression (`license_expression`) is the modern PEP 639 form. |
 | `classifiers` | string[] | Trove classifiers (incl. `Development Status`, license, supported Pythons). |
-| `yanked` / `yanked_reason` | bool / string | PEP 592 — see §8. |
+| `yanked` / `yanked_reason` | bool / string | PEP 592; see §8. |
 
-### Real example (trimmed — `requests`)
+### Real example (trimmed, `requests`)
 
 ```json
 {
@@ -292,7 +291,7 @@ whose `data-*` attributes carry install hints. Captured live (`requests`):
    data-provenance="…/requests-2.34.2.tar.gz/provenance">requests-2.34.2.tar.gz</a><br />
 ```
 
-Note the **sdist has no `data-core-metadata`** — only wheels carry a METADATA
+Note the **sdist has no `data-core-metadata`**, only wheels carry a METADATA
 file. `data-yanked` (PEP 592), when present, marks a yanked file.
 
 ### PEP 691 JSON (preferred)
@@ -327,34 +326,34 @@ file. `data-yanked` (PEP 592), when present, marks a yanked file.
 | `meta._last-serial` | number | (Warehouse) | == `X-PyPI-Last-Serial`. |
 | `name` | string | 691 | Normalized project name. |
 | `versions` | string[] | 700 | All version strings present (PEP 700 addition). |
-| `files[].filename` | string | 691 | The distribution filename (encodes tags — §7). |
+| `files[].filename` | string | 691 | The distribution filename (encodes tags, §7). |
 | `files[].url` | string | 691 | Absolute, on `files.pythonhosted.org`. |
 | `files[].hashes` | object`<alg,hex>` | 691 | Keyed by algorithm; **`sha256` always present**. |
 | `files[].requires-python` | string\|null | 691 | PEP 440 gate. |
-| `files[].core-metadata` | bool \| `{sha256}` | 658/714 | If truthy, a `.metadata` file exists (see §6). `data-dist-info-metadata` is the **old name** for the same thing — both emitted for compat (PEP 714). |
+| `files[].core-metadata` | bool \| `{sha256}` | 658/714 | If truthy, a `.metadata` file exists (see §6). `data-dist-info-metadata` is the **old name** for the same thing, both emitted for compat (PEP 714). |
 | `files[].provenance` | string\|null | 740 | URL of attestation bundle, if any. |
 | `files[].size` | number | 700 | Bytes. |
 | `files[].upload-time` | ISO-8601 | 700 | The **publish timestamp** (the age signal). |
 | `files[].yanked` | bool \| string | 592 | `true` or a reason string. |
 
-This is the richer, modern surface — prefer JSON, fall back to HTML only for
+This is the richer, modern surface, prefer JSON, fall back to HTML only for
 ancient mirrors.
 
 ---
 
-## 6. Package details — a release & its core metadata
+## 6. Package details, a release & its core metadata
 
 "Package details" for Python splits across two places, because dependency
 metadata lives **inside the artifact**, not in the index:
 
-### (a) The version JSON — `GET /pypi/{project}/{version}/json`
+### (a) The version JSON, `GET /pypi/{project}/{version}/json`
 
 Identical to the project JSON **minus the `releases` key**: `{ info, last_serial,
 urls, vulnerabilities, ownership }`. `urls` is the file list for *that* version;
 `info` is that version's metadata. Captured live: `requests 2.32.3` →
 `urls` had 2 files (`bdist_wheel`, `sdist`). Unknown version → `404`.
 
-### (b) Core metadata (the METADATA file) — PEP 658/714
+### (b) Core metadata (the METADATA file), PEP 658/714
 
 The authoritative per-version dependency data is the **core metadata** (PEP 566/
 621/643) embedded in each wheel's `*.dist-info/METADATA`. PyPI exposes it
@@ -383,7 +382,7 @@ chardet<8,>=3.0.2      ; extra == "use-chardet-on-py3"
 charset_normalizer<4,>=2
 ```
 
-— version sets, **environment markers** (`python_version`, `sys_platform`,
+They carry version sets, **environment markers** (`python_version`, `sys_platform`,
 `extra == …`), and extras. A faithful model keeps the raw string and the parsed
 `{name, specifier, marker, extras}`.
 
@@ -391,10 +390,10 @@ charset_normalizer<4,>=2
 
 PyPI has no `hasInstallScript`, but the risk exists in a different shape:
 
-- **Wheels run no code on install** — they are unpacked, not executed. Installing
+- **Wheels run no code on install**, they are unpacked, not executed. Installing
   a wheel is inert.
 - **sdists execute a build backend** (`setup.py` / PEP 517 backend) at *install/
-  build* time — arbitrary code. For PyPI, the install-time-execution signal is
+  build* time, arbitrary code. For PyPI, the install-time-execution signal is
   therefore **"prefer/require wheels; treat sdist-only releases as higher
   risk."** This is derivable purely from the file list (`packagetype`), no
   download needed.
@@ -403,7 +402,7 @@ PyPI has no `hasInstallScript`, but the risk exists in a different shape:
 
 ## 7. The file (distribution) object
 
-The security-critical unit — the analogue of npm's `dist`, but there are **many
+The security-critical unit, the analogue of npm's `dist`, but there are **many
 per version**, and its shape differs slightly between the JSON API and the
 Simple API.
 
@@ -420,9 +419,9 @@ Captured live (`requests` wheel):
 | `requires_python` | string\|null | PEP 440 gate. |
 | `size` | number | Bytes. |
 | `upload_time_iso_8601` | ISO-8601 | Publish timestamp. |
-| `digests` | object | `{ sha256, md5, blake2b_256 }` — **`sha256` is the one to verify**. |
+| `digests` | object | `{ sha256, md5, blake2b_256 }`, **`sha256` is the one to verify**. |
 | `yanked` / `yanked_reason` | bool / string\|null | PEP 592. |
-| `has_sig` | bool | Legacy GPG flag — **always `false`** now (deprecated). |
+| `has_sig` | bool | Legacy GPG flag, **always `false`** now (deprecated). |
 | `comment_text` | string | Uploader note (usually empty). |
 
 ### Simple API file
@@ -447,7 +446,7 @@ markupsafe-3.0.3-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
 
 `pip` selects files whose tags match the running interpreter/platform. A pure
 wheel uses `py3-none-any`. **Implication:** a version maps to a *set* of files,
-each with its own hash, size, tags, and metadata — it cannot be collapsed to a
+each with its own hash, size, tags, and metadata, it cannot be collapsed to a
 single artifact the way npm's `dist` can.
 
 ### Integrity & provenance
@@ -458,7 +457,7 @@ single artifact the way npm's `dist` can.
 - **Core-metadata hash**: `core-metadata.sha256` lets a client verify the
   `.metadata` companion independently.
 - **Provenance** (PEP 740): `provenance` / `data-provenance` points at an
-  attestation bundle (`/integrity/{p}/{v}/{file}/provenance`) — Sigstore-backed
+  attestation bundle (`/integrity/{p}/{v}/{file}/provenance`), Sigstore-backed
   signatures binding the file to a Trusted Publisher. The modern integrity story,
   analogous to npm's `dist.signatures`.
 
@@ -468,7 +467,7 @@ single artifact the way npm's `dist` can.
 
 > The explicit requirement again: handling *"someone installs a package without
 > specifying a version"*. As with npm, **the registry does not resolve
-> specifiers** — `pip` does, client-side.
+> specifiers**, `pip` does, client-side.
 
 ### What the server resolves vs. what the client resolves
 
@@ -476,9 +475,9 @@ single artifact the way npm's `dist` can.
 |------|---------------|
 | Exact version, JSON API (`/pypi/requests/2.32.3/json`) | `200` |
 | Unknown version | `404` (captured: `/pypi/requests/0.0.0/json` → `404`) |
-| A **specifier** (`requests>=2`, `requests==2.*`) | **no endpoint accepts it** — there is no range URL at all |
+| A **specifier** (`requests>=2`, `requests==2.*`) | **no endpoint accepts it**, there is no range URL at all |
 
-The Simple index has **no per-version URL** — it returns *all* files for the
+The Simple index has **no per-version URL**, it returns *all* files for the
 project, full stop. There is also **no `latest` pointer on the wire** (unlike
 npm's `dist-tags.latest`); `info.version` in the JSON API is the only
 server-provided "current", and the installer doesn't rely on it.
@@ -499,12 +498,11 @@ server-provided "current", and the installer doesn't rely on it.
    - **pre-releases** excluded by default (PEP 440) unless `--pre` or pinned.
 4. **Pick** the highest remaining version; choose the best-matching wheel (or
    sdist).
-5. **Resolve transitive deps** by reading each candidate's core metadata —
-   cheaply via the **`.metadata`** companion (§6), else by downloading.
+5. **Resolve transitive deps** by reading each candidate's core metadata,   cheaply via the **`.metadata`** companion (§6), else by downloading.
 6. **Download** from `files.pythonhosted.org`, verify `sha256`, install.
 
 So **availability of a version = "a usable, non-yanked file for it exists in the
-index"** — there is no separate availability API; presence in the Simple index
+index"**, there is no separate availability API; presence in the Simple index
 *is* availability, modulo yank/compat filtering.
 
 ### Consequences for a proxy (both directions)
@@ -519,12 +517,12 @@ index"** — there is no separate availability API; presence in the Simple index
   non-canonical requests 301-redirected.
 - **Policy shapes availability.** A per-file/version policy decides what to
   serve. To *hide* a denied release, **omit its files** from the served index
-  (the cleanest experience — `pip` simply never considers it). To *soft-block*,
+  (the cleanest experience, `pip` simply never considers it). To *soft-block*,
   mark files `yanked` (keeps `==` pins working but drops them from ranges). To
   *hard-block*, serve the index but `403` the artifact fetch (a mid-resolution
   failure). A deny-by-default served index is, as with npm, a **filtered
   projection** of the upstream index.
-- **`upload-time` is the age signal** for an age-based policy — it's in the
+- **`upload-time` is the age signal** for an age-based policy, it's in the
   Simple JSON (PEP 700) and the JSON API (`upload_time_iso_8601`), per file. Note
   age is **per file**, not per version (a version's wheels can be uploaded at
   different times).
@@ -543,7 +541,7 @@ Public PyPI requires **no authentication** to read. Private indexes (e.g.
 `devpi`, Artifactory, AWS CodeArtifact's PyPI endpoint, GitLab/GitHub package
 registries) use **HTTP Basic** auth on the index URL. `pip` sources those
 credentials from, in order: the URL itself
-(`https://user:pass@host/simple/`), `keyring`, and `~/.netrc` — emitting
+(`https://user:pass@host/simple/`), `keyring`, and `~/.netrc`, emitting
 `Authorization: Basic <base64(user:pass)>`. There is **no** bearer/OTP/login
 handshake for reads.
 
@@ -554,16 +552,16 @@ handshake for reads.
 
 Two mechanisms:
 
-1. **API tokens** — HTTP Basic auth with a fixed username and the token as
+1. **API tokens**, HTTP Basic auth with a fixed username and the token as
    password:
    ```
    username = __token__
    password = pypi-AgEIcHlwaS5vcmc…        # tokens are prefixed "pypi-"
    ```
    Tokens are created in the PyPI web UI (account- or project-scoped). Legacy
-   username/password upload has been **removed** — `__token__` (or Trusted
+   username/password upload has been **removed**, `__token__` (or Trusted
    Publishing) is mandatory.
-2. **Trusted Publishing (OIDC)** — a CI workflow (GitHub Actions, GitLab CI, …)
+2. **Trusted Publishing (OIDC)**, a CI workflow (GitHub Actions, GitLab CI, …)
    presents an OIDC identity token to `POST /_/oidc/mint-token`, which returns a
    short-lived, tightly-scoped API token used for that one upload. No long-lived
    secret stored. This is the recommended modern path.
@@ -579,9 +577,9 @@ of npm's per-registry nerf-dart), e.g.:
 
 ### Implications for a proxy
 
-- **Read proxy to public PyPI needs no credentials at all** — simpler than npm.
+- **Read proxy to public PyPI needs no credentials at all**, simpler than npm.
 - **Private upstream**: forward/attach `Authorization: Basic …` (static token,
-  or CodeArtifact's IAM-derived credential — same Basic shape, AWS-issued).
+  or CodeArtifact's IAM-derived credential, same Basic shape, AWS-issued).
 - **Mirror/upload request** (if the proxy ever publishes): `POST .../legacy/` with
   `__token__` Basic, or mint via OIDC.
 - A proxy's **own** client gate is a separate concern; it need implement none of
@@ -595,15 +593,15 @@ of npm's per-registry nerf-dart), e.g.:
 Not on the proxy's critical path (Écluse delegates storage; mirror writes are a
 separate concern), but documented so "act as a Python index" is complete.
 
-- **Upload** — `POST https://upload.pypi.org/legacy/`, `multipart/form-data`
+- **Upload**, `POST https://upload.pypi.org/legacy/`, `multipart/form-data`
   with `:action=file_upload`, `protocol_version=1`, the core-metadata fields
   (`name`, `version`, `metadata_version`, `requires_dist[]`, `requires_python`,
   …), the file `content`, and its `sha256_digest`. One request per file (sdist
   and each wheel uploaded separately). Re-uploading an existing filename is
-  rejected (`400` — PyPI files are immutable; you cannot overwrite).
-- **Yank/unyank** — done via the web UI / API, sets the PEP 592 flag (no public
+  rejected (`400`, PyPI files are immutable; you cannot overwrite).
+- **Yank/unyank**, done via the web UI / API, sets the PEP 592 flag (no public
   wire endpoint comparable to npm dist-tags).
-- **Provenance** — attestations (PEP 740) are submitted alongside upload under
+- **Provenance**, attestations (PEP 740) are submitted alongside upload under
   Trusted Publishing and surfaced at `/integrity/{p}/{v}/{file}/provenance`.
 
 ---
@@ -639,7 +637,7 @@ File = {
   size?:           number,
   uploadTime?:     ISODate,         -- the age signal (per file!)
   yanked:          boolean | string,-- closest analogue of npm's deprecated
-  coreMetadata?:   boolean | { sha256: string },  -- PEP 658/714 — .metadata exists
+  coreMetadata?:   boolean | { sha256: string },  -- PEP 658/714, .metadata exists
   provenance?:     string           -- PEP 740 attestation URL (≈ npm dist.signatures)
 }
 ```
@@ -660,7 +658,7 @@ CoreMetadata = {
   classifiers?:    [string],        -- trove (license, status, supported Pythons)
   authorEmail?:    string           -- from author/maintainer/author_email
   -- no direct install-script field: derive risk from any file's packagetype == "sdist"
-  -- the publish timestamp is NOT here — it comes from the File.uploadTime
+  -- the publish timestamp is NOT here, it comes from the File.uploadTime
 }
 ```
 
@@ -732,7 +730,7 @@ Vulnerability = {               -- OSV, inline in the JSON API
 - [ ] Normalize names (PEP 503); request Simple **JSON** + `Accept-Encoding: gzip`;
       set a descriptive `User-Agent`.
 - [ ] Resolve PEP 440 specifiers, wheel tags (PEP 425), `requires-python`, and
-      **exclude yanked** (PEP 592) — all **locally**; never expect upstream to.
+      **exclude yanked** (PEP 592), all **locally**; never expect upstream to.
 - [ ] Read dependencies from the **`.metadata`** companion (PEP 658) before
       downloading whole wheels.
 - [ ] For private upstreams attach `Authorization: Basic …` (static or
@@ -782,16 +780,16 @@ curl -s https://pypi.org/pypi/markupsafe/json | jq '{version:.info.version, n_fi
 
 - PyPI API overview / JSON / Index / Upload docs:
   <https://docs.pypi.org/api/>
-- PEP 503 — Simple Repository API (HTML, normalization):
+- PEP 503, Simple Repository API (HTML, normalization):
   <https://peps.python.org/pep-0503/>
-- PEP 691 — JSON Simple API: <https://peps.python.org/pep-0691/>
-- PEP 700 — Additional fields for the JSON Simple API (`versions`, `size`,
+- PEP 691, JSON Simple API: <https://peps.python.org/pep-0691/>
+- PEP 700, Additional fields for the JSON Simple API (`versions`, `size`,
   `upload-time`): <https://peps.python.org/pep-0700/>
-- PEP 592 — Yanked releases: <https://peps.python.org/pep-0592/>
-- PEP 658 / PEP 714 — serving & renaming the metadata file (`.metadata`,
+- PEP 592, Yanked releases: <https://peps.python.org/pep-0592/>
+- PEP 658 / PEP 714, serving & renaming the metadata file (`.metadata`,
   `data-core-metadata`): <https://peps.python.org/pep-0658/> ·
   <https://peps.python.org/pep-0714/>
-- PEP 740 — provenance / attestations: <https://peps.python.org/pep-0740/>
+- PEP 740, provenance / attestations: <https://peps.python.org/pep-0740/>
 - PEP 440 (versions) · PEP 508 (dependency specifiers) · PEP 425/427 (wheel tags
   & format) · PEP 639 (license expression).
 - API tokens & Trusted Publishing:

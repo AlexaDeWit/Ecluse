@@ -1,6 +1,6 @@
 # Écluse brand colours
 
-The palette is taken directly from the brand artwork — the logo mark
+The palette is taken directly from the brand artwork, the logo mark
 ([`logo.svg`](logo.svg)) and the social cards ([`../social-card.svg`](../social-card.svg),
 [`../social-preview.svg`](../social-preview.svg)). **Those SVGs are the source of truth;**
 this file names the colours and records how they are used, so the website, future
@@ -8,7 +8,7 @@ graphics, and any other surface stay consistent.
 
 The motif is a flight of canal locks: warm **cream and charcoal** (paper and ink), the
 lock chambers stepping through **sand** and **tan**, and the **water** rendered as a
-muted sage-teal. The overall feel is warm, calm, and a little aged — deliberately *not*
+muted sage-teal. The overall feel is warm, calm, and a little aged, deliberately *not*
 bright white.
 
 ## Core colours
@@ -48,5 +48,5 @@ from these anchors rather than picking fresh colours.
 ## Mode
 
 **Light only, for now.** The artwork has no dark-mode variant to draw from, so a dark
-theme should wait until one exists — the natural ground would be Charcoal `#211F1C` with
+theme should wait until one exists, the natural ground would be Charcoal `#211F1C` with
 Cream text, mirroring the logo tile.

@@ -1,7 +1,7 @@
 ---
 id: S10
 title: Pure router (classify/Route)
-milestone: M2 — Web front door
+milestone: M2, Web front door
 status: merged
 depends-on: []
 test-tier: [unit]
@@ -11,9 +11,9 @@ arch-refs:
 pr: null
 ---
 
-# S10 — Pure router (`classify` / `Route`)
+# S10, Pure router (`classify` / `Route`)
 
-> Milestone **M2** · depends on: — (root) · tier: unit
+> Milestone **M2** · depends on:, (root) · tier: unit
 
 **Goal.** The pure routing function that turns an ecosystem-native path (post
 mount-strip) into a small `Route` sum type, so the whole routing table is
@@ -21,31 +21,31 @@ unit-testable with no server.
 
 **Acceptance criteria.**
 - [ ] `Route = Packument PackageName | Tarball PackageName Text | Ping | Search | Unsupported`
-  (and the liveness/readiness routes — see S12) and `classify :: [Text] -> Route`,
-  pure. — _web-layer.md#raw-wai-not-a-web-framework_
+  (and the liveness/readiness routes; see S12) and `classify :: [Text] -> Route`,
+  pure., _web-layer.md#raw-wai-not-a-web-framework_
 - [ ] Encoded-slash handling: a scoped name arriving as one already-decoded segment
   (`@scope/pkg`) **and** as two segments (`@scope`,`pkg`) both classify correctly
-  (WAI percent-decodes `pathInfo`). — _npm.md#2-transport--conventions_
+  (WAI percent-decodes `pathInfo`)., _npm.md#2-transport--conventions_
 - [ ] Reserved meta-routes (`/-/…`) matched **first** (a real package name can't
   begin with `-`); the tarball path `/{pkg}/-/{file}.tgz` distinguished from
-  packument; anything unrecognised → `Unsupported`. — _web-layer.md#raw-wai-not-a-web-framework_
+  packument; anything unrecognised → `Unsupported`., _web-layer.md#raw-wai-not-a-web-framework_
 
 **File scope.**
-- `src/Ecluse/Server/Route.hs` — `Route`, `classify`, name normalisation.
-- `ecluse.cabal` — register module (no new deps).
-- `test/unit/Ecluse/Server/RouteSpec.hs` — table of `pathInfo` → `Route` (scoped both encodings, tarball, meta-routes, junk → Unsupported).
+- `src/Ecluse/Server/Route.hs`, `Route`, `classify`, name normalisation.
+- `ecluse.cabal`, register module (no new deps).
+- `test/unit/Ecluse/Server/RouteSpec.hs`, table of `pathInfo` → `Route` (scoped both encodings, tarball, meta-routes, junk → Unsupported).
 
-**Test tier.** Unit — exhaustive routing table; this is the cheapest place to pin
+**Test tier.** Unit, exhaustive routing table; this is the cheapest place to pin
 the whole URL surface.
 
-**Notes / risks.** Pure and dependency-free (root) — a Wave-1 candidate. Normalise
+**Notes / risks.** Pure and dependency-free (root), a Wave-1 candidate. Normalise
 the scoped-name encodings early so downstream never re-checks. Keep `classify`
-ecosystem-native (mount dispatch/prefix-strip is S12) — this function never sees the
+ecosystem-native (mount dispatch/prefix-strip is S12), this function never sees the
 mount prefix.
 
 **As-built / reconciliation.** `Route` / `classify` shipped in
 `Ecluse.Server.Route`. A later refactor (#106 / #116) **injected the route
 classifier** into the server and **relocated the npm-specific path grammar into the
 adapter** (`Ecluse.Registry.Npm.Route`), so dispatch is ecosystem-agnostic and each
-mount supplies its own classifier — the generic `Route` type and the agnostic split
+mount supplies its own classifier, the generic `Route` type and the agnostic split
 stay as specified here.

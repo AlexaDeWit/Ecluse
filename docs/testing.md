@@ -71,19 +71,19 @@ upstream + mirror target as containers on a docker network, then asserts client-
 mirror-observable outcomes: an allow-listed package installs; a rules-denied one is blocked
 and never mirrored; an installed package round-trips server→worker to the private mirror; a
 tampered artifact fails the integrity gate and never publishes. It is the tier that catches
-**composition-root and cross-component** regressions nothing else does — its first run found
+**composition-root and cross-component** regressions nothing else does, its first run found
 that the path-relative `dist.tarball` rewrite was not installable by `npm` (now fixed by
 `PROXY_PUBLIC_URL`).
 
-It **gates** — it runs as its own parallel job that the CI `gate` depends on. Although it is
+It **gates**, it runs as its own parallel job that the CI `gate` depends on. Although it is
 far heavier than the rest of the gate (an image build, multiple containers, the npm CLI), it
-is **hermetic** — the nginx + Verdaccio upstreams are local, so unlike the live-registry smoke
-tier it has no external dependency to flake on — and has been reliably green, which is what
+is **hermetic**, the nginx + Verdaccio upstreams are local, so unlike the live-registry smoke
+tier it has no external dependency to flake on, and has been reliably green, which is what
 makes gating on it safe. It runs on every PR and nightly. Because of its weight it is kept out
 of the local `make gate`/`check` targets (run `make test-e2e` on demand). The egress guard
 refuses internal addresses on the public path, so the
 containers run on an RFC 5737 documentation subnet (`203.0.113.0/24`) the guard treats as
-external — **no production escape hatch**, the real default-build image runs unmodified. Run
+external, **no production escape hatch**, the real default-build image runs unmodified. Run
 `make test-e2e` (it builds + loads the image, then runs the suite); it needs a Docker daemon
 and the npm CLI, and **skips** (every case `pending`) when `ECLUSE_E2E_IMAGE` is unset.
 
@@ -144,7 +144,7 @@ Codecov to ingest. See [`scripts/coverage.sh`](../scripts/coverage.sh) (one tier
 
 - **Codecov is the merged authority; `make coverage` reproduces it.** Codecov merges the
   per-tier flag uploads into one project total (unit ∪ integration), so a single tier's number
-  *under-counts* every module the other tier exercises — the SQS `MirrorQueue` backend and the
+  *under-counts* every module the other tier exercises, the SQS `MirrorQueue` backend and the
   worker's real fetch/publish path are covered only by the integration tier. The canonical
   local command, **`make coverage`**, reproduces Codecov's merged total: it runs both gating
   tiers, `hpc combine --union`s their `.tix` (ADD join, unioned module namespace, mirroring how
@@ -154,7 +154,7 @@ Codecov to ingest. See [`scripts/coverage.sh`](../scripts/coverage.sh) (one tier
   itself); with no daemon it fails with a clear message pointing at the fast path below. For a
   quick, Docker-free loop, **`make coverage-unit`** (or `make coverage SUITE=ecluse-unit`)
   measures the unit tier only and **loudly prints that it is a partial view** Codecov merges
-  with the integration tier — so a single-tier read is never mistaken for the whole picture.
+  with the integration tier, so a single-tier read is never mistaken for the whole picture.
 - **Per-suite flags (what CI uploads).** Each tier uploads under its own Codecov *flag*, so one
   combined gate spans the suites while each stays visible. CI runs the per-tier form
   (`make coverage SUITE=ecluse-unit` and `make coverage SUITE=ecluse-integration`) so each flag
@@ -163,7 +163,7 @@ Codecov to ingest. See [`scripts/coverage.sh`](../scripts/coverage.sh) (one tier
   partial upload can't fire a transient "coverage decreased" status. The **smoke** tier is
   excluded: non-gating and network-bound, like everywhere else.
 - **Reporting divergence vs. real gaps.** This combined command exists to remove a *reporting*
-  confusion — a local single-tier read disagreeing with the merged dashboard — not to paper
+  confusion, a local single-tier read disagreeing with the merged dashboard, not to paper
   over real coverage gaps. If the **merged** report still shows a module's error arms red (e.g.
   `Worker.hs`'s fail-closed integrity-mismatch branch), that is a *genuine* uncovered path the
   tests owe, not a reporting artifact: it is fixed by a test, not by this tooling. Keep the two
