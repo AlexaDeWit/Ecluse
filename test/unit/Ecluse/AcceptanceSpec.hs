@@ -62,7 +62,7 @@ spec = do
         it "names the breached package and its margin" $ do
             ("react" `T.isInfixOf` rendered) `shouldBe` True
             ("BREACH +75.0 ms" `T.isInfixOf` rendered) `shouldBe` True
-        it "separates the upstream and Ecluse-overhead legs (room for a normalization column)" $ do
+        it "separates the upstream and Ecluse-overhead legs (room for a normalisation column)" $ do
             ("Upstream (ms)" `T.isInfixOf` rendered) `shouldBe` True
             ("Écluse overhead (ms)" `T.isInfixOf` rendered) `shouldBe` True
         it "lists an unavailable package as unavailable, not breached" $

@@ -12,7 +12,7 @@ name: Performance acceptance (Context B)
 # so the red informs without ever blocking merge. Live + non-deterministic, so a flaky
 # registry is reported as unavailable, never a breach (the harness exits non-zero only
 # on an over-budget measurement). The run summary separates the upstream and Écluse
-# overhead legs, leaving room for a later upstream-normalization column. See
+# overhead legs, leaving room for a later upstream-normalisation column. See
 # docs/architecture/performance.md.
 on:
   pull_request:

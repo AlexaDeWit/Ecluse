@@ -156,10 +156,10 @@ reportBreached = any isBreach . reportOutcomes
 -- ── rendering ──────────────────────────────────────────────────────────────────
 
 {- | Render a run as a Markdown summary: an overall verdict line, then a per-package
-table separating the __upstream__ and __Écluse overhead__ legs (the breakdown a
-later upstream-normalization column slots beside), each measured row naming its
-budget and — on a breach — the margin over it. Unavailable packages are listed as
-such, never as breaches.
+table that keeps the __upstream__ and __Écluse overhead__ legs in separate columns —
+so an upstream-normalisation view can be added without reshaping the table — with each
+measured row naming its budget and, on a breach, the margin over it. Unavailable
+packages are listed as such, never as breaches.
 -}
 renderReport :: Report -> Text
 renderReport report =

@@ -431,7 +431,7 @@ uses), the harness fetches the **live** packument and times two legs separately:
   passes to damp noise.
 
 Separating the legs keeps an upstream-bound cost from being mistaken for an Écluse one,
-and the run summary's two columns leave room for a later **upstream-normalization** column
+and the run summary's two columns leave room for a later **upstream-normalisation** column
 (e.g. overhead as a share of total) to slot in — a parallel design; the summary is built
 not to couple to it.
 
@@ -441,9 +441,10 @@ The budget lives in a **version-controlled** config,
 [`acceptance/criteria.json`](../../acceptance/criteria.json): a `defaultBudgetMs` plus
 per-package overrides for the heavy, many-version packuments. It is version-controlled on
 purpose — **moving the bar is an explicit, reviewed act**, not a silent drift. The
-committed budgets are deliberately generous initial coarse bounds (set without a measured
-baseline); they are calibrated against the first real runs, which is exactly what
-version-controlling them is for. The pure evaluation — budget resolution, the per-package
+committed budgets are calibrated from a first real run, with deliberately generous (~3×)
+headroom over the measured overhead to absorb shared-runner noise and packument growth;
+refining them as the real runs accrue is exactly what version-controlling them is for. The
+pure evaluation — budget resolution, the per-package
 verdict, the summary rendering — is `Ecluse.Acceptance`, unit-tested in the gating tier;
 the live fetch and timing are the `perf-acceptance` executable's shell.
 
