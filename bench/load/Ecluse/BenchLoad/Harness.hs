@@ -55,6 +55,8 @@ module Ecluse.BenchLoad.Harness (
 
     -- * Rendering
     renderReports,
+    renderServiceTime,
+    renderLoadSaturation,
 ) where
 
 import Data.Aeson (FromJSON, ToJSON)
@@ -71,6 +73,15 @@ import Numeric (showFFloat)
 import System.Mem (performMajorGC)
 
 import Ecluse.BenchLoad.Error (benchFail)
+import Ecluse.BenchLoad.Normalise (
+    BaselineSource,
+    NormalisedRow (NormalisedRow),
+    SaturationInput (SaturationInput),
+    deriveSaturation,
+    queuingDominanceThreshold,
+    renderNormalised,
+    renderSaturation,
+ )
 import Ecluse.BenchLoad.Oha (OhaReport (..), runOha, runOhaUrls)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 
@@ -235,6 +246,11 @@ data ScenarioReport = ScenarioReport
     -- ^ Requests (or jobs) per second.
     , srSuccessRate :: Double
     -- ^ Fraction of requests that succeeded, in @[0, 1]@.
+    , srDeadlineAborts :: Int
+    {- ^ Requests the load generator abandoned when the run's deadline arrived before they
+    completed — a backlog the proxy never drained, the load-saturation signal. Zero for the
+    in-process scenario, which has no deadline-bounded generator.
+    -}
     , srP50Ms, srP90Ms, srP99Ms, srP999Ms :: Maybe Double
     -- ^ Latency percentiles, in milliseconds.
     , srAllocPerReqBytes :: Double
@@ -294,7 +310,7 @@ measure knobs scenario driver = do
     warmUp driver
     performMajorGC
     before <- getRTSStats
-    (requests, throughput, successRate, percentilesMs, note) <- drive knobs driver
+    (requests, throughput, successRate, percentilesMs, deadlineAborts, note) <- drive knobs driver
     after <- getRTSStats
     when (requests <= 0) $
         benchFail ("scenario " <> scenarioName scenario <> " served no requests — a harness failure, not a result")
@@ -311,6 +327,7 @@ measure knobs scenario driver = do
             , srRequests = requests
             , srThroughput = throughput
             , srSuccessRate = successRate
+            , srDeadlineAborts = deadlineAborts
             , srP50Ms = p50
             , srP90Ms = p90
             , srP99Ms = p99
@@ -338,9 +355,9 @@ warmUp = \case
     warmupSeconds = 3
 
 -- Apply the measured load and return the figures the RTS capture is paired with: the
--- request count, throughput, success rate, the four percentiles in milliseconds, and a
--- distribution note.
-drive :: LoadKnobs -> Driver -> IO (Int, Double, Double, (Maybe Double, Maybe Double, Maybe Double, Maybe Double), Text)
+-- request count, throughput, success rate, the four percentiles in milliseconds, the
+-- deadline-abort count, and a distribution note.
+drive :: LoadKnobs -> Driver -> IO (Int, Double, Double, (Maybe Double, Maybe Double, Maybe Double, Maybe Double), Int, Text)
 drive knobs = \case
     DriveHttp url -> fromOha <$> runOha (lkConcurrency knobs) (lkDurationSeconds knobs) url
     DriveHttpUrls urls -> fromOha <$> runOhaUrls (lkConcurrency knobs) (lkDurationSeconds knobs) urls
@@ -357,22 +374,37 @@ drive knobs = \case
             , fromIntegral requests / elapsed
             , 1.0
             , (pctl 0.50, pctl 0.90, pctl 0.99, pctl 0.999)
+            , 0 -- no deadline-bounded generator here, so the deadline-abort count is explicitly zero
             , "in-process worker loop (no HTTP surface)"
             )
   where
     -- Project an oha report into the figures the RTS capture is paired with; shared by
     -- the single-URL and weighted-URL-list HTTP drivers.
-    fromOha :: OhaReport -> (Int, Double, Double, (Maybe Double, Maybe Double, Maybe Double, Maybe Double), Text)
+    fromOha :: OhaReport -> (Int, Double, Double, (Maybe Double, Maybe Double, Maybe Double, Maybe Double), Int, Text)
     fromOha report =
         ( sum (Map.elems (ohaStatusCounts report))
         , ohaRequestsPerSec report
         , ohaSuccessRate report
         , (toMs (ohaP50 report), toMs (ohaP90 report), toMs (ohaP99 report), toMs (ohaP999 report))
+        , deadlineAbortsOf report
         , distributionNote report
         )
 
     toMs :: Maybe Double -> Maybe Double
     toMs = fmap (* 1_000)
+
+-- The count of requests the generator abandoned at the run's deadline — a best-effort
+-- saturation signal, never an exact one and never a gate. oha labels a deadline
+-- abandonment as a transport error "aborted due to deadline" (distinct from a non-2xx
+-- status), so the count sums the error-distribution entries whose label names the deadline;
+-- under load it is the backlog the proxy never drained before the window closed. The label
+-- is oha's, and oha is nix-pinned, so the substring match is stable until a deliberate oha
+-- bump (a reviewed flake.lock change). The default is an explicit zero: no matching label —
+-- no deadline aborts, or a future oha that renamed it — yields 0, an accepted, safe default
+-- for an inform-only figure.
+deadlineAbortsOf :: OhaReport -> Int
+deadlineAbortsOf report =
+    sum [n | (label, n) <- Map.toList (ohaErrorCounts report), "deadline" `T.isInfixOf` T.toLower label]
 
 -- A nearest-rank percentile of a sorted, non-empty list; 'Nothing' for an empty one.
 percentile :: Double -> [Double] -> Maybe Double
@@ -454,6 +486,37 @@ renderScenario r =
 
     msCell :: Maybe Double -> Text
     msCell = maybe "n/a" (\v -> fmt2 v <> " ms")
+
+{- | Render the service-time attribution section (upstream vs Écluse overhead) from the
+concurrency-1 pass's reports, against the given upstream baseline. The pure split and its
+layout live in "Ecluse.BenchLoad.Normalise"; this only lifts each report's p50 and p99
+out into the row shape that module renders.
+-}
+renderServiceTime :: BaselineSource -> [ScenarioReport] -> Text
+renderServiceTime source reports =
+    renderNormalised source (map toRow reports)
+  where
+    toRow r = NormalisedRow (srName r) (srP50Ms r) (srP99Ms r)
+
+{- | Render the load-saturation section (the queuing-delay flag) by pairing each loaded
+report with its concurrency-1 counterpart by name. The throughput and deadline aborts
+come from the loaded pass; the service p50 from the concurrency-1 pass; the queuing
+derivation and its flag live in "Ecluse.BenchLoad.Normalise".
+-}
+renderLoadSaturation :: [ScenarioReport] -> [ScenarioReport] -> Text
+renderLoadSaturation c1Reports loadedReports =
+    renderSaturation queuingDominanceThreshold (map (deriveSaturation queuingDominanceThreshold . toInput) loadedReports)
+  where
+    c1ByName :: Map Text ScenarioReport
+    c1ByName = Map.fromList [(srName r, r) | r <- c1Reports]
+
+    toInput loaded =
+        SaturationInput
+            (srName loaded)
+            (srThroughput loaded)
+            (srDeadlineAborts loaded)
+            (srP50Ms =<< Map.lookup (srName loaded) c1ByName)
+            (srP50Ms loaded)
 
 -- ── numeric formatting ───────────────────────────────────────────────────────────
 
