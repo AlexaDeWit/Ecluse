@@ -15,10 +15,12 @@ name: Cache cleanup
 #
 # It keeps the newest KEEP_PER_PREFIX entries per key prefix on main (current +
 # one fallback for in-flight runs and quick rollback) and deletes the rest. The
-# Pages doc-variant caches (the `-docs-` prefixes) keep only KEEP_DOCS instead —
-# they are the heaviest entries, change only on a dependency bump, and Pages is
-# their serial single writer, so a second epoch buys little (see prune-caches.sh).
-# Deleting caches needs `actions: write`; everything else is least-privilege.
+# heavy single-epoch caches keep only KEEP_DOCS instead — the Pages doc-variant
+# caches (`-docs-` prefixes) and the Nix-store closures (`nix-*` prefixes, incl. the
+# docs job's `nix-docs-*` doc closure): they are the biggest entries (~1 GB each),
+# change only on a dependency/flake bump, and each has a single writer, so a second
+# epoch buys little (see prune-caches.sh). Deleting caches needs `actions: write`;
+# everything else is least-privilege.
 
 on:
   schedule:
