@@ -26,9 +26,9 @@ dead-letter queue.
 The SQS queue is a __trusted, operator-declared destination__ (the configured queue
 URL, or an endpoint override): like the OTLP telemetry endpoint (see
 "Ecluse.Telemetry.Resolve"), it is reached through @amazonka@'s own client and is
-__not__ subject to the data-plane egress controls (the host allowlist, the
-internal-range block, or the resolved-IP recheck of "Ecluse.Core.Security.Egress"), which
-guard only untrusted package downloads — never a destination the operator configured.
+__not__ subject to the data-plane egress controls (the host allowlist and the https-only
+egress posture of "Ecluse.Core.Security.Egress"), which guard only untrusted package
+downloads, never a destination the operator configured.
 -}
 module Ecluse.Core.Queue.Sqs (
     -- * Configuration

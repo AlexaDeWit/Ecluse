@@ -205,6 +205,7 @@ withE2EWith cfg action = do
         coll = "ecluse-e2e-otelcol-" <> sfx
         workDir = tmpRoot </> ("ecluse-e2e-" <> sfx)
         htmlDir = workDir </> "html"
+        certsDir = workDir </> "certs"
         verdConf = workDir </> "verdaccio.yaml"
         nginxConf = workDir </> "nginx.conf"
     bracket
@@ -215,6 +216,9 @@ withE2EWith cfg action = do
             buildFixtures htmlDir fixturePackages
             writeFileText verdConf verdaccioConfig
             writeFileText nginxConf nginxStubConfig
+            -- The test CA + server cert (SANs upstream, mirror) the TLS stubs serve and the
+            -- proxy trusts, plus the trust bundle the proxy's SSL_CERT_FILE points at.
+            generateCerts certsDir
             dockerOk ["network", "create", "--subnet", "203.0.113.0/24", net]
             -- The OTLP collector, when the scenario asks for one: an OTLP/HTTP receiver
             -- into a `debug` exporter at detailed verbosity (so each received metric and
@@ -242,9 +246,28 @@ withE2EWith cfg action = do
                     ]
                 ready <- awaitContainerLog coll (T.isInfixOf "Everything is ready") 240
                 unless ready (fail "OTLP collector did not become ready within the timeout")
-            -- nginx public-upstream stub, reachable by the proxy as `upstream`. The
-            -- config maps /<pkg> to the package's packument.json (the tarball lives
-            -- under /<pkg>/-/, so /<pkg> cannot be a file and a directory both).
+            -- Verdaccio private upstream + mirror backend, reachable on the internal
+            -- network as `verdaccio` over plain HTTP (the nginx `mirror` stub fronts it
+            -- with TLS). Started before nginx so the `mirror` server block's proxy_pass
+            -- host resolves. Its host-published port stays HTTP for the harness's own polls.
+            dockerOk
+                [ "run"
+                , "-d"
+                , "--name"
+                , verd
+                , "--network"
+                , net
+                , "--network-alias"
+                , "verdaccio"
+                , "-p"
+                , "127.0.0.1:0:4873"
+                , "-v"
+                , verdConf <> ":/verdaccio/conf/config.yaml:ro"
+                , "verdaccio/verdaccio:5"
+                ]
+            -- nginx TLS terminator for both registry stubs, reached by the proxy as
+            -- `upstream` (static packuments/tarballs) and `mirror` (reverse-proxied to
+            -- Verdaccio). It serves the generated test cert mounted at /certs.
             dockerOk
                 [ "run"
                 , "-d"
@@ -254,27 +277,15 @@ withE2EWith cfg action = do
                 , net
                 , "--network-alias"
                 , "upstream"
+                , "--network-alias"
+                , "mirror"
                 , "-v"
                 , htmlDir <> ":/usr/share/nginx/html:ro"
                 , "-v"
                 , nginxConf <> ":/etc/nginx/conf.d/default.conf:ro"
-                , "nginx:alpine"
-                ]
-            -- Verdaccio private upstream + mirror target, reachable as `mirror`.
-            dockerOk
-                [ "run"
-                , "-d"
-                , "--name"
-                , verd
-                , "--network"
-                , net
-                , "--network-alias"
-                , "mirror"
-                , "-p"
-                , "127.0.0.1:0:4873"
                 , "-v"
-                , verdConf <> ":/verdaccio/conf/config.yaml:ro"
-                , "verdaccio/verdaccio:5"
+                , certsDir <> ":/certs:ro"
+                , "nginx:alpine"
                 ]
             -- ministack SQS emulator, reachable by the proxy as `ministack` and by the
             -- harness on a published host port (to create the queue). The image is used
@@ -313,6 +324,10 @@ withE2EWith cfg action = do
                 , net
                 , "-p"
                 , "127.0.0.1:" <> show proxyPort <> ":4873"
+                , -- The test CA bundle the proxy trusts (SSL_CERT_FILE in proxyEnv points
+                  -- here): the documented "extend the image with your cert chain" workflow.
+                  "-v"
+                , certsDir <> ":/certs:ro"
                 ]
                     <> concatMap (\(k, v) -> ["-e", toString (k <> "=" <> v)]) (proxyEnv proxyPort queueUrl <> ecExtraEnv cfg)
                     <> [image]
@@ -344,10 +359,17 @@ served @dist.tarball@ is rewritten to an absolute URL npm can fetch.
 proxyEnv :: Int -> Text -> [(Text, Text)]
 proxyEnv hostPort queueUrl =
     [ ("PROXY_PORT", "4873")
-    , ("PROXY_PUBLIC_URL", "http://127.0.0.1:" <> show hostPort)
-    , ("PUBLIC_UPSTREAM_URL", "http://upstream/")
-    , ("PRIVATE_UPSTREAM_URL", "http://mirror:4873/")
-    , ("MIRROR_TARGET_URL", "http://mirror:4873/")
+    , -- PROXY_PUBLIC_URL is the proxy's own client-facing URL (for dist.tarball
+      -- rewriting), not a registry-egress target, so it stays http on host loopback.
+      ("PROXY_PUBLIC_URL", "http://127.0.0.1:" <> show hostPort)
+    , -- The registry endpoints are https-only by construction: the upstream and mirror
+      -- stubs are served over TLS (an nginx terminator with the test cert), and the proxy
+      -- image's trust store is extended with the test CA via SSL_CERT_FILE below, the
+      -- documented internal-CA operator workflow.
+      ("PUBLIC_UPSTREAM_URL", "https://upstream/")
+    , ("PRIVATE_UPSTREAM_URL", "https://mirror/")
+    , ("MIRROR_TARGET_URL", "https://mirror/")
+    , ("SSL_CERT_FILE", "/certs/bundle.pem")
     , ("MIRROR_TARGET_TOKEN", "e2e-publish-token")
     , ("MIRROR_QUEUE_PROVIDER", "sqs")
     , ("MIRROR_QUEUE_URL", queueUrl)
@@ -695,7 +717,7 @@ project @.npmrc@\'s 'publishAuthToken'), so no static publication-target token i
 -}
 publishTargetEnv :: [(Text, Text)]
 publishTargetEnv =
-    [ ("PUBLICATION_TARGET_URL", "http://mirror:4873/")
+    [ ("PUBLICATION_TARGET_URL", "https://mirror/")
     , ("PUBLISH_SCOPES", publishScope)
     ]
 
@@ -818,6 +840,44 @@ dockerOk args = do
     unless (code == ExitSuccess) $
         fail ("docker command " <> show args <> " failed: " <> toString (decodeUtf8 (LBS.toStrict err) :: Text))
 
+{- | Generate a test CA and a server certificate (SANs: @upstream@, @mirror@,
+@localhost@, @127.0.0.1@) into @dir@, plus a @bundle.pem@ trust bundle of the system
+CAs and the test CA for the proxy's @SSL_CERT_FILE@. This stands in for an operator
+extending the image with their own cert chain, the documented internal-CA workflow that
+makes the https-only egress reachable in the sealed test network.
+-}
+generateCerts :: FilePath -> IO ()
+generateCerts dir = do
+    createDirectoryIfMissing True dir
+    let caCrt = dir </> "ca.crt"
+        caKey = dir </> "ca.key"
+        srvCrt = dir </> "server.crt"
+        srvKey = dir </> "server.key"
+        srvCsr = dir </> "server.csr"
+        ext = dir </> "san.ext"
+    writeFileText ext "subjectAltName=DNS:upstream,DNS:mirror,DNS:localhost,IP:127.0.0.1\n"
+    opensslOk ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", caKey, "-out", caCrt, "-days", "2", "-subj", "/CN=Ecluse E2E Test CA"]
+    opensslOk ["genrsa", "-out", srvKey, "2048"]
+    opensslOk ["req", "-new", "-key", srvKey, "-out", srvCsr, "-subj", "/CN=ecluse-e2e"]
+    opensslOk ["x509", "-req", "-in", srvCsr, "-CA", caCrt, "-CAkey", caKey, "-CAcreateserial", "-out", srvCrt, "-days", "2", "-extfile", ext]
+    -- The proxy's trust bundle: the system CAs (so an unmodified deployment still trusts
+    -- public TLS) plus the test CA, exactly the operator's "system store + my CA" extension.
+    systemCas <- lookupEnv "NIX_SSL_CERT_FILE" >>= maybe (pure "") readBytesOrEmpty
+    testCa <- readFileBS caCrt
+    writeFileBS (dir </> "bundle.pem") (systemCas <> "\n" <> testCa)
+
+-- Read a file's bytes, or empty on any error (the system CA bundle is best-effort: the
+-- proxy reaches only the test stubs over TLS in the e2e, so the test CA alone suffices).
+readBytesOrEmpty :: FilePath -> IO ByteString
+readBytesOrEmpty path = handleAny (\_ -> pure "") (readFileBS path)
+
+-- | Run an openssl command, failing the test loudly if it exits non-zero.
+opensslOk :: [String] -> IO ()
+opensslOk args = do
+    (code, _, err) <- readProcess (proc "openssl" args)
+    unless (code == ExitSuccess) $
+        fail ("openssl command " <> show args <> " failed: " <> toString (decodeUtf8 (LBS.toStrict err) :: Text))
+
 -- | The host loopback port a container's given @\<port\>\/tcp@ is published to.
 publishedPort :: String -> String -> IO Int
 publishedPort cname containerPort = do
@@ -906,17 +966,25 @@ uniqueSuffix = do
     t <- getPOSIXTime
     pure (show (round (t * 1000) :: Integer))
 
-{- | The nginx stub config. A package's packument is served at @\/\<pkg\>@ from
-@\<pkg\>\/packument.json@ (a regex location), while its tarball is served from
-@\/\<pkg\>\/-\/\<file\>.tgz@ by the default root — so @\<pkg\>@ can be both the
-packument path and the tarball path prefix without a file/directory clash.
+{- | The nginx stub config, served over __TLS__ with the generated test cert. One nginx
+terminates TLS for both registry stubs, routed by SNI\/@server_name@: the @upstream@
+public stub serves static packuments\/tarballs from the file root (a package's packument
+at @\/\<pkg\>@ from @\<pkg\>\/packument.json@, its tarball from @\/\<pkg\>\/-\/\<file\>.tgz@
+by the default root, so @\<pkg\>@ is both the packument path and the tarball prefix without
+a file\/directory clash), while the @mirror@ stub reverse-proxies to the Verdaccio container
+over plain HTTP on the internal network. This is what makes the proxy dial https-only
+registry endpoints; only the proxy validates the cert, so the harness's own probes stay
+plain HTTP. @client_max_body_size 0@ lets a published tarball through the mirror leg, and
+the forwarded @X-Forwarded-Proto https@ keeps Verdaccio generating https URLs.
 -}
 nginxStubConfig :: Text
 nginxStubConfig =
     T.unlines
         [ "server {"
-        , "    listen 80;"
-        , "    server_name _;"
+        , "    listen 443 ssl;"
+        , "    server_name upstream;"
+        , "    ssl_certificate /certs/server.crt;"
+        , "    ssl_certificate_key /certs/server.key;"
         , "    root /usr/share/nginx/html;"
         , "    location ~ ^/(?<pkg>[^/]+)$ {"
         , "        default_type application/json;"
@@ -924,6 +992,19 @@ nginxStubConfig =
         , "    }"
         , "    location / {"
         , "        try_files $uri =404;"
+        , "    }"
+        , "}"
+        , "server {"
+        , "    listen 443 ssl;"
+        , "    server_name mirror;"
+        , "    ssl_certificate /certs/server.crt;"
+        , "    ssl_certificate_key /certs/server.key;"
+        , "    client_max_body_size 0;"
+        , "    location / {"
+        , "        proxy_pass http://verdaccio:4873;"
+        , "        proxy_set_header Host $host;"
+        , "        proxy_set_header X-Forwarded-Proto https;"
+        , "        proxy_set_header X-Forwarded-For $remote_addr;"
         , "    }"
         , "}"
         ]

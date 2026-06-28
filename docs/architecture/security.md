@@ -59,32 +59,29 @@ here.
    cannot `302` a fetch to an off-allowlist host: the only host dialled is the one the
    allowlist admitted. See [Registry Model](registry-model.md#registry-abstraction) and
    [URL rewriting](hosting.md#the-load-bearing-requirement-url-rewriting).
-3. **Internal address ranges are blocked on the untrusted origins**, link-local
-   (incl. the `169.254.169.254` cloud-metadata endpoint), loopback, the
-   unspecified / this-host range (`0.0.0.0/8` and IPv6 `::`, since `0.0.0.0` is a
-   loopback-equivalent on Linux), RFC1918, CGNAT shared space (`100.64.0.0/10`), and
-   IPv6 unique-local `fc00::/7` (incl. the AWS IMDSv6 endpoint `fd00:ec2::254`). The
-   block is **origin-aware**: it guards the **untrusted** egress, the public-upstream
-   fetch and every **untrusted** artifact (`dist.tarball`) fetch (a public
-   `dist.tarball` stream and the mirror worker's back-fill fetch), and is **re-applied
-   to every resolved IP** at connection time. The **full** resolved set is vetted and the
-   connection then dials **only vetted addresses**, **failing over** among them: if any
-   resolved address is internal the whole answer is refused (so an attacker cannot smuggle
-   an internal IP among public siblings and have the proxy dial the siblings), and
-   otherwise the connection is pinned to the vetted IPs, the socket opens to an address
-   the recheck just tested rather than to an independent re-resolution, so time-of-check
-   equals time-of-use and the DNS-rebinding race is closed, while a multi-IP upstream with
-   frequent DNS rotation keeps connection-time failover. An IPv6-only host cannot be pinned
-   through the connector's IPv4-only address parameter and falls back to its own resolution
-  , the one residual rebinding window, narrow and IPv6-only (tracked by #426). The
-   **trusted private origin** (the operator-configured private upstream) is deliberately
-   *exempt*, its
-   packument *and* its same-host conventional tarball read alike: a private registry may
-   legitimately live on an internal address, and only an untrusted target can be steered
-   by an attacker. This is **defence-in-depth behind
-   invariant 2**: the host allowlist is the load-bearing control, and the
-   internal-range block is the second gate for an untrusted allowlisted name that
-   resolves to an internal literal (see
+3. **Registry egress is https-only by construction, and certificate validation is the
+   endpoint-authentication boundary.** Every outbound registry URL the proxy dials, the
+   configured public and private base URLs, every `dist.tarball` target, and any followed
+   redirect target, is built through a single typed boundary (`mkRegistryUrl`,
+   `Ecluse.Core.Security.Egress`) that rejects any non-https scheme, so a plain-HTTP
+   registry target cannot be represented in a running system. A non-https configured
+   endpoint, public **or** private, **fails closed at boot** with an actionable error
+   naming the offending URL. The data-plane manager is the standard validating TLS
+   manager, so the certificate presented by the dialled host is checked against the system
+   trust store for the requested name: an attacker who can steer a name to an internal or
+   rebound address cannot make that address present a CA-trusted certificate for the host,
+   so the credential-exfiltration and resolve-to-internal SSRF class is closed **by
+   certificate validation**, not by a resolved-IP recheck. (An operator whose private
+   registry uses an internal CA extends the container image with their own cert chain; the
+   proxy does not pre-bake custom CA trust.) An upstream-declared `dist.tarball` is
+   normalised before it is dialled: an https target is kept, a same-host legacy `http`
+   target is upgraded to https, and an `http` target on any other host is dropped as a
+   graceful per-entry refusal (recorded for the operator). A legacy `http://` registry
+   endpoint is a non-supported configuration. This is **defence-in-depth behind invariant
+   2**: the host allowlist is the load-bearing control, and a cheap pure literal
+   internal-range block stays as a second gate on the `dist.tarball` host (the
+   **trusted private origin** is exempt from that literal block, since a private registry
+   may legitimately live on an internal address; see
    [Why `dist.tarball` is honoured](#why-disttarball-is-honoured-and-what-bounds-it)
    and [Network egress is a shared responsibility](#network-egress-is-a-shared-responsibility)).
 4. **Parsed upstream responses are bounded**, maximum body size, version count,
@@ -223,9 +220,8 @@ The load-bearing guard is thus `isAllowedUpstreamHost`; the IP-range block is it
 backstop. That block has two parts with a deliberate boundary between them. Recognising
 whether a host **is** an IP literal stays a **hand-rolled, intentionally lenient**
 parser; testing a recognised address for **membership** of the blocked CIDR ranges
-is delegated to the `iproute` library (one shared predicate, `isBlockedIP`, for
-both the literal block and the resolved-address recheck, so they gate against
-identical ranges). The split is load-bearing: a strict IP library rejects ambiguous
+is delegated to the `iproute` library (one shared predicate, `isBlockedIP`, for the
+literal block on the `dist.tarball` host gate). The split is load-bearing: a strict IP library rejects ambiguous
 bypass spellings, notably leading-zero octets (`0127.0.0.1`, `010.0.0.1`), as
 non-literals, which would let them **skip** the block and reach the fetch layer as
 names, silently *narrowing* the gate. The lenient recogniser instead parses them as
@@ -234,57 +230,70 @@ malformed group that overflows 16 bits (`fe80::1ffff`) is treated as a name the
 allowlist constrains. Delegating literal *parsing* to a library would change both
 behaviours, so only membership is delegated.
 
-This literal-form coverage earns its keep because the fetch layer also re-checks
-**resolved** IPs: the shared HTTP manager's connection hook resolves every outbound
-host and re-applies the same internal-range block to each resolved address before
-the socket is used (`Ecluse.Core.Security.Egress`), so a DNS name that resolves to an
-internal address, which the pure layer cannot see, is refused at connect time.
-This narrows the resolve-then-connect (DNS-rebinding) window the pure layer leaves
-open.
+This literal-form coverage earns its keep as the pure literal internal-range block on
+the `dist.tarball` host gate (`isBlockedTarget`): a `dist.tarball` whose host is an
+internal-address literal is refused there, cheap defence-in-depth behind the host
+allowlist. A DNS name that *resolves* to an internal address is not re-checked at
+connect time. That window is closed by **https-only egress with certificate
+validation** (invariant 3): a rebound or internal address cannot present a CA-trusted
+certificate for the requested host, so the connection fails the TLS handshake rather
+than reaching the internal target.
 
 ## Egress scope: what the outbound controls guard, and what they do not
 
-The outbound egress controls, the host allowlist (`isAllowedUpstreamHost`), the
-internal-range block (`isBlockedTarget`), and the connection-time resolved-IP recheck
-(`Ecluse.Core.Security.Egress`), exist to constrain **one** thing: an **untrusted package
+The outbound egress controls, the host allowlist (`isAllowedUpstreamHost`),
+https-only egress with TLS certificate validation (`Ecluse.Core.Security.Egress`), and
+the pure literal internal-range block on the `dist.tarball` host gate
+(`isBlockedTarget`), exist to constrain **one** thing: an **untrusted package
 download** whose target an attacker can influence (the public packument and every
-public `dist.tarball`). They are therefore scoped to exactly the **untrusted** egress
-and are deliberately **absent** from every **trusted, operator-declared destination**.
+public `dist.tarball`). The host allowlist and the literal block are scoped to exactly
+the **untrusted** egress and are deliberately **absent** from every **trusted,
+operator-declared destination** (https-only applies to every registry endpoint,
+trusted included).
 Conflating the two is over-restriction: a control aimed at attacker-steered fetches
 that fired on a destination the operator themselves configured would break legitimate
 function, telemetry export, the mirror-queue publish, or a private registry that lives
 on an internal address, for no security gain, since none of those targets is
 attacker-influenced.
 
-Every outbound connection Écluse makes, and the controls it carries:
+Every outbound connection Écluse makes, and the controls it carries. The two data-plane
+managers (`envManager`, `envPrivateManager`) are now the **same** validating-TLS manager;
+the per-origin split is in credential handling and the origin-awareness of the literal
+internal-range block, not the manager. The last column is the **untrusted-egress policy**
+(the host allowlist plus the literal internal-range block on the `dist.tarball` host):
 
-| Outbound connection | Trust | Manager / client | Internal-range block + resolved-IP recheck |
+| Outbound connection | Trust | Manager / client | Host allowlist + literal internal-range block |
 |---|---|---|---|
-| Public-upstream **packument** fetch | Untrusted | `envManager` (guarded) | **Yes** |
-| Public `dist.tarball` **artifact** stream | Untrusted | `envManager` (guarded) | **Yes** (plus the tarball-host policy) |
-| Mirror worker's public **artifact** back-fill fetch | Untrusted | `envManager` (guarded) | **Yes** |
-| Private-upstream **packument** fetch | Trusted | `envPrivateManager` (unguarded) | **No** |
-| Private **conventional** tarball read (`{base}/{pkg}/-/{file}`) | Trusted origin | `envPrivateManager` (unguarded) | **No**, same-host by construction; the allowlist + same-host policy still apply (trivially satisfied) |
-| Mirror-target **publish** (npm `PUT`) | Trusted declared destination | `envPrivateManager` (unguarded) | **No** |
-| **First-party publish** relay (client `npm publish` → publication target) | Trusted declared destination | `envPrivateManager` (unguarded) | **No**, the destination is configuration (`PUBLICATION_TARGET_URL`); it carries the client's **forwarded** credential, which is **never redirect-followed** (see below) |
+| Public-upstream **packument** fetch | Untrusted | `envManager` (untrusted) | **Yes** |
+| Public `dist.tarball` **artifact** stream | Untrusted | `envManager` (untrusted) | **Yes** (plus the tarball-host policy) |
+| Mirror worker's public **artifact** back-fill fetch | Untrusted | `envManager` (untrusted) | **Yes** |
+| Private-upstream **packument** fetch | Trusted | `envPrivateManager` (trusted) | **No** |
+| Private **conventional** tarball read (`{base}/{pkg}/-/{file}`) | Trusted origin | `envPrivateManager` (trusted) | **No**, same-host by construction; the allowlist + same-host policy still apply (trivially satisfied) |
+| Mirror-target **publish** (npm `PUT`) | Trusted declared destination | `envPrivateManager` (trusted) | **No** |
+| **First-party publish** relay (client `npm publish` → publication target) | Trusted declared destination | `envPrivateManager` (trusted) | **No**, the destination is configuration (`PUBLICATION_TARGET_URL`); it carries the client's **forwarded** credential, which is **never redirect-followed** (see below) |
 | OTLP **telemetry** export | Trusted declared destination | OpenTelemetry SDK's own client | **No**, the endpoint is declared, not classified (see `Ecluse.Telemetry.Resolve`) |
 | **SQS** mirror-queue publish / poll | Trusted declared destination | `amazonka`'s own client | **No** (see `Ecluse.Core.Queue.Sqs`) |
 | **IMDS** instance-role credential minting | Required internal | `amazonka`'s own client (separate from the data plane) | **No**, must reach `169.254.169.254`; never routed through the data-plane manager |
+
+Every registry endpoint above (public, private, mirror, publication) is dialled
+https-only with certificate validation, regardless of trust: that is what authenticates
+the endpoint and closes the resolve-to-internal / rebinding class, in place of the
+retired resolved-IP recheck.
 
 The host allowlist gates only the targets built from **upstream-supplied** data (the
 public packument host and every `dist.tarball`). A destination that is
 **configuration**, the private base URL, the mirror target, the OTLP endpoint, the SQS
 queue, is the operator's declared intent, used as given rather than re-validated
-against an allowlist it would itself define. The internal-range block and its
-resolved-IP recheck likewise guard the untrusted origins alone (invariant 3): the
-trusted private origin, the telemetry export, the queue, and IMDS credential minting
-all reach an internal address by design.
+against an allowlist it would itself define. The literal internal-range block likewise
+guards the untrusted origins alone (invariant 3): the trusted private origin, the
+telemetry export, the queue, and IMDS credential minting all reach an internal address
+by design.
 
 The private origin's tarball is the one subtlety: the
 [conventional stable read](registry-model.md#serving-a-tarball-a-conventional-private-read-an-honoured-public-location)
-is served over the unguarded trusted manager and is **exempt from the internal-range
-block** as a `TrustedOrigin` (so a private registry on an internal address serves its
-same-host tarball). The constructed URL is on the private base host, so the host
+is served over the trusted manager and is **exempt from the literal internal-range
+block** as a `TrustedOrigin` (so a private registry on an internal https address serves
+its same-host tarball). The constructed URL is on the private base host, so the host
 allowlist and same-host tarball policy are **satisfied by construction**, still applied,
 simply trivially met. It is treated as part of the trusted private origin, not as an
 untrusted download.
@@ -296,9 +305,9 @@ relay, and the mirror-target publish), is built with redirect-following **disabl
 (`Ecluse.Core.Registry.Npm.withToken`). This forecloses a danger on each plane. On the
 **credentialed** plane: http-client's default re-sends the `Authorization` header to a
 `3xx` `Location` (and does not strip it cross-host), so a hostile or misconfigured upstream
-could `302` a forwarded/minted credential to an attacker-chosen host, and on the
-**unguarded** private manager that target carries no resolved-IP recheck, so the credential
-could reach an internal address with no egress guard at all. On the **anonymous** plane:
+could `302` a forwarded/minted credential to an attacker-chosen host; pinning
+`redirectCount = 0` removes that hop entirely rather than relying on any per-hop egress
+control. On the **anonymous** plane:
 the host allowlist is enforced when the URL is built, not per redirect hop, so following a
 `302` would let an allowlisted upstream steer a fetch to an off-allowlist or internal /
 cloud-metadata host with nothing re-gating it. Not following the redirect removes the hop
@@ -472,9 +481,10 @@ guards follow that principle, and it is made concrete for the tarball path:
   PyPI-files-host shape above) **opts in** to honouring the upstream-declared host
   (still constrained to the allowlist) by setting
   `PROXY_RESPECT_UPSTREAM_TARBALL_HOST`, accepting the documented wider fetch surface
-  in exchange. The override never escapes the allowlist or the resolved-IP block: an
-  allowlisted cross-host name that resolves to an internal address is still refused at
-  connect time by the resolved-IP recheck (invariant 3). The configuration surface and
+  in exchange. The override never escapes the allowlist or the https-only posture: an
+  allowlisted cross-host tarball is still dialled https-only with certificate validation,
+  and a literal internal-address host is still refused by the literal block (invariant 3).
+  The configuration surface and
   its security note are in
   [Configuration → Outbound egress safety](configuration.md#outbound-egress-safety).
 

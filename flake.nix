@@ -417,14 +417,19 @@
           # or network-dependent suites. Both are required by the gate (`make
           # nix-check` runs both; CI's static-checks job runs both via `nix build
           # .#checks.x86_64-linux.unit-core .#checks.x86_64-linux.unit-app`).
-          unit-core = hlib.overrideCabal ecluseRaw (_: {
+          # Both build the whole package (including the loopback integration suite),
+          # so they enable dev-http-egress, the flag the integration suites' loopback
+          # constructor needs to compile. The release `ecluse` (ecluseRaw / dontCheck)
+          # never enables it, so the shipped artifact still carries no plaintext-egress
+          # constructor.
+          unit-core = hlib.enableCabalFlag (hlib.overrideCabal ecluseRaw (_: {
             doCheck = true;
             testTarget = "ecluse-core-unit";
-          });
-          unit-app = hlib.overrideCabal ecluseRaw (_: {
+          })) "dev-http-egress";
+          unit-app = hlib.enableCabalFlag (hlib.overrideCabal ecluseRaw (_: {
             doCheck = true;
             testTarget = "ecluse-unit";
-          });
+          })) "dev-http-egress";
 
           format = pkgs.runCommand "fourmolu-check"
             { nativeBuildInputs = [ hpkgs.fourmolu ]; } ''

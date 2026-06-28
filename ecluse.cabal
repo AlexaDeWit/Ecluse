@@ -41,6 +41,18 @@ source-repository head
   type:     git
   location: https://github.com/AlexaDeWit/Ecluse.git
 
+-- Compile the test- and dev-only plain-HTTP loopback egress constructor
+-- (Ecluse.Core.Security.Egress.DevHttp). OFF by default, so the release library and
+-- executable carry no way to construct a non-https registry target. The dev shell and
+-- the test/CI builds turn it ON (cabal.project enables it for `cabal` in the dev shell;
+-- the flake's unit-core/unit-app checks pass -fdev-http-egress) so the loopback
+-- integration suites compile; the Nix-built release `ecluse` (callCabal2nix, which
+-- ignores cabal.project and uses this default) leaves it off.
+flag dev-http-egress
+  description: Expose the test-only plain-HTTP loopback egress constructor.
+  default:     False
+  manual:      True
+
 -- Shared settings for every component. relude replaces the default prelude via
 -- cabal mixins (see docs/architecture.md "relude as the implicit prelude").
 common shared
@@ -127,12 +139,21 @@ library ecluse-core
 
   -- Per-ecosystem version grammars and their shared lexical atoms. Internal to
   -- ecluse-core: VersionKey is opaque, so callers reach these only through the
-  -- agnostic Ecluse.Core.Version API.
+  -- agnostic Ecluse.Core.Version API. Egress.Internal holds the raw RegistryUrl
+  -- constructor: an other-module, so it is reachable only from within ecluse-core
+  -- (the app library and executable see only the abstract type through
+  -- Ecluse.Core.Security.Egress).
   other-modules:
+    Ecluse.Core.Security.Egress.Internal
     Ecluse.Core.Version.Gem
     Ecluse.Core.Version.Pep440
     Ecluse.Core.Version.Semver
     Ecluse.Core.Version.Token
+
+  -- The test/dev-only plain-HTTP loopback constructor, exposed only when the flag is
+  -- on. Off in a release build, so the constructor is absent from the shipped artifact.
+  if flag(dev-http-egress)
+    exposed-modules: Ecluse.Core.Security.Egress.DevHttp
 
   build-depends:
     , aeson                 ^>=2.2

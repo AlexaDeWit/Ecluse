@@ -96,7 +96,6 @@ module Ecluse (
 ) where
 
 import Data.Map.Strict qualified as Map
-import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
 import Data.Time (getCurrentTime)
@@ -142,8 +141,7 @@ import Ecluse.Core.Registry.Npm (NpmClientConfig (NpmClientConfig, npmBaseUrl, n
 import Ecluse.Core.Registry.Npm.Route qualified as Npm
 import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
 import Ecluse.Core.Rules (renderBootOrder)
-import Ecluse.Core.Security (defaultLimits, lowerCaseHosts)
-import Ecluse.Core.Security.Egress (guardedManagerSettings)
+import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Server.Cache (Source (Source), newMetadataCache)
 import Ecluse.Core.Server.Context (PackumentDeps, PublishDeps, pdLimits, pdNow, pdPublicBaseUrl, pdRules)
 import Ecluse.Core.Server.Metadata (ManifestCaching (Cached), newNpmMetadataClient)
@@ -227,24 +225,24 @@ run = do
     -- telemetry is off.
     prepareTelemetryBoot (cfgTelemetry env) logEnv
     withTelemetry (cfgTelemetry env) logEnv $ \telemetry -> do
-        -- Two data-plane managers, split by trust. The guarded one rechecks every
-        -- resolved outbound IP against the internal-range block (DNS-rebinding /
-        -- resolve-to-internal SSRF) and serves the untrusted upstreams — the public
-        -- upstream and every artifact stream — blocking every internal resolved address
-        -- (an empty opt-in: the secure default). The trusted one serves the private
-        -- origin only: the private base URL is operator-configured and may legitimately
-        -- resolve to an internal address, so it is deliberately not rechecked. Both are
-        -- built inside the telemetry bracket so that, with telemetry enabled, each
-        -- carries the http-client instrumentation (child spans + W3C context
-        -- propagation) hung off the substrate's installed providers; with it off the
-        -- instrumentation step is the identity, so the managers are exactly the guarded
-        -- and trusted ones.
-        manager <- newManager =<< instrumentDataPlaneManagerSettings telemetry (guardedManagerSettings (lowerCaseHosts Set.empty) tlsManagerSettings)
+        -- Two data-plane managers, one per origin. Both are the standard validating TLS
+        -- manager: registry egress is https-only by construction (a non-https endpoint
+        -- fails closed at boot), and certificate validation authenticates the dialled
+        -- host, so a rebound or internal address cannot present a CA-trusted certificate
+        -- for the requested name (the SSRF / resolve-to-internal class is closed by
+        -- certificate validation). The split is retained
+        -- because the two origins differ in credential handling (the public reads are
+        -- anonymous; the private reads forward the client's credential) and in the
+        -- @dist.tarball@ host gate's trust. Both are built inside the telemetry bracket so
+        -- that, with telemetry enabled, each carries the http-client instrumentation
+        -- (child spans + W3C context propagation) hung off the substrate's installed
+        -- providers; with it off the instrumentation step is the identity.
+        manager <- newManager =<< instrumentDataPlaneManagerSettings telemetry tlsManagerSettings
         privateManager <- newManager =<< instrumentDataPlaneManagerSettings telemetry tlsManagerSettings
         -- The mirror worker's publish-side registry client, resolved per ecosystem from
         -- the configured mirror target and its write credential. It writes to the
         -- operator-configured, trusted mirror target, so it uses the trusted private
-        -- manager (no resolved-IP recheck — that guards only the untrusted public fetch).
+        -- manager (the private origin's credential-forwarding path).
         publishClient <- resolvePublishClient privateManager publishTargets
         withEnv publishClient queue (mirrorWriteProvider (cfgMirrorTargetCredentialProvider env) providers) manager privateManager metadataCache logEnv telemetry heartbeat $ \builtEnv -> do
             -- The instruments now exist (built in 'withEnv' from the telemetry handle);

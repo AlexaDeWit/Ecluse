@@ -106,12 +106,11 @@ guards take, yielding a 'LoweredHostSet'.
 
 A plain DNS name is folded to lower case (hostnames are case-insensitive), so the
 guards match an incoming host against the configuration regardless of how either
-was spelled. An entry that parses as an __IP literal__ is additionally rendered to
-the single canonical literal the resolved-address recheck produces (see
-'canonicalHostKey'), so equivalent spellings of one address — compressed versus
-expanded IPv6, differing case — collapse to one key. An operator who opts in
-@0:0:0:0:0:0:0:1@ therefore matches a resolved @::1@ rather than missing it on a
-textual difference.
+was spelled. An entry that parses as an __IP literal__ is additionally rendered to its
+single canonical literal (see 'canonicalHostKey'), so equivalent spellings of one
+address (compressed versus expanded IPv6, differing case) collapse to one key. An
+operator who opts in @0:0:0:0:0:0:0:1@ therefore matches a literal @::1@ rather than
+missing it on a textual difference.
 -}
 lowerCaseHosts :: Set Text -> LoweredHostSet
 lowerCaseHosts = LoweredHostSet . Set.map canonicalHostKey
@@ -176,12 +175,11 @@ isBlockedTarget allowedInternal host =
 {- | Whether @host@ is opted in to the internal-range block — the deliberate
 exemption for a private upstream that genuinely lives on an internal address.
 
-The opt-in half of 'isBlockedTarget', shared with the resolved-address recheck in
-"Ecluse.Core.Security.Egress" so the literal block and the connection-time block honour
-the exemption identically. The match folds case (as DNS and the host allowlist do)
-and, for an IP-literal, collapses equivalent spellings to one canonical key (see
-'canonicalHostKey'): the @allowedInternal@ set was built with that same key, so an
-opt-in matches a resolved or literal address whichever representation either uses.
+The opt-in half of 'isBlockedTarget': the deliberate exemption for a host that
+genuinely lives on an internal address. The match folds case (as DNS and the host
+allowlist do) and, for an IP-literal, collapses equivalent spellings to one canonical
+key (see 'canonicalHostKey'): the @allowedInternal@ set was built with that same key, so
+an opt-in matches a literal address whichever representation either uses.
 -}
 hostOptedIn :: LoweredHostSet -> Text -> Bool
 hostOptedIn (LoweredHostSet allowedInternal) host =
@@ -189,9 +187,8 @@ hostOptedIn (LoweredHostSet allowedInternal) host =
 
 {- | Whether an 'IP' falls in a blocked internal range.
 
-The single source of record for the internal-range decision, shared by the
-literal block here ('isBlockedTarget') and the resolved-address recheck in
-"Ecluse.Core.Security.Egress" so both gate against __identical__ ranges. An
+The single source of record for the internal-range decision, used by the literal
+block ('isBlockedTarget') on the @dist.tarball@ host gate. An
 IPv4-mapped IPv6 address (@::ffff:a.b.c.d@) is first decoded to its embedded IPv4
 and tested against the IPv4 ranges: a mapped internal literal (e.g.
 @::ffff:169.254.169.254@) is a recognised SSRF smuggling form, so it must be
@@ -245,19 +242,17 @@ ipAddrToIP = \case
 
 {- The canonical comparison key for a host: a normalised string the host guards
 match a 'LoweredHostSet' on. A host that parses as an IP literal is rendered to the
-@iproute@ canonical literal — the /same/ form the resolved-address recheck in
-"Ecluse.Core.Security.Egress" renders a connected address to, since both go through this
-@IP@ 'show' — so equivalent spellings of one address collapse to one key:
-compressed versus expanded IPv6 (@::1@ ≡ @0:0:0:0:0:0:0:1@), embedded IPv4, and
-hex case all canonicalise identically. Anything that is not a literal (a DNS name)
-is merely case-folded, since hostnames are case-insensitive.
+@iproute@ canonical literal through @IP@ 'show', so equivalent spellings of one
+address collapse to one key: compressed versus expanded IPv6
+(@::1@ is @0:0:0:0:0:0:0:1@), embedded IPv4, and hex case all canonicalise identically.
+Anything that is not a literal (a DNS name) is merely case-folded, since hostnames are
+case-insensitive.
 
 This is the single canonicaliser feeding __both__ sides of the internal-range
 opt-in: 'lowerCaseHosts' builds the set with it, and 'hostOptedIn' folds the
-queried host with it, so an operator's opt-in matches a resolved or literal address
-whichever representation either uses. Pointing the opt-in key and the guard's
-rendered key at one @show@ is what guarantees they are identical — a second,
-separate canonicaliser could drift.
+queried host with it, so an operator's opt-in matches a literal address whichever
+representation either uses. Pointing the opt-in key and the guard's rendered key at one
+@show@ is what guarantees they are identical; a second, separate canonicaliser could drift.
 -}
 canonicalHostKey :: Text -> Text
 canonicalHostKey host = case parseIpLiteral host of
@@ -361,17 +356,14 @@ parser that rejected these spellings would let an octal\/hex spelling of an
 internal address skip the block and reach the resolving fetch as a name, silently
 __narrowing__ the SSRF gate.
 
-Two residual boundaries are deliberately left to the connection-time resolved-IP
-recheck in "Ecluse.Core.Security.Egress" (which resolves through the same
-@getAddrInfo@ and re-applies 'isBlockedIP') rather than modelled here. First, the
-__short__ @inet_aton@ forms with fewer than four parts — a bare 32-bit number
-(@2130706433@, @0x7f000001@) or a @127.1@ — are not literals here. Second, a
-malformed octet — an invalid-octal @08@ (8 is not an octal digit) or an
-overflowing @0400@\/@256@\/@0x100@ — is not a literal, exactly as a resolver
-rejects it; both stay names the allowlist constrains. A malformed IPv6 group that
-overflows 16 bits (@fe80::1ffff@) is likewise not a literal here. Delegating
-literal /parsing/ to a library would change this lenient/strict boundary, so it is
-kept here.
+Two boundaries are deliberately not modelled here; such a host is simply treated as a
+name, which the host allowlist constrains. First, the __short__ @inet_aton@ forms with
+fewer than four parts (a bare 32-bit number @2130706433@ \/ @0x7f000001@, or a @127.1@)
+are not literals here. Second, a malformed octet (an invalid-octal @08@, where 8 is not
+an octal digit, or an overflowing @0400@\/@256@\/@0x100@) is not a literal, exactly as a
+resolver rejects it. A malformed IPv6 group that overflows 16 bits (@fe80::1ffff@) is
+likewise not a literal here. Delegating literal /parsing/ to a library would change this
+lenient/strict boundary, so it is kept here.
 -}
 parseIpLiteral :: Text -> Maybe IpAddr
 parseIpLiteral host = case T.uncons host of
@@ -382,8 +374,7 @@ parseIpLiteral host = case T.uncons host of
 by the supplied octet parser. The top-level host literal passes the
 @inet_aton@-faithful 'octetInetAton' (leading-zero octal and @0x@ hex), and the
 embedded IPv4-in-IPv6 form passes the strict-decimal 'octetDecimal'; only the
-four-part form is recognised (see 'parseIpLiteral' for the short forms left to the
-connection-time recheck).
+four-part form is recognised (see 'parseIpLiteral' for the short forms treated as names).
 -}
 parseIPv4 :: (Text -> Maybe Word8) -> Text -> Maybe IpAddr
 parseIPv4 octet host = case T.splitOn "." host of
@@ -503,11 +494,10 @@ that served the packument.
 An upstream's @dist.tarball@ is server-chosen data (see
 @docs\/architecture\/security.md@ → "Why @dist.tarball@ is honoured"), so a
 compromised or hostile upstream can name __any__ host as the artifact location.
-This policy bounds the third axis of that risk — /where/ the bytes are fetched —
-that the host allowlist and the resolved-IP block leave open: even an
-allowlisted-but-/different/ host is a wider fetch surface than the packument's own
-source, and the safe reading of the allowlist is "same source unless told
-otherwise".
+This policy bounds the axis of that risk the host allowlist leaves open: /where/ the
+bytes are fetched. Even an allowlisted-but-/different/ host is a wider fetch surface than
+the packument's own source, and the safe reading of the allowlist is "same source unless
+told otherwise".
 -}
 data TarballHostPolicy
     = {- | The secure default: a tarball is fetched only from the __same__ host
@@ -523,27 +513,21 @@ data TarballHostPolicy
       AnyAllowlistedHost
     deriving stock (Eq, Show)
 
-{- | The trust of the origin a @dist.tarball@ is being served from, mirroring the
-connection-layer trust split (see "Ecluse.Core.Security.Egress"): the operator-configured
-private upstream is 'TrustedOrigin', and the public upstream — together with every
-artifact location an attacker could influence — is 'UntrustedOrigin'.
+{- | The trust of the origin a @dist.tarball@ is being served from: the
+operator-configured private upstream is 'TrustedOrigin', and the public upstream,
+together with every artifact location an attacker could influence, is 'UntrustedOrigin'.
 
-The distinction governs the __internal-range block__ alone. The trusted private
-origin is deliberately exempt from it (a private registry may legitimately live on
-an internal address, and only an untrusted target can be steered there), exactly as
-the trusted origin's connections use the unguarded 'Ecluse.Core.Security.Egress.newTrustedTlsManager'
-while untrusted ones carry the resolved-IP recheck of
-'Ecluse.Core.Security.Egress.newGuardedTlsManager' (@security.md@ invariant 3). It never
-relaxes the host allowlist or the same-host clause — those gate both origins
-identically — so a trusted origin's @dist.tarball@ is still constrained to its own
-allowlisted host.
+The distinction governs the __literal internal-range block__ alone (the cheap pure
+defence-in-depth on the host gate). The trusted private origin is deliberately exempt
+from it: a private registry may legitimately live on an internal address, and only an
+untrusted target can be steered there. It never relaxes the host allowlist or the
+same-host clause, which gate both origins identically, so a trusted origin's
+@dist.tarball@ is still constrained to its own allowlisted host.
 -}
 data Origin
-    = -- | The operator-configured private upstream: exempt from the internal-range block.
+    = -- | The operator-configured private upstream: exempt from the literal internal-range block.
       TrustedOrigin
-    | {- | The public upstream, and any attacker-influenceable target: subject to the
-      internal-range block (and the resolved-IP recheck at connect time).
-      -}
+    | -- | The public upstream, and any attacker-influenceable target: subject to the literal internal-range block.
       UntrustedOrigin
     deriving stock (Eq, Show)
 
@@ -551,19 +535,18 @@ data Origin
 policy, the host that served the packument, and the configured guards.
 
 This is the policy half of the @dist.tarball@ defence; it never replaces the host
-allowlist or the internal-range block but composes /on top/ of them, so the
+allowlist or the literal internal-range block but composes /on top/ of them, so the
 answer is the conjunction of three independent checks and over-blocking is the
 fail-safe:
 
 * the @tarballHost@ must be on the host allowlist (@allowed@), as every outbound
-  target is — a @dist.tarball@ host off the allowlist is refused regardless of
+  target is: a @dist.tarball@ host off the allowlist is refused regardless of
   policy;
-* it must not be an internal address (subject to the per-host @allowedInternal@
-  opt-in), as every untrusted outbound target is — but a 'TrustedOrigin' is __exempt__
-  from this clause (its connections likewise carry no resolved-IP recheck; see
-  'Origin' and @security.md@ invariant 3); and
+* it must not be an internal-address literal (subject to the per-host @allowedInternal@
+  opt-in), the cheap pure defence-in-depth, but a 'TrustedOrigin' is __exempt__ from this
+  clause (see 'Origin'); and
 * under 'SameHostAsPackument' (the secure default) it must additionally __equal__
-  the @packumentHost@ — the host that served the metadata — so a tarball on a
+  the @packumentHost@ (the host that served the metadata), so a tarball on a
   /different/ host is refused even when that host is allowlisted. Under
   'AnyAllowlistedHost' that last clause is relaxed, leaving only the allowlist and
   (origin-aware) internal-range checks.
@@ -573,11 +556,11 @@ internal-range clause is origin-aware, so a 'TrustedOrigin' is never let past it
 allowlisted host or onto a /different/ host than its metadata under the default.
 
 Hosts are compared by their canonical key (case-folded, and for an IP-literal the
-single canonical literal — see 'canonicalHostKey'), as the host guards are. An
+single canonical literal; see 'canonicalHostKey'), as the host guards are. An
 empty @tarballHost@ is never allowed (the allowlist already refuses it). The
 @packumentHost@ is the bare host the metadata was fetched from (extract it with
 'hostAddress'); only its equality to @tarballHost@ matters, so it need not itself
-be re-validated here — it was already gated when the packument was fetched.
+be re-validated here: it was already gated when the packument was fetched.
 -}
 tarballHostAllowed ::
     Origin ->
@@ -598,9 +581,8 @@ tarballHostAllowed origin policy allowed allowedInternal packumentHost tarballHo
             SameHostAsPackument -> canonicalHostKey tarballHost == canonicalHostKey packumentHost
             AnyAllowlistedHost -> True
   where
-    -- The internal-range block is origin-aware: the trusted private origin is exempt
-    -- (mirroring its unguarded connection manager), the untrusted origin is gated
-    -- subject to the per-host opt-in.
+    -- The literal internal-range block is origin-aware: the trusted private origin is
+    -- exempt, the untrusted origin is gated subject to the per-host opt-in.
     internalRangeOk :: Bool
     internalRangeOk = case origin of
         TrustedOrigin -> True

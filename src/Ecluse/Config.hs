@@ -114,6 +114,7 @@ import Ecluse.Core.Package.Integrity (
     parseMinIntegrity,
     parseMinTrustedIntegrity,
  )
+import Ecluse.Core.Registry.Npm (publicRegistryUrl)
 import Ecluse.Core.Rules.Types (
     PrecededRule (..),
     Rule (..),
@@ -123,6 +124,7 @@ import Ecluse.Core.Security (
     Limits (maxBodyBytes, maxNestingDepth, maxVersionCount),
     defaultLimits,
  )
+import Ecluse.Core.Security.Egress (RegistryUrl, mkRegistryUrl)
 import Ecluse.Core.Wire (WireVocab (..), parseWire, renderWire)
 import Ecluse.Log (LogFormat (..), parseLogFormat)
 import Ecluse.Telemetry (TelemetrySwitch (..), parseTelemetrySwitch)
@@ -310,13 +312,16 @@ one-entry mount map.
 data EnvConfig = EnvConfig
     { cfgPort :: Int
     -- ^ The port the proxy listens on (@PROXY_PORT@, default 4873).
-    , cfgPrivateUpstream :: Url
-    -- ^ The private upstream registry (@PRIVATE_UPSTREAM_URL@, required).
-    , cfgPublicUpstream :: Url
-    {- ^ The public upstream registry (@PUBLIC_UPSTREAM_URL@, default
-    @https:\/\/registry.npmjs.org@).
+    , cfgPrivateUpstream :: RegistryUrl
+    {- ^ The private upstream registry (@PRIVATE_UPSTREAM_URL@, required). An
+    'RegistryUrl', so it is https by construction: a non-https value fails closed at
+    boot.
     -}
-    , cfgMirrorTarget :: Maybe Url
+    , cfgPublicUpstream :: RegistryUrl
+    {- ^ The public upstream registry (@PUBLIC_UPSTREAM_URL@, default
+    @https:\/\/registry.npmjs.org@). An https-only 'RegistryUrl'.
+    -}
+    , cfgMirrorTarget :: Maybe RegistryUrl
     {- ^ Where approved packages are mirrored to (@MIRROR_TARGET_URL@). __Optional__:
     'Nothing' folds the mirror target onto 'cfgPrivateUpstream' (a single registry
     that is both read as the private upstream and written as the mirror target), so
@@ -508,9 +513,9 @@ data EnvConfig = EnvConfig
     own vetted source substitutes for cryptographic strength. An unknown algorithm name is
     still rejected at load (see "Ecluse.Core.Package.Integrity").
     -}
-    , cfgPublicationTarget :: Maybe Url
+    , cfgPublicationTarget :: Maybe RegistryUrl
     {- ^ Where client @npm publish@ (first-party packages) are written
-    (@PUBLICATION_TARGET_URL@). __Optional__ and __opt-in__: 'Nothing' means no
+    (@PUBLICATION_TARGET_URL@), https by construction. __Optional__ and __opt-in__: 'Nothing' means no
     publication target, so a @PUT \/{pkg}@ is refused with @405@ — there is no implicit
     write path. May be the same registry as the private upstream (so published packages
     are then readable via the private leg). See
@@ -559,11 +564,14 @@ envParser :: Env.Parser Env.Error EnvConfig
 envParser =
     EnvConfig
         <$> Env.var portReader "PROXY_PORT" (Env.def 4873)
-        <*> Env.var urlReader "PRIVATE_UPSTREAM_URL" mempty
-        <*> Env.var urlReader "PUBLIC_UPSTREAM_URL" (Env.def defaultPublicUpstream)
+        -- The registry endpoints are https-only by construction: a non-https value is
+        -- rejected here ('registryUrlReader' over 'mkRegistryUrl'), so a plain-HTTP
+        -- registry endpoint fails closed at boot.
+        <*> Env.var registryUrlReader "PRIVATE_UPSTREAM_URL" mempty
+        <*> Env.var registryUrlReader "PUBLIC_UPSTREAM_URL" (Env.def publicRegistryUrl)
         -- Optional: an unset mirror target folds onto the private upstream in
         -- 'loadConfig', so only the private upstream is a hard-required endpoint.
-        <*> optionalUrl "MIRROR_TARGET_URL"
+        <*> optionalRegistryUrl "MIRROR_TARGET_URL"
         <*> Env.var queueBackendReader "MIRROR_QUEUE_PROVIDER" (Env.def SqsQueue)
         -- Optional at the env layer: the requiredness is provider-dependent and
         -- enforced at provider resolution (planMirrorQueue) — required for the cloud
@@ -631,13 +639,10 @@ envParser =
         -- off (a PUT /{pkg} is then 405). When set, PUBLISH_SCOPES is required — the
         -- cross-field check is at the composition root (composeBindings), where the
         -- two are validated together with the rest of the boot-time wiring.
-        <*> optionalUrl "PUBLICATION_TARGET_URL"
+        <*> optionalRegistryUrl "PUBLICATION_TARGET_URL"
         <*> (fmap mkSecret <$> Env.sensitive (optionalText "PUBLICATION_TARGET_TOKEN"))
         <*> Env.var publishScopesReader "PUBLISH_SCOPES" (Env.def [])
   where
-    defaultPublicUpstream :: Url
-    defaultPublicUpstream = Url "https://registry.npmjs.org"
-
     defaultCacheTtl :: NominalDiffTime
     defaultCacheTtl = 60
 
@@ -672,6 +677,12 @@ envParser =
     optionalUrl :: String -> Env.Parser Env.Error (Maybe Url)
     optionalUrl name = Env.var ((fmap . fmap) Just urlReader) name (Env.def Nothing)
 
+    -- An optional https-only 'RegistryUrl' variable: absent yields 'Nothing', a
+    -- present non-https value fails the parse. Same shape as 'optionalUrl', through
+    -- 'registryUrlReader'.
+    optionalRegistryUrl :: String -> Env.Parser Env.Error (Maybe RegistryUrl)
+    optionalRegistryUrl name = Env.var ((fmap . fmap) Just registryUrlReader) name (Env.def Nothing)
+
     -- An optional capped CodeArtifact token-lifetime variable: absent yields
     -- 'Nothing' (CodeArtifact defaults the lifetime). Same shape as 'optionalUrl',
     -- through 'codeArtifactDurationReader'.
@@ -689,6 +700,11 @@ textReader parser s = first (Env.unread . toString) (parser (toText s))
 -- An 'Env.Reader' that parses a 'Url', surfacing 'mkUrl's reason.
 urlReader :: Env.Reader Env.Error Url
 urlReader = textReader mkUrl
+
+-- An 'Env.Reader' that parses an https-only 'RegistryUrl', surfacing 'mkRegistryUrl's
+-- reason (so a non-https registry endpoint is a fail-loud boot error naming the value).
+registryUrlReader :: Env.Reader Env.Error RegistryUrl
+registryUrlReader = textReader mkRegistryUrl
 
 -- An 'Env.Reader' for the queue backend enum.
 queueBackendReader :: Env.Reader Env.Error QueueBackend
@@ -808,12 +824,12 @@ the client's credential or are anonymous (see
 @docs\/architecture\/registry-model.md@ → "Credential flow and authority").
 -}
 data MountRegistries = MountRegistries
-    { regPrivateUpstream :: Url
-    {- ^ The authoritative, already-vetted upstream. Reads forward the __client's__
-    credential; Écluse holds none for it.
+    { regPrivateUpstream :: RegistryUrl
+    {- ^ The authoritative, already-vetted upstream (https by construction). Reads
+    forward the __client's__ credential; Écluse holds none for it.
     -}
-    , regPublicUpstream :: Url
-    -- ^ The public upstream, read anonymously and gated by the rules.
+    , regPublicUpstream :: RegistryUrl
+    -- ^ The public upstream (https by construction), read anonymously and gated by the rules.
     , regMirrorTarget :: MirrorTarget
     -- ^ Where approved packages are written, with the backends used to do so.
     }
@@ -824,8 +840,8 @@ used to write to it. This is the sole endpoint carrying an Écluse-minted
 credential.
 -}
 data MirrorTarget = MirrorTarget
-    { mtUrl :: Url
-    -- ^ The mirror-target registry endpoint.
+    { mtUrl :: RegistryUrl
+    -- ^ The mirror-target registry endpoint (https by construction).
     , mtCredential :: CredentialBackend
     -- ^ How the bearer token to publish here is obtained.
     , mtQueue :: QueueBackend
@@ -1140,8 +1156,8 @@ instance FromJSON MountDoc where
             o
         registries <-
             MountRegistries
-                <$> (o .: "privateUpstream" >>= parseUrl)
-                <*> (o .: "publicUpstream" >>= parseUrl)
+                <$> (o .: "privateUpstream" >>= parseRegistryUrl)
+                <*> (o .: "publicUpstream" >>= parseRegistryUrl)
                 <*> o .: "mirrorTarget"
         MountDoc registries <$> o .:? "rules" .!= emptyPatch
 
@@ -1149,7 +1165,7 @@ instance FromJSON MirrorTarget where
     parseJSON = withObject "mirrorTarget" $ \o -> do
         rejectUnknownKeys "mirrorTarget" ["url", "credential", "queue"] o
         MirrorTarget
-            <$> (o .: "url" >>= parseUrl)
+            <$> (o .: "url" >>= parseRegistryUrl)
             <*> (o .: "credential" >>= parseEnum parseCredentialBackend "credential")
             <*> (o .: "queue" >>= parseEnum parseQueueBackend "queue")
 
@@ -1212,9 +1228,10 @@ rejectSecretKeys o =
     secretKeys :: [Key.Key]
     secretKeys = ["token", "authToken", "password", "secret", "credentialToken"]
 
--- Parse a 'Url' value, surfacing 'mkUrl's reason as a decoder failure.
-parseUrl :: Value -> Parser Url
-parseUrl = withText' $ \t -> either (fail . toString) pure (mkUrl t)
+-- Parse an https-only 'RegistryUrl' value, surfacing 'mkRegistryUrl's reason as a
+-- decoder failure (so a non-https registry endpoint in the document fails the load).
+parseRegistryUrl :: Value -> Parser RegistryUrl
+parseRegistryUrl = withText' $ \t -> either (fail . toString) pure (mkRegistryUrl t)
 
 -- Parse a string-valued enum via its 'Text' parser, naming the field on failure.
 parseEnum :: (Text -> Either Text a) -> String -> Value -> Parser a

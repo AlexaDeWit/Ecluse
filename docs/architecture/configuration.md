@@ -45,9 +45,9 @@ registries derive short-lived tokens from ambient cloud credentials (see
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `PROXY_PORT` | No (default: 4873) | Port the proxy listens on. Must be in `0..65535` (`0` binds an OS-assigned ephemeral port); an out-of-range value is rejected at load. |
-| `PRIVATE_UPSTREAM_URL` | Yes | URL of the private upstream registry. |
-| `PUBLIC_UPSTREAM_URL` | No (default: `https://registry.npmjs.org`) | URL of the public upstream. |
-| `MIRROR_TARGET_URL` | No (default: `PRIVATE_UPSTREAM_URL`) | URL of the registry to mirror approved packages to. Unset ⇒ folds onto the private upstream (one registry, both read and written), so the private upstream is the only hard-required endpoint. The write **credential** does not fold; it stays `MIRROR_TARGET_CREDENTIAL_PROVIDER`. |
+| `PRIVATE_UPSTREAM_URL` | Yes | `https://` URL of the private upstream registry. A non-https value fails closed at boot. |
+| `PUBLIC_UPSTREAM_URL` | No (default: `https://registry.npmjs.org`) | `https://` URL of the public upstream. A non-https value fails closed at boot. |
+| `MIRROR_TARGET_URL` | No (default: `PRIVATE_UPSTREAM_URL`) | `https://` URL of the registry to mirror approved packages to. Unset ⇒ folds onto the private upstream (one registry, both read and written), so the private upstream is the only hard-required endpoint. The write **credential** does not fold; it stays `MIRROR_TARGET_CREDENTIAL_PROVIDER`. |
 | `MIRROR_TARGET_CREDENTIAL_PROVIDER` | No (default: `static`) | How the mirror-target write token is obtained: `static` (uses `MIRROR_TARGET_TOKEN`), `codeartifact` (mints via CodeArtifact `GetAuthorizationToken` under the ambient task role), or `gcp-artifact-registry` (recognised but not yet built, a fail-loud boot error). This is the credential-**provider** axis, distinct from the per-mount serve **strategy** (`passthrough`/`service`). See [Cloud Backends → Credential Provider](cloud-backends.md#credential-provider). |
 | `MIRROR_TARGET_TOKEN` | No | Static write token for the mirror target, used when `MIRROR_TARGET_CREDENTIAL_PROVIDER=static` (the default). |
 | `MIRROR_TARGET_CODEARTIFACT_DOMAIN` | `codeartifact` provider only | The CodeArtifact domain that scopes the minted token. Resolved from this key, else parsed from a CodeArtifact `MIRROR_TARGET_URL` host (`{domain}-{owner}.d.codeartifact.{region}.amazonaws.com`); unresolvable ⇒ fail-loud at boot. |
@@ -77,6 +77,18 @@ registries derive short-lived tokens from ambient cloud credentials (see
 | `PROXY_MIN_PUBLIC_INTEGRITY` | No (default: `sha256`) | Minimum integrity algorithm a **public** (untrusted) version's digest must meet to be admitted: `sha256`, `sha384`, `sha512`, or `blake2b`. A public version whose strongest digest is weaker (e.g. a legacy SHA-1 `shasum` only) is refused with a `403`. **Hard-floored at SHA-256**, a value below it (`sha1`, `md5`) or an unknown name is rejected at load, not clamped, and there is **no escape-hatch** to admit a sub-SHA-256 digest from an untrusted upstream. The trusted private path has its own, loosenable floor (`PROXY_MIN_TRUSTED_INTEGRITY`). See [Public integrity floor](#public-integrity-floor) and [Security → asymmetric integrity trust](security.md#invariants). |
 | `PROXY_MIN_TRUSTED_INTEGRITY` | No (default: `sha256`) | Minimum integrity algorithm a **trusted** (private) version's digest must meet to be served. Defaults to `sha256`, so by default a SHA-1-only or hashless private version is dropped, exactly like a public one, but unlike the public floor is **loosenable below SHA-256**: `sha1`/`md5` are accepted for a legacy private mirror, where trust substitutes for cryptographic strength. An unknown name is still rejected at load. See [Trusted integrity floor](#trusted-integrity-floor) and [Security → asymmetric integrity trust](security.md#invariants). |
 | `PROXY_CONFIG` | No | The structured config document as an inline JSON blob, the alternate to a mounted config file for an env-only deployment. |
+
+### Registry endpoints must be https
+
+Every registry endpoint (`PRIVATE_UPSTREAM_URL`, `PUBLIC_UPSTREAM_URL`,
+`MIRROR_TARGET_URL`, `PUBLICATION_TARGET_URL`) **must** be an `https://` URL. A plain-HTTP
+registry endpoint is not a supported configuration: the proxy fails closed at boot with
+an error naming the offending URL. Certificate validation is the endpoint-authentication
+boundary, so a private registry that uses an **internal CA** is supported by extending the
+container image with your own cert chain (add it to the image's system trust store); the
+proxy does not pre-bake custom CA trust. A legacy upstream that advertises a plaintext
+`dist.tarball` on its own host is upgraded to https automatically; a plaintext tarball on
+any other host is dropped (the version is skipped, and the drop is recorded).
 
 ### Upstream composition (optional)
 

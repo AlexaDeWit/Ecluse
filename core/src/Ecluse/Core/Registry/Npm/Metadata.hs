@@ -54,13 +54,15 @@ import Ecluse.Core.Registry.Metadata (
  )
 import Ecluse.Core.Registry.Npm (
     MetadataForm (Full),
-    NpmClientConfig (npmLimits),
+    NpmClientConfig (npmBaseUrl, npmLimits),
     ResponseBoundExceeded (ResponseBoundExceeded),
     fetchMetadataForm,
     noValidators,
  )
 import Ecluse.Core.Registry.Npm.Project (
     Projection (NameMismatch, Projected),
+    enforceTarballScheme,
+    enforceTarballSchemeDetails,
     parsePackageInfoFromValue,
     projectName,
     projectVersionEntry,
@@ -93,7 +95,10 @@ fetchNpmManifest :: NpmClientConfig -> PackageName -> IO (Either MetadataError (
 fetchNpmManifest config name =
     handle (\(ResponseBoundExceeded err) -> pure (Left (MetadataBoundExceeded err))) $ do
         response <- fetchMetadataForm config Full noValidators name
-        pure (projectNpmManifest (npmLimits config) name (responseBody response))
+        -- Normalise each version's dist.tarball scheme against the host this client reads
+        -- from (same-host http upgraded, foreign-host http dropped); the raw document is
+        -- returned unchanged, since the serve path honours the projected (gated) artUrls.
+        pure (first (enforceTarballScheme (npmBaseUrl config)) <$> projectNpmManifest (npmLimits config) name (responseBody response))
 
 {- | Project a fetched packument's bytes into @(manifest, raw document)@, applying the
 serve path's response bounds and name validation. Pure and total.
@@ -133,7 +138,9 @@ fetchNpmVersion :: NpmClientConfig -> PackageName -> Version -> IO (Either Metad
 fetchNpmVersion config name version =
     handle (\(ResponseBoundExceeded err) -> pure (Left (MetadataBoundExceeded err))) $ do
         response <- fetchMetadataForm config Full noValidators name
-        pure (projectNpmVersion (npmLimits config) name version (responseBody response))
+        -- Normalise the one version's dist.tarball scheme; a non-https, non-upgradeable
+        -- tarball drops the version (it becomes a clean absence).
+        pure ((>>= enforceTarballSchemeDetails (npmBaseUrl config)) <$> projectNpmVersion (npmLimits config) name version (responseBody response))
 
 {- | Project a fetched packument's bytes into __one version's__ 'PackageDetails' (or the
 typed 'MetadataError'), without decoding the other versions. Pure and total.
