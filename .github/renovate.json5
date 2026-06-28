@@ -90,9 +90,12 @@
       semanticCommitType: "build",
     },
 
-    // npm — the lone package.json (test/oracles) pinning the node-semver
-    // reference oracle, built into node_modules by importNpmLock in flake.nix.
-    // → build(deps), same as the other dependency arms.
+    // npm — the two package.json pin files: test/oracles (the node-semver reference
+    // oracle, built into node_modules by importNpmLock in flake.nix) and bench/corpus
+    // (the real-world packument benchmark corpus pins, captured by
+    // `make gen-bench-corpus`; not installed — the versions are capture pins, no
+    // node_modules). Both are kept fresh by Renovate's npm manager. → build(deps), same
+    // as the other dependency arms.
     {
       matchManagers: ["npm"],
       semanticCommitType: "build",

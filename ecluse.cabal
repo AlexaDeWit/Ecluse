@@ -22,7 +22,12 @@ build-type:    Simple
 -- express.full.json is a real, untrimmed capture of a large trusted package's full
 -- packument (registry.npmjs.org/express), so the response-bound defaults can be
 -- proven not to false-positive on a legitimate large package.
+--
+-- bench/corpus/npm/*.json is the curated real-world packument corpus the benchmarks
+-- read at run time (pinned by bench/corpus/package.json, regenerated with
+-- `make gen-bench-corpus`; see docs/architecture/performance.md).
 extra-source-files:
+  bench/corpus/npm/*.json
   core/test/unit/fixtures/npm/*.json
   core/test/unit/fixtures/version-ordering.txt
 

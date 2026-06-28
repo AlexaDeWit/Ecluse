@@ -1,16 +1,25 @@
-{- | The realistic input corpus for the work-per-request benchmarks.
+{- | The input corpus for the work-per-request benchmarks.
 
-Two sources feed the benches:
+Two sources feed the benches, with distinct jobs:
 
-  * the committed npm fixtures under @core\/test\/unit\/fixtures\/npm\/@ — the same
-    real captures the unit suite decodes, including the large untrimmed
-    @express.full.json@ packument — located at runtime by the same package-root
-    relative path the suite uses (Cabal runs both from the package root); and
+  * a __curated real-world packument corpus__ ('corpus') — a pinned set of real npm
+    captures spanning the small (@is-odd@, @left-pad@) to heavy (@typescript@,
+    @\@types\/node@, an @aws-sdk@-class package) size\/shape spectrum, so the
+    work-per-request figures sample the real distribution of package sizes and shapes
+    rather than one anchor. The captures live under @bench\/corpus\/npm\/@ (plus the
+    pre-existing untrimmed @express@ anchor reused in place under
+    @core\/test\/unit\/fixtures\/npm\/@); they are sourced from pinned registry
+    captures kept fresh by Renovate and regenerated with @make gen-bench-corpus@ (see
+    @docs\/architecture\/performance.md@). Each retains its real heterogeneous shape —
+    varied dependency sets, @peerDependencies@\/@engines@\/@deprecated@, many
+    @dist-tags@, large per-version manifests — trimmed only of pure noise; and
 
   * a __synthetic packument generator__, 'syntheticPackumentValue', which builds an
     npm full-metadata document with an arbitrary number of versions so a bench can
     scale version count up to the order of @100k@ and a complexity assertion can fit
-    the curve.
+    the curve. It is retained __only__ for the complexity-scaling (O(n) fit) case — a
+    stress input, not a realistic one: its versions are structurally identical, so it
+    is deliberately degenerate where the real corpus is heterogeneous.
 
 The generator emits a genuine npm-shaped 'Value' — name, @dist-tags@, a @versions@
 object, @time@, and @maintainers@ — so it round-trips through the real wire decode
@@ -20,23 +29,28 @@ checked by the benchmark's own test cases (see @bench\/Main.hs@), so a malformed
 generator fails the run rather than silently benching a degenerate input.
 -}
 module Ecluse.Bench.Corpus (
-    -- * Committed fixtures
-    fixtureBytes,
-    expressBytes,
-    loadExpress,
-    expressPackageName,
+    -- * The curated real-world corpus
+    CorpusEntry (..),
+    CorpusTier (..),
+    corpus,
+    loadCorpus,
+    LoadedEntry,
+    withLoaded,
+    entryInfo,
+    entryName,
 
-    -- * Package identity
-    benchPackageText,
-    benchPackageName,
+    -- * Reading a committed fixture
+    fixtureBytes,
 
     -- * Inspecting a packument value
     versionKeysOf,
 
-    -- * Synthetic packument generator
+    -- * Synthetic packument generator (complexity-scaling only)
     syntheticPackumentValue,
     syntheticPackumentBytes,
     syntheticProxyBase,
+    benchPackageText,
+    benchPackageName,
 
     -- * Projecting into the agnostic core types
     projectInfo,
@@ -64,7 +78,7 @@ import Ecluse.Core.Package (
     mkPackageName,
     mkScope,
  )
-import Ecluse.Core.Registry.Npm.Project (Projection (Projected), parsePackageInfoFromValue)
+import Ecluse.Core.Registry.Npm.Project (Projection (NameMismatch, Projected), parsePackageInfoFromValue)
 import Ecluse.Core.Rules.Types (
     EvalContext (EvalContext),
     PrecededRule,
@@ -73,39 +87,115 @@ import Ecluse.Core.Rules.Types (
  )
 import Ecluse.Test.Package (validSha1, validSha512Sri)
 
-{- | Where the committed npm fixtures live, relative to the package root Cabal
-runs the benchmark from (the same path the unit suite reads them by).
--}
-fixtureRoot :: FilePath
-fixtureRoot = "core/test/unit/fixtures/npm/"
+-- ── the curated real-world corpus ──────────────────────────────────────────────
 
-{- | Read a committed npm fixture body by file name (under
-@core\/test\/unit\/fixtures\/npm\/@), as raw bytes.
+{- | A size\/shape tier for a corpus entry, ordering the corpus small-to-heavy and
+labelling the rendered benchmark groups so a reader can see where on the distribution
+a figure sits.
 -}
+data CorpusTier = Small | Medium | Large | Heavy
+    deriving stock (Eq, Show)
+
+{- | One curated real-world packument capture: the name the projection validates the
+capture against, the file it was captured to, and its size tier.
+-}
+data CorpusEntry = CorpusEntry
+    { ceLabel :: Text
+    -- ^ The package's display label (e.g. @"express"@ or @"\@types\/node"@).
+    , cePackage :: PackageName
+    -- ^ The requested name the projection validates the capture's self-reported name against.
+    , cePath :: FilePath
+    -- ^ The capture's path, relative to the package root Cabal runs the benchmark from.
+    , ceTier :: CorpusTier
+    -- ^ The entry's size\/shape tier.
+    }
+
+{- | Where the curated corpus captures live, relative to the package root Cabal runs
+the benchmark from (the same package-root-relative convention the unit suite reads its
+fixtures by).
+-}
+corpusRoot :: FilePath
+corpusRoot = "bench/corpus/npm/"
+
+{- | The curated corpus, ordered small-to-heavy. Every entry but @express@ is a pinned
+capture under @bench\/corpus\/npm\/@ (refreshed by @make gen-bench-corpus@); @express@
+is the pre-existing untrimmed anchor under @core\/test\/unit\/fixtures\/npm\/@, reused
+in place and shared with the unit suite.
+-}
+corpus :: [CorpusEntry]
+corpus =
+    [ entry Small "is-odd" (unscoped "is-odd") (corpusRoot <> "is-odd.full.json")
+    , entry Small "left-pad" (unscoped "left-pad") (corpusRoot <> "left-pad.full.json")
+    , entry Medium "lodash" (unscoped "lodash") (corpusRoot <> "lodash.full.json")
+    , entry Medium "request" (unscoped "request") (corpusRoot <> "request.full.json")
+    , entry Large "@babel/core" (scoped "babel" "core") (corpusRoot <> "babel-core.full.json")
+    , entry Large "express" (unscoped "express") "core/test/unit/fixtures/npm/express.full.json"
+    , entry Heavy "react" (unscoped "react") (corpusRoot <> "react.full.json")
+    , entry Heavy "typescript" (unscoped "typescript") (corpusRoot <> "typescript.full.json")
+    , entry Heavy "@aws-sdk/client-s3" (scoped "aws-sdk" "client-s3") (corpusRoot <> "aws-sdk-client-s3.full.json")
+    , entry Heavy "webpack" (unscoped "webpack") (corpusRoot <> "webpack.full.json")
+    , entry Heavy "@types/node" (scoped "types" "node") (corpusRoot <> "types-node.full.json")
+    ]
+  where
+    entry tier label name path = CorpusEntry{ceLabel = label, cePackage = name, cePath = path, ceTier = tier}
+    unscoped = mkPackageName Npm Nothing
+    scoped s = mkPackageName Npm (Just (mkScope s))
+
+-- | A corpus entry paired with its loaded raw bytes and decoded JSON 'Value'.
+type LoadedEntry = (CorpusEntry, ByteString, Value)
+
+{- | Load every corpus capture as its raw bytes and decoded 'Value', in 'corpus'
+order, for use as a benchmark @env@. Fails loudly if a capture is missing, does not
+decode, projects to zero versions, or self-reports a name that does not match its
+'cePackage' — so a corrupt or mis-pinned corpus stops the run rather than benching
+nothing. Returns just the loaded pairs (the entry metadata is the pure 'corpus', zipped
+back on by 'withLoaded') so the @env@ value needs no @NFData@ beyond the bytes and value.
+-}
+loadCorpus :: IO [(ByteString, Value)]
+loadCorpus = traverse loadOne corpus
+  where
+    loadOne :: CorpusEntry -> IO (ByteString, Value)
+    loadOne ce = do
+        raw <- fixtureBytes (cePath ce)
+        value <- either (failWith ce "did not decode") pure (Aeson.eitherDecodeStrict raw)
+        case parsePackageInfoFromValue (cePackage ce) value of
+            Right (Projected info)
+                | not (Map.null (infoVersions info)) -> pure (raw, value)
+                | otherwise -> fail (label ce <> " projected to zero versions")
+            Right (NameMismatch reported) -> fail (label ce <> " self-reports name " <> toString reported)
+            Left err -> failWith ce "did not project" (show err)
+
+    failWith :: CorpusEntry -> String -> String -> IO a
+    failWith ce what detail = fail (label ce <> " " <> what <> ": " <> detail)
+
+    label :: CorpusEntry -> String
+    label ce = "corpus capture " <> toString (ceLabel ce)
+
+{- | Pair the pure corpus metadata back onto the loaded bytes\/values, in order — the
+inverse of the split 'loadCorpus' performs so its @env@ value carries no 'PackageName'.
+-}
+withLoaded :: [(ByteString, Value)] -> [LoadedEntry]
+withLoaded = zipWith (\ce (raw, value) -> (ce, raw, value)) corpus
+
+-- | The projected 'PackageInfo' of a loaded corpus entry, against its requested name.
+entryInfo :: LoadedEntry -> PackageInfo
+entryInfo (ce, _, value) = projectInfo (cePackage ce) value
+
+-- | A loaded entry's benchmark name: its label tagged with its size tier.
+entryName :: LoadedEntry -> String
+entryName (ce, _, _) = toString (ceLabel ce) <> " (" <> tierName (ceTier ce) <> ")"
+  where
+    tierName = \case
+        Small -> "small"
+        Medium -> "medium"
+        Large -> "large"
+        Heavy -> "heavy"
+
+-- | Read a committed fixture body by its path relative to the package root, as raw bytes.
 fixtureBytes :: FilePath -> IO ByteString
-fixtureBytes name = readFileBS (fixtureRoot <> name)
+fixtureBytes = readFileBS
 
-{- | The real, untrimmed @express@ packument — a large legitimate packument
-(hundreds of versions) that anchors the realistic end of the corpus.
--}
-expressBytes :: IO ByteString
-expressBytes = fixtureBytes "express.full.json"
-
-{- | Load the @express@ packument as both its raw bytes and its decoded JSON
-'Value', for use as a benchmark @env@. Fails loudly if the committed fixture does
-not decode, so a corrupt corpus stops the run rather than benching nothing.
--}
-loadExpress :: IO (ByteString, Value)
-loadExpress = do
-    raw <- expressBytes
-    json <- either (fail . ("express fixture did not decode: " <>)) pure (Aeson.eitherDecodeStrict raw)
-    pure (raw, json)
-
-{- | The @express@ packument's own name, as an npm 'PackageName' — the requested
-name the projection benches match the fixture against.
--}
-expressPackageName :: PackageName
-expressPackageName = mkPackageName Npm Nothing "express"
+-- ── the synthetic generator (complexity-scaling only) ──────────────────────────
 
 {- | The package name the synthetic generator labels its document with. Chosen so
 every structural component is safe to interpolate into a rewritten tarball path
@@ -129,7 +219,9 @@ syntheticProxyBase = "https://ecluse.example"
 (@1.0.0@ .. @1.0.{n-1}@), each with a rewritable @dist.tarball@, a well-formed
 integrity digest, a small dependency set, and an install script — the fields the
 hot paths actually touch. The document is a faithful npm shape, so it decodes,
-projects, filters, and re-serialises exactly as a real packument would.
+projects, filters, and re-serialises exactly as a real packument would, but its
+versions are structurally identical: it is the complexity-scaling stress input, not a
+realistic one (the real distribution is 'corpus').
 
 @versionCount@ is expected to be positive; the benches only ever pass positive
 sizes.
@@ -212,7 +304,8 @@ syntheticPackumentBytes = encodeStrict . syntheticPackumentValue
 {- | Project a packument 'Value' into the agnostic 'PackageInfo' for the named
 package. A value that does not project (a tested-impossible case for the corpus
 here) yields the empty document for that name, so the function stays total without a
-partial 'error' — the benchmark's own generator tests guarantee a real projection.
+partial 'error' — the benchmark's own generator tests and 'loadCorpus' guarantee a
+real projection.
 -}
 projectInfo :: PackageName -> Value -> PackageInfo
 projectInfo name value = case parsePackageInfoFromValue name value of

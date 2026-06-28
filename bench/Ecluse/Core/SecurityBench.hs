@@ -3,9 +3,11 @@ the bounded body read that caps an upstream response, the JSON nesting-depth gua
 and the version-count guard — the cheap checks that protect the proxy from a hostile
 or oversized upstream document.
 
-The bounded read runs over a multi-megabyte body; the structural guards run over the
-realistic @express@ document and over a synthetic packument scaled toward @100k@
-versions, the size at which a guard that was accidentally super-linear would bite.
+The bounded read runs over a multi-megabyte body; the structural guards run over each
+corpus document (so the cost is reported across the real distribution) and over a
+synthetic packument scaled toward @100k@ versions, the size at which a guard that was
+accidentally super-linear would bite. The synthetic generator is retained __only__ for
+that stress case.
 -}
 module Ecluse.Core.SecurityBench (
     benchmarks,
@@ -14,9 +16,9 @@ module Ecluse.Core.SecurityBench (
 import Data.Aeson (Value)
 import Data.ByteString qualified as BS
 import Ecluse.Bench.Corpus (
-    expressPackageName,
-    loadExpress,
-    projectInfo,
+    LoadedEntry,
+    entryInfo,
+    entryName,
     syntheticPackageInfo,
     syntheticPackumentValue,
  )
@@ -31,18 +33,24 @@ import Ecluse.Core.Security (
 import Test.Tasty.Bench (Benchmark, bench, bgroup, env, whnf, whnfIO)
 
 -- | The bounded-read and structural-guard benches.
-benchmarks :: Benchmark
-benchmarks =
-    env loadExpress $ \ ~(_, json) ->
-        bgroup
-            "security guards"
-            [ env (pure bodyChunks) $ \chunks ->
+benchmarks :: [LoadedEntry] -> Benchmark
+benchmarks loaded =
+    bgroup
+        "security guards"
+        ( [ env (pure bodyChunks) $ \chunks ->
                 bench "boundedRead (8 MiB body, 64 KiB chunks)" (whnfIO (boundedReadDepth chunks))
-            , bench "checkNestingDepth (express)" (whnf nestingDepth json)
-            , bench "checkNestingDepth (synthetic / 100000)" (whnf nestingDepth (syntheticPackumentValue 100000))
-            , bench "checkVersionCount (express)" (whnf versionCountDepth (projectInfo expressPackageName json))
-            , bench "checkVersionCount (synthetic / 2000)" (whnf versionCountDepth (syntheticPackageInfo 2000))
-            ]
+          ]
+            <> [ bgroup
+                    (entryName le)
+                    [ bench "checkNestingDepth" (whnf nestingDepth value)
+                    , bench "checkVersionCount" (whnf versionCountDepth (entryInfo le))
+                    ]
+               | le@(_, _, value) <- loaded
+               ]
+            <> [ bench "checkNestingDepth (synthetic / 100000)" (whnf nestingDepth (syntheticPackumentValue 100000))
+               , bench "checkVersionCount (synthetic / 2000)" (whnf versionCountDepth (syntheticPackageInfo 2000))
+               ]
+        )
 
 {- | Drain a chunked body through 'boundedRead', forcing the assembled length (or an
 error code). A fresh cursor is built per run so each measured iteration reads the

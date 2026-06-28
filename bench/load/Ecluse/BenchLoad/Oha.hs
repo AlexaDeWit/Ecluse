@@ -17,11 +17,14 @@ throw, since that is a literal harness failure, the one red state the layer reco
 module Ecluse.BenchLoad.Oha (
     OhaReport (..),
     runOha,
+    runOhaUrls,
 ) where
 
 import Data.Aeson (FromJSON (parseJSON), eitherDecode, withObject, (.!=), (.:), (.:?))
 import Data.Map.Strict qualified as Map
+import GHC.IO.Handle (hClose)
 import System.Process.Typed (proc, readProcessStdout_)
+import UnliftIO.Temporary (withSystemTempFile)
 
 import Ecluse.BenchLoad.Error (benchFail)
 
@@ -82,7 +85,30 @@ failure. A merely degraded run (errors, non-2xx) parses cleanly and is returned 
 caller to report.
 -}
 runOha :: Int -> Int -> Text -> IO OhaReport
-runOha concurrency durationSeconds url = do
+runOha concurrency durationSeconds url =
+    runOhaArgs concurrency durationSeconds [toString url]
+
+{- | Drive @oha@ against a __weighted list of URLs__ at the given concurrency for the
+given number of seconds, returning its parsed report. The list is written to a
+temporary file and passed via @--urls-from-file@; @oha@ spreads requests across the
+file in proportion to each URL's multiplicity, so repeating a URL @w@ times gives it
+weight @w@ in the served mix — the mechanism the load harness uses to drive a realistic
+heavy-headed (Zipfian) package mix (a few hot packages, a long one-shot tail).
+
+The same literal-failure contract as 'runOha': throws if @oha@ cannot be started or
+its JSON does not parse, returns a degraded run for the caller to report.
+-}
+runOhaUrls :: Int -> Int -> [Text] -> IO OhaReport
+runOhaUrls concurrency durationSeconds urls =
+    withSystemTempFile "ecluse-bench-urls.txt" $ \path handle -> do
+        hClose handle
+        writeFileText path (unlines urls)
+        runOhaArgs concurrency durationSeconds ["--urls-from-file", path]
+
+-- Run oha with the common reporting flags plus the given target arguments (a single
+-- URL, or @--urls-from-file <path>@), and parse its JSON report.
+runOhaArgs :: Int -> Int -> [String] -> IO OhaReport
+runOhaArgs concurrency durationSeconds target = do
     raw <- readProcessStdout_ (proc "oha" args)
     either (\err -> benchFail ("oha report did not parse: " <> toText err)) pure (eitherDecode raw)
   where
@@ -95,5 +121,5 @@ runOha concurrency durationSeconds url = do
         , show concurrency
         , "-z"
         , show durationSeconds <> "s"
-        , toString url
         ]
+            <> target

@@ -178,6 +178,9 @@ coverage-unit: ## Fast, Docker-free unit-only coverage (a PARTIAL view; Codecov 
 gen-version-fixtures: ## Regenerate version-ordering fixtures from the reference tools (node-semver / packaging / Gem::Version)
 	$(NIX) bash scripts/gen-version-fixtures.sh
 
+gen-bench-corpus: ## Re-capture the real-world packument benchmark corpus from the pins in bench/corpus/package.json
+	$(NIX) bash scripts/gen-bench-corpus.sh
+
 # Create an isolated agent worktree on BRANCH and warm its HLS index in the
 # background (a `make build` populating dist-newstyle, which HLS reuses) so the
 # agent's first agent-lsp navigation call lands hot rather than a cold typecheck

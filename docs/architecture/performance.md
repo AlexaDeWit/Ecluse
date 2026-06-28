@@ -159,9 +159,12 @@ widest frames — those are where the time and allocations go.
 
 ## What is benched
 
-The Layer A benches cover the pure hot paths a metadata request exercises, each over
-the real `express` packument (hundreds of versions) and, where growth matters, over a
-synthetic packument scaled toward ~100k versions:
+The Layer A benches cover the pure hot paths a metadata request exercises, each
+**per package across the curated real-world corpus** (see
+[The real-world corpus](#the-real-world-corpus)) — so the work-per-request figures
+sample the real distribution of package sizes and shapes, small (`is-odd`) to heavy
+(`@types/node`), rather than one anchor — and, where growth matters, over a synthetic
+packument scaled toward ~100k versions for the complexity assertion only:
 
 | Hot path | Module | Scaled complexity assertion |
 |---|---|---|
@@ -173,10 +176,45 @@ synthetic packument scaled toward ~100k versions:
 | filter + URL rewrite + re-serialise + ETag | `Ecluse.Core.Registry.Npm.Filter` / `.Serve`, `Ecluse.Core.Server.Conditional` | linear in version count |
 | bounded read / nesting / version-count guards | `Ecluse.Core.Security` | — |
 
-The realistic input corpus reuses the committed npm fixtures under
-`core/test/unit/fixtures/npm/` (the same captures the unit suite decodes), and the
-synthetic generator's invariants are pinned by test cases that run as part of the
-benchmark, so a malformed corpus stops the run rather than benching a degenerate input.
+The corpus is loaded once and validated up front (a corrupt or mis-pinned capture stops
+the run before any benching), and the synthetic generator's invariants are pinned by test
+cases that run as part of the benchmark — so a malformed corpus or generator stops the
+run rather than benching a degenerate input.
+
+### The real-world corpus
+
+The M9 benches once ran on a thin, partly-synthetic corpus — one real anchor (`express`)
+plus a synthetic packument whose versions are structurally identical — which did **not**
+sample the heavy, heterogeneous tail (`typescript` / `react` / `@types/node` / `@babel/*`
+/ an `aws-sdk`-class package) that dominates the real-world cost. The corpus now spans
+that spectrum with **pinned real captures**:
+
+| Tier | Packages |
+|---|---|
+| small | `is-odd`, `left-pad` |
+| medium | `lodash`, `request` |
+| large | `@babel/core`, `express` |
+| heavy | `react`, `typescript`, `@aws-sdk/client-s3`, `webpack`, `@types/node` |
+
+- **Pinned and committed.** Each package is pinned by `package@version` in
+  `bench/corpus/package.json` and captured to `bench/corpus/npm/<pkg>.full.json`. The
+  pins are kept fresh by Renovate's npm manager exactly as the `test/oracles/`
+  version-ordering reference is (a bump is the signal to re-capture). `express` is the
+  pre-existing untrimmed anchor under `core/test/unit/fixtures/npm/`, reused in place and
+  shared with the unit suite — the one untrimmed capture.
+- **Trimmed for size, not shape.** `make gen-bench-corpus` re-captures from the pins: for
+  each package it keeps every **stable** release at or below the pin with its full
+  per-version manifest — the heterogeneous dependency / `peerDependencies` / `engines` /
+  `deprecated` / `scripts` / `dist` shape the hot paths read and re-serialise — and drops
+  only (a) the degenerate nightly/canary/dev **prerelease** versions (near-identical
+  day-to-day builds that are the bulk of `typescript`/`react`'s size and add no real
+  shape — the synthetic generator's degeneracy), and (b) pure-noise fields no hot path
+  reads (`readme`, npm operational internals). Capturing at or below the pin makes a
+  re-run reproduce the same fixture until Renovate moves a pin, so the dataset stays
+  deterministic and committed without silently drifting from what npm serves.
+- **Synthetic generator: stress only.** `syntheticPackumentValue` is retained **only**
+  for the complexity-scaling (O(n) curve fit) assertions — the version-count stress
+  input, not a realistic case. The realistic distribution is the corpus.
 
 ## Layer B — throughput & latency under load
 
@@ -214,9 +252,32 @@ residency, GC stats, and allocations per request.
 
 | Scenario | Shape | What it isolates |
 |---|---|---|
-| `merge-cold` | `GET /{pkg}` fanning to both upstreams → merge → rule-filter → URL-rewrite → ETag → re-serialise, **public cache disabled (TTL 0)** | the expensive headline path: the live private fetch, the cross-upstream merge, the rule sweep, and the re-serialise on every request (the public leg's fetch + decode is single-flight-amortised under concurrency, not per-request) |
-| `cached-public-hit` | the same `GET`, with the anonymous public origin served from the **warm metadata cache** | the cheap, common high-throughput path: the public fetch and decode are elided |
+| `merge-cold` | `GET /{pkg}` over the corpus mix fanning to both upstreams → merge → rule-filter → URL-rewrite → ETag → re-serialise, **public cache disabled (TTL 0)** | the expensive headline path: the live private fetch, the cross-upstream merge, the rule sweep, and the re-serialise on every request (the public leg's fetch + decode is single-flight-amortised under concurrency, not per-request) |
+| `cached-public-hit` | the same `GET` over the corpus mix, with the anonymous public origin served from the **warm metadata cache** | the cheap, common high-throughput path: the public fetch and decode are elided |
 | `worker-mirroring` | the mirror worker's `fetch → verify → publish → ack` loop, driven **in-process** (no HTTP surface) | the mirror hot path: an artifact fetch, an integrity recompute-and-verify, and a publish |
+
+#### The serve mix: a real-world corpus, heavy-headed
+
+The two packument scenarios serve the **curated real-world corpus**, not one synthetic
+payload. The public upstream serves each package's real captured packument by the
+requested name (the unscoped subset of the Layer A corpus — `is-odd`, `left-pad`,
+`lodash`, `request`, `express`, `react`, `typescript`, `webpack`; unscoped so the
+loopback stub's path-to-package mapping is unambiguous), and the private upstream serves a
+small disjoint overlay per package so every request still merges a genuine cross-upstream
+union.
+
+The load is driven over a **weighted mix** — `oha`'s `--urls-from-file`, each package's
+URL repeated by its weight — under a **heavy-headed (Zipfian) access pattern**: a few hot
+small utilities (`is-odd`, `left-pad`, …) head the distribution and the heavy packuments
+(`typescript`, `webpack`) sit in the **one-shot tail** at weight 1. This models the real
+serve mix — cheap-dominated steady state with rare heavy bursts — so the throughput and
+allocation figures reflect the common case while the heavy tail is still exercised: a
+heavy serve spikes the **peak-residency high-water mark** when it lands, which is exactly
+the large-packument-under-fan-out case the open memory-burst work (#417 / #418 / #419)
+needs measured. The project documents no prior access-pattern model, so this Zipfian
+weighting is the chosen default (it lives in `serveCorpus`, in `Ecluse.BenchLoad.Npm`).
+The worker scenario keeps its synthetic, payload-sized artifact (it mirrors a tarball,
+not a packument).
 
 A note on the cache scenarios. The default `passthrough` posture caches only the
 **anonymous public** origin; the trusted private origin is the per-client authority and
@@ -281,7 +342,10 @@ runner-sane defaults:
 | concurrency | `BENCH_LOAD_CONCURRENCY` | 50 |
 | duration (seconds) | `BENCH_LOAD_DURATION_SECONDS` | 30 |
 | injected upstream latency (ms) | `BENCH_LOAD_UPSTREAM_LATENCY_MS` | 5 |
-| payload size (bytes) | `BENCH_LOAD_PAYLOAD_BYTES` | 262144 |
+| worker artifact size (bytes) | `BENCH_LOAD_PAYLOAD_BYTES` | 262144 |
+
+The packument scenarios derive their payloads from the real-world corpus captures, so
+`BENCH_LOAD_PAYLOAD_BYTES` sizes only the worker scenario's synthetic artifact.
 
 ### Running it
 

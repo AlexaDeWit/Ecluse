@@ -20,11 +20,13 @@ import Data.Text qualified as T
 import Ecluse.Bench.Corpus (
     benchPackageName,
     benchPackageText,
+    loadCorpus,
     projectInfo,
     syntheticPackumentBytes,
     syntheticPackumentValue,
     syntheticProxyBase,
     versionKeysOf,
+    withLoaded,
  )
 import Ecluse.Core.MergeBench qualified as MergeBench
 import Ecluse.Core.Package (infoVersions)
@@ -41,17 +43,23 @@ import Test.Tasty.Bench (bgroup, defaultMain)
 import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
 
 main :: IO ()
-main =
+main = do
+    -- Load and decode the curated real-world corpus once, up front, before the
+    -- measured window — so the decode cost is excluded from every bench's timing and
+    -- a corrupt or mis-pinned capture stops the run before any benching (loadCorpus
+    -- fails loudly). Loaded eagerly rather than through a tasty 'env' resource, which
+    -- the tasty-bench reporters do not handle when mixed with the HUnit generator tests.
+    corpusEntries <- withLoaded <$> loadCorpus
     defaultMain
         [ bgroup
             "ecluse-core (work-per-request)"
-            [ WireBench.benchmarks
-            , VersionBench.benchmarks
-            , RouteBench.benchmarks
-            , RulesBench.benchmarks
-            , MergeBench.benchmarks
-            , ServeBench.benchmarks
-            , SecurityBench.benchmarks
+            [ RouteBench.benchmarks
+            , WireBench.benchmarks corpusEntries
+            , VersionBench.benchmarks corpusEntries
+            , RulesBench.benchmarks corpusEntries
+            , MergeBench.benchmarks corpusEntries
+            , ServeBench.benchmarks corpusEntries
+            , SecurityBench.benchmarks corpusEntries
             ]
         , generatorTests
         ]
