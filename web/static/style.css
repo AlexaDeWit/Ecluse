@@ -117,3 +117,7 @@ h3.threat { scroll-margin-top: 1rem; }
 .card:hover { border-color: var(--accent); }
 .card h3 { margin: 0 0 0.3rem; }
 .card p { margin: 0; color: var(--muted); font-size: 0.95rem; }
+/* Supplementary link beneath the card grid (e.g. the raw OpenAPI spec): a whole
+   card is an anchor, so an in-card inline link would nest <a> in <a>; this keeps
+   such links valid and reachable without breaking the card affordance. */
+.cards-note { margin: 0; color: var(--muted); font-size: 0.9rem; }
