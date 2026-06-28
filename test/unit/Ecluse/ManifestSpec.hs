@@ -4,6 +4,7 @@ import Data.Aeson (Value (Object), decode)
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.HashMap.Strict.InsOrd qualified as InsOrd
 import Data.HashSet.InsOrd qualified as InsOrdSet
+import Data.Text qualified as T
 
 import Autodocodec (eitherDecodeJSONViaCodec, encodeJSONViaCodec)
 import Data.OpenApi (
@@ -52,8 +53,16 @@ spec = do
             InsOrd.member errorEnvelopeSchemaName schemas `shouldBe` True
             InsOrd.member synthesizedPackumentSchemaName schemas `shouldBe` True
 
-        it "renders deterministically (byte-stable across runs)" $
-            renderManifest doc `shouldBe` renderManifest doc
+        it "emits top-level keys in sorted order (deterministic key ordering)" $ do
+            let rendered = decodeUtf8 (renderManifest doc) :: Text
+                topKeys = ["components", "info", "openapi", "paths", "servers", "tags"]
+                marker k = "\n  \"" <> k <> "\":"
+                offsetOf k = T.length (fst (T.breakOn (marker k) rendered))
+            -- every top-level key is present at the document root ...
+            all (\k -> marker k `T.isInfixOf` rendered) topKeys `shouldBe` True
+            -- ... and they appear in ascending order, so confCompare = compare is in
+            -- effect and the output does not depend on insertion order.
+            map offsetOf topKeys `shouldBe` sort (map offsetOf topKeys)
 
     describe "every Route constructor appears as an operation" $ do
         it "Packument -> GET /npm/{package}" $

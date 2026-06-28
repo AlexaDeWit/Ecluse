@@ -39,25 +39,31 @@ full rationale (a capability manifest, **not** a client-integration contract).
 > (`buildOpenApi :: ManifestSource -> OpenApi`) folding the closed `Route` over the
 > mounts; the owned `ErrorEnvelope` schema (one `autodocodec` codec → `aeson` + OpenAPI)
 > and the hand-written partial synthesized-packument `ToSchema`; the `openapi-gen`
-> executable (out of the library closure); the committed deterministic artifact at
-> **`openapi/openapi.json`**; and unit tests (`test/unit/Ecluse/ManifestSpec.hs`). The
-> Redoc render + `make site`/Pages publishing is **PR 2**; the drift controls
-> (`validateToJSON`, `Route`↔operation exhaustiveness, the `hspec-wai` live-status
-> contract, the CI golden-regen gate) are **S35 (PR 3)**. Status stays `not-started`
-> until PR 2 closes the render/publish half (the repo has no in-progress status value).
-> **Config-as-JSON-Schema is deferred**: the config decoders are strict hand-rolled
-> `aeson` (they reject unknown keys), and making them `autodocodec`-backed would change
-> that runtime decode behaviour — a design fork for its own PR rather than PR 1's
-> generation core.
+> generator **plus the `ecluse-manifest` internal sublibrary that holds the assembly**
+> (so the OpenAPI dependency tree stays out of the shipped `ecluse` app / `exe:ecluse`
+> proxy closure); the committed deterministic artifact at **`openapi/openapi.json`**;
+> and unit tests (`test/unit/Ecluse/ManifestSpec.hs`). The Redoc render + `make
+> site`/Pages publishing is **PR 2**; the drift controls (`validateToJSON`,
+> `Route`↔operation exhaustiveness, the `hspec-wai` live-status contract, the CI
+> golden-regen gate) are **S35 (PR 3)**. Status stays `not-started` until PR 2 closes
+> the render/publish half (the repo has no in-progress status value).
+> **Config-as-JSON-Schema is cut** (architect decision, recorded in the owned-schemas
+> AC): the manifest is config-agnostic, so the config model defines no `autodocodec`
+> codec and the strict hand-rolled config decoders are untouched.
 
 **Acceptance criteria.**
-- [ ] **Owned schemas via `autodocodec`.** The error/denial envelope (S11, via S12),
-  the **synthesized packument** (the served merged-and-filtered view — S14, over the
-  S06 wire type), and the config model (S03) define their JSON via `autodocodec`,
-  deriving `aeson` instances *and* the OpenAPI/JSON-Schema from one codec (no drift).
-  The synthesized packument is a **partial** schema: modelled known/transformed
-  fields + `additionalProperties: true` with the "relayed from upstream, private
-  wins" note. — _api-surface.md#the-synthesized-packument-schema--the-trust-boundary_
+- [ ] **Owned schemas.** The error/denial envelope (S11, via S12) is an owned
+  code-first type whose `aeson` instances *and* OpenAPI schema derive from one
+  `autodocodec` codec; the **synthesized packument** (the served merged-and-filtered
+  view — S14, over the S06 wire type) is a **partial, hand-written** schema: modelled
+  known/transformed fields + `additionalProperties: true` with the "relayed from
+  upstream, private wins" note. —
+  _api-surface.md#the-synthesized-packument-schema--the-trust-boundary_
+  - **Config-as-JSON-Schema is cut (architect decision):** the OpenAPI manifest is
+    **config-agnostic** — a config schema would be an orphan in `components.schemas`,
+    documenting no operation. If an operator config schema is ever wanted it is a
+    **separate artifact** (a hand-written `ToSchema`; the strict hand-rolled config
+    decoders stay untouched). The config model defines **no** `autodocodec` codec here.
 - [ ] **Paths derived from `Route` × mounts.** Operations are folded from the closed
   `Route` enumeration (`Ecluse.Core.Server.Route`) over the configured mounts; each
   mount contributes its per-ecosystem path template + support status. **`Search` is
@@ -82,18 +88,23 @@ full rationale (a capability manifest, **not** a client-integration contract).
   `pages.yml` workflow publishes it on push to `main` with the rest of the site.
 
 **File scope.**
-- `src/Ecluse/App/Manifest.hs` (app library) — assemble the `openapi3` document
-  (owned schemas + the `Route` × mount path fold) as a **pure** `Config -> OpenApi`
-  function. (Module name indicative; the exact home follows the `ecluse-core` /
-  `ecluse` split — the `Route` enumeration lives in `ecluse-core`, the config/mounts
-  in the app, so the assembly sits in the app library that composes both.) **No
+- `manifest/Ecluse/Manifest.hs` (the **`ecluse-manifest` internal sublibrary**) —
+  assemble the `openapi3` document (owned schemas + the `Route` × mount path fold) as a
+  **pure** `ManifestSource -> OpenApi` function. The sublibrary (the
+  `ecluse-test-support` pattern) carries the heavy OpenAPI dependency tree and is
+  depended on **only** by the generator and the unit test — **not** by the `ecluse`
+  app library, so `openapi3` never reaches the shipped proxy. It links `ecluse-core`
+  (the `Route` enumeration and the served types), not the app library. **No
   `/openapi.json` handler.**
-- `core/src/Ecluse/Core/Server/Response.hs`, the app config model, the npm served
-  view — *additive* `autodocodec` codecs for the owned types (no behaviour change to
-  existing decoders; keep npm **inbound** wire decoding lenient `aeson`).
-- `ecluse.cabal` — a `openapi-gen` executable component (the generator), kept out of
-  the library closure (cf the `ecluse-bench` / `bench-load` precedent).
-- `test/unit/Ecluse/App/ManifestSpec.hs` — the document validates; every `Route`
+- The owned error/denial envelope is a **new code-first type** in the sublibrary
+  (`ErrorEnvelope`, via one `autodocodec` codec). **No** `autodocodec` codecs are
+  added to `core/src/Ecluse/Core/Server/Response.hs`, the config model, or the npm
+  served view; npm **inbound** wire decoding stays lenient `aeson` and the renderer is
+  unchanged.
+- `ecluse.cabal` — the `ecluse-manifest` sublibrary plus an `openapi-gen` executable
+  (the generator), both kept out of the app-library closure (cf the `ecluse-bench` /
+  `bench-load` precedent and `ecluse-test-support`).
+- `test/unit/Ecluse/ManifestSpec.hs` — the document validates; every `Route`
   constructor × mount appears; `Search` carries `501`; `hedgehog` round-trips the
   owned codecs (conformance-by-construction in lieu of an external fuzzer). _No
   `hspec-wai` serving test for the manifest — it is not served._

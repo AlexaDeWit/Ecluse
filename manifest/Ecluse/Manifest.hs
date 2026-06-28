@@ -36,20 +36,22 @@ or the output would churn on per-deployment values.
 
 == Schema strategy
 
-The owned error envelope derives its @aeson@ instances /and/ its JSON schema from
-one @autodocodec@ codec, so the wire format and the documented schema cannot
-diverge. The synthesized packument is the exception: it is an /open/ schema
-(unlisted fields relayed unchanged from upstream), which has no clean codec
-representation, so it carries a hand-written partial schema. npm's /inbound/ wire
-decoding stays lenient hand-rolled @aeson@ ("Ecluse.Core.Registry.Npm.Wire") —
-@autodocodec@ is for what Écluse owns and emits, not for tolerantly parsing
-someone else's loose document.
+The owned error envelope is a code-first type: one @autodocodec@ codec backs both
+its @aeson@ instances and its OpenAPI schema, so the /documented/ schema is derived
+rather than hand-maintained. The codec backs the documented schema only — the
+denial body the server renders is shaped separately in
+"Ecluse.Core.Registry.Npm.Serve", and the two are expected to agree on the
+@{"error": …}@ shape (a behavioural correspondence, not one this codec enforces).
+The synthesized packument is a further exception: it is an /open/ schema (unlisted
+fields relayed unchanged from upstream), which has no clean codec representation, so
+it carries a hand-written partial schema. npm's /inbound/ wire decoding stays
+lenient hand-rolled @aeson@ ("Ecluse.Core.Registry.Npm.Wire") — @autodocodec@ is for
+what Écluse owns and emits, not for tolerantly parsing someone else's loose document.
 -}
 module Ecluse.Manifest (
     -- * Inputs
     ManifestSource (..),
     canonicalManifestSource,
-    manifestSourceFromConfig,
 
     -- * Assembly and rendering
     buildOpenApi,
@@ -67,7 +69,6 @@ import Data.Aeson (FromJSON, ToJSON)
 import Data.Aeson.Encode.Pretty qualified as Pretty
 import Data.HashMap.Strict.InsOrd qualified as InsOrd
 import Data.HashSet.InsOrd qualified as InsOrdSet
-import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 
 import Autodocodec (HasCodec (codec), object, requiredField, (.=))
@@ -103,7 +104,6 @@ import Data.OpenApi (
  )
 import Network.HTTP.Media (MediaType)
 
-import Ecluse.Config (Config (configEnv, configMounts), EnvConfig (cfgPublicUrl), unUrl)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI, RubyGems), ecosystemName, prefixFor)
 import Ecluse.Core.Package (PackageName, mkPackageName)
 import Ecluse.Core.Server.Route (Filename (Filename), Route (Packument, Ping, Publish, Search, Tarball, Unsupported))
@@ -115,10 +115,9 @@ import Ecluse.Core.Version (Version, mkVersion)
 externally-reachable base URL (the @servers@ entry artifact URLs resolve against)
 and the mounted ecosystems (the manifest's tags and per-mount path grammars).
 
-It is a small projection of the full 'Config' on purpose — the manifest depends
-only on the base URL and the set of mounts, not on credentials, upstreams, or
-policy — so the assembly stays a total, deterministic function of a value that is
-trivial to fix for the generator.
+It is deliberately a narrow value — the base URL and the set of mounts, not the
+proxy's credentials, upstreams, or policy — so the assembly stays a total,
+deterministic function of something trivial to fix for the generator.
 -}
 data ManifestSource = ManifestSource
     { manifestBaseUrl :: Text
@@ -138,19 +137,6 @@ canonicalManifestSource =
     ManifestSource
         { manifestBaseUrl = "https://registry.ecluse.example"
         , manifestEcosystems = Npm :| []
-        }
-
-{- | Project a live 'Config' onto a 'ManifestSource' — the base URL from the
-configured public URL (a path-relative @\/@ when none is set) and the ecosystems
-from the configured mounts. Provided so the manifest can be derived from a real
-configuration; the published artifact is generated from 'canonicalManifestSource'
-instead, to keep it deterministic.
--}
-manifestSourceFromConfig :: Config -> ManifestSource
-manifestSourceFromConfig cfg =
-    ManifestSource
-        { manifestBaseUrl = maybe "/" unUrl (cfgPublicUrl (configEnv cfg))
-        , manifestEcosystems = fromMaybe (Npm :| []) (nonEmpty (Map.keys (configMounts cfg)))
         }
 
 -- ── assembly ─────────────────────────────────────────────────────────────────
@@ -427,11 +413,16 @@ synthRef = Ref (Reference synthesizedPackumentSchemaName)
 
 -- ── owned error envelope (autodocodec) ───────────────────────────────────────
 
-{- | The client-facing error\/denial body Écluse emits: a single @error@ string
-carrying the human-facing reason. The @aeson@ encoding and the OpenAPI schema are
-both derived from one @autodocodec@ codec, so the documented schema cannot diverge
-from the encoded shape. Each mount renders the same shape for its denials (npm's
-@{"error": …}@ object lives in "Ecluse.Core.Registry.Npm.Serve").
+{- | The owned model of the client-facing error\/denial body: a single @error@
+string carrying the human-facing reason. One @autodocodec@ codec backs both this
+type's @aeson@ instances and its OpenAPI schema, so the /documented/ schema is
+code-first.
+
+This type backs the manifest's documented schema only. The denial body the server
+actually emits is shaped independently by each mount's renderer (npm's
+@{"error": …}@ object lives in "Ecluse.Core.Registry.Npm.Serve"); that the rendered
+body matches this documented shape is a behavioural correspondence, not an invariant
+this codec enforces.
 -}
 newtype ErrorEnvelope = ErrorEnvelope
     { errorEnvelopeError :: Text
@@ -445,7 +436,7 @@ instance HasCodec ErrorEnvelope where
     codec =
         object "ErrorEnvelope" $
             ErrorEnvelope
-                <$> requiredField "error" "the human-facing reason the request was refused" .= errorEnvelopeError
+                <$> requiredField "error" "The human-facing reason the request was refused." .= errorEnvelopeError
 
 -- | The @components.schemas@ name the error envelope is registered under.
 errorEnvelopeSchemaName :: Text

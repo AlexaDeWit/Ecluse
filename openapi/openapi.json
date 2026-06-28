@@ -4,7 +4,7 @@
       "ErrorEnvelope": {
         "properties": {
           "error": {
-            "description": "the human-facing reason the request was refused",
+            "description": "The human-facing reason the request was refused.",
             "type": "string"
           }
         },
