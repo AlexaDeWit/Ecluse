@@ -71,21 +71,23 @@ import Numeric (showFFloat)
 import System.Mem (performMajorGC)
 
 import Ecluse.BenchLoad.Error (benchFail)
-import Ecluse.BenchLoad.Oha (OhaReport (..), runOha)
+import Ecluse.BenchLoad.Oha (OhaReport (..), runOha, runOhaUrls)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 
 -- ── load knobs ─────────────────────────────────────────────────────────────────
 
 {- | The tunables every scenario shares: the load the generator applies (concurrency,
 duration) and the shape of the upstream it applies it to (injected per-upstream latency
-and the canned payload size). The latency and payload are consumed by a scenario's
+and the artifact payload size). The latency and payload are consumed by a scenario's
 ecosystem-specific setup ('scenarioBoot'); the concurrency and duration are consumed by
-the harness when it drives the load.
+the harness when it drives the load. The npm packument scenarios derive their payloads
+from the real-world corpus (see "Ecluse.BenchLoad.Npm"), so 'lkPayloadBytes' sizes only
+the worker scenario's synthetic artifact.
 
-The defaults model a realistic cache-miss on a chunky package; override them through the
-environment ('loadKnobsFromEnv') to probe a different operating point. Absolutes are
-runner-dependent and noisy (decision D2) — the work-normalised counters (allocations per
-request) are the cross-runner-stable signal.
+The defaults model a realistic operating point; override them through the environment
+('loadKnobsFromEnv') to probe a different one. Absolutes are runner-dependent and noisy
+(decision D2) — the work-normalised counters (allocations per request) are the
+cross-runner-stable signal.
 -}
 data LoadKnobs = LoadKnobs
     { lkConcurrency :: Int
@@ -95,14 +97,30 @@ data LoadKnobs = LoadKnobs
     , lkUpstreamLatencyMicros :: Int
     -- ^ Latency a stub upstream injects before responding, modelling a real network hop.
     , lkPayloadBytes :: Int
-    -- ^ Approximate size of the canned upstream payload (a packument body, or an artifact).
+    {- ^ Approximate size of the worker scenario's synthetic artifact. The packument
+    scenarios serve the real-world corpus, so their payloads come from the captures, not
+    from this knob.
+    -}
+    , lkCacheMaxEntries :: Int
+    {- ^ Metadata-cache entry bound for the cache-eviction scenario. Set below the working
+    set so the cache cannot hold it all and continually evicts and re-derives; the
+    fits-in-cache baseline scenario instead bounds at the working-set size.
+    -}
+    , lkWorkingSet :: Int
+    {- ^ Number of distinct large packages in the cache-eviction working set (taken from
+    the head of the corpus, heaviest first). The default exceeds the corpus, so the whole
+    corpus is the working set unless narrowed.
+    -}
     }
     deriving stock (Eq, Show)
 
 {- | The default operating point: 50 concurrent clients for 30 seconds against an
-upstream with a 5 ms injected latency serving a ~256 KiB payload — a realistic chunky
-cache-miss. Sane for a shared runner: enough load to saturate the proxy without a load
-the generator itself cannot sustain.
+upstream with a 5 ms injected latency. The packument scenarios serve the real-world
+corpus (their payloads come from the captures); the ~256 KiB payload sizes the worker
+scenario's synthetic artifact. The cache-eviction scenario bounds the cache at 3 entries
+against the whole-corpus working set (default 64, capped to the corpus), so it evicts.
+Sane for a shared runner: enough load to saturate the proxy without a load the generator
+itself cannot sustain.
 -}
 defaultLoadKnobs :: LoadKnobs
 defaultLoadKnobs =
@@ -111,13 +129,16 @@ defaultLoadKnobs =
         , lkDurationSeconds = 30
         , lkUpstreamLatencyMicros = 5_000
         , lkPayloadBytes = 256 * 1024
+        , lkCacheMaxEntries = 3
+        , lkWorkingSet = 64
         }
 
 {- | Read the load knobs from the environment, each falling back to its
 'defaultLoadKnobs' value: @BENCH_LOAD_CONCURRENCY@, @BENCH_LOAD_DURATION_SECONDS@,
 @BENCH_LOAD_UPSTREAM_LATENCY_MS@ (milliseconds, converted to the microseconds the stub
-delays by), and @BENCH_LOAD_PAYLOAD_BYTES@. A malformed value falls back to the default
-rather than failing, since the knobs only shape an inform-only measurement.
+delays by), @BENCH_LOAD_PAYLOAD_BYTES@, @BENCH_LOAD_CACHE_MAX_ENTRIES@, and
+@BENCH_LOAD_WORKING_SET@. A malformed value falls back to the default rather than
+failing, since the knobs only shape an inform-only measurement.
 -}
 loadKnobsFromEnv :: IO LoadKnobs
 loadKnobsFromEnv = do
@@ -125,12 +146,16 @@ loadKnobsFromEnv = do
     duration <- readEnvInt "BENCH_LOAD_DURATION_SECONDS" (lkDurationSeconds defaultLoadKnobs)
     latencyMs <- readEnvInt "BENCH_LOAD_UPSTREAM_LATENCY_MS" (lkUpstreamLatencyMicros defaultLoadKnobs `div` 1_000)
     payload <- readEnvInt "BENCH_LOAD_PAYLOAD_BYTES" (lkPayloadBytes defaultLoadKnobs)
+    cacheMax <- readEnvInt "BENCH_LOAD_CACHE_MAX_ENTRIES" (lkCacheMaxEntries defaultLoadKnobs)
+    workingSetSize <- readEnvInt "BENCH_LOAD_WORKING_SET" (lkWorkingSet defaultLoadKnobs)
     pure
         LoadKnobs
             { lkConcurrency = max 1 concurrency
             , lkDurationSeconds = max 1 duration
             , lkUpstreamLatencyMicros = max 0 latencyMs * 1_000
             , lkPayloadBytes = max 1 payload
+            , lkCacheMaxEntries = max 1 cacheMax
+            , lkWorkingSet = max 1 workingSetSize
             }
   where
     readEnvInt :: String -> Int -> IO Int
@@ -178,6 +203,12 @@ data Driver
       and duration.
       -}
       DriveHttp Text
+    | {- | Drive a __weighted list of URLs__ with @oha@ (the proxy is up): @oha@ spreads
+      requests across the list in proportion to each URL's multiplicity, so a hot
+      package repeated many times and a heavy one listed once realise a heavy-headed
+      (Zipfian) serve mix. The harness owns the concurrency and duration.
+      -}
+      DriveHttpUrls [Text]
     | {- | Run the in-process load for the configured duration, returning each completed
       unit's latency in seconds. The harness wraps the RTS capture around the call and
       computes the throughput and percentiles from the timings.
@@ -300,6 +331,7 @@ measure knobs scenario driver = do
 warmUp :: Driver -> IO ()
 warmUp = \case
     DriveHttp url -> void (runOha 8 warmupSeconds url)
+    DriveHttpUrls urls -> void (runOhaUrls 8 warmupSeconds urls)
     DriveInProcess _ -> pass
   where
     warmupSeconds :: Int
@@ -310,11 +342,8 @@ warmUp = \case
 -- distribution note.
 drive :: LoadKnobs -> Driver -> IO (Int, Double, Double, (Maybe Double, Maybe Double, Maybe Double, Maybe Double), Text)
 drive knobs = \case
-    DriveHttp url -> do
-        report <- runOha (lkConcurrency knobs) (lkDurationSeconds knobs) url
-        let requests = sum (Map.elems (ohaStatusCounts report))
-            percentilesMs = (toMs (ohaP50 report), toMs (ohaP90 report), toMs (ohaP99 report), toMs (ohaP999 report))
-        pure (requests, ohaRequestsPerSec report, ohaSuccessRate report, percentilesMs, distributionNote report)
+    DriveHttp url -> fromOha <$> runOha (lkConcurrency knobs) (lkDurationSeconds knobs) url
+    DriveHttpUrls urls -> fromOha <$> runOhaUrls (lkConcurrency knobs) (lkDurationSeconds knobs) urls
     DriveInProcess act -> do
         start <- getMonotonicTime
         latencies <- act
@@ -331,6 +360,17 @@ drive knobs = \case
             , "in-process worker loop (no HTTP surface)"
             )
   where
+    -- Project an oha report into the figures the RTS capture is paired with; shared by
+    -- the single-URL and weighted-URL-list HTTP drivers.
+    fromOha :: OhaReport -> (Int, Double, Double, (Maybe Double, Maybe Double, Maybe Double, Maybe Double), Text)
+    fromOha report =
+        ( sum (Map.elems (ohaStatusCounts report))
+        , ohaRequestsPerSec report
+        , ohaSuccessRate report
+        , (toMs (ohaP50 report), toMs (ohaP90 report), toMs (ohaP99 report), toMs (ohaP999 report))
+        , distributionNote report
+        )
+
     toMs :: Maybe Double -> Maybe Double
     toMs = fmap (* 1_000)
 
@@ -378,9 +418,13 @@ renderReports knobs ecosystem reports =
             <> show (lkDurationSeconds knobs)
             <> "s · "
             <> fmt1 (fromIntegral (lkUpstreamLatencyMicros knobs) / 1_000)
-            <> " ms injected upstream latency · ~"
+            <> " ms injected upstream latency · packument scenarios serve the real-world corpus · cache-eviction bound "
+            <> show (lkCacheMaxEntries knobs)
+            <> " entries over a working set of up to "
+            <> show (lkWorkingSet knobs)
+            <> " · ~"
             <> fmtKiB (lkPayloadBytes knobs)
-            <> " payload."
+            <> " worker artifact."
         , ""
         ]
             <> concatMap renderScenario reports

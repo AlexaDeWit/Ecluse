@@ -159,9 +159,12 @@ widest frames — those are where the time and allocations go.
 
 ## What is benched
 
-The Layer A benches cover the pure hot paths a metadata request exercises, each over
-the real `express` packument (hundreds of versions) and, where growth matters, over a
-synthetic packument scaled toward ~100k versions:
+The Layer A benches cover the pure hot paths a metadata request exercises, each
+**per package across the curated real-world corpus** (see
+[The real-world corpus](#the-real-world-corpus)) — so the work-per-request figures
+sample the real distribution of package sizes and shapes, small (`is-odd`) to heavy
+(`@types/node`), rather than one anchor — and, where growth matters, over a synthetic
+packument scaled toward ~100k versions for the complexity assertion only:
 
 | Hot path | Module | Scaled complexity assertion |
 |---|---|---|
@@ -173,10 +176,49 @@ synthetic packument scaled toward ~100k versions:
 | filter + URL rewrite + re-serialise + ETag | `Ecluse.Core.Registry.Npm.Filter` / `.Serve`, `Ecluse.Core.Server.Conditional` | linear in version count |
 | bounded read / nesting / version-count guards | `Ecluse.Core.Security` | — |
 
-The realistic input corpus reuses the committed npm fixtures under
-`core/test/unit/fixtures/npm/` (the same captures the unit suite decodes), and the
-synthetic generator's invariants are pinned by test cases that run as part of the
-benchmark, so a malformed corpus stops the run rather than benching a degenerate input.
+The corpus is loaded once and validated up front (a corrupt or mis-pinned capture stops
+the run before any benching), and the synthetic generator's invariants are pinned by test
+cases that run as part of the benchmark — so a malformed corpus or generator stops the
+run rather than benching a degenerate input.
+
+### The real-world corpus
+
+The M9 benches once ran on a thin, partly-synthetic corpus — one real anchor (`express`)
+plus a synthetic packument whose versions are structurally identical — which did **not**
+sample the heavy, heterogeneous tail (`typescript` / `react` / `@types/node` / `@babel/*`
+/ an `aws-sdk`-class package) that dominates the real-world cost. The corpus now spans
+that spectrum with **pinned real captures** of substantial, many-version packages.
+Trivial few-version packages stress nothing — neither the hot paths nor the metadata
+cache — so they are **deliberately excluded**; the corpus leans large.
+
+| Tier | Packages (versions) |
+|---|---|
+| medium | `lodash` (113), `request` (126) |
+| large | `@babel/core` (161), `express` (anchor), `react` (135), `typescript` (168) |
+| heavy | `@aws-sdk/client-s3` (668), `webpack` (569), `@types/node` (2339) |
+
+- **Pinned and committed — frozen data.** Each package is pinned by `package@version` in
+  `bench/corpus/pins.json` (a plain data file, **not** an npm project) and captured to
+  `bench/corpus/npm/<pkg>.full.json`. The captures are **frozen benchmark data, not a
+  dependency**: Renovate ignores `bench/corpus/**`, and refresh is a **deliberate, manual
+  re-capture** — edit a pin and rerun `make gen-bench-corpus`, then review the diff —
+  never an automatic bump. (`test/oracles/`, which tracks the node-semver *reference
+  implementation*, is a different case and stays Renovate-managed.) `express` is the
+  pre-existing untrimmed anchor under `core/test/unit/fixtures/npm/`, reused in place and
+  shared with the unit suite — the one untrimmed capture.
+- **Trimmed for size, not shape.** `make gen-bench-corpus` re-captures from the pins: for
+  each package it keeps every **stable** release at or below the pin with its full
+  per-version manifest — the heterogeneous dependency / `peerDependencies` / `engines` /
+  `deprecated` / `scripts` / `dist` shape the hot paths read and re-serialise — and drops
+  only (a) the degenerate nightly/canary/dev **prerelease** versions (near-identical
+  day-to-day builds that are the bulk of `typescript`/`react`'s size and add no real
+  shape — the synthetic generator's degeneracy), and (b) pure-noise fields no hot path
+  reads (`readme`, npm operational internals). Capturing at or below the pin makes a
+  re-run reproduce the same fixture until a pin is deliberately changed, so the dataset
+  stays deterministic and committed without silently drifting from what npm serves.
+- **Synthetic generator: stress only.** `syntheticPackumentValue` is retained **only**
+  for the complexity-scaling (O(n) curve fit) assertions — the version-count stress
+  input, not a realistic case. The realistic distribution is the corpus.
 
 ## Layer B — throughput & latency under load
 
@@ -207,23 +249,67 @@ comparison is by hand.
 > process high-water mark that also spans the warm-up; the allocation and GC figures are
 > before/after deltas over the measured window only.
 
-### The three scenarios
+### The scenarios
 
 Each scenario reports throughput, the p50/p90/p99/p99.9 latency distribution, peak
 residency, GC stats, and allocations per request.
 
 | Scenario | Shape | What it isolates |
 |---|---|---|
-| `merge-cold` | `GET /{pkg}` fanning to both upstreams → merge → rule-filter → URL-rewrite → ETag → re-serialise, **public cache disabled (TTL 0)** | the expensive headline path: the live private fetch, the cross-upstream merge, the rule sweep, and the re-serialise on every request (the public leg's fetch + decode is single-flight-amortised under concurrency, not per-request) |
-| `cached-public-hit` | the same `GET`, with the anonymous public origin served from the **warm metadata cache** | the cheap, common high-throughput path: the public fetch and decode are elided |
+| `merge-cold` | `GET /{pkg}` over the large-emphasis corpus mix fanning to both upstreams → merge → rule-filter → URL-rewrite → ETag → re-serialise, **public cache disabled (TTL 0)** | the expensive headline path: the live private fetch, the cross-upstream merge, the rule sweep, and the re-serialise on every request (the public leg's fetch + decode is single-flight-amortised under concurrency, not per-request) |
+| `cached-public-hit` | the same `GET` over the corpus mix, with the anonymous public origin served from the **warm metadata cache** (bound holds the whole set) | the cheap, common high-throughput path: the public fetch and decode are elided |
+| `cache-fits-large` | a **uniform** working set of large packuments, **TTL > 0**, cache bound **≥ working set** | the eviction-comparison baseline: after warm-up every entry stays resident, served warm with no re-derivation |
+| `cache-evicts-large` | the **same** uniform large working set, **TTL > 0**, cache bound **< working set** | **cache eviction under large datasets**: continual eviction + re-derivation — throughput/latency under churn, the alloc/request of re-deriving each evicted large packument, residency bounded by the bound |
 | `worker-mirroring` | the mirror worker's `fetch → verify → publish → ack` loop, driven **in-process** (no HTTP surface) | the mirror hot path: an artifact fetch, an integrity recompute-and-verify, and a publish |
+
+#### The serve mix: a real-world corpus, large-emphasis
+
+The packument scenarios serve the **curated real-world corpus**, not one synthetic
+payload. The public upstream serves each package's real captured packument by the
+requested name (the full Layer A corpus, scoped packages included — the stub recovers
+`@scope/name` from the request path); the private upstream serves a small disjoint overlay
+per package so every request still merges a genuine cross-upstream union.
+
+The `merge-cold` and `cached-public-hit` scenarios drive a **weighted mix** (`oha`'s
+`--urls-from-file`, each package's URL repeated by its weight) with the **large,
+many-version packuments as the primary drivers** — the heavy captures (`@types/node`,
+`webpack`, `@aws-sdk/client-s3`, …) carry the most weight, since trivial packages stress
+nothing. This is a deliberate stress emphasis, not a traffic-realism model. The project
+documents no prior access-pattern model, so the weighting is the chosen default (it lives
+in `serveCorpus`, in `Ecluse.BenchLoad.Npm`). The worker scenario keeps its synthetic,
+payload-sized artifact (it mirrors a tarball, not a packument).
+
+#### Cache eviction under large datasets
+
+The metadata cache (`Ecluse.Core.Server.Cache`) is size-bounded by `cacheMaxEntries`
+(default 1024) and holds a parsed `PackageInfo` + raw `Value` per `(Source, PackageName)`.
+A working set of large packuments larger than the bound forces continual eviction and
+re-derivation — the cost trivial packages never expose. Two paired scenarios isolate it,
+serving the **same uniform working set** of large packuments at **TTL > 0** (so entries
+are removed by eviction, not expiry), differing only in the bound:
+
+- `cache-fits-large` bounds at the working-set size — everything stays resident, served
+  warm: the **fits-in-cache** baseline (low alloc/request; residency ≈ the whole working
+  set held at once).
+- `cache-evicts-large` bounds **below** the working set — the cache cannot hold it all and
+  continually evicts and re-derives (re-fetch + decode + project) each evicted large
+  packument on its next request: higher alloc/request and GC churn, lower throughput, and
+  a residency bounded by the bound (plus the transient re-derivation, which — because the
+  warm-up touches the whole set — keeps the peak high-water mark near the fits baseline;
+  the alloc/request and GC deltas are the cleaner eviction-cost signal).
+
+Reading the two side by side isolates the eviction cost. Both the bound and the working
+set are knobs (`BENCH_LOAD_CACHE_MAX_ENTRIES`, `BENCH_LOAD_WORKING_SET`), so a
+fits-vs-exceeds sweep is a knob change. The whole comparison runs over the committed
+fixtures, so it stays deterministic.
 
 A note on the cache scenarios. The default `passthrough` posture caches only the
 **anonymous public** origin; the trusted private origin is the per-client authority and
 is fetched per request, never cached (see
-[Registry Model](registry-model.md) and `Ecluse.Core.Server.Pipeline`). So the two
-packument scenarios differ in the cache TTL: `merge-cold` uses a zero TTL, while
-`cached-public-hit` uses a long TTL and a warm-up pass.
+[Registry Model](registry-model.md) and `Ecluse.Core.Server.Pipeline`). So the packument
+scenarios differ in the cache TTL and bound: `merge-cold` uses a zero TTL (cache off),
+`cached-public-hit` a long TTL with a bound holding the whole set, and the two
+`cache-*-large` scenarios a long TTL with the bound at or below the working set (above).
 
 A zero TTL does **not** make the public fetch+decode a per-request cost, though. The
 public leg resolves through the cache's **single-flight** path (`resolveMetadata`): even
@@ -273,7 +359,7 @@ npm is the first and only instance (`Ecluse.BenchLoad.Npm`). Adding PyPI is "wri
 
 ### Load knobs
 
-The operating point is set by four knobs, each overridable through the environment, with
+The operating point is set by these knobs, each overridable through the environment, with
 runner-sane defaults:
 
 | Knob | Environment variable | Default |
@@ -281,7 +367,15 @@ runner-sane defaults:
 | concurrency | `BENCH_LOAD_CONCURRENCY` | 50 |
 | duration (seconds) | `BENCH_LOAD_DURATION_SECONDS` | 30 |
 | injected upstream latency (ms) | `BENCH_LOAD_UPSTREAM_LATENCY_MS` | 5 |
-| payload size (bytes) | `BENCH_LOAD_PAYLOAD_BYTES` | 262144 |
+| worker artifact size (bytes) | `BENCH_LOAD_PAYLOAD_BYTES` | 262144 |
+| cache-eviction bound (entries) | `BENCH_LOAD_CACHE_MAX_ENTRIES` | 3 |
+| cache-eviction working set | `BENCH_LOAD_WORKING_SET` | 64 (capped to the corpus) |
+
+The packument scenarios derive their payloads from the real-world corpus captures, so
+`BENCH_LOAD_PAYLOAD_BYTES` sizes only the worker scenario's synthetic artifact.
+`BENCH_LOAD_CACHE_MAX_ENTRIES` is the bound for `cache-evicts-large` (set it `≥` the
+working set to turn that scenario into a second fits run); `BENCH_LOAD_WORKING_SET` caps
+how many of the (heaviest-first) corpus packages the two `cache-*-large` scenarios cycle.
 
 ### Running it
 

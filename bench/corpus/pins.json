@@ -1,0 +1,13 @@
+{
+  "_note": "Frozen benchmark-corpus pins — NOT an npm project, NOT installed, and NOT Renovate-managed (Renovate ignores bench/corpus/**). Each entry pins a package@version; `make gen-bench-corpus` captures that packument into bench/corpus/npm/<pkg>.full.json. The captures are committed, frozen data; refresh is a deliberate, manual re-capture (rerun the script and review the diff), never an automatic bump. The set is substantial, many-version packages spanning medium->heavy (trivial few-version packages stress nothing, so they are excluded). See docs/architecture/performance.md.",
+  "pins": {
+    "lodash": "4.18.1",
+    "request": "2.88.2",
+    "@babel/core": "8.0.1",
+    "react": "19.2.7",
+    "typescript": "6.0.3",
+    "@aws-sdk/client-s3": "3.1075.0",
+    "webpack": "5.108.1",
+    "@types/node": "26.0.1"
+  }
+}
