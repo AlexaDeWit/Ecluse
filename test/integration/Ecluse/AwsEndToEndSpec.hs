@@ -45,6 +45,7 @@ import Ecluse.Integration.Ministack (
  )
 import Ecluse.Server (MountBinding (..), application, mkServerConfig)
 import Ecluse.Telemetry (telemetryDisabled)
+import Ecluse.Test.Worker (admitAllPolicies)
 
 {- | The whole AWS-backed path through the __real composition root__, end to end: an
 in-process Écluse — the real 'Ecluse.Server.application' serve path and the real
@@ -344,7 +345,7 @@ against a condition-poller ('race_'); a hard timeout bounds the whole thing so a
 test cannot hang. -}
 runLoopUntil :: Env -> IO Bool -> IO ()
 runLoopUntil env done =
-    void $ timeout loopHardTimeout $ race_ (runWorker env) (waitFor done)
+    void $ timeout loopHardTimeout $ race_ (runWorker admitAllPolicies env) (waitFor done)
 
 -- A generous hard ceiling, far above a healthy fetch → verify → publish cycle even
 -- under @-fhpc@ instrumentation, so it only ever fires on a genuine hang.

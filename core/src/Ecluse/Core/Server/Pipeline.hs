@@ -201,8 +201,10 @@ import Ecluse.Core.Queue (
  )
 import Ecluse.Core.Registry (UrlFormationError)
 import Ecluse.Core.Registry.Metadata (
-    MetadataClient (fetchFullManifest, fetchVersionMetadata),
+    MetadataClient (fetchFullManifest),
     MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable),
+    VersionEvaluation (VersionMetadataUnavailable, VersionMissing, VersionPresent),
+    fetchVersionDetails,
  )
 import Ecluse.Core.Registry.Npm (
     NpmClientConfig (..),
@@ -1327,15 +1329,13 @@ fail-closes to an 'Unavailable' @503@\/@500@. -}
 gatePublicVersion :: ServeRuntime -> PackumentDeps -> PackageName -> Version -> Text -> Handler PublicArtifactGate
 gatePublicVersion rt deps name version file = do
     evalCtx <- liftIO (EvalContext <$> pdNow deps)
-    resolved <-
-        tryAny $
-            withPublicMetadataClient (pdLimits deps) rt (pdPublicBaseUrl deps) $ \client ->
-                fetchVersionMetadata client name version
-    case resolved of
-        Left _ -> pure (Refused upstreamUnavailable)
-        Right (Left _) -> pure (Refused upstreamUnavailable)
-        Right (Right Nothing) -> pure (Refused versionAbsent)
-        Right (Right (Just details)) ->
+    eval <-
+        withPublicMetadataClient (pdLimits deps) rt (pdPublicBaseUrl deps) $ \client ->
+            liftIO (fetchVersionDetails client name version)
+    case eval of
+        VersionMetadataUnavailable -> pure (Refused upstreamUnavailable)
+        VersionMissing -> pure (Refused versionAbsent)
+        VersionPresent details ->
             -- The rule-eval domain span wraps the actual decision (only reached once
             -- the version exists), recording the verdict so a denial → 403 is
             -- explainable from the trace; the upstream-outage and version-absent

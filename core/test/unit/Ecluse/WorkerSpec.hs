@@ -5,6 +5,7 @@ import Data.Aeson (Key, Value (Object, String), eitherDecodeStrict')
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteArray.Encoding (Base (Base16, Base64), convertToBase)
 import Data.ByteString qualified as BS
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), addUTCTime, fromGregorian, secondsToDiffTime)
 import Katip (Environment (Environment), Namespace (Namespace), initLogEnv)
@@ -17,7 +18,18 @@ import UnliftIO (timeout)
 import UnliftIO.Exception (throwString)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Package (Hash, HashAlg (Blake2b, MD5, SHA1, SHA256, SRI), PackageName, mkPackageName)
+import Ecluse.Core.Package (
+    Artifact (..),
+    ArtifactKind (Tarball),
+    Availability (Available),
+    CodeExecSignal (NoCodeOnInstall),
+    Hash,
+    HashAlg (Blake2b, MD5, SHA1, SHA256, SRI),
+    PackageDetails (..),
+    PackageName,
+    Trust (Untrusted),
+    mkPackageName,
+ )
 import Ecluse.Core.Package qualified as Pkg
 import Ecluse.Core.Queue (
     MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize),
@@ -35,7 +47,15 @@ import Ecluse.Core.Registry (
     RegistryClient (..),
     UrlFormationError (EmptyBaseUrl),
  )
+import Ecluse.Core.Registry.Metadata (
+    MetadataClient (MetadataClient, fetchFullManifest, fetchVersionMetadata),
+    MetadataError (MetadataUndecodable),
+    VersionEvaluation (VersionMetadataUnavailable, VersionMissing, VersionPresent),
+    fetchVersionDetails,
+ )
 import Ecluse.Core.Registry.Npm (npmPublishDocument)
+import Ecluse.Core.Rules (PreparedRule (PreparedRule, prepEval, prepName, prepPrecedence, prepResilience))
+import Ecluse.Core.Rules.Types (RuleResult (Allow, Deny))
 import Ecluse.Core.Telemetry.Metrics (MirrorResult (Failed, Published))
 import Ecluse.Core.Telemetry.Record (WorkerMetricsPort)
 import Ecluse.Core.Version (Version, mkVersion)
@@ -43,7 +63,9 @@ import Ecluse.Core.Worker (
     IntegrityResult (IntegrityMismatch, IntegrityVerified),
     JobOutcome (Dropped, Retried, Succeeded),
     WorkerM,
-    WorkerRuntime (WorkerRuntime, wrHeartbeat, wrManager, wrMetrics, wrQueue, wrRegistry, wrTracing),
+    WorkerPolicies,
+    WorkerPolicy (WorkerPolicy, wpNow, wpResolveVersion, wpRules),
+    WorkerRuntime (WorkerRuntime, wrHeartbeat, wrManager, wrMetrics, wrPolicies, wrQueue, wrRegistry, wrTracing),
     heartbeatHealthy,
     lastPoll,
     newWorkerHeartbeat,
@@ -196,12 +218,12 @@ recordingClient logRef outcome =
 -- ── building a worker runtime over doubles ──────────────────────────────────────
 
 {- | Build a 'WorkerRuntime' with the recording publish client, a real no-TLS manager
-(for the stub upstream), a fresh queue + heartbeat, and the given worker metrics port,
-then run the body against it. The queue and the publish log are returned so a test can
-drive and inspect them.
+(for the stub upstream), a fresh queue + heartbeat, the given worker metrics port, and the
+given per-ecosystem re-evaluation policies, then run the body against it. The queue and the
+publish log are returned so a test can drive and inspect them.
 -}
-withRuntimeWith :: WorkerMetricsPort -> Either PublishFault () -> (WorkerRuntime -> MirrorQueue -> IORef PublishLog -> IO a) -> IO a
-withRuntimeWith metricsPort outcome body = do
+withRuntimePolicies :: WorkerPolicies -> WorkerMetricsPort -> Either PublishFault () -> (WorkerRuntime -> MirrorQueue -> IORef PublishLog -> IO a) -> IO a
+withRuntimePolicies policies metricsPort outcome body = do
     logRef <- newIORef (PublishLog [])
     queue <- newInMemoryQueue
     manager <- newManager defaultManagerSettings
@@ -214,8 +236,16 @@ withRuntimeWith metricsPort outcome body = do
                 , wrHeartbeat = heartbeat
                 , wrMetrics = metricsPort
                 , wrTracing = passthroughWorkerTracingPort
+                , wrPolicies = policies
                 }
     body runtime queue logRef
+
+{- | 'withRuntimePolicies' with the default admitting policy ('admitPolicies'), so the
+integrity-gate and publish tests exercise their own path while ingest re-evaluation always
+admits; the re-evaluation tests pass their own policies through 'withRuntimePolicies'.
+-}
+withRuntimeWith :: WorkerMetricsPort -> Either PublishFault () -> (WorkerRuntime -> MirrorQueue -> IORef PublishLog -> IO a) -> IO a
+withRuntimeWith = withRuntimePolicies admitPolicies
 
 -- | 'withRuntimeWith' with the inert worker metrics port — the common case.
 withRuntime :: Either PublishFault () -> (WorkerRuntime -> MirrorQueue -> IORef PublishLog -> IO a) -> IO a
@@ -238,8 +268,110 @@ withQueueRuntime queue body = do
                 , wrHeartbeat = heartbeat
                 , wrMetrics = noopWorkerMetricsPort
                 , wrTracing = passthroughWorkerTracingPort
+                , wrPolicies = admitPolicies
                 }
     body runtime
+
+-- ── ingest re-evaluation fixtures ───────────────────────────────────────────────
+
+{- | A prepared rule with a fixed verdict, built directly through the engine's injection
+point so a re-evaluation reaches a chosen decision independent of the version's details.
+-}
+constRule :: Text -> RuleResult -> PreparedRule
+constRule name result =
+    PreparedRule
+        { prepName = name
+        , prepPrecedence = 0
+        , prepResilience = Nothing
+        , prepEval = \_ _ -> pure result
+        }
+
+-- | An always-admitting prepared rule: a re-evaluation reaches an admit decision.
+admitRule :: PreparedRule
+admitRule = constRule "test-admit" (Allow "admitted for test")
+
+{- | An always-blocking prepared rule: a re-evaluation reaches a block decision, modelling a
+denylist/advisory/config that has tightened to deny since the job was enqueued.
+-}
+denyRule :: PreparedRule
+denyRule = constRule "test-deny" (Deny "denied by current policy")
+
+-- | An inert artifact for a projected version snapshot; the injected rules never inspect it.
+sampleArtifact :: Artifact
+sampleArtifact =
+    Artifact
+        { artFilename = "thing-1.0.0.tgz"
+        , artUrl = "https://registry.npmjs.org/thing/-/thing-1.0.0.tgz"
+        , artKind = Tarball
+        , artHashes = []
+        , artSize = Nothing
+        , artInterpreter = Nothing
+        , artYanked = False
+        , artProvenance = Nothing
+        }
+
+{- | A minimal projected version snapshot. The injected rules ignore its contents, so only
+its validity matters; it stands in for what the shared single-version fetch would project.
+-}
+sampleDetails :: PackageName -> Version -> PackageDetails
+sampleDetails name version =
+    PackageDetails
+        { pkgName = name
+        , pkgVersion = version
+        , pkgPublishedAt = Nothing
+        , pkgInstallCode = NoCodeOnInstall
+        , pkgTrust = Untrusted
+        , pkgAvailability = Available
+        , pkgArtifacts = sampleArtifact :| []
+        , pkgLicenses = []
+        , pkgPublisher = Nothing
+        , pkgMaintainers = []
+        , pkgDependencies = []
+        }
+
+{- | A resolver that always reports the version present (projected), so the worker runs the
+rules over its 'PackageDetails'.
+-}
+presentResolver :: PackageName -> Version -> IO VersionEvaluation
+presentResolver name version = pure (VersionPresent (sampleDetails name version))
+
+{- | A worker-policies map for the npm ecosystem with the given single-version resolver and
+prepared rules, clocked at the fixed 'epoch' (the injected rules are not time-sensitive).
+-}
+npmPolicies :: (PackageName -> Version -> IO VersionEvaluation) -> [PreparedRule] -> WorkerPolicies
+npmPolicies resolve rules =
+    Map.singleton
+        Npm
+        WorkerPolicy
+            { wpResolveVersion = resolve
+            , wpRules = rules
+            , wpNow = pure epoch
+            }
+
+{- | The default admitting policy the integrity-gate and publish tests run under: the version
+resolves present and an always-admit rule clears it, so re-evaluation never blocks and the
+existing tests exercise the integrity gate and publish outcomes unchanged.
+-}
+admitPolicies :: WorkerPolicies
+admitPolicies = npmPolicies presentResolver [admitRule]
+
+{- | A 'MetadataClient' double whose single-version op returns a fixed result (the
+full-manifest op is unused here and refuses loudly).
+-}
+versionClient :: Either MetadataError (Maybe PackageDetails) -> MetadataClient
+versionClient result =
+    MetadataClient
+        { fetchFullManifest = const (throwString "versionClient: fetchFullManifest is unused")
+        , fetchVersionMetadata = \_ _ -> pure result
+        }
+
+-- | A 'MetadataClient' double whose single-version op throws, standing in for a transport fault.
+throwingVersionClient :: MetadataClient
+throwingVersionClient =
+    MetadataClient
+        { fetchFullManifest = const (throwString "throwingVersionClient: fetchFullManifest is unused")
+        , fetchVersionMetadata = \_ _ -> throwString "simulated transport fault"
+        }
 
 {- | Discharge a 'WorkerM' to 'IO' over the worker runtime against a scribe-less @katip@
 environment (its log lines have nowhere to go, which is what these tests want) and an
@@ -496,6 +628,88 @@ spec = do
                     (receipt, job) <- enqueueAndReceive queue (jobWith url (unsafeHash SHA1 trueSha1 :| []))
                     outcome <- runWM runtime (processJob receipt job)
                     outcome `shouldSatisfy` isDropped
+
+    describe "processJob: ingest-time policy re-evaluation" $ do
+        it "drops a job whose version current policy denies, without publishing" $
+            -- The drift-to-deny close: a version admitted at serve time but denied by current
+            -- policy must be dropped (acked/retired), never frozen into the trusted mirror store.
+            -- 'unreachableUrl' doubles as a guard: were re-evaluation skipped, the artifact
+            -- fetch would surface a Retried, not the Dropped this asserts.
+            withRuntimePolicies (npmPolicies presentResolver [denyRule]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
+                (receipt, job) <- enqueueAndReceive queue (jobWith unreachableUrl (unsafeHash SHA1 trueSha1 :| []))
+                outcome <- runWM runtime (processJob receipt job)
+                outcome `shouldSatisfy` isDropped
+                published <- plDocuments <$> readIORef logRef
+                published `shouldBe` []
+
+        it "publishes a job whose version current policy admits (happy path unregressed)" $
+            withUpstream $ \url ->
+                withRuntimePolicies (npmPolicies presentResolver [admitRule]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
+                    (receipt, job) <- enqueueAndReceive queue (jobWith url (unsafeHash SHA1 trueSha1 :| []))
+                    outcome <- runWM runtime (processJob receipt job)
+                    outcome `shouldBe` Succeeded
+                    published <- plDocuments <$> readIORef logRef
+                    length published `shouldBe` 1
+
+        it "drops a job whose version the upstream no longer offers (withdrawn), without publishing" $
+            -- The re-fetch yields no version (a yanked/unpublished version): a non-retryable
+            -- drop, since a version the upstream has withdrawn must not be mirrored.
+            withRuntimePolicies (npmPolicies (\_ _ -> pure VersionMissing) [admitRule]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
+                (receipt, job) <- enqueueAndReceive queue (jobWith unreachableUrl (unsafeHash SHA1 trueSha1 :| []))
+                outcome <- runWM runtime (processJob receipt job)
+                outcome `shouldSatisfy` isDropped
+                published <- plDocuments <$> readIORef logRef
+                published `shouldBe` []
+
+        it "retries a job when the re-evaluation metadata cannot be re-fetched, without publishing" $
+            -- A transient metadata outage maps to the serve path's transient degrade: leave the
+            -- job for redelivery rather than dropping it or publishing it unvetted.
+            withRuntimePolicies (npmPolicies (\_ _ -> pure VersionMetadataUnavailable) [admitRule]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
+                (receipt, job) <- enqueueAndReceive queue (jobWith unreachableUrl (unsafeHash SHA1 trueSha1 :| []))
+                outcome <- runWM runtime (processJob receipt job)
+                outcome `shouldSatisfy` isRetried
+                published <- plDocuments <$> readIORef logRef
+                published `shouldBe` []
+
+        it "drops a job whose ecosystem has no configured policy (fail-closed), without publishing" $
+            -- A job for an ecosystem with no bundle is fail-closed: never mirrored unvetted.
+            withRuntimePolicies mempty noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
+                (receipt, job) <- enqueueAndReceive queue (jobWith unreachableUrl (unsafeHash SHA1 trueSha1 :| []))
+                outcome <- runWM runtime (processJob receipt job)
+                outcome `shouldSatisfy` isDropped
+                published <- plDocuments <$> readIORef logRef
+                published `shouldBe` []
+
+        it "acks a policy-denied job so it is retired, not redelivered forever" $
+            -- Mirrors the integrity-mismatch ack test for the deny path: a current-policy deny
+            -- is non-retryable, so the job is acked (retired) rather than left to redeliver.
+            withRuntimePolicies (npmPolicies presentResolver [denyRule]) noopWorkerMetricsPort (Right ()) $ \runtime queue logRef -> do
+                enqueue queue (jobWith unreachableUrl (unsafeHash SHA1 trueSha1 :| []))
+                messages <- receive queue
+                runWM runtime (processBatch messages)
+                published <- plDocuments <$> readIORef logRef
+                published `shouldBe` []
+                redelivered <- pollUntilRedelivered queue 5
+                redelivered `shouldBe` False
+
+    describe "fetchVersionDetails: the shared single-version evaluation boundary" $ do
+        -- The serve-time tarball gate and the worker both resolve a version through this one
+        -- function, so its classification (the no-divergence boundary) is asserted directly.
+        it "classifies a resolved version as present" $
+            fetchVersionDetails (versionClient (Right (Just (sampleDetails pkg ver)))) pkg ver
+                `shouldReturn` VersionPresent (sampleDetails pkg ver)
+
+        it "classifies an absent version (resolved, but no such version) as missing" $
+            fetchVersionDetails (versionClient (Right Nothing)) pkg ver
+                `shouldReturn` VersionMissing
+
+        it "classifies a metadata error as unavailable (the transient degrade)" $
+            fetchVersionDetails (versionClient (Left MetadataUndecodable)) pkg ver
+                `shouldReturn` VersionMetadataUnavailable
+
+        it "classifies a transport throw as unavailable (total, never an escaping exception)" $
+            fetchVersionDetails throwingVersionClient pkg ver
+                `shouldReturn` VersionMetadataUnavailable
 
     describe "processBatch — ack semantics over the in-memory queue" $ do
         it "acks a successfully-mirrored job so it is not redelivered" $

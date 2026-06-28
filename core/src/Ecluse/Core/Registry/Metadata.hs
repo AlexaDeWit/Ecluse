@@ -35,9 +35,14 @@ module Ecluse.Core.Registry.Metadata (
 
     -- * Errors
     MetadataError (..),
+
+    -- * Single-version resolution
+    VersionEvaluation (..),
+    fetchVersionDetails,
 ) where
 
 import Data.Aeson (Value)
+import UnliftIO.Exception (tryAny)
 
 import Ecluse.Core.Package (PackageDetails, PackageInfo, PackageName)
 import Ecluse.Core.Security (LimitError)
@@ -93,3 +98,42 @@ data MetadataError
       -}
       MetadataNameMismatch Text
     deriving stock (Eq, Show)
+
+{- | The outcome of resolving one version's metadata for a policy decision: the projected
+version snapshot when present, or the degrade both the serve-time gate and the mirror
+worker map onto their own response. It is the shared classification of a single-version
+fetch, so the gate that decides what to serve and the worker that decides what to mirror
+reach the same three outcomes from the same fetch and projection.
+-}
+data VersionEvaluation
+    = -- | The version resolved and projected; its 'PackageDetails' is ready for the rules engine.
+      VersionPresent PackageDetails
+    | {- | The package resolved but does not carry the requested version (a withdrawn or
+      never-published version), a genuine absence distinct from unobtainable metadata.
+      -}
+      VersionMissing
+    | {- | The metadata could not be obtained at all: a transport fault, or any
+      'MetadataError' (a decode failure, a bound breach, or a self-reported name mismatch).
+      Transient: the one retryable outcome every unobtainable-metadata cause collapses to.
+      -}
+      VersionMetadataUnavailable
+    deriving stock (Eq, Show)
+
+{- | Resolve a single version's metadata through a 'MetadataClient' and classify the
+outcome into a 'VersionEvaluation': the one fetch-and-project step both the serve-time
+tarball gate and the mirror worker run before the rules engine, so a future rule that
+reads a new field sees the same projected 'PackageDetails' in either context.
+
+A transport fault (the exception channel the client leaves to its caller) and any
+'MetadataError' alike classify as 'VersionMetadataUnavailable', collapsing every
+unobtainable-metadata cause to the one transient outcome; a resolved-but-absent version is
+'VersionMissing'; a resolved version is 'VersionPresent'. Total: a fetch failure becomes a
+classified value, never an escaping exception.
+-}
+fetchVersionDetails :: MetadataClient -> PackageName -> Version -> IO VersionEvaluation
+fetchVersionDetails client name version =
+    tryAny (fetchVersionMetadata client name version) <&> \case
+        Left _ -> VersionMetadataUnavailable
+        Right (Left _) -> VersionMetadataUnavailable
+        Right (Right Nothing) -> VersionMissing
+        Right (Right (Just details)) -> VersionPresent details

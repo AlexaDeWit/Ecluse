@@ -95,6 +95,7 @@ module Ecluse (
     unconfiguredCredentials,
 ) where
 
+import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
@@ -129,29 +130,32 @@ import Ecluse.Config (
  )
 import Ecluse.Core.Credential (AuthToken (..), CredentialProvider, currentToken, mkSecret, staticProvider)
 import Ecluse.Core.Credential.Refresh (CredentialReporters (CredentialReporters, crBreakerReporter, crRefreshReporter))
-import Ecluse.Core.Ecosystem (Ecosystem (Npm), prefixFor)
+import Ecluse.Core.Ecosystem (Ecosystem (Npm), parseEcosystem, prefixFor)
 import Ecluse.Core.Queue (MirrorQueue, newBoundedInMemoryQueue)
 import Ecluse.Core.Queue.Sqs (newSqsQueue)
 import Ecluse.Core.Registry (
     ParseError (..),
     RegistryClient (..),
  )
+import Ecluse.Core.Registry.Metadata (fetchVersionDetails)
 import Ecluse.Core.Registry.Npm (NpmClientConfig (NpmClientConfig, npmBaseUrl, npmLimits, npmManager, npmToken), newNpmClient)
 import Ecluse.Core.Registry.Npm.Route qualified as Npm
 import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
 import Ecluse.Core.Rules (renderBootOrder)
 import Ecluse.Core.Security (defaultLimits, lowerCaseHosts)
 import Ecluse.Core.Security.Egress (guardedManagerSettings)
-import Ecluse.Core.Server.Cache (newMetadataCache)
-import Ecluse.Core.Server.Context (PackumentDeps, PublishDeps, pdRules)
-import Ecluse.Core.Telemetry.Metrics (BreakerSource (CredentialMint), Provider (CodeArtifact))
-import Ecluse.Core.Worker (runWorkerM, workerLoop)
-import Ecluse.Env (Env, envDdContext, envLogEnv, envMetrics, newWorkerHeartbeat, withEnv, workerRuntimeOf)
+import Ecluse.Core.Server.Cache (Source (Source), newMetadataCache)
+import Ecluse.Core.Server.Context (PackumentDeps, PublishDeps, pdLimits, pdNow, pdPublicBaseUrl, pdRules)
+import Ecluse.Core.Server.Metadata (ManifestCaching (Cached), newNpmMetadataClient)
+import Ecluse.Core.Telemetry.Metrics (BreakerSource (CredentialMint), Provider (CodeArtifact), Upstream (Public))
+import Ecluse.Core.Worker (WorkerPolicies, WorkerPolicy (..), runWorkerM, workerLoop)
+import Ecluse.Env (Env, envDdContext, envLogEnv, envManager, envMetadataCache, envMetrics, newWorkerHeartbeat, withEnv, workerRuntimeOf)
 import Ecluse.Log (moduleField, newLogEnv)
 import Ecluse.Server (MountBinding (..), ServerConfig (scDrainTimeout, scPort), ShutdownDrainTimeout (ShutdownDrainTimeout), mkServerConfig)
 import Ecluse.Server qualified as Server
 import Ecluse.Telemetry (TelemetrySwitch (TelemetryOff, TelemetryOn), withTelemetry)
 import Ecluse.Telemetry.Correlation (ddPayloadNow)
+import Ecluse.Telemetry.Instruments (metricsPortOf)
 import Ecluse.Telemetry.Reporters (
     deferredBreakerReporter,
     deferredRefreshReporter,
@@ -248,7 +252,7 @@ run = do
             -- the rest of the run. They are the no-op-meter instruments when telemetry
             -- is off, so this is inert in that posture.
             installMetrics deferredMetrics (envMetrics builtEnv)
-            runServices serverConfig builtEnv
+            runServices serverConfig (workerPoliciesFor builtEnv bindings) builtEnv
 
 {- | Read the optional structured config document from the @PROXY_CONFIG@ env blob,
 decoding it strictly. 'Nothing' when unset — an env-only deployment supplies no
@@ -353,8 +357,8 @@ separate binaries later is two thin entry points calling 'runServer' \/
 'runWorker' — no rearchitecting. The server's settings (its derived mount bindings
 and port) are supplied by the composition root and threaded to 'runServer'.
 -}
-runServices :: ServerConfig -> Env -> IO ()
-runServices serverConfig env = concurrently_ (runServer serverConfig env) (runWorker env)
+runServices :: ServerConfig -> WorkerPolicies -> Env -> IO ()
+runServices serverConfig policies env = concurrently_ (runServer serverConfig env) (runWorker policies env)
 
 {- | Run the proxy's HTTP front door over the composition-root 'Env' with the
 config-derived 'ServerConfig'.
@@ -415,10 +419,13 @@ npmMount packumentDeps publishDeps =
         , bindingRenderer = npmRenderer
         }
 
-{- | Run the supervised mirror worker over the composition-root 'Env': the
-consume → fetch → verify → publish → ack loop against the queue, the publish-side
-registry client, and the credential handle, in the worker monad
-('Ecluse.Core.Worker.WorkerM') over the worker runtime ('Ecluse.Env.workerRuntimeOf').
+{- | Run the supervised mirror worker over the composition-root 'Env' and the
+per-ecosystem re-evaluation bundles: the consume → re-evaluate → fetch → verify → publish →
+ack loop against the queue, the publish-side registry client, and the credential handle, in
+the worker monad ('Ecluse.Core.Worker.WorkerM') over the worker runtime
+('Ecluse.Env.workerRuntimeOf'). The bundles carry the same prepared rules and public origin
+the serve path gates with, so the worker re-runs current policy against a job before
+mirroring it.
 
 This is the composition-root __hoist point__: it resolves the request-independent @dd@
 correlation object (the service identity; no span is active at the worker entry) and
@@ -427,10 +434,58 @@ through 'Ecluse.Core.Worker.runWorkerM' — the worker analogue of the serve pat
 'Ecluse.Core.Server.Context.runHandler' boundary. The loop logic lives in
 "Ecluse.Core.Worker"; the single-process program runs this alongside 'runServer'.
 -}
-runWorker :: Env -> IO ()
-runWorker env = do
+runWorker :: WorkerPolicies -> Env -> IO ()
+runWorker policies env = do
     dd <- ddPayloadNow (envDdContext env)
-    runWorkerM (envLogEnv env) dd (workerRuntimeOf env) (katipAddNamespace "worker" workerLoop)
+    runWorkerM (envLogEnv env) dd (workerRuntimeOf policies env) (katipAddNamespace "worker" workerLoop)
+
+{- | Resolve the worker's per-ecosystem re-evaluation bundles from the served mounts: for
+each mount that serves a packument (carries 'PackumentDeps'), a bundle keyed by the
+ecosystem its path prefix names. A mount left at the recognised-but-unserved stub
+contributes none, and a job for an ecosystem absent here is fail-closed at the worker. The
+bundles reuse each mount's __own__ prepared rules, so the serve gate and the ingest
+re-evaluation share one prepared rule set (and any per-source breaker state) rather than
+preparing a second.
+-}
+workerPoliciesFor :: Env -> [MountBinding] -> WorkerPolicies
+workerPoliciesFor env bindings =
+    Map.fromList
+        [ (eco, workerPolicyFor env deps)
+        | binding <- bindings
+        , let prefixHead :| _ = bindingPrefix binding
+        , Just eco <- [parseEcosystem prefixHead]
+        , Just deps <- [bindingPackumentDeps binding]
+        ]
+
+{- Build one mount's worker re-evaluation bundle from its packument-serve dependencies: the
+single-version resolver over the guarded public origin through the shared metadata cache
+(the same fetch-and-project the serve path runs, so the ingest decision does not diverge
+from the serve decision), the mount's prepared rules, and its injected clock. The metadata
+client is anonymous (no client credential reaches the public origin) and reuses the guarded
+data-plane manager, so the worker's re-fetch inherits the resolved-IP SSRF recheck. Its own
+failure and dropped-entry logs are elided (the worker logs its own re-evaluation outcome per
+job), while the upstream-fetch metrics still record through the shared instruments. -}
+workerPolicyFor :: Env -> PackumentDeps -> WorkerPolicy
+workerPolicyFor env deps =
+    WorkerPolicy
+        { wpResolveVersion = fetchVersionDetails client
+        , wpRules = pdRules deps
+        , wpNow = pdNow deps
+        }
+  where
+    client =
+        newNpmMetadataClient
+            (metricsPortOf (envMetrics env))
+            Public
+            (Cached (envMetadataCache env) (Source (pdPublicBaseUrl deps)))
+            (\_ _ -> pure ())
+            (\_ _ -> pure ())
+            NpmClientConfig
+                { npmBaseUrl = pdPublicBaseUrl deps
+                , npmManager = envManager env
+                , npmToken = Nothing
+                , npmLimits = pdLimits deps
+                }
 
 {- Build the worker's publish-side registry client from the resolved per-ecosystem
 publish targets, over the given (trusted) manager.

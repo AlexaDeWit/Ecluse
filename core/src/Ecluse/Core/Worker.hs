@@ -53,6 +53,10 @@ module Ecluse.Core.Worker (
     -- * Worker runtime
     WorkerRuntime (..),
 
+    -- * Per-ecosystem ingest re-evaluation
+    WorkerPolicy (..),
+    WorkerPolicies,
+
     -- * The worker monad
     WorkerM,
     runWorkerM,
@@ -81,6 +85,7 @@ import Crypto.Hash (Digest, SHA1, SHA384, SHA512, hashlazy)
 import Data.ByteArray.Encoding (Base (Base16, Base64), convertToBase)
 import Data.Foldable (maximumBy)
 import Data.List.NonEmpty qualified as NE
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, UTCTime, diffUTCTime, getCurrentTime)
 import Katip (Katip, KatipContext, LogEnv, Severity (ErrorS, InfoS, WarningS), SimpleLogPayload, katipAddNamespace, logFM, ls)
@@ -90,7 +95,8 @@ import UnliftIO (MonadUnliftIO, tryAny, withRunInIO)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (try)
 
-import Ecluse.Core.Package (Hash (hashAlg, hashValue), HashAlg (Blake2b, MD5, SHA1, SHA256, SHA384, SHA512, SRI), renderPackageName)
+import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
+import Ecluse.Core.Package (Hash (hashAlg, hashValue), HashAlg (Blake2b, MD5, SHA1, SHA256, SHA384, SHA512, SRI), PackageName, pkgEcosystem, renderPackageName)
 import Ecluse.Core.Package.Integrity (Strength, assertedAlg, integrityStrength, sriAlgorithm, sriBody, sriPrefix)
 import Ecluse.Core.Queue (
     MirrorArtifact (maFilename, maHashes),
@@ -104,17 +110,22 @@ import Ecluse.Core.Registry (
     PublishFault (PublishRejected, PublishUrlUnformable),
     RegistryClient (publishArtifact),
  )
+import Ecluse.Core.Registry.Metadata (
+    VersionEvaluation (VersionMetadataUnavailable, VersionMissing, VersionPresent),
+ )
 import Ecluse.Core.Registry.Npm (
     NpmClientConfig (NpmClientConfig, npmBaseUrl, npmLimits, npmManager, npmToken),
     ResponseBoundExceeded (ResponseBoundExceeded),
     artifactRequestByUrl,
     npmPublishDocument,
  )
+import Ecluse.Core.Rules (PreparedRule, evalRules)
+import Ecluse.Core.Rules.Types (Decision (Admitted, Blocked, BlockedByDefault, Undecidable), EvalContext (EvalContext))
 import Ecluse.Core.Security (Limits (maxBodyBytes), boundedRead, defaultLimits)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (WorkerMetricsPort (..), timedSeconds)
 import Ecluse.Core.Telemetry.Span (JobSpanOutcome (JobSpanOutcome), WorkerTracingPort (..))
-import Ecluse.Core.Version (renderVersion)
+import Ecluse.Core.Version (Version, renderVersion)
 
 -- ── worker runtime ────────────────────────────────────────────────────────────
 
@@ -152,7 +163,48 @@ data WorkerRuntime = WorkerRuntime
     -- ^ The metric-recording port the worker emits its @ecluse.mirror.*@ job signals through.
     , wrTracing :: WorkerTracingPort
     -- ^ The tracing port the worker opens its per-job span through.
+    , wrPolicies :: WorkerPolicies
+    {- ^ The per-ecosystem re-evaluation bundles, keyed by a job's ecosystem. The worker
+    re-runs current policy against a job's version before it mirrors it, so a policy that
+    has tightened toward deny since the job was enqueued drops the job rather than freezing
+    a now-disallowed version into the trusted mirror store.
+    -}
     }
+
+-- ── per-ecosystem ingest re-evaluation ────────────────────────────────────────
+
+{- | The per-ecosystem re-evaluation bundle the worker re-runs current policy through
+before it mirrors a job: a resolver that fetches and projects the single version's
+metadata, the prepared rule set, and the wall-clock the age rules read.
+
+The resolver is the __shared__ single-version fetch-and-project
+('Ecluse.Core.Registry.Metadata.fetchVersionDetails' over the guarded public origin,
+wired by the composition root), and the rules are the __same__ prepared rules the serve
+path gates with, so the worker's ingest decision and the serve-time decision run one
+codepath and any per-source breaker state is shared, never forked.
+-}
+data WorkerPolicy = WorkerPolicy
+    { wpResolveVersion :: PackageName -> Version -> IO VersionEvaluation
+    {- ^ Resolve and project one version's metadata through the guarded public origin,
+    classifying the outcome ('Ecluse.Core.Registry.Metadata.fetchVersionDetails'). Total:
+    a fetch failure is a 'VersionMetadataUnavailable' value, never an escaping exception.
+    -}
+    , wpRules :: [PreparedRule]
+    {- ^ The prepared rule set evaluated against the resolved version under current policy
+    (the same rules the serve path gates the public version set with).
+    -}
+    , wpNow :: IO UTCTime
+    {- ^ The wall-clock "now" for the rules' 'EvalContext'; injected so the time-sensitive
+    age gate is deterministic under test.
+    -}
+    }
+
+{- | The worker's per-ecosystem re-evaluation bundles, keyed by the ecosystem a job's
+package belongs to ('Ecluse.Core.Package.pkgEcosystem'). Built once at boot and shared
+with the serve mounts; a job whose ecosystem is absent here is fail-closed (dropped), never
+mirrored unvetted.
+-}
+type WorkerPolicies = Map Ecosystem WorkerPolicy
 
 -- ── the worker monad ──────────────────────────────────────────────────────────
 
@@ -375,42 +427,39 @@ data JobOutcome
       Retried Text
     deriving stock (Eq, Show)
 
-{- | Process one mirror job end to end: fetch the artifact, verify it against the
-job's serve-time-admitted integrity digest, and — only on a match — publish it to
-the mirror target. Returns the 'JobOutcome' that decides ack vs. redeliver.
+{- | Process one mirror job end to end: __re-evaluate current policy__ for the job's
+version, and only on a current admit fetch the artifact, verify it against the job's
+serve-time-admitted integrity digest, and publish it to the mirror target. Returns the
+'JobOutcome' that decides ack vs. redeliver.
+
+The policy re-evaluation is the ingest-time gate. The version was gated at serve time, but
+the enqueue-to-process window is asynchronous and unbounded, so policy may have tightened
+toward deny since (a new denylist entry, a freshly-published advisory, a rule-config
+change). The worker re-runs the __same__ rules the serve path gates with, over the version
+resolved through the __same__ single-version fetch-and-project, so a now-denied version is
+dropped (acked, never published) rather than frozen into the rule-exempt trusted mirror
+store; a version the upstream has since withdrawn is likewise dropped, while metadata that
+cannot be re-fetched (or a rule that cannot be computed) leaves the job for redelivery. A
+current admit proceeds to the integrity gate: a tampered or corrupt artifact fails the job
+with no publish, since the mirror is later served without the rules.
 
 The receipt handle is taken so a long publish can 'Ecluse.Core.Queue.extendVisibility'
-to hold the message before its window lapses. The rules are __not__ re-run: the
-job was gated at serve time.
+to hold the message before its window lapses.
 
-The per-job domain span (the worker tracing port) wraps the whole fetch → verify →
-publish, projecting the terminal outcome onto the span so a refused publish is
-explainable from the trace, and __linking__ back to the request that enqueued the job
-through the trace context the job carries ('jobTraceContext'). The span body is
-discharged to 'IO' through the unlift, so the loop's structured log lines still compose
-through the ambient @katip@ context.
+The per-job domain span (the worker tracing port) wraps the whole re-evaluate → fetch →
+verify → publish, projecting the terminal outcome onto the span so a refused or dropped job
+is explainable from the trace, and __linking__ back to the request that enqueued the job
+through the trace context the job carries ('jobTraceContext'). The span body is discharged
+to 'IO' through the unlift, so the loop's structured log lines still compose through the
+ambient @katip@ context.
 -}
 processJob :: ReceiptHandle -> MirrorJob -> WorkerM JobOutcome
 processJob receipt job = katipAddNamespace "job" $ do
     tracing <- asks wrTracing
     withRunInIO $ \runInIO ->
         wtpMirrorJobSpan tracing (jobPackage job) (jobVersion job) (jobTraceContext job) jobSpanOutcome $
-            runInIO $ do
-                fetched <- fetchArtifactBytes (jobArtifactUrl job)
-                case fetched of
-                    Left reason -> pure (Retried reason)
-                    Right bytes ->
-                        case verifyIntegrity (maHashes artifact) bytes of
-                            IntegrityMismatch detail -> do
-                                -- The security crux: a tampered or corrupt artifact must never
-                                -- reach the private upstream, which is served without rules. Fail
-                                -- the job with no publish and alarm.
-                                logFM ErrorS (ls ("artifact integrity mismatch, refusing to publish: " <> detail))
-                                pure (Dropped ("integrity mismatch: " <> detail))
-                            IntegrityVerified -> publishVerified receipt job bytes
+            runInIO (reevaluateThenMirror receipt job)
   where
-    artifact = jobArtifact job
-
     -- Project a terminal job outcome onto the worker-job span: the bounded outcome
     -- label always, and the failure detail (which marks the span errored) when the
     -- job did not publish.
@@ -419,6 +468,87 @@ processJob receipt job = katipAddNamespace "job" $ do
         Succeeded -> JobSpanOutcome "succeeded" Nothing
         Dropped reason -> JobSpanOutcome "dropped" (Just reason)
         Retried reason -> JobSpanOutcome "retried" (Just reason)
+
+-- ── ingest-time policy re-evaluation ──────────────────────────────────────────
+
+-- The terminal decision of re-evaluating current policy for a job, before any artifact
+-- fetch: admit (mirror it), drop (a current deny or a withdrawn version, acked and never
+-- published), or retry (metadata unobtainable, or a rule uncomputable, left for redelivery).
+data ReevalOutcome
+    = ReevalAdmit
+    | ReevalDrop Text
+    | ReevalRetry Text
+
+-- Re-evaluate current policy for the job's version, then mirror it on a current admit. The
+-- gate runs before the (potentially large) artifact fetch, so a now-denied job is dropped
+-- without downloading its bytes.
+reevaluateThenMirror :: ReceiptHandle -> MirrorJob -> WorkerM JobOutcome
+reevaluateThenMirror receipt job =
+    reevaluatePolicy job >>= \case
+        ReevalAdmit -> mirrorArtifact receipt job
+        ReevalDrop reason -> pure (Dropped reason)
+        ReevalRetry reason -> pure (Retried reason)
+
+{- Re-run current policy for the job's single version: look up the job's ecosystem bundle,
+resolve and project the version's metadata through the shared single-version fetch, and
+evaluate the prepared rules over it. A job for an ecosystem with no configured bundle is
+fail-closed (dropped) rather than mirrored unvetted. The outcomes mirror the serve path's
+degrade: a withdrawn/absent version is a non-retryable drop, unobtainable metadata a
+transient retry; a rule block (or deny-by-default) drops, and an uncomputable rule retries
+rather than dropping a serviceable job or publishing it unvetted. -}
+reevaluatePolicy :: MirrorJob -> WorkerM ReevalOutcome
+reevaluatePolicy job = do
+    policies <- asks wrPolicies
+    case Map.lookup ecosystem policies of
+        Nothing ->
+            pure (ReevalDrop ("no rule policy is configured for the " <> ecosystemName ecosystem <> " ecosystem; refusing to mirror " <> renderJob job))
+        Just policy -> do
+            evaluation <- liftIO (wpResolveVersion policy (jobPackage job) (jobVersion job))
+            case evaluation of
+                VersionMetadataUnavailable ->
+                    pure (ReevalRetry ("could not re-fetch metadata to re-evaluate current policy for " <> renderJob job))
+                VersionMissing ->
+                    pure (ReevalDrop ("the public upstream no longer offers " <> renderJob job <> "; refusing to mirror a withdrawn version"))
+                VersionPresent details -> do
+                    ctx <- liftIO (EvalContext <$> wpNow policy)
+                    decision <- liftIO (evalRules ctx (wpRules policy) details)
+                    pure (outcomeOfDecision job decision)
+  where
+    ecosystem = pkgEcosystem (jobPackage job)
+
+-- Map a re-evaluation 'Decision' to a job outcome. An admit mirrors; a rule block or
+-- deny-by-default drops (current policy denies the version, so it must not be frozen into
+-- the trusted mirror store); an undecidable verdict (a fail-closed rule that could not be
+-- computed) retries, so a transient advisory-source outage neither drops a serviceable job
+-- nor publishes it unvetted (the serve path renders the same cause a transient 503).
+outcomeOfDecision :: MirrorJob -> Decision -> ReevalOutcome
+outcomeOfDecision job = \case
+    Admitted{} -> ReevalAdmit
+    Blocked ruleName reason ->
+        ReevalDrop ("current policy denies " <> renderJob job <> ": blocked by " <> ruleName <> " (" <> reason <> ")")
+    BlockedByDefault _ ->
+        ReevalDrop ("current policy denies " <> renderJob job <> ": no rule admits it")
+    Undecidable _ reason ->
+        ReevalRetry ("current policy could not be evaluated for " <> renderJob job <> ": " <> reason)
+
+-- Fetch the artifact bytes, verify them against the job's serve-time-admitted integrity
+-- digest, and (only on a match) publish to the mirror target. Reached only on a current
+-- policy admit. The integrity gate is the security crux: a tampered or corrupt artifact
+-- must never reach the private upstream, which is served without the rules, so a mismatch
+-- fails the job with no publish and alarms.
+mirrorArtifact :: ReceiptHandle -> MirrorJob -> WorkerM JobOutcome
+mirrorArtifact receipt job = do
+    fetched <- fetchArtifactBytes (jobArtifactUrl job)
+    case fetched of
+        Left reason -> pure (Retried reason)
+        Right bytes ->
+            case verifyIntegrity (maHashes artifact) bytes of
+                IntegrityMismatch detail -> do
+                    logFM ErrorS (ls ("artifact integrity mismatch, refusing to publish: " <> detail))
+                    pure (Dropped ("integrity mismatch: " <> detail))
+                IntegrityVerified -> publishVerified receipt job bytes
+  where
+    artifact = jobArtifact job
 
 -- Publish already-verified bytes to the mirror target: hold the message past the
 -- visibility window (a large-artifact publish may run long), assemble the npm
