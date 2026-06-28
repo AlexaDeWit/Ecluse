@@ -38,7 +38,7 @@ DOCS_BUILDDIR ?= dist-newstyle
 .DEFAULT_GOAL := help
 .PHONY: help update build test test-integration test-smoke test-e2e test-all doctest \
         coverage coverage-unit freeze gen-version-fixtures new-worktree format format-check lint sast \
-        cabal-check lint-workflows lint-scripts weeder check gate run docs \
+        cabal-check lint-workflows lint-scripts test-scripts weeder check gate run docs \
         docs-check docs-site site nix-build nix-check docker-build docker-push sbom scan \
         scan-vulnix clean version tag stan stan-all bench bench-profile bench-load
 
@@ -240,6 +240,14 @@ lint-workflows: ## Lint GitHub Actions workflows (actionlint + zizmor)
 lint-scripts: ## Lint shell scripts (shellcheck)
 	$(NIX) shellcheck --severity=warning $(SH)
 
+# Deterministic unit tests for the helper scripts that carry their own logic —
+# currently the Haddock dependency-link rewriter, whose Hackage URL mapping is
+# pinned here against the link shapes `cabal haddock` emits (a full docs build is
+# far too heavy to gate every PR). No toolchain, so it runs in the lean
+# `.#workflow-lint` shell in CI alongside the script lint.
+test-scripts: ## Run the shell-script unit tests (deterministic, no toolchain)
+	$(NIX) bash scripts/rewrite-haddock-dep-links.test.sh
+
 # weeder reports library code not reachable from the application entry point —
 # i.e. built (and usually tested) but not yet wired into the running proxy. It
 # reads .hie files, so we build ONLY the library + executable with -fwrite-ide-info
@@ -271,7 +279,7 @@ stan-all: ## Full stan report incl Performance/space-leak (informational; ignore
 	$(NIX) cabal build exe:ecluse --builddir=dist-stan --ghc-options=-fwrite-ide-info
 	$(NIX) stan --hiedir dist-stan --no-default
 
-check: build test doctest format-check lint sast cabal-check lint-workflows lint-scripts ## Fast pre-push checks: the gate minus its Docker integration + Haddock tiers (see gate)
+check: build test doctest format-check lint sast cabal-check lint-workflows lint-scripts test-scripts ## Fast pre-push checks: the gate minus its Docker integration + Haddock tiers (see gate)
 
 # The faithful local mirror of the CI gate: everything `check` runs, plus the two
 # tiers it omits — the integration suite (needs a Docker daemon, exactly like the
@@ -309,7 +317,13 @@ docs-check: ## Build Haddock for the CI gate (both libraries; no dep docs, no so
 # Assemble the API tree under ./_site/api for the GitHub Pages workflow to upload —
 # the site root is left free for the home page (see `site`). Two surfaces live here:
 # both libraries' Haddock, and the OpenAPI capability manifest. The Haddock output
-# path embeds the arch + GHC version, so we locate it rather than hard-code it. The
+# path embeds the arch + GHC version, so we locate it rather than hard-code it.
+# `cabal haddock --haddock-hyperlink-source` resolves cross-package identifiers
+# against the local build tree, so the staged HTML is post-processed
+# (scripts/rewrite-haddock-dep-links.sh) to repoint dependency links at canonical
+# Hackage URLs: the raw links are dead off the build host, and one shape ships the
+# runner's home path into public HTML. A guard then fails the build if any
+# unresolved/leaky shape survived (a new link form Haddock started emitting). The
 # manifest is derived build data (git-ignored, never committed), so it is generated
 # here at publish time: `openapi-gen` writes openapi.json from the fixed canonical
 # source, and the Redoc wrapper (web/redoc.html) renders it client-side from the
@@ -330,6 +344,13 @@ docs-site: ## Build both libraries' Haddock + the OpenAPI manifest and stage the
 	    mkdir -p "_site/api/$$name" && cp -R "$$(dirname "$$idx")"/. "_site/api/$$name/"; \
 	    echo "Staged $$name -> _site/api/$$name"; \
 	  done
+	@echo "Rewriting dependency cross-links to canonical Hackage URLs"; \
+	  $(NIX) bash scripts/rewrite-haddock-dep-links.sh _site/api
+	@if grep -rlE 'file:///|\$$\{pkgroot\}|/store/ghc-' _site/api >/dev/null 2>&1; then \
+	  echo "docs-site: unresolved/leaky dependency links survived the rewrite (new Haddock link shape?):" >&2; \
+	  grep -rlE 'file:///|\$$\{pkgroot\}|/store/ghc-' _site/api >&2; \
+	  exit 1; \
+	fi
 	@cp web/api-index.html _site/api/index.html
 	$(NIX) cabal run -v0 --builddir=$(DOCS_BUILDDIR) openapi-gen -- _site/api/openapi.json
 	@mkdir -p _site/api/openapi && cp web/redoc.html _site/api/openapi/index.html
