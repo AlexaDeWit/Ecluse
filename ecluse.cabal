@@ -90,8 +90,10 @@ library ecluse-core
     Ecluse.Core.Queue
     Ecluse.Core.Queue.Sqs
     Ecluse.Core.Registry
+    Ecluse.Core.Registry.Metadata
     Ecluse.Core.Registry.Npm
     Ecluse.Core.Registry.Npm.Filter
+    Ecluse.Core.Registry.Npm.Metadata
     Ecluse.Core.Registry.Npm.Project
     Ecluse.Core.Registry.Npm.Route
     Ecluse.Core.Registry.Npm.Serve
@@ -105,6 +107,7 @@ library ecluse-core
     Ecluse.Core.Server.Cache
     Ecluse.Core.Server.Conditional
     Ecluse.Core.Server.Context
+    Ecluse.Core.Server.Metadata
     Ecluse.Core.Server.Pipeline
     Ecluse.Core.Server.Pipeline.Internal
     Ecluse.Core.Server.Response
@@ -307,6 +310,7 @@ test-suite ecluse-core-unit
     Ecluse.Queue.SqsSpec
     Ecluse.Registry.NpmSpec
     Ecluse.Registry.Npm.FilterSpec
+    Ecluse.Registry.Npm.MetadataSpec
     Ecluse.Registry.Npm.ProjectSpec
     Ecluse.Registry.Npm.RouteSpec
     Ecluse.Registry.Npm.ServeSpec
@@ -319,6 +323,7 @@ test-suite ecluse-core-unit
     Ecluse.Security.EgressSpec
     Ecluse.Server.CacheSpec
     Ecluse.Server.ConditionalSpec
+    Ecluse.Server.MetadataSpec
     Ecluse.Server.Pipeline.InternalSpec
     Ecluse.Server.PipelineSpec
     Ecluse.Server.ResponseSpec

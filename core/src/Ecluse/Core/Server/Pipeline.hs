@@ -166,7 +166,7 @@ import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types (RequestHeaders, ResponseHeaders, Status, hAuthorization, hContentLength, hContentType, methodHead, mkStatus, status200, status401, status403, status405, status500, status501, status502, statusIsSuccessful)
 import Network.Wai (Request, Response, ResponseReceived, consumeRequestBodyStrict, requestHeaders, responseHeaders, responseLBS, responseStatus)
 import UnliftIO (concurrently, withRunInIO)
-import UnliftIO.Exception (handle, throwIO, tryAny)
+import UnliftIO.Exception (tryAny)
 
 import Ecluse.Core.Credential (Secret, mkSecret)
 import Ecluse.Core.Package (
@@ -195,20 +195,20 @@ import Ecluse.Core.Queue (
     MirrorJob (MirrorJob, jobArtifact, jobArtifactUrl, jobMirrorTarget, jobPackage, jobTraceContext, jobVersion),
     enqueue,
  )
-import Ecluse.Core.Registry (RegistryResponse (responseBody), UrlFormationError)
+import Ecluse.Core.Registry (UrlFormationError)
+import Ecluse.Core.Registry.Metadata (
+    MetadataClient (fetchFullManifest, fetchVersionMetadata),
+    MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable),
+ )
 import Ecluse.Core.Registry.Npm (
-    MetadataForm (Full),
     NpmClientConfig (..),
     PublishRelayResponse (PublishRelayResponse),
-    ResponseBoundExceeded (ResponseBoundExceeded),
     artifactRequestByFile,
     artifactRequestByUrl,
-    fetchMetadataForm,
-    noValidators,
     relayPublishDocument,
  )
 import Ecluse.Core.Registry.Npm.Filter (FilterResult (Filtered, NoSurvivors), applyFilterPlan, rewriteTarballUrls)
-import Ecluse.Core.Registry.Npm.Project (Projection (NameMismatch, Projected), parsePackageInfoFromValue, projectName)
+import Ecluse.Core.Registry.Npm.Project (projectName)
 import Ecluse.Core.Rules (evalRules)
 import Ecluse.Core.Rules.Types (Decision, EvalContext (EvalContext))
 import Ecluse.Core.Security (
@@ -216,13 +216,11 @@ import Ecluse.Core.Security (
     Limits,
     LoweredHostSet,
     Origin (TrustedOrigin, UntrustedOrigin),
-    checkNestingDepth,
-    checkVersionCount,
     hostAddress,
     lowerCaseHosts,
     tarballHostAllowed,
  )
-import Ecluse.Core.Server.Cache (CacheEntry (CacheEntry, entryInfo, entryRaw), Source (Source), resolveMetadata)
+import Ecluse.Core.Server.Cache (Source (Source))
 import Ecluse.Core.Server.Conditional (Conditional (Modified, NotModified), etagHeader, evaluateOwnETag, forwardValidators, isNotModified)
 import Ecluse.Core.Server.Context (
     Handler,
@@ -233,12 +231,10 @@ import Ecluse.Core.Server.Context (
     ctxMount,
     ctxRuntime,
  )
+import Ecluse.Core.Server.Metadata (ManifestCaching (Cached, Uncached), newNpmMetadataClient)
 import Ecluse.Core.Server.Pipeline.Internal (
-    PackumentNameMismatch (PackumentNameMismatch),
-    PackumentUndecodable (PackumentUndecodable),
     admitByIntegrity,
     evalTier,
-    fetchCause,
     logDecodeFailure,
     logNameMismatch,
     packumentServeDecision,
@@ -479,16 +475,17 @@ originPackument = \case
     OriginNameMismatch -> Nothing
     OriginUnresolved -> Nothing
 
-{- Classify a caught origin fetch into an 'OriginResult': a success is 'OriginResolved';
-a 'PackumentNameMismatch' throw (the validated-name degrade) is kept distinct as
-'OriginNameMismatch'; every other degrade (outage, bound breach, undecodable body) is a
-plain 'OriginUnresolved'. -}
-originResultFrom :: Either SomeException CacheEntry -> OriginResult
-originResultFrom = \case
-    Right entry -> OriginResolved (unpair entry)
-    Left err -> case fromException err of
-        Just PackumentNameMismatch -> OriginNameMismatch
-        Nothing -> OriginUnresolved
+{- Classify a per-origin full-manifest fetch into an 'OriginResult'. A genuine
+transport\/async fault (the 'tryAny' channel) and a 'MetadataError' degrade alike yield
+no document, but a 'MetadataNameMismatch' is kept distinct as 'OriginNameMismatch' so the
+no-valid-origin terminal status can render a @502@ (a responding upstream answered for a
+different package) apart from a transient outage, an undecodable body, or a bound breach. -}
+originResultOf :: Either SomeException (Either MetadataError (PackageInfo, Value)) -> OriginResult
+originResultOf = \case
+    Left _ -> OriginUnresolved
+    Right (Left (MetadataNameMismatch _)) -> OriginNameMismatch
+    Right (Left _) -> OriginUnresolved
+    Right (Right pair) -> OriginResolved pair
 
 {- Resolve the private (trusted) upstream origin, __uncached__, forwarding the client's
 own credential (the default @passthrough@ posture). Returns its coherent (parsed
@@ -509,13 +506,10 @@ origin safely is the serve-time authorisation it adds — see
 fetchPrivateOrigin :: Limits -> ServeRuntime -> Text -> Maybe Secret -> PackageName -> Handler OriginResult
 fetchPrivateOrigin limits rt baseUrl token name = do
     resolved <-
-        tryAny
-            ( recordedFetch
-                (srMetrics rt)
-                Metric.Private
-                (fetchEntry limits (srPrivateManager rt) baseUrl token name)
-            )
-    pure (originResultFrom resolved)
+        tryAny $
+            withMetadataClient rt Metric.Private Uncached limits (srPrivateManager rt) baseUrl token $ \client ->
+                fetchFullManifest client name
+    pure (originResultOf resolved)
 
 {- Resolve the public (gated, anonymous) upstream origin through the metadata cache,
 keyed by the origin's base URL as its 'Source', returning its coherent (parsed
@@ -527,98 +521,69 @@ every client without crossing any trust boundary — there is no per-client auth
 to preserve, only one shared anonymous document. A hit returns the cached pair
 (typed view and the exact bytes it was decoded from), so the served document and the
 decision over it stay coherent across the TTL, and concurrent resolutions of a
-popular package __collapse to one upstream call__. -}
+popular package __collapse to one upstream call__ — as does the tarball gate's
+single-version read, which shares this very cache entry ('fetchVersionMetadata'). -}
 fetchPublicOrigin :: Limits -> ServeRuntime -> Text -> PackageName -> Handler OriginResult
 fetchPublicOrigin limits rt baseUrl name = do
-    let metrics = srMetrics rt
     resolved <-
         tryAny $
-            -- The cache runs the fetch action in plain 'IO' (its single-flight leader
-            -- under @mask@); 'withRunInIO' discharges the 'Handler' fetch to 'IO' while
-            -- capturing the ambient @katip@ context, so a breach\/decode warning the
-            -- leader logs still rides the request's trace-correlated context.
-            withRunInIO $ \runInIO ->
-                resolveMetadata
-                    metrics
-                    (srMetadataCache rt)
-                    (Source baseUrl)
-                    name
-                    (runInIO (recordedFetch metrics Metric.Public (fetchEntry limits (srPublicManager rt) baseUrl Nothing name)))
-    pure (originResultFrom resolved)
+            withPublicMetadataClient limits rt baseUrl $ \client ->
+                fetchFullManifest client name
+    pure (originResultOf resolved)
 
-{- Fetch one upstream's full packument (the @Full@ form, for the @time@ map a
-publish-age rule needs) and decode it once into both the typed 'PackageInfo' used to
-decide and the raw @Value@ edited in place to serve. The two come from the /same/
-fetch, so the decision is taken over exactly the bytes served. A body that does not
-decode into both throws, so the fetch degrades to a missing contribution rather than
-failing the whole request. The injected token is the fetch's credential posture (the
-client's for the private origin, 'Nothing' for the anonymous public origin).
+{- Construct a per-request read handle for one origin and run an action over it, with the
+ambient @katip@ context captured into the handle's failure log.
 
-The response bounds (security.md invariant 4) are enforced here against the mount's
-'Limits' budget, every breach mapped onto the same fail-closed degraded path a parse
-failure already takes (the throw that 'fetchPrivateOrigin'\/'fetchPublicOrigin' catch
-to 'Nothing') — but each breach is __logged at a 'WarningS'__ first, naming the
-package and the ceiling it crossed, so an operator can tell a hostile\/oversized
-upstream (or a too-tight cap) from an ordinary parse failure:
+The handle's operations run the fetch in plain 'IO' (the public origin's cache leader runs
+under @mask@); 'withRunInIO' discharges the 'Handler' failure log to 'IO' while capturing
+the request's trace-correlated context, so a breach\/decode\/name-mismatch warning the
+leader logs still rides that context. The npm origin's credential posture, manager, base
+URL, and response budget are the per-fetch 'NpmClientConfig'; the 'ManifestCaching' decides
+whether the origin resolves through the shared metadata cache.
 
-\* __body size__ — 'fetchMetadataForm' reads the body through
-  'Ecluse.Core.Security.boundedRead' against the budget's @maxBodyBytes@, so an oversized
-  body raises a 'ResponseBoundExceeded' from the fetch before it is ever buffered
-  whole; it is caught here, logged, and re-raised;
-\* __nesting depth__ — 'Ecluse.Core.Security.checkNestingDepth' is applied on the decoded
-  @Value@, before it is projected or deeply traversed, so a pathologically nested
-  payload is refused before any deep walk. (The structure is already
-  /bounded-by-body-size/ at the parser — the @maxBodyBytes@ cap above precedes the
-  decode — so this guard bounds the /traversal/ cost of a within-size-but-deep
-  document, not an unbounded one.)
-\* __version count__ — 'Ecluse.Core.Security.checkVersionCount' is applied after projection,
-  before the document threads into rule evaluation, so a version-flood packument is
-  refused before per-version rules run.
+Every response bound (security.md invariant 4) is enforced inside the handle's fetch
+against the mount's 'Limits' budget — a body-size, nesting-depth, or version-count breach
+becomes a 'MetadataBoundExceeded', logged once at a 'WarningS' (naming the package and the
+ceiling crossed) before it degrades the contribution fail-closed, so an operator can tell a
+hostile\/oversized upstream from an ordinary parse failure. -}
+withMetadataClient ::
+    ServeRuntime ->
+    Metric.Upstream ->
+    ManifestCaching ->
+    Limits ->
+    Manager ->
+    Text ->
+    Maybe Secret ->
+    (MetadataClient -> IO a) ->
+    Handler a
+withMetadataClient rt upstream caching limits manager baseUrl token k =
+    withRunInIO $ \runInIO ->
+        k $
+            newNpmMetadataClient
+                (srMetrics rt)
+                upstream
+                caching
+                (\nm err -> runInIO (logMetadataFailure nm baseUrl err))
+                (clientConfig limits manager baseUrl token)
 
-A pathological document is therefore refused outright, never partially served. -}
-fetchEntry :: Limits -> Manager -> Text -> Maybe Secret -> PackageName -> Handler CacheEntry
-fetchEntry limits manager baseUrl token name = do
-    -- The body-size breach is raised from the bounded read as a typed
-    -- 'ResponseBoundExceeded'; log it (which ceiling, observed-vs-cap) before letting
-    -- it propagate to the origin fetcher's @tryAny@, the same fail-closed degrade.
-    response <-
-        handle (\(ResponseBoundExceeded err) -> logBreach name err *> throwIO (ResponseBoundExceeded err)) $
-            liftIO (fetchMetadataForm (clientConfig limits manager baseUrl token) Full noValidators name)
-    -- Decode the body once into the raw @Value@, then project the typed view from
-    -- that same parse: aeson decodes bytes to a 'Value' and runs the 'FromJSON'
-    -- instance either way, so projecting from the @Value@ reuses the one parse
-    -- rather than tokenising a multi-megabyte packument a second time.
-    case Aeson.eitherDecodeStrict (responseBody response) of
-        -- Bound the nesting depth on the decoded @Value@, before projecting or
-        -- traversing, then the version count after projection, before the document
-        -- reaches rule evaluation. A breach of either is logged and then degraded
-        -- exactly like a parse failure.
-        Right value -> case checkNestingDepth limits value of
-            Right bounded -> case parsePackageInfoFromValue name bounded of
-                Right (Projected info) -> case checkVersionCount limits info of
-                    Right boundedInfo -> pure (CacheEntry{entryInfo = boundedInfo, entryRaw = bounded})
-                    Left err -> boundBreach err
-                Right (NameMismatch reported) -> nameMismatch reported
-                Left _ -> decodeFailure
-            Left err -> boundBreach err
-        Left _ -> decodeFailure
-  where
-    -- A nesting/version breach: log which ceiling was crossed, then fail closed as a
-    -- typed 'ResponseBoundExceeded' (caught by the origin fetcher's @tryAny@).
-    boundBreach :: LimitError -> Handler CacheEntry
-    boundBreach err = logBreach name err *> throwIO (ResponseBoundExceeded err)
+{- The public origin's read handle: anonymous (no token), resolved through the shared
+metadata cache under the base URL's 'Source'. Both the packument fetch ('fetchFullManifest')
+and the tarball gate's single-version read ('fetchVersionMetadata') go through this handle,
+so they share one cache entry. -}
+withPublicMetadataClient :: Limits -> ServeRuntime -> Text -> (MetadataClient -> IO a) -> Handler a
+withPublicMetadataClient limits rt baseUrl =
+    withMetadataClient rt Metric.Public (Cached (srMetadataCache rt) (Source baseUrl)) limits (srPublicManager rt) baseUrl Nothing
 
-    decodeFailure :: Handler CacheEntry
-    decodeFailure = logDecodeFailure name *> throwIO PackumentUndecodable
-
-    -- The origin answered with a packument self-reporting a different package's name:
-    -- log it (both names + this origin) and degrade like a decode failure, but with a
-    -- distinct typed throw so the no-valid-origin status can render a @502@.
-    nameMismatch :: Text -> Handler CacheEntry
-    nameMismatch reported = logNameMismatch name baseUrl reported *> throwIO PackumentNameMismatch
-
-unpair :: CacheEntry -> (PackageInfo, Value)
-unpair entry = (entryInfo entry, entryRaw entry)
+{- Log a per-origin metadata-fetch failure at the point and severity it has always been
+logged: a response-bound breach names the ceiling crossed ('logBreach'); an undecodable
+body is the silent-guard decode log ('logDecodeFailure'); a self-reported /different/ name
+is the name-mismatch log ('logNameMismatch'). Invoked once per real fetch, inside the
+single-flight leader, in the request's context. -}
+logMetadataFailure :: PackageName -> Text -> MetadataError -> Handler ()
+logMetadataFailure name baseUrl = \case
+    MetadataBoundExceeded err -> logBreach name err
+    MetadataUndecodable -> logDecodeFailure name
+    MetadataNameMismatch reported -> logNameMismatch name baseUrl reported
 
 {- Log a response-bound breach at 'WarningS' before the contribution is degraded
 fail-closed, so an operator can distinguish a bound breach (a hostile\/oversized
@@ -1265,37 +1230,44 @@ data PublicArtifactGate
       Refused ServeDecision
 
 {- Gate the single requested version against the rules engine and select its
-artifact, returning the gate outcome. The public packument is fetched anonymously
-and parsed; the requested version's 'PackageDetails' is evaluated through
-'Ecluse.Core.Rules.evalRules' (the same engine the packument path gates with). On an admit the
-artifact matching the requested filename is selected ('artifactFor'); a filename
-absent from an otherwise-admitted version is a forwarded miss, the same @404@ as an
-absent version.
+artifact, returning the gate outcome. The single-version metadata is fetched through the
+public origin's read handle ('fetchVersionMetadata'), which resolves the full packument
+__through the shared metadata cache__ — so a packument @GET@ and the tarball gate that
+follows still collapse to one upstream call — and selects the requested version's
+'PackageDetails'. That version is evaluated through 'Ecluse.Core.Rules.evalRules' (the same
+engine the packument path gates with). On an admit the artifact matching the requested
+filename is selected ('artifactFor'); a filename absent from an otherwise-admitted version
+is a forwarded miss, the same @404@ as an absent version.
 
 The refusal causes the error model maps: a version (or file) absent from the public
 metadata is a genuine miss (a @404@ forwarded absence, projected as 'Unavailable'
 'WontResolve' only to carry a non-admit — the status is overridden to @404@ in
-'artifactError'); a metadata fetch that fails is a transient upstream outage (@503@);
-a present version is decided by the rules, where a needed effectful rule that cannot
-be consulted fail-closes to an 'Unavailable' @503@\/@500@. -}
+'artifactError'); a metadata fetch that fails — a transport outage or any 'MetadataError',
+a misreporting origin included — is a transient upstream outage (@503@), the single-version
+path collapsing every unobtainable-metadata cause to the same retryable outage; a present
+version is decided by the rules, where a needed effectful rule that cannot be consulted
+fail-closes to an 'Unavailable' @503@\/@500@. -}
 gatePublicVersion :: ServeRuntime -> PackumentDeps -> PackageName -> Version -> Text -> Handler PublicArtifactGate
 gatePublicVersion rt deps name version file = do
     evalCtx <- liftIO (EvalContext <$> pdNow deps)
-    resolved <- originPackument <$> fetchPublicOrigin (pdLimits deps) rt (pdPublicBaseUrl deps) name
+    resolved <-
+        tryAny $
+            withPublicMetadataClient (pdLimits deps) rt (pdPublicBaseUrl deps) $ \client ->
+                fetchVersionMetadata client name version
     case resolved of
-        Nothing -> pure (Refused upstreamUnavailable)
-        Just (info, _value) -> case Map.lookup (renderVersion version) (infoVersions info) of
-            Nothing -> pure (Refused versionAbsent)
-            Just details ->
-                -- The rule-eval domain span wraps the actual decision (only reached once
-                -- the version exists), recording the verdict so a denial → 403 is
-                -- explainable from the trace; the upstream-outage and version-absent
-                -- branches above are not rule evaluations and carry no span.
-                liftIO $
-                    spanRuleEval (srTracing rt) name version $ do
-                        (gate, seconds) <- timedSeconds (gateVersion evalCtx deps file details)
-                        mpRuleEvalDuration (srMetrics rt) (evalTier (pdRules deps)) seconds
-                        pure (gate, gateVerdict gate)
+        Left _ -> pure (Refused upstreamUnavailable)
+        Right (Left _) -> pure (Refused upstreamUnavailable)
+        Right (Right Nothing) -> pure (Refused versionAbsent)
+        Right (Right (Just details)) ->
+            -- The rule-eval domain span wraps the actual decision (only reached once
+            -- the version exists), recording the verdict so a denial → 403 is
+            -- explainable from the trace; the upstream-outage and version-absent
+            -- branches above are not rule evaluations and carry no span.
+            liftIO $
+                spanRuleEval (srTracing rt) name version $ do
+                    (gate, seconds) <- timedSeconds (gateVersion evalCtx deps file details)
+                    mpRuleEvalDuration (srMetrics rt) (evalTier (pdRules deps)) seconds
+                    pure (gate, gateVerdict gate)
 
 -- The serve verdict a public-artifact gate outcome carries, for the rule-eval span:
 -- an admitted version admits; a refused one carries the decision the serve error
@@ -1646,25 +1618,6 @@ from the rule\/upstream outcomes 'artifactError' renders. -}
 internalArtifactError :: Response
 internalArtifactError =
     responseLBS (mkStatus 500 "Internal Server Error") [(hContentType, "application/json")] "{\"error\":\"could not form the upstream artifact URL\"}"
-
--- ── metric emits ───────────────────────────────────────────────────────────────
-
-{- Record an upstream metadata fetch around the real fetch action: its latency on a
-successful resolve (a 2xx body was read and decoded), or a bounded-cause error
-otherwise, before re-raising so the caller's degrade is unchanged. Wrapping the fetch
-action means the public path — fetched through the cache — records only on a miss (a
-hit never runs the action), so the histogram counts real upstream calls, not cache
-hits (those are the metadata-cache metric's concern). -}
-recordedFetch :: MetricsPort -> Metric.Upstream -> Handler CacheEntry -> Handler CacheEntry
-recordedFetch metrics upstream action = do
-    (result, seconds) <- timedSeconds (tryAny action)
-    case result of
-        Right entry -> do
-            liftIO (mpUpstreamFetch metrics upstream Metric.Status2xx seconds)
-            pure entry
-        Left err -> do
-            liftIO (mpUpstreamFetchError metrics upstream (fetchCause err))
-            throwIO err
 
 -- ── the first-party publish handler ───────────────────────────────────────────
 
