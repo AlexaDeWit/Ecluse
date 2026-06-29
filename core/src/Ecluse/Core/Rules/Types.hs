@@ -21,6 +21,7 @@ module Ecluse.Core.Rules.Types (
     defaultAllowIfOlderThanPrecedence,
     defaultAllowScopePrecedence,
     defaultDenyInstallTimeExecutionPrecedence,
+    defaultDenyByIdentityPrecedence,
 
     -- * Evaluation
     EvalContext (..),
@@ -67,6 +68,10 @@ data Rule
       common arbitrary-code-execution vector. Yields no decision otherwise.
       -}
       DenyInstallTimeExecution
+    | {- | A hard deny for a specific package or package@version. Evaluated at top
+      precedence (above AllowScope) as a post-mirror revocation mechanism.
+      -}
+      DenyByIdentity Text
     deriving stock (Eq, Show)
 
 {- | A stable, human-facing name for a rule — its identity, derived from the data: the
@@ -77,6 +82,7 @@ ruleName = \case
     AllowScope{} -> "AllowScope"
     AllowIfOlderThan{} -> "AllowIfOlderThan"
     DenyInstallTimeExecution -> "DenyInstallTimeExecution"
+    DenyByIdentity{} -> "DenyByIdentity"
 
 {- | A 'Rule' paired with the integer precedence at which it competes (higher
 wins). This is config's resolved-policy element; "Ecluse.Core.Rules" prepares it into
@@ -114,6 +120,7 @@ defaultPrecedence = \case
     AllowIfOlderThan{} -> defaultAllowIfOlderThanPrecedence
     AllowScope{} -> defaultAllowScopePrecedence
     DenyInstallTimeExecution -> defaultDenyInstallTimeExecutionPrecedence
+    DenyByIdentity{} -> defaultDenyByIdentityPrecedence
 
 -- | Pair a rule with its type's 'defaultPrecedence'.
 atDefaultPrecedence :: Rule -> PrecededRule
@@ -137,6 +144,12 @@ every allow default, so a matching deny overrides any allow out of the box.
 -}
 defaultDenyInstallTimeExecutionPrecedence :: Int
 defaultDenyInstallTimeExecutionPrecedence = 300
+
+{- | Default precedence of 'DenyByIdentity': the top precedence, strictly above
+every other rule (including explicit allow-lists), to serve as a hard revocation.
+-}
+defaultDenyByIdentityPrecedence :: Int
+defaultDenyByIdentityPrecedence = 400
 
 {- | Ambient information a rule may need that is not part of the package itself
 (the wall-clock "now" for age calculations).

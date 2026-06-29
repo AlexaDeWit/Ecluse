@@ -149,6 +149,18 @@ spec = do
         it "DenyInstallTimeExecution yields no decision when there are no install scripts" $
             evalRule ctx DenyInstallTimeExecution (pkg Nothing 99)
                 >>= (`shouldSatisfy` isNoDecision)
+        it "DenyByIdentity matches a package name exactly" $
+            evalRule ctx (DenyByIdentity "thing") (pkg Nothing 0)
+                >>= (`shouldSatisfy` isDeny)
+        it "DenyByIdentity matches a package@version exactly" $
+            evalRule ctx (DenyByIdentity "thing@1.0.0") (pkg Nothing 0)
+                >>= (`shouldSatisfy` isDeny)
+        it "DenyByIdentity matches a scoped package name exactly" $
+            evalRule ctx (DenyByIdentity "@myorg/thing") (pkg (Just "myorg") 0)
+                >>= (`shouldSatisfy` isDeny)
+        it "DenyByIdentity yields no decision on a non-match" $
+            evalRule ctx (DenyByIdentity "other") (pkg Nothing 0)
+                >>= (`shouldSatisfy` isNoDecision)
 
     describe "PrecededRule" $ do
         it "exposes the precedence and rule it was built with" $ do
@@ -254,6 +266,12 @@ spec = do
                 ]
                 (withInstallScripts (pkg (Just "myorg") 99))
                 >>= \d -> admittedBy d `shouldBe` Just "AllowScope"
+        it "DenyByIdentity outranks an AllowScope for the same name" $ do
+            -- Precedence test: DenyByIdentity (400) outranks AllowScope (200)
+            let rs = map atDefaultPrecedence [AllowScope (mkScope "myorg"), DenyByIdentity "@myorg/thing"]
+                p = pkg (Just "myorg") 0
+            decide rs p >>= \d -> blockedBy d `shouldBe` Just "DenyByIdentity"
+            decide (reverse rs) p >>= \d -> blockedBy d `shouldBe` Just "DenyByIdentity"
         it "denies by default when every rule is non-decisive, collecting each reason in boot order" $
             -- The audit trail carries each non-decisive rule's actual reason, in
             -- boot order (highest precedence first): AllowScope (200) then

@@ -1019,6 +1019,9 @@ buildRule name ty entry = case ty of
     "AllowScope" -> case entryScope entry of
         Just scope -> Right (AllowScope (mkScope scope))
         Nothing -> Left [MalformedRule name "\"AllowScope\" requires \"scope\""]
+    "DenyByIdentity" -> case entryIdentity entry of
+        Just ident -> Right (DenyByIdentity ident)
+        Nothing -> Left [MalformedRule name "\"DenyByIdentity\" requires \"identity\""]
     "DenyInstallTimeExecution" -> Right DenyInstallTimeExecution
     _ -> Left [UnknownRuleType name ty]
 
@@ -1036,6 +1039,7 @@ patchRuleValue name entry rule = do
                 | otherwise -> Left [MalformedRule name "\"ageSeconds\" must be non-negative"]
             Nothing -> Right (AllowIfOlderThan d)
         AllowScope s -> Right (AllowScope (maybe s mkScope (entryScope entry)))
+        DenyByIdentity i -> Right (DenyByIdentity (fromMaybe i (entryIdentity entry)))
         DenyInstallTimeExecution -> Right DenyInstallTimeExecution
 
 -- A restated @type@ on a patch must match the existing rule's kind, so a typo
@@ -1054,11 +1058,12 @@ ruleTypeName = \case
     AllowScope{} -> "AllowScope"
     AllowIfOlderThan{} -> "AllowIfOlderThan"
     DenyInstallTimeExecution -> "DenyInstallTimeExecution"
+    DenyByIdentity{} -> "DenyByIdentity"
 
 -- The rule @type@ names config can build. @AllowIfRemediatesCve@ is deliberately
 -- absent: it is effectful and not part of this rule model, so it is unknown here.
 knownRuleTypes :: [Text]
-knownRuleTypes = ["AllowScope", "AllowIfOlderThan", "DenyInstallTimeExecution"]
+knownRuleTypes = ["AllowScope", "AllowIfOlderThan", "DenyInstallTimeExecution", "DenyByIdentity"]
 
 -- ── the structured document ──────────────────────────────────────────────────
 
@@ -1117,6 +1122,8 @@ data RuleEntry = RuleEntry
     -- ^ The quarantine window for an @AllowIfOlderThan@ rule, in seconds.
     , entryScope :: Maybe Text
     -- ^ The scope for an @AllowScope@ rule.
+    , entryIdentity :: Maybe Text
+    -- ^ The identity for a @DenyByIdentity@ rule.
     }
     deriving stock (Eq, Show)
 
@@ -1181,13 +1188,14 @@ instance FromJSON RuleEntry where
         -- failure, enforcing the env-only-secrets boundary in the type system
         -- rather than merely documenting it.
         rejectSecretKeys o
-        rejectUnknownKeys "rule" ["type", "precedence", "enabled", "ageSeconds", "scope"] o
+        rejectUnknownKeys "rule" ["type", "precedence", "enabled", "ageSeconds", "scope", "identity"] o
         RuleEntry
             <$> o .:? "type"
             <*> o .:? "precedence"
             <*> o .:? "enabled"
             <*> o .:? "ageSeconds"
             <*> o .:? "scope"
+            <*> o .:? "identity"
 
 -- ── decoder helpers ──────────────────────────────────────────────────────────
 
