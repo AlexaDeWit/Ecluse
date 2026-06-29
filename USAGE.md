@@ -39,9 +39,7 @@ hosts nothing itself. The design is in [`docs/architecture.md`](docs/architectur
 
 ## Deployment model
 
-Écluse ships as a single, reproducible container image that runs **one process**: the HTTP
-front door (a raw-`wai` application on `PROXY_PORT`, default `4873`) and, alongside it, the
-mirror worker. Point your package manager at it as a registry (see
+Écluse ships as a single, reproducible container image providing a **unified multicall executable**. It can run the HTTP proxy server (`ecluse serve`), the OSV ingestion pipeline (`ecluse pilot`), or the registry cleanup worker (`ecluse dredger`) depending on the container command. All three roles share the exact same configuration file and rule definitions. The default command runs the `serve` process (the HTTP front door on `PROXY_PORT`, default `4873`) and, alongside it, the mirror worker. Point your package manager at it as a registry (see
 [Connecting your clients](#connecting-your-clients)).
 
 Before you run a published image, **verify its provenance and SBOM attestations**: the
