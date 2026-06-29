@@ -31,3 +31,5 @@ dist-bench-prof/
 scratchpad/
 .vscode/*
 !.vscode/settings.json
+.agents/settings.local.json
+.agents/settings.json
