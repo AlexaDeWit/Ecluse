@@ -43,6 +43,7 @@ module Ecluse.Core.Registry (
     PublishError (..),
     PublishFault (..),
     UrlFormationError (..),
+    PublishRelayResponse (..),
 ) where
 
 import Ecluse.Core.Package (PackageDetails, PackageInfo, PackageName)
@@ -110,6 +111,20 @@ typed exception — catchable by type, never laundered into a stringly-typed
 retry vs. drop on it.
 -}
 instance Exception UrlFormationError
+
+{- | The response from the publication target after relaying a publish document.
+Kept in memory (no streaming) — the relayed body is small (typically a JSON
+envelope and a tarball under the target's size limit), and buffering it whole lets the
+proxy catch and log an exception before starting a chunked response it would otherwise
+abandon mid-stream.
+-}
+data PublishRelayResponse = PublishRelayResponse
+    { relayStatus :: Int
+    -- ^ The HTTP status code the publication target returned.
+    , relayBody :: LByteString
+    -- ^ The publication target's response body, relayed to the client unchanged.
+    }
+    deriving stock (Eq, Show)
 
 {- | Why a publish could not complete, surfaced as a __value__ rather than thrown
 so the mirror worker decides retry vs. drop by an exhaustive pattern match rather

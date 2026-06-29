@@ -34,6 +34,8 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageName, mkPackageName)
 import Ecluse.Core.Package.Integrity (defaultMinIntegrity, defaultMinTrustedIntegrity)
 import Ecluse.Core.Queue (newInMemoryQueue)
+import Ecluse.Core.Registry.Npm (NpmClientConfig (..), artifactRequestByFile, artifactRequestByUrl)
+import Ecluse.Core.Registry.Npm.Filter (applyFilterPlan, rewriteTarballUrls)
 import Ecluse.Core.Registry.Npm.Route qualified as Npm
 import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
 import Ecluse.Core.Rules (prepare)
@@ -48,6 +50,7 @@ import Ecluse.Core.Server.Context (
     ServeRuntime (ServeRuntime),
     runHandler,
  )
+import Ecluse.Core.Server.Metadata (newNpmMetadataClient)
 import Ecluse.Core.Server.Pipeline (servePackument, serveTarball)
 import Ecluse.Core.Server.Route (Filename (Filename))
 import Ecluse.Core.Telemetry.Metrics (Decision (Admit, Unavailable))
@@ -158,6 +161,11 @@ depsFor publicPort = do
             , pdHelp = Nothing
             , pdMinIntegrity = defaultMinIntegrity
             , pdMinTrustedIntegrity = defaultMinTrustedIntegrity
+            , pdNewMetadataClient = \p u c f1 f2 l m t s -> newNpmMetadataClient p u c f1 f2 (NpmClientConfig t m s l)
+            , pdBuildArtifactRequestByFile = \l m t s -> artifactRequestByFile (NpmClientConfig t m s l)
+            , pdBuildArtifactRequestByUrl = \l m t s -> artifactRequestByUrl (NpmClientConfig t m s l)
+            , pdApplyFilter = applyFilterPlan
+            , pdRewriteUrls = rewriteTarballUrls
             }
 
 {- | A pure rule policy that admits the fixture version: the rules engine is

@@ -87,7 +87,6 @@ module Ecluse.Core.Registry.Npm (
     publishRequest,
 
     -- * First-party publish relay
-    PublishRelayResponse (..),
     relayPublishDocument,
 
     -- * Publish-document assembly
@@ -142,10 +141,12 @@ import Ecluse.Core.Registry (
     ParseError (ParseError),
     PublishError (..),
     PublishFault (PublishRejected, PublishUrlUnformable),
+    PublishRelayResponse (..),
     RegistryClient (..),
     RegistryResponse (RegistryResponse),
     UrlFormationError (EmptyBaseUrl, UnparseableUrl),
  )
+
 import Ecluse.Core.Registry.Npm.Project qualified as Project
 import Ecluse.Core.Security (
     LimitError,
@@ -422,26 +423,6 @@ publishRequest config name document = do
             }
 
 -- ── first-party publish relay ─────────────────────────────────────────────────
-
-{- | The publication target's response to a relayed first-party publish: the HTTP
-status __code__ and the response __body__, so the front door can forward the
-registry's own answer to the @npm@ client verbatim.
-
-This is deliberately distinct from the mirror worker's
-'Ecluse.Core.Registry.publishArtifact', which collapses the registry's reply into a
-success-or-'Ecluse.Core.Registry.PublishFault' verdict (the worker only needs to know
-whether to ack or retry the job). A first-party publish is a __relay__: the client
-publishes through the proxy and must see exactly what the registry said — a success
-shape, a @409@ "version exists", a @403@ the registry's own authorisation produced —
-so the status and body are carried through rather than reduced to a verdict.
--}
-data PublishRelayResponse = PublishRelayResponse
-    { relayStatus :: Int
-    -- ^ The HTTP status code the publication target returned.
-    , relayBody :: LByteString
-    -- ^ The publication target's response body, relayed to the client unchanged.
-    }
-    deriving stock (Eq, Show)
 
 {- | Relay a client's npm publish document to the publication target and return the
 target's own response — the first-party publish primitive behind the @PUT \/{pkg}@

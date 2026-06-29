@@ -69,8 +69,8 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Set qualified as Set
 import Data.Text qualified as T
 
-import Ecluse.Core.Package.Filter (FilterPlan (fpDecisions, fpLatest, fpSurvivors))
-import Ecluse.Core.Rules.Types (Decision)
+import Ecluse.Core.Package.Filter (FilterPlan (fpDecisions, fpLatest, fpSurvivors), FilterResult (..))
+
 import Ecluse.Core.Server.Route (isSafeComponent)
 import Ecluse.Core.Version (unVersion)
 
@@ -168,14 +168,6 @@ version's 'Decision' so the serve layer can render the denial and choose the
 status (403 for an all-policy denial, 503 for a transient or undecidable cause).
 Choosing that status is __not__ this module's job.
 -}
-data FilterResult
-    = -- | At least one version survived; the coherent, filtered packument body.
-      Filtered Value
-    | {- | No version survived; each rejected version's decision, for the serve
-      layer to map to a status and a denial body.
-      -}
-      NoSurvivors [Decision]
-    deriving stock (Eq, Show)
 
 {- | Replay a 'FilterPlan' onto the raw packument @Value@, removing every
 non-surviving version and repairing cross-field coherence.
