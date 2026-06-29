@@ -640,8 +640,8 @@
                   "severity": "High",
                   "title": "Proxy compromised via tampered OSV database",
                   "type": "Tampering",
-                  "description": "If the S3 bucket is writable by an attacker, they could supply a tampered osv.db to bypass vulnerability gates.",
-                  "mitigation": "S3 bucket is private. Proxy IAM role is granted GetObject only. Atomic shadow-swap prevents partial reads.",
+                  "description": "If the S3 bucket is writable by an attacker, they could supply a tampered osv.db to bypass vulnerability gates, or worse, exploit memory corruption vulnerabilities in the underlying C SQLite engine (e.g., Magellan-style exploits, malicious triggers) when the proxy executes queries.",
+                  "mitigation": "S3 bucket is private. Proxy IAM role is granted GetObject only. Atomic shadow-swap prevents partial reads. In addition, the proxy explicitly binds the SQLite connection to Read-Only mode and disables Trusted Schema (PRAGMA trusted_schema = OFF;) upon opening the connection to prevent execution of attacker-controlled triggers or views.",
                   "modelType": "STRIDE",
                   "id": "32d813d8-6bee-4fa3-acb2-d62efe5aff18"
                 }
