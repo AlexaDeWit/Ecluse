@@ -113,7 +113,7 @@ the time it takes to review.** Low-effort, unreviewed AI output ("slop") will be
 
 - **Disclose non-trivial AI use.** Editor autocomplete needs no disclosure; AI-generated or
   substantially AI-shaped code, prose, or commits do. Add an `Assisted-by:` git trailer naming
-  the tool, e.g. `Assisted-by: Claude (Anthropic)`, and mention it in the PR description. This
+  the tool, e.g. `Assisted-by: <Agent Name> (<Vendor>)`, and mention it in the PR description. This
   records a tool that *helped*; you remain the sole author, so it's **not** `Co-authored-by:`.
 - **Verify before you file.** Never open an issue, and especially never a vulnerability
   report, that an AI produced and you haven't reproduced and confirmed yourself (see

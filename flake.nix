@@ -325,8 +325,8 @@
           pkgs.shellcheck
         ];
 
-        # agent-lsp: the LSP<->MCP bridge that lets an MCP client (e.g. Claude
-        # Code) drive haskell-language-server's semantic navigation — go-to-
+        # agent-lsp: the LSP<->MCP bridge that lets an MCP client (e.g. agent
+        # harnesses) drive haskell-language-server's semantic navigation — go-to-
         # definition, find-references, hover/type-at-point, diagnostics, rename —
         # over this project instead of lexical grep. It is built on a *complete*
         # LSP client. (The earlier bridge, mcp-language-server v0.1.1, was an

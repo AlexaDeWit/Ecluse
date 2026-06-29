@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git fetch *)",
+      "Bash(gh issue *)",
+      "Bash(git checkout *)",
+      "Bash(git pull *)"
+    ]
+  },
+  "enabledMcpjsonServers": [
+    "hls"
+  ]
+}

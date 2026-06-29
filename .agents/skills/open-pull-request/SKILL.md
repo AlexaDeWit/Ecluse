@@ -2,7 +2,7 @@
 name: open-pull-request
 description: >-
   Prepare a commit + pull request for Écluse the way this repo gates them: GPG-signed,
-  DCO-signed-off (as the author, NOT Claude), Conventional-Commit, AI-disclosed, opened
+  DCO-signed-off (as the author, NOT the AI), Conventional-Commit, AI-disclosed, opened
   as a draft, and with a PR body that follows the template AND explains the change in
   plain terms. Invoke before you commit and open (or finalize) a PR, it encodes the
   exact rules agents most often miss, so the churn (DCO red, missing trailers, a
@@ -21,9 +21,9 @@ mistakes that have actually cost us reword-and-force-push round-trips.
 Two non-negotiables up front, because they are the two that bite:
 
 1. **The `Signed-off-by:` trailer must name the _author_, `Alexandra DeWit
-   <alexa.dewit@gmail.com>`, never Claude.** The DCO check (a probot) gates on a
-   `Signed-off-by` matching the commit author's email. `Signed-off-by: Claude
-   <noreply@anthropic.com>` red-fails it. AI assistance is disclosed *separately*, via
+   <alexa.dewit@gmail.com>`, never the AI agent.** The DCO check (a probot) gates on a
+   `Signed-off-by` matching the commit author's email. `Signed-off-by: AI Agent
+   <noreply@ai.com>` red-fails it. AI assistance is disclosed *separately*, via
    the `Assisted-by:` trailer (below), the two never substitute for each other.
 2. **Every non-trivial PR body must include a plain-language section** (`## In plain
    terms`). The architect reviews every PR and routinely asks for an "explain it like
@@ -36,7 +36,7 @@ Two non-negotiables up front, because they are the two that bite:
 Commit with **both** signing flags, every time:
 
 ```
-git commit -S -s -m "<conventional subject>" -m "<body…>" -m "Assisted-by: Claude (Anthropic)"
+git commit -S -s -m "<conventional subject>" -m "<body…>" -m "Assisted-by: <Agent Name> (<Vendor>)"
 ```
 
 - `-S` = GPG-sign (authenticity, *who* committed). `-s` = append the DCO
@@ -45,7 +45,7 @@ git commit -S -s -m "<conventional subject>" -m "<body…>" -m "Assisted-by: Cla
   hand-write a `Signed-off-by:` line** (that is exactly how the wrong name slips in).
 - **Conventional Commits** subject: `type(scope): summary`,  `fix(egress): …`, `feat(server): …`, `docs(threat-model): …`, `test(bench): …`,
   `refactor(core): …`, `ci(pages): …`. Imperative mood, lower-case, no trailing period.
-- **`Assisted-by: Claude (Anthropic)`** discloses the AI assistance. It is **not**
+- **`Assisted-by: <Agent Name> (<Vendor>)`** discloses the AI assistance. It is **not**
   `Co-Authored-By`, do not use that trailer. It coexists with the sign-off.
 - **This machine's git has no `--trailer` flag.** Put trailers as literal lines in the
   message body (a trailing `-m` block, as above, or in a message file via `-F`). Don't
@@ -89,7 +89,7 @@ clause. An analogy is welcome where it genuinely illuminates. No internal slice/
 - [ ] Tests added or updated for the change
 
 ## AI assistance
-- [x] Disclosed: assisted by Claude (Anthropic); `Assisted-by:` trailer on the
+- [x] Disclosed: assisted by AI; `Assisted-by:` trailer on the
       relevant commits. Author reviewed and is responsible for every line.
 ```
 
