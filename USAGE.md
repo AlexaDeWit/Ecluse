@@ -111,8 +111,8 @@ in that Écluse cannot detect them, so nothing warns you. The registry-topology 
   `PUBLICATION_TARGET_URL` unset. The *perimeter* still holds (public content is still gated), but you
   lose **provenance separation**: first-party and public-derived packages share one store, so you can no
   longer apply distinct per-provenance scanning or policy, and post-incident scoping, *"which mirrored
-  public packages did we hold?"*, is muddied. You give up auditability and defence-in-depth, not the gate.
-  (Register [threat #10](https://alexadewit.github.io/Ecluse/threat-model.html).)
+  public packages did we hold?"*, is muddied. Furthermore, **Écluse Dredger will refuse to boot** if `MIRROR_TARGET_URL` matches `PUBLICATION_TARGET_URL`, because automated pruning on a shared datastore risks catastrophic first-party data loss. You give up auditability, defence-in-depth, and automated reaping, not the gate.
+  (Register [threat #10](https://alexadewit.github.io/Ecluse/threat-model.html) and #16.)
 - **Pointing the private upstream at a registry that itself draws from public**; e.g. a CodeArtifact repo
   carrying the stock `npm-store` upstream to npmjs. This is the **dangerous one.** Raw, ungated public
   packages then reach clients through the *trusted* read path, *behind* Écluse's gate instead of through
