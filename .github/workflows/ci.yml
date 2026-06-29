@@ -75,14 +75,6 @@ jobs:
       - name: Build (library, executable, all test suites)
         run: nix develop .#ci --command make build
 
-      - name: Unit tests (core + app)
-        run: nix develop .#ci --command make test
-
-      # Same warm build dir, so the integration tier costs only its own (small)
-      # test-suite link + the ministack containers — not another dependency build.
-      - name: Integration tests (ministack)
-        run: nix develop .#ci --command make test-integration
-
       # Run the >>> examples in Haddock comments as tests (doctest), reusing the
       # warm build above so documented examples can't drift from the code. Gates
       # through this job. See HADDOCK.md → "Examples that run".

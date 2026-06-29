@@ -25,6 +25,7 @@
 set -euo pipefail
 
 suite="${1:-ecluse-unit}"
+shift || true
 builddir="dist-coverage" # isolated from dist-newstyle so the normal `cabal
                          # build` cache isn't invalidated by -fhpc instrumentation
 outdir="coverage"
@@ -53,7 +54,8 @@ fi
 cabal test "$suite" \
   --enable-coverage \
   --builddir="$builddir" \
-  --test-show-details=direct
+  --test-show-details=direct \
+  "$@"
 
 tix="$(find "$builddir" -type f -name "${suite}.tix" | head -n1)"
 if [ -z "$tix" ]; then
