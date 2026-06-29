@@ -48,7 +48,7 @@ hard boundary between the **pure capability core** and the **composition shell**
 - **`ecluse`** (`src`, modules under `Ecluse.*`), the application shell that composes
   the core into a running proxy: the configuration loader, the `Env` composition root,
   logging, the WAI `Application`, and the telemetry **SDK** / OTLP export wiring.
-- **`ecluse` executable** (`app/Main.hs`), the entrypoint.
+- **`ecluse` executable** (`app/Main.hs`), the entrypoint (a multicall CLI router that spins up `serve`, `pilot`, or `dredger` roles).
 
 The boundary is **enforced by the build graph**: the core's unit suite does not depend
 on the application library, so a core module that reached into composition would fail to
