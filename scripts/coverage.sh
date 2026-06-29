@@ -131,6 +131,9 @@ case "$suite" in
       # logic. Remove when S06 (npm-wire) adds real fetch/parse code and tests that
       # link it.
       ./core/src/Ecluse/Core/Registry.hs
+      # test/dev-only loopback constructor enabled by dev-http-egress flag.
+      # tested by integration tests, not linked by core-unit tests.
+      ./core/src/Ecluse/Core/Security/Egress/DevHttp.hs
     )
     ;;
   ecluse-unit)
