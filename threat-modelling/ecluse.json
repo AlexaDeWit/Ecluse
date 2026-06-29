@@ -1,9 +1,9 @@
 {
   "version": "2.6.2",
   "summary": {
-    "title": "Écluse",
+    "title": "\u00c9cluse",
     "owner": "Alexandra de Wit",
-    "description": "Initial STRIDE threat model for Écluse, a supply-chain resilience proxy for package registries. The 'High Level' diagram captures the canonical deployment posture: per-caller passthrough credentials, the three-registry topology (first-party private store, public-derived mirror store, and a pull-through read endpoint), and AWS CodeArtifact reached over VPC endpoints, with the demand-driven mirror worker minting its own write token under the container role. Edge access control and storage-layer scanning are operator responsibilities and are out of scope (recorded as trust assumptions). This is an iterative sketch, refined collaboratively; the .json is the single source of truth and Threat Dragon renders it.",
+    "description": "Initial STRIDE threat model for \u00c9cluse, a supply-chain resilience proxy for package registries. The 'High Level' diagram captures the canonical deployment posture: per-caller passthrough credentials, the three-registry topology (first-party private store, public-derived mirror store, and a pull-through read endpoint), and AWS CodeArtifact reached over VPC endpoints, with the demand-driven mirror worker minting its own write token under the container role. Edge access control and storage-layer scanning are operator responsibilities and are out of scope (recorded as trust assumptions). This is an iterative sketch, refined collaboratively; the .json is the single source of truth and Threat Dragon renders it.",
     "id": 0
   },
   "detail": {
@@ -32,7 +32,7 @@
             },
             "attrs": {
               "label": {
-                "text": "Operator trust zone (VPC / mesh) — access edge enforced here"
+                "text": "Operator trust zone (VPC / mesh) \u2014 access edge enforced here"
               }
             },
             "visible": true,
@@ -55,7 +55,9 @@
                 "0ec10e5e-0000-4000-8000-000000000033",
                 "0ec10e5e-0000-4000-8000-000000000034",
                 "f1646094-9885-422a-b7e7-7888c72905ef",
-                "c8455307-cef2-4843-a821-ff90db9643d2"
+                "c8455307-cef2-4843-a821-ff90db9643d2",
+                "f66e2ffa-c6bf-4b45-8aad-a23ced3a97ff",
+                "d5da865d-6e80-44da-a2ee-841f6bebd567"
               ],
               "crossingFlows": [
                 "0ec10e5e-0000-4000-8000-000000000040",
@@ -240,7 +242,7 @@
             "id": "0ec10e5e-0000-4000-8000-000000000010",
             "data": {
               "name": "npm client\n(developer / CI)",
-              "description": "The caller. Presents its own CodeArtifact bearer token; authenticated to the proxy by the operator's access edge, not by Écluse.",
+              "description": "The caller. Presents its own CodeArtifact bearer token; authenticated to the proxy by the operator's access edge, not by \u00c9cluse.",
               "type": "tm.Actor",
               "isTrustBoundary": false,
               "outOfScope": false,
@@ -357,7 +359,7 @@
             "id": "0ec10e5e-0000-4000-8000-000000000011",
             "data": {
               "name": "Public npm registry",
-              "description": "The public upstream. Its tarball bytes and author-supplied manifest fields are untrusted — gated by the rules engine and the integrity floor, never served blindly. The fields the registry itself asserts are trusted only to the floor that the registry is an honest operator: the per-version publish time is server-stamped (npm/PyPI/RubyGems record it server-side and it is absent from the publish document, so a publisher cannot backdate it), as is server-side integrity. A compromised or malicious registry operator forging those is below this necessary trust floor and out of scope. Queried anonymously (caller credential stripped).",
+              "description": "The public upstream. Its tarball bytes and author-supplied manifest fields are untrusted \u2014 gated by the rules engine and the integrity floor, never served blindly. The fields the registry itself asserts are trusted only to the floor that the registry is an honest operator: the per-version publish time is server-stamped (npm/PyPI/RubyGems record it server-side and it is absent from the publish document, so a publisher cannot backdate it), as is server-side integrity. A compromised or malicious registry operator forging those is below this necessary trust floor and out of scope. Queried anonymously (caller credential stripped).",
               "type": "tm.Actor",
               "isTrustBoundary": false,
               "outOfScope": false,
@@ -369,8 +371,8 @@
                   "severity": "High",
                   "title": "Upstream registry forges its own server-asserted metadata (e.g. a backdated publish time)",
                   "type": "Tampering",
-                  "description": "Écluse's freshness quarantine and integrity reasoning consume fields the upstream registry asserts — notably the per-version publish time and server-side integrity. A registry that asserted forged values (a backdated time to defeat the age quarantine, or a manufactured digest) could admit content the proxy's age- and integrity-based gates would otherwise hold back.",
-                  "mitigation": "Out of scope by trust assumption, but recognized as a theoretical possibility. The primary registries stamp these fields server-side — the publish time is not part of the publish document, so a publisher cannot forge it — and Écluse necessarily extends a floor of trust to the registry operator's honesty: it reads the registry's metadata, so a hostile operator is an adversary the model cannot counter (the same class as 'what if npm itself is malicious'). What is untrusted here are the tarball contents and author-supplied fields, which the rules engine and integrity floor do gate. The freshness quarantine's age signal does depend on the upstream's timestamp honesty, so a registry asserting a forged time could in theory defeat it; Écluse could re-anchor age to its own first observation of a version to remove that dependence, but this is deliberately not pursued at this time. The central public registries (npmjs, PyPI, and their peers) are foundational enough to modern software infrastructure that trusting their server-stamped timestamps is the only practical recourse, and a robust first-observation anchor would require durable, replica-shared state at odds with Écluse's network-broker design while only narrowing a surface that is already out of scope. The possibility is acknowledged and not treated as a serious attack surface at this time.",
+                  "description": "\u00c9cluse's freshness quarantine and integrity reasoning consume fields the upstream registry asserts \u2014 notably the per-version publish time and server-side integrity. A registry that asserted forged values (a backdated time to defeat the age quarantine, or a manufactured digest) could admit content the proxy's age- and integrity-based gates would otherwise hold back.",
+                  "mitigation": "Out of scope by trust assumption, but recognized as a theoretical possibility. The primary registries stamp these fields server-side \u2014 the publish time is not part of the publish document, so a publisher cannot forge it \u2014 and \u00c9cluse necessarily extends a floor of trust to the registry operator's honesty: it reads the registry's metadata, so a hostile operator is an adversary the model cannot counter (the same class as 'what if npm itself is malicious'). What is untrusted here are the tarball contents and author-supplied fields, which the rules engine and integrity floor do gate. The freshness quarantine's age signal does depend on the upstream's timestamp honesty, so a registry asserting a forged time could in theory defeat it; \u00c9cluse could re-anchor age to its own first observation of a version to remove that dependence, but this is deliberately not pursued at this time. The central public registries (npmjs, PyPI, and their peers) are foundational enough to modern software infrastructure that trusting their server-stamped timestamps is the only practical recourse, and a robust first-observation anchor would require durable, replica-shared state at odds with \u00c9cluse's network-broker design while only narrowing a surface that is already out of scope. The possibility is acknowledged and not treated as a serious attack surface at this time.",
                   "modelType": "STRIDE",
                   "id": "0ec10e5e-0000-4000-8000-00000000010c"
                 }
@@ -507,7 +509,7 @@
             },
             "attrs": {
               "text": {
-                "text": "Écluse proxy"
+                "text": "\u00c9cluse proxy"
               },
               "body": {
                 "stroke": "#333333",
@@ -602,8 +604,8 @@
             },
             "id": "0ec10e5e-0000-4000-8000-000000000020",
             "data": {
-              "name": "Écluse proxy",
-              "description": "The request pipeline: router, parallel upstream fetch, packument merge, deny-by-default rules + integrity gate, and serve. Relays publishes. Holds forwarded caller credentials transiently.",
+              "name": "\u00c9cluse proxy",
+              "description": "The request pipeline: router, parallel upstream fetch, packument merge, deny-by-default rules + integrity gate, and serve. Relays publishes. Holds forwarded caller credentials transiently. Polls S3 for OSV db updates and performs atomic shadow-swap for CVE boundaries.",
               "type": "tm.Process",
               "isTrustBoundary": false,
               "outOfScope": false,
@@ -616,8 +618,8 @@
                   "severity": "High",
                   "title": "Forwarded caller credentials aggregated in proxy memory",
                   "type": "Information disclosure",
-                  "description": "Under the canonical passthrough strategy the proxy transiently holds every caller's own CodeArtifact bearer in process memory while relaying reads and publishes. A single proxy compromise (a heap/memory dump, a log-field leak, or a malicious dependency in Écluse's own supply chain) therefore harvests the credentials of all callers in transit, not one. Passthrough distributes credential exposure across every user, where a service identity would concentrate it in one short-lived token.",
-                  "mitigation": "Tokens are carried as a redacted type (the Secret newtype, whose Show renders a fixed placeholder) so they never reach a log field, and retention is request-scoped; the token is unwrapped only at the point of use, to attach the bearer to an outbound request. The data-plane and WAI span instrumentation records no request or response headers, so an Authorization header is never lifted onto a span (regression-tested). Residual: a GC'd runtime cannot guarantee prompt erasure from the heap, so hardening Écluse's own runtime and supply chain — the attested, reproducible image, kept clean by the image vulnerability-scan gate — is the first-class compensating control. The service strategy (post-launch) is available to operators who want the smallest credential surface.",
+                  "description": "Under the canonical passthrough strategy the proxy transiently holds every caller's own CodeArtifact bearer in process memory while relaying reads and publishes. A single proxy compromise (a heap/memory dump, a log-field leak, or a malicious dependency in \u00c9cluse's own supply chain) therefore harvests the credentials of all callers in transit, not one. Passthrough distributes credential exposure across every user, where a service identity would concentrate it in one short-lived token.",
+                  "mitigation": "Tokens are carried as a redacted type (the Secret newtype, whose Show renders a fixed placeholder) so they never reach a log field, and retention is request-scoped; the token is unwrapped only at the point of use, to attach the bearer to an outbound request. The data-plane and WAI span instrumentation records no request or response headers, so an Authorization header is never lifted onto a span (regression-tested). Residual: a GC'd runtime cannot guarantee prompt erasure from the heap, so hardening \u00c9cluse's own runtime and supply chain \u2014 the attested, reproducible image, kept clean by the image vulnerability-scan gate \u2014 is the first-class compensating control. The service strategy (post-launch) is available to operators who want the smallest credential surface.",
                   "modelType": "STRIDE",
                   "id": "0ec10e5e-0000-4000-8000-000000000101"
                 },
@@ -627,8 +629,8 @@
                   "severity": "Medium",
                   "title": "Chokepoint exhaustion via pathological upstream payload",
                   "type": "Denial of service",
-                  "description": "Écluse is a mandatory chokepoint, so degrading its availability is itself a supply-chain attack: builds either fail or operators are tempted to bypass the gate. A hostile or compromised upstream, or a pathological public package, could return an oversized, version-flooded, or deeply-nested packument whose parsing and per-version rule evaluation exhaust CPU or memory.",
-                  "mitigation": "Input is bounded fail-closed by body-size, version-count, and nesting-depth caps (PROXY_MAX_RESPONSE_BYTES / PROXY_MAX_VERSION_COUNT / PROXY_MAX_NESTING_DEPTH), the bounded read stopping mid-stream. The serve path is O(n log n) in version count (a Map-based merge, no super-linear blow-up), the single-flight cache coalesces concurrent misses for the same package onto one computation, and a per-request timeout caps any single request. The version cap is being made to fail fast at the cap rather than projecting the whole document first — a release-gated fix in progress (#400; no release ships without it). A future CVE-informed rules feature (not yet built) must likewise batch its advisory lookups rather than querying per version (#399), so the amplification is a forward design constraint on that feature, not a current cost; resident-bytes and serve-concurrency admission bounds further cap aggregate resident cost (#418, #419). The residual is resource amplification, not algorithmic complexity: a near-cap document still costs real CPU and heap, and distinct-key floods (worst under a hostile or compromised upstream) bypass single-flight, so volumetric and concurrency rate-limiting is an operator-edge responsibility, as with access control.",
+                  "description": "\u00c9cluse is a mandatory chokepoint, so degrading its availability is itself a supply-chain attack: builds either fail or operators are tempted to bypass the gate. A hostile or compromised upstream, or a pathological public package, could return an oversized, version-flooded, or deeply-nested packument whose parsing and per-version rule evaluation exhaust CPU or memory.",
+                  "mitigation": "Input is bounded fail-closed by body-size, version-count, and nesting-depth caps (PROXY_MAX_RESPONSE_BYTES / PROXY_MAX_VERSION_COUNT / PROXY_MAX_NESTING_DEPTH), the bounded read stopping mid-stream. The serve path is O(n log n) in version count (a Map-based merge, no super-linear blow-up), the single-flight cache coalesces concurrent misses for the same package onto one computation, and a per-request timeout caps any single request. The version cap is being made to fail fast at the cap rather than projecting the whole document first \u2014 a release-gated fix in progress (#400; no release ships without it). A future CVE-informed rules feature (not yet built) must likewise batch its advisory lookups rather than querying per version (#399), so the amplification is a forward design constraint on that feature, not a current cost; resident-bytes and serve-concurrency admission bounds further cap aggregate resident cost (#418, #419). The residual is resource amplification, not algorithmic complexity: a near-cap document still costs real CPU and heap, and distinct-key floods (worst under a hostile or compromised upstream) bypass single-flight, so volumetric and concurrency rate-limiting is an operator-edge responsibility, as with access control.",
                   "modelType": "STRIDE",
                   "id": "0ec10e5e-0000-4000-8000-000000000102"
                 }
@@ -742,7 +744,7 @@
             "id": "0ec10e5e-0000-4000-8000-000000000021",
             "data": {
               "name": "Mirror worker",
-              "description": "Demand-driven async worker: polls the mirror queue, back-fills the approved artifact from the public upstream, verifies bytes against dist.integrity, and publishes to the mirror store with Écluse's own minted write token.",
+              "description": "Demand-driven async worker: polls the mirror queue, back-fills the approved artifact from the public upstream, verifies bytes against dist.integrity, and publishes to the mirror store with \u00c9cluse's own minted write token.",
               "type": "tm.Process",
               "isTrustBoundary": false,
               "outOfScope": false,
@@ -858,7 +860,7 @@
             "id": "0ec10e5e-0000-4000-8000-000000000022",
             "data": {
               "name": "Credential provider",
-              "description": "Mints and refreshes the mirror-target write token under the container/task role (CodeArtifact GetAuthorizationToken), with single-flight + breaker. Écluse's only standing credential.",
+              "description": "Mints and refreshes the mirror-target write token under the container/task role (CodeArtifact GetAuthorizationToken), with single-flight + breaker. \u00c9cluse's only standing credential.",
               "type": "tm.Process",
               "isTrustBoundary": false,
               "outOfScope": false,
@@ -995,7 +997,7 @@
                   "title": "Cross-client disclosure of a private package via shared cache (#115)",
                   "type": "Information disclosure",
                   "description": "A cache key carries no credential dimension, so were a private-origin document cached, one caller could warm an entry and another, differently-authorised caller could be served it without their own request being authorised upstream.",
-                  "mitigation": "The private origin is never entered into the shared cache, under any strategy, made unrepresentable by construction; only the anonymous public-gated origin is cached, and the private origin is re-consulted per request (with the caller's own token under passthrough, or Écluse's own workload identity under service). The cache-recovering designs that would have shared a private entry (delegated-cache, memoised) are rejected by design, so no shared private cache exists to leak.",
+                  "mitigation": "The private origin is never entered into the shared cache, under any strategy, made unrepresentable by construction; only the anonymous public-gated origin is cached, and the private origin is re-consulted per request (with the caller's own token under passthrough, or \u00c9cluse's own workload identity under service). The cache-recovering designs that would have shared a private entry (delegated-cache, memoised) are rejected by design, so no shared private cache exists to leak.",
                   "modelType": "STRIDE",
                   "id": "0ec10e5e-0000-4000-8000-000000000109"
                 }
@@ -1253,7 +1255,7 @@
                   "title": "Undetected artifact substitution across upstreams",
                   "type": "Tampering",
                   "description": "The merge flags an integrity divergence when private and public copies of a version contradict on a shared digest algorithm. A weak-only or absent digest, or a flaw in how divergence is keyed, could let a substituted artifact pass undetected and be served as the trusted copy.",
-                  "mitigation": "A public version must carry a digest meeting the integrity floor (uniform default SHA-256, hard-floored) to be admitted, and divergence is compared on each digest's asserted algorithm rather than a bucketed tag; the asserted-algorithm keying landed in #380 (closing #376); a real same-version contradiction on a shared algorithm is then reported in the merge plan — and may be failed-closed on that version per policy — never silently reconciled, so a substitution is surfaced, not undetected. Residual: the deliberately operator-loosenable trusted-floor path, which trades strictness for availability and is the remaining way a weak digest could be accepted.",
+                  "mitigation": "A public version must carry a digest meeting the integrity floor (uniform default SHA-256, hard-floored) to be admitted, and divergence is compared on each digest's asserted algorithm rather than a bucketed tag; the asserted-algorithm keying landed in #380 (closing #376); a real same-version contradiction on a shared algorithm is then reported in the merge plan \u2014 and may be failed-closed on that version per policy \u2014 never silently reconciled, so a substitution is surfaced, not undetected. Residual: the deliberately operator-loosenable trusted-floor path, which trades strictness for availability and is the remaining way a weak digest could be accepted.",
                   "modelType": "STRIDE",
                   "id": "0ec10e5e-0000-4000-8000-00000000010b"
                 },
@@ -1263,8 +1265,8 @@
                   "severity": "High",
                   "title": "Private-upstream aggregation admits the public registry, bypassing the gate",
                   "type": "Tampering",
-                  "description": "The recommended topology unions the trusted stores (first-party A and the sanitized mirror B) into the pull-through read endpoint C at the registry level (e.g. CodeArtifact upstream relationships). If that aggregation also includes a direct connection to the public registry, raw public packages reach clients through C as a trusted source, skipping Écluse's gate (rules, integrity floor, freshness quarantine) entirely. The same upstream-merger mechanism that makes the ideal topology work makes this the natural misconfiguration: a CodeArtifact repository's default npm-store upstream to npmjs is exactly this shape.",
-                  "mitigation": "An operator-architecture invariant, documented in the registry model and the Golden Path: the aggregating private upstream composes trusted stores only (first-party plus Écluse's sanitized mirror) and never carries a direct public upstream — public content enters only through Écluse's gate. Écluse cannot detect a violation (the private upstream is trusted by construction, and its upstream wiring is external to the proxy), so the control is operator discipline plus this documented invariant rather than a structural check.",
+                  "description": "The recommended topology unions the trusted stores (first-party A and the sanitized mirror B) into the pull-through read endpoint C at the registry level (e.g. CodeArtifact upstream relationships). If that aggregation also includes a direct connection to the public registry, raw public packages reach clients through C as a trusted source, skipping \u00c9cluse's gate (rules, integrity floor, freshness quarantine) entirely. The same upstream-merger mechanism that makes the ideal topology work makes this the natural misconfiguration: a CodeArtifact repository's default npm-store upstream to npmjs is exactly this shape.",
+                  "mitigation": "An operator-architecture invariant, documented in the registry model and the Golden Path: the aggregating private upstream composes trusted stores only (first-party plus \u00c9cluse's sanitized mirror) and never carries a direct public upstream \u2014 public content enters only through \u00c9cluse's gate. \u00c9cluse cannot detect a violation (the private upstream is trusted by construction, and its upstream wiring is external to the proxy), so the control is operator discipline plus this documented invariant rather than a structural check.",
                   "modelType": "STRIDE",
                   "id": "0ec10e5e-0000-4000-8000-00000000010f"
                 }
@@ -1523,7 +1525,7 @@
                   "severity": "Medium",
                   "title": "Registry collapse erases provenance and per-store policy",
                   "type": "Repudiation",
-                  "description": "Écluse supports collapsing its internal registry roles onto as few as one store. The recommended topology keeps the first-party store (A) and the public-derived mirror store (B) separate and unions them into the pull-through read endpoint (C) at the registry level; collapsing them onto a single shared store is the degenerate floor — and the configuration default, since an unset MIRROR_TARGET_URL folds the mirror onto the private upstream. Collapse loses the physical separation between first-party and public-derived inventory: distinct storage-level rule-sets and scanning per provenance become impossible, and post-disclosure incident scoping ('which mirrored public packages did we hold?') is muddied, weakening the arithmetic-not-forensics response.",
+                  "description": "\u00c9cluse supports collapsing its internal registry roles onto as few as one store. The recommended topology keeps the first-party store (A) and the public-derived mirror store (B) separate and unions them into the pull-through read endpoint (C) at the registry level; collapsing them onto a single shared store is the degenerate floor \u2014 and the configuration default, since an unset MIRROR_TARGET_URL folds the mirror onto the private upstream. Collapse loses the physical separation between first-party and public-derived inventory: distinct storage-level rule-sets and scanning per provenance become impossible, and post-disclosure incident scoping ('which mirrored public packages did we hold?') is muddied, weakening the arithmetic-not-forensics response.",
                   "mitigation": "Deploy the recommended three-registry topology (the Golden Path): a first-party store, a public-derived mirror store, and a pull-through aggregator read endpoint unioning the two at the registry level, each independently governable. The single-registry collapse remains supported but is discouraged; the trade it makes is auditability and defence-in-depth, not the perimeter.",
                   "modelType": "STRIDE",
                   "id": "0ec10e5e-0000-4000-8000-00000000010a"
@@ -1534,8 +1536,8 @@
                   "severity": "Medium",
                   "title": "Malicious mirrored version persists and is served as trusted (no automatic post-ingestion revocation)",
                   "type": "Tampering",
-                  "description": "Écluse mirrors approved public versions into Registry B and, by design, resists upstream yanks so a benign yank does not break installs. The flip side: a version later found malicious persists in B and is served as trusted (the merge serves the private origin unfiltered by the rules), with no automatic removal — neither an upstream yank nor a rules change reaches an already-mirrored artifact.",
-                  "mitigation": "The freshness quarantine (`AllowIfOlderThan`) is the primary defence — it delays serving a new version until advisories have had time to surface, so most malicious versions are denied at admission before they are ever mirrored; this threat is the residual for a version found bad after it cleared the quarantine and was mirrored. Detection is delegated (operator scanning of Registry B, plus upstream advisories and security-holding signals, decide what to revoke). Enforcement is layered across the version's lifecycle: a hard deny-by-identity rule (roadmapped, #470) halts re-admission on the serve path and re-mirroring at the worker ingest re-check (#414) — the immediate, surgical stop that also breaks the re-mirror treadmill; an automated reaper (the Écluse Dredger, #478 — a separate zero-ingress service sharing the core rules engine) continually prunes already-mirrored versions matching advisory or age conditions, automating recovery once an alert is public; and the operator can purge a version from Registry B directly (rules never run on trusted content, so a purge — manual or by the reaper — is what removes the already-mirrored copy). Ordered deny-then-purge so demand does not re-mirror during the purge; purge alone is a treadmill while the version is still live upstream. The typical pattern is the inverse — an upstream yank or security-hold removes or changes the bytes first, after which re-mirroring cannot reproduce them and a purge clears the stale copy. Irreducible residual: a malicious version with no public advisory cannot be reaped (there is nothing to detect on) — the bound the freshness quarantine exists to provide.",
+                  "description": "\u00c9cluse mirrors approved public versions into Registry B and, by design, resists upstream yanks so a benign yank does not break installs. The flip side: a version later found malicious persists in B and is served as trusted (the merge serves the private origin unfiltered by the rules), with no automatic removal \u2014 neither an upstream yank nor a rules change reaches an already-mirrored artifact.",
+                  "mitigation": "The freshness quarantine (`AllowIfOlderThan`) is the primary defence \u2014 it delays serving a new version until advisories have had time to surface, so most malicious versions are denied at admission before they are ever mirrored; this threat is the residual for a version found bad after it cleared the quarantine and was mirrored. Detection is delegated (operator scanning of Registry B, plus upstream advisories and security-holding signals, decide what to revoke). Enforcement is layered across the version's lifecycle: a hard deny-by-identity rule (roadmapped, #470) halts re-admission on the serve path and re-mirroring at the worker ingest re-check (#414) \u2014 the immediate, surgical stop that also breaks the re-mirror treadmill; an automated reaper (the \u00c9cluse Dredger, #478 \u2014 a separate zero-ingress service sharing the core rules engine) continually prunes already-mirrored versions matching advisory or age conditions, automating recovery once an alert is public; and the operator can purge a version from Registry B directly (rules never run on trusted content, so a purge \u2014 manual or by the reaper \u2014 is what removes the already-mirrored copy). Ordered deny-then-purge so demand does not re-mirror during the purge; purge alone is a treadmill while the version is still live upstream. The typical pattern is the inverse \u2014 an upstream yank or security-hold removes or changes the bytes first, after which re-mirroring cannot reproduce them and a purge clears the stale copy. Irreducible residual: a malicious version with no public advisory cannot be reaped (there is nothing to detect on) \u2014 the bound the freshness quarantine exists to provide.",
                   "modelType": "STRIDE",
                   "id": "0ec10e5e-0000-4000-8000-00000000010d"
                 }
@@ -1577,8 +1579,8 @@
                   "severity": "Medium",
                   "title": "Off-by-default edge auth assumes a sound network boundary",
                   "type": "Spoofing",
-                  "description": "PROXY_AUTH_TOKEN is off by default: Écluse delegates 'who may reach the proxy' to the operator's access edge (gateway / mesh / network policy). If that boundary fails, notably east-west (a compromised neighbour reaching the pod directly, bypassing an ingress-only IP allow-list), an unauthenticated caller can drive the proxy.",
-                  "mitigation": "Compensating control: under passthrough the request carries only the caller's own forwarded token and the read path never substitutes a standing credential, so no forwarded token means no private read — a breach of the edge exposes only the public-gated view plus the untrusted-egress and DoS surface, never private packages. The one exception is the publish path: a configured static publication-target credential (PUBLICATION_TARGET_TOKEN) is used as a fallback for a tokenless publish, so 'no token, no publish' holds only for pure passthrough. The internal-credential publish mode is therefore fail-closed by construction: a configured publication-target token requires a verifiable inbound edge (PROXY_AUTH_TOKEN or stronger), so the composition root refuses internal-credential-plus-open-edge at boot (landed in #424, closing #420), making that state unrepresentable — the same principle the trusted-edge read identity follows. Operators must restrict both north-south and east-west access (the Golden Path documents this); any edge mode that substitutes Écluse's own identity, read or write, must require a verifiable edge (mTLS / shared secret), never a bare spoofable header.",
+                  "description": "PROXY_AUTH_TOKEN is off by default: \u00c9cluse delegates 'who may reach the proxy' to the operator's access edge (gateway / mesh / network policy). If that boundary fails, notably east-west (a compromised neighbour reaching the pod directly, bypassing an ingress-only IP allow-list), an unauthenticated caller can drive the proxy.",
+                  "mitigation": "Compensating control: under passthrough the request carries only the caller's own forwarded token and the read path never substitutes a standing credential, so no forwarded token means no private read \u2014 a breach of the edge exposes only the public-gated view plus the untrusted-egress and DoS surface, never private packages. The one exception is the publish path: a configured static publication-target credential (PUBLICATION_TARGET_TOKEN) is used as a fallback for a tokenless publish, so 'no token, no publish' holds only for pure passthrough. The internal-credential publish mode is therefore fail-closed by construction: a configured publication-target token requires a verifiable inbound edge (PROXY_AUTH_TOKEN or stronger), so the composition root refuses internal-credential-plus-open-edge at boot (landed in #424, closing #420), making that state unrepresentable \u2014 the same principle the trusted-edge read identity follows. Operators must restrict both north-south and east-west access (the Golden Path documents this); any edge mode that substitutes \u00c9cluse's own identity, read or write, must require a verifiable edge (mTLS / shared secret), never a bare spoofable header.",
                   "modelType": "STRIDE",
                   "id": "0ec10e5e-0000-4000-8000-000000000103"
                 }
@@ -1728,7 +1730,7 @@
             "data": {
               "type": "tm.Flow",
               "name": "anonymous packument / tarball fetch (caller token stripped)",
-              "description": "Untrusted egress to the public upstream. Attacker-influenceable target; caller credential stripped. Crosses to the public internet.",
+              "description": "Untrusted egress to the public upstream. Attacker-influenceable target; caller credential stripped. Crosses to the public internet. (Forced HTTPS-only)",
               "outOfScope": false,
               "isTrustBoundary": false,
               "reasonOutOfScope": "",
@@ -1831,7 +1833,7 @@
                   "severity": "High",
                   "title": "Package shadowing via first-party publish",
                   "type": "Tampering",
-                  "description": "A publish is relayed to the private store with the publisher's own token, and the packument merge serves private versions as trusted, winning collisions over public. A compromised-CI or insider publisher who clears (or slips past) the publish-scope check could publish a name that the merge then serves as a trusted version over the public package, a dependency-confusion path through Écluse's own trust model.",
+                  "description": "A publish is relayed to the private store with the publisher's own token, and the packument merge serves private versions as trusted, winning collisions over public. A compromised-CI or insider publisher who clears (or slips past) the publish-scope check could publish a name that the merge then serves as a trusted version over the public package, a dependency-confusion path through \u00c9cluse's own trust model.",
                   "mitigation": "The PUBLISH_SCOPES allow-list refuses any name outside the operator's scopes before any upstream write (the anti-shadowing guard); the scope match is exact on the parsed namespace, so a prefix such as @acme-evil does not satisfy an @acme allow-list. Soundness requires the authorised identity to be the written identity: the publish document's own declared name and _id (and per-version names) are validated equal to the scope-guarded URL-path name before the relay (the body-name agreement leg landed in #425, closing #391), and the write URL is built from that same canonical name, so the guarded name, the written name, and the merge collision key are one identity by construction. Residual: shadowing within an allow-listed scope and allow-precedence choices remain the operator's risk (least-privilege the publisher's target credential).",
                   "modelType": "STRIDE",
                   "id": "0ec10e5e-0000-4000-8000-000000000106"
@@ -1977,7 +1979,7 @@
             "data": {
               "type": "tm.Flow",
               "name": "back-fill artifact fetch (untrusted)",
-              "description": "The worker fetches the approved artifact from the public upstream to mirror it. Untrusted egress; bytes verified against dist.integrity before publish.",
+              "description": "The worker fetches the approved artifact from the public upstream to mirror it. Untrusted egress; bytes verified against dist.integrity before publish. (Forced HTTPS-only)",
               "outOfScope": false,
               "isTrustBoundary": false,
               "reasonOutOfScope": "",
@@ -1993,7 +1995,7 @@
                   "severity": "Low",
                   "title": "SSRF via the worker back-fill fetch (a blind sink)",
                   "type": "Elevation of privilege",
-                  "description": "The mirror worker fetches the approved artifact from an upstream-declared dist.tarball location to replicate it. Like the serve-path public fetch this is untrusted egress to an attacker-influenceable target, so in principle it carries the same SSRF surface — a dist.tarball steered at an internal or cloud-metadata address.",
+                  "description": "The mirror worker fetches the approved artifact from an upstream-declared dist.tarball location to replicate it. Like the serve-path public fetch this is untrusted egress to an attacker-influenceable target, so in principle it carries the same SSRF surface \u2014 a dist.tarball steered at an internal or cloud-metadata address.",
                   "mitigation": "The fetch runs on the same validating-TLS data-plane manager as the serve path (https-only egress with certificate validation authenticating the host, and the universal no-redirect invariant landed in #431), over an https-only dist.tarball, and the location host was admitted by the outbound allow-list at serve time before the job was enqueued. Decisively, it is a blind sink: the bytes are verified against dist.integrity and published, never returned to a caller, and an internal or metadata response cannot present a CA-trusted certificate for the host nor match the asserted digest, so the job fails closed (dropped) rather than exfiltrating. Its impact is well below the serve-path fetch.",
                   "modelType": "STRIDE",
                   "id": "0ec10e5e-0000-4000-8000-00000000010e"
@@ -2111,7 +2113,7 @@
                   "title": "SSRF to the instance-metadata credential endpoint",
                   "type": "Elevation of privilege",
                   "description": "Container-role token minting must reach the instance-metadata endpoint (169.254.169.254 / STS). An SSRF that reached metadata could mint the worker's CodeArtifact credential.",
-                  "mitigation": "Écluse only follows internal-resolving locations on the trusted private origin, never on a client- or upstream-influenced target, so the data plane cannot be steered at metadata; minting uses amazonka's own client off the guarded data-plane manager. Operator defence-in-depth: require IMDSv2 and set the hop limit to 1; do not block metadata outright.",
+                  "mitigation": "\u00c9cluse only follows internal-resolving locations on the trusted private origin, never on a client- or upstream-influenced target, so the data plane cannot be steered at metadata; minting uses amazonka's own client off the guarded data-plane manager. Operator defence-in-depth: require IMDSv2 and set the hop limit to 1; do not block metadata outright.",
                   "modelType": "STRIDE",
                   "id": "0ec10e5e-0000-4000-8000-000000000108"
                 }
@@ -2156,7 +2158,7 @@
             "data": {
               "type": "tm.Flow",
               "name": "publish mirrored artifact (minted write token)",
-              "description": "The worker writes the verified, approved artifact to the mirror store with Écluse's own minted token.",
+              "description": "The worker writes the verified, approved artifact to the mirror store with \u00c9cluse's own minted token.",
               "outOfScope": false,
               "isTrustBoundary": false,
               "reasonOutOfScope": "",
@@ -2172,8 +2174,8 @@
                   "severity": "High",
                   "title": "Mirror-write credential is a standing privilege over the trusted store",
                   "type": "Elevation of privilege",
-                  "description": "The mirror worker holds Écluse's only standing self-minted credential, with write access to the mirror store (Registry B) that feeds the trusted read path. A worker compromise, or any bypass of the admission gate, could write attacker-chosen bytes into the trusted store, poisoning future reads.",
-                  "mitigation": "Containment of this standing privilege is least-privilege IAM on the container/task role (write to Registry B only; CodeArtifact tokens bear the role's own permissions, so this is an IAM policy rather than a token-level scope), container-role minting over static credentials, and a minimal TTL (CodeArtifact caps at 12h); the publish runs with redirectCount=0 (the mint token is attached at withToken, the single bearer-attach point). The mirror queue is part of the same trust boundary and is isolated and managed at the infrastructure level: a job is unauthenticated data that directs the worker to fetch-and-publish, so queue-send access is equivalent to trusted-write access — scope the queue's IAM so only the serve role enqueues (SendMessage) and only the worker receives and acks. Message authenticity is deliberately controlled by access, not signatures, the standard pattern for an internal single-producer/single-consumer queue. The worker's own attack surface is small: it hashes the fetched bytes and forwards them unchanged (no decompression or tarball parsing), so a malicious artifact is a poor code-execution vector. The dist.integrity check is anti-tamper-in-transit and anti-downgrade (it fails closed when the strongest present digest is in an uncomputable algorithm, never downgrading to a forgeable weaker one): it proves the bytes match the upstream's asserted digest, so it catches back-fill corruption but not a hostile upstream or a worker compromise. The poisoning-of-future-reads consequence is therefore bounded by admission-gate soundness (the trusted store is only as clean as what the gate admits, and only the gate may enqueue), the role's blast radius, and queue access control — not by the integrity check.",
+                  "description": "The mirror worker holds \u00c9cluse's only standing self-minted credential, with write access to the mirror store (Registry B) that feeds the trusted read path. A worker compromise, or any bypass of the admission gate, could write attacker-chosen bytes into the trusted store, poisoning future reads.",
+                  "mitigation": "Containment of this standing privilege is least-privilege IAM on the container/task role (write to Registry B only; CodeArtifact tokens bear the role's own permissions, so this is an IAM policy rather than a token-level scope), container-role minting over static credentials, and a minimal TTL (CodeArtifact caps at 12h); the publish runs with redirectCount=0 (the mint token is attached at withToken, the single bearer-attach point). The mirror queue is part of the same trust boundary and is isolated and managed at the infrastructure level: a job is unauthenticated data that directs the worker to fetch-and-publish, so queue-send access is equivalent to trusted-write access \u2014 scope the queue's IAM so only the serve role enqueues (SendMessage) and only the worker receives and acks. Message authenticity is deliberately controlled by access, not signatures, the standard pattern for an internal single-producer/single-consumer queue. The worker's own attack surface is small: it hashes the fetched bytes and forwards them unchanged (no decompression or tarball parsing), so a malicious artifact is a poor code-execution vector. The dist.integrity check is anti-tamper-in-transit and anti-downgrade (it fails closed when the strongest present digest is in an uncomputable algorithm, never downgrading to a forgeable weaker one): it proves the bytes match the upstream's asserted digest, so it catches back-fill corruption but not a hostile upstream or a worker compromise. The poisoning-of-future-reads consequence is therefore bounded by admission-gate soundness (the trusted store is only as clean as what the gate admits, and only the gate may enqueue), the role's blast radius, and queue access control \u2014 not by the integrity check.",
                   "modelType": "STRIDE",
                   "id": "0ec10e5e-0000-4000-8000-000000000107"
                 }
@@ -2501,7 +2503,7 @@
             },
             "attrs": {
               "text": {
-                "text": "CVE Dataset \nWorker"
+                "text": "The Oracle\n(Ingestion Pipeline)"
               },
               "body": {
                 "stroke": "#333333",
@@ -2597,8 +2599,8 @@
             "id": "f1646094-9885-422a-b7e7-7888c72905ef",
             "data": {
               "type": "tm.Process",
-              "name": "CVE Dataset \nWorker",
-              "description": "A worker process that periodically pulls public OSV data from the public internet, and compiled the raw JSON to an optimized queryable SQLLite File",
+              "name": "The Oracle\n(Ingestion Pipeline)",
+              "description": "Standalone Haskell binary that fetches, streams, and parses OSV data dumps, producing a highly optimized, read-only osv.db uploaded to S3/GCS. Decouples heavy JSON processing and GC pressure from the proxy.",
               "outOfScope": false,
               "isTrustBoundary": false,
               "reasonOutOfScope": "",
@@ -2849,6 +2851,168 @@
               "storesCredentials": false,
               "storesInventory": false,
               "threats": []
+            }
+          },
+          {
+            "position": {
+              "x": 400,
+              "y": 1100
+            },
+            "size": {
+              "width": 130,
+              "height": 130
+            },
+            "attrs": {
+              "text": {
+                "text": "\u00c9cluse Dredger"
+              },
+              "body": {
+                "stroke": "#333333",
+                "strokeWidth": 1,
+                "strokeDasharray": null
+              }
+            },
+            "visible": true,
+            "shape": "process",
+            "zIndex": 2,
+            "ports": {
+              "groups": {
+                "top": {
+                  "position": "top",
+                  "attrs": {
+                    "circle": {
+                      "r": 4,
+                      "magnet": true,
+                      "stroke": "#5F95FF",
+                      "strokeWidth": 1,
+                      "fill": "#fff",
+                      "style": {
+                        "visibility": "hidden"
+                      }
+                    }
+                  }
+                },
+                "right": {
+                  "position": "right",
+                  "attrs": {
+                    "circle": {
+                      "r": 4,
+                      "magnet": true,
+                      "stroke": "#5F95FF",
+                      "strokeWidth": 1,
+                      "fill": "#fff",
+                      "style": {
+                        "visibility": "hidden"
+                      }
+                    }
+                  }
+                },
+                "bottom": {
+                  "position": "bottom",
+                  "attrs": {
+                    "circle": {
+                      "r": 4,
+                      "magnet": true,
+                      "stroke": "#5F95FF",
+                      "strokeWidth": 1,
+                      "fill": "#fff",
+                      "style": {
+                        "visibility": "hidden"
+                      }
+                    }
+                  }
+                },
+                "left": {
+                  "position": "left",
+                  "attrs": {
+                    "circle": {
+                      "r": 4,
+                      "magnet": true,
+                      "stroke": "#5F95FF",
+                      "strokeWidth": 1,
+                      "fill": "#fff",
+                      "style": {
+                        "visibility": "hidden"
+                      }
+                    }
+                  }
+                }
+              },
+              "items": [
+                {
+                  "group": "top",
+                  "id": "257a65c3-4d20-469c-9cb7-a607b428add3"
+                },
+                {
+                  "group": "right",
+                  "id": "e36aff10-a930-4ede-92af-845e5d4685ca"
+                },
+                {
+                  "group": "bottom",
+                  "id": "e051de01-09fc-4c74-8291-15c145892857"
+                },
+                {
+                  "group": "left",
+                  "id": "7692aeb2-1f62-4dda-8af3-b3234d902ac1"
+                }
+              ]
+            },
+            "id": "f66e2ffa-c6bf-4b45-8aad-a23ced3a97ff",
+            "data": {
+              "name": "\u00c9cluse Dredger",
+              "description": "A separate reaper service that continually prunes the private mirror (Registry B) for cold inventory (AgeSinceMirror) or vulnerable versions (HasAdvisoryAboveThreshold). Has zero ingress, shares ecluse-core for rules, and deletes from the trusted store.",
+              "type": "tm.Process",
+              "isTrustBoundary": false,
+              "outOfScope": false,
+              "reasonOutOfScope": "",
+              "hasOpenThreats": true,
+              "threats": [
+                {
+                  "number": 14,
+                  "status": "Open",
+                  "severity": "Medium",
+                  "title": "Dredger inappropriately purges valid packages",
+                  "type": "Denial of service",
+                  "description": "A misconfiguration in Dredger or poisoned OSV data could cause it to delete legitimate, needed packages from Registry B, causing cache misses or upstream fetching failures.",
+                  "mitigation": "Dredger only deletes from mirror; on next request, proxy can re-mirror if it passes admission. It behaves as a cache eviction.",
+                  "modelType": "STRIDE",
+                  "id": "43f60aec-7a7c-4450-8992-ae2b42d20b0f"
+                },
+                {
+                  "number": 15,
+                  "status": "Mitigated",
+                  "severity": "High",
+                  "title": "Dredger container-role privilege escalation",
+                  "type": "Elevation of privilege",
+                  "description": "Dredger has standing high privilege (delete-only) to Registry B. If compromised, it could wipe the entire registry.",
+                  "mitigation": "Zero network ingress; least-privilege IAM (delete-only, scoped to Registry B); prefers container-role minting over static secrets.",
+                  "modelType": "STRIDE",
+                  "id": "c12bddfe-96d4-47c6-92e0-a961abadb5b2"
+                }
+              ]
+            }
+          },
+          {
+            "shape": "flow",
+            "zIndex": 10,
+            "id": "d5da865d-6e80-44da-a2ee-841f6bebd567",
+            "source": {
+              "cell": "f66e2ffa-c6bf-4b45-8aad-a23ced3a97ff"
+            },
+            "target": {
+              "cell": "0ec10e5e-0000-4000-8000-000000000034"
+            },
+            "data": {
+              "name": "delete pruned versions",
+              "description": "Dredger issues delete requests to Registry B based on CVE advisories or age.",
+              "type": "tm.Flow",
+              "isTrustBoundary": false,
+              "outOfScope": false,
+              "reasonOutOfScope": "",
+              "hasOpenThreats": false,
+              "threats": [],
+              "isEncrypted": true,
+              "isPublicNetwork": false
             }
           }
         ]
