@@ -181,16 +181,17 @@ doctest: ## Run the Haddock >>> examples as tests (doctest)
 # selects the single-tier path. `origin` distinguishes a command-line SUITE= from
 # this default, so the bare target is combined while `SUITE=…` stays per-tier.
 SUITE ?= ecluse-unit
+COVERAGE_FLAGS ?= -fdev-http-egress
 
 coverage: ## Combined unit ∪ integration coverage matching Codecov (Docker); SUITE=<tier> for one tier
 ifeq ($(origin SUITE),command line)
-	$(NIX) bash scripts/coverage.sh $(SUITE)
+	$(NIX) bash scripts/coverage.sh $(SUITE) $(COVERAGE_FLAGS)
 else
-	$(NIX) bash scripts/coverage-combined.sh
+	$(NIX) bash scripts/coverage-combined.sh $(COVERAGE_FLAGS)
 endif
 
 coverage-unit: ## Fast, Docker-free unit-only coverage (a PARTIAL view; Codecov merges it with integration)
-	$(NIX) bash scripts/coverage.sh ecluse-unit
+	$(NIX) bash scripts/coverage.sh ecluse-unit $(COVERAGE_FLAGS)
 
 gen-version-fixtures: ## Regenerate version-ordering fixtures from the reference tools (node-semver / packaging / Gem::Version)
 	$(NIX) bash scripts/gen-version-fixtures.sh
