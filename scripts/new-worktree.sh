@@ -27,13 +27,13 @@
 # Usage: scripts/new-worktree.sh <branch> [base-ref] [dir]
 #   <branch>    new branch to create for the worktree
 #   [base-ref]  ref to branch from   (default: origin/main)
-#   [dir]       worktree directory   (default: .claude/worktrees/<branch-slug>)
+#   [dir]       worktree directory   (default: .agents/worktrees/<branch-slug>)
 set -euo pipefail
 
 branch="${1:?usage: scripts/new-worktree.sh <branch> [base-ref] [dir]}"
 base="${2:-origin/main}"
 slug="${branch//\//-}"
-dir="${3:-.claude/worktrees/$slug}"
+dir="${3:-.agents/worktrees/$slug}"
 
 if [ -e "$dir" ]; then
   echo "new-worktree: '$dir' already exists; pick another DIR or remove it" >&2

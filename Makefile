@@ -204,7 +204,7 @@ gen-bench-corpus: ## Re-capture the real-world packument benchmark corpus from t
 # mid-session. One worktree per agent; cap concurrency at 2-3 and stagger
 # creations (HLS is memory-hungry). NOT $(NIX)-wrapped: git/bash are ambient and
 # the script enters the flake itself, only for the background build. Override
-# BASE (default origin/main) and DIR (default .claude/worktrees/<branch-slug>).
+# BASE (default origin/main) and DIR (default .agents/worktrees/<branch-slug>).
 # See AGENTS.md -> "Build & Tooling" and planning/orchestration-strategy.md.
 new-worktree: ## Create an agent worktree on BRANCH and warm its HLS index (BASE=…, DIR=…)
 	@test -n "$(BRANCH)" || { echo "set BRANCH, e.g. make new-worktree BRANCH=slice/foo"; exit 1; }

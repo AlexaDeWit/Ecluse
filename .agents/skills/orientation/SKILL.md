@@ -1,7 +1,7 @@
 ---
 name: orientation
 description: >-
-  Bootstrap a fresh Claude agent on the Écluse project: orient by reading the
+  Bootstrap a fresh agent on the Écluse project: orient by reading the
   design-of-record and process canon, syncing ground truth from git/gh and agent
   memory, and forming a picture before acting. A map to where knowledge lives, not a
   copy of it, invoke it first in a fresh session.
@@ -95,7 +95,7 @@ Summarise what you now know, what's merged vs in flight, and where your task fit
 - **Leading the multi-agent build (team lead)** → use **`/resume-orchestration`**
   instead, the role-specific resume (the orchestration loop, fix routing, and the
   `/compact` template). This skill is the general front door; that one is the team-lead
-  seat. Other project skills live in `.claude/skills/`.
+  seat. Other project skills live in `.agents/skills/`.
 - **Anything large, ambiguous, or outward-facing** → surface a short plan or a
   decision-ready question first. *Escalate, don't guess.*
 

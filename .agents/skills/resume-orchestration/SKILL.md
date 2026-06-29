@@ -68,7 +68,7 @@ durable and copied verbatim. Its final line bootstraps the routine above.
 > slices in flight. Per slice: BUILD (implementer, own worktree, TDD) → EVALUATE
 > (fresh reviewer + team-lead diff-read) → GATE (hermetic nix flake check) → hand off.
 > Escalate-don't-guess. Commits GPG-signed, Conventional Commits, trailer
-> `Assisted-by: Claude (Anthropic)` (NOT Co-Authored-By).
+> `Assisted-by: <Agent Name> (<Vendor>)` (NOT Co-Authored-By).
 >
 > CRITICAL CONVENTIONS: (1) run ALL build/format/gate via
 > `env -u IN_NIX_SHELL nix develop --command make <target>` (ambient shell stale →
