@@ -97,7 +97,7 @@ runs:
     # each time while never actually changing the resolved dependency set.
     - name: Restore cabal store
       if: inputs.cabal-cache == 'true'
-      uses: actions/cache/restore@2c8a9bd7457de244a408f35966fab2fb45fda9c8 # v6.0.0
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ github.workspace }}/.cabal
         key: cabal-store-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}
@@ -112,7 +112,7 @@ runs:
     # changed local modules (~12k LoC) — never the dependency closure.
     - name: Restore dist-newstyle
       if: inputs.cabal-cache == 'true'
-      uses: actions/cache/restore@2c8a9bd7457de244a408f35966fab2fb45fda9c8 # v6.0.0
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: dist-newstyle
         key: dist-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze') }}
