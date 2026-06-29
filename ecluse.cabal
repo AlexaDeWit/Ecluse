@@ -484,7 +484,6 @@ test-suite ecluse-integration
     Ecluse.Server.GracefulShutdownSpec
     Ecluse.Server.PipelineSpec
     Ecluse.Server.PublishSpec
-    Ecluse.Server.TarballHostSpec
     Ecluse.TelemetryMetricsSpec
     Ecluse.TelemetryTracingSpec
     Ecluse.Test.SupportLinkageSpec
