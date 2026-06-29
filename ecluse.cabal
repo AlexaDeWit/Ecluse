@@ -1,20 +1,20 @@
 cabal-version: 3.0
-name: ecluse
-version: 0.1.0
-synopsis: Supply-chain resilience proxy for package registries
+name:          ecluse
+version:       0.1.0
+synopsis:      Supply-chain resilience proxy for package registries
 description:
   Écluse is a controlled passage in front of package registries (npm, PyPI, …):
   every dependency clears resilience and policy checks — version and age gates
   and rule-based allow/deny — before it reaches your build. See the README for
   the architecture and configuration.
+homepage:      https://github.com/AlexaDeWit/Ecluse
+license:       MIT
+license-file:  LICENSE
+author:        Alexandra DeWit
+maintainer:    https://github.com/AlexaDeWit
+category:      Network, Security
+build-type:    Simple
 
-homepage: https://github.com/AlexaDeWit/Ecluse
-license: MIT
-license-file: LICENSE
-author: Alexandra DeWit
-maintainer: https://github.com/AlexaDeWit
-category: Network, Security
-build-type: Simple
 -- Test fixtures read at runtime by the pure unit suite. The version-ordering
 -- file is reference-oracle output (regenerate with `make gen-version-fixtures`);
 -- the npm/*.json bodies are captures derived from
@@ -38,7 +38,7 @@ extra-source-files:
   core/test/unit/fixtures/version-ordering.txt
 
 source-repository head
-  type: git
+  type:     git
   location: https://github.com/AlexaDeWit/Ecluse.git
 
 -- Compile the test- and dev-only plain-HTTP loopback egress constructor
@@ -50,8 +50,8 @@ source-repository head
 -- ignores cabal.project and uses this default) leaves it off.
 flag dev-http-egress
   description: Expose the test-only plain-HTTP loopback egress constructor.
-  default: False
-  manual: True
+  default:     False
+  manual:      True
 
 -- Shared settings for every component. relude replaces the default prelude via
 -- cabal mixins (see docs/architecture.md "relude as the implicit prelude").
@@ -63,20 +63,12 @@ common shared
   -- (we use open imports for internal modules), and -Wmissing-local-signatures
   -- (where-helpers are allowed to be inferred).
   ghc-options:
-    -Wall
-    -Wcompat
-    -Widentities
-    -Wincomplete-record-selectors
-    -Wincomplete-record-updates
-    -Wincomplete-uni-patterns
-    -Wmissing-deriving-strategies
-    -Wmissing-export-lists
-    -Wname-shadowing
-    -Wpartial-fields
-    -Wredundant-bang-patterns
-    -Wredundant-constraints
+    -Wall -Wcompat -Widentities -Wincomplete-record-selectors
+    -Wincomplete-record-updates -Wincomplete-uni-patterns
+    -Wmissing-deriving-strategies -Wmissing-export-lists -Wname-shadowing
+    -Wpartial-fields -Wredundant-bang-patterns -Wredundant-constraints
 
-  default-language: GHC2021
+  default-language:   GHC2021
   default-extensions:
     DerivingStrategies
     LambdaCase
@@ -84,20 +76,20 @@ common shared
     StrictData
 
   build-depends:
-    base ^>=4.20,
-    relude ^>=1.2,
+    , base    ^>=4.20
+    , relude  ^>=1.2
 
   mixins:
     base hiding (Prelude),
-    relude (Relude as Prelude),
+    relude (Relude as Prelude)
 
 -- The pure capability core: domain types, registry adapters, version grammars,
 -- credential refresh, rule engine, queue abstraction, security, and the
 -- agnostic server layer (Route/Response/Conditional/Stream) and metrics catalogue.
 -- The main application library and all test suites depend on this.
 library ecluse-core
-  import: shared
-  hs-source-dirs: core/src
+  import:          shared
+  hs-source-dirs:  core/src
   exposed-modules:
     Ecluse.Core.Breaker
     Ecluse.Core.Credential
@@ -162,41 +154,42 @@ library ecluse-core
   -- on. Off in a release build, so the constructor is absent from the shipped artifact.
   if flag(dev-http-egress)
     exposed-modules: Ecluse.Core.Security.Egress.DevHttp
+
   build-depends:
-    aeson ^>=2.2,
-    amazonka ^>=2.0,
-    amazonka-codeartifact ^>=2.0,
-    amazonka-sqs ^>=2.0,
-    bytestring ^>=0.12,
-    cache ^>=0.1.3,
-    clock ^>=0.8,
-    containers ^>=0.7,
-    crypton ^>=1.0,
-    hs-opentelemetry-api ^>=1.0,
-    http-client ^>=0.7,
-    http-client-tls ^>=0.3.6,
-    http-types ^>=0.12,
-    iproute ^>=1.7,
-    katip ^>=0.8.8,
-    memory ^>=0.18,
-    microlens ^>=0.4.13,
-    microlens-aeson ^>=2.5,
-    network ^>=3.2,
-    resourcet ^>=1.3,
-    retry ^>=0.9,
-    stm ^>=2.5,
-    text ^>=2.1,
-    text-short ^>=0.1.6,
-    time ^>=1.12,
-    universe-base ^>=1.1,
-    unliftio ^>=0.2.25,
-    vector ^>=0.13,
-    versions ^>=6.0,
-    wai ^>=3.2,
+    , aeson                 ^>=2.2
+    , amazonka              ^>=2.0
+    , amazonka-codeartifact ^>=2.0
+    , amazonka-sqs          ^>=2.0
+    , bytestring            ^>=0.12
+    , cache                 ^>=0.1.3
+    , clock                 ^>=0.8
+    , containers            ^>=0.7
+    , crypton               ^>=1.0
+    , http-client           ^>=0.7
+    , http-client-tls       ^>=0.3.6
+    , http-types            ^>=0.12
+    , hs-opentelemetry-api  ^>=1.0
+    , iproute               ^>=1.7
+    , katip                 ^>=0.8.8
+    , memory                ^>=0.18
+    , microlens             ^>=0.4.13
+    , microlens-aeson       ^>=2.5
+    , network               ^>=3.2
+    , resourcet             ^>=1.3
+    , retry                 ^>=0.9
+    , stm                   ^>=2.5
+    , text                  ^>=2.1
+    , text-short            ^>=0.1.6
+    , time                  ^>=1.12
+    , universe-base         ^>=1.1
+    , unliftio              ^>=0.2.25
+    , vector                ^>=0.13
+    , versions              ^>=6.0
+    , wai                   ^>=3.2
 
 library
-  import: shared
-  hs-source-dirs: src
+  import:          shared
+  hs-source-dirs:  src
   exposed-modules:
     Ecluse
     Ecluse.Composition
@@ -212,56 +205,52 @@ library
     Ecluse.Telemetry.Tracing
 
   build-depends:
-    aeson ^>=2.2,
-    amazonka ^>=2.0,
-    amazonka-codeartifact ^>=2.0,
-    amazonka-sqs ^>=2.0,
-    amazonka-sts ^>=2.0,
-    bytestring ^>=0.12,
-    containers ^>=0.7,
-    crypton ^>=1.0,
-    ecluse:ecluse-core,
-    envparse >=0.5 && <0.7,
-    hs-opentelemetry-api ^>=1.0,
-    hs-opentelemetry-exporter-otlp ^>=1.0,
-    hs-opentelemetry-instrumentation-http-client ^>=1.0,
-    hs-opentelemetry-instrumentation-wai ^>=1.0,
-    hs-opentelemetry-propagator-w3c ^>=1.0,
-    hs-opentelemetry-sdk ^>=1.0,
-    http-client ^>=0.7,
-    http-client-tls ^>=0.3.6,
-    http-types ^>=0.12,
-    iproute ^>=1.7,
-    katip ^>=0.8.8,
-    memory ^>=0.18,
-    network ^>=3.2,
-    resourcet ^>=1.3,
-    retry ^>=0.9,
-    stm ^>=2.5,
-    text ^>=2.1,
-    time ^>=1.12,
-    unix ^>=2.8,
-    unliftio ^>=0.2.25,
-    validation-selective ^>=0.2,
-    vector ^>=0.13,
-    versions ^>=6.0,
-    wai ^>=3.2,
-    wai-extra ^>=3.1,
-    warp ^>=3.4,
+    , ecluse:ecluse-core
+    , aeson                           ^>=2.2
+    , amazonka                        ^>=2.0
+    , amazonka-codeartifact           ^>=2.0
+    , amazonka-sqs                    ^>=2.0
+    , amazonka-sts                    ^>=2.0
+    , bytestring                      ^>=0.12
+    , containers                      ^>=0.7
+    , crypton                         ^>=1.0
+    , envparse                        >=0.5  && <0.7
+    , http-client                     ^>=0.7
+    , http-client-tls                 ^>=0.3.6
+    , http-types                      ^>=0.12
+    , hs-opentelemetry-api            ^>=1.0
+    , hs-opentelemetry-exporter-otlp  ^>=1.0
+    , hs-opentelemetry-instrumentation-http-client  ^>=1.0
+    , hs-opentelemetry-instrumentation-wai          ^>=1.0
+    , hs-opentelemetry-propagator-w3c ^>=1.0
+    , hs-opentelemetry-sdk            ^>=1.0
+    , iproute                         ^>=1.7
+    , katip                           ^>=0.8.8
+    , memory                          ^>=0.18
+    , network                         ^>=3.2
+    , resourcet                       ^>=1.3
+    , retry                           ^>=0.9
+    , stm                             ^>=2.5
+    , text                            ^>=2.1
+    , time                            ^>=1.12
+    , unix                            ^>=2.8
+    , unliftio                        ^>=0.2.25
+    , validation-selective            ^>=0.2
+    , vector                          ^>=0.13
+    , versions                        ^>=6.0
+    , wai                             ^>=3.2
+    , wai-extra                       ^>=3.1
+    , warp                            ^>=3.4
 
 executable ecluse
-  import: shared
+  import:         shared
   -- The threaded runtime is required: with telemetry enabled the OpenTelemetry SDK
   -- runs a batch span processor on a background thread, which aborts under the
   -- non-threaded RTS. -N lets the server and worker use every core.
-  ghc-options:
-    -threaded
-    -rtsopts
-    -with-rtsopts=-N
-
-  main-is: Main.hs
+  ghc-options:    -threaded -rtsopts "-with-rtsopts=-N"
+  main-is:        Main.hs
   hs-source-dirs: app
-  build-depends: ecluse
+  build-depends:  ecluse
 
 -- The capability-manifest assembly: the pure (ManifestSource -> OpenApi) builder
 -- and the owned schemas. An INTERNAL sublibrary (the ecluse-test-support pattern)
@@ -271,19 +260,19 @@ executable ecluse
 -- never by the app library. It links ecluse-core (the Route enumeration and the
 -- served types), not the app library.
 library ecluse-manifest
-  import: shared
-  hs-source-dirs: manifest
+  import:          shared
+  hs-source-dirs:  manifest
   exposed-modules: Ecluse.Manifest
   build-depends:
-    aeson ^>=2.2,
-    aeson-pretty ^>=0.8,
-    autodocodec ^>=0.5,
-    autodocodec-openapi3 ^>=0.3,
-    ecluse:ecluse-core,
-    http-media ^>=0.8,
-    insert-ordered-containers ^>=0.2,
-    openapi3 ^>=3.2,
-    text ^>=2.1,
+    , ecluse:ecluse-core
+    , aeson                      ^>=2.2
+    , aeson-pretty               ^>=0.8
+    , autodocodec                ^>=0.5
+    , autodocodec-openapi3       ^>=0.3
+    , http-media                 ^>=0.8
+    , insert-ordered-containers  ^>=0.2
+    , openapi3                   ^>=3.2
+    , text                       ^>=2.1
 
 -- The capability-manifest generator: a build-time component that assembles the
 -- OpenAPI document (Ecluse.Manifest) from the fixed canonical source and writes
@@ -291,20 +280,20 @@ library ecluse-manifest
 -- app library, so the OpenAPI dependency tree never reaches the running proxy. Run
 -- with `cabal run openapi-gen`.
 executable openapi-gen
-  import: shared
-  main-is: Main.hs
+  import:         shared
+  main-is:        Main.hs
   hs-source-dirs: gen
   build-depends:
-    directory ^>=1.3,
-    ecluse:ecluse-manifest,
-    filepath ^>=1.5,
+    , directory          ^>=1.3
+    , ecluse:ecluse-manifest
+    , filepath           ^>=1.5
 
 -- Internal test-support library shared by every suite below. The common home
 -- for cross-suite helpers, fixtures, and specs; it links against the library
 -- under test so shared fixtures can build domain values directly.
 library ecluse-test-support
-  import: shared
-  hs-source-dirs: test/support
+  import:          shared
+  hs-source-dirs:  test/support
   exposed-modules:
     Ecluse.Test.Package
     Ecluse.Test.Port
@@ -314,51 +303,51 @@ library ecluse-test-support
     Ecluse.Test.Worker
 
   build-depends:
-    aeson ^>=2.2,
-    bytestring ^>=0.12,
-    containers ^>=0.7,
-    ecluse:ecluse-core,
-    hedgehog ^>=1.5,
-    hspec ^>=2.11,
-    http-client ^>=0.7,
-    text ^>=2.1,
-    time ^>=1.12,
+    , ecluse:ecluse-core
+    , aeson        ^>=2.2
+    , bytestring   ^>=0.12
+    , containers   ^>=0.7
+    , hedgehog     ^>=1.5
+    , hspec        ^>=2.11
+    , http-client  ^>=0.7
+    , text         ^>=2.1
+    , time         ^>=1.12
 
 -- Core unit tests: cover every Ecluse.Core.* module. Pure, fast, deterministic. Gating.
 -- MUST NOT list the `ecluse` app library in build-depends: its absence is the partition
 -- enforcement — an app spec accidentally placed here fails to compile.
 test-suite ecluse-core-unit
-  import: shared
+  import:             shared
   -- hspec-discover generates a Main without an export list.
-  ghc-options: -Wno-missing-export-lists
-  type: exitcode-stdio-1.0
-  main-is: Spec.hs
-  hs-source-dirs: core/test/unit
+  ghc-options:        -Wno-missing-export-lists
+  type:               exitcode-stdio-1.0
+  main-is:            Spec.hs
+  hs-source-dirs:     core/test/unit
   other-modules:
     Ecluse.BreakerSpec
+    Ecluse.CredentialSpec
     Ecluse.Credential.CodeArtifactSpec
     Ecluse.Credential.Refresh.InternalSpec
-    Ecluse.CredentialSpec
     Ecluse.InFlightSpec
     Ecluse.Package.FilterSpec
     Ecluse.Package.IntegritySpec
     Ecluse.Package.MergeSpec
     Ecluse.PackageSpec
-    Ecluse.Queue.SqsSpec
     Ecluse.QueueSpec
+    Ecluse.Queue.SqsSpec
+    Ecluse.Registry.NpmSpec
     Ecluse.Registry.Npm.FilterSpec
     Ecluse.Registry.Npm.MetadataSpec
     Ecluse.Registry.Npm.ProjectSpec
     Ecluse.Registry.Npm.RouteSpec
     Ecluse.Registry.Npm.ServeSpec
     Ecluse.Registry.Npm.WireSpec
-    Ecluse.Registry.NpmSpec
     Ecluse.Registry.Pypi.WireSpec
     Ecluse.Registry.Rubygems.WireSpec
     Ecluse.Rules.EffectfulSpec
     Ecluse.RulesSpec
-    Ecluse.Security.EgressSpec
     Ecluse.SecuritySpec
+    Ecluse.Security.EgressSpec
     Ecluse.Server.CacheSpec
     Ecluse.Server.ConditionalSpec
     Ecluse.Server.MetadataSpec
@@ -378,48 +367,49 @@ test-suite ecluse-core-unit
 
   build-tool-depends: hspec-discover:hspec-discover ^>=2.11
   build-depends:
+    , ecluse:ecluse-core
+    , ecluse:ecluse-test-support
+    , aeson             ^>=2.2
+    , amazonka          ^>=2.0
+    , bytestring        ^>=0.12
+    , case-insensitive  ^>=1.2
+    , containers        ^>=0.7
+    , crypton           ^>=1.0
+    , hedgehog          ^>=1.5
+    , hspec             ^>=2.11
+    , hspec-hedgehog    ^>=0.3
+    , http-client       ^>=0.7
+    , http-types        ^>=0.12
+    , katip             ^>=0.8.8
+    , memory            ^>=0.18
+    , network           ^>=3.2
+    , retry             ^>=0.9
+    , scientific        ^>=0.3
+    , text              ^>=2.1
+    , text-short        ^>=0.1.6
+    , time              ^>=1.12
+    , universe-base     ^>=1.1
+    , unliftio          ^>=0.2.25
+    , vector            ^>=0.13
+    , wai               ^>=3.2
+    , warp              ^>=3.4
     -- Test-only: gzip a body so the bounded metadata read can be asserted to bound
     -- DECOMPRESSED bytes (a small compressed blob that inflates past the cap). zlib
     -- is already in the resolved build plan (a transitive dependency), so this adds
     -- no new resolution.
-    aeson ^>=2.2,
-    amazonka ^>=2.0,
-    bytestring ^>=0.12,
-    case-insensitive ^>=1.2,
-    containers ^>=0.7,
-    crypton ^>=1.0,
-    ecluse:ecluse-core,
-    ecluse:ecluse-test-support,
-    hedgehog ^>=1.5,
-    hspec ^>=2.11,
-    hspec-hedgehog ^>=0.3,
-    http-client ^>=0.7,
-    http-types ^>=0.12,
-    katip ^>=0.8.8,
-    memory ^>=0.18,
-    network ^>=3.2,
-    retry ^>=0.9,
-    scientific ^>=0.3,
-    text ^>=2.1,
-    text-short ^>=0.1.6,
-    time ^>=1.12,
-    universe-base ^>=1.1,
-    unliftio ^>=0.2.25,
-    vector ^>=0.13,
-    wai ^>=3.2,
-    warp ^>=3.4,
-    zlib ^>=0.7,
+    , zlib              ^>=0.7
 
 -- App-layer unit tests: cover every Ecluse.* (non-Core) module. Pure, fast,
 -- deterministic. Gating.
 test-suite ecluse-unit
-  import: shared
+  import:             shared
   -- hspec-discover generates a Main without an export list.
-  ghc-options: -Wno-missing-export-lists
-  type: exitcode-stdio-1.0
-  main-is: Spec.hs
-  hs-source-dirs: test/unit
+  ghc-options:        -Wno-missing-export-lists
+  type:               exitcode-stdio-1.0
+  main-is:            Spec.hs
+  hs-source-dirs:     test/unit
   other-modules:
+    EcluseSpec
     Ecluse.AcceptanceSpec
     Ecluse.BenchLoad.NormaliseSpec
     Ecluse.CompositionSpec
@@ -428,68 +418,64 @@ test-suite ecluse-unit
     Ecluse.LogSpec
     Ecluse.ManifestSpec
     Ecluse.ServerSpec
+    Ecluse.TelemetrySpec
     Ecluse.Telemetry.CorrelationSpec
     Ecluse.Telemetry.InstrumentsSpec
     Ecluse.Telemetry.ReportersSpec
     Ecluse.Telemetry.ResolveSpec
     Ecluse.Telemetry.TracingSpec
-    Ecluse.TelemetrySpec
-    EcluseSpec
 
   build-tool-depends: hspec-discover:hspec-discover ^>=2.11
   build-depends:
-    aeson ^>=2.2,
-    autodocodec ^>=0.5,
-    bytestring ^>=0.12,
-    cache ^>=0.1.3,
-    case-insensitive ^>=1.2,
-    containers ^>=0.7,
-    crypton ^>=1.0,
-    ecluse,
-    ecluse:ecluse-acceptance,
-    ecluse:ecluse-bench-load,
-    ecluse:ecluse-core,
-    ecluse:ecluse-manifest,
-    ecluse:ecluse-test-support,
-    envparse >=0.5 && <0.7,
-    hedgehog ^>=1.5,
-    hs-opentelemetry-api ^>=1.0,
-    hs-opentelemetry-exporter-in-memory ^>=1.0,
-    hs-opentelemetry-instrumentation-http-client ^>=1.0,
-    hs-opentelemetry-instrumentation-wai ^>=1.0,
-    hs-opentelemetry-propagator-w3c ^>=1.0,
-    hs-opentelemetry-sdk ^>=1.0,
-    hspec ^>=2.11,
-    hspec-hedgehog ^>=0.3,
-    hspec-wai ^>=0.11,
-    http-client ^>=0.7,
-    http-types ^>=0.12,
-    insert-ordered-containers ^>=0.2,
-    katip ^>=0.8.8,
-    memory ^>=0.18,
-    openapi3 ^>=3.2,
-    text ^>=2.1,
-    time ^>=1.12,
-    unliftio ^>=0.2.25,
-    wai ^>=3.2,
-    wai-extra ^>=3.1,
-    warp ^>=3.4,
+    , ecluse
+    , ecluse:ecluse-acceptance
+    , ecluse:ecluse-bench-load
+    , ecluse:ecluse-core
+    , ecluse:ecluse-manifest
+    , ecluse:ecluse-test-support
+    , aeson             ^>=2.2
+    , autodocodec       ^>=0.5
+    , bytestring        ^>=0.12
+    , cache             ^>=0.1.3
+    , case-insensitive  ^>=1.2
+    , containers        ^>=0.7
+    , crypton           ^>=1.0
+    , envparse          >=0.5 && <0.7
+    , hedgehog          ^>=1.5
+    , hspec             ^>=2.11
+    , hspec-hedgehog    ^>=0.3
+    , hspec-wai         ^>=0.11
+    , http-client       ^>=0.7
+    , insert-ordered-containers  ^>=0.2
+    , openapi3          ^>=3.2
+    , http-types        ^>=0.12
+    , hs-opentelemetry-api  ^>=1.0
+    , hs-opentelemetry-exporter-in-memory  ^>=1.0
+    , hs-opentelemetry-instrumentation-http-client  ^>=1.0
+    , hs-opentelemetry-instrumentation-wai          ^>=1.0
+    , hs-opentelemetry-propagator-w3c     ^>=1.0
+    , hs-opentelemetry-sdk  ^>=1.0
+    , katip             ^>=0.8.8
+    , memory            ^>=0.18
+    , text              ^>=2.1
+    , time              ^>=1.12
+    , unliftio          ^>=0.2.25
+    , wai               ^>=3.2
+    , wai-extra         ^>=3.1
+    , warp              ^>=3.4
 
 -- Integration tests: exercise the real request path against in-process servers
 -- (and, where they land, AWS-backed code against a ministack container via
 -- testcontainers). Hermetic and gating; the AWS cases require a Docker daemon.
 test-suite ecluse-integration
-  import: shared
+  import:             shared
   -- hspec-discover generates a Main without an export list. -threaded is required by
   -- the OpenTelemetry batch span processor the tracing integration test drives
   -- through the live SDK (it aborts under the non-threaded RTS).
-  ghc-options:
-    -Wno-missing-export-lists
-    -threaded
-
-  type: exitcode-stdio-1.0
-  main-is: Spec.hs
-  hs-source-dirs: test/integration
+  ghc-options:        -Wno-missing-export-lists -threaded
+  type:               exitcode-stdio-1.0
+  main-is:            Spec.hs
+  hs-source-dirs:     test/integration
   other-modules:
     Ecluse.AwsEndToEndSpec
     Ecluse.Integration.Ministack
@@ -506,44 +492,44 @@ test-suite ecluse-integration
   build-tool-depends: hspec-discover:hspec-discover ^>=2.11
   build-depends:
     , aeson            ^>=2.2
-    aeson ^>=2.2,
-    amazonka ^>=2.0,
-    amazonka-sqs ^>=2.0,
-    bytestring ^>=0.12,
-    case-insensitive ^>=1.2,
-    containers ^>=0.7,
-    crypton ^>=1.0,
-    ecluse,
-    ecluse:ecluse-core,
-    ecluse:ecluse-test-support,
-    hs-opentelemetry-api ^>=1.0,
-    hs-opentelemetry-sdk ^>=1.0,
-    hspec ^>=2.11,
-    http-client ^>=0.7,
-    http-types ^>=0.12,
-    katip ^>=0.8.8,
-    memory ^>=0.18,
-    microlens ^>=0.4.13,
-    network ^>=3.2,
-    resourcet ^>=1.3,
-    testcontainers ^>=0.5.3,
-    text ^>=2.1,
-    time ^>=1.12,
-    unliftio ^>=0.2.25,
-    wai ^>=3.2,
-    wai-extra ^>=3.1,
-    warp ^>=3.4,
+    , amazonka         ^>=2.0
+    , amazonka-sqs     ^>=2.0
+    , bytestring       ^>=0.12
+    , case-insensitive  ^>=1.2
+    , containers       ^>=0.7
+    , crypton          ^>=1.0
+    , ecluse
+    , ecluse:ecluse-core
+    , ecluse:ecluse-test-support
+    , hspec            ^>=2.11
+    , http-client      ^>=0.7
+    , http-types       ^>=0.12
+    , hs-opentelemetry-api  ^>=1.0
+    , hs-opentelemetry-sdk  ^>=1.0
+    , katip            ^>=0.8.8
+    , memory           ^>=0.18
+    , microlens        ^>=0.4.13
+    , network          ^>=3.2
+    , resourcet        ^>=1.3
+    , testcontainers   ^>=0.5.3
+    , text             ^>=2.1
+    , time             ^>=1.12
+    , unliftio         ^>=0.2.25
+    , wai              ^>=3.2
+    , wai-extra        ^>=3.1
+    , warp             ^>=3.4
+
 -- Smoke tests: live calls to public registries (npm/PyPI) to validate our JSON
 -- and protocol handling. ALLOWED TO FAIL by design (non-gating) — they depend on
 -- uncontrolled external services.
 test-suite ecluse-smoke
   import:             shared
-  import: shareds a Main without an export list.
+  -- hspec-discover generates a Main without an export list.
   ghc-options:        -Wno-missing-export-lists
-  ghc-options: -Wno-missing-export-lists
-  type: exitcode-stdio-1.0
-  main-is: Spec.hs
-  hs-source-dirs: test/smoke
+  type:               exitcode-stdio-1.0
+  main-is:            Spec.hs
+  hs-source-dirs:     test/smoke
+  other-modules:
     Ecluse.Credential.CodeArtifactSpec
     Ecluse.RegistryProtocolSpec
     Ecluse.SecurityResolverOracleSpec
@@ -553,22 +539,22 @@ test-suite ecluse-smoke
   build-tool-depends: hspec-discover:hspec-discover ^>=2.11
   build-depends:
     , aeson            ^>=2.2
-    aeson ^>=2.2,
-    containers ^>=0.7,
-    directory ^>=1.3,
-    ecluse,
-    ecluse:ecluse-core,
-    ecluse:ecluse-test-support,
-    hedgehog ^>=1.5,
-    hspec ^>=2.11,
-    hspec-hedgehog ^>=0.3,
-    http-client ^>=0.7,
-    http-client-tls ^>=0.3.6,
-    iproute ^>=1.7,
-    network ^>=3.2,
-    process ^>=1.6,
-    text ^>=2.1,
-    unliftio ^>=0.2.25,
+    , containers       ^>=0.7
+    , directory        ^>=1.3
+    , ecluse
+    , ecluse:ecluse-core
+    , ecluse:ecluse-test-support
+    , hedgehog         ^>=1.5
+    , hspec            ^>=2.11
+    , hspec-hedgehog   ^>=0.3
+    , http-client      ^>=0.7
+    , http-client-tls  ^>=0.3.6
+    , iproute          ^>=1.7
+    , network          ^>=3.2
+    , process          ^>=1.6
+    , text             ^>=2.1
+    , unliftio         ^>=0.2.25
+
 -- End-to-end tests: the whole system as the real OCI image, driven by the real npm
 -- CLI over its public HTTP surface, with the server↔worker round-trip across real
 -- containers. NON-GATING (pre-merge visibility + nightly) — needs a Docker daemon,
@@ -578,12 +564,12 @@ test-suite ecluse-smoke
 -- machine without the setup. See planning/slices/S53-e2e-ecosystem.md.
 test-suite ecluse-e2e
   import:             shared
-  import: shareds a Main without an export list.
+  -- hspec-discover generates a Main without an export list.
   ghc-options:        -Wno-missing-export-lists
-  ghc-options: -Wno-missing-export-lists
-  type: exitcode-stdio-1.0
-  main-is: Spec.hs
-  hs-source-dirs: test/e2e
+  type:               exitcode-stdio-1.0
+  main-is:            Spec.hs
+  hs-source-dirs:     test/e2e
+  other-modules:
     Ecluse.E2E.Fixtures
     Ecluse.E2E.Harness
     Ecluse.E2E.SuiteSpec
@@ -592,23 +578,23 @@ test-suite ecluse-e2e
   build-tool-depends: hspec-discover:hspec-discover ^>=2.11
   build-depends:
     , aeson          ^>=2.2
-    aeson ^>=2.2,
-    bytestring ^>=0.12,
-    containers ^>=0.7,
-    crypton ^>=1.0,
-    directory ^>=1.3,
-    ecluse:ecluse-core,
-    ecluse:ecluse-test-support,
-    filepath ^>=1.5,
-    hspec ^>=2.11,
-    http-client ^>=0.7,
-    http-types ^>=0.12,
-    memory ^>=0.18,
-    network ^>=3.2,
-    text ^>=2.1,
-    time ^>=1.12,
-    typed-process ^>=0.2.13,
-    unliftio ^>=0.2.25,
+    , bytestring     ^>=0.12
+    , containers     ^>=0.7
+    , crypton        ^>=1.0
+    , directory      ^>=1.3
+    , ecluse:ecluse-core
+    , ecluse:ecluse-test-support
+    , filepath       ^>=1.5
+    , hspec          ^>=2.11
+    , http-client    ^>=0.7
+    , http-types     ^>=0.12
+    , memory         ^>=0.18
+    , network        ^>=3.2
+    , text           ^>=2.1
+    , time           ^>=1.12
+    , typed-process  ^>=0.2.13
+    , unliftio       ^>=0.2.25
+
 -- Benchmarks: the work-per-request (Layer A) micro-benches over the pure
 -- ecluse-core hot paths, plus the synthetic-corpus generator's correctness tests
 -- and the complexity assertions that guard the accidentally-quadratic class.
@@ -618,18 +604,15 @@ test-suite ecluse-e2e
 -- OUT of the library's own dependency closure. See docs/architecture/performance.md.
 benchmark ecluse-bench
   import:          shared
-  import: shared
-  type: exitcode-stdio-1.0
-  main-is: Main.hs
-  hs-source-dirs: benche's default optimisation (-O1), like every other component,
+  type:            exitcode-stdio-1.0
+  main-is:         Main.hs
+  hs-source-dirs:  bench
+  -- Built at the package's default optimisation (-O1), like every other component,
   -- so the numbers reflect the shipped build rather than a benchmark-only setting.
   -- -T (baked into the RTS opts) makes tasty-bench report allocated bytes from GC
   -- stats on every run, with no caller flag.
   ghc-options:     -rtsopts "-with-rtsopts=-T"
-  ghc-options:
-    -rtsopts
-    -with-rtsopts=-T
-
+  other-modules:
     Ecluse.Bench.Corpus
     Ecluse.Bench.Fit
     Ecluse.Core.MergeBench
@@ -643,18 +626,18 @@ benchmark ecluse-bench
 
   build-depends:
     , ecluse:ecluse-core
-    aeson ^>=2.2,
-    bytestring ^>=0.12,
-    containers ^>=0.7,
-    ecluse:ecluse-core,
-    ecluse:ecluse-test-support,
-    http-types ^>=0.12,
-    tasty ^>=1.5,
-    tasty-bench ^>=0.4,
-    tasty-bench-fit ^>=0.1,
-    tasty-hunit ^>=0.10,
-    text ^>=2.1,
-    time ^>=1.12,
+    , ecluse:ecluse-test-support
+    , aeson            ^>=2.2
+    , bytestring       ^>=0.12
+    , containers       ^>=0.7
+    , http-types       ^>=0.12
+    , tasty            ^>=1.5
+    , tasty-bench      ^>=0.4
+    , tasty-bench-fit  ^>=0.1
+    , tasty-hunit      ^>=0.10
+    , text             ^>=2.1
+    , time             ^>=1.12
+
 -- Layer B load harness (S38): throughput & latency under concurrent load against the
 -- real composed proxy. A separate EXECUTABLE (not a tasty-bench component): it boots
 -- Ecluse.Server.application on warp over in-process stub upstreams and the in-memory
@@ -666,14 +649,10 @@ benchmark ecluse-bench
 -- INFORM-ONLY and not part of the gate. See docs/architecture/performance.md.
 executable bench-load
   import:          shared
-  import: shared
-  main-is: Main.hs
-  hs-source-dirs: bench/load
-  ghc-options:
-    -threaded
-    -rtsopts
-    "-with-rtsopts=-T -N"
-
+  main-is:         Main.hs
+  hs-source-dirs:  bench/load
+  ghc-options:     -threaded -rtsopts "-with-rtsopts=-T -N"
+  other-modules:
     Ecluse.BenchLoad.Error
     Ecluse.BenchLoad.Harness
     Ecluse.BenchLoad.Npm
@@ -681,25 +660,25 @@ executable bench-load
 
   build-depends:
     , ecluse
-    aeson ^>=2.2,
-    bytestring ^>=0.12,
-    containers ^>=0.7,
-    crypton ^>=1.0,
-    ecluse,
-    ecluse:ecluse-bench-load,
-    ecluse:ecluse-core,
-    ecluse:ecluse-test-support,
-    http-client ^>=0.7,
-    http-client-tls ^>=0.3.6,
-    http-types ^>=0.12,
-    katip ^>=0.8.8,
-    memory ^>=0.18,
-    text ^>=2.1,
-    time ^>=1.12,
-    typed-process ^>=0.2.13,
-    unliftio ^>=0.2.25,
-    wai ^>=3.2,
-    warp ^>=3.4,
+    , ecluse:ecluse-bench-load
+    , ecluse:ecluse-core
+    , ecluse:ecluse-test-support
+    , aeson            ^>=2.2
+    , bytestring       ^>=0.12
+    , containers       ^>=0.7
+    , crypton          ^>=1.0
+    , http-client      ^>=0.7
+    , http-client-tls  ^>=0.3.6
+    , http-types       ^>=0.12
+    , katip            ^>=0.8.8
+    , memory           ^>=0.18
+    , text             ^>=2.1
+    , time             ^>=1.12
+    , typed-process    ^>=0.2.13
+    , unliftio         ^>=0.2.25
+    , wai              ^>=3.2
+    , warp             ^>=3.4
+
 -- Layer B normalisation core: the PURE attribution and saturation maths the load
 -- harness's two analysis views are built from (service-time upstream-vs-overhead split,
 -- and the load-saturation queuing-delay flag). An INTERNAL sublibrary (the
@@ -708,10 +687,10 @@ executable bench-load
 -- Carries no socket or load-generator dependency. See docs/architecture/performance.md.
 library ecluse-bench-load
   import:          shared
-  import: shared
-  hs-source-dirs: bench/load/srcad.Normalise
+  hs-source-dirs:  bench/load/src
+  exposed-modules: Ecluse.BenchLoad.Normalise
   build-depends:   text ^>=2.1
-  build-depends: text ^>=2.1
+
 -- Live performance-acceptance harness (Context B): the PURE evaluation core. The
 -- version-controlled acceptance criteria, the per-package budget verdict, and the
 -- run-summary rendering. An INTERNAL sublibrary (the ecluse-manifest pattern) so the
@@ -720,15 +699,15 @@ library ecluse-bench-load
 -- kept out of the shipped library closure. See docs/architecture/performance.md.
 library ecluse-acceptance
   import:          shared
-  import: shared
-  hs-source-dirs: acceptance/srcnce
+  hs-source-dirs:  acceptance/src
+  exposed-modules: Ecluse.Acceptance
   build-depends:
     , ecluse:ecluse-core
-    aeson ^>=2.2,
-    bytestring ^>=0.12,
-    containers ^>=0.7,
-    ecluse:ecluse-core,
-    text ^>=2.1,
+    , aeson       ^>=2.2
+    , bytestring  ^>=0.12
+    , containers  ^>=0.7
+    , text        ^>=2.1
+
 -- The live performance-acceptance harness (Context B): a separate EXECUTABLE that
 -- fetches LIVE packuments for the curated catalogue set (Ecluse.Test.RegistryCapture),
 -- times Ecluse's work-per-request over each, and evaluates the overhead against the
@@ -738,17 +717,16 @@ library ecluse-acceptance
 -- docs/architecture/performance.md.
 executable perf-acceptance
   import:         shared
-  import: shared
-  main-is: Main.hsnce/app
+  main-is:        Main.hs
+  hs-source-dirs: acceptance/app
   build-depends:
     , ecluse:ecluse-acceptance
-    aeson ^>=2.2,
-    bytestring ^>=0.12,
-    containers ^>=0.7,
-    ecluse:ecluse-acceptance,
-    ecluse:ecluse-core,
-    ecluse:ecluse-test-support,
-    http-client ^>=0.7,
-    http-client-tls ^>=0.3.6,
-    text ^>=2.1,
-    time ^>=1.12,
+    , ecluse:ecluse-core
+    , ecluse:ecluse-test-support
+    , aeson            ^>=2.2
+    , bytestring       ^>=0.12
+    , containers       ^>=0.7
+    , http-client      ^>=0.7
+    , http-client-tls  ^>=0.3.6
+    , text             ^>=2.1
+    , time             ^>=1.12
