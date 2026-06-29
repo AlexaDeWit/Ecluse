@@ -134,6 +134,13 @@ evalRule _ DenyInstallTimeExecution pd =
         RunsCodeOnInstall how -> Deny ("runs code on install: " <> how)
         NoCodeOnInstall -> NoDecision "no install-time code execution"
         CodeExecUnknown -> NoDecision "install-time code execution not yet determined"
+evalRule _ (DenyByIdentity ident) pd =
+    pure $
+        let pkgStr = renderPackageName (pkgName pd)
+            pkgAtVer = pkgStr <> "@" <> renderVersion (pkgVersion pd)
+         in if ident == pkgStr || ident == pkgAtVer
+                then Deny ("identity " <> ident <> " is revoked by operator")
+                else NoDecision ("identity is not the revoked " <> ident)
 
 -- ── the engine's prepared rule ──────────────────────────────────────────────────
 

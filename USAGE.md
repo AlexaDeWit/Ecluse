@@ -350,6 +350,7 @@ resilience rather than blanket bans:
   launch.**
 - **`remediation-fast-track`**: admit a release that fixes a known CVE immediately, ahead of
   the quarantine. **On once the CVE tier lands.**
+- **`revoke`**: a hard-deny (`DenyByIdentity`) rule to deny a specific package or `package@version`, at a precedence above the scope allow-list. **Available.**
 
 You override values, add rules (e.g. opt into `DenyInstallTimeExecution`), or suppress a
 default by name in the configuration document:
@@ -358,7 +359,8 @@ default by name in the configuration document:
 {
   "rules": {
     "min-age":      { "ageSeconds": 1209600 },
-    "deny-scripts": { "type": "DenyInstallTimeExecution", "precedence": 200 }
+    "deny-scripts": { "type": "DenyInstallTimeExecution", "precedence": 200 },
+    "revoke-bad":   { "type": "DenyByIdentity", "identity": "bad-package" }
   }
 }
 ```
@@ -429,11 +431,10 @@ knob you must not lower below SHA-256. See
   automatically, and Écluse never re-gates trusted content. The **typical case resolves itself**,  the public registry yanks or security-holds the bad version, its bytes change or vanish,
   re-mirroring can no longer reproduce them, and you purge the stale copy from Registry B at your
   leisure. For the **atypical case where your own scanning is ahead of the public yank**, revoke in
-  this order: **(1)** deny the identity (the planned `DenyByIdentity` revocation rule; see Planned
-  controls) so the serve path stops admitting it and the worker stops re-mirroring it, then **(2)**
+  this order: **(1)** deny the identity (the `DenyByIdentity` revocation rule) so the serve path stops admitting it and the worker stops re-mirroring it, then **(2)**
   purge that version from Registry B to remove the already-mirrored copy. **Order matters:** purge
   alone is a treadmill, while the version is still live upstream, the next install re-admits and
-  re-mirrors it. Until `DenyByIdentity` ships, purge is the only lever, with that caveat.
+  re-mirrors it.
 
 ## Planned controls
 
@@ -446,9 +447,6 @@ control: you decide your threat tolerance.**
   the GCP equivalents are **planned**.
 - **Effectful CVE rules**: `DenyIfCVE` / `AllowIfRemediatesCve` over a local OSV advisory
   index (**planned**).
-- **Revocation denylist**: a hard-deny `DenyByIdentity` rule (deny a specific package or
-  `package@version`, at a precedence above the scope allow-list), the enforcement half of
-  revoking a mirrored version ahead of an upstream yank, paired with purging Registry B.
 
 The full deployment runbook ships with the launch.
 
