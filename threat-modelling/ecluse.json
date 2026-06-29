@@ -633,6 +633,17 @@
                   "mitigation": "Input is bounded fail-closed by body-size, version-count, and nesting-depth caps (PROXY_MAX_RESPONSE_BYTES / PROXY_MAX_VERSION_COUNT / PROXY_MAX_NESTING_DEPTH), the bounded read stopping mid-stream. The serve path is O(n log n) in version count (a Map-based merge, no super-linear blow-up), the single-flight cache coalesces concurrent misses for the same package onto one computation, and a per-request timeout caps any single request. The version cap is being made to fail fast at the cap rather than projecting the whole document first \u2014 a release-gated fix in progress (#400; no release ships without it). A future CVE-informed rules feature (not yet built) must likewise batch its advisory lookups rather than querying per version (#399), so the amplification is a forward design constraint on that feature, not a current cost; resident-bytes and serve-concurrency admission bounds further cap aggregate resident cost (#418, #419). The residual is resource amplification, not algorithmic complexity: a near-cap document still costs real CPU and heap, and distinct-key floods (worst under a hostile or compromised upstream) bypass single-flight, so volumetric and concurrency rate-limiting is an operator-edge responsibility, as with access control.",
                   "modelType": "STRIDE",
                   "id": "0ec10e5e-0000-4000-8000-000000000102"
+                },
+                {
+                  "number": 18,
+                  "status": "Open",
+                  "severity": "High",
+                  "title": "Proxy compromised via tampered OSV database",
+                  "type": "Tampering",
+                  "description": "If the S3 bucket is writable by an attacker, they could supply a tampered osv.db to bypass vulnerability gates.",
+                  "mitigation": "S3 bucket is private. Proxy IAM role is granted GetObject only. Atomic shadow-swap prevents partial reads.",
+                  "modelType": "STRIDE",
+                  "id": "32d813d8-6bee-4fa3-acb2-d62efe5aff18"
                 }
               ]
             }
@@ -2420,8 +2431,8 @@
             "connector": "smooth",
             "data": {
               "type": "tm.Flow",
-              "name": "SQLLite Files",
-              "description": "Stores SQLLite files that contain highly indexable copies of the OSV dataset",
+              "name": "Push osv.db (SQLite)",
+              "description": "Pilot pushes the optimized osv.db to S3.",
               "outOfScope": false,
               "isTrustBoundary": false,
               "reasonOutOfScope": "",
@@ -2466,8 +2477,8 @@
             "connector": "smooth",
             "data": {
               "type": "tm.Flow",
-              "name": "Downloads Datasets",
-              "description": "Periodically Pulls the latest OSV SQLLite file if the ETag has changed, allowing up to date CVE-informed decision making",
+              "name": "Download osv.db",
+              "description": "Proxy polls S3 and downloads osv.db via GetObject.",
               "outOfScope": false,
               "isTrustBoundary": false,
               "reasonOutOfScope": "",
@@ -2503,7 +2514,7 @@
             },
             "attrs": {
               "text": {
-                "text": "The Oracle\n(Ingestion Pipeline)"
+                "text": "\u00c9cluse Pilot\n(Ingestion Pipeline)"
               },
               "body": {
                 "stroke": "#333333",
@@ -2599,8 +2610,8 @@
             "id": "f1646094-9885-422a-b7e7-7888c72905ef",
             "data": {
               "type": "tm.Process",
-              "name": "The Oracle\n(Ingestion Pipeline)",
-              "description": "Standalone Haskell binary that fetches, streams, and parses OSV data dumps, producing a highly optimized, read-only osv.db uploaded to S3/GCS. Decouples heavy JSON processing and GC pressure from the proxy.",
+              "name": "\u00c9cluse Pilot\n(Ingestion Pipeline)",
+              "description": "Standalone Haskell binary that fetches, streams, and parses raw OSV data dumps from osv.dev public endpoints. It mints container credentials to produce a highly optimized, read-only osv.db and pushes it to S3/GCS.",
               "outOfScope": false,
               "isTrustBoundary": false,
               "reasonOutOfScope": "",
@@ -2609,7 +2620,30 @@
               "handlesGoodsOrServices": false,
               "isWebApplication": false,
               "privilegeLevel": "",
-              "threats": []
+              "threats": [
+                {
+                  "number": 16,
+                  "status": "Open",
+                  "severity": "Medium",
+                  "title": "Poisoned OSV payload exploits parser",
+                  "type": "Denial of service",
+                  "description": "A maliciously crafted or unexpectedly massive OSV payload from upstream could cause Pilot to exhaust memory or crash during JSON parsing.",
+                  "mitigation": "Pilot is decoupled from the proxy. If it OOMs or fails, it only delays updates; the proxy continues serving traffic using the last-known-good osv.db snapshot.",
+                  "modelType": "STRIDE",
+                  "id": "4b73d786-865e-43fc-b1bd-0e0bc75cae03"
+                },
+                {
+                  "number": 17,
+                  "status": "Open",
+                  "severity": "High",
+                  "title": "Pilot container-role privilege escalation",
+                  "type": "Elevation of privilege",
+                  "description": "If Pilot is compromised, its standing container credentials could be leveraged.",
+                  "mitigation": "Least-privilege IAM restricted to s3:PutObject for the specific bucket prefix. Runs in a segregated container separate from the proxy.",
+                  "modelType": "STRIDE",
+                  "id": "b1a6332d-8def-4df9-922e-53718c920155"
+                }
+              ]
             }
           },
           {
@@ -3005,6 +3039,52 @@
             "data": {
               "name": "delete pruned versions",
               "description": "Dredger issues delete requests to Registry B based on CVE advisories or age.",
+              "type": "tm.Flow",
+              "isTrustBoundary": false,
+              "outOfScope": false,
+              "reasonOutOfScope": "",
+              "hasOpenThreats": false,
+              "threats": [],
+              "isEncrypted": true,
+              "isPublicNetwork": false
+            }
+          },
+          {
+            "shape": "flow",
+            "zIndex": 10,
+            "id": "fd44cd74-341a-4185-a3f3-f58357ccf91d",
+            "source": {
+              "cell": "f1646094-9885-422a-b7e7-7888c72905ef"
+            },
+            "target": {
+              "cell": "0ec10e5e-0000-4000-8000-000000000012"
+            },
+            "data": {
+              "name": "mint container credentials",
+              "description": "Pilot requests IAM credentials to push to S3.",
+              "type": "tm.Flow",
+              "isTrustBoundary": false,
+              "outOfScope": false,
+              "reasonOutOfScope": "",
+              "hasOpenThreats": false,
+              "threats": [],
+              "isEncrypted": true,
+              "isPublicNetwork": false
+            }
+          },
+          {
+            "shape": "flow",
+            "zIndex": 10,
+            "id": "5dacf1eb-231a-49d3-8612-9ecf49f1839d",
+            "source": {
+              "cell": "0ec10e5e-0000-4000-8000-000000000020"
+            },
+            "target": {
+              "cell": "c8455307-cef2-4843-a821-ff90db9643d2"
+            },
+            "data": {
+              "name": "poll & download osv.db",
+              "description": "Proxy polls S3 for ETag changes and downloads the osv.db snapshot (GetObject permission).",
               "type": "tm.Flow",
               "isTrustBoundary": false,
               "outOfScope": false,

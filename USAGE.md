@@ -305,6 +305,13 @@ platform egress controls above.
 The rationale (and why both the application guards and the platform controls are worth
 having) is in [Security: Outbound-Request & Input-Validation Invariants](docs/architecture/security.md#network-egress-is-a-shared-responsibility).
 
+### Securing Écluse Pilot & Dredger Services
+
+If you deploy the auxiliary services (the **Écluse Pilot** ingestion pipeline and the **Écluse Dredger** reaper), they require distinct, tightly scoped network configurations:
+
+- **Écluse Pilot**: Requires **no public ingress**. It requires egress to `osv.dev` public endpoints (to fetch raw vulnerability data), the cloud instance-metadata endpoint (to mint container credentials), and your configured object store (S3/GCS) with `s3:PutObject` permissions to upload the processed `osv.db`.
+- **Écluse Dredger**: Requires **no public ingress**. It requires egress *only* to your private mirror (Registry B) to issue delete requests, and to the instance-metadata endpoint for credentials. It has a standing high-privilege delete capability, so isolating it from all untrusted networks is critical.
+
 ## Locking down CI egress (recommended)
 
 The controls above secure Écluse's *own* outbound path. This one is about your *consumers'*,
