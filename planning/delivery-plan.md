@@ -223,7 +223,7 @@ owes also owes a deterministic `U`/`I` test (see [Testing Strategy](../docs/test
 | ID | Slice | Depends on | Tier |
 |----|-------|------------|------|
 | [S21](slices/S21-effectful-tier.md) | Effectful rule tier (`Unavailable`, timeout/retry/breaker) | S05, S14 | U |
-| [S22](slices/S22-cve-sync.md) | `CVELookup` handle + OSV local-sync index | S01, S21 | U, I |
+| [S22](slices/S22-cve-sync.md) | `CVELookup` handle + SQLite `osv.db` polling | S01, S21 | U, I |
 | [S23](slices/S23-deny-if-cve.md) | CVE rules, `DenyIfCVE` + `AllowIfRemediatesCve` | S03, S22 | U |
 
 ### M6, Observability

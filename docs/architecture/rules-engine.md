@@ -271,37 +271,29 @@ ranges using the same per-ecosystem ordering as
 [`compareVersions`](domain-model.md), the allow direction just asks "is *V* past
 the fix boundary?" instead of "is *V* inside the affected range?".
 
-### Local sync, in memory
+### Local polling, decoupled ingestion
 
-A supervised in-process background task periodically pulls **OSV's per-ecosystem
-advisory exports** (`gs://osv-vulnerabilities/<ecosystem>/all.zip`), one dataset
-per supported ecosystem, under one schema, and parses each into a compact
-in-memory index (package → affected version-ranges + advisory IDs), which is
-**atomically swapped** in. The download is transient (stream-unzipped, or a temp
-file deleted immediately), so there is **no persistent writable-disk requirement**. The footprint is RAM: tens of MB per ecosystem, the index smaller than the raw
-export. OSV is chosen as the aggregator, it covers npm/PyPI/RubyGems under one
-schema and ships dumps built for mirroring, so a single mechanism serves every
-ecosystem. The task feeds request-path rule evaluation, so it travels with the
-server (see [Process model](cloud-backends.md#process-model)).
+Rather than fetching and parsing raw JSON advisory dumps on the proxy (which would introduce heavy GC pressure and memory spikes), Écluse uses a **decoupled ingestion pipeline (Écluse Pilot)**. Pilot is a standalone background service that pulls **OSV's per-ecosystem advisory exports**, processes them, and compiles them into a highly optimized, read-only SQLite database (`osv.db`). It pushes this database to a private S3/GCS bucket.
 
-Syncing rather than looking up on demand removes the **one external dependency
+The Écluse proxy runs a supervised in-process polling thread that periodically checks the S3 bucket for ETag changes. When a new `osv.db` is published, the proxy downloads it and performs an **atomic shadow-swap** of the active database connection. The footprint is minimal: the proxy merely queries the local SQLite file on disk.
+
+Polling rather than looking up on demand removes the **one external dependency
 that would otherwise sit under the deliberately fail-closed gate** (see
 [Effectful-rule failure](#effectful-rule-failure)): an advisory-source outage
-becomes **sync lag**, the last-good index keeps serving, with an alarm, instead
+becomes **sync lag**, the last-good `osv.db` keeps serving, with an alarm, instead
 of per-package blocking. Lookups also leave the hot path entirely; and the cold
 path is already rare, since a version is checked only *before* it is mirrored,
 after which it is served rule-free, so lookup volume tracks first-time-seen
 versions, not requests.
 
-- **Cold start**, until the first sync lands the index is empty, so
+- **Cold start**, until the first sync lands the SQLite DB is absent, so
   [readiness](web-layer.md#meta-routes-ping-health-and-search) gates on
-  *first-sync-complete*: the proxy is not marked ready until advisories are loaded.
-- **Sync failure**, keep the last-good index and alarm; never drop to an empty
-  index on a failed refresh.
+  *first-sync-complete*: the proxy is not marked ready until `osv.db` is loaded.
+- **Sync failure**, keep the last-good DB and alarm; never drop to an empty
+  state on a failed refresh.
 - **Version matching**, owned locally: a version is tested against an advisory's
   affected ranges using the same per-ecosystem ordering as
-  [`compareVersions`](domain-model.md). (Owned whichever source is used, every
-  source returns ranges.)
+  [`compareVersions`](domain-model.md) via queries against the SQLite index.
 
 ### Point-in-time gating, a known limitation
 
