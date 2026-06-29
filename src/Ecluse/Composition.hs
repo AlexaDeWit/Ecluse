@@ -96,11 +96,16 @@ import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName, prefixFor)
 import Ecluse.Core.Package.Integrity (MinIntegrity, MinTrustedIntegrity)
 import Ecluse.Core.Queue (MemoryQueueConfig, defaultMemoryQueueConfig)
 import Ecluse.Core.Queue.Sqs (SqsConfig (sqsEndpoint), SqsEndpoint (..), defaultSqsConfig)
+import Ecluse.Core.Registry.Npm qualified as Npm
+import Ecluse.Core.Registry.Npm.Filter qualified as NpmFilter
+import Ecluse.Core.Registry.Npm.Project qualified as NpmProject
+
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Security (Limits (Limits, maxBodyBytes, maxNestingDepth, maxVersionCount), TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), hostAddress, lowerCaseHosts, splitHostPort)
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Cache (CacheConfig (..))
 import Ecluse.Core.Server.Context (MountBinding, PackumentDeps (..), PublishDeps (..))
+import Ecluse.Core.Server.Metadata qualified as Metadata
 import Ecluse.Core.Server.Response (HelpMessage, mkHelpMessage)
 import Ecluse.Core.Text (nonBlank)
 
@@ -560,6 +565,11 @@ composeBindings resolveAdapter clock providers config = do
                 , pdHelp = helpMessage
                 , pdMinIntegrity = minIntegrity
                 , pdMinTrustedIntegrity = minTrustedIntegrity
+                , pdNewMetadataClient = \p u c f1 f2 l m t s -> Metadata.newNpmMetadataClient p u c f1 f2 (Npm.NpmClientConfig t m s l)
+                , pdBuildArtifactRequestByFile = \l m t s -> Npm.artifactRequestByFile (Npm.NpmClientConfig t m s l)
+                , pdBuildArtifactRequestByUrl = \l m t s -> Npm.artifactRequestByUrl (Npm.NpmClientConfig t m s l)
+                , pdApplyFilter = NpmFilter.applyFilterPlan
+                , pdRewriteUrls = NpmFilter.rewriteTarballUrls
                 }
 
 -- The mount's externally-visible base path, derived from its ecosystem prefix
@@ -592,6 +602,8 @@ publishDepsFor env limits helpMessage = case cfgPublicationTarget env of
                         , pubInboundToken = inboundToken
                         , pubLimits = limits
                         , pubHelp = helpMessage
+                        , pubRelayPublish = \l m t s -> Npm.relayPublishDocument (Npm.NpmClientConfig t m s l)
+                        , pubCanonicaliseName = rightToMaybe . NpmProject.projectName
                         }
                 )
         errs -> Left errs

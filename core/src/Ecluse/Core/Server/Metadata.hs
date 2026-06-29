@@ -40,6 +40,7 @@ import Ecluse.Core.Registry.Metadata (
  )
 import Ecluse.Core.Registry.Npm (NpmClientConfig)
 import Ecluse.Core.Registry.Npm.Metadata (fetchNpmManifest, fetchNpmVersion)
+
 import Ecluse.Core.Server.Cache (
     CacheEntry (CacheEntry, entryInfo, entryRaw),
     MetadataCache,

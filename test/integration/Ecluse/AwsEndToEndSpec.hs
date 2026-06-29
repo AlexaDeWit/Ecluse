@@ -28,7 +28,8 @@ import Ecluse.Core.Credential (AuthToken (AuthToken, authExpiresAt, authSecret),
 import Ecluse.Core.Package.Integrity (defaultMinIntegrity, defaultMinTrustedIntegrity)
 import Ecluse.Core.Queue (MirrorQueue)
 import Ecluse.Core.Queue.Sqs (SqsConfig (sqsWaitSeconds), SqsEndpoint (endpointHost, endpointPort), newSqsQueue)
-import Ecluse.Core.Registry.Npm (NpmClientConfig (NpmClientConfig, npmBaseUrl, npmLimits, npmManager, npmToken), newNpmClient)
+import Ecluse.Core.Registry.Npm (NpmClientConfig (..), artifactRequestByFile, artifactRequestByUrl, newNpmClient)
+import Ecluse.Core.Registry.Npm.Filter (applyFilterPlan, rewriteTarballUrls)
 import Ecluse.Core.Registry.Npm.Route qualified as Npm
 import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
 import Ecluse.Core.Rules (prepare)
@@ -36,6 +37,7 @@ import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan), atDefault
 import Ecluse.Core.Security (LoweredHostSet, TarballHostPolicy (SameHostAsPackument), defaultLimits, lowerCaseHosts)
 import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
+import Ecluse.Core.Server.Metadata (newNpmMetadataClient)
 import Ecluse.Env (Env, newEnv, newWorkerHeartbeat)
 import Ecluse.Integration.Ministack (
     endpointFor,
@@ -194,6 +196,11 @@ mountBinding privateUrl publicUrl mirrorUrl = do
                 , pdHelp = Nothing
                 , pdMinIntegrity = defaultMinIntegrity
                 , pdMinTrustedIntegrity = defaultMinTrustedIntegrity
+                , pdNewMetadataClient = \p u c f1 f2 l m t s -> newNpmMetadataClient p u c f1 f2 (NpmClientConfig t m s l)
+                , pdBuildArtifactRequestByFile = \l m t s -> artifactRequestByFile (NpmClientConfig t m s l)
+                , pdBuildArtifactRequestByUrl = \l m t s -> artifactRequestByUrl (NpmClientConfig t m s l)
+                , pdApplyFilter = applyFilterPlan
+                , pdRewriteUrls = rewriteTarballUrls
                 }
     pure
         MountBinding

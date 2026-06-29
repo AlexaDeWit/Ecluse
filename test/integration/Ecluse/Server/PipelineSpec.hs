@@ -47,6 +47,8 @@ import Ecluse.Core.Queue (
     newInMemoryQueue,
  )
 import Ecluse.Core.Registry (ParseError (..), RegistryClient (..))
+import Ecluse.Core.Registry.Npm (NpmClientConfig (..), artifactRequestByFile, artifactRequestByUrl)
+import Ecluse.Core.Registry.Npm.Filter (applyFilterPlan, rewriteTarballUrls)
 import Ecluse.Core.Registry.Npm.Route qualified as Npm
 import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
 import Ecluse.Core.Rules (
@@ -68,6 +70,7 @@ import Ecluse.Core.Rules.Types (
 import Ecluse.Core.Security (Limits (maxBodyBytes, maxNestingDepth, maxVersionCount), TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), defaultLimits, lowerCaseHosts)
 import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
+import Ecluse.Core.Server.Metadata (newNpmMetadataClient)
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Env (Env (envQueue), newEnv, newWorkerHeartbeat)
 import Ecluse.Log (LogFormat (JsonLog), newLogEnv)
@@ -646,6 +649,11 @@ deps privatePort publicPort inbound = do
             , pdHelp = Nothing
             , pdMinIntegrity = defaultMinIntegrity
             , pdMinTrustedIntegrity = defaultMinTrustedIntegrity
+            , pdNewMetadataClient = \p u c f1 f2 l m t s -> newNpmMetadataClient p u c f1 f2 (NpmClientConfig t m s l)
+            , pdBuildArtifactRequestByFile = \l m t s -> artifactRequestByFile (NpmClientConfig t m s l)
+            , pdBuildArtifactRequestByUrl = \l m t s -> artifactRequestByUrl (NpmClientConfig t m s l)
+            , pdApplyFilter = applyFilterPlan
+            , pdRewriteUrls = rewriteTarballUrls
             }
 
 {- | The packument-serve dependencies as 'deps', but with the given effectful prepared

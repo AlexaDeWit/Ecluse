@@ -182,7 +182,7 @@ import Ecluse.Core.Package (
     pkgNamespace,
     renderPackageName,
  )
-import Ecluse.Core.Package.Filter (filterPlanFromDecisions, fpSurvivors)
+import Ecluse.Core.Package.Filter (FilterResult (Filtered, NoSurvivors), filterPlanFromDecisions, fpSurvivors)
 import Ecluse.Core.Package.Integrity (
     MinTrustedIntegrity,
     VersionIntegrity (BelowFloor, MeetsFloor, NoIntegrity),
@@ -199,22 +199,13 @@ import Ecluse.Core.Queue (
     MirrorJob (MirrorJob, jobArtifact, jobArtifactUrl, jobMirrorTarget, jobPackage, jobTraceContext, jobVersion),
     enqueue,
  )
-import Ecluse.Core.Registry (UrlFormationError)
+import Ecluse.Core.Registry (PublishRelayResponse (PublishRelayResponse), UrlFormationError)
 import Ecluse.Core.Registry.Metadata (
     MetadataClient (fetchFullManifest),
     MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable),
     VersionEvaluation (VersionMetadataUnavailable, VersionMissing, VersionPresent),
     fetchVersionDetails,
  )
-import Ecluse.Core.Registry.Npm (
-    NpmClientConfig (..),
-    PublishRelayResponse (PublishRelayResponse),
-    artifactRequestByFile,
-    artifactRequestByUrl,
-    relayPublishDocument,
- )
-import Ecluse.Core.Registry.Npm.Filter (FilterResult (Filtered, NoSurvivors), applyFilterPlan, rewriteTarballUrls)
-import Ecluse.Core.Registry.Npm.Project (projectName)
 import Ecluse.Core.Rules (evalRules)
 import Ecluse.Core.Rules.Types (Decision, EvalContext (EvalContext))
 import Ecluse.Core.Security (
@@ -237,7 +228,7 @@ import Ecluse.Core.Server.Context (
     ctxMount,
     ctxRuntime,
  )
-import Ecluse.Core.Server.Metadata (ManifestCaching (Cached, Uncached), newNpmMetadataClient)
+import Ecluse.Core.Server.Metadata (ManifestCaching (Cached, Uncached))
 import Ecluse.Core.Server.Pipeline.Internal (
     admitByIntegrity,
     evalTier,
@@ -379,8 +370,8 @@ serveWithDeps mode renderer deps name request respond
         let clientToken = forwardedToken request
         (privResult, pubResult) <-
             concurrently
-                (fetchPrivateOrigin (pdLimits deps) rt (pdPrivateBaseUrl deps) clientToken name)
-                (fetchPublicOrigin (pdLimits deps) rt (pdPublicBaseUrl deps) name)
+                (fetchPrivateOrigin deps rt clientToken name)
+                (fetchPublicOrigin deps rt name)
         (public, publicExclusions) <- liftIO (gatePublic metrics deps evalCtx (originPackument pubResult))
         let (private, privateExclusions) = admitTrusted (pdMinTrustedIntegrity deps) (originPackument privResult)
             sources = catMaybes [private, public]
@@ -509,11 +500,11 @@ origin is therefore deliberately kept out of the metadata cache; only the anonym
 public origin is cached. (How a non-@passthrough@ strategy can instead share the private
 origin safely is the serve-time authorisation it adds — see
 @docs\/architecture\/access-model.md@.) -}
-fetchPrivateOrigin :: Limits -> ServeRuntime -> Text -> Maybe Secret -> PackageName -> Handler OriginResult
-fetchPrivateOrigin limits rt baseUrl token name = do
+fetchPrivateOrigin :: PackumentDeps -> ServeRuntime -> Maybe Secret -> PackageName -> Handler OriginResult
+fetchPrivateOrigin deps rt token name = do
     resolved <-
         tryAny $
-            withMetadataClient rt Metric.Private Uncached limits (srPrivateManager rt) baseUrl token $ \client ->
+            withMetadataClient rt deps Metric.Private Uncached (pdLimits deps) (srPrivateManager rt) (pdPrivateBaseUrl deps) token $ \client ->
                 fetchFullManifest client name
     pure (originResultOf resolved)
 
@@ -529,11 +520,11 @@ to preserve, only one shared anonymous document. A hit returns the cached pair
 decision over it stay coherent across the TTL, and concurrent resolutions of a
 popular package __collapse to one upstream call__ — as does the tarball gate's
 single-version read, which shares this very cache entry ('fetchVersionMetadata'). -}
-fetchPublicOrigin :: Limits -> ServeRuntime -> Text -> PackageName -> Handler OriginResult
-fetchPublicOrigin limits rt baseUrl name = do
+fetchPublicOrigin :: PackumentDeps -> ServeRuntime -> PackageName -> Handler OriginResult
+fetchPublicOrigin deps rt name = do
     resolved <-
         tryAny $
-            withPublicMetadataClient limits rt baseUrl $ \client ->
+            withPublicMetadataClient rt deps (pdPublicBaseUrl deps) $ \client ->
                 fetchFullManifest client name
     pure (originResultOf resolved)
 
@@ -555,6 +546,7 @@ ceiling crossed) before it degrades the contribution fail-closed, so an operator
 hostile\/oversized upstream from an ordinary parse failure. -}
 withMetadataClient ::
     ServeRuntime ->
+    PackumentDeps ->
     Metric.Upstream ->
     ManifestCaching ->
     Limits ->
@@ -563,24 +555,28 @@ withMetadataClient ::
     Maybe Secret ->
     (MetadataClient -> IO a) ->
     Handler a
-withMetadataClient rt upstream caching limits manager baseUrl token k =
+withMetadataClient rt deps upstream caching limits manager baseUrl token k =
     withRunInIO $ \runInIO ->
         k $
-            newNpmMetadataClient
+            pdNewMetadataClient
+                deps
                 (srMetrics rt)
                 upstream
                 caching
                 (\nm err -> runInIO (logMetadataFailure nm baseUrl err))
                 (\nm entries -> runInIO (logInvalidEntries nm baseUrl entries))
-                (clientConfig limits manager baseUrl token)
+                limits
+                manager
+                baseUrl
+                token
 
 {- The public origin's read handle: anonymous (no token), resolved through the shared
 metadata cache under the base URL's 'Source'. Both the packument fetch ('fetchFullManifest')
 and the tarball gate's single-version read ('fetchVersionMetadata') go through this handle,
 so they share one cache entry. -}
-withPublicMetadataClient :: Limits -> ServeRuntime -> Text -> (MetadataClient -> IO a) -> Handler a
-withPublicMetadataClient limits rt baseUrl =
-    withMetadataClient rt Metric.Public (Cached (srMetadataCache rt) (Source baseUrl)) limits (srPublicManager rt) baseUrl Nothing
+withPublicMetadataClient :: ServeRuntime -> PackumentDeps -> Text -> (MetadataClient -> IO a) -> Handler a
+withPublicMetadataClient rt deps baseUrl =
+    withMetadataClient rt deps Metric.Public (Cached (srMetadataCache rt) (Source baseUrl)) (pdLimits deps) (srPublicManager rt) baseUrl Nothing
 
 {- Log a per-origin metadata-fetch failure at the point and severity it has always been
 logged: a response-bound breach names the ceiling crossed ('logBreach'); an undecodable
@@ -707,23 +703,6 @@ maxRenderedValueChars = 200
 pipelineModule :: Text
 pipelineModule = "Ecluse.Server.Pipeline"
 
-{- The npm client config for one fetch: its response-bound budget, 'Manager', base
-URL, and injected token (the client's credential for the private origin, 'Nothing'
-for the anonymous public origin). The client never originates a token; the authority
-model is decided here. The 'Manager' is passed explicitly per fetch: the trusted
-'srPrivateManager' for the private upstream, the 'srPublicManager' for the
-public\/artifact fetches, both the validating TLS manager over https-only egress. The
-'Limits' carries the mount's @maxBodyBytes@ to the bounded
-metadata read in 'fetchMetadataForm'. -}
-clientConfig :: Limits -> Manager -> Text -> Maybe Secret -> NpmClientConfig
-clientConfig limits manager baseUrl token =
-    NpmClientConfig
-        { npmBaseUrl = baseUrl
-        , npmManager = manager
-        , npmToken = token
-        , npmLimits = limits
-        }
-
 {- Apply the __trusted integrity floor__ to a private (trusted) contribution before it
 enters the merge, returning the surviving 'Contribution' (if any version survived) and the
 per-version exclusions for the dropped ones (for the no-survivors status). This is the
@@ -784,7 +763,7 @@ gatePublic metrics deps ctx = \case
         mpRuleEvalDuration metrics (evalTier (pdRules deps)) seconds
         recordEffectfulFailures metrics (Map.elems decisions)
         let plan = filterPlanFromDecisions decisions admissible
-        pure $ case applyFilterPlan plan value of
+        pure $ case pdApplyFilter deps plan value of
             Filtered filtered ->
                 (Just (Contribution GatedSource (restrictToSurvivors (fpSurvivors plan) admissible) filtered), integrityRefusals)
             NoSurvivors leftover -> (Nothing, projectDecisions admissible leftover <> integrityRefusals)
@@ -867,7 +846,7 @@ baseDocument sources =
 result. Other top-level keys are inherited from the base document. -}
 replayPlan :: PackumentDeps -> Map SourceId Contribution -> MergePlan -> Value -> Value
 replayPlan deps bySource plan base =
-    rewriteTarballUrls (pdMountBaseUrl deps) (Object rebuilt)
+    pdRewriteUrls deps (pdMountBaseUrl deps) (Object rebuilt)
   where
     rebuilt :: KeyMap Value
     rebuilt =
@@ -1268,7 +1247,7 @@ streamPrivateArtifact mode rt deps token validators name file respond =
     privateRequest :: Maybe HTTP.Request
     privateRequest =
         if tarballHostHonoured TrustedOrigin deps (pdPrivateBaseUrl deps) (pdPrivateBaseUrl deps)
-            then withValidators validators . withMethod mode <$> rightToMaybe (artifactRequestByFile (clientConfig (pdLimits deps) (srPrivateManager rt) (pdPrivateBaseUrl deps) token) name file)
+            then withValidators validators . withMethod mode <$> rightToMaybe (pdBuildArtifactRequestByFile deps (pdLimits deps) (srPrivateManager rt) (pdPrivateBaseUrl deps) token name file)
             else Nothing
 
 {- Serve the artifact from the public upstream after a private miss: gate the
@@ -1330,7 +1309,7 @@ gatePublicVersion :: ServeRuntime -> PackumentDeps -> PackageName -> Version -> 
 gatePublicVersion rt deps name version file = do
     evalCtx <- liftIO (EvalContext <$> pdNow deps)
     eval <-
-        withPublicMetadataClient (pdLimits deps) rt (pdPublicBaseUrl deps) $ \client ->
+        withPublicMetadataClient rt deps (pdPublicBaseUrl deps) $ \client ->
             liftIO (fetchVersionDetails client name version)
     case eval of
         VersionMetadataUnavailable -> pure (Refused upstreamUnavailable)
@@ -1466,7 +1445,7 @@ streamPublicArtifact ::
     IO ResponseReceived
 streamPublicArtifact mode rt renderer deps validators name version artifact respond =
     if tarballHostHonoured UntrustedOrigin deps (pdPublicBaseUrl deps) (artUrl artifact)
-        then case withValidators validators . withMethod mode <$> artifactRequestByUrl (clientConfig (pdLimits deps) (srPublicManager rt) (pdPublicBaseUrl deps) Nothing) (artUrl artifact) of
+        then case withValidators validators . withMethod mode <$> pdBuildArtifactRequestByUrl deps (pdLimits deps) (srPublicManager rt) (pdPublicBaseUrl deps) Nothing (artUrl artifact) of
             Right req ->
                 relayUpstreamWhen mode (srPublicManager rt) req (const True) relayArtifact respond >>= \case
                     Just received -> do
@@ -1767,30 +1746,15 @@ publishWithDeps renderer deps name request respond
         -- declared identity, so a crafted body could otherwise write a name the guard never
         -- saw. Refuse — before the relay — any present declared name that disagrees with the
         -- URL-path name, so the identity authorised is provably the identity written.
-        case bodyNameDisagreement name body of
+        case bodyNameDisagreement (pubCanonicaliseName deps) name body of
             Just declared -> liftIO (respond (bodyNameMismatch renderer deps name declared))
             -- @consumeRequestBodyStrict@ reads the whole body but returns it lazy; the
             -- publish builder ('relayPublishDocument') puts it on the wire as a strict
             -- @RequestBodyBS@, so materialise it strict here. The body is already bounded by
             -- the client→proxy request-size cap.
             Nothing -> do
-                outcome <- tryAny (liftIO (relayPublishDocument (publishConfig rt deps request) name (LBS.toStrict body)))
+                outcome <- tryAny (liftIO (pubRelayPublish deps (pubLimits deps) (srPrivateManager rt) (pubTargetUrl deps) (forwardedToken request <|> pubStaticToken deps) name (LBS.toStrict body)))
                 liftIO (respond (renderRelay renderer deps outcome))
-
-{- The per-request npm client config for the publish relay: the publication target as
-its base URL (https by construction, like every registry endpoint), the trusted private
-manager (the target is operator-configured, like the private upstream, so it is reached
-over the trusted path), the response-bound budget, and the __forwarded__ publisher token,
-the client's own ('forwardedToken'), falling back to the static 'pubStaticToken' only
-when the client sends none (the passthrough credential model). -}
-publishConfig :: ServeRuntime -> PublishDeps -> Request -> NpmClientConfig
-publishConfig rt deps request =
-    NpmClientConfig
-        { npmBaseUrl = pubTargetUrl deps
-        , npmManager = srPrivateManager rt
-        , npmToken = forwardedToken request <|> pubStaticToken deps
-        , npmLimits = pubLimits deps
-        }
 
 {- Whether a package name falls within the configured publish-scope allow-list — the
 anti-shadowing guard. A __scoped__ name is admitted iff its scope is one of the
@@ -1867,16 +1831,16 @@ are read — the base64 @_attachments@ are never decoded. An __absent__ name is 
 claim, so it is not a disagreement (a legitimate npm client always sends matching
 names); a body that does not decode to a JSON object likewise declares no readable
 name and raises none, leaving the relay to meet the target's own validation. -}
-bodyNameDisagreement :: PackageName -> LByteString -> Maybe Text
-bodyNameDisagreement name body =
+bodyNameDisagreement :: (Text -> Maybe PackageName) -> PackageName -> LByteString -> Maybe Text
+bodyNameDisagreement canonicalise name body =
     case Aeson.decode body of
         Nothing -> Nothing
         Just document -> find disagrees (declaredNames document)
   where
     disagrees :: Text -> Bool
-    disagrees declared = case projectName declared of
-        Right declaredName -> declaredName /= name
-        Left _ -> True
+    disagrees declared = case canonicalise declared of
+        Just declaredName -> declaredName /= name
+        Nothing -> True
 
 -- Every package-name string a publish document declares as its own identity: the
 -- top-level @_id@ and @name@, and each @versions.<v>.name@. Only string-valued name

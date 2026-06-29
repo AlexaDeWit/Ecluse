@@ -116,6 +116,8 @@ import Ecluse.Core.Queue (
     newInMemoryQueue,
  )
 import Ecluse.Core.Registry (ParseError (ParseError), RegistryClient (..))
+import Ecluse.Core.Registry.Npm (NpmClientConfig (..), artifactRequestByFile, artifactRequestByUrl)
+import Ecluse.Core.Registry.Npm.Filter (applyFilterPlan, rewriteTarballUrls)
 import Ecluse.Core.Registry.Npm.Route qualified as Npm
 import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
 import Ecluse.Core.Rules (prepare)
@@ -123,6 +125,7 @@ import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan), atDefault
 import Ecluse.Core.Security (TarballHostPolicy (SameHostAsPackument), defaultLimits, lowerCaseHosts)
 import Ecluse.Core.Server.Cache (CacheConfig (cacheMaxEntries, cacheTtl), defaultCacheConfig, newMetadataCache)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
+import Ecluse.Core.Server.Metadata (newNpmMetadataClient)
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Core.Worker (
     WorkerRuntime (
@@ -311,6 +314,11 @@ npmDeps privatePort publicPort = do
             , pdHelp = Nothing
             , pdMinIntegrity = defaultMinIntegrity
             , pdMinTrustedIntegrity = defaultMinTrustedIntegrity
+            , pdNewMetadataClient = \p u c f1 f2 l m t s -> newNpmMetadataClient p u c f1 f2 (NpmClientConfig t m s l)
+            , pdBuildArtifactRequestByFile = \l m t s -> artifactRequestByFile (NpmClientConfig t m s l)
+            , pdBuildArtifactRequestByUrl = \l m t s -> artifactRequestByUrl (NpmClientConfig t m s l)
+            , pdApplyFilter = applyFilterPlan
+            , pdRewriteUrls = rewriteTarballUrls
             }
 
 -- The npm mount binding: the shared npm classifier, renderer, and /npm prefix, carrying

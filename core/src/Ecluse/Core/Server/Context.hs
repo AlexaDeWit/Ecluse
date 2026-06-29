@@ -42,21 +42,27 @@ module Ecluse.Core.Server.Context (
     runHandler,
 ) where
 
+import Data.Aeson (Value)
 import Data.Time (UTCTime)
 import Katip (Katip, KatipContext, LogEnv, SimpleLogPayload)
 import Katip.Monadic (KatipContextT, runKatipContextT)
-import Network.HTTP.Client (Manager)
+import Network.HTTP.Client (Manager, Request)
 import UnliftIO (MonadUnliftIO)
 
 import Ecluse.Core.Credential (Secret)
-import Ecluse.Core.Package (Scope)
+import Ecluse.Core.Package (InvalidEntry, PackageName, Scope)
+import Ecluse.Core.Package.Filter (FilterPlan, FilterResult)
 import Ecluse.Core.Package.Integrity (MinIntegrity, MinTrustedIntegrity)
 import Ecluse.Core.Queue (MirrorQueue)
+import Ecluse.Core.Registry (PublishRelayResponse, UrlFormationError)
+import Ecluse.Core.Registry.Metadata (MetadataClient, MetadataError)
 import Ecluse.Core.Rules (PreparedRule)
 import Ecluse.Core.Security (Limits, LoweredHostSet, TarballHostPolicy)
 import Ecluse.Core.Server.Cache (MetadataCache)
+import Ecluse.Core.Server.Metadata (ManifestCaching)
 import Ecluse.Core.Server.Response (HelpMessage, MountRenderer)
 import Ecluse.Core.Server.Route (Classifier)
+import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort)
 import Ecluse.Core.Telemetry.Span (TracingPort)
 
@@ -179,13 +185,34 @@ data PackumentDeps = PackumentDeps
     The trusted private path consults 'pdMinTrustedIntegrity' instead.
     -}
     , pdMinTrustedIntegrity :: MinTrustedIntegrity
-    {- ^ The minimum integrity algorithm a __trusted__ (private) version's digest must
-    meet to be served (the global @PROXY_MIN_TRUSTED_INTEGRITY@ floor, default SHA-256).
-    The trusted gate drops a private version whose strongest digest is below this from the
-    served listing and falls a below-floor private artifact through to the public origin.
-    Unlike 'pdMinIntegrity' it is __operator-loosenable below SHA-256__ (down to SHA-1 /
-    MD5) for a legacy private mirror, where trust substitutes for cryptographic strength.
+    -- ^ The minimum integrity hash required for a trusted upstream dependency.
+    , pdNewMetadataClient ::
+        MetricsPort ->
+        Metric.Upstream ->
+        ManifestCaching ->
+        (PackageName -> MetadataError -> IO ()) ->
+        (PackageName -> [InvalidEntry] -> IO ()) ->
+        Limits ->
+        Manager ->
+        Text ->
+        Maybe Secret ->
+        MetadataClient
+    {- ^ Build a per-request metadata client for one origin, given the per-fetch
+    parameters. The composition root closes over the ecosystem's raw fetch
+    primitives; the pipeline supplies only the per-request runtime parameters.
     -}
+    , pdBuildArtifactRequestByFile :: Limits -> Manager -> Text -> Maybe Secret -> PackageName -> Text -> Either UrlFormationError Request
+    {- ^ Build an artifact request by conventional filename path for the private
+    (trusted) leg.
+    -}
+    , pdBuildArtifactRequestByUrl :: Limits -> Manager -> Text -> Maybe Secret -> Text -> Either UrlFormationError Request
+    -- ^ Build an artifact request by authoritative URL for the public leg.
+    , pdApplyFilter :: FilterPlan -> Value -> FilterResult
+    {- ^ Replay a filter plan onto the raw upstream document, removing denied
+    versions and repairing cross-field coherence.
+    -}
+    , pdRewriteUrls :: Text -> Value -> Value
+    -- ^ Rewrite artifact URLs in a raw document under the given mount base URL.
     }
 
 -- ── publish-serve dependencies ────────────────────────────────────────────────
@@ -237,6 +264,12 @@ data PublishDeps = PublishDeps
     -}
     , pubHelp :: Maybe HelpMessage
     -- ^ The operator help message appended to a publish denial, if configured.
+    , pubRelayPublish :: Limits -> Manager -> Text -> Maybe Secret -> PackageName -> ByteString -> IO (Either UrlFormationError PublishRelayResponse)
+    -- ^ Relay a publish document to the publication target, returning its response.
+    , pubCanonicaliseName :: Text -> Maybe PackageName
+    {- ^ Canonicalise a raw package-name string to a 'PackageName', or 'Nothing' if
+    it cannot be parsed. Used by the body-name agreement guard.
+    -}
     }
 
 -- ── mount binding ─────────────────────────────────────────────────────────────
