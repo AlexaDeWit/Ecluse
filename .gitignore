@@ -33,3 +33,4 @@ scratchpad/
 !.vscode/settings.json
 .agents/settings.local.json
 .agents/settings.json
+.agents/worktrees/
