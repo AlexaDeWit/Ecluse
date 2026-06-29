@@ -24,7 +24,7 @@
           {
             "position": {
               "x": 240,
-              "y": 40
+              "y": 10
             },
             "size": {
               "width": 1180,
@@ -37,19 +37,45 @@
             },
             "visible": true,
             "shape": "trust-boundary-box",
-            "id": "0ec10e5e-0000-4000-8000-000000000001",
             "zIndex": -1,
+            "id": "0ec10e5e-0000-4000-8000-000000000001",
             "data": {
               "type": "tm.BoundaryBox",
               "description": "",
               "isTrustBoundary": true,
-              "hasOpenThreats": false
+              "hasOpenThreats": false,
+              "containedElements": [
+                "0ec10e5e-0000-4000-8000-000000000012",
+                "0ec10e5e-0000-4000-8000-000000000020",
+                "0ec10e5e-0000-4000-8000-000000000021",
+                "0ec10e5e-0000-4000-8000-000000000022",
+                "0ec10e5e-0000-4000-8000-000000000030",
+                "0ec10e5e-0000-4000-8000-000000000031",
+                "0ec10e5e-0000-4000-8000-000000000032",
+                "0ec10e5e-0000-4000-8000-000000000033",
+                "0ec10e5e-0000-4000-8000-000000000034",
+                "f1646094-9885-422a-b7e7-7888c72905ef",
+                "c8455307-cef2-4843-a821-ff90db9643d2"
+              ],
+              "crossingFlows": [
+                "0ec10e5e-0000-4000-8000-000000000040",
+                "0ec10e5e-0000-4000-8000-000000000043",
+                "0ec10e5e-0000-4000-8000-000000000047",
+                "4e565871-45cc-4987-abba-24859ee2cf60"
+              ]
+            },
+            "tools": {
+              "items": [
+                "boundary",
+                "button-remove"
+              ],
+              "name": null
             }
           },
           {
             "position": {
-              "x": 1500,
-              "y": 440
+              "x": -90,
+              "y": 640
             },
             "size": {
               "width": 240,
@@ -62,19 +88,55 @@
             },
             "visible": true,
             "shape": "trust-boundary-box",
-            "id": "0ec10e5e-0000-4000-8000-000000000002",
             "zIndex": -1,
+            "id": "0ec10e5e-0000-4000-8000-000000000002",
             "data": {
               "type": "tm.BoundaryBox",
               "description": "",
               "isTrustBoundary": true,
-              "hasOpenThreats": false
+              "hasOpenThreats": false,
+              "containedElements": [
+                "0ec10e5e-0000-4000-8000-000000000011"
+              ],
+              "crossingFlows": [
+                "0ec10e5e-0000-4000-8000-000000000043",
+                "0ec10e5e-0000-4000-8000-000000000047"
+              ]
             }
           },
           {
             "position": {
-              "x": 40,
-              "y": 500
+              "x": 1452,
+              "y": 755
+            },
+            "size": {
+              "width": 240,
+              "height": 200
+            },
+            "attrs": {
+              "label": {
+                "text": "Public internet (untrusted)"
+              }
+            },
+            "visible": true,
+            "shape": "trust-boundary-box",
+            "zIndex": -1,
+            "id": "bdf95436-cb02-4248-99a2-4e50b0d286fa",
+            "data": {
+              "type": "tm.BoundaryBox",
+              "description": "",
+              "isTrustBoundary": true,
+              "hasOpenThreats": false,
+              "containedElements": [
+                "7528590e-7392-46c4-9b8c-7ca872d63590"
+              ],
+              "crossingFlows": []
+            }
+          },
+          {
+            "position": {
+              "x": 10,
+              "y": 350
             },
             "size": {
               "width": 170,
@@ -86,12 +148,95 @@
               },
               "body": {
                 "stroke": "#333333",
-                "strokeWidth": 1,
+                "strokeWidth": 1.5,
                 "strokeDasharray": null
               }
             },
+            "visible": true,
             "shape": "actor",
             "zIndex": 1,
+            "ports": {
+              "groups": {
+                "top": {
+                  "position": "top",
+                  "attrs": {
+                    "circle": {
+                      "r": 4,
+                      "magnet": true,
+                      "stroke": "#5F95FF",
+                      "strokeWidth": 1,
+                      "fill": "#fff",
+                      "style": {
+                        "visibility": "hidden"
+                      }
+                    }
+                  }
+                },
+                "right": {
+                  "position": "right",
+                  "attrs": {
+                    "circle": {
+                      "r": 4,
+                      "magnet": true,
+                      "stroke": "#5F95FF",
+                      "strokeWidth": 1,
+                      "fill": "#fff",
+                      "style": {
+                        "visibility": "hidden"
+                      }
+                    }
+                  }
+                },
+                "bottom": {
+                  "position": "bottom",
+                  "attrs": {
+                    "circle": {
+                      "r": 4,
+                      "magnet": true,
+                      "stroke": "#5F95FF",
+                      "strokeWidth": 1,
+                      "fill": "#fff",
+                      "style": {
+                        "visibility": "hidden"
+                      }
+                    }
+                  }
+                },
+                "left": {
+                  "position": "left",
+                  "attrs": {
+                    "circle": {
+                      "r": 4,
+                      "magnet": true,
+                      "stroke": "#5F95FF",
+                      "strokeWidth": 1,
+                      "fill": "#fff",
+                      "style": {
+                        "visibility": "hidden"
+                      }
+                    }
+                  }
+                }
+              },
+              "items": [
+                {
+                  "group": "top",
+                  "id": "d52c044f-12e4-467c-9390-836d49214bda"
+                },
+                {
+                  "group": "right",
+                  "id": "239ca41c-1dd4-485d-a01f-60776f447fb5"
+                },
+                {
+                  "group": "bottom",
+                  "id": "79054acd-3861-48e0-b664-7abbf0942486"
+                },
+                {
+                  "group": "left",
+                  "id": "f647372c-43de-495c-bbe9-9f958faf1cb1"
+                }
+              ]
+            },
             "id": "0ec10e5e-0000-4000-8000-000000000010",
             "data": {
               "name": "npm client\n(developer / CI)",
@@ -107,8 +252,8 @@
           },
           {
             "position": {
-              "x": 1530,
-              "y": 495
+              "x": -60,
+              "y": 695
             },
             "size": {
               "width": 180,
@@ -120,12 +265,95 @@
               },
               "body": {
                 "stroke": "#333333",
-                "strokeWidth": 1,
+                "strokeWidth": 1.5,
                 "strokeDasharray": null
               }
             },
+            "visible": true,
             "shape": "actor",
             "zIndex": 1,
+            "ports": {
+              "groups": {
+                "top": {
+                  "position": "top",
+                  "attrs": {
+                    "circle": {
+                      "r": 4,
+                      "magnet": true,
+                      "stroke": "#5F95FF",
+                      "strokeWidth": 1,
+                      "fill": "#fff",
+                      "style": {
+                        "visibility": "hidden"
+                      }
+                    }
+                  }
+                },
+                "right": {
+                  "position": "right",
+                  "attrs": {
+                    "circle": {
+                      "r": 4,
+                      "magnet": true,
+                      "stroke": "#5F95FF",
+                      "strokeWidth": 1,
+                      "fill": "#fff",
+                      "style": {
+                        "visibility": "hidden"
+                      }
+                    }
+                  }
+                },
+                "bottom": {
+                  "position": "bottom",
+                  "attrs": {
+                    "circle": {
+                      "r": 4,
+                      "magnet": true,
+                      "stroke": "#5F95FF",
+                      "strokeWidth": 1,
+                      "fill": "#fff",
+                      "style": {
+                        "visibility": "hidden"
+                      }
+                    }
+                  }
+                },
+                "left": {
+                  "position": "left",
+                  "attrs": {
+                    "circle": {
+                      "r": 4,
+                      "magnet": true,
+                      "stroke": "#5F95FF",
+                      "strokeWidth": 1,
+                      "fill": "#fff",
+                      "style": {
+                        "visibility": "hidden"
+                      }
+                    }
+                  }
+                }
+              },
+              "items": [
+                {
+                  "group": "top",
+                  "id": "0478b7f8-6f9a-4aa7-9372-7ca5f105a072"
+                },
+                {
+                  "group": "right",
+                  "id": "a4f2a1d8-0759-4fcf-a804-5ec22d83ec16"
+                },
+                {
+                  "group": "bottom",
+                  "id": "55a564b2-6b01-4864-9dd7-63747a3c7d63"
+                },
+                {
+                  "group": "left",
+                  "id": "868b93e4-d97a-44f6-825a-065da7a23af4"
+                }
+              ]
+            },
             "id": "0ec10e5e-0000-4000-8000-000000000011",
             "data": {
               "name": "Public npm registry",
@@ -153,8 +381,8 @@
           },
           {
             "position": {
-              "x": 960,
-              "y": 1010
+              "x": 635,
+              "y": 740
             },
             "size": {
               "width": 190,
@@ -170,8 +398,91 @@
                 "strokeDasharray": null
               }
             },
+            "visible": true,
             "shape": "actor",
             "zIndex": 1,
+            "ports": {
+              "groups": {
+                "top": {
+                  "position": "top",
+                  "attrs": {
+                    "circle": {
+                      "r": 4,
+                      "magnet": true,
+                      "stroke": "#5F95FF",
+                      "strokeWidth": 1,
+                      "fill": "#fff",
+                      "style": {
+                        "visibility": "hidden"
+                      }
+                    }
+                  }
+                },
+                "right": {
+                  "position": "right",
+                  "attrs": {
+                    "circle": {
+                      "r": 4,
+                      "magnet": true,
+                      "stroke": "#5F95FF",
+                      "strokeWidth": 1,
+                      "fill": "#fff",
+                      "style": {
+                        "visibility": "hidden"
+                      }
+                    }
+                  }
+                },
+                "bottom": {
+                  "position": "bottom",
+                  "attrs": {
+                    "circle": {
+                      "r": 4,
+                      "magnet": true,
+                      "stroke": "#5F95FF",
+                      "strokeWidth": 1,
+                      "fill": "#fff",
+                      "style": {
+                        "visibility": "hidden"
+                      }
+                    }
+                  }
+                },
+                "left": {
+                  "position": "left",
+                  "attrs": {
+                    "circle": {
+                      "r": 4,
+                      "magnet": true,
+                      "stroke": "#5F95FF",
+                      "strokeWidth": 1,
+                      "fill": "#fff",
+                      "style": {
+                        "visibility": "hidden"
+                      }
+                    }
+                  }
+                }
+              },
+              "items": [
+                {
+                  "group": "top",
+                  "id": "70f0792f-c49c-401f-88f1-f1c5b0f9ace3"
+                },
+                {
+                  "group": "right",
+                  "id": "ed3faf1a-8746-431b-be1d-0aeb46361c57"
+                },
+                {
+                  "group": "bottom",
+                  "id": "e9304a8a-cf70-4d02-a30c-76181f6b9671"
+                },
+                {
+                  "group": "left",
+                  "id": "40865e8f-3f61-472a-93c4-f06ef0bf5ad4"
+                }
+              ]
+            },
             "id": "0ec10e5e-0000-4000-8000-000000000012",
             "data": {
               "name": "AWS IMDS + STS",
@@ -187,8 +498,8 @@
           },
           {
             "position": {
-              "x": 380,
-              "y": 460
+              "x": 530,
+              "y": 475
             },
             "size": {
               "width": 130,
@@ -204,8 +515,91 @@
                 "strokeDasharray": null
               }
             },
+            "visible": true,
             "shape": "process",
             "zIndex": 2,
+            "ports": {
+              "groups": {
+                "top": {
+                  "position": "top",
+                  "attrs": {
+                    "circle": {
+                      "r": 4,
+                      "magnet": true,
+                      "stroke": "#5F95FF",
+                      "strokeWidth": 1,
+                      "fill": "#fff",
+                      "style": {
+                        "visibility": "hidden"
+                      }
+                    }
+                  }
+                },
+                "right": {
+                  "position": "right",
+                  "attrs": {
+                    "circle": {
+                      "r": 4,
+                      "magnet": true,
+                      "stroke": "#5F95FF",
+                      "strokeWidth": 1,
+                      "fill": "#fff",
+                      "style": {
+                        "visibility": "hidden"
+                      }
+                    }
+                  }
+                },
+                "bottom": {
+                  "position": "bottom",
+                  "attrs": {
+                    "circle": {
+                      "r": 4,
+                      "magnet": true,
+                      "stroke": "#5F95FF",
+                      "strokeWidth": 1,
+                      "fill": "#fff",
+                      "style": {
+                        "visibility": "hidden"
+                      }
+                    }
+                  }
+                },
+                "left": {
+                  "position": "left",
+                  "attrs": {
+                    "circle": {
+                      "r": 4,
+                      "magnet": true,
+                      "stroke": "#5F95FF",
+                      "strokeWidth": 1,
+                      "fill": "#fff",
+                      "style": {
+                        "visibility": "hidden"
+                      }
+                    }
+                  }
+                }
+              },
+              "items": [
+                {
+                  "group": "top",
+                  "id": "2cb5e9cb-1bca-40d6-8c60-9aef61e8dc9b"
+                },
+                {
+                  "group": "right",
+                  "id": "5c2fd042-8843-4a37-a536-9d7893768be6"
+                },
+                {
+                  "group": "bottom",
+                  "id": "5b785c3f-8e47-4f93-ae53-867f58b1bc9c"
+                },
+                {
+                  "group": "left",
+                  "id": "536e34c6-cf61-4be1-9fd2-704b4af2f7c3"
+                }
+              ]
+            },
             "id": "0ec10e5e-0000-4000-8000-000000000020",
             "data": {
               "name": "Écluse proxy",
@@ -243,8 +637,8 @@
           },
           {
             "position": {
-              "x": 400,
-              "y": 800
+              "x": 350,
+              "y": 990
             },
             "size": {
               "width": 130,
@@ -260,8 +654,91 @@
                 "strokeDasharray": null
               }
             },
+            "visible": true,
             "shape": "process",
             "zIndex": 2,
+            "ports": {
+              "groups": {
+                "top": {
+                  "position": "top",
+                  "attrs": {
+                    "circle": {
+                      "r": 4,
+                      "magnet": true,
+                      "stroke": "#5F95FF",
+                      "strokeWidth": 1,
+                      "fill": "#fff",
+                      "style": {
+                        "visibility": "hidden"
+                      }
+                    }
+                  }
+                },
+                "right": {
+                  "position": "right",
+                  "attrs": {
+                    "circle": {
+                      "r": 4,
+                      "magnet": true,
+                      "stroke": "#5F95FF",
+                      "strokeWidth": 1,
+                      "fill": "#fff",
+                      "style": {
+                        "visibility": "hidden"
+                      }
+                    }
+                  }
+                },
+                "bottom": {
+                  "position": "bottom",
+                  "attrs": {
+                    "circle": {
+                      "r": 4,
+                      "magnet": true,
+                      "stroke": "#5F95FF",
+                      "strokeWidth": 1,
+                      "fill": "#fff",
+                      "style": {
+                        "visibility": "hidden"
+                      }
+                    }
+                  }
+                },
+                "left": {
+                  "position": "left",
+                  "attrs": {
+                    "circle": {
+                      "r": 4,
+                      "magnet": true,
+                      "stroke": "#5F95FF",
+                      "strokeWidth": 1,
+                      "fill": "#fff",
+                      "style": {
+                        "visibility": "hidden"
+                      }
+                    }
+                  }
+                }
+              },
+              "items": [
+                {
+                  "group": "top",
+                  "id": "257a65c3-4d20-469c-9cb7-a607b428add3"
+                },
+                {
+                  "group": "right",
+                  "id": "e36aff10-a930-4ede-92af-845e5d4685ca"
+                },
+                {
+                  "group": "bottom",
+                  "id": "e051de01-09fc-4c74-8291-15c145892857"
+                },
+                {
+                  "group": "left",
+                  "id": "7692aeb2-1f62-4dda-8af3-b3234d902ac1"
+                }
+              ]
+            },
             "id": "0ec10e5e-0000-4000-8000-000000000021",
             "data": {
               "name": "Mirror worker",
@@ -276,8 +753,8 @@
           },
           {
             "position": {
-              "x": 650,
-              "y": 1000
+              "x": 635,
+              "y": 910
             },
             "size": {
               "width": 140,
@@ -293,8 +770,91 @@
                 "strokeDasharray": null
               }
             },
+            "visible": true,
             "shape": "process",
             "zIndex": 2,
+            "ports": {
+              "groups": {
+                "top": {
+                  "position": "top",
+                  "attrs": {
+                    "circle": {
+                      "r": 4,
+                      "magnet": true,
+                      "stroke": "#5F95FF",
+                      "strokeWidth": 1,
+                      "fill": "#fff",
+                      "style": {
+                        "visibility": "hidden"
+                      }
+                    }
+                  }
+                },
+                "right": {
+                  "position": "right",
+                  "attrs": {
+                    "circle": {
+                      "r": 4,
+                      "magnet": true,
+                      "stroke": "#5F95FF",
+                      "strokeWidth": 1,
+                      "fill": "#fff",
+                      "style": {
+                        "visibility": "hidden"
+                      }
+                    }
+                  }
+                },
+                "bottom": {
+                  "position": "bottom",
+                  "attrs": {
+                    "circle": {
+                      "r": 4,
+                      "magnet": true,
+                      "stroke": "#5F95FF",
+                      "strokeWidth": 1,
+                      "fill": "#fff",
+                      "style": {
+                        "visibility": "hidden"
+                      }
+                    }
+                  }
+                },
+                "left": {
+                  "position": "left",
+                  "attrs": {
+                    "circle": {
+                      "r": 4,
+                      "magnet": true,
+                      "stroke": "#5F95FF",
+                      "strokeWidth": 1,
+                      "fill": "#fff",
+                      "style": {
+                        "visibility": "hidden"
+                      }
+                    }
+                  }
+                }
+              },
+              "items": [
+                {
+                  "group": "top",
+                  "id": "fa4f305f-64e3-4c69-81e8-407ef8fec892"
+                },
+                {
+                  "group": "right",
+                  "id": "8185a3f0-7d02-4e70-8c9e-dd58e190ae18"
+                },
+                {
+                  "group": "bottom",
+                  "id": "7e3aadfa-e54c-4ed9-9273-6f557aad14e7"
+                },
+                {
+                  "group": "left",
+                  "id": "b06145ca-8cb5-478b-b393-864a8ee57e29"
+                }
+              ]
+            },
             "id": "0ec10e5e-0000-4000-8000-000000000022",
             "data": {
               "name": "Credential provider",
@@ -321,18 +881,99 @@
                 "text": "Metadata cache\n(public-gated only)"
               },
               "topLine": {
-                "stroke": "#333333",
                 "strokeWidth": 1,
                 "strokeDasharray": null
               },
               "bottomLine": {
-                "stroke": "#333333",
                 "strokeWidth": 1,
                 "strokeDasharray": null
               }
             },
+            "visible": true,
             "shape": "store",
             "zIndex": 3,
+            "ports": {
+              "groups": {
+                "top": {
+                  "position": "top",
+                  "attrs": {
+                    "circle": {
+                      "r": 4,
+                      "magnet": true,
+                      "stroke": "#5F95FF",
+                      "strokeWidth": 1,
+                      "fill": "#fff",
+                      "style": {
+                        "visibility": "hidden"
+                      }
+                    }
+                  }
+                },
+                "right": {
+                  "position": "right",
+                  "attrs": {
+                    "circle": {
+                      "r": 4,
+                      "magnet": true,
+                      "stroke": "#5F95FF",
+                      "strokeWidth": 1,
+                      "fill": "#fff",
+                      "style": {
+                        "visibility": "hidden"
+                      }
+                    }
+                  }
+                },
+                "bottom": {
+                  "position": "bottom",
+                  "attrs": {
+                    "circle": {
+                      "r": 4,
+                      "magnet": true,
+                      "stroke": "#5F95FF",
+                      "strokeWidth": 1,
+                      "fill": "#fff",
+                      "style": {
+                        "visibility": "hidden"
+                      }
+                    }
+                  }
+                },
+                "left": {
+                  "position": "left",
+                  "attrs": {
+                    "circle": {
+                      "r": 4,
+                      "magnet": true,
+                      "stroke": "#5F95FF",
+                      "strokeWidth": 1,
+                      "fill": "#fff",
+                      "style": {
+                        "visibility": "hidden"
+                      }
+                    }
+                  }
+                }
+              },
+              "items": [
+                {
+                  "group": "top",
+                  "id": "ef25e467-4c39-4364-8cef-cdff26b81787"
+                },
+                {
+                  "group": "right",
+                  "id": "cb5492c9-bd40-4542-b333-44866c8ddeed"
+                },
+                {
+                  "group": "bottom",
+                  "id": "855b0df9-941b-40b2-adc6-04c05a10b9e6"
+                },
+                {
+                  "group": "left",
+                  "id": "72ab1d48-4c1c-471e-aa4b-3ffd080bd796"
+                }
+              ]
+            },
             "id": "0ec10e5e-0000-4000-8000-000000000030",
             "data": {
               "name": "Metadata cache\n(public-gated only)",
@@ -363,8 +1004,8 @@
           },
           {
             "position": {
-              "x": 720,
-              "y": 110
+              "x": 325,
+              "y": 810
             },
             "size": {
               "width": 180,
@@ -375,18 +1016,99 @@
                 "text": "Mirror queue (SQS)"
               },
               "topLine": {
-                "stroke": "#333333",
-                "strokeWidth": 1,
+                "strokeWidth": 1.5,
                 "strokeDasharray": null
               },
               "bottomLine": {
-                "stroke": "#333333",
-                "strokeWidth": 1,
+                "strokeWidth": 1.5,
                 "strokeDasharray": null
               }
             },
+            "visible": true,
             "shape": "store",
             "zIndex": 3,
+            "ports": {
+              "groups": {
+                "top": {
+                  "position": "top",
+                  "attrs": {
+                    "circle": {
+                      "r": 4,
+                      "magnet": true,
+                      "stroke": "#5F95FF",
+                      "strokeWidth": 1,
+                      "fill": "#fff",
+                      "style": {
+                        "visibility": "hidden"
+                      }
+                    }
+                  }
+                },
+                "right": {
+                  "position": "right",
+                  "attrs": {
+                    "circle": {
+                      "r": 4,
+                      "magnet": true,
+                      "stroke": "#5F95FF",
+                      "strokeWidth": 1,
+                      "fill": "#fff",
+                      "style": {
+                        "visibility": "hidden"
+                      }
+                    }
+                  }
+                },
+                "bottom": {
+                  "position": "bottom",
+                  "attrs": {
+                    "circle": {
+                      "r": 4,
+                      "magnet": true,
+                      "stroke": "#5F95FF",
+                      "strokeWidth": 1,
+                      "fill": "#fff",
+                      "style": {
+                        "visibility": "hidden"
+                      }
+                    }
+                  }
+                },
+                "left": {
+                  "position": "left",
+                  "attrs": {
+                    "circle": {
+                      "r": 4,
+                      "magnet": true,
+                      "stroke": "#5F95FF",
+                      "strokeWidth": 1,
+                      "fill": "#fff",
+                      "style": {
+                        "visibility": "hidden"
+                      }
+                    }
+                  }
+                }
+              },
+              "items": [
+                {
+                  "group": "top",
+                  "id": "e3220d05-5ded-41df-a55b-d944c5df45fd"
+                },
+                {
+                  "group": "right",
+                  "id": "297cd53b-7e9d-4d78-9c2d-d42dbb77c3ec"
+                },
+                {
+                  "group": "bottom",
+                  "id": "a34c9d25-a750-4061-9778-12bbdcf2abd6"
+                },
+                {
+                  "group": "left",
+                  "id": "94e220c8-7341-4048-b921-8a7742ed0953"
+                }
+              ]
+            },
             "id": "0ec10e5e-0000-4000-8000-000000000031",
             "data": {
               "name": "Mirror queue (SQS)",
@@ -405,8 +1127,8 @@
           },
           {
             "position": {
-              "x": 1120,
-              "y": 470
+              "x": 910,
+              "y": 475
             },
             "size": {
               "width": 200,
@@ -417,18 +1139,99 @@
                 "text": "Registry C:\npull-through read endpoint"
               },
               "topLine": {
-                "stroke": "#333333",
-                "strokeWidth": 1,
+                "strokeWidth": 1.5,
                 "strokeDasharray": null
               },
               "bottomLine": {
-                "stroke": "#333333",
-                "strokeWidth": 1,
+                "strokeWidth": 1.5,
                 "strokeDasharray": null
               }
             },
+            "visible": true,
             "shape": "store",
             "zIndex": 3,
+            "ports": {
+              "groups": {
+                "top": {
+                  "position": "top",
+                  "attrs": {
+                    "circle": {
+                      "r": 4,
+                      "magnet": true,
+                      "stroke": "#5F95FF",
+                      "strokeWidth": 1,
+                      "fill": "#fff",
+                      "style": {
+                        "visibility": "hidden"
+                      }
+                    }
+                  }
+                },
+                "right": {
+                  "position": "right",
+                  "attrs": {
+                    "circle": {
+                      "r": 4,
+                      "magnet": true,
+                      "stroke": "#5F95FF",
+                      "strokeWidth": 1,
+                      "fill": "#fff",
+                      "style": {
+                        "visibility": "hidden"
+                      }
+                    }
+                  }
+                },
+                "bottom": {
+                  "position": "bottom",
+                  "attrs": {
+                    "circle": {
+                      "r": 4,
+                      "magnet": true,
+                      "stroke": "#5F95FF",
+                      "strokeWidth": 1,
+                      "fill": "#fff",
+                      "style": {
+                        "visibility": "hidden"
+                      }
+                    }
+                  }
+                },
+                "left": {
+                  "position": "left",
+                  "attrs": {
+                    "circle": {
+                      "r": 4,
+                      "magnet": true,
+                      "stroke": "#5F95FF",
+                      "strokeWidth": 1,
+                      "fill": "#fff",
+                      "style": {
+                        "visibility": "hidden"
+                      }
+                    }
+                  }
+                }
+              },
+              "items": [
+                {
+                  "group": "top",
+                  "id": "96c96316-4145-413d-bd2d-475aa5dff4bf"
+                },
+                {
+                  "group": "right",
+                  "id": "0bbf84f9-137d-4f83-a055-a8777fb924ca"
+                },
+                {
+                  "group": "bottom",
+                  "id": "2c0f3945-d87d-4d06-b14d-69f83826d553"
+                },
+                {
+                  "group": "left",
+                  "id": "7789edc1-9fd6-435a-82be-97de00ba0e15"
+                }
+              ]
+            },
             "id": "0ec10e5e-0000-4000-8000-000000000032",
             "data": {
               "name": "Registry C:\npull-through read endpoint",
@@ -437,7 +1240,7 @@
               "isTrustBoundary": false,
               "outOfScope": false,
               "reasonOutOfScope": "",
-              "hasOpenThreats": true,
+              "hasOpenThreats": false,
               "isALog": false,
               "storesCredentials": false,
               "isEncrypted": false,
@@ -470,8 +1273,8 @@
           },
           {
             "position": {
-              "x": 1120,
-              "y": 130
+              "x": 1150,
+              "y": 140
             },
             "size": {
               "width": 200,
@@ -482,18 +1285,99 @@
                 "text": "Registry A:\nprivate store (first-party)"
               },
               "topLine": {
-                "stroke": "#333333",
-                "strokeWidth": 1,
+                "strokeWidth": 1.5,
                 "strokeDasharray": null
               },
               "bottomLine": {
-                "stroke": "#333333",
-                "strokeWidth": 1,
+                "strokeWidth": 1.5,
                 "strokeDasharray": null
               }
             },
+            "visible": true,
             "shape": "store",
             "zIndex": 3,
+            "ports": {
+              "groups": {
+                "top": {
+                  "position": "top",
+                  "attrs": {
+                    "circle": {
+                      "r": 4,
+                      "magnet": true,
+                      "stroke": "#5F95FF",
+                      "strokeWidth": 1,
+                      "fill": "#fff",
+                      "style": {
+                        "visibility": "hidden"
+                      }
+                    }
+                  }
+                },
+                "right": {
+                  "position": "right",
+                  "attrs": {
+                    "circle": {
+                      "r": 4,
+                      "magnet": true,
+                      "stroke": "#5F95FF",
+                      "strokeWidth": 1,
+                      "fill": "#fff",
+                      "style": {
+                        "visibility": "hidden"
+                      }
+                    }
+                  }
+                },
+                "bottom": {
+                  "position": "bottom",
+                  "attrs": {
+                    "circle": {
+                      "r": 4,
+                      "magnet": true,
+                      "stroke": "#5F95FF",
+                      "strokeWidth": 1,
+                      "fill": "#fff",
+                      "style": {
+                        "visibility": "hidden"
+                      }
+                    }
+                  }
+                },
+                "left": {
+                  "position": "left",
+                  "attrs": {
+                    "circle": {
+                      "r": 4,
+                      "magnet": true,
+                      "stroke": "#5F95FF",
+                      "strokeWidth": 1,
+                      "fill": "#fff",
+                      "style": {
+                        "visibility": "hidden"
+                      }
+                    }
+                  }
+                }
+              },
+              "items": [
+                {
+                  "group": "top",
+                  "id": "ba170cf2-22ee-470d-872e-bdb5fc4a2c79"
+                },
+                {
+                  "group": "right",
+                  "id": "46d35dcf-b6a2-47a1-ae75-9559ff88a4dd"
+                },
+                {
+                  "group": "bottom",
+                  "id": "d5d39bb3-8187-4223-80f9-b24321c77878"
+                },
+                {
+                  "group": "left",
+                  "id": "4e8409b6-c20e-449e-8786-67a6d1e064d4"
+                }
+              ]
+            },
             "id": "0ec10e5e-0000-4000-8000-000000000033",
             "data": {
               "name": "Registry A:\nprivate store (first-party)",
@@ -512,8 +1396,8 @@
           },
           {
             "position": {
-              "x": 1120,
-              "y": 820
+              "x": 1190,
+              "y": 665
             },
             "size": {
               "width": 200,
@@ -524,18 +1408,101 @@
                 "text": "Registry B:\nmirror store (public-derived)"
               },
               "topLine": {
-                "stroke": "#333333",
-                "strokeWidth": 1,
+                "stroke": "red",
+                "strokeWidth": 2.5,
                 "strokeDasharray": null
               },
               "bottomLine": {
-                "stroke": "#333333",
-                "strokeWidth": 1,
+                "stroke": "red",
+                "strokeWidth": 2.5,
                 "strokeDasharray": null
               }
             },
+            "visible": true,
             "shape": "store",
             "zIndex": 3,
+            "ports": {
+              "groups": {
+                "top": {
+                  "position": "top",
+                  "attrs": {
+                    "circle": {
+                      "r": 4,
+                      "magnet": true,
+                      "stroke": "#5F95FF",
+                      "strokeWidth": 1,
+                      "fill": "#fff",
+                      "style": {
+                        "visibility": "hidden"
+                      }
+                    }
+                  }
+                },
+                "right": {
+                  "position": "right",
+                  "attrs": {
+                    "circle": {
+                      "r": 4,
+                      "magnet": true,
+                      "stroke": "#5F95FF",
+                      "strokeWidth": 1,
+                      "fill": "#fff",
+                      "style": {
+                        "visibility": "hidden"
+                      }
+                    }
+                  }
+                },
+                "bottom": {
+                  "position": "bottom",
+                  "attrs": {
+                    "circle": {
+                      "r": 4,
+                      "magnet": true,
+                      "stroke": "#5F95FF",
+                      "strokeWidth": 1,
+                      "fill": "#fff",
+                      "style": {
+                        "visibility": "hidden"
+                      }
+                    }
+                  }
+                },
+                "left": {
+                  "position": "left",
+                  "attrs": {
+                    "circle": {
+                      "r": 4,
+                      "magnet": true,
+                      "stroke": "#5F95FF",
+                      "strokeWidth": 1,
+                      "fill": "#fff",
+                      "style": {
+                        "visibility": "hidden"
+                      }
+                    }
+                  }
+                }
+              },
+              "items": [
+                {
+                  "group": "top",
+                  "id": "b3e83887-1f1d-4751-aec9-e078a640593e"
+                },
+                {
+                  "group": "right",
+                  "id": "1bf2cc31-d00a-4681-87a9-f6fdbf8ba5e4"
+                },
+                {
+                  "group": "bottom",
+                  "id": "6ee14119-76fe-4f57-a7cd-a6fd1e357fb5"
+                },
+                {
+                  "group": "left",
+                  "id": "1c2f1f0d-9bfe-4427-ad05-015ea9a49b14"
+                }
+              ]
+            },
             "id": "0ec10e5e-0000-4000-8000-000000000034",
             "data": {
               "name": "Registry B:\nmirror store (public-derived)",
@@ -596,12 +1563,13 @@
               "name": "npm read / publish (passthrough CodeArtifact token)",
               "description": "The caller's request, carrying its own CodeArtifact bearer. Crosses the operator access edge.",
               "outOfScope": false,
+              "isTrustBoundary": false,
               "reasonOutOfScope": "",
-              "protocol": "HTTPS",
+              "hasOpenThreats": true,
+              "isBidirectional": false,
               "isEncrypted": true,
               "isPublicNetwork": false,
-              "hasOpenThreats": true,
-              "isTrustBoundary": false,
+              "protocol": "HTTPS",
               "threats": [
                 {
                   "number": 3,
@@ -614,19 +1582,22 @@
                   "modelType": "STRIDE",
                   "id": "0ec10e5e-0000-4000-8000-000000000103"
                 }
+              ],
+              "trustBoundaryIds": [
+                "0ec10e5e-0000-4000-8000-000000000001"
               ]
             },
-            "id": "0ec10e5e-0000-4000-8000-000000000040",
             "labels": [
               {
-                "position": 0.5,
                 "attrs": {
                   "label": {
                     "text": "npm read / publish (passthrough token)"
                   }
-                }
+                },
+                "position": 0.5
               }
             ],
+            "id": "0ec10e5e-0000-4000-8000-000000000040",
             "source": {
               "cell": "0ec10e5e-0000-4000-8000-000000000010"
             },
@@ -656,25 +1627,27 @@
               "name": "read packument / tarball (caller token forwarded)",
               "description": "Per-request private read with the caller's own token; the upstream re-authorises each request. Never shared-cached under passthrough.",
               "outOfScope": false,
+              "isTrustBoundary": false,
               "reasonOutOfScope": "",
-              "protocol": "HTTPS",
+              "hasOpenThreats": false,
+              "isBidirectional": false,
               "isEncrypted": true,
               "isPublicNetwork": false,
-              "hasOpenThreats": false,
-              "isTrustBoundary": false,
-              "threats": []
+              "protocol": "HTTPS",
+              "threats": [],
+              "trustBoundaryIds": []
             },
-            "id": "0ec10e5e-0000-4000-8000-000000000041",
             "labels": [
               {
-                "position": 0.5,
                 "attrs": {
                   "label": {
                     "text": "read (caller token)"
                   }
-                }
+                },
+                "position": 0.5
               }
             ],
+            "id": "0ec10e5e-0000-4000-8000-000000000041",
             "source": {
               "cell": "0ec10e5e-0000-4000-8000-000000000020"
             },
@@ -704,25 +1677,27 @@
               "name": "cache public-gated metadata",
               "description": "Read/write of the anonymous public (gated) origin only.",
               "outOfScope": false,
+              "isTrustBoundary": false,
               "reasonOutOfScope": "",
-              "protocol": "in-process",
+              "hasOpenThreats": false,
+              "isBidirectional": false,
               "isEncrypted": false,
               "isPublicNetwork": false,
-              "hasOpenThreats": false,
-              "isTrustBoundary": false,
-              "threats": []
+              "protocol": "in-process",
+              "threats": [],
+              "trustBoundaryIds": []
             },
-            "id": "0ec10e5e-0000-4000-8000-000000000042",
             "labels": [
               {
-                "position": 0.5,
                 "attrs": {
                   "label": {
                     "text": "cache (public-gated)"
                   }
-                }
+                },
+                "position": 0.5
               }
             ],
+            "id": "0ec10e5e-0000-4000-8000-000000000042",
             "source": {
               "cell": "0ec10e5e-0000-4000-8000-000000000020"
             },
@@ -735,10 +1710,13 @@
             "shape": "flow",
             "attrs": {
               "line": {
-                "stroke": "#333333",
-                "strokeWidth": 1,
+                "stroke": "red",
+                "strokeWidth": 2.5,
                 "targetMarker": {
                   "name": "block"
+                },
+                "sourceMarker": {
+                  "name": ""
                 },
                 "strokeDasharray": null
               }
@@ -752,12 +1730,13 @@
               "name": "anonymous packument / tarball fetch (caller token stripped)",
               "description": "Untrusted egress to the public upstream. Attacker-influenceable target; caller credential stripped. Crosses to the public internet.",
               "outOfScope": false,
+              "isTrustBoundary": false,
               "reasonOutOfScope": "",
-              "protocol": "HTTPS",
+              "hasOpenThreats": true,
+              "isBidirectional": false,
               "isEncrypted": true,
               "isPublicNetwork": true,
-              "hasOpenThreats": false,
-              "isTrustBoundary": false,
+              "protocol": "HTTPS",
               "threats": [
                 {
                   "number": 4,
@@ -792,35 +1771,30 @@
                   "modelType": "STRIDE",
                   "id": "0ec10e5e-0000-4000-8000-000000000110"
                 }
+              ],
+              "trustBoundaryIds": [
+                "0ec10e5e-0000-4000-8000-000000000001",
+                "0ec10e5e-0000-4000-8000-000000000002"
               ]
             },
-            "id": "0ec10e5e-0000-4000-8000-000000000043",
             "labels": [
               {
-                "position": 0.5,
                 "attrs": {
                   "label": {
                     "text": "anonymous fetch (token stripped)"
                   }
-                }
+                },
+                "position": 0.5
               }
             ],
+            "id": "0ec10e5e-0000-4000-8000-000000000043",
             "source": {
               "cell": "0ec10e5e-0000-4000-8000-000000000020"
             },
             "target": {
               "cell": "0ec10e5e-0000-4000-8000-000000000011"
             },
-            "vertices": [
-              {
-                "x": 580,
-                "y": 340
-              },
-              {
-                "x": 1400,
-                "y": 340
-              }
-            ]
+            "vertices": []
           },
           {
             "shape": "flow",
@@ -843,12 +1817,13 @@
               "name": "relay npm publish (publisher token forwarded)",
               "description": "First-party publish relayed to the private store with the publisher's own token. Gated by the publish-scope allow-list before any write.",
               "outOfScope": false,
+              "isTrustBoundary": false,
               "reasonOutOfScope": "",
-              "protocol": "HTTPS",
+              "hasOpenThreats": true,
+              "isBidirectional": false,
               "isEncrypted": true,
               "isPublicNetwork": false,
-              "hasOpenThreats": true,
-              "isTrustBoundary": false,
+              "protocol": "HTTPS",
               "threats": [
                 {
                   "number": 6,
@@ -861,19 +1836,20 @@
                   "modelType": "STRIDE",
                   "id": "0ec10e5e-0000-4000-8000-000000000106"
                 }
-              ]
+              ],
+              "trustBoundaryIds": []
             },
-            "id": "0ec10e5e-0000-4000-8000-000000000044",
             "labels": [
               {
-                "position": 0.5,
                 "attrs": {
                   "label": {
                     "text": "publish relay (publisher token)"
                   }
-                }
+                },
+                "position": 0.5
               }
             ],
+            "id": "0ec10e5e-0000-4000-8000-000000000044",
             "source": {
               "cell": "0ec10e5e-0000-4000-8000-000000000020"
             },
@@ -903,25 +1879,27 @@
               "name": "enqueue mirror job (demand-driven)",
               "description": "On tarball-path acceptance, a mirror job is enqueued (non-blocking).",
               "outOfScope": false,
+              "isTrustBoundary": false,
               "reasonOutOfScope": "",
-              "protocol": "AWS SQS",
+              "hasOpenThreats": false,
+              "isBidirectional": false,
               "isEncrypted": true,
               "isPublicNetwork": false,
-              "hasOpenThreats": false,
-              "isTrustBoundary": false,
-              "threats": []
+              "protocol": "AWS SQS",
+              "threats": [],
+              "trustBoundaryIds": []
             },
-            "id": "0ec10e5e-0000-4000-8000-000000000045",
             "labels": [
               {
-                "position": 0.5,
                 "attrs": {
                   "label": {
                     "text": "enqueue mirror job"
                   }
-                }
+                },
+                "position": 0.5
               }
             ],
+            "id": "0ec10e5e-0000-4000-8000-000000000045",
             "source": {
               "cell": "0ec10e5e-0000-4000-8000-000000000020"
             },
@@ -951,25 +1929,27 @@
               "name": "poll jobs",
               "description": "The worker polls the mirror queue for demand-driven jobs.",
               "outOfScope": false,
+              "isTrustBoundary": false,
               "reasonOutOfScope": "",
-              "protocol": "AWS SQS",
+              "hasOpenThreats": false,
+              "isBidirectional": false,
               "isEncrypted": true,
               "isPublicNetwork": false,
-              "hasOpenThreats": false,
-              "isTrustBoundary": false,
-              "threats": []
+              "protocol": "AWS SQS",
+              "threats": [],
+              "trustBoundaryIds": []
             },
-            "id": "0ec10e5e-0000-4000-8000-000000000046",
             "labels": [
               {
-                "position": 0.5,
                 "attrs": {
                   "label": {
                     "text": "poll jobs"
                   }
-                }
+                },
+                "position": 0.5
               }
             ],
+            "id": "0ec10e5e-0000-4000-8000-000000000046",
             "source": {
               "cell": "0ec10e5e-0000-4000-8000-000000000021"
             },
@@ -999,12 +1979,13 @@
               "name": "back-fill artifact fetch (untrusted)",
               "description": "The worker fetches the approved artifact from the public upstream to mirror it. Untrusted egress; bytes verified against dist.integrity before publish.",
               "outOfScope": false,
+              "isTrustBoundary": false,
               "reasonOutOfScope": "",
-              "protocol": "HTTPS",
+              "hasOpenThreats": false,
+              "isBidirectional": false,
               "isEncrypted": true,
               "isPublicNetwork": true,
-              "hasOpenThreats": false,
-              "isTrustBoundary": false,
+              "protocol": "HTTPS",
               "threats": [
                 {
                   "number": 14,
@@ -1017,19 +1998,23 @@
                   "modelType": "STRIDE",
                   "id": "0ec10e5e-0000-4000-8000-00000000010e"
                 }
+              ],
+              "trustBoundaryIds": [
+                "0ec10e5e-0000-4000-8000-000000000001",
+                "0ec10e5e-0000-4000-8000-000000000002"
               ]
             },
-            "id": "0ec10e5e-0000-4000-8000-000000000047",
             "labels": [
               {
-                "position": 0.5,
                 "attrs": {
                   "label": {
                     "text": "back-fill fetch (untrusted)"
                   }
-                }
+                },
+                "position": 0.5
               }
             ],
+            "id": "0ec10e5e-0000-4000-8000-000000000047",
             "source": {
               "cell": "0ec10e5e-0000-4000-8000-000000000021"
             },
@@ -1043,9 +2028,11 @@
             "attrs": {
               "line": {
                 "stroke": "#333333",
-                "strokeWidth": 1,
                 "targetMarker": {
                   "name": "block"
+                },
+                "sourceMarker": {
+                  "name": ""
                 },
                 "strokeDasharray": null
               }
@@ -1059,25 +2046,27 @@
               "name": "request mirror-write token",
               "description": "The worker asks the credential provider for a mirror-target write token.",
               "outOfScope": false,
+              "isTrustBoundary": false,
               "reasonOutOfScope": "",
-              "protocol": "in-process",
+              "hasOpenThreats": false,
+              "isBidirectional": false,
               "isEncrypted": false,
               "isPublicNetwork": false,
-              "hasOpenThreats": false,
-              "isTrustBoundary": false,
-              "threats": []
+              "protocol": "in-process",
+              "threats": [],
+              "trustBoundaryIds": []
             },
-            "id": "0ec10e5e-0000-4000-8000-000000000048",
             "labels": [
               {
-                "position": 0.5,
                 "attrs": {
                   "label": {
                     "text": "request write token"
                   }
-                }
+                },
+                "position": 0.5
               }
             ],
+            "id": "0ec10e5e-0000-4000-8000-000000000048",
             "source": {
               "cell": "0ec10e5e-0000-4000-8000-000000000021"
             },
@@ -1107,12 +2096,13 @@
               "name": "mint via container role (IMDSv2 / STS)",
               "description": "The credential provider exchanges container-role credentials for a CodeArtifact write token. Reaches an internal address by design.",
               "outOfScope": false,
+              "isTrustBoundary": false,
               "reasonOutOfScope": "",
-              "protocol": "HTTPS",
+              "hasOpenThreats": false,
+              "isBidirectional": false,
               "isEncrypted": true,
               "isPublicNetwork": false,
-              "hasOpenThreats": false,
-              "isTrustBoundary": false,
+              "protocol": "HTTPS",
               "threats": [
                 {
                   "number": 8,
@@ -1125,19 +2115,20 @@
                   "modelType": "STRIDE",
                   "id": "0ec10e5e-0000-4000-8000-000000000108"
                 }
-              ]
+              ],
+              "trustBoundaryIds": []
             },
-            "id": "0ec10e5e-0000-4000-8000-000000000049",
             "labels": [
               {
-                "position": 0.5,
                 "attrs": {
                   "label": {
                     "text": "mint token (container role)"
                   }
-                }
+                },
+                "position": 0.5
               }
             ],
+            "id": "0ec10e5e-0000-4000-8000-000000000049",
             "source": {
               "cell": "0ec10e5e-0000-4000-8000-000000000022"
             },
@@ -1167,12 +2158,13 @@
               "name": "publish mirrored artifact (minted write token)",
               "description": "The worker writes the verified, approved artifact to the mirror store with Écluse's own minted token.",
               "outOfScope": false,
+              "isTrustBoundary": false,
               "reasonOutOfScope": "",
-              "protocol": "HTTPS",
+              "hasOpenThreats": true,
+              "isBidirectional": false,
               "isEncrypted": true,
               "isPublicNetwork": false,
-              "hasOpenThreats": true,
-              "isTrustBoundary": false,
+              "protocol": "HTTPS",
               "threats": [
                 {
                   "number": 7,
@@ -1185,26 +2177,32 @@
                   "modelType": "STRIDE",
                   "id": "0ec10e5e-0000-4000-8000-000000000107"
                 }
-              ]
+              ],
+              "trustBoundaryIds": []
             },
-            "id": "0ec10e5e-0000-4000-8000-00000000004a",
             "labels": [
               {
-                "position": 0.5,
                 "attrs": {
                   "label": {
                     "text": "publish mirrored artifact"
                   }
-                }
+                },
+                "position": 0.5
               }
             ],
+            "id": "0ec10e5e-0000-4000-8000-00000000004a",
             "source": {
               "cell": "0ec10e5e-0000-4000-8000-000000000021"
             },
             "target": {
               "cell": "0ec10e5e-0000-4000-8000-000000000034"
             },
-            "vertices": []
+            "vertices": [
+              {
+                "x": 1180,
+                "y": 1065
+              }
+            ]
           },
           {
             "shape": "flow",
@@ -1227,25 +2225,27 @@
               "name": "pull-through (first-party)",
               "description": "Registry C aggregates the first-party store A on read. Trusted, registry-level composition.",
               "outOfScope": false,
+              "isTrustBoundary": false,
               "reasonOutOfScope": "",
-              "protocol": "HTTPS",
+              "hasOpenThreats": false,
+              "isBidirectional": false,
               "isEncrypted": true,
               "isPublicNetwork": false,
-              "hasOpenThreats": false,
-              "isTrustBoundary": false,
-              "threats": []
+              "protocol": "HTTPS",
+              "threats": [],
+              "trustBoundaryIds": []
             },
-            "id": "0ec10e5e-0000-4000-8000-00000000004b",
             "labels": [
               {
-                "position": 0.5,
                 "attrs": {
                   "label": {
                     "text": "pull-through (first-party)"
                   }
-                }
+                },
+                "position": 0.5
               }
             ],
+            "id": "0ec10e5e-0000-4000-8000-00000000004b",
             "source": {
               "cell": "0ec10e5e-0000-4000-8000-000000000032"
             },
@@ -1275,25 +2275,27 @@
               "name": "pull-through (mirrored)",
               "description": "Registry C aggregates the mirror store B on read. Trusted, registry-level composition.",
               "outOfScope": false,
+              "isTrustBoundary": false,
               "reasonOutOfScope": "",
-              "protocol": "HTTPS",
+              "hasOpenThreats": false,
+              "isBidirectional": false,
               "isEncrypted": true,
               "isPublicNetwork": false,
-              "hasOpenThreats": false,
-              "isTrustBoundary": false,
-              "threats": []
+              "protocol": "HTTPS",
+              "threats": [],
+              "trustBoundaryIds": []
             },
-            "id": "0ec10e5e-0000-4000-8000-00000000004c",
             "labels": [
               {
-                "position": 0.5,
                 "attrs": {
                   "label": {
                     "text": "pull-through (mirrored)"
                   }
-                }
+                },
+                "position": 0.5
               }
             ],
+            "id": "0ec10e5e-0000-4000-8000-00000000004c",
             "source": {
               "cell": "0ec10e5e-0000-4000-8000-000000000032"
             },
@@ -1301,6 +2303,553 @@
               "cell": "0ec10e5e-0000-4000-8000-000000000034"
             },
             "vertices": []
+          },
+          {
+            "shape": "flow",
+            "attrs": {
+              "line": {
+                "stroke": "#333333",
+                "targetMarker": {
+                  "name": "block"
+                },
+                "sourceMarker": {
+                  "name": ""
+                },
+                "strokeDasharray": null
+              }
+            },
+            "width": 200,
+            "height": 100,
+            "zIndex": 10,
+            "connector": "smooth",
+            "data": {
+              "type": "tm.Flow",
+              "name": "mint token (container role)",
+              "description": "",
+              "outOfScope": false,
+              "isTrustBoundary": false,
+              "reasonOutOfScope": "",
+              "hasOpenThreats": false,
+              "isBidirectional": false,
+              "isEncrypted": false,
+              "isPublicNetwork": false,
+              "protocol": "https",
+              "threats": [],
+              "trustBoundaryIds": []
+            },
+            "labels": [
+              "mint token (container role)"
+            ],
+            "id": "c928bb63-2ec8-44ff-b34b-39d4afb19dc6",
+            "source": {
+              "cell": "0ec10e5e-0000-4000-8000-000000000012",
+              "port": "ed3faf1a-8746-431b-be1d-0aeb46361c57"
+            },
+            "target": {
+              "cell": "f1646094-9885-422a-b7e7-7888c72905ef",
+              "port": "12a49897-bd2d-451e-aee6-aea6c2a6c851"
+            }
+          },
+          {
+            "shape": "flow",
+            "attrs": {
+              "line": {
+                "stroke": "#333333",
+                "targetMarker": {
+                  "name": "block"
+                },
+                "sourceMarker": {
+                  "name": ""
+                },
+                "strokeDasharray": null
+              }
+            },
+            "width": 200,
+            "height": 100,
+            "zIndex": 10,
+            "connector": "smooth",
+            "data": {
+              "type": "tm.Flow",
+              "name": "OSV Dataset for Supported Registries",
+              "description": "",
+              "outOfScope": false,
+              "isTrustBoundary": false,
+              "reasonOutOfScope": "",
+              "hasOpenThreats": false,
+              "isBidirectional": false,
+              "isEncrypted": true,
+              "isPublicNetwork": false,
+              "protocol": "https",
+              "threats": [],
+              "trustBoundaryIds": [
+                "0ec10e5e-0000-4000-8000-000000000001"
+              ]
+            },
+            "labels": [
+              "OSV Dataset for Supported Registries"
+            ],
+            "id": "4e565871-45cc-4987-abba-24859ee2cf60",
+            "source": {
+              "x": 1480,
+              "y": 860
+            },
+            "target": {
+              "cell": "f1646094-9885-422a-b7e7-7888c72905ef",
+              "port": "a1d34122-d242-4d6e-9801-9ef96ef00f95"
+            }
+          },
+          {
+            "shape": "flow",
+            "attrs": {
+              "line": {
+                "stroke": "#333333",
+                "targetMarker": {
+                  "name": "block"
+                },
+                "sourceMarker": {
+                  "name": ""
+                },
+                "strokeDasharray": null
+              }
+            },
+            "width": 200,
+            "height": 100,
+            "zIndex": 10,
+            "connector": "smooth",
+            "data": {
+              "type": "tm.Flow",
+              "name": "SQLLite Files",
+              "description": "Stores SQLLite files that contain highly indexable copies of the OSV dataset",
+              "outOfScope": false,
+              "isTrustBoundary": false,
+              "reasonOutOfScope": "",
+              "hasOpenThreats": false,
+              "isBidirectional": false,
+              "isEncrypted": true,
+              "isPublicNetwork": false,
+              "protocol": "https",
+              "threats": [],
+              "trustBoundaryIds": []
+            },
+            "labels": [
+              "SQLLite Files"
+            ],
+            "id": "ec4bbc95-8582-4e22-ab64-3c87cff87239",
+            "source": {
+              "cell": "f1646094-9885-422a-b7e7-7888c72905ef",
+              "port": "8d1850ae-617e-47f8-93df-eab937b83f46"
+            },
+            "target": {
+              "cell": "c8455307-cef2-4843-a821-ff90db9643d2",
+              "port": "01fc5f05-8beb-4979-a7d6-3e1599de042e"
+            }
+          },
+          {
+            "shape": "flow",
+            "attrs": {
+              "line": {
+                "stroke": "#333333",
+                "targetMarker": {
+                  "name": "block"
+                },
+                "sourceMarker": {
+                  "name": ""
+                },
+                "strokeDasharray": null
+              }
+            },
+            "width": 200,
+            "height": 100,
+            "zIndex": 10,
+            "connector": "smooth",
+            "data": {
+              "type": "tm.Flow",
+              "name": "Downloads Datasets",
+              "description": "Periodically Pulls the latest OSV SQLLite file if the ETag has changed, allowing up to date CVE-informed decision making",
+              "outOfScope": false,
+              "isTrustBoundary": false,
+              "reasonOutOfScope": "",
+              "hasOpenThreats": false,
+              "isBidirectional": false,
+              "isEncrypted": true,
+              "isPublicNetwork": false,
+              "protocol": "https",
+              "threats": [],
+              "trustBoundaryIds": []
+            },
+            "labels": [
+              "Downloads Datasets"
+            ],
+            "id": "f2d6c311-b8b3-4a9f-bef7-b78e4adaa17e",
+            "source": {
+              "cell": "c8455307-cef2-4843-a821-ff90db9643d2",
+              "port": "ab65e6d8-6650-4327-b44f-ebbf70c14f4f"
+            },
+            "target": {
+              "cell": "0ec10e5e-0000-4000-8000-000000000020",
+              "port": "5c2fd042-8843-4a37-a536-9d7893768be6"
+            }
+          },
+          {
+            "position": {
+              "x": 920,
+              "y": 915
+            },
+            "size": {
+              "width": 130,
+              "height": 130
+            },
+            "attrs": {
+              "text": {
+                "text": "CVE Dataset \nWorker"
+              },
+              "body": {
+                "stroke": "#333333",
+                "strokeWidth": 1.5,
+                "strokeDasharray": null
+              }
+            },
+            "visible": true,
+            "shape": "process",
+            "zIndex": 11,
+            "ports": {
+              "groups": {
+                "top": {
+                  "position": "top",
+                  "attrs": {
+                    "circle": {
+                      "r": 4,
+                      "magnet": true,
+                      "stroke": "#5F95FF",
+                      "strokeWidth": 1,
+                      "fill": "#fff",
+                      "style": {
+                        "visibility": "hidden"
+                      }
+                    }
+                  }
+                },
+                "right": {
+                  "position": "right",
+                  "attrs": {
+                    "circle": {
+                      "r": 4,
+                      "magnet": true,
+                      "stroke": "#5F95FF",
+                      "strokeWidth": 1,
+                      "fill": "#fff",
+                      "style": {
+                        "visibility": "hidden"
+                      }
+                    }
+                  }
+                },
+                "bottom": {
+                  "position": "bottom",
+                  "attrs": {
+                    "circle": {
+                      "r": 4,
+                      "magnet": true,
+                      "stroke": "#5F95FF",
+                      "strokeWidth": 1,
+                      "fill": "#fff",
+                      "style": {
+                        "visibility": "hidden"
+                      }
+                    }
+                  }
+                },
+                "left": {
+                  "position": "left",
+                  "attrs": {
+                    "circle": {
+                      "r": 4,
+                      "magnet": true,
+                      "stroke": "#5F95FF",
+                      "strokeWidth": 1,
+                      "fill": "#fff",
+                      "style": {
+                        "visibility": "hidden"
+                      }
+                    }
+                  }
+                }
+              },
+              "items": [
+                {
+                  "group": "top",
+                  "id": "8d1850ae-617e-47f8-93df-eab937b83f46"
+                },
+                {
+                  "group": "right",
+                  "id": "a1d34122-d242-4d6e-9801-9ef96ef00f95"
+                },
+                {
+                  "group": "bottom",
+                  "id": "dae2d487-945e-4cd4-9020-021df2eb6338"
+                },
+                {
+                  "group": "left",
+                  "id": "12a49897-bd2d-451e-aee6-aea6c2a6c851"
+                }
+              ]
+            },
+            "id": "f1646094-9885-422a-b7e7-7888c72905ef",
+            "data": {
+              "type": "tm.Process",
+              "name": "CVE Dataset \nWorker",
+              "description": "A worker process that periodically pulls public OSV data from the public internet, and compiled the raw JSON to an optimized queryable SQLLite File",
+              "outOfScope": false,
+              "isTrustBoundary": false,
+              "reasonOutOfScope": "",
+              "hasOpenThreats": false,
+              "handlesCardPayment": false,
+              "handlesGoodsOrServices": false,
+              "isWebApplication": false,
+              "privilegeLevel": "",
+              "threats": []
+            }
+          },
+          {
+            "position": {
+              "x": 1477,
+              "y": 810
+            },
+            "size": {
+              "width": 170,
+              "height": 110
+            },
+            "attrs": {
+              "text": {
+                "text": "OSV.dev"
+              },
+              "body": {
+                "stroke": "#333333",
+                "strokeWidth": 1.5,
+                "strokeDasharray": null
+              }
+            },
+            "visible": true,
+            "shape": "actor",
+            "zIndex": 12,
+            "ports": {
+              "groups": {
+                "top": {
+                  "position": "top",
+                  "attrs": {
+                    "circle": {
+                      "r": 4,
+                      "magnet": true,
+                      "stroke": "#5F95FF",
+                      "strokeWidth": 1,
+                      "fill": "#fff",
+                      "style": {
+                        "visibility": "hidden"
+                      }
+                    }
+                  }
+                },
+                "right": {
+                  "position": "right",
+                  "attrs": {
+                    "circle": {
+                      "r": 4,
+                      "magnet": true,
+                      "stroke": "#5F95FF",
+                      "strokeWidth": 1,
+                      "fill": "#fff",
+                      "style": {
+                        "visibility": "hidden"
+                      }
+                    }
+                  }
+                },
+                "bottom": {
+                  "position": "bottom",
+                  "attrs": {
+                    "circle": {
+                      "r": 4,
+                      "magnet": true,
+                      "stroke": "#5F95FF",
+                      "strokeWidth": 1,
+                      "fill": "#fff",
+                      "style": {
+                        "visibility": "hidden"
+                      }
+                    }
+                  }
+                },
+                "left": {
+                  "position": "left",
+                  "attrs": {
+                    "circle": {
+                      "r": 4,
+                      "magnet": true,
+                      "stroke": "#5F95FF",
+                      "strokeWidth": 1,
+                      "fill": "#fff",
+                      "style": {
+                        "visibility": "hidden"
+                      }
+                    }
+                  }
+                }
+              },
+              "items": [
+                {
+                  "group": "top",
+                  "id": "363b4ef0-559f-4ced-85f0-560aacc1ce78"
+                },
+                {
+                  "group": "right",
+                  "id": "08db74be-6368-4694-968b-59b344fb0238"
+                },
+                {
+                  "group": "bottom",
+                  "id": "ad8a2c19-cf4e-4097-bdb4-8cf56bcacc98"
+                },
+                {
+                  "group": "left",
+                  "id": "93ae4ace-7467-4d70-8031-903c8147193f"
+                }
+              ]
+            },
+            "id": "7528590e-7392-46c4-9b8c-7ca872d63590",
+            "data": {
+              "type": "tm.Actor",
+              "name": "OSV.dev",
+              "description": "Open Source Vulnerability Dataset Available via JSON",
+              "isTrustBoundary": false,
+              "outOfScope": false,
+              "reasonOutOfScope": "",
+              "hasOpenThreats": false,
+              "providesAuthentication": false,
+              "threats": []
+            }
+          },
+          {
+            "position": {
+              "x": 920,
+              "y": 640
+            },
+            "size": {
+              "width": 180,
+              "height": 130
+            },
+            "attrs": {
+              "text": {
+                "text": "S3 (OSV Datasets)"
+              },
+              "topLine": {
+                "strokeWidth": 1.5,
+                "strokeDasharray": null
+              },
+              "bottomLine": {
+                "strokeWidth": 1.5,
+                "strokeDasharray": null
+              }
+            },
+            "visible": true,
+            "shape": "store",
+            "ports": {
+              "groups": {
+                "top": {
+                  "position": "top",
+                  "attrs": {
+                    "circle": {
+                      "r": 4,
+                      "magnet": true,
+                      "stroke": "#5F95FF",
+                      "strokeWidth": 1,
+                      "fill": "#fff",
+                      "style": {
+                        "visibility": "hidden"
+                      }
+                    }
+                  }
+                },
+                "right": {
+                  "position": "right",
+                  "attrs": {
+                    "circle": {
+                      "r": 4,
+                      "magnet": true,
+                      "stroke": "#5F95FF",
+                      "strokeWidth": 1,
+                      "fill": "#fff",
+                      "style": {
+                        "visibility": "hidden"
+                      }
+                    }
+                  }
+                },
+                "bottom": {
+                  "position": "bottom",
+                  "attrs": {
+                    "circle": {
+                      "r": 4,
+                      "magnet": true,
+                      "stroke": "#5F95FF",
+                      "strokeWidth": 1,
+                      "fill": "#fff",
+                      "style": {
+                        "visibility": "hidden"
+                      }
+                    }
+                  }
+                },
+                "left": {
+                  "position": "left",
+                  "attrs": {
+                    "circle": {
+                      "r": 4,
+                      "magnet": true,
+                      "stroke": "#5F95FF",
+                      "strokeWidth": 1,
+                      "fill": "#fff",
+                      "style": {
+                        "visibility": "hidden"
+                      }
+                    }
+                  }
+                }
+              },
+              "items": [
+                {
+                  "group": "top",
+                  "id": "f468ce27-a4ce-47e8-8db0-93b51baa1cd5"
+                },
+                {
+                  "group": "right",
+                  "id": "3c2f1ad8-8e42-4364-af56-647119aa6969"
+                },
+                {
+                  "group": "bottom",
+                  "id": "01fc5f05-8beb-4979-a7d6-3e1599de042e"
+                },
+                {
+                  "group": "left",
+                  "id": "ab65e6d8-6650-4327-b44f-ebbf70c14f4f"
+                }
+              ]
+            },
+            "id": "c8455307-cef2-4843-a821-ff90db9643d2",
+            "zIndex": 13,
+            "data": {
+              "type": "tm.Store",
+              "name": "S3 (OSV Datasets)",
+              "description": "SQLLite Pre-Compiled Data files For Querying against real live CVEs",
+              "outOfScope": false,
+              "isTrustBoundary": false,
+              "reasonOutOfScope": "",
+              "hasOpenThreats": false,
+              "isALog": false,
+              "isEncrypted": false,
+              "isSigned": false,
+              "storesCredentials": false,
+              "storesInventory": false,
+              "threats": []
+            }
           }
         ]
       }
