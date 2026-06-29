@@ -39,9 +39,7 @@ hosts nothing itself. The design is in [`docs/architecture.md`](docs/architectur
 
 ## Deployment model
 
-Écluse ships as a single, reproducible container image that runs **one process**: the HTTP
-front door (a raw-`wai` application on `PROXY_PORT`, default `4873`) and, alongside it, the
-mirror worker. Point your package manager at it as a registry (see
+Écluse ships as a single, reproducible container image providing a **unified multicall executable**. It can run the HTTP proxy server (`ecluse serve`), the OSV ingestion pipeline (`ecluse pilot`), or the registry cleanup worker (`ecluse dredger`) depending on the container command. All three roles share the exact same configuration file and rule definitions. The default command runs the `serve` process (the HTTP front door on `PROXY_PORT`, default `4873`) and, alongside it, the mirror worker. Point your package manager at it as a registry (see
 [Connecting your clients](#connecting-your-clients)).
 
 Before you run a published image, **verify its provenance and SBOM attestations**: the
@@ -304,6 +302,13 @@ platform egress controls above.
 
 The rationale (and why both the application guards and the platform controls are worth
 having) is in [Security: Outbound-Request & Input-Validation Invariants](docs/architecture/security.md#network-egress-is-a-shared-responsibility).
+
+### Securing Écluse Pilot & Dredger Services
+
+If you deploy the auxiliary services (the **Écluse Pilot** ingestion pipeline and the **Écluse Dredger** reaper), they require distinct, tightly scoped network configurations:
+
+- **Écluse Pilot**: Requires **no public ingress**. It requires egress to `osv.dev` public endpoints (to fetch raw vulnerability data), the cloud instance-metadata endpoint (to mint container credentials), and your configured object store (S3/GCS) with `s3:PutObject` permissions to upload the processed `osv.db`.
+- **Écluse Dredger**: Requires **no public ingress**. It requires egress *only* to your private mirror (Registry B) to issue delete requests, and to the instance-metadata endpoint for credentials. It has a standing high-privilege delete capability, so isolating it from all untrusted networks is critical.
 
 ## Locking down CI egress (recommended)
 

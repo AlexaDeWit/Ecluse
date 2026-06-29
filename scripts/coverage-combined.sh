@@ -22,7 +22,7 @@
 #   make coverage SUITE=ecluse-core-unit  (a PARTIAL view; run both unit tiers for
 #   make coverage SUITE=ecluse-unit        the full local unit picture without Docker)
 #
-# Usage: scripts/coverage-combined.sh   (no arguments)
+# Usage: scripts/coverage-combined.sh   (accepts cabal test flags like -fdev-http-egress)
 set -euo pipefail
 
 builddir="dist-coverage"
@@ -57,11 +57,11 @@ fi
 # also refreshes all per-tier reports for free. SUITE-scoped runs print their own
 # partial-view caveat; suppress it here since this script *is* the merged view.
 echo "coverage: building $core_unit_tier (instrumented) ..."
-ECLUSE_COVERAGE_QUIET_PARTIAL=1 bash "$(dirname "$0")/coverage.sh" "$core_unit_tier"
+ECLUSE_COVERAGE_QUIET_PARTIAL=1 bash "$(dirname "$0")/coverage.sh" "$core_unit_tier" "$@"
 echo "coverage: building $unit_tier (instrumented) ..."
-ECLUSE_COVERAGE_QUIET_PARTIAL=1 bash "$(dirname "$0")/coverage.sh" "$unit_tier"
+ECLUSE_COVERAGE_QUIET_PARTIAL=1 bash "$(dirname "$0")/coverage.sh" "$unit_tier" "$@"
 echo "coverage: building $integration_tier (instrumented, needs Docker) ..."
-ECLUSE_COVERAGE_QUIET_PARTIAL=1 bash "$(dirname "$0")/coverage.sh" "$integration_tier"
+ECLUSE_COVERAGE_QUIET_PARTIAL=1 bash "$(dirname "$0")/coverage.sh" "$integration_tier" "$@"
 
 core_unit_tix="$(find "$builddir" -type f -name "${core_unit_tier}.tix" | head -n1)"
 unit_tix="$(find "$builddir" -type f -name "${unit_tier}.tix" | head -n1)"

@@ -42,30 +42,18 @@ in the private upstream. Subsequent requests for the same package during this
 window will fall through to the public upstream again and re-run rules; this is
 acceptable; the rules are deterministic for a given package version.
 
-### Process model
+### Process model: The Unified Multicall Binary
 
-At launch the worker runs **in the proxy process as a supervised concurrent
-thread** (`async` / `unliftio`), not a separate service: worker load is
-front-loaded, a cold mirror back-fills heavily for the first few days, then
-settles to a modest steady state, so an extra deployable is not yet worth it.
-Transient failures are handled in the loop (retry/backoff/DLQ, above); a sustained
-failure surfaces through the worker's health signal.
+Écluse ships as a **single, unified executable** (the "BusyBox" or "multicall" pattern). Instead of building separate binaries for the proxy server, the OSV ingestion pipeline (`pilot`), and the registry cleanup worker (`dredger`), `app/Main.hs` acts as a CLI router that runs different sub-systems based on the invocation command (e.g., `ecluse serve`, `ecluse pilot`, `ecluse dredger`). 
 
-A second in-process background task, the **advisory-dataset sync** (see
-[CVE Subsystem](rules-engine.md#cve-subsystem)), refreshes the in-memory advisory
-index the request-path rules read; it is supervised the same way and, because
-rules run on the request path, travels with the server when the worker is split
-out.
+This pattern is a deliberate architectural and security decision:
+1. **Config & Rule Synchronization:** Because `pilot`, `dredger`, and `serve` are the same binary parsing the same configuration file, they share the exact same runtime state (the same `Env` and config models). A manual package revocation rule (`DenyByIdentity`) configured in `ecluse.yaml` is guaranteed to be respected by Dredger (to purge it) and the Proxy (to block it). There is zero chance of drift.
+2. **First-party Scope Protection:** By sharing the configuration, Dredger is inherently aware of the `PUBLISH_SCOPES` (internal first-party scopes) that the Proxy routes to the Publication Target. Dredger automatically and unconditionally excludes these scopes from its purge routines, preventing catastrophic data loss of first-party packages.
+3. **Deployment Simplicity:** The operator deploys the same versioned Docker image for all three components, simply changing the container command and the IAM role.
 
-The split is kept **trivial for later**. The server and worker are each a
-self-contained entry function over the shared, handle-based `Env`,`runServer :: Env -> IO ()` and `runWorker :: Env -> IO ()`, and the
-single-process `Main` simply runs both concurrently. Splitting into two binaries
-is then two thin `Main`s calling the same functions, no rearchitecting, because
-neither depends on the other, only on the handles in `Env`. The worker carries its
-**own health/liveness surface** (a consume-loop heartbeat / last-successful-poll),
-distinct from the server's HTTP readiness, so that the single process's health
-reflects a stalled worker today and a future standalone worker binary has its own
-liveness/readiness probe.
+**Security Boundaries:** The security model relies on the orchestrator (Kubernetes or AWS ECS). The roles (e.g., `s3:GetObject` for Proxy vs `s3:PutObject` for Pilot) and network egress bounds (e.g., zero ingress for Dredger) are applied per-container. Even though the proxy *contains* the Pilot code, it has neither the IAM permissions nor the CLI invocation to execute it.
+
+At launch, the **mirror worker** runs in the `ecluse serve` process as a supervised concurrent thread (`async` / `unliftio`), not a separate service: worker load is front-loaded, a cold mirror back-fills heavily for the first few days, then settles to a modest steady state, so an extra deployable is not yet worth it. The worker carries its **own health/liveness surface** (a consume-loop heartbeat / last-successful-poll), distinct from the server's HTTP readiness.
 
 The worker is the consumer of the composition root's **publish-side
 `RegistryClient`**: it `publishArtifact`s approved packages to the mirror target

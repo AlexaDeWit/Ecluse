@@ -113,10 +113,10 @@ Per-slice files are deliberate: parallel agents (and their status updates) touch
 > per-source metadata-cache keying with a cached raw document (#111 / #113); the
 > injected route classifier, with npm path grammar moved into the adapter
 > (#106 / #116); the uncached trusted-leg fix for per-client authority (#115 /
-> #117); and the **per-mount error renderer + mandatory path-mounting** refactor
+> #117); the **per-mount error renderer + mandatory path-mounting** refactor
 > (#122 / #133), which introduced `MountBinding` (`bindingPrefix :: NonEmpty Text`,
 > so a root mount is unrepresentable) and moved npm's `{"error": …}` body out of the
-> agnostic serve layer into the adapter renderer.
+> agnostic serve layer into the adapter renderer; and the **Unified Multicall Binary (CLI router)** refactor (e.g. `ecluse serve`, `ecluse pilot`, `ecluse dredger`), ensuring shared config constraints and `PUBLISH_SCOPES` protection.
 
 **Remaining, what this plan still delivers:** on top of the launch-ready AWS base
 (**M4**, closed by S20) and the now-complete observability stack (**M6**), the
@@ -223,7 +223,7 @@ owes also owes a deterministic `U`/`I` test (see [Testing Strategy](../docs/test
 | ID | Slice | Depends on | Tier |
 |----|-------|------------|------|
 | [S21](slices/S21-effectful-tier.md) | Effectful rule tier (`Unavailable`, timeout/retry/breaker) | S05, S14 | U |
-| [S22](slices/S22-cve-sync.md) | `CVELookup` handle + OSV local-sync index | S01, S21 | U, I |
+| [S22](slices/S22-cve-sync.md) | `CVELookup` handle + SQLite `osv.db` polling | S01, S21 | U, I |
 | [S23](slices/S23-deny-if-cve.md) | CVE rules, `DenyIfCVE` + `AllowIfRemediatesCve` | S03, S22 | U |
 
 ### M6, Observability
