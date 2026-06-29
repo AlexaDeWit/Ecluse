@@ -3022,6 +3022,17 @@
                   "mitigation": "Zero network ingress; least-privilege IAM (delete-only, scoped to Registry B); prefers container-role minting over static secrets.",
                   "modelType": "STRIDE",
                   "id": "c12bddfe-96d4-47c6-92e0-a961abadb5b2"
+                },
+                {
+                  "number": 16,
+                  "status": "Mitigated",
+                  "severity": "High",
+                  "title": "First-party data loss from collapsed registries",
+                  "type": "Denial of service",
+                  "description": "If the mirror target and publication target are collapsed onto a single registry, Dredger could purge first-party packages thinking they are stale or vulnerable public ones.",
+                  "mitigation": "Dredger refuses to boot when MIRROR_TARGET_URL == PUBLICATION_TARGET_URL. Collapsing registries intentionally surrenders Dredger's automated pruning capabilities.",
+                  "modelType": "STRIDE",
+                  "id": "e23cddfe-96d4-47c6-92e0-a961abadb5b3"
                 }
               ]
             }
