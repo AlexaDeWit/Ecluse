@@ -30,6 +30,7 @@ Configuration parsing enforces the precondition. The unchecked integer stays at 
 internal composition boundary so every request pays only an STM decrement, not another
 validation step.
 -}
+
 -- The configuration parser guarantees capacity > 0; this is a defense-in-depth bounds check.
 {- HLINT ignore newServeAdmission "Avoid restricted function" -}
 newServeAdmission :: Int -> IO ServeAdmission
