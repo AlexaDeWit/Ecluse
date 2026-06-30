@@ -53,6 +53,7 @@ import Ecluse.Core.Server.Context (
  )
 import Ecluse.Core.Server.Metadata (newNpmMetadataClient)
 import Ecluse.Core.Server.Pipeline (servePackument, serveTarball)
+import Ecluse.Core.Server.Pipeline.Publish ()
 import Ecluse.Core.Server.Route (Filename (Filename))
 import Ecluse.Core.Telemetry.Metrics (Decision (Admit, Unavailable))
 import Ecluse.Core.Telemetry.Record (MetricsPort)

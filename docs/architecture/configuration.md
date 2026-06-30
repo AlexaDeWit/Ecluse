@@ -106,18 +106,18 @@ one for **reading** the private upstream. Each such endpoint selects a
 credentials above: `AWS_REGION` / instance role, or ADC / `ECLUSE_GOOGLE_PROJECT`)
 or a static token.
 
-**Selecting the mirror-target write provider.** `ECLUSE_MIRROR_TARGET_CREDENTIAL_PROVIDER`
+**Selecting the mirror-target write provider.** `ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER`
 chooses how that one always-held write credential is obtained, `static` (a
-`ECLUSE_MIRROR_TARGET_TOKEN`) or `codeartifact` (a token minted under the ambient task role,
-its domain/owner/region from the `MIRROR_TARGET_CODEARTIFACT_*` keys or parsed from the
+`ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN`) or `codeartifact` (a token minted under the ambient task role,
+its domain/owner/region from the `ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_*` keys or parsed from the
 mirror-target host). The write credential is **explicit and does not fold** when
-`ECLUSE_MIRROR_TARGET` folds onto the private upstream: under the default `passthrough`
+`ECLUSE_MOUNTS__NPM__MIRROR_TARGET` folds onto the private upstream: under the default `passthrough`
 the private upstream carries no Écluse credential, while the mirror write runs on the
 async worker under Écluse's own identity, so the two are independent. (When the
 `service` strategy later gives the private-upstream read its own Écluse credential, a
 write to the same registry **may** inherit it; that is the `service` slice's concern,
-not this one.) The read-side providers (`PRIVATE_UPSTREAM_*`) and the publish-target
-provider (`PUBLICATION_TARGET_*`) will follow the **same prefixed-provider pattern**
+not this one.) The read-side providers (`ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM_*`) and the publish-target
+provider (`ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_*`) will follow the **same prefixed-provider pattern**
 when those slices land, so the shape is set once here.
 
 **How reads are credentialled is the credential strategy** (see

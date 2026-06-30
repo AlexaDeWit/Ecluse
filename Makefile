@@ -14,11 +14,13 @@ NIX := $(if $(IN_NIX_SHELL),,nix develop --command)
 # `.#bench` itself); otherwise it enters `.#bench`. See flake.nix `devShells.bench`.
 NIX_BENCH := $(if $(IN_NIX_SHELL),,nix develop ".\#bench" --command)
 
-# Tracked Haskell sources, for the formatter and linter.
-HS := $(shell git ls-files '*.hs')
+# Tracked and untracked Haskell sources, for the formatter and linter.
+# Uses find instead of git ls-files so `make check` catches untracked files
+# before you commit them, preventing CI failures on files not yet in the index.
+HS := $(shell find . -name '*.hs' -not -path '*/dist-*' -not -path '*/.git/*' -not -path '*/.agents/*')
 
-# Tracked shell scripts, for shellcheck (`make lint-scripts`).
-SH := $(shell git ls-files '*.sh')
+# Tracked and untracked shell scripts, for shellcheck (`make lint-scripts`).
+SH := $(shell find . -name '*.sh' -not -path '*/dist-*' -not -path '*/.git/*' -not -path '*/.agents/*')
 
 # Published image repository. Override for forks/mirrors: `make docker-push IMAGE=…`.
 IMAGE ?= docker.io/alexadewit/ecluse
