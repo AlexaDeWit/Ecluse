@@ -109,12 +109,14 @@ spec = do
     -- supplied so the env single-mount's @static@ credential reference resolves.
     describe "run" $ do
         it "boots from the environment layer alone (no document) and serves" $ do
+            unsetEnv "ECLUSE_COVERAGE_QUIET_PARTIAL"
             traverse_ (uncurry setEnv) awsRunEnv
             outcome <- timeout 100000 run
             traverse_ (unsetEnv . fst) awsRunEnv
             outcome `shouldBe` Nothing
 
         it "boots with an inline PROXY_CONFIG document and serves" $ do
+            unsetEnv "ECLUSE_COVERAGE_QUIET_PARTIAL"
             traverse_ (uncurry setEnv) awsRunEnv
             outcome <- timeout 100000 run
             traverse_ (unsetEnv . fst) awsRunEnv
@@ -135,6 +137,7 @@ spec = do
             -- AWS_REGION/credentials AND no ECLUSE_QUEUE_URL -- emitting its loud
             -- non-durable boot warning and constructing the bounded in-memory queue. The
             -- idle worker simply parks on the empty queue rather than hot-looping.
+            unsetEnv "ECLUSE_COVERAGE_QUIET_PARTIAL"
             unsetEnv "AWS_REGION"
             unsetEnv "ECLUSE_QUEUE_URL"
             traverse_ (uncurry setEnv) (filter ((/= "ECLUSE_QUEUE_URL") . fst) runEnv)

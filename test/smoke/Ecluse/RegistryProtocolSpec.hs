@@ -25,14 +25,16 @@ import Ecluse.Core.Package (
  )
 import Ecluse.Core.Registry (RegistryClient (fetchMetadata, parsePackageInfo), RegistryResponse (responseBody))
 import Ecluse.Core.Registry.Npm (
-    MetadataForm (Full),
     NpmClientConfig (npmLimits, npmManager),
     defaultNpmConfig,
     fetchMetadataForm,
     newNpmClient,
-    noValidators,
  )
 import Ecluse.Core.Registry.Npm.Project (Projection (NameMismatch, Projected), parsePackageInfoFromValue)
+import Ecluse.Core.Registry.Npm.Request (
+    MetadataForm (Full),
+    noValidators,
+ )
 import Ecluse.Core.Registry.Npm.Wire (
     AbbreviatedPackument (apkmtDistTags, apkmtName, apkmtVersions),
  )

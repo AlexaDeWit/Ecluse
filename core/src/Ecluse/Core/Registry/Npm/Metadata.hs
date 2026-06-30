@@ -53,11 +53,9 @@ import Ecluse.Core.Registry.Metadata (
     MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable),
  )
 import Ecluse.Core.Registry.Npm (
-    MetadataForm (Full),
     NpmClientConfig (npmBaseUrl, npmLimits),
     ResponseBoundExceeded (ResponseBoundExceeded),
     fetchMetadataForm,
-    noValidators,
  )
 import Ecluse.Core.Registry.Npm.Project (
     Projection (NameMismatch, Projected),
@@ -66,6 +64,10 @@ import Ecluse.Core.Registry.Npm.Project (
     parsePackageInfoFromValue,
     projectName,
     projectVersionEntry,
+ )
+import Ecluse.Core.Registry.Npm.Request (
+    MetadataForm (Full),
+    noValidators,
  )
 import Ecluse.Core.Registry.Npm.SelectiveDecode (
     SelectedVersion (svName, svTime, svVersion, svVersionCount),
