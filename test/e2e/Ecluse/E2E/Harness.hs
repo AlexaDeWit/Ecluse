@@ -104,7 +104,6 @@ import Network.Socket (
 import System.Directory (createDirectoryIfMissing, doesFileExist, getTemporaryDirectory, removePathForcibly)
 import System.Exit (ExitCode (ExitSuccess))
 import System.FilePath ((</>))
-import System.IO.Unsafe (unsafePerformIO)
 import System.Process.Typed (proc, readProcess, readProcessStdout, setEnv, setWorkingDir)
 import UnliftIO (bracket, bracket_, handleAny)
 import UnliftIO.Concurrent (threadDelay)
@@ -178,8 +177,8 @@ dockerDaemonReachable =
 -- ── lifecycle ───────────────────────────────────────────────────────────────
 
 {-# NOINLINE globalFixtures #-}
-globalFixtures :: FilePath
-globalFixtures = unsafePerformIO $ do
+globalFixtures :: IO FilePath
+globalFixtures = do
     tmpRoot <- getTemporaryDirectory
     let workDir = tmpRoot </> "ecluse-e2e-shared-fixtures"
         htmlDir = workDir </> "html"
@@ -206,11 +205,11 @@ data GlobalDataPlane = GlobalDataPlane
 withGlobalDataPlane :: (GlobalDataPlane -> IO ()) -> IO ()
 withGlobalDataPlane action = do
     sfx <- uniqueSuffix
+    workDir <- globalFixtures
     let net = "ecluse-e2e-global-net-" <> sfx
         stub = "ecluse-e2e-global-stub-" <> sfx
         verd = "ecluse-e2e-global-verd-" <> sfx
         mini = "ecluse-e2e-global-mini-" <> sfx
-        workDir = globalFixtures
         htmlDir = workDir </> "html"
         certsDir = workDir </> "certs"
         verdConf = workDir </> "verdaccio.yaml"
