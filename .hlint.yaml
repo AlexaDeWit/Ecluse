@@ -48,7 +48,7 @@
 - functions:
     - {name: System.IO.Error.userError, within: [], message: "Stringly IOError: throw a typed Exception (e.g. a nullary type with an Exception instance), or return a domain value. See STYLE.md section 11."}
     - {name: UnliftIO.Exception.stringException, within: [], message: "Stringly exception: throw a typed Exception or return a domain value. See STYLE.md section 11."}
-    - {name: UnliftIO.Exception.throwString, within: [Ecluse.RegistryProtocolSpec, Ecluse.Credential.Refresh.InternalSpec, Ecluse.EnvSpec, Ecluse.InFlightSpec, Ecluse.Rules.EffectfulSpec, Ecluse.Server.CacheSpec, Ecluse.Server.PipelineSpec, Ecluse.ServerSpec, Ecluse.WorkerSpec, EcluseSpec], message: "Stringly exception: in production, throw a typed Exception or return a domain value (STYLE.md section 11). Permitted in tests to simulate failures or mark unused handle stubs."}
+    - {name: UnliftIO.Exception.throwString, within: [Ecluse.RegistryProtocolSpec, Ecluse.Credential.Refresh.InternalSpec, Ecluse.EnvSpec, Ecluse.InFlightSpec, Ecluse.Rules.EffectfulSpec, Ecluse.Server.CacheSpec, Ecluse.Server.PipelineSpec, Ecluse.Server.Pipeline.PackumentSpec, Ecluse.Server.Pipeline.TestSupport, Ecluse.Server.Pipeline.SharedSpec, Ecluse.ServerSpec, Ecluse.WorkerSpec, EcluseSpec], message: "Stringly exception: in production, throw a typed Exception or return a domain value (STYLE.md section 11). Permitted in tests to simulate failures or mark unused handle stubs."}
 
 # --- Debugging leftovers: banned in committed code --------------------------
 - modules:
