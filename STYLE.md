@@ -708,23 +708,6 @@ three-tier strategy are in `CONTRIBUTING.md`; this is style.)
   from the library rather than re-defining it; a helper only one suite uses stays
   local to that suite. See `docs/testing.md`.
 
----
+## 13. Character Sets
 
-## 13. Checklist (before you open a PR)
-
-- [ ] `make format` run; `make check` is green (build with `-Werror`, unit
-      tests, doctest, fourmolu, hlint, Semgrep).
-- [ ] Every new module has a Haddock header; every exported type and function
-      has a Haddock comment; record fields and sum constructors are documented.
-      Docs follow [`HADDOCK.md`](HADDOCK.md), `make doctest` passes, and the
-      rendered page was checked (`make docs`).
-- [ ] New domain values are newtypes; opaque ones expose `mk*`/`un*`/`render*`
-      as appropriate.
-- [ ] No partial functions; no `error`/`undefined`/`unsafePerformIO` (a
-      genuinely-unreachable `error` needs the §10 ignore + justifying comment).
-- [ ] Errors follow §11: domain outcomes are typed values, faults are typed
-      exceptions; no `stringException`/`throwString`/`userError`, and no `ExceptT`
-      threaded through the `ReaderT Env IO` base.
-- [ ] Functions are small and composed; logic is pure where it can be.
-- [ ] Docs that the change affects (`README.md`, `docs/`, this file) are updated
-      in the same commit.
+Only the ASCII standard character set is permitted in the codebase or documentation except where specific language-specific terms require it, such as our name Écluse, or if for some reason Vi hadde någon (väldigt stort) behöv och skriva på svenska. But things like em-dashes, emoji, and so on? No. Exactly one emoji is allowed: `⚜️`
