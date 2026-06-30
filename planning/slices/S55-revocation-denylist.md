@@ -33,7 +33,7 @@ operator's decision (see threat #13, Registry B).
   `Deny` (the matched identity in the reason, for the audit trail); no match → `Abstain`.
 - [ ] It is a **hard deny**: evaluated at a precedence **above `AllowScope`**, so an
   allow-listed scope cannot override a revocation, the one deliberate exception to
-  allow-over-deny (a revocation an allow-list could outrank is not a revocation).,  _rules-engine.md#rule-precedence_
+  allow-over-deny (a revocation an allow-list could outrank is not a revocation).   _rules-engine.md#rule-precedence_
 - [ ] Pure, no IO; evaluated on the serve path, and honoured by the worker mirror-job
   ingest re-evaluation (#414) so a revoked identity is **neither served nor (re-)mirrored**.
 - [ ] Wired into the rule config decoder (S03): a revocation list via config (additive).

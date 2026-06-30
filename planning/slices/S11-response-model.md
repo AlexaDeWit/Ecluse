@@ -22,13 +22,13 @@ client-facing error maps to the right status and an intuitive body, not a generi
 **Acceptance criteria.**
 - [ ] `ServeDecision = Admit | Reject Rejection`; `Rejection { reason, message }`;
   `RejectReason = ByPolicy RuleName | Unavailable Transience`;
-  `Transience = WillResolve (Maybe Seconds) | WontResolve`., _web-layer.md#error-model_
+  `Transience = WillResolve (Maybe Seconds) | WontResolve`.  _web-layer.md#error-model_
 - [ ] Concrete-artifact mapping: `Admit`→200(stream), `ByPolicy`→403+denial body,
   `Unavailable WillResolve`→503+`Retry-After`, `Unavailable WontResolve`→500,
   upstream miss→404. The rule: **503 only when we believe it will resolve**, else
-  500., _web-layer.md#error-model_
+  500.  _web-layer.md#error-model_
 - [ ] Denial body is the npm `{"error": "…"}` shape including which rule decided and
-  why; `ECLUSE_HELP_MESSAGE` (config, S03) appended to every denial.,  _rules-engine.md#denial-responses_
+  why; `ECLUSE_HELP_MESSAGE` (config, S03) appended to every denial.   _rules-engine.md#denial-responses_
 - [ ] Renders a `Decision` (from S05) into a `Rejection` message via the existing
   `renderDecision`/`renderDuration`.
 

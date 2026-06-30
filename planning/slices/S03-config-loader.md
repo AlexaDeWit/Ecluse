@@ -37,20 +37,20 @@ fast and reject the unknown, including unresolvable merge references.
   env blob (same schema), carrying both the **mount map** (each mount = prefix +
   external base URL + three-registry tuple with per-endpoint credential provider +
   queue backend, plus an optional per-mount rule refinement) and the top-level
-  **rule policy**., _configuration.md#configuration, hosting.md#mounts_
+  **rule policy**.  _configuration.md#configuration, hosting.md#mounts_
 - [ ] Single-mount env vars **desugar** to a one-entry mount map; with no document
   supplied, the built-in **default rule policy** still applies (env-only launch
-  case)., _configuration.md#configuration_
+  case).  _configuration.md#configuration_
 - [ ] **Rule policy is a named map merged over a built-in default**: a known default
   name takes a **partial patch** (override precedence/values); a new name must carry
-  a full `type` (**add**); `"enabled": false` **suppresses** a default., _configuration.md#rule-policy, #the-default-policy_
+  a full `type` (**add**); `"enabled": false` **suppresses** a default.  _configuration.md#rule-policy, #the-default-policy_
 - [ ] **Strict + fail-loud**: unknown rule `type`, unknown JSON keys, malformed
   values (bad URL, non-integer precedence, unparseable JSON), **and an unresolvable
   merge reference** (typo'd default name, suppress/patch of a non-existent rule, an
   add missing its `type`) are all **rejected**, not skipped. A typo'd rule must fail
-  startup, not vanish., _configuration.md#validation-fail-fast-reject-the-unknown_
+  startup, not vanish.  _configuration.md#validation-fail-fast-reject-the-unknown_
 - [ ] Rule entries decode to the precedence-carrying model (default precedence per
-  type when omitted), consuming the **S05** precedence model., _configuration.md#rule-policy_
+  type when omitted), consuming the **S05** precedence model.  _configuration.md#rule-policy_
 - [ ] **Secrets never in structured config**, tokens only via env; assert the
   decoder rejects a token field inside the document.
 
@@ -66,7 +66,7 @@ surface and that all surface at once.
 model). Keep the **merge** here (named-map patch over the default) but source the
 **default policy value** from the rules layer so config doesn't hard-code rule
 semantics; the launch default is just `min-age` (`AllowIfPublishedBefore`), and the
-effectful `AllowIfRemediatesCve` member joins the default only once **S23** lands,guard the decoder so naming an effectful rule before then is a clean "unknown type",
+effectful `AllowIfRemediatesCve` member joins the default only once **S23** lands, guard the decoder so naming an effectful rule before then is a clean "unknown type",
 not a crash. "Reject the unknown" via aeson means turning off permissive defaults
 (no `rejectUnknownFields`-style escape); pick the explicit-key-set approach, and test
 the merge's fail-loud references too. The mount-map shape must match what S20's
@@ -80,14 +80,14 @@ prefix. The base-hardening decisions (now final and landed) move that model, and
 reflect it:
 - **Mounts are keyed by ecosystem** (`npm`, `pypi`); the path prefix is **derived
   from the ecosystem, never configured** (a wrong/colliding prefix is
-  unrepresentable), and the env-only single mount defaults to npm → `/npm`., _D1, D5;
+  unrepresentable), and the env-only single mount defaults to npm → `/npm`.  _D1, D5;
   [hosting.md → Mounts](../../docs/architecture/hosting.md#mounts),
   [configuration.md](../../docs/architecture/configuration.md#configuration)_
 - The three registry roles are a **named-role record (`MountRegistries`)**, not a
-  positional tuple; the private upstream and mirror target may coincide., _D2_
+  positional tuple; the private upstream and mirror target may coincide.  _D2_
 - **Credential providers are process-global**; a mount **references** which provider
   its strategy draws on (no per-endpoint provider), and a reference to an
-  uninitialized provider **fails fast at boot**., _D4;
+  uninitialized provider **fails fast at boot**.  _D4;
   [cloud-backends.md → Credential Provider](../../docs/architecture/cloud-backends.md#credential-provider),
   [configuration.md → Validation](../../docs/architecture/configuration.md#validation-fail-fast-reject-the-unknown)_
 

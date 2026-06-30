@@ -39,7 +39,7 @@ that later `dlopen`s something, not a fix for a known defect.
 - [ ] In the release path, `docker load` the built `.#dockerImage` archive and
   `docker run` it; assert the container **starts**, the entrypoint resolves and
   every `DT_NEEDED` library is present (catches a missing loader / startup
-  `dlopen` in the distroless image)., _release-supply-chain.md#releases--container-image_
+  `dlopen` in the distroless image).  _release-supply-chain.md#releases--container-image_
 - [ ] Drive **one real proxied request** through the running container (DNS
   resolution + TLS handshake + an upstream fetch), so the glibc **NSS / resolver**
   and TLS `dlopen` paths are exercised in the shipped image, not just in the dev
@@ -48,7 +48,7 @@ that later `dlopen`s something, not a fix for a known defect.
   on the shipped binary reports **no "not found"**, a fast invariant guarding the
   link-time closure.
 - [ ] Runs in `release.yml` (or a dedicated image-smoke job), **off the PR gate**;
-  SHA-pinned actions, injection-free, `persist-credentials: false`., _AGENTS.md (CI & Security)_
+  SHA-pinned actions, injection-free, `persist-credentials: false`.  _AGENTS.md (CI & Security)_
 - [ ] Docs note (CONTRIBUTING → Releases / architecture) recording the distroless
   `dlopen`/NSS consideration and that the image smoke covers it.
 

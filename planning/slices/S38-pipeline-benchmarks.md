@@ -38,7 +38,7 @@ concurrency. Two sides of one coin.
   `MirrorQueue` / `CredentialProvider` doubles (`newInMemoryQueue`, `staticProvider`),
   with **injectable per-upstream latency + payload size**, driven by `oha` from the
   `.#bench` dev shell; `make bench-load`. A separate `bench-load` **executable** (not a
-  `tasty-bench` component)., _web-layer.md#web-layer · architecture.md#request-lifecycle_
+  `tasty-bench` component).  _web-layer.md#web-layer · architecture.md#request-lifecycle_
 - [x] **Mandatory traffic scenarios** (the real-world shapes that earn the confidence,  architect-specified):
   1. **`merge-cold`**, public download path with the private + public packument MERGE
      in the loop: `GET /{pkg}` fanning to both upstreams → merge → rule-filter →
@@ -50,9 +50,9 @@ concurrency. Two sides of one coin.
     , _registry-model.md#packument-merge-across-upstreams · rules-engine.md_
   2. **`cached-public-hit`**, the cheap, common high-throughput path: the same `GET`
      with the anonymous public origin served from the warm metadata cache (no public
-     fetch or decode)., _web-layer.md (metadata cache)_
+     fetch or decode).  _web-layer.md (metadata cache)_
   3. **`worker-mirroring`**, the fetch → verify → publish → ack loop, driven in-process
-     (no HTTP surface)., _cloud-backends.md#mirror-queue_
+     (no HTTP surface).  _cloud-backends.md#mirror-queue_
 - [x] **Metrics captured per scenario:** throughput; latency distribution
   **p50/p90/p99/p99.9**; **peak residency**; GC-pause stats; **and work-normalised
   per-request counters** (allocations/request), the host-independent signal that stays
@@ -113,7 +113,7 @@ failure), but it is not part of the gate.
   mark, so the driver re-execs the binary once per scenario (each prints its report as a
   single JSON line) and aggregates, keeping each scenario's residency its own.
 - **`oha` 1.14.0 invocation.** The JSON flag is `--output-format json` (not `--json`);
-  the report carries `summary.requestsPerSec`, `latencyPercentiles.{p50,p90,p99,p99.9}`,
+  the report carries `summary.requestsPerSec`, `latencyPercentiles.{p50, p90, p99, p99.9}`,
   and the status/error distributions.
 - **Load-knob defaults:** `-c 50`, `-z 30s`, 5 ms injected upstream latency, ~256 KiB
   payload; each overridable via `BENCH_LOAD_*` environment variables (the CI dispatch

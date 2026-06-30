@@ -18,13 +18,7 @@ Security fixes: coordinate privately first; see SECURITY.md.
 ## Sign-off (DCO)
 
 <!--
-We squash-merge: the squash commit message is assembled from your commit
-messages, so a `Signed-off-by` trailer reaches `main` only if every commit
-carries one. Sign off as you go with `git commit -s` (pair with `-S` to stay
-GPG-signed), the DCO check verifies it per commit, and that is what carries the
-sign-off onto `main`. Editing this description does not sign your commits; keep
-the trailers in the final squash message. See
-CONTRIBUTING.md → "Developer Certificate of Origin (DCO)".
+See CONTRIBUTING.md → "Developer Certificate of Origin (DCO)".
 -->
 
 ## AI assistance

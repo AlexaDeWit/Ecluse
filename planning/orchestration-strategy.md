@@ -23,7 +23,7 @@ CI in [`../CONTRIBUTING.md`](../CONTRIBUTING.md), Haskell style in
 The single most important rule. Whenever an agent is **stuck, unsure, blocked, or
 facing ambiguous / missing / contradictory spec, it stops and surfaces the
 problem** rather than inventing a way past it. Agents make a _bounded_ attempt
-against the existing specs first, then escalate, they do not thrash, and they do
+against the existing specs first, then escalate. They do not thrash, and they do
 not paper over uncertainty. Specifically, an implementation agent must never:
 
 - fabricate a config key, path, value, or **API behaviour** (verify via
@@ -202,13 +202,13 @@ The implementer's own "it works" does not count; evidence does.
 
 Critical findings block; the fix is routed per __Fix routing__ above, the team lead
 resumes the original background agent (`SendMessage`), applies a small
-reviewer-specified fix directly, or briefs a fresh build agent for a larger rework,then re-verifies. Review _can_ bounce back to the original implementer now that a
+reviewer-specified fix directly, or briefs a fresh build agent for a larger rework, then re-verifies. Review _can_ bounce back to the original implementer now that a
 background agent can be resumed with its context intact.
 
 ## Inter-wave quality & alignment pass
 
 Per-PR review judges each slice **in isolation**; it cannot see the whole that
-parallel slices compose into. Slices built concurrently against the handles drift,divergent idioms, duplicated helpers, inconsistent Haddock, and type-conversion
+parallel slices compose into. Slices built concurrently against the handles drift, divergent idioms, duplicated helpers, inconsistent Haddock, and type-conversion
 churn at the boundaries (bouncing a value through `String` / `Text` /
 `ByteString`), and none of that fails a single-slice review. So **between waves**,
 once a wave's PRs are all merged and before the next wave is dispatched, the team
@@ -247,7 +247,7 @@ The audit produces a **categorized findings report**; the team lead triages it:
   one reviewed, gated `refactor` / `docs` PR, the same BUILD → EVALUATE → GATE
   loop.
 - **Design-level or far-reaching findings** are **escalated to the architect** as
-  new slices / issues rather than silently absorbed, they may reshape later waves.
+  new slices / issues rather than silently absorbed. They may reshape later waves.
 
 The pass also includes **housekeeping**: once the wave's PRs have landed, prune the
 spent worktrees and their merged branches so `git worktree list` stays an accurate
@@ -322,12 +322,12 @@ a per-PR bar (chasing it is wasteful); see
 > suites surface no coverage** (not built with HPC, no Codecov flag), by design.
 > So when `codecov/patch` flags changed lines, **reach for a unit or integration
 > test**: a path exercised only by an e2e/smoke run still reads as uncovered, on the
-> dashboard and in any local `make coverage`. Don't conclude "the e2e test covers it"
->, it does not count. (Equally, a single-tier local read under-counts the other
+> dashboard and in any local `make coverage`. Don't conclude "the e2e test covers it".
+> It does not count. (Equally, a single-tier local read under-counts the other
 > tier; `make coverage` merges both; see [CONTRIBUTING → Coverage](../CONTRIBUTING.md#coverage).)
 
 **Scale verification to the change.** Light by default. Reserve heavier local
-reproduction _and_ exhaustive case-enumeration for the genuinely risky surfaces,the parsers and identifier canonicalisation, the credential path, deny-by-default
+reproduction _and_ exhaustive case-enumeration for the genuinely risky surfaces: the parsers and identifier canonicalisation, the credential path, deny-by-default
 rule precedence, and egress/SSRF, where a regression is costly and a fast unit
 pass under-covers the threat. A small, low-risk refactor must not cost an hour of
 ceremony.
@@ -409,14 +409,14 @@ Escalations arrive **decision-ready**:
 - **Cross-cutting invariants live in one helper.** When the same invariant is
   enforced by more than one slice (`latest` resolution in the npm filter and the
   packument merge; lossless `Value` passthrough across filter/merge/serve), extract
-  it into a single shared helper the slices call, duplicated invariant logic drifts
+  it into a single shared helper the slices call. Duplicated invariant logic drifts
   and gets fixed N times.
 - **Surface decisions one at a time.** When several design questions are open at
   once, the team lead does **not** front-load them all on the architect in one
   message. They are **parked** (a short-lived `design-queue.md` under `planning/`, spun
   up when decisions accumulate and removed once drained into `docs/` + slices) and
   brought **one at a time**, lead-with-a-recommendation; the rest wait their turn. This
-  complements *escalate, don't guess*, surface proactively, but serialized, not in
+  complements *escalate, don't guess*. Surface proactively, but serialized, not in
   a flood.
 - **Reference work by identifiers the architect can see.** When surfacing or
   escalating, name a piece of work by what is visible to the architect, its slice ID

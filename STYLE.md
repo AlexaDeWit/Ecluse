@@ -67,7 +67,7 @@ Concretely:
   over a case that was already ruled out. This is the registry handle in action:
   adapters project wire formats into `Ecluse.Core.Package` types and nothing above
   them sees raw wire data (see §4.4 and `docs/architecture.md`).
-- **No shotgun parsing.** Don't scatter input checks through processing logic,  that LangSec anti-pattern lets malformed input get partially processed before
+- **No shotgun parsing.** Don't scatter input checks through processing logic. That LangSec anti-pattern lets malformed input get partially processed before
   it's rejected, leaving state hard to reason about. Keep a clean parse phase,
   then an execution phase that can trust its inputs.
 - **Smart constructors are parsers.** When a type can't *structurally* exclude
@@ -332,7 +332,7 @@ protect (see §6), and pairs with the `.Internal` escape hatch in 4.6.
 ## 5. Documentation (Haddock)
 
 Documentation is not optional here, and it is the rule agents most often skip.
-Its conventions have their own focused, example-driven reference,**[`HADDOCK.md`](HADDOCK.md)**, which you should read before writing doc
+Its conventions have their own focused, example-driven reference, **[`HADDOCK.md`](HADDOCK.md)**, which you should read before writing doc
 comments. The essentials:
 
 - **Every module** opens with a prose `{- | … -}` header saying what it is for
@@ -340,9 +340,9 @@ comments. The essentials:
   comment; sum constructors and record fields are documented where they carry
   domain meaning. Non-exported helpers get a plain `--` comment at most, never
   Haddock.
-- **Document the *why*, not the *what*** the signature already states,  especially the security rationale of a rule, the most valuable thing a comment
+- **Document the *why*, not the *what*** the signature already states. This is especially true for the security rationale of a rule, the most valuable thing a comment
   here can carry.
-- **Keep Haddock free of project narration**, no status/roadmap, no slice / PR /
+- **Keep Haddock free of project narration**. No status/roadmap, no slice / PR /
   issue references. It is the durable contract, read long after any PR.
 - **Examples run.** Prefer a `>>>` example to prose; `make doctest` (part of the
   CI gate) executes them, so they cannot drift from the code.
@@ -472,13 +472,7 @@ the middle out.
 **Rule 9.2, Prefer pure and total.** Keep the core logic (the rules engine,
 parsers, rendering) pure; push `IO` to the edges (`app/Main.hs`, the server and
 worker layers). Annotate a purity/totality guarantee **only where it is
-surprising or load-bearing**, a boundary parser a reader would expect to throw,
-or a totality that carries domain meaning (`mkVersion` never dropping a version;
-`evalRule` never crashing the gate on hostile metadata). Do **not** tag
-`-- … Pure and total.` reflexively: in a module whose header already says it is
-pure, or on a signature with no `IO` and a total return type, the tag only
-restates the header and the type ([`HADDOCK.md`](HADDOCK.md) §3). The effect
-style for the parts that *are* effectful is `ReaderT Env IO` (architecture doc),handlers take `Env` and run in plain `IO`.
+surprising or load-bearing**—such as a boundary parser a reader would expect to throw, or a totality that carries domain meaning (`mkVersion` never dropping a version; `evalRule` never crashing the gate on hostile metadata). Do **not** tag `-- … Pure and total.` reflexively: in a module whose header already says it is pure, or on a signature with no `IO` and a total return type, the tag only restates the header and the type ([`HADDOCK.md`](HADDOCK.md) §3). The effect style for the parts that *are* effectful is `ReaderT Env IO` (architecture doc); handlers take `Env` and run in plain `IO`.
 
 **Rule 9.3, Use local `where` helpers** to name sub-steps and keep the main
 equation readable. Top-level bindings always have a signature; `where`-helpers
@@ -667,7 +661,7 @@ The good reasons are narrow:
   decision to make, only "fail loudly", so the exception is the fail-fast.
 
 The tell-tale that a value was the right answer: **a throw that the throwing
-function, or its immediate caller, catches and turns back into a normal result**,throw here, `tryAny` one frame up, degrade to `Nothing`. That round-trip is a value
+function, or its immediate caller, catches and turns back into a normal result**. For example, throwing here, `tryAny` one frame up, and degrading to `Nothing`. That round-trip is a value
 wearing an exception's clothes. Prefer returning the value; reach for the throw only
 when threading it back is genuinely worse (e.g. it would ripple a `Maybe` through a
 signature several layers off), and when you make that trade, say so at the site.

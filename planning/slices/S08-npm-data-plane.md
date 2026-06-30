@@ -26,16 +26,16 @@ optional bearer token.
 - [ ] `fetchMetadata` requests the **abbreviated** form
   (`Accept: application/vnd.npm.install-v1+json`) with `Accept-Encoding: gzip`, and
   fetches the **full** packument when `time`/publish-age is needed; conditional-GET
-  validators relayed., _npm.md#2-transport--conventions, npm.md#8-version--availability-resolution_
+  validators relayed.  _npm.md#2-transport--conventions, npm.md#8-version--availability-resolution_
 - [ ] `fetchArtifact` returns a streamable handle (the response body is streamed by
-  the web layer, S13, this slice exposes it without buffering the whole tarball).,  _web-layer.md#streaming-and-resource-lifetime_
+  the web layer, S13, this slice exposes it without buffering the whole tarball).   _web-layer.md#streaming-and-resource-lifetime_
 - [ ] `publishArtifact` performs the npm `PUT /{pkg}` publish (packument +
-  `_attachments`), treating a `409`/already-present as idempotent success.,  _npm.md#10-write-path-for-completeness_
+  `_attachments`), treating a `409`/already-present as idempotent success.   _npm.md#10-write-path-for-completeness_
 - [ ] A `RegistryClient` is assembled by `newNpmClient :: NpmClientConfig -> IO RegistryClient`,
-  wiring S07's `parse*` into the pure fields and these over the effectful ones.,  _registry-model.md#registry-abstraction_
+  wiring S07's `parse*` into the pure fields and these over the effectful ones.   _registry-model.md#registry-abstraction_
 - [ ] Bearer-token attachment is per the credential-flow authority model
   (which token, by leg, is the request pipeline's job in S14, here the client
-  accepts an injected token and never originates credential policy)., _web-layer.md#control-plane-vs-data-plane_
+  accepts an injected token and never originates credential policy).  _web-layer.md#control-plane-vs-data-plane_
 
 **File scope.**
 - `src/Ecluse/Registry/Npm.hs`, `newNpmClient`, the effectful fields, request building.

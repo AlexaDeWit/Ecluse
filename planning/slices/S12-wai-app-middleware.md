@@ -25,17 +25,17 @@ real pipeline.
 **Acceptance criteria.**
 - [ ] **Mount dispatch**: match the leading path segment to a mount, strip the
   prefix, hand the remainder to `classify` (S10); accept the prefix with/without a
-  trailing slash., _hosting.md#dispatch_
+  trailing slash.  _hosting.md#dispatch_
 - [ ] **Meta-routes**: `/-/ping`→200 `{}` (answered locally); `/livez`/`/readyz`
   distinct, liveness reflects the worker heartbeat in single-process mode,
   readiness is **lenient about public-upstream reachability** and (later) gates on
   CVE first-sync (S22); `/-/v1/search`→501 with a pointer message; everything
-  unrecognised→404., _web-layer.md#meta-routes-ping-health-and-search, cloud-backends.md#process-model_
+  unrecognised→404.  _web-layer.md#meta-routes-ping-health-and-search, cloud-backends.md#process-model_
 - [ ] **Middleware stack** composed around the app: `RequestSizeLimit`, `RealIp`/
   forwarded-for, `Timeout`, and a thin `katip` logging middleware (S04). **Not**
-  `Autohead` or `Gzip` (documented why)., _web-layer.md#middleware-and-helper-libraries_
+  `Autohead` or `Gzip` (documented why).  _web-layer.md#middleware-and-helper-libraries_
 - [ ] `runServer :: Env -> IO ()` starts warp on the configured port; handlers run
-  in plain `IO` taking `Env`., _cloud-backends.md#process-model_
+  in plain `IO` taking `Env`.  _cloud-backends.md#process-model_
 - [ ] Handlers return `ServeDecision`/responses via S11; the real fetch→rules→serve
   body is deferred to S14/S15 (honest stub returning a clear "not yet wired" path
   for package routes, **not** a fake 200).

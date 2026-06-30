@@ -10,7 +10,7 @@
 | HTTP server | `warp` + `wai` (+ `wai-extra`) | Fast, battle-tested. Raw WAI routing rather than a framework; see [Web Layer](web-layer.md#web-layer). `wai-extra` supplies cross-cutting middleware (size limits, real-IP, timeouts). |
 | HTTP client | `http-client` + `http-client-tls` | The data plane: streams artifacts and fetches metadata, including the CodeArtifact / Artifact Registry npm endpoints. Kept off `amazonka`'s `ResourceT` streaming path; see [Web Layer](web-layer.md#web-layer). |
 | JSON | `aeson` | Metadata parsing (lenient **inbound** wire decoding), rule config, queue payloads, denial bodies. |
-| API manifest / schemas | `autodocodec` + `openapi3` | The [capability manifest](api-surface.md) and config JSON Schema: **owned** types (error envelope, synthesized packument, config) derive their `aeson` codec **and** the OpenAPI / JSON-Schema from one `autodocodec` codec, no drift; `openapi3` assembles the document. Inbound npm wire decoding stays lenient `aeson`. |
+| API manifest / schemas | `autodocodec` + `openapi3` | The [capability manifest](api-surface.md) and config JSON Schema: **owned** types (error envelope, synthesised packument, config) derive their `aeson` codec **and** the OpenAPI / JSON-Schema from one `autodocodec` codec, no drift; `openapi3` assembles the document. Inbound npm wire decoding stays lenient `aeson`. |
 | Cloud, AWS | `amazonka` | Split packages: `amazonka-sqs` (mirror queue), `amazonka-codeartifact` (registry token), `amazonka-sts` (workload identity). Mature and comprehensive. |
 | Cloud, GCP | `gogol` *or* a hand-rolled REST client (TBD) | Pub/Sub mirror queue + Artifact Registry token. GCP's Haskell story is weaker than AWS's, so the choice is gated on a spike; see [Cloud Backends](cloud-backends.md#cloud-backends). |
 | Logging | `katip` | Structured, contextual JSON logging. Denials are an audit trail, package/version/rule context attaches to every event. |
@@ -46,7 +46,7 @@ if dependency-hygiene checking is wanted later.
 **Raw WAI, not a web framework.** A proxy is a passthrough over an irregular URL
 surface (URL-encoded slashes, reserved meta-routes), and memory-bounded artifact
 streaming needs direct control over the response body's lifetime. Both point away
-from servant/Scotty/Yesod and toward a raw `Application`. The full rationale,routing, the control/data-plane split, streaming, and the middleware stance, is
+from servant/Scotty/Yesod and toward a raw `Application`. The full rationale, routing, the control/data-plane split, streaming, and the middleware stance, is
 in [Web Layer](web-layer.md#web-layer).
 
 **The effect model: `IO` handles, `App` orchestration.** `App = ReaderT Env IO`
@@ -68,7 +68,7 @@ holding the handles plus the shared HTTP manager, caches, and logger.
 
 **Capability manifest, not a client contract.** Écluse speaks registry protocols,
 not a bespoke API, so its OpenAPI document is a *capability manifest*, generated
-from the closed `Route` enumeration × the configured mounts. Owned / synthesized
+from the closed `Route` enumeration × the configured mounts. Owned / synthesised
 responses (the error envelope and the merged-and-filtered packument) are modelled
 **code-first via `autodocodec`** so the schema cannot drift from the wire format;
 opaque pass-through bodies (tarballs) are linked out rather than re-specified; and

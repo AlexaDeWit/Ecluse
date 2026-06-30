@@ -198,7 +198,7 @@ token API. On mint failure the wrapper keeps serving the still-valid token,
 effectful tier; see
 [Rules Engine → Effectful-rule failure](rules-engine.md#effectful-rule-failure)),
 and alarms; only if the token has actually **expired *and* mint still fails** does
-the dependent operation fail. For a **mirror-write** credential that is the publish,the job is left un-acked and retries / dead-letters (see [Mirror Queue](#mirror-queue)),
+the dependent operation fail. For a **mirror-write** credential that is the publish, the job is left un-acked and retries / dead-letters (see [Mirror Queue](#mirror-queue)),
 never touching the client serve path. For a **read** credential, under `service`, the dependent operation *is* a client
 read, so an exhausted read credential degrades serving (surfaced per the
 [serve error model](web-layer.md#error-model)), one reason `passthrough`, which holds
@@ -296,7 +296,7 @@ how `ecluse-smoke` is already treated.
 ### Azure backends (designed-for, furthest-out)
 
 Azure is the **worked third backend**: it slots into the same two handles with **no
-structural change**, but it sits **last in the priority queue**, after AWS and GCP,because its queue side carries a risk sharper than GCP's. Azure is therefore the
+structural change**, but it sits **last in the priority queue**, after AWS and GCP, because its queue side carries a risk sharper than GCP's. Azure is therefore the
 **furthest-out track**, designed for, but sequenced after AWS and GCP.
 
 Its arms split cleanly into *easy* and *risky*:
@@ -313,7 +313,7 @@ Its arms split cleanly into *easy* and *risky*:
   over HTTPS (`https://pkgs.dev.azure.com/{org}/{project}/_packaging/{feed}/npm/registry/`),
   so they ride the existing npm `RegistryClient` plus an Entra bearer, no per-cloud
   publish path. (Azure Artifacts' own *upstream sources* are a registry-composition
-  feature, the analog of CodeArtifact external connections, the same
+  feature, the analogue of CodeArtifact external connections, the same
   [registry composition, don't bypass the gate](registry-model.md#registry-level-composition-the-recommended-topology)
   caveat applies.)
 - **Queue, the risk, and why Azure is last.** Sharper than the GCP gRPC-vs-REST gap:

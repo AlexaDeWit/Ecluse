@@ -98,7 +98,7 @@ paths keep tracking the same versions.
 
 ## Codebase Layout
 
-The *principles* of module organization and namespacing (vertical organization, where types
+The *principles* of module organisation and namespacing (vertical organisation, where types
 live with their functions, one `Ecluse.<Area>` namespace per area, and when a `.Types` split
 is justified) live in [`STYLE.md`](../STYLE.md) → "Module organization". This section records
 the *current* concrete layout and the one project-specific pattern below.
@@ -121,7 +121,7 @@ the *current* concrete layout and the one project-specific pattern below.
 
 For the **current module list**, read the module index of the
 [published Haddock](https://alexadewit.github.io/Ecluse/api/) (each module's one-line summary
-is its header) and the root [`Ecluse`](../src/Ecluse.hs) module's "How the code is organized"
+is its header) and the root [`Ecluse`](../src/Ecluse.hs) module's "How the code is organised"
 synopsis for the narrative grouping. Both live with the code and update with it, so they can't
 drift; this guide deliberately doesn't duplicate the list here.
 

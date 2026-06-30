@@ -16,7 +16,7 @@ pr: null
 
 **Goal.** Move image publishing off a **personal** Docker Hub account with an
 **account-wide** `Read & Write` personal access token (PAT) onto an
-**organization** account whose publish credential is an **Organization Access
+**organisation** account whose publish credential is an **Organisation Access
 Token (OAT) scoped to the single `ecluse` repository**, owned by a dedicated
 machine account. This closes the one residual weakness in the otherwise
 attestation-anchored release path: the current PAT's permission is a *level*
@@ -57,7 +57,7 @@ ops change with an external billing decision, so it is parked here to be done
 deliberately rather than mid-feature.
 
 **Acceptance criteria.**
-- [ ] A Docker Hub **organization** exists on a plan that offers **Organization
+- [ ] A Docker Hub **organisation** exists on a plan that offers **Organisation
   Access Tokens** (Team/Business); the cost is accepted as an explicit decision.
 - [ ] The `ecluse` image lives under the org namespace, published by a **dedicated
   machine account** that is an org member with access to **only** the `ecluse`
@@ -67,7 +67,7 @@ deliberately rather than mid-feature.
   the personal account-wide PAT.
 - [ ] Secrets (`DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN`) are rotated to the new
   identity and remain on the **protected `release` Environment** (required
-  reviewers); `--password-stdin`, never argv., _AGENTS.md (CI & Security)_
+  reviewers); `--password-stdin`, never argv.  _AGENTS.md (CI & Security)_
 - [ ] `release.yml`'s `IMAGE` env and any namespace-bearing steps point at
   `docker.io/<org>/ecluse`; the attestation `subject-name` follows.
 - [ ] README verify recipe, `nix build …#dockerImage` reference, and
