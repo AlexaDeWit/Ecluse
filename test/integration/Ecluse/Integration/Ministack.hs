@@ -40,6 +40,8 @@ import TestContainers.Hspec (withContainers)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (try)
 
+import System.Environment (setEnv)
+
 import Ecluse.Core.Queue (MirrorQueue (receive), QueueMessage, Seconds (Seconds))
 import Ecluse.Core.Queue.Sqs (SqsConfig (..), SqsEndpoint (..), defaultSqsConfig, newSqsQueue)
 
@@ -61,7 +63,10 @@ raw image fails. The override keeps the test on the real emulator while sidestep
 that parser bug.
 -}
 withMinistack :: (Container -> IO ()) -> IO ()
-withMinistack = withContainers ministack
+withMinistack body = do
+    setEnv "AWS_ACCESS_KEY_ID" "test"
+    setEnv "AWS_SECRET_ACCESS_KEY" "test"
+    withContainers ministack body
 
 ministack :: TC.TestContainer Container
 ministack =
