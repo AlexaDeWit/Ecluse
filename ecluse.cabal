@@ -419,7 +419,6 @@ test-suite ecluse-unit
     Ecluse.AcceptanceSpec
     Ecluse.BenchLoad.NormaliseSpec
     Ecluse.CompositionSpec
-    Ecluse.ConfigSpec
     Ecluse.Config.AesonSpec
     Ecluse.Config.ResolveSpec
     Ecluse.Config.RuleSpec
