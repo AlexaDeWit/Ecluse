@@ -130,6 +130,7 @@ case "$suite" in
       # pure re-export shims
       ./core/src/Ecluse/Core/Security.hs
       ./core/src/Ecluse/Core/Server/Pipeline.hs
+      ./core/src/Ecluse/Core/Worker.hs
       # pure protocol Handle (#16): the RegistryClient record + error newtypes, no
       # logic. Remove when S06 (npm-wire) adds real fetch/parse code and tests that
       # link it.
