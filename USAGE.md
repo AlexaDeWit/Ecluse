@@ -223,7 +223,7 @@ operator reference. **Keep the two in sync** when either changes.
 : _(No, default `30`)_ Seconds the graceful shutdown waits for in-flight requests and in-progress artifact streams to finish before the process exits. Positive integer.
 
 `ECLUSE_SERVE_MAX_IN_FLIGHT`
-: _(No, default `16`)_ Process-wide cap on concurrent metadata materialisation: whole packument requests and the public-metadata gate reached by a tarball miss. Work beyond the cap is rejected immediately with `503 Service Unavailable` and `Retry-After: 1`; it is not placed in an application queue. Trusted private tarball hits stream outside the cap, as do health probes and cheap local routes. Positive integer.
+: _(No, default `16`)_ Process-wide cap on concurrent metadata materialisation: whole packument requests and the public-metadata gate reached by a tarball miss. Work beyond the cap is rejected immediately with `503 Service Unavailable` and `Retry-After: 1`; it is not placed in an application queue. Trusted private tarball hits stream outside the cap, as do health probes and cheap local routes. Positive integer. **Note**: operators deploying Écluse within an orchestration mesh (e.g., Istio) can configure the mesh to automatically manage retries upon receiving this 503 response.
 
 `ECLUSE_PUBLIC_CONNECTIONS_PER_HOST`
 : _(No, default `10`)_ Maximum concurrent pooled connections to each public upstream host. Public metadata misses are single-flight-coalesced, so the default keeps the upstream library's conservative per-host bound. Positive integer.

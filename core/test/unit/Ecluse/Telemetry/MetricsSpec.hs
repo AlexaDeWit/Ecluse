@@ -48,11 +48,12 @@ catalogueSpec = describe "metric-name catalogue" $ do
     it "renders the ecluse.* catalogue and the HTTP semantic convention to their wire names" $ do
         let names = map metricName allMetricNames
         names
-            `shouldContain` [ "ecluse.serve.decision"
+                            `shouldContain` [ "ecluse.serve.decision"
                             , "ecluse.rule.denials"
                             , "ecluse.rule.eval.duration"
                             , "ecluse.rule.effectful.failures"
                             , "ecluse.rule.breaker.state"
+                            , "ecluse.serve.admission.in_flight"
                             , "ecluse.upstream.fetch.duration"
                             , "ecluse.upstream.fetch.errors"
                             , "ecluse.metadata_cache.requests"

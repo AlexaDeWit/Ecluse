@@ -259,7 +259,7 @@ serveWithDeps mode renderer deps name request respond
     | not (edgeAuthorised deps request) = liftIO (respond (edgeUnauthorised renderer))
     | otherwise = do
         rt <- asks ctxRuntime
-        withServeAdmission (srAdmission rt) (serveAdmitted rt) >>= \case
+        withServeAdmission (srMetrics rt) (srAdmission rt) (serveAdmitted rt) >>= \case
             Just received -> pure received
             Nothing -> liftIO $ do
                 mpServeDecision (srMetrics rt) Metric.Unavailable

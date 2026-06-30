@@ -37,6 +37,7 @@ module Ecluse.Telemetry.Instruments (
 
     -- * Serve decision
     recordServeDecision,
+    recordServeAdmissionInFlight,
 
     -- * Rule gate
     recordRuleDenial,
@@ -69,11 +70,13 @@ import OpenTelemetry.Metric.Core (
     Histogram (histogramRecord),
     Meter,
     MeterProvider,
+    UpDownCounter (upDownCounterAdd),
     defaultAdvisoryParameters,
     getMeter,
     meterCreateCounterInt64,
     meterCreateGaugeInt64,
     meterCreateHistogram,
+    meterCreateUpDownCounterInt64,
     noopMeterProvider,
  )
 
@@ -111,6 +114,7 @@ wiring is layered on as the subsystems that own them are built.
 -}
 data Metrics = Metrics
     { mServeDecision :: Counter Int64
+    , mServeAdmissionInFlight :: UpDownCounter Int64
     , mRuleDenials :: Counter Int64
     , mRuleEvalDuration :: Histogram
     , mRuleEffectfulFailures :: Counter Int64
@@ -144,6 +148,7 @@ newMetrics telemetry = do
     meter <- getMeter meterProvider ecluseScope
     Metrics
         <$> counter meter ServeDecision "{decision}" "serve decisions by admit/deny/unavailable"
+        <*> upDownCounter meter ServeAdmissionInFlight "{request}" "in-flight metadata parses"
         <*> counter meter RuleDenials "{denial}" "rule denials by rule and reason class"
         <*> histogram meter RuleEvalDuration "rule-evaluation latency by tier"
         <*> counter meter RuleEffectfulFailures "{failure}" "effectful-rule failures by cause"
@@ -169,6 +174,10 @@ newMetrics telemetry = do
     histogram meter name description =
         meterCreateHistogram meter (metricName name) (Just "s") (Just description) defaultAdvisoryParameters
 
+    upDownCounter :: Meter -> MetricName -> Text -> Text -> IO (UpDownCounter Int64)
+    upDownCounter meter name unit description =
+        meterCreateUpDownCounterInt64 meter (metricName name) (Just unit) (Just description) defaultAdvisoryParameters
+
     gauge :: Meter -> MetricName -> Text -> IO (Gauge Int64)
     gauge meter name description =
         meterCreateGaugeInt64 meter (metricName name) Nothing (Just description) defaultAdvisoryParameters
@@ -191,6 +200,7 @@ metricsPortOf :: Metrics -> MetricsPort
 metricsPortOf m =
     MetricsPort
         { mpServeDecision = recordServeDecision m
+        , mpServeAdmissionInFlight = recordServeAdmissionInFlight m
         , mpRuleDenial = recordRuleDenial m
         , mpRuleEvalDuration = recordRuleEvalDuration m
         , mpRuleEffectfulFailure = recordRuleEffectfulFailure m
@@ -221,6 +231,11 @@ workerMetricsPortOf m =
 recordServeDecision :: (MonadIO m) => Metrics -> Decision -> m ()
 recordServeDecision m decision =
     addOne (mServeDecision m) [LDecision decision]
+
+-- | Record a change in in-flight metadata parses (@ecluse.serve.admission.in_flight@).
+recordServeAdmissionInFlight :: (MonadIO m) => Metrics -> Int -> m ()
+recordServeAdmissionInFlight m delta =
+    addDelta (mServeAdmissionInFlight m) (fromIntegral delta) []
 
 {- | Record one rule denial (@ecluse.rule.denials@) by reason class and, for a policy
 denial, the deciding rule. A non-policy refusal (a missing-integrity or upstream cause)
@@ -319,6 +334,10 @@ recordCredentialTokenTtl m provider seconds =
 -- Add one to a counter under the given bounded labels.
 addOne :: (MonadIO m) => Counter Int64 -> [Label] -> m ()
 addOne instrument labels = liftIO (counterAdd instrument 1 (metricAttributes labels))
+
+-- Add a delta to an up-down counter under the given bounded labels.
+addDelta :: (MonadIO m) => UpDownCounter Int64 -> Int64 -> [Label] -> m ()
+addDelta instrument delta labels = liftIO (upDownCounterAdd instrument delta (metricAttributes labels))
 
 -- Record a histogram measurement under the given bounded labels.
 record :: (MonadIO m) => Histogram -> Double -> [Label] -> m ()

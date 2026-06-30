@@ -50,7 +50,7 @@ import Ecluse.Core.Server.Context (
     MountBinding (..),
     PackumentDeps (..),
     RequestCtx (RequestCtx),
-    ServeRuntime (ServeRuntime),
+    ServeRuntime (ServeRuntime, srMetrics),
     runHandler,
  )
 import Ecluse.Core.Server.Metadata (newNpmMetadataClient)
@@ -106,7 +106,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
         admission <- newServeAdmission 1
         rt <- mkRuntimeWith admission metricsPort
         deps <- depsFor 1
-        held <- withServeAdmission admission (captureServe rt (mountWith (Just deps)) (servePackument leftpad defaultRequest))
+        held <- withServeAdmission (srMetrics rt) admission (captureServe rt (mountWith (Just deps)) (servePackument leftpad defaultRequest))
         response <- maybe (expectationFailure "failed to acquire the test's outer admission slot" >> throwString "unreachable") pure held
         statusCode (responseStatus response) `shouldBe` 503
         (snd <$> find ((== hRetryAfter) . fst) (responseHeaders response)) `shouldBe` Just "1"
@@ -117,7 +117,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
             admission <- newServeAdmission 1
             rt <- mkRuntimeWith admission metricsPort
             deps <- depsFor port
-            saturated <- withServeAdmission admission (captureServe rt (mountWith (Just deps)) (servePackument leftpad defaultRequest))
+            saturated <- withServeAdmission (srMetrics rt) admission (captureServe rt (mountWith (Just deps)) (servePackument leftpad defaultRequest))
             (statusCode . responseStatus <$> saturated) `shouldBe` Just 503
             admitted <- captureServe rt (mountWith (Just deps)) (servePackument leftpad defaultRequest)
             statusCode (responseStatus admitted) `shouldBe` 200
@@ -128,7 +128,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
         rt <- mkRuntimeWith admission metricsPort
         deps <- depsFor 1
         held <-
-            withServeAdmission admission $
+            withServeAdmission (srMetrics rt) admission $
                 captureServe
                     rt
                     (mountWith (Just deps))
@@ -145,7 +145,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
             deps <- depsFor 1
             let privateDeps = deps{pdPrivateBaseUrl = "http://127.0.0.1:" <> show port}
             held <-
-                withServeAdmission admission $
+                withServeAdmission (srMetrics rt) admission $
                     captureServe
                         rt
                         (mountWith (Just privateDeps))

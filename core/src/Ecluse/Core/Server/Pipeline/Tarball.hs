@@ -353,7 +353,7 @@ servePublicArtifact ::
     Handler ResponseReceived
 servePublicArtifact mode rt renderer deps validators name version file respond = do
     let metrics = srMetrics rt
-    withServeAdmission (srAdmission rt) (gatePublicVersion rt deps name version file) >>= \case
+    withServeAdmission metrics (srAdmission rt) (gatePublicVersion rt deps name version file) >>= \case
         Just (Admitted artifact) -> do
             liftIO (mpServeDecision metrics Metric.Admit)
             liftIO (streamPublicArtifact mode rt renderer deps validators name version artifact respond)

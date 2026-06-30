@@ -15,6 +15,8 @@ module Ecluse.Core.Server.Admission (
 import UnliftIO (MonadUnliftIO)
 import UnliftIO.Exception qualified as UE
 
+import Ecluse.Core.Telemetry.Record (MetricsPort (..))
+
 {- | A process-wide serve admission handle. The constructor is hidden so only the
 checked acquire/release operation can mutate its remaining capacity.
 -}
@@ -44,9 +46,9 @@ unlimitedServeAdmission = UnlimitedServeAdmission
 {- | Run an action only when a slot is immediately available. 'Nothing' means the
 bound was already full; the caller should shed the request rather than queue it.
 -}
-withServeAdmission :: (MonadUnliftIO m) => ServeAdmission -> m a -> m (Maybe a)
-withServeAdmission UnlimitedServeAdmission action = Just <$> action
-withServeAdmission (BoundedServeAdmission slots) action =
+withServeAdmission :: (MonadUnliftIO m) => MetricsPort -> ServeAdmission -> m a -> m (Maybe a)
+withServeAdmission _ UnlimitedServeAdmission action = Just <$> action
+withServeAdmission metrics (BoundedServeAdmission slots) action =
     UE.mask $ \restore -> do
         acquired <- atomically $ do
             available <- readTVar slots
@@ -54,7 +56,7 @@ withServeAdmission (BoundedServeAdmission slots) action =
                 then pure False
                 else writeTVar slots (available - 1) >> pure True
         if acquired
-            then Just <$> (restore action `UE.finally` release)
+            then Just <$> (restore (liftIO (mpServeAdmissionInFlight metrics 1) >> action) `UE.finally` release)
             else pure Nothing
   where
-    release = atomically (modifyTVar' slots (+ 1))
+    release = atomically (modifyTVar' slots (+ 1)) >> liftIO (mpServeAdmissionInFlight metrics (-1))

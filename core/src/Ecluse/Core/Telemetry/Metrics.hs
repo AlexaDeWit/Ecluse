@@ -101,6 +101,8 @@ data MetricName
       RuleEffectfulFailures
     | -- | @ecluse.rule.breaker.state@ -- effectful\/mint breaker state by source (gauge).
       RuleBreakerState
+    | -- | @ecluse.serve.admission.in_flight@ -- in-flight metadata parses (up-down counter).
+      ServeAdmissionInFlight
     | -- | @ecluse.upstream.fetch.duration@ -- upstream fetch latency (histogram).
       UpstreamFetchDuration
     | -- | @ecluse.upstream.fetch.errors@ -- upstream fetch errors (counter).
@@ -138,6 +140,7 @@ metricName = \case
     RuleEvalDuration -> "ecluse.rule.eval.duration"
     RuleEffectfulFailures -> "ecluse.rule.effectful.failures"
     RuleBreakerState -> "ecluse.rule.breaker.state"
+    ServeAdmissionInFlight -> "ecluse.serve.admission.in_flight"
     UpstreamFetchDuration -> "ecluse.upstream.fetch.duration"
     UpstreamFetchErrors -> "ecluse.upstream.fetch.errors"
     MetadataCacheRequests -> "ecluse.metadata_cache.requests"
