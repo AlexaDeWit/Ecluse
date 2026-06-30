@@ -65,7 +65,7 @@ import Ecluse.Core.Worker (
     WorkerM,
     WorkerPolicies,
     WorkerPolicy (WorkerPolicy, wpNow, wpResolveVersion, wpRules),
-    WorkerRuntime (WorkerRuntime, wrHeartbeat, wrManager, wrMetrics, wrPolicies, wrQueue, wrRegistry, wrTracing),
+    WorkerRuntime (WorkerRuntime, wrHeartbeat, wrManager, wrMetrics, wrPolicies, wrQueue, wrRegistry, wrTracing, wrInjectTraceContext),
     heartbeatHealthy,
     lastPoll,
     newWorkerHeartbeat,
@@ -249,6 +249,7 @@ withRuntimePolicies policies metricsPort outcome body = do
                 , wrHeartbeat = heartbeat
                 , wrMetrics = metricsPort
                 , wrTracing = passthroughWorkerTracingPort
+                , wrInjectTraceContext = id
                 , wrPolicies = policies
                 }
     body runtime queue logRef
@@ -281,6 +282,7 @@ withQueueRuntime queue body = do
                 , wrHeartbeat = heartbeat
                 , wrMetrics = noopWorkerMetricsPort
                 , wrTracing = passthroughWorkerTracingPort
+                , wrInjectTraceContext = id
                 , wrPolicies = admitPolicies
                 }
     body runtime

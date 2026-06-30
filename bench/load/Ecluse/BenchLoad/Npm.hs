@@ -136,7 +136,8 @@ import Ecluse.Core.Worker (
         wrPolicies,
         wrQueue,
         wrRegistry,
-        wrTracing
+        wrTracing,
+        wrInjectTraceContext
     ),
     newWorkerHeartbeat,
     processBatch,
@@ -372,6 +373,7 @@ workerScenario =
                             , wrHeartbeat = heartbeat
                             , wrMetrics = noopWorkerMetricsPort
                             , wrTracing = passthroughWorkerTracingPort
+                            , wrInjectTraceContext = id
                             , wrPolicies = admitAllPolicies
                             }
                     artUrl = localhost artPort <> "/" <> packageText <> "/-/" <> packageText <> "-1.0.0.tgz"

@@ -19,7 +19,7 @@ import Data.Text qualified as T
 import System.Exit (ExitCode (ExitSuccess))
 import Test.Hspec
 
-import Ecluse.E2E.Fixtures (PkgSpec, allowPkg, denyPkg, headPkg, mirrorPkg, psName, psVersion, tamperPkg, telemetryPkg)
+import Ecluse.E2E.Fixtures (PkgSpec, allowPkg, denyPkg, headPkg, mirrorPkg, psName, psVersion, tamperPkg, telemetryDdPkg, telemetryPkg)
 import Ecluse.E2E.Harness
 
 shouldSucceed :: NpmResult -> IO ()
@@ -220,7 +220,7 @@ telemetryScenarios = do
                 -- A mirror round-trip drives request spans plus a worker job span, the
                 -- span-scoped path whose log line carries a populated dd.trace_id.
                 withNpmProject e2e $ \proj -> do
-                    installed <- npmInstallIn proj (psName telemetryPkg)
+                    installed <- npmInstallIn proj (psName telemetryDdPkg)
                     shouldSucceed installed
                 -- The exported signals carry the UST resource attributes the resolver
                 -- derived from the DD_* identity (service.name/deployment.environment/
@@ -253,9 +253,6 @@ telemetryScenarios = do
                                 && ("\"version\":\"" <> ddTagVersion <> "\"") `T.isInfixOf` logs
                         )
                         80
-                unless correlated $ do
-                    logs <- proxyContainerLogs e2e
-                    expectationFailure $ "Datadog log correlation failed. Proxy logs:\n" <> T.unpack logs
                 correlated `shouldBe` True
 
 {- | The first-party publish scenarios. The round-trip and the anti-shadowing refusal each

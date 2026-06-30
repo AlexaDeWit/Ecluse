@@ -47,7 +47,7 @@ module Ecluse.Env (
     lastPoll,
 ) where
 
-import Katip (LogEnv)
+import Katip (LogEnv, katipAddContext)
 import Network.HTTP.Client (Manager)
 import UnliftIO (MonadUnliftIO, bracket)
 
@@ -58,7 +58,7 @@ import Ecluse.Core.Server.Context (ServeRuntime (..))
 import Ecluse.Core.Worker (WorkerHeartbeat, WorkerPolicies, WorkerRuntime (..), lastPoll, newWorkerHeartbeat, recordPoll)
 import Ecluse.Log (DdContext)
 import Ecluse.Telemetry (Telemetry)
-import Ecluse.Telemetry.Correlation (ddIdentityFromEnvironment)
+import Ecluse.Telemetry.Correlation (ddIdentityFromEnvironment, ddPayloadNow)
 import Ecluse.Telemetry.Instruments (Metrics, metricsPortOf, newMetrics, workerMetricsPortOf)
 import Ecluse.Telemetry.Tracing (tracingPortOf, workerTracingPortOf)
 
@@ -243,5 +243,8 @@ workerRuntimeOf policies env =
         , wrHeartbeat = envWorkerHeartbeat env
         , wrMetrics = workerMetricsPortOf (envMetrics env)
         , wrTracing = workerTracingPortOf (envTelemetry env)
+        , wrInjectTraceContext = \action -> do
+            dd <- liftIO $ ddPayloadNow (envDdContext env)
+            katipAddContext dd action
         , wrPolicies = policies
         }

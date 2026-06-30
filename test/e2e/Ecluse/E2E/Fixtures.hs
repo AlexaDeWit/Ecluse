@@ -25,6 +25,7 @@ module Ecluse.E2E.Fixtures (
     tamperPkg,
     headPkg,
     telemetryPkg,
+    telemetryDdPkg,
     fixturePackages,
     buildFixtures,
 ) where
@@ -91,9 +92,12 @@ headPkg = defaultPkgSpec "e2e-head"
 telemetryPkg :: PkgSpec
 telemetryPkg = defaultPkgSpec "e2e-telemetry"
 
+telemetryDdPkg :: PkgSpec
+telemetryDdPkg = defaultPkgSpec "e2e-telemetry-datadog"
+
 -- | The full fixture set the stub serves.
 fixturePackages :: [PkgSpec]
-fixturePackages = [allowPkg, denyPkg, mirrorPkg, tamperPkg, headPkg, telemetryPkg]
+fixturePackages = [allowPkg, denyPkg, mirrorPkg, tamperPkg, headPkg, telemetryPkg, telemetryDdPkg]
 
 {- | Write every fixture package under @root@ (the directory bind-mounted into the
 nginx stub as its document root). Creates the packument and the gzipped artifact and
