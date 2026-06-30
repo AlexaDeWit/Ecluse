@@ -126,6 +126,10 @@ library ecluse-core
     Ecluse.Core.Server.Context
     Ecluse.Core.Server.Metadata
     Ecluse.Core.Server.Pipeline
+    Ecluse.Core.Server.Pipeline.Packument
+    Ecluse.Core.Server.Pipeline.Tarball
+    Ecluse.Core.Server.Pipeline.Publish
+    Ecluse.Core.Server.Pipeline.Shared
     Ecluse.Core.Server.Pipeline.Internal
     Ecluse.Core.Server.Response
     Ecluse.Core.Server.Route
