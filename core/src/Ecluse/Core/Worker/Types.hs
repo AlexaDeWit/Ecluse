@@ -6,9 +6,6 @@ module Ecluse.Core.Worker.Types (
     runWorkerM,
 ) where
 
-import Control.Monad.IO.Class (MonadIO)
-import Control.Monad.Reader (MonadReader, ReaderT, runReaderT)
-import Data.Map (Map)
 import Data.Time (UTCTime)
 import Katip (Katip, KatipContext, KatipContextT, LogEnv, SimpleLogPayload, runKatipContextT)
 import Network.HTTP.Client (Manager)
