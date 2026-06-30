@@ -102,6 +102,7 @@ import Network.Socket (
 import System.Directory (createDirectoryIfMissing, doesFileExist, getTemporaryDirectory, removePathForcibly)
 import System.Exit (ExitCode (ExitSuccess))
 import System.FilePath ((</>))
+import System.IO.Unsafe (unsafePerformIO)
 import System.Process.Typed (proc, readProcess, readProcessStdout, setEnv, setWorkingDir)
 import UnliftIO (bracket, bracket_, handleAny)
 import UnliftIO.Concurrent (threadDelay)
@@ -174,6 +175,22 @@ dockerDaemonReachable =
 
 -- ── lifecycle ───────────────────────────────────────────────────────────────
 
+{-# NOINLINE globalFixtures #-}
+globalFixtures :: FilePath
+globalFixtures = unsafePerformIO $ do
+    tmpRoot <- getTemporaryDirectory
+    let workDir = tmpRoot </> "ecluse-e2e-shared-fixtures"
+        htmlDir = workDir </> "html"
+        certsDir = workDir </> "certs"
+        verdConf = workDir </> "verdaccio.yaml"
+        nginxConf = workDir </> "nginx.conf"
+    createDirectoryIfMissing True htmlDir
+    buildFixtures htmlDir fixturePackages
+    writeFileText verdConf verdaccioConfig
+    writeFileText nginxConf nginxStubConfig
+    generateCerts certsDir
+    pure workDir
+
 {- | Bring the network + base containers up, wait for proxy readiness, run the action,
 then tear everything down on every exit path — the plain topology ('defaultE2EConfig'),
 no collector and no extra proxy environment. Assumes 'e2eUnavailable' returned 'Nothing'.
@@ -193,29 +210,20 @@ withE2EWith :: E2EConfig -> (E2E -> IO ()) -> IO ()
 withE2EWith cfg action = do
     image <- maybe (fail (imageVar <> " unset")) pure =<< lookupEnv imageVar
     sfx <- uniqueSuffix
-    tmpRoot <- getTemporaryDirectory
     let net = "ecluse-e2e-net-" <> sfx
         stub = "ecluse-e2e-stub-" <> sfx
         verd = "ecluse-e2e-verd-" <> sfx
         mini = "ecluse-e2e-mini-" <> sfx
         prox = "ecluse-e2e-proxy-" <> sfx
         coll = "ecluse-e2e-otelcol-" <> sfx
-        workDir = tmpRoot </> ("ecluse-e2e-" <> sfx)
-        htmlDir = workDir </> "html"
-        certsDir = workDir </> "certs"
-        verdConf = workDir </> "verdaccio.yaml"
-        nginxConf = workDir </> "nginx.conf"
+        htmlDir = globalFixtures </> "html"
+        certsDir = globalFixtures </> "certs"
+        verdConf = globalFixtures </> "verdaccio.yaml"
+        nginxConf = globalFixtures </> "nginx.conf"
     bracket
         (pure ())
-        (\_ -> teardown net [prox, verd, stub, mini, coll] workDir)
+        (\_ -> teardown net [prox, verd, stub, mini, coll] "")
         ( \_ -> do
-            createDirectoryIfMissing True htmlDir
-            buildFixtures htmlDir fixturePackages
-            writeFileText verdConf verdaccioConfig
-            writeFileText nginxConf nginxStubConfig
-            -- The test CA + server cert (SANs upstream, mirror) the TLS stubs serve and the
-            -- proxy trusts, plus the trust bundle the proxy's SSL_CERT_FILE points at.
-            generateCerts certsDir
             dockerOk ["network", "create", net]
             -- The OTLP collector, when the scenario asks for one: an OTLP/HTTP receiver
             -- into a `debug` exporter at detailed verbosity (so each received metric and
@@ -381,7 +389,7 @@ proxyEnv hostPort queueUrl =
     , -- Add DenyInstallTimeExecution so the deny scenario has a rule to fire.
       -- We must also explicitly disable 'min-age' from the opinionated default policy,
       -- otherwise it will block the e2e test's freshly-created test packages.
-      ("ECLUSE_RULES", "{\"min-age\":{\"enabled\":false},\"deny-install-scripts\":{\"type\":\"DenyInstallTimeExecution\"}}")
+      ("ECLUSE_RULES", "{\"min-age\":{\"type\":\"AllowIfOlderThan\",\"ageSeconds\":0},\"deny-install-scripts\":{\"type\":\"DenyInstallTimeExecution\"}}")
     ]
 
 teardown :: String -> [String] -> FilePath -> IO ()
