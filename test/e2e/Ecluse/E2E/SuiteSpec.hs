@@ -37,8 +37,8 @@ spec = do
     unavailable <- runIO e2eUnavailable
     case unavailable of
         Just reason -> it "end-to-end suite (environment unavailable)" (pendingWith reason)
-        Nothing -> do
-            around withE2E scenarios
+        Nothing -> aroundAll withGlobalDataPlane $ do
+            scenarios
             telemetryScenarios
             publishScenarios
             pendingScenarios
@@ -46,8 +46,8 @@ spec = do
 {- | The active scenarios. Under 'around' each @it@ gets its own freshly booted
 environment, torn down before the next — per-test isolation (see the module header).
 -}
-scenarios :: SpecWith E2E
-scenarios = do
+scenarios :: SpecWith GlobalDataPlane
+scenarios = aroundWith (withE2E defaultE2EConfig) $ do
     describe "public surface — install and policy" $ do
         it "installs an allow-listed package end to end" $ \e2e -> do
             res <- npmInstall e2e (psName allowPkg)
@@ -122,12 +122,12 @@ telemetry dialect ('E2EConfig') — under its own 'around', still per-test isola
 Datadog SaaS); the stdout/log validation keys on the proxy container's own JSONL stream.
 See @planning\/slices\/S53-e2e-ecosystem.md@.
 -}
-telemetryScenarios :: Spec
+telemetryScenarios :: SpecWith GlobalDataPlane
 telemetryScenarios = do
     -- #324 — real healthy OTLP publication: with telemetry on and an OTLP endpoint, a
     -- real npm request's ecluse.* metrics and its span actually reach a collector.
     describe "telemetry — OTLP healthy publication (#324)" $
-        around (withE2EWith E2EConfig{ecCollector = True, ecExtraEnv = otlpCollectorEnv}) $
+        aroundWith (withE2EWith E2EConfig{ecCollector = True, ecExtraEnv = otlpCollectorEnv}) $
             it "exports ecluse.* metrics and a span to the collector on a real npm request" $ \e2e -> do
                 res <- npmInstall e2e (psName allowPkg)
                 shouldSucceed res
@@ -147,7 +147,7 @@ telemetryScenarios = do
     -- the collector's debug exporter — so the domain instrumentation is exercised end to end,
     -- not only the WAI/http-client spans the #324 case proves.
     describe "telemetry — domain-span emission (#307)" $
-        around (withE2EWith E2EConfig{ecCollector = True, ecExtraEnv = otlpCollectorEnv}) $
+        aroundWith (withE2EWith E2EConfig{ecCollector = True, ecExtraEnv = otlpCollectorEnv}) $
             it "emits the rule-eval, mirror-enqueue, and mirror-job domain spans to the collector on a mirror round-trip" $ \e2e -> do
                 -- A public-served install gates the version (rule-eval span) and enqueues a
                 -- mirror (enqueue span); the worker then mirrors it (job span).
@@ -172,7 +172,7 @@ telemetryScenarios = do
     -- #325(a) — OTLP absent / telemetry off: the real image still boots, serves a real
     -- install, and logs JSONL to stdout/stderr, with no collector anywhere.
     describe "telemetry — OTLP off, no collector (#325)" $
-        around (withE2EWith E2EConfig{ecCollector = False, ecExtraEnv = [("ECLUSE_TELEMETRY", "off")]}) $
+        aroundWith (withE2EWith E2EConfig{ecCollector = False, ecExtraEnv = [("ECLUSE_TELEMETRY", "off")]}) $
             it "starts, serves a real install, and logs JSONL to stdout — no collector needed" $ \e2e -> do
                 res <- npmInstall e2e (psName allowPkg)
                 shouldSucceed res
@@ -192,7 +192,7 @@ telemetryScenarios = do
     -- the first failure is the "telemetry export error" line this asserts on, on top of the
     -- keeps-serving proof.
     describe "telemetry — OTLP on but the collector unreachable (#325)" $
-        around (withE2EWith E2EConfig{ecCollector = False, ecExtraEnv = otlpCollectorEnv}) $
+        aroundWith (withE2EWith E2EConfig{ecCollector = False, ecExtraEnv = otlpCollectorEnv}) $
             it "surfaces a throttled export-failure warning yet keeps serving — an absent collector degrades visibly, no crash" $ \e2e -> do
                 firstInstall <- npmInstall e2e (psName allowPkg)
                 shouldSucceed firstInstall
@@ -215,7 +215,7 @@ telemetryScenarios = do
     -- the self-aligning resolver to Datadog unified-service-tag resource attributes on the
     -- exported signals and the dd object on the JSONL logs.
     describe "telemetry — Datadog pattern (#323)" $
-        around (withE2EWith E2EConfig{ecCollector = True, ecExtraEnv = datadogCollectorEnv}) $
+        aroundWith (withE2EWith E2EConfig{ecCollector = True, ecExtraEnv = datadogCollectorEnv}) $
             it "carries the Datadog unified-service tags to the collector and the dd object onto the logs" $ \e2e -> do
                 -- A mirror round-trip drives request spans plus a worker job span, the
                 -- span-scoped path whose log line carries a populated dd.trace_id.
@@ -263,10 +263,10 @@ back over the private leg" model. The opt-in @405@ posture runs on the base topo
 publication target). Each is per-test isolated like 'scenarios'. See
 @planning\/slices\/S52-publish-path.md@.
 -}
-publishScenarios :: Spec
+publishScenarios :: SpecWith GlobalDataPlane
 publishScenarios = do
     describe "first-party publish — publication target enabled" $
-        around (withE2EWith E2EConfig{ecCollector = False, ecExtraEnv = publishTargetEnv}) $ do
+        aroundWith (withE2EWith E2EConfig{ecCollector = False, ecExtraEnv = publishTargetEnv}) $ do
             it "publishes an in-scope package, then installs it back through the private leg" $ \e2e -> do
                 let name = publishInScopeName
                     ver = publishVersion
@@ -303,7 +303,7 @@ publishScenarios = do
                 reached `shouldBe` False
 
     describe "first-party publish — opt-in posture" $
-        around withE2E $
+        aroundWith (withE2E defaultE2EConfig) $
             it "answers a publish with 405 when no publication target is configured" $ \e2e -> do
                 -- The base topology sets no ECLUSE_PUBLICATION_TARGET, so the publish path is
                 -- off: a PUT /{pkg} is not an allowed method (no implicit write path). A raw
@@ -315,7 +315,7 @@ publishScenarios = do
 environment. Graceful drain (#160) @SIGTERM@s the proxy, so when written it belongs in the
 per-test isolated 'scenarios' above.
 -}
-pendingScenarios :: Spec
+pendingScenarios :: SpecWith GlobalDataPlane
 pendingScenarios =
     describe "graceful shutdown" $
         it "drains in-flight work on SIGTERM" $

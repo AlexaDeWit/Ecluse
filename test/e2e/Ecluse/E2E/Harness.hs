@@ -23,6 +23,8 @@ cases @pending@ rather than fail on a machine without the setup.
 module Ecluse.E2E.Harness (
     E2E (..),
     e2eUnavailable,
+    GlobalDataPlane (..),
+    withGlobalDataPlane,
     withE2E,
     withE2EWith,
     E2EConfig (..),
@@ -191,12 +193,93 @@ globalFixtures = unsafePerformIO $ do
     generateCerts certsDir
     pure workDir
 
+data GlobalDataPlane = GlobalDataPlane
+    { gdpNet :: String
+    , gdpStub :: String
+    , gdpVerd :: String
+    , gdpMini :: String
+    , gdpVerdPort :: Int
+    , gdpMiniPort :: Int
+    , gdpWorkDir :: FilePath
+    }
+
+withGlobalDataPlane :: (GlobalDataPlane -> IO ()) -> IO ()
+withGlobalDataPlane action = do
+    sfx <- uniqueSuffix
+    let net = "ecluse-e2e-global-net-" <> sfx
+        stub = "ecluse-e2e-global-stub-" <> sfx
+        verd = "ecluse-e2e-global-verd-" <> sfx
+        mini = "ecluse-e2e-global-mini-" <> sfx
+        workDir = globalFixtures
+        htmlDir = workDir </> "html"
+        certsDir = workDir </> "certs"
+        verdConf = workDir </> "verdaccio.yaml"
+        nginxConf = workDir </> "nginx.conf"
+    bracket
+        (pure ())
+        (\_ -> teardown net [verd, stub, mini] "")
+        ( \_ -> do
+            dockerOk ["network", "create", net]
+            dockerOk
+                [ "run"
+                , "-d"
+                , "--name"
+                , verd
+                , "--network"
+                , net
+                , "--network-alias"
+                , "verdaccio"
+                , "-p"
+                , "127.0.0.1:0:4873"
+                , "-v"
+                , verdConf <> ":/verdaccio/conf/config.yaml:ro"
+                , "verdaccio/verdaccio:5"
+                ]
+            dockerOk
+                [ "run"
+                , "-d"
+                , "--name"
+                , stub
+                , "--network"
+                , net
+                , "--network-alias"
+                , "upstream"
+                , "--network-alias"
+                , "mirror"
+                , "-v"
+                , htmlDir <> ":/usr/share/nginx/html:ro"
+                , "-v"
+                , nginxConf <> ":/etc/nginx/conf.d/default.conf:ro"
+                , "-v"
+                , certsDir <> ":/certs:ro"
+                , "nginx:alpine"
+                ]
+            dockerOk
+                [ "run"
+                , "-d"
+                , "--name"
+                , mini
+                , "--network"
+                , net
+                , "--network-alias"
+                , "ministack"
+                , "-p"
+                , "127.0.0.1:0:4566"
+                , "ministackorg/ministack@sha256:5164592def36af01b8ac76364028e27c5ecd8f1494c8a53d5fcd811cc7dfb594"
+                ]
+            miniPort <- publishedPort mini "4566/tcp"
+            verdPort <- publishedPort verd "4873/tcp"
+            action GlobalDataPlane{gdpNet = net, gdpStub = stub, gdpVerd = verd, gdpMini = mini, gdpVerdPort = verdPort, gdpMiniPort = miniPort, gdpWorkDir = workDir}
+        )
+
 {- | Bring the network + base containers up, wait for proxy readiness, run the action,
 then tear everything down on every exit path — the plain topology ('defaultE2EConfig'),
 no collector and no extra proxy environment. Assumes 'e2eUnavailable' returned 'Nothing'.
 -}
-withE2E :: (E2E -> IO ()) -> IO ()
-withE2E = withE2EWith defaultE2EConfig
+withE2E :: GlobalDataPlane -> (E2E -> IO ()) -> IO ()
+withE2E gdp = withE2EWith cfg gdp
+  where
+    cfg = defaultE2EConfig
 
 {- | 'withE2E' parameterised by an 'E2EConfig': optionally stand up an OTLP collector
 the proxy exports to (on the same TEST-NET, reached by its @otelcol@ network alias),
@@ -206,25 +289,21 @@ receiving when the proxy makes its first export, and is torn down with the other
 case under 'withE2EWith' is still per-test isolated: its own network, containers, and
 collector, freshly booted and torn down (see "Ecluse.E2E.SuiteSpec").
 -}
-withE2EWith :: E2EConfig -> (E2E -> IO ()) -> IO ()
-withE2EWith cfg action = do
+withE2EWith :: E2EConfig -> GlobalDataPlane -> (E2E -> IO ()) -> IO ()
+withE2EWith cfg gdp action = do
     image <- maybe (fail (imageVar <> " unset")) pure =<< lookupEnv imageVar
     sfx <- uniqueSuffix
-    let net = "ecluse-e2e-net-" <> sfx
-        stub = "ecluse-e2e-stub-" <> sfx
-        verd = "ecluse-e2e-verd-" <> sfx
-        mini = "ecluse-e2e-mini-" <> sfx
+    let net = gdpNet gdp
+        stub = gdpStub gdp
+        verd = gdpVerd gdp
+        mini = gdpMini gdp
         prox = "ecluse-e2e-proxy-" <> sfx
         coll = "ecluse-e2e-otelcol-" <> sfx
-        htmlDir = globalFixtures </> "html"
-        certsDir = globalFixtures </> "certs"
-        verdConf = globalFixtures </> "verdaccio.yaml"
-        nginxConf = globalFixtures </> "nginx.conf"
+        certsDir = gdpWorkDir gdp </> "certs"
     bracket
         (pure ())
-        (\_ -> teardown net [prox, verd, stub, mini, coll] "")
+        (\_ -> teardown "" [prox, coll] "")
         ( \_ -> do
-            dockerOk ["network", "create", net]
             -- The OTLP collector, when the scenario asks for one: an OTLP/HTTP receiver
             -- into a `debug` exporter at detailed verbosity (so each received metric and
             -- span is written to its logs), reached by the proxy as `otelcol`. Brought up
@@ -251,69 +330,12 @@ withE2EWith cfg action = do
                     ]
                 ready <- awaitContainerLog coll (T.isInfixOf "Everything is ready") 240
                 unless ready (fail "OTLP collector did not become ready within the timeout")
-            -- Verdaccio private upstream + mirror backend, reachable on the internal
-            -- network as `verdaccio` over plain HTTP (the nginx `mirror` stub fronts it
-            -- with TLS). Started before nginx so the `mirror` server block's proxy_pass
-            -- host resolves. Its host-published port stays HTTP for the harness's own polls.
-            dockerOk
-                [ "run"
-                , "-d"
-                , "--name"
-                , verd
-                , "--network"
-                , net
-                , "--network-alias"
-                , "verdaccio"
-                , "-p"
-                , "127.0.0.1:0:4873"
-                , "-v"
-                , verdConf <> ":/verdaccio/conf/config.yaml:ro"
-                , "verdaccio/verdaccio:5"
-                ]
-            -- nginx TLS terminator for both registry stubs, reached by the proxy as
-            -- `upstream` (static packuments/tarballs) and `mirror` (reverse-proxied to
-            -- Verdaccio). It serves the generated test cert mounted at /certs.
-            dockerOk
-                [ "run"
-                , "-d"
-                , "--name"
-                , stub
-                , "--network"
-                , net
-                , "--network-alias"
-                , "upstream"
-                , "--network-alias"
-                , "mirror"
-                , "-v"
-                , htmlDir <> ":/usr/share/nginx/html:ro"
-                , "-v"
-                , nginxConf <> ":/etc/nginx/conf.d/default.conf:ro"
-                , "-v"
-                , certsDir <> ":/certs:ro"
-                , "nginx:alpine"
-                ]
-            -- ministack SQS emulator, reachable by the proxy as `ministack` and by the
-            -- harness on a published host port (to create the queue). The image is used
-            -- directly (no testcontainers-hs label-parsing workaround needed here).
-            dockerOk
-                [ "run"
-                , "-d"
-                , "--name"
-                , mini
-                , "--network"
-                , net
-                , "--network-alias"
-                , "ministack"
-                , "-p"
-                , "127.0.0.1:0:4566"
-                , "ministackorg/ministack@sha256:5164592def36af01b8ac76364028e27c5ecd8f1494c8a53d5fcd811cc7dfb594"
-                ]
             manager <- newManager defaultManagerSettings
             -- Create the mirror queue in ministack and learn its URL. The proxy routes to
             -- ministack via AWS_ENDPOINT_URL_SQS and matches the queue by its path, so the
             -- URL's host (here ministack's own `localhost:4566`) is immaterial.
-            miniPort <- publishedPort mini "4566/tcp"
-            queueUrl <- createMinistackQueue manager miniPort "ecluse-e2e"
+            let queueName = "ecluse-e2e-queue-" <> T.pack sfx
+            queueUrl <- createMinistackQueue manager (gdpMiniPort gdp) queueName
             -- Pick the host port up front so ECLUSE_PUBLIC_URL (which makes the proxy
             -- rewrite dist.tarball to an absolute, npm-fetchable URL) is known before
             -- the container starts — the assigned port is only readable after.
@@ -336,8 +358,8 @@ withE2EWith cfg action = do
                 ]
                     <> concatMap (\(k, v) -> ["-e", toString (k <> "=" <> v)]) (proxyEnv proxyPort queueUrl <> ecExtraEnv cfg)
                     <> [image]
-            verdPort <- publishedPort verd "4873/tcp"
-            let base = "http://127.0.0.1:" <> show proxyPort
+            let verdPort = gdpVerdPort gdp
+                base = "http://127.0.0.1:" <> show proxyPort
                 e2e =
                     E2E
                         { e2eRegistry = base <> "/npm/"
@@ -395,8 +417,8 @@ proxyEnv hostPort queueUrl =
 teardown :: String -> [String] -> FilePath -> IO ()
 teardown net containers workDir = do
     for_ containers (\c -> void (readProcess (proc "docker" ["rm", "-f", c])))
-    void (readProcess (proc "docker" ["network", "rm", net]))
-    handleAny (const pass) (removePathForcibly workDir)
+    unless (null net) $ void (readProcess (proc "docker" ["network", "rm", net]))
+    unless (null workDir) $ handleAny (const pass) (removePathForcibly workDir)
 
 -- ── telemetry topology ────────────────────────────────────────────────────────
 
