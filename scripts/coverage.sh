@@ -142,6 +142,9 @@ case "$suite" in
       # (test/integration/Ecluse/Server/PublishSpec.hs).
       ./core/src/Ecluse/Core/Server/Pipeline/Publish.hs
     )
+    
+    # Drop orphaned coverage records from the CI cache since WorkerSpec was split and deleted.
+    support_exclude+=(-x "Ecluse.WorkerSpec")
     ;;
   ecluse-unit)
     src_dir="src"
