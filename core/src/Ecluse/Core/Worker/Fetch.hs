@@ -30,7 +30,6 @@ fetchArtifactBytes url = do
                 Right (Left (ResponseBoundExceeded limitErr)) ->
                     Left ("artifact exceeded the response bound: " <> show limitErr)
                 Right (Right bytes) -> Right bytes
-  where
 
 {- Open the artifact request and read its body chunk-by-chunk through the bounded
 read, returning the whole bytes when within the artifact cap or a typed
