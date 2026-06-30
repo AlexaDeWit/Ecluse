@@ -276,10 +276,8 @@ withGlobalDataPlane action = do
 then tear everything down on every exit path — the plain topology ('defaultE2EConfig'),
 no collector and no extra proxy environment. Assumes 'e2eUnavailable' returned 'Nothing'.
 -}
-withE2E :: GlobalDataPlane -> (E2E -> IO ()) -> IO ()
-withE2E gdp = withE2EWith cfg gdp
-  where
-    cfg = defaultE2EConfig
+withE2E :: (E2E -> IO ()) -> GlobalDataPlane -> IO ()
+withE2E = withE2EWith defaultE2EConfig
 
 {- | 'withE2E' parameterised by an 'E2EConfig': optionally stand up an OTLP collector
 the proxy exports to (on the same TEST-NET, reached by its @otelcol@ network alias),
@@ -289,14 +287,12 @@ receiving when the proxy makes its first export, and is torn down with the other
 case under 'withE2EWith' is still per-test isolated: its own network, containers, and
 collector, freshly booted and torn down (see "Ecluse.E2E.SuiteSpec").
 -}
-withE2EWith :: E2EConfig -> GlobalDataPlane -> (E2E -> IO ()) -> IO ()
-withE2EWith cfg gdp action = do
+withE2EWith :: E2EConfig -> (E2E -> IO ()) -> GlobalDataPlane -> IO ()
+withE2EWith cfg action gdp = do
     image <- maybe (fail (imageVar <> " unset")) pure =<< lookupEnv imageVar
     sfx <- uniqueSuffix
     let net = gdpNet gdp
         stub = gdpStub gdp
-        verd = gdpVerd gdp
-        mini = gdpMini gdp
         prox = "ecluse-e2e-proxy-" <> sfx
         coll = "ecluse-e2e-otelcol-" <> sfx
         certsDir = gdpWorkDir gdp </> "certs"

@@ -47,7 +47,7 @@ spec = do
 environment, torn down before the next — per-test isolation (see the module header).
 -}
 scenarios :: SpecWith GlobalDataPlane
-scenarios = aroundWith (withE2E defaultE2EConfig) $ do
+scenarios = aroundWith withE2E $ do
     describe "public surface — install and policy" $ do
         it "installs an allow-listed package end to end" $ \e2e -> do
             res <- npmInstall e2e (psName allowPkg)
@@ -303,7 +303,7 @@ publishScenarios = do
                 reached `shouldBe` False
 
     describe "first-party publish — opt-in posture" $
-        aroundWith (withE2E defaultE2EConfig) $
+        aroundWith withE2E $
             it "answers a publish with 405 when no publication target is configured" $ \e2e -> do
                 -- The base topology sets no ECLUSE_PUBLICATION_TARGET, so the publish path is
                 -- off: a PUT /{pkg} is not an allowed method (no implicit write path). A raw
@@ -318,7 +318,7 @@ per-test isolated 'scenarios' above.
 pendingScenarios :: SpecWith GlobalDataPlane
 pendingScenarios =
     describe "graceful shutdown" $
-        it "drains in-flight work on SIGTERM" $
+        it "drains in-flight work on SIGTERM" $ \_ ->
             pendingWith "activates with the #160 graceful-drain work"
 
 -- | The mount-relative tarball path for a fixture package's single version.
