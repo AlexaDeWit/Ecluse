@@ -432,7 +432,7 @@ mirrorJob url hashes size =
 succeedingPublishClient :: IORef Int -> RegistryClient
 succeedingPublishClient counter =
     refusingRegistry
-        { publishArtifact = \_ _ _ -> do
+        { publishArtifact = \_ _ _ _ -> do
             atomicModifyIORef' counter (\n -> (n + 1, ()))
             pure (Right ())
         }
@@ -600,7 +600,7 @@ refusingRegistry =
     RegistryClient
         { fetchMetadata = const (refuse "fetchMetadata")
         , fetchArtifact = \_ _ -> refuse "fetchArtifact"
-        , publishArtifact = \_ _ _ -> refuse "publishArtifact"
+        , publishArtifact = \_ _ _ _ -> refuse "publishArtifact"
         , parsePackageInfo = \_ _ -> Left (ParseError "unused")
         , parseVersionDetails = \_ _ -> Left (ParseError "unused")
         , parseVersionList = const (Left (ParseError "unused"))

@@ -28,7 +28,7 @@ fakeRegistry =
     RegistryClient
         { fetchMetadata = const unused
         , fetchArtifact = \_ _ -> unused
-        , publishArtifact = \_ _ _ -> unused
+        , publishArtifact = \_ _ _ _ -> unused
         , parsePackageInfo = \_ _ -> Left parseStub
         , parseVersionDetails = \_ _ -> Left parseStub
         , parseVersionList = \(RegistryResponse body) -> Left (ParseError (decodeUtf8 body))
@@ -200,7 +200,8 @@ spec = do
             -- serving phantom data or reporting a publish that never happened.
             shouldRefuse (fetchMetadata unconfiguredRegistry pkg)
             shouldRefuse (fetchArtifact unconfiguredRegistry pkg ver)
-            shouldRefuse (publishArtifact unconfiguredRegistry pkg ver "bytes")
+            {- HLINT ignore "Avoid restricted function" -}
+            shouldRefuse (publishArtifact unconfiguredRegistry pkg ver (error "publishArtifact should not evaluate the artifact in this test") "bytes")
 
         it "fails every parse with an explanatory error" $ do
             let resp = RegistryResponse "anything"

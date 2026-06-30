@@ -47,6 +47,7 @@ module Ecluse.Core.Registry (
 ) where
 
 import Ecluse.Core.Package (PackageDetails, PackageInfo, PackageName)
+import Ecluse.Core.Queue (MirrorArtifact)
 import Ecluse.Core.Version (Version)
 
 {- | A raw response fetched from a registry -- the unparsed bytes of a metadata
@@ -154,11 +155,14 @@ data RegistryClient = RegistryClient
     -- ^ Fetch a package's metadata document (its packument) from the registry.
     , fetchArtifact :: PackageName -> Version -> IO RegistryResponse
     -- ^ Fetch the artifact bytes for one version.
-    , publishArtifact :: PackageName -> Version -> ByteString -> IO (Either PublishFault ())
-    {- ^ Publish an artifact's bytes for one version to the registry. Idempotent
-    at the protocol level (versions are immutable), so a redelivered mirror
-    job's re-publish is safe. A failure is reported as a 'PublishFault' __value__
-    -- 'PublishRejected' (retry) or 'PublishUrlUnformable' (drop) -- never thrown,
+    , publishArtifact :: PackageName -> Version -> MirrorArtifact -> ByteString -> IO (Either PublishFault ())
+    {- ^ Publish one version's artifact to the registry, given its metadata
+    ('MirrorArtifact' — filename, integrity hashes, declared size) and the raw
+    tarball bytes. The adapter is responsible for assembling the
+    ecosystem-specific publish document from these inputs. Idempotent at the
+    protocol level (versions are immutable), so a redelivered mirror job's
+    re-publish is safe. A failure is reported as a 'PublishFault' __value__ --
+    'PublishRejected' (retry) or 'PublishUrlUnformable' (drop) -- never thrown,
     so the worker's retry-vs-drop decision is total at the call site.
     -}
     , parsePackageInfo :: PackageName -> RegistryResponse -> Either ParseError PackageInfo
