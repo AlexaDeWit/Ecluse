@@ -64,7 +64,6 @@ import Data.Aeson qualified as Aeson
 import Data.Aeson.Types (Parser, parseEither)
 import Lens.Micro ((?~), (^.))
 
-
 import Ecluse.Core.Ecosystem (ecosystemName, parseEcosystem)
 import Ecluse.Core.Package (
     Hash,
