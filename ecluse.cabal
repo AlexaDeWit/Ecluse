@@ -208,8 +208,12 @@ library ecluse-core
 library
   import:          shared
   hs-source-dirs:  src
+  other-modules:   Paths_ecluse
+  autogen-modules: Paths_ecluse
   exposed-modules:
     Ecluse
+    Ecluse.Boot
+    Ecluse.Proxy
     Ecluse.Composition
     Ecluse.Config
     Ecluse.CLI
