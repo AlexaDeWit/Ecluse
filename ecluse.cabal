@@ -214,6 +214,8 @@ library
     Ecluse
     Ecluse.Boot
     Ecluse.Proxy
+    Ecluse.Pilot
+    Ecluse.Dredger
     Ecluse.Composition
     Ecluse.Config
     Ecluse.CLI

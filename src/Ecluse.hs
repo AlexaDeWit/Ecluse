@@ -95,6 +95,8 @@ module Ecluse (
 
 import Ecluse.Boot
 import Ecluse.CLI (AppCommand (..), execCLI)
+import Ecluse.Dredger
+import Ecluse.Pilot
 import Ecluse.Proxy
 
 run :: IO ()
@@ -103,5 +105,5 @@ run = do
     withBootEnv $ \bootEnv ->
         case cmd of
             RunProxy -> runProxy bootEnv
-            RunPilot -> logBootInfo (beLogEnv bootEnv) "Pilot: Not yet implemented"
-            RunDredger -> logBootInfo (beLogEnv bootEnv) "Dredger: Not yet implemented"
+            RunPilot -> runPilot bootEnv
+            RunDredger -> runDredger bootEnv

@@ -246,7 +246,7 @@ grammar ("Ecluse.Core.Registry.Npm.Route") and its denial renderer
 Splitting the server into its own binary later reuses this same entry.
 -}
 runServer :: ServerConfig -> Env -> IO ()
-runServer = Server.runServer
+runServer cfg env = Server.runWarp cfg (Server.tracedApplication cfg env)
 
 {- | The fallback server settings: a single npm mount with __no__ packument-serve
 or publish dependencies, so the packument route is the recognised-but-unserved @501@
