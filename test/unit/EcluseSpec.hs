@@ -94,6 +94,9 @@ awsRunEnv =
     [ ("ECLUSE_AWS_REGION", "us-east-1")
     , ("ECLUSE_AWS_ACCESS_KEY_ID", "test")
     , ("ECLUSE_AWS_SECRET_ACCESS_KEY", "test")
+    , ("AWS_REGION", "us-east-1")
+    , ("AWS_ACCESS_KEY_ID", "test")
+    , ("AWS_SECRET_ACCESS_KEY", "test")
     ]
         <> runEnv
 
@@ -141,6 +144,7 @@ spec = do
             -- idle worker simply parks on the empty queue rather than hot-looping.
             unsetEnv "PROXY_CONFIG"
             unsetEnv "ECLUSE_AWS_REGION"
+            unsetEnv "AWS_REGION"
             unsetEnv "ECLUSE_QUEUE_URL"
             traverse_ (uncurry setEnv) (filter ((/= "ECLUSE_QUEUE_URL") . fst) runEnv)
             setEnv "ECLUSE_QUEUE_BACKEND" "memory"
@@ -156,6 +160,7 @@ spec = do
             -- Clear ECLUSE_AWS_REGION explicitly so a sibling case (run under a randomized
             -- order) cannot leak it into this missing-region fixture.
             unsetEnv "ECLUSE_AWS_REGION"
+            unsetEnv "AWS_REGION"
             traverse_ (uncurry setEnv) runEnv
             setEnv "ECLUSE_QUEUE_BACKEND" "sqs"
             outcome <- try (timeout 100000 run) :: IO (Either BootAborted (Maybe ()))
