@@ -29,7 +29,7 @@ fakeRegistry =
     RegistryClient
         { fetchMetadata = const unused
         , fetchArtifact = \_ _ -> unused
-        , publishArtifact = \_ _ _ -> unused
+        , publishArtifact = \_ _ _ _ -> unused
         , parsePackageInfo = \_ _ -> Left unusedParse
         , parseVersionDetails = \_ _ -> Left unusedParse
         , parseVersionList = const (Left unusedParse)

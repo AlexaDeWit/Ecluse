@@ -39,6 +39,7 @@ module Ecluse.Core.Registry.Npm (
     publicRegistryBaseUrl,
     publicRegistryUrl,
     newNpmClient,
+    newNpmPublishClient,
 
     -- * Lower-level fetch
     fetchMetadataForm,
@@ -51,6 +52,7 @@ module Ecluse.Core.Registry.Npm (
 ) where
 
 import Data.ByteString.Lazy qualified as LBS
+import Data.List.NonEmpty qualified as NE
 import Network.HTTP.Client (
     BodyReader,
     Manager,
@@ -65,7 +67,8 @@ import Network.HTTP.Types.Status (statusCode)
 import UnliftIO (throwIO)
 
 import Ecluse.Core.Credential (Secret)
-import Ecluse.Core.Package (PackageName)
+import Ecluse.Core.Package (Hash (hashAlg, hashValue), HashAlg (SHA1, SRI), PackageName)
+import Ecluse.Core.Queue (MirrorArtifact (maFilename, maHashes))
 import Ecluse.Core.Registry (
     ParseError (ParseError),
     PublishError (..),
@@ -77,7 +80,7 @@ import Ecluse.Core.Registry (
  )
 
 import Ecluse.Core.Registry.Npm.Project qualified as Project
-import Ecluse.Core.Registry.Npm.Publish (publishRequest)
+import Ecluse.Core.Registry.Npm.Publish (npmPublishDocument, publishRequest)
 import Ecluse.Core.Registry.Npm.Request (
     MetadataForm (Abbreviated),
     Validators,
@@ -157,12 +160,18 @@ unconditionally; the richer 'fetchMetadataForm' (for the full packument and
 relayed validators) is exposed separately for the request pipeline.
 -}
 newNpmClient :: NpmClientConfig -> IO RegistryClient
-newNpmClient config =
+newNpmClient config = newNpmPublishClient config (pure (npmToken config))
+
+{- | Build an npm RegistryClient whose publishArtifact field mints a fresh token
+per call via the provided IO action. Other fields use the token in the config.
+-}
+newNpmPublishClient :: NpmClientConfig -> IO (Maybe Secret) -> IO RegistryClient
+newNpmPublishClient config mintToken =
     pure
         RegistryClient
             { fetchMetadata = fetchMetadataForm config Abbreviated noValidators
             , fetchArtifact = fetchArtifact' config
-            , publishArtifact = publishArtifact' config
+            , publishArtifact = publishArtifact' config mintToken
             , -- Each version's @dist.tarball@ scheme is normalised against the host this
               -- client reads from (same-host http upgraded, foreign-host http dropped) as
               -- a projection post-step; the Handle field types are unchanged.
@@ -224,17 +233,22 @@ fetchArtifact' config name version = do
     response <- httpLbs request (npmManager config)
     pure (RegistryResponse (toStrict (responseBody response)))
 
-{- Publish a version's artifact, treating a @409 Conflict@ (the version is
-already present) as idempotent success.
+{- Publish a version's artifact: assemble the ecosystem-specific publish document
+from the artifact metadata and raw tarball bytes, then PUT it, treating a
+@409 Conflict@ (the version is already present) as idempotent success.
 -}
 publishArtifact' ::
     NpmClientConfig ->
+    IO (Maybe Secret) ->
     PackageName ->
     Version ->
+    MirrorArtifact ->
     ByteString ->
     IO (Either PublishFault ())
-publishArtifact' config name _version document =
-    case publishRequest (npmBaseUrl config) (npmToken config) name document of
+publishArtifact' config mintToken name version artifact tarball = do
+    token <- mintToken
+    let document = npmPublishDocument name version (maFilename artifact) (sriOf artifact) (sha1Of artifact) tarball
+    case publishRequest (npmBaseUrl config) token name document of
         Left urlErr -> pure (Left (PublishUrlUnformable urlErr))
         Right request -> do
             response <- httpLbs request (npmManager config)
@@ -285,3 +299,15 @@ orThrow :: Either UrlFormationError Request -> IO Request
 orThrow = \case
     Left err -> throwIO err
     Right request -> pure request
+
+-- Pick the SRI (@dist.integrity@) string from the admitted digests, if present.
+sriOf :: MirrorArtifact -> Maybe Text
+sriOf = firstHashValue SRI
+
+-- Pick the SHA-1 shasum from the admitted digests, if present.
+sha1Of :: MirrorArtifact -> Maybe Text
+sha1Of = firstHashValue SHA1
+
+firstHashValue :: HashAlg -> MirrorArtifact -> Maybe Text
+firstHashValue alg artifact =
+    fmap hashValue (find ((== alg) . hashAlg) (NE.toList (maHashes artifact)))

@@ -14,17 +14,15 @@ module Ecluse.Core.Worker.Job (
     displayExceptionT,
 ) where
 
-import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
 import Katip (Severity (ErrorS, InfoS, WarningS), katipAddNamespace, logFM, ls)
 import UnliftIO (tryAny, withRunInIO)
 
 import Ecluse.Core.Ecosystem (ecosystemName)
-import Ecluse.Core.Package (Hash (hashAlg, hashValue), HashAlg (SHA1, SRI), pkgEcosystem, renderPackageName)
-import Ecluse.Core.Queue (MirrorArtifact (maFilename, maHashes), MirrorJob (jobArtifact, jobArtifactUrl, jobPackage, jobTraceContext, jobVersion), MirrorQueue (ack, extendVisibility), QueueMessage (msgJob, msgReceipt), ReceiptHandle, Seconds (Seconds))
+import Ecluse.Core.Package (pkgEcosystem, renderPackageName)
+import Ecluse.Core.Queue (MirrorArtifact (maHashes), MirrorJob (jobArtifact, jobArtifactUrl, jobPackage, jobTraceContext, jobVersion), MirrorQueue (ack, extendVisibility), QueueMessage (msgJob, msgReceipt), ReceiptHandle, Seconds (Seconds))
 import Ecluse.Core.Registry (PublishFault (PublishRejected, PublishUrlUnformable), RegistryClient (publishArtifact))
 import Ecluse.Core.Registry.Metadata (VersionEvaluation (VersionMetadataUnavailable, VersionMissing, VersionPresent))
-import Ecluse.Core.Registry.Npm.Publish (npmPublishDocument)
 import Ecluse.Core.Rules (evalRules)
 import Ecluse.Core.Rules.Types (Decision (Admitted, Blocked, BlockedByDefault, Undecidable), EvalContext (EvalContext))
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
@@ -225,25 +223,17 @@ mirrorArtifact receipt job = do
     artifact = jobArtifact job
 
 -- Publish already-verified bytes to the mirror target: hold the message past the
--- visibility window (a large-artifact publish may run long), assemble the npm
--- publish document, publish through the composition-root publish client, and
--- classify the registry outcome into a 'JobOutcome'.
+-- visibility window (a large-artifact publish may run long), publish through the
+-- composition-root publish client (which assembles the ecosystem-specific document),
+-- and classify the registry outcome into a 'JobOutcome'.
 publishVerified :: ReceiptHandle -> MirrorJob -> ByteString -> WorkerM JobOutcome
 publishVerified receipt job bytes = do
     holdForLongPublish receipt
     client <- asks wrRegistry
     metrics <- asks wrMetrics
-    let document =
-            npmPublishDocument
-                (jobPackage job)
-                (jobVersion job)
-                (maFilename artifact)
-                (sriOf artifact)
-                (sha1Of artifact)
-                bytes
     -- The publish is the long, network-bound step; time it for the publish-latency
     -- histogram whichever way the registry responds.
-    (result, seconds) <- timedSeconds (liftIO (publishArtifact client (jobPackage job) (jobVersion job) document))
+    (result, seconds) <- timedSeconds (liftIO (publishArtifact client (jobPackage job) (jobVersion job) artifact bytes))
     liftIO (wmpMirrorPublishDuration metrics seconds)
     case result of
         Right () -> do
@@ -297,18 +287,6 @@ releaseForRetry receipt = do
 -- A one-line identifier for a job, for log lines.
 renderJob :: MirrorJob -> Text
 renderJob job = renderPackageName (jobPackage job) <> "@" <> renderVersion (jobVersion job)
-
--- Pick the SRI (@dist.integrity@) string from the admitted digests, if present.
-sriOf :: MirrorArtifact -> Maybe Text
-sriOf = firstHashValue SRI
-
--- Pick the SHA-1 shasum from the admitted digests, if present.
-sha1Of :: MirrorArtifact -> Maybe Text
-sha1Of = firstHashValue SHA1
-
-firstHashValue :: HashAlg -> MirrorArtifact -> Maybe Text
-firstHashValue alg artifact =
-    fmap hashValue (find ((== alg) . hashAlg) (NE.toList (maHashes artifact)))
 
 -- Render an exception as 'Text' for a log line (relude's 'displayException' is over
 -- 'String').

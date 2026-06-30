@@ -134,7 +134,7 @@ import Ecluse.Core.Registry (
     RegistryClient (..),
  )
 import Ecluse.Core.Registry.Metadata (fetchVersionDetails)
-import Ecluse.Core.Registry.Npm (NpmClientConfig (NpmClientConfig, npmBaseUrl, npmLimits, npmManager, npmToken), newNpmClient)
+import Ecluse.Core.Registry.Npm (NpmClientConfig (NpmClientConfig, npmBaseUrl, npmLimits, npmManager, npmToken), newNpmPublishClient)
 import Ecluse.Core.Registry.Npm.Route qualified as Npm
 import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
 import Ecluse.Core.Rules (renderBootOrder)
@@ -473,25 +473,24 @@ publish targets, over the given (trusted) manager.
 
 The publish client speaks the registry protocol; the only ecosystem with an adapter
 is npm, so a target is wired into an npm client pointed at the mirror-target
-endpoint and carrying the bearer minted from the target's credential provider. The
-credential is read once here at the composition root (the @static@ provider never
-expires, so a baked token is correct for it). When no mount is configured there is
-nothing to publish, so the slot holds the refusing 'unconfiguredRegistry'
-placeholder, whose effectful fields fail loudly if ever called -- the worker only
-reaches it once a job exists, which only a configured mount produces. -}
+endpoint. The credential is minted fresh per publish through the provider's
+'currentToken'. When no mount is configured there is nothing to publish, so
+the slot holds the refusing 'unconfiguredRegistry' placeholder, whose effectful
+fields fail loudly if ever called. -}
 resolvePublishClient :: Manager -> [PublishTarget] -> IO RegistryClient
 resolvePublishClient manager targets =
     case find ((== Npm) . ptEcosystem) targets of
         Nothing -> pure unconfiguredRegistry
         Just target -> do
-            token <- authSecret <$> currentToken (ptCredentials target)
-            newNpmClient
+            let mintToken = Just . authSecret <$> currentToken (ptCredentials target)
+            newNpmPublishClient
                 NpmClientConfig
                     { npmBaseUrl = ptMirrorUrl target
                     , npmManager = manager
-                    , npmToken = Just token
+                    , npmToken = Nothing
                     , npmLimits = defaultLimits
                     }
+                mintToken
 
 {- | Raised by 'unconfiguredRegistry' when an effectful registry field is called
 with no backend wired in -- a composition-root misconfiguration. A distinct typed
@@ -514,7 +513,7 @@ unconfiguredRegistry =
     RegistryClient
         { fetchMetadata = const refuse
         , fetchArtifact = \_ _ -> refuse
-        , publishArtifact = \_ _ _ -> refuse
+        , publishArtifact = \_ _ _ _ -> refuse
         , parsePackageInfo = \_ _ -> Left notConfigured
         , parseVersionDetails = \_ _ -> Left notConfigured
         , parseVersionList = const (Left notConfigured)

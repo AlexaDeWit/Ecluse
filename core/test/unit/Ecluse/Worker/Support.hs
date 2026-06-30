@@ -217,7 +217,7 @@ recordingClient logRef outcome =
     RegistryClient
         { fetchMetadata = const (refuse "fetchMetadata")
         , fetchArtifact = \_ _ -> refuse "fetchArtifact"
-        , publishArtifact = \_ _ document -> do
+        , publishArtifact = \_ _ _ document -> do
             atomicModifyIORef' logRef (\l -> (l{plDocuments = document : plDocuments l}, ()))
             pure outcome
         , parsePackageInfo = \_ _ -> Left (ParseError "unused")
