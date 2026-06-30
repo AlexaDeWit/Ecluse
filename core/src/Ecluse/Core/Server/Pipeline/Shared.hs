@@ -227,6 +227,7 @@ renderedResponse status extra (RenderedBody contentType body) =
 -- The headers a GET would carry (notably any relayed @Content-Length@) are preserved.
 bodiless :: Response -> Response
 bodiless response = responseLBS (responseStatus response) (responseHeaders response) ""
+
 {- A __public__ version refused by the integrity-presence admission policy: its selected
 artifact carries no integrity digest of any kind, so it cannot be tied to a
 tamper-evident fingerprint. A deliberate deny-by-default policy refusal ('MissingIntegrity',
@@ -261,4 +262,3 @@ private path. -}
 trustedIntegrityBelowFloor :: ServeDecision
 trustedIntegrityBelowFloor =
     Reject (Rejection BelowIntegrityFloor "this private version's integrity digest is weaker than the configured trusted minimum and was not served")
-

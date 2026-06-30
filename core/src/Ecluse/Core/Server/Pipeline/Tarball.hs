@@ -140,7 +140,6 @@ module Ecluse.Core.Server.Pipeline.Tarball (
     headTarball,
 ) where
 
-
 import Network.HTTP.Client (Manager)
 import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types (RequestHeaders, ResponseHeaders, Status, hContentType, methodHead, mkStatus, statusIsSuccessful)
@@ -184,13 +183,13 @@ import Ecluse.Core.Server.Context (
     ctxMount,
     ctxRuntime,
  )
-import Ecluse.Core.Server.Pipeline.Shared
-import Ecluse.Core.Server.Pipeline.Packument (withPublicMetadataClient)
 import Ecluse.Core.Server.Pipeline.Internal (
     evalTier,
     recordDenials,
     serveDecisionClass,
  )
+import Ecluse.Core.Server.Pipeline.Packument (withPublicMetadataClient)
+import Ecluse.Core.Server.Pipeline.Shared
 import Ecluse.Core.Server.Response (
     ArtifactStatus (Forbidden, NotFound, Ok, ServerError, Unavailable'),
     MountRenderer,
@@ -275,8 +274,6 @@ headTarball name version filename request respond =
     -- body. (The 'ServeHead' upstream probe is what keeps the artifact body from being
     -- fetched at all; this strips the body of the locally-rendered branches too.)
     tarballWith ServeHead name version filename request (respond . bodiless)
-
-
 
 -- The artifact serve mode: a full GET that streams the body through, or a HEAD that
 -- probes the upstream bodiless and relays only the headers. Threaded through the
@@ -527,7 +524,6 @@ miss (the package may exist, this version does not). -}
 versionAbsent :: ServeDecision
 versionAbsent =
     Reject (Rejection (Unavailable WontResolve) "the requested version was not found upstream")
-
 
 {- Stream the artifact from the public upstream at its __authoritative location__,
 __anonymously__ (the client credential is never sent to the public upstream), and —

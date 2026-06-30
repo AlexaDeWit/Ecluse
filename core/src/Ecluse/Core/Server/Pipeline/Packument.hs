@@ -175,22 +175,22 @@ import Ecluse.Core.Package.Filter (FilterResult (Filtered, NoSurvivors), filterP
 import Ecluse.Core.Package.Integrity (
     MinTrustedIntegrity,
  )
-import Ecluse.Core.Registry.Metadata (
-    MetadataClient (fetchFullManifest),
-    MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable),
- )
-import Ecluse.Core.Security (
-    LimitError (BodyTooLarge, TooDeeplyNested, TooManyVersions),
-    Limits,
- )
 import Ecluse.Core.Package.Merge (
     MergePlan (mpDistTags, mpSurvivors, mpTime),
     Provenance (GatedSource, TrustedSource),
     SourceId,
     mergePackuments,
  )
+import Ecluse.Core.Registry.Metadata (
+    MetadataClient (fetchFullManifest),
+    MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable),
+ )
 import Ecluse.Core.Rules (evalRules)
 import Ecluse.Core.Rules.Types (Decision, EvalContext (EvalContext))
+import Ecluse.Core.Security (
+    LimitError (BodyTooLarge, TooDeeplyNested, TooManyVersions),
+    Limits,
+ )
 import Ecluse.Core.Server.Cache (Source (Source))
 import Ecluse.Core.Server.Conditional (Conditional (Modified, NotModified), etagHeader, evaluateOwnETag)
 import Ecluse.Core.Server.Context (
@@ -202,7 +202,6 @@ import Ecluse.Core.Server.Context (
     ctxRuntime,
  )
 import Ecluse.Core.Server.Metadata (ManifestCaching (Cached, Uncached))
-import Ecluse.Core.Server.Pipeline.Shared
 import Ecluse.Core.Server.Pipeline.Internal (
     admitByIntegrity,
     evalTier,
@@ -212,6 +211,7 @@ import Ecluse.Core.Server.Pipeline.Internal (
     recordDenials,
     recordEffectfulFailures,
  )
+import Ecluse.Core.Server.Pipeline.Shared
 import Ecluse.Core.Server.Response (
     MountRenderer,
     PackumentStatus (PackumentBadGateway, PackumentForbidden, PackumentOk, PackumentServerError, PackumentUnavailable),
@@ -955,6 +955,3 @@ retryAfterHeader :: PackumentStatus -> ResponseHeaders
 retryAfterHeader = \case
     PackumentUnavailable (Just (RetryAfter secs)) -> [("Retry-After", show secs)]
     _ -> []
-
-
-
