@@ -76,7 +76,7 @@ module Ecluse.Core.Server.Pipeline.Tarball (
 
 import Network.HTTP.Client (Manager)
 import Network.HTTP.Client qualified as HTTP
-import Network.HTTP.Types (RequestHeaders, ResponseHeaders, Status, hContentType, methodHead, mkStatus, statusIsSuccessful)
+import Network.HTTP.Types (RequestHeaders, ResponseHeaders, Status, hContentType, hRetryAfter, methodHead, mkStatus, statusIsSuccessful)
 import Network.Wai (Request, Response, ResponseReceived, requestHeaders, responseLBS)
 import UnliftIO.Exception (tryAny)
 
@@ -130,6 +130,7 @@ import Ecluse.Core.Server.Response (
     MountRenderer,
     RejectReason (Unavailable),
     Rejection (Rejection, rejectionMessage),
+    RetryAfter (..),
     ServeDecision (Admit, Reject),
     Transience (WillResolve, WontResolve),
     artifactStatus,
@@ -685,8 +686,12 @@ path -- so it is mapped to @404@ rather than the @500@ a 'WontResolve' would
 otherwise render. -}
 artifactError :: MountRenderer -> PackumentDeps -> ArtifactStatus -> ServeDecision -> Response
 artifactError renderer deps status decision =
-    renderedResponse (toStatus actualStatus) [] (renderError renderer (pdHelp deps) message)
+    renderedResponse (toStatus actualStatus) retryHeaders (renderError renderer (pdHelp deps) message)
   where
+    retryHeaders :: ResponseHeaders
+    retryHeaders = case actualStatus of
+        Unavailable' (Just (RetryAfter secs)) -> [(hRetryAfter, show secs)]
+        _ -> []
     -- The version-absent miss is carried as a 'WontResolve' rejection but rendered
     -- as a forwarded @404@, not the @500@ a generic 'WontResolve' maps to.
     actualStatus :: ArtifactStatus
