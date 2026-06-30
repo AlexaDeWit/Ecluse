@@ -253,6 +253,9 @@ telemetryScenarios = do
                                 && ("\"version\":\"" <> ddTagVersion <> "\"") `T.isInfixOf` logs
                         )
                         80
+                unless correlated $ do
+                    logs <- proxyContainerLogs e2e
+                    expectationFailure $ "Datadog log correlation failed. Proxy logs:\n" <> T.unpack logs
                 correlated `shouldBe` True
 
 {- | The first-party publish scenarios. The round-trip and the anti-shadowing refusal each
