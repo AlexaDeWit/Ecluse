@@ -64,8 +64,6 @@ spec = do
             (elem "typescript" <$> Map.lookup Npm names) `shouldBe` Just True
             Map.member "lodash" (catBenchPins cat) `shouldBe` True
 
--- ── sample bodies ──────────────────────────────────────────────────────────────
-
 -- A well-formed catalogue with one pin and one curated name list per ecosystem.
 sampleCatalogue :: LByteString
 sampleCatalogue =

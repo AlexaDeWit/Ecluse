@@ -22,7 +22,7 @@ bodyB = "{\"name\":\"is-even\",\"versions\":{}}"
 
 spec :: Spec
 spec = do
-    describe "ownETag — over the served bytes" $ do
+    describe "ownETag -- over the served bytes" $ do
         it "is stable for identical bytes" $
             ownETag bodyA `shouldBe` ownETag bodyA
 
@@ -42,7 +42,7 @@ spec = do
             name `shouldBe` "ETag"
             value `shouldBe` encodeUtf8 (renderETag (ownETag bodyA))
 
-    describe "evaluateOwnETag — transformed bodies (filtered packuments)" $ do
+    describe "evaluateOwnETag -- transformed bodies (filtered packuments)" $ do
         it "is Modified when the request carries no validator" $
             case evaluateOwnETag [] bodyA of
                 Modified e -> e `shouldBe` ownETag bodyA
@@ -105,7 +105,7 @@ spec = do
                 NotModified e -> e `shouldBe` etag
                 Modified _ -> expectationFailure "a weak echo of our tag is still a match"
 
-    describe "forwardValidators — pass-through bodies (artifacts, raw metadata)" $ do
+    describe "forwardValidators -- pass-through bodies (artifacts, raw metadata)" $ do
         it "relays the client's If-None-Match upstream" $
             forwardValidators [(hIfNoneMatch, "\"abc\"")]
                 `shouldBe` [(hIfNoneMatch, "\"abc\"")]
@@ -121,7 +121,7 @@ spec = do
         it "yields nothing when the client sends no validators" $
             forwardValidators [("Accept", "application/json")] `shouldBe` []
 
-    describe "isNotModified — relaying upstream 304s" $ do
+    describe "isNotModified -- relaying upstream 304s" $ do
         it "recognises a 304 to pass straight back" $
             isNotModified status304 `shouldBe` True
 

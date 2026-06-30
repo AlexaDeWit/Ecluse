@@ -42,8 +42,6 @@ spec = do
     coherenceSpec
     propertiesSpec
 
--- ── a fixed clock and an age-quarantine policy ───────────────────────────────
-
 -- | A fixed "now" so the age-based admit/deny axis is deterministic.
 now :: UTCTime
 now = UTCTime (fromGregorian 2026 6 20) 0
@@ -53,21 +51,19 @@ ctx = EvalContext now
 
 {- | The policy under test: a single 7-day publish-age quarantine. A version is
 __approved__ iff its @time@ entry is at least 7 days before 'now', and otherwise
-deny-by-default — so a version's survival is controlled purely by its @time@ in
+deny-by-default -- so a version's survival is controlled purely by its @time@ in
 the fixture, exercising the real rules engine rather than a stub.
 -}
 quarantine :: [PrecededRule]
 quarantine = [atDefaultPrecedence (AllowIfOlderThan (7 * nominalDay))]
 
 {- | An ISO-8601 instant @ageDays@ before 'now', as the bare npm @time@ string
-(no surrounding quotes — the literal builders add those), parseable by the
+(no surrounding quotes -- the literal builders add those), parseable by the
 projection's @UTCTime@ decoder.
 -}
 publishedDaysAgo :: Integer -> Text
 publishedDaysAgo ageDays =
     toText (iso8601Show (addUTCTime (negate (fromInteger ageDays * nominalDay)) now))
-
--- ── URL rewriting ────────────────────────────────────────────────────────────
 
 base :: Text
 base = "https://proxy.test/npm"
@@ -129,8 +125,6 @@ rewriteSpec = describe "rewriteTarballUrls" $ do
         tarballAt "1.0.0" (rewriteTarballUrls base v)
             `shouldBe` Just "https://upstream.test/thing/-/thing-1.0.0.tgz"
 
--- ── filtering ────────────────────────────────────────────────────────────────
-
 filterSpec :: Spec
 filterSpec = describe "applyFilterPlan (replay)" $ do
     it "removes a denied version from versions and time, keeping the approved one" $ do
@@ -147,7 +141,7 @@ filterSpec = describe "applyFilterPlan (replay)" $ do
 
     it "keeps a surviving upstream latest rather than promoting a higher survivor" $ do
         -- The whole point of keep-unless-denied: upstream latest is 1.0.0 and both
-        -- 1.0.0 and the higher 2.0.0 survive, so latest stays 1.0.0 — it is never
+        -- 1.0.0 and the higher 2.0.0 survive, so latest stays 1.0.0 -- it is never
         -- promoted to the higher surviving version.
         filtered <- filterTo latestKeptBelowHigherSurvivor
         distTag "latest" filtered `shouldBe` Just "1.0.0"
@@ -204,13 +198,11 @@ filterSpec = describe "applyFilterPlan (replay)" $ do
         -- End-to-end version-level graceful degradation: 2.0.0's `dist` is a scalar (a
         -- malformed required field) yet it is 30 days old, so it would clear the
         -- quarantine if it decoded. It is absent from the served versions/time purely
-        -- because the decode dropped it from the decision surface — a healthy package
+        -- because the decode dropped it from the decision surface -- a healthy package
         -- keeps serving its good versions despite one poisoned one.
         filtered <- filterTo healthyPlusBroken
         Map.keys (versionsOf filtered) `shouldBe` ["1.0.0"]
         Map.keys (timeKeysOf filtered) `shouldBe` ["1.0.0"]
-
--- ── coherence ────────────────────────────────────────────────────────────────
 
 coherenceSpec :: Spec
 coherenceSpec = describe "coherence of the filtered packument" $ do
@@ -245,8 +237,6 @@ coherenceSpec = describe "coherence of the filtered packument" $ do
         case distTag "latest" filtered of
             Just l -> Set.member l (Map.keysSet (versionsOf filtered)) `shouldBe` True
             Nothing -> expectationFailure "latest must resolve even with an unparseable survivor"
-
--- ── properties ───────────────────────────────────────────────────────────────
 
 propertiesSpec :: Spec
 propertiesSpec = describe "properties" $ do
@@ -301,8 +291,6 @@ propertiesSpec = describe "properties" $ do
                         Just l -> assert (Set.member l survivingKeys)
                         Nothing -> annotateShow out >> failure
 
--- ── inline packument fixtures ────────────────────────────────────────────────
-
 -- | One unscoped version, published 30 days ago (survives the quarantine).
 oneVersionPackument :: ByteString
 oneVersionPackument =
@@ -351,7 +339,7 @@ twoVersions =
 
 {- | Both versions survive, and @latest@ aims at the /lower/ 1.0.0 (the
 maintainer's chosen release). Under keep-unless-denied, @latest@ must stay 1.0.0
-even though the higher 2.0.0 also survives — a surviving @latest@ is never
+even though the higher 2.0.0 also survives -- a surviving @latest@ is never
 promoted to the higher survivor.
 -}
 latestKeptBelowHigherSurvivor :: ByteString
@@ -391,7 +379,7 @@ twoVersionsStableTag =
 
 {- | A healthy 1.0.0 alongside a 2.0.0 whose @dist@ is a scalar (a malformed
 required field). Both are 30 days old, so the broken one would clear the
-quarantine if it decoded — proving its absence from the served body is the
+quarantine if it decoded -- proving its absence from the served body is the
 __decode__ dropping it from the decision surface, not the age policy. The broken
 version's object literal is supplied raw (the 'versionLit' builder only makes
 well-formed versions).
@@ -483,7 +471,7 @@ traversalNamePackument =
         )
 
 {- | A packument whose (upstream-controlled) @name@ carries a control character
-(a literal @\\u0001@), which the component-safety gate rejects — so the rewrite
+(a literal @\\u0001@), which the component-safety gate rejects -- so the rewrite
 leaves the version's tarball untouched rather than interpolating it.
 -}
 controlCharNamePackument :: ByteString
@@ -530,7 +518,7 @@ noDistTagsPackument =
             <> "\"}}"
         )
 
-{- | A packument whose @dist-tags@ is JSON @null@ — the common malformed shape.
+{- | A packument whose @dist-tags@ is JSON @null@ -- the common malformed shape.
 The projection's @.:?@ reads it as absent, but the raw body still carries the
 null, so filtering must repair it rather than relay an unresolvable @latest@.
 -}
@@ -544,8 +532,6 @@ nullDistTagsPackument =
             <> publishedDaysAgo 30
             <> "\"}}"
         )
-
--- ── packument-literal builders ───────────────────────────────────────────────
 
 {- | Build a JSON packument literal from its parts. @extras@ are extra top-level
 key/raw-JSON pairs; each version is a pre-rendered object literal.
@@ -618,8 +604,6 @@ versionLit name ver tarball extras =
 quoted :: Text -> Text
 quoted t = "\"" <> t <> "\""
 
--- ── generators ───────────────────────────────────────────────────────────────
-
 {- | A generated packument's logical spec: a name and a list of versions, each
 with a publish age in days. Survival is derived from the age against 'quarantine'.
 -}
@@ -654,7 +638,7 @@ genBase =
         ]
 
 {- | Render a 'PackumentSpec' to JSON bytes, with @latest@ aimed at the last
-version (which may or may not survive — exercising repointing) when any exist.
+version (which may or may not survive -- exercising repointing) when any exist.
 -}
 renderPackument :: PackumentSpec -> ByteString
 renderPackument (PackumentSpec name versions) =
@@ -675,8 +659,6 @@ upstreamTarball :: Text -> Text -> Text
 upstreamTarball name ver = "https://upstream.test/" <> name <> "/-/" <> baseName name <> "-" <> ver <> ".tgz"
   where
     baseName n = snd (T.breakOnEnd "/" n)
-
--- ── decoding & projection helpers ────────────────────────────────────────────
 
 decodeValue :: ByteString -> IO Value
 decodeValue bs = either (fail . ("decode failure: " <>)) pure (eitherDecodeStrict bs)
@@ -714,7 +696,7 @@ loadPackument bs = do
     pure (info, v)
 
 {- | Decide the plan ('Ecluse.Core.Package.Filter.filterPlan') over the typed view and
-replay it ('applyFilterPlan') onto the raw body — the composition the serve layer
+replay it ('applyFilterPlan') onto the raw body -- the composition the serve layer
 performs. The replay no longer rewrites tarball URLs (that is 'rewriteTarballUrls',
 the assembly stage's single pass), so it carries no mount base.
 -}
@@ -748,8 +730,6 @@ isApproved = \case
     Admitted{} -> True
     _ -> False
 
--- ── hedgehog lift helpers ────────────────────────────────────────────────────
-
 decodeOrFail :: ByteString -> H.PropertyT IO Value
 decodeOrFail bs = either (\e -> annotateShow e >> failure) pure (eitherDecodeStrict bs)
 
@@ -758,8 +738,6 @@ loadOrFail bs = do
     v <- decodeOrFail bs
     info <- either (\e -> annotateShow e >> failure) pure (parsePackageInfo (fixtureName v) (RegistryResponse bs))
     pure (info, v)
-
--- ── raw-Value navigation ─────────────────────────────────────────────────────
 
 asObject :: Value -> KeyMap Value
 asObject = \case
@@ -804,8 +782,6 @@ versionKey ver key v = do
 
 topLevelKey :: Key.Key -> Value -> Maybe Value
 topLevelKey key v = KeyMap.lookup key (asObject v)
-
--- ── misc ─────────────────────────────────────────────────────────────────────
 
 encode :: Text -> ByteString
 encode = encodeUtf8

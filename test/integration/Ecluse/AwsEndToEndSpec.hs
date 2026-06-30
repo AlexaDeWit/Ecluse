@@ -49,8 +49,8 @@ import Ecluse.Telemetry (telemetryDisabled)
 import Ecluse.Test.Worker (admitAllPolicies)
 
 {- | The whole AWS-backed path through the __real composition root__, end to end: an
-in-process Écluse — the real 'Ecluse.Server.application' serve path and the real
-mirror worker ('Ecluse.runWorker') — over a __real SQS queue__ (a @ministack@ container,
+in-process Écluse -- the real 'Ecluse.Server.application' serve path and the real
+mirror worker ('Ecluse.runWorker') -- over a __real SQS queue__ (a @ministack@ container,
 shared through "Ecluse.Integration.Ministack") and WAI npm stubs for the public
 upstream, the (missing) private upstream, and the mirror target.
 
@@ -61,7 +61,7 @@ Two flows are exercised against that one wiring:
 * a __tarball__ request on a private-upstream miss is gated, streamed from the public
   upstream, and __enqueues a real SQS mirror job__; the worker then long-polls that
   queue, fetches the artifact, __verifies it against the serve-time integrity digest__,
-  and publishes it to the mirror target — the demand-driven fetch → verify → publish
+  and publishes it to the mirror target -- the demand-driven fetch → verify → publish
   back-fill, across a genuine SQS round-trip.
 
 Hermetic and gating, but requires a Docker daemon (for @ministack@) and no real AWS.
@@ -93,8 +93,6 @@ spec =
                     length published `shouldSatisfy` (>= 1)
                     published `shouldSatisfy` all (== "/left-pad")
 
--- ── the proxy under test ──────────────────────────────────────────────────────
-
 {- | The in-process Écluse under test: the serve 'Application', the composition-root
 'Env' the worker runs over, and the mirror-target stub's publish log.
 -}
@@ -110,7 +108,7 @@ serve 'Application' over them, then run the body against the assembled proxy.
 
 The queue is built through the __config-driven composition root__
 ('Ecluse.Composition.planMirrorQueue' → 'Ecluse.Core.Queue.Sqs.newSqsQueue'), driven by the
-AWS-SDK-standard @AWS_ENDPOINT_URL_SQS@ override pointed at the container — the same
+AWS-SDK-standard @AWS_ENDPOINT_URL_SQS@ override pointed at the container -- the same
 production path the released image runs, with no test-only code path. -}
 withAwsProxy :: Container -> Text -> (TestProxy -> IO a) -> IO a
 withAwsProxy container queueName body =
@@ -208,8 +206,6 @@ mountBinding privateUrl publicUrl mirrorUrl = do
             , bindingRenderer = npmRenderer
             }
 
--- ── WAI stubs ─────────────────────────────────────────────────────────────────
-
 {- The public upstream: it answers any @.tgz@ path with the artifact bytes and every
 other path with the two-version packument, whose @dist.tarball@ names this same
 loopback host and port (learned from the request's @Host@ header) so the honoured
@@ -245,8 +241,6 @@ withMirrorTarget body = do
             atomicModifyIORef' logRef (\xs -> (rawPathInfo req : xs, ()))
         respond (responseLBS status201 [] "{}")
 
--- ── fixtures ──────────────────────────────────────────────────────────────────
-
 -- The artifact bytes the public upstream serves and the worker verifies + publishes.
 tarballBytes :: LByteString
 tarballBytes = "left-pad-1.0.0-artifact-bytes"
@@ -255,7 +249,7 @@ tarballBytes = "left-pad-1.0.0-artifact-bytes"
 sha1Shasum :: Text
 sha1Shasum = decodeUtf8 (convertToBase Base16 (hashlazy tarballBytes :: Digest SHA1) :: ByteString)
 
--- The true SRI @sha512-<base64>@ (npm @dist.integrity@) of the served bytes — the
+-- The true SRI @sha512-<base64>@ (npm @dist.integrity@) of the served bytes -- the
 -- strongest digest, the one the worker verifies the fetched bytes against.
 sha512Integrity :: Text
 sha512Integrity = "sha512-" <> decodeUtf8 (convertToBase Base64 (hashlazy tarballBytes :: Digest SHA512) :: ByteString)
@@ -307,8 +301,6 @@ admitOldEnough = [atDefaultPrecedence (AllowIfOlderThan (7 * nominalDay))]
 loopbackOptIn :: LoweredHostSet
 loopbackOptIn = lowerCaseHosts (Set.fromList ["127.0.0.1", "::1"])
 
--- ── helpers ───────────────────────────────────────────────────────────────────
-
 -- A loopback base URL for a testWithApplication-hosted stub on the given port.
 loopbackUrl :: Int -> Text
 loopbackUrl port = "http://127.0.0.1:" <> show port
@@ -339,8 +331,6 @@ packumentVersions body = case decode body of
 -- A scribe-free LogEnv (no stdout output during the integration run).
 newTestLogEnv :: IO LogEnv
 newTestLogEnv = initLogEnv (Namespace ["ecluse"]) (Environment "test")
-
--- ── driving the worker loop ────────────────────────────────────────────────────
 
 {- Run the supervised mirror worker ('runWorker') against the real queue until a
 condition holds, then tear it down. The loop never returns on its own, so it is raced

@@ -1,11 +1,11 @@
 {- | The AWS CodeArtifact leaf of the outbound-credential handle: mint a
 short-lived registry bearer token via CodeArtifact's @GetAuthorizationToken@.
 
-This is the one genuinely cloud-specific part of outbound auth — everything else
+This is the one genuinely cloud-specific part of outbound auth -- everything else
 (caching, proactive refresh, single-flight, the circuit breaker) is the
 cloud-agnostic policy in "Ecluse.Core.Credential.Refresh", which this module wires its
 mint into. The leaf itself is tiny: build an @amazonka@ 'Env' once (credentials
-discovered the standard AWS way — environment, instance role, container role, SSO,
+discovered the standard AWS way -- environment, instance role, container role, SSO,
 STS), then on each mint call @GetAuthorizationToken@ and return the token together
 with its real expiry so the refresh policy schedules off the token's own
 lifetime (CodeArtifact tokens last up to 12h).
@@ -43,7 +43,7 @@ import Ecluse.Core.Credential.Refresh (
 
 {- The mint's one failure: @GetAuthorizationToken@ succeeded but carried no token.
 Thrown (not a stringly exception) because the refresh breaker runs this leaf and
-catches 'SomeException' to count failures and trip — the leaf must throw to be seen,
+catches 'SomeException' to count failures and trip -- the leaf must throw to be seen,
 and a returned value would fight that contract (STYLE.md section 11.4). Not exported
 for the same reason: the breaker sees it as a 'SomeException'. -}
 data CodeArtifactMintError = AuthorizationTokenMissing
@@ -90,7 +90,7 @@ newCodeArtifactProvider :: CredentialReporters -> CodeArtifactConfig -> IO Crede
 newCodeArtifactProvider reporters cfg =
     AWS.newEnv AWS.discover >>= \env -> providerForEnv reporters env cfg
 
-{- | Build the provider over a caller-supplied @amazonka@ 'Env' — the boundary the
+{- | Build the provider over a caller-supplied @amazonka@ 'Env' -- the boundary the
 production 'newCodeArtifactProvider' wraps with credential discovery. The config's
 region is applied to the 'Env', and each mint calls @GetAuthorizationToken@ through
 it under the cache\/proactive-refresh\/single-flight\/breaker policy of

@@ -10,8 +10,8 @@ shut by the age rule.
 
 The tree mirrors the npm registry layout the stub serves over HTTP:
 
-> \<name\>            — the packument JSON
-> \<name\>/-/\<name\>-\<version\>.tgz — the artifact
+> \<name\>            -- the packument JSON
+> \<name\>/-/\<name\>-\<version\>.tgz -- the artifact
 
 so a packument's @dist.tarball@ (@https:\/\/upstream\/\<name\>\/-\/…@) resolves on the
 same stub.
@@ -41,7 +41,7 @@ import System.FilePath ((</>))
 import System.Process.Typed (proc, runProcess_)
 
 {- | One fixture package: its identity plus the two behaviours the scenarios turn
-on — whether it declares an install script (so the @DenyInstallTimeExecution@ rule
+on -- whether it declares an install script (so the @DenyInstallTimeExecution@ rule
 blocks it) and whether its served bytes are corrupted after the SRI is fixed (so the
 integrity gate must reject it).
 -}
@@ -51,7 +51,7 @@ data PkgSpec = PkgSpec
     , psVersion :: Text
     -- ^ The single published version.
     , psInstallScript :: Bool
-    -- ^ Declare an install script — the @DenyInstallTimeExecution@ trigger.
+    -- ^ Declare an install script -- the @DenyInstallTimeExecution@ trigger.
     , psTamper :: Bool
     {- ^ Corrupt the artifact bytes after the packument's SRI is computed, so the
     served bytes no longer match the declared integrity.
@@ -82,7 +82,7 @@ tamperPkg = (defaultPkgSpec "e2e-tamper"){psTamper = True}
 
 {- | A package used only for @HEAD@ probes. A @HEAD@ on a tarball must report the
 artifact size without streaming the body and without enqueueing a mirror, so this
-package is never installed or @GET@ (either would itself mirror it) — leaving an empty
+package is never installed or @GET@ (either would itself mirror it) -- leaving an empty
 mirror attributable to the @HEAD@ alone.
 -}
 headPkg :: PkgSpec
@@ -101,8 +101,8 @@ fixturePackages = [allowPkg, denyPkg, mirrorPkg, tamperPkg, headPkg, telemetryPk
 
 {- | Write every fixture package under @root@ (the directory bind-mounted into the
 nginx stub as its document root). Creates the packument and the gzipped artifact and
-fixes the packument's @dist.integrity@ to the artifact's real sha-512, then — for a
-tamper spec — corrupts the artifact so the served bytes diverge from that digest.
+fixes the packument's @dist.integrity@ to the artifact's real sha-512, then -- for a
+tamper spec -- corrupts the artifact so the served bytes diverge from that digest.
 -}
 buildFixtures :: FilePath -> [PkgSpec] -> IO ()
 buildFixtures root = traverse_ (buildOne root)

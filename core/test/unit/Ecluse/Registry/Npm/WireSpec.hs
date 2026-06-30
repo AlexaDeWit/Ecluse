@@ -32,7 +32,7 @@ import Ecluse.Core.Registry.Npm.Wire
 {- | Decoding tests for the npm wire types. Every fixture under
 @core\/test\/unit\/fixtures\/npm\/@ is a body derived from the real captures documented
 in @docs\/research\/reverse-engineering\/npm.md@ (§4 full packument, §5
-abbreviated, §6 manifest, §3 errors). The suite is pure and offline — it never
+abbreviated, §6 manifest, §3 errors). The suite is pure and offline -- it never
 touches the network; protocol drift is surfaced separately by the non-gating
 smoke suite.
 
@@ -53,8 +53,6 @@ spec = do
     errorResponseSpec
     jsonListSpec
     totalitySpec
-
--- ── abbreviated packument ────────────────────────────────────────────────────
 
 abbreviatedPackumentSpec :: Spec
 abbreviatedPackumentSpec = describe "AbbreviatedPackument" $ do
@@ -102,8 +100,6 @@ abbreviatedPackumentSpec = describe "AbbreviatedPackument" $ do
                 \\"1.0.0\":{\"name\":\"mix\",\"version\":\"1.0.0\",\"dist\":{\"tarball\":\"https://r/mix-1.0.0.tgz\"}},\
                 \\"2.0.0\":{\"name\":\"mix\",\"version\":\"2.0.0\"}}}"
         Map.keys (apkmtVersions pk) `shouldBe` ["1.0.0"]
-
--- ── full packument ───────────────────────────────────────────────────────────
 
 fullPackumentSpec :: Spec
 fullPackumentSpec = describe "Packument (full)" $ do
@@ -175,8 +171,6 @@ fullPackumentSpec = describe "Packument (full)" $ do
                 \\"3.0.0\":42}}"
         Map.keys (pkmtVersions pk) `shouldBe` ["1.0.0"]
 
--- ── version manifest ─────────────────────────────────────────────────────────
-
 versionManifestSpec :: Spec
 versionManifestSpec = describe "VersionManifest" $ do
     it "decodes a standalone full manifest (core-js)" $ do
@@ -233,8 +227,6 @@ versionManifestSpec = describe "VersionManifest" $ do
         b <- decodeFixture @VersionManifest "core-js.manifest.json"
         a `shouldBe` b
 
--- ── dist ─────────────────────────────────────────────────────────────────────
-
 distSpec :: Spec
 distSpec = describe "Dist" $ do
     it "captures the integrity triple (tarball, shasum, integrity)" $ do
@@ -277,8 +269,6 @@ distSpec = describe "Dist" $ do
                 , distSignatures = []
                 }
             )
-
--- ── advisory dist-field leniency ─────────────────────────────────────────────
 
 {- | A regression guard for the whole-packument denial defect: the __advisory__
 @dist@ sub-fields (@unpackedSize@, @fileCount@, @signatures@) decide no rule and
@@ -355,7 +345,7 @@ advisoryFieldLeniencySpec = describe "advisory dist-field leniency (whole-packum
                 \,\"integrity\":\"sha512-BBBB\",\"unpackedSize\":4096\
                 \,\"signatures\":[{\"sig\":\"s\",\"keyid\":\"k\"}]}}}}"
 
-        -- Every version is present — not just the healthy one.
+        -- Every version is present -- not just the healthy one.
         Map.keys (apkmtVersions pk) `shouldBe` ["1.0.0", "2.0.0", "3.0.0"]
 
         -- The poisoned 1.0.0 keeps its load-bearing integrity fields; its advisory
@@ -378,8 +368,6 @@ advisoryFieldLeniencySpec = describe "advisory dist-field leniency (whole-packum
         (distIntegrity <$> d3) `shouldBe` Just (Just "sha512-BBBB")
         (distUnpackedSize <$> d3) `shouldBe` Just (Just 4096)
         (distSignatures <$> d3) `shouldBe` Just [Signature "s" "k"]
-
--- ── lenient string-or-object scalars ─────────────────────────────────────────
 
 lenientScalarSpec :: Spec
 lenientScalarSpec = describe "lenient string-or-object scalars" $ do
@@ -470,8 +458,6 @@ lenientScalarSpec = describe "lenient string-or-object scalars" $ do
             (eitherDecode "[\"oops\"]" :: Either String ErrorResponse)
                 `shouldBe` Left "Error in $: expected ErrorResponse (object or string), but encountered an array"
 
--- ── error responses ──────────────────────────────────────────────────────────
-
 errorResponseSpec :: Spec
 errorResponseSpec = describe "ErrorResponse" $ do
     it "tolerates the bare-string per-version 404 body" $ do
@@ -498,8 +484,6 @@ errorResponseSpec = describe "ErrorResponse" $ do
             `shouldBe` ErrorObject
                 ErrorBody{errMessage = Just "you must be logged in", errError = Just "Unauthorized"}
         errorMessage err `shouldBe` Just "you must be logged in"
-
--- ── JSON arrays of the wire types ────────────────────────────────────────────
 
 {- | The wire types appear inside JSON arrays on the registry (maintainer and
 signature lists, and @versions@\/@dist-tags@ are objects of them), so each must
@@ -568,14 +552,12 @@ jsonListSpec = describe "decoding JSON arrays of the wire types" $ do
                        ]
         map errorMessage errs `shouldBe` [Just "version not found", Just "Not found", Just "nope"]
 
--- ── decoder totality (the fuzz target) ───────────────────────────────────────
-
 {- | The wire decoders eat __untrusted__ upstream JSON, so every one must be
 __total__: an arbitrary input may never make a decoder bottom (throw, or hit a
 partial function); it must always return a typed 'Success'\/'Error' (for a
 'Value') or a 'Right'\/'Left' (for raw bytes). These generative properties feed
 each 'FromJSON' instance a bounded-but-arbitrary 'Value' and a run of arbitrary
-bytes and assert the result is fully evaluable without an exception — the
+bytes and assert the result is fully evaluable without an exception -- the
 totality half of /parse, don't validate/ that the fixture suite above only spot-
 checks. (The companion projection-layer properties live in
 "Ecluse.Registry.Npm.ProjectSpec".)
@@ -628,8 +610,6 @@ totalitySpec = describe "decoder totality (arbitrary input never bottoms)" $ do
             case fromJSON (String s) :: Result ErrorResponse of
                 Success (ErrorString captured) -> captured H.=== s
                 other -> annotateShow other >> H.failure
-
--- ── totality helpers ─────────────────────────────────────────────────────────
 
 {- | Assert a 'FromJSON' decoder is __total__ over an arbitrary 'Value': feed it a
 bounded-but-arbitrary value and fully evaluate the typed 'Result', so a bottom
@@ -692,13 +672,13 @@ genValue :: H.Gen Value
 genValue =
     Gen.recursive
         Gen.choice
-        -- non-recursive (leaf) generators — also the shrink targets
+        -- non-recursive (leaf) generators -- also the shrink targets
         [ pure Null
         , Bool <$> Gen.bool
         , Number <$> genNumber
         , String <$> genJsonText
         ]
-        -- recursive generators — small fan-out so the tree stays bounded
+        -- recursive generators -- small fan-out so the tree stays bounded
         [ Array . V.fromList <$> Gen.list (Range.linear 0 4) genValue
         , Object . KeyMap.fromList
             <$> Gen.list (Range.linear 0 4) ((,) <$> genKey <*> genValue)
@@ -711,7 +691,7 @@ genInteger :: H.Gen Integer
 genInteger = Gen.integral (Range.linearFrom 0 (-100000) 100000)
 
 {- | A small arbitrary JSON number. Most draws are modest integers (cheap to
-'Show'), but a deliberate minority are hostile to a strict 'Int' decode —
+'Show'), but a deliberate minority are hostile to a strict 'Int' decode --
 fractional or far outside 'Int' range (built from a bounded coefficient and a
 wide base-10 exponent, so the magnitude is astronomical yet the value stays cheap
 to render). This reaches the fractional\/huge\/overflowing shapes a plain integer
@@ -731,7 +711,7 @@ genJsonText = Gen.text (Range.linear 0 8) Gen.unicode
 
 {- | An object key drawn from a pool biased toward the real wire field names
 (@name@, @version@, @dist@, @tarball@, …) so generated objects frequently satisfy
-a decoder's required\/optional keys — otherwise almost every object would miss
+a decoder's required\/optional keys -- otherwise almost every object would miss
 @.: \"name\"@ and the success arm would go unsampled.
 -}
 genKey :: H.Gen Key.Key
@@ -763,8 +743,6 @@ genKey = Key.fromText <$> Gen.choice [Gen.element wireKeys, genJsonText]
         , "deprecated"
         , "hasInstallScript"
         ]
-
--- ── helpers ──────────────────────────────────────────────────────────────────
 
 {- | Decode a committed fixture by file name (under @core\/test\/unit\/fixtures\/npm\/@,
 a path relative to the package root that Cabal runs tests from), failing the
@@ -808,7 +786,7 @@ decodeOrFail json = case eitherDecode json of
 
 {- | Parse an ISO-8601 timestamp for an expectation. Runs in the example\'s own
 'MonadFail' (here @IO@), so an unparseable literal fails the test rather than
-crashing — keeping the suite total (no partial @error@; see STYLE.md §10).
+crashing -- keeping the suite total (no partial @error@; see STYLE.md §10).
 -}
 readUTC :: (MonadFail m) => Text -> m UTCTime
 readUTC = iso8601ParseM . toString

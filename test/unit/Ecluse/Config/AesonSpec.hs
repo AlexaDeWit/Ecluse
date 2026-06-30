@@ -39,8 +39,6 @@ spec = describe "decodeDocument" $ do
     it "rejects an unknown key inside a mount, naming it" $
         loadConfig [] (Just (mountDocWithExtraKey "baseURL")) `shouldSatisfy` decodeErrorMentions "baseURL"
 
--- ── fixtures & helpers ───────────────────────────────────────────────────────
-
 singleMountDoc :: ByteString
 singleMountDoc =
     "{\"queueBackend\":\"sqs\",\"mounts\":{\"npm\":{\

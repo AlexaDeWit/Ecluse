@@ -1,5 +1,5 @@
 {- | The bridge from the telemetry-agnostic reporters the pre-telemetry providers carry
-to the live @ecluse.*@ instruments — and the deferral that lets a provider built before
+to the live @ecluse.*@ instruments -- and the deferral that lets a provider built before
 the meter exists record once it does.
 
 The circuit breaker ("Ecluse.Core.Breaker") and the refreshing credential provider
@@ -45,8 +45,6 @@ import Ecluse.Telemetry.Instruments (
     recordCredentialTokenTtl,
  )
 
--- ── deferred metric handle ────────────────────────────────────────────────────
-
 {- | A 'Metrics' handle that may not exist yet: empty until the telemetry substrate has
 built the instruments, then live. The pre-telemetry boot phase builds providers that
 record through reporters closed over this, so they can be wired before the meter exists
@@ -68,8 +66,6 @@ installMetrics (DeferredMetrics ref) = writeIORef ref . Just
 -- Run an action with the live instruments if installed; a no-op while still empty.
 withDeferredMetrics :: DeferredMetrics -> (Metrics -> IO ()) -> IO ()
 withDeferredMetrics (DeferredMetrics ref) record = readIORef ref >>= maybe pass record
-
--- ── reporters ─────────────────────────────────────────────────────────────────
 
 {- | A 'BreakerReporter' that records a breaker's state to @ecluse.rule.breaker.state@
 under the given source, through the deferred handle (inert until it is installed).
@@ -96,8 +92,6 @@ deferredRefreshReporter deferred provider =
         withDeferredMetrics deferred $ \metrics -> do
             recordCredentialRefresh metrics provider result
             whenJust mTtlSeconds (recordCredentialTokenTtl metrics provider)
-
--- ── breaker-state projection ──────────────────────────────────────────────────
 
 {- | Project the breaker's runtime state ("Ecluse.Core.Breaker") onto the bounded gauge value
 the catalogue records ("Ecluse.Core.Telemetry.Metrics"). The consecutive-failure tally a

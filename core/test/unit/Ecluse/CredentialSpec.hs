@@ -37,7 +37,7 @@ spec = do
         it "is unequal for equal-length tokens that differ" $
             -- A 'Secret' equality is constant-time (no content-dependent early
             -- out), so this same-length, differing-content case must not be
-            -- mistaken for equal — the property timing-safe comparison exists to
+            -- mistaken for equal -- the property timing-safe comparison exists to
             -- protect, exercised on the shape that would otherwise leak.
             mkSecret "abcdef" `shouldNotBe` mkSecret "abcxef"
 

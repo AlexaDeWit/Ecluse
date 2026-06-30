@@ -24,21 +24,21 @@ npmVersion = mkVersion Npm
 {- | The agnostic routing layer: the shared 'Route' set, the deny-by-default
 classifier, and the ecosystem-independent component-safety gate.
 
-No ecosystem path grammar lives here — that is each adapter's classifier (e.g.
+No ecosystem path grammar lives here -- that is each adapter's classifier (e.g.
 "Ecluse.Core.Registry.Npm.Route"). These specs pin the neutral routing boundary: the
 default classifier denies everything, and 'isSafeComponent' is the shared
 traversal gate.
 -}
 spec :: Spec
 spec = do
-    describe "denyAll — the agnostic default classifier" $ do
+    describe "denyAll -- the agnostic default classifier" $ do
         it "denies a package-shaped path (no ecosystem grammar is built in)" $
             denyAll methodGet ["is-odd"] `shouldBe` Unsupported
         it "denies a meta-route-shaped path" $
             denyAll methodGet ["-", "ping"] `shouldBe` Unsupported
         it "denies the empty path" $
             denyAll methodGet [] `shouldBe` Unsupported
-        it "denies a PUT (a publish) too — it knows no write grammar either" $
+        it "denies a PUT (a publish) too -- it knows no write grammar either" $
             denyAll methodPut ["is-odd"] `shouldBe` Unsupported
         it "denies every path it is given, under any method (deny by default)" $
             hedgehog $ do
@@ -46,7 +46,7 @@ spec = do
                 segs <- forAll (Gen.list (Range.linear 0 5) (Gen.text (Range.linear 0 8) Gen.unicode))
                 denyAll method segs H.=== Unsupported
 
-    describe "Filename — the agnostic artifact-name type" $ do
+    describe "Filename -- the agnostic artifact-name type" $ do
         -- The verbatim on-the-wire name a 'Tarball' route carries is held as a
         -- distinct type (not a bare 'Text') because it is authoritative for fetching
         -- the bytes; its equality is by the wrapped name, so two routes naming the
@@ -58,7 +58,7 @@ spec = do
             Tarball (unscoped "is-odd") (npmVersion "3.0.1") (Filename "is-odd-3.0.1.tgz")
                 `shouldNotBe` Tarball (unscoped "is-odd") (npmVersion "3.0.1") (Filename "is-odd-3.0.2.tgz")
 
-    describe "isSafeComponent — the shared traversal gate" $ do
+    describe "isSafeComponent -- the shared traversal gate" $ do
         it "accepts an ordinary name" $
             isSafeComponent "is-odd" `shouldBe` True
         it "accepts a name with interior dots, hyphens, underscores, and digits" $
@@ -78,7 +78,7 @@ spec = do
         it "rejects a component with a NUL" $
             isSafeComponent "foo\0bar" `shouldBe` False
 
-    describe "encodeComponent — the shared component percent-encoder" $ do
+    describe "encodeComponent -- the shared component percent-encoder" $ do
         it "leaves an ordinary name unchanged (only unreserved characters)" $
             encodeComponent "is-odd" `shouldBe` "is-odd"
         it "leaves interior dots, hyphens, underscores, digits, and tildes unchanged" $

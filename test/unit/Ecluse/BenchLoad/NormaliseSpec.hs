@@ -26,7 +26,7 @@ import Ecluse.BenchLoad.Normalise (
 spec :: Spec
 spec = do
     describe "publicLegMultiple" $
-        it "is one round trip — concurrent fan-out plus single-flight public leg" $
+        it "is one round trip -- concurrent fan-out plus single-flight public leg" $
             publicLegMultiple `shouldBe` 1.0
 
     describe "attribute" $ do

@@ -9,8 +9,6 @@ spec = do
     mkRegistryUrlSpec
     resolveTarballUrlSpec
 
--- ── the https-only smart constructor ──────────────────────────────────────────
-
 {- | 'mkRegistryUrl' is the production boundary: a registry target is https by
 construction, so a plain-HTTP value cannot be represented in a running system. These
 prove the rejection (the load-bearing half) and that a release build's only path to a
@@ -38,8 +36,6 @@ mkRegistryUrlSpec = describe "mkRegistryUrl (https-only by construction)" $ do
 
     it "rejects a non-http(s) scheme" $
         mkRegistryUrl "ftp://registry.example/" `shouldSatisfy` isLeft
-
--- ── dist.tarball scheme normalisation ─────────────────────────────────────────
 
 {- | 'resolveTarballUrl' normalises an upstream-declared @dist.tarball@ against the
 host the packument was served from: https kept, same-host http upgraded, foreign-host

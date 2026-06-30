@@ -5,8 +5,8 @@
 {- | The npm path grammar: the request router that maps an npm-native request
 path to a shared "Ecluse.Core.Server.Route".
 
-'classify' turns an npm request — its HTTP method and the already-mount-stripped,
-percent-decoded path segments — into a 'Route', so the whole npm routing table is
+'classify' turns an npm request -- its HTTP method and the already-mount-stripped,
+percent-decoded path segments -- into a 'Route', so the whole npm routing table is
 unit-testable with __no server__: feed it a method and segments, assert the
 'Route'. The agnostic dispatcher carries a route classifier per mount; this module
 is npm's, wired in at the composition root.
@@ -14,7 +14,7 @@ is npm's, wired in at the composition root.
 A @PUT \/{pkg}@ is the npm __publish__ request, so the method is part of the match:
 a @PUT@ over a bare-package path is a 'Publish', while every read method (@GET@,
 @HEAD@, …) over the same path is a 'Packument'. The read grammar below is otherwise
-method-independent — a @HEAD@ classifies like its @GET@, the dispatcher answering it
+method-independent -- a @HEAD@ classifies like its @GET@, the dispatcher answering it
 bodiless.
 
 The model is __deny by default__: anything not explicitly recognised is
@@ -64,7 +64,7 @@ import Ecluse.Core.Version (mkVersion)
 A @PUT@ is the publish method, so it is dispatched first: a @PUT@ over a
 bare-package path is a 'Publish', everything else under @PUT@ denies. Every other
 method reads, taking the path through the read grammar where matching order is
-significant — reserved meta-routes (a leading @"-"@ segment) are tried first, since
+significant -- reserved meta-routes (a leading @"-"@ segment) are tried first, since
 a real package name can never begin with @\'-\'@; only then is the path read as a
 package request. See the module header for the npm conventions this encodes.
 -}
@@ -74,25 +74,25 @@ classify method segments
     | otherwise = classifyRead segments
 
 {- Classify a read request's path (any non-@PUT@ method): reserved meta-routes
-first, then a package request. A @HEAD@ takes this same path as its @GET@ — the
-dispatcher answers it bodiless — so the read grammar is method-independent. -}
+first, then a package request. A @HEAD@ takes this same path as its @GET@ -- the
+dispatcher answers it bodiless -- so the read grammar is method-independent. -}
 classifyRead :: [Text] -> Route
 classifyRead ("-" : meta) = classifyMeta meta
 classifyRead segments = classifyPackage segments
 
 {- Classify a @PUT@ as an npm publish. npm publishes a package with @PUT \/{pkg}@,
 the version manifest and tarball carried in the body, so a publish is exactly a
-__bare-package__ path (no trailing segments) — both scoped encodings handled by
+__bare-package__ path (no trailing segments) -- both scoped encodings handled by
 'takePackage'. A @PUT@ to anything else (a tarball slot, a meta-route, trailing
 junk) is 'Unsupported' (deny by default); the version is /not/ read from the path
-here — it lives in the relayed document. -}
+here -- it lives in the relayed document. -}
 classifyPublish :: [Text] -> Route
 classifyPublish segments =
     case takePackage segments of
         Just (name, []) -> Publish name
         _ -> Unsupported
 
-{- Classify a reserved meta-route — the segments __after__ the leading @"-"@.
+{- Classify a reserved meta-route -- the segments __after__ the leading @"-"@.
 Only the routes the proxy actually serves are recognised; every other meta-route
 is 'Unsupported' (never re-interpreted as a package).
 -}
@@ -122,11 +122,11 @@ classifyPackage segments =
 {- Peel the leading package unit off a path, returning its 'PackageName' and
 the remaining segments. Handles both wire encodings of a scoped name:
 
-\* one decoded segment, @\@scope\/pkg@ — split on the first @\'\/\'@;
-\* two segments, @\@scope@ then @pkg@ — consume both.
+\* one decoded segment, @\@scope\/pkg@ -- split on the first @\'\/\'@;
+\* two segments, @\@scope@ then @pkg@ -- consume both.
 
 Returns 'Nothing' (so the caller denies it) for anything without a usable
-package: an empty path, or a name with an __unsafe component__ — a scope or base
+package: an empty path, or a name with an __unsafe component__ -- a scope or base
 name that 'isSafeComponent' rejects (empty, @"."@\/@".."@, or carrying a
 @\'\/\'@, @\'\\\\\'@, or control character). This covers the degenerate scoped
 names (@\@\/pkg@, @\@scope\/@ reachable from @\/\@scope%2F@, @\@scope\/a\/b@) and
@@ -165,11 +165,11 @@ takePackage (seg : rest)
 deny it. The npm convention is @{unscoped-name}-{version}.tgz@, so the file must:
 
 \* end in @.tgz@ over a non-empty name (a bare @.tgz@ is not an artifact), and
-\* have a basename of exactly @{unscoped-name}-{version}@ — the unscoped name (the
+\* have a basename of exactly @{unscoped-name}-{version}@ -- the unscoped name (the
   scope dropped, as npm names the file), a @\'-\'@, then a non-empty @version@.
 
 A basename that does not begin with @{unscoped-name}-@ is addressing some other
-package's artifact under this package's path — a path-confusion attempt — so it
+package's artifact under this package's path -- a path-confusion attempt -- so it
 denies rather than fabricating a coordinate. On a match the @version@ run is read
 by the total 'mkVersion' (an unparseable version still yields a coordinate, so a
 parser gap never drops a real artifact), and the @file@ is preserved verbatim in

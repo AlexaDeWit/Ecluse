@@ -2,7 +2,7 @@
 
 A 'Version' carries the raw text verbatim (version strings are embedded in
 artifact URLs and re-served, so fidelity matters) alongside a parsed, canonical
-'VersionKey' — present only when the raw text parses for its ecosystem. Ordering
+'VersionKey' -- present only when the raw text parses for its ecosystem. Ordering
 goes through 'compareVersions', which is defined __only__ on parsed keys, so
 non-canonical text can never reach the comparator (/parse, don't validate/).
 
@@ -11,7 +11,7 @@ Parsing is per-ecosystem and selected by the 'Ecosystem' tag from
 ("Ecluse.Core.Version.Pep440"), @Gem::Version@ for RubyGems ("Ecluse.Core.Version.Gem").
 Each grammar and its ordering rules live in its own module; this module is the
 agnostic abstraction that dispatches to them on the 'Ecosystem' tag. The grammar
-modules are kept __private__ — callers build with 'mkVersion' (total) or
+modules are kept __private__ -- callers build with 'mkVersion' (total) or
 'parseVersionKey' (reports the parse error) and compare with 'compareVersions'.
 
 This vocabulary is consumed by "Ecluse.Core.Package" (@PackageDetails@ holds a
@@ -49,7 +49,7 @@ import Ecluse.Core.Version.Semver (SemverKey, isSemverStable, parseSemver)
 
 The raw text is kept verbatim for faithful round-trip (version strings are
 embedded in artifact URLs and re-served), while a parsed, canonical
-'VersionKey' — present only when the raw text parses for its ecosystem — is what
+'VersionKey' -- present only when the raw text parses for its ecosystem -- is what
 ordering uses. Build with 'mkVersion' (total: an unparseable version is still
 represented, just with no key, so a proxy never drops a version over a parser
 gap) or 'parseVersionKey' when you want the parse error.
@@ -59,7 +59,7 @@ There is deliberately __no__ 'Ord' on 'Version': comparison goes through
 can never reach the comparator.
 -}
 data Version = Version
-    { -- The version as published — used for rendering and round-tripping only,
+    { -- The version as published -- used for rendering and round-tripping only,
       -- never for ordering decisions.
       versionRaw :: Text
     , versionKey :: Maybe VersionKey
@@ -85,7 +85,7 @@ renderVersion :: Version -> Text
 renderVersion = versionRaw
 
 {- | Compare two versions by their canonical keys. 'Nothing' if either version
-did not parse (its key is absent) — an ordering-based rule should then abstain,
+did not parse (its key is absent) -- an ordering-based rule should then abstain,
 mirroring the other "unknown signal" cases (@CodeExecUnknown@, @TrustUnknown@).
 -}
 compareVersions :: Version -> Version -> Maybe Ordering
@@ -94,13 +94,13 @@ compareVersions a b = compare <$> versionKey a <*> versionKey b
 {- | Whether a parsed version is a __stable__ (final, non-prerelease) release.
 The notion is ecosystem-specific, dispatched on the key's constructor:
 
-* __semver (npm)__ — stable iff there is no @-prerelease@ component (the
+* __semver (npm)__ -- stable iff there is no @-prerelease@ component (the
   prerelease is 'SemverFinal'). So @1.0.0@ is stable; @1.0.0-rc.1@ and
   @2.0.0-beta@ are not.
-* __PEP 440 (PyPI)__ — stable iff it is neither a pre-release (@a@\/@b@\/@rc@)
+* __PEP 440 (PyPI)__ -- stable iff it is neither a pre-release (@a@\/@b@\/@rc@)
   nor a dev release. Post-releases /are/ stable. So @1.0@ and @1.0.post1@ are
   stable; @1.0a1@, @1.0rc1@, @1.0.dev1@ and @1.0a1.dev2@ are not.
-* __RubyGems__ — stable iff no segment contains a letter (the version is
+* __RubyGems__ -- stable iff no segment contains a letter (the version is
   all-numeric). So @1.0.0@ is stable; @1.0.0.pre@ and @1.2.0.rc1@ are not.
 
 Used by 'selectLatest' to prefer a stable release when @dist-tags.latest@ must
@@ -124,7 +124,7 @@ isStable = \case
     RubyGemsKey k -> isGemStable k
 
 {- | Resolve @dist-tags.latest@ for a packument after denied\/undecidable
-versions have been filtered out — the __keep-unless-denied, stable-preferring__
+versions have been filtered out -- the __keep-unless-denied, stable-preferring__
 rule from @docs\/architecture\/rules-engine.md@ ("Applying verdicts to a
 packument"). @chosen@ is the source's currently-tagged @latest@ (if any);
 @survivors@ is the surviving versions. The result, when present, is always one
@@ -132,7 +132,7 @@ of @survivors@, so the caller can use its 'unVersion' as the tag string.
 
 The resolution, in order:
 
-* If @survivors@ is empty, there is nothing to point at — 'Nothing'.
+* If @survivors@ is empty, there is nothing to point at -- 'Nothing'.
 * __Keep:__ if @chosen@ survives (by raw text), return it unchanged. This is the
   identity on a single-input packument and never /promotes/ a prerelease over a
   maintainer's chosen stable @latest@.
@@ -176,7 +176,7 @@ newtype VersionError = VersionError
 
 {- | The parsed, canonical, comparable form of a version. __Opaque__: the only
 way to obtain one is 'parseVersionKey', so a 'VersionKey' always holds a
-well-formed, normalised version — the comparator structurally cannot see
+well-formed, normalised version -- the comparator structurally cannot see
 non-canonical input (parse, don't validate). Its 'Ord' is meaningful only within
 a single ecosystem, which is the only case that ever arises (one compares
 versions of one package).

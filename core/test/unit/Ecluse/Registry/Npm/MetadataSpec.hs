@@ -31,8 +31,8 @@ import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Package (validSha1, validSha512Sri)
 
 {- | Pure-projection tests for the npm full-manifest read primitive. They pin the
-'MetadataError' each failure maps to — the distinctions the serve path renders as
-distinct responses — and that a well-formed packument projects to the typed manifest
+'MetadataError' each failure maps to -- the distinctions the serve path renders as
+distinct responses -- and that a well-formed packument projects to the typed manifest
 paired with the raw document the serve path re-serializes. (The body-size bound is
 enforced over the HTTP body in 'Ecluse.Core.Registry.Npm.Metadata.fetchNpmManifest',
 not in this pure step, so it is exercised by the data-plane tests instead.)
@@ -124,7 +124,7 @@ projectNpmManifestSpec = describe "projectNpmManifest" $ do
 
 {- | Parity and taxonomy tests for the selective single-version decode. The headline is
 __parity__: 'projectNpmVersion' must yield the byte-for-byte identical 'PackageDetails' a
-full 'projectNpmManifest' followed by a version lookup would — over a rich, multi-field
+full 'projectNpmManifest' followed by a version lookup would -- over a rich, multi-field
 packument (integrity digests, dependencies, install scripts, publish times), for /every/
 version. The rest pin the 'MetadataError' taxonomy and the present\/absent contract.
 -}
@@ -160,7 +160,7 @@ projectNpmVersionSpec = describe "projectNpmVersion" $ do
 
     it "drops a malformed requested-version object as a forwarded miss (Right Nothing), as the full path would" $ do
         let body = BL.toStrict . encode $ object ["name" .= ("is-odd" :: Text), "versions" .= object ["1.0.0" .= object ["name" .= ("is-odd" :: Text)]]]
-        -- The 1.0.0 manifest has no @dist@, so it is unprojectable and dropped — a genuine
+        -- The 1.0.0 manifest has no @dist@, so it is unprojectable and dropped -- a genuine
         -- absence both the full and the selective path reach.
         projectNpmVersion defaultLimits (unscoped "is-odd") (mkVersion Npm "1.0.0") body
             `shouldBe` Right Nothing
@@ -188,8 +188,6 @@ projectNpmVersionSpec = describe "projectNpmVersion" $ do
     it "reports a nesting-depth breach as a bound breach" $
         projectNpmVersion (defaultLimits{maxNestingDepth = 2}) (unscoped "is-odd") (mkVersion Npm "1.0.0") (richPackumentBytes "is-odd" ["1.0.0"])
             `shouldBe` Left (MetadataBoundExceeded (TooDeeplyNested 2))
-
--- ── fixtures ──────────────────────────────────────────────────────────────────
 
 -- | An unscoped npm 'PackageName'.
 unscoped :: Text -> PackageName

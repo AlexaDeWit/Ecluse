@@ -21,7 +21,7 @@ import Ecluse.Env (Env, newEnv, newWorkerHeartbeat)
 import Ecluse.Server (MountBinding (..), application)
 import Ecluse.Telemetry (telemetryDisabled)
 
-{- | A registry-handle double whose effectful fields are never invoked — the
+{- | A registry-handle double whose effectful fields are never invoked -- the
 composition-root routing assertions below only route, classify, and render.
 -}
 fakeRegistry :: RegistryClient
@@ -58,7 +58,7 @@ newTestEnv = do
     newEnv fakeRegistry queue manager manager metadataCache logEnv telemetryDisabled heartbeat
 
 {- | The composed npm front door ('npmServerConfig') as a WAI 'Application', driven
-in-process — so the actual mount the composition root wires is exercised, no socket.
+in-process -- so the actual mount the composition root wires is exercised, no socket.
 -}
 npmApp :: IO Application
 npmApp = application npmServerConfig <$> newTestEnv
@@ -88,8 +88,8 @@ runEnv =
 needs to be built: a region, and throwaway credentials in the environment so
 @amazonka@'s discovery resolves from env vars (no instance-metadata round-trip) and
 'Ecluse.Core.Queue.Sqs.newSqsQueue' constructs without touching the network. The bogus
-queue URL is never reached on the boot-and-serve path — the worker's failing polls
-are caught by its own supervision — so this stays hermetic.
+queue URL is never reached on the boot-and-serve path -- the worker's failing polls
+are caught by its own supervision -- so this stays hermetic.
 -}
 awsRunEnv :: [(String, String)]
 awsRunEnv =
@@ -104,7 +104,7 @@ spec = do
     -- rather than only through the binary, and stays linked into the unit suite
     -- where scripts/coverage.sh can see it. 'run' parses configuration, validates
     -- it, and starts the blocking server, so over a valid minimal env it keeps
-    -- serving under a short timeout — the liveness check that the config-driven
+    -- serving under a short timeout -- the liveness check that the config-driven
     -- root wires up and starts without throwing. The static mirror-target token is
     -- supplied so the env single-mount's @static@ credential reference resolves.
     describe "run" $ do
@@ -132,7 +132,7 @@ spec = do
 
         it "boots under the in-memory mirror-queue backend (no AWS settings, no ECLUSE_QUEUE_URL) and serves" $ do
             -- The explicit memory backend needs no cloud queue: it boots with no
-            -- AWS_REGION/credentials AND no ECLUSE_QUEUE_URL — emitting its loud
+            -- AWS_REGION/credentials AND no ECLUSE_QUEUE_URL -- emitting its loud
             -- non-durable boot warning and constructing the bounded in-memory queue. The
             -- idle worker simply parks on the empty queue rather than hot-looping.
             unsetEnv "AWS_REGION"
@@ -196,7 +196,7 @@ spec = do
                 Left BootAborted -> pure ()
                 Right () -> expectationFailure "expected the boot to abort"
 
-    describe "npmServerConfig — the composed npm front door" $
+    describe "npmServerConfig -- the composed npm front door" $
         -- Drive the real composition the composition root wires (npmServerConfig),
         -- not a copy: this exercises the npm mount end to end through dispatch.
         with npmApp $ do
@@ -208,13 +208,13 @@ spec = do
                 -- (unwired) packument deps, then renders the 501 through its renderer.
                 get "/npm/is-odd" `shouldRespondWith` 501
 
-            it "does NOT mount npm at the root — /-/ping there is the neutral 404" $
+            it "does NOT mount npm at the root -- /-/ping there is the neutral 404" $
                 get "/-/ping" `shouldRespondWith` "Not Found\n"{matchStatus = 404}
 
             it "renders an unmounted prefix as a neutral text/plain 404" $
                 get "/pypi/is-odd" `shouldRespondWith` "Not Found\n"{matchStatus = 404}
 
-    describe "mountBindingFor — ecosystem drives the binding" $ do
+    describe "mountBindingFor -- ecosystem drives the binding" $ do
         it "resolves npm to a binding whose prefix is derived from the ecosystem (/npm)" $
             -- The path prefix is derived from the ecosystem, never configured, so
             -- the npm binding is served under its own /npm prefix.
@@ -222,6 +222,6 @@ spec = do
 
         it "has no binding for an ecosystem with no adapter wired (loud Nothing, not a stub)" $ do
             -- PyPI and RubyGems have no registry client or renderer yet, so resolving
-            -- one is a Nothing the caller must handle — never a silently half-wired mount.
+            -- one is a Nothing the caller must handle -- never a silently half-wired mount.
             (bindingPrefix <$> mountBindingFor PyPI Nothing Nothing) `shouldBe` Nothing
             (bindingPrefix <$> mountBindingFor RubyGems Nothing Nothing) `shouldBe` Nothing

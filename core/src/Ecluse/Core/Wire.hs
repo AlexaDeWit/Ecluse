@@ -6,7 +6,7 @@
 configuration boundary speaks: a queue or credential provider, the log format, the
 telemetry switch. Each is a fixed, finite set of wire names, historically
 hand-rolled as a parse @\\case@, a render @\\case@, and a separately maintained
-"(expected one of: …)" string — three places kept in step by hand.
+"(expected one of: …)" string -- three places kept in step by hand.
 
 A 'WireVocab' instance carries the vocabulary as one @(value, name)@ table plus the
 human noun for the set. 'renderWire' and 'parseWire' are derived from it once and
@@ -14,8 +14,8 @@ dispatched by type, so the rendered names, the parse, and the accepted-set messa
 can no longer drift apart: there is a single list of names per type.
 
 The vocabulary is keyed by type, which means one type speaks exactly one vocabulary.
-Where a type must be spoken two ways — a credential provider is named differently as
-a mirror-target selector than as a per-mount field — the second vocabulary is a
+Where a type must be spoken two ways -- a credential provider is named differently as
+a mirror-target selector than as a per-mount field -- the second vocabulary is a
 @newtype@ over the first with its own instance (see
 'Ecluse.Config.parseMirrorCredentialProvider').
 
@@ -49,11 +49,11 @@ class WireVocab a where
     -}
     wireTable :: NonEmpty (a, Text)
 
-{- | The wire name of a value, looked up in its instance's 'wireTable' — the inverse
+{- | The wire name of a value, looked up in its instance's 'wireTable' -- the inverse
 of 'parseWire'.
 
 A complete table (the contract every instance keeps) makes this total. A value the
-table omits — an instance that has fallen behind its type — renders as the first
+table omits -- an instance that has fallen behind its type -- renders as the first
 entry's name, which the instance's round-trip test surfaces rather than letting it
 pass silently.
 -}

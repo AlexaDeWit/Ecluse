@@ -57,7 +57,7 @@ import Ecluse.Server (
 import Ecluse.Telemetry (telemetryDisabled)
 
 {- | A registry-handle double whose effectful fields are never invoked: the web
-layer only routes, classifies, and renders — it never fetches — so a handle that
+layer only routes, classifies, and renders -- it never fetches -- so a handle that
 refuses loudly is enough to assemble an 'Env'. If a route reached an effectful
 field, the refusal would surface the leak.
 -}
@@ -103,7 +103,7 @@ mountAt prefix classifier =
     publishMountAt prefix classifier Nothing
 
 {- | A test mount binding like 'mountAt' but with the given (optional) first-party
-publish dependencies — 'Nothing' leaves a @PUT \/{pkg}@ the @405@ opt-out, 'Just'
+publish dependencies -- 'Nothing' leaves a @PUT \/{pkg}@ the @405@ opt-out, 'Just'
 enables the publish path (the scope guard and the relay).
 -}
 publishMountAt :: NonEmpty Text -> Classifier -> Maybe PublishDeps -> MountBinding
@@ -126,16 +126,16 @@ npmMountApp = application (mkServerConfig [mountAt ("npm" :| []) Npm.classify]) 
 {- | The 'application' under a single @\/npm@ mount with the first-party publish path
 __enabled__: a publish-scope allow-list of @\@acme@ and a publication target pointed at
 an __unconnectable__ address. So an in-scope publish passes the anti-shadowing guard and
-attempts the relay (which then fails to connect — a @502@, proving the write was
+attempts the relay (which then fails to connect -- a @502@, proving the write was
 reached), while an out-of-scope publish is refused at the guard (a @403@) before any
-connection — the assertion that the guard fires before any upstream write.
+connection -- the assertion that the guard fires before any upstream write.
 -}
 publishMountApp :: IO Application
 publishMountApp = publishAppWith basePublishDeps
 
 {- | The base first-party publish dependencies the publish tests build on: an @\@acme@
 scope allow-list and a publication target at an unconnectable port (so an in-scope
-publish reaches the relay and fails to connect — a @502@).
+publish reaches the relay and fails to connect -- a @502@).
 -}
 basePublishDeps :: PublishDeps
 basePublishDeps =
@@ -198,7 +198,7 @@ raisedDrain = do
 {- | An npm-mount 'application' whose worker heartbeat is __stale__: its last
 successful poll is recorded well past 'workerHeartbeatStaleAfter' ago, standing in
 for a single-process worker whose consume loop has gone quiet. Used to drive the
-liveness probe to its @503@ "worker stalled" arm — the single-process liveness
+liveness probe to its @503@ "worker stalled" arm -- the single-process liveness
 signal the front door folds the worker heartbeat into.
 -}
 stalledWorkerApp :: IO Application
@@ -211,7 +211,7 @@ stalledWorkerApp = do
     pure (application (mkServerConfig [mountAt ("npm" :| []) Npm.classify]) env)
 
 {- | A header matcher that passes only when the response carries __no__
-@Connection@ header — the not-draining expectation, the complement of the
+@Connection@ header -- the not-draining expectation, the complement of the
 going-away assertion. (@hspec-wai@'s '<:>' only asserts a header is present.)
 -}
 matchNoConnectionHeader :: MatchHeader
@@ -222,7 +222,7 @@ matchNoConnectionHeader = MatchHeader $ \headers _body ->
 
 {- | The server middleware stack wrapping a body-reading application under a tiny
 request-body cap. The size-limit middleware rejects an over-cap body only once a
-handler reads it, so the inner app strictly consumes the body — exercising the cap.
+handler reads it, so the inner app strictly consumes the body -- exercising the cap.
 The 'realIp' and 'timeout' middleware are part of the same stack.
 -}
 cappedApp :: Application
@@ -236,7 +236,7 @@ cappedApp = serverMiddleware (mkServerConfig []){scSizeLimit = RequestSizeLimit 
 {- | Drive a POST with the given body through an 'Application' and return its
 status code. The request is marked 'ChunkedBody' (rather than a known length) so
 the size-limit middleware applies its streaming byte-count check as the body is
-read — the path @hspec-wai@'s @request@, which fixes @requestBodyLength@ at a known
+read -- the path @hspec-wai@'s @request@, which fixes @requestBodyLength@ at a known
 zero, cannot reach. (@srequest@ supplies the body chunks from the 'LByteString'.)
 -}
 statusForBody :: Application -> LByteString -> IO Int
@@ -258,7 +258,7 @@ spec = do
             it "answers /readyz with 200" $
                 get "/readyz" `shouldRespondWith` 200
 
-    describe "liveness — worker-stall arm of /livez" $
+    describe "liveness -- worker-stall arm of /livez" $
         with stalledWorkerApp $ do
             it "fails /livez with 503 once the worker heartbeat is stale" $
                 -- The single-process liveness signal folds in the mirror worker's
@@ -269,11 +269,11 @@ spec = do
 
             it "keeps /readyz at 200 (readiness ignores worker staleness; it is not draining)" $
                 -- Readiness is about whether to route NEW traffic, gated only on the drain
-                -- signal — not on worker liveness. A stalled worker fails /livez, never
+                -- signal -- not on worker liveness. A stalled worker fails /livez, never
                 -- /readyz, so the two probes stay independent.
                 get "/readyz" `shouldRespondWith` 200
 
-    describe "graceful shutdown — readiness flip while draining" $
+    describe "graceful shutdown -- readiness flip while draining" $
         with drainingApp $ do
             it "fails /readyz with 503 (the LB stops routing new traffic here)" $
                 get "/readyz" `shouldRespondWith` 503
@@ -281,7 +281,7 @@ spec = do
             it "keeps /livez at 200 (a draining instance is alive, not unhealthy)" $
                 get "/livez" `shouldRespondWith` 200
 
-    describe "graceful shutdown — going-away header" $ do
+    describe "graceful shutdown -- going-away header" $ do
         with drainingApp $
             it "stamps Connection: close on a response while draining" $
                 -- A keep-alive pool (a client's, or a mesh's) must not reuse a socket
@@ -301,7 +301,7 @@ spec = do
             it "answers /npm/-/v1/search with 501 (search is not an install path)" $
                 get "/npm/-/v1/search" `shouldRespondWith` 501
 
-    describe "dispatch — /npm mount (prefix strip + npm grammar)" $
+    describe "dispatch -- /npm mount (prefix strip + npm grammar)" $
         with npmMountApp $ do
             it "recognises a packument route but does not yet serve it (501, not a fake 200)" $
                 get "/npm/is-odd" `shouldRespondWith` 501
@@ -338,14 +338,14 @@ spec = do
 
             it "lets an in-scope publish through the guard to the relay (502 when the target is unreachable)" $
                 -- @acme is in scope, so the guard admits the publish and the relay is
-                -- attempted; the target is unconnectable, so it fails with 502 — proving the
+                -- attempted; the target is unconnectable, so it fails with 502 -- proving the
                 -- guard let the write through rather than refusing it at the scope check.
                 request methodPut "/npm/@acme/widget" [] "" `shouldRespondWith` 502
 
             -- The body-name agreement leg of the anti-shadowing guard (issue #391). The
             -- URL @acme/widget is in scope, but the document body declares a DIFFERENT name,
             -- so a relay would write a name the scope guard never authorised. The refusal is
-            -- a 403 BEFORE the relay — distinguishable here from the 502 an attempted write
+            -- a 403 BEFORE the relay -- distinguishable here from the 502 an attempted write
             -- to the unconnectable target would yield, which is the proof the relay never ran.
             it "refuses an in-scope publish whose body _id / name disagree with the URL with 403, before any relay" $
                 request methodPut "/npm/@acme/widget" [] "{\"_id\":\"@victim/target\",\"name\":\"@victim/target\",\"versions\":{}}" `shouldRespondWith` 403
@@ -367,7 +367,7 @@ spec = do
         with (publishAppWith basePublishDeps{pubInboundToken = Just (mkSecret "edge-token")}) $ do
             it "401s a publish that fails the edge token gate (before the scope guard)" $
                 -- With an edge token configured, a publish carrying none is rejected at the
-                -- edge — the same gate the read paths apply.
+                -- edge -- the same gate the read paths apply.
                 request methodPut "/npm/@acme/widget" [] "" `shouldRespondWith` 401
 
     describe "the two response tiers (neutral above mounts, mount renderer within)" $
@@ -379,11 +379,11 @@ spec = do
 
             it "renders an unrecognised IN-MOUNT path through the mount's npm renderer" $
                 -- @/npm/is-odd/3.0.1@ is under the npm mount but not a recognised npm
-                -- path, so its 404 body is the npm {\"error\": …} object — the mount's
+                -- path, so its 404 body is the npm {\"error\": …} object -- the mount's
                 -- surface, distinct from the neutral plain-text 404 above.
                 get "/npm/is-odd/3.0.1" `shouldRespondWith` "{\"error\":\"not found\"}"{matchStatus = 404}
 
-    describe "dispatch — injected classifier (the routing boundary)" $
+    describe "dispatch -- injected classifier (the routing boundary)" $
         -- Drive dispatch with a FAKE classifier (not npm's): the route a request
         -- takes must follow the injected function, proving the web layer is not
         -- hardwired to npm's grammar.
@@ -400,7 +400,7 @@ spec = do
             it "denies npm's ping meta-route (the fake's grammar does not recognise it)" $
                 get "/npm/-/ping" `shouldRespondWith` 404
 
-    describe "no mounts — neutral by default" $
+    describe "no mounts -- neutral by default" $
         -- With no mount wired, the web layer serves nothing but the health probes;
         -- every other path matches no mount and is the neutral 404.
         with neutralApp $ do
@@ -411,7 +411,7 @@ spec = do
                 get "/livez" `shouldRespondWith` 200
                 get "/readyz" `shouldRespondWith` 200
 
-    describe "middleware — request size limit" $ do
+    describe "middleware -- request size limit" $ do
         it "rejects a request body over the cap with 413" $
             -- The body exceeds the 8-byte cap; reading it trips the size-limit
             -- middleware, which answers 413 rather than letting the handler buffer
@@ -422,7 +422,7 @@ spec = do
         it "passes a request whose body is within the cap through to the handler" $
             statusForBody cappedApp "tiny" `shouldReturn` 200
 
-    describe "mkServerConfig — defaults" $ do
+    describe "mkServerConfig -- defaults" $ do
         it "listens on the conventional npm proxy port" $
             scPort (mkServerConfig []) `shouldBe` defaultPort
 
@@ -463,7 +463,7 @@ spec = do
 
     describe "withInteractiveHalt (local-dev quit key)" $ do
         -- The real wiring (TTY guard, stdin EOF, _exit) is process-global and not
-        -- deterministically drivable in-process — the same boundary the OS-signal
+        -- deterministically drivable in-process -- the same boundary the OS-signal
         -- path has. So the three injection points are wired and the combinator's logic is
         -- tested: armed only when interactive, halts when the signal fires, and the
         -- watcher is torn down with the action (never fires after it returns).
@@ -498,7 +498,7 @@ spec = do
             fired <- timeout 1_000_000 (takeMVar halted)
             fired `shouldBe` Just ()
 
-        it "tears the watcher down with the action — halt never fires once the action returns" $ do
+        it "tears the watcher down with the action -- halt never fires once the action returns" $ do
             halted <- newIORef False
             let ih =
                     InteractiveHalt

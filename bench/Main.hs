@@ -2,14 +2,14 @@
 over the pure @ecluse-core@ hot paths, the version-count complexity assertions, and
 the synthetic-corpus generator's correctness tests, all in one @tasty@ tree.
 
-@tasty-bench@ reports time and — under @+RTS -T@, baked into the component's RTS
-options — allocated bytes for each bench. Allocations are the machine-independent
+@tasty-bench@ reports time and -- under @+RTS -T@, baked into the component's RTS
+options -- allocated bytes for each bench. Allocations are the machine-independent
 signal the baseline tracks; time is informational. See
 @docs\/architecture\/performance.md@.
 
 The generator tests and the complexity assertions are ordinary @tasty@ test cases
 mixed into the same tree, so a malformed corpus or an accidentally-quadratic hot
-path fails the run (a non-zero exit) — the one red state this harness recognises.
+path fails the run (a non-zero exit) -- the one red state this harness recognises.
 -}
 module Main (main) where
 
@@ -46,7 +46,7 @@ import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
 main :: IO ()
 main = do
     -- Load and decode the curated real-world corpus once, up front, before the
-    -- measured window — so the decode cost is excluded from every bench's timing and
+    -- measured window -- so the decode cost is excluded from every bench's timing and
     -- a corrupt or mis-pinned capture stops the run before any benching (loadCorpus
     -- fails loudly). Loaded eagerly rather than through a tasty 'env' resource, which
     -- the tasty-bench reporters do not handle when mixed with the HUnit generator tests.
@@ -99,7 +99,7 @@ generatorTests =
     rewrittenPrefix :: Text
     rewrittenPrefix = syntheticProxyBase <> "/" <> benchPackageText <> "/-/"
 
-{- | Every @dist.tarball@ URL in a packument value, in @versions@-object order — used
+{- | Every @dist.tarball@ URL in a packument value, in @versions@-object order -- used
 to confirm the serve-time rewrite reached each version.
 -}
 tarballUrlsOf :: Value -> [Text]

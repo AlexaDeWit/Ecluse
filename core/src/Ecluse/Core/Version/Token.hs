@@ -3,7 +3,7 @@
 A 'VToken' is a single numeric or textual run, with the ordering rule common to
 the RubyGems and PEP 440-local grammars: numeric tokens outrank textual ones,
 numerics compare numerically, text compares lexically. (The semver prerelease
-rule is the opposite — numeric identifiers rank /below/ alphanumeric ones — so it
+rule is the opposite -- numeric identifiers rank /below/ alphanumeric ones -- so it
 lives with the semver grammar, not here.)
 
 The two segment readers, 'parseNumSeg' (validating) and 'numOr0' (total over
@@ -22,7 +22,7 @@ import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
 import Data.Text qualified as T
 
 {- | A version token: a numeric run or a textual run. Its 'Ord' is the RubyGems
-\/ PEP 440-local rule — numeric tokens outrank textual ones, numerics compare
+\/ PEP 440-local rule -- numeric tokens outrank textual ones, numerics compare
 numerically, text compares lexically. (Semver prerelease ordering is the
 opposite and is handled in "Ecluse.Core.Version.Semver".)
 -}
@@ -40,7 +40,7 @@ instance Ord VToken where
 the cost of reading numeric segments: a segment is turned into an 'Integer' with
 'readMaybe', which is quadratic in the digit count, so an unbounded digit run in
 hostile registry metadata would be an algorithmic-complexity DoS. Real version
-strings are tiny — npm caps its own version field at 256 characters — so this far
+strings are tiny -- npm caps its own version field at 256 characters -- so this far
 larger bound rejects only adversarial input. A version past it fails to parse and is
 served raw without an ordering key (the total-by-design @mkVersion@ path in
 "Ecluse.Core.Version": a version is never dropped over a parser gap).
@@ -59,7 +59,7 @@ numOr0 :: Text -> Integer
 numOr0 t = if T.null t then 0 else fromMaybe 0 (readMaybe (toString t))
 
 {- | ASCII-only \"alphanumeric\" predicate: an ASCII letter or ASCII digit. Use
-this — not 'Data.Char.isAlphaNum', which is Unicode-aware — wherever the PEP 440
+this -- not 'Data.Char.isAlphaNum', which is Unicode-aware -- wherever the PEP 440
 and @Gem::Version@ grammars gate \"alphanumeric\" characters: Python's
 @packaging@ and Ruby's @Gem::Version@ are ASCII-only, so a Unicode-aware gate
 both over-accepts (fullwidth\/Arabic-Indic digits, @1.0+café@) and mis-orders

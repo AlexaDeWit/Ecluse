@@ -89,7 +89,7 @@ spec = do
         it "ranks a bare SRI below every real algorithm (resolve it first)" $
             (integrityStrength SRI < integrityStrength MD5) `shouldBe` True
 
-        it "ranks SHA-512 and Blake2b as EQUAL — the modern long digests share the top tier" $
+        it "ranks SHA-512 and Blake2b as EQUAL -- the modern long digests share the top tier" $
             -- The load-bearing invariant of the tier representation: a naive
             -- one-constructor-per-algorithm enum would make these distinct and
             -- silently change which digest wins a strongest-digest comparison. The
@@ -145,8 +145,8 @@ spec = do
             (unMinIntegrity <$> mkMinIntegrity Blake2b) `shouldBe` Right Blake2b
 
         it "rejects a floor below SHA-256 with a precise message (a sub-floor is a config error)" $ do
-            -- Asserted by value (not just isLeft) so the operator-facing message — and
-            -- the rejected algorithm's rendered name — is pinned.
+            -- Asserted by value (not just isLeft) so the operator-facing message -- and
+            -- the rejected algorithm's rendered name -- is pinned.
             mkMinIntegrity SHA1 `shouldBe` Left "the minimum public integrity algorithm must be SHA-256 or stronger, not sha1"
             mkMinIntegrity MD5 `shouldBe` Left "the minimum public integrity algorithm must be SHA-256 or stronger, not md5"
             mkMinIntegrity SRI `shouldBe` Left "the minimum public integrity algorithm must be SHA-256 or stronger, not sri"
@@ -160,7 +160,7 @@ spec = do
 
         it "rejects a below-floor name and an unknown name with distinct messages" $ do
             -- A recognised-but-weak name fails the floor; an unrecognised name fails the
-            -- parse — the two error texts are distinct so a misconfiguration is precise.
+            -- parse -- the two error texts are distinct so a misconfiguration is precise.
             parseMinIntegrity "sha1" `shouldBe` Left "the minimum public integrity algorithm must be SHA-256 or stronger, not sha1"
             parseMinIntegrity "md5" `shouldBe` Left "the minimum public integrity algorithm must be SHA-256 or stronger, not md5"
             parseMinIntegrity "frobnicate" `shouldBe` Left "unknown integrity algorithm: frobnicate"
@@ -178,7 +178,7 @@ spec = do
         it "defaults to SHA-256, the same secure default as the public floor" $
             unMinTrustedIntegrity defaultMinTrustedIntegrity `shouldBe` SHA256
 
-        it "accepts any concrete algorithm — including the broken SHA-1 and MD5 (loosenable)" $ do
+        it "accepts any concrete algorithm -- including the broken SHA-1 and MD5 (loosenable)" $ do
             -- The trusted floor has NO hard minimum: an operator may loosen it below
             -- SHA-256 for a legacy private mirror, where trust substitutes for strength.
             (unMinTrustedIntegrity <$> mkMinTrustedIntegrity SHA1) `shouldBe` Right SHA1

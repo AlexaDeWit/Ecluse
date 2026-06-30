@@ -81,13 +81,13 @@ import Ecluse.Core.Version (Version, mkVersion)
 
 {- | Request-shaping tests for the npm data plane. They drive 'newNpmClient' and
 the exposed request builders against an __in-process WAI stub__ standing in for a
-registry, so the wire requests Écluse emits — and the way it classifies the
-responses — are asserted without any network.
+registry, so the wire requests Écluse emits -- and the way it classifies the
+responses -- are asserted without any network.
 
 The cases pin the protocol details the slice calls out: the @Accept@ /
 @Accept-Encoding@ content negotiation, the scoped-package @%2F@ path encoding, the
 injected bearer token, relayed conditional-GET validators, the non-decompressing
-artifact request (so a tarball streams byte-for-byte), and — the subtle one —
+artifact request (so a tarball streams byte-for-byte), and -- the subtle one --
 __idempotent publish on HTTP 409__, where a re-published immutable version is
 success, not an error.
 -}
@@ -102,8 +102,6 @@ spec = do
     publishSpec
     urlFailureSpec
     configAndWiringSpec
-
--- ── a recording WAI stub ──────────────────────────────────────────────────────
 
 {- | What the stub captured from the request it last served: enough to assert the
 method, path, and headers Écluse sent.
@@ -141,7 +139,7 @@ action's duration, so the test never collides on a fixed port.
 withStub :: Status -> LByteString -> (Stub -> IO a) -> IO a
 withStub status = withStubHeaders status []
 
-{- | 'withStub' with extra response headers — e.g. @Content-Encoding: gzip@ so the
+{- | 'withStub' with extra response headers -- e.g. @Content-Encoding: gzip@ so the
 @http-client@ body reader decompresses the served bytes, letting a test assert the
 bounded read bounds /decompressed/ size rather than wire size.
 -}
@@ -178,8 +176,6 @@ stubConfig stub = do
 -- | Look up a header (case-insensitively) in a captured request.
 headerValue :: ByteString -> Captured -> Maybe ByteString
 headerValue name cap = snd <$> find ((== CI.mk name) . fst) (capHeaders cap)
-
--- ── content negotiation ──────────────────────────────────────────────────────
 
 requestShapingSpec :: Spec
 requestShapingSpec =
@@ -225,8 +221,6 @@ requestShapingSpec =
                 headerValue "If-None-Match" cap `shouldBe` Nothing
                 headerValue "If-Modified-Since" cap `shouldBe` Nothing
 
--- ── bounded body read (response bound, security.md invariant 4) ───────────────
-
 {- | The metadata fetch reads the upstream body through 'boundedRead' against the
 config's 'npmLimits', so a body past 'maxBodyBytes' is aborted fail-closed (an 'IO'
 exception) rather than buffered whole, while a body within budget is returned
@@ -247,7 +241,7 @@ boundedBodySpec = describe "bounded metadata body read" $ do
             outcome `shouldSatisfy` threw
 
     it "returns a body that is within maxBodyBytes verbatim" $
-        -- A body the cap admits is read whole and returned unchanged — no false refusal.
+        -- A body the cap admits is read whole and returned unchanged -- no false refusal.
         withStub status200 "{\"name\":\"is-odd\"}" $ \stub -> do
             base <- stubConfig stub
             let config = base{npmLimits = defaultLimits{maxBodyBytes = 64}}
@@ -284,8 +278,6 @@ gzippedOversizedBody :: ByteString
 gzippedOversizedBody =
     toStrict (GZip.compress (toLazy ("{\"name\":\"is-odd\",\"_padding\":\"" <> BS.replicate 65536 0x78 <> "\"}")))
 
--- ── scoped-name path encoding ─────────────────────────────────────────────────
-
 pathEncodingSpec :: Spec
 pathEncodingSpec =
     around (withStub status200 "{}") $
@@ -319,8 +311,6 @@ pathEncodingSpec =
                 cap <- lastCaptured stub
                 capPath cap `shouldBe` "/foo%252e%252e%252fbar"
 
--- ── auth ──────────────────────────────────────────────────────────────────────
-
 authSpec :: Spec
 authSpec =
     around (withStub status200 "{}") $
@@ -337,8 +327,6 @@ authSpec =
                 _ <- fetchMetadataForm config Abbreviated noValidators isOdd
                 cap <- lastCaptured stub
                 headerValue "Authorization" cap `shouldBe` Nothing
-
--- ── redirect posture (Écluse never follows an upstream redirect) ───────────────
 
 {- | The single request-finalization point ('withToken') disables redirect following on
 __every__ request, anonymous and credential-bearing alike, so no request ever follows a
@@ -382,8 +370,6 @@ redirectSpec = describe "no data-plane request follows an upstream redirect" $ d
     expectRedirectCount want = \case
         Left err -> fail ("request building failed: " <> show err)
         Right req -> Client.redirectCount req `shouldBe` want
-
--- ── artifacts ──────────────────────────────────────────────────────────────────
 
 artifactSpec :: Spec
 artifactSpec = describe "fetchArtifact / artifactRequest" $ do
@@ -469,8 +455,6 @@ artifactSpec = describe "fetchArtifact / artifactRequest" $ do
                 find ((== "Authorization") . fst) (Client.requestHeaders req)
                     `shouldBe` Just ("Authorization", "Bearer tok-xyz")
 
--- ── publish ─────────────────────────────────────────────────────────────────────
-
 publishSpec :: Spec
 publishSpec = describe "publishArtifact idempotency" $ do
     it "PUTs the publish document to the package path" $
@@ -513,14 +497,12 @@ publishSpec = describe "publishArtifact idempotency" $ do
             outcome <- publishArtifact client isOdd v1 publishDoc
             outcome `shouldSatisfy` isLeft
 
--- ── URL-formation failures ──────────────────────────────────────────────────────
-
 urlFailureSpec :: Spec
 urlFailureSpec = describe "URL-formation failures" $ do
     it "metadataRequest refuses an empty base URL as a UrlFormationError, not a publish error" $ do
         manager <- newManager defaultManagerSettings
         let config = NpmClientConfig{npmBaseUrl = "", npmManager = manager, npmToken = Nothing, npmLimits = defaultLimits}
-        -- A read-path (fetch) URL fault is a 'UrlFormationError' — the whole point
+        -- A read-path (fetch) URL fault is a 'UrlFormationError' -- the whole point
         -- of the type split: it is never reported as a 'PublishError'.
         metadataRequest config Abbreviated noValidators isOdd `shouldSatisfy` urlErrorWas EmptyBaseUrl
 
@@ -579,8 +561,6 @@ urlFailureSpec = describe "URL-formation failures" $ do
         -- A trailing slash on the base must not double the join.
         metadataRequest config Abbreviated noValidators isOdd `shouldNotSatisfy` isLeft
 
--- ── config and handle wiring ─────────────────────────────────────────────────
-
 configAndWiringSpec :: Spec
 configAndWiringSpec = describe "config and handle wiring" $ do
     it "defaultNpmConfig targets the public registry anonymously over the given manager" $ do
@@ -612,11 +592,9 @@ configAndWiringSpec = describe "config and handle wiring" $ do
             Left err -> fail ("expected a successful projection, got: " <> show err)
             Right info -> renderPackageName (infoName info) `shouldBe` "is-odd"
         -- No versions in this body, so the version list is empty and a
-        -- per-version lookup is absent — both reach the wired field.
+        -- per-version lookup is absent -- both reach the wired field.
         parseVersionList client resp `shouldBe` Right []
         parseVersionDetails client resp v1 `shouldSatisfy` isLeft
-
--- ── fixtures ──────────────────────────────────────────────────────────────────
 
 isOdd :: PackageName
 isOdd = mkPackageName Npm Nothing "is-odd"
@@ -662,7 +640,7 @@ isUnparseable = either matchUnparseable (const False)
     matchUnparseable (UnparseableUrl _) = True
     matchUnparseable _ = False
 
-{- | Whether a @try@'d fetch raised rather than returning a response — the assertion
+{- | Whether a @try@'d fetch raised rather than returning a response -- the assertion
 the bounded-body tests make when an over-budget body aborts the read fail-closed
 (the metadata fetch throws a 'ResponseBoundExceeded').
 -}

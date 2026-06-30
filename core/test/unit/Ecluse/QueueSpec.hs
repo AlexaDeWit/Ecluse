@@ -26,7 +26,7 @@ import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Package (unsafeHash, validSha1)
 
 {- | A sample mirror job. The in-memory queue under test does not inspect a
-job's contents — it only carries it from 'enqueue' to 'receive' — so one fixed
+job's contents -- it only carries it from 'enqueue' to 'receive' -- so one fixed
 job suffices for the FIFO / ack / redelivery assertions.
 -}
 sampleJob :: MirrorJob
@@ -143,7 +143,7 @@ spec = do
 
         it "gives each delivery of the same job a distinct message (fresh receipt)" $ do
             -- A job that is received but not acked is redelivered, and each delivery
-            -- must be a *distinct* 'QueueMessage' — same job, but a fresh receipt —
+            -- must be a *distinct* 'QueueMessage' -- same job, but a fresh receipt --
             -- so acking one delivery cannot be confused with another. This pins the
             -- receipt-per-delivery invariant via 'QueueMessage' equality.
             q <- newInMemoryQueue
@@ -214,7 +214,7 @@ spec = do
             readIORef drops `shouldReturn` [1]
 
         it "reports the first drop then every interval-th, rate-limiting a flood" $ do
-            -- AC4: a sustained flood must not spam — only the first drop and every
+            -- AC4: a sustained flood must not spam -- only the first drop and every
             -- 'memoryQueueDropReportInterval'-th drop are reported (carrying the
             -- running total), so log volume is bounded under load.
             (q, drops) <- boundedQueue 1
@@ -223,7 +223,7 @@ spec = do
             readIORef drops `shouldReturn` [1, memoryQueueDropReportInterval]
   where
     -- A bounded in-memory queue at the given cap, paired with an 'IORef' that records
-    -- (in order) the running drop totals its drop callback was invoked with — so a
+    -- (in order) the running drop totals its drop callback was invoked with -- so a
     -- test can assert both the cap behaviour and the rate-limited drop reporting. The
     -- idle poll window is shortened to 50ms (the production default is ~20s) so an
     -- idle-receive test returns promptly rather than waiting out a real long-poll.
@@ -248,8 +248,6 @@ spec = do
                     traverse_ (ack q . msgReceipt) msgs
                     go (reverse (map msgJob msgs) <> acc)
 
--- ── model-based state-machine property ───────────────────────────────────────
-
 {- | A pure model of 'newInMemoryQueue's observable state, parameterised over the
 Hedgehog variable phase @v@ (symbolic while generating, concrete while running).
 
@@ -257,7 +255,7 @@ It mirrors the implementation's @QueueState@: visible jobs in FIFO order, plus
 in-flight (received-but-unacked) jobs. Each in-flight entry remembers which
 'receive' delivered it (the symbolic @Var@ over that receive's @[QueueMessage]@
 output) and its index within that delivery, so a later 'Ack' / 'Extend' can name
-the exact handle the implementation will use — exactly the bookkeeping the real
+the exact handle the implementation will use -- exactly the bookkeeping the real
 queue does with its monotonic receipt counter.
 -}
 data QModel (v :: Type -> Type) = QModel
@@ -270,7 +268,7 @@ data QModel (v :: Type -> Type) = QModel
     }
 
 {- | One in-flight job in the model: the job itself, whether 'Extend' has held it
-past the next reclaim, and the symbolic handle identifying it — the @Var@ over the
+past the next reclaim, and the symbolic handle identifying it -- the @Var@ over the
 delivering receive's output list plus this job's index in that list.
 -}
 data InFlightEntry v = InFlightEntry
@@ -298,8 +296,6 @@ predictReceive m =
             | otherwise = (ifJob e : jobs, held)
         delivered = reclaimed <> mVisible m
      in (delivered, stillHeld)
-
--- ── command inputs (Hedgehog "barbie" functors over the variable phase) ──────
 
 -- Each input is higher-kinded in @v@ so Hedgehog can carry symbolic variables
 -- through it. Enqueue/Receive reference no prior result, so their @v@ is phantom;
@@ -344,8 +340,6 @@ instance FunctorB ExtendInput where
 
 instance TraversableB ExtendInput where
     btraverse f (ExtendInput var i s) = ExtendInput <$> btraverse f var <*> pure i <*> pure s
-
--- ── commands ─────────────────────────────────────────────────────────────────
 
 -- | A small pool of jobs so receive can observe FIFO ordering of distinct jobs.
 genJob :: H.Gen MirrorJob
@@ -395,9 +389,9 @@ receiveCommand q =
             -- invariant), so acking one can never be confused with another.
             let receipts = map msgReceipt msgs
             length (ordNub receipts) === length receipts
-            -- Non-vacuity: the sequence must reach the interesting arms — a receive
+            -- Non-vacuity: the sequence must reach the interesting arms -- a receive
             -- that redelivers an un-acked job (reclaim) and one that batches 2+
-            -- jobs — not just empty / single-job receives.
+            -- jobs -- not just empty / single-job receives.
             let hadUnheldInFlight = not (all ifHeld (mInFlight beforeState))
             H.cover 1 "receive reclaims an un-acked job" (hadUnheldInFlight && not (null delivered))
             H.cover 1 "receive delivers a batch (2+ jobs)" (length delivered >= 2)
@@ -471,8 +465,8 @@ the implementation agrees with the pure model on every observable result (the
 'Ensure' callbacks) and that the model's state transitions stay consistent.
 
 The queue threaded into the commands is created once per test run (in 'IO' lifted
-into generation), but generation never invokes @commandExecute@ — it only walks
-the pure @commandGen@ / 'Require' / 'Update' callbacks — so the same handle is
+into generation), but generation never invokes @commandExecute@ -- it only walks
+the pure @commandGen@ / 'Require' / 'Update' callbacks -- so the same handle is
 safely reused for execution.
 -}
 queueModelProperty :: H.PropertyT IO ()

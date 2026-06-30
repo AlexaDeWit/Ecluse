@@ -3,7 +3,7 @@ __write__ approved packages to the mirror target.
 
 This is one of the two cloud handles (the other is "Ecluse.Core.Queue"); it is separate
 from the protocol handle "Ecluse.Core.Registry" because protocol and authentication are
-orthogonal axes — every managed npm registry (AWS CodeArtifact, GCP Artifact
+orthogonal axes -- every managed npm registry (AWS CodeArtifact, GCP Artifact
 Registry, a self-hosted Verdaccio) speaks the same npm protocol and differs only
 in how its bearer token is obtained (see
 @docs\/architecture\/cloud-backends.md@ → "Credential Provider").
@@ -47,8 +47,8 @@ import Text.Show (showString, showsPrec)
 {- | A short-lived bearer secret (an access token).
 
 __Opaque, and its 'Show' is redacted__: the underlying token text is never
-rendered, so a 'Secret' can be embedded in any value — an 'AuthToken', a log
-record, an error — without risking disclosure (token material must never reach a
+rendered, so a 'Secret' can be embedded in any value -- an 'AuthToken', a log
+record, an error -- without risking disclosure (token material must never reach a
 log, metric, or trace; see @docs\/architecture\/observability.md@). This
 redaction is a load-bearing security property.
 
@@ -60,7 +60,7 @@ without a content-dependent early out (see the 'Eq' instance). The default
 derived equality would be 'Data.Text'\'s short-circuiting compare, which returns
 as soon as two tokens first differ and so leaks, through timing, how long a
 shared prefix is. Folding that property into the type itself means no comparison
-on a 'Secret' — the inbound edge-auth gate above all — can accidentally become
+on a 'Secret' -- the inbound edge-auth gate above all -- can accidentally become
 non-constant-time. (A constant-time compare can still reveal the token /length/;
 that residual leak is accepted, but the /content/ is never short-circuited on.)
 -}

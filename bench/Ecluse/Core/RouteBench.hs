@@ -2,9 +2,9 @@
 ("Ecluse.Core.Registry.Npm.Route") that turns a request's method and path segments
 into a typed 'Route' on every request, before any metadata work happens.
 
-The input is a representative mix of the request shapes the proxy sees — bare and
+The input is a representative mix of the request shapes the proxy sees -- bare and
 scoped packuments, tarball coordinates, the @ping@ probe, search, first-party
-publishes (@PUT@), and unrecognised paths — so the bench reflects the real
+publishes (@PUT@), and unrecognised paths -- so the bench reflects the real
 classifier branch distribution rather than one hot path.
 -}
 module Ecluse.Core.RouteBench (

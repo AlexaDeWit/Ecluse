@@ -15,10 +15,10 @@ import Ecluse.Core.Credential.Refresh (noCredentialReporters)
 
 {- | Component test for the CodeArtifact credential leaf with __no live AWS__: an
 in-process HTTP stub answers @GetAuthorizationToken@ with a canned response (the
-shape from the API reference — @{"authorizationToken": string, "expiration":
+shape from the API reference -- @{"authorizationToken": string, "expiration":
 number}@, a @200@), and an @amazonka@ 'AWS.Env' is pointed at it via an endpoint
-override with static credentials. This drives the real mint path — request build,
-SigV4 signing, response parse, token + expiry extraction — that the secret-gated
+override with static credentials. This drives the real mint path -- request build,
+SigV4 signing, response parse, token + expiry extraction -- that the secret-gated
 smoke test can only reach against the real service. (The token is a control-plane
 AWS API call, not the npm protocol, so an npm-registry emulator cannot stand in;
 the endpoint shim is the injection point.)

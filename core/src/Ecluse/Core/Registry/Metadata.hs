@@ -5,7 +5,7 @@ This is the read counterpart to the publish-side "Ecluse.Core.Registry" handle, 
 deliberately distinct from it. The publish handle is the write\/worker side (one
 client minted once at the composition root); this handle is the serve path's read
 boundary, constructed __per request__ so it can capture the per-origin manager,
-credential posture, base URL, and response budget — and the shared metadata cache —
+credential posture, base URL, and response budget -- and the shared metadata cache --
 that a serve fetch needs. The pipeline never reaches for a registry's wire format: it
 asks a mount for one of two things and the mount owns both fetch and parse behind the
 answer.
@@ -15,13 +15,13 @@ The two operations are asymmetric __by design__:
 * 'fetchFullManifest' yields the packument-level 'Ecluse.Core.Package.PackageInfo'
   /and/ the raw document it was decoded from. The serve path needs the raw document
   because it edits the packument in place (dropping filtered versions, rewriting
-  artifact locations) and re-serializes it to the client — and
+  artifact locations) and re-serializes it to the client -- and
   'Ecluse.Core.Package.PackageInfo' is a lossy projection that cannot reconstruct the
   document.
 
 * 'fetchVersionMetadata' yields only one version's
   'Ecluse.Core.Package.PackageDetails'. It never re-serializes, so it need not carry
-  the raw document — which is what lets a mount make it the cheap path (a smaller
+  the raw document -- which is what lets a mount make it the cheap path (a smaller
   endpoint, or a selective parse) without changing this boundary.
 
 Both operations are total: a failure is reported as a 'MetadataError' __value__, not
@@ -48,7 +48,7 @@ import Ecluse.Core.Package (PackageDetails, PackageInfo, PackageName)
 import Ecluse.Core.Security (LimitError)
 import Ecluse.Core.Version (Version)
 
-{- | The serve-path read handle — a record of two intent operations over a registry
+{- | The serve-path read handle -- a record of two intent operations over a registry
 mount, whose private state (the per-origin fetch configuration and the shared cache)
 the closures capture. Both fields return 'IO' so a backend stays decoupled from the
 proxy core, exactly as the publish-side handle does.
@@ -65,7 +65,7 @@ data MetadataClient = MetadataClient
     version's 'PackageDetails', or 'Nothing' when the package resolved but does not
     carry the requested version (a genuine absence the caller renders as a miss,
     distinct from a 'MetadataError' that means the metadata itself was unobtainable).
-    Never carries the raw document — it does not re-serialize.
+    Never carries the raw document -- it does not re-serialize.
 
     The 'Maybe' is the one deliberate departure from a bare
     @Either MetadataError PackageDetails@: a serve path must distinguish a version that
@@ -75,7 +75,7 @@ data MetadataClient = MetadataClient
     -}
     }
 
-{- | Why a metadata fetch could not yield a usable result — reported as a value so the
+{- | Why a metadata fetch could not yield a usable result -- reported as a value so the
 serve path maps each cause onto the response it renders, byte-for-byte as before.
 
 Each constructor preserves a distinction the serve path acts on: a name mismatch is
@@ -94,7 +94,7 @@ data MetadataError
       MetadataUndecodable
     | {- | The upstream answered with a manifest that self-reported a /different/
       package's name (carried verbatim for the audit log). The origin is untrusted for
-      this request and dropped — never served as the requested package.
+      this request and dropped -- never served as the requested package.
       -}
       MetadataNameMismatch Text
     deriving stock (Eq, Show)

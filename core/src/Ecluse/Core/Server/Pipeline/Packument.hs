@@ -2,12 +2,12 @@
 @GET \/{pkg}@.
 
 This is the data-plane handler module for packuments. It composes the
-slices that decide /what/ to serve — the registry client
+slices that decide /what/ to serve -- the registry client
 ("Ecluse.Core.Registry.Npm"), the per-version rules ("Ecluse.Core.Rules"), the structural
 filter ("Ecluse.Core.Registry.Npm.Filter"), the cross-upstream merge
 ("Ecluse.Core.Package.Merge"), the metadata cache ("Ecluse.Core.Server.Cache"), the
 own-ETag conditional ("Ecluse.Core.Server.Conditional"), and the serve-outcome status
-("Ecluse.Core.Server.Response") — into one action in the
+("Ecluse.Core.Server.Response") -- into one action in the
 'Ecluse.Core.Server.Context.Handler' reader, reading its mount's serve dependencies and
 the request runtime 'Ecluse.Core.Server.Context.ServeRuntime' from the request's
 'Ecluse.Core.Server.Context.RequestCtx'.
@@ -17,7 +17,7 @@ the request runtime 'Ecluse.Core.Server.Context.ServeRuntime' from the request's
 This handler implements the default @passthrough@ credential posture (see
 @docs\/architecture\/access-model.md@). The invariant that holds under __every__
 strategy is the __public strip__: the client's credential is __stripped before any
-public-upstream fetch__, which is always anonymous — sending an internal token to the
+public-upstream fetch__, which is always anonymous -- sending an internal token to the
 public registry would be a credential disclosure, so the public-upstream fetch is built
 with no token at all. Under @passthrough@ the client's own credential is additionally
 __forwarded verbatim to the private upstream__, which is the authority for who may
@@ -30,9 +30,9 @@ every request with that client's own credential, so the upstream re-authorises e
 client itself, and only the anonymous public origin is cached (one shared document, no
 per-client authority to preserve). Caching the private origin keyed by base URL alone
 would let one client's cached entry serve another client's private document within the
-TTL, bypassing the upstream's authorisation — a cross-client disclosure. (Other
+TTL, bypassing the upstream's authorisation -- a cross-client disclosure. (Other
 strategies make the private origin shareable by authorising each serve differently; the
-metadata cache itself stays credential-free regardless — see
+metadata cache itself stays credential-free regardless -- see
 @docs\/architecture\/access-model.md@ → "Caching".)
 
 == Merge, not fallback
@@ -45,7 +45,7 @@ through the rules and the structural filter ('filterPlan' decides, 'applyFilterP
 replays) before they enter; the two are combined, private winning a collision and
 an integrity divergence flagged. If one upstream
 is unavailable while the other succeeds, the best-effort union of what resolved is
-served — only when /nothing/ resolves does the request error.
+served -- only when /nothing/ resolves does the request error.
 
 == Decision surface vs served surface
 
@@ -57,7 +57,7 @@ that won it; the served body is assembled by taking each survivor's object from
 the /raw @Value@/ of its winning source, carrying the reconciled @dist-tags@ and
 @time@, and relaying every other top-level key from the precedence-winning
 document. The typed model is never re-serialised. The two fields the merge /owns/ as
-a decision — @dist-tags.latest@ and the @time@ instants — are re-rendered from that
+a decision -- @dist-tags.latest@ and the @time@ instants -- are re-rendered from that
 decision (the times as normalised ISO-8601), so they may differ byte-for-byte from
 any single upstream while denoting the same value; integrity-bearing fields
 (@dist.integrity@, @dist.tarball@) are relayed raw and untouched. The served bytes
@@ -158,20 +158,18 @@ import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (..), timedSeconds)
 import Ecluse.Core.Version (renderVersion)
 
--- ── the handler ─────────────────────────────────────────────────────────────
-
 {- | Serve a @GET \/{pkg}@ packument request end to end, over the request's
 'RequestCtx'.
 
 The mount's 'PackumentDeps' and error renderer are read from the matched
 'MountBinding' in context, not threaded as arguments. When the mount has no
-packument-serve dependencies wired, the route is recognised but not served — a
-@501@ in the mount's surface — rather than fabricating a result.
+packument-serve dependencies wired, the route is recognised but not served -- a
+@501@ in the mount's surface -- rather than fabricating a result.
 
 With dependencies wired: the edge token, if configured, is validated before any
 upstream is touched. Then the private and public upstreams are fetched
-__concurrently__ — the client's credential forwarded to the private origin, the public
-origin anonymous — each parse failure or unavailable upstream degrading to a missing
+__concurrently__ -- the client's credential forwarded to the private origin, the public
+origin anonymous -- each parse failure or unavailable upstream degrading to a missing
 contribution rather than an error. Private versions are trusted as-is; public
 versions are gated through the rules and the structural filter ('filterPlan' then
 'applyFilterPlan'); the surviving sets are merged ('mergePackuments') and the
@@ -179,11 +177,11 @@ versions are gated through the rules and the structural filter ('filterPlan' the
 which is then answered against the client's conditional request with our own ETag.
 When nothing survives, the status follows the most recoverable cause via
 'packumentStatus'. An origin whose self-reported packument name disagrees with the
-route is validated out — dropped as untrusted for this request and logged — so a
+route is validated out -- dropped as untrusted for this request and logged -- so a
 single misreporting upstream never denies a package another upstream serves; when
 that leaves __no__ valid origin, the request is a @502@ (a responding upstream
-returned an invalid response), distinct from a genuine absence. Every refusal — the
-edge @401@ and the no-survivors @403@\/@503@\/@502@\/@500@ — is rendered through the
+returned an invalid response), distinct from a genuine absence. Every refusal -- the
+edge @401@ and the no-survivors @403@\/@503@\/@502@\/@500@ -- is rendered through the
 mount's 'MountRenderer'.
 -}
 servePackument ::
@@ -194,14 +192,14 @@ servePackument ::
 servePackument = packumentWith PackumentFull
 
 {- | Serve a @HEAD \/{pkg}@ packument request: the __identical pipeline and gating__ as
-'servePackument' — the same fetch, merge, filter, rule decision, and no-survivors
-status — answered with the __identical status and headers__ as the @GET@ (the would-be
+'servePackument' -- the same fetch, merge, filter, rule decision, and no-survivors
+status -- answered with the __identical status and headers__ as the @GET@ (the would-be
 merged body's @Content-Length@ and the own @ETag@ the conditional-request machinery
 computes), but with the body suppressed ('bodiless'), as HTTP semantics require of a
 @HEAD@ reply.
 
 A packument body is assembled __locally__ (a metadata fetch plus the cross-upstream
-merge), so — unlike the tarball @HEAD@ ('headTarball') — answering it pumps __no
+merge), so -- unlike the tarball @HEAD@ ('headTarball') -- answering it pumps __no
 artifact body__ and carries no egress-amplification risk: this is the HTTP-correctness
 half of the explicit-@HEAD@ handling, not the DoS lever the tarball path closes. The
 merged body is still materialised, to size it and compute its @ETag@; only the bytes
@@ -217,7 +215,7 @@ headPackument name request respond =
 
 {- The packument serve mode threaded through the handler: a full @GET@ that serves the
 merged body, or a @HEAD@ that answers the identical status and headers with the body
-suppressed. It changes exactly one thing in the pipeline — whether the @200@ success
+suppressed. It changes exactly one thing in the pipeline -- whether the @200@ success
 path stamps the would-be body's @Content-Length@ (a @HEAD@ does, so a client sees the
 framing a @GET@ would; a @GET@ leaves that to the serving layer, which frames the body
 it actually writes). The body itself is withheld uniformly by the 'bodiless' wrapper
@@ -244,7 +242,7 @@ packumentWith mode name request respond = do
         Just deps -> serveWithDeps mode renderer deps name request respond
 
 -- Serve a packument once the mount's dependencies are known: fetch, gate, merge,
--- and answer — the credential-authority and merge logic the module header
+-- and answer -- the credential-authority and merge logic the module header
 -- describes. The request runtime is read from the request context. The
 -- 'PackumentServe' mode is threaded to the success path so a @HEAD@ stamps the
 -- would-be body's @Content-Length@ (the 'bodiless' wrapper withholds the bytes).
@@ -283,11 +281,10 @@ serveWithDeps mode renderer deps name request respond
 -- A recognised-but-unserved packument route: a @501@ in the mount's surface, for a
 -- mount whose packument-serve dependencies are not wired. The decision to serve or
 -- stub is the handler's, so the routing layer need not re-derive it.
--- ── per-origin fetch ──────────────────────────────────────────────────────────
 
 {- A successfully resolved upstream contribution: the parsed packument used to
 decide, alongside the raw @Value@ that is edited in place to serve. Pairing them
-is the decision-surface\/served-surface contract — every stage carries the raw
+is the decision-surface\/served-surface contract -- every stage carries the raw
 @Value@ next to the typed view so losslessness survives the pipeline. -}
 data Contribution = Contribution
     { srcProvenance :: Provenance
@@ -304,12 +301,12 @@ data OriginResult
     = -- | A packument that decoded and whose self-reported name matched the request.
       OriginResolved (PackageInfo, Value)
     | {- | The origin answered, but its packument self-reported a name for a /different/
-      package — dropped as untrusted for this request, and a @502@ signal when no
+      package -- dropped as untrusted for this request, and a @502@ signal when no
       origin is valid.
       -}
       OriginNameMismatch
-    | {- | The origin did not yield a usable packument — unreachable, undecodable, or a
-      genuine absence — the existing degrade (no contribution).
+    | {- | The origin did not yield a usable packument -- unreachable, undecodable, or a
+      genuine absence -- the existing degrade (no contribution).
       -}
       OriginUnresolved
 
@@ -335,7 +332,7 @@ originResultOf = \case
 
 {- Resolve the private (trusted) upstream origin, __uncached__, forwarding the client's
 own credential (the default @passthrough@ posture). Returns its coherent (parsed
-packument, raw @Value@) pair — or 'Nothing' when the origin is unavailable or its body
+packument, raw @Value@) pair -- or 'Nothing' when the origin is unavailable or its body
 does not parse. A failed fetch is a degraded contribution, not an error: the merge
 serves the best-effort union of whatever resolved (partial-upstream availability).
 
@@ -344,10 +341,10 @@ what, so its metadata is __not__ shared across clients: it is fetched and parsed
 __every__ request with that client's own forwarded token, so the upstream re-authorises
 each client itself. Caching it would key on the base URL alone (no credential
 dimension), so within the TTL one client's cache hit would skip the fetch and serve
-another client's private document — bypassing the upstream's authorisation. The private
+another client's private document -- bypassing the upstream's authorisation. The private
 origin is therefore deliberately kept out of the metadata cache; only the anonymous
 public origin is cached. (How a non-@passthrough@ strategy can instead share the private
-origin safely is the serve-time authorisation it adds — see
+origin safely is the serve-time authorisation it adds -- see
 @docs\/architecture\/access-model.md@.) -}
 fetchPrivateOrigin :: PackumentDeps -> ServeRuntime -> Maybe Secret -> PackageName -> Handler OriginResult
 fetchPrivateOrigin deps rt token name = do
@@ -359,15 +356,15 @@ fetchPrivateOrigin deps rt token name = do
 
 {- Resolve the public (gated, anonymous) upstream origin through the metadata cache,
 keyed by the origin's base URL as its 'Source', returning its coherent (parsed
-packument, raw @Value@) pair — or 'Nothing' when the origin is unavailable or its body
+packument, raw @Value@) pair -- or 'Nothing' when the origin is unavailable or its body
 does not parse. A failed fetch is a degraded contribution, not an error.
 
 The public origin is anonymous (no client credential), so a single cached entry serves
-every client without crossing any trust boundary — there is no per-client authority
+every client without crossing any trust boundary -- there is no per-client authority
 to preserve, only one shared anonymous document. A hit returns the cached pair
 (typed view and the exact bytes it was decoded from), so the served document and the
 decision over it stay coherent across the TTL, and concurrent resolutions of a
-popular package __collapse to one upstream call__ — as does the tarball gate's
+popular package __collapse to one upstream call__ -- as does the tarball gate's
 single-version read, which shares this very cache entry ('fetchVersionMetadata'). -}
 fetchPublicOrigin :: PackumentDeps -> ServeRuntime -> PackageName -> Handler OriginResult
 fetchPublicOrigin deps rt name = do
@@ -389,7 +386,7 @@ response budget are the per-fetch 'NpmClientConfig'; the 'ManifestCaching' decid
 the origin resolves through the shared metadata cache.
 
 Every response bound (security.md invariant 4) is enforced inside the handle's fetch
-against the mount's 'Limits' budget — a body-size, nesting-depth, or version-count breach
+against the mount's 'Limits' budget -- a body-size, nesting-depth, or version-count breach
 becomes a 'MetadataBoundExceeded', logged once at a 'WarningS' (naming the package and the
 ceiling crossed) before it degrades the contribution fail-closed, so an operator can tell a
 hostile\/oversized upstream from an ordinary parse failure. -}
@@ -442,7 +439,7 @@ logMetadataFailure name baseUrl = \case
 fail-closed, so an operator can distinguish a bound breach (a hostile\/oversized
 upstream, or a too-tight cap) from an ordinary parse failure or upstream outage. The
 structured payload names the package, which @bound@ was crossed, and the observed
-value against its @cap@ — the high-cardinality identifiers that belong on the log
+value against its @cap@ -- the high-cardinality identifiers that belong on the log
 line, not a metric label. Emitted through the ambient @katip@ context (the request's,
 so the line carries its trace-correlation @dd@), under the @ecluse@ namespace the rest
 of the stream uses. -}
@@ -464,7 +461,7 @@ logBreach name err =
     message :: Text
     message = "refused an upstream metadata document: it exceeded the " <> boundName <> " response bound (observed " <> observed <> ", cap " <> cap <> ")"
 
-    -- Which ceiling, the observed value, and the cap — pulled from the typed error so
+    -- Which ceiling, the observed value, and the cap -- pulled from the typed error so
     -- the three are always consistent with what was enforced.
     boundName :: Text
     observed :: Text
@@ -544,7 +541,7 @@ maxRenderedDrops = 20
 maxRenderedValueChars :: Int
 maxRenderedValueChars = 200
 
--- The @module@ tag this module's breach log carries — the operator-facing log filter
+-- The @module@ tag this module's breach log carries -- the operator-facing log filter
 -- key, held stable as the current value rather than the source module path, so an
 -- operator's saved filter keeps matching across the move into ecluse-core (the only
 -- change to these lines is the trace-correlation @dd@ the ambient context adds). The
@@ -560,7 +557,7 @@ trusted floor ('pdMinTrustedIntegrity') is dropped from the served listing, so b
 (floor = SHA-256) a SHA-1-only or hashless private version is not listed, while an operator
 who loosens the trusted floor admits it again. Trusted versions stay __unfiltered by the
 rules__ (the trust split is the caller's); only the integrity floor applies. The raw
-@Value@ is kept whole — the merge replays only surviving keys onto it, so a dropped version
+@Value@ is kept whole -- the merge replays only surviving keys onto it, so a dropped version
 is never taken from it; tarball URLs are rewritten at assembly, uniformly across sources. -}
 admitTrusted :: MinTrustedIntegrity -> Maybe (PackageInfo, Value) -> (Maybe Contribution, [ServeDecision])
 admitTrusted minTrusted = \case
@@ -580,9 +577,9 @@ A public origin that did not resolve contributes nothing and no exclusions. A re
 origin first has the __integrity-floor admission policy__ applied: any version whose
 strongest digest does not meet the configured floor ('pdMinIntegrity') is dropped from
 the gated set up front ('admitByIntegrity'), so a below-floor public version is never
-listed (a client cannot fetch it — the artifact gate would refuse it anyway) and never
+listed (a client cannot fetch it -- the artifact gate would refuse it anyway) and never
 contributes its fingerprint to the merge. The remaining versions are decided by the
-rules engine ('Ecluse.Core.Rules.evalRules' — the boot order walked to the first decisive
+rules engine ('Ecluse.Core.Rules.evalRules' -- the boot order walked to the first decisive
 result), the resulting decisions handed to the agnostic
 'filterPlanFromDecisions', and that plan replayed by 'applyFilterPlan' onto the raw
 @Value@: 'Filtered' yields a gated 'Contribution' over the surviving versions;
@@ -602,7 +599,7 @@ let a denied version reach the merge plan (and skew the reconciled @latest@\/@ti
 
 This gate runs on the public path only; the trusted (private) contribution is admitted
 separately by 'admitTrusted' against the trusted integrity floor (the rules never run on
-it — the trust split is the caller's). -}
+it -- the trust split is the caller's). -}
 gatePublic :: MetricsPort -> PackumentDeps -> EvalContext -> Maybe (PackageInfo, Value) -> IO (Maybe Contribution, [ServeDecision])
 gatePublic metrics deps ctx = \case
     Nothing -> pure (Nothing, [])
@@ -626,7 +623,7 @@ decideVersions :: PackumentDeps -> EvalContext -> PackageInfo -> IO (Map Text De
 decideVersions deps ctx info =
     traverse (evalRules ctx (pdRules deps)) (infoVersions info)
 
-{- Restrict a 'PackageInfo' to the version keys that survived filtering — the
+{- Restrict a 'PackageInfo' to the version keys that survived filtering -- the
 'Ecluse.Core.Package.Filter.FilterPlan'\'s own 'fpSurvivors', which 'applyFilterPlan' kept
 in the filtered @Value@'s @versions@, so the typed view handed to the merge matches
 the filtered document. Taking the survivor set from the plan reuses the 'Set' the
@@ -651,8 +648,6 @@ no-survivors status. 'applyFilterPlan' carries the plan's decisions in
 projectDecisions :: PackageInfo -> [Decision] -> [ServeDecision]
 projectDecisions info =
     zipWith serveDecisionOf (Map.elems (infoVersions info))
-
--- ── decision-surface replay ───────────────────────────────────────────────────
 
 -- The fully-edited served body: the raw @Value@ to encode and answer against the
 -- conditional request.
@@ -679,7 +674,7 @@ assemble deps sources = do
     pure (ServedBody (replayPlan deps bySource plan (baseDocument sources)))
 
 {- The document whose unmodeled top-level keys are relayed into the served body:
-the precedence-winning source's raw @Value@ — the first trusted source if any,
+the precedence-winning source's raw @Value@ -- the first trusted source if any,
 else the first source. (The merge takes its identity from the first input
 likewise.) An empty source list never reaches here. -}
 baseDocument :: [Contribution] -> Value
@@ -712,7 +707,7 @@ replayPlan deps bySource plan base =
     -- Each surviving version's object, taken from the raw @Value@ of the source
     -- that won the key (so the served bytes are the winning upstream's, unmodeled
     -- keys and all). A survivor whose source object is missing is dropped rather
-    -- than fabricated — coherence with the plan is preserved by construction.
+    -- than fabricated -- coherence with the plan is preserved by construction.
     survivingVersions :: KeyMap Value
     survivingVersions =
         KeyMap.fromList
@@ -779,8 +774,6 @@ timeBookkeepingKeys = ["created", "modified"]
 renderTime :: UTCTime -> Text
 renderTime = toText . iso8601Show
 
--- ── status when nothing survives ──────────────────────────────────────────────
-
 {- The per-version serve decisions weighed for the no-survivors status: the
 public-set exclusions, plus the per-origin signals each upstream contributes.
 
@@ -788,7 +781,7 @@ A private upstream that did not resolve is a needed-but-unavailable transient si
 (it may resolve on retry), so a private outage with no public survivors is a @503@
 rather than a @403@. An origin (private or public) that __answered with a packument
 for a different package__ contributes an 'UpstreamInvalid' signal, so a request whose
-only responding origins were invalid this way renders a @502@ — distinct from a
+only responding origins were invalid this way renders a @502@ -- distinct from a
 genuine absence. A public upstream that merely did not resolve degrades silently, as
 before: its absence is not by itself a needed-upstream outage. -}
 collectDecisions :: OriginResult -> OriginResult -> [ServeDecision] -> [ServeDecision]
@@ -813,8 +806,6 @@ collectDecisions privResult pubResult publicExclusions =
     upstreamInvalidDecision :: ServeDecision
     upstreamInvalidDecision = Reject (Rejection UpstreamInvalid "an upstream returned a packument for a different package")
 
--- ── response rendering ────────────────────────────────────────────────────────
-
 {- Render the served packument body: @200@ with our own ETag over the served
 bytes, or a @304@ when the client's conditional validator already matches. The
 ETag is computed over exactly the bytes served, so it changes iff the served
@@ -838,7 +829,7 @@ servePackumentBody mode request body =
 
 {- The @Content-Length@ header a packument @200@ carries: on a 'PackumentHead', the
 length of the would-be merged body, so the @HEAD@ reply advertises the framing a @GET@
-would (the body itself is withheld by 'bodiless'); on a 'PackumentFull', none — the
+would (the body itself is withheld by 'bodiless'); on a 'PackumentFull', none -- the
 serving layer frames the body it actually writes. -}
 headContentLength :: PackumentServe -> LByteString -> ResponseHeaders
 headContentLength = \case
@@ -846,7 +837,7 @@ headContentLength = \case
     PackumentHead -> \bytes -> [(hContentLength, show (LBS.length bytes))]
 
 {- Render the no-survivors outcome: the status 'packumentStatus' chose over the
-exclusions, with a denial body collecting the reasons. Never a @404@ — the package
+exclusions, with a denial body collecting the reasons. Never a @404@ -- the package
 existed and its versions were withheld. -}
 noSurvivors :: MountRenderer -> PackumentDeps -> [ServeDecision] -> Response
 noSurvivors renderer deps decisions =

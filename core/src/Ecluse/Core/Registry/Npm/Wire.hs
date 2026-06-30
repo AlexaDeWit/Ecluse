@@ -2,7 +2,7 @@
 
 This module is the npm protocol __boundary__: it models the JSON the registry
 actually sends and parses it with deliberately forgiving 'FromJSON' instances.
-It is the raw-wire layer of "parse, don't validate" — it captures /what the
+It is the raw-wire layer of "parse, don't validate" -- it captures /what the
 registry said/ as faithfully as the rules and serving need, and __nothing
 more__. Projecting these wire types into the ecosystem-agnostic domain model
 ("Ecluse.Core.Package": @PackageDetails@ et al.) is a separate concern; keeping the
@@ -37,8 +37,8 @@ the documented reality:
   reads every form, so a boolean never fails the whole packument decode (a real
   packument such as react's mixes the string and boolean forms across versions).
 * __Advisory @dist@ sub-fields degrade rather than deny.__ @fileCount@,
-  @unpackedSize@, and @signatures@ are advisory — they decide no rule and no
-  serve — so a hostile value in one (a fractional\/huge\/@Int@-overflowing number,
+  @unpackedSize@, and @signatures@ are advisory -- they decide no rule and no
+  serve -- so a hostile value in one (a fractional\/huge\/@Int@-overflowing number,
   a wrong-typed field, or a malformed\/non-array @signatures@) reads as
   absent\/empty rather than failing the version. One poisoned value therefore
   cannot deny the whole packument ('Dist').
@@ -48,7 +48,7 @@ the documented reality:
 The fields the rules engine and the serving path actually need are captured
 precisely: the abbreviated-only 'vmHasInstallScript' flag, the 'vmDeprecated'
 notice, the whole 'vmScripts' map (so the full form's install-script presence
-can be /derived/ — the full manifest has no @hasInstallScript@ key), the
+can be /derived/ -- the full manifest has no @hasInstallScript@ key), the
 'Dist' integrity triple (@tarball@\/@shasum@\/@integrity@), and the full
 packument's 'pkmtTime' map (the source of truth for publish age, which the
 abbreviated form drops).
@@ -93,9 +93,7 @@ import Data.Aeson.Types (Parser, parseMaybe)
 import Data.Map.Strict qualified as Map
 import Data.Time (UTCTime)
 
--- ── shared scalars ───────────────────────────────────────────────────────────
-
-{- | A person associated with a package — an author, maintainer, contributor, or
+{- | A person associated with a package -- an author, maintainer, contributor, or
 the per-version publisher (@_npmUser@).
 
 __Lenient:__ npm sends a person as /either/ an object @{name, email?, url?}@ /or/
@@ -103,7 +101,7 @@ a single packed string of the conventional form
 @"Name \<email\> (url)"@. The packed form is captured __verbatim__ in
 'personName' (with 'personEmail'\/'personUrl' left 'Nothing'); this wire layer
 does not attempt to split it, leaving that to the domain projection if it is ever
-needed. Distinct from "Ecluse.Core.Package"'s domain @Person@ — this is the raw wire
+needed. Distinct from "Ecluse.Core.Package"'s domain @Person@ -- this is the raw wire
 shape.
 -}
 data Person = Person
@@ -200,11 +198,9 @@ instance FromJSON License where
                 <*> o .:? "url"
         other -> typeMismatchOneOf "License (object or string)" other
 
--- ── the dist object ──────────────────────────────────────────────────────────
-
 {- | One registry signature over a published artifact: an ECDSA signature and
 the id of the key that produced it. Verifiable against npm's published public
-keys (@GET \/-\/npm\/v1\/keys@) — the basis of @npm audit signatures@.
+keys (@GET \/-\/npm\/v1\/keys@) -- the basis of @npm audit signatures@.
 -}
 data Signature = Signature
     { sigSig :: Text
@@ -225,14 +221,14 @@ manifest (full and abbreviated). It is the gateway to the tarball bytes and the
 integrity guarantee.
 
 The integrity triple ('distTarball', 'distShasum', 'distIntegrity') is
-rule-decisive and serving-decisive — a client __fails the install__ if the
+rule-decisive and serving-decisive -- a client __fails the install__ if the
 downloaded bytes do not match @integrity@\/@shasum@, so any mirror or URL rewrite
 must preserve these byte-for-byte. Prefer 'distIntegrity' (SRI) over the legacy
 SHA-1 'distShasum'.
 
 The remaining sub-fields ('distFileCount', 'distUnpackedSize',
-'distSignatures') are __advisory__ — they inform reporting but decide no rule and
-no serve — and so are decoded __leniently__: a present-but-undecodable number
+'distSignatures') are __advisory__ -- they inform reporting but decide no rule and
+no serve -- and so are decoded __leniently__: a present-but-undecodable number
 (fractional, huge, or 'Int'-overflowing) reads as absent ('Nothing'), a malformed
 signature element is skipped rather than failing the array, and a
 @signatures@ value that is not even an array reads as empty. A hostile value in
@@ -290,9 +286,7 @@ lenientSignatures o = do
         Just (Array xs) -> mapMaybe (parseMaybe parseJSON) (toList xs)
         _ -> []
 
--- ── version manifest ─────────────────────────────────────────────────────────
-
-{- | A single version's manifest — the per-version object that is essentially
+{- | A single version's manifest -- the per-version object that is essentially
 the package's @package.json@ at publish time plus registry-injected fields. It
 appears three ways on the wire and this one type decodes all of them: embedded in
 a full 'Packument' (@versions[v]@), embedded in an 'AbbreviatedPackument' (a
@@ -301,7 +295,7 @@ trimmed subset of the same shape), and standalone (@GET \/{pkg}\/{version}@).
 Only the fields Écluse's rules and serving need are modelled; everything else is
 ignored (see the module header). The two rule-decisive optionals deserve note:
 
-* 'vmHasInstallScript' is __abbreviated-only__ — the registry sets it when the
+* 'vmHasInstallScript' is __abbreviated-only__ -- the registry sets it when the
   version declares @preinstall@\/@install@\/@postinstall@ scripts. It is the
   cleanest install-script signal, but it is __absent from the full manifest__.
 * 'vmScripts' is therefore captured whole so that, when only the full form is
@@ -309,7 +303,7 @@ ignored (see the module header). The two rule-decisive optionals deserve note:
   (@scripts@ has any of @preinstall@\/@install@\/@postinstall@). That derivation
   is a domain-projection concern, not this layer's.
 
-The publish timestamp is __not__ here — it lives in the packument's
+The publish timestamp is __not__ here -- it lives in the packument's
 'pkmtTime' map, not the manifest (see §8 of the protocol reference).
 -}
 data VersionManifest = VersionManifest
@@ -391,8 +385,6 @@ lenientVersionMap o = do
     raw <- o .:? "versions" .!= mempty -- Map Text Value: each version object kept raw
     pure (Map.mapMaybe (parseMaybe parseJSON) raw) -- drop the entries that will not decode
 
--- ── packuments ───────────────────────────────────────────────────────────────
-
 {- | The __full__ packument: @GET \/{pkg}@ with @Accept: application\/json@ (or
 no @Accept@). One document describing the package and __every__ published
 version.
@@ -404,7 +396,7 @@ source of truth for publish age that age-based rules need. The abbreviated form
 @description@\/@license@\/@author@ are hoisted from the @latest@ version for
 convenience; the authoritative copy is the per-version one in 'pkmtVersions'.
 
-@_attachments@ is intentionally not modelled — it is populated only on the
+@_attachments@ is intentionally not modelled -- it is populated only on the
 publish document, not on reads.
 -}
 data Packument = Packument
@@ -460,7 +452,7 @@ the one the proxy treats as primary.
 It carries exactly four top-level fields. Notably the full @time@ map is dropped
 (only a top-level 'apkmtModified' remains), so publish-age rules need the full
 'Packument'. Its 'apkmtVersions' manifests are the trimmed subset of
-'VersionManifest' — the same type, with the install-only fields populated
+'VersionManifest' -- the same type, with the install-only fields populated
 (including the abbreviated-only 'vmHasInstallScript').
 -}
 data AbbreviatedPackument = AbbreviatedPackument
@@ -488,13 +480,11 @@ instance FromJSON AbbreviatedPackument where
             <*> o .:? "dist-tags" .!= mempty
             <*> lenientVersionMap o
 
--- ── errors ───────────────────────────────────────────────────────────────────
-
 {- | An npm error body.
 
 __Lenient:__ the documented shape is an object @{ message?, error?, ok?: false
 }@ and clients "should check for @message@, then @error@". But the registry is
-inconsistent — its per-version 404 is a bare JSON __string__
+inconsistent -- its per-version 404 is a bare JSON __string__
 (@"version not found: ^3.0.0"@), not an object. This type tolerates both: the
 object form keeps its fields in an 'ErrorBody', and a bare string is captured
 whole as 'ErrorString'. Read the human-facing reason via 'errorMessage', which
@@ -508,14 +498,14 @@ data ErrorResponse
     deriving stock (Eq, Show)
 
 {- | The fields of npm's object-form error body. A product type (not inline
-constructor fields on 'ErrorResponse') so its selectors are __total__ — there is
+constructor fields on 'ErrorResponse') so its selectors are __total__ -- there is
 no @ErrorString@ case for them to be partial over.
 -}
 data ErrorBody = ErrorBody
     { errMessage :: Maybe Text
-    -- ^ The @message@ field — the preferred human-facing reason.
+    -- ^ The @message@ field -- the preferred human-facing reason.
     , errError :: Maybe Text
-    -- ^ The @error@ field — the fallback reason.
+    -- ^ The @error@ field -- the fallback reason.
     }
     deriving stock (Eq, Show)
 
@@ -537,8 +527,6 @@ errorMessage :: ErrorResponse -> Maybe Text
 errorMessage = \case
     ErrorString msg -> Just msg
     ErrorObject body -> errMessage body <|> errError body
-
--- ── helpers ──────────────────────────────────────────────────────────────────
 
 {- Fail a lenient string-or-object decoder with a descriptive message,
 naming the accepted shapes and reporting what was actually found. A small wrapper

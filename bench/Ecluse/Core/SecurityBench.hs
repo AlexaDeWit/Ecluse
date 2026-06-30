@@ -1,6 +1,6 @@
 {- | Work-per-request benches for the response-bound guards ("Ecluse.Core.Security"):
 the bounded body read that caps an upstream response, the JSON nesting-depth guard,
-and the version-count guard — the cheap checks that protect the proxy from a hostile
+and the version-count guard -- the cheap checks that protect the proxy from a hostile
 or oversized upstream document.
 
 The bounded read runs over a multi-megabyte body; the structural guards run over each

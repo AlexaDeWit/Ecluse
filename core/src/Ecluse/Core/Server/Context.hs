@@ -1,8 +1,8 @@
 {- | The per-request context the serve path reads through, and the handler monad
 over it.
 
-Mount dispatch matches a request to one 'MountBinding' — a mount's __complete__
-ecosystem wiring — then runs the route's handler in 'Handler', a reader over a
+Mount dispatch matches a request to one 'MountBinding' -- a mount's __complete__
+ecosystem wiring -- then runs the route's handler in 'Handler', a reader over a
 'RequestCtx' pairing that binding with the request runtime 'ServeRuntime'. A handler
 reads its per-mount dependencies (the classifier, the packument-serve dependencies,
 the error renderer, the path prefix) and the shared runtime from that one context,
@@ -66,8 +66,6 @@ import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort)
 import Ecluse.Core.Telemetry.Span (TracingPort)
 
--- ── request runtime ───────────────────────────────────────────────────────────
-
 {- | The runtime backends the serve path is closed over: exactly the effectful
 capabilities a request needs to fetch, gate, serve, and record. A record of concrete
 handles and abstract ports (the Handle pattern), assembled by the composition root and
@@ -108,8 +106,6 @@ data ServeRuntime = ServeRuntime
     -- ^ The tracing port the serve path opens its hand-added domain spans through.
     }
 
--- ── packument-serve dependencies ──────────────────────────────────────────────
-
 {- | The per-mount inputs the serve handlers need beyond the request runtime
 'ServeRuntime': the two upstream endpoints, the mount's externally-visible base URL,
 the mirror-target endpoint, its resolved rule policy, the edge auth token, the
@@ -118,8 +114,8 @@ wall-clock source, and the operator help message.
 These are a mount-level concern, resolved at the composition root (a separate
 concern) and carried on the mount's 'MountBinding'; a handler reads exactly what it
 needs to decide and serve from the 'RequestCtx' it runs in. Both the packument and
-the tarball paths share these deps — the tarball path additionally gates one
-version and enqueues a mirror job to 'pdMirrorTarget' — so the name is retained for
+the tarball paths share these deps -- the tarball path additionally gates one
+version and enqueues a mirror job to 'pdMirrorTarget' -- so the name is retained for
 continuity rather than narrowed to one route.
 -}
 data PackumentDeps = PackumentDeps
@@ -132,7 +128,7 @@ data PackumentDeps = PackumentDeps
     URLs are rewritten so artifacts are fetched back through the gate.
     -}
     , pdMirrorTarget :: Text
-    {- ^ The mount's mirror-target endpoint — where the demand-driven mirror worker
+    {- ^ The mount's mirror-target endpoint -- where the demand-driven mirror worker
     publishes an approved artifact. Carried on the enqueued
     'Ecluse.Core.Queue.MirrorJob' as its publish destination; the serve path never reads
     or writes it itself.
@@ -215,8 +211,6 @@ data PackumentDeps = PackumentDeps
     -- ^ Rewrite artifact URLs in a raw document under the given mount base URL.
     }
 
--- ── publish-serve dependencies ────────────────────────────────────────────────
-
 {- | The per-mount inputs the first-party publish handler needs: the publication
 target endpoint, the publish-scope allow-list (the anti-shadowing guard), the
 optional static fallback credential, the edge token, the response-bound budget, and
@@ -232,7 +226,7 @@ re-derived at the handler (see
 The credential posture is __passthrough__, symmetric with the private-upstream read
 under @passthrough@: the publisher's own forwarded token is what reaches the
 publication target, the static 'pubStaticToken' only a fallback for a client that
-sends none. Écluse mints no token of its own here — unlike the mirror target — so this
+sends none. Écluse mints no token of its own here -- unlike the mirror target -- so this
 record carries no 'Ecluse.Core.Credential.CredentialProvider' (see
 @docs\/architecture\/access-model.md@ → "Publishing: the publication target").
 -}
@@ -242,7 +236,7 @@ data PublishDeps = PublishDeps
     @npm publish@ is relayed to. The package path is appended to it.
     -}
     , pubScopes :: [Scope]
-    {- ^ The configured publish-scope allow-list (@ECLUSE_PUBLISH_SCOPES@) — the
+    {- ^ The configured publish-scope allow-list (@ECLUSE_PUBLISH_SCOPES@) -- the
     anti-shadowing guard. A publish whose package name is not within one of these
     scopes is refused __before any upstream write__, so a client cannot publish a name
     that shadows an existing public package (a dependency-confusion vector). Never
@@ -251,7 +245,7 @@ data PublishDeps = PublishDeps
     , pubStaticToken :: Maybe Secret
     {- ^ The static fallback credential (@ECLUSE_PUBLICATION_TARGET_TOKEN@) forwarded to the
     publication target __only when the client sends no token of its own__. The default
-    model is passthrough — the publisher's own token — so this is 'Nothing' on the
+    model is passthrough -- the publisher's own token -- so this is 'Nothing' on the
     common path.
     -}
     , pubInboundToken :: Maybe Secret
@@ -272,16 +266,14 @@ data PublishDeps = PublishDeps
     -}
     }
 
--- ── mount binding ─────────────────────────────────────────────────────────────
-
 {- | A mount: a path prefix bound to a registry, carrying that registry's
 __complete__ ecosystem wiring. Dispatch matches a request's leading path segments
 to 'bindingPrefix', strips them, and routes the remainder through the rest of the
 binding.
 
 The prefix is a 'NonEmpty' list of segments (@"npm" :| []@ for a @\/npm@ mount):
-every registry is path-mounted, so a root mount — which would force a URL change
-on every consumer the day a second ecosystem is added — is __unrepresentable__
+every registry is path-mounted, so a root mount -- which would force a URL change
+on every consumer the day a second ecosystem is added -- is __unrepresentable__
 rather than merely discouraged. Bundling the classifier, serve dependencies, and
 renderer into one record means a mount cannot be half-wired: there is no default
 to fall back to.
@@ -297,32 +289,28 @@ data MountBinding = MountBinding
     -}
     , bindingPublishDeps :: Maybe PublishDeps
     {- ^ The first-party publish dependencies, when a publication target is
-    configured; 'Nothing' is the opt-out — a @PUT \/{pkg}@ is then @405@ (no implicit
+    configured; 'Nothing' is the opt-out -- a @PUT \/{pkg}@ is then @405@ (no implicit
     write path).
     -}
     , bindingRenderer :: MountRenderer
-    {- ^ This mount's renderer for error\/denial bodies — the ecosystem surface an
+    {- ^ This mount's renderer for error\/denial bodies -- the ecosystem surface an
     in-mount @403@\/@404@\/@501@ is shaped into.
     -}
     }
 
--- ── per-request context ───────────────────────────────────────────────────────
-
 {- | The context one request is served through: the request runtime 'ServeRuntime'
 paired with the 'MountBinding' the request matched. A concrete record with plain
-accessors — 'ctxRuntime' and 'ctxMount' — so a handler reads the shared runtime and its
+accessors -- 'ctxRuntime' and 'ctxMount' -- so a handler reads the shared runtime and its
 per-mount wiring from one place rather than as explicit arguments.
 
 Dispatch builds it once per request; the handler reads it through the 'Handler' reader.
 -}
 data RequestCtx = RequestCtx
     { ctxRuntime :: ServeRuntime
-    -- ^ The request runtime — the data-plane managers, the caches and queue, the recording ports.
+    -- ^ The request runtime -- the data-plane managers, the caches and queue, the recording ports.
     , ctxMount :: MountBinding
     -- ^ The mount the request matched, carrying its complete ecosystem wiring.
     }
-
--- ── the handler monad ─────────────────────────────────────────────────────────
 
 {- | The request hot path's monad: a reader over the per-request 'RequestCtx'
 layered on @katip@'s logging context.

@@ -39,8 +39,6 @@ spec = do
     decisionsSpec
     propertiesSpec
 
--- ── a fixed clock and an age-quarantine policy ───────────────────────────────
-
 -- | A fixed "now" so the age-based admit/deny axis is deterministic.
 now :: UTCTime
 now = UTCTime (fromGregorian 2026 6 20) 0
@@ -50,7 +48,7 @@ ctx = EvalContext now
 
 {- | The policy under test: a 7-day publish-age quarantine plus an install-script
 deny. A version is approved iff it is at least 7 days old and declares no install
-script — so survival is controlled purely by the typed fixture, exercising the real
+script -- so survival is controlled purely by the typed fixture, exercising the real
 rules engine over the domain model (no @Value@ in sight).
 -}
 policy :: [PrecededRule]
@@ -58,8 +56,6 @@ policy =
     [ atDefaultPrecedence (AllowIfOlderThan (7 * nominalDay))
     , atDefaultPrecedence DenyInstallTimeExecution
     ]
-
--- ── typed fixtures ───────────────────────────────────────────────────────────
 
 name :: PackageName
 name = mkPackageName Npm Nothing "thing"
@@ -113,8 +109,6 @@ infoOf latest vs =
         , infoInvalidEntries = []
         }
 
--- ── survivors ────────────────────────────────────────────────────────────────
-
 survivorSpec :: Spec
 survivorSpec = describe "fpSurvivors" $ do
     it "keeps only the approved versions, dropping a too-young one" $ do
@@ -130,8 +124,6 @@ survivorSpec = describe "fpSurvivors" $ do
     it "is empty when nothing is approved" $ do
         plan <- filterPlan ctx policy (infoOf (Just "2.0.0") [("1.0.0", 1, False), ("2.0.0", 1, False)])
         fpSurvivors plan `shouldBe` Set.empty
-
--- ── resolved latest ──────────────────────────────────────────────────────────
 
 latestSpec :: Spec
 latestSpec = describe "fpLatest" $ do
@@ -160,8 +152,6 @@ latestSpec = describe "fpLatest" $ do
         plan <- filterPlan ctx policy (infoOf (Just "1.0.0") [("1.0.0", 1, False)])
         fpLatest plan `shouldBe` Nothing
 
--- ── decisions ────────────────────────────────────────────────────────────────
-
 decisionsSpec :: Spec
 decisionsSpec = describe "fpDecisions" $ do
     it "carries one decision per version (survivors and denials alike)" $ do
@@ -172,8 +162,6 @@ decisionsSpec = describe "fpDecisions" $ do
         plan <- filterPlan ctx policy (infoOf (Just "1.0.0") [("1.0.0", 1, False), ("2.0.0", 1, True)])
         length (fpDecisions plan) `shouldBe` 2
         any isApproved (fpDecisions plan) `shouldBe` False
-
--- ── properties ───────────────────────────────────────────────────────────────
 
 propertiesSpec :: Spec
 propertiesSpec = describe "properties" $ do
@@ -227,8 +215,6 @@ propertiesSpec = describe "properties" $ do
                         assert (all (\s -> compareVersions (mkVersion Npm s) (mkVersion Npm l) /= Just GT) stableSurvivors)
                     Nothing -> annotateShow survivors >> H.failure
 
--- ── generated specs ──────────────────────────────────────────────────────────
-
 {- | A generated logical packument: a chosen @latest@ target plus versions, each
 with an age and an install-script flag. Survival is derived from age (≥ 7 days) and
 the absence of an install script against 'policy'.
@@ -266,8 +252,6 @@ genSpec = do
 -- A pool mixing stable and prerelease semver so repointing exercises both bands.
 versionPool :: [Text]
 versionPool = ["1.0.0", "1.1.0", "2.0.0-rc.1", "2.0.0", "3.0.0-beta", "10.0.0"]
-
--- ── helpers ──────────────────────────────────────────────────────────────────
 
 -- | The resolved @latest@ as its raw version string, if present.
 latestRaw :: FilterPlan -> Maybe Text

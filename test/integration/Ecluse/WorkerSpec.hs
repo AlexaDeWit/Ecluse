@@ -37,7 +37,7 @@ import Ecluse.Test.Worker (admitAllPolicies)
 
 {- | The mirror worker, end to end against real SQS (a @ministack@ container, shared
 through "Ecluse.Integration.Ministack") and WAI upstream/mirror stubs. These cases
-exercise the queue semantics the in-memory double cannot faithfully reproduce —
+exercise the queue semantics the in-memory double cannot faithfully reproduce --
 real visibility timeouts, redelivery, @extendVisibility@-held messages, and the
 supervised worker loop ('Ecluse.runWorker') itself polling a real queue (heartbeat
 included).
@@ -91,7 +91,7 @@ spec =
             it "leaves a transiently-rejected job un-acked, so it redelivers" $ \container ->
                 withUpstream $ \upstreamUrl ->
                     -- The mirror target answers 503 (a retryable rejection). The worker
-                    -- must not ack, so the message redelivers — a real second delivery.
+                    -- must not ack, so the message redelivers -- a real second delivery.
                     withMirrorTarget status503 $ \mirrorUrl publishLog -> do
                         queue <- freshQueue container "worker-retry" defaultQueueOptions
                         env <- envFor queue mirrorUrl
@@ -100,8 +100,8 @@ spec =
                         -- publish attempt: a transient 503 is never acked, so the message
                         -- becomes visible again and the running loop re-consumes it and
                         -- PUTs the same artifact a second time. We wait for two recorded
-                        -- publish PUTs — that second PUT only exists because the un-acked
-                        -- message genuinely redelivered — then tear the loop down.
+                        -- publish PUTs -- that second PUT only exists because the un-acked
+                        -- message genuinely redelivered -- then tear the loop down.
                         --
                         -- This is robust-by-construction where the old test was a timing
                         -- knife-edge. Redelivery on this path is driven by the worker's
@@ -110,13 +110,13 @@ spec =
                         -- success-path 'holdForLongPublish' has already extended the
                         -- in-flight window to 300s, so a bare timeout would never
                         -- redeliver within a test's patience (which is why this no longer
-                        -- sets a 1s 'qoVisibilityTimeout' — it never governed redelivery
+                        -- sets a 1s 'qoVisibilityTimeout' -- it never governed redelivery
                         -- here, it only looked like the lever).
                         --
                         -- The old test instead /stole/ the redelivery: it tore the loop
                         -- down the instant the first PUT was logged, then polled the queue
                         -- itself. But the stub records the PUT before it answers 503, so
-                        -- the log fills a beat before the worker runs 'releaseForRetry' —
+                        -- the log fills a beat before the worker runs 'releaseForRetry' --
                         -- and under the slower -fhpc-instrumented loop the teardown could
                         -- win that race and cancel the loop before the release ran,
                         -- leaving the message held under the 300s hold so it never
@@ -125,8 +125,8 @@ spec =
                         -- the release ran and the message redelivered.
                         runLoopUntil env (publishedAtLeast publishLog 2)
                         published <- readIORef publishLog
-                        -- The one un-acked job was delivered and PUT more than once — a
-                        -- real redelivery — and every PUT targeted its publish path. We
+                        -- The one un-acked job was delivered and PUT more than once -- a
+                        -- real redelivery -- and every PUT targeted its publish path. We
                         -- assert "at least twice, all to the publish path" rather than an
                         -- exact count: once the condition trips, the loop keeps redriving
                         -- (each redelivery is another 503, another redelivery) until the
@@ -147,8 +147,6 @@ spec =
                         runLoopFor env 3_000_000
                         pollAfter <- lastPoll (envWorkerHeartbeat env)
                         pollAfter `shouldSatisfy` isJust
-
--- ── fixtures ──────────────────────────────────────────────────────────────────
 
 -- The artifact bytes the upstream stub serves.
 tarballBytes :: LByteString
@@ -186,13 +184,11 @@ job upstreamUrl sha1 =
         }
 
 {- | A well-formed SHA-1 digest (sha1 of the empty string) that does not match the
-served tarball — the tamper fixture, distinct from a malformed digest the queue would
+served tarball -- the tamper fixture, distinct from a malformed digest the queue would
 reject at decode.
 -}
 wrongSha1 :: Text
 wrongSha1 = "da39a3ee5e6b4b0d3255bfef95601890afd80709"
-
--- ── Env over the real queue + a publish client at the mirror stub ──────────────
 
 envFor :: MirrorQueue -> Text -> IO Env
 envFor queue mirrorUrl = do
@@ -214,19 +210,17 @@ envFor queue mirrorUrl = do
 newTestLogEnv :: IO LogEnv
 newTestLogEnv = initLogEnv (Namespace ["ecluse"]) (Environment "test")
 
--- ── driving the supervised loop ────────────────────────────────────────────────
-
 {- Run the supervised mirror worker ('runWorker') against the real queue until a
 condition holds, then tear it down. The loop never returns on its own, so it is raced
 against a condition-poller ('race_'): when the poller observes the condition, 'race_'
-cancels the loop — the same cooperative cancellation process shutdown uses. A hard
+cancels the loop -- the same cooperative cancellation process shutdown uses. A hard
 timeout bounds the whole thing so a failing test cannot hang. -}
 runLoopUntil :: Env -> IO Bool -> IO ()
 runLoopUntil env done =
     void $ timeout loopHardTimeout $ race_ (runWorker admitAllPolicies env) (waitFor done)
 
 {- The hard ceiling on a 'runLoopUntil' run, sized so even the slowest positive
-condition (the redelivery case waiting on a /second/ publish — two full
+condition (the redelivery case waiting on a /second/ publish -- two full
 fetch → verify → publish cycles plus a real redelivery in between) lands with
 comfortable headroom under @-fhpc@ instrumentation, where the loop runs several
 times slower than uninstrumented. Uninstrumented those steps take well under a
@@ -236,14 +230,14 @@ loopHardTimeout :: Int
 loopHardTimeout = 45_000_000
 
 {- Run the supervised mirror worker ('runWorker') for a fixed wall-clock window, then
-cancel it — for the cases that assert a /negative/ (nothing published, an idle
+cancel it -- for the cases that assert a /negative/ (nothing published, an idle
 heartbeat) where there is no positive condition to wait on. -}
 runLoopFor :: Env -> Int -> IO ()
 runLoopFor env micros = void (timeout micros (runWorker admitAllPolicies env))
 
 -- Poll a condition until it holds, bounded so a failing test does not hang. The
 -- bound (~40s of 200ms ticks) sits just under 'loopHardTimeout' so that ceiling, not
--- this poller, is what fires on a genuine hang — while still leaving the slowest
+-- this poller, is what fires on a genuine hang -- while still leaving the slowest
 -- healthy positive condition (the -fhpc redelivery wait) ample room to land.
 waitFor :: IO Bool -> IO ()
 waitFor done = go (200 :: Int)
@@ -257,8 +251,6 @@ waitFor done = go (200 :: Int)
 
 publishedAtLeast :: IORef [a] -> Int -> IO Bool
 publishedAtLeast logRef n = (>= n) . length <$> readIORef logRef
-
--- ── WAI stubs: the public upstream and the mirror target ───────────────────────
 
 -- A WAI upstream serving the artifact bytes at any path, yielding its base URL.
 withUpstream :: (Text -> IO a) -> IO a

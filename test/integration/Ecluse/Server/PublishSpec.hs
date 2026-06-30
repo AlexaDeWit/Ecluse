@@ -38,8 +38,6 @@ import Ecluse.Env (Env, newEnv, newWorkerHeartbeat)
 import Ecluse.Server (MountBinding (..), application, mkServerConfig)
 import Ecluse.Telemetry (telemetryDisabled)
 
--- ── the publication-target double ─────────────────────────────────────────────
-
 {- | An in-process publication-target double: it records the @Authorization@ header
 and the body of every @PUT@ it receives (so the credential-passthrough and
 body-relay invariants are assertable), and answers with a fixed status and body so the
@@ -63,7 +61,7 @@ newTarget code body = do
 
 {- | Host a publication-target double (answering @code@/@body@) on an ephemeral port,
 handing the continuation the port (to point the proxy at) and the 'Target' (to inspect
-what it saw) — the in-process integration harness, no Docker required.
+what it saw) -- the in-process integration harness, no Docker required.
 -}
 withTarget :: Int -> LByteString -> (Int -> Target -> IO a) -> IO a
 withTarget code body k = do
@@ -77,8 +75,6 @@ authHeader headers = snd <$> find ((== hAuthorization) . fst) headers
 -- The (auth, body) pairs the target saw, in arrival order.
 targetSaw :: Target -> IO [(Maybe ByteString, ByteString)]
 targetSaw target = reverse <$> readIORef (tgSeen target)
-
--- ── proxy assembly ────────────────────────────────────────────────────────────
 
 {- | A registry-handle double whose effectful fields refuse loudly: the publish path
 talks to the publication target via the npm client over the shared 'Manager', not the
@@ -107,7 +103,7 @@ newTestEnv = do
 {- | The first-party publish dependencies for the tests: a @\@acme@ publish-scope
 allow-list, the publication target at the given loopback port, and the given static
 fallback credential (used only when a client sends none). The default model is
-passthrough — the client's own token — so 'pubStaticToken' is usually 'Nothing'.
+passthrough -- the client's own token -- so 'pubStaticToken' is usually 'Nothing'.
 -}
 publishDepsAt :: Int -> Maybe Secret -> PublishDeps
 publishDepsAt targetPort staticToken =
@@ -123,7 +119,7 @@ publishDepsAt targetPort staticToken =
         }
 
 {- | A proxy 'Application' over a single @\/npm@ mount carrying the given publish deps
-('Nothing' leaves the publish path off — a @405@).
+('Nothing' leaves the publish path off -- a @405@).
 -}
 proxyWith :: Maybe PublishDeps -> IO Application
 proxyWith publishDeps = do
@@ -139,8 +135,6 @@ proxyWith publishDeps = do
                     }
                 ]
     pure (application cfg env)
-
--- ── driving a publish ─────────────────────────────────────────────────────────
 
 -- | A @PUT \/npm\/{path}@ publish carrying the given bearer (if any) and body.
 putPublish :: ByteString -> Maybe Text -> LByteString -> Application -> IO SResponse
@@ -161,15 +155,15 @@ status = statusCode . simpleStatus
 publishBody :: LByteString
 publishBody = "{\"_id\":\"@acme/widget\",\"name\":\"@acme/widget\",\"versions\":{}}"
 
--- A populated single-version publish whose body identity — its @_id@, top-level
--- @name@, and the one @versions[].name@ — all agree with the @\@acme\/widget@ URL: a
+-- A populated single-version publish whose body identity -- its @_id@, top-level
+-- @name@, and the one @versions[].name@ -- all agree with the @\@acme\/widget@ URL: a
 -- legitimate npm client's shape, which the body-name agreement check must still relay.
 matchingVersionBody :: LByteString
 matchingVersionBody =
     "{\"_id\":\"@acme/widget\",\"name\":\"@acme/widget\",\"versions\":{\"1.0.0\":{\"name\":\"@acme/widget\",\"version\":\"1.0.0\"}}}"
 
 -- Publish documents whose declared body identity disagrees with the in-scope URL name
--- @\@acme\/widget@ on exactly one field — the anti-shadowing bypass of issue #391: a
+-- @\@acme\/widget@ on exactly one field -- the anti-shadowing bypass of issue #391: a
 -- crafted body names a package the scope guard never authorised.
 mismatchedIdBody :: LByteString
 mismatchedIdBody =
@@ -220,7 +214,7 @@ spec = describe "first-party publish path → publication target (S52)" $ do
             status resp `shouldBe` 403
             targetSaw target `shouldReturn` []
 
-    it "refuses a scope that only prefixes an allowed one (@acme-evil vs the allowed @acme) — exact match" $
+    it "refuses a scope that only prefixes an allowed one (@acme-evil vs the allowed @acme) -- exact match" $
         withTarget 201 "{\"success\":true}" $ \targetPort target -> do
             -- The guard compares scopes exactly, so a look-alike scope is not admitted by
             -- prefix; the publication target is never contacted.
@@ -257,7 +251,7 @@ spec = describe "first-party publish path → publication target (S52)" $ do
     -- The body-name agreement leg of the anti-shadowing guard (issue #391): the URL path
     -- is in-scope and passes 'inPublishScope', but the document body declares a DIFFERENT
     -- package name, so the relay would publish a name the scope guard never authorised.
-    -- Each present declared name — @_id@, top-level @name@, and @versions[].name@ — is
+    -- Each present declared name -- @_id@, top-level @name@, and @versions[].name@ -- is
     -- checked, and a disagreement is a 403 before any upstream write.
     it "refuses a publish whose body _id disagrees with the in-scope URL name (403 before any relay)" $
         withTarget 201 "{\"success\":true}" $ \targetPort target -> do

@@ -28,7 +28,7 @@ import Ecluse.Core.Version (Version, mkVersion, renderVersion)
 import Ecluse.Test.Port (noopMetricsPort)
 
 {- | Tests for the serve-path read handle's wiring: the full-manifest op resolving through
-the shared cache, and the single-version op's __hybrid__ topology — the small
+the shared cache, and the single-version op's __hybrid__ topology -- the small
 @(package, version)@ cache, then the warm full-packument cache read-only (so a @GET@ then
 its tarball gate stay one upstream call), then a cold selective fetch that populates the
 version cache without writing the whole packument back to the shared one. Also that an
@@ -40,7 +40,7 @@ call counter, so an assertion on it is the total number of upstream calls across
 -}
 spec :: Spec
 spec = do
-    describe "newMetadataClient — single-version hybrid topology" $ do
+    describe "newMetadataClient -- single-version hybrid topology" $ do
         it "reuses the warm full-packument cache: a GET then its version select is one upstream call" $ do
             calls <- newIORef (0 :: Int)
             cache <- newMetadataCache defaultCacheConfig
@@ -87,7 +87,7 @@ spec = do
             fmap (fmap pkgVersion) absentHit `shouldBe` Right Nothing
             readIORef calls `shouldReturn` 1
 
-    describe "newMetadataClient — caching policy" $
+    describe "newMetadataClient -- caching policy" $
         it "an uncached handle fetches on every call (the per-client private origin)" $ do
             calls <- newIORef (0 :: Int)
             let info = manifest name ["1.0.0"]
@@ -97,7 +97,7 @@ spec = do
             _ <- fetchFullManifest client name
             readIORef calls `shouldReturn` 2
 
-    describe "newMetadataClient — failure propagation" $
+    describe "newMetadataClient -- failure propagation" $
         it "propagates a MetadataError from both operations and caches nothing on failure" $ do
             calls <- newIORef (0 :: Int)
             cache <- newMetadataCache defaultCacheConfig
@@ -113,8 +113,6 @@ spec = do
             -- A failed fetch caches nothing, so each op (the full leg, then the cold
             -- single-version leg) re-ran its fetch.
             readIORef calls `shouldReturn` 2
-
--- ── fixtures ──────────────────────────────────────────────────────────────────
 
 name :: PackageName
 name = unscoped "is-odd"

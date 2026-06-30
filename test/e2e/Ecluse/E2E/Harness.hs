@@ -3,13 +3,13 @@ the real @npm@ CLI, and tear it all down.
 
 The topology runs the __real OCI image__ (the artifact we publish), an __nginx__
 public-upstream stub, a __Verdaccio__ private upstream + mirror target, a
-__ministack__ SQS emulator, and — for the telemetry scenarios ('E2EConfig') — an
+__ministack__ SQS emulator, and -- for the telemetry scenarios ('E2EConfig') -- an
 __OTLP collector__ the proxy exports to, on a standard docker network. Custom networks are
 beyond @testcontainers-hs@, so the harness drives @docker@ directly through
 @typed-process@.
 
 The proxy's mirror queue is the __real AWS SQS backend__ pointed at ministack through
-the production @AWS_ENDPOINT_URL_SQS@ override (no test-only code path — the released image
+the production @AWS_ENDPOINT_URL_SQS@ override (no test-only code path -- the released image
 is exercised exactly as deployed, just with the endpoint aimed at the emulator). The
 harness creates the queue in ministack over the plain SQS query API (the emulator
 needs no signed request) and passes its URL to the proxy; the proxy reaches the
@@ -125,7 +125,7 @@ data E2E = E2E
     -}
     , e2eProxyContainer :: String
     {- ^ The proxy container name, so a test can read the proxy's own JSONL log stream
-    ('proxyContainerLogs') — what it wrote to stdout\/stderr.
+    ('proxyContainerLogs') -- what it wrote to stdout\/stderr.
     -}
     , e2eCollectorContainer :: Maybe String
     {- ^ The OTLP collector container name when one was booted ('ecCollector'), so a
@@ -139,7 +139,7 @@ data E2E = E2E
 {- | What an end-to-end environment boots beyond the base topology: whether to stand
 up an OTLP collector for the proxy to export to, and any extra proxy environment
 (telemetry switches, the OTLP\/Datadog dialect) layered over the base 'proxyEnv'. The
-default boots neither — the plain topology the non-telemetry scenarios use.
+default boots neither -- the plain topology the non-telemetry scenarios use.
 -}
 data E2EConfig = E2EConfig
     { ecCollector :: Bool
@@ -152,17 +152,15 @@ data E2EConfig = E2EConfig
 defaultE2EConfig :: E2EConfig
 defaultE2EConfig = E2EConfig{ecCollector = False, ecExtraEnv = []}
 
--- ── availability ──────────────────────────────────────────────────────────────
-
-{- | 'Nothing' when the suite can run; @Just reason@ when it must be skipped — no
+{- | 'Nothing' when the suite can run; @Just reason@ when it must be skipped -- no
 docker daemon, or @ECLUSE_E2E_IMAGE@ unset (the image is built and named by
 @make test-e2e@ / the CI e2e job).
 -}
 e2eUnavailable :: IO (Maybe String)
 e2eUnavailable =
     lookupEnv imageVar >>= \case
-        Nothing -> pure (Just (imageVar <> " is unset — run via `make test-e2e`"))
-        Just "" -> pure (Just (imageVar <> " is empty — run via `make test-e2e`"))
+        Nothing -> pure (Just (imageVar <> " is unset -- run via `make test-e2e`"))
+        Just "" -> pure (Just (imageVar <> " is empty -- run via `make test-e2e`"))
         Just _ -> do
             ok <- dockerDaemonReachable
             pure (if ok then Nothing else Just "no reachable docker daemon")
@@ -173,8 +171,6 @@ imageVar = "ECLUSE_E2E_IMAGE"
 dockerDaemonReachable :: IO Bool
 dockerDaemonReachable =
     handleAny (\_ -> pure False) (exitOk <$> readProcess (proc "docker" ["info"]))
-
--- ── lifecycle ───────────────────────────────────────────────────────────────
 
 {-# NOINLINE globalFixtures #-}
 globalFixtures :: IO FilePath
@@ -272,7 +268,7 @@ withGlobalDataPlane action = do
         )
 
 {- | Bring the network + base containers up, wait for proxy readiness, run the action,
-then tear everything down on every exit path — the plain topology ('defaultE2EConfig'),
+then tear everything down on every exit path -- the plain topology ('defaultE2EConfig'),
 no collector and no extra proxy environment. Assumes 'e2eUnavailable' returned 'Nothing'.
 -}
 withE2E :: (E2E -> IO ()) -> GlobalDataPlane -> IO ()
@@ -280,8 +276,8 @@ withE2E = withE2EWith defaultE2EConfig
 
 {- | 'withE2E' parameterised by an 'E2EConfig': optionally stand up an OTLP collector
 the proxy exports to (on the same TEST-NET, reached by its @otelcol@ network alias),
-and layer extra proxy environment over the base 'proxyEnv'. The collector — when asked
-for — is brought up __before__ the proxy and waited until ready, so it is already
+and layer extra proxy environment over the base 'proxyEnv'. The collector -- when asked
+for -- is brought up __before__ the proxy and waited until ready, so it is already
 receiving when the proxy makes its first export, and is torn down with the others. Every
 case under 'withE2EWith' is still per-test isolated: its own network, containers, and
 collector, freshly booted and torn down (see "Ecluse.E2E.SuiteSpec").
@@ -302,7 +298,7 @@ withE2EWith cfg action gdp = do
             -- The OTLP collector, when the scenario asks for one: an OTLP/HTTP receiver
             -- into a `debug` exporter at detailed verbosity (so each received metric and
             -- span is written to its logs), reached by the proxy as `otelcol`. Brought up
-            -- and waited ready here — before the proxy — so it is already accepting when
+            -- and waited ready here -- before the proxy -- so it is already accepting when
             -- the proxy first exports.
             when (ecCollector cfg) $ do
                 dockerOk
@@ -333,7 +329,7 @@ withE2EWith cfg action gdp = do
             queueUrl <- createMinistackQueue manager (gdpMiniPort gdp) queueName
             -- Pick the host port up front so ECLUSE_PUBLIC_URL (which makes the proxy
             -- rewrite dist.tarball to an absolute, npm-fetchable URL) is known before
-            -- the container starts — the assigned port is only readable after.
+            -- the container starts -- the assigned port is only readable after.
             proxyPort <- freeHostPort
             -- The real proxy image: server ‖ worker over the real SQS backend, pointed
             -- at ministack through the production AWS_ENDPOINT_URL_SQS override.
@@ -415,21 +411,19 @@ teardown net containers workDir = do
     unless (null net) $ void (readProcess (proc "docker" ["network", "rm", net]))
     unless (null workDir) $ handleAny (const pass) (removePathForcibly workDir)
 
--- ── telemetry topology ────────────────────────────────────────────────────────
-
 -- The collector's network alias on the TEST-NET; the proxy exports to it by this name.
 collectorAlias :: Text
 collectorAlias = "otelcol"
 
-{- | The in-cluster OTLP endpoint the proxy exports to — the collector reached by its
+{- | The in-cluster OTLP endpoint the proxy exports to -- the collector reached by its
 network alias on the TEST-NET. A scenario names it through 'otlpCollectorEnv' (vanilla
 OpenTelemetry) or has the resolver derive it from @DD_AGENT_HOST@ ('datadogCollectorEnv').
 -}
 collectorOtlpEndpoint :: Text
 collectorOtlpEndpoint = "http://" <> collectorAlias <> ":4318"
 
-{- Fast-flush export knobs — standard @OTEL_*@ configuration (read by the SDK), not a
-test-only path — so a span and a metric reach the collector well within a scenario's
+{- Fast-flush export knobs -- standard @OTEL_*@ configuration (read by the SDK), not a
+test-only path -- so a span and a metric reach the collector well within a scenario's
 patience window rather than on the SDK's minute-scale batch defaults. -}
 telemetryExportTuning :: [(Text, Text)]
 telemetryExportTuning =
@@ -443,7 +437,7 @@ telemetryExportTuning =
 endpoint named by @OTEL_EXPORTER_OTLP_ENDPOINT@. Paired with @ecCollector = True@ the
 collector is up and receives (the healthy-publication path); paired with
 @ecCollector = False@ the named endpoint resolves to nothing, exercising the
-missing-collector graceful-degradation path — the same proxy configuration, only the
+missing-collector graceful-degradation path -- the same proxy configuration, only the
 collector's presence differs.
 -}
 otlpCollectorEnv :: [(Text, Text)]
@@ -454,7 +448,7 @@ otlpCollectorEnv =
         <> telemetryExportTuning
 
 {- | The Datadog unified-service-tag identity the Datadog scenario configures __and__
-asserts on — exported as resource attributes and stamped onto the @dd@ log object. Named
+asserts on -- exported as resource attributes and stamped onto the @dd@ log object. Named
 constants so the proxy environment and the assertions cannot drift apart.
 -}
 ddTagService, ddTagEnv, ddTagVersion :: Text
@@ -498,9 +492,7 @@ collectorConfig =
         <> "traces: {receivers: [otlp], exporters: [debug]}, "
         <> "metrics: {receivers: [otlp], exporters: [debug]}}}}"
 
--- ── observing container output ──────────────────────────────────────────────────
-
-{- | The proxy container's combined stdout+stderr as docker has captured it so far — the
+{- | The proxy container's combined stdout+stderr as docker has captured it so far -- the
 JSONL stream the proxy writes (@ECLUSE_LOG_FORMAT=json@), so a test can assert the proxy
 logs at all (the stdout\/stderr property) and inspect the @dd@ object on its lines.
 -}
@@ -525,7 +517,7 @@ awaitContainerLog cname matches = go
             logs <- containerLogs cname
             if matches logs then pure True else threadDelay 250000 >> go (n - 1)
 
-{- | Poll the proxy's own log stream until the predicate holds, or the attempts lapse —
+{- | Poll the proxy's own log stream until the predicate holds, or the attempts lapse --
 for an assertion that has to await an asynchronous line (e.g. the worker's
 @mirrored artifact published@, or a throttled telemetry export-error warning).
 -}
@@ -543,7 +535,7 @@ awaitCollectorLog e2e matches attempts =
         Just coll -> awaitContainerLog coll matches attempts
 
 {- | Whether any @dd@ object across the given log text carries a __populated__ (digit-
-leading) @trace_id@ — the active-span correlation, present only when telemetry is on and
+leading) @trace_id@ -- the active-span correlation, present only when telemetry is on and
 a span is in scope. Split on the @"trace_id":"@ prefix and require a value that begins
 with a digit, so an absent or empty id does not satisfy it.
 -}
@@ -552,8 +544,6 @@ hasPopulatedTraceId logs =
     any leadsWithDigit (drop 1 (T.splitOn "\"trace_id\":\"" logs))
   where
     leadsWithDigit seg = maybe False (isDigit . fst) (T.uncons seg)
-
--- ── npm driver ──────────────────────────────────────────────────────────────
 
 -- | The outcome of an @npm@ invocation: exit code plus captured output.
 data NpmResult = NpmResult
@@ -581,10 +571,10 @@ action, then remove the project tree on every exit path. For a publish-capable p
 withNpmProject :: E2E -> (NpmProject -> IO a) -> IO a
 withNpmProject e2e = withProjectContents e2e consumerPackageJson ""
 
-{- An isolated npm project with the given @package.json@ and @.npmrc@ contents — the
+{- An isolated npm project with the given @package.json@ and @.npmrc@ contents -- the
 shared body behind 'withNpmProject' (a consumer project, empty @.npmrc@) and
 'withPublishProject' (a publishable project, an authorising @.npmrc@). Creates the dirs
-and the pinned, fully isolated environment (own cache, userconfig, prefix, @HOME@ — no
+and the pinned, fully isolated environment (own cache, userconfig, prefix, @HOME@ -- no
 developer global state leaks in, the only registry is the proxy), runs the action, then
 removes the tree on every exit path. -}
 withProjectContents :: E2E -> Text -> Text -> (NpmProject -> IO a) -> IO a
@@ -615,7 +605,7 @@ withProjectContents e2e packageJson npmrcContents use = do
                       -- execute an upstream package's lifecycle scripts (an arbitrary-code-
                       -- execution surface). This project lives outside the repo tree, where the
                       -- committed root @.npmrc@'s @ignore-scripts@ is unreachable, so the guard
-                      -- is set in the child environment instead — unconditionally, every npm call.
+                      -- is set in the child environment instead -- unconditionally, every npm call.
                       ("npm_config_ignore_scripts", "true")
                     , ("HOME", projectDir)
                     ]
@@ -632,8 +622,8 @@ withProjectContents e2e packageJson npmrcContents use = do
 {- | Bracket an isolated, __publishable__ npm project: a @package.json@ carrying the
 given scoped name and version (npm packs the project directory, so no prebuilt tarball
 fixture is needed) and an @.npmrc@ authorising the proxy registry with a bearer token.
-The token satisfies npm's client-side publish gate — without one npm refuses the publish
-with @ENEEDAUTH@ before it reaches the proxy — and is forwarded through the publish
+The token satisfies npm's client-side publish gate -- without one npm refuses the publish
+with @ENEEDAUTH@ before it reaches the proxy -- and is forwarded through the publish
 relay. The publication target accepts the publish on its own terms, so the token's
 identity is immaterial here (asserting the forwarded-credential identity is the
 integration tier's concern); the @.npmrc@ exists to exercise the forward, not to prove it.
@@ -657,21 +647,21 @@ runNpm proj args = do
             , npmStderr = decodeUtf8 (LBS.toStrict err)
             }
 
-{- | @npm install \<pkg\>@ in a project — resolves via the packument and writes the
+{- | @npm install \<pkg\>@ in a project -- resolves via the packument and writes the
 lockfile (@package.json@ + @package-lock.json@) for a later 'npmCiIn'.
 -}
 npmInstallIn :: NpmProject -> Text -> IO NpmResult
 npmInstallIn proj pkg = runNpm proj ["install", toString pkg]
 
-{- | @npm ci@ in a project — a deterministic install from the lockfile. It fetches each
+{- | @npm ci@ in a project -- a deterministic install from the lockfile. It fetches each
 artifact from the lockfile's @resolved@ URL (the proxy's __private-first__ tarball path)
-and checks @integrity@, without re-resolving via the packument — so once a version is
+and checks @integrity@, without re-resolving via the packument -- so once a version is
 mirrored it never contacts the public upstream.
 -}
 npmCiIn :: NpmProject -> IO NpmResult
 npmCiIn proj = runNpm proj ["ci"]
 
-{- | @npm publish@ in a publishable project (see 'withPublishProject') — packs the
+{- | @npm publish@ in a publishable project (see 'withPublishProject') -- packs the
 project directory and @PUT \/{pkg}@s the publish document to the proxy, which gates it on
 the publish-scope allow-list before relaying it to the publication target. The exit code
 reflects what the proxy returned: success when the publish was admitted and the target
@@ -689,7 +679,7 @@ npmInstall e2e pkg = withNpmProject e2e (`npmInstallIn` pkg)
 {- | Install an isolated project whose own @postinstall@ would create a sentinel file in the
 project root, returning the install result and whether that sentinel was created. npm runs a
 root package's lifecycle scripts on @npm install@ unless they are disabled, and the harness
-disables them for every npm child it spawns, so a faithful harness creates no sentinel — the
+disables them for every npm child it spawns, so a faithful harness creates no sentinel -- the
 returned 'Bool' is 'False' even on a successful install. The regression guard that script
 suppression holds: were the guard dropped, the @postinstall@ would run and the 'Bool' flip to
 'True'.
@@ -702,7 +692,7 @@ installWithLifecycleProbe e2e =
         pure (res, ran)
 
 -- The file a lifecycle script would create; its absence after an install proves no script
--- ran. Relative, so it lands in the project root — npm's working directory for a root
+-- ran. Relative, so it lands in the project root -- npm's working directory for a root
 -- package's own lifecycle scripts.
 lifecycleSentinel :: FilePath
 lifecycleSentinel = "lifecycle-script-ran"
@@ -728,10 +718,8 @@ withUpstreamPaused e2e =
         (dockerOk ["pause", e2eStubContainer e2e])
         (dockerOk ["unpause", e2eStubContainer e2e])
 
--- ── first-party publish ───────────────────────────────────────────────────────
-
 {- | The extra proxy environment that turns the first-party publish path __on__, layered
-over the base 'proxyEnv' through 'E2EConfig'\'s @ecExtraEnv@ — so only the scenarios that
+over the base 'proxyEnv' through 'E2EConfig'\'s @ecExtraEnv@ -- so only the scenarios that
 ask for it see a publication target, and the base topology keeps the implicit
 publish→@405@ default. The target is Verdaccio, the same registry the base topology reads
 as the private upstream (@mirror@), so a published package is then readable back over the
@@ -758,7 +746,7 @@ publishInScopeName :: Text
 publishInScopeName = publishScope <> "/e2e-publish"
 
 {- | A package in a scope __outside__ the allow-list: an @npm publish@ of it must be
-refused by the anti-shadowing guard __before__ any upstream write — the security
+refused by the anti-shadowing guard __before__ any upstream write -- the security
 property the refuse-before-write scenario proves.
 -}
 publishOutOfScopeName :: Text
@@ -776,7 +764,7 @@ publishAuthToken :: Text
 publishAuthToken = "e2e-publisher-token"
 
 -- A publishable project's @package.json@: the scoped name and version npm packs and
--- publishes. Deliberately not @private@ — npm refuses to publish a private package.
+-- publishes. Deliberately not @private@ -- npm refuses to publish a private package.
 publishPackageJson :: Text -> Text -> Text
 publishPackageJson name version =
     "{\"name\":\"" <> name <> "\",\"version\":\"" <> version <> "\"}\n"
@@ -790,8 +778,6 @@ npmAuthLine registry token =
   where
     withoutScheme u = fromMaybe u (T.stripPrefix "http://" u <|> T.stripPrefix "https://" u)
 
--- ── HTTP probes ─────────────────────────────────────────────────────────────
-
 -- | The HTTP status of a @GET@ to a proxy path (e.g. @\/npm\/e2e-allow@).
 proxyStatus :: E2E -> Text -> IO Int
 proxyStatus e2e path = fst <$> proxyGet e2e path
@@ -804,7 +790,7 @@ proxyGet e2e path = do
     pure (statusCode (responseStatus resp), responseBody resp)
 
 {- | @HEAD@ a proxy path, returning the status, the declared @Content-Length@ (if
-any), and how many body bytes actually arrived — so a test can assert a @HEAD@ does
+any), and how many body bytes actually arrived -- so a test can assert a @HEAD@ does
 not stream a body.
 -}
 proxyHead :: E2E -> Text -> IO (Int, Maybe Int, Int)
@@ -818,7 +804,7 @@ proxyHead e2e path = do
                 readMaybe (toString (decodeUtf8 raw :: Text))
         pure (statusCode (responseStatus resp), declared, sum (map BS.length chunks))
 
-{- | @PUT@ a proxy path with an empty body, returning the status — the raw publish probe.
+{- | @PUT@ a proxy path with an empty body, returning the status -- the raw publish probe.
 A publish on a mount with __no__ publication target configured is refused (@405@) before
 the request body is read, so an empty @PUT@ is enough to assert the opt-in posture without
 driving the @npm@ CLI.
@@ -841,7 +827,7 @@ verdaccioHasVersion e2e pkg version = go (40 :: Int)
         present <- verdaccioHasVersionNow e2e pkg version
         if present then pure True else threadDelay 500000 >> go (n - 1)
 
-{- | A single, non-retrying check of whether the mirror already serves a version —
+{- | A single, non-retrying check of whether the mirror already serves a version --
 the precondition probe (\"absent now\") without the patience window
 'verdaccioHasVersion' spends to confirm an absence.
 -}
@@ -854,8 +840,6 @@ verdaccioHasVersionNow e2e pkg version =
             ( statusCode (responseStatus resp) == 200
                 && version `T.isInfixOf` decodeUtf8 (LBS.toStrict (responseBody resp))
             )
-
--- ── docker helpers ────────────────────────────────────────────────────────────
 
 -- | Run a docker command, failing the test loudly if it exits non-zero.
 dockerOk :: [String] -> IO ()
@@ -914,8 +898,8 @@ publishedPort cname containerPort = do
         (readMaybe (toString portText))
 
 {- | Create (idempotently) the mirror queue in the ministack SQS emulator on its
-host-published port and return the queue URL. Uses the plain SQS query API — the
-emulator needs no signed request — and retries while the emulator's SQS service warms
+host-published port and return the queue URL. Uses the plain SQS query API -- the
+emulator needs no signed request -- and retries while the emulator's SQS service warms
 up. @CreateQueue@ is idempotent (a repeat returns the existing URL), so the retry is
 safe. The returned URL's host is the emulator's own (@localhost:4566@); the proxy
 routes to ministack via @AWS_ENDPOINT_URL_SQS@ and matches the queue by its path, so
@@ -953,8 +937,6 @@ between opening closing t =
                 let (inner, rest) = T.breakOn closing (T.drop (T.length opening) afterOpen)
                  in if T.null rest then Nothing else Just inner
 
--- ── waiting ───────────────────────────────────────────────────────────────────
-
 -- | Poll a URL until it returns the wanted status, up to ~30s.
 waitFor :: Manager -> Text -> Int -> IO Bool
 waitFor manager url want = go (100 :: Int)
@@ -966,8 +948,6 @@ waitFor manager url want = go (100 :: Int)
                 req <- parseRequest (toString url)
                 Just . statusCode . responseStatus <$> (httpLbs req manager :: IO (Response LByteString))
         if got == Just want then pure True else threadDelay 300000 >> go (n - 1)
-
--- ── misc ──────────────────────────────────────────────────────────────────────
 
 exitOk :: (ExitCode, a, b) -> Bool
 exitOk (code, _, _) = code == ExitSuccess

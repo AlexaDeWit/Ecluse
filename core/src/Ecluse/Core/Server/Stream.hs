@@ -1,18 +1,18 @@
-{- | Bounded-memory artifact streaming — the constant-memory serve path.
+{- | Bounded-memory artifact streaming -- the constant-memory serve path.
 
 The proxy serves an artifact by __streaming it through__ from upstream, never
 buffering it whole: a multi-hundred-megabyte tarball must not become a local
 memory spike. The trap is resource lifetime. A WAI streaming body __runs after the
 handler returns__ (Warp serialises it while writing to the socket), so an upstream
 connection released when the handler returns lexically is already gone by the time
-the body streams — a use-after-free.
+the body streams -- a use-after-free.
 
 Raw WAI avoids it by construction: 'Network.Wai.Application' is
 continuation-passing, so the upstream connection is acquired with @withResponse@
 __bracketed around the @respond@ call itself__. The connection then lives for
 exactly the duration of the streamed body and is closed only when Warp returns
 @ResponseReceived@. 'pumpBody' pulls one chunk from upstream, writes it, and
-blocks on the socket send buffer before pulling the next — so the proxy reads from
+blocks on the socket send buffer before pulling the next -- so the proxy reads from
 upstream only as fast as the client drains, giving __constant memory regardless of
 artifact size__ with backpressure for free. No @ResourceT@, no conduit on the hot
 path (see @docs\/architecture\/web-layer.md@ → "Streaming and resource lifetime").
@@ -46,7 +46,7 @@ import Ecluse.Core.Server.Conditional (isNotModified)
 
 The upstream connection is opened with @withResponse@ __bracketed around the
 @respond@ call__, so it lives exactly as long as the streamed body and is released
-only after Warp returns 'ResponseReceived' — the WAI streaming-lifetime contract.
+only after Warp returns 'ResponseReceived' -- the WAI streaming-lifetime contract.
 The body is pumped chunk-by-chunk via 'pumpBody', whose @write@ blocks on the
 socket, so upstream is read only as fast as the client drains (backpressure).
 
@@ -74,22 +74,22 @@ mid-stream failure.
 
 This is the conditional relay the serve path's __private-origin fetch__ needs: open the
 upstream, learn its status, stream the body on a hit, and on a miss fall through to
-another upstream — without buffering and without leaking the connection. The two
+another upstream -- without buffering and without leaking the connection. The two
 outcomes are deliberately kept apart:
 
-* __Recoverable miss__ — the connection could not be opened, or the status fails
+* __Recoverable miss__ -- the connection could not be opened, or the status fails
   @accept@. No response has been committed, so the connection is closed and
   'Nothing' is returned and the caller may fall through to another upstream.
-* __Committed stream__ — the status passed, so the response is begun on the wire.
+* __Committed stream__ -- the status passed, so the response is begun on the wire.
   From that point a failure pumping the body is __unrecoverable__: it is __not__
   collapsed into a miss (that would call @respond@ a second time over a half-sent
-  response), but propagates — the connection torn down as it unwinds — so the
+  response), but propagates -- the connection torn down as it unwinds -- so the
   caller fails internally rather than responding again.
 
 A passing 'isNotModified' (@304 Not Modified@) status is the __pass-through
 conditional-GET relay__: it is committed like any accepted status, but answered
 __bodiless__ ('responseLBS' over an empty body) rather than pumped, since a @304@
-carries no body (RFC 9110 §15.4.5) — the upstream body reader is never read. This is
+carries no body (RFC 9110 §15.4.5) -- the upstream body reader is never read. This is
 how a client validator relayed upstream that matches comes straight back as a @304@,
 the artifact never re-downloaded.
 
@@ -135,7 +135,7 @@ streamUpstreamWhen manager request accept relay respond =
       where
         upstreamStatus = responseStatus upstream
 
-{- | Probe an upstream __without pumping a body__ — the bodiless relay a @HEAD@
+{- | Probe an upstream __without pumping a body__ -- the bodiless relay a @HEAD@
 takes, so a client cannot force the proxy to open the upstream artifact connection
 and stream a whole artifact to nowhere (the GET-pump amplification a HEAD must never
 trigger).
@@ -145,15 +145,15 @@ upstream sees a bodiless request too and replies with headers and no body. This
 mirrors 'streamUpstreamWhen''s hit\/miss split, but the committed phase answers with
 'responseLBS' over an __empty body__ rather than the streaming pump:
 
-* __Recoverable miss__ — the connection could not be opened, or the status fails
+* __Recoverable miss__ -- the connection could not be opened, or the status fails
   @accept@; no response is committed, the connection is closed, and 'Nothing' is
   returned so the caller may fall through to another upstream.
-* __Committed reply__ — the status passed, so a bodiless response is sent with the
+* __Committed reply__ -- the status passed, so a bodiless response is sent with the
   relayed status and headers. The upstream body reader is never read.
 
 The @relay@ chooses the client-facing status and headers from upstream's (the same
 header-filtering the streamed path applies), so a @HEAD@ relays an artifact's content
-headers — @Content-Type@, @Content-Length@, @ETag@, and the like — exactly as the
+headers -- @Content-Type@, @Content-Length@, @ETag@, and the like -- exactly as the
 matching @GET@ would, only without the bytes. The connection is released on every
 path; nothing is pumped, so there is no mid-stream phase to guard.
 -}
@@ -182,7 +182,7 @@ probeUpstreamWhen manager request accept relay respond =
 
 Each pull reads one chunk; a non-empty chunk is written and flushed before the
 next is pulled, so at most one chunk is ever resident. An empty chunk is the
-@http-client@ 'BodyReader' end-of-body terminator — the pump stops on it and never
+@http-client@ 'BodyReader' end-of-body terminator -- the pump stops on it and never
 writes it. Because @write@ blocks on the socket send buffer, the loop pulls from
 upstream only as fast as the client consumes: backpressure, and bounded memory
 independent of body size.

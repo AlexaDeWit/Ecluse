@@ -12,8 +12,8 @@ import Ecluse.Core.Credential.CodeArtifact (
 import Ecluse.Core.Credential.Refresh (noCredentialReporters)
 
 {- | Smoke test for the one outbound-credential surface no emulator covers:
-CodeArtifact @GetAuthorizationToken@. It makes a __live__ AWS call, so — like the
-live-registry oracles — it is __allowed to fail by design__ and never gates a
+CodeArtifact @GetAuthorizationToken@. It makes a __live__ AWS call, so -- like the
+live-registry oracles -- it is __allowed to fail by design__ and never gates a
 merge.
 
 It is __secret-gated__: it runs only when a sandbox CodeArtifact domain is

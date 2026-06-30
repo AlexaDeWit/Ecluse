@@ -2,14 +2,14 @@
 
 Parses a gem version into a 'GemKey': a flat list of 'VToken's obtained by
 splitting on dots and then into maximal digit and letter runs, then
-__canonicalised__ the way @Gem::Version#canonical_segments@ is — trailing zeros are
+__canonicalised__ the way @Gem::Version#canonical_segments@ is -- trailing zeros are
 dropped from the numeric release and from the prerelease tail independently, so
 @2.0.a@ keys as @[2, "a"]@. Ordering compares the canonical token lists
 position-by-position, zero-padding the shorter side, so @1.0 == 1.0.0@,
 @2.0.a == 2.a@, @2.t > 2.0.a@, and a trailing letter (prerelease) segment sorts
 below the bare release (a 'VStr' ranks below 'VNum 0'; see "Ecluse.Core.Version.Token").
 
-A gem version is __stable__ iff every token is numeric — no letter segment, i.e.
+A gem version is __stable__ iff every token is numeric -- no letter segment, i.e.
 no prerelease marker such as @.pre@ or @.rc1@.
 -}
 module Ecluse.Core.Version.Gem (
@@ -72,7 +72,7 @@ parseGem raw = do
 {- Canonicalise a gem token list the way @Gem::Version#canonical_segments@ does:
 split it at the first textual (prerelease) token into a numeric release and a
 prerelease tail, drop trailing zeros from /each/ part, then rejoin. So @2.0.a@ keys
-as @[2, "a"]@ (the release's trailing zero is dropped before the prerelease) — which
+as @[2, "a"]@ (the release's trailing zero is dropped before the prerelease) -- which
 is why @2.t > 2.0.a@ and @2.0.a == 2.a@. Comparing the un-canonicalised flat lists
 would instead reach a numeric-vs-textual position and order them the other way.
 -}

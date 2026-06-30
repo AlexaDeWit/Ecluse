@@ -1,7 +1,7 @@
 {- | The registry-protocol handle: the sole interface between the proxy core and
 any specific registry's wire protocol.
 
-This is the __ecosystem (protocol) axis__ — fetch, publish, and parse — and
+This is the __ecosystem (protocol) axis__ -- fetch, publish, and parse -- and
 nothing more (see @docs\/architecture\/registry-model.md@ → "Registry
 Abstraction"). It is a __record of functions__ (the Handle pattern): a backend's
 smart constructor returns a 'RegistryClient' whose closures capture that
@@ -15,7 +15,7 @@ Two design points are load-bearing:
 
 * __The effectful fields return 'IO', not @App@.__ An adapter closes over its
   own state (HTTP manager, credentials) and never imports the proxy's
-  @Env@\/@App@, so backends stay decoupled from the core (no import cycle) — see
+  @Env@\/@App@, so backends stay decoupled from the core (no import cycle) -- see
   @docs\/architecture\/technology-stack.md@ → "Key Decisions". The @parse*@
   fields are __pure__ ('Either'): parsing a fetched response is a total,
   side-effect-free projection (/parse, don't validate/).
@@ -49,7 +49,7 @@ module Ecluse.Core.Registry (
 import Ecluse.Core.Package (PackageDetails, PackageInfo, PackageName)
 import Ecluse.Core.Version (Version)
 
-{- | A raw response fetched from a registry — the unparsed bytes of a metadata
+{- | A raw response fetched from a registry -- the unparsed bytes of a metadata
 document or an artifact, as returned by 'fetchMetadata' \/ 'fetchArtifact'. It is
 kept opaque-of-bytes here so the protocol\/data plane (fetch) is separate from
 parsing: a @parse*@ field turns a 'RegistryResponse' into a domain type.
@@ -70,7 +70,7 @@ newtype ParseError = ParseError
     }
     deriving stock (Eq, Show)
 
-{- | Why publishing an artifact to a registry failed — a genuine write fault
+{- | Why publishing an artifact to a registry failed -- a genuine write fault
 reported by 'publishArtifact' (an 'Ecluse.Core.Queue' job is then left un-acked and
 retried; see @docs\/architecture\/cloud-backends.md@).
 
@@ -88,7 +88,7 @@ newtype PublishError = PublishError
 already-parsed 'Ecluse.Core.Package.PackageName'.
 
 This is a __protocol-independent__ fault shared by every request an adapter
-builds — metadata fetch, artifact fetch, and publish alike — so a read-path
+builds -- metadata fetch, artifact fetch, and publish alike -- so a read-path
 failure is reported as what it is rather than borrowing the write-path's
 'PublishError'. It is distinct from "Ecluse.Core.Security"'s @UrlError@: that is the
 pure SSRF\/identifier guard (which also rejects unsafe name components), whereas
@@ -105,7 +105,7 @@ data UrlFormationError
 
 {- | A 'UrlFormationError' is throwable. The __read__ path (metadata\/artifact
 fetch) treats an unformable URL as a configuration fault and raises it as this
-typed exception — catchable by type, never laundered into a stringly-typed
+typed exception -- catchable by type, never laundered into a stringly-typed
 @stringException@. The __write__ path does not throw it: it surfaces it as a
 'PublishFault' value instead (see below), because the mirror worker must decide
 retry vs. drop on it.
@@ -113,7 +113,7 @@ retry vs. drop on it.
 instance Exception UrlFormationError
 
 {- | The response from the publication target after relaying a publish document.
-Kept in memory (no streaming) — the relayed body is small (typically a JSON
+Kept in memory (no streaming) -- the relayed body is small (typically a JSON
 envelope and a tarball under the target's size limit), and buffering it whole lets the
 proxy catch and log an exception before starting a chunked response it would otherwise
 abandon mid-stream.
@@ -129,11 +129,11 @@ data PublishRelayResponse = PublishRelayResponse
 {- | Why a publish could not complete, surfaced as a __value__ rather than thrown
 so the mirror worker decides retry vs. drop by an exhaustive pattern match rather
 than by catching (and re-classifying) an exception. The two cases differ in
-exactly that — retryability — which is the whole reason this is a value: one is
+exactly that -- retryability -- which is the whole reason this is a value: one is
 worth redelivering and the other never is.
 -}
 data PublishFault
-    = {- | The request URL could not be formed (e.g. an empty base URL) — a
+    = {- | The request URL could not be formed (e.g. an empty base URL) -- a
       configuration fault carried as its 'UrlFormationError'. __Not retryable__:
       redelivering the job cannot change a misconfigured base URL, so the worker
       drops (and alerts) rather than re-enqueueing forever.
@@ -145,7 +145,7 @@ data PublishFault
       PublishRejected PublishError
     deriving stock (Eq, Show)
 
-{- | The registry-protocol handle — a record of functions over a backend whose
+{- | The registry-protocol handle -- a record of functions over a backend whose
 private state the closures capture. The effectful fields return 'IO' (decoupled
 from the core); the @parse*@ fields are pure. See the module header.
 -}
@@ -158,13 +158,13 @@ data RegistryClient = RegistryClient
     {- ^ Publish an artifact's bytes for one version to the registry. Idempotent
     at the protocol level (versions are immutable), so a redelivered mirror
     job's re-publish is safe. A failure is reported as a 'PublishFault' __value__
-    — 'PublishRejected' (retry) or 'PublishUrlUnformable' (drop) — never thrown,
+    -- 'PublishRejected' (retry) or 'PublishUrlUnformable' (drop) -- never thrown,
     so the worker's retry-vs-drop decision is total at the call site.
     -}
     , parsePackageInfo :: PackageName -> RegistryResponse -> Either ParseError PackageInfo
     {- ^ Project a fetched metadata response into the packument-level
     'PackageInfo' for the requested package. The 'PackageName' is the identity the
-    request is for — the proxy always knows it from the route — supplied so the
+    request is for -- the proxy always knows it from the route -- supplied so the
     projection has the requested identity available alongside the upstream
     document's self-reported @name@.
     -}

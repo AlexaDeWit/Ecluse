@@ -1,5 +1,5 @@
 {- | Unit cover for the core serve handlers ("Ecluse.Core.Server.Pipeline") driven
-__directly__ over a 'ServeRuntime' of test doubles — no application 'Env', no
+__directly__ over a 'ServeRuntime' of test doubles -- no application 'Env', no
 OpenTelemetry SDK.
 
 This is the partition's proof that the request pipeline is genuinely core: it constructs
@@ -7,7 +7,7 @@ the request runtime from a recording metrics port, a pass-through tracing port, 
 in-memory queue, and a real cache and HTTP manager, then runs the handlers through the
 core 'runHandler' against a scribe-less @katip@ environment. The handlers serve a merged
 packument and a gated tarball, degrade to an unavailability when no upstream resolves,
-and stub an unwired mount — and the recording port confirms the serve decision each path
+and stub an unwired mount -- and the recording port confirms the serve decision each path
 recorded through the interface. The exhaustive serve-path behaviour (every status, the
 credential split, the merge) is covered through the real stack in the integration
 suite's @Ecluse.Server.PipelineSpec@; this pins that the handlers run over the ports.
@@ -99,8 +99,6 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
             statusCode (responseStatus resp) `shouldBe` 200
             decisions >>= (`shouldBe` [Admit])
 
--- ── driving a handler ──────────────────────────────────────────────────────────
-
 {- | Run a serve handler over a request runtime and mount, capturing the 'Response' it
 hands its continuation. The handler runs through the core 'runHandler' against a
 scribe-less @katip@ environment (its warnings have nowhere to go, which is what these
@@ -123,8 +121,6 @@ mkRuntime metricsPort = do
     cache <- newMetadataCache defaultCacheConfig
     queue <- newInMemoryQueue
     pure (ServeRuntime manager manager cache queue metricsPort passthroughTracingPort)
-
--- ── the mount and its dependencies ───────────────────────────────────────────────
 
 leftpad :: PackageName
 leftpad = mkPackageName Npm Nothing "leftpad"
@@ -181,8 +177,6 @@ allowPolicy = [atDefaultPrecedence (AllowIfOlderThan (7 * nominalDay))]
 -- | A fixed wall clock against which the fixture version reads as well-aged.
 fixedNow :: UTCTime
 fixedNow = UTCTime (fromGregorian 2020 1 1) 0
-
--- ── the in-process upstream double ───────────────────────────────────────────────
 
 {- | A minimal npm upstream: it answers @GET \/leftpad@ with a one-version packument
 whose @dist.tarball@ self-hosts on this upstream (the host taken from the request, so

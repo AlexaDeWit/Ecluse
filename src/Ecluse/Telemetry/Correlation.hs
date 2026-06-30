@@ -13,7 +13,7 @@ trace and span ids into a 'DdSpan', and fills it onto a 'DdContext'.
 The @service@\/@env@\/@version@ identity is resolved once
 ("Ecluse.Telemetry.Resolve") and carried as a span-less 'DdContext' (the
 __identity__); 'ddPayloadNow' fills the __active span__ onto a copy of it at log time.
-With no span in scope — outside a request, or with telemetry off — the trace and span
+With no span in scope -- outside a request, or with telemetry off -- the trace and span
 ids are simply absent and the identity still stamps the line. A span whose context is
 not valid (a dropped\/non-recording span carrying zero ids) likewise contributes no
 ids, so a line never carries a meaningless all-zero trace id.
@@ -53,8 +53,6 @@ import Ecluse.Telemetry.Resolve (
     resolveTelemetry,
  )
 
--- ── identity ───────────────────────────────────────────────────────────────────
-
 {- | The span-less @dd@ identity from a resolved telemetry configuration: the
 @service@\/@env@\/@version@ that stamp every line, with no active span yet
 ('ddPayloadNow' fills that at log time). The single resolved identity feeds both the
@@ -70,15 +68,13 @@ ddIdentity resolved =
         , ddSpan = Nothing
         }
 
-{- | Resolve the @dd@ identity from the process environment — the same precedence
+{- | Resolve the @dd@ identity from the process environment -- the same precedence
 table the SDK configuration uses ("Ecluse.Telemetry.Resolve"), so the log identity
 matches the exporter's. Read once at composition (the @OTEL_*@ environment is already
 normalised by then), not per line.
 -}
 ddIdentityFromEnvironment :: IO DdContext
 ddIdentityFromEnvironment = ddIdentity . resolveTelemetry <$> getEnvironment
-
--- ── active-span correlation ──────────────────────────────────────────────────
 
 {- | The active span's ids as a 'DdSpan', read from the ambient OpenTelemetry context
 and rendered in the Datadog id format. 'Nothing' when no span is in scope or the
@@ -107,8 +103,8 @@ ddContextNow base = do
     mSpan <- activeDdSpan
     pure base{ddSpan = mSpan}
 
-{- | The @dd@ object for the current log site as a @katip@ payload — the identity plus
-the active span's ids — ready to compose into a log call or install as the initial
+{- | The @dd@ object for the current log site as a @katip@ payload -- the identity plus
+the active span's ids -- ready to compose into a log call or install as the initial
 context of a request\/worker scope (so every line under it carries @dd@).
 -}
 ddPayloadNow :: (MonadIO m) => DdContext -> m SimpleLogPayload

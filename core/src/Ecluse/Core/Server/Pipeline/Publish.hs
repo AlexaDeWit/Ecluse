@@ -79,7 +79,7 @@ publishWithDeps renderer deps name request respond
         -- The body-name agreement leg of the anti-shadowing guard (issue #391): the scope
         -- guard authorised the URL-path name, but the publish document carries its own
         -- declared identity, so a crafted body could otherwise write a name the guard never
-        -- saw. Refuse — before the relay — any present declared name that disagrees with the
+        -- saw. Refuse -- before the relay -- any present declared name that disagrees with the
         -- URL-path name, so the identity authorised is provably the identity written.
         case bodyNameDisagreement (pubCanonicaliseName deps) name body of
             Just declared -> liftIO (respond (bodyNameMismatch renderer deps name declared))
@@ -91,7 +91,7 @@ publishWithDeps renderer deps name request respond
                 outcome <- tryAny (liftIO (pubRelayPublish deps (pubLimits deps) (srPrivateManager rt) (pubTargetUrl deps) (forwardedToken request <|> pubStaticToken deps) name (LBS.toStrict body)))
                 liftIO (respond (renderRelay renderer deps outcome))
 
-{- Whether a package name falls within the configured publish-scope allow-list — the
+{- Whether a package name falls within the configured publish-scope allow-list -- the
 anti-shadowing guard. A __scoped__ name is admitted iff its scope is one of the
 configured scopes; an __unscoped__ name is never in any scope, so it is refused (the
 MVP allow-list is scope-based, e.g. @\@acme@). The scope equality is exact, so
@@ -102,7 +102,7 @@ inPublishScope scopes name = case pkgNamespace name of
     Nothing -> False
 
 {- Render the relay outcome: the publication target's own status and body forwarded to
-the client on success (so the publisher sees the registry's real answer — a success
+the client on success (so the publisher sees the registry's real answer -- a success
 shape, a @409@, a @403@ the registry's own authorisation produced); a @502@ when the
 target could not be reached; a @500@ when its URL is unformable (misconfiguration). -}
 renderRelay ::
@@ -126,7 +126,7 @@ publishDisabled renderer =
     renderedResponse status405 [("Allow", "GET, HEAD")] (renderError renderer Nothing "publishing is not enabled on this proxy (no publication target is configured)")
 
 -- A @403@ for a publish whose name is outside the configured publish-scope
--- allow-list — the anti-shadowing guard, refused before any upstream write.
+-- allow-list -- the anti-shadowing guard, refused before any upstream write.
 outOfScope :: MountRenderer -> PublishDeps -> PackageName -> Response
 outOfScope renderer deps name =
     renderedResponse status403 [] (renderError renderer (pubHelp deps) message)
@@ -137,8 +137,8 @@ outOfScope renderer deps name =
             <> renderPackageName name
             <> "': its name is outside the configured publish-scope allow-list (the anti-shadowing guard against publishing a name that shadows a public package)"
 
--- A @403@ for a publish whose document body declares a package name — its @_id@,
--- top-level @name@, or a @versions[].name@ — that disagrees with the scope-guarded
+-- A @403@ for a publish whose document body declares a package name -- its @_id@,
+-- top-level @name@, or a @versions[].name@ -- that disagrees with the scope-guarded
 -- URL-path name. The body-name agreement leg of the anti-shadowing guard (issue #391),
 -- refused before any upstream write so the identity the guard authorises is the
 -- identity written.
@@ -156,13 +156,13 @@ bodyNameMismatch renderer deps name declared =
 
 {- The first declared body name that disagrees with the URL-path name, or 'Nothing'
 when the body declares no disagreeing name. The publish document carries its own
-identity — a top-level @_id@ and @name@, and a @name@ per entry in @versions@ — so a
+identity -- a top-level @_id@ and @name@, and a @name@ per entry in @versions@ -- so a
 relay that keyed the write off the body could otherwise write a name the scope guard
 never authorised. Each __present__ declared name is canonicalised the same way the
 route builds its 'PackageName' ('projectName') and compared by 'PackageName' equality
 (ecosystem-aware, so an encoding variant of the same name cannot disagree silently); a
 present name that does not equal the URL-path name is a disagreement. Only the names
-are read — the base64 @_attachments@ are never decoded. An __absent__ name is not a
+are read -- the base64 @_attachments@ are never decoded. An __absent__ name is not a
 claim, so it is not a disagreement (a legitimate npm client always sends matching
 names); a body that does not decode to a JSON object likewise declares no readable
 name and raises none, leaving the relay to meet the target's own validation. -}

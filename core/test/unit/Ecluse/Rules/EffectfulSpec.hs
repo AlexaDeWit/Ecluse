@@ -16,8 +16,8 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package
 import Ecluse.Core.Rules
 
--- This spec builds 'PreparedRule's directly — with a fake 'prepEval' and a chosen
--- 'prepName' — to exercise the resilience harness and the parallel engine without any
+-- This spec builds 'PreparedRule's directly -- with a fake 'prepEval' and a chosen
+-- 'prepName' -- to exercise the resilience harness and the parallel engine without any
 -- evaluation closure on the closed 'Rule' data.
 import Ecluse.Core.Rules.Types
 import Ecluse.Core.Version (mkVersion)
@@ -79,7 +79,7 @@ fastConfig =
 {- | Build a resilient (effectful) prepared rule with a fresh breaker, the given
 precedence, config, failure alignment, and (fake) evaluator, observed through the given
 breaker reporter. The evaluator ignores the evaluation context (the rules under test
-read only the package). This is the engine's injection point — an arbitrary 'prepEval'
+read only the package). This is the engine's injection point -- an arbitrary 'prepEval'
 and a chosen 'prepName', without widening the closed 'Rule' vocabulary.
 -}
 mkRuleR ::
@@ -148,7 +148,7 @@ isUnavailableResult = \case
     _ -> False
 
 {- | An outcome for the equal-precedence tie tests: an allow, a deny, or a
-self-reported (fail-closed) unavailability — the three decisive positions that
+self-reported (fail-closed) unavailability -- the three decisive positions that
 compete in the boot order.
 -}
 genTieOutcome :: Gen RuleResult
@@ -161,7 +161,7 @@ genTieOutcome =
 
 spec :: Spec
 spec = do
-    describe "defaultEffectfulConfig — the shipped resilience knobs" $
+    describe "defaultEffectfulConfig -- the shipped resilience knobs" $
         it "pins the documented defaults (timeout, backoff schedule, breaker, no Retry-After)" $ do
             -- The shipped policy a caller inherits when it overrides only the eval:
             -- a 2s per-attempt timeout, two backoffs (100ms, 250ms), a breaker
@@ -172,11 +172,11 @@ spec = do
             ecBreakerCooldown defaultEffectfulConfig `shouldBe` 30
             ecRetryAfter defaultEffectfulConfig `shouldBe` Nothing
 
-    describe "backoffPolicy — the compiled retry schedule" $ do
+    describe "backoffPolicy -- the compiled retry schedule" $ do
         -- 'simulatePolicy' walks the policy without sleeping, so the schedule the
         -- harness drives the retry loop with is asserted directly: the n-th retry
         -- waits the n-th 'ecBackoff' delay, and the policy stops (yields 'Nothing')
-        -- once the list is exhausted — its length being the retry budget.
+        -- once the list is exhausted -- its length being the retry budget.
         it "the default schedule retries twice, at 100ms then 250ms, then stops" $ do
             delays <- simulatePolicy 2 (backoffPolicy [100_000, 250_000])
             map snd delays `shouldBe` [Just 100_000, Just 250_000, Nothing]
@@ -185,10 +185,10 @@ spec = do
             delays <- simulatePolicy 0 (backoffPolicy [])
             map snd delays `shouldBe` [Nothing]
 
-    describe "evalRules — one engine over pure and effectful rules" $ do
+    describe "evalRules -- one engine over pure and effectful rules" $ do
         it "an effectful rule below a pure decisive prefix is never launched (short-circuit)" $ do
             -- A pure deny at precedence 300 decides first; an effectful rule ranked
-            -- below it is mooted, so its IO must never run — the counter (and its
+            -- below it is mooted, so its IO must never run -- the counter (and its
             -- throw) prove it.
             ran <- newIORef (0 :: Int)
             effLater <- mkRule "EffAfter" 200 fastConfig FailDeny $ \_ -> do
@@ -217,11 +217,11 @@ spec = do
             decision <- evalRules ctx [pureAt 200 (AllowScope (mkScope "myorg")), rule] (pkg Nothing 0)
             admittedBy decision `shouldBe` Just "EffAllow"
 
-    describe "evalRules — deny-by-default with reasons in boot order" $
+    describe "evalRules -- deny-by-default with reasons in boot order" $
         it "collects every non-decisive reason, highest precedence first" $ do
             -- A losing fail-open unavailability (its source down), a NoDecision, and a
             -- pure NoDecision: none is decisive, so the package is BlockedByDefault
-            -- carrying each reason in boot order (300, 200, 100) — including the
+            -- carrying each reason in boot order (300, 200, 100) -- including the
             -- fail-open Unavailable's, so a fail-open loss is still surfaced.
             high <- failingRule "EffHigh" 300 fastConfig FailNoDecision
             mid <- constRule "EffMid" 200 fastConfig FailNoDecision (NoDecision "mid no opinion")
@@ -235,7 +235,7 @@ spec = do
                                    ]
                 other -> expectationFailure ("expected BlockedByDefault, got " <> show other)
 
-    describe "evalRules — fail-closed vs fail-open alignment" $ do
+    describe "evalRules -- fail-closed vs fail-open alignment" $ do
         it "a failing FailDeny rule that could decide is Undecidable (fail-closed)" $ do
             rule <- failingRule "EffDeny" 300 fastConfig FailDeny
             decision <- evalRules ctx [pureAt 200 (AllowScope (mkScope "myorg")), rule] (pkg (Just "myorg") 0)
@@ -272,7 +272,7 @@ spec = do
             decision <- evalRules ctx [rule] (pkg Nothing 0)
             isAdmitted decision `shouldBe` False
 
-    describe "evalRules — deterministic speculative parallelism" $ do
+    describe "evalRules -- deterministic speculative parallelism" $ do
         it "credits the earliest-in-boot-order decisive rule, not the first to return" $ do
             -- The higher-precedence deny is slow; the lower-precedence allow returns
             -- first in wall-clock time. The decision must still be the deny (earliest
@@ -296,7 +296,7 @@ spec = do
             blockedBy decision `shouldBe` Just "EffWinner"
             readIORef done `shouldReturn` False
 
-    describe "evalRules — order-independent boot order (carried from #377/#378)" $ do
+    describe "evalRules -- order-independent boot order (carried from #377/#378)" $ do
         it "an equal-precedence effectful deny and unavailable resolve to the same decision regardless of order" $ do
             -- The sharpest case from the original bug: an effectful Deny (a permanent
             -- 403) and an effectful fail-closed Unavailable (a retryable 503) tie on
@@ -327,7 +327,7 @@ spec = do
                 shuffled <- liftIO (decide perm)
                 original === shuffled
 
-    describe "runEffectfulRule — the per-rule resilience wrapper" $ do
+    describe "runEffectfulRule -- the per-rule resilience wrapper" $ do
         it "runs a pure rule directly (no resilience)" $ do
             outcome <- runEffectfulRule ctx (pureAt 200 (AllowScope (mkScope "myorg"))) (pkg (Just "myorg") 0)
             outcome `shouldSatisfy` (\case Allow{} -> True; _ -> False)

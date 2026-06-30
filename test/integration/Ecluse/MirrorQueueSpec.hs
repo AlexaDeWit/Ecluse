@@ -24,7 +24,7 @@ import Ecluse.Test.Package (unsafeHash, validSha1)
 {- | Integration tests exercise the SQS 'MirrorQueue' backend against a real
 endpoint provided by a @ministack@ container (launched via @testcontainers@, shared
 through "Ecluse.Integration.Ministack"). @amazonka@ is pointed at the container with
-throwaway credentials, so they are hermetic and __gating__ — but they require a
+throwaway credentials, so they are hermetic and __gating__ -- but they require a
 running Docker daemon and no real AWS.
 -}
 spec :: Spec

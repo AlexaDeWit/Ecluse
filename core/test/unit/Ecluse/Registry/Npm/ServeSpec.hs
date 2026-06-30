@@ -24,7 +24,7 @@ errorField raw =
 
 spec :: Spec
 spec = do
-    describe "npmDenialBody — the npm {\"error\": …} shape" $ do
+    describe "npmDenialBody -- the npm {\"error\": …} shape" $ do
         it "is a JSON object with a string error field carrying the message" $
             errorField (npmDenialBody Nothing "denied because reasons")
                 `shouldBe` Right "denied because reasons"
@@ -41,7 +41,7 @@ spec = do
             errorField (npmDenialBody (Just (mkHelpMessage "   ")) "denied")
                 `shouldBe` Right "denied"
 
-    describe "npmRenderer — the npm mount renderer" $ do
+    describe "npmRenderer -- the npm mount renderer" $ do
         it "tags the rendered body application/json" $
             renderedContentType (renderError npmRenderer Nothing "denied")
                 `shouldBe` "application/json"

@@ -4,7 +4,7 @@ off the wire ("Ecluse.Core.Registry.Npm.Wire") and projecting it into the agnost
 
 These run over the curated real-world corpus (small @is-odd@ through heavy
 @\@types\/node@), so the decode and projection cost is reported across the real
-distribution of package sizes and shapes rather than one anchor — the heterogeneous
+distribution of package sizes and shapes rather than one anchor -- the heterogeneous
 per-version manifests are where a decode regression on a heavy packument shows up.
 Each result is summarised to a forced 'Int' that touches a deep field of every
 version, so the whole decoded\/projected structure is evaluated, not just its

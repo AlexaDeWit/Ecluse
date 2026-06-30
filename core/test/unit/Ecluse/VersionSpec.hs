@@ -125,7 +125,7 @@ spec = do
             cmp RubyGems "1.0.0-1" "1.0.0.pre.1" `shouldBe` Just EQ
         it "is Nothing when a version cannot be parsed" $
             cmp Npm "not a version" "1.0.0" `shouldBe` Nothing
-        it "is reflexive — EQ when parseable, Nothing otherwise" $
+        it "is reflexive -- EQ when parseable, Nothing otherwise" $
             hedgehog $ do
                 eco <- forAll (Gen.element [Npm, PyPI, RubyGems])
                 ver <-
@@ -143,12 +143,12 @@ spec = do
     -- and triple draws inject equal cases explicitly ('versionPair' /
     -- 'versionTriple' reuse one raw across positions, which compares EQ), so the
     -- EQ class stays covered independent of how often two independent draws
-    -- collide — robust to the generator's width rather than relying on a narrow,
+    -- collide -- robust to the generator's width rather than relying on a narrow,
     -- collision-dense space.
     describe "compareVersions total-order laws" $
         modifyMaxSuccess (const 400) $
             for_ ecosystemGens $ \(eco, gen) -> describe (show eco) $ do
-                it "totality — both parse ⇒ Just (never Nothing)" $
+                it "totality -- both parse ⇒ Just (never Nothing)" $
                     hedgehog $ do
                         (a, b) <- forAll (versionPair gen)
                         let (x, y) = (mkVersion eco a, mkVersion eco b)
@@ -163,12 +163,12 @@ spec = do
                         H.cover 1 "EQ" (compareVersions x y == Just EQ)
                         H.cover 1 "GT" (compareVersions x y == Just GT)
                         H.assert (isJust (compareVersions x y))
-                it "antisymmetry — cmp x y == invert <$> cmp y x" $
+                it "antisymmetry -- cmp x y == invert <$> cmp y x" $
                     hedgehog $ do
                         (a, b) <- forAll (versionPair gen)
                         let (x, y) = (mkVersion eco a, mkVersion eco b)
                         compareVersions x y === fmap invertOrdering (compareVersions y x)
-                it "transitivity — x ≤ y and y ≤ z ⇒ x ≤ z" $
+                it "transitivity -- x ≤ y and y ≤ z ⇒ x ≤ z" $
                     hedgehog $ do
                         (a, b, c) <- forAll (versionTriple gen)
                         let x = mkVersion eco a

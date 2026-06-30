@@ -2,7 +2,7 @@
 
 A scaled bench is not only timed; its /growth/ is fitted with @tasty-bench-fit@ and
 checked to be no worse than linear. This is the guard against the accidentally
-quadratic class of regression — a fold that becomes @O(n^2)@ in version count —
+quadratic class of regression -- a fold that becomes @O(n^2)@ in version count --
 which a single-size timing would never reveal.
 
 Unlike a perf-regression comparison (machine-dependent, noisy, never gated), an
@@ -39,8 +39,8 @@ linearCeiling = 1.5
 
 {- | Assert that a pure operation's running time grows no worse than linearly in the
 input size. The size-to-input function runs once per measured size (its result is
-shared across the iterations at that size), so only the operation — not the input
-construction — is fitted. The operation is summarised to a forced 'Int' so the whole
+shared across the iterations at that size), so only the operation -- not the input
+construction -- is fitted. The operation is summarised to a forced 'Int' so the whole
 result is evaluated.
 -}
 notWorseThanLinear ::
@@ -63,7 +63,7 @@ notWorseThanLinear label (low, high) build operation =
             (cmplVarPower complexity < linearCeiling)
 
 {- | Like 'notWorseThanLinear', but for an operation whose result is computed in
-'IO' — the rule engine prepares rules once, then evaluates each version effectfully,
+'IO' -- the rule engine prepares rules once, then evaluates each version effectfully,
 so the per-request sweep is an 'IO' action. The action is run per measurement and its
 'Int' result forced.
 -}

@@ -5,7 +5,7 @@ The core pipeline and the mirror worker record through abstract ports rather tha
 telemetry backend, so a suite can drive them over inert or recording doubles with no
 OpenTelemetry SDK. These are the shared doubles every suite reaches for: an inert metrics
 port, a metrics port that captures the signals it is handed (to assert what was
-recorded), and a pass-through tracing port that simply runs the bracketed body — one set
+recorded), and a pass-through tracing port that simply runs the bracketed body -- one set
 for the serve path, one for the worker.
 -}
 module Ecluse.Test.Port (
@@ -24,7 +24,7 @@ import Ecluse.Core.Telemetry.Metrics (Decision, MirrorResult)
 import Ecluse.Core.Telemetry.Record (MetricsPort (..), WorkerMetricsPort (..))
 import Ecluse.Core.Telemetry.Span (TracingPort (..), WorkerTracingPort (..))
 
-{- | A 'MetricsPort' whose every field discards its measurement — the inert double for a
+{- | A 'MetricsPort' whose every field discards its measurement -- the inert double for a
 spec that drives the serve path but asserts nothing about metrics.
 -}
 noopMetricsPort :: MetricsPort
@@ -54,7 +54,7 @@ recordingMetricsPort = do
     let port = noopMetricsPort{mpServeDecision = \d -> atomically (modifyTVar' seen (<> [d]))}
     pure (port, readTVarIO seen)
 
-{- | A 'TracingPort' that opens no span and simply runs the bracketed body — the inert
+{- | A 'TracingPort' that opens no span and simply runs the bracketed body -- the inert
 double for a spec that drives the serve path's span sites without a tracer.
 -}
 passthroughTracingPort :: TracingPort
@@ -66,9 +66,7 @@ passthroughTracingPort =
           spanMirrorEnqueue = \_ _ _ _project body -> body Nothing
         }
 
--- ── worker ports ────────────────────────────────────────────────────────────────
-
-{- | A 'WorkerMetricsPort' whose every field discards its measurement — the inert double
+{- | A 'WorkerMetricsPort' whose every field discards its measurement -- the inert double
 for a spec that drives the worker loop but asserts nothing about metrics.
 -}
 noopWorkerMetricsPort :: WorkerMetricsPort
@@ -89,7 +87,7 @@ recordingWorkerMetricsPort = do
     let port = noopWorkerMetricsPort{wmpMirrorJobProcessed = \r -> atomically (modifyTVar' seen (<> [r]))}
     pure (port, readTVarIO seen)
 
-{- | A 'WorkerTracingPort' that opens no span and simply runs the bracketed body — the
+{- | A 'WorkerTracingPort' that opens no span and simply runs the bracketed body -- the
 inert double for a spec that drives the worker's per-job span site without a tracer.
 -}
 passthroughWorkerTracingPort :: WorkerTracingPort

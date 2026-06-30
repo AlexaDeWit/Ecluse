@@ -86,7 +86,7 @@ pypiJob =
         }
 
 {- | A job body in the wire shape an older producer emits: every required field, a
-valid artifact digest, and __no @traceContext@ key at all__ — the literal "legacy"
+valid artifact digest, and __no @traceContext@ key at all__ -- the literal "legacy"
 shape the optional-carrier decode must accept (decoding it to a 'Nothing' carrier).
 -}
 legacyNoTraceContextBody :: Text
@@ -126,7 +126,7 @@ spec = do
         it "round-trips every hash algorithm's wire name (encode/decode are inverse over all algs)" $
             -- A job whose artifact carries one digest of EACH algorithm exercises both
             -- directions of the wire mapping (renderHashAlg on encode, parseHashAlg on
-            -- decode) for sha1/sha256/sha384/sha512/md5/blake2b/sri — so a future algorithm
+            -- decode) for sha1/sha256/sha384/sha512/md5/blake2b/sri -- so a future algorithm
             -- whose two halves disagree is caught here rather than silently dropping a
             -- digest the worker would later need to verify against.
             let allAlgsJob =
@@ -148,8 +148,8 @@ spec = do
 
         it "decodes a legacy job body with no traceContext key to a Nothing carrier (back-compat)" $
             -- A producer from before the carrier field existed emits no "traceContext" key
-            -- at all (not even a null). It must decode to a valid job with no carrier — the
-            -- '.:?'-absent path — rather than fail, so the field is additive and a job
+            -- at all (not even a null). It must decode to a valid job with no carrier -- the
+            -- '.:?'-absent path -- rather than fail, so the field is additive and a job
             -- already on the wire keeps processing across the upgrade.
             case decodeJob legacyNoTraceContextBody of
                 Left err -> expectationFailure (toString err)

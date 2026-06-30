@@ -7,8 +7,8 @@ Maps the handle's receive → process → ack shape onto SQS:
 * 'ack' → @DeleteMessage@ (the message is gone, never redelivered),
 * 'extendVisibility' → @ChangeMessageVisibility@ (hold a long publish).
 
-The provider differences SQS embodies — the visibility timeout, the long-poll
-window, the batch limit — are 'SqsConfig' knobs with sane defaults, and the SQS
+The provider differences SQS embodies -- the visibility timeout, the long-poll
+window, the batch limit -- are 'SqsConfig' knobs with sane defaults, and the SQS
 receipt handle is carried opaquely in a 'ReceiptHandle' (via 'mkReceiptHandle'),
 so none of it leaks past the handle. __Retry is "don't ack"__: a job whose
 processing fails is simply not 'ack'ed, and SQS redelivers it once the visibility
@@ -19,8 +19,8 @@ The @amazonka@ 'AWS.Env' is built once at 'newSqsQueue' and captured by the
 handle's closures, so the backend's state never reaches the proxy's @Env@\/@App@
 (see @docs\/architecture\/technology-stack.md@ → "Key Decisions"). The
 'MirrorJob' wire mapping is a plain JSON object, decoded on 'receive'; a body that
-fails to parse is dropped rather than yielded as a partial, so — like any message
-left unprocessed — it is not 'ack'ed and SQS redelivers it, ultimately to the
+fails to parse is dropped rather than yielded as a partial, so -- like any message
+left unprocessed -- it is not 'ack'ed and SQS redelivers it, ultimately to the
 dead-letter queue.
 
 The SQS queue is a __trusted, operator-declared destination__ (the configured queue
@@ -129,7 +129,7 @@ data SqsConfig = SqsConfig
     -}
     , sqsVisibilityTimeout :: Seconds
     {- ^ How long a received message stays hidden from other 'receive's before SQS
-    redelivers it — the budget for processing-then-'ack', extendable per message
+    redelivers it -- the budget for processing-then-'ack', extendable per message
     via 'extendVisibility'.
     -}
     }
@@ -152,9 +152,9 @@ defaultSqsConfig queueUrl region =
         }
 
 {- | Build an SQS-backed 'MirrorQueue'. The @amazonka@ 'AWS.Env' is constructed
-once here — region-scoped, and pointed at 'sqsEndpoint' with its throwaway
+once here -- region-scoped, and pointed at 'sqsEndpoint' with its throwaway
 credentials when one is given, otherwise discovering the ambient AWS credential
-chain — and captured by the returned handle's closures.
+chain -- and captured by the returned handle's closures.
 -}
 newSqsQueue :: SqsConfig -> IO MirrorQueue
 newSqsQueue cfg = do
@@ -215,7 +215,7 @@ receiveRequest cfg =
 
 {- Lift one SQS Message into a QueueMessage. A message missing its body or
 receipt handle (which SQS always supplies) is dropped rather than crashing the
-poll; likewise an undecodable body — the visibility timeout then redelivers it,
+poll; likewise an undecodable body -- the visibility timeout then redelivers it,
 and a persistently bad message falls to the dead-letter queue. -}
 toQueueMessage :: SQS.Message -> Maybe QueueMessage
 toQueueMessage message = do
@@ -224,13 +224,11 @@ toQueueMessage message = do
     job <- rightToMaybe (decodeJob body)
     pure QueueMessage{msgJob = job, msgReceipt = mkReceiptHandle receipt}
 
--- ── job wire mapping ─────────────────────────────────────────────────────────
-
 {- | Encode a 'MirrorJob' as the JSON text of an SQS message body. The inverse of
 'decodeJob': the package identity is split into its ecosystem, optional scope, and
 bare name so it round-trips through 'mkPackageName', and the version keeps its raw
-string. The serve-time-admitted artifact descriptor ('jobArtifact') — the filename,
-the integrity digests, and the declared size — round-trips as a nested object so the
+string. The serve-time-admitted artifact descriptor ('jobArtifact') -- the filename,
+the integrity digests, and the declared size -- round-trips as a nested object so the
 worker has the digest to verify the fetched bytes against and the inputs to assemble
 the publish document.
 -}
@@ -309,14 +307,14 @@ decodeJob body =
 
 -- Parse the optional trace-context carrier back into a 'RemoteSpanContext': the W3C
 -- traceparent and tracestate verbatim. The carrier is untrusted opaque transport, so
--- both fields are taken as-is — an unparseable W3C value is the tracing port's concern
+-- both fields are taken as-is -- an unparseable W3C value is the tracing port's concern
 -- (it yields no link), never a decode failure that would strand a serviceable job.
 parseTraceContext :: Aeson.Value -> Parser RemoteSpanContext
 parseTraceContext = withObject "RemoteSpanContext" $ \t ->
     RemoteSpanContext <$> t .: "traceparent" <*> t .: "tracestate"
 
 -- Parse the nested artifact descriptor, failing on an empty hash list (the
--- 'NonEmpty' invariant the serve path upholds — a job must carry a digest to verify
+-- 'NonEmpty' invariant the serve path upholds -- a job must carry a digest to verify
 -- against).
 parseArtifact :: Aeson.Value -> Parser MirrorArtifact
 parseArtifact = withObject "MirrorArtifact" $ \o -> do
@@ -340,7 +338,7 @@ parseArtifact = withObject "MirrorArtifact" $ \o -> do
         either (fail . toString) pure (mkHash alg value)
     unknownAlg n = "unknown hash algorithm " <> show (n :: Text)
 
--- Decode a wire algorithm name back to its 'HashAlg' — the inverse of 'renderHashAlg'
+-- Decode a wire algorithm name back to its 'HashAlg' -- the inverse of 'renderHashAlg'
 -- over the SQS message vocabulary, including the @sri@ wrapper an npm @dist.integrity@
 -- digest rides under. An exact match on a name a digest is serialized under, so a
 -- well-formed message round-trips and an unrecognised name yields 'Nothing' (the job

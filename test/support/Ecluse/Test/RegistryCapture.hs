@@ -5,7 +5,7 @@ It exists so the curated package lists and the registry fetch live in a single
 place rather than being re-spelled per consumer:
 
   * the __catalogue__ ('Catalogue') is the one source for the curated package
-    lists — the gnarly-version names the version-oracle smoke differential
+    lists -- the gnarly-version names the version-oracle smoke differential
     exercises ('smokeRegistryPackages') and the benchmark-corpus capture pins
     ('catBenchPins'). It is read from a language-neutral JSON file
     ('cataloguePath') so the Haskell consumers here and the Node corpus-capture
@@ -58,8 +58,6 @@ import Ecluse.Core.Registry.Npm.Wire (Packument (pkmtVersions))
 import Ecluse.Core.Registry.Pypi.Wire qualified as Pypi
 import Ecluse.Core.Registry.Rubygems.Wire qualified as Rubygems
 
--- ── the curated catalogue ──────────────────────────────────────────────────────
-
 {- | The curated package catalogue: the per-ecosystem smoke names and the
 benchmark-corpus capture pins, decoded from the shared JSON source.
 -}
@@ -95,7 +93,7 @@ decodeCatalogue :: LByteString -> Either String Catalogue
 decodeCatalogue = eitherDecode
 
 {- | Read and decode the committed catalogue from 'cataloguePath'. Fails loudly if
-the file is missing or malformed — a committed-data defect, not a runtime condition
+the file is missing or malformed -- a committed-data defect, not a runtime condition
 a caller decides on.
 -}
 loadCatalogue :: IO Catalogue
@@ -103,13 +101,11 @@ loadCatalogue = do
     raw <- readFileLBS cataloguePath
     either (\e -> fail (cataloguePath <> " did not decode: " <> e)) pure (decodeCatalogue raw)
 
-{- | The curated smoke names as @(ecosystem, names)@ pairs, ordered by ecosystem —
+{- | The curated smoke names as @(ecosystem, names)@ pairs, ordered by ecosystem --
 the shape the version-oracle differential iterates.
 -}
 smokeRegistryPackages :: Catalogue -> [(Ecosystem, [Text])]
 smokeRegistryPackages = Map.toList . catSmokeNames
-
--- ── the live registry fetch ────────────────────────────────────────────────────
 
 {- | The registry endpoint that lists a package's published versions. A scoped npm
 name is percent-encoded (@\@types\/node@ → @\@types%2Fnode@); the other ecosystems
@@ -127,7 +123,7 @@ captureUserAgent = "ecluse-registry-capture"
 
 {- | Fetch a package's raw version-listing body from its registry. 'Nothing' on any
 network failure, a non-2xx status (a 404 throws via 'parseUrlThrow'), or a missing
-endpoint — so a live tier pends on absence rather than failing.
+endpoint -- so a live tier pends on absence rather than failing.
 -}
 fetchPackumentBody :: Manager -> Ecosystem -> Text -> IO (Maybe LByteString)
 fetchPackumentBody manager eco pkg = do
@@ -143,7 +139,7 @@ fetchPackumentBody manager eco pkg = do
         Left (_ :: SomeException) -> Nothing
         Right body -> Just body
 
-{- | Fetch a package's published version strings from its registry — the fetch
+{- | Fetch a package's published version strings from its registry -- the fetch
 layered with each ecosystem's canonical decode. 'Nothing' when the fetch fails or
 the body does not decode for that ecosystem. Every published version is kept,
 prereleases included; trimming, where wanted, is the caller's job.
@@ -153,10 +149,10 @@ fetchVersions manager eco pkg =
     (>>= parseRegistryVersions eco) <$> fetchPackumentBody manager eco pkg
 
 {- | Extract a registry response's published version strings through each
-ecosystem's __canonical__ wire decoder — the npm packument
+ecosystem's __canonical__ wire decoder -- the npm packument
 ('Ecluse.Core.Registry.Npm.Wire.Packument'), the PyPI project JSON
 ('Ecluse.Core.Registry.Pypi.Wire.ProjectJson'), or the RubyGems versions array
-('Ecluse.Core.Registry.Rubygems.Wire.VersionListing') — rather than re-parsing the
+('Ecluse.Core.Registry.Rubygems.Wire.VersionListing') -- rather than re-parsing the
 JSON here. 'Nothing' if the body does not decode for that ecosystem.
 -}
 parseRegistryVersions :: Ecosystem -> LByteString -> Maybe [Text]

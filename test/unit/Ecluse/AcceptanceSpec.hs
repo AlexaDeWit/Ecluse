@@ -104,8 +104,6 @@ spec = do
             Map.member "@types/node" (critPerPackageBudgetMs crit0) `shouldBe` True
             Map.member "@types/node" (critPerPackageSingleVersionBudgetMs crit0) `shouldBe` True
 
--- ── fixtures ─────────────────────────────────────────────────────────────────────
-
 crit :: Criteria
 crit =
     Criteria

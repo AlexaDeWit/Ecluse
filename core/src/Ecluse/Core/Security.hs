@@ -1,8 +1,8 @@
 {- | Outbound-request and response-bound guards for the proxy's data plane.
 
-Écluse builds outbound HTTP requests from two untrusted sources — __client-supplied
+Écluse builds outbound HTTP requests from two untrusted sources -- __client-supplied
 package identifiers__ (the request path) and __upstream-supplied artifact
-locations__ (a packument's @dist.tarball@) — and then parses whatever an upstream
+locations__ (a packument's @dist.tarball@) -- and then parses whatever an upstream
 returns. This module is the pure guard layer that keeps those steps from being
 steered or exhausted by hostile input. It defends three boundaries:
 

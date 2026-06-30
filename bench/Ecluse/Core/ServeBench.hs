@@ -1,12 +1,12 @@
 {- | Work-per-request benches for the npm serve path: filtering a packument to the
 surviving versions, rewriting every @dist.tarball@ onto the proxy origin
 ("Ecluse.Core.Registry.Npm.Filter"), re-serialising the body, and computing the own
-@ETag@ over it ("Ecluse.Core.Server.Conditional") — the transform a metadata response
+@ETag@ over it ("Ecluse.Core.Server.Conditional") -- the transform a metadata response
 goes through before it is served.
 
 The realistic benches run the full serve transform over each corpus package, so the
 filter\/rewrite\/re-serialise cost is reported across the real distribution of sizes
-and shapes — the re-serialise touches the whole heterogeneous body, so a heavy
+and shapes -- the re-serialise touches the whole heterogeneous body, so a heavy
 packument is where its cost is felt. A synthetic bench scales the version count and
 asserts the serve transform stays linear, guarding the accidentally quadratic class on
 the rewrite\/restrict\/re-serialise path; the synthetic generator is retained __only__

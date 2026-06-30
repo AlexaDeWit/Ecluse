@@ -25,15 +25,15 @@ import Ecluse.Core.Security (LoweredHostSet, isBlockedIP, isBlockedTarget, lower
 {- | Smoke tier: a /generative, live/ differential between the SSRF literal
 recogniser's IPv4 octet coercion and the __real__ libc resolver. The hand-rolled
 recogniser in "Ecluse.Core.Security" reads a leading-zero octet as octal and a
-@0x@ octet as hex — exactly what @inet_aton@, and therefore
-'Network.Socket.getAddrInfo', coerces a spelling to — so the resolved address is
+@0x@ octet as hex -- exactly what @inet_aton@, and therefore
+'Network.Socket.getAddrInfo', coerces a spelling to -- so the resolved address is
 the ground-truth oracle and no verdict is hard-coded here.
 
 The property generates four-part dotted-quad spellings whose octets are rendered in
 a random mix of bases (decimal, leading-zero octal, @0x@ hex), biased toward the
 internal ranges so blocked cases actually occur, with an occasional malformed octet
 (invalid-octal @08@, overflowing @0400@\/@256@\/@0x100@). For each spelling it
-resolves numerically (@AI_NUMERICHOST@ — local, no DNS) and asserts:
+resolves numerically (@AI_NUMERICHOST@ -- local, no DNS) and asserts:
 
   * the resolver accepts it as address @a@ ⟹ @'isBlockedTarget' noOptIn spelling ==
     'isBlockedIP' a@ (our literal-layer block decision agrees with how the resolver
@@ -60,8 +60,6 @@ spec = describe "IPv4 literal classification vs the real resolver (getAddrInfo)"
         then it "resolver oracle" $ pendingWith "getAddrInfo numeric resolution unavailable on this host"
         else generativeOracleSpec
 
--- ── the generative differential ──────────────────────────────────────────────
-
 {- | The resolver is the oracle: over generated four-part spellings, our literal
 block must agree with how the resolver classifies the address it resolves to, and
 we must claim no literal the resolver rejects.
@@ -85,8 +83,6 @@ generativeOracleSpec =
                         Just a -> isBlockedTarget noOptIn spelling H.=== isBlockedIP a
                         -- The resolver rejected it: we must not claim a literal either.
                         Nothing -> H.assert (isNothing (parseIpLiteral spelling))
-
--- ── generators ───────────────────────────────────────────────────────────────
 
 {- | A four-part dotted-quad spelling whose octets are rendered in a random mix of
 bases (decimal, leading-zero octal, @0x@ hex), so it spans exactly the @inet_aton@
@@ -144,7 +140,7 @@ genOctets =
         ]
 
 {- | Render one octet value in a randomly chosen @inet_aton@ base: decimal, a
-leading-zero octal (@0NNN@), or a @0x@ hex — each of which a resolver coerces back
+leading-zero octal (@0NNN@), or a @0x@ hex -- each of which a resolver coerces back
 to the same value.
 -}
 renderOctet :: Word8 -> Gen Text
@@ -171,12 +167,10 @@ genMalformedToken =
         , "0x1ff" -- hex 511 overflows an octet
         ]
 
--- ── resolution ───────────────────────────────────────────────────────────────
-
 {- | Resolve @host@ as a numeric IPv4 literal through the real 'getAddrInfo' (the
 @inet_aton@ coercion path), returning its 'SockAddr' or 'Nothing' if the resolver
 rejects it. @AI_NUMERICHOST@ forbids a DNS lookup, so a non-numeric spelling fails
-locally rather than touching the network — the same coercion the connection-time
+locally rather than touching the network -- the same coercion the connection-time
 recheck sees, isolated from name resolution.
 -}
 resolveNumeric :: Text -> IO (Maybe SockAddr)

@@ -86,7 +86,7 @@ pkg scope ageDays code =
 
 spec :: Spec
 spec = do
-    describe "artifactStatus — outcome to status (concrete artifact)" $ do
+    describe "artifactStatus -- outcome to status (concrete artifact)" $ do
         -- The architecture table (web-layer.md#error-model), as a code-level
         -- truth table. Each serve outcome maps to exactly one artifact status.
         it "Admit streams a 200" $
@@ -110,7 +110,7 @@ spec = do
             artifactStatus (Reject (Rejection BelowIntegrityFloor "too weak"))
                 `shouldBe` Forbidden
 
-    describe "artifactStatusCode — numeric HTTP codes" $ do
+    describe "artifactStatusCode -- numeric HTTP codes" $ do
         it "Ok is 200" $ artifactStatusCode Ok `shouldBe` 200
         it "Forbidden is 403" $ artifactStatusCode Forbidden `shouldBe` 403
         it "an Unavailable' is 503 regardless of the Retry-After delay" $ do
@@ -129,7 +129,7 @@ spec = do
             artifactStatusCode (artifactStatus (Reject (Rejection (Unavailable WontResolve) "x")))
                 `shouldBe` 500
 
-    describe "packumentStatus — status over the merged survivor set" $ do
+    describe "packumentStatus -- status over the merged survivor set" $ do
         let denied = Reject (Rejection (ByPolicy (RuleName "DenyInstallTimeExecution")) "no")
             transient d = Reject (Rejection (Unavailable (WillResolve d)) "down")
             broken = Reject (Rejection (Unavailable WontResolve) "broken")
@@ -141,7 +141,7 @@ spec = do
             packumentStatus [denied, denied] `shouldBe` PackumentForbidden
         it "is 403 (deny-by-default) for an empty decision set" $
             packumentStatus [] `shouldBe` PackumentForbidden
-        it "is 503 when any exclusion may self-heal — a retry may yield survivors" $
+        it "is 503 when any exclusion may self-heal -- a retry may yield survivors" $
             packumentStatus [denied, transient Nothing] `shouldBe` PackumentUnavailable Nothing
         it "prefers 503 over 500: a will-resolve cause outranks a wont-resolve one" $
             packumentStatus [broken, transient Nothing] `shouldBe` PackumentUnavailable Nothing
@@ -180,7 +180,7 @@ spec = do
                 [denied, broken, invalid, transient (Just (RetryAfter 5)), transient (Just (RetryAfter 30))]
                 `shouldBe` PackumentUnavailable (Just (RetryAfter 30))
 
-    describe "longestRetry — the longest suggested delay, or none" $ do
+    describe "longestRetry -- the longest suggested delay, or none" $ do
         it "is Nothing for an empty list" $
             longestRetry [] `shouldBe` Nothing
         it "is Nothing when no cause suggested a delay" $
@@ -189,7 +189,7 @@ spec = do
             longestRetry [Just (RetryAfter 5), Nothing, Just (RetryAfter 30), Just (RetryAfter 12)]
                 `shouldBe` Just (RetryAfter 30)
 
-    describe "packumentStatusCode — numeric HTTP codes (never 404)" $
+    describe "packumentStatusCode -- numeric HTTP codes (never 404)" $
         it "maps Ok/Forbidden/Unavailable/ServerError to 200/403/503/500" $ do
             packumentStatusCode PackumentOk `shouldBe` 200
             packumentStatusCode PackumentForbidden `shouldBe` 403
@@ -198,14 +198,14 @@ spec = do
             packumentStatusCode PackumentBadGateway `shouldBe` 502
             packumentStatusCode PackumentServerError `shouldBe` 500
 
-    describe "HelpMessage — trimmed at construction" $ do
+    describe "HelpMessage -- trimmed at construction" $ do
         it "stores the message trimmed of surrounding whitespace" $
             unHelpMessage (mkHelpMessage "  Contact support.  ")
                 `shouldBe` "Contact support."
         it "collapses an all-whitespace message to empty" $
             unHelpMessage (mkHelpMessage " \t ") `shouldBe` ""
 
-    describe "serveDecisionOf — a rules Decision becomes a serve outcome" $ do
+    describe "serveDecisionOf -- a rules Decision becomes a serve outcome" $ do
         it "a deny-rule decision rejects ByPolicy, naming the rule, with the rendered why" $ do
             let pd = pkg "public" 30 (RunsCodeOnInstall "preinstall hook")
             decision <- decideAt [atDefaultPrecedence DenyInstallTimeExecution] pd
@@ -223,7 +223,7 @@ spec = do
                     rejectionReason rej `shouldBe` ByPolicy (RuleName "BlockedByDefault")
                     rejectionMessage rej `shouldSatisfy` T.isInfixOf "denied"
                 Admit -> expectationFailure "deny-by-default must reject, not admit"
-        it "an approved decision admits — only denials reject" $ do
+        it "an approved decision admits -- only denials reject" $ do
             let pd = pkg "internal" 30 NoCodeOnInstall
             decision <- decideAt [atDefaultPrecedence (AllowScope (mkScope "internal"))] pd
             serveDecisionOf pd decision `shouldBe` Admit

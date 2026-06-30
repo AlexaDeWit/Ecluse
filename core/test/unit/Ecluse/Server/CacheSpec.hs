@@ -47,7 +47,7 @@ privateSource, publicSource :: Source
 privateSource = Source "https://private.example"
 publicSource = Source "https://public.example"
 
-{- | A 'PackageInfo' carrying only its name — enough to assert which metadata
+{- | A 'PackageInfo' carrying only its name -- enough to assert which metadata
 value the cache stored and returned without building a full document.
 -}
 info :: PackageName -> PackageInfo
@@ -105,7 +105,7 @@ countingFetch calls name marker = do
 
 spec :: Spec
 spec = do
-    describe "resolveMetadata — hit/miss" $ do
+    describe "resolveMetadata -- hit/miss" $ do
         it "fetches on a miss and returns the parsed metadata with its raw bytes" $ do
             c <- freshCache
             result <- resolveMetadata c publicSource (pkg "is-odd") (pure (entry (pkg "is-odd") "raw"))
@@ -121,7 +121,7 @@ spec = do
 
         it "returns the coherent pair the entry was cached with on a hit" $ do
             -- A hit serves the cached typed view and the exact bytes it was parsed
-            -- from, never the caller's later (would-be) fetch — the second fetch's
+            -- from, never the caller's later (would-be) fetch -- the second fetch's
             -- distinct marker must not appear, since it never runs.
             c <- freshCache
             _ <- resolveMetadata c publicSource (pkg "coherent") (pure (entry (pkg "coherent") "first"))
@@ -155,7 +155,7 @@ spec = do
             _ <- resolveMetadata c publicSource (pkg "flaky") (countingFetch calls (pkg "flaky") "raw")
             readIORef calls `shouldReturn` 2
 
-    describe "resolveMetadata — per-source isolation" $ do
+    describe "resolveMetadata -- per-source isolation" $ do
         it "keeps the private and public documents of one package apart" $ do
             -- The same package is fetched from two distinct sources; each source has its
             -- own entry, so neither origin sees the other's bytes (no cross-contamination).
@@ -186,7 +186,7 @@ spec = do
                 (entryRaw <$> pub) `shouldBe` Just (String "pub")
             readIORef calls `shouldReturn` 2
 
-    describe "resolveMetadata — TTL" $
+    describe "resolveMetadata -- TTL" $
         it "re-fetches once the short TTL has elapsed" $ do
             c <- newMetadataCache (config 0.05 100) -- 50 ms TTL
             calls <- newIORef 0
@@ -195,7 +195,7 @@ spec = do
             _ <- resolveMetadata c publicSource (pkg "stale") (countingFetch calls (pkg "stale") "raw")
             readIORef calls `shouldReturn` 2
 
-    describe "resolveMetadata — collapse" $ do
+    describe "resolveMetadata -- collapse" $ do
         it "collapses concurrent resolutions of one package to a single upstream call" $ do
             c <- freshCache
             calls <- newIORef (0 :: Int)
@@ -244,7 +244,7 @@ spec = do
             _ <- resolveMetadata c publicSource (pkg "back-to-back") (countingFetch calls (pkg "back-to-back") "raw")
             readIORef calls `shouldReturn` 1
 
-    describe "resolveMetadata — single-flight orphan window" $ do
+    describe "resolveMetadata -- single-flight orphan window" $ do
         it "unblocks a waiting follower and lets a later caller re-lead when the leader is cancelled at the claim handoff" $ do
             -- Regression: an async exception (request timeout, killed handler thread)
             -- landing on the leader between claiming the in-flight slot and completing
