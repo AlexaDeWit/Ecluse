@@ -273,9 +273,7 @@ environment variables above and need no document. Schema and examples:
 
 The default baseline configuration, from which all deployments derive their initial policy and behaviour, is defined below.
 
-```{.yaml .embed-default-config}
-# Replaced by pandoc Lua filter
-```
+[View the default baseline configuration (`config/default.yaml`)](config/default.yaml)
 
 ### Secrets
 

@@ -110,11 +110,8 @@ the `169.254.169.254` metadata endpoint). See
 [Network egress is a shared responsibility](security.md#network-egress-is-a-shared-responsibility).
 
 The one application-level knob, following Écluse's **secure-defaults /
-configurable-overrides** principle, *the consumer decides their threat tolerance*:
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ECLUSE_RESPECT_UPSTREAM_TARBALL_HOST` | `false` (secure default) | When `false`, a tarball is fetched only from the **same allowlisted upstream that served the packument**; a `dist.tarball` pointing at a *different* host is refused. Set `true` only for a registry that legitimately serves tarballs from a separate CDN/files host (e.g. the PyPI files host), which **widens the outbound fetch surface to any allowlisted host**, opt in deliberately, and pair it with platform egress controls. |
+configurable-overrides** principle, *the consumer decides their threat tolerance*. 
+See the `ECLUSE_MOUNTS__*__RESPECT_UPSTREAM_TARBALL_HOST` setting in the [Operator Manual](../../USAGE.md#environment-variables) for how to relax this constraint.
 
 The override never escapes the host allowlist or the internal-range block: it
 relaxes *which allowlisted host* may serve a tarball, not whether the allowlist
@@ -134,13 +131,7 @@ subject to the body-size bound.
 
 The defaults are generous for real registry documents and tight enough to fail closed
 on pathological input; each is a strictly positive integer (a non-positive value is a
-degenerate budget and is rejected at startup).
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ECLUSE_MAX_RESPONSE_BYTES` | `12582912` (12 MiB) | Largest metadata body buffered before the bounded read aborts the fetch. |
-| `ECLUSE_MAX_VERSION_COUNT` | `100000` | Largest version count a packument may carry before it is refused (bounds per-version rule evaluation). |
-| `ECLUSE_MAX_NESTING_DEPTH` | `64` | Deepest JSON nesting a decoded document may reach before it is refused (bounds stack/CPU on a pathological payload). |
+degenerate budget and is rejected at startup). For the specific variables (`ECLUSE_MAX_RESPONSE_BYTES`, `ECLUSE_MAX_VERSION_COUNT`, `ECLUSE_MAX_NESTING_DEPTH`), see the [Operator Manual](../../USAGE.md#environment-variables).
 
 The metadata ceilings are layered. `ECLUSE_MAX_RESPONSE_BYTES` (default **12 MiB**,the largest packuments seen today are ~4 MiB, so this leaves years of headroom) is
 the **primary, pre-decode** bound: the body is bounded as it streams, **before** the
@@ -161,18 +152,11 @@ listing. The trusted private path is governed by its own, **loosenable** floor
 ([Trusted integrity floor](#trusted-integrity-floor)), but the public floor here is
 **never** loosenable.
 
-`ECLUSE_MIN_PUBLIC_INTEGRITY` sets the floor (default `sha256`). It may be **raised** as
+`ECLUSE_MIN_PUBLIC_INTEGRITY` sets the floor. It may be **raised** as
 cryptanalysis ages an algorithm, but is **hard-floored at SHA-256**, a value below it
 or an unknown name is a configuration error rejected at load, never silently clamped, and
 there is **no escape-hatch** to accept a sub-SHA-256 digest from an untrusted public
-upstream.
-
-| Value | Effect |
-|-------|--------|
-| `sha256` | The default and hard minimum: a public version must carry a SHA-256 (or stronger) digest. |
-| `sha384` | A raised floor: a public version must carry a SHA-384 (or stronger) digest; a SHA-256-only version is then refused. |
-| `sha512` / `blake2b` | A raised floor: a public version must carry a SHA-512 / BLAKE2b digest; a SHA-256-only or SHA-384-only version is then refused. |
-| `sha1` / `md5` / unknown | **Rejected at load**, a sub-floor or unrecognised algorithm fails the configuration parse. |
+upstream. See the [Operator Manual](../../USAGE.md#environment-variables) for supported algorithms.
 
 ### Trusted integrity floor
 
@@ -184,18 +168,11 @@ default as the public floor, so by default a SHA-1-only or hashless private vers
 falls through to the public origin). The old "trusted private path is exempt" behaviour is
 no longer the default.
 
-`ECLUSE_MIN_TRUSTED_INTEGRITY` sets the floor (default `sha256`). Unlike the public floor it
+`ECLUSE_MIN_TRUSTED_INTEGRITY` sets the floor. Unlike the public floor it
 is **loosenable below SHA-256** for a legacy private mirror, where trust in the operator's
 own vetted source substitutes for cryptographic strength. This is the **only** way Écluse
 will serve a sub-SHA-256 digest, and only on the trusted private origin, the public floor
-is never lowerable. An unknown algorithm name is still rejected at load.
-
-| Value | Effect |
-|-------|--------|
-| `sha256` | The default: a private version must carry a SHA-256 (or stronger) digest, exactly like the public default. |
-| `sha384` / `sha512` / `blake2b` | A raised trusted floor: a private version must carry that algorithm (or stronger). |
-| `sha1` / `md5` | A **loosened** trusted floor: a private version may be served on a legacy SHA-1 / MD5 digest, accepted only because the private upstream is the operator's own vetted source; the public floor rejects these outright. |
-| unknown | **Rejected at load**, an unrecognised algorithm fails the configuration parse. |
+is never lowerable. An unknown algorithm name is still rejected at load. See the [Operator Manual](../../USAGE.md#environment-variables) for supported values.
 
 ### Rule policy
 
