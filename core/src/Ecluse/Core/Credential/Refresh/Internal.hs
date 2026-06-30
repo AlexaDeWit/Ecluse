@@ -75,6 +75,11 @@ data CredentialError
       not a runtime token condition.
       -}
       Unconfigured Text
+    | {- | The minted token is already expired. This usually indicates severe
+      clock skew between the local machine and the cloud provider, or a
+      misconfigured backend. It is treated as a mint failure.
+      -}
+      MintedTokenAlreadyExpired
     deriving stock (Eq, Show)
 
 instance Exception CredentialError
@@ -319,7 +324,8 @@ backgroundRefresh cfg stateVar = do
         result <- try (rcMint cfg)
         now' <- rcClock cfg
         case result of
-            Right token -> recordMintSuccess cfg stateVar now' token
+            Right token | tokenValid now' token -> recordMintSuccess cfg stateVar now' token
+            Right _ -> recordMintFailure cfg stateVar now'
             Left (_ :: SomeException) -> recordMintFailure cfg stateVar now'
 
 {- The synchronous (expired-token) path: the caller blocks on a mint because
@@ -339,9 +345,12 @@ mintSynchronously cfg stateVar = do
             result <- try (rcMint cfg)
             now' <- rcClock cfg
             case result of
-                Right token -> do
+                Right token | tokenValid now' token -> do
                     recordMintSuccess cfg stateVar now' token
                     pure token
+                Right _ -> do
+                    recordMintFailure cfg stateVar now'
+                    throwIO MintedTokenAlreadyExpired
                 Left (e :: SomeException) -> do
                     recordMintFailure cfg stateVar now'
                     throwIO e
