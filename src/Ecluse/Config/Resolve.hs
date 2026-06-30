@@ -46,7 +46,7 @@ buildEnvAst env = foldl' deepMerge (Object KeyMap.empty) (map mkValue ecluseVars
         , Just k <- [kMaybe]
         ]
 
-    exemptedPrefixes = ["AWS_REGION", "AWS_ENDPOINT_URL_SQS", "AWS_ENDPOINT_URL", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"]
+    exemptedPrefixes = ["AWS_"]
 
     mkValue :: (Text, String) -> Value
     mkValue (k, v) =

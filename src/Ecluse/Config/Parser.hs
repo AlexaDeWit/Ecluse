@@ -53,15 +53,16 @@ valueKind = \case
 
 rejectUnknownKeys :: String -> [Key.Key] -> KeyMap.KeyMap Value -> Parser ()
 rejectUnknownKeys context accepted o =
-    case filter (`notElem` accepted) (KeyMap.keys o) of
-        [] -> pure ()
-        unknown ->
-            fail
-                ( "unexpected "
-                    <> context
-                    <> " key(s): "
-                    <> intercalate ", " (map (show . Key.toText) unknown)
-                )
+    let isUnknown k = k `notElem` accepted && not ("aws" `T.isPrefixOf` Key.toText k)
+     in case filter isUnknown (KeyMap.keys o) of
+            [] -> pure ()
+            unknown ->
+                fail
+                    ( "unexpected "
+                        <> context
+                        <> " key(s): "
+                        <> intercalate ", " (map (show . Key.toText) unknown)
+                    )
 
 parseUrl :: Value -> Parser Url
 parseUrl = withText "Url" $ \t ->
