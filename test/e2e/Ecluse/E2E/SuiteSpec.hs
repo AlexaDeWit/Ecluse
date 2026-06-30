@@ -19,7 +19,7 @@ import Data.Text qualified as T
 import System.Exit (ExitCode (ExitSuccess))
 import Test.Hspec
 
-import Ecluse.E2E.Fixtures (PkgSpec, allowPkg, denyPkg, headPkg, mirrorPkg, psName, psVersion, tamperPkg)
+import Ecluse.E2E.Fixtures (PkgSpec, allowPkg, denyPkg, headPkg, mirrorPkg, psName, psVersion, tamperPkg, telemetryDdPkg, telemetryPkg)
 import Ecluse.E2E.Harness
 
 shouldSucceed :: NpmResult -> IO ()
@@ -152,11 +152,11 @@ telemetryScenarios = do
                 -- A public-served install gates the version (rule-eval span) and enqueues a
                 -- mirror (enqueue span); the worker then mirrors it (job span).
                 withNpmProject e2e $ \proj -> do
-                    installed <- npmInstallIn proj (psName mirrorPkg)
+                    installed <- npmInstallIn proj (psName telemetryPkg)
                     shouldSucceed installed
                 -- The worker mirrors asynchronously, so the mirror-job span lands after the
                 -- install returns; the published mirror is the cue the job has run.
-                mirrored <- verdaccioHasVersion e2e (psName mirrorPkg) (psVersion mirrorPkg)
+                mirrored <- verdaccioHasVersion e2e (psName telemetryPkg) (psVersion telemetryPkg)
                 mirrored `shouldBe` True
                 emitted <-
                     awaitCollectorLog
@@ -220,7 +220,7 @@ telemetryScenarios = do
                 -- A mirror round-trip drives request spans plus a worker job span, the
                 -- span-scoped path whose log line carries a populated dd.trace_id.
                 withNpmProject e2e $ \proj -> do
-                    installed <- npmInstallIn proj (psName mirrorPkg)
+                    installed <- npmInstallIn proj (psName telemetryDdPkg)
                     shouldSucceed installed
                 -- The exported signals carry the UST resource attributes the resolver
                 -- derived from the DD_* identity (service.name/deployment.environment/

@@ -23,13 +23,13 @@ pr: null
 **Acceptance criteria.**
 - [ ] `newSqsQueue :: SqsConfig -> IO MirrorQueue` implements
   `enqueue`/`receive`(one long-poll, `[]` on timeout)/`ack`/`extendVisibility`, with
-  `ReceiptHandle` carrying the SQS receipt handle (opaque)., _cloud-backends.md#queue-abstraction_
+  `ReceiptHandle` carrying the SQS receipt handle (opaque).  _cloud-backends.md#queue-abstraction_
 - [ ] **Retry-is-don't-ack**: a failed job is simply not acked; the visibility
   timeout redelivers; the SQS-native DLQ (max-receive-count) catches persistent
-  failures. No explicit `nack`., _cloud-backends.md#queue-abstraction_
-- [ ] Batch size, long-poll window, visibility timeout are config (sane defaults).,  _cloud-backends.md#queue-abstraction_
+  failures. No explicit `nack`.  _cloud-backends.md#queue-abstraction_
+- [ ] Batch size, long-poll window, visibility timeout are config (sane defaults).   _cloud-backends.md#queue-abstraction_
 - [ ] Integration test against **ministack** (image `ministackorg/ministack`, port
-  4566) via `testcontainers`: enqueue→receive→ack round-trip; no-ack→redeliver.,  _CONTRIBUTING.md#integration-tests--ecluse-integration-gating_
+  4566) via `testcontainers`: enqueue→receive→ack round-trip; no-ack→redeliver.   _CONTRIBUTING.md#integration-tests--ecluse-integration-gating_
 
 **File scope.**
 - `src/Ecluse/Queue/Sqs.hs`, `newSqsQueue`.

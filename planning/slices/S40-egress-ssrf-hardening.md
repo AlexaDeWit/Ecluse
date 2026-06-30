@@ -21,7 +21,7 @@ pr: null
 > tarball-host policy real. Security architecture: [`security.md`](../../docs/architecture/security.md).
 
 **Goal.** Take the SSRF posture from "pure primitives + host allowlist" to a fetch
-path that is hardened against the cases the pure layer structurally cannot see,DNS resolving to an internal address, and a `dist.tarball` host that differs from
+path that is hardened against the cases the pure layer structurally cannot see, DNS resolving to an internal address, and a `dist.tarball` host that differs from
 the packument's source, and document the operator-side egress controls the
 application guards assume.
 
@@ -31,20 +31,20 @@ application guards assume.
       `isBlockedTarget` to the **resolved** IP of every outbound connection (not just
       the host literal), so an allowlisted DNS name that resolves to an internal
       address is refused at connect time. Closes the gap the S36 "Deferred" note names
-      (the pure layer cannot resolve names)., _security.md invariant 3_
+      (the pure layer cannot resolve names).  _security.md invariant 3_
 - [ ] **`dist.tarball` host policy, disallow-by-default.** A tarball is fetched only
       from the **same allowlisted upstream that served the packument** unless the
       operator opts in via `ECLUSE_RESPECT_UPSTREAM_TARBALL_HOST` (see
       [Configuration → Outbound egress safety](../../docs/architecture/configuration.md#outbound-egress-safety)),
       which relaxes to "any allowlisted host", never escaping the allowlist or the
-      internal-range block. Secure default; configurable override., _security.md_
+      internal-range block. Secure default; configurable override.  _security.md_
 - [ ] **Config surface + validation.** The new setting is parsed at the config
       boundary with the same fail-fast posture as the rest (S03), defaulting to the
       secure value; its security note ships in the same change.
 - [ ] **Operator egress runbook.** The platform-layer egress guidance (security
       groups / NACLs, K8s `NetworkPolicy`, Istio `ServiceEntry` + egress policy, IMDSv2
       hop-limit / metadata-endpoint denial) is carried into the deployment runbook
-      ([S32](S32-launch-docs.md))., _security.md#network-egress-is-a-shared-responsibility_
+      ([S32](S32-launch-docs.md)).  _security.md#network-egress-is-a-shared-responsibility_
 - [ ] **Hostile-fixture extension.** The S36 corpus gains resolved-internal-IP and
       cross-host-`dist.tarball` cases, exercised through the real request path
       (integration).

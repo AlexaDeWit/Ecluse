@@ -23,15 +23,15 @@ miss gates *that one version* against the public upstream and, on admit, streams
 
 **Acceptance criteria.**
 - [ ] **Private hit** → stream the tarball unfiltered (already vetted), bounded
-  memory (S13 streaming)., _architecture.md#request-lifecycle_
+  memory (S13 streaming).  _architecture.md#request-lifecycle_
 - [ ] **Private miss** → fetch the version's metadata from public, run the rules for
   that single version; on **admit**, stream from public **and** enqueue a
   `MirrorJob` (mirror target URL, package, version, artifact location); on reject,
-  the serve error model (403/503/500)., _architecture.md#request-lifecycle, web-layer.md#error-model_
+  the serve error model (403/503/500).  _architecture.md#request-lifecycle, web-layer.md#error-model_
 - [ ] **Enqueue is best-effort and non-blocking**: the artifact is served first; an
-  enqueue failure is logged/metered and **never** fails the client response.,  _cloud-backends.md#mirror-queue_
+  enqueue failure is logged/metered and **never** fails the client response.   _cloud-backends.md#mirror-queue_
 - [ ] **Demand-driven**: a job is enqueued only when an artifact is *accepted on the
-  tarball path*, not when a packument is filtered., _cloud-backends.md#mirror-queue_
+  tarball path*, not when a packument is filtered.  _cloud-backends.md#mirror-queue_
 - [ ] Lockfile installs (`npm ci`) hitting tarball URLs with no preceding packument
   request are gated correctly on this path alone.
 

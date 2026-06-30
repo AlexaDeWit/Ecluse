@@ -29,21 +29,21 @@ the S02 in-memory doubles; real AWS backends arrive in M4.
 - [x] **Multi-upstream merge**: fetch the **private and public upstreams in
   parallel**; trust private versions (unfiltered) and gate public versions (rules);
   **merge** into one document via S33 (private wins on collision; integrity
-  divergence flagged). No private-hit short-circuit.,  _registry-model.md#packument-merge-across-upstreams, architecture.md#request-lifecycle_
+  divergence flagged). No private-hit short-circuit.   _registry-model.md#packument-merge-across-upstreams, architecture.md#request-lifecycle_
 - [x] **Credential authority** (the default [`passthrough`](../../docs/architecture/access-model.md)
   strategy this slice ships): the client's `Authorization`/`_authToken` is
   **forwarded to the private upstream** and **stripped before any public-upstream
   fetch**; the public leg is anonymous. Pin this with a test. The invariant that
   holds under *every* strategy is the **public strip**; forwarding to the private
-  upstream is specifically the `passthrough` behaviour., _registry-model.md#credential-flow-and-authority, access-model.md, web-layer.md#control-plane-vs-data-plane_
+  upstream is specifically the `passthrough` behaviour.  _registry-model.md#credential-flow-and-authority, access-model.md, web-layer.md#control-plane-vs-data-plane_
 - [x] **Public set gated**: fetch (full packument for `time`) → `parsePackageInfo`
   → evaluate rules per version → `filterPackument` (S09) → rewrite tarball URLs
   (S09); the filtered public set is merged (S33) with the trusted private set and
-  served with our **own ETag** (S13)., _rules-engine.md#applying-verdicts-to-a-packument_
+  served with our **own ETag** (S13).  _rules-engine.md#applying-verdicts-to-a-packument_
 - [x] **No survivors in the merge** → 403 (all by-policy) or 503 (any
   transient/undecidable once S21 lands, **or a needed upstream unavailable**); never
   404 when the package exists. **Partial-upstream availability**: one upstream
-  failing while another succeeds serves the best-effort union, not an error.,  _rules-engine.md#applying-verdicts-to-a-packument, registry-model.md#packument-merge-across-upstreams_
+  failing while another succeeds serves the best-effort union, not an error.   _rules-engine.md#applying-verdicts-to-a-packument, registry-model.md#packument-merge-across-upstreams_
 - [x] Optional inbound `ECLUSE_AUTH_TOKEN` validated at the edge before proxying (S03).
 - [x] Uses the metadata cache (S13) so the fetch+parse is shared/collapsed (the
   **public** leg only; see as-built notes).

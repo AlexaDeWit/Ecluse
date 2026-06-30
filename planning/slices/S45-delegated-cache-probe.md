@@ -37,16 +37,16 @@ populate is an orthogonal operational choice (see
 **Acceptance criteria.**
 - [ ] Before serving a `delegated-cache` hit, Écluse issues an **authorisation probe**
   to the upstream carrying the caller's credential; a non-2xx probe is refused per the
-  [serve error model](../../docs/architecture/web-layer.md#error-model), and a 2xx admits the cached compute.,  _access-model.md#delegated-cache--the-upstream-decides-retrievability-écluse-caches-the-compute_
+  [serve error model](../../docs/architecture/web-layer.md#error-model), and a 2xx admits the cached compute.   _access-model.md#delegated-cache--the-upstream-decides-retrievability-écluse-caches-the-compute_
 - [ ] **Probe granularity is configurable and must match the upstream's authorisation**:
   `mount` (a coarse, per-mount probe, e.g. `whoami`/`HEAD`) or `resource` (a
   per-package probe). The probe must be **cheaper than the fetch it replaces**; a
-  strategy declared on an upstream that offers no such probe fails validation.,  _access-model.md#authorisation-granularity_
+  strategy declared on an upstream that offers no such probe fails validation.   _access-model.md#authorisation-granularity_
 - [ ] The probe holds **no credential state**, the caller's token is used transiently
-  for the probe and discarded, exactly as `passthrough`., _access-model.md#the-four-corner-trade-off_
+  for the probe and discarded, exactly as `passthrough`.  _access-model.md#the-four-corner-trade-off_
 - [ ] Probe outcomes are not cached as a long-lived verdict (the deferred `memoised`
   strategy, explicitly out of scope here); each request re-probes, bounding revocation
-  latency to one request., _access-model.md#memoised--deferred-documented-for-completeness_
+  latency to one request.  _access-model.md#memoised--deferred-documented-for-completeness_
 - [ ] Tests: unit over probe-admits / probe-refuses and the granularity branch with a
   fake upstream; integration proving a coarse (`whoami`) probe gates a shared cached
   packument for two distinct callers (authorised vs refused).

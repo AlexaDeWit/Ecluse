@@ -37,15 +37,15 @@ resilience (timeout budget, bounded retry/backoff, circuit breaker), fail-closed
 **Acceptance criteria.**
 - [ ] `Unavailable Transience` added as a fourth `RuleOutcome`/`Decision` arm,
   carrying will-resolve vs not, **fail-closed** (an `Unavailable` version is not
-  admitted)., _rules-engine.md#effectful-rule-failure_
+  admitted).  _rules-engine.md#effectful-rule-failure_
 - [ ] **Tier is performance, not precedence**: once the pure tier yields a winner at
   precedence *P*, effectful rules ranked below *P* are skipped; the effectful tier is
-  skipped entirely when no effectful rule is ranked ≥ *P*., _rules-engine.md#rules-engine_
+  skipped entirely when no effectful rule is ranked ≥ *P*.  _rules-engine.md#rules-engine_
 - [ ] Each effectful rule has a timeout budget, bounded retry+backoff, and a
   per-source circuit breaker (reusing the S16 breaker machinery); a rule may set
-  `onError: abstain` where availability beats safety., _rules-engine.md#effectful-rule-failure_
+  `onError: abstain` where availability beats safety.  _rules-engine.md#effectful-rule-failure_
 - [ ] `Unavailable` surfaces correctly by request shape: filtered out of a packument
-  (like a denial); a concrete artifact maps to 503/500 via the error model (S11).,  _rules-engine.md#effectful-rule-failure, web-layer.md#error-model_
+  (like a denial); a concrete artifact maps to 503/500 via the error model (S11).   _rules-engine.md#effectful-rule-failure, web-layer.md#error-model_
 - [ ] Every `Unavailable`/breaker trip emits an ERROR log + metric (metric in M6).
 - [ ] `EvalContext` extended with the fetchers/lookups the effectful tier needs.
 

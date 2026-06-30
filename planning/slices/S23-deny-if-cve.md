@@ -25,7 +25,7 @@ version that *fixes* one past the publish-age quarantine.
 **Acceptance criteria.**
 - [ ] `DenyIfCVE` evaluates a version against `CVELookup`; a match → `Deny` (with the
   advisory IDs in the reason for the audit trail); no match → `Abstain`; lookup
-  failure → `Unavailable` (fail-closed, S21)., _rules-engine.md#cve-subsystem, #effectful-rule-failure_
+  failure → `Unavailable` (fail-closed, S21).  _rules-engine.md#cve-subsystem, #effectful-rule-failure_
 - [ ] `AllowIfRemediatesCve` evaluates a version against `CVELookup`: an advisory
   affects an **earlier** version of the package **and** this version is **outside**
   its affected range → `Allow` (remediated advisory IDs in the reason); otherwise →
@@ -34,10 +34,10 @@ version that *fixes* one past the publish-age quarantine.
   inverse of the deny direction.), _rules-engine.md#allowifremediatescve--remediation-fast-track_
 - [ ] Both wired into the rule config decoder (S03): `DenyIfCVE` at a default
   precedence consistent with deny-over-allow; `AllowIfRemediatesCve` at a **high**
-  precedence (above the `min-age` quarantine) so a fix is admitted immediately.,  _configuration.md#rule-policy, #the-default-policy_
+  precedence (above the `min-age` quarantine) so a fix is admitted immediately.   _configuration.md#rule-policy, #the-default-policy_
 - [ ] Because the index is in memory, evaluation does no network IO on the hot path
   (the `Unavailable` / abstain-on-failure paths cover an empty/unloaded index
-  pre-first-sync, already guarded by readiness)., _rules-engine.md#cve-subsystem_
+  pre-first-sync, already guarded by readiness).  _rules-engine.md#cve-subsystem_
 
 **File scope.**
 - `src/Ecluse/Rules/Types.hs`, `src/Ecluse/Rules.hs`, add `DenyIfCVE` and

@@ -59,12 +59,4 @@ through one at a time):
    embeds a `Version`. The split keeps each module to a single responsibility and
    breaks the `Package`↔`Version` import cycle (the shared tag is the handle). The
    `evalRules` fold and the rule inputs are unchanged.
-6. **Cross-upstream merge**, a served packument is the merge of several upstreams'
-   `PackageInfo` (trusted private ∪ gated public; see
-   [Registry Model → Packument merge](registry-model.md#packument-merge-across-upstreams)).
-   This is a **pure operation over the domain model**, living above the
-   `RegistryClient` handle in its own module (`Ecluse.Core.Package.Merge`), never in an
-   adapter, so a new ecosystem inherits merging for free. **Provenance** (trusted
-   vs gated) is a **merge-time parameter**, not a persisted `PackageDetails` field,
-   so identity/equality stay unchanged; if threaded through for observability it is
-   kept out of the equality key.
+6. **Cross-upstream merge**, a served packument is the merge of several upstreams' `PackageInfo`. See [Registry Model → Packument merge](registry-model.md#packument-merge-across-upstreams) for details on how provenances (trusted vs gated) are merged.

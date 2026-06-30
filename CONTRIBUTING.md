@@ -162,6 +162,8 @@ sign-off become a permanent public record.
 - **Workflows stay injection-free.** Never interpolate untrusted `${{ github.event.* }}` /
   `${{ github.head_ref }}` values directly into `run:` shell blocks; pass them via `env:` or
   intermediate files instead.
+- **Pin every GitHub Action to a full commit SHA** (never a tag/branch), with the version in a trailing comment. Renovate bumps them, keeping them digest-pinned. The shared toolchain setup (install Nix, restore the Nix-store + cabal caches) lives once in the `setup-toolchain` composite action; CI jobs enter the lean `nix develop .#ci` shell and restore the Nix store via `cache-nix-action`.
+- **Caches are restore-only on PRs and written solely by `main`'s runs**. Caches are keyed on the dependency plan (`flake.lock`/`cabal.project`/`cabal.project.freeze`), with the `cache-cleanup` workflow pruning superseded/off-main entries daily; this keeps the repo under the 10 GB Actions-cache quota.
 - **Semgrep ignores require the repo owner's approval.** Don't add `.semgrepignore` entries or
   `nosemgrep` comments unilaterally.
 - **Use [Conventional Commits](https://www.conventionalcommits.org/).** Write commit subjects
@@ -174,4 +176,4 @@ sign-off become a permanent public record.
 - **Disclose AI assistance.** Mark non-trivial AI-assisted commits with an `Assisted-by:`
   trailer; see [AI-assisted contributions](#ai-assisted-contributions).
 - **Diagrams are Mermaid, not ASCII art** in committed Markdown docs: a fenced ` ```mermaid `
-  block, never box-drawing characters. See [`AGENTS.md`](AGENTS.md) → Code Conventions.
+  block, never box-drawing characters.

@@ -34,27 +34,27 @@ validation, and the verified edge-identity extraction.
 
 **Acceptance criteria.**
 - [ ] A per-mount `credentialStrategy` (default `passthrough`) decodes in the mount
-  map (alongside the mount's reference to a **process-global** credential provider,  base-hardening D4), with strict validation.,  _access-model.md#credential-strategies-per-mount, configuration.md#client-authentication_
+  map (alongside the mount's reference to a **process-global** credential provider,  base-hardening D4), with strict validation.   _access-model.md#credential-strategies-per-mount, configuration.md#client-authentication_
 - [ ] Edge authentication modes parse and validate: `open`, `static`
   (`ECLUSE_AUTH_TOKEN`), and `trusted-edge` (a configured, signed identity header /
   asserted principal **plus its verifiable binding**, a configured mutual-TLS peer
   identity, or a shared secret / HMAC key the edge signs the assertion with). The
   **reachable-only-via-edge** network precondition is recorded in docs as the
-  deployment's part., _access-model.md#edge-authentication, security.md#trust-assumptions--credential-posture_
+  deployment's part.  _access-model.md#edge-authentication, security.md#trust-assumptions--credential-posture_
 - [ ] **`trusted-edge` without a verifiable binding is unrepresentable / fails fast.**
   A `trusted-edge` mount configured with neither an mTLS-peer identity nor a
   shared-secret/HMAC key is **rejected at startup**, and at request time an assertion
   lacking a valid binding is **not honoured** (treated as unauthenticated). A bare
   trusted header is forgeable into granted access wherever Écluse is reachable other
-  than through the edge, so this is closed in code, not left to a deployment hope.,  _access-model.md#safe-defaults-and-unrepresentable-unsafe-combinations, security.md#trust-assumptions--credential-posture_
+  than through the edge, so this is closed in code, not left to a deployment hope.   _access-model.md#safe-defaults-and-unrepresentable-unsafe-combinations, security.md#trust-assumptions--credential-posture_
 - [ ] **Unrepresentable unsafe combination**: **no** strategy admits a shared
   private-leg cache entry; the types/config make a shared private cache impossible to
   express under **any** strategy (`passthrough` or `service`), not merely rejected at
-  runtime, Écluse forbids a private cache outright.,  _access-model.md#safe-defaults-and-unrepresentable-unsafe-combinations_
+  runtime, Écluse forbids a private cache outright.   _access-model.md#safe-defaults-and-unrepresentable-unsafe-combinations_
 - [ ] `service` requires an explicit "the edge authorises callers" acknowledgement in
-  config; omitting it is a fail-fast startup error., _access-model.md#safe-defaults-and-unrepresentable-unsafe-combinations_
+  config; omitting it is a fail-fast startup error.  _access-model.md#safe-defaults-and-unrepresentable-unsafe-combinations_
 - [ ] The caller's edge identity (when present) is available to the request pipeline
-  for audit/logging without becoming a metric label (bounded-cardinality rule).,  _observability.md#cardinality-and-attributes_
+  for audit/logging without becoming a metric label (bounded-cardinality rule).   _observability.md#cardinality-and-attributes_
 - [ ] Unit tests: strategy/edge-mode decode (valid/invalid/missing), the
   fail-fast `service`-without-assertion case, and a type-level/​property check that the
   unsafe cache combination cannot be constructed.

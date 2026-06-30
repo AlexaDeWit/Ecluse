@@ -127,6 +127,9 @@ case "$suite" in
       # pure re-export shim: the curated public surface only; implementation and
       # coverage live in Ecluse.Core.Credential.Refresh.Internal.
       ./core/src/Ecluse/Core/Credential/Refresh.hs
+      # pure re-export shims
+      ./core/src/Ecluse/Core/Security.hs
+      ./core/src/Ecluse/Core/Server/Pipeline.hs
       # pure protocol Handle (#16): the RegistryClient record + error newtypes, no
       # logic. Remove when S06 (npm-wire) adds real fetch/parse code and tests that
       # link it.
@@ -134,6 +137,9 @@ case "$suite" in
       # test/dev-only loopback constructor enabled by dev-http-egress flag.
       # tested by integration tests, not linked by core-unit tests.
       ./core/src/Ecluse/Core/Security/Egress/DevHttp.hs
+      # servePublish is tested exclusively by the integration test suite
+      # (test/integration/Ecluse/Server/PublishSpec.hs).
+      ./core/src/Ecluse/Core/Server/Pipeline/Publish.hs
     )
     ;;
   ecluse-unit)

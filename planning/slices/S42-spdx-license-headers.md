@@ -38,7 +38,7 @@ and merge churn, hence parked here rather than done opportunistically.
   undisturbed.
 - [ ] A CI lint fails a PR that adds a source file without an SPDX tag (a small
   `grep`-based gate, or `reuse lint` if the REUSE layout is adopted), wired into
-  the `static-checks` job, off the product path., _AGENTS.md (CI & Security)_
+  the `static-checks` job, off the product path.  _AGENTS.md (CI & Security)_
 - [ ] The new-file header convention is documented in [`STYLE.md`](../../STYLE.md)
   and/or [`CONTRIBUTING.md`](../../CONTRIBUTING.md).
 - [ ] _(Optional)_ Full REUSE compliance, a `LICENSES/MIT.txt` copy and a green

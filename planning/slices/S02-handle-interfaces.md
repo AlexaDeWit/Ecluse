@@ -28,16 +28,16 @@ against stable interfaces.
 - [ ] `RegistryClient` record defined with the exact field set from the spec
   (`fetchMetadata`, `fetchArtifact`, `publishArtifact`, `parsePackageInfo`,
   `parseVersionDetails`, `parseVersionList`); effectful fields return `IO`, `parse*`
-  fields are pure., _registry-model.md#registry-abstraction_
+  fields are pure.  _registry-model.md#registry-abstraction_
 - [ ] Supporting types: `RegistryResponse`, `ParseError`, `PublishError`. (`PackageInfo`
   is introduced in S07; reference it here only via an `hs-boot`-free ordering, keep
   the handle in a module that can import the domain types.), _registry-model.md_
 - [ ] `MirrorQueue` record (`enqueue`/`receive`/`ack`/`extendVisibility`) with
   `MirrorJob`, `QueueMessage`, opaque `ReceiptHandle`, `Seconds`. Conventions
-  documented in Haddock: `enqueue` best-effort, retry-is-don't-ack, no `nack`.,  _cloud-backends.md#queue-abstraction_
+  documented in Haddock: `enqueue` best-effort, retry-is-don't-ack, no `nack`.   _cloud-backends.md#queue-abstraction_
 - [ ] `CredentialProvider` (`newtype` over `currentToken :: IO AuthToken`) with
   `AuthToken { secret, expiresAt }` and an opaque `Secret` whose `Show` is redacted
-  (never prints the token)., _cloud-backends.md#credential-provider_
+  (never prints the token).  _cloud-backends.md#credential-provider_
 - [ ] In-memory doubles: `newInMemoryQueue :: IO MirrorQueue` (STM-backed), a
   `staticToken`-style `CredentialProvider`, and a `RegistryClient` test double
   driven by fixtures, usable by every downstream slice's tests.
@@ -53,7 +53,7 @@ against stable interfaces.
 **Test tier.** Unit, the in-memory queue's FIFO/ack/redeliver-on-no-ack semantics
 and `Secret` redaction are asserted; the doubles are the substrate later slices test against.
 
-**Notes / risks.** `Secret` redaction is load-bearing (no token in any signal,see observability.md#cardinality-and-attributes); pin it with a test now. Keep the
+**Notes / risks.** `Secret` redaction is load-bearing (no token in any signal, see observability.md#cardinality-and-attributes); pin it with a test now. Keep the
 handle modules free of any `Env`/`App` import so backends never couple to the core
 (technology-stack.md#key-decisions). `PackageInfo`/`PackageDetails` ordering: the
 handle references domain types from `Ecluse.Package`/`Ecluse.Version`/(new) `PackageInfo`. Coordinate the `PackageInfo` introduction with S07 to avoid an import cycle (prefer

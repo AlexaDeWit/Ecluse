@@ -33,21 +33,21 @@ logs to traces via trace-ID injection into the JSONL `dd` object.
 - [x] The `ecluse.*` metric catalogue (serve decision, rule denials/eval-duration/
   effectful-failures/breaker-state, advisory sync age/failures/last-good, upstream
   fetch, metadata-cache, mirror, credential refresh/ttl) plus OTel HTTP semantic
-  conventions., _observability.md#metrics_, _catalogue + emits delivered; breaker-state
+  conventions.  _observability.md#metrics_, _catalogue + emits delivered; breaker-state
   + credential refresh/ttl emits and advisory-sync deferred (see As-built)._
 - [x] **Bounded-label discipline**: metric labels are a closed set of bounded enums
   only; high-cardinality identifiers (package/version/scope/message) never become
-  labels, a label-domain guard test rejects an unbounded label., _observability.md#cardinality-and-attributes_
+  labels, a label-domain guard test rejects an unbounded label.  _observability.md#cardinality-and-attributes_
 - [x] Transport: **OTLP push to the Datadog Agent's OTLP receiver is the launch
   transport** (the already-pinned `hs-opentelemetry-exporter-otlp`; the Agent
   auto-maps OTLP → Datadog metric format). A Prometheus `/metrics` scrape is a
   deferred pull alternative ([#288](https://github.com/AlexaDeWit/Ecluse/issues/288)):
   the SDK honours `OTEL_METRICS_EXPORTER=prometheus` but the pinned set ships no
   scrape-endpoint renderer, so the actual endpoint is out of scope here.
-  DogStatsD is out (no maintained GHC 9.10 client)., _observability.md#metrics_
+  DogStatsD is out (no maintained GHC 9.10 client).  _observability.md#metrics_
 - [x] **Logs ↔ traces**: katip JSONL (S04) gains a populated `dd` object
   (`trace_id`/`span_id`/`service`/`env`/`version`) in the id format Datadog expects;
-  one compact line per record., _observability.md#logs_
+  one compact line per record.  _observability.md#logs_
 
 **File scope.**
 - `src/Ecluse/Telemetry/Metrics.hs`, instrument definitions + the bounded-label types.

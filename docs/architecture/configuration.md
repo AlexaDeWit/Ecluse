@@ -37,40 +37,7 @@ per-endpoint registry tokens) are always environment variables; cloud-managed
 registries derive short-lived tokens from ambient cloud credentials (see
 [Outbound Registry Credentials](#outbound-registry-credentials)).
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `ECLUSE_PORT` | No (default: 4873) | Port the proxy listens on. Must be in `0..65535` (`0` binds an OS-assigned ephemeral port); an out-of-range value is rejected at load. |
-| `ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM` | Yes | `https://` URL of the private upstream registry. A non-https value fails closed at boot. |
-| `ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM` | No (default: `https://registry.npmjs.org`) | `https://` URL of the public upstream. A non-https value fails closed at boot. |
-| `ECLUSE_MOUNTS__NPM__MIRROR_TARGET` | No (default: `ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM`) | `https://` URL of the registry to mirror approved packages to. Unset ⇒ folds onto the private upstream (one registry, both read and written), so the private upstream is the only hard-required endpoint. The write **credential** does not fold; it stays `ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER`. |
-| `ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER` | No (default: `static`) | How the mirror-target write token is obtained: `static` (uses `ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN`), `codeartifact` (mints via CodeArtifact `GetAuthorizationToken` under the ambient task role), or `gcp-artifact-registry` (recognised but not yet built, a fail-loud boot error). This is the credential-**provider** axis, distinct from the per-mount serve **strategy** (`passthrough`/`service`). See [Cloud Backends → Credential Provider](cloud-backends.md#credential-provider). |
-| `ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN` | No | Static write token for the mirror target, used when `ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER=static` (the default). |
-| `ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_DOMAIN` | `codeartifact` provider only | The CodeArtifact domain that scopes the minted token. Resolved from this key, else parsed from a CodeArtifact `ECLUSE_MOUNTS__NPM__MIRROR_TARGET` host (`{domain}-{owner}.d.codeartifact.{region}.amazonaws.com`); unresolvable ⇒ fail-loud at boot. |
-| `ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_DOMAIN_OWNER` | `codeartifact` provider only | The 12-digit AWS account id owning the domain. Resolved from this key, else parsed from the mirror-target host; a value that is not a 12-digit account id is rejected at boot. |
-| `ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_REGION` | `codeartifact` provider only | The region of the CodeArtifact domain. Resolution order: this key → the mirror-target host (its authoritative region) → `AWS_REGION`. |
-| `ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_TOKEN_DURATION` | No | Requested CodeArtifact token lifetime in seconds, capped at `43200` (12 h). Unset ⇒ CodeArtifact ties it to the caller's role-credential expiry. |
-| `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET` | No | URL the proxy writes client `npm publish` (first-party packages) to. **Unset ⇒ the proxy refuses publishes with `405`.** May be the same registry as the private upstream (so published packages are then readable via the private leg). See [Registry roles → publication target](registry-model.md#publishing-first-party-packages-the-publication-target). |
-| `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN` | No (but **requires `ECLUSE_AUTH_TOKEN`** when set) | Static credential for the publication target when it is not reached with the client's forwarded token. The default publish credential model is **passthrough**, the publisher's own token; see [Access model](access-model.md#publishing-the-publication-target-passthrough-write). Because a static credential makes Écluse publish under its **own** identity; it is fail-closed: set without `ECLUSE_AUTH_TOKEN`, the proxy **refuses to boot** (`PublishStaticCredentialNeedsEdge`). |
-| `ECLUSE_MOUNTS__NPM__PUBLISH_SCOPES` | Required when `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET` is set | Comma-separated allow-list of package scopes a client may publish (e.g. `@acme`). A publish whose name is outside the list is refused, the anti-shadowing guard against publishing a name that collides with a public package. |
-| `ECLUSE_QUEUE_BACKEND` | No (default: `sqs`) | Mirror-queue backend: `sqs` (AWS), `memory` (a bounded in-process queue, no cloud queue, at the cost of a **non-durable, best-effort** mirror; an explicit choice for a simple/single-node/air-gapped deployment, **never** an automatic fallback), or `pubsub` (GCP, recognised but not yet built). Selecting `memory` emits a loud boot warning. See [Cloud Backends](cloud-backends.md#cloud-backends). |
-| `ECLUSE_QUEUE_URL` | Cloud backends only (`sqs`/`pubsub`) | Queue identifier for mirror jobs: an SQS queue URL, or a Pub/Sub `projects/<project>/topics/<topic>` resource, per provider. **Required for the cloud backends** (an absent one fails loud at boot); **not needed for `memory`**, which has no external queue and ignores it. |
-| `ECLUSE_QUEUE_MEMORY_MAX_DEPTH` | No (default: `50000`) | `memory` provider only. The cap on the in-process queue's depth. A cold-cache `npm ci` enqueues thousands of mirror jobs at once, so the queue is hard-bounded against an out-of-memory burst: an enqueue past the cap is dropped (**drop-newest**), which is safe, a dropped job is re-mirrored on the next demand. Each rate-limited drop is logged. Must be a positive integer; raise it to shed fewer jobs under load, lower it to bound memory tighter. |
-| `AWS_REGION` | AWS backends only | Region for SQS and CodeArtifact. |
-| `AWS_ENDPOINT_URL_SQS` | No | SQS endpoint override (the AWS-SDK-standard variable). Set to target a local emulator (`ministack`) or a VPC endpoint; the released image uses the same key with no test-only code path. Takes precedence over `AWS_ENDPOINT_URL`. With an override set, requests are signed with `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` (an emulator is off the ambient role chain). |
-| `AWS_ENDPOINT_URL` | No | Generic AWS endpoint override (the AWS-SDK-standard variable), used for SQS when `AWS_ENDPOINT_URL_SQS` is unset. |
-| `ECLUSE_GOOGLE_PROJECT` | GCP backends only | Project for Pub/Sub and Artifact Registry. Credentials come from Application Default Credentials (ADC). |
-| `ECLUSE_AUTH_TOKEN` | No (but **required if `ECLUSE_PUBLICATION_TARGET_TOKEN` is set**) | If set, clients must supply this token as `Bearer` or `_authToken`. Omit for open/network-secured deployments, except when a static `ECLUSE_PUBLICATION_TARGET_TOKEN` is configured, which requires it (see that key). |
-| `ECLUSE_MOUNTS__NPM__RESPECT_UPSTREAM_TARBALL_HOST` | No (default: `false`) | When `false`, a tarball is fetched only from the same allowlisted upstream that served the packument; a `dist.tarball` pointing at a different host is refused. See [Outbound egress safety](#outbound-egress-safety). |
-| `ECLUSE_HELP_MESSAGE` | No | Custom string appended to all denial messages (e.g. `"Contact #platform-eng on Slack for assistance."`). |
-| `ECLUSE_LOG_FORMAT` | No (default: `json`) | Structured-log output shape: `json` (one object per line, for log collectors) or `console` (human-readable). See [Observability](observability.md). |
-| `ECLUSE_TELEMETRY` | No (default: `off`) | OpenTelemetry master switch. With it `off`, nothing is wired and no telemetry is emitted. When `on`, the SDK reads the standard `OTEL_*` (or `DD_*`) variables. See [Observability](observability.md#configuration). |
-| `ECLUSE_CVE_SYNC_INTERVAL` | No (default: 3600) | How often to refresh the in-memory advisory index from OSV (see [CVE Subsystem](rules-engine.md#cve-subsystem)). |
-| `ECLUSE_SHUTDOWN_DRAIN_TIMEOUT` | No (default: 30) | Seconds the graceful shutdown waits for in-flight requests and in-progress artifact streams to finish after the listen socket closes, before the process exits regardless. Must be a positive integer. See [Graceful rollover](hosting.md#graceful-rollover). |
-| `ECLUSE_MAX_RESPONSE_BYTES` | No (default: `12582912`, 12 MiB) | Largest upstream **metadata** body the proxy buffers before aborting the fetch fail-closed. Bounds memory against a hostile upstream returning a multi-gigabyte body. Must be a positive integer. See [Response bounds](#response-bounds). |
-| `ECLUSE_MAX_VERSION_COUNT` | No (default: `100000`) | Largest number of versions a parsed packument may carry before it is refused. Bounds per-version rule evaluation against a version-flood document. Must be a positive integer. See [Response bounds](#response-bounds). |
-| `ECLUSE_MAX_NESTING_DEPTH` | No (default: `64`) | Deepest JSON nesting a decoded upstream document may reach before it is refused. Bounds stack/CPU against a pathologically nested payload. Must be a positive integer. See [Response bounds](#response-bounds). |
-| `ECLUSE_MIN_PUBLIC_INTEGRITY` | No (default: `sha256`) | Minimum integrity algorithm a **public** (untrusted) version's digest must meet to be admitted: `sha256`, `sha384`, `sha512`, or `blake2b`. A public version whose strongest digest is weaker (e.g. a legacy SHA-1 `shasum` only) is refused with a `403`. **Hard-floored at SHA-256**, a value below it (`sha1`, `md5`) or an unknown name is rejected at load, not clamped, and there is **no escape-hatch** to admit a sub-SHA-256 digest from an untrusted upstream. The trusted private path has its own, loosenable floor (`ECLUSE_MIN_TRUSTED_INTEGRITY`). See [Public integrity floor](#public-integrity-floor) and [Security → asymmetric integrity trust](security.md#invariants). |
-| `ECLUSE_MIN_TRUSTED_INTEGRITY` | No (default: `sha256`) | Minimum integrity algorithm a **trusted** (private) version's digest must meet to be served. Defaults to `sha256`, so by default a SHA-1-only or hashless private version is dropped, exactly like a public one, but unlike the public floor is **loosenable below SHA-256**: `sha1`/`md5` are accepted for a legacy private mirror, where trust substitutes for cryptographic strength. An unknown name is still rejected at load. See [Trusted integrity floor](#trusted-integrity-floor) and [Security → asymmetric integrity trust](security.md#invariants). |
+> For the comprehensive list of environment variables, their defaults, and operator semantics, see the [Operator Manual (`USAGE.md`)](../../USAGE.md#environment-variables).
 
 ### Registry endpoints must be https
 
@@ -106,18 +73,18 @@ one for **reading** the private upstream. Each such endpoint selects a
 credentials above: `AWS_REGION` / instance role, or ADC / `ECLUSE_GOOGLE_PROJECT`)
 or a static token.
 
-**Selecting the mirror-target write provider.** `ECLUSE_MIRROR_TARGET_CREDENTIAL_PROVIDER`
+**Selecting the mirror-target write provider.** `ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER`
 chooses how that one always-held write credential is obtained, `static` (a
-`ECLUSE_MIRROR_TARGET_TOKEN`) or `codeartifact` (a token minted under the ambient task role,
-its domain/owner/region from the `MIRROR_TARGET_CODEARTIFACT_*` keys or parsed from the
+`ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN`) or `codeartifact` (a token minted under the ambient task role,
+its domain/owner/region from the `ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_*` keys or parsed from the
 mirror-target host). The write credential is **explicit and does not fold** when
-`ECLUSE_MIRROR_TARGET` folds onto the private upstream: under the default `passthrough`
+`ECLUSE_MOUNTS__NPM__MIRROR_TARGET` folds onto the private upstream: under the default `passthrough`
 the private upstream carries no Écluse credential, while the mirror write runs on the
 async worker under Écluse's own identity, so the two are independent. (When the
 `service` strategy later gives the private-upstream read its own Écluse credential, a
 write to the same registry **may** inherit it; that is the `service` slice's concern,
-not this one.) The read-side providers (`PRIVATE_UPSTREAM_*`) and the publish-target
-provider (`PUBLICATION_TARGET_*`) will follow the **same prefixed-provider pattern**
+not this one.) The read-side providers (`ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM_*`) and the publish-target
+provider (`ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_*`) will follow the **same prefixed-provider pattern**
 when those slices land, so the shape is set once here.
 
 **How reads are credentialled is the credential strategy** (see
@@ -143,11 +110,8 @@ the `169.254.169.254` metadata endpoint). See
 [Network egress is a shared responsibility](security.md#network-egress-is-a-shared-responsibility).
 
 The one application-level knob, following Écluse's **secure-defaults /
-configurable-overrides** principle, *the consumer decides their threat tolerance*:
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ECLUSE_RESPECT_UPSTREAM_TARBALL_HOST` | `false` (secure default) | When `false`, a tarball is fetched only from the **same allowlisted upstream that served the packument**; a `dist.tarball` pointing at a *different* host is refused. Set `true` only for a registry that legitimately serves tarballs from a separate CDN/files host (e.g. the PyPI files host), which **widens the outbound fetch surface to any allowlisted host**, opt in deliberately, and pair it with platform egress controls. |
+configurable-overrides** principle, *the consumer decides their threat tolerance*. 
+See the `ECLUSE_MOUNTS__*__RESPECT_UPSTREAM_TARBALL_HOST` setting in the [Operator Manual](../../USAGE.md#environment-variables) for how to relax this constraint.
 
 The override never escapes the host allowlist or the internal-range block: it
 relaxes *which allowlisted host* may serve a tarball, not whether the allowlist
@@ -167,13 +131,7 @@ subject to the body-size bound.
 
 The defaults are generous for real registry documents and tight enough to fail closed
 on pathological input; each is a strictly positive integer (a non-positive value is a
-degenerate budget and is rejected at startup).
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ECLUSE_MAX_RESPONSE_BYTES` | `12582912` (12 MiB) | Largest metadata body buffered before the bounded read aborts the fetch. |
-| `ECLUSE_MAX_VERSION_COUNT` | `100000` | Largest version count a packument may carry before it is refused (bounds per-version rule evaluation). |
-| `ECLUSE_MAX_NESTING_DEPTH` | `64` | Deepest JSON nesting a decoded document may reach before it is refused (bounds stack/CPU on a pathological payload). |
+degenerate budget and is rejected at startup). For the specific variables (`ECLUSE_MAX_RESPONSE_BYTES`, `ECLUSE_MAX_VERSION_COUNT`, `ECLUSE_MAX_NESTING_DEPTH`), see the [Operator Manual](../../USAGE.md#environment-variables).
 
 The metadata ceilings are layered. `ECLUSE_MAX_RESPONSE_BYTES` (default **12 MiB**,the largest packuments seen today are ~4 MiB, so this leaves years of headroom) is
 the **primary, pre-decode** bound: the body is bounded as it streams, **before** the
@@ -194,18 +152,11 @@ listing. The trusted private path is governed by its own, **loosenable** floor
 ([Trusted integrity floor](#trusted-integrity-floor)), but the public floor here is
 **never** loosenable.
 
-`ECLUSE_MIN_PUBLIC_INTEGRITY` sets the floor (default `sha256`). It may be **raised** as
+`ECLUSE_MIN_PUBLIC_INTEGRITY` sets the floor. It may be **raised** as
 cryptanalysis ages an algorithm, but is **hard-floored at SHA-256**, a value below it
 or an unknown name is a configuration error rejected at load, never silently clamped, and
 there is **no escape-hatch** to accept a sub-SHA-256 digest from an untrusted public
-upstream.
-
-| Value | Effect |
-|-------|--------|
-| `sha256` | The default and hard minimum: a public version must carry a SHA-256 (or stronger) digest. |
-| `sha384` | A raised floor: a public version must carry a SHA-384 (or stronger) digest; a SHA-256-only version is then refused. |
-| `sha512` / `blake2b` | A raised floor: a public version must carry a SHA-512 / BLAKE2b digest; a SHA-256-only or SHA-384-only version is then refused. |
-| `sha1` / `md5` / unknown | **Rejected at load**, a sub-floor or unrecognised algorithm fails the configuration parse. |
+upstream. See the [Operator Manual](../../USAGE.md#environment-variables) for supported algorithms.
 
 ### Trusted integrity floor
 
@@ -217,18 +168,11 @@ default as the public floor, so by default a SHA-1-only or hashless private vers
 falls through to the public origin). The old "trusted private path is exempt" behaviour is
 no longer the default.
 
-`ECLUSE_MIN_TRUSTED_INTEGRITY` sets the floor (default `sha256`). Unlike the public floor it
+`ECLUSE_MIN_TRUSTED_INTEGRITY` sets the floor. Unlike the public floor it
 is **loosenable below SHA-256** for a legacy private mirror, where trust in the operator's
 own vetted source substitutes for cryptographic strength. This is the **only** way Écluse
 will serve a sub-SHA-256 digest, and only on the trusted private origin, the public floor
-is never lowerable. An unknown algorithm name is still rejected at load.
-
-| Value | Effect |
-|-------|--------|
-| `sha256` | The default: a private version must carry a SHA-256 (or stronger) digest, exactly like the public default. |
-| `sha384` / `sha512` / `blake2b` | A raised trusted floor: a private version must carry that algorithm (or stronger). |
-| `sha1` / `md5` | A **loosened** trusted floor: a private version may be served on a legacy SHA-1 / MD5 digest, accepted only because the private upstream is the operator's own vetted source; the public floor rejects these outright. |
-| unknown | **Rejected at load**, an unrecognised algorithm fails the configuration parse. |
+is never lowerable. An unknown algorithm name is still rejected at load. See the [Operator Manual](../../USAGE.md#environment-variables) for supported values.
 
 ### Rule policy
 
@@ -316,7 +260,7 @@ Crucially, **unknown is an error, not a silent skip**:
   is absent, is **rejected at boot**. Credential providers are
   [process-global](cloud-backends.md#credential-provider) and a mount only references
   one, so an incompatible reference never reaches a request.
-- **A static publish credential requires a verifiable edge.** A `ECLUSE_PUBLICATION_TARGET_TOKEN`
+- **A static publish credential requires a verifiable edge.** A `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN`
   set without `ECLUSE_AUTH_TOKEN` is **rejected at boot** (`PublishStaticCredentialNeedsEdge`):
   a static credential makes Écluse publish under its own identity, so coupling it to an open
   edge would let any unauthenticated client publish under it, that combination is made

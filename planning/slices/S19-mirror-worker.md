@@ -26,7 +26,7 @@ a supervised concurrent thread, split-ready.
 - [ ] `runWorker :: Env -> IO ()`: `receive` → fetch artifact → **verify
   `dist.integrity`** → `publishArtifact` (bearer from `CredentialProvider`) → `ack`.
   A **hash mismatch fails the job (no publish)** and alarms, a tampered artifact
-  never enters the private upstream., _cloud-backends.md#mirror-queue_
+  never enters the private upstream.  _cloud-backends.md#mirror-queue_
 - [ ] **Wire the publish-side `RegistryClient`**, the deferred tail of the
   per-ecosystem composition-root wiring (D5; the *serve* side landed in
   [#144](https://github.com/AlexaDeWit/Ecluse/pull/144)). Resolve the configured
@@ -34,16 +34,16 @@ a supervised concurrent thread, split-ready.
   `CredentialProvider`) at the composition root, replacing the refusing
   `Env.envRegistry` placeholder (`unconfiguredRegistry`). `envRegistry` is currently
   consumed by nothing, the serve path builds its own per-leg clients, so this slice
-  is its first real consumer and retires/repurposes the single global slot.,  _cloud-backends.md#process-model_
+  is its first real consumer and retires/repurposes the single global slot.   _cloud-backends.md#process-model_
 - [ ] **Idempotent publish**: a redelivered job whose version already exists is
-  treated as success (S08's 409-is-success)., _cloud-backends.md#mirror-queue_
+  treated as success (S08's 409-is-success).  _cloud-backends.md#mirror-queue_
 - [ ] **No re-running rules** in the worker (gated at serve time); retry-is-don't-ack
-  on transient failure; long publishes may `extendVisibility`., _cloud-backends.md#mirror-queue_
+  on transient failure; long publishes may `extendVisibility`.  _cloud-backends.md#mirror-queue_
 - [ ] **Health/heartbeat**: the worker exposes a consume-loop heartbeat /
   last-successful-poll distinct from the server's HTTP readiness, feeding `/livez`
-  (S12)., _cloud-backends.md#process-model_
+  (S12).  _cloud-backends.md#process-model_
 - [ ] Composition root runs `runServer` + `runWorker` **concurrently** (async /
-  unliftio), each a self-contained entry over the shared `Env` (split-ready).,  _cloud-backends.md#process-model_
+  unliftio), each a self-contained entry over the shared `Env` (split-ready).   _cloud-backends.md#process-model_
 
 **File scope.**
 - `src/Ecluse/Worker.hs`, `runWorker`, the consume loop, integrity verification, heartbeat.
@@ -99,7 +99,7 @@ Decide and document each here when building:
 
 **Deferred composition wiring (from [#144](https://github.com/AlexaDeWit/Ecluse/pull/144)).**
 The per-ecosystem composition root wired the *serve* side (each mount's
-`PackumentDeps`); the *publish* side, a configured `RegistryClient` per ecosystem,was deliberately left to this slice, the worker being its only consumer. Today
+`PackumentDeps`); the *publish* side, a configured `RegistryClient` per ecosystem, was deliberately left to this slice, the worker being its only consumer. Today
 `Env.envRegistry` is a single global refusing placeholder, so this slice resolves it
 from config and retires the single global slot, the deferred D5 tail of the
 per-ecosystem composition-root work.

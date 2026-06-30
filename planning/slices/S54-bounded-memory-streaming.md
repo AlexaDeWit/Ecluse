@@ -36,10 +36,10 @@ infeasible in practice, do not force a flaky gate, keep it informational and esc
 - [ ] **Tarball residency invariant (gating).** Streaming a large artifact (e.g. 100 MB)
   through the tarball path costs essentially the same peak residency as a small one
   (e.g. 1 MB), within a fixed margin independent of body size, proving constant-memory
-  passthrough, not size-proportional buffering., _web-layer.md#web-layer_
+  passthrough, not size-proportional buffering.  _web-layer.md#web-layer_
 - [ ] **Metadata cap holds (gating).** A packument response that decompresses past
   `maxBodyBytes` is bounded/refused at the cap rather than read unbounded, the
-  decoded-bytes bound, not the on-the-wire bound., _web-layer.md · security.md_
+  decoded-bytes bound, not the on-the-wire bound.  _web-layer.md · security.md_
 - [ ] **Deterministic, not flaky.** The assertions key on the size-invariance / cap, with
   a `performGC` + `GHC.Stats` measurement and a generous margin; they pass repeatably on
   the shared CI runner. Gates as a normal test in its tier.
@@ -54,4 +54,4 @@ is acceptable if it asserts the invariant more deterministically.
 
 **Notes / risks.** Residency assertions are the classic flaky-test trap; the invariant
 framing (size-independence) + GC + margin is the mitigation. Depends only on the merged
-tarball path (S15); the `maxBodyBytes` cap is from S13. Lowest priority in the queue,pull it in at a quiet point, after the launch-critical and observability tails.
+tarball path (S15); the `maxBodyBytes` cap is from S13. Lowest priority in the queue, pull it in at a quiet point, after the launch-critical and observability tails.

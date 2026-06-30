@@ -23,10 +23,10 @@ S20.
 
 **Acceptance criteria.**
 - [ ] Composition root selects the GCP backends from config
-  (`ECLUSE_GOOGLE_PROJECT`, `pubsub`, ADC)., _configuration.md#configuration, #outbound-registry-credentials_
-- [ ] The proxy core, rules, web layer, worker, and CVE subsystem are **unchanged**,  GCP is purely additive behind the two handles., _cloud-backends.md#cloud-backends_
+  (`ECLUSE_GOOGLE_PROJECT`, `pubsub`, ADC).  _configuration.md#configuration, #outbound-registry-credentials_
+- [ ] The proxy core, rules, web layer, worker, and CVE subsystem are **unchanged**,  GCP is purely additive behind the two handles.  _cloud-backends.md#cloud-backends_
 - [ ] End-to-end integration test on GCP backends (Pub/Sub emulator + stub npm
-  registry) mirrors the AWS end-to-end (S20)., _cloud-backends.md#testing_
+  registry) mirrors the AWS end-to-end (S20).  _cloud-backends.md#testing_
 - [ ] Config docs updated (the GCP rows already exist; mark them functional).
 
 **File scope.**

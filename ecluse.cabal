@@ -121,11 +121,18 @@ library ecluse-core
     Ecluse.Core.Rules.Types
     Ecluse.Core.Security
     Ecluse.Core.Security.Egress
+    Ecluse.Core.Security.Host
+    Ecluse.Core.Security.Limits
+    Ecluse.Core.Security.Url
     Ecluse.Core.Server.Cache
     Ecluse.Core.Server.Conditional
     Ecluse.Core.Server.Context
     Ecluse.Core.Server.Metadata
     Ecluse.Core.Server.Pipeline
+    Ecluse.Core.Server.Pipeline.Packument
+    Ecluse.Core.Server.Pipeline.Tarball
+    Ecluse.Core.Server.Pipeline.Publish
+    Ecluse.Core.Server.Pipeline.Shared
     Ecluse.Core.Server.Pipeline.Internal
     Ecluse.Core.Server.Response
     Ecluse.Core.Server.Route
@@ -491,6 +498,10 @@ test-suite ecluse-integration
     Ecluse.MirrorQueueSpec
     Ecluse.Security.EgressOriginSpec
     Ecluse.Server.GracefulShutdownSpec
+    Ecluse.Server.Pipeline.PackumentSpec
+    Ecluse.Server.Pipeline.SharedSpec
+    Ecluse.Server.Pipeline.TarballSpec
+    Ecluse.Server.Pipeline.TestSupport
     Ecluse.Server.PipelineSpec
     Ecluse.Server.PublishSpec
     Ecluse.TelemetryMetricsSpec

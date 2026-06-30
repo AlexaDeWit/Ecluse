@@ -23,12 +23,12 @@ behind the same two handles, closing "AWS, GCP, **and Azure**."
 
 **Acceptance criteria.**
 - [ ] Composition root selects the Azure backends from config (the Azure region /
-  tenant / namespace scoping, the chosen queue provider, the Entra leaf).,  _configuration.md#configuration_
-- [ ] The proxy core, rules, web layer, worker, and CVE subsystem are **unchanged**,  Azure is purely additive behind the two handles., _cloud-backends.md#cloud-backends_
+  tenant / namespace scoping, the chosen queue provider, the Entra leaf).   _configuration.md#configuration_
+- [ ] The proxy core, rules, web layer, worker, and CVE subsystem are **unchanged**,  Azure is purely additive behind the two handles.  _cloud-backends.md#cloud-backends_
 - [ ] Azure Artifacts is reached through the **unchanged** npm `RegistryClient` (npm
-  protocol over HTTPS + Entra bearer); no per-cloud publish path is added.,  _cloud-backends.md#azure-backends-designed-for-furthest-out_
+  protocol over HTTPS + Entra bearer); no per-cloud publish path is added.   _cloud-backends.md#azure-backends-designed-for-furthest-out_
 - [ ] End-to-end integration test on Azure backends (Azurite or namespace per S47 +
-  stub npm registry) mirrors the AWS/GCP end-to-end., _cloud-backends.md#testing_
+  stub npm registry) mirrors the AWS/GCP end-to-end.  _cloud-backends.md#testing_
 - [ ] Config + README rows for Azure added and marked functional.
 
 **File scope.**

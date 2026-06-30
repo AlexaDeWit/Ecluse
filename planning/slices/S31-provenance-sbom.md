@@ -23,12 +23,12 @@ provenance attestation already binds the digest to the builder identity.
 
 **Acceptance criteria.**
 - [x] SLSA build provenance via `actions/attest-build-provenance` for the released
-  image; verifiable with `gh attestation verify`., _docs/architecture/release-supply-chain.md#releases--container-image_
+  image; verifiable with `gh attestation verify`.  _docs/architecture/release-supply-chain.md#releases--container-image_
 - [x] An SBOM (`sbomnix` over `.#ecluse-bin`) is generated and attested via
   `actions/attest-sbom`.
 - [x] All actions SHA-pinned (Dependabot-bumped); the release workflow stays
   injection-free; provenance/SBOM run in the tag-triggered `release.yml`, **not** the
-  PR gate., _AGENTS.md (CI & Security)_
+  PR gate.  _AGENTS.md (CI & Security)_
 - [x] Docs updated (CONTRIBUTING → Releases) describing how to verify provenance + SBOM.
 
 **File scope.**

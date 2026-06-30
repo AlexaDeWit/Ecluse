@@ -4,9 +4,9 @@ This is the **index** to Écluse's systems design. It captures the vision, how a
 request flows end to end, and what is out of scope; the detailed design of each
 concern lives in the linked documents under [`architecture/`](architecture/).
 Development practices, codebase layout, testing strategy, and CI / repo
-requirements, live in [`../CONTRIBUTING.md`](../CONTRIBUTING.md). For *why* Écluse
+requirements, live in [`../CONTRIBUTING.md`](../CONTRIBUTING.md). For _why_ Écluse
 exists, the problem it solves and the reasoning behind these decisions; see
-[`../MOTIVATION.md`](../MOTIVATION.md); this document and those it links are the *how*.
+[`../MOTIVATION.md`](../MOTIVATION.md); this document and those it links are the _how_.
 
 > These documents describe the **intended target design** (the design of record),
 > not necessarily the current state of the code. Implementation tracks toward them, and
@@ -57,7 +57,7 @@ compile. The authoritative component and module map is [`ecluse.cabal`](../eclus
 ## Request Lifecycle
 
 The three request shapes diverge in how they use the upstreams, a tarball
-*falls back*, a packument *merges*, and a publish *writes through*:
+_falls back_, a packument _merges_, and a publish _writes through_:
 
 ```mermaid
 flowchart TD
@@ -84,14 +84,14 @@ flowchart TD
     W3 --> WSV(["npm success. Done."])
 ```
 
-A **tarball/artifact** request is gated for *that one version*: a private-upstream
+A **tarball/artifact** request is gated for _that one version_: a private-upstream
 hit is streamed unfiltered (already vetted); on a private miss the proxy fetches
 the version's metadata from the public upstream, runs the rules, and either streams
 it from public **and enqueues a mirror job** or returns the serve
 [error model](architecture/web-layer.md#error-model) (403 / 503 / 500). Lockfile
 installs (`npm ci`) hit tarball URLs directly, often with no preceding packument
 request, so the artifact path gates on its own. **Mirroring is demand-driven**, a
-job is enqueued when an artifact is *accepted on the tarball path*, not when a
+job is enqueued when an artifact is _accepted on the tarball path_, not when a
 packument is filtered, so only versions actually pulled are mirrored.
 
 A **packument** request is not a private-then-public fallback but a **merge**: the
@@ -105,34 +105,34 @@ mirroring can fire for them. See
 [Registry Model → Packument merge](architecture/registry-model.md#packument-merge-across-upstreams)
 and [Rules Engine → Applying verdicts to a packument](architecture/rules-engine.md#applying-verdicts-to-a-packument).
 
-A **publish** request (`PUT /{pkg}`, i.e. `npm publish`) is the one client-driven *write*:
+A **publish** request (`PUT /{pkg}`, i.e. `npm publish`) is the one client-driven _write_:
 it is accepted at the mount, checked against the operator's **publish-scope allow-list**
 (the anti-shadowing guard, rejected before any upstream write), and relayed to the
-**publication target** with the publisher's *own* forwarded credential. It is opt-in (a
+**publication target** with the publisher's _own_ forwarded credential. It is opt-in (a
 `405` when no `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET` is configured), and published packages are read back
-through the private upstream, distinct from the mirror target, which the *worker* writes
+through the private upstream, distinct from the mirror target, which the _worker_ writes
 with Écluse's own credential. See
 [Registry Model → Publishing first-party packages](architecture/registry-model.md#publishing-first-party-packages-the-publication-target).
 
 ## Document Map
 
-| Document | Covers |
-|---|---|
-| [Diagrams](architecture/diagrams.md) | **Visual companion (Mermaid):** system overview, packument / tarball / worker sequences, and the rules-engine and credential lifecycles. |
-| [Registry Model](architecture/registry-model.md) | The four registry roles (two reads, two writes) and the `RegistryClient` protocol handle. |
-| [Internal Domain Model](architecture/domain-model.md) | `PackageDetails` and the ecosystem-agnostic signal vocabulary the rules engine consumes. |
-| [Multi-Ecosystem Hosting](architecture/hosting.md) | Mounting ecosystems under path prefixes, URL rewriting, and dispatch. |
-| [Web Layer](architecture/web-layer.md) | The raw-WAI front door: routing, the control/data-plane split, streaming, middleware. |
-| [API Surface & Capability Manifest](architecture/api-surface.md) | The OpenAPI **capability manifest**, which protocols Écluse speaks and what is / isn't supported, generated from the route enumeration × mounts; the synthesized-packument schema. |
-| [Rules Engine & Responses](architecture/rules-engine.md) | Deny-by-default evaluation, the rule tiers, the CVE subsystem, and denial responses. |
-| [Cloud Backends & Mirroring](architecture/cloud-backends.md) | The mirror queue and the two cloud handles (`MirrorQueue`, `CredentialProvider`); AWS & GCP. |
-| [Configuration & Authentication](architecture/configuration.md) | Environment configuration, outbound registry credentials, and inbound client authentication. |
-| [Access & Credential Model](architecture/access-model.md) | The per-mount credential strategy (`passthrough` / `service`), edge authentication, and the no-private-cache posture. |
-| [Security Invariants](architecture/security.md) | Outbound-request & input-validation defences, identifier canonicalisation, the outbound host allowlist, internal-range blocking, and response bounds. |
-| [Threat Model](https://alexadewit.github.io/Ecluse/threat-model.html) | The STRIDE threat register, generated from the OWASP Threat Dragon model (`threat-modelling/ecluse.json`) and published to the site; the single source of truth for the system's threats. |
-| [Observability](architecture/observability.md) | Opt-in, vendor-neutral OpenTelemetry/OTLP tracing & metrics; Datadog as a first-class but optional target. |
-| [Technology Stack](architecture/technology-stack.md) | Library choices and the key cross-cutting decisions. |
-| [Release & Supply-Chain Operations](architecture/release-supply-chain.md) | The reproducible OCI image, the publish/attest chain (keyless provenance + SBOM), Docker Hub token handling, and CVE scanning + dependency freshness. |
+| Document                                                                  | Covers                                                                                                                                                                                    |
+| ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [Diagrams](architecture/diagrams.md)                                      | **Visual companion (Mermaid):** system overview, packument / tarball / worker sequences, and the rules-engine and credential lifecycles.                                                  |
+| [Registry Model](architecture/registry-model.md)                          | The four registry roles (two reads, two writes) and the `RegistryClient` protocol handle.                                                                                                 |
+| [Internal Domain Model](architecture/domain-model.md)                     | `PackageDetails` and the ecosystem-agnostic signal vocabulary the rules engine consumes.                                                                                                  |
+| [Multi-Ecosystem Hosting](architecture/hosting.md)                        | Mounting ecosystems under path prefixes, URL rewriting, and dispatch.                                                                                                                     |
+| [Web Layer](architecture/web-layer.md)                                    | The raw-WAI front door: routing, the control/data-plane split, streaming, middleware.                                                                                                     |
+| [API Surface & Capability Manifest](architecture/api-surface.md)          | The OpenAPI **capability manifest**, which protocols Écluse speaks and what is / isn't supported, generated from the route enumeration × mounts; the synthesized-packument schema.        |
+| [Rules Engine & Responses](architecture/rules-engine.md)                  | Deny-by-default evaluation, the rule tiers, the CVE subsystem, and denial responses.                                                                                                      |
+| [Cloud Backends & Mirroring](architecture/cloud-backends.md)              | The mirror queue and the two cloud handles (`MirrorQueue`, `CredentialProvider`); AWS & GCP.                                                                                              |
+| [Configuration & Authentication](architecture/configuration.md)           | Environment configuration, outbound registry credentials, and inbound client authentication.                                                                                              |
+| [Access & Credential Model](architecture/access-model.md)                 | The per-mount credential strategy (`passthrough` / `service`), edge authentication, and the no-private-cache posture.                                                                     |
+| [Security Invariants](architecture/security.md)                           | Outbound-request & input-validation defences, identifier canonicalisation, the outbound host allowlist, internal-range blocking, and response bounds.                                     |
+| [Threat Model](https://alexadewit.github.io/Ecluse/threat-model.html)     | The STRIDE threat register, generated from the OWASP Threat Dragon model (`threat-modelling/ecluse.json`) and published to the site; the single source of truth for the system's threats. |
+| [Observability](architecture/observability.md)                            | Opt-in, vendor-neutral OpenTelemetry/OTLP tracing & metrics; Datadog as a first-class but optional target.                                                                                |
+| [Technology Stack](architecture/technology-stack.md)                      | Library choices and the key cross-cutting decisions.                                                                                                                                      |
+| [Release & Supply-Chain Operations](architecture/release-supply-chain.md) | The reproducible OCI image, the publish/attest chain (keyless provenance + SBOM), Docker Hub token handling, and CVE scanning + dependency freshness.                                     |
 
 ## Out of Scope (for now)
 
@@ -142,8 +142,8 @@ with Écluse's own credential. See
   revisit only if a non-registry mirror target is ever wanted.
 - Web UI or admin API.
 - **Re-specifying upstream registry protocols** in the
-  [capability manifest](architecture/api-surface.md). Écluse documents *its
-  coverage* of each protocol, and what is unsupported, not npm's full
+  [capability manifest](architecture/api-surface.md). Écluse documents _its
+  coverage_ of each protocol, and what is unsupported, not npm's full
   packument / registry contract: clients hardcode that, and it is npm's to specify.
 - PyPI and other non-npm **adapters**, the hosting model and `RegistryClient`
   handle are designed to accommodate them (see

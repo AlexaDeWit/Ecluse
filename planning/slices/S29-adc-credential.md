@@ -16,16 +16,16 @@ pr: null
 > Milestone **M7** · depends on: [S16](S16-credential-wrapper.md) · tier: smoke
 
 **Goal.** The GCP per-cloud credential leaf: mint an OAuth2 access token via
-Application Default Credentials (ADC, TTL ~1h), wrapped by the S16 generic policy,the GCP analogue of the CodeArtifact leaf (S17).
+Application Default Credentials (ADC, TTL ~1h), wrapped by the S16 generic policy, the GCP analogue of the CodeArtifact leaf (S17).
 
 **Acceptance criteria.**
 - [ ] `newAdcProvider :: ... -> IO CredentialProvider` mints an OAuth2 access token
   from ADC, returning an `AuthToken` with the real `expiresAt` (~1h) so the S16
   wrapper refreshes off the token's own lifetime, the wide TTL spread vs
-  CodeArtifact is exactly why the wrapper keys on `expiresAt`., _cloud-backends.md#credential-provider_
-- [ ] ~10 lines of cloud-specific code; all policy stays in S16., _cloud-backends.md#credential-provider_
+  CodeArtifact is exactly why the wrapper keys on `expiresAt`.  _cloud-backends.md#credential-provider_
+- [ ] ~10 lines of cloud-specific code; all policy stays in S16.  _cloud-backends.md#credential-provider_
 - [ ] Real mint exercised in **smoke** only (no emulator for the OAuth2 token
-  endpoint)., _cloud-backends.md#testing_
+  endpoint).  _cloud-backends.md#testing_
 
 **File scope.**
 - `src/Ecluse/Credential/Adc.hs`, the leaf + smart constructor.
