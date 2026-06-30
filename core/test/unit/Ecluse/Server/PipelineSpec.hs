@@ -22,13 +22,16 @@ import Data.Set qualified as Set
 import Data.Time (UTCTime (UTCTime), fromGregorian, nominalDay)
 import Katip (Environment (Environment), Namespace (Namespace), initLogEnv)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
-import Network.HTTP.Types (hContentType, hRetryAfter, status200, status404, statusCode)
+import Network.HTTP.Types (HeaderName, hContentType, status200, status404, statusCode)
 
 import Network.HTTP.Types.Header (hHost)
 import Network.Wai (Application, Request (rawPathInfo, requestHeaders), Response, defaultRequest, responseHeaders, responseLBS, responseStatus)
 import Network.Wai.Handler.Warp (testWithApplication)
 import Network.Wai.Internal (ResponseReceived (ResponseReceived))
 import Test.Hspec
+
+hRetryAfter :: HeaderName
+hRetryAfter = "Retry-After"
 import UnliftIO.Exception (throwString)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))

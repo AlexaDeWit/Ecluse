@@ -76,7 +76,7 @@ module Ecluse.Core.Server.Pipeline.Tarball (
 
 import Network.HTTP.Client (Manager)
 import Network.HTTP.Client qualified as HTTP
-import Network.HTTP.Types (RequestHeaders, ResponseHeaders, Status, hContentType, hRetryAfter, methodHead, mkStatus, statusIsSuccessful)
+import Network.HTTP.Types (HeaderName, RequestHeaders, ResponseHeaders, Status, hContentType, methodHead, mkStatus, statusIsSuccessful)
 import Network.Wai (Request, Response, ResponseReceived, requestHeaders, responseLBS)
 import UnliftIO.Exception (tryAny)
 
@@ -141,7 +141,10 @@ import Ecluse.Core.Server.Response (
 import Ecluse.Core.Server.Route (Filename (Filename))
 import Ecluse.Core.Server.Stream (probeUpstreamWhen, streamUpstreamWhen)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
-import Ecluse.Core.Telemetry.Record (MetricsPort (..), timedSeconds)
+import Ecluse.Core.Telemetry.Record (RecordEvent (..), logRecord, logRecord_)
+
+hRetryAfter :: HeaderName
+hRetryAfter = "Retry-After"
 import Ecluse.Core.Telemetry.Span (spanMirrorEnqueue, spanRuleEval)
 import Ecluse.Core.Version (Version)
 
