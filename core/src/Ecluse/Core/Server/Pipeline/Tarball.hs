@@ -141,12 +141,12 @@ import Ecluse.Core.Server.Response (
 import Ecluse.Core.Server.Route (Filename (Filename))
 import Ecluse.Core.Server.Stream (probeUpstreamWhen, streamUpstreamWhen)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
-import Ecluse.Core.Telemetry.Record (RecordEvent (..), logRecord, logRecord_)
+import Ecluse.Core.Telemetry.Record (MetricsPort (..), timedSeconds)
+import Ecluse.Core.Telemetry.Span (spanMirrorEnqueue, spanRuleEval)
+import Ecluse.Core.Version (Version)
 
 hRetryAfter :: HeaderName
 hRetryAfter = "Retry-After"
-import Ecluse.Core.Telemetry.Span (spanMirrorEnqueue, spanRuleEval)
-import Ecluse.Core.Version (Version)
 
 {- | Serve a @GET \/{pkg}\/-\/{file}.tgz@ artifact request end to end, over the
 request's 'RequestCtx'.

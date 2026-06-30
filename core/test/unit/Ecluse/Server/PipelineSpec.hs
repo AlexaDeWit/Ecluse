@@ -24,16 +24,6 @@ import Katip (Environment (Environment), Namespace (Namespace), initLogEnv)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types (HeaderName, hContentType, status200, status404, statusCode)
 
-import Network.HTTP.Types.Header (hHost)
-import Network.Wai (Application, Request (rawPathInfo, requestHeaders), Response, defaultRequest, responseHeaders, responseLBS, responseStatus)
-import Network.Wai.Handler.Warp (testWithApplication)
-import Network.Wai.Internal (ResponseReceived (ResponseReceived))
-import Test.Hspec
-
-hRetryAfter :: HeaderName
-hRetryAfter = "Retry-After"
-import UnliftIO.Exception (throwString)
-
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageName, mkPackageName)
 import Ecluse.Core.Package.Integrity (defaultMinIntegrity, defaultMinTrustedIntegrity)
@@ -64,6 +54,15 @@ import Ecluse.Core.Telemetry.Metrics (Decision (Admit, Unavailable))
 import Ecluse.Core.Telemetry.Record (MetricsPort)
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Port (passthroughTracingPort, recordingMetricsPort)
+import Network.HTTP.Types.Header (hHost)
+import Network.Wai (Application, Request (rawPathInfo, requestHeaders), Response, defaultRequest, responseHeaders, responseLBS, responseStatus)
+import Network.Wai.Handler.Warp (testWithApplication)
+import Network.Wai.Internal (ResponseReceived (ResponseReceived))
+import Test.Hspec
+import UnliftIO.Exception (throwString)
+
+hRetryAfter :: HeaderName
+hRetryAfter = "Retry-After"
 
 spec :: Spec
 spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)" $ do

@@ -21,10 +21,6 @@ module Ecluse.Core.Server.Pipeline.Shared (
     trustedIntegrityBelowFloor,
 ) where
 
-import Control.Monad (guard)
-import Data.ByteString.Lazy (LByteString)
-import Data.List (find)
-import Data.Text.Encoding (decodeUtf8)
 import Data.Text qualified as T
 import Network.HTTP.Types (HeaderName, ResponseHeaders, Status, hAuthorization, hContentType, status401, status501, status503)
 import Network.Wai (Request, Response, requestHeaders, responseHeaders, responseLBS, responseStatus)
