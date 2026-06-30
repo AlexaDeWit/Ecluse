@@ -22,13 +22,13 @@ unit-testable with no server.
 **Acceptance criteria.**
 - [ ] `Route = Packument PackageName | Tarball PackageName Text | Ping | Search | Unsupported`
   (and the liveness/readiness routes; see S12) and `classify :: [Text] -> Route`,
-  pure., _web-layer.md#raw-wai-not-a-web-framework_
+  pure.  _web-layer.md#raw-wai-not-a-web-framework_
 - [ ] Encoded-slash handling: a scoped name arriving as one already-decoded segment
   (`@scope/pkg`) **and** as two segments (`@scope`,`pkg`) both classify correctly
-  (WAI percent-decodes `pathInfo`)., _npm.md#2-transport--conventions_
+  (WAI percent-decodes `pathInfo`).  _npm.md#2-transport--conventions_
 - [ ] Reserved meta-routes (`/-/…`) matched **first** (a real package name can't
   begin with `-`); the tarball path `/{pkg}/-/{file}.tgz` distinguished from
-  packument; anything unrecognised → `Unsupported`., _web-layer.md#raw-wai-not-a-web-framework_
+  packument; anything unrecognised → `Unsupported`.  _web-layer.md#raw-wai-not-a-web-framework_
 
 **File scope.**
 - `src/Ecluse/Server/Route.hs`, `Route`, `classify`, name normalisation.

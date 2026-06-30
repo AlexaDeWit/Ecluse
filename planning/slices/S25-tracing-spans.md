@@ -56,15 +56,15 @@ domain spans carrying the decisions an operator cares about, with secrets scrubb
 **Acceptance criteria.**
 - [ ] WAI instrumentation slots into the middleware stack (S12) for one server span
   per request; http-client instrumentation adds child spans + context propagation on
-  the **data plane** (private/public fetches)., _observability.md#what-gets-traced_
+  the **data plane** (private/public fetches).  _observability.md#what-gets-traced_
 - [ ] Domain spans: **rule evaluation** (verdict; on denial the `RuleName` +
-  `RejectReason`), **mirror enqueue**, **mirror worker job**, **advisory sync**,  linked appropriately., _observability.md#what-gets-traced_
+  `RejectReason`), **mirror enqueue**, **mirror worker job**, **advisory sync**,  linked appropriately.  _observability.md#what-gets-traced_
 - [ ] Head-based sampling: always-on by default when telemetry is enabled (rare
-  denial/error traces never missed); `OTEL_TRACES_SAMPLER` ratio lever honoured.,  _observability.md#sampling_
+  denial/error traces never missed); `OTEL_TRACES_SAMPLER` ratio lever honoured.   _observability.md#sampling_
 - [ ] **Secret scrubbing**: the forwarded client token and any `Authorization` are
-  scrubbed from anything the WAI/http-client instrumentation might capture.,  _observability.md#cardinality-and-attributes_
+  scrubbed from anything the WAI/http-client instrumentation might capture.   _observability.md#cardinality-and-attributes_
 - [ ] Integration: drive a request through an in-process Écluse into a real Agent /
-  OTLP Collector container and assert spans were accepted., _observability.md#verifying-it--smoke-test-plan_
+  OTLP Collector container and assert spans were accepted.  _observability.md#verifying-it--smoke-test-plan_
 
 **File scope.**
 - `src/Ecluse/Telemetry/Tracing.hs`, domain-span helpers + attribute mapping.

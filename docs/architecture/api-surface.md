@@ -16,8 +16,8 @@ manifest is where it becomes legible, for operators, contributors, and future us
 Écluse documents **its coverage of** each protocol, not the protocol itself. The
 distinction maps onto how each route is handled:
 
-- **Owned / synthesized responses → fully modelled.** The error/denial envelope,
-  the health and meta routes, and, most importantly, the **synthesized
+- **Owned / synthesised responses → fully modelled.** The error/denial envelope,
+  the health and meta routes, and, most importantly, the **synthesised
   packument** (Écluse parses, merges across upstreams, filters, and re-serialises
   it; see [Registry Model → Packument merge](registry-model.md#packument-merge-across-upstreams))
   are documents Écluse *authors*, so their schemas are owned and described in full.
@@ -49,10 +49,10 @@ In the rendered docs, **tags = ecosystems**: Redoc / Swagger UI group operations
 by mount, so the document reads as "one server, these protocols," each ecosystem's
 supported and unsupported operations side by side.
 
-## The synthesized-packument schema = the trust boundary
+## The synthesised-packument schema = the trust boundary
 
 The served packument is not any single upstream's document; it is Écluse's
-**merged-and-filtered** view (private versions trusted, public versions gated,see [Registry Model → Packument merge](registry-model.md#packument-merge-across-upstreams)).
+**merged-and-filtered** view (private versions trusted, public versions gated, see [Registry Model → Packument merge](registry-model.md#packument-merge-across-upstreams)).
 Its schema is therefore **owned**, and modelled as a *partial* schema: the fields
 Écluse reads and transforms (`versions`, `dist-tags`, `time`, `dist`) are
 described, and everything else carries `additionalProperties: true` with a note
@@ -66,7 +66,7 @@ must not be mistaken for a proof that the filtered document is internally cohere
 
 ## How it's built and published
 
-- **Code-first owned schemas, no drift.** Owned types (error envelope, synthesized
+- **Code-first owned schemas, no drift.** Owned types (error envelope, synthesised
   packument, config) define their JSON via **`autodocodec`**, which derives the
   `aeson` instances *and* the OpenAPI / JSON-Schema from one codec, so the wire
   format and the documented schema cannot diverge. The document is assembled with
@@ -104,7 +104,7 @@ a pure function of those inputs, the manifest's **ordinary unit tests**
 (`ManifestSpec`) are the accepted guarantor that it stays well-formed and covers the
 surface.
 
-> **The synthesized packument is the schema exception.** It is an *open* schema
+> **The synthesised packument is the schema exception.** It is an *open* schema
 > (`additionalProperties: true`, "relay unlisted fields"), so "drift" there means "did
 > we drop a field we promised to relay", a question only the **lossless round-trip
 > property test** can answer (see
@@ -115,7 +115,7 @@ surface.
 guards, `validateToJSON` properties, a `Route`↔operation exhaustiveness test, an
 `hspec-wai` live-status contract, and a committed golden snapshot, was **dropped**.
 Those guards can flag *that* the documented surface changed, but the thing actually
-worth gating, **is a change breaking or safe-additive for an external consumer?**,they cannot classify; that needs a **semantic OpenAPI differ** (oasdiff-class).
+worth gating, **is a change breaking or safe-additive for an external consumer?**, they cannot classify; that needs a **semantic OpenAPI differ** (oasdiff-class).
 Écluse has **no external consumers reading this manifest** (registry clients hardcode
 the protocol and never read an API description; see the top of this page), so the
 differ is **deferred** until a consumer needs it, and `openapi.json` stays **derived

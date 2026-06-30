@@ -23,12 +23,12 @@ leaf. Everything but `mintToken` is unit-testable deterministically.
 - [ ] A generic wrapper takes `mintToken :: IO AuthToken` + an **injected clock** and
   returns a `CredentialProvider` whose `currentToken` serves a cached token,
   refreshing **proactively in the background** at ~80% of lifetime (configurable,
-  with jitter) plus a hard floor near expiry., _cloud-backends.md#credential-provider_
+  with jitter) plus a hard floor near expiry.  _cloud-backends.md#credential-provider_
 - [ ] **Single-flight** refresh (STM flag / `TMVar`): at most one mint in flight; a
-  cohort never stampedes., _cloud-backends.md#credential-provider_
+  cohort never stampedes.  _cloud-backends.md#credential-provider_
 - [ ] **Mint failure** keeps serving the still-valid token, retries with backoff
   behind a **circuit breaker**, and alarms; only an *expired* token + failing mint
-  surfaces as failure to the caller., _cloud-backends.md#credential-provider_
+  surfaces as failure to the caller.  _cloud-backends.md#credential-provider_
 - [ ] `static` leaf: a fixed token, no expiry, never refreshes.
 - [ ] Deterministic unit tests with the injected clock + a fake mint cover: refresh
   timing, single-flight, serve-stale-on-failure, breaker trip/half-open.

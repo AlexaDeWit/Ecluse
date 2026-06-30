@@ -24,14 +24,14 @@ layer runs in `App`.
 
 **Acceptance criteria.**
 - [ ] `App = ReaderT Env IO` defined; `unliftio` adopted so `bracket`/`async` lift
-  into the reader., _technology-stack.md#key-decisions, web-layer.md#middleware-and-helper-libraries_
+  into the reader.  _technology-stack.md#key-decisions, web-layer.md#middleware-and-helper-libraries_
 - [ ] `Env` record holds the three handles (from S02), a shared `http-client`
   `Manager` (placeholder until S08 needs it), a logger handle (filled by S04), and
-  slots for the caches (filled by S13). Documented as the single composition root.,  _technology-stack.md#key-decisions_
+  slots for the caches (filled by S13). Documented as the single composition root.   _technology-stack.md#key-decisions_
 - [ ] `runServer :: Env -> IO ()` and `runWorker :: Env -> IO ()` are declared as
   the split-ready entry functions; at this slice they are honest minimal stubs
   (server fleshed out in S12, worker in S19), **not** silent no-ops claimed as done,
-  but documented as "wired in S12/S19"., _cloud-backends.md#process-model_
+  but documented as "wired in S12/S19".  _cloud-backends.md#process-model_
 - [ ] `Ecluse.run` builds an `Env` (from injected handles/doubles) and is structured
   to run server + worker concurrently once they land. The placeholder `putTextLn`
   in `src/Ecluse.hs` is replaced by genuine composition-root wiring.

@@ -15,10 +15,10 @@ arch-refs:
 ## Goal
 
 Serve each tarball from the artifact's **authoritative upstream location**, the
-`Artifact.artUrl` the projection already preserves from the upstream `dist.tarball`,gated by the existing egress controls, instead of reconstructing
+`Artifact.artUrl` the projection already preserves from the upstream `dist.tarball`, gated by the existing egress controls, instead of reconstructing
 `{base}/{pkg}/-/{file}` by npm convention. This conforms the serve path to the
 documented model (registry-model.md upstream roles; configuration.md
-`ECLUSE_RESPECT_UPSTREAM_TARBALL_HOST`) and makes the S40 tarball-host policy,currently plumbed but never consulted, load-bearing.
+`ECLUSE_RESPECT_UPSTREAM_TARBALL_HOST`) and makes the S40 tarball-host policy, currently plumbed but never consulted, load-bearing.
 
 ## Background, what is already right, and the one gap
 

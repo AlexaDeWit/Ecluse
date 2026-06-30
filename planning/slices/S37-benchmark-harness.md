@@ -21,7 +21,7 @@ pr: 385
 **Goal.** Stand up the benchmarking harness and the **work-per-request** layer over the
 pure `ecluse-core` already on `main`, plus the informational CI plumbing the whole
 milestone hangs off. M9 is **one capability, two layers** (see
-[performance.md](../../docs/architecture/performance.md)): this slice is **Layer A,work per request**, the *deterministic, machine-independent* signal (allocations /
+[performance.md](../../docs/architecture/performance.md)): this slice is **Layer A, work per request**, the *deterministic, machine-independent* signal (allocations /
 instructions). [S38](S38-pipeline-benchmarks.md) adds **Layer B, throughput &
 latency under load**. Because every target here is already merged, S37 lands early and
 **de-risks the perf-CI pipeline** before Layer B builds on it.
@@ -38,7 +38,7 @@ change may knowingly trade performance for correctness and still merge.
   [`tasty-bench`](https://hackage.haskell.org/package/tasty-bench) (one module; only
   `tasty`), `-Werror`-clean, run via `make bench` from the Nix shell. `criterion` is
   rejected (50+ transitive deps) per the lean-dependency posture. The component is
-  kept **out of the library's dependency closure**., _technology-stack.md#key-decisions_
+  kept **out of the library's dependency closure**.  _technology-stack.md#key-decisions_
 - [x] **Micro-benches over the pure hot paths**, each on a realistic input from the
   corpus below: npm wire decode + projection (`Registry.Npm.Wire` / `.Project`);
   `Rules.evalRules` scaled across version counts; packument `Package.Merge`; the npm

@@ -35,13 +35,13 @@ queue product by which one a Haskell client can actually drive *and* test:
 **Acceptance criteria.**
 - [ ] A round-trip `enqueue → receive → ack` proven for **one** option: Option B
   against Azurite via `testcontainers`, **or** Option A against a real Service Bus
-  namespace (smoke-only), with evidence., _cloud-backends.md#azure-backends-designed-for-furthest-out_
+  namespace (smoke-only), with evidence.  _cloud-backends.md#azure-backends-designed-for-furthest-out_
 - [ ] A written **decision** recorded (in this slice file + the PR): Service Bus
   (REST, smoke-tested) vs Storage Queues (REST, Azurite-tested), with the
-  dead-letter and testability trade-offs that decided it., _cloud-backends.md#haskell-client-maturity, technology-stack.md_
+  dead-letter and testability trade-offs that decided it.  _cloud-backends.md#haskell-client-maturity, technology-stack.md_
 - [ ] Confirm the **credential** and **registry** arms are *not* part of this risk:
   the Entra token (S49) and Azure Artifacts publish (npm protocol, unchanged) are
-  plain HTTPS+JSON., _cloud-backends.md#azure-backends-designed-for-furthest-out_
+  plain HTTPS+JSON.  _cloud-backends.md#azure-backends-designed-for-furthest-out_
 
 **File scope.**
 - `test/integration/Ecluse/AzureQueueSpikeSpec.hs`, the spike (explicitly-marked exploratory suite).

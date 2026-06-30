@@ -20,7 +20,7 @@ pr: [427, 443]
 > any time after its dependencies. It does **not** gate M3/M4.
 
 **Goal.** Emit Écluse's **capability manifest**, an OpenAPI 3 document describing
-*which registry protocols this server speaks and exactly what is / isn't supported*,as a **statically generated build-time artifact**, render it to a browsable static
+*which registry protocols this server speaks and exactly what is / isn't supported*, as a **statically generated build-time artifact**, render it to a browsable static
 page, and **publish it to GitHub Pages alongside the Haddock** through the existing
 docs pipeline. See [api-surface.md](../../docs/architecture/api-surface.md) for the
 full rationale (a capability manifest, **not** a client-integration contract).
@@ -91,7 +91,7 @@ full rationale (a capability manifest, **not** a client-integration contract).
   `autodocodec` codec; the **synthesized packument** (the served merged-and-filtered
   view, S14, over the S06 wire type) is a **partial, hand-written** schema: modelled
   known/transformed fields + `additionalProperties: true` with the "relayed from
-  upstream, private wins" note.,  _api-surface.md#the-synthesized-packument-schema--the-trust-boundary_
+  upstream, private wins" note.   _api-surface.md#the-synthesized-packument-schema--the-trust-boundary_
   - **Config-as-JSON-Schema is cut (architect decision):** the OpenAPI manifest is
     **config-agnostic**, a config schema would be an orphan in `components.schemas`,
     documenting no operation. If an operator config schema is ever wanted it is a

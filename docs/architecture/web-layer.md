@@ -70,7 +70,7 @@ not served; there is no `GET /openapi.json` route or any WAI wiring**. Generatin
 from the same `Route` enumeration the server routes on means it cannot drift from
 what the server actually routes (`Search` shows as `501`, tarballs as opaque
 streamed media), and the rendered docs group operations by ecosystem. The
-synthesized (merged + filtered) packument is an **owned** schema. The full
+synthesised (merged + filtered) packument is an **owned** schema. The full
 rationale, the schema strategy (`autodocodec` + `openapi3`), and the build-time
 generation + CI publish (static Redoc on GitHub Pages, node-free) are in
 [API Surface & Capability Manifest](api-surface.md).
@@ -100,7 +100,7 @@ On the data plane, credential handling follows the mount's
 [credential strategy](access-model.md): under the default `passthrough` the client's
 `Authorization` is **forwarded to the private upstream**; under `service` the private fetch uses Écluse's own
 [`CredentialProvider`](cloud-backends.md#credential-provider) token instead. The
-client's `Authorization` is **always stripped before any public-upstream fetch**,an internal token must never leave for the public registry, regardless of strategy.
+client's `Authorization` is **always stripped before any public-upstream fetch**, an internal token must never leave for the public registry, regardless of strategy.
 
 ## Streaming and resource lifetime
 
@@ -205,10 +205,10 @@ appear instantly. This is **in-memory metadata only**; on-disk artifact caching
 stays out of scope, and the mirror remains the durable store.
 
 The cache holds the **anonymous public (gated) origin only**, under **every** strategy:
-the **private origin is never cached**. The private upstream is the per-client authority
-(`passthrough` re-authorises each request with the client's own forwarded credential;
-`service` reads with Écluse's own identity behind the edge), and a cache key carries no
-credential dimension, so a shared private entry would let one client's document be
+the **private origin is never cached**. The private upstream is the per-client authority.
+Under `passthrough`, each request is re-authorised with the client's own forwarded credential.
+Under `service`, reads use Écluse's own identity behind the edge.
+Because a cache key carries no credential dimension, a shared private entry would allow one client's document to be
 served to another within the TTL, bypassing per-client authorisation. Écluse therefore
 [forbids a shared private cache](access-model.md#why-écluse-never-caches-the-private-origin)
 outright and reads the private origin **per request** (see
@@ -261,9 +261,8 @@ decide cannot help, so we do not invite it.
 
 For a **packument** request there is no single status, the document is
 [merged across upstreams](registry-model.md#packument-merge-across-upstreams) and
-each `Reject` (gated, public-provenance) version is filtered out (see
-[Rules Engine → Applying verdicts](rules-engine.md#applying-verdicts-to-a-packument)),
-while trusted private versions are admitted unfiltered. A status is chosen only
+filtered based on provenance (see
+[Rules Engine → Applying verdicts](rules-engine.md#applying-verdicts-to-a-packument)). A status is chosen only
 when *nothing* survives the merge, following the most recoverable cause: `503` if
 any rejection was `WillResolve` **or a needed upstream was unavailable** (a retry
 may yield survivors); else `502` if a responding upstream returned an **invalid
@@ -323,7 +322,7 @@ wire contract.**
   dormant and segment-based, so they fight the encoded-slash handling that a
   small pure `classify` gets right.
 - **Defer**, `http-reverse-proxy` (revisit only if the hand-rolled core starts
-  reinventing it; our need to intercept and *synthesize* denial responses argues
+  reinventing it; our need to intercept and *synthesise* denial responses argues
   against a transparent proxy), the tracing/metrics middleware (now specified in
   [Observability](observability.md), OpenTelemetry WAI instrumentation,  deferred until it lands), and `warp-tls` (only if TLS is not terminated
   upstream).

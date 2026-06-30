@@ -35,28 +35,28 @@ breaks demand-driven mirroring of partially-mirrored packages).
   with `Provenance = TrustedSource | GatedSource` (suffixed `*Source` to avoid
   colliding with `Ecluse.Package`'s `Trusted`). An empty input list is `Nothing`; the
   single-input case is the degenerate identity, so 0/1-upstream deployments fall out
-  for free., _registry-model.md#packument-merge-across-upstreams_
+  for free.  _registry-model.md#packument-merge-across-upstreams_
 - [x] **Trust split is the caller's, applied before merge.** `Trusted`
   (private-provenance) versions enter the union **as-is**; `Gated`
   (public-provenance) versions are the already-rule-filtered set (S09). Merge does
-  not itself run rules, it unions what it is handed., _rules-engine.md#applying-verdicts-to-a-packument_
+  not itself run rules, it unions what it is handed.  _rules-engine.md#applying-verdicts-to-a-packument_
 - [x] **Collision → private (higher-precedence) wins**, and a **divergence**
   (same version key, differing artifact integrity) is **detected and reported** in
   the `MergePlan` (a supply-chain signal, log/metric in S14/S26), never silently
   dropped. Divergence detection is order-independent (an `IntegrityFingerprint` over
-  the sorted `(alg, digest)` multiset)., _registry-model.md#packument-merge-across-upstreams_
+  the sorted `(alg, digest)` multiset).  _registry-model.md#packument-merge-across-upstreams_
 - [x] **Reconcile dist-tags / time / latest over the union.** `dist-tags.latest`
   resolved by `Ecluse.Version.selectLatest` (keep-unless-denied, stable-preferring,
   unparseable-safe) over the union; per-source tags pointing at an absent version are
   dropped; `time` is the union restricted to surviving versions. Same-key collisions
   on tags and times resolve **by provenance** (trusted wins), so the plan is
-  independent of caller input order., _rules-engine.md#applying-verdicts-to-a-packument_
+  independent of caller input order.  _rules-engine.md#applying-verdicts-to-a-packument_
 - [x] **Provenance is a merge-time parameter**, not a persisted `PackageDetails`
   field, and is kept out of equality/identity. *As built:* each survivor records the
   `SourceId` (the 0-based input index) of the source that won it, so the serve layer
   takes that version's object from the right raw `Value`. `SourceId = Int` is used
   rather than keying on `Provenance`, which is ambiguous once several inputs share a
-  provenance (the multi-source case)., _domain-model.md_
+  provenance (the multi-source case).  _domain-model.md_
 
 **File scope.**
 - `src/Ecluse/Package/Merge.hs`, `Provenance`, `SourceId`, `MergePlan` (the

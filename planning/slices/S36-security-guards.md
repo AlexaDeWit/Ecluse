@@ -28,27 +28,27 @@ pipeline advances ([issue #11](https://github.com/AlexaDeWit/Ecluse/issues/11)).
 **Acceptance criteria.**
 - [ ] **Outbound host allowlist.** A pure `isAllowedUpstreamHost`; the data plane
   (S08) fetches only from the configured upstream hosts. Artifact bytes are fetched
-  only from the **upstream-declared `dist.tarball`** (after the allowlist check),  never a client-supplied URL., _registry-model.md, issue #11_
+  only from the **upstream-declared `dist.tarball`** (after the allowlist check),  never a client-supplied URL.  _registry-model.md, issue #11_
 - [ ] **Internal-range block.** A pure `isBlockedTarget` rejecting link-local
   (`169.254.0.0/16`, incl. the `169.254.169.254` cloud-metadata endpoint),
   loopback, and RFC1918, unless the configured upstream is deliberately internal
-  (explicit per-host config opt-in). Applied to the resolved fetch target., _issue #11_
+  (explicit per-host config opt-in). Applied to the resolved fetch target.  _issue #11_
 - [ ] **Bounded responses, fail-closed.** Config-driven limits on every upstream
   read/parse: **max body size** (a bounded reader that aborts past N bytes), **max
   version count**, and **max JSON nesting depth**; exceeding any bound fails closed.
-  Sane defaults, overridable (S03)., _issue #11 (algorithmic-complexity DoS)_
+  Sane defaults, overridable (S03).  _issue #11 (algorithmic-complexity DoS)_
 - [ ] **Identifier safety at the boundary.** Identifiers are parsed-and-canonicalised
   before any URL is built; upstream URLs are constructed from the **canonical
   identifier + upstream-declared location**, never raw client path segments. The
   router's `isSafeComponent` (S10, merged) already rejects traversal / encoded-slash
   / control-char path components, this slice restates that as a stated *security*
-  requirement and owns the URL-construction side., _web-layer.md, hosting.md, issue #11_
+  requirement and owns the URL-construction side.  _web-layer.md, hosting.md, issue #11_
 - [ ] **Hostile-fixture corpus.** A reusable suite of hostile inputs, `../`
   traversal, `%2f` / `@scope%2f..%2f`, absolute / alternate-host URLs, CRLF,
   `169.254.169.254`, RFC1918 hosts, and oversized / deeply-nested / million-version
   payloads, asserting each guard rejects them (plus positive cases that pass).
   Unit now; **exercised through the real request path** once S08/S14/S15 wire the
-  guards (integration)., _issue #11_
+  guards (integration).  _issue #11_
 
 **File scope.**
 - `src/Ecluse/Security.hs`, the pure guards (`isAllowedUpstreamHost`,

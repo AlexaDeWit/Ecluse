@@ -23,15 +23,15 @@ ID (Azure AD) bearer token over plain HTTPS+JSON, no SDK, ~the size of the ADC l
 **Acceptance criteria.**
 - [ ] `mintToken` acquires an Entra access token via **Managed Identity (IMDS)**,  `GET http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource={res}`
   with header `Metadata: true`, parsing `access_token` + `expires_on` into
-  `AuthToken`., _cloud-backends.md#credential-provider_
+  `AuthToken`.  _cloud-backends.md#credential-provider_
 - [ ] Alternative acquisition via **Workload Identity Federation** (AKS): read the
   projected SA token (audience `api://AzureADTokenExchange`), exchange it at the Entra
-  token endpoint., _cloud-backends.md#azure-backends-designed-for-furthest-out_
+  token endpoint.  _cloud-backends.md#azure-backends-designed-for-furthest-out_
 - [ ] `resource` for an Azure Artifacts mirror target is the Azure DevOps app ID
   `499b84ac-1321-427f-aa17-267ca6975798`; TTL (~1h) flows through the existing
-  refresh-off-`expiresAt` wrapper (no new refresh policy)., _cloud-backends.md#credential-provider_
+  refresh-off-`expiresAt` wrapper (no new refresh policy).  _cloud-backends.md#credential-provider_
 - [ ] The leaf is the only un-unit-testable surface; the wrapper around it stays
-  deterministic (injected clock + fake mint), per the existing pattern., _cloud-backends.md#testing_
+  deterministic (injected clock + fake mint), per the existing pattern.  _cloud-backends.md#testing_
 
 **File scope.**
 - `src/Ecluse/Credential/Entra.hs`, the `mintToken` leaf (IMDS + federation paths).

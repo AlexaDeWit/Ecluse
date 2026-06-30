@@ -22,10 +22,10 @@ attaches context to; trace-ID/`dd`-object correlation is added in M6 (S26).
 
 **Acceptance criteria.**
 - [ ] A `katip` `LogEnv`/namespace is created and stored in `Env` (filling the S01
-  logger slot)., _technology-stack.md_
+  logger slot).  _technology-stack.md_
 - [ ] `ECLUSE_LOG_FORMAT=json` produces **exactly one** compact JSON object per line
   to stdout (no pretty-print, embedded newlines escaped as `\n`, no prefix outside
-  the object); `console` produces the human-readable dev format., _observability.md#logs_
+  the object); `console` produces the human-readable dev format.  _observability.md#logs_
 - [ ] A small structured-context helper so denials/audit events can attach
   `package`/`version`/`rule` fields (the audit-trail use the rules engine feeds).
 - [ ] The JSONL scribe is unit-tested table-driven: a record serialises to one line

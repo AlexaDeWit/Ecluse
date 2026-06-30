@@ -47,20 +47,20 @@ server without a test failing, across **both** drift axes (schema; path/operatio
 - [ ] **Schema backstop**: a `hedgehog` property per owned type runs
   `validateToJSON` (`Data.OpenApi.Schema.Validation`), generate → encode →
   validate against that type's schema. Explicitly covers the **hand-written
-  synthesized-packument** partial schema as well as the autodocodec-derived ones.,  _api-surface.md#contract-drift-controls_
+  synthesized-packument** partial schema as well as the autodocodec-derived ones.   _api-surface.md#contract-drift-controls_
 - [ ] **Route ↔ operation exhaustiveness**: a test that pattern-matches **every**
   `Route` constructor and asserts a corresponding manifest operation (and the
   reverse, 1:1), so adding a `Route` without documenting it fails to compile or
-  fails the test., _api-surface.md#source-of-truth-the-route-enumeration--mounts_
+  fails the test.  _api-surface.md#source-of-truth-the-route-enumeration--mounts_
 - [ ] **Live status contract**: `hspec-wai` drives the real `Application` and asserts
   each documented operation's status, boundaries included (`Search` → `501`, unknown →
   `404`, a denial → `403`). This ties the **statically generated** spec to the
   server's live behaviour; the manifest is not served, but the statuses it documents
-  must match what the routes actually return., _api-surface.md#contract-drift-controls_
+  must match what the routes actually return.  _api-surface.md#contract-drift-controls_
 - [ ] **Golden snapshot**: the spec emitted by **S34's build-time generator** from a
   **fixed canonical config** is committed and compared in CI; a mismatch fails until
   regenerated, so every contract change is a reviewed diff. This is the **same file
-  S34 publishes**, the published spec doubles as the golden.,  _api-surface.md#contract-drift-controls_
+  S34 publishes**, the published spec doubles as the golden.   _api-surface.md#contract-drift-controls_
 - [ ] _(Optional)_ an `openapi-diff` CI step classifying breaking vs additive
   changes against the committed golden; note explicitly if deferred.
 

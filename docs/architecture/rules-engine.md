@@ -75,7 +75,7 @@ only by whether it "feels" like IO.** Many inputs are already present in the
 metadata an adapter fetches for resolution, publish age, declared scope, npm's
 `hasInstallScript`, a PyPI file's `packagetype == sdist`, and support **pure**
 rules. Others are *not* exposed in any metadata response and must be fetched and
-parsed per version. RubyGems is the motivating case: a gem's native `extensions`,its install-time code-execution signal, the analogue of npm's install scripts,appears only in the gemspec inside the `.gem` (or the legacy `quick` Marshal spec),
+parsed per version. RubyGems is the motivating case: a gem's native `extensions`, its install-time code-execution signal, the analogue of npm's install scripts, appears only in the gemspec inside the `.gem` (or the legacy `quick` Marshal spec),
 never in the Compact Index or the JSON API (see
 [`research/reverse-engineering/rubygems.md`](../research/reverse-engineering/rubygems.md)).
 A rule over such a signal is necessarily **effectful**, even though it is
@@ -174,18 +174,8 @@ fail-open where availability must beat safety.
 ### Applying verdicts to a packument
 
 `evalRules` decides a single version, but a metadata request returns a whole
-**packument** with many versions, so verdicts are applied across it. A packument is
-**merged across upstreams** (see
-[Registry Model → Packument merge](registry-model.md#packument-merge-across-upstreams)),
-and verdicts apply **by provenance**: **gated (public-upstream)** versions are
-filtered here, while **trusted (private-upstream)** versions are admitted
-unfiltered, as already vetted. Filtering thus runs on the public set *before* the
-merge unions it with the trusted set:
+**packument** with many versions, so verdicts are applied across it. For details on how packuments are merged across upstreams and how trusted (private) versus gated (public) provenances are handled, see [Registry Model → Packument merge](registry-model.md#packument-merge-across-upstreams).
 
-- **Filter the gated `versions`.** Every public-provenance version is evaluated;
-  versions that are denied **or [undecidable](#effectful-rule-failure)** are removed
-  from `versions` and from the `time` map, so a client's resolver only ever sees
-  admitted versions. Trusted private versions skip this step.
 - **Resolve `dist-tags.latest`, keep unless denied, prefer stable.** `latest` is
   **kept as the precedence-winning source published it** as long as that version
   survives, so `npm install <pkg>` resolves to the maintainer's chosen release,

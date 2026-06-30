@@ -24,12 +24,12 @@ contract, the Datadog Operator recipe (optional), and the `release` environment 
 **Acceptance criteria.**
 - [ ] A deployment guide: full env-var reference + a worked mount-config JSON
   example; the three client-auth modes; the credential-flow authority model
-  summarised., _configuration.md_
+  summarised.  _configuration.md_
 - [ ] Health/readiness/liveness probe documentation (incl. CVE first-sync gating). 
 - [ ] The optional Datadog Operator deployment recipe (OTLP receiver + node-local
-  Agent endpoint + JSONL logs), clearly marked optional., _observability.md#datadog-deployment-operator_
+  Agent endpoint + JSONL logs), clearly marked optional.  _observability.md#datadog-deployment-operator_
 - [ ] The `release` GitHub Environment + `DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN`
-  machine-account setup documented so the publish workflow can succeed.,  _docs/architecture/release-supply-chain.md#releases--container-image_
+  machine-account setup documented so the publish workflow can succeed.   _docs/architecture/release-supply-chain.md#releases--container-image_
 - [ ] `README.md` updated to reflect launch status.
 
 **File scope.**

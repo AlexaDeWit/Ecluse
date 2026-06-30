@@ -31,18 +31,18 @@ one identity.
 **Acceptance criteria.**
 - [ ] When a mount's strategy is `service`, the private-upstream fetch uses a
   configured **read** `CredentialProvider` (reusing the S16 wrapper + an S17/S29 leaf
-  or `static`), never the caller's forwarded token., _access-model.md#credential-supply-the-credentialprovider-generalised_
+  or `static`), never the caller's forwarded token.  _access-model.md#credential-supply-the-credentialprovider-generalised_
 - [ ] The private leg is **not** cached under `service` (as under `passthrough`): the
   shared cache holds only the anonymous public origin, and the `service` private read is
-  per-request with Écluse's identity. There is no private-cache admission path to build.,  _access-model.md#caching, web-layer.md#metadata-cache_
+  per-request with Écluse's identity. There is no private-cache admission path to build.   _access-model.md#caching, web-layer.md#metadata-cache_
 - [ ] `passthrough` behaviour is unchanged (no read credential; private leg not
   cached). The only difference `service` introduces is **whose credential** fetches the
   private leg, the caller's forwarded token (`passthrough`) versus Écluse's own
-  identity (`service`), never whether it is cached (it is not, either way).,  _access-model.md#caching_
+  identity (`service`), never whether it is cached (it is not, either way).   _access-model.md#caching_
 - [ ] A read-credential refresh failure degrades **reads** (surfaced per the
   [serve error model](../../docs/architecture/web-layer.md#error-model)); document that, unlike the
   mirror-write-only past, a read credential now sits on the serve path under
-  `service`., _access-model.md#credential-supply-the-credentialprovider-generalised_
+  `service`.  _access-model.md#credential-supply-the-credentialprovider-generalised_
 - [ ] Tests: unit over the strategy branch (service vs passthrough fetch identity +
   cache admission) with a fake provider and an in-process upstream stub; integration
   exercising a `service`-mount read through the composition root.

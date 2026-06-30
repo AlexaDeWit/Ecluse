@@ -66,12 +66,11 @@ here.
    `Ecluse.Core.Security.Egress`) that rejects any non-https scheme, so a plain-HTTP
    registry target cannot be represented in a running system. A non-https configured
    endpoint, public **or** private, **fails closed at boot** with an actionable error
-   naming the offending URL. The data-plane manager is the standard validating TLS
-   manager, so the certificate presented by the dialled host is checked against the system
-   trust store for the requested name: an attacker who can steer a name to an internal or
-   rebound address cannot make that address present a CA-trusted certificate for the host,
-   so the credential-exfiltration and resolve-to-internal SSRF class is closed **by
-   certificate validation**, not by a resolved-IP recheck. (An operator whose private
+   naming the offending URL. 
+   
+   The data-plane manager uses a standard validating TLS manager. This ensures the certificate presented by the dialled host is checked against the system trust store for the requested name. An attacker who steers a name to an internal or rebound address cannot make that address present a CA-trusted certificate for the host. Therefore, the credential-exfiltration and resolve-to-internal SSRF class is closed **by certificate validation**, rather than relying on a resolved-IP recheck. 
+   
+   (An operator whose private
    registry uses an internal CA extends the container image with their own cert chain; the
    proxy does not pre-bake custom CA trust.) An upstream-declared `dist.tarball` is
    normalised before it is dialled: an https target is kept, a same-host legacy `http`
@@ -146,17 +145,7 @@ here.
    the public floor.
 
    **The shared-weak-digest divergence cross-check is a consequence of loosening the
-   trusted floor, not a default posture.** A
-   [cross-upstream divergence](registry-model.md#packument-merge-across-upstreams) is
-   detected when two copies of a version **contradict on a shared algorithm**. By default
-   (uniform SHA-256) every admitted version anchors that comparison on a **strong**
-   (≥ SHA-256) digest, so a weak shared digest never carries it. Only when an operator
-   **explicitly loosens the trusted floor below SHA-256** can a private version be admitted
-   on, say, a lone `sha1`; a private `{sha1}` vs public `{sha1, sha256}` pair then
-   cross-checks on the shared `sha1` (the public copy still independently meets its own
-   hard SHA-256 floor on its `sha256`). That weak cross-check is therefore the
-   **opted-into** behaviour of a loosened trusted floor, never something the default model
-   relies on.
+   trusted floor, not a default posture.** For details on packument merging, trust splits, and cross-upstream divergence, see [Registry Model → Packument merge](registry-model.md#packument-merge-across-upstreams).
 
    Algorithm strength and the floor predicate live in `Ecluse.Core.Package.Integrity`
    (`integrityStrength`, `meetsFloor`); the digest computation the worker verifies with sits
@@ -171,7 +160,7 @@ here.
 ## Posture
 
 Every guard is **deny-by-default** and **fail-closed**, consistent with the rules
-engine. The invariants are verified by a **hostile-input corpus**,traversal, encoded slashes, alternate-host and absolute URLs, CRLF, metadata and
+engine. The invariants are verified by a **hostile-input corpus**, traversal, encoded slashes, alternate-host and absolute URLs, CRLF, metadata and
 RFC1918 targets, oversized and deeply-nested payloads, asserted against the pure
 guards and exercised **through the real request path**: an oversized body, a version
 flood, and a deeply-nested document
@@ -298,7 +287,7 @@ allowlist and same-host tarball policy are **satisfied by construction**, still 
 simply trivially met. It is treated as part of the trusted private origin, not as an
 untrusted download.
 
-**Écluse never follows an upstream redirect.** Every outbound npm data-plane request,the **anonymous** public reads *and* every credential-bearing request (the private-upstream
+**Écluse never follows an upstream redirect.** Every outbound npm data-plane request, the **anonymous** public reads *and* every credential-bearing request (the private-upstream
 read under `passthrough`, the credential-bearing artifact reads, the first-party publish
 relay, and the mirror-target publish), is built with redirect-following **disabled**
 (`redirectCount = 0`) at the single request-finalization point

@@ -26,13 +26,13 @@ rules and serving need.
 **Acceptance criteria.**
 - [ ] `aeson` decoders for `Packument` (full), `AbbreviatedPackument`,
   `VersionManifest`, `Dist`, and the shared scalars (`Person`, `Repository`, `Bugs`,
-  `License`) per the type model., _npm.md#11-type-model_
+  `License`) per the type model.  _npm.md#11-type-model_
 - [ ] **Lenient input**: unknown keys ignored; `license`/`bugs`/`repository`/person
   accept both string and object forms; `ErrorResponse` tolerates `{error|message}`
-  **or** a bare JSON string (the per-version 404)., _npm.md#errors, npm.md#11-type-model_
+  **or** a bare JSON string (the per-version 404).  _npm.md#errors, npm.md#11-type-model_
 - [ ] Captures the rule-decisive fields: abbreviated `hasInstallScript`,
-  `deprecated`, `dist.{tarball,shasum,integrity}`, and the `time` map (full only) for
-  publish age., _npm.md#5-abbreviated-packument, npm.md#8-version--availability-resolution_
+  `deprecated`, `dist.{tarball, shasum, integrity}`, and the `time` map (full only) for
+  publish age.  _npm.md#5-abbreviated-packument, npm.md#8-version--availability-resolution_
 - [ ] Round-trips representative real bodies (fixtures captured from the npm.md
   probes: `is-odd`, `core-js`, a scoped `@babel/...`, `request` (deprecated)).
 

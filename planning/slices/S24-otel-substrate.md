@@ -23,11 +23,11 @@ and nothing is emitted when unset.
 **Acceptance criteria.**
 - [ ] `hs-opentelemetry-sdk` tracer+meter provider built in the composition root,
   exported via `hs-opentelemetry-exporter-otlp` (HTTP/protobuf default; no gRPC/
-  grapesy)., _observability.md#opentelemetry-as-the-substrate_
+  grapesy).  _observability.md#opentelemetry-as-the-substrate_
 - [ ] `ECLUSE_TELEMETRY` master switch (default `off`); with it unset **nothing is
   wired and no telemetry is emitted**. Standard `OTEL_*` vars
   (`OTEL_SERVICE_NAME`/`…_RESOURCE_ATTRIBUTES`/`…_EXPORTER_OTLP_ENDPOINT`/`…_PROTOCOL`/
-  sampler) read by the SDK., _observability.md#configuration_
+  sampler) read by the SDK.  _observability.md#configuration_
 - [ ] Telemetry config parsing unit-tested (present/absent/malformed); the provider
   lifecycle is bracketed in `Env`.
 
@@ -49,7 +49,7 @@ posture: the maintainer's Datadog choice must not become every consumer's obliga
 
 - **OTel 1.0 sourcing proved on both paths.** Hackage (index-state
   `2026-06-23T19:20:36Z`) carries the whole 1.0 stack; `cabal.project` pins it
-  (`hs-opentelemetry-{api,api-types,sdk,exporter-otlp} ==1.0.*`) and
+  (`hs-opentelemetry-{api, api-types, sdk, exporter-otlp} ==1.0.*`) and
   `cabal.project.freeze` was regenerated via `make freeze` (sdk/api/api-types/
   exporter-otlp/otlp `1.0.0.0`, semantic-conventions `1.40.0.0`; the
   exporter resolves with its `grpc` flag **off**, HTTP/protobuf only, no

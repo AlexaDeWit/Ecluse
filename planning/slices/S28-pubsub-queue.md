@@ -22,11 +22,11 @@ against the Pub/Sub emulator.
 **Acceptance criteria.**
 - [ ] `newPubSubQueue :: PubSubConfig -> IO MirrorQueue` implements the handle
   (`enqueue`/`receive`/`ack`/`extendVisibility`), `ReceiptHandle` carrying the
-  Pub/Sub `ackId` (opaque)., _cloud-backends.md#queue-abstraction_
+  Pub/Sub `ackId` (opaque).  _cloud-backends.md#queue-abstraction_
 - [ ] Provider differences (ack deadline vs visibility timeout, batch limits,
-  dead-letter wiring) stay behind the handle; the worker (S19) is unchanged.,  _cloud-backends.md#queue-abstraction, #service-mapping_
+  dead-letter wiring) stay behind the handle; the worker (S19) is unchanged.   _cloud-backends.md#queue-abstraction, #service-mapping_
 - [ ] Integration test against the Pub/Sub emulator: enqueue→receive→ack;
-  no-ack→redeliver., _cloud-backends.md#testing_
+  no-ack→redeliver.  _cloud-backends.md#testing_
 
 **File scope.**
 - `src/Ecluse/Queue/PubSub.hs`, `newPubSubQueue` (client per S27 decision).

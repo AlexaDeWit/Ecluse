@@ -22,11 +22,11 @@ can `publish → pull → ack` against it. This experiment resolves both client-
 
 **Acceptance criteria.**
 - [ ] Pub/Sub emulator container started via `testcontainers`; the client points at
-  it via `PUBSUB_EMULATOR_HOST` (auth ignored)., _cloud-backends.md#haskell-client-maturity_
+  it via `PUBSUB_EMULATOR_HOST` (auth ignored).  _cloud-backends.md#haskell-client-maturity_
 - [ ] One client path demonstrably does `publish → pull → ack` end to end.
 - [ ] A written **decision** recorded (in this slice file + the PR): `gogol` or a
   thin hand-rolled REST client over `http-client`+`aeson`, with the evidence
-  (coverage, emulator compatibility)., _cloud-backends.md#haskell-client-maturity, technology-stack.md_
+  (coverage, emulator compatibility).  _cloud-backends.md#haskell-client-maturity, technology-stack.md_
 
 **File scope.**
 - `test/integration/Ecluse/PubSubSpikeSpec.hs`, the spike (may live as an explicitly-marked exploratory suite).

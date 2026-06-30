@@ -25,14 +25,14 @@ view above `PackageDetails`). Nothing above the adapter sees npm wire data.
 - [ ] `PackageInfo` domain type introduced (name, dist-tags, the per-version
   `PackageDetails` map, the `time`/publish-age data, surviving package-level
   metadata), placed to avoid an import cycle with `PackageDetails` (in
-  `Ecluse.Package` or a sibling; no `.hs-boot`)., _registry-model.md, domain-model.md_
+  `Ecluse.Package` or a sibling; no `.hs-boot`).  _registry-model.md, domain-model.md_
 - [ ] `parsePackageInfo :: RegistryResponse -> Either ParseError PackageInfo`,
   `parseVersionDetails :: RegistryResponse -> Version -> Either ParseError PackageDetails`,
-  `parseVersionList :: RegistryResponse -> Either ParseError [Version]`, all pure.,  _registry-model.md#registry-abstraction_
+  `parseVersionList :: RegistryResponse -> Either ParseError [Version]`, all pure.   _registry-model.md#registry-abstraction_
 - [ ] Signal mapping: npm `hasInstallScript` (or derived from `scripts`) →
   `CodeExecSignal`; `deprecated` → `Availability`; `dist` → `NonEmpty Artifact`
   with algorithm-tagged `Hash`es (SRI + SHA-1); `_npmUser` → `pkgPublisher`;
-  `time[version]` → `pkgPublishedAt`; names parsed into `Ecosystem`/`Scope`/canonical.,  _domain-model.md, npm.md#12-what-écluse-must-replicate_
+  `time[version]` → `pkgPublishedAt`; names parsed into `Ecosystem`/`Scope`/canonical.   _domain-model.md, npm.md#12-what-écluse-must-replicate_
 - [ ] Unknown/unfetched signals map to the explicit-unknown cases
   (`CodeExecUnknown`/`TrustUnknown`/`Nothing`) rather than fabricated values.
 
