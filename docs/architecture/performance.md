@@ -382,7 +382,11 @@ total, at **p50** (primary) and **p99** (the tail, GC included).
 time a request spends waiting in line, neither upstream nor per-request overhead, but a
 backlog signal. Reported alongside the achieved throughput (the plateau) and the
 **deadline-abort count** (requests the generator abandoned at the window's close, a backlog
-never drained), and **flagged loudly** when the queuing delay exceeds half the loaded p50,a pointer at connection-pool and admission-bound work, never at a per-request cost. Like the
+never drained), and **flagged loudly** when the queuing delay exceeds half the loaded p50,
+a capacity signal rather than a per-request cost. The production serve path sheds
+requests beyond its configured admission cap instead of growing an application queue,
+and its public/private per-host pools are explicit; this view verifies that those
+controls remain calibrated as the corpus and deployment shape evolve. Like the
 rest of Layer B it is **inform-only**: a flag is read by a human, never a gate.
 
 The attribution and saturation maths are a pure module (`Ecluse.BenchLoad.Normalise`,
@@ -420,6 +424,9 @@ runner-sane defaults:
 | worker artifact size (bytes) | `BENCH_LOAD_PAYLOAD_BYTES` | 262144 |
 | cache-eviction bound (entries) | `BENCH_LOAD_CACHE_MAX_ENTRIES` | 3 |
 | cache-eviction working set | `BENCH_LOAD_WORKING_SET` | 64 (capped to the corpus) |
+| metadata admission capacity | `BENCH_LOAD_SERVE_MAX_IN_FLIGHT` | 16 |
+| public connections per host | `BENCH_LOAD_PUBLIC_CONNECTIONS_PER_HOST` | 10 |
+| private connections per host | `BENCH_LOAD_PRIVATE_CONNECTIONS_PER_HOST` | 16 |
 
 `BENCH_LOAD_UPSTREAM_LATENCY_MS` is the **fallback** upstream latency: when the live RTT
 probe runs (the default) the measured mean round trip overrides it for both passes; it is

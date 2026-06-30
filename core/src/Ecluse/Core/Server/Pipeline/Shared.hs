@@ -10,6 +10,7 @@ module Ecluse.Core.Server.Pipeline.Shared (
     edgeAuthorised,
     edgeTokenAuthorised,
     edgeUnauthorised,
+    serveOverloaded,
     forwardedToken,
     jsonResponse,
     renderedResponse,
@@ -21,7 +22,7 @@ module Ecluse.Core.Server.Pipeline.Shared (
 ) where
 
 import Data.Text qualified as T
-import Network.HTTP.Types (ResponseHeaders, Status, hAuthorization, hContentType, status401, status501)
+import Network.HTTP.Types (ResponseHeaders, Status, hAuthorization, hContentType, hRetryAfter, status401, status501, status503)
 import Network.Wai (Request, Response, requestHeaders, responseHeaders, responseLBS, responseStatus)
 
 import Ecluse.Core.Credential (Secret, mkSecret)
@@ -63,6 +64,14 @@ edgeTokenAuthorised expected request = case expected of
 edgeUnauthorised :: MountRenderer -> Response
 edgeUnauthorised renderer =
     renderedResponse status401 [] (renderError renderer Nothing "authentication required")
+
+{- | A non-queuing admission refusal. The body follows the matched mount's error
+surface and the retry hint is deliberately short: capacity, unlike a policy
+denial, can clear as soon as one in-flight metadata operation completes.
+-}
+serveOverloaded :: MountRenderer -> Response
+serveOverloaded renderer =
+    renderedResponse status503 [(hRetryAfter, "1")] (renderError renderer Nothing "server is busy; retry later")
 
 {- The client's forwarded bearer credential, recovered from the request's
 @Authorization: Bearer …@ header. 'Nothing' when no bearer credential is present;

@@ -120,6 +120,12 @@ data LoadKnobs = LoadKnobs
     the head of the corpus, heaviest first). The default exceeds the corpus, so the whole
     corpus is the working set unless narrowed.
     -}
+    , lkServeMaxInFlight :: Int
+    -- ^ Process-wide metadata admission capacity exercised by the proxy fixture.
+    , lkPublicConnectionsPerHost :: Int
+    -- ^ Public-upstream per-host connection-pool capacity.
+    , lkPrivateConnectionsPerHost :: Int
+    -- ^ Private-upstream per-host connection-pool capacity.
     }
     deriving stock (Eq, Show)
 
@@ -140,13 +146,18 @@ defaultLoadKnobs =
         , lkPayloadBytes = 256 * 1024
         , lkCacheMaxEntries = 3
         , lkWorkingSet = 64
+        , lkServeMaxInFlight = 16
+        , lkPublicConnectionsPerHost = 10
+        , lkPrivateConnectionsPerHost = 16
         }
 
 {- | Read the load knobs from the environment, each falling back to its
 'defaultLoadKnobs' value: @BENCH_LOAD_CONCURRENCY@, @BENCH_LOAD_DURATION_SECONDS@,
 @BENCH_LOAD_UPSTREAM_LATENCY_MS@ (milliseconds, converted to the microseconds the stub
 delays by), @BENCH_LOAD_PAYLOAD_BYTES@, @BENCH_LOAD_CACHE_MAX_ENTRIES@, and
-@BENCH_LOAD_WORKING_SET@. A malformed value falls back to the default rather than
+@BENCH_LOAD_WORKING_SET@, @BENCH_LOAD_SERVE_MAX_IN_FLIGHT@,
+@BENCH_LOAD_PUBLIC_CONNECTIONS_PER_HOST@, and
+@BENCH_LOAD_PRIVATE_CONNECTIONS_PER_HOST@. A malformed value falls back to the default rather than
 failing, since the knobs only shape an inform-only measurement.
 -}
 loadKnobsFromEnv :: IO LoadKnobs
@@ -157,6 +168,9 @@ loadKnobsFromEnv = do
     payload <- readEnvInt "BENCH_LOAD_PAYLOAD_BYTES" (lkPayloadBytes defaultLoadKnobs)
     cacheMax <- readEnvInt "BENCH_LOAD_CACHE_MAX_ENTRIES" (lkCacheMaxEntries defaultLoadKnobs)
     workingSetSize <- readEnvInt "BENCH_LOAD_WORKING_SET" (lkWorkingSet defaultLoadKnobs)
+    serveMaxInFlight <- readEnvInt "BENCH_LOAD_SERVE_MAX_IN_FLIGHT" (lkServeMaxInFlight defaultLoadKnobs)
+    publicConnections <- readEnvInt "BENCH_LOAD_PUBLIC_CONNECTIONS_PER_HOST" (lkPublicConnectionsPerHost defaultLoadKnobs)
+    privateConnections <- readEnvInt "BENCH_LOAD_PRIVATE_CONNECTIONS_PER_HOST" (lkPrivateConnectionsPerHost defaultLoadKnobs)
     pure
         LoadKnobs
             { lkConcurrency = max 1 concurrency
@@ -165,6 +179,9 @@ loadKnobsFromEnv = do
             , lkPayloadBytes = max 1 payload
             , lkCacheMaxEntries = max 1 cacheMax
             , lkWorkingSet = max 1 workingSetSize
+            , lkServeMaxInFlight = max 1 serveMaxInFlight
+            , lkPublicConnectionsPerHost = max 1 publicConnections
+            , lkPrivateConnectionsPerHost = max 1 privateConnections
             }
   where
     readEnvInt :: String -> Int -> IO Int
@@ -444,6 +461,12 @@ renderReports knobs ecosystem reports =
             <> show (lkCacheMaxEntries knobs)
             <> " entries over a working set of up to "
             <> show (lkWorkingSet knobs)
+            <> " · admission "
+            <> show (lkServeMaxInFlight knobs)
+            <> " · public/private connections per host "
+            <> show (lkPublicConnectionsPerHost knobs)
+            <> "/"
+            <> show (lkPrivateConnectionsPerHost knobs)
             <> " · ~"
             <> fmtKiB (lkPayloadBytes knobs)
             <> " worker artifact."

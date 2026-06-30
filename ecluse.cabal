@@ -127,6 +127,7 @@ library ecluse-core
     Ecluse.Core.Security.Limits
     Ecluse.Core.Security.Url
     Ecluse.Core.Server.Cache
+    Ecluse.Core.Server.Admission
     Ecluse.Core.Server.Conditional
     Ecluse.Core.Server.Context
     Ecluse.Core.Server.Metadata

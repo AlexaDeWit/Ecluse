@@ -58,6 +58,7 @@ import Ecluse.Core.Registry (PublishRelayResponse, UrlFormationError)
 import Ecluse.Core.Registry.Metadata (MetadataClient, MetadataError)
 import Ecluse.Core.Rules (PreparedRule)
 import Ecluse.Core.Security (Limits, LoweredHostSet, TarballHostPolicy)
+import Ecluse.Core.Server.Admission (ServeAdmission)
 import Ecluse.Core.Server.Cache (MetadataCache)
 import Ecluse.Core.Server.Metadata (ManifestCaching)
 import Ecluse.Core.Server.Response (HelpMessage, MountRenderer)
@@ -84,7 +85,12 @@ telemetry backend. There is no log field: handlers log through the ambient @kati
 context.
 -}
 data ServeRuntime = ServeRuntime
-    { srPublicManager :: Manager
+    { srAdmission :: ServeAdmission
+    {- ^ The process-wide non-queuing bound around metadata materialisation. A
+    private tarball hit and the artifact streaming pump stay outside it; packument
+    work and a tarball miss's public metadata gate acquire a slot.
+    -}
+    , srPublicManager :: Manager
     {- ^ The validating-TLS data-plane manager for the __untrusted__ public-upstream
     metadata fetch and every artifact stream.
     -}

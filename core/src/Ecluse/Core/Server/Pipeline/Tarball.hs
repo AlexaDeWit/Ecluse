@@ -108,6 +108,7 @@ import Ecluse.Core.Security (
     lowerCaseHosts,
     tarballHostAllowed,
  )
+import Ecluse.Core.Server.Admission (withServeAdmission)
 import Ecluse.Core.Server.Conditional (forwardValidators, isNotModified)
 import Ecluse.Core.Server.Context (
     Handler,
@@ -352,15 +353,17 @@ servePublicArtifact ::
     Handler ResponseReceived
 servePublicArtifact mode rt renderer deps validators name version file respond = do
     let metrics = srMetrics rt
-    gated <- gatePublicVersion rt deps name version file
-    case gated of
-        Admitted artifact -> do
+    withServeAdmission (srAdmission rt) (gatePublicVersion rt deps name version file) >>= \case
+        Just (Admitted artifact) -> do
             liftIO (mpServeDecision metrics Metric.Admit)
             liftIO (streamPublicArtifact mode rt renderer deps validators name version artifact respond)
-        Refused decision -> liftIO $ do
+        Just (Refused decision) -> liftIO $ do
             mpServeDecision metrics (serveDecisionClass decision)
             recordDenials metrics [decision]
             respond (artifactError renderer deps (artifactStatus decision) decision)
+        Nothing -> liftIO $ do
+            mpServeDecision metrics Metric.Unavailable
+            respond (serveOverloaded renderer)
 
 {- The outcome of gating a single requested artifact on the public path: either the
 chosen 'Artifact' to fetch, or the serve decision the error model renders. The

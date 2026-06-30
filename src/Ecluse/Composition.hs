@@ -64,6 +64,7 @@ module Ecluse.Composition (
 
     -- * Config-derived runtime settings
     cacheConfigFor,
+    connectionPoolSettings,
 ) where
 
 import Data.Char (isDigit)
@@ -71,6 +72,7 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Time (UTCTime)
+import Network.HTTP.Client (ManagerSettings (managerConnCount))
 import UnliftIO (tryAny)
 
 import Ecluse.Config (
@@ -108,6 +110,15 @@ import Ecluse.Core.Server.Context (MountBinding, PackumentDeps (..), PublishDeps
 import Ecluse.Core.Server.Metadata qualified as Metadata
 import Ecluse.Core.Server.Response (HelpMessage, mkHelpMessage)
 import Ecluse.Core.Text (nonBlank)
+
+{- | Apply an explicit per-host connection bound to an HTTP manager's settings.
+
+The public and private managers call this independently after telemetry
+instrumentation, so changing the pool size cannot discard the instrumented request and
+response hooks.
+-}
+connectionPoolSettings :: Int -> ManagerSettings -> ManagerSettings
+connectionPoolSettings connections settings = settings{managerConnCount = connections}
 
 {- | The process-global credential providers, keyed by the backend they
 implement. Built __once__ at the composition root from the environment layer; a

@@ -216,6 +216,26 @@ outright and reads the private origin **per request** (see
 The public origin is anonymous under every strategy, so a single shared entry crosses no
 trust boundary and is cached freely.
 
+## Serve admission and upstream pools
+
+The packument path and a tarball miss's public-metadata gate share one
+process-wide, non-queuing admission bound. At most
+`ECLUSE_SERVE_MAX_IN_FLIGHT` metadata materialisations may run at once; excess
+work receives the mount's error shape as `503 Service Unavailable` with
+`Retry-After: 1`. Refusal is immediate, so overload cannot turn into an
+application backlog whose resident parse structures and latency grow with client
+concurrency. Health probes and cheap local routes bypass admission. A trusted
+private tarball hit also bypasses it: the artifact stream is already
+constant-memory, and holding a metadata slot for a slow download would let clients
+starve packument traffic without protecting any parse structure.
+
+The bound also gives the data plane an aggregate connection ceiling. Within it,
+the public and private `http-client` managers have independently configurable
+per-host pools. Public same-key misses are single-flight-coalesced, while private
+reads deliberately preserve per-client authority and run once per request; the
+private pool therefore defaults to the admission capacity rather than the
+library's smaller implicit default.
+
 ## Error model
 
 Every served response is the rendering of one **serve outcome**. A small, nuanced

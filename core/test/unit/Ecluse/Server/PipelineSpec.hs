@@ -22,10 +22,10 @@ import Data.Set qualified as Set
 import Data.Time (UTCTime (UTCTime), fromGregorian, nominalDay)
 import Katip (Environment (Environment), Namespace (Namespace), initLogEnv)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
-import Network.HTTP.Types (hContentType, status200, status404, statusCode)
+import Network.HTTP.Types (hContentType, hRetryAfter, status200, status404, statusCode)
 
 import Network.HTTP.Types.Header (hHost)
-import Network.Wai (Application, Request (rawPathInfo, requestHeaders), Response, defaultRequest, responseLBS, responseStatus)
+import Network.Wai (Application, Request (rawPathInfo, requestHeaders), Response, defaultRequest, responseHeaders, responseLBS, responseStatus)
 import Network.Wai.Handler.Warp (testWithApplication)
 import Network.Wai.Internal (ResponseReceived (ResponseReceived))
 import Test.Hspec
@@ -43,6 +43,7 @@ import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan), atDefaultPrecedence)
 import Ecluse.Core.Security (TarballHostPolicy (SameHostAsPackument), defaultLimits, lowerCaseHosts)
+import Ecluse.Core.Server.Admission (ServeAdmission, newServeAdmission, unlimitedServeAdmission, withServeAdmission)
 import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Core.Server.Context (
     Handler,
@@ -100,6 +101,57 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
             statusCode (responseStatus resp) `shouldBe` 200
             decisions >>= (`shouldBe` [Admit])
 
+    it "sheds packument work immediately when metadata admission is full" $ do
+        (metricsPort, _decisions) <- recordingMetricsPort
+        admission <- newServeAdmission 1
+        rt <- mkRuntimeWith admission metricsPort
+        deps <- depsFor 1
+        held <- withServeAdmission admission (captureServe rt (mountWith (Just deps)) (servePackument leftpad defaultRequest))
+        response <- maybe (expectationFailure "failed to acquire the test's outer admission slot" >> throwString "unreachable") pure held
+        statusCode (responseStatus response) `shouldBe` 503
+        (snd <$> find ((== hRetryAfter) . fst) (responseHeaders response)) `shouldBe` Just "1"
+
+    it "releases metadata admission after an admitted operation completes" $
+        testWithApplication (pure upstreamApp) $ \port -> do
+            (metricsPort, _decisions) <- recordingMetricsPort
+            admission <- newServeAdmission 1
+            rt <- mkRuntimeWith admission metricsPort
+            deps <- depsFor port
+            saturated <- withServeAdmission admission (captureServe rt (mountWith (Just deps)) (servePackument leftpad defaultRequest))
+            (statusCode . responseStatus <$> saturated) `shouldBe` Just 503
+            admitted <- captureServe rt (mountWith (Just deps)) (servePackument leftpad defaultRequest)
+            statusCode (responseStatus admitted) `shouldBe` 200
+
+    it "sheds a tarball miss when its public metadata gate cannot acquire admission" $ do
+        (metricsPort, _decisions) <- recordingMetricsPort
+        admission <- newServeAdmission 1
+        rt <- mkRuntimeWith admission metricsPort
+        deps <- depsFor 1
+        held <-
+            withServeAdmission admission $
+                captureServe
+                    rt
+                    (mountWith (Just deps))
+                    (serveTarball leftpad (mkVersion Npm "1.0.0") (Filename "leftpad-1.0.0.tgz") defaultRequest)
+        response <- maybe (expectationFailure "failed to acquire the test's outer admission slot" >> throwString "unreachable") pure held
+        statusCode (responseStatus response) `shouldBe` 503
+        (snd <$> find ((== hRetryAfter) . fst) (responseHeaders response)) `shouldBe` Just "1"
+
+    it "does not hold metadata admission around a trusted private tarball stream" $
+        testWithApplication (pure upstreamApp) $ \port -> do
+            (metricsPort, _decisions) <- recordingMetricsPort
+            admission <- newServeAdmission 1
+            rt <- mkRuntimeWith admission metricsPort
+            deps <- depsFor 1
+            let privateDeps = deps{pdPrivateBaseUrl = "http://127.0.0.1:" <> show port}
+            held <-
+                withServeAdmission admission $
+                    captureServe
+                        rt
+                        (mountWith (Just privateDeps))
+                        (serveTarball leftpad (mkVersion Npm "1.0.0") (Filename "leftpad-1.0.0.tgz") defaultRequest)
+            (statusCode . responseStatus <$> held) `shouldBe` Just 200
+
 {- | Run a serve handler over a request runtime and mount, capturing the 'Response' it
 hands its continuation. The handler runs through the core 'runHandler' against a
 scribe-less @katip@ environment (its warnings have nowhere to go, which is what these
@@ -118,10 +170,14 @@ a real (no-TLS) manager shared by both legs, a fresh cache, and an in-memory que
 -}
 mkRuntime :: MetricsPort -> IO ServeRuntime
 mkRuntime metricsPort = do
+    mkRuntimeWith unlimitedServeAdmission metricsPort
+
+mkRuntimeWith :: ServeAdmission -> MetricsPort -> IO ServeRuntime
+mkRuntimeWith admission metricsPort = do
     manager <- newManager defaultManagerSettings
     cache <- newMetadataCache defaultCacheConfig
     queue <- newInMemoryQueue
-    pure (ServeRuntime manager manager cache queue metricsPort passthroughTracingPort)
+    pure (ServeRuntime admission manager manager cache queue metricsPort passthroughTracingPort)
 
 leftpad :: PackageName
 leftpad = mkPackageName Npm Nothing "leftpad"

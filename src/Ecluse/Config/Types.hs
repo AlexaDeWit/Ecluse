@@ -141,6 +141,9 @@ data AppConfig = AppConfig
     , cfgHelpMessage :: Maybe Text
     , cfgCveSyncInterval :: NominalDiffTime
     , cfgShutdownDrainTimeout :: Int
+    , cfgServeMaxInFlight :: Int
+    , cfgPublicConnectionsPerHost :: Int
+    , cfgPrivateConnectionsPerHost :: Int
     , cfgCacheTtl :: NominalDiffTime
     , cfgCacheMaxEntries :: Int
     , cfgCacheMaxBytes :: Int

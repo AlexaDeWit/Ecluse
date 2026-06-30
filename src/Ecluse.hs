@@ -109,6 +109,7 @@ import UnliftIO (concurrently_, throwIO, tryJust)
 import Ecluse.Composition (
     MirrorQueuePlan (MemoryBackend, SqsBackend),
     PublishTarget (ptCredentials, ptEcosystem, ptMirrorUrl),
+    connectionPoolSettings,
     initCredentialProviders,
     memoryQueueDropWarning,
     mirrorQueuePlanWarning,
@@ -119,7 +120,7 @@ import Ecluse.Composition (
  )
 import Ecluse.Composition qualified as Composition
 import Ecluse.Config (
-    AppConfig (cfgLogFormat, cfgPort, cfgShutdownDrainTimeout, cfgTelemetry),
+    AppConfig (cfgLogFormat, cfgPort, cfgPrivateConnectionsPerHost, cfgPublicConnectionsPerHost, cfgServeMaxInFlight, cfgShutdownDrainTimeout, cfgTelemetry),
     Config (configApp),
     loadConfig,
     renderConfigError,
@@ -139,12 +140,13 @@ import Ecluse.Core.Registry.Npm.Route qualified as Npm
 import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
 import Ecluse.Core.Rules (renderBootOrder)
 import Ecluse.Core.Security (defaultLimits)
+import Ecluse.Core.Server.Admission (newServeAdmission)
 import Ecluse.Core.Server.Cache (Source (Source), newMetadataCache)
 import Ecluse.Core.Server.Context (PackumentDeps, PublishDeps, pdLimits, pdNow, pdPublicBaseUrl, pdRules)
 import Ecluse.Core.Server.Metadata (ManifestCaching (Cached), newNpmMetadataClient)
 import Ecluse.Core.Telemetry.Metrics (BreakerSource (CredentialMint), Provider (CodeArtifact), Upstream (Public))
 import Ecluse.Core.Worker (WorkerPolicies, WorkerPolicy (..), runWorkerM, workerLoop)
-import Ecluse.Env (Env, envDdContext, envLogEnv, envManager, envMetadataCache, envMetrics, newWorkerHeartbeat, withEnv, workerRuntimeOf)
+import Ecluse.Env (Env, envDdContext, envLogEnv, envManager, envMetadataCache, envMetrics, newWorkerHeartbeat, withEnvWithAdmission, workerRuntimeOf)
 import Ecluse.Log (moduleField, newLogEnv)
 import Ecluse.Server (MountBinding (..), ServerConfig (scDrainTimeout, scPort), ShutdownDrainTimeout (ShutdownDrainTimeout), mkServerConfig)
 import Ecluse.Server qualified as Server
@@ -204,6 +206,7 @@ run = do
     -- "not built" boot error, never a silent fall-through); the resulting plan is
     -- handed to the one queue-construction site below.
     queuePlan <- orExit (T.unlines . map renderBootError) (planMirrorQueue env)
+    serveAdmission <- newServeAdmission (cfgServeMaxInFlight env)
     let serverConfig =
             (mkServerConfig bindings)
                 { scPort = cfgPort env
@@ -238,14 +241,16 @@ run = do
         -- that, with telemetry enabled, each carries the http-client instrumentation
         -- (child spans + W3C context propagation) hung off the substrate's installed
         -- providers; with it off the instrumentation step is the identity.
-        manager <- newManager =<< instrumentDataPlaneManagerSettings telemetry tlsManagerSettings
-        privateManager <- newManager =<< instrumentDataPlaneManagerSettings telemetry tlsManagerSettings
+        publicSettings <- instrumentDataPlaneManagerSettings telemetry tlsManagerSettings
+        privateSettings <- instrumentDataPlaneManagerSettings telemetry tlsManagerSettings
+        manager <- newManager (connectionPoolSettings (cfgPublicConnectionsPerHost env) publicSettings)
+        privateManager <- newManager (connectionPoolSettings (cfgPrivateConnectionsPerHost env) privateSettings)
         -- The mirror worker's publish-side registry client, resolved per ecosystem from
         -- the configured mirror target and its write credential. It writes to the
         -- operator-configured, trusted mirror target, so it uses the trusted private
         -- manager (the private origin's credential-forwarding path).
         publishClient <- resolvePublishClient privateManager publishTargets
-        withEnv publishClient queue manager privateManager metadataCache logEnv telemetry heartbeat $ \builtEnv -> do
+        withEnvWithAdmission serveAdmission publishClient queue manager privateManager metadataCache logEnv telemetry heartbeat $ \builtEnv -> do
             -- The instruments now exist (built in 'withEnv' from the telemetry handle);
             -- install them so the credential provider's deferred reporters go live for
             -- the rest of the run. They are the no-op-meter instruments when telemetry

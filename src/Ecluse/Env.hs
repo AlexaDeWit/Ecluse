@@ -34,7 +34,9 @@ module Ecluse.Env (
     -- * Composition root
     Env (..),
     newEnv,
+    newEnvWithAdmission,
     withEnv,
+    withEnvWithAdmission,
 
     -- * Runtime projections
     serveRuntimeOf,
@@ -53,6 +55,7 @@ import UnliftIO (MonadUnliftIO, bracket)
 
 import Ecluse.Core.Queue (MirrorQueue)
 import Ecluse.Core.Registry (RegistryClient)
+import Ecluse.Core.Server.Admission (ServeAdmission, unlimitedServeAdmission)
 import Ecluse.Core.Server.Cache (MetadataCache)
 import Ecluse.Core.Server.Context (ServeRuntime (..))
 import Ecluse.Core.Worker (WorkerHeartbeat, WorkerPolicies, WorkerRuntime (..), lastPoll, newWorkerHeartbeat, recordPoll)
@@ -67,7 +70,11 @@ metadata cache, from which the whole effectful shell is reached. See the module
 header for the no-SDK and sole-composition-root invariants it upholds.
 -}
 data Env = Env
-    { envRegistry :: RegistryClient
+    { envServeAdmission :: ServeAdmission
+    {- ^ The process-wide non-queuing bound for metadata-bearing serve work. It is
+    projected into every request runtime, so all mounts share one aggregate cap.
+    -}
+    , envRegistry :: RegistryClient
     {- ^ The registry-protocol handle the mirror __worker__ publishes approved
     packages through. The request serve path does __not__ read it: each upstream
     of a packument merge builds its own client over 'envManager' (two upstreams, with
@@ -147,7 +154,14 @@ selection happens in the handle smart constructors that produce the arguments;
 this only gathers them.
 -}
 newEnv :: RegistryClient -> MirrorQueue -> Manager -> Manager -> MetadataCache -> LogEnv -> Telemetry -> WorkerHeartbeat -> IO Env
-newEnv registry queue manager privateManager metadataCache logEnv telemetry heartbeat = do
+newEnv = newEnvWithAdmission unlimitedServeAdmission
+
+{- | Assemble an 'Env' with an explicit process-wide serve admission handle. The
+executable uses this form with its configured bound; 'newEnv' retains the unlimited
+embedding default for tests whose subject is unrelated to overload.
+-}
+newEnvWithAdmission :: ServeAdmission -> RegistryClient -> MirrorQueue -> Manager -> Manager -> MetadataCache -> LogEnv -> Telemetry -> WorkerHeartbeat -> IO Env
+newEnvWithAdmission admission registry queue manager privateManager metadataCache logEnv telemetry heartbeat = do
     -- The metric instruments are built once here from the telemetry handle: created on
     -- its meter provider when enabled, on the SDK's no-op meter when off (so they are
     -- inert without an SDK). Building them in 'newEnv' keeps the construction the single
@@ -158,7 +172,8 @@ newEnv registry queue manager privateManager metadataCache logEnv telemetry hear
     ddContext <- ddIdentityFromEnvironment
     pure
         Env
-            { envRegistry = registry
+            { envServeAdmission = admission
+            , envRegistry = registry
             , envQueue = queue
             , envManager = manager
             , envPrivateManager = privateManager
@@ -188,8 +203,27 @@ withEnv ::
     (Env -> m a) ->
     m a
 withEnv registry queue manager privateManager metadataCache logEnv telemetry heartbeat =
+    withEnvWithAdmission unlimitedServeAdmission registry queue manager privateManager metadataCache logEnv telemetry heartbeat
+
+{- | Bracket an 'Env' carrying an explicit serve admission handle. This is the
+production form of 'withEnv'; teardown ownership is otherwise identical.
+-}
+withEnvWithAdmission ::
+    (MonadUnliftIO m) =>
+    ServeAdmission ->
+    RegistryClient ->
+    MirrorQueue ->
+    Manager ->
+    Manager ->
+    MetadataCache ->
+    LogEnv ->
+    Telemetry ->
+    WorkerHeartbeat ->
+    (Env -> m a) ->
+    m a
+withEnvWithAdmission admission registry queue manager privateManager metadataCache logEnv telemetry heartbeat =
     bracket
-        (liftIO (newEnv registry queue manager privateManager metadataCache logEnv telemetry heartbeat))
+        (liftIO (newEnvWithAdmission admission registry queue manager privateManager metadataCache logEnv telemetry heartbeat))
         teardown
   where
     -- The connection pool behind the 'Manager' and the telemetry providers behind
@@ -211,7 +245,8 @@ core interface without depending on this application 'Env'.
 serveRuntimeOf :: Env -> ServeRuntime
 serveRuntimeOf env =
     ServeRuntime
-        { srPublicManager = envManager env
+        { srAdmission = envServeAdmission env
+        , srPublicManager = envManager env
         , srPrivateManager = envPrivateManager env
         , srMetadataCache = envMetadataCache env
         , srQueue = envQueue env

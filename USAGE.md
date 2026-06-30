@@ -222,6 +222,15 @@ operator reference. **Keep the two in sync** when either changes.
 `ECLUSE_SHUTDOWN_DRAIN_TIMEOUT`
 : _(No, default `30`)_ Seconds the graceful shutdown waits for in-flight requests and in-progress artifact streams to finish before the process exits. Positive integer.
 
+`ECLUSE_SERVE_MAX_IN_FLIGHT`
+: _(No, default `16`)_ Process-wide cap on concurrent metadata materialisation: whole packument requests and the public-metadata gate reached by a tarball miss. Work beyond the cap is rejected immediately with `503 Service Unavailable` and `Retry-After: 1`; it is not placed in an application queue. Trusted private tarball hits stream outside the cap, as do health probes and cheap local routes. Positive integer.
+
+`ECLUSE_PUBLIC_CONNECTIONS_PER_HOST`
+: _(No, default `10`)_ Maximum concurrent pooled connections to each public upstream host. Public metadata misses are single-flight-coalesced, so the default keeps the upstream library's conservative per-host bound. Positive integer.
+
+`ECLUSE_PRIVATE_CONNECTIONS_PER_HOST`
+: _(No, default `16`)_ Maximum concurrent pooled connections to each private upstream host. The default matches `ECLUSE_SERVE_MAX_IN_FLIGHT`, because private reads are deliberately per-request and are not coalesced across clients. Positive integer.
+
 `ECLUSE_CACHE_TTL`
 : _(No, default `60`)_ Seconds metadata is kept in the shared packument cache.
 
