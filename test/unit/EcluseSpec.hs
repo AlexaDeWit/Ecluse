@@ -1,3 +1,5 @@
+module EcluseSpec (spec) where
+
 import Prelude hiding (get)
 
 import Katip (Environment (Environment), Namespace (Namespace), initLogEnv)
