@@ -5,12 +5,11 @@ import Prelude hiding (get)
 import Katip (Environment (Environment), Namespace (Namespace), initLogEnv)
 import Network.HTTP.Client (Manager, defaultManagerSettings, newManager)
 import Network.Wai (Application)
+import System.Environment (setEnv, unsetEnv, withArgs)
 import Test.Hspec
 import Test.Hspec.Wai
 import UnliftIO (timeout, try)
 import UnliftIO.Exception (throwString)
-
-import System.Environment (setEnv, unsetEnv)
 
 import Ecluse (BootAborted (..), mountBindingFor, npmServerConfig, orExit, run)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
@@ -111,14 +110,14 @@ spec = do
         it "boots from the environment layer alone (no document) and serves" $ do
             unsetEnv "ECLUSE_COVERAGE_QUIET_PARTIAL"
             traverse_ (uncurry setEnv) awsRunEnv
-            outcome <- timeout 100000 run
+            outcome <- timeout 100000 (withArgs ["proxy"] run)
             traverse_ (unsetEnv . fst) awsRunEnv
             outcome `shouldBe` Nothing
 
         it "boots with an inline PROXY_CONFIG document and serves" $ do
             unsetEnv "ECLUSE_COVERAGE_QUIET_PARTIAL"
             traverse_ (uncurry setEnv) awsRunEnv
-            outcome <- timeout 100000 run
+            outcome <- timeout 100000 (withArgs ["proxy"] run)
             traverse_ (unsetEnv . fst) awsRunEnv
             outcome `shouldBe` Nothing
 
@@ -127,7 +126,7 @@ spec = do
             -- to start rather than silently falling back to a different queue.
             traverse_ (uncurry setEnv) awsRunEnv
             setEnv "ECLUSE_QUEUE_BACKEND" "pubsub"
-            outcome <- try (timeout 100000 run) :: IO (Either BootAborted (Maybe ()))
+            outcome <- try (timeout 100000 (withArgs ["proxy"] run)) :: IO (Either BootAborted (Maybe ()))
             unsetEnv "ECLUSE_QUEUE_BACKEND"
             traverse_ (unsetEnv . fst) awsRunEnv
             outcome `shouldBe` Left BootAborted
@@ -142,7 +141,7 @@ spec = do
             unsetEnv "ECLUSE_QUEUE_URL"
             traverse_ (uncurry setEnv) (filter ((/= "ECLUSE_QUEUE_URL") . fst) runEnv)
             setEnv "ECLUSE_QUEUE_BACKEND" "memory"
-            outcome <- timeout 100000 run
+            outcome <- timeout 100000 (withArgs ["proxy"] run)
             unsetEnv "ECLUSE_QUEUE_BACKEND"
             traverse_ (unsetEnv . fst) runEnv
             outcome `shouldBe` Nothing
@@ -155,7 +154,7 @@ spec = do
             unsetEnv "AWS_REGION"
             traverse_ (uncurry setEnv) runEnv
             setEnv "ECLUSE_QUEUE_BACKEND" "sqs"
-            outcome <- try (timeout 100000 run) :: IO (Either BootAborted (Maybe ()))
+            outcome <- try (timeout 100000 (withArgs ["proxy"] run)) :: IO (Either BootAborted (Maybe ()))
             unsetEnv "ECLUSE_QUEUE_BACKEND"
             traverse_ (unsetEnv . fst) runEnv
             outcome `shouldBe` Left BootAborted
@@ -167,7 +166,7 @@ spec = do
             traverse_ (uncurry setEnv) awsRunEnv
             unsetEnv "ECLUSE_QUEUE_URL"
             setEnv "ECLUSE_QUEUE_BACKEND" "sqs"
-            outcome <- try (timeout 100000 run) :: IO (Either BootAborted (Maybe ()))
+            outcome <- try (timeout 100000 (withArgs ["proxy"] run)) :: IO (Either BootAborted (Maybe ()))
             unsetEnv "ECLUSE_QUEUE_BACKEND"
             traverse_ (unsetEnv . fst) awsRunEnv
             outcome `shouldBe` Left BootAborted
@@ -175,7 +174,7 @@ spec = do
         it "aborts fast at boot when the gcp-artifact-registry credential provider is selected (not built)" $ do
             traverse_ (uncurry setEnv) awsRunEnv
             setEnv "ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER" "gcp-artifact-registry"
-            outcome <- try (timeout 100000 run) :: IO (Either BootAborted (Maybe ()))
+            outcome <- try (timeout 100000 (withArgs ["proxy"] run)) :: IO (Either BootAborted (Maybe ()))
             unsetEnv "ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER"
             traverse_ (unsetEnv . fst) awsRunEnv
             outcome `shouldBe` Left BootAborted
@@ -184,7 +183,7 @@ spec = do
             -- The CodeArtifact inputs resolve by neither an explicit key nor the
             traverse_ (uncurry setEnv) awsRunEnv
             setEnv "ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER" "codeartifact"
-            outcome <- try (timeout 100000 run) :: IO (Either BootAborted (Maybe ()))
+            outcome <- try (timeout 100000 (withArgs ["proxy"] run)) :: IO (Either BootAborted (Maybe ()))
             unsetEnv "ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER"
             traverse_ (unsetEnv . fst) awsRunEnv
             outcome `shouldBe` Left BootAborted

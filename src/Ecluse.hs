@@ -106,6 +106,7 @@ import System.Environment (getEnvironment)
 import System.IO.Error (isDoesNotExistError)
 import UnliftIO (concurrently_, throwIO, tryJust)
 
+import Ecluse.CLI (AppCommand (..), execCLI)
 import Ecluse.Composition (
     MirrorQueuePlan (MemoryBackend, SqsBackend),
     PublishTarget (ptCredentials, ptEcosystem, ptMirrorUrl),
@@ -150,7 +151,7 @@ import Ecluse.Env (Env, envDdContext, envLogEnv, envManager, envMetadataCache, e
 import Ecluse.Log (moduleField, newLogEnv)
 import Ecluse.Server (MountBinding (..), ServerConfig (scDrainTimeout, scPort), ShutdownDrainTimeout (ShutdownDrainTimeout), mkServerConfig)
 import Ecluse.Server qualified as Server
-import Ecluse.Telemetry (TelemetrySwitch (TelemetryOff, TelemetryOn), withTelemetry)
+import Ecluse.Telemetry (Telemetry, TelemetrySwitch (TelemetryOff, TelemetryOn), withTelemetry)
 import Ecluse.Telemetry.Correlation (ddPayloadNow)
 import Ecluse.Telemetry.Instruments (metricsPortOf)
 import Ecluse.Telemetry.Reporters (
@@ -178,13 +179,48 @@ server and the mirror worker __concurrently__ over that single 'Env' ('runServer
 and 'runWorker'). Bracketing the 'Env' (and the telemetry providers) for the
 lifetime of both means their shared resources are torn down along every exit path.
 -}
-run :: IO ()
-run = do
+data BootEnv = BootEnv
+    { beConfig :: AppConfig
+    , beLogEnv :: LogEnv
+    , beTelemetry :: Telemetry
+    , beConfigFull :: Config
+    }
+
+withBootEnv :: (BootEnv -> IO ()) -> IO ()
+withBootEnv action = do
     envVars <- getEnvironment
     mDocBlob <- tryJust (guard . isDoesNotExistError) (BS.readFile "/etc/ecluse/config.yaml")
     let docBlob = either (const Nothing) Just mDocBlob
     config <- orExit (T.unlines . map renderConfigError) (loadConfig envVars docBlob)
     let env = configApp config
+    logEnv <- newLogEnv (cfgLogFormat env) (Environment "production")
+    logBootInfo logEnv ("Loaded configuration: " <> show config)
+    prepareTelemetryBoot (cfgTelemetry env) logEnv
+    withTelemetry (cfgTelemetry env) logEnv $ \telemetry ->
+        action
+            BootEnv
+                { beConfig = env
+                , beLogEnv = logEnv
+                , beTelemetry = telemetry
+                , beConfigFull = config
+                }
+
+run :: IO ()
+run = do
+    cmd <- execCLI
+    withBootEnv $ \bootEnv ->
+        case cmd of
+            RunProxy -> runProxy bootEnv
+            RunPilot -> logBootInfo (beLogEnv bootEnv) "Pilot: Not yet implemented"
+            RunDredger -> logBootInfo (beLogEnv bootEnv) "Dredger: Not yet implemented"
+
+runProxy :: BootEnv -> IO ()
+runProxy bootEnv = do
+    let env = beConfig bootEnv
+    let config = beConfigFull bootEnv
+    let logEnv = beLogEnv bootEnv
+    let telemetry = beTelemetry bootEnv
+
     -- The metric instruments do not exist until the telemetry substrate is built, well
     -- below; this deferred handle lets the credential provider (constructed here, at
     -- boot) record through reporters that stay inert until 'installMetrics' makes them
@@ -212,8 +248,6 @@ run = do
                 { scPort = cfgPort env
                 , scDrainTimeout = ShutdownDrainTimeout (cfgShutdownDrainTimeout env)
                 }
-    logEnv <- newLogEnv (cfgLogFormat env) (Environment "production")
-    logBootInfo logEnv ("Loaded configuration: " <> show config)
     -- Log each mount's resolved rule boot order so an operator sees at start-up exactly
     -- how their policy will resolve (highest precedence first, then name).
     logRuleBootOrder logEnv bindings
@@ -224,39 +258,35 @@ run = do
     queue <- buildMirrorQueue logEnv queuePlan
     metadataCache <- newMetadataCache (Composition.cacheConfigFor env)
     heartbeat <- newWorkerHeartbeat
-    -- Resolve the telemetry identity (DD_* / OTEL_*) and normalise the OTEL_*
-    -- environment the SDK reads, before the substrate initialises. A no-op when
-    -- telemetry is off.
-    prepareTelemetryBoot (cfgTelemetry env) logEnv
-    withTelemetry (cfgTelemetry env) logEnv $ \telemetry -> do
-        -- Two data-plane managers, one per origin. Both are the standard validating TLS
-        -- manager: registry egress is https-only by construction (a non-https endpoint
-        -- fails closed at boot), and certificate validation authenticates the dialled
-        -- host, so a rebound or internal address cannot present a CA-trusted certificate
-        -- for the requested name (the SSRF / resolve-to-internal class is closed by
-        -- certificate validation). The split is retained
-        -- because the two origins differ in credential handling (the public reads are
-        -- anonymous; the private reads forward the client's credential) and in the
-        -- @dist.tarball@ host gate's trust. Both are built inside the telemetry bracket so
-        -- that, with telemetry enabled, each carries the http-client instrumentation
-        -- (child spans + W3C context propagation) hung off the substrate's installed
-        -- providers; with it off the instrumentation step is the identity.
-        publicSettings <- instrumentDataPlaneManagerSettings telemetry tlsManagerSettings
-        privateSettings <- instrumentDataPlaneManagerSettings telemetry tlsManagerSettings
-        manager <- newManager (connectionPoolSettings (cfgPublicConnectionsPerHost env) publicSettings)
-        privateManager <- newManager (connectionPoolSettings (cfgPrivateConnectionsPerHost env) privateSettings)
-        -- The mirror worker's publish-side registry client, resolved per ecosystem from
-        -- the configured mirror target and its write credential. It writes to the
-        -- operator-configured, trusted mirror target, so it uses the trusted private
-        -- manager (the private origin's credential-forwarding path).
-        publishClient <- resolvePublishClient privateManager publishTargets
-        withEnvWithAdmission serveAdmission publishClient queue manager privateManager metadataCache logEnv telemetry heartbeat $ \builtEnv -> do
-            -- The instruments now exist (built in 'withEnv' from the telemetry handle);
-            -- install them so the credential provider's deferred reporters go live for
-            -- the rest of the run. They are the no-op-meter instruments when telemetry
-            -- is off, so this is inert in that posture.
-            installMetrics deferredMetrics (envMetrics builtEnv)
-            runServices serverConfig (workerPoliciesFor builtEnv bindings) builtEnv
+
+    -- Two data-plane managers, one per origin. Both are the standard validating TLS
+    -- manager: registry egress is https-only by construction (a non-https endpoint
+    -- fails closed at boot), and certificate validation authenticates the dialled
+    -- host, so a rebound or internal address cannot present a CA-trusted certificate
+    -- for the requested name (the SSRF / resolve-to-internal class is closed by
+    -- certificate validation). The split is retained
+    -- because the two origins differ in credential handling (the public reads are
+    -- anonymous; the private reads forward the client's credential) and in the
+    -- @dist.tarball@ host gate's trust. Both are built inside the telemetry bracket so
+    -- that, with telemetry enabled, each carries the http-client instrumentation
+    -- (child spans + W3C context propagation) hung off the substrate's installed
+    -- providers; with it off the instrumentation step is the identity.
+    publicSettings <- instrumentDataPlaneManagerSettings telemetry tlsManagerSettings
+    privateSettings <- instrumentDataPlaneManagerSettings telemetry tlsManagerSettings
+    manager <- newManager (connectionPoolSettings (cfgPublicConnectionsPerHost env) publicSettings)
+    privateManager <- newManager (connectionPoolSettings (cfgPrivateConnectionsPerHost env) privateSettings)
+    -- The mirror worker's publish-side registry client, resolved per ecosystem from
+    -- the configured mirror target and its write credential. It writes to the
+    -- operator-configured, trusted mirror target, so it uses the trusted private
+    -- manager (the private origin's credential-forwarding path).
+    publishClient <- resolvePublishClient privateManager publishTargets
+    withEnvWithAdmission serveAdmission publishClient queue manager privateManager metadataCache logEnv telemetry heartbeat $ \builtEnv -> do
+        -- The instruments now exist (built in 'withEnv' from the telemetry handle);
+        -- install them so the credential provider's deferred reporters go live for
+        -- the rest of the run. They are the no-op-meter instruments when telemetry
+        -- is off, so this is inert in that posture.
+        installMetrics deferredMetrics (envMetrics builtEnv)
+        runServices serverConfig (workerPoliciesFor builtEnv bindings) builtEnv
 
 {- Build the config-selected mirror queue from its plan: the durable AWS SQS backend,
 or the bounded in-memory backend. The in-memory arm first emits the loud boot warning
