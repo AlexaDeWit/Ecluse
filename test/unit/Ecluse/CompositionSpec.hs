@@ -190,7 +190,7 @@ credentialProvidersSpec = describe "initCredentialProviders" $ do
     it "refuses to build when codeartifact is selected but its domain cannot be resolved" $ do
         -- A non-CodeArtifact ECLUSE_MOUNTS__NPM__MIRROR_TARGET and no explicit keys: domain and owner
         -- resolve by neither route, so both are named in the aggregated boot failure.
-        env <- expectEnv (("ECLUSE_AWS_REGION", "us-east-1") : overrideEnv "ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER" "codeartifact" staticEnvVars)
+        env <- expectEnv (("AWS_REGION", "us-east-1") : overrideEnv "ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER" "codeartifact" staticEnvVars)
         result <- initCredentialProviders noCredentialReporters env
         leftToMaybe result
             `shouldBe` Just
@@ -203,25 +203,25 @@ credentialProvidersSpec = describe "initCredentialProviders" $ do
 mirrorQueueSpec :: Spec
 mirrorQueueSpec = describe "planMirrorQueue" $ do
     it "selects the SQS backend from the configured queue URL and region" $ do
-        env <- expectEnv (("ECLUSE_AWS_REGION", "us-east-1") : staticEnvVars)
+        env <- expectEnv (("AWS_REGION", "us-east-1") : staticEnvVars)
         cfg <- expectSqsBackend env
         sqsQueueUrl cfg `shouldBe` "https://sqs.example.test/q"
         sqsRegion cfg `shouldBe` "us-east-1"
 
-    it "fails fast when the SQS backend has no ECLUSE_AWS_REGION" $ do
-        -- ECLUSE_AWS_REGION is required for the AWS queue; absent, the backend cannot be
+    it "fails fast when the SQS backend has no AWS_REGION" $ do
+        -- AWS_REGION is required for the AWS queue; absent, the backend cannot be
         -- region-scoped, so it is a loud boot failure rather than a silent default.
         env <- expectEnv staticEnvVars
         planMirrorQueue env `shouldBe` Left [QueueRegionMissing]
 
-    it "treats a blank ECLUSE_AWS_REGION as missing" $ do
-        env <- expectEnv (("ECLUSE_AWS_REGION", "   ") : staticEnvVars)
+    it "treats a blank AWS_REGION as missing" $ do
+        env <- expectEnv (("AWS_REGION", "   ") : staticEnvVars)
         planMirrorQueue env `shouldBe` Left [QueueRegionMissing]
 
     it "fails fast when the SQS backend has no ECLUSE_QUEUE_URL" $ do
         -- ECLUSE_QUEUE_URL is optional at the env layer but required for sqs here: the
         -- jobs need a queue to be sent to, so an absent one is a fail-loud boot error.
-        env <- expectEnv (("ECLUSE_AWS_REGION", "us-east-1") : withoutQueueUrl staticEnvVars)
+        env <- expectEnv (("AWS_REGION", "us-east-1") : withoutQueueUrl staticEnvVars)
         planMirrorQueue env `shouldBe` Left [QueueUrlMissing SqsQueue]
 
     it "aggregates a missing region and a missing queue URL under sqs in one report" $ do
@@ -231,12 +231,12 @@ mirrorQueueSpec = describe "planMirrorQueue" $ do
     it "refuses the GCP pubsub backend as not built in this binary (no silent fallback)" $ do
         -- The pubsub arm is recognised by config (S03) but has no backend compiled in;
         -- it must route to a clear "not built" error, never quietly to a different queue.
-        env <- expectEnv (("ECLUSE_AWS_REGION", "us-east-1") : overrideEnv "ECLUSE_QUEUE_BACKEND" "pubsub" staticEnvVars)
+        env <- expectEnv (("AWS_REGION", "us-east-1") : overrideEnv "ECLUSE_QUEUE_BACKEND" "pubsub" staticEnvVars)
         planMirrorQueue env `shouldBe` Left [QueueProviderUnavailable PubSubQueue]
 
-    it "selects the bounded in-memory backend with the configured cap (no ECLUSE_AWS_REGION or ECLUSE_QUEUE_URL needed)" $ do
+    it "selects the bounded in-memory backend with the configured cap (no AWS_REGION or ECLUSE_QUEUE_URL needed)" $ do
         -- The memory backend is an explicit operator choice that needs no cloud queue:
-        -- it carries only its depth cap, and neither ECLUSE_AWS_REGION nor ECLUSE_QUEUE_URL is
+        -- it carries only its depth cap, and neither AWS_REGION nor ECLUSE_QUEUE_URL is
         -- consulted, so it resolves cleanly with both absent.
         env <-
             expectEnv
@@ -253,20 +253,18 @@ mirrorQueueSpec = describe "planMirrorQueue" $ do
         -- AC3: selecting memory emits a loud non-durable/best-effort boot warning;
         -- a durable backend warrants none. The composition root logs the Just.
         memEnv <- expectEnv (overrideEnv "ECLUSE_QUEUE_BACKEND" "memory" staticEnvVars)
-        sqsEnv <- expectEnv (("ECLUSE_AWS_REGION", "us-east-1") : staticEnvVars)
+        sqsEnv <- expectEnv (("AWS_REGION", "us-east-1") : staticEnvVars)
         (mirrorQueuePlanWarning <$> planMirrorQueue memEnv) `shouldBe` Right (Just memoryQueueBootWarning)
         (mirrorQueuePlanWarning <$> planMirrorQueue sqsEnv) `shouldBe` Right Nothing
         -- The warning names the load-bearing caveats so an operator cannot miss them.
         memoryQueueBootWarning `shouldSatisfy` ("NON-DURABLE" `T.isInfixOf`)
         memoryQueueBootWarning `shouldSatisfy` ("BEST-EFFORT" `T.isInfixOf`)
 
-    it "honours the AWS-standard SQS endpoint override (ECLUSE_AWS_ENDPOINT_URL_SQS)" $ do
+    it "honours the AWS-standard SQS endpoint override (AWS_ENDPOINT_URL_SQS)" $ do
         env <-
             expectEnv
-                ( ("ECLUSE_AWS_REGION", "us-east-1")
-                    : ("ECLUSE_AWS_ENDPOINT_URL_SQS", "http://localhost:4566")
-                    : ("ECLUSE_AWS_ACCESS_KEY_ID", "test")
-                    : ("ECLUSE_AWS_SECRET_ACCESS_KEY", "sqs-secret-xyz")
+                ( ("AWS_REGION", "us-east-1")
+                    : ("AWS_ENDPOINT_URL_SQS", "http://localhost:4566")
                     : staticEnvVars
                 )
         cfg <- expectSqsBackend env
@@ -275,30 +273,15 @@ mirrorQueueSpec = describe "planMirrorQueue" $ do
                 endpointSecure ep `shouldBe` False
                 endpointHost ep `shouldBe` "localhost"
                 endpointPort ep `shouldBe` 4566
-                -- N2: the endpoint secret key is a redacted Secret — its plaintext
-                -- must never reach the derived Show of the config/endpoint.
-                let rendered = show cfg :: Text
-                rendered `shouldNotSatisfy` ("sqs-secret-xyz" `T.isInfixOf`)
-                rendered `shouldSatisfy` ("REDACTED" `T.isInfixOf`)
             Nothing -> expectationFailure "expected the endpoint override to resolve"
 
-    it "falls back to the generic ECLUSE_AWS_ENDPOINT_URL when the SQS-specific one is unset" $ do
-        env <-
-            expectEnv
-                ( ("ECLUSE_AWS_REGION", "us-east-1")
-                    : ("ECLUSE_AWS_ENDPOINT_URL", "https://sqs.vpce.example:8443")
-                    : staticEnvVars
-                )
-        cfg <- expectSqsBackend env
-        ((endpointSecure &&& endpointPort) <$> sqsEndpoint cfg) `shouldBe` Just (True, 8443)
-
     it "uses AWS default resolution (no endpoint) when no override is set" $ do
-        env <- expectEnv (("ECLUSE_AWS_REGION", "us-east-1") : staticEnvVars)
+        env <- expectEnv (("AWS_REGION", "us-east-1") : staticEnvVars)
         cfg <- expectSqsBackend env
         sqsEndpoint cfg `shouldBe` Nothing
 
     it "fails fast on a malformed SQS endpoint override" $ do
-        env <- expectEnv (("ECLUSE_AWS_REGION", "us-east-1") : ("ECLUSE_AWS_ENDPOINT_URL_SQS", "not-a-url") : staticEnvVars)
+        env <- expectEnv (("AWS_REGION", "us-east-1") : ("AWS_ENDPOINT_URL_SQS", "not-a-url") : staticEnvVars)
         planMirrorQueue env `shouldBe` Left [QueueEndpointMalformed "not-a-url"]
   where
     -- Resolve the SQS config from a plan that must select the SQS backend, failing
@@ -354,27 +337,27 @@ mirrorCredentialSpec = describe "planMirrorCredential / resolveCodeArtifactConfi
                 caRegion cfg `shouldBe` "us-west-2"
             Left errs -> expectationFailure ("expected the host to parse, got " <> show errs)
 
-    it "ranks the host-encoded region above ECLUSE_AWS_REGION (mints against the domain's region)" $ do
+    it "ranks the host-encoded region above AWS_REGION (mints against the domain's region)" $ do
         -- N3: the endpoint host encodes the domain's authoritative region, so a
-        -- cross-region deploy (us-west-2 URL, ECLUSE_AWS_REGION=us-east-1) mints in us-west-2.
+        -- cross-region deploy (us-west-2 URL, AWS_REGION=us-east-1) mints in us-west-2.
         env <-
             expectEnv
                 ( ("ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER", "codeartifact")
                     : ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET", "https://my-domain-111122223333.d.codeartifact.us-west-2.amazonaws.com/npm/my-repo/")
-                    : ("ECLUSE_AWS_REGION", "us-east-1")
+                    : ("AWS_REGION", "us-east-1")
                     : withoutMirrorTargetUrl staticEnvVars
                 )
         (caRegion <$> rightToMaybe (resolveCodeArtifactConfig Npm env (cfgMounts env Map.! Npm))) `shouldBe` Just "us-west-2"
 
-    it "falls the region back to ECLUSE_AWS_REGION only when neither explicit key nor host supplies it" $ do
+    it "falls the region back to AWS_REGION only when neither explicit key nor host supplies it" $ do
         -- A non-CodeArtifact mirror URL (no host region) and no explicit region: the
-        -- process-wide ECLUSE_AWS_REGION is the last resort.
+        -- process-wide AWS_REGION is the last resort.
         env <-
             expectEnv
                 ( ("ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER", "codeartifact")
                     : ("ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_DOMAIN", "d")
                     : ("ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_DOMAIN_OWNER", "111122223333")
-                    : ("ECLUSE_AWS_REGION", "ap-south-1")
+                    : ("AWS_REGION", "ap-south-1")
                     : staticEnvVars
                 )
         (caRegion <$> rightToMaybe (resolveCodeArtifactConfig Npm env (cfgMounts env Map.! Npm))) `shouldBe` Just "ap-south-1"
@@ -407,7 +390,7 @@ mirrorCredentialSpec = describe "planMirrorCredential / resolveCodeArtifactConfi
             `shouldBe` Left [CodeArtifactConfigInvalid "ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_DOMAIN_OWNER" "expected a 12-digit AWS account id"]
 
     it "fails loud, naming each unresolved input, when neither key nor host supplies it" $ do
-        -- A non-CodeArtifact mirror URL and no explicit keys / ECLUSE_AWS_REGION: domain,
+        -- A non-CodeArtifact mirror URL and no explicit keys / AWS_REGION: domain,
         -- owner, and region are all unresolved and all named in one aggregated failure.
         env <- expectEnv (overrideEnv "ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER" "codeartifact" staticEnvVars)
         resolveCodeArtifactConfig Npm env (cfgMounts env Map.! Npm)
@@ -746,7 +729,7 @@ renderSpec = describe "renderBootError" $
         renderBootError (UnresolvedCredential Npm CodeArtifactCredential)
             `shouldSatisfy` infixed "not initialized"
         renderBootError (QueueProviderUnavailable PubSubQueue) `shouldSatisfy` infixed "not available"
-        renderBootError QueueRegionMissing `shouldSatisfy` infixed "ECLUSE_AWS_REGION"
+        renderBootError QueueRegionMissing `shouldSatisfy` infixed "AWS_REGION"
         renderBootError (QueueUrlMissing SqsQueue) `shouldSatisfy` infixed "ECLUSE_QUEUE_URL"
         renderBootError (QueueEndpointMalformed "x") `shouldSatisfy` infixed "endpoint"
         renderBootError (MirrorCredentialProviderUnavailable AdcCredential)

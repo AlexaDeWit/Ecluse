@@ -110,7 +110,7 @@ serve 'Application' over them, then run the body against the assembled proxy.
 
 The queue is built through the __config-driven composition root__
 ('Ecluse.Composition.planMirrorQueue' → 'Ecluse.Core.Queue.Sqs.newSqsQueue'), driven by the
-AWS-SDK-standard @ECLUSE_AWS_ENDPOINT_URL_SQS@ override pointed at the container — the same
+AWS-SDK-standard @AWS_ENDPOINT_URL_SQS@ override pointed at the container — the same
 production path the released image runs, with no test-only code path. -}
 withAwsProxy :: Container -> Text -> (TestProxy -> IO a) -> IO a
 withAwsProxy container queueName body =
@@ -125,7 +125,7 @@ withAwsProxy container queueName body =
 
 {- Build the SQS-backed mirror queue through the production composition root: create a
 queue in the container, then resolve the backend from an environment layer carrying the
-AWS-SDK-standard @ECLUSE_AWS_ENDPOINT_URL_SQS@ override (and the standard credential keys an
+AWS-SDK-standard @AWS_ENDPOINT_URL_SQS@ override (and the standard credential keys an
 emulator needs), exactly as the released image would. A short long-poll keeps the worker
 loop brisk. -}
 configDrivenQueue :: Container -> Text -> IO MirrorQueue
@@ -145,10 +145,10 @@ sqsEnvVars :: Text -> Text -> [(String, String)]
 sqsEnvVars queueUrl endpointUrl =
     [ ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://private.invalid")
     , ("ECLUSE_QUEUE_URL", toString queueUrl)
-    , ("ECLUSE_AWS_REGION", "us-east-1")
-    , ("ECLUSE_AWS_ENDPOINT_URL_SQS", toString endpointUrl)
-    , ("ECLUSE_AWS_ACCESS_KEY_ID", "test")
-    , ("ECLUSE_AWS_SECRET_ACCESS_KEY", "test")
+    , ("AWS_REGION", "us-east-1")
+    , ("AWS_ENDPOINT_URL_SQS", toString endpointUrl)
+    , ("AWS_ACCESS_KEY_ID", "test")
+    , ("AWS_SECRET_ACCESS_KEY", "test")
     ]
 
 -- The composition-root 'Env' over the real SQS queue and the publish client aimed at

@@ -72,9 +72,6 @@ instance FromJSON AppConfig where
             <*> o .: "queueMemoryMaxDepth"
             <*> o .:? "awsRegion"
             <*> o .:? "awsEndpointUrlSqs"
-            <*> o .:? "awsEndpointUrl"
-            <*> o .:? "awsAccessKeyId"
-            <*> (o .:? "awsSecretAccessKey" >>= traverse parseSecret)
             <*> o .:? "googleProject"
             <*> (o .:? "authToken" >>= traverse parseSecret)
             <*> o .:? "helpMessage"

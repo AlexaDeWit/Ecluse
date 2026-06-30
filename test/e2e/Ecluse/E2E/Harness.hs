@@ -12,7 +12,7 @@ beyond @testcontainers-hs@, so the harness drives @docker@ directly through
 @typed-process@.
 
 The proxy's mirror queue is the __real AWS SQS backend__ pointed at ministack through
-the production @ECLUSE_AWS_ENDPOINT_URL_SQS@ override (no test-only code path — the released image
+the production @AWS_ENDPOINT_URL_SQS@ override (no test-only code path — the released image
 is exercised exactly as deployed, just with the endpoint aimed at the emulator). The
 harness creates the queue in ministack over the plain SQS query API (the emulator
 needs no signed request) and passes its URL to the proxy; the proxy reaches the
@@ -305,7 +305,7 @@ withE2EWith cfg action = do
                 ]
             manager <- newManager defaultManagerSettings
             -- Create the mirror queue in ministack and learn its URL. The proxy routes to
-            -- ministack via ECLUSE_AWS_ENDPOINT_URL_SQS and matches the queue by its path, so the
+            -- ministack via AWS_ENDPOINT_URL_SQS and matches the queue by its path, so the
             -- URL's host (here ministack's own `localhost:4566`) is immaterial.
             miniPort <- publishedPort mini "4566/tcp"
             queueUrl <- createMinistackQueue manager miniPort "ecluse-e2e"
@@ -314,7 +314,7 @@ withE2EWith cfg action = do
             -- the container starts — the assigned port is only readable after.
             proxyPort <- freeHostPort
             -- The real proxy image: server ‖ worker over the real SQS backend, pointed
-            -- at ministack through the production ECLUSE_AWS_ENDPOINT_URL_SQS override.
+            -- at ministack through the production AWS_ENDPOINT_URL_SQS override.
             dockerOk $
                 [ "run"
                 , "-d"
@@ -350,8 +350,8 @@ withE2EWith cfg action = do
 
 {- | The proxy's environment, given the host port it is published on and the mirror
 queue URL created in ministack. The real SQS backend is pointed at ministack through
-the production @ECLUSE_AWS_ENDPOINT_URL_SQS@ override and signs with the standard
-@ECLUSE_AWS_ACCESS_KEY_ID@\/@ECLUSE_AWS_SECRET_ACCESS_KEY@ (the emulator ignores them). Both upstream
+the production @AWS_ENDPOINT_URL_SQS@ override and signs with the standard
+@AWS_ACCESS_KEY_ID@\/@AWS_SECRET_ACCESS_KEY@ (the emulator ignores them). Both upstream
 legs and the mirror target point at the stub containers by their network aliases.
 @ECLUSE_PUBLIC_URL@ is the host-loopback address npm reaches the proxy on, so each
 served @dist.tarball@ is rewritten to an absolute URL npm can fetch.
@@ -376,10 +376,10 @@ proxyEnv hostPort queueUrl =
     , ("ECLUSE_QUEUE_URL", queueUrl)
     , -- The production endpoint override (AWS-SDK-standard), aimed at the ministack
       -- alias; the dummy keys sign the request the emulator does not validate.
-      ("ECLUSE_AWS_ENDPOINT_URL_SQS", "http://ministack:4566")
-    , ("ECLUSE_AWS_REGION", "us-east-1")
-    , ("ECLUSE_AWS_ACCESS_KEY_ID", "test")
-    , ("ECLUSE_AWS_SECRET_ACCESS_KEY", "test")
+      ("AWS_ENDPOINT_URL_SQS", "http://ministack:4566")
+    , ("AWS_REGION", "us-east-1")
+    , ("AWS_ACCESS_KEY_ID", "test")
+    , ("AWS_SECRET_ACCESS_KEY", "test")
     , ("ECLUSE_LOG_FORMAT", "json")
     , -- Add DenyInstallTimeExecution so the deny scenario has a rule to fire.
       -- We must also explicitly disable 'min-age' from the opinionated default policy,
@@ -896,7 +896,7 @@ host-published port and return the queue URL. Uses the plain SQS query API — t
 emulator needs no signed request — and retries while the emulator's SQS service warms
 up. @CreateQueue@ is idempotent (a repeat returns the existing URL), so the retry is
 safe. The returned URL's host is the emulator's own (@localhost:4566@); the proxy
-routes to ministack via @ECLUSE_AWS_ENDPOINT_URL_SQS@ and matches the queue by its path, so
+routes to ministack via @AWS_ENDPOINT_URL_SQS@ and matches the queue by its path, so
 that host is never dialled.
 -}
 createMinistackQueue :: Manager -> Int -> Text -> IO Text

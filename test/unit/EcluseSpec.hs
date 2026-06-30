@@ -68,7 +68,7 @@ URLs, a static mirror-target token so the env single-mount's @static@ credential
 reference resolves, and an ephemeral port so the brief blocking listen does not
 collide with the conventional default. The document-loading path is exercised
 separately by layering @PROXY_CONFIG@ on top of this base. It deliberately omits
-@ECLUSE_AWS_REGION@, so it is also the fixture for the queue-region fail-fast case.
+@AWS_REGION@, so it is also the fixture for the queue-region fail-fast case.
 -}
 runEnv :: [(String, String)]
 runEnv =
@@ -91,12 +91,7 @@ are caught by its own supervision — so this stays hermetic.
 -}
 awsRunEnv :: [(String, String)]
 awsRunEnv =
-    [ ("ECLUSE_AWS_REGION", "us-east-1")
-    , ("ECLUSE_AWS_ACCESS_KEY_ID", "test")
-    , ("ECLUSE_AWS_SECRET_ACCESS_KEY", "test")
-    , ("AWS_REGION", "us-east-1")
-    , ("AWS_ACCESS_KEY_ID", "test")
-    , ("AWS_SECRET_ACCESS_KEY", "test")
+    [ ("AWS_REGION", "us-east-1")
     ]
         <> runEnv
 
@@ -139,11 +134,10 @@ spec = do
 
         it "boots under the in-memory mirror-queue backend (no AWS settings, no ECLUSE_QUEUE_URL) and serves" $ do
             -- The explicit memory backend needs no cloud queue: it boots with no
-            -- ECLUSE_AWS_REGION/credentials AND no ECLUSE_QUEUE_URL — emitting its loud
+            -- AWS_REGION/credentials AND no ECLUSE_QUEUE_URL — emitting its loud
             -- non-durable boot warning and constructing the bounded in-memory queue. The
             -- idle worker simply parks on the empty queue rather than hot-looping.
             unsetEnv "PROXY_CONFIG"
-            unsetEnv "ECLUSE_AWS_REGION"
             unsetEnv "AWS_REGION"
             unsetEnv "ECLUSE_QUEUE_URL"
             traverse_ (uncurry setEnv) (filter ((/= "ECLUSE_QUEUE_URL") . fst) runEnv)
@@ -153,13 +147,12 @@ spec = do
             traverse_ (unsetEnv . fst) runEnv
             outcome `shouldBe` Nothing
 
-        it "aborts fast at boot when the sqs backend has no ECLUSE_AWS_REGION" $ do
+        it "aborts fast at boot when the sqs backend has no AWS_REGION" $ do
             -- The default sqs backend needs a region to be scoped to; absent, the
             -- composition root fails fast rather than building an unscoped queue.
             unsetEnv "PROXY_CONFIG"
-            -- Clear ECLUSE_AWS_REGION explicitly so a sibling case (run under a randomized
+            -- Clear AWS_REGION explicitly so a sibling case (run under a randomized
             -- order) cannot leak it into this missing-region fixture.
-            unsetEnv "ECLUSE_AWS_REGION"
             unsetEnv "AWS_REGION"
             traverse_ (uncurry setEnv) runEnv
             setEnv "ECLUSE_QUEUE_BACKEND" "sqs"

@@ -87,7 +87,7 @@ import Ecluse.Config (
     renderPolicyError,
     unUrl,
  )
-import Ecluse.Core.Credential (AuthToken (..), CredentialProvider, Secret, mkSecret, staticProvider)
+import Ecluse.Core.Credential (AuthToken (..), CredentialProvider, Secret, staticProvider)
 import Ecluse.Core.Credential.CodeArtifact (CodeArtifactConfig (..), newCodeArtifactProvider)
 import Ecluse.Core.Credential.Refresh (CredentialReporters)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName, prefixFor)
@@ -211,9 +211,9 @@ boot errors naming each input that could not be resolved.
 Each required input is resolved __(a) from its explicit @MIRROR_TARGET_CODEARTIFACT_*@
 key, else (b) by parsing the mirror-target URL host__ of the form
 @{domain}-{owner}.d.codeartifact.{region}.amazonaws.com@ (the documented host
-fallback). The region resolves explicit key → host → @ECLUSE_AWS_REGION@: the endpoint host
+fallback). The region resolves explicit key → host → @AWS_REGION@: the endpoint host
 encodes the domain's authoritative region, so it outranks the process-wide
-@ECLUSE_AWS_REGION@ (a cross-region deploy mints against the domain's region, not the
+@AWS_REGION@ (a cross-region deploy mints against the domain's region, not the
 caller's). The mirror-target URL is the resolved one — an unset @ECLUSE_MIRROR_TARGET@
 has already folded onto the private upstream — so a private-upstream CodeArtifact
 endpoint is parsed too. The optional token-duration carries through
@@ -309,7 +309,7 @@ data BootError
       -}
       QueueProviderUnavailable QueueBackend
     | {- | The SQS mirror-queue backend was selected but no AWS region was supplied
-      (@ECLUSE_AWS_REGION@), so the queue cannot be scoped to a region.
+      (@AWS_REGION@), so the queue cannot be scoped to a region.
       -}
       QueueRegionMissing
     | {- | A cloud mirror-queue backend (e.g. @sqs@) was selected but no
@@ -317,8 +317,8 @@ data BootError
       in-memory backend does not raise this — it has no external queue.
       -}
       QueueUrlMissing QueueBackend
-    | {- | The configured SQS endpoint override (@ECLUSE_AWS_ENDPOINT_URL_SQS@ \/
-      @ECLUSE_AWS_ENDPOINT_URL@) is not a parseable endpoint URL. Carries the offending value.
+    | {- | The configured SQS endpoint override (@AWS_ENDPOINT_URL_SQS@ \/
+      @AWS_ENDPOINT_URL@) is not a parseable endpoint URL. Carries the offending value.
       -}
       QueueEndpointMalformed Text
     | {- | The selected mirror-target credential provider has no implementation
@@ -377,13 +377,13 @@ renderBootError = \case
     QueueRegionMissing ->
         "mirror queue provider "
             <> renderWire SqsQueue
-            <> " requires ECLUSE_AWS_REGION to be set"
+            <> " requires AWS_REGION to be set"
     QueueUrlMissing backend ->
         "mirror queue provider "
             <> renderWire backend
             <> " requires ECLUSE_QUEUE_URL to be set"
     QueueEndpointMalformed url ->
-        "the SQS endpoint override (ECLUSE_AWS_ENDPOINT_URL_SQS / ECLUSE_AWS_ENDPOINT_URL) is not a valid endpoint URL: " <> url
+        "the SQS endpoint override (AWS_ENDPOINT_URL_SQS / AWS_ENDPOINT_URL) is not a valid endpoint URL: " <> url
     MirrorCredentialProviderUnavailable backend ->
         "mirror-target credential provider "
             <> renderWire backend
@@ -701,20 +701,20 @@ which backends this binary can build. The AWS @sqs@ backend resolves to a
 knobs at their defaults); the composition root passes that to
 @Ecluse.Core.Queue.Sqs.newSqsQueue@. The @memory@ backend resolves to a 'MemoryBackend'
 carrying its depth cap, built in-process with no cloud queue (@ECLUSE_QUEUE_URL@ and
-@ECLUSE_AWS_REGION@ are not consulted for it) — an explicit operator choice for a simple,
+@AWS_REGION@ are not consulted for it) — an explicit operator choice for a simple,
 single-node, or air-gapped deployment, never an automatic fallback (which would
 soften the fail-loud-on-misconfig posture); the composition root emits the
 'memoryQueueBootWarning' on selection. The GCP @pubsub@ arm is recognised but not
 built, so it is a fail-loud 'QueueProviderUnavailable' boot error rather than a
 silent fall-through. @ECLUSE_QUEUE_URL@ is optional at the env layer; it is required
 __here__ for @sqs@ (the jobs need a queue), so a missing one is a fail-loud
-'QueueUrlMissing' boot error, and a missing @ECLUSE_AWS_REGION@ under @sqs@ is a
+'QueueUrlMissing' boot error, and a missing @AWS_REGION@ under @sqs@ is a
 'QueueRegionMissing' boot error — the @sqs@ arm aggregates the region, queue-URL, and
 endpoint failures, and the whole result is a list so it aggregates with the rest of
 the boot-time validation.
 
-When an endpoint override is configured (@ECLUSE_AWS_ENDPOINT_URL_SQS@, else
-@ECLUSE_AWS_ENDPOINT_URL@ — the AWS-SDK-standard variables), it is parsed into the
+When an endpoint override is configured (@AWS_ENDPOINT_URL_SQS@, else
+@AWS_ENDPOINT_URL@ — the AWS-SDK-standard variables), it is parsed into the
 backend's 'SqsEndpoint' so the released image can target a local emulator
 (@ministack@) or a VPC endpoint without a test-only code path; a malformed override URL is
 a fail-loud 'QueueEndpointMalformed' boot error. With no override, the SQS backend
@@ -723,7 +723,7 @@ uses AWS's default endpoint and credential resolution.
 planMirrorQueue :: AppConfig -> Either [BootError] MirrorQueuePlan
 planMirrorQueue env = case cfgQueueBackend env of
     PubSubQueue -> Left [QueueProviderUnavailable PubSubQueue]
-    -- The in-memory backend needs no cloud queue: ECLUSE_QUEUE_URL and ECLUSE_AWS_REGION are
+    -- The in-memory backend needs no cloud queue: ECLUSE_QUEUE_URL and AWS_REGION are
     -- not consulted, so it can never fail on a missing one.
     MemoryQueue -> Right (MemoryBackend (defaultMemoryQueueConfig (cfgQueueMemoryMaxDepth env)))
     SqsQueue -> case (regionE, urlE, resolveSqsEndpoint env) of
@@ -734,7 +734,7 @@ planMirrorQueue env = case cfgQueueBackend env of
             -- URL, malformed endpoint) so one boot reports them all at once.
             Left (lefts [void regionE, void urlE] <> fromLeft [] endpointE)
   where
-    -- ECLUSE_AWS_REGION, required to scope the SQS queue; a blank value is treated as absent.
+    -- AWS_REGION, required to scope the SQS queue; a blank value is treated as absent.
     regionE :: Either BootError Text
     regionE = case T.strip <$> cfgAwsRegion env of
         Just region | not (T.null region) -> Right region
@@ -780,14 +780,14 @@ memoryQueueDropWarning dropped =
         <> "ECLUSE_QUEUE_MEMORY_MAX_DEPTH to shed fewer under load."
 
 {- Resolve the optional SQS endpoint override into an 'SqsEndpoint', or 'Nothing' for
-AWS's default resolution. The AWS-SDK-standard @ECLUSE_AWS_ENDPOINT_URL_SQS@ takes precedence
-over the generic @ECLUSE_AWS_ENDPOINT_URL@; the override URL is parsed into its TLS flag,
+AWS's default resolution. The AWS-SDK-standard @AWS_ENDPOINT_URL_SQS@ takes precedence
+over the generic @AWS_ENDPOINT_URL@; the override URL is parsed into its TLS flag,
 host, and port, and the request signing keys are taken from the standard
-@ECLUSE_AWS_ACCESS_KEY_ID@\/@ECLUSE_AWS_SECRET_ACCESS_KEY@ (an emulator is off the ambient chain).
+@AWS_ACCESS_KEY_ID@\/@AWS_SECRET_ACCESS_KEY@ (an emulator is off the ambient chain).
 A malformed override URL is a fail-loud boot error. -}
 resolveSqsEndpoint :: AppConfig -> Either [BootError] (Maybe SqsEndpoint)
 resolveSqsEndpoint env =
-    case nonBlank =<< (cfgAwsEndpointUrlSqs env <|> cfgAwsEndpointUrl env) of
+    case nonBlank =<< cfgAwsEndpointUrlSqs env of
         Nothing -> Right Nothing
         Just url -> case parseEndpointUrl url of
             Just (secure, host, port) ->
@@ -797,9 +797,6 @@ resolveSqsEndpoint env =
                             { endpointSecure = secure
                             , endpointHost = host
                             , endpointPort = port
-                            , endpointAccessKey = fromMaybe "" (cfgAwsAccessKeyId env)
-                            , -- Carried as a redacted 'Secret' end to end (never unwrapped here).
-                              endpointSecretKey = fromMaybe (mkSecret "") (cfgAwsSecretAccessKey env)
                             }
                     )
             Nothing -> Left [QueueEndpointMalformed url]

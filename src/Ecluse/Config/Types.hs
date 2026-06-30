@@ -136,9 +136,6 @@ data AppConfig = AppConfig
     , cfgQueueMemoryMaxDepth :: Int
     , cfgAwsRegion :: Maybe Text
     , cfgAwsEndpointUrlSqs :: Maybe Text
-    , cfgAwsEndpointUrl :: Maybe Text
-    , cfgAwsAccessKeyId :: Maybe Text
-    , cfgAwsSecretAccessKey :: Maybe Secret
     , cfgGoogleProject :: Maybe Text
     , cfgAuthToken :: Maybe Secret
     , cfgHelpMessage :: Maybe Text

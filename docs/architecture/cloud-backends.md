@@ -164,7 +164,7 @@ those references collapse to **one** identity: the same container role both writ
 the mirror target and (under `service`)
 reads the private upstream, Écluse acts as one consistent entity. A multi-cloud
 process holds one provider per cloud, keyed by cloud; the region/project scoping
-each (`ECLUSE_AWS_REGION` / `ECLUSE_GOOGLE_PROJECT`) are likewise process-global. **A mount
+each (`AWS_REGION` / `ECLUSE_GOOGLE_PROJECT`) are likewise process-global. **A mount
 that names a credential source with no initialized provider is a boot-time failure**
 (aggregated with other config errors; see
 [Configuration → Validation](configuration.md#validation-fail-fast-reject-the-unknown)),

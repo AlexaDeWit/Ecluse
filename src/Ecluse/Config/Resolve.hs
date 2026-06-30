@@ -39,8 +39,14 @@ buildEnvAst env = foldl' deepMerge (Object KeyMap.empty) (map mkValue ecluseVars
     ecluseVars =
         [ (k, v)
         | (key, v) <- env
-        , Just k <- [T.stripPrefix "ECLUSE_" (T.pack key)]
+        , let kText = T.pack key
+        , let kMaybe = case T.stripPrefix "ECLUSE_" kText of
+                Just k -> Just k
+                Nothing -> if any (`T.isPrefixOf` kText) exemptedPrefixes then Just kText else Nothing
+        , Just k <- [kMaybe]
         ]
+
+    exemptedPrefixes = ["AWS_"]
 
     mkValue :: (Text, String) -> Value
     mkValue (k, v) =
