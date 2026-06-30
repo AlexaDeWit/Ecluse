@@ -5,7 +5,8 @@ module Ecluse.Core.Worker.Fetch (
 import Network.HTTP.Client (HttpException, Manager, Request, brRead, responseBody, withResponse)
 import UnliftIO.Exception (try)
 
-import Ecluse.Core.Registry.Npm (NpmClientConfig (..), ResponseBoundExceeded (ResponseBoundExceeded), artifactRequestByUrl)
+import Ecluse.Core.Registry.Npm (ResponseBoundExceeded (ResponseBoundExceeded))
+import Ecluse.Core.Registry.Npm.Request (artifactRequestByUrl)
 import Ecluse.Core.Security (Limits (maxBodyBytes), boundedRead, defaultLimits)
 import Ecluse.Core.Worker.Types (WorkerM, wrManager)
 
@@ -21,7 +22,7 @@ redelivers rather than killing the iteration. -}
 fetchArtifactBytes :: Text -> WorkerM (Either Text ByteString)
 fetchArtifactBytes url = do
     manager <- asks wrManager
-    case artifactRequestByUrl (fetchConfig manager) url of
+    case artifactRequestByUrl "" Nothing url of
         Left urlErr -> pure (Left ("unformable artifact URL: " <> show urlErr))
         Right request ->
             try (liftIO (boundedFetch manager request)) <&> \case
@@ -30,18 +31,6 @@ fetchArtifactBytes url = do
                     Left ("artifact exceeded the response bound: " <> show limitErr)
                 Right (Right bytes) -> Right bytes
   where
-    -- The public artifact fetch is anonymous (the client credential is never sent
-    -- upstream) and uses the untrusted data-plane manager, the validating TLS manager
-    -- over an https-only dist.tarball. The base URL is unused for the by-URL request form
-    -- (the URL is absolute); the manager and anonymous posture are what matter.
-    fetchConfig :: Manager -> NpmClientConfig
-    fetchConfig manager =
-        NpmClientConfig
-            { npmBaseUrl = url
-            , npmManager = manager
-            , npmToken = Nothing
-            , npmLimits = workerArtifactLimits
-            }
 
 {- Open the artifact request and read its body chunk-by-chunk through the bounded
 read, returning the whole bytes when within the artifact cap or a typed

@@ -42,7 +42,8 @@ import Ecluse.Core.Queue (
     newInMemoryQueue,
  )
 import Ecluse.Core.Registry (ParseError (..), RegistryClient (..))
-import Ecluse.Core.Registry.Npm (NpmClientConfig (..), artifactRequestByFile, artifactRequestByUrl)
+import Ecluse.Core.Registry.Npm (NpmClientConfig (..))
+import Ecluse.Core.Registry.Npm.Request (artifactRequestByFile, artifactRequestByUrl)
 import Ecluse.Core.Registry.Npm.Filter (applyFilterPlan, rewriteTarballUrls)
 import Ecluse.Core.Registry.Npm.Route qualified as Npm
 import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
@@ -621,8 +622,8 @@ deps privatePort publicPort inbound = do
             , pdMinIntegrity = defaultMinIntegrity
             , pdMinTrustedIntegrity = defaultMinTrustedIntegrity
             , pdNewMetadataClient = \p u c f1 f2 l m t s -> newNpmMetadataClient p u c f1 f2 (NpmClientConfig t m s l)
-            , pdBuildArtifactRequestByFile = \l m t s -> artifactRequestByFile (NpmClientConfig t m s l)
-            , pdBuildArtifactRequestByUrl = \l m t s -> artifactRequestByUrl (NpmClientConfig t m s l)
+            , pdBuildArtifactRequestByFile = \_ _ t s -> artifactRequestByFile t s
+            , pdBuildArtifactRequestByUrl = \_ _ t s -> artifactRequestByUrl t s
             , pdApplyFilter = applyFilterPlan
             , pdRewriteUrls = rewriteTarballUrls
             }

@@ -24,7 +24,7 @@ import Ecluse.Core.Package (Hash (hashAlg, hashValue), HashAlg (SHA1, SRI), pkgE
 import Ecluse.Core.Queue (MirrorArtifact (maFilename, maHashes), MirrorJob (jobArtifact, jobArtifactUrl, jobPackage, jobTraceContext, jobVersion), MirrorQueue (ack, extendVisibility), QueueMessage (msgJob, msgReceipt), ReceiptHandle, Seconds (Seconds))
 import Ecluse.Core.Registry (PublishFault (PublishRejected, PublishUrlUnformable), RegistryClient (publishArtifact))
 import Ecluse.Core.Registry.Metadata (VersionEvaluation (VersionMetadataUnavailable, VersionMissing, VersionPresent))
-import Ecluse.Core.Registry.Npm (npmPublishDocument)
+import Ecluse.Core.Registry.Npm.Publish (npmPublishDocument)
 import Ecluse.Core.Rules (evalRules)
 import Ecluse.Core.Rules.Types (Decision (Admitted, Blocked, BlockedByDefault, Undecidable), EvalContext (EvalContext))
 import Ecluse.Core.Telemetry.Metrics qualified as Metric

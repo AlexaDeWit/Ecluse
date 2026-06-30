@@ -13,9 +13,11 @@ import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageName, mkPackageName)
 import Ecluse.Core.Registry (RegistryResponse (responseBody))
 import Ecluse.Core.Registry.Npm (
-    MetadataForm (Abbreviated),
     NpmClientConfig (NpmClientConfig, npmBaseUrl, npmLimits, npmManager, npmToken),
     fetchMetadataForm,
+ )
+import Ecluse.Core.Registry.Npm.Request (
+    MetadataForm (Abbreviated),
     noValidators,
  )
 import Ecluse.Core.Security (defaultLimits)

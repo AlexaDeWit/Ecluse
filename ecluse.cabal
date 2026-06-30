@@ -111,6 +111,8 @@ library ecluse-core
     Ecluse.Core.Registry.Npm.Filter
     Ecluse.Core.Registry.Npm.Metadata
     Ecluse.Core.Registry.Npm.Project
+    Ecluse.Core.Registry.Npm.Publish
+    Ecluse.Core.Registry.Npm.Request
     Ecluse.Core.Registry.Npm.Route
     Ecluse.Core.Registry.Npm.SelectiveDecode
     Ecluse.Core.Registry.Npm.Serve
@@ -318,20 +320,25 @@ library ecluse-test-support
     Ecluse.Test.Package
     Ecluse.Test.Port
     Ecluse.Test.RegistryCapture
+    Ecluse.Test.Stub
     Ecluse.Test.Support
     Ecluse.Test.Version
     Ecluse.Test.Worker
 
   build-depends:
     , ecluse:ecluse-core
-    , aeson        ^>=2.2
-    , bytestring   ^>=0.12
-    , containers   ^>=0.7
-    , hedgehog     ^>=1.5
-    , hspec        ^>=2.11
-    , http-client  ^>=0.7
-    , text         ^>=2.1
-    , time         ^>=1.12
+    , aeson             ^>=2.2
+    , bytestring        ^>=0.12
+    , case-insensitive  ^>=1.2
+    , containers        ^>=0.7
+    , hedgehog          ^>=1.5
+    , hspec             ^>=2.11
+    , http-client       ^>=0.7
+    , http-types        ^>=0.12
+    , text              ^>=2.1
+    , time              ^>=1.12
+    , wai               ^>=3.2
+    , warp              ^>=3.4
 
 -- Core unit tests: cover every Ecluse.Core.* module. Pure, fast, deterministic. Gating.
 -- MUST NOT list the `ecluse` app library in build-depends: its absence is the partition
@@ -359,6 +366,8 @@ test-suite ecluse-core-unit
     Ecluse.Registry.Npm.FilterSpec
     Ecluse.Registry.Npm.MetadataSpec
     Ecluse.Registry.Npm.ProjectSpec
+    Ecluse.Registry.Npm.PublishSpec
+    Ecluse.Registry.Npm.RequestSpec
     Ecluse.Registry.Npm.RouteSpec
     Ecluse.Registry.Npm.ServeSpec
     Ecluse.Registry.Npm.WireSpec

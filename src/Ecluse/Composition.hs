@@ -97,6 +97,7 @@ import Ecluse.Core.Queue.Sqs (SqsConfig (sqsEndpoint), SqsEndpoint (..), default
 import Ecluse.Core.Registry.Npm qualified as Npm
 import Ecluse.Core.Registry.Npm.Filter qualified as NpmFilter
 import Ecluse.Core.Registry.Npm.Project qualified as NpmProject
+import Ecluse.Core.Registry.Npm.Request qualified as NpmRequest
 import Ecluse.Core.Wire (renderWire)
 
 import Ecluse.Core.Rules (prepare)
@@ -550,8 +551,8 @@ composeBindings resolveAdapter clock providers config = do
                 , pdMinIntegrity = minIntegrity
                 , pdMinTrustedIntegrity = minTrustedIntegrity
                 , pdNewMetadataClient = \p u c f1 f2 l m t s -> Metadata.newNpmMetadataClient p u c f1 f2 (Npm.NpmClientConfig t m s l)
-                , pdBuildArtifactRequestByFile = \l m t s -> Npm.artifactRequestByFile (Npm.NpmClientConfig t m s l)
-                , pdBuildArtifactRequestByUrl = \l m t s -> Npm.artifactRequestByUrl (Npm.NpmClientConfig t m s l)
+                , pdBuildArtifactRequestByFile = \_ _ t s -> NpmRequest.artifactRequestByFile t s
+                , pdBuildArtifactRequestByUrl = \_ _ t s -> NpmRequest.artifactRequestByUrl t s
                 , pdApplyFilter = NpmFilter.applyFilterPlan
                 , pdRewriteUrls = NpmFilter.rewriteTarballUrls
                 }
