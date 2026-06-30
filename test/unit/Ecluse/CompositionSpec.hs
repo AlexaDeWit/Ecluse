@@ -2,6 +2,7 @@ module Ecluse.CompositionSpec (spec) where
 
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, UTCTime (UTCTime), fromGregorian)
+import Network.HTTP.Client (ManagerSettings (managerConnCount), defaultManagerSettings)
 import Test.Hspec
 
 import Data.Map.Strict qualified as Map
@@ -13,6 +14,7 @@ import Ecluse.Composition (
     MirrorQueuePlan (..),
     cacheConfigFor,
     composeBindings,
+    connectionPoolSettings,
     initCredentialProviders,
     initializedEcosystems,
     lookupProvider,
@@ -69,6 +71,7 @@ spec = do
     mirrorQueueSpec
     mirrorCredentialSpec
     cacheConfigSpec
+    connectionPoolSpec
     composeBindingsSpec
     bootErrorSpec
     publishWiringSpec
@@ -405,6 +408,12 @@ cacheConfigSpec = describe "cacheConfigFor" $
         cacheTtl (cacheConfigFor env) `shouldBe` (45 :: NominalDiffTime)
         cacheMaxEntries (cacheConfigFor env) `shouldBe` 256
         cacheMaxBytes (cacheConfigFor env) `shouldBe` 1048576
+
+connectionPoolSpec :: Spec
+connectionPoolSpec =
+    describe "connectionPoolSettings" $
+        it "sets the configured per-host connection bound" $
+            managerConnCount (connectionPoolSettings 23 defaultManagerSettings) `shouldBe` 23
 
 composeBindingsSpec :: Spec
 composeBindingsSpec = describe "planMounts / composeBindings (config-driven serving)" $ do

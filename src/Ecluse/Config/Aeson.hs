@@ -63,7 +63,7 @@ instance FromJSON MountConfig where
 
 instance FromJSON AppConfig where
     parseJSON = withObject "AppConfig" $ \o -> do
-        rejectUnknownKeys "document" ["port", "mounts", "queueBackend", "queueUrl", "queueMemoryMaxDepth", "awsRegion", "awsEndpointUrlSqs", "awsEndpointUrl", "awsAccessKeyId", "awsSecretAccessKey", "googleProject", "authToken", "helpMessage", "cveSyncInterval", "shutdownDrainTimeout", "cacheTtl", "cacheMaxEntries", "cacheMaxBytes", "maxResponseBytes", "maxVersionCount", "maxNestingDepth", "logFormat", "telemetry", "publicUrl", "minPublicIntegrity", "minTrustedIntegrity", "rules"] o
+        rejectUnknownKeys "document" ["port", "mounts", "queueBackend", "queueUrl", "queueMemoryMaxDepth", "awsRegion", "awsEndpointUrlSqs", "awsEndpointUrl", "awsAccessKeyId", "awsSecretAccessKey", "googleProject", "authToken", "helpMessage", "cveSyncInterval", "shutdownDrainTimeout", "serveMaxInFlight", "publicConnectionsPerHost", "privateConnectionsPerHost", "cacheTtl", "cacheMaxEntries", "cacheMaxBytes", "maxResponseBytes", "maxVersionCount", "maxNestingDepth", "logFormat", "telemetry", "publicUrl", "minPublicIntegrity", "minTrustedIntegrity", "rules"] o
         AppConfig
             <$> o .: "port"
             <*> (o .:? "mounts" .!= mempty >>= parseMounts)
@@ -77,6 +77,9 @@ instance FromJSON AppConfig where
             <*> o .:? "helpMessage"
             <*> (o .: "cveSyncInterval" >>= parseSeconds)
             <*> o .: "shutdownDrainTimeout"
+            <*> (o .: "serveMaxInFlight" >>= parsePositiveInt "serveMaxInFlight")
+            <*> (o .: "publicConnectionsPerHost" >>= parsePositiveInt "publicConnectionsPerHost")
+            <*> (o .: "privateConnectionsPerHost" >>= parsePositiveInt "privateConnectionsPerHost")
             <*> (o .: "cacheTtl" >>= parseSeconds)
             <*> o .: "cacheMaxEntries"
             <*> o .: "cacheMaxBytes"
@@ -115,6 +118,11 @@ instance FromJSON AppConfig where
             let val = truncate n :: Integer
              in if val >= 0 then pure (fromInteger val) else fail "expected a non-negative integer count of seconds"
         parseSeconds _ = fail "expected a String or Number for Seconds"
+
+        parsePositiveInt :: String -> Int -> Parser Int
+        parsePositiveInt field value
+            | value > 0 = pure value
+            | otherwise = fail (field <> " must be a positive integer")
 
 instance FromJSON RulePatch where
     parseJSON = withObject "rules" $ \o ->

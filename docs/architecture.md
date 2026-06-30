@@ -42,7 +42,7 @@ hard boundary between the **pure capability core** and the **composition shell**
   ecosystem-agnostic core: the domain model, registry adapters, version grammars, the
   pure and effectful rule tiers, credential refresh, the queue and security primitives,
   the agnostic server layer (routing, response model, streaming, conditional-GET, the
-  metadata cache, the request pipeline), the telemetry instrument catalogue, and the
+  metadata cache, non-queuing serve admission, the request pipeline), the telemetry instrument catalogue, and the
   mirror worker. It depends on the OpenTelemetry **API** only, never the SDK, so the
   core carries no process-global wiring.
 - **`ecluse`** (`src`, modules under `Ecluse.*`), the application shell that composes

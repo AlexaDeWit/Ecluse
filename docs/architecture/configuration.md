@@ -141,6 +141,28 @@ packument is projected, is a deliberate **defence-in-depth** semantic backstop b
 it, it bounds per-version work the byte cap already keeps finite, rather than a
 streaming early-reject (the byte cap makes that unnecessary).
 
+### Aggregate serve capacity
+
+Per-response ceilings do not bound aggregate residency when many clients resolve
+different packages concurrently. Écluse therefore admits at most
+`ECLUSE_SERVE_MAX_IN_FLIGHT` metadata materialisations process-wide (a whole
+packument request or the public-metadata gate after a private tarball miss; default
+**16**). Work beyond the cap is shed immediately with a
+mount-shaped `503` and `Retry-After: 1`; there is no application queue whose memory
+or latency can grow with client concurrency. Health probes and locally answered
+routes bypass the bound so an overloaded instance remains observable. A trusted
+private tarball hit also bypasses it and streams with its existing constant-memory
+backpressure; admission protects resident metadata structures, not download count.
+
+The two process-lifetime HTTP managers also carry explicit per-host pool bounds.
+The public default remains **10** connections per host because same-key metadata
+misses are single-flight-coalesced. The private default is **16**, matching the
+serve admission cap: private reads preserve per-client authority and cannot be
+coalesced, so an admitted request is not made to wait behind a smaller implicit
+pool. Operators may tune the three positive integer controls independently; the
+admission cap remains the aggregate process-wide ceiling even when a deployment
+raises a per-host pool.
+
 ### Public integrity floor
 
 A **public** (untrusted) upstream's version is admitted only if its selected artifact

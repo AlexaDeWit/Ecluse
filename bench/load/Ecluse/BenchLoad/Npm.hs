@@ -96,6 +96,7 @@ import Network.Wai.Handler.Warp (testWithApplication)
 
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Harness (Driver (DriveHttpUrls, DriveInProcess), LoadKnobs (..), Scenario (..), UpstreamFixture (..))
+import Ecluse.Composition (connectionPoolSettings)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (Hash, HashAlg (SHA1, SRI), PackageName, mkPackageName)
@@ -124,6 +125,7 @@ import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan), atDefaultPrecedence)
 import Ecluse.Core.Security (TarballHostPolicy (SameHostAsPackument), defaultLimits, lowerCaseHosts)
+import Ecluse.Core.Server.Admission (newServeAdmission)
 import Ecluse.Core.Server.Cache (CacheConfig (cacheMaxEntries, cacheTtl), defaultCacheConfig, newMetadataCache)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Core.Server.Metadata (newNpmMetadataClient)
@@ -144,7 +146,7 @@ import Ecluse.Core.Worker (
     processBatch,
     runWorkerM,
  )
-import Ecluse.Env (newEnv)
+import Ecluse.Env (newEnvWithAdmission)
 import Ecluse.Server (MountBinding (..), application, mkServerConfig)
 import Ecluse.Telemetry (telemetryDisabled)
 import Ecluse.Test.Package (unsafeHash, validSha1, validSha512Sri)
@@ -252,7 +254,9 @@ withNpmProxy knobs ttl maxEntries mkMix body = do
     bodies <- loadServeBodies
     testWithApplication (pure (privateOverlayStub latency)) $ \privatePort ->
         testWithApplication (pure (corpusPublicStub latency bodies)) $ \publicPort -> do
-            manager <- newManager defaultManagerSettings
+            publicManager <- newManager (connectionPoolSettings (lkPublicConnectionsPerHost knobs) defaultManagerSettings)
+            privateManager <- newManager (connectionPoolSettings (lkPrivateConnectionsPerHost knobs) defaultManagerSettings)
+            admission <- newServeAdmission (lkServeMaxInFlight knobs)
             cache <- newMetadataCache defaultCacheConfig{cacheTtl = ttl, cacheMaxEntries = max 1 maxEntries}
             logEnv <- benchLogEnv
             heartbeat <- newWorkerHeartbeat
@@ -260,7 +264,7 @@ withNpmProxy knobs ttl maxEntries mkMix body = do
             -- The same plain manager serves the private and public legs; the serve path
             -- never touches the publish-side registry handle, so it is the refusing
             -- placeholder.
-            env <- newEnv refusingRegistry queue manager manager cache logEnv telemetryDisabled heartbeat
+            env <- newEnvWithAdmission admission refusingRegistry queue publicManager privateManager cache logEnv telemetryDisabled heartbeat
             deps <- npmDeps privatePort publicPort
             let cfg = mkServerConfig [npmMount deps]
             testWithApplication (pure (application cfg env)) $ \proxyPort ->

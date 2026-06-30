@@ -31,6 +31,7 @@ noopMetricsPort :: MetricsPort
 noopMetricsPort =
     MetricsPort
         { mpServeDecision = const pass
+        , mpServeAdmissionInFlight = const pass
         , mpRuleDenial = \_ _ -> pass
         , mpRuleEvalDuration = \_ _ -> pass
         , mpRuleEffectfulFailure = const pass

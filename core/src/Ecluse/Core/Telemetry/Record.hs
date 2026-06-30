@@ -50,6 +50,8 @@ recording through it) stays decoupled from the application's effect stack.
 data MetricsPort = MetricsPort
     { mpServeDecision :: Decision -> IO ()
     -- ^ Record one serve decision (@ecluse.serve.decision@): admit, deny, or unavailable.
+    , mpServeAdmissionInFlight :: Int -> IO ()
+    -- ^ Record a change (+1 or -1) to in-flight metadata parses (@ecluse.serve.admission.in_flight@).
     , mpRuleDenial :: Maybe Text -> ReasonClass -> IO ()
     {- ^ Record one rule denial (@ecluse.rule.denials@) by reason class and, for a
     policy denial, the deciding rule. A non-policy refusal carries no rule.

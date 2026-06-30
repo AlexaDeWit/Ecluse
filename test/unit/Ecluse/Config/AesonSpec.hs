@@ -7,7 +7,7 @@ import Data.Text qualified as T
 import Data.Map.Strict qualified as Map
 import Test.Hspec
 
-import Ecluse.Config (Config (..), ConfigError, loadConfig, renderConfigError)
+import Ecluse.Config (AppConfig (..), Config (..), ConfigError, loadConfig, renderConfigError)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 
 spec :: Spec
@@ -38,6 +38,22 @@ spec = describe "decodeDocument" $ do
 
     it "rejects an unknown key inside a mount, naming it" $
         loadConfig [] (Just (mountDocWithExtraKey "baseURL")) `shouldSatisfy` decodeErrorMentions "baseURL"
+
+    it "loads the bounded serve and connection-pool defaults" $
+        case loadConfig [] Nothing of
+            Left e -> expectationFailure ("unexpected decode error: " <> show e)
+            Right doc -> do
+                cfgServeMaxInFlight (configApp doc) `shouldBe` 16
+                cfgPublicConnectionsPerHost (configApp doc) `shouldBe` 10
+                cfgPrivateConnectionsPerHost (configApp doc) `shouldBe` 16
+
+    it "rejects non-positive serve and connection capacities" $ do
+        loadConfig [("ECLUSE_SERVE_MAX_IN_FLIGHT", "0")] Nothing
+            `shouldSatisfy` decodeErrorMentions "serveMaxInFlight must be a positive integer"
+        loadConfig [("ECLUSE_PUBLIC_CONNECTIONS_PER_HOST", "0")] Nothing
+            `shouldSatisfy` decodeErrorMentions "publicConnectionsPerHost must be a positive integer"
+        loadConfig [("ECLUSE_PRIVATE_CONNECTIONS_PER_HOST", "-1")] Nothing
+            `shouldSatisfy` decodeErrorMentions "privateConnectionsPerHost must be a positive integer"
 
 singleMountDoc :: ByteString
 singleMountDoc =

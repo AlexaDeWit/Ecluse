@@ -35,6 +35,9 @@ it rather than trust it.
 enforces a configurable resilience policy before any package reaches a build. It proxies
 requests through a private upstream first, falls back to the public npm registry with rules
 applied, and mirrors approved packages asynchronously, all without hosting packages itself.
+The serve path is capacity-bounded: metadata-bearing requests are admitted up to a
+configurable process-wide limit and excess load is shed promptly instead of accumulating an
+unbounded queue.
 
 See [`docs/architecture.md`](docs/architecture.md) for the full design: the four-role registry
 model, the deny-by-default rules engine, the mirror queue, and the configuration reference.

@@ -53,6 +53,7 @@ catalogueSpec = describe "metric-name catalogue" $ do
                             , "ecluse.rule.eval.duration"
                             , "ecluse.rule.effectful.failures"
                             , "ecluse.rule.breaker.state"
+                            , "ecluse.serve.admission.in_flight"
                             , "ecluse.upstream.fetch.duration"
                             , "ecluse.upstream.fetch.errors"
                             , "ecluse.metadata_cache.requests"

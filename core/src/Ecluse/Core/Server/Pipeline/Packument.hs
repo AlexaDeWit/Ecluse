@@ -120,6 +120,7 @@ import Ecluse.Core.Security (
     LimitError (BodyTooLarge, TooDeeplyNested, TooManyVersions),
     Limits,
  )
+import Ecluse.Core.Server.Admission (withServeAdmission)
 import Ecluse.Core.Server.Cache (Source (Source))
 import Ecluse.Core.Server.Conditional (Conditional (Modified, NotModified), etagHeader, evaluateOwnETag)
 import Ecluse.Core.Server.Context (
@@ -258,6 +259,13 @@ serveWithDeps mode renderer deps name request respond
     | not (edgeAuthorised deps request) = liftIO (respond (edgeUnauthorised renderer))
     | otherwise = do
         rt <- asks ctxRuntime
+        withServeAdmission (srMetrics rt) (srAdmission rt) (serveAdmitted rt) >>= \case
+            Just received -> pure received
+            Nothing -> liftIO $ do
+                mpServeDecision (srMetrics rt) Metric.Unavailable
+                respond (serveOverloaded renderer)
+  where
+    serveAdmitted rt = do
         let metrics = srMetrics rt
         evalCtx <- liftIO (EvalContext <$> pdNow deps)
         let clientToken = forwardedToken request
