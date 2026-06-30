@@ -307,9 +307,10 @@ spec = do
                     bad <- readIORef failRef
                     if bad
                         then throwString "mint boom"
-                        else if n == 1
-                            then pure (tokenExpiringIn "tok-2" 1000)
-                            else pure (tokenExpiringIn "tok-2" 5000)
+                        else
+                            if n == 1
+                                then pure (tokenExpiringIn "tok-2" 1000)
+                                else pure (tokenExpiringIn "tok-2" 5000)
             -- Seed succeeds; failures start afterwards.
             provider <- refreshingProvider (testConfig clock mint)
             readIORef mintCount `shouldReturn` 1

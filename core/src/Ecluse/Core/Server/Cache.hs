@@ -132,7 +132,7 @@ import Data.Map.Strict qualified as Map
 import Data.Text.Short qualified as TS
 import Data.Time (NominalDiffTime)
 import System.Clock (Clock (Monotonic), TimeSpec (TimeSpec), getTime)
-import UnliftIO.Exception (mask, throwIO)
+import UnliftIO.Exception (SomeAsyncException, mask, throwIO)
 
 import Ecluse.Core.InFlight (guardInFlight)
 import Ecluse.Core.Package (
@@ -518,7 +518,15 @@ resolveSingleFlight afterClaim recordRequest recordInsert sf key fetch = mask $ 
             -- A follower coalesced onto an in-flight fetch is a miss for this caller
             -- (no fresh entry was present), exactly as the leader's miss is.
             recordRequest Metric.Miss
-            restore (either throwIO pure =<< atomically (readTMVar marker))
+            result <- restore (atomically (readTMVar marker))
+            case result of
+                Right fetched -> pure fetched
+                Left err -> case fromException err of
+                    Just (_ :: SomeAsyncException) ->
+                        -- The leader was killed (e.g. by a client disconnect). We must
+                        -- re-evaluate the single-flight decision rather than dying with it.
+                        resolveSingleFlight afterClaim recordRequest recordInsert sf key fetch
+                    Nothing -> throwIO err
         Lead marker -> do
             recordRequest Metric.Miss
             -- Only the fetch runs under @restore@ (cancellable); the publish + insert run
