@@ -76,7 +76,7 @@ module Ecluse.Core.Server.Pipeline.Tarball (
 
 import Network.HTTP.Client (Manager)
 import Network.HTTP.Client qualified as HTTP
-import Network.HTTP.Types (HeaderName, RequestHeaders, ResponseHeaders, Status, hContentType, methodHead, mkStatus, statusIsSuccessful)
+import Network.HTTP.Types (RequestHeaders, ResponseHeaders, Status, hContentType, methodHead, mkStatus, statusIsSuccessful)
 import Network.Wai (Request, Response, ResponseReceived, requestHeaders, responseLBS)
 import UnliftIO.Exception (tryAny)
 
@@ -144,9 +144,6 @@ import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (..), timedSeconds)
 import Ecluse.Core.Telemetry.Span (spanMirrorEnqueue, spanRuleEval)
 import Ecluse.Core.Version (Version)
-
-hRetryAfter :: HeaderName
-hRetryAfter = "Retry-After"
 
 {- | Serve a @GET \/{pkg}\/-\/{file}.tgz@ artifact request end to end, over the
 request's 'RequestCtx'.

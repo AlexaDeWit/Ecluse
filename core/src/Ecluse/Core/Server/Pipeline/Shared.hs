@@ -19,6 +19,7 @@ module Ecluse.Core.Server.Pipeline.Shared (
     integrityBelowFloor,
     trustedIntegrityMissing,
     trustedIntegrityBelowFloor,
+    hRetryAfter,
 ) where
 
 import Data.Text qualified as T

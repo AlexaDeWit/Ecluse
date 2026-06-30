@@ -22,7 +22,7 @@ import Data.Set qualified as Set
 import Data.Time (UTCTime (UTCTime), fromGregorian, nominalDay)
 import Katip (Environment (Environment), Namespace (Namespace), initLogEnv)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
-import Network.HTTP.Types (HeaderName, hContentType, status200, status404, statusCode)
+import Network.HTTP.Types (hContentType, status200, status404, statusCode)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageName, mkPackageName)
@@ -49,6 +49,7 @@ import Ecluse.Core.Server.Context (
 import Ecluse.Core.Server.Metadata (newNpmMetadataClient)
 import Ecluse.Core.Server.Pipeline (servePackument, serveTarball)
 import Ecluse.Core.Server.Pipeline.Publish ()
+import Ecluse.Core.Server.Pipeline.Shared (hRetryAfter)
 import Ecluse.Core.Server.Route (Filename (Filename))
 import Ecluse.Core.Telemetry.Metrics (Decision (Admit, Unavailable))
 import Ecluse.Core.Telemetry.Record (MetricsPort)
@@ -60,9 +61,6 @@ import Network.Wai.Handler.Warp (testWithApplication)
 import Network.Wai.Internal (ResponseReceived (ResponseReceived))
 import Test.Hspec
 import UnliftIO.Exception (throwString)
-
-hRetryAfter :: HeaderName
-hRetryAfter = "Retry-After"
 
 spec :: Spec
 spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)" $ do
