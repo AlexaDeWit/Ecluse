@@ -15,7 +15,7 @@ module Ecluse.Core.Worker.Job (
 ) where
 
 import Data.Map.Strict qualified as Map
-import Katip (Severity (ErrorS, InfoS, WarningS), katipAddNamespace, logFM, ls)
+import Katip (Severity (DebugS, ErrorS, InfoS, WarningS), katipAddNamespace, logFM, ls)
 import UnliftIO (tryAny, withRunInIO)
 
 import Ecluse.Core.Ecosystem (ecosystemName)
@@ -127,6 +127,7 @@ ambient @katip@ context.
 -}
 processJob :: ReceiptHandle -> MirrorJob -> WorkerM JobOutcome
 processJob receipt job = katipAddNamespace "job" $ do
+    logFM DebugS (ls ("starting mirror job for " <> renderJob job))
     tracing <- asks wrTracing
     runtime <- ask
     withRunInIO $ \runInIO ->
@@ -210,6 +211,7 @@ outcomeOfDecision job = \case
 -- fails the job with no publish and alarms.
 mirrorArtifact :: ReceiptHandle -> MirrorJob -> WorkerM JobOutcome
 mirrorArtifact receipt job = do
+    logFM DebugS (ls ("fetching artifact bytes from " <> jobArtifactUrl job))
     fetched <- fetchArtifactBytes (jobArtifactUrl job)
     case fetched of
         Left reason -> pure (Retried reason)

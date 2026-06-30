@@ -59,6 +59,12 @@ data TracingPort = TracingPort
     marks the span errored, so a swallowed best-effort enqueue failure is still
     explainable from the trace.
     -}
+    , spanPackumentGate ::
+        forall a.
+        PackageName ->
+        IO a ->
+        IO a
+    -- ^ Bracket the gating phase of a packument request, which runs the rules and filter on the public upstream document.
     }
 
 {- | The mirror worker's domain-span tracing port -- the worker analogue of 'TracingPort',

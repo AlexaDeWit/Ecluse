@@ -55,6 +55,7 @@ module Ecluse.Telemetry.Tracing (
     withRuleEvalSpan,
     withMirrorEnqueueSpan,
     withMirrorJobSpan,
+    withPackumentGateSpan,
     JobSpanOutcome (..),
 
     -- * The core tracing ports
@@ -232,6 +233,18 @@ withMirrorJobSpan telemetry name version remoteContext project action =
         whenJust mSpan $ \theSpan -> whenJust mDetail (setStatus theSpan . Error)
         pure result
 
+-- | Run a packument-gate domain span around the rules and filter application for a public packument.
+withPackumentGateSpan ::
+    (MonadUnliftIO m) =>
+    Telemetry ->
+    PackageName ->
+    m a ->
+    m a
+withPackumentGateSpan telemetry name action =
+    withDomainSpan telemetry Internal [] "ecluse.packument.gate" $ \mSpan -> do
+        recordFields mSpan [("ecluse.package", renderPackageName name)]
+        action
+
 {- | Project the OpenTelemetry-backed domain spans onto the core 'TracingPort' the
 serve path ("Ecluse.Core.Server.Pipeline") brackets through: the per-version rule
 verdict and the serve-time mirror-enqueue hand-off. Each field is the matching
@@ -245,6 +258,7 @@ tracingPortOf telemetry =
     TracingPort
         { spanRuleEval = withRuleEvalSpan telemetry
         , spanMirrorEnqueue = withMirrorEnqueueSpan telemetry
+        , spanPackumentGate = withPackumentGateSpan telemetry
         }
 
 {- | Project the OpenTelemetry-backed mirror-job span onto the core 'WorkerTracingPort'

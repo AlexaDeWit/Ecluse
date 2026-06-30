@@ -65,6 +65,7 @@ passthroughTracingPort =
         , -- Open no span: hand the body no captured trace context and ignore the
           -- error projection, just running the enqueue body.
           spanMirrorEnqueue = \_ _ _ _project body -> body Nothing
+        , spanPackumentGate = \_ action -> action
         }
 
 {- | A 'WorkerMetricsPort' whose every field discards its measurement -- the inert double

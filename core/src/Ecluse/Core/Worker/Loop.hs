@@ -20,7 +20,7 @@ module Ecluse.Core.Worker.Loop (
 ) where
 
 import Data.Time (getCurrentTime)
-import Katip (Severity (ErrorS), logFM, ls)
+import Katip (Severity (DebugS, ErrorS), logFM, ls)
 import UnliftIO (tryAny)
 import UnliftIO.Concurrent (threadDelay)
 
@@ -49,6 +49,9 @@ workerLoop = forever $ do
     pollAndProcess = do
         queue <- asks wrQueue
         messages <- liftIO (receive queue)
+        case messages of
+            [] -> pass
+            _ -> logFM DebugS (ls ("worker received " <> show (length messages) <> " messages" :: Text))
         -- Heartbeat on every successful poll -- an empty long-poll is a healthy idle.
         heartbeat <- asks wrHeartbeat
         now <- liftIO getCurrentTime
