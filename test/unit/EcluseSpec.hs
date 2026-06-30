@@ -77,6 +77,8 @@ runEnv =
     , ("ECLUSE_QUEUE_URL", "https://sqs.example.test/q")
     , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN", "mirror-write-token")
     , ("ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER", "static")
+    , ("ECLUSE_MOUNTS__PYPI__CREDENTIAL_PROVIDER", "static")
+    , ("ECLUSE_MOUNTS__RUBYGEMS__CREDENTIAL_PROVIDER", "static")
     , ("ECLUSE_PORT", "0")
     ]
 

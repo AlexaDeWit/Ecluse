@@ -1,7 +1,7 @@
+# Production default settings
 port: 8080
 queueBackend: sqs # default to sqs for production, switch to memory for local dev if desired
 queueMemoryMaxDepth: 50000
-
 cveSyncInterval: 3600
 shutdownDrainTimeout: 30
 cacheTtl: 60
