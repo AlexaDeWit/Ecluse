@@ -188,6 +188,7 @@ library ecluse-core
     , memory                ^>=0.18
     , microlens             ^>=0.4.13
     , microlens-aeson       ^>=2.5
+    , mtl                   ^>=2.3
     , network               ^>=3.2
     , resourcet             ^>=1.3
     , retry                 ^>=0.9
