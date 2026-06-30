@@ -367,7 +367,7 @@ proxyEnv hostPort queueUrl =
       -- image's trust store is extended with the test CA via SSL_CERT_FILE below, the
       -- documented internal-CA operator workflow.
       ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://mirror/")
-    , ("ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM", "https://registry.npmjs.org/")
+    , ("ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM", "https://upstream/")
     , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET", "https://mirror/")
     , ("ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER", "static")
     , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN", "e2e-publish-token")
@@ -381,9 +381,10 @@ proxyEnv hostPort queueUrl =
     , ("ECLUSE_AWS_ACCESS_KEY_ID", "test")
     , ("ECLUSE_AWS_SECRET_ACCESS_KEY", "test")
     , ("ECLUSE_LOG_FORMAT", "json")
-    , -- Add DenyInstallTimeExecution to the default min-age policy so the deny
-      -- scenario has a rule to fire; the document carries only this rule patch.
-      ("PROXY_CONFIG", "{\"rules\":{\"deny-install-scripts\":{\"type\":\"DenyInstallTimeExecution\"}}}")
+    , -- Add DenyInstallTimeExecution so the deny scenario has a rule to fire.
+      -- We must also explicitly disable 'min-age' from the opinionated default policy,
+      -- otherwise it will block the e2e test's freshly-created test packages.
+      ("ECLUSE_RULES", "{\"min-age\":{\"enabled\":false},\"deny-install-scripts\":{\"type\":\"DenyInstallTimeExecution\"}}")
     ]
 
 teardown :: String -> [String] -> FilePath -> IO ()
