@@ -202,6 +202,7 @@
           LANG = "C.UTF-8";
           LC_ALL = "C.UTF-8";
           NODE_PATH = "${oracleNodeModules}/node_modules";
+          AWS_EC2_METADATA_DISABLED = "true";
         };
 
         # Everything CI drives through `make`, across every gate job — this is the

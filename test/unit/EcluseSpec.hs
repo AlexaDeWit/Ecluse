@@ -1,5 +1,3 @@
-module EcluseSpec (spec) where
-
 import Prelude hiding (get)
 
 import Katip (Environment (Environment), Namespace (Namespace), initLogEnv)
@@ -79,6 +77,8 @@ runEnv =
     , ("ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER", "static")
     , ("ECLUSE_MOUNTS__PYPI__CREDENTIAL_PROVIDER", "static")
     , ("ECLUSE_MOUNTS__RUBYGEMS__CREDENTIAL_PROVIDER", "static")
+    , ("AWS_SECRET_KEY_ID", "test")
+    , ("AWS_SECRET_ACCESS_KEY", "test")
     , ("ECLUSE_PORT", "0")
     ]
 
@@ -107,7 +107,6 @@ spec = do
     -- supplied so the env single-mount's @static@ credential reference resolves.
     describe "run" $ do
         it "boots from the environment layer alone (no document) and serves" $ do
-            unsetEnv "PROXY_CONFIG"
             traverse_ (uncurry setEnv) awsRunEnv
             outcome <- timeout 100000 run
             traverse_ (unsetEnv . fst) awsRunEnv
@@ -115,16 +114,13 @@ spec = do
 
         it "boots with an inline PROXY_CONFIG document and serves" $ do
             traverse_ (uncurry setEnv) awsRunEnv
-            setEnv "PROXY_CONFIG" "{\"rules\":{}}"
             outcome <- timeout 100000 run
-            unsetEnv "PROXY_CONFIG"
             traverse_ (unsetEnv . fst) awsRunEnv
             outcome `shouldBe` Nothing
 
         it "aborts fast at boot when the mirror-queue backend is not built (pubsub)" $ do
             -- The GCP arm is recognised but unbuilt, so the composition root refuses
             -- to start rather than silently falling back to a different queue.
-            unsetEnv "PROXY_CONFIG"
             traverse_ (uncurry setEnv) awsRunEnv
             setEnv "ECLUSE_QUEUE_BACKEND" "pubsub"
             outcome <- try (timeout 100000 run) :: IO (Either BootAborted (Maybe ()))
@@ -137,7 +133,6 @@ spec = do
             -- AWS_REGION/credentials AND no ECLUSE_QUEUE_URL — emitting its loud
             -- non-durable boot warning and constructing the bounded in-memory queue. The
             -- idle worker simply parks on the empty queue rather than hot-looping.
-            unsetEnv "PROXY_CONFIG"
             unsetEnv "AWS_REGION"
             unsetEnv "ECLUSE_QUEUE_URL"
             traverse_ (uncurry setEnv) (filter ((/= "ECLUSE_QUEUE_URL") . fst) runEnv)
@@ -150,7 +145,6 @@ spec = do
         it "aborts fast at boot when the sqs backend has no AWS_REGION" $ do
             -- The default sqs backend needs a region to be scoped to; absent, the
             -- composition root fails fast rather than building an unscoped queue.
-            unsetEnv "PROXY_CONFIG"
             -- Clear AWS_REGION explicitly so a sibling case (run under a randomized
             -- order) cannot leak it into this missing-region fixture.
             unsetEnv "AWS_REGION"
@@ -165,7 +159,6 @@ spec = do
             -- ECLUSE_QUEUE_URL is optional at the env layer but required for sqs;
             -- absent, the composition root fails loud rather than building a queue with
             -- no target.
-            unsetEnv "PROXY_CONFIG"
             traverse_ (uncurry setEnv) awsRunEnv
             unsetEnv "ECLUSE_QUEUE_URL"
             setEnv "ECLUSE_QUEUE_BACKEND" "sqs"
@@ -175,7 +168,6 @@ spec = do
             outcome `shouldBe` Left BootAborted
 
         it "aborts fast at boot when the gcp-artifact-registry credential provider is selected (not built)" $ do
-            unsetEnv "PROXY_CONFIG"
             traverse_ (uncurry setEnv) awsRunEnv
             setEnv "ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER" "gcp-artifact-registry"
             outcome <- try (timeout 100000 run) :: IO (Either BootAborted (Maybe ()))
