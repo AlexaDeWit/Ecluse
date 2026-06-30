@@ -1,7 +1,7 @@
 {- | The serve paths behind the package routes: the packument merge behind
-@GET \/{pkg}@ and the artifact relay behind @GET \/{pkg}\/-\/{file}.tgz@.
+@GET \/{pkg}@.
 
-This is the data-plane handler module. It composes the
+This is the data-plane handler module for packuments. It composes the
 slices that decide /what/ to serve — the registry client
 ("Ecluse.Core.Registry.Npm"), the per-version rules ("Ecluse.Core.Rules"), the structural
 filter ("Ecluse.Core.Registry.Npm.Filter"), the cross-upstream merge
@@ -62,77 +62,6 @@ decision (the times as normalised ISO-8601), so they may differ byte-for-byte fr
 any single upstream while denoting the same value; integrity-bearing fields
 (@dist.integrity@, @dist.tarball@) are relayed raw and untouched. The served bytes
 get our __own ETag__, since a merged\/filtered body matches no single upstream's.
-
-== Ecosystem coupling
-
-This is the __npm__ packument pipeline: it reaches for the npm registry
-client, projection, and structural filter directly, so it is the one
-serve-path module that depends on a concrete adapter. The coupling is
-expedient, not intended — the agnostic handles that would let it dispatch through an
-adapter (a per-adapter router, and an ecosystem-neutral filter\/projection) would
-let a second ecosystem reuse this orchestration unchanged.
-
-== Artifact path
-
-The tarball handler ('serveTarball') is the demand-driven artifact relay. Its two legs
-locate the tarball differently, by the trust of their origin.
-
-The __private__ leg is a __conventional stable read__: it fetches the tarball at
-@{pdPrivateBaseUrl}\/{pkg}\/-\/{file}@ ('artifactRequestByFile'), addressed by the
-client's requested filename, __without a private-packument fetch__ — the stable,
-cacheable shape an @npm ci@ install issues, so a worst-case lockfile fan-out pays one
-artifact round-trip per tarball rather than a packument fetch+decode per tarball it
-would only discard. The request __forwards the client's credential__ over the
-__trusted__ manager, attached at the single bearer-attach point
-('Ecluse.Core.Registry.Npm.withToken'), which pins @redirectCount = 0@: this
-credential-bearing read __never follows a redirect__ (a private CDN @302@ is returned to
-the serve path, not chased with the bearer). The constructed URL is on the private base
-host, so the 'Ecluse.Core.Security.TrustedOrigin' tarball-host gate is satisfied
-__same-host__, and the trusted origin is exempt from the internal-range block (a private
-registry on an internal address still serves). A @2xx@ streams the artifact through with
-__bounded memory__ (the @withResponse@\/@responseStream@ relay, never a buffering fetch)
-and __answers the request__; a non-@2xx@ status or a connection failure is a __clean
-miss__ that falls through to the public leg.
-
-The private leg applies __no serve-time integrity floor__. An established version pinned
-in a consumer's lockfile and served from an operator-__trusted__ private registry is
-fast-tracked: its bytes are still verified __client-side by @npm@__ (against the
-@dist.integrity@ it resolved over the packument route) and by the __mirror worker__ on
-ingestion, so fast-tracking gives up only the proactive "refuse weak-integrity" stance,
-not tamper-evidence. A consequence of the conventional read: a private upstream that
-serves its tarball __off the conventional @\/-\/@ path__ (a separate files host, a signed
-CDN URL the convention cannot rebuild) is not reached by this leg, so it is a private
-miss that falls through to the public origin.
-
-The __public__ leg honours the __authoritative upstream location__ — the
-@Artifact.artUrl@ the projection preserved from the gated version's @dist.tarball@,
-selected by the requested filename — rather than reconstructing the conventional path,
-so the proxy can front a public registry that serves its artifacts from a separate host
-or an off-convention path (a CDN\/files host, a signed URL). That location is gated, not
-trusted: it is fetched only when the tarball-host policy
-('Ecluse.Core.Security.tarballHostAllowed', per @ECLUSE_RESPECT_UPSTREAM_TARBALL_HOST@)
-admits its host (the default refuses a cross-host @dist.tarball@), and the untrusted
-egress is https-only with certificate validation. The public leg is anonymous: it
-gates __that one version__ against the rules (the same machinery the packument path
-gates the whole set with) and selects the artifact, and on an admit __streams the public
-bytes from @artUrl@ and enqueues a 'Ecluse.Core.Queue.MirrorJob'__ (naming that
-authoritative URL) for the worker to back-fill the mirror target; on a reject —
-including a host the tarball-host policy refuses — it renders the serve error model
-(@403@\/@503@\/@500@\/@404@) through the mount's renderer. The enqueue is
-__serve-then-enqueue, best-effort and non-blocking__: the artifact reaches the client
-first, and an enqueue failure is swallowed rather than failing or delaying the response.
-Mirroring is __demand-driven__ — a job is enqueued only here, on a tarball-path admit,
-never when a packument is filtered. The serve path does __not__ verify @dist.integrity@;
-the client checks the artifact's own hash and the worker re-verifies before publishing.
-
-An artifact is a __pass-through__ body — served byte-identical to upstream's — so its
-conditional-GET handling __relays__ rather than computing an own ETag (see
-@docs\/architecture\/web-layer.md@ → "Middleware and helper libraries", and contrast
-the merged-packument own-ETag path): the client's @If-None-Match@\/@If-Modified-Since@
-are forwarded onto the upstream artifact request on __both__ legs ('forwardValidators'),
-and an upstream @304 Not Modified@ is relayed straight back to the client as a bodiless
-@304@ ('isNotModified' via the relay's accept predicate) rather than re-downloading the
-tarball — the cheap freshness check on the hot artifact path.
 -}
 module Ecluse.Core.Server.Pipeline.Packument (
     servePackument,

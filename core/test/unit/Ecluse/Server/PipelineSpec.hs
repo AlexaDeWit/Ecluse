@@ -24,8 +24,6 @@ import Katip (Environment (Environment), Namespace (Namespace), initLogEnv)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types (hContentType, status200, status404, statusCode)
 
-import Ecluse.Core.Server.Pipeline ()
-import Ecluse.Core.Server.Pipeline.Publish ()
 import Network.HTTP.Types.Header (hHost)
 import Network.Wai (Application, Request (rawPathInfo, requestHeaders), Response, defaultRequest, responseLBS, responseStatus)
 import Network.Wai.Handler.Warp (testWithApplication)

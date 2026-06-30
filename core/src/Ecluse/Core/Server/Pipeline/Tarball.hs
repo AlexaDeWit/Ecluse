@@ -1,76 +1,10 @@
-{- | The serve paths behind the package routes: the packument merge behind
-@GET \/{pkg}@ and the artifact relay behind @GET \/{pkg}\/-\/{file}.tgz@.
+{- | The serve paths behind the package routes: the artifact relay behind @GET \/{pkg}\/-\/{file}.tgz@.
 
-This is the data-plane handler module. It composes the
-slices that decide /what/ to serve — the registry client
-("Ecluse.Core.Registry.Npm"), the per-version rules ("Ecluse.Core.Rules"), the structural
-filter ("Ecluse.Core.Registry.Npm.Filter"), the cross-upstream merge
-("Ecluse.Core.Package.Merge"), the metadata cache ("Ecluse.Core.Server.Cache"), the
-own-ETag conditional ("Ecluse.Core.Server.Conditional"), and the serve-outcome status
-("Ecluse.Core.Server.Response") — into one action in the
+This is the data-plane handler module for artifacts. It composes the
+slices that decide /what/ to serve into one action in the
 'Ecluse.Core.Server.Context.Handler' reader, reading its mount's serve dependencies and
 the request runtime 'Ecluse.Core.Server.Context.ServeRuntime' from the request's
 'Ecluse.Core.Server.Context.RequestCtx'.
-
-== Credential authority
-
-This handler implements the default @passthrough@ credential posture (see
-@docs\/architecture\/access-model.md@). The invariant that holds under __every__
-strategy is the __public strip__: the client's credential is __stripped before any
-public-upstream fetch__, which is always anonymous — sending an internal token to the
-public registry would be a credential disclosure, so the public-upstream fetch is built
-with no token at all. Under @passthrough@ the client's own credential is additionally
-__forwarded verbatim to the private upstream__, which is the authority for who may
-read what. The two origins are fetched concurrently, each with its own credential
-posture; nothing shares a token across the trust split.
-
-Because @passthrough@ makes the private upstream the __per-client authority__, its
-metadata is __not cached across clients__ here: the private origin is fetched and parsed on
-every request with that client's own credential, so the upstream re-authorises each
-client itself, and only the anonymous public origin is cached (one shared document, no
-per-client authority to preserve). Caching the private origin keyed by base URL alone
-would let one client's cached entry serve another client's private document within the
-TTL, bypassing the upstream's authorisation — a cross-client disclosure. (Other
-strategies make the private origin shareable by authorising each serve differently; the
-metadata cache itself stays credential-free regardless — see
-@docs\/architecture\/access-model.md@ → "Caching".)
-
-== Merge, not fallback
-
-A packument is the /set of available versions/, spread across upstreams, so it is
-__merged__ rather than short-circuited on a private hit (see
-@docs\/architecture\/registry-model.md@ → "Packument merge across upstreams").
-Private versions are trusted and enter unfiltered; public versions are gated
-through the rules and the structural filter ('filterPlan' decides, 'applyFilterPlan'
-replays) before they enter; the two are combined, private winning a collision and
-an integrity divergence flagged. If one upstream
-is unavailable while the other succeeds, the best-effort union of what resolved is
-served — only when /nothing/ resolves does the request error.
-
-== Decision surface vs served surface
-
-The merge and filter reason over the /typed/ 'PackageInfo' but the document served
-is the __raw upstream JSON__, edited in place, so every unmodeled wire key
-survives (see @docs\/architecture\/registry-model.md@ → "Decision surface vs
-served surface"). The 'MergePlan' names, for each surviving version, the source
-that won it; the served body is assembled by taking each survivor's object from
-the /raw @Value@/ of its winning source, carrying the reconciled @dist-tags@ and
-@time@, and relaying every other top-level key from the precedence-winning
-document. The typed model is never re-serialised. The two fields the merge /owns/ as
-a decision — @dist-tags.latest@ and the @time@ instants — are re-rendered from that
-decision (the times as normalised ISO-8601), so they may differ byte-for-byte from
-any single upstream while denoting the same value; integrity-bearing fields
-(@dist.integrity@, @dist.tarball@) are relayed raw and untouched. The served bytes
-get our __own ETag__, since a merged\/filtered body matches no single upstream's.
-
-== Ecosystem coupling
-
-This is the __npm__ packument pipeline: it reaches for the npm registry
-client, projection, and structural filter directly, so it is the one
-serve-path module that depends on a concrete adapter. The coupling is
-expedient, not intended — the agnostic handles that would let it dispatch through an
-adapter (a per-adapter router, and an ecosystem-neutral filter\/projection) would
-let a second ecosystem reuse this orchestration unchanged.
 
 == Artifact path
 

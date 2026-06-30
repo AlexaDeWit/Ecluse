@@ -1,10 +1,15 @@
-{- | Outbound-request and response-bound guards for the proxy's data plane.
+{- | Outbound-request guards for the proxy's data plane: defending how an upstream URL is derived.
 
 Écluse builds outbound HTTP requests from two untrusted sources — __client-supplied
 package identifiers__ (the request path) and __upstream-supplied artifact
-locations__ (a packument's @dist.tarball@) — and then parses whatever an upstream
-returns. This module is the pure guard layer that keeps those steps from being
-steered or exhausted by hostile input. It defends three boundaries:
+locations__ (a packument's @dist.tarball@). This module provides the pure guard layer
+that enforces safe URL construction.
+
+__How an upstream URL is derived:__ 'upstreamUrlFor' builds an artifact\/metadata
+URL from a configured base URL and an __already-parsed__ 'PackageName', never
+from raw client path segments, re-checking each name component with the router's
+own safety rule so traversal, encoded slashes, or an absolute URL cannot change
+the target.
 -}
 module Ecluse.Core.Security.Url (
     -- * Identifier → URL safety

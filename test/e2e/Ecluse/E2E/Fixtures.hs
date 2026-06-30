@@ -24,6 +24,7 @@ module Ecluse.E2E.Fixtures (
     mirrorPkg,
     tamperPkg,
     headPkg,
+    telemetryPkg,
     fixturePackages,
     buildFixtures,
 ) where
@@ -86,9 +87,13 @@ mirror attributable to the @HEAD@ alone.
 headPkg :: PkgSpec
 headPkg = defaultPkgSpec "e2e-head"
 
+-- | A package used to exercise telemetry domain-span emission.
+telemetryPkg :: PkgSpec
+telemetryPkg = defaultPkgSpec "e2e-telemetry"
+
 -- | The full fixture set the stub serves.
 fixturePackages :: [PkgSpec]
-fixturePackages = [allowPkg, denyPkg, mirrorPkg, tamperPkg, headPkg]
+fixturePackages = [allowPkg, denyPkg, mirrorPkg, tamperPkg, headPkg, telemetryPkg]
 
 {- | Write every fixture package under @root@ (the directory bind-mounted into the
 nginx stub as its document root). Creates the packument and the gzipped artifact and
