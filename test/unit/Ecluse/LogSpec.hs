@@ -142,7 +142,7 @@ spec = do
         it "JsonLog emits a single compact JSON object (one line, no pretty-print)" $ do
             let line = renderLogLine JsonLog (item deniedContext "denied")
             -- One JSON object: a single '{'…'}' with nothing outside it, and no
-            -- embedded physical newline — the JSONL one-line guarantee.
+            -- embedded physical newline -- the JSONL one-line guarantee.
             T.isPrefixOf "{" line `shouldBe` True
             T.isSuffixOf "}" line `shouldBe` True
             T.count "\n" line `shouldBe` 0

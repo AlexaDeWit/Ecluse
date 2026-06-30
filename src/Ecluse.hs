@@ -1,15 +1,15 @@
-{- | Écluse — a supply-chain resilience proxy for package registries.
+{- | Écluse -- a supply-chain resilience proxy for package registries.
 
 Écluse (package @ecluse@) is a lightweight proxy that sits between consumers
 (developers, CI) and a package registry, applying a configurable __resilience__
-policy before any dependency reaches a build — without taking on the cost of
+policy before any dependency reaches a build -- without taking on the cost of
 hosting packages itself. The name is French for a canal lock: a chamber whose
-gates never open at once. That is the posture — not a wall that blocks, but a
+gates never open at once. That is the posture -- not a wall that blocks, but a
 controlled passage every dependency is held in and cleared through before it is
 admitted to a build.
 
 The goal is __resilience, not malware detection__: shrink the blast radius of a
-bad publish — a hijacked maintainer account, a race-to-publish, a typosquat —
+bad publish -- a hijacked maintainer account, a race-to-publish, a typosquat --
 rather than promise to recognise malice. And Écluse is __not a registry__:
 storage is delegated to whatever backend the operator runs (e.g. AWS
 CodeArtifact, GCP Artifact Registry), and Écluse only governs what may be fetched
@@ -18,9 +18,9 @@ model is deliberately ecosystem-agnostic so that PyPI and RubyGems can follow.
 
 == How a request is cleared
 
-Écluse speaks a registry's native protocol across three read-path registries —
+Écluse speaks a registry's native protocol across three read-path registries --
 the client's, a /private upstream/ of already-vetted packages, and the /public/
-registry — and the two request shapes use them differently:
+registry -- and the two request shapes use them differently:
 
 * A __tarball__ request is gated for that one version: a private-upstream hit is
   streamed unfiltered (already vetted); on a miss, the proxy fetches the
@@ -33,7 +33,7 @@ registry — and the two request shapes use them differently:
   supply-chain signal, and @latest@ is repointed to the newest survivor).
 
 Two properties run through both shapes: the rules engine is __deny by default__
-— a version is admitted only if some rule allows it and none denies it — and
+-- a version is admitted only if some rule allows it and none denies it -- and
 __mirroring is demand-driven__, so only versions actually pulled are mirrored,
 and never on the request's critical path.
 
@@ -41,25 +41,25 @@ and never on the request's critical path.
 
 Écluse is a __functional core with effects at the edges__: the policy and
 protocol logic is pure and trivially testable, and @IO@ is confined to a thin
-shell. Swappable backends sit behind /handles/ — records of functions chosen at a
-single composition root — so a new cloud or a new ecosystem is an added
+shell. Swappable backends sit behind /handles/ -- records of functions chosen at a
+single composition root -- so a new cloud or a new ecosystem is an added
 implementation behind an existing handle, not a structural change.
 
 The library's vocabulary, roughly from the pure core outward:
 
-* __Domain model__ — "Ecluse.Core.Package" (the ecosystem-agnostic package vocabulary
+* __Domain model__ -- "Ecluse.Core.Package" (the ecosystem-agnostic package vocabulary
   the rules reason over), "Ecluse.Core.Version" (version identity and per-ecosystem
   ordering), and "Ecluse.Core.Ecosystem" (the ecosystem tag the rest dispatches on).
-* __Policy__ — "Ecluse.Core.Rules" (deny-by-default evaluation) over the rule types
+* __Policy__ -- "Ecluse.Core.Rules" (deny-by-default evaluation) over the rule types
   in "Ecluse.Core.Rules.Types".
-* __Protocol boundary__ — "Ecluse.Core.Registry" (the registry-protocol handle),
+* __Protocol boundary__ -- "Ecluse.Core.Registry" (the registry-protocol handle),
   "Ecluse.Core.Registry.Npm.Wire" and "Ecluse.Core.Registry.Npm.Project" (the lenient npm
   wire decoders and their projection onto the domain model),
   "Ecluse.Core.Registry.Npm.Route" (the npm path grammar), and "Ecluse.Core.Server.Route"
   (the shared serve-action 'Route' set and the injected route classifier).
-* __Cloud handles__ — "Ecluse.Core.Credential" (minting the mirror-target write token)
+* __Cloud handles__ -- "Ecluse.Core.Credential" (minting the mirror-target write token)
   and "Ecluse.Core.Queue" (the durable mirror-job hand-off to the worker).
-* __Mirror worker__ — "Ecluse.Core.Worker" (the supervised consume loop that fetches,
+* __Mirror worker__ -- "Ecluse.Core.Worker" (the supervised consume loop that fetches,
   verifies against the job's integrity digest, and publishes an approved artifact).
 
 'run' is the entry point the @ecluse@ executable invokes (see "Main"). It lives
@@ -167,10 +167,10 @@ layer and the optional config document, __validates everything and fails fast at
 boot__ on any problem (a malformed env, an unresolved rule policy, a configured
 mount with no adapter, a credential reference that does not resolve, or a
 mirror-queue backend that is not built in this binary), aggregating the failures so
-a single run reports them all. On success it builds the handles — the shared HTTP
+a single run reports them all. On success it builds the handles -- the shared HTTP
 @Manager@, the config-selected mirror queue, the metadata cache, the logger, the
 process-global credential provider, and the telemetry substrate (off unless
-@ECLUSE_TELEMETRY@ enables it) — into an 'Env', derives the served mount bindings,
+@ECLUSE_TELEMETRY@ enables it) -- into an 'Env', derives the served mount bindings,
 then runs the
 server and the mirror worker __concurrently__ over that single 'Env' ('runServer'
 and 'runWorker'). Bracketing the 'Env' (and the telemetry providers) for the
@@ -216,7 +216,7 @@ run = do
     logRuleBootOrder logEnv bindings
     -- The config-selected mirror queue, built once here (the single constructor
     -- call) from the validated plan and captured in Env: the durable AWS SQS backend,
-    -- or the bounded in-memory backend — which first emits a loud boot warning (it is
+    -- or the bounded in-memory backend -- which first emits a loud boot warning (it is
     -- non-durable / best-effort) and logs each rate-limited cap-overflow drop.
     queue <- buildMirrorQueue logEnv queuePlan
     metadataCache <- newMetadataCache (Composition.cacheConfigFor env)
@@ -255,7 +255,7 @@ run = do
 
 {- Build the config-selected mirror queue from its plan: the durable AWS SQS backend,
 or the bounded in-memory backend. The in-memory arm first emits the loud boot warning
-('mirrorQueuePlanWarning' — it is non-durable / best-effort) through the
+('mirrorQueuePlanWarning' -- it is non-durable / best-effort) through the
 composition-root logger, then constructs the bounded queue with a drop callback that
 logs each rate-limited cap-overflow drop at a warning. (A drop /metric/ hooks in
 alongside the log once the @ecluse.mirror.*@ catalogue lands.) -}
@@ -268,7 +268,7 @@ buildMirrorQueue logEnv plan = do
             newBoundedInMemoryQueue memoryConfig (logBootWarning logEnv . memoryQueueDropWarning)
 
 {- Log one line at 'WarningS' through the composition-root 'LogEnv', tagged with this
-module — the plain-'IO' katip path the boot phase uses (it holds no @Handler@ reader),
+module -- the plain-'IO' katip path the boot phase uses (it holds no @Handler@ reader),
 the same shape "Ecluse.Telemetry.Resolve" and "Ecluse.Core.Server.Pipeline.Internal" use. -}
 logBootWarning :: LogEnv -> Text -> IO ()
 logBootWarning logEnv message =
@@ -280,7 +280,7 @@ logBootInfo :: LogEnv -> Text -> IO ()
 logBootInfo logEnv message =
     runKatipContextT logEnv (moduleField "Ecluse") mempty (logFM InfoS (ls message))
 
-{- Log every wired mount's resolved rule boot order ('renderBootOrder' — the single
+{- Log every wired mount's resolved rule boot order ('renderBootOrder' -- the single
 total order evaluation walks), one line per rule, so an operator can read the
 effective policy resolution straight from the start-up log. A mount with no packument
 deps (the unserved stub) contributes nothing. -}
@@ -296,12 +296,12 @@ logRuleBootOrder logEnv = traverse_ logMount
 worker, selected by the configured provider backend
 ('Ecluse.Config.'): the static token or the
 CodeArtifact mint. In the common case there is a single provider; the no-backend
-placeholder only holds the slot when the selected provider was not built — a mount
+placeholder only holds the slot when the selected provider was not built -- a mount
 that references it has already failed the boot-time credential check by this point,
 so the worker (the slot's only consumer) never reaches the placeholder. -}
 
 {- | Raised to abort start-up after a boot phase has reported its aggregated
-failure to stderr. A distinct type — rather than a bare 'exitFailure' — so the
+failure to stderr. A distinct type -- rather than a bare 'exitFailure' -- so the
 abort is observable in a test without the process actually exiting; uncaught, it
 propagates to 'main' and the runtime exits non-zero, the operator-facing fail-fast.
 -}
@@ -335,7 +335,7 @@ prepareTelemetryBoot switch logEnv = case switch of
 'Env', the shape the single-process program uses. The two are independent (each
 depends only on the handles in 'Env', not on each other), so splitting into
 separate binaries later is two thin entry points calling 'runServer' \/
-'runWorker' — no rearchitecting. The server's settings (its derived mount bindings
+'runWorker' -- no rearchitecting. The server's settings (its derived mount bindings
 and port) are supplied by the composition root and threaded to 'runServer'.
 -}
 runServices :: ServerConfig -> WorkerPolicies -> Env -> IO ()
@@ -344,9 +344,9 @@ runServices serverConfig policies env = concurrently_ (runServer serverConfig en
 {- | Run the proxy's HTTP front door over the composition-root 'Env' with the
 config-derived 'ServerConfig'.
 
-This is the npm-aware composition site: 'mountBindingFor' mounts npm — its path
+This is the npm-aware composition site: 'mountBindingFor' mounts npm -- its path
 grammar ("Ecluse.Core.Registry.Npm.Route") and its denial renderer
-("Ecluse.Core.Registry.Npm.Serve") — into the otherwise ecosystem-neutral web layer
+("Ecluse.Core.Registry.Npm.Serve") -- into the otherwise ecosystem-neutral web layer
 ('Ecluse.Server.runServer'), so the agnostic server stays closed over the shared
 'Ecluse.Core.Server.Route.Route' set and only this one place names an ecosystem.
 Splitting the server into its own binary later reuses this same entry.
@@ -369,14 +369,14 @@ npmServerConfig = mkServerConfig [npmMount Nothing Nothing]
 ecosystem has no adapter wired. The ecosystem selects its path
 grammar (the 'Ecluse.Core.Server.Route.Classifier') and its denial renderer (the
 'Ecluse.Core.Server.Response.MountRenderer'), and its path prefix is __derived__ from it
-('prefixFor') rather than configured — so the ecosystem is the single thing that
+('prefixFor') rather than configured -- so the ecosystem is the single thing that
 drives the binding (see @docs\/architecture\/hosting.md@ → "Mounts"). The
 packument-serve dependencies are passed in (the composition root supplies them once
 the per-mount registry set is resolved); 'Nothing' for them leaves the packument
 route the recognised-but-unserved @501@ stub.
 
 npm is the only ecosystem with an adapter; the others have no registry
-client or renderer, so they resolve to 'Nothing' — a loud miss at the call
+client or renderer, so they resolve to 'Nothing' -- a loud miss at the call
 site rather than a silently half-wired mount.
 -}
 mountBindingFor :: Ecosystem -> Maybe PackumentDeps -> Maybe PublishDeps -> Maybe MountBinding
@@ -384,11 +384,11 @@ mountBindingFor eco packumentDeps publishDeps = case eco of
     Npm -> Just (npmMount packumentDeps publishDeps)
     _ -> Nothing
 
-{- The npm mount: npm's complete wiring under its derived @\/npm@ prefix — its path
-grammar and its denial renderer — taking the packument-serve and first-party publish
+{- The npm mount: npm's complete wiring under its derived @\/npm@ prefix -- its path
+grammar and its denial renderer -- taking the packument-serve and first-party publish
 dependencies the composition root supplies ('Nothing' packument deps leave the
 packument route the recognised-but-unserved @501@ stub; 'Nothing' publish deps leave a
-@PUT \/{pkg}@ the @405@ opt-out — no publication target).
+@PUT \/{pkg}@ the @405@ opt-out -- no publication target).
 -}
 npmMount :: Maybe PackumentDeps -> Maybe PublishDeps -> MountBinding
 npmMount packumentDeps publishDeps =
@@ -411,7 +411,7 @@ mirroring it.
 This is the composition-root __hoist point__: it resolves the request-independent @dd@
 correlation object (the service identity; no span is active at the worker entry) and
 installs it as the worker's initial @katip@ context, then discharges the loop to 'IO'
-through 'Ecluse.Core.Worker.runWorkerM' — the worker analogue of the serve path's
+through 'Ecluse.Core.Worker.runWorkerM' -- the worker analogue of the serve path's
 'Ecluse.Core.Server.Context.runHandler' boundary. The loop logic lives in
 "Ecluse.Core.Worker"; the single-process program runs this alongside 'runServer'.
 -}
@@ -477,7 +477,7 @@ endpoint and carrying the bearer minted from the target's credential provider. T
 credential is read once here at the composition root (the @static@ provider never
 expires, so a baked token is correct for it). When no mount is configured there is
 nothing to publish, so the slot holds the refusing 'unconfiguredRegistry'
-placeholder, whose effectful fields fail loudly if ever called — the worker only
+placeholder, whose effectful fields fail loudly if ever called -- the worker only
 reaches it once a job exists, which only a configured mount produces. -}
 resolvePublishClient :: Manager -> [PublishTarget] -> IO RegistryClient
 resolvePublishClient manager targets =
@@ -494,7 +494,7 @@ resolvePublishClient manager targets =
                     }
 
 {- | Raised by 'unconfiguredRegistry' when an effectful registry field is called
-with no backend wired in — a composition-root misconfiguration. A distinct typed
+with no backend wired in -- a composition-root misconfiguration. A distinct typed
 exception (not a stringly @userError@), so the refusal is observable in a test,
 catchable by type, and never mistaken for a configured backend's own failure.
 -}
@@ -528,7 +528,7 @@ unconfiguredRegistry =
 
 {- | A credential handle with no backend behind it: a static, non-expiring empty
 secret. It holds the 'CredentialProvider' slot in the composition root until a live
-backend is selected — for the mirror-target write, and for the private-upstream read
+backend is selected -- for the mirror-target write, and for the private-upstream read
 under the @service@ \/ @delegated-cache@ strategies. The default @passthrough@
 strategy needs no read credential at all (reads forward the caller's own token), so
 this empty placeholder is harmless on the serve path there. See

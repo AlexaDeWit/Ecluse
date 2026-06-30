@@ -259,7 +259,7 @@ credentialSpec = describe "credential authority (forward-to-private, strip-befor
 
 privateAuthoritySpec :: Spec
 privateAuthoritySpec = describe "private origin is the per-client authority (not cached across clients)" $
-    it "re-consults the private upstream per client within the TTL — each client's token reaches it" $ do
+    it "re-consults the private upstream per client within the TTL -- each client's token reaches it" $ do
         privateUp <- servingUpstream (encodePackument (privatePackument [("1.0.0", plainVersion "1.0.0")] "1.0.0"))
         publicUp <-
             servingUpstream
@@ -338,7 +338,7 @@ partialAvailabilitySpec = describe "partial-upstream availability" $ do
 
 cacheSpec :: Spec
 cacheSpec = describe "metadata cache (read-through coherence)" $ do
-    it "reuses the cached document within the TTL — a second request does not re-fetch" $ do
+    it "reuses the cached document within the TTL -- a second request does not re-fetch" $ do
         privateUp <- failingUpstream
         let v1 =
                 encodePackument

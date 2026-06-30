@@ -96,8 +96,8 @@ spec = do
     describe "logNameMismatch" $
         it "logs a WARNING carrying both names and the origin when an upstream reports a different package" $ do
             -- The serve path drives this through the request's ambient katip context;
-            -- here it is run against a real JSONL scribe so the warning's actual bytes —
-            -- the requested name, the upstream's reported name, and the origin — are
+            -- here it is run against a real JSONL scribe so the warning's actual bytes --
+            -- the requested name, the upstream's reported name, and the origin -- are
             -- pinned against what an operator reads. No span is active, so no @dd@ object
             -- is added: the dd-correlation that goes live on the serve path is the only
             -- delta to these lines.
@@ -201,10 +201,8 @@ spec = do
             -- versions are dropped from the served listing.
             Map.keys (infoVersions admissible) `shouldBe` ["1.5.0"]
             -- Two below-floor (SHA-1) versions, then two missing-integrity (no digest)
-            -- versions — the bucket order the fold must hold, not the key order.
+            -- versions -- the bucket order the fold must hold, not the key order.
             refusals `shouldBe` [belowFloorMarker, belowFloorMarker, missingMarker, missingMarker]
-
--- ── the integrity-admission fixture ──────────────────────────────────────────────
 
 {- | A packument whose versions interleave the three integrity classes by key: two clear
 the floor only with SHA-1 (below floor), two carry no digest at all (missing), and one
@@ -273,7 +271,7 @@ artifactWith hashes =
         }
 
 {- | Run an 'IO' action with 'stdout' redirected to a temporary file, returning
-everything written — so a scribe's output is assertable with no network. The original
+everything written -- so a scribe's output is assertable with no network. The original
 'stdout' is restored on every exit path. (Mirrors the local helper in "Ecluse.LogSpec"
 and "Ecluse.Server.PipelineSpec"; kept local to avoid exporting a test-only utility.)
 -}
@@ -295,8 +293,8 @@ captureStdout act =
 
 {- | A @katip@ 'LogEnv' with a single stdout scribe in the compact one-line JSON form,
 built from @katip@ directly (the application's "Ecluse.Log".@newLogEnv@ is not on the
-core side of the boundary). It reproduces that scribe — colour off, every severity
-admitted — so a warning's serialised bytes are assertable here.
+core side of the boundary). It reproduces that scribe -- colour off, every severity
+admitted -- so a warning's serialised bytes are assertable here.
 -}
 jsonLogEnv :: IO LogEnv
 jsonLogEnv = do

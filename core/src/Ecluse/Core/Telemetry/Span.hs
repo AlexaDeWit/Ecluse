@@ -3,9 +3,9 @@
 {- | The domain-span tracing ports: the abstract interfaces the core serve path and
 mirror worker open their hand-added spans through, decoupled from any tracing backend.
 
-The serve path brackets two domain spans an operator cares about — the per-version
-rule verdict and the synchronous-to-asynchronous mirror hand-off — and the mirror
-worker brackets one — the per-job fetch → verify → publish. This module defines those
+The serve path brackets two domain spans an operator cares about -- the per-version
+rule verdict and the synchronous-to-asynchronous mirror hand-off -- and the mirror
+worker brackets one -- the per-job fetch → verify → publish. This module defines those
 bracket operations as records of functions (the Handle pattern), each parametric in the
 bracketed action's result so the span wraps the real work without seeing its shape. A
 consumer records through its port and never names an OpenTelemetry tracer; the
@@ -31,7 +31,7 @@ import Ecluse.Core.Queue (RemoteSpanContext)
 import Ecluse.Core.Server.Response (ServeDecision)
 import Ecluse.Core.Version (Version)
 
-{- | The domain-span tracing port — a record of bracket operations over a backend
+{- | The domain-span tracing port -- a record of bracket operations over a backend
 whose closure captures its tracer. Each field runs a bracketed @IO@ action within a
 span and returns its result; the fields are rank-2 (parametric in the result) so one
 port value serves every call site whatever the body yields. The implementation is
@@ -61,7 +61,7 @@ data TracingPort = TracingPort
     -}
     }
 
-{- | The mirror worker's domain-span tracing port — the worker analogue of 'TracingPort',
+{- | The mirror worker's domain-span tracing port -- the worker analogue of 'TracingPort',
 kept a separate record so the worker brackets exactly its own span. The single field
 brackets the per-job fetch → verify → publish, projecting the job's terminal result onto
 the span's outcome ('JobSpanOutcome'); it is rank-2 (parametric in the result) so one

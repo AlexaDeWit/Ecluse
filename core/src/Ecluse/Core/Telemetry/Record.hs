@@ -40,7 +40,7 @@ import Ecluse.Core.Telemetry.Metrics (
     Upstream,
  )
 
-{- | The metric-recording port — a record of functions over a backend whose closure
+{- | The metric-recording port -- a record of functions over a backend whose closure
 captures its instruments. Each field records one @ecluse.*@ signal under exactly the
 bounded labels that signal carries; the closed label vocabularies come from
 "Ecluse.Core.Telemetry.Metrics", so the bounded-cardinality discipline is enforced at
@@ -86,7 +86,7 @@ data MetricsPort = MetricsPort
     -- ^ Record one mirror enqueue failure (@ecluse.mirror.enqueue.failures@).
     }
 
-{- | The mirror worker's metric-recording port — the worker analogue of 'MetricsPort',
+{- | The mirror worker's metric-recording port -- the worker analogue of 'MetricsPort',
 kept a separate record so the worker records exactly its own signals and the serve path
 exactly its own (the two consumers share no field). Both fields return 'IO', so the
 worker loop records through the port without naming a telemetry backend; the application

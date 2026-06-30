@@ -8,8 +8,8 @@ distributions. This module knows that schema and nothing about any ecosystem: it
 part of the reusable harness core, shared unchanged across every upstream a scenario
 might target.
 
-The driver is deliberately tolerant of a degraded run — a low success rate or non-2xx
-responses are reported, not thrown — because Layer B is inform-only and characterises
+The driver is deliberately tolerant of a degraded run -- a low success rate or non-2xx
+responses are reported, not thrown -- because Layer B is inform-only and characterises
 behaviour rather than asserting a pass\/fail (see @docs\/architecture\/performance.md@).
 A genuinely broken run (the subprocess cannot start, or its output does not parse) does
 throw, since that is a literal harness failure, the one red state the layer recognises.
@@ -80,7 +80,7 @@ seconds, returning its parsed report. The subprocess output is captured (never t
 harness's stdout, which carries only the machine-readable per-scenario report), so a
 caller renders the figures itself.
 
-Throws if @oha@ cannot be started or its JSON does not parse — a literal harness
+Throws if @oha@ cannot be started or its JSON does not parse -- a literal harness
 failure. A merely degraded run (errors, non-2xx) parses cleanly and is returned for the
 caller to report.
 -}
@@ -92,7 +92,7 @@ runOha concurrency durationSeconds url =
 given number of seconds, returning its parsed report. The list is written to a
 temporary file and passed via @--urls-from-file@; @oha@ spreads requests across the
 file in proportion to each URL's multiplicity, so repeating a URL @w@ times gives it
-weight @w@ in the served mix — the mechanism the load harness uses to drive a realistic
+weight @w@ in the served mix -- the mechanism the load harness uses to drive a realistic
 heavy-headed (Zipfian) package mix (a few hot packages, a long one-shot tail).
 
 The same literal-failure contract as 'runOha': throws if @oha@ cannot be started or

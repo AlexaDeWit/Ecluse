@@ -5,14 +5,14 @@ deterministically.
 Two complementary views split a measured latency into parts a capacity planner can act
 on:
 
-  * __service-time attribution__ ('attribute') — at concurrency one (no queuing), a
+  * __service-time attribution__ ('attribute') -- at concurrency one (no queuing), a
     measured latency is @upstream baseline + Écluse overhead@. The baseline is the real
     public-registry round trip; the overhead is everything Écluse adds on top of just
     hitting the public registry (the private leg, the merge, the decode, the
     re-serialise). Reported absolute and as a fraction of the total, so the
     upstream-bound floor is told apart from the achievable-gain portion;
 
-  * __load saturation__ ('deriveSaturation') — under concurrent load the same latency
+  * __load saturation__ ('deriveSaturation') -- under concurrent load the same latency
     grows by a queuing delay that is neither upstream nor per-request overhead but a
     capacity signal. It is recovered as @loaded p50 − concurrency-one service p50@ and
     flagged when it dominates the loaded latency, alongside the achieved throughput and
@@ -43,8 +43,6 @@ module Ecluse.BenchLoad.Normalise (
 import Data.Text qualified as T
 import Numeric (showFFloat)
 
--- ── the public-leg baseline ──────────────────────────────────────────────────────
-
 {- | The per-request upstream wait as a multiple of the public-registry round trip. The
 two origin legs are fetched concurrently and the public leg is single-flight amortised,
 so a request waits one round trip on the upstream, whichever scenario it is. A scenario
@@ -72,8 +70,6 @@ baselineMs = \case
     MeasuredRtt rtt _ -> rtt
     InjectedFallback ms -> ms
 
--- ── service-time attribution ──────────────────────────────────────────────────────
-
 {- | One measured latency split into its upstream and Écluse-overhead parts, each
 absolute (milliseconds) and as a fraction of the total in @[0, 1]@.
 -}
@@ -93,8 +89,8 @@ data Attribution = Attribution
 
 {- | Split a measured latency into its upstream baseline and the Écluse overhead. The
 baseline is the public round trip times 'publicLegMultiple', capped at the total so the
-overhead is never negative (a measurement below the baseline — noise, or a path faster
-than the live registry — attributes the whole latency to upstream and zero overhead).
+overhead is never negative (a measurement below the baseline -- noise, or a path faster
+than the live registry -- attributes the whole latency to upstream and zero overhead).
 -}
 attribute :: Double -> Double -> Attribution
 attribute rttMs totalMs =
@@ -129,7 +125,7 @@ alongside.
 renderNormalised :: BaselineSource -> [NormalisedRow] -> Text
 renderNormalised source rows =
     T.unlines $
-        [ "## Service-time attribution — upstream vs Écluse overhead (Layer B, concurrency 1)"
+        [ "## Service-time attribution -- upstream vs Écluse overhead (Layer B, concurrency 1)"
         , ""
         , "Concurrency-1 pass, so queuing does not contaminate the split: each latency is "
             <> "the upstream baseline plus the Écluse overhead. Baseline = "
@@ -165,10 +161,8 @@ renderRow rttMs row =
             ]
     split ms frac = msCell ms <> " (" <> pctCell frac <> ")"
 
--- ── load saturation ──────────────────────────────────────────────────────────────
-
 {- | The fraction of the loaded latency above which the queuing delay is judged to
-dominate it — the point where the latency a client sees is mostly the request waiting in
+dominate it -- the point where the latency a client sees is mostly the request waiting in
 line, not upstream and not Écluse's per-request work.
 -}
 queuingDominanceThreshold :: Double
@@ -214,7 +208,7 @@ data Saturation = Saturation
 {- | Derive a scenario's saturation view from its scalars. The queuing delay is the
 loaded p50 less the concurrency-one service p50 (floored at zero), its fraction is that
 delay over the loaded p50, and it dominates when the fraction exceeds the threshold. A
-missing p50 leaves the delay, the fraction, and the dominance undefined (not a breach —
+missing p50 leaves the delay, the fraction, and the dominance undefined (not a breach --
 an absent measurement, not a slow one).
 -}
 deriveSaturation :: Double -> SaturationInput -> Saturation
@@ -243,10 +237,10 @@ per-row flag), then a loud summary line when any scenario is queuing-bound.
 renderSaturation :: Double -> [Saturation] -> Text
 renderSaturation threshold sats =
     T.unlines $
-        [ "## Load saturation — queuing delay (Layer B)"
+        [ "## Load saturation -- queuing delay (Layer B)"
         , ""
         , "The queuing delay is the loaded p50 less the concurrency-1 service p50 (both at the "
-            <> "same injected upstream latency), so it is the time a request spends waiting in line — "
+            <> "same injected upstream latency), so it is the time a request spends waiting in line -- "
             <> "neither upstream nor per-request overhead, but a capacity signal. It is flagged "
             <> "queuing-bound when it exceeds "
             <> pctCell threshold
@@ -264,9 +258,9 @@ renderSaturation threshold sats =
         | null bound =
             "No scenario is queuing-bound: the loaded latency is upstream plus per-request overhead, not backlog."
         | otherwise =
-            "FLAG — queuing-bound: "
+            "FLAG -- queuing-bound: "
                 <> T.intercalate ", " (map satName bound)
-                <> " — the loaded latency is mostly backlog (connection-pool / admission-bound), not per-request work."
+                <> " -- the loaded latency is mostly backlog (connection-pool / admission-bound), not per-request work."
 
 renderSat :: Saturation -> Text
 renderSat s =
@@ -287,8 +281,6 @@ renderSat s =
         (Just d, Just f) -> msCell d <> " (" <> pctCell f <> ")"
         (Just d, Nothing) -> msCell d
         _ -> "n/a"
-
--- ── formatting ────────────────────────────────────────────────────────────────────
 
 -- A latency in milliseconds to one decimal place.
 msCell :: Double -> Text

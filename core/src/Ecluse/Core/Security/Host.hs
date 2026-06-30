@@ -1,6 +1,6 @@
 {- | Outbound-request guards for the proxy's data plane: defending where the proxy fetches.
 
-Écluse builds outbound HTTP requests from two untrusted sources — __client-supplied
+Écluse builds outbound HTTP requests from two untrusted sources -- __client-supplied
 package identifiers__ (the request path) and __upstream-supplied artifact
 locations__ (a packument's @dist.tarball@). This module provides the pure guard layer
 that keeps the proxy from being steered by hostile input.
@@ -42,8 +42,6 @@ import Data.IP (
 import Data.Set qualified as Set
 import Data.Text qualified as T
 
--- ── outbound host allowlist ──────────────────────────────────────────────────
-
 {- | A set of host strings normalised to lower case, the form the host guards
 ('isAllowedUpstreamHost' and 'isBlockedTarget') compare against.
 
@@ -72,23 +70,21 @@ lowerCaseHosts = LoweredHostSet . Set.map canonicalHostKey
 {- | Whether @host@ is one of the configured upstream hosts.
 
 The first guard on every outbound fetch: the proxy talks to its configured
-private\/public upstreams and mirror target, and __nothing else__ — so a target
+private\/public upstreams and mirror target, and __nothing else__ -- so a target
 host derived from a packument's @dist.tarball@ (or anywhere else) is fetched only
 if it appears in @allowed@. The match is exact on the bare host (no port, no
-scheme — extract it with 'hostAddress' first) and __case-insensitive__, since
+scheme -- extract it with 'hostAddress' first) and __case-insensitive__, since
 DNS hostnames are; an empty @host@ is never allowed. This is the allowlist half
 of the SSRF gate; pair it with 'isBlockedTarget' for the internal-range half.
 
 The allowlist is a 'LoweredHostSet', so it is already normalised and only the
-incoming @host@ is folded here — through the same 'canonicalHostKey' the set was
+incoming @host@ is folded here -- through the same 'canonicalHostKey' the set was
 built with, so an IP-literal entry matches regardless of how either side spells the
 address.
 -}
 isAllowedUpstreamHost :: LoweredHostSet -> Text -> Bool
 isAllowedUpstreamHost (LoweredHostSet allowed) host =
     not (T.null host) && canonicalHostKey host `Set.member` allowed
-
--- ── internal-range block ─────────────────────────────────────────────────────
 
 {- | Whether @host@ is an internal address the proxy must not fetch, /unless/ it
 is explicitly opted in.
@@ -102,23 +98,23 @@ against:
 * __link-local__ @169.254.0.0\/16@ (which contains the @169.254.169.254@ metadata
   address) and IPv6 @fe80::\/10@;
 * __loopback__ @127.0.0.0\/8@ and IPv6 @::1@;
-* __unspecified \/ this-host__ @0.0.0.0\/8@ and IPv6 @::@ — @0.0.0.0@ is not a
+* __unspecified \/ this-host__ @0.0.0.0\/8@ and IPv6 @::@ -- @0.0.0.0@ is not a
   no-op target: on Linux a connect to it reaches a loopback-bound service, so it
   is a loopback-equivalent that must be blocked alongside @127.0.0.0\/8@;
 * __RFC1918 private__ @10.0.0.0\/8@, @172.16.0.0\/12@, and @192.168.0.0\/16@;
-* __CGNAT shared__ @100.64.0.0\/10@ (RFC 6598) — carrier-grade NAT space some
+* __CGNAT shared__ @100.64.0.0\/10@ (RFC 6598) -- carrier-grade NAT space some
   cloud fabrics route internally;
-* __IPv6 unique-local__ @fc00::\/7@ (RFC 4193) — the private-network IPv6 analogue,
+* __IPv6 unique-local__ @fc00::\/7@ (RFC 4193) -- the private-network IPv6 analogue,
   which contains the AWS IMDSv6 metadata endpoint @fd00:ec2::254@.
 
 A host in @allowedInternal@ is __never__ blocked (matched case-insensitively, as
-DNS and the host allowlist are) — the deliberate opt-in for a private upstream that
+DNS and the host allowlist are) -- the deliberate opt-in for a private upstream that
 genuinely lives on an internal address. As a 'LoweredHostSet' it is already
 lower-cased, so only the incoming @host@ is folded for the comparison. A @host@
 that is not an IP literal (a DNS name) is __not__ blocked here: name-based targets
 are constrained by the 'isAllowedUpstreamHost' allowlist instead, and
 post-resolution IP filtering belongs to the resolving fetch layer, not this pure
-check. Both guards apply — an allowlisted host that resolves to an internal literal
+check. Both guards apply -- an allowlisted host that resolves to an internal literal
 is still caught when its address is tested here.
 -}
 isBlockedTarget :: LoweredHostSet -> Text -> Bool
@@ -126,7 +122,7 @@ isBlockedTarget allowedInternal host =
     not (hostOptedIn allowedInternal host)
         && maybe False (isBlockedIP . ipAddrToIP) (parseIpLiteral host)
 
-{- | Whether @host@ is opted in to the internal-range block — the deliberate
+{- | Whether @host@ is opted in to the internal-range block -- the deliberate
 exemption for a private upstream that genuinely lives on an internal address.
 
 The opt-in half of 'isBlockedTarget': the deliberate exemption for a host that
@@ -247,7 +243,7 @@ and any @\/path@\/@?query@\/@#fragment@ tail, lower-casing the result. It is a
 pragmatic extractor for comparison, __not__ a full RFC 3986 parser; a value with
 no recognisable host yields the empty string, which both guards treat as
 not-allowed. IPv6 literals in brackets (@[::1]:443@) are returned without the
-brackets — the bracket-aware @host[:port]@ split is 'splitHostPort', shared with
+brackets -- the bracket-aware @host[:port]@ split is 'splitHostPort', shared with
 the SQS endpoint parser so the two cannot drift on an authority edge case; a
 malformed authority (an opening bracket with no close) yields the empty string,
 the same fail-safe the guards apply to it.
@@ -260,7 +256,7 @@ hostAddress raw =
      in T.toLower (maybe "" fst (splitHostPort afterUserinfo))
   where
     -- The text after @needle@'s last occurrence, or all of @hay@ if absent.
-    -- ('T.breakOnEnd' yields @(hay, "")@ when the needle is absent — its prefix
+    -- ('T.breakOnEnd' yields @(hay, "")@ when the needle is absent -- its prefix
     -- is non-empty exactly when the needle was found, since it includes it.)
     afterLast :: Text -> Text -> Text
     afterLast needle hay =
@@ -274,8 +270,8 @@ inner colons are never mistaken for the port separator.
 The single canonical authority split feeding both the data-plane host extractor
 ('hostAddress') and the SQS endpoint parser ('Ecluse.Composition.parseEndpointUrl'),
 so the two re-implementations the @[::1]:port@ edge cases tripped on cannot drift
-again. A @[…]@ IPv6 literal is split on its closing bracket — the host is returned
-without the brackets and the remainder is whatever follows (a @":port"@ or empty) —
+again. A @[…]@ IPv6 literal is split on its closing bracket -- the host is returned
+without the brackets and the remainder is whatever follows (a @":port"@ or empty) --
 so an inner @::@ is never read as the port separator; a bare authority is split on
 its first @':'@. An opening bracket with __no__ close is a malformed authority and
 yields 'Nothing', which 'hostAddress' folds to the empty (not-allowed) host and the
@@ -289,9 +285,9 @@ splitHostPort authority = case T.stripPrefix "[" authority of
     Nothing -> Just (T.breakOn ":" authority)
 
 {- | Parse a host as an IP literal, or 'Nothing' for a DNS name. Handles dotted-
-quad IPv4 and the IPv6 forms a host realistically carries — full eight-group form,
+quad IPv4 and the IPv6 forms a host realistically carries -- full eight-group form,
 @::@-compressed forms (including @::1@), and a trailing embedded IPv4 (the
-@a.b.c.d@ in @::ffff:a.b.c.d@) — which is enough to recognise the loopback,
+@a.b.c.d@ in @::ffff:a.b.c.d@) -- which is enough to recognise the loopback,
 link-local, and IPv4-mapped addresses 'isBlockedIP' blocks. It is deliberately
 __not__ a complete IPv6 parser (no zone ids); an unrecognised literal is treated
 as a name, which the host allowlist still constrains.
@@ -299,13 +295,13 @@ as a name, which the host allowlist still constrains.
 Only range __membership__ is delegated to @iproute@ ('isBlockedIP'); recognising
 the literal stays hand-rolled __on purpose__. This recogniser is deliberately
 __lenient__ on the IPv4 dotted-quad: it accepts the ambiguous octet spellings a
-strict IP library rejects and coerces each octet exactly as @inet_aton@ — and
-hence a libc resolver — does, so the block tests the address that would actually be
+strict IP library rejects and coerces each octet exactly as @inet_aton@ -- and
+hence a libc resolver -- does, so the block tests the address that would actually be
 dialled. A @0x@\/@0X@-prefixed octet is hexadecimal, a leading-zero octet is
 __octal__, and anything else is decimal. A leading-zero octet is therefore /not/
 its decimal digits: @0012.0.0.1@ is octal @10.0.0.1@ (RFC1918, blocked), whereas
 @010.0.0.1@ is octal @8.0.0.1@ and @0127.0.0.1@ is octal @87.0.0.1@ (both public,
-not blocked) — matching the resolver rather than a decimal misreading. A stricter
+not blocked) -- matching the resolver rather than a decimal misreading. A stricter
 parser that rejected these spellings would let an octal\/hex spelling of an
 internal address skip the block and reach the resolving fetch as a name, silently
 __narrowing__ the SSRF gate.
@@ -335,14 +331,14 @@ parseIPv4 octet host = case T.splitOn "." host of
     [a, b, c, d] -> IpV4 <$> octet a <*> octet b <*> octet c <*> octet d
     _ -> Nothing
 
-{- An IPv4 octet under @inet_aton@'s per-part base rules — the coercion a libc
+{- An IPv4 octet under @inet_aton@'s per-part base rules -- the coercion a libc
 resolver ('getAddrInfo') applies, so the internal-range block tests the address a
 resolver would actually dial. A @0x@\/@0X@ prefix is hexadecimal, a leading @0@
 (with at least one more digit) is octal, and anything else is decimal; the parsed
 value must still fit @0..255@, so an overflowing part (@0400@ = 256, @0x100@ = 256)
 is rejected exactly as a resolver rejects it. The base-digit check keeps 'readMaybe'
 from accepting signs or whitespace and rejects a digit outside the chosen base (the
-@8@ in @08@ is not octal), so such a spelling is not a literal — matching glibc,
+@8@ in @08@ is not octal), so such a spelling is not a literal -- matching glibc,
 which refuses it rather than coercing it.
 -}
 octetInetAton :: Text -> Maybe Word8
@@ -370,8 +366,8 @@ octetDecimal t = do
     n <- if isDecimal t then readMaybe (toString t) else Nothing :: Maybe Integer
     if n <= 255 then Just (fromInteger n) else Nothing
 
-{- Parse an IPv6 literal — either the full eight-group form or a @::@-compressed
-form (at most one @::@), optionally ending in an embedded dotted-quad IPv4 — into
+{- Parse an IPv6 literal -- either the full eight-group form or a @::@-compressed
+form (at most one @::@), optionally ending in an embedded dotted-quad IPv4 -- into
 its eight 16-bit groups. Enough to recognise the @::1@, @fe80::\/10@, and
 @::ffff:0:0\/96@ addresses we block; rejects anything malformed.
 -}
@@ -439,8 +435,6 @@ isHex :: Text -> Bool
 isHex t = not (T.null t) && T.all isHexDigit t
   where
     isHexDigit c = c `elem` (['0' .. '9'] <> ['a' .. 'f'] <> ['A' .. 'F'])
-
--- ── tarball-host policy ───────────────────────────────────────────────────────
 
 {- | Whether a tarball may be fetched from a host that differs from the upstream
 that served the packument.

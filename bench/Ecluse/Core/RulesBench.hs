@@ -5,8 +5,8 @@ survive a metadata response.
 The realistic benches run over the curated real-world corpus (each package's real
 version set and per-version signals); a synthetic bench scales the version count and
 asserts the sweep stays linear, guarding the accidentally quadratic regression a
-per-version rule fold can hide. Evaluation is effectful — the engine 'prepare's
-rules, then evaluates each version in 'IO' — so the per-version sweep is the measured
+per-version rule fold can hide. Evaluation is effectful -- the engine 'prepare's
+rules, then evaluates each version in 'IO' -- so the per-version sweep is the measured
 'IO' work. The synthetic generator is retained __only__ for this complexity-scaling
 assertion, not as the realistic case.
 -}
@@ -46,8 +46,8 @@ benchmarks loaded =
                ]
 
 {- | Evaluate the rule set against every version, forcing each decision. The engine
-'prepare's the rules — a cheap, once-at-boot step for pure rules, a constant in the
-version count — and then sweeps every version in 'IO', the per-request work a packument
+'prepare's the rules -- a cheap, once-at-boot step for pure rules, a constant in the
+version count -- and then sweeps every version in 'IO', the per-request work a packument
 response performs.
 -}
 rulesDepth :: PackageInfo -> IO Int

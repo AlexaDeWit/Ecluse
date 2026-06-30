@@ -1,4 +1,4 @@
-{- | The package domain model — ecosystem-agnostic vocabulary for the rules
+{- | The package domain model -- ecosystem-agnostic vocabulary for the rules
 engine.
 
 These types capture everything the proxy needs to reason about a package
@@ -18,7 +18,7 @@ The design follows two principles synthesised from the protocol research (see
 
 * __Rules consume normalised signals, not raw fields.__ The risky behaviours
   differ on the wire (npm install scripts, PyPI sdist builds, RubyGems native
-  extensions) but collapse to one signal — 'CodeExecSignal'. Trust likewise
+  extensions) but collapse to one signal -- 'CodeExecSignal'. Trust likewise
   collapses to 'Trust'. A rule never learns which ecosystem it is looking at.
 
 * __Signal availability is explicit.__ A signal the adapter has not (or cannot
@@ -123,13 +123,13 @@ renderScope (Scope s) = "@" <> TS.toText s
 
 {- | A package identity, decoupled from any registry's wire format.
 
-Identity differs by ecosystem — npm has scopes and is case-sensitive, PyPI
-normalises per PEP 503, RubyGems is verbatim — so the type is __opaque__:
+Identity differs by ecosystem -- npm has scopes and is case-sensitive, PyPI
+normalises per PEP 503, RubyGems is verbatim -- so the type is __opaque__:
 build it with 'mkPackageName', which records the ecosystem, computes a
 'pkgCanonical' key used for equality\/matching, and keeps a 'pkgDisplay' form
 for faithful rendering. Equality and ordering are on
-@('pkgEcosystem', 'pkgNamespace', 'pkgCanonical')@ only — never the display
-form — so @Flask@ and @flask@ are the same PyPI package but different npm ones.
+@('pkgEcosystem', 'pkgNamespace', 'pkgCanonical')@ only -- never the display
+form -- so @Flask@ and @flask@ are the same PyPI package but different npm ones.
 -}
 data PackageName = PackageName
     { pkgEcosystem :: Ecosystem
@@ -200,15 +200,13 @@ renderPackageName = TS.toText . pkgDisplay
 
 {- | The unscoped (base) name: the display name with any @\@scope/@ prefix dropped
 (@\@babel\/code-frame@ → @code-frame@). The single home for the bare-name derivation
-the npm tarball/path layer and the mirror queue all need — they previously each
+the npm tarball/path layer and the mirror queue all need -- they previously each
 reconstructed it by rendering then string-stripping the scope.
 -}
 unscopedName :: PackageName -> Text
 unscopedName name = case pkgNamespace name of
     Just _ -> T.drop 1 (snd (T.breakOn "/" (renderPackageName name)))
     Nothing -> renderPackageName name
-
--- ── normalised signals ───────────────────────────────────────────────────────
 
 {- | Whether installing a version executes code (the cross-ecosystem unification
 of npm install scripts, PyPI sdist builds, and RubyGems native extensions).
@@ -263,8 +261,6 @@ data Availability
       Yanked (Maybe Text)
     deriving stock (Eq, Show)
 
--- ── artifacts ────────────────────────────────────────────────────────────────
-
 -- | A hash algorithm an integrity digest is computed with.
 data HashAlg
     = SHA1
@@ -297,7 +293,7 @@ data Hash = Hash
 {- | Build a 'Hash', validating that the digest is __structurally well-formed__:
 cleanly encoded and exactly the byte length its algorithm specifies. This is the only
 way to construct a 'Hash', so the type itself is the proof that the digest could be a
-real digest of that algorithm — an empty, truncated, over-long, non-hex, or bad-base64
+real digest of that algorithm -- an empty, truncated, over-long, non-hex, or bad-base64
 value is unconstructable and so can never reach an integrity gate as a degenerate
 digest (the fail-open this closes is @docs\/architecture\/security.md@ invariant 5).
 
@@ -330,7 +326,7 @@ wellFormed = \case
     alg -> wellFormedHex alg
 
 -- A hex digest is well-formed when it decodes as hex (case-insensitively) to exactly
--- the algorithm's digest length — which 'digestFromByteString' decides by accepting
+-- the algorithm's digest length -- which 'digestFromByteString' decides by accepting
 -- only an input of the right size.
 wellFormedHex :: HashAlg -> Text -> Bool
 wellFormedHex alg t =
@@ -347,8 +343,6 @@ hexDigestOk alg bytes = case alg of
     MD5 -> isJust (digestFromByteString @MD5 bytes)
     Blake2b -> isJust (digestFromByteString @Blake2b_512 bytes)
     SRI -> False
-
--- ── digest computation ───────────────────────────────────────────────────────
 
 {- | Compute the digest of bytes in a given algorithm, as the raw digest bytes, or
 'Nothing' for an algorithm Écluse will not verify against. The computable algorithms are
@@ -420,8 +414,6 @@ sriBodyOk algName body =
             "sha512" -> isJust (digestFromByteString @SHA512 bytes)
             _ -> False
 
--- ── algorithm vocabulary ─────────────────────────────────────────────────────
-
 -- This is the single home for the algorithm vocabulary: the wire name an algorithm
 -- renders to and parses from, and how a Subresource-Integrity string is split and
 -- resolved. It lives here, in the lowest layer, because 'mkHash' needs it and
@@ -431,7 +423,7 @@ sriBodyOk algName body =
 -- an SRI asserts rather than each re-encoding it. "Ecluse.Core.Package.Integrity" re-exports
 -- these names for its existing callers.
 
-{- | The lower-case wire name of an algorithm — the canonical spelling 'parseHashAlg'
+{- | The lower-case wire name of an algorithm -- the canonical spelling 'parseHashAlg'
 reads back. Total and injective, so it doubles as config rendering and error text.
 
 >>> renderHashAlg SHA256
@@ -468,7 +460,7 @@ parseHashAlg raw = case T.filter (/= '-') (T.toLower (T.strip raw)) of
     "blake2b" -> Right Blake2b
     _ -> Left ("unknown integrity algorithm: " <> raw)
 
-{- | The algorithm-name token of a Subresource-Integrity string — the @\<alg\>@ before
+{- | The algorithm-name token of a Subresource-Integrity string -- the @\<alg\>@ before
 the first @\'-\'@ in @\<alg\>-\<base64\>@. A string with no @\'-\'@ is all prefix.
 
 >>> sriPrefix "sha512-Zm9vYmFy"
@@ -477,7 +469,7 @@ the first @\'-\'@ in @\<alg\>-\<base64\>@. A string with no @\'-\'@ is all prefi
 sriPrefix :: Text -> Text
 sriPrefix = fst . T.breakOn "-"
 
-{- | The base64 digest body of a Subresource-Integrity string — the @\<base64\>@ after
+{- | The base64 digest body of a Subresource-Integrity string -- the @\<base64\>@ after
 the first @\'-\'@ in @\<alg\>-\<base64\>@. A string with no @\'-\'@ has an empty body.
 
 >>> sriBody "sha512-Zm9vYmFy"
@@ -541,8 +533,6 @@ data Artifact = Artifact
     }
     deriving stock (Eq, Show)
 
--- ── dependencies ─────────────────────────────────────────────────────────────
-
 -- | The role a dependency plays.
 data DepKind
     = Runtime
@@ -552,7 +542,7 @@ data DepKind
     deriving stock (Eq, Show)
 
 {- | A declared dependency. The constraint is kept as __raw text__ (semver range
-\/ PEP 508 \/ @Gem::Requirement@) — lossless and ecosystem-agnostic — and is
+\/ PEP 508 \/ @Gem::Requirement@) -- lossless and ecosystem-agnostic -- and is
 parsed only if a rule ever needs to compare it.
 -}
 data Dependency = Dependency
@@ -627,7 +617,7 @@ data PackageInfo = PackageInfo
     packument's own key). Each 'PackageDetails' still carries its parsed
     'Version'; the map is keyed by 'Text' because a 'Version' has no 'Ord'
     (ordering goes through 'Ecluse.Core.Version.compareVersions', never a derived
-    instance) — see "Ecluse.Core.Version".
+    instance) -- see "Ecluse.Core.Version".
     -}
     , infoDistTags :: Map Text Version
     {- ^ Distribution tags (e.g. @"latest"@, @"next"@) to the 'Version' they

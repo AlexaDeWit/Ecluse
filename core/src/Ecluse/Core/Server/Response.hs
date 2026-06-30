@@ -1,8 +1,8 @@
 {- | The serve-outcome model, the per-outcome status mapping, and the agnostic
 shape of an error body.
 
-Every client-facing reply is the rendering of one __serve outcome__ — admit the
-request, or reject it — so that an error maps to the status a client can act on
+Every client-facing reply is the rendering of one __serve outcome__ -- admit the
+request, or reject it -- so that an error maps to the status a client can act on
 rather than a generic 403\/500. The model and the per-outcome status mapping live
 here; the WAI layer that turns an 'ArtifactStatus' into an actual response and
 streams the body is separate (see @docs\/architecture\/web-layer.md@).
@@ -10,7 +10,7 @@ streams the body is separate (see @docs\/architecture\/web-layer.md@).
 This module decides the HTTP /status/ of a refusal but holds __no body shape of
 its own__: the bytes a client reads an error from are an ecosystem's (npm's
 @{"error": …}@ JSON, a different surface for PyPI), so a mount supplies a
-'MountRenderer' — chosen at the composition root alongside its path grammar — and
+'MountRenderer' -- chosen at the composition root alongside its path grammar -- and
 the agnostic web layer never names one. 'appendHelp' is the ecosystem-neutral part
 the renderer reuses: joining the operator help message onto a denial.
 
@@ -18,7 +18,7 @@ the renderer reuses: joining the operator help message onto a denial.
 
 A 'ServeDecision' is 'Admit' or 'Reject' with a 'Rejection' carrying a
 'RejectReason'. A rejection is either __by policy__ (a rule denied the version,
-including deny-by-default) or __unavailable__ — the version could not be decided,
+including deny-by-default) or __unavailable__ -- the version could not be decided,
 carrying its 'Transience': whether the evaluator believes the condition will
 self-heal. The whole verdict pipeline ("Ecluse.Core.Rules") feeds this: a rules
 'Decision' projects to a 'ServeDecision' via 'serveDecisionOf'.
@@ -27,12 +27,12 @@ self-heal. The whole verdict pipeline ("Ecluse.Core.Rules") feeds this: a rules
 
 For a __concrete artifact__ (one specific version) the outcome renders to a
 single 'ArtifactStatus'. The load-bearing rule is __503 only when we believe it
-will resolve__ — a transient upstream\/advisory condition invites a retry, while a
+will resolve__ -- a transient upstream\/advisory condition invites a retry, while a
 permanent or internal inability to decide ('WontResolve') is a @500@, because
 retrying it cannot help and we should not invite it. A policy rejection is a
 @403@ whose body the mount's 'MountRenderer' shapes. A __packument__ request has
-no single status — its versions are filtered and the status is chosen over the
-surviving set — so this module deliberately maps __per outcome__, not per request.
+no single status -- its versions are filtered and the status is chosen over the
+surviving set -- so this module deliberately maps __per outcome__, not per request.
 
 An operator help message, when configured, is appended to every denial
 ('appendHelp') so clients are told where to ask; how the joined text is then
@@ -79,11 +79,9 @@ import Ecluse.Core.Rules.Types (
     Transience (..),
  )
 
--- ── serve outcomes ───────────────────────────────────────────────────────────
-
 {- | The outcome of deciding a request: serve it, or refuse it with a reason.
 
-Every client-facing reply renders one of these. 'Admit' carries no payload — the
+Every client-facing reply renders one of these. 'Admit' carries no payload -- the
 artifact or packument is what is then streamed; 'Reject' carries the 'Rejection'
 that explains the refusal and selects the status.
 -}
@@ -117,7 +115,7 @@ data RejectReason
       is the rule that decided, for the audit trail and the denial body.
       -}
       ByPolicy RuleName
-    | {- | The version could not be decided — an effectful rule the evaluator
+    | {- | The version could not be decided -- an effectful rule the evaluator
       needed could not be consulted (advisory source down, timeout). This is
       __fail-closed__: a never-vetted version is not admitted just because the
       scanner is unreachable. The 'Transience' says whether a retry can help.
@@ -126,8 +124,8 @@ data RejectReason
     | {- | The version's selected artifact carries __no integrity digest of any
       kind__ (neither an SRI nor a legacy shasum), so its bytes cannot be tied to
       a tamper-evident fingerprint. A version without an integrity check is
-      inadmissible from an /untrusted/ (public) upstream — there is nothing to
-      detect a divergence against — so admission refuses it outright. This is a
+      inadmissible from an /untrusted/ (public) upstream -- there is nothing to
+      detect a divergence against -- so admission refuses it outright. This is a
       deliberate, deny-by-default __admission policy__, not a rule decision and not
       a retryable inability: it maps to a @403@. The trusted private upstream is
       exempt; this reason never arises on that path.
@@ -137,20 +135,20 @@ data RejectReason
       strongest one is __weaker than the configured minimum algorithm__ (e.g. a
       legacy SHA-1 shasum only, under the default SHA-256 floor). A collision-broken
       digest cannot tie the bytes to a tamper-evident fingerprint, so it is
-      inadmissible from an /untrusted/ (public) upstream — distinct from
+      inadmissible from an /untrusted/ (public) upstream -- distinct from
       'MissingIntegrity' (which has no digest at all) so the audit trail says which.
       A deny-by-default __admission policy__ that maps to a @403@; the trusted private
       upstream is exempt and this reason never arises on that path.
       -}
       BelowIntegrityFloor
     | {- | A responding upstream returned an __invalid response__ for the requested
-      package — its packument self-reported a name for a /different/ package, so that
+      package -- its packument self-reported a name for a /different/ package, so that
       origin is untrusted for this request and its contribution is dropped. It is not
       a policy verdict and not a retryable inability but a /gateway/ fault: when no
       origin yields a valid packument and a responding one was invalid this way, the
       packument request maps to a @502@. Distinct from a genuine absence (no such
       package at all), which is not refused this way. Arises on the packument path
-      only — the artifact path never validates a packument name.
+      only -- the artifact path never validates a packument name.
       -}
       UpstreamInvalid
     deriving stock (Eq, Show)
@@ -169,7 +167,7 @@ An 'Admitted' decision admits; a 'Blocked' or 'BlockedByDefault' decision reject
 'ByPolicy', naming the deciding rule and carrying the human-readable
 'renderDecision' as the message. An 'Undecidable' decision (a fail-closed rule that
 could not be computed) rejects as 'Unavailable', carrying its 'Transience' so the
-status mapping can choose @503@ vs @500@ — __fail-closed__, exactly as a denial
+status mapping can choose @503@ vs @500@ -- __fail-closed__, exactly as a denial
 removes a version, but flagged retryable when the cause may self-heal. Only an
 admission admits.
 -}
@@ -183,28 +181,26 @@ serveDecisionOf pd decision = case decision of
     rejectAs :: RejectReason -> Rejection
     rejectAs reason = Rejection reason (renderDecision pd decision)
 
--- ── concrete-artifact status ─────────────────────────────────────────────────
-
 {- | The HTTP status a __concrete-artifact__ request renders to. A domain sum
 type (not a raw code) so the mapping is total and the WAI layer reads off an
 exhaustive set; 'artifactStatusCode' gives the numeric code.
 
-A packument request has no single status — its versions are filtered and a status
-is chosen over the survivors — so this type models only the concrete-artifact
+A packument request has no single status -- its versions are filtered and a status
+is chosen over the survivors -- so this type models only the concrete-artifact
 case.
 -}
 data ArtifactStatus
-    = -- | @200@ — admitted; the artifact is streamed.
+    = -- | @200@ -- admitted; the artifact is streamed.
       Ok
-    | -- | @403@ — refused by policy; the body is shaped by the mount's 'MountRenderer'.
+    | -- | @403@ -- refused by policy; the body is shaped by the mount's 'MountRenderer'.
       Forbidden
-    | {- | @503@ — a transient inability to decide; the 'RetryAfter', if known,
+    | {- | @503@ -- a transient inability to decide; the 'RetryAfter', if known,
       becomes the @Retry-After@ header.
       -}
       Unavailable' (Maybe RetryAfter)
-    | -- | @500@ — a permanent or internal inability to decide; not retryable.
+    | -- | @500@ -- a permanent or internal inability to decide; not retryable.
       ServerError
-    | -- | @404@ — the upstream did not have the artifact (forwarded miss).
+    | -- | @404@ -- the upstream did not have the artifact (forwarded miss).
       NotFound
     deriving stock (Eq, Show)
 
@@ -212,7 +208,7 @@ data ArtifactStatus
 
 @403@ for a policy refusal; @503@ when an unavailability 'WillResolve' (a retry
 may help); @500@ when it 'WontResolve'. __@503@ only when we believe it will
-resolve__ — a permanent or internal inability is a @500@, since retrying it
+resolve__ -- a permanent or internal inability is a @500@, since retrying it
 cannot help. A @404@ upstream miss is not a serve /decision/ (the version exists
 unless upstream says otherwise), so it is not produced here.
 -}
@@ -239,42 +235,40 @@ artifactStatusCode = \case
     ServerError -> 500
     NotFound -> 404
 
--- ── packument status (over the merged survivor set) ──────────────────────────
-
 {- | The HTTP status a __packument__ request renders to, chosen once the merged
-survivor set is known. A packument has no single per-version status — its versions
-are filtered and merged across upstreams — so the status is chosen __over the
+survivor set is known. A packument has no single per-version status -- its versions
+are filtered and merged across upstreams -- so the status is chosen __over the
 survivors__: with at least one survivor the document is served; with none, the
 status follows the most recoverable cause among the exclusions (see
 'packumentStatus').
 
 A domain sum (not a raw code) so the mapping is total and the WAI layer reads an
 exhaustive set; 'packumentStatusCode' gives the numeric code. There is no @404@: a
-packument whose versions were all withheld is __not__ a miss — the package exists,
+packument whose versions were all withheld is __not__ a miss -- the package exists,
 so a genuine upstream absence (no such package at all) is a separate concern of the
 serve layer, decided before the merge.
 -}
 data PackumentStatus
-    = -- | @200@ — at least one version survived; the merged, filtered packument is served.
+    = -- | @200@ -- at least one version survived; the merged, filtered packument is served.
       PackumentOk
-    | {- | @403@ — no version survived and every exclusion was a policy denial; the
+    | {- | @403@ -- no version survived and every exclusion was a policy denial; the
       response body collects the denial reasons.
       -}
       PackumentForbidden
-    | {- | @503@ — no version survived, but at least one exclusion may self-heal (a
+    | {- | @503@ -- no version survived, but at least one exclusion may self-heal (a
       transient rule outcome, or a needed upstream that was unavailable), so a retry
       may yet yield survivors. The 'RetryAfter', if any was suggested, becomes the
       @Retry-After@ header.
       -}
       PackumentUnavailable (Maybe RetryAfter)
-    | {- | @502@ — no version survived because a responding upstream returned an
+    | {- | @502@ -- no version survived because a responding upstream returned an
       __invalid response__ (a packument self-reporting a different package's name),
       and no origin yielded a valid packument. A gateway fault, distinct from a
       genuine absence (no such package) and from a retryable outage: the upstream
       answered, but with a document for the wrong package.
       -}
       PackumentBadGateway
-    | {- | @500@ — no version survived, no exclusion is retryable, and at least one is
+    | {- | @500@ -- no version survived, no exclusion is retryable, and at least one is
       a permanent or internal inability to decide; retrying cannot help.
       -}
       PackumentServerError
@@ -282,7 +276,7 @@ data PackumentStatus
 
 {- | Choose a packument's status from the per-version serve outcomes weighed for it:
 the 'Admit's for surviving versions (trusted, or rule-approved) and the 'Reject's
-for excluded ones — plus any 'Reject' a needed-but-unavailable upstream contributes.
+for excluded ones -- plus any 'Reject' a needed-but-unavailable upstream contributes.
 Pure and total.
 
 Any 'Admit' means the merged document has a survivor, so it is served
@@ -295,9 +289,9 @@ among the exclusions, so a retry is invited exactly when it might produce surviv
   a different package; ranked above the terminal @500@\/@403@ because it names a
   concrete, actionable gateway fault, but below the retryable @503@ since a transient
   origin may yet come back with a valid document);
-* else any 'Unavailable' 'WontResolve' → @500@ (a permanent inability — a retry
+* else any 'Unavailable' 'WontResolve' → @500@ (a permanent inability -- a retry
   cannot help, so it is not dressed up as a retryable @503@);
-* else every exclusion is a deny-by-default cause — a 'ByPolicy' rule denial or an
+* else every exclusion is a deny-by-default cause -- a 'ByPolicy' rule denial or an
   admission refusal ('MissingIntegrity' or 'BelowIntegrityFloor'), __including the
   degenerate empty input__ → @403@: there is nothing to serve and nothing invites a
   retry.
@@ -367,9 +361,7 @@ packumentStatusCode = \case
     PackumentBadGateway -> 502
     PackumentServerError -> 500
 
--- ── denial rendering ─────────────────────────────────────────────────────────
-
-{- | An operator-configured message appended to every denial — typically where to
+{- | An operator-configured message appended to every denial -- typically where to
 ask for help (e.g. a support channel). Stored trimmed of surrounding whitespace
 so it joins the denial text with a single separating space and an all-blank value
 contributes nothing.
@@ -388,7 +380,7 @@ unHelpMessage (HelpMessage t) = t
 {- | Append a non-blank operator 'HelpMessage' to a denial message, separated by a
 single space; a blank or absent help message contributes nothing.
 
-This is the ecosystem-neutral part of denial rendering — every ecosystem appends
+This is the ecosystem-neutral part of denial rendering -- every ecosystem appends
 the operator's help text the same way. How the joined text is then wrapped into
 body bytes is the mount's 'MountRenderer'.
 -}
@@ -400,8 +392,8 @@ appendHelp help message =
 
 {- | A rendered error body: its @Content-Type@ and the bytes.
 
-The agnostic serve layer chooses the HTTP /status/; the body shape — JSON, plain
-text, HTML — is the mount's, so a 'MountRenderer' returns this pair and the WAI
+The agnostic serve layer chooses the HTTP /status/; the body shape -- JSON, plain
+text, HTML -- is the mount's, so a 'MountRenderer' returns this pair and the WAI
 layer reads the content type off it rather than assuming one.
 -}
 data RenderedBody = RenderedBody
@@ -412,7 +404,7 @@ data RenderedBody = RenderedBody
     }
     deriving stock (Eq, Show)
 
-{- | A mount's ecosystem-specific error renderer — the Handle that keeps the npm
+{- | A mount's ecosystem-specific error renderer -- the Handle that keeps the npm
 @{"error": …}@ shape (and any other ecosystem's) out of the agnostic web layer.
 
 The status machinery here is ecosystem-agnostic, but the body a client reads an

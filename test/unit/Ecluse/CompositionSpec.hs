@@ -58,8 +58,8 @@ import Ecluse.Core.Server.Response (unHelpMessage)
 {- | Tests for the composition root's boot-time wiring. They exercise the two
 promises of the slice: a valid configuration produces served mount bindings with
 real packument-serve dependencies (so packuments are merged, not @501@ stubs), and
-every boot problem — an unresolved rule policy, a configured mount with no adapter,
-a credential reference that does not resolve — is a fail-fast, __aggregated__ boot
+every boot problem -- an unresolved rule policy, a configured mount with no adapter,
+a credential reference that does not resolve -- is a fail-fast, __aggregated__ boot
 error. Pure of IO: the clock and the ecosystem-to-adapter resolver are injected, so
 nothing here opens a socket.
 -}
@@ -73,8 +73,6 @@ spec = do
     bootErrorSpec
     publishWiringSpec
     renderSpec
-
--- ── fixtures ──────────────────────────────────────────────────────────────────
 
 -- | A fixed clock for the injected 'pdNow'; never advanced (no timing here).
 fixedNow :: UTCTime
@@ -127,7 +125,7 @@ expectDoc :: ByteString -> IO ByteString
 expectDoc = pure
 
 {- | A document mount keyed by the given ecosystem, naming the given credential
-backend — for the no-adapter and unresolved-credential boot-error cases.
+backend -- for the no-adapter and unresolved-credential boot-error cases.
 -}
 mountDoc :: Text -> Text -> ByteString
 mountDoc eco credential =
@@ -154,8 +152,6 @@ planFrom envVars mDocBytes = do
             initCredentialProviders noCredentialReporters (configApp cfg) >>= \case
                 Left pErrs -> pure (Left pErrs)
                 Right providers -> planMounts mountBindingFor (pure fixedNow) providers cfg
-
--- ── credential providers ──────────────────────────────────────────────────────
 
 credentialProvidersSpec :: Spec
 credentialProvidersSpec = describe "initCredentialProviders" $ do
@@ -197,8 +193,6 @@ credentialProvidersSpec = describe "initCredentialProviders" $ do
                 [ CodeArtifactConfigMissing "ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_DOMAIN"
                 , CodeArtifactConfigMissing "ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_DOMAIN_OWNER"
                 ]
-
--- ── mirror-queue backend selection ────────────────────────────────────────────
 
 mirrorQueueSpec :: Spec
 mirrorQueueSpec = describe "planMirrorQueue" $ do
@@ -290,8 +284,6 @@ mirrorQueueSpec = describe "planMirrorQueue" $ do
     expectSqsBackend env = case planMirrorQueue env of
         Right (SqsBackend cfg) -> pure cfg
         other -> fail ("expected an SQS mirror-queue plan, got: " <> show other)
-
--- ── mirror-target credential provider selection ───────────────────────────────
 
 mirrorCredentialSpec :: Spec
 mirrorCredentialSpec = describe "planMirrorCredential / resolveCodeArtifactConfig" $ do
@@ -400,8 +392,6 @@ mirrorCredentialSpec = describe "planMirrorCredential / resolveCodeArtifactConfi
                 , CodeArtifactConfigMissing "ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_REGION"
                 ]
 
--- ── config-derived cache settings ─────────────────────────────────────────────
-
 cacheConfigSpec :: Spec
 cacheConfigSpec = describe "cacheConfigFor" $
     it "maps the env cache tunables onto the metadata CacheConfig" $ do
@@ -415,8 +405,6 @@ cacheConfigSpec = describe "cacheConfigFor" $
         cacheTtl (cacheConfigFor env) `shouldBe` (45 :: NominalDiffTime)
         cacheMaxEntries (cacheConfigFor env) `shouldBe` 256
         cacheMaxBytes (cacheConfigFor env) `shouldBe` 1048576
-
--- ── config-driven serving ─────────────────────────────────────────────────────
 
 composeBindingsSpec :: Spec
 composeBindingsSpec = describe "planMounts / composeBindings (config-driven serving)" $ do
@@ -471,7 +459,7 @@ composeBindingsSpec = describe "planMounts / composeBindings (config-driven serv
     it "threads the inbound edge token, clock, and help message onto the deps" $ do
         -- Forces the remaining 'PackumentDeps' fields: the inbound token (from
         -- ECLUSE_AUTH_TOKEN), the injected clock ('pdNow'), and the operator help
-        -- message — all wired by the composition root.
+        -- message -- all wired by the composition root.
         env <- expectEnv (("ECLUSE_AUTH_TOKEN", "edge-secret") : ("ECLUSE_HELP_MESSAGE", "ask #platform") : staticEnvVars)
         providers <- expectProviders env
         config <- expectConfig (("ECLUSE_AUTH_TOKEN", "edge-secret") : ("ECLUSE_HELP_MESSAGE", "ask #platform") : staticEnvVars) Nothing
@@ -504,7 +492,7 @@ composeBindingsSpec = describe "planMounts / composeBindings (config-driven serv
             other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
 
     it "defaults the response-bound budget to the secure defaults" $ do
-        -- With no PROXY_MAX_* set, the deps carry Ecluse.Core.Security.defaultLimits — the
+        -- With no PROXY_MAX_* set, the deps carry Ecluse.Core.Security.defaultLimits -- the
         -- secure-default body/version/nesting ceilings (security.md invariant 4).
         _ <- expectEnv staticEnvVars
         planFrom staticEnvVars Nothing >>= \case
@@ -560,7 +548,7 @@ composeBindingsSpec = describe "planMounts / composeBindings (config-driven serv
 
     it "threads a loosened trusted-integrity floor (sha1) onto the deps" $ do
         -- The trusted floor is loosenable below SHA-256, so a SHA-1 value flows from
-        -- config to the deps the trusted gate consults — the asymmetry with the public
+        -- config to the deps the trusted gate consults -- the asymmetry with the public
         -- floor's hard SHA-256 minimum.
         sha1Floor <- either (fail . toString) pure (mkMinTrustedIntegrity SHA1)
         _ <- expectEnv (("ECLUSE_MIN_TRUSTED_INTEGRITY", "sha1") : staticEnvVars)
@@ -580,8 +568,6 @@ composeBindingsSpec = describe "planMounts / composeBindings (config-driven serv
         composeBindings mountBindingFor (pure fixedNow) providers config >>= \case
             Right bindings -> map bindingPrefix bindings `shouldBe` ["npm" :| []]
             Left errs -> expectationFailure ("unexpected boot errors: " <> show errs)
-
--- ── boot fail-fast ────────────────────────────────────────────────────────────
 
 bootErrorSpec :: Spec
 bootErrorSpec = describe "planMounts (fail fast at boot)" $ do
@@ -672,8 +658,6 @@ bootErrorSpec = describe "planMounts (fail fast at boot)" $ do
             Left errs -> errs `shouldMatchList` [PublishScopesMissing Npm, PublishStaticCredentialNeedsEdge Npm]
             Right _ -> expectationFailure "expected both publish boot errors, accumulated"
 
--- ── first-party publish wiring ────────────────────────────────────────────────
-
 publishWiringSpec :: Spec
 publishWiringSpec = describe "planMounts (first-party publish deps)" $ do
     it "wires the publication target and scope allow-list onto the mount when configured" $ do
@@ -692,7 +676,7 @@ publishWiringSpec = describe "planMounts (first-party publish deps)" $ do
             _ -> expectationFailure "expected a single wired binding"
 
     it "boots a static publish credential when a verifiable inbound edge is configured" $ do
-        -- The safe pairing — the positive control for the fail-loud boot test above: the
+        -- The safe pairing -- the positive control for the fail-loud boot test above: the
         -- same static publish credential boots once ECLUSE_AUTH_TOKEN gates the edge, so the
         -- internal credential is only ever reachable behind edge authentication.
         let testEnv =
@@ -711,15 +695,13 @@ publishWiringSpec = describe "planMounts (first-party publish deps)" $ do
 
     it "leaves the publish path off (no publish deps) when no publication target is configured" $ do
         -- The opt-out: with no ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET the mount carries no publish deps,
-        -- so a PUT /{pkg} is 405 — there is no implicit write path.
+        -- so a PUT /{pkg} is 405 -- there is no implicit write path.
         _ <- expectEnv staticEnvVars
         planFrom staticEnvVars Nothing >>= \case
             Right [binding] -> case bindingPublishDeps binding of
                 Nothing -> pure ()
                 Just _ -> expectationFailure "expected no publish deps when no publication target is configured"
             _ -> expectationFailure "expected a single wired binding"
-
--- ── rendering ─────────────────────────────────────────────────────────────────
 
 renderSpec :: Spec
 renderSpec = describe "renderBootError" $

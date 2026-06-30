@@ -9,7 +9,7 @@ the job (see @docs\/architecture\/cloud-backends.md@ → "Mirror Queue").
 
 The queue is the one cloud surface with materially different APIs per provider
 (AWS SQS @SendMessage@\/@ReceiveMessage@+visibility-timeout\/@DeleteMessage@; GCP
-Pub\/Sub @Publish@\/@Pull@+ack-deadline\/@Acknowledge@), so it is its own handle —
+Pub\/Sub @Publish@\/@Pull@+ack-deadline\/@Acknowledge@), so it is its own handle --
 a __record of functions__ (the Handle pattern). Both providers fit the same
 receive → process → ack shape; their differences (visibility timeout vs ack
 deadline, batch limits, dead-letter wiring) stay behind the handle, and
@@ -27,7 +27,7 @@ handle's contract reflects that:
 
 * __'enqueue' is best-effort.__ It runs on the request hot path (enqueue, then
   serve immediately), so a failure must be logged\/metered and __never fail the
-  client response__ — the artifact is already served, and a later pull
+  client response__ -- the artifact is already served, and a later pull
   re-enqueues.
 * __Retry is "don't 'ack'".__ A job that fails processing is simply not acked;
   the visibility timeout \/ ack deadline redelivers it, and the backend's native
@@ -40,10 +40,10 @@ handle's contract reflects that:
 This module provides the handle and its payload types, plus two STM-backed
 in-memory implementations:
 
-* 'newInMemoryQueue' — the __test double__ that models the cloud backends'
+* 'newInMemoryQueue' -- the __test double__ that models the cloud backends'
   visibility-timeout semantics (receive → ack \/ redeliver-on-no-ack), used to
   exercise the worker's retry path without a cloud queue.
-* 'newBoundedInMemoryQueue' — the __bounded, best-effort production backend__
+* 'newBoundedInMemoryQueue' -- the __bounded, best-effort production backend__
   selected by @ECLUSE_QUEUE_BACKEND=memory@. See its own Haddock for why it is
   correctness-safe (a dropped job is re-enqueued on the next demand) and why it
   deliberately does __not__ redeliver.
@@ -128,7 +128,7 @@ document, captured when the version was gated.
 
 'maHashes' is a 'NonEmpty' because the serve path admits a public version only when
 it carries at least one integrity digest (the integrity-presence admission policy),
-so a job with __no__ digest to verify against is unrepresentable — the worker always
+so a job with __no__ digest to verify against is unrepresentable -- the worker always
 has a fingerprint to check the bytes against before they reach the private upstream.
 -}
 data MirrorArtifact = MirrorArtifact
@@ -153,7 +153,7 @@ tracing port to re-establish a span __link__ from the per-job span to the enqueu
 request, so the asynchronous mirror hand-off is navigable in a trace.
 
 The two fields are the W3C header values verbatim; the queue carries them opaquely
-(it neither parses nor validates them — an unparseable carrier simply yields no link),
+(it neither parses nor validates them -- an unparseable carrier simply yields no link),
 so this type names what is carried without coupling the queue to any tracing backend.
 -}
 data RemoteSpanContext = RemoteSpanContext
@@ -167,8 +167,8 @@ data RemoteSpanContext = RemoteSpanContext
     deriving stock (Eq, Show)
 
 {- | An __opaque__ handle identifying a received message for 'ack' \/
-'extendVisibility'. It carries the backend's own delivery token — an SQS receipt
-handle or a Pub\/Sub @ackId@ — as text; the constructor is hidden so neither
+'extendVisibility'. It carries the backend's own delivery token -- an SQS receipt
+handle or a Pub\/Sub @ackId@ -- as text; the constructor is hidden so neither
 provider's representation leaks into worker code, and a handle is only ever
 obtained from a 'QueueMessage' returned by 'receive'. Build one (in a backend)
 with 'mkReceiptHandle' and read the token back with 'unReceiptHandle'.
@@ -177,7 +177,7 @@ newtype ReceiptHandle = ReceiptHandle Text
     deriving stock (Eq, Ord, Show)
 
 {- | Wrap a backend's delivery token (an SQS receipt handle, a Pub\/Sub @ackId@)
-as an opaque 'ReceiptHandle'. For backend implementations only — worker code
+as an opaque 'ReceiptHandle'. For backend implementations only -- worker code
 obtains handles from 'receive', never builds them.
 -}
 mkReceiptHandle :: Text -> ReceiptHandle
@@ -206,7 +206,7 @@ data QueueMessage = QueueMessage
 newtype Seconds = Seconds Int
     deriving stock (Eq, Ord, Show)
 
-{- | The mirror-queue handle — a record of functions over a backend whose private
+{- | The mirror-queue handle -- a record of functions over a backend whose private
 state the closures capture. See the module header for the @enqueue@ /
 don't-@ack@-to-retry / no-@nack@ conventions; all fields are 'IO'.
 -}
@@ -229,14 +229,12 @@ data MirrorQueue = MirrorQueue
     -}
     }
 
--- ── in-memory double ─────────────────────────────────────────────────────────
-
 {- The mutable state of the in-memory queue.
 
 Modelled as visible (waiting) jobs plus in-flight (received-but-unacked) ones,
 exactly mirroring the visibility-timeout model the cloud backends use: a 'receive'
 makes visible jobs in-flight, an 'ack' drops an in-flight job, and an unacked
-in-flight job becomes visible again — redelivered — on a subsequent 'receive'.
+in-flight job becomes visible again -- redelivered -- on a subsequent 'receive'.
 -}
 data QueueState = QueueState
     { -- A monotonic counter giving each delivery a unique 'ReceiptHandle'.
@@ -245,16 +243,16 @@ data QueueState = QueueState
       -- O(1) amortised snoc so enqueue cost does not grow with queue depth.
       qsVisible :: Seq MirrorJob
     , -- Delivered-but-unacked jobs, keyed by the numeric receipt counter (not the
-      -- rendered 'ReceiptHandle' text) so iteration stays in delivery — hence
-      -- FIFO-reclaim — order rather than the lexicographic order text keys give.
+      -- rendered 'ReceiptHandle' text) so iteration stays in delivery -- hence
+      -- FIFO-reclaim -- order rather than the lexicographic order text keys give.
       qsInFlight :: Map Word64 InFlight
     }
 
 {- One in-flight job and whether its visibility has been extended.
 
 A held ('inFlightHeld' = 'True') job survives one reclaim pass (the effect of
-'extendVisibility'); otherwise an in-flight job is reclaimed — made visible again
-for redelivery — on the next 'receive', modelling expiry of the visibility
+'extendVisibility'); otherwise an in-flight job is reclaimed -- made visible again
+for redelivery -- on the next 'receive', modelling expiry of the visibility
 window.
 -}
 data InFlight = InFlight
@@ -270,7 +268,7 @@ Honours the handle's contract: 'enqueue' appends (FIFO), 'receive' delivers all
 currently-visible jobs and moves them in-flight, 'ack' removes an in-flight job,
 and an in-flight job that is never acked is __redelivered__ on the next 'receive'
 ("retry is don't ack"). 'extendVisibility' holds a job in-flight across one such
-redelivery pass. This is a test double — there is no long-poll blocking; an empty
+redelivery pass. This is a test double -- there is no long-poll blocking; an empty
 'receive' returns @[]@ at once.
 -}
 newInMemoryQueue :: IO MirrorQueue
@@ -363,8 +361,6 @@ newInMemoryQueue = do
             , Map.insert next (InFlight{inFlightJob = job, inFlightHeld = False}) inFlight
             )
 
--- ── bounded in-memory production backend ─────────────────────────────────────
-
 {- | What the bounded in-memory backend needs: its depth cap and its idle-poll
 window. A record (like 'Ecluse.Core.Queue.Sqs.SqsConfig') so each knob is named rather
 than a bare 'Int'; build it with 'defaultMemoryQueueConfig' for the production poll
@@ -379,13 +375,13 @@ data MemoryQueueConfig = MemoryQueueConfig
     , memQueuePollWaitMicros :: Int
     {- ^ The idle long-poll window in microseconds: how long a 'receive' waits for a
     job before returning @[]@ (an empty, healthy poll). Bounds the idle wait so the
-    worker's liveness heartbeat keeps advancing — see 'newBoundedInMemoryQueue'.
+    worker's liveness heartbeat keeps advancing -- see 'newBoundedInMemoryQueue'.
     -}
     }
     deriving stock (Eq, Show)
 
 {- | A 'MemoryQueueConfig' for a given depth cap with the idle-poll window at its
-production default — @20s@, mirroring the SQS long-poll cadence
+production default -- @20s@, mirroring the SQS long-poll cadence
 ('Ecluse.Core.Queue.Sqs.defaultSqsConfig') and comfortably under the worker's @120s@
 heartbeat-staleness budget ('Ecluse.Core.Worker.workerHeartbeatStaleAfter'), so an idle
 'receive' returns a healthy empty poll long before @\/livez@ would flag the loop
@@ -400,8 +396,8 @@ defaultMemoryQueueConfig maxDepth =
         }
 
 {- | The most jobs one 'receive' delivers from the bounded in-memory backend. Held
-at the SQS batch cap so the worker — which processes a batch __sequentially__ and
-advances its liveness heartbeat once per poll — sees the same bounded batch shape
+at the SQS batch cap so the worker -- which processes a batch __sequentially__ and
+advances its liveness heartbeat once per poll -- sees the same bounded batch shape
 regardless of backend, rather than one poll returning a whole cold-cache burst and
 starving the heartbeat past its staleness window.
 -}
@@ -416,19 +412,19 @@ per dropped job.
 memoryQueueDropReportInterval :: Int
 memoryQueueDropReportInterval = 1000
 
-{- | Build a bounded, best-effort in-memory 'MirrorQueue' — the production backend
+{- | Build a bounded, best-effort in-memory 'MirrorQueue' -- the production backend
 behind @ECLUSE_QUEUE_BACKEND=memory@, a 'TBQueue' shared between the serve path's
 'enqueue' and the worker's 'receive'.
 
 It is __correctness-safe despite being lossy__: mirroring is a demand-driven
 optimization over the always-available public upstream, so a job lost to the cap or
 to process teardown just means the package is served from public again and
-re-enqueued on the next pull — a deferred performance win, never a correctness loss.
+re-enqueued on the next pull -- a deferred performance win, never a correctness loss.
 That admits two deliberate departures from the cloud backends' contract:
 
 * __Bounded, drop-newest on overflow.__ The queue holds at most 'memQueueMaxDepth'
   jobs; an 'enqueue' that would exceed the cap is rejected (the newest job is
-  dropped) rather than growing memory without bound — the load-bearing constraint,
+  dropped) rather than growing memory without bound -- the load-bearing constraint,
   since a cold-cache @npm ci@ enqueues thousands of jobs at once. 'enqueue' never
   throws (it runs on the serve hot path), and each report-worthy drop invokes the
   injected drop callback with the running drop count, rate-limited by
@@ -436,13 +432,13 @@ That admits two deliberate departures from the cloud backends' contract:
 * __No redelivery; 'ack' \/ 'extendVisibility' are no-ops.__ Unlike the cloud
   backends (and 'newInMemoryQueue'), there is no visibility-timeout in-flight
   tracking: a 'receive' removes a job for good. A job whose processing fails is
-  therefore __not__ redelivered — it is simply re-enqueued on the next demand. This
+  therefore __not__ redelivered -- it is simply re-enqueued on the next demand. This
   bounds memory hardest (nothing is retained after delivery) and is admissible
   precisely because a lost job is safe.
 
 'receive' is a __bounded long-poll__: it waits up to 'memQueuePollWaitMicros' for a
 job, then drains up to 'memoryQueueBatchSize' without blocking, or returns @[]@ when
-the window lapses — the in-process analogue of the cloud long-poll. The bound is
+the window lapses -- the in-process analogue of the cloud long-poll. The bound is
 load-bearing: the worker advances its liveness heartbeat only when 'receive' returns
 (an empty poll is a healthy idle), so an idle 'receive' that blocked forever would
 let the heartbeat go stale and @\/livez@ flag the loop stalled. The wait is the
@@ -473,7 +469,7 @@ newBoundedInMemoryQueue cfg onDrop = do
                     if full
                         then do
                             -- Drop-newest: at the cap, reject this enqueue rather than
-                            -- grow memory. Safe — the job is re-enqueued on next demand.
+                            -- grow memory. Safe -- the job is re-enqueued on next demand.
                             n <- (+ 1) <$> readTVar dropCount
                             writeTVar dropCount n
                             pure (if shouldReport n then Just n else Nothing)

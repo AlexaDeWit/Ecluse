@@ -4,14 +4,14 @@ An inline proxy sees thousands of distinct packages, so the failure mode for met
 is a __series explosion__: a single high-cardinality label (a package name, a version,
 a denial message) multiplied across every package turns a handful of series into
 millions. This module is the structural defence. It defines the catalogue of metric
-__names__ and, crucially, the __closed set of label types__ a metric may carry — every
+__names__ and, crucially, the __closed set of label types__ a metric may carry -- every
 one a small, fixed-domain enum.
 
 == Bounded labels
 
 The label vocabulary is a closed sum, 'Label', whose every constructor pairs a
-bounded-domain key with a bounded value. High-cardinality identifiers — @package@,
-@version@, @scope@, and a denial @message@ — have __no constructor here at all__, so
+bounded-domain key with a bounded value. High-cardinality identifiers -- @package@,
+@version@, @scope@, and a denial @message@ -- have __no constructor here at all__, so
 they cannot be made into a metric label: the type system forbids it. They live on
 spans and the structured log line ("Ecluse.Log") instead, which is where a specific
 decision is debugged. The one operator-bounded label is @rule@ (a rule's configured
@@ -79,53 +79,51 @@ import Data.Universe.Generic (universeGeneric)
 
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 
--- ── the metric-name catalogue ────────────────────────────────────────────────
-
 {- | The catalogue of metric instruments Écluse emits: the @ecluse.*@ domain signals
 plus the OpenTelemetry HTTP server semantic convention. Each maps to its wire name
 through 'metricName'; a typed enum so the catalogue is enumerable (and asserted whole
 in the tests) rather than a scatter of string literals.
 
-Queue backlog and DLQ depth are deliberately absent — those are cloud-native metrics
+Queue backlog and DLQ depth are deliberately absent -- those are cloud-native metrics
 (CloudWatch, Cloud Monitoring), not signals Écluse re-emits. Advisory-sync metrics are
 deferred until the advisory subsystem exists.
 -}
 data MetricName
-    = -- | @http.server.request.duration@ — server request latency (histogram).
+    = -- | @http.server.request.duration@ -- server request latency (histogram).
       HttpServerRequestDuration
-    | -- | @ecluse.serve.decision@ — admit\/deny\/unavailable (counter).
+    | -- | @ecluse.serve.decision@ -- admit\/deny\/unavailable (counter).
       ServeDecision
-    | -- | @ecluse.rule.denials@ — rule denials by rule and reason class (counter).
+    | -- | @ecluse.rule.denials@ -- rule denials by rule and reason class (counter).
       RuleDenials
-    | -- | @ecluse.rule.eval.duration@ — rule-evaluation latency by tier (histogram).
+    | -- | @ecluse.rule.eval.duration@ -- rule-evaluation latency by tier (histogram).
       RuleEvalDuration
-    | -- | @ecluse.rule.effectful.failures@ — effectful-rule failures (counter).
+    | -- | @ecluse.rule.effectful.failures@ -- effectful-rule failures (counter).
       RuleEffectfulFailures
-    | -- | @ecluse.rule.breaker.state@ — effectful\/mint breaker state by source (gauge).
+    | -- | @ecluse.rule.breaker.state@ -- effectful\/mint breaker state by source (gauge).
       RuleBreakerState
-    | -- | @ecluse.upstream.fetch.duration@ — upstream fetch latency (histogram).
+    | -- | @ecluse.upstream.fetch.duration@ -- upstream fetch latency (histogram).
       UpstreamFetchDuration
-    | -- | @ecluse.upstream.fetch.errors@ — upstream fetch errors (counter).
+    | -- | @ecluse.upstream.fetch.errors@ -- upstream fetch errors (counter).
       UpstreamFetchErrors
-    | -- | @ecluse.metadata_cache.requests@ — metadata-cache hit\/miss (counter).
+    | -- | @ecluse.metadata_cache.requests@ -- metadata-cache hit\/miss (counter).
       MetadataCacheRequests
-    | -- | @ecluse.metadata_cache.entries@ — metadata-cache occupancy (gauge).
+    | -- | @ecluse.metadata_cache.entries@ -- metadata-cache occupancy (gauge).
       MetadataCacheEntries
     | -- | @ecluse.metadata_cache.resident_bytes@: full-packument cache resident bytes (gauge).
       MetadataCacheResidentBytes
     | -- | @ecluse.metadata_cache.version.resident_bytes@: single-version cache resident bytes (gauge).
       SingleVersionCacheResidentBytes
-    | -- | @ecluse.mirror.enqueued@ — mirror jobs enqueued (counter).
+    | -- | @ecluse.mirror.enqueued@ -- mirror jobs enqueued (counter).
       MirrorEnqueued
-    | -- | @ecluse.mirror.enqueue.failures@ — mirror enqueue failures (counter).
+    | -- | @ecluse.mirror.enqueue.failures@ -- mirror enqueue failures (counter).
       MirrorEnqueueFailures
-    | -- | @ecluse.mirror.jobs.processed@ — mirror jobs processed by result (counter).
+    | -- | @ecluse.mirror.jobs.processed@ -- mirror jobs processed by result (counter).
       MirrorJobsProcessed
-    | -- | @ecluse.mirror.publish.duration@ — mirror publish latency (histogram).
+    | -- | @ecluse.mirror.publish.duration@ -- mirror publish latency (histogram).
       MirrorPublishDuration
-    | -- | @ecluse.credential.refresh@ — credential refreshes by result and provider (counter).
+    | -- | @ecluse.credential.refresh@ -- credential refreshes by result and provider (counter).
       CredentialRefresh
-    | -- | @ecluse.credential.token.ttl.seconds@ — remaining token lifetime by provider (gauge).
+    | -- | @ecluse.credential.token.ttl.seconds@ -- remaining token lifetime by provider (gauge).
       CredentialTokenTtlSeconds
     deriving stock (Eq, Generic, Ord, Show)
 
@@ -157,11 +155,9 @@ metricName = \case
 allMetricNames :: [MetricName]
 allMetricNames = universe
 
--- ── label keys ───────────────────────────────────────────────────────────────
-
 {- | The closed set of metric label keys. Every label Écluse attaches is one of these
 bounded-domain keys. High-cardinality identifiers (@package@, @version@, @scope@, a
-denial @message@) are deliberately __absent__ — see 'highCardinalityKeys' — so they
+denial @message@) are deliberately __absent__ -- see 'highCardinalityKeys' -- so they
 can never become a metric label.
 -}
 data LabelKey
@@ -208,15 +204,13 @@ these is a 'LabelKey' wire name; there is, by construction, no 'Label' that prod
 highCardinalityKeys :: [Text]
 highCardinalityKeys = ["package", "version", "scope", "message"]
 
--- ── bounded label values ─────────────────────────────────────────────────────
-
 -- | The serve decision (@ecluse.serve.decision@).
 data Decision = Admit | Deny | Unavailable
     deriving stock (Eq, Generic, Show)
 
 instance Universe Decision where universe = universeGeneric
 
-{- | The bucketed class of a denial reason — a bounded summary of
+{- | The bucketed class of a denial reason -- a bounded summary of
 "Ecluse.Core.Server.Response.RejectReason", __not__ the rule name or the message (those are
 high-cardinality and stay on the log line).
 -}
@@ -263,7 +257,7 @@ instance Universe CacheResult where universe = universeGeneric
 
 {- | A processed mirror job's result. The idempotent "already present" outcome (a
 registry @409@) is __not__ a distinct value: the worker treats it as a success, so it is
-counted as 'Published' — a series that could never emit is not published.
+counted as 'Published' -- a series that could never emit is not published.
 -}
 data MirrorResult = Published | Failed
     deriving stock (Eq, Generic, Show)
@@ -282,8 +276,6 @@ data BreakerSource = EffectfulRule | CredentialMint
 
 instance Universe BreakerSource where universe = universeGeneric
 
--- ── breaker state (a bounded gauge value) ────────────────────────────────────
-
 {- | The circuit-breaker state, recorded as the value of the @ecluse.rule.breaker.state@
 gauge (labelled by 'BreakerSource'). It is a bounded measurement, not a label.
 -}
@@ -292,7 +284,7 @@ data BreakerState = Closed | HalfOpen | Open
 
 instance Universe BreakerState where universe = universeGeneric
 
-{- | The gauge code for a breaker state: @0@ closed, @1@ half-open, @2@ open — a small
+{- | The gauge code for a breaker state: @0@ closed, @1@ half-open, @2@ open -- a small
 ordinal so a dashboard can alarm on "not closed" without a high-cardinality label.
 -}
 breakerStateCode :: BreakerState -> Int64
@@ -301,11 +293,9 @@ breakerStateCode = \case
     HalfOpen -> 1
     Open -> 2
 
--- ── labels ───────────────────────────────────────────────────────────────────
-
 {- | A single metric label: a bounded key paired with its bounded value. There is no
 constructor for a package, version, scope, or message, so a high-cardinality identifier
-cannot be turned into a label. 'LRule' carries a rule's configured name — the one
+cannot be turned into a label. 'LRule' carries a rule's configured name -- the one
 operator-bounded label (a deployment defines a small, fixed rule set).
 -}
 data Label
@@ -407,11 +397,9 @@ statusClassOf code
     | code >= 500 && code < 600 = Status5xx
     | otherwise = StatusOther
 
--- ── attribute construction ───────────────────────────────────────────────────
-
 {- | Materialise a label list into the OpenTelemetry 'Attributes' an instrument is
 recorded with. Every value is bounded, so the attribute set an instrument ever sees is
-drawn from a small fixed product of the label domains — never the unbounded space of
+drawn from a small fixed product of the label domains -- never the unbounded space of
 package identifiers.
 -}
 metricAttributes :: [Label] -> Attributes

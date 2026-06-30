@@ -59,7 +59,7 @@ __both__ wire encodings (one decoded segment @\@scope\/pkg@ and two segments
 -}
 spec :: Spec
 spec = do
-    describe "classify — packuments" $ do
+    describe "classify -- packuments" $ do
         it "routes an unscoped package to its packument" $
             classify ["is-odd"] `shouldBe` Packument (unscoped "is-odd")
         it "routes a scoped package (two segments) to its packument" $
@@ -71,7 +71,7 @@ spec = do
         it "agrees on the same Route for both scoped encodings" $
             classify ["@babel", "code-frame"] `shouldBe` classify ["@babel/code-frame"]
 
-    describe "classify — tarballs (the parsed artifact coordinate)" $ do
+    describe "classify -- tarballs (the parsed artifact coordinate)" $ do
         it "routes an unscoped tarball to its artifact, parsing the version" $
             classify ["is-odd", "-", "is-odd-3.0.1.tgz"]
                 `shouldBe` Tarball (unscoped "is-odd") (npmVersion "3.0.1") (Filename "is-odd-3.0.1.tgz")
@@ -89,7 +89,7 @@ spec = do
                 `shouldBe` Tarball (unscoped "pkg") (npmVersion "1.0.0-rc.1") (Filename "pkg-1.0.0-rc.1.tgz")
         it "preserves the filename verbatim, not one rebuilt from (name, version)" $
             -- The file's parsed version round-trips and the Filename is byte-identical
-            -- to what arrived — it, not a reconstruction, fetches the bytes.
+            -- to what arrived -- it, not a reconstruction, fetches the bytes.
             classify ["@babel/code-frame", "-", "code-frame-7.0.0.tgz"]
                 `shouldBe` Tarball (scoped "babel" "code-frame") (npmVersion "7.0.0") (Filename "code-frame-7.0.0.tgz")
         it "denies a basename that does not match the requested package (path-confusion)" $
@@ -103,7 +103,7 @@ spec = do
         it "denies a basename that is the name and a trailing hyphen but empty version" $
             classify ["is-odd", "-", "is-odd-.tgz"] `shouldBe` Unsupported
 
-    describe "classify — meta-routes (matched before any package)" $ do
+    describe "classify -- meta-routes (matched before any package)" $ do
         it "routes /-/ping to Ping" $
             classify ["-", "ping"] `shouldBe` Ping
         it "routes /-/v1/search to Search" $
@@ -113,7 +113,7 @@ spec = do
         it "treats the dist-tags meta-route as Unsupported" $
             classify ["-", "package", "is-odd", "dist-tags"] `shouldBe` Unsupported
 
-    describe "classify — publish (PUT /{pkg}, the method-aware write route)" $ do
+    describe "classify -- publish (PUT /{pkg}, the method-aware write route)" $ do
         it "routes a PUT of an unscoped package to Publish" $
             publish ["is-odd"] `shouldBe` Publish (unscoped "is-odd")
         it "routes a PUT of a scoped package (two segments) to Publish" $
@@ -132,7 +132,7 @@ spec = do
             publish ["is-odd", "extra"] `shouldBe` Unsupported
         it "denies a PUT to the empty path" $
             publish [] `shouldBe` Unsupported
-        it "denies a PUT of an unsafe name (embedded slash) — the same component gate as reads" $
+        it "denies a PUT of an unsafe name (embedded slash) -- the same component gate as reads" $
             publish ["foo/bar"] `shouldBe` Unsupported
         it "denies a PUT of a bare scope with no package name" $
             publish ["@acme"] `shouldBe` Unsupported
@@ -141,7 +141,7 @@ spec = do
             -- publishes under PUT.
             classify ["is-odd"] `shouldBe` Packument (unscoped "is-odd")
 
-    describe "classify — unrecognised paths deny by default" $ do
+    describe "classify -- unrecognised paths deny by default" $ do
         it "routes the empty path to Unsupported" $
             classify [] `shouldBe` Unsupported
         it "routes a bare slash (one empty segment) to Unsupported" $
@@ -159,7 +159,7 @@ spec = do
             classify ["@babel"] `shouldBe` Unsupported
         it "routes a scope with an empty trailing name to Unsupported" $
             -- Reachable from @\/\@scope%2F@: percent-decoding @%2F@ yields one segment
-            -- @"\@babel\/"@, whose base name is empty — a degenerate scoped name.
+            -- @"\@babel\/"@, whose base name is empty -- a degenerate scoped name.
             classify ["@babel/"] `shouldBe` Unsupported
         it "routes an empty scope (\"@\" then name) to Unsupported" $
             -- @mkScope "@"@ strips to @""@, which would render as @\/code-frame@.
@@ -170,7 +170,7 @@ spec = do
         it "routes trailing junk after a package to Unsupported" $
             classify ["is-odd", "extra", "junk"] `shouldBe` Unsupported
 
-    describe "classify — unsafe path components deny by default" $ do
+    describe "classify -- unsafe path components deny by default" $ do
         -- A single percent-decoded segment can carry traversal/separator/control
         -- content; 'classify' must never accept it as a name, scope, or file,
         -- since the component is interpolated into the upstream URL downstream.
@@ -199,9 +199,9 @@ spec = do
         it "rejects a tarball filename with an embedded slash" $
             classify ["is-odd", "-", "sub/is-odd-3.0.1.tgz"] `shouldBe` Unsupported
 
-    describe "classify — real names still classify (no over-rejection)" $ do
+    describe "classify -- real names still classify (no over-rejection)" $ do
         -- Guard against the safe-component check rejecting plausibly-real names:
-        -- interior dots, hyphens, and uppercase are all fine — this is a security
+        -- interior dots, hyphens, and uppercase are all fine -- this is a security
         -- boundary, not an npm-policy validator.
         it "accepts an unscoped name with interior dots" $
             classify ["lodash.merge"] `shouldBe` Packument (unscoped "lodash.merge")
@@ -224,7 +224,7 @@ spec = do
         -- hostile fragments AND real-looking names, so it exercises both denied
         -- and accepted routes (the classification below proves it is not
         -- vacuous). For each accepted 'Packument'/'Tarball' we check every
-        -- component — scope, base name, and (for tarballs) the file — with the
+        -- component -- scope, base name, and (for tarballs) the file -- with the
         -- same safe-component rule the router enforces. We split the rendered
         -- name back into its components rather than scanning it whole, because a
         -- legitimate scoped name renders as @\@scope\/base@ and so contains the
@@ -250,8 +250,8 @@ isAccepted = \case
     Tarball{} -> True
     _ -> False
 
-{- | The structural components of an accepted name — its scope (if any) and its
-base name — recovered from the public surface. The base name is the rendered
+{- | The structural components of an accepted name -- its scope (if any) and its
+base name -- recovered from the public surface. The base name is the rendered
 display form with any @\@scope\/@ prefix stripped, so each component is checked
 on its own rather than across the scope separator.
 -}

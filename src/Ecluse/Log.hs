@@ -2,8 +2,8 @@
 
 Écluse sits in the install path of someone else's build, so when it refuses a
 package or runs slow the operator must see /why/ from the logs alone. This module
-stands up a @katip@ 'LogEnv' — the single log stream every layer attaches context
-to — and chooses its on-the-wire shape:
+stands up a @katip@ 'LogEnv' -- the single log stream every layer attaches context
+to -- and chooses its on-the-wire shape:
 
 * __'JsonLog'__ writes __one compact JSON object per line__ to stdout (JSONL): the
   whole physical line /is/ the JSON, with no pretty-printing and no level or
@@ -20,7 +20,7 @@ in the composition root ("Ecluse.Env").
 Trace-ID correlation rides this stream as the @dd@ object ('ddField'): @service@\/
 @env@\/@version@ from the resolved telemetry identity, plus the active span's
 @trace_id@\/@span_id@ in the id format Datadog expects ('formatDdTraceId'). The object
-is built here but stays free of any OpenTelemetry dependency — the active span is read
+is built here but stays free of any OpenTelemetry dependency -- the active span is read
 and the ids rendered by "Ecluse.Telemetry.Correlation", which composes 'ddField' into a
 log site's payload.
 
@@ -86,14 +86,12 @@ import Katip.Scribes.Handle (ItemFormatter, bracketFormat, jsonFormat, mkHandleS
 
 import Ecluse.Core.Wire (WireVocab (..), parseWire, renderWire)
 
--- ── log format ───────────────────────────────────────────────────────────────
-
 {- | The on-the-wire shape of the log stream, selected by configuration. A sum
 type rather than a 'Bool' so each case names its intent and a new shape is a new
 constructor, not a second flag.
 -}
 data LogFormat
-    = {- | One compact JSON object per line to stdout (JSONL) — the in-container
+    = {- | One compact JSON object per line to stdout (JSONL) -- the in-container
       default a log collector's stdout JSON parsing consumes.
       -}
       JsonLog
@@ -126,8 +124,6 @@ parseLogFormat = parseWire
 renderLogFormat :: LogFormat -> Text
 renderLogFormat = renderWire
 
--- ── pipeline construction ────────────────────────────────────────────────────
-
 {- | Build the application 'LogEnv': a @katip@ environment under the @ecluse@
 namespace with a single stdout scribe in the chosen 'LogFormat'. This is the value
 the composition root holds and every later layer logs through.
@@ -143,7 +139,7 @@ newLogEnv format environment = do
     registerScribe "stdout" scribe defaultScribeSettings base
 
 {- | Build the stdout 'Scribe' for a 'LogFormat'. Colour is forced __off__
-('ColorLog' 'False') so a captured 'JsonLog' line is always valid JSON — no ANSI
+('ColorLog' 'False') so a captured 'JsonLog' line is always valid JSON -- no ANSI
 escapes leak into the object even when stdout is a terminal. The handle scribe
 writes each item as exactly one line (the formatter output plus a single trailing
 newline), which is what makes 'JsonLog' a true JSONL stream.
@@ -168,9 +164,7 @@ formatterFor = \case
     JsonLog -> jsonFormat
     ConsoleLog -> bracketFormat
 
--- ── structured context ───────────────────────────────────────────────────────
-
-{- | The structured context for an audit event — a denial or other rule decision —
+{- | The structured context for an audit event -- a denial or other rule decision --
 carrying the @package@, @version@, and @rule@ the operator needs to explain a 403
 from the log line alone. These are the high-cardinality identifiers that belong on
 the log line, never on a metric label (see
@@ -201,8 +195,6 @@ opens its own context through the composition-root 'LogEnv').
 moduleField :: Text -> SimpleLogPayload
 moduleField = sl "module"
 
--- ── Datadog trace correlation ──────────────────────────────────────────────────
-
 {- | The unified-service identity stamped onto every log line as the @dd@ object, plus
 the active span's ids when one is in scope. @service@\/@env@\/@version@ come from the
 same resolved telemetry identity as the traces ("Ecluse.Telemetry.Resolve"), so logs
@@ -211,11 +203,11 @@ active (filled by "Ecluse.Telemetry.Correlation" off the OpenTelemetry context).
 -}
 data DdContext = DdContext
     { ddService :: Text
-    -- ^ @dd.service@ — the resolved service name.
+    -- ^ @dd.service@ -- the resolved service name.
     , ddEnv :: Maybe Text
-    -- ^ @dd.env@ — the deployment environment, when configured.
+    -- ^ @dd.env@ -- the deployment environment, when configured.
     , ddVersion :: Maybe Text
-    -- ^ @dd.version@ — the service version, when configured.
+    -- ^ @dd.version@ -- the service version, when configured.
     , ddSpan :: Maybe DdSpan
     -- ^ The active span's correlation ids, when a span is in scope.
     }
@@ -227,9 +219,9 @@ of any OpenTelemetry dependency.
 -}
 data DdSpan = DdSpan
     { ddTraceId :: Text
-    -- ^ @dd.trace_id@ — the trace id in Datadog form.
+    -- ^ @dd.trace_id@ -- the trace id in Datadog form.
     , ddSpanId :: Text
-    -- ^ @dd.span_id@ — the span id in Datadog form.
+    -- ^ @dd.span_id@ -- the span id in Datadog form.
     }
     deriving stock (Eq, Show)
 
@@ -260,7 +252,7 @@ __unsigned decimal of the low 64 bits__. Datadog's log↔trace correlation match
 @dd.trace_id@ as a decimal 64-bit value (the low half of an OpenTelemetry 128-bit id);
 the full-128-bit-hex form is a separate opt-in not used here. Reads the last eight bytes
 big-endian, so a shorter id is taken whole and a longer one is truncated to its low 64
-bits — never a partial-byte misread.
+bits -- never a partial-byte misread.
 -}
 formatDdTraceId :: ByteString -> Text
 formatDdTraceId = show . low64Bits
@@ -279,10 +271,8 @@ low64Bits = BS.foldl' (\acc byte -> acc * 256 + fromIntegral byte) 0 . lastBytes
     lastBytes :: Int -> ByteString -> ByteString
     lastBytes n bytes = BS.drop (max 0 (BS.length bytes - n)) bytes
 
--- ── rendering ────────────────────────────────────────────────────────────────
-
 {- | Render a single log 'Item' to the exact text the scribe for this 'LogFormat'
-writes for it — the formatter output for one item, without the trailing newline
+writes for it -- the formatter output for one item, without the trailing newline
 the handle scribe appends to separate physical lines.
 
 This is what the unit tests assert on: it reproduces the scribe's serialisation

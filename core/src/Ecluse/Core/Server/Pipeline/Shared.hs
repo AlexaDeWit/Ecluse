@@ -39,8 +39,6 @@ recognisedButUnserved :: MountRenderer -> Response
 recognisedButUnserved renderer =
     renderedResponse status501 [] (renderError renderer Nothing "this route is recognised but not yet served by this proxy")
 
--- ── edge authentication ──────────────────────────────────────────────────────
-
 {- Whether the request carries the configured inbound token. With no token
 configured the edge is open; with one configured the request's bearer
 @Authorization@ must match it exactly. Deny-by-default: a missing or mismatched
@@ -93,7 +91,7 @@ renderedResponse :: Status -> ResponseHeaders -> RenderedBody -> Response
 renderedResponse status extra (RenderedBody contentType body) =
     responseLBS status ((hContentType, contentType) : extra) body
 
--- Strip a response's body while keeping its status and headers — the bodiless form a
+-- Strip a response's body while keeping its status and headers -- the bodiless form a
 -- HEAD reply takes on every branch (HTTP semantics: a HEAD carries no message body).
 -- The headers a GET would carry (notably any relayed @Content-Length@) are preserved.
 bodiless :: Response -> Response

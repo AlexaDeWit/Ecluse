@@ -32,20 +32,20 @@ import UnliftIO.Timeout (timeout)
 loopback. These assert the lifecycle guarantee the going-away design rests on: when
 the listen socket is closed (what the @SIGTERM@\/@SIGINT@ handler does in
 'Ecluse.Server.runServer'), Warp stops accepting new connections yet __waits for an
-in-flight request to finish__ before the server returns — so a request mid-flight
+in-flight request to finish__ before the server returns -- so a request mid-flight
 during a rollover is never cut off.
 
 The drain is driven by closing the socket directly rather than by delivering an OS
 signal: signal delivery is process-global and would race the test runner. The signal
-handler's body — raise the drain flag, then run Warp's @closeSocket@ — is what these
+handler's body -- raise the drain flag, then run Warp's @closeSocket@ -- is what these
 tests stand in for; the flag-raising and readiness\/header effects are asserted
 socket-free in "Ecluse.ServerSpec".
 -}
 spec :: Spec
-spec = describe "graceful shutdown — drain in-flight work" $ do
+spec = describe "graceful shutdown -- drain in-flight work" $ do
     it "completes an in-flight request after the socket is closed, then the server stops" $ do
         -- A handler that blocks on a release barrier, so we can hold a request
-        -- in-flight across the socket close — the rollover window the drain guards.
+        -- in-flight across the socket close -- the rollover window the drain guards.
         arrived <- newEmptyMVar
         release <- newEmptyMVar
         let app :: Application
@@ -63,7 +63,7 @@ spec = describe "graceful shutdown — drain in-flight work" $ do
             -- Begin the drain: close the listen socket (the signal handler's act).
             closeSocket
 
-            -- The server must NOT have returned yet — it is waiting on the
+            -- The server must NOT have returned yet -- it is waiting on the
             -- in-flight request, which is still parked on the barrier.
             stillServing <- poll serverThread
             stillServing `shouldSatisfy` isNothing
@@ -88,7 +88,7 @@ spec = describe "graceful shutdown — drain in-flight work" $ do
             beforeClose `shouldBe` (200, "served")
 
             -- Close the socket: with nothing in flight, the drain has nothing to
-            -- wait for, so the server stops well inside the 30s graceful window —
+            -- wait for, so the server stops well inside the 30s graceful window --
             -- it does not block out the whole timeout.
             closeSocket
             stopped <- timeout 5_000_000 (wait serverThread)
@@ -98,11 +98,9 @@ spec = describe "graceful shutdown — drain in-flight work" $ do
             afterStop <- try (getStatusBody manager port) :: IO (Either SomeException (Int, LByteString))
             afterStop `shouldSatisfy` isLeft
 
--- ── harness ──────────────────────────────────────────────────────────────────
-
 {- Run an 'Application' on a free loopback port with the same graceful-shutdown
-settings 'Ecluse.Server.runServer' uses — a bounded 'setGracefulShutdownTimeout' and
-a 'setInstallShutdownHandler' — and hand the test the port, a @closeSocket@ action
+settings 'Ecluse.Server.runServer' uses -- a bounded 'setGracefulShutdownTimeout' and
+a 'setInstallShutdownHandler' -- and hand the test the port, a @closeSocket@ action
 that begins the drain, and the server's 'Async' so it can observe when the server
 returns. The shutdown handler captures Warp's @closeSocket@ into an MVar rather than
 installing an OS signal handler, so the drain is triggered deterministically.
@@ -114,7 +112,7 @@ withListener ::
     IO a
 withListener app drainTimeoutSeconds k = do
     -- Discover a free port, then release it so Warp can open and own its own listen
-    -- socket — so the @closeSocket@ the install handler captures closes the very
+    -- socket -- so the @closeSocket@ the install handler captures closes the very
     -- socket Warp's accept loop holds, the way 'Ecluse.Server.runServer' is wired.
     port <- freePort
     closeSocketVar <- newEmptyMVar
@@ -140,8 +138,8 @@ freePort = do
     pure port
 
 {- Issue a GET to the loopback listener and return its status code and body. The
-request carries @Connection: close@ — as a response from a draining instance does
-in production — so the connection is not held open in a keep-alive pool past the
+request carries @Connection: close@ -- as a response from a draining instance does
+in production -- so the connection is not held open in a keep-alive pool past the
 response; the graceful drain then completes once the in-flight request returns
 rather than waiting on an idle socket.
 -}

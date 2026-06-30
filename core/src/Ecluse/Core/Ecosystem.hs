@@ -9,7 +9,7 @@ and __derives that mount's path prefix__ from it ('prefixFor').
 It lives in its own small module on purpose. It is a stable shared type imported
 by several areas, and keeping it here breaks what would otherwise be an import
 cycle between "Ecluse.Core.Package" (whose @PackageDetails@ holds a @Version@) and
-"Ecluse.Core.Version" (whose parsers dispatch on the ecosystem) — exactly the
+"Ecluse.Core.Version" (whose parsers dispatch on the ecosystem) -- exactly the
 @.Types@-style extraction sanctioned by STYLE.md → "Module organization".
 -}
 module Ecluse.Core.Ecosystem (
@@ -26,7 +26,7 @@ data Ecosystem
     | RubyGems
     deriving stock (Eq, Ord, Show)
 
-{- | The canonical wire\/config name of an ecosystem — the key a @mounts@ object
+{- | The canonical wire\/config name of an ecosystem -- the key a @mounts@ object
 is written under and the inverse of 'parseEcosystem'.
 
 >>> ecosystemName Npm

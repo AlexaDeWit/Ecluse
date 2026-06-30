@@ -10,41 +10,8 @@ import Test.Hspec.Hedgehog (hedgehog)
 
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Package
-import Ecluse.Core.Version (Version, mkVersion)
-
--- | A single inert artifact; the packument-level tests do not inspect artifacts.
-sampleArtifact :: Artifact
-sampleArtifact =
-    Artifact
-        { artFilename = "thing-1.0.0.tgz"
-        , artUrl = "https://example.test/thing-1.0.0.tgz"
-        , artKind = Tarball
-        , artHashes = []
-        , artSize = Nothing
-        , artInterpreter = Nothing
-        , artYanked = False
-        , artProvenance = Nothing
-        }
-
-{- | A minimal per-version snapshot for a given name and version. Only the fields
-a 'PackageInfo' threads through (the name and version) are meaningful here; the
-rest are inert defaults, since these tests are about the packument-level view.
--}
-details :: PackageName -> Version -> PackageDetails
-details name version =
-    PackageDetails
-        { pkgName = name
-        , pkgVersion = version
-        , pkgPublishedAt = Nothing
-        , pkgInstallCode = NoCodeOnInstall
-        , pkgTrust = Untrusted
-        , pkgAvailability = Available
-        , pkgArtifacts = sampleArtifact :| []
-        , pkgLicenses = ["MIT"]
-        , pkgPublisher = Nothing
-        , pkgMaintainers = []
-        , pkgDependencies = []
-        }
+import Ecluse.Core.Version (mkVersion)
+import Ecluse.Test.Package (sampleDetails)
 
 spec :: Spec
 spec = do
@@ -166,7 +133,7 @@ spec = do
         let name = mkPackageName Npm Nothing "thing"
             version = mkVersion Npm "1.0.0"
             publishedAt = UTCTime (fromGregorian 2026 6 21) 0
-            versionDetails = (details name version){pkgPublishedAt = Just publishedAt}
+            versionDetails = (sampleDetails name version){pkgLicenses = ["MIT"], pkgPublishedAt = Just publishedAt}
             info =
                 PackageInfo
                     { infoName = name

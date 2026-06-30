@@ -1,4 +1,4 @@
-{- | Telemetry configuration resolution and export-failure routing — the boot-time
+{- | Telemetry configuration resolution and export-failure routing -- the boot-time
 substrate that sits between the operator's environment and the OpenTelemetry SDK.
 
 Écluse's maintainer runs Datadog, but the project is vendor-neutral, so an operator
@@ -9,12 +9,12 @@ traces share a single identity whichever dialect was provided.
 
 == The resolver
 
-'resolveTelemetry' is a bounded precedence table over exactly four fields —
+'resolveTelemetry' is a bounded precedence table over exactly four fields --
 @service.name@, @deployment.environment@, @service.version@, and the OTLP export
-endpoint — each resolved __Datadog-value-wins → vanilla OpenTelemetry → default__.
+endpoint -- each resolved __Datadog-value-wins → vanilla OpenTelemetry → default__.
 It is deliberately /not/ a general per-variable merge: only these four cross between
 the dialects, and only their fixed precedence is encoded. The @DD_API_KEY@ \/
-@DD_SITE@ agentless-SaaS credentials are __never read__ — Écluse exports to an
+@DD_SITE@ agentless-SaaS credentials are __never read__ -- Écluse exports to an
 __operator-declared__, node-local collector\/Agent, never directly to a vendor's
 cloud, so there is no path by which a key in the environment turns into off-cluster
 egress. The endpoint itself is a declared destination (like the mirror queue), not an
@@ -84,8 +84,6 @@ import OpenTelemetry.Internal.Logging (setGlobalErrorHandler)
 import Ecluse.Core.Text (nonBlank)
 import Ecluse.Log (moduleField)
 
--- ── the resolved telemetry identity ──────────────────────────────────────────
-
 {- | Where a resolved OTLP endpoint came from, so the boot path can distinguish a
 deliberately-configured target from the silent default and warn on the latter.
 -}
@@ -109,7 +107,7 @@ data TelemetryEndpoint = TelemetryEndpoint
 
 {- | The telemetry identity resolved from the environment: the single source of
 truth for both the SDK configuration and the @dd@ log object. 'rtEnvironment' and
-'rtVersion' are 'Nothing' when the operator named neither dialect's form — they are
+'rtVersion' are 'Nothing' when the operator named neither dialect's form -- they are
 genuinely optional resource attributes, not defaulted to a placeholder.
 -}
 data ResolvedTelemetry = ResolvedTelemetry
@@ -176,7 +174,7 @@ defaultEndpointUrl = "http://localhost:4318"
 
 {- Build the OTLP HTTP\/protobuf endpoint URL for a Datadog Agent host: the Agent's
 OTLP receiver listens on 4318 for HTTP\/protobuf, the only transport we build. A
-literal IPv6 host is bracketed so the authority is well-formed — @http:\/\/[fd00::1]:4318@,
+literal IPv6 host is bracketed so the authority is well-formed -- @http:\/\/[fd00::1]:4318@,
 not the invalid @http:\/\/fd00::1:4318@ the SDK exporter would fail to parse. A host
 that already carries a scheme is used verbatim, and one already carrying a port is not
 given a second, so a deliberately-qualified @DD_AGENT_HOST@ is never mangled. Colon
@@ -194,12 +192,10 @@ agentHostUrl raw
         | T.count ":" host == 1 = host
         | otherwise = host <> ":4318"
 
--- ── canonical OTEL_* projection ──────────────────────────────────────────────
-
 {- | Project the resolved identity back to the canonical @OTEL_*@ variables the
 env-driven SDK reads, so a @DD_*@-only deployment still configures the exporter. The
 overrides set @OTEL_SERVICE_NAME@, the OTLP endpoint, the @http\/protobuf@ protocol
-(the only transport built — gRPC is behind a disabled cabal flag), and an
+(the only transport built -- gRPC is behind a disabled cabal flag), and an
 @OTEL_RESOURCE_ATTRIBUTES@ whose @service.name@\/@deployment.environment@\/
 @service.version@ keys are overlaid by the resolution while any other operator-set
 attributes are preserved.
@@ -246,8 +242,8 @@ otelEnvironmentOverrides environment =
 
 -- Parse the @key1=value1,key2=value2@ resource-attribute string into a map,
 -- trimming surrounding whitespace and dropping any entry that carries no @=@ or an
--- empty key. Lenient by design — this is operator-authored configuration, not a
--- wire format — so a stray trailing comma or spacing is tolerated.
+-- empty key. Lenient by design -- this is operator-authored configuration, not a
+-- wire format -- so a stray trailing comma or spacing is tolerated.
 parseResourceAttributes :: Text -> Map Text Text
 parseResourceAttributes raw =
     Map.fromList
@@ -270,8 +266,6 @@ defaultedEndpointMessage url =
     "no telemetry export endpoint configured (DD_AGENT_HOST / OTEL_EXPORTER_OTLP_ENDPOINT unset); defaulting to "
         <> url
         <> "."
-
--- ── export-failure throttle ──────────────────────────────────────────────────
 
 {- | The throttle state for SDK export-error routing: when an error was last
 logged, and how many have been suppressed since. Exposed so the throttle decision
@@ -319,15 +313,13 @@ throttleStep interval now st = case tsLastLogged st of
         | otherwise ->
             (st{tsSuppressed = tsSuppressed st + 1}, EmitSuppress)
 
--- ── boot wiring ──────────────────────────────────────────────────────────────
-
 {- | Prepare the telemetry substrate at boot, before the SDK initialises: resolve the
 identity and normalise the canonical @OTEL_*@ environment the env-driven SDK reads (so a
 @DD_*@-only deployment still configures the exporter). The export-failure observation
 itself is wired when the substrate stands up ("Ecluse.Telemetry.withTelemetry"), which
 builds the shared sink and installs the exporter wrappers and the SDK error handler.
 
-A defaulted endpoint — neither @DD_AGENT_HOST@ nor @OTEL_EXPORTER_OTLP_ENDPOINT@ set —
+A defaulted endpoint -- neither @DD_AGENT_HOST@ nor @OTEL_EXPORTER_OTLP_ENDPOINT@ set --
 is surfaced through @katip@ as one boot warning and falls back to
 @http:\/\/localhost:4318@; it is never a failure. The OTLP endpoint is an
 __operator-declared destination__ (like the mirror queue), so it is normalised and used
@@ -341,8 +333,8 @@ prepareTelemetry logEnv environment = do
     mapM_ (uncurry setEnv) (otelEnvironmentOverrides environment)
 
 {- | The shared export-failure sink: a single throttle plus the @katip@ target that
-every export failure feeds — the span exporter, the metric exporter, and the SDK's own
-diagnostic stream — so a persistently unreachable collector is one coalesced stream (the
+every export failure feeds -- the span exporter, the metric exporter, and the SDK's own
+diagnostic stream -- so a persistently unreachable collector is one coalesced stream (the
 first failure plainly, then a periodic heartbeat) rather than several independent floods.
 
 The clock and the surfacing action are injected so the throttle decision is unit-tested
@@ -381,7 +373,7 @@ routeExportFailure sink diagnostic = do
         EmitSuppress -> pass
 
 {- | Observe one exporter's 'ExportResult', routing a 'Failure' through the sink and
-ignoring a 'Success'. This only /observes/ the failure — the inner result is the
+ignoring a 'Success'. This only /observes/ the failure -- the inner result is the
 caller's to return unchanged, so export semantics are untouched (a failed export stays
 off the request path). @signal@ names the failing exporter (@span@ \/ @metric@).
 -}
@@ -392,8 +384,8 @@ observeExportResult sink signal = \case
 
 {- | Install a process-global handler for the SDK's own diagnostic stream, routed through
 the shared sink so it coalesces with the exporter-failure feed. In @hs-opentelemetry
-1.0.0.0@ the only caller of this handler is the SDK's internal logging — a failed OTLP
-export is dropped there rather than routed here — so the export-failure feed comes from
+1.0.0.0@ the only caller of this handler is the SDK's internal logging -- a failed OTLP
+export is dropped there rather than routed here -- so the export-failure feed comes from
 the exporter wrappers ('observeExportResult'); this handler is kept for the SDK-internal
 diagnostics it still serves.
 
@@ -417,7 +409,7 @@ heartbeatMessage suppressed diagnostic =
         <> " export errors since the last report. Latest: "
         <> diagnostic
 
--- Log one line through the composition-root 'LogEnv', tagged with this module — the
+-- Log one line through the composition-root 'LogEnv', tagged with this module -- the
 -- plain-'IO' katip path the boot phase uses (it holds no 'Handler' reader).
 logResolve :: LogEnv -> Severity -> Text -> IO ()
 logResolve logEnv severity message =

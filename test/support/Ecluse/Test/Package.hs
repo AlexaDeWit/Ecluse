@@ -2,7 +2,7 @@
 
 This mirrors the module under test: helpers that support exercising
 @Ecluse.Core.Package@ live here, under the @Ecluse.X → Ecluse.Test.X@ convention this
-support library follows. It carries the digest plumbing every suite reuses —
+support library follows. It carries the digest plumbing every suite reuses --
 'unsafeHash', which lifts a known-good digest into a 'Hash', and the canonical
 well-formed digest fixtures (each the empty-input digest of its algorithm) that
 appear across the queue, integrity, env, and worker specs.
@@ -21,9 +21,25 @@ module Ecluse.Test.Package (
     validSha256Sri,
     validSha384Sri,
     validSha512Sri,
+
+    -- * Shared fixtures
+    sampleArtifact,
+    sampleDetails,
 ) where
 
-import Ecluse.Core.Package (Hash, HashAlg, mkHash)
+import Ecluse.Core.Package (
+    Artifact (..),
+    ArtifactKind (Tarball),
+    Availability (Available),
+    CodeExecSignal (NoCodeOnInstall),
+    Hash,
+    HashAlg,
+    PackageDetails (..),
+    PackageName,
+    Trust (Untrusted),
+    mkHash,
+ )
+import Ecluse.Core.Version (Version)
 
 {- HLINT ignore unsafeHash "Avoid restricted function" -}
 
@@ -34,7 +50,7 @@ nothing.
 unsafeHash :: HashAlg -> Text -> Hash
 unsafeHash alg = either error id . mkHash alg
 
-{- | Canonical well-formed digests — each the empty-input digest of its algorithm,
+{- | Canonical well-formed digests -- each the empty-input digest of its algorithm,
 so every fixture 'Hash' is 'mkHash'-constructible and survives a validated decode
 round-trip. The values are immaterial beyond being well-formed: a suite uses them
 wherever a digest must merely parse, not match any particular bytes.
@@ -54,3 +70,37 @@ validSha256Sri, validSha384Sri, validSha512Sri :: Text
 validSha256Sri = "sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU="
 validSha384Sri = "sha384-OLBgp1GsljhM2TJ+sbHjaiH9txEUvgdDTAzHv2P24donTt6/529l+9Ua0vFImLlb"
 validSha512Sri = "sha512-z4PhNX7vuL3xVChQ1m2AB9Yg5AULVxXcg/SpIdNs6c5H0NE8XYXysP+DGNKHfuwvY7kxvUdBeoGlODJ6+SfaPg=="
+
+-- | A single inert artifact; the packument-level tests do not inspect artifacts.
+sampleArtifact :: Artifact
+sampleArtifact =
+    Artifact
+        { artFilename = "thing-1.0.0.tgz"
+        , artUrl = "https://example.test/thing-1.0.0.tgz"
+        , artKind = Tarball
+        , artHashes = []
+        , artSize = Nothing
+        , artInterpreter = Nothing
+        , artYanked = False
+        , artProvenance = Nothing
+        }
+
+{- | A minimal per-version snapshot for a given name and version. Only the fields
+a 'PackageInfo' threads through (the name and version) are meaningful here; the
+rest are inert defaults.
+-}
+sampleDetails :: PackageName -> Version -> PackageDetails
+sampleDetails name version =
+    PackageDetails
+        { pkgName = name
+        , pkgVersion = version
+        , pkgPublishedAt = Nothing
+        , pkgInstallCode = NoCodeOnInstall
+        , pkgTrust = Untrusted
+        , pkgAvailability = Available
+        , pkgArtifacts = sampleArtifact :| []
+        , pkgLicenses = []
+        , pkgPublisher = Nothing
+        , pkgMaintainers = []
+        , pkgDependencies = []
+        }

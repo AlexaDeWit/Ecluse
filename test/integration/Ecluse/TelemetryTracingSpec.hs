@@ -86,7 +86,7 @@ spec =
             -- The AC4 stitch end to end on a real span: with the SDK live, a span is
             -- opened (as the WAI middleware does per request), the dd context is built
             -- within it exactly as runHandler does, and a JSONL log line is rendered from
-            -- it. The line must carry a non-zero dd.trace_id / dd.span_id — proving the
+            -- it. The line must carry a non-zero dd.trace_id / dd.span_id -- proving the
             -- active-span -> low-64 -> log-line correlation, the slice's "verify against
             -- the Agent" crux. (The id format itself is pinned in Ecluse.LogSpec.)
             it "stamps a non-zero dd.trace_id on a log line emitted within a span" $ \collector -> do
@@ -99,8 +99,6 @@ spec =
                         -- And the id lands on a rendered JSONL line under dd.trace_id.
                         renderLogLine JsonLog (ddLogItem ctx)
                             `shouldSatisfy` T.isInfixOf ("\"trace_id\":\"" <> tid <> "\"")
-
--- ── the request under trace ────────────────────────────────────────────────────
 
 {- Drive one request through the in-process traced Écluse application, pointing the
 SDK at the collector. With telemetry on, the WAI middleware opens a server span that
@@ -124,8 +122,8 @@ driveRequest collector switch marker = do
 
 -- Point the SDK's OTLP exporter at the collector via the standard environment, with
 -- traces export ON and metrics and logs export off (the collector here carries only a
--- traces pipeline). Every signal's exporter is pinned explicitly — including
--- @OTEL_TRACES_EXPORTER@ — because @setEnv@ is process-global and the integration suite
+-- traces pipeline). Every signal's exporter is pinned explicitly -- including
+-- @OTEL_TRACES_EXPORTER@ -- because @setEnv@ is process-global and the integration suite
 -- runs every spec in one process: a sibling spec exporting a different signal (e.g. the
 -- metrics spec, which sets @OTEL_TRACES_EXPORTER=none@) would otherwise leave traces
 -- disabled here. Pinning all three makes this spec independent of run order.
@@ -160,9 +158,7 @@ freshMarker = do
     now <- getPOSIXTime
     pure ("ecltrace" <> show (round (now * 1_000_000) :: Integer))
 
--- ── the AC4 dd-correlation stitch ───────────────────────────────────────────────
-
-{- Open a real SDK span — as the WAI middleware does per request — and build the @dd@
+{- Open a real SDK span -- as the WAI middleware does per request -- and build the @dd@
 context within it through the same "Ecluse.Telemetry.Correlation" path 'runHandler'
 uses, returning that context. The collector backs the SDK's exporter (init needs a valid
 endpoint; export is async), but this asserts the in-process active-span stitch, not
@@ -206,8 +202,6 @@ ddLogItem ctx =
 -- A fixed instant so the rendered line is deterministic across runs.
 fixedTime :: UTCTime
 fixedTime = UTCTime (fromGregorian 2026 6 26) 0
-
--- ── the collector container ────────────────────────────────────────────────────
 
 -- A running OTLP collector: the endpoint to export to, and its accumulated logs.
 data Collector = Collector
@@ -274,7 +268,7 @@ accumulateLogs :: IORef [ByteString] -> TC.LogConsumer
 accumulateLogs logsRef _pipe line = atomicModifyIORef' logsRef (\acc -> (line : acc, ()))
 
 {- Poll the collector's accumulated logs for the marker, up to @attempts@ times at
-~250ms each. 'True' once a log line carries the marker — the @debug@ exporter prints
+~250ms each. 'True' once a log line carries the marker -- the @debug@ exporter prints
 the server span's path attribute, so the marker surfaces once the span is accepted. -}
 awaitMarker :: Collector -> Text -> Int -> IO Bool
 awaitMarker collectorHandle marker = go

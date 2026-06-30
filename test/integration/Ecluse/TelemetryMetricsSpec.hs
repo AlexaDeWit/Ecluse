@@ -38,7 +38,7 @@ import Ecluse.Telemetry.Instruments (
 {- | The integration tier for metrics: drive @ecluse.*@ measurements through an
 in-process telemetry handle into a real OTLP __Collector__ container (no Datadog SaaS)
 and assert the series are accepted. The Collector runs an OTLP\/HTTP receiver into a
-@debug@ exporter at detailed verbosity, so every received metric — its name and labels —
+@debug@ exporter at detailed verbosity, so every received metric -- its name and labels --
 is written to its logs; the test records a spread of catalogue signals, force-flushes
 the meter provider, then watches the Collector's logs for a known metric name.
 
@@ -68,8 +68,6 @@ spec =
 markerMetric :: Text
 markerMetric = "ecluse.serve.decision"
 
--- ── the metrics under export ─────────────────────────────────────────────────
-
 {- Record a spread of @ecluse.*@ signals through an in-process telemetry handle pointed
 at the collector, then force-flush the meter provider so the export does not wait on the
 periodic reader's window. With telemetry off, 'newMetrics' builds against the no-op
@@ -92,8 +90,8 @@ driveMetrics collector switch = do
                 void (forceFlushMeterProvider meterProvider Nothing)
 
 {- Run an action with the SDK pointed at the collector through the standard @OTEL_*@
-environment — metrics exporter on (the collector carries a metrics pipeline), traces and
-logs off so the SDK does not ship signals the collector has no pipeline for — and
+environment -- metrics exporter on (the collector carries a metrics pipeline), traces and
+logs off so the SDK does not ship signals the collector has no pipeline for -- and
 __restore the prior environment on exit__. @setEnv@ is process-global and the integration
 suite runs every spec in one process, so without this restore these values (e.g.
 @OTEL_TRACES_EXPORTER=none@) would leak into a later spec; every key this sets is saved
@@ -127,8 +125,6 @@ withSdkEnv endpoint act = bracket saveKeys restoreKeys (const (apply >> act))
         setEnv "OTEL_TRACES_EXPORTER" "none"
         setEnv "OTEL_LOGS_EXPORTER" "none"
         setEnv "OTEL_METRIC_EXPORT_INTERVAL" "200"
-
--- ── the collector container ────────────────────────────────────────────────────
 
 -- A running OTLP collector: the endpoint to export to, and its accumulated logs.
 data Collector = Collector
@@ -196,7 +192,7 @@ accumulateLogs :: IORef [ByteString] -> TC.LogConsumer
 accumulateLogs logsRef _pipe line = atomicModifyIORef' logsRef (\acc -> (line : acc, ()))
 
 {- Poll the collector's accumulated logs for the metric name, up to @attempts@ times at
-~250ms each. 'True' once a log line carries the name — the @debug@ exporter prints each
+~250ms each. 'True' once a log line carries the name -- the @debug@ exporter prints each
 received metric's name, so it surfaces once the metric is accepted. -}
 awaitMetric :: Collector -> Text -> Int -> IO Bool
 awaitMetric collectorHandle metric = go

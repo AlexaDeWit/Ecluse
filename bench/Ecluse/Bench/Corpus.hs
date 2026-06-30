@@ -2,7 +2,7 @@
 
 Two sources feed the benches, with distinct jobs:
 
-  * a __curated real-world packument corpus__ ('corpus') — a pinned set of real npm
+  * a __curated real-world packument corpus__ ('corpus') -- a pinned set of real npm
     captures of substantial, many-version packages spanning the medium (@lodash@,
     @request@) to heavy (@typescript@, @\@types\/node@, an @aws-sdk@-class package)
     size\/shape spectrum, so the work-per-request figures sample the real distribution
@@ -10,22 +10,22 @@ Two sources feed the benches, with distinct jobs:
     packages stress nothing, so they are deliberately excluded). The captures live under
     @bench\/corpus\/npm\/@ (plus the
     pre-existing untrimmed @express@ anchor reused in place under
-    @core\/test\/unit\/fixtures\/npm\/@); they are __frozen data__ — committed captures
+    @core\/test\/unit\/fixtures\/npm\/@); they are __frozen data__ -- committed captures
     pinned in @bench\/corpus\/pins.json@ and re-captured deliberately with
     @make gen-bench-corpus@ (not dependency-tracked; see
-    @docs\/architecture\/performance.md@). Each retains its real heterogeneous shape —
+    @docs\/architecture\/performance.md@). Each retains its real heterogeneous shape --
     varied dependency sets, @peerDependencies@\/@engines@\/@deprecated@, many
-    @dist-tags@, large per-version manifests — trimmed only of pure noise; and
+    @dist-tags@, large per-version manifests -- trimmed only of pure noise; and
 
   * a __synthetic packument generator__, 'syntheticPackumentValue', which builds an
     npm full-metadata document with an arbitrary number of versions so a bench can
     scale version count up to the order of @100k@ and a complexity assertion can fit
-    the curve. It is retained __only__ for the complexity-scaling (O(n) fit) case — a
+    the curve. It is retained __only__ for the complexity-scaling (O(n) fit) case -- a
     stress input, not a realistic one: its versions are structurally identical, so it
     is deliberately degenerate where the real corpus is heterogeneous.
 
-The generator emits a genuine npm-shaped 'Value' — name, @dist-tags@, a @versions@
-object, @time@, and @maintainers@ — so it round-trips through the real wire decode
+The generator emits a genuine npm-shaped 'Value' -- name, @dist-tags@, a @versions@
+object, @time@, and @maintainers@ -- so it round-trips through the real wire decode
 ("Ecluse.Core.Registry.Npm.Wire"), the projection ("Ecluse.Core.Registry.Npm.Project"),
 and the serve-time URL rewrite ("Ecluse.Core.Registry.Npm.Filter"). Its invariants are
 checked by the benchmark's own test cases (see @bench\/Main.hs@), so a malformed
@@ -90,8 +90,6 @@ import Ecluse.Core.Rules.Types (
  )
 import Ecluse.Test.Package (validSha1, validSha512Sri)
 
--- ── the curated real-world corpus ──────────────────────────────────────────────
-
 {- | A size\/shape tier for a corpus entry, ordering the corpus small-to-heavy and
 labelling the rendered benchmark groups so a reader can see where on the distribution
 a figure sits.
@@ -148,7 +146,7 @@ type LoadedEntry = (CorpusEntry, ByteString, Value)
 {- | Load every corpus capture as its raw bytes and decoded 'Value', in 'corpus'
 order, for use as a benchmark @env@. Fails loudly if a capture is missing, does not
 decode, projects to zero versions, or self-reports a name that does not match its
-'cePackage' — so a corrupt or mis-pinned corpus stops the run rather than benching
+'cePackage' -- so a corrupt or mis-pinned corpus stops the run rather than benching
 nothing. Returns just the loaded pairs (the entry metadata is the pure 'corpus', zipped
 back on by 'withLoaded') so the @env@ value needs no @NFData@ beyond the bytes and value.
 -}
@@ -172,7 +170,7 @@ loadCorpus = traverse loadOne corpus
     label :: CorpusEntry -> String
     label ce = "corpus capture " <> toString (ceLabel ce)
 
-{- | Pair the pure corpus metadata back onto the loaded bytes\/values, in order — the
+{- | Pair the pure corpus metadata back onto the loaded bytes\/values, in order -- the
 inverse of the split 'loadCorpus' performs so its @env@ value carries no 'PackageName'.
 -}
 withLoaded :: [(ByteString, Value)] -> [LoadedEntry]
@@ -195,8 +193,6 @@ entryName (ce, _, _) = toString (ceLabel ce) <> " (" <> tierName (ceTier ce) <> 
 fixtureBytes :: FilePath -> IO ByteString
 fixtureBytes = readFileBS
 
--- ── the synthetic generator (complexity-scaling only) ──────────────────────────
-
 {- | The package name the synthetic generator labels its document with. Chosen so
 every structural component is safe to interpolate into a rewritten tarball path
 (see "Ecluse.Core.Registry.Npm.Filter"), so the serve-time rewrite exercises the real
@@ -209,7 +205,7 @@ benchPackageText = "bench-pkg"
 benchPackageName :: PackageName
 benchPackageName = mkPackageName Npm Nothing benchPackageText
 
-{- | The proxy base URL the serve-time rewrite benches rewrite tarball URLs onto —
+{- | The proxy base URL the serve-time rewrite benches rewrite tarball URLs onto --
 standing in for a deployment's own public origin.
 -}
 syntheticProxyBase :: Text
@@ -217,7 +213,7 @@ syntheticProxyBase = "https://ecluse.example"
 
 {- | Build a synthetic npm packument 'Value' carrying @versionCount@ versions
 (@1.0.0@ .. @1.0.{n-1}@), each with a rewritable @dist.tarball@, a well-formed
-integrity digest, a small dependency set, and an install script — the fields the
+integrity digest, a small dependency set, and an install script -- the fields the
 hot paths actually touch. The document is a faithful npm shape, so it decodes,
 projects, filters, and re-serialises exactly as a real packument would, but its
 versions are structurally identical: it is the complexity-scaling stress input, not a
@@ -287,7 +283,7 @@ tarballUrl i =
         <> versionText i
         <> ".tgz"
 
-{- | The version keys of a packument 'Value' — the keys of its @versions@ object,
+{- | The version keys of a packument 'Value' -- the keys of its @versions@ object,
 in 'KeyMap' order. Empty for a value that is not an object with a @versions@ object.
 -}
 versionKeysOf :: Value -> [Text]
@@ -304,7 +300,7 @@ syntheticPackumentBytes = encodeStrict . syntheticPackumentValue
 {- | Project a packument 'Value' into the agnostic 'PackageInfo' for the named
 package. A value that does not project (a tested-impossible case for the corpus
 here) yields the empty document for that name, so the function stays total without a
-partial 'error' — the benchmark's own generator tests and 'loadCorpus' guarantee a
+partial 'error' -- the benchmark's own generator tests and 'loadCorpus' guarantee a
 real projection.
 -}
 projectInfo :: PackageName -> Value -> PackageInfo
@@ -328,8 +324,8 @@ the age-based rule is deterministic across runs.
 benchEvalContext :: EvalContext
 benchEvalContext = EvalContext (UTCTime (fromGregorian 2026 6 27) (secondsToDiffTime 0))
 
-{- | A representative rule set spanning all three pure rule types — an allow-list, an
-install-time-execution deny, and an age quarantine — so the rule sweep exercises
+{- | A representative rule set spanning all three pure rule types -- an allow-list, an
+install-time-execution deny, and an age quarantine -- so the rule sweep exercises
 every evaluation arm rather than one.
 -}
 benchRules :: [PrecededRule]

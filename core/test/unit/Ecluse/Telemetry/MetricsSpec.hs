@@ -32,8 +32,8 @@ import Ecluse.Core.Telemetry.Metrics (
 {- | Tests for the @ecluse.*@ catalogue and the __bounded-label discipline__. The
 crux is the cardinality guard: high-cardinality identifiers (package\/version\/scope\/
 message) must never become metric labels. These assert the catalogue's wire names, the
-closed label-key set, that every label value is drawn from a small fixed domain, and —
-the guard — that no high-cardinality identifier is a label key (and, structurally, that
+closed label-key set, that every label value is drawn from a small fixed domain, and --
+the guard -- that no high-cardinality identifier is a label key (and, structurally, that
 no 'Label' constructor produces one). Pure.
 -}
 spec :: Spec
@@ -42,8 +42,6 @@ spec = do
     labelKeySpec
     boundedDomainSpec
     renderSpec
-
--- ── the metric-name catalogue ────────────────────────────────────────────────
 
 catalogueSpec :: Spec
 catalogueSpec = describe "metric-name catalogue" $ do
@@ -78,8 +76,6 @@ catalogueSpec = describe "metric-name catalogue" $ do
         map metricName allMetricNames
             `shouldNotContain` ["ecluse.queue.backlog", "ecluse.mirror.queue.depth", "ecluse.mirror.dlq.depth"]
 
--- ── the bounded-label key set (the cardinality guard) ─────────────────────────
-
 labelKeySpec :: Spec
 labelKeySpec = describe "label keys (the cardinality guard)" $ do
     it "is exactly the closed bounded-enum set" $
@@ -107,13 +103,11 @@ labelKeySpec = describe "label keys (the cardinality guard)" $ do
     it "files every bounded label under a key in the closed set" $
         all (\l -> labelKey l `elem` (allLabelKeys :: [LabelKey])) allBoundedLabels `shouldBe` True
 
--- ── boundedness of every label value domain ──────────────────────────────────
-
 boundedDomainSpec :: Spec
 boundedDomainSpec = describe "bounded label value domains" $ do
     it "draws the whole bounded-label series space from a small, fixed product" $
         -- Excluding the operator-bounded `rule` (a deployment's small fixed rule set),
-        -- the entire space of metric label values is this handful — never the unbounded
+        -- the entire space of metric label values is this handful -- never the unbounded
         -- space of package identifiers. A label whose domain was not finite could not
         -- appear in this enumeration (it has no Universe instance to enumerate).
         length allBoundedLabels `shouldSatisfy` (< 64)
@@ -133,8 +127,6 @@ boundedDomainSpec = describe "bounded label value domains" $ do
 
     it "encodes breaker state as a small ordinal gauge value, not a label" $
         map breakerStateCode [Closed, HalfOpen, Open] `shouldBe` [0, 1, 2]
-
--- ── label rendering ──────────────────────────────────────────────────────────
 
 renderSpec :: Spec
 renderSpec = describe "renderLabel" $ do

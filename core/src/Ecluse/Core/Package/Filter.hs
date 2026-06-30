@@ -2,7 +2,7 @@
 packument: which versions survive a rule set, which version @dist-tags.latest@
 resolves to, and the per-version decisions a no-survivors outcome must report.
 
-This mirrors "Ecluse.Core.Package.Merge" — the pure fold above the registry handle that
+This mirrors "Ecluse.Core.Package.Merge" -- the pure fold above the registry handle that
 emits a __plan__ rather than a finished document. It reasons over the typed
 'Ecluse.Core.Package.PackageInfo' domain model only; it never touches a registry's wire
 format. The per-ecosystem adapter __replays__ this plan onto the raw upstream
@@ -14,23 +14,23 @@ __Decision, not served surface.__ A 'FilterPlan' carries exactly the decisions t
 filter owns:
 
 * __Survivors.__ A version key survives iff the rules engine 'Admitted' it; every
-  other verdict — a denial, deny-by-default, or an undecidable outcome — drops it.
+  other verdict -- a denial, deny-by-default, or an undecidable outcome -- drops it.
   Presence in the served packument /is/ availability (see
   @docs\/research\/reverse-engineering\/npm.md@ §8), so a non-approved version is
   removed rather than flagged.
 
 * __Resolved @latest@.__ The surviving @dist-tags.latest@ under the shared
   __keep-unless-denied, stable-preferring__ rule ('Ecluse.Core.Version.selectLatest'):
-  the upstream @latest@ is kept untouched while it survives, and only repointed —
-  to the highest /stable/ survivor — when it was itself denied. This is the
+  the upstream @latest@ is kept untouched while it survives, and only repointed --
+  to the highest /stable/ survivor -- when it was itself denied. This is the
   @latest@ /within the public set/, which the cross-upstream merge then re-resolves
   over the union; it is not the final served @latest@.
 
 * __Decisions.__ Every version's 'Decision', in version-key order, so a
   no-survivors outcome can render each denial and choose a status.
 
-What the plan deliberately omits is any "dropped tags" list: a stale tag — one
-whose target did not survive — is droppable __structurally__ from the survivor set
+What the plan deliberately omits is any "dropped tags" list: a stale tag -- one
+whose target did not survive -- is droppable __structurally__ from the survivor set
 alone (a tag is kept iff its target is in 'fpSurvivors'), so the replay needs no
 extra field to find them. The plan stays minimal: the decisions the filter owns,
 nothing the replay can recompute.
@@ -73,7 +73,7 @@ data FilterResult
 
 {- | The decisions filtering a single public packument owns, for the adapter to
 replay onto the raw upstream @Value@. Carries only what the filter decides over the
-typed model — never a finished, re-serialisable document (see this module's
+typed model -- never a finished, re-serialisable document (see this module's
 header). The replay derives everything else (which stale tags to drop, which
 @time@ entries to prune) from these fields.
 -}
@@ -83,7 +83,7 @@ data FilterPlan = FilterPlan
     exactly those the rules engine approved. Empty when no version survived.
     -}
     , fpLatest :: Maybe Version
-    {- ^ @dist-tags.latest@ resolved over the survivors by the shared selector —
+    {- ^ @dist-tags.latest@ resolved over the survivors by the shared selector --
     kept as published while it survives, else repointed (stable-preferring) to the
     highest survivor. 'Nothing' when nothing survives. When present it is always one
     of 'fpSurvivors', so the replay can point @latest@ at a key that is served.
@@ -97,7 +97,7 @@ data FilterPlan = FilterPlan
     deriving stock (Eq, Show)
 
 {- | Decide a single public packument against a rule set: which versions survive,
-where @latest@ resolves, and every version's decision. 'IO' and total — it reasons
+where @latest@ resolves, and every version's decision. 'IO' and total -- it reasons
 over the typed 'PackageInfo' alone, with no registry wire format in sight, deciding
 each version through the one engine ('Ecluse.Core.Rules.evalRules', over the
 'prepare'd policy), so the filter's per-version decision and the serve path share it.
@@ -105,7 +105,7 @@ each version through the one engine ('Ecluse.Core.Rules.evalRules', over the
 A version survives iff the engine 'Admitted' it; every other verdict drops it.
 @latest@ is resolved by 'Ecluse.Core.Version.selectLatest' from the upstream-tagged
 @latest@ (looked up among the versions, so a tag aimed at an absent version
-contributes nothing) and the surviving versions — kept while it survives, else
+contributes nothing) and the surviving versions -- kept while it survives, else
 repointed downward to the highest stable survivor. The decisions are returned for
 __every__ version in key order, so the adapter has each denial's reason when
 nothing survives.
@@ -124,7 +124,7 @@ decision map is keyed by raw version string and __must__ cover exactly the
 packument's versions; a version with no decision is treated as not surviving.
 
 A version survives iff its decision is an 'Admitted'; every other
-verdict — denial, deny-by-default, or 'Ecluse.Core.Rules.Types.Undecidable' — drops it,
+verdict -- denial, deny-by-default, or 'Ecluse.Core.Rules.Types.Undecidable' -- drops it,
 so a fail-closed undecidable version is filtered out exactly like a denial, while its
 decision is still carried in 'fpDecisions' for the no-survivors status.
 -}

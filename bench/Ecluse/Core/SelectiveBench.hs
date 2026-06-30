@@ -6,9 +6,9 @@ The serve path's tarball gate needs exactly one version's
 'Ecluse.Core.Package.PackageDetails'. The status-quo cold path decodes the /whole/
 packument and selects one entry ("full decode + select"); the optimised path parses only
 the requested version's object and @time@ entry, skipping the others
-("selective decode") — "Ecluse.Core.Registry.Npm.Metadata.projectNpmVersion". Both run
+("selective decode") -- "Ecluse.Core.Registry.Npm.Metadata.projectNpmVersion". Both run
 over each corpus entry's @latest@ version, so the saving is reported across the real
-distribution of package sizes (the heavy packuments — thousands of versions — are where a
+distribution of package sizes (the heavy packuments -- thousands of versions -- are where a
 whole-document decode dominates and the selective decode pays off).
 
 Each result is forced to an 'Int' over a deep field of the selected version, so the
@@ -45,7 +45,7 @@ benchmarks loaded =
 
 {- The version each entry is read at: the last key in its @versions@ object (the most
 recently published, the realistic install target). 'Nothing' for a value with no
-versions — never the case for the curated corpus, which 'loadCorpus' guarantees projects
+versions -- never the case for the curated corpus, which 'loadCorpus' guarantees projects
 to a non-empty version set. -}
 targetVersion :: Value -> Maybe Version
 targetVersion value = mkVersion Npm . NE.last <$> nonEmpty (versionKeysOf value)

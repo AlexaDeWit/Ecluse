@@ -1,7 +1,7 @@
 {- | The live performance-acceptance harness (Context B).
 
 For each package in the shared curated catalogue it fetches the __live__ packument
-from the registry — timing the fetch (the upstream leg) — then times two slices of
+from the registry -- timing the fetch (the upstream leg) -- then times two slices of
 Écluse's work-per-request over it:
 
   * the __full-packument__ transform (decode, project, rule sweep, filter, URL
@@ -15,7 +15,7 @@ Each measurement is checked against the version-controlled acceptance budget
 summary when present, and exits non-zero __only__ on a real budget breach.
 
 Live and non-deterministic by design: a fetch or decode failure is reported as
-unavailable, never a breach, so registry flakiness does not red the run — only an
+unavailable, never a breach, so registry flakiness does not red the run -- only an
 over-budget measurement does. The acceptance decision itself is pure and
 unit-tested in "Ecluse.Acceptance"; this module is the live measurement shell.
 -}
@@ -62,12 +62,10 @@ main = do
     lookupEnv "GITHUB_STEP_SUMMARY" >>= traverse_ (`appendFileText` rendered)
     when (reportBreached report) exitFailure
 
--- ── live measurement (the non-deterministic shell) ───────────────────────────────
-
-{- | Fetch one package's live packument and measure Écluse's overhead over it — both
+{- | Fetch one package's live packument and measure Écluse's overhead over it -- both
 the full-packument transform and the single-version selective decode of its latest
-version. A @Left (name, reason)@ marks it unavailable — a fetch, decode, or projection
-failure, which is never a breach — and a @Right sample@ carries the timed legs.
+version. A @Left (name, reason)@ marks it unavailable -- a fetch, decode, or projection
+failure, which is never a breach -- and a @Right sample@ carries the timed legs.
 -}
 measurePackage :: Manager -> UTCTime -> Text -> IO (Either (Text, Text) Sample)
 measurePackage manager now name = do
@@ -114,7 +112,7 @@ measureFull now pkg body = do
     t1 <- getMonotonicTime
     pure (if done then Just (t1 - t0) else Nothing)
 
-{- | Time the single-version selective decode — the cold tarball gate's read of one
+{- | Time the single-version selective decode -- the cold tarball gate's read of one
 version's snapshot from the raw packument, parsing only that version rather than the whole
 document. 'Nothing' when the version is absent or the body does not decode; otherwise the
 median of a few passes, to damp noise.
@@ -177,7 +175,7 @@ sampleCount :: Int
 sampleCount = 5
 
 -- A permissive rule set so the rewrite and re-serialise run over the whole packument
--- rather than short-circuiting to a denial — the full per-request cost.
+-- rather than short-circuiting to a denial -- the full per-request cost.
 serveRules :: [PrecededRule]
 serveRules = [atDefaultPrecedence (AllowIfOlderThan nominalDay)]
 

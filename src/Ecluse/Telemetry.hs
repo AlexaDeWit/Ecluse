@@ -6,7 +6,7 @@ __off__.
 observability is __opt-in and vendor-neutral__: the substrate is OpenTelemetry,
 emitting OTLP that any compatible backend can receive. The maintainer's choice of backend (Datadog)
 must never become every consumer's obligation, so __with @ECLUSE_TELEMETRY@ unset
-nothing is wired and no telemetry is emitted__ — the SDK is not even initialised.
+nothing is wired and no telemetry is emitted__ -- the SDK is not even initialised.
 
 This module is purely the __substrate__: it stands up (or, by default, declines to
 stand up) the providers and brackets their lifecycle. The spans on the request
@@ -19,7 +19,7 @@ here instruments the hot path.
 configuration boundary ("Ecluse.Config") in the same strict, fail-loud style as
 the other enums. The 'Telemetry' handle it produces is one of two shapes:
 
-* __'telemetryDisabled'__ — the off-by-default no-op. It holds no providers, the
+* __'telemetryDisabled'__ -- the off-by-default no-op. It holds no providers, the
   SDK is never initialised, and nothing is exported. This is what an unset
   @ECLUSE_TELEMETRY@ yields.
 * an __enabled__ handle carrying the SDK's tracer and meter providers, built from
@@ -29,13 +29,13 @@ the other enums. The 'Telemetry' handle it produces is one of two shapes:
   HTTP\/protobuf; gRPC stays behind the exporter's cabal flag, off.
 
 'withTelemetry' is the lifecycle bracket the composition root ("Ecluse.Env") runs
-the proxy within: when enabled it initialises the providers and tears them down —
-flushing buffered spans and metrics — along every exit path; when disabled it is a
+the proxy within: when enabled it initialises the providers and tears them down --
+flushing buffered spans and metrics -- along every exit path; when disabled it is a
 pure pass-through that opens nothing to tear down.
 
 When enabled it also makes export failures __visible__: the OTLP span and metric
-exporters are wrapped so a failed export — which @hs-opentelemetry 1.0.0.0@ otherwise
-drops silently — is observed and routed through the shared @katip@ throttle
+exporters are wrapped so a failed export -- which @hs-opentelemetry 1.0.0.0@ otherwise
+drops silently -- is observed and routed through the shared @katip@ throttle
 ("Ecluse.Telemetry.Resolve"), the first failure logged plainly then a periodic
 heartbeat. The wrappers only /observe/; export semantics are unchanged, so an
 unreachable collector still degrades off the request path.
@@ -100,8 +100,6 @@ import Ecluse.Telemetry.Resolve (
 
 import Ecluse.Core.Wire (WireVocab (..), parseWire, renderWire)
 
--- ── master switch ────────────────────────────────────────────────────────────
-
 {- | The @ECLUSE_TELEMETRY@ master switch: telemetry is opt-in, so 'TelemetryOff' is
 the default and the FOSS posture. A sum type rather than a 'Bool' so each case
 names its intent and a future mode (e.g. a metrics-only switch) is a new
@@ -146,12 +144,10 @@ parseTelemetrySwitch = parseWire
 renderTelemetrySwitch :: TelemetrySwitch -> Text
 renderTelemetrySwitch = renderWire
 
--- ── the telemetry handle ─────────────────────────────────────────────────────
-
 {- | The telemetry handle held in the composition root: either the off-by-default
 no-op or the enabled providers. Spans and metric instruments are derived from the
 providers it carries; the disabled case carries none, so a layer that reaches for a
-provider finds nothing to emit through — telemetry is genuinely inert, not merely
+provider finds nothing to emit through -- telemetry is genuinely inert, not merely
 unsampled.
 -}
 data Telemetry
@@ -163,7 +159,7 @@ data Telemetry
       -}
       TelemetryEnabled TelemetryProviders
 
-{- | The SDK providers an enabled 'Telemetry' handle carries — a total product, so
+{- | The SDK providers an enabled 'Telemetry' handle carries -- a total product, so
 its fields are not partial selectors over the 'Telemetry' sum.
 -}
 data TelemetryProviders = TelemetryProviders
@@ -179,7 +175,7 @@ providers and emits nothing. This is what an unset @ECLUSE_TELEMETRY@ resolves t
 telemetryDisabled :: Telemetry
 telemetryDisabled = TelemetryDisabled
 
-{- | Build an enabled telemetry handle from the SDK signals — the tracer and meter
+{- | Build an enabled telemetry handle from the SDK signals -- the tracer and meter
 providers. The disabled case has no constructor argument, so this is the only way
 to obtain an enabled handle, keeping its providers' origin (the bracketed SDK
 lifecycle) explicit.
@@ -209,11 +205,9 @@ telemetryMeterProvider = \case
     TelemetryDisabled -> Nothing
     TelemetryEnabled providers -> Just (tpMeterProvider providers)
 
--- ── lifecycle ────────────────────────────────────────────────────────────────
-
 {- | Run an action with a 'Telemetry' handle whose lifecycle is bracketed by the
-'TelemetrySwitch', tearing the providers down — flushing buffered spans and
-metrics — along every exit path.
+'TelemetrySwitch', tearing the providers down -- flushing buffered spans and
+metrics -- along every exit path.
 
 * __'TelemetryOff'__ (the default) is a pure pass-through: the SDK is __never
   initialised__, the body runs against 'telemetryDisabled', the 'LogEnv' is unused,
@@ -236,10 +230,8 @@ withTelemetry switch logEnv use = case switch of
         registerObservedSpanExporter sink
         bracket (initializeObservedOpenTelemetry sink) otelShutdown (use . telemetryEnabled)
 
--- ── export-failure observation ───────────────────────────────────────────────
-
-{- Wrap the OTLP span exporter so a failed export is observed — routed through the shared
-'ExportFailureSink' into @katip@ under a throttle — and the inner result returned
+{- Wrap the OTLP span exporter so a failed export is observed -- routed through the shared
+'ExportFailureSink' into @katip@ under a throttle -- and the inner result returned
 unchanged. @hs-opentelemetry 1.0.0.0@ drops a failed export silently (the batch processor
 discards the 'ExportResult'), so this wrapper is where Écluse learns the export failed
 without changing export semantics: the failure stays off the request path. -}
@@ -302,7 +294,7 @@ initializeObservedOpenTelemetry sink = do
 
 {- Build the global meter provider with the OTLP metric exporter wrapped for failure
 observation. Mirrors @hs-opentelemetry-sdk@'s @initializeGlobalMeterProvider@ exactly,
-differing only in wrapping the exporter the periodic reader drives — the SDK's metric
+differing only in wrapping the exporter the periodic reader drives -- the SDK's metric
 init takes the exporter directly ('resolveMetricExporter') with no registry injection
 point, unlike the span path. Pinned to @hs-opentelemetry-sdk 1.0.0.0@; re-verify against
 the SDK's @initializeGlobalMeterProvider@ on any version bump. -}

@@ -47,7 +47,7 @@ malformed); the off-by-default handle is a genuine no-op (the SDK is never
 initialised and no provider is exposed); and 'telemetryEnabled' wires the SDK's
 tracer and meter providers through to the handle's accessors. The enabled handle
 under test is built from /offline/ providers (an empty-processor tracer provider
-and the no-op meter provider) — no exporter is opened and no @OTEL_*@ env is read,
+and the no-op meter provider) -- no exporter is opened and no @OTEL_*@ env is read,
 so this stays pure-tier. Only the live 'withTelemetry' @on@ path (which reads
 @OTEL_*@ and opens an OTLP exporter against a real collector) is reserved for the
 integration tier (see @docs\/architecture\/observability.md@ → "Verifying it").
@@ -63,8 +63,6 @@ spec = do
     enabledHandleSpec
     lifecycleSpec
     exportObservationSpec
-
--- ── the master switch ────────────────────────────────────────────────────────
 
 switchSpec :: Spec
 switchSpec = describe "TelemetrySwitch" $ do
@@ -82,8 +80,6 @@ switchSpec = describe "TelemetrySwitch" $ do
         show TelemetryOff `shouldBe` ("TelemetryOff" :: String)
         show TelemetryOn `shouldBe` ("TelemetryOn" :: String)
 
--- ── the telemetry handle ─────────────────────────────────────────────────────
-
 handleSpec :: Spec
 handleSpec = describe "telemetryDisabled" $ do
     -- A 'TracerProvider'/'MeterProvider' has no 'Show', so the provider absence is
@@ -98,13 +94,11 @@ handleSpec = describe "telemetryDisabled" $ do
         TelemetryDisabled -> pure ()
         TelemetryEnabled{} -> expectationFailure "expected the disabled no-op handle"
 
--- ── the enabled handle ───────────────────────────────────────────────────────
-
 {- | An 'OTelSignals' assembled from /offline/ providers, so 'telemetryEnabled'
 can be exercised without standing up the real SDK. Every provider is inert: the
 tracer and logger providers have no processors (they export nothing), the meter
 provider is the SDK's no-op, and the propagator is the empty 'mempty'. No exporter
-is opened and no @OTEL_*@ env is read — this is pure substrate wiring, not the live
+is opened and no @OTEL_*@ env is read -- this is pure substrate wiring, not the live
 @on@ path. ('telemetryEnabled' reads only the tracer and meter fields; the rest are
 present so the value is total rather than relying on a bottom.)
 -}
@@ -149,14 +143,12 @@ enabledHandleSpec = describe "telemetryEnabled" $ do
   where
     -- Force the projected provider to WHNF and report whether it was present. A
     -- provider has no 'Eq'/'Show', so this asserts the projection actually ran and
-    -- yielded a real value ('Just' forced), not a lazily-dropped thunk —
+    -- yielded a real value ('Just' forced), not a lazily-dropped thunk --
     -- exercising the enabled branches of the accessors and the field projections.
     forceProvider :: Maybe a -> IO Bool
     forceProvider = \case
         Nothing -> pure False
         Just provider -> True <$ evaluateWHNF provider
-
--- ── lifecycle ────────────────────────────────────────────────────────────────
 
 lifecycleSpec :: Spec
 lifecycleSpec = describe "withTelemetry" $ do
@@ -181,12 +173,10 @@ lifecycleSpec = describe "withTelemetry" $ do
         result <- withTelemetry TelemetryOff logEnv (const (pure (42 :: Int)))
         result `shouldBe` 42
 
--- ── export-failure observation (the exporter wrappers) ───────────────────────
-
 {- The exporter wrappers turn a dropped export into a visible warning. Driving a stub
 exporter that always returns 'Failure' through the wrapper must surface the first failure
 through the sink, suppress repeats inside the throttle window, then heartbeat the
-suppressed count once the window elapses — the IO-boundary mirror of the pure
+suppressed count once the window elapses -- the IO-boundary mirror of the pure
 'throttleStep' tests, with the clock and surfacing action injected so the decision is
 asserted without wall-clock timing or a live @katip@ scribe. -}
 exportObservationSpec :: Spec

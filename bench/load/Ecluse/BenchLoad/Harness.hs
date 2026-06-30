@@ -3,7 +3,7 @@
 
 {- | The ecosystem-agnostic core of the Layer B load harness: the load knobs, the
 per-ecosystem fixture interface, the runtime-statistics capture, and the report
-rendering — everything that is the same whatever upstream ecosystem a scenario drives.
+rendering -- everything that is the same whatever upstream ecosystem a scenario drives.
 
 == The extension point
 
@@ -11,12 +11,12 @@ Today only npm is served, but the proxy is built to front several upstream ecosy
 (PyPI, RubyGems, …). So the load harness is split into one reusable __structure__ and a
 small per-ecosystem __interface__:
 
-  * the structure — the @oha@ driver, the runtime-statistics capture, the scenario
-    runner, and the report rendering — lives here and in "Ecluse.BenchLoad.Oha", and is
+  * the structure -- the @oha@ driver, the runtime-statistics capture, the scenario
+    runner, and the report rendering -- lives here and in "Ecluse.BenchLoad.Oha", and is
     reused unchanged across ecosystems;
 
-  * the interface — an 'UpstreamFixture' (the Handle pattern: a record carrying an
-    ecosystem and its 'Scenario's) — is implemented once per ecosystem. A 'Scenario'
+  * the interface -- an 'UpstreamFixture' (the Handle pattern: a record carrying an
+    ecosystem and its 'Scenario's) -- is implemented once per ecosystem. A 'Scenario'
     holds only the ecosystem-specific __setup and teardown__ ('scenarioBoot'): it boots
     that ecosystem's stub upstream(s) with the injected latency and payload size, wires
     the proxy, and yields a 'Driver' telling the harness what to drive. npm is the first
@@ -34,8 +34,8 @@ rather than the running maximum of every scenario before it.
 
 Layer B never asserts a throughput pass\/fail (decision D1): the figures are reported
 for a human to read and trend, never compared to a threshold. The one red state is a
-__literal failure__ — the harness cannot boot, @oha@ cannot run, or a scenario served
-nothing — surfaced as a thrown exception (a non-zero exit). See
+__literal failure__ -- the harness cannot boot, @oha@ cannot run, or a scenario served
+nothing -- surfaced as a thrown exception (a non-zero exit). See
 @docs\/architecture\/performance.md@.
 -}
 module Ecluse.BenchLoad.Harness (
@@ -85,8 +85,6 @@ import Ecluse.BenchLoad.Normalise (
 import Ecluse.BenchLoad.Oha (OhaReport (..), runOha, runOhaUrls)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 
--- ── load knobs ─────────────────────────────────────────────────────────────────
-
 {- | The tunables every scenario shares: the load the generator applies (concurrency,
 duration) and the shape of the upstream it applies it to (injected per-upstream latency
 and the artifact payload size). The latency and payload are consumed by a scenario's
@@ -97,7 +95,7 @@ the worker scenario's synthetic artifact.
 
 The defaults model a realistic operating point; override them through the environment
 ('loadKnobsFromEnv') to probe a different one. Absolutes are runner-dependent and noisy
-(decision D2) — the work-normalised counters (allocations per request) are the
+(decision D2) -- the work-normalised counters (allocations per request) are the
 cross-runner-stable signal.
 -}
 data LoadKnobs = LoadKnobs
@@ -172,8 +170,6 @@ loadKnobsFromEnv = do
     readEnvInt :: String -> Int -> IO Int
     readEnvInt name fallback = maybe fallback (fromMaybe fallback . readMaybe) <$> lookupEnv name
 
--- ── the per-ecosystem fixture interface ──────────────────────────────────────────
-
 {- | A per-ecosystem load-test fixture (the Handle pattern): the ecosystem it serves
 and its load scenarios. One instance exists per upstream ecosystem; the harness
 consumes it without knowing which ecosystem it is. npm is the first and only instance
@@ -226,8 +222,6 @@ data Driver
       -}
       DriveInProcess (IO [Double])
 
--- ── the scenario report ──────────────────────────────────────────────────────────
-
 {- | The figures one scenario yields. Serialised across the per-scenario process
 boundary (each scenario runs in its own process; the driver collects the reports), so it
 carries JSON instances.
@@ -248,22 +242,22 @@ data ScenarioReport = ScenarioReport
     -- ^ Fraction of requests that succeeded, in @[0, 1]@.
     , srDeadlineAborts :: Int
     {- ^ Requests the load generator abandoned when the run's deadline arrived before they
-    completed — a backlog the proxy never drained, the load-saturation signal. Zero for the
+    completed -- a backlog the proxy never drained, the load-saturation signal. Zero for the
     in-process scenario, which has no deadline-bounded generator.
     -}
     , srP50Ms, srP90Ms, srP99Ms, srP999Ms :: Maybe Double
     -- ^ Latency percentiles, in milliseconds.
     , srAllocPerReqBytes :: Double
-    {- ^ Bytes allocated per request — the machine-independent signal. The allocation
+    {- ^ Bytes allocated per request -- the machine-independent signal. The allocation
     delta is measured over the whole bench process, which for the HTTP scenarios also
     runs the two in-process stub upstreams and the proxy (only @oha@, a subprocess, is
     excluded), so the stubs' own per-request allocations are folded in. It is therefore a
-    consistent __over-count__ — fine for trending across commits, but __not__ a pure proxy
+    consistent __over-count__ -- fine for trending across commits, but __not__ a pure proxy
     per-request cost, and not directly comparable to Layer A's pure per-call allocations.
     -}
     , srPeakResidencyBytes :: Word64
     {- ^ Peak live heap over this scenario's process (RTS @max_live_bytes@). A process
-    high-water mark, so it spans the warm-up as well as the measured window — a wider
+    high-water mark, so it spans the warm-up as well as the measured window -- a wider
     window than the allocation and GC deltas.
     -}
     , srRetainedBytes :: Word64
@@ -271,7 +265,7 @@ data ScenarioReport = ScenarioReport
     , srGcs :: Word32
     -- ^ Total GCs over the measured window.
     , srMajorGcs :: Word32
-    -- ^ Major (whole-heap) GCs over the measured window — the long-pause kind.
+    -- ^ Major (whole-heap) GCs over the measured window -- the long-pause kind.
     , srGcWallMs :: Double
     -- ^ Wall-clock time spent in GC over the window, in milliseconds.
     , srMeanPauseMs :: Maybe Double
@@ -282,14 +276,12 @@ data ScenarioReport = ScenarioReport
     deriving stock (Generic, Show)
     deriving anyclass (FromJSON, ToJSON)
 
--- ── running a scenario ──────────────────────────────────────────────────────────
-
 {- | Boot a scenario's fixture, apply the load, capture the runtime statistics around
 it, and return the figures. The fixture's bracket owns setup and teardown; this owns the
 RTS capture and the measurement, which is the same whatever the ecosystem.
 
-Throws on a literal failure — the RTS counters are unavailable (the binary was built
-without @-T@), or the scenario served nothing — never on a slow or degraded result.
+Throws on a literal failure -- the RTS counters are unavailable (the binary was built
+without @-T@), or the scenario served nothing -- never on a slow or degraded result.
 -}
 runScenario :: LoadKnobs -> Scenario -> IO ScenarioReport
 runScenario knobs scenario = do
@@ -303,7 +295,7 @@ runScenario knobs scenario = do
 -- steady-state); then a major GC zeroes the residual heap, the before-snapshot is taken,
 -- the measured load runs, and the after-snapshot closes the window. The allocation and GC
 -- figures are before/after deltas over that window (warm-up excluded); peak residency
--- ('max_live_bytes') is a process high-water mark, so it also spans the warm-up — a wider
+-- ('max_live_bytes') is a process high-water mark, so it also spans the warm-up -- a wider
 -- window than the deltas, noted on the field.
 measure :: LoadKnobs -> Scenario -> Driver -> IO ScenarioReport
 measure knobs scenario driver = do
@@ -313,7 +305,7 @@ measure knobs scenario driver = do
     (requests, throughput, successRate, percentilesMs, deadlineAborts, note) <- drive knobs driver
     after <- getRTSStats
     when (requests <= 0) $
-        benchFail ("scenario " <> scenarioName scenario <> " served no requests — a harness failure, not a result")
+        benchFail ("scenario " <> scenarioName scenario <> " served no requests -- a harness failure, not a result")
     performMajorGC
     retained <- gcdetails_live_bytes . gc <$> getRTSStats
     let (p50, p90, p99, p999) = percentilesMs
@@ -393,14 +385,14 @@ drive knobs = \case
     toMs :: Maybe Double -> Maybe Double
     toMs = fmap (* 1_000)
 
--- The count of requests the generator abandoned at the run's deadline — a best-effort
+-- The count of requests the generator abandoned at the run's deadline -- a best-effort
 -- saturation signal, never an exact one and never a gate. oha labels a deadline
 -- abandonment as a transport error "aborted due to deadline" (distinct from a non-2xx
 -- status), so the count sums the error-distribution entries whose label names the deadline;
 -- under load it is the backlog the proxy never drained before the window closed. The label
 -- is oha's, and oha is nix-pinned, so the substring match is stable until a deliberate oha
--- bump (a reviewed flake.lock change). The default is an explicit zero: no matching label —
--- no deadline aborts, or a future oha that renamed it — yields 0, an accepted, safe default
+-- bump (a reviewed flake.lock change). The default is an explicit zero: no matching label --
+-- no deadline aborts, or a future oha that renamed it -- yields 0, an accepted, safe default
 -- for an inform-only figure.
 deadlineAbortsOf :: OhaReport -> Int
 deadlineAbortsOf report =
@@ -428,8 +420,6 @@ distributionNote report =
         | otherwise = ["errors " <> renderCounts (ohaErrorCounts report)]
     renderCounts m = T.intercalate ", " [k <> "×" <> show v | (k, v) <- Map.toList m]
 
--- ── rendering ────────────────────────────────────────────────────────────────────
-
 {- | Render the per-scenario reports to a Markdown section: a header naming the
 ecosystem and the operating point, then one block per scenario with its throughput,
 latency percentiles, allocations per request, residency, and GC stats. The same text
@@ -438,11 +428,11 @@ goes to stdout and to the GitHub run summary.
 renderReports :: LoadKnobs -> Ecosystem -> [ScenarioReport] -> Text
 renderReports knobs ecosystem reports =
     T.unlines $
-        [ "## Load test — throughput & latency (Layer B) over " <> ecosystemName ecosystem
+        [ "## Load test -- throughput & latency (Layer B) over " <> ecosystemName ecosystem
         , ""
         , "Inform-only: the figures are reported for a human to read and trend, never compared to a threshold (decision D1). Throughput and latency are runner-dependent and read coarsely; allocations per request is the machine-independent signal. The in-process residency and GC stats are per scenario (each runs in its own process)."
         , ""
-        , "Caveat on the numbers: allocations / request is measured over the whole bench process, which for the HTTP scenarios also runs the two in-process stub upstreams and the proxy (only oha, a subprocess, is excluded), so it folds in the stubs' own per-request allocations — a consistent over-count, fine for trending, but NOT a pure proxy per-request cost and NOT directly comparable to Layer A's pure per-call allocations. Peak residency is a process high-water mark that also spans the warm-up; the allocation and GC figures are before/after deltas over the measured window only."
+        , "Caveat on the numbers: allocations / request is measured over the whole bench process, which for the HTTP scenarios also runs the two in-process stub upstreams and the proxy (only oha, a subprocess, is excluded), so it folds in the stubs' own per-request allocations -- a consistent over-count, fine for trending, but NOT a pure proxy per-request cost and NOT directly comparable to Layer A's pure per-call allocations. Peak residency is a process high-water mark that also spans the warm-up; the allocation and GC figures are before/after deltas over the measured window only."
         , ""
         , "Operating point: "
             <> show (lkConcurrency knobs)
@@ -517,8 +507,6 @@ renderLoadSaturation c1Reports loadedReports =
             (srDeadlineAborts loaded)
             (srP50Ms =<< Map.lookup (srName loaded) c1ByName)
             (srP50Ms loaded)
-
--- ── numeric formatting ───────────────────────────────────────────────────────────
 
 fmt1, fmt2 :: Double -> Text
 fmt1 x = toText (showFFloat (Just 1) x "")

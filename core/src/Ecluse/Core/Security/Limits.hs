@@ -30,8 +30,6 @@ import Data.Vector qualified as V
 
 import Ecluse.Core.Package (PackageInfo, infoVersions)
 
--- ── response bounds ──────────────────────────────────────────────────────────
-
 {- | Resource budget for a single upstream response. Every field is a hard
 ceiling enforced fail-closed: exceeding one aborts with a 'LimitError' rather
 than returning a truncated or partially-parsed result. These bound the
@@ -42,7 +40,7 @@ The metadata ceilings are layered. 'maxBodyBytes' (through 'boundedRead') is the
 __primary, pre-decode__ bound: it caps the parse spend before aeson runs, so a
 hostile body is aborted while still streaming and never reaches the decoder whole.
 The post-projection 'maxVersionCount' ('checkVersionCount') is a __deliberate
-defence-in-depth__ semantic backstop /behind/ it — it refuses an over-versioned
+defence-in-depth__ semantic backstop /behind/ it -- it refuses an over-versioned
 packument after projection, bounding per-version work the byte cap already keeps
 finite.
 -}
@@ -95,7 +93,7 @@ streaming fetch can run it in 'IO' while tests drive it purely.
 each call yields the next chunk, and an __empty__ 'ByteString' signals end of
 input. 'boundedRead' pulls chunks until EOF and returns the concatenated body, or
 stops at the first chunk that pushes the running total past 'maxBodyBytes' and
-returns @'Left' ('BodyTooLarge' …)@ — __fail-closed__, never a truncated body. A
+returns @'Left' ('BodyTooLarge' …)@ -- __fail-closed__, never a truncated body. A
 zero or negative 'maxBodyBytes' rejects any non-empty body. The bound is checked
 __before__ a chunk is retained, so memory never exceeds the limit plus one chunk.
 -}
@@ -104,7 +102,7 @@ boundedRead limits readChunk = go 0 mempty
   where
     cap = maxBodyBytes limits
     -- Accumulate the body in a forward-built 'Builder' (chunks appended in arrival
-    -- order), finalised once at EOF — no reversed chunk list to undo.
+    -- order), finalised once at EOF -- no reversed chunk list to undo.
     go !seen acc = do
         chunk <- readChunk
         if BS.null chunk
@@ -137,14 +135,14 @@ checkVersionCount limits info =
 {- | Reject a decoded JSON document nested deeper than 'maxNestingDepth',
 returning it unchanged when within budget.
 
-Run on the __already-decoded__ 'Value' — after the parser has produced it, before
-the document is projected to domain types — so a pathologically nested payload is
+Run on the __already-decoded__ 'Value' -- after the parser has produced it, before
+the document is projected to domain types -- so a pathologically nested payload is
 refused before any deep /domain/ traversal. It is therefore __not__ the defence
 against an unbounded structure: the structure is already /bounded-by-body-size/ by
 the time it reaches here, since the @maxBodyBytes@ cap on the streamed read precedes
 the decode (a body the parser never finishes reading never produces a 'Value'). This
-guard bounds the __traversal cost__ of a within-size-but-deeply-nested document — the
-stack\/CPU a recursive walk of it would spend — which the body cap alone does not
+guard bounds the __traversal cost__ of a within-size-but-deeply-nested document -- the
+stack\/CPU a recursive walk of it would spend -- which the body cap alone does not
 bound (a small body can still nest deeply). Depth counts container nesting: a scalar
 is depth @1@, and each enclosing 'Object'\/'Array' adds one. An empty container
 counts as a leaf (depth @1@), since it forces no descent. Traversal short-circuits at
@@ -157,7 +155,7 @@ checkNestingDepth limits value =
         then Right value
         else Left (TooDeeplyNested (maxNestingDepth limits))
 
-{- | True iff @value@ nests no deeper than @budget@ levels — the depth predicate
+{- | True iff @value@ nests no deeper than @budget@ levels -- the depth predicate
 'checkNestingDepth' decides against 'maxNestingDepth', exposed so a /selective/ decode
 that never materialises the whole 'Value' (see
 "Ecluse.Core.Registry.Npm.SelectiveDecode") can bound each sub-tree it walks at the same

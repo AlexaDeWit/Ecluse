@@ -144,6 +144,12 @@ library ecluse-core
     Ecluse.Core.Version
     Ecluse.Core.Wire
     Ecluse.Core.Worker
+      Ecluse.Core.Worker.Fetch
+      Ecluse.Core.Worker.Integrity
+      Ecluse.Core.Worker.Job
+      Ecluse.Core.Worker.Liveness
+      Ecluse.Core.Worker.Loop
+      Ecluse.Core.Worker.Types
 
   -- Per-ecosystem version grammars and their shared lexical atoms. Internal to
   -- ecluse-core: VersionKey is opaque, so callers reach these only through the
@@ -182,6 +188,7 @@ library ecluse-core
     , memory                ^>=0.18
     , microlens             ^>=0.4.13
     , microlens-aeson       ^>=2.5
+    , mtl                   ^>=2.3
     , network               ^>=3.2
     , resourcet             ^>=1.3
     , retry                 ^>=0.9
@@ -361,6 +368,9 @@ test-suite ecluse-core-unit
     Ecluse.RulesSpec
     Ecluse.SecuritySpec
     Ecluse.Security.EgressSpec
+    Ecluse.Security.HostSpec
+    Ecluse.Security.LimitsSpec
+    Ecluse.Security.UrlSpec
     Ecluse.Server.CacheSpec
     Ecluse.Server.ConditionalSpec
     Ecluse.Server.MetadataSpec
@@ -376,7 +386,11 @@ test-suite ecluse-core-unit
     Ecluse.VersionOrderingSpec
     Ecluse.VersionSpec
     Ecluse.WireSpec
-    Ecluse.WorkerSpec
+    Ecluse.Worker.IntegritySpec
+    Ecluse.Worker.JobSpec
+    Ecluse.Worker.LivenessSpec
+    Ecluse.Worker.LoopSpec
+    Ecluse.Worker.Support
 
   build-tool-depends: hspec-discover:hspec-discover ^>=2.11
   build-depends:

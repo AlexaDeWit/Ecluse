@@ -1,12 +1,12 @@
 {- | Internal guts of the serve pipeline ("Ecluse.Core.Server.Pipeline"), exposed for
-tests without widening that module's two-handler public API — the @.Internal@ convention,
+tests without widening that module's two-handler public API -- the @.Internal@ convention,
 as "Ecluse.Core.Credential.Refresh.Internal" uses. Importing it opts out of the public
 module's stability promise.
 
 It holds the operator-facing warning helpers for two bad-upstream conditions the
-response-bound guards leave silent — an upstream whose body does not decode into a
+response-bound guards leave silent -- an upstream whose body does not decode into a
 usable packument ('logDecodeFailure'), and one whose packument self-reports a name for
-a /different/ package ('logNameMismatch') — each surfaced at a 'WarningS' through the
+a /different/ package ('logNameMismatch') -- each surfaced at a 'WarningS' through the
 ambient @katip@ context before the contribution degrades. The conditions themselves are
 classified on the serve path as a typed 'Ecluse.Core.Registry.Metadata.MetadataError';
 this module only renders their warning lines. Alongside them sit the pure integrity-floor
@@ -68,7 +68,7 @@ import Ecluse.Core.Version (renderVersion)
 pipelineInternalModule :: Text
 pipelineInternalModule = "Ecluse.Server.Pipeline.Internal"
 
-{- | Log a parse failure at 'WarningS' — the one bad-upstream condition the
+{- | Log a parse failure at 'WarningS' -- the one bad-upstream condition the
 response-bound guards leave silent: the upstream answered, but its body did not decode
 into the typed view and raw document the serve path needs. Same fail-closed degrade and
 the same @module@\/@package@ payload convention as the breach log in
@@ -87,8 +87,8 @@ logDecodeFailure name =
 {- | Log an upstream name mismatch at 'WarningS' before the contribution degrades: the
 origin answered, but its packument self-reported a name for a different package than
 the one requested, so it is dropped as untrusted for this request. The structured
-payload carries both names and the origin (its base URL) — the high-cardinality
-identifiers that belong on the log line — so an operator can tell a misconfigured or
+payload carries both names and the origin (its base URL) -- the high-cardinality
+identifiers that belong on the log line -- so an operator can tell a misconfigured or
 hostile upstream from an ordinary outage. Same fail-closed degrade and payload
 convention as 'logDecodeFailure'.
 -}
@@ -103,8 +103,6 @@ logNameMismatch requested origin reported =
             <> sl "upstreamName" reported
     message :: Text
     message = "dropped an upstream contribution: its packument self-reported a name for a different package"
-
--- ── integrity-floor admission ────────────────────────────────────────────────
 
 {- | Apply an integrity-floor admission policy to a 'PackageInfo', keeping only the versions
 whose strongest digest meets the floor and projecting the rest to refusals. A version
@@ -138,7 +136,7 @@ admitByIntegrity floorSpec belowFloorRefusal missingRefusal info =
     , refusals
     )
   where
-    -- Classify each version against the floor exactly once — the up-to-100k-version map is
+    -- Classify each version against the floor exactly once -- the up-to-100k-version map is
     -- walked a single time, and the admissible keys and both refusal buckets are read off
     -- the resulting class map (itself the size of the version map, not small).
     classified :: Map Text VersionIntegrity
@@ -157,8 +155,6 @@ admitByIntegrity floorSpec belowFloorRefusal missingRefusal info =
         bucket BelowFloor (b, m) = (belowFloorRefusal : b, m)
         bucket NoIntegrity (b, m) = (b, missingRefusal : m)
         bucket MeetsFloor acc = acc
-
--- ── metric-label projections ─────────────────────────────────────────────────
 
 {- | Classify a no-survivors packument outcome into the bounded @ecluse.serve.decision@
 value: a forbidden set is a denial, any other non-served status a transient
@@ -198,7 +194,7 @@ denialLabels = \case
 {- | The rule-evaluation tier a duration is attributed to, from the mount's rule set:
 a mount with any __resilient__ (effectful) rule is attributed to the effectful tier;
 a purely-pure rule set reduces to the structural tier. The resilience policy a prepared
-rule carries — not a separate list — is what distinguishes an effectful rule now that
+rule carries -- not a separate list -- is what distinguishes an effectful rule now that
 the two tiers are one engine.
 -}
 evalTier :: [PreparedRule] -> Metric.Tier
@@ -214,7 +210,7 @@ transienceCause = \case
     WontResolve -> Metric.OtherCause
 
 {- | Record the @ecluse.rule.denials@ counter for each rejected decision, labelled by
-the bounded reason class and — for a policy denial — the deciding rule name
+the bounded reason class and -- for a policy denial -- the deciding rule name
 ('denialLabels'). An admit records nothing.
 -}
 recordDenials :: MetricsPort -> [ServeDecision] -> IO ()

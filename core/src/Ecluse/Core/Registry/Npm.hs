@@ -10,8 +10,8 @@ re-exported through the handle.
 
 It speaks the npm registry protocol directly with @http-client@, __never__
 @amazonka@: the control plane (the @GetAuthorizationToken@ mint, the mirror
-queue) is @amazonka@'s job behind separate handles, but the data plane — fetch
-metadata, stream a tarball, publish — is ordinary HTTPS+JSON, identical across
+queue) is @amazonka@'s job behind separate handles, but the data plane -- fetch
+metadata, stream a tarball, publish -- is ordinary HTTPS+JSON, identical across
 every npm-speaking backend (npmjs.org, CodeArtifact, Artifact Registry, a
 self-hosted Verdaccio). Keeping the streaming path off @amazonka@'s
 @conduit@\/@ResourceT@ machinery is exactly what makes bounded-memory artifact
@@ -30,7 +30,7 @@ Three details of the wire protocol are load-bearing and handled here (see
   @time@ map). 'MetadataForm' selects between them; both request
   @Accept-Encoding: gzip@, since popular packuments are megabytes.
 * __Scoped-name path encoding.__ A scoped name @\@scope\/name@ is encoded on the
-  wire as @\@scope%2Fname@ — the scope separator is percent-encoded but the
+  wire as @\@scope%2Fname@ -- the scope separator is percent-encoded but the
   leading @\@@ is not. 'metadataRequest' builds this from an
   __already-parsed__ 'PackageName', never from raw client path segments.
 * __Idempotent publish.__ A @PUT \/{pkg}@ that re-publishes an existing version
@@ -159,13 +159,11 @@ import Ecluse.Core.Server.Route (encodeComponent)
 import Ecluse.Core.Text (joinUrlPath)
 import Ecluse.Core.Version (Version, renderVersion)
 
--- ── configuration ────────────────────────────────────────────────────────────
-
 {- | Everything 'newNpmClient' needs to talk to one npm-speaking registry: the
 base URL, the shared HTTP 'Manager', and an optional injected bearer token.
 
 The 'Manager' is shared (it owns the connection pool), so it is taken rather than
-built here — the same one the composition root reuses across requests. The token
+built here -- the same one the composition root reuses across requests. The token
 is whatever the request pipeline decided this client should present; this module
 never chooses it (see the module header → "Authentication").
 -}
@@ -214,8 +212,6 @@ defaultNpmConfig manager =
         , npmLimits = defaultLimits
         }
 
--- ── content negotiation ──────────────────────────────────────────────────────
-
 {- | Which of npm's two metadata documents to request, selected by the @Accept@
 header (see 'metadataAccept').
 -}
@@ -244,11 +240,9 @@ metadataAccept = \case
     Abbreviated -> "application/vnd.npm.install-v1+json"
     Full -> "application/json"
 
--- ── conditional-GET validators ───────────────────────────────────────────────
-
 {- | The conditional-GET validators to relay on a metadata fetch. Replaying an
 upstream's @ETag@ as @If-None-Match@ (or its @Last-Modified@ as
-@If-Modified-Since@) lets the upstream answer @304 Not Modified@ with no body —
+@If-Modified-Since@) lets the upstream answer @304 Not Modified@ with no body --
 the cheap freshness check the proxy uses on a cache revalidation. Both are
 forwarded only when present.
 -}
@@ -262,11 +256,9 @@ data Validators = Validators
     }
     deriving stock (Eq, Show)
 
--- | No conditional-GET validators — an unconditional fetch.
+-- | No conditional-GET validators -- an unconditional fetch.
 noValidators :: Validators
 noValidators = Validators{validatorIfNoneMatch = Nothing, validatorIfModifiedSince = Nothing}
-
--- ── request building ──────────────────────────────────────────────────────────
 
 {- | Build the metadata @GET@ request for a package: the URL is
 @{baseUrl}\/{encoded-name}@ with the @Accept@ header for the chosen
@@ -299,7 +291,7 @@ metadataRequest config form validators name = do
 {- | Build the artifact @GET@ request for one version's tarball.
 
 The request is marked __non-decompressing__ ('decompress' returns 'False') so the
-@.tgz@ bytes are streamed through verbatim — a tarball is opaque binary and must
+@.tgz@ bytes are streamed through verbatim -- a tarball is opaque binary and must
 reach the client byte-for-byte for its @dist.integrity@ to verify. The artifact
 URL is the registry-served tarball location, derived like 'metadataRequest' but
 addressing the version's artifact path. Exposed so the web layer can bracket it
@@ -330,8 +322,8 @@ artifactRequest config name version = do
 {- | Build the artifact @GET@ request addressing a tarball by its __preserved
 on-the-wire filename__, at @{baseUrl}\/{encoded-pkg}\/-\/{filename}@.
 
-The serve path fetches an artifact by the exact filename the client requested —
-the authoritative name for the bytes — rather than reconstructing it from
+The serve path fetches an artifact by the exact filename the client requested --
+the authoritative name for the bytes -- rather than reconstructing it from
 @(package, version)@ as 'artifactRequest' does, so a registry whose tarball naming
 differs from the proxy's own convention still resolves. The @filename@ is taken
 verbatim (the classifier has already passed it through the component-safety gate),
@@ -358,8 +350,8 @@ artifactRequestByFile config name filename = do
             }
 
 {- | Build the artifact @GET@ request addressing a tarball at its __authoritative
-upstream location__ — the absolute @url@ the projection preserved from the
-upstream's @dist.tarball@ — rather than reconstructing it from @(base, package,
+upstream location__ -- the absolute @url@ the projection preserved from the
+upstream's @dist.tarball@ -- rather than reconstructing it from @(base, package,
 file)@.
 
 The artifact location is server-chosen data, not a derivable fact: a registry may
@@ -422,23 +414,21 @@ publishRequest config name document = do
                     : requestHeaders base
             }
 
--- ── first-party publish relay ─────────────────────────────────────────────────
-
 {- | Relay a client's npm publish document to the publication target and return the
-target's own response — the first-party publish primitive behind the @PUT \/{pkg}@
+target's own response -- the first-party publish primitive behind the @PUT \/{pkg}@
 serve path.
 
 The @document@ is the publisher's own @PUT@ body, relayed __verbatim__ (the proxy
 does not re-assemble it the way the mirror worker assembles 'npmPublishDocument' from
 verified bytes). The request is built by 'publishRequest', so it carries the
-config's injected bearer — for this path the publisher's __own forwarded token__
-(passthrough), put on the per-request 'NpmClientConfig' by the serve layer — and the
+config's injected bearer -- for this path the publisher's __own forwarded token__
+(passthrough), put on the per-request 'NpmClientConfig' by the serve layer -- and the
 @Content-Type: application\/json@ the npm publish protocol requires. The package URL
 is formed from the route's 'PackageName', never the document's self-reported name.
 
 The response body is read __bounded__ through 'Ecluse.Core.Security.boundedRead' against
 the config's 'npmLimits' (the same @maxBodyBytes@ budget the metadata path enforces), via
-'withResponse' rather than an unbounded 'httpLbs' — so a hostile or compromised
+'withResponse' rather than an unbounded 'httpLbs' -- so a hostile or compromised
 publication target cannot exhaust the proxy with a multi-gigabyte response. A body past
 the cap aborts fail-closed as a 'ResponseBoundExceeded' throw, which the serve layer's
 @tryAny@ turns into a gateway error.
@@ -446,7 +436,7 @@ the cap aborts fail-closed as a 'ResponseBoundExceeded' throw, which the serve l
 Returns the publication target's status and bounded body ('PublishRelayResponse'), or a
 'UrlFormationError' when the request URL cannot be formed (a misconfigured base URL). A
 transport failure (the target unreachable) throws, as the serve layer's @tryAny@ expects
-— it renders a gateway error rather than a relayed status. Unlike
+-- it renders a gateway error rather than a relayed status. Unlike
 'Ecluse.Core.Registry.publishArtifact', a @409@ is __not__ folded into success here: a
 first-party publisher re-publishing an existing version should see the registry's @409@,
 not a fabricated @200@.
@@ -470,10 +460,8 @@ relayPublishDocument config name document =
                             }
                     )
 
--- ── publish-document assembly ─────────────────────────────────────────────────
-
 {- | Assemble the npm publish document for one version from its verified tarball
-bytes — the serialised body 'publishRequest' (hence
+bytes -- the serialised body 'publishRequest' (hence
 'Ecluse.Core.Registry.publishArtifact') @PUT@s to @\/{pkg}@.
 
 The document is the npm @PUT \/{pkg}@ shape: the package name and a single-version
@@ -483,8 +471,8 @@ itself base64-encoded under @_attachments@ with its byte @length@. A managed npm
 registry (CodeArtifact, Artifact Registry, Verdaccio) recomputes the served
 @dist.tarball@ location from the attachment, so the location is not carried.
 
-The integrity digests written into @dist@ are the __caller's__ — the worker passes
-the serve-time-admitted digests it has already verified the bytes against — so the
+The integrity digests written into @dist@ are the __caller's__ -- the worker passes
+the serve-time-admitted digests it has already verified the bytes against -- so the
 published manifest's integrity matches exactly the bytes attached. The tarball
 @length@ is taken from the actual byte count, never a caller-declared size, so the
 attachment can never disagree with its own bytes.
@@ -498,7 +486,7 @@ npmPublishDocument ::
     PackageName ->
     -- | The version being published.
     Version ->
-    -- | The tarball's filename — the @_attachments@ key and tarball file segment.
+    -- | The tarball's filename -- the @_attachments@ key and tarball file segment.
     Text ->
     -- | The @dist.integrity@ SRI string, if known (e.g. @"sha512-…"@).
     Maybe Text ->
@@ -544,8 +532,6 @@ npmPublishDocument name version filename integrity shasum tarball =
     encodedTarball :: Text
     encodedTarball = decodeUtf8 (convertToBase Base64 tarball :: ByteString)
 
--- ── handle assembly ───────────────────────────────────────────────────────────
-
 {- | Assemble a "Ecluse.Core.Registry.RegistryClient" for the npm protocol over the
 given configuration.
 
@@ -588,13 +574,13 @@ returning a body larger than 'Ecluse.Core.Security.maxBodyBytes' is aborted
 __fail-closed__ rather than exhausting memory (security.md invariant 4). A body
 within budget is returned whole (the metadata path projects the entire document);
 artifacts are the separate streaming concern, not bounded here. The request's
-@Accept-Encoding: gzip@ still applies — @http-client@ decompresses transparently
+@Accept-Encoding: gzip@ still applies -- @http-client@ decompresses transparently
 under 'withResponse' exactly as under @httpLbs@, so the cap bounds the
 __decompressed__ bytes the proxy actually retains.
 
 A body-size breach surfaces as a typed 'ResponseBoundExceeded' exception carrying
 the 'Ecluse.Core.Security.LimitError', so the request pipeline's @tryAny@ degrades the
-contribution to nothing — the fail-closed parse-failure path — rather than the
+contribution to nothing -- the fail-closed parse-failure path -- rather than the
 projection layer ever seeing a truncated body. A request-building failure (an
 unformable URL) likewise surfaces as a typed 'UrlFormationError' exception rather
 than a silent success: a misconfigured base URL is a programming\/config fault on
@@ -614,14 +600,14 @@ fetchMetadataForm config form validators name = do
         readBoundedBody (npmLimits config) (responseBody response)
 
 {- | Raised when an upstream metadata body breaches a 'Ecluse.Core.Security.Limits'
-ceiling: the body-size guard here, or — surfaced through the same type by the serve
-pipeline — the version-count or nesting-depth guard.
+ceiling: the body-size guard here, or -- surfaced through the same type by the serve
+pipeline -- the version-count or nesting-depth guard.
 
 Carries the 'Ecluse.Core.Security.LimitError' (which ceiling, the observed value, and the
 cap), so the breach is __diagnosable__ rather than collapsing into an opaque failure:
 the serve path logs it at the breach point before degrading the contribution to
 nothing. It is thrown fail-closed (never a truncated or partial body), so it surfaces
-to the fetch caller exactly as a parse failure would — the request pipeline's @tryAny@
+to the fetch caller exactly as a parse failure would -- the request pipeline's @tryAny@
 treats it as a degraded (missing) contribution.
 -}
 newtype ResponseBoundExceeded = ResponseBoundExceeded LimitError
@@ -633,7 +619,7 @@ instance Exception ResponseBoundExceeded
 returning the whole body as a 'RegistryResponse' when within the cap. A body past
 'Ecluse.Core.Security.maxBodyBytes' aborts the read fail-closed and is raised as a typed
 'ResponseBoundExceeded' (never a truncated body), so the caller can log the breach
-and its @tryAny@ degrades it to a missing contribution — the same handling a parse
+and its @tryAny@ degrades it to a missing contribution -- the same handling a parse
 failure gets. -}
 readBoundedBody :: Limits -> BodyReader -> IO RegistryResponse
 readBoundedBody limits bodyReader =
@@ -655,7 +641,7 @@ fetchArtifact' config name version = do
 already present) as idempotent success.
 
 A published @name\@version@ is immutable, so a conflict means the bytes are
-already there — exactly the success a redelivered mirror job wants, not an error
+already there -- exactly the success a redelivered mirror job wants, not an error
 to retry forever. Any other non-2xx status is reported as a 'PublishRejected' so
 the mirror job is left un-acked and retried.
 
@@ -690,8 +676,6 @@ classifyPublish code
     | otherwise =
         Left (PublishRejected (PublishError ("publish failed with HTTP status " <> show code)))
 
--- ── helpers ───────────────────────────────────────────────────────────────────
-
 {- The metadata\/publish URL for a package: @{baseUrl}\/{encoded-name}@, with
 the scoped-name separator percent-encoded (@\@scope\/name@ → @\@scope%2Fname@).
 -}
@@ -724,7 +708,7 @@ artifactFileUrl baseUrl name filename =
 
 {- Join a base URL and an already-encoded path, tolerating one trailing slash
 on the base so the join never doubles it. An empty base URL is refused with a
-'UrlFormationError' — the read- and write-path builders share this report, so an
+'UrlFormationError' -- the read- and write-path builders share this report, so an
 unformable URL is never mislabelled as a publish failure.
 -}
 joinPath :: Text -> Text -> Either UrlFormationError Text
@@ -735,9 +719,9 @@ joinPath baseUrl path
 {- Encode a package name as its on-the-wire path segment. Each name component
 (scope, base name) is percent-encoded ('Ecluse.Core.Server.Route.encodeComponent')
 around the structural delimiters this builder writes: a scoped @\@scope\/name@
-becomes @\@{enc-scope}%2F{enc-base}@ — the leading @\@@ and the @%2F@ separator
+becomes @\@{enc-scope}%2F{enc-base}@ -- the leading @\@@ and the @%2F@ separator
 are written here, never derived from a component, so a legitimate scoped name
-yields exactly one @%2F@ — and an unscoped name is its single encoded component.
+yields exactly one @%2F@ -- and an unscoped name is its single encoded component.
 Encoding each component is the defence in depth that keeps a @\'%\'@, @\'\/\'@, or
 other reserved byte inside a decoded name from reaching the upstream URL raw (a
 once-decoded @%2e%2e%2f@ is re-encoded to @%252e%252e%252f@), without
@@ -759,8 +743,8 @@ tarballFile name version =
 {- Finalize an npm data-plane request: __disable redirect following__ ('redirectCount'
 = 0) on __every__ request, and attach a bearer token when one is injected.
 
-This is the single request-finalization point for the whole npm data plane — every
-builder and call site funnels through it (it is also the only 'applyBearerAuth') — so
+This is the single request-finalization point for the whole npm data plane -- every
+builder and call site funnels through it (it is also the only 'applyBearerAuth') -- so
 pinning @redirectCount = 0@ here makes one invariant universal: __Écluse never follows an
 upstream redirect__, on the credentialed and the anonymous plane alike.
 
@@ -768,7 +752,7 @@ Two dangers it forecloses, one per plane:
 
 \* __Credential leakage__ (credentialed plane). http-client's default ('redirectCount' =
   10) re-sends the @Authorization@ header to the redirect's @Location@, and its
-  @shouldStripHeaderOnRedirect@ does not strip it cross-host — so a hostile or
+  @shouldStripHeaderOnRedirect@ does not strip it cross-host -- so a hostile or
   misconfigured upstream could @302@ a forwarded\/minted credential to an attacker-chosen
   host. That is especially dangerous on the __trusted private manager__, where a redirect
   could exfiltrate the credential to an attacker-chosen target; pinning @redirectCount = 0@
@@ -776,18 +760,18 @@ Two dangers it forecloses, one per plane:
 
 \* __SSRF via redirect__ (anonymous plane). The host allowlist is enforced when the URL is
   built, not per redirect hop, so following a @302@ would let an allowlisted upstream
-  steer an anonymous fetch to __any__ host — an internal\/cloud-metadata address or any
-  off-allowlist host — re-gated by nothing. Not following the redirect removes the hop
+  steer an anonymous fetch to __any__ host -- an internal\/cloud-metadata address or any
+  off-allowlist host -- re-gated by nothing. Not following the redirect removes the hop
   there is to gate.
 
 The accepted consequence, symmetric across both planes: a read no longer follows an
-upstream's CDN @302@ — it returns the @3xx@ to the serve path rather than chasing it. That
+upstream's CDN @302@ -- it returns the @3xx@ to the serve path rather than chasing it. That
 is the safer posture, and the proxy already honours the __packument's__ @dist.tarball@
 location explicitly, gated by the egress policy, rather than relying on redirects.
 Redirect-following for a nonstandard upstream (a presigned\/redirecting object store) is an
 explicit, per-upstream opt-in, never the default.
 
-(Out of scope here: amazonka — CodeArtifact\/SQS — and the OTLP exporter build their own
+(Out of scope here: amazonka -- CodeArtifact\/SQS -- and the OTLP exporter build their own
 requests outside this function, so this invariant does not reach them; that is a separate
 follow-up.) -}
 -- The anonymous no-redirect-follow posture closes the SSRF leg of #397; the

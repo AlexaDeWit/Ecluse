@@ -2,8 +2,8 @@
 component is reached.
 
 'Env' is the one place backend choice is resolved. It holds the proxy's __handles__
-— the registry-protocol client, the mirror queue, and the outbound-credential
-provider — each an opaque record of functions (the Handle pattern) whose closures
+-- the registry-protocol client, the mirror queue, and the outbound-credential
+provider -- each an opaque record of functions (the Handle pattern) whose closures
 already capture their backend's private state. Nothing downstream inspects which
 backend a handle is; it only applies the field. Alongside the handles it carries the
 shared @http-client@ 'Manager' that the data plane (metadata fetch, artifact
@@ -14,7 +14,7 @@ Two invariants make this hold together:
 
 * __No backend SDK appears here.__ 'Env' imports only the handle /records/, never a
   cloud SDK (no @amazonka@, no GCP client). Each handle's effectful fields return
-  'IO' (not an application monad), so an adapter never imports back into this module —
+  'IO' (not an application monad), so an adapter never imports back into this module --
   there is no import cycle and no recursive @Env@-holds-a-handle-whose-methods-need-@Env@
   knot (see @docs\/architecture\/technology-stack.md@ → "Key Decisions").
 
@@ -26,7 +26,7 @@ Two invariants make this hold together:
   @docs\/architecture\/cloud-backends.md@ → "Process model").
 
 Request handlers read this 'Env' through a per-request
-'Ecluse.Core.Server.Context.RequestCtx' — the request runtime projected by
+'Ecluse.Core.Server.Context.RequestCtx' -- the request runtime projected by
 'serveRuntimeOf', paired with the matched mount; the mirror worker reads it through the
 'Ecluse.Core.Worker.WorkerRuntime' projected by 'workerRuntimeOf'.
 -}
@@ -109,8 +109,8 @@ data Env = Env
     -}
     , envTelemetry :: Telemetry
     {- ^ The OpenTelemetry handle (see "Ecluse.Telemetry"): the tracer and meter
-    providers spans and metrics are emitted through, or — by default, with
-    @ECLUSE_TELEMETRY@ unset — the inert no-op that emits nothing. Its provider
+    providers spans and metrics are emitted through, or -- by default, with
+    @ECLUSE_TELEMETRY@ unset -- the inert no-op that emits nothing. Its provider
     lifecycle is bracketed by the composition root that supplies it.
     -}
     , envMetrics :: Metrics
@@ -127,8 +127,8 @@ data Env = Env
     -}
     , envWorkerHeartbeat :: WorkerHeartbeat
     {- ^ The mirror worker's consume-loop heartbeat: the time of its
-    last-successful-poll. Distinct from the server's HTTP readiness — it is the
-    worker's own liveness surface — and read by the liveness probe so a stalled
+    last-successful-poll. Distinct from the server's HTTP readiness -- it is the
+    worker's own liveness surface -- and read by the liveness probe so a stalled
     worker is visible in single-process health (see "Ecluse.Core.Worker").
     -}
     }
@@ -140,7 +140,7 @@ private upstream, both the validating TLS manager).
 The 'Manager's, 'MetadataCache', 'LogEnv', and 'Telemetry' handle are taken as
 arguments rather than built here: a 'Manager' owns a connection pool whose lifetime
 should be bracketed by the caller that also owns teardown (see 'withEnv'), and
-injecting them keeps 'Env' assembly pure of network, logging, and telemetry setup —
+injecting them keeps 'Env' assembly pure of network, logging, and telemetry setup --
 so it can be exercised in tests against in-memory handle doubles with no sockets
 opened, no scribe attached to stdout, and no exporter initialised. Backend
 selection happens in the handle smart constructors that produce the arguments;
@@ -170,7 +170,7 @@ newEnv registry queue manager privateManager metadataCache logEnv telemetry hear
             , envWorkerHeartbeat = heartbeat
             }
 
-{- | Build an 'Env', run an action against it, and tear it down — even on
+{- | Build an 'Env', run an action against it, and tear it down -- even on
 exception or asynchronous cancellation. The teardown is bracketed via @unliftio@,
 so the composition root's resources are released along every exit path; this is
 the scope within which the server and worker run.
@@ -195,7 +195,7 @@ withEnv registry queue manager privateManager metadataCache logEnv telemetry hea
     -- The connection pool behind the 'Manager' and the telemetry providers behind
     -- the 'Telemetry' handle are each owned and released by whoever provided them
     -- (the manager's caller; 'Ecluse.Telemetry.withTelemetry' for the providers),
-    -- and the handles hold no resource this root acquired — so the composition
+    -- and the handles hold no resource this root acquired -- so the composition
     -- root has nothing of its own to release.
     teardown :: (MonadUnliftIO m) => Env -> m ()
     teardown _ = pure ()
@@ -204,8 +204,8 @@ withEnv registry queue manager privateManager metadataCache logEnv telemetry hea
 path is closed over from the composition root: the two data-plane managers, the
 metadata cache and mirror queue, and the OpenTelemetry-backed metric and tracing ports
 ('Ecluse.Telemetry.Instruments.metricsPortOf', 'Ecluse.Telemetry.Tracing.tracingPortOf').
-Built at dispatch per request — it gathers existing handles and wraps the instrument and
-telemetry handles in their ports — so the core pipeline reads its backends through the
+Built at dispatch per request -- it gathers existing handles and wraps the instrument and
+telemetry handles in their ports -- so the core pipeline reads its backends through the
 core interface without depending on this application 'Env'.
 -}
 serveRuntimeOf :: Env -> ServeRuntime
@@ -224,9 +224,9 @@ is closed over from the composition root: the mirror queue, the publish-side reg
 client, the untrusted data-plane manager, the consume-loop heartbeat, and the
 OpenTelemetry-backed worker metric and tracing ports
 ('Ecluse.Telemetry.Instruments.workerMetricsPortOf',
-'Ecluse.Telemetry.Tracing.workerTracingPortOf'). Built at the worker entry point — it
+'Ecluse.Telemetry.Tracing.workerTracingPortOf'). Built at the worker entry point -- it
 gathers existing handles and wraps the instrument and telemetry handles in their worker
-ports — so the core loop reads its backends through the core interface without depending
+ports -- so the core loop reads its backends through the core interface without depending
 on this application 'Env' (the analogue of 'serveRuntimeOf' for the serve path).
 
 The per-ecosystem re-evaluation bundles are passed in rather than read from the 'Env': they

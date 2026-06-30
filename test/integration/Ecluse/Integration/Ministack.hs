@@ -2,13 +2,13 @@
 
 The mirror-queue and mirror-worker specs both exercise the real AWS SQS
 'Ecluse.Core.Queue.MirrorQueue' backend against a @ministack@ container (launched via
-@testcontainers@), pointed at the emulator with throwaway credentials — hermetic
+@testcontainers@), pointed at the emulator with throwaway credentials -- hermetic
 and gating, but requiring a Docker daemon and no real AWS. This module stands the
 bootstrapping up __once__ (the container, its ASCII-relabelled image, the
 endpoint-overridden @amazonka@ environment, and creating a fresh per-test queue) so
 both specs share it rather than each re-deriving it.
 
-This is test support, not a spec — it carries no @hspec@ 'Test.Hspec.Spec' of its
+This is test support, not a spec -- it carries no @hspec@ 'Test.Hspec.Spec' of its
 own and is named off the @Spec@ suffix so @hspec-discover@ does not collect it.
 -}
 module Ecluse.Integration.Ministack (
@@ -44,8 +44,6 @@ import System.Environment (setEnv)
 
 import Ecluse.Core.Queue (MirrorQueue (receive), QueueMessage, Seconds (Seconds))
 import Ecluse.Core.Queue.Sqs (SqsConfig (..), SqsEndpoint (..), defaultSqsConfig, newSqsQueue)
-
--- ── container lifecycle ───────────────────────────────────────────────────────
 
 -- | The SQS gateway port @ministack@ serves on.
 ministackPort :: TC.Port
@@ -83,8 +81,6 @@ ministackDockerfile =
     "FROM ministackorg/ministack@sha256:5164592def36af01b8ac76364028e27c5ecd8f1494c8a53d5fcd811cc7dfb594\n\
     \LABEL description=\"Local AWS Service Emulator\"\n"
 
--- ── endpoint ──────────────────────────────────────────────────────────────────
-
 {- | The SQS endpoint override pointing @amazonka@ at the running @ministack@
 container with throwaway credentials. ministack ignores credentials, so any
 non-empty pair signs successfully.
@@ -97,8 +93,6 @@ endpointFor container =
             , endpointHost = host
             , endpointPort = mappedPort
             }
-
--- ── per-test queue ────────────────────────────────────────────────────────────
 
 {- | The tunables a spec may want to vary per case: the visibility timeout (short,
 to observe redelivery within the test's patience) and the long-poll window (short,

@@ -1,21 +1,21 @@
-{- | The npm 'UpstreamFixture' — the first and (today) only concrete instance of the
+{- | The npm 'UpstreamFixture' -- the first and (today) only concrete instance of the
 ecosystem interface the Layer B load harness drives ("Ecluse.BenchLoad.Harness").
 
 It implements npm's traffic scenarios over stub upstreams and the real composed
 'Ecluse.Server.application':
 
-  1. __merge (cold)__ — a packument @GET@ that fans to both upstreams, merges, gates,
+  1. __merge (cold)__ -- a packument @GET@ that fans to both upstreams, merges, gates,
      rewrites, and re-serialises, with the public metadata cache disabled (a zero TTL).
      Every request pays the live private fetch, the merge, the rule sweep, and the
      re-serialise; the public leg's fetch and ~40 ms decode are __single-flight-amortised__
      under concurrency (see below), not paid per request;
-  2. __cached-public hit__ — the same @GET@ with the public origin served from the warm
+  2. __cached-public hit__ -- the same @GET@ with the public origin served from the warm
      metadata cache (no public fetch or decode), the cheap high-throughput path;
-  3. __cache-fits-large__ / __cache-evicts-large__ — a uniform working set of large
+  3. __cache-fits-large__ / __cache-evicts-large__ -- a uniform working set of large
      packuments served at a positive TTL, with the cache bound holding the whole set
      (fits, the baseline) versus held below it (evicts, continual eviction and
      re-derivation): the cache-eviction-under-large-datasets comparison;
-  4. __worker mirroring__ — the @fetch → verify → publish → ack@ loop, driven in-process
+  4. __worker mirroring__ -- the @fetch → verify → publish → ack@ loop, driven in-process
      (it has no HTTP surface) over a stub artifact upstream.
 
 == The serve mix: a real-world corpus, large-emphasis
@@ -23,11 +23,11 @@ It implements npm's traffic scenarios over stub upstreams and the real composed
 The packument scenarios serve the __curated real-world corpus__ of substantial,
 many-version packages, not one synthetic payload (trivial few-version packages stress
 nothing): the public upstream serves each package's real captured packument by the
-requested name (the full Layer A corpus, scoped packages included — 'requestedPackage'
+requested name (the full Layer A corpus, scoped packages included -- 'requestedPackage'
 recovers @\@scope\/name@ from the request path; captured under @bench\/corpus\/npm\/@; see
 "Ecluse.Bench.Corpus" and @docs\/architecture\/performance.md@). The @merge-cold@ and
 @cached-public-hit@ scenarios drive a __weighted mix__ ('serveMix') with the heavy
-many-version packuments as the __primary drivers__ — a deliberate stress emphasis, not a
+many-version packuments as the __primary drivers__ -- a deliberate stress emphasis, not a
 traffic-realism model. The two @cache-*-large@ scenarios drive a __uniform__ working set
 ('uniformMix') so a too-small bound thrashes. The private upstream serves a small disjoint
 overlay per package so every request still merges a genuine cross-upstream union. The
@@ -36,8 +36,8 @@ packument).
 
 Everything here is npm-specific setup and teardown: the corpus serve mix, the stub
 upstreams, the worker's artifact payload, and the proxy wiring (the npm classifier,
-renderer, and mount prefix). The harness structure — the @oha@ driver, the
-runtime-statistics capture, and the reporting — is reused unchanged; a second ecosystem
+renderer, and mount prefix). The harness structure -- the @oha@ driver, the
+runtime-statistics capture, and the reporting -- is reused unchanged; a second ecosystem
 (PyPI, RubyGems) is a second 'UpstreamFixture' beside this one, not a change to the
 harness.
 
@@ -56,7 +56,7 @@ The public leg resolves through the metadata cache's __single-flight__ path
 ('Ecluse.Core.Server.Cache.resolveMetadata'): even at a zero TTL, concurrent misses
 coalesce onto one in-flight fetch and share the leader's parsed packument, so followers
 skip both the fetch and the ~40 ms decode. At the default concurrency the public
-fetch+decode is therefore __amortised across followers__, not paid per request — which
+fetch+decode is therefore __amortised across followers__, not paid per request -- which
 narrows the contrast with the cached-public hit (both amortise the public fetch: one via
 the cache, one via single-flight). The cold merge's per-request cost is the live private
 leg, the merge, the rule sweep, and the re-serialise. This is real production behaviour;
@@ -69,7 +69,7 @@ cached-public hit is its faithful realisation of the issue's cheap, no-public-fe
 
 All upstreams are in-process @warp@ stubs on loopback; the proxy and the worker fetch
 them over plain (no-TLS, unguarded) managers with @127.0.0.1@ opted into the
-internal-range allowance, exactly as the integration suite does — so the harness opens no
+internal-range allowance, exactly as the integration suite does -- so the harness opens no
 external socket and needs no Docker.
 -}
 module Ecluse.BenchLoad.Npm (
@@ -150,8 +150,6 @@ import Ecluse.Test.Package (unsafeHash, validSha1, validSha512Sri)
 import Ecluse.Test.Port (noopWorkerMetricsPort, passthroughWorkerTracingPort)
 import Ecluse.Test.Worker (admitAllPolicies)
 
--- ── the fixture ──────────────────────────────────────────────────────────────────
-
 -- | The npm load-test fixture: the packument traffic scenarios plus the worker loop.
 npmFixture :: UpstreamFixture
 npmFixture =
@@ -166,13 +164,11 @@ npmFixture =
             ]
         }
 
--- ── packument scenarios ────────────────────────────────────────────────────────
-
 {- | The expensive headline path: a packument @GET@ that fans to both upstreams and
 merges, gated, rewritten, and re-serialised. The public metadata cache is disabled (a zero
 TTL). Each request pays the live private fetch, the merge, the rule sweep, and the
 re-serialise; the public leg's fetch and decode are single-flight-amortised under
-concurrency (concurrent misses coalesce onto one in-flight fetch), not paid per request —
+concurrency (concurrent misses coalesce onto one in-flight fetch), not paid per request --
 so this narrows the contrast with the cached-public hit rather than being a strict
 per-request worst case.
 -}
@@ -201,7 +197,7 @@ cacheHitScenario =
 
 {- | The cache-eviction baseline: a working set of several large packuments cycled
 __uniformly__ against a cache whose bound __holds the whole set__ (TTL > 0). After warm-up
-every entry stays resident, so the public leg is cache-served with no re-derivation — the
+every entry stays resident, so the public leg is cache-served with no re-derivation -- the
 @fits-in-cache@ half of the eviction comparison. Its residency (≈ the whole working set
 held at once) and its low alloc-per-request are the baseline the eviction scenario is read
 against.
@@ -220,10 +216,10 @@ cacheFitsScenario =
 {- | The cache-eviction stress: the __same__ uniform working set of large packuments
 (TTL > 0), but a cache bound __smaller than the working set__, so the cache cannot hold it
 all and continually evicts least-room entries and re-derives them on the next request. It
-isolates eviction cost — throughput and latency under churn, the alloc-per-request of
+isolates eviction cost -- throughput and latency under churn, the alloc-per-request of
 re-deriving (re-fetch + decode + project) each evicted large packument on its miss, and a
 peak residency bounded by @cacheMaxEntries@ large entries plus the transient re-derivation
-— against the @cache-fits-large@ baseline. The bound and working-set size are the
+-- against the @cache-fits-large@ baseline. The bound and working-set size are the
 @BENCH_LOAD_CACHE_MAX_ENTRIES@ and @BENCH_LOAD_WORKING_SET@ knobs.
 -}
 cacheEvictsScenario :: Scenario
@@ -243,9 +239,9 @@ cacheEvictsScenario =
 longCacheTtl :: NominalDiffTime
 longCacheTtl = 3600
 
-{- | Boot the two packument upstreams over the real-world corpus — a path-aware public
+{- | Boot the two packument upstreams over the real-world corpus -- a path-aware public
 upstream serving each package's real captured packument by the requested name, and a
-path-aware trusted-private upstream serving a small disjoint overlay per package — and
+path-aware trusted-private upstream serving a small disjoint overlay per package -- and
 the real composed proxy over them, with the given metadata-cache TTL and entry bound.
 Yields the serve mix the caller builds (a weighted distribution, or a uniform working set)
 to the body. All sockets are loopback @warp@ stubs torn down on exit.
@@ -282,7 +278,7 @@ serveMix :: Int -> [Text]
 serveMix proxyPort =
     concatMap (\cp -> replicate (cpWeight cp) (packageUrl proxyPort (cpName cp))) serveCorpus
 
--- A uniform mix over the working set: each package once, so oha cycles them evenly — the
+-- A uniform mix over the working set: each package once, so oha cycles them evenly -- the
 -- access pattern that thrashes a too-small cache (every package is reused, so an evicted
 -- one is requested again and re-derived).
 uniformMix :: [CorpusPackage] -> Int -> [Text]
@@ -336,12 +332,10 @@ npmMount deps =
 
 {- | A permissive rule set: every version old enough to clear a one-day quarantine is
 admitted, so the merge and rewrite run over the whole packument rather than
-short-circuiting to a denial — the full serve-path cost the scenario means to measure.
+short-circuiting to a denial -- the full serve-path cost the scenario means to measure.
 -}
 benchPolicy :: [PrecededRule]
 benchPolicy = [atDefaultPrecedence (AllowIfOlderThan nominalDay)]
-
--- ── worker mirroring scenario ──────────────────────────────────────────────────
 
 {- | The mirror worker's hot loop: @fetch → verify → publish → ack@, driven in-process
 against a stub artifact upstream for the configured duration. The artifact is fetched
@@ -383,7 +377,7 @@ workerScenario =
 
 {- | Run the worker loop for the configured duration, timing each job's
 fetch → verify → publish → ack, and return the per-job latencies in seconds. After the
-loop, every processed job must have published exactly once — a shortfall means the
+loop, every processed job must have published exactly once -- a shortfall means the
 fetch\/verify\/publish wiring broke, a literal harness failure rather than a result.
 -}
 runWorkerLoop :: LoadKnobs -> LogEnv -> WorkerRuntime -> MirrorQueue -> MirrorJob -> IORef Int -> IO [Double]
@@ -397,7 +391,7 @@ runWorkerLoop knobs logEnv runtime queue job counter = do
                 <> show published
                 <> " of "
                 <> show (length latencies)
-                <> " jobs published — a harness wiring failure (fetch/verify/publish broke)"
+                <> " jobs published -- a harness wiring failure (fetch/verify/publish broke)"
             )
     pure latencies
   where
@@ -460,9 +454,7 @@ sriOf bytes = "sha512-" <> decodeUtf8 (convertToBase Base64 (Crypto.hashlazy byt
 sha1HexOf :: LByteString -> Text
 sha1HexOf bytes = decodeUtf8 (convertToBase Base16 (Crypto.hashlazy bytes :: Crypto.Digest Crypto.SHA1) :: ByteString)
 
--- ── stub upstreams ──────────────────────────────────────────────────────────────
-
--- A stub upstream that injects the configured latency then serves a fixed body — used by
+-- A stub upstream that injects the configured latency then serves a fixed body -- used by
 -- the worker scenario's artifact upstream, which answers any path the same way.
 stubUpstream :: ByteString -> Int -> LByteString -> Application
 stubUpstream contentType latency body _request respond = do
@@ -498,13 +490,11 @@ privateOverlayStub latency request respond = do
 -- The package name a packument GET addresses: the request path segments rejoined with
 -- @/@. An unscoped fetch is @{base}/{pkg}@ (one segment); a scoped fetch is
 -- @{base}/@scope/name@, which the client may send as one percent-encoded segment or two
--- raw ones — rejoining recovers @\@scope\/name@ either way. Empty path -> Nothing.
+-- raw ones -- rejoining recovers @\@scope\/name@ either way. Empty path -> Nothing.
 requestedPackage :: Request -> Maybe Text
 requestedPackage request = case pathInfo request of
     [] -> Nothing
     segments -> Just (T.intercalate "/" segments)
-
--- ── the corpus serve mix ─────────────────────────────────────────────────────────
 
 {- | One package in the Layer B serve mix: the package name (both the request path and
 the body's self-reported name, scoped or not), the capture file read at boot, and the
@@ -517,7 +507,7 @@ data CorpusPackage = CorpusPackage
     }
 
 {- | The curated serve mix: the Layer A corpus of substantial, many-version packages
-(trivial few-version ones are excluded — they stress nothing), ordered __heaviest first__
+(trivial few-version ones are excluded -- they stress nothing), ordered __heaviest first__
 and weighted __large-emphasis__ so the heavy many-version packuments are the primary
 drivers of the merge/cache scenarios, not a trivial path. The leading entries are also
 the cache-eviction working set ('workingSet'). The pins and captures are shared with
@@ -579,8 +569,6 @@ overlayVersionObject name version =
                 ]
         ]
 
--- ── shared values ──────────────────────────────────────────────────────────────
-
 packageText :: Text
 packageText = "bench-pkg"
 
@@ -594,7 +582,7 @@ localhost port = "http://127.0.0.1:" <> show port
 benchNow :: UTCTime
 benchNow = UTCTime (fromGregorian 2026 6 1) 0
 
--- An ISO-8601 instant 400 days before 'benchNow' — comfortably past any short
+-- An ISO-8601 instant 400 days before 'benchNow' -- comfortably past any short
 -- quarantine, so every canned version is admitted.
 publishedLongAgo :: Text
 publishedLongAgo = toText (iso8601Show (addUTCTime (negate (400 * nominalDay)) benchNow))

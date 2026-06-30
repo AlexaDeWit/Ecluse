@@ -1,7 +1,7 @@
 {- | The PEP 440 grammar and ordering (PyPI).
 
-Parses a PEP 440 version into a 'Pep440Key' — the canonical ordering tuple
-@(epoch, release, pre, post, dev, local)@ — canonicalising non-normalised
+Parses a PEP 440 version into a 'Pep440Key' -- the canonical ordering tuple
+@(epoch, release, pre, post, dev, local)@ -- canonicalising non-normalised
 spellings (@1.0ALPHA1@, @1.0-1@, trailing zeros, …) along the way. Release has
 trailing zeros stripped (@1.0 == 1.0.0@), and the rank tuples encode PEP 440's
 None-handling so 'Ord' on 'Pep440Key' reproduces the spec ordering directly:
@@ -78,7 +78,7 @@ parsePep440 raw = do
     let (releaseText, suffix) = T.span (\c -> isDigit c || c == '.') afterEpoch
         -- 'releaseText' greedily grabs the dot that separates the release from a
         -- suffix ("1.0.dev1" → "1.0." → ["1","0",""]), so drop *one* trailing
-        -- empty segment — but only one, and reject any remaining empty segment so
+        -- empty segment -- but only one, and reject any remaining empty segment so
         -- interior/leading blanks ("1..0", ".1.0", "1.0..dev1") are not accepted.
         relSegs = dropTrailingEmpty (T.splitOn "." releaseText)
     guard (not (any T.null relSegs))

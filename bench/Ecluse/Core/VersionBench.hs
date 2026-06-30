@@ -36,7 +36,7 @@ benchmarks loaded =
 
 {- | The version read pipeline over a packument's raw version keys: parse every key
 into its ordering key, order the parsed versions by the semantic comparator, and
-resolve @latest@ — summed to a forced 'Int' so the whole pipeline is evaluated.
+resolve @latest@ -- summed to a forced 'Int' so the whole pipeline is evaluated.
 -}
 versionPipelineDepth :: [Text] -> Int
 versionPipelineDepth raws =

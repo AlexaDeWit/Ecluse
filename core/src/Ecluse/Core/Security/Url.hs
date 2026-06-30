@@ -1,6 +1,6 @@
 {- | Outbound-request guards for the proxy's data plane: defending how an upstream URL is derived.
 
-Écluse builds outbound HTTP requests from two untrusted sources — __client-supplied
+Écluse builds outbound HTTP requests from two untrusted sources -- __client-supplied
 package identifiers__ (the request path) and __upstream-supplied artifact
 locations__ (a packument's @dist.tarball@). This module provides the pure guard layer
 that enforces safe URL construction.
@@ -23,11 +23,9 @@ import Ecluse.Core.Package (PackageName, renderPackageName)
 import Ecluse.Core.Server.Route (encodeComponent, isSafeComponent)
 import Ecluse.Core.Text (joinUrlPath)
 
--- ── identifier → URL safety ──────────────────────────────────────────────────
-
 -- | Why building an upstream URL from an identifier was refused.
 data UrlError
-    = {- | A name component (scope or base name) is unsafe to interpolate — see
+    = {- | A name component (scope or base name) is unsafe to interpolate -- see
       'Ecluse.Core.Server.Route.isSafeComponent'. Carries the offending component.
       -}
       UnsafeComponent Text
@@ -41,18 +39,18 @@ __already-parsed__ 'PackageName'.
 This is the only sanctioned way to derive an upstream URL for a package: the
 target is @{baseUrl}\/{path}@, where @path@ is built from the package's structural
 components and @baseUrl@ is __configuration__, never a client-supplied path. The
-client never chooses the host or the path prefix — only which (validated) package
-— so @..\/@ traversal, an encoded slash, an absolute URL, or a CRLF in the original
+client never chooses the host or the path prefix -- only which (validated) package
+-- so @..\/@ traversal, an encoded slash, an absolute URL, or a CRLF in the original
 request cannot steer the fetch elsewhere (see the module header).
 
 The path is built with two complementary defences. First, although a 'PackageName'
 is normally produced by the router's already-safe parse, its smart constructor does
 no validation, so this __re-checks every structural component__ (scope and base
-name) with the router's own 'Ecluse.Core.Server.Route.isSafeComponent' — a name carrying
+name) with the router's own 'Ecluse.Core.Server.Route.isSafeComponent' -- a name carrying
 a @\'\/\'@, @\'\\\\\'@, control character, or a @"."@\/@".."@ component is refused
 with 'UnsafeComponent' rather than interpolated. Second, each accepted component is
 then __percent-encoded__ ('Ecluse.Core.Server.Route.encodeComponent') around the
-structural @\'\@\'@ sigil and @%2F@ scope separator this builder writes — so a
+structural @\'\@\'@ sigil and @%2F@ scope separator this builder writes -- so a
 @\'%\'@, @\'?\'@, @\'#\'@, or other reserved byte the denylist accepts (notably a
 once-decoded @%2e%2e%2f@) cannot reach the upstream URL raw. A scoped
 @\@scope\/name@ therefore yields exactly one @%2F@ (the separator written here, not

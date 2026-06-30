@@ -1,6 +1,6 @@
 {- | The small circuit-breaker state machine that guards an unreliable operation.
 
-A breaker fronts a call that can fail or hang — minting an outbound credential, or
+A breaker fronts a call that can fail or hang -- minting an outbound credential, or
 consulting an effectful rule source. While the call is healthy it stays out of the
 way; once failures pile up it __trips open__ and fast-fails further calls for a
 cooldown, sparing both the caller's latency and the failing dependency. After the
@@ -8,8 +8,8 @@ cooldown it admits a single __half-open probe__: if the probe succeeds the break
 resets, and if it fails the breaker re-opens for another cooldown.
 
 The machine is pure and clock-injected: every transition takes the caller's @now@,
-so it is deterministic under test with no real time passing. The two policy knobs —
-the trip /threshold/ and the /cooldown/ — are not held here; each caller passes its
+so it is deterministic under test with no real time passing. The two policy knobs --
+the trip /threshold/ and the /cooldown/ -- are not held here; each caller passes its
 own to 'recordFailure', so one breaker shape serves consumers that tune them
 differently. Concurrency and storage (an STM 'TVar', a record field) are the
 caller's concern too: these functions only fold one state into the next.
@@ -86,12 +86,10 @@ recordFailure threshold cooldown now = \case
   where
     tripped = Open (addUTCTime cooldown now)
 
--- ── observing transitions ─────────────────────────────────────────────────────
-
 {- | An observer of breaker state changes: invoked with the breaker's new state
 after a transition commits, so a layer that cares (a state gauge) can record it.
 
-Deliberately __telemetry-agnostic__ — it is just a @'Breaker' -> IO ()@ callback, so
+Deliberately __telemetry-agnostic__ -- it is just a @'Breaker' -> IO ()@ callback, so
 the breaker and its callers ("Ecluse.Core.Rules.Effectful", the credential refresher) stay
 free of any metric dependency; the composition root supplies the bridge to the
 instruments. 'noBreakerReporter' is the inert default: a breaker observed by it records
@@ -105,7 +103,7 @@ noBreakerReporter :: BreakerReporter
 noBreakerReporter = BreakerReporter (const pass)
 
 {- | Report a transition through the observer, but only when @old@ and @new@ differ in
-their __observable__ state — 'Closed' carries a failure tally that is not itself
+their __observable__ state -- 'Closed' carries a failure tally that is not itself
 observable, so a failure that merely advances the count within 'Closed' is not a state
 change and fires nothing. A genuine change (a trip, a recovery probe, a reset) fires the
 reporter with the new state.
@@ -115,7 +113,7 @@ reportBreakerChange (BreakerReporter report) old new
     | observable old == observable new = pass
     | otherwise = report new
   where
-    -- The coarse, observable state — the failure tally inside 'Closed' is elided, so
+    -- The coarse, observable state -- the failure tally inside 'Closed' is elided, so
     -- two 'Closed' states compare equal however many failures each has counted.
     observable :: Breaker -> Int
     observable = \case

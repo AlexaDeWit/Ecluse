@@ -1,7 +1,7 @@
 {- | Data types for the policy rules engine.
 
 The evaluation model lives in "Ecluse.Core.Rules"; this module holds only the
-dependency-light types it operates on — the closed built-in rule vocabulary config
+dependency-light types it operates on -- the closed built-in rule vocabulary config
 selects from, a rule's per-version result, and the overall decision.
 
 A 'Rule' is __evaluation-agnostic data__: it says /what/ a rule is, never /how/ it is
@@ -46,7 +46,7 @@ This is __data, not the engine's runtime representation__: a small, inspectable,
 @Eq@\/@Show@ enum so config can parse, patch (override a rule's parameters), and name
 each rule. "Ecluse.Core.Rules" turns it into the engine's runtime
 'Ecluse.Core.Rules.PreparedRule' (binding /how/ it is evaluated) for evaluation. It
-carries no allow\/deny "direction" — whether a rule admits or blocks is simply what
+carries no allow\/deny "direction" -- whether a rule admits or blocks is simply what
 its evaluation returns.
 
 It is also the __security boundary__ on what config can express: untrusted config only
@@ -63,8 +63,8 @@ data Rule
       publishes a malicious version and hopes it is consumed before takedown.
       -}
       AllowIfOlderThan NominalDiffTime
-    | {- | Deny any package version that runs code at install time — npm install
-      scripts, a RubyGems native-extension build, a PyPI sdist build backend — a
+    | {- | Deny any package version that runs code at install time -- npm install
+      scripts, a RubyGems native-extension build, a PyPI sdist build backend -- a
       common arbitrary-code-execution vector. Yields no decision otherwise.
       -}
       DenyInstallTimeExecution
@@ -74,7 +74,7 @@ data Rule
       DenyByIdentity Text
     deriving stock (Eq, Show)
 
-{- | A stable, human-facing name for a rule — its identity, derived from the data: the
+{- | A stable, human-facing name for a rule -- its identity, derived from the data: the
 boot-order tiebreak and the credited identity in logs and denial messages.
 -}
 ruleName :: Rule -> Text
@@ -87,12 +87,12 @@ ruleName = \case
 {- | A 'Rule' paired with the integer precedence at which it competes (higher
 wins). This is config's resolved-policy element; "Ecluse.Core.Rules" prepares it into
 the engine's runtime rule, whose boot-time ordering ('Ecluse.Core.Rules.bootOrder')
-turns precedence — and, at equal precedence, the rule name — into the single total
+turns precedence -- and, at equal precedence, the rule name -- into the single total
 order the engine walks.
 
 Precedence is a __field, not an @Ord@ instance__: equal precedence between two rules
 is legal (it is resolved by name in the boot order), so a total derived 'Ord' would
-be non-antisymmetric — unlawful and misleading. This mirrors
+be non-antisymmetric -- unlawful and misleading. This mirrors
 'Ecluse.Core.Version.Version', whose ordering likewise goes through a function rather
 than a derived instance.
 -}
@@ -104,7 +104,7 @@ data PrecededRule = PrecededRule
     }
     deriving stock (Eq, Show)
 
-{- | The default precedence for a rule /type/ — used when a policy omits an
+{- | The default precedence for a rule /type/ -- used when a policy omits an
 explicit precedence for a rule.
 
 __Every deny type defaults strictly above every allow type__, so "any deny
@@ -113,7 +113,7 @@ bands: the allow band (@AllowIfOlderThan@ <
 'defaultAllowScopePrecedence'), then the deny band
 ('defaultDenyInstallTimeExecutionPrecedence') strictly above both. An operator may
 still elevate a /specific/ allow above a /specific/ deny by giving it a higher
-explicit precedence — the per-type defaults set only the out-of-the-box ordering.
+explicit precedence -- the per-type defaults set only the out-of-the-box ordering.
 -}
 defaultPrecedence :: Rule -> Int
 defaultPrecedence = \case
@@ -132,9 +132,9 @@ quarantine that yields to an explicit allow-list and to every deny.
 defaultAllowIfOlderThanPrecedence :: Int
 defaultAllowIfOlderThanPrecedence = 100
 
-{- | Default precedence of 'AllowScope': above the passive age quarantine — an
+{- | Default precedence of 'AllowScope': above the passive age quarantine -- an
 explicit allow-list of a trusted internal scope is a stronger statement than the
-time gate — but still below every deny.
+time gate -- but still below every deny.
 -}
 defaultAllowScopePrecedence :: Int
 defaultAllowScopePrecedence = 200
@@ -175,7 +175,7 @@ data RuleResult
       Deny Reason
     | -- | This rule has no opinion; the reason is kept for the audit trail. A no-op.
       NoDecision Reason
-    | {- | The rule could not be computed — its IO failed, timed out, or its source
+    | {- | The rule could not be computed -- its IO failed, timed out, or its source
       circuit breaker is open. It carries its own __failure alignment__: a
       'FailDeny' rule is decisive (fail-closed, → 'Undecidable'), a 'FailNoDecision'
       rule is a no-op (fail-open). The 'Transience' records whether a retry can help;
@@ -213,15 +213,13 @@ data Decision
       -}
       BlockedByDefault [Reason]
     | {- | Undecidable: a 'FailDeny' rule that could not be computed __won__, so the
-      version could not be vetted. Fail-closed — it is not admitted (a packument
+      version could not be vetted. Fail-closed -- it is not admitted (a packument
       filters it out like a denial; a concrete artifact surfaces a @503@\/@500@ by the
       serve error model). The 'Transience' carries whether a retry can help; the
       'Reason' is the audit reason.
       -}
       Undecidable Transience Reason
     deriving stock (Eq, Show)
-
--- ── unavailability ────────────────────────────────────────────────────────────
 
 {- | Whether an unavailability is expected to resolve on its own.
 
@@ -233,7 +231,7 @@ outage, rate limit, timeout, or open breaker is transient; an internal or parse
 fault is not.
 -}
 data Transience
-    = {- | Transient — a retry may succeed (an advisory source briefly down, a
+    = {- | Transient -- a retry may succeed (an advisory source briefly down, a
       timeout, an open circuit breaker). The optional 'RetryAfter' is the delay to
       suggest to the client.
       -}

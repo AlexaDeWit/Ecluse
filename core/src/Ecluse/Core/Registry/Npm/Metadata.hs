@@ -5,14 +5,14 @@ packument and project it into the domain manifest, reporting every failure as a 
 npm satisfies both serve-path needs from the /same/ full-packument endpoint: the
 publish-age rules require the packument's @time@ map, which npm exposes only in the
 full form, so even the single-version need fetches the full bytes. This module owns the
-npm side of both serve-path operations — the fetch and the projection — while the cache,
+npm side of both serve-path operations -- the fetch and the projection -- while the cache,
 metrics, and single-version cache topology are wired around them by the serve layer
 ("Ecluse.Core.Server.Metadata"), which is where the cross-cutting caching policy belongs:
 
   * 'fetchNpmManifest' \/ 'projectNpmManifest' back the full-manifest operation. The
-    projection is the sequence the serve path has always applied to a fetched packument —
+    projection is the sequence the serve path has always applied to a fetched packument --
     decode, bound the nesting depth, project and validate the self-reported name, bound the
-    version count — re-expressed as a total 'Either' so the serve path maps each cause onto
+    version count -- re-expressed as a total 'Either' so the serve path maps each cause onto
     a response rather than catching a typed throw.
 
   * 'fetchNpmVersion' \/ 'projectNpmVersion' back the single-version operation. The full
@@ -22,7 +22,7 @@ metrics, and single-version cache topology are wired around them by the serve la
     a cold tarball gate no longer pays a whole-packument decode to consult one version. The
     selected version is projected through the /same/ per-version code the full path runs, so
     its 'Ecluse.Core.Package.PackageDetails' is identical to selecting it out of a full
-    projection — the optimization the stable boundary was always meant to admit.
+    projection -- the optimization the stable boundary was always meant to admit.
 -}
 module Ecluse.Core.Registry.Npm.Metadata (
     -- * npm full-manifest fetch
@@ -87,8 +87,8 @@ or the typed 'MetadataError' for why it could not.
 
 The body is read bounded against the config's response budget (so an oversized upstream
 is refused fail-closed before it is buffered whole); a breach surfaces as
-'MetadataBoundExceeded'. A genuine transport fault is left to throw — the serve path
-already brackets the unreachable-upstream case — so this 'Either' carries only the
+'MetadataBoundExceeded'. A genuine transport fault is left to throw -- the serve path
+already brackets the unreachable-upstream case -- so this 'Either' carries only the
 parse-and-policy outcomes the serve path renders distinctly.
 -}
 fetchNpmManifest :: NpmClientConfig -> PackageName -> IO (Either MetadataError (PackageInfo, Value))
@@ -103,9 +103,9 @@ fetchNpmManifest config name =
 {- | Project a fetched packument's bytes into @(manifest, raw document)@, applying the
 serve path's response bounds and name validation. Pure and total.
 
-The sequence — decode to a 'Value', bound its nesting depth, project the typed
+The sequence -- decode to a 'Value', bound its nesting depth, project the typed
 'PackageInfo' and validate its self-reported name against the request, then bound the
-version count — is the one the serve path has always run; the raw 'Value' returned is
+version count -- is the one the serve path has always run; the raw 'Value' returned is
 the nesting-checked document the serve path edits in place, so the typed view and the
 served bytes describe the same parse. Each refusal maps to the constructor the serve
 path renders: a decode failure or an absent\/undecodable name is 'MetadataUndecodable';
@@ -124,7 +124,7 @@ projectNpmManifest limits name body = do
     pure (boundedInfo, bounded)
 
 {- | Fetch a package's full packument and project __only the requested version__ into its
-'PackageDetails', or the typed 'MetadataError' for why it could not — the cheap counterpart
+'PackageDetails', or the typed 'MetadataError' for why it could not -- the cheap counterpart
 to 'fetchNpmManifest' for the single-version serve operation.
 
 npm carries the @time@ map only in the full document, so the __full bytes are still
@@ -147,21 +147,21 @@ typed 'MetadataError'), without decoding the other versions. Pure and total.
 
 The outcome is the same the whole-document path would reach for that one version, computed
 selectively: 'Ecluse.Core.Registry.Npm.SelectiveDecode.selectVersionFromPackument' walks the
-token stream — depth-bounding every value (the 'maxNestingDepth' ceiling
+token stream -- depth-bounding every value (the 'maxNestingDepth' ceiling
 'projectNpmManifest' applies through 'checkNestingDepth') and reporting malformed JSON as
-'MetadataUndecodable' — and materialises only the document @name@, the requested version's
+'MetadataUndecodable' -- and materialises only the document @name@, the requested version's
 object, and its @time@ entry. Those are then validated and projected exactly as
 'projectNpmManifest' would:
 
-  * the self-reported @name@ is validated against the request — an absent\/undecodable name
+  * the self-reported @name@ is validated against the request -- an absent\/undecodable name
     is 'MetadataUndecodable', a self-reported /different/ name is 'MetadataNameMismatch' (the
     anti-shadowing distinction);
-  * the @versions@ count is bounded against 'maxVersionCount' (the raw entry count — a
+  * the @versions@ count is bounded against 'maxVersionCount' (the raw entry count -- a
     fail-closed defence-in-depth backstop on this path, which evaluates only the one version
     regardless, so it never needs the projected count the full path bounds);
   * the requested version's object is projected through
-    'Ecluse.Core.Registry.Npm.Project.projectVersionEntry' — the same per-version projection
-    the full path runs — so a present version yields a 'PackageDetails' identical to
+    'Ecluse.Core.Registry.Npm.Project.projectVersionEntry' -- the same per-version projection
+    the full path runs -- so a present version yields a 'PackageDetails' identical to
     @'Data.Map.Strict.lookup'@-ing it out of a full 'projectNpmManifest', and an
     absent\/unprojectable version yields 'Nothing'.
 -}
@@ -169,7 +169,7 @@ projectNpmVersion :: Limits -> PackageName -> Version -> ByteString -> Either Me
 projectNpmVersion limits name version body = do
     selected <- first (selectiveError limits) (selectVersionFromPackument (maxNestingDepth limits) version body)
     -- The self-reported name is the validation authority (anti-shadowing), checked before
-    -- the version-count backstop — the same order 'projectNpmManifest' validates the name
+    -- the version-count backstop -- the same order 'projectNpmManifest' validates the name
     -- before bounding the count.
     reported <- validateName (svName selected)
     when (reported /= name) (Left (MetadataNameMismatch (renderPackageName reported)))

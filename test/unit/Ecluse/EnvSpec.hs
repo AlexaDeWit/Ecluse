@@ -144,7 +144,7 @@ spec = do
 
         it "wires the telemetry handle through (the off-by-default no-op)" $ do
             -- The default substrate is disabled, so the handle stored in the 'Env'
-            -- exposes no providers — telemetry is genuinely inert, not merely
+            -- exposes no providers -- telemetry is genuinely inert, not merely
             -- unsampled. A 'TracerProvider' has no 'Show', so each is checked
             -- through 'isNothing' rather than a printing matcher.
             env <- newTestEnv

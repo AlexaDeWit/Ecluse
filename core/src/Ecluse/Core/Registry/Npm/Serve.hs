@@ -30,7 +30,7 @@ npmRenderer :: MountRenderer
 npmRenderer =
     MountRenderer (\help message -> RenderedBody "application/json" (npmDenialBody help message))
 
-{- | Render an npm denial body — the @{"error": …}@ object whose @error@ string is
+{- | Render an npm denial body -- the @{"error": …}@ object whose @error@ string is
 the message with the operator help message, if any, appended. A blank or absent
 help message is omitted rather than appended as empty text.
 

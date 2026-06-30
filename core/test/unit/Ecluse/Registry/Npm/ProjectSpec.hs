@@ -57,7 +57,7 @@ import Ecluse.Core.Version (Version, mkVersion, renderVersion, unVersion)
 import Ecluse.Test.Package (unsafeHash)
 
 {- | Projection tests for the npm adapter. They assert the __domain__ values a
-fetched packument projects into — the second half of the boundary that
+fetched packument projects into -- the second half of the boundary that
 "Ecluse.Registry.Npm.WireSpec" tests the decode half of. The fixtures under
 @core\/test\/unit\/fixtures\/npm\/@ are the same captures the wire suite uses; a few
 edge cases (a full-form install-script derivation, a missing @time@ entry, a
@@ -81,8 +81,6 @@ spec = do
     gracefulDegradationSpec
     failureSpec
     totalitySpec
-
--- ── packument-level projection ───────────────────────────────────────────────
 
 packageInfoSpec :: Spec
 packageInfoSpec = describe "parsePackageInfo" $ do
@@ -111,8 +109,6 @@ packageInfoSpec = describe "parsePackageInfo" $ do
         info <- projectFixture (unscoped "core-js") "core-js.abbreviated.json"
         all (isNothing . pkgPublishedAt) (Map.elems (infoVersions info)) `shouldBe` True
 
--- ── name as a validation input (route name is the authority) ──────────────────
-
 nameValidationSpec :: Spec
 nameValidationSpec = describe "name validation against the requested name" $ do
     it "projects a document whose self-reported name matches the request" $ do
@@ -123,7 +119,7 @@ nameValidationSpec = describe "name validation against the requested name" $ do
 
     it "flags a document whose self-reported name disagrees with the request" $ do
         -- A present-but-different name is a NameMismatch carrying the upstream's
-        -- self-reported name (for the audit log) — never a rewrite to the route name.
+        -- self-reported name (for the audit log) -- never a rewrite to the route name.
         parsePackageInfoFromValue (unscoped "thing") (packumentValueNamed "other")
             `shouldBe` Right (NameMismatch "other")
 
@@ -142,8 +138,6 @@ nameValidationSpec = describe "name validation against the requested name" $ do
         case parsePackageInfoFromValue (unscoped "thing") (packumentValueNamed "thing") of
             Right (Projected info) -> infoName info `shouldBe` unscoped "thing"
             other -> fail ("expected a matching projection, got: " <> show other)
-
--- ── the signal-mapping table ─────────────────────────────────────────────────
 
 signalMappingSpec :: Spec
 signalMappingSpec = describe "signal mapping" $ do
@@ -247,8 +241,6 @@ signalMappingSpec = describe "signal mapping" $ do
             kindOf "peer-dep" `shouldBe` Just Peer
             kindOf "optional-dep" `shouldBe` Just Optional
 
--- ── integrity: BOTH digests survive ──────────────────────────────────────────
-
 integritySpec :: Spec
 integritySpec = describe "dist → Artifact integrity" $ do
     it "carries BOTH the SHA-1 shasum and the SRI integrity (is-odd)" $ do
@@ -302,7 +294,7 @@ integritySpec = describe "dist → Artifact integrity" $ do
 
     it "treats an empty-string shasum as no digest (a content-empty digest is absent)" $ do
         -- An empty `shasum` decodes to a present `Just ""`, but it ties the version to no
-        -- tamper-evident fingerprint. It must project to NO Hash — not a degenerate
+        -- tamper-evident fingerprint. It must project to NO Hash -- not a degenerate
         -- `Hash SHA1 ""` that would pass the list-emptiness admission gate.
         d <- projectVersionOf emptyShasumPackument (mkVersion Npm "1.0.0")
         artHashes (soleArtifact d) `shouldBe` []
@@ -318,8 +310,6 @@ integritySpec = describe "dist → Artifact integrity" $ do
         d <- projectVersionOf emptyBothPackument (mkVersion Npm "1.0.0")
         artHashes (soleArtifact d) `shouldBe` []
 
--- ── parseVersionDetails ──────────────────────────────────────────────────────
-
 versionDetailsSpec :: Spec
 versionDetailsSpec = describe "parseVersionDetails" $ do
     it "projects the requested version's details (is-odd@3.0.1)" $ do
@@ -332,8 +322,6 @@ versionDetailsSpec = describe "parseVersionDetails" $ do
         parseVersionDetails (RegistryResponse body) (mkVersion Npm "99.99.99")
             `shouldSatisfy` isLeft
 
--- ── parseVersionList ─────────────────────────────────────────────────────────
-
 versionListSpec :: Spec
 versionListSpec = describe "parseVersionList" $ do
     it "lists the packument's versions, preserving the raw strings (is-odd)" $ do
@@ -343,8 +331,6 @@ versionListSpec = describe "parseVersionList" $ do
     it "lists every key for a multi-version inline packument, in key order" $ do
         vs <- orFailParse (parseVersionList (RegistryResponse multiVersionPackument))
         map unVersion vs `shouldBe` ["1.0.0", "1.2.0", "2.0.0"]
-
--- ── version-level graceful degradation ───────────────────────────────────────
 
 {- | One version broken in a required\/security-decisive field must be __dropped__
 from the decision surface, never deny the whole package. A version that cannot be
@@ -367,7 +353,7 @@ versionLevelLeniencySpec = describe "version-level graceful degradation (one bro
 
     it "drops a bare-scalar version entry rather than failing the packument" $ do
         -- A version whose value is a scalar (not even an object) is dropped, not a
-        -- wholesale parse failure — the old policy this case used to assert.
+        -- wholesale parse failure -- the old policy this case used to assert.
         info <-
             orFailParse
                 ( parsePackageInfo
@@ -389,7 +375,7 @@ versionLevelLeniencySpec = describe "version-level graceful degradation (one bro
     it "keeps a version carrying junk advisory fields, degrading the field (production Value path)" $ do
         -- The complement to the drop cases: advisory junk degrades the field but the
         -- version SURVIVES. 2.0.0 carries an out-of-range unpackedSize and a signature
-        -- missing its keyid; 3.0.0 a non-array signatures. Both must remain — the
+        -- missing its keyid; 3.0.0 a non-array signatures. Both must remain -- the
         -- degraded unpackedSize projecting to no artifact size, the load-bearing
         -- tarball/integrity intact. Driven through parsePackageInfoFromValue, the very
         -- entry the serve path projects the decoded body with, so the field-level and
@@ -408,8 +394,6 @@ versionLevelLeniencySpec = describe "version-level graceful degradation (one bro
                     Nothing -> fail "the advisory-junk version 2.0.0 must survive"
                 Map.member "3.0.0" (infoVersions info) `shouldBe` True
             other -> fail ("expected a Projected packument, got: " <> show other)
-
--- ── graceful per-entry degradation with typed drop-tracking ──────────────────
 
 {- | A sound requested version next to a malformed sibling in each of the three
 per-entry-lenient axes (an undecodable sibling version manifest, a non-string
@@ -452,8 +436,6 @@ gracefulDegradationSpec = describe "graceful per-entry degradation with typed dr
         info <- orFailParse (parsePackageInfo (unscoped "bk") (RegistryResponse malformedBookkeepingTimePackument))
         filter ((== InvalidPublishTime) . invalidKind) (infoInvalidEntries info) `shouldBe` []
 
--- ── failure handling ─────────────────────────────────────────────────────────
-
 failureSpec :: Spec
 failureSpec = describe "malformed input" $ do
     it "reports a ParseError on a body that is not JSON" $
@@ -461,7 +443,7 @@ failureSpec = describe "malformed input" $ do
 
     it "reports a ParseError on an empty package name" $
         -- An absent/empty `name` cannot yield a PackageName, so it is a decode-level
-        -- ParseError — distinct from a present-but-different name (a mismatch).
+        -- ParseError -- distinct from a present-but-different name (a mismatch).
         parsePackageInfo (unscoped "thing") (RegistryResponse "{\"name\":\"\"}") `shouldSatisfy` isLeft
 
     it "reports a ParseError on a JSON value that is not a packument object" $
@@ -471,15 +453,13 @@ failureSpec = describe "malformed input" $ do
     it "reports a ParseError when versions itself is not an object" $
         -- The top-level `versions` must be an object to enumerate versions at all; a
         -- scalar there leaves the document unusable, so it fails wholesale (distinct
-        -- from a single malformed version ENTRY, which is dropped — see the
+        -- from a single malformed version ENTRY, which is dropped -- see the
         -- version-level graceful degradation block).
         parsePackageInfo (unscoped "x") (RegistryResponse "{\"name\":\"x\",\"versions\":5}")
             `shouldSatisfy` isLeft
 
     it "fails parseVersionList on a non-JSON body too" $
         parseVersionList (RegistryResponse "nope") `shouldSatisfy` isLeft
-
--- ── projection totality (the fuzz target) ────────────────────────────────────
 
 {- | The projection eats __untrusted__ upstream JSON (it decodes the response
 body internally with 'eitherDecodeStrict' and then walks the wire shape into the
@@ -522,7 +502,7 @@ totalitySpec = describe "projection totality (arbitrary input never bottoms)" $ 
             let resp = RegistryResponse (encodeToBody v)
                 -- Validate against the body's own self-reported name so a
                 -- packument-shaped body reaches the success arm (name matches),
-                -- while arbitrary JSON still rejects — both arms stay sampled.
+                -- while arbitrary JSON still rejects -- both arms stay sampled.
                 decoded = parsePackageInfo (routeNameOf v) resp
             annotateShow v
             _ <- H.eval (showResult decoded)
@@ -531,8 +511,6 @@ totalitySpec = describe "projection totality (arbitrary input never bottoms)" $ 
             -- arbitrary half), so the totality checks above are not all-failures.
             H.cover 5 "projects (Right)" (isRight decoded)
             H.cover 5 "rejects (Left)" (isLeft decoded)
-
--- ── totality helpers ─────────────────────────────────────────────────────────
 
 {- | Assert a projection entry is __total__ over an arbitrary 'Value' body: encode
 a 'genBody' value (which mixes fully-arbitrary JSON with packument-shaped objects,
@@ -592,7 +570,7 @@ genValue =
 packument-__shaped__ objects ('genPackumentish'), so a property driving a
 projection reaches __both__ arms: arbitrary JSON almost always rejects (a 'Left'),
 while a packument-shaped object usually projects (a 'Right'). The wire decoders
-are lenient, so even the shaped half carries arbitrary values in its fields — it
+are lenient, so even the shaped half carries arbitrary values in its fields -- it
 is a /shape/ bias, not a valid-document oracle, which keeps the fuzzing honest.
 -}
 genBody :: H.Gen Value
@@ -617,7 +595,7 @@ genPackumentish = do
             <> extra
 
 {- | A version-object-shaped 'Value': @name@\/@version@ strings and a @dist@ with a
-@tarball@ URL string, plus a few arbitrary keys — enough that the wire manifest
+@tarball@ URL string, plus a few arbitrary keys -- enough that the wire manifest
 decodes and the artifact projection has a tarball to read.
 -}
 genVersionish :: H.Gen Value
@@ -671,8 +649,6 @@ genKey = Key.fromText <$> Gen.choice [Gen.element packumentKeys, genJsonText]
         , "latest"
         ]
 
--- ── inline packument fixtures ────────────────────────────────────────────────
-
 {- | A full-form packument whose single version declares a @postinstall@ script
 and __no__ @hasInstallScript@ key, so install-script presence must be derived.
 -}
@@ -701,7 +677,7 @@ noInstallScriptPackument =
     \\"hasInstallScript\":false,\"dist\":{\"tarball\":\"https://r/noscript/-/noscript-1.0.0.tgz\"}}}}"
 
 {- | A full-form packument whose single version sets @hasInstallScript:false@ but
-declares a real @postinstall@ script — the hostile mismatch a compromised upstream
+declares a real @postinstall@ script -- the hostile mismatch a compromised upstream
 could use to try to mask install-time code execution behind the flag. The two wire
 fields are independent, so the projection must fail closed and honour the script.
 -}
@@ -806,7 +782,7 @@ malformedBookkeepingTimePackument =
 {- | A packument whose 1.0.0 is healthy, 2.0.0 carries an out-of-range
 @unpackedSize@ (@1e400@) and a signature missing its @keyid@, and 3.0.0 carries a
 non-array @signatures@. Every version must __survive__ the production decode with
-its advisory fields degraded — the complement to a required-field-broken version
+its advisory fields degraded -- the complement to a required-field-broken version
 being dropped. 2.0.0's @integrity@ is a well-formed SRI so the load-bearing digest
 projects intact alongside the degraded size.
 -}
@@ -827,8 +803,6 @@ multiVersionPackument =
     \\"1.2.0\":{\"name\":\"multi\",\"version\":\"1.2.0\",\"dist\":{\"tarball\":\"https://r/b.tgz\"}},\
     \\"2.0.0\":{\"name\":\"multi\",\"version\":\"2.0.0\",\"dist\":{\"tarball\":\"https://r/c.tgz\"}}}}"
 
--- ── helpers ──────────────────────────────────────────────────────────────────
-
 -- | The canonical key of a 'PackageName' (verbatim for npm).
 renderName :: PackageName -> Text
 renderName = TS.toText . pkgCanonical
@@ -847,8 +821,8 @@ runsCode = \case
     _ -> False
 
 {- | Decode a JSON literal into a 'Value', failing the example on an undecodable
-literal. Used to drive 'parsePackageInfoFromValue' — the entry the serve path
-projects an already-decoded body with — directly from an inline packument.
+literal. Used to drive 'parsePackageInfoFromValue' -- the entry the serve path
+projects an already-decoded body with -- directly from an inline packument.
 -}
 decodeValue :: ByteString -> IO Value
 decodeValue bs = either (\e -> fail ("decode failure: " <> e)) pure (eitherDecodeStrict bs)
@@ -916,7 +890,7 @@ projectVersionOf body version =
     orFailParse (parseVersionDetails (RegistryResponse body) version)
 
 {- | Unwrap a projection result, failing the example with the 'ParseError'
-message rather than crashing — keeping the suite total (no partial @error@).
+message rather than crashing -- keeping the suite total (no partial @error@).
 -}
 orFailParse :: Either ParseError a -> IO a
 orFailParse = either expectationFailureWith pure

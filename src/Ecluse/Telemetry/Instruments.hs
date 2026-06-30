@@ -1,10 +1,10 @@
 {- | The runtime metric instruments and the typed emit helpers the hot path records
-through — the IO layer over the pure @ecluse.*@ catalogue ("Ecluse.Core.Telemetry.Metrics").
+through -- the IO layer over the pure @ecluse.*@ catalogue ("Ecluse.Core.Telemetry.Metrics").
 
 "Ecluse.Core.Telemetry.Metrics" defines /what/ the catalogue is (the names and the closed
 set of bounded labels); this module turns that catalogue into live OpenTelemetry
 instruments and exposes one typed @record*@ per signal. Each helper takes only the
-bounded label values its metric carries — never a free identifier — so the
+bounded label values its metric carries -- never a free identifier -- so the
 bounded-label discipline is enforced at the call site by the type, and the attribute
 set an instrument ever sees is drawn from a small fixed product of the label domains.
 
@@ -13,11 +13,11 @@ set an instrument ever sees is drawn from a small fixed product of the label dom
 'newMetrics' builds the instruments from the 'Telemetry' handle's meter provider when
 telemetry is enabled, and from the SDK's __no-op meter provider__ when it is not. A
 no-op instrument discards every measurement, so the @record*@ helpers are called
-__unconditionally__ on the hot path and are genuinely inert when telemetry is off — no
+__unconditionally__ on the hot path and are genuinely inert when telemetry is off -- no
 per-call branch, no provider fabricated at the edge. The 'Metrics' handle is therefore
 total: every signal has a real instrument whichever posture the proxy is in. The no-op
 recording function ignores its arguments, so the 'metricAttributes' a call passes is
-never forced — no attribute set is materialised when telemetry is off, only a thunk that
+never forced -- no attribute set is materialised when telemetry is off, only a thunk that
 is discarded.
 
 The catalogue and the cardinality rule are described in
@@ -98,8 +98,6 @@ import Ecluse.Core.Telemetry.Metrics (
  )
 import Ecluse.Core.Telemetry.Record (MetricsPort (..), WorkerMetricsPort (..), timedSeconds)
 import Ecluse.Telemetry (Telemetry, telemetryMeterProvider)
-
--- ── the instrument handle ─────────────────────────────────────────────────────
 
 {- | The live metric instruments, one per @ecluse.*@ signal, created against a single
 meter. Opaque: built with 'newMetrics' and recorded through the @record*@ helpers.
@@ -182,12 +180,10 @@ newMetrics telemetry = do
 ecluseScope :: (IsString s) => s
 ecluseScope = "ecluse"
 
--- ── the core recording port ──────────────────────────────────────────────────
-
 {- | Project the OpenTelemetry-backed instruments onto the core 'MetricsPort' the
 serve path ("Ecluse.Core.Server.Pipeline") records through. Each field is the matching
 @record*@ helper partially applied to the instrument handle, so the port is exactly
-this module's recording behaviour behind the core interface — inert when telemetry is
+this module's recording behaviour behind the core interface -- inert when telemetry is
 off, since the instruments are. ('timedSeconds' is re-exported from the port module, so
 the data-plane timing util has one home beside the durations it feeds.)
 -}
@@ -211,7 +207,7 @@ metricsPortOf m =
 {- | Project the OpenTelemetry-backed instruments onto the core 'WorkerMetricsPort' the
 mirror worker ("Ecluse.Core.Worker") records through. Each field is the matching
 @record*@ helper partially applied to the instrument handle, so the port is exactly this
-module's recording behaviour behind the core interface — inert when telemetry is off,
+module's recording behaviour behind the core interface -- inert when telemetry is off,
 since the instruments are.
 -}
 workerMetricsPortOf :: Metrics -> WorkerMetricsPort
@@ -221,18 +217,14 @@ workerMetricsPortOf m =
         , wmpMirrorPublishDuration = recordMirrorPublishDuration m
         }
 
--- ── serve decision ───────────────────────────────────────────────────────────
-
 -- | Record one serve decision (@ecluse.serve.decision@): admit, deny, or unavailable.
 recordServeDecision :: (MonadIO m) => Metrics -> Decision -> m ()
 recordServeDecision m decision =
     addOne (mServeDecision m) [LDecision decision]
 
--- ── rule gate ─────────────────────────────────────────────────────────────────
-
 {- | Record one rule denial (@ecluse.rule.denials@) by reason class and, for a policy
 denial, the deciding rule. A non-policy refusal (a missing-integrity or upstream cause)
-carries the reason class alone — no rule attributed it, so none is labelled.
+carries the reason class alone -- no rule attributed it, so none is labelled.
 -}
 recordRuleDenial :: (MonadIO m) => Metrics -> Maybe Text -> ReasonClass -> m ()
 recordRuleDenial m rule reasonClass =
@@ -255,8 +247,6 @@ recordBreakerState :: (MonadIO m) => Metrics -> BreakerSource -> BreakerState ->
 recordBreakerState m source breakerState =
     set (mRuleBreakerState m) (breakerStateCode breakerState) [LBreakerSource source]
 
--- ── upstream fetch (data plane) ───────────────────────────────────────────────
-
 {- | Record an upstream metadata-fetch latency sample (@ecluse.upstream.fetch.duration@)
 by which upstream was fetched and the response's status class.
 -}
@@ -270,8 +260,6 @@ which upstream and the bounded cause.
 recordUpstreamFetchError :: (MonadIO m) => Metrics -> Upstream -> Cause -> m ()
 recordUpstreamFetchError m upstream cause =
     addOne (mUpstreamFetchErrors m) [LUpstream upstream, LCause cause]
-
--- ── metadata cache ────────────────────────────────────────────────────────────
 
 -- | Record one metadata-cache lookup (@ecluse.metadata_cache.requests@) as a hit or miss.
 recordCacheRequest :: (MonadIO m) => Metrics -> CacheResult -> m ()
@@ -297,8 +285,6 @@ recordVersionCacheResidentBytes :: (MonadIO m) => Metrics -> Int -> m ()
 recordVersionCacheResidentBytes m bytes =
     set (mSingleVersionCacheResidentBytes m) (fromIntegral bytes) []
 
--- ── mirror ─────────────────────────────────────────────────────────────────────
-
 -- | Record one mirror job enqueued (@ecluse.mirror.enqueued@).
 recordMirrorEnqueued :: (MonadIO m) => Metrics -> m ()
 recordMirrorEnqueued m = addOne (mMirrorEnqueued m) []
@@ -317,8 +303,6 @@ recordMirrorPublishDuration :: (MonadIO m) => Metrics -> Double -> m ()
 recordMirrorPublishDuration m seconds =
     record (mMirrorPublishDuration m) seconds []
 
--- ── credentials ────────────────────────────────────────────────────────────────
-
 -- | Record one credential refresh (@ecluse.credential.refresh@) by result and provider.
 recordCredentialRefresh :: (MonadIO m) => Metrics -> Provider -> CredentialResult -> m ()
 recordCredentialRefresh m provider result =
@@ -331,8 +315,6 @@ gauge decays towards zero.
 recordCredentialTokenTtl :: (MonadIO m) => Metrics -> Provider -> Int -> m ()
 recordCredentialTokenTtl m provider seconds =
     set (mCredentialTokenTtlSeconds m) (fromIntegral seconds) [LProvider provider]
-
--- ── recording primitives ─────────────────────────────────────────────────────
 
 -- Add one to a counter under the given bounded labels.
 addOne :: (MonadIO m) => Counter Int64 -> [Label] -> m ()

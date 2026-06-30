@@ -11,6 +11,7 @@ import Test.Hspec.Hedgehog (hedgehog)
 
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Package
+import Ecluse.Test.Package (sampleDetails)
 
 import Ecluse.Core.Rules
 import Ecluse.Core.Rules.Types
@@ -23,39 +24,18 @@ now = UTCTime (fromGregorian 2026 6 20) 0
 ctx :: EvalContext
 ctx = EvalContext now
 
--- | A single inert artifact; the rules under test do not inspect artifacts.
-sampleArtifact :: Artifact
-sampleArtifact =
-    Artifact
-        { artFilename = "thing-1.0.0.tgz"
-        , artUrl = "https://example.test/thing-1.0.0.tgz"
-        , artKind = Tarball
-        , artHashes = []
-        , artSize = Nothing
-        , artInterpreter = Nothing
-        , artYanked = False
-        , artProvenance = Nothing
-        }
-
 {- | A package version under an optional npm scope, published @ageDays@ days
 before 'now'. Other fields are fixed; the rules under test read only the scope,
 the publish age, and the install-code signal.
 -}
 pkg :: Maybe Text -> Integer -> PackageDetails
 pkg mScope ageDays =
-    PackageDetails
-        { pkgName = mkPackageName Npm (mkScope <$> mScope) "thing"
-        , pkgVersion = mkVersion Npm "1.0.0"
-        , pkgPublishedAt = Just (addUTCTime (negate (fromInteger ageDays * nominalDay)) now)
-        , pkgInstallCode = NoCodeOnInstall
-        , pkgTrust = Untrusted
-        , pkgAvailability = Available
-        , pkgArtifacts = sampleArtifact :| []
-        , pkgLicenses = ["MIT"]
-        , pkgPublisher = Nothing
-        , pkgMaintainers = []
-        , pkgDependencies = []
-        }
+    let name = mkPackageName Npm (mkScope <$> mScope) "thing"
+        version = mkVersion Npm "1.0.0"
+     in (sampleDetails name version)
+            { pkgPublishedAt = Just (addUTCTime (negate (fromInteger ageDays * nominalDay)) now)
+            , pkgLicenses = ["MIT"]
+            }
 
 isAllow :: RuleResult -> Bool
 isAllow (Allow _) = True
@@ -118,7 +98,7 @@ genFiringRule scopeTxt =
 {- | Canonicalise a decision for order-independence comparison: the audit-reason
 list of a 'BlockedByDefault' is sorted, since reasons are gathered in boot order and
 a permutation of the configured set only reorders the non-decisive ones at equal
-precedence. 'Admitted' \/ 'Blocked' are left as-is — a permutation cannot change the
+precedence. 'Admitted' \/ 'Blocked' are left as-is -- a permutation cannot change the
 credited rule, since the boot order resolves every equal-precedence tie by name.
 -}
 canonical :: Decision -> Decision
@@ -236,7 +216,7 @@ spec = do
             decide (reverse rs) p >>= \d -> blockedBy d `shouldBe` Just "DenyInstallTimeExecution"
         it "resolves an equal-precedence allow-vs-deny tie by name, not by deny-priority" $ do
             -- The deliberate change from the two-tier design: at *equal explicit*
-            -- precedence there is no deny-over-allow runtime rule — the boot order
+            -- precedence there is no deny-over-allow runtime rule -- the boot order
             -- resolves the tie by name. "AllowScope" sorts before
             -- "DenyInstallTimeExecution", so the allow is credited even though the
             -- version also trips the deny. (Deny-over-allow still holds out of the
@@ -299,7 +279,7 @@ spec = do
             hedgehog $ do
                 -- A non-matching scope and a too-young age make both allows
                 -- yield no decision; the package runs no install scripts so the deny
-                -- does too — so whatever the precedences, nothing fires.
+                -- does too -- so whatever the precedences, nothing fires.
                 scopeTxt <- forAll genScope
                 otherTxt <- forAll (Gen.filter (/= scopeTxt) genScope)
                 precs <- forAll (Gen.list (Range.singleton 3) genPrecedence)
@@ -336,8 +316,8 @@ spec = do
 
         it "the decision is invariant under shuffling the rule list" $
             hedgehog $ do
-                -- Precedences may collide, so equal-precedence ties — including an
-                -- allow-vs-allow tie where two firing allows share a precedence —
+                -- Precedences may collide, so equal-precedence ties -- including an
+                -- allow-vs-allow tie where two firing allows share a precedence --
                 -- are exercised. The boot order resolves every tie by name, so the
                 -- credited winner (and the whole 'Decision') is order-independent;
                 -- only the gathered reason order tracks the input list within a tie,

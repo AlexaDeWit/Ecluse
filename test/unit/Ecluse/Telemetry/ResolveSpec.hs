@@ -37,8 +37,6 @@ spec = do
     prepareSpec
     throttleSpec
 
--- ── the precedence resolver ──────────────────────────────────────────────────
-
 resolveSpec :: Spec
 resolveSpec = describe "resolveTelemetry" $ do
     it "prefers DD_SERVICE over OTEL_SERVICE_NAME and the resource attribute" $
@@ -101,8 +99,6 @@ resolveSpec = describe "resolveTelemetry" $ do
         hostAddress (teUrl (rtEndpoint (resolveTelemetry [("DD_AGENT_HOST", "2606:4700:4700::1111")])))
             `shouldBe` "2606:4700:4700::1111"
 
--- ── the canonical OTEL_* projection ──────────────────────────────────────────
-
 overridesSpec :: Spec
 overridesSpec = describe "otelEnvironmentOverrides" $ do
     it "projects the resolved identity to the canonical OTEL_* the SDK reads" $ do
@@ -134,8 +130,6 @@ overridesSpec = describe "otelEnvironmentOverrides" $ do
                 ]
             )
             `shouldBe` Just "service.name=api,team=core"
-
--- ── the boot normalisation ───────────────────────────────────────────────────
 
 prepareSpec :: Spec
 prepareSpec = describe "prepareTelemetry" $ do
@@ -170,8 +164,6 @@ prepareSpec = describe "prepareTelemetry" $ do
         , "OTEL_EXPORTER_OTLP_PROTOCOL"
         , "OTEL_RESOURCE_ATTRIBUTES"
         ]
-
--- ── the export-failure throttle ──────────────────────────────────────────────
 
 throttleSpec :: Spec
 throttleSpec = describe "throttleStep" $ do

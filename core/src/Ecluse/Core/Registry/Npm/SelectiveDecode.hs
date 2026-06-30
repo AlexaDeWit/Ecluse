@@ -2,22 +2,22 @@
 the document bytes without materialising the other versions.
 
 The whole-packument decode (@aeson@'s @eitherDecodeStrict@) builds a 'Value' for /every/
-version — and on a heavy packument (thousands of versions, multiple megabytes) that
+version -- and on a heavy packument (thousands of versions, multiple megabytes) that
 decode dominates the serve-path cost. But the tarball gate consults a __single__
 version: it needs that version's manifest object, its @time[version]@ publish stamp, and
-the document's self-reported @name@ — nothing of the other versions. This module walks
+the document's self-reported @name@ -- nothing of the other versions. This module walks
 the registry's own JSON token stream (@aeson@'s @Data.Aeson.Decoding@, no new
 dependency) and materialises a 'Value' only for those few pieces, __skipping every other
 version's tokens without allocating them__. The win is on the /parse/, not the fetch:
 the full bytes are still read (npm carries @time@ only in the full document), but they
-are parsed selectively — O(1 version) work and residency rather than O(N).
+are parsed selectively -- O(1 version) work and residency rather than O(N).
 
 == Faithful to the whole-document decode
 
 The skip is not a shortcut past validation. The walk consumes the __entire__ token
 stream, so:
 
-  * malformed JSON __anywhere__ surfaces as 'SelectiveUndecodable' — the lexer reaches
+  * malformed JSON __anywhere__ surfaces as 'SelectiveUndecodable' -- the lexer reaches
     the offending bytes whether or not they sit in the requested version (matching
     @eitherDecodeStrict@ failing the whole body);
   * trailing non-whitespace after the top-level object is rejected likewise (the same
@@ -26,7 +26,7 @@ stream, so:
     'Ecluse.Core.Security.checkNestingDepth' would apply to it, so a deeply-nested
     sub-tree __anywhere__ is a 'SelectiveTooDeeplyNested' breach, not a serve.
 
-The two pieces it /does/ build — the requested version object and the document @name@ —
+The two pieces it /does/ build -- the requested version object and the document @name@ --
 are produced by the same @aeson@ 'Value' decoder the whole-document path uses, so
 projecting them yields a byte-for-byte identical 'Ecluse.Core.Package.PackageDetails'
 (the projection is "Ecluse.Core.Registry.Npm.Project.projectVersionEntry", run over the
@@ -89,7 +89,7 @@ data SelectedVersion = SelectedVersion
     }
     deriving stock (Eq, Show)
 
-{- | Why a selective decode could not yield a 'SelectedVersion' — the two refusal causes
+{- | Why a selective decode could not yield a 'SelectedVersion' -- the two refusal causes
 the whole-document decode would also raise, so the caller maps them onto the same
 'Ecluse.Core.Registry.Metadata.MetadataError' the full path does.
 -}
@@ -108,12 +108,12 @@ the depth bound matches 'Ecluse.Core.Security.checkNestingDepth' over the whole
 document).
 
 The body must be a well-formed JSON object with nothing but whitespace after it, or the
-result is 'SelectiveUndecodable' — exactly as @eitherDecodeStrict@ would fail it.
+result is 'SelectiveUndecodable' -- exactly as @eitherDecodeStrict@ would fail it.
 -}
 selectVersionFromPackument :: Int -> Version -> ByteString -> Either SelectiveError SelectedVersion
 selectVersionFromPackument maxDepth version body
     -- The top-level value is itself a container occupying one level, so a zero (or
-    -- negative) budget refuses it before the walk — mirroring @within cap@ requiring
+    -- negative) budget refuses it before the walk -- mirroring @within cap@ requiring
     -- @cap >= 1@ for the document object.
     | maxDepth < 1 = Left SelectiveTooDeeplyNested
     | otherwise = case bsToTokens body of
@@ -189,8 +189,8 @@ withRecord budget toks k
 
 {- Consume one value's tokens without allocating a 'Value', returning the continuation.
 Bounds nesting at @budget@ levels exactly as 'Ecluse.Core.Security.withinNestingBudget'
-does over a built 'Value' — a value occupies one level (refused at @budget < 1@) and a
-container's children are bounded one level deeper — so skipping reproduces the depth check
+does over a built 'Value' -- a value occupies one level (refused at @budget < 1@) and a
+container's children are bounded one level deeper -- so skipping reproduces the depth check
 the whole-document path runs. Malformed tokens are 'SelectiveUndecodable'. -}
 skipValue :: Int -> Tokens k String -> Either SelectiveError k
 skipValue budget toks
@@ -217,7 +217,7 @@ skipRecord budget = \case
     TkRecordEnd cont -> Right cont
     TkRecordErr _ -> Left SelectiveUndecodable
 
-{- Whether the bytes after the top-level value are JSON whitespace only — the
+{- Whether the bytes after the top-level value are JSON whitespace only -- the
 end-of-input check @eitherDecodeStrict@ applies, so a body with trailing non-whitespace is
 refused identically (space, tab, newline, carriage return are the four JSON whitespace
 bytes). -}

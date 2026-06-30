@@ -25,7 +25,7 @@ import Ecluse.Core.Server.Stream (probeUpstreamWhen, pumpBody, streamUpstream, s
 {- | A chunk source over a fixed list of chunks: each pull returns the next chunk
 and an empty 'ByteString' once exhausted (the @http-client@ @BodyReader@
 contract). It records the high-water mark of chunks produced-but-not-yet-consumed
-— the residency the backpressure assertion turns on.
+-- the residency the backpressure assertion turns on.
 -}
 data Source = Source
     { srcNext :: IO ByteString
@@ -59,12 +59,12 @@ builtBytes = toStrict . toLazyByteString
 
 spec :: Spec
 spec = do
-    describe "pumpBody — constant memory and backpressure" $ do
+    describe "pumpBody -- constant memory and backpressure" $ do
         it "holds at most one chunk in flight regardless of body size (constant memory)" $ do
             -- A 256-chunk body through a synchronous rendezvous: each 'write' blocks
             -- until the consumer has taken the chunk AND acked, so the handoff is
             -- fully complete before the pump loops back to read the next chunk. The
-            -- producer therefore can never run ahead — the outstanding high-water
+            -- producer therefore can never run ahead -- the outstanding high-water
             -- mark is exactly 1 no matter how large the body. Were the pump to
             -- buffer the whole body, the high-water would track the 256-chunk count;
             -- staying at 1 is the constant-memory property, and the rendezvous block
@@ -101,7 +101,7 @@ spec = do
             pumpBody (srcNext src) (const (modifyIORef' out (+ 1))) (pure ())
             readIORef out `shouldReturn` 0
 
-    describe "streamUpstream — end to end over an in-process upstream" $
+    describe "streamUpstream -- end to end over an in-process upstream" $
         it "relays a large body through with the upstream status" $ do
             -- A 4 MiB body streamed from an in-process Warp upstream, through the
             -- proxy's streamUpstream, and pulled back by a real client. It must
@@ -115,7 +115,7 @@ spec = do
                     resp <- httpLbs req manager
                     toStrict (responseBody resp) `shouldBe` bigBody
 
-    describe "streamUpstreamWhen — conditional relay (hit / miss / open-failure)" $ do
+    describe "streamUpstreamWhen -- conditional relay (hit / miss / open-failure)" $ do
         it "relays the body AND the upstream content headers when the status passes accept" $ do
             -- On a passing status the body streams through and the relay forwards the
             -- upstream's content headers (the client verifies dist.integrity over the
@@ -132,7 +132,7 @@ spec = do
 
         it "returns a clean miss (the fall-through marker) when the status fails accept" $ do
             -- A 404 fails the success predicate: no response is committed, so the
-            -- proxy falls through and answers its own marker — proving the helper
+            -- proxy falls through and answers its own marker -- proving the helper
             -- reported the recoverable miss rather than relaying the upstream body.
             manager <- newManager defaultManagerSettings
             testWithApplication (pure missingUpstream) $ \upPort ->
@@ -157,7 +157,7 @@ spec = do
         it "relays an upstream 304 as a bodiless 304, forwarding its validator (the pass-through conditional relay)" $ do
             -- A 304 passes the artifact relay's accept predicate (a 2xx OR a 304), and
             -- is relayed straight back as a BODILESS 304 with the upstream's validator
-            -- (ETag) forwarded — never pumped as a streamed body. This is the cheap
+            -- (ETag) forwarded -- never pumped as a streamed body. This is the cheap
             -- conditional-GET freshness check: the client gets a 304, not the artifact.
             manager <- newManager defaultManagerSettings
             testWithApplication (pure notModifiedUpstream) $ \upPort ->
@@ -169,10 +169,10 @@ spec = do
                     (snd <$> find ((== hETag) . fst) (HTTP.responseHeaders resp))
                         `shouldBe` Just "\"v1\""
 
-    describe "probeUpstreamWhen — bodiless relay (HEAD, no pump)" $ do
+    describe "probeUpstreamWhen -- bodiless relay (HEAD, no pump)" $ do
         it "relays the upstream status and content headers with no body on a hit" $ do
             -- A HEAD probe through the helper: the client gets the upstream's status
-            -- and content headers (here a Content-Type) but an EMPTY body — the body is
+            -- and content headers (here a Content-Type) but an EMPTY body -- the body is
             -- never pumped (the amplification a HEAD must never trigger).
             manager <- newManager defaultManagerSettings
             testWithApplication (pure headLengthUpstream) $ \upPort ->
@@ -221,11 +221,11 @@ spec = do
     headeredUpstream _req respond =
         respond (responseLBS status200 [(hContentType, "application/octet-stream")] "the-bytes")
 
-    -- An upstream that always 404s — the conditional relay's recoverable miss.
+    -- An upstream that always 404s -- the conditional relay's recoverable miss.
     missingUpstream :: Application
     missingUpstream _req respond = respond (responseLBS status404 [] "not found")
 
-    -- An upstream that answers a bodiless 304 with a validator (an ETag) — the
+    -- An upstream that answers a bodiless 304 with a validator (an ETag) -- the
     -- not-modified case of the pass-through conditional relay.
     notModifiedUpstream :: Application
     notModifiedUpstream _req respond =

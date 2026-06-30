@@ -6,7 +6,7 @@ the closed serve-route enumeration and the configured mounts.
 The manifest is a __capability statement__, not a client-integration contract:
 registry clients (npm, pnpm, yarn) hardcode the registry protocol and never read
 an API description. So this document exists to say, for a human, /which registry
-protocols this one server speaks and exactly what is — and is not — supported/,
+protocols this one server speaks and exactly what is -- and is not -- supported/,
 per ecosystem. It is __statically generated__ from a fixed canonical source and
 published as static content; it is __not served__, and there is no route or WAI
 wiring for it.
@@ -16,12 +16,12 @@ not Servant, so there is no route table to reflect): the operations are folded
 from the closed 'Route' sum over the configured mounts, and the owned response
 bodies carry code-first schemas. Three kinds of surface are distinguished:
 
-* __Owned / synthesized__ bodies — the error\/denial envelope ('ErrorEnvelope')
-  and the merged-and-filtered packument ('synthesizedPackumentSchema') — are
+* __Owned / synthesized__ bodies -- the error\/denial envelope ('ErrorEnvelope')
+  and the merged-and-filtered packument ('synthesizedPackumentSchema') -- are
   modelled in full, because Écluse authors them.
-* __Opaque pass-through__ — artifact bytes — are described as a streamed media
+* __Opaque pass-through__ -- artifact bytes -- are described as a streamed media
   type and link out rather than reproducing the upstream protocol.
-* __Unsupported__ — @search@ and any unrecognised path — are first-class
+* __Unsupported__ -- @search@ and any unrecognised path -- are first-class
   documented boundaries (a @501@ and the deny-by-default @404@), so a reader
   learns the limit from the manifest, not from an error reply.
 
@@ -30,7 +30,7 @@ bodies carry code-first schemas. Three kinds of surface are distinguished:
 The rendered bytes must be __byte-stable__ across runs and machines, so the
 published artifact yields a meaningful line-level diff on every contract change.
 'renderManifest' pins object-key ordering (sorted) and 'buildOpenApi' is a pure
-function of an explicit 'ManifestSource' — generate from 'canonicalManifestSource'
+function of an explicit 'ManifestSource' -- generate from 'canonicalManifestSource'
 (fixed mounts and base URL), never a live or environment-derived configuration,
 or the output would churn on per-deployment values.
 
@@ -38,14 +38,14 @@ or the output would churn on per-deployment values.
 
 The owned error envelope is a code-first type: one @autodocodec@ codec backs both
 its @aeson@ instances and its OpenAPI schema, so the /documented/ schema is derived
-rather than hand-maintained. The codec backs the documented schema only — the
+rather than hand-maintained. The codec backs the documented schema only -- the
 denial body the server renders is shaped separately in
 "Ecluse.Core.Registry.Npm.Serve", and the two are expected to agree on the
 @{"error": …}@ shape (a behavioural correspondence, not one this codec enforces).
 The synthesized packument is a further exception: it is an /open/ schema (unlisted
 fields relayed unchanged from upstream), which has no clean codec representation, so
 it carries a hand-written partial schema. npm's /inbound/ wire decoding stays
-lenient hand-rolled @aeson@ ("Ecluse.Core.Registry.Npm.Wire") — @autodocodec@ is for
+lenient hand-rolled @aeson@ ("Ecluse.Core.Registry.Npm.Wire") -- @autodocodec@ is for
 what Écluse owns and emits, not for tolerantly parsing someone else's loose document.
 -}
 module Ecluse.Manifest (
@@ -109,14 +109,12 @@ import Ecluse.Core.Package (PackageName, mkPackageName)
 import Ecluse.Core.Server.Route (Filename (Filename), Route (Packument, Ping, Publish, Search, Tarball, Unsupported))
 import Ecluse.Core.Version (Version, mkVersion)
 
--- ── inputs ───────────────────────────────────────────────────────────────────
-
 {- | The explicit inputs the manifest is a pure function of: the server's
 externally-reachable base URL (the @servers@ entry artifact URLs resolve against)
 and the mounted ecosystems (the manifest's tags and per-mount path grammars).
 
-It is deliberately a narrow value — the base URL and the set of mounts, not the
-proxy's credentials, upstreams, or policy — so the assembly stays a total,
+It is deliberately a narrow value -- the base URL and the set of mounts, not the
+proxy's credentials, upstreams, or policy -- so the assembly stays a total,
 deterministic function of something trivial to fix for the generator.
 -}
 data ManifestSource = ManifestSource
@@ -138,8 +136,6 @@ canonicalManifestSource =
         { manifestBaseUrl = "https://registry.ecluse.example"
         , manifestEcosystems = Npm :| []
         }
-
--- ── assembly ─────────────────────────────────────────────────────────────────
 
 {- | Assemble the OpenAPI 3 document. A __pure__ function of the source: the
 operations are folded from the closed 'Route' enumeration over each mount, the
@@ -171,7 +167,7 @@ manifestInfo =
         , _infoDescription =
             Just
                 "Which registry protocols this Écluse server speaks, and exactly what is and is not \
-                \supported, per ecosystem. A capability manifest for operators and contributors — \
+                \supported, per ecosystem. A capability manifest for operators and contributors -- \
                 \not a client-integration contract: registry clients hardcode the protocol and never \
                 \read this document. Generated statically from the closed serve-route enumeration; \
                 \it is not served."
@@ -187,8 +183,6 @@ ownedSchemas =
 -- | The tag for an ecosystem (the manifest groups operations by mount).
 ecosystemTag :: Ecosystem -> Tag
 ecosystemTag eco = Tag (ecosystemName eco) (Just (ecosystemName eco <> " registry protocol coverage")) Nothing
-
--- ── the Route × mount fold ───────────────────────────────────────────────────
 
 {- | One entry in the fold: the path-template key and a 'PathItem' carrying just
 this route's operation (and any path parameters). Entries that share a path key
@@ -220,7 +214,7 @@ ecosystemRoutes = \case
     PyPI -> []
     RubyGems -> []
 
-{- | One representative value per 'Route' constructor — the iteration the fold
+{- | One representative value per 'Route' constructor -- the iteration the fold
 runs over. The constructor payloads are inert (the manifest documents path
 /templates/, not concrete coordinates); 'npmRouteEntry' reads the constructor, not
 the payload.
@@ -267,8 +261,6 @@ npmRouteEntry = \case
 npmPath :: Text -> FilePath
 npmPath suffix = toString ("/" <> T.intercalate "/" (toList (prefixFor Npm)) <> suffix)
 
--- ── path parameters ──────────────────────────────────────────────────────────
-
 packageParam :: Param
 packageParam = pathParam "package" "The package name, URL-encoded; a scoped name is `@scope%2Fname`."
 
@@ -287,8 +279,6 @@ pathParam name description =
         , _paramDescription = Just description
         , _paramSchema = Just (Inline (stringSchema Nothing))
         }
-
--- ── operations ───────────────────────────────────────────────────────────────
 
 packumentOperation :: Operation
 packumentOperation =
@@ -357,12 +347,10 @@ unsupportedOperation :: Operation
 unsupportedOperation =
     operation
         "Deny by default (unsupported path)"
-        "Any request under this mount matched by none of the routes above is denied with `404` — \
+        "Any request under this mount matched by none of the routes above is denied with `404` -- \
         \deny by default at the routing layer."
         Nothing
         [(404, errorResponse "Unrecognised path; deny by default.")]
-
--- ── operation / response / body builders ─────────────────────────────────────
 
 operation :: Text -> Text -> Maybe (Referenced RequestBody) -> [(HttpStatusCode, Response)] -> Operation
 operation summary description requestBody statuses =
@@ -411,8 +399,6 @@ errorRef = Ref (Reference errorEnvelopeSchemaName)
 synthRef :: Referenced Schema
 synthRef = Ref (Reference synthesizedPackumentSchemaName)
 
--- ── owned error envelope (autodocodec) ───────────────────────────────────────
-
 {- | The owned model of the client-facing error\/denial body: a single @error@
 string carrying the human-facing reason. One @autodocodec@ codec backs both this
 type's @aeson@ instances and its OpenAPI schema, so the /documented/ schema is
@@ -442,8 +428,6 @@ instance HasCodec ErrorEnvelope where
 errorEnvelopeSchemaName :: Text
 errorEnvelopeSchemaName = "ErrorEnvelope"
 
--- ── synthesized packument (hand-written partial schema) ──────────────────────
-
 {- | A type-level handle for the synthesized packument's hand-written schema. It
 has no values: the served packument is built by the npm serve path, not decoded
 into a single Haskell type, so this exists only to carry 'synthesizedPackumentSchema'
@@ -459,14 +443,14 @@ synthesizedPackumentSchemaName :: Text
 synthesizedPackumentSchemaName = "SynthesizedPackument"
 
 {- | The hand-written __partial__ schema of the served (merged-and-filtered)
-packument — the documented __trust boundary__.
+packument -- the documented __trust boundary__.
 
 This is the highest-scrutiny piece of the manifest. It models only the fields
 Écluse reads and transforms (@versions@, @dist-tags@, @time@, and each version's
 @dist@), and carries @additionalProperties: true@ everywhere: every unlisted field
 is __relayed unchanged from the contributing upstream, and the private upstream
 wins on a collision__. It is therefore a precise statement of what the gate
-touches — and what it does not — but a valid instance is __not__ a proof that the
+touches -- and what it does not -- but a valid instance is __not__ a proof that the
 filtered document is internally coherent (that every @dist-tags@ target is a
 surviving @versions@ key); that cross-field coherence is not schema-expressible.
 
@@ -542,8 +526,6 @@ synthesizedPackumentSchema =
             }
     dateTimeSchema = (mempty :: Schema){_schemaType = Just OpenApiString, _schemaFormat = Just "date-time"}
 
--- ── shared schema fragments ──────────────────────────────────────────────────
-
 stringSchema :: Maybe Text -> Schema
 stringSchema description = (mempty :: Schema){_schemaType = Just OpenApiString, _schemaDescription = description}
 
@@ -570,8 +552,6 @@ publishDocumentSchema =
         , _schemaAdditionalProperties = Just (AdditionalPropertiesAllowed True)
         , _schemaDescription = Just "The npm publish document, relayed to the publication target (its full shape is npm's, not re-specified here)."
         }
-
--- ── rendering ────────────────────────────────────────────────────────────────
 
 {- | Render the document to __byte-stable__ JSON: object keys are sorted, so the
 output is independent of insertion order and reproducible across runs and

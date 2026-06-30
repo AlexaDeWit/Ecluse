@@ -128,7 +128,7 @@ capturingReporters = do
 
 {- | A mint that runs the next scripted action on each call (the head is consumed by
 the eager construction mint), so a test drives a deterministic sequence of mint
-outcomes — successes and failures — past the provider.
+outcomes -- successes and failures -- past the provider.
 -}
 scriptedMint :: IORef [IO AuthToken] -> IO AuthToken
 scriptedMint ref = join (atomicModifyIORef' ref next)
@@ -234,7 +234,7 @@ spec = do
             -- Regression for the parent-side gap the mid-flight test above does not
             -- cover: the flag is claimed in the serve transaction but released only
             -- once the mint runner has installed its handler. An async exception in
-            -- that handoff — before the runner takes ownership — must still release
+            -- that handoff -- before the runner takes ownership -- must still release
             -- the flag, or every later expired caller wedges on the STM retry.
             --
             -- The window is otherwise a smooth, interruptible point in pure
@@ -447,7 +447,7 @@ spec = do
 
         it "fails loudly when built from defaults without wiring the mint and clock" $ do
             -- defaultRefreshConfig leaves rcMint/rcClock unconfigured so a provider
-            -- assembled without them fails at construction, not silently — whether
+            -- assembled without them fails at construction, not silently -- whether
             -- it is the clock or the mint leaf that is left unwired.
             refreshingProvider defaultRefreshConfig `shouldThrow` anyException
             (clock, _setClock) <- newClock t0
@@ -650,8 +650,6 @@ spec = do
         it "agrees with a pure cache/clock/breaker model under random operation sequences" $
             hedgehog refreshModelProperty
 
--- ── model-based state-machine property for refreshingProvider ────────────────
-
 {- | Policy constants the model and the provider-under-test share. Mirrors the
 'testConfig' knobs used by the example tests above (refresh at 80% of lifetime,
 zero jitter, a 30-second floor, breaker threshold 3, 30-second cooldown) so the
@@ -717,7 +715,7 @@ mRefreshNeeded now m = case rmRefreshDue m of
     Nothing -> False
     Just due -> now >= due
 
-{- | The refresh instant for a freshly minted token, with zero jitter — the exact
+{- | The refresh instant for a freshly minted token, with zero jitter -- the exact
 arithmetic of 'Ecluse.Core.Credential.Refresh's @refreshDueAt@ for the shared knobs.
 -}
 mRefreshDueAt :: UTCTime -> AuthToken -> Maybe UTCTime
@@ -762,7 +760,7 @@ mOnFailure now = \case
 {- | The model's outcome of a 'RequestToken' at the current clock: the token (or
 'Nothing' for a thrown error) the caller should observe, and the model after the
 call has fully settled (background refresh included). This is the heart of the
-oracle — it folds the same decisions 'serve' makes, but purely.
+oracle -- it folds the same decisions 'serve' makes, but purely.
 -}
 data RequestOutcome
     = ServedToken AuthToken
@@ -822,12 +820,10 @@ stepRequest m
 mintName :: Int -> Text
 mintName n = "tok-" <> show n
 
--- ── the test harness wiring the model knobs to a real provider ───────────────
-
 {- | The mutable wiring a model run drives: a settable clock, a fail flag, a
 running mint count, the index of the next token to hand out, and a live gauge of
-mints in flight together with the high-water mark (so a single-flight violation —
-two mints overlapping — is caught directly).
+mints in flight together with the high-water mark (so a single-flight violation --
+two mints overlapping -- is caught directly).
 -}
 data RefreshHarness = RefreshHarness
     { hClock :: IORef UTCTime
@@ -850,7 +846,7 @@ newHarness start =
 
 {- | Build a provider whose clock and mint are wired to the harness. The mint
 records its concurrency (to catch single-flight violations), counts itself, and
-either fails (when the fail flag is set) or hands out the next distinct token —
+either fails (when the fail flag is set) or hands out the next distinct token --
 matching the model's 'mintInto' arithmetic.
 -}
 harnessProvider :: RefreshHarness -> IO CredentialProvider
@@ -881,8 +877,6 @@ harnessProvider h =
                 leave
                 pure (tokenLiving (mintName idx) now 1000)
 
--- ── command inputs (Hedgehog barbie functors; none carry symbolic variables) ──
-
 data RequestInput (v :: Type -> Type) = RequestInput
     deriving stock (Show)
 
@@ -910,8 +904,6 @@ instance FunctorB SetFailInput where
 instance TraversableB SetFailInput where
     btraverse _ (SetFailInput b) = pure (SetFailInput b)
 
--- ── commands ─────────────────────────────────────────────────────────────────
-
 {- | 'AdvanceClock dt': move the injected clock forward by @dt@ seconds. The clock
 only ever advances (time does not run backwards), so the generated deltas are
 non-negative. No mint can be triggered by advancing alone.
@@ -937,7 +929,7 @@ setFailCommand h =
 
 {- | 'RequestToken': call 'currentToken'. After it returns we settle any
 background refresh (waiting for the predicted mint count), so the 'Ensure'
-oracle can assert deterministically that the served token — or the thrown error —
+oracle can assert deterministically that the served token -- or the thrown error --
 exactly matches the model, the served secret is never fabricated, a served token
 is always valid at the current clock, and single-flight was never violated.
 -}

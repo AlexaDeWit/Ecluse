@@ -66,7 +66,7 @@ import Ecluse.Telemetry.Tracing (
 {- | Tests for the request-lifecycle tracing layer. They prove the three promises
 this slice carries that can be proven at the pure\/offline tier: the verdict
 attribute mapping is exact (so a denial is explainable from the trace), a domain-span
-bracket is genuinely inert when telemetry is disabled, and — the load-bearing one —
+bracket is genuinely inert when telemetry is disabled, and -- the load-bearing one --
 the forwarded client token and the @Authorization@ header are scrubbed from anything
 the http-client and WAI instrumentation capture.
 
@@ -89,8 +89,6 @@ spec = do
 -- the captured spans for it.
 secretToken :: Text
 secretToken = "s3cr3t-bearer-tok3n-do-not-leak"
-
--- ── verdict attribute mapping ──────────────────────────────────────────────────
 
 verdictMappingSpec :: Spec
 verdictMappingSpec = describe "ruleVerdictFields" $ do
@@ -133,8 +131,6 @@ verdictMappingSpec = describe "ruleVerdictFields" $ do
                        , ("ecluse.rule.message", "upstream returned a different package")
                        ]
 
--- ── gating (inert when disabled) ───────────────────────────────────────────────
-
 gatingSpec :: Spec
 gatingSpec = describe "withRuleEvalSpan (telemetry disabled)" $
     it "runs the body and returns its result, opening no span" $ do
@@ -144,8 +140,6 @@ gatingSpec = describe "withRuleEvalSpan (telemetry disabled)" $
             withRuleEvalSpan telemetryDisabled (mkPackageName Npm Nothing "left-pad") (mkVersion Npm "1.0.0") $
                 pure (42 :: Int, Admit)
         result `shouldBe` 42
-
--- ── secret scrubbing ───────────────────────────────────────────────────────────
 
 scrubSpec :: Spec
 scrubSpec = describe "secret scrubbing" $ do
@@ -199,7 +193,7 @@ withBearer req =
             ]
         }
 
--- The captured spans rendered to text — every span's name and full attribute set —
+-- The captured spans rendered to text -- every span's name and full attribute set --
 -- so a substring search proves the secret is present nowhere on any span.
 attributeDump :: IORef [ImmutableSpan] -> IO Text
 attributeDump ref = do
@@ -209,9 +203,7 @@ attributeDump ref = do
         pure (hotName hot <> " " <> show (hotAttributes hot))
     pure (T.intercalate "\n" parts)
 
--- ── cross-async span link ───────────────────────────────────────────────────────
-
--- The package/version coordinates the domain spans carry — fixed, since these tests
+-- The package/version coordinates the domain spans carry -- fixed, since these tests
 -- assert on the trace structure (links, status), not the coordinate attributes.
 samplePackage :: PackageName
 samplePackage = mkPackageName Npm Nothing "left-pad"
@@ -221,7 +213,7 @@ sampleVersion = mkVersion Npm "1.3.0"
 
 {- The true cross-async span link: capture the originating request's (enqueue) span
 context exactly as the serve path does, hand it to the worker's per-job span exactly as
-the worker does, and assert — through the in-memory exporter — that the @ecluse.mirror.job@
+the worker does, and assert -- through the in-memory exporter -- that the @ecluse.mirror.job@
 span carries a span __link__ whose trace id is the @ecluse.mirror.enqueue@ span's. This is
 the deterministic proof that the worker job is linked to the request that enqueued it,
 not merely correlated by package\/version. -}
@@ -251,7 +243,7 @@ crossAsyncLinkSpec = describe "cross-async span link (enqueue → worker job)" $
         tracerProvider <- createTracerProvider [processor] emptyTracerProviderOptions
         let telemetry = TelemetryEnabled (TelemetryProviders tracerProvider noopMeterProvider)
         -- A job enqueued with no context (tracing was off at enqueue) yields an unlinked
-        -- worker span — still emitted, just not linked.
+        -- worker span -- still emitted, just not linked.
         withMirrorJobSpan telemetry samplePackage sampleVersion Nothing (const (JobSpanOutcome "succeeded" Nothing)) pass
         _ <- forceFlushTracerProvider tracerProvider Nothing
         jobSpan <- findSpan ref "ecluse.mirror.job"
@@ -270,8 +262,6 @@ crossAsyncLinkSpec = describe "cross-async span link (enqueue → worker job)" $
         jobSpan <- findSpan ref "ecluse.mirror.job"
         jobHot <- readIORef (spanHot jobSpan)
         toList (appendOnlyBoundedCollectionValues (hotLinks jobHot)) `shouldSatisfy` null
-
--- ── span status on a swallowed enqueue failure ──────────────────────────────────
 
 {- The producer span must explain a swallowed best-effort enqueue failure: when the
 enqueue-result projection reports a failure detail, the @ecluse.mirror.enqueue@ span's
@@ -301,8 +291,6 @@ enqueueStatusSpec = describe "enqueue span status on a swallowed failure" $ do
         hot <- readIORef (spanHot enqueueSpan)
         hotStatus hot `shouldBe` Unset
 
--- ── W3C traceparent injection on outbound data-plane requests ────────────────────
-
 {- The data-plane instrumentation must inject a W3C @traceparent@ on each outbound
 request, so a downstream service continues the trace. Drive a request through the very
 instrumented manager the proxy installs (under the global W3C propagator the SDK installs
@@ -329,7 +317,7 @@ traceparentInjectionSpec = describe "W3C traceparent injection on the data plane
         find ((== "traceparent") . fst) received `shouldSatisfy` isJust
 
 -- A WAI application that records the headers of the request it received, then answers
--- @200@ — the downstream stub the traceparent-injection assertion inspects.
+-- @200@ -- the downstream stub the traceparent-injection assertion inspects.
 captureHeadersApp :: IORef [(HeaderName, ByteString)] -> Application
 captureHeadersApp ref req respond = do
     writeIORef ref (Wai.requestHeaders req)

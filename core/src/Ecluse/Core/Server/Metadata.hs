@@ -16,7 +16,7 @@ __hybrid__ path so a cold tarball gate need not pay a whole-packument decode to 
 one version (see 'newMetadataClient'): it consults a small @(package, version)@ cache, then
 the warm full-packument cache __read-only__ (so a packument @GET@ followed by its tarball
 gate still collapses to one upstream call), and only on a cold miss leads its own
-__selective__ fetch — parsing just the requested version out of the full bytes — into the
+__selective__ fetch -- parsing just the requested version out of the full bytes -- into the
 @(package, version)@ cache, never writing the whole packument back to the shared cache.
 -}
 module Ecluse.Core.Server.Metadata (
@@ -61,32 +61,32 @@ per-client authority and must not be shared, while the public origin is anonymou
 shared across every client.
 -}
 data ManifestCaching
-    = {- | Resolve directly, uncached — the per-client private origin, re-fetched every
+    = {- | Resolve directly, uncached -- the per-client private origin, re-fetched every
       request so the upstream re-authorises each client's own forwarded credential.
       -}
       Uncached
-    | {- | Resolve through the shared metadata cache under the origin's 'Source' key —
+    | {- | Resolve through the shared metadata cache under the origin's 'Source' key --
       the anonymous public origin, so concurrent and subsequent reads collapse to one
       upstream call. Both operations of the resulting handle share this one entry.
       -}
       Cached MetadataCache Source
 
-{- | Build a per-request read handle from a registry's raw fetch primitives — one that
+{- | Build a per-request read handle from a registry's raw fetch primitives -- one that
 fetches and projects the __full manifest__, one that fetches and __selectively__ projects a
-__single version__ — wiring them with the caching policy, the upstream-fetch metrics, and a
+__single version__ -- wiring them with the caching policy, the upstream-fetch metrics, and a
 request-context failure log.
 
 The full-manifest op resolves the whole packument through the shared full-packument cache.
 The single-version op takes the __hybrid__ path that delivers the cheap cold tarball gate
 while preserving the warm install one-call property:
 
-  1. consult the small @(package, version)@ cache — a hit (a positive snapshot, or a cached
+  1. consult the small @(package, version)@ cache -- a hit (a positive snapshot, or a cached
      /determined absence/) returns at once;
-  2. else consult the warm full-packument cache __read-only__ — a hit selects the one version
+  2. else consult the warm full-packument cache __read-only__ -- a hit selects the one version
      from the shared entry (so a packument @GET@ followed by its tarball gate is still one
      upstream call), and __does not__ populate the version cache;
-  3. else (cold) lead the raw __single-version__ fetch — which fetches the full bytes but
-     parses only the requested version — through the @(package, version)@ cache's
+  3. else (cold) lead the raw __single-version__ fetch -- which fetches the full bytes but
+     parses only the requested version -- through the @(package, version)@ cache's
      single-flight, caching the resulting snapshot (or its determined absence) there, and
      __never__ writing the whole packument back to the shared cache.
 
@@ -145,7 +145,7 @@ newMetadataClient metrics upstream caching logFailure logInvalid rawFetch rawFet
                 Left err -> logFailure name err >> throwIO (ManifestFetchFailed err)
 
     -- The single-version hybrid: the small version cache, then the warm full cache
-    -- read-only, then a cold selective fetch — or, uncached, the raw selective fetch.
+    -- read-only, then a cold selective fetch -- or, uncached, the raw selective fetch.
     resolveVersionHybrid :: PackageName -> Version -> IO (Either MetadataError (Maybe PackageDetails))
     resolveVersionHybrid name version = case caching of
         Uncached -> runVersion (versionLeader name version)
@@ -206,7 +206,7 @@ newNpmMetadataClient metrics upstream caching logFailure logInvalid config =
 
 {- The in-band failure carrier for a full-manifest leader fetch: a 'MetadataError' raised
 so the shared metadata cache caches nothing on failure and re-raises it to coalesced
-followers, then converted back to a 'Left' at the resolve boundary. Internal — the
+followers, then converted back to a 'Left' at the resolve boundary. Internal -- the
 serve path only ever sees the returned 'Either' (or a genuine transport throw). -}
 newtype ManifestFetchFailed = ManifestFetchFailed MetadataError
     deriving stock (Show)
@@ -225,7 +225,7 @@ instance Exception VersionFetchFailed
 
 {- Record one upstream metadata fetch around the leader action: its latency on a
 successful resolve, or the bounded error cause otherwise, before re-raising so the
-caller's degrade is unchanged. Wrapping the leader — which runs only on a cache miss —
+caller's degrade is unchanged. Wrapping the leader -- which runs only on a cache miss --
 means the public path records real upstream calls, not cache hits. Value-agnostic, so it
 wraps either leg's leader (a full-manifest 'CacheEntry' or a single-version snapshot). -}
 recordedFetch :: MetricsPort -> Metric.Upstream -> IO a -> IO a

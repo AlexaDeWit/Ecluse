@@ -22,7 +22,7 @@ instruments, and for the deferral that lets a pre-telemetry provider record once
 substrate exists. The crux is that the bridge is __total and inert when telemetry is
 off__: a record through it before installation does nothing, and after installation of
 the no-op-meter instruments ('newMetrics' on a disabled handle) still discards every
-measurement — the property the boot-time providers rely on to record unconditionally.
+measurement -- the property the boot-time providers rely on to record unconditionally.
 The state projection is checked directly. No SDK is initialised (that is the integration
 tier), so these run pure of any exporter.
 -}
