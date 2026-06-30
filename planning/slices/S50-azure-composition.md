@@ -17,7 +17,7 @@ pr: null
 > Milestone **M10** · depends on: [S03](S03-config-loader.md), [S48](S48-azure-queue.md), [S49](S49-entra-credential.md) · tier: integration
 
 **Goal.** Light up the Azure arms of the config-driven composition root:
-`MIRROR_QUEUE_PROVIDER=servicebus` (or `azurequeue`) → the S48 backend; the Entra
+`ECLUSE_QUEUE_BACKEND=servicebus` (or `azurequeue`) → the S48 backend; the Entra
 credential leaf (S49) for an **Azure Artifacts** mirror target. The third backend
 behind the same two handles, closing "AWS, GCP, **and Azure**."
 

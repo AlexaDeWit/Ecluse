@@ -216,20 +216,19 @@ concrete module list is the module index of the published Haddock (and the root
 project-specific layout patterns. The principles below are what decide where new
 code goes.
 
-### 4.1 Organize vertically, a type lives with the functions on it
+### 4.1 Organize by concept, favouring smaller modules
 
-Group each area's types **and** the functions that operate on them in the same
-module or namespace ("vertical" organization). Resist starting a project-wide
-`Types` module, a `Constants` module, or a `Util`/`Misc` grab-bag: those
-"horizontal" buckets pull related code apart and rot into dumping grounds.
-(This is the central recommendation of Gabriella González's widely-cited module-
-organization guide.)
+Group each area's types **and** the functions that operate on them into well-scoped,
+single-purpose modules. Historically, this guide recommended "vertical" grouping
+at a broad feature level, which led to 900+ line unmanageable monoliths.
 
-So `Ecluse.Core.Package` deliberately keeps `Scope`/`PackageName`/… *together* with
-their smart constructors and renderers, one cohesive vocabulary module, rather
-than scattering them across type/function modules. Likewise `Ecluse.Core.Version`
-keeps the `Version` type with its parsers and comparator: each module is a
-vertical slice of one area, not a horizontal type-vs-function split.
+Now, we strongly prefer extracting discrete concepts into their own files. If a
+file starts doing three different things (e.g., domain types, JSON parsers, and
+resolution logic), split it. 
+
+So `Ecluse.Core.Package` can contain just the core identity types, with logic
+split into `Ecluse.Core.Package.Logic` or similar, depending on size. Small,
+hyper-focused modules are easier to digest, test, and safely change.
 
 ### 4.2 One namespace per area; module name = file path
 
@@ -240,30 +239,28 @@ vertical slice of one area, not a horizontal type-vs-function split.
 - GHC requires the module name to match the file path, PascalCase and
   hierarchical: `Ecluse.Core.Rules.Types` ⇄ `core/src/Ecluse/Core/Rules/Types.hs`. The
   compiler enforces this; tests mirror it (`core/test/unit/Ecluse/RulesSpec.hs`, see §12).
-- Prefer a few cohesive modules over many tiny ones. A module per single
-  function is over-splitting; a 1,000-line module spanning three concerns is
-  under-splitting. Aim for one clear responsibility per module. (`Ecluse.Core.Version`
-  was split out of `Ecluse.Core.Package` on this basis: the package vocabulary and the
-  three version-grammar parsers are two responsibilities, not one.)
+- **Prefer small, single-purpose modules.** A module should do one thing well.
+  If a module spans multiple concerns (e.g., data types + parsing + domain logic),
+  split it. Large modules become dumping grounds that obscure intent.
+  (`Ecluse.Config` is a good example of how split domains keep code manageable:
+  `Ecluse.Config.Types`, `Ecluse.Config.Rule`, `Ecluse.Config.Parser`.)
 
-### 4.3 Split a `.Types` module only when it earns it
+### 4.3 Extract `.Types` and `.Helpers` modules freely
 
-Because vertical organization (4.1) is the default, a separate
-`Ecluse.<Area>.Types` module is the *exception*, justified by one of:
+Because small, single-purpose modules are the goal, splitting out an
+`Ecluse.<Area>.Types` module is completely acceptable and encouraged, especially
+when it aids navigation or separates simple data definitions from complex logic
+or heavy dependencies (like Aeson parsers).
 
-1. **Breaking a cyclic import.** Haskell forbids module import cycles (short of
-   `.hs-boot` files, which we avoid). When two modules would otherwise need each
-   other, extract the shared data types into a `.Types` module they both import.
-   This is the canonical reason a types module exists.
+Typical reasons to split:
+1. **Breaking a cyclic import.** Extract the shared data types.
 2. **A shared vocabulary**: the types are a stable contract imported by several
-   modules, while the functions over them are many and varied.
-3. **Size**: the implementation has grown enough that separating the data
-   declarations genuinely aids navigation.
+   modules.
+3. **Size or Clarity**: separating data declarations from implementation makes
+   the code more approachable.
 
-`Ecluse.Core.Rules.Types` (the `Rule`/`Decision`/… types) is split from `Ecluse.Core.Rules`
-(the evaluation functions) on grounds (2)/(3): the types are the engine's
-contract, shared with the tests and the future effectful rule tiers. When none of
-the three applies, as with `Ecluse.Core.Package`, keep types and functions together.
+When logic grows, do not hesitate to extract `.Types`, `.Parser`, or `.Logic`
+modules.
 
 ### 4.4 Functional core, effects at the edges
 

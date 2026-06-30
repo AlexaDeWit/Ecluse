@@ -86,15 +86,14 @@ module Ecluse (
     mountBindingFor,
 
     -- * Composition glue (exposed for direct testing)
-    mirrorWriteProvider,
     orExit,
     BootAborted (..),
 
     -- * Default handles
     unconfiguredRegistry,
-    unconfiguredCredentials,
 ) where
 
+import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
@@ -104,10 +103,10 @@ import Katip.Monadic (runKatipContextT)
 import Network.HTTP.Client (Manager, newManager)
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 import System.Environment (getEnvironment)
-import UnliftIO (concurrently_, throwIO)
+import System.IO.Error (isDoesNotExistError)
+import UnliftIO (concurrently_, throwIO, tryJust)
 
 import Ecluse.Composition (
-    CredentialProviders,
     MirrorQueuePlan (MemoryBackend, SqsBackend),
     PublishTarget (ptCredentials, ptEcosystem, ptMirrorUrl),
     initCredentialProviders,
@@ -120,14 +119,12 @@ import Ecluse.Composition (
  )
 import Ecluse.Composition qualified as Composition
 import Ecluse.Config (
-    ConfigDoc,
-    CredentialBackend,
-    EnvConfig (cfgLogFormat, cfgMirrorTargetCredentialProvider, cfgPort, cfgShutdownDrainTimeout, cfgTelemetry),
-    decodeDocument,
-    parseEnv,
-    renderEnvErrors,
+    AppConfig (cfgLogFormat, cfgPort, cfgShutdownDrainTimeout, cfgTelemetry),
+    Config (configApp),
+    loadConfig,
+    renderConfigError,
  )
-import Ecluse.Core.Credential (AuthToken (..), CredentialProvider, currentToken, mkSecret, staticProvider)
+import Ecluse.Core.Credential (AuthToken (..), currentToken)
 import Ecluse.Core.Credential.Refresh (CredentialReporters (CredentialReporters, crBreakerReporter, crRefreshReporter))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm), parseEcosystem, prefixFor)
 import Ecluse.Core.Queue (MirrorQueue, newBoundedInMemoryQueue)
@@ -173,7 +170,7 @@ mirror-queue backend that is not built in this binary), aggregating the failures
 a single run reports them all. On success it builds the handles — the shared HTTP
 @Manager@, the config-selected mirror queue, the metadata cache, the logger, the
 process-global credential provider, and the telemetry substrate (off unless
-@PROXY_TELEMETRY@ enables it) — into an 'Env', derives the served mount bindings,
+@ECLUSE_TELEMETRY@ enables it) — into an 'Env', derives the served mount bindings,
 then runs the
 server and the mirror worker __concurrently__ over that single 'Env' ('runServer'
 and 'runWorker'). Bracketing the 'Env' (and the telemetry providers) for the
@@ -181,8 +178,11 @@ lifetime of both means their shared resources are torn down along every exit pat
 -}
 run :: IO ()
 run = do
-    env <- parseEnv >>= orExit renderEnvErrors
-    mDoc <- loadDocument
+    envVars <- getEnvironment
+    mDocBlob <- tryJust (guard . isDoesNotExistError) (BS.readFile "/etc/ecluse/config.yaml")
+    let docBlob = either (const Nothing) Just mDocBlob
+    config <- orExit (T.unlines . map renderConfigError) (loadConfig envVars docBlob)
+    let env = configApp config
     -- The metric instruments do not exist until the telemetry substrate is built, well
     -- below; this deferred handle lets the credential provider (constructed here, at
     -- boot) record through reporters that stay inert until 'installMetrics' makes them
@@ -198,8 +198,8 @@ run = do
     -- the static token, or the CodeArtifact mint (whose inputs are validated and which
     -- mints once eagerly, so a misconfiguration fails loudly here at boot).
     providers <- initCredentialProviders credentialReporters env >>= orExit (T.unlines . map renderBootError)
-    bindings <- planMounts mountBindingFor getCurrentTime providers env mDoc >>= orExit (T.unlines . map renderBootError)
-    publishTargets <- orExit (T.unlines . map renderBootError) (planPublishTargets providers env mDoc)
+    bindings <- planMounts mountBindingFor getCurrentTime providers config >>= orExit (T.unlines . map renderBootError)
+    publishTargets <- orExit (T.unlines . map renderBootError) (planPublishTargets providers config)
     -- Select the mirror-queue backend from config (the GCP arm is a fail-loud
     -- "not built" boot error, never a silent fall-through); the resulting plan is
     -- handed to the one queue-construction site below.
@@ -210,6 +210,7 @@ run = do
                 , scDrainTimeout = ShutdownDrainTimeout (cfgShutdownDrainTimeout env)
                 }
     logEnv <- newLogEnv (cfgLogFormat env) (Environment "production")
+    logBootInfo logEnv ("Loaded configuration: " <> show config)
     -- Log each mount's resolved rule boot order so an operator sees at start-up exactly
     -- how their policy will resolve (highest precedence first, then name).
     logRuleBootOrder logEnv bindings
@@ -244,28 +245,13 @@ run = do
         -- operator-configured, trusted mirror target, so it uses the trusted private
         -- manager (the private origin's credential-forwarding path).
         publishClient <- resolvePublishClient privateManager publishTargets
-        withEnv publishClient queue (mirrorWriteProvider (cfgMirrorTargetCredentialProvider env) providers) manager privateManager metadataCache logEnv telemetry heartbeat $ \builtEnv -> do
+        withEnv publishClient queue manager privateManager metadataCache logEnv telemetry heartbeat $ \builtEnv -> do
             -- The instruments now exist (built in 'withEnv' from the telemetry handle);
             -- install them so the credential provider's deferred reporters go live for
             -- the rest of the run. They are the no-op-meter instruments when telemetry
             -- is off, so this is inert in that posture.
             installMetrics deferredMetrics (envMetrics builtEnv)
             runServices serverConfig (workerPoliciesFor builtEnv bindings) builtEnv
-
-{- | Read the optional structured config document from the @PROXY_CONFIG@ env blob,
-decoding it strictly. 'Nothing' when unset — an env-only deployment supplies no
-document and runs on the built-in default policy. A set-but-undecodable blob is a
-fail-fast boot error (an operator typo must not be silently ignored).
-
-@PROXY_CONFIG@ is the documented, named source for the inline document (see
-@docs\/architecture\/configuration.md@ → "Configuration"); the alternative
-file form has no documented env var for its path yet, so it is not read here.
--}
-loadDocument :: IO (Maybe ConfigDoc)
-loadDocument =
-    lookupEnv "PROXY_CONFIG" >>= \case
-        Nothing -> pure Nothing
-        Just blob -> Just <$> orExit ("PROXY_CONFIG: " <>) (decodeDocument (encodeUtf8 blob))
 
 {- Build the config-selected mirror queue from its plan: the durable AWS SQS backend,
 or the bounded in-memory backend. The in-memory arm first emits the loud boot warning
@@ -308,14 +294,11 @@ logRuleBootOrder logEnv = traverse_ logMount
 
 {- The process-global mirror-write credential provider stored in 'Env' for the
 worker, selected by the configured provider backend
-('Ecluse.Config.cfgMirrorTargetCredentialProvider'): the static token or the
+('Ecluse.Config.'): the static token or the
 CodeArtifact mint. In the common case there is a single provider; the no-backend
 placeholder only holds the slot when the selected provider was not built — a mount
 that references it has already failed the boot-time credential check by this point,
 so the worker (the slot's only consumer) never reaches the placeholder. -}
-mirrorWriteProvider :: CredentialBackend -> CredentialProviders -> CredentialProvider
-mirrorWriteProvider backend providers =
-    fromMaybe unconfiguredCredentials (Composition.lookupProvider backend providers)
 
 {- | Raised to abort start-up after a boot phase has reported its aggregated
 failure to stderr. A distinct type — rather than a bare 'exitFailure' — so the
@@ -339,7 +322,7 @@ orExit render = \case
 {- Prepare the telemetry substrate before the SDK initialises: when enabled, resolve
 the identity, normalise the @OTEL_*@ environment the SDK reads, and install the
 throttled export-error handler ("Ecluse.Telemetry.Resolve.prepareTelemetry"). A no-op
-when telemetry is off, so an unset @PROXY_TELEMETRY@ reads no process environment and
+when telemetry is off, so an unset @ECLUSE_TELEMETRY@ reads no process environment and
 configures nothing. -}
 prepareTelemetryBoot :: TelemetrySwitch -> LogEnv -> IO ()
 prepareTelemetryBoot switch logEnv = case switch of
@@ -551,6 +534,3 @@ strategy needs no read credential at all (reads forward the caller's own token),
 this empty placeholder is harmless on the serve path there. See
 @docs\/architecture\/access-model.md@.
 -}
-unconfiguredCredentials :: CredentialProvider
-unconfiguredCredentials =
-    staticProvider AuthToken{authSecret = mkSecret "", authExpiresAt = Nothing}

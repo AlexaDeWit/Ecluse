@@ -162,7 +162,7 @@ telemetryScenarios = do
     -- #325(a) — OTLP absent / telemetry off: the real image still boots, serves a real
     -- install, and logs JSONL to stdout/stderr, with no collector anywhere.
     describe "telemetry — OTLP off, no collector (#325)" $
-        around (withE2EWith E2EConfig{ecCollector = False, ecExtraEnv = [("PROXY_TELEMETRY", "off")]}) $
+        around (withE2EWith E2EConfig{ecCollector = False, ecExtraEnv = [("ECLUSE_TELEMETRY", "off")]}) $
             it "starts, serves a real install, and logs JSONL to stdout — no collector needed" $ \e2e -> do
                 res <- npmInstall e2e (psName allowPkg)
                 npmExit res `shouldBe` ExitSuccess
@@ -280,7 +280,7 @@ publishScenarios = do
                 -- post-publish absence below is attributable to the refusal, not a stale state.
                 absentBefore <- verdaccioHasVersionNow e2e name ver
                 absentBefore `shouldBe` False
-                -- A name outside PUBLISH_SCOPES is refused with a 403 BEFORE the relay, so npm
+                -- A name outside ECLUSE_PUBLISH_SCOPES is refused with a 403 BEFORE the relay, so npm
                 -- exits non-zero and the publication target never receives it. The absence is a
                 -- sound proof of refused-before-write *because* the harness configures Verdaccio
                 -- to accept anonymous publishes: had the document reached the target it would
@@ -295,7 +295,7 @@ publishScenarios = do
     describe "first-party publish — opt-in posture" $
         around withE2E $
             it "answers a publish with 405 when no publication target is configured" $ \e2e -> do
-                -- The base topology sets no PUBLICATION_TARGET_URL, so the publish path is
+                -- The base topology sets no ECLUSE_PUBLICATION_TARGET, so the publish path is
                 -- off: a PUT /{pkg} is not an allowed method (no implicit write path). A raw
                 -- PUT is enough — the 405 precedes any body read — so npm need not be driven.
                 status <- proxyPut e2e ("/npm/" <> publishInScopeName)

@@ -28,7 +28,7 @@ client-facing error maps to the right status and an intuitive body, not a generi
   upstream miss→404. The rule: **503 only when we believe it will resolve**, else
   500., _web-layer.md#error-model_
 - [ ] Denial body is the npm `{"error": "…"}` shape including which rule decided and
-  why; `PROXY_HELP_MESSAGE` (config, S03) appended to every denial.,  _rules-engine.md#denial-responses_
+  why; `ECLUSE_HELP_MESSAGE` (config, S03) appended to every denial.,  _rules-engine.md#denial-responses_
 - [ ] Renders a `Decision` (from S05) into a `Rejection` message via the existing
   `renderDecision`/`renderDuration`.
 
@@ -65,7 +65,7 @@ no single status (S14 chooses 403-vs-503 over the filtered set).
   `newtype RuleName = RuleName Text` (over `Ecluse.Rules.ruleName`), not a bare
   `Text`. The denial body's operator help message is a `newtype HelpMessage` with a
   `mkHelpMessage` smart constructor that trims surrounding whitespace, so a blank or
-  all-space `PROXY_HELP_MESSAGE` contributes nothing rather than appending an empty
+  all-space `ECLUSE_HELP_MESSAGE` contributes nothing rather than appending an empty
   span.
 - **`Rejection` field names.** The record fields are `rejectionReason` /
   `rejectionMessage` (type-tagged per STYLE.md §6.3), and a rules `Decision` is

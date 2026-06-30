@@ -12,7 +12,7 @@ import UnliftIO (race_, timeout)
 import UnliftIO.Concurrent (threadDelay)
 
 import Ecluse (runWorker)
-import Ecluse.Core.Credential (AuthToken (..), CredentialProvider, mkSecret, staticProvider)
+import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (HashAlg (SHA1), mkPackageName)
 import Ecluse.Core.Queue (
@@ -208,10 +208,7 @@ envFor queue mirrorUrl = do
     metadataCache <- newMetadataCache defaultCacheConfig
     logEnv <- newTestLogEnv
     heartbeat <- newWorkerHeartbeat
-    newEnv publishClient queue credentials manager manager metadataCache logEnv telemetryDisabled heartbeat
-  where
-    credentials :: CredentialProvider
-    credentials = staticProvider AuthToken{authSecret = mkSecret "test-token", authExpiresAt = Nothing}
+    newEnv publishClient queue manager manager metadataCache logEnv telemetryDisabled heartbeat
 
 -- A scribe-free LogEnv (no stdout output during the integration run).
 newTestLogEnv :: IO LogEnv

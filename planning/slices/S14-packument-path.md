@@ -44,7 +44,7 @@ the S02 in-memory doubles; real AWS backends arrive in M4.
   transient/undecidable once S21 lands, **or a needed upstream unavailable**); never
   404 when the package exists. **Partial-upstream availability**: one upstream
   failing while another succeeds serves the best-effort union, not an error.,  _rules-engine.md#applying-verdicts-to-a-packument, registry-model.md#packument-merge-across-upstreams_
-- [x] Optional inbound `PROXY_AUTH_TOKEN` validated at the edge before proxying (S03).
+- [x] Optional inbound `ECLUSE_AUTH_TOKEN` validated at the edge before proxying (S03).
 - [x] Uses the metadata cache (S13) so the fetch+parse is shared/collapsed (the
   **public** leg only; see as-built notes).
 

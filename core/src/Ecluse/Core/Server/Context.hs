@@ -148,7 +148,7 @@ data PackumentDeps = PackumentDeps
     from the upstream that served the packument
     ('Ecluse.Core.Security.SameHostAsPackument' by default, the secure reading of the
     host allowlist; relaxed to 'Ecluse.Core.Security.AnyAllowlistedHost' by
-    @PROXY_RESPECT_UPSTREAM_TARBALL_HOST@).
+    @ECLUSE_RESPECT_UPSTREAM_TARBALL_HOST@).
     -}
     , pdAllowedInternalHosts :: LoweredHostSet
     {- ^ The hosts deliberately opted in to the literal internal-range block when gating
@@ -158,7 +158,7 @@ data PackumentDeps = PackumentDeps
     -}
     , pdLimits :: Limits
     {- ^ The response-bound budget enforced on every upstream metadata fetch and
-    decode (@PROXY_MAX_RESPONSE_BYTES@\/@PROXY_MAX_VERSION_COUNT@\/@PROXY_MAX_NESTING_DEPTH@):
+    decode (@ECLUSE_MAX_RESPONSE_BYTES@\/@ECLUSE_MAX_VERSION_COUNT@\/@ECLUSE_MAX_NESTING_DEPTH@):
     the body-size, version-count, and JSON-nesting ceilings of
     'Ecluse.Core.Security.Limits'. The data plane reads the metadata body through
     'Ecluse.Core.Security.boundedRead' against @maxBodyBytes@, checks
@@ -168,7 +168,7 @@ data PackumentDeps = PackumentDeps
     upstream document is refused, never partially served (security.md invariant 4).
     -}
     , pdInboundToken :: Maybe Secret
-    {- ^ The optional inbound token a client must present (@PROXY_AUTH_TOKEN@);
+    {- ^ The optional inbound token a client must present (@ECLUSE_AUTH_TOKEN@);
     'Nothing' leaves the edge open (the network layer guards it).
     -}
     , pdNow :: IO UTCTime
@@ -179,7 +179,7 @@ data PackumentDeps = PackumentDeps
     -- ^ The operator help message appended to every denial body, if configured.
     , pdMinIntegrity :: MinIntegrity
     {- ^ The minimum integrity algorithm a __public__ (untrusted) version's digest must
-    meet to be admitted (the global @PROXY_MIN_PUBLIC_INTEGRITY@ floor, default SHA-256).
+    meet to be admitted (the global @ECLUSE_MIN_PUBLIC_INTEGRITY@ floor, default SHA-256).
     The public gate refuses a version whose strongest digest is below this; it is
     __hard-floored at SHA-256__ and never lowerable (see "Ecluse.Core.Package.Integrity").
     The trusted private path consults 'pdMinTrustedIntegrity' instead.
@@ -238,24 +238,24 @@ record carries no 'Ecluse.Core.Credential.CredentialProvider' (see
 -}
 data PublishDeps = PublishDeps
     { pubTargetUrl :: Text
-    {- ^ The publication target endpoint (@PUBLICATION_TARGET_URL@) a client
+    {- ^ The publication target endpoint (@ECLUSE_PUBLICATION_TARGET@) a client
     @npm publish@ is relayed to. The package path is appended to it.
     -}
     , pubScopes :: [Scope]
-    {- ^ The configured publish-scope allow-list (@PUBLISH_SCOPES@) — the
+    {- ^ The configured publish-scope allow-list (@ECLUSE_PUBLISH_SCOPES@) — the
     anti-shadowing guard. A publish whose package name is not within one of these
     scopes is refused __before any upstream write__, so a client cannot publish a name
     that shadows an existing public package (a dependency-confusion vector). Never
     empty when a publication target is configured (config validation rejects that).
     -}
     , pubStaticToken :: Maybe Secret
-    {- ^ The static fallback credential (@PUBLICATION_TARGET_TOKEN@) forwarded to the
+    {- ^ The static fallback credential (@ECLUSE_PUBLICATION_TARGET_TOKEN@) forwarded to the
     publication target __only when the client sends no token of its own__. The default
     model is passthrough — the publisher's own token — so this is 'Nothing' on the
     common path.
     -}
     , pubInboundToken :: Maybe Secret
-    {- ^ The optional inbound edge token a client must present (@PROXY_AUTH_TOKEN@),
+    {- ^ The optional inbound edge token a client must present (@ECLUSE_AUTH_TOKEN@),
     the same gate the read paths apply; 'Nothing' leaves the edge open.
     -}
     , pubLimits :: Limits

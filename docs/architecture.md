@@ -76,7 +76,7 @@ flowchart TD
     P3 -->|"survivors"| PSV(["Serve merged packument. Done."])
     P3 -->|"none survive"| PD(["403 / 503. Done."])
 
-    K -->|"publish (PUT)"| W1{"PUBLICATION_TARGET_URL set?"}
+    K -->|"publish (PUT)"| W1{"ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET set?"}
     W1 -->|"no"| W405(["405 Method Not Allowed. Done."])
     W1 -->|"yes"| W2["Enforce publish-scope allow-list<br/>(anti-shadowing)"]
     W2 -->|"out of scope"| WR(["4xx, no upstream write. Done."])
@@ -109,7 +109,7 @@ A **publish** request (`PUT /{pkg}`, i.e. `npm publish`) is the one client-drive
 it is accepted at the mount, checked against the operator's **publish-scope allow-list**
 (the anti-shadowing guard, rejected before any upstream write), and relayed to the
 **publication target** with the publisher's *own* forwarded credential. It is opt-in (a
-`405` when no `PUBLICATION_TARGET_URL` is configured), and published packages are read back
+`405` when no `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET` is configured), and published packages are read back
 through the private upstream, distinct from the mirror target, which the *worker* writes
 with Écluse's own credential. See
 [Registry Model → Publishing first-party packages](architecture/registry-model.md#publishing-first-party-packages-the-publication-target).

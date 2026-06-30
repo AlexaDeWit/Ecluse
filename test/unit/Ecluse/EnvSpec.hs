@@ -6,15 +6,7 @@ import Test.Hspec
 import UnliftIO (evaluate, timeout, try)
 import UnliftIO.Exception (StringException, throwString)
 
-import Ecluse (npmServerConfig, runServer, runWorker, unconfiguredCredentials, unconfiguredRegistry)
-import Ecluse.Core.Credential (
-    AuthToken (..),
-    CredentialProvider,
-    currentToken,
-    mkSecret,
-    staticProvider,
-    unSecret,
- )
+import Ecluse (npmServerConfig, runServer, runWorker, unconfiguredRegistry)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Package (HashAlg (..), PackageName, mkPackageName)
 import Ecluse.Core.Queue (MirrorArtifact (..), MirrorJob (..), enqueue, msgJob, newInMemoryQueue, receive)
@@ -49,8 +41,6 @@ fakeRegistry =
     parseStub = ParseError "fake"
 
 -- | A credential-handle double: a fixed, non-expiring token.
-fakeCredentials :: CredentialProvider
-fakeCredentials = staticProvider AuthToken{authSecret = mkSecret "env-spec-token", authExpiresAt = Nothing}
 
 {- | A manager built from 'defaultManagerSettings' (no TLS, no connection opened
 on construction), so assembling an 'Env' touches no network.
@@ -78,7 +68,7 @@ newTestEnv = do
     metadataCache <- newTestCache
     logEnv <- newTestLogEnv
     heartbeat <- newWorkerHeartbeat
-    newEnv fakeRegistry queue fakeCredentials manager manager metadataCache logEnv telemetryDisabled heartbeat
+    newEnv fakeRegistry queue manager manager metadataCache logEnv telemetryDisabled heartbeat
 
 -- | A sample job for round-tripping the queue handle held in an 'Env'.
 sampleJob :: MirrorJob
@@ -110,14 +100,8 @@ spec = do
         it "assembles an Env from injected handle doubles, with no network" $ do
             -- Construction must not touch the network: it only gathers the handles
             -- and the manager. A clean return is the assertion.
-            env <- newTestEnv
-            currentTok <- currentToken' env
-            currentTok `shouldBe` "env-spec-token"
-
-        it "wires the credential handle through unchanged" $ do
-            env <- newTestEnv
-            tok <- currentTokenSecret env
-            unSecret (authSecret tok) `shouldBe` "env-spec-token"
+            _env <- newTestEnv
+            pure ()
 
         it "wires the registry handle through unchanged (a pure parse field round-trips)" $ do
             -- The registry double's 'parseVersionList' echoes the response body as
@@ -174,9 +158,7 @@ spec = do
             metadataCache <- newTestCache
             logEnv <- newTestLogEnv
             heartbeat <- newWorkerHeartbeat
-            result <- withEnv fakeRegistry queue fakeCredentials manager manager metadataCache logEnv telemetryDisabled heartbeat $ \env ->
-                currentToken' env
-            result `shouldBe` "env-spec-token"
+            withEnv fakeRegistry queue manager manager metadataCache logEnv telemetryDisabled heartbeat (\_ -> pure ())
 
         it "propagates an exception thrown in the body (bracketed teardown re-raises)" $ do
             queue <- newInMemoryQueue
@@ -186,7 +168,7 @@ spec = do
             heartbeat <- newWorkerHeartbeat
             let body :: Env -> IO ()
                 body _ = throwString "boom"
-            outcome <- try (withEnv fakeRegistry queue fakeCredentials manager manager metadataCache logEnv telemetryDisabled heartbeat body)
+            outcome <- try (withEnv fakeRegistry queue manager manager metadataCache logEnv telemetryDisabled heartbeat body)
             case outcome of
                 Left (_ :: StringException) -> pure ()
                 Right () -> expectationFailure "expected the body's exception to propagate"
@@ -227,19 +209,7 @@ spec = do
             parsePackageInfo unconfiguredRegistry pkg resp `shouldBe` expected
             parseVersionDetails unconfiguredRegistry resp ver `shouldBe` expected
             parseVersionList unconfiguredRegistry resp `shouldBe` expected
-
-    describe "unconfiguredCredentials" $ do
-        it "mints no usable token (empty secret, no expiry)" $ do
-            tok <- currentToken unconfiguredCredentials
-            unSecret (authSecret tok) `shouldBe` ""
-            authExpiresAt tok `shouldBe` Nothing
   where
-    currentToken' :: Env -> IO Text
-    currentToken' env = unSecret . authSecret <$> currentTokenSecret env
-
-    currentTokenSecret :: Env -> IO AuthToken
-    currentTokenSecret env = currentToken (envCredentials env)
-
     -- Assert an effectful handle call throws rather than returning a value.
     shouldRefuse :: IO a -> Expectation
     shouldRefuse act = do

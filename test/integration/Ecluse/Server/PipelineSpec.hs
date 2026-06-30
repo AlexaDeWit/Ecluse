@@ -36,7 +36,7 @@ import UnliftIO (bracket)
 import UnliftIO.Exception (throwString, try)
 import UnliftIO.Temporary (withSystemTempFile)
 
-import Ecluse.Core.Credential (AuthToken (..), CredentialProvider, mkSecret, staticProvider)
+import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (HashAlg (SHA1, SHA512), PackageDetails, PackageName, mkPackageName)
 import Ecluse.Core.Package.Integrity (defaultMinIntegrity, defaultMinTrustedIntegrity, mkMinIntegrity, mkMinTrustedIntegrity)
@@ -606,9 +606,6 @@ fakeRegistry =
     refuse :: Text -> IO a
     refuse field = throwString (toString ("fakeRegistry: the pipeline must not use the handle field " <> field))
 
-fakeCredentials :: CredentialProvider
-fakeCredentials = staticProvider AuthToken{authSecret = mkSecret "unused", authExpiresAt = Nothing}
-
 {- | A fresh 'Env' over handle doubles and a real (no-TLS) manager for the in-process
 upstream doubles, carrying the given mirror queue (the in-memory double, or one
 rigged to fail for the best-effort-enqueue assertion).
@@ -618,7 +615,7 @@ newTestEnvWithQueue queue manager = do
     metadataCache <- newMetadataCache defaultCacheConfig
     logEnv <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
     heartbeat <- newWorkerHeartbeat
-    newEnv fakeRegistry queue fakeCredentials manager manager metadataCache logEnv telemetryDisabled heartbeat
+    newEnv fakeRegistry queue manager manager metadataCache logEnv telemetryDisabled heartbeat
 
 {- | The packument-serve dependencies pointing at two in-process upstream ports,
 with the given inbound edge token (usually 'Nothing').
@@ -1478,7 +1475,7 @@ noSurvivorsSpec = describe "no survivors in the merge" $ do
 -- ── edge authentication ───────────────────────────────────────────────────────
 
 edgeAuthSpec :: Spec
-edgeAuthSpec = describe "inbound PROXY_AUTH_TOKEN validated at the edge" $ do
+edgeAuthSpec = describe "inbound ECLUSE_AUTH_TOKEN validated at the edge" $ do
     it "401s a request with no/incorrect inbound token before proxying" $ do
         privateUp <- servingUpstream (encodePackument (privatePackument [("1.0.0", plainVersion "1.0.0")] "1.0.0"))
         publicUp <- servingUpstream (encodePackument (packument [] "0.0.0" []))
@@ -2650,7 +2647,7 @@ captureBreachLog privateBody = do
             -- is actually written and capturable.
             logEnv <- newLogEnv JsonLog (Environment "test")
             heartbeat <- newWorkerHeartbeat
-            env <- newEnv fakeRegistry queue fakeCredentials manager manager metadataCache logEnv telemetryDisabled heartbeat
+            env <- newEnv fakeRegistry queue manager manager metadataCache logEnv telemetryDisabled heartbeat
             baseDeps <- deps privatePort publicPort Nothing
             let cfg =
                     mkServerConfig

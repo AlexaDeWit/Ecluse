@@ -39,6 +39,7 @@ module Ecluse.Core.Credential (
     staticProvider,
 ) where
 
+import Data.Aeson (FromJSON (..), ToJSON (..), Value (String), withText)
 import Data.ByteArray qualified as BA
 import Data.Time (UTCTime)
 import Text.Show (showString, showsPrec)
@@ -70,7 +71,7 @@ newtype Secret = Secret Text
 'BA.constEq' compares every byte regardless of where the inputs first diverge,
 so a near-miss token cannot be distinguished from a far-miss one by how long the
 comparison takes. This is the security property the whole type exists to make
-unmissable: the @PROXY_AUTH_TOKEN@ edge gate compares the client's bearer token
+unmissable: the @ECLUSE_AUTH_TOKEN@ edge gate compares the client's bearer token
 against the configured one through this instance, and a short-circuiting compare
 there would leak the secret's prefix length to a remote attacker.
 -}
@@ -96,6 +97,14 @@ of use (setting the auth header); never log or otherwise render the result.
 -}
 unSecret :: Secret -> Text
 unSecret (Secret s) = s
+
+-- | Aeson encoding redacts the secret, ensuring it never leaks into JSON logs.
+instance ToJSON Secret where
+    toJSON _ = String "<REDACTED>"
+
+-- | Aeson decoding allows parsing the secret from configuration (e.g. environment AST).
+instance FromJSON Secret where
+    parseJSON = withText "Secret" (pure . mkSecret)
 
 {- | A bearer token for a registry endpoint, with its expiry when known.
 

@@ -99,8 +99,8 @@ here.
    is what bounds an *unbounded* structure, it precedes the decode, so the document
    reaching the depth check is already bounded-by-body-size; the depth check then
    bounds the *traversal cost* of a within-size-but-deeply-nested document.) The
-   ceilings are operator-tunable with secure defaults (`PROXY_MAX_RESPONSE_BYTES`
-   / `PROXY_MAX_VERSION_COUNT` / `PROXY_MAX_NESTING_DEPTH`; see
+   ceilings are operator-tunable with secure defaults (`ECLUSE_MAX_RESPONSE_BYTES`
+   / `ECLUSE_MAX_VERSION_COUNT` / `ECLUSE_MAX_NESTING_DEPTH`; see
    [Configuration → Response bounds](configuration.md#response-bounds)). Artifacts are
    streamed with constant memory and are not subject to the body-size bound; the
    inbound client→proxy request-body cap is the separate `sizeLimitMiddleware`.
@@ -111,7 +111,7 @@ here.
    far they may move**:
 
    - The **public (untrusted) floor** is a **hard SHA-256 boundary**
-     (`PROXY_MIN_PUBLIC_INTEGRITY`, default **SHA-256**). It may be **raised** to
+     (`ECLUSE_MIN_PUBLIC_INTEGRITY`, default **SHA-256**). It may be **raised** to
      `sha384`/`sha512`/`blake2b` as cryptanalysis ages an algorithm, but **never lowered
      below SHA-256**, a sub-floor or unknown value is [rejected at config
      load](configuration.md#public-integrity-floor), never clamped. **There is no
@@ -125,7 +125,7 @@ here.
      not substituted; admitting on such a digest would let a colliding artifact pass the
      tamper gate.
    - The **trusted (private) floor** carries the **same SHA-256 default**
-     (`PROXY_MIN_TRUSTED_INTEGRITY`, default **SHA-256**), so by default a SHA-1-only or
+     (`ECLUSE_MIN_TRUSTED_INTEGRITY`, default **SHA-256**), so by default a SHA-1-only or
      hashless **private** version is **dropped** exactly as a public one is, the old
      "trusted private path is exempt" model is gone as a default. But this floor is
      **operator-loosenable below SHA-256** (down to `sha1`/`md5`) for a **legacy private
@@ -270,7 +270,7 @@ internal-range block, not the manager. The last column is the **untrusted-egress
 | Private-upstream **packument** fetch | Trusted | `envPrivateManager` (trusted) | **No** |
 | Private **conventional** tarball read (`{base}/{pkg}/-/{file}`) | Trusted origin | `envPrivateManager` (trusted) | **No**, same-host by construction; the allowlist + same-host policy still apply (trivially satisfied) |
 | Mirror-target **publish** (npm `PUT`) | Trusted declared destination | `envPrivateManager` (trusted) | **No** |
-| **First-party publish** relay (client `npm publish` → publication target) | Trusted declared destination | `envPrivateManager` (trusted) | **No**, the destination is configuration (`PUBLICATION_TARGET_URL`); it carries the client's **forwarded** credential, which is **never redirect-followed** (see below) |
+| **First-party publish** relay (client `npm publish` → publication target) | Trusted declared destination | `envPrivateManager` (trusted) | **No**, the destination is configuration (`ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET`); it carries the client's **forwarded** credential, which is **never redirect-followed** (see below) |
 | OTLP **telemetry** export | Trusted declared destination | OpenTelemetry SDK's own client | **No**, the endpoint is declared, not classified (see `Ecluse.Telemetry.Resolve`) |
 | **SQS** mirror-queue publish / poll | Trusted declared destination | `amazonka`'s own client | **No** (see `Ecluse.Core.Queue.Sqs`) |
 | **IMDS** instance-role credential minting | Required internal | `amazonka`'s own client (separate from the data plane) | **No**, must reach `169.254.169.254`; never routed through the data-plane manager |
@@ -323,14 +323,14 @@ follow-up.
 
 The [first-party publish path](registry-model.md#publishing-first-party-packages-the-publication-target)
 relays a client `npm publish` to the publication target. Its scope allow-list
-(`PUBLISH_SCOPES`) constrains **which package names** may be published, it is **not** an
-authentication control and says nothing about **who** may publish. So a static
-`PUBLICATION_TARGET_TOKEN`, Écluse substituting its **own** credential for a publisher who
+(`ECLUSE_MOUNTS__NPM__PUBLISH_SCOPES`) constrains **which package names** may be published, it is **not** an
+authentication mechanism: it does not verify *who* is publishing. If a deployment uses
+`ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN`, Écluse substituting its **own** credential for a publisher who
 forwards none, **requires a verifiable inbound edge**: the composition root **refuses to
 boot** when it is set without one (`PublishStaticCredentialNeedsEdge`). That makes "static
 publish credential + open edge", which would otherwise let **any unauthenticated client**
 publish under the operator's credential within the allowed scopes, an **unrepresentable**
-state rather than an operator-beware footgun. `PROXY_AUTH_TOKEN` is the verifiable edge
+state rather than an operator-beware footgun. `ECLUSE_AUTH_TOKEN` is the verifiable edge
 Écluse checks today; an external layer (an API gateway, a service mesh with mTLS, a
 `NetworkPolicy`) is defence-in-depth but **cannot substitute** for it, since Écluse can only
 verify its own edge. Pure **passthrough** (no static token) carries no such floor, the
@@ -419,13 +419,13 @@ and CodeArtifact over VPC endpoints). The posture's threats, and their dispositi
 modelled in the [register](https://alexadewit.github.io/Ecluse/threat-model.html); this is the assumptions framing, with the
 detail deferred to the threats noted, not a second copy of them.
 
-**Edge access is an operator concern** (register threat #3). `PROXY_AUTH_TOKEN` is **off by
+**Edge access is an operator concern** (register threat #3). `ECLUSE_AUTH_TOKEN` is **off by
 default**; *who may reach the proxy* is delegated to the deployment's access edge, which must
 hold **east-west as well as north-south** (an ingress-only allow-list that leaves pod-to-pod
 traffic open is the usual gap). Under passthrough this is **softened**, a caller with no
 forwarded token gets no private read or publish, so an edge breach exposes only the
 public-gated view plus the untrusted-egress and DoS surface, never private packages. (The
-publish corollary is stronger, a static publication token **requires** `PROXY_AUTH_TOKEN`,
+publish corollary is stronger, a static publication token **requires** `ECLUSE_AUTH_TOKEN`,
 enforced at boot: [a static publish credential is fail-closed](#a-static-publish-credential-is-fail-closed).)
 The future **trusted-edge-identity** mode must require a *verifiable* binding to the edge
 (mutual TLS, or a shared secret / HMAC on the assertion), an [unrepresentable unsafe
@@ -480,7 +480,7 @@ guards follow that principle, and it is made concrete for the tarball path:
   operator whose registry legitimately serves tarballs from a separate CDN (the
   PyPI-files-host shape above) **opts in** to honouring the upstream-declared host
   (still constrained to the allowlist) by setting
-  `PROXY_RESPECT_UPSTREAM_TARBALL_HOST`, accepting the documented wider fetch surface
+  `ECLUSE_MOUNTS__NPM__RESPECT_UPSTREAM_TARBALL_HOST`, accepting the documented wider fetch surface
   in exchange. The override never escapes the allowlist or the https-only posture: an
   allowlisted cross-host tarball is still dialled https-only with certificate validation,
   and a literal internal-address host is still refused by the literal block (invariant 3).

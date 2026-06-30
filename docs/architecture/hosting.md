@@ -134,12 +134,12 @@ a **full graceful drain** on `SIGTERM` and `SIGINT`:
    connections and **waits for in-flight requests and in-progress artifact streams
    to finish** before the process exits, a half-delivered tarball runs to
    completion rather than being severed. The wait is bounded by
-   **`PROXY_SHUTDOWN_DRAIN_TIMEOUT`** (default **30 seconds**; see
+   **`ECLUSE_SHUTDOWN_DRAIN_TIMEOUT`** (default **30 seconds**; see
    [Configuration](configuration.md#configuration)), after which the process exits
    regardless so a stuck request cannot pin the old instance open through a deploy.
 
 **Operator note.** Set the platform's termination grace period **longer** than
-`PROXY_SHUTDOWN_DRAIN_TIMEOUT` so the orchestrator does not `SIGKILL` the process
+`ECLUSE_SHUTDOWN_DRAIN_TIMEOUT` so the orchestrator does not `SIGKILL` the process
 mid-drain (e.g. a Kubernetes `terminationGracePeriodSeconds` comfortably above the
 configured drain). The readiness-flip-then-drain sequence assumes the LB acts on
 `/readyz`; a deployment that load-balances without a readiness check should add one.

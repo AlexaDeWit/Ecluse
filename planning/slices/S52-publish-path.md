@@ -49,7 +49,7 @@ configured as its own role.
   the publication target is write-only from the proxy's perspective. To read what you
   published, the operator configures the publication target to be the **same registry**
   as the private upstream.
-- **Opt-in config.** `PUBLICATION_TARGET_URL` (+ its credential) enables the path;
+- **Opt-in config.** `ECLUSE_PUBLICATION_TARGET` (+ its credential) enables the path;
   **unset ⇒ `PUT /{pkg}` returns `405`** (no implicit write path).
 
 ## Approach
@@ -69,7 +69,7 @@ configured as its own role.
   (forwarded credential) and returns the npm success shape. (integration)
 - An **out-of-scope** name is **rejected before any upstream write**, with a clear
   error, the anti-shadowing guard. (unit + integration)
-- With no `PUBLICATION_TARGET_URL`, `PUT /{pkg}` returns `405`. (unit)
+- With no `ECLUSE_PUBLICATION_TARGET`, `PUT /{pkg}` returns `405`. (unit)
 - The client credential is forwarded to the publication target and **never** to the
   public upstream or used as the mirror-target credential. (unit)
 - Docs reconciled in the same PR: `registry-model.md` (role + publish path),
@@ -81,7 +81,7 @@ configured as its own role.
 
 - `src/Ecluse/Registry/Npm/Route.hs` + `src/Ecluse/Server/Route.hs`, the publish route.
 - `src/Ecluse/Server/…`, the publish handler + scope-allow-list policy.
-- `src/Ecluse/Config.hs`, `PUBLICATION_TARGET_URL` + publish scopes.
+- `src/Ecluse/Config.hs`, `ECLUSE_PUBLICATION_TARGET` + publish scopes.
 - Composition root (with S20), wire the publication-target role + credential.
 - docs + tests.
 
@@ -111,10 +111,10 @@ as built:
   is distinct from the mirror worker's `RegistryClient.publishArtifact` (a
   success/`PublishFault` verdict). The npm adapter gained `relayPublishDocument` over a
   per-request `NpmClientConfig` carrying the forwarded client token; the agnostic
-  `RegistryClient` is unchanged. `PUBLICATION_TARGET_TOKEN` is the static fallback when a
+  `RegistryClient` is unchanged. `ECLUSE_PUBLICATION_TARGET_TOKEN` is the static fallback when a
   client sends no token.
-- **Config.** `PUBLICATION_TARGET_URL`, `PUBLICATION_TARGET_TOKEN`, `PUBLISH_SCOPES`
-  (global env, single-ecosystem desugaring). `PUBLISH_SCOPES` is **required when a target
+- **Config.** `ECLUSE_PUBLICATION_TARGET`, `ECLUSE_PUBLICATION_TARGET_TOKEN`, `ECLUSE_PUBLISH_SCOPES`
+  (global env, single-ecosystem desugaring). `ECLUSE_PUBLISH_SCOPES` is **required when a target
   is set** (a fail-loud `PublishScopesMissing` boot error); `bindingPublishDeps :: Maybe
   PublishDeps` models the opt-in (`Nothing` ⇒ `405`). The scope guard keys on the
   **route** name; the document's self-reported name is the registry's concern (a future

@@ -107,7 +107,7 @@ each via `make test-e2e` and in the CI e2e job):
 against a live `npm` client + Verdaccio, the e2e tier caught two composition-level
 defects no unit/integration test could (none drives a real client), both fixed here:
 1. **`dist.tarball` was rewritten path-relative (`/npm/…`)**, which `npm` reads as a
-   local `file:` path and cannot install. Fixed by a new **`PROXY_PUBLIC_URL`** config
+   local `file:` path and cannot install. Fixed by a new **`ECLUSE_PUBLIC_URL`** config
    that makes the composition root emit an **absolute** rewrite base
    (`Ecluse.Config`, `Ecluse.Composition`); `USAGE.md` documents it as required for
    real installs.
@@ -121,7 +121,7 @@ defects no unit/integration test could (none drives a real client), both fixed h
 _The e2e tier:_
 - `test/e2e/Spec.hs`, `hspec-discover` entry for the new suite.
 - `test/e2e/Ecluse/E2E/Harness.hs`, the docker orchestration via `typed-process`:
-  pick the host port up front (for `PROXY_PUBLIC_URL`), create the TEST-NET network,
+  pick the host port up front (for `ECLUSE_PUBLIC_URL`), create the TEST-NET network,
   run/stop the proxy + Verdaccio + nginx-stub containers, `/readyz` wait, the
   isolated-`npm` driver and the HTTP/mirror probes, and teardown.
 - `test/e2e/Ecluse/E2E/Fixtures.hs`, generate the nginx static tree: npm-format
@@ -146,11 +146,11 @@ _The e2e tier:_
   `blockedRanges`, commented to the e2e tier + #178.
 
 _The two production fixes the tier surfaced (see above):_
-- `src/Ecluse/Config.hs`, the `PROXY_PUBLIC_URL` field + env parse.
+- `src/Ecluse/Config.hs`, the `ECLUSE_PUBLIC_URL` field + env parse.
 - `src/Ecluse/Composition.hs`, `mountBaseUrl`: the absolute rewrite base under
-  `PROXY_PUBLIC_URL` (relative-path fallback retained).
+  `ECLUSE_PUBLIC_URL` (relative-path fallback retained).
 - `src/Ecluse/Registry/Npm.hs`, set `Content-Type: application/json` on publish.
-- `USAGE.md`, document `PROXY_PUBLIC_URL`.
+- `USAGE.md`, document `ECLUSE_PUBLIC_URL`.
 - `test/unit/Ecluse/ConfigSpec.hs`, `test/unit/Ecluse/CompositionSpec.hs`,
   `test/unit/Ecluse/Registry/NpmSpec.hs`, unit coverage for the three fixes.
 

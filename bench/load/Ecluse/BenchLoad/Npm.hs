@@ -96,7 +96,7 @@ import Network.Wai.Handler.Warp (testWithApplication)
 
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Harness (Driver (DriveHttpUrls, DriveInProcess), LoadKnobs (..), Scenario (..), UpstreamFixture (..))
-import Ecluse.Core.Credential (AuthToken (AuthToken, authExpiresAt, authSecret), CredentialProvider, mkSecret, staticProvider)
+
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (Hash, HashAlg (SHA1, SRI), PackageName, mkPackageName)
 import Ecluse.Core.Package.Integrity (defaultMinIntegrity, defaultMinTrustedIntegrity)
@@ -262,7 +262,7 @@ withNpmProxy knobs ttl maxEntries mkMix body = do
             -- The same plain manager serves the private and public legs; the serve path
             -- never touches the publish-side registry handle, so it is the refusing
             -- placeholder.
-            env <- newEnv refusingRegistry queue refusingCredentials manager manager cache logEnv telemetryDisabled heartbeat
+            env <- newEnv refusingRegistry queue manager manager cache logEnv telemetryDisabled heartbeat
             deps <- npmDeps privatePort publicPort
             let cfg = mkServerConfig [npmMount deps]
             testWithApplication (pure (application cfg env)) $ \proxyPort ->
@@ -620,5 +620,3 @@ refusingRegistry =
 
 -- A static credential provider with a placeholder token: the serve path strips the
 -- public-leg credential and forwards the client's to the private leg, so this is unused.
-refusingCredentials :: CredentialProvider
-refusingCredentials = staticProvider AuthToken{authSecret = mkSecret "unused", authExpiresAt = Nothing}

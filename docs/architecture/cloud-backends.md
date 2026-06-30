@@ -48,8 +48,8 @@ acceptable; the rules are deterministic for a given package version.
 
 This pattern is a deliberate architectural and security decision:
 1. **Config & Rule Synchronization:** Because `pilot`, `dredger`, and `serve` are the same binary parsing the same configuration file, they share the exact same runtime state (the same `Env` and config models). A manual package revocation rule (`DenyByIdentity`) configured in `ecluse.yaml` is guaranteed to be respected by Dredger (to purge it) and the Proxy (to block it). There is zero chance of drift.
-2. **First-party Scope Protection:** By sharing the configuration, Dredger is inherently aware of the `PUBLISH_SCOPES` (internal first-party scopes) that the Proxy routes to the Publication Target. Dredger automatically and unconditionally excludes these scopes from its purge routines, preventing catastrophic data loss of first-party packages.
-3. **Collapsed Registry Mitigation:** If an operator misconfigures the system by collapsing the Mirror Target and the Publication Target onto a single shared registry, Dredger will detect this and explicitly refuse to boot. This hard failure prevents Dredger from treating first-party packages (that might fall outside the explicit `PUBLISH_SCOPES`) as stale public ones and deleting them.
+2. **First-party Scope Protection:** By sharing the configuration, Dredger is inherently aware of the `ECLUSE_MOUNTS__NPM__PUBLISH_SCOPES` (internal first-party scopes) that the Proxy routes to the Publication Target. Dredger automatically and unconditionally excludes these scopes from its purge routines, preventing catastrophic data loss of first-party packages.
+3. **Collapsed Registry Mitigation:** If an operator misconfigures the system by collapsing the Mirror Target and the Publication Target onto a single shared registry, Dredger will detect this and explicitly refuse to boot. This hard failure prevents Dredger from treating first-party packages (that might fall outside the explicit `ECLUSE_MOUNTS__NPM__PUBLISH_SCOPES`) as stale public ones and deleting them.
 4. **Deployment Simplicity:** The operator deploys the same versioned Docker image for all three components, simply changing the container command and the IAM role.
 
 **Security Boundaries:** The security model relies on the orchestrator (Kubernetes or AWS ECS). The roles (e.g., `s3:GetObject` for Proxy vs `s3:PutObject` for Pilot) and network egress bounds (e.g., zero ingress for Dredger) are applied per-container. Even though the proxy *contains* the Pilot code, it has neither the IAM permissions nor the CLI invocation to execute it.
@@ -164,7 +164,7 @@ those references collapse to **one** identity: the same container role both writ
 the mirror target and (under `service`)
 reads the private upstream, Écluse acts as one consistent entity. A multi-cloud
 process holds one provider per cloud, keyed by cloud; the region/project scoping
-each (`AWS_REGION` / `GOOGLE_CLOUD_PROJECT`) are likewise process-global. **A mount
+each (`ECLUSE_AWS_REGION` / `ECLUSE_GOOGLE_PROJECT`) are likewise process-global. **A mount
 that names a credential source with no initialized provider is a boot-time failure**
 (aggregated with other config errors; see
 [Configuration → Validation](configuration.md#validation-fail-fast-reject-the-unknown)),

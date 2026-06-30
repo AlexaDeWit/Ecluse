@@ -23,8 +23,8 @@ import UnliftIO.Concurrent (threadDelay)
 
 import Ecluse (runWorker)
 import Ecluse.Composition (MirrorQueuePlan (MemoryBackend, SqsBackend), planMirrorQueue, renderBootError)
-import Ecluse.Config (parseEnvPure)
-import Ecluse.Core.Credential (AuthToken (AuthToken, authExpiresAt, authSecret), CredentialProvider, mkSecret, staticProvider)
+import Ecluse.Config (Config (configApp), loadConfig)
+import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Package.Integrity (defaultMinIntegrity, defaultMinTrustedIntegrity)
 import Ecluse.Core.Queue (MirrorQueue)
 import Ecluse.Core.Queue.Sqs (SqsConfig (sqsWaitSeconds), SqsEndpoint (endpointHost, endpointPort), newSqsQueue)
@@ -110,7 +110,7 @@ serve 'Application' over them, then run the body against the assembled proxy.
 
 The queue is built through the __config-driven composition root__
 ('Ecluse.Composition.planMirrorQueue' → 'Ecluse.Core.Queue.Sqs.newSqsQueue'), driven by the
-AWS-SDK-standard @AWS_ENDPOINT_URL_SQS@ override pointed at the container — the same
+AWS-SDK-standard @ECLUSE_AWS_ENDPOINT_URL_SQS@ override pointed at the container — the same
 production path the released image runs, with no test-only code path. -}
 withAwsProxy :: Container -> Text -> (TestProxy -> IO a) -> IO a
 withAwsProxy container queueName body =
@@ -125,7 +125,7 @@ withAwsProxy container queueName body =
 
 {- Build the SQS-backed mirror queue through the production composition root: create a
 queue in the container, then resolve the backend from an environment layer carrying the
-AWS-SDK-standard @AWS_ENDPOINT_URL_SQS@ override (and the standard credential keys an
+AWS-SDK-standard @ECLUSE_AWS_ENDPOINT_URL_SQS@ override (and the standard credential keys an
 emulator needs), exactly as the released image would. A short long-poll keeps the worker
 loop brisk. -}
 configDrivenQueue :: Container -> Text -> IO MirrorQueue
@@ -133,7 +133,7 @@ configDrivenQueue container queueName = do
     queueUrl <- freshQueueUrl container queueName
     let endpoint = endpointFor container
         endpointUrl = "http://" <> endpointHost endpoint <> ":" <> show (endpointPort endpoint)
-    env <- either (fail . ("AwsEndToEndSpec fixture env: " <>) . show) pure (parseEnvPure (sqsEnvVars queueUrl endpointUrl))
+    env <- either (fail . ("AwsEndToEndSpec fixture env: " <>) . show) (pure . configApp) (loadConfig (sqsEnvVars queueUrl endpointUrl) Nothing)
     plan <- either (fail . toString . T.unlines . map renderBootError) pure (planMirrorQueue env)
     case plan of
         SqsBackend sqsConfig -> newSqsQueue sqsConfig{sqsWaitSeconds = 1}
@@ -143,12 +143,12 @@ configDrivenQueue container queueName = do
 -- the standard endpoint override and credential keys, plus the required upstreams.
 sqsEnvVars :: Text -> Text -> [(String, String)]
 sqsEnvVars queueUrl endpointUrl =
-    [ ("PRIVATE_UPSTREAM_URL", "https://private.invalid")
-    , ("MIRROR_QUEUE_URL", toString queueUrl)
-    , ("AWS_REGION", "us-east-1")
-    , ("AWS_ENDPOINT_URL_SQS", toString endpointUrl)
-    , ("AWS_ACCESS_KEY_ID", "test")
-    , ("AWS_SECRET_ACCESS_KEY", "test")
+    [ ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://private.invalid")
+    , ("ECLUSE_QUEUE_URL", toString queueUrl)
+    , ("ECLUSE_AWS_REGION", "us-east-1")
+    , ("ECLUSE_AWS_ENDPOINT_URL_SQS", toString endpointUrl)
+    , ("ECLUSE_AWS_ACCESS_KEY_ID", "test")
+    , ("ECLUSE_AWS_SECRET_ACCESS_KEY", "test")
     ]
 
 -- The composition-root 'Env' over the real SQS queue and the publish client aimed at
@@ -169,10 +169,7 @@ buildEnv queue mirrorUrl = do
     metadataCache <- newMetadataCache defaultCacheConfig
     logEnv <- newTestLogEnv
     heartbeat <- newWorkerHeartbeat
-    newEnv publishClient queue credentials guardedManager trusted metadataCache logEnv telemetryDisabled heartbeat
-  where
-    credentials :: CredentialProvider
-    credentials = staticProvider AuthToken{authSecret = mkSecret "e2e-publish-token", authExpiresAt = Nothing}
+    newEnv publishClient queue guardedManager trusted metadataCache logEnv telemetryDisabled heartbeat
 
 -- The single npm mount: the public origin is the loopback upstream stub, the private
 -- origin is the 404 stub (so every request misses to public), and the mirror target is

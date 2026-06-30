@@ -1,3 +1,5 @@
+{- HLINT ignore "Avoid restricted function" -}
+
 {- | The composition-root wiring: turn a validated 'Config' and the
 process-global credential providers into the served 'MountBinding's, failing fast
 and __aggregated__ on any boot problem.
@@ -19,7 +21,7 @@ it draws on (its @mtCredential@). The boot-time check is the resolution of that
 reference: every distinct credential backend named across all mounts must resolve
 to an __initialized__ provider, or the app halts at boot (see
 @docs\/architecture\/cloud-backends.md@ → "Credential Provider"). Only the
-@static@ backend has a leaf (from @MIRROR_TARGET_TOKEN@); a mount naming
+@static@ backend has a leaf (from @ECLUSE_MIRROR_TARGET_TOKEN@); a mount naming
 @codeartifact@ or @adc@ resolves to no provider and is an honest boot failure.
 
 == Fail-fast at boot
@@ -36,7 +38,7 @@ module Ecluse.Composition (
     -- * Global credential providers
     CredentialProviders,
     initCredentialProviders,
-    initializedBackends,
+    initializedEcosystems,
     lookupProvider,
 
     -- * Mirror-target credential provider selection
@@ -72,21 +74,17 @@ import Data.Time (UTCTime)
 import UnliftIO (tryAny)
 
 import Ecluse.Config (
+    AppConfig (..),
     Config (..),
-    ConfigDoc,
     CredentialBackend (..),
-    EnvConfig (..),
     MirrorTarget (mtCredential, mtUrl),
     Mount (..),
+    MountConfig (..),
     MountRegistries (..),
     PolicyError,
     QueueBackend (..),
     Url,
-    loadConfig,
-    renderCredentialBackend,
-    renderMirrorCredentialProvider,
     renderPolicyError,
-    renderQueueBackend,
     unUrl,
  )
 import Ecluse.Core.Credential (AuthToken (..), CredentialProvider, Secret, mkSecret, staticProvider)
@@ -99,6 +97,7 @@ import Ecluse.Core.Queue.Sqs (SqsConfig (sqsEndpoint), SqsEndpoint (..), default
 import Ecluse.Core.Registry.Npm qualified as Npm
 import Ecluse.Core.Registry.Npm.Filter qualified as NpmFilter
 import Ecluse.Core.Registry.Npm.Project qualified as NpmProject
+import Ecluse.Core.Wire (renderWire)
 
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Security (Limits (Limits, maxBodyBytes, maxNestingDepth, maxVersionCount), TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), hostAddress, lowerCaseHosts, splitHostPort)
@@ -118,13 +117,13 @@ mount references one by name and never holds its own.
 The keyset (see 'initializedBackends') is the boot-check's pure surface — a mount
 that names a backend absent from it has an unresolved credential reference.
 -}
-newtype CredentialProviders = CredentialProviders (Map CredentialBackend CredentialProvider)
+newtype CredentialProviders = CredentialProviders (Map Ecosystem CredentialProvider)
 
 {- | Build the global credential providers from the environment layer, or the
 aggregated boot errors that block them. The mirror-target write provider is
-selected by 'cfgMirrorTargetCredentialProvider' (see 'planMirrorCredential'):
+selected by 'cfgCredentialProvider' (see 'planMirrorCredential'):
 
-* @static@ — built from @MIRROR_TARGET_TOKEN@ ('cfgMirrorTargetToken') when set;
+* @static@ — built from @ECLUSE_MIRROR_TARGET_TOKEN@ ('cfgMirrorTargetToken') when set;
   absent, no static provider is initialized, so a mount naming @static@ fails the
   boot-time credential-reference check.
 * @codeartifact@ — the CodeArtifact inputs are resolved
@@ -140,7 +139,7 @@ selected by 'cfgMirrorTargetCredentialProvider' (see 'planMirrorCredential'):
 * @gcp-artifact-registry@ — recognised but not built in this binary, so selecting
   it is a fail-loud boot error rather than a silent fall-through.
 
-The @static@ provider is also built whenever @MIRROR_TARGET_TOKEN@ is present,
+The @static@ provider is also built whenever @ECLUSE_MIRROR_TARGET_TOKEN@ is present,
 independent of the selector, so a static token never goes unused.
 
 The 'CredentialReporters' are handed to the refreshing CodeArtifact provider so its
@@ -148,53 +147,50 @@ mint breaker and refresh outcomes record to telemetry; the static provider never
 refreshes, so they do not concern it. The composition root supplies the deferred
 reporters that go live once the telemetry substrate exists.
 -}
-initCredentialProviders :: CredentialReporters -> EnvConfig -> IO (Either [BootError] CredentialProviders)
-initCredentialProviders reporters env = case planMirrorCredential env of
-    Left errs -> pure (Left errs)
-    Right Nothing -> pure (Right (providersFrom Nothing))
-    Right (Just caConfig) ->
-        -- The CodeArtifact leaf mints once eagerly at construction, so an unreachable
-        -- or unauthorised identity fails the boot here rather than on the first write.
-        -- Catch that mint so its failure renders through the aggregated boot block
-        -- instead of escaping as a raw amazonka exception.
-        tryAny (newCodeArtifactProvider reporters caConfig) <&> \case
-            Left err -> Left [CodeArtifactMintFailed (toText (displayException err))]
-            Right provider -> Right (providersFrom (Just provider))
-  where
-    -- Assemble the provider map from the static leaf (when a token is present) plus
-    -- the optionally-built CodeArtifact provider.
-    providersFrom :: Maybe CredentialProvider -> CredentialProviders
-    providersFrom mCodeArtifact =
-        CredentialProviders
-            (Map.fromList (catMaybes [staticEntry] <> maybeToList ((CodeArtifactCredential,) <$> mCodeArtifact)))
+initCredentialProviders :: CredentialReporters -> AppConfig -> IO (Either [BootError] CredentialProviders)
+initCredentialProviders reporters app = do
+    let plans = map (\(eco, mcfg) -> (eco, mcfg, planMirrorCredential eco app mcfg)) (Map.toList (cfgMounts app))
+    let errs = concat [e | (_, _, Left e) <- plans]
+    if not (null errs)
+        then pure (Left errs)
+        else do
+            let validPlans = [(eco, mcfg, mca) | (eco, mcfg, Right mca) <- plans]
+            results <-
+                traverse
+                    ( \(eco, mcfg, mca) -> do
+                        case mca of
+                            Nothing ->
+                                case mntMirrorTargetToken mcfg of
+                                    Just token -> pure (Right (eco, Just (staticProvider AuthToken{authSecret = token, authExpiresAt = Nothing})))
+                                    Nothing -> pure (Right (eco, Nothing))
+                            Just caConfig -> do
+                                tryAny (newCodeArtifactProvider reporters caConfig) <&> \case
+                                    Left err -> Left [CodeArtifactMintFailed (toText (displayException err))]
+                                    Right provider -> Right (eco, Just provider)
+                    )
+                    validPlans
+            let (initErrs, valid) = partitionEithers results
+            if not (null initErrs)
+                then pure (Left (concat initErrs))
+                else pure (Right (CredentialProviders (Map.fromList [(eco, p) | (eco, Just p) <- valid])))
 
-    -- The static provider, when a static write token is supplied. A static token
-    -- never expires, so the in-memory 'staticProvider' leaf is the whole policy.
-    staticEntry :: Maybe (CredentialBackend, CredentialProvider)
-    staticEntry = do
-        token <- cfgMirrorTargetToken env
-        pure
-            ( StaticCredential
-            , staticProvider AuthToken{authSecret = token, authExpiresAt = Nothing}
-            )
-
-{- | The set of credential backends that resolved to an initialized provider — the
+{- | The set of ecosystems that resolved to an initialized provider — the
 pure surface the boot-time credential-reference check reasons over.
 -}
-initializedBackends :: CredentialProviders -> Set CredentialBackend
-initializedBackends (CredentialProviders ps) = Map.keysSet ps
+initializedEcosystems :: CredentialProviders -> Set Ecosystem
+initializedEcosystems (CredentialProviders ps) = Map.keysSet ps
 
-{- | Look up the initialized provider for a backend, 'Nothing' when none is
+{- | Look up the initialized provider for an ecosystem, 'Nothing' when none is
 initialized (the unresolved-reference case the boot check rejects).
 -}
-lookupProvider :: CredentialBackend -> CredentialProviders -> Maybe CredentialProvider
-lookupProvider backend (CredentialProviders ps) = Map.lookup backend ps
+lookupProvider :: Ecosystem -> CredentialProviders -> Maybe CredentialProvider
+lookupProvider eco (CredentialProviders ps) = Map.lookup eco ps
 
 -- ── mirror-target credential provider selection ───────────────────────────────
 
 {- | Decide what mirror-target write provider the environment layer selects, as the
 pure half of 'initCredentialProviders': 'Nothing' when the @static@ provider is
-selected (its leaf is the @MIRROR_TARGET_TOKEN@ already handled there), 'Just' a
+selected (its leaf is the @ECLUSE_MIRROR_TARGET_TOKEN@ already handled there), 'Just' a
 resolved 'CodeArtifactConfig' when @codeartifact@ is selected, or the aggregated
 boot errors that block the selection.
 
@@ -203,10 +199,10 @@ a fail-loud 'MirrorCredentialProviderUnavailable' boot error — never a silent
 fall-through to a different provider, mirroring how 'planMirrorQueue' treats the GCP
 queue arm.
 -}
-planMirrorCredential :: EnvConfig -> Either [BootError] (Maybe CodeArtifactConfig)
-planMirrorCredential env = case cfgMirrorTargetCredentialProvider env of
+planMirrorCredential :: Ecosystem -> AppConfig -> MountConfig -> Either [BootError] (Maybe CodeArtifactConfig)
+planMirrorCredential eco app mcfg = case mntCredentialProvider mcfg of
     StaticCredential -> Right Nothing
-    CodeArtifactCredential -> Just <$> resolveCodeArtifactConfig env
+    CodeArtifactCredential -> Just <$> resolveCodeArtifactConfig eco app mcfg
     AdcCredential -> Left [MirrorCredentialProviderUnavailable AdcCredential]
 
 {- | Resolve the CodeArtifact inputs for the mirror-target token, or the aggregated
@@ -215,10 +211,10 @@ boot errors naming each input that could not be resolved.
 Each required input is resolved __(a) from its explicit @MIRROR_TARGET_CODEARTIFACT_*@
 key, else (b) by parsing the mirror-target URL host__ of the form
 @{domain}-{owner}.d.codeartifact.{region}.amazonaws.com@ (the documented host
-fallback). The region resolves explicit key → host → @AWS_REGION@: the endpoint host
+fallback). The region resolves explicit key → host → @ECLUSE_AWS_REGION@: the endpoint host
 encodes the domain's authoritative region, so it outranks the process-wide
-@AWS_REGION@ (a cross-region deploy mints against the domain's region, not the
-caller's). The mirror-target URL is the resolved one — an unset @MIRROR_TARGET_URL@
+@ECLUSE_AWS_REGION@ (a cross-region deploy mints against the domain's region, not the
+caller's). The mirror-target URL is the resolved one — an unset @ECLUSE_MIRROR_TARGET@
 has already folded onto the private upstream — so a private-upstream CodeArtifact
 endpoint is parsed too. The optional token-duration carries through
 ('cfgMirrorCodeArtifactTokenDuration').
@@ -230,8 +226,8 @@ at all (so it falls through to the named-key check). If a required input resolve
 __neither__ source, that is a fail-loud 'CodeArtifactConfigMissing' boot error naming
 the exact key the operator must set, aggregated so one run reports every problem.
 -}
-resolveCodeArtifactConfig :: EnvConfig -> Either [BootError] CodeArtifactConfig
-resolveCodeArtifactConfig env =
+resolveCodeArtifactConfig :: Ecosystem -> AppConfig -> MountConfig -> Either [BootError] CodeArtifactConfig
+resolveCodeArtifactConfig eco app mcfg =
     case partitionEithers [domainE, ownerE, regionE] of
         ([], [domain, owner, region]) ->
             Right
@@ -239,29 +235,26 @@ resolveCodeArtifactConfig env =
                     { caRegion = region
                     , caDomain = domain
                     , caDomainOwner = Just owner
-                    , caDurationSeconds = cfgMirrorCodeArtifactTokenDuration env
+                    , caDurationSeconds = mntMirrorCodeArtifactTokenDuration mcfg
                     }
         (errs, _) -> Left errs
   where
-    -- The parsed (domain, owner, region) of the resolved mirror-target host, when it
-    -- is a CodeArtifact endpoint — the (b) fallback source for each input.
     parsed :: Maybe (Text, Text, Text)
     parsed = parseCodeArtifactHost (hostAddress mirrorTargetUrl)
 
     mirrorTargetUrl :: Text
-    mirrorTargetUrl = maybe (registryUrlText (cfgPrivateUpstream env)) registryUrlText (cfgMirrorTarget env)
+    mirrorTargetUrl = maybe (registryUrlText (fromMaybe (error "no pUpstream") (mntPrivateUpstream mcfg))) registryUrlText (mntMirrorTarget mcfg)
 
-    -- The first non-blank of the precedence-ordered candidates, or the named-key
-    -- boot error. Each candidate is trimmed, so a blank explicit value falls through.
     resolve :: Text -> [Maybe Text] -> Either BootError Text
     resolve key candidates =
-        maybe (Left (CodeArtifactConfigMissing key)) Right (asum (map (>>= nonBlank) candidates))
+        let fullKey = "ECLUSE_MOUNTS__" <> T.toUpper (ecosystemName eco) <> "__" <> key
+         in maybe (Left (CodeArtifactConfigMissing fullKey)) Right (asum (map (>>= nonBlank) candidates))
 
-    domainE = resolve "MIRROR_TARGET_CODEARTIFACT_DOMAIN" [cfgMirrorCodeArtifactDomain env, fst3 <$> parsed]
+    domainE = resolve "MIRROR_CODE_ARTIFACT_DOMAIN" [mntMirrorCodeArtifactDomain mcfg, fst3 <$> parsed]
     ownerE =
-        resolve "MIRROR_TARGET_CODEARTIFACT_DOMAIN_OWNER" [cfgMirrorCodeArtifactDomainOwner env, snd3 <$> parsed]
-            >>= validateAccountId "MIRROR_TARGET_CODEARTIFACT_DOMAIN_OWNER"
-    regionE = resolve "MIRROR_TARGET_CODEARTIFACT_REGION" [cfgMirrorCodeArtifactRegion env, thd3 <$> parsed, cfgAwsRegion env]
+        resolve "MIRROR_CODE_ARTIFACT_DOMAIN_OWNER" [mntMirrorCodeArtifactDomainOwner mcfg, snd3 <$> parsed]
+            >>= validateAccountId ("ECLUSE_MOUNTS__" <> T.toUpper (ecosystemName eco) <> "__MIRROR_CODE_ARTIFACT_DOMAIN_OWNER")
+    regionE = resolve "MIRROR_CODE_ARTIFACT_REGION" [mntMirrorCodeArtifactRegion mcfg, thd3 <$> parsed, cfgAwsRegion app]
 
     -- A resolved owner must be a 12-digit AWS account id (an explicit key can supply a
     -- malformed one; a host owner is already validated by 'parseCodeArtifactHost').
@@ -316,16 +309,16 @@ data BootError
       -}
       QueueProviderUnavailable QueueBackend
     | {- | The SQS mirror-queue backend was selected but no AWS region was supplied
-      (@AWS_REGION@), so the queue cannot be scoped to a region.
+      (@ECLUSE_AWS_REGION@), so the queue cannot be scoped to a region.
       -}
       QueueRegionMissing
     | {- | A cloud mirror-queue backend (e.g. @sqs@) was selected but no
-      @MIRROR_QUEUE_URL@ was supplied, so there is no queue to send jobs to. The
+      @ECLUSE_QUEUE_URL@ was supplied, so there is no queue to send jobs to. The
       in-memory backend does not raise this — it has no external queue.
       -}
       QueueUrlMissing QueueBackend
-    | {- | The configured SQS endpoint override (@AWS_ENDPOINT_URL_SQS@ \/
-      @AWS_ENDPOINT_URL@) is not a parseable endpoint URL. Carries the offending value.
+    | {- | The configured SQS endpoint override (@ECLUSE_AWS_ENDPOINT_URL_SQS@ \/
+      @ECLUSE_AWS_ENDPOINT_URL@) is not a parseable endpoint URL. Carries the offending value.
       -}
       QueueEndpointMalformed Text
     | {- | The selected mirror-target credential provider has no implementation
@@ -347,22 +340,22 @@ data BootError
       fixed). Carries the rendered exception so the cause is legible and aggregated.
       -}
       CodeArtifactMintFailed Text
-    | {- | A publication target was configured (@PUBLICATION_TARGET_URL@) but no
-      publish-scope allow-list (@PUBLISH_SCOPES@) was supplied, so the anti-shadowing
+    | {- | A publication target was configured (@ECLUSE_PUBLICATION_TARGET@) but no
+      publish-scope allow-list (@ECLUSE_PUBLISH_SCOPES@) was supplied, so the anti-shadowing
       guard would have nothing to enforce. Refused at boot rather than defaulting to an
       empty allow-list (which would deny every publish) or an open one (which would let
       a client shadow any public name).
       -}
-      PublishScopesMissing
-    | {- | A static publish credential (@PUBLICATION_TARGET_TOKEN@) was configured
-      without a verifiable inbound edge (@PROXY_AUTH_TOKEN@). Écluse would otherwise
+      PublishScopesMissing Ecosystem
+    | {- | A static publish credential (@ECLUSE_PUBLICATION_TARGET_TOKEN@) was configured
+      without a verifiable inbound edge (@ECLUSE_AUTH_TOKEN@). Écluse would otherwise
       substitute its own standing write credential for a publishing caller who forwards
       none, so an unauthenticated request could publish within the configured scopes
       under Écluse's own identity. Refused at boot so an internal publish credential
       paired with an open edge is unrepresentable — the write-side counterpart of the
       fail-closed read identity.
       -}
-      PublishStaticCredentialNeedsEdge
+      PublishStaticCredentialNeedsEdge Ecosystem
     deriving stock (Eq, Show)
 
 -- | Render a 'BootError' as a human-facing line for the aggregated failure block.
@@ -375,40 +368,40 @@ renderBootError = \case
         "mount "
             <> ecosystemName eco
             <> " names credential source "
-            <> renderCredentialBackend backend
+            <> renderWire backend
             <> ", not initialized in this build"
     QueueProviderUnavailable backend ->
         "mirror queue provider "
-            <> renderQueueBackend backend
+            <> renderWire backend
             <> " is not available in this build"
     QueueRegionMissing ->
         "mirror queue provider "
-            <> renderQueueBackend SqsQueue
-            <> " requires AWS_REGION to be set"
+            <> renderWire SqsQueue
+            <> " requires ECLUSE_AWS_REGION to be set"
     QueueUrlMissing backend ->
         "mirror queue provider "
-            <> renderQueueBackend backend
-            <> " requires MIRROR_QUEUE_URL to be set"
+            <> renderWire backend
+            <> " requires ECLUSE_QUEUE_URL to be set"
     QueueEndpointMalformed url ->
-        "the SQS endpoint override (AWS_ENDPOINT_URL_SQS / AWS_ENDPOINT_URL) is not a valid endpoint URL: " <> url
+        "the SQS endpoint override (ECLUSE_AWS_ENDPOINT_URL_SQS / ECLUSE_AWS_ENDPOINT_URL) is not a valid endpoint URL: " <> url
     MirrorCredentialProviderUnavailable backend ->
         "mirror-target credential provider "
-            <> renderMirrorCredentialProvider backend
+            <> renderWire backend
             <> " is not available in this build"
     CodeArtifactConfigMissing key ->
         "mirror-target credential provider codeartifact requires "
             <> key
-            <> " (set it explicitly, or use a CodeArtifact MIRROR_TARGET_URL it can be parsed from)"
+            <> " (set it explicitly, or use a CodeArtifact ECLUSE_MIRROR_TARGET it can be parsed from)"
     CodeArtifactConfigInvalid key reason ->
         "mirror-target credential provider codeartifact: " <> key <> " is invalid (" <> reason <> ")"
     CodeArtifactMintFailed detail ->
         "mirror-target credential provider codeartifact failed to mint an initial token at boot: "
             <> detail
             <> " (a transient AWS error may clear on retry; a permanent one — bad domain/region or missing permission — must be fixed)"
-    PublishScopesMissing ->
-        "PUBLICATION_TARGET_URL is set but PUBLISH_SCOPES is empty: a publication target needs a publish-scope allow-list (e.g. @acme) for the anti-shadowing guard. Set PUBLISH_SCOPES, or unset PUBLICATION_TARGET_URL to disable publishing."
-    PublishStaticCredentialNeedsEdge ->
-        "PUBLICATION_TARGET_TOKEN is set but PROXY_AUTH_TOKEN is not: a static publish credential needs a verifiable inbound edge, or an unauthenticated caller could publish using Écluse's own credential within the allowed scopes. Set PROXY_AUTH_TOKEN to require edge authentication, or unset PUBLICATION_TARGET_TOKEN to forward only the publisher's own token."
+    PublishScopesMissing eco ->
+        "ECLUSE_MOUNTS__" <> T.toUpper (T.pack (show eco)) <> "__PUBLICATION_TARGET is set but ECLUSE_MOUNTS__" <> T.toUpper (T.pack (show eco)) <> "__PUBLISH_SCOPES is empty: a publication target needs a publish-scope allow-list (e.g. @acme) for the anti-shadowing guard."
+    PublishStaticCredentialNeedsEdge eco ->
+        "ECLUSE_MOUNTS__" <> T.toUpper (T.pack (show eco)) <> "__PUBLICATION_TARGET_TOKEN is set but ECLUSE_AUTH_TOKEN is not: a static publish credential needs a verifiable inbound edge."
 
 {- | Validate the environment layer and optional document into the served mount
 bindings, or the aggregated boot errors. The composition root's single entry: it
@@ -425,13 +418,9 @@ planMounts ::
     (Ecosystem -> Maybe PackumentDeps -> Maybe PublishDeps -> Maybe MountBinding) ->
     IO UTCTime ->
     CredentialProviders ->
-    EnvConfig ->
-    Maybe ConfigDoc ->
+    Config ->
     IO (Either [BootError] [MountBinding])
-planMounts resolveAdapter clock providers env mDoc =
-    case first (map PolicyBootError) (loadConfig env mDoc) of
-        Left errs -> pure (Left errs)
-        Right config -> composeBindings resolveAdapter clock providers config
+planMounts = composeBindings
 
 {- | Turn a validated 'Config' into the served 'MountBinding's, or the aggregated
 boot errors. For each mount, in ecosystem order: its credential reference must
@@ -446,25 +435,26 @@ composeBindings ::
     Config ->
     IO (Either [BootError] [MountBinding])
 composeBindings resolveAdapter clock providers config = do
-    -- The publish-deps validation is global (env-level), so its error aggregates with
-    -- the per-mount errors rather than short-circuiting: one boot reports every problem.
-    let (pubErrs, pubDeps) = either (,Nothing) ([],) (publishDepsFor (configEnv config) limits helpMessage)
-    -- 'bindingFor' is 'IO' (it 'prepare's the mount's rules), so the per-mount results
-    -- are gathered with 'traverse' and then partitioned exactly as before.
-    bindingResults <- traverse (bindingFor pubDeps) (Map.elems (configMounts config))
+    let pubDepsMapE = sequence $ Map.mapWithKey (\eco mcfg -> publishDepsFor eco (configApp config) mcfg limits helpMessage) (cfgMounts (configApp config))
+    let (pubErrs, pubDepsMap) = case pubDepsMapE of
+            Left errs -> (errs, Map.empty)
+            Right m -> ([], m)
+
+    bindingResults <- traverse (\mount -> bindingFor (join (Map.lookup (mountEcosystem mount) pubDepsMap)) mount) (Map.elems (configMounts config))
     pure $ case (pubErrs, partitionEithers bindingResults) of
         ([], ([], bindings)) -> Right bindings
         (_, (errs, _)) -> Left (pubErrs <> concat errs)
   where
     inboundToken :: Maybe Secret
-    inboundToken = cfgAuthToken (configEnv config)
+    inboundToken = cfgAuthToken (configApp config)
 
     -- The resolved tarball-host policy for every mount, from the secure-default
     -- environment toggle: honour a cross-host dist.tarball only when explicitly
     -- opted in (and even then, never past the allowlist or the internal block).
-    tarballHostPolicy :: TarballHostPolicy
-    tarballHostPolicy =
-        if cfgRespectUpstreamTarballHost (configEnv config)
+    -- The resolved tarball-host policy for every mount, from the secure-default
+    tarballHostPolicy :: Mount -> TarballHostPolicy
+    tarballHostPolicy mount =
+        if mntRespectUpstreamTarballHost (fromMaybe (error "no mount") (Map.lookup (mountEcosystem mount) (cfgMounts (configApp config))))
             then AnyAllowlistedHost
             else SameHostAsPackument
 
@@ -475,35 +465,35 @@ composeBindings resolveAdapter clock providers config = do
     limits :: Limits
     limits =
         Limits
-            { maxBodyBytes = cfgMaxResponseBytes (configEnv config)
-            , maxVersionCount = cfgMaxVersionCount (configEnv config)
-            , maxNestingDepth = cfgMaxNestingDepth (configEnv config)
+            { maxBodyBytes = cfgMaxResponseBytes (configApp config)
+            , maxVersionCount = cfgMaxVersionCount (configApp config)
+            , maxNestingDepth = cfgMaxNestingDepth (configApp config)
             }
 
     -- The operator help message, derived from the environment layer like the
     -- inbound token, so every mount's denials carry it.
     helpMessage :: Maybe HelpMessage
-    helpMessage = mkHelpMessage <$> cfgHelpMessage (configEnv config)
+    helpMessage = mkHelpMessage <$> cfgHelpMessage (configApp config)
 
     -- The global public-integrity admission floor, validated at config load, carried
     -- onto every mount's deps so the public gate refuses a below-floor version.
     minIntegrity :: MinIntegrity
-    minIntegrity = cfgMinPublicIntegrity (configEnv config)
+    minIntegrity = cfgMinPublicIntegrity (configApp config)
 
     -- The global trusted-integrity admission floor (default SHA-256, loosenable below it),
     -- carried onto every mount's deps so the trusted gate drops a below-floor private
     -- version from the listing and gates the private artifact serve.
     minTrustedIntegrity :: MinTrustedIntegrity
-    minTrustedIntegrity = cfgMinTrustedIntegrity (configEnv config)
+    minTrustedIntegrity = cfgMinTrustedIntegrity (configApp config)
 
     -- A mount's externally-visible base URL for the dist.tarball rewrite. Absolute
-    -- under PROXY_PUBLIC_URL when set (so a served tarball is a full URL an npm
+    -- under ECLUSE_PUBLIC_URL when set (so a served tarball is a full URL an npm
     -- client can fetch); otherwise the relative prefix path, retained for
     -- compatibility. A trailing slash on the configured URL is dropped so the join
     -- with the leading-slash mount path yields exactly one separator.
     mountBaseUrl :: Ecosystem -> Text
     mountBaseUrl eco =
-        case cfgPublicUrl (configEnv config) of
+        case cfgPublicUrl (configApp config) of
             Nothing -> mountBasePath eco
             Just public -> T.dropWhileEnd (== '/') (unUrl public) <> mountBasePath eco
 
@@ -525,19 +515,19 @@ composeBindings resolveAdapter clock providers config = do
     credentialError :: Mount -> Maybe BootError
     credentialError mount =
         let backend = mtCredential (regMirrorTarget (mountRegistries mount))
-         in if backend `Set.member` initializedBackends providers
+         in if mountEcosystem mount `Set.member` initializedEcosystems providers
                 then Nothing
                 else Just (UnresolvedCredential (mountEcosystem mount) backend)
 
     {- Build a mount's 'PackumentDeps' from its registries, resolved rules, the
     inbound edge token, the injected clock, and the operator help message. The
     mount's externally-visible base URL drives the @dist.tarball@ rewrite: an
-    __absolute__ URL under @PROXY_PUBLIC_URL@ (@{public}\/npm\/{pkg}\/-\/{file}@)
+    __absolute__ URL under @ECLUSE_PUBLIC_URL@ (@{public}\/npm\/{pkg}\/-\/{file}@)
     when one is configured, so an @npm@ client fetches the artifact back through the
     proxy on the gated path; otherwise the relative prefix path (@\/npm@), retained
     for compatibility — but note @npm@ cannot consume a relative @dist.tarball@ (it
     reads a leading slash as a @file:@ path), so a real install path must set
-    @PROXY_PUBLIC_URL@ (see @mountBaseUrl@ and
+    @ECLUSE_PUBLIC_URL@ (see @mountBaseUrl@ and
     @docs\/architecture\/hosting.md@ → "URL rewriting"). -}
     packumentDepsFor :: Mount -> IO PackumentDeps
     packumentDepsFor mount = do
@@ -554,7 +544,7 @@ composeBindings resolveAdapter clock providers config = do
                 , pdMountBaseUrl = mountBaseUrl (mountEcosystem mount)
                 , pdMirrorTarget = registryUrlText (mtUrl (regMirrorTarget regs))
                 , pdRules = prepared
-                , pdTarballHostPolicy = tarballHostPolicy
+                , pdTarballHostPolicy = tarballHostPolicy mount
                 , -- The internal-range opt-in for an honoured tarball host is empty: the
                   -- composition root's secure default for the pure literal-block
                   -- defence-in-depth on the dist.tarball host gate.
@@ -588,8 +578,8 @@ verifiable inbound edge — reported together rather than one reboot at a time. 
 URL, the scopes, and the static fallback credential are the publish env layer; the
 response bounds ('Limits') and help message are shared with the read paths and passed in.
 -}
-publishDepsFor :: EnvConfig -> Limits -> Maybe HelpMessage -> Either [BootError] (Maybe PublishDeps)
-publishDepsFor env limits helpMessage = case cfgPublicationTarget env of
+publishDepsFor :: Ecosystem -> AppConfig -> MountConfig -> Limits -> Maybe HelpMessage -> Either [BootError] (Maybe PublishDeps)
+publishDepsFor eco app mcfg limits helpMessage = case mntPublicationTarget mcfg of
     Nothing -> Right Nothing
     Just url -> case bootErrors of
         [] ->
@@ -597,7 +587,7 @@ publishDepsFor env limits helpMessage = case cfgPublicationTarget env of
                 ( Just
                     PublishDeps
                         { pubTargetUrl = registryUrlText url
-                        , pubScopes = cfgPublishScopes env
+                        , pubScopes = mntPublishScopes mcfg
                         , pubStaticToken = staticToken
                         , pubInboundToken = inboundToken
                         , pubLimits = limits
@@ -608,29 +598,19 @@ publishDepsFor env limits helpMessage = case cfgPublicationTarget env of
                 )
         errs -> Left errs
   where
-    -- The inbound edge token (@PROXY_AUTH_TOKEN@) and the static fallback publish
-    -- credential (@PUBLICATION_TARGET_TOKEN@, forwarded only when a publishing client
-    -- sends none) — the pair whose coupling the edge check below constrains.
     inboundToken, staticToken :: Maybe Secret
-    inboundToken = cfgAuthToken env
-    staticToken = cfgPublicationTargetToken env
+    inboundToken = cfgAuthToken app
+    staticToken = mntPublicationTargetToken mcfg
 
-    -- The publish boot couplings, accumulated so one boot reports every problem rather
-    -- than surfacing them one reboot at a time; each error sits next to the condition
-    -- that fires it.
     bootErrors :: [BootError]
     bootErrors = catMaybes [scopesError, edgeError]
 
     scopesError, edgeError :: Maybe BootError
-    -- A publication target needs a publish-scope allow-list for the anti-shadowing guard.
     scopesError
-        | null (cfgPublishScopes env) = Just PublishScopesMissing
+        | null (mntPublishScopes mcfg) = Just (PublishScopesMissing eco)
         | otherwise = Nothing
-    -- A static publish credential needs a verifiable inbound edge: without one, Écluse
-    -- would publish under its own standing credential for a caller who forwards none, so
-    -- internal credential + open edge is refused as unrepresentable.
     edgeError
-        | isJust staticToken && isNothing inboundToken = Just PublishStaticCredentialNeedsEdge
+        | isJust staticToken && isNothing inboundToken = Just (PublishStaticCredentialNeedsEdge eco)
         | otherwise = Nothing
 
 -- ── publish-side wiring ───────────────────────────────────────────────────────
@@ -664,12 +644,9 @@ reports for the serve side, so the two surfaces never disagree on what is wired.
 -}
 planPublishTargets ::
     CredentialProviders ->
-    EnvConfig ->
-    Maybe ConfigDoc ->
+    Config ->
     Either [BootError] [PublishTarget]
-planPublishTargets providers env mDoc =
-    first (map PolicyBootError) (loadConfig env mDoc)
-        >>= composePublishTargets providers
+planPublishTargets = composePublishTargets
 
 -- Resolve every mount's publish target from a validated config, aggregating an
 -- unresolved-credential error per mount (the same check 'composeBindings' applies).
@@ -686,7 +663,7 @@ composePublishTargets providers config =
     targetFor mount =
         let target = regMirrorTarget (mountRegistries mount)
             backend = mtCredential target
-         in case lookupProvider backend providers of
+         in case lookupProvider (mountEcosystem mount) providers of
                 Just provider ->
                     Right
                         PublishTarget
@@ -723,30 +700,30 @@ which backends this binary can build. The AWS @sqs@ backend resolves to a
 'SqsBackend' carrying its 'SqsConfig' (the queue URL and region, with the provider
 knobs at their defaults); the composition root passes that to
 @Ecluse.Core.Queue.Sqs.newSqsQueue@. The @memory@ backend resolves to a 'MemoryBackend'
-carrying its depth cap, built in-process with no cloud queue (@MIRROR_QUEUE_URL@ and
-@AWS_REGION@ are not consulted for it) — an explicit operator choice for a simple,
+carrying its depth cap, built in-process with no cloud queue (@ECLUSE_QUEUE_URL@ and
+@ECLUSE_AWS_REGION@ are not consulted for it) — an explicit operator choice for a simple,
 single-node, or air-gapped deployment, never an automatic fallback (which would
 soften the fail-loud-on-misconfig posture); the composition root emits the
 'memoryQueueBootWarning' on selection. The GCP @pubsub@ arm is recognised but not
 built, so it is a fail-loud 'QueueProviderUnavailable' boot error rather than a
-silent fall-through. @MIRROR_QUEUE_URL@ is optional at the env layer; it is required
+silent fall-through. @ECLUSE_QUEUE_URL@ is optional at the env layer; it is required
 __here__ for @sqs@ (the jobs need a queue), so a missing one is a fail-loud
-'QueueUrlMissing' boot error, and a missing @AWS_REGION@ under @sqs@ is a
+'QueueUrlMissing' boot error, and a missing @ECLUSE_AWS_REGION@ under @sqs@ is a
 'QueueRegionMissing' boot error — the @sqs@ arm aggregates the region, queue-URL, and
 endpoint failures, and the whole result is a list so it aggregates with the rest of
 the boot-time validation.
 
-When an endpoint override is configured (@AWS_ENDPOINT_URL_SQS@, else
-@AWS_ENDPOINT_URL@ — the AWS-SDK-standard variables), it is parsed into the
+When an endpoint override is configured (@ECLUSE_AWS_ENDPOINT_URL_SQS@, else
+@ECLUSE_AWS_ENDPOINT_URL@ — the AWS-SDK-standard variables), it is parsed into the
 backend's 'SqsEndpoint' so the released image can target a local emulator
 (@ministack@) or a VPC endpoint without a test-only code path; a malformed override URL is
 a fail-loud 'QueueEndpointMalformed' boot error. With no override, the SQS backend
 uses AWS's default endpoint and credential resolution.
 -}
-planMirrorQueue :: EnvConfig -> Either [BootError] MirrorQueuePlan
+planMirrorQueue :: AppConfig -> Either [BootError] MirrorQueuePlan
 planMirrorQueue env = case cfgQueueBackend env of
     PubSubQueue -> Left [QueueProviderUnavailable PubSubQueue]
-    -- The in-memory backend needs no cloud queue: MIRROR_QUEUE_URL and AWS_REGION are
+    -- The in-memory backend needs no cloud queue: ECLUSE_QUEUE_URL and ECLUSE_AWS_REGION are
     -- not consulted, so it can never fail on a missing one.
     MemoryQueue -> Right (MemoryBackend (defaultMemoryQueueConfig (cfgQueueMemoryMaxDepth env)))
     SqsQueue -> case (regionE, urlE, resolveSqsEndpoint env) of
@@ -757,13 +734,13 @@ planMirrorQueue env = case cfgQueueBackend env of
             -- URL, malformed endpoint) so one boot reports them all at once.
             Left (lefts [void regionE, void urlE] <> fromLeft [] endpointE)
   where
-    -- AWS_REGION, required to scope the SQS queue; a blank value is treated as absent.
+    -- ECLUSE_AWS_REGION, required to scope the SQS queue; a blank value is treated as absent.
     regionE :: Either BootError Text
     regionE = case T.strip <$> cfgAwsRegion env of
         Just region | not (T.null region) -> Right region
         _ -> Left QueueRegionMissing
 
-    -- MIRROR_QUEUE_URL is optional at the env layer; it is required here for SQS (the
+    -- ECLUSE_QUEUE_URL is optional at the env layer; it is required here for SQS (the
     -- jobs need a queue to be sent to), an absent one being a fail-loud boot error.
     urlE :: Either BootError Url
     urlE = maybe (Left (QueueUrlMissing SqsQueue)) Right (cfgQueueUrl env)
@@ -800,15 +777,15 @@ memoryQueueDropWarning dropped =
     "mirror queue at capacity: dropped a mirror job (drop-newest); "
         <> show dropped
         <> " job(s) dropped so far. Each is re-mirrored on the next demand; raise "
-        <> "MIRROR_QUEUE_MEMORY_MAX_DEPTH to shed fewer under load."
+        <> "ECLUSE_QUEUE_MEMORY_MAX_DEPTH to shed fewer under load."
 
 {- Resolve the optional SQS endpoint override into an 'SqsEndpoint', or 'Nothing' for
-AWS's default resolution. The AWS-SDK-standard @AWS_ENDPOINT_URL_SQS@ takes precedence
-over the generic @AWS_ENDPOINT_URL@; the override URL is parsed into its TLS flag,
+AWS's default resolution. The AWS-SDK-standard @ECLUSE_AWS_ENDPOINT_URL_SQS@ takes precedence
+over the generic @ECLUSE_AWS_ENDPOINT_URL@; the override URL is parsed into its TLS flag,
 host, and port, and the request signing keys are taken from the standard
-@AWS_ACCESS_KEY_ID@\/@AWS_SECRET_ACCESS_KEY@ (an emulator is off the ambient chain).
+@ECLUSE_AWS_ACCESS_KEY_ID@\/@ECLUSE_AWS_SECRET_ACCESS_KEY@ (an emulator is off the ambient chain).
 A malformed override URL is a fail-loud boot error. -}
-resolveSqsEndpoint :: EnvConfig -> Either [BootError] (Maybe SqsEndpoint)
+resolveSqsEndpoint :: AppConfig -> Either [BootError] (Maybe SqsEndpoint)
 resolveSqsEndpoint env =
     case nonBlank =<< (cfgAwsEndpointUrlSqs env <|> cfgAwsEndpointUrl env) of
         Nothing -> Right Nothing
@@ -852,7 +829,7 @@ parseEndpointUrl raw = do
 TTL and entry bound — so a deployment's cache settings flow from config rather than
 the built-in defaults (see "Ecluse.Core.Server.Cache").
 -}
-cacheConfigFor :: EnvConfig -> CacheConfig
+cacheConfigFor :: AppConfig -> CacheConfig
 cacheConfigFor env =
     CacheConfig
         { cacheTtl = cfgCacheTtl env

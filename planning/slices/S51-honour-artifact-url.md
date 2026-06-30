@@ -18,7 +18,7 @@ Serve each tarball from the artifact's **authoritative upstream location**, the
 `Artifact.artUrl` the projection already preserves from the upstream `dist.tarball`,gated by the existing egress controls, instead of reconstructing
 `{base}/{pkg}/-/{file}` by npm convention. This conforms the serve path to the
 documented model (registry-model.md upstream roles; configuration.md
-`PROXY_RESPECT_UPSTREAM_TARBALL_HOST`) and makes the S40 tarball-host policy,currently plumbed but never consulted, load-bearing.
+`ECLUSE_RESPECT_UPSTREAM_TARBALL_HOST`) and makes the S40 tarball-host policy,currently plumbed but never consulted, load-bearing.
 
 ## Background, what is already right, and the one gap
 
@@ -35,7 +35,7 @@ documented model (registry-model.md upstream roles; configuration.md
 - **The gap:** `streamPublicArtifact` / `streamPrivateArtifact` discard that and
   reconstruct `{base}/{pkg}/-/{file}` via `artifactRequestByFile`. So
   `tarballHostAllowed` / `pdTarballHostPolicy` are never consulted,
-  `PROXY_RESPECT_UPSTREAM_TARBALL_HOST` is inert, and cross-host / off-convention
+  `ECLUSE_RESPECT_UPSTREAM_TARBALL_HOST` is inert, and cross-host / off-convention
   upstreams (PyPI, some private npm registries) cannot be served. For same-host
   npm.js the reconstructed URL equals `artUrl`, so this is a **conditional** defect,
   not a regression on the shipped path.
@@ -53,7 +53,7 @@ documented model (registry-model.md upstream roles; configuration.md
    (the proxy must still mediate / cache / mirror).
 3. Apply the egress gate at the egress point, by trust context:
    - **Public origin:** guarded `envManager` (resolved-IP recheck, already live)
-     **plus** `tarballHostAllowed` with `PROXY_RESPECT_UPSTREAM_TARBALL_HOST`
+     **plus** `tarballHostAllowed` with `ECLUSE_RESPECT_UPSTREAM_TARBALL_HOST`
      semantics, default `SameHostAsPackument` refuses a tarball host ≠ the
      packument's host; `AnyAllowlistedHost` (knob `true`) admits an allowlisted host.
    - **Private origin:** trusted `envPrivateManager`; honour the private packument's
@@ -74,7 +74,7 @@ documented model (registry-model.md upstream roles; configuration.md
 - The private-origin honour-URL path is covered.
 - Docs reconciled in the same PR: `security.md` describes the **now-enforced** control
   (drop the "planned" / hedged framing); `configuration.md`'s
-  `PROXY_RESPECT_UPSTREAM_TARBALL_HOST` matches the implemented behaviour.
+  `ECLUSE_RESPECT_UPSTREAM_TARBALL_HOST` matches the implemented behaviour.
 - Local gate green incl. `codecov/patch` ≥ 95%, mind the HPC partials lesson (no
   always-true `| otherwise` guards; verify partials on the diff, not just "every line
   hit").

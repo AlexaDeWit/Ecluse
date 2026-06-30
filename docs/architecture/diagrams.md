@@ -296,7 +296,7 @@ pushed out-of-band. It is gated by the operator's **publish-scope allow-list** (
 anti-shadowing guard, which rejects before any upstream write) and relayed to the
 **publication target** with the publisher's **own forwarded credential**, the write
 counterpart to the private read, and distinct from the mirror target (which the worker
-writes with Écluse's own token). The path is opt-in: with no `PUBLICATION_TARGET_URL`,
+writes with Écluse's own token). The path is opt-in: with no `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET`,
 `PUT /{pkg}` is a `405`. Published packages are read back through the private upstream. See
 [Registry Model → Publishing first-party packages](registry-model.md#publishing-first-party-packages-the-publication-target).
 
@@ -308,7 +308,7 @@ sequenceDiagram
     participant PubT as Publication target
 
     Client->>E: PUT /{pkg} (npm publish: document + client token)
-    alt no PUBLICATION_TARGET_URL configured
+    alt no ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET configured
         E-->>Client: 405 Method Not Allowed
     else publication target configured
         Note over E: enforce publish-scope allow-list<br/>(anti-shadowing, reject before any write)

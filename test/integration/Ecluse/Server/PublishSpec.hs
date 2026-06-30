@@ -23,7 +23,7 @@ import Network.Wai.Test (
 import Test.Hspec
 import UnliftIO (throwString)
 
-import Ecluse.Core.Credential (AuthToken (..), CredentialProvider, Secret, mkSecret, staticProvider)
+import Ecluse.Core.Credential (Secret, mkSecret)
 import Ecluse.Core.Package (mkScope)
 import Ecluse.Core.Queue (newInMemoryQueue)
 import Ecluse.Core.Registry (ParseError (..), RegistryClient (..))
@@ -95,9 +95,6 @@ fakeRegistry =
         , parseVersionList = const (Left (ParseError "unused"))
         }
 
-fakeCredentials :: CredentialProvider
-fakeCredentials = staticProvider AuthToken{authSecret = mkSecret "unused", authExpiresAt = Nothing}
-
 newTestEnv :: IO Env
 newTestEnv = do
     queue <- newInMemoryQueue
@@ -105,7 +102,7 @@ newTestEnv = do
     metadataCache <- newMetadataCache defaultCacheConfig
     logEnv <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
     heartbeat <- newWorkerHeartbeat
-    newEnv fakeRegistry queue fakeCredentials manager manager metadataCache logEnv telemetryDisabled heartbeat
+    newEnv fakeRegistry queue manager manager metadataCache logEnv telemetryDisabled heartbeat
 
 {- | The first-party publish dependencies for the tests: a @\@acme@ publish-scope
 allow-list, the publication target at the given loopback port, and the given static
@@ -199,7 +196,7 @@ spec = describe "first-party publish path → publication target (S52)" $ do
             seen <- targetSaw target
             seen `shouldBe` [(Just "Bearer publisher-token", LBS.toStrict publishBody)]
 
-    it "forwards the static PUBLICATION_TARGET_TOKEN only when the client sends no token of its own" $
+    it "forwards the static ECLUSE_PUBLICATION_TARGET_TOKEN only when the client sends no token of its own" $
         withTarget 201 "{\"success\":true}" $ \targetPort target -> do
             app <- proxyWith (Just (publishDepsAt targetPort (Just (mkSecret "fallback-token"))))
             resp <- putPublish "/npm/@acme/widget" Nothing publishBody app
