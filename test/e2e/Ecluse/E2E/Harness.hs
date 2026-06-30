@@ -4,10 +4,7 @@ the real @npm@ CLI, and tear it all down.
 The topology runs the __real OCI image__ (the artifact we publish), an __nginx__
 public-upstream stub, a __Verdaccio__ private upstream + mirror target, a
 __ministack__ SQS emulator, and — for the telemetry scenarios ('E2EConfig') — an
-__OTLP collector__ the proxy exports to, on a docker network whose subnet is RFC 5737 documentation
-space (@203.0.113.0\/24@). That range is __not__ in the egress guard's internal-range
-block, so the proxy reaches the stub at a non-internal address with no production code
-change — see @planning\/slices\/S53-e2e-ecosystem.md@. Custom-subnet networks are
+__OTLP collector__ the proxy exports to, on a standard docker network. Custom networks are
 beyond @testcontainers-hs@, so the harness drives @docker@ directly through
 @typed-process@.
 
@@ -219,7 +216,7 @@ withE2EWith cfg action = do
             -- The test CA + server cert (SANs upstream, mirror) the TLS stubs serve and the
             -- proxy trusts, plus the trust bundle the proxy's SSL_CERT_FILE points at.
             generateCerts certsDir
-            dockerOk ["network", "create", "--subnet", "203.0.113.0/24", net]
+            dockerOk ["network", "create", net]
             -- The OTLP collector, when the scenario asks for one: an OTLP/HTTP receiver
             -- into a `debug` exporter at detailed verbosity (so each received metric and
             -- span is written to its logs), reached by the proxy as `otelcol`. Brought up
