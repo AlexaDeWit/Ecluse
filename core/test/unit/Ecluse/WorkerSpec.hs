@@ -65,7 +65,7 @@ import Ecluse.Core.Worker (
     WorkerM,
     WorkerPolicies,
     WorkerPolicy (WorkerPolicy, wpNow, wpResolveVersion, wpRules),
-    WorkerRuntime (WorkerRuntime, wrHeartbeat, wrManager, wrMetrics, wrPolicies, wrQueue, wrRegistry, wrTracing, wrInjectTraceContext),
+    WorkerRuntime (WorkerRuntime, wrHeartbeat, wrInjectTraceContext, wrManager, wrMetrics, wrPolicies, wrQueue, wrRegistry, wrTracing),
     heartbeatHealthy,
     lastPoll,
     newWorkerHeartbeat,

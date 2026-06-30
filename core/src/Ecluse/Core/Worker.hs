@@ -163,8 +163,9 @@ data WorkerRuntime = WorkerRuntime
     , wrTracing :: WorkerTracingPort
     -- ^ The tracing port the worker opens its per-job span through.
     , wrInjectTraceContext :: forall m a. (KatipContext m, MonadIO m) => m a -> m a
-    -- ^ Evaluate and inject the current OpenTelemetry correlation payload into the
-    -- @katip@ context for the inner action.
+    {- ^ Evaluate and inject the current OpenTelemetry correlation payload into the
+    @katip@ context for the inner action.
+    -}
     , wrPolicies :: WorkerPolicies
     {- ^ The per-ecosystem re-evaluation bundles, keyed by a job's ecosystem. The worker
     re-runs current policy against a job's version before it mirrors it, so a policy that
@@ -461,7 +462,8 @@ processJob receipt job = katipAddNamespace "job" $ do
     runtime <- ask
     withRunInIO $ \runInIO ->
         wtpMirrorJobSpan tracing (jobPackage job) (jobVersion job) (jobTraceContext job) jobSpanOutcome $
-            runInIO $ wrInjectTraceContext runtime (reevaluateThenMirror receipt job)
+            runInIO $
+                wrInjectTraceContext runtime (reevaluateThenMirror receipt job)
   where
     -- Project a terminal job outcome onto the worker-job span: the bounded outcome
     -- label always, and the failure detail (which marks the span errored) when the

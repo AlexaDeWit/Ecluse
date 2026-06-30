@@ -131,13 +131,13 @@ import Ecluse.Core.Worker (
     WorkerRuntime (
         WorkerRuntime,
         wrHeartbeat,
+        wrInjectTraceContext,
         wrManager,
         wrMetrics,
         wrPolicies,
         wrQueue,
         wrRegistry,
-        wrTracing,
-        wrInjectTraceContext
+        wrTracing
     ),
     newWorkerHeartbeat,
     processBatch,
