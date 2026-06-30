@@ -277,9 +277,7 @@ spec = do
                 follower <- async (try (resolveMetadata c publicSource (pkg "wedge") fetch) :: IO (Either SomeException CacheEntry))
                 threadDelay 30000 -- give the follower time to register on the marker
                 cancel leader -- cancel in the handoff window; the slot must still free
-                followed <- wait follower
-                -- Since the follower safely retries when the leader is cancelled, it should succeed.
-                pure followed
+                wait follower
             case result of
                 Nothing -> expectationFailure "wedged: a cancelled leader orphaned the in-flight slot"
                 Just (Left _) -> expectationFailure "follower failed instead of recovering"
