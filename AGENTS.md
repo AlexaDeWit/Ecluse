@@ -1,75 +1,120 @@
 # Agent Instructions
 
-## Documentation Policy
+This file is the small, always-loaded constitution for agents working on Écluse. The
+repository is durable memory: load detailed guidance only when the current task needs it.
+See [`.agents/context-management.md`](.agents/context-management.md) for the context-routing
+procedure.
 
-- **Always read `README.md` before starting any task.** It describes the current architecture, key design decisions, and module responsibilities.
-- **Read architecture documents** in `docs/` (if present) before making structural changes to the codebase.
-- **Keep documentation up to date.** Any change that affects behaviour, architecture, public interfaces, or configuration must be reflected in `README.md` and any relevant `docs/` file in the same PR/commit. Do not defer documentation updates.
-- **[`USAGE.md`](USAGE.md) is the operator manual**, the consumer-facing reference for configuration, client setup, network-egress safety, and operations. Any change to something an operator configures or must do to run Écluse safely (environment variables, the config schema, egress requirements, client auth, health/observability endpoints) must update `USAGE.md` in the same PR/commit. The `docs/architecture/` documents stay the home for the *why*; `USAGE.md` is the *how*, and the two must not drift.
-- When adding a new module or significantly changing an existing one, update the architecture section of `README.md` to describe its role.
+## Start here
 
-## Implementation Coordination
+- **Always read [`README.md`](README.md) before starting a task.** It describes the current
+  architecture, design decisions, and module responsibilities.
+- Identify the task type and authoritative source before reading further. Do not preload the
+  entire process and design canon.
+- The design documents describe the target; git, the implementation, and per-slice status
+  describe what has shipped. Reconcile them rather than treating either as interchangeable.
+- **Escalate, don't guess.** Stop on ambiguous, missing, or contradictory requirements rather
+  than inventing a way through them.
 
-Implementation is run as a coordinated multi-agent effort. The repo owner is the **principal architect** (owns design and requirements). The lead agent acts as **team lead** (decomposes the work, dispatches implementation subagents in isolated worktrees, evaluates their output, runs a fast local check, lets CI be the gate, and hands review-ready PRs back for approval). The governing rule is **escalate, don't guess**. Any agent that is stuck, unsure, or facing ambiguous/missing/contradictory specs must stop and surface the issue rather than inventing a way past it.
+| Work | Read next |
+|---|---|
+| Implement or change Haskell | Active slice or issue, relevant architecture section, [`STYLE.md`](STYLE.md), then applicable sections of [`HADDOCK.md`](HADDOCK.md) |
+| Change architecture or module boundaries | [`docs/architecture.md`](docs/architecture.md) and only the linked concern documents affected |
+| Change operator behaviour or configuration | [`USAGE.md`](USAGE.md) and the relevant architecture document |
+| Add or change tests | Applicable sections of [`docs/testing.md`](docs/testing.md) |
+| Build, debug, or navigate Haskell | Applicable sections of [`docs/getting-started.md`](docs/getting-started.md) |
+| Change CI, releases, supply chain, or security tooling | [`CONTRIBUTING.md`](CONTRIBUTING.md) and the relevant testing or release-supply-chain sections |
+| Coordinate implementation slices | [`planning/orchestration-strategy.md`](planning/orchestration-strategy.md), [`planning/delivery-plan.md`](planning/delivery-plan.md), and the active slice files |
+| Commit or open a PR | [`CONTRIBUTING.md`](CONTRIBUTING.md), the PR template, and the `open-pull-request` skill |
+| Run in a hosted/web execution environment | [`.agents/remote-execution.md`](.agents/remote-execution.md) |
 
-The full strategy, decomposition, the per-PR loop, the escalation contract, and how verification works, are all in [`planning/orchestration-strategy.md`](planning/orchestration-strategy.md). The concrete delivery plan is the dependency-ordered PR DAG in [`planning/delivery-plan.md`](planning/delivery-plan.md), with one detail file per slice under [`planning/slices/`](planning/slices/). **Each slice's live status lives in its own `planning/slices/SNN-*.md` file** (in the frontmatter `status:` field). Using one file per slice ensures parallel work never collides on a shared table. When you pick up, work on, or finish a slice, update that file (and only that file) in a small `docs(planning)` commit. Before starting a slice, read its file for the slice's file scope and acceptance criteria.
+## Documentation policy
 
-## Project Structure
+- Read architecture documents before structural changes.
+- Update documentation in the same PR whenever behaviour, architecture, public interfaces, or
+  configuration changes. Do not defer it.
+- [`USAGE.md`](USAGE.md) is the operator manual. Update it for anything an operator configures or
+  must do to run Écluse safely: environment variables, config schema, egress, client auth, and
+  health or observability endpoints.
+- `docs/architecture/` owns the *why*; `USAGE.md` owns the *how*. Keep them aligned.
+- Update the architecture section of `README.md` when adding a module or significantly changing
+  a module's responsibility.
 
+## Implementation coordination
+
+The repo owner is the **principal architect** and owns design and requirements. The lead agent
+coordinates PR-sized work, independent evaluation, and handoff. The full workflow lives in
+[`planning/orchestration-strategy.md`](planning/orchestration-strategy.md).
+
+- The dependency-ordered plan is [`planning/delivery-plan.md`](planning/delivery-plan.md).
+- Each slice's goal, acceptance criteria, file scope, and live `status:` are authoritative in its
+  own `planning/slices/SNN-*.md` file. Read it before touching slice code.
+- Update only that slice file's status, in a small `docs(planning)` commit, when taking it up,
+  moving it to review, or completing it.
+- Use one isolated worktree per implementation agent. Never let concurrent agents edit the same
+  checkout.
+- Dispatch implementation only after explicit architect kickoff. The lead agent never merges or
+  pushes to `main`.
+
+## Project structure and code conventions
+
+```text
+core/  ecluse-core: pure, ecosystem-agnostic capability core (Ecluse.Core.*)
+src/   ecluse: application shell that composes the core (Ecluse.*)
+app/   executable entry point (keep Main.hs thin)
+test/  unit and integration tests mirroring the library hierarchy
+docs/  architecture and design documents
 ```
-core/     , ecluse-core library: the pure, ecosystem-agnostic capability core (Ecluse.Core.*)
-src/      , ecluse library: the application shell that composes the core (Ecluse.*)
-app/      , executable entry point (Main.hs only; keep thin)
-test/     , unit and integration tests (mirror the library module structure)
-docs/     , architecture and design documents
-```
 
-## Code Conventions
+- Follow [`STYLE.md`](STYLE.md) for Haskell and [`HADDOCK.md`](HADDOCK.md) for documentation.
+- Organise vertically by capability. Keep effects at the application edge and avoid generic
+  `.Types` or `.Helpers` modules unless the split is earned.
+- Tests mirror library paths (`src/Foo/Bar.hs` -> `test/Foo/BarSpec.hs`).
+- Write prose, comments, commits, and PRs in Canadian English, including `behaviour`, `colour`,
+  `licence` as a noun, and `-ise` endings. Do not rewrite a human contributor's spelling.
+- Repository diagrams are Mermaid, never ASCII art.
 
-- **Follow [`STYLE.md`](STYLE.md) for all Haskell coding style**, naming, function design, totality, imports, and the compiler-flag set, and **[`HADDOCK.md`](HADDOCK.md) for documentation/Haddock conventions** (what to document, how much, and the doctest-backed examples). Both are written to be followed directly by agents; read them before writing or changing code. The points below are the structural essentials only.
-- Separate concerns: the capability core in `core/`, the application shell in `src/`, executable wiring in `app/`, tests in `test/`.
-- Tests mirror the library module hierarchy (e.g. `src/Foo/Bar.hs` → `test/Foo/BarSpec.hs`).
-- Keep `app/Main.hs` thin. It should only parse config and call into the library.
-- **Keep modules fit-to-purpose with idiomatic namespacing.** Organise vertically (a type lives with the functions on it), one `Ecluse.<Area>` namespace per area, and split a `.Types` module only when it earns it. The full principles are in [`STYLE.md`](STYLE.md) → "Module organization"; the current concrete module list is the published Haddock module index, and [`docs/getting-started.md`](docs/getting-started.md) → "Codebase Layout" records the project-specific layout patterns.
-- **Write prose in Canadian English.** Docs, code comments, and commit/PR messages use Canadian spelling, `colour`, `behaviour`, `centre`/`centred`, `catalogue`, `analogue`, `defence`, `licence` (noun); use `-ise` endings (`organise`, `optimise`, `authorise`), **not** `-ize`. This is an agent-consistency convention: do **not** police or rewrite human contributors' spelling in their issues, PRs, or comments.
-- **Diagrams are Mermaid, not ASCII art.** See [`CONTRIBUTING.md`](CONTRIBUTING.md#repository-requirements).
+## Build and tooling
 
-## Build & Tooling
+- Nix with flakes is mandatory. Use the pinned dev shell; system GHC/Cabal is unsupported.
+- Run work through `make` inside `nix develop`. When the ambient shell may be stale, use:
 
-- **Nix (with flakes) is a hard dependency.** All tooling comes from the dev shell (`nix develop`, or `direnv`), pinned by `flake.lock` (GHC 9.10); there is no supported system-level GHC/Cabal.
-- Run every task through **`make`**, the unified runner shared with CI (`make build`, `make test`, `make check`, `make sast`, …; `make help` for the list), which wraps Cabal/fourmolu/hlint/Semgrep from the dev shell. Run `make` **inside** `nix develop` (it auto-wraps in `nix develop --command` otherwise, but re-enters the shell per target). Cabal (not Stack) remains the underlying build tool.
-- **Automation scripts are Bash** (`#!/usr/bin/env bash`, `set -euo pipefail`) in [`scripts/`](scripts/), invoked from `make`/workflows, one language. Put non-trivial logic in a `scripts/*.sh` file, never inline in a workflow `run:` block, and keep it `shellcheck`-clean, **`make lint-scripts` gates it** (`awk`/`sort` cover structured-data munging). Other languages only when forced (Lua = pandoc filters); a new Python/Node build-time dependency needs a strong, stated reason. See [`CONTRIBUTING.md`](CONTRIBUTING.md) → "Automation scripting".
-- **Haskell search & exploration tools are in the dev shell.** Use them to confirm signatures and discover functions instead of guessing:
-  - `hoogle`, search by name or type signature. Run `hoogle generate` once (downloads the Hackage database; needs network) to build the index, then e.g. `hoogle 'Text -> ByteString'`, `hoogle Data.Map.insert`, or `hoogle --info <name>` for docs; `hoogle server --local --port 8080` gives a browsable UI.
-  - `cabal-plan`, inspect the resolved build plan and dependency versions (`cabal-plan list-bins`, `cabal-plan dot`); run after a `make build`.
-  - `haskell-language-server` and `ghcid`, live type/error feedback; Haddock for the project builds via `cabal haddock`.
-  - **Semantic navigation over MCP (opt-in).** The `.#mcp` dev shell bridges `haskell-language-server` to MCP clients via **`agent-lsp`** (a complete LSP client, built from tagged source in the flake), exposing go-to-definition, find-references, hover/type-at-point, diagnostics, document symbols, and rename, higher-precision than `grep` across re-exports and qualified imports. Wired in the committed `.mcp.json` (approval-gated; touches neither build nor gate). **First call `start_lsp` with `root_dir` = your repo/worktree root**, or agent-lsp drops to single-file mode (HLS then reports "Could not find module …"). This bites especially in a git *worktree*, whose `.git` is a file. Then reach for `go_to_definition` / `find_references` / `get_diagnostics` / `go_to_symbol` / `hover`; `list_symbols` returns a compressed summary, so prefer `go_to_symbol` / `find_references` for navigation. The compiler stays ground truth for correctness. (This replaced `mcp-language-server` v0.1.1, an incomplete client that deadlocked HLS at ~0 % CPU on every semantic request, verified on this project; the same HLS is flawless under VS Code's `vscode-languageclient`.)
-- **Warm a new agent worktree's HLS index at creation.** `make new-worktree BRANCH=<branch>` adds an isolated worktree (under `.agents/worktrees/`, off `origin/main` by default; override `BASE`/`DIR`) and kicks off a background `make build`, populating that worktree's own `dist-newstyle` with the interface files HLS reuses, so the agent's first navigation call returns in seconds rather than after a cold typecheck. Dependencies come warm from the shared Nix store; only this project's own modules need the local build. **One worktree per agent** is also *correctness* hygiene: HLS keys its `hiedb` by workspace path, so co-located instances sharing one checkout contend on a single SQLite database and can stall each other; give each its own directory. Cap concurrency at 2–3 and **stagger** creations so parallel cold typechecks don't thrash the CPU (~250–300 MB per HLS). A post-merge rebase invalidates part of the cache; re-run `make build` to re-warm. The orchestration workflow is in [`planning/orchestration-strategy.md`](planning/orchestration-strategy.md) → "Subagents and isolation".
-- The dependency set and rationale (relude as the prelude via cabal mixins, aeson, amazonka, warp/wai, http-client-tls, katip, envparse, cache, hedgehog) live in [`docs/architecture/technology-stack.md`](docs/architecture/technology-stack.md); the **testing strategy** (pure `hspec`+`hedgehog` tests; integration tests via `testcontainers` + `ministack` over Docker) lives in [`docs/testing.md`](docs/testing.md). Read them before adding dependencies or tests.
+  ```bash
+  env -u IN_NIX_SHELL nix develop --command make <target>
+  ```
 
-## CI & Security
+- Run `make help` to discover targets. `make check` is the fast pre-push suite; CI remains the
+  authoritative gate. Run `make sast` before pushing.
+- Automation scripts are Bash in `scripts/`, with `#!/usr/bin/env bash` and
+  `set -euo pipefail`; keep workflow `run:` blocks trivial and scripts shellcheck-clean. A new
+  Python or Node build-time dependency needs an explicit justification.
+- Use `hoogle`, HLS, `cabal-plan`, and `ghcid` to discover types and behaviour instead of
+  guessing. Start the HLS MCP bridge with the worktree root before semantic requests.
+- Create agent worktrees with `make new-worktree BRANCH=<branch>` so the local HLS index warms in
+  isolation. Keep cold HLS concurrency to two or three worktrees.
 
-- CI is a **single unified workflow** (`.github/workflows/ci.yml`): one **build-test** job builds the project once and runs unit + integration + doctest + coverage against those artifacts, alongside **static-checks** (fourmolu/hlint/`cabal check`/Semgrep/workflow-lint), the **Haddock** gate (scoped to `lib:ecluse`), and a heavyweight **e2e** job (whole-system: the real OCI image + nginx/Verdaccio upstreams driven by the npm CLI, hermetic, so no live-registry flake), these four gating jobs feed a terminal **`gate`** job. The non-gating **smoke** (live registries; `continue-on-error`) and **weeder** (dead-code report) tiers also run on every PR for visibility but never block the gate; smoke and e2e additionally run nightly (smoke to catch registry drift independent of our commits). e2e gates but is kept out of the local `make gate`/`check` for weight, run `make test-e2e`. Only `gate` is marked `Required` in branch protection, wire any new check in as a `gate` dependency, never as another required check. The one documented exception is Codecov's server-side `codecov/project` / `codecov/patch` statuses.
-- **Coverage** is generated per gating suite (HPC → `hpc-codecov` → Codecov JSON, via `make coverage`) and uploaded under per-suite flags using tokenless GitHub OIDC, no stored token. Thresholds live in [`codecov.yml`](codecov.yml); details in [`docs/testing.md`](docs/testing.md) → "Coverage".
-- **Releases attest provenance + SBOM.** Each published image carries keyless SLSA provenance + SBOM attestations bound to the digest, produced in CI by the GitHub attest-actions and stored as **immutable OCI referrers** (cosign can't store attestations immutably, only `sign` has referrer mode). SBOM content is `sbomnix` over `.#ecluse-bin` (`make sbom`). Consumers verify with `gh attestation verify` (recipe in [`README.md`](README.md)); details in [`docs/architecture/release-supply-chain.md`](docs/architecture/release-supply-chain.md). A tagged release also publishes a **GitHub Release** pinning the digest + verify recipe + auto changelog ([`scripts/release-notes.sh`](scripts/release-notes.sh)); rc-tags are flagged prerelease and `workflow_dispatch` rc smoke tests publish no Release. The **single source of truth for the version is `ecluse.cabal`'s `version:`** field (semver, e.g. `0.1.0`, **not** PVP `0.1.0.0`; Écluse is an app, not a Hackage library). `make version` prints it; `make tag` cuts the signed `vX.Y.Z` tag *from* it; and `release.yml`'s `verify-version` job **asserts the pushed tag matches** it (stripping any `-rc` suffix), failing the release on drift. Bump the cabal version, then `make tag`.
-- **Vulnerability scanning is report-only.** `make scan` = grype over the sbomnix SBOM of `.#ecluse-bin` (the authority, severity-rated); `make scan-vulnix` = vulnix (now from the single pinned nixpkgs set, current enough on the 26.05 base) as a Nix-native cross-check. [`security.yml`](.github/workflows/security.yml) never gates. It reports on flake-touching PRs and, daily, opens/updates a `security:vuln-scan` tracking issue. On `main` it uploads the grype SARIF to GitHub **code scanning** (Security tab) alongside Semgrep + Scorecard. All SARIF uploads are gated to `main` so the dashboard reflects trunk, not per-PR noise. Freshness is Renovate's `nix` manager ([`renovate.json5`](.github/renovate.json5)) refreshing `flake.lock`. Details: [`docs/architecture/release-supply-chain.md`](docs/architecture/release-supply-chain.md#vulnerability-scanning--dependency-freshness).
-- **Pin every GitHub Action to a full commit SHA** and follow caching rules. See [`CONTRIBUTING.md`](CONTRIBUTING.md#repository-requirements).
-- **Semgrep** runs `--config auto`, failing on ERROR/WARNING findings, from the Nix dev shell, so CI and local use the same pinned binary. It also writes `semgrep.sarif` (`--sarif-output`, alongside the text output), which the `static-checks` CI job uploads to GitHub code scanning (Security tab) on `main` only (the scan still gates every PR); the upload never affects the gate.
-- **Before pushing, verify Semgrep is clean locally:** inside `nix develop`, `make sast` (Semgrep `--config auto`, failing on ERROR/WARNING) must report zero findings. Do not push with outstanding findings.
-- **Semgrep ignores require the repo owner's approval.** Do not add `.semgrepignore` entries or `nosemgrep` comments unilaterally.
-- **Stan** is HIE-based Haskell static analysis (partial functions + potential bugs that Semgrep, no Haskell, and hlint, no type info, miss). It reads the `.hie` files from a dedicated `dist-stan` build, scoped by [`.stan.toml`](.stan.toml) to a floor that keeps the safety signal (`#Partial`, `#Infinite`, Foldable footguns, `#PotentialBug`) **and the Performance severity** armed while dropping only the Style severity; `STAN-0213` (wildcard `_` on sum types) is excluded by explicit decision. The CI `stan` job **fails on any finding (a visible red signal) but is non-gating**, never a `gate` dependency, so it never blocks a merge. Reproduce it with `make stan`; `make stan-all` shows the full set incl. the dropped Style findings. Prefer fixing a finding at source; per-finding `[[ignore]]` entries in `.stan.toml` are an explicit, recorded decision (each pinned to its source line) and **require the repo owner's approval**, do not add them unilaterally.
-- Commits are GPG-signed; keep history verifiable.
-- **Sign off every commit (DCO).** Details in [`CONTRIBUTING.md`](CONTRIBUTING.md#developer-certificate-of-origin-dco).
+## CI, security, and repository gates
 
-## Web & Remote-Execution Agents
+- The unified CI workflow and tier semantics are documented in [`docs/testing.md`](docs/testing.md).
+  The terminal `gate` job is the branch-protection authority; smoke, weeder, Stan, vulnerability
+  scanning, and Codecov's server-side statuses have their documented non-gating roles.
+- Pin every GitHub Action to a full commit SHA and follow the cache rules in
+  [`CONTRIBUTING.md`](CONTRIBUTING.md).
+- Do not add `.semgrepignore` entries or `nosemgrep` comments without repo-owner approval.
+- Do not add Stan `[[ignore]]` entries without repo-owner approval. Prefer fixing findings.
+- Keep the threat model in `threat-modelling/ecluse.json`; do not create a competing prose risk
+  register.
+- The version authority is `ecluse.cabal`'s `version:` field. Release and supply-chain procedures
+  live in [`docs/architecture/release-supply-chain.md`](docs/architecture/release-supply-chain.md).
+- Every commit must be Conventional-Commit formatted, GPG-signed, DCO-signed off as the human
+  author, and disclose non-trivial AI help with `Assisted-by:` rather than `Co-Authored-By:`.
 
-This section is for agents running in the hosted/web execution environment (Agent harnesses on the web, scheduled routines, GitHub-triggered sessions) rather than on a contributor's own machine. The environment is an ephemeral container with a fresh clone, an outbound egress proxy, and a **local git relay** that fronts `origin`. A few of its behaviours are non-obvious and have cost peers time, read these before you try to land a commit.
+## Context discipline
 
-- **Commit through local `git`, never through the REST git-objects API.** A repository ruleset requires **verified signatures on every branch** (not just `main`). The container is pre-wired for SSH-based signing, `gpg.format=ssh`, `commit.gpgsign=true`, and `gpg.ssh.program=/tmp/code-sign` (a shim onto the environment manager that signs with an account-registered key), so a normal `git commit -S -s` produces a commit GitHub accepts as **Verified**. The GitHub MCP write tools (`push_files`, `create_or_update_file`) build commits through the REST git-objects API instead, which **cannot** attach that signature; the ruleset rejects them with `HTTP 422, "Commits must have verified signatures."` Use those tools for issues, PR bodies, labels, and reviews, but make **commits** locally with `git`.
-- **Ignore the local "No signature" false negative.** `git log --show-signature` reports `No signature` / `gpg.ssh.allowedSignersFile needs to be configured` in the container, because no local allowed-signers file is set up for *verification*. This does **not** mean the commit is unsigned, confirm the signature with `git cat-file -p HEAD` (look for the `gpgsig -----BEGIN SSH SIGNATURE-----` header) or trust GitHub's own Verified badge after pushing.
-- **Don't conclude signing is unavailable from a missing key.** `user.signingkey` points at `~/.ssh/commit_signing_key.pub`, which is a **0-byte file**, and `gpg --list-secret-keys` is **empty**; both read as "no signing configured," but they are red herrings: `/tmp/code-sign` signs remotely and needs neither a populated keyfile nor a GPG keyring. Prove it by making one `git commit -S` and checking for the `gpgsig` header; do **not** downgrade the task to filing issues because signing *looks* unavailable; that is the exact false alarm this section exists to prevent.
-- **The git relay forbids force-pushes and branch deletes, not new branches.** A non-fast-forward push, a `--force`/`--force-with-lease`, or a branch deletion is refused with `HTTP 403` from the relay (`127.0.0.1`, so it never reaches the egress proxy; this is *not* an egress-policy denial). A plain non-force push to any branch name is fine. Practical consequences: **never rewrite published history**, always base new work on the current `origin/main` (`git fetch origin main` first) and add commits forward; and a branch you create cannot be cleaned up from here, so don't litter; reuse the session's working branch.
-- **Let `git push` create the branch; don't pre-create it through the API.** Seeding the branch first with the `create_branch` MCP tool (or `push_files`) strands you: that ref starts at a stale or unsigned commit, so once your real local work is based on the current `origin/main` the push is non-fast-forward, which the relay refuses (`403`), and you cannot delete the orphan to start over either. A plain `git push origin HEAD:<branch>` to a name that does not exist yet creates it, signed, in one step.
-- **Re-fetch `origin/main`; the initial checkout can be stale.** The container may start on a working branch whose `HEAD` lags a force-updated `origin/main` (`git fetch` shows `main` as a `forced update`). Run `git fetch origin main`, base your branch on `origin/main`, and **re-read any file at that base before editing**; the tree you first see in the checkout may not be what you are committing against.
-- **A session is typically pinned to one working branch.** Hosted sessions are usually given a designated branch to develop on; push your commits there and open the PR from it, even when a task's own convention would otherwise prefer a differently-named branch. The branch name on the PR is cosmetic next to a green `gate`, don't fight the relay over it.
-- **You cannot run the gate locally; the dev shell may be absent.** A scheduled/remote container often has no Nix, so `make build`/`make test`/`make sast` cannot run (`make` will try to re-enter `nix develop` and fail). When that is the case, lean on the structural correctness of small changes and let CI's `gate` job be the check, but keep changes minimal and formatting-safe (you cannot run `fourmolu`/`hlint` to auto-fix), and say plainly in the PR that the gate was not reproduced locally.
+- Keep stable rules in files and volatile decisions in the current task or compaction summary.
+- Read precise sections and files required by the task; avoid whole-canon rereads.
+- Keep command output bounded. Save large logs as files and inspect the failing portion.
+- Use a fresh thread for a bounded implementation or review. Keep the orchestration thread focused
+  on requirements, decisions, PR state, and handoff.
+- Use `orientation` for a cold task session and `resume-orchestration` for the team-lead seat after
+  compaction or restart. Do not run both for the same startup.
