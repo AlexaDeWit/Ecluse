@@ -1,15 +1,15 @@
 module Ecluse.Server.Pipeline.PackumentSpec (spec) where
 
-import Ecluse.Server.Pipeline.TestSupport
-import Test.Hspec
 import Data.Aeson (Value (String))
-import qualified Data.ByteString.Lazy as LBS
-import Ecluse.Core.Server.Context (PackumentDeps(..))
-import Ecluse.Core.Package.Integrity (mkMinTrustedIntegrity, mkMinIntegrity)
-import Ecluse.Core.Package (HashAlg(SHA1, SHA512))
+import Data.ByteString.Lazy qualified as LBS
+import Ecluse.Core.Package (HashAlg (SHA1, SHA512))
+import Ecluse.Core.Package.Integrity (mkMinIntegrity, mkMinTrustedIntegrity)
 import Ecluse.Core.Queue (newInMemoryQueue)
+import Ecluse.Core.Server.Context (PackumentDeps (..))
+import Ecluse.Server.Pipeline.TestSupport
+import Network.Wai.Test (SResponse (..), simpleBody)
+import Test.Hspec
 import UnliftIO.Exception (throwString)
-import Network.Wai.Test (SResponse(..), simpleBody)
 
 spec :: Spec
 spec = do

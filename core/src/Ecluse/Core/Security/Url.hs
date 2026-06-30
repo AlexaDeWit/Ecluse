@@ -5,7 +5,6 @@ package identifiers__ (the request path) and __upstream-supplied artifact
 locations__ (a packument's @dist.tarball@) — and then parses whatever an upstream
 returns. This module is the pure guard layer that keeps those steps from being
 steered or exhausted by hostile input. It defends three boundaries:
-
 -}
 module Ecluse.Core.Security.Url (
     -- * Identifier → URL safety
@@ -18,8 +17,6 @@ import Data.Text qualified as T
 import Ecluse.Core.Package (PackageName, renderPackageName)
 import Ecluse.Core.Server.Route (encodeComponent, isSafeComponent)
 import Ecluse.Core.Text (joinUrlPath)
-
-
 
 -- ── identifier → URL safety ──────────────────────────────────────────────────
 
@@ -109,5 +106,3 @@ encodePath :: NameParts -> Text
 encodePath = \case
     Scoped scope base -> "@" <> encodeComponent scope <> "%2F" <> encodeComponent base
     Single c -> encodeComponent c
-
-

@@ -63,6 +63,7 @@ import Data.IP (
  )
 import Data.Set qualified as Set
 import Data.Text qualified as T
+
 -- ── outbound host allowlist ──────────────────────────────────────────────────
 
 {- | A set of host strings normalised to lower case, the form the host guards
@@ -562,4 +563,3 @@ tarballHostAllowed origin policy allowed allowedInternal packumentHost tarballHo
     internalRangeOk = case origin of
         TrustedOrigin -> True
         UntrustedOrigin -> not (isBlockedTarget allowedInternal tarballHost)
-

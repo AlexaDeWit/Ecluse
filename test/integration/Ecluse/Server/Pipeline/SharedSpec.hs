@@ -1,33 +1,33 @@
 module Ecluse.Server.Pipeline.SharedSpec (spec) where
 
-import Ecluse.Server.Pipeline.TestSupport
-import Test.Hspec
-import qualified Data.Text as T
 import Data.Aeson (Value (Object, String))
-import qualified Data.Aeson.KeyMap as KeyMap
-import qualified Data.Aeson as Aeson
-import Network.Wai.Test (SResponse(..), simpleBody)
-import Network.HTTP.Client (newManager, defaultManagerSettings)
-import UnliftIO.Temporary (withSystemTempFile)
-import UnliftIO.Exception (throwString)
+import Data.Aeson qualified as Aeson
+import Data.Aeson.KeyMap qualified as KeyMap
+import Data.Text qualified as T
+import Ecluse.Server.Pipeline.TestSupport
+import GHC.IO.Handle (hClose, hDuplicate, hDuplicateTo)
+import Network.HTTP.Client (defaultManagerSettings, newManager)
+import Network.Wai.Test (SResponse (..), simpleBody)
+import Test.Hspec
 import UnliftIO (bracket)
-import GHC.IO.Handle (hDuplicate, hDuplicateTo, hClose)
+import UnliftIO.Exception (throwString)
+import UnliftIO.Temporary (withSystemTempFile)
 
-import Ecluse.Core.Rules (PreparedRule(..), EffectfulConfig(..), Resilience(..), defaultEffectfulConfig, newBreaker, noBreakerReporter)
-import Ecluse.Core.Rules.Types (FailureAlignment(..), RuleResult(..))
 import Ecluse.Core.Package (PackageDetails)
-import Ecluse.Core.Security (Limits(..), defaultLimits)
-import Ecluse.Core.Server.Context (PackumentDeps(..))
 import Ecluse.Core.Queue (newInMemoryQueue)
-import Ecluse.Server (MountBinding(..), mkServerConfig, application)
 import Ecluse.Core.Registry.Npm.Route qualified as Npm
 import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
-import Network.Wai.Handler.Warp (testWithApplication)
-import Ecluse.Core.Server.Cache (newMetadataCache, defaultCacheConfig)
-import Ecluse.Log (newLogEnv, LogFormat(JsonLog))
-import Katip (Environment(Environment), closeScribes)
-import Ecluse.Env (newWorkerHeartbeat, newEnv)
+import Ecluse.Core.Rules (EffectfulConfig (..), PreparedRule (..), Resilience (..), defaultEffectfulConfig, newBreaker, noBreakerReporter)
+import Ecluse.Core.Rules.Types (FailureAlignment (..), RuleResult (..))
+import Ecluse.Core.Security (Limits (..), defaultLimits)
+import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
+import Ecluse.Core.Server.Context (PackumentDeps (..))
+import Ecluse.Env (newEnv, newWorkerHeartbeat)
+import Ecluse.Log (LogFormat (JsonLog), newLogEnv)
+import Ecluse.Server (MountBinding (..), application, mkServerConfig)
 import Ecluse.Telemetry (telemetryDisabled)
+import Katip (Environment (Environment), closeScribes)
+import Network.Wai.Handler.Warp (testWithApplication)
 
 spec :: Spec
 spec = do
@@ -279,5 +279,3 @@ boundsLogSpec = describe "serve-path warnings are logged before degrading" $ do
     it "tags every serve-path log line with the emitting module" $ do
         logged <- captureBreachLog versionFloodPackument
         logged `shouldSatisfy` T.isInfixOf "\"module\":\"Ecluse.Server.Pipeline\""
-
-

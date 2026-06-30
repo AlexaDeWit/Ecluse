@@ -1,19 +1,18 @@
 module Ecluse.Server.Pipeline.TarballSpec (spec) where
 
-import Ecluse.Server.Pipeline.TestSupport
-import Ecluse.Core.Server.Context (PackumentDeps(..))
-import Test.Hspec
-import Data.Aeson (object, (.=))
-import Network.HTTP.Types (hIfNoneMatch, methodGet, methodHead)
-import Network.Wai.Test (SResponse(..), simpleBody)
 import Control.Exception (try)
-import qualified Data.Set as Set
-import Ecluse.Core.Ecosystem (Ecosystem(Npm))
-import Ecluse.Core.Version (mkVersion)
-import Ecluse.Core.Security (TarballHostPolicy(AnyAllowlistedHost), lowerCaseHosts)
-import Ecluse.Core.Queue (newInMemoryQueue)
+import Data.Aeson (object, (.=))
+import Data.Set qualified as Set
+import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (mkPackageName)
-
+import Ecluse.Core.Queue (newInMemoryQueue)
+import Ecluse.Core.Security (TarballHostPolicy (AnyAllowlistedHost), lowerCaseHosts)
+import Ecluse.Core.Server.Context (PackumentDeps (..))
+import Ecluse.Core.Version (mkVersion)
+import Ecluse.Server.Pipeline.TestSupport
+import Network.HTTP.Types (hIfNoneMatch, methodGet, methodHead)
+import Network.Wai.Test (SResponse (..), simpleBody)
+import Test.Hspec
 
 spec :: Spec
 spec = do

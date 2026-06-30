@@ -5,7 +5,6 @@ package identifiers__ (the request path) and __upstream-supplied artifact
 locations__ (a packument's @dist.tarball@) — and then parses whatever an upstream
 returns. This module is the pure guard layer that keeps those steps from being
 steered or exhausted by hostile input. It defends three boundaries:
-
 -}
 module Ecluse.Core.Security.Limits (
     -- * Response bounds
@@ -27,8 +26,6 @@ import Data.Map.Strict qualified as Map
 import Data.Vector qualified as V
 
 import Ecluse.Core.Package (PackageInfo, infoVersions)
-
-
 
 -- ── response bounds ──────────────────────────────────────────────────────────
 
