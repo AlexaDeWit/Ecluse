@@ -202,8 +202,8 @@ withEnv ::
     WorkerHeartbeat ->
     (Env -> m a) ->
     m a
-withEnv registry queue manager privateManager metadataCache logEnv telemetry heartbeat =
-    withEnvWithAdmission unlimitedServeAdmission registry queue manager privateManager metadataCache logEnv telemetry heartbeat
+withEnv =
+    withEnvWithAdmission unlimitedServeAdmission
 
 {- | Bracket an 'Env' carrying an explicit serve admission handle. This is the
 production form of 'withEnv'; teardown ownership is otherwise identical.
