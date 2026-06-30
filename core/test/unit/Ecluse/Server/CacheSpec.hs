@@ -277,16 +277,11 @@ spec = do
                 follower <- async (try (resolveMetadata c publicSource (pkg "wedge") fetch) :: IO (Either SomeException CacheEntry))
                 threadDelay 30000 -- give the follower time to register on the marker
                 cancel leader -- cancel in the handoff window; the slot must still free
-                -- The follower must unblock with the leader's error, never park forever.
-                followed <- wait follower
-                -- A subsequent caller must re-lead and fetch successfully (the slot is free).
-                recovered <- resolveMetadata c publicSource (pkg "wedge") fetch
-                pure (followed, infoName (entryInfo recovered))
+                wait follower
             case result of
                 Nothing -> expectationFailure "wedged: a cancelled leader orphaned the in-flight slot"
-                Just (followed, recoveredName) -> do
-                    isLeft followed `shouldBe` True -- the follower got the error, did not hang
-                    recoveredName `shouldBe` pkg "wedge"
+                Just (Left _) -> expectationFailure "follower failed instead of recovering"
+                Just (Right e) -> infoName (entryInfo e) `shouldBe` pkg "wedge"
 
         it "frees the slot for a later caller when the leader's fetch is cancelled mid-flight" $ do
             -- The mid-fetch analogue: the async exception lands while the leader is

@@ -219,8 +219,8 @@ spec = do
                             -- cancelled here, mid-flight.
                             atomically (putTMVar started ())
                             (atomically (takeTMVar gate) :: IO ())
-                            pure (tokenExpiringIn "unreached" 1000)
-                        _ -> pure (tokenExpiringIn "recovered" 1000)
+                            pure (tokenExpiringIn "unreached" 5000)
+                        _ -> pure (tokenExpiringIn "recovered" 5000)
             provider <- refreshingProvider (testConfig clock mint)
             setClock (addUTCTime 2000 t0) -- expired: the next serve mints synchronously
             blocked <- async (currentToken provider)
@@ -251,7 +251,7 @@ spec = do
                     n <- atomicModifyIORef' mintCount (\c -> (c + 1, c + 1))
                     if n == 1
                         then pure (tokenExpiringIn "seed" 1000)
-                        else pure (tokenExpiringIn "recovered" 1000)
+                        else pure (tokenExpiringIn "recovered" 5000)
                 -- Run on the serving thread in the claim -> mint-runner window. On the
                 -- first (to-be-cancelled) claim only, mark that the flag is claimed and
                 -- the thread is parked here, then block (interruptibly) so the cancel
@@ -303,9 +303,14 @@ spec = do
             failRef <- newIORef False
             mintCount <- newIORef (0 :: Int)
             let mint = do
-                    _ <- atomicModifyIORef' mintCount (\n -> (n + 1, ()))
+                    n <- atomicModifyIORef' mintCount (\c -> (c + 1, c + 1))
                     bad <- readIORef failRef
-                    if bad then throwString "mint boom" else pure (tokenExpiringIn "tok-2" 1000)
+                    if bad
+                        then throwString "mint boom"
+                        else
+                            if n == 1
+                                then pure (tokenExpiringIn "tok-2" 1000)
+                                else pure (tokenExpiringIn "tok-2" 5000)
             -- Seed succeeds; failures start afterwards.
             provider <- refreshingProvider (testConfig clock mint)
             readIORef mintCount `shouldReturn` 1
