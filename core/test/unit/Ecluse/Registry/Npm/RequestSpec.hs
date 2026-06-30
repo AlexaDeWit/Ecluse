@@ -33,8 +33,8 @@ import Ecluse.Core.Registry.Npm.Request (
 import Ecluse.Core.Version (Version, mkVersion)
 
 import Ecluse.Test.Stub (
-    withStub,
     stubBaseUrl,
+    withStub,
  )
 
 spec :: Spec
@@ -227,5 +227,3 @@ isUnparseable = either matchUnparseable (const False)
   where
     matchUnparseable (UnparseableUrl _) = True
     matchUnparseable _ = False
-
-

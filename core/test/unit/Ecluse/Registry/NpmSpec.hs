@@ -131,4 +131,3 @@ gzippedOversizedBody =
 
 threw :: Either SomeException RegistryResponse -> Bool
 threw = isLeft
-

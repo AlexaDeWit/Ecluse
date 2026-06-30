@@ -1,6 +1,5 @@
 module Ecluse.Registry.Npm.PublishSpec (spec) where
 
-
 import Data.Text qualified as T
 import Network.HTTP.Types.Status (status200, status404, status409, status500)
 import Test.Hspec (Spec, describe, it, shouldBe, shouldReturn, shouldSatisfy)
@@ -88,5 +87,3 @@ leftMessage outcome = case outcome of
     Left (PublishRejected err) -> Just (publishErrorMessage err)
     Left (PublishUrlUnformable _) -> Nothing
     Right _ -> Nothing
-
-
