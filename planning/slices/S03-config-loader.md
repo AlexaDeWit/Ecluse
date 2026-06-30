@@ -27,10 +27,10 @@ and an env-only deployment with no document still runs on the default policy. Fa
 fast and reject the unknown, including unresolvable merge references.
 
 **Acceptance criteria.**
-- [ ] Env-var layer parses every variable in the table (`PROXY_PORT`,
-  `PRIVATE_UPSTREAM_URL`, `PUBLIC_UPSTREAM_URL`, `MIRROR_TARGET_URL`,
-  `MIRROR_QUEUE_PROVIDER`, `MIRROR_QUEUE_URL`, `AWS_REGION`, `PROXY_AUTH_TOKEN`,
-  `PROXY_HELP_MESSAGE`, `CVE_SYNC_INTERVAL_SECONDS`, …) with documented defaults;
+- [ ] Env-var layer parses every variable in the table (`ECLUSE_PORT`,
+  `ECLUSE_PRIVATE_UPSTREAM`, `ECLUSE_PUBLIC_UPSTREAM`, `ECLUSE_MIRROR_TARGET`,
+  `ECLUSE_QUEUE_BACKEND`, `ECLUSE_QUEUE_URL`, `AWS_REGION`, `ECLUSE_AUTH_TOKEN`,
+  `ECLUSE_HELP_MESSAGE`, `ECLUSE_CVE_SYNC_INTERVAL`, …) with documented defaults;
   **errors aggregate** (all problems reported in one run). _(`PROXY_RULES` is
   retired, rules live in the structured document.)_, _configuration.md#configuration_
 - [ ] Structured **config document** decoded from a JSON file *or* a `PROXY_CONFIG`

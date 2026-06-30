@@ -41,7 +41,7 @@ upstream wants on the wire* (credential supply). The strategies are detailed in 
 - **Mirror target (write)**, always Écluse's own credential: the
   [`CredentialProvider`](cloud-backends.md#credential-provider) mints the token to
   publish approved packages. Often the same registry as the private upstream, so its
-  URL **defaults to `PRIVATE_UPSTREAM_URL`** when unset, but a different identity on
+  URL **defaults to `ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM`** when unset, but a different identity on
   it: the *client* reads it, *Écluse* writes it, and the write credential is selected
   explicitly (it does not fold with the URL).
 - **Publication target (write)**, the **client's own forwarded credential**
@@ -117,7 +117,7 @@ out-of-band flow.
   was published, the operator configures the publication target to be the *same
   registry* as the private upstream (or has the private upstream aggregate it). This
   keeps the read model at two sources.
-- **Opt-in.** The path exists only when `PUBLICATION_TARGET_URL` is configured; with no
+- **Opt-in.** The path exists only when `ECLUSE_PUBLICATION_TARGET` is configured; with no
   publication target a `PUT /{pkg}` is rejected with **`405 Method Not Allowed`**.
 
 ## Serving a tarball: a conventional private read, an honoured public location
@@ -230,8 +230,8 @@ deduplicating.
   *artifact* is still served from the private origin (the listing-side trusted floor on
   the packument route is unchanged; the bytes stay client- and worker-verified, and the
   opt-in metadata-resolution mode restores the floor here). The **public
-  floor** (`PROXY_MIN_PUBLIC_INTEGRITY`, default SHA-256) is **hard-floored** and never
-  lowerable; the **trusted floor** (`PROXY_MIN_TRUSTED_INTEGRITY`, default SHA-256) shares
+  floor** (`ECLUSE_MIN_PUBLIC_INTEGRITY`, default SHA-256) is **hard-floored** and never
+  lowerable; the **trusted floor** (`ECLUSE_MIN_TRUSTED_INTEGRITY`, default SHA-256) shares
   that default but is **operator-loosenable below SHA-256** for a legacy private mirror.
   With the floors enforced at admission, the cross-upstream divergence reasons over
   fingerprints each anchored on a strong digest **by default**; the **private-weak /
@@ -368,7 +368,7 @@ count) is a noted follow-up.
 The **recommended** deployment keeps the first-party store and the public-derived
 mirror store **physically separate** and unions them at the **registry** level into the
 private-upstream read path; e.g. AWS CodeArtifact upstream relationships, where
-`PRIVATE_UPSTREAM_URL` points at an aggregating repository that itself draws from a
+`ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM` points at an aggregating repository that itself draws from a
 mirror-target repo and a first-party "published-by-us" repo. The private upstream then
 behaves as a read-only union of two trusted stores and returns the full trusted set in
 one fetch, while each store stays independently governable, distinct storage-level

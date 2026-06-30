@@ -13,7 +13,7 @@ to — and chooses its on-the-wire shape:
 * __'ConsoleLog'__ writes the human-readable bracketed form for local development.
 
 A 'LogEnv' built here carries no colour codes even on a terminal, so a captured
-JSON line is always valid JSON. The selected format is parsed from @PROXY_LOG_FORMAT@
+JSON line is always valid JSON. The selected format is parsed from @ECLUSE_LOG_FORMAT@
 at the configuration boundary ("Ecluse.Config") and the resulting 'LogEnv' is held
 in the composition root ("Ecluse.Env").
 

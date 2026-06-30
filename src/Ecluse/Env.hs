@@ -51,7 +51,6 @@ import Katip (LogEnv)
 import Network.HTTP.Client (Manager)
 import UnliftIO (MonadUnliftIO, bracket)
 
-import Ecluse.Core.Credential (CredentialProvider)
 import Ecluse.Core.Queue (MirrorQueue)
 import Ecluse.Core.Registry (RegistryClient)
 import Ecluse.Core.Server.Cache (MetadataCache)
@@ -80,10 +79,6 @@ data Env = Env
     , envQueue :: MirrorQueue
     {- ^ The mirror-queue handle: the durable hand-off from the request path to the
     mirror worker.
-    -}
-    , envCredentials :: CredentialProvider
-    {- ^ The outbound-credential handle: mints the bearer token used to write
-    approved packages to the mirror target.
     -}
     , envManager :: Manager
     {- ^ The shared @http-client@ 'Manager' for the __untrusted__ data plane (the
@@ -115,7 +110,7 @@ data Env = Env
     , envTelemetry :: Telemetry
     {- ^ The OpenTelemetry handle (see "Ecluse.Telemetry"): the tracer and meter
     providers spans and metrics are emitted through, or — by default, with
-    @PROXY_TELEMETRY@ unset — the inert no-op that emits nothing. Its provider
+    @ECLUSE_TELEMETRY@ unset — the inert no-op that emits nothing. Its provider
     lifecycle is bracketed by the composition root that supplies it.
     -}
     , envMetrics :: Metrics
@@ -151,8 +146,8 @@ opened, no scribe attached to stdout, and no exporter initialised. Backend
 selection happens in the handle smart constructors that produce the arguments;
 this only gathers them.
 -}
-newEnv :: RegistryClient -> MirrorQueue -> CredentialProvider -> Manager -> Manager -> MetadataCache -> LogEnv -> Telemetry -> WorkerHeartbeat -> IO Env
-newEnv registry queue credentials manager privateManager metadataCache logEnv telemetry heartbeat = do
+newEnv :: RegistryClient -> MirrorQueue -> Manager -> Manager -> MetadataCache -> LogEnv -> Telemetry -> WorkerHeartbeat -> IO Env
+newEnv registry queue manager privateManager metadataCache logEnv telemetry heartbeat = do
     -- The metric instruments are built once here from the telemetry handle: created on
     -- its meter provider when enabled, on the SDK's no-op meter when off (so they are
     -- inert without an SDK). Building them in 'newEnv' keeps the construction the single
@@ -165,7 +160,6 @@ newEnv registry queue credentials manager privateManager metadataCache logEnv te
         Env
             { envRegistry = registry
             , envQueue = queue
-            , envCredentials = credentials
             , envManager = manager
             , envPrivateManager = privateManager
             , envMetadataCache = metadataCache
@@ -185,7 +179,6 @@ withEnv ::
     (MonadUnliftIO m) =>
     RegistryClient ->
     MirrorQueue ->
-    CredentialProvider ->
     Manager ->
     Manager ->
     MetadataCache ->
@@ -194,9 +187,9 @@ withEnv ::
     WorkerHeartbeat ->
     (Env -> m a) ->
     m a
-withEnv registry queue credentials manager privateManager metadataCache logEnv telemetry heartbeat =
+withEnv registry queue manager privateManager metadataCache logEnv telemetry heartbeat =
     bracket
-        (liftIO (newEnv registry queue credentials manager privateManager metadataCache logEnv telemetry heartbeat))
+        (liftIO (newEnv registry queue manager privateManager metadataCache logEnv telemetry heartbeat))
         teardown
   where
     -- The connection pool behind the 'Manager' and the telemetry providers behind

@@ -45,7 +45,7 @@ module Ecluse.Core.Queue.Sqs (
 ) where
 
 import Amazonka qualified as AWS
-import Amazonka.Auth qualified as AWS.Auth
+
 import Amazonka.SQS.ChangeMessageVisibility qualified as SQS
 import Amazonka.SQS.DeleteMessage qualified as SQS
 import Amazonka.SQS.ReceiveMessage qualified as SQS
@@ -64,7 +64,6 @@ import Data.Aeson qualified as Aeson
 import Data.Aeson.Types (Parser, parseEither)
 import Lens.Micro ((?~), (^.))
 
-import Ecluse.Core.Credential (Secret, unSecret)
 import Ecluse.Core.Ecosystem (ecosystemName, parseEcosystem)
 import Ecluse.Core.Package (
     Hash,
@@ -94,9 +93,7 @@ import Ecluse.Core.Version (mkVersion, renderVersion)
 
 {- | Where an SQS-compatible endpoint lives, for pointing the backend at a
 non-default host: a local emulator (@ministack@) in tests, or a VPC endpoint. A
-'Nothing' 'sqsEndpoint' uses @amazonka@'s default resolution and the ambient AWS
-credential chain; an override needs explicit credentials because an emulator is
-off that chain.
+non-default host: a local emulator (@ministack@) in tests, or a VPC endpoint.
 -}
 data SqsEndpoint = SqsEndpoint
     { endpointSecure :: Bool
@@ -105,13 +102,6 @@ data SqsEndpoint = SqsEndpoint
     -- ^ The host to connect to (e.g. @"localhost"@).
     , endpointPort :: Int
     -- ^ The port to connect to (e.g. @4566@ for ministack).
-    , endpointAccessKey :: Text
-    -- ^ A throwaway access key id the emulator accepts (real SQS uses the chain).
-    , endpointSecretKey :: Secret
-    {- ^ The matching secret key, held as a redacted 'Secret' so it never reaches the
-    derived 'Show' of this record (the secret-redaction guarantee must survive even on
-    an off-path log\/error).
-    -}
     }
     deriving stock (Eq, Show)
 
@@ -188,23 +178,13 @@ newSqsQueue cfg = do
 -- Build the region-scoped, optionally endpoint-overridden amazonka environment.
 mkEnv :: SqsConfig -> IO AWS.Env
 mkEnv cfg = case sqsEndpoint cfg of
-    -- Real AWS: discover credentials the standard way (env, instance/container
-    -- role, SSO, STS). Off the emulator path, so unit/integration cannot exercise
-    -- it; the live smoke tier is its only end-to-end check.
-    Nothing -> regioned <$> AWS.newEnv AWS.discover
-    -- An emulator is off the AWS credential chain, so seed throwaway keys and
-    -- point the SQS service at the override host.
     Just ep -> do
-        base <- AWS.Auth.fromKeys (accessKey ep) (secretKey ep) <$> AWS.newEnvNoAuth
-        pure (configured ep (regioned base))
+        base <- regioned <$> AWS.newEnv AWS.discover
+        pure (configured ep base)
+    Nothing -> regioned <$> AWS.newEnv AWS.discover
   where
     regioned :: AWS.Env -> AWS.Env
     regioned env = env{AWS.region = AWS.Region' (sqsRegion cfg)}
-
-    accessKey ep = AWS.AccessKey (encodeUtf8 (endpointAccessKey ep))
-    -- The secret is recovered from its redacted 'Secret' only here, at the point of
-    -- use (building the signer), never rendered.
-    secretKey ep = AWS.SecretKey (encodeUtf8 (unSecret (endpointSecretKey ep)))
 
     configured :: SqsEndpoint -> AWS.Env -> AWS.Env
     configured ep =

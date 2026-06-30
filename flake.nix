@@ -202,6 +202,7 @@
           LANG = "C.UTF-8";
           LC_ALL = "C.UTF-8";
           NODE_PATH = "${oracleNodeModules}/node_modules";
+          AWS_EC2_METADATA_DISABLED = "true";
         };
 
         # Everything CI drives through `make`, across every gate job — this is the
@@ -391,7 +392,7 @@
             contents = [ ecluseBin pkgs.cacert ];
             config = {
               Entrypoint = [ "${ecluseBin}/bin/ecluse" ];
-              ExposedPorts = { "4873/tcp" = { }; }; # default PROXY_PORT
+              ExposedPorts = { "4873/tcp" = { }; }; # default ECLUSE_PORT
               User = "65532:65532"; # nonroot, distroless convention
               Env = [
                 # A distroless image has no system trust store, so tls/x509-system

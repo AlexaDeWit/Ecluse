@@ -283,7 +283,7 @@ bytes in its ecosystem's surface, npm's `{"error": …}` object lives in
 Rendering therefore splits into **two tiers**: a request matching **no mount** is a
 neutral `404 Not Found` in `text/plain` (there is no ecosystem to render it), while
 every in-mount error, a policy `403`, an unrecognised-path `404`, a `501`, renders
-through that mount's renderer. The denial-body shape and `PROXY_HELP_MESSAGE`
+through that mount's renderer. The denial-body shape and `ECLUSE_HELP_MESSAGE`
 handling are in [Rules Engine → Denial Responses](rules-engine.md#denial-responses).
 
 ## Middleware and helper libraries

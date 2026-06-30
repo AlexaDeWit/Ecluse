@@ -22,13 +22,23 @@ import Test.Hspec
 import Ecluse.E2E.Fixtures (PkgSpec, allowPkg, denyPkg, headPkg, mirrorPkg, psName, psVersion, tamperPkg)
 import Ecluse.E2E.Harness
 
+shouldSucceed :: NpmResult -> IO ()
+shouldSucceed res = case npmExit res of
+    ExitSuccess -> pure ()
+    _ -> expectationFailure $ "npm failed!\nSTDOUT:\n" <> T.unpack (npmStdout res) <> "\nSTDERR:\n" <> T.unpack (npmStderr res)
+
+shouldFail :: NpmResult -> IO ()
+shouldFail res = case npmExit res of
+    ExitSuccess -> expectationFailure $ "npm incorrectly succeeded!\nSTDOUT:\n" <> T.unpack (npmStdout res) <> "\nSTDERR:\n" <> T.unpack (npmStderr res)
+    _ -> pure ()
+
 spec :: Spec
 spec = do
     unavailable <- runIO e2eUnavailable
     case unavailable of
         Just reason -> it "end-to-end suite (environment unavailable)" (pendingWith reason)
-        Nothing -> do
-            around withE2E scenarios
+        Nothing -> aroundAll withGlobalDataPlane $ do
+            scenarios
             telemetryScenarios
             publishScenarios
             pendingScenarios
@@ -36,16 +46,16 @@ spec = do
 {- | The active scenarios. Under 'around' each @it@ gets its own freshly booted
 environment, torn down before the next — per-test isolation (see the module header).
 -}
-scenarios :: SpecWith E2E
-scenarios = do
+scenarios :: SpecWith GlobalDataPlane
+scenarios = aroundWith withE2E $ do
     describe "public surface — install and policy" $ do
         it "installs an allow-listed package end to end" $ \e2e -> do
             res <- npmInstall e2e (psName allowPkg)
-            npmExit res `shouldBe` ExitSuccess
+            shouldSucceed res
 
         it "blocks a package that declares an install script, and never mirrors it" $ \e2e -> do
             res <- npmInstall e2e (psName denyPkg)
-            npmExit res `shouldNotBe` ExitSuccess
+            shouldFail res
             mirrored <- verdaccioHasVersion e2e (psName denyPkg) (psVersion denyPkg)
             mirrored `shouldBe` False
 
@@ -57,7 +67,7 @@ scenarios = do
             -- probe project's own `postinstall` would create a sentinel; a successful install
             -- that creates none proves npm_config_ignore_scripts held.
             (installed, scriptRan) <- installWithLifecycleProbe e2e
-            npmExit installed `shouldBe` ExitSuccess
+            shouldSucceed installed
             scriptRan `shouldBe` False
 
     describe "server↔worker — the integrity gate" $
@@ -85,11 +95,11 @@ scenarios = do
             presentBefore `shouldBe` False
             withNpmProject e2e $ \proj -> do
                 installed <- npmInstallIn proj name -- (2,3) served from public; writes the lockfile
-                npmExit installed `shouldBe` ExitSuccess
+                shouldSucceed installed
                 mirrored <- verdaccioHasVersion e2e name ver -- (4) the worker mirrors it to private
                 mirrored `shouldBe` True
                 fromMirror <- withUpstreamPaused e2e (npmCiIn proj) -- (5) public down → from the mirror
-                npmExit fromMirror `shouldBe` ExitSuccess
+                shouldSucceed fromMirror
 
     describe "protocol behaviours" $
         it "answers HEAD on a tarball with its size but no body, and enqueues no mirror" $ \e2e -> do
@@ -112,15 +122,15 @@ telemetry dialect ('E2EConfig') — under its own 'around', still per-test isola
 Datadog SaaS); the stdout/log validation keys on the proxy container's own JSONL stream.
 See @planning\/slices\/S53-e2e-ecosystem.md@.
 -}
-telemetryScenarios :: Spec
+telemetryScenarios :: SpecWith GlobalDataPlane
 telemetryScenarios = do
     -- #324 — real healthy OTLP publication: with telemetry on and an OTLP endpoint, a
     -- real npm request's ecluse.* metrics and its span actually reach a collector.
     describe "telemetry — OTLP healthy publication (#324)" $
-        around (withE2EWith E2EConfig{ecCollector = True, ecExtraEnv = otlpCollectorEnv}) $
+        aroundWith (withE2EWith E2EConfig{ecCollector = True, ecExtraEnv = otlpCollectorEnv}) $
             it "exports ecluse.* metrics and a span to the collector on a real npm request" $ \e2e -> do
                 res <- npmInstall e2e (psName allowPkg)
-                npmExit res `shouldBe` ExitSuccess
+                shouldSucceed res
                 -- The serve path's catalogue metric and a request span both land in the
                 -- collector's debug exporter: keyed on the catalogue metric name and the
                 -- exporter's per-span marker, so both signals are proven received.
@@ -137,13 +147,13 @@ telemetryScenarios = do
     -- the collector's debug exporter — so the domain instrumentation is exercised end to end,
     -- not only the WAI/http-client spans the #324 case proves.
     describe "telemetry — domain-span emission (#307)" $
-        around (withE2EWith E2EConfig{ecCollector = True, ecExtraEnv = otlpCollectorEnv}) $
+        aroundWith (withE2EWith E2EConfig{ecCollector = True, ecExtraEnv = otlpCollectorEnv}) $
             it "emits the rule-eval, mirror-enqueue, and mirror-job domain spans to the collector on a mirror round-trip" $ \e2e -> do
                 -- A public-served install gates the version (rule-eval span) and enqueues a
                 -- mirror (enqueue span); the worker then mirrors it (job span).
                 withNpmProject e2e $ \proj -> do
                     installed <- npmInstallIn proj (psName mirrorPkg)
-                    npmExit installed `shouldBe` ExitSuccess
+                    shouldSucceed installed
                 -- The worker mirrors asynchronously, so the mirror-job span lands after the
                 -- install returns; the published mirror is the cue the job has run.
                 mirrored <- verdaccioHasVersion e2e (psName mirrorPkg) (psVersion mirrorPkg)
@@ -162,10 +172,10 @@ telemetryScenarios = do
     -- #325(a) — OTLP absent / telemetry off: the real image still boots, serves a real
     -- install, and logs JSONL to stdout/stderr, with no collector anywhere.
     describe "telemetry — OTLP off, no collector (#325)" $
-        around (withE2EWith E2EConfig{ecCollector = False, ecExtraEnv = [("PROXY_TELEMETRY", "off")]}) $
+        aroundWith (withE2EWith E2EConfig{ecCollector = False, ecExtraEnv = [("ECLUSE_TELEMETRY", "off")]}) $
             it "starts, serves a real install, and logs JSONL to stdout — no collector needed" $ \e2e -> do
                 res <- npmInstall e2e (psName allowPkg)
-                npmExit res `shouldBe` ExitSuccess
+                shouldSucceed res
                 -- It still writes structured JSONL to its stdout/stderr (docker captures
                 -- both): await any log object (keyed on the `msg` field every katip JSONL
                 -- line carries) — the worker's async publish line reliably provides one.
@@ -182,10 +192,10 @@ telemetryScenarios = do
     -- the first failure is the "telemetry export error" line this asserts on, on top of the
     -- keeps-serving proof.
     describe "telemetry — OTLP on but the collector unreachable (#325)" $
-        around (withE2EWith E2EConfig{ecCollector = False, ecExtraEnv = otlpCollectorEnv}) $
+        aroundWith (withE2EWith E2EConfig{ecCollector = False, ecExtraEnv = otlpCollectorEnv}) $
             it "surfaces a throttled export-failure warning yet keeps serving — an absent collector degrades visibly, no crash" $ \e2e -> do
                 firstInstall <- npmInstall e2e (psName allowPkg)
-                npmExit firstInstall `shouldBe` ExitSuccess
+                shouldSucceed firstInstall
                 logged <- awaitProxyLog e2e (T.isInfixOf "\"msg\":") 80
                 logged `shouldBe` True
                 -- The first install's spans (1s batch flush) and metrics (1s reader) export
@@ -199,19 +209,19 @@ telemetryScenarios = do
                 stillReady <- proxyStatus e2e "/readyz"
                 stillReady `shouldBe` 200
                 secondInstall <- npmInstall e2e (psName mirrorPkg)
-                npmExit secondInstall `shouldBe` ExitSuccess
+                shouldSucceed secondInstall
 
     -- #323 — Datadog pattern: DD_SERVICE/DD_ENV/DD_VERSION (+ DD_AGENT_HOST) flow through
     -- the self-aligning resolver to Datadog unified-service-tag resource attributes on the
     -- exported signals and the dd object on the JSONL logs.
     describe "telemetry — Datadog pattern (#323)" $
-        around (withE2EWith E2EConfig{ecCollector = True, ecExtraEnv = datadogCollectorEnv}) $
+        aroundWith (withE2EWith E2EConfig{ecCollector = True, ecExtraEnv = datadogCollectorEnv}) $
             it "carries the Datadog unified-service tags to the collector and the dd object onto the logs" $ \e2e -> do
                 -- A mirror round-trip drives request spans plus a worker job span, the
                 -- span-scoped path whose log line carries a populated dd.trace_id.
                 withNpmProject e2e $ \proj -> do
                     installed <- npmInstallIn proj (psName mirrorPkg)
-                    npmExit installed `shouldBe` ExitSuccess
+                    shouldSucceed installed
                 -- The exported signals carry the UST resource attributes the resolver
                 -- derived from the DD_* identity (service.name/deployment.environment/
                 -- service.version), both the key and the configured value.
@@ -253,10 +263,10 @@ back over the private leg" model. The opt-in @405@ posture runs on the base topo
 publication target). Each is per-test isolated like 'scenarios'. See
 @planning\/slices\/S52-publish-path.md@.
 -}
-publishScenarios :: Spec
+publishScenarios :: SpecWith GlobalDataPlane
 publishScenarios = do
     describe "first-party publish — publication target enabled" $
-        around (withE2EWith E2EConfig{ecCollector = False, ecExtraEnv = publishTargetEnv}) $ do
+        aroundWith (withE2EWith E2EConfig{ecCollector = False, ecExtraEnv = publishTargetEnv}) $ do
             it "publishes an in-scope package, then installs it back through the private leg" $ \e2e -> do
                 let name = publishInScopeName
                     ver = publishVersion
@@ -264,14 +274,14 @@ publishScenarios = do
                 -- relayed to the publication target (Verdaccio), so the version is then
                 -- present there...
                 published <- withPublishProject e2e name ver npmPublishIn
-                npmExit published `shouldBe` ExitSuccess
+                shouldSucceed published
                 onTarget <- verdaccioHasVersion e2e name ver
                 onTarget `shouldBe` True
                 -- ...and readable back: the proxy serves it over the private (trusted) leg,
                 -- so a fresh install through the proxy resolves and succeeds — publish →
                 -- publication target → readable-back, end to end through the real image.
                 installed <- npmInstall e2e name
-                npmExit installed `shouldBe` ExitSuccess
+                shouldSucceed installed
 
             it "refuses an out-of-scope publish before any upstream write (anti-shadowing guard)" $ \e2e -> do
                 let name = publishOutOfScopeName
@@ -280,7 +290,7 @@ publishScenarios = do
                 -- post-publish absence below is attributable to the refusal, not a stale state.
                 absentBefore <- verdaccioHasVersionNow e2e name ver
                 absentBefore `shouldBe` False
-                -- A name outside PUBLISH_SCOPES is refused with a 403 BEFORE the relay, so npm
+                -- A name outside ECLUSE_PUBLISH_SCOPES is refused with a 403 BEFORE the relay, so npm
                 -- exits non-zero and the publication target never receives it. The absence is a
                 -- sound proof of refused-before-write *because* the harness configures Verdaccio
                 -- to accept anonymous publishes: had the document reached the target it would
@@ -288,14 +298,14 @@ publishScenarios = do
                 -- identical relay and ACL, shows it is (that scenario is the control). So a
                 -- False after the patience window can only mean the write never left the proxy.
                 published <- withPublishProject e2e name ver npmPublishIn
-                npmExit published `shouldNotBe` ExitSuccess
+                shouldFail published
                 reached <- verdaccioHasVersion e2e name ver
                 reached `shouldBe` False
 
     describe "first-party publish — opt-in posture" $
-        around withE2E $
+        aroundWith withE2E $
             it "answers a publish with 405 when no publication target is configured" $ \e2e -> do
-                -- The base topology sets no PUBLICATION_TARGET_URL, so the publish path is
+                -- The base topology sets no ECLUSE_PUBLICATION_TARGET, so the publish path is
                 -- off: a PUT /{pkg} is not an allowed method (no implicit write path). A raw
                 -- PUT is enough — the 405 precedes any body read — so npm need not be driven.
                 status <- proxyPut e2e ("/npm/" <> publishInScopeName)
@@ -305,10 +315,10 @@ publishScenarios = do
 environment. Graceful drain (#160) @SIGTERM@s the proxy, so when written it belongs in the
 per-test isolated 'scenarios' above.
 -}
-pendingScenarios :: Spec
+pendingScenarios :: SpecWith GlobalDataPlane
 pendingScenarios =
     describe "graceful shutdown" $
-        it "drains in-flight work on SIGTERM" $
+        it "drains in-flight work on SIGTERM" $ \_ ->
             pendingWith "activates with the #160 graceful-drain work"
 
 -- | The mount-relative tarball path for a fixture package's single version.

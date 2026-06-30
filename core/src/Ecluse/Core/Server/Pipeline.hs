@@ -110,7 +110,7 @@ selected by the requested filename — rather than reconstructing the convention
 so the proxy can front a public registry that serves its artifacts from a separate host
 or an off-convention path (a CDN\/files host, a signed URL). That location is gated, not
 trusted: it is fetched only when the tarball-host policy
-('Ecluse.Core.Security.tarballHostAllowed', per @PROXY_RESPECT_UPSTREAM_TARBALL_HOST@)
+('Ecluse.Core.Security.tarballHostAllowed', per @ECLUSE_RESPECT_UPSTREAM_TARBALL_HOST@)
 admits its host (the default refuses a cross-host @dist.tarball@), and the untrusted
 egress is https-only with certificate validation. The public leg is anonymous: it
 gates __that one version__ against the rules (the same machinery the packument path
@@ -1688,7 +1688,7 @@ __before any upstream write is attempted__:
 1. the edge token (if configured) is validated, exactly as the read paths gate
    ('edgeTokenAuthorised'); a missing\/mismatched token is a @401@;
 2. the __anti-shadowing scope guard__ ('inPublishScope') is enforced — a name outside
-   the configured @PUBLISH_SCOPES@ allow-list is a @403@ with a clear message, so a
+   the configured @ECLUSE_PUBLISH_SCOPES@ allow-list is a @403@ with a clear message, so a
    client cannot publish a name that shadows an existing public package
    (dependency confusion);
 3. the body is read and its __declared identity is validated__

@@ -62,7 +62,7 @@ The streaming/ETag/cache concerns are S13, this slice is routing + meta + middle
   local `ServerConfig` (port + `[Mount]` + `RequestSizeLimit`); `application ::
   ServerConfig -> Env -> Application` is the testable entry point, and `runServer :: Env
   -> IO ()` uses `defaultServerConfig` (port **4873**, the documented
-  `PROXY_PORT` default, and a single root mount). S20 supplies the real port and
+  `ECLUSE_PORT` default, and a single root mount). S20 supplies the real port and
   resolved `MountMap` at the composition root without changing this signature.
 - **Mount dispatch** matches the request's leading path segment(s) to a `Mount`
   prefix, strips it (accepting a bare-prefix trailing slash), and hands the

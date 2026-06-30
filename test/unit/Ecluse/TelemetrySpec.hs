@@ -42,7 +42,7 @@ import Ecluse.Telemetry (
 import Ecluse.Telemetry.Resolve (newExportFailureSink)
 
 {- | Tests for the OpenTelemetry substrate. They exercise the substrate's
-promises: the @PROXY_TELEMETRY@ master switch parses strictly (on \/ off \/
+promises: the @ECLUSE_TELEMETRY@ master switch parses strictly (on \/ off \/
 malformed); the off-by-default handle is a genuine no-op (the SDK is never
 initialised and no provider is exposed); and 'telemetryEnabled' wires the SDK's
 tracer and meter providers through to the handle's accessors. The enabled handle

@@ -22,7 +22,7 @@ import UnliftIO.Timeout (timeout)
 
 import Data.Time (addUTCTime, getCurrentTime)
 
-import Ecluse.Core.Credential (AuthToken (..), CredentialProvider, mkSecret, staticProvider)
+import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Package (mkScope)
 import Ecluse.Core.Queue (newInMemoryQueue)
 import Ecluse.Core.Registry (ParseError (..), RegistryClient (..))
@@ -79,8 +79,6 @@ fakeRegistry =
     unusedParse = ParseError "fakeRegistry: the web layer must not parse when only routing"
 
 -- | A credential-handle double: a fixed, non-expiring token, never read here.
-fakeCredentials :: CredentialProvider
-fakeCredentials = staticProvider AuthToken{authSecret = mkSecret "server-spec", authExpiresAt = Nothing}
 
 -- | A manager with no TLS and no connection opened on construction.
 newTestManager :: IO Manager
@@ -94,7 +92,7 @@ newTestEnv = do
     metadataCache <- newMetadataCache defaultCacheConfig
     logEnv <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
     heartbeat <- newWorkerHeartbeat
-    newEnv fakeRegistry queue fakeCredentials manager manager metadataCache logEnv telemetryDisabled heartbeat
+    newEnv fakeRegistry queue manager manager metadataCache logEnv telemetryDisabled heartbeat
 
 {- | A test mount binding: the given prefix and classifier, npm's denial renderer,
 and no packument-serve dependencies (so a 'Packument' route is the recognised-but-

@@ -23,8 +23,8 @@ import UnliftIO.Concurrent (threadDelay)
 
 import Ecluse (runWorker)
 import Ecluse.Composition (MirrorQueuePlan (MemoryBackend, SqsBackend), planMirrorQueue, renderBootError)
-import Ecluse.Config (parseEnvPure)
-import Ecluse.Core.Credential (AuthToken (AuthToken, authExpiresAt, authSecret), CredentialProvider, mkSecret, staticProvider)
+import Ecluse.Config (Config (configApp), loadConfig)
+import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Package.Integrity (defaultMinIntegrity, defaultMinTrustedIntegrity)
 import Ecluse.Core.Queue (MirrorQueue)
 import Ecluse.Core.Queue.Sqs (SqsConfig (sqsWaitSeconds), SqsEndpoint (endpointHost, endpointPort), newSqsQueue)
@@ -133,7 +133,7 @@ configDrivenQueue container queueName = do
     queueUrl <- freshQueueUrl container queueName
     let endpoint = endpointFor container
         endpointUrl = "http://" <> endpointHost endpoint <> ":" <> show (endpointPort endpoint)
-    env <- either (fail . ("AwsEndToEndSpec fixture env: " <>) . show) pure (parseEnvPure (sqsEnvVars queueUrl endpointUrl))
+    env <- either (fail . ("AwsEndToEndSpec fixture env: " <>) . show) (pure . configApp) (loadConfig (sqsEnvVars queueUrl endpointUrl) Nothing)
     plan <- either (fail . toString . T.unlines . map renderBootError) pure (planMirrorQueue env)
     case plan of
         SqsBackend sqsConfig -> newSqsQueue sqsConfig{sqsWaitSeconds = 1}
@@ -143,8 +143,8 @@ configDrivenQueue container queueName = do
 -- the standard endpoint override and credential keys, plus the required upstreams.
 sqsEnvVars :: Text -> Text -> [(String, String)]
 sqsEnvVars queueUrl endpointUrl =
-    [ ("PRIVATE_UPSTREAM_URL", "https://private.invalid")
-    , ("MIRROR_QUEUE_URL", toString queueUrl)
+    [ ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://private.invalid")
+    , ("ECLUSE_QUEUE_URL", toString queueUrl)
     , ("AWS_REGION", "us-east-1")
     , ("AWS_ENDPOINT_URL_SQS", toString endpointUrl)
     , ("AWS_ACCESS_KEY_ID", "test")
@@ -169,10 +169,7 @@ buildEnv queue mirrorUrl = do
     metadataCache <- newMetadataCache defaultCacheConfig
     logEnv <- newTestLogEnv
     heartbeat <- newWorkerHeartbeat
-    newEnv publishClient queue credentials guardedManager trusted metadataCache logEnv telemetryDisabled heartbeat
-  where
-    credentials :: CredentialProvider
-    credentials = staticProvider AuthToken{authSecret = mkSecret "e2e-publish-token", authExpiresAt = Nothing}
+    newEnv publishClient queue guardedManager trusted metadataCache logEnv telemetryDisabled heartbeat
 
 -- The single npm mount: the public origin is the loopback upstream stub, the private
 -- origin is the 404 stub (so every request misses to public), and the mirror target is

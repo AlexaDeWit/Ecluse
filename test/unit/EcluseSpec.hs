@@ -13,7 +13,6 @@ import UnliftIO.Exception (throwString)
 import System.Environment (setEnv, unsetEnv)
 
 import Ecluse (BootAborted (..), mountBindingFor, npmServerConfig, orExit, run)
-import Ecluse.Core.Credential (AuthToken (..), CredentialProvider, mkSecret, staticProvider)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Queue (newInMemoryQueue)
 import Ecluse.Core.Registry (ParseError (..), RegistryClient (..))
@@ -43,8 +42,6 @@ fakeRegistry =
     unusedParse = ParseError "fakeRegistry: composition-root routing must not parse"
 
 -- | A credential-handle double: a fixed, non-expiring token, never read here.
-fakeCredentials :: CredentialProvider
-fakeCredentials = staticProvider AuthToken{authSecret = mkSecret "ecluse-spec", authExpiresAt = Nothing}
 
 -- | A manager with no TLS and no connection opened on construction.
 newTestManager :: IO Manager
@@ -58,7 +55,7 @@ newTestEnv = do
     metadataCache <- newMetadataCache defaultCacheConfig
     logEnv <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
     heartbeat <- newWorkerHeartbeat
-    newEnv fakeRegistry queue fakeCredentials manager manager metadataCache logEnv telemetryDisabled heartbeat
+    newEnv fakeRegistry queue manager manager metadataCache logEnv telemetryDisabled heartbeat
 
 {- | The composed npm front door ('npmServerConfig') as a WAI 'Application', driven
 in-process — so the actual mount the composition root wires is exercised, no socket.
@@ -75,11 +72,16 @@ separately by layering @PROXY_CONFIG@ on top of this base. It deliberately omits
 -}
 runEnv :: [(String, String)]
 runEnv =
-    [ ("PRIVATE_UPSTREAM_URL", "https://private.example.test")
-    , ("MIRROR_TARGET_URL", "https://mirror.example.test")
-    , ("MIRROR_QUEUE_URL", "https://sqs.example.test/q")
-    , ("MIRROR_TARGET_TOKEN", "mirror-write-token")
-    , ("PROXY_PORT", "0")
+    [ ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://private.example.test")
+    , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET", "https://mirror.example.test")
+    , ("ECLUSE_QUEUE_URL", "https://sqs.example.test/q")
+    , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN", "mirror-write-token")
+    , ("ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER", "static")
+    , ("ECLUSE_MOUNTS__PYPI__CREDENTIAL_PROVIDER", "static")
+    , ("ECLUSE_MOUNTS__RUBYGEMS__CREDENTIAL_PROVIDER", "static")
+    , ("AWS_SECRET_KEY_ID", "test")
+    , ("AWS_SECRET_ACCESS_KEY", "test")
+    , ("ECLUSE_PORT", "0")
     ]
 
 {- | 'runEnv' extended with the AWS settings the default @sqs@ mirror-queue backend
@@ -92,8 +94,6 @@ are caught by its own supervision — so this stays hermetic.
 awsRunEnv :: [(String, String)]
 awsRunEnv =
     [ ("AWS_REGION", "us-east-1")
-    , ("AWS_ACCESS_KEY_ID", "test")
-    , ("AWS_SECRET_ACCESS_KEY", "test")
     ]
         <> runEnv
 
@@ -109,7 +109,6 @@ spec = do
     -- supplied so the env single-mount's @static@ credential reference resolves.
     describe "run" $ do
         it "boots from the environment layer alone (no document) and serves" $ do
-            unsetEnv "PROXY_CONFIG"
             traverse_ (uncurry setEnv) awsRunEnv
             outcome <- timeout 100000 run
             traverse_ (unsetEnv . fst) awsRunEnv
@@ -117,78 +116,73 @@ spec = do
 
         it "boots with an inline PROXY_CONFIG document and serves" $ do
             traverse_ (uncurry setEnv) awsRunEnv
-            setEnv "PROXY_CONFIG" "{\"rules\":{}}"
             outcome <- timeout 100000 run
-            unsetEnv "PROXY_CONFIG"
             traverse_ (unsetEnv . fst) awsRunEnv
             outcome `shouldBe` Nothing
 
         it "aborts fast at boot when the mirror-queue backend is not built (pubsub)" $ do
             -- The GCP arm is recognised but unbuilt, so the composition root refuses
             -- to start rather than silently falling back to a different queue.
-            unsetEnv "PROXY_CONFIG"
             traverse_ (uncurry setEnv) awsRunEnv
-            setEnv "MIRROR_QUEUE_PROVIDER" "pubsub"
+            setEnv "ECLUSE_QUEUE_BACKEND" "pubsub"
             outcome <- try (timeout 100000 run) :: IO (Either BootAborted (Maybe ()))
-            unsetEnv "MIRROR_QUEUE_PROVIDER"
+            unsetEnv "ECLUSE_QUEUE_BACKEND"
             traverse_ (unsetEnv . fst) awsRunEnv
             outcome `shouldBe` Left BootAborted
 
-        it "boots under the in-memory mirror-queue backend (no AWS settings, no MIRROR_QUEUE_URL) and serves" $ do
+        it "boots under the in-memory mirror-queue backend (no AWS settings, no ECLUSE_QUEUE_URL) and serves" $ do
             -- The explicit memory backend needs no cloud queue: it boots with no
-            -- AWS_REGION/credentials AND no MIRROR_QUEUE_URL — emitting its loud
+            -- AWS_REGION/credentials AND no ECLUSE_QUEUE_URL — emitting its loud
             -- non-durable boot warning and constructing the bounded in-memory queue. The
             -- idle worker simply parks on the empty queue rather than hot-looping.
-            unsetEnv "PROXY_CONFIG"
             unsetEnv "AWS_REGION"
-            unsetEnv "MIRROR_QUEUE_URL"
-            traverse_ (uncurry setEnv) (filter ((/= "MIRROR_QUEUE_URL") . fst) runEnv)
-            setEnv "MIRROR_QUEUE_PROVIDER" "memory"
+            unsetEnv "ECLUSE_QUEUE_URL"
+            traverse_ (uncurry setEnv) (filter ((/= "ECLUSE_QUEUE_URL") . fst) runEnv)
+            setEnv "ECLUSE_QUEUE_BACKEND" "memory"
             outcome <- timeout 100000 run
-            unsetEnv "MIRROR_QUEUE_PROVIDER"
+            unsetEnv "ECLUSE_QUEUE_BACKEND"
             traverse_ (unsetEnv . fst) runEnv
             outcome `shouldBe` Nothing
 
         it "aborts fast at boot when the sqs backend has no AWS_REGION" $ do
             -- The default sqs backend needs a region to be scoped to; absent, the
             -- composition root fails fast rather than building an unscoped queue.
-            unsetEnv "PROXY_CONFIG"
             -- Clear AWS_REGION explicitly so a sibling case (run under a randomized
             -- order) cannot leak it into this missing-region fixture.
             unsetEnv "AWS_REGION"
             traverse_ (uncurry setEnv) runEnv
+            setEnv "ECLUSE_QUEUE_BACKEND" "sqs"
             outcome <- try (timeout 100000 run) :: IO (Either BootAborted (Maybe ()))
+            unsetEnv "ECLUSE_QUEUE_BACKEND"
             traverse_ (unsetEnv . fst) runEnv
             outcome `shouldBe` Left BootAborted
 
-        it "aborts fast at boot when the sqs backend has no MIRROR_QUEUE_URL" $ do
-            -- MIRROR_QUEUE_URL is optional at the env layer but required for sqs;
+        it "aborts fast at boot when the sqs backend has no ECLUSE_QUEUE_URL" $ do
+            -- ECLUSE_QUEUE_URL is optional at the env layer but required for sqs;
             -- absent, the composition root fails loud rather than building a queue with
             -- no target.
-            unsetEnv "PROXY_CONFIG"
             traverse_ (uncurry setEnv) awsRunEnv
-            unsetEnv "MIRROR_QUEUE_URL"
+            unsetEnv "ECLUSE_QUEUE_URL"
+            setEnv "ECLUSE_QUEUE_BACKEND" "sqs"
             outcome <- try (timeout 100000 run) :: IO (Either BootAborted (Maybe ()))
+            unsetEnv "ECLUSE_QUEUE_BACKEND"
             traverse_ (unsetEnv . fst) awsRunEnv
             outcome `shouldBe` Left BootAborted
 
         it "aborts fast at boot when the gcp-artifact-registry credential provider is selected (not built)" $ do
-            unsetEnv "PROXY_CONFIG"
             traverse_ (uncurry setEnv) awsRunEnv
-            setEnv "MIRROR_TARGET_CREDENTIAL_PROVIDER" "gcp-artifact-registry"
+            setEnv "ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER" "gcp-artifact-registry"
             outcome <- try (timeout 100000 run) :: IO (Either BootAborted (Maybe ()))
-            unsetEnv "MIRROR_TARGET_CREDENTIAL_PROVIDER"
+            unsetEnv "ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER"
             traverse_ (unsetEnv . fst) awsRunEnv
             outcome `shouldBe` Left BootAborted
 
         it "aborts fast at boot when codeartifact is selected but its domain cannot be resolved" $ do
             -- The CodeArtifact inputs resolve by neither an explicit key nor the
-            -- (non-CodeArtifact) mirror URL host, so boot fails before any AWS mint.
-            unsetEnv "PROXY_CONFIG"
             traverse_ (uncurry setEnv) awsRunEnv
-            setEnv "MIRROR_TARGET_CREDENTIAL_PROVIDER" "codeartifact"
+            setEnv "ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER" "codeartifact"
             outcome <- try (timeout 100000 run) :: IO (Either BootAborted (Maybe ()))
-            unsetEnv "MIRROR_TARGET_CREDENTIAL_PROVIDER"
+            unsetEnv "ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER"
             traverse_ (unsetEnv . fst) awsRunEnv
             outcome `shouldBe` Left BootAborted
 

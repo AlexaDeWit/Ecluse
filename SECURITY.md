@@ -30,7 +30,7 @@ designed behaviour.
 ### A public version must carry an integrity digest
 
 A package version served from a **public** (untrusted) upstream **must carry an integrity
-digest whose algorithm meets the integrity floor** (`PROXY_MIN_PUBLIC_INTEGRITY`, default
+digest whose algorithm meets the integrity floor** (`ECLUSE_MIN_PUBLIC_INTEGRITY`, default
 **SHA-256**). A public version whose strongest digest is **absent**, or **below the floor**
 (for example only a legacy SHA-1 `dist.shasum`, with no `sha256`/`sha512` SRI `dist.integrity`)
 is **inadmissible**: it's refused outright, never served.

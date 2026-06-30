@@ -194,7 +194,7 @@ publicRegistryBaseUrl :: Text
 publicRegistryBaseUrl = "https://registry.npmjs.org"
 
 {- | The canonical public npm registry as an https 'RegistryUrl': the
-'publicRegistryBaseUrl' text, https by construction. The default @PUBLIC_UPSTREAM_URL@
+'publicRegistryBaseUrl' text, https by construction. The default @ECLUSE_PUBLIC_UPSTREAM@
 when none is configured.
 -}
 publicRegistryUrl :: RegistryUrl

@@ -4,10 +4,7 @@ the real @npm@ CLI, and tear it all down.
 The topology runs the __real OCI image__ (the artifact we publish), an __nginx__
 public-upstream stub, a __Verdaccio__ private upstream + mirror target, a
 __ministack__ SQS emulator, and — for the telemetry scenarios ('E2EConfig') — an
-__OTLP collector__ the proxy exports to, on a docker network whose subnet is RFC 5737 documentation
-space (@203.0.113.0\/24@). That range is __not__ in the egress guard's internal-range
-block, so the proxy reaches the stub at a non-internal address with no production code
-change — see @planning\/slices\/S53-e2e-ecosystem.md@. Custom-subnet networks are
+__OTLP collector__ the proxy exports to, on a standard docker network. Custom networks are
 beyond @testcontainers-hs@, so the harness drives @docker@ directly through
 @typed-process@.
 
@@ -26,6 +23,8 @@ cases @pending@ rather than fail on a machine without the setup.
 module Ecluse.E2E.Harness (
     E2E (..),
     e2eUnavailable,
+    GlobalDataPlane (..),
+    withGlobalDataPlane,
     withE2E,
     withE2EWith,
     E2EConfig (..),
@@ -177,11 +176,106 @@ dockerDaemonReachable =
 
 -- ── lifecycle ───────────────────────────────────────────────────────────────
 
+{-# NOINLINE globalFixtures #-}
+globalFixtures :: IO FilePath
+globalFixtures = do
+    tmpRoot <- getTemporaryDirectory
+    let workDir = tmpRoot </> "ecluse-e2e-shared-fixtures"
+        htmlDir = workDir </> "html"
+        certsDir = workDir </> "certs"
+        verdConf = workDir </> "verdaccio.yaml"
+        nginxConf = workDir </> "nginx.conf"
+    createDirectoryIfMissing True htmlDir
+    buildFixtures htmlDir fixturePackages
+    writeFileText verdConf verdaccioConfig
+    writeFileText nginxConf nginxStubConfig
+    generateCerts certsDir
+    pure workDir
+
+data GlobalDataPlane = GlobalDataPlane
+    { gdpNet :: String
+    , gdpStub :: String
+    , gdpVerd :: String
+    , gdpMini :: String
+    , gdpVerdPort :: Int
+    , gdpMiniPort :: Int
+    , gdpWorkDir :: FilePath
+    }
+
+withGlobalDataPlane :: (GlobalDataPlane -> IO ()) -> IO ()
+withGlobalDataPlane action = do
+    sfx <- uniqueSuffix
+    workDir <- globalFixtures
+    let net = "ecluse-e2e-global-net-" <> sfx
+        stub = "ecluse-e2e-global-stub-" <> sfx
+        verd = "ecluse-e2e-global-verd-" <> sfx
+        mini = "ecluse-e2e-global-mini-" <> sfx
+        htmlDir = workDir </> "html"
+        certsDir = workDir </> "certs"
+        verdConf = workDir </> "verdaccio.yaml"
+        nginxConf = workDir </> "nginx.conf"
+    bracket
+        (pure ())
+        (\_ -> teardown net [verd, stub, mini] "")
+        ( \_ -> do
+            dockerOk ["network", "create", net]
+            dockerOk
+                [ "run"
+                , "-d"
+                , "--name"
+                , verd
+                , "--network"
+                , net
+                , "--network-alias"
+                , "verdaccio"
+                , "-p"
+                , "127.0.0.1:0:4873"
+                , "-v"
+                , verdConf <> ":/verdaccio/conf/config.yaml:ro"
+                , "verdaccio/verdaccio:5"
+                ]
+            dockerOk
+                [ "run"
+                , "-d"
+                , "--name"
+                , stub
+                , "--network"
+                , net
+                , "--network-alias"
+                , "upstream"
+                , "--network-alias"
+                , "mirror"
+                , "-v"
+                , htmlDir <> ":/usr/share/nginx/html:ro"
+                , "-v"
+                , nginxConf <> ":/etc/nginx/conf.d/default.conf:ro"
+                , "-v"
+                , certsDir <> ":/certs:ro"
+                , "nginx:alpine"
+                ]
+            dockerOk
+                [ "run"
+                , "-d"
+                , "--name"
+                , mini
+                , "--network"
+                , net
+                , "--network-alias"
+                , "ministack"
+                , "-p"
+                , "127.0.0.1:0:4566"
+                , "ministackorg/ministack@sha256:5164592def36af01b8ac76364028e27c5ecd8f1494c8a53d5fcd811cc7dfb594"
+                ]
+            miniPort <- publishedPort mini "4566/tcp"
+            verdPort <- publishedPort verd "4873/tcp"
+            action GlobalDataPlane{gdpNet = net, gdpStub = stub, gdpVerd = verd, gdpMini = mini, gdpVerdPort = verdPort, gdpMiniPort = miniPort, gdpWorkDir = workDir}
+        )
+
 {- | Bring the network + base containers up, wait for proxy readiness, run the action,
 then tear everything down on every exit path — the plain topology ('defaultE2EConfig'),
 no collector and no extra proxy environment. Assumes 'e2eUnavailable' returned 'Nothing'.
 -}
-withE2E :: (E2E -> IO ()) -> IO ()
+withE2E :: (E2E -> IO ()) -> GlobalDataPlane -> IO ()
 withE2E = withE2EWith defaultE2EConfig
 
 {- | 'withE2E' parameterised by an 'E2EConfig': optionally stand up an OTLP collector
@@ -192,34 +286,19 @@ receiving when the proxy makes its first export, and is torn down with the other
 case under 'withE2EWith' is still per-test isolated: its own network, containers, and
 collector, freshly booted and torn down (see "Ecluse.E2E.SuiteSpec").
 -}
-withE2EWith :: E2EConfig -> (E2E -> IO ()) -> IO ()
-withE2EWith cfg action = do
+withE2EWith :: E2EConfig -> (E2E -> IO ()) -> GlobalDataPlane -> IO ()
+withE2EWith cfg action gdp = do
     image <- maybe (fail (imageVar <> " unset")) pure =<< lookupEnv imageVar
     sfx <- uniqueSuffix
-    tmpRoot <- getTemporaryDirectory
-    let net = "ecluse-e2e-net-" <> sfx
-        stub = "ecluse-e2e-stub-" <> sfx
-        verd = "ecluse-e2e-verd-" <> sfx
-        mini = "ecluse-e2e-mini-" <> sfx
+    let net = gdpNet gdp
+        stub = gdpStub gdp
         prox = "ecluse-e2e-proxy-" <> sfx
         coll = "ecluse-e2e-otelcol-" <> sfx
-        workDir = tmpRoot </> ("ecluse-e2e-" <> sfx)
-        htmlDir = workDir </> "html"
-        certsDir = workDir </> "certs"
-        verdConf = workDir </> "verdaccio.yaml"
-        nginxConf = workDir </> "nginx.conf"
+        certsDir = gdpWorkDir gdp </> "certs"
     bracket
         (pure ())
-        (\_ -> teardown net [prox, verd, stub, mini, coll] workDir)
+        (\_ -> teardown "" [prox, coll] "")
         ( \_ -> do
-            createDirectoryIfMissing True htmlDir
-            buildFixtures htmlDir fixturePackages
-            writeFileText verdConf verdaccioConfig
-            writeFileText nginxConf nginxStubConfig
-            -- The test CA + server cert (SANs upstream, mirror) the TLS stubs serve and the
-            -- proxy trusts, plus the trust bundle the proxy's SSL_CERT_FILE points at.
-            generateCerts certsDir
-            dockerOk ["network", "create", "--subnet", "203.0.113.0/24", net]
             -- The OTLP collector, when the scenario asks for one: an OTLP/HTTP receiver
             -- into a `debug` exporter at detailed verbosity (so each received metric and
             -- span is written to its logs), reached by the proxy as `otelcol`. Brought up
@@ -246,70 +325,13 @@ withE2EWith cfg action = do
                     ]
                 ready <- awaitContainerLog coll (T.isInfixOf "Everything is ready") 240
                 unless ready (fail "OTLP collector did not become ready within the timeout")
-            -- Verdaccio private upstream + mirror backend, reachable on the internal
-            -- network as `verdaccio` over plain HTTP (the nginx `mirror` stub fronts it
-            -- with TLS). Started before nginx so the `mirror` server block's proxy_pass
-            -- host resolves. Its host-published port stays HTTP for the harness's own polls.
-            dockerOk
-                [ "run"
-                , "-d"
-                , "--name"
-                , verd
-                , "--network"
-                , net
-                , "--network-alias"
-                , "verdaccio"
-                , "-p"
-                , "127.0.0.1:0:4873"
-                , "-v"
-                , verdConf <> ":/verdaccio/conf/config.yaml:ro"
-                , "verdaccio/verdaccio:5"
-                ]
-            -- nginx TLS terminator for both registry stubs, reached by the proxy as
-            -- `upstream` (static packuments/tarballs) and `mirror` (reverse-proxied to
-            -- Verdaccio). It serves the generated test cert mounted at /certs.
-            dockerOk
-                [ "run"
-                , "-d"
-                , "--name"
-                , stub
-                , "--network"
-                , net
-                , "--network-alias"
-                , "upstream"
-                , "--network-alias"
-                , "mirror"
-                , "-v"
-                , htmlDir <> ":/usr/share/nginx/html:ro"
-                , "-v"
-                , nginxConf <> ":/etc/nginx/conf.d/default.conf:ro"
-                , "-v"
-                , certsDir <> ":/certs:ro"
-                , "nginx:alpine"
-                ]
-            -- ministack SQS emulator, reachable by the proxy as `ministack` and by the
-            -- harness on a published host port (to create the queue). The image is used
-            -- directly (no testcontainers-hs label-parsing workaround needed here).
-            dockerOk
-                [ "run"
-                , "-d"
-                , "--name"
-                , mini
-                , "--network"
-                , net
-                , "--network-alias"
-                , "ministack"
-                , "-p"
-                , "127.0.0.1:0:4566"
-                , "ministackorg/ministack@sha256:5164592def36af01b8ac76364028e27c5ecd8f1494c8a53d5fcd811cc7dfb594"
-                ]
             manager <- newManager defaultManagerSettings
             -- Create the mirror queue in ministack and learn its URL. The proxy routes to
             -- ministack via AWS_ENDPOINT_URL_SQS and matches the queue by its path, so the
             -- URL's host (here ministack's own `localhost:4566`) is immaterial.
-            miniPort <- publishedPort mini "4566/tcp"
-            queueUrl <- createMinistackQueue manager miniPort "ecluse-e2e"
-            -- Pick the host port up front so PROXY_PUBLIC_URL (which makes the proxy
+            let queueName = "ecluse-e2e-queue-" <> T.pack sfx
+            queueUrl <- createMinistackQueue manager (gdpMiniPort gdp) queueName
+            -- Pick the host port up front so ECLUSE_PUBLIC_URL (which makes the proxy
             -- rewrite dist.tarball to an absolute, npm-fetchable URL) is known before
             -- the container starts — the assigned port is only readable after.
             proxyPort <- freeHostPort
@@ -331,8 +353,8 @@ withE2EWith cfg action = do
                 ]
                     <> concatMap (\(k, v) -> ["-e", toString (k <> "=" <> v)]) (proxyEnv proxyPort queueUrl <> ecExtraEnv cfg)
                     <> [image]
-            verdPort <- publishedPort verd "4873/tcp"
-            let base = "http://127.0.0.1:" <> show proxyPort
+            let verdPort = gdpVerdPort gdp
+                base = "http://127.0.0.1:" <> show proxyPort
                 e2e =
                     E2E
                         { e2eRegistry = base <> "/npm/"
@@ -353,43 +375,45 @@ queue URL created in ministack. The real SQS backend is pointed at ministack thr
 the production @AWS_ENDPOINT_URL_SQS@ override and signs with the standard
 @AWS_ACCESS_KEY_ID@\/@AWS_SECRET_ACCESS_KEY@ (the emulator ignores them). Both upstream
 legs and the mirror target point at the stub containers by their network aliases.
-@PROXY_PUBLIC_URL@ is the host-loopback address npm reaches the proxy on, so each
+@ECLUSE_PUBLIC_URL@ is the host-loopback address npm reaches the proxy on, so each
 served @dist.tarball@ is rewritten to an absolute URL npm can fetch.
 -}
 proxyEnv :: Int -> Text -> [(Text, Text)]
 proxyEnv hostPort queueUrl =
-    [ ("PROXY_PORT", "4873")
-    , -- PROXY_PUBLIC_URL is the proxy's own client-facing URL (for dist.tarball
+    [ ("ECLUSE_PORT", "4873")
+    , -- ECLUSE_PUBLIC_URL is the proxy's own client-facing URL (for dist.tarball
       -- rewriting), not a registry-egress target, so it stays http on host loopback.
-      ("PROXY_PUBLIC_URL", "http://127.0.0.1:" <> show hostPort)
+      ("ECLUSE_PUBLIC_URL", "http://127.0.0.1:" <> show hostPort)
     , -- The registry endpoints are https-only by construction: the upstream and mirror
       -- stubs are served over TLS (an nginx terminator with the test cert), and the proxy
       -- image's trust store is extended with the test CA via SSL_CERT_FILE below, the
       -- documented internal-CA operator workflow.
-      ("PUBLIC_UPSTREAM_URL", "https://upstream/")
-    , ("PRIVATE_UPSTREAM_URL", "https://mirror/")
-    , ("MIRROR_TARGET_URL", "https://mirror/")
+      ("ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM", "https://mirror/")
+    , ("ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM", "https://upstream/")
+    , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET", "https://mirror/")
+    , ("ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER", "static")
+    , ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN", "e2e-publish-token")
     , ("SSL_CERT_FILE", "/certs/bundle.pem")
-    , ("MIRROR_TARGET_TOKEN", "e2e-publish-token")
-    , ("MIRROR_QUEUE_PROVIDER", "sqs")
-    , ("MIRROR_QUEUE_URL", queueUrl)
+    , ("ECLUSE_QUEUE_BACKEND", "sqs")
+    , ("ECLUSE_QUEUE_URL", queueUrl)
     , -- The production endpoint override (AWS-SDK-standard), aimed at the ministack
       -- alias; the dummy keys sign the request the emulator does not validate.
       ("AWS_ENDPOINT_URL_SQS", "http://ministack:4566")
     , ("AWS_REGION", "us-east-1")
     , ("AWS_ACCESS_KEY_ID", "test")
     , ("AWS_SECRET_ACCESS_KEY", "test")
-    , ("PROXY_LOG_FORMAT", "json")
-    , -- Add DenyInstallTimeExecution to the default min-age policy so the deny
-      -- scenario has a rule to fire; the document carries only this rule patch.
-      ("PROXY_CONFIG", "{\"rules\":{\"deny-install-scripts\":{\"type\":\"DenyInstallTimeExecution\"}}}")
+    , ("ECLUSE_LOG_FORMAT", "json")
+    , -- Add DenyInstallTimeExecution so the deny scenario has a rule to fire.
+      -- We must also explicitly disable 'min-age' from the opinionated default policy,
+      -- otherwise it will block the e2e test's freshly-created test packages.
+      ("ECLUSE_RULES", "{\"min-age\":{\"type\":\"AllowIfOlderThan\",\"ageSeconds\":0},\"deny-install-scripts\":{\"type\":\"DenyInstallTimeExecution\"}}")
     ]
 
 teardown :: String -> [String] -> FilePath -> IO ()
 teardown net containers workDir = do
     for_ containers (\c -> void (readProcess (proc "docker" ["rm", "-f", c])))
-    void (readProcess (proc "docker" ["network", "rm", net]))
-    handleAny (const pass) (removePathForcibly workDir)
+    unless (null net) $ void (readProcess (proc "docker" ["network", "rm", net]))
+    unless (null workDir) $ handleAny (const pass) (removePathForcibly workDir)
 
 -- ── telemetry topology ────────────────────────────────────────────────────────
 
@@ -424,7 +448,7 @@ collector's presence differs.
 -}
 otlpCollectorEnv :: [(Text, Text)]
 otlpCollectorEnv =
-    [ ("PROXY_TELEMETRY", "on")
+    [ ("ECLUSE_TELEMETRY", "on")
     , ("OTEL_EXPORTER_OTLP_ENDPOINT", collectorOtlpEndpoint)
     ]
         <> telemetryExportTuning
@@ -445,7 +469,7 @@ collector. The resolver projects these onto @service.name@\/@deployment.environm
 -}
 datadogCollectorEnv :: [(Text, Text)]
 datadogCollectorEnv =
-    [ ("PROXY_TELEMETRY", "on")
+    [ ("ECLUSE_TELEMETRY", "on")
     , ("DD_SERVICE", ddTagService)
     , ("DD_ENV", ddTagEnv)
     , ("DD_VERSION", ddTagVersion)
@@ -477,7 +501,7 @@ collectorConfig =
 -- ── observing container output ──────────────────────────────────────────────────
 
 {- | The proxy container's combined stdout+stderr as docker has captured it so far — the
-JSONL stream the proxy writes (@PROXY_LOG_FORMAT=json@), so a test can assert the proxy
+JSONL stream the proxy writes (@ECLUSE_LOG_FORMAT=json@), so a test can assert the proxy
 logs at all (the stdout\/stderr property) and inspect the @dd@ object on its lines.
 -}
 proxyContainerLogs :: E2E -> IO Text
@@ -711,14 +735,14 @@ over the base 'proxyEnv' through 'E2EConfig'\'s @ecExtraEnv@ — so only the sce
 ask for it see a publication target, and the base topology keeps the implicit
 publish→@405@ default. The target is Verdaccio, the same registry the base topology reads
 as the private upstream (@mirror@), so a published package is then readable back over the
-private leg. @PUBLISH_SCOPES@ is the anti-shadowing allow-list, required once a target is
+private leg. @ECLUSE_PUBLISH_SCOPES@ is the anti-shadowing allow-list, required once a target is
 set. The publish is __passthrough__: the relay forwards the client's own bearer (the
 project @.npmrc@\'s 'publishAuthToken'), so no static publication-target token is configured.
 -}
 publishTargetEnv :: [(Text, Text)]
 publishTargetEnv =
-    [ ("PUBLICATION_TARGET_URL", "https://mirror/")
-    , ("PUBLISH_SCOPES", publishScope)
+    [ ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET", "https://mirror/")
+    , ("ECLUSE_MOUNTS__NPM__PUBLISH_SCOPES", publishScope)
     ]
 
 -- The publish-scope allow-list value 'publishTargetEnv' configures. 'publishInScopeName'
@@ -950,7 +974,7 @@ exitOk (code, _, _) = code == ExitSuccess
 
 {- | A free host loopback port: bind to @127.0.0.1:0@, read the port the OS assigned,
 release it. The brief window before docker rebinds it is a tolerable race for a
-loopback test. Picked up front so PROXY_PUBLIC_URL can name it before boot.
+loopback test. Picked up front so ECLUSE_PUBLIC_URL can name it before boot.
 -}
 freeHostPort :: IO Int
 freeHostPort =

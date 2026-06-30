@@ -1,0 +1,36 @@
+# Production default settings
+port: 8080
+queueBackend: sqs # default to sqs for production, switch to memory for local dev if desired
+queueMemoryMaxDepth: 50000
+cveSyncInterval: 3600
+shutdownDrainTimeout: 30
+cacheTtl: 60
+cacheMaxEntries: 1024
+cacheMaxBytes: 268435456
+maxResponseBytes: 12582912
+maxVersionCount: 100000
+maxNestingDepth: 64
+logFormat: json
+telemetry: "off"
+minPublicIntegrity: sha256
+minTrustedIntegrity: sha256
+
+mounts:
+  npm:
+    publicUpstream: https://registry.npmjs.org
+    credentialProvider: codeartifact
+    respectUpstreamTarballHost: false
+  pypi:
+    publicUpstream: https://pypi.org
+    credentialProvider: codeartifact
+    respectUpstreamTarballHost: false
+  rubygems:
+    publicUpstream: https://rubygems.org
+    credentialProvider: codeartifact
+    respectUpstreamTarballHost: false
+
+rules:
+  min-age:
+    type: AllowIfOlderThan
+    precedence: 100
+    ageSeconds: 604800

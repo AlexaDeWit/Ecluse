@@ -44,7 +44,7 @@ in-memory implementations:
   visibility-timeout semantics (receive → ack \/ redeliver-on-no-ack), used to
   exercise the worker's retry path without a cloud queue.
 * 'newBoundedInMemoryQueue' — the __bounded, best-effort production backend__
-  selected by @MIRROR_QUEUE_PROVIDER=memory@. See its own Haddock for why it is
+  selected by @ECLUSE_QUEUE_BACKEND=memory@. See its own Haddock for why it is
   correctness-safe (a dropped job is re-enqueued on the next demand) and why it
   deliberately does __not__ redeliver.
 -}
@@ -417,7 +417,7 @@ memoryQueueDropReportInterval :: Int
 memoryQueueDropReportInterval = 1000
 
 {- | Build a bounded, best-effort in-memory 'MirrorQueue' — the production backend
-behind @MIRROR_QUEUE_PROVIDER=memory@, a 'TBQueue' shared between the serve path's
+behind @ECLUSE_QUEUE_BACKEND=memory@, a 'TBQueue' shared between the serve path's
 'enqueue' and the worker's 'receive'.
 
 It is __correctness-safe despite being lossy__: mirroring is a demand-driven

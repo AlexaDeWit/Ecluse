@@ -73,7 +73,7 @@ and never mirrored; an installed package round-trips server→worker to the priv
 tampered artifact fails the integrity gate and never publishes. It is the tier that catches
 **composition-root and cross-component** regressions nothing else does, its first run found
 that the path-relative `dist.tarball` rewrite was not installable by `npm` (now fixed by
-`PROXY_PUBLIC_URL`).
+`ECLUSE_PUBLIC_URL`).
 
 It **gates**, it runs as its own parallel job that the CI `gate` depends on. Although it is
 far heavier than the rest of the gate (an image build, multiple containers, the npm CLI), it

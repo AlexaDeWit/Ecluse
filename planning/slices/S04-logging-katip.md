@@ -23,7 +23,7 @@ attaches context to; trace-ID/`dd`-object correlation is added in M6 (S26).
 **Acceptance criteria.**
 - [ ] A `katip` `LogEnv`/namespace is created and stored in `Env` (filling the S01
   logger slot)., _technology-stack.md_
-- [ ] `PROXY_LOG_FORMAT=json` produces **exactly one** compact JSON object per line
+- [ ] `ECLUSE_LOG_FORMAT=json` produces **exactly one** compact JSON object per line
   to stdout (no pretty-print, embedded newlines escaped as `\n`, no prefix outside
   the object); `console` produces the human-readable dev format., _observability.md#logs_
 - [ ] A small structured-context helper so denials/audit events can attach
@@ -34,7 +34,7 @@ attaches context to; trace-ID/`dd`-object correlation is added in M6 (S26).
 **File scope.**
 - `src/Ecluse/Log.hs`, scribe construction, format switch, context helpers.
 - `src/Ecluse/Env.hs`, fill the logger field (additive).
-- `src/Ecluse/Config.hs`, `PROXY_LOG_FORMAT` (additive; coordinate with S03).
+- `src/Ecluse/Config.hs`, `ECLUSE_LOG_FORMAT` (additive; coordinate with S03).
 - `ecluse.cabal`, add `katip`.
 - `test/unit/Ecluse/LogSpec.hs`, JSONL one-line/escaping; format selection.
 
@@ -49,13 +49,13 @@ nothing logs a token).
 - `LogFormat` (the `json`/`console` enum, with `parseLogFormat`/`renderLogFormat`)
   lives in `Ecluse.Log` and is imported by `Ecluse.Config`, rather than being
   defined in or re-exported from `Config`, one home for the type. `Config` gains
-  `cfgLogFormat` (`PROXY_LOG_FORMAT`, default `json`) read through the existing
+  `cfgLogFormat` (`ECLUSE_LOG_FORMAT`, default `json`) read through the existing
   strict env parser.
 - Filling the `Env` logger slot meant adding `envLogEnv :: LogEnv` and a `LogEnv`
   argument to `newEnv`/`withEnv`, so the two call sites outside the slice's stated
   file scope were updated for the additive change: `Ecluse.run` (the composition
   root, which now builds the default JSONL `LogEnv`) and `Ecluse.EnvSpec` (the
-  handle-double assembly). `Ecluse.ConfigSpec` gained `PROXY_LOG_FORMAT` cases.
+  handle-double assembly). `Ecluse.ConfigSpec` gained `ECLUSE_LOG_FORMAT` cases.
 - The scribe writes to stdout via katip's handle scribe with colour forced off, so
   a `json` line is always valid JSON. Tests assert on `renderLogLine` (the
   formatter output, no stdout) for the format/escaping contract, plus an

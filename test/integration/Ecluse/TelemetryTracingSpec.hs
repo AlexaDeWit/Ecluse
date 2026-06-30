@@ -33,7 +33,7 @@ import TestContainers.Docker (fromDockerfile)
 import TestContainers.Hspec (withContainers)
 import UnliftIO.Concurrent (threadDelay)
 
-import Ecluse (npmServerConfig, unconfiguredCredentials, unconfiguredRegistry)
+import Ecluse (npmServerConfig, unconfiguredRegistry)
 import Ecluse.Core.Queue (newInMemoryQueue)
 import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Env (Env, newEnv, newWorkerHeartbeat)
@@ -151,7 +151,7 @@ buildEnv telemetry = do
     metadataCache <- newMetadataCache defaultCacheConfig
     logEnv <- initLogEnv (Namespace ["ecluse"]) (Environment "test")
     heartbeat <- newWorkerHeartbeat
-    newEnv unconfiguredRegistry queue unconfiguredCredentials manager privateManager metadataCache logEnv telemetry heartbeat
+    newEnv unconfiguredRegistry queue manager privateManager metadataCache logEnv telemetry heartbeat
 
 -- A fresh, unique, path-safe marker per case, so one case's spans never satisfy
 -- another's assertion (in particular the off case's absence assertion).

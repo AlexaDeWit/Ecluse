@@ -39,7 +39,7 @@ hosts nothing itself. The design is in [`docs/architecture.md`](docs/architectur
 
 ## Deployment model
 
-Écluse ships as a single, reproducible container image providing a **unified multicall executable**. It can run the HTTP proxy server (`ecluse serve`), the OSV ingestion pipeline (`ecluse pilot`), or the registry cleanup worker (`ecluse dredger`) depending on the container command. All three roles share the exact same configuration file and rule definitions. The default command runs the `serve` process (the HTTP front door on `PROXY_PORT`, default `4873`) and, alongside it, the mirror worker. Point your package manager at it as a registry (see
+Écluse ships as a single, reproducible container image providing a **unified multicall executable**. It can run the HTTP proxy server (`ecluse serve`), the OSV ingestion pipeline (`ecluse pilot`), or the registry cleanup worker (`ecluse dredger`) depending on the container command. All three roles share the exact same configuration file and rule definitions. The default command runs the `serve` process (the HTTP front door on `ECLUSE_PORT`, default `4873`) and, alongside it, the mirror worker. Point your package manager at it as a registry (see
 [Connecting your clients](#connecting-your-clients)).
 
 Before you run a published image, **verify its provenance and SBOM attestations**: the
@@ -56,7 +56,7 @@ detail.
 1. **Run three registries, not one.** Configure distinct backends for the three internal
    roles: a **first-party** store (the publication target), a **public-derived mirror**
    store (the mirror target), and a **pull-through** read endpoint that aggregates both
-   (`PRIVATE_UPSTREAM_URL`). Keeping first-party and public-derived inventory physically
+   (`ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM`). Keeping first-party and public-derived inventory physically
    separate lets you apply distinct storage-level policy and scanning per provenance and
    keeps your package inventory auditable; collapsing them onto fewer registries still
    works, but muddies auditing and post-incident scoping. **The one hard rule:** that
@@ -70,16 +70,16 @@ detail.
    escalation or compression, and Écluse holds no standing read credential. This is the
    launch default; nothing to set. See [access model](docs/architecture/access-model.md).
 3. **Mint the mirror-write token from the container role.** Set
-   `MIRROR_TARGET_CREDENTIAL_PROVIDER=codeartifact` so the worker mints a short-lived write
+   `ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER=codeartifact` so the worker mints a short-lived write
    token under the task/instance role rather than carrying a static secret (`static` is
    supported but discouraged). Scope that role **write-only** to the mirror store and keep
-   the token duration short (`MIRROR_TARGET_CODEARTIFACT_TOKEN_DURATION_SECONDS`). It is
+   the token duration short (`ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_TOKEN_DURATION`). It is
    Écluse's only standing credential and it writes the trusted store, so least-privilege it
    hardest. **Scope the mirror queue the same way**; it is part of the same trust boundary:
    a job directs the worker to fetch-and-publish, so grant only the serve role `SendMessage`
    (enqueue) and only the worker `ReceiveMessage`/delete. Anyone who can write the queue can
    make the worker write the trusted store.
-4. **Let the edge own access; leave `PROXY_AUTH_TOKEN` off.** Écluse is not your access
+4. **Let the edge own access; leave `ECLUSE_AUTH_TOKEN` off.** Écluse is not your access
    boundary: front it with a gateway / service mesh / IAP that admits only the networks you
    intend (office ranges, a VPN tunnel), and restrict **both** north-south *and* east-west
    (pod-to-pod) reachability, an ingress-only allow-list that still leaves the pod
@@ -107,11 +107,11 @@ The [Golden Path](#the-golden-path) is the posture the threat model treats as ca
 *runs* if you diverge, but each deviation trades away a specific protection, and a couple are **silent**,
 in that Écluse cannot detect them, so nothing warns you. The registry-topology deviations are the sharpest:
 
-- **Collapsing the registries onto one store**, the default if you leave `MIRROR_TARGET_URL` /
-  `PUBLICATION_TARGET_URL` unset. The *perimeter* still holds (public content is still gated), but you
+- **Collapsing the registries onto one store**, the default if you leave `ECLUSE_MOUNTS__NPM__MIRROR_TARGET` /
+  `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET` unset. The *perimeter* still holds (public content is still gated), but you
   lose **provenance separation**: first-party and public-derived packages share one store, so you can no
   longer apply distinct per-provenance scanning or policy, and post-incident scoping, *"which mirrored
-  public packages did we hold?"*, is muddied. Furthermore, **Écluse Dredger will refuse to boot** if `MIRROR_TARGET_URL` matches `PUBLICATION_TARGET_URL`, because automated pruning on a shared datastore risks catastrophic first-party data loss. You give up auditability, defence-in-depth, and automated reaping, not the gate.
+  public packages did we hold?"*, is muddied. Furthermore, **Écluse Dredger will refuse to boot** if `ECLUSE_MOUNTS__NPM__MIRROR_TARGET` matches `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET`, because automated pruning on a shared datastore risks catastrophic first-party data loss. You give up auditability, defence-in-depth, and automated reaping, not the gate.
   (Register [threat #10](https://alexadewit.github.io/Ecluse/threat-model.html) and #16.)
 - **Pointing the private upstream at a registry that itself draws from public**; e.g. a CodeArtifact repo
   carrying the stock `npm-store` upstream to npmjs. This is the **dangerous one.** Raw, ungated public
@@ -123,7 +123,7 @@ in that Écluse cannot detect them, so nothing warns you. The registry-topology 
   and let Écluse's gated mirror be the *only* path public content takes in. (Register
   [threat #15](https://alexadewit.github.io/Ecluse/threat-model.html).)
 
-The other steps carry smaller, self-announcing trade-offs: an open edge (`PROXY_AUTH_TOKEN` unset) leans
+The other steps carry smaller, self-announcing trade-offs: an open edge (`ECLUSE_AUTH_TOKEN` unset) leans
 entirely on your network boundary; a static publish credential *requires* that edge, and Écluse fails
 closed at boot if you set one without it; a `static` mirror-write secret forgoes the short-lived minted
 token. Each is described at its step above and in
@@ -144,50 +144,49 @@ operator reference. **Keep the two in sync** when either changes.
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `PROXY_PORT` | No (default `4873`) | TCP port the proxy listens on. Must be in `0..65535` (`0` binds an OS-assigned ephemeral port); an out-of-range value is rejected at load. |
-| `PRIVATE_UPSTREAM_URL` | **Yes** | URL of the private upstream registry (the authority for reads under the default `passthrough` strategy). |
-| `PUBLIC_UPSTREAM_URL` | No (default `https://registry.npmjs.org`) | URL of the public upstream, queried anonymously and gated by the rules. |
-| `PROXY_PUBLIC_URL` | Recommended | The proxy's own externally-reachable base URL (e.g. `https://registry.example.com`), used to rewrite each served `dist.tarball` to an **absolute** URL clients fetch back through the proxy. **Unset, tarball URLs are path-relative, which the `npm` CLI cannot install from**; it reads a leading-slash `dist.tarball` as a local `file:` path, so set this for any deployment that serves real `npm install`s. |
-| `MIRROR_TARGET_URL` | No (default `PRIVATE_UPSTREAM_URL`) | Registry that approved packages are mirrored to. Unset ⇒ folds onto the private upstream (one registry, read and written). The write credential does **not** fold, set `MIRROR_TARGET_CREDENTIAL_PROVIDER`. |
-| `MIRROR_TARGET_CREDENTIAL_PROVIDER` | No (default `static`) | Mirror-target write credential: `static` (`MIRROR_TARGET_TOKEN`) or `codeartifact` (mints under the container/task role). `gcp-artifact-registry` is recognised but not yet built. |
-| `MIRROR_TARGET_TOKEN` | No | Static write token, when `MIRROR_TARGET_CREDENTIAL_PROVIDER=static` (the default). |
-| `MIRROR_TARGET_CODEARTIFACT_DOMAIN` | `codeartifact` only | CodeArtifact domain, or parsed from a CodeArtifact `MIRROR_TARGET_URL` host. |
-| `MIRROR_TARGET_CODEARTIFACT_DOMAIN_OWNER` | `codeartifact` only | 12-digit owning account id, or parsed from the host (a non-account-id value is rejected at boot). |
-| `MIRROR_TARGET_CODEARTIFACT_REGION` | `codeartifact` only | Region, this key, else the host (its authoritative region), else `AWS_REGION`. |
-| `MIRROR_TARGET_CODEARTIFACT_TOKEN_DURATION_SECONDS` | No | Token lifetime in seconds, capped at `43200` (12 h). |
-| `PUBLICATION_TARGET_URL` | No | Where client `npm publish` (first-party packages) is written. **Opt-in: unset ⇒ a `PUT /{pkg}` is `405`** (no implicit write path). May be the same registry as the private upstream (so published packages are then readable via the private leg). **Protect this surface; see the warning below.** |
-| `PUBLICATION_TARGET_TOKEN` | No | Static fallback credential for the publication target, forwarded only when a publishing client sends no token of its own. The default model is **passthrough**, the publisher's own forwarded token. **⚠️ A static token with an open edge lets any unauthenticated client publish under it; see the warning below.** |
-| `PUBLISH_SCOPES` | Required when `PUBLICATION_TARGET_URL` is set | Comma-separated allow-list of package scopes a client may publish (e.g. `@acme,@beta`), the anti-shadowing guard. A publish whose name is outside the list is refused **before any upstream write**, so a client cannot publish a name that shadows a public package. It limits **names, not callers**; it is not authentication. An empty list with a publication target set is a fail-loud boot error. |
-| `MIRROR_QUEUE_PROVIDER` | No (default `sqs`) | Mirror-queue backend: `sqs` (AWS), or `memory` (a bounded in-process queue, no cloud queue, at the cost of a **non-durable, best-effort** mirror; an explicit choice for a simple/single-node/air-gapped deployment, never an automatic fallback, selecting it warns loudly at boot). `pubsub` (GCP) is recognised but not yet built. |
-| `MIRROR_QUEUE_URL` | Cloud backends only (`sqs`/`pubsub`) | Queue identifier: an SQS queue URL or a Pub/Sub `projects/<p>/topics/<t>` resource. **Required for the cloud backends** (absent ⇒ fail-loud at boot); **not needed for `memory`** (no external queue, ignored). |
-| `MIRROR_QUEUE_MEMORY_MAX_DEPTH` | No (default `50000`) | `memory` only. Cap on the in-process queue depth. A cold-cache `npm ci` enqueues thousands of jobs at once, so the queue is hard-bounded: an enqueue past the cap is **dropped (drop-newest)**, safe, since a dropped job is re-mirrored on the next demand, and rate-limit-logged. Positive integer. |
+| `ECLUSE_PORT` | No (default `4873`) | TCP port the proxy listens on. Must be in `0..65535` (`0` binds an OS-assigned ephemeral port); an out-of-range value is rejected at load. |
+| `ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM` | **Yes** | URL of the private upstream registry (the authority for reads under the default `passthrough` strategy). |
+| `ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM` | No (default `https://registry.npmjs.org`) | URL of the public upstream, queried anonymously and gated by the rules. |
+| `ECLUSE_PUBLIC_URL` | Recommended | The proxy's own externally-reachable base URL (e.g. `https://registry.example.com`), used to rewrite each served `dist.tarball` to an **absolute** URL clients fetch back through the proxy. **Unset, tarball URLs are path-relative, which the `npm` CLI cannot install from**; it reads a leading-slash `dist.tarball` as a local `file:` path, so set this for any deployment that serves real `npm install`s. |
+| `ECLUSE_MOUNTS__NPM__MIRROR_TARGET` | No (default `ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM`) | Registry that approved packages are mirrored to. Unset ⇒ folds onto the private upstream (one registry, read and written). The write credential does **not** fold, set `ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER`. |
+| `ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER` | No (default `static`) | Mirror-target write credential: `static` (`ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN`) or `codeartifact` (mints under the container/task role). `gcp-artifact-registry` is recognised but not yet built. |
+| `ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN` | No | Static write token, when `ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER=static` (the default). |
+| `ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_DOMAIN` | `codeartifact` only | CodeArtifact domain, or parsed from a CodeArtifact `ECLUSE_MOUNTS__NPM__MIRROR_TARGET` host. |
+| `ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_DOMAIN_OWNER` | `codeartifact` only | 12-digit owning account id, or parsed from the host (a non-account-id value is rejected at boot). |
+| `ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_REGION` | `codeartifact` only | Region, this key, else the host (its authoritative region), else `AWS_REGION`. |
+| `ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_TOKEN_DURATION` | No | Token lifetime in seconds, capped at `43200` (12 h). |
+| `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET` | No | Where client `npm publish` (first-party packages) is written. **Opt-in: unset ⇒ a `PUT /{pkg}` is `405`** (no implicit write path). May be the same registry as the private upstream (so published packages are then readable via the private leg). **Protect this surface; see the warning below.** |
+| `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN` | No | Static fallback credential for the publication target, forwarded only when a publishing client sends no token of its own. The default model is **passthrough**, the publisher's own forwarded token. **⚠️ A static token with an open edge lets any unauthenticated client publish under it; see the warning below.** |
+| `ECLUSE_MOUNTS__NPM__PUBLISH_SCOPES` | Required when `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET` is set | Comma-separated allow-list of package scopes a client may publish (e.g. `@acme,@beta`), the anti-shadowing guard. A publish whose name is outside the list is refused **before any upstream write**, so a client cannot publish a name that shadows a public package. It limits **names, not callers**; it is not authentication. An empty list with a publication target set is a fail-loud boot error. |
+| `ECLUSE_QUEUE_BACKEND` | No (default `sqs`) | Mirror-queue backend: `sqs` (AWS), or `memory` (a bounded in-process queue, no cloud queue, at the cost of a **non-durable, best-effort** mirror; an explicit choice for a simple/single-node/air-gapped deployment, never an automatic fallback, selecting it warns loudly at boot). `pubsub` (GCP) is recognised but not yet built. |
+| `ECLUSE_QUEUE_URL` | Cloud backends only (`sqs`/`pubsub`) | Queue identifier: an SQS queue URL or a Pub/Sub `projects/<p>/topics/<t>` resource. **Required for the cloud backends** (absent ⇒ fail-loud at boot); **not needed for `memory`** (no external queue, ignored). |
+| `ECLUSE_QUEUE_MEMORY_MAX_DEPTH` | No (default `50000`) | `memory` only. Cap on the in-process queue depth. A cold-cache `npm ci` enqueues thousands of jobs at once, so the queue is hard-bounded: an enqueue past the cap is **dropped (drop-newest)**, safe, since a dropped job is re-mirrored on the next demand, and rate-limit-logged. Positive integer. |
 | `AWS_REGION` | AWS backends only | Region for SQS and CodeArtifact. |
 | `AWS_ENDPOINT_URL_SQS` / `AWS_ENDPOINT_URL` | No | SQS endpoint override (AWS-SDK-standard). Point at a local emulator (`ministack`) or VPC endpoint; with one set, requests are signed with `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`. Unset ⇒ normal AWS resolution. |
-| `GOOGLE_CLOUD_PROJECT` | GCP backends only | Project for Pub/Sub and Artifact Registry (credentials via ADC). |
-| `PROXY_AUTH_TOKEN` | No | If set, clients must present this token (`Bearer` / `_authToken`). Omit for network-secured deployments. |
-| `PROXY_RESPECT_UPSTREAM_TARBALL_HOST` | No (default `false`) | Secure default. When `false`, a tarball is fetched only from the **same allowlisted upstream that served the packument**; set `true` only for a registry that serves tarballs from a separate CDN/files host (widens the fetch surface to any allowlisted host). See [Securing network egress](#securing-network-egress-required). |
-| `PROXY_HELP_MESSAGE` | No | String appended to every denial message (e.g. a support channel). |
-| `PROXY_LOG_FORMAT` | No (default `json`) | Log shape: `json` (one JSON object per line, for log collectors) or `console` (human-readable). |
-| `CVE_SYNC_INTERVAL_SECONDS` | No (default `3600`) | How often the in-memory advisory index refreshes from OSV. **(with the CVE tier)** |
-| `PROXY_MAX_RESPONSE_BYTES` | No (default `12582912`, 12 MiB) | Largest upstream **metadata** body buffered before the fetch aborts fail-closed. Bounds memory against a hostile upstream returning a giant body. Positive integer. |
-| `PROXY_MAX_VERSION_COUNT` | No (default `100000`) | Largest version count a packument may carry before it is refused. Bounds per-version rule evaluation against a version flood. Positive integer. |
-| `PROXY_MAX_NESTING_DEPTH` | No (default `64`) | Deepest JSON nesting a decoded upstream document may reach before it is refused. Bounds CPU/stack against a pathologically nested payload. Positive integer. |
-| `PROXY_MIN_PUBLIC_INTEGRITY` | No (default `sha256`) | Minimum integrity algorithm a **public** version's digest must meet to be served: `sha256`, `sha512`, or `blake2b`. A public version whose strongest digest is weaker (e.g. a legacy SHA-1 `shasum` only) is refused with a `403`. **Hard-floored at SHA-256**, `sha1`/`md5`/an unknown name is rejected at startup. The trusted private upstream is exempt. |
-| `PROXY_CONFIG` | No | The configuration document as an inline JSON blob, for an env-only deployment with no mounted file. |
+| `ECLUSE_GOOGLE_PROJECT` | GCP backends only | Project for Pub/Sub and Artifact Registry (credentials via ADC). |
+| `ECLUSE_AUTH_TOKEN` | No | If set, clients must present this token (`Bearer` / `_authToken`). Omit for network-secured deployments. |
+| `ECLUSE_MOUNTS__NPM__RESPECT_UPSTREAM_TARBALL_HOST` | No (default `false`) | Secure default. When `false`, a tarball is fetched only from the **same allowlisted upstream that served the packument**; set `true` only for a registry that serves tarballs from a separate CDN/files host (widens the fetch surface to any allowlisted host). See [Securing network egress](#securing-network-egress-required). |
+| `ECLUSE_HELP_MESSAGE` | No | String appended to every denial message (e.g. a support channel). |
+| `ECLUSE_LOG_FORMAT` | No (default `json`) | Log shape: `json` (one JSON object per line, for log collectors) or `console` (human-readable). |
+| `ECLUSE_CVE_SYNC_INTERVAL` | No (default `3600`) | How often the in-memory advisory index refreshes from OSV. **(with the CVE tier)** |
+| `ECLUSE_MAX_RESPONSE_BYTES` | No (default `12582912`, 12 MiB) | Largest upstream **metadata** body buffered before the fetch aborts fail-closed. Bounds memory against a hostile upstream returning a giant body. Positive integer. |
+| `ECLUSE_MAX_VERSION_COUNT` | No (default `100000`) | Largest version count a packument may carry before it is refused. Bounds per-version rule evaluation against a version flood. Positive integer. |
+| `ECLUSE_MAX_NESTING_DEPTH` | No (default `64`) | Deepest JSON nesting a decoded upstream document may reach before it is refused. Bounds CPU/stack against a pathologically nested payload. Positive integer. |
+| `ECLUSE_MIN_PUBLIC_INTEGRITY` | No (default `sha256`) | Minimum integrity algorithm a **public** version's digest must meet to be served: `sha256`, `sha512`, or `blake2b`. A public version whose strongest digest is weaker (e.g. a legacy SHA-1 `shasum` only) is refused with a `403`. **Hard-floored at SHA-256**, `sha1`/`md5`/an unknown name is rejected at startup. The trusted private upstream is exempt. |
 
 Configuration is **validated in full at startup, and the process refuses to start on any
 problem**: an unknown rule type, a bad URL, an unresolved policy reference. A
 misconfiguration is a loud, immediate failure, never a quietly mis-enforced policy.
 
 > ⚠️ **The first-party publish surface authorises *names*, not *callers*.** If you enable
-> publishing (`PUBLICATION_TARGET_URL`), the `PUBLISH_SCOPES` allow-list limits **which
+> publishing (`ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET`), the `ECLUSE_MOUNTS__NPM__PUBLISH_SCOPES` allow-list limits **which
 > package names** may be published; it is **not** authentication and says nothing about
-> **who** may publish. So a static `PUBLICATION_TARGET_TOKEN` (Écluse's own credential, used
-> only when a publisher forwards none) is **fail-closed**: set it without `PROXY_AUTH_TOKEN`
+> **who** may publish. So a static `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN` (Écluse's own credential, used
+> only when a publisher forwards none) is **fail-closed**: set it without `ECLUSE_AUTH_TOKEN`
 > and Écluse **refuses to start** (`PublishStaticCredentialNeedsEdge`), making "static
 > publish credential + open edge", which would otherwise let **any unauthenticated client
 > publish** under the operator's credential, an unrepresentable state rather than a footgun.
-> `PROXY_AUTH_TOKEN` is the verifiable edge Écluse can check itself; an external layer
+> `ECLUSE_AUTH_TOKEN` is the verifiable edge Écluse can check itself; an external layer
 > (gateway, service mesh / mTLS, network policy) is good defence-in-depth but does **not**
 > satisfy this requirement. Pure **passthrough** (no static token, the default) needs none
 > of this: the publisher's own forwarded token is the authority. See
@@ -195,11 +194,16 @@ misconfiguration is a loud, immediate failure, never a quietly mis-enforced poli
 
 ### The configuration document
 
-Supplied either as a JSON **file** (the reviewable source of truth) or inline via
-`PROXY_CONFIG`. It carries the **rule policy** (see [Rule policy](#rule-policy)) and, for
+Supplied as a YAML **file** (the reviewable source of truth) mounted at `/etc/ecluse/config.yaml`. It carries the **rule policy** (see [Rule policy](#rule-policy)) and, for
 multi-mount deployments, the **mount map**. Single-mount deployments desugar from the
 environment variables above and need no document. Schema and examples:
 [Configuration & Authentication](docs/architecture/configuration.md#configuration).
+
+The default baseline configuration, from which all deployments derive their initial policy and behaviour, is defined below. 
+
+```yaml {.embed-default-config}
+# Replaced by pandoc Lua filter
+```
 
 ### Secrets
 
@@ -215,7 +219,7 @@ while `service` reads with Écluse's own credential. See
 
 ## Connecting your clients
 
-Point your package manager at the proxy as its registry. With `PROXY_AUTH_TOKEN` set, supply
+Point your package manager at the proxy as its registry. With `ECLUSE_AUTH_TOKEN` set, supply
 it the standard npm way:
 
 ```ini
@@ -228,9 +232,9 @@ Edge authentication to the proxy has three modes (and feeds the mount's
 [credential strategy](docs/architecture/access-model.md), which decides how the upstreams
 are then credentialled):
 
-1. **Open**: `PROXY_AUTH_TOKEN` unset; access control is delegated entirely to the network
+1. **Open**: `ECLUSE_AUTH_TOKEN` unset; access control is delegated entirely to the network
    layer (VPC, service mesh). Appropriate only on a closed network.
-2. **Static token**: `PROXY_AUTH_TOKEN` set; clients send it as
+2. **Static token**: `ECLUSE_AUTH_TOKEN` set; clients send it as
    `Authorization: Bearer <token>` or `.npmrc` `_authToken`.
 3. **Trusted edge identity**: a fronting gateway / IAP / mesh asserts a verified identity
    Écluse trusts. Écluse honours the assertion **only over a verifiable binding to that
@@ -256,7 +260,7 @@ itself, with an **origin-aware trust model**:
   allowlisted name that resolves to an internal address is refused, a DNS-rebinding
   backstop), a **disallow-by-default `dist.tarball` host policy** (below), and
   **response-size bounds**.
-- **The trusted private origin**, your operator-configured `PRIVATE_UPSTREAM_URL`, is
+- **The trusted private origin**, your operator-configured `ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM`, is
   deliberately *not* subject to the internal-address block: a private registry
   legitimately lives on your internal network, so Écluse has to be able to reach it.
 
@@ -295,7 +299,7 @@ catching anything the application layer doesn't:
 by default Écluse fetches a tarball only from the **same allowlisted upstream that served the
 packument**: a `dist.tarball` pointing at a *different* host is refused even if that host is
 otherwise on the allowlist. If your registry legitimately serves artifacts from a separate
-CDN/files host (the PyPI-files-host shape), set `PROXY_RESPECT_UPSTREAM_TARBALL_HOST=true` to
+CDN/files host (the PyPI-files-host shape), set `ECLUSE_MOUNTS__NPM__RESPECT_UPSTREAM_TARBALL_HOST=true` to
 relax this to *any allowlisted host*; it never escapes the allowlist or the internal-range
 block, but it does widen the fetch surface, so opt in deliberately and pair it with the
 platform egress controls above.
@@ -374,7 +378,7 @@ Full semantics (precedence, the patch/add/suppress merge, and the strict validat
 Independent of the configurable rules above, Écluse enforces one **non-negotiable admission
 policy** on **public** (untrusted) upstreams: a version is served only if its `dist` carries
 at least one integrity digest whose algorithm meets the **integrity floor**
-(`PROXY_MIN_PUBLIC_INTEGRITY`, default **SHA-256**). A public version whose strongest digest
+(`ECLUSE_MIN_PUBLIC_INTEGRITY`, default **SHA-256**). A public version whose strongest digest
 is **absent** or **below the floor**, for example only a legacy SHA-1 `shasum`, with no
 `sha256`/`sha512` SRI `integrity`, is **inadmissible**:
 
@@ -403,12 +407,12 @@ knob you must not lower below SHA-256. See
   deliberately lenient about public-upstream reachability so a transient upstream blip
   doesn't pull a healthy pod from rotation. The npm liveness probe `GET /-/ping` is answered
   locally with `200 {}`.
-- **Logs.** Structured, one JSON object per line by default (`PROXY_LOG_FORMAT=json`) for
+- **Logs.** Structured, one JSON object per line by default (`ECLUSE_LOG_FORMAT=json`) for
   stdout log-collector autodiscovery, or `console` for local development. Bearer tokens are
   carried as a redacted type whose rendering is a placeholder, so token material never reaches
   a log field.
 - **Telemetry (opt-in).** OpenTelemetry traces and metrics are **off by default**; set
-  `PROXY_TELEMETRY=on` to enable them. Identity and endpoint are **self-aligning across
+  `ECLUSE_TELEMETRY=on` to enable them. Identity and endpoint are **self-aligning across
   dialects**: set the `DD_*` variables (`DD_SERVICE`, `DD_ENV`, `DD_VERSION`, `DD_AGENT_HOST`)
   if you run Datadog, or the standard `OTEL_*` ones for any other backend, the `DD_*` form
   wins where both are present, and the same resolved identity stamps both your traces and the

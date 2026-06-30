@@ -23,8 +23,8 @@ and run server + worker. This is the slice that makes Écluse a deployable AWS-b
 npm proxy.
 
 **Acceptance criteria.**
-- [ ] The composition root reads config (S03) and selects backends,  `MIRROR_QUEUE_PROVIDER=sqs` → `newSqsQueue`; mirror-target credential →
-  `newCodeArtifactProvider` or `static` (`MIRROR_TARGET_TOKEN`), storing the
+- [ ] The composition root reads config (S03) and selects backends,  `ECLUSE_QUEUE_BACKEND=sqs` → `newSqsQueue`; mirror-target credential →
+  `newCodeArtifactProvider` or `static` (`ECLUSE_MIRROR_TARGET_TOKEN`), storing the
   resulting handle records in `Env`. Nothing downstream knows which backend it holds.
   (The generic `ecosystem → RegistryClient + classifier + bindingPrefix → MountBinding`
   resolution is delivered by the **base-hardening track** (D5);
@@ -70,14 +70,14 @@ than reimplementing it:
 - **Mirror-queue selection (AC1 / AC3).** `run` previously hard-wired the
   `newInMemoryQueue` test double. It now selects the backend from config through a
   pure `Ecluse.Composition.planMirrorQueue :: EnvConfig -> Either [BootError] SqsConfig`:
-  `MIRROR_QUEUE_PROVIDER=sqs` → an `SqsConfig` (from `MIRROR_QUEUE_URL` + `AWS_REGION`)
+  `ECLUSE_QUEUE_BACKEND=sqs` → an `SqsConfig` (from `ECLUSE_QUEUE_URL` + `AWS_REGION`)
   that `run` hands to `newSqsQueue`; `pubsub` (the GCP arm) → a clear
   `QueueProviderUnavailable` boot error (no silent fallback); `sqs` with no
   `AWS_REGION` → a `QueueRegionMissing` boot error. The single `newSqsQueue` call lives
   in `run`; `planMirrorQueue` is the single place the not-built decision lives.
 - **Mirror-target credential provider selection (AC1 / AC2).** The write provider is
-  selected by `MIRROR_TARGET_CREDENTIAL_PROVIDER` (default `static`) through a pure
-  `Ecluse.Composition.planMirrorCredential`: `static` uses `MIRROR_TARGET_TOKEN`;
+  selected by `ECLUSE_MIRROR_TARGET_CREDENTIAL_PROVIDER` (default `static`) through a pure
+  `Ecluse.Composition.planMirrorCredential`: `static` uses `ECLUSE_MIRROR_TARGET_TOKEN`;
   `codeartifact` resolves a `CodeArtifactConfig` (`resolveCodeArtifactConfig`) and
   builds the generic refresh/cache wrapper around the `newCodeArtifactProvider` mint
   leaf (which mints once eagerly, so a misconfigured identity fails loudly at boot);
@@ -93,8 +93,8 @@ than reimplementing it:
   rendered through the aggregated boot block (legible transient-vs-permanent) while
   keeping the eager-mint fail-fast posture; the SQS endpoint-override secret key is
   carried as a redacted `Secret` end to end.
-- **Mirror-target URL fold.** `MIRROR_TARGET_URL` is now optional and folds onto
-  `PRIVATE_UPSTREAM_URL` when unset (one registry, read and written). The write
+- **Mirror-target URL fold.** `ECLUSE_MIRROR_TARGET` is now optional and folds onto
+  `ECLUSE_PRIVATE_UPSTREAM` when unset (one registry, read and written). The write
   **credential** does not fold, it stays the explicit provider above. The read-side
   (`PRIVATE_UPSTREAM_*`, S44) and publish-target (`PUBLICATION_TARGET_*`, S52) providers
   will follow the same prefixed-provider pattern when those slices land.
@@ -105,7 +105,7 @@ than reimplementing it:
   (preserving ship==test for the e2e tier); a malformed override is a fail-loud boot
   error; unset ⇒ normal AWS resolution.
 - **Static credential path is the AWS launch path.** A deployment with
-  `MIRROR_TARGET_TOKEN` (static write credential) + an SQS queue + `AWS_REGION` is a
+  `ECLUSE_MIRROR_TARGET_TOKEN` (static write credential) + an SQS queue + `AWS_REGION` is a
   fully working AWS-backed npm proxy. A mount that names an uninitialized provider
   still fails fast at boot (the D4 check), unchanged.
 - **End-to-end integration test (AC4).** `test/integration/Ecluse/AwsEndToEndSpec.hs`
@@ -119,9 +119,9 @@ than reimplementing it:
 
 ### Notes for the e2e rebase
 
-`run` no longer has an in-memory queue path: `MIRROR_QUEUE_PROVIDER` defaults to `sqs`,
+`run` no longer has an in-memory queue path: `ECLUSE_QUEUE_BACKEND` defaults to `sqs`,
 so the production entry requires a reachable SQS endpoint and `AWS_REGION`. The
 `test/e2e` harness (which ran the real image over the in-memory queue with a dummy
-`MIRROR_QUEUE_URL`) now points the image at a `ministack` SQS via the new
+`ECLUSE_QUEUE_URL`) now points the image at a `ministack` SQS via the new
 `AWS_ENDPOINT_URL_SQS` key, the e2e agent adds the `ministack` queue container and
 sets the var (that harness change is out of this slice's scope).

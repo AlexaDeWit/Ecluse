@@ -40,7 +40,6 @@ import TestContainers.Hspec (withContainers)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (try)
 
-import Ecluse.Core.Credential (mkSecret, unSecret)
 import Ecluse.Core.Queue (MirrorQueue (receive), QueueMessage, Seconds (Seconds))
 import Ecluse.Core.Queue.Sqs (SqsConfig (..), SqsEndpoint (..), defaultSqsConfig, newSqsQueue)
 
@@ -92,8 +91,6 @@ endpointFor container =
             { endpointSecure = False
             , endpointHost = host
             , endpointPort = mappedPort
-            , endpointAccessKey = "test"
-            , endpointSecretKey = mkSecret "test"
             }
 
 -- ── per-test queue ────────────────────────────────────────────────────────────
@@ -144,11 +141,7 @@ freshQueueUrl container queueName = do
 -- A region-scoped, endpoint-overridden amazonka Env with the throwaway keys.
 envFor :: SqsEndpoint -> IO AWS.Env
 envFor endpoint = do
-    base <-
-        AWS.Auth.fromKeys
-            (AWS.AccessKey (encodeUtf8 (endpointAccessKey endpoint)))
-            (AWS.SecretKey (encodeUtf8 (unSecret (endpointSecretKey endpoint))))
-            <$> AWS.newEnvNoAuth
+    base <- AWS.Auth.fromKeys "test" "test" <$> AWS.newEnvNoAuth
     let regioned = base{AWS.region = AWS.Region' "us-east-1"}
     pure $
         AWS.configureService

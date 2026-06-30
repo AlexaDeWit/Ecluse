@@ -17,14 +17,14 @@ pr: 158
 
 **Goal.** Wire the OpenTelemetry substrate into the composition root: the SDK
 tracer+meter provider, the OTLP exporter (HTTP/protobuf), and the standard `OTEL_*` /
-`PROXY_TELEMETRY` configuration, **off by default**, so telemetry is fully opt-in
+`ECLUSE_TELEMETRY` configuration, **off by default**, so telemetry is fully opt-in
 and nothing is emitted when unset.
 
 **Acceptance criteria.**
 - [ ] `hs-opentelemetry-sdk` tracer+meter provider built in the composition root,
   exported via `hs-opentelemetry-exporter-otlp` (HTTP/protobuf default; no gRPC/
   grapesy)., _observability.md#opentelemetry-as-the-substrate_
-- [ ] `PROXY_TELEMETRY` master switch (default `off`); with it unset **nothing is
+- [ ] `ECLUSE_TELEMETRY` master switch (default `off`); with it unset **nothing is
   wired and no telemetry is emitted**. Standard `OTEL_*` vars
   (`OTEL_SERVICE_NAME`/`…_RESOURCE_ATTRIBUTES`/`…_EXPORTER_OTLP_ENDPOINT`/`…_PROTOCOL`/
   sampler) read by the SDK., _observability.md#configuration_
@@ -33,7 +33,7 @@ and nothing is emitted when unset.
 
 **File scope.**
 - `src/Ecluse/Telemetry.hs`, provider construction/lifecycle, config plumbing.
-- `src/Ecluse/Env.hs`, `src/Ecluse/Config.hs`, telemetry handle + `PROXY_TELEMETRY` (additive).
+- `src/Ecluse/Env.hs`, `src/Ecluse/Config.hs`, telemetry handle + `ECLUSE_TELEMETRY` (additive).
 - `ecluse.cabal`, add `hs-opentelemetry-sdk`, `hs-opentelemetry-exporter-otlp`.
 - `test/unit/Ecluse/TelemetrySpec.hs`, config parsing; off-by-default no-op.
 
@@ -62,7 +62,7 @@ posture: the maintainer's Datadog choice must not become every consumer's obliga
   jaeger/w3c/xray), exporter-handle, exporter-in-memory, sdk, exporter-otlp. The
   in-memory exporter and propagators had to move too: the 0.x ones don't compile
   against the 1.0 api. `make nix-check` (callCabal2nix → unit check) is green.
-- **Substrate shape.** `Ecluse.Telemetry` exposes a `PROXY_TELEMETRY` master
+- **Substrate shape.** `Ecluse.Telemetry` exposes a `ECLUSE_TELEMETRY` master
   switch (`TelemetrySwitch`, default `off`) wired into `EnvConfig` (`cfgTelemetry`),
   and a `Telemetry` handle held in `Env` (`envTelemetry`). `withTelemetry` brackets
   the providers in the composition root: `off` is a pure pass-through that never

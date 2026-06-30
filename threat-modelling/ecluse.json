@@ -1248,7 +1248,7 @@
             "id": "0ec10e5e-0000-4000-8000-000000000032",
             "data": {
               "name": "Registry C:\npull-through read endpoint",
-              "description": "The trusted private-upstream read view (PRIVATE_UPSTREAM_URL). A pull-through aggregator over the first-party store (A) and the mirror store (B); what the proxy reads.",
+              "description": "The trusted private-upstream read view (ECLUSE_PRIVATE_UPSTREAM). A pull-through aggregator over the first-party store (A) and the mirror store (B); what the proxy reads.",
               "type": "tm.Store",
               "isTrustBoundary": false,
               "outOfScope": false,

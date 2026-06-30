@@ -76,8 +76,9 @@ common shared
     StrictData
 
   build-depends:
-    , base    ^>=4.20
-    , relude  ^>=1.2
+    , base        ^>=4.20
+    , file-embed  ^>=0.0.16
+    , relude      ^>=1.2
 
   mixins:
     base hiding (Prelude),
@@ -194,6 +195,11 @@ library
     Ecluse
     Ecluse.Composition
     Ecluse.Config
+    Ecluse.Config.Aeson
+    Ecluse.Config.Parser
+    Ecluse.Config.Resolve
+    Ecluse.Config.Rule
+    Ecluse.Config.Types
     Ecluse.Env
     Ecluse.Log
     Ecluse.Server
@@ -214,7 +220,7 @@ library
     , bytestring                      ^>=0.12
     , containers                      ^>=0.7
     , crypton                         ^>=1.0
-    , envparse                        >=0.5  && <0.7
+    , yaml                            ^>=0.11
     , http-client                     ^>=0.7
     , http-client-tls                 ^>=0.3.6
     , http-types                      ^>=0.12
@@ -413,7 +419,10 @@ test-suite ecluse-unit
     Ecluse.AcceptanceSpec
     Ecluse.BenchLoad.NormaliseSpec
     Ecluse.CompositionSpec
-    Ecluse.ConfigSpec
+    Ecluse.Config.AesonSpec
+    Ecluse.Config.ResolveSpec
+    Ecluse.Config.RuleSpec
+    Ecluse.Config.TypesSpec
     Ecluse.EnvSpec
     Ecluse.LogSpec
     Ecluse.ManifestSpec
@@ -440,7 +449,7 @@ test-suite ecluse-unit
     , case-insensitive  ^>=1.2
     , containers        ^>=0.7
     , crypton           ^>=1.0
-    , envparse          >=0.5 && <0.7
+    , yaml              ^>=0.11
     , hedgehog          ^>=1.5
     , hspec             ^>=2.11
     , hspec-hedgehog    ^>=0.3

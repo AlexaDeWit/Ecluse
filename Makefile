@@ -12,7 +12,7 @@ NIX := $(if $(IN_NIX_SHELL),,nix develop --command)
 # The benchmark targets run from the lean `.#bench` shell (the CI toolchain plus the
 # flame-graph tooling), not the default shell. Empty inside a dev shell (CI enters
 # `.#bench` itself); otherwise it enters `.#bench`. See flake.nix `devShells.bench`.
-NIX_BENCH := $(if $(IN_NIX_SHELL),,nix develop .#bench --command)
+NIX_BENCH := $(if $(IN_NIX_SHELL),,nix develop ".\#bench" --command)
 
 # Tracked Haskell sources, for the formatter and linter.
 HS := $(shell git ls-files '*.hs')
@@ -385,7 +385,7 @@ site: docs-site ## Assemble the Pages site (landing + rendered docs at /, Haddoc
 	@$(NIX) sh -c 'mkdir -p _site/vendor && cp "$$MERMAID_JS" _site/vendor/mermaid.min.js && cp "$$REDOC_JS" _site/vendor/redoc.standalone.js'
 	$(NIX) pandoc MOTIVATION.md   -o _site/motivation.html   $(PANDOC_FLAGS) -M title="Why Écluse?"
 	$(NIX) pandoc ALTERNATIVES.md -o _site/alternatives.html $(PANDOC_FLAGS) -M title="Alternatives"
-	$(NIX) pandoc USAGE.md        -o _site/usage.html        $(PANDOC_FLAGS) -M title="Operator Manual"
+	$(NIX) pandoc USAGE.md        -o _site/usage.html        $(PANDOC_FLAGS) --lua-filter web/embed-config.lua -M title="Operator Manual"
 	$(NIX) pandoc AI-DISCLOSURE.md -o _site/ai-disclosure.html $(PANDOC_FLAGS) -M title="Built with AI"
 	$(NIX) pandoc web/threat-model.md -o _site/threat-model.html $(PANDOC_FLAGS) --lua-filter web/threat-register.lua -M title="Threat Model"
 	@echo "Assembled ./_site (landing + rendered docs at /, Haddock under /api)"

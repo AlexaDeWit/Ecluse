@@ -17,13 +17,13 @@ pr: null
 > Milestone **M7** · depends on: [S03](S03-config-loader.md), [S28](S28-pubsub-queue.md), [S29](S29-adc-credential.md) · tier: integration
 
 **Goal.** Light up the GCP arms of the config-driven composition root:
-`MIRROR_QUEUE_PROVIDER=pubsub` → `newPubSubQueue`; ADC credential leaf for an
+`ECLUSE_QUEUE_BACKEND=pubsub` → `newPubSubQueue`; ADC credential leaf for an
 Artifact Registry mirror target, replacing the "not yet built" routes left honest in
 S20.
 
 **Acceptance criteria.**
 - [ ] Composition root selects the GCP backends from config
-  (`GOOGLE_CLOUD_PROJECT`, `pubsub`, ADC)., _configuration.md#configuration, #outbound-registry-credentials_
+  (`ECLUSE_GOOGLE_PROJECT`, `pubsub`, ADC)., _configuration.md#configuration, #outbound-registry-credentials_
 - [ ] The proxy core, rules, web layer, worker, and CVE subsystem are **unchanged**,  GCP is purely additive behind the two handles., _cloud-backends.md#cloud-backends_
 - [ ] End-to-end integration test on GCP backends (Pub/Sub emulator + stub npm
   registry) mirrors the AWS end-to-end (S20)., _cloud-backends.md#testing_

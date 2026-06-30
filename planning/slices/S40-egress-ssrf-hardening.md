@@ -34,7 +34,7 @@ application guards assume.
       (the pure layer cannot resolve names)., _security.md invariant 3_
 - [ ] **`dist.tarball` host policy, disallow-by-default.** A tarball is fetched only
       from the **same allowlisted upstream that served the packument** unless the
-      operator opts in via `PROXY_RESPECT_UPSTREAM_TARBALL_HOST` (see
+      operator opts in via `ECLUSE_RESPECT_UPSTREAM_TARBALL_HOST` (see
       [Configuration → Outbound egress safety](../../docs/architecture/configuration.md#outbound-egress-safety)),
       which relaxes to "any allowlisted host", never escaping the allowlist or the
       internal-range block. Secure default; configurable override., _security.md_
@@ -53,7 +53,7 @@ application guards assume.
 
 - `src/Ecluse/Registry/Npm.hs` (or the S08 fetch boundary), the resolved-IP
   recheck and the tarball-host policy decision at the connect point.
-- `src/Ecluse/Config.hs`, the `PROXY_RESPECT_UPSTREAM_TARBALL_HOST` setting.
+- `src/Ecluse/Config.hs`, the `ECLUSE_RESPECT_UPSTREAM_TARBALL_HOST` setting.
 - `src/Ecluse/Security.hs`, only if the policy needs a new pure helper (the
   internal-range block itself already covers `0.0.0.0/8`, `::`, RFC1918, CGNAT,
   link-local, loopback, and the IPv4-mapped forms).
@@ -89,7 +89,7 @@ leg-aware split per the post-review (issue #162).
   network-blocked. IMDSv2 + hop-limit-1 retained.
 - **Tarball-host policy, plumbed and unit-tested here; wired load-bearing in
   [S51](S51-honour-artifact-url.md).** `Ecluse.Security.tarballHostAllowed`,
-  `TarballHostPolicy`, the `PROXY_RESPECT_UPSTREAM_TARBALL_HOST` config, and the
+  `TarballHostPolicy`, the `ECLUSE_RESPECT_UPSTREAM_TARBALL_HOST` config, and the
   `pdTarballHostPolicy` field shipped in S40 with unit coverage; S40's serve path
   still reconstructed the tarball URL from the configured upstream, so the policy was
   inert. S51 made the serve path honour the authoritative `Artifact.artUrl` and

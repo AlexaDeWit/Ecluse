@@ -330,5 +330,5 @@ When a request is denied (no allow rule matched, or a deny rule fired):
   }
   ```
 - The denial reason (which rule decided, and why) is always included.
-- `PROXY_HELP_MESSAGE`, if configured, is appended to every denial (the
+- `ECLUSE_HELP_MESSAGE`, if configured, is appended to every denial (the
   ecosystem-neutral `appendHelp`, before the renderer wraps it).
