@@ -718,8 +718,8 @@ project @.npmrc@\'s 'publishAuthToken'), so no static publication-target token i
 -}
 publishTargetEnv :: [(Text, Text)]
 publishTargetEnv =
-    [ ("ECLUSE_PUBLICATION_TARGET", "https://mirror/")
-    , ("ECLUSE_PUBLISH_SCOPES", publishScope)
+    [ ("ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET", "https://mirror/")
+    , ("ECLUSE_MOUNTS__NPM__PUBLISH_SCOPES", publishScope)
     ]
 
 -- The publish-scope allow-list value 'publishTargetEnv' configures. 'publishInScopeName'
