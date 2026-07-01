@@ -260,16 +260,29 @@ tasks:
       - task: doctest
       - task: cabal-check
 
-  check:
-    desc: Fast pre-push checks
+  static-checks:
+    desc: Run all static analysis checks concurrently
     deps:
-      - cabal-checks
       - format-check
       - lint
       - sast
       - lint-workflows
       - lint-scripts
       - test-scripts
+
+  check:
+    desc: Fast pre-push checks
+    deps:
+      - cabal-checks
+      - static-checks
+
+  ci:
+    desc: Reproduce the core CI pipeline locally
+    cmds:
+      - task: check
+      - task: docs-check
+      - task: weeder
+      - task: stan
 
   gate:
     desc: Reproduce the full CI gate locally

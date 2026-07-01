@@ -68,27 +68,8 @@ jobs:
       - name: Update package index
         run: nix develop .#ci --command task update
 
-      # The single heavy step: build everything (all three test suites included),
-      # so a broken integration/smoke suite fails the gate, and so the cabal store
-      # this job caches covers the WIDEST dependency plan — every other Haskell
-      # job (docs, smoke, weeder) resolves a subset and is fully served by it.
-      - name: Build (library, executable, all test suites)
-        run: nix develop .#ci --command task build
-
-      # Run the >>> examples in Haddock comments as tests (doctest), reusing the
-      # warm build above so documented examples can't drift from the code. Gates
-      # through this job. See HADDOCK.md → "Examples that run".
-      - name: Doctest (Haddock examples)
-        run: nix develop .#ci --command task doctest
-
-      # Instrumented re-runs of the unit suites in a separate build dir, each
-      # emitting Codecov-native JSON. Only our small package recompiles (-fhpc);
-      # deps come from the cached cabal store, so this is cheap. Both suites upload
-      # under the `unit` flag; Codecov merges them into one flag total. This is the
-      # fix for the phase 2a regression where core modules silently dropped from
-      # Codecov attribution (PR2b). See CONTRIBUTING.md → "Coverage".
-      - name: Coverage (core unit)
-        run: nix develop .#ci --command task coverage SUITE=ecluse-core-unit
+      - name: Cabal checks (build, coverage, doctest, cabal-check)
+        run: nix develop .#ci --command task cabal-checks
 
       - name: Upload core unit coverage to Codecov
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
@@ -98,9 +79,6 @@ jobs:
           flags: unit
           fail_ci_if_error: true # a lost upload must not silently skip the gate
 
-      - name: Coverage (app unit)
-        run: nix develop .#ci --command task coverage SUITE=ecluse-unit
-
       - name: Upload app unit coverage to Codecov
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
@@ -108,13 +86,6 @@ jobs:
           files: coverage/ecluse-unit.json
           flags: unit
           fail_ci_if_error: true # a lost upload must not silently skip the gate
-
-      # Instrumented re-run of the integration suite (against the same ministack
-      # tier as above), so the cloud-backed modules the unit suites cannot exercise
-      # — the SQS MirrorQueue backend — count toward the merged Codecov total. Like
-      # the unit passes, only our package recompiles under -fhpc.
-      - name: Coverage (integration)
-        run: nix develop .#ci --command task coverage SUITE=ecluse-integration
 
       - name: Upload integration coverage to Codecov
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
@@ -279,35 +250,10 @@ jobs:
       - name: Set up toolchain
         uses: ./.github/actions/setup-toolchain
 
-      # The purely-hermetic static tier — format, lint, cabal-check — runs as
-      # first-class Nix flake checks (flake.nix → checks.<system>.*) rather than
-      # `make` targets in a devshell, so CI points straight at the flake graph. The
-      # checks are sandboxed (no ambient state), content-addressed (unchanged
-      # sources are a store hit — no rerun), and pinned (they run the EXACT flake
-      # fourmolu/hlint/cabal, so a stale ambient tool can't drift the result — the
-      # failure mode AGENTS.md warns about). Locally: this same `nix build`, or
-      # `nix flake check` for the whole graph. The runner is x86_64, hence the
-      # hard-coded system; deriving it is a follow-up.
-      #
-      # These three are the WHOLE purely-hermetic static tier. The remaining gate
-      # tiers (doctest, docs-check, build, the unit suite) all COMPILE the package,
-      # which as a flake check goes through the Nix Haskell builder — a separate
-      # compilation from the cabal/dist-newstyle path the build-test job uses, so
-      # moving them trades that job's incremental rebuild for a second full build.
-      # That is a deliberate decision to measure on its own, not a mechanical next
-      # step. Semgrep + workflow-lint stay as `make` steps below: both reach the
-      # network (rule registry / zizmor's online audit), so they can't be
-      # offline-sandboxed checks.
-      - name: Format, lint, cabal-check (flake checks)
-        if: ${{ !cancelled() }}
-        run: nix build .#checks.x86_64-linux.format .#checks.x86_64-linux.lint .#checks.x86_64-linux.cabal-check --no-link --print-build-logs
-
-      - name: Semgrep scan
-        if: ${{ !cancelled() }}
-        # `task sast` runs the same Nix-pinned Semgrep developers use, with
-        # --config auto (anonymous; rules fetched from the public Registry),
-        # failing on ERROR/WARNING findings. It also writes semgrep.sarif.
-        run: nix develop .#ci --command task sast
+      - name: Static checks
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: nix develop --command task static-checks
 
       - name: Upload Semgrep SARIF to code scanning
         # Surface findings in the Security tab, so the dashboard reflects
@@ -320,29 +266,6 @@ jobs:
         with:
           sarif_file: semgrep.sarif
           category: semgrep
-
-      - name: Lint workflows (actionlint + zizmor)
-        if: ${{ !cancelled() }}
-        # actionlint (correctness) + zizmor (security). GH_TOKEN lets zizmor run
-        # its online audits with the job's own read-only token; no secret needed.
-        # Runs in the lean .#workflow-lint shell rather than .#ci.
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: nix develop .#workflow-lint --command task lint-workflows
-
-      - name: Lint shell scripts (shellcheck)
-        if: ${{ !cancelled() }}
-        # shellcheck over scripts/*.sh (--severity=warning). Same lean .#workflow-lint
-        # shell as the workflow lint above. See CONTRIBUTING.md → "Automation scripting".
-        run: nix develop .#workflow-lint --command task lint-scripts
-
-      - name: Test shell scripts
-        if: ${{ !cancelled() }}
-        # Deterministic unit tests for the helper scripts (currently the Haddock
-        # dependency-link rewriter's Hackage URL mapping). A full docs build is too
-        # heavy to gate every PR, so this locks the mapping against the link shapes
-        # cabal haddock emits. Same lean .#workflow-lint shell as the lint above.
-        run: nix develop .#workflow-lint --command task test-scripts
 
   docs:
     name: Haddock builds
