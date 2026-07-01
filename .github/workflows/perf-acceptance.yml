@@ -58,11 +58,11 @@ jobs:
           save-nix-store: "false"
 
       - name: Update package index
-        run: nix develop .#ci --command make update
+        run: nix develop .#ci --command task update
 
       # Run the harness. It writes its summary to $GITHUB_STEP_SUMMARY itself, so this
       # step needs no shell wrapping (keeping the workflow injection-free), and its exit
       # code is preserved: non-zero ONLY on a real budget breach, which reds this
       # (non-required) check.
       - name: Run performance acceptance
-        run: nix develop .#ci --command make perf-acceptance
+        run: nix develop .#ci --command task perf-acceptance

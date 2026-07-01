@@ -235,12 +235,13 @@
           pkgs.nodejs
           (pkgs.python3.withPackages (ps: [ ps.packaging ]))
           pkgs.ruby
+          pkgs.go-task
         ];
 
         # Site rendering: pandoc turns the repo's Markdown into the published site
         # pages (`make site`). Only the Pages publish uses it, so it rides in the
         # default (human) shell below but is kept out of the lean CI set.
-        docsInputs = [ pkgs.pandoc ];
+        docsInputs = [ pkgs.pandoc pkgs.go-task ];
 
         # Vendored Mermaid bundle for the site: one self-contained UMD build, pinned
         # by hash and copied into the published site (see Makefile `site`) so diagrams
@@ -290,6 +291,7 @@
         releaseInputs = [
           pkgs.skopeo
           pkgs.sbomnix
+          pkgs.go-task
         ];
 
         # Vulnerability scanning. grype is the authority (`make scan`): it scans
@@ -308,6 +310,7 @@
           # jq: scripts/grype-sarif-locations.sh post-processes grype.sarif for
           # GitHub code scanning; pinned here rather than relying on the runner's.
           pkgs.jq
+          pkgs.go-task
         ];
 
         # GitHub Actions linting (`make lint-workflows`): actionlint for
@@ -324,6 +327,7 @@
           # shellcheck for `make lint-scripts` (scripts/*.sh). actionlint already runs
           # shellcheck on workflow `run:` blocks; this lints the committed scripts too.
           pkgs.shellcheck
+          pkgs.go-task
         ];
 
         # agent-lsp: the LSP<->MCP bridge that lets an MCP client (e.g. agent

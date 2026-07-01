@@ -40,7 +40,7 @@ jobs:
 
       # grype scans the sbomnix SBOM of .#ecluse-bin → grype.json (+ a table).
       - name: Scan image closure (grype)
-        run: nix develop .#scan --command make scan
+        run: nix develop .#scan --command task scan
 
       - name: Upload grype SARIF to code scanning
         # Surface the closure CVEs in the Security tab (code scanning), alongside

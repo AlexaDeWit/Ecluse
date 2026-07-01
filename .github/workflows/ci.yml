@@ -66,20 +66,20 @@ jobs:
           cabal-cache: "true"
 
       - name: Update package index
-        run: nix develop .#ci --command make update
+        run: nix develop .#ci --command task update
 
       # The single heavy step: build everything (all three test suites included),
       # so a broken integration/smoke suite fails the gate, and so the cabal store
       # this job caches covers the WIDEST dependency plan — every other Haskell
       # job (docs, smoke, weeder) resolves a subset and is fully served by it.
       - name: Build (library, executable, all test suites)
-        run: nix develop .#ci --command make build
+        run: nix develop .#ci --command task build
 
       # Run the >>> examples in Haddock comments as tests (doctest), reusing the
       # warm build above so documented examples can't drift from the code. Gates
       # through this job. See HADDOCK.md → "Examples that run".
       - name: Doctest (Haddock examples)
-        run: nix develop .#ci --command make doctest
+        run: nix develop .#ci --command task doctest
 
       # Instrumented re-runs of the unit suites in a separate build dir, each
       # emitting Codecov-native JSON. Only our small package recompiles (-fhpc);
@@ -88,7 +88,7 @@ jobs:
       # fix for the phase 2a regression where core modules silently dropped from
       # Codecov attribution (PR2b). See CONTRIBUTING.md → "Coverage".
       - name: Coverage (core unit)
-        run: nix develop .#ci --command make coverage SUITE=ecluse-core-unit
+        run: nix develop .#ci --command task coverage SUITE=ecluse-core-unit
 
       - name: Upload core unit coverage to Codecov
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
@@ -99,7 +99,7 @@ jobs:
           fail_ci_if_error: true # a lost upload must not silently skip the gate
 
       - name: Coverage (app unit)
-        run: nix develop .#ci --command make coverage SUITE=ecluse-unit
+        run: nix develop .#ci --command task coverage SUITE=ecluse-unit
 
       - name: Upload app unit coverage to Codecov
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
@@ -114,7 +114,7 @@ jobs:
       # — the SQS MirrorQueue backend — count toward the merged Codecov total. Like
       # the unit passes, only our package recompiles under -fhpc.
       - name: Coverage (integration)
-        run: nix develop .#ci --command make coverage SUITE=ecluse-integration
+        run: nix develop .#ci --command task coverage SUITE=ecluse-integration
 
       - name: Upload integration coverage to Codecov
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
@@ -175,10 +175,10 @@ jobs:
           cabal-cache: "true"
 
       - name: Update package index
-        run: nix develop .#ci --command make update
+        run: nix develop .#ci --command task update
 
       - name: Smoke tests
-        run: nix develop .#ci --command make test-smoke
+        run: nix develop .#ci --command task test-smoke
 
   e2e:
     name: End-to-end tests (whole-system, real npm)
@@ -225,7 +225,7 @@ jobs:
       # image build's GHC closure lands on /mnt when "Set up toolchain" installs into
       # it) and the Docker data-root (so `docker load` of the OCI image + the running
       # containers do too). Both must precede their first use — the bind mount before
-      # the toolchain install, the data-root before `make test-e2e`.
+      # the toolchain install, the data-root before `task test-e2e`.
       - name: Relocate the Nix store and Docker data-root onto /mnt
         run: |
           sudo mkdir -p /mnt/nix /nix
@@ -253,10 +253,10 @@ jobs:
           save-nix-store: "false"
 
       - name: Update package index
-        run: nix develop --command make update
+        run: nix develop --command task update
 
       - name: End-to-end suite (builds + loads the image, drives the real npm CLI)
-        run: nix develop --command make test-e2e
+        run: nix develop --command task test-e2e
 
   static-checks:
     name: Static checks (format, lint, Semgrep, workflows)
@@ -304,15 +304,15 @@ jobs:
 
       - name: Semgrep scan
         if: ${{ !cancelled() }}
-        # `make sast` runs the same Nix-pinned Semgrep developers use, with
+        # `task sast` runs the same Nix-pinned Semgrep developers use, with
         # --config auto (anonymous; rules fetched from the public Registry),
         # failing on ERROR/WARNING findings. It also writes semgrep.sarif.
-        run: nix develop .#ci --command make sast
+        run: nix develop .#ci --command task sast
 
       - name: Upload Semgrep SARIF to code scanning
         # Surface findings in the Security tab, so the dashboard reflects
         # trunk's state rather than per-PR/branch alerts. Semgrep still GATES on every
-        # PR (`make sast` fails on findings), so nothing slips through; this upload is
+        # PR (`task sast` fails on findings), so nothing slips through; this upload is
         # only the dashboard view, which should track main. always() so a run
         # still uploads even if an earlier step failed.
         if: ${{ always() }}
@@ -328,13 +328,13 @@ jobs:
         # Runs in the lean .#workflow-lint shell rather than .#ci.
         env:
           GH_TOKEN: ${{ github.token }}
-        run: nix develop .#workflow-lint --command make lint-workflows
+        run: nix develop .#workflow-lint --command task lint-workflows
 
       - name: Lint shell scripts (shellcheck)
         if: ${{ !cancelled() }}
         # shellcheck over scripts/*.sh (--severity=warning). Same lean .#workflow-lint
         # shell as the workflow lint above. See CONTRIBUTING.md → "Automation scripting".
-        run: nix develop .#workflow-lint --command make lint-scripts
+        run: nix develop .#workflow-lint --command task lint-scripts
 
       - name: Test shell scripts
         if: ${{ !cancelled() }}
@@ -342,7 +342,7 @@ jobs:
         # dependency-link rewriter's Hackage URL mapping). A full docs build is too
         # heavy to gate every PR, so this locks the mapping against the link shapes
         # cabal haddock emits. Same lean .#workflow-lint shell as the lint above.
-        run: nix develop .#workflow-lint --command make test-scripts
+        run: nix develop .#workflow-lint --command task test-scripts
 
   docs:
     name: Haddock builds
@@ -351,12 +351,12 @@ jobs:
     # Builds the library Haddock so broken doc comments / missing modules are caught
     # on the PR, not after merge when the Pages deploy fails. Builds it as the
     # `checks.docs` flake check (Nix Haskell builder) rather than `cabal haddock`
-    # (`make docs-check`). The cabal path rebuilt the whole ~188-package dependency
+    # (`task docs-check`). The cabal path rebuilt the whole ~188-package dependency
     # closure every run (~12 min), because `cabal haddock` wants a documentation
     # variant of the deps that build-test's `cabal build` store lacks; the flake check
     # takes the deps prebuilt from the pinned Haskell set, so only ecluse compiles +
     # haddocks. Same validation — broken doc comments fail the build. The published,
-    # source-linked styling is still built by the Pages publish (`make site`) on main.
+    # source-linked styling is still built by the Pages publish (`task site`) on main.
     #
     # DEDICATED Nix-store cache. The shared "nix" entry build-test writes holds the
     # `.#ci` shell closure, which lacks the dependency `-doc` outputs `checks.docs`
@@ -419,13 +419,13 @@ jobs:
             dist-weeder-${{ runner.os }}-
 
       - name: Update package index
-        run: nix develop .#weeder --command make update
+        run: nix develop .#weeder --command task update
 
       - name: weeder (report to job summary)
         # weeder exits non-zero on findings; this tier is informational, so swallow
         # that and render the findings into the run summary instead.
         run: |
-          nix develop .#weeder --command make weeder 2>&1 | tee weeder.out || true
+          nix develop .#weeder --command task weeder 2>&1 | tee weeder.out || true
           {
             echo '## weeder — library code not yet reachable from the app entry';
             echo;
@@ -452,7 +452,7 @@ jobs:
     # weeder swallows its exit and this one surfaces it. Stan analyses GHC HIE files
     # for partial functions + potential bugs that Semgrep (no Haskell) and hlint (no
     # type info) can't see, scoped by .stan.toml to a Warning floor (Performance/Style
-    # space-leak noise excluded; `make stan-all` shows the full set). Builds its own
+    # space-leak noise excluded; `task stan-all` shows the full set). Builds its own
     # dist-stan, like weeder. Warm deps (restored from main) keep it cheap.
     env:
       CABAL_DIR: ${{ github.workspace }}/.cabal
@@ -476,13 +476,13 @@ jobs:
             dist-stan-${{ runner.os }}-
 
       - name: Update package index
-        run: nix develop .#stan --command make update
+        run: nix develop .#stan --command task update
 
-      # `make stan` exits non-zero on findings; pipefail (the runner's default) carries
+      # `task stan` exits non-zero on findings; pipefail (the runner's default) carries
       # that through `tee` so the job goes red, while the findings are still captured for
       # the summary. The gate never depends on this job, so red here never blocks a merge.
       - name: stan (fails on findings; non-gating)
-        run: nix develop .#stan --command make stan 2>&1 | tee stan.out
+        run: nix develop .#stan --command task stan 2>&1 | tee stan.out
 
       - name: Render stan findings to the run summary
         if: always()
@@ -490,7 +490,7 @@ jobs:
           {
             echo '## stan — Haskell static analysis (non-gating: fails the job, not the CI gate)';
             echo;
-            echo 'Partial functions and potential bugs (HIE-based) at the Warning floor. Nothing is ignored without an explicit decision; run "make stan-all" locally for the full set incl Performance/space-leak.';
+            echo 'Partial functions and potential bugs (HIE-based) at the Warning floor. Nothing is ignored without an explicit decision; run "task stan-all" locally for the full set incl Performance/space-leak.';
             echo;
             echo '```';
             sed -E 's/\x1b\[[0-9;]*m//g' stan.out 2>/dev/null || echo '(no output)';

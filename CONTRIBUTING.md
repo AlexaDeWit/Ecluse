@@ -3,7 +3,7 @@
 How we work on **Écluse** (package `ecluse`): the contribution *process* and the
 repository's requirements. This file is policy; the practical guides live alongside it:
 
-- **Set up & build** ([Getting Started](docs/getting-started.md)): Nix, the `make` loop,
+- **Set up & build** ([Getting Started](docs/getting-started.md)): Nix, the `task` loop,
   reproducible builds, and dependency locking.
 - **Testing** ([Testing Strategy](docs/testing.md)): the tiers, what gates, and coverage.
 - **Code style** ([`STYLE.md`](STYLE.md)); documentation/Haddock ([`HADDOCK.md`](HADDOCK.md)).
@@ -27,16 +27,16 @@ Source code, identifiers, comments, and commit messages stay in English.
 
 Build and CI automation is **Bash**: one language, so there's one thing to read and review.
 Scripts live in [`scripts/`](scripts/) (`#!/usr/bin/env bash`, `set -euo pipefail`) and are
-invoked from the [`Makefile`](Makefile) or the workflows. The `Makefile` orchestrates; any
-non-trivial logic belongs in a `scripts/*.sh` file rather than inline in a workflow `run:`
-block, so it stays reviewable, runnable outside CI, and `shellcheck`-clean. `make
+invoked from the [`Taskfile.yml`](Taskfile.yml) or the workflows. The `Taskfile.yml` orchestrates; any
+complexity belongs in the shell scripts, not embedded in a multiline YAML `cmds:`
+block, so it stays reviewable, runnable outside CI, and `shellcheck`-clean. `task
 lint-scripts` runs `shellcheck` over `scripts/*.sh` in the gate (at `--severity=warning`).
 `awk`/`sort` handle structured-data munging, so reach for them before a heavier runtime.
 
 Use another language only when one is genuinely *forced*, and say why in review:
 
 - **Lua** for the pandoc filters in [`web/`](web/), because pandoc's filter API is Lua.
-- **Make** and **Nix** are the task orchestrator and the build/derivation language; they're
+- **Task** and **Nix** are the task orchestrator and the build/derivation language; they're
   not homes for procedural logic.
 
 Introducing a new build-time dependency on Python, Node, or similar needs a strong, stated
@@ -51,19 +51,17 @@ flag uploads (unit ∪ integration) into one project total. The full strategy, g
 Codecov knobs live in [Testing Strategy](docs/testing.md) → "Coverage"; the contributor-facing
 commands are:
 
-- **`make coverage`: the canonical command.** Builds *both* gating tiers instrumented
+- **`task coverage`: the canonical command.** Builds *both* gating tiers instrumented
   (HPC, in an isolated `dist-coverage/`), `hpc combine --union`s their `.tix`, and writes the
   combined Codecov JSON to `coverage/combined.json`. This reproduces the **merged total Codecov
   shows**, so a local read agrees with the dashboard. It runs the integration tier, so it
   **needs a running Docker daemon** (the ministack containers; the Nix shell ships the
   toolchain, not the daemon). With no daemon it fails with a clear message pointing at the fast
   path.
-- **`make coverage-unit` (≡ `make coverage SUITE=ecluse-unit`): the fast, Docker-free loop.**
-  Measures the **unit tier only**. It is a **partial view** Codecov merges with the integration
-  tier (the run prints this loudly), so it under-counts every module the integration tier
-  exercises (the SQS `MirrorQueue` backend, the worker's real fetch/publish path). Reach for it
-  for a quick local number; reach for bare `make coverage` for the honest, Codecov-matching one.
-- **`make coverage SUITE=<tier>`: one tier's report.** The per-flag form CI uses: each tier
+- **`task coverage-unit` (≡ `task coverage SUITE=ecluse-unit`): the fast, Docker-free loop.**
+  Codecov treats them seamlessly (it merges all tiers). You do not need to run `task coverage`
+  for a quick local number; reach for bare `task coverage` for the honest, Codecov-matching one.
+- **`task coverage SUITE=<tier>`: one tier's report.** The per-flag form CI uses: each tier
   (`ecluse-unit`, `ecluse-integration`) writes its own `coverage/<tier>.json`, uploaded under
   its own Codecov flag. Keep this shape: the per-flag uploads depend on it.
 
@@ -90,9 +88,9 @@ The generators are [`scripts/coverage.sh`](scripts/coverage.sh) (one tier) and
 
 ## Releases, attestations & vulnerability scanning
 
-Écluse ships as a lean, reproducible OCI image built by Nix (`make docker-build`), published
-by a tag-triggered workflow that attaches keyless SLSA provenance + SBOM attestations and a
-GitHub Release pinning the digest. Image CVEs are scanned report-only (`make scan`, grype over
+Écluse ships as a lean, reproducible OCI image built by Nix (`task docker-build`), published
+via `skopeo` on GitHub Releases and Docker Hub (`task docker-push`). The workflow attaches
+GitHub Release pinning the digest. Image CVEs are scanned report-only (`task scan`, grype over
 the SBOM); findings surface both in the **Security tab** (code scanning, alongside Semgrep and
 Scorecard) and in a single auto-updating tracking issue. Dependency freshness is kept by Renovate
 refreshing `flake.lock` (and bumping the GitHub Actions and Haskell dependencies).

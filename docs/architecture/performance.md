@@ -93,7 +93,7 @@ visible on the PR, never a gate.
 
 ```mermaid
 flowchart TD
-    Trigger["pull_request / workflow_dispatch"] --> Run["make bench --csv"]
+    Trigger["pull_request / workflow_dispatch"] --> Run["task bench --csv"]
     Run --> Summary["render time + allocations<br/>to the run summary"]
     Run --> Artifact["upload this run's<br/>results (CSV + table)"]
 ```
@@ -104,7 +104,7 @@ There is **no cross-run baseline**: a GitHub Actions artifact is scoped to its o
 so one run cannot read another's, and a durable cross-run store (a data branch or an
 external service) would need write permissions this project deliberately does not take
 on. Comparison is therefore **by hand**, read a PR run's allocations against `main`'s,
-or, locally, `make bench BENCH_OPTS='--baseline out.csv'` against a CSV you saved.
+or, locally, `task bench BENCH_OPTS='--baseline out.csv'` against a CSV you saved.
 Because allocations are machine-independent, an eyeballed allocation delta is a reliable
 signal even across different runners.
 
@@ -119,22 +119,22 @@ Comparable numbers need a comparable environment:
   recorded figure is drawn from the same kind of machine.
 - **Local runs are for deep-dives, not for comparison against CI.** Run the benches on
   your own machine to iterate on a change and to profile a regression to a cost centre
-  (`make bench-profile`), but compare a local time figure only against another local
+  (`task bench-profile`), but compare a local time figure only against another local
   figure on the same machine, never against a CI baseline.
 
 ## Running locally
 
 Everything runs from the lean `.#bench` dev shell (the CI toolchain plus the
-flame-graph tooling); the `make` targets enter it for you.
+flame-graph tooling); the `task` targets enter it for you.
 
-```sh
-make bench                       # time + allocations for every hot path
-make bench BENCH_OPTS='-p serve' # only the matching benches (tasty-bench pattern)
-make bench BENCH_OPTS='--csv out.csv'              # write a results CSV
-make bench BENCH_OPTS='--baseline out.csv'         # print each delta vs a prior CSV (inform-only)
+```bash
+task bench                       # time + allocations for every hot path
+task bench BENCH_OPTS='-p serve' # only the matching benches (tasty-bench pattern)
+task bench BENCH_OPTS='--csv out.csv'              # write a results CSV
+task bench BENCH_OPTS='--baseline out.csv'         # print each delta vs a prior CSV (inform-only)
 ```
 
-`make bench` reports both numbers per bench, e.g.:
+`task bench` reports both numbers per bench, e.g.:
 
 ```
 serve (filter + url-rewrite + etag)
@@ -145,9 +145,9 @@ serve (filter + url-rewrite + etag)
 To localise a regression to a cost centre, build a profiling variant and render a
 flame graph:
 
-```sh
-make bench-profile                                 # profiles the express benches by default
-make bench-profile BENCH_PROFILE_OPTS='-p "serve"' # profile one bench for a focused graph
+```bash
+task bench-profile                                 # profiles the express benches by default
+task bench-profile BENCH_PROFILE_OPTS='-p "serve"' # profile one bench for a focused graph
 ```
 
 `bench-profile` builds the benchmark with GHC's late cost-centre profiling
@@ -200,7 +200,7 @@ cache, so they are **deliberately excluded**; the corpus leans large.
   `bench/corpus/pins.json` (a plain data file, **not** an npm project) and captured to
   `bench/corpus/npm/<pkg>.full.json`. The captures are **frozen benchmark data, not a
   dependency**: Renovate ignores `bench/corpus/**`, and refresh is a **deliberate, manual
-  re-capture**, edit a pin and rerun `make gen-bench-corpus`, then review the diff,  never an automatic bump. (`test/oracles/`, which tracks the node-semver *reference
+  re-capture**, edit a pin and rerun `task gen-bench-corpus`, then review the diff,  never an automatic bump. (`test/oracles/`, which tracks the node-semver *reference
   implementation*, is a different case and stays Renovate-managed.) `express` is the
   pre-existing untrimmed anchor under `core/test/unit/fixtures/npm/`, reused in place and
   shared with the unit suite, the one untrimmed capture.
@@ -209,11 +209,11 @@ cache, so they are **deliberately excluded**; the corpus leans large.
   pins above) it carries `smokeNames`, the curated gnarly-version package names per
   ecosystem that drive the non-gating version-oracle smoke differential
   ([Testing Strategy](../testing.md)). The Haskell `Ecluse.Test.RegistryCapture` reads
-  this catalogue and provides the one live-registry fetch path; `make gen-bench-corpus`
+  this catalogue and provides the one live-registry fetch path; `task gen-bench-corpus`
   (Node) reads the same file's `pins`. The corpus capture stays in Node deliberately,  its version selection uses real `node-semver`, keeping the frozen corpus independent of
   Écluse's own version engine (the system under test). Smoke keeps every published
   version (ordering is the point); the bench trims to stable releases.
-- **Trimmed for size, not shape.** `make gen-bench-corpus` re-captures from the pins: for
+- **Trimmed for size, not shape.** `task gen-bench-corpus` re-captures from the pins: for
   each package it keeps every **stable** release at or below the pin with its full
   per-version manifest, the heterogeneous dependency / `peerDependencies` / `engines` /
   `deprecated` / `scripts` / `dist` shape the hot paths read and re-serialise, and drops
@@ -442,12 +442,12 @@ how many of the (heaviest-first) corpus packages the two `cache-*-large` scenari
 
 ### Running it
 
-Everything runs from the lean `.#bench` dev shell (which carries `oha`); the `make`
+Everything runs from the lean `.#bench` dev shell (which carries `oha`); the `task`
 target enters it for you.
 
-```sh
-make bench-load                               # all scenarios, default operating point
-BENCH_LOAD_DURATION_SECONDS=10 make bench-load # a quicker local pass
+```bash
+task bench-load                               # all scenarios, default operating point
+BENCH_LOAD_DURATION_SECONDS=10 task bench-load # a quicker local pass
 ```
 
 Each scenario's table is rendered to stdout and, in CI, to the run summary. The CI job
@@ -533,6 +533,6 @@ harness exits non-zero only on a genuine over-budget measurement. This deliberat
 acceptance of extra flakiness, in exchange for real-world fidelity, is the trade Context B
 exists to make.
 
-```sh
-make perf-acceptance   # fetch live packuments, check overhead against acceptance/criteria.json
+```bash
+task perf-acceptance   # fetch live packuments, check overhead against acceptance/criteria.json
 ```
