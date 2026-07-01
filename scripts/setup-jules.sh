@@ -41,11 +41,14 @@ if [ ! -d /etc/nix ]; then
     sudo mkdir -p /etc/nix
 fi
 
-# Use additive configuration to avoid overwriting installer-generated settings.
 ensure_config() {
     local key="$1"
     local value="$2"
-    if [ ! -f /etc/nix/nix.conf ] || ! grep -q "^$key =" /etc/nix/nix.conf; then
+    if [ ! -f /etc/nix/nix.conf ]; then
+        echo "$key = $value" | sudo tee -a /etc/nix/nix.conf > /dev/null
+    elif grep -q "^$key =" /etc/nix/nix.conf; then
+        sudo sed -i "s|^$key =.*|$key = $value|" /etc/nix/nix.conf
+    else
         echo "$key = $value" | sudo tee -a /etc/nix/nix.conf > /dev/null
     fi
 }
@@ -59,9 +62,11 @@ ensure_config "download-attempts" "5"
 ensure_config "trusted-users" "root jules"
 
 # --- 2. Install Nix if missing ---
+NIX_WAS_INSTALLED=false
 if ! command -v nix &> /dev/null && [ ! -e "/nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh" ]; then
     echo "Nix not found. Installing using Native Nix installer..."
     curl -L https://nixos.org/nix/install | sh -s -- --daemon --yes
+    NIX_WAS_INSTALLED=true
 fi
 
 # Source nix-daemon for the current session
@@ -75,10 +80,23 @@ if ! command -v nix &> /dev/null; then
     exit 1
 fi
 
+if [ "$NIX_WAS_INSTALLED" = true ]; then
+    echo "Re-applying container compatibility configuration after installation..."
+    ensure_config "sandbox" "false"
+    ensure_config "filter-syscalls" "false"
+    ensure_config "experimental-features" "nix-command flakes"
+    ensure_config "connect-timeout" "10"
+    ensure_config "download-attempts" "5"
+    ensure_config "trusted-users" "root jules"
+fi
+
 # --- 3. Daemon management and verification ---
 # Ensure nix-daemon is running and accessible (robust against systemd failures in containers)
 echo "Verifying nix-daemon connection..."
 RESTART_DAEMON=false
+if [ "$NIX_WAS_INSTALLED" = true ]; then
+    RESTART_DAEMON=true
+fi
 SOCKET="/nix/var/nix/daemon-socket/socket"
 
 if [ ! -S "$SOCKET" ]; then
