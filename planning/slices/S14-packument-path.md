@@ -107,6 +107,6 @@ code is being brought into line by refactors and the base-hardening track:
   classifier, packument deps and error renderer.
 - The plain-`IO`-taking-`Env` handler and the explicit `PackumentDeps` threading are
   **superseded by the base-hardening Reader migration**
-  (base-hardening D6): handlers now run in
+  (base-hardening track): handlers now run in
   `ReaderT RequestCtx IO`, reading per-mount deps from `RequestCtx`. See
   [technology-stack.md → Key Decisions](../../docs/architecture/technology-stack.md#key-decisions).

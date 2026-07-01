@@ -96,6 +96,6 @@ registry is path-mounted, a root mount is now unrepresentable
 (`bindingPrefix :: NonEmpty Text`), and the per-mount unit is a `MountBinding`
 carrying its prefix, classifier, packument deps and error renderer as one
 composition-root-wired unit. The base-hardening track
-(base-hardening D1 / D5) keys the mount map by **ecosystem**
+keys the mount map by **ecosystem**
 and derives the prefix from it; the env-only single mount defaults to npm → `/npm`.
 See [hosting.md → Mounts](../../docs/architecture/hosting.md#mounts).

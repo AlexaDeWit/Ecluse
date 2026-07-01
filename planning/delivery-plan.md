@@ -126,7 +126,7 @@ effectful tier (**M5**); the GCP backends (M7); the launch docs + release-harden
 (M8); the capability manifest (S34; S35 dropped); and the informational benchmark track (M9).
 
 > **Base-hardening before S15.** The config / mount / credential / Reader-context
-> generalization decided across the **base-hardening track** (D1–D6) is now
+> generalization decided across the **base-hardening track** is now
 > landed ahead of S15, bringing the merged code into line with the
 > already-rendered architecture: ecosystem-keyed mounts with a derived prefix; the
 > `MountRegistries` role record; process-global credential providers a mount

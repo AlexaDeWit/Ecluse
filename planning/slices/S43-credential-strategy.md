@@ -34,7 +34,7 @@ validation, and the verified edge-identity extraction.
 
 **Acceptance criteria.**
 - [ ] A per-mount `credentialStrategy` (default `passthrough`) decodes in the mount
-  map (alongside the mount's reference to a **process-global** credential provider,  base-hardening D4), with strict validation.   _access-model.md#credential-strategies-per-mount, configuration.md#client-authentication_
+  map (alongside the mount's reference to a **process-global** credential provider,  base-hardening track), with strict validation.   _access-model.md#credential-strategies-per-mount, configuration.md#client-authentication_
 - [ ] Edge authentication modes parse and validate: `open`, `static`
   (`ECLUSE_AUTH_TOKEN`), and `trusted-edge` (a configured, signed identity header /
   asserted principal **plus its verifiable binding**, a configured mutual-TLS peer

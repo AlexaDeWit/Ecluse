@@ -24,7 +24,7 @@ pr: 410
 the **real `Application` on Warp/localhost over stub upstreams and the in-memory handle
 doubles**, with **configurable injected upstream latency + payload size**, under a real
 concurrent load generator (`oha`). Hermetic and deterministic in shape (no network, no
-Docker). Like S37 it is **inform-only and never gates** (decision **D1**); it carries
+Docker). Like S37 it is **inform-only and never gates**; it carries
 **no SLO**, it characterises and trends, it never passes or fails on a number.
 
 **Why both tiers.** Allocations (S37, work-per-request micro-benches) are the *leading indicator* of the p99
@@ -61,7 +61,7 @@ concurrency. Two sides of one coin.
   scenarios it folds in the in-process stub upstreams' allocations, a consistent
   over-count for trending, not a pure proxy per-request cost, not directly comparable to
   work-per-request micro-benches. Peak residency is a process high-water mark that also spans the warm-up.)
-- [x] **Inform-only flow (D1/D2/D3).** Results render to **stdout and the run summary**
+- [x] **Inform-only flow.** Results render to **stdout and the run summary**
   and upload as a **per-run downloadable artifact**; **no `gate` wiring**, never fails on
   a regression. There is **no cross-run baseline and no PR-comparison comment**, both
   deliberately dropped (a durable store / a comment would need write access this project
@@ -123,6 +123,6 @@ failure), but it is not part of the gate.
 - **Hermeticity.** All upstreams are loopback `warp` stubs; the proxy and worker fetch
   them over plain (no-TLS, unguarded) managers with `127.0.0.1` opted into the
   internal-range allowance, exactly as the integration suite does, no external socket, no
-  Docker. Throughput/latency absolutes are **noisy on the shared runner (D2)**, read the
+  Docker. Throughput/latency absolutes are **noisy on the shared runner**, read the
   trend coarsely, use the work-normalised per-request counters as the steady signal, and
   take trustworthy absolutes from **local deep-dives**. **Never wired into `gate`.**
