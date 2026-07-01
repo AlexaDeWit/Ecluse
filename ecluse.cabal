@@ -466,6 +466,7 @@ test-suite ecluse-unit
     Ecluse.DredgerSpec
     Ecluse.EnvSpec
     Ecluse.LogSpec
+    Ecluse.Core.Security.HostSpec
     Ecluse.ManifestSpec
     Ecluse.PilotSpec
     Ecluse.ProxySpec
