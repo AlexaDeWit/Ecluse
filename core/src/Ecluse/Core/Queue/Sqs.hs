@@ -42,6 +42,7 @@ module Ecluse.Core.Queue.Sqs (
     -- * Job wire mapping
     encodeJob,
     decodeJob,
+    parseHashAlg,
 ) where
 
 import Amazonka qualified as AWS

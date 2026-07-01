@@ -30,6 +30,8 @@ module Ecluse.Core.Security.Host (
     Origin (..),
     tarballHostAllowed,
 
+    -- * Internal for testing
+    isHex,
     -- * Internals exported for testing
     IpAddr (..),
     parseIPv4,
@@ -283,11 +285,16 @@ yields 'Nothing', which 'hostAddress' folds to the empty (not-allowed) host and 
 endpoint parser surfaces as a malformed-URL boot error.
 -}
 splitHostPort :: Text -> Maybe (Text, Text)
-splitHostPort authority = case T.stripPrefix "[" authority of
-    Just rest -> case T.breakOn "]" rest of
-        (_, "") -> Nothing -- an opening bracket with no close: malformed
-        (inner, afterBracket) -> Just (inner, T.drop 1 afterBracket)
-    Nothing -> Just (T.breakOn ":" authority)
+splitHostPort authority
+    | T.null authority = Nothing
+    | otherwise = case T.stripPrefix "[" authority of
+        Just rest -> case T.breakOn "]" rest of
+            (_, "") -> Nothing -- an opening bracket with no close: malformed
+            (inner, afterBracket) -> Just (inner, T.drop 1 afterBracket)
+        Nothing -> case T.breakOn ":" authority of
+            ("", _) -> Nothing
+            (h, "") -> Just (h, "")
+            (h, p) -> if p == ":" then Just (h, "") else Just (h, p)
 
 {- | Parse a host as an IP literal, or 'Nothing' for a DNS name. Handles dotted-
 quad IPv4 and the IPv6 forms a host realistically carries -- full eight-group form,
@@ -425,7 +432,8 @@ parseIPv6 host =
         if n <= 0xFFFF then Just (fromInteger n) else Nothing
 
     exactly8 :: [Word16] -> Maybe IpAddr
-    exactly8 gs = if length gs == 8 then Just (IpV6 gs) else Nothing
+    exactly8 gs@[_, _, _, _, _, _, _, _] = Just (IpV6 gs)
+    exactly8 _ = Nothing
 
 -- Whether @t@ is a non-empty run of decimal digits (no sign or whitespace).
 isDecimal :: Text -> Bool

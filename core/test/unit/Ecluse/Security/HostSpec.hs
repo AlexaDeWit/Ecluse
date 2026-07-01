@@ -454,6 +454,16 @@ splitHostPortSpec = describe "splitHostPort" $ do
         splitHostPort "127.0.0.1:8080" `shouldBe` Just ("127.0.0.1", ":8080")
     it "rejects an opening bracket with no close as malformed" $
         splitHostPort "[::1" `shouldBe` Nothing
+    it "handles missing host (empty string)" $
+        splitHostPort "" `shouldBe` Nothing
+    it "handles missing host with a port" $
+        splitHostPort ":4566" `shouldBe` Nothing
+    it "handles missing port after colon" $
+        splitHostPort "localhost:" `shouldBe` Just ("localhost", "")
+    it "handles multiple colons in bare host" $
+        splitHostPort "a:b:c" `shouldBe` Just ("a", ":b:c")
+    it "handles empty brackets with port" $
+        splitHostPort "[]:80" `shouldBe` Just ("", ":80")
 
 {- | The actual outbound-fetch guarantee is the __conjunction__: a target is
 fetched only if it is on the host allowlist /and/ not an internal address. The two

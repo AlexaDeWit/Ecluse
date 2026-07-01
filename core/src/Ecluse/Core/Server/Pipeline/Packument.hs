@@ -512,7 +512,7 @@ logInvalidEntries name baseUrl entries =
             <> sl "droppedEntries" (map renderDrop (take maxRenderedDrops entries))
 
     countOf :: InvalidEntryKind -> Int
-    countOf kind = length (filter ((== kind) . invalidKind) entries)
+    countOf kind = foldl' (\acc e -> if invalidKind e == kind then acc + 1 else acc) 0 entries
 
     -- One dropped entry rendered for the operator: its kind, key, reason, and the raw
     -- value the upstream sent (truncated), so the actual offending bytes are visible.

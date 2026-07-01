@@ -36,6 +36,7 @@ extra-source-files:
   bench/corpus/pins.json
   core/test/unit/fixtures/npm/*.json
   core/test/unit/fixtures/version-ordering.txt
+  test/unit/fixtures/osv/*.zip
 
 source-repository head
   type:     git
@@ -215,6 +216,8 @@ library
     Ecluse.Boot
     Ecluse.Proxy
     Ecluse.Pilot
+    Ecluse.Pilot.Osv
+    Ecluse.Pilot.Osv.Stream
     Ecluse.Dredger
     Ecluse.Composition
     Ecluse.Config
@@ -272,6 +275,11 @@ library
     , wai                             ^>=3.2
     , wai-extra                       ^>=3.1
     , warp                            ^>=3.4
+    , conduit                         ^>=1.3
+    , conduit-extra                   ^>=1.3
+    , http-conduit                    ^>=2.3
+    , zip-stream                      ^>=0.2
+    , primitive                       ^>=0.9
 
 executable ecluse
   import:         shared
@@ -466,8 +474,10 @@ test-suite ecluse-unit
     Ecluse.DredgerSpec
     Ecluse.EnvSpec
     Ecluse.LogSpec
+    Ecluse.Core.Security.HostSpec
     Ecluse.ManifestSpec
     Ecluse.PilotSpec
+    Ecluse.Pilot.OsvSpec
     Ecluse.ProxySpec
     Ecluse.ServerSpec
     Ecluse.TelemetrySpec
@@ -496,6 +506,7 @@ test-suite ecluse-unit
     , yaml              ^>=0.11
     , hedgehog          ^>=1.5
     , hspec             ^>=2.11
+    , conduit           ^>=1.3
     , hspec-hedgehog    ^>=0.3
     , hspec-wai         ^>=0.11
     , http-client       ^>=0.7
@@ -510,6 +521,8 @@ test-suite ecluse-unit
     , hs-opentelemetry-sdk  ^>=1.0
     , katip             ^>=0.8.8
     , memory            ^>=0.18
+    , mtl               ^>=2.3
+    , primitive         ^>=0.9.1
     , text              ^>=2.1
     , time              ^>=1.12
     , unliftio          ^>=0.2.25
