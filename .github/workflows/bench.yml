@@ -65,7 +65,7 @@ jobs:
         if: always()
         run: |
           {
-            echo '## Benchmarks — work-per-request (Layer A) over ecluse-core';
+            echo '## Benchmarks — work-per-request over ecluse-core';
             echo;
             echo 'Time AND allocations per pure hot path. Allocations (from GC stats) are the machine-independent signal tracked across commits; time is informational and varies with the runner. This workflow never computes a perf-regression fail — its only red state is a literal benchmark failure (a build error, a crashed harness, or a tripped complexity assertion).';
             echo;

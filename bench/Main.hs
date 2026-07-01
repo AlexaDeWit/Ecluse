@@ -1,4 +1,4 @@
-{- | The Écluse benchmark entry point: the work-per-request (Layer A) micro-benches
+{- | The Écluse benchmark entry point: the work-per-request micro-benches
 over the pure @ecluse-core@ hot paths, the version-count complexity assertions, and
 the synthetic-corpus generator's correctness tests, all in one @tasty@ tree.
 

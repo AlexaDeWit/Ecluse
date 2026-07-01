@@ -1,5 +1,5 @@
 {- | The npm 'UpstreamFixture' -- the first and (today) only concrete instance of the
-ecosystem interface the Layer B load harness drives ("Ecluse.BenchLoad.Harness").
+ecosystem interface the load benchmarks harness drives ("Ecluse.BenchLoad.Harness").
 
 It implements npm's traffic scenarios over stub upstreams and the real composed
 'Ecluse.Server.application':
@@ -23,7 +23,7 @@ It implements npm's traffic scenarios over stub upstreams and the real composed
 The packument scenarios serve the __curated real-world corpus__ of substantial,
 many-version packages, not one synthetic payload (trivial few-version packages stress
 nothing): the public upstream serves each package's real captured packument by the
-requested name (the full Layer A corpus, scoped packages included -- 'requestedPackage'
+requested name (the full work-per-request corpus, scoped packages included -- 'requestedPackage'
 recovers @\@scope\/name@ from the request path; captured under @bench\/corpus\/npm\/@; see
 "Ecluse.Bench.Corpus" and @docs\/architecture\/performance.md@). The @merge-cold@ and
 @cached-public-hit@ scenarios drive a __weighted mix__ ('serveMix') with the heavy
@@ -501,7 +501,7 @@ requestedPackage request = case pathInfo request of
     [] -> Nothing
     segments -> Just (T.intercalate "/" segments)
 
-{- | One package in the Layer B serve mix: the package name (both the request path and
+{- | One package in the load benchmarks serve mix: the package name (both the request path and
 the body's self-reported name, scoped or not), the capture file read at boot, and the
 serve weight (its URL's multiplicity in the large-emphasis weighted mix).
 -}
@@ -511,12 +511,12 @@ data CorpusPackage = CorpusPackage
     , cpWeight :: Int
     }
 
-{- | The curated serve mix: the Layer A corpus of substantial, many-version packages
+{- | The curated serve mix: the work-per-request corpus of substantial, many-version packages
 (trivial few-version ones are excluded -- they stress nothing), ordered __heaviest first__
 and weighted __large-emphasis__ so the heavy many-version packuments are the primary
 drivers of the merge/cache scenarios, not a trivial path. The leading entries are also
 the cache-eviction working set ('workingSet'). The pins and captures are shared with
-Layer A (@bench\/corpus\/pins.json@, @bench\/corpus\/npm\/*.full.json@); @express@ is
+work-per-request micro-benches (@bench\/corpus\/pins.json@, @bench\/corpus\/npm\/*.full.json@); @express@ is
 the reused in-place anchor. See @docs\/architecture\/performance.md@.
 -}
 serveCorpus :: [CorpusPackage]

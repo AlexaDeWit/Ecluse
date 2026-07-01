@@ -1,7 +1,7 @@
 {-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE RankNTypes #-}
 
-{- | The ecosystem-agnostic core of the Layer B load harness: the load knobs, the
+{- | The ecosystem-agnostic core of the load benchmarks harness: the load knobs, the
 per-ecosystem fixture interface, the runtime-statistics capture, and the report
 rendering -- everything that is the same whatever upstream ecosystem a scenario drives.
 
@@ -32,7 +32,7 @@ rather than the running maximum of every scenario before it.
 
 == Inform-only
 
-Layer B never asserts a throughput pass\/fail (decision D1): the figures are reported
+The load benchmarks tier never asserts a throughput pass\/fail: the figures are reported
 for a human to read and trend, never compared to a threshold. The one red state is a
 __literal failure__ -- the harness cannot boot, @oha@ cannot run, or a scenario served
 nothing -- surfaced as a thrown exception (a non-zero exit). See
@@ -95,7 +95,7 @@ the worker scenario's synthetic artifact.
 
 The defaults model a realistic operating point; override them through the environment
 ('loadKnobsFromEnv') to probe a different one. Absolutes are runner-dependent and noisy
-(decision D2) -- the work-normalised counters (allocations per request) are the
+-- the work-normalised counters (allocations per request) are the
 cross-runner-stable signal.
 -}
 data LoadKnobs = LoadKnobs
@@ -270,7 +270,7 @@ data ScenarioReport = ScenarioReport
     runs the two in-process stub upstreams and the proxy (only @oha@, a subprocess, is
     excluded), so the stubs' own per-request allocations are folded in. It is therefore a
     consistent __over-count__ -- fine for trending across commits, but __not__ a pure proxy
-    per-request cost, and not directly comparable to Layer A's pure per-call allocations.
+    per-request cost, and not directly comparable to the work-per-request micro-benches' pure per-call allocations.
     -}
     , srPeakResidencyBytes :: Word64
     {- ^ Peak live heap over this scenario's process (RTS @max_live_bytes@). A process
@@ -445,11 +445,11 @@ goes to stdout and to the GitHub run summary.
 renderReports :: LoadKnobs -> Ecosystem -> [ScenarioReport] -> Text
 renderReports knobs ecosystem reports =
     T.unlines $
-        [ "## Load test -- throughput & latency (Layer B) over " <> ecosystemName ecosystem
+        [ "## Load test -- throughput & latency over " <> ecosystemName ecosystem
         , ""
-        , "Inform-only: the figures are reported for a human to read and trend, never compared to a threshold (decision D1). Throughput and latency are runner-dependent and read coarsely; allocations per request is the machine-independent signal. The in-process residency and GC stats are per scenario (each runs in its own process)."
+        , "Inform-only: the figures are reported for a human to read and trend, never compared to a threshold. Throughput and latency are runner-dependent and read coarsely; allocations per request is the machine-independent signal. The in-process residency and GC stats are per scenario (each runs in its own process)."
         , ""
-        , "Caveat on the numbers: allocations / request is measured over the whole bench process, which for the HTTP scenarios also runs the two in-process stub upstreams and the proxy (only oha, a subprocess, is excluded), so it folds in the stubs' own per-request allocations -- a consistent over-count, fine for trending, but NOT a pure proxy per-request cost and NOT directly comparable to Layer A's pure per-call allocations. Peak residency is a process high-water mark that also spans the warm-up; the allocation and GC figures are before/after deltas over the measured window only."
+        , "Caveat on the numbers: allocations / request is measured over the whole bench process, which for the HTTP scenarios also runs the two in-process stub upstreams and the proxy (only oha, a subprocess, is excluded), so it folds in the stubs' own per-request allocations -- a consistent over-count, fine for trending, but NOT a pure proxy per-request cost and NOT directly comparable to the work-per-request micro-benches' pure per-call allocations. Peak residency is a process high-water mark that also spans the warm-up; the allocation and GC figures are before/after deltas over the measured window only."
         , ""
         , "Operating point: "
             <> show (lkConcurrency knobs)

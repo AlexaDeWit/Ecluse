@@ -1,8 +1,8 @@
 {-# LANGUAGE DeriveAnyClass #-}
 
-{- | The one failure type the Layer B load harness raises.
+{- | The one failure type the load benchmarks harness raises.
 
-Layer B is inform-only (decision D1): it never fails on a slow or degraded result. Its
+The load benchmarks tier is inform-only: it never fails on a slow or degraded result. Its
 only red state is a __literal failure__ -- the harness cannot boot, @oha@ cannot run, a
 report does not parse, or a scenario served nothing. That is surfaced as this typed
 exception (a non-zero exit), rather than a stringly throw, per @STYLE.md@ section 11.

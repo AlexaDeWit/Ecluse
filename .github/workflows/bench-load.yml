@@ -1,12 +1,12 @@
 name: Load test
 
-# Layer B of the benchmark strategy: throughput & latency under concurrent load against
+# The load benchmarks tier of the benchmark strategy: throughput & latency under concurrent load against
 # the real composed proxy, driven by `oha`. Deliberately NOT run per pull request —
 # shared-runner throughput is too noisy to be a useful per-PR signal, and a load run is
-# heavier than the per-PR Layer A benches. It runs on a nightly schedule and on manual
+# heavier than the per-PR work-per-request micro-benches. It runs on a nightly schedule and on manual
 # dispatch only.
 #
-# Like the Layer A benches it is a standalone, INFORM-ONLY tier: it is NOT wired into
+# Like the work-per-request micro-benches it is a standalone, INFORM-ONLY tier: it is NOT wired into
 # ci.yml's `gate`, so it never blocks a merge, and its only red state is a LITERAL
 # failure (the harness cannot boot, `oha` cannot run, or a scenario served nothing). It
 # never computes a perf-regression fail — throughput and latency are reported in the run

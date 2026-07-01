@@ -15,13 +15,13 @@ Performance has two distinct shapes, measured by two distinct mechanisms:
 
 ```mermaid
 flowchart LR
-    A["Layer A, work-per-request<br/>pure ecluse-core hot paths<br/>(tasty-bench micro-benches)"]
-    B["Layer B, throughput-under-load<br/>the whole server under concurrent load<br/>(load harness, oha)"]
+    A["work-per-request micro-benches<br/>pure ecluse-core hot paths<br/>(tasty-bench micro-benches)"]
+    B["load benchmarks<br/>the whole server under concurrent load<br/>(load harness, oha)"]
     A -->|"localises a regression to a<br/>function and an allocation count"| Cost["cost centre"]
     B -->|"localises a regression to<br/>saturation, latency tails, GC pauses"| Sys["system behaviour"]
 ```
 
-- **Layer A, work-per-request.** The CPU and allocation cost of the
+- **Work-per-request micro-benches.** The CPU and allocation cost of the
   transformations a single request triggers, benchmarked in isolation over realistic
   input. This is what the benchmark harness in this repository measures today: the
   hot-path computations of [`ecluse-core`](../../core), with no server and no network.
@@ -29,15 +29,15 @@ flowchart LR
   evaluator (rule evaluation is `IO`), so those benches measure that `IO` action, but
   it is still the per-request computation, not a kernel scheduler or a socket. It is the
   layer where an accidentally-quadratic fold or a doubled allocation is caught.
-- **Layer B, throughput-under-load.** The whole system under concurrent load,  request rate, latency tails, GC pause behaviour, memory under sustained traffic. A load
+- **Load benchmarks.** The whole system under concurrent load,  request rate, latency tails, GC pause behaviour, memory under sustained traffic. A load
   generator ([`oha`](https://github.com/hatoo/oha)) drives the real composed server, so
   this measures system behaviour, saturation and the latency tail, rather than a pure
-  function's cost. Allocations per request (Layer A) are the *leading indicator* of the
-  p99 Layer B measures: GC pauses are tail latency for an inline proxy, so the two layers
+  function's cost. Allocations per request (work-per-request micro-benches) are the *leading indicator* of the
+  p99 load benchmarks measures: GC pauses are tail latency for an inline proxy, so the two tiers
   are complementary, not redundant.
 
-The next sections cover Layer A; the [final section](#layer-b--throughput--latency-under-load)
-covers Layer B.
+The next sections cover work-per-request micro-benches; the [final section](#load-benchmarks)
+covers load benchmarks.
 
 ## What we measure: allocations and time
 
@@ -158,7 +158,7 @@ widest frames, those are where the time and allocations go.
 
 ## What is benched
 
-The Layer A benches cover the pure hot paths a metadata request exercises, each
+The work-per-request benches cover the pure hot paths a metadata request exercises, each
 **per package across the curated real-world corpus** (see
 [The real-world corpus](#the-real-world-corpus)), so the work-per-request figures
 sample the real distribution of package sizes and shapes, small (`is-odd`) to heavy
@@ -227,9 +227,9 @@ cache, so they are **deliberately excluded**; the corpus leans large.
   for the complexity-scaling (O(n) curve fit) assertions, the version-count stress
   input, not a realistic case. The realistic distribution is the corpus.
 
-## Layer B, throughput & latency under load
+## Load benchmarks
 
-Layer B is the *host-sensitive* counterpart to Layer A's deterministic work-per-request
+The load benchmarks tier is the *host-sensitive* counterpart to the work-per-request micro-benches' deterministic work-per-request
 figures: it boots the **real composed server** (`Ecluse.Server.application`) on `warp`
 and drives it under concurrent load, so it answers "does the proxy keep up with traffic?",
 throughput, the latency tail, GC pause behaviour, residency under sustained load. It is
@@ -238,12 +238,12 @@ sockets and spawns a load generator.
 
 ### Posture: inform-only, never gates
 
-Layer B characterises and trends; it **never asserts a throughput pass/fail**. There is
+The load benchmarks tier characterises and trends; it **never asserts a throughput pass/fail**. There is
 no SLO, no "10% slower than `main`" threshold, no allocation ceiling. Its only red state
 is a **literal failure**, the harness cannot boot, `oha` cannot run, or a scenario
 served nothing, surfaced as a non-zero exit. Throughput and latency are runner-dependent
 and read coarsely; **allocations per request** is the machine-independent signal that
-trends cleanly across runners (decision D2). There is **no
+trends cleanly across runners. There is **no
 cross-run baseline**: a run uploads its own results, consumed by no other run, so
 comparison is by hand.
 
@@ -252,7 +252,7 @@ comparison is by hand.
 > in-process stub upstreams and the proxy (only `oha`, a subprocess, is excluded). It
 > therefore folds in the stubs' own per-request allocations, a *consistent over-count*,
 > fine for trending across commits, but **not** a pure proxy per-request cost, and so
-> **not directly comparable** to Layer A's pure per-call allocations. Peak residency is a
+> **not directly comparable** to the work-per-request micro-benches' pure per-call allocations. Peak residency is a
 > process high-water mark that also spans the warm-up; the allocation and GC figures are
 > before/after deltas over the measured window only.
 
@@ -273,7 +273,7 @@ residency, GC stats, and allocations per request.
 
 The packument scenarios serve the **curated real-world corpus**, not one synthetic
 payload. The public upstream serves each package's real captured packument by the
-requested name (the full Layer A corpus, scoped packages included, the stub recovers
+requested name (the full work-per-request corpus, scoped packages included, the stub recovers
 `@scope/name` from the request path); the private upstream serves a small disjoint overlay
 per package so every request still merges a genuine cross-upstream union.
 
@@ -387,11 +387,11 @@ a capacity signal rather than a per-request cost. The production serve path shed
 requests beyond its configured admission cap instead of growing an application queue,
 and its public/private per-host pools are explicit; this view verifies that those
 controls remain calibrated as the corpus and deployment shape evolve. Like the
-rest of Layer B it is **inform-only**: a flag is read by a human, never a gate.
+rest of the load benchmarks tier it is **inform-only**: a flag is read by a human, never a gate.
 
 The attribution and saturation maths are a pure module (`Ecluse.BenchLoad.Normalise`,
 unit-tested in the gating `ecluse-unit` suite); the live probe and the two-pass orchestration
-are the `bench-load` executable's shell, mirroring the Layer A / Context B pure-core split.
+are the `bench-load` executable's shell, mirroring the work-per-request / Context B pure-core split.
 
 ### Built to extend across ecosystems
 
@@ -461,11 +461,11 @@ machine, never from a shared-runner figure.
 ## Context B, live performance-acceptance
 
 Everything above is **Context A**: *deterministic regression* benchmarking over
-**committed, pinned** data (Layer A's work-per-request, Layer B's load harness, the
+**committed, pinned** data (work-per-request micro-benches, load benchmarks, the
 frozen corpus). Its machine-independent regression signal is **allocations-per-request**,
 frozen against the committed corpus, a change in allocated bytes is the code, not the
 environment. Absolute latency and throughput stay the **live, read-coarsely** signal,
-never a regression gate: Layer A's clock is machine-dependent, and Layer B's **default**
+never a regression gate: the work-per-request clock is machine-dependent, and the load benchmarks' **default**
 run live-probes the public registry for its upstream-latency operating point (set
 `BENCH_LOAD_PROBE_RTT=0` for a deterministic fixed mode), so its latency reflects today's
 network, not the code alone. Context A answers *"did the code regress?"*, read its
