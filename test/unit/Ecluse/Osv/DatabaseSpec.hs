@@ -4,8 +4,6 @@
 module Ecluse.Osv.DatabaseSpec (spec) where
 
 import Conduit
-import Control.Monad.Primitive (PrimMonad (..))
-import Control.Monad.Trans.Class (lift)
 import Data.Text (Text)
 import Database.SQLite.Simple qualified as SQLite
 import Katip (ColorStrategy (ColorIfTerminal), KatipContextT, LogContexts, LogEnv, Severity (..), Verbosity (V3), defaultLogEnv, logFM, ls, registerSeverity, runKatipContextT)
@@ -15,10 +13,7 @@ import UnliftIO.Temporary (withSystemTempFile)
 
 import Ecluse.Osv (ExtractedOsv (..))
 import Ecluse.Osv.Database (compileToSqlite, lookupAdvisories, withAdvisoryDb)
-
-instance (PrimMonad m) => PrimMonad (KatipContextT m) where
-    type PrimState (KatipContextT m) = PrimState m
-    primitive = lift . primitive
+import Ecluse.Osv.Stream () -- For PrimMonad KatipContextT instance
 
 spec :: Spec
 spec = describe "Ecluse.Pilot.Osv.Database" $ do

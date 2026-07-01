@@ -7,9 +7,10 @@ module Ecluse.Osv.Database (
     lookupAdvisories,
 ) where
 
-import Conduit
-import Control.Monad.Primitive (PrimMonad)
+import Control.Exception (bracket)
+import Data.Conduit
 import Data.Conduit.List qualified as CL
+import Data.Text (Text)
 import Database.SQLite.Simple qualified as SQLite
 import Katip (KatipContext, Severity (..), logFM, ls)
 
@@ -20,7 +21,7 @@ The resulting database is optimized for fast lookups by package name and ecosyst
 It uses bulk inserts and transactions for performance, and finishes with
 VACUUM and ANALYZE to ensure the file is compact and query plans are optimized.
 -}
-compileToSqlite :: (MonadResource m, MonadThrow m, PrimMonad m, KatipContext m) => FilePath -> ConduitT ExtractedOsv o m ()
+compileToSqlite :: (MonadResource m, MonadThrow m, KatipContext m) => FilePath -> ConduitT ExtractedOsv o m ()
 compileToSqlite dbPath = do
     lift $ logFM InfoS (ls ("Initializing SQLite database for OSV compilation at: " <> dbPath))
 
@@ -60,13 +61,15 @@ It applies defense-in-depth pragmas.
 withAdvisoryDb :: FilePath -> (SQLite.Connection -> IO a) -> IO a
 withAdvisoryDb dbPath action =
     bracket
-        (SQLite.openReadOnly dbPath)
+        (SQLite.open dbPath)
         SQLite.close
         ( \conn -> do
+            SQLite.execute_ conn "PRAGMA query_only = ON"
             SQLite.execute_ conn "PRAGMA trusted_schema = OFF"
             action conn
         )
 
+-- | Fast lookup for a package's remediation boundaries (fixed versions).
 {- | Fast lookup for a package's remediation boundaries (fixed versions).
 -}
 lookupAdvisories :: SQLite.Connection -> Text -> Text -> IO [Text]

@@ -10,10 +10,11 @@ module Ecluse.Osv.Stream (
 import Codec.Archive.Zip.Conduit.Types (ZipEntry (..))
 import Codec.Archive.Zip.Conduit.UnZip (unZipStream)
 import Conduit
-import Control.Monad.Primitive (PrimMonad)
+import Control.Monad.Primitive (PrimMonad (..))
+import Control.Monad.Trans.Class (lift)
 import Data.Aeson (decodeStrict)
 import Data.ByteString qualified as BS
-import Katip (KatipContext, Severity (..), logFM, ls)
+import Katip (KatipContext, KatipContextT, Severity (..), logFM, ls)
 import Network.HTTP.Simple (getResponseBody, httpSource, parseRequest)
 import OpenTelemetry.Context qualified as Ctx
 import OpenTelemetry.Trace (SpanKind (Internal), defaultSpanArguments, kind, makeTracer, tracerOptions)
@@ -21,6 +22,10 @@ import OpenTelemetry.Trace.Core (createSpan, endSpan)
 
 import Ecluse.Osv (ExtractedOsv, OsvAdvisory, extractFromAdvisory)
 import Ecluse.Telemetry (Telemetry, telemetryTracerProvider)
+
+instance (PrimMonad m) => PrimMonad (KatipContextT m) where
+    type PrimState (KatipContextT m) = PrimState m
+    primitive = lift . primitive
 
 -- | Fetch the OSV zip and stream its contents
 streamOsvUrl :: (MonadResource m, MonadThrow m, PrimMonad m, KatipContext m) => Telemetry -> String -> ConduitT i ExtractedOsv m ()

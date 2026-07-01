@@ -8,26 +8,21 @@ module Ecluse.Pilot (
 ) where
 
 import Conduit (runConduit, (.|))
-import Control.Monad.Primitive (PrimMonad (..))
-import Control.Monad.Trans.Class (lift)
-import Control.Monad.Trans.Resource (runResourceT)
 import Control.Concurrent (threadDelay)
+import Control.Monad (forever, void)
+import Control.Monad.Trans.Resource (runResourceT)
 import UnliftIO (async)
 import Katip (Severity (InfoS), logFM, ls)
 import Katip.Monadic (KatipContextT, runKatipContextT)
 import Network.Wai (Application)
 
 import Ecluse.Boot (BootEnv (..))
-import Ecluse.Config (AppConfig (cfgPort))
+import Ecluse.Config (AppConfig (cfgOsvDbPath, cfgOsvSyncInterval, cfgOsvUrl, cfgPort))
 import Ecluse.Log (moduleField)
 import Ecluse.Osv.Database (compileToSqlite)
 import Ecluse.Osv.Stream (streamOsvUrl)
 import Ecluse.Server (ServerConfig (scDrain, scPort), mkServerConfig, probeApplication, runWarp, serverMiddleware)
 import Ecluse.Telemetry (telemetryTracerProvider)
-
-instance (PrimMonad m) => PrimMonad (KatipContextT m) where
-    type PrimState (KatipContextT m) = PrimState m
-    primitive = lift . primitive
 
 {- | The WAI application for the Pilot worker mode.
 It exposes liveness and readiness probes.
@@ -54,7 +49,8 @@ runPilot bootEnv = do
             Nothing -> logFM InfoS "No OSV URL configured, background compilation disabled."
             Just url -> do
                 let dbPath = cfgOsvDbPath config
-                    interval = cfgOsvSyncInterval config
+                    -- Floor the interval at 1 hour (3600s) to avoid API hammering
+                    interval = max 3600 (cfgOsvSyncInterval config)
                 void . liftIO . async $ forever $ do
                     runKatipContextT logEnv (moduleField "Ecluse.Pilot") mempty $ do
                         logFM InfoS (ls ("Starting background OSV compilation from " <> url))
