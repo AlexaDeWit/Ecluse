@@ -259,13 +259,18 @@ tasks:
       - task: build
       - task: coverage
       - task: doctest
-      - task: format-check
-      - task: lint
-      - task: sast
       - task: cabal-check
-      - task: lint-workflows
-      - task: lint-scripts
-      - task: test-scripts
+      - task: _static_checks
+
+  _static_checks:
+    internal: true
+    deps:
+      - format-check
+      - lint
+      - sast
+      - lint-workflows
+      - lint-scripts
+      - test-scripts
 
   gate:
     desc: Reproduce the full CI gate locally
