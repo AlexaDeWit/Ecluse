@@ -28,3 +28,6 @@ relay. Local contributor sessions do not need it.
 Hosted containers may lack Nix and therefore cannot reproduce `make build`, `make test`, or
 `make sast`. Keep such changes small and formatting-safe, let CI be the gate, and state plainly in
 the PR which checks were not reproduced locally.
+
+If you skip local verification, you **must** monitor the CI results (e.g., via GitHub Actions polling
+or webhook notifications) and follow up on any failures. Your task is not complete until CI passes.
