@@ -6,7 +6,7 @@ import Data.Text qualified as T
 import Test.Hspec
 
 import Ecluse.Config.Rule (PolicyError (..), renderPolicyError)
-import Ecluse.Config.Types (CredentialBackend (..), QueueBackend (..), mkUrl, unUrl, parseCredentialBackend, renderCredentialBackend)
+import Ecluse.Config.Types (CredentialBackend (..), QueueBackend (..), mkUrl, parseCredentialBackend, renderCredentialBackend, unUrl)
 import Ecluse.Core.Wire (parseWire, renderWire)
 
 spec :: Spec
