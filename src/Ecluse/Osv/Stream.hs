@@ -10,8 +10,10 @@ module Ecluse.Osv.Stream (
 import Codec.Archive.Zip.Conduit.Types (ZipEntry (..))
 import Codec.Archive.Zip.Conduit.UnZip (unZipStream)
 import Conduit
+import Control.Monad.Catch (MonadThrow)
 import Control.Monad.Primitive (PrimMonad (..))
 import Control.Monad.Trans.Class (lift)
+import Control.Monad.Trans.Resource (MonadResource)
 import Data.Aeson (decodeStrict)
 import Data.ByteString qualified as BS
 import Katip (KatipContext, KatipContextT, Severity (..), logFM, ls)

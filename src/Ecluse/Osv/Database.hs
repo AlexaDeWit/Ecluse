@@ -8,6 +8,8 @@ module Ecluse.Osv.Database (
 ) where
 
 import Control.Exception (bracket)
+import Control.Monad.Catch (MonadThrow)
+import Control.Monad.Trans.Resource (MonadResource)
 import Data.Conduit
 import Data.Conduit.List qualified as CL
 import Data.Text (Text)
@@ -69,9 +71,8 @@ withAdvisoryDb dbPath action =
             action conn
         )
 
+
 -- | Fast lookup for a package's remediation boundaries (fixed versions).
-{- | Fast lookup for a package's remediation boundaries (fixed versions).
--}
 lookupAdvisories :: SQLite.Connection -> Text -> Text -> IO [Text]
 lookupAdvisories conn pkg eco =
     fmap SQLite.fromOnly
