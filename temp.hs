@@ -2,13 +2,53 @@
 
 module Ecluse.Worker.IntegritySpec (spec) where
 
-import Test.Hspec
-import Data.Text qualified as T
-import Ecluse.Core.Package (HashAlg (Blake2b, MD5, SHA1, SHA256, SRI))
-import Ecluse.Core.Package qualified as Pkg
-import Ecluse.Core.Worker (IntegrityResult (IntegrityMismatch, IntegrityVerified), verifyIntegrity)
-import Ecluse.Test.Package (unsafeHash)
-import Ecluse.Worker.Support
+
+    Artifact (..),
+    ArtifactKind (Tarball),
+    Availability (Available),
+    CodeExecSignal (NoCodeOnInstall),
+    Hash,
+    HashAlg (Blake2b, MD5, SHA1, SHA256, SRI),
+    PackageDetails (..),
+    PackageName,
+    Trust (Untrusted),
+    mkPackageName,
+ )
+    MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize),
+    MirrorJob (..),
+    MirrorQueue (receive),
+    QueueMessage (msgReceipt),
+    ReceiptHandle,
+    enqueue,
+    newInMemoryQueue,
+ )
+    ParseError (ParseError),
+    PublishError (PublishError),
+    PublishFault (PublishRejected, PublishUrlUnformable),
+    RegistryClient (..),
+    UrlFormationError (EmptyBaseUrl),
+ )
+    MetadataClient (MetadataClient, fetchFullManifest, fetchVersionMetadata),
+    MetadataError (MetadataUndecodable),
+    VersionEvaluation (VersionMetadataUnavailable, VersionMissing, VersionPresent),
+    fetchVersionDetails,
+ )
+    IntegrityResult (IntegrityMismatch, IntegrityVerified),
+    JobOutcome (Dropped, Retried, Succeeded),
+    WorkerM,
+    WorkerPolicies,
+    WorkerPolicy (WorkerPolicy, wpNow, wpResolveVersion, wpRules),
+    WorkerRuntime (WorkerRuntime, wrHeartbeat, wrInjectTraceContext, wrManager, wrMetrics, wrPolicies, wrQueue, wrRegistry, wrTracing),
+    heartbeatHealthy,
+    lastPoll,
+    newWorkerHeartbeat,
+    processBatch,
+    processJob,
+    runWorkerM,
+    verifyIntegrity,
+    workerHeartbeatStaleAfter,
+    workerLoop,
+ )
 
 spec :: Spec
 spec = do
