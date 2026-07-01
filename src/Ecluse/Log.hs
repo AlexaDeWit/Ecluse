@@ -59,9 +59,13 @@ module Ecluse.Log (
 
     -- * Rendering (for serialise-and-assert)
     renderLogLine,
+
+    -- * Internals exported for testing
+    low64Bits,
 ) where
 
 import Data.Aeson (Value, object, (.=))
+import Data.ByteString.Base16 qualified as Base16
 import Data.ByteString qualified as BS
 import Data.Text.Lazy qualified as TL
 import Data.Text.Lazy.Builder qualified as TB
@@ -266,10 +270,13 @@ formatDdSpanId = show . low64Bits
 -- The unsigned 64-bit value of the last (up to) eight bytes, big-endian. Shared by the
 -- trace-id low-64 truncation and the span-id read so both decode identically.
 low64Bits :: ByteString -> Word64
-low64Bits = BS.foldl' (\acc byte -> acc * 256 + fromIntegral byte) 0 . lastBytes 8
-  where
-    lastBytes :: Int -> ByteString -> ByteString
-    lastBytes n bytes = BS.drop (max 0 (BS.length bytes - n)) bytes
+low64Bits bs = case Base16.decode bs of
+    Right decoded ->
+        let len = BS.length decoded
+            pad = max 0 (8 - len)
+            padded = BS.replicate pad 0 <> BS.drop (max 0 (len - 8)) decoded
+         in BS.foldl' (\acc byte -> acc * 256 + fromIntegral byte) 0 padded
+    Left _ -> 0
 
 {- | Render a single log 'Item' to the exact text the scribe for this 'LogFormat'
 writes for it -- the formatter output for one item, without the trailing newline

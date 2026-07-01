@@ -36,6 +36,7 @@ import Ecluse.Log (
     ddObject,
     formatDdSpanId,
     formatDdTraceId,
+    low64Bits,
     newLogEnv,
     newScribe,
     parseLogFormat,
@@ -276,6 +277,25 @@ spec = do
             (dd >>= ddStr "version") `shouldBe` Just "1.4.2"
             (dd >>= ddStr "trace_id") `shouldBe` Just "42"
             (dd >>= ddStr "span_id") `shouldBe` Just "7"
+
+    describe "low64Bits" $ do
+        it "extracts the 64-bit value from a valid 8-byte input" $ do
+            low64Bits "000000000000002a" `shouldBe` 42
+            low64Bits "0000000000000100" `shouldBe` 256
+            low64Bits "ffffffffffffffff" `shouldBe` 18446744073709551615
+
+        it "pads inputs shorter than 8 bytes with leading zeros" $ do
+            low64Bits "2a" `shouldBe` 42
+            low64Bits "0100" `shouldBe` 256
+            low64Bits "" `shouldBe` 0
+
+        it "truncates inputs longer than 8 bytes, taking only the low 64 bits (the end)" $ do
+            low64Bits "ffff000000000000002a" `shouldBe` 42
+            low64Bits "010000000000000000" `shouldBe` 0
+
+        it "returns 0 for non-hex strings" $ do
+            low64Bits "hello" `shouldBe` 0
+
   where
     -- Whether a decoded JSON result is a single object (the JSONL contract).
     isObjectValue :: Either String Value -> Bool

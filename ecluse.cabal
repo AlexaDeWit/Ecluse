@@ -241,6 +241,7 @@ library
     , ecluse:ecluse-core
     , aeson                           ^>=2.2
     , amazonka                        ^>=2.0
+    , base16-bytestring               ^>=1.0.2
     , amazonka-codeartifact           ^>=2.0
     , amazonka-sqs                    ^>=2.0
     , amazonka-sts                    ^>=2.0
