@@ -407,6 +407,7 @@ serve such a source, point it at the **private** (trusted) upstream slot, not th
 
 ## Operating Écluse
 
+- **Pre-warming the cache.** A cold-start on a large monorepo (e.g., running `npm install` against a completely cold proxy cache) can hit the proxy with dozens of simultaneous heavy package requests, which may cause latency spikes or trigger `503 Service Unavailable` backpressure. We strongly recommend pre-warming the cache as part of your deployment process by running an automated `npm install` (or a script fetching your known heavy dependencies) after starting Écluse, before directing production CI traffic to it. Once the cache is warm, Écluse's request coalescing will effortlessly absorb large traffic spikes.
 - **Health probes.** `GET /livez` reports process liveness (a stalled mirror worker fails
   it); `GET /readyz` reports that config is loaded and the listener is serving. Readiness is
   deliberately lenient about public-upstream reachability so a transient upstream blip
