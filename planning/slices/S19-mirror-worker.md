@@ -28,7 +28,7 @@ a supervised concurrent thread, split-ready.
   A **hash mismatch fails the job (no publish)** and alarms, a tampered artifact
   never enters the private upstream.  _cloud-backends.md#mirror-queue_
 - [ ] **Wire the publish-side `RegistryClient`**, the deferred tail of the
-  per-ecosystem composition-root wiring (D5; the *serve* side landed in
+  per-ecosystem composition-root wiring (the *serve* side landed in
   [#144](https://github.com/AlexaDeWit/Ecluse/pull/144)). Resolve the configured
   publish client **per ecosystem** (the mirror-target endpoint paired with the global
   `CredentialProvider`) at the composition root, replacing the refusing
@@ -101,5 +101,5 @@ Decide and document each here when building:
 The per-ecosystem composition root wired the *serve* side (each mount's
 `PackumentDeps`); the *publish* side, a configured `RegistryClient` per ecosystem, was deliberately left to this slice, the worker being its only consumer. Today
 `Env.envRegistry` is a single global refusing placeholder, so this slice resolves it
-from config and retires the single global slot, the deferred D5 tail of the
+from config and retires the single global slot, the deferred tail of the
 per-ecosystem composition-root work.

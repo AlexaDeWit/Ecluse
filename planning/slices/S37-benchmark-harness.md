@@ -58,7 +58,7 @@ change may knowingly trade performance for correctness and still merge.
   large `express.full.json`) and add a **synthetic ~100k-version packument generator**
   to stress scaling. Bench inputs are supplied via `env`, never top-level thunks.
 - [x] **Informational CI workflow.** `.github/workflows/bench.yml` on **`pull_request`
-  + `workflow_dispatch`** (D3), **not** a `gate` dependency, runs `make bench` in a lean
+  + `workflow_dispatch`**, **not** a `gate` dependency, runs `make bench` in a lean
   `.#bench` dev shell, and renders the results to the run summary. **First-party
   SHA-pinned actions only** (no third-party Node action). Superseded PR runs are
   cancelled; a dispatch is never cancelled.
@@ -67,13 +67,13 @@ change may knowingly trade performance for correctness and still merge.
   that run, **not** a cross-run baseline (an artifact is scoped to its run, and a
   durable cross-run store would need write permissions we deliberately do not take on).
   Comparison is by hand (allocations are machine-independent). _No before/after PR
-  comment: it would need that same write access, out of scope (D2/D3)._
+  comment: it would need that same write access, out of scope._
 - [x] **`make bench-profile`**, a profiling build → flamegraph target, so a
   regression localises to a cost centre.
 - [x] **Strategy documented in the same PR**, `docs/architecture/performance.md`
   authored here: the two-layer model, allocations-vs-time, **never-gates-except-on-
   failure**, the per-run-results flow (no cross-run baseline), the consistency posture
-  (D2), and how to run `make bench` / `make bench-profile` locally.
+  (decision), and how to run `make bench` / `make bench-profile` locally.
 
 **File scope.**
 - `bench/Main.hs` (+ `bench/Ecluse/Core/*Bench.hs`), the `tasty-bench` suite.
@@ -90,7 +90,7 @@ change may knowingly trade performance for correctness and still merge.
 - `.github/workflows/bench.yml`, the informational, non-gating, `workflow_dispatch`
   workflow.
 - `docs/architecture/performance.md`, the strategy doc (home of the *inform-only*,
-  *never-gates-except-on-failure*, *D1/D2/D3* decisions).
+  *never-gates-except-on-failure* decisions).
 
 **Test tier.** Bench, informational; **not** gating, **not** wired into `gate`. A
 tiny unit check may cover any results-formatting shim if it grows logic.
@@ -98,11 +98,11 @@ tiny unit check may cover any results-formatting shim if it grows logic.
 **Notes / decisions.**
 - Tooling confirmed present in the pin (nixpkgs 26.05 / ghc910, 2026-06-27):
   `tasty-bench` 0.4.1, `tasty` 1.5.4, `tasty-bench-fit` 0.1.1.
-- **D1**, no SLO; inform-only (this milestone never asserts a pass/fail throughput).
-- **D2**, measure on the **shared public** GitHub-hosted runner; trustworthy
+- **No SLO**; inform-only (this milestone never asserts a pass/fail throughput).
+- **Measure on the shared public** GitHub-hosted runner; trustworthy
   absolutes come from **local deep-dives**. Self-hosted rejected (PR-code supply-chain
   risk); larger hosted runners deferred (need a paid org plan).
-- **D3**, runs on `pull_request` + `workflow_dispatch`. No cross-run baseline and no
+- **Runs on** `pull_request` + `workflow_dispatch`. No cross-run baseline and no
   before/after PR comment (each would need a durable cross-run store / write access this
   project deliberately avoids); comparison is by hand.
 - RTS hygiene: a larger nursery (`-A32m`) and `-fproc-alignment=64` cut GC / layout

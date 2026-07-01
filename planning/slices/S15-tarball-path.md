@@ -49,5 +49,5 @@ client must never wait on the queue. The integrity hash travels in the job for t
 worker to verify (S19); this slice does **not** verify on the serve path (it relies
 on the client's `dist.integrity`). The tarball handler is added on the
 post-base-hardening **`ReaderT RequestCtx IO`** hot path
-(base-hardening D6), reading its mount deps from
+(base-hardening track), reading its mount deps from
 `RequestCtx`, not the plain-`IO`-taking-`Env` shape S14 first shipped.

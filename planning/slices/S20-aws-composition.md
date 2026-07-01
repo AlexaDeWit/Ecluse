@@ -27,10 +27,10 @@ npm proxy.
   `newCodeArtifactProvider` or `static` (`ECLUSE_MIRROR_TARGET_TOKEN`), storing the
   resulting handle records in `Env`. Nothing downstream knows which backend it holds.
   (The generic `ecosystem → RegistryClient + classifier + bindingPrefix → MountBinding`
-  resolution is delivered by the **base-hardening track** (D5);
+  resolution is delivered by the **base-hardening track**;
   S20 layers AWS backend selection on top of it.),  _cloud-backends.md#handles-records-of-functions, configuration.md#outbound-registry-credentials_
 - [ ] **Credential providers are process-global; mounts reference them**
-  (base-hardening D4): the composition root builds the
+  (base-hardening track): the composition root builds the
   provider(s) **once** (a single container task role in the common case) and each
   mount *names* which it draws on, always a mirror-target write provider; under the
   default `passthrough`, reads forward the client token / are anonymous (no Écluse
@@ -60,7 +60,7 @@ is scheduled.
 
 ## As-built notes
 
-The D4/D5 base-hardening track had already landed most of the composition root
+The base-hardening track had already landed most of the composition root
 (`Ecluse.Composition` + `Ecluse.Config`): config-driven mounts, the process-global
 credential providers (the `static` leaf), boot-time fail-fast aggregation
 (`planMounts` / `planPublishTargets`), and the publish-side `RegistryClient`
@@ -107,7 +107,7 @@ than reimplementing it:
 - **Static credential path is the AWS launch path.** A deployment with
   `ECLUSE_MIRROR_TARGET_TOKEN` (static write credential) + an SQS queue + `AWS_REGION` is a
   fully working AWS-backed npm proxy. A mount that names an uninitialized provider
-  still fails fast at boot (the D4 check), unchanged.
+  still fails fast at boot (the validation check), unchanged.
 - **End-to-end integration test (AC4).** `test/integration/Ecluse/AwsEndToEndSpec.hs`
   drives an in-process Écluse (the real `Ecluse.Server.application` + the real
   `Ecluse.Worker.workerLoop`) over a **real SQS queue** built through the

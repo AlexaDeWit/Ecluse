@@ -54,7 +54,7 @@ backend SDK in `Env`/`App`, only the handle records (decoupling invariant).
 
 **Reconciliation (post-merge).** "Request handlers run in plain `IO` taking `Env`"
 is **superseded by the base-hardening Reader migration**
-(base-hardening D6): handlers now run in
+(base-hardening track): handlers now run in
 `ReaderT RequestCtx IO` over a per-request `RequestCtx { ctxEnv, ctxMount, … }`,
 reading the matched mount's deps from context. `App = ReaderT Env IO` and the
 `Env`-as-composition-root model this slice established are unchanged, `RequestCtx`
