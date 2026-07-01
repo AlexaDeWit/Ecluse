@@ -291,15 +291,14 @@ stan-all: ## Full stan report incl Performance/space-leak (informational; ignore
 	$(NIX) cabal build exe:ecluse --builddir=dist-stan --ghc-options=-fwrite-ide-info
 	$(NIX) stan --hiedir dist-stan --no-default
 
-check: build coverage doctest format-check lint sast cabal-check lint-workflows lint-scripts test-scripts ## Fast pre-push checks: the gate minus its Docker integration + Haddock tiers (see gate)
+check: build coverage test-integration doctest format-check lint sast cabal-check lint-workflows lint-scripts test-scripts ## Fast pre-push checks: the gate minus its Haddock tier (see gate)
 
-# The faithful local mirror of the CI gate: everything `check` runs, plus the two
-# tiers it omits — the integration suite (needs a Docker daemon, exactly like the
-# gate's build-test job) and the Haddock build (docs-check). Two CI-gating inputs are
+# The faithful local mirror of the CI gate: everything `check` runs, plus the one
+# tier it omits — the Haddock build (docs-check). Two CI-gating inputs are
 # deliberately NOT reproduced here: the Codecov coverage upload/status (computed
 # server-side) and the e2e suite (an OCI image build + containers + npm — too heavy
 # for routine pre-push; run `make test-e2e` before a risky composition-root change).
-gate: check test-integration docs-check ## Reproduce the full CI gate locally (sans the heavy e2e tier; integration needs Docker)
+gate: check docs-check ## Reproduce the full CI gate locally (sans the heavy e2e tier)
 
 run: ## Run the proxy
 	$(NIX) cabal run ecluse
