@@ -137,8 +137,16 @@ tasks:
       - task: coverage-unit
         vars: { SUITE: ecluse-integration }
       - |
-        hpc combine --union --output=dist-coverage/unit-combined.tix dist-coverage/ecluse-core-unit.tix dist-coverage/ecluse-unit.tix
-        hpc combine --union --output=dist-coverage/combined.tix dist-coverage/unit-combined.tix dist-coverage/ecluse-integration.tix
+        core_unit_tix="$(find dist-coverage -type f -name ecluse-core-unit.tix | head -n1)"
+        unit_tix="$(find dist-coverage -type f -name ecluse-unit.tix | head -n1)"
+        integration_tix="$(find dist-coverage -type f -name ecluse-integration.tix | head -n1)"
+        if [ -z "$core_unit_tix" ] || [ -z "$unit_tix" ] || [ -z "$integration_tix" ]; then
+          echo "coverage: missing a tier .tix under dist-coverage/ (did all three suites run?)" >&2
+          exit 1
+        fi
+        
+        hpc combine --union --output=dist-coverage/unit-combined.tix "$core_unit_tix" "$unit_tix"
+        hpc combine --union --output=dist-coverage/combined.tix dist-coverage/unit-combined.tix "$integration_tix"
         
         mix_args=()
         while IFS= read -r d; do
@@ -425,7 +433,7 @@ tasks:
       - mkdir -p sbom
       - sbomnix --cdx sbom/ecluse.cdx.json .#ecluse-bin
       - grype sbom:sbom/ecluse.cdx.json -o table -o json=grype.json -o sarif=grype.sarif
-      - bash scripts/grype-sarif-locations.sh grype.sarif
+      - jq '.runs[].results[]?.locations[]?.physicalLocation.artifactLocation.uri |= (if (. // "") == "" then "flake.lock" else . end)' grype.sarif > tmp.sarif && mv tmp.sarif grype.sarif
 
   scan-vulnix:
     desc: Secondary Nix-native cross-check (vulnix)
