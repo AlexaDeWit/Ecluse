@@ -171,6 +171,8 @@ tasks:
     sources:
       - '**/*.hs'
       - '**/*.sh'
+      - '**/*.yaml'
+      - '**/*.json'
       - 'flake.lock'
       - 'ecluse.cabal'
       - 'cabal.project.freeze'
