@@ -57,6 +57,11 @@ jobs:
       BENCH_LOAD_DURATION_SECONDS: ${{ github.event.inputs.duration-seconds || '30' }}
       BENCH_LOAD_CONCURRENCY: ${{ github.event.inputs.concurrency || '50' }}
       BENCH_LOAD_SERVE_MAX_IN_FLIGHT: ${{ github.event.inputs.serve-max-in-flight || '64' }}
+      BENCH_LOAD_ISOLATE_OHA: "1"
+      # Isolate the load generator from the server: ubuntu-latest has 4 cores. oha is
+      # pinned to core 0 by the harness; we restrict GHC to 3 capability threads so they
+      # neatly occupy the remaining 3 cores without self-contention.
+      GHCRTS: "-N3"
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0

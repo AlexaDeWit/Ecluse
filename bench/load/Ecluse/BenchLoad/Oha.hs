@@ -23,6 +23,7 @@ module Ecluse.BenchLoad.Oha (
 import Data.Aeson (FromJSON (parseJSON), eitherDecode, withObject, (.!=), (.:), (.:?))
 import Data.Map.Strict qualified as Map
 import GHC.IO.Handle (hClose)
+import System.Environment (lookupEnv)
 import System.Process.Typed (proc, readProcessStdout_)
 import UnliftIO.Temporary (withSystemTempFile)
 
@@ -109,7 +110,11 @@ runOhaUrls concurrency durationSeconds urls =
 -- URL, or @--urls-from-file <path>@), and parse its JSON report.
 runOhaArgs :: Int -> Int -> [String] -> IO OhaReport
 runOhaArgs concurrency durationSeconds target = do
-    raw <- readProcessStdout_ (proc "oha" args)
+    isolate <- (== Just "1") <$> lookupEnv "BENCH_LOAD_ISOLATE_OHA"
+    let (cmd, finalArgs) = if isolate
+            then ("taskset", ["-c", "0", "oha"] <> args)
+            else ("oha", args)
+    raw <- readProcessStdout_ (proc cmd finalArgs)
     either (\err -> benchFail ("oha report did not parse: " <> toText err)) pure (eitherDecode raw)
   where
     args :: [String]
