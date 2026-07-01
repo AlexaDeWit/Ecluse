@@ -2611,7 +2611,7 @@
             "data": {
               "type": "tm.Process",
               "name": "\u00c9cluse Pilot\n(Ingestion Pipeline)",
-              "description": "Standalone Haskell binary that fetches, streams, and parses raw OSV data dumps from osv.dev public endpoints. It mints container credentials to produce a highly optimized, read-only osv.db and pushes it to S3/GCS.",
+              "description": "Pilot is strictly an unopinionated data ingestion pipeline. It solves the performance and rate-limiting bottleneck of querying osv.dev on the critical path by fetching vulnerability data and delivering an optimized osv.db to S3. It does not make security or blocking decisions. The proxy's Rules Engine is the sole opinionated enforcement point (e.g., evaluating the data to block based on CVE severity or EPSS scores, or to fast-lane remediation packages).",
               "outOfScope": false,
               "isTrustBoundary": false,
               "reasonOutOfScope": "",
