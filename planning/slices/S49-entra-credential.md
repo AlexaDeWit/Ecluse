@@ -9,6 +9,7 @@ arch-refs:
   - docs/architecture/cloud-backends.md#credential-provider
   - docs/architecture/cloud-backends.md#azure-backends-designed-for-furthest-out
 pr: null
+issue: 596
 ---
 
 # S49, Entra ID credential leaf

@@ -10,6 +10,7 @@ arch-refs:
   - docs/architecture/configuration.md#configuration
   - docs/architecture/configuration.md#outbound-registry-credentials
 pr: null
+issue: 588
 ---
 
 # S30, GCP composition wiring

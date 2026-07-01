@@ -9,6 +9,7 @@ arch-refs:
   - docs/architecture/cloud-backends.md#queue-abstraction
   - docs/architecture/cloud-backends.md#azure-backends-designed-for-furthest-out
 pr: null
+issue: 595
 ---
 
 # S48, Azure `MirrorQueue` backend

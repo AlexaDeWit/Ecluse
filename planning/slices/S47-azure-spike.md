@@ -10,6 +10,7 @@ arch-refs:
   - docs/architecture/cloud-backends.md#haskell-client-maturity--a-design-risk-to-retire-early
   - docs/architecture/technology-stack.md
 pr: null
+issue: 594
 ---
 
 # S47, Azure queue de-risking spike (decision gate)

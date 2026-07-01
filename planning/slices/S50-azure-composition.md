@@ -10,6 +10,7 @@ arch-refs:
   - docs/architecture/cloud-backends.md#azure-backends-designed-for-furthest-out
   - docs/architecture/configuration.md#configuration
 pr: null
+issue: 597
 ---
 
 # S50, Azure composition wiring

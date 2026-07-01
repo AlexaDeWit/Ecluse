@@ -9,6 +9,7 @@ arch-refs:
   - docs/architecture/web-layer.md#web-layer
   - docs/architecture/security.md
 pr: null
+issue: 598
 ---
 
 # S54, Bounded-memory streaming: residency-invariant gating correctness test

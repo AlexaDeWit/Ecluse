@@ -8,6 +8,7 @@ test-tier: []
 arch-refs:
   - docs/architecture/release-supply-chain.md#releases--container-image
 pr: null
+issue: 590
 ---
 
 # S41, Image runtime smoke (distroless dynamic-link verification)

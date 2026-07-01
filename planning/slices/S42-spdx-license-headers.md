@@ -8,6 +8,7 @@ test-tier: []
 arch-refs:
   - docs/architecture/release-supply-chain.md#releases--container-image
 pr: null
+issue: 591
 ---
 
 # S42, Per-file SPDX license headers + new-file lint
