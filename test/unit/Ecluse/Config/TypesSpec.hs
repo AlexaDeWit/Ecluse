@@ -6,7 +6,7 @@ import Data.Text qualified as T
 import Test.Hspec
 
 import Ecluse.Config.Rule (PolicyError (..), renderPolicyError)
-import Ecluse.Config.Types (CredentialBackend (..), QueueBackend (..), mkUrl, parseCredentialBackend, renderCredentialBackend, unUrl)
+import Ecluse.Config.Types (CredentialBackend (..), QueueBackend (..), mkUrl, parseCredentialBackend, parseQueueBackend, renderCredentialBackend, unUrl)
 import Ecluse.Core.Wire (parseWire, renderWire)
 
 spec :: Spec
@@ -27,6 +27,17 @@ backendSpec = describe "backend selection" $ do
             renderWire MemoryQueue `shouldBe` "memory"
         it "rejects an unknown name, naming the accepted set" $
             (parseWire "kafka" :: Either Text QueueBackend)
+                `shouldBe` Left "unknown queue provider \"kafka\" (expected one of: sqs, pubsub, memory)"
+
+    describe "parseQueueBackend" $ do
+        it "parses sqs to SqsQueue" $
+            parseQueueBackend "sqs" `shouldBe` Right SqsQueue
+        it "parses memory to MemoryQueue" $
+            parseQueueBackend "memory" `shouldBe` Right MemoryQueue
+        it "parses pubsub to PubSubQueue" $
+            parseQueueBackend "pubsub" `shouldBe` Right PubSubQueue
+        it "rejects unknown backends" $
+            parseQueueBackend "kafka"
                 `shouldBe` Left "unknown queue provider \"kafka\" (expected one of: sqs, pubsub, memory)"
 
     describe "CredentialBackend" $ do
