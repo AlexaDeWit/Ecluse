@@ -392,11 +392,32 @@ tasks:
       - cp -R web/static/. _site/
       - cp docs/branding/logo.svg docs/branding/favicon-32.png docs/branding/lock-illustration.svg docs/social-preview.png _site/
       - sh -c 'mkdir -p _site/vendor && cp "$MERMAID_JS" _site/vendor/mermaid.min.js && cp "$REDOC_JS" _site/vendor/redoc.standalone.js'
-      - pandoc MOTIVATION.md -o _site/motivation.html {{.PANDOC_FLAGS}} -M title="Why Écluse?"
-      - pandoc ALTERNATIVES.md -o _site/alternatives.html {{.PANDOC_FLAGS}} -M title="Alternatives"
-      - pandoc USAGE.md -o _site/usage.html {{.PANDOC_FLAGS}} --lua-filter web/embed-config.lua -M title="Operator Manual"
-      - pandoc AI-DISCLOSURE.md -o _site/ai-disclosure.html {{.PANDOC_FLAGS}} -M title="Built with AI"
-      - pandoc web/threat-model.md -o _site/threat-model.html {{.PANDOC_FLAGS}} --lua-filter web/threat-register.lua -M title="Threat Model"
+      - task: site:pandoc
+
+  site:pandoc:
+    internal: true
+    deps:
+      - task: site:pandoc-page
+        vars: { SRC: "MOTIVATION.md", OUT: "motivation.html", TITLE: "Why Écluse?" }
+      - task: site:pandoc-page
+        vars: { SRC: "ALTERNATIVES.md", OUT: "alternatives.html", TITLE: "Alternatives" }
+      - task: site:pandoc-page
+        vars: { SRC: "USAGE.md", OUT: "usage.html", TITLE: "Operator Manual", EXTRA_FLAGS: "--lua-filter web/embed-config.lua" }
+      - task: site:pandoc-page
+        vars: { SRC: "AI-DISCLOSURE.md", OUT: "ai-disclosure.html", TITLE: "Built with AI" }
+      - task: site:pandoc-page
+        vars: { SRC: "web/threat-model.md", OUT: "threat-model.html", TITLE: "Threat Model", EXTRA_FLAGS: "--lua-filter web/threat-register.lua" }
+
+  site:pandoc-page:
+    internal: true
+    sources:
+      - '{{.SRC}}'
+      - web/template.html
+      - web/static/style.css
+    generates:
+      - '_site/{{.OUT}}'
+    cmds:
+      - pandoc '{{.SRC}}' -o '_site/{{.OUT}}' {{.PANDOC_FLAGS}} {{if .EXTRA_FLAGS}}{{.EXTRA_FLAGS}}{{end}} -M title="{{.TITLE}}"
 
   nix-build:
     desc: Build the release artifact via Nix (hermetic)
