@@ -57,7 +57,7 @@ scenarios = do
                 -- probe project's own `postinstall` would create a sentinel; a successful install
                 -- that creates none proves npm_config_ignore_scripts held.
                 (installed, scriptRan) <- installWithLifecycleProbe e2e
-                shouldSucceed installed
+                void $ shouldSucceed installed
                 scriptRan `shouldBe` False
 
         describe "server↔worker -- the integrity gate" $
