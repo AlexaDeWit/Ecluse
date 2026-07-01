@@ -120,5 +120,12 @@ fi
 echo "Pinning nixpkgs to $NIXPKGS_COMMIT..."
 nix --extra-experimental-features "nix-command flakes" registry pin nixpkgs "github:NixOS/nixpkgs/$NIXPKGS_COMMIT"
 
+# --- 5. Pre-arm Nix shells ---
+echo "Pre-arming Nix shells (ci, develop, mcp)..."
+for shell in ci develop mcp; do
+    echo "Pre-arming shell: $shell..."
+    nix --extra-experimental-features "nix-command flakes" develop ".#$shell" --command true
+done
+
 echo "Nix bootstrap complete."
 nix --version
