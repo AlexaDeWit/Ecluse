@@ -67,9 +67,22 @@ tasks:
       - cabal test ecluse-smoke --test-show-details=direct
 
   test-e2e:
-    desc: Run the end-to-end suite (builds + runs the real image; CI-gating)
+    desc: End-to-end suite against a locally built OCI image (requires E2E image to run tests, E2E daemon must be active, E2E deps must be built)
     cmds:
-      - bash scripts/e2e.sh
+      - |
+        echo "==> building the OCI image (.#dockerImage)"
+        img_archive="$(nix build .#dockerImage --no-link --print-out-paths)"
+        
+        echo "==> loading the image into docker"
+        tag="$(docker load <"$img_archive" | sed -n 's/^Loaded image: //p' | head -1)"
+        if [ -z "$tag" ]; then
+          echo "could not determine the loaded image tag from 'docker load'" >&2
+          exit 1
+        fi
+        echo "==> image: $tag"
+        
+        echo "==> running ecluse-e2e"
+        ECLUSE_E2E_IMAGE="$tag" cabal test ecluse-e2e --test-show-details=direct
 
   test-all:
     desc: Run every test suite
@@ -111,8 +124,34 @@ tasks:
 
   coverage:
     desc: Combined unit + integration coverage matching Codecov
+    preconditions:
+      - sh: docker info >/dev/null 2>&1
+        msg: "coverage: the combined report needs a running Docker daemon (ecluse-integration drives ministack containers via testcontainers)."
+    env:
+      ECLUSE_COVERAGE_QUIET_PARTIAL: 1
     cmds:
-      - bash scripts/coverage-combined.sh {{.COVERAGE_FLAGS}}
+      - task: coverage-unit
+        vars: { SUITE: ecluse-core-unit }
+      - task: coverage-unit
+        vars: { SUITE: ecluse-unit }
+      - task: coverage-unit
+        vars: { SUITE: ecluse-integration }
+      - |
+        hpc combine --union --output=dist-coverage/unit-combined.tix dist-coverage/ecluse-core-unit.tix dist-coverage/ecluse-unit.tix
+        hpc combine --union --output=dist-coverage/combined.tix dist-coverage/unit-combined.tix dist-coverage/ecluse-integration.tix
+        
+        mix_args=()
+        while IFS= read -r d; do
+          mix_args+=(-m "$d")
+        done < <(find dist-coverage -type d -path '*/hpc/vanilla/mix')
+        
+        support_exclude=()
+        while IFS= read -r module; do
+          support_exclude+=(-x "$module")
+        done < <(find test/support -name '*.hs' | sed -e 's#^test/support/##' -e 's#/#.#g' -e 's#\.hs$##')
+        
+        hpc-codecov "${mix_args[@]}" -s . -x Main -x Paths_ecluse "${support_exclude[@]}" -f codecov -o coverage/combined.json dist-coverage/combined.tix
+        echo "coverage: wrote coverage/combined.json (combined core-unit ∪ app-unit ∪ integration — matches Codecov's merged total)"
 
   coverage-unit:
     desc: Fast, Docker-free unit-only coverage
