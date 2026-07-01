@@ -59,7 +59,7 @@ jobs:
       # never gates on performance; this step fails only on a genuine benchmark failure.
       - name: Run benchmarks
         run: |
-          nix develop .#bench --command task bench BENCH_OPTS='--csv bench-results.csv' 2>&1 | tee bench-output.txt
+          nix develop .#bench --command task bench BENCH_OPTS='--csv bench-results.csv --stdev 20' 2>&1 | tee bench-output.txt
 
       - name: Render results to the run summary
         if: always()
