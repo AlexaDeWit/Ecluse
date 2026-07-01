@@ -73,7 +73,10 @@ tasks:
 
   test-all:
     desc: Run every test suite
-    deps: [test, test-integration, test-smoke]
+    cmds:
+      - task: test
+      - task: test-integration
+      - task: test-smoke
 
   bench:
     desc: Run the work-per-request benchmarks
@@ -252,23 +255,24 @@ tasks:
 
   check:
     desc: Fast pre-push checks
-    deps:
-      - build
-      - coverage
-      - doctest
-      - format-check
-      - lint
-      - sast
-      - cabal-check
-      - lint-workflows
-      - lint-scripts
-      - test-scripts
+    cmds:
+      - task: build
+      - task: coverage
+      - task: doctest
+      - task: format-check
+      - task: lint
+      - task: sast
+      - task: cabal-check
+      - task: lint-workflows
+      - task: lint-scripts
+      - task: test-scripts
 
   gate:
     desc: Reproduce the full CI gate locally
-    deps:
-      - check
-      - docs-check
+    cmds:
+      - task: check
+      - task: test-integration
+      - task: docs-check
 
   run:
     desc: Run the proxy
