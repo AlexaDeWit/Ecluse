@@ -4,7 +4,7 @@ module Ecluse.E2E.Harness.Types (
     defaultE2EConfig,
     GlobalDataPlane (..),
     NpmResult (..),
-    NpmProject (..)
+    NpmProject (..),
 ) where
 
 import Network.HTTP.Client (Manager)

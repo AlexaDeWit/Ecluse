@@ -18,7 +18,6 @@ module Ecluse.E2E.Harness.Npm (
     publishVersion,
 ) where
 
-
 import Data.ByteString.Lazy qualified as LBS
 
 import Data.Text qualified as T
@@ -33,12 +32,12 @@ import UnliftIO.Environment (getEnvironment)
 import Ecluse.E2E.Harness.Docker (uniqueSuffix)
 import Ecluse.E2E.Harness.Types
 
-shouldSucceed :: MonadIO m => NpmResult -> m NpmResult
+shouldSucceed :: (MonadIO m) => NpmResult -> m NpmResult
 shouldSucceed res = liftIO $ case npmExit res of
     ExitSuccess -> pure res
     _ -> expectationFailure ("npm failed!\nSTDOUT:\n" <> T.unpack (npmStdout res) <> "\nSTDERR:\n" <> T.unpack (npmStderr res)) >> pure res
 
-shouldFail :: MonadIO m => NpmResult -> m NpmResult
+shouldFail :: (MonadIO m) => NpmResult -> m NpmResult
 shouldFail res = liftIO $ case npmExit res of
     ExitSuccess -> expectationFailure ("npm incorrectly succeeded!\nSTDOUT:\n" <> T.unpack (npmStdout res) <> "\nSTDERR:\n" <> T.unpack (npmStderr res)) >> pure res
     _ -> pure res

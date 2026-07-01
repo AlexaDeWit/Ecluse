@@ -15,7 +15,6 @@ per-test 'around' so it boots no environment until it is implemented.
 -}
 module Ecluse.E2E.SuiteSpec (spec) where
 
-
 import Data.Text qualified as T
 
 import Test.Hspec
@@ -108,7 +107,6 @@ scenarios = do
                     mirrored <- verdaccioHasVersion e2e name ver -- (4) the worker mirrors it to private
                     mirrored `shouldBe` True
                     void $ withUpstreamPaused e2e (npmCiIn proj) >>= shouldSucceed -- (5) public down → from the mirror
-
         describe "first-party publish -- opt-in posture" $
             it "answers a publish with 405 when no publication target is configured" $ \e2e -> do
                 -- The base topology sets no ECLUSE_PUBLICATION_TARGET, so the publish path is
@@ -289,8 +287,6 @@ publishScenarios = do
                     threadDelay 1500000
                     reached <- verdaccioHasVersionNow e2e name ver
                     reached `shouldBe` False
-
-
 
 {- | Placeholders for not-yet-implemented work, kept outside 'around' so they boot no
 environment. Graceful drain (#160) @SIGTERM@s the proxy, so when written it belongs in the

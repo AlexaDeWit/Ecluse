@@ -20,7 +20,6 @@ module Ecluse.E2E.Harness.Docker (
     uniqueSuffix,
 ) where
 
-
 import Data.ByteString.Lazy qualified as LBS
 import Data.Text qualified as T
 import Data.Time.Clock.POSIX (getPOSIXTime)
@@ -54,7 +53,6 @@ import System.Process.Typed (proc, readProcess, readProcessStdout)
 import UnliftIO (bracket, bracket_, handleAny)
 import UnliftIO.Concurrent (threadDelay)
 
-
 import Ecluse.E2E.Fixtures (buildFixtures, fixturePackages)
 import Ecluse.E2E.Harness.Types
 
@@ -67,12 +65,13 @@ e2eUnavailable = do
     useExisting <- lookupEnv "ECLUSE_E2E_USE_EXISTING"
     case useExisting of
         Just "1" -> pure Nothing
-        _ -> lookupEnv imageVar >>= \case
-            Nothing -> pure (Just (imageVar <> " is unset -- run via `make test-e2e`"))
-            Just "" -> pure (Just (imageVar <> " is empty -- run via `make test-e2e`"))
-            Just _ -> do
-                ok <- dockerDaemonReachable
-                pure (if ok then Nothing else Just "no reachable docker daemon")
+        _ ->
+            lookupEnv imageVar >>= \case
+                Nothing -> pure (Just (imageVar <> " is unset -- run via `make test-e2e`"))
+                Just "" -> pure (Just (imageVar <> " is empty -- run via `make test-e2e`"))
+                Just _ -> do
+                    ok <- dockerDaemonReachable
+                    pure (if ok then Nothing else Just "no reachable docker daemon")
 
 imageVar :: String
 imageVar = "ECLUSE_E2E_IMAGE"
@@ -194,15 +193,16 @@ withE2EWith cfg action gdp = do
         Just "1" -> do
             manager <- newManager defaultManagerSettings
             let base = "http://127.0.0.1:4873"
-            action E2E
-                { e2eRegistry = base <> "/npm/"
-                , e2eBaseUrl = base
-                , e2eVerdaccio = "http://127.0.0.1:4874" -- Assuming local verdaccio is on 4874 in local dev
-                , e2eStubContainer = gdpStub gdp
-                , e2eProxyContainer = "ecluse-proxy" -- Placeholder for local dev
-                , e2eCollectorContainer = if ecCollector cfg then Just "otelcol" else Nothing
-                , e2eManager = manager
-                }
+            action
+                E2E
+                    { e2eRegistry = base <> "/npm/"
+                    , e2eBaseUrl = base
+                    , e2eVerdaccio = "http://127.0.0.1:4874" -- Assuming local verdaccio is on 4874 in local dev
+                    , e2eStubContainer = gdpStub gdp
+                    , e2eProxyContainer = "ecluse-proxy" -- Placeholder for local dev
+                    , e2eCollectorContainer = if ecCollector cfg then Just "otelcol" else Nothing
+                    , e2eManager = manager
+                    }
         _ -> do
             image <- maybe (fail (imageVar <> " unset")) pure =<< lookupEnv imageVar
             sfx <- uniqueSuffix
