@@ -155,6 +155,7 @@ data AppConfig = AppConfig
     , cfgPublicUrl :: Maybe Url
     , cfgMinPublicIntegrity :: MinIntegrity
     , cfgMinTrustedIntegrity :: MinTrustedIntegrity
+    , cfgOsvDataDir :: FilePath
     }
     deriving stock (Eq, Show)
 

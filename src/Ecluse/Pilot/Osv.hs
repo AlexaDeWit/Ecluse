@@ -75,20 +75,38 @@ instance FromJSON OsvEvent where
             <*> v .:? "fixed"
 
 {- | The necessary subset of data requested by the goal:
-package names, ecosystem identifiers, and fixedVersion remediation boundaries.
+package names, ecosystem identifiers, cve_id, and remediation boundaries.
 -}
 data ExtractedOsv = ExtractedOsv
     { extPackage :: Text
     , extEcosystem :: Text
-    , extFixedVersions :: [Text]
+    , extCveId :: Text
+    , extIntroduced :: Maybe Text
+    , extFixed :: Maybe Text
     }
     deriving stock (Show, Eq)
 
 extractFromAdvisory :: OsvAdvisory -> [ExtractedOsv]
 extractFromAdvisory adv = do
-    affs <- maybeToList (osvAffected adv)
-    aff <- affs
+    aff <- fromMaybe [] (osvAffected adv)
     let pkg = affectedPackage aff
-        rngs = fromMaybe [] (affectedRanges aff)
-        fixed = [f | r <- rngs, e <- rangeEvents r, f <- maybeToList (eventFixed e)]
-    pure $ ExtractedOsv (packageName pkg) (packageEcosystem pkg) fixed
+    rng <- fromMaybe [] (affectedRanges aff)
+    (intro, fixed) <- extractBounds (rangeEvents rng)
+    pure $
+        ExtractedOsv
+            { extPackage = packageName pkg
+            , extEcosystem = packageEcosystem pkg
+            , extCveId = osvId adv
+            , extIntroduced = intro
+            , extFixed = fixed
+            }
+
+extractBounds :: [OsvEvent] -> [(Maybe Text, Maybe Text)]
+extractBounds = go Nothing
+  where
+    go (Just i) [] = [(Just i, Nothing)]
+    go Nothing [] = []
+    go current (e : es)
+        | Just i <- eventIntroduced e = go (Just i) es
+        | Just f <- eventFixed e = (current, Just f) : go Nothing es
+        | otherwise = go current es
