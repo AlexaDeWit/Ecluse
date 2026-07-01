@@ -351,7 +351,7 @@ running the gem:
 1. **`/quick/Marshal.4.8/{name}-{version}.gemspec.rz`**, a single version's
    gemspec, zlib-compressed Ruby Marshal. Cheapest way to read `extensions`
    without the full artifact (captured: `200`, `application/octet-stream`).
-2. **Inside the `.gem`**, `metadata.gz` is the YAML-serialized
+2. **Inside the `.gem`**, `metadata.gz` is the YAML-serialised
    `Gem::Specification`. Captured live (`bcrypt`):
 
 ```yaml
@@ -571,7 +571,7 @@ separate concern), but documented so "act as a gem server" is complete.
 A wire type model, sharing vocabulary with [`npm.md` §11](npm.md#11-type-model)
 and [`pypi.md` §11](pypi.md#11-type-model) for easy comparison. Lenient on input
 (ignore unknown keys; tolerate the plain-text Compact Index, JSON, and
-Ruby-serialized gemspec forms), strict on output. ⚠️ = a shape that differs
+Ruby-serialised gemspec forms), strict on output. ⚠️ = a shape that differs
 materially from the npm wire model.
 
 ### Shared scalars
