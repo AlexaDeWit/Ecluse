@@ -39,7 +39,9 @@ hosts nothing itself. The design is in [`docs/architecture.md`](docs/architectur
 
 ## Deployment model
 
-Écluse ships as a single, reproducible container image providing a **unified multicall executable**. It can run the HTTP proxy server (`ecluse serve`), the OSV ingestion pipeline (`ecluse pilot`), or the registry cleanup worker (`ecluse dredger`) depending on the container command. All three roles share the exact same configuration file and rule definitions. The default command runs the `serve` process (the HTTP front door on `ECLUSE_PORT`, default `4873`) and, alongside it, the mirror worker. Point your package manager at it as a registry (see
+Écluse ships as a single, reproducible container image providing a **unified multicall executable**. It can run the HTTP proxy server (`ecluse proxy`), the OSV ingestion pipeline (`ecluse pilot`), or the registry cleanup worker (`ecluse dredger`) depending on the container command. All three roles share the exact same configuration file and rule definitions. 
+
+The default command runs the `proxy` process (the HTTP front door on `ECLUSE_PORT`, default `4873`) and, alongside it, the mirror worker. While the `proxy` process is designed to scale horizontally behind a load balancer, **Écluse Pilot and Écluse Dredger must be deployed as singletons** (exactly one running instance each). Running multiple instances of Pilot or Dredger will cause race conditions, duplicate API calls, and aggressive overlapping registry deletions. Point your package manager at the proxy as a registry (see
 [Connecting your clients](#connecting-your-clients)).
 
 Before you run a published image, **verify its provenance and SBOM attestations**: the
@@ -141,119 +143,46 @@ operator reference. **Keep the two in sync** when either changes.
 
 ### Environment variables
 
-`ECLUSE_PORT`
-: _(No, default `4873`)_ TCP port the proxy listens on. Must be in `0..65535` (`0` binds an OS-assigned ephemeral port); an out-of-range value is rejected at load.
-
-`ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM`
-: _(**Yes**)_ URL of the private upstream registry (the authority for reads under the default `passthrough` strategy).
-
-`ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM`
-: _(No, default `https://registry.npmjs.org`)_ URL of the public upstream, queried anonymously and gated by the rules.
-
-`ECLUSE_PUBLIC_URL`
-: _(Recommended)_ The proxy's own externally-reachable base URL (e.g. `https://registry.example.com`), used to rewrite each served `dist.tarball` to an **absolute** URL clients fetch back through the proxy. **Unset, tarball URLs are path-relative, which the `npm` CLI cannot install from**; it reads a leading-slash `dist.tarball` as a local `file:` path, so set this for any deployment that serves real `npm install`s.
-
-`ECLUSE_MOUNTS__NPM__MIRROR_TARGET`
-: _(No, default `ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM`)_ Registry that approved packages are mirrored to. Unset ⇒ folds onto the private upstream (one registry, read and written). The write credential does **not** fold, set `ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER`.
-
-`ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER`
-: _(No, default `static`)_ Mirror-target write credential: `static` (`ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN`) or `codeartifact` (mints under the container/task role). `gcp-artifact-registry` is recognised but not yet built.
-
-`ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN`
-: _(No)_ Static write token, when `ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER=static` (the default).
-
-`ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_DOMAIN`
-: _(`codeartifact` only)_ CodeArtifact domain, or parsed from a CodeArtifact `ECLUSE_MOUNTS__NPM__MIRROR_TARGET` host.
-
-`ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_DOMAIN_OWNER`
-: _(`codeartifact` only)_ 12-digit owning account id, or parsed from the host (a non-account-id value is rejected at boot).
-
-`ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_REGION`
-: _(`codeartifact` only)_ Region, this key, else the host (its authoritative region), else `AWS_REGION`.
-
-`ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_TOKEN_DURATION`
-: _(No)_ Token lifetime in seconds, capped at `43200` (12 h).
-
-`ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET`
-: _(No)_ Where client `npm publish` (first-party packages) is written. **Opt-in: unset ⇒ a `PUT /{pkg}` is `405`** (no implicit write path). May be the same registry as the private upstream (so published packages are then readable via the private leg). **Protect this surface; see the warning below.**
-
-`ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN`
-: _(No)_ Static fallback credential for the publication target, forwarded only when a publishing client sends no token of its own. The default model is **passthrough**, the publisher's own forwarded token. **⚠️ A static token with an open edge lets any unauthenticated client publish under it; see the warning below.**
-
-`ECLUSE_MOUNTS__NPM__PUBLISH_SCOPES`
-: _(Required when `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET` is set)_ Comma-separated allow-list of package scopes a client may publish (e.g. `@acme,@beta`), the anti-shadowing guard. A publish whose name is outside the list is refused **before any upstream write**, so a client cannot publish a name that shadows a public package. It limits **names, not callers**; it is not authentication. An empty list with a publication target set is a fail-loud boot error.
-
-`ECLUSE_QUEUE_BACKEND`
-: _(No, default `sqs`)_ Mirror-queue backend: `sqs` (AWS), or `memory` (a bounded in-process queue, no cloud queue, at the cost of a **non-durable, best-effort** mirror; an explicit choice for a simple/single-node/air-gapped deployment, never an automatic fallback, selecting it warns loudly at boot). `pubsub` (GCP) is recognised but not yet built.
-
-`ECLUSE_QUEUE_URL`
-: _(Cloud backends only)_ Queue identifier: an SQS queue URL or a Pub/Sub `projects/<p>/topics/<t>` resource. **Required for the cloud backends** (absent ⇒ fail-loud at boot); **not needed for `memory`** (no external queue, ignored).
-
-`ECLUSE_QUEUE_MEMORY_MAX_DEPTH`
-: _(No, default `50000`)_ `memory` only. Cap on the in-process queue depth. A cold-cache `npm ci` enqueues thousands of jobs at once, so the queue is hard-bounded: an enqueue past the cap is **dropped (drop-newest)**, safe, since a dropped job is re-mirrored on the next demand, and rate-limit-logged. Positive integer.
-
-`AWS_REGION`
-: _(AWS backends only)_ Region for SQS and CodeArtifact.
-
-`AWS_ENDPOINT_URL_SQS` / `AWS_ENDPOINT_URL`
-: _(No)_ SQS endpoint override (AWS-SDK-standard). Point at a local emulator (`ministack`) or VPC endpoint; with one set, requests are signed with `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`. Unset ⇒ normal AWS resolution.
-
-`ECLUSE_GOOGLE_PROJECT`
-: _(GCP backends only)_ Project for Pub/Sub and Artifact Registry (credentials via ADC).
-
-`ECLUSE_AUTH_TOKEN`
-: _(No)_ If set, clients must present this token (`Bearer` / `_authToken`). Omit for network-secured deployments.
-
-`ECLUSE_MOUNTS__NPM__RESPECT_UPSTREAM_TARBALL_HOST`
-: _(No, default `false`)_ Secure default. When `false`, a tarball is fetched only from the **same allowlisted upstream that served the packument**; set `true` only for a registry that serves tarballs from a separate CDN/files host (widens the fetch surface to any allowlisted host). See [Securing network egress](#securing-network-egress-required).
-
-`ECLUSE_HELP_MESSAGE`
-: _(No)_ String appended to every denial message (e.g. a support channel).
-
-`ECLUSE_LOG_FORMAT`
-: _(No, default `json`)_ Log shape: `json` (one JSON object per line, for log collectors) or `console` (human-readable).
-
-`ECLUSE_TELEMETRY`
-: _(No, default `off`)_ OpenTelemetry master switch. With it `off`, no telemetry is emitted. When `on`, the SDK reads the standard `OTEL_*` variables.
-
-`ECLUSE_CVE_SYNC_INTERVAL`
-: _(No, default `3600`)_ How often the in-memory advisory index refreshes from OSV. **(with the CVE tier)**
-
-`ECLUSE_SHUTDOWN_DRAIN_TIMEOUT`
-: _(No, default `30`)_ Seconds the graceful shutdown waits for in-flight requests and in-progress artifact streams to finish before the process exits. Positive integer.
-
-`ECLUSE_SERVE_MAX_IN_FLIGHT`
-: _(No, default `16`)_ Process-wide cap on concurrent metadata materialisation: whole packument requests and the public-metadata gate reached by a tarball miss. Work beyond the cap is rejected immediately with `503 Service Unavailable` and `Retry-After: 1`; it is not placed in an application queue. Trusted private tarball hits stream outside the cap, as do health probes and cheap local routes. Positive integer. **Note**: operators deploying Écluse within an orchestration mesh (e.g., Istio) can configure the mesh to automatically manage retries upon receiving this 503 response. **Alerting note**: 503s returned with a `Retry-After: 1` header are a normal operational response indicating safe, intentional backpressure. Operational alerts on 503s should strictly exclude responses with this header, as true proxy or upstream failures (e.g., the public npm registry is down) will return a 503 *without* the `Retry-After: 1` header.
-
-`ECLUSE_PUBLIC_CONNECTIONS_PER_HOST`
-: _(No, default `10`)_ Maximum concurrent pooled connections to each public upstream host. Public metadata misses are single-flight-coalesced, so the default keeps the upstream library's conservative per-host bound. Positive integer.
-
-`ECLUSE_PRIVATE_CONNECTIONS_PER_HOST`
-: _(No, default `16`)_ Maximum concurrent pooled connections to each private upstream host. The default matches `ECLUSE_SERVE_MAX_IN_FLIGHT`, because private reads are deliberately per-request and are not coalesced across clients. Positive integer.
-
-`ECLUSE_CACHE_TTL`
-: _(No, default `60`)_ Seconds metadata is kept in the shared packument cache.
-
-`ECLUSE_CACHE_MAX_ENTRIES`
-: _(No, default `500`)_ Maximum number of items the metadata cache will hold.
-
-`ECLUSE_CACHE_MAX_BYTES`
-: _(No, default `52428800`, 50 MiB)_ Maximum total byte size for the metadata cache.
-
-`ECLUSE_MAX_RESPONSE_BYTES`
-: _(No, default `12582912`, 12 MiB)_ Largest upstream **metadata** body buffered before the fetch aborts fail-closed. Bounds memory against a hostile upstream returning a giant body. Positive integer.
-
-`ECLUSE_MAX_VERSION_COUNT`
-: _(No, default `100000`)_ Largest version count a packument may carry before it is refused. Bounds per-version rule evaluation against a version flood. Positive integer.
-
-`ECLUSE_MAX_NESTING_DEPTH`
-: _(No, default `64`)_ Deepest JSON nesting a decoded upstream document may reach before it is refused. Bounds CPU/stack against a pathologically nested payload. Positive integer.
-
-`ECLUSE_MIN_PUBLIC_INTEGRITY`
-: _(No, default `sha256`)_ Minimum integrity algorithm a **public** (untrusted) version's digest must meet to be served: `sha256`, `sha384`, `sha512`, or `blake2b`. A public version whose strongest digest is weaker (e.g. a legacy SHA-1 `shasum` only) is refused with a `403`. **Hard-floored at SHA-256**, `sha1`/`md5`/an unknown name is rejected at startup. The trusted private path has its own, loosenable floor (`ECLUSE_MIN_TRUSTED_INTEGRITY`).
-
-`ECLUSE_MIN_TRUSTED_INTEGRITY`
-: _(No, default `sha256`)_ Minimum integrity algorithm a **trusted** (private) version's digest must meet to be served. Defaults to `sha256`, so by default a SHA-1-only or hashless private version is dropped, exactly like a public one, but unlike the public floor is **loosenable below SHA-256**: `sha1`/`md5` are accepted for a legacy private mirror, where trust substitutes for cryptographic strength. An unknown name is still rejected at load.
+| Variable | Required | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `ECLUSE_PORT` | No | `4873` | TCP port the proxy listens on. Must be in `0..65535` (`0` binds an OS-assigned ephemeral port); an out-of-range value is rejected at load. |
+| `ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM` | Yes |  | URL of the private upstream registry (the authority for reads under the default `passthrough` strategy). |
+| `ECLUSE_MOUNTS__NPM__PUBLIC_UPSTREAM` | No | `https://registry.npmjs.org` | URL of the public upstream, queried anonymously and gated by the rules. |
+| `ECLUSE_PUBLIC_URL` | Recommended |  | The proxy's own externally-reachable base URL (e.g. `https://registry.example.com`), used to rewrite each served `dist.tarball` to an **absolute** URL clients fetch back through the proxy. **Unset, tarball URLs are path-relative, which the `npm` CLI cannot install from**; it reads a leading-slash `dist.tarball` as a local `file:` path, so set this for any deployment that serves real `npm install`s. |
+| `ECLUSE_MOUNTS__NPM__MIRROR_TARGET` | No | `ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM` | Registry that approved packages are mirrored to. Unset ⇒ folds onto the private upstream (one registry, read and written). The write credential does **not** fold, set `ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER`. |
+| `ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER` | No | `static` | Mirror-target write credential: `static` (`ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN`) or `codeartifact` (mints under the container/task role). `gcp-artifact-registry` is recognised but not yet built. |
+| `ECLUSE_MOUNTS__NPM__MIRROR_TARGET_TOKEN` | No |  | Static write token, when `ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER=static` (the default). |
+| `ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_DOMAIN` | Depends | `codeartifact` only | CodeArtifact domain, or parsed from a CodeArtifact `ECLUSE_MOUNTS__NPM__MIRROR_TARGET` host. |
+| `ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_DOMAIN_OWNER` | Depends | `codeartifact` only | 12-digit owning account id, or parsed from the host (a non-account-id value is rejected at boot). |
+| `ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_REGION` | Depends | `codeartifact` only | Region, this key, else the host (its authoritative region), else `AWS_REGION`. |
+| `ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_TOKEN_DURATION` | No |  | Token lifetime in seconds, capped at `43200` (12 h). |
+| `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET` | No |  | Where client `npm publish` (first-party packages) is written. **Opt-in: unset ⇒ a `PUT /{pkg}` is `405`** (no implicit write path). May be the same registry as the private upstream (so published packages are then readable via the private leg). **Protect this surface; see the warning below.** |
+| `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET_TOKEN` | No |  | Static fallback credential for the publication target, forwarded only when a publishing client sends no token of its own. The default model is **passthrough**, the publisher's own forwarded token. **⚠️ A static token with an open edge lets any unauthenticated client publish under it; see the warning below.** |
+| `ECLUSE_MOUNTS__NPM__PUBLISH_SCOPES` | Conditionally | If `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET` is set | Comma-separated allow-list of package scopes a client may publish (e.g. `@acme,@beta`), the anti-shadowing guard. A publish whose name is outside the list is refused **before any upstream write**, so a client cannot publish a name that shadows a public package. It limits **names, not callers**; it is not authentication. An empty list with a publication target set is a fail-loud boot error. |
+| `ECLUSE_QUEUE_BACKEND` | No | `sqs` | Mirror-queue backend: `sqs` (AWS), or `memory` (a bounded in-process queue, no cloud queue, at the cost of a **non-durable, best-effort** mirror; an explicit choice for a simple/single-node/air-gapped deployment, never an automatic fallback, selecting it warns loudly at boot). `pubsub` (GCP) is recognised but not yet built. |
+| `ECLUSE_QUEUE_URL` | Depends | Cloud backends only | Queue identifier: an SQS queue URL or a Pub/Sub `projects/<p>/topics/<t>` resource. **Required for the cloud backends** (absent ⇒ fail-loud at boot); **not needed for `memory`** (no external queue, ignored). |
+| `ECLUSE_QUEUE_MEMORY_MAX_DEPTH` | No | `50000` | `memory` only. Cap on the in-process queue depth. A cold-cache `npm ci` enqueues thousands of jobs at once, so the queue is hard-bounded: an enqueue past the cap is **dropped (drop-newest)**, safe, since a dropped job is re-mirrored on the next demand, and rate-limit-logged. Positive integer. |
+| `AWS_REGION` | Depends | AWS backends only | Region for SQS and CodeArtifact. |
+| `AWS_ENDPOINT_URL_SQS` / `AWS_ENDPOINT_URL` | No |  | SQS endpoint override (AWS-SDK-standard). Point at a local emulator (`ministack`) or VPC endpoint; with one set, requests are signed with `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`. Unset ⇒ normal AWS resolution. |
+| `ECLUSE_GOOGLE_PROJECT` | Depends | GCP backends only | Project for Pub/Sub and Artifact Registry (credentials via ADC). |
+| `ECLUSE_AUTH_TOKEN` | No |  | If set, clients must present this token (`Bearer` / `_authToken`). Omit for network-secured deployments. |
+| `ECLUSE_MOUNTS__NPM__RESPECT_UPSTREAM_TARBALL_HOST` | No | `false` | Secure default. When `false`, a tarball is fetched only from the **same allowlisted upstream that served the packument**; set `true` only for a registry that serves tarballs from a separate CDN/files host (widens the fetch surface to any allowlisted host). See [Securing network egress](#securing-network-egress-required). |
+| `ECLUSE_HELP_MESSAGE` | No |  | String appended to every denial message (e.g. a support channel). |
+| `ECLUSE_LOG_FORMAT` | No | `json` | Log shape: `json` (one JSON object per line, for log collectors) or `console` (human-readable). |
+| `ECLUSE_TELEMETRY` | No | `off` | OpenTelemetry master switch. With it `off`, no telemetry is emitted. When `on`, the SDK reads the standard `OTEL_*` variables. |
+| `ECLUSE_CVE_SYNC_INTERVAL` | Depends | Pilot only, default `3600` | How often the Écluse Pilot singleton refreshes the OSV database from upstream. |
+| `ECLUSE_SHUTDOWN_DRAIN_TIMEOUT` | No | `30` | Seconds the graceful shutdown waits for in-flight requests and in-progress artifact streams to finish before the process exits. Positive integer. |
+| `ECLUSE_SERVE_MAX_IN_FLIGHT` | No | `16` | Process-wide cap on concurrent metadata materialisation: whole packument requests and the public-metadata gate reached by a tarball miss. Work beyond the cap is rejected immediately with `503 Service Unavailable` and `Retry-After: 1`; it is not placed in an application queue. Trusted private tarball hits stream outside the cap, as do health probes and cheap local routes. Positive integer. **Note**: operators deploying Écluse within an orchestration mesh (e.g., Istio) can configure the mesh to automatically manage retries upon receiving this 503 response. **Alerting note**: 503s returned with a `Retry-After: 1` header are a normal operational response indicating safe, intentional backpressure. Operational alerts on 503s should strictly exclude responses with this header, as true proxy or upstream failures (e.g., the public npm registry is down) will return a 503 *without* the `Retry-After: 1` header. |
+| `ECLUSE_PUBLIC_CONNECTIONS_PER_HOST` | No | `10` | Maximum concurrent pooled connections to each public upstream host. Public metadata misses are single-flight-coalesced, so the default keeps the upstream library's conservative per-host bound. Positive integer. |
+| `ECLUSE_PRIVATE_CONNECTIONS_PER_HOST` | No | `16` | Maximum concurrent pooled connections to each private upstream host. The default matches `ECLUSE_SERVE_MAX_IN_FLIGHT`, because private reads are deliberately per-request and are not coalesced across clients. Positive integer. |
+| `ECLUSE_CACHE_TTL` | No | `60` | Seconds metadata is kept in the shared packument cache. |
+| `ECLUSE_CACHE_MAX_ENTRIES` | No | `500` | Maximum number of items the metadata cache will hold. |
+| `ECLUSE_CACHE_MAX_BYTES` | No | `52428800`, 50 MiB | Maximum total byte size for the metadata cache. |
+| `ECLUSE_MAX_RESPONSE_BYTES` | No | `12582912`, 12 MiB | Largest upstream **metadata** body buffered before the fetch aborts fail-closed. Bounds memory against a hostile upstream returning a giant body. Positive integer. |
+| `ECLUSE_MAX_VERSION_COUNT` | No | `100000` | Largest version count a packument may carry before it is refused. Bounds per-version rule evaluation against a version flood. Positive integer. |
+| `ECLUSE_MAX_NESTING_DEPTH` | No | `64` | Deepest JSON nesting a decoded upstream document may reach before it is refused. Bounds CPU/stack against a pathologically nested payload. Positive integer. |
+| `ECLUSE_MIN_PUBLIC_INTEGRITY` | No | `sha256` | Minimum integrity algorithm a **public** (untrusted) version's digest must meet to be served: `sha256`, `sha384`, `sha512`, or `blake2b`. A public version whose strongest digest is weaker (e.g. a legacy SHA-1 `shasum` only) is refused with a `403`. **Hard-floored at SHA-256**, `sha1`/`md5`/an unknown name is rejected at startup. The trusted private path has its own, loosenable floor (`ECLUSE_MIN_TRUSTED_INTEGRITY`). |
+| `ECLUSE_MIN_TRUSTED_INTEGRITY` | No | `sha256` | Minimum integrity algorithm a **trusted** (private) version's digest must meet to be served. Defaults to `sha256`, so by default a SHA-1-only or hashless private version is dropped, exactly like a public one, but unlike the public floor is **loosenable below SHA-256**: `sha1`/`md5` are accepted for a legacy private mirror, where trust substitutes for cryptographic strength. An unknown name is still rejected at load. |
 
 Configuration is **validated in full at startup, and the process refuses to start on any
 problem**: an unknown rule type, a bad URL, an unresolved policy reference. A
@@ -388,10 +317,10 @@ having) is in [Security: Outbound-Request & Input-Validation Invariants](docs/ar
 
 ### Securing Écluse Pilot & Dredger Services
 
-If you deploy the auxiliary services (the **Écluse Pilot** ingestion pipeline and the **Écluse Dredger** reaper), they require distinct, tightly scoped network configurations:
+If you deploy the auxiliary services (the **Écluse Pilot** ingestion pipeline and the **Écluse Dredger** reaper), they require distinct, tightly scoped network configurations. Additionally, **both services must be deployed as singletons (one replica only)**.
 
-- **Écluse Pilot**: Requires **no public ingress**. It requires egress to `osv.dev` public endpoints (to fetch raw vulnerability data), the cloud instance-metadata endpoint (to mint container credentials), and your configured object store (S3/GCS) with `s3:PutObject` permissions to upload the processed `osv.db`.
-- **Écluse Dredger**: Requires **no public ingress**. It requires egress _only_ to your private mirror (Registry B) to issue delete requests, and to the instance-metadata endpoint for credentials. It has a standing high-privilege delete capability, so isolating it from all untrusted networks is critical.
+- **Écluse Pilot (Singleton)**: Requires **no public ingress**. It requires egress to `osv.dev` public endpoints (to fetch raw vulnerability data), the cloud instance-metadata endpoint (to mint container credentials), and your configured object store (S3/GCS) with `s3:PutObject` permissions to upload the processed `osv.db`. Running multiple instances will cause overlapping writes and corrupted OSV databases.
+- **Écluse Dredger (Singleton)**: Requires **no public ingress**. It requires egress _only_ to your private mirror (Registry B) to issue delete requests, and to the instance-metadata endpoint for credentials. It has a standing high-privilege delete capability, so isolating it from all untrusted networks is critical. Running multiple instances will result in conflicting delete sweeps and rate-limit exhaustion against your registry.
 
 ## Locking down CI egress (recommended)
 
@@ -482,7 +411,7 @@ serve such a source, point it at the **private** (trusted) upstream slot, not th
   it); `GET /readyz` reports that config is loaded and the listener is serving. Readiness is
   deliberately lenient about public-upstream reachability so a transient upstream blip
   doesn't pull a healthy pod from rotation. The npm liveness probe `GET /-/ping` is answered
-  locally with `200 {}`.
+  locally with `200 {}`. **Pilot and Dredger** export identical `/livez` and `/readyz` probes on the same `ECLUSE_PORT`, allowing unified readiness checks across all container roles.
 - **Logs.** Structured, one JSON object per line by default (`ECLUSE_LOG_FORMAT=json`) for
   stdout log-collector autodiscovery, or `console` for local development. Bearer tokens are
   carried as a redacted type whose rendering is a placeholder, so token material never reaches

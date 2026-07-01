@@ -56,7 +56,8 @@ module Ecluse.Server (
     tracedApplication,
 
     -- * Running the server
-    runServer,
+    runWarp,
+    probeApplication,
 
     -- * Graceful shutdown
     DrainSignal,
@@ -333,12 +334,9 @@ match routes the remainder through that mount's binding; no match is the neutral
 -}
 dispatch :: ServerConfig -> Env -> Application
 dispatch cfg env request respond =
-    case pathInfo request of
-        ["livez"] -> liveness env >>= respond
-        ["readyz"] -> readiness (scDrain cfg) >>= respond
-        segments -> case matchMount (requestMethod request) (scMounts cfg) segments of
-            Nothing -> respond notFound
-            Just (binding, classified) -> serve env binding classified request respond
+    case matchMount (requestMethod request) (scMounts cfg) (pathInfo request) of
+        Just (binding, classified) -> serve env binding classified request respond
+        Nothing -> probeApplication (scDrain cfg) (heartbeatHealthyNow (envWorkerHeartbeat env)) request respond
 
 {- Serve a classified route under its matched mount. Dispatch builds the
 per-request 'RequestCtx' once -- the request runtime ('serveRuntimeOf') paired with the
@@ -468,23 +466,16 @@ notFound :: Response
 notFound =
     responseLBS status404 [(hContentType, "text/plain; charset=utf-8")] "Not Found\n"
 
-{- Liveness (@\/livez@): @200@ while the process is responsive, @503@ once the
-single-process mirror worker has stalled. The architecture folds the worker's
-consume-loop heartbeat into single-process liveness, so a worker whose loop has gone
-quiet past the staleness threshold ('Ecluse.Core.Worker.workerHeartbeatStaleAfter') fails
-liveness here (see @docs\/architecture\/cloud-backends.md@ → "Process model"); a
-worker still starting (no poll yet) or polling normally stays @200@.
-
-Liveness stays @200@ __throughout__ a graceful drain: a draining instance is alive
-and finishing its in-flight work, not unhealthy, so an orchestrator must not kill it
-prematurely -- that is the readiness probe's job (see 'readiness'). Worker staleness
-is the only thing that fails it.
--}
-liveness :: Env -> IO Response
-liveness env =
-    heartbeatHealthyNow (envWorkerHeartbeat env) <&> \case
-        True -> jsonResponse status200 "{\"status\":\"live\"}"
-        False -> jsonResponse status503 "{\"status\":\"worker stalled\"}"
+probeApplication :: DrainSignal -> IO Bool -> Application
+probeApplication drain checkLiveness request respond =
+    case pathInfo request of
+        ["livez"] -> do
+            alive <- checkLiveness
+            if alive
+                then respond (jsonResponse status200 "{\"status\":\"live\"}")
+                else respond (jsonResponse status503 "{\"status\":\"liveness check failed\"}")
+        ["readyz"] -> readiness drain >>= respond
+        _ -> respond notFound
 
 {- Readiness (@\/readyz@): @200@ when config is loaded and the listener is serving,
 @503@ once the instance is __draining__. It is deliberately __lenient about
@@ -589,8 +580,8 @@ __only when attached to an interactive terminal__ -- arms a watcher that forces 
 immediate halt on Ctrl-D (end of standard input), bypassing the drain like a second
 Ctrl-C. Outside a TTY (production) no watcher is installed and this changes nothing.
 -}
-runServer :: ServerConfig -> Env -> IO ()
-runServer cfg0 env = do
+runWarp :: ServerConfig -> IO Application -> IO ()
+runWarp cfg0 getApp = do
     drain <- newDrainSignal
     let cfg = cfg0{scDrain = drain}
         ShutdownDrainTimeout timeoutSecs = scDrainTimeout cfg
@@ -599,7 +590,7 @@ runServer cfg0 env = do
                 . Warp.setInstallShutdownHandler (installShutdownHandler drain)
                 . Warp.setGracefulShutdownTimeout (Just timeoutSecs)
                 $ Warp.defaultSettings
-    app <- tracedApplication cfg env
+    app <- getApp
     withInteractiveHalt defaultInteractiveHalt (Warp.runSettings settings app)
 
 {- Install the OS shutdown handler @warp@ asks for: on @SIGTERM@\/@SIGINT@, raise the
