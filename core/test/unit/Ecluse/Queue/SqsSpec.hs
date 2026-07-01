@@ -11,6 +11,7 @@ import Ecluse.Core.Queue.Sqs (
     decodeJob,
     defaultSqsConfig,
     encodeJob,
+    parseHashAlg,
  )
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Test.Package (
@@ -231,3 +232,18 @@ spec = do
             sqsWaitSeconds cfg `shouldBe` 20
         it "defaults the visibility timeout to 30 seconds" $
             sqsVisibilityTimeout cfg `shouldBe` Seconds 30
+
+    describe "parseHashAlg" $ do
+        it "parses valid algorithm names" $ do
+            parseHashAlg "sha1" `shouldBe` Just SHA1
+            parseHashAlg "sha256" `shouldBe` Just SHA256
+            parseHashAlg "sha384" `shouldBe` Just SHA384
+            parseHashAlg "sha512" `shouldBe` Just SHA512
+            parseHashAlg "md5" `shouldBe` Just MD5
+            parseHashAlg "blake2b" `shouldBe` Just Blake2b
+            parseHashAlg "sri" `shouldBe` Just SRI
+
+        it "rejects unknown algorithm names" $ do
+            parseHashAlg "crc32" `shouldBe` Nothing
+            parseHashAlg "SHA1" `shouldBe` Nothing
+            parseHashAlg "" `shouldBe` Nothing
