@@ -29,7 +29,9 @@ module Ecluse.Core.Security.Host (
     TarballHostPolicy (..),
     Origin (..),
     tarballHostAllowed,
-    -- * Internal test exports
+
+    -- * Internal for testing
+    isHex,
     isOctal,
 ) where
 
@@ -422,7 +424,8 @@ parseIPv6 host =
         if n <= 0xFFFF then Just (fromInteger n) else Nothing
 
     exactly8 :: [Word16] -> Maybe IpAddr
-    exactly8 gs = if length gs == 8 then Just (IpV6 gs) else Nothing
+    exactly8 gs@[_, _, _, _, _, _, _, _] = Just (IpV6 gs)
+    exactly8 _ = Nothing
 
 -- Whether @t@ is a non-empty run of decimal digits (no sign or whitespace).
 isDecimal :: Text -> Bool

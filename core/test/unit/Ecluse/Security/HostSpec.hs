@@ -17,8 +17,8 @@ import Ecluse.Core.Security (
     hostAddress,
     isAllowedUpstreamHost,
     isBlockedTarget,
-    isOctal,
     lowerCaseHosts,
+    isOctal,
     splitHostPort,
     tarballHostAllowed,
  )
