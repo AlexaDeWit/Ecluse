@@ -29,32 +29,37 @@ compileOsvToSqlite telemetry outDir ecosystem urlStr = do
     liftIO $ catchIOError (removeFile dbFile) (const $ pure ())
 
     bracket (liftIO $ open dbFile) (liftIO . close) $ \conn -> do
-        liftIO $
-            execute_
-                conn
-                "CREATE TABLE package_vulnerability_ranges (\
-                \  package_name TEXT NOT NULL,\
-                \  cve_id TEXT NOT NULL,\
-                \  introduced_version TEXT,\
-                \  fixed_version TEXT,\
-                \  severity TEXT,\
-                \  epss_score REAL,\
-                \  PRIMARY KEY (package_name, cve_id, introduced_version, fixed_version)\
-                \)"
-        liftIO $ execute_ conn "CREATE INDEX idx_package_name ON package_vulnerability_ranges(package_name)"
+        liftIO $ initSchema conn
 
         runConduit $
             streamOsvUrl telemetry urlStr
                 .| CL.chunksOf 2000
-                .| awaitForever
-                    ( \batch -> do
-                        liftIO $
-                            withTransaction conn $
-                                executeMany
-                                    conn
-                                    "INSERT INTO package_vulnerability_ranges (package_name, cve_id, introduced_version, fixed_version, severity, epss_score) VALUES (?, ?, ?, ?, NULL, NULL)"
-                                    (map osvToRow batch)
-                    )
+                .| sinkSqlite conn
+
     pure dbFile
+
+initSchema :: Connection -> IO ()
+initSchema conn = do
+    execute_
+        conn
+        "CREATE TABLE package_vulnerability_ranges (\
+        \  package_name TEXT NOT NULL,\
+        \  cve_id TEXT NOT NULL,\
+        \  introduced_version TEXT,\
+        \  fixed_version TEXT,\
+        \  severity TEXT,\
+        \  epss_score REAL,\
+        \  PRIMARY KEY (package_name, cve_id, introduced_version, fixed_version)\
+        \)"
+    execute_ conn "CREATE INDEX idx_package_name ON package_vulnerability_ranges(package_name)"
+
+sinkSqlite :: (MonadIO m) => Connection -> ConduitT [ExtractedOsv] o m ()
+sinkSqlite conn = awaitForever $ \batch ->
+    liftIO $
+        withTransaction conn $
+            executeMany
+                conn
+                "INSERT INTO package_vulnerability_ranges (package_name, cve_id, introduced_version, fixed_version, severity, epss_score) VALUES (?, ?, ?, ?, NULL, NULL)"
+                (map osvToRow batch)
   where
     osvToRow osv = (extPackage osv, extCveId osv, extIntroduced osv, extFixed osv)
