@@ -1,6 +1,3 @@
-{-# LANGUAGE ImportQualifiedPost #-}
-{-# LANGUAGE TypeFamilies #-}
-
 module Ecluse.Pilot (
     runPilot,
     runCompileOsv,
@@ -17,7 +14,7 @@ import Network.Wai (Application)
 import UnliftIO (async)
 
 import Ecluse.Boot (BootEnv (..))
-import Ecluse.Config (AppConfig (cfgOsvDbPath, cfgOsvSyncInterval, cfgOsvUrl, cfgPort))
+import Ecluse.Config (AppConfig (cfgCveSyncInterval, cfgOsvDbPath, cfgOsvUrl, cfgPort))
 import Ecluse.Log (moduleField)
 import Ecluse.Osv.Database (compileToSqlite)
 import Ecluse.Osv.Stream (streamOsvUrl)
@@ -50,7 +47,7 @@ runPilot bootEnv = do
             Just url -> do
                 let dbPath = cfgOsvDbPath config
                     -- Floor the interval at 1 hour (3600s) to avoid API hammering
-                    interval = max 3600 (cfgOsvSyncInterval config)
+                    interval = max 3600 (cfgCveSyncInterval config)
                 void . liftIO . async $ forever $ do
                     runKatipContextT logEnv (moduleField "Ecluse.Pilot") mempty $ do
                         logFM InfoS (ls ("Starting background OSV compilation from " <> url))

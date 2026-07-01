@@ -1,4 +1,3 @@
-{-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module Ecluse.Osv.DatabaseSpec (spec) where
@@ -13,7 +12,9 @@ import UnliftIO.Temporary (withSystemTempFile)
 
 import Ecluse.Osv (ExtractedOsv (..))
 import Ecluse.Osv.Database (compileToSqlite, lookupAdvisories, withAdvisoryDb)
-import Ecluse.Osv.Stream () -- For PrimMonad KatipContextT instance
+import Ecluse.Osv.Stream ()
+
+-- For PrimMonad KatipContextT instance
 
 spec :: Spec
 spec = describe "Ecluse.Pilot.Osv.Database" $ do

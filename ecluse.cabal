@@ -72,9 +72,11 @@ common shared
   default-language:   GHC2021
   default-extensions:
     DerivingStrategies
+    ImportQualifiedPost
     LambdaCase
     OverloadedStrings
     StrictData
+    TypeFamilies
 
   build-depends:
     , base        ^>=4.20
@@ -481,7 +483,7 @@ test-suite ecluse-unit
     Ecluse.LogSpec
     Ecluse.ManifestSpec
     Ecluse.PilotSpec
-    Ecluse.Pilot.OsvSpec
+    Ecluse.OsvSpec
     Ecluse.Osv.DatabaseSpec
     Ecluse.ProxySpec
     Ecluse.ServerSpec

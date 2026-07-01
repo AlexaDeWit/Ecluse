@@ -1,4 +1,3 @@
-{-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module Ecluse.Osv.Database (
@@ -70,8 +69,6 @@ withAdvisoryDb dbPath action =
             SQLite.execute_ conn "PRAGMA trusted_schema = OFF"
             action conn
         )
-
-
 -- | Fast lookup for a package's remediation boundaries (fixed versions).
 lookupAdvisories :: SQLite.Connection -> Text -> Text -> IO [Text]
 lookupAdvisories conn pkg eco =
