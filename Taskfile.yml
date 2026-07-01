@@ -252,8 +252,8 @@ tasks:
     cmds:
       - cabal build exe:ecluse --builddir=dist-stan --ghc-options=-fwrite-ide-info
       - stan --hiedir dist-stan --no-default
-  _cabal_checks:
-    internal: true
+  cabal-checks:
+    desc: Run all Cabal-dependent checks sequentially
     cmds:
       - task: build
       - task: coverage
@@ -263,7 +263,7 @@ tasks:
   check:
     desc: Fast pre-push checks
     deps:
-      - _cabal_checks
+      - cabal-checks
       - format-check
       - lint
       - sast
