@@ -13,6 +13,8 @@ it rests on — including the operator responsibilities, such as edge access con
 and storage-layer scanning, that it places out of scope — rather than restating
 them here.
 
+**Status Policy:** This model represents the strict reality of the `main` branch codebase today. A threat is only marked as `Mitigated` if its compensating control is physically implemented in code or formally delegated to a mandatory operator boundary. Threats with planned or roadmapped fixes (even if tracked in a milestone) remain `Open` until the corresponding code is merged, preventing any false sense of security.
+
 For the security *invariants and posture* — the outbound-request and
 input-validation contract the code upholds, and why — see [Security
 architecture](docs/architecture/security.md). That document is the narrative;

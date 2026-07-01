@@ -636,7 +636,7 @@
                 },
                 {
                   "number": 18,
-                  "status": "Open",
+                  "status": "Mitigated",
                   "severity": "High",
                   "title": "Proxy compromised via tampered OSV database",
                   "type": "Tampering",
@@ -644,6 +644,17 @@
                   "mitigation": "S3 bucket is private. Proxy IAM role is granted GetObject only. Atomic shadow-swap prevents partial reads. In addition, the proxy explicitly binds the SQLite connection to Read-Only mode and disables Trusted Schema (PRAGMA trusted_schema = OFF;) upon opening the connection to prevent execution of attacker-controlled triggers or views.",
                   "modelType": "STRIDE",
                   "id": "32d813d8-6bee-4fa3-acb2-d62efe5aff18"
+                },
+                {
+                  "number": 19,
+                  "status": "Open",
+                  "severity": "Medium",
+                  "title": "Docker Hub Static Credential Leakage",
+                  "type": "Information disclosure",
+                  "description": "Docker Hub does not support OIDC, forcing the CI release workflow to rely on a static, long-lived DOCKERHUB_TOKEN.",
+                  "mitigation": "The token is protected within a GitHub Environment requiring manual review and is tied to a repo-scoped machine account. However, it remains a static secret. The long-term goal is to migrate to an OIDC-capable registry or alternate auth.",
+                  "modelType": "STRIDE",
+                  "id": "006c7e3d-71f3-414f-87a5-901def6bf71e"
                 }
               ]
             }
@@ -1578,7 +1589,7 @@
               "outOfScope": false,
               "isTrustBoundary": false,
               "reasonOutOfScope": "",
-              "hasOpenThreats": true,
+              "hasOpenThreats": false,
               "isBidirectional": false,
               "isEncrypted": true,
               "isPublicNetwork": false,
@@ -1745,7 +1756,7 @@
               "outOfScope": false,
               "isTrustBoundary": false,
               "reasonOutOfScope": "",
-              "hasOpenThreats": true,
+              "hasOpenThreats": false,
               "isBidirectional": false,
               "isEncrypted": true,
               "isPublicNetwork": true,
@@ -1775,7 +1786,7 @@
                 },
                 {
                   "number": 16,
-                  "status": "Open",
+                  "status": "Mitigated",
                   "severity": "Low",
                   "title": "Connect-time reachability/timing oracle for an attacker-controlled allowlisted DNS",
                   "type": "Information disclosure",
@@ -1832,7 +1843,7 @@
               "outOfScope": false,
               "isTrustBoundary": false,
               "reasonOutOfScope": "",
-              "hasOpenThreats": true,
+              "hasOpenThreats": false,
               "isBidirectional": false,
               "isEncrypted": true,
               "isPublicNetwork": false,
@@ -2173,7 +2184,7 @@
               "outOfScope": false,
               "isTrustBoundary": false,
               "reasonOutOfScope": "",
-              "hasOpenThreats": true,
+              "hasOpenThreats": false,
               "isBidirectional": false,
               "isEncrypted": true,
               "isPublicNetwork": false,
@@ -2615,7 +2626,7 @@
               "outOfScope": false,
               "isTrustBoundary": false,
               "reasonOutOfScope": "",
-              "hasOpenThreats": false,
+              "hasOpenThreats": true,
               "handlesCardPayment": false,
               "handlesGoodsOrServices": false,
               "isWebApplication": false,
@@ -2653,6 +2664,17 @@
                   "mitigation": "Out of scope by trust assumption. A compromised security oracle is a foundational supply-chain compromise. Pilot relies on OSV to fast-lane remediations; if the oracle is hostile, the defensive mechanism is inherently defeated. We acknowledge this as an unavoidable killchain.",
                   "modelType": "STRIDE",
                   "id": "c87367bd-fc3f-4792-94b6-8db459011823"
+                },
+                {
+                  "number": 20,
+                  "status": "Open",
+                  "severity": "Medium",
+                  "title": "Pathological OSV Payload (DoS)",
+                  "type": "Denial of service",
+                  "description": "OSV.dev or a compromised upstream could serve an overly large, deeply nested, or malformed JSON file, consuming excessive CPU/memory and crashing the Pilot.",
+                  "mitigation": "Awaiting implementation. Pilot needs to bound HTTP response sizes and parse streams iteratively rather than strictly into memory.",
+                  "modelType": "STRIDE",
+                  "id": "3735906e-a06a-4e0f-ba45-894ba5400ce8"
                 }
               ]
             }
@@ -3014,7 +3036,7 @@
               "threats": [
                 {
                   "number": 14,
-                  "status": "Open",
+                  "status": "Mitigated",
                   "severity": "Medium",
                   "title": "Dredger inappropriately purges valid packages",
                   "type": "Denial of service",
@@ -3025,7 +3047,7 @@
                 },
                 {
                   "number": 15,
-                  "status": "Mitigated",
+                  "status": "Open",
                   "severity": "High",
                   "title": "Dredger container-role privilege escalation",
                   "type": "Elevation of privilege",
@@ -3036,7 +3058,7 @@
                 },
                 {
                   "number": 16,
-                  "status": "Mitigated",
+                  "status": "Open",
                   "severity": "High",
                   "title": "First-party data loss from collapsed registries",
                   "type": "Denial of service",
@@ -3047,7 +3069,7 @@
                 },
                 {
                   "number": 102,
-                  "status": "Mitigated",
+                  "status": "Open",
                   "severity": "Critical",
                   "title": "Accidental permanent deletion of registry data",
                   "type": "Elevation of privilege",
@@ -3055,6 +3077,17 @@
                   "mitigation": "Dredger must verify explicit operator consent before executing any destructive actions. It queries the target CodeArtifact repository for a specific resource tag (e.g., `Dredger: PermanentDeletionAllowed`). If absent, Dredger fails-closed. Additionally, it refuses to boot if MIRROR_TARGET == PUBLICATION_TARGET.",
                   "modelType": "STRIDE",
                   "id": "0b32b3e5-74f1-421c-8c9b-92a24fd2a00b"
+                },
+                {
+                  "number": 21,
+                  "status": "Open",
+                  "severity": "Medium",
+                  "title": "Massive Purge DoS",
+                  "type": "Denial of service",
+                  "description": "A bug in Dredger or malicious rule configuration could trigger thousands of deletion requests at once, exhausting registry API limits and effectively DoSing the private mirror.",
+                  "mitigation": "Awaiting implementation. Dredger's deletion logic must be explicitly batched and rate-limited.",
+                  "modelType": "STRIDE",
+                  "id": "0c922ee5-3ac6-4a85-89de-91feecf0f9f7"
                 }
               ]
             }

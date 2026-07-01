@@ -190,18 +190,14 @@ Renovate PR.
 
 **Haskell advisories, Renovate's OSV alerting.** HSEC advisories (the
 [Haskell Security Response Team](https://github.com/haskell/security-advisories)
-database) are exported to [OSV.dev](https://osv.dev), and Renovate maps the
-`hackage` datasource it extracts from `ecluse.cabal` to the OSV `Hackage`
-ecosystem, so `osvVulnerabilityAlerts: true` (set in
-[`renovate.json5`](../../.github/renovate.json5)) raises a fix-PR when an advisory
+database) are exported to [OSV.dev](https://osv.dev), and Renovate raises a fix-PR when an advisory
 affects one of our cabal deps. It must be the OSV-based opt-in: the default
 platform `vulnerabilityAlerts` (the GitHub Advisory Database) has no Hackage
-ecosystem, so the OSV flag is what brings HSEC coverage. This alerts on the
-**declared** cabal deps; a deeper audit of the full resolved install plan,transitive deps and GHC-boot libraries (`base`, `process`, …), with SARIF output, via `cabal-audit`, remains an optional future enhancement. (`cabal-audit` and
-the modern `hsec-tools` 0.5.x build cleanly on the current GHC 9.10 toolchain;
-the earlier "broken in nixpkgs" blocker applied to the pre-26.05 / GHC-9.6 set.)
-It stays deferred because the statically-linked Haskell deps are a lower-risk
-surface than the C libs grype already watches.
+ecosystem, so the OSV flag is what brings HSEC coverage. To ensure this covers the **full resolved install plan**
+(both direct and transitive dependencies), our [`renovate.json5`](../../.github/renovate.json5) configuration uses a custom
+regex manager to parse the `cabal.project.freeze` file exactly. GHC-boot libraries (`base`, `process`, etc.) are 
+intentionally ignored by Renovate since they move with the compiler, but they are covered by `grype`'s scan of the 
+final runtime closure.
 
 ## Posture scoring, OpenSSF Scorecard
 
