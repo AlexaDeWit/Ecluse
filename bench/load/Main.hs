@@ -1,11 +1,11 @@
-{- | The @bench-load@ entry point: Layer B of the benchmark strategy -- throughput and
+{- | The @bench-load@ entry point: the load benchmarks tier of the benchmark strategy -- throughput and
 latency under concurrent load against the real composed proxy.
 
-Unlike the Layer A work-per-request micro-benches (@ecluse-bench@, @tasty-bench@), this
+Unlike the work-per-request micro-benches (@ecluse-bench@, @tasty-bench@), this
 boots the real 'Ecluse.Server.application' on @warp@ over stub upstreams and drives it
 with @oha@, so it measures system behaviour -- saturation, latency tails, GC pauses --
 rather than a pure function's cost. It is __inform-only__ and __never gates__: the
-figures are reported for a human to read and trend (decision D1); the only red state is a
+figures are reported for a human to read and trend; the only red state is a
 literal failure (the harness cannot boot, @oha@ cannot run, or a scenario served
 nothing). See @docs\/architecture\/performance.md@.
 

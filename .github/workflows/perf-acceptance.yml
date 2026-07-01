@@ -4,7 +4,7 @@ name: Performance Acceptance
 # the curated catalogue set and checks Écluse's work-per-request overhead against the
 # version-controlled acceptance budget (acceptance/criteria.json).
 #
-# Standalone and deliberately NON-REQUIRED. Unlike the deterministic Layer A/B
+# Standalone and deliberately NON-REQUIRED. Unlike the deterministic work-per-request and load benchmarks
 # benchmarks (which red only on a literal crash), this job REDS on a real budget breach
 # — a visible red check on the pull request — so the team reacts when real-world
 # conditions degrade and decides: code regression, or reality outgrew the budget? But it

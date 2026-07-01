@@ -9,7 +9,7 @@ part of the reusable harness core, shared unchanged across every upstream a scen
 might target.
 
 The driver is deliberately tolerant of a degraded run -- a low success rate or non-2xx
-responses are reported, not thrown -- because Layer B is inform-only and characterises
+responses are reported, not thrown -- because the load benchmarks tier is inform-only and characterises
 behaviour rather than asserting a pass\/fail (see @docs\/architecture\/performance.md@).
 A genuinely broken run (the subprocess cannot start, or its output does not parse) does
 throw, since that is a literal harness failure, the one red state the layer recognises.

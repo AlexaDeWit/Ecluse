@@ -1,6 +1,6 @@
 ---
 id: S37
-title: Benchmark harness + Layer A work-per-request benches + PR-run CI (informational)
+title: Benchmark harness + work-per-request micro-benches + PR-run CI (informational)
 milestone: M9, Benchmarking & load testing
 status: merged
 depends-on: []
@@ -14,17 +14,17 @@ arch-refs:
 pr: 385
 ---
 
-# S37, Benchmark harness + Layer A work-per-request benches + PR-run CI (informational)
+# S37, Benchmark harness + work-per-request micro-benches + PR-run CI (informational)
 
 > Milestone **M9** · depends on:, (runs against the already-merged pure core) · tier: bench
 
 **Goal.** Stand up the benchmarking harness and the **work-per-request** layer over the
 pure `ecluse-core` already on `main`, plus the informational CI plumbing the whole
 milestone hangs off. M9 is **one capability, two layers** (see
-[performance.md](../../docs/architecture/performance.md)): this slice is **Layer A, work per request**, the *deterministic, machine-independent* signal (allocations /
-instructions). [S38](S38-pipeline-benchmarks.md) adds **Layer B, throughput &
+[performance.md](../../docs/architecture/performance.md)): this slice is **work-per-request micro-benches**, the *deterministic, machine-independent* signal (allocations /
+instructions). [S38](S38-pipeline-benchmarks.md) adds **load benchmarks**,
 latency under load**. Because every target here is already merged, S37 lands early and
-**de-risks the perf-CI pipeline** before Layer B builds on it.
+**de-risks the perf-CI pipeline** before load benchmarks build on it.
 
 **Posture (the whole milestone).** **Informational; never gates.** Not a `gate.needs`
 dependency. The workflow's *only* red state is a **literal benchmark failure** (build

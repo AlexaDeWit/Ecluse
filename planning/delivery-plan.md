@@ -265,8 +265,8 @@ for the first iteration. See [`docs/architecture/performance.md`](../docs/archit
 
 | ID | Slice | Depends on | Tier |
 |----|-------|------------|------|
-| [S37](slices/S37-benchmark-harness.md) | Harness + Layer A work-per-request benches + CI baseline | - | B |
-| [S38](slices/S38-pipeline-benchmarks.md) | Layer B, throughput & latency under load + mandatory traffic scenarios | S37 | B |
+| [S37](slices/S37-benchmark-harness.md) | Harness + work-per-request micro-benches + CI baseline | - | B |
+| [S38](slices/S38-pipeline-benchmarks.md) | Load benchmarks + mandatory traffic scenarios | S37 | B |
 | [S39](slices/S39-load-and-memory.md) | ~~Macro load + bounded-memory~~, **superseded** (load folded into S38; bounded-memory lifted out as a gating correctness item) | - | - |
 
 ### M10, Azure backends (lowest priority; after AWS & GCP)

@@ -1,6 +1,6 @@
 ---
 id: S38
-title: Layer B, throughput & latency under load, with the mandatory traffic scenarios (informational)
+title: Load benchmarks, with the mandatory traffic scenarios (informational)
 milestone: M9, Benchmarking & load testing
 status: merged
 depends-on: [S37]
@@ -15,11 +15,11 @@ arch-refs:
 pr: 410
 ---
 
-# S38, Layer B: throughput & latency under load, with the mandatory traffic scenarios (informational)
+# S38, Load benchmarks: with the mandatory traffic scenarios (informational)
 
 > Milestone **M9** · depends on: [S37](S37-benchmark-harness.md) (the harness + CI plumbing); the request pipeline (S14/S15/S33/S19) is merged · tier: bench
 
-**Goal.** Add **Layer B, throughput & latency under concurrency** to the harness: the
+**Goal.** Add **load benchmarks** to the harness: the
 *host-sensitive* layer that answers "does the proxy keep up with traffic?" by driving
 the **real `Application` on Warp/localhost over stub upstreams and the in-memory handle
 doubles**, with **configurable injected upstream latency + payload size**, under a real
@@ -27,9 +27,9 @@ concurrent load generator (`oha`). Hermetic and deterministic in shape (no netwo
 Docker). Like S37 it is **inform-only and never gates** (decision **D1**); it carries
 **no SLO**, it characterises and trends, it never passes or fails on a number.
 
-**Why both layers.** Allocations (S37, Layer A) are the *leading indicator* of the p99
-this slice measures, GC pauses are tail latency for an inline proxy. Layer A localises
-regressions deterministically; Layer B shows the throughput/latency shape under real
+**Why both tiers.** Allocations (S37, work-per-request micro-benches) are the *leading indicator* of the p99
+this slice measures, GC pauses are tail latency for an inline proxy. Work-per-request micro-benches localise
+regressions deterministically; load benchmarks show the throughput/latency shape under real
 concurrency. Two sides of one coin.
 
 **Acceptance criteria.**
@@ -60,7 +60,7 @@ concurrency. Two sides of one coin.
   allocations/request figure is measured over the whole bench process, so for the HTTP
   scenarios it folds in the in-process stub upstreams' allocations, a consistent
   over-count for trending, not a pure proxy per-request cost, not directly comparable to
-  Layer A. Peak residency is a process high-water mark that also spans the warm-up.)
+  work-per-request micro-benches. Peak residency is a process high-water mark that also spans the warm-up.)
 - [x] **Inform-only flow (D1/D2/D3).** Results render to **stdout and the run summary**
   and upload as a **per-run downloadable artifact**; **no `gate` wiring**, never fails on
   a regression. There is **no cross-run baseline and no PR-comparison comment**, both
@@ -83,7 +83,7 @@ concurrency. Two sides of one coin.
 - `.github/workflows/bench-load.yml`, the inform-only load job (`workflow_dispatch` +
   nightly `schedule`), off `gate`, first-party SHA-pinned actions, renders to the run
   summary, uploads this run's results.
-- `docs/architecture/performance.md`, the Layer B section filled in.
+- `docs/architecture/performance.md`, the load benchmarks section filled in.
 
 **Test tier.** Bench, informational, non-gating. The harness self-checks its wiring (a
 scenario that serves nothing, or a worker job that never publishes, is a thrown literal

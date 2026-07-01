@@ -670,7 +670,7 @@ test-suite ecluse-e2e
     , typed-process  ^>=0.2.13
     , unliftio       ^>=0.2.25
 
--- Benchmarks: the work-per-request (Layer A) micro-benches over the pure
+-- Benchmarks: the work-per-request micro-benches over the pure
 -- ecluse-core hot paths, plus the synthetic-corpus generator's correctness tests
 -- and the complexity assertions that guard the accidentally-quadratic class.
 -- tasty-bench (not criterion) is the harness: it reports time AND allocations
@@ -713,7 +713,7 @@ benchmark ecluse-bench
     , text             ^>=2.1
     , time             ^>=1.12
 
--- Layer B load harness (S38): throughput & latency under concurrent load against the
+-- Load benchmarks harness (S38): throughput & latency under concurrent load against the
 -- real composed proxy. A separate EXECUTABLE (not a tasty-bench component): it boots
 -- Ecluse.Server.application on warp over in-process stub upstreams and the in-memory
 -- queue/credential doubles, drives the HTTP scenarios with `oha` (a subprocess, via
@@ -754,7 +754,7 @@ executable bench-load
     , wai              ^>=3.2
     , warp             ^>=3.4
 
--- Layer B normalisation core: the PURE attribution and saturation maths the load
+-- Load benchmarks normalisation core: the PURE attribution and saturation maths the load
 -- harness's two analysis views are built from (service-time upstream-vs-overhead split,
 -- and the load-saturation queuing-delay flag). An INTERNAL sublibrary (the
 -- ecluse-acceptance pattern) so the gating unit suite tests the maths deterministically,

@@ -1,4 +1,4 @@
-{- | The pure attribution and saturation maths behind the Layer B load harness's two
+{- | The pure attribution and saturation maths behind the load benchmarks harness's two
 analysis views, kept apart from the live measurement shell so they are exercised
 deterministically.
 
@@ -125,7 +125,7 @@ alongside.
 renderNormalised :: BaselineSource -> [NormalisedRow] -> Text
 renderNormalised source rows =
     T.unlines $
-        [ "## Service-time attribution -- upstream vs Écluse overhead (Layer B, concurrency 1)"
+        [ "## Service-time attribution -- upstream vs Écluse overhead (concurrency 1)"
         , ""
         , "Concurrency-1 pass, so queuing does not contaminate the split: each latency is "
             <> "the upstream baseline plus the Écluse overhead. Baseline = "
@@ -237,7 +237,7 @@ per-row flag), then a loud summary line when any scenario is queuing-bound.
 renderSaturation :: Double -> [Saturation] -> Text
 renderSaturation threshold sats =
     T.unlines $
-        [ "## Load saturation -- queuing delay (Layer B)"
+        [ "## Load saturation -- queuing delay"
         , ""
         , "The queuing delay is the loaded p50 less the concurrency-1 service p50 (both at the "
             <> "same injected upstream latency), so it is the time a request spends waiting in line -- "

@@ -11,8 +11,8 @@
 # FROZEN benchmark data: this script is the regeneration tool (the analogue of
 # scripts/gen-version-fixtures.sh), run DELIBERATELY when the pins or the capture
 # policy change — never on an automatic bump. Its output (bench/corpus/npm/*.full.json)
-# is committed and read at run time by the Layer A micro-benches (Ecluse.Bench.Corpus)
-# and the Layer B load harness (Ecluse.BenchLoad.Npm).
+# is committed and read at run time by the work-per-request micro-benches (Ecluse.Bench.Corpus)
+# and the load benchmarks harness (Ecluse.BenchLoad.Npm).
 #
 # Usage:  make gen-bench-corpus   (runs inside the Nix dev shell, which carries
 #                                  node + node-semver on NODE_PATH)
