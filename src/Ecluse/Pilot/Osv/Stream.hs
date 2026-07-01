@@ -1,3 +1,4 @@
+{-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
@@ -9,6 +10,7 @@ module Ecluse.Pilot.Osv.Stream (
 import Codec.Archive.Zip.Conduit.Types (ZipEntry (..))
 import Codec.Archive.Zip.Conduit.UnZip (unZipStream)
 import Conduit
+import Control.Monad.Primitive (PrimMonad)
 import Data.Aeson (decodeStrict)
 import Data.ByteString qualified as BS
 import Katip (KatipContext, Severity (..), logFM, ls)
