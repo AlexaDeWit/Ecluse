@@ -1,0 +1,44 @@
+{
+  "id": "GHSA-multi",
+  "affected": [
+    {
+      "package": {
+        "name": "multi-pkg",
+        "ecosystem": "npm"
+      },
+      "ranges": [
+        {
+          "type": "SEMVER",
+          "events": [
+            { "introduced": "0" },
+            { "fixed": "1.0.0" },
+            { "introduced": "1.1.0" },
+            { "fixed": "1.2.0" }
+          ]
+        },
+        {
+          "type": "ECOSYSTEM",
+          "events": [
+            { "introduced": "2.0.0" },
+            { "fixed": "2.1.0" }
+          ]
+        }
+      ]
+    },
+    {
+      "package": {
+        "name": "other-pkg",
+        "ecosystem": "npm"
+      },
+      "ranges": [
+        {
+          "type": "SEMVER",
+          "events": [
+            { "introduced": "0" },
+            { "fixed": "3.0.0" }
+          ]
+        }
+      ]
+    }
+  ]
+}

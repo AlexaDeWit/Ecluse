@@ -59,6 +59,7 @@ module Ecluse.Telemetry.Tracing (
     withMetadataDecodeSpan,
     withMirrorJobSpan,
     JobSpanOutcome (..),
+    withDomainSpan,
 
     -- * The core tracing ports
     tracingPortOf,
