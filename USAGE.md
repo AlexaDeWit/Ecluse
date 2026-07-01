@@ -39,7 +39,9 @@ hosts nothing itself. The design is in [`docs/architecture.md`](docs/architectur
 
 ## Deployment model
 
-Écluse ships as a single, reproducible container image providing a **unified multicall executable**. It can run the HTTP proxy server (`ecluse serve`), the OSV ingestion pipeline (`ecluse pilot`), or the registry cleanup worker (`ecluse dredger`) depending on the container command. All three roles share the exact same configuration file and rule definitions. The default command runs the `serve` process (the HTTP front door on `ECLUSE_PORT`, default `4873`) and, alongside it, the mirror worker. Point your package manager at it as a registry (see
+Écluse ships as a single, reproducible container image providing a **unified multicall executable**. It can run the HTTP proxy server (`ecluse proxy`), the OSV ingestion pipeline (`ecluse pilot`), or the registry cleanup worker (`ecluse dredger`) depending on the container command. All three roles share the exact same configuration file and rule definitions. 
+
+The default command runs the `proxy` process (the HTTP front door on `ECLUSE_PORT`, default `4873`) and, alongside it, the mirror worker. While the `proxy` process is designed to scale horizontally behind a load balancer, **Écluse Pilot and Écluse Dredger must be deployed as singletons** (exactly one running instance each). Running multiple instances of Pilot or Dredger will cause race conditions, duplicate API calls, and aggressive overlapping registry deletions. Point your package manager at the proxy as a registry (see
 [Connecting your clients](#connecting-your-clients)).
 
 Before you run a published image, **verify its provenance and SBOM attestations**: the
@@ -217,7 +219,7 @@ operator reference. **Keep the two in sync** when either changes.
 : _(No, default `off`)_ OpenTelemetry master switch. With it `off`, no telemetry is emitted. When `on`, the SDK reads the standard `OTEL_*` variables.
 
 `ECLUSE_CVE_SYNC_INTERVAL`
-: _(No, default `3600`)_ How often the in-memory advisory index refreshes from OSV. **(with the CVE tier)**
+: _(Pilot only, default `3600`)_ How often the Écluse Pilot singleton refreshes the OSV database from upstream.
 
 `ECLUSE_SHUTDOWN_DRAIN_TIMEOUT`
 : _(No, default `30`)_ Seconds the graceful shutdown waits for in-flight requests and in-progress artifact streams to finish before the process exits. Positive integer.
@@ -388,10 +390,10 @@ having) is in [Security: Outbound-Request & Input-Validation Invariants](docs/ar
 
 ### Securing Écluse Pilot & Dredger Services
 
-If you deploy the auxiliary services (the **Écluse Pilot** ingestion pipeline and the **Écluse Dredger** reaper), they require distinct, tightly scoped network configurations:
+If you deploy the auxiliary services (the **Écluse Pilot** ingestion pipeline and the **Écluse Dredger** reaper), they require distinct, tightly scoped network configurations. Additionally, **both services must be deployed as singletons (one replica only)**.
 
-- **Écluse Pilot**: Requires **no public ingress**. It requires egress to `osv.dev` public endpoints (to fetch raw vulnerability data), the cloud instance-metadata endpoint (to mint container credentials), and your configured object store (S3/GCS) with `s3:PutObject` permissions to upload the processed `osv.db`.
-- **Écluse Dredger**: Requires **no public ingress**. It requires egress _only_ to your private mirror (Registry B) to issue delete requests, and to the instance-metadata endpoint for credentials. It has a standing high-privilege delete capability, so isolating it from all untrusted networks is critical.
+- **Écluse Pilot (Singleton)**: Requires **no public ingress**. It requires egress to `osv.dev` public endpoints (to fetch raw vulnerability data), the cloud instance-metadata endpoint (to mint container credentials), and your configured object store (S3/GCS) with `s3:PutObject` permissions to upload the processed `osv.db`. Running multiple instances will cause overlapping writes and corrupted OSV databases.
+- **Écluse Dredger (Singleton)**: Requires **no public ingress**. It requires egress _only_ to your private mirror (Registry B) to issue delete requests, and to the instance-metadata endpoint for credentials. It has a standing high-privilege delete capability, so isolating it from all untrusted networks is critical. Running multiple instances will result in conflicting delete sweeps and rate-limit exhaustion against your registry.
 
 ## Locking down CI egress (recommended)
 
@@ -482,7 +484,7 @@ serve such a source, point it at the **private** (trusted) upstream slot, not th
   it); `GET /readyz` reports that config is loaded and the listener is serving. Readiness is
   deliberately lenient about public-upstream reachability so a transient upstream blip
   doesn't pull a healthy pod from rotation. The npm liveness probe `GET /-/ping` is answered
-  locally with `200 {}`.
+  locally with `200 {}`. **Pilot and Dredger** export identical `/livez` and `/readyz` probes on the same `ECLUSE_PORT`, allowing unified readiness checks across all container roles.
 - **Logs.** Structured, one JSON object per line by default (`ECLUSE_LOG_FORMAT=json`) for
   stdout log-collector autodiscovery, or `console` for local development. Bearer tokens are
   carried as a redacted type whose rendering is a placeholder, so token material never reaches
