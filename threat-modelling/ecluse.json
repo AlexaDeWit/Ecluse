@@ -610,7 +610,7 @@
               "isTrustBoundary": false,
               "outOfScope": false,
               "reasonOutOfScope": "",
-              "hasOpenThreats": false,
+              "hasOpenThreats": true,
               "threats": [
                 {
                   "number": 1,
@@ -647,7 +647,7 @@
                 },
                 {
                   "number": 19,
-                  "status": "Mitigated",
+                  "status": "Open",
                   "severity": "Medium",
                   "title": "Docker Hub Static Credential Leakage",
                   "type": "Information disclosure",
@@ -1535,7 +1535,7 @@
               "isTrustBoundary": false,
               "outOfScope": false,
               "reasonOutOfScope": "",
-              "hasOpenThreats": false,
+              "hasOpenThreats": true,
               "isALog": false,
               "storesCredentials": false,
               "isEncrypted": false,
@@ -1554,7 +1554,7 @@
                 },
                 {
                   "number": 13,
-                  "status": "Mitigated",
+                  "status": "Open",
                   "severity": "Medium",
                   "title": "Malicious mirrored version persists and is served as trusted (no automatic post-ingestion revocation)",
                   "type": "Tampering",
@@ -2626,7 +2626,7 @@
               "outOfScope": false,
               "isTrustBoundary": false,
               "reasonOutOfScope": "",
-              "hasOpenThreats": false,
+              "hasOpenThreats": true,
               "handlesCardPayment": false,
               "handlesGoodsOrServices": false,
               "isWebApplication": false,
@@ -2634,7 +2634,7 @@
               "threats": [
                 {
                   "number": 16,
-                  "status": "Mitigated",
+                  "status": "Open",
                   "severity": "Medium",
                   "title": "Poisoned OSV payload exploits parser",
                   "type": "Denial of service",
@@ -2667,7 +2667,7 @@
                 },
                 {
                   "number": 20,
-                  "status": "Mitigated",
+                  "status": "Open",
                   "severity": "Medium",
                   "title": "Pathological OSV Payload (DoS)",
                   "type": "Denial of service",
@@ -3058,7 +3058,7 @@
                 },
                 {
                   "number": 16,
-                  "status": "Mitigated",
+                  "status": "Open",
                   "severity": "High",
                   "title": "First-party data loss from collapsed registries",
                   "type": "Denial of service",
@@ -3069,7 +3069,7 @@
                 },
                 {
                   "number": 102,
-                  "status": "Mitigated",
+                  "status": "Open",
                   "severity": "Critical",
                   "title": "Accidental permanent deletion of registry data",
                   "type": "Elevation of privilege",
