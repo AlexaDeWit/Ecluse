@@ -1,9 +1,9 @@
 module Ecluse.CLISpec (spec) where
 
-import Options.Applicative (execParserPure, defaultPrefs, info, helper, idm, ParserResult(..))
+import Options.Applicative (ParserResult (..), defaultPrefs, execParserPure, helper, idm, info)
 import Test.Hspec
 
-import Ecluse.CLI (AppCommand(..), commandParser)
+import Ecluse.CLI (AppCommand (..), commandParser)
 
 parseCLI :: [String] -> ParserResult AppCommand
 parseCLI args = execParserPure defaultPrefs (info (commandParser <**> helper) idm) args

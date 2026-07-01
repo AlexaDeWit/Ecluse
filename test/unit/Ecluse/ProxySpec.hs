@@ -9,12 +9,12 @@ import Test.Hspec
 import Test.Hspec.Wai
 import UnliftIO.Exception (throwString)
 
-import Ecluse.Proxy (mountBindingFor, npmServerConfig)
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Queue (newInMemoryQueue)
 import Ecluse.Core.Registry (ParseError (..), RegistryClient (..))
 import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Env (Env, newEnv, newWorkerHeartbeat)
+import Ecluse.Proxy (mountBindingFor, npmServerConfig)
 import Ecluse.Server (MountBinding (..), application)
 import Ecluse.Telemetry (telemetryDisabled)
 
