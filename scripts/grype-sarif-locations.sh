@@ -12,7 +12,7 @@
 # (an empty results array uploads fine). So the upload works until the closure
 # grows its first CVE, then breaks silently on every run.
 #
-# Fix: point every locationless result at flake.lock -- a real repo path (so code
+# Workaround: point every locationless result at flake.lock -- a real repo path (so code
 # scanning is satisfied) and the honest remediation target, since flake.lock pins
 # the whole dependency closure and bumping it is how a closure CVE is cleared. A
 # result that already carries a real path (should grype ever emit one) is left
