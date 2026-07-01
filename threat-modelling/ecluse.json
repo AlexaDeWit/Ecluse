@@ -2642,6 +2642,17 @@
                   "mitigation": "Least-privilege IAM restricted to s3:PutObject for the specific bucket prefix. Runs in a segregated container separate from the proxy.",
                   "modelType": "STRIDE",
                   "id": "b1a6332d-8def-4df9-922e-53718c920155"
+                },
+                {
+                  "number": 101,
+                  "status": "Mitigated",
+                  "severity": "High",
+                  "title": "Oracle Blackout / Supply Chain DoS via OSV.dev compromise",
+                  "type": "Spoofing",
+                  "description": "If an attacker gains control of osv.dev and pushes malicious vulnerability records (or combines a malicious package with an OSV compromise), they can trigger false positives or fast-lane malicious remediation packages. \u00c9cluse explicitly trusts the OSV database as the oracle of truth.",
+                  "mitigation": "Out of scope by trust assumption. A compromised security oracle is a foundational supply-chain compromise. Pilot relies on OSV to fast-lane remediations; if the oracle is hostile, the defensive mechanism is inherently defeated. We acknowledge this as an unavoidable killchain.",
+                  "modelType": "STRIDE",
+                  "id": "c87367bd-fc3f-4792-94b6-8db459011823"
                 }
               ]
             }
@@ -3033,6 +3044,17 @@
                   "mitigation": "Dredger refuses to boot when MIRROR_TARGET_URL == PUBLICATION_TARGET_URL. Collapsing registries intentionally surrenders Dredger's automated pruning capabilities.",
                   "modelType": "STRIDE",
                   "id": "e23cddfe-96d4-47c6-92e0-a961abadb5b3"
+                },
+                {
+                  "number": 102,
+                  "status": "Mitigated",
+                  "severity": "Critical",
+                  "title": "Accidental permanent deletion of registry data",
+                  "type": "Elevation of privilege",
+                  "description": "Dredger issues permanent hard deletions to the mirror registry. If misconfigured or pointed at the wrong registry, it will permanently destroy data.",
+                  "mitigation": "Dredger must verify explicit operator consent before executing any destructive actions. It queries the target CodeArtifact repository for a specific resource tag (e.g., `Dredger: PermanentDeletionAllowed`). If absent, Dredger fails-closed. Additionally, it refuses to boot if MIRROR_TARGET == PUBLICATION_TARGET.",
+                  "modelType": "STRIDE",
+                  "id": "0b32b3e5-74f1-421c-8c9b-92a24fd2a00b"
                 }
               ]
             }
