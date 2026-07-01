@@ -1,5 +1,4 @@
 {-# OPTIONS_GHC -Wno-unused-top-binds -Wno-orphans #-}
-{-# OPTIONS_GHC -Wno-unused-top-binds #-}
 
 module Ecluse.Worker.Support where
 
