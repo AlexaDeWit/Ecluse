@@ -8,7 +8,7 @@ import Conduit
 import Data.Aeson (eitherDecodeStrict)
 import Data.ByteString qualified as BS
 import Katip (Environment (..), Katip (..), KatipContext (..), LogEnv, initLogEnv)
-import Test.Hspec (Spec, describe, it, shouldBe)
+import Test.Hspec (Spec, anyException, describe, it, shouldBe, shouldThrow)
 
 import Ecluse.Pilot.Osv
 import Ecluse.Pilot.Osv.Stream (parseOsvStream)
@@ -45,6 +45,27 @@ spec = describe "Osv parsing and streaming" $ do
                                     }
                                ]
 
+    it "extracts multiple packages and ranges from a complex OSV advisory" $ do
+        fileBytes <- BS.readFile "test/unit/fixtures/osv/complex.json"
+        let res = eitherDecodeStrict fileBytes :: Either String OsvAdvisory
+        case res of
+            Left err -> fail ("Failed to decode: " <> err)
+            Right adv -> do
+                osvId adv `shouldBe` "GHSA-multi"
+                let extracted = extractFromAdvisory adv
+                extracted
+                    `shouldBe` [ ExtractedOsv
+                                    { extPackage = "multi-pkg"
+                                    , extEcosystem = "npm"
+                                    , extFixedVersions = ["1.0.0", "1.2.0", "2.1.0"]
+                                    }
+                               , ExtractedOsv
+                                    { extPackage = "other-pkg"
+                                    , extEcosystem = "npm"
+                                    , extFixedVersions = ["3.0.0"]
+                                    }
+                               ]
+
     it "streams an OSV zip archive and emits ExtractedOsv elements" $ do
         le <- initLogEnv "test" (Environment "test")
         results <-
@@ -65,3 +86,45 @@ spec = describe "Osv parsing and streaming" $ do
                 extEcosystem ext `shouldBe` "npm"
                 extFixedVersions ext `shouldBe` ["4.6.5"]
             _ -> fail "Expected exactly 1 result"
+
+    it "handles an empty zip archive gracefully without emitting anything" $ do
+        le <- initLogEnv "test" (Environment "test")
+        results <-
+            runResourceT $
+                runReaderT
+                    ( runTestM $
+                        runConduit $
+                            sourceFile "test/unit/fixtures/osv/empty.zip"
+                                .| parseOsvStream telemetryDisabled
+                                .| sinkList
+                    )
+                    le
+        results `shouldBe` []
+
+    it "skips malformed JSON files inside a zip archive and logs a warning" $ do
+        le <- initLogEnv "test" (Environment "test")
+        results <-
+            runResourceT $
+                runReaderT
+                    ( runTestM $
+                        runConduit $
+                            sourceFile "test/unit/fixtures/osv/malformed-json.zip"
+                                .| parseOsvStream telemetryDisabled
+                                .| sinkList
+                    )
+                    le
+        results `shouldBe` []
+
+    it "throws an exception when streaming a non-zip file" $ do
+        le <- initLogEnv "test" (Environment "test")
+        let action =
+                runResourceT $
+                    runReaderT
+                        ( runTestM $
+                            runConduit $
+                                sourceFile "test/unit/fixtures/osv/not-a-zip.zip"
+                                    .| parseOsvStream telemetryDisabled
+                                    .| sinkList
+                        )
+                        le
+        action `shouldThrow` anyException
