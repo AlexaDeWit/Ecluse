@@ -19,7 +19,6 @@ import Control.Monad (void)
 import Data.Text qualified as T
 import System.Exit (ExitCode (ExitSuccess))
 import Test.Hspec
-import Control.Monad.IO.Class (liftIO)
 
 import Ecluse.E2E.Fixtures (PkgSpec, allowPkg, denyPkg, headPkg, mirrorPkg, psName, psVersion, tamperPkg, telemetryDdPkg, telemetryPkg)
 import Ecluse.E2E.Harness
@@ -58,7 +57,7 @@ scenarios = do
                 -- probe project's own `postinstall` would create a sentinel; a successful install
                 -- that creates none proves npm_config_ignore_scripts held.
                 (installed, scriptRan) <- installWithLifecycleProbe e2e
-                void $ shouldSucceed installed
+                shouldSucceed installed
                 scriptRan `shouldBe` False
 
         describe "server↔worker -- the integrity gate" $
