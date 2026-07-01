@@ -14,7 +14,7 @@ import Ecluse.Test.Version (genGem, genNpm, genPyPI)
 
 spec :: Spec
 spec = do
-    describe "mkVersion / parseVersionKey" $ do
+    describe "mkVersion" $ do
         it "round-trips the raw text through unVersion" $
             hedgehog $ do
                 v <- forAll (Gen.text (Range.linear 1 12) Gen.ascii)
@@ -25,8 +25,37 @@ spec = do
             versionKey (mkVersion PyPI "totally bogus") `shouldBe` Nothing
         it "parses a valid version into a key" $
             versionKey (mkVersion Npm "1.2.3") `shouldSatisfy` isJust
-        it "parseVersionKey reports an error for invalid input" $
-            parseVersionKey Npm "nope" `shouldSatisfy` isLeft
+
+    describe "parseVersionKey" $ do
+        describe "Npm" $ do
+            it "parses a valid Npm version" $
+                parseVersionKey Npm "1.2.3" `shouldSatisfy` isRight
+            it "returns a VersionError for invalid Npm input" $
+                parseVersionKey Npm "nope" `shouldSatisfy` isLeft
+            it "successfully parses generated valid Npm versions" $
+                hedgehog $ do
+                    v <- forAll genNpm
+                    assert (isRight (parseVersionKey Npm v))
+
+        describe "PyPI" $ do
+            it "parses a valid PyPI version" $
+                parseVersionKey PyPI "1.2.3" `shouldSatisfy` isRight
+            it "returns a VersionError for invalid PyPI input" $
+                parseVersionKey PyPI "totally bogus" `shouldSatisfy` isLeft
+            it "successfully parses generated valid PyPI versions" $
+                hedgehog $ do
+                    v <- forAll genPyPI
+                    assert (isRight (parseVersionKey PyPI v))
+
+        describe "RubyGems" $ do
+            it "parses a valid RubyGems version" $
+                parseVersionKey RubyGems "1.2.3" `shouldSatisfy` isRight
+            it "returns a VersionError for unparseable RubyGems input" $
+                parseVersionKey RubyGems "" `shouldSatisfy` isLeft
+            it "successfully parses generated valid RubyGems versions" $
+                hedgehog $ do
+                    v <- forAll genGem
+                    assert (isRight (parseVersionKey RubyGems v))
 
     -- Strictness regressions: inputs the hand-rolled PEP 440 / Gem parsers used
     -- to over-accept must now be rejected (Left). The ordering fixture can only
