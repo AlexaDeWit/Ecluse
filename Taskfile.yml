@@ -149,6 +149,9 @@ tasks:
       - exclude: 'dist-*/**'
       - exclude: '.git/**'
       - exclude: '.agents/**'
+      - exclude: 'coverage/**'
+      - exclude: '_site/**'
+      - exclude: 'scratchpad/**'
     cmds:
       - find . -name '*.hs' -not -path '*/dist-*' -not -path '*/.git/*' -not -path '*/.agents/*' -exec fourmolu --mode check {} +
 
@@ -163,6 +166,9 @@ tasks:
       - exclude: 'dist-*/**'
       - exclude: '.git/**'
       - exclude: '.agents/**'
+      - exclude: 'coverage/**'
+      - exclude: '_site/**'
+      - exclude: 'scratchpad/**'
     cmds:
       - find . -name '*.hs' -not -path '*/dist-*' -not -path '*/.git/*' -not -path '*/.agents/*' -exec hlint {} +
 
@@ -179,6 +185,11 @@ tasks:
       - exclude: 'dist-*/**'
       - exclude: '.git/**'
       - exclude: '.agents/**'
+      - exclude: 'coverage/**'
+      - exclude: '_site/**'
+      - exclude: 'scratchpad/**'
+      - exclude: 'sbom/**'
+      - exclude: '*.json'
     cmds:
       - semgrep scan --config auto --severity ERROR --severity WARNING --sarif-output=semgrep.sarif --error .
 
