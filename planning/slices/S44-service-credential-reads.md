@@ -10,6 +10,7 @@ arch-refs:
   - docs/architecture/access-model.md#caching
   - docs/architecture/access-model.md#credential-supply-the-credentialprovider-generalised
 pr: null
+issue: 593
 ---
 
 # S44, Service-credential read path

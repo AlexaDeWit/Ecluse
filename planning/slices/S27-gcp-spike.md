@@ -9,6 +9,7 @@ arch-refs:
   - docs/architecture/cloud-backends.md#haskell-client-maturity--a-design-risk-to-retire-early
   - docs/architecture/technology-stack.md
 pr: null
+issue: 585
 ---
 
 # S27, Pub/Sub de-risking spike (decision gate)

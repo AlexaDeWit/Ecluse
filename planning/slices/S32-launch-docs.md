@@ -10,6 +10,7 @@ arch-refs:
   - docs/architecture/observability.md#datadog-deployment-operator
   - docs/architecture/release-supply-chain.md#releases--container-image
 pr: null
+issue: 589
 ---
 
 # S32, Launch docs & deployment runbook

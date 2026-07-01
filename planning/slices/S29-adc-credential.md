@@ -9,6 +9,7 @@ arch-refs:
   - docs/architecture/cloud-backends.md#credential-provider
   - docs/architecture/cloud-backends.md#service-mapping
 pr: null
+issue: 587
 ---
 
 # S29, Artifact Registry / ADC credential leaf

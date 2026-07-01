@@ -9,6 +9,7 @@ arch-refs:
   - docs/architecture/cloud-backends.md#queue-abstraction
   - docs/architecture/cloud-backends.md#service-mapping
 pr: null
+issue: 586
 ---
 
 # S28, Pub/Sub `MirrorQueue` backend

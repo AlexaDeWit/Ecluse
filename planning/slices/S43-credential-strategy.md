@@ -12,6 +12,7 @@ arch-refs:
   - docs/architecture/access-model.md#safe-defaults-and-unrepresentable-unsafe-combinations
   - docs/architecture/security.md#trust-assumptions--credential-posture
 pr: null
+issue: 592
 ---
 
 # S43, Credential strategy & edge authentication

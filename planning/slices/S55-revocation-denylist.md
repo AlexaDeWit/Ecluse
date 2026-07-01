@@ -10,6 +10,7 @@ arch-refs:
   - docs/architecture/configuration.md#rule-policy
   - threat-modelling/ecluse.json (threat #13, Registry B)
 pr: null
+issue: 599
 ---
 
 # S55, Revocation denylist: `DenyByIdentity` (hard deny)

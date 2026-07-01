@@ -11,6 +11,7 @@ arch-refs:
   - docs/architecture/configuration.md#rule-policy
   - docs/architecture/configuration.md#the-default-policy
 pr: null
+issue: 584
 ---
 
 # S23, CVE rules: `DenyIfCVE` + `AllowIfRemediatesCve`
