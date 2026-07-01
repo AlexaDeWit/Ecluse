@@ -6,7 +6,7 @@ import Test.Hspec
 import Ecluse.CLI (AppCommand (..), commandParser)
 
 parseCLI :: [String] -> ParserResult AppCommand
-parseCLI args = execParserPure defaultPrefs (info (commandParser <**> helper) idm) args
+parseCLI = execParserPure defaultPrefs (info (commandParser <**> helper) idm)
 
 spec :: Spec
 spec = do
