@@ -20,7 +20,7 @@ tasks:
     silent: true
     cmds:
       - |
-        v="$$(cabal info ./ecluse.cabal 2>/dev/null | sed -n -E 's/^\* ecluse-([0-9.]+).*/\1/p' | head -n1)"
+        v="$(cabal info ./ecluse.cabal 2>/dev/null | sed -n -E 's/^\* ecluse-([0-9.]+).*/\1/p' | head -n1)"
         [ -n "$v" ] && echo "$v" || { echo "task version: could not read from 'cabal info'" >&2; exit 1; }
 
   tag:
@@ -28,9 +28,9 @@ tasks:
     silent: true
     cmds:
       - |
-        v="v$$(task version)"
-        git tag -s -m "Release $$v" "$$v"
-        echo "created $$v — push to release:  git push origin $$v"
+        v="v$(task version)"
+        git tag -s -m "Release $v" "$v"
+        echo "created $v — push to release:  git push origin $v"
 
   update:
     desc: Refresh the cabal package index
@@ -42,8 +42,8 @@ tasks:
     cmds:
       - cabal update
       - |
-        bash -c 'ts=$$(cabal update 2>&1 | sed -n "s/.*index-state is set to \(.*\)\.$$/\1/p" | tail -1); \
-        [ -n "$$ts" ] && sed -i "s/^index-state:.*/index-state: $$ts/" cabal.project; \
+        bash -c 'ts=$(cabal update 2>&1 | sed -n "s/.*index-state is set to \(.*\)\.$/\1/p" | tail -1); \
+        [ -n "$ts" ] && sed -i "s/^index-state:.*/index-state: $ts/" cabal.project; \
         cabal freeze'
 
   build:
@@ -86,8 +86,8 @@ tasks:
       - '{{.NIX_BENCH}} cabal build ecluse-bench --enable-profiling --profiling-detail=late --builddir={{.BENCH_PROFILE_DIR}}'
       - |
         {{.NIX_BENCH}} bash -c 'set -euo pipefail; \
-        bin=$$(cabal list-bin ecluse-bench --enable-profiling --builddir={{.BENCH_PROFILE_DIR}}); \
-        "$$bin" {{.BENCH_PROFILE_OPTS | default "-p express"}} +RTS -p -RTS; \
+        bin=$(cabal list-bin ecluse-bench --enable-profiling --builddir={{.BENCH_PROFILE_DIR}}); \
+        "$bin" {{.BENCH_PROFILE_OPTS | default "-p express"}} +RTS -p -RTS; \
         ghc-prof-flamegraph ecluse-bench.prof -o ecluse-bench.svg; \
         echo "flame graph: ecluse-bench.svg  (cost-centre profile: ecluse-bench.prof)"'
 
@@ -178,7 +178,7 @@ tasks:
       - cabal.project
     cmds:
       - |
-        out=$$(cabal check 2>&1); printf "%s\n" "$$out"; case "$$out" in *Warning:*|*Error:*) exit 1 ;; esac
+        out=$(cabal check 2>&1); printf "%s\n" "$out"; case "$out" in *Warning:*|*Error:*) exit 1 ;; esac
 
   lint-workflows:
     desc: Lint GitHub Actions workflows
@@ -214,8 +214,8 @@ tasks:
       - cabal build exe:ecluse --builddir=dist-stan --ghc-options=-fwrite-ide-info
       - stan --hiedir dist-stan
       - |
-        n=$$(bash -c 'stan --hiedir dist-stan --json-output | jq ".observations | length"'); \
-        if [ "$$n" -gt 0 ]; then echo "stan: $$n finding(s) above the configured floor (non-gating job fails)"; exit 1; fi; \
+        n=$(bash -c 'stan --hiedir dist-stan --json-output | jq ".observations | length"'); \
+        if [ "$n" -gt 0 ]; then echo "stan: $n finding(s) above the configured floor (non-gating job fails)"; exit 1; fi; \
         echo "stan: clean at the configured floor"
 
   stan-all:
@@ -254,9 +254,9 @@ tasks:
     cmds:
       - cabal haddock lib:ecluse lib:ecluse-core {{.HADDOCK_FLAGS}}
       - |
-        html=$$(find dist-newstyle -path '*/doc/html/ecluse/index.html' | head -n1); \
-        echo "Haddock: $$html"; \
-        command -v xdg-open >/dev/null 2>&1 && xdg-open "$$html" >/dev/null 2>&1 &
+        html=$(find dist-newstyle -path '*/doc/html/ecluse/index.html' | head -n1); \
+        echo "Haddock: $html"; \
+        command -v xdg-open >/dev/null 2>&1 && xdg-open "$html" >/dev/null 2>&1 &
 
   docs-check:
     desc: Build Haddock for the CI gate
@@ -269,22 +269,22 @@ tasks:
       - cabal haddock lib:ecluse lib:ecluse-core --builddir={{.DOCS_BUILDDIR}} {{.HADDOCK_FLAGS}}
       - rm -rf _site && mkdir -p _site/api && touch _site/.nojekyll
       - |
-        appidx=$$(find {{.DOCS_BUILDDIR}} -path '*/doc/html/ecluse/index.html' | grep -v '/l/' | head -n1); \
-        coreidx=$$(find {{.DOCS_BUILDDIR}} -path '*/l/ecluse-core/doc/html/*/index.html' | head -n1); \
-        for pair in "ecluse:$$appidx" "ecluse-core:$$coreidx"; do \
-          name=$${pair%%:*}; idx=$${pair#*:}; \
-          if [ -z "$$idx" ] || [ ! -f "$$idx" ]; then \
-            echo "docs-site: no Haddock index for '$$name'" >&2; exit 1; \
+        appidx=$(find {{.DOCS_BUILDDIR}} -path '*/doc/html/ecluse/index.html' | grep -v '/l/' | head -n1); \
+        coreidx=$(find {{.DOCS_BUILDDIR}} -path '*/l/ecluse-core/doc/html/*/index.html' | head -n1); \
+        for pair in "ecluse:$appidx" "ecluse-core:$coreidx"; do \
+          name=${pair%%:*}; idx=${pair#*:}; \
+          if [ -z "$idx" ] || [ ! -f "$idx" ]; then \
+            echo "docs-site: no Haddock index for '$name'" >&2; exit 1; \
           fi; \
-          mkdir -p "_site/api/$$name" && cp -R "$$(dirname "$$idx")"/. "_site/api/$$name/"; \
-          echo "Staged $$name -> _site/api/$$name"; \
+          mkdir -p "_site/api/$name" && cp -R "$(dirname "$idx")"/. "_site/api/$name/"; \
+          echo "Staged $name -> _site/api/$name"; \
         done
       - echo "Rewriting dependency cross-links to canonical Hackage URLs"
       - bash scripts/rewrite-haddock-dep-links.sh _site/api
       - |
-        if grep -rlE 'file:///|\$$\{pkgroot\}|/store/ghc-' _site/api >/dev/null 2>&1; then \
+        if grep -rlE 'file:///|\$\{pkgroot\}|/store/ghc-' _site/api >/dev/null 2>&1; then \
           echo "docs-site: unresolved/leaky dependency links survived" >&2; \
-          grep -rlE 'file:///|\$$\{pkgroot\}|/store/ghc-' _site/api >&2; exit 1; \
+          grep -rlE 'file:///|\$\{pkgroot\}|/store/ghc-' _site/api >&2; exit 1; \
         fi
       - cp web/api-index.html _site/api/index.html
       - cabal run -v0 --builddir={{.DOCS_BUILDDIR}} openapi-gen -- _site/api/openapi.json
@@ -297,7 +297,7 @@ tasks:
     cmds:
       - cp -R web/static/. _site/
       - cp docs/branding/logo.svg docs/branding/favicon-32.png docs/branding/lock-illustration.svg docs/social-preview.png _site/
-      - sh -c 'mkdir -p _site/vendor && cp "$$MERMAID_JS" _site/vendor/mermaid.min.js && cp "$$REDOC_JS" _site/vendor/redoc.standalone.js'
+      - sh -c 'mkdir -p _site/vendor && cp "$MERMAID_JS" _site/vendor/mermaid.min.js && cp "$REDOC_JS" _site/vendor/redoc.standalone.js'
       - pandoc MOTIVATION.md -o _site/motivation.html {{.PANDOC_FLAGS}} -M title="Why Écluse?"
       - pandoc ALTERNATIVES.md -o _site/alternatives.html {{.PANDOC_FLAGS}} -M title="Alternatives"
       - pandoc USAGE.md -o _site/usage.html {{.PANDOC_FLAGS}} --lua-filter web/embed-config.lua -M title="Operator Manual"
@@ -324,7 +324,7 @@ tasks:
     requires:
       vars: [TAG]
     cmds:
-      - printf '%s' "$$DOCKERHUB_TOKEN" | skopeo login docker.io -u "$$DOCKERHUB_USERNAME" --password-stdin
+      - printf '%s' "$DOCKERHUB_TOKEN" | skopeo login docker.io -u "$DOCKERHUB_USERNAME" --password-stdin
       - skopeo copy docker-archive:./result "docker://{{.IMAGE}}:{{.TAG}}"
 
   sbom:
@@ -345,7 +345,7 @@ tasks:
     desc: Secondary Nix-native cross-check (vulnix)
     ignore_error: true
     cmds:
-      - bash -c 'vulnix -C $$(nix build .#ecluse-bin --no-link --print-out-paths)'
+      - bash -c 'vulnix -C $(nix build .#ecluse-bin --no-link --print-out-paths)'
 
   clean:
     desc: Remove build artifacts
