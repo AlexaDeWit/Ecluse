@@ -454,9 +454,9 @@ test-suite ecluse-unit
   main-is:            Spec.hs
   hs-source-dirs:     test/unit
   other-modules:
-    EcluseSpec
     Ecluse.AcceptanceSpec
     Ecluse.BenchLoad.NormaliseSpec
+    Ecluse.BootSpec
     Ecluse.CLISpec
     Ecluse.CompositionSpec
     Ecluse.Config.AesonSpec
@@ -468,6 +468,7 @@ test-suite ecluse-unit
     Ecluse.LogSpec
     Ecluse.ManifestSpec
     Ecluse.PilotSpec
+    Ecluse.ProxySpec
     Ecluse.ServerSpec
     Ecluse.TelemetrySpec
     Ecluse.Telemetry.CorrelationSpec
