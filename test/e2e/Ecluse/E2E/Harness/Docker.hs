@@ -119,7 +119,7 @@ withGlobalDataPlane action = do
                 (pure ())
                 (\_ -> teardown net [verd, stub, mini] "")
                 ( \_ -> do
-                    dockerOk ["network", "create", net]
+                    dockerOk ["network", "create", "--subnet", "10.254.254.0/24", net]
                     dockerOk
                         [ "run"
                         , "-d"
