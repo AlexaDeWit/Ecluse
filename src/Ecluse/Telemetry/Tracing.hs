@@ -254,7 +254,6 @@ withMetadataDecodeSpan telemetry name action =
         recordFields mSpan [("ecluse.package", renderPackageName name)]
         action
 
-
 {- | Project the OpenTelemetry-backed domain spans onto the core 'TracingPort' the
 serve path ("Ecluse.Core.Server.Pipeline") brackets through: the per-version rule
 verdict and the serve-time mirror-enqueue hand-off. Each field is the matching
