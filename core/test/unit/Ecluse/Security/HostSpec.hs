@@ -17,10 +17,10 @@ import Ecluse.Core.Security (
     hostAddress,
     isAllowedUpstreamHost,
     isBlockedTarget,
+    isOctal,
     lowerCaseHosts,
     splitHostPort,
     tarballHostAllowed,
-    isOctal,
  )
 
 {- | The raw configured upstream hosts (lower-/mixed-case on purpose), before

@@ -1,0 +1,10 @@
+--- core/src/Ecluse/Core/Security/Host.hs
++++ core/src/Ecluse/Core/Security/Host.hs
+@@ -31,7 +31,6 @@
+     TarballHostPolicy (..),
+     Origin (..),
+     tarballHostAllowed,
+-
+     -- * Internal test exports
+     isOctal,
+ ) where
