@@ -527,7 +527,20 @@ serverMiddleware cfg =
     sizeLimitMiddleware (scSizeLimit cfg)
         . realIp
         . timeout timeoutSeconds
+        . securityHeadersMiddleware
         . goingAwayMiddleware (scDrain cfg)
+
+{- | Adds standard security headers to every response. -}
+securityHeadersMiddleware :: Middleware
+securityHeadersMiddleware app request respond =
+    app request $ \response -> respond $ mapResponseHeaders addSecurityHeaders response
+  where
+    addSecurityHeaders headers =
+        ("X-Content-Type-Options", "nosniff")
+            : ("X-Frame-Options", "DENY")
+            : ("Content-Security-Policy", "default-src 'none'")
+            : ("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+            : headers
 
 {- While the instance is draining, stamp @Connection: close@ on every response so a
 keep-alive client (or a mesh connection pool) does not reuse the socket on a closing
