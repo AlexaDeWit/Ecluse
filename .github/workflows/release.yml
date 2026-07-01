@@ -123,16 +123,17 @@ jobs:
     name: Assemble multi-arch image, attest & release
     needs: build
     runs-on: ubuntu-latest
-    # The token lives on a protected environment (required reviewers), so only an
-    # approved release can read it. Only this job is privileged; the build legs
-    # above carry no secrets. Configure DOCKERHUB_USERNAME / DOCKERHUB_TOKEN here.
+    # The workflow relies on the ephemeral GITHUB_TOKEN to push to GHCR.
+    # The protected environment (required reviewers) ensures human approval
+    # before a release is published.
     environment: release
     permissions:
       contents: write # create the GitHub Release (digest pin + verify recipe + notes)
       id-token: write # OIDC: keyless signing of the attestations (Fulcio/Rekor)
       attestations: write # record the provenance/SBOM attestations
+      packages: write # authenticate to GHCR with the ephemeral token
     env:
-      IMAGE: docker.io/alexadewit/ecluse
+      IMAGE: ghcr.io/alexadewit/ecluse
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -164,11 +165,12 @@ jobs:
       # Authenticate so regctl can push the manifest list and the attest-actions
       # can push referrers. docker/login-action writes ~/.docker/config.json,
       # which both regctl and skopeo read as their fallback auth file.
-      - name: Log in to Docker Hub
+      - name: Log in to GitHub Container Registry
         uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       # Assemble the two per-arch archives into ONE manifest list, push the single
       # canonical tag, and emit the index + per-platform digests for the attest

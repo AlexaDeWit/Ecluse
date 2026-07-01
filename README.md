@@ -70,7 +70,7 @@ release is cut its digest is published in the
 digest. Verify by **digest** with the GitHub CLI:
 
 ```bash
-IMAGE=alexadewit/ecluse@sha256:…   # pin by digest
+IMAGE=ghcr.io/alexadewit/ecluse@sha256:…   # pin by digest
 
 # Verify every attestation (provenance + SBOM) against the release identity + Rekor:
 gh attestation verify "oci://$IMAGE" --repo AlexaDeWit/Ecluse

@@ -39,12 +39,12 @@ and the auto-generated changelog
 builds and manual pushes; the cross-arch assembly is CI-only.)
 
 **Immutable tags, no `latest`.** The target repo
-([`alexadewit/ecluse`](https://hub.docker.com/r/alexadewit/ecluse)) enforces
+(`ghcr.io/alexadewit/ecluse`) enforces
 immutable tags, so every push is a fresh, never-reused tag: the release publishes
 `ecluse:X.Y.Z` (from the git tag) and nothing else, a **single canonical
 multi-arch tag** (an OCI index) that serves amd64 or arm64 automatically, with no
 per-arch tags. There is deliberately no moving pointer, **pin deployments by
-digest** (`alexadewit/ecluse@sha256:…`, the index digest), which is the stronger
+digest** (`ghcr.io/alexadewit/ecluse@sha256:…`, the index digest), which is the stronger
 supply-chain posture regardless; the digest for each version is published in its
 GitHub Release.
 
@@ -131,19 +131,11 @@ its own.
 Consumers verify by digest with `gh attestation verify`; the recipe lives in the
 [README](../../README.md#verifying-the-image).
 
-**Authentication (Docker Hub).** Docker Hub has no OIDC keyless login, so the push
-needs a long-lived token, kept as weak and contained as possible:
+**Authentication (GitHub Container Registry).** Écluse is published with **zero long-lived static credentials**. We publish exclusively to GitHub Container Registry (GHCR) using the ephemeral, repository-scoped `GITHUB_TOKEN`:
 
-- **Per-repo token scoping is not available on a personal account**, only
-  account-wide access tokens (choose the *Read & Write* permission level; `Delete`
-  is not needed for immutable-tag pushes). True per-repository scoping requires an
-  **Organization Access Token**, which needs a Docker org on a paid plan. The
-  pragmatic mitigation without paying: put the image under a dedicated **machine
-  account** that can reach *only* this repo, so its account-wide token is
-  effectively repo-scoped.
-- Store it as `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` on a **protected `release`
-  GitHub Environment** (required reviewers), so only an approved release job can
-  read it. The token is fed via `--password-stdin`, never argv or `echo`.
+- The workflow authenticates via `github.actor` and `secrets.GITHUB_TOKEN` (requiring the `packages: write` permission).
+- The credential exists only for the duration of the job, and its blast radius is natively constrained to this specific repository.
+- Docker Hub is retained only as an empty namespace placeholder to prevent typo-squatting, though we may add it as a mirror in the future if Docker Hub implements native OIDC support for GitHub Actions.
 - Each image carries **keyless provenance + SBOM attestations** via GitHub OIDC
   (`id-token: write` + `attestations: write`), immutable OCI referrers + the
   Rekor log, no stored key, giving verifiable provenance and contents that
