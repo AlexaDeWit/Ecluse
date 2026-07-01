@@ -10,9 +10,13 @@ import Data.ByteString qualified as BS
 import Katip (Environment (..), Katip (..), KatipContext (..), LogEnv, initLogEnv)
 import Test.Hspec (Spec, anyException, describe, it, shouldBe, shouldThrow)
 
+import Data.ByteString.Lazy qualified as LBS
+import Data.Text (unpack)
 import Ecluse.Pilot.Osv
-import Ecluse.Pilot.Osv.Stream (parseOsvStream)
+import Ecluse.Pilot.Osv.Stream (parseOsvStream, streamOsvUrl)
 import Ecluse.Telemetry (telemetryDisabled)
+import Ecluse.Test.Stub (stubBaseUrl, withStub)
+import Network.HTTP.Types.Status (status200)
 
 newtype TestM a = TestM {runTestM :: ReaderT LogEnv (ResourceT IO) a}
     deriving newtype (Functor, Applicative, Monad, MonadIO, MonadResource, MonadThrow, PrimMonad)
@@ -124,6 +128,39 @@ spec = describe "Osv parsing and streaming" $ do
                             runConduit $
                                 sourceFile "test/unit/fixtures/osv/not-a-zip.zip"
                                     .| parseOsvStream telemetryDisabled
+                                    .| sinkList
+                        )
+                        le
+        action `shouldThrow` anyException
+
+    it "fetches and streams an OSV zip archive over HTTP" $ do
+        le <- initLogEnv "test" (Environment "test")
+        zipData <- LBS.readFile "test/unit/fixtures/osv/sample.zip"
+        results <- withStub status200 zipData $ \stub -> do
+            runResourceT $
+                runReaderT
+                    ( runTestM $
+                        runConduit $
+                            streamOsvUrl telemetryDisabled (unpack (stubBaseUrl stub) <> "/sample.zip")
+                                .| sinkList
+                    )
+                    le
+        length results `shouldBe` 1
+        case results of
+            [ext] -> do
+                extPackage ext `shouldBe` "hono"
+                extEcosystem ext `shouldBe` "npm"
+                extFixedVersions ext `shouldBe` ["4.6.5"]
+            _ -> fail "Expected exactly 1 result"
+
+    it "throws an exception if the URL is invalid" $ do
+        le <- initLogEnv "test" (Environment "test")
+        let action =
+                runResourceT $
+                    runReaderT
+                        ( runTestM $
+                            runConduit $
+                                streamOsvUrl telemetryDisabled "not-a-valid-url"
                                     .| sinkList
                         )
                         le
