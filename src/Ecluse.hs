@@ -107,3 +107,4 @@ run = do
             RunProxy -> runProxy bootEnv
             RunPilot -> runPilot bootEnv
             RunDredger -> runDredger bootEnv
+            CompileOsv url dbPath -> runCompileOsv bootEnv url dbPath

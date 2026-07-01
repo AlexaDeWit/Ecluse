@@ -1,8 +1,10 @@
 module Ecluse.Pilot (
     runPilot,
+    runCompileOsv,
     pilotApplication,
 ) where
 
+import Conduit (runConduitRes, (.|))
 import Katip (Severity (InfoS), logFM, ls)
 import Katip.Monadic (runKatipContextT)
 import Network.Wai (Application)
@@ -10,7 +12,10 @@ import Network.Wai (Application)
 import Ecluse.Boot (BootEnv (..))
 import Ecluse.Config (AppConfig (cfgPort))
 import Ecluse.Log (moduleField)
+import Ecluse.Pilot.Osv.Database (compileToSqlite)
+import Ecluse.Pilot.Osv.Stream (streamOsvUrl)
 import Ecluse.Server (ServerConfig (scDrain, scPort), mkServerConfig, probeApplication, runWarp, serverMiddleware)
+import Ecluse.Telemetry (telemetryTracerProvider)
 
 {- | The WAI application for the Pilot worker mode.
 It exposes liveness and readiness probes.
@@ -32,3 +37,18 @@ runPilot bootEnv = do
         logFM InfoS (ls ("Pilot mode starting up on port " <> show port :: String))
 
     runWarp cfg (pilotApplication cfg)
+
+{- | Run the OSV compilation pipeline.
+It fetches the OSV dataset from the given URL and compiles it into a SQLite
+database at the specified path.
+-}
+runCompileOsv :: BootEnv -> String -> FilePath -> IO ()
+runCompileOsv bootEnv url dbPath = do
+    let logEnv = beLogEnv bootEnv
+        telemetry = beTelemetry bootEnv
+
+    runKatipContextT logEnv (moduleField "Ecluse.Pilot") mempty $ do
+        logFM InfoS (ls ("Starting OSV compilation from " <> url <> " to " <> dbPath))
+        runConduitRes $
+            streamOsvUrl telemetry url
+                .| compileToSqlite dbPath

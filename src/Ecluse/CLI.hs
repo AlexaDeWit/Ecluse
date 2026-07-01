@@ -12,6 +12,10 @@ data AppCommand
     = RunProxy
     | RunPilot
     | RunDredger
+    | CompileOsv
+        { osvUrl :: String
+        , osvDbPath :: FilePath
+        }
     deriving stock (Eq, Show)
 
 commandParser :: Parser AppCommand
@@ -20,8 +24,23 @@ commandParser =
         ( command "proxy" (info (pure RunProxy) (progDesc "Run the Écluse proxy server"))
             <> command "pilot" (info (pure RunPilot) (progDesc "Run the Écluse Pilot (OSV ingestion pipeline)"))
             <> command "dredger" (info (pure RunDredger) (progDesc "Run the Écluse Dredger (mirror pruning worker)"))
+            <> command "compile-osv" (info compileOsvParser (progDesc "Compile OSV JSON stream into a SQLite database"))
         )
         <|> pure RunProxy
+
+compileOsvParser :: Parser AppCommand
+compileOsvParser =
+    CompileOsv
+        <$> strOption
+            ( long "url"
+                <> metavar "URL"
+                <> help "The URL of the OSV ecosystem zip file (e.g. https://osv-vulnerabilities.storage.googleapis.com/npm/all.zip)"
+            )
+        <*> strOption
+            ( long "out"
+                <> metavar "FILE"
+                <> help "The output path for the compiled SQLite database (osv.db)"
+            )
 
 execCLI :: IO AppCommand
 execCLI =
