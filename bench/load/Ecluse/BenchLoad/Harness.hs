@@ -391,13 +391,25 @@ drive knobs = \case
     -- the single-URL and weighted-URL-list HTTP drivers.
     fromOha :: OhaReport -> (Int, Double, Double, (Maybe Double, Maybe Double, Maybe Double, Maybe Double), Int, Text)
     fromOha report =
-        ( sum (Map.elems (ohaStatusCounts report))
-        , ohaRequestsPerSec report
-        , ohaSuccessRate report
-        , (toMs (ohaP50 report), toMs (ohaP90 report), toMs (ohaP99 report), toMs (ohaP999 report))
-        , deadlineAbortsOf report
-        , distributionNote report
-        )
+        let statusCounts = ohaStatusCounts report
+            errorCounts = ohaErrorCounts report
+            totalResponses = sum (Map.elems statusCounts)
+            totalErrors = sum (Map.elems errorCounts)
+            totalRequests = totalResponses + totalErrors
+
+            isSuccess status = "2" `T.isPrefixOf` status || "3" `T.isPrefixOf` status
+            successCount = sum [count | (status, count) <- Map.toList statusCounts, isSuccess status]
+
+            elapsed = ohaElapsedSeconds report
+            successReqsPerSec = if elapsed > 0 then fromIntegral successCount / elapsed else 0
+            successRate = if totalRequests > 0 then fromIntegral successCount / fromIntegral totalRequests else 0
+         in ( totalResponses
+            , successReqsPerSec
+            , successRate
+            , (toMs (ohaP50 report), toMs (ohaP90 report), toMs (ohaP99 report), toMs (ohaP999 report))
+            , deadlineAbortsOf report
+            , distributionNote report
+            )
 
     toMs :: Maybe Double -> Maybe Double
     toMs = fmap (* 1_000)
