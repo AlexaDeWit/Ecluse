@@ -18,11 +18,9 @@ module Ecluse.E2E.Harness.Npm (
     publishVersion,
 ) where
 
-import Control.Applicative ((<|>))
-import Control.Monad.IO.Class (MonadIO, liftIO)
+
 import Data.ByteString.Lazy qualified as LBS
-import Data.List (isPrefixOf)
-import Data.Maybe (fromMaybe)
+
 import Data.Text qualified as T
 import System.Directory (createDirectoryIfMissing, doesFileExist, getTemporaryDirectory, removePathForcibly)
 import System.Exit (ExitCode (ExitSuccess))

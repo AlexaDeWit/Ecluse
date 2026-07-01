@@ -20,7 +20,7 @@ module Ecluse.E2E.Harness.Docker (
     uniqueSuffix,
 ) where
 
-import Data.ByteString qualified as BS
+
 import Data.ByteString.Lazy qualified as LBS
 import Data.Text qualified as T
 import Data.Time.Clock.POSIX (getPOSIXTime)
@@ -53,7 +53,7 @@ import System.FilePath ((</>))
 import System.Process.Typed (proc, readProcess, readProcessStdout)
 import UnliftIO (bracket, bracket_, handleAny)
 import UnliftIO.Concurrent (threadDelay)
-import UnliftIO.Environment (getEnvironment)
+
 
 import Ecluse.E2E.Fixtures (buildFixtures, fixturePackages)
 import Ecluse.E2E.Harness.Types

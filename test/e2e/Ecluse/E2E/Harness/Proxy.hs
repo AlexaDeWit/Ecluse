@@ -14,6 +14,7 @@ module Ecluse.E2E.Harness.Proxy (
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Char (isDigit)
+import Data.List (lookup)
 import Data.Text qualified as T
 import Network.HTTP.Client (
     Request (method),

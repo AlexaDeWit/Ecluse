@@ -7,7 +7,6 @@ module Ecluse.E2E.Harness.Types (
     NpmProject (..)
 ) where
 
-import Data.Text (Text)
 import Network.HTTP.Client (Manager)
 import System.Exit (ExitCode)
 

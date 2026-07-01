@@ -15,9 +15,9 @@ per-test 'around' so it boots no environment until it is implemented.
 -}
 module Ecluse.E2E.SuiteSpec (spec) where
 
-import Control.Monad (void)
+
 import Data.Text qualified as T
-import System.Exit (ExitCode (ExitSuccess))
+
 import Test.Hspec
 
 import Ecluse.E2E.Fixtures (PkgSpec, allowPkg, denyPkg, headPkg, mirrorPkg, psName, psVersion, tamperPkg, telemetryDdPkg, telemetryPkg)
