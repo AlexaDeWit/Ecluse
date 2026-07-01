@@ -19,6 +19,7 @@ module Ecluse.E2E.SuiteSpec (spec) where
 import Data.Text qualified as T
 
 import Test.Hspec
+import UnliftIO.Concurrent (threadDelay)
 
 import Ecluse.E2E.Fixtures (PkgSpec, allowPkg, denyPkg, headPkg, mirrorPkg, psName, psVersion, tamperPkg, telemetryDdPkg, telemetryPkg)
 import Ecluse.E2E.Harness
@@ -46,7 +47,10 @@ scenarios = do
 
             it "blocks a package that declares an install script, and never mirrors it" $ \e2e -> do
                 void $ npmInstall e2e (psName denyPkg) >>= shouldFail
-                mirrored <- verdaccioHasVersion e2e (psName denyPkg) (psVersion denyPkg)
+                -- Give the worker a 1.5s window to erroneously mirror it, then assert absence.
+                -- Using verdaccioHasVersion here would incur a 20-second timeout penalty.
+                threadDelay 1500000
+                mirrored <- verdaccioHasVersionNow e2e (psName denyPkg) (psVersion denyPkg)
                 mirrored `shouldBe` False
 
             it "runs no package lifecycle script during a harness install (defence in depth)" $ \e2e -> do
@@ -66,7 +70,8 @@ scenarios = do
                 -- the bytes, but the worker's strongest-digest gate must reject them, so the
                 -- tampered version never reaches the private mirror.
                 _ <- proxyGet e2e (tarballPath tamperPkg)
-                mirrored <- verdaccioHasVersion e2e (psName tamperPkg) (psVersion tamperPkg)
+                threadDelay 1500000
+                mirrored <- verdaccioHasVersionNow e2e (psName tamperPkg) (psVersion tamperPkg)
                 mirrored `shouldBe` False
 
         describe "protocol behaviours" $
@@ -80,7 +85,8 @@ scenarios = do
                 status `shouldBe` 200
                 bodyBytes `shouldBe` 0
                 declared `shouldSatisfy` maybe False (> 0)
-                mirrored <- verdaccioHasVersion e2e (psName headPkg) (psVersion headPkg)
+                threadDelay 1500000
+                mirrored <- verdaccioHasVersionNow e2e (psName headPkg) (psVersion headPkg)
                 mirrored `shouldBe` False
 
         describe "server↔worker -- the full mirror lifecycle" $
@@ -278,9 +284,11 @@ publishScenarios = do
                 -- have been stored and visible -- exactly as the in-scope scenario, under the
                 -- identical relay and ACL, shows it is (that scenario is the control). So a
                 -- False after the patience window can only mean the write never left the proxy.
-                void $ withPublishProject e2e name ver npmPublishIn >>= shouldFail
-                reached <- verdaccioHasVersion e2e name ver
-                reached `shouldBe` False
+                withPublishProject e2e name ver $ \proj -> do
+                    void $ npmPublishIn proj >>= shouldFail
+                    threadDelay 1500000
+                    reached <- verdaccioHasVersionNow e2e name ver
+                    reached `shouldBe` False
 
 
 
