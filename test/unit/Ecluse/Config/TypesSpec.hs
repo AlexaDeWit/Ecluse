@@ -6,7 +6,7 @@ import Data.Text qualified as T
 import Test.Hspec
 
 import Ecluse.Config.Rule (PolicyError (..), renderPolicyError)
-import Ecluse.Config.Types (CredentialBackend (..), QueueBackend (..), mkUrl, unUrl)
+import Ecluse.Config.Types (CredentialBackend (..), QueueBackend (..), mkUrl, parseCredentialBackend, renderCredentialBackend, unUrl)
 import Ecluse.Core.Wire (parseWire, renderWire)
 
 spec :: Spec
@@ -31,14 +31,14 @@ backendSpec = describe "backend selection" $ do
 
     describe "CredentialBackend" $ do
         it "round-trips each backend through parse/render" $ do
-            parseWire "codeartifact" `shouldBe` Right CodeArtifactCredential
-            parseWire "static" `shouldBe` Right StaticCredential
-            parseWire "adc" `shouldBe` Right AdcCredential
-            renderWire CodeArtifactCredential `shouldBe` "codeartifact"
-            renderWire StaticCredential `shouldBe` "static"
-            renderWire AdcCredential `shouldBe` "adc"
+            parseCredentialBackend "codeartifact" `shouldBe` Right CodeArtifactCredential
+            parseCredentialBackend "static" `shouldBe` Right StaticCredential
+            parseCredentialBackend "adc" `shouldBe` Right AdcCredential
+            renderCredentialBackend CodeArtifactCredential `shouldBe` "codeartifact"
+            renderCredentialBackend StaticCredential `shouldBe` "static"
+            renderCredentialBackend AdcCredential `shouldBe` "adc"
         it "rejects an unknown name, naming the accepted set" $
-            (parseWire "vault" :: Either Text CredentialBackend)
+            parseCredentialBackend "vault"
                 `shouldBe` Left "unknown credential provider \"vault\" (expected one of: codeartifact, static, adc)"
 
 urlSpec :: Spec
