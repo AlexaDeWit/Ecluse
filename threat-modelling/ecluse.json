@@ -647,12 +647,12 @@
                 },
                 {
                   "number": 19,
-                  "status": "Open",
+                  "status": "Mitigated",
                   "severity": "Medium",
                   "title": "Docker Hub Static Credential Leakage",
                   "type": "Information disclosure",
                   "description": "Docker Hub does not support OIDC, forcing the CI release workflow to rely on a static, long-lived DOCKERHUB_TOKEN.",
-                  "mitigation": "The token is protected within a GitHub Environment requiring manual review and is tied to a repo-scoped machine account. However, it remains a static secret. The long-term goal is to migrate to an OIDC-capable registry or alternate auth.",
+                  "mitigation": "The workflow was migrated to GitHub Container Registry (GHCR), completely removing Docker Hub static secrets in favor of the ephemeral, OIDC-backed GITHUB_TOKEN.",
                   "modelType": "STRIDE",
                   "id": "006c7e3d-71f3-414f-87a5-901def6bf71e"
                 }
