@@ -1,18 +1,26 @@
 module Ecluse.Dredger (
     runDredger,
+    dredgerApplication,
 ) where
 
 import Katip (Severity (InfoS), logFM, ls)
 import Katip.Monadic (runKatipContextT)
+import Network.Wai (Application)
 
 import Ecluse.Boot (BootEnv (..))
 import Ecluse.Config (AppConfig (cfgPort))
 import Ecluse.Log (moduleField)
 import Ecluse.Server (ServerConfig (scDrain, scPort), mkServerConfig, probeApplication, runWarp, serverMiddleware)
 
+{- | The WAI application for the Dredger worker mode.
+It exposes liveness and readiness probes.
+-}
+dredgerApplication :: ServerConfig -> IO Application
+dredgerApplication cfg = pure (serverMiddleware cfg (probeApplication (scDrain cfg) (pure True)))
+
 {- | The entry point for the Dredger worker mode.
 Dredger runs as a standalone HTTP server that only exposes liveness and readiness
-probes. Its actual worker loop will scan upstream mirrors and garbage collect.
+probes. Its actual worker loop will clean up upstream mirrors.
 -}
 runDredger :: BootEnv -> IO ()
 runDredger bootEnv = do
@@ -23,6 +31,4 @@ runDredger bootEnv = do
     runKatipContextT logEnv (moduleField "Ecluse.Dredger") mempty $ do
         logFM InfoS (ls ("Dredger mode starting up on port " <> show port :: String))
 
-    -- Start the probe server. Since scMounts is empty, it will only serve
-    -- /livez and /readyz, using a dummy heartbeat that is always healthy.
-    runWarp cfg (pure (serverMiddleware cfg (probeApplication (scDrain cfg) (pure True))))
+    runWarp cfg (dredgerApplication cfg)

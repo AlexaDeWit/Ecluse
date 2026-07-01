@@ -1,14 +1,22 @@
 module Ecluse.Pilot (
     runPilot,
+    pilotApplication,
 ) where
 
 import Katip (Severity (InfoS), logFM, ls)
 import Katip.Monadic (runKatipContextT)
+import Network.Wai (Application)
 
 import Ecluse.Boot (BootEnv (..))
 import Ecluse.Config (AppConfig (cfgPort))
 import Ecluse.Log (moduleField)
 import Ecluse.Server (ServerConfig (scDrain, scPort), mkServerConfig, probeApplication, runWarp, serverMiddleware)
+
+{- | The WAI application for the Pilot worker mode.
+It exposes liveness and readiness probes.
+-}
+pilotApplication :: ServerConfig -> IO Application
+pilotApplication cfg = pure (serverMiddleware cfg (probeApplication (scDrain cfg) (pure True)))
 
 {- | The entry point for the Pilot worker mode.
 Pilot runs as a standalone HTTP server that only exposes liveness and readiness
@@ -23,6 +31,4 @@ runPilot bootEnv = do
     runKatipContextT logEnv (moduleField "Ecluse.Pilot") mempty $ do
         logFM InfoS (ls ("Pilot mode starting up on port " <> show port :: String))
 
-    -- Start the probe server. Since scMounts is empty, it will only serve
-    -- /livez and /readyz, using a dummy heartbeat that is always healthy.
-    runWarp cfg (pure (serverMiddleware cfg (probeApplication (scDrain cfg) (pure True))))
+    runWarp cfg (pilotApplication cfg)

@@ -457,14 +457,17 @@ test-suite ecluse-unit
     EcluseSpec
     Ecluse.AcceptanceSpec
     Ecluse.BenchLoad.NormaliseSpec
+    Ecluse.CLISpec
     Ecluse.CompositionSpec
     Ecluse.Config.AesonSpec
     Ecluse.Config.ResolveSpec
     Ecluse.Config.RuleSpec
     Ecluse.Config.TypesSpec
+    Ecluse.DredgerSpec
     Ecluse.EnvSpec
     Ecluse.LogSpec
     Ecluse.ManifestSpec
+    Ecluse.PilotSpec
     Ecluse.ServerSpec
     Ecluse.TelemetrySpec
     Ecluse.Telemetry.CorrelationSpec
@@ -478,6 +481,7 @@ test-suite ecluse-unit
     , ecluse
     , ecluse:ecluse-acceptance
     , ecluse:ecluse-bench-load
+    , optparse-applicative
     , ecluse:ecluse-core
     , ecluse:ecluse-manifest
     , ecluse:ecluse-test-support
