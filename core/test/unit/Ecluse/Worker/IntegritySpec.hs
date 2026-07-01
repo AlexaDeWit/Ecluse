@@ -2,13 +2,13 @@
 
 module Ecluse.Worker.IntegritySpec (spec) where
 
-import Test.Hspec
 import Data.Text qualified as T
 import Ecluse.Core.Package (HashAlg (Blake2b, MD5, SHA1, SHA256, SRI))
 import Ecluse.Core.Package qualified as Pkg
 import Ecluse.Core.Worker (IntegrityResult (IntegrityMismatch, IntegrityVerified), verifyIntegrity)
 import Ecluse.Test.Package (unsafeHash)
 import Ecluse.Worker.Support
+import Test.Hspec
 
 spec :: Spec
 spec = do
