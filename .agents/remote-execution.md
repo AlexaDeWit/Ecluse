@@ -23,18 +23,10 @@ relay. Local contributor sessions do not need it.
   ref can make the later signed push non-fast-forward and undeletable from the environment.
 - Use the session's designated branch when one is provided.
 
-## Local Verification and Bootstrapping
+## Local Verification
 
-Hosted containers may lack Nix initially. Agents **must not** skip local verification (`make check`).
-If Nix is missing, bootstrap the environment using the project's setup script:
-
-```bash
-# Pin to a specific SHA for safety.
-# E.g. 5a4a74a13740022d612a99c38c9cf71284867732
-curl -sSL https://raw.githubusercontent.com/AlexaDeWit/Ecluse/5a4a74a13740022d612a99c38c9cf71284867732/scripts/setup-jules.sh | bash
-```
-
-Once Nix is installed, run `make check` inside the Nix shell:
+Agents **must not** skip local verification (`make check`).
+Run `make check` inside the Nix shell:
 
 ```bash
 env -u IN_NIX_SHELL nix develop --command make check
