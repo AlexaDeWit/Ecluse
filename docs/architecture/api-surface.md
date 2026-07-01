@@ -78,7 +78,7 @@ must not be mistaken for a proof that the filtered document is internally cohere
   **build time** by a small generator (kept out of the library closure, like the
   benchmark components) from a **fixed canonical config**, a **pure** function of
   (config, mounts), with **no `GET /openapi.json` route and no WAI wiring**.
-  `make docs-site` / `make site` **run the generator** and render its output to a
+  `task docs-site` / `task site` **run the generator** and render its output to a
   static **Redoc** page, staging it, together with `openapi.json` itself, into
   `./_site` for GitHub Pages, beside the Haddock, published by `pages.yml` on push to
   `main`. (The spec is **derived build data**, regenerated at publish time, **not

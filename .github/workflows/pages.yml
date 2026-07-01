@@ -41,7 +41,7 @@ jobs:
       # store into this directory: it fills it with the documentation-variant
       # closure instead (see the doc-variant cache steps below).
       CABAL_DIR: ${{ github.workspace }}/.cabal
-      # The build directory `make site` writes Haddock + the OpenAPI manifest into.
+      # The build directory `task site` writes Haddock + the OpenAPI manifest into.
       # Cached under its own dist-docs-* key, so the doc-variant build products never
       # collide with the gate's regular-variant dist-newstyle entry.
       DOCS_BUILDDIR: dist-docs
@@ -97,7 +97,7 @@ jobs:
             dist-docs-${{ runner.os }}-
 
       - name: Update package index
-        run: nix develop .#docs --command make update
+        run: nix develop .#docs --command task update
 
       # Assembles the Pages site into ./_site: the home page at the root and the
       # library Haddock under /api (with .nojekyll at the root). Runs in the lean
@@ -105,7 +105,7 @@ jobs:
       # shell the job used to enter. DOCS_BUILDDIR routes the doc-variant build into
       # the separately-cached tree restored above.
       - name: Build the Pages site into ./_site
-        run: nix develop .#docs --command make site DOCS_BUILDDIR="$DOCS_BUILDDIR"
+        run: nix develop .#docs --command task site DOCS_BUILDDIR="$DOCS_BUILDDIR"
 
       # Cache writes: main only, single writer (Pages). Right after the build that
       # produced them and before the deploy steps, so the expensive doc-variant

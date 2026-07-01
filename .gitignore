@@ -34,3 +34,4 @@ scratchpad/
 .agents/settings.local.json
 .agents/settings.json
 .agents/worktrees/
+.task/

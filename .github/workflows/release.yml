@@ -31,7 +31,7 @@ jobs:
   # A pushed tag (or the workflow_dispatch `tag` input) must match it — a release
   # fails fast HERE, before the expensive multi-arch build, on any drift. Pre-release
   # suffixes (e.g. -rc1) are stripped before comparing, so v0.1.0-rc1 still matches
-  # 0.1.0. `make version` reads it via `cabal info`, so this needs the toolchain —
+  # 0.1.0. `task version` reads it via `cabal info`, so this needs the toolchain —
   # cheap insurance on the infrequent release path.
   verify-version:
     name: Verify tag matches cabal version
@@ -55,7 +55,7 @@ jobs:
         run: |
           if [ -n "$INPUT_TAG" ]; then tag="$INPUT_TAG"; else tag="${REF_NAME#v}"; fi
           base="${tag%%-*}" # strip any -rc / -pre suffix
-          want="$(nix develop .#ci --command make version)"
+          want="$(nix develop .#ci --command task version)"
           if [ "$base" != "$want" ]; then
             echo "::error::release tag '$tag' (base '$base') != ecluse.cabal version '$want' — bump the cabal version or fix the tag"
             exit 1
@@ -89,7 +89,7 @@ jobs:
         uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v22
 
       - name: Build image
-        run: nix develop .#release --command make docker-build
+        run: nix develop .#release --command task docker-build
 
       # Dereference the ./result symlink (it points into /nix/store) so the
       # uploaded artifact carries the archive's bytes, not a dangling link.
@@ -101,7 +101,7 @@ jobs:
       # Per-platform SBOM: .#ecluse-bin is THIS arch's binary, so its closure (and
       # thus the SBOM) is arch-specific. Attested to the platform digest below.
       - name: Generate SBOM
-        run: nix develop .#release --command make sbom
+        run: nix develop .#release --command task sbom
 
       - name: Upload image archive
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

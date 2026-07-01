@@ -77,21 +77,21 @@ docs/  architecture and design documents
 ## Build and tooling
 
 - Nix with flakes is mandatory. Use the pinned dev shell; system GHC/Cabal is unsupported.
-- Run work through `make` inside `nix develop`. When the ambient shell may be stale, use:
+- Run work through `task` inside `nix develop`. When the ambient shell may be stale, use:
 
   ```bash
-  env -u IN_NIX_SHELL nix develop --command make <target>
+  env -u IN_NIX_SHELL nix develop --command task <target>
   ```
 
 - Run `task --list` to discover targets. `task check` is the fast pre-push suite; CI remains the
   authoritative gate. Run `task sast` before pushing. Web-based agents without Nix access must
-  not skip local verification.
+  not skip local verification; instead, use `scripts/setup-jules.sh` to bootstrap the environment.
 - Automation scripts are Bash in `scripts/`, with `#!/usr/bin/env bash` and
   `set -euo pipefail`; keep workflow `run:` blocks trivial and scripts shellcheck-clean. A new
   Python or Node build-time dependency needs an explicit justification.
 - Use `hoogle`, HLS, `cabal-plan`, and `ghcid` to discover types and behaviour instead of
   guessing. Start the HLS MCP bridge with the worktree root before semantic requests.
-- Create agent worktrees with `make new-worktree BRANCH=<branch>` so the local HLS index warms in
+- Create agent worktrees with `task new-worktree BRANCH=<branch>` so the local HLS index warms in
   isolation. Keep cold HLS concurrency to two or three worktrees.
 
 ## CI, security, and repository gates

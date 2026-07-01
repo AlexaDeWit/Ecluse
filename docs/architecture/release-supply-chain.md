@@ -3,7 +3,7 @@
 > Part of the [Écluse architecture overview](../architecture.md).
 
 How Écluse is built into a container image, published, attested, and scanned. The
-contributor-facing summary and the `make` targets live in
+contributor-facing summary and the `task` targets live in
 [`../../CONTRIBUTING.md`](../../CONTRIBUTING.md); this document is the operational
 detail behind them. The consumer-side verify recipe is in the
 [README](../../README.md#verifying-the-image).
@@ -15,7 +15,7 @@ detail behind them. The consumer-side verify recipe is in the
 Dockerfile. The image is the stripped binary's runtime closure plus CA
 certificates and nothing else, no shell, no package manager, runs **non-root**
 (uid 65532), and is **bit-for-bit reproducible** (a fitting property for a
-supply-chain tool). Build it locally with `make docker-build` (→ `./result`, a
+supply-chain tool). Build it locally with `task docker-build` (→ `./result`, a
 `docker-archive`).
 
 > The image is ~23 MB. A residual chunk (`curl`/`openssl`/`krb5`) rides in via
@@ -29,13 +29,13 @@ part of the PR `gate`. Pushing a `vX.Y.Z` tag builds the image **natively for bo
 `linux/amd64` and `linux/arm64`** (see [Multi-architecture image](#multi-architecture-image)),
 assembles the two builds into a single multi-arch manifest list pushed under one
 immutable tag, attaches keyless provenance + SBOM attestations as immutable OCI
-referrers (the GitHub attest-actions; SBOM content from `make sbom`), and publishes
+referrers (the GitHub attest-actions; SBOM content from `task sbom`), and publishes
 a **GitHub Release** carrying the image digest, the `gh attestation verify` recipe,
 and the auto-generated changelog
 ([`scripts/release-notes.sh`](../../scripts/release-notes.sh)). A pre-release tag
 (`vX.Y.Z-rc.N`) is flagged as a prerelease; an `rc` smoke test via
-`workflow_dispatch` publishes the image but no Release. (`make docker-build` /
-`make docker-push` remain the **single-arch, host-architecture** path for local
+`workflow_dispatch` publishes the image but no Release. (`task docker-build` /
+`task docker-push` remain the **single-arch, host-architecture** path for local
 builds and manual pushes; the cross-arch assembly is CI-only.)
 
 **Immutable tags, no `latest`.** The target repo
@@ -109,7 +109,7 @@ its own.
   from the run context, the source repo + commit, the release workflow, and the
   run (the *how/where*). The cryptographic "who built it" guarantee is the
   keyless signing identity (the release workflow's OIDC cert).
-- **SBOM** (`actions/attest-sbom`, content from `make sbom`). Generated with
+- **SBOM** (`actions/attest-sbom`, content from `task sbom`). Generated with
   [`sbomnix`](https://github.com/tiiuae/sbomnix) from the **Nix closure of the
   exact binary the image ships** (`.#ecluse-bin`, stripped/static), not a scan
   of the image, which couldn't see the statically-linked Haskell deps. So it
@@ -159,10 +159,9 @@ needs a long-lived token, kept as weak and contained as possible:
 Two arms keep the image's dependency closure honest over time, **detection** and
 **freshness**.
 
-**Detection, `grype` (the authority).** `make scan` builds the sbomnix SBOM of
-`.#ecluse-bin` (the exact shipped binary) and scans it with
-[grype](https://github.com/anchore/grype) against its maintained DB →
-severity-rated, low-noise findings in `grype.json` (plus a table). `make
+**Detection, `grype` (the authority).** `task scan` builds the sbomnix SBOM of
+the application closure into `sbom/`, runs `grype` against it, and saves the
+severity-rated, low-noise findings in `grype.json` (plus a table). `task
 scan-vulnix` is a secondary [vulnix](https://github.com/flyingcircusio/vulnix)
 cross-check, more comprehensive and Nix-patch-aware, but un-graded, so *not* the
 authority. (A naive closure scan with distro-advisory matchers reports ~1000

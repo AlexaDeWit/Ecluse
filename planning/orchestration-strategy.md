@@ -113,8 +113,8 @@ immediately rather than at PR time. Slices that genuinely cannot be split become
 
 **Warm each worktree's HLS index at creation.** A fresh worktree is a fresh HLS
 workspace: its `dist-newstyle` and `.hie` start empty, so the first navigation call
-pays a cold typecheck. Create worktrees with `make new-worktree BRANCH=<branch>`,
-which adds the worktree and kicks off a background `make build` so the interface
+pays a cold typecheck. Create worktrees with `task new-worktree BRANCH=<branch>`,
+which adds the worktree and kicks off a background `task build` so the interface
 files HLS reuses are on disk before the agent arrives, the first call then returns
 in seconds, not after a full typecheck. Dependencies come warm from the shared Nix
 store, so only this project's own modules cost anything. Two reasons one-worktree-per-
@@ -122,7 +122,7 @@ agent is a **hard** rule and not just a speed-up: HLS keys its `hiedb` (a SQLite
 by *workspace path*, so multiple agents in one shared checkout contend on a single
 database and can stall each other, a separate directory per agent gives each its own
 DB; and with 2–3 worktrees in flight, **stagger** the creations so parallel cold
-typechecks don't thrash the CPU. After a post-merge rebase, re-run `make build` to
+typechecks don't thrash the CPU. After a post-merge rebase, re-run `task build` to
 re-warm incrementally.
 
 **Carry the architect's full acceptance criteria into the brief; a brief is not a
@@ -169,14 +169,11 @@ into the agent's environment when you rely on it.
 long-lived agent session enters a `nix develop` once and holds it for the whole
 session; if a flake upgrade merges _mid-session_ (a new GHC, fourmolu, or
 dependency pin), that ambient shell goes stale while the code on disk moves on.
-The Makefile trusts `IN_NIX_SHELL` and runs tools directly when it is set, which
-is silently wrong for a stale agent shell (e.g. a 0.14 fourmolu reflowing a 0.19
-codebase's Haddock). So agents and the team lead run every build/format/gate
-command as `env -u IN_NIX_SHELL nix develop --command make <target>`, which
+command as `env -u IN_NIX_SHELL nix develop --command task <target>`, which
 rebuilds the shell from the on-disk flake and uses its pinned tools regardless of
 session age. This is an **agent-workflow rule, not a repo one**: CI enters the
 shell fresh per run and humans' direnv re-evaluates on pull, so neither is ever
-stale, the Makefile is deliberately left as-is rather than taxing every consumer
+stale, the Taskfile is deliberately left as-is rather than taxing every consumer
 to compensate for an environment defect unique to long-lived agent sessions.
 
 ## Evaluation, two independent passes
@@ -272,7 +269,7 @@ coherent first. It is recorded in the
 ## Verification: fast local, CI is the gate
 
 CI **is** the gate; local verification is for _fast feedback_, not a pre-push
-ceremony. Every CI job just calls `make`, and CI runs the tiers **in parallel** on
+ceremony. Every CI job just calls `task`, and CI runs the tiers **in parallel** on
 its own runners, so reproducing the slow, parallelizable ones (Docker
 integration, the hermetic `nix-check`, Haddock) serially on one contended host is
 wasted work CI does anyway, and the team lead reproducing the whole gate before
@@ -281,10 +278,10 @@ pushing is **running it twice**.
 The **fast floor** is the agent's whole local obligation before pushing:
 
 ```bash
-make check
+task check
 ```
 
-`make check` is the project's fast pre-push target, build, unit tests, doctest,
+`task check` is the project's fast pre-push target, build, unit tests, doctest,
 fourmolu/hlint, Semgrep, `cabal check`, and workflow-lint: **the gate minus its
 Docker integration and Haddock tiers**, the slow parallelizable ones CI runs for
 you. The one hard stop within it is **Semgrep clean** (zero findings, no new ignores
@@ -292,28 +289,28 @@ without the architect's approval). Then **push early, let CI parallelize the res
 and watch the real run to green** (`gh pr checks --watch`).
 
 Reproduce a tier locally **only to debug a red**, map the red CI job back to its
-`make` target and run just that one, never the whole gate wholesale. The gating
+`task` target and run just that one, never the whole gate wholesale. The gating
 jobs (the `needs` of the terminal `gate` job in
 [`../.github/workflows/ci.yml`](../.github/workflows/ci.yml)) map one-to-one:
 
 | Gating CI job                              | Local command                                          |
 | ------------------------------------------ | ------------------------------------------------------ |
-| `build-and-test` (build + unit)            | `make check` _(build, unit, format-check, lint, sast)_ |
-| `lint` (fourmolu + hlint)                  | ↳ included in `make check`                             |
-| `semgrep` (`--config auto`, ERROR/WARNING) | ↳ included in `make check`                             |
-| `integration` (ministack / Docker)         | `make test-integration`                                |
-| `docs` (Haddock)                           | `make docs-site`                                       |
+| `build-and-test` (build + unit)            | `task check` _(build, unit, format-check, lint, sast)_ |
+| `lint` (fourmolu + hlint)                  | ↳ included in `task check`                             |
+| `semgrep` (`--config auto`, ERROR/WARNING) | ↳ included in `task check`                             |
+| `integration` (ministack / Docker)         | `task test-integration`                                |
+| `docs` (Haddock)                           | `task docs-site`                                       |
 | `gate`                                     | green iff all of the above are green                   |
-| `smoke` (live registries)                  | `make test-smoke`, **non-gating, never blocks**       |
+| `smoke` (live registries)                  | `task test-smoke`, **non-gating, never blocks**       |
 
-`make nix-check` is the one worth a _proactive_ local run when you have touched the
+`task nix-check` is the one worth a _proactive_ local run when you have touched the
 flake or added a module: it catches `-Werror` warnings and the _flakes only see
 git-tracked files_ trap, so a new module must be `git add`-ed (and listed in the
-`.cabal` file) **before** it runs, a failure a plain `make build` misses.
+`.cabal` file) **before** it runs, a failure a plain `task build` misses.
 
 Coverage takes the same posture: `codecov/patch` runs in CI as a **backstop**
 (≥ 85% on changed lines), so write the behaviour tests you would write anyway and
-let it flag genuine gaps, don't pre-run `make coverage` and parse
+let it flag genuine gaps, don't pre-run `task coverage` and parse
 `coverage/<suite>.json` to colour a number up. ~95% is a long-term aspiration, not
 a per-PR bar (chasing it is wasteful); see
 [Testing Strategy → Coverage](../docs/testing.md).
@@ -322,9 +319,9 @@ a per-PR bar (chasing it is wasteful); see
 > suites surface no coverage** (not built with HPC, no Codecov flag), by design.
 > So when `codecov/patch` flags changed lines, **reach for a unit or integration
 > test**: a path exercised only by an e2e/smoke run still reads as uncovered, on the
-> dashboard and in any local `make coverage`. Don't conclude "the e2e test covers it".
-> It does not count. (Equally, a single-tier local read under-counts the other
-> tier; `make coverage` merges both; see [CONTRIBUTING → Coverage](../CONTRIBUTING.md#coverage).)
+> dashboard and in any local `task coverage`. Don't conclude "the e2e test covers it".
+> (This is also why the local test loop has a `task coverage-unit` and `task coverage`
+> tier; `task coverage` merges both; see [CONTRIBUTING → Coverage](../CONTRIBUTING.md#coverage).)
 
 **Scale verification to the change.** Light by default. Reserve heavier local
 reproduction _and_ exhaustive case-enumeration for the genuinely risky surfaces: the parsers and identifier canonicalisation, the credential path, deny-by-default
@@ -346,7 +343,7 @@ A PR reaches the architect only when **all** hold:
 
 - [ ] All acceptance criteria met, each with passing **deterministic, gating** (unit/integration) test evidence, a non-gating smoke test never stands in for a criterion
 - [ ] Independent review (Stage A + B) passed; no open critical issues
-- [ ] Fast local checks pass before pushing (`make check`, the gate minus its Docker + Haddock tiers), not the full gate
+- [ ] Fast local checks pass before pushing (`task check`, the gate minus its Docker + Haddock tiers), not the full gate
 - [ ] Foreseeable branches tested by intent; `codecov/patch` green (≥ 85%, a CI backstop, not a number chased locally)
 - [ ] Comments are contract + why only, no roadmap / slice / PR references (HADDOCK.md §11)
 - [ ] Semgrep clean (no new ignores)
@@ -404,7 +401,7 @@ Escalations arrive **decision-ready**:
   in a follow-up reconciliation. The team lead verifies this at GATE; a merged slice still
   reading `not-started` is drift the per-PR loop was supposed to prevent.
 - Generated artifacts (e.g. version-ordering fixtures via
-  `make gen-version-fixtures`) are regenerated with their tooling, never
+  `task gen-version-fixtures`) are regenerated with their tooling, never
   hand-edited.
 - **Cross-cutting invariants live in one helper.** When the same invariant is
   enforced by more than one slice (`latest` resolution in the npm filter and the

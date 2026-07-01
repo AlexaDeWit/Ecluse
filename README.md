@@ -113,12 +113,12 @@ three commands:
 
 ```bash
 nix develop        # enter the dev shell (direnv does this automatically)
-make build         # build the library, executable, and tests
-make check         # fast pre-push checks (a subset of the gate)
-make gate          # the full CI-gate mirror (adds the Docker integration + Haddock tiers)
+task build         # build the library, executable, and tests
+task check         # fast pre-push checks (a subset of the gate)
+task gate          # the full CI-gate mirror (adds the Docker integration + Haddock tiers)
 ```
 
-Full setup, the `make` workflow, reproducible/hermetic builds, and dependency locking are in
+Full setup, the `task` workflow, reproducible/hermetic builds, and dependency locking are in
 **[Getting Started](docs/getting-started.md)**. The contribution process (conventions, DCO
 sign-off, and the AI-assistance policy) is in [`CONTRIBUTING.md`](CONTRIBUTING.md); all
 participation is governed by the [Code of Conduct](CODE_OF_CONDUCT.md).
