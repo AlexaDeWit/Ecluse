@@ -610,7 +610,7 @@
               "isTrustBoundary": false,
               "outOfScope": false,
               "reasonOutOfScope": "",
-              "hasOpenThreats": true,
+              "hasOpenThreats": false,
               "threats": [
                 {
                   "number": 1,
@@ -647,7 +647,7 @@
                 },
                 {
                   "number": 19,
-                  "status": "Open",
+                  "status": "Mitigated",
                   "severity": "Medium",
                   "title": "Docker Hub Static Credential Leakage",
                   "type": "Information disclosure",
