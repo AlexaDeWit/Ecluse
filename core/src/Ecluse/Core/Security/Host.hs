@@ -29,6 +29,10 @@ module Ecluse.Core.Security.Host (
     TarballHostPolicy (..),
     Origin (..),
     tarballHostAllowed,
+
+    -- * Internals exported for testing
+    IpAddr (..),
+    parseIPv4,
 ) where
 
 import Data.IP (
@@ -233,6 +237,7 @@ data IpAddr
       IpV4 Word8 Word8 Word8 Word8
     | -- An IPv6 address, normalised to its eight 16-bit groups.
       IpV6 [Word16]
+    deriving stock (Eq, Show)
 
 {- | Extract the bare host from a URI or @host[:port]@ authority.
 

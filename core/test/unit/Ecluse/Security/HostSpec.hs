@@ -10,6 +10,9 @@ import Hedgehog.Range qualified as Range
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
+import Data.Word (Word8)
+import Text.Read (readMaybe)
+
 import Ecluse.Core.Security (
     LoweredHostSet,
     Origin (TrustedOrigin, UntrustedOrigin),
@@ -21,6 +24,7 @@ import Ecluse.Core.Security (
     splitHostPort,
     tarballHostAllowed,
  )
+import Ecluse.Core.Security.Host (IpAddr (..), parseIPv4)
 
 {- | The raw configured upstream hosts (lower-/mixed-case on purpose), before
 normalisation. Kept unwrapped so a case can extend it (e.g. the SSRF gate's
@@ -45,7 +49,36 @@ spec = do
     ssrfGateSpec
     tarballHostPolicySpec
     lowerCaseHostsSpec
+    parseIPv4Spec
     propertiesSpec
+
+parseIPv4Spec :: Spec
+parseIPv4Spec = describe "parseIPv4" $ do
+    let mockOctet :: Text -> Maybe Word8
+        mockOctet t = do
+            n <- readMaybe (T.unpack t) :: Maybe Integer
+            if n >= 0 && n <= 255 then Just (fromIntegral n) else Nothing
+
+    it "parses exactly four valid octets" $
+        parseIPv4 mockOctet "192.168.1.1" `shouldBe` Just (IpV4 192 168 1 1)
+
+    it "rejects too few parts" $
+        parseIPv4 mockOctet "192.168.1" `shouldBe` Nothing
+
+    it "rejects too many parts" $
+        parseIPv4 mockOctet "192.168.1.1.5" `shouldBe` Nothing
+
+    it "rejects when octet parsing fails" $
+        parseIPv4 mockOctet "192.168.x.1" `shouldBe` Nothing
+
+    it "rejects empty string" $
+        parseIPv4 mockOctet "" `shouldBe` Nothing
+
+    it "rejects empty parts" $
+        parseIPv4 mockOctet "192..1.1" `shouldBe` Nothing
+
+    it "rejects out-of-bounds octets (if mockOctet rejects them)" $
+        parseIPv4 mockOctet "256.168.1.1" `shouldBe` Nothing
 
 hostAllowlistSpec :: Spec
 hostAllowlistSpec = describe "isAllowedUpstreamHost" $ do
