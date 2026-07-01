@@ -29,6 +29,9 @@ module Ecluse.Core.Security.Host (
     TarballHostPolicy (..),
     Origin (..),
     tarballHostAllowed,
+
+    -- * Internal test exports
+    isOctal,
 ) where
 
 import Data.IP (

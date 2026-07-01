@@ -20,6 +20,7 @@ import Ecluse.Core.Security (
     lowerCaseHosts,
     splitHostPort,
     tarballHostAllowed,
+    isOctal,
  )
 
 {- | The raw configured upstream hosts (lower-/mixed-case on purpose), before
@@ -46,6 +47,7 @@ spec = do
     tarballHostPolicySpec
     lowerCaseHostsSpec
     propertiesSpec
+    isOctalSpec
 
 hostAllowlistSpec :: Spec
 hostAllowlistSpec = describe "isAllowedUpstreamHost" $ do
@@ -621,3 +623,24 @@ genMaybeInternalHost =
   where
     octet :: H.Gen Int
     octet = Gen.int (Range.linear 0 255)
+
+isOctalSpec :: Spec
+isOctalSpec = describe "isOctal" $ do
+    it "accepts a single octal digit" $
+        isOctal "0" `shouldBe` True
+    it "accepts multiple octal digits" $
+        isOctal "01234567" `shouldBe` True
+    it "rejects the empty string" $
+        isOctal "" `shouldBe` False
+    it "rejects a string containing an 8" $
+        isOctal "018" `shouldBe` False
+    it "rejects a string containing a 9" $
+        isOctal "019" `shouldBe` False
+    it "rejects a string with non-numeric characters" $
+        isOctal "01a" `shouldBe` False
+    it "rejects a string with leading whitespace" $
+        isOctal " 01" `shouldBe` False
+    it "rejects a string with trailing whitespace" $
+        isOctal "01 " `shouldBe` False
+    it "rejects a negative sign" $
+        isOctal "-01" `shouldBe` False
