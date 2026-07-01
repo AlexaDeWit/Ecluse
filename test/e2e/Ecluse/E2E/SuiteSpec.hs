@@ -19,6 +19,7 @@ import Control.Monad (void)
 import Data.Text qualified as T
 import System.Exit (ExitCode (ExitSuccess))
 import Test.Hspec
+import Control.Monad.IO.Class (liftIO)
 
 import Ecluse.E2E.Fixtures (PkgSpec, allowPkg, denyPkg, headPkg, mirrorPkg, psName, psVersion, tamperPkg, telemetryDdPkg, telemetryPkg)
 import Ecluse.E2E.Harness
