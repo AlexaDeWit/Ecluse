@@ -1,0 +1,45 @@
+{
+  "schema_version": "1.7.5",
+  "id": "GHSA-2234-fmw7-43wr",
+  "published": "2024-10-15T17:43:50Z",
+  "modified": "2026-03-23T17:41:30.891186Z",
+  "aliases": ["CVE-2024-48913"],
+  "related": ["CGA-8g32-3q6w-rghg"],
+  "summary": "Hono allows bypass of CSRF Middleware by a request without Content-Type header.",
+  "details": "### Summary\nBypass CSRF Middleware by a request without Content-Type header.",
+  "affected": [
+    {
+      "package": {
+        "name": "hono",
+        "ecosystem": "npm",
+        "purl": "pkg:npm/hono"
+      },
+      "ranges": [
+        {
+          "type": "SEMVER",
+          "events": [
+            { "introduced": "0" },
+            { "fixed": "4.6.5" }
+          ]
+        }
+      ],
+      "database_specific": {
+        "source": "https://github.com/github/advisory-database/blob/main/advisories/github-reviewed/2024/10/GHSA-2234-fmw7-43wr/GHSA-2234-fmw7-43wr.json"
+      }
+    }
+  ],
+  "references": [],
+  "database_specific": {
+    "cwe_ids": ["CWE-352"],
+    "github_reviewed": true,
+    "github_reviewed_at": "2024-10-15T17:43:50Z",
+    "nvd_published_at": "2024-10-15T16:15:05Z",
+    "severity": "MODERATE"
+  },
+  "severity": [
+    {
+      "type": "CVSS_V3",
+      "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:U/C:L/I:H/A:N"
+    }
+  ]
+}

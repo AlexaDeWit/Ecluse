@@ -56,6 +56,7 @@ module Ecluse.Telemetry.Tracing (
     withMirrorEnqueueSpan,
     withMirrorJobSpan,
     JobSpanOutcome (..),
+    withDomainSpan,
 
     -- * The core tracing ports
     tracingPortOf,
