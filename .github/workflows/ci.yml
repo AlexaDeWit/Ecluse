@@ -298,11 +298,6 @@ jobs:
 
       - name: Set up toolchain
         uses: ./.github/actions/setup-toolchain
-        with:
-          # Own the doc-closure cache (deps + their `-doc` outputs); single writer,
-          # save on main. Bigger than the `.#ci` shell, so raise the trim cap.
-          nix-cache-prefix: nix-docs
-          nix-gc-max-store-size: 7G
 
       - name: Build library Haddock (checks.docs flake check)
         run: nix build .#checks.x86_64-linux.docs --no-link --print-build-logs

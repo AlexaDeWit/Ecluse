@@ -479,128 +479,61 @@
           '';
 
           # Build the library Haddock via the Nix Haskell builder. The dependency
-          # closure comes prebuilt from the pinned haskell set (with their .haddock
-          # interfaces), so ONLY ecluse compiles + haddocks — whereas `cabal haddock`
-          # (make docs-check) rebuilds the whole ~188-package closure every CI run,
-          # because it wants a documentation variant of the deps that build-test's
-          # `cabal build` store lacks. doHaddock forces the Haddock pass (broken doc
-          # comments fail the build); dontCheck skips the test suites.
-          docs = hlib.doHaddock (hlib.dontCheck ecluseRaw);
-        };
+        # closure comes prebuilt from the pinned haskell set (with their .haddock
+        # interfaces), so ONLY ecluse compiles + haddocks — whereas `cabal haddock`
+        # (make docs-check) rebuilds the whole ~188-package closure every CI run,
+        # because it wants a documentation variant of the deps that build-test's
+        # `cabal build` store lacks. doHaddock forces the Haddock pass (broken doc
+        # comments fail the build); dontCheck skips the test suites.
+        docs = hlib.doHaddock (hlib.dontCheck ecluseRaw);
+      };
 
+      devShells = rec {
         # Full shell for humans: lean CI set + IDE + release + scan + workflow-lint + weeder + stan.
-        devShells.default = pkgs.mkShell (shellEnv // {
+        default = pkgs.mkShell (shellEnv // {
           name = "ecluse";
           buildInputs =
             ciInputs ++ ideInputs ++ releaseInputs ++ scanInputs ++ workflowLintInputs
-            ++ docsInputs ++ [ hpkgs.weeder hpkgs.stan ];
+            ++ docsInputs ++ [ pkgs.haskellPackages.ghc-prof-flamegraph pkgs.flamegraph pkgs.oha hpkgs.weeder hpkgs.stan ];
           # Paths to the pinned vendored bundles; `make site` copies them into
           # _site/vendor (Mermaid for the rendered docs, Redoc for the manifest page).
           MERMAID_JS = "${mermaidJs}";
           REDOC_JS = "${redocJs}";
         });
 
-        # Lean shell for CI: only what the gate jobs invoke through `make`. CI
-        # enters it explicitly with `nix develop .#ci`; humans get the full shell
-        # above. Keeping CI's closure small makes the Nix-store cache fast and
-        # shrinks the surface exposed to cache.nixos.org flakiness.
-        devShells.ci = pkgs.mkShell (shellEnv // {
+        # Unified shell for CI: contains all tools needed by all gating and
+        # informational jobs. By bundling them here, the build-test job realizes
+        # the entire closure and writes a single, comprehensive entry to the
+        # GitHub Actions cache. This ensures every downstream job gets a 100%
+        # cache hit and doesn't need to download missing tools (like weeder or stan)
+        # from cache.nixos.org on every run, dramatically speeding up CI.
+        ci = pkgs.mkShell (shellEnv // {
           name = "ecluse-ci";
-          buildInputs = ciInputs;
-        });
-
-        # Lean shell for the Pages publish (pages.yml `make site`): the Haskell
-        # toolchain to build the library Haddock + pandoc to render the Markdown
-        # pages, plus the build essentials (zlib/pkg-config) the library compiles
-        # against. Far smaller than the default (human) shell the Pages job used to
-        # enter — no IDE/release/scan/lint tooling — so the job realizes and caches a
-        # much smaller closure. MERMAID_JS / REDOC_JS point at the pinned bundles
-        # `make site` vendors into the site; the GHC toolchain + cabal also build the
-        # `openapi-gen` generator the docs build runs to emit `openapi.json` (its
-        # openapi3/autodocodec deps resolve via cabal from the pin, no extra shell
-        # tool). CI enters it with `nix develop .#docs`.
-        devShells.docs = pkgs.mkShell (shellEnv // {
-          name = "ecluse-docs";
           buildInputs =
-            [ pkgs.bashInteractive hpkgs.ghc hpkgs.cabal-install pkgs.zlib pkgs.pkg-config ]
-            ++ docsInputs;
+            ciInputs ++ docsInputs ++ scanInputs ++ workflowLintInputs
+            ++ releaseInputs ++ [ pkgs.haskellPackages.ghc-prof-flamegraph pkgs.flamegraph pkgs.oha hpkgs.weeder hpkgs.stan ];
           MERMAID_JS = "${mermaidJs}";
           REDOC_JS = "${redocJs}";
         });
 
-        # Lean shell for the security workflow: the vuln scanners only. CI enters
-        # it with `nix develop .#scan`.
-        devShells.scan = pkgs.mkShell (shellEnv // {
-          name = "ecluse-scan";
-          buildInputs = [ pkgs.bashInteractive pkgs.sbomnix ] ++ scanInputs;
-        });
-
-        # Lean shell for the lint gate steps: the Actions linters (actionlint, zizmor)
-        # plus shellcheck for scripts/*.sh. CI enters it with `nix develop .#workflow-lint`.
-        devShells.workflow-lint = pkgs.mkShell (shellEnv // {
-          name = "ecluse-workflow-lint";
-          buildInputs = [ pkgs.bashInteractive ] ++ workflowLintInputs;
-        });
-
-        # Shell for the informational weeder job: the CI toolchain (to build the
-        # .hie files weeder reads) plus weeder itself, which must come from the
-        # same GHC 9.10 set as the compiler that produced those files. CI enters it
-        # with `nix develop .#weeder`.
-        devShells.weeder = pkgs.mkShell (shellEnv // {
-          name = "ecluse-weeder";
-          buildInputs = ciInputs ++ [ hpkgs.weeder ];
-        });
-
-        # Shell for the `stan` job: the CI toolchain (to build the .hie files Stan
-        # reads) plus Stan itself from the same GHC 9.10 set as the compiler that
-        # produced them, and jq (the `make stan` fail-wrapper counts findings from
-        # Stan's JSON output). CI enters it with `nix develop .#stan`.
-        devShells.stan = pkgs.mkShell (shellEnv // {
-          name = "ecluse-stan";
-          buildInputs = ciInputs ++ [ hpkgs.stan pkgs.jq ];
-        });
-
-        # Lean shell for the release workflow. release.yml enters it with
-        # `nix develop .#release`. It carries the release tooling (skopeo, sbomnix)
-        # plus the multi-arch assembly tools. The assembly is deliberately
-        # DAEMONLESS: skopeo writes each per-arch Nix archive into an on-disk OCI
-        # image layout (plain files — no container engine, no user namespace, which
-        # ubuntu-24.04's AppArmor blocks for /nix/store binaries), and `regctl`
-        # (regclient) builds the index from those layouts and copies it to the
-        # registry as ONE canonical `:X.Y.Z` tag (an OCI index over both platform
-        # images — no lingering per-arch tags, the way `docker buildx imagetools
-        # create` would leave them). `jq` parses the pushed index for the
-        # per-platform digests the attest-actions bind to. (regctl replaced podman
-        # here: podman needs rootless containers-storage, whose user namespace the
-        # runner's AppArmor denies.) See scripts/push-multiarch.sh and
-        # docs/architecture/release-supply-chain.md → "Multi-architecture image".
-        devShells.release = pkgs.mkShell (shellEnv // {
-          name = "ecluse-release";
-          buildInputs = [ pkgs.bashInteractive pkgs.regclient pkgs.jq ] ++ releaseInputs;
-        });
-
-        # Shell for the benchmark harness (`make bench` / `make bench-profile` /
-        # `make bench-load`). The Layer-A benches themselves need no extra *shell* tool
-        # beyond the GHC toolchain — the tasty-bench / tasty-bench-fit libraries come via
-        # cabal from the pin, exactly like every other Hackage dependency. `make
-        # bench-profile` adds two tools that turn a GHC cost-centre profile into a flame
-        # graph: ghc-prof-flamegraph (folds a `.prof` into collapsed stacks) and the
-        # FlameGraph scripts (renders them to SVG). `make bench-load` (Layer B) drives the
-        # running proxy with `oha`, a single-binary HTTP load generator with clean `--json`
-        # output the harness parses. CI enters it with `nix develop .#bench`. See
-        # docs/architecture/performance.md.
-        devShells.bench = pkgs.mkShell (shellEnv // {
-          name = "ecluse-bench";
-          buildInputs = ciInputs ++ [ pkgs.haskellPackages.ghc-prof-flamegraph pkgs.flamegraph pkgs.oha ];
-        });
+        # The specific shells are now just aliases to the unified CI shell to
+        # maximize cache hits across GHA jobs without requiring workflow churn.
+        docs = ci;
+        scan = ci;
+        workflow-lint = ci;
+        weeder = ci;
+        stan = ci;
+        release = ci;
+        bench = ci;
 
         # LSP<->MCP bridge shell (HLS + agent-lsp). Opt-in only: not
         # built by CI (the gate runs no `nix flake check`) and not part of the
         # default dev shell. Enter with `nix develop .#mcp`, or let `.mcp.json`
         # launch it. See AGENTS.md → "Build & Tooling".
-        devShells.mcp = pkgs.mkShell (shellEnv // {
+        mcp = pkgs.mkShell (shellEnv // {
           name = "ecluse-mcp";
           buildInputs = mcpInputs;
         });
-      });
+      };
+    });
 }
