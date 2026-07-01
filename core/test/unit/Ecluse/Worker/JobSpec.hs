@@ -1,85 +1,35 @@
-{-# OPTIONS_GHC -Wno-unused-imports -Wno-unused-top-binds -Wno-orphans #-}
-
 module Ecluse.Worker.JobSpec (spec) where
 
-import Crypto.Hash (Blake2b_512, Digest, SHA1, SHA256, SHA384, SHA512, hashlazy)
-import Data.Aeson (Key, Value (Object, String), eitherDecodeStrict')
-import Data.Aeson.KeyMap qualified as KeyMap
-import Data.ByteArray.Encoding (Base (Base16, Base64), convertToBase)
-import Data.ByteString qualified as BS
-import Data.Map.Strict qualified as Map
-import Data.Text qualified as T
-import Data.Time (UTCTime (UTCTime), addUTCTime, fromGregorian, secondsToDiffTime)
-import Katip (Environment (Environment), Namespace (Namespace), initLogEnv)
-import Network.HTTP.Client (defaultManagerSettings, newManager)
-import Network.HTTP.Types (status200)
-import Network.Wai (Application, responseLBS)
-import Network.Wai.Handler.Warp (testWithApplication)
+import Data.Aeson (Value, eitherDecodeStrict')
+import Data.ByteArray.Encoding (Base (Base64), convertToBase)
 import Test.Hspec
-import UnliftIO (timeout)
-import UnliftIO.Exception (throwString)
 
-import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (
-    Artifact (..),
-    ArtifactKind (Tarball),
-    Availability (Available),
-    CodeExecSignal (NoCodeOnInstall),
-    Hash,
-    HashAlg (Blake2b, MD5, SHA1, SHA256, SRI),
-    PackageDetails (..),
-    PackageName,
-    Trust (Untrusted),
-    mkPackageName,
+    HashAlg (Blake2b, SHA1, SHA256, SRI),
  )
-import Ecluse.Core.Package qualified as Pkg
 import Ecluse.Core.Queue (
-    MirrorArtifact (MirrorArtifact, maFilename, maHashes, maSize),
-    MirrorJob (..),
     MirrorQueue (receive),
-    QueueMessage (msgReceipt),
-    ReceiptHandle,
     enqueue,
-    newInMemoryQueue,
  )
 import Ecluse.Core.Registry (
-    ParseError (ParseError),
     PublishError (PublishError),
     PublishFault (PublishRejected, PublishUrlUnformable),
-    RegistryClient (..),
     UrlFormationError (EmptyBaseUrl),
  )
 import Ecluse.Core.Registry.Metadata (
-    MetadataClient (MetadataClient, fetchFullManifest, fetchVersionMetadata),
     MetadataError (MetadataUndecodable),
     VersionEvaluation (VersionMetadataUnavailable, VersionMissing, VersionPresent),
     fetchVersionDetails,
  )
 import Ecluse.Core.Registry.Npm.Publish (npmPublishDocument)
-import Ecluse.Core.Rules (PreparedRule (PreparedRule, prepEval, prepName, prepPrecedence, prepResilience))
-import Ecluse.Core.Rules.Types (RuleResult (Allow, Deny))
 import Ecluse.Core.Telemetry.Metrics (MirrorResult (Failed, Published))
-import Ecluse.Core.Telemetry.Record (WorkerMetricsPort)
-import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Core.Worker (
-    IntegrityResult (IntegrityMismatch, IntegrityVerified),
-    JobOutcome (Dropped, Retried, Succeeded),
-    WorkerM,
-    WorkerPolicies,
-    WorkerPolicy (WorkerPolicy, wpNow, wpResolveVersion, wpRules),
-    WorkerRuntime (WorkerRuntime, wrHeartbeat, wrInjectTraceContext, wrManager, wrMetrics, wrPolicies, wrQueue, wrRegistry, wrTracing),
-    heartbeatHealthy,
-    lastPoll,
-    newWorkerHeartbeat,
+    JobOutcome (Succeeded),
     processBatch,
     processJob,
-    runWorkerM,
-    verifyIntegrity,
-    workerHeartbeatStaleAfter,
-    workerLoop,
  )
 import Ecluse.Test.Package (unsafeHash)
-import Ecluse.Test.Port (noopWorkerMetricsPort, passthroughWorkerTracingPort, recordingWorkerMetricsPort)
+import Ecluse.Test.Port (noopWorkerMetricsPort, recordingWorkerMetricsPort)
 import Ecluse.Worker.Support
 
 spec :: Spec
