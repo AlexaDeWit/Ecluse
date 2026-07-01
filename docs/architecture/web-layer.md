@@ -32,7 +32,7 @@ server, feed it `pathInfo`, assert the `Route`. Two npm-specific facts it must
 encode: `pathInfo` splits on `/` *before* percent-decoding, so an encoded scoped
 name (`/@scope%2Fpkg`) arrives as a single segment; and reserved meta-routes
 (`/-/…`) are matched first, since a real package name can never begin with `-`.
-Anything unrecognized is `Unsupported` → 404, so deny-by-default holds at the
+Anything unrecognised is `Unsupported` → 404, so deny-by-default holds at the
 routing layer too.
 
 ## Meta-routes: ping, health, and search
@@ -56,7 +56,7 @@ Beyond packuments and artifacts, a few non-package routes:
   message pointing users to the public registry's website. Revisit only if demand
   warrants.
 
-Everything else unrecognized stays `Unsupported` → `404` (deny-by-default at the
+Everything else unrecognised stays `Unsupported` → `404` (deny-by-default at the
 routing layer).
 
 ## Capability manifest
@@ -105,7 +105,7 @@ client's `Authorization` is **always stripped before any public-upstream fetch**
 ## Streaming and resource lifetime
 
 A WAI streaming response body **runs after the handler returns**, Warp
-serializes it while writing to the socket. So a resource with lexical scope
+serialises it while writing to the socket. So a resource with lexical scope
 (`bracket`, `withResponse`, `runResourceT`) released when the handler returns is
 already gone by the time the body streams: a use-after-free / GC race. This is
 the classic trap, and it is why frameworks that hide the response continuation
