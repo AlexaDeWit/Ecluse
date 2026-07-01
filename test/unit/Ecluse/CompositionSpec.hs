@@ -371,7 +371,7 @@ mirrorCredentialSpec = describe "planMirrorCredential / resolveCodeArtifactConfi
                 )
         resolveCodeArtifactConfig Npm env (cfgMounts env Map.! Npm) `shouldBe` Left [CodeArtifactConfigMissing "ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_DOMAIN_OWNER"]
 
-    it "fails loud on an explicit owner that is not a 12-digit account id" $ do
+    it "fails loud on an explicit owner with less than 12 digits" $ do
         -- B1: a malformed explicit owner must be rejected, not sail through.
         env <-
             expectEnv
@@ -383,6 +383,42 @@ mirrorCredentialSpec = describe "planMirrorCredential / resolveCodeArtifactConfi
                 )
         resolveCodeArtifactConfig Npm env (cfgMounts env Map.! Npm)
             `shouldBe` Left [CodeArtifactConfigInvalid "ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_DOMAIN_OWNER" "expected a 12-digit AWS account id"]
+
+    it "fails loud on an explicit owner with more than 12 digits" $ do
+        env <-
+            expectEnv
+                ( ("ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER", "codeartifact")
+                    : ("ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_DOMAIN", "d")
+                    : ("ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_DOMAIN_OWNER", "1111222233334")
+                    : ("ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_REGION", "us-east-1")
+                    : staticEnvVars
+                )
+        resolveCodeArtifactConfig Npm env (cfgMounts env Map.! Npm)
+            `shouldBe` Left [CodeArtifactConfigInvalid "ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_DOMAIN_OWNER" "expected a 12-digit AWS account id"]
+
+    it "fails loud on an explicit owner with 12 characters but containing non-digits" $ do
+        env <-
+            expectEnv
+                ( ("ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER", "codeartifact")
+                    : ("ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_DOMAIN", "d")
+                    : ("ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_DOMAIN_OWNER", "11112222333a")
+                    : ("ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_REGION", "us-east-1")
+                    : staticEnvVars
+                )
+        resolveCodeArtifactConfig Npm env (cfgMounts env Map.! Npm)
+            `shouldBe` Left [CodeArtifactConfigInvalid "ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_DOMAIN_OWNER" "expected a 12-digit AWS account id"]
+
+    it "fails to parse a CodeArtifact host with an invalid account ID (containing non-digits), falling back to missing keys" $ do
+        env <-
+            expectEnv
+                ( ("ECLUSE_MOUNTS__NPM__CREDENTIAL_PROVIDER", "codeartifact")
+                    : ("ECLUSE_MOUNTS__NPM__MIRROR_TARGET", "https://my-domain-11112222333a.d.codeartifact.us-west-2.amazonaws.com/npm/my-repo/")
+                    : ("ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_DOMAIN", "my-domain")
+                    : ("ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_REGION", "us-west-2")
+                    : withoutMirrorTargetUrl staticEnvVars
+                )
+        resolveCodeArtifactConfig Npm env (cfgMounts env Map.! Npm)
+            `shouldBe` Left [CodeArtifactConfigMissing "ECLUSE_MOUNTS__NPM__MIRROR_CODE_ARTIFACT_DOMAIN_OWNER"]
 
     it "fails loud, naming each unresolved input, when neither key nor host supplies it" $ do
         -- A non-CodeArtifact mirror URL and no explicit keys / AWS_REGION: domain,
