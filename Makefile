@@ -291,7 +291,7 @@ stan-all: ## Full stan report incl Performance/space-leak (informational; ignore
 	$(NIX) cabal build exe:ecluse --builddir=dist-stan --ghc-options=-fwrite-ide-info
 	$(NIX) stan --hiedir dist-stan --no-default
 
-check: build coverage test-integration doctest format-check lint sast cabal-check lint-workflows lint-scripts test-scripts ## Fast pre-push checks: the gate minus its Haddock tier (see gate)
+check: build coverage doctest format-check lint sast cabal-check lint-workflows lint-scripts test-scripts ## Fast pre-push checks: the gate minus its Haddock tier (requires Docker)
 
 # The faithful local mirror of the CI gate: everything `check` runs, plus the one
 # tier it omits — the Haddock build (docs-check). Two CI-gating inputs are
