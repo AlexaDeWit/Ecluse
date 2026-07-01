@@ -82,6 +82,7 @@ import Ecluse.Core.Security (
     maxNestingDepth,
     maxVersionCount,
  )
+import Ecluse.Core.Telemetry.Span (TracingPort (spanMetadataDecode, spanMetadataFetch))
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
 
 {- | Fetch a package's full packument and project it into @(manifest, raw document)@,
@@ -93,14 +94,12 @@ is refused fail-closed before it is buffered whole); a breach surfaces as
 already brackets the unreachable-upstream case -- so this 'Either' carries only the
 parse-and-policy outcomes the serve path renders distinctly.
 -}
-fetchNpmManifest :: NpmClientConfig -> PackageName -> IO (Either MetadataError (PackageInfo, Value))
-fetchNpmManifest config name =
+fetchNpmManifest :: TracingPort -> NpmClientConfig -> PackageName -> IO (Either MetadataError (PackageInfo, Value))
+fetchNpmManifest tracing config name =
     handle (\(ResponseBoundExceeded err) -> pure (Left (MetadataBoundExceeded err))) $ do
-        response <- fetchMetadataForm config Full noValidators name
-        -- Normalise each version's dist.tarball scheme against the host this client reads
-        -- from (same-host http upgraded, foreign-host http dropped); the raw document is
-        -- returned unchanged, since the serve path honours the projected (gated) artUrls.
-        pure (first (enforceTarballScheme (npmBaseUrl config)) <$> projectNpmManifest (npmLimits config) name (responseBody response))
+        response <- spanMetadataFetch tracing name $ fetchMetadataForm config Full noValidators name
+        spanMetadataDecode tracing name $
+            pure (first (enforceTarballScheme (npmBaseUrl config)) <$> projectNpmManifest (npmLimits config) name (responseBody response))
 
 {- | Project a fetched packument's bytes into @(manifest, raw document)@, applying the
 serve path's response bounds and name validation. Pure and total.
@@ -136,13 +135,12 @@ version rather than every version. A 'Nothing' is a version genuinely absent fro
 document (a forwarded miss); a 'MetadataError' is metadata that could not be obtained at all.
 A transport fault is left to throw, as 'fetchNpmManifest'.
 -}
-fetchNpmVersion :: NpmClientConfig -> PackageName -> Version -> IO (Either MetadataError (Maybe PackageDetails))
-fetchNpmVersion config name version =
+fetchNpmVersion :: TracingPort -> NpmClientConfig -> PackageName -> Version -> IO (Either MetadataError (Maybe PackageDetails))
+fetchNpmVersion tracing config name version =
     handle (\(ResponseBoundExceeded err) -> pure (Left (MetadataBoundExceeded err))) $ do
-        response <- fetchMetadataForm config Full noValidators name
-        -- Normalise the one version's dist.tarball scheme; a non-https, non-upgradeable
-        -- tarball drops the version (it becomes a clean absence).
-        pure ((>>= enforceTarballSchemeDetails (npmBaseUrl config)) <$> projectNpmVersion (npmLimits config) name version (responseBody response))
+        response <- spanMetadataFetch tracing name $ fetchMetadataForm config Full noValidators name
+        spanMetadataDecode tracing name $
+            pure ((>>= enforceTarballSchemeDetails (npmBaseUrl config)) <$> projectNpmVersion (npmLimits config) name version (responseBody response))
 
 {- | Project a fetched packument's bytes into __one version's__ 'PackageDetails' (or the
 typed 'MetadataError'), without decoding the other versions. Pure and total.

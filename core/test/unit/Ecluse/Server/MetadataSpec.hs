@@ -92,7 +92,7 @@ spec = do
             calls <- newIORef (0 :: Int)
             let info = manifest name ["1.0.0"]
                 client =
-                    newMetadataClient noopMetricsPort Metric.Private Uncached noLog noInvalidLog (countingFull calls info) (countingVersion calls info)
+                    newMetadataClient noopMetricsPort Metric.Private Uncached noLog noInvalidLog noFetchLog (countingFull calls info) (countingVersion calls info)
             _ <- fetchFullManifest client name
             _ <- fetchFullManifest client name
             readIORef calls `shouldReturn` 2
@@ -132,6 +132,9 @@ noLog _ _ = pure ()
 noInvalidLog :: PackageName -> [InvalidEntry] -> IO ()
 noInvalidLog _ _ = pure ()
 
+noFetchLog :: PackageName -> IO ()
+noFetchLog _ = pure ()
+
 {- | A public (cached, anonymous) read handle over an injected full and single-version
 fetch.
 -}
@@ -141,7 +144,7 @@ publicClient ::
     (PackageName -> Version -> IO (Either MetadataError (Maybe PackageDetails))) ->
     MetadataClient
 publicClient cache =
-    newMetadataClient noopMetricsPort Metric.Public (Cached cache source) noLog noInvalidLog
+    newMetadataClient noopMetricsPort Metric.Public (Cached cache source) noLog noInvalidLog noFetchLog
 
 {- | A counting full-manifest fetch: bumps the call counter, then yields the given manifest
 paired with a marker raw 'Value' (so a test can confirm a hit returned the cached pair).

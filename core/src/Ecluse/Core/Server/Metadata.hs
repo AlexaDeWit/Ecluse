@@ -52,6 +52,7 @@ import Ecluse.Core.Server.Cache (
  )
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (..), timedSeconds)
+import Ecluse.Core.Telemetry.Span (TracingPort)
 import Ecluse.Core.Version (Version, renderVersion)
 
 {- | How a read handle resolves the full manifest for one origin.
@@ -106,10 +107,11 @@ newMetadataClient ::
     ManifestCaching ->
     (PackageName -> MetadataError -> IO ()) ->
     (PackageName -> [InvalidEntry] -> IO ()) ->
+    (PackageName -> IO ()) ->
     (PackageName -> IO (Either MetadataError (PackageInfo, Value))) ->
     (PackageName -> Version -> IO (Either MetadataError (Maybe PackageDetails))) ->
     MetadataClient
-newMetadataClient metrics upstream caching logFailure logInvalid rawFetch rawFetchVersion =
+newMetadataClient metrics upstream caching logFailure logInvalid logFetch rawFetch rawFetchVersion =
     MetadataClient
         { fetchFullManifest = resolveFull
         , fetchVersionMetadata = resolveVersionHybrid
@@ -135,7 +137,8 @@ newMetadataClient metrics upstream caching logFailure logInvalid rawFetch rawFet
     -- miss, metered, with any dropped malformed entries logged on success and a fetch
     -- failure logged once before the carrier is raised.
     manifestLeader :: PackageName -> IO CacheEntry
-    manifestLeader name =
+    manifestLeader name = do
+        logFetch name
         recordedFetch metrics upstream $
             rawFetch name >>= \case
                 Right (info, raw) -> do
@@ -182,7 +185,8 @@ newMetadataClient metrics upstream caching logFailure logInvalid rawFetch rawFet
     -- The single-version single-flight leader action: the real selective fetch, run only on
     -- a cold miss, metered and (on failure) logged once before the carrier is raised.
     versionLeader :: PackageName -> Version -> IO (Maybe PackageDetails)
-    versionLeader name version =
+    versionLeader name version = do
+        logFetch name
         recordedFetch metrics upstream $
             rawFetchVersion name version >>= \case
                 Right details -> pure details
@@ -194,15 +198,17 @@ the serve-path caching, metrics, and the failure and dropped-entry logs wired by
 'newMetadataClient'.
 -}
 newNpmMetadataClient ::
+    TracingPort ->
     MetricsPort ->
     Metric.Upstream ->
     ManifestCaching ->
     (PackageName -> MetadataError -> IO ()) ->
     (PackageName -> [InvalidEntry] -> IO ()) ->
+    (PackageName -> IO ()) ->
     NpmClientConfig ->
     MetadataClient
-newNpmMetadataClient metrics upstream caching logFailure logInvalid config =
-    newMetadataClient metrics upstream caching logFailure logInvalid (fetchNpmManifest config) (fetchNpmVersion config)
+newNpmMetadataClient tracing metrics upstream caching logFailure logInvalid logFetch config =
+    newMetadataClient metrics upstream caching logFailure logInvalid logFetch (fetchNpmManifest tracing config) (fetchNpmVersion tracing config)
 
 {- The in-band failure carrier for a full-manifest leader fetch: a 'MetadataError' raised
 so the shared metadata cache caches nothing on failure and re-raises it to coalesced

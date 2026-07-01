@@ -82,7 +82,7 @@ import Data.Text qualified as T
 import Data.Text.Lazy qualified as TL
 import Data.Time (UTCTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
-import Katip (KatipContext, Severity (WarningS), katipAddContext, logFM, ls, sl)
+import Katip (KatipContext, Severity (DebugS, InfoS, WarningS), katipAddContext, logFM, ls, sl)
 import Lens.Micro ((^?))
 import Lens.Micro.Aeson (key, _Object)
 import Network.HTTP.Client (Manager)
@@ -157,6 +157,7 @@ import Ecluse.Core.Server.Response (
  )
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (..), timedSeconds)
+import Ecluse.Core.Telemetry.Span (TracingPort, spanPackumentGate)
 import Ecluse.Core.Version (renderVersion)
 
 {- | Serve a @GET \/{pkg}@ packument request end to end, over the request's
@@ -266,6 +267,7 @@ serveWithDeps mode renderer deps name request respond
                 respond (serveOverloaded renderer)
   where
     serveAdmitted rt = do
+        logFM InfoS (ls ("serving packument request for " <> renderPackageName name))
         let metrics = srMetrics rt
         evalCtx <- liftIO (EvalContext <$> pdNow deps)
         let clientToken = forwardedToken request
@@ -273,11 +275,12 @@ serveWithDeps mode renderer deps name request respond
             concurrently
                 (fetchPrivateOrigin deps rt clientToken name)
                 (fetchPublicOrigin deps rt name)
-        (public, publicExclusions) <- liftIO (gatePublic metrics deps evalCtx (originPackument pubResult))
+        (public, publicExclusions) <- liftIO (gatePublic (srTracing rt) metrics deps name evalCtx (originPackument pubResult))
         let (private, privateExclusions) = admitTrusted (pdMinTrustedIntegrity deps) (originPackument privResult)
             sources = catMaybes [private, public]
         case assemble deps sources of
             Just body -> do
+                logFM DebugS (ls ("assembled packument for " <> renderPackageName name))
                 liftIO (mpServeDecision metrics Metric.Admit)
                 liftIO (respond (servePackumentBody mode request body))
             Nothing -> do
@@ -356,6 +359,7 @@ origin safely is the serve-time authorisation it adds -- see
 @docs\/architecture\/access-model.md@.) -}
 fetchPrivateOrigin :: PackumentDeps -> ServeRuntime -> Maybe Secret -> PackageName -> Handler OriginResult
 fetchPrivateOrigin deps rt token name = do
+    logFM DebugS (ls ("fetching private origin for " <> renderPackageName name))
     resolved <-
         tryAny $
             withMetadataClient rt deps Metric.Private Uncached (pdLimits deps) (srPrivateManager rt) (pdPrivateBaseUrl deps) token $ \client ->
@@ -376,6 +380,7 @@ popular package __collapse to one upstream call__ -- as does the tarball gate's
 single-version read, which shares this very cache entry ('fetchVersionMetadata'). -}
 fetchPublicOrigin :: PackumentDeps -> ServeRuntime -> PackageName -> Handler OriginResult
 fetchPublicOrigin deps rt name = do
+    logFM DebugS (ls ("fetching public origin for " <> renderPackageName name))
     resolved <-
         tryAny $
             withPublicMetadataClient rt deps (pdPublicBaseUrl deps) $ \client ->
@@ -414,11 +419,13 @@ withMetadataClient rt deps upstream caching limits manager baseUrl token k =
         k $
             pdNewMetadataClient
                 deps
+                (srTracing rt)
                 (srMetrics rt)
                 upstream
                 caching
                 (\nm err -> runInIO (logMetadataFailure nm baseUrl err))
                 (\nm entries -> runInIO (logInvalidEntries nm baseUrl entries))
+                (\nm -> runInIO (logFM DebugS (ls ("fetching packument from origin for " <> renderPackageName nm))))
                 limits
                 manager
                 baseUrl
@@ -608,10 +615,10 @@ let a denied version reach the merge plan (and skew the reconciled @latest@\/@ti
 This gate runs on the public path only; the trusted (private) contribution is admitted
 separately by 'admitTrusted' against the trusted integrity floor (the rules never run on
 it -- the trust split is the caller's). -}
-gatePublic :: MetricsPort -> PackumentDeps -> EvalContext -> Maybe (PackageInfo, Value) -> IO (Maybe Contribution, [ServeDecision])
-gatePublic metrics deps ctx = \case
+gatePublic :: TracingPort -> MetricsPort -> PackumentDeps -> PackageName -> EvalContext -> Maybe (PackageInfo, Value) -> IO (Maybe Contribution, [ServeDecision])
+gatePublic tracing metrics deps name ctx = \case
     Nothing -> pure (Nothing, [])
-    Just (info, value) -> do
+    Just (info, value) -> spanPackumentGate tracing name $ do
         let (admissible, integrityRefusals) = admitByIntegrity (pdMinIntegrity deps) integrityBelowFloor integrityMissing info
         (decisions, seconds) <- timedSeconds (decideVersions deps ctx admissible)
         mpRuleEvalDuration metrics (evalTier (pdRules deps)) seconds

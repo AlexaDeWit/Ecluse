@@ -62,9 +62,10 @@ passthroughTracingPort :: TracingPort
 passthroughTracingPort =
     TracingPort
         { spanRuleEval = \_ _ action -> fst <$> action
-        , -- Open no span: hand the body no captured trace context and ignore the
-          -- error projection, just running the enqueue body.
-          spanMirrorEnqueue = \_ _ _ _project body -> body Nothing
+        , spanMirrorEnqueue = \_ _ _ _ action -> action Nothing
+        , spanPackumentGate = \_ action -> action
+        , spanMetadataFetch = \_ action -> action
+        , spanMetadataDecode = \_ action -> action
         }
 
 {- | A 'WorkerMetricsPort' whose every field discards its measurement -- the inert double
