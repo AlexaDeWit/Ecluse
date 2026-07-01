@@ -14,7 +14,6 @@ author:        Alexandra DeWit
 maintainer:    https://github.com/AlexaDeWit
 category:      Network, Security
 build-type:    Simple
-
 -- Test fixtures read at runtime by the pure unit suite. The version-ordering
 -- file is reference-oracle output (regenerate with `make gen-version-fixtures`);
 -- the npm/*.json bodies are captures derived from
@@ -37,11 +36,9 @@ extra-source-files:
   core/test/unit/fixtures/npm/*.json
   core/test/unit/fixtures/version-ordering.txt
   test/unit/fixtures/osv/*.zip
-
 source-repository head
   type:     git
   location: https://github.com/AlexaDeWit/Ecluse.git
-
 -- Compile the test- and dev-only plain-HTTP loopback egress constructor
 -- (Ecluse.Core.Security.Egress.DevHttp). OFF by default, so the release library and
 -- executable carry no way to construct a non-https registry target. The dev shell and
@@ -53,7 +50,6 @@ flag dev-http-egress
   description: Expose the test-only plain-HTTP loopback egress constructor.
   default:     False
   manual:      True
-
 -- Shared settings for every component. relude replaces the default prelude via
 -- cabal mixins (see docs/architecture.md "relude as the implicit prelude").
 common shared
@@ -68,23 +64,19 @@ common shared
     -Wincomplete-record-updates -Wincomplete-uni-patterns
     -Wmissing-deriving-strategies -Wmissing-export-lists -Wname-shadowing
     -Wpartial-fields -Wredundant-bang-patterns -Wredundant-constraints
-
   default-language:   GHC2021
   default-extensions:
     DerivingStrategies
     LambdaCase
     OverloadedStrings
     StrictData
-
   build-depends:
     , base        ^>=4.20
     , file-embed  ^>=0.0.16
     , relude      ^>=1.2
-
   mixins:
     base hiding (Prelude),
     relude (Relude as Prelude)
-
 -- The pure capability core: domain types, registry adapters, version grammars,
 -- credential refresh, rule engine, queue abstraction, security, and the
 -- agnostic server layer (Route/Response/Conditional/Stream) and metrics catalogue.
@@ -154,7 +146,6 @@ library ecluse-core
       Ecluse.Core.Worker.Liveness
       Ecluse.Core.Worker.Loop
       Ecluse.Core.Worker.Types
-
   -- Per-ecosystem version grammars and their shared lexical atoms. Internal to
   -- ecluse-core: VersionKey is opaque, so callers reach these only through the
   -- agnostic Ecluse.Core.Version API. Egress.Internal holds the raw RegistryUrl
@@ -167,12 +158,10 @@ library ecluse-core
     Ecluse.Core.Version.Pep440
     Ecluse.Core.Version.Semver
     Ecluse.Core.Version.Token
-
   -- The test/dev-only plain-HTTP loopback constructor, exposed only when the flag is
   -- on. Off in a release build, so the constructor is absent from the shipped artifact.
   if flag(dev-http-egress)
     exposed-modules: Ecluse.Core.Security.Egress.DevHttp
-
   build-depends:
     , aeson                 ^>=2.2
     , amazonka              ^>=2.0
@@ -205,7 +194,6 @@ library ecluse-core
     , vector                ^>=0.13
     , versions              ^>=6.0
     , wai                   ^>=3.2
-
 library
   import:          shared
   hs-source-dirs:  src
@@ -236,7 +224,6 @@ library
     Ecluse.Telemetry.Reporters
     Ecluse.Telemetry.Resolve
     Ecluse.Telemetry.Tracing
-
   build-depends:
     , ecluse:ecluse-core
     , aeson                           ^>=2.2
@@ -281,7 +268,6 @@ library
     , http-conduit                    ^>=2.3
     , zip-stream                      ^>=0.2
     , primitive                       ^>=0.9
-
 executable ecluse
   import:         shared
   -- The threaded runtime is required: with telemetry enabled the OpenTelemetry SDK
@@ -291,7 +277,6 @@ executable ecluse
   main-is:        Main.hs
   hs-source-dirs: app
   build-depends:  ecluse
-
 -- The capability-manifest assembly: the pure (ManifestSource -> OpenApi) builder
 -- and the owned schemas. An INTERNAL sublibrary (the ecluse-test-support pattern)
 -- so the heavy OpenAPI dependency tree (openapi3 + autodocodec + lens/optics/…)
@@ -313,7 +298,6 @@ library ecluse-manifest
     , insert-ordered-containers  ^>=0.2
     , openapi3                   ^>=3.2
     , text                       ^>=2.1
-
 -- The capability-manifest generator: a build-time component that assembles the
 -- OpenAPI document (Ecluse.Manifest) from the fixed canonical source and writes
 -- the committed openapi.json. It depends on the ecluse-manifest sublibrary, NOT the
@@ -327,7 +311,6 @@ executable openapi-gen
     , directory          ^>=1.3
     , ecluse:ecluse-manifest
     , filepath           ^>=1.5
-
 -- Internal test-support library shared by every suite below. The common home
 -- for cross-suite helpers, fixtures, and specs; it links against the library
 -- under test so shared fixtures can build domain values directly.
@@ -342,7 +325,6 @@ library ecluse-test-support
     Ecluse.Test.Support
     Ecluse.Test.Version
     Ecluse.Test.Worker
-
   build-depends:
     , ecluse:ecluse-core
     , aeson             ^>=2.2
@@ -357,7 +339,6 @@ library ecluse-test-support
     , time              ^>=1.12
     , wai               ^>=3.2
     , warp              ^>=3.4
-
 -- Core unit tests: cover every Ecluse.Core.* module. Pure, fast, deterministic. Gating.
 -- MUST NOT list the `ecluse` app library in build-depends: its absence is the partition
 -- enforcement — an app spec accidentally placed here fails to compile.
@@ -418,7 +399,6 @@ test-suite ecluse-core-unit
     Ecluse.Worker.LivenessSpec
     Ecluse.Worker.LoopSpec
     Ecluse.Worker.Support
-
   build-tool-depends: hspec-discover:hspec-discover ^>=2.11
   build-depends:
     , ecluse:ecluse-core
@@ -452,7 +432,6 @@ test-suite ecluse-core-unit
     -- is already in the resolved build plan (a transitive dependency), so this adds
     -- no new resolution.
     , zlib              ^>=0.7
-
 -- App-layer unit tests: cover every Ecluse.* (non-Core) module. Pure, fast,
 -- deterministic. Gating.
 test-suite ecluse-unit
@@ -487,7 +466,6 @@ test-suite ecluse-unit
     Ecluse.Telemetry.ReportersSpec
     Ecluse.Telemetry.ResolveSpec
     Ecluse.Telemetry.TracingSpec
-
   build-tool-depends: hspec-discover:hspec-discover ^>=2.11
   build-depends:
     , ecluse
@@ -530,7 +508,6 @@ test-suite ecluse-unit
     , wai               ^>=3.2
     , wai-extra         ^>=3.1
     , warp              ^>=3.4
-
 -- Integration tests: exercise the real request path against in-process servers
 -- (and, where they land, AWS-backed code against a ministack container via
 -- testcontainers). Hermetic and gating; the AWS cases require a Docker daemon.
@@ -559,7 +536,6 @@ test-suite ecluse-integration
     Ecluse.TelemetryTracingSpec
     Ecluse.Test.SupportLinkageSpec
     Ecluse.WorkerSpec
-
   build-tool-depends: hspec-discover:hspec-discover ^>=2.11
   build-depends:
     , aeson            ^>=2.2
@@ -589,7 +565,6 @@ test-suite ecluse-integration
     , wai              ^>=3.2
     , wai-extra        ^>=3.1
     , warp             ^>=3.4
-
 -- Smoke tests: live calls to public registries (npm/PyPI) to validate our JSON
 -- and protocol handling. ALLOWED TO FAIL by design (non-gating) — they depend on
 -- uncontrolled external services.
@@ -606,7 +581,6 @@ test-suite ecluse-smoke
     Ecluse.SecurityResolverOracleSpec
     Ecluse.Test.SupportLinkageSpec
     Ecluse.VersionOraclesSpec
-
   build-tool-depends: hspec-discover:hspec-discover ^>=2.11
   build-depends:
     , aeson            ^>=2.2
@@ -625,7 +599,6 @@ test-suite ecluse-smoke
     , process          ^>=1.6
     , text             ^>=2.1
     , unliftio         ^>=0.2.25
-
 -- End-to-end tests: the whole system as the real OCI image, driven by the real npm
 -- CLI over its public HTTP surface, with the server↔worker round-trip across real
 -- containers. NON-GATING (pre-merge visibility + nightly) — needs a Docker daemon,
@@ -645,7 +618,6 @@ test-suite ecluse-e2e
     Ecluse.E2E.Harness
     Ecluse.E2E.SuiteSpec
     Ecluse.Test.SupportLinkageSpec
-
   build-tool-depends: hspec-discover:hspec-discover ^>=2.11
   build-depends:
     , aeson          ^>=2.2
@@ -665,7 +637,6 @@ test-suite ecluse-e2e
     , time           ^>=1.12
     , typed-process  ^>=0.2.13
     , unliftio       ^>=0.2.25
-
 -- Benchmarks: the work-per-request (Layer A) micro-benches over the pure
 -- ecluse-core hot paths, plus the synthetic-corpus generator's correctness tests
 -- and the complexity assertions that guard the accidentally-quadratic class.
@@ -694,7 +665,6 @@ benchmark ecluse-bench
     Ecluse.Core.ServeBench
     Ecluse.Core.VersionBench
     Ecluse.Core.WireBench
-
   build-depends:
     , ecluse:ecluse-core
     , ecluse:ecluse-test-support
@@ -708,7 +678,6 @@ benchmark ecluse-bench
     , tasty-hunit      ^>=0.10
     , text             ^>=2.1
     , time             ^>=1.12
-
 -- Layer B load harness (S38): throughput & latency under concurrent load against the
 -- real composed proxy. A separate EXECUTABLE (not a tasty-bench component): it boots
 -- Ecluse.Server.application on warp over in-process stub upstreams and the in-memory
@@ -728,7 +697,6 @@ executable bench-load
     Ecluse.BenchLoad.Harness
     Ecluse.BenchLoad.Npm
     Ecluse.BenchLoad.Oha
-
   build-depends:
     , ecluse
     , ecluse:ecluse-bench-load
@@ -749,7 +717,6 @@ executable bench-load
     , unliftio         ^>=0.2.25
     , wai              ^>=3.2
     , warp             ^>=3.4
-
 -- Layer B normalisation core: the PURE attribution and saturation maths the load
 -- harness's two analysis views are built from (service-time upstream-vs-overhead split,
 -- and the load-saturation queuing-delay flag). An INTERNAL sublibrary (the
@@ -761,7 +728,6 @@ library ecluse-bench-load
   hs-source-dirs:  bench/load/src
   exposed-modules: Ecluse.BenchLoad.Normalise
   build-depends:   text ^>=2.1
-
 -- Live performance-acceptance harness (Context B): the PURE evaluation core. The
 -- version-controlled acceptance criteria, the per-package budget verdict, and the
 -- run-summary rendering. An INTERNAL sublibrary (the ecluse-manifest pattern) so the
@@ -778,7 +744,6 @@ library ecluse-acceptance
     , bytestring  ^>=0.12
     , containers  ^>=0.7
     , text        ^>=2.1
-
 -- The live performance-acceptance harness (Context B): a separate EXECUTABLE that
 -- fetches LIVE packuments for the curated catalogue set (Ecluse.Test.RegistryCapture),
 -- times Ecluse's work-per-request over each, and evaluates the overhead against the
