@@ -23,11 +23,21 @@ relay. Local contributor sessions do not need it.
   ref can make the later signed push non-fast-forward and undeletable from the environment.
 - Use the session's designated branch when one is provided.
 
-## Verification limits
+## Local Verification and Bootstrapping
 
-Hosted containers may lack Nix and therefore cannot reproduce `make build`, `make test`, or
-`make sast`. Keep such changes small and formatting-safe, let CI be the gate, and state plainly in
-the PR which checks were not reproduced locally.
+Hosted containers may lack Nix initially. Agents **must not** skip local verification (`make check`).
+If Nix is missing, bootstrap the environment using the project's setup script:
 
-If you skip local verification, you **must** monitor the CI results (e.g., via GitHub Actions polling
-or webhook notifications) and follow up on any failures. Your task is not complete until CI passes.
+```bash
+# Pin to a specific SHA for safety.
+# E.g. 5a4a74a13740022d612a99c38c9cf71284867732
+curl -sSL https://raw.githubusercontent.com/AlexaDeWit/Ecluse/5a4a74a13740022d612a99c38c9cf71284867732/scripts/setup-jules.sh | bash
+```
+
+Once Nix is installed, run `make check` inside the Nix shell:
+
+```bash
+env -u IN_NIX_SHELL nix develop --command make check
+```
+
+You **must** monitor CI results and follow up on any failures. Your task is not complete until both local verification and CI pass.
