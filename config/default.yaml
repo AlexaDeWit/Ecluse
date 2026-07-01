@@ -4,7 +4,7 @@ queueBackend: sqs # default to sqs for production, switch to memory for local de
 queueMemoryMaxDepth: 50000
 cveSyncInterval: 3600
 shutdownDrainTimeout: 30
-serveMaxInFlight: 16
+serveMaxInFlight: 64
 publicConnectionsPerHost: 10
 privateConnectionsPerHost: 16
 cacheTtl: 60
