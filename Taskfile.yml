@@ -433,7 +433,7 @@ tasks:
       - mkdir -p sbom
       - sbomnix --cdx sbom/ecluse.cdx.json .#ecluse-bin
       - grype sbom:sbom/ecluse.cdx.json -o table -o json=grype.json -o sarif=grype.sarif
-      - jq '.runs[].results[]?.locations[]?.physicalLocation.artifactLocation.uri |= (if (. // "") == "" then "flake.lock" else . end)' grype.sarif > tmp.sarif && mv tmp.sarif grype.sarif
+      - bash scripts/grype-sarif-locations.sh grype.sarif
 
   scan-vulnix:
     desc: Secondary Nix-native cross-check (vulnix)
