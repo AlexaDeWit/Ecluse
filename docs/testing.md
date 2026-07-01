@@ -35,7 +35,7 @@ an AWS-specific one):
 Both are hermetic and reproducible: no real cloud account or credentials. They require a
 running Docker daemon: CI's `ubuntu-latest` provides one; locally, install Docker (Nix
 provides the toolchain but not the daemon, a host concern). Run: `cabal test
-ecluse-integration` (or `make test-integration`).
+ecluse-integration` (or `task test-integration`).
 
 > **Token-mint caveat.** No emulator covers the managed-registry token APIs (CodeArtifact's
 > `GetAuthorizationToken`, or GCP's OAuth2 token endpoint). That's by design: the only
@@ -80,11 +80,11 @@ far heavier than the rest of the gate (an image build, multiple containers, the 
 is **hermetic**, the nginx + Verdaccio upstreams are local, so unlike the live-registry smoke
 tier it has no external dependency to flake on, and has been reliably green, which is what
 makes gating on it safe. It runs on every PR and nightly. Because of its weight it is kept out
-of the local `make gate` and `make check` targets (run `make test-e2e` on demand).
+of the local `task gate` and `task check` targets (run `task test-e2e` on demand).
 
 The egress guard refuses internal addresses on the public path. To ensure the tests run correctly, the containers run on an RFC 5737 documentation subnet (`203.0.113.0/24`), which the guard treats as external. This approach avoids any production escape hatches, allowing the real default-build image to run unmodified. 
 
-Run `make test-e2e` to build the image, load it, and run the suite. This command requires a Docker daemon and the npm CLI. It skips tests (marking every case as `pending`) when `ECLUSE_E2E_IMAGE` is unset.
+Run `task test-e2e` to build the image, load it, and run the suite. This command requires a Docker daemon and the npm CLI. It skips tests (marking every case as `pending`) when `ECLUSE_E2E_IMAGE` is unset.
 
 Because this is the only tier that runs the **real `npm` CLI** against real packages, it is
 also where an upstream lifecycle script (`preinstall`/`install`/`postinstall`/`prepare`/…)
@@ -141,22 +141,21 @@ untouched), then converts the `.tix`/`.mix` output to Codecov's native JSON with
 Codecov to ingest. See [`scripts/coverage.sh`](../scripts/coverage.sh) (one tier) and
 [`scripts/coverage-combined.sh`](../scripts/coverage-combined.sh) (the merged view).
 
-- **Codecov is the merged authority; `make coverage` reproduces it.** Codecov merges the
+- **Codecov is the merged authority; `task coverage` reproduces it.** Codecov merges the
   per-tier flag uploads into one project total (unit ∪ integration), so a single tier's number
   *under-counts* every module the other tier exercises, the SQS `MirrorQueue` backend and the
   worker's real fetch/publish path are covered only by the integration tier. The canonical
-  local command, **`make coverage`**, reproduces Codecov's merged total: it runs both gating
-  tiers, `hpc combine --union`s their `.tix` (ADD join, unioned module namespace, mirroring how
-  Codecov sums the flags), and reports the combined picture as `coverage/combined.json`. A
-  local `make coverage` therefore **agrees with the dashboard**. Because it runs the integration
+  local command, **`task coverage`**, reproduces Codecov's merged total: it runs both gating
+  unit suites plus the `ecluse-integration` suite (which hits the SQS mirror queues). The
+  local `task coverage` therefore **agrees with the dashboard**. Because it runs the integration
   tier it **needs a running Docker daemon** (the ministack containers, exactly like the suite
   itself); with no daemon it fails with a clear message pointing at the fast path below. For a
-  quick, Docker-free loop, **`make coverage-unit`** (or `make coverage SUITE=ecluse-unit`)
+  quick, Docker-free loop, **`task coverage-unit`** (or `task coverage SUITE=ecluse-unit`)
   measures the unit tier only and **loudly prints that it is a partial view** Codecov merges
   with the integration tier, so a single-tier read is never mistaken for the whole picture.
 - **Per-suite flags (what CI uploads).** Each tier uploads under its own Codecov *flag*, so one
   combined gate spans the suites while each stays visible. CI runs the per-tier form
-  (`make coverage SUITE=ecluse-unit` and `make coverage SUITE=ecluse-integration`) so each flag
+  (`task coverage SUITE=ecluse-unit` and `task coverage SUITE=ecluse-integration`) so each flag
   gets its own JSON; both the `unit` and `integration` tiers upload, and Codecov waits for both
   (`notify.after_n_builds: 2` in `codecov.yml`) before computing the combined total, so a
   partial upload can't fire a transient "coverage decreased" status. The **smoke** tier is
