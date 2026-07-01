@@ -1,7 +1,7 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Ecluse.Pilot.Osv (
+module Ecluse.Osv (
     OsvAdvisory (..),
     OsvAffected (..),
     OsvPackage (..),

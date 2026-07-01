@@ -2,7 +2,7 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Ecluse.Pilot.Osv.Stream (
+module Ecluse.Osv.Stream (
     streamOsvUrl,
     parseOsvStream,
 ) where
@@ -19,7 +19,7 @@ import OpenTelemetry.Context qualified as Ctx
 import OpenTelemetry.Trace (SpanKind (Internal), defaultSpanArguments, kind, makeTracer, tracerOptions)
 import OpenTelemetry.Trace.Core (createSpan, endSpan)
 
-import Ecluse.Pilot.Osv (ExtractedOsv, OsvAdvisory, extractFromAdvisory)
+import Ecluse.Osv (ExtractedOsv, OsvAdvisory, extractFromAdvisory)
 import Ecluse.Telemetry (Telemetry, telemetryTracerProvider)
 
 -- | Fetch the OSV zip and stream its contents

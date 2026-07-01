@@ -216,9 +216,9 @@ library
     Ecluse.Boot
     Ecluse.Proxy
     Ecluse.Pilot
-    Ecluse.Pilot.Osv
-    Ecluse.Pilot.Osv.Stream
-    Ecluse.Pilot.Osv.Database
+    Ecluse.Osv
+    Ecluse.Osv.Stream
+    Ecluse.Osv.Database
     Ecluse.Dredger
     Ecluse.Composition
     Ecluse.Config
@@ -480,7 +480,7 @@ test-suite ecluse-unit
     Ecluse.ManifestSpec
     Ecluse.PilotSpec
     Ecluse.Pilot.OsvSpec
-    Ecluse.Pilot.Osv.DatabaseSpec
+    Ecluse.Osv.DatabaseSpec
     Ecluse.ProxySpec
     Ecluse.ServerSpec
     Ecluse.TelemetrySpec

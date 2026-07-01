@@ -91,6 +91,9 @@ instance FromJSON AppConfig where
             <*> (o .:? "publicUrl" >>= traverse parseUrl)
             <*> (o .: "minPublicIntegrity" >>= parseEnum parseMinIntegrity "minPublicIntegrity")
             <*> (o .: "minTrustedIntegrity" >>= parseEnum parseMinTrustedIntegrity "minTrustedIntegrity")
+            <*> o .:? "osvUrl"
+            <*> o .:? "osvDbPath" .!= "osv.db"
+            <*> (o .:? "osvSyncInterval" .!= Number 3600 >>= parseSeconds)
       where
         parseMounts :: KeyMap.KeyMap Value -> Parser (Map.Map Ecosystem MountConfig)
         parseMounts km = do

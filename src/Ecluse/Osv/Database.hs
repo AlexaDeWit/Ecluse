@@ -1,8 +1,10 @@
 {-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Ecluse.Pilot.Osv.Database (
+module Ecluse.Osv.Database (
     compileToSqlite,
+    withAdvisoryDb,
+    lookupAdvisories,
 ) where
 
 import Conduit
@@ -11,7 +13,7 @@ import Data.Conduit.List qualified as CL
 import Database.SQLite.Simple qualified as SQLite
 import Katip (KatipContext, Severity (..), logFM, ls)
 
-import Ecluse.Pilot.Osv (ExtractedOsv (..))
+import Ecluse.Osv (ExtractedOsv (..))
 
 {- | A sink that compiles 'ExtractedOsv' into a SQLite database.
 The resulting database is optimized for fast lookups by package name and ecosystem.
@@ -51,6 +53,26 @@ compileToSqlite dbPath = do
             liftIO $ SQLite.execute_ conn "CREATE INDEX IF NOT EXISTS idx_advisories_pkg_eco_ver ON advisories (package, ecosystem, fixed_version)"
             liftIO $ SQLite.execute_ conn "VACUUM"
             liftIO $ SQLite.execute_ conn "ANALYZE"
+
+{- | Open an advisory database in read-only mode and execute an action.
+It applies defense-in-depth pragmas.
+-}
+withAdvisoryDb :: FilePath -> (SQLite.Connection -> IO a) -> IO a
+withAdvisoryDb dbPath action =
+    bracket
+        (SQLite.openReadOnly dbPath)
+        SQLite.close
+        ( \conn -> do
+            SQLite.execute_ conn "PRAGMA trusted_schema = OFF"
+            action conn
+        )
+
+{- | Fast lookup for a package's remediation boundaries (fixed versions).
+-}
+lookupAdvisories :: SQLite.Connection -> Text -> Text -> IO [Text]
+lookupAdvisories conn pkg eco =
+    fmap SQLite.fromOnly
+        <$> SQLite.query conn "SELECT fixed_version FROM advisories WHERE package = ? AND ecosystem = ?" (pkg, eco)
 
 setupSchema :: SQLite.Connection -> IO ()
 setupSchema conn = do

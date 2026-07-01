@@ -2,7 +2,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE UndecidableInstances #-}
 
-module Ecluse.Pilot.OsvSpec (spec) where
+module Ecluse.OsvSpec (spec) where
 
 import Conduit
 import Data.Aeson (eitherDecodeStrict)
@@ -12,8 +12,8 @@ import Test.Hspec (Spec, anyException, describe, it, shouldBe, shouldThrow)
 
 import Data.ByteString.Lazy qualified as LBS
 import Data.Text (unpack)
-import Ecluse.Pilot.Osv
-import Ecluse.Pilot.Osv.Stream (parseOsvStream, streamOsvUrl)
+import Ecluse.Osv
+import Ecluse.Osv.Stream (parseOsvStream, streamOsvUrl)
 import Ecluse.Telemetry (telemetryDisabled)
 import Ecluse.Test.Stub (stubBaseUrl, withStub)
 import Network.HTTP.Types.Status (status200)

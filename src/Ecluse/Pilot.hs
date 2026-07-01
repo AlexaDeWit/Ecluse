@@ -1,4 +1,5 @@
 {-# LANGUAGE ImportQualifiedPost #-}
+{-# LANGUAGE TypeFamilies #-}
 
 module Ecluse.Pilot (
     runPilot,
@@ -6,8 +7,12 @@ module Ecluse.Pilot (
     pilotApplication,
 ) where
 
-import Conduit (runConduitRes, (.|))
+import Conduit (runConduit, (.|))
 import Control.Monad.Primitive (PrimMonad (..))
+import Control.Monad.Trans.Class (lift)
+import Control.Monad.Trans.Resource (runResourceT)
+import Control.Concurrent (threadDelay)
+import UnliftIO (async)
 import Katip (Severity (InfoS), logFM, ls)
 import Katip.Monadic (KatipContextT, runKatipContextT)
 import Network.Wai (Application)
@@ -15,8 +20,8 @@ import Network.Wai (Application)
 import Ecluse.Boot (BootEnv (..))
 import Ecluse.Config (AppConfig (cfgPort))
 import Ecluse.Log (moduleField)
-import Ecluse.Pilot.Osv.Database (compileToSqlite)
-import Ecluse.Pilot.Osv.Stream (streamOsvUrl)
+import Ecluse.Osv.Database (compileToSqlite)
+import Ecluse.Osv.Stream (streamOsvUrl)
 import Ecluse.Server (ServerConfig (scDrain, scPort), mkServerConfig, probeApplication, runWarp, serverMiddleware)
 import Ecluse.Telemetry (telemetryTracerProvider)
 
@@ -37,11 +42,24 @@ probes. Its actual worker loop will ingest advisory databases.
 runPilot :: BootEnv -> IO ()
 runPilot bootEnv = do
     let logEnv = beLogEnv bootEnv
-        port = cfgPort (beConfig bootEnv)
+        config = beConfig bootEnv
+        port = cfgPort config
         cfg = (mkServerConfig []){scPort = port}
 
     runKatipContextT logEnv (moduleField "Ecluse.Pilot") mempty $ do
         logFM InfoS (ls ("Pilot mode starting up on port " <> show port :: String))
+
+        -- Start background compilation loop if configured
+        case cfgOsvUrl config of
+            Nothing -> logFM InfoS "No OSV URL configured, background compilation disabled."
+            Just url -> do
+                let dbPath = cfgOsvDbPath config
+                    interval = cfgOsvSyncInterval config
+                void . liftIO . async $ forever $ do
+                    runKatipContextT logEnv (moduleField "Ecluse.Pilot") mempty $ do
+                        logFM InfoS (ls ("Starting background OSV compilation from " <> url))
+                        runCompileOsv bootEnv url dbPath
+                    threadDelay (round (realToFrac interval * 1000000 :: Double))
 
     runWarp cfg (pilotApplication cfg)
 
@@ -54,8 +72,9 @@ runCompileOsv bootEnv url dbPath = do
     let logEnv = beLogEnv bootEnv
         telemetry = beTelemetry bootEnv
 
-    runKatipContextT logEnv (moduleField "Ecluse.Pilot") mempty $ do
-        logFM InfoS (ls ("Starting OSV compilation from " <> url <> " to " <> dbPath))
-        runConduitRes $
-            streamOsvUrl telemetry url
-                .| compileToSqlite dbPath
+    runResourceT $
+        runKatipContextT logEnv (moduleField "Ecluse.Pilot") mempty $ do
+            logFM InfoS (ls ("Starting OSV compilation from " <> url <> " to " <> dbPath))
+            runConduit $
+                streamOsvUrl telemetry url
+                    .| compileToSqlite dbPath
