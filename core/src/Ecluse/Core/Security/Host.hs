@@ -29,6 +29,9 @@ module Ecluse.Core.Security.Host (
     TarballHostPolicy (..),
     Origin (..),
     tarballHostAllowed,
+
+    -- * Internal for testing
+    isHex,
 ) where
 
 import Data.IP (
