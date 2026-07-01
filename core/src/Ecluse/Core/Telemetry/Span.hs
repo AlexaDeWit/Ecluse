@@ -64,6 +64,16 @@ data TracingPort = TracingPort
         PackageName ->
         IO a ->
         IO a
+    , spanMetadataFetch ::
+        forall a.
+        PackageName ->
+        IO a ->
+        IO a
+    , spanMetadataDecode ::
+        forall a.
+        PackageName ->
+        IO a ->
+        IO a
     -- ^ Bracket the gating phase of a packument request, which runs the rules and filter on the public upstream document.
     }
 

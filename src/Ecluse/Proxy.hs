@@ -133,7 +133,7 @@ import Ecluse.Telemetry.Reporters (
     installMetrics,
     newDeferredMetrics,
  )
-import Ecluse.Telemetry.Tracing (instrumentDataPlaneManagerSettings)
+import Ecluse.Telemetry.Tracing (instrumentDataPlaneManagerSettings, tracingPortOf)
 
 {- | Start Écluse: the entry point the @ecluse@ executable runs (see "Main").
 
@@ -350,11 +350,13 @@ workerPolicyFor env deps =
   where
     client =
         newNpmMetadataClient
+            (tracingPortOf (envTelemetry env))
             (metricsPortOf (envMetrics env))
             Public
             (Cached (envMetadataCache env) (Source (pdPublicBaseUrl deps)))
             (\_ _ -> pure ())
             (\_ _ -> pure ())
+            (\_ -> pure ())
             NpmClientConfig
                 { npmBaseUrl = pdPublicBaseUrl deps
                 , npmManager = envManager env

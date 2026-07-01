@@ -54,8 +54,10 @@ module Ecluse.Telemetry.Tracing (
     -- * Domain spans
     withRuleEvalSpan,
     withMirrorEnqueueSpan,
-    withMirrorJobSpan,
     withPackumentGateSpan,
+    withMetadataFetchSpan,
+    withMetadataDecodeSpan,
+    withMirrorJobSpan,
     JobSpanOutcome (..),
 
     -- * The core tracing ports
@@ -80,7 +82,7 @@ import OpenTelemetry.Trace (
     NewLink (NewLink, linkAttributes, linkContext),
     Span,
     SpanArguments (kind, links),
-    SpanKind (Consumer, Internal, Producer),
+    SpanKind (Client, Consumer, Internal, Producer),
     SpanStatus (Error),
     addAttribute,
     defaultSpanArguments,
@@ -89,7 +91,7 @@ import OpenTelemetry.Trace (
     setStatus,
     tracerOptions,
  )
-import UnliftIO (MonadUnliftIO)
+import UnliftIO (MonadUnliftIO, withRunInIO)
 
 import Ecluse.Core.Package (PackageName, renderPackageName)
 import Ecluse.Core.Queue (RemoteSpanContext (RemoteSpanContext, rscTraceparent, rscTracestate))
@@ -234,16 +236,24 @@ withMirrorJobSpan telemetry name version remoteContext project action =
         pure result
 
 -- | Run a packument-gate domain span around the rules and filter application for a public packument.
-withPackumentGateSpan ::
-    (MonadUnliftIO m) =>
-    Telemetry ->
-    PackageName ->
-    m a ->
-    m a
+withPackumentGateSpan :: (MonadUnliftIO m) => Telemetry -> PackageName -> m a -> m a
 withPackumentGateSpan telemetry name action =
     withDomainSpan telemetry Internal [] "ecluse.packument.gate" $ \mSpan -> do
         recordFields mSpan [("ecluse.package", renderPackageName name)]
         action
+
+withMetadataFetchSpan :: (MonadUnliftIO m) => Telemetry -> PackageName -> m a -> m a
+withMetadataFetchSpan telemetry name action =
+    withDomainSpan telemetry Client [] "ecluse.metadata.fetch" $ \mSpan -> do
+        recordFields mSpan [("ecluse.package", renderPackageName name)]
+        action
+
+withMetadataDecodeSpan :: (MonadUnliftIO m) => Telemetry -> PackageName -> m a -> m a
+withMetadataDecodeSpan telemetry name action =
+    withDomainSpan telemetry Internal [] "ecluse.metadata.decode" $ \mSpan -> do
+        recordFields mSpan [("ecluse.package", renderPackageName name)]
+        action
+
 
 {- | Project the OpenTelemetry-backed domain spans onto the core 'TracingPort' the
 serve path ("Ecluse.Core.Server.Pipeline") brackets through: the per-version rule
@@ -257,8 +267,14 @@ tracingPortOf :: Telemetry -> TracingPort
 tracingPortOf telemetry =
     TracingPort
         { spanRuleEval = withRuleEvalSpan telemetry
-        , spanMirrorEnqueue = withMirrorEnqueueSpan telemetry
-        , spanPackumentGate = withPackumentGateSpan telemetry
+        , spanMirrorEnqueue = \n v url ok action -> withRunInIO $ \runInIO ->
+            withMirrorEnqueueSpan telemetry n v url ok (runInIO . action)
+        , spanPackumentGate = \n action -> withRunInIO $ \runInIO ->
+            withPackumentGateSpan telemetry n (runInIO action)
+        , spanMetadataFetch = \n action -> withRunInIO $ \runInIO ->
+            withMetadataFetchSpan telemetry n (runInIO action)
+        , spanMetadataDecode = \n action -> withRunInIO $ \runInIO ->
+            withMetadataDecodeSpan telemetry n (runInIO action)
         }
 
 {- | Project the OpenTelemetry-backed mirror-job span onto the core 'WorkerTracingPort'

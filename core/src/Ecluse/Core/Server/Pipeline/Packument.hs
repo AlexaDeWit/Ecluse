@@ -419,11 +419,13 @@ withMetadataClient rt deps upstream caching limits manager baseUrl token k =
         k $
             pdNewMetadataClient
                 deps
+                (srTracing rt)
                 (srMetrics rt)
                 upstream
                 caching
                 (\nm err -> runInIO (logMetadataFailure nm baseUrl err))
                 (\nm entries -> runInIO (logInvalidEntries nm baseUrl entries))
+                (\nm -> runInIO (logFM DebugS (ls ("fetching packument from origin for " <> renderPackageName nm))))
                 limits
                 manager
                 baseUrl

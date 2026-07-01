@@ -189,11 +189,13 @@ data PackumentDeps = PackumentDeps
     , pdMinTrustedIntegrity :: MinTrustedIntegrity
     -- ^ The minimum integrity hash required for a trusted upstream dependency.
     , pdNewMetadataClient ::
+        TracingPort ->
         MetricsPort ->
         Metric.Upstream ->
         ManifestCaching ->
         (PackageName -> MetadataError -> IO ()) ->
         (PackageName -> [InvalidEntry] -> IO ()) ->
+        (PackageName -> IO ()) ->
         Limits ->
         Manager ->
         Text ->
