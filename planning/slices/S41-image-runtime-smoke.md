@@ -2,7 +2,7 @@
 id: S41
 title: Image runtime smoke, distroless `docker run` + real proxied fetch (dlopen/NSS verification)
 milestone: M8, Release hardening
-status: not-started
+status: merged
 depends-on: [S20]
 test-tier: []
 arch-refs:
