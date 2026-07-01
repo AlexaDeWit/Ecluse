@@ -642,6 +642,11 @@ test-suite ecluse-e2e
   other-modules:
     Ecluse.E2E.Fixtures
     Ecluse.E2E.Harness
+    Ecluse.E2E.Harness.Docker
+    Ecluse.E2E.Harness.Npm
+    Ecluse.E2E.Harness.Proxy
+    Ecluse.E2E.Harness.Types
+    Ecluse.E2E.Harness.Verdaccio
     Ecluse.E2E.SuiteSpec
     Ecluse.Test.SupportLinkageSpec
 
