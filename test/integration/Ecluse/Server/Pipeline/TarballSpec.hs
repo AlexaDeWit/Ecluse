@@ -10,7 +10,8 @@ import Ecluse.Core.Security (TarballHostPolicy (AnyAllowlistedHost), lowerCaseHo
 import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Server.Pipeline.TestSupport
-import Network.HTTP.Types (hIfNoneMatch, methodGet, methodHead)
+import Network.HTTP.Types (methodGet, methodHead)
+import Network.HTTP.Types.Header (hIfNoneMatch)
 import Network.Wai.Test (SResponse (..), simpleBody)
 import Test.Hspec
 
