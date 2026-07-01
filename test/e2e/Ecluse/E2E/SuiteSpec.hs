@@ -83,7 +83,6 @@ scenarios = do
                 mirrored <- verdaccioHasVersion e2e (psName headPkg) (psVersion headPkg)
                 mirrored `shouldBe` False
 
-    describe "mutating scenarios (isolated environments)" $ aroundWith withE2E $ do
         describe "server↔worker -- the full mirror lifecycle" $
             it "mirrors a package served from public, then installs it from the mirror with public down" $ \e2e -> do
                 -- The core resilience loop, end to end, as a real upstream-outage scenario.
@@ -104,6 +103,14 @@ scenarios = do
                     mirrored `shouldBe` True
                     void $ withUpstreamPaused e2e (npmCiIn proj) >>= shouldSucceed -- (5) public down → from the mirror
 
+        describe "first-party publish -- opt-in posture" $
+            it "answers a publish with 405 when no publication target is configured" $ \e2e -> do
+                -- The base topology sets no ECLUSE_PUBLICATION_TARGET, so the publish path is
+                -- off: a PUT /{pkg} is not an allowed method (no implicit write path). A raw
+                -- PUT is enough -- the 405 precedes any body read -- so npm need not be driven.
+                status <- proxyPut e2e ("/npm/" <> publishInScopeName)
+                status `shouldBe` 405
+
 {- | The whole-system telemetry scenarios. Each gets its __own__ freshly booted
 environment with the telemetry topology it needs -- an OTLP collector and the proxy's
 telemetry dialect ('E2EConfig') -- under its own 'around', still per-test isolated like
@@ -115,8 +122,8 @@ telemetryScenarios :: SpecWith GlobalDataPlane
 telemetryScenarios = do
     -- #324 -- real healthy OTLP publication: with telemetry on and an OTLP endpoint, a
     -- real npm request's ecluse.* metrics and its span actually reach a collector.
-    describe "telemetry -- OTLP healthy publication (#324)" $
-        aroundWith (withE2EWith E2EConfig{ecCollector = True, ecExtraEnv = otlpCollectorEnv}) $
+    describe "telemetry -- OTLP healthy publication (#324) and domain-span emission (#307)" $
+        aroundAllWith (withE2EWith E2EConfig{ecCollector = True, ecExtraEnv = otlpCollectorEnv}) $ do
             it "exports ecluse.* metrics and a span to the collector on a real npm request" $ \e2e -> do
                 void $ npmInstall e2e (psName allowPkg) >>= shouldSucceed
                 -- The serve path's catalogue metric and a request span both land in the
@@ -129,13 +136,6 @@ telemetryScenarios = do
                         80
                 delivered `shouldBe` True
 
-    -- #307(2) -- domain-span emission proven end to end: a real mirror round-trip drives the
-    -- hand-added domain spans (rule eval on the public tarball gate, the mirror-enqueue
-    -- producer span, and the mirror-job consumer span the worker opens), and all three reach
-    -- the collector's debug exporter -- so the domain instrumentation is exercised end to end,
-    -- not only the WAI/http-client spans the #324 case proves.
-    describe "telemetry -- domain-span emission (#307)" $
-        aroundWith (withE2EWith E2EConfig{ecCollector = True, ecExtraEnv = otlpCollectorEnv}) $
             it "emits the rule-eval, mirror-enqueue, and mirror-job domain spans to the collector on a mirror round-trip" $ \e2e -> do
                 -- A public-served install gates the version (rule-eval span) and enqueues a
                 -- mirror (enqueue span); the worker then mirrors it (job span).
@@ -159,7 +159,7 @@ telemetryScenarios = do
     -- #325(a) -- OTLP absent / telemetry off: the real image still boots, serves a real
     -- install, and logs JSONL to stdout/stderr, with no collector anywhere.
     describe "telemetry -- OTLP off, no collector (#325)" $
-        aroundWith (withE2EWith E2EConfig{ecCollector = False, ecExtraEnv = [("ECLUSE_TELEMETRY", "off")]}) $
+        aroundAllWith (withE2EWith E2EConfig{ecCollector = False, ecExtraEnv = [("ECLUSE_TELEMETRY", "off")]}) $
             it "starts, serves a real install, and logs JSONL to stdout -- no collector needed" $ \e2e -> do
                 void $ npmInstall e2e (psName allowPkg) >>= shouldSucceed
                 -- It still writes structured JSONL to its stdout/stderr (docker captures
@@ -178,7 +178,7 @@ telemetryScenarios = do
     -- the first failure is the "telemetry export error" line this asserts on, on top of the
     -- keeps-serving proof.
     describe "telemetry -- OTLP on but the collector unreachable (#325)" $
-        aroundWith (withE2EWith E2EConfig{ecCollector = False, ecExtraEnv = otlpCollectorEnv}) $
+        aroundAllWith (withE2EWith E2EConfig{ecCollector = False, ecExtraEnv = otlpCollectorEnv}) $
             it "surfaces a throttled export-failure warning yet keeps serving -- an absent collector degrades visibly, no crash" $ \e2e -> do
                 void $ npmInstall e2e (psName allowPkg) >>= shouldSucceed
                 logged <- awaitProxyLog e2e (T.isInfixOf "\"msg\":") 80
@@ -199,7 +199,7 @@ telemetryScenarios = do
     -- the self-aligning resolver to Datadog unified-service-tag resource attributes on the
     -- exported signals and the dd object on the JSONL logs.
     describe "telemetry -- Datadog pattern (#323)" $
-        aroundWith (withE2EWith E2EConfig{ecCollector = True, ecExtraEnv = datadogCollectorEnv}) $
+        aroundAllWith (withE2EWith E2EConfig{ecCollector = True, ecExtraEnv = datadogCollectorEnv}) $
             it "carries the Datadog unified-service tags to the collector and the dd object onto the logs" $ \e2e -> do
                 -- A mirror round-trip drives request spans plus a worker job span, the
                 -- span-scoped path whose log line carries a populated dd.trace_id.
@@ -249,7 +249,7 @@ publication target). Each is per-test isolated like 'scenarios'. See
 publishScenarios :: SpecWith GlobalDataPlane
 publishScenarios = do
     describe "first-party publish -- publication target enabled" $
-        aroundWith (withE2EWith E2EConfig{ecCollector = False, ecExtraEnv = publishTargetEnv}) $ do
+        aroundAllWith (withE2EWith E2EConfig{ecCollector = False, ecExtraEnv = publishTargetEnv}) $ do
             it "publishes an in-scope package, then installs it back through the private leg" $ \e2e -> do
                 let name = publishInScopeName
                     ver = publishVersion
@@ -282,14 +282,7 @@ publishScenarios = do
                 reached <- verdaccioHasVersion e2e name ver
                 reached `shouldBe` False
 
-    describe "first-party publish -- opt-in posture" $
-        aroundWith withE2E $
-            it "answers a publish with 405 when no publication target is configured" $ \e2e -> do
-                -- The base topology sets no ECLUSE_PUBLICATION_TARGET, so the publish path is
-                -- off: a PUT /{pkg} is not an allowed method (no implicit write path). A raw
-                -- PUT is enough -- the 405 precedes any body read -- so npm need not be driven.
-                status <- proxyPut e2e ("/npm/" <> publishInScopeName)
-                status `shouldBe` 405
+
 
 {- | Placeholders for not-yet-implemented work, kept outside 'around' so they boot no
 environment. Graceful drain (#160) @SIGTERM@s the proxy, so when written it belongs in the
