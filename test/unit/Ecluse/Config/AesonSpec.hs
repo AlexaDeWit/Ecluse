@@ -43,7 +43,7 @@ spec = describe "decodeDocument" $ do
         case loadConfig [] Nothing of
             Left e -> expectationFailure ("unexpected decode error: " <> show e)
             Right doc -> do
-                cfgServeMaxInFlight (configApp doc) `shouldBe` 64
+                cfgServeMaxInFlight (configApp doc) `shouldBe` 32
                 cfgPublicConnectionsPerHost (configApp doc) `shouldBe` 10
                 cfgPrivateConnectionsPerHost (configApp doc) `shouldBe` 16
 

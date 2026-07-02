@@ -27,7 +27,7 @@ on:
       serve-max-in-flight:
         description: "Maximum concurrent packument fetches"
         required: false
-        default: "64"
+        default: "32"
   schedule:
     # Nightly, off-peak UTC. A trend a human reads in the morning, never a gate.
     - cron: "17 4 * * *"
@@ -56,7 +56,8 @@ jobs:
       # value can only mis-size a measurement, never inject.
       BENCH_LOAD_DURATION_SECONDS: ${{ github.event.inputs.duration-seconds || '30' }}
       BENCH_LOAD_CONCURRENCY: ${{ github.event.inputs.concurrency || '50' }}
-      BENCH_LOAD_SERVE_MAX_IN_FLIGHT: ${{ github.event.inputs.serve-max-in-flight || '64' }}
+      BENCH_LOAD_SERVE_MAX_IN_FLIGHT: ${{ github.event.inputs.serve-max-in-flight || '32' }}
+      BENCH_LOAD_ISOLATE_OHA: "1"
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -82,7 +83,11 @@ jobs:
       # fails only on a genuine harness failure (a non-zero exit).
       - name: Run load tests
         run: |
-          nix develop .#bench --command task bench-load 2>&1 | tee bench-load-results.md
+          set -eo pipefail
+          # Isolate the load generator from the server: ubuntu-latest has 4 cores. oha is
+          # pinned to core 0 by the harness; we restrict GHC to 3 capability threads so they
+          # neatly occupy the remaining 3 cores without self-contention.
+          nix develop .#bench --command cabal run -v0 bench-load -- +RTS -N3 -RTS 2>&1 | tee bench-load-results.md
 
       # This run's results, downloadable from the run page. A convenience for a human
       # comparing by hand — there is no cross-run baseline store. Uploaded even on a
