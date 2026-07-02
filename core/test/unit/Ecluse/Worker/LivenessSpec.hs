@@ -1,4 +1,4 @@
-{-# OPTIONS_GHC -Wno-unused-imports -Wno-unused-top-binds -Wno-orphans #-}
+{-# OPTIONS_GHC -Wno-unused-imports -Wno-orphans #-}
 
 module Ecluse.Worker.LivenessSpec (spec) where
 
