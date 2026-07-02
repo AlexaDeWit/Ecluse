@@ -15,6 +15,11 @@ procedure.
   describe what has shipped. Reconcile them rather than treating either as interchangeable.
 - **Escalate, don't guess.** Stop on ambiguous, missing, or contradictory requirements rather
   than inventing a way through them.
+- **Review the plan before you build.** For any non-trivial change, present the proposed approach
+  (the strategy, the files you intend to touch, and the notable trade-offs or alternatives) to the
+  repo owner and get their agreement *before* writing the implementation. Do not run ahead and hand
+  back a finished result whose strategy the owner never saw. A trivial or already-scoped change is
+  exempt; when unsure whether it qualifies, surface the plan and wait.
 
 | Work | Read next |
 |---|---|
