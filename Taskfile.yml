@@ -376,9 +376,9 @@ tasks:
       - echo "Rewriting dependency cross-links to canonical Hackage URLs"
       - bash scripts/rewrite-haddock-dep-links.sh _site/api
       - |
-        if grep -rlE 'file:///|\$\{pkgroot\}|/store/ghc-' _site/api >/dev/null 2>&1; then \
+        if grep -rlE 'file:///|\$\{pkgroot\}|/store/ghc-|/nix/store/' _site/api >/dev/null 2>&1; then \
           echo "docs-site: unresolved/leaky dependency links survived" >&2; \
-          grep -rlE 'file:///|\$\{pkgroot\}|/store/ghc-' _site/api >&2; exit 1; \
+          grep -rlE 'file:///|\$\{pkgroot\}|/store/ghc-|/nix/store/' _site/api >&2; exit 1; \
         fi
       - cp web/api-index.html _site/api/index.html
       - cabal run -v0 --builddir={{.DOCS_BUILDDIR}} openapi-gen -- _site/api/openapi.json

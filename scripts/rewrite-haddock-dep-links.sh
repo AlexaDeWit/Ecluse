@@ -46,16 +46,19 @@ set -euo pipefail
 
 # GHC boot libraries, hashed dir: <prefix>/share/doc/ghc/html/libraries/<name>-<ver>-<hash>/<page>.
 # The whole <prefix> (pkgroot/.. or a store path) and its Nix hash are dropped.
-boot_h='s#[^"]*/share/doc/ghc/html/libraries/([^/"]+-[0-9][0-9.]*)-[0-9a-f]+/([^"]+)#https://hackage.haskell.org/package/\1/docs/\2#g'
+# The version is also dropped to produce canonical, stable Hackage URLs.
+boot_h='s#[^"]*/share/doc/ghc/html/libraries/([^/"]+)-[0-9][0-9.]*-[0-9a-f]+/([^"]+)#https://hackage.haskell.org/package/\1/docs/\2#g'
 
 # GHC boot libraries, legacy unhashed dir (older GHC layouts): no -<hash> segment.
-boot_n='s#[^"]*/share/doc/ghc/html/libraries/([^/"]+-[0-9][0-9.]*)/([^"]+)#https://hackage.haskell.org/package/\1/docs/\2#g'
+boot_n='s#[^"]*/share/doc/ghc/html/libraries/([^/"]+)-[0-9][0-9.]*/([^"]+)#https://hackage.haskell.org/package/\1/docs/\2#g'
 
 # cabal-store dependencies: <prefix>/store/<ghc>/<name>-<ver>-<hash>/share/doc/html/<page>.
-# A store unit-id dir always carries its <hash>, so there is no unhashed fallback;
-# an impossible unhashed form is left for the docs-site guard to fail on, loudly,
-# rather than be silently mis-rewritten.
-store_h='s#[^"]*/store/[^/"]+/([^/"]+-[0-9][0-9.]*)-[0-9a-f]+/share/doc/html/([^"]+)#https://hackage.haskell.org/package/\1/docs/\2#g'
+# A store unit-id dir always carries its <hash>, so there is no unhashed fallback.
+store_h='s#[^"]*/store/[^/"]+/([^/"]+)-[0-9][0-9.]*-[0-9a-f]+/share/doc/html/([^"]+)#https://hackage.haskell.org/package/\1/docs/\2#g'
+
+# Generic Nix store documentation: /nix/store/<hash>-<name>-<ver>-doc/share/doc/html/<page>.
+# Covers non-boot dependencies when built via Nix.
+nix_h='s#[^"]*/nix/store/[0-9a-z]+-([^/"]+)-[0-9][0-9.]*-doc/share/doc/html/([^"]+)#https://hackage.haskell.org/package/\1/docs/\2#g'
 
 usage() {
   echo "usage: $0 <dir> | --filter" >&2
@@ -66,7 +69,7 @@ usage() {
 
 case "$1" in
   --filter)
-    exec sed -E -e "$boot_h" -e "$boot_n" -e "$store_h"
+    exec sed -E -e "$boot_h" -e "$boot_n" -e "$store_h" -e "$nix_h"
     ;;
   -*)
     usage
@@ -80,6 +83,6 @@ case "$1" in
     # Rewrite every generated page and the JSON search index in place. Other file
     # types (CSS, JS bundles, images) never carry these links.
     find "$dir" -type f \( -name '*.html' -o -name '*.json' \) -print0 |
-      xargs -0 -r sed -E -i -e "$boot_h" -e "$boot_n" -e "$store_h"
+      xargs -0 -r sed -E -i -e "$boot_h" -e "$boot_n" -e "$store_h" -e "$nix_h"
     ;;
 esac
