@@ -65,6 +65,9 @@ module Ecluse.Composition (
     -- * Config-derived runtime settings
     cacheConfigFor,
     connectionPoolSettings,
+
+    -- * Internals exported for testing
+    parseCodeArtifactHost,
 ) where
 
 import Data.Char (isDigit)
