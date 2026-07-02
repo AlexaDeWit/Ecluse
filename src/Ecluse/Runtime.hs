@@ -40,7 +40,9 @@ supervisor sees an uninterrupted process, exactly as an @exec@-ing entrypoint sc
 behaves. A marker variable ('reexecMarker') guards against loops: the re-launched
 process sees it, skips any further exec, and only logs (a warning, if the RTS still
 diverges from the plan -- an operator's @GHCRTS@ fighting the config, or a flag the
-RTS rejected).
+RTS rejected). A failure of the exec call itself is likewise degraded to a warning
+and an unenforced posture: tuning never loops the boot and never takes the service
+down.
 
 The pure resolution ('resolveRuntimePlan'), the cgroup parsing ('parseCpuMax',
 'parseMemoryMax'), and the rendering are separated from the thin IO shell
@@ -75,7 +77,7 @@ import GHC.RTS.Flags (GCFlags (maxHeapSize, minAllocAreaSize, nurseryChunkSize),
 import System.Environment (getEnvironment, getExecutablePath)
 import System.IO.Error (isDoesNotExistError)
 import System.Posix.Process (executeFile)
-import UnliftIO (tryJust)
+import UnliftIO (tryIO, tryJust)
 
 {- | The RTS posture the process is actually running with, in bytes. Read once at
 boot ('currentRtsPosture'); the plan is resolved against it and the log renders it.
@@ -292,7 +294,23 @@ applyRuntimePosture logInfo logWarning cfgCores cfgMaxHeap = do
             | "-N" `T.isPrefixOf` capsOnly -> do
                 setNumCapabilities (fst (planCapabilities plan))
                 logPosture plan rts{rpCapabilities = fst (planCapabilities plan)}
-        _ -> reexecWith logInfo flags
+        _ ->
+            -- Tuning must never take the service down: a failed exec (essentially
+            -- unreachable -- the path is /proc/self/exe -- but not guaranteed) is
+            -- degraded to a warning and an unenforced posture, never an abort. The
+            -- exec itself never returns on success, so reaching the continuation
+            -- at all means it failed.
+            tryIO (reexecWith logInfo flags) >>= \case
+                Left err -> do
+                    logWarning
+                        ( "runtime: re-launching to apply "
+                            <> T.intercalate " " flags
+                            <> " failed ("
+                            <> show err
+                            <> "); continuing with the live posture, unenforced."
+                        )
+                    logPosture plan rts
+                Right () -> logPosture plan rts
   where
     logPosture plan rts = traverse_ logInfo (renderRuntimePosture plan rts)
 
