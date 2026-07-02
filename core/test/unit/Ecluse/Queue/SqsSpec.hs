@@ -219,6 +219,31 @@ spec = do
                 \\"hashes\":[{\"alg\":\"sha1\",\"value\":\"deadbeef\"}],\"size\":null}}"
                 `shouldSatisfy` isLeft
 
+        it "rejects a job with a malformed traceContext (missing traceparent)" $
+            decodeJob
+                "{\"ecosystem\":\"npm\",\"scope\":null,\"name\":\"x\",\
+                \\"version\":\"1.0.0\",\"artifactUrl\":\"u\",\"mirrorTarget\":\"m\",\
+                \\"artifact\":{\"filename\":\"x-1.0.0.tgz\",\
+                \\"hashes\":[{\"alg\":\"sha1\",\"value\":\"da39a3ee5e6b4b0d3255bfef95601890afd80709\"}],\"size\":null},\
+                \\"traceContext\":{\"tracestate\":\"ecluse=1\"}}"
+                `shouldSatisfy` isLeft
+
+        it "rejects a job with traceContext present but not an object" $
+            decodeJob
+                "{\"ecosystem\":\"npm\",\"scope\":null,\"name\":\"x\",\
+                \\"version\":\"1.0.0\",\"artifactUrl\":\"u\",\"mirrorTarget\":\"m\",\
+                \\"artifact\":{\"filename\":\"x-1.0.0.tgz\",\
+                \\"hashes\":[{\"alg\":\"sha1\",\"value\":\"da39a3ee5e6b4b0d3255bfef95601890afd80709\"}],\"size\":null},\
+                \\"traceContext\":\"just-a-string\"}"
+                `shouldSatisfy` isLeft
+
+        it "rejects a job with a malformed artifact (missing filename)" $
+            decodeJob
+                "{\"ecosystem\":\"npm\",\"scope\":null,\"name\":\"x\",\
+                \\"version\":\"1.0.0\",\"artifactUrl\":\"u\",\"mirrorTarget\":\"m\",\
+                \\"artifact\":{\"hashes\":[{\"alg\":\"sha1\",\"value\":\"da39a3ee5e6b4b0d3255bfef95601890afd80709\"}],\"size\":null}}"
+                `shouldSatisfy` isLeft
+
     describe "defaultSqsConfig" $ do
         let cfg = defaultSqsConfig "https://sqs.example/q" "us-east-1"
         it "carries the queue URL and region through" $ do
