@@ -790,7 +790,7 @@ parseCodeArtifactHostSpec = describe "parseCodeArtifactHost" $ do
         parseCodeArtifactHost "my-domain-111122223333.codeartifact.us-west-2.amazonaws.com" `shouldBe` Nothing
 
     it "returns Nothing if the host contains .d.codeartifact. multiple times" $ do
-        parseCodeArtifactHost "my-domain-111122223333.d.codeartifact.d.codeartifact.us-west-2.amazonaws.com" `shouldBe` Nothing
+        parseCodeArtifactHost "my-domain-111122223333.d.codeartifact.foo.d.codeartifact.us-west-2.amazonaws.com" `shouldBe` Nothing
 
     it "returns Nothing if there is no hyphen separating domain and owner" $ do
         -- The parsing logic relies on finding the last hyphen in domainOwner.
