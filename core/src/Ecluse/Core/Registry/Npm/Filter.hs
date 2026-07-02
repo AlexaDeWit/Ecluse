@@ -102,7 +102,8 @@ rewriteTarballUrls base = \case
     Object o
         | Just pkg <- stringField "name" o
         , safeName pkg ->
-            Object (adjustObject "versions" (mapValues (rewriteVersion (joinUrl base pkg))) o)
+            let prefixDash = joinUrl base pkg <> "/-/"
+             in Object (adjustObject "versions" (mapValues (rewriteVersion prefixDash)) o)
     other -> other
 
 {- | Whether an upstream-controlled packument @name@ is safe to interpolate into a
@@ -125,8 +126,8 @@ safeName name = all isSafeComponent components
 prefix, leaving the object untouched if it carries no rewritable tarball.
 -}
 rewriteVersion :: Text -> Value -> Value
-rewriteVersion prefix = \case
-    Object vo -> Object (adjustObject "dist" (rewriteDist prefix) vo)
+rewriteVersion prefixDash = \case
+    Object vo -> Object (adjustObject "dist" (rewriteDist prefixDash) vo)
     other -> other
 
 {- | Rewrite a @dist@ object's @tarball@ to @{prefix}\/-\/{file}@, where @file@ is
@@ -134,11 +135,11 @@ the existing URL's last path segment. A @dist@ with no string @tarball@, or a
 tarball with no filename segment, is left unchanged.
 -}
 rewriteDist :: Text -> Value -> Value
-rewriteDist prefix = \case
+rewriteDist prefixDash = \case
     Object dist
         | Just url <- stringField "tarball" dist
         , Just file <- tarballFile url ->
-            Object (KeyMap.insert "tarball" (String (prefix <> "/-/" <> file)) dist)
+            Object (KeyMap.insert "tarball" (String (prefixDash <> file)) dist)
     other -> other
 
 {- | The artifact filename of a tarball URL: the path segment after the last
@@ -212,12 +213,14 @@ retention and removal coincide there.)
 -}
 restrict :: FilterPlan -> KeyMap Value -> KeyMap Value
 restrict plan o =
-    adjustObject "versions" (keepKeys survivors)
-        . adjustObject "time" (dropKeys deniedVersions)
+    adjustObject "versions" (keepKeys survivorsKeys)
+        . adjustObject "time" (dropKeys deniedVersionKeys)
         $ o
   where
     survivors = fpSurvivors plan
+    survivorsKeys = Set.map Key.fromText survivors
     deniedVersions = Set.difference (versionKeys o) survivors
+    deniedVersionKeys = Set.map Key.fromText deniedVersions
 
 {- | Resolve @dist-tags.latest@ to the plan's resolved @latest@ and drop any other
 tag pointing at a removed version. A @dist-tags@ that is absent /or/
@@ -285,18 +288,18 @@ mapValues f = \case
     other -> other
 
 -- | Keep only the object entries whose key is in the surviving set.
-keepKeys :: Set Text -> Value -> Value
-keepKeys survivors = \case
-    Object o -> Object (KeyMap.filterWithKey (\k _ -> Key.toText k `Set.member` survivors) o)
+keepKeys :: Set Key.Key -> Value -> Value
+keepKeys survivorsKeys = \case
+    Object o -> Object (KeyMap.filterWithKey (\k _ -> k `Set.member` survivorsKeys) o)
     other -> other
 
 {- | Drop the object entries whose key is in the given set, leaving every other
 entry -- surviving versions and unmodelled bookkeeping keys (@created@,
 @modified@) alike -- untouched.
 -}
-dropKeys :: Set Text -> Value -> Value
+dropKeys :: Set Key.Key -> Value -> Value
 dropKeys keys = \case
-    Object o -> Object (KeyMap.filterWithKey (\k _ -> Key.toText k `Set.notMember` keys) o)
+    Object o -> Object (KeyMap.filterWithKey (\k _ -> k `Set.notMember` keys) o)
     other -> other
 
 -- | The 'Text' at @key@ in an object, if present and a JSON string.
