@@ -153,7 +153,11 @@ case "$suite" in
     # logic yet. Each entry states why and when it returns, so this stays a reviewed
     # decision and not a silent escape hatch. Paths use the ./src/... form the
     # report emits.
-    unscoped=()
+    unscoped=(
+      # tested exclusively by the integration test suite
+      ./src/Ecluse/Pilot/Export/S3.hs
+      ./src/Ecluse/Pilot/Pipeline.hs
+    )
     ;;
   *)
     echo "coverage: wrote $out"

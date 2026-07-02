@@ -17,7 +17,7 @@ logFormat: json
 telemetry: "off"
 minPublicIntegrity: sha256
 minTrustedIntegrity: sha256
-osvDataDir: "data/osv"
+osvScratchDir: "data/osv-scratch"
 
 mounts:
   npm:

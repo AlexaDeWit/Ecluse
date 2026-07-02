@@ -219,6 +219,8 @@ library
     Ecluse.Pilot.Osv
     Ecluse.Pilot.Osv.Stream
     Ecluse.Pilot.Osv.Compile
+    Ecluse.Pilot.Export.S3
+    Ecluse.Pilot.Pipeline
     Ecluse.Dredger
     Ecluse.Composition
     Ecluse.Config
@@ -245,6 +247,7 @@ library
     , amazonka-codeartifact           ^>=2.0
     , amazonka-sqs                    ^>=2.0
     , amazonka-sts                    ^>=2.0
+    , amazonka-s3                     ^>=2.0
     , bytestring                      ^>=0.12
     , containers                      ^>=0.7
     , crypton                         ^>=1.0
@@ -562,6 +565,7 @@ test-suite ecluse-integration
     Ecluse.Server.Pipeline.TestSupport
     Ecluse.Server.PipelineSpec
     Ecluse.Server.PublishSpec
+    Ecluse.PilotS3ExportSpec
     Ecluse.TelemetryMetricsSpec
     Ecluse.TelemetryTracingSpec
     Ecluse.Test.SupportLinkageSpec
@@ -571,7 +575,12 @@ test-suite ecluse-integration
   build-depends:
     , aeson            ^>=2.2
     , amazonka         ^>=2.0
+    , unliftio
+    , exceptions
+    , resourcet
+    , primitive
     , amazonka-sqs     ^>=2.0
+    , amazonka-s3      ^>=2.0
     , bytestring       ^>=0.12
     , case-insensitive  ^>=1.2
     , containers       ^>=0.7

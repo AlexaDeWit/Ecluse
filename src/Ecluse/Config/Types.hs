@@ -155,7 +155,8 @@ data AppConfig = AppConfig
     , cfgPublicUrl :: Maybe Url
     , cfgMinPublicIntegrity :: MinIntegrity
     , cfgMinTrustedIntegrity :: MinTrustedIntegrity
-    , cfgOsvDataDir :: FilePath
+    , cfgOsvScratchDir :: FilePath
+    , cfgPilotS3Bucket :: Maybe Text
     }
     deriving stock (Eq, Show)
 
