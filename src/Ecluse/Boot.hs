@@ -99,7 +99,7 @@ import Ecluse.Composition (
     mirrorQueuePlanWarning,
  )
 import Ecluse.Config (
-    AppConfig (cfgLogFormat, cfgTelemetry),
+    AppConfig (cfgCores, cfgLogFormat, cfgMaxHeapBytes, cfgTelemetry),
     Config (configApp),
     loadConfig,
     renderConfigError,
@@ -109,6 +109,7 @@ import Ecluse.Core.Queue.Sqs (newSqsQueue)
 import Ecluse.Core.Rules (renderBootOrder)
 import Ecluse.Core.Server.Context (PackumentDeps (pdRules))
 import Ecluse.Log (moduleField, newLogEnv)
+import Ecluse.Runtime (applyRuntimePosture)
 import Ecluse.Server (MountBinding (bindingPackumentDeps, bindingPrefix))
 import Ecluse.Telemetry (Telemetry, TelemetrySwitch (TelemetryOff, TelemetryOn), withTelemetry)
 import Ecluse.Telemetry.Resolve (prepareTelemetry)
@@ -144,6 +145,10 @@ withBootEnv action = do
     config <- orExit (T.unlines . map renderConfigError) (loadConfig envVars docBlob)
     let env = configApp config
     logEnv <- newLogEnv (cfgLogFormat env) (Environment "production")
+    -- Resolve and apply the runtime posture before anything else spins up: this may
+    -- exec the binary in place (same PID; see Ecluse.Runtime) to enforce a heap
+    -- ceiling, so nothing stateful must precede it beyond config and the logger.
+    applyRuntimePosture (logBootInfo logEnv) (logBootWarning logEnv) (cfgCores env) (cfgMaxHeapBytes env)
     logBootInfo logEnv ("Loaded configuration: " <> show config)
     prepareTelemetryBoot (cfgTelemetry env) logEnv
     withTelemetry (cfgTelemetry env) logEnv $ \telemetry ->

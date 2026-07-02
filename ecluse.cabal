@@ -232,6 +232,7 @@ library
     Ecluse.Config.Types
     Ecluse.Env
     Ecluse.Log
+    Ecluse.Runtime
     Ecluse.Server
     Ecluse.Telemetry
     Ecluse.Telemetry.Correlation
@@ -501,6 +502,7 @@ test-suite ecluse-unit
     Ecluse.Pilot.OsvSpec
     Ecluse.Pilot.Osv.CompileSpec
     Ecluse.ProxySpec
+    Ecluse.RuntimeSpec
     Ecluse.ServerSpec
     Ecluse.TelemetrySpec
     Ecluse.Telemetry.CorrelationSpec

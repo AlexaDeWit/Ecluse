@@ -154,6 +154,37 @@ routes bypass the bound so an overloaded instance remains observable. A trusted
 private tarball hit also bypasses it and streams with its existing constant-memory
 backpressure; admission protects resident metadata structures, not download count.
 
+### Runtime sizing: cores and heap ceiling
+
+`ECLUSE_CORES` and `ECLUSE_MAX_HEAP_BYTES` are the first-class surface for the
+process's runtime posture; anything omitted is **derived from the container's
+cgroup (v2)** in the `automaxprocs` style, and with no cgroup limit either the
+GHC runtime's own resolution (its baked defaults plus any operator `GHCRTS`)
+stands. Resolution is per knob, strongest first: config, then cgroup, then
+runtime. The derivation reads the process's own cgroup and every ancestor
+(tightest limit wins), so a limit placed on a parent slice still binds. Every
+decision is logged at boot with its provenance, so the effective posture is
+always readable from the standard logs.
+
+Two mechanics are deliberate. A derived heap ceiling subtracts the nursery
+budget (cores x allocation area) and 10% slack from the memory limit, floored
+at half the limit, so the ceiling accounts for memory the process spends
+outside the heap. And because a heap ceiling can only be set at runtime start,
+enforcing one **re-executes the binary once, in place** (same PID; a container
+supervisor observes an uninterrupted process), loop-guarded by an internal
+marker. An operator's own `GHCRTS` is never fought: an explicit `-M` there is
+adopted rather than overridden, and a divergence that survives the re-launch
+is logged as a warning, never an abort. See the [Operator
+Manual](../../USAGE.md#operating-écluse) for the sizing arithmetic.
+
+The resolution is **role-agnostic on purpose, and only the resolution**: cores
+and the heap ceiling derive from the container's limits, which bind the proxy,
+Pilot, and Dredger alike. What is *not* universalised is workload-shaped memory
+modelling: the shipped allocation-area tuning and the pod-sizing arithmetic are
+the **proxy serve path's** profile, while Pilot (a single scheduled ingestion
+pipe) and the Dredger (profile to follow its pruning rules) are tuned
+per-deployment via `GHCRTS` until their shapes earn their own defaults.
+
 The two process-lifetime HTTP managers also carry explicit per-host pool bounds.
 The public default remains **10** connections per host because same-key metadata
 misses are single-flight-coalesced. The private default is **16**, matching the
