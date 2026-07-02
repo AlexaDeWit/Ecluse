@@ -28,7 +28,15 @@ dist-bench-prof/
 /ecluse-bench.svg
 *.hi
 *.o
+# AI Agent Scratch Space
 scratchpad/
+ai-notepad/
+scratch/
+test-*.sh
+inspect*.hs
+query*.hs
+*.scratch.*
+
 .vscode/*
 !.vscode/settings.json
 .agents/settings.local.json
