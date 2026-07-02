@@ -656,33 +656,33 @@ genMaybeInternalHost =
 parseIpLiteralSpec :: Spec
 parseIpLiteralSpec = describe "parseIpLiteral" $ do
     it "returns Nothing for empty strings" $
-        fmap (const ()) (parseIpLiteral "") `shouldBe` Nothing
+        void (parseIpLiteral "") `shouldBe` Nothing
 
     it "returns Nothing for regular hostnames" $
-        fmap (const ()) (parseIpLiteral "registry.npmjs.org") `shouldBe` Nothing
+        void (parseIpLiteral "registry.npmjs.org") `shouldBe` Nothing
 
     it "returns Just for standard IPv4" $
-        fmap (const ()) (parseIpLiteral "127.0.0.1") `shouldBe` Just ()
+        void (parseIpLiteral "127.0.0.1") `shouldBe` Just ()
 
     it "returns Just for hex IPv4" $
-        fmap (const ()) (parseIpLiteral "0x7f.0.0.1") `shouldBe` Just ()
+        void (parseIpLiteral "0x7f.0.0.1") `shouldBe` Just ()
 
     it "returns Just for octal IPv4" $
-        fmap (const ()) (parseIpLiteral "0177.0.0.1") `shouldBe` Just ()
+        void (parseIpLiteral "0177.0.0.1") `shouldBe` Just ()
 
     it "returns Just for standard IPv6" $ do
-        fmap (const ()) (parseIpLiteral "::1") `shouldBe` Just ()
-        fmap (const ()) (parseIpLiteral "fe80::1") `shouldBe` Just ()
+        void (parseIpLiteral "::1") `shouldBe` Just ()
+        void (parseIpLiteral "fe80::1") `shouldBe` Just ()
 
     it "returns Just for IPv4-mapped IPv6" $
-        fmap (const ()) (parseIpLiteral "::ffff:127.0.0.1") `shouldBe` Just ()
+        void (parseIpLiteral "::ffff:127.0.0.1") `shouldBe` Just ()
 
     it "returns Nothing for invalid short IPv4" $
-        fmap (const ()) (parseIpLiteral "127.0.0") `shouldBe` Nothing
+        void (parseIpLiteral "127.0.0") `shouldBe` Nothing
 
     it "returns Nothing for large IPv4 octets" $
-        fmap (const ()) (parseIpLiteral "0400.0.0.1") `shouldBe` Nothing
+        void (parseIpLiteral "0400.0.0.1") `shouldBe` Nothing
 
     it "returns Nothing for malformed IPv6" $ do
-        fmap (const ()) (parseIpLiteral "fe80::1ffff") `shouldBe` Nothing
-        fmap (const ()) (parseIpLiteral "1::2::3") `shouldBe` Nothing
+        void (parseIpLiteral "fe80::1ffff") `shouldBe` Nothing
+        void (parseIpLiteral "1::2::3") `shouldBe` Nothing
