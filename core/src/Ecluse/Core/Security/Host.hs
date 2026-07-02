@@ -32,6 +32,7 @@ module Ecluse.Core.Security.Host (
 
     -- * Internal for testing
     isHex,
+    isDecimal,
 ) where
 
 import Data.IP (

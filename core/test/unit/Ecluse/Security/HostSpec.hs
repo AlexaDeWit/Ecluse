@@ -17,6 +17,7 @@ import Ecluse.Core.Security (
     hostAddress,
     isAllowedUpstreamHost,
     isBlockedTarget,
+    isDecimal,
     lowerCaseHosts,
     splitHostPort,
     tarballHostAllowed,
@@ -46,6 +47,24 @@ spec = do
     tarballHostPolicySpec
     lowerCaseHostsSpec
     propertiesSpec
+    isDecimalSpec
+
+isDecimalSpec :: Spec
+isDecimalSpec = describe "isDecimal" $ do
+    it "returns True for a string with only decimal digits" $
+        isDecimal "1234567890" `shouldBe` True
+    it "returns False for an empty string" $
+        isDecimal "" `shouldBe` False
+    it "returns False for a string with spaces" $
+        isDecimal "123 456" `shouldBe` False
+    it "returns False for a string with letters" $
+        isDecimal "123a456" `shouldBe` False
+    it "returns False for a string with a sign" $
+        isDecimal "-123" `shouldBe` False
+    it "returns False for a string with a decimal point" $
+        isDecimal "123.456" `shouldBe` False
+    it "returns True for a single digit" $
+        isDecimal "0" `shouldBe` True
 
 hostAllowlistSpec :: Spec
 hostAllowlistSpec = describe "isAllowedUpstreamHost" $ do
