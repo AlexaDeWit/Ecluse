@@ -74,7 +74,7 @@ backendSpec = describe "backend selection" $ do
             renderWire (MirrorCredentialProvider AdcCredential) `shouldBe` "gcp-artifact-registry"
         it "rejects an unknown name, naming the accepted set" $ do
             let res = parseWire "vault" :: Either Text MirrorCredentialProvider
-            (const () <$> res) `shouldBe` Left "unknown mirror-target credential provider \"vault\" (expected one of: static, codeartifact, gcp-artifact-registry)"
+            void res `shouldBe` Left "unknown mirror-target credential provider \"vault\" (expected one of: static, codeartifact, gcp-artifact-registry)"
 
     describe "parseMirrorCredentialProvider" $ do
         it "parses codeartifact to CodeArtifactCredential" $
