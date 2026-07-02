@@ -85,7 +85,7 @@ docs/  architecture and design documents
   ```
 
 - Run `task --list` to discover targets. `task check` is the fast pre-push suite; CI remains the
-  authoritative gate. Run `task sast` before pushing. Web-based agents without Nix access must
+  authoritative gate. **Always run `task format` before `task check` to auto-fix code styling.** Never ignore a failing `task check` exit code; fix the issue before opening a PR. **Never assume a fix worked without re-running the verification command locally and observing a 0 exit code.** Run `task sast` before pushing. Web-based agents without Nix access must
   not skip local verification; instead, use `scripts/setup-jules.sh` to bootstrap the environment.
 - Automation scripts are Bash in `scripts/`, with `#!/usr/bin/env bash` and
   `set -euo pipefail`; keep workflow `run:` blocks trivial and scripts shellcheck-clean. A new
