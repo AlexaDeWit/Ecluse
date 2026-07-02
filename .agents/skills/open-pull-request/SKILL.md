@@ -113,6 +113,21 @@ change) is itself a trivial one, and omits the section.
 
 - **Open the PR as a draft:** `gh pr create --draft …`. It stays draft while work or
   review is still moving.
+- **Pipe the PR body via stdin; never write it to a file at the repo root.** Root-level
+  scratch files (`pr_body.md` and friends) collide across concurrent agents and
+  worktrees, and get staged by accident:
+
+  ```
+  gh pr create --draft --title "<subject>" --body-file - <<'EOF'
+  <body…>
+  EOF
+  ```
+
+  `gh pr edit --body-file -` updates it the same way. If the body genuinely needs to
+  exist as a file first (iterating on it, or handing it to a reviewer), put it in the
+  gitignored `scratchpad/` under a branch-scoped name
+  (`scratchpad/pr-body-<branch>.md`), or in your harness's session scratchpad outside
+  the repo. Never commit it.
 - **Ready-for-review means exactly: independent review passed (reviewer APPROVE +
   team-lead diff-read) AND the gating CI is green.** Nothing else gates the flip, not
   optional polish, not a nice-to-have test someone floated. The instant both hold,
