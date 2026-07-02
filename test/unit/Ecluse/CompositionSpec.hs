@@ -20,6 +20,7 @@ import Ecluse.Composition (
     lookupProvider,
     memoryQueueBootWarning,
     mirrorQueuePlanWarning,
+    parseCodeArtifactHost,
     planMirrorCredential,
     planMirrorQueue,
     planMounts,
@@ -76,6 +77,7 @@ spec = do
     bootErrorSpec
     publishWiringSpec
     renderSpec
+    parseCodeArtifactHostSpec
 
 -- | A fixed clock for the injected 'pdNow'; never advanced (no timing here).
 fixedNow :: UTCTime
@@ -772,6 +774,33 @@ renderSpec = describe "renderBootError" $
   where
     infixed :: Text -> Text -> Bool
     infixed needle hay = needle `T.isInfixOf` hay
+
+parseCodeArtifactHostSpec :: Spec
+parseCodeArtifactHostSpec = describe "parseCodeArtifactHost" $ do
+    it "parses a valid CodeArtifact host into domain, owner, and region" $ do
+        parseCodeArtifactHost "my-domain-111122223333.d.codeartifact.us-west-2.amazonaws.com"
+            `shouldBe` Just ("my-domain", "111122223333", "us-west-2")
+
+    it "parses a valid CodeArtifact host with hyphens in the domain" $ do
+        parseCodeArtifactHost "my-company-domain-111122223333.d.codeartifact.eu-central-1.amazonaws.com"
+            `shouldBe` Just ("my-company-domain", "111122223333", "eu-central-1")
+
+    it "returns Nothing if the host does not contain .d.codeartifact." $ do
+        parseCodeArtifactHost "example.com" `shouldBe` Nothing
+        parseCodeArtifactHost "my-domain-111122223333.codeartifact.us-west-2.amazonaws.com" `shouldBe` Nothing
+
+    it "returns Nothing if the host contains .d.codeartifact. multiple times" $ do
+        parseCodeArtifactHost "my-domain-111122223333.d.codeartifact.d.codeartifact.us-west-2.amazonaws.com" `shouldBe` Nothing
+
+    it "returns Nothing if there is no hyphen separating domain and owner" $ do
+        -- The parsing logic relies on finding the last hyphen in domainOwner.
+        -- If there's no hyphen, T.breakOnEnd returns ("", "mydomain111122223333"),
+        -- then T.dropEnd 1 "" is "", which fails the `nonBlank` check.
+        parseCodeArtifactHost "mydomain111122223333.d.codeartifact.us-west-2.amazonaws.com" `shouldBe` Nothing
+
+    it "returns Nothing if the host is missing the .amazonaws.com suffix" $ do
+        parseCodeArtifactHost "my-domain-111122223333.d.codeartifact.us-west-2.com" `shouldBe` Nothing
+        parseCodeArtifactHost "my-domain-111122223333.d.codeartifact.us-west-2" `shouldBe` Nothing
 
 -- Build a 'Config' from an env + optional document, failing the test on a policy
 -- error (the composeBindings examples want a successfully-loaded config).
