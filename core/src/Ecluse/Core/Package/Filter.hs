@@ -40,36 +40,18 @@ trusted /private/ set is the cross-upstream merge ("Ecluse.Core.Package.Merge").
 -}
 module Ecluse.Core.Package.Filter (
     FilterPlan (..),
-    FilterResult (..),
     filterPlan,
     filterPlanFromDecisions,
+    restrictToSurvivors,
 ) where
 
-import Data.Aeson (Value)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 
 import Ecluse.Core.Package (PackageInfo (infoDistTags, infoVersions), pkgVersion)
 import Ecluse.Core.Rules (evalRules, prepare)
 import Ecluse.Core.Rules.Types (Decision (Admitted), EvalContext, PrecededRule)
-import Ecluse.Core.Version (Version, selectLatest, unVersion)
-
-{- | The outcome of replaying a 'FilterPlan' onto a packument.
-
-A 'Filtered' body still has at least one admitted version and is internally
-coherent. 'NoSurvivors' means every version was rejected; it carries each
-version's 'Decision' so the serve layer can render the denial and choose the
-status (403 for an all-policy denial, 503 for a transient or undecidable cause).
-Choosing that status is __not__ this module's job.
--}
-data FilterResult
-    = -- | At least one version survived; the coherent, filtered packument body.
-      Filtered Value
-    | {- | No version survived; each rejected version's decision, for the serve
-      layer to map to a status and a denial body.
-      -}
-      NoSurvivors [Decision]
-    deriving stock (Eq, Show)
+import Ecluse.Core.Version (Version, renderVersion, selectLatest, unVersion)
 
 {- | The decisions filtering a single public packument owns, for the adapter to
 replay onto the raw upstream @Value@. Carries only what the filter decides over the
@@ -160,3 +142,19 @@ filterPlanFromDecisions decisions info =
     -- 'selectLatest'\'s @survivors@: the surviving versions' parsed 'Version's.
     survivingVersions :: [Version]
     survivingVersions = mapMaybe versionOf (Set.toList survivors)
+
+{- | Restrict a 'PackageInfo' to the version keys that survived filtering -- the
+'FilterPlan'\'s own 'fpSurvivors' -- so the typed view handed to the cross-upstream
+merge carries exactly the gated set ('Ecluse.Core.Package.Merge.mergePackuments'
+treats a gated source as already filtered and never re-filters). @dist-tags@ is
+pruned to the surviving keys likewise (the merge reconciles tags over the union);
+@dist-tags@ targets absent from the survivors are dropped. Each surviving version
+carries its own publish time, so restricting the versions carries the times with it
+(the merge reconstructs the served @time@ from the survivors).
+-}
+restrictToSurvivors :: Set Text -> PackageInfo -> PackageInfo
+restrictToSurvivors survivors info =
+    info
+        { infoVersions = Map.restrictKeys (infoVersions info) survivors
+        , infoDistTags = Map.filter ((`Set.member` survivors) . renderVersion) (infoDistTags info)
+        }

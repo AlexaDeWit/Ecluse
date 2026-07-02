@@ -567,8 +567,7 @@ composeBindings resolveAdapter clock providers config = do
                 , pdNewMetadataClient = \t p u c f1 f2 f3 l m b s -> Metadata.newNpmMetadataClient t p u c f1 f2 f3 (Npm.NpmClientConfig b m s l)
                 , pdBuildArtifactRequestByFile = \_ _ t s -> NpmRequest.artifactRequestByFile t s
                 , pdBuildArtifactRequestByUrl = \_ _ t s -> NpmRequest.artifactRequestByUrl t s
-                , pdApplyFilter = NpmFilter.applyFilterPlan
-                , pdRewriteUrls = NpmFilter.rewriteTarballUrls
+                , pdAssemble = NpmFilter.assembleMergedPackument
                 }
 
 -- The mount's externally-visible base path, derived from its ecosystem prefix

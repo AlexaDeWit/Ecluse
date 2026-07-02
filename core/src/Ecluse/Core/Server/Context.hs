@@ -51,8 +51,8 @@ import UnliftIO (MonadUnliftIO)
 
 import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Package (InvalidEntry, PackageName, Scope)
-import Ecluse.Core.Package.Filter (FilterPlan, FilterResult)
 import Ecluse.Core.Package.Integrity (MinIntegrity, MinTrustedIntegrity)
+import Ecluse.Core.Package.Merge (MergePlan, SourceId)
 import Ecluse.Core.Queue (MirrorQueue)
 import Ecluse.Core.Registry (PublishRelayResponse, UrlFormationError)
 import Ecluse.Core.Registry.Metadata (MetadataClient, MetadataError)
@@ -211,12 +211,12 @@ data PackumentDeps = PackumentDeps
     -}
     , pdBuildArtifactRequestByUrl :: Limits -> Manager -> Text -> Maybe Secret -> Text -> Either UrlFormationError Request
     -- ^ Build an artifact request by authoritative URL for the public leg.
-    , pdApplyFilter :: FilterPlan -> Value -> FilterResult
-    {- ^ Replay a filter plan onto the raw upstream document, removing denied
-    versions and repairing cross-field coherence.
+    , pdAssemble :: Text -> Map SourceId Value -> MergePlan -> Value -> Value
+    {- ^ Assemble the served document from a merge plan and the raw source
+    documents: rebuild the plan-owned keys onto the base document from the winning
+    sources, rewriting each surviving version's artifact URL under the given mount
+    base in the same pass.
     -}
-    , pdRewriteUrls :: Text -> Value -> Value
-    -- ^ Rewrite artifact URLs in a raw document under the given mount base URL.
     }
 
 {- | The per-mount inputs the first-party publish handler needs: the publication

@@ -137,7 +137,7 @@ task bench BENCH_OPTS='--baseline out.csv'         # print each delta vs a prior
 `task bench` reports both numbers per bench, e.g.:
 
 ```
-serve (filter + url-rewrite + etag)
+serve (filter + merge-assemble + etag)
   express: filter + serve: OK
     5.1 ms ± 0.3 ms, 9.8 MB allocated, ...
 ```
@@ -486,8 +486,8 @@ uses), the harness fetches the **live** packument and times three legs separatel
 
 - **upstream**, how long the registry took to serve the packument (the fetch);
 - **full-packument overhead**, how long Écluse's work-per-request takes over the whole
-  document (decode → project → rule sweep → filter / URL-rewrite → re-serialise → ETag),
-  the median of a few passes to damp noise; and
+  document (decode → project → rule sweep → merge → served-body assembly with the fused
+  URL rewrite → re-serialise → ETag), the median of a few passes to damp noise; and
 - **single-version overhead**, the cold tarball gate's selective decode of one version's
   snapshot (its latest) from the raw packument, parsing only that version rather than the
   whole document. It is tracked on its own because a whole-document decode dominates it on

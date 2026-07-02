@@ -43,7 +43,7 @@ import Ecluse.Core.Queue (
  )
 import Ecluse.Core.Registry (ParseError (..), RegistryClient (..))
 import Ecluse.Core.Registry.Npm (NpmClientConfig (..))
-import Ecluse.Core.Registry.Npm.Filter (applyFilterPlan, rewriteTarballUrls)
+import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
 import Ecluse.Core.Registry.Npm.Request (artifactRequestByFile, artifactRequestByUrl)
 import Ecluse.Core.Registry.Npm.Route qualified as Npm
 import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
@@ -624,8 +624,7 @@ deps privatePort publicPort inbound = do
             , pdNewMetadataClient = \t p u c f1 f2 f3 l m b s -> newNpmMetadataClient t p u c f1 f2 f3 (NpmClientConfig b m s l)
             , pdBuildArtifactRequestByFile = \_ _ t s -> artifactRequestByFile t s
             , pdBuildArtifactRequestByUrl = \_ _ t s -> artifactRequestByUrl t s
-            , pdApplyFilter = applyFilterPlan
-            , pdRewriteUrls = rewriteTarballUrls
+            , pdAssemble = assembleMergedPackument
             }
 
 {- | The packument-serve dependencies as 'deps', but with the given effectful prepared
