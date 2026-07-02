@@ -58,10 +58,6 @@ jobs:
       BENCH_LOAD_CONCURRENCY: ${{ github.event.inputs.concurrency || '50' }}
       BENCH_LOAD_SERVE_MAX_IN_FLIGHT: ${{ github.event.inputs.serve-max-in-flight || '64' }}
       BENCH_LOAD_ISOLATE_OHA: "1"
-      # Isolate the load generator from the server: ubuntu-latest has 4 cores. oha is
-      # pinned to core 0 by the harness; we restrict GHC to 3 capability threads so they
-      # neatly occupy the remaining 3 cores without self-contention.
-      GHCRTS: "-N3"
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -87,7 +83,10 @@ jobs:
       # fails only on a genuine harness failure (a non-zero exit).
       - name: Run load tests
         run: |
-          nix develop .#bench --command task bench-load 2>&1 | tee bench-load-results.md
+          # Isolate the load generator from the server: ubuntu-latest has 4 cores. oha is
+          # pinned to core 0 by the harness; we restrict GHC to 3 capability threads so they
+          # neatly occupy the remaining 3 cores without self-contention.
+          nix develop .#bench --command cabal run -v0 bench-load -- +RTS -N3 -RTS 2>&1 | tee bench-load-results.md
 
       # This run's results, downloadable from the run page. A convenience for a human
       # comparing by hand — there is no cross-run baseline store. Uploaded even on a
