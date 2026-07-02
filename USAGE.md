@@ -435,6 +435,13 @@ serve such a source, point it at the **private** (trusted) upstream slot, not th
     throttled to a periodic heartbeat rather than flooding your logs.
 - **Search.** `GET /-/v1/search` returns `501` by design: search is a discovery convenience,
   not an install path. Use the public registry's website to discover packages.
+- **Runtime memory tuning.** The binary ships with a GC configuration tuned for the serve
+  path's allocation profile (`-A64m -n4m`: a 64 MiB per-core allocation area, shared in
+  4 MiB chunks). This trades a bounded amount of extra memory (up to 64 MiB per core of
+  nursery, over and above the live heap) for an order-of-magnitude fewer garbage
+  collections under load. On a memory-constrained deployment, shrink it at run time with
+  RTS flags, e.g. `ecluse +RTS -A16m -RTS`; capping capabilities (`-N2`) bounds it too,
+  since the allocation area scales per core.
 - **Revoking a mirrored version (internal yank).** The mirror store (Registry B) deliberately
   resists upstream yanks. A benign yank (e.g., a maintainer rage-deletes, a name dispute) does not
   break your installs. The flip side is that a version _later found malicious_ is not removed

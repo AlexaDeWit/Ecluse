@@ -19,11 +19,11 @@ import Test.Hspec.Hedgehog (hedgehog)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageInfo, PackageName, mkPackageName, mkScope)
-import Ecluse.Core.Package.Filter (filterPlan)
+import Ecluse.Core.Package.Filter (filterPlan, fpDecisions, fpSurvivors, restrictToSurvivors)
+import Ecluse.Core.Package.Merge (MergePlan (mpSurvivors), Provenance (GatedSource), mergePackuments)
 import Ecluse.Core.Registry (ParseError, RegistryResponse (RegistryResponse))
 import Ecluse.Core.Registry.Npm.Filter (
-    FilterResult (Filtered, NoSurvivors),
-    applyFilterPlan,
+    assembleMergedPackument,
     rewriteTarballUrls,
  )
 import Ecluse.Core.Registry.Npm.Project (parsePackageInfo)
@@ -126,7 +126,7 @@ rewriteSpec = describe "rewriteTarballUrls" $ do
             `shouldBe` Just "https://upstream.test/thing/-/thing-1.0.0.tgz"
 
 filterSpec :: Spec
-filterSpec = describe "applyFilterPlan (replay)" $ do
+filterSpec = describe "assembleMergedPackument (plan replay)" $ do
     it "removes a denied version from versions and time, keeping the approved one" $ do
         -- 2.0.0 is 1 day old (denied by quarantine); 1.0.0 is 30 days old (approved).
         filtered <- filterTo twoVersions
@@ -178,21 +178,39 @@ filterSpec = describe "applyFilterPlan (replay)" $ do
             NoSurvivors decisions -> do
                 length decisions `shouldBe` 2
                 any isApproved decisions `shouldBe` False
-            Filtered _ -> expectationFailure "expected NoSurvivors, got Filtered"
+            Assembled _ -> expectationFailure "expected NoSurvivors, got an assembled document"
 
-    it "treats a non-object body as having no survivors and no decisions" $ do
+    it "assembles onto a non-object base as an object carrying only the plan-owned keys" $ do
+        -- The pipeline never hands a non-object here (a non-object body fails
+        -- projection and contributes nothing), but the assembly is total: a
+        -- non-object base relays no top-level keys and no version objects, so the
+        -- result is an object of exactly the plan-owned keys, none fabricated.
         (info, _) <- loadPackument oneVersionPackument
-        applyTo ctx quarantine info (Array mempty) >>= (`shouldBe` NoSurvivors [])
+        applyTo ctx quarantine info (Array mempty) >>= \case
+            NoSurvivors _ -> expectationFailure "expected an assembled document"
+            Assembled out -> do
+                Map.keys (objKeys "versions" (asObject out)) `shouldBe` []
+                sort (map Key.toText (KeyMap.keys (asObject out))) `shouldBe` ["dist-tags", "time", "versions"]
 
-    it "relays a surviving version's dist.tarball as the upstream bytes; the single assembly rewrite lands it under the mount base" $ do
-        -- The replay no longer rewrites tarballs: it relays the upstream URL, and the
-        -- one assembly-stage 'rewriteTarballUrls' pass lands it under {base}/{pkg}/-/{file}.
-        -- Asserting both halves pins the rewrite to a single pass (issue #299).
+    it "rewrites a surviving version's dist.tarball under the mount base in the assembly pass" $ do
+        -- The rewrite is fused into the assembly (one pass over the versions), so
+        -- the assembled document already carries {base}/{pkg}/-/{file}.
         filtered <- filterTo twoVersions
         tarballAt "1.0.0" (Object (rawObject filtered))
-            `shouldBe` Just "https://upstream.test/thing/-/thing-1.0.0.tgz"
-        tarballAt "1.0.0" (rewriteTarballUrls base (Object (rawObject filtered)))
             `shouldBe` Just "https://proxy.test/npm/thing/-/thing-1.0.0.tgz"
+
+    it "leaves a tarball untouched when the document's name carries a traversal" $ do
+        -- The fused rewrite honours the same component-safety gate as
+        -- 'rewriteTarballUrls': an unsafe upstream-controlled name is never
+        -- interpolated, so the upstream URL is relayed unrewritten.
+        filtered <- filterTo traversalNamePackument
+        tarballAt "1.0.0" (Object (rawObject filtered))
+            `shouldBe` Just "https://upstream.test/thing/-/thing-1.0.0.tgz"
+
+    it "leaves a tarball untouched when the document's name carries a control character" $ do
+        filtered <- filterTo controlCharNamePackument
+        tarballAt "1.0.0" (Object (rawObject filtered))
+            `shouldBe` Just "https://upstream.test/thing/-/thing-1.0.0.tgz"
 
     it "drops a version broken in a required field from the served body, keeping the healthy one" $ do
         -- End-to-end version-level graceful degradation: 2.0.0's `dist` is a scalar (a
@@ -267,7 +285,7 @@ propertiesSpec = describe "properties" $ do
             let denied = deniedVersions spec'
             liftIO (applyTo ctx quarantine info v) >>= \case
                 NoSurvivors _ -> success
-                Filtered out -> do
+                Assembled out -> do
                     let o = asObject out
                         survivingKeys = Map.keysSet (objKeys "versions" o)
                         timeKeys = Map.keysSet (objKeys "time" o)
@@ -284,7 +302,7 @@ propertiesSpec = describe "properties" $ do
             (info, v) <- loadOrFail (renderPackument spec')
             liftIO (applyTo ctx quarantine info v) >>= \case
                 NoSurvivors _ -> success
-                Filtered out -> do
+                Assembled out -> do
                     let o = asObject out
                         survivingKeys = Map.keysSet (objKeys "versions" o)
                     case lookupTag "latest" o of
@@ -695,25 +713,41 @@ loadPackument bs = do
     info <- orFailParse (parsePackageInfo (fixtureName v) (RegistryResponse bs))
     pure (info, v)
 
-{- | Decide the plan ('Ecluse.Core.Package.Filter.filterPlan') over the typed view and
-replay it ('applyFilterPlan') onto the raw body -- the composition the serve layer
-performs. The replay no longer rewrites tarball URLs (that is 'rewriteTarballUrls',
-the assembly stage's single pass), so it carries no mount base.
+{- | The outcome of the serve composition under test: the assembled served document
+when survivors remain, or every version's decision when none do -- the shape the
+serve layer branches on.
 -}
-applyTo :: EvalContext -> [PrecededRule] -> PackageInfo -> Value -> IO FilterResult
+data AssembleResult
+    = Assembled Value
+    | NoSurvivors [Decision]
+    deriving stock (Eq, Show)
+
+{- | Decide the plan ('Ecluse.Core.Package.Filter.filterPlan') over the typed view,
+merge the gated survivor set, and assemble the plan onto the raw body under 'base'
+-- the composition the serve layer performs for a single public origin. The tarball
+rewrite is fused into the assembly, so the result already carries mount-based URLs.
+-}
+applyTo :: EvalContext -> [PrecededRule] -> PackageInfo -> Value -> IO AssembleResult
 applyTo c rules info value = do
     plan <- filterPlan c rules info
-    pure (applyFilterPlan plan value)
+    pure $
+        if Set.null (fpSurvivors plan)
+            then NoSurvivors (fpDecisions plan)
+            else case mergePackuments [(GatedSource, restrictToSurvivors (fpSurvivors plan) info)] of
+                Just merged
+                    | not (Map.null (mpSurvivors merged)) ->
+                        Assembled (assembleMergedPackument base (Map.singleton 0 value) merged value)
+                _ -> NoSurvivors (fpDecisions plan)
 
--- | Filter a fixture body, requiring survivors; returns the filtered packument.
+-- | Assemble a fixture body, requiring survivors; returns the served packument.
 filterTo :: ByteString -> IO FilteredPackument
 filterTo bs = do
     (info, v) <- loadPackument bs
     applyTo ctx quarantine info v >>= \case
-        Filtered out -> pure (FilteredPackument (asObject out))
+        Assembled out -> pure (FilteredPackument (asObject out))
         NoSurvivors _ -> fail "expected survivors, got NoSurvivors"
 
--- | A filtered packument as its top-level object, for read-back assertions.
+-- | A served packument as its top-level object, for read-back assertions.
 newtype FilteredPackument = FilteredPackument {rawObject :: KeyMap Value}
 
 versionsOf :: FilteredPackument -> Map Text Value

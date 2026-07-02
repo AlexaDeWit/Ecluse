@@ -315,18 +315,19 @@ distinct surfaces, and the boundary between them is load-bearing:
   which source wins a collision, what `latest` resolves to, which integrity
   divergences exist.
 - The **raw `Value`** is the *served* surface. Those decisions are computed on the
-  typed model but **applied structurally to the raw bytes**, denied versions
-  removed, tarball URLs rewritten, `latest` repointed, so every unmodeled wire key
-  is relayed unchanged. The served body is **never re-serialised from the lossy
-  typed model** (see
+  typed model but **applied structurally to the raw bytes**, only surviving
+  versions taken (with their tarball URLs rewritten as they are placed), `latest`
+  carried from the plan, so every unmodeled wire key is relayed unchanged. The
+  served body is **never re-serialised from the lossy typed model** (see
   [API Surface → synthesized-packument schema](api-surface.md#the-synthesized-packument-schema--the-trust-boundary)).
 
-So the merge is a **producer→consumer pipeline** across slices: the adapter filters
-and rewrites a single public packument (deciding over `PackageInfo`, editing the
-`Value`); the ecosystem-agnostic core merges; the serve layer applies the outcome
-to the raw `Value`(s). The merge stage therefore emits a **merge plan**, the
-surviving set, the per-version precedence winner, the resolved `latest`, and the
-detected divergences, that the serve layer **replays onto the raw bytes**, rather
+So the merge is a **producer→consumer pipeline** across slices: the rules and the
+structural filter decide over the typed `PackageInfo` (a plan, never an edited
+document); the ecosystem-agnostic core merges; the ecosystem adapter **assembles
+the outcome onto the raw `Value`(s) in one pass** (each surviving version's object
+taken from its winning source with the tarball URL rewritten as it is placed). The
+merge stage therefore emits a **merge plan**, the surviving set, the per-version
+precedence winner, the resolved `latest`, and the detected divergences, rather
 than a finished typed document the serve layer would have to re-encode (which would
 drop unmodeled fields). Each stage carries its raw `Value` alongside the typed view
 so losslessness survives the whole pipeline.
@@ -349,7 +350,8 @@ with a clear fail-closed boundary:
   `tarball`, an unusable `version`), that **single version** is dropped from the
   decision surface. Because presence in the decision surface is what makes a
   version a serve-candidate, a dropped version is automatically excluded from the
-  served body (`applyFilterPlan` restricts `versions`/`time` to the survivors). This
+  served body (the assembly takes only plan-surviving versions from the raw
+  documents). This
   is **fail-closed for that version**: a version that cannot be decoded cannot be
   evaluated for integrity, CVEs, or rules, so it is never served unverifiable,  while every healthy sibling version keeps serving.
 - **The package is denied wholesale only if the top-level document is unusable.**

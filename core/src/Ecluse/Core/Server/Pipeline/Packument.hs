@@ -41,8 +41,8 @@ A packument is the /set of available versions/, spread across upstreams, so it i
 __merged__ rather than short-circuited on a private hit (see
 @docs\/architecture\/registry-model.md@ → "Packument merge across upstreams").
 Private versions are trusted and enter unfiltered; public versions are gated
-through the rules and the structural filter ('filterPlan' decides, 'applyFilterPlan'
-replays) before they enter; the two are combined, private winning a collision and
+through the rules and the structural filter (the 'FilterPlan''s survivors restrict
+the typed view) before they enter; the two are combined, private winning a collision and
 an integrity divergence flagged. If one upstream
 is unavailable while the other succeeds, the best-effort union of what resolved is
 served -- only when /nothing/ resolves does the request error.
@@ -50,18 +50,22 @@ served -- only when /nothing/ resolves does the request error.
 == Decision surface vs served surface
 
 The merge and filter reason over the /typed/ 'PackageInfo' but the document served
-is the __raw upstream JSON__, edited in place, so every unmodeled wire key
-survives (see @docs\/architecture\/registry-model.md@ → "Decision surface vs
-served surface"). The 'MergePlan' names, for each surviving version, the source
-that won it; the served body is assembled by taking each survivor's object from
-the /raw @Value@/ of its winning source, carrying the reconciled @dist-tags@ and
-@time@, and relaying every other top-level key from the precedence-winning
-document. The typed model is never re-serialised. The two fields the merge /owns/ as
-a decision -- @dist-tags.latest@ and the @time@ instants -- are re-rendered from that
-decision (the times as normalised ISO-8601), so they may differ byte-for-byte from
-any single upstream while denoting the same value; integrity-bearing fields
-(@dist.integrity@, @dist.tarball@) are relayed raw and untouched. The served bytes
-get our __own ETag__, since a merged\/filtered body matches no single upstream's.
+is the __raw upstream JSON__, so every unmodeled wire key survives (see
+@docs\/architecture\/registry-model.md@ → "Decision surface vs served surface").
+The 'MergePlan' names, for each surviving version, the source that won it; the
+served body is assembled in one pass by the mount's assembly hook
+('Ecluse.Core.Registry.Npm.Filter.assembleMergedPackument' for npm): each
+survivor's object is taken from the /raw @Value@/ of its winning source with its
+tarball URL rewritten under the mount base as it is placed, the reconciled
+@dist-tags@ and @time@ are carried from the plan, and every other top-level key is
+relayed from the precedence-winning document. The typed model is never
+re-serialised. The two fields the merge /owns/ as a decision -- @dist-tags.latest@
+and the @time@ instants -- are re-rendered from that decision (the times as
+normalised ISO-8601), so they may differ byte-for-byte from any single upstream
+while denoting the same value; integrity-bearing fields (@dist.integrity@,
+@dist.tarball@ up to the rewrite's own prefix) are relayed raw and untouched. The
+served bytes get our __own ETag__, since a merged\/filtered body matches no single
+upstream's.
 -}
 module Ecluse.Core.Server.Pipeline.Packument (
     servePackument,
@@ -69,22 +73,15 @@ module Ecluse.Core.Server.Pipeline.Packument (
     withPublicMetadataClient,
 ) where
 
-import Data.Aeson (Value (Object, String))
+import Data.Aeson (Value (Object))
 import Data.Aeson qualified as Aeson
-import Data.Aeson.Key qualified as Key
-import Data.Aeson.KeyMap (KeyMap)
-import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Text (encodeToLazyText)
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as TL
-import Data.Time (UTCTime)
-import Data.Time.Format.ISO8601 (iso8601Show)
 import Katip (KatipContext, Severity (DebugS, InfoS, WarningS), katipAddContext, logFM, ls, sl)
-import Lens.Micro ((^?))
-import Lens.Micro.Aeson (key, _Object)
 import Network.HTTP.Client (Manager)
 import Network.HTTP.Types (ResponseHeaders, Status, hContentLength, mkStatus, status200)
 import Network.Wai (Request, Response, ResponseReceived, requestHeaders)
@@ -96,16 +93,16 @@ import Ecluse.Core.Credential (Secret)
 import Ecluse.Core.Package (
     InvalidEntry (invalidKey, invalidKind, invalidReason, invalidValue),
     InvalidEntryKind (InvalidDistTag, InvalidPublishTime, InvalidVersionManifest),
-    PackageInfo (infoDistTags, infoVersions),
+    PackageInfo (infoVersions),
     PackageName,
     renderPackageName,
  )
-import Ecluse.Core.Package.Filter (FilterResult (Filtered, NoSurvivors), filterPlanFromDecisions, fpSurvivors)
+import Ecluse.Core.Package.Filter (filterPlanFromDecisions, fpDecisions, fpSurvivors, restrictToSurvivors)
 import Ecluse.Core.Package.Integrity (
     MinTrustedIntegrity,
  )
 import Ecluse.Core.Package.Merge (
-    MergePlan (mpDistTags, mpSurvivors, mpTime),
+    MergePlan (mpSurvivors),
     Provenance (GatedSource, TrustedSource),
     SourceId,
     mergePackuments,
@@ -158,7 +155,6 @@ import Ecluse.Core.Server.Response (
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (MetricsPort (..), timedSeconds)
 import Ecluse.Core.Telemetry.Span (TracingPort, spanPackumentGate)
-import Ecluse.Core.Version (renderVersion)
 
 {- | Serve a @GET \/{pkg}@ packument request end to end, over the request's
 'RequestCtx'.
@@ -173,9 +169,9 @@ upstream is touched. Then the private and public upstreams are fetched
 __concurrently__ -- the client's credential forwarded to the private origin, the public
 origin anonymous -- each parse failure or unavailable upstream degrading to a missing
 contribution rather than an error. Private versions are trusted as-is; public
-versions are gated through the rules and the structural filter ('filterPlan' then
-'applyFilterPlan'); the surviving sets are merged ('mergePackuments') and the
-'MergePlan' replayed onto the raw upstream @Value@s to assemble the served body,
+versions are gated through the rules and the structural filter (the 'FilterPlan');
+the surviving sets are merged ('mergePackuments') and the 'MergePlan' assembled
+onto the raw upstream @Value@s to build the served body,
 which is then answered against the client's conditional request with our own ETag.
 When nothing survives, the status follows the most recoverable cause via
 'packumentStatus'. An origin whose self-reported packument name disagrees with the
@@ -596,9 +592,12 @@ listed (a client cannot fetch it -- the artifact gate would refuse it anyway) an
 contributes its fingerprint to the merge. The remaining versions are decided by the
 rules engine ('Ecluse.Core.Rules.evalRules' -- the boot order walked to the first decisive
 result), the resulting decisions handed to the agnostic
-'filterPlanFromDecisions', and that plan replayed by 'applyFilterPlan' onto the raw
-@Value@: 'Filtered' yields a gated 'Contribution' over the surviving versions;
-'NoSurvivors' yields no contribution and the per-version 'ServeDecision's, each excluded
+'filterPlanFromDecisions', and the plan consumed directly: a plan with survivors
+yields a gated 'Contribution' -- the typed view restricted to the survivors beside
+the __unrestricted raw @Value@__ (the assembly takes only plan-surviving version
+objects from it, so restricting the raw document here would rebuild a many-version
+object only for the assembly to rebuild it again); a plan with no survivors yields
+no contribution and the per-version 'ServeDecision's, each excluded
 version's decision projected (a fail-closed 'Ecluse.Core.Rules.Types.Undecidable' carrying
 its transient\/permanent cause, so the no-survivors status is a @503@\/@500@ rather than
 a @403@). The dropped below-floor versions are projected as 'MissingIntegrity' (no digest
@@ -607,10 +606,12 @@ exclusions, so a packument with /only/ inadmissible public versions is a @403@ r
 than an empty success. Evaluation is IO (an effectful rule may do IO), so this gate is
 IO; with only pure rules it short-circuits without launching any IO.
 
-The gated contribution's typed 'PackageInfo' is __restricted to the survivors__ to
-match its filtered @Value@: 'mergePackuments' treats a 'GatedSource' as the
-already-filtered set and never re-filters, so feeding it the unfiltered view would
-let a denied version reach the merge plan (and skew the reconciled @latest@\/@time@).
+The gated contribution's typed 'PackageInfo' is __restricted to the survivors__:
+'mergePackuments' treats a 'GatedSource' as the already-filtered set and never
+re-filters, so feeding it the unfiltered view would let a denied version reach the
+merge plan (and skew the reconciled @latest@\/@time@). The raw @Value@ needs no
+matching restriction: only versions named by the plan's survivors are ever taken
+from it at assembly, so a denied version's object is unreachable by construction.
 
 This gate runs on the public path only; the trusted (private) contribution is admitted
 separately by 'admitTrusted' against the trusted integrity floor (the rules never run on
@@ -624,10 +625,10 @@ gatePublic tracing metrics deps name ctx = \case
         mpRuleEvalDuration metrics (evalTier (pdRules deps)) seconds
         recordEffectfulFailures metrics (Map.elems decisions)
         let plan = filterPlanFromDecisions decisions admissible
-        pure $ case pdApplyFilter deps plan value of
-            Filtered filtered ->
-                (Just (Contribution GatedSource (restrictToSurvivors (fpSurvivors plan) admissible) filtered), integrityRefusals)
-            NoSurvivors leftover -> (Nothing, projectDecisions admissible leftover <> integrityRefusals)
+        pure $
+            if Set.null (fpSurvivors plan)
+                then (Nothing, projectDecisions admissible (fpDecisions plan) <> integrityRefusals)
+                else (Just (Contribution GatedSource (restrictToSurvivors (fpSurvivors plan) admissible) value), integrityRefusals)
 
 {- Decide every version of a public packument against the rules engine, keyed by raw
 version string (the map 'filterPlanFromDecisions' consumes). Each version is run
@@ -638,26 +639,8 @@ decideVersions :: PackumentDeps -> EvalContext -> PackageInfo -> IO (Map Text De
 decideVersions deps ctx info =
     traverse (evalRules ctx (pdRules deps)) (infoVersions info)
 
-{- Restrict a 'PackageInfo' to the version keys that survived filtering -- the
-'Ecluse.Core.Package.Filter.FilterPlan'\'s own 'fpSurvivors', which 'applyFilterPlan' kept
-in the filtered @Value@'s @versions@, so the typed view handed to the merge matches
-the filtered document. Taking the survivor set from the plan reuses the 'Set' the
-filter already built rather than re-deriving it from the filtered @Value@'s keys (a
-@Set.fromList@ of every survivor key, each 'Key.toText'-converted, over a packument of
-up to the version cap). @dist-tags@ is pruned to the surviving keys likewise (the merge
-reconciles tags over the union); @dist-tags@ targets absent from the survivors are
-dropped. Each surviving version carries its own publish time, so restricting the
-versions carries the times with it (the merge reconstructs the served @time@ from the
-survivors). -}
-restrictToSurvivors :: Set Text -> PackageInfo -> PackageInfo
-restrictToSurvivors survivors info =
-    info
-        { infoVersions = Map.restrictKeys (infoVersions info) survivors
-        , infoDistTags = Map.filter ((`Set.member` survivors) . renderVersion) (infoDistTags info)
-        }
-
 {- Project each excluded version's 'Decision' to a 'ServeDecision' for the
-no-survivors status. 'applyFilterPlan' carries the plan's decisions in
+no-survivors status. The plan carries its decisions ('fpDecisions') in
 @versions@-key order ('Data.Map.elems'), so they zip back onto the same-ordered
 'PackageDetails' to recover the package\/version each denial is about. -}
 projectDecisions :: PackageInfo -> [Decision] -> [ServeDecision]
@@ -684,9 +667,9 @@ assemble :: PackumentDeps -> [Contribution] -> Maybe ServedBody
 assemble deps sources = do
     plan <- mergePackuments [(srcProvenance s, srcInfo s) | s <- sources]
     guard (not (Map.null (mpSurvivors plan)))
-    let bySource :: Map SourceId Contribution
-        bySource = Map.fromList (zip [0 ..] sources)
-    pure (ServedBody (replayPlan deps bySource plan (baseDocument sources)))
+    let bySource :: Map SourceId Value
+        bySource = Map.fromList (zip [0 ..] (map srcValue sources))
+    pure (ServedBody (pdAssemble deps (pdMountBaseUrl deps) bySource plan (baseDocument sources)))
 
 {- The document whose unmodeled top-level keys are relayed into the served body:
 the precedence-winning source's raw @Value@ -- the first trusted source if any,
@@ -699,95 +682,6 @@ baseDocument sources =
         Nothing -> case sources of
             s : _ -> srcValue s
             [] -> Object mempty
-
-{- Replay a 'MergePlan' onto the raw source @Value@s: rebuild @versions@,
-@dist-tags@, and @time@ from the plan, then rewrite the tarball URLs of the
-result. Other top-level keys are inherited from the base document. -}
-replayPlan :: PackumentDeps -> Map SourceId Contribution -> MergePlan -> Value -> Value
-replayPlan deps bySource plan base =
-    pdRewriteUrls deps (pdMountBaseUrl deps) (Object rebuilt)
-  where
-    rebuilt :: KeyMap Value
-    rebuilt =
-        baseObject
-            & KeyMap.insert "versions" (Object survivingVersions)
-            & KeyMap.insert "dist-tags" (Object distTags)
-            & KeyMap.insert "time" (Object reconciledTime)
-
-    baseObject :: KeyMap Value
-    baseObject = case base of
-        Object o -> o
-        _ -> mempty
-
-    -- Each surviving version's object, taken from the raw @Value@ of the source
-    -- that won the key (so the served bytes are the winning upstream's, unmodeled
-    -- keys and all). A survivor whose source object is missing is dropped rather
-    -- than fabricated -- coherence with the plan is preserved by construction.
-    survivingVersions :: KeyMap Value
-    survivingVersions =
-        KeyMap.fromList
-            [ (Key.fromText version, object)
-            | (version, sid) <- Map.toList (mpSurvivors plan)
-            , Just object <- [versionObjectFrom sid version]
-            ]
-
-    -- Each source's raw @versions@ object, extracted once per source.
-    -- 'versionObjectFrom' runs once per surviving version (up to the packument's
-    -- version cap), so resolving the source's @versions@ object inside it would
-    -- re-extract the same object on every version; hoisting it here leaves each
-    -- survivor a single inner lookup. ('bySource' holds one entry per upstream.)
-    versionsBySource :: Map SourceId (KeyMap Value)
-    versionsBySource = Map.mapMaybe ((^? key "versions" . _Object) . srcValue) bySource
-
-    versionObjectFrom :: SourceId -> Text -> Maybe Value
-    versionObjectFrom sid version =
-        Map.lookup sid versionsBySource >>= KeyMap.lookup (Key.fromText version)
-
-    -- @dist-tags@ rebuilt from the plan's reconciled tags (each a rendered version
-    -- string). The plan has already resolved @latest@ and dropped absent-target
-    -- tags over the union.
-    distTags :: KeyMap Value
-    distTags =
-        KeyMap.fromList
-            [ (Key.fromText tag, String (renderVersion v))
-            | (tag, v) <- Map.toList (mpDistTags plan)
-            ]
-
-    -- @time@ rebuilt from the plan's surviving-version times, with the sources'
-    -- non-version bookkeeping keys (@created@\/@modified@) retained. The plan
-    -- restricts @time@ to surviving versions; the bookkeeping keys are not versions
-    -- and so are carried separately, from the base document's @time@.
-    reconciledTime :: KeyMap Value
-    reconciledTime =
-        bookkeepingTime
-            <> KeyMap.fromList
-                [ (Key.fromText version, String (renderTime t))
-                | (version, t) <- Map.toList (mpTime plan)
-                ]
-
-    -- The base @time@ map carries one entry per published version (up to the
-    -- packument's version cap) plus the @created@\/@modified@ bookkeeping keys.
-    -- Look those two keys up directly rather than filtering the whole map, so this
-    -- is a pair of lookups, not a full traversal of every version's publish time.
-    bookkeepingTime :: KeyMap Value
-    bookkeepingTime =
-        case base ^? key "time" . _Object of
-            Nothing -> mempty
-            Just timeObject ->
-                KeyMap.fromList
-                    [ (k, value)
-                    | name <- timeBookkeepingKeys
-                    , let k = Key.fromText name
-                    , Just value <- [KeyMap.lookup k timeObject]
-                    ]
-
--- The non-version keys an npm @time@ object carries that must be relayed unchanged.
-timeBookkeepingKeys :: [Text]
-timeBookkeepingKeys = ["created", "modified"]
-
--- Render a publish time as the ISO-8601 instant npm serves in its @time@ map.
-renderTime :: UTCTime -> Text
-renderTime = toText . iso8601Show
 
 {- The per-version serve decisions weighed for the no-survivors status: the
 public-set exclusions, plus the per-origin signals each upstream contributes.

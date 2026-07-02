@@ -4,8 +4,9 @@ For each package in the shared curated catalogue it fetches the __live__ packume
 from the registry -- timing the fetch (the upstream leg) -- then times two slices of
 Écluse's work-per-request over it:
 
-  * the __full-packument__ transform (decode, project, rule sweep, filter, URL
-    rewrite, re-serialise, ETag) that a metadata read of every version pays; and
+  * the __full-packument__ transform (decode, project, rule sweep, merge, served-body
+    assembly with the fused URL rewrite, re-serialise, ETag) that a metadata read of
+    every version pays; and
   * the __single-version__ selective decode the cold tarball gate consults to serve
     one package version (its latest), the per-package overhead a whole-document
     decode dominates on the heavy packuments and a selective decode does not.
@@ -36,8 +37,9 @@ import Network.HTTP.Client.TLS (tlsManagerSettings)
 import Ecluse.Acceptance (Sample (..), evaluate, loadCriteria, renderReport, reportBreached)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageDetails (pkgDependencies), PackageName, mkPackageName, mkScope)
-import Ecluse.Core.Package.Filter (filterPlan)
-import Ecluse.Core.Registry.Npm.Filter (FilterResult (Filtered, NoSurvivors), applyFilterPlan, rewriteTarballUrls)
+import Ecluse.Core.Package.Filter (filterPlan, fpSurvivors, restrictToSurvivors)
+import Ecluse.Core.Package.Merge (MergePlan (mpSurvivors), Provenance (GatedSource), mergePackuments)
+import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
 import Ecluse.Core.Registry.Npm.Metadata (projectNpmVersion)
 import Ecluse.Core.Registry.Npm.Project (Projection (NameMismatch, Projected), parsePackageInfoFromValue)
 import Ecluse.Core.Rules.Types (EvalContext (EvalContext), PrecededRule, Rule (AllowIfOlderThan), atDefaultPrecedence)
@@ -148,9 +150,11 @@ selectiveDepth pkg version raw =
         Right Nothing -> -1
         Left _ -> -2
 
-{- | The full-packument work-per-request transform: decode the body, project it, sweep
-the rules to build the filter plan, restrict the body to the survivors, rewrite the
-tarball URLs, re-serialise, and ETag the result. Returns whether the input decoded and
+{- | The full-packument work-per-request transform, mirroring the serve pipeline's
+composition: decode the body, project it, sweep the rules to build the filter plan,
+merge the gated survivor set, assemble the served document from the plan (each
+surviving version taken from the raw body with its tarball URL rewritten in the same
+pass), re-serialise, and ETag the result. Returns whether the input decoded and
 projected; the computed size is forced so the whole transform actually runs.
 -}
 runTransform :: UTCTime -> PackageName -> LByteString -> IO Bool
@@ -161,11 +165,12 @@ runTransform now pkg body =
             Right (Projected info) -> do
                 plan <- filterPlan (EvalContext now) serveRules info
                 let size :: Int
-                    size = case applyFilterPlan plan value of
-                        Filtered served ->
-                            let out = encode (rewriteTarballUrls proxyBase served)
-                             in T.length (renderETag (ownETag out)) + fromIntegral (BSL.length out)
-                        NoSurvivors _ -> 0
+                    size = case mergePackuments [(GatedSource, restrictToSurvivors (fpSurvivors plan) info)] of
+                        Just merged
+                            | not (Map.null (mpSurvivors merged)) ->
+                                let out = encode (assembleMergedPackument proxyBase (Map.singleton 0 value) merged value)
+                                 in T.length (renderETag (ownETag out)) + fromIntegral (BSL.length out)
+                        _ -> 0
                 size `seq` pure True
             Right (NameMismatch _) -> pure False
             Left _ -> pure False
@@ -174,7 +179,7 @@ runTransform now pkg body =
 sampleCount :: Int
 sampleCount = 5
 
--- A permissive rule set so the rewrite and re-serialise run over the whole packument
+-- A permissive rule set so the assembly and re-serialise run over the whole packument
 -- rather than short-circuiting to a denial -- the full per-request cost.
 serveRules :: [PrecededRule]
 serveRules = [atDefaultPrecedence (AllowIfOlderThan nominalDay)]

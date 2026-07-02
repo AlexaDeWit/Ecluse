@@ -29,7 +29,7 @@ import Ecluse.Core.Package.Integrity (defaultMinIntegrity, defaultMinTrustedInte
 import Ecluse.Core.Queue (MirrorQueue)
 import Ecluse.Core.Queue.Sqs (SqsConfig (sqsWaitSeconds), SqsEndpoint (endpointHost, endpointPort), newSqsQueue)
 import Ecluse.Core.Registry.Npm (NpmClientConfig (..), newNpmClient)
-import Ecluse.Core.Registry.Npm.Filter (applyFilterPlan, rewriteTarballUrls)
+import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
 import Ecluse.Core.Registry.Npm.Request (artifactRequestByFile, artifactRequestByUrl)
 import Ecluse.Core.Registry.Npm.Route qualified as Npm
 import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
@@ -195,8 +195,7 @@ mountBinding privateUrl publicUrl mirrorUrl = do
                 , pdNewMetadataClient = \t p u c f1 f2 f3 l m b s -> newNpmMetadataClient t p u c f1 f2 f3 (NpmClientConfig b m s l)
                 , pdBuildArtifactRequestByFile = \_ _ t s -> artifactRequestByFile t s
                 , pdBuildArtifactRequestByUrl = \_ _ t s -> artifactRequestByUrl t s
-                , pdApplyFilter = applyFilterPlan
-                , pdRewriteUrls = rewriteTarballUrls
+                , pdAssemble = assembleMergedPackument
                 }
     pure
         MountBinding

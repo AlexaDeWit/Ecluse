@@ -1,26 +1,26 @@
-{- | The two pure transforms a __single public-upstream__ npm packument needs
-before Écluse serves it: rewrite the embedded artifact URLs under the mount's
-prefix, and replay a 'FilterPlan'\'s verdicts across every version.
+{- | The two pure transforms an npm packument needs before Écluse serves it:
+rewrite the embedded artifact URLs under the mount's prefix, and assemble the
+served document from a cross-upstream 'MergePlan' and the raw source documents.
 
 Both transforms operate __structurally over the raw @aeson@ 'Value'__, never by
 re-serialising a typed model. This is load-bearing: the served packument is an
 __open__ document -- its schema is @additionalProperties: true@ (see
 @docs\/architecture\/api-surface.md@ → "The synthesized-packument schema") -- so
 any field Écluse does not model (author keys, registry bookkeeping, per-version
-extras) must be __relayed unchanged__. Editing the @Value@ in place removes denied
-versions and rewrites @dist.tarball@ while leaving every unmodelled key untouched;
-rebuilding the body from "Ecluse.Core.Package" would silently drop them.
+extras) must be __relayed unchanged__. Building the served body from the raw
+@Value@s keeps every unmodelled key; rebuilding it from "Ecluse.Core.Package"
+would silently drop them.
 
 == The decision\/replay split
 
-/Which/ versions survive, where @dist-tags.latest@ resolves, and each version's
-denial 'Decision' is the ecosystem-agnostic filtering decision, taken over the
-typed 'Ecluse.Core.Package.PackageInfo' by "Ecluse.Core.Package.Filter" and handed here as a
-'Ecluse.Core.Package.Filter.FilterPlan'. This module owns the __npm wire-shape
-transforms__: the plan replay (restrict @versions@\/@time@ to the surviving keys and
-rebuild @dist-tags@) and the tarball-URL rewrite over the raw upstream bytes. The npm
-wire knowledge lives here; the decision logic does not (it is reused by every
-ecosystem). See
+/Which/ versions survive, which source wins each one, where @dist-tags.latest@
+resolves, and each surviving version's publish instant are the ecosystem-agnostic
+decisions, taken over the typed 'Ecluse.Core.Package.PackageInfo' by
+"Ecluse.Core.Package.Filter" and "Ecluse.Core.Package.Merge" and handed here as a
+'MergePlan'. This module owns the __npm wire-shape assembly__: rebuilding
+@versions@\/@dist-tags@\/@time@ onto the base document from the plan, and the
+tarball-URL rewrite over the raw upstream bytes. The npm wire knowledge lives
+here; the decision logic does not (it is reused by every ecosystem). See
 @docs\/architecture\/registry-model.md@ → "Decision surface vs served surface".
 
 == URL rewriting
@@ -35,44 +35,47 @@ externally-visible base URL is __supplied by the caller__; this
 transform performs no IO. It is __idempotent__: re-deriving @{pkg}@ and @{file}@ from
 an already-rewritten URL yields the same URL, so applying it more than once is safe.
 
-== Replaying the filter plan
+== Assembling the served document
 
-'applyFilterPlan' replays a 'FilterPlan' onto the raw @Value@: a version not in the
-plan's survivors is removed from both @versions@ and @time@, so a client's resolver
-only ever sees admitted versions (presence in the packument /is/ availability -- see
-@docs\/research\/reverse-engineering\/npm.md@ §8). @dist-tags.latest@ is repointed
-at the plan's resolved @latest@, and any other tag whose target did not survive is
-__dropped__, never repointed. The replay does __not__ rewrite tarball URLs -- that is
-'rewriteTarballUrls', applied once to the assembled body. The replay's result is
-coherent: @dist-tags.latest@ is always a key of @versions@, and @time@ has an entry
-for exactly the surviving versions.
+'assembleMergedPackument' replays a 'MergePlan' onto the raw source @Value@s in
+__one pass__: each surviving version's object is taken from the raw document of the
+source that won it (so the served bytes are the winning upstream's, unmodelled keys
+and all) with its @dist.tarball@ rewritten under the mount base as it is placed;
+@dist-tags@ and @time@ are rebuilt from the plan's reconciled decisions (the times
+as normalised ISO-8601, with the base document's @created@\/@modified@ bookkeeping
+retained); every other top-level key is relayed from the base document. A version
+not in the plan's survivors is simply never taken, so a client's resolver only ever
+sees admitted versions (presence in the packument /is/ availability -- see
+@docs\/research\/reverse-engineering\/npm.md@ §8).
 
-When the plan has __no survivors__, the replay returns 'NoSurvivors' carrying the
-plan's per-version denial 'Decision's; the serve layer maps that to a status, which
-this module deliberately does not choose. A body that is not even a JSON object is
-not a packument we can replay onto -- it carries no versions to serve, so it yields
-'NoSurvivors' with no decisions.
+The fused single pass is deliberate: restricting, assembling, and rewriting as
+separate whole-document edits would rebuild a many-version packument several times
+per request, and this transform sits on the serve path's hot loop (see
+@docs\/architecture\/performance.md@). The rewrite honours the same gate as
+'rewriteTarballUrls': the base document's own @name@ is validated component-wise
+('safeName') before it is interpolated, and a document with no usable name has no
+URLs rewritten.
 -}
 module Ecluse.Core.Registry.Npm.Filter (
     -- * URL rewriting
     rewriteTarballUrls,
 
-    -- * Filtering
-    applyFilterPlan,
-    FilterResult (..),
+    -- * Assembling the served document
+    assembleMergedPackument,
 ) where
 
 import Data.Aeson (Value (Object, String))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap (KeyMap)
 import Data.Aeson.KeyMap qualified as KeyMap
-import Data.Set qualified as Set
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Data.Time (UTCTime)
+import Data.Time.Format.ISO8601 (iso8601Show)
 
-import Ecluse.Core.Package.Filter (FilterPlan (fpDecisions, fpLatest, fpSurvivors), FilterResult (..))
-
+import Ecluse.Core.Package.Merge (MergePlan (mpDistTags, mpSurvivors, mpTime), SourceId)
 import Ecluse.Core.Server.Route (isSafeComponent)
-import Ecluse.Core.Version (unVersion)
+import Ecluse.Core.Version (renderVersion)
 
 {- | Rewrite every version's @dist.tarball@ to @{base}\/{pkg}\/-\/{file}@, so the
 artifact is fetched back through this mount rather than directly from upstream.
@@ -156,118 +159,133 @@ trailing slash already on the base.
 joinUrl :: Text -> Text -> Text
 joinUrl base seg = T.dropWhileEnd (== '/') base <> "/" <> seg
 
-{- | The outcome of replaying a 'FilterPlan' onto a packument.
+{- | Assemble the served packument from a 'MergePlan' and the raw source documents:
+rebuild @versions@, @dist-tags@, and @time@ from the plan onto the base document,
+rewriting each surviving version's @dist.tarball@ under @mountBase@ in the same
+pass. Other top-level keys are inherited from the base document.
 
-A 'Filtered' body still has at least one admitted version and is internally
-coherent. 'NoSurvivors' means every version was rejected; it carries each
-version's 'Decision' so the serve layer can render the denial and choose the
-status (403 for an all-policy denial, 503 for a transient or undecidable cause).
-Choosing that status is __not__ this module's job.
+The plan was decided over the projected 'Ecluse.Core.Package.PackageInfo's (the
+typed views of the /same/ documents), but the assembly reads the raw @Value@s, so
+unmodelled fields survive (see the module header). Each surviving version's object
+is taken from the source that won its key ('mpSurvivors'); a survivor whose source
+object is missing is dropped rather than fabricated, so coherence with the plan is
+preserved by construction. @dist-tags@ is the plan's reconciled map ('mpDistTags':
+@latest@ resolved, absent-target tags dropped); @time@ is the plan's
+surviving-version instants ('mpTime', rendered as normalised ISO-8601) plus the
+base document's non-version @created@\/@modified@ bookkeeping.
+
+The tarball rewrite is the same per-version transform 'rewriteTarballUrls' applies,
+fused into the assembly so the versions object is built once rather than rebuilt by
+a second whole-document pass; it is gated identically (the base document's own
+@name@, validated by 'safeName', with no rewrite when the name is unusable).
+
+The caller decides what to do with an empty plan; an empty 'mpSurvivors' simply
+assembles an empty @versions@ object. A non-object base document contributes no
+top-level keys and no bookkeeping (the plan-owned keys are still assembled), so the
+result is always an object.
 -}
-
-{- | Replay a 'FilterPlan' onto the raw packument @Value@, removing every
-non-surviving version and repairing cross-field coherence.
-
-The plan was decided over the projected 'Ecluse.Core.Package.PackageInfo' (the typed
-view of the /same/ document), but the edits land on the raw 'Value', so unmodelled
-fields survive (see the module header). A version key is kept iff it is in the
-plan's survivors.
-
-When survivors remain the body is returned 'Filtered' with:
-
-* @versions@ and @time@ restricted to the surviving version keys (@time@ is pruned
-  by /removal/ of the denied keys, so its unmodelled @created@\/@modified@
-  bookkeeping is relayed);
-* @dist-tags.latest@ pointed at the plan's resolved @latest@ ('fpLatest') -- the
-  kept upstream @latest@, or its downward repoint when the upstream @latest@ was
-  denied;
-* every other @dist-tags@ entry whose target did not survive __dropped__ (never
-  repointed -- repointing @beta@ at a stable release would misrepresent it).
-
-Surviving versions' @dist.tarball@ URLs are __not__ rewritten here -- they are
-relayed as the upstream bytes. Rewriting them under the mount base is
-'rewriteTarballUrls', applied once to the assembled body uniformly across every
-contributing source, so the replay carries no base URL.
-
-When the plan has no survivors, 'NoSurvivors' carries its per-version decisions. A
-non-object body is not a packument we can replay onto; with no versions it has no
-survivors and no decisions to report.
--}
-applyFilterPlan :: FilterPlan -> Value -> FilterResult
-applyFilterPlan plan = \case
-    Object o
-        | Set.null (fpSurvivors plan) -> NoSurvivors (fpDecisions plan)
-        | otherwise -> Filtered (Object (repairTags plan (restrict plan o)))
-    -- A non-object body is not a packument we can replay onto; with no versions to
-    -- serve it has no survivors and no decisions to report.
-    _ -> NoSurvivors []
-
-{- | Restrict @versions@ to the surviving keys, and drop the denied versions from
-@time@. @time@ is pruned by /removal/, not /retention/, because it also carries
-non-version bookkeeping keys (@created@, @modified@) that Écluse does not model and
-must relay; keeping only the survivor keys would drop them. The denied keys are the
-raw @versions@ keys absent from the plan's survivors -- derived from the document so
-the replay needs no extra plan field. (@versions@ has only version keys, so
-retention and removal coincide there.)
--}
-restrict :: FilterPlan -> KeyMap Value -> KeyMap Value
-restrict plan o =
-    adjustObject "versions" (keepKeys survivors)
-        . adjustObject "time" (dropKeys deniedVersions)
-        $ o
+assembleMergedPackument :: Text -> Map SourceId Value -> MergePlan -> Value -> Value
+assembleMergedPackument mountBase bySource plan base =
+    Object rebuilt
   where
-    survivors = fpSurvivors plan
-    deniedVersions = Set.difference (versionKeys o) survivors
+    rebuilt :: KeyMap Value
+    rebuilt =
+        baseObject
+            & KeyMap.insert "versions" (Object survivingVersions)
+            & KeyMap.insert "dist-tags" (Object distTags)
+            & KeyMap.insert "time" (Object reconciledTime)
 
-{- | Resolve @dist-tags.latest@ to the plan's resolved @latest@ and drop any other
-tag pointing at a removed version. A @dist-tags@ that is absent /or/
-present-but-malformed -- most commonly JSON @null@, which the projection reads as
-"absent" yet the raw body still carries -- is treated as empty, so the coherence
-promise (a resolvable @latest@) holds even for that malformed-upstream edge (see
-npm.md §8); a well-formed object is rebuilt in place, preserving its unmodelled
-tags.
--}
-repairTags :: FilterPlan -> KeyMap Value -> KeyMap Value
-repairTags plan o =
-    let resolved = unVersion <$> fpLatest plan
-        existing = case KeyMap.lookup "dist-tags" o of
-            Just tags@(Object _) -> tags
-            _ -> Object mempty
-     in KeyMap.insert "dist-tags" (rebuildTags (fpSurvivors plan) resolved existing) o
+    baseObject :: KeyMap Value
+    baseObject = case base of
+        Object o -> o
+        _ -> mempty
 
-{- | The raw @versions@ object's keys, as a 'Set' of version strings; empty when
-@versions@ is absent or not an object. These are exactly the projected
-'Ecluse.Core.Package.infoVersions' keys, so subtracting the survivors yields the denied
-version keys the @time@ prune removes.
--}
-versionKeys :: KeyMap Value -> Set Text
-versionKeys o = case KeyMap.lookup "versions" o of
-    Just (Object vs) -> Set.fromList (map Key.toText (KeyMap.keys vs))
-    _ -> mempty
+    -- The per-version tarball rewrite, resolved once for the whole assembly: the
+    -- same @{base}/{pkg}@ prefix and safe-name gate as 'rewriteTarballUrls', over
+    -- the base document's self-reported @name@. No usable or safe name -> no
+    -- rewrite, exactly as the whole-document transform behaves.
+    rewriteSurvivor :: Value -> Value
+    rewriteSurvivor = case stringField "name" baseObject of
+        Just pkg | safeName pkg -> rewriteVersion (joinUrl mountBase pkg)
+        _ -> id
 
-{- | Rebuild a @dist-tags@ object: point @latest@ at @resolved@ (the raw version
-string the plan resolved -- the kept upstream @latest@, or its downward repoint) and
-keep every other tag only if its target version still survives. A tag dropped here
-is one that pointed at a removed version -- repointing @beta@ at a stable release
-would misrepresent it.
--}
-rebuildTags :: Set Text -> Maybe Text -> Value -> Value
-rebuildTags survivors resolved = \case
-    Object tags ->
-        Object
-            ( KeyMap.filterWithKey keepTag tags
-                & maybe id (KeyMap.insert "latest" . String) resolved
-            )
-    -- @dist-tags@ should be an object; an unexpected shape is left as-is rather
-    -- than fabricated, so nothing unmodelled is dropped.
+    -- Each surviving version's object, taken from the raw @Value@ of the source
+    -- that won the key (so the served bytes are the winning upstream's, unmodelled
+    -- keys and all), rewritten as it is placed. A survivor whose source object is
+    -- missing is dropped rather than fabricated.
+    survivingVersions :: KeyMap Value
+    survivingVersions =
+        KeyMap.fromList
+            [ (Key.fromText version, rewriteSurvivor object)
+            | (version, sid) <- Map.toList (mpSurvivors plan)
+            , Just object <- [versionObjectFrom sid version]
+            ]
+
+    -- Each source's raw @versions@ object, extracted once per source.
+    -- 'versionObjectFrom' runs once per surviving version (up to the packument's
+    -- version cap), so resolving the source's @versions@ object inside it would
+    -- re-extract the same object on every version; hoisting it here leaves each
+    -- survivor a single inner lookup. ('bySource' holds one entry per upstream.)
+    versionsBySource :: Map SourceId (KeyMap Value)
+    versionsBySource = Map.mapMaybe versionsObjectOf bySource
+
+    versionsObjectOf :: Value -> Maybe (KeyMap Value)
+    versionsObjectOf = \case
+        Object o | Just (Object vs) <- KeyMap.lookup "versions" o -> Just vs
+        _ -> Nothing
+
+    versionObjectFrom :: SourceId -> Text -> Maybe Value
+    versionObjectFrom sid version =
+        Map.lookup sid versionsBySource >>= KeyMap.lookup (Key.fromText version)
+
+    -- @dist-tags@ rebuilt from the plan's reconciled tags (each a rendered version
+    -- string). The plan has already resolved @latest@ and dropped absent-target
+    -- tags over the union.
+    distTags :: KeyMap Value
+    distTags =
+        KeyMap.fromList
+            [ (Key.fromText tag, String (renderVersion v))
+            | (tag, v) <- Map.toList (mpDistTags plan)
+            ]
+
+    -- @time@ rebuilt from the plan's surviving-version times, with the base
+    -- document's non-version bookkeeping keys (@created@\/@modified@) retained.
+    reconciledTime :: KeyMap Value
+    reconciledTime =
+        bookkeepingTime
+            <> KeyMap.fromList
+                [ (Key.fromText version, String (renderTime t))
+                | (version, t) <- Map.toList (mpTime plan)
+                ]
+
+    -- The base @time@ map carries one entry per published version (up to the
+    -- packument's version cap) plus the @created@\/@modified@ bookkeeping keys.
+    -- Look those two keys up directly rather than filtering the whole map, so this
+    -- is a pair of lookups, not a full traversal of every version's publish time.
+    bookkeepingTime :: KeyMap Value
+    bookkeepingTime = case KeyMap.lookup "time" baseObject of
+        Just (Object timeObject) ->
+            KeyMap.fromList
+                [ (k, value)
+                | name <- timeBookkeepingKeys
+                , let k = Key.fromText name
+                , Just value <- [KeyMap.lookup k timeObject]
+                ]
+        _ -> mempty
+
+-- The non-version keys an npm @time@ object carries that must be relayed unchanged.
+timeBookkeepingKeys :: [Text]
+timeBookkeepingKeys = ["created", "modified"]
+
+-- Render a publish time as the ISO-8601 instant npm serves in its @time@ map.
+renderTime :: UTCTime -> Text
+renderTime = toText . iso8601Show
+
+-- | Map a function over every value of an 'Object', leaving a non-object as-is.
+mapValues :: (Value -> Value) -> Value -> Value
+mapValues f = \case
+    Object o -> Object (fmap f o)
     other -> other
-  where
-    keepTag :: Key.Key -> Value -> Bool
-    keepTag k v
-        | k == "latest" = False -- always re-inserted, pointed at the survivor
-        | otherwise = case v of
-            String target -> target `Set.member` survivors
-            _ -> True -- a non-string tag value is unmodelled; relay it
 
 {- | Apply a function to the value at @key@ in an object, only when that key is
 present. A missing key is left absent (no key is fabricated), preserving lossless
@@ -277,27 +295,6 @@ adjustObject :: Key.Key -> (Value -> Value) -> KeyMap Value -> KeyMap Value
 adjustObject key f o = case KeyMap.lookup key o of
     Just v -> KeyMap.insert key (f v) o
     Nothing -> o
-
--- | Map a function over every value of an 'Object', leaving a non-object as-is.
-mapValues :: (Value -> Value) -> Value -> Value
-mapValues f = \case
-    Object o -> Object (fmap f o)
-    other -> other
-
--- | Keep only the object entries whose key is in the surviving set.
-keepKeys :: Set Text -> Value -> Value
-keepKeys survivors = \case
-    Object o -> Object (KeyMap.filterWithKey (\k _ -> Key.toText k `Set.member` survivors) o)
-    other -> other
-
-{- | Drop the object entries whose key is in the given set, leaving every other
-entry -- surviving versions and unmodelled bookkeeping keys (@created@,
-@modified@) alike -- untouched.
--}
-dropKeys :: Set Text -> Value -> Value
-dropKeys keys = \case
-    Object o -> Object (KeyMap.filterWithKey (\k _ -> Key.toText k `Set.notMember` keys) o)
-    other -> other
 
 -- | The 'Text' at @key@ in an object, if present and a JSON string.
 stringField :: Key.Key -> KeyMap Value -> Maybe Text

@@ -29,7 +29,7 @@ import Ecluse.Core.Package (PackageName, mkPackageName)
 import Ecluse.Core.Package.Integrity (defaultMinIntegrity, defaultMinTrustedIntegrity)
 import Ecluse.Core.Queue (newInMemoryQueue)
 import Ecluse.Core.Registry.Npm (NpmClientConfig (..))
-import Ecluse.Core.Registry.Npm.Filter (applyFilterPlan, rewriteTarballUrls)
+import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
 import Ecluse.Core.Registry.Npm.Request (artifactRequestByFile, artifactRequestByUrl)
 import Ecluse.Core.Registry.Npm.Route qualified as Npm
 import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
@@ -219,8 +219,7 @@ depsFor publicPort = do
             , pdNewMetadataClient = \t p u c f1 f2 f3 l m t' s -> newNpmMetadataClient t p u c f1 f2 f3 (NpmClientConfig t' m s l)
             , pdBuildArtifactRequestByFile = \_ _ t s -> artifactRequestByFile t s
             , pdBuildArtifactRequestByUrl = \_ _ t s -> artifactRequestByUrl t s
-            , pdApplyFilter = applyFilterPlan
-            , pdRewriteUrls = rewriteTarballUrls
+            , pdAssemble = assembleMergedPackument
             }
 
 {- | A pure rule policy that admits the fixture version: the rules engine is
