@@ -11,6 +11,9 @@ import Codec.Archive.Zip.Conduit.UnZip (unZipStream)
 import Conduit
 import Data.Aeson (decodeStrict)
 import Data.ByteString qualified as BS
+import Data.List (foldl')
+import Data.Text.Encoding (decodeUtf8With)
+import Data.Text.Encoding.Error (lenientDecode)
 import Katip (KatipContext, Severity (..), logFM, ls)
 import Network.HTTP.Simple (getResponseBody, httpSource, parseRequest)
 import OpenTelemetry.Context qualified as Ctx
@@ -64,8 +67,8 @@ collectFile = go []
   where
     go acc =
         await >>= \case
-            Nothing -> pure (BS.concat (reverse acc))
+            Nothing -> pure (BS.concat (foldl' (flip (:)) [] acc))
             Just (Left entry) -> do
                 leftover (Left entry)
-                pure (BS.concat (reverse acc))
+                pure (BS.concat (foldl' (flip (:)) [] acc))
             Just (Right bs) -> go (bs : acc)

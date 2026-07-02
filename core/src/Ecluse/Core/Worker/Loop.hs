@@ -19,6 +19,10 @@ module Ecluse.Core.Worker.Loop (
     workerLoop,
 ) where
 
+import Control.Monad (forever)
+import Control.Monad.Reader (asks)
+import Data.List (foldl')
+import Data.Text (Text)
 import Data.Time (getCurrentTime)
 import Katip (Severity (DebugS, ErrorS), logFM, ls)
 import UnliftIO (tryAny)
@@ -51,7 +55,7 @@ workerLoop = forever $ do
         messages <- liftIO (receive queue)
         case messages of
             [] -> pass
-            _ -> logFM DebugS (ls ("worker received " <> show (length messages) <> " messages" :: Text))
+            _ -> logFM DebugS (ls ("worker received " <> show (foldl' (\n _ -> n + 1) (0 :: Int) messages) <> " messages" :: Text))
         -- Heartbeat on every successful poll -- an empty long-poll is a healthy idle.
         heartbeat <- asks wrHeartbeat
         now <- liftIO getCurrentTime

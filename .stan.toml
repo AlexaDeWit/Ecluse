@@ -33,3 +33,7 @@ check =
   id = "OBS-STAN-0103-pTUbUb-481:22"  # Security.hs:481 `length gs == 8` — gs is the fixed 8-group IPv6 split; this IS the well-formedness check
 [[ignore]]
   id = "OBS-STAN-0103-O2rrhR-384:19"  # Cache.hs:384 `length ks` — the metadata cache's current key set, bounded by its max-entries cap
+[[ignore]]
+  id = "OBS-STAN-0212-ZUcJjk-48:25"  # Config.hs:48 `embedFile` — Template Haskell inherently uses unsafePerformIO
+[[ignore]]
+  id = "OBS-STAN-0212-ZUcJjk-59:25"  # Config.hs:59 `embedFile` — Template Haskell inherently uses unsafePerformIO

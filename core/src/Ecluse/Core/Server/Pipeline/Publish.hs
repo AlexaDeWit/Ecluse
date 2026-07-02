@@ -187,7 +187,7 @@ declaredNames document =
     | slot <-
         [document ^? key "_id", document ^? key "name"]
             <> [ versionDoc ^? key "name"
-               | versions <- toList (document ^? key "versions" . _Object)
+               | versions <- maybe [] (:[]) (document ^? key "versions" . _Object)
                , versionDoc <- KeyMap.elems versions
                ]
     , Just (String declared) <- [slot]
