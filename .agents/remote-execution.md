@@ -25,11 +25,11 @@ relay. Local contributor sessions do not need it.
 
 ## Local Verification
 
-Agents **must not** skip local verification (`make check`).
-Run `make check` inside the Nix shell:
+Agents **must not** skip local verification (`task check`).
+Run `task format`, then `task check`, inside the Nix shell:
 
 ```bash
-env -u IN_NIX_SHELL nix develop --command make check
+env -u IN_NIX_SHELL nix develop --command task check
 ```
 
 You **must** monitor CI results and follow up on any failures. Your task is not complete until both local verification and CI pass.

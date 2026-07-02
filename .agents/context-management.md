@@ -1,6 +1,6 @@
 # Agent Context Management
 
-This guide keeps Codex's limited context focused on evidence needed for the current decision.
+This guide keeps an agent's limited context focused on evidence needed for the current decision.
 Thorough project understanding comes from reliable retrieval from repository sources, not from
 loading every source at once.
 
@@ -25,7 +25,7 @@ Layers 2-4 are replaceable. Do not copy layer 1 or whole design documents into c
    large document into the transcript.
 6. State the objective, applicable invariants, evidence sources, open questions, and next action.
 
-Do not read `AGENTS.md` again in a session: Codex injects it at startup. Do not read
+Do not read `AGENTS.md` again in a session: the harness injects it at startup. Do not read
 `CONTRIBUTING.md`, all of `STYLE.md`, all architecture documents, or all memory files merely
 because they exist.
 
@@ -70,13 +70,19 @@ It omits copied repository policy, copied design prose, successful logs, abandon
 chronological narration. On resume, verify volatile state live and retrieve referenced sources only
 when the next decision needs them.
 
-For automatic Codex CLI compaction, a trusted project may point at the prompt from
-`.codex/config.toml` (relative paths resolve from `.codex/`):
+### Per-agent compaction wiring
 
-```toml
-tool_output_token_limit = 6000
-experimental_compact_prompt_file = "../.agents/compact-prompt.md"
+- **Claude Code:** `/compact` accepts inline instructions; direct it to follow
+  `.agents/compact-prompt.md`.
+- **Gemini CLI:** `/compress` uses a fixed summariser; write the checkpoint per
+  `.agents/compact-prompt.md` into the conversation before compressing.
+- **Codex CLI:** a trusted project may point automatic compaction at the prompt from
+  `.codex/config.toml` (relative paths resolve from `.codex/`):
 
-[tui]
-status_line = ["model-with-reasoning", "context-remaining", "git-branch", "current-dir"]
-```
+  ```toml
+  tool_output_token_limit = 6000
+  experimental_compact_prompt_file = "../.agents/compact-prompt.md"
+
+  [tui]
+  status_line = ["model-with-reasoning", "context-remaining", "git-branch", "current-dir"]
+  ```

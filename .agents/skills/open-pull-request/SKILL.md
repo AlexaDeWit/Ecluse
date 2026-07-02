@@ -82,7 +82,7 @@ clause. An analogy is welcome where it genuinely illuminates. No internal slice/
 **The trade-off.** <What was deliberately accepted, or chosen against, and the honest reason.>
 
 ## Checklist
-- [ ] `make check` passes locally (build, unit tests, fourmolu, hlint, Semgrep)
+- [ ] `task check` passes locally (build, unit tests, fourmolu, hlint, Semgrep)
 - [ ] Docs updated in this PR where behaviour, interfaces, or config changed
 - [ ] Conventional Commit subjects; commits are GPG-signed
 - [ ] Every commit is signed off, DCO (`git commit -s`), as the author
