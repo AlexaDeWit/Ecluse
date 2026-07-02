@@ -1,5 +1,5 @@
 rules:
-  unpinned-uses:
+  ref-version-mismatch:
     ignore:
       - .github/workflows/bench-load.yml
       - .github/workflows/bench.yml
