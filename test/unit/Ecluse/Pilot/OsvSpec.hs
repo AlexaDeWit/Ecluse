@@ -45,7 +45,9 @@ spec = describe "Osv parsing and streaming" $ do
                     `shouldBe` [ ExtractedOsv
                                     { extPackage = "hono"
                                     , extEcosystem = "npm"
-                                    , extFixedVersions = ["4.6.5"]
+                                    , extCveId = "GHSA-2234-fmw7-43wr"
+                                    , extIntroduced = Just "0"
+                                    , extFixed = Just "4.6.5"
                                     }
                                ]
 
@@ -61,12 +63,30 @@ spec = describe "Osv parsing and streaming" $ do
                     `shouldBe` [ ExtractedOsv
                                     { extPackage = "multi-pkg"
                                     , extEcosystem = "npm"
-                                    , extFixedVersions = ["1.0.0", "1.2.0", "2.1.0"]
+                                    , extCveId = "GHSA-multi"
+                                    , extIntroduced = Just "0"
+                                    , extFixed = Just "1.0.0"
+                                    }
+                               , ExtractedOsv
+                                    { extPackage = "multi-pkg"
+                                    , extEcosystem = "npm"
+                                    , extCveId = "GHSA-multi"
+                                    , extIntroduced = Just "1.1.0"
+                                    , extFixed = Just "1.2.0"
+                                    }
+                               , ExtractedOsv
+                                    { extPackage = "multi-pkg"
+                                    , extEcosystem = "npm"
+                                    , extCveId = "GHSA-multi"
+                                    , extIntroduced = Just "2.0.0"
+                                    , extFixed = Just "2.1.0"
                                     }
                                , ExtractedOsv
                                     { extPackage = "other-pkg"
                                     , extEcosystem = "npm"
-                                    , extFixedVersions = ["3.0.0"]
+                                    , extCveId = "GHSA-multi"
+                                    , extIntroduced = Just "0"
+                                    , extFixed = Just "3.0.0"
                                     }
                                ]
 
@@ -88,7 +108,8 @@ spec = describe "Osv parsing and streaming" $ do
             [ext] -> do
                 extPackage ext `shouldBe` "hono"
                 extEcosystem ext `shouldBe` "npm"
-                extFixedVersions ext `shouldBe` ["4.6.5"]
+                extCveId ext `shouldBe` "GHSA-2234-fmw7-43wr"
+                extFixed ext `shouldBe` Just "4.6.5"
             _ -> fail "Expected exactly 1 result"
 
     it "handles an empty zip archive gracefully without emitting anything" $ do
@@ -150,7 +171,8 @@ spec = describe "Osv parsing and streaming" $ do
             [ext] -> do
                 extPackage ext `shouldBe` "hono"
                 extEcosystem ext `shouldBe` "npm"
-                extFixedVersions ext `shouldBe` ["4.6.5"]
+                extCveId ext `shouldBe` "GHSA-2234-fmw7-43wr"
+                extFixed ext `shouldBe` Just "4.6.5"
             _ -> fail "Expected exactly 1 result"
 
     it "throws an exception if the URL is invalid" $ do
