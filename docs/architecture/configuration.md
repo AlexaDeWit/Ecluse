@@ -277,7 +277,7 @@ Crucially, **unknown is an error, not a silent skip**:
   mistype a rule out of existence.
 - **Credential references must resolve.** A mount whose
   [credential strategy](access-model.md) draws on a provider the deployment has not
-  initialized; e.g. a `service` mount with
+  initialised; e.g. a `service` mount with
   no read provider, or a mirror target naming a backend whose ambient cloud identity
   is absent, is **rejected at boot**. Credential providers are
   [process-global](cloud-backends.md#credential-provider) and a mount only references

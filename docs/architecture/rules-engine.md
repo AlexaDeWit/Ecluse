@@ -263,7 +263,7 @@ the fix boundary?" instead of "is *V* inside the affected range?".
 
 ### Local polling, decoupled ingestion
 
-Rather than fetching and parsing raw JSON advisory dumps on the proxy (which would introduce heavy GC pressure and memory spikes), Écluse uses a **decoupled ingestion pipeline (Écluse Pilot)**. Pilot is a standalone background service that pulls **OSV's per-ecosystem advisory exports**, processes them, and compiles them into a highly optimized, read-only SQLite database (`osv.db`). It pushes this database to a private S3/GCS bucket.
+Rather than fetching and parsing raw JSON advisory dumps on the proxy (which would introduce heavy GC pressure and memory spikes), Écluse uses a **decoupled ingestion pipeline (Écluse Pilot)**. Pilot is a standalone background service that pulls **OSV's per-ecosystem advisory exports**, processes them, and compiles them into a highly optimised, read-only SQLite database (`osv.db`). It pushes this database to a private S3/GCS bucket.
 
 The Écluse proxy runs a supervised in-process polling thread that periodically checks the S3 bucket for ETag changes. When a new `osv.db` is published, the proxy downloads it and performs an **atomic shadow-swap** of the active database connection. The footprint is minimal: the proxy merely queries the local SQLite file on disk.
 
