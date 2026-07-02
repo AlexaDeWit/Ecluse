@@ -21,7 +21,7 @@ import Ecluse.Pilot.Osv (ExtractedOsv, OsvAdvisory, extractFromAdvisory)
 import Ecluse.Telemetry (Telemetry, telemetryTracerProvider)
 
 -- | Fetch the OSV zip and stream its contents
-streamOsvUrl :: (MonadResource m, MonadThrow m, PrimMonad m, KatipContext m) => Telemetry -> String -> ConduitT i ExtractedOsv m ()
+streamOsvUrl :: (MonadResource m, MonadThrow m, KatipContext m) => Telemetry -> String -> ConduitT i ExtractedOsv m ()
 streamOsvUrl telemetry urlStr = do
     lift $ logFM InfoS (ls ("Initializing OSV stream from URL: " <> urlStr))
     let mTracer = (\tp -> makeTracer tp "ecluse" tracerOptions) <$> telemetryTracerProvider telemetry
@@ -34,14 +34,14 @@ streamOsvUrl telemetry urlStr = do
         )
 
 -- | Parse the zip stream and emit ExtractedOsv
-parseOsvStream :: (MonadResource m, MonadThrow m, PrimMonad m, KatipContext m) => Telemetry -> ConduitT ByteString ExtractedOsv m ()
+parseOsvStream :: (MonadResource m, MonadThrow m, KatipContext m) => Telemetry -> ConduitT ByteString ExtractedOsv m ()
 parseOsvStream telemetry = do
     lift $ logFM InfoS (ls ("Starting OSV zip extraction and parsing pipeline" :: String))
     let mTracer = (\tp -> makeTracer tp "ecluse" tracerOptions) <$> telemetryTracerProvider telemetry
     bracketP
         (traverse (\t -> createSpan t Ctx.empty "ecluse.pilot.osv.parse" defaultSpanArguments{kind = Internal}) mTracer)
         (mapM_ (`endSpan` Nothing))
-        (\_ -> void unZipStream .| processZipEntries)
+        (\_ -> void (transPipe liftIO unZipStream) .| processZipEntries)
 
 processZipEntries :: (MonadThrow m, KatipContext m) => ConduitT (Either ZipEntry ByteString) ExtractedOsv m ()
 processZipEntries =

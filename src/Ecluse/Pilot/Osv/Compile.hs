@@ -19,7 +19,7 @@ import Ecluse.Pilot.Osv (ExtractedOsv (..))
 import Ecluse.Pilot.Osv.Stream (streamOsvUrl)
 import Ecluse.Telemetry (Telemetry)
 
-compileOsvToSqlite :: (MonadResource m, MonadThrow m, MonadUnliftIO m, PrimMonad m, KatipContext m) => Telemetry -> FilePath -> Text -> String -> m FilePath
+compileOsvToSqlite :: (MonadResource m, MonadThrow m, MonadUnliftIO m, KatipContext m) => Telemetry -> FilePath -> Text -> String -> m FilePath
 compileOsvToSqlite telemetry outDir ecosystem urlStr = do
     let dbFile = outDir </> (toString ecosystem <> "-v" <> showVersion version <> "-osv.db")
     logFM InfoS (ls ("Compiling OSV data for " <> ecosystem <> " to " <> toText dbFile))
@@ -59,7 +59,7 @@ sinkSqlite conn = awaitForever $ \batch ->
         withTransaction conn $
             executeMany
                 conn
-                "INSERT INTO package_vulnerability_ranges (package_name, cve_id, introduced_version, fixed_version, severity, epss_score) VALUES (?, ?, ?, ?, NULL, NULL)"
+                "INSERT OR IGNORE INTO package_vulnerability_ranges (package_name, cve_id, introduced_version, fixed_version, severity, epss_score) VALUES (?, ?, ?, ?, NULL, NULL)"
                 (map osvToRow batch)
   where
     osvToRow osv = (extPackage osv, extCveId osv, extIntroduced osv, extFixed osv)
