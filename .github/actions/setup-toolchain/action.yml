@@ -52,6 +52,61 @@ inputs:
 runs:
   using: composite
   steps:
+    # ---- Disk headroom (Linux runners) ------------------------------------
+    # Free the ~14 GB root partition and move the big stores onto the large
+    # ephemeral /mnt volume, before Nix installs into /nix and the caches
+    # restore below. Every workflow that sets up the toolchain then gets the
+    # same headroom: the heaviest job (the e2e image build plus `docker load`)
+    # can exhaust the small root partition, and the benchmark jobs hit the same
+    # wall. These run FIRST because the /mnt bind mount must precede the Nix
+    # install, and both must precede the cache restore. Guarded to Linux: the
+    # sudo/rm/mount/systemctl calls assume a Linux runner (every current caller
+    # is ubuntu-latest), so on any other runner they are a safe no-op. Kept
+    # inline, not a third-party action, to honour the repo's SHA-pin
+    # supply-chain convention. See AGENTS.md → "CI & Security".
+    #
+    # Remove preinstalled toolchains these Nix jobs never touch (the system
+    # GHC/ghcup, Android SDK, .NET, Swift), since npm/node and GHC all come from
+    # the Nix dev shell. `df` before/after so a failing run shows the actual
+    # reclaim.
+    - name: Free disk space
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        echo "before:"; df -h / /mnt
+        sudo rm -rf \
+          /usr/local/lib/android \
+          /usr/share/dotnet \
+          /usr/share/swift \
+          /opt/ghc \
+          /usr/local/.ghcup
+        echo "after:"; df -h / /mnt
+
+    # Put the two biggest disk consumers on the ephemeral /mnt volume (~70 GB)
+    # rather than the small root partition: the Nix store (bind-mounted now so
+    # the GHC closure lands on /mnt when the Install Nix step below writes into
+    # it) and the Docker data-root (so a later `docker load` of an OCI image and
+    # its running containers do too). Both must precede their first use: the bind
+    # mount before the Install Nix step just below, the data-root before any job
+    # step that runs Docker.
+    - name: Relocate the Nix store and Docker data-root onto /mnt
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        sudo mkdir -p /mnt/nix /nix
+        sudo mount --bind /mnt/nix /nix
+        sudo systemctl stop docker.service docker.socket
+        sudo mkdir -p /mnt/docker
+        if [ -f /etc/docker/daemon.json ]; then
+          sudo jq '. + {"data-root": "/mnt/docker"}' /etc/docker/daemon.json \
+            | sudo tee /etc/docker/daemon.json.tmp >/dev/null
+          sudo mv /etc/docker/daemon.json.tmp /etc/docker/daemon.json
+        else
+          echo '{"data-root": "/mnt/docker"}' | sudo tee /etc/docker/daemon.json >/dev/null
+        fi
+        sudo systemctl start docker.service
+        docker info --format 'Docker root: {{.DockerRootDir}}'
+
     # Reproducible toolchain: the exact flake-pinned dev shell developers use.
     # extra-conf hardens substitution against transient cache.nixos.org hiccups
     # — the cold path; warm runs restore the store from the cache below and skip
