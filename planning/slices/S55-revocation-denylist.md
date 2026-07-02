@@ -2,14 +2,14 @@
 id: S55
 title: Revocation denylist, DenyByIdentity (hard-deny operator revocation)
 milestone: M8, Release hardening
-status: not-started
+status: merged
 depends-on: [S03, S05]
 test-tier: [unit]
 arch-refs:
   - docs/architecture/rules-engine.md#rule-precedence
   - docs/architecture/configuration.md#rule-policy
   - threat-modelling/ecluse.json (threat #13, Registry B)
-pr: null
+pr: 499
 issue: 599
 ---
 
@@ -30,15 +30,15 @@ scope, delegated to operator scanning / upstream advisories; *what* to revoke is
 operator's decision (see threat #13, Registry B).
 
 **Acceptance criteria.**
-- [ ] `DenyByIdentity` matches a configured package name, or a `package@version`; a match →
+- [x] `DenyByIdentity` matches a configured package name, or a `package@version`; a match →
   `Deny` (the matched identity in the reason, for the audit trail); no match → `Abstain`.
-- [ ] It is a **hard deny**: evaluated at a precedence **above `AllowScope`**, so an
+- [x] It is a **hard deny**: evaluated at a precedence **above `AllowScope`**, so an
   allow-listed scope cannot override a revocation, the one deliberate exception to
   allow-over-deny (a revocation an allow-list could outrank is not a revocation).   _rules-engine.md#rule-precedence_
-- [ ] Pure, no IO; evaluated on the serve path, and honoured by the worker mirror-job
+- [x] Pure, no IO; evaluated on the serve path, and honoured by the worker mirror-job
   ingest re-evaluation (#414) so a revoked identity is **neither served nor (re-)mirrored**.
-- [ ] Wired into the rule config decoder (S03): a revocation list via config (additive).
-- [ ] Does **not** reach an already-mirrored trusted copy (rules do not run on trusted, by
+- [x] Wired into the rule config decoder (S03): a revocation list via config (additive).
+- [x] Does **not** reach an already-mirrored trusted copy (rules do not run on trusted, by
   design), the operator purges Registry B for that. The rule prevents re-admission and
   re-mirroring (the treadmill); the documented playbook is **deny first, then purge**.
 
