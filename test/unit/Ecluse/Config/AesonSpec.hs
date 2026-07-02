@@ -47,6 +47,26 @@ spec = describe "decodeDocument" $ do
                 cfgPublicConnectionsPerHost (configApp doc) `shouldBe` 10
                 cfgPrivateConnectionsPerHost (configApp doc) `shouldBe` 16
 
+    it "leaves the runtime posture unset when cores and maxHeapBytes are omitted" $ do
+        case loadConfig [] Nothing of
+            Left e -> expectationFailure ("unexpected decode error: " <> show e)
+            Right doc -> do
+                cfgCores (configApp doc) `shouldBe` Nothing
+                cfgMaxHeapBytes (configApp doc) `shouldBe` Nothing
+
+    it "parses cores and maxHeapBytes from the environment layer" $ do
+        case loadConfig [("ECLUSE_CORES", "2"), ("ECLUSE_MAX_HEAP_BYTES", "419430400")] Nothing of
+            Left e -> expectationFailure ("unexpected decode error: " <> show e)
+            Right doc -> do
+                cfgCores (configApp doc) `shouldBe` Just 2
+                cfgMaxHeapBytes (configApp doc) `shouldBe` Just 419430400
+
+    it "rejects non-positive cores and maxHeapBytes" $ do
+        loadConfig [("ECLUSE_CORES", "0")] Nothing
+            `shouldSatisfy` decodeErrorMentions "cores must be a positive integer"
+        loadConfig [("ECLUSE_MAX_HEAP_BYTES", "-1")] Nothing
+            `shouldSatisfy` decodeErrorMentions "maxHeapBytes must be a positive integer"
+
     it "rejects non-positive serve and connection capacities" $ do
         loadConfig [("ECLUSE_SERVE_MAX_IN_FLIGHT", "0")] Nothing
             `shouldSatisfy` decodeErrorMentions "serveMaxInFlight must be a positive integer"

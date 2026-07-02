@@ -172,6 +172,8 @@ operator reference. **Keep the two in sync** when either changes.
 | `ECLUSE_TELEMETRY` | No | `off` | OpenTelemetry master switch. With it `off`, no telemetry is emitted. When `on`, the SDK reads the standard `OTEL_*` variables. |
 | `ECLUSE_CVE_SYNC_INTERVAL` | Depends | Pilot only, default `3600` | How often the Écluse Pilot singleton refreshes the OSV database from upstream. |
 | `ECLUSE_SHUTDOWN_DRAIN_TIMEOUT` | No | `30` | Seconds the graceful shutdown waits for in-flight requests and in-progress artifact streams to finish before the process exits. Positive integer. |
+| `ECLUSE_CORES` | No | derived | Cores (GHC capabilities) the process claims. Unset ⇒ derived from the container's cgroup CPU quota (rounded up, clamped to the visible processors); with no cgroup limit either, the runtime's own detection stands. The boot log prints the decision and its provenance. Positive integer. See [Operating Écluse → Runtime sizing](#operating-écluse). |
+| `ECLUSE_MAX_HEAP_BYTES` | No | derived | Heap ceiling in bytes, enforced by the GHC runtime (a breach is a clean heap-overflow error rather than a kernel OOM kill). Unset ⇒ derived from the cgroup memory limit less the nursery budget and 10% slack; with no cgroup limit, unbounded unless your own `GHCRTS -M` says otherwise. Enforcing a ceiling re-executes the binary once, in place (same PID). Positive integer. |
 | `ECLUSE_SERVE_MAX_IN_FLIGHT` | No | `16` | Process-wide cap on concurrent metadata materialisation: whole packument requests and the public-metadata gate reached by a tarball miss. Work beyond the cap is rejected immediately with `503 Service Unavailable` and `Retry-After: 1`; it is not placed in an application queue. Trusted private tarball hits stream outside the cap, as do health probes and cheap local routes. Positive integer. **Note**: operators deploying Écluse within an orchestration mesh (e.g., Istio) can configure the mesh to automatically manage retries upon receiving this 503 response. **Alerting note**: 503s returned with a `Retry-After: 1` header are a normal operational response indicating safe, intentional backpressure. Operational alerts on 503s should strictly exclude responses with this header, as true proxy or upstream failures (e.g., the public npm registry is down) will return a 503 *without* the `Retry-After: 1` header. |
 | `ECLUSE_PUBLIC_CONNECTIONS_PER_HOST` | No | `10` | Maximum concurrent pooled connections to each public upstream host. Public metadata misses are single-flight-coalesced, so the default keeps the upstream library's conservative per-host bound. Positive integer. |
 | `ECLUSE_PRIVATE_CONNECTIONS_PER_HOST` | No | `16` | Maximum concurrent pooled connections to each private upstream host. The default matches `ECLUSE_SERVE_MAX_IN_FLIGHT`, because private reads are deliberately per-request and are not coalesced across clients. Positive integer. |
@@ -435,13 +437,45 @@ serve such a source, point it at the **private** (trusted) upstream slot, not th
     throttled to a periodic heartbeat rather than flooding your logs.
 - **Search.** `GET /-/v1/search` returns `501` by design: search is a discovery convenience,
   not an install path. Use the public registry's website to discover packages.
-- **Runtime memory tuning.** The binary ships with a GC configuration tuned for the serve
-  path's allocation profile (`-A64m -n4m`: a 64 MiB per-core allocation area, shared in
-  4 MiB chunks). This trades a bounded amount of extra memory (up to 64 MiB per core of
-  nursery, over and above the live heap) for an order-of-magnitude fewer garbage
-  collections under load. On a memory-constrained deployment, shrink it at run time with
-  RTS flags, e.g. `ecluse +RTS -A16m -RTS`; capping capabilities (`-N2`) bounds it too,
-  since the allocation area scales per core.
+- **Runtime sizing (cores and memory).** At boot Écluse resolves how many cores to claim
+  and what heap ceiling to run under, and logs each decision with its provenance
+  (`runtime: capabilities 2 (derived from the cgroup limit)` and friends), so the
+  effective posture is always readable from the start-up lines. Resolution order, per
+  knob:
+  1. **Explicit configuration wins**: `ECLUSE_CORES` (or `cores` in the config document)
+     and `ECLUSE_MAX_HEAP_BYTES` (`maxHeapBytes`), both positive integers.
+  2. **Omitted values are derived from the container's cgroup (v2)**: the CPU quota,
+     rounded up and clamped to the visible processors, and the memory limit less the
+     nursery budget (cores x allocation area) less 10% slack, floored at half the limit.
+  3. **No limit found either way**: whatever the GHC runtime resolved (its baked
+     defaults plus any `GHCRTS` you set) stands, and the log says so. A `GHCRTS` heap
+     ceiling you set yourself is never overridden by derivation.
+
+  This exists because a container CPU **limit** is a cgroup quota that does not shrink
+  the processor count the runtime sees: without it, a 2-CPU pod on a 32-core node claims
+  32 capabilities and sizes 32 nurseries. Applying a heap ceiling requires runtime flags
+  that cannot change after start, so when one must be enforced Écluse **re-executes its
+  own binary once, in place** (same PID, no exit observed by the container runtime),
+  logging `runtime: re-launching with GHCRTS ...` first.
+- **Runtime memory arithmetic (sizing a proxy pod).** This modelling is for the
+  **proxy** role; the other container roles have different shapes (Pilot performs a
+  single scheduled ingestion computation, and the Dredger's profile will follow its
+  pruning rules as they land), so do not carry the proxy's arithmetic over to them --
+  the cores/heap **resolution** above still applies to every role (those derive from
+  the container, not the workload), but tune their allocation area independently via
+  `GHCRTS` if you run them in tight pods. The binary ships with a GC configuration
+  tuned for the serve path's allocation profile (`-A64m -n4m`: a 64 MiB per-core
+  allocation area, shared in 4 MiB chunks). This trades a bounded amount of extra memory
+  for an order-of-magnitude fewer garbage collections under load. Budget roughly:
+  `cores x 64 MiB` of nursery, plus the live heap (dominated by the metadata cache),
+  plus up to one live-heap's worth of copying headroom during a major collection. Worked
+  shapes: a 2-CPU / 512 MiB pod runs comfortably as-is (128 MiB nursery, ~330 MiB derived
+  heap ceiling); for a 2-CPU / 256 MiB pod also shrink the allocation area
+  (`GHCRTS="-A16m"`); a 4-CPU pod is comfortable from ~750 MiB with the shipped defaults,
+  or at 512 MiB with `-A32m`. Taller pods amortise the metadata cache and request
+  coalescing better than more small pods, so prefer 4-CPU-ish shapes when in doubt. The
+  allocation area itself is deliberately not config-surfaced; tune it with `GHCRTS`
+  (e.g. `GHCRTS="-A16m"`), and the boot log always prints the effective value.
 - **Revoking a mirrored version (internal yank).** The mirror store (Registry B) deliberately
   resists upstream yanks. A benign yank (e.g., a maintainer rage-deletes, a name dispute) does not
   break your installs. The flip side is that a version _later found malicious_ is not removed
