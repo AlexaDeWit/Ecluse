@@ -221,6 +221,7 @@ library
     Ecluse.Pilot.Osv
     Ecluse.Pilot.Osv.Stream
     Ecluse.Pilot.Osv.Compile
+    Ecluse.Pilot.Osv.Retry
     Ecluse.Dredger
     Ecluse.Composition
     Ecluse.Config
@@ -500,6 +501,7 @@ test-suite ecluse-unit
     Ecluse.PilotSpec
     Ecluse.Pilot.OsvSpec
     Ecluse.Pilot.Osv.CompileSpec
+    Ecluse.Pilot.Osv.RetrySpec
     Ecluse.ProxySpec
     Ecluse.ServerSpec
     Ecluse.TelemetrySpec
@@ -525,6 +527,7 @@ test-suite ecluse-unit
     , case-insensitive  ^>=1.2
     , containers        ^>=0.7
     , crypton           ^>=1.0
+    , exceptions        ^>=0.10
     , yaml              ^>=0.11
     , hedgehog          ^>=1.5
     , hspec             ^>=2.11
@@ -545,6 +548,7 @@ test-suite ecluse-unit
     , memory            ^>=0.18
     , mtl               ^>=2.3
     , primitive         ^>=0.9.1
+    , retry             ^>=0.9
     , text              ^>=2.1
     , time              ^>=1.12
     , unliftio          ^>=0.2.25
