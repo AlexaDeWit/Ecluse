@@ -10,20 +10,17 @@ import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec (Spec, around, describe, it, shouldBe)
 import TestContainers (containerAddress)
 import UnliftIO (throwIO)
-import UnliftIO.Exception (catchAny)
 import UnliftIO.Concurrent (threadDelay)
+import UnliftIO.Exception (catchAny)
 
 import Amazonka qualified as AWS
 import Amazonka.S3 qualified as S3
 import Amazonka.S3.ListObjectsV2 qualified as S3
 import Amazonka.S3.Types.Object qualified as S3Object
+import Ecluse.Config (AppConfig (..), Config (..), loadConfig)
 import Ecluse.Integration.Ministack (withMinistack)
 import Ecluse.Pilot.Export (exportToS3)
-import Ecluse.Config (AppConfig(..), Config(..), loadConfig)
-import Katip (runKatipContextT, initLogEnv, Environment(..))
-
-
-
+import Katip (Environment (..), initLogEnv, runKatipContextT)
 
 -- We just need a basic spec to test bucket creation and export loop
 
@@ -38,10 +35,11 @@ spec = do
                         bucket = "test-osv-bucket"
 
                     env <- AWS.newEnv AWS.discover
-                    let base
-                            = AWS.configureService
+                    let base =
+                            AWS.configureService
                                 ( (AWS.setEndpoint False (encodeUtf8 host) port S3.defaultService)
-                                    { AWS.s3AddressingStyle = AWS.S3AddressingStylePath }
+                                    { AWS.s3AddressingStyle = AWS.S3AddressingStylePath
+                                    }
                                 )
                                 env
                         regioned = base{AWS.region = AWS.Region' "us-east-1"}
@@ -64,10 +62,11 @@ spec = do
                     fullConfig <- case loadConfig [] Nothing of
                         Right c -> pure c
                         Left e -> fail ("Config error: " <> show e)
-                    let appCfg = (configApp fullConfig)
-                            { cfgVulnerabilityDatabaseBucket = Just bucket
-                            , cfgAwsEndpointUrl = Just endpoint
-                            }
+                    let appCfg =
+                            (configApp fullConfig)
+                                { cfgVulnerabilityDatabaseBucket = Just bucket
+                                , cfgAwsEndpointUrl = Just endpoint
+                                }
 
                     -- Run exportToS3 with Katip context
                     logEnv <- liftIO $ initLogEnv "ecluse-test" (Environment "test")
@@ -76,7 +75,7 @@ spec = do
                     -- Verify upload
                     resp <- runResourceT $ AWS.send base (S3.newListObjectsV2 (S3.BucketName bucket))
                     let objects = fromMaybe [] (S3.contents resp)
-                    
+
                     length objects `shouldBe` 1
                     case objects of
                         [obj] -> (S3Object.key obj) `shouldBe` S3.ObjectKey "dummy.sqlite"

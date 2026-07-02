@@ -21,12 +21,12 @@ import Ecluse.Composition (
     memoryQueueBootWarning,
     mirrorQueuePlanWarning,
     parseCodeArtifactHost,
+    parseEndpointUrl,
     planMirrorCredential,
     planMirrorQueue,
     planMounts,
     renderBootError,
     resolveCodeArtifactConfig,
-    parseEndpointUrl,
  )
 import Ecluse.Config (
     AppConfig (..),
