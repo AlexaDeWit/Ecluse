@@ -27,7 +27,7 @@ on:
       serve-max-in-flight:
         description: "Maximum concurrent packument fetches"
         required: false
-        default: "64"
+        default: "32"
   schedule:
     # Nightly, off-peak UTC. A trend a human reads in the morning, never a gate.
     - cron: "17 4 * * *"
@@ -56,7 +56,7 @@ jobs:
       # value can only mis-size a measurement, never inject.
       BENCH_LOAD_DURATION_SECONDS: ${{ github.event.inputs.duration-seconds || '30' }}
       BENCH_LOAD_CONCURRENCY: ${{ github.event.inputs.concurrency || '50' }}
-      BENCH_LOAD_SERVE_MAX_IN_FLIGHT: ${{ github.event.inputs.serve-max-in-flight || '64' }}
+      BENCH_LOAD_SERVE_MAX_IN_FLIGHT: ${{ github.event.inputs.serve-max-in-flight || '32' }}
       BENCH_LOAD_ISOLATE_OHA: "1"
     steps:
       - name: Checkout
