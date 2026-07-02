@@ -1,0 +1,12 @@
+rules:
+  unpinned-uses:
+    ignore:
+      - .github/workflows/bench-load.yml
+      - .github/workflows/bench.yml
+      - .github/workflows/cache-cleanup.yml
+      - .github/workflows/ci.yml
+      - .github/workflows/pages.yml
+      - .github/workflows/perf-acceptance.yml
+      - .github/workflows/release.yml
+      - .github/workflows/scorecard.yml
+      - .github/workflows/security.yml
