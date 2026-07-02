@@ -54,7 +54,6 @@ module Ecluse.Core.Registry.Npm.SelectiveDecode (
     SelectedVersion (..),
     SelectiveError (..),
     selectVersionFromPackument,
-    selectTimeFromPackument,
 ) where
 
 import Data.Aeson (Value)
@@ -123,34 +122,6 @@ selectVersionFromPackument maxDepth version body
         -- malformed body never decodes; the whole-document path renders both as the same
         -- "unobtainable metadata", so neither is distinguished here.
         _ -> Left SelectiveUndecodable
-
-{- | Selectively extract ONLY the @time@ object from a full packument, skipping every
-other token unallocated. Used to cheaply obtain the publish stamps needed for rules
-without allocating a 'Value' for the entire heavy document.
--}
-selectTimeFromPackument :: Int -> ByteString -> Either SelectiveError (Maybe Value)
-selectTimeFromPackument maxDepth body
-    | maxDepth < 1 = Left SelectiveTooDeeplyNested
-    | otherwise = case bsToTokens body of
-        TkRecordOpen rec -> walkTopTime (maxDepth - 1) Nothing rec
-        _ -> Left SelectiveUndecodable
-
-{- Walk the top-level packument record to its end, materialising only the @time@ value. -}
-walkTopTime :: Int -> Maybe Value -> TkRecord ByteString String -> Either SelectiveError (Maybe Value)
-walkTopTime childBudget = go
-  where
-    go found = \case
-        TkRecordEnd leftover
-            | trailingWhitespace leftover -> Right found
-            | otherwise -> Left SelectiveUndecodable
-        TkRecordErr _ -> Left SelectiveUndecodable
-        TkPair key valueToks -> case Key.toText key of
-            "time" -> case toEitherValue valueToks of
-                Left _ -> Left SelectiveUndecodable
-                Right (timeValue, cont)
-                    | withinNestingBudget childBudget timeValue -> go (Just timeValue) cont
-                    | otherwise -> Left SelectiveTooDeeplyNested
-            _ -> skipValue childBudget valueToks >>= go found
 
 -- The starting accumulator: nothing found, no versions counted.
 emptySelection :: SelectedVersion

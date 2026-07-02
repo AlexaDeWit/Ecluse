@@ -1,6 +1,7 @@
 module Ecluse.Server.Pipeline.SharedSpec (spec) where
 
 import Data.Aeson (Value (Object, String))
+import Data.Aeson qualified as Aeson
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Text qualified as T
 import Ecluse.Server.Pipeline.TestSupport
@@ -144,7 +145,7 @@ deeplyNestedBody = encodePackument (nest 32 (String "deep"))
   where
     nest :: Int -> Value -> Value
     nest 0 v = v
-    nest n v = Object (KeyMap.singleton "nested" (nest (n - 1) v))
+    nest n v = nest (n - 1) (Aeson.toJSON [v])
 
 boundsSpec :: Spec
 boundsSpec = describe "response bounds through the request path (security.md invariant 4)" $ do
