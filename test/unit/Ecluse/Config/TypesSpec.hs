@@ -64,16 +64,17 @@ backendSpec = describe "backend selection" $ do
                 `shouldBe` Left "unknown credential provider \"vault\" (expected one of: codeartifact, static, adc)"
 
     describe "MirrorCredentialProvider" $ do
+        let unProvider (MirrorCredentialProvider x) = x
         it "round-trips each backend through parse/render" $ do
-            parseWire "static" `shouldBe` Right (MirrorCredentialProvider StaticCredential)
-            parseWire "codeartifact" `shouldBe` Right (MirrorCredentialProvider CodeArtifactCredential)
-            parseWire "gcp-artifact-registry" `shouldBe` Right (MirrorCredentialProvider AdcCredential)
+            (unProvider <$> parseWire "static") `shouldBe` Right StaticCredential
+            (unProvider <$> parseWire "codeartifact") `shouldBe` Right CodeArtifactCredential
+            (unProvider <$> parseWire "gcp-artifact-registry") `shouldBe` Right AdcCredential
             renderWire (MirrorCredentialProvider StaticCredential) `shouldBe` "static"
             renderWire (MirrorCredentialProvider CodeArtifactCredential) `shouldBe` "codeartifact"
             renderWire (MirrorCredentialProvider AdcCredential) `shouldBe` "gcp-artifact-registry"
-        it "rejects an unknown name, naming the accepted set" $
-            (parseWire "vault" :: Either Text MirrorCredentialProvider)
-                `shouldBe` Left "unknown mirror-target credential provider \"vault\" (expected one of: static, codeartifact, gcp-artifact-registry)"
+        it "rejects an unknown name, naming the accepted set" $ do
+            let res = parseWire "vault" :: Either Text MirrorCredentialProvider
+            (const () <$> res) `shouldBe` Left "unknown mirror-target credential provider \"vault\" (expected one of: static, codeartifact, gcp-artifact-registry)"
 
     describe "parseMirrorCredentialProvider" $ do
         it "parses codeartifact to CodeArtifactCredential" $

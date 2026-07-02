@@ -93,7 +93,7 @@ renderCredentialBackend :: CredentialBackend -> Text
 renderCredentialBackend = renderWire
 
 newtype MirrorCredentialProvider = MirrorCredentialProvider CredentialBackend
-    deriving stock (Eq, Show)
+    deriving stock (Eq)
 
 instance WireVocab MirrorCredentialProvider where
     wireKind = "mirror-target credential provider"
