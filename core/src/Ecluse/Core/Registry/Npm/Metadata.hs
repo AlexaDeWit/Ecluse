@@ -33,6 +33,7 @@ module Ecluse.Core.Registry.Npm.Metadata (
 
     -- * Pure projection
     projectNpmManifest,
+    projectNpmManifestHybrid,
     projectNpmVersion,
 ) where
 
@@ -41,6 +42,8 @@ import Data.Aeson.Types (parseMaybe)
 import Data.Time (UTCTime)
 import UnliftIO.Exception (handle)
 
+import Data.Aeson (Value (Object))
+import Data.Aeson.KeyMap qualified as KeyMap
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (
     PackageDetails,
@@ -66,12 +69,13 @@ import Ecluse.Core.Registry.Npm.Project (
     projectVersionEntry,
  )
 import Ecluse.Core.Registry.Npm.Request (
-    MetadataForm (Full),
+    MetadataForm (Abbreviated, Full),
     noValidators,
  )
 import Ecluse.Core.Registry.Npm.SelectiveDecode (
     SelectedVersion (svName, svTime, svVersion, svVersionCount),
     SelectiveError (SelectiveTooDeeplyNested, SelectiveUndecodable),
+    selectTimeFromPackument,
     selectVersionFromPackument,
  )
 import Ecluse.Core.Security (
@@ -84,6 +88,7 @@ import Ecluse.Core.Security (
  )
 import Ecluse.Core.Telemetry.Span (TracingPort (spanMetadataDecode, spanMetadataFetch))
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
+import UnliftIO.Async (concurrently)
 
 {- | Fetch a package's full packument and project it into @(manifest, raw document)@,
 or the typed 'MetadataError' for why it could not.
@@ -97,9 +102,12 @@ parse-and-policy outcomes the serve path renders distinctly.
 fetchNpmManifest :: TracingPort -> NpmClientConfig -> PackageName -> IO (Either MetadataError (PackageInfo, Value))
 fetchNpmManifest tracing config name =
     handle (\(ResponseBoundExceeded err) -> pure (Left (MetadataBoundExceeded err))) $ do
-        response <- spanMetadataFetch tracing name $ fetchMetadataForm config Full noValidators name
+        (abbrevResp, fullResp) <-
+            concurrently
+                (spanMetadataFetch tracing name $ fetchMetadataForm config Abbreviated noValidators name)
+                (spanMetadataFetch tracing name $ fetchMetadataForm config Full noValidators name)
         spanMetadataDecode tracing name $
-            pure (first (enforceTarballScheme (npmBaseUrl config)) <$> projectNpmManifest (npmLimits config) name (responseBody response))
+            pure (first (enforceTarballScheme (npmBaseUrl config)) <$> projectNpmManifestHybrid (npmLimits config) name (responseBody abbrevResp) (responseBody fullResp))
 
 {- | Project a fetched packument's bytes into @(manifest, raw document)@, applying the
 serve path's response bounds and name validation. Pure and total.
@@ -114,9 +122,24 @@ a self-reported /different/ name is 'MetadataNameMismatch'; a nesting-depth or
 version-count breach is 'MetadataBoundExceeded'.
 -}
 projectNpmManifest :: Limits -> PackageName -> ByteString -> Either MetadataError (PackageInfo, Value)
-projectNpmManifest limits name body = do
-    value <- first (const MetadataUndecodable) (eitherDecodeStrict body)
-    bounded <- first MetadataBoundExceeded (checkNestingDepth limits value)
+projectNpmManifest limits name body = projectNpmManifestHybrid limits name body body
+
+projectNpmManifestHybrid :: Limits -> PackageName -> ByteString -> ByteString -> Either MetadataError (PackageInfo, Value)
+projectNpmManifestHybrid limits name abbrevBody fullBody = do
+    timeValue <- case selectTimeFromPackument (maxNestingDepth limits) fullBody of
+        Left SelectiveUndecodable -> Left MetadataUndecodable
+        Left SelectiveTooDeeplyNested -> Left (MetadataBoundExceeded (TooDeeplyNested (maxNestingDepth limits)))
+        Right found -> Right found
+
+    abbrevValue <- first (const MetadataUndecodable) (eitherDecodeStrict abbrevBody)
+
+    let mergedValue = case timeValue of
+            Just t -> case abbrevValue of
+                Object obj -> Object (KeyMap.insert "time" t obj)
+                _ -> abbrevValue
+            Nothing -> abbrevValue
+
+    bounded <- first MetadataBoundExceeded (checkNestingDepth limits mergedValue)
     info <- case parsePackageInfoFromValue name bounded of
         Left _ -> Left MetadataUndecodable
         Right (NameMismatch reported) -> Left (MetadataNameMismatch reported)

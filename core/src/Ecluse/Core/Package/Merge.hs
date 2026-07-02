@@ -510,9 +510,10 @@ planFrom acc = do
         Set.fromList
             [ Divergence{divVersion = key, divWinning = win, divLosing = lose}
             | (key, cs) <- Map.toList (mergeVersions acc)
-            , let win = candFingerprint (winnerOf cs)
             , let distinct = Set.fromList [candFingerprint c | c <- Set.toList cs]
-            , lose <- Set.toList distinct
+            , Set.size distinct > 1
+            , let win = candFingerprint (winnerOf cs)
+            , lose <- Set.toList (Set.delete win distinct)
             , contradicts win lose
             ]
 
