@@ -7,9 +7,12 @@ import Katip (Severity (InfoS), logFM, ls)
 import Katip.Monadic (runKatipContextT)
 import Network.Wai (Application)
 
+import UnliftIO.Async (concurrently_)
+
 import Ecluse.Boot (BootEnv (..))
 import Ecluse.Config (AppConfig (cfgPort))
 import Ecluse.Log (moduleField)
+import Ecluse.Pilot.Export (runExportLoop)
 import Ecluse.Server (ServerConfig (scDrain, scPort), mkServerConfig, probeApplication, runWarp, serverMiddleware)
 
 {- | The WAI application for the Pilot worker mode.
@@ -30,5 +33,6 @@ runPilot bootEnv = do
 
     runKatipContextT logEnv (moduleField "Ecluse.Pilot") mempty $ do
         logFM InfoS (ls ("Pilot mode starting up on port " <> show port :: String))
-
-    runWarp cfg (pilotApplication cfg)
+        concurrently_
+            (runExportLoop (beTelemetry bootEnv) (beConfigFull bootEnv))
+            (liftIO $ runWarp cfg (pilotApplication cfg))

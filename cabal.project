@@ -25,6 +25,7 @@ source-repository-package
             lib/services/amazonka-sts
             lib/services/amazonka-codeartifact
             lib/services/amazonka-sqs
+            lib/services/amazonka-s3
 
 -- Pin the Hackage index the solver may see, so `cabal build`/`cabal test` (the
 -- dev-shell + CI path) resolve a *reproducible* plan: a package uploaded to

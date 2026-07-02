@@ -57,6 +57,7 @@ module Ecluse.Composition (
     mirrorQueuePlanWarning,
     memoryQueueBootWarning,
     memoryQueueDropWarning,
+    parseEndpointUrl,
 
     -- * Publish-side wiring
     PublishTarget (..),

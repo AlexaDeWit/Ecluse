@@ -26,6 +26,7 @@ import Ecluse.Composition (
     planMounts,
     renderBootError,
     resolveCodeArtifactConfig,
+    parseEndpointUrl,
  )
 import Ecluse.Config (
     AppConfig (..),
@@ -78,6 +79,7 @@ spec = do
     publishWiringSpec
     renderSpec
     parseCodeArtifactHostSpec
+    parseEndpointUrlSpec
 
 -- | A fixed clock for the injected 'pdNow'; never advanced (no timing here).
 fixedNow :: UTCTime
@@ -784,6 +786,17 @@ parseCodeArtifactHostSpec = describe "parseCodeArtifactHost" $ do
     it "parses a valid CodeArtifact host with hyphens in the domain" $ do
         parseCodeArtifactHost "my-company-domain-111122223333.d.codeartifact.eu-central-1.amazonaws.com"
             `shouldBe` Just ("my-company-domain", "111122223333", "eu-central-1")
+
+parseEndpointUrlSpec :: Spec
+parseEndpointUrlSpec = describe "parseEndpointUrl" $ do
+    it "parses http with explicit port" $ do
+        parseEndpointUrl "http://localhost:4566" `shouldBe` Just (False, "localhost", 4566)
+    it "parses https with implicit port" $ do
+        parseEndpointUrl "https://s3.amazonaws.com" `shouldBe` Just (True, "s3.amazonaws.com", 443)
+    it "parses http with implicit port" $ do
+        parseEndpointUrl "http://s3.amazonaws.com" `shouldBe` Just (False, "s3.amazonaws.com", 80)
+    it "rejects malformed URLs" $ do
+        parseEndpointUrl "not-a-url" `shouldBe` Nothing
 
     it "returns Nothing if the host does not contain .d.codeartifact." $ do
         parseCodeArtifactHost "example.com" `shouldBe` Nothing

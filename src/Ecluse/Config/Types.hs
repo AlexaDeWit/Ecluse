@@ -136,6 +136,7 @@ data AppConfig = AppConfig
     , cfgQueueMemoryMaxDepth :: Int
     , cfgAwsRegion :: Maybe Text
     , cfgAwsEndpointUrlSqs :: Maybe Text
+    , cfgAwsEndpointUrl :: Maybe Text
     , cfgGoogleProject :: Maybe Text
     , cfgAuthToken :: Maybe Secret
     , cfgHelpMessage :: Maybe Text
@@ -156,6 +157,7 @@ data AppConfig = AppConfig
     , cfgMinPublicIntegrity :: MinIntegrity
     , cfgMinTrustedIntegrity :: MinTrustedIntegrity
     , cfgOsvDataDir :: FilePath
+    , cfgVulnerabilityDatabaseBucket :: Maybe Text
     }
     deriving stock (Eq, Show)
 
