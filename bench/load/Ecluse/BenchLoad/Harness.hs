@@ -146,7 +146,7 @@ defaultLoadKnobs =
         , lkPayloadBytes = 256 * 1024
         , lkCacheMaxEntries = 3
         , lkWorkingSet = 64
-        , lkServeMaxInFlight = 128
+        , lkServeMaxInFlight = 32
         , lkPublicConnectionsPerHost = 100
         , lkPrivateConnectionsPerHost = 100
         }
