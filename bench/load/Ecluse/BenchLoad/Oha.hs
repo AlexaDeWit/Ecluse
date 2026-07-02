@@ -23,7 +23,6 @@ module Ecluse.BenchLoad.Oha (
 import Data.Aeson (FromJSON (parseJSON), eitherDecode, withObject, (.!=), (.:), (.:?))
 import Data.Map.Strict qualified as Map
 import GHC.IO.Handle (hClose)
-import System.Environment (lookupEnv)
 import System.Process.Typed (proc, readProcessStdout_)
 import UnliftIO.Temporary (withSystemTempFile)
 

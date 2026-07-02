@@ -83,6 +83,7 @@ jobs:
       # fails only on a genuine harness failure (a non-zero exit).
       - name: Run load tests
         run: |
+          set -eo pipefail
           # Isolate the load generator from the server: ubuntu-latest has 4 cores. oha is
           # pinned to core 0 by the harness; we restrict GHC to 3 capability threads so they
           # neatly occupy the remaining 3 cores without self-contention.
