@@ -13,8 +13,9 @@ contain only the current task contract, applicable invariants, and volatile evid
 
 ## Procedure
 
-1. **Read the entry point:** read `README.md`. `AGENTS.md` is already injected by Codex at session
-   startup; do not reread it unless an exact passage is disputed.
+1. **Read the entry point:** read `README.md`. Agent harnesses load `AGENTS.md` (directly or
+   through their native context file) at session startup; do not reread it unless an exact
+   passage is disputed.
 2. **Classify the task:** implementation, review, architecture, operations/configuration,
    documentation, release/CI, or orchestration. Identify the authoritative task contract:
    the user request, issue, PR, or one `planning/slices/SNN-*.md` file.

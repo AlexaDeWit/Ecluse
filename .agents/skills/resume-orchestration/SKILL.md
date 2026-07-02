@@ -49,6 +49,6 @@ The canonical history-compaction instruction is `.agents/compact-prompt.md`. Com
 boundary while enough context remains to record decisions accurately. The checkpoint must preserve
 volatile state and rationale, not duplicate stable repository guidance.
 
-When invoking `/compact` manually, request that Codex follow `.agents/compact-prompt.md`. The
-result must end by directing the resumed thread to this skill so it verifies live state before
-acting.
+When invoking your agent's compaction command manually (`/compact` or equivalent), request that
+it follow `.agents/compact-prompt.md`. The result must end by directing the resumed thread to
+this skill so it verifies live state before acting.
