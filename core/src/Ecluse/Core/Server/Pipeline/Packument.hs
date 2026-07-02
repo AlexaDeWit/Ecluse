@@ -726,9 +726,10 @@ replayPlan deps bySource plan base =
     survivingVersions :: KeyMap Value
     survivingVersions =
         KeyMap.fromList
-            [ (Key.fromText version, object)
+            [ (k, object)
             | (version, sid) <- Map.toList (mpSurvivors plan)
-            , Just object <- [versionObjectFrom sid version]
+            , let k = Key.fromText version
+            , Just object <- [versionObjectFrom sid k]
             ]
 
     -- Each source's raw @versions@ object, extracted once per source.
@@ -739,9 +740,9 @@ replayPlan deps bySource plan base =
     versionsBySource :: Map SourceId (KeyMap Value)
     versionsBySource = Map.mapMaybe ((^? key "versions" . _Object) . srcValue) bySource
 
-    versionObjectFrom :: SourceId -> Text -> Maybe Value
-    versionObjectFrom sid version =
-        Map.lookup sid versionsBySource >>= KeyMap.lookup (Key.fromText version)
+    versionObjectFrom :: SourceId -> Key.Key -> Maybe Value
+    versionObjectFrom sid k =
+        Map.lookup sid versionsBySource >>= KeyMap.lookup k
 
     -- @dist-tags@ rebuilt from the plan's reconciled tags (each a rendered version
     -- string). The plan has already resolved @latest@ and dropped absent-target
