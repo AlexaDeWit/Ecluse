@@ -111,6 +111,17 @@ docs/  architecture and design documents
 - Every commit must be Conventional-Commit formatted, GPG-signed, DCO-signed off as the human
   author, and disclose non-trivial AI help with `Assisted-by:` rather than `Co-Authored-By:`.
 
+## Skills
+
+- Reusable procedures live in [`.agents/skills/`](.agents/skills/), one directory per skill with a
+  `SKILL.md`, following the [Agent Skills](https://agentskills.io/specification) open standard.
+  Codex, Gemini CLI, and GitHub Copilot discover this location natively.
+- Claude Code discovers project skills only from `.claude/skills/`, so each skill is bridged there
+  by a tracked relative symlink. When adding, renaming, or removing a skill, update the matching
+  symlink in the same commit.
+- `CLAUDE.md` (an `@AGENTS.md` import) and `.gemini/settings.json` (`context.fileName`) exist only
+  to point those harnesses at this file. Keep shared guidance here, never in per-agent files.
+
 ## Context discipline
 
 - Keep stable rules in files and volatile decisions in the current task or compaction summary.

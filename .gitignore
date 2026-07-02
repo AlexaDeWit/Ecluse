@@ -34,4 +34,7 @@ scratchpad/
 .agents/settings.local.json
 .agents/settings.json
 .agents/worktrees/
+.claude/settings.local.json
+.claude/settings.json
+.claude/worktrees/
 .task/
