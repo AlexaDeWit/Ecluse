@@ -163,6 +163,7 @@ npmFixture =
             , cacheHitScenario
             , cacheFitsScenario
             , cacheEvictsScenario
+            , tarballScenario
             , workerScenario
             ]
         }
@@ -236,6 +237,15 @@ cacheEvictsScenario =
              in withNpmProxy knobs longCacheTtl (lkCacheMaxEntries knobs) (uniformMix pkgs) (k . DriveHttpUrls)
         }
 
+tarballScenario :: Scenario
+tarballScenario =
+    Scenario
+        { scenarioName = "tarball-hot-path"
+        , scenarioDescription =
+            "Tarball proxy hot path: GET /npm/{pkg}/-/{pkg}-9999.0.2.tgz fans to the packument first to read the dist.tarball URL (instantly served from the metadata cache), then streams the tarball from the artifact upstream."
+        , scenarioBoot = \knobs k -> withNpmProxy knobs longCacheTtl (cacheMaxEntries defaultCacheConfig) tarballMix (k . DriveHttpUrls)
+        }
+
 -- A cache TTL comfortably longer than any single scenario's warm-up plus measured
 -- window, so a warmed public entry is evicted (when the bound is exceeded) rather than
 -- expiring, and the cache-fits baseline stays resident for the whole run.
@@ -252,23 +262,25 @@ to the body. All sockets are loopback @warp@ stubs torn down on exit.
 withNpmProxy :: LoadKnobs -> NominalDiffTime -> Int -> (Int -> [Text]) -> ([Text] -> IO a) -> IO a
 withNpmProxy knobs ttl maxEntries mkMix body = do
     bodies <- loadServeBodies
-    testWithApplication (pure (privateOverlayStub latency)) $ \privatePort ->
-        testWithApplication (pure (corpusPublicStub latency bodies)) $ \publicPort -> do
-            publicManager <- newManager (connectionPoolSettings (lkPublicConnectionsPerHost knobs) defaultManagerSettings)
-            privateManager <- newManager (connectionPoolSettings (lkPrivateConnectionsPerHost knobs) defaultManagerSettings)
-            admission <- newServeAdmission (lkServeMaxInFlight knobs)
-            cache <- newMetadataCache defaultCacheConfig{cacheTtl = ttl, cacheMaxEntries = max 1 maxEntries}
-            logEnv <- benchLogEnv
-            heartbeat <- newWorkerHeartbeat
-            queue <- newInMemoryQueue
-            -- The same plain manager serves the private and public legs; the serve path
-            -- never touches the publish-side registry handle, so it is the refusing
-            -- placeholder.
-            env <- newEnvWithAdmission admission refusingRegistry queue publicManager privateManager cache logEnv telemetryDisabled heartbeat
-            deps <- npmDeps privatePort publicPort
-            let cfg = mkServerConfig [npmMount deps]
-            testWithApplication (pure (application cfg env)) $ \proxyPort ->
-                body (mkMix proxyPort)
+    let bytes = artifactBytes (lkPayloadBytes knobs)
+    testWithApplication (pure (stubUpstream octetContentType latency bytes)) $ \artPort ->
+        testWithApplication (pure (privateOverlayStub artPort latency)) $ \privatePort ->
+            testWithApplication (pure (corpusPublicStub latency bodies)) $ \publicPort -> do
+                publicManager <- newManager (connectionPoolSettings (lkPublicConnectionsPerHost knobs) defaultManagerSettings)
+                privateManager <- newManager (connectionPoolSettings (lkPrivateConnectionsPerHost knobs) defaultManagerSettings)
+                admission <- newServeAdmission (lkServeMaxInFlight knobs)
+                cache <- newMetadataCache defaultCacheConfig{cacheTtl = ttl, cacheMaxEntries = max 1 maxEntries}
+                logEnv <- benchLogEnv
+                heartbeat <- newWorkerHeartbeat
+                queue <- newInMemoryQueue
+                -- The same plain manager serves the private and public legs; the serve path
+                -- never touches the publish-side registry handle, so it is the refusing
+                -- placeholder.
+                env <- newEnvWithAdmission admission refusingRegistry queue publicManager privateManager cache logEnv telemetryDisabled heartbeat
+                deps <- npmDeps privatePort publicPort
+                let cfg = mkServerConfig [npmMount deps]
+                testWithApplication (pure (application cfg env)) $ \proxyPort ->
+                    body (mkMix proxyPort)
   where
     latency = lkUpstreamLatencyMicros knobs
 
@@ -288,6 +300,11 @@ serveMix proxyPort =
 -- one is requested again and re-derived).
 uniformMix :: [CorpusPackage] -> Int -> [Text]
 uniformMix pkgs proxyPort = map (packageUrl proxyPort . cpName) pkgs
+
+-- The tarball serve mix: each corpus package's tarball URL repeated by its serve weight.
+tarballMix :: Int -> [Text]
+tarballMix proxyPort =
+    concatMap (\cp -> replicate (cpWeight cp) (localhost proxyPort <> "/npm/" <> cpName cp <> "/-/" <> cpName cp <> "-9999.0.2.tgz")) serveCorpus
 
 -- The cache-eviction working set: the leading 'lkWorkingSet' large corpus packages (in
 -- 'serveCorpus' order, heaviest first), so a bound below its length forces eviction.
@@ -485,11 +502,11 @@ corpusPublicStub latency bodies request respond = do
 -- overlay of disjoint versions named for the requested package, so the merge serves a
 -- genuine cross-upstream union for every package in the mix rather than the public set
 -- alone.
-privateOverlayStub :: Int -> Application
-privateOverlayStub latency request respond = do
+privateOverlayStub :: Int -> Int -> Application
+privateOverlayStub artPort latency request respond = do
     when (latency > 0) (threadDelay latency)
     respond $ case requestedPackage request of
-        Just name -> responseLBS status200 [(hContentType, jsonContentType)] (encode (privateOverlay name))
+        Just name -> responseLBS status200 [(hContentType, jsonContentType)] (encode (privateOverlay artPort name))
         Nothing -> responseLBS status404 [(hContentType, jsonContentType)] "{}"
 
 -- The package name a packument GET addresses: the request path segments rejoined with
@@ -546,12 +563,12 @@ loadServeBodies = Map.fromList <$> traverse load serveCorpus
 from any real version, named for that package and old enough to clear the quarantine, so
 the merge serves a genuine union for every package in the mix.
 -}
-privateOverlay :: Text -> Value
-privateOverlay name =
+privateOverlay :: Int -> Text -> Value
+privateOverlay artPort name =
     object
         [ "name" .= name
         , "dist-tags" .= object ["latest" .= ("9999.0.2" :: Text)]
-        , "versions" .= object [Key.fromText v .= overlayVersionObject name v | v <- overlayVersions]
+        , "versions" .= object [Key.fromText v .= overlayVersionObject artPort name v | v <- overlayVersions]
         , "time" .= object (("created" .= publishedLongAgo) : [Key.fromText v .= publishedLongAgo | v <- overlayVersions])
         , "_id" .= name
         ]
@@ -561,14 +578,14 @@ privateOverlay name =
 
 -- One overlay version manifest, named for the package, with a rewritable dist.tarball and
 -- floor-meeting integrity digests so the version is admitted and the serve-time rewrite runs.
-overlayVersionObject :: Text -> Text -> Value
-overlayVersionObject name version =
+overlayVersionObject :: Int -> Text -> Text -> Value
+overlayVersionObject artPort name version =
     object
         [ "name" .= name
         , "version" .= version
         , "dist"
             .= object
-                [ "tarball" .= ("https://registry.bench/" <> name <> "/-/" <> name <> "-" <> version <> ".tgz")
+                [ "tarball" .= (localhost artPort <> "/" <> name <> "/-/" <> name <> "-" <> version <> ".tgz")
                 , "integrity" .= validSha512Sri
                 , "shasum" .= validSha1
                 ]
