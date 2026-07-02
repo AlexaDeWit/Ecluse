@@ -73,6 +73,7 @@ docs/  architecture and design documents
 - Write prose, comments, commits, and PRs in Canadian English, including `behaviour`, `colour`,
   `licence` as a noun, and `-ise` endings. Do not rewrite a human contributor's spelling.
 - Repository diagrams are Mermaid, never ASCII art.
+- **Agent Workspace Hygiene:** Do not litter the repository with temporary scratch scripts (e.g., `inspect.hs`, `test-ministack.sh`) or blindly run `git add -A`. Always place temporary working files in `scratchpad/` or `ai-notepad/`, and review your staged files carefully before committing.
 
 ## Build and tooling
 
