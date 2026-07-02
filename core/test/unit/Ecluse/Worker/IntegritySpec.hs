@@ -1,4 +1,4 @@
-{-# OPTIONS_GHC -Wno-unused-top-binds -Wno-orphans #-}
+{-# OPTIONS_GHC -Wno-orphans #-}
 
 module Ecluse.Worker.IntegritySpec (spec) where
 
