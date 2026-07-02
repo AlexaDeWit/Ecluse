@@ -146,9 +146,9 @@ defaultLoadKnobs =
         , lkPayloadBytes = 256 * 1024
         , lkCacheMaxEntries = 3
         , lkWorkingSet = 64
-        , lkServeMaxInFlight = 64
-        , lkPublicConnectionsPerHost = 10
-        , lkPrivateConnectionsPerHost = 16
+        , lkServeMaxInFlight = 128
+        , lkPublicConnectionsPerHost = 100
+        , lkPrivateConnectionsPerHost = 100
         }
 
 {- | Read the load knobs from the environment, each falling back to its
