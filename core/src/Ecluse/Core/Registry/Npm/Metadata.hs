@@ -32,15 +32,17 @@ module Ecluse.Core.Registry.Npm.Metadata (
     fetchNpmVersion,
 
     -- * Pure projection
+    projectNpmManifest,
     projectNpmManifestHybrid,
     projectNpmVersion,
 ) where
 
-import Data.Aeson (Value, eitherDecodeStrict, parseJSON)
+import Data.Aeson (Value (Object), eitherDecodeStrict, parseJSON)
 import Data.Aeson.Types (parseMaybe)
 import Data.Time (UTCTime)
 import UnliftIO.Exception (handle)
 
+import Data.Aeson.KeyMap qualified as KeyMap
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (
     PackageDetails,
@@ -57,9 +59,6 @@ import Ecluse.Core.Registry.Npm (
     ResponseBoundExceeded (ResponseBoundExceeded),
     fetchMetadataForm,
  )
-import Data.Aeson (Value(Object))
-import Data.Aeson.KeyMap qualified as KeyMap
-import UnliftIO.Async (concurrently)
 import Ecluse.Core.Registry.Npm.Project (
     Projection (NameMismatch, Projected),
     enforceTarballScheme,
@@ -69,14 +68,14 @@ import Ecluse.Core.Registry.Npm.Project (
     projectVersionEntry,
  )
 import Ecluse.Core.Registry.Npm.Request (
-    MetadataForm (Full, Abbreviated),
+    MetadataForm (Abbreviated, Full),
     noValidators,
  )
 import Ecluse.Core.Registry.Npm.SelectiveDecode (
     SelectedVersion (svName, svTime, svVersion, svVersionCount),
     SelectiveError (SelectiveTooDeeplyNested, SelectiveUndecodable),
-    selectVersionFromPackument,
     selectTimeFromPackument,
+    selectVersionFromPackument,
  )
 import Ecluse.Core.Security (
     LimitError (TooDeeplyNested, TooManyVersions),
@@ -88,6 +87,7 @@ import Ecluse.Core.Security (
  )
 import Ecluse.Core.Telemetry.Span (TracingPort (spanMetadataDecode, spanMetadataFetch))
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
+import UnliftIO.Async (concurrently)
 
 {- | Fetch a package's full packument and project it into @(manifest, raw document)@,
 or the typed 'MetadataError' for why it could not.
@@ -101,9 +101,10 @@ parse-and-policy outcomes the serve path renders distinctly.
 fetchNpmManifest :: TracingPort -> NpmClientConfig -> PackageName -> IO (Either MetadataError (PackageInfo, Value))
 fetchNpmManifest tracing config name =
     handle (\(ResponseBoundExceeded err) -> pure (Left (MetadataBoundExceeded err))) $ do
-        (abbrevResp, fullResp) <- concurrently
-            (spanMetadataFetch tracing name $ fetchMetadataForm config Abbreviated noValidators name)
-            (spanMetadataFetch tracing name $ fetchMetadataForm config Full noValidators name)
+        (abbrevResp, fullResp) <-
+            concurrently
+                (spanMetadataFetch tracing name $ fetchMetadataForm config Abbreviated noValidators name)
+                (spanMetadataFetch tracing name $ fetchMetadataForm config Full noValidators name)
         spanMetadataDecode tracing name $
             pure (first (enforceTarballScheme (npmBaseUrl config)) <$> projectNpmManifestHybrid (npmLimits config) name (responseBody abbrevResp) (responseBody fullResp))
 
@@ -127,7 +128,7 @@ projectNpmManifestHybrid limits name abbrevBody fullBody = do
         Right found -> Right found
 
     abbrevValue <- first (const MetadataUndecodable) (eitherDecodeStrict abbrevBody)
-    
+
     let mergedValue = case timeValue of
             Just t -> case abbrevValue of
                 Object obj -> Object (KeyMap.insert "time" t obj)
@@ -229,3 +230,17 @@ selectiveError :: Limits -> SelectiveError -> MetadataError
 selectiveError limits = \case
     SelectiveUndecodable -> MetadataUndecodable
     SelectiveTooDeeplyNested -> MetadataBoundExceeded (TooDeeplyNested (maxNestingDepth limits))
+
+{- | Project a fetched packument's bytes into @(manifest, raw document)@.
+This is the original single-document projection.
+-}
+projectNpmManifest :: Limits -> PackageName -> ByteString -> Either MetadataError (PackageInfo, Value)
+projectNpmManifest limits name body = do
+    value <- first (const MetadataUndecodable) (eitherDecodeStrict body)
+    bounded <- first MetadataBoundExceeded (checkNestingDepth limits value)
+    info <- case parsePackageInfoFromValue name bounded of
+        Left _ -> Left MetadataUndecodable
+        Right (NameMismatch reported) -> Left (MetadataNameMismatch reported)
+        Right (Projected extracted) -> Right extracted
+    _ <- first MetadataBoundExceeded (checkVersionCount limits info)
+    pure (info, value)

@@ -254,8 +254,8 @@ credentialSpec = describe "credential authority (forward-to-private, strip-befor
             _ <- getThing (Just "client-secret-token") app
             privAuth <- seenAuth privateUp
             pubAuth <- seenAuth publicUp
-            privAuth `shouldBe` [Just "Bearer client-secret-token"]
-            pubAuth `shouldBe` [Nothing]
+            privAuth `shouldBe` [Just "Bearer client-secret-token", Just "Bearer client-secret-token"]
+            pubAuth `shouldBe` [Nothing, Nothing]
 
 privateAuthoritySpec :: Spec
 privateAuthoritySpec = describe "private origin is the per-client authority (not cached across clients)" $
@@ -269,8 +269,8 @@ privateAuthoritySpec = describe "private origin is the per-client authority (not
             _ <- getThing (Just "tokenB") app
             privAuth <- seenAuth privateUp
             pubAuth <- seenAuth publicUp
-            privAuth `shouldBe` [Just "Bearer tokenA", Just "Bearer tokenB"]
-            pubAuth `shouldBe` [Nothing]
+            privAuth `shouldBe` [Just "Bearer tokenA", Just "Bearer tokenA", Just "Bearer tokenB", Just "Bearer tokenB"]
+            pubAuth `shouldBe` [Nothing, Nothing]
 
 partialAvailabilitySpec :: Spec
 partialAvailabilitySpec = describe "partial-upstream availability" $ do
@@ -357,7 +357,7 @@ cacheSpec = describe "metadata cache (read-through coherence)" $ do
             secondResp <- getThing Nothing app
             status secondResp `shouldBe` 200
             servedVersions secondResp `shouldBe` ["1.0.0"]
-            seenAuth publicUp `shouldReturn` [Nothing]
+            seenAuth publicUp `shouldReturn` [Nothing, Nothing]
 
     it "serves a coherent pair: the cached typed decision matches the cached bytes" $ do
         privateUp <- failingUpstream

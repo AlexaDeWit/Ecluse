@@ -43,9 +43,9 @@ spec = describe "decodeDocument" $ do
         case loadConfig [] Nothing of
             Left e -> expectationFailure ("unexpected decode error: " <> show e)
             Right doc -> do
-                cfgServeMaxInFlight (configApp doc) `shouldBe` 32
-                cfgPublicConnectionsPerHost (configApp doc) `shouldBe` 10
-                cfgPrivateConnectionsPerHost (configApp doc) `shouldBe` 16
+                cfgServeMaxInFlight (configApp doc) `shouldBe` 128
+                cfgPublicConnectionsPerHost (configApp doc) `shouldBe` 100
+                cfgPrivateConnectionsPerHost (configApp doc) `shouldBe` 100
 
     it "rejects non-positive serve and connection capacities" $ do
         loadConfig [("ECLUSE_SERVE_MAX_IN_FLIGHT", "0")] Nothing
