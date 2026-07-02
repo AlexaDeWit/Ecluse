@@ -290,7 +290,16 @@ executable ecluse
   -- The threaded runtime is required: with telemetry enabled the OpenTelemetry SDK
   -- runs a batch span processor on a background thread, which aborts under the
   -- non-threaded RTS. -N lets the server and worker use every core.
-  ghc-options:    -threaded -rtsopts "-with-rtsopts=-N"
+  --
+  -- -A64m -n4m tune the GC for the serve path's allocation profile: assembling and
+  -- re-serialising a many-version packument allocates tens of MB per request, and
+  -- the default 4 MB allocation area makes the process collect hundreds of times a
+  -- second under load (GC was ~half the wall time in the load benchmarks). A 64 MB
+  -- per-capability allocation area divided into 4 MB chunks (so capabilities share
+  -- it instead of stranding idle nurseries) cuts the collection count by an order
+  -- of magnitude. Operators can override at run time, e.g.
+  -- `ecluse +RTS -A16m -RTS`, since -rtsopts is set; see USAGE.md.
+  ghc-options:    -threaded -rtsopts "-with-rtsopts=-N -A64m -n4m"
   main-is:        Main.hs
   hs-source-dirs: app
   build-depends:  ecluse
@@ -734,7 +743,10 @@ executable bench-load
   import:          shared
   main-is:         Main.hs
   hs-source-dirs:  bench/load
-  ghc-options:     -threaded -rtsopts "-with-rtsopts=-T -N"
+  -- Mirrors the shipped server's RTS tuning (-A64m -n4m; see `executable ecluse`)
+  -- so the load benchmarks measure the runtime posture the proxy actually ships
+  -- with; -T additionally exposes the RTS stats the harness reports.
+  ghc-options:     -threaded -rtsopts "-with-rtsopts=-T -N -A64m -n4m"
   other-modules:
     Ecluse.BenchLoad.Error
     Ecluse.BenchLoad.Harness
