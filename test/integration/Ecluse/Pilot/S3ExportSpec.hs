@@ -78,5 +78,5 @@ spec = do
 
                     length objects `shouldBe` 1
                     case objects of
-                        [obj] -> (S3Object.key obj) `shouldBe` S3.ObjectKey "dummy.sqlite"
+                        [obj] -> S3Object.key obj `shouldBe` S3.ObjectKey "dummy.sqlite"
                         _ -> fail ("Expected 1 object, got " <> show (length objects))

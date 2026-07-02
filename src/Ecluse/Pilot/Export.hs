@@ -8,15 +8,15 @@ module Ecluse.Pilot.Export (
 
 import Conduit (MonadResource, runResourceT)
 import Control.Monad.Catch (MonadThrow)
+import System.FilePath (takeFileName)
 import UnliftIO (MonadUnliftIO)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (catchAny)
-import System.FilePath (takeFileName)
 
 import Katip (KatipContext, Severity (..), logFM, ls)
 
-import Ecluse.Config (AppConfig (..), Config (..))
 import Ecluse.Composition (parseEndpointUrl)
+import Ecluse.Config (AppConfig (..), Config (..))
 import Ecluse.Pilot.Osv.Compile (compileOsvToSqlite)
 import Ecluse.Telemetry (Telemetry)
 
@@ -46,15 +46,15 @@ exportNpm telemetry appCfg bucketName = do
 exportToS3 :: (MonadResource m, MonadThrow m, KatipContext m) => AppConfig -> Text -> FilePath -> m ()
 exportToS3 appCfg bucketName dbPath = do
     logFM InfoS (ls ("Uploading " <> toText dbPath <> " to S3 bucket " <> bucketName))
-    
+
     env <- liftIO $ buildS3Env appCfg
     let key = S3.ObjectKey (toText (takeFileName dbPath))
-    
+
     body <- liftIO $ AWS.chunkedFile 1048576 dbPath
     let req = S3.newPutObject (S3.BucketName bucketName) key body
-    
+
     void $ AWS.send env req
-    
+
     logFM InfoS "S3 upload complete"
 
 buildS3Env :: AppConfig -> IO AWS.Env
@@ -65,7 +65,8 @@ buildS3Env appCfg = do
             Just (secure, host, port) ->
                 AWS.configureService
                     ( (AWS.setEndpoint secure (encodeUtf8 host) port S3.defaultService)
-                        { AWS.s3AddressingStyle = AWS.S3AddressingStylePath }
+                        { AWS.s3AddressingStyle = AWS.S3AddressingStylePath
+                        }
                     )
                     env
             Nothing -> env
