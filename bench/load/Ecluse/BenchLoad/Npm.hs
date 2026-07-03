@@ -509,8 +509,9 @@ privateOverlayStub artPort latency bytes request respond = do
     let mPkg = requestedPackage request
     case mPkg of
         -- Artifact request: /{pkg}/-/{file}
-        Just pkg | "/-/" `T.isInfixOf` pkg ->
-            respond (responseLBS status200 [(hContentType, octetContentType)] bytes)
+        Just pkg
+            | "/-/" `T.isInfixOf` pkg ->
+                respond (responseLBS status200 [(hContentType, octetContentType)] bytes)
         -- Packument request: /{pkg}
         Just pkg ->
             respond (responseLBS status200 [(hContentType, jsonContentType)] (encode (privateOverlay artPort pkg)))
