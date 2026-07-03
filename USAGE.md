@@ -173,7 +173,7 @@ operator reference. **Keep the two in sync** when either changes.
 | `ECLUSE_CVE_SYNC_INTERVAL` | Depends | Pilot only, default `3600` | How often the Écluse Pilot singleton refreshes the OSV database from upstream. |
 | `ECLUSE_OSV_DATA_DIR` | No | `data/osv` | Directory path for the Pilot OSV advisory database. |
 | `ECLUSE_SHUTDOWN_DRAIN_TIMEOUT` | No | `30` | Seconds the graceful shutdown waits for in-flight requests and in-progress artifact streams to finish before the process exits. Positive integer. |
-| `ECLUSE_CORES` | No | derived | Cores (GHC capabilities) the process claims. Unset ⇒ derived from the container's cgroup CPU quota (rounded up, clamped to the visible processors); with no cgroup limit either, the runtime's own detection stands. The boot log prints the decision and its provenance. Positive integer. See [Operating Écluse → Runtime sizing](#operating-écluse). |
+| `ECLUSE_CORES` | No | derived | Cores (GHC capabilities) the process claims. Unset ⇒ derived from the container's cgroup CPU quota (floored, at least 1, clamped to the visible processors); with no cgroup limit either, the runtime's own detection stands. Give the container **whole cores**; see the runtime sizing note. The boot log prints the decision and its provenance. Positive integer. See [Operating Écluse → Runtime sizing](#operating-écluse). |
 | `ECLUSE_MAX_HEAP_BYTES` | No | derived | Heap ceiling in bytes, enforced by the GHC runtime (a breach is a clean heap-overflow error rather than a kernel OOM kill). Unset ⇒ derived from the cgroup memory limit less the nursery budget and 10% slack; with no cgroup limit, unbounded unless your own `GHCRTS -M` says otherwise. Enforcing a ceiling re-executes the binary once, in place (same PID). Positive integer. |
 | `ECLUSE_SERVE_MAX_IN_FLIGHT` | No | computed | Process-wide cap on concurrent metadata materialisation: whole packument requests and the public-metadata gate reached by a tarball miss. **Unset, the capacity is computed at boot from the resolved core count** (`max(8, 10 x cores)`, sized from the serve path's measured saturation point: a request holds its admission slot across every upstream leg plus GC and scheduling, not just one round trip) and logged with its provenance; set it only to override that. Work beyond the cap is rejected immediately with `503 Service Unavailable` and `Retry-After: 1`; it is not placed in an application queue. Trusted private tarball hits stream outside the cap, as do health probes and cheap local routes. Positive integer. **Note**: operators deploying Écluse within an orchestration mesh (e.g., Istio) can configure the mesh to automatically manage retries upon receiving this 503 response. **Alerting note**: 503s returned with a `Retry-After: 1` header are a normal operational response indicating safe, intentional backpressure. Operational alerts on 503s should strictly exclude responses with this header, as true proxy or upstream failures (e.g., the public npm registry is down) will return a 503 *without* the `Retry-After: 1` header. |
 | `ECLUSE_PUBLIC_CONNECTIONS_PER_HOST` | No | `10` | Maximum concurrent pooled connections to each public upstream host. Public metadata misses are single-flight-coalesced, so the default keeps the upstream library's conservative per-host bound. Positive integer. (The **private** upstream pool has no knob: it always equals the effective `ECLUSE_SERVE_MAX_IN_FLIGHT`, because private reads are per-request and never coalesced, so demand on that pool is exactly the admission capacity.) |
@@ -445,11 +445,22 @@ serve such a source, point it at the **private** (trusted) upstream slot, not th
   1. **Explicit configuration wins**: `ECLUSE_CORES` (or `cores` in the config document)
      and `ECLUSE_MAX_HEAP_BYTES` (`maxHeapBytes`), both positive integers.
   2. **Omitted values are derived from the container's cgroup (v2)**: the CPU quota,
-     rounded up and clamped to the visible processors, and the memory limit less the
-     nursery budget (cores x allocation area) less 10% slack, floored at half the limit.
+     floored (at least 1) and clamped to the visible processors, and the memory limit
+     less the nursery budget (cores x allocation area) less 10% slack, floored at half
+     the limit.
   3. **No limit found either way**: whatever the GHC runtime resolved (its baked
      defaults plus any `GHCRTS` you set) stands, and the log says so. A `GHCRTS` heap
      ceiling you set yourself is never overridden by derivation.
+
+  **Give Écluse whole cores.** A fractional CPU limit (say 3.5) leaves no good option:
+  claiming 4 capabilities borrows above the budget, and because garbage collection is
+  stop-the-world across **all** capabilities at once, that burst is exactly what
+  overruns a CFS quota, freezing the process mid-pause and stretching a ~10 ms pause
+  toward the 100 ms period for every in-flight request. Écluse therefore floors the
+  derived count (3.5 ⇒ 3 capabilities), which never self-throttles but strands the
+  fractional entitlement. An integer limit avoids both losses, and pairing it with
+  `requests = limits` (and, where the cluster offers it, the static CPU manager's
+  exclusive cores) removes throttling structurally rather than statistically.
 
   This exists because a container CPU **limit** is a cgroup quota that does not shrink
   the processor count the runtime sees: without it, a 2-CPU pod on a 32-core node claims
