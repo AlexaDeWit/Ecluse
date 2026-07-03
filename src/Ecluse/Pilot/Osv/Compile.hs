@@ -7,6 +7,8 @@ module Ecluse.Pilot.Osv.Compile (
 import Conduit
 import Control.Monad.Catch (MonadMask)
 import Data.Conduit.List qualified as CL
+import Data.Time (getCurrentTime)
+import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.Version (showVersion)
 import Database.SQLite.Simple
 import Katip (KatipContext, Severity (..), logFM, ls)
@@ -16,14 +18,19 @@ import System.FilePath ((</>))
 import System.IO.Error (catchIOError)
 import UnliftIO.Exception (bracket)
 
+import Ecluse.Osv.Schema (MetaKey (..), osvDbFileName, osvSchemaEpoch, renderMetaKey)
 import Ecluse.Pilot.Osv (ExtractedOsv (..))
 import Ecluse.Pilot.Osv.Retry (defaultOsvRetryPolicy, withOsvRetry)
 import Ecluse.Pilot.Osv.Stream (streamOsvUrl)
 import Ecluse.Telemetry (Telemetry)
 
+{- | Compile an ecosystem's OSV advisory export into the SQLite artifact and
+return its path. The artifact's name, epoch stamp, and @meta@ table follow the
+contract in "Ecluse.Osv.Schema".
+-}
 compileOsvToSqlite :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => Telemetry -> FilePath -> Text -> String -> m FilePath
 compileOsvToSqlite telemetry outDir ecosystem urlStr = do
-    let dbFile = outDir </> (toString ecosystem <> "-v" <> showVersion version <> "-osv.db")
+    let dbFile = outDir </> osvDbFileName ecosystem
     logFM InfoS (ls ("Compiling OSV data for " <> ecosystem <> " to " <> toText dbFile))
 
     -- Ensure clean state
@@ -48,6 +55,9 @@ compileOsvToSqlite telemetry outDir ecosystem urlStr = do
                     .| CL.chunksOf 2000
                     .| sinkSqlite conn
 
+        rowCount <- liftIO $ writeMeta conn ecosystem urlStr
+        logFM InfoS (ls ("Compiled " <> show rowCount <> " advisory ranges for " <> ecosystem))
+
     pure dbFile
 
 initSchema :: Connection -> IO ()
@@ -64,6 +74,34 @@ initSchema conn = do
         \  PRIMARY KEY (package_name, cve_id, introduced_version, fixed_version)\
         \)"
     execute_ conn "CREATE INDEX idx_package_name ON package_vulnerability_ranges(package_name)"
+    execute_
+        conn
+        "CREATE TABLE meta (\
+        \  key TEXT NOT NULL PRIMARY KEY,\
+        \  value TEXT NOT NULL\
+        \)"
+    execute_ conn (fromString ("PRAGMA user_version = " <> show osvSchemaEpoch))
+
+-- Written once, after the stream has completed: the row count is only
+-- meaningful for a complete artifact, and the populated flags stay 0 until a
+-- build actually emits the optional columns.
+writeMeta :: Connection -> Text -> String -> IO Int
+writeMeta conn ecosystem urlStr = do
+    now <- getCurrentTime
+    counted <- query_ conn "SELECT COUNT(*) FROM package_vulnerability_ranges" :: IO [Only Int]
+    let rowCount = maybe 0 fromOnly (listToMaybe counted)
+    executeMany
+        conn
+        "INSERT INTO meta (key, value) VALUES (?, ?)"
+        [ (renderMetaKey MetaPilotVersion, toText (showVersion version))
+        , (renderMetaKey MetaEcosystem, ecosystem)
+        , (renderMetaKey MetaBuiltAt, toText (iso8601Show now))
+        , (renderMetaKey MetaSourceUrl, toText urlStr)
+        , (renderMetaKey MetaRowCount, show rowCount)
+        , (renderMetaKey MetaSeverityPopulated, "0")
+        , (renderMetaKey MetaEpssPopulated, "0")
+        ]
+    pure rowCount
 
 sinkSqlite :: (MonadIO m) => Connection -> ConduitT [ExtractedOsv] o m ()
 sinkSqlite conn = awaitForever $ \batch ->

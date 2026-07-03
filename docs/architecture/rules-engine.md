@@ -267,6 +267,39 @@ Rather than fetching and parsing raw JSON advisory dumps on the proxy (which wou
 
 The Écluse proxy runs a supervised in-process polling thread that periodically checks the S3 bucket for ETag changes. When a new `osv.db` is published, the proxy downloads it and performs an **atomic shadow-swap** of the active database connection. The footprint is minimal: the proxy merely queries the local SQLite file on disk.
 
+#### The artifact contract
+
+The object key is **stable per ecosystem** and embeds the artifact's
+**table-schema epoch**, never the application version:
+`<ecosystem>-osv-schema<N>.db` (for example `npm-osv-schema1.db`).
+Per-ecosystem artifacts keep uploads independent: one ecosystem's failed
+compilation never holds back another's refresh, and a Pilot restart loses at
+most one ecosystem's work. The stable key is what makes ETag polling work. The
+epoch is a hand-bumped constant shared by the Pilot writer and the proxy
+reader (`Ecluse.Osv.Schema`). The artifact is immutable and rebuilt from
+scratch on every compilation, so there are no migrations, only a
+read-compatibility contract; naming the key after the application version
+would invalidate compatible databases on every release and couple proxy
+readiness to Pilot's deploy cadence.
+
+Pilot stamps the same epoch inside the artifact as SQLite's `user_version`;
+the proxy verifies the stamp after download and before the shadow-swap, and a
+mismatch keeps the last-good database and alarms. The epoch moves only for a
+breaking change to the existing shape. Additive changes (a new column, a new
+table) do not bump it: readers select explicit columns, so additions are
+invisible to old readers, and the catch-up window while a new rule waits for
+newly populated data degrades **per rule**, as effectful-rule unavailability
+under that rule's failure alignment (see
+[Effectful-rule failure](#effectful-rule-failure)), rather than per database.
+
+To let a reader tell "this build does not populate the column yet" apart from
+"no data known for this package", the artifact carries a small `meta`
+key/value table: populated flags for the optional columns (`severity`,
+`epss_score`) plus provenance (Pilot version, ecosystem, build timestamp,
+source URL, row count). The reader consults it once at swap time; alongside
+the active ETag it is also the audit surface that ties a rule decision to the
+exact database that produced it.
+
 Polling rather than looking up on demand removes the **one external dependency
 that would otherwise sit under the deliberately fail-closed gate** (see
 [Effectful-rule failure](#effectful-rule-failure)): an advisory-source outage
