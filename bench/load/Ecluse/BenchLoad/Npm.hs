@@ -93,7 +93,8 @@ import GHC.Conc (getNumCapabilities)
 import Katip (Environment (Environment), LogEnv, Namespace (Namespace), initLogEnv)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Client qualified as HTTP
-import Network.HTTP.Types (hContentType, hETag, status200, status404)
+import Network.HTTP.Types (hContentType, status200, status404)
+import Network.HTTP.Types.Header (hETag)
 import Network.Wai (Application, Request, pathInfo, responseLBS)
 import Network.Wai.Handler.Warp (testWithApplication)
 
