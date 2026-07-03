@@ -257,7 +257,15 @@ ones (e.g. two sources at the same key but differing integrity).
 data Candidate = Candidate
     { candProvenance :: Provenance
     , candSourceId :: SourceId
-    , candFingerprint :: IntegrityFingerprint
+    , candFingerprint :: ~IntegrityFingerprint
+    {- ^ __Deliberately lazy__ (the @~@ opts out of StrictData): the fingerprint is
+    only ever consulted when a version key genuinely collides across sources, and
+    the common cold-path merge collides on a handful of keys out of thousands, so
+    computing every version's fingerprint eagerly is almost entirely wasted work.
+    Candidate ordering compares rank before fingerprint and ranks are unique per
+    input, so 'Set' operations never force it; only the divergence derivation over
+    a multi-candidate key does.
+    -}
     , candDetails :: PackageDetails
     }
     deriving stock (Show)
@@ -510,6 +518,11 @@ planFrom acc = do
         Set.fromList
             [ Divergence{divVersion = key, divWinning = win, divLosing = lose}
             | (key, cs) <- Map.toList (mergeVersions acc)
+            , -- A key offered by one source alone cannot diverge (the winner never
+            -- contradicts itself), so its fingerprints are never even computed --
+            -- the guard that keeps the lazy 'candFingerprint' unforced across the
+            -- overwhelmingly common collision-free merge.
+            Set.size cs > 1
             , let win = candFingerprint (winnerOf cs)
             , let distinct = Set.fromList [candFingerprint c | c <- Set.toList cs]
             , lose <- Set.toList distinct
