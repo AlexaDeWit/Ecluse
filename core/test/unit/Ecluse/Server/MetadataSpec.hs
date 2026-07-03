@@ -18,8 +18,10 @@ import Ecluse.Core.Package (
     mkPackageName,
  )
 import Ecluse.Core.Registry.Metadata (
+    Manifest (Manifest, manifestDigest, manifestInfo, manifestRaw),
     MetadataClient (fetchFullManifest, fetchVersionMetadata),
     MetadataError (MetadataUndecodable),
+    digestOf,
  )
 import Ecluse.Core.Server.Cache (MetadataCache, Source (Source), cachedMetadata, defaultCacheConfig, newMetadataCache)
 import Ecluse.Core.Server.Metadata (ManifestCaching (Cached, Uncached), newMetadataClient)
@@ -140,7 +142,7 @@ fetch.
 -}
 publicClient ::
     MetadataCache ->
-    (PackageName -> IO (Either MetadataError (PackageInfo, Value))) ->
+    (PackageName -> IO (Either MetadataError Manifest)) ->
     (PackageName -> Version -> IO (Either MetadataError (Maybe PackageDetails))) ->
     MetadataClient
 publicClient cache =
@@ -149,10 +151,10 @@ publicClient cache =
 {- | A counting full-manifest fetch: bumps the call counter, then yields the given manifest
 paired with a marker raw 'Value' (so a test can confirm a hit returned the cached pair).
 -}
-countingFull :: IORef Int -> PackageInfo -> PackageName -> IO (Either MetadataError (PackageInfo, Value))
+countingFull :: IORef Int -> PackageInfo -> PackageName -> IO (Either MetadataError Manifest)
 countingFull calls info _name = do
     atomicModifyIORef' calls (\n -> (n + 1, ()))
-    pure (Right (info, String "raw"))
+    pure (Right Manifest{manifestInfo = info, manifestRaw = String "raw", manifestDigest = digestOf "raw-bytes"})
 
 {- | A counting single-version fetch: bumps the call counter, then selects the version from
 the given manifest (so an absent version is a 'Nothing'), as the npm selective fetch would.
@@ -163,7 +165,7 @@ countingVersion calls info _name version = do
     pure (Right (Map.lookup (renderVersion version) (infoVersions info)))
 
 -- | A counting full-manifest fetch that always fails, so a test can assert nothing is cached.
-failingFull :: IORef Int -> PackageName -> IO (Either MetadataError (PackageInfo, Value))
+failingFull :: IORef Int -> PackageName -> IO (Either MetadataError Manifest)
 failingFull calls _name = do
     atomicModifyIORef' calls (\n -> (n + 1, ()))
     pure (Left MetadataUndecodable)

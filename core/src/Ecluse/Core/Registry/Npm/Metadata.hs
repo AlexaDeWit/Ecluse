@@ -50,7 +50,9 @@ import Ecluse.Core.Package (
  )
 import Ecluse.Core.Registry (RegistryResponse (responseBody))
 import Ecluse.Core.Registry.Metadata (
+    Manifest (Manifest, manifestDigest, manifestInfo, manifestRaw),
     MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable),
+    digestOf,
  )
 import Ecluse.Core.Registry.Npm (
     NpmClientConfig (npmBaseUrl, npmLimits),
@@ -85,21 +87,32 @@ import Ecluse.Core.Security (
 import Ecluse.Core.Telemetry.Span (TracingPort (spanMetadataDecode, spanMetadataFetch))
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
 
-{- | Fetch a package's full packument and project it into @(manifest, raw document)@,
-or the typed 'MetadataError' for why it could not.
+{- | Fetch a package's full packument and project it into a 'Manifest' (typed view,
+raw document, and the wire bytes' 'ContentDigest'), or the typed 'MetadataError' for
+why it could not.
 
 The body is read bounded against the config's response budget (so an oversized upstream
 is refused fail-closed before it is buffered whole); a breach surfaces as
 'MetadataBoundExceeded'. A genuine transport fault is left to throw -- the serve path
 already brackets the unreachable-upstream case -- so this 'Either' carries only the
 parse-and-policy outcomes the serve path renders distinctly.
+
+The digest is computed here, over the strict body the bounded read already produced:
+the one place the wire bytes exist, so no later stage re-encodes the document just to
+fingerprint it.
 -}
-fetchNpmManifest :: TracingPort -> NpmClientConfig -> PackageName -> IO (Either MetadataError (PackageInfo, Value))
+fetchNpmManifest :: TracingPort -> NpmClientConfig -> PackageName -> IO (Either MetadataError Manifest)
 fetchNpmManifest tracing config name =
     handle (\(ResponseBoundExceeded err) -> pure (Left (MetadataBoundExceeded err))) $ do
         response <- spanMetadataFetch tracing name $ fetchMetadataForm config Full noValidators name
+        let body = responseBody response
         spanMetadataDecode tracing name $
-            pure (first (enforceTarballScheme (npmBaseUrl config)) <$> projectNpmManifest (npmLimits config) name (responseBody response))
+            pure
+                ( manifestOf (digestOf body) . first (enforceTarballScheme (npmBaseUrl config))
+                    <$> projectNpmManifest (npmLimits config) name body
+                )
+  where
+    manifestOf digest (info, raw) = Manifest{manifestInfo = info, manifestRaw = raw, manifestDigest = digest}
 
 {- | Project a fetched packument's bytes into @(manifest, raw document)@, applying the
 serve path's response bounds and name validation. Pure and total.

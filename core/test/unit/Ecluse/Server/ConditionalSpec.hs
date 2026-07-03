@@ -5,32 +5,36 @@ import Network.HTTP.Types (status200, status304, status404)
 import Network.HTTP.Types.Header (hIfModifiedSince, hIfNoneMatch)
 import Test.Hspec
 
+import Crypto.Hash (Digest, SHA256, hash)
+
 import Ecluse.Core.Server.Conditional (
     Conditional (Modified, NotModified),
+    ETag,
     etagHeader,
-    evaluateOwnETag,
+    evaluateETag,
     forwardValidators,
     isNotModified,
-    ownETag,
+    mkStrongETag,
     renderETag,
  )
 
--- | Two distinct served bodies, for asserting the ETag tracks the bytes.
-bodyA, bodyB :: LByteString
-bodyA = "{\"name\":\"is-odd\",\"versions\":{}}"
-bodyB = "{\"name\":\"is-even\",\"versions\":{}}"
+{- | Two distinct strong tags, built over distinct digests, standing in for two
+served documents. (The packument fingerprint that feeds 'mkStrongETag' in
+production has its own spec beside the pipeline.)
+-}
+tagA, tagB :: ETag
+tagA = mkStrongETag (hash ("input-fingerprint-a" :: ByteString) :: Digest SHA256)
+tagB = mkStrongETag (hash ("input-fingerprint-b" :: ByteString) :: Digest SHA256)
 
 spec :: Spec
 spec = do
-    describe "ownETag -- over the served bytes" $ do
-        it "is stable for identical bytes" $
-            ownETag bodyA `shouldBe` ownETag bodyA
-
-        it "differs for different bytes" $
-            ownETag bodyA `shouldNotBe` ownETag bodyB
+    describe "mkStrongETag -- the quoted wire form" $ do
+        it "is stable for an identical digest and differs across digests" $ do
+            tagA `shouldBe` tagA
+            tagA `shouldNotBe` tagB
 
         it "renders as a quoted strong validator" $ do
-            let rendered = renderETag (ownETag bodyA)
+            let rendered = renderETag tagA
             -- A strong validator is the opaque tag wrapped in double quotes, with
             -- no weakness (W/) prefix.
             rendered `shouldSatisfy` ("\"" `T.isPrefixOf`)
@@ -38,33 +42,33 @@ spec = do
             rendered `shouldNotSatisfy` ("W/" `T.isPrefixOf`)
 
         it "renders the ETag header under the standard field name" $ do
-            let (name, value) = etagHeader (ownETag bodyA)
+            let (name, value) = etagHeader tagA
             name `shouldBe` "ETag"
-            value `shouldBe` encodeUtf8 (renderETag (ownETag bodyA))
+            value `shouldBe` encodeUtf8 (renderETag tagA)
 
-    describe "evaluateOwnETag -- transformed bodies (filtered packuments)" $ do
+    describe "evaluateETag -- transformed bodies (filtered packuments)" $ do
         it "is Modified when the request carries no validator" $
-            case evaluateOwnETag [] bodyA of
-                Modified e -> e `shouldBe` ownETag bodyA
+            case evaluateETag [] tagA of
+                Modified e -> e `shouldBe` tagA
                 NotModified _ -> expectationFailure "no validator should not be a 304"
 
         it "is NotModified when If-None-Match matches our own ETag" $ do
-            let etag = ownETag bodyA
+            let etag = tagA
                 req = [(hIfNoneMatch, encodeUtf8 (renderETag etag))]
-            case evaluateOwnETag req bodyA of
+            case evaluateETag req tagA of
                 NotModified e -> e `shouldBe` etag
                 Modified _ -> expectationFailure "a matching validator should be a 304"
 
         it "is Modified when If-None-Match names a different ETag" $ do
-            let req = [(hIfNoneMatch, encodeUtf8 (renderETag (ownETag bodyB)))]
-            case evaluateOwnETag req bodyA of
-                Modified e -> e `shouldBe` ownETag bodyA
+            let req = [(hIfNoneMatch, encodeUtf8 (renderETag tagB))]
+            case evaluateETag req tagA of
+                Modified e -> e `shouldBe` tagA
                 NotModified _ -> expectationFailure "a stale validator must re-serve"
 
         it "matches our ETag inside a comma-separated If-None-Match list" $ do
-            let etag = ownETag bodyA
+            let etag = tagA
                 req = [(hIfNoneMatch, "\"deadbeef\", " <> encodeUtf8 (renderETag etag))]
-            case evaluateOwnETag req bodyA of
+            case evaluateETag req tagA of
                 NotModified e -> e `shouldBe` etag
                 Modified _ -> expectationFailure "a match anywhere in the list is a 304"
 
@@ -72,12 +76,12 @@ spec = do
             -- A client may legally repeat If-None-Match as distinct header lines
             -- rather than one comma-joined value; the match must scan every line
             -- (the lookupAll/any path), not just the first.
-            let etag = ownETag bodyA
+            let etag = tagA
                 req =
                     [ (hIfNoneMatch, "\"deadbeef\"")
                     , (hIfNoneMatch, encodeUtf8 (renderETag etag))
                     ]
-            case evaluateOwnETag req bodyA of
+            case evaluateETag req tagA of
                 NotModified e -> e `shouldBe` etag
                 Modified _ -> expectationFailure "a match on any If-None-Match line is a 304"
 
@@ -85,23 +89,23 @@ spec = do
             -- The mirror of the above: multiple lines, none matching, must re-serve.
             let req =
                     [ (hIfNoneMatch, "\"deadbeef\"")
-                    , (hIfNoneMatch, encodeUtf8 (renderETag (ownETag bodyB)))
+                    , (hIfNoneMatch, encodeUtf8 (renderETag tagB))
                     ]
-            case evaluateOwnETag req bodyA of
-                Modified e -> e `shouldBe` ownETag bodyA
+            case evaluateETag req tagA of
+                Modified e -> e `shouldBe` tagA
                 NotModified _ -> expectationFailure "no matching line must re-serve"
 
         it "treats a wildcard If-None-Match as a match (304)" $
-            case evaluateOwnETag [(hIfNoneMatch, "*")] bodyA of
-                NotModified e -> e `shouldBe` ownETag bodyA
+            case evaluateETag [(hIfNoneMatch, "*")] tagA of
+                NotModified e -> e `shouldBe` tagA
                 Modified _ -> expectationFailure "a wildcard validator is a 304"
 
         it "matches a weakly-prefixed client validator against our strong ETag" $ do
             -- Clients may echo back our validator with a W/ weakness prefix; the
             -- comparison is on the opaque tag, so it still matches.
-            let etag = ownETag bodyA
+            let etag = tagA
                 req = [(hIfNoneMatch, "W/" <> encodeUtf8 (renderETag etag))]
-            case evaluateOwnETag req bodyA of
+            case evaluateETag req tagA of
                 NotModified e -> e `shouldBe` etag
                 Modified _ -> expectationFailure "a weak echo of our tag is still a match"
 

@@ -21,7 +21,6 @@ module Ecluse.Core.ServeBench (
 import Data.Aeson (Value, encode)
 import Data.ByteString.Lazy qualified as BSL
 import Data.Map.Strict qualified as Map
-import Data.Text qualified as T
 import Data.Time (nominalDay)
 import Ecluse.Bench.Corpus (
     LoadedEntry,
@@ -39,7 +38,6 @@ import Ecluse.Core.Package.Filter (filterPlan, fpSurvivors, restrictToSurvivors)
 import Ecluse.Core.Package.Merge (MergePlan (mpSurvivors), Provenance (GatedSource), mergePackuments)
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
 import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan), atDefaultPrecedence)
-import Ecluse.Core.Server.Conditional (ownETag, renderETag)
 import Test.Tasty.Bench (Benchmark, bench, bgroup, whnfAppIO)
 
 -- | The serve-transform benches: realistic over the corpus, scaled over synthetic versions.
@@ -64,7 +62,8 @@ benchmarks loaded =
 filter plan over the versions (the engine's effectful rule sweep), merge the gated
 survivor set, assemble the served document from the plan (each surviving version
 taken from the raw body with its tarball URL rewritten in the same pass),
-re-serialise, and ETag the result.
+and re-serialise. (The validator is no longer hashed over the output -- it derives
+from the inputs -- so the measured tail is plan, merge, assemble, encode.)
 -}
 serveDepth :: (Value, PackageInfo) -> IO Int
 serveDepth (value, info) = do
@@ -73,7 +72,7 @@ serveDepth (value, info) = do
         Just merged
             | not (Map.null (mpSurvivors merged)) ->
                 let body = encode (assembleMergedPackument syntheticProxyBase (Map.singleton 0 value) merged value)
-                 in T.length (renderETag (ownETag body)) + fromIntegral (BSL.length body)
+                 in fromIntegral (BSL.length body)
         _ -> 0
 
 {- | A permissive rule set: every legitimately-aged version survives, so the assemble

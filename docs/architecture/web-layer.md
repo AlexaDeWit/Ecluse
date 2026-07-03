@@ -177,9 +177,9 @@ by the same bodiless wrapper the tarball `HEAD` uses. What it defends differs fr
 tarball case: a packument body is assembled **locally** (a metadata fetch plus the
 merge), so answering it triggers **no artifact egress**, this is an HTTP-correctness
 fix (a `HEAD` reply must carry no body), not the DoS-amplification control the tarball
-`HEAD` closes. The merged body is still materialised, to size it and compute its `ETag`;
-answering a packument `HEAD` without building the body is a possible future refinement, a
-metadata-only cost rather than the artifact-egress one.
+`HEAD` closes. A `HEAD` alone still materialises the merged body, to size its
+`Content-Length`; a `GET` streams the encoding straight to the socket, and a `304`
+(either method) is answered off the derived validator without assembling at all.
 
 ## Metadata cache
 
@@ -340,8 +340,17 @@ wire contract.**
   client's validators are relayed upstream and `304`s passed back unchanged; for
   **transformed** bodies (every packument, now always
   [merged across upstreams](registry-model.md#packument-merge-across-upstreams) and
-  filtered) the served body differs from any single upstream's, so we compute our
-  **own** `ETag` over what we serve and answer conditional requests against that,  relaying an upstream validator there would cache or validate the wrong bytes.
+  filtered) the served body differs from any single upstream's, so we serve our
+  **own** `ETag` and answer conditional requests against it,  relaying an upstream
+  validator there would cache or validate the wrong bytes. The own-ETag is **derived
+  from the serve's inputs** (the origin bodies' digests, hashed once at fetch; the
+  per-source surviving version sets; the mount base URL), of which the served document
+  is a deterministic function: it can never call a changed document unchanged, though
+  it may change spuriously (a harmless extra `200`, never a wrong `304`). Deriving it
+  from inputs is what lets a `304` skip the assembly, encode, and any output hashing
+  entirely, and lets a `200` stream its body without materialising it for a hash
+  pass, the revalidation traffic a CI fleet with restored npm caches generates is
+  answered at the cost of the per-request private fetch alone.
 - **Decline**, routing libraries (`wai-routes`, `wai-routing`, …): largely
   dormant and segment-based, so they fight the encoded-slash handling that a
   small pure `classify` gets right.

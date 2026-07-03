@@ -82,7 +82,7 @@ import Ecluse.BenchLoad.Normalise (
     renderNormalised,
     renderSaturation,
  )
-import Ecluse.BenchLoad.Oha (OhaReport (..), runOha, runOhaUrls)
+import Ecluse.BenchLoad.Oha (OhaReport (..), runOha, runOhaUrls, runOhaUrlsWith)
 import Ecluse.Composition (resolveServeAdmission)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 
@@ -251,6 +251,11 @@ data Driver
       (Zipfian) serve mix. The harness owns the concurrency and duration.
       -}
       DriveHttpUrls [Text]
+    | {- | Drive a weighted list of URLs with @oha@, every request carrying the given
+      fixed headers -- the revalidation scenario's conditional @If-None-Match@, so the
+      measured path is the @304@ answer rather than the full body.
+      -}
+      DriveHttpHeaders [(Text, Text)] [Text]
     | {- | Run the in-process load for the configured duration, returning each completed
       unit's latency in seconds. The harness wraps the RTS capture around the call and
       computes the throughput and percentiles from the timings.
@@ -376,6 +381,7 @@ warmUp :: Driver -> IO ()
 warmUp = \case
     DriveHttp url -> void (runOha 8 warmupSeconds url)
     DriveHttpUrls urls -> void (runOhaUrls 8 warmupSeconds urls)
+    DriveHttpHeaders headers urls -> void (runOhaUrlsWith headers 8 warmupSeconds urls)
     DriveInProcess _ -> pass
   where
     warmupSeconds :: Int
@@ -388,6 +394,7 @@ drive :: LoadKnobs -> Driver -> IO (Int, Double, Double, (Maybe Double, Maybe Do
 drive knobs = \case
     DriveHttp url -> fromOha <$> runOha (lkConcurrency knobs) (lkDurationSeconds knobs) url
     DriveHttpUrls urls -> fromOha <$> runOhaUrls (lkConcurrency knobs) (lkDurationSeconds knobs) urls
+    DriveHttpHeaders headers urls -> fromOha <$> runOhaUrlsWith headers (lkConcurrency knobs) (lkDurationSeconds knobs) urls
     DriveInProcess act -> do
         start <- getMonotonicTime
         latencies <- act

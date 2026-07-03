@@ -12,6 +12,7 @@ import UnliftIO.Exception (throwString, try)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageInfo (..), PackageName, mkPackageName)
+import Ecluse.Core.Registry.Metadata (digestOf)
 import Ecluse.Core.Server.Cache (
     CacheConfig (..),
     CacheEntry (..),
@@ -63,7 +64,7 @@ info name =
 so a test can assert which exact (typed view, raw bytes) pair a hit returned.
 -}
 entry :: PackageName -> Text -> CacheEntry
-entry name marker = CacheEntry{entryInfo = info name, entryRaw = String marker}
+entry name marker = CacheEntry{entryInfo = info name, entryRaw = String marker, entryDigest = digestOf (encodeUtf8 marker)}
 
 {- | A cache config with the given TTL (seconds) and maximum entry count, with a resident
 budget generous enough that the entry count is the binding bound.

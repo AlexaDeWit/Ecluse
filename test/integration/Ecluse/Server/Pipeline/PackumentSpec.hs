@@ -488,6 +488,39 @@ conditionalSpec = describe "own ETag over the served bytes" $ do
             status secondResp `shouldBe` 304
             simpleBody secondResp `shouldBe` ""
 
+    it "consults the private origin on a 304 -- the conditional never bypasses per-client authorisation" $ do
+        (privateUp, publicUp) <- twoServingUpstreams
+        withProxy privateUp publicUp Nothing $ \app -> do
+            firstResp <- getThing (Just "client-token") app
+            etag <- maybe (throwString "no ETag on the 200 response") pure (header "ETag" firstResp)
+            secondResp <- getThingWith [("If-None-Match", etag), ("Authorization", "Bearer client-token")] app
+            status secondResp `shouldBe` 304
+            -- Both requests reached the private origin carrying the client's own
+            -- credential: the 304 is an answer about content, never a skipped
+            -- authorisation -- the derived validator is evaluated only after the
+            -- per-request private fetch resolved.
+            seenAuth privateUp `shouldReturn` [Just "Bearer client-token", Just "Bearer client-token"]
+
+    it "re-serves 200 when the private document changes under a matching validator (per-client freshness)" $ do
+        -- The public origin stays cached across both requests; only the private
+        -- leg (re-fetched every request) changes. The validator must track it:
+        -- a changed merged view is never answered 304 off the warm public entry.
+        privateUp <-
+            mutatingUpstream
+                ( encodePackument (privatePackument [("9.0.0", plainVersion "9.0.0")] "9.0.0")
+                    :| [encodePackument (privatePackument [("9.0.1", plainVersion "9.0.1")] "9.0.1")]
+                )
+        publicUp <-
+            servingUpstream
+                (encodePackument (packument [("2.0.0", plainVersion "2.0.0")] "2.0.0" [("2.0.0", publishedDaysAgo 30)]))
+        withProxy privateUp publicUp Nothing $ \app -> do
+            firstResp <- getThing Nothing app
+            status firstResp `shouldBe` 200
+            etag <- maybe (throwString "no ETag on the 200 response") pure (header "ETag" firstResp)
+            secondResp <- getThingWith [("If-None-Match", etag)] app
+            status secondResp `shouldBe` 200
+            header "ETag" secondResp `shouldSatisfy` (/= Just etag)
+
 packumentHeadSpec :: Spec
 packumentHeadSpec = describe "HEAD on a packument route (same gating as GET, no body)" $ do
     it "answers a 200 HEAD with the GET's status, ETag, and Content-Length but no body" $ do

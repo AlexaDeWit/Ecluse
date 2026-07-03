@@ -44,7 +44,6 @@ import Ecluse.Core.Registry.Npm.Metadata (projectNpmVersion)
 import Ecluse.Core.Registry.Npm.Project (Projection (NameMismatch, Projected), parsePackageInfoFromValue)
 import Ecluse.Core.Rules.Types (EvalContext (EvalContext), PrecededRule, Rule (AllowIfOlderThan), atDefaultPrecedence)
 import Ecluse.Core.Security (defaultLimits)
-import Ecluse.Core.Server.Conditional (ownETag, renderETag)
 import Ecluse.Core.Version (Version, mkVersion)
 import Ecluse.Test.RegistryCapture (catBenchPins, fetchPackumentBody, loadCatalogue, parseRegistryVersions)
 
@@ -169,7 +168,7 @@ runTransform now pkg body =
                         Just merged
                             | not (Map.null (mpSurvivors merged)) ->
                                 let out = encode (assembleMergedPackument proxyBase (Map.singleton 0 value) merged value)
-                                 in T.length (renderETag (ownETag out)) + fromIntegral (BSL.length out)
+                                 in fromIntegral (BSL.length out)
                         _ -> 0
                 size `seq` pure True
             Right (NameMismatch _) -> pure False

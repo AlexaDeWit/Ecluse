@@ -425,6 +425,7 @@ test-suite ecluse-core-unit
     Ecluse.Server.ConditionalSpec
     Ecluse.Server.MetadataSpec
     Ecluse.Server.Pipeline.InternalSpec
+    Ecluse.Server.Pipeline.PackumentSpec
     Ecluse.Server.PipelineSpec
     Ecluse.Server.ResponseSpec
     Ecluse.Server.RouteSpec
