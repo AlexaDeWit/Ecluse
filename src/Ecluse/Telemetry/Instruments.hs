@@ -125,6 +125,7 @@ data Metrics = Metrics
     , mMetadataCacheEntries :: Gauge Int64
     , mMetadataCacheResidentBytes :: Gauge Int64
     , mSingleVersionCacheResidentBytes :: Gauge Int64
+    , mAssembledCacheResidentBytes :: Gauge Int64
     , mMirrorEnqueued :: Counter Int64
     , mMirrorEnqueueFailures :: Counter Int64
     , mMirrorJobsProcessed :: Counter Int64
@@ -159,6 +160,7 @@ newMetrics telemetry = do
         <*> gauge meter MetadataCacheEntries "metadata-cache occupancy"
         <*> gauge meter MetadataCacheResidentBytes "full-packument metadata-cache resident bytes"
         <*> gauge meter SingleVersionCacheResidentBytes "single-version metadata-cache resident bytes"
+        <*> gauge meter AssembledCacheResidentBytes "assembled-representation store resident bytes"
         <*> counter meter MirrorEnqueued "{job}" "mirror jobs enqueued"
         <*> counter meter MirrorEnqueueFailures "{failure}" "mirror enqueue failures"
         <*> counter meter MirrorJobsProcessed "{job}" "mirror jobs processed by result"
@@ -210,6 +212,7 @@ metricsPortOf m =
         , mpCacheEntries = recordCacheEntries m
         , mpCacheResidentBytes = recordCacheResidentBytes m
         , mpVersionCacheResidentBytes = recordVersionCacheResidentBytes m
+        , mpAssembledCacheResidentBytes = recordAssembledCacheResidentBytes m
         , mpMirrorEnqueued = recordMirrorEnqueued m
         , mpMirrorEnqueueFailure = recordMirrorEnqueueFailure m
         }
@@ -299,6 +302,13 @@ recordCacheResidentBytes m bytes =
 recordVersionCacheResidentBytes :: (MonadIO m) => Metrics -> Int -> m ()
 recordVersionCacheResidentBytes m bytes =
     set (mSingleVersionCacheResidentBytes m) (fromIntegral bytes) []
+
+{- | Record the assembled-representation store's resident bytes
+(@ecluse.metadata_cache.assembled.resident_bytes@).
+-}
+recordAssembledCacheResidentBytes :: (MonadIO m) => Metrics -> Int -> m ()
+recordAssembledCacheResidentBytes m bytes =
+    set (mAssembledCacheResidentBytes m) (fromIntegral bytes) []
 
 -- | Record one mirror job enqueued (@ecluse.mirror.enqueued@).
 recordMirrorEnqueued :: (MonadIO m) => Metrics -> m ()

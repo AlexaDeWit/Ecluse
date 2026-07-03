@@ -82,6 +82,10 @@ data MetricsPort = MetricsPort
     {- ^ Record the single-version metadata cache's resident bytes
     (@ecluse.metadata_cache.version.resident_bytes@).
     -}
+    , mpAssembledCacheResidentBytes :: Int -> IO ()
+    {- ^ Record the assembled-representation store's resident bytes
+    (@ecluse.metadata_cache.assembled.resident_bytes@).
+    -}
     , mpMirrorEnqueued :: IO ()
     -- ^ Record one mirror job enqueued (@ecluse.mirror.enqueued@).
     , mpMirrorEnqueueFailure :: IO ()

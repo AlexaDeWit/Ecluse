@@ -197,7 +197,15 @@ cached metadata each request, so time-sensitive rules (`AllowIfOlderThan`)
 and the separately-cached advisory tier stay correct, only each upstream's
 fetch+parse is memoised (per source, since a packument is
 [merged across upstreams](registry-model.md#packument-merge-across-upstreams)); the
-pure merge, filter, and `latest` repoint are recomputed each request. The TTL is
+pure merge, filter, and `latest` repoint are recomputed each request. The one
+memoisation past that point is the **assembled-representation store**: the encoded
+merged document keyed by its derived validator, a content address over every serve
+input, so a recurring (public entry, private content, plan) triple serves stored
+bytes with no re-assembly or re-encode, can never be stale (changed inputs miss by
+key), and never crosses a client boundary (a different private view is a different
+key; the [access model](access-model.md#caching) carries the full argument). The
+verdict itself is still never cached: the rules run first, and their outcome is part
+of the key. The TTL is
 short and **conditional-GET revalidates** on
 expiry (see [Middleware](#middleware-and-helper-libraries)); brief staleness is
 benign and even aligned with the resilience posture, a brand-new publish need not

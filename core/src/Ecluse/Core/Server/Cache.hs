@@ -97,6 +97,22 @@ short TTL and budget. Both stores enforce the resident-byte budget, and each rep
 residency gauge: the full-packument store under @ecluse.metadata_cache.resident_bytes@ and
 the single-version store under @ecluse.metadata_cache.version.resident_bytes@. The
 hit\/miss counter and the entry-count occupancy gauge stay about the full-packument store.
+
+A third store memoises the __assembled representation__ ('resolveAssembled'): the
+encoded merged document, keyed by its derived validator
+('Ecluse.Core.Server.Pipeline.Packument.packumentETag'). The key is a fingerprint of
+every input the document is a function of -- the origin bodies (private included, by
+content digest), the survivor sets, the mount base -- which makes the store
+__content-addressed__: an entry can never be served stale, because changed inputs
+produce a different key and simply miss. Staleness governance is therefore not the
+TTL's job here (it only trims dead entries early); the resident-byte budget is the
+real bound. Cross-client safety follows from the same property: a lookup key includes
+the digest of the private document __this request's own authorised fetch returned__,
+so a client can only ever hit an entry whose bytes its own inputs would deterministically
+re-produce -- the transform is shared, never the authorisation and never another
+client's view (the private-origin caching prohibition is about credential-blind
+keying, which a content key is not). Residency gauge:
+@ecluse.metadata_cache.assembled.resident_bytes@.
 -}
 module Ecluse.Core.Server.Cache (
     -- * Configuration
@@ -122,9 +138,13 @@ module Ecluse.Core.Server.Cache (
     resolveVersion,
     resolveVersionWith,
     cachedVersion,
+
+    -- * Assembled-representation resolution
+    resolveAssembled,
 ) where
 
 import Data.Aeson (Value, encode)
+import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BSL
 import Data.Cache (Cache)
 import Data.Cache qualified as Cache
@@ -148,6 +168,7 @@ import Ecluse.Core.Registry.Metadata (ContentDigest)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (
     MetricsPort,
+    mpAssembledCacheResidentBytes,
     mpCacheEntries,
     mpCacheRequest,
     mpCacheResidentBytes,
@@ -266,6 +287,16 @@ versionEntryBytes = 16 * 1024
 negativeEntryBytes :: Int
 negativeEntryBytes = 1024
 
+{- | An assembled entry's resident footprint __is__ its strict bytes (plus a small
+constant for the key and spine): unlike a parsed 'CacheEntry' there is no expanded
+structure to estimate, so the budget counts what is genuinely held.
+-}
+weighAssembled :: ByteString -> Int
+weighAssembled bytes = BS.length bytes + assembledEntryOverheadBytes
+
+assembledEntryOverheadBytes :: Int
+assembledEntryOverheadBytes = 256
+
 {- | The key a 'CacheEntry' is cached under: the upstream 'Source' paired with the
 package's identity, rendered to a stable 'Text'. The package identity is distinct
 from a display name so two encodings of the same scoped package share one entry, and
@@ -368,10 +399,11 @@ newSingleFlight cfg weigh = do
             , sfInFlight = inFlight
             }
 
-{- | The metadata-cache handle: the two single-flight stores (the full-packument cache and
-the single-version cache). Opaque -- built with 'newMetadataCache' and reached only through
-the accessors. Lives in the composition root (one per process), so every request shares the
-same caches and their connection-collapsing.
+{- | The metadata-cache handle: the three single-flight stores (the full-packument
+cache, the single-version cache, and the assembled-representation store). Opaque --
+built with 'newMetadataCache' and reached only through the accessors. Lives in the
+composition root (one per process), so every request shares the same caches and their
+connection-collapsing.
 -}
 data MetadataCache = MetadataCache
     { mcFull :: SingleFlight CacheKey CacheEntry
@@ -381,16 +413,23 @@ data MetadataCache = MetadataCache
     version's 'PackageDetails' (or its determined absence) -- written only by the
     single-version path, never the full path.
     -}
+    , mcAssembled :: SingleFlight Text ByteString
+    {- ^ The assembled-representation store: the encoded served document, keyed by its
+    derived validator's rendered form (a content address over every serve input; see
+    the module header) -- written and read only by the packument serve tail.
+    -}
     }
 
-{- | Build a metadata cache from its configuration: the full-packument store and the
-single-version store, each over the same TTL and size bound.
+{- | Build a metadata cache from its configuration: the full-packument store, the
+single-version store, and the assembled-representation store, each over the same TTL
+and size bound.
 -}
 newMetadataCache :: CacheConfig -> IO MetadataCache
 newMetadataCache cfg =
     MetadataCache
         <$> newSingleFlight cfg weighCacheEntry
         <*> newSingleFlight cfg weighVersion
+        <*> newSingleFlight cfg weighAssembled
 
 {- | Resolve a package's metadata from one upstream 'Source', reusing the cache and
 collapsing concurrent misses.
@@ -478,6 +517,30 @@ resolveVersionWith afterClaim metrics cache source name version =
         (mpVersionCacheResidentBytes metrics . occBytes)
         (mcVersion cache)
         (versionKey source name version)
+
+{- | Resolve the __assembled representation__ for one derived validator, leading the
+render (assemble + encode) on a miss and collapsing concurrent identical renders,
+exactly as 'resolveMetadata' does for a fetch.
+
+The key is the rendered derived 'Ecluse.Core.Server.Conditional.ETag' -- a content
+address over every input the served document is a function of -- so a hit is
+byte-for-byte the document this request's own inputs would deterministically produce:
+the store can never serve stale bytes (changed inputs miss by construction) and never
+crosses a client boundary (a different private view is a different key; see the
+module header). Under the TTL-zero configuration the store degrades to pure
+single-flight coalescing, the same behaviour as the sibling stores.
+
+Like the single-version store it records no hit\/miss counter; a leader's insert
+refreshes the @ecluse.metadata_cache.assembled.resident_bytes@ residency gauge, so
+the byte budget's third occupant is observable alongside the other two.
+-}
+resolveAssembled :: MetricsPort -> MetadataCache -> Text -> IO ByteString -> IO ByteString
+resolveAssembled metrics cache =
+    resolveSingleFlight
+        (pure ())
+        (const pass)
+        (mpAssembledCacheResidentBytes metrics . occBytes)
+        (mcAssembled cache)
 
 {- The single-flight resolution shared by the full-packument and single-version caches: a
 fresh hit short-circuits; otherwise the caller leads one fetch (installing an in-flight
