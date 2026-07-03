@@ -76,7 +76,12 @@ resolutionSpec = describe "resolveRuntimePlan precedence" $ do
         planMaxHeapBytes plan
             `shouldBe` (Just (deriveMaxHeapBytes (512 * mib) 2 (64 * mib)), FromCgroup)
 
-    it "rounds a fractional cpu quota up, so a half-CPU pod still gets one capability" $ do
+    it "floors a fractional cpu quota, so capabilities never exceed the CFS budget" $ do
+        let cgroup = noCgroup{cgCpuCores = Just 3.5}
+        planCapabilities (resolveRuntimePlan Nothing Nothing cgroup unpinned)
+            `shouldBe` (3, FromCgroup)
+
+    it "grants a sub-1 quota one capability rather than zero" $ do
         let cgroup = noCgroup{cgCpuCores = Just 0.5}
         planCapabilities (resolveRuntimePlan Nothing Nothing cgroup unpinned)
             `shouldBe` (1, FromCgroup)

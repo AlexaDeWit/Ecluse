@@ -12,9 +12,12 @@ backstop is the kernel OOM killer. This module closes that gap the way Go's
 
 1. __Explicit configuration wins__: @cores@ (@ECLUSE_CORES@) and @maxHeapBytes@
    (@ECLUSE_MAX_HEAP_BYTES@).
-2. __Omitted values fall back to the cgroup__ (v2): @cpu.max@'s quota, rounded up
-   and clamped to the visible processors, and @memory.max@ less the nursery budget
-   and slack ('deriveMaxHeapBytes').
+2. __Omitted values fall back to the cgroup__ (v2): @cpu.max@'s quota, __floored__
+   (at least one) and clamped to the visible processors, and @memory.max@ less the
+   nursery budget and slack ('deriveMaxHeapBytes'). Flooring follows Go's
+   @automaxprocs@: a capability count above the budget lets a stop-the-world
+   collection outrun the CFS quota and freeze mid-pause, so a fractional
+   entitlement is stranded rather than borrowed against.
 3. __No limit found either way__: the posture the RTS already resolved (its baked
    defaults plus any @GHCRTS@ the operator set) stands, and the log says so.
 
@@ -149,7 +152,10 @@ resolveRuntimePlan cfgCores cfgMaxHeap cgroup rts =
   where
     capabilities = case (cfgCores, cgCpuCores cgroup) of
         (Just n, _) -> (max 1 n, FromConfig)
-        (Nothing, Just quota) -> (clamp (ceiling quota), FromCgroup)
+        -- Floored, as Go's automaxprocs does: claiming above the budget would let a
+        -- stop-the-world collection (all capabilities at once) outrun the CFS quota
+        -- and freeze mid-pause. The clamp's floor of one covers sub-1 quotas.
+        (Nothing, Just quota) -> (clamp (floor quota), FromCgroup)
         (Nothing, Nothing) -> (rpCapabilities rts, FromRts)
 
     clamp n = max 1 (min (rpProcessors rts) n)
