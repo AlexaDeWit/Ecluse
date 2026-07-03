@@ -94,8 +94,8 @@ import Katip (Environment (Environment), LogEnv, Namespace (Namespace), initLogE
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types (hContentType, status200, status404)
-import Network.HTTP.Types.Header (hETag)
-import Network.Wai (Application, Request, pathInfo, responseLBS)
+import Network.HTTP.Types.Header (hETag, hHost)
+import Network.Wai (Application, Request, pathInfo, requestHeaders, responseLBS)
 import Network.Wai.Handler.Warp (testWithApplication)
 
 import Ecluse.BenchLoad.Error (benchFail)
@@ -169,6 +169,8 @@ npmFixture =
             , cacheFitsScenario
             , cacheEvictsScenario
             , tarballScenario
+            , tarballOnboardingScenario
+            , tarballCeilingScenario
             , workerScenario
             ]
         }
@@ -185,6 +187,7 @@ mergeScenario :: Scenario
 mergeScenario =
     Scenario
         { scenarioName = "merge-cold"
+        , scenarioConcurrencyScale = 1
         , scenarioDescription =
             "Public download path with the private + public packument merge in the loop, over a large-emphasis mix drawn from the curated real-world corpus (the heavy many-version packuments are the primary drivers): GET /{pkg} fans to both upstreams -> merge -> rule-filter -> URL-rewrite -> ETag -> re-serialise, with the public metadata cache disabled (TTL 0). The public leg is single-flight, so concurrent misses coalesce onto one in-flight fetch+decode and followers share the leader's parsed packument: the public fetch+decode is amortised under load, not paid per request. Every request still pays the live private fetch, the merge, the rule sweep, and the re-serialise."
         , scenarioBoot = \knobs k -> withNpmProxy knobs 0 (cacheMaxEntries defaultCacheConfig) serveMix (k . DriveHttpUrls)
@@ -199,6 +202,7 @@ cacheHitScenario :: Scenario
 cacheHitScenario =
     Scenario
         { scenarioName = "cached-public-hit"
+        , scenarioConcurrencyScale = 1
         , scenarioDescription =
             "The cheap cache-served path over the same large-emphasis corpus mix: GET /{pkg} with the anonymous public origin served from the warm metadata cache (no public fetch or decode), the live private leg merged in. The passthrough model caches the public origin, not the per-client private one, so this is the faithful no-public-fetch shape."
         , scenarioBoot = \knobs k -> withNpmProxy knobs longCacheTtl (cacheMaxEntries defaultCacheConfig) serveMix (k . DriveHttpUrls)
@@ -217,6 +221,7 @@ revalidateScenario :: Scenario
 revalidateScenario =
     Scenario
         { scenarioName = "revalidate-not-modified"
+        , scenarioConcurrencyScale = 1
         , scenarioDescription =
             "Conditional revalidation of the heaviest corpus packument: a priming GET captures the served ETag, then every driven request echoes it as If-None-Match and is answered 304 off the derived validator -- the private leg still fetched and the plan still computed per request, but no assembly, encode, or output hash. The realistic shape for CI fleets restoring npm's cache: metadata traffic that revalidates instead of re-downloading."
         , scenarioBoot = \knobs k ->
@@ -250,6 +255,7 @@ cacheFitsScenario :: Scenario
 cacheFitsScenario =
     Scenario
         { scenarioName = "cache-fits-large"
+        , scenarioConcurrencyScale = 1
         , scenarioDescription =
             "Cache-eviction baseline (fits): a uniform working set of large packuments served with TTL > 0 and a cache bound that holds the whole set, so after warm-up every entry stays resident and the public leg is cache-served with no re-derivation. Residency reflects the whole working set held at once; alloc/request is the cheap warm-served floor. Read against cache-evicts-large to isolate the eviction cost."
         , scenarioBoot = \knobs k ->
@@ -270,6 +276,7 @@ cacheEvictsScenario :: Scenario
 cacheEvictsScenario =
     Scenario
         { scenarioName = "cache-evicts-large"
+        , scenarioConcurrencyScale = 1
         , scenarioDescription =
             "Cache-eviction stress (exceeds): the same uniform large working set with TTL > 0, but a cache bound smaller than the working set, so entries are continually evicted and re-derived. Isolates the eviction cost against cache-fits-large: throughput/latency under churn, the alloc/request of re-deriving (re-fetch + decode + project) each evicted large packument on a miss, and a peak residency bounded by the cache bound rather than the whole set. Bound = BENCH_LOAD_CACHE_MAX_ENTRIES, working set = BENCH_LOAD_WORKING_SET."
         , scenarioBoot = \knobs k ->
@@ -281,9 +288,57 @@ tarballScenario :: Scenario
 tarballScenario =
     Scenario
         { scenarioName = "tarball-hot-path"
+        , scenarioConcurrencyScale = 1
         , scenarioDescription =
             "Tarball proxy hot path: GET /npm/{pkg}/-/{unscoped-pkg}-9999.0.2.tgz (the scope-dropping npm convention) fans to the packument first to read the dist.tarball URL (instantly served from the metadata cache), then streams the tarball from the artifact upstream."
         , scenarioBoot = \knobs k -> withNpmProxy knobs longCacheTtl (cacheMaxEntries defaultCacheConfig) tarballMix (k . DriveHttpUrls)
+        }
+
+{- | The onboarding (fail-over) regime: every tarball request misses the private
+pull-through (nothing mirrored yet) and takes the public leg -- probe miss, gate the
+one version, stream the public bytes, enqueue the mirror job. This is the shape a
+__new project__ drives before the mirror warms; at steady state the pull-through
+serves these reads instead ('tarballScenario'). Its figures price the onboarding
+experience -- the regime the fleet transits once per project, per new package, and per
+new version -- not the steady state.
+-}
+tarballOnboardingScenario :: Scenario
+tarballOnboardingScenario =
+    Scenario
+        { scenarioName = "tarball-onboarding"
+        , scenarioConcurrencyScale = 1
+        , scenarioDescription =
+            "The onboarding fail-over: GET /npm/{pkg}/-/{pkg}-1.0.0.tgz with the private pull-through missing everything (404 after the injected latency, as an unwarmed mirror would) and the public leg serving -- single-version gate, then the artifact streamed from the public origin's self-hosted location, then the mirror-job enqueue. Prices the regime a new project drives until the mirror warms; the steady state is tarball-hot-path. Per-request floor is two sequential upstream round trips (probe miss + artifact) plus the stream."
+        , scenarioBoot = \knobs k ->
+            let latency = lkUpstreamLatencyMicros knobs
+                bytes = artifactBytes (lkPayloadBytes knobs)
+             in withProxyOverStubs
+                    knobs
+                    longCacheTtl
+                    (cacheMaxEntries defaultCacheConfig)
+                    (onboardingPrivateStub latency)
+                    (onboardingPublicStub latency bytes)
+                    onboardingMix
+                    (k . DriveHttpUrls)
+        }
+
+{- | The streaming-ceiling probe: the same private-hit relay as 'tarballScenario', but
+driven at __eight times the shared concurrency__ against a __2 ms__ stub latency, so
+the binding constraint is the proxy's own relay (scheduler, pump, pool, syscalls)
+rather than the load generator's connections x RTT. The ordinary tarball scenario is
+client-bound by construction (its throughput ~ concurrency / RTT says nothing about
+the proxy's limit); this one exists to chase the knee. Read it with its own operating
+point in mind -- the shared operating-point line prints the unscaled base.
+-}
+tarballCeilingScenario :: Scenario
+tarballCeilingScenario =
+    Scenario
+        { scenarioName = "tarball-ceiling"
+        , scenarioConcurrencyScale = 8
+        , scenarioDescription =
+            "Streaming-ceiling probe on the private-hit relay: 8x the shared concurrency, 2 ms stub latency (overriding the probed RTT for this scenario alone), same conventional private read as tarball-hot-path. Chases the proxy's own streaming knee -- relay pump, connection handling, syscall pressure -- instead of the client's connections x RTT ceiling. Throughput here x the worker-artifact payload size approximates the relay's byte rate."
+        , scenarioBoot = \knobs k ->
+            withNpmProxy knobs{lkUpstreamLatencyMicros = 2_000} longCacheTtl (cacheMaxEntries defaultCacheConfig) tarballMix (k . DriveHttpUrls)
         }
 
 -- A cache TTL comfortably longer than any single scenario's warm-up plus measured
@@ -303,36 +358,49 @@ withNpmProxy :: LoadKnobs -> NominalDiffTime -> Int -> (Int -> [Text]) -> ([Text
 withNpmProxy knobs ttl maxEntries mkMix body = do
     bodies <- loadServeBodies
     let bytes = artifactBytes (lkPayloadBytes knobs)
-    -- An unknobbed run resolves the admission capacity and the private pool through the
-    -- same functions as the composition root, so it measures the shipped defaults (the
-    -- two are computed from independent datapoints: capabilities vs the fd limit).
+        latency = lkUpstreamLatencyMicros knobs
+    testWithApplication (pure (stubUpstream octetContentType latency bytes)) $ \artPort ->
+        withProxyOverStubs
+            knobs
+            ttl
+            maxEntries
+            (privateOverlayStub artPort latency bytes)
+            (corpusPublicStub latency bodies)
+            mkMix
+            body
+
+{- | Boot the composed proxy over the __given__ private and public upstream stubs --
+the shared shell of every HTTP scenario. The standard fixture ('withNpmProxy') passes
+the private overlay and corpus stubs; the onboarding scenario passes a missing-private
+stub and a self-hosted public stub. Admission and the private pool resolve through the
+composition root's own functions, so an unknobbed run measures the shipped defaults.
+-}
+withProxyOverStubs :: LoadKnobs -> NominalDiffTime -> Int -> Application -> Application -> (Int -> [Text]) -> ([Text] -> IO a) -> IO a
+withProxyOverStubs knobs ttl maxEntries privateApp publicApp mkMix body = do
     capabilities <- getNumCapabilities
     fdLimit <- openFileSoftLimit
     let admissionCapacity = fst (resolveServeAdmission (lkServeMaxInFlight knobs) capabilities)
         privateConnections = fst (resolvePrivateConnections (lkPrivateConnectionsPerHost knobs) fdLimit)
-    testWithApplication (pure (stubUpstream octetContentType latency bytes)) $ \artPort ->
-        testWithApplication (pure (privateOverlayStub artPort latency bytes)) $ \privatePort ->
-            testWithApplication (pure (corpusPublicStub latency bodies)) $ \publicPort -> do
-                publicManager <- newManager (connectionPoolSettings (lkPublicConnectionsPerHost knobs) defaultManagerSettings)
-                -- The private pool is sized independently of the admission capacity,
-                -- through the same function the composition root uses, since a trusted
-                -- tarball hit streams outside admission (see resolvePrivateConnections).
-                privateManager <- newManager (connectionPoolSettings privateConnections defaultManagerSettings)
-                admission <- newServeAdmission admissionCapacity
-                cache <- newMetadataCache defaultCacheConfig{cacheTtl = ttl, cacheMaxEntries = max 1 maxEntries}
-                logEnv <- benchLogEnv
-                heartbeat <- newWorkerHeartbeat
-                queue <- newInMemoryQueue
-                -- The same plain manager serves the private and public legs; the serve path
-                -- never touches the publish-side registry handle, so it is the refusing
-                -- placeholder.
-                env <- newEnvWithAdmission admission refusingRegistry queue publicManager privateManager cache logEnv telemetryDisabled heartbeat
-                deps <- npmDeps privatePort publicPort
-                let cfg = mkServerConfig [npmMount deps]
-                testWithApplication (pure (application cfg env)) $ \proxyPort ->
-                    body (mkMix proxyPort)
-  where
-    latency = lkUpstreamLatencyMicros knobs
+    testWithApplication (pure privateApp) $ \privatePort ->
+        testWithApplication (pure publicApp) $ \publicPort -> do
+            publicManager <- newManager (connectionPoolSettings (lkPublicConnectionsPerHost knobs) defaultManagerSettings)
+            -- The private pool is sized independently of the admission capacity,
+            -- through the same function the composition root uses, since a trusted
+            -- tarball hit streams outside admission (see resolvePrivateConnections).
+            privateManager <- newManager (connectionPoolSettings privateConnections defaultManagerSettings)
+            admission <- newServeAdmission admissionCapacity
+            cache <- newMetadataCache defaultCacheConfig{cacheTtl = ttl, cacheMaxEntries = max 1 maxEntries}
+            logEnv <- benchLogEnv
+            heartbeat <- newWorkerHeartbeat
+            queue <- newInMemoryQueue
+            -- The same plain manager serves the private and public legs; the serve path
+            -- never touches the publish-side registry handle, so it is the refusing
+            -- placeholder.
+            env <- newEnvWithAdmission admission refusingRegistry queue publicManager privateManager cache logEnv telemetryDisabled heartbeat
+            deps <- npmDeps privatePort publicPort
+            let cfg = mkServerConfig [npmMount deps]
+            testWithApplication (pure (application cfg env)) $ \proxyPort ->
+                body (mkMix proxyPort)
 
 -- The proxy URL for one corpus package's packument GET.
 packageUrl :: Int -> Text -> Text
@@ -423,6 +491,7 @@ workerScenario :: Scenario
 workerScenario =
     Scenario
         { scenarioName = "worker-mirroring"
+        , scenarioConcurrencyScale = 1
         , scenarioDescription =
             "The mirror worker's fetch -> verify -> publish -> ack loop, driven in-process over a stub artifact upstream: each job fetches the artifact over loopback, recomputes and verifies its integrity digest, and publishes through a succeeding in-memory client. The mirror-presence probe answers absent, so every job measures the full pipeline, never the dedup short-circuit."
         , scenarioBoot = \knobs k -> do
@@ -600,6 +669,82 @@ cpUnscopedName cp = case T.breakOn "/" (cpName cp) of
 the body's self-reported name, scoped or not), the capture file read at boot, and the
 serve weight (its URL's multiplicity in the large-emphasis weighted mix).
 -}
+
+{- | The onboarding (fail-over) fixture: the private upstream misses everything, the
+public upstream self-hosts a minimal admissible packument and the artifact bytes.
+
+The private stub answers @404@ to every request __after the injected latency__: during
+onboarding the pull-through private registry has nothing mirrored yet, and the probe's
+round trip is a real cost the scenario must price, not skip. The public stub serves,
+for any requested package, a one-version packument whose @dist.tarball@ points back at
+the stub's own authority (read from the request's @Host@ header, so the
+same-host-as-packument tarball policy holds without configuration) and the canned
+artifact bytes for any tarball path. The version is published long ago, so the bench
+policy admits it, and carries floor-meeting digests.
+
+The gate's document decode here is deliberately small: the packument-decode cost of
+the metadata paths is priced by the packument scenarios; this scenario prices the
+fail-over __shape__ -- probe miss, single-version gate, public stream, mirror enqueue.
+-}
+onboardingPrivateStub :: Int -> Application
+onboardingPrivateStub latency _request respond = do
+    when (latency > 0) (threadDelay latency)
+    respond (responseLBS status404 [(hContentType, jsonContentType)] "{}")
+
+-- The self-hosted public stub of the onboarding fixture (see 'onboardingPrivateStub').
+onboardingPublicStub :: Int -> LByteString -> Application
+onboardingPublicStub latency bytes request respond = do
+    when (latency > 0) (threadDelay latency)
+    case requestedPackage request of
+        Just pkg
+            | "/-/" `T.isInfixOf` pkg ->
+                respond (responseLBS status200 [(hContentType, octetContentType)] bytes)
+        Just pkg ->
+            respond (responseLBS status200 [(hContentType, jsonContentType)] (encode (onboardingPackument (selfAuthority request) pkg)))
+        Nothing ->
+            respond (responseLBS status404 [(hContentType, jsonContentType)] "{}")
+
+-- The stub's own base URL, recovered from the request's @Host@ header, so the
+-- packument's self-referencing @dist.tarball@ carries the authority the proxy
+-- actually fetched from (the port is not knowable before warp binds).
+selfAuthority :: Request -> Text
+selfAuthority request =
+    "http://" <> maybe "127.0.0.1" decodeUtf8 (List.lookup hHost (requestHeaders request))
+
+-- A minimal admissible packument: one old version, self-hosted conventional
+-- tarball, floor-meeting digests -- enough for the single-version gate to admit and
+-- the public stream to fetch, nothing more.
+onboardingPackument :: Text -> Text -> Value
+onboardingPackument base name =
+    object
+        [ "name" .= name
+        , "dist-tags" .= object ["latest" .= onboardingVersion]
+        , "versions" .= object [Key.fromText onboardingVersion .= versionObj]
+        , "time" .= object ["created" .= publishedLongAgo, Key.fromText onboardingVersion .= publishedLongAgo]
+        , "_id" .= name
+        ]
+  where
+    versionObj =
+        object
+            [ "name" .= name
+            , "version" .= onboardingVersion
+            , "dist"
+                .= object
+                    [ "tarball" .= (base <> "/" <> name <> "/-/" <> unscopedName name <> "-" <> onboardingVersion <> ".tgz")
+                    , "integrity" .= validSha512Sri
+                    , "shasum" .= validSha1
+                    ]
+            ]
+
+onboardingVersion :: Text
+onboardingVersion = "1.0.0"
+
+-- The onboarding drive: each corpus package's tarball once, uniformly -- a fresh
+-- project pulls each dependency once, not by popularity weight.
+onboardingMix :: Int -> [Text]
+onboardingMix proxyPort =
+    [localhost proxyPort <> "/npm/" <> cpName cp <> "/-/" <> unscopedName (cpName cp) <> "-" <> onboardingVersion <> ".tgz" | cp <- serveCorpus]
+
 data CorpusPackage = CorpusPackage
     { cpName :: Text
     , cpFile :: FilePath
@@ -669,10 +814,16 @@ overlayVersionObject artPort name version =
                 ]
         ]
   where
-    unscoped = case T.breakOn "/" name of
-        (scope, base)
-            | "@" `T.isPrefixOf` scope && not (T.null base) -> T.drop 1 base
-        _ -> name
+    unscoped = unscopedName name
+
+{- | The npm tarball filename stem for a package: a scoped @\@scope\/name@ drops its
+scope (the npm convention for @dist.tarball@ filenames); an unscoped name is itself.
+-}
+unscopedName :: Text -> Text
+unscopedName name = case T.breakOn "/" name of
+    (scope, base)
+        | "@" `T.isPrefixOf` scope && not (T.null base) -> T.drop 1 base
+    _ -> name
 
 packageText :: Text
 packageText = "bench-pkg"

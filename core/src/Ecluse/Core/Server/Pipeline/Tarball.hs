@@ -56,7 +56,11 @@ including a host the tarball-host policy refuses -- it renders the serve error m
 __serve-then-enqueue, best-effort and non-blocking__: the artifact reaches the client
 first, and an enqueue failure is swallowed rather than failing or delaying the response.
 Mirroring is __demand-driven__ -- a job is enqueued only here, on a tarball-path admit,
-never when a packument is filtered. The serve path does __not__ verify @dist.integrity@;
+never when a packument is filtered. The two legs are not peers over time: the
+back-fill retires each artifact from the public leg, so at steady state the private
+conventional read serves the vast majority of tarball traffic and the public leg is
+the transient onboarding\/fail-over ramp (see
+@docs\/architecture\/registry-model.md@ → "Traffic shape over time"). The serve path does __not__ verify @dist.integrity@;
 the client checks the artifact's own hash and the worker re-verifies before publishing.
 
 An artifact is a __pass-through__ body -- served byte-identical to upstream's -- so its

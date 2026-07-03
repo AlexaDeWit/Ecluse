@@ -59,7 +59,10 @@ detail.
    roles: a **first-party** store (publication target), a **public-derived mirror**
    store (mirror target), and a **pull-through** read endpoint that aggregates both
    (`ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM`). Keeping first-party and public-derived inventory physically
-   separate lets you apply distinct storage-level policies and scanning per provenance. It also keeps your package inventory auditable. Collapsing them onto fewer registries still
+   separate lets you apply distinct storage-level policies and scanning per provenance.
+   Over time the pull-through endpoint serves nearly all reads (the worker back-fills
+   every admitted public artifact into the mirror), so size for private-hit traffic as
+   the steady state; the public path is the onboarding ramp, not the workhorse. It also keeps your package inventory auditable. Collapsing them onto fewer registries still
    works, but muddies auditing and post-incident scoping. **The one hard rule:** your
    aggregating endpoint must union **trusted** stores only, never a direct public
    upstream. Otherwise, raw, ungated public packages reach clients as trusted, bypassing Écluse's

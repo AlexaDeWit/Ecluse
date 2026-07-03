@@ -27,6 +27,9 @@ on:
       serve-max-in-flight:
         description: "Maximum concurrent packument fetches (blank exercises the proxy's computed default, as a scheduled run does)"
         required: false
+      payload-bytes:
+        description: "Synthetic artifact size in bytes for the worker and tarball scenarios (default 262144; sweep this to probe the relay's byte rate)"
+        required: false
   schedule:
     # Nightly, off-peak UTC. A trend a human reads in the morning, never a gate.
     - cron: "17 4 * * *"
@@ -59,6 +62,7 @@ jobs:
       BENCH_LOAD_DURATION_SECONDS: ${{ github.event.inputs.duration-seconds || '30' }}
       BENCH_LOAD_CONCURRENCY: ${{ github.event.inputs.concurrency || '50' }}
       BENCH_LOAD_SERVE_MAX_IN_FLIGHT: ${{ github.event.inputs.serve-max-in-flight }}
+      BENCH_LOAD_PAYLOAD_BYTES: ${{ github.event.inputs.payload-bytes || '262144' }}
       BENCH_LOAD_ISOLATE_OHA: "1"
     steps:
       - name: Checkout

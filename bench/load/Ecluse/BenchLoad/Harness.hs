@@ -231,6 +231,14 @@ data Scenario = Scenario
     -- ^ A stable, argument-safe identifier (the driver passes it to the child process).
     , scenarioDescription :: Text
     -- ^ A one-line description of the traffic shape, for the rendered report.
+    , scenarioConcurrencyScale :: Int
+    {- ^ Multiplier applied to the shared 'lkConcurrency' for this scenario alone.
+    @1@ for every ordinary scenario; a ceiling-probe scenario raises it so the load
+    generator stops being the binding constraint (a streaming path at the default
+    concurrency is bounded by client connections x RTT, not by the proxy). The
+    scenario's description must state the factor, since the operating-point line
+    prints the shared base.
+    -}
     , scenarioBoot :: forall a. LoadKnobs -> (Driver -> IO a) -> IO a
     -- ^ Bracket the ecosystem-specific setup\/teardown and yield the 'Driver'.
     }
@@ -328,7 +336,10 @@ runScenario knobs scenario = do
     rtsOn <- getRTSStatsEnabled
     unless rtsOn $
         benchFail "bench-load needs the RTS stats (build with -with-rtsopts=-T); getRTSStatsEnabled is False"
-    scenarioBoot scenario knobs (measure knobs scenario)
+    -- The scenario's concurrency scale is applied to the shared base here, once, so
+    -- the boot, the warm-up, and the measured drive all see the scenario's own level.
+    let scaled = knobs{lkConcurrency = lkConcurrency knobs * max 1 (scenarioConcurrencyScale scenario)}
+    scenarioBoot scenario scaled (measure scaled scenario)
 
 -- Apply the load over a booted fixture and assemble the report. A short warm-up runs
 -- first (JIT, connection pool, and the metadata cache settle, so the measured window is
@@ -502,7 +513,9 @@ renderReports knobs capabilities ecosystem reports =
             <> show admissionCapacity
             <> " ("
             <> admissionOrigin
-            <> "; private pool follows admission) · public connections per host "
+            <> ") · private pool "
+            <> privatePoolNote
+            <> " · public connections per host "
             <> show (lkPublicConnectionsPerHost knobs)
             <> " · "
             <> show capabilities
@@ -519,6 +532,12 @@ renderReports knobs capabilities ecosystem reports =
     admissionOrigin = case lkServeMaxInFlight knobs of
         Just _ -> "explicit"
         Nothing -> "computed from " <> show capabilities <> " capabilities, as in production"
+
+    -- The private pool no longer follows admission (it is fd-derived since the
+    -- composition split them); name its origin so the line cannot mislead.
+    privatePoolNote = case lkPrivateConnectionsPerHost knobs of
+        Just n -> show n <> " (explicit)"
+        Nothing -> "computed from the fd limit, as in production"
 
 renderScenario :: ScenarioReport -> [Text]
 renderScenario r =
