@@ -79,8 +79,8 @@ module Ecluse.Core.Server.Pipeline.Packument (
 import Crypto.Hash (Context, SHA256, hashFinalize, hashInit, hashUpdates)
 import Data.Aeson (Value (Object))
 import Data.Aeson qualified as Aeson
-import Data.Aeson.Encoding (fromEncoding)
 import Data.Aeson.Text (encodeToLazyText)
+import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
@@ -88,8 +88,8 @@ import Data.Text qualified as T
 import Data.Text.Lazy qualified as TL
 import Katip (KatipContext, Severity (DebugS, InfoS, WarningS), katipAddContext, logFM, ls, sl)
 import Network.HTTP.Client (Manager)
-import Network.HTTP.Types (ResponseHeaders, Status, hContentLength, hContentType, mkStatus, status200)
-import Network.Wai (Request, Response, ResponseReceived, requestHeaders, responseBuilder)
+import Network.HTTP.Types (ResponseHeaders, Status, hContentLength, mkStatus, status200)
+import Network.Wai (Request, Response, ResponseReceived, requestHeaders)
 import UnliftIO (concurrently, withRunInIO)
 import UnliftIO.Exception (tryAny)
 
@@ -126,8 +126,8 @@ import Ecluse.Core.Security (
     Limits,
  )
 import Ecluse.Core.Server.Admission (withServeAdmission)
-import Ecluse.Core.Server.Cache (Source (Source))
-import Ecluse.Core.Server.Conditional (Conditional (Modified, NotModified), ETag, etagHeader, evaluateETag, mkStrongETag)
+import Ecluse.Core.Server.Cache (Source (Source), resolveAssembled)
+import Ecluse.Core.Server.Conditional (Conditional (Modified, NotModified), ETag, etagHeader, evaluateETag, mkStrongETag, renderETag)
 import Ecluse.Core.Server.Context (
     Handler,
     MountBinding (bindingPackumentDeps, bindingRenderer),
@@ -294,8 +294,20 @@ serveWithDeps mode renderer deps name request respond
                         logFM DebugS (ls ("packument unchanged for " <> renderPackageName name <> " (304, unassembled)"))
                         liftIO (respond (notModifiedResponse matched))
                     Modified fresh -> do
-                        logFM DebugS (ls ("assembled packument for " <> renderPackageName name))
-                        liftIO (respond (packumentResponse mode fresh (renderServedBody deps sources plan)))
+                        logFM DebugS (ls ("serving packument for " <> renderPackageName name))
+                        -- The validator is a content address over every serve input, so
+                        -- the assembled, encoded document is memoised under it: a recurring
+                        -- triple (public entry, private content, plan) serves the stored
+                        -- bytes with no assembly or encode, and concurrent identical
+                        -- renders coalesce onto one leader. A changed input is a changed
+                        -- key, so the store cannot serve stale bytes; a different private
+                        -- view is a different key, so it cannot cross a client boundary.
+                        bytes <-
+                            liftIO $
+                                resolveAssembled (srMetrics rt) (srMetadataCache rt) (renderETag fresh) $
+                                    pure $!
+                                        LBS.toStrict (Aeson.encode (servedValue (renderServedBody deps sources plan)))
+                        liftIO (respond (packumentResponse mode fresh bytes))
             Nothing -> do
                 let decisions = collectDecisions privResult pubResult (privateExclusions <> publicExclusions)
                 liftIO (mpServeDecision metrics (packumentServeDecision decisions))
@@ -794,28 +806,21 @@ collectDecisions privResult pubResult publicExclusions =
     upstreamInvalidDecision :: ServeDecision
     upstreamInvalidDecision = Reject (Rejection UpstreamInvalid "an upstream returned a packument for a different package")
 
-{- Render the served packument @200@, carrying the derived 'ETag' the caller already
-evaluated the conditional against ('Modified' -- a match never reaches here).
-
-A 'PackumentFull' (GET) __streams the encoding straight into the response__: the
-document is never materialised whole (no lazy-bytestring chunks retained across a
-hash or length pass), so the answer costs one encode traversal and no residency
-spike; the serving layer frames the body it writes. A 'PackumentHead' alone still
-pays an encode, to advertise the would-be body's @Content-Length@ (the 'bodiless'
-wrapper then withholds the bytes), so the @HEAD@ reply frames exactly what a @GET@
-would. -}
-packumentResponse :: PackumentServe -> ETag -> ServedBody -> Response
-packumentResponse mode etag body = case mode of
+{- The served packument @200@ over the (possibly memoised) assembled bytes, carrying
+the derived 'ETag' the caller already evaluated the conditional against ('Modified' --
+a match never reaches here). The bytes come from 'resolveAssembled': strict, encoded
+once per content address, shared across every request whose inputs coincide. A
+'PackumentHead' additionally advertises the body's exact @Content-Length@ (the
+'bodiless' wrapper then withholds the bytes), free off the memoised bytes. -}
+packumentResponse :: PackumentServe -> ETag -> ByteString -> Response
+packumentResponse mode etag bytes = case mode of
     PackumentFull ->
-        responseBuilder
-            status200
-            [etagHeader etag, (hContentType, "application/json")]
-            (fromEncoding (Aeson.toEncoding (servedValue body)))
+        jsonResponse status200 [etagHeader etag] (LBS.fromStrict bytes)
     PackumentHead ->
-        jsonResponse status200 [etagHeader etag, (hContentLength, show (LBS.length encoded))] encoded
-      where
-        encoded :: LByteString
-        encoded = Aeson.encode (servedValue body)
+        jsonResponse
+            status200
+            [etagHeader etag, (hContentLength, show (BS.length bytes))]
+            (LBS.fromStrict bytes)
 
 -- The bodiless conditional answer: the client's validator matched, so only the tag
 -- travels. Identical between GET and HEAD (a 304 carries no body either way).

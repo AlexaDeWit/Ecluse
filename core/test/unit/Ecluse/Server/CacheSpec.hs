@@ -3,6 +3,7 @@
 module Ecluse.Server.CacheSpec (spec) where
 
 import Data.Aeson (Value (String))
+import Data.ByteString qualified as BS
 import Data.Map.Strict qualified as Map
 import Data.Time (NominalDiffTime)
 import Test.Hspec
@@ -38,6 +39,20 @@ resolveMetadata = Cache.resolveMetadata noopMetricsPort
 -- | As 'resolveMetadata', threading the single-flight handoff hook (an inert metrics port).
 resolveMetadataWith :: IO () -> MetadataCache -> Source -> PackageName -> IO CacheEntry -> IO CacheEntry
 resolveMetadataWith afterClaim = Cache.resolveMetadataWith afterClaim noopMetricsPort
+
+-- | Resolve through the assembled-representation store with an inert metrics port.
+resolveAssembled :: MetadataCache -> Text -> IO ByteString -> IO ByteString
+resolveAssembled = Cache.resolveAssembled noopMetricsPort
+
+-- | A counting render: bumps the counter, then yields the given assembled bytes.
+countingRender :: IORef Int -> ByteString -> IO ByteString
+countingRender renders bytes = do
+    atomicModifyIORef' renders (\n -> (n + 1, ()))
+    pure bytes
+
+-- | A filler body of the given size, for driving the assembled store's byte budget.
+mkBytes :: Int -> Char -> ByteString
+mkBytes n c = BS.replicate n (fromIntegral (ord c))
 
 -- | A package name fixture; the metadata cache keys on package identity.
 pkg :: Text -> PackageName
@@ -379,6 +394,46 @@ spec = do
             n <- cacheSize c
             residency `shouldBe` Just (n * entryWeight)
             n `shouldBe` 4
+
+    describe "resolveAssembled -- the assembled-representation store" $ do
+        it "serves the stored bytes on a repeat key without re-rendering" $ do
+            renders <- newIORef (0 :: Int)
+            c <- newMetadataCache (config 60 8)
+            initial <- resolveAssembled c "\"tag-a\"" (countingRender renders "assembled-bytes")
+            again <- resolveAssembled c "\"tag-a\"" (countingRender renders "assembled-bytes")
+            initial `shouldBe` "assembled-bytes"
+            again `shouldBe` "assembled-bytes"
+            readIORef renders `shouldReturn` 1
+
+        it "keeps distinct keys distinct (a different validator never shares bytes)" $ do
+            renders <- newIORef (0 :: Int)
+            c <- newMetadataCache (config 60 8)
+            a <- resolveAssembled c "\"tag-a\"" (countingRender renders "bytes-a")
+            b <- resolveAssembled c "\"tag-b\"" (countingRender renders "bytes-b")
+            (a, b) `shouldBe` ("bytes-a", "bytes-b")
+            readIORef renders `shouldReturn` 2
+
+        it "coalesces concurrent identical renders onto one leader" $ do
+            renders <- newIORef (0 :: Int)
+            c <- newMetadataCache (config 60 8)
+            results <-
+                mapConcurrently
+                    (\(_ :: Int) -> resolveAssembled c "\"tag-a\"" (threadDelay 20_000 >> countingRender renders "assembled-bytes"))
+                    [1 .. 8]
+            results `shouldSatisfy` all (== "assembled-bytes")
+            readIORef renders `shouldReturn` 1
+
+        it "evicts to the byte budget, re-rendering an evicted entry on its next request" $ do
+            renders <- newIORef (0 :: Int)
+            -- A budget that holds roughly one large entry: the second insert evicts the
+            -- first, so re-requesting the first key re-renders.
+            let bigBytes = 4096
+                budget = bigBytes + 1024
+            c <- newMetadataCache (configBytes 60 8 budget)
+            _ <- resolveAssembled c "\"tag-a\"" (countingRender renders (mkBytes bigBytes 'a'))
+            _ <- resolveAssembled c "\"tag-b\"" (countingRender renders (mkBytes bigBytes 'b'))
+            _ <- resolveAssembled c "\"tag-a\"" (countingRender renders (mkBytes bigBytes 'a'))
+            readIORef renders `shouldReturn` 3
 
     describe "defaultCacheConfig" $ do
         it "uses a short, non-zero TTL" $
