@@ -148,9 +148,12 @@ different packages concurrently. Écluse therefore admits at most
 `ECLUSE_SERVE_MAX_IN_FLIGHT` metadata materialisations process-wide (a whole
 packument request or the public-metadata gate after a private tarball miss). The
 default is **computed at boot** from the resolved capability count,
-`max(8, 4 x capabilities)`: an admitted materialisation alternates upstream wait
+`max(8, 10 x capabilities)`: an admitted materialisation alternates upstream wait
 and CPU work, so keeping `C` capabilities busy wants about `C x (1 + W/P)` in
-flight, roughly 4 per capability at realistic latency ratios. The decision is
+flight. The naive one-round-trip model put `W/P` near 3 (about 4 per capability);
+the load bench's measured dose-response kept climbing past that and levelled only
+around 10 per capability, because a slot is held across every upstream leg plus
+GC pauses and scheduling delay. The multiplier is therefore empirical. The decision is
 logged with its provenance beside the runtime posture lines; set the key only to
 override it. The **private upstream connection pool always equals the effective
 admission capacity** (no separate key): private reads are per-request and never

@@ -127,13 +127,16 @@ connectionPoolSettings connections settings = settings{managerConnCount = connec
 
 {- | The effective serve-admission capacity and its boot-log line: the explicit
 @serveMaxInFlight@ when configured, else __computed from the resolved capability
-count__ -- @max 8 (4 x capabilities)@.
+count__ -- @max 8 (10 x capabilities)@.
 
-The multiplier comes from the saturation model: an admitted metadata
-materialisation alternates upstream wait (@W@, roughly one upstream round trip)
-and CPU work (@P@), so keeping @C@ capabilities busy wants about
-@C x (W + P) \/ P@ in flight; with the realistic @W\/P@ around 2-3 that is
-~4 per capability. The floor keeps a tiny pod admitting a useful burst. The
+The multiplier is empirical, not modelled. The saturation model (an admitted
+metadata materialisation alternates upstream wait @W@ and CPU work @P@, so
+keeping @C@ capabilities busy wants about @C x (W + P) \/ P@ in flight)
+suggested ~4 per capability at a round-trip @W\/P@ of 2-3, but the load bench's
+measured dose-response kept climbing well past that and levelled only near 10
+per capability: a slot is held across every upstream leg plus GC pauses and
+scheduling delay, so the effective @W\/P@ is nearer 9-10. The floor keeps a tiny
+pod admitting a useful burst should the multiplier ever drop below it. The
 capability count must be the __post-runtime-posture__ one (see "Ecluse.Runtime"),
 so callers resolve this after 'Ecluse.Runtime.applyRuntimePosture' has run.
 
@@ -151,11 +154,11 @@ resolveServeAdmission explicit capabilities = case explicit of
         let computed = max serveAdmissionFloor (serveAdmissionPerCapability * capabilities)
          in (computed, "runtime: serve admission " <> show computed <> " (computed from " <> show capabilities <> " capabilities)")
 
--- The computed-admission constants: ~C x (1 + W/P) with W/P ~ 3 (see
--- 'resolveServeAdmission'), and a floor so a single-capability pod still admits a
--- useful burst.
+-- The computed-admission constants: empirically ~10 per capability (see
+-- 'resolveServeAdmission'), and a floor so a tiny pod still admits a useful
+-- burst if the multiplier ever drops below it.
 serveAdmissionPerCapability :: Int
-serveAdmissionPerCapability = 4
+serveAdmissionPerCapability = 10
 
 serveAdmissionFloor :: Int
 serveAdmissionFloor = 8
