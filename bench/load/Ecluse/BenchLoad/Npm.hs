@@ -97,7 +97,7 @@ import Network.Wai.Handler.Warp (testWithApplication)
 
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Harness (Driver (DriveHttpUrls, DriveInProcess), LoadKnobs (..), Scenario (..), UpstreamFixture (..))
-import Ecluse.Composition (connectionPoolSettings, resolveServeAdmission)
+import Ecluse.Composition (connectionPoolSettings, openFileSoftLimit, resolvePrivateConnections, resolveServeAdmission)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (Hash, HashAlg (SHA1, SRI), PackageName, mkPackageName)
@@ -125,7 +125,7 @@ import Ecluse.Core.Registry.Npm.Route qualified as Npm
 import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan), atDefaultPrecedence)
-import Ecluse.Core.Security (TarballHostPolicy (SameHostAsPackument), defaultLimits, lowerCaseHosts)
+import Ecluse.Core.Security (TarballHostPolicy (SameHostAsPackument), defaultLimits, lowerCaseHosts, tarballHostGate)
 import Ecluse.Core.Server.Admission (newServeAdmission)
 import Ecluse.Core.Server.Cache (CacheConfig (cacheMaxEntries, cacheTtl), defaultCacheConfig, newMetadataCache)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
@@ -264,17 +264,21 @@ withNpmProxy :: LoadKnobs -> NominalDiffTime -> Int -> (Int -> [Text]) -> ([Text
 withNpmProxy knobs ttl maxEntries mkMix body = do
     bodies <- loadServeBodies
     let bytes = artifactBytes (lkPayloadBytes knobs)
-    -- An unknobbed run resolves the admission capacity through the same function as
-    -- the composition root, so it measures the shipped default.
+    -- An unknobbed run resolves the admission capacity and the private pool through the
+    -- same functions as the composition root, so it measures the shipped defaults (the
+    -- two are computed from independent datapoints: capabilities vs the fd limit).
     capabilities <- getNumCapabilities
+    fdLimit <- openFileSoftLimit
     let admissionCapacity = fst (resolveServeAdmission (lkServeMaxInFlight knobs) capabilities)
+        privateConnections = fst (resolvePrivateConnections (lkPrivateConnectionsPerHost knobs) fdLimit)
     testWithApplication (pure (stubUpstream octetContentType latency bytes)) $ \artPort ->
         testWithApplication (pure (privateOverlayStub artPort latency bytes)) $ \privatePort ->
             testWithApplication (pure (corpusPublicStub latency bodies)) $ \publicPort -> do
                 publicManager <- newManager (connectionPoolSettings (lkPublicConnectionsPerHost knobs) defaultManagerSettings)
-                -- The private pool follows the admission capacity by construction,
-                -- as in production (issue #634).
-                privateManager <- newManager (connectionPoolSettings admissionCapacity defaultManagerSettings)
+                -- The private pool is sized independently of the admission capacity,
+                -- through the same function the composition root uses, since a trusted
+                -- tarball hit streams outside admission (see resolvePrivateConnections).
+                privateManager <- newManager (connectionPoolSettings privateConnections defaultManagerSettings)
                 admission <- newServeAdmission admissionCapacity
                 cache <- newMetadataCache defaultCacheConfig{cacheTtl = ttl, cacheMaxEntries = max 1 maxEntries}
                 logEnv <- benchLogEnv
@@ -335,6 +339,7 @@ npmDeps privatePort publicPort = do
             , pdRules = prepared
             , pdTarballHostPolicy = SameHostAsPackument
             , pdAllowedInternalHosts = lowerCaseHosts (Set.singleton "127.0.0.1")
+            , pdTarballHostGate = tarballHostGate (localhost privatePort) (localhost publicPort) "https://mirror.bench"
             , pdLimits = defaultLimits
             , pdInboundToken = Nothing
             , pdNow = pure benchNow

@@ -102,11 +102,12 @@ import Ecluse.Core.Registry.Metadata (
 import Ecluse.Core.Rules (evalRules)
 import Ecluse.Core.Rules.Types (EvalContext (EvalContext))
 import Ecluse.Core.Security (
-    LoweredHostSet,
     Origin (TrustedOrigin, UntrustedOrigin),
     hostAddress,
-    lowerCaseHosts,
     tarballHostAllowed,
+    thgAllowlist,
+    thgPrivateHost,
+    thgPublicHost,
  )
 import Ecluse.Core.Server.Admission (withServeAdmission)
 import Ecluse.Core.Server.Conditional (forwardValidators, isNotModified)
@@ -333,9 +334,14 @@ streamPrivateArtifact mode rt deps token validators name file respond =
     -- redirectCount = 0 (the credential-redirect invariant).
     privateRequest :: Maybe HTTP.Request
     privateRequest =
-        if tarballHostHonoured TrustedOrigin deps (pdPrivateBaseUrl deps) (pdPrivateBaseUrl deps)
+        if tarballHostHonoured TrustedOrigin deps privateHost privateHost
             then withValidators validators . withMethod mode <$> rightToMaybe (pdBuildArtifactRequestByFile deps (pdLimits deps) (srPrivateManager rt) (pdPrivateBaseUrl deps) token name file)
             else Nothing
+      where
+        -- The precomputed private host: the constructed URL is on the private base
+        -- host, so both the packument and the tarball host of the trusted gate are it
+        -- (the check stays applied, trivially satisfied, without re-parsing the URL).
+        privateHost = thgPrivateHost (pdTarballHostGate deps)
 
 {- Serve the artifact from the public upstream after a private miss: gate the
 single requested version against the rules, and on an admit stream the public bytes
@@ -498,7 +504,7 @@ streamPublicArtifact ::
     (Response -> IO ResponseReceived) ->
     IO ResponseReceived
 streamPublicArtifact mode rt renderer deps validators name version artifact respond =
-    if tarballHostHonoured UntrustedOrigin deps (pdPublicBaseUrl deps) (artUrl artifact)
+    if tarballHostHonoured UntrustedOrigin deps (thgPublicHost (pdTarballHostGate deps)) (hostAddress (artUrl artifact))
         then case withValidators validators . withMethod mode <$> pdBuildArtifactRequestByUrl deps (pdLimits deps) (srPublicManager rt) (pdPublicBaseUrl deps) Nothing (artUrl artifact) of
             Right req ->
                 relayUpstreamWhen mode (srPublicManager rt) req (const True) relayArtifact respond >>= \case
@@ -611,14 +617,20 @@ enqueueMirror rt deps name version artifact =
     enqueueFailureDetail :: SomeException -> Text
     enqueueFailureDetail e = "mirror enqueue failed: " <> toText (displayException e)
 
-{- Whether an artifact's authoritative @url@ may be fetched, given the origin's trust,
+{- Whether an artifact's @dist.tarball@ host may be fetched, given the origin's trust,
 the mount's tarball-host policy, and the host that served the packument it came from.
-Connects the pure 'tarballHostAllowed' at the serve boundary: the @url@'s host must be on
+Connects the pure 'tarballHostAllowed' at the serve boundary: the tarball host must be on
 the upstream allowlist and -- under the secure-default
 'Ecluse.Core.Security.SameHostAsPackument' -- equal to the packument host; the opt-in
 'Ecluse.Core.Security.AnyAllowlistedHost' relaxes that last clause to any allowlisted host.
 This is the policy half of the @dist.tarball@ defence; the egress itself is https-only
 with certificate validation authenticating the host (see "Ecluse.Core.Security.Egress").
+
+The @packumentHost@ and @artifactHost@ are bare hosts, __already extracted__: the
+mount-constant ones (the upstream allowlist and the private\/public hosts) are precomputed
+once at the composition root into the 'Ecluse.Core.Security.TarballHostGate' carried on
+'pdTarballHostGate', so the hot path parses no base URL and rebuilds no allowlist per
+request; only the dynamic public @dist.tarball@ host is parsed at the call site.
 
 The literal internal-range block is __origin-aware__: an
 'Ecluse.Core.Security.UntrustedOrigin' (the public path) is gated against it (subject to
@@ -628,24 +640,12 @@ since a private registry may legitimately live on an internal address (security.
 invariant 3). The allowlist and same-host clauses still gate the trusted origin
 identically. -}
 tarballHostHonoured :: Origin -> PackumentDeps -> Text -> Text -> Bool
-tarballHostHonoured origin deps packumentBaseUrl artifactUrl =
+tarballHostHonoured origin deps =
     tarballHostAllowed
         origin
         (pdTarballHostPolicy deps)
-        (upstreamAllowlist deps)
+        (thgAllowlist (pdTarballHostGate deps))
         (pdAllowedInternalHosts deps)
-        (hostAddress packumentBaseUrl)
-        (hostAddress artifactUrl)
-
-{- The host allowlist on the serve path: the bare hosts of the mount's configured
-upstreams -- the public and private upstream base URLs and the mirror target. These
-are exactly the hosts the proxy is configured to talk to, so an artifact @url@ on any
-other host is off the allowlist regardless of policy (security.md invariant 2: a
-@dist.tarball@ host off the configured upstreams is refused). -}
-upstreamAllowlist :: PackumentDeps -> LoweredHostSet
-upstreamAllowlist deps =
-    lowerCaseHosts . fromList $
-        map hostAddress [pdPublicBaseUrl deps, pdPrivateBaseUrl deps, pdMirrorTarget deps]
 
 {- Select the artifact a request's filename names from a version's distribution
 files. npm has exactly one artifact per version, so the match is the single file; a

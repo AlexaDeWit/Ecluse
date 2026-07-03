@@ -768,6 +768,7 @@ benchmark ecluse-bench
     Ecluse.Core.SecurityBench
     Ecluse.Core.SelectiveBench
     Ecluse.Core.ServeBench
+    Ecluse.Core.StreamBench
     Ecluse.Core.VersionBench
     Ecluse.Core.WireBench
 

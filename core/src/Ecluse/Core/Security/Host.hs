@@ -29,6 +29,8 @@ module Ecluse.Core.Security.Host (
     TarballHostPolicy (..),
     Origin (..),
     tarballHostAllowed,
+    TarballHostGate (..),
+    tarballHostGate,
 
     -- * Internal for testing
     isHex,
@@ -545,3 +547,45 @@ tarballHostAllowed origin policy allowed allowedInternal packumentHost tarballHo
     internalRangeOk = case origin of
         TrustedOrigin -> True
         UntrustedOrigin -> not (isBlockedTarget allowedInternal tarballHost)
+
+{- | The mount-constant inputs to the per-request 'tarballHostAllowed' gate, extracted
+__once__ from a mount's three configured upstream URLs so the serve path parses no URL
+and builds no host set per request.
+
+The serve-path tarball gate is on the hot artifact path (every private hit and every
+public leg runs it), yet its allowlist and the private\/public upstream hosts never
+change after boot -- they are fixed by the mount's configuration. Recovering them from
+the base URLs on each request rebuilt a 'LoweredHostSet' and re-ran 'hostAddress' several
+times per artifact; precomputing them here into a 'TarballHostGate' collapses that to a
+few field reads. The only genuinely per-request host is the dynamic public
+@dist.tarball@, still parsed at the call site.
+-}
+data TarballHostGate = TarballHostGate
+    { thgAllowlist :: LoweredHostSet
+    {- ^ The lowered allowlist of the mount's configured upstream hosts (public, private,
+    and mirror target) -- the same set every outbound fetch is gated against
+    (security.md invariant 2).
+    -}
+    , thgPrivateHost :: Text
+    -- ^ The bare host of the private upstream, extracted once.
+    , thgPublicHost :: Text
+    -- ^ The bare host of the public upstream, extracted once.
+    }
+    deriving stock (Eq, Show)
+
+{- | Build the 'TarballHostGate' from a mount's private, public, and mirror-target
+upstream URLs: the allowlist is the lowered set of their bare hosts, and the private and
+public hosts are each extracted once with 'hostAddress'. Called once per mount at the
+composition root (and by test fixtures); the result is carried on the serve
+dependencies so the per-request gate reads fields rather than re-parsing URLs.
+-}
+tarballHostGate :: Text -> Text -> Text -> TarballHostGate
+tarballHostGate privateUrl publicUrl mirrorUrl =
+    TarballHostGate
+        { thgAllowlist = lowerCaseHosts (Set.fromList [privateHost, publicHost, hostAddress mirrorUrl])
+        , thgPrivateHost = privateHost
+        , thgPublicHost = publicHost
+        }
+  where
+    privateHost = hostAddress privateUrl
+    publicHost = hostAddress publicUrl

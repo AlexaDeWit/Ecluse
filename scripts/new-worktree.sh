@@ -9,10 +9,10 @@
 # Why warm at creation, not on first call: each worktree is a separate HLS
 # workspace with its own (git-ignored) dist-newstyle / .hie. Dependencies already
 # come warm from the shared Nix store, so the only per-worktree cost is
-# typechecking this project's own modules. `make build` (== cabal build all
+# typechecking this project's own modules. `task build` (== cabal build all
 # --enable-tests) populates dist-newstyle with the interface files HLS reuses, so
 # the heavy load is already on disk by the time the agent's MCP boots HLS. We
-# delegate to `make build` rather than re-spelling the build so the warm-up can
+# delegate to `task build` rather than re-spelling the build so the warm-up can
 # never drift from the canonical one.
 #
 # The build is backgrounded and its output redirected to a log OUTSIDE the
@@ -47,13 +47,13 @@ git fetch --quiet origin 2>/dev/null || true
 git worktree add -b "$branch" "$dir" "$base"
 echo "new-worktree: created '$dir' on '$branch' (from '$base')"
 
-# Warm HLS's on-disk caches in the background. `env -u IN_NIX_SHELL` forces make
-# to rebuild the dev shell from the worktree's own on-disk flake rather than
-# trusting a (possibly stale) ambient agent shell — the same rule agents follow.
+# Warm HLS's on-disk caches in the background. `env -u IN_NIX_SHELL nix develop`
+# re-enters the dev shell from the worktree's own on-disk flake rather than
+# trusting a (possibly stale) ambient agent shell, the same rule agents follow.
 log="${TMPDIR:-/tmp}/ecluse-hls-warm-${slug}.log"
 (
   cd "$dir"
-  env -u IN_NIX_SHELL make build
+  env -u IN_NIX_SHELL nix develop --command task build
 ) >"$log" 2>&1 &
 warm_pid=$!
 

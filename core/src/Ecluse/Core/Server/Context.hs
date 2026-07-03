@@ -57,7 +57,7 @@ import Ecluse.Core.Queue (MirrorQueue)
 import Ecluse.Core.Registry (PublishRelayResponse, UrlFormationError)
 import Ecluse.Core.Registry.Metadata (MetadataClient, MetadataError)
 import Ecluse.Core.Rules (PreparedRule)
-import Ecluse.Core.Security (Limits, LoweredHostSet, TarballHostPolicy)
+import Ecluse.Core.Security (Limits, LoweredHostSet, TarballHostGate, TarballHostPolicy)
 import Ecluse.Core.Server.Admission (ServeAdmission)
 import Ecluse.Core.Server.Cache (MetadataCache)
 import Ecluse.Core.Server.Metadata (ManifestCaching)
@@ -157,6 +157,20 @@ data PackumentDeps = PackumentDeps
     an honoured artifact location ('Ecluse.Core.Security.tarballHostAllowed'), the cheap
     pure defence-in-depth that complements the host allowlist. Empty by default, the
     secure reading.
+    -}
+    , pdTarballHostGate :: TarballHostGate
+    {- ^ The mount-constant inputs to the per-request tarball-host gate
+    ('Ecluse.Core.Security.TarballHostGate'): the lowered upstream allowlist and the bare
+    private and public upstream hosts, extracted __once__ at the composition root from
+    the base URLs above. The hot artifact path reads these fields rather than rebuilding
+    the allowlist set and re-parsing the base URLs on every request (only the dynamic
+    public @dist.tarball@ host is parsed per request).
+
+    __Invariant__: this is a cached projection of 'pdPrivateBaseUrl', 'pdPublicBaseUrl',
+    and 'pdMirrorTarget'; whoever changes one of those after construction must re-derive
+    it via 'Ecluse.Core.Security.tarballHostGate' or the gate goes stale. The composition
+    root builds the deps once, so production never does; a test that record-updates a URL
+    field must rebuild the gate (the serve-path test harness does this centrally).
     -}
     , pdLimits :: Limits
     {- ^ The response-bound budget enforced on every upstream metadata fetch and

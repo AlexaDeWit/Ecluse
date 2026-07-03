@@ -37,6 +37,7 @@ import Ecluse.Core.RulesBench qualified as RulesBench
 import Ecluse.Core.SecurityBench qualified as SecurityBench
 import Ecluse.Core.SelectiveBench qualified as SelectiveBench
 import Ecluse.Core.ServeBench qualified as ServeBench
+import Ecluse.Core.StreamBench qualified as StreamBench
 import Ecluse.Core.VersionBench qualified as VersionBench
 import Ecluse.Core.WireBench qualified as WireBench
 import Test.Tasty (TestTree, testGroup)
@@ -61,6 +62,7 @@ main = do
             , RulesBench.benchmarks corpusEntries
             , MergeBench.benchmarks corpusEntries
             , ServeBench.benchmarks corpusEntries
+            , StreamBench.benchmarks
             , SecurityBench.benchmarks corpusEntries
             ]
         , generatorTests

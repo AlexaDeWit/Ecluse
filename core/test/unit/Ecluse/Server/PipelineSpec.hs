@@ -35,7 +35,7 @@ import Ecluse.Core.Registry.Npm.Route qualified as Npm
 import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan), atDefaultPrecedence)
-import Ecluse.Core.Security (TarballHostPolicy (SameHostAsPackument), defaultLimits, lowerCaseHosts)
+import Ecluse.Core.Security (TarballHostPolicy (SameHostAsPackument), defaultLimits, lowerCaseHosts, tarballHostGate)
 import Ecluse.Core.Server.Admission (ServeAdmission, newServeAdmission, unlimitedServeAdmission, withServeAdmission)
 import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Core.Server.Context (
@@ -210,6 +210,7 @@ depsFor publicPort = do
             , pdRules = prepared
             , pdTarballHostPolicy = SameHostAsPackument
             , pdAllowedInternalHosts = lowerCaseHosts (Set.singleton "127.0.0.1")
+            , pdTarballHostGate = tarballHostGate "http://127.0.0.1:1" ("http://127.0.0.1:" <> show publicPort) "http://mirror.test"
             , pdLimits = defaultLimits
             , pdInboundToken = Nothing
             , pdNow = pure fixedNow

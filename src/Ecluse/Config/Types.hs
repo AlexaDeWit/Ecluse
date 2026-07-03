@@ -146,6 +146,7 @@ data AppConfig = AppConfig
     , cfgMaxHeapBytes :: Maybe Int
     , cfgServeMaxInFlight :: Maybe Int
     , cfgPublicConnectionsPerHost :: Int
+    , cfgPrivateConnectionsPerHost :: Maybe Int
     , cfgCacheTtl :: NominalDiffTime
     , cfgCacheMaxEntries :: Int
     , cfgCacheMaxBytes :: Int

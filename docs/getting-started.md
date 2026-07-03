@@ -25,7 +25,7 @@ for one-offs.
 | Static analysis (SAST) | `task sast` |
 | Coverage (combined, matches Codecov; needs Docker) | `task coverage` |
 | Coverage (fast, unit-only, Docker-free; partial) | `task coverage-unit` |
-| Pre-push checks (fast) | `task check` |
+| Pre-push checks (subset of the gate) | `task check` |
 | Full CI-gate mirror (needs Docker) | `task gate` |
 
 Run `task --list` for the full list (the integration/smoke suites, `nix-build`, `nix-check`,
@@ -34,10 +34,11 @@ drift.
 
 **Before you push,** run `task check`, and it has to be clean: build (warnings are errors via
 `-Werror`), units (with strict assertions), doctest over the Haddock `>>>` examples,
-`fourmolu --mode check`, `hlint`, and Semgrep (zero findings). `task check` is the fast
-subset; `task gate` additionally runs the Docker-bound integration suite and the Haddock
-build, the two tiers the gate has that `task check` doesn't, for a faithful end-to-end
-representation. (Performance tests are not a push requirement; they are verified
+`fourmolu --mode check`, `hlint`, and Semgrep (zero findings). `task check` is the smaller
+of the two, but not a quick check: it is a full `-Werror` build of every component, so on a
+cold checkout or under CPU contention it runs 10+ minutes. `task gate` additionally runs the
+Docker-bound integration suite and the Haddock build, the two tiers the gate has that
+`task check` doesn't, for a faithful end-to-end representation. (Performance tests are not a push requirement; they are verified
 server-side.) Add `task test-integration` (needs Docker) for the other gating suite. The CI
 gate expects all those to pass. It also runs a live-registry smoke suite, but that suite
 (`task test-smoke`) is allowed to fail and never gates (see [Testing Strategy](testing.md)).

@@ -35,7 +35,7 @@ import Ecluse.Core.Registry.Npm.Route qualified as Npm
 import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan), atDefaultPrecedence)
-import Ecluse.Core.Security (LoweredHostSet, TarballHostPolicy (SameHostAsPackument), defaultLimits, lowerCaseHosts)
+import Ecluse.Core.Security (LoweredHostSet, TarballHostPolicy (SameHostAsPackument), defaultLimits, lowerCaseHosts, tarballHostGate)
 import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Core.Server.Metadata (newNpmMetadataClient)
@@ -186,6 +186,7 @@ mountBinding privateUrl publicUrl mirrorUrl = do
                 , pdRules = prepared
                 , pdTarballHostPolicy = SameHostAsPackument
                 , pdAllowedInternalHosts = loopbackOptIn
+                , pdTarballHostGate = tarballHostGate privateUrl publicUrl mirrorUrl
                 , pdLimits = defaultLimits
                 , pdInboundToken = Nothing
                 , pdNow = pure fixedNow

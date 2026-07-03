@@ -63,7 +63,7 @@ instance FromJSON MountConfig where
 
 instance FromJSON AppConfig where
     parseJSON = withObject "AppConfig" $ \o -> do
-        rejectUnknownKeys "document" ["port", "mounts", "queueBackend", "queueUrl", "queueMemoryMaxDepth", "awsRegion", "awsEndpointUrlSqs", "awsEndpointUrl", "awsAccessKeyId", "awsSecretAccessKey", "googleProject", "authToken", "helpMessage", "cveSyncInterval", "shutdownDrainTimeout", "cores", "maxHeapBytes", "serveMaxInFlight", "publicConnectionsPerHost", "cacheTtl", "cacheMaxEntries", "cacheMaxBytes", "maxResponseBytes", "maxVersionCount", "maxNestingDepth", "logFormat", "telemetry", "publicUrl", "minPublicIntegrity", "minTrustedIntegrity", "rules", "osvDataDir", "vulnerabilityDatabaseBucket"] o
+        rejectUnknownKeys "document" ["port", "mounts", "queueBackend", "queueUrl", "queueMemoryMaxDepth", "awsRegion", "awsEndpointUrlSqs", "awsEndpointUrl", "awsAccessKeyId", "awsSecretAccessKey", "googleProject", "authToken", "helpMessage", "cveSyncInterval", "shutdownDrainTimeout", "cores", "maxHeapBytes", "serveMaxInFlight", "publicConnectionsPerHost", "privateConnectionsPerHost", "cacheTtl", "cacheMaxEntries", "cacheMaxBytes", "maxResponseBytes", "maxVersionCount", "maxNestingDepth", "logFormat", "telemetry", "publicUrl", "minPublicIntegrity", "minTrustedIntegrity", "rules", "osvDataDir", "vulnerabilityDatabaseBucket"] o
         AppConfig
             <$> o .: "port"
             <*> (o .:? "mounts" .!= mempty >>= parseMounts)
@@ -82,6 +82,7 @@ instance FromJSON AppConfig where
             <*> (o .:? "maxHeapBytes" >>= traverse (parsePositiveInt "maxHeapBytes"))
             <*> (o .:? "serveMaxInFlight" >>= traverse (parsePositiveInt "serveMaxInFlight"))
             <*> (o .: "publicConnectionsPerHost" >>= parsePositiveInt "publicConnectionsPerHost")
+            <*> (o .:? "privateConnectionsPerHost" >>= traverse (parsePositiveInt "privateConnectionsPerHost"))
             <*> (o .: "cacheTtl" >>= parseSeconds)
             <*> o .: "cacheMaxEntries"
             <*> o .: "cacheMaxBytes"

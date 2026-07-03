@@ -103,7 +103,7 @@ import Ecluse.Composition (
  )
 import Ecluse.Composition qualified as Composition
 import Ecluse.Config (
-    AppConfig (cfgPort, cfgPublicConnectionsPerHost, cfgServeMaxInFlight, cfgShutdownDrainTimeout),
+    AppConfig (cfgPort, cfgPrivateConnectionsPerHost, cfgPublicConnectionsPerHost, cfgServeMaxInFlight, cfgShutdownDrainTimeout),
  )
 import Ecluse.Core.Credential (AuthToken (..), currentToken)
 import Ecluse.Core.Credential.Refresh (CredentialReporters (CredentialReporters, crBreakerReporter, crRefreshReporter))
@@ -182,12 +182,20 @@ runProxy bootEnv = do
     queuePlan <- orExit (T.unlines . map renderBootError) (planMirrorQueue env)
     -- The effective admission capacity: explicit config, else computed from the
     -- post-runtime-posture capability count, logged with its provenance beside the
-    -- runtime lines. The private manager's pool below follows this value by
-    -- construction (never a separate knob; see issue #634).
+    -- runtime lines. This bounds metadata materialisation only; the private manager's
+    -- pool is sized independently below, since a trusted tarball hit streams outside
+    -- admission (see 'Composition.resolvePrivateConnections' and issue #634).
     capabilities <- getNumCapabilities
     let (serveMaxInFlight, admissionLine) = Composition.resolveServeAdmission (cfgServeMaxInFlight env) capabilities
     logBootInfo logEnv admissionLine
     serveAdmission <- newServeAdmission serveMaxInFlight
+    -- The private-upstream connection pool: an explicit override, else computed from the
+    -- process file-descriptor limit (the pool's real ceiling, since each pooled
+    -- connection is one descriptor). Sized for the un-admitted private-hit streaming
+    -- fan-out, not the admission capacity.
+    fdLimit <- Composition.openFileSoftLimit
+    let (privateConnections, privateConnectionsLine) = Composition.resolvePrivateConnections (cfgPrivateConnectionsPerHost env) fdLimit
+    logBootInfo logEnv privateConnectionsLine
     let serverConfig =
             (mkServerConfig bindings)
                 { scPort = cfgPort env
@@ -219,7 +227,7 @@ runProxy bootEnv = do
     publicSettings <- instrumentDataPlaneManagerSettings telemetry tlsManagerSettings
     privateSettings <- instrumentDataPlaneManagerSettings telemetry tlsManagerSettings
     manager <- newManager (connectionPoolSettings (cfgPublicConnectionsPerHost env) publicSettings)
-    privateManager <- newManager (connectionPoolSettings serveMaxInFlight privateSettings)
+    privateManager <- newManager (connectionPoolSettings privateConnections privateSettings)
     -- The mirror worker's publish-side registry client, resolved per ecosystem from
     -- the configured mirror target and its write credential. It writes to the
     -- operator-configured, trusted mirror target, so it uses the trusted private
