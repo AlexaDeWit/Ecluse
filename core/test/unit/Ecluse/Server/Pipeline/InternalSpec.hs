@@ -252,8 +252,6 @@ detailsWith raw hashes =
         , pkgArtifacts = artifactWith hashes :| []
         , pkgLicenses = []
         , pkgPublisher = Nothing
-        , pkgMaintainers = []
-        , pkgDependencies = []
         }
 
 -- | A single inert tarball carrying the given integrity digests and nothing else.

@@ -23,7 +23,7 @@ import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
 import Ecluse.Bench.Corpus (CorpusEntry (cePackage), LoadedEntry, entryName, versionKeysOf)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Package (PackageDetails (pkgDependencies), PackageInfo (infoVersions))
+import Ecluse.Core.Package (PackageDetails, PackageInfo (infoVersions), artHashes, pkgArtifacts)
 import Ecluse.Core.Registry.Npm.Metadata (projectNpmManifest, projectNpmVersion)
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Version (Version, mkVersion, renderVersion)
@@ -64,6 +64,9 @@ selectiveDepth ce (raw, version) =
         Left _ -> -1
         Right mDetails -> detailsDepth mDetails
 
--- | Force a selected snapshot by a deep field; @-2@ marks an unexpectedly absent version.
+{- | Force a selected snapshot by a deep field (the artifact digests -- the
+decision surface no longer models dependencies); @-2@ marks an unexpectedly
+absent version.
+-}
 detailsDepth :: Maybe PackageDetails -> Int
-detailsDepth = maybe (-2) (length . pkgDependencies)
+detailsDepth = maybe (-2) (length . artHashes . NE.head . pkgArtifacts)

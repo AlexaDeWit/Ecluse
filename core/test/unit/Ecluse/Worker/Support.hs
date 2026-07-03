@@ -325,8 +325,6 @@ sampleDetails name version =
         , pkgArtifacts = sampleArtifact :| []
         , pkgLicenses = []
         , pkgPublisher = Nothing
-        , pkgMaintainers = []
-        , pkgDependencies = []
         }
 
 {- | A resolver that always reports the version present (projected), so the worker runs the

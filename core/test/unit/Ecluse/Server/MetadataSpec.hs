@@ -197,8 +197,6 @@ details who rawVer =
         , pkgArtifacts = artifact :| []
         , pkgLicenses = []
         , pkgPublisher = Nothing
-        , pkgMaintainers = []
-        , pkgDependencies = []
         }
   where
     artifact =

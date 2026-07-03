@@ -70,8 +70,6 @@ module Ecluse.Core.Package (
     isComputable,
 
     -- * Dependencies
-    Dependency (..),
-    DepKind (..),
 
     -- * People
     Person (..),
@@ -533,34 +531,6 @@ data Artifact = Artifact
     }
     deriving stock (Eq, Show)
 
--- | The role a dependency plays.
-data DepKind
-    = Runtime
-    | Dev
-    | Optional
-    | Peer
-    deriving stock (Eq, Show)
-
-{- | A declared dependency. The constraint is kept as __raw text__ (semver range
-\/ PEP 508 \/ @Gem::Requirement@) -- lossless and ecosystem-agnostic -- and is
-parsed only if a rule ever needs to compare it.
--}
-data Dependency = Dependency
-    { depName :: ShortText
-    {- ^ The dependency's name. Held as 'ShortText': dependency names repeat
-    across every version's dependency list and are only ever stored and compared
-    (never parsed or rewritten), so the @'Text' -> 'ShortText'@ conversion happens
-    once at projection (see STYLE.md §6).
-    -}
-    , depConstraint :: Text
-    -- ^ The raw version constraint, as declared.
-    , depKind :: DepKind
-    -- ^ The role the dependency plays (runtime, dev, optional, peer).
-    , depMarker :: Maybe Text
-    -- ^ A raw environment marker \/ extras qualifier (PEP 508), if any.
-    }
-    deriving stock (Eq, Show)
-
 -- | A person associated with a package (author, maintainer, or publisher).
 data Person = Person
     { personName :: Text
@@ -596,11 +566,22 @@ data PackageDetails = PackageDetails
     , pkgLicenses :: [Text]
     -- ^ Declared licenses (SPDX expressions/ids); may be several.
     , pkgPublisher :: Maybe Person
-    -- ^ Who published __this__ version, if known (provenance).
-    , pkgMaintainers :: [Person]
-    -- ^ The package's maintainers (distinct from the per-version publisher).
-    , pkgDependencies :: [Dependency]
-    -- ^ Declared dependencies, constraints kept raw.
+    {- ^ Who published __this__ version, if known (provenance).
+
+    Dependencies and maintainers are __deliberately not modelled__ (architect
+    ruling, 2026-07-02). Dependencies are structurally redundant on the decision
+    surface: a dependency only ever matters when it is itself fetched, and that
+    fetch comes back through this same gate and receives its own verdict, so
+    gating a parent's dependency /list/ would duplicate the gate that already
+    sits on every child request. Not modelling them means the wire layer does
+    not even parse them (a heavy packument carries thousands of per-version
+    dependency entries of pure parse cost on the hot path), and a malformed
+    entry there can no longer drop the version -- it degrades, per the same
+    ruling. The raw document still carries everything to the client untouched;
+    the served surface is lossless regardless of what the decision surface
+    models. If a dependency-reading rule ever genuinely lands, restore the
+    @Dependency@\/@DepKind@ vocabulary from history and re-model then.
+    -}
     }
     deriving stock (Eq, Show)
 

@@ -108,7 +108,6 @@ import Data.Aeson.Types (Parser, parseEither, parseMaybe)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
-import Data.Text.Short qualified as TS
 import Data.Time (UTCTime)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
@@ -117,8 +116,6 @@ import Ecluse.Core.Package (
     ArtifactKind (Tarball),
     Availability (Available, Deprecated),
     CodeExecSignal (NoCodeOnInstall, RunsCodeOnInstall),
-    DepKind (Dev, Optional, Peer, Runtime),
-    Dependency (..),
     Hash,
     HashAlg (SHA1, SRI),
     InvalidEntry (..),
@@ -477,8 +474,6 @@ projectDetails name version publishedAt entry =
         , pkgArtifacts = projectArtifact version (vmDist vm) :| []
         , pkgLicenses = maybe [] (one . licenseText) (vmLicense vm)
         , pkgPublisher = projectPerson <$> vePublisher entry
-        , pkgMaintainers = map projectPerson (vmMaintainers vm)
-        , pkgDependencies = projectDependencies vm
         }
   where
     vm = veManifest entry
@@ -488,31 +483,6 @@ licenseText :: License -> Text
 licenseText = \case
     LicenseSpdx spdx -> spdx
     LicenseObject name _url -> name
-
-{- Project the four npm dependency maps into a flat list of 'Dependency',
-tagging each with its 'DepKind'. The constraint strings are kept __raw__ (npm
-never resolves ranges server-side), and npm carries no PEP 508 environment
-markers, so 'depMarker' is always 'Nothing'.
--}
-projectDependencies :: VersionManifest -> [Dependency]
-projectDependencies vm =
-    concatMap
-        depsOfKind
-        [ (Runtime, vmDependencies vm)
-        , (Dev, vmDevDependencies vm)
-        , (Peer, vmPeerDependencies vm)
-        , (Optional, vmOptionalDependencies vm)
-        ]
-  where
-    depsOfKind (kind, deps) =
-        [ Dependency
-            { depName = TS.fromText name
-            , depConstraint = constraint
-            , depKind = kind
-            , depMarker = Nothing
-            }
-        | (name, constraint) <- Map.toList deps
-        ]
 
 {- Map npm install-script presence onto 'CodeExecSignal', failing closed across
 the two independent wire signals: a version runs code on install when /either/

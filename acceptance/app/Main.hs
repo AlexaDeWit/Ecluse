@@ -36,7 +36,7 @@ import Network.HTTP.Client.TLS (tlsManagerSettings)
 
 import Ecluse.Acceptance (Sample (..), evaluate, loadCriteria, renderReport, reportBreached)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
-import Ecluse.Core.Package (PackageDetails (pkgDependencies), PackageName, mkPackageName, mkScope)
+import Ecluse.Core.Package (PackageName, artHashes, mkPackageName, mkScope, pkgArtifacts)
 import Ecluse.Core.Package.Filter (filterPlan, fpSurvivors, restrictToSurvivors)
 import Ecluse.Core.Package.Merge (MergePlan (mpSurvivors), Provenance (GatedSource), mergePackuments)
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
@@ -146,7 +146,7 @@ measureSingleVersion pkg version raw = do
 selectiveDepth :: PackageName -> Version -> ByteString -> Int
 selectiveDepth pkg version raw =
     case projectNpmVersion defaultLimits pkg version raw of
-        Right (Just details) -> length (pkgDependencies details)
+        Right (Just details) -> length (artHashes (NE.head (pkgArtifacts details)))
         Right Nothing -> -1
         Left _ -> -2
 

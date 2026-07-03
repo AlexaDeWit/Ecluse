@@ -62,8 +62,6 @@ detailsWith rawVer hs =
         , pkgArtifacts = artifactWith hs :| []
         , pkgLicenses = ["MIT"]
         , pkgPublisher = Nothing
-        , pkgMaintainers = []
-        , pkgDependencies = []
         }
 
 {- | The fixed publish instant every 'detailsWith' version carries (the folded
