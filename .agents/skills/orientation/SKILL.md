@@ -18,7 +18,7 @@ contain only the current task contract, applicable invariants, and volatile evid
    passage is disputed.
 2. **Classify the task:** implementation, review, architecture, operations/configuration,
    documentation, release/CI, or orchestration. Identify the authoritative task contract:
-   the user request, issue, PR, or one `planning/slices/SNN-*.md` file.
+   the user request, issue, PR, or the relevant GitHub issue.
 3. **Route context:** follow the table in `AGENTS.md` and
    `.agents/context-management.md`. Read only files and sections needed for the next decision.
    Architecture describes target intent; code, git, and slice status establish shipped state.
