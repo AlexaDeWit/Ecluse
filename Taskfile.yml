@@ -65,6 +65,11 @@ tasks:
     cmds:
       - cabal test ecluse-integration --test-show-details=direct
 
+  test-residency:
+    desc: Run the bounded-memory streaming gate (S54; own process, RTS -T)
+    cmds:
+      - cabal test ecluse-residency --test-show-details=direct
+
   test-smoke:
     desc: Run the smoke suite (live registries; non-gating)
     cmds:
@@ -308,6 +313,9 @@ tasks:
     cmds:
       - task: build
       - task: coverage
+      # The residency gate runs outside coverage on purpose: it measures live bytes,
+      # and its process must not carry hpc's tix apparatus or another suite's heap.
+      - task: test-residency
       - task: doctest
       - task: cabal-check
 

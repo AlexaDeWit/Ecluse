@@ -37,6 +37,18 @@ running Docker daemon: CI's `ubuntu-latest` provides one; locally, install Docke
 provides the toolchain but not the daemon, a host concern). Run: `cabal test
 ecluse-integration` (or `task test-integration`).
 
+## Residency gate: `ecluse-residency` (gating)
+
+S54's bounded-memory streaming gate: streams a 1 MiB and a 100 MiB artifact through the
+tarball relay (both the trusted private-hit leg and the gated public leg) and asserts peak
+live bytes are **invariant in artifact size** within a fixed margin — the correctness
+counterpart to the load bench's inform-only residency trend. It is its own suite, not an
+`ecluse-integration` spec, because the measurement demands process isolation (live-bytes
+sampling must not share a heap with hundreds of other examples) and the RTS statistics flag
+(`-with-rtsopts=-T`) baked into its `ghc-options`. It runs outside coverage for the same
+reason. No Docker needed (loopback WAI stubs only). Run: `cabal test ecluse-residency` (or
+`task test-residency`); `task check` includes it via `cabal-checks`.
+
 > **Token-mint caveat.** No emulator covers the managed-registry token APIs (CodeArtifact's
 > `GetAuthorizationToken`, or GCP's OAuth2 token endpoint). That's by design: the only
 > un-emulable part is the per-cloud `mintToken` leaf of the `CredentialProvider`, so it's
