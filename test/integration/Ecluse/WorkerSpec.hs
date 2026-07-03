@@ -263,7 +263,9 @@ withUpstream body =
 {- A WAI mirror-target stub accepting an npm publish @PUT@ and answering with the
 given status (201 success, 409 idempotent-conflict, 503 transient). It records each
 publish PUT's path into an 'IORef'; the base URL and that log are yielded to the
-body. -}
+body. The worker's mirror-presence probe (a metadata @GET@) receives the same fixed
+answer, and @{}@ never parses as a version list, so every job here runs the full
+pipeline rather than the dedup short-circuit. -}
 withMirrorTarget :: Status -> (Text -> IORef [ByteString] -> IO a) -> IO a
 withMirrorTarget status body = do
     logRef <- newIORef []

@@ -268,7 +268,7 @@ residency, GC stats, and allocations per request.
 | `revalidate-not-modified` | the heaviest corpus packument, every request echoing a primed `ETag` as `If-None-Match`, answered `304` off the derived validator | the conditional short-circuit: the per-request private fetch and plan without assembly, encode, or output hashing (the dominant metadata shape for CI fleets that restore npm's local cache) |
 | `cache-fits-large` | a **uniform** working set of large packuments, **TTL > 0**, cache bound **≥ working set** | the eviction-comparison baseline: after warm-up every entry stays resident, served warm with no re-derivation |
 | `cache-evicts-large` | the **same** uniform large working set, **TTL > 0**, cache bound **< working set** | **cache eviction under large datasets**: continual eviction + re-derivation, throughput/latency under churn, the alloc/request of re-deriving each evicted large packument, residency bounded by the bound |
-| `worker-mirroring` | the mirror worker's `fetch → verify → publish → ack` loop, driven **in-process** (no HTTP surface) | the mirror hot path: an artifact fetch, an integrity recompute-and-verify, and a publish |
+| `worker-mirroring` | the mirror worker's `fetch → verify → publish → ack` loop, driven **in-process** (no HTTP surface); the mirror-presence probe answers **absent**, so every job measures the full pipeline, never the dedup short-circuit | the mirror hot path: an artifact fetch, an integrity recompute-and-verify, and a publish |
 
 #### The serve mix: a real-world corpus, large-emphasis
 
