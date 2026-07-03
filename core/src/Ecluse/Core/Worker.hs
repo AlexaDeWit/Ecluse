@@ -4,13 +4,19 @@ mirrored packages.
 The worker is the consumer end of the demand-driven mirror queue (see
 "Ecluse.Core.Queue"). The consume loop long-polls the queue, and for each received job:
 
-1. fetches the artifact bytes from the public upstream named on the job,
-2. __verifies__ those bytes against the integrity digest the job carries -- the
+1. __probes__ the mirror target for the job's version, acking a confirmed-present
+   duplicate outright (demand-driven enqueue means a fleet-wide install of a novel
+   version enqueues many jobs for it; only the first has work to do),
+2. __re-evaluates current policy__ for the version through the same rules and
+   single-version fetch the serve path gates with, so a version denied since its
+   serve-time admit is dropped rather than mirrored,
+3. fetches the artifact bytes from the public upstream named on the job,
+4. __verifies__ those bytes against the integrity digest the job carries -- the
    digest the rules admitted at serve time, not a fresh re-fetch,
-3. assembles the npm publish document and publishes it to the mirror target (the
+5. assembles the npm publish document and publishes it to the mirror target (the
    publish-side registry handle on the 'WorkerRuntime', resolved at the composition
    root with the bearer from the "Ecluse.Core.Credential" provider), and
-4. acknowledges the job.
+6. acknowledges the job.
 
 See individual modules for detailed behaviour:
 * "Ecluse.Core.Worker.Integrity" for the security gate on artifact digests.

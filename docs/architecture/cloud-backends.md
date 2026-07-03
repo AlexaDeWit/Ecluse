@@ -18,9 +18,26 @@ package anyone browses.
 
 The queue is a cloud-agnostic handle with backends for AWS SQS and GCP Pub/Sub
 (see [Cloud Backends](#cloud-backends)). A consumer (a separate worker process)
-receives jobs, fetches the artifact from the public upstream, **verifies its bytes
-against the version's integrity hash** (npm `dist.integrity`), publishes it to the
-mirror target via `publishArtifact`, and acknowledges the job. A hash mismatch
+receives jobs, and for each one:
+
+1. **probes the mirror target** for the job's version, acknowledging a
+   confirmed-present duplicate outright: demand-driven enqueue creates one job per
+   public-leg serve of a still-unmirrored version, so a fleet-wide install of a
+   novel version enqueues many, and the probe retires each duplicate for one
+   metadata round trip instead of a full artifact download and a no-op publish
+   (positive confirmation only: a probe that cannot tell falls through to the full
+   pipeline),
+2. **re-evaluates current policy** for the version through the same rules and
+   single-version fetch the serve path gates with, so a version denied since its
+   serve-time admit (a new denylist entry, a freshly published advisory, a rule
+   change) is dropped rather than frozen into the rule-exempt mirror,
+3. fetches the artifact from the public upstream,
+4. **verifies its bytes against the version's integrity hash** (npm
+   `dist.integrity`), and
+5. publishes it to the mirror target via `publishArtifact` and acknowledges the
+   job.
+
+A hash mismatch
 fails the job (no publish, it routes to retry/DLQ) and alarms, so a corrupt or
 tampered artifact never enters the private upstream, which is later served without
 rules. The worker thus
@@ -31,11 +48,9 @@ registry is no different from pushing to any npm registry, so there is no
 per-cloud publish path. Both backends give at-least-once delivery with retry and a
 dead-letter path for jobs that keep failing, the semantics the worker needs,
 regardless of cloud. At-least-once is safe here because **publishing is idempotent**: registries treat
-versions as immutable, so a redelivered job's publish finds the version already
-present and is treated as success. The worker does **not** re-run the rules, the
-artifact was gated at serve time when the job was enqueued; the enqueue→process
-window is too short for meaningful policy drift, and anything mirrored is in any
-case later served without rules.
+versions as immutable, so a redelivered job whose probe could not confirm anything
+still finds the version already present at publish and is treated as success (the
+probe is an optimisation; the idempotent publish stays the correctness mechanism).
 
 This means there is a window between a package being approved and it appearing
 in the private upstream. Subsequent requests for the same package during this

@@ -71,7 +71,7 @@ hand because they carry the decisions an operator cares about:
   and a **swallowed best-effort enqueue failure** is recorded on this span's status
   (the trace says *why* the mirror did not happen, beyond the
   `ecluse.mirror.enqueue.failures` counter).
-- **mirror worker job**, the async fetch→verify→publish consumer span. It carries an
+- **mirror worker job**, the async probe→re-evaluate→fetch→verify→publish consumer span. It carries an
   OpenTelemetry **span link** to the enqueue (producer) span, re-established from the
   W3C trace context the job carries, so the asynchronous hop is navigable in a trace,  a true cross-async link, not merely a `package@version` correlation. Batch-robust: a
   worker poll may mix jobs from many originating requests, so each job links to its own

@@ -117,7 +117,7 @@ import Ecluse.Core.Queue (
     enqueue,
     newInMemoryQueue,
  )
-import Ecluse.Core.Registry (ParseError (ParseError), RegistryClient (..))
+import Ecluse.Core.Registry (ParseError (ParseError), RegistryClient (..), RegistryResponse (RegistryResponse))
 import Ecluse.Core.Registry.Npm (NpmClientConfig (..))
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
 import Ecluse.Core.Registry.Npm.Request (artifactRequestByFile, artifactRequestByUrl)
@@ -375,15 +375,17 @@ benchPolicy = [atDefaultPrecedence (AllowIfOlderThan nominalDay)]
 against a stub artifact upstream for the configured duration. The artifact is fetched
 over loopback and verified against its real digest each iteration (the per-job work);
 the publish goes to a succeeding in-memory client (the publish target is not part of the
-hot path being characterised). It has no HTTP surface, so the harness times the loop
-directly rather than driving it with @oha@.
+hot path being characterised), and the mirror-presence probe answers absent through the
+same client, so every job measures the full pipeline rather than the dedup
+short-circuit. It has no HTTP surface, so the harness times the loop directly rather
+than driving it with @oha@.
 -}
 workerScenario :: Scenario
 workerScenario =
     Scenario
         { scenarioName = "worker-mirroring"
         , scenarioDescription =
-            "The mirror worker's fetch -> verify -> publish -> ack loop, driven in-process over a stub artifact upstream: each job fetches the artifact over loopback, recomputes and verifies its integrity digest, and publishes through a succeeding in-memory client."
+            "The mirror worker's fetch -> verify -> publish -> ack loop, driven in-process over a stub artifact upstream: each job fetches the artifact over loopback, recomputes and verifies its integrity digest, and publishes through a succeeding in-memory client. The mirror-presence probe answers absent, so every job measures the full pipeline, never the dedup short-circuit."
         , scenarioBoot = \knobs k -> do
             counter <- newIORef (0 :: Int)
             let bytes = artifactBytes (lkPayloadBytes knobs)
@@ -461,13 +463,22 @@ mirrorJob url hashes size =
         }
 
 -- A publish client that records each publish and reports success, for the worker hot
--- loop; its read/parse fields refuse loudly, since the worker only ever publishes.
+-- loop; the remaining read/parse fields refuse loudly, since the worker uses none of them.
+--
+-- The mirror-presence probe MUST answer "absent" here: the scenario re-mirrors the same
+-- version every iteration, so a probe that confirmed presence would short-circuit every
+-- job after the first into a no-op and falsely inflate the loop's throughput. An
+-- unparseable probe body is the absent posture (a production mirror answers a package
+-- it does not hold with an error body no version list parses from), so each job drives
+-- the full fetch -> verify -> publish pipeline.
 succeedingPublishClient :: IORef Int -> RegistryClient
 succeedingPublishClient counter =
     refusingRegistry
         { publishArtifact = \_ _ _ _ -> do
             atomicModifyIORef' counter (\n -> (n + 1, ()))
             pure (Right ())
+        , fetchMetadata = const (pure (RegistryResponse ""))
+        , parseVersionList = const (Left (ParseError "bench mirror: nothing mirrored yet"))
         }
 
 -- The canned artifact bytes for the worker scenario: a payload-sized buffer (the verify
@@ -648,7 +659,8 @@ benchLogEnv :: IO LogEnv
 benchLogEnv = initLogEnv (Namespace ["ecluse"]) (Environment "bench-load")
 
 -- A registry handle whose every field refuses loudly: the serve path never reads the
--- publish-side handle, and the worker scenario overrides only its publish field.
+-- publish-side handle, and the worker scenario overrides only the fields its loop uses
+-- (the publish, and the presence probe's metadata read).
 refusingRegistry :: RegistryClient
 refusingRegistry =
     RegistryClient

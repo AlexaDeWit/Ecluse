@@ -42,6 +42,7 @@ import Ecluse.Core.Registry (
     ParseError (ParseError),
     PublishFault,
     RegistryClient (..),
+    RegistryResponse (RegistryResponse),
  )
 import Ecluse.Core.Registry.Metadata (
     MetadataClient (MetadataClient, fetchFullManifest, fetchVersionMetadata),
@@ -167,6 +168,12 @@ pkg = mkPackageName Npm Nothing "thing"
 ver :: Version
 ver = mkVersion Npm "1.0.0"
 
+{- | A different version of the same package -- a present-at-mirror probe fixture lists
+it to prove presence is judged per version, never per package.
+-}
+otherVer :: Version
+otherVer = mkVersion Npm "0.9.0"
+
 {- | A mirror job whose artifact descriptor carries the given integrity hashes; its
 artifact URL is the stub upstream the test points it at.
 -}
@@ -192,36 +199,58 @@ jobWith url hashes =
 newtype PublishLog = PublishLog {plDocuments :: [ByteString]}
 
 {- | A registry-handle double whose 'publishArtifact' records each call and returns
-the given fixed outcome; the read/parse fields refuse loudly (unused here).
+the given fixed outcome. The mirror-presence probe (the worker's first step) answers
+__absent__ -- an unparseable metadata body, the same shape a production mirror gives a
+package it does not hold -- so every test drives the full pipeline unless it swaps in
+'mirrorListingClient'. The fields the worker never uses refuse loudly, so a test that
+wrongly reaches one fails rather than passing on a fabricated result.
 -}
 recordingClient :: IORef PublishLog -> Either PublishFault () -> RegistryClient
 recordingClient logRef outcome =
     RegistryClient
-        { fetchMetadata = const (refuse "fetchMetadata")
+        { fetchMetadata = const (pure (RegistryResponse ""))
         , fetchArtifact = \_ _ -> refuse "fetchArtifact"
         , publishArtifact = \_ _ _ document -> do
             atomicModifyIORef' logRef (\l -> (l{plDocuments = document : plDocuments l}, ()))
             pure outcome
         , parsePackageInfo = \_ _ -> Left (ParseError "unused")
         , parseVersionDetails = \_ _ -> Left (ParseError "unused")
-        , parseVersionList = const (Left (ParseError "unused"))
+        , parseVersionList = const (Left (ParseError "absent: nothing mirrored yet"))
         }
   where
-    -- The worker only ever publishes through this double; the read fields are wired
-    -- to refuse loudly so a test that wrongly reaches one fails rather than passing
-    -- on a fabricated result.
     refuse :: Text -> IO a
     refuse field = throwString (toString ("recordingClient: the worker must not use the handle field " <> field))
 
+{- | 'recordingClient' whose mirror-presence probe __confirms__ the given versions
+present at the mirror target, for the dedup short-circuit tests.
+-}
+mirrorListingClient :: IORef PublishLog -> Either PublishFault () -> [Version] -> RegistryClient
+mirrorListingClient logRef outcome versions =
+    (recordingClient logRef outcome)
+        { parseVersionList = const (Right versions)
+        }
+
+{- | 'recordingClient' whose mirror-presence probe __throws__ (a mirror outage), for
+the probe-cannot-tell fall-through tests.
+-}
+probeThrowingClient :: IORef PublishLog -> Either PublishFault () -> RegistryClient
+probeThrowingClient logRef outcome =
+    (recordingClient logRef outcome)
+        { fetchMetadata = const (throwString "probeThrowingClient: simulated mirror outage")
+        }
+
 -- ── building a worker runtime over doubles ──────────────────────────────────────
 
-{- | Build a 'WorkerRuntime' with the recording publish client, a real no-TLS manager
-(for the stub upstream), a fresh queue + heartbeat, the given worker metrics port, and the
-given per-ecosystem re-evaluation policies, then run the body against it. The queue and the
-publish log are returned so a test can drive and inspect them.
+{- | Build a 'WorkerRuntime' over a caller-supplied registry-handle double (given the
+publish log, so its publishes still record), a real no-TLS manager (for the stub
+upstream), a fresh queue + heartbeat, the given worker metrics port, and the given
+per-ecosystem re-evaluation policies, then run the body against it. The queue and the
+publish log are returned so a test can drive and inspect them. The probe tests use this
+directly to swap in 'mirrorListingClient' or 'probeThrowingClient';
+'withRuntimePolicies' is this over 'recordingClient'.
 -}
-withRuntimePolicies :: WorkerPolicies -> WorkerMetricsPort -> Either PublishFault () -> (WorkerRuntime -> MirrorQueue -> IORef PublishLog -> IO a) -> IO a
-withRuntimePolicies policies metricsPort outcome body = do
+withRuntimeRegistry :: (IORef PublishLog -> RegistryClient) -> WorkerPolicies -> WorkerMetricsPort -> (WorkerRuntime -> MirrorQueue -> IORef PublishLog -> IO a) -> IO a
+withRuntimeRegistry mkClient policies metricsPort body = do
     logRef <- newIORef (PublishLog [])
     queue <- newInMemoryQueue
     manager <- newManager defaultManagerSettings
@@ -229,7 +258,7 @@ withRuntimePolicies policies metricsPort outcome body = do
     let runtime =
             WorkerRuntime
                 { wrQueue = queue
-                , wrRegistry = recordingClient logRef outcome
+                , wrRegistry = mkClient logRef
                 , wrManager = manager
                 , wrHeartbeat = heartbeat
                 , wrMetrics = metricsPort
@@ -238,6 +267,13 @@ withRuntimePolicies policies metricsPort outcome body = do
                 , wrPolicies = policies
                 }
     body runtime queue logRef
+
+{- | 'withRuntimeRegistry' with the recording publish client answering the given
+publish outcome -- the common case.
+-}
+withRuntimePolicies :: WorkerPolicies -> WorkerMetricsPort -> Either PublishFault () -> (WorkerRuntime -> MirrorQueue -> IORef PublishLog -> IO a) -> IO a
+withRuntimePolicies policies metricsPort outcome =
+    withRuntimeRegistry (`recordingClient` outcome) policies metricsPort
 
 {- | 'withRuntimePolicies' with the default admitting policy ('admitPolicies'), so the
 integrity-gate and publish tests exercise their own path while ingest re-evaluation always

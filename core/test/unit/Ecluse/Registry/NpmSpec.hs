@@ -8,10 +8,11 @@ import Network.HTTP.Types.Status (status200)
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 import UnliftIO (evaluate, try)
 
+import Ecluse.Core.Credential (mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (PackageName, mkPackageName)
 import Ecluse.Core.Registry (
-    RegistryClient (parsePackageInfo, parseVersionDetails, parseVersionList),
+    RegistryClient (fetchMetadata, parsePackageInfo, parseVersionDetails, parseVersionList),
     RegistryResponse (..),
  )
 
@@ -20,6 +21,7 @@ import Ecluse.Core.Registry.Npm (
     defaultNpmConfig,
     fetchMetadataForm,
     newNpmClient,
+    newNpmPublishClient,
     publicRegistryBaseUrl,
  )
 import Ecluse.Core.Registry.Npm.Request (MetadataForm (Full), noValidators)
@@ -27,6 +29,8 @@ import Ecluse.Core.Security (defaultLimits, maxBodyBytes)
 import Ecluse.Core.Version (Version, mkVersion)
 
 import Ecluse.Test.Stub (
+    headerValue,
+    lastCaptured,
     stubConfig,
     withStub,
     withStubHeaders,
@@ -95,6 +99,18 @@ configAndWiringSpec = describe "config and handle wiring" $ do
         -- assertion that the field carries the manager we passed, not a bottom.
         _ <- evaluate (npmManager config)
         pure ()
+
+    it "mints the credential per metadata fetch on the publish-side handle" $
+        -- The worker's mirror-presence probe reads the mirror target through the
+        -- publish handle, and a managed mirror requires auth on reads as on writes:
+        -- fetchMetadata must mint per call (as publishArtifact does), never fall back
+        -- to the config's (anonymous) token.
+        withStub status200 "{\"name\":\"is-odd\"}" $ \stub -> do
+            config <- stubConfig stub
+            client <- newNpmPublishClient config (pure (Just (mkSecret "minted-token")))
+            _ <- fetchMetadata client isOdd
+            captured <- lastCaptured stub
+            headerValue "Authorization" captured `shouldBe` Just "Bearer minted-token"
 
     it "wires the parse* projections into the handle's pure fields" $ do
         manager <- newManager defaultManagerSettings

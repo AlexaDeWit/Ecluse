@@ -21,7 +21,7 @@ import UnliftIO (tryAny, withRunInIO)
 import Ecluse.Core.Ecosystem (ecosystemName)
 import Ecluse.Core.Package (pkgEcosystem, renderPackageName)
 import Ecluse.Core.Queue (MirrorArtifact (maHashes), MirrorJob (jobArtifact, jobArtifactUrl, jobPackage, jobTraceContext, jobVersion), MirrorQueue (ack, extendVisibility), QueueMessage (msgJob, msgReceipt), ReceiptHandle, Seconds (Seconds))
-import Ecluse.Core.Registry (PublishFault (PublishRejected, PublishUrlUnformable), RegistryClient (publishArtifact))
+import Ecluse.Core.Registry (PublishFault (PublishRejected, PublishUrlUnformable), RegistryClient (fetchMetadata, parseVersionList, publishArtifact))
 import Ecluse.Core.Registry.Metadata (VersionEvaluation (VersionMetadataUnavailable, VersionMissing, VersionPresent))
 import Ecluse.Core.Rules (evalRules)
 import Ecluse.Core.Rules.Types (Decision (Admitted, Blocked, BlockedByDefault, Undecidable), EvalContext (EvalContext))
@@ -85,7 +85,8 @@ data JobOutcome
     = {- | The publish succeeded, so the job is acked. This covers an idempotent
       redelivery too: a version already present at the mirror target is a @409@ the
       registry handle treats as success ('Ecluse.Core.Registry.publishArtifact'), so it
-      surfaces here as 'Succeeded' rather than a distinct case.
+      surfaces here as 'Succeeded' rather than a distinct case -- as does the same
+      presence confirmed by the pre-fetch probe, before any bytes moved.
       -}
       Succeeded
     | {- | A __non-retryable__ fault: the bytes did not match the serve-time digest
@@ -99,10 +100,20 @@ data JobOutcome
       Retried Text
     deriving stock (Eq, Show)
 
-{- | Process one mirror job end to end: __re-evaluate current policy__ for the job's
-version, and only on a current admit fetch the artifact, verify it against the job's
-serve-time-admitted integrity digest, and publish it to the mirror target. Returns the
-'JobOutcome' that decides ack vs. redeliver.
+{- | Process one mirror job end to end: __probe the mirror target__ for the job's version
+(a confirmed-present version is acked outright, the duplicate-suppression short-circuit),
+then __re-evaluate current policy__, and only on a current admit fetch the artifact,
+verify it against the job's serve-time-admitted integrity digest, and publish it to the
+mirror target. Returns the 'JobOutcome' that decides ack vs. redeliver.
+
+The presence probe exists for the enqueue-to-availability window: mirroring is
+demand-driven, so every public-leg admit of a still-unmirrored version enqueues its own
+job, and a fleet-wide install of a novel version enqueues many. Without the probe each
+duplicate pays a full artifact download and an integrity recompute before the publish
+discovers the version is already present (the idempotent @409@); with it, a duplicate
+costs one metadata round trip. The probe is an __optimisation, never a gate__: it skips
+only work whose publish would have been that no-op, so the policy re-evaluation below
+still guards every artifact that actually publishes.
 
 The policy re-evaluation is the ingest-time gate. The version was gated at serve time, but
 the enqueue-to-process window is asynchronous and unbounded, so policy may have tightened
@@ -118,8 +129,8 @@ with no publish, since the mirror is later served without the rules.
 The receipt handle is taken so a long publish can 'Ecluse.Core.Queue.extendVisibility'
 to hold the message before its window lapses.
 
-The per-job domain span (the worker tracing port) wraps the whole re-evaluate → fetch →
-verify → publish, projecting the terminal outcome onto the span so a refused or dropped job
+The per-job domain span (the worker tracing port) wraps the whole probe → re-evaluate →
+fetch → verify → publish, projecting the terminal outcome onto the span so a refused or dropped job
 is explainable from the trace, and __linking__ back to the request that enqueued the job
 through the trace context the job carries ('jobTraceContext'). The span body is discharged
 to 'IO' through the unlift, so the loop's structured log lines still compose through the
@@ -152,15 +163,40 @@ data ReevalOutcome
     | ReevalDrop Text
     | ReevalRetry Text
 
--- Re-evaluate current policy for the job's version, then mirror it on a current admit. The
--- gate runs before the (potentially large) artifact fetch, so a now-denied job is dropped
+-- Probe the mirror target first (a confirmed-present version is a no-op job, acked
+-- without another byte moved), then re-evaluate current policy, then mirror on a current
+-- admit. Both cheap steps run before the (potentially large) artifact fetch, so a
+-- duplicate is retired for one metadata round trip and a now-denied job is dropped
 -- without downloading its bytes.
 reevaluateThenMirror :: ReceiptHandle -> MirrorJob -> WorkerM JobOutcome
 reevaluateThenMirror receipt job =
-    reevaluatePolicy job >>= \case
-        ReevalAdmit -> mirrorArtifact receipt job
-        ReevalDrop reason -> pure (Dropped reason)
-        ReevalRetry reason -> pure (Retried reason)
+    alreadyMirrored job >>= \case
+        True -> do
+            logFM InfoS (ls ("already present at the mirror target, acking without re-publish: " <> renderJob job))
+            pure Succeeded
+        False ->
+            reevaluatePolicy job >>= \case
+                ReevalAdmit -> mirrorArtifact receipt job
+                ReevalDrop reason -> pure (Dropped reason)
+                ReevalRetry reason -> pure (Retried reason)
+
+{- Ask the mirror target whether the job's version is already present, through the
+publish-side registry handle's read fields. __Positive confirmation only__: 'True' needs
+the mirror's own metadata to parse and to list the version; a fetch failure or an
+unparseable body (a mirror @404@ for a package not yet mirrored, an auth refusal, an
+outage) answers 'False', so the job falls through to the full gated pipeline. A false
+'False' costs one redundant download and an idempotent @409@ -- exactly the pre-probe
+behaviour -- so the probe can only ever save work, never lose a publish or admit one
+unvetted. -}
+alreadyMirrored :: MirrorJob -> WorkerM Bool
+alreadyMirrored job = do
+    client <- asks wrRegistry
+    probed <- tryAny (liftIO (fetchMetadata client (jobPackage job)))
+    pure $ case probed of
+        Left _ -> False
+        Right response -> case parseVersionList client response of
+            Left _ -> False
+            Right versions -> jobVersion job `elem` versions
 
 {- Re-run current policy for the job's single version: look up the job's ecosystem bundle,
 resolve and project the version's metadata through the shared single-version fetch, and

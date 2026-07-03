@@ -162,14 +162,21 @@ relayed validators) is exposed separately for the request pipeline.
 newNpmClient :: NpmClientConfig -> IO RegistryClient
 newNpmClient config = newNpmPublishClient config (pure (npmToken config))
 
-{- | Build an npm RegistryClient whose publishArtifact field mints a fresh token
-per call via the provided IO action. Other fields use the token in the config.
+{- | Build an npm RegistryClient whose 'Ecluse.Core.Registry.publishArtifact' and
+'Ecluse.Core.Registry.fetchMetadata' fields mint a fresh token per call via the provided
+IO action; the remaining fields use the token in the config. The metadata read mints
+because the worker's mirror-presence probe reads the mirror target through this handle,
+and a managed mirror (CodeArtifact) requires auth on reads as on writes -- an anonymous
+probe would be refused and the dedup would never confirm anything. For 'newNpmClient'
+the mint is the configured token, so its behaviour is unchanged.
 -}
 newNpmPublishClient :: NpmClientConfig -> IO (Maybe Secret) -> IO RegistryClient
 newNpmPublishClient config mintToken =
     pure
         RegistryClient
-            { fetchMetadata = fetchMetadataForm config Abbreviated noValidators
+            { fetchMetadata = \name -> do
+                token <- mintToken
+                fetchMetadataForm config{npmToken = token} Abbreviated noValidators name
             , fetchArtifact = fetchArtifact' config
             , publishArtifact = publishArtifact' config mintToken
             , -- Each version's @dist.tarball@ scheme is normalised against the host this

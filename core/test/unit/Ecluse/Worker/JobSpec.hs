@@ -203,6 +203,52 @@ spec = do
                 published `shouldBe` []
                 redelivered <- pollUntilRedelivered queue 5
                 redelivered `shouldBe` False
+    describe "processJob: the mirror-presence dedup probe" $ do
+        -- The default 'recordingClient' answers the probe with an unparseable body (the
+        -- absent posture), so every other test in this file already covers that
+        -- fall-through; these cover the confirmed-present skip and the cannot-tell arms.
+        it "acks an already-mirrored version without fetching or publishing" $
+            -- 'unreachableUrl' doubles as the no-fetch guard: were the probe's skip not
+            -- taken, the artifact fetch would surface a Retried, not this Succeeded.
+            withRuntimeRegistry (\logRef -> mirrorListingClient logRef (Right ()) [ver]) admitPolicies noopWorkerMetricsPort $ \runtime queue logRef -> do
+                (receipt, job) <- enqueueAndReceive queue (jobWith unreachableUrl (unsafeHash SHA1 trueSha1 :| []))
+                outcome <- runWM runtime (processJob receipt job)
+                outcome `shouldBe` Succeeded
+                published <- plDocuments <$> readIORef logRef
+                published `shouldBe` []
+
+        it "falls through to the full pipeline when the probe cannot reach the mirror" $
+            -- A mirror outage means the probe cannot tell: the job must run the full
+            -- gated pipeline (here, to a publish), never be skipped or failed on the
+            -- probe alone.
+            withUpstream $ \url ->
+                withRuntimeRegistry (`probeThrowingClient` Right ()) admitPolicies noopWorkerMetricsPort $ \runtime queue logRef -> do
+                    (receipt, job) <- enqueueAndReceive queue (jobWith url (unsafeHash SHA1 trueSha1 :| []))
+                    outcome <- runWM runtime (processJob receipt job)
+                    outcome `shouldBe` Succeeded
+                    published <- plDocuments <$> readIORef logRef
+                    length published `shouldBe` 1
+
+        it "falls through when the mirror lists other versions but not this one" $
+            -- Presence is judged per version: a package already partially mirrored must
+            -- still mirror its missing versions.
+            withUpstream $ \url ->
+                withRuntimeRegistry (\logRef -> mirrorListingClient logRef (Right ()) [otherVer]) admitPolicies noopWorkerMetricsPort $ \runtime queue logRef -> do
+                    (receipt, job) <- enqueueAndReceive queue (jobWith url (unsafeHash SHA1 trueSha1 :| []))
+                    outcome <- runWM runtime (processJob receipt job)
+                    outcome `shouldBe` Succeeded
+                    published <- plDocuments <$> readIORef logRef
+                    length published `shouldBe` 1
+
+        it "acks the skipped duplicate so it is retired from the queue" $
+            withRuntimeRegistry (\logRef -> mirrorListingClient logRef (Right ()) [ver]) admitPolicies noopWorkerMetricsPort $ \runtime queue logRef -> do
+                enqueue queue (jobWith unreachableUrl (unsafeHash SHA1 trueSha1 :| []))
+                messages <- receive queue
+                runWM runtime (processBatch messages)
+                published <- plDocuments <$> readIORef logRef
+                published `shouldBe` []
+                redelivered <- pollUntilRedelivered queue 5
+                redelivered `shouldBe` False
     describe "fetchVersionDetails: the shared single-version evaluation boundary" $ do
         -- The serve-time tarball gate and the worker both resolve a version through this one
         -- function, so its classification (the no-divergence boundary) is asserted directly.
