@@ -146,8 +146,18 @@ streaming early-reject (the byte cap makes that unnecessary).
 Per-response ceilings do not bound aggregate residency when many clients resolve
 different packages concurrently. Écluse therefore admits at most
 `ECLUSE_SERVE_MAX_IN_FLIGHT` metadata materialisations process-wide (a whole
-packument request or the public-metadata gate after a private tarball miss; default
-**16**). Work beyond the cap is shed immediately with a
+packument request or the public-metadata gate after a private tarball miss). The
+default is **computed at boot** from the resolved capability count,
+`max(8, 4 x capabilities)`: an admitted materialisation alternates upstream wait
+and CPU work, so keeping `C` capabilities busy wants about `C x (1 + W/P)` in
+flight, roughly 4 per capability at realistic latency ratios. The decision is
+logged with its provenance beside the runtime posture lines; set the key only to
+override it. The **private upstream connection pool always equals the effective
+admission capacity** (no separate key): private reads are per-request and never
+coalesced, so demand on that pool is the admission cap, and a smaller pool would
+not queue but pay a fresh TLS handshake per overflow request (http-client's pool
+bound governs keep-alive retention, not concurrency). Work beyond the cap is shed
+immediately with a
 mount-shaped `503` and `Retry-After: 1`; there is no application queue whose memory
 or latency can grow with client concurrency. Health probes and locally answered
 routes bypass the bound so an overloaded instance remains observable. A trusted

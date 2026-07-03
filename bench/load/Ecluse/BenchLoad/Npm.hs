@@ -267,7 +267,9 @@ withNpmProxy knobs ttl maxEntries mkMix body = do
         testWithApplication (pure (privateOverlayStub artPort latency bytes)) $ \privatePort ->
             testWithApplication (pure (corpusPublicStub latency bodies)) $ \publicPort -> do
                 publicManager <- newManager (connectionPoolSettings (lkPublicConnectionsPerHost knobs) defaultManagerSettings)
-                privateManager <- newManager (connectionPoolSettings (lkPrivateConnectionsPerHost knobs) defaultManagerSettings)
+                -- The private pool follows the admission capacity by construction,
+                -- as in production (issue #634).
+                privateManager <- newManager (connectionPoolSettings (lkServeMaxInFlight knobs) defaultManagerSettings)
                 admission <- newServeAdmission (lkServeMaxInFlight knobs)
                 cache <- newMetadataCache defaultCacheConfig{cacheTtl = ttl, cacheMaxEntries = max 1 maxEntries}
                 logEnv <- benchLogEnv

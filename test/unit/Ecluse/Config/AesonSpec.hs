@@ -43,9 +43,10 @@ spec = describe "decodeDocument" $ do
         case loadConfig [] Nothing of
             Left e -> expectationFailure ("unexpected decode error: " <> show e)
             Right doc -> do
-                cfgServeMaxInFlight (configApp doc) `shouldBe` 32
+                -- serveMaxInFlight is unset by default: the effective capacity is
+                -- computed at boot from the resolved capability count (issue #634).
+                cfgServeMaxInFlight (configApp doc) `shouldBe` Nothing
                 cfgPublicConnectionsPerHost (configApp doc) `shouldBe` 10
-                cfgPrivateConnectionsPerHost (configApp doc) `shouldBe` 16
 
     it "leaves the runtime posture unset when cores and maxHeapBytes are omitted" $ do
         case loadConfig [] Nothing of
@@ -67,13 +68,23 @@ spec = describe "decodeDocument" $ do
         loadConfig [("ECLUSE_MAX_HEAP_BYTES", "-1")] Nothing
             `shouldSatisfy` decodeErrorMentions "maxHeapBytes must be a positive integer"
 
+    it "parses an explicit serveMaxInFlight override" $ do
+        case loadConfig [("ECLUSE_SERVE_MAX_IN_FLIGHT", "24")] Nothing of
+            Left e -> expectationFailure ("unexpected decode error: " <> show e)
+            Right doc -> cfgServeMaxInFlight (configApp doc) `shouldBe` Just 24
+
+    it "rejects the removed privateConnectionsPerHost key fail-loud" $
+        -- The private pool follows the admission capacity by construction
+        -- (issue #634); an operator still setting the removed key gets a clear
+        -- unknown-key boot error, never a silently ignored value.
+        loadConfig [("ECLUSE_PRIVATE_CONNECTIONS_PER_HOST", "16")] Nothing
+            `shouldSatisfy` decodeErrorMentions "privateConnectionsPerHost"
+
     it "rejects non-positive serve and connection capacities" $ do
         loadConfig [("ECLUSE_SERVE_MAX_IN_FLIGHT", "0")] Nothing
             `shouldSatisfy` decodeErrorMentions "serveMaxInFlight must be a positive integer"
         loadConfig [("ECLUSE_PUBLIC_CONNECTIONS_PER_HOST", "0")] Nothing
             `shouldSatisfy` decodeErrorMentions "publicConnectionsPerHost must be a positive integer"
-        loadConfig [("ECLUSE_PRIVATE_CONNECTIONS_PER_HOST", "-1")] Nothing
-            `shouldSatisfy` decodeErrorMentions "privateConnectionsPerHost must be a positive integer"
 
 singleMountDoc :: ByteString
 singleMountDoc =

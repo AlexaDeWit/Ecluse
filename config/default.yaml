@@ -4,9 +4,13 @@ queueBackend: sqs # default to sqs for production, switch to memory for local de
 queueMemoryMaxDepth: 50000
 cveSyncInterval: 3600
 shutdownDrainTimeout: 30
-serveMaxInFlight: 32
+# serveMaxInFlight is deliberately NOT pinned here: omitted, it is computed at boot
+# from the resolved capability count (max(8, 4 x capabilities); see
+# Ecluse.Composition.resolveServeAdmission). Set it (or ECLUSE_SERVE_MAX_IN_FLIGHT)
+# only to override the computed default. The private connection pool has no key at
+# all: it always equals the effective admission capacity, since private reads are
+# per-request and never coalesced.
 publicConnectionsPerHost: 10
-privateConnectionsPerHost: 16
 cacheTtl: 60
 cacheMaxEntries: 1024
 cacheMaxBytes: 268435456

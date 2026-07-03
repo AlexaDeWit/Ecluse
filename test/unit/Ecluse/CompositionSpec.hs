@@ -27,6 +27,7 @@ import Ecluse.Composition (
     planMounts,
     renderBootError,
     resolveCodeArtifactConfig,
+    resolveServeAdmission,
  )
 import Ecluse.Config (
     AppConfig (..),
@@ -450,7 +451,22 @@ cacheConfigSpec = describe "cacheConfigFor" $
         cacheMaxBytes (cacheConfigFor env) `shouldBe` 1048576
 
 connectionPoolSpec :: Spec
-connectionPoolSpec =
+connectionPoolSpec = do
+    describe "resolveServeAdmission" $ do
+        it "computes the default from the capability count with the floor" $ do
+            fst (resolveServeAdmission Nothing 4) `shouldBe` 16
+            fst (resolveServeAdmission Nothing 16) `shouldBe` 64
+            -- 1-2 capabilities land on the floor, so a tiny pod still admits a burst.
+            fst (resolveServeAdmission Nothing 1) `shouldBe` 8
+            fst (resolveServeAdmission Nothing 2) `shouldBe` 8
+
+        it "lets an explicit config value win over the computation" $
+            fst (resolveServeAdmission (Just 24) 4) `shouldBe` 24
+
+        it "names the decision's provenance in the boot line" $ do
+            snd (resolveServeAdmission Nothing 4) `shouldSatisfy` T.isInfixOf "computed from 4 capabilities"
+            snd (resolveServeAdmission (Just 24) 4) `shouldSatisfy` T.isInfixOf "from config"
+
     describe "connectionPoolSettings" $
         it "sets the configured per-host connection bound" $
             managerConnCount (connectionPoolSettings 23 defaultManagerSettings) `shouldBe` 23
