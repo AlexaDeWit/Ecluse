@@ -219,10 +219,23 @@ discipline. On the **tarball leg** the per-request read is the credentialed
 of the artifact itself, no packument round-trip, so the private upstream (under
 `passthrough`) or the service identity (under `service`) authorises each artifact read.
 
-The one cache that exists, the anonymous public origin, stores **no
-credential-derived state**: its key carries no credential dimension (the upstream base
-URL plus the package), and its value is the canonical public document, never a
-credential or a credential-derived verdict.
+The anonymous public-origin cache stores **no credential-derived state**: its key
+carries no credential dimension (the upstream base URL plus the package), and its
+value is the canonical public document, never a credential or a credential-derived
+verdict.
+
+One further store exists beside it: the **assembled-representation store**, which
+memoises the encoded merged document keyed by its
+[derived validator](web-layer.md#middleware-and-helper-libraries), a fingerprint of
+every input the document is a function of, **including the digest of the private
+document this request's own authorised fetch returned**. That key is what keeps the
+store inside this model: the prohibition above forbids *credential-blind* keying
+(a base-URL key would let one caller's entry answer another), whereas a content key
+can only ever be produced by a caller whose own per-request, per-credential private
+read returned identical content, and whose own pipeline would deterministically
+re-produce the identical bytes. The private *fetch and authorisation* are never
+shared or skipped; only the byte-identical *transform* of already-authorised inputs
+is. A different private view is a different key and misses by construction.
 
 ## Credential supply: the `CredentialProvider`, generalised
 

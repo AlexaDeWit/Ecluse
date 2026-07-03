@@ -7,6 +7,8 @@ import Ecluse.Core.Package.Integrity (mkMinIntegrity, mkMinTrustedIntegrity)
 import Ecluse.Core.Queue (newInMemoryQueue)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Server.Pipeline.TestSupport
+import Network.HTTP.Types (status200)
+import Network.Wai (requestHeaders, responseLBS)
 import Network.Wai.Test (SResponse (..), simpleBody)
 import Test.Hspec
 import UnliftIO.Exception (throwString)
@@ -258,7 +260,7 @@ credentialSpec = describe "credential authority (forward-to-private, strip-befor
             pubAuth `shouldBe` [Nothing]
 
 privateAuthoritySpec :: Spec
-privateAuthoritySpec = describe "private origin is the per-client authority (not cached across clients)" $
+privateAuthoritySpec = describe "private origin is the per-client authority (not cached across clients)" $ do
     it "re-consults the private upstream per client within the TTL -- each client's token reaches it" $ do
         privateUp <- servingUpstream (encodePackument (privatePackument [("1.0.0", plainVersion "1.0.0")] "1.0.0"))
         publicUp <-
@@ -271,6 +273,42 @@ privateAuthoritySpec = describe "private origin is the per-client authority (not
             pubAuth <- seenAuth publicUp
             privAuth `shouldBe` [Just "Bearer tokenA", Just "Bearer tokenB"]
             pubAuth `shouldBe` [Nothing]
+
+    it "serves byte-identical bodies across identical repeat requests (the assembled representation is reused)" $ do
+        (privateUp, publicUp) <- twoServingUpstreams
+        withProxy privateUp publicUp Nothing $ \app -> do
+            firstResp <- getThing (Just "tokenA") app
+            secondResp <- getThing (Just "tokenA") app
+            status firstResp `shouldBe` 200
+            simpleBody secondResp `shouldBe` simpleBody firstResp
+            header "ETag" secondResp `shouldBe` header "ETag" firstResp
+            -- The reuse never skips the per-request private authorisation.
+            seenAuth privateUp `shouldReturn` [Just "Bearer tokenA", Just "Bearer tokenA"]
+
+    it "never serves one client's assembled document to another with a different private view" $ do
+        -- The private upstream answers per credential: client A's token sees 9.0.0,
+        -- client B's sees 9.0.1. Interleaved requests must each get their own merged
+        -- document -- the assembled store is keyed by content, so B's entry can never
+        -- answer A (and the last request proves A's own entry still serves A).
+        seen <- newIORef []
+        let perToken req respond = do
+                modifyIORef' seen (lookupAuth (requestHeaders req) :)
+                let body = case lookupAuth (requestHeaders req) of
+                        Just "Bearer token-a" -> encodePackument (privatePackument [("9.0.0", plainVersion "9.0.0")] "9.0.0")
+                        _ -> encodePackument (privatePackument [("9.0.1", plainVersion "9.0.1")] "9.0.1")
+                respond (responseLBS status200 [] body)
+        privateUp <- mkUpstream seen perToken
+        publicUp <-
+            servingUpstream
+                (encodePackument (packument [("2.0.0", plainVersion "2.0.0")] "2.0.0" [("2.0.0", publishedDaysAgo 30)]))
+        withProxy privateUp publicUp Nothing $ \app -> do
+            respA <- getThing (Just "token-a") app
+            respB <- getThing (Just "token-b") app
+            respA2 <- getThing (Just "token-a") app
+            servedVersions respA `shouldBe` ["2.0.0", "9.0.0"]
+            servedVersions respB `shouldBe` ["2.0.0", "9.0.1"]
+            servedVersions respA2 `shouldBe` ["2.0.0", "9.0.0"]
+            simpleBody respA2 `shouldBe` simpleBody respA
 
 partialAvailabilitySpec :: Spec
 partialAvailabilitySpec = describe "partial-upstream availability" $ do

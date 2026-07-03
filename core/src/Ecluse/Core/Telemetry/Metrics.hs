@@ -115,6 +115,8 @@ data MetricName
       MetadataCacheResidentBytes
     | -- | @ecluse.metadata_cache.version.resident_bytes@: single-version cache resident bytes (gauge).
       SingleVersionCacheResidentBytes
+    | -- | @ecluse.metadata_cache.assembled.resident_bytes@: assembled-representation store resident bytes (gauge).
+      AssembledCacheResidentBytes
     | -- | @ecluse.mirror.enqueued@ -- mirror jobs enqueued (counter).
       MirrorEnqueued
     | -- | @ecluse.mirror.enqueue.failures@ -- mirror enqueue failures (counter).
@@ -147,6 +149,7 @@ metricName = \case
     MetadataCacheEntries -> "ecluse.metadata_cache.entries"
     MetadataCacheResidentBytes -> "ecluse.metadata_cache.resident_bytes"
     SingleVersionCacheResidentBytes -> "ecluse.metadata_cache.version.resident_bytes"
+    AssembledCacheResidentBytes -> "ecluse.metadata_cache.assembled.resident_bytes"
     MirrorEnqueued -> "ecluse.mirror.enqueued"
     MirrorEnqueueFailures -> "ecluse.mirror.enqueue.failures"
     MirrorJobsProcessed -> "ecluse.mirror.jobs.processed"
