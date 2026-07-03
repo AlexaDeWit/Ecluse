@@ -26,7 +26,6 @@ remains retrievable from repository files.
 3. **Retrieve by decision:** read only the sections needed for the next orchestration action:
    - per-PR loop, fix routing, evaluation, gate, or guardrails from
      `planning/orchestration-strategy.md`;
-   - the relevant dependency row or in-flight section from `planning/delivery-plan.md`;
    - active slice files;
    - architecture sections explicitly implicated by a blocker or review finding.
 4. **Reconcile selective memory:** only if the checkpoint names stale memory, or a current decision
@@ -37,7 +36,7 @@ remains retrievable from repository files.
    implementation build.
 
 Do not routinely reread `README.md`, `AGENTS.md`, `CONTRIBUTING.md`, `STYLE.md`, `HADDOCK.md`, all
-of `docs/testing.md`, all of `planning/delivery-plan.md`, or the architecture set. Retrieve one
+of `docs/testing.md`, or the architecture set. Retrieve one
 when the next decision actually depends on it.
 
 This routine may query live state, but it does not edit project files, dispatch work, merge, or

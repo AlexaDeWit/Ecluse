@@ -29,7 +29,7 @@ procedure.
 | Add or change tests | Applicable sections of [`docs/testing.md`](docs/testing.md) |
 | Build, debug, or navigate Haskell | Applicable sections of [`docs/getting-started.md`](docs/getting-started.md) |
 | Change CI, releases, supply chain, or security tooling | [`CONTRIBUTING.md`](CONTRIBUTING.md) and the relevant testing or release-supply-chain sections |
-| Coordinate implementation slices | [`planning/orchestration-strategy.md`](planning/orchestration-strategy.md), [`planning/delivery-plan.md`](planning/delivery-plan.md), and the active slice files |
+| Coordinate implementation slices | [`planning/orchestration-strategy.md`](planning/orchestration-strategy.md) |
 | Commit or open a PR | [`CONTRIBUTING.md`](CONTRIBUTING.md), the PR template, and the `open-pull-request` skill |
 | Run in a hosted/web execution environment | [`.agents/remote-execution.md`](.agents/remote-execution.md) |
 
@@ -51,11 +51,7 @@ The repo owner is the **principal architect** and owns design and requirements. 
 coordinates PR-sized work, independent evaluation, and handoff. The full workflow lives in
 [`planning/orchestration-strategy.md`](planning/orchestration-strategy.md).
 
-- The dependency-ordered plan is [`planning/delivery-plan.md`](planning/delivery-plan.md).
-- Each slice's goal, acceptance criteria, file scope, and live `status:` are authoritative in its
-  own `planning/slices/SNN-*.md` file. Read it before touching slice code.
-- Update only that slice file's status, in a small `docs(planning)` commit, when taking it up,
-  moving it to review, or completing it.
+
 - Use one isolated worktree per implementation agent. Never let concurrent agents edit the same
   checkout.
 - Dispatch implementation only after explicit architect kickoff. The lead agent never merges or

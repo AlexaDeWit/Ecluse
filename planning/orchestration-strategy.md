@@ -44,7 +44,7 @@ warranted_, not only when something is hard-blocked.
 
 Done once, when the architecture is frozen (not before). The team lead turns the
 design into a **dependency-ordered DAG of PR-sized slices**, recorded in
-`planning/delivery-plan.md`:
+the issue tracker:
 
 - **Walking skeleton first**, the thinnest end-to-end path, then capabilities
   layered onto it.
@@ -61,8 +61,8 @@ The architect signs off on this breakdown **before any code is written**.
 
 The DAG encodes _ordering_ (`depends-on`) but not the **shape** of what crosses
 each edge. Where several producer slices converge on one consumer; e.g.
-`S09 + S33 → S14` (the packument pipeline) or `S15/S17/S18/S19 → S20` (launch
-composition), specify the **consumer's interface, the types that flow across the
+the packument pipeline or launch
+composition, specify the **consumer's interface, the types that flow across the
 boundary, before building the producers**. Producers then build _to_ a known
 contract instead of the consumer reverse-engineering whatever they happened to
 emit. A convergence slice's interface is a deliverable of **this planning pass**,
@@ -223,15 +223,15 @@ A dedicated agent audits the integrated tree (fresh context, read-and-verify) fo
   `String`↔`Text`↔`ByteString` bounce), avoidable re-parsing / re-allocation,
   lazy/strict mismatches, accidentally-quadratic patterns, caught structurally
   now, before later slices build on them. Once the benchmark harness
-  ([S37](slices/S37-benchmark-harness.md)) exists, this audit is **measured, not
+  exists, this audit is **measured, not
   eyeballed**: the micro-benchmarks quantify these regressions and the audit
   consults the informational trend (which itself never gates).
 - **Spec & doc accuracy reconciliation**, for every slice merged in the wave,
   reconcile the as-built code against the slice file and the architecture
   document(s) it derives from: fold any learnings, discoveries, and deviations
-  from the original acceptance criteria back into the [`slices/`](slices/) file,
+  from the original acceptance criteria back into the issue tracker,
   and update the architecture doc so the design of record matches what shipped.
-  Confirm every merged slice's `status:` reads `merged`. This stops the plan and
+  This stops the plan and
   the architecture drifting from reality as parallel slices land, drift the
   per-PR loop cannot catch, because it never re-reads the spec after the merge.
   **Material design changes are escalated to the architect** (they may reshape
@@ -264,7 +264,7 @@ left with a note on what remains.
 
 The pass **gates the next wave**: the integrated base a wave builds on is made
 coherent first. It is recorded in the
-[delivery plan](delivery-plan.md#parallelization--3-slices-in-flight)'s wave sequence.
+issue tracker's milestone sequence.
 
 ## Verification: fast local, CI is the gate
 
@@ -350,7 +350,7 @@ A PR reaches the architect only when **all** hold:
 - [ ] CI `gate` (and every job it needs) green on the PR
 - [ ] Docs updated in the same PR; changes limited to the slice's file scope (other files only with strong justification)
 - [ ] Any GitHub issue the PR resolves is named in its description with a closing keyword (`Closes #N`), so the merge closes it; the tracker must not accrue resolved-but-open issues
-- [ ] **The slice-completing PR flips its own slice `status:` to `merged` in this same PR**; the merge is what makes `merged` true, so the flip and the as-built reconciliation **ride with the code**, never deferred to a later sweep, and folds in the as-built delta (design decisions, discoveries, deviations from the acceptance criteria); the slice's `planning/slices/SNN-*.md` is part of the slice's file scope. A slice left reading `not-started`/`in-review` after its PR merged is a hand-off defect, caught at GATE.
+- [ ] **The slice-completing PR closes its corresponding GitHub issue**; the merge is what makes the slice true, so the as-built reconciliation **rides with the code**, never deferred to a later sweep, and folds in the as-built delta (design decisions, discoveries, deviations from the acceptance criteria). An issue left open after its PR merged is a hand-off defect, caught at GATE.
 - [ ] Commits GPG-signed + DCO `Signed-off-by` (`git commit -s`) + Conventional Commits
 - [ ] PR taken **out of draft and marked ready for review**, the hand-off itself, done only once every box above holds; until then the PR stays a **draft** so it is never mistaken for review-ready
 
@@ -394,12 +394,10 @@ Escalations arrive **decision-ready**:
 - **Semgrep clean** before every push; ignores need the architect's approval.
 - GitHub Actions **SHA-pinned**; workflows kept **injection-free**.
 - Documentation updated in the **same** PR as the change it describes, and that
-  includes the **planning record**: a PR that completes a slice **flips that slice's
-  `status:` to `merged` and folds in its as-built delta in the very same PR**, because the
-  merge is precisely what makes `merged` true. The slice file, the affected architecture /
-  `docs/` pages, and any `delivery-plan.md` "In flight" pointer move **with** the code, not
-  in a follow-up reconciliation. The team lead verifies this at GATE; a merged slice still
-  reading `not-started` is drift the per-PR loop was supposed to prevent.
+  includes the **planning record**: a PR that completes a slice **closes its corresponding issue and folds in its as-built delta in the very same PR**. The affected architecture /
+  `docs/` pages, and any issue status move **with** the code, not
+  in a follow-up reconciliation. The team lead verifies this at GATE; a merged slice with an issue still
+  open is drift the per-PR loop was supposed to prevent.
 - Generated artifacts (e.g. version-ordering fixtures via
   `task gen-version-fixtures`) are regenerated with their tooling, never
   hand-edited.
@@ -411,13 +409,12 @@ Escalations arrive **decision-ready**:
 - **Surface decisions one at a time.** When several design questions are open at
   once, the team lead does **not** front-load them all on the architect in one
   message. They are **parked** (a short-lived `design-queue.md` under `planning/`, spun
-  up when decisions accumulate and removed once drained into `docs/` + slices) and
+  up when decisions accumulate and removed once drained into `docs/` + issues) and
   brought **one at a time**, lead-with-a-recommendation; the rest wait their turn. This
   complements *escalate, don't guess*. Surface proactively, but serialized, not in
   a flood.
 - **Reference work by identifiers the architect can see.** When surfacing or
-  escalating, name a piece of work by what is visible to the architect, its slice ID
-  (`S19`), PR or issue number (`#168`), or a short descriptive title, never an
+  escalating, name a piece of work by what is visible to the architect, its PR or issue number (`#168`), or a short descriptive title, never an
   internal task-tracker ID (the architect's view does not render those).
 - **The Handle pattern is the canonical name for the records-of-functions
   abstraction.** `RegistryClient`, `MirrorQueue`, and `CredentialProvider` are **the
@@ -427,7 +424,6 @@ Escalations arrive **decision-ready**:
 
 ## What lives under `planning/`
 
-This strategy; the concrete **delivery plan** (the PR DAG) once the architecture is
-finalized; and, when design questions accumulate, a short-lived `design-queue.md`
-holding area (worked one at a time, then drained into `docs/` and slices, and removed
+This strategy; and, when design questions accumulate, a short-lived `design-queue.md`
+holding area (worked one at a time, then drained into `docs/` and issues, and removed
 once empty). See [README](README.md).
