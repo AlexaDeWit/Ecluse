@@ -453,8 +453,8 @@ ecosystem and the operating point, then one block per scenario with its throughp
 latency percentiles, allocations per request, residency, and GC stats. The same text
 goes to stdout and to the GitHub run summary.
 -}
-renderReports :: LoadKnobs -> Ecosystem -> [ScenarioReport] -> Text
-renderReports knobs ecosystem reports =
+renderReports :: LoadKnobs -> Int -> Ecosystem -> [ScenarioReport] -> Text
+renderReports knobs capabilities ecosystem reports =
     T.unlines $
         [ "## Load test -- throughput & latency over " <> ecosystemName ecosystem
         , ""
@@ -476,7 +476,9 @@ renderReports knobs ecosystem reports =
             <> show (lkServeMaxInFlight knobs)
             <> " (private pool follows admission) · public connections per host "
             <> show (lkPublicConnectionsPerHost knobs)
-            <> " · ~"
+            <> " · "
+            <> show capabilities
+            <> " GHC capabilities (scenario children pinned to the driver's count) · ~"
             <> fmtKiB (lkPayloadBytes knobs)
             <> " worker artifact."
         , ""
