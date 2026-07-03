@@ -756,7 +756,7 @@ renderSpec = describe "renderBootError" $
         renderBootError (PolicyBootError (UnknownRuleType "x" "Y")) `shouldSatisfy` infixed "unknown type"
         renderBootError (MissingAdapter PyPI) `shouldSatisfy` infixed "no adapter"
         renderBootError (UnresolvedCredential Npm CodeArtifactCredential)
-            `shouldSatisfy` infixed "not initialized"
+            `shouldSatisfy` infixed "not initialised"
         renderBootError (QueueProviderUnavailable PubSubQueue) `shouldSatisfy` infixed "not available"
         renderBootError QueueRegionMissing `shouldSatisfy` infixed "AWS_REGION"
         renderBootError (QueueUrlMissing SqsQueue) `shouldSatisfy` infixed "ECLUSE_QUEUE_URL"
