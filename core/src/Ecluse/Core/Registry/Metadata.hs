@@ -33,6 +33,12 @@ module Ecluse.Core.Registry.Metadata (
     -- * The read handle
     MetadataClient (..),
 
+    -- * The full-manifest result
+    Manifest (..),
+    ContentDigest,
+    digestOf,
+    digestBytes,
+
     -- * Errors
     MetadataError (..),
 
@@ -41,12 +47,44 @@ module Ecluse.Core.Registry.Metadata (
     fetchVersionDetails,
 ) where
 
+import Crypto.Hash (Digest, SHA256, hash)
 import Data.Aeson (Value)
+import Data.ByteArray qualified as BA
 import UnliftIO.Exception (tryAny)
 
 import Ecluse.Core.Package (PackageDetails, PackageInfo, PackageName)
 import Ecluse.Core.Security (LimitError)
 import Ecluse.Core.Version (Version)
+
+{- | A SHA-256 digest of one origin's __wire body__ -- the exact bytes a manifest was
+decoded from, hashed once at the read boundary (where the strict body already exists)
+so downstream consumers can fingerprint a document without re-encoding or re-hashing
+it. Opaque: built only by 'digestOf', read only by 'digestBytes'.
+-}
+newtype ContentDigest = ContentDigest ByteString
+    deriving stock (Eq, Show)
+
+-- | Digest a strict body -- one @O(body)@ pass, paid at fetch time, never per serve.
+digestOf :: ByteString -> ContentDigest
+digestOf body = ContentDigest (BA.convert (hash body :: Digest SHA256))
+
+-- | The digest's raw 32 bytes, for feeding into a wider fingerprint.
+digestBytes :: ContentDigest -> ByteString
+digestBytes (ContentDigest bytes) = bytes
+
+{- | A resolved full manifest: the typed packument-level view, the raw document it was
+decoded from (the serve path edits and re-serialises it), and the 'ContentDigest' of
+the wire bytes both were derived from -- the input fingerprint the serve path's
+derived ETag is built over ('Ecluse.Core.Server.Conditional').
+-}
+data Manifest = Manifest
+    { manifestInfo :: PackageInfo
+    -- ^ The typed packument view the rules and merge reason over.
+    , manifestRaw :: Value
+    -- ^ The raw upstream document the served body is built from.
+    , manifestDigest :: ContentDigest
+    -- ^ Digest of the wire bytes 'manifestInfo' and 'manifestRaw' were decoded from.
+    }
 
 {- | The serve-path read handle -- a record of two intent operations over a registry
 mount, whose private state (the per-origin fetch configuration and the shared cache)
@@ -54,11 +92,13 @@ the closures capture. Both fields return 'IO' so a backend stays decoupled from 
 proxy core, exactly as the publish-side handle does.
 -}
 data MetadataClient = MetadataClient
-    { fetchFullManifest :: PackageName -> IO (Either MetadataError (PackageInfo, Value))
+    { fetchFullManifest :: PackageName -> IO (Either MetadataError Manifest)
     {- ^ Fetch and project a package's __full manifest__: the packument-level
-    'PackageInfo' (every version) paired with the raw 'Value' it was decoded from, so
-    the serve path can edit and re-serialize the document. A failed fetch\/parse is a
-    'MetadataError'; a transport fault is thrown (the caller already brackets it).
+    'PackageInfo' (every version), the raw 'Value' it was decoded from (so the serve
+    path can edit and re-serialize the document), and the wire bytes' 'ContentDigest'
+    (so the serve path can fingerprint the document without re-hashing it). A failed
+    fetch\/parse is a 'MetadataError'; a transport fault is thrown (the caller already
+    brackets it).
     -}
     , fetchVersionMetadata :: PackageName -> Version -> IO (Either MetadataError (Maybe PackageDetails))
     {- ^ Fetch the __single-version metadata__ for one @(package, version)@: that

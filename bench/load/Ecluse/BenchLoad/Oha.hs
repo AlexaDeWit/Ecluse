@@ -18,6 +18,7 @@ module Ecluse.BenchLoad.Oha (
     OhaReport (..),
     runOha,
     runOhaUrls,
+    runOhaUrlsWith,
 ) where
 
 import Data.Aeson (FromJSON (parseJSON), eitherDecode, withObject, (.!=), (.:), (.:?))
@@ -99,11 +100,21 @@ The same literal-failure contract as 'runOha': throws if @oha@ cannot be started
 its JSON does not parse, returns a degraded run for the caller to report.
 -}
 runOhaUrls :: Int -> Int -> [Text] -> IO OhaReport
-runOhaUrls concurrency durationSeconds urls =
+runOhaUrls = runOhaUrlsWith []
+
+{- | 'runOhaUrls' with fixed extra request headers on every request -- the
+revalidation scenario's @If-None-Match@. Each pair becomes an @-H "name: value"@
+argument.
+-}
+runOhaUrlsWith :: [(Text, Text)] -> Int -> Int -> [Text] -> IO OhaReport
+runOhaUrlsWith headers concurrency durationSeconds urls =
     withSystemTempFile "ecluse-bench-urls.txt" $ \path handle -> do
         hClose handle
         writeFileText path (unlines urls)
-        runOhaArgs concurrency durationSeconds ["--urls-from-file", path]
+        runOhaArgs concurrency durationSeconds (headerArgs <> ["--urls-from-file", path])
+  where
+    headerArgs :: [String]
+    headerArgs = concatMap (\(name, value) -> ["-H", toString (name <> ": " <> value)]) headers
 
 -- Run oha with the common reporting flags plus the given target arguments (a single
 -- URL, or @--urls-from-file <path>@), and parse its JSON report.

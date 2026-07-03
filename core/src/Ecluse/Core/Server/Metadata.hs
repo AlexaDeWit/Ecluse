@@ -28,13 +28,13 @@ module Ecluse.Core.Server.Metadata (
     newNpmMetadataClient,
 ) where
 
-import Data.Aeson (Value)
 import Data.Map.Strict qualified as Map
 import Network.HTTP.Client qualified as HTTP
 import UnliftIO.Exception (throwIO, try, tryAny)
 
 import Ecluse.Core.Package (InvalidEntry, PackageDetails, PackageInfo (infoInvalidEntries, infoVersions), PackageName)
 import Ecluse.Core.Registry.Metadata (
+    Manifest (Manifest, manifestDigest, manifestInfo, manifestRaw),
     MetadataClient (..),
     MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable),
  )
@@ -42,7 +42,7 @@ import Ecluse.Core.Registry.Npm (NpmClientConfig)
 import Ecluse.Core.Registry.Npm.Metadata (fetchNpmManifest, fetchNpmVersion)
 
 import Ecluse.Core.Server.Cache (
-    CacheEntry (CacheEntry, entryInfo, entryRaw),
+    CacheEntry (CacheEntry, entryDigest, entryInfo, entryRaw),
     MetadataCache,
     Source,
     cachedMetadata,
@@ -108,7 +108,7 @@ newMetadataClient ::
     (PackageName -> MetadataError -> IO ()) ->
     (PackageName -> [InvalidEntry] -> IO ()) ->
     (PackageName -> IO ()) ->
-    (PackageName -> IO (Either MetadataError (PackageInfo, Value))) ->
+    (PackageName -> IO (Either MetadataError Manifest)) ->
     (PackageName -> Version -> IO (Either MetadataError (Maybe PackageDetails))) ->
     MetadataClient
 newMetadataClient metrics upstream caching logFailure logInvalid logFetch rawFetch rawFetchVersion =
@@ -117,7 +117,7 @@ newMetadataClient metrics upstream caching logFailure logInvalid logFetch rawFet
         , fetchVersionMetadata = resolveVersionHybrid
         }
   where
-    resolveFull :: PackageName -> IO (Either MetadataError (PackageInfo, Value))
+    resolveFull :: PackageName -> IO (Either MetadataError Manifest)
     resolveFull name = do
         -- A leader's parse\/policy failure is raised as the carrier so the cache stores
         -- nothing and re-raises to followers; here it is folded back to a 'Left'. A
@@ -125,7 +125,13 @@ newMetadataClient metrics upstream caching logFailure logInvalid logFetch rawFet
         -- serve path's bracket, exactly as before.
         outcome <- try (resolveEntry name)
         pure $ case outcome of
-            Right entry -> Right (entryInfo entry, entryRaw entry)
+            Right entry ->
+                Right
+                    Manifest
+                        { manifestInfo = entryInfo entry
+                        , manifestRaw = entryRaw entry
+                        , manifestDigest = entryDigest entry
+                        }
             Left (ManifestFetchFailed err) -> Left err
 
     resolveEntry :: PackageName -> IO CacheEntry
@@ -141,10 +147,10 @@ newMetadataClient metrics upstream caching logFailure logInvalid logFetch rawFet
         logFetch name
         recordedFetch metrics upstream $
             rawFetch name >>= \case
-                Right (info, raw) -> do
-                    let invalid = infoInvalidEntries info
+                Right manifest -> do
+                    let invalid = infoInvalidEntries (manifestInfo manifest)
                     unless (null invalid) (logInvalid name invalid)
-                    pure (CacheEntry info raw)
+                    pure (CacheEntry (manifestInfo manifest) (manifestRaw manifest) (manifestDigest manifest))
                 Left err -> logFailure name err >> throwIO (ManifestFetchFailed err)
 
     -- The single-version hybrid: the small version cache, then the warm full cache

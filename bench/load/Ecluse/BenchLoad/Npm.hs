@@ -82,6 +82,7 @@ import Data.Aeson (Value, encode, object, (.=))
 import Data.Aeson.Key qualified as Key
 import Data.ByteArray.Encoding (Base (Base16, Base64), convertToBase)
 import Data.ByteString.Lazy qualified as LBS
+import Data.List qualified as List
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text qualified as T
@@ -91,12 +92,13 @@ import GHC.Clock (getMonotonicTime)
 import GHC.Conc (getNumCapabilities)
 import Katip (Environment (Environment), LogEnv, Namespace (Namespace), initLogEnv)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
-import Network.HTTP.Types (hContentType, status200, status404)
+import Network.HTTP.Client qualified as HTTP
+import Network.HTTP.Types (hContentType, hETag, status200, status404)
 import Network.Wai (Application, Request, pathInfo, responseLBS)
 import Network.Wai.Handler.Warp (testWithApplication)
 
 import Ecluse.BenchLoad.Error (benchFail)
-import Ecluse.BenchLoad.Harness (Driver (DriveHttpUrls, DriveInProcess), LoadKnobs (..), Scenario (..), UpstreamFixture (..))
+import Ecluse.BenchLoad.Harness (Driver (DriveHttpHeaders, DriveHttpUrls, DriveInProcess), LoadKnobs (..), Scenario (..), UpstreamFixture (..))
 import Ecluse.Composition (connectionPoolSettings, openFileSoftLimit, resolvePrivateConnections, resolveServeAdmission)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
@@ -162,6 +164,7 @@ npmFixture =
         , fixtureScenarios =
             [ mergeScenario
             , cacheHitScenario
+            , revalidateScenario
             , cacheFitsScenario
             , cacheEvictsScenario
             , tarballScenario
@@ -199,6 +202,41 @@ cacheHitScenario =
             "The cheap cache-served path over the same large-emphasis corpus mix: GET /{pkg} with the anonymous public origin served from the warm metadata cache (no public fetch or decode), the live private leg merged in. The passthrough model caches the public origin, not the per-client private one, so this is the faithful no-public-fetch shape."
         , scenarioBoot = \knobs k -> withNpmProxy knobs longCacheTtl (cacheMaxEntries defaultCacheConfig) serveMix (k . DriveHttpUrls)
         }
+
+{- | The conditional-revalidation path: every request echoes a freshly primed @ETag@
+as @If-None-Match@, so the proxy answers @304@s -- the dominant metadata pattern for
+CI fleets that restore npm's local cache between runs. With the derived validator the
+@304@ costs the per-request private fetch and the plan, never the document assembly,
+encode, or an output hash, so this scenario prices exactly that short-circuit (and
+would catch a regression that re-attaches heavy work to the conditional path). The
+priming @GET@ warms the public cache and captures the tag the drive echoes; success
+counts @304@s (the harness treats 2xx\/3xx alike).
+-}
+revalidateScenario :: Scenario
+revalidateScenario =
+    Scenario
+        { scenarioName = "revalidate-not-modified"
+        , scenarioDescription =
+            "Conditional revalidation of the heaviest corpus packument: a priming GET captures the served ETag, then every driven request echoes it as If-None-Match and is answered 304 off the derived validator -- the private leg still fetched and the plan still computed per request, but no assembly, encode, or output hash. The realistic shape for CI fleets restoring npm's cache: metadata traffic that revalidates instead of re-downloading."
+        , scenarioBoot = \knobs k ->
+            let pkgs = take 1 (workingSet knobs)
+             in withNpmProxy knobs longCacheTtl (cacheMaxEntries defaultCacheConfig) (uniformMix pkgs) $ \case
+                    url : _ -> do
+                        etag <- primeETag url
+                        k (DriveHttpHeaders [("If-None-Match", etag)] [url])
+                    [] -> benchFail "revalidate-not-modified: no URL to drive"
+        }
+
+{- Prime the revalidation scenario: one plain @GET@ against the proxy (warming the
+public cache entry) whose response @ETag@ the drive then echoes. -}
+primeETag :: Text -> IO Text
+primeETag url = do
+    manager <- newManager defaultManagerSettings
+    request <- HTTP.parseRequest (toString url)
+    response <- HTTP.httpLbs request manager
+    case List.lookup hETag (HTTP.responseHeaders response) of
+        Just tag -> pure (decodeUtf8 tag)
+        Nothing -> benchFail "revalidate-not-modified: the priming GET returned no ETag"
 
 {- | The cache-eviction baseline: a working set of several large packuments cycled
 __uniformly__ against a cache whose bound __holds the whole set__ (TTL > 0). After warm-up

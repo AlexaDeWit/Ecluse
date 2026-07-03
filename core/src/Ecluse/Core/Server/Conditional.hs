@@ -12,31 +12,37 @@ The proxy serves two kinds of body, and they validate differently (see
 
 * __Transformed bodies__ -- every packument, which is merged across upstreams and
   filtered by the rules -- differ from any single upstream's body, so an upstream
-  validator would validate the wrong bytes. We instead compute our __own__ strong
-  'ETag' over __what we serve__ ('ownETag') and answer the client's conditional
-  request against that ('evaluateOwnETag').
+  validator would validate the wrong bytes. We instead serve our __own__ strong
+  'ETag' ('mkStrongETag') and answer the client's conditional request against it
+  ('evaluateETag').
 
-The own-ETag is a SHA-256 over the exact served bytes, so it changes iff the
-served document changes -- a filtered version dropping in or out, a @latest@
-repoint, an integrity divergence -- and never collides a stale body onto a fresh
-one. The functions here are pure; turning a 'Conditional' or relayed status into a
-WAI response is the serving layer's job.
+The own-ETag is __derived from the serve's inputs__, not hashed over its output: a
+SHA-256 over the origin bodies' digests, the per-source surviving version sets, and
+the assembly's identity (see 'Ecluse.Core.Server.Pipeline.Packument.packumentETag').
+The served document is a deterministic function of exactly those inputs, so the tag
+can never validate a stale body as fresh -- the direction correctness needs -- while
+it may occasionally change when the re-assembled bytes would not have (a spurious
+@200@, never a wrong @304@). Deriving it from inputs is what lets the serve path
+answer a @304@ __without assembling, encoding, or hashing the document at all__, and
+stream a @200@ body without materialising it for a hash pass first. The functions
+here are pure; turning a 'Conditional' or relayed status into a WAI response is the
+serving layer's job.
 -}
 module Ecluse.Core.Server.Conditional (
     -- * Our own ETag (transformed bodies)
     ETag,
-    ownETag,
+    mkStrongETag,
     renderETag,
     etagHeader,
     Conditional (..),
-    evaluateOwnETag,
+    evaluateETag,
 
     -- * Relaying validators (pass-through bodies)
     forwardValidators,
     isNotModified,
 ) where
 
-import Crypto.Hash (Digest, SHA256, hashlazy)
+import Crypto.Hash (Digest, SHA256)
 import Data.ByteArray.Encoding (Base (Base16), convertToBase)
 import Data.Text qualified as T
 import Network.HTTP.Types (Header, RequestHeaders, Status, statusCode)
@@ -49,17 +55,16 @@ is not confused with the bare digest or any other 'Text'.
 newtype ETag = ETag Text
     deriving stock (Eq, Ord, Show)
 
-{- | Compute our own strong 'ETag' over the __served bytes__ -- a SHA-256 digest,
-hex-encoded and quoted. It tracks exactly what we serve, so a transformed
-(filtered, merged) packument gets a validator that changes when, and only when,
-the served document does. Computing it over upstream's body instead would
-validate the wrong bytes.
+{- | Quote a SHA-256 digest as a strong 'ETag' -- hex-encoded, in the quoted
+opaque-tag wire form. The digest is whatever fingerprint the serving layer stands
+behind; for packuments that is the input fingerprint of
+'Ecluse.Core.Server.Pipeline.Packument.packumentETag'.
 -}
-ownETag :: LByteString -> ETag
-ownETag body = ETag ("\"" <> digest <> "\"")
+mkStrongETag :: Digest SHA256 -> ETag
+mkStrongETag digest = ETag ("\"" <> hex <> "\"")
   where
-    digest :: Text
-    digest = decodeUtf8 (convertToBase Base16 (hashlazy body :: Digest SHA256) :: ByteString)
+    hex :: Text
+    hex = decodeUtf8 (convertToBase Base16 digest :: ByteString)
 
 -- | The 'ETag's wire form, the quoted opaque tag as it goes into the header.
 renderETag :: ETag -> Text
@@ -85,25 +90,21 @@ data Conditional
 
 {- | Evaluate a conditional request against our own ETag for a transformed body.
 
-The body's 'ownETag' is computed, then matched against the request's
-@If-None-Match@: a @*@ wildcard, or any tag in the (comma-separated) list whose
-opaque value equals ours, is a match → 'NotModified'. The match is __weak__ (RFC
-7232): a @W/@ prefix on either side is ignored, so a client echoing our tag with a
-weakness marker still matches. Anything else -- a stale tag, or no validator --
-is 'Modified'.
+The given tag is matched against the request's @If-None-Match@: a @*@ wildcard, or
+any tag in the (comma-separated) list whose opaque value equals ours, is a match →
+'NotModified'. The match is __weak__ (RFC 7232): a @W/@ prefix on either side is
+ignored, so a client echoing our tag with a weakness marker still matches. Anything
+else -- a stale tag, or no validator -- is 'Modified'.
 
 @If-Modified-Since@ is deliberately not consulted for transformed bodies: a merged
 packument has no single upstream @Last-Modified@ to compare to, and the strong
-content ETag is the precise validator.
+ETag is the precise validator.
 -}
-evaluateOwnETag :: RequestHeaders -> LByteString -> Conditional
-evaluateOwnETag headers body
+evaluateETag :: RequestHeaders -> ETag -> Conditional
+evaluateETag headers etag
     | matches = NotModified etag
     | otherwise = Modified etag
   where
-    etag :: ETag
-    etag = ownETag body
-
     matches :: Bool
     matches = any clientMatches (lookupAll hIfNoneMatch headers)
 

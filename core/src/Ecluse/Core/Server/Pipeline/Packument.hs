@@ -71,10 +71,15 @@ module Ecluse.Core.Server.Pipeline.Packument (
     servePackument,
     headPackument,
     withPublicMetadataClient,
+
+    -- * The derived validator (exported for its unit spec)
+    packumentETag,
 ) where
 
+import Crypto.Hash (Context, SHA256, hashFinalize, hashInit, hashUpdates)
 import Data.Aeson (Value (Object))
 import Data.Aeson qualified as Aeson
+import Data.Aeson.Encoding (fromEncoding)
 import Data.Aeson.Text (encodeToLazyText)
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict qualified as Map
@@ -83,8 +88,8 @@ import Data.Text qualified as T
 import Data.Text.Lazy qualified as TL
 import Katip (KatipContext, Severity (DebugS, InfoS, WarningS), katipAddContext, logFM, ls, sl)
 import Network.HTTP.Client (Manager)
-import Network.HTTP.Types (ResponseHeaders, Status, hContentLength, mkStatus, status200)
-import Network.Wai (Request, Response, ResponseReceived, requestHeaders)
+import Network.HTTP.Types (ResponseHeaders, Status, hContentLength, hContentType, mkStatus, status200)
+import Network.Wai (Request, Response, ResponseReceived, requestHeaders, responseBuilder)
 import UnliftIO (concurrently, withRunInIO)
 import UnliftIO.Exception (tryAny)
 
@@ -108,8 +113,11 @@ import Ecluse.Core.Package.Merge (
     mergePackuments,
  )
 import Ecluse.Core.Registry.Metadata (
+    ContentDigest,
+    Manifest (manifestDigest, manifestInfo, manifestRaw),
     MetadataClient (fetchFullManifest),
     MetadataError (MetadataBoundExceeded, MetadataNameMismatch, MetadataUndecodable),
+    digestBytes,
  )
 import Ecluse.Core.Rules (evalRules)
 import Ecluse.Core.Rules.Types (Decision, EvalContext (EvalContext))
@@ -119,7 +127,7 @@ import Ecluse.Core.Security (
  )
 import Ecluse.Core.Server.Admission (withServeAdmission)
 import Ecluse.Core.Server.Cache (Source (Source))
-import Ecluse.Core.Server.Conditional (Conditional (Modified, NotModified), etagHeader, evaluateOwnETag)
+import Ecluse.Core.Server.Conditional (Conditional (Modified, NotModified), ETag, etagHeader, evaluateETag, mkStrongETag)
 import Ecluse.Core.Server.Context (
     Handler,
     MountBinding (bindingPackumentDeps, bindingRenderer),
@@ -271,14 +279,23 @@ serveWithDeps mode renderer deps name request respond
             concurrently
                 (fetchPrivateOrigin deps rt clientToken name)
                 (fetchPublicOrigin deps rt name)
-        (public, publicExclusions) <- liftIO (gatePublic (srTracing rt) metrics deps name evalCtx (originPackument pubResult))
-        let (private, privateExclusions) = admitTrusted (pdMinTrustedIntegrity deps) (originPackument privResult)
+        (public, publicExclusions) <- liftIO (gatePublic (srTracing rt) metrics deps name evalCtx (originManifest pubResult))
+        let (private, privateExclusions) = admitTrusted (pdMinTrustedIntegrity deps) (originManifest privResult)
             sources = catMaybes [private, public]
-        case assemble deps sources of
-            Just body -> do
-                logFM DebugS (ls ("assembled packument for " <> renderPackageName name))
+        case packumentPlan sources of
+            Just plan -> do
                 liftIO (mpServeDecision metrics Metric.Admit)
-                liftIO (respond (servePackumentBody mode request body))
+                -- The validator is derived from the serve's inputs, so the conditional
+                -- request is answered BEFORE any assembly: a 304 costs the fetches and
+                -- the plan, never the document rebuild, encode, or an output hash.
+                let etag = packumentETag (pdMountBaseUrl deps) name (map fingerprintPiece sources)
+                case evaluateETag (requestHeaders request) etag of
+                    NotModified matched -> do
+                        logFM DebugS (ls ("packument unchanged for " <> renderPackageName name <> " (304, unassembled)"))
+                        liftIO (respond (notModifiedResponse matched))
+                    Modified fresh -> do
+                        logFM DebugS (ls ("assembled packument for " <> renderPackageName name))
+                        liftIO (respond (packumentResponse mode fresh (renderServedBody deps sources plan)))
             Nothing -> do
                 let decisions = collectDecisions privResult pubResult (privateExclusions <> publicExclusions)
                 liftIO (mpServeDecision metrics (packumentServeDecision decisions))
@@ -290,14 +307,23 @@ serveWithDeps mode renderer deps name request respond
 -- stub is the handler's, so the routing layer need not re-derive it.
 
 {- A successfully resolved upstream contribution: the parsed packument used to
-decide, alongside the raw @Value@ that is edited in place to serve. Pairing them
-is the decision-surface\/served-surface contract -- every stage carries the raw
+decide, alongside the raw @Value@ that is edited in place to serve, and the
+origin body's 'ContentDigest' for the derived validator. Pairing the views is
+the decision-surface\/served-surface contract -- every stage carries the raw
 @Value@ next to the typed view so losslessness survives the pipeline. -}
 data Contribution = Contribution
     { srcProvenance :: Provenance
     , srcInfo :: PackageInfo
     , srcValue :: Value
+    , srcDigest :: ContentDigest
     }
+
+{- One source's slice of the derived validator: its provenance, its origin body's
+digest, and the version keys that actually survived its gate -- together with the
+mount base URL and package name, exactly the inputs the assembled document is a
+deterministic function of (the plan itself derives from these). -}
+fingerprintPiece :: Contribution -> (Provenance, ContentDigest, [Text])
+fingerprintPiece s = (srcProvenance s, srcDigest s, Map.keys (infoVersions (srcInfo s)))
 
 {- The outcome of resolving one upstream origin for a packument, beyond the
 plain "resolved or not" the merge consumes: a name mismatch is kept distinct from a
@@ -306,7 +332,7 @@ responding upstream returned a packument for a different package) apart from a
 transient outage or a genuine absence. -}
 data OriginResult
     = -- | A packument that decoded and whose self-reported name matched the request.
-      OriginResolved (PackageInfo, Value)
+      OriginResolved Manifest
     | {- | The origin answered, but its packument self-reported a name for a /different/
       package -- dropped as untrusted for this request, and a @502@ signal when no
       origin is valid.
@@ -317,11 +343,11 @@ data OriginResult
       -}
       OriginUnresolved
 
--- The resolved (packument, raw @Value@) pair an origin contributed, if any. A name
--- mismatch and a plain non-resolution alike contribute no document to the merge.
-originPackument :: OriginResult -> Maybe (PackageInfo, Value)
-originPackument = \case
-    OriginResolved pair -> Just pair
+-- The resolved manifest an origin contributed, if any. A name mismatch and a plain
+-- non-resolution alike contribute no document to the merge.
+originManifest :: OriginResult -> Maybe Manifest
+originManifest = \case
+    OriginResolved manifest -> Just manifest
     OriginNameMismatch -> Nothing
     OriginUnresolved -> Nothing
 
@@ -330,12 +356,12 @@ transport\/async fault (the 'tryAny' channel) and a 'MetadataError' degrade alik
 no document, but a 'MetadataNameMismatch' is kept distinct as 'OriginNameMismatch' so the
 no-valid-origin terminal status can render a @502@ (a responding upstream answered for a
 different package) apart from a transient outage, an undecodable body, or a bound breach. -}
-originResultOf :: Either SomeException (Either MetadataError (PackageInfo, Value)) -> OriginResult
+originResultOf :: Either SomeException (Either MetadataError Manifest) -> OriginResult
 originResultOf = \case
     Left _ -> OriginUnresolved
     Right (Left (MetadataNameMismatch _)) -> OriginNameMismatch
     Right (Left _) -> OriginUnresolved
-    Right (Right pair) -> OriginResolved pair
+    Right (Right manifest) -> OriginResolved manifest
 
 {- Resolve the private (trusted) upstream origin, __uncached__, forwarding the client's
 own credential (the default @passthrough@ posture). Returns its coherent (parsed
@@ -570,15 +596,15 @@ who loosens the trusted floor admits it again. Trusted versions stay __unfiltere
 rules__ (the trust split is the caller's); only the integrity floor applies. The raw
 @Value@ is kept whole -- the merge replays only surviving keys onto it, so a dropped version
 is never taken from it; tarball URLs are rewritten at assembly, uniformly across sources. -}
-admitTrusted :: MinTrustedIntegrity -> Maybe (PackageInfo, Value) -> (Maybe Contribution, [ServeDecision])
+admitTrusted :: MinTrustedIntegrity -> Maybe Manifest -> (Maybe Contribution, [ServeDecision])
 admitTrusted minTrusted = \case
     Nothing -> (Nothing, [])
-    Just (info, value) ->
+    Just manifest ->
         let (admissible, integrityRefusals) =
-                admitByIntegrity minTrusted trustedIntegrityBelowFloor trustedIntegrityMissing info
+                admitByIntegrity minTrusted trustedIntegrityBelowFloor trustedIntegrityMissing (manifestInfo manifest)
          in if Map.null (infoVersions admissible)
                 then (Nothing, integrityRefusals)
-                else (Just (Contribution TrustedSource admissible value), integrityRefusals)
+                else (Just (Contribution TrustedSource admissible (manifestRaw manifest) (manifestDigest manifest)), integrityRefusals)
 
 {- Gate a public-upstream contribution through the rules engine and the structural
 filter, returning the surviving 'Contribution' (if any survived) and the per-version
@@ -616,11 +642,11 @@ from it at assembly, so a denied version's object is unreachable by construction
 This gate runs on the public path only; the trusted (private) contribution is admitted
 separately by 'admitTrusted' against the trusted integrity floor (the rules never run on
 it -- the trust split is the caller's). -}
-gatePublic :: TracingPort -> MetricsPort -> PackumentDeps -> PackageName -> EvalContext -> Maybe (PackageInfo, Value) -> IO (Maybe Contribution, [ServeDecision])
+gatePublic :: TracingPort -> MetricsPort -> PackumentDeps -> PackageName -> EvalContext -> Maybe Manifest -> IO (Maybe Contribution, [ServeDecision])
 gatePublic tracing metrics deps name ctx = \case
     Nothing -> pure (Nothing, [])
-    Just (info, value) -> spanPackumentGate tracing name $ do
-        let (admissible, integrityRefusals) = admitByIntegrity (pdMinIntegrity deps) integrityBelowFloor integrityMissing info
+    Just manifest -> spanPackumentGate tracing name $ do
+        let (admissible, integrityRefusals) = admitByIntegrity (pdMinIntegrity deps) integrityBelowFloor integrityMissing (manifestInfo manifest)
         (decisions, seconds) <- timedSeconds (decideVersions deps ctx admissible)
         mpRuleEvalDuration metrics (evalTier (pdRules deps)) seconds
         recordEffectfulFailures metrics (Map.elems decisions)
@@ -628,7 +654,10 @@ gatePublic tracing metrics deps name ctx = \case
         pure $
             if Set.null (fpSurvivors plan)
                 then (Nothing, projectDecisions admissible (fpDecisions plan) <> integrityRefusals)
-                else (Just (Contribution GatedSource (restrictToSurvivors (fpSurvivors plan) admissible) value), integrityRefusals)
+                else
+                    ( Just (Contribution GatedSource (restrictToSurvivors (fpSurvivors plan) admissible) (manifestRaw manifest) (manifestDigest manifest))
+                    , integrityRefusals
+                    )
 
 {- Decide every version of a public packument against the rules engine, keyed by raw
 version string (the map 'filterPlanFromDecisions' consumes). Each version is run
@@ -651,10 +680,61 @@ projectDecisions info =
 -- conditional request.
 newtype ServedBody = ServedBody {servedValue :: Value}
 
-{- Assemble the served packument by merging the resolved sources and replaying the
-'MergePlan' onto their raw @Value@s, or 'Nothing' when no version survives the
-merge (no source resolved, or every public version was excluded and no private
-versions exist).
+{- Merge the resolved sources into the serve plan, or 'Nothing' when no version
+survives the merge (no source resolved, or every public version was excluded and no
+private versions exist). Split from the rendering so the conditional evaluation can
+sit between them: the plan (typed, cheap) decides serve-vs-no-survivors, and only a
+'Modified' outcome pays for 'renderServedBody'. -}
+packumentPlan :: [Contribution] -> Maybe MergePlan
+packumentPlan sources = do
+    plan <- mergePackuments [(srcProvenance s, srcInfo s) | s <- sources]
+    guard (not (Map.null (mpSurvivors plan)))
+    pure plan
+
+{- | The derived packument validator: a SHA-256 over the serve's __inputs__ -- the
+mount base URL, the package name, and per source (in merge order) its provenance,
+its origin body's digest, and the version keys that survived its gate.
+
+The served document is a deterministic function of exactly these (the merge plan
+derives from the gated typed views, which derive from the origin bytes and the
+survivor sets; the assembly then edits the origin documents under the mount base
+URL), so this tag can never call a changed document unchanged. It may change when
+the re-assembled bytes would not have -- a spurious @200@, never a wrong @304@ --
+which is the correct slack for a validator. Deriving it from inputs is what lets a
+@304@ skip assembly, encoding, and any output hashing entirely.
+
+Fields are fed to the hash with unambiguous framing: the digest is fixed-width, the
+variable-length pieces are @NUL@-terminated, and each source block closes with an
+@\\SOH@ terminator, so no concatenation of adjacent fields can collide with another
+split of the same bytes. The leading salt versions the scheme: bump it when the
+assembly's behaviour changes so pre-change client caches revalidate as modified.
+-}
+packumentETag :: Text -> PackageName -> [(Provenance, ContentDigest, [Text])] -> ETag
+packumentETag mountBaseUrl name sources =
+    mkStrongETag (hashFinalize (hashUpdates (hashInit :: Context SHA256) pieces))
+  where
+    pieces :: [ByteString]
+    pieces =
+        [ "ecluse:packument-etag:v1\0"
+        , encodeUtf8 mountBaseUrl <> "\0"
+        , encodeUtf8 (renderPackageName name) <> "\0"
+        ]
+            <> concatMap sourcePieces sources
+
+    sourcePieces :: (Provenance, ContentDigest, [Text]) -> [ByteString]
+    sourcePieces (provenance, digest, survivors) =
+        provenanceTag provenance
+            : digestBytes digest
+            : map (\v -> encodeUtf8 v <> "\0") survivors
+                <> ["\1"]
+
+    provenanceTag :: Provenance -> ByteString
+    provenanceTag = \case
+        TrustedSource -> "t\0"
+        GatedSource -> "g\0"
+
+{- Assemble the served packument by replaying the 'MergePlan' onto the sources' raw
+@Value@s.
 
 The merge decides over the typed 'PackageInfo's; the served body is built from the
 raw @Value@s so unmodeled keys survive. For each surviving @(version, SourceId)@
@@ -662,14 +742,13 @@ the version object is taken from that source's raw @Value@; @dist-tags@ and @tim
 come from the plan (with @time@'s non-version bookkeeping keys retained from the
 sources); every other top-level key is relayed from the precedence-winning
 document. Tarball URLs are rewritten under the mount base so artifacts route back
-through the gate. -}
-assemble :: PackumentDeps -> [Contribution] -> Maybe ServedBody
-assemble deps sources = do
-    plan <- mergePackuments [(srcProvenance s, srcInfo s) | s <- sources]
-    guard (not (Map.null (mpSurvivors plan)))
-    let bySource :: Map SourceId Value
-        bySource = Map.fromList (zip [0 ..] (map srcValue sources))
-    pure (ServedBody (pdAssemble deps (pdMountBaseUrl deps) bySource plan (baseDocument sources)))
+through the gate. Runs only on a 'Modified' outcome -- a @304@ never pays for it. -}
+renderServedBody :: PackumentDeps -> [Contribution] -> MergePlan -> ServedBody
+renderServedBody deps sources plan =
+    ServedBody (pdAssemble deps (pdMountBaseUrl deps) bySource plan (baseDocument sources))
+  where
+    bySource :: Map SourceId Value
+    bySource = Map.fromList (zip [0 ..] (map srcValue sources))
 
 {- The document whose unmodeled top-level keys are relayed into the served body:
 the precedence-winning source's raw @Value@ -- the first trusted source if any,
@@ -715,35 +794,34 @@ collectDecisions privResult pubResult publicExclusions =
     upstreamInvalidDecision :: ServeDecision
     upstreamInvalidDecision = Reject (Rejection UpstreamInvalid "an upstream returned a packument for a different package")
 
-{- Render the served packument body: @200@ with our own ETag over the served
-bytes, or a @304@ when the client's conditional validator already matches. The
-ETag is computed over exactly the bytes served, so it changes iff the served
-document changes.
+{- Render the served packument @200@, carrying the derived 'ETag' the caller already
+evaluated the conditional against ('Modified' -- a match never reaches here).
 
-On a 'PackumentHead' the @200@ additionally carries the would-be body's
-@Content-Length@ (the 'bodiless' wrapper then withholds the bytes), so the @HEAD@ reply
-advertises the same framing a @GET@ would; a 'PackumentFull' leaves the @Content-Length@
-to the serving layer, which frames the body it actually writes. The @304@ carries no
-body either way, so it is identical between the two. -}
-servePackumentBody :: PackumentServe -> Request -> ServedBody -> Response
-servePackumentBody mode request body =
-    case evaluateOwnETag (requestHeaders request) encoded of
-        NotModified etag ->
-            jsonResponse (mkStatus 304 "Not Modified") [etagHeader etag] ""
-        Modified etag ->
-            jsonResponse status200 (etagHeader etag : headContentLength mode encoded) encoded
-  where
-    encoded :: LByteString
-    encoded = Aeson.encode (servedValue body)
+A 'PackumentFull' (GET) __streams the encoding straight into the response__: the
+document is never materialised whole (no lazy-bytestring chunks retained across a
+hash or length pass), so the answer costs one encode traversal and no residency
+spike; the serving layer frames the body it writes. A 'PackumentHead' alone still
+pays an encode, to advertise the would-be body's @Content-Length@ (the 'bodiless'
+wrapper then withholds the bytes), so the @HEAD@ reply frames exactly what a @GET@
+would. -}
+packumentResponse :: PackumentServe -> ETag -> ServedBody -> Response
+packumentResponse mode etag body = case mode of
+    PackumentFull ->
+        responseBuilder
+            status200
+            [etagHeader etag, (hContentType, "application/json")]
+            (fromEncoding (Aeson.toEncoding (servedValue body)))
+    PackumentHead ->
+        jsonResponse status200 [etagHeader etag, (hContentLength, show (LBS.length encoded))] encoded
+      where
+        encoded :: LByteString
+        encoded = Aeson.encode (servedValue body)
 
-{- The @Content-Length@ header a packument @200@ carries: on a 'PackumentHead', the
-length of the would-be merged body, so the @HEAD@ reply advertises the framing a @GET@
-would (the body itself is withheld by 'bodiless'); on a 'PackumentFull', none -- the
-serving layer frames the body it actually writes. -}
-headContentLength :: PackumentServe -> LByteString -> ResponseHeaders
-headContentLength = \case
-    PackumentFull -> const []
-    PackumentHead -> \bytes -> [(hContentLength, show (LBS.length bytes))]
+-- The bodiless conditional answer: the client's validator matched, so only the tag
+-- travels. Identical between GET and HEAD (a 304 carries no body either way).
+notModifiedResponse :: ETag -> Response
+notModifiedResponse etag =
+    jsonResponse (mkStatus 304 "Not Modified") [etagHeader etag] ""
 
 {- Render the no-survivors outcome: the status 'packumentStatus' chose over the
 exclusions, with a denial body collecting the reasons. Never a @404@ -- the package

@@ -144,6 +144,7 @@ import Ecluse.Core.Package (
     pkgNamespace,
     renderScope,
  )
+import Ecluse.Core.Registry.Metadata (ContentDigest)
 import Ecluse.Core.Telemetry.Metrics qualified as Metric
 import Ecluse.Core.Telemetry.Record (
     MetricsPort,
@@ -214,6 +215,11 @@ data CacheEntry = CacheEntry
     -- ^ The typed packument view the rules and merge reason over.
     , entryRaw :: Value
     -- ^ The raw upstream document the served body is built from, edited in place.
+    , entryDigest :: ContentDigest
+    {- ^ Digest of the wire bytes both views were decoded from, computed once at the
+    leader's fetch -- the public origin's contribution to the serve path's derived
+    ETag, amortised across every hit on this entry.
+    -}
     }
     deriving stock (Eq, Show)
 
