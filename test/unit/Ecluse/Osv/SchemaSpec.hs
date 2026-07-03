@@ -9,7 +9,7 @@ spec = do
     describe "osvDbFileName" $ do
         -- The literal pins the published object key: a change here is a change
         -- to the writer/reader contract and must be a conscious epoch bump.
-        it "names the artifact by ecosystem and schema epoch, never the application version" $
+        it "names the artifact by ecosystem and schema epoch" $
             osvDbFileName "npm" `shouldBe` "npm-osv-schema1.db"
 
     describe "renderMetaKey" $ do

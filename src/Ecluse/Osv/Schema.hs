@@ -8,10 +8,9 @@ epoch that names and stamps it, and the keys of its @meta@ table.
 
 The artifact is immutable and rebuilt from scratch on every compilation, so
 there are no migrations, only a read-compatibility contract between whoever
-wrote a file and whoever reads it. The epoch expresses exactly that contract;
-the application version deliberately plays no part in it, because releases far
-outnumber schema changes and a version-named artifact would couple the
-reader's ability to find its database to the writer's deploy cadence.
+wrote a file and whoever reads it. The epoch expresses exactly that contract:
+it moves only when the shape of the data breaks, so the key stays findable
+and the stamp stays checkable across releases of either side.
 -}
 module Ecluse.Osv.Schema (
     -- * The table-schema epoch

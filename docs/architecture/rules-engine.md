@@ -270,17 +270,14 @@ The Écluse proxy runs a supervised in-process polling thread that periodically 
 #### The artifact contract
 
 The object key is **stable per ecosystem** and embeds the artifact's
-**table-schema epoch**, never the application version:
-`<ecosystem>-osv-schema<N>.db` (for example `npm-osv-schema1.db`).
-Per-ecosystem artifacts keep uploads independent: one ecosystem's failed
-compilation never holds back another's refresh, and a Pilot restart loses at
-most one ecosystem's work. The stable key is what makes ETag polling work. The
-epoch is a hand-bumped constant shared by the Pilot writer and the proxy
-reader (`Ecluse.Osv.Schema`). The artifact is immutable and rebuilt from
-scratch on every compilation, so there are no migrations, only a
-read-compatibility contract; naming the key after the application version
-would invalidate compatible databases on every release and couple proxy
-readiness to Pilot's deploy cadence.
+**table-schema epoch**: `<ecosystem>-osv-schema<N>.db` (for example
+`npm-osv-schema1.db`). Per-ecosystem artifacts keep uploads independent: one
+ecosystem's failed compilation never holds back another's refresh, and a Pilot
+restart loses at most one ecosystem's work. The stable key is what makes ETag
+polling work. The epoch is a hand-bumped constant shared by the Pilot writer
+and the proxy reader (`Ecluse.Osv.Schema`). The artifact is immutable and
+rebuilt from scratch on every compilation, so there are no migrations, only a
+read-compatibility contract, and the epoch is that contract's version.
 
 Pilot stamps the same epoch inside the artifact as SQLite's `user_version`;
 the proxy verifies the stamp after download and before the shadow-swap, and a
