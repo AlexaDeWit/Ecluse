@@ -25,9 +25,8 @@ on:
         required: false
         default: "50"
       serve-max-in-flight:
-        description: "Maximum concurrent packument fetches"
+        description: "Maximum concurrent packument fetches (blank exercises the proxy's computed default, as a scheduled run does)"
         required: false
-        default: "32"
   schedule:
     # Nightly, off-peak UTC. A trend a human reads in the morning, never a gate.
     - cron: "17 4 * * *"
@@ -53,10 +52,13 @@ jobs:
       CABAL_DIR: ${{ github.workspace }}/.cabal
       # The load knobs, from the dispatch inputs (defaulted for a scheduled run). Passed
       # through the environment, never interpolated into a shell command, so a malformed
-      # value can only mis-size a measurement, never inject.
+      # value can only mis-size a measurement, never inject. Admission has no fixed
+      # default here: blank means the harness resolves the proxy's computed default from
+      # the capability count, exactly as an unconfigured deployment would, so nightly
+      # trends measure what operators get. Dispatch a number to pin it.
       BENCH_LOAD_DURATION_SECONDS: ${{ github.event.inputs.duration-seconds || '30' }}
       BENCH_LOAD_CONCURRENCY: ${{ github.event.inputs.concurrency || '50' }}
-      BENCH_LOAD_SERVE_MAX_IN_FLIGHT: ${{ github.event.inputs.serve-max-in-flight || '32' }}
+      BENCH_LOAD_SERVE_MAX_IN_FLIGHT: ${{ github.event.inputs.serve-max-in-flight }}
       BENCH_LOAD_ISOLATE_OHA: "1"
     steps:
       - name: Checkout

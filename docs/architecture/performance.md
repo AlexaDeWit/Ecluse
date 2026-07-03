@@ -424,7 +424,7 @@ runner-sane defaults:
 | worker artifact size (bytes) | `BENCH_LOAD_PAYLOAD_BYTES` | 262144 |
 | cache-eviction bound (entries) | `BENCH_LOAD_CACHE_MAX_ENTRIES` | 3 |
 | cache-eviction working set | `BENCH_LOAD_WORKING_SET` | 64 (capped to the corpus) |
-| metadata admission capacity | `BENCH_LOAD_SERVE_MAX_IN_FLIGHT` | 16 |
+| metadata admission capacity | `BENCH_LOAD_SERVE_MAX_IN_FLIGHT` | computed from the capability count, as in production (set a number to pin it) |
 | public connections per host | `BENCH_LOAD_PUBLIC_CONNECTIONS_PER_HOST` | 10 |
 | private connections per host | (no knob; follows the admission capacity, as in production) | = admission |
 

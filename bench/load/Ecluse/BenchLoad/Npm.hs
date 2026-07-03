@@ -88,6 +88,7 @@ import Data.Text qualified as T
 import Data.Time (NominalDiffTime, UTCTime (UTCTime), addUTCTime, fromGregorian, nominalDay)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import GHC.Clock (getMonotonicTime)
+import GHC.Conc (getNumCapabilities)
 import Katip (Environment (Environment), LogEnv, Namespace (Namespace), initLogEnv)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.HTTP.Types (hContentType, status200, status404)
@@ -96,7 +97,7 @@ import Network.Wai.Handler.Warp (testWithApplication)
 
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Harness (Driver (DriveHttpUrls, DriveInProcess), LoadKnobs (..), Scenario (..), UpstreamFixture (..))
-import Ecluse.Composition (connectionPoolSettings)
+import Ecluse.Composition (connectionPoolSettings, resolveServeAdmission)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (Hash, HashAlg (SHA1, SRI), PackageName, mkPackageName)
@@ -263,14 +264,18 @@ withNpmProxy :: LoadKnobs -> NominalDiffTime -> Int -> (Int -> [Text]) -> ([Text
 withNpmProxy knobs ttl maxEntries mkMix body = do
     bodies <- loadServeBodies
     let bytes = artifactBytes (lkPayloadBytes knobs)
+    -- An unknobbed run resolves the admission capacity through the same function as
+    -- the composition root, so it measures the shipped default.
+    capabilities <- getNumCapabilities
+    let admissionCapacity = fst (resolveServeAdmission (lkServeMaxInFlight knobs) capabilities)
     testWithApplication (pure (stubUpstream octetContentType latency bytes)) $ \artPort ->
         testWithApplication (pure (privateOverlayStub artPort latency bytes)) $ \privatePort ->
             testWithApplication (pure (corpusPublicStub latency bodies)) $ \publicPort -> do
                 publicManager <- newManager (connectionPoolSettings (lkPublicConnectionsPerHost knobs) defaultManagerSettings)
                 -- The private pool follows the admission capacity by construction,
                 -- as in production (issue #634).
-                privateManager <- newManager (connectionPoolSettings (lkServeMaxInFlight knobs) defaultManagerSettings)
-                admission <- newServeAdmission (lkServeMaxInFlight knobs)
+                privateManager <- newManager (connectionPoolSettings admissionCapacity defaultManagerSettings)
+                admission <- newServeAdmission admissionCapacity
                 cache <- newMetadataCache defaultCacheConfig{cacheTtl = ttl, cacheMaxEntries = max 1 maxEntries}
                 logEnv <- benchLogEnv
                 heartbeat <- newWorkerHeartbeat
