@@ -155,11 +155,13 @@ the load bench's measured dose-response kept climbing past that and levelled onl
 around 10 per capability, because a slot is held across every upstream leg plus
 GC pauses and scheduling delay. The multiplier is therefore empirical. The decision is
 logged with its provenance beside the runtime posture lines; set the key only to
-override it. The **private upstream connection pool always equals the effective
-admission capacity** (no separate key): private reads are per-request and never
-coalesced, so demand on that pool is the admission cap, and a smaller pool would
-not queue but pay a fresh TLS handshake per overflow request (http-client's pool
-bound governs keep-alive retention, not concurrency). Work beyond the cap is shed
+override it. The **private upstream connection pool** is sized on a different
+basis (`ECLUSE_PRIVATE_CONNECTIONS_PER_HOST`, default computed from a quarter of the
+process file-descriptor limit, clamped to 64-4096): a trusted tarball hit **streams
+outside admission**, so the pool's real demand is the inbound hit fan-out, not the
+admission capacity, and an undersized pool would not queue but pay a fresh TLS
+handshake per overflow stream (http-client's pool bound governs keep-alive
+retention, not concurrency). Work beyond the cap is shed
 immediately with a
 mount-shaped `503` and `Retry-After: 1`; there is no application queue whose memory
 or latency can grow with client concurrency. Health probes and locally answered

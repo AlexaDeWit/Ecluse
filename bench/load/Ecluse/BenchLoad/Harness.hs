@@ -125,13 +125,18 @@ data LoadKnobs = LoadKnobs
     {- ^ Process-wide metadata admission capacity exercised by the proxy fixture: an
     explicit capacity, or 'Nothing' to resolve the shipped computed default from the
     capability count via 'resolveServeAdmission', exactly as the composition root
-    does -- so an unknobbed run measures what an operator gets by default. The
-    private-upstream connection pool follows the resolved value by construction, as
-    it does in production (private reads are per-request, so demand on that pool is
-    the admission capacity; see issue #634) -- there is no separate private knob.
+    does -- so an unknobbed run measures what an operator gets by default.
     -}
     , lkPublicConnectionsPerHost :: Int
     -- ^ Public-upstream per-host connection-pool capacity.
+    , lkPrivateConnectionsPerHost :: Maybe Int
+    {- ^ Private-upstream per-host connection-pool capacity: an explicit override, or
+    'Nothing' to resolve the shipped computed default from the process file-descriptor
+    limit via 'resolvePrivateConnections'\/'openFileSoftLimit', exactly as the composition
+    root does. Sized independently of the admission capacity, since a trusted tarball hit
+    streams outside admission -- so this is the knob for a private-pool dose-response
+    against the un-admitted streaming fan-out.
+    -}
     }
     deriving stock (Eq, Show)
 
@@ -154,22 +159,24 @@ defaultLoadKnobs =
         , lkWorkingSet = 64
         , lkServeMaxInFlight = Nothing
         , lkPublicConnectionsPerHost = 10
+        , lkPrivateConnectionsPerHost = Nothing
         }
 
 {- | Read the load knobs from the environment, each falling back to its
 'defaultLoadKnobs' value: @BENCH_LOAD_CONCURRENCY@, @BENCH_LOAD_DURATION_SECONDS@,
 @BENCH_LOAD_UPSTREAM_LATENCY_MS@ (milliseconds, converted to the microseconds the stub
 delays by), @BENCH_LOAD_PAYLOAD_BYTES@, @BENCH_LOAD_CACHE_MAX_ENTRIES@, and
-@BENCH_LOAD_WORKING_SET@, @BENCH_LOAD_SERVE_MAX_IN_FLIGHT@, and
-@BENCH_LOAD_PUBLIC_CONNECTIONS_PER_HOST@. A malformed value falls back to the default rather than
-failing, since the knobs only shape an inform-only measurement. (The private
-connection pool has no knob: it follows the admission capacity, as in production.)
+@BENCH_LOAD_WORKING_SET@, @BENCH_LOAD_SERVE_MAX_IN_FLIGHT@,
+@BENCH_LOAD_PUBLIC_CONNECTIONS_PER_HOST@, and @BENCH_LOAD_PRIVATE_CONNECTIONS_PER_HOST@.
+A malformed value falls back to the default rather than failing, since the knobs only
+shape an inform-only measurement.
 
-@BENCH_LOAD_SERVE_MAX_IN_FLIGHT@ is the exception to "falls back to its default
-value": it has no fixed default. Set, it pins the admission capacity; blank, absent,
-or malformed, the fixture resolves the shipped computed default from the capability
-count at use ('lkServeMaxInFlight' stays 'Nothing'), so the unknobbed bench measures
-the admission an operator gets.
+@BENCH_LOAD_SERVE_MAX_IN_FLIGHT@ and @BENCH_LOAD_PRIVATE_CONNECTIONS_PER_HOST@ are the
+exceptions to "falls back to its default value": neither has a fixed default. Set, each
+pins its value; blank, absent, or malformed, the fixture resolves the shipped computed
+default at use (the knob stays 'Nothing') -- @serveMaxInFlight@ from the capability count
+and the private pool from the file-descriptor limit -- so the unknobbed bench measures
+the posture an operator gets.
 -}
 loadKnobsFromEnv :: IO LoadKnobs
 loadKnobsFromEnv = do
@@ -181,6 +188,7 @@ loadKnobsFromEnv = do
     workingSetSize <- readEnvInt "BENCH_LOAD_WORKING_SET" (lkWorkingSet defaultLoadKnobs)
     serveMaxInFlight <- (>>= readMaybe) <$> lookupEnv "BENCH_LOAD_SERVE_MAX_IN_FLIGHT"
     publicConnections <- readEnvInt "BENCH_LOAD_PUBLIC_CONNECTIONS_PER_HOST" (lkPublicConnectionsPerHost defaultLoadKnobs)
+    privateConnections <- (>>= readMaybe) <$> lookupEnv "BENCH_LOAD_PRIVATE_CONNECTIONS_PER_HOST"
     pure
         LoadKnobs
             { lkConcurrency = max 1 concurrency
@@ -191,6 +199,7 @@ loadKnobsFromEnv = do
             , lkWorkingSet = max 1 workingSetSize
             , lkServeMaxInFlight = max 1 <$> serveMaxInFlight
             , lkPublicConnectionsPerHost = max 1 publicConnections
+            , lkPrivateConnectionsPerHost = max 1 <$> privateConnections
             }
   where
     readEnvInt :: String -> Int -> IO Int

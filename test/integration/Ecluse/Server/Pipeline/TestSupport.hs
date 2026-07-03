@@ -53,7 +53,7 @@ import Ecluse.Core.Rules.Types (
     Rule (AllowIfOlderThan, DenyInstallTimeExecution),
     atDefaultPrecedence,
  )
-import Ecluse.Core.Security (TarballHostPolicy (SameHostAsPackument), defaultLimits, lowerCaseHosts)
+import Ecluse.Core.Security (TarballHostPolicy (SameHostAsPackument), defaultLimits, lowerCaseHosts, tarballHostGate)
 import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Core.Server.Metadata (newNpmMetadataClient)
@@ -615,6 +615,7 @@ deps privatePort publicPort inbound = do
             , pdRules = prepared
             , pdTarballHostPolicy = SameHostAsPackument
             , pdAllowedInternalHosts = lowerCaseHosts (Set.singleton "127.0.0.1")
+            , pdTarballHostGate = tarballHostGate (localhost privatePort) (localhost publicPort) "https://mirror.test"
             , pdLimits = defaultLimits
             , pdInboundToken = mkSecret <$> inbound
             , pdNow = pure now
@@ -639,6 +640,16 @@ depsWith effectful privatePort publicPort = do
 
 localhost :: Int -> Text
 localhost port = "http://127.0.0.1:" <> show port
+
+{- | Re-derive the precomputed tarball-host gate from a deps value's (possibly
+overridden) upstream URLs, so a test that record-updates @pdPrivateBaseUrl@,
+@pdPublicBaseUrl@, or @pdMirrorTarget@ keeps @pdTarballHostGate@ consistent. The gate is
+a cached projection of those three URLs (the composition root builds it once), so a bare
+record update would leave it stale; the override harness applies this after any tweak.
+-}
+consistentGate :: PackumentDeps -> PackumentDeps
+consistentGate d =
+    d{pdTarballHostGate = tarballHostGate (pdPrivateBaseUrl d) (pdPublicBaseUrl d) (pdMirrorTarget d)}
 
 {- | Run an assertion against a proxy whose two upstream origins are the given
 in-process doubles, with access to the proxy's own 'Env' (so a test can drain the
@@ -679,7 +690,7 @@ withProxyEnvQueueDeps queue privateUp publicUp inbound tweakDeps k =
                         [ MountBinding
                             { bindingPrefix = "npm" :| []
                             , bindingClassifier = Npm.classify
-                            , bindingPackumentDeps = Just (tweakDeps baseDeps)
+                            , bindingPackumentDeps = Just (consistentGate (tweakDeps baseDeps))
                             , bindingPublishDeps = Nothing
                             , bindingRenderer = npmRenderer
                             }

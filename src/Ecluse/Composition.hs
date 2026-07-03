@@ -67,6 +67,8 @@ module Ecluse.Composition (
     cacheConfigFor,
     connectionPoolSettings,
     resolveServeAdmission,
+    resolvePrivateConnections,
+    openFileSoftLimit,
 
     -- * Internals exported for testing
     parseCodeArtifactHost,
@@ -78,6 +80,7 @@ import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Network.HTTP.Client (ManagerSettings (managerConnCount))
+import System.Posix.Resource (Resource (ResourceOpenFiles), ResourceLimit (ResourceLimit, ResourceLimitInfinity, ResourceLimitUnknown), ResourceLimits (softLimit), getResourceLimit)
 import UnliftIO (tryAny)
 
 import Ecluse.Config (
@@ -108,7 +111,7 @@ import Ecluse.Core.Registry.Npm.Request qualified as NpmRequest
 import Ecluse.Core.Wire (renderWire)
 
 import Ecluse.Core.Rules (prepare)
-import Ecluse.Core.Security (Limits (Limits, maxBodyBytes, maxNestingDepth, maxVersionCount), TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), hostAddress, lowerCaseHosts, splitHostPort)
+import Ecluse.Core.Security (Limits (Limits, maxBodyBytes, maxNestingDepth, maxVersionCount), TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), hostAddress, lowerCaseHosts, splitHostPort, tarballHostGate)
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Cache (CacheConfig (..))
 import Ecluse.Core.Server.Context (MountBinding, PackumentDeps (..), PublishDeps (..))
@@ -141,11 +144,13 @@ capability count must be the __post-runtime-posture__ one (see "Ecluse.Runtime")
 so callers resolve this after 'Ecluse.Runtime.applyRuntimePosture' has run.
 
 The returned line carries the decision's provenance for the standard boot log,
-alongside the runtime posture lines. The __private__ connection pool is sized from
-the returned capacity, never configured separately: private reads are per-request
-and never coalesced, so demand on that pool /is/ the admission capacity (an
-undersized pool does not queue -- http-client opens throwaway connections beyond
-it, paying a TLS handshake per overflow request).
+alongside the runtime posture lines. This bounds only __metadata materialisation__
+(whole packument requests and a tarball miss's public-metadata gate). The __private__
+connection pool is __not__ sized from it -- see 'resolvePrivateConnections': a trusted
+tarball hit __streams outside admission__, so demand on the private pool is the inbound
+hit concurrency, not the admission capacity, and tying the two would undersize that pool
+under a private-hit fan-out (http-client opens throwaway connections beyond the pool,
+paying a TLS handshake per overflow request).
 -}
 resolveServeAdmission :: Maybe Int -> Int -> (Int, Text)
 resolveServeAdmission explicit capabilities = case explicit of
@@ -162,6 +167,68 @@ serveAdmissionPerCapability = 10
 
 serveAdmissionFloor :: Int
 serveAdmissionFloor = 8
+
+{- | The effective private-upstream connection-pool size and its boot-log line: the
+explicit @privateConnectionsPerHost@ when configured, else __computed from the process
+file-descriptor limit__ -- @clamp 64 4096 (nofile \/ 4)@.
+
+The private pool caches idle connections to the trusted upstream for __reuse across
+concurrent private-hit tarball streams__. Those streams are __IO-bound__ and, unlike
+metadata materialisation, stream __outside serve admission__, so their concurrency (and
+thus the pool's real demand) is the inbound hit fan-out, not the CPU-saturation model
+'resolveServeAdmission' uses -- which is exactly why this is computed from a different
+datapoint and is __not__ tied to @serveMaxInFlight@ (see issue #634's incomplete
+inference: the private pool also serves the un-admitted streaming path).
+
+Each pooled connection is one file descriptor, so the file-descriptor limit is the pool's
+real physical ceiling. The default takes a __quarter of the soft @RLIMIT_NOFILE@__ as the
+reuse cache, floored at 'privateConnectionsFloor' so a small-limit host still reuses
+connections across an install fan-out, and capped at 'privateConnectionsCap' so an
+enormous-limit host does not retain an absurd idle cache to a single upstream. A larger
+pool never opens more sockets than the concurrency already demands (http-client opens a
+connection per in-flight request regardless); it only decides how many to __retain for
+reuse__ rather than re-handshake, so sizing up is safe. An operator who knows their
+fan-out can override it outright.
+
+The returned line carries the decision's provenance for the standard boot log.
+-}
+resolvePrivateConnections :: Maybe Int -> Int -> (Int, Text)
+resolvePrivateConnections explicit fdLimit = case explicit of
+    Just n -> (n, "runtime: private connection pool " <> show n <> " (from config)")
+    Nothing ->
+        let computed = clampPrivateConnections (fdLimit `div` privateConnectionsFdShare)
+         in (computed, "runtime: private connection pool " <> show computed <> " (computed from file-descriptor limit " <> show fdLimit <> ")")
+
+-- Clamp a computed private-pool size into the sane band: a floor so a small
+-- file-descriptor limit still reuses a useful number of connections, and a cap so an
+-- enormous limit does not retain an absurd idle cache to one upstream.
+clampPrivateConnections :: Int -> Int
+clampPrivateConnections = max privateConnectionsFloor . min privateConnectionsCap
+
+-- The private pool takes a quarter of the file-descriptor budget as its reuse cache
+-- (each pooled connection is one descriptor); the other three quarters stay for the
+-- listener, the public pool, telemetry, the worker, and the runtime.
+privateConnectionsFdShare :: Int
+privateConnectionsFdShare = 4
+
+privateConnectionsFloor :: Int
+privateConnectionsFloor = 64
+
+privateConnectionsCap :: Int
+privateConnectionsCap = 4096
+
+{- | The process soft file-descriptor limit (@RLIMIT_NOFILE@), the datapoint
+'resolvePrivateConnections' sizes the private pool against. An __infinite__ or
+__unknown__ limit falls back to @privateConnectionsCap x privateConnectionsFdShare@, so
+the computed pool lands at the cap rather than overflowing.
+-}
+openFileSoftLimit :: IO Int
+openFileSoftLimit = do
+    limits <- getResourceLimit ResourceOpenFiles
+    pure $ case softLimit limits of
+        ResourceLimit n -> fromInteger n
+        ResourceLimitInfinity -> privateConnectionsCap * privateConnectionsFdShare
+        ResourceLimitUnknown -> privateConnectionsCap * privateConnectionsFdShare
 
 {- | The process-global credential providers, keyed by the backend they
 implement. Built __once__ at the composition root from the environment layer; a
@@ -598,6 +665,14 @@ composeBindings resolveAdapter clock providers config = do
                   -- composition root's secure default for the pure literal-block
                   -- defence-in-depth on the dist.tarball host gate.
                   pdAllowedInternalHosts = lowerCaseHosts mempty
+                , -- The tarball-host gate's mount-constant inputs (allowlist + private and
+                  -- public hosts), extracted once here so the hot artifact path parses no
+                  -- URL and rebuilds no host set per request.
+                  pdTarballHostGate =
+                    tarballHostGate
+                        (registryUrlText (regPrivateUpstream regs))
+                        (registryUrlText (regPublicUpstream regs))
+                        (registryUrlText (mtUrl (regMirrorTarget regs)))
                 , pdLimits = limits
                 , pdInboundToken = inboundToken
                 , pdNow = clock

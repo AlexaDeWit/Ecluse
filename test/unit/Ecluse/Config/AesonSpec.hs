@@ -73,18 +73,26 @@ spec = describe "decodeDocument" $ do
             Left e -> expectationFailure ("unexpected decode error: " <> show e)
             Right doc -> cfgServeMaxInFlight (configApp doc) `shouldBe` Just 24
 
-    it "rejects the removed privateConnectionsPerHost key fail-loud" $
-        -- The private pool follows the admission capacity by construction
-        -- (issue #634); an operator still setting the removed key gets a clear
-        -- unknown-key boot error, never a silently ignored value.
-        loadConfig [("ECLUSE_PRIVATE_CONNECTIONS_PER_HOST", "16")] Nothing
-            `shouldSatisfy` decodeErrorMentions "privateConnectionsPerHost"
+    it "parses an explicit privateConnectionsPerHost override" $ do
+        -- The private pool defaults to a value computed from the file-descriptor limit,
+        -- independent of the admission capacity (it streams outside admission); an
+        -- operator who knows their fan-out can still pin it.
+        case loadConfig [("ECLUSE_PRIVATE_CONNECTIONS_PER_HOST", "256")] Nothing of
+            Left e -> expectationFailure ("unexpected decode error: " <> show e)
+            Right doc -> cfgPrivateConnectionsPerHost (configApp doc) `shouldBe` Just 256
+
+    it "leaves privateConnectionsPerHost unset when not configured (computed at boot)" $
+        case loadConfig [] Nothing of
+            Left e -> expectationFailure ("unexpected decode error: " <> show e)
+            Right doc -> cfgPrivateConnectionsPerHost (configApp doc) `shouldBe` Nothing
 
     it "rejects non-positive serve and connection capacities" $ do
         loadConfig [("ECLUSE_SERVE_MAX_IN_FLIGHT", "0")] Nothing
             `shouldSatisfy` decodeErrorMentions "serveMaxInFlight must be a positive integer"
         loadConfig [("ECLUSE_PUBLIC_CONNECTIONS_PER_HOST", "0")] Nothing
             `shouldSatisfy` decodeErrorMentions "publicConnectionsPerHost must be a positive integer"
+        loadConfig [("ECLUSE_PRIVATE_CONNECTIONS_PER_HOST", "0")] Nothing
+            `shouldSatisfy` decodeErrorMentions "privateConnectionsPerHost must be a positive integer"
 
 singleMountDoc :: ByteString
 singleMountDoc =

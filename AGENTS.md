@@ -85,8 +85,9 @@ docs/  architecture and design documents
   env -u IN_NIX_SHELL nix develop --command task <target>
   ```
 
-- Run `task --list` to discover targets. `task check` is the fast pre-push suite; CI remains the
-  authoritative gate. **Always run `task format` before `task check` to auto-fix code styling.** Never ignore a failing `task check` exit code; fix the issue before opening a PR. **Never assume a fix worked without re-running the verification command locally and observing a 0 exit code.** Run `task sast` before pushing. Web-based agents without Nix access must
+- Run `task --list` to discover targets. `task check` is the pre-push suite: a subset of the full
+  `task gate`, but not a quick check (a full `-Werror` build of every component that runs 10+ minutes
+  on a cold checkout or under CPU contention). CI remains the authoritative gate. **Always run `task format` before `task check` to auto-fix code styling.** Never ignore a failing `task check` exit code; fix the issue before opening a PR. **Never assume a fix worked without re-running the verification command locally and observing a 0 exit code.** Run `task sast` before pushing. Web-based agents without Nix access must
   not skip local verification; instead, use `scripts/setup-jules.sh` to bootstrap the environment.
 - Automation scripts are Bash in `scripts/`, with `#!/usr/bin/env bash` and
   `set -euo pipefail`; keep workflow `run:` blocks trivial and scripts shellcheck-clean. A new

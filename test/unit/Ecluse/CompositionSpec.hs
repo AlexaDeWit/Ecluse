@@ -27,6 +27,7 @@ import Ecluse.Composition (
     planMounts,
     renderBootError,
     resolveCodeArtifactConfig,
+    resolvePrivateConnections,
     resolveServeAdmission,
  )
 import Ecluse.Config (
@@ -467,6 +468,32 @@ connectionPoolSpec = do
         it "names the decision's provenance in the boot line" $ do
             snd (resolveServeAdmission Nothing 4) `shouldSatisfy` T.isInfixOf "computed from 4 capabilities"
             snd (resolveServeAdmission (Just 24) 4) `shouldSatisfy` T.isInfixOf "from config"
+
+    describe "resolvePrivateConnections" $ do
+        it "computes a quarter of the file-descriptor limit within the sane band" $ do
+            -- A typical container soft limit (1024) → 256, comfortably inside the band.
+            fst (resolvePrivateConnections Nothing 1024) `shouldBe` 256
+            fst (resolvePrivateConnections Nothing 4096) `shouldBe` 1024
+
+        it "floors a tiny file-descriptor limit and caps an enormous one" $ do
+            -- A small limit floors at 64 so a constrained pod still reuses connections.
+            fst (resolvePrivateConnections Nothing 256) `shouldBe` 64
+            fst (resolvePrivateConnections Nothing 64) `shouldBe` 64
+            -- An enormous limit caps at 4096 rather than retaining an absurd idle cache.
+            fst (resolvePrivateConnections Nothing 65536) `shouldBe` 4096
+
+        it "is computed from a datapoint unrelated to the admission capacity" $
+            -- Same capability count, different fd limit ⇒ different pool: the two knobs
+            -- are computationally independent (the private hit streams outside admission).
+            fst (resolvePrivateConnections Nothing 1024)
+                `shouldNotBe` fst (resolvePrivateConnections Nothing 8192)
+
+        it "lets an explicit config value win over the computation" $
+            fst (resolvePrivateConnections (Just 512) 1024) `shouldBe` 512
+
+        it "names the decision's provenance in the boot line" $ do
+            snd (resolvePrivateConnections Nothing 1024) `shouldSatisfy` T.isInfixOf "computed from file-descriptor limit 1024"
+            snd (resolvePrivateConnections (Just 512) 1024) `shouldSatisfy` T.isInfixOf "from config"
 
     describe "connectionPoolSettings" $
         it "sets the configured per-host connection bound" $

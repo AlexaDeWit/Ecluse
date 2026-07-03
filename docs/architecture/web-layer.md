@@ -229,12 +229,16 @@ private tarball hit also bypasses it: the artifact stream is already
 constant-memory, and holding a metadata slot for a slow download would let clients
 starve packument traffic without protecting any parse structure.
 
-The bound also gives the data plane an aggregate connection ceiling. Within it,
-the public and private `http-client` managers have independently configurable
-per-host pools. Public same-key misses are single-flight-coalesced, while private
-reads deliberately preserve per-client authority and run once per request; the
-private pool therefore defaults to the admission capacity rather than the
-library's smaller implicit default.
+The public and private `http-client` managers have independently configurable
+per-host pools. Public same-key misses are single-flight-coalesced, so the public
+pool keeps the library's conservative per-host default. The private pool is sized
+on a different basis: a trusted tarball hit **streams outside admission**, so the
+pool's demand is the inbound hit fan-out rather than the admission capacity, and it
+defaults to a share of the process file-descriptor limit (the pool's real physical
+ceiling, since each pooled connection is one descriptor) rather than following
+`ECLUSE_SERVE_MAX_IN_FLIGHT`. A larger pool never opens more sockets than the
+concurrency already demands; it only governs how many are kept for reuse rather
+than re-handshaked.
 
 ## Error model
 
