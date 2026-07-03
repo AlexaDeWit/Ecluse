@@ -66,6 +66,7 @@ module Ecluse.Composition (
     -- * Config-derived runtime settings
     cacheConfigFor,
     connectionPoolSettings,
+    resolveServeAdmission,
 
     -- * Internals exported for testing
     parseCodeArtifactHost,
@@ -123,6 +124,41 @@ response hooks.
 -}
 connectionPoolSettings :: Int -> ManagerSettings -> ManagerSettings
 connectionPoolSettings connections settings = settings{managerConnCount = connections}
+
+{- | The effective serve-admission capacity and its boot-log line: the explicit
+@serveMaxInFlight@ when configured, else __computed from the resolved capability
+count__ -- @max 8 (4 x capabilities)@.
+
+The multiplier comes from the saturation model: an admitted metadata
+materialisation alternates upstream wait (@W@, roughly one upstream round trip)
+and CPU work (@P@), so keeping @C@ capabilities busy wants about
+@C x (W + P) \/ P@ in flight; with the realistic @W\/P@ around 2-3 that is
+~4 per capability. The floor keeps a tiny pod admitting a useful burst. The
+capability count must be the __post-runtime-posture__ one (see "Ecluse.Runtime"),
+so callers resolve this after 'Ecluse.Runtime.applyRuntimePosture' has run.
+
+The returned line carries the decision's provenance for the standard boot log,
+alongside the runtime posture lines. The __private__ connection pool is sized from
+the returned capacity, never configured separately: private reads are per-request
+and never coalesced, so demand on that pool /is/ the admission capacity (an
+undersized pool does not queue -- http-client opens throwaway connections beyond
+it, paying a TLS handshake per overflow request).
+-}
+resolveServeAdmission :: Maybe Int -> Int -> (Int, Text)
+resolveServeAdmission explicit capabilities = case explicit of
+    Just n -> (n, "runtime: serve admission " <> show n <> " (from config)")
+    Nothing ->
+        let computed = max serveAdmissionFloor (serveAdmissionPerCapability * capabilities)
+         in (computed, "runtime: serve admission " <> show computed <> " (computed from " <> show capabilities <> " capabilities)")
+
+-- The computed-admission constants: ~C x (1 + W/P) with W/P ~ 3 (see
+-- 'resolveServeAdmission'), and a floor so a single-capability pod still admits a
+-- useful burst.
+serveAdmissionPerCapability :: Int
+serveAdmissionPerCapability = 4
+
+serveAdmissionFloor :: Int
+serveAdmissionFloor = 8
 
 {- | The process-global credential providers, keyed by the backend they
 implement. Built __once__ at the composition root from the environment layer; a

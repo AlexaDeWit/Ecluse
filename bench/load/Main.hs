@@ -46,6 +46,7 @@ import Data.Char (toLower)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import GHC.Clock (getMonotonicTime)
+import GHC.Conc (getNumCapabilities)
 import Network.HTTP.Client (Manager, newManager)
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 import System.Environment (getEnvironment, getExecutablePath)
@@ -89,9 +90,16 @@ runDriver = do
     knobs <- loadKnobsFromEnv
     baseline <- probePublicRtt knobs
     self <- getExecutablePath
-    let injMs = baselineInjectedMs baseline
-        loadOverrides = [latencyOverride injMs]
-        c1Overrides = [latencyOverride injMs, ("BENCH_LOAD_CONCURRENCY", "1")]
+    -- Scenario children must run with the driver's capability count: a command-line
+    -- @+RTS -N3@ does not survive the re-exec (argv RTS flags are consumed by the
+    -- parent's runtime), so without this the children fall back to the baked bare
+    -- @-N@, claim every core, and overlap the core the harness pins oha to. GHCRTS
+    -- is read by the child's RTS at startup, so the driver's count propagates.
+    capabilities <- getNumCapabilities
+    let pinChildren = ("GHCRTS", "-N" <> show capabilities)
+        injMs = baselineInjectedMs baseline
+        loadOverrides = [latencyOverride injMs, pinChildren]
+        c1Overrides = [latencyOverride injMs, ("BENCH_LOAD_CONCURRENCY", "1"), pinChildren]
         loadPassKnobs = knobs{lkUpstreamLatencyMicros = injMs * 1_000}
     rendered <- forM fixtures $ \fixture -> do
         let names = map scenarioName (fixtureScenarios fixture)
@@ -101,7 +109,7 @@ runDriver = do
         pure $
             T.intercalate
                 "\n"
-                [ renderReports loadPassKnobs eco loadedReports
+                [ renderReports loadPassKnobs capabilities eco loadedReports
                 , renderServiceTime baseline c1Reports
                 , renderLoadSaturation c1Reports loadedReports
                 ]

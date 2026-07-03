@@ -426,7 +426,7 @@ runner-sane defaults:
 | cache-eviction working set | `BENCH_LOAD_WORKING_SET` | 64 (capped to the corpus) |
 | metadata admission capacity | `BENCH_LOAD_SERVE_MAX_IN_FLIGHT` | 16 |
 | public connections per host | `BENCH_LOAD_PUBLIC_CONNECTIONS_PER_HOST` | 10 |
-| private connections per host | `BENCH_LOAD_PRIVATE_CONNECTIONS_PER_HOST` | 16 |
+| private connections per host | (no knob; follows the admission capacity, as in production) | = admission |
 
 `BENCH_LOAD_UPSTREAM_LATENCY_MS` is the **fallback** upstream latency: when the live RTT
 probe runs (the default) the measured mean round trip overrides it for both passes; it is

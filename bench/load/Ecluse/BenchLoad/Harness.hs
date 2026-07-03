@@ -121,11 +121,13 @@ data LoadKnobs = LoadKnobs
     corpus is the working set unless narrowed.
     -}
     , lkServeMaxInFlight :: Int
-    -- ^ Process-wide metadata admission capacity exercised by the proxy fixture.
+    {- ^ Process-wide metadata admission capacity exercised by the proxy fixture.
+    The private-upstream connection pool follows this value by construction, as it
+    does in production (private reads are per-request, so demand on that pool is
+    the admission capacity; see issue #634) -- there is no separate private knob.
+    -}
     , lkPublicConnectionsPerHost :: Int
     -- ^ Public-upstream per-host connection-pool capacity.
-    , lkPrivateConnectionsPerHost :: Int
-    -- ^ Private-upstream per-host connection-pool capacity.
     }
     deriving stock (Eq, Show)
 
@@ -148,17 +150,16 @@ defaultLoadKnobs =
         , lkWorkingSet = 64
         , lkServeMaxInFlight = 64
         , lkPublicConnectionsPerHost = 10
-        , lkPrivateConnectionsPerHost = 16
         }
 
 {- | Read the load knobs from the environment, each falling back to its
 'defaultLoadKnobs' value: @BENCH_LOAD_CONCURRENCY@, @BENCH_LOAD_DURATION_SECONDS@,
 @BENCH_LOAD_UPSTREAM_LATENCY_MS@ (milliseconds, converted to the microseconds the stub
 delays by), @BENCH_LOAD_PAYLOAD_BYTES@, @BENCH_LOAD_CACHE_MAX_ENTRIES@, and
-@BENCH_LOAD_WORKING_SET@, @BENCH_LOAD_SERVE_MAX_IN_FLIGHT@,
-@BENCH_LOAD_PUBLIC_CONNECTIONS_PER_HOST@, and
-@BENCH_LOAD_PRIVATE_CONNECTIONS_PER_HOST@. A malformed value falls back to the default rather than
-failing, since the knobs only shape an inform-only measurement.
+@BENCH_LOAD_WORKING_SET@, @BENCH_LOAD_SERVE_MAX_IN_FLIGHT@, and
+@BENCH_LOAD_PUBLIC_CONNECTIONS_PER_HOST@. A malformed value falls back to the default rather than
+failing, since the knobs only shape an inform-only measurement. (The private
+connection pool has no knob: it follows the admission capacity, as in production.)
 -}
 loadKnobsFromEnv :: IO LoadKnobs
 loadKnobsFromEnv = do
@@ -170,7 +171,6 @@ loadKnobsFromEnv = do
     workingSetSize <- readEnvInt "BENCH_LOAD_WORKING_SET" (lkWorkingSet defaultLoadKnobs)
     serveMaxInFlight <- readEnvInt "BENCH_LOAD_SERVE_MAX_IN_FLIGHT" (lkServeMaxInFlight defaultLoadKnobs)
     publicConnections <- readEnvInt "BENCH_LOAD_PUBLIC_CONNECTIONS_PER_HOST" (lkPublicConnectionsPerHost defaultLoadKnobs)
-    privateConnections <- readEnvInt "BENCH_LOAD_PRIVATE_CONNECTIONS_PER_HOST" (lkPrivateConnectionsPerHost defaultLoadKnobs)
     pure
         LoadKnobs
             { lkConcurrency = max 1 concurrency
@@ -181,7 +181,6 @@ loadKnobsFromEnv = do
             , lkWorkingSet = max 1 workingSetSize
             , lkServeMaxInFlight = max 1 serveMaxInFlight
             , lkPublicConnectionsPerHost = max 1 publicConnections
-            , lkPrivateConnectionsPerHost = max 1 privateConnections
             }
   where
     readEnvInt :: String -> Int -> IO Int
@@ -454,8 +453,8 @@ ecosystem and the operating point, then one block per scenario with its throughp
 latency percentiles, allocations per request, residency, and GC stats. The same text
 goes to stdout and to the GitHub run summary.
 -}
-renderReports :: LoadKnobs -> Ecosystem -> [ScenarioReport] -> Text
-renderReports knobs ecosystem reports =
+renderReports :: LoadKnobs -> Int -> Ecosystem -> [ScenarioReport] -> Text
+renderReports knobs capabilities ecosystem reports =
     T.unlines $
         [ "## Load test -- throughput & latency over " <> ecosystemName ecosystem
         , ""
@@ -475,11 +474,11 @@ renderReports knobs ecosystem reports =
             <> show (lkWorkingSet knobs)
             <> " · admission "
             <> show (lkServeMaxInFlight knobs)
-            <> " · public/private connections per host "
+            <> " (private pool follows admission) · public connections per host "
             <> show (lkPublicConnectionsPerHost knobs)
-            <> "/"
-            <> show (lkPrivateConnectionsPerHost knobs)
-            <> " · ~"
+            <> " · "
+            <> show capabilities
+            <> " GHC capabilities (scenario children pinned to the driver's count) · ~"
             <> fmtKiB (lkPayloadBytes knobs)
             <> " worker artifact."
         , ""

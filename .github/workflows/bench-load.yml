@@ -86,7 +86,9 @@ jobs:
           set -eo pipefail
           # Isolate the load generator from the server: ubuntu-latest has 4 cores. oha is
           # pinned to core 0 by the harness; we restrict GHC to 3 capability threads so they
-          # neatly occupy the remaining 3 cores without self-contention.
+          # neatly occupy the remaining 3 cores without self-contention. The driver
+          # propagates this count to the scenario child processes via GHCRTS (argv RTS
+          # flags do not survive the per-scenario re-exec).
           nix develop .#bench --command cabal run -v0 bench-load -- +RTS -N3 -RTS 2>&1 | tee bench-load-results.md
 
       # This run's results, downloadable from the run page. A convenience for a human

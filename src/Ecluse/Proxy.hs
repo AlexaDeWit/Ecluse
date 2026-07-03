@@ -85,6 +85,7 @@ module Ecluse.Proxy (
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (getCurrentTime)
+import GHC.Conc (getNumCapabilities)
 import Katip (katipAddNamespace)
 import Network.HTTP.Client (Manager, newManager)
 import Network.HTTP.Client.TLS (tlsManagerSettings)
@@ -102,7 +103,7 @@ import Ecluse.Composition (
  )
 import Ecluse.Composition qualified as Composition
 import Ecluse.Config (
-    AppConfig (cfgPort, cfgPrivateConnectionsPerHost, cfgPublicConnectionsPerHost, cfgServeMaxInFlight, cfgShutdownDrainTimeout),
+    AppConfig (cfgPort, cfgPublicConnectionsPerHost, cfgServeMaxInFlight, cfgShutdownDrainTimeout),
  )
 import Ecluse.Core.Credential (AuthToken (..), currentToken)
 import Ecluse.Core.Credential.Refresh (CredentialReporters (CredentialReporters, crBreakerReporter, crRefreshReporter))
@@ -179,7 +180,14 @@ runProxy bootEnv = do
     -- "not built" boot error, never a silent fall-through); the resulting plan is
     -- handed to the one queue-construction site below.
     queuePlan <- orExit (T.unlines . map renderBootError) (planMirrorQueue env)
-    serveAdmission <- newServeAdmission (cfgServeMaxInFlight env)
+    -- The effective admission capacity: explicit config, else computed from the
+    -- post-runtime-posture capability count, logged with its provenance beside the
+    -- runtime lines. The private manager's pool below follows this value by
+    -- construction (never a separate knob; see issue #634).
+    capabilities <- getNumCapabilities
+    let (serveMaxInFlight, admissionLine) = Composition.resolveServeAdmission (cfgServeMaxInFlight env) capabilities
+    logBootInfo logEnv admissionLine
+    serveAdmission <- newServeAdmission serveMaxInFlight
     let serverConfig =
             (mkServerConfig bindings)
                 { scPort = cfgPort env
@@ -211,7 +219,7 @@ runProxy bootEnv = do
     publicSettings <- instrumentDataPlaneManagerSettings telemetry tlsManagerSettings
     privateSettings <- instrumentDataPlaneManagerSettings telemetry tlsManagerSettings
     manager <- newManager (connectionPoolSettings (cfgPublicConnectionsPerHost env) publicSettings)
-    privateManager <- newManager (connectionPoolSettings (cfgPrivateConnectionsPerHost env) privateSettings)
+    privateManager <- newManager (connectionPoolSettings serveMaxInFlight privateSettings)
     -- The mirror worker's publish-side registry client, resolved per ecosystem from
     -- the configured mirror target and its write credential. It writes to the
     -- operator-configured, trusted mirror target, so it uses the trusted private

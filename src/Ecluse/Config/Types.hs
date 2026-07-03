@@ -144,9 +144,8 @@ data AppConfig = AppConfig
     , cfgShutdownDrainTimeout :: Int
     , cfgCores :: Maybe Int
     , cfgMaxHeapBytes :: Maybe Int
-    , cfgServeMaxInFlight :: Int
+    , cfgServeMaxInFlight :: Maybe Int
     , cfgPublicConnectionsPerHost :: Int
-    , cfgPrivateConnectionsPerHost :: Int
     , cfgCacheTtl :: NominalDiffTime
     , cfgCacheMaxEntries :: Int
     , cfgCacheMaxBytes :: Int
