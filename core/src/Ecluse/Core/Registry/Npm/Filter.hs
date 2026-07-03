@@ -71,10 +71,10 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime)
-import Data.Time.Format.ISO8601 (iso8601Show)
 
 import Ecluse.Core.Package.Merge (MergePlan (mpDistTags, mpSurvivors, mpTime), SourceId)
 import Ecluse.Core.Server.Route (isSafeComponent)
+import Ecluse.Core.Text (renderIso8601Utc)
 import Ecluse.Core.Version (renderVersion)
 
 {- | Rewrite every version's @dist.tarball@ to @{base}\/{pkg}\/-\/{file}@, so the
@@ -277,9 +277,11 @@ assembleMergedPackument mountBase bySource plan base =
 timeBookkeepingKeys :: [Text]
 timeBookkeepingKeys = ["created", "modified"]
 
--- Render a publish time as the ISO-8601 instant npm serves in its @time@ map.
+-- Render a publish time as the ISO-8601 instant npm serves in its @time@ map --
+-- through the hot-path renderer (byte-for-byte 'iso8601Show' parity), since this
+-- runs once per surviving version per request.
 renderTime :: UTCTime -> Text
-renderTime = toText . iso8601Show
+renderTime = renderIso8601Utc
 
 -- | Map a function over every value of an 'Object', leaving a non-object as-is.
 mapValues :: (Value -> Value) -> Value -> Value
