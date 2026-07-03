@@ -623,6 +623,44 @@ test-suite ecluse-integration
     , wai-extra        ^>=3.1
     , warp             ^>=3.4
 
+-- S54's bounded-memory streaming gate. Deliberately its OWN suite rather than a spec
+-- inside ecluse-integration, for two structural reasons: the assertion samples live
+-- bytes (GHC.Stats) while streaming, so it must not share a heap with hundreds of
+-- other examples whose residency would drown the signal; and it needs the RTS
+-- statistics flag (-T) baked in, which the wider tiers should not pay for. It reuses
+-- the integration tier's canonical proxy fixture (TestSupport) via a shared source
+-- directory instead of duplicating it.
+test-suite ecluse-residency
+  import:             shared
+  -- TestSupport (shared with ecluse-integration) has no export list.
+  ghc-options:        -Wno-missing-export-lists -threaded -rtsopts "-with-rtsopts=-T"
+  type:               exitcode-stdio-1.0
+  main-is:            Main.hs
+  hs-source-dirs:     test/residency test/integration
+  other-modules:
+    Ecluse.Server.Pipeline.TestSupport
+    Ecluse.Server.TarballResidencySpec
+
+  build-depends:
+    , aeson             ^>=2.2
+    , bytestring        ^>=0.12
+    , case-insensitive  ^>=1.2
+    , containers        ^>=0.7
+    , crypton           ^>=1.0
+    , ecluse
+    , ecluse:ecluse-core
+    , hspec             ^>=2.11
+    , http-client      ^>=0.7
+    , http-types       ^>=0.12
+    , katip            ^>=0.8.8
+    , memory           ^>=0.18
+    , text             ^>=2.1
+    , time             ^>=1.12
+    , unliftio         ^>=0.2.25
+    , wai              ^>=3.2
+    , wai-extra        ^>=3.1
+    , warp             ^>=3.4
+
 -- Smoke tests: live calls to public registries (npm/PyPI) to validate our JSON
 -- and protocol handling. ALLOWED TO FAIL by design (non-gating) — they depend on
 -- uncontrolled external services.
