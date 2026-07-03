@@ -37,7 +37,7 @@ Two properties run through both shapes: the rules engine is __deny by default__
 __mirroring is demand-driven__, so only versions actually pulled are mirrored,
 and never on the request's critical path.
 
-== How the code is organized
+== How the code is organised
 
 Écluse is a __functional core with effects at the edges__: the policy and
 protocol logic is pure and trivially testable, and @IO@ is confined to a thin

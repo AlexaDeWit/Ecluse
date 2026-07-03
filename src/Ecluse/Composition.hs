@@ -19,7 +19,7 @@ built __once__ from the environment layer ('initCredentialProviders') and held
 process-global; a mount does not carry a provider, it only __names__ which backend
 it draws on (its @mtCredential@). The boot-time check is the resolution of that
 reference: every distinct credential backend named across all mounts must resolve
-to an __initialized__ provider, or the app halts at boot (see
+to an __initialised__ provider, or the app halts at boot (see
 @docs\/architecture\/cloud-backends.md@ → "Credential Provider"). Only the
 @static@ backend has a leaf (from @ECLUSE_MIRROR_TARGET_TOKEN@); a mount naming
 @codeartifact@ or @adc@ resolves to no provider and is an honest boot failure.
@@ -30,7 +30,7 @@ Three boot failures are aggregated into one report so a single run shows every
 problem: a rule policy that does not resolve ('PolicyBootError', surfaced by
 'Ecluse.Config.loadConfig'), a configured mount whose ecosystem has no adapter
 wired ('MissingAdapter'), and a mount naming a credential backend with no
-initialized provider ('UnresolvedCredential'). A bad configuration is thus a
+initialised provider ('UnresolvedCredential'). A bad configuration is thus a
 loud, immediate startup failure, never a quietly mis-enforced or half-wired state
 (see @docs\/architecture\/configuration.md@ → "Validation").
 -}
@@ -138,7 +138,7 @@ aggregated boot errors that block them. The mirror-target write provider is
 selected by 'cfgCredentialProvider' (see 'planMirrorCredential'):
 
 * @static@ -- built from @ECLUSE_MIRROR_TARGET_TOKEN@ ('cfgMirrorTargetToken') when set;
-  absent, no static provider is initialized, so a mount naming @static@ fails the
+  absent, no static provider is initialised, so a mount naming @static@ fails the
   boot-time credential-reference check.
 * @codeartifact@ -- the CodeArtifact inputs are resolved
   ('resolveCodeArtifactConfig'); a required input that resolves by neither an
@@ -188,14 +188,14 @@ initCredentialProviders reporters app = do
                 then pure (Left (concat initErrs))
                 else pure (Right (CredentialProviders (Map.fromList [(eco, p) | (eco, Just p) <- valid])))
 
-{- | The set of ecosystems that resolved to an initialized provider -- the
+{- | The set of ecosystems that resolved to an initialised provider -- the
 pure surface the boot-time credential-reference check reasons over.
 -}
 initializedEcosystems :: CredentialProviders -> Set Ecosystem
 initializedEcosystems (CredentialProviders ps) = Map.keysSet ps
 
-{- | Look up the initialized provider for an ecosystem, 'Nothing' when none is
-initialized (the unresolved-reference case the boot check rejects).
+{- | Look up the initialised provider for an ecosystem, 'Nothing' when none is
+initialised (the unresolved-reference case the boot check rejects).
 -}
 lookupProvider :: Ecosystem -> CredentialProviders -> Maybe CredentialProvider
 lookupProvider eco (CredentialProviders ps) = Map.lookup eco ps
@@ -309,7 +309,7 @@ data BootError
       cannot be served (a loud miss, never a silent drop). Carries the ecosystem.
       -}
       MissingAdapter Ecosystem
-    | {- | A mount names a credential backend with no initialized provider. Carries
+    | {- | A mount names a credential backend with no initialised provider. Carries
       the ecosystem of the mount and the unresolved backend.
       -}
       UnresolvedCredential Ecosystem CredentialBackend
@@ -379,7 +379,7 @@ renderBootError = \case
             <> ecosystemName eco
             <> " names credential source "
             <> renderWire backend
-            <> ", not initialized in this build"
+            <> ", not initialised in this build"
     QueueProviderUnavailable backend ->
         "mirror queue provider "
             <> renderWire backend
@@ -434,7 +434,7 @@ planMounts = composeBindings
 
 {- | Turn a validated 'Config' into the served 'MountBinding's, or the aggregated
 boot errors. For each mount, in ecosystem order: its credential reference must
-resolve to an initialized provider, and its ecosystem must resolve to an adapter
+resolve to an initialised provider, and its ecosystem must resolve to an adapter
 (through the injected resolver, fed real 'PackumentDeps' so the packument route is
 served rather than the @501@ stub). Errors aggregate across every mount.
 -}
@@ -521,7 +521,7 @@ composeBindings resolveAdapter clock providers config = do
                 Left (maybeToList mCredErr <> [MissingAdapter (mountEcosystem mount) | isNothing mBinding])
 
     -- The credential reference of a mount: an error when the named backend is not
-    -- initialized, nothing when it resolves.
+    -- initialised, nothing when it resolves.
     credentialError :: Mount -> Maybe BootError
     credentialError mount =
         let backend = mtCredential (regMirrorTarget (mountRegistries mount))
