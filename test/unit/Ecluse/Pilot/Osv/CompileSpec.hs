@@ -4,6 +4,7 @@
 module Ecluse.Pilot.Osv.CompileSpec (spec) where
 
 import Conduit
+import Control.Monad.Catch (MonadCatch, MonadMask)
 import Data.ByteString.Lazy qualified as LBS
 import Data.Text (unpack)
 import Database.SQLite.Simple
@@ -18,7 +19,7 @@ import Ecluse.Test.Stub (stubBaseUrl, withStub)
 import Network.HTTP.Types.Status (status200)
 
 newtype TestM a = TestM {runTestM :: ReaderT LogEnv (ResourceT IO) a}
-    deriving newtype (Functor, Applicative, Monad, MonadIO, MonadResource, MonadThrow, PrimMonad, MonadUnliftIO)
+    deriving newtype (Functor, Applicative, Monad, MonadIO, MonadResource, MonadThrow, MonadCatch, MonadMask, PrimMonad, MonadUnliftIO)
 
 instance Katip TestM where
     getLogEnv = TestM ask

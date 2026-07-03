@@ -12,7 +12,7 @@ import Conduit
 import Data.Aeson (decodeStrict)
 import Data.ByteString qualified as BS
 import Katip (KatipContext, Severity (..), logFM, ls)
-import Network.HTTP.Simple (getResponseBody, httpSource, parseRequest)
+import Network.HTTP.Simple (getResponseBody, httpSource, parseRequest, setRequestCheckStatus)
 import OpenTelemetry.Context qualified as Ctx
 import OpenTelemetry.Trace (SpanKind (Internal), defaultSpanArguments, kind, makeTracer, tracerOptions)
 import OpenTelemetry.Trace.Core (createSpan, endSpan)
@@ -29,7 +29,13 @@ streamOsvUrl telemetry urlStr = do
         (traverse (\t -> createSpan t Ctx.empty "ecluse.pilot.osv.stream" defaultSpanArguments{kind = Internal}) mTracer)
         (mapM_ (`endSpan` Nothing))
         ( \_ -> do
-            req <- liftIO $ parseRequest urlStr
+            -- 'setRequestCheckStatus' makes a non-2xx response throw a
+            -- 'StatusCodeException' at the header boundary. This is deliberate: it
+            -- lets the backoff wrapper (see 'Ecluse.Pilot.Osv.Retry') see a 502
+            -- from osv.dev as a retryable fault, rather than streaming the error
+            -- page into the unzip parser where it would surface as a parse error a
+            -- retry could not fix.
+            req <- liftIO $ setRequestCheckStatus <$> parseRequest urlStr
             httpSource req (\res -> getResponseBody res .| parseOsvStream telemetry)
         )
 

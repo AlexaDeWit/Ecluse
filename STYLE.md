@@ -511,6 +511,19 @@ Match every constructor explicitly (no wildcard) when you want the compiler to
 flag you the day a new constructor is added, useful for exhaustive logic like
 `ruleName` and `evalRule`.
 
+**Rule 9.5, Lift a non-capturing helper to the top level.** A local `where` or
+`let` binding earns its place by *closing over* something in the enclosing
+equation: a parameter, the scrutinee, an intermediate result. When a helper refers
+only to its own arguments and module-level names, so it captures nothing local,
+make it a top-level function instead. A top-level function is independently
+testable, shows up by name in a profile or a stack, and reads without the reader
+scanning the parent to see what it captured. The §9.3 helpers (`pick`, `plural`,
+`units`) earn their `where` because they close over the parent's values; reserve
+local bindings for that. A pure formatter such as a log-line builder, which touches
+only its arguments, belongs at the top level, where a test can pin its output
+directly rather than reaching it through the effectful caller that happened to
+enclose it.
+
 ---
 
 ## 10. Totality, no partial functions

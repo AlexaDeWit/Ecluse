@@ -7,7 +7,7 @@ module Ecluse.Pilot.Export (
 ) where
 
 import Conduit (MonadResource, runResourceT)
-import Control.Monad.Catch (MonadThrow)
+import Control.Monad.Catch (MonadMask, MonadThrow)
 import System.FilePath (takeFileName)
 import UnliftIO (MonadUnliftIO)
 import UnliftIO.Concurrent (threadDelay)
@@ -23,7 +23,7 @@ import Ecluse.Telemetry (Telemetry)
 import Amazonka qualified as AWS
 import Amazonka.S3 qualified as S3
 
-runExportLoop :: (MonadThrow m, MonadUnliftIO m, KatipContext m) => Telemetry -> Config -> m ()
+runExportLoop :: (MonadMask m, MonadUnliftIO m, KatipContext m) => Telemetry -> Config -> m ()
 runExportLoop telemetry config = do
     let appCfg = configApp config
     case cfgVulnerabilityDatabaseBucket appCfg of
@@ -37,7 +37,7 @@ runExportLoop telemetry config = do
                     logFM ErrorS (ls ("Export failed: " <> show e :: String))
                 threadDelay ((round (cfgCveSyncInterval appCfg) :: Int) * 1000000)
 
-exportNpm :: (MonadResource m, MonadThrow m, MonadUnliftIO m, KatipContext m) => Telemetry -> AppConfig -> Text -> m ()
+exportNpm :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => Telemetry -> AppConfig -> Text -> m ()
 exportNpm telemetry appCfg bucketName = do
     logFM InfoS "Starting npm OSV database compilation"
     dbPath <- compileOsvToSqlite telemetry (cfgOsvDataDir appCfg) "npm" "https://osv-vulnerabilities.storage.googleapis.com/npm/all.zip"

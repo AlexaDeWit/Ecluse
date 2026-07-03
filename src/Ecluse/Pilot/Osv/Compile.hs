@@ -5,6 +5,7 @@ module Ecluse.Pilot.Osv.Compile (
 ) where
 
 import Conduit
+import Control.Monad.Catch (MonadMask)
 import Data.Conduit.List qualified as CL
 import Data.Version (showVersion)
 import Database.SQLite.Simple
@@ -16,10 +17,11 @@ import System.IO.Error (catchIOError)
 import UnliftIO.Exception (bracket)
 
 import Ecluse.Pilot.Osv (ExtractedOsv (..))
+import Ecluse.Pilot.Osv.Retry (defaultOsvRetryPolicy, withOsvRetry)
 import Ecluse.Pilot.Osv.Stream (streamOsvUrl)
 import Ecluse.Telemetry (Telemetry)
 
-compileOsvToSqlite :: (MonadResource m, MonadThrow m, MonadUnliftIO m, KatipContext m) => Telemetry -> FilePath -> Text -> String -> m FilePath
+compileOsvToSqlite :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => Telemetry -> FilePath -> Text -> String -> m FilePath
 compileOsvToSqlite telemetry outDir ecosystem urlStr = do
     let dbFile = outDir </> (toString ecosystem <> "-v" <> showVersion version <> "-osv.db")
     logFM InfoS (ls ("Compiling OSV data for " <> ecosystem <> " to " <> toText dbFile))
@@ -31,10 +33,20 @@ compileOsvToSqlite telemetry outDir ecosystem urlStr = do
     bracket (liftIO $ open dbFile) (liftIO . close) $ \conn -> do
         liftIO $ initSchema conn
 
-        runConduit $
-            streamOsvUrl telemetry urlStr
-                .| CL.chunksOf 2000
-                .| sinkSqlite conn
+        -- The fetch runs under a truncated exponential backoff (see
+        -- 'Ecluse.Pilot.Osv.Retry'): a transient osv.dev failure is retried with
+        -- jittered, capped, and count-bounded backoff rather than tight-looping, so
+        -- an outage cannot get our egress IP rate-limited or banned. Batches commit
+        -- incrementally, so a mid-stream drop can leave a partial table behind; each
+        -- attempt therefore wipes it first and re-streams from a clean slate. (INSERT
+        -- OR IGNORE alone would not suffice: a NULL introduced/fixed bound is distinct
+        -- under the composite primary key, so a re-run would duplicate those ranges.)
+        withOsvRetry defaultOsvRetryPolicy $ do
+            liftIO $ execute_ conn "DELETE FROM package_vulnerability_ranges"
+            runConduit $
+                streamOsvUrl telemetry urlStr
+                    .| CL.chunksOf 2000
+                    .| sinkSqlite conn
 
     pure dbFile
 
