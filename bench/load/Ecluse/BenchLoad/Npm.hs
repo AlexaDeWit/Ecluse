@@ -242,7 +242,7 @@ tarballScenario =
     Scenario
         { scenarioName = "tarball-hot-path"
         , scenarioDescription =
-            "Tarball proxy hot path: GET /npm/{pkg}/-/{pkg}-9999.0.2.tgz fans to the packument first to read the dist.tarball URL (instantly served from the metadata cache), then streams the tarball from the artifact upstream."
+            "Tarball proxy hot path: GET /npm/{pkg}/-/{unscoped-pkg}-9999.0.2.tgz (the scope-dropping npm convention) fans to the packument first to read the dist.tarball URL (instantly served from the metadata cache), then streams the tarball from the artifact upstream."
         , scenarioBoot = \knobs k -> withNpmProxy knobs longCacheTtl (cacheMaxEntries defaultCacheConfig) tarballMix (k . DriveHttpUrls)
         }
 
@@ -264,7 +264,7 @@ withNpmProxy knobs ttl maxEntries mkMix body = do
     bodies <- loadServeBodies
     let bytes = artifactBytes (lkPayloadBytes knobs)
     testWithApplication (pure (stubUpstream octetContentType latency bytes)) $ \artPort ->
-        testWithApplication (pure (privateOverlayStub artPort latency)) $ \privatePort ->
+        testWithApplication (pure (privateOverlayStub artPort latency bytes)) $ \privatePort ->
             testWithApplication (pure (corpusPublicStub latency bodies)) $ \publicPort -> do
                 publicManager <- newManager (connectionPoolSettings (lkPublicConnectionsPerHost knobs) defaultManagerSettings)
                 privateManager <- newManager (connectionPoolSettings (lkPrivateConnectionsPerHost knobs) defaultManagerSettings)
@@ -302,9 +302,10 @@ uniformMix :: [CorpusPackage] -> Int -> [Text]
 uniformMix pkgs proxyPort = map (packageUrl proxyPort . cpName) pkgs
 
 -- The tarball serve mix: each corpus package's tarball URL repeated by its serve weight.
+-- A tarball path is /npm/{pkg}/-/{unscoped-pkg}-{version}.tgz (npm convention).
 tarballMix :: Int -> [Text]
 tarballMix proxyPort =
-    concatMap (\cp -> replicate (cpWeight cp) (localhost proxyPort <> "/npm/" <> cpName cp <> "/-/" <> cpName cp <> "-9999.0.2.tgz")) serveCorpus
+    concatMap (\cp -> replicate (cpWeight cp) (localhost proxyPort <> "/npm/" <> cpName cp <> "/-/" <> cpUnscopedName cp <> "-9999.0.2.tgz")) serveCorpus
 
 -- The cache-eviction working set: the leading 'lkWorkingSet' large corpus packages (in
 -- 'serveCorpus' order, heaviest first), so a bound below its length forces eviction.
@@ -500,13 +501,22 @@ corpusPublicStub latency bodies request respond = do
 -- The trusted-private upstream over the corpus: inject the latency, then serve a small
 -- overlay of disjoint versions named for the requested package, so the merge serves a
 -- genuine cross-upstream union for every package in the mix rather than the public set
--- alone.
-privateOverlayStub :: Int -> Int -> Application
-privateOverlayStub artPort latency request respond = do
+-- alone. It also serves the canned artifact bytes for any tarball path under the
+-- package, so the conventional private-leg read (the hot path) succeeds.
+privateOverlayStub :: Int -> Int -> LByteString -> Application
+privateOverlayStub artPort latency bytes request respond = do
     when (latency > 0) (threadDelay latency)
-    respond $ case requestedPackage request of
-        Just name -> responseLBS status200 [(hContentType, jsonContentType)] (encode (privateOverlay artPort name))
-        Nothing -> responseLBS status404 [(hContentType, jsonContentType)] "{}"
+    let mPkg = requestedPackage request
+    case mPkg of
+        -- Artifact request: /{pkg}/-/{file}
+        Just pkg
+            | "/-/" `T.isInfixOf` pkg ->
+                respond (responseLBS status200 [(hContentType, octetContentType)] bytes)
+        -- Packument request: /{pkg}
+        Just pkg ->
+            respond (responseLBS status200 [(hContentType, jsonContentType)] (encode (privateOverlay artPort pkg)))
+        Nothing ->
+            respond (responseLBS status404 [(hContentType, jsonContentType)] "{}")
 
 -- The package name a packument GET addresses: the request path segments rejoined with
 -- @/@. An unscoped fetch is @{base}/{pkg}@ (one segment); a scoped fetch is
@@ -516,6 +526,13 @@ requestedPackage :: Request -> Maybe Text
 requestedPackage request = case pathInfo request of
     [] -> Nothing
     segments -> Just (T.intercalate "/" segments)
+
+-- The unscoped (base) name of a corpus package: the name with any @scope/ prefix dropped.
+cpUnscopedName :: CorpusPackage -> Text
+cpUnscopedName cp = case T.breakOn "/" (cpName cp) of
+    (scope, name)
+        | "@" `T.isPrefixOf` scope && not (T.null name) -> T.drop 1 name
+    _ -> cpName cp
 
 {- | One package in the load benchmarks serve mix: the package name (both the request path and
 the body's self-reported name, scoped or not), the capture file read at boot, and the
@@ -584,11 +601,16 @@ overlayVersionObject artPort name version =
         , "version" .= version
         , "dist"
             .= object
-                [ "tarball" .= (localhost artPort <> "/" <> name <> "/-/" <> name <> "-" <> version <> ".tgz")
+                [ "tarball" .= (localhost artPort <> "/" <> name <> "/-/" <> unscoped <> "-" <> version <> ".tgz")
                 , "integrity" .= validSha512Sri
                 , "shasum" .= validSha1
                 ]
         ]
+  where
+    unscoped = case T.breakOn "/" name of
+        (scope, base)
+            | "@" `T.isPrefixOf` scope && not (T.null base) -> T.drop 1 base
+        _ -> name
 
 packageText :: Text
 packageText = "bench-pkg"
