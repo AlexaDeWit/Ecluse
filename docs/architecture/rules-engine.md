@@ -289,13 +289,13 @@ newly populated data degrades **per rule**, as effectful-rule unavailability
 under that rule's failure alignment (see
 [Effectful-rule failure](#effectful-rule-failure)), rather than per database.
 
-To let a reader tell "this build does not populate the column yet" apart from
-"no data known for this package", the artifact carries a small `meta`
-key/value table: populated flags for the optional columns (`severity`,
-`epss_score`) plus provenance (Pilot version, ecosystem, build timestamp,
-source URL, row count). The reader consults it once at swap time; alongside
-the active ETag it is also the audit surface that ties a rule decision to the
-exact database that produced it.
+A column exists exactly when the build populates it, so a reader learns what
+data an artifact offers from the schema itself, and a NULL always means "no
+data known for this row", never "not populated yet". The artifact also
+carries a small `meta` key/value table of provenance: Pilot version,
+ecosystem, build timestamp, source URL, and row count. Alongside the active
+ETag it is the audit surface that ties a rule decision to the exact database
+that produced it.
 
 Polling rather than looking up on demand removes the **one external dependency
 that would otherwise sit under the deliberately fail-closed gate** (see

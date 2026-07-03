@@ -28,9 +28,8 @@ the Pilot writer and the proxy reader.
 Bump it only for a breaking change to the existing shape (a column rename, a
 semantic change, a key change). Additive changes (a new column, a new table)
 must not bump it: readers select explicit columns, so additions are invisible
-to them, and whether an optional column actually carries data is advertised
-through the @meta@ table instead ('MetaSeverityPopulated',
-'MetaEpssPopulated').
+to them. A column exists exactly when the build populates it, so a reader
+learns what data an artifact offers from the schema itself.
 
 The epoch names the published artifact ('osvDbFileName') and is stamped into
 it as SQLite's @user_version@; a reader must reject an artifact whose stamp
@@ -55,10 +54,8 @@ osvDbFileName ecosystem =
 
 {- | A key of the artifact's @meta@ table (one @TEXT@ key\/value row per key).
 
-The table carries the artifact's provenance (which build produced it, from
-what source, and when) and its capabilities (which optional columns this build
-populates), so a reader can tell "this build does not emit the column" apart
-from "no data known for this package".
+The table carries the artifact's provenance: which build produced it, from
+what source, and when.
 -}
 data MetaKey
     = -- | The Pilot application version that produced the artifact.
@@ -71,10 +68,6 @@ data MetaKey
       MetaSourceUrl
     | -- | The number of advisory ranges the artifact holds.
       MetaRowCount
-    | -- | @1@ when this build populates @severity@; @0@ until then.
-      MetaSeverityPopulated
-    | -- | @1@ when this build populates @epss_score@; @0@ until then.
-      MetaEpssPopulated
     deriving stock (Bounded, Enum, Eq, Show)
 
 -- | The key's stored form in the @meta@ table.
@@ -85,5 +78,3 @@ renderMetaKey = \case
     MetaBuiltAt -> "built_at"
     MetaSourceUrl -> "source_url"
     MetaRowCount -> "row_count"
-    MetaSeverityPopulated -> "severity_populated"
-    MetaEpssPopulated -> "epss_populated"

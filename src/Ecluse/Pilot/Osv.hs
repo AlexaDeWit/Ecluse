@@ -7,6 +7,7 @@ module Ecluse.Pilot.Osv (
     OsvPackage (..),
     OsvRange (..),
     OsvEvent (..),
+    OsvDatabaseSpecific (..),
     ExtractedOsv (..),
     extractFromAdvisory,
 ) where
@@ -17,6 +18,7 @@ import Data.Aeson (FromJSON (..), withObject, (.:), (.:?))
 data OsvAdvisory = OsvAdvisory
     { osvId :: Text
     , osvAffected :: Maybe [OsvAffected]
+    , osvDatabaseSpecific :: Maybe OsvDatabaseSpecific
     }
     deriving stock (Show, Eq, Generic)
 
@@ -25,6 +27,21 @@ instance FromJSON OsvAdvisory where
         OsvAdvisory
             <$> v .: "id"
             <*> v .:? "affected"
+            <*> v .:? "database_specific"
+
+-- | The subset of an advisory's @database_specific@ block the pipeline consumes.
+newtype OsvDatabaseSpecific = OsvDatabaseSpecific
+    { dbsSeverity :: Maybe Text
+    {- ^ The source database's qualitative severity label (for GHSA-sourced npm
+    advisories: @LOW@, @MODERATE@, @HIGH@, or @CRITICAL@).
+    -}
+    }
+    deriving stock (Show, Eq, Generic)
+
+instance FromJSON OsvDatabaseSpecific where
+    parseJSON = withObject "OsvDatabaseSpecific" $ \v ->
+        OsvDatabaseSpecific
+            <$> v .:? "severity"
 
 data OsvAffected = OsvAffected
     { affectedPackage :: OsvPackage
@@ -83,6 +100,10 @@ data ExtractedOsv = ExtractedOsv
     , extCveId :: Text
     , extIntroduced :: Maybe Text
     , extFixed :: Maybe Text
+    , extSeverity :: Maybe Text
+    {- ^ The advisory-level severity label, carried onto each of the advisory's
+    ranges; 'Nothing' when the source database supplies none.
+    -}
     }
     deriving stock (Show, Eq)
 
@@ -99,6 +120,7 @@ extractFromAdvisory adv = do
             , extCveId = osvId adv
             , extIntroduced = intro
             , extFixed = fixed
+            , extSeverity = dbsSeverity =<< osvDatabaseSpecific adv
             }
 
 extractBounds :: [OsvEvent] -> [(Maybe Text, Maybe Text)]

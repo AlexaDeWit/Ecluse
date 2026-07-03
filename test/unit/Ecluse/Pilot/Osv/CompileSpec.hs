@@ -52,7 +52,7 @@ spec = describe "SQLite OSV Compilation" $ do
 
         -- Verify the sqlite db
         conn <- open dbFile
-        rows <- query_ conn "SELECT package_name, cve_id, fixed_version FROM package_vulnerability_ranges" :: IO [(Text, Text, Maybe Text)]
+        rows <- query_ conn "SELECT package_name, cve_id, fixed_version, severity FROM package_vulnerability_ranges" :: IO [(Text, Text, Maybe Text, Maybe Text)]
         stamped <- query_ conn "PRAGMA user_version" :: IO [Only Int]
         metaRows <- query_ conn "SELECT key, value FROM meta" :: IO [(Text, Text)]
         close conn
@@ -62,14 +62,13 @@ spec = describe "SQLite OSV Compilation" $ do
         -- contract, the forms a reader depends on, not the constants that
         -- produced them.
         takeFileName dbFile `shouldBe` "npm-osv-schema1.db"
-        rows `shouldBe` [("hono", "GHSA-2234-fmw7-43wr", Just "4.6.5")]
+        rows `shouldBe` [("hono", "GHSA-2234-fmw7-43wr", Just "4.6.5", Just "MODERATE")]
         map fromOnly stamped `shouldBe` [osvSchemaEpoch]
 
         let meta = Map.fromList metaRows
+        Map.keys meta `shouldBe` ["built_at", "ecosystem", "pilot_version", "row_count", "source_url"]
         Map.lookup "ecosystem" meta `shouldBe` Just "npm"
         Map.lookup "row_count" meta `shouldBe` Just "1"
-        Map.lookup "severity_populated" meta `shouldBe` Just "0"
-        Map.lookup "epss_populated" meta `shouldBe` Just "0"
         Map.lookup "pilot_version" meta `shouldBe` Just (toText (showVersion version))
         Map.lookup "source_url" meta `shouldSatisfy` maybe False (T.isSuffixOf "/sample.zip")
         Map.lookup "built_at" meta `shouldSatisfy` maybe False (not . T.null)

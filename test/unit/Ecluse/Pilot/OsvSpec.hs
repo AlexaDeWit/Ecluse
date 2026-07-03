@@ -48,6 +48,7 @@ spec = describe "Osv parsing and streaming" $ do
                                     , extCveId = "GHSA-2234-fmw7-43wr"
                                     , extIntroduced = Just "0"
                                     , extFixed = Just "4.6.5"
+                                    , extSeverity = Just "MODERATE"
                                     }
                                ]
 
@@ -59,6 +60,8 @@ spec = describe "Osv parsing and streaming" $ do
             Right adv -> do
                 osvId adv `shouldBe` "GHSA-multi"
                 let extracted = extractFromAdvisory adv
+                -- The complex fixture has "database_specific": null, so every
+                -- extracted range carries no severity label.
                 extracted
                     `shouldBe` [ ExtractedOsv
                                     { extPackage = "multi-pkg"
@@ -66,6 +69,7 @@ spec = describe "Osv parsing and streaming" $ do
                                     , extCveId = "GHSA-multi"
                                     , extIntroduced = Just "0"
                                     , extFixed = Just "1.0.0"
+                                    , extSeverity = Nothing
                                     }
                                , ExtractedOsv
                                     { extPackage = "multi-pkg"
@@ -73,6 +77,7 @@ spec = describe "Osv parsing and streaming" $ do
                                     , extCveId = "GHSA-multi"
                                     , extIntroduced = Just "1.1.0"
                                     , extFixed = Just "1.2.0"
+                                    , extSeverity = Nothing
                                     }
                                , ExtractedOsv
                                     { extPackage = "multi-pkg"
@@ -80,6 +85,7 @@ spec = describe "Osv parsing and streaming" $ do
                                     , extCveId = "GHSA-multi"
                                     , extIntroduced = Just "2.0.0"
                                     , extFixed = Just "2.1.0"
+                                    , extSeverity = Nothing
                                     }
                                , ExtractedOsv
                                     { extPackage = "other-pkg"
@@ -87,6 +93,7 @@ spec = describe "Osv parsing and streaming" $ do
                                     , extCveId = "GHSA-multi"
                                     , extIntroduced = Just "0"
                                     , extFixed = Just "3.0.0"
+                                    , extSeverity = Nothing
                                     }
                                ]
 

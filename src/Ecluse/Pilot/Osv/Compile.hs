@@ -70,7 +70,6 @@ initSchema conn = do
         \  introduced_version TEXT,\
         \  fixed_version TEXT,\
         \  severity TEXT,\
-        \  epss_score REAL,\
         \  PRIMARY KEY (package_name, cve_id, introduced_version, fixed_version)\
         \)"
     execute_ conn "CREATE INDEX idx_package_name ON package_vulnerability_ranges(package_name)"
@@ -83,8 +82,7 @@ initSchema conn = do
     execute_ conn (fromString ("PRAGMA user_version = " <> show osvSchemaEpoch))
 
 -- Written once, after the stream has completed: the row count is only
--- meaningful for a complete artifact, and the populated flags stay 0 until a
--- build actually emits the optional columns.
+-- meaningful for a complete artifact.
 writeMeta :: Connection -> Text -> String -> IO Int
 writeMeta conn ecosystem urlStr = do
     now <- getCurrentTime
@@ -98,8 +96,6 @@ writeMeta conn ecosystem urlStr = do
         , (renderMetaKey MetaBuiltAt, toText (iso8601Show now))
         , (renderMetaKey MetaSourceUrl, toText urlStr)
         , (renderMetaKey MetaRowCount, show rowCount)
-        , (renderMetaKey MetaSeverityPopulated, "0")
-        , (renderMetaKey MetaEpssPopulated, "0")
         ]
     pure rowCount
 
@@ -109,7 +105,7 @@ sinkSqlite conn = awaitForever $ \batch ->
         withTransaction conn $
             executeMany
                 conn
-                "INSERT OR IGNORE INTO package_vulnerability_ranges (package_name, cve_id, introduced_version, fixed_version, severity, epss_score) VALUES (?, ?, ?, ?, NULL, NULL)"
+                "INSERT OR IGNORE INTO package_vulnerability_ranges (package_name, cve_id, introduced_version, fixed_version, severity) VALUES (?, ?, ?, ?, ?)"
                 (map osvToRow batch)
   where
-    osvToRow osv = (extPackage osv, extCveId osv, extIntroduced osv, extFixed osv)
+    osvToRow osv = (extPackage osv, extCveId osv, extIntroduced osv, extFixed osv, extSeverity osv)
