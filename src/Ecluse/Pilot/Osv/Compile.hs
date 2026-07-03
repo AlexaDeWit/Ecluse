@@ -36,9 +36,13 @@ compileOsvToSqlite telemetry outDir ecosystem urlStr = do
         -- The fetch runs under a truncated exponential backoff (see
         -- 'Ecluse.Pilot.Osv.Retry'): a transient osv.dev failure is retried with
         -- jittered, capped, and count-bounded backoff rather than tight-looping, so
-        -- an outage cannot get our egress IP rate-limited or banned. INSERT OR
-        -- IGNORE keeps a re-run after a mid-stream drop idempotent.
-        withOsvRetry defaultOsvRetryPolicy $
+        -- an outage cannot get our egress IP rate-limited or banned. Batches commit
+        -- incrementally, so a mid-stream drop can leave a partial table behind; each
+        -- attempt therefore wipes it first and re-streams from a clean slate. (INSERT
+        -- OR IGNORE alone would not suffice: a NULL introduced/fixed bound is distinct
+        -- under the composite primary key, so a re-run would duplicate those ranges.)
+        withOsvRetry defaultOsvRetryPolicy $ do
+            liftIO $ execute_ conn "DELETE FROM package_vulnerability_ranges"
             runConduit $
                 streamOsvUrl telemetry urlStr
                     .| CL.chunksOf 2000
