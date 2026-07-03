@@ -29,6 +29,9 @@ module Ecluse.Pilot.Osv.Retry (
 
     -- * Running a fetch under the policy
     withOsvRetry,
+
+    -- * Log lines
+    transientMessage,
 ) where
 
 import Control.Monad.Catch (Handler (Handler), MonadMask)
@@ -95,16 +98,25 @@ corrupt-archive parse error, is not caught here and propagates unretried.
 -}
 withOsvRetry :: (MonadMask m, KatipContext m) => RetryPolicyM m -> m a -> m a
 withOsvRetry policy fetch =
-    recovering policy [handler] (const fetch)
-  where
-    handler status = Handler $ \e ->
-        if isRetryableHttpException e
-            then logFM WarningS (ls (transientMessage status e)) >> pure True
-            else pure False
+    recovering policy [retryHandler] (const fetch)
 
-    transientMessage :: RetryStatus -> HttpException -> String
-    transientMessage status err =
-        "osv.dev fetch failed transiently on attempt "
-            <> show (1 + rsIterNumber status)
-            <> "; backing off before the next retry. Cause: "
-            <> show err
+-- Log-and-retry a transient 'HttpException'; decline a permanent one so
+-- 'recovering' re-throws it. It closes over nothing in 'withOsvRetry', so it is a
+-- top-level binding rather than a 'where' helper (STYLE section 9.5).
+retryHandler :: (KatipContext m) => RetryStatus -> Handler m Bool
+retryHandler status = Handler $ \e ->
+    if isRetryableHttpException e
+        then logFM WarningS (ls (transientMessage status e)) >> pure True
+        else pure False
+
+{- | The warning logged before a transient fetch failure is retried. Reports the
+1-based attempt number ('rsIterNumber' counts retries from zero) and the cause, so
+an operator reading the logs can watch the backoff engage. It depends only on its
+arguments, so it can be exercised in isolation.
+-}
+transientMessage :: RetryStatus -> HttpException -> String
+transientMessage status err =
+    "osv.dev fetch failed transiently on attempt "
+        <> show (1 + rsIterNumber status)
+        <> "; backing off before the next retry. Cause: "
+        <> show err

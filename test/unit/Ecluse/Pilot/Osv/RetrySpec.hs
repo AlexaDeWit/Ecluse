@@ -2,7 +2,14 @@
 
 module Ecluse.Pilot.Osv.RetrySpec (spec) where
 
-import Control.Retry (capDelay, fullJitterBackoff, limitRetries, simulatePolicy)
+import Control.Retry (
+    RetryStatus (rsIterNumber),
+    capDelay,
+    defaultRetryStatus,
+    fullJitterBackoff,
+    limitRetries,
+    simulatePolicy,
+ )
 import Data.ByteString.Lazy qualified as LBS
 import Network.HTTP.Client (
     HttpException (..),
@@ -119,6 +126,11 @@ spec = do
         it "does not retry a malformed URL" $
             isRetryableHttpException permanentFailure `shouldBe` False
 
+        it "treats a request fault outside the transient set as permanent" $
+            isRetryableHttpException
+                (HttpExceptionRequest defaultRequest (InternalException (toException StubCause)))
+                `shouldBe` False
+
         it "classifies a real 502 as retryable and a real 404 as permanent" $ do
             e502 <- statusException status502
             e404 <- statusException status404
@@ -159,3 +171,13 @@ spec = do
                 Left err -> isRetryableHttpException err `shouldBe` False
                 Right () -> expectationFailure "expected the permanent failure to propagate"
             readIORef attempts `shouldReturn` 1
+
+    describe "transientMessage -- the retry log line" $ do
+        it "counts attempts from one and names the cause" $ do
+            let msg = transientMessage defaultRetryStatus{rsIterNumber = 2} transientFailure
+            msg `shouldContain` "attempt 3"
+            msg `shouldContain` "backing off before the next retry"
+            msg `shouldContain` show transientFailure
+
+        it "reports the initial attempt as attempt 1, not 0" $
+            transientMessage defaultRetryStatus transientFailure `shouldContain` "attempt 1"
