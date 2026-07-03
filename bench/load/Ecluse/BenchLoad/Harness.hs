@@ -83,6 +83,7 @@ import Ecluse.BenchLoad.Normalise (
     renderSaturation,
  )
 import Ecluse.BenchLoad.Oha (OhaReport (..), runOha, runOhaUrls)
+import Ecluse.Composition (resolveServeAdmission)
 import Ecluse.Core.Ecosystem (Ecosystem, ecosystemName)
 
 {- | The tunables every scenario shares: the load the generator applies (concurrency,
@@ -120,10 +121,13 @@ data LoadKnobs = LoadKnobs
     the head of the corpus, heaviest first). The default exceeds the corpus, so the whole
     corpus is the working set unless narrowed.
     -}
-    , lkServeMaxInFlight :: Int
-    {- ^ Process-wide metadata admission capacity exercised by the proxy fixture.
-    The private-upstream connection pool follows this value by construction, as it
-    does in production (private reads are per-request, so demand on that pool is
+    , lkServeMaxInFlight :: Maybe Int
+    {- ^ Process-wide metadata admission capacity exercised by the proxy fixture: an
+    explicit capacity, or 'Nothing' to resolve the shipped computed default from the
+    capability count via 'resolveServeAdmission', exactly as the composition root
+    does -- so an unknobbed run measures what an operator gets by default. The
+    private-upstream connection pool follows the resolved value by construction, as
+    it does in production (private reads are per-request, so demand on that pool is
     the admission capacity; see issue #634) -- there is no separate private knob.
     -}
     , lkPublicConnectionsPerHost :: Int
@@ -148,7 +152,7 @@ defaultLoadKnobs =
         , lkPayloadBytes = 256 * 1024
         , lkCacheMaxEntries = 3
         , lkWorkingSet = 64
-        , lkServeMaxInFlight = 64
+        , lkServeMaxInFlight = Nothing
         , lkPublicConnectionsPerHost = 10
         }
 
@@ -160,6 +164,12 @@ delays by), @BENCH_LOAD_PAYLOAD_BYTES@, @BENCH_LOAD_CACHE_MAX_ENTRIES@, and
 @BENCH_LOAD_PUBLIC_CONNECTIONS_PER_HOST@. A malformed value falls back to the default rather than
 failing, since the knobs only shape an inform-only measurement. (The private
 connection pool has no knob: it follows the admission capacity, as in production.)
+
+@BENCH_LOAD_SERVE_MAX_IN_FLIGHT@ is the exception to "falls back to its default
+value": it has no fixed default. Set, it pins the admission capacity; blank, absent,
+or malformed, the fixture resolves the shipped computed default from the capability
+count at use ('lkServeMaxInFlight' stays 'Nothing'), so the unknobbed bench measures
+the admission an operator gets.
 -}
 loadKnobsFromEnv :: IO LoadKnobs
 loadKnobsFromEnv = do
@@ -169,7 +179,7 @@ loadKnobsFromEnv = do
     payload <- readEnvInt "BENCH_LOAD_PAYLOAD_BYTES" (lkPayloadBytes defaultLoadKnobs)
     cacheMax <- readEnvInt "BENCH_LOAD_CACHE_MAX_ENTRIES" (lkCacheMaxEntries defaultLoadKnobs)
     workingSetSize <- readEnvInt "BENCH_LOAD_WORKING_SET" (lkWorkingSet defaultLoadKnobs)
-    serveMaxInFlight <- readEnvInt "BENCH_LOAD_SERVE_MAX_IN_FLIGHT" (lkServeMaxInFlight defaultLoadKnobs)
+    serveMaxInFlight <- (>>= readMaybe) <$> lookupEnv "BENCH_LOAD_SERVE_MAX_IN_FLIGHT"
     publicConnections <- readEnvInt "BENCH_LOAD_PUBLIC_CONNECTIONS_PER_HOST" (lkPublicConnectionsPerHost defaultLoadKnobs)
     pure
         LoadKnobs
@@ -179,7 +189,7 @@ loadKnobsFromEnv = do
             , lkPayloadBytes = max 1 payload
             , lkCacheMaxEntries = max 1 cacheMax
             , lkWorkingSet = max 1 workingSetSize
-            , lkServeMaxInFlight = max 1 serveMaxInFlight
+            , lkServeMaxInFlight = max 1 <$> serveMaxInFlight
             , lkPublicConnectionsPerHost = max 1 publicConnections
             }
   where
@@ -473,8 +483,10 @@ renderReports knobs capabilities ecosystem reports =
             <> " entries over a working set of up to "
             <> show (lkWorkingSet knobs)
             <> " · admission "
-            <> show (lkServeMaxInFlight knobs)
-            <> " (private pool follows admission) · public connections per host "
+            <> show admissionCapacity
+            <> " ("
+            <> admissionOrigin
+            <> "; private pool follows admission) · public connections per host "
             <> show (lkPublicConnectionsPerHost knobs)
             <> " · "
             <> show capabilities
@@ -484,6 +496,13 @@ renderReports knobs capabilities ecosystem reports =
         , ""
         ]
             <> concatMap renderScenario reports
+  where
+    -- Resolved through the same function as the composition root, so the reported
+    -- admission is the admission the fixture actually ran with.
+    admissionCapacity = fst (resolveServeAdmission (lkServeMaxInFlight knobs) capabilities)
+    admissionOrigin = case lkServeMaxInFlight knobs of
+        Just _ -> "explicit"
+        Nothing -> "computed from " <> show capabilities <> " capabilities, as in production"
 
 renderScenario :: ScenarioReport -> [Text]
 renderScenario r =
