@@ -111,6 +111,41 @@ install/fetch/lockfile behaviour, so the resilience scenarios are unaffected. Th
 oracles (`test/oracles`) need no such guard: their `node_modules` is materialised by Nix from
 the lockfile (`importNpmLock`), a pure materialisation that runs no npm CLI and no scripts.
 
+## Tests and Docker
+
+The integration (`ecluse-integration`) and end-to-end (`ecluse-e2e`) tiers are the only ones
+that start Docker containers: integration through `testcontainers` (ministack, the OTLP
+collector), e2e through the raw `docker` harness (`test/e2e/Ecluse/E2E/Harness/Docker.hs`,
+the proxy image plus its nginx/Verdaccio/ministack data plane). Both stamp every container
+they create with two labels:
+
+- `com.ecluse.test` = `integration` | `e2e` — marks it as an Écluse test container; and
+- `com.ecluse.test.scope` = a **per-worktree** id (from `ECLUSE_TEST_SCOPE`, set by the
+  `task test-*` targets from `scripts/test-containers.sh scope`).
+
+Under a normal exit both harnesses tear their own containers down (a `bracket` in the e2e
+harness, `withContainers` in the integration tier), and the `docker run`s carry `--rm` so a
+container that crashes on its own is removed too. The gap is a **hard kill** — SIGKILL, an
+OOM, or an agent/CI harness killing a timed-out command — which runs no cleanup and leaves
+the whole topology behind. Repeated across a battery of runs that is how a machine ends up
+with hundreds of orphaned containers.
+
+Two reaping commands close that gap, both driven by `scripts/test-containers.sh`:
+
+- **`task test-clean`** removes only **this worktree's** test containers, networks (and, in
+  `--all` mode, build images), keyed on the `com.ecluse.test.scope` label. Because it is
+  scoped it is safe to run while other agents or worktrees have suites running — it cannot
+  touch theirs. `task test-integration` and `task test-e2e` run this scoped reap automatically
+  before the suite (sweeping this worktree's strays from a previous killed run) and again on
+  exit.
+- **`task test-clean-all`** removes **every** Écluse test container/network/image on the
+  daemon regardless of scope. Reach for it only when you know no other suite is running; it
+  will remove a parallel worktree's live containers.
+
+Inspect what is currently lingering with `docker ps --filter label=com.ecluse.test` or
+`bash scripts/test-containers.sh list` (which groups them by scope). The label writer is
+`Ecluse.Test.Containers`, kept in lock-step with the reaper's label spelling.
+
 ## What gates, and what doesn't
 
 Two things about the split are easy to get backwards, so I'll state them plainly:

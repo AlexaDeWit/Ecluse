@@ -55,6 +55,7 @@ import UnliftIO.Concurrent (threadDelay)
 
 import Ecluse.E2E.Fixtures (buildFixtures, fixturePackages)
 import Ecluse.E2E.Harness.Types
+import Ecluse.Test.Containers (dockerLabelArgs)
 
 {- | 'Nothing' when the suite can run; @Just reason@ when it must be skipped -- no
 docker daemon, or @ECLUSE_E2E_IMAGE@ unset (the image is built and named by
@@ -106,6 +107,10 @@ withGlobalDataPlane action = do
         _ -> do
             sfx <- uniqueSuffix
             workDir <- globalFixtures
+            -- Stamp every container and the network with the reaping labels, so a
+            -- run that is hard-killed (past the bracket teardown below) can still be
+            -- swept up by `task test-clean` -- see "Ecluse.Test.Containers".
+            labelArgs <- dockerLabelArgs "e2e"
             let net = "ecluse-e2e-global-net-" <> sfx
                 stub = "ecluse-e2e-global-stub-" <> sfx
                 verd = "ecluse-e2e-global-verd-" <> sfx
@@ -118,9 +123,10 @@ withGlobalDataPlane action = do
                 (pure ())
                 (\_ -> teardown net [verd, stub, mini] "")
                 ( \_ -> do
-                    dockerOk ["network", "create", "--subnet", "10.254.254.0/24", net]
-                    dockerOk
+                    dockerOk (["network", "create", "--subnet", "10.254.254.0/24"] <> labelArgs <> [net])
+                    dockerOk $
                         [ "run"
+                        , "--rm"
                         , "-d"
                         , "--name"
                         , verd
@@ -132,10 +138,12 @@ withGlobalDataPlane action = do
                         , "127.0.0.1:0:4873"
                         , "-v"
                         , verdConf <> ":/verdaccio/conf/config.yaml:ro"
-                        , "verdaccio/verdaccio:5"
                         ]
-                    dockerOk
+                            <> labelArgs
+                            <> ["verdaccio/verdaccio:5"]
+                    dockerOk $
                         [ "run"
+                        , "--rm"
                         , "-d"
                         , "--name"
                         , stub
@@ -151,10 +159,12 @@ withGlobalDataPlane action = do
                         , nginxConf <> ":/etc/nginx/conf.d/default.conf:ro"
                         , "-v"
                         , certsDir <> ":/certs:ro"
-                        , "nginx:alpine"
                         ]
-                    dockerOk
+                            <> labelArgs
+                            <> ["nginx:alpine"]
+                    dockerOk $
                         [ "run"
+                        , "--rm"
                         , "-d"
                         , "--name"
                         , mini
@@ -164,8 +174,9 @@ withGlobalDataPlane action = do
                         , "ministack"
                         , "-p"
                         , "127.0.0.1:0:4566"
-                        , "ministackorg/ministack@sha256:5164592def36af01b8ac76364028e27c5ecd8f1494c8a53d5fcd811cc7dfb594"
                         ]
+                            <> labelArgs
+                            <> ["ministackorg/ministack@sha256:5164592def36af01b8ac76364028e27c5ecd8f1494c8a53d5fcd811cc7dfb594"]
                     miniPort <- publishedPort mini "4566/tcp"
                     verdPort <- publishedPort verd "4873/tcp"
                     action GlobalDataPlane{gdpNet = net, gdpStub = stub, gdpVerd = verd, gdpMini = mini, gdpVerdPort = verdPort, gdpMiniPort = miniPort, gdpWorkDir = workDir}
@@ -206,6 +217,7 @@ withE2EWith cfg action gdp = do
         _ -> do
             image <- maybe (fail (imageVar <> " unset")) pure =<< lookupEnv imageVar
             sfx <- uniqueSuffix
+            labelArgs <- dockerLabelArgs "e2e"
             let net = gdpNet gdp
                 stub = gdpStub gdp
                 prox = "ecluse-e2e-proxy-" <> sfx
@@ -221,8 +233,9 @@ withE2EWith cfg action gdp = do
                     -- and waited ready here -- before the proxy -- so it is already accepting when
                     -- the proxy first exports.
                     when (ecCollector cfg) $ do
-                        dockerOk
+                        dockerOk $
                             [ "run"
+                            , "--rm"
                             , "-d"
                             , "--name"
                             , coll
@@ -232,13 +245,15 @@ withE2EWith cfg action gdp = do
                             , toString collectorAlias
                             , "-e"
                             , "OTELCOL_CONFIG=" <> toString collectorConfig
-                            , collectorImage
-                            , -- The args after the image replace the image's default CMD, so the
-                              -- inline config arrives through the `env:` provider with no shell,
-                              -- file, or bind mount on the distroless image.
-                              "--config"
-                            , "env:OTELCOL_CONFIG"
                             ]
+                                <> labelArgs
+                                <> [ collectorImage
+                                   , -- The args after the image replace the image's default CMD, so the
+                                     -- inline config arrives through the `env:` provider with no shell,
+                                     -- file, or bind mount on the distroless image.
+                                     "--config"
+                                   , "env:OTELCOL_CONFIG"
+                                   ]
                         ready <- awaitContainerLog coll (T.isInfixOf "Everything is ready") 240
                         unless ready (fail "OTLP collector did not become ready within the timeout")
                     manager <- newManager defaultManagerSettings
@@ -255,6 +270,7 @@ withE2EWith cfg action gdp = do
                     -- at ministack through the production AWS_ENDPOINT_URL_SQS override.
                     dockerOk $
                         [ "run"
+                        , "--rm"
                         , "-d"
                         , "--name"
                         , prox
@@ -268,6 +284,7 @@ withE2EWith cfg action gdp = do
                         , certsDir <> ":/certs:ro"
                         ]
                             <> concatMap (\(k, v) -> ["-e", toString (k <> "=" <> v)]) (proxyEnv proxyPort queueUrl <> ecExtraEnv cfg)
+                            <> labelArgs
                             <> [image]
                     let verdPort = gdpVerdPort gdp
                         base = "http://127.0.0.1:" <> show proxyPort
