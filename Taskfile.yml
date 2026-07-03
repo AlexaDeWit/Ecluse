@@ -62,7 +62,16 @@ tasks:
 
   test-integration:
     desc: Run the integration suite (requires a Docker daemon)
+    env:
+      # Pin this worktree's reaping scope so the harness stamps every container with
+      # it (see Ecluse.Test.Containers) and the reaps below target only our own.
+      ECLUSE_TEST_SCOPE:
+        sh: bash scripts/test-containers.sh scope
     cmds:
+      # Sweep this worktree's strays from a prior killed run first, then reap again on
+      # exit. Both are scoped, so a sibling worktree's live containers are never touched.
+      - bash scripts/test-containers.sh reap
+      - defer: bash scripts/test-containers.sh reap
       - cabal test ecluse-integration --test-show-details=direct
 
   test-residency:
@@ -77,7 +86,16 @@ tasks:
 
   test-e2e:
     desc: End-to-end suite against a locally built OCI image (requires E2E image to run tests, E2E daemon must be active, E2E deps must be built)
+    env:
+      # Pin this worktree's reaping scope so the harness stamps every container with
+      # it (see Ecluse.Test.Containers) and the reaps below target only our own.
+      ECLUSE_TEST_SCOPE:
+        sh: bash scripts/test-containers.sh scope
     cmds:
+      # Sweep this worktree's strays from a prior killed run first, then reap again on
+      # exit. Both are scoped, so a sibling worktree's live containers are never touched.
+      - bash scripts/test-containers.sh reap
+      - defer: bash scripts/test-containers.sh reap
       - |
         echo "==> building the OCI image (.#dockerImage)"
         img_archive="$(nix build .#dockerImage --no-link --print-out-paths)"
@@ -92,6 +110,16 @@ tasks:
         
         echo "==> running ecluse-e2e"
         ECLUSE_E2E_IMAGE="$tag" cabal test ecluse-e2e --test-show-details=direct
+
+  test-clean:
+    desc: Reap THIS worktree's leftover test containers/networks (scoped; safe while other agents or worktrees run)
+    cmds:
+      - bash scripts/test-containers.sh reap
+
+  test-clean-all:
+    desc: Reap ALL Écluse test containers/networks/images across every worktree (only when no other suite is running)
+    cmds:
+      - bash scripts/test-containers.sh reap --all
 
   test-all:
     desc: Run every test suite

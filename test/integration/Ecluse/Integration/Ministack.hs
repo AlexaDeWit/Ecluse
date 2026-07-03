@@ -35,7 +35,7 @@ import Control.Monad.Trans.Resource (runResourceT)
 import Lens.Micro ((^.))
 import TestContainers (Container, containerAddress)
 import TestContainers qualified as TC
-import TestContainers.Docker (fromDockerfile)
+import TestContainers.Docker (fromDockerfile, withLabels)
 import TestContainers.Hspec (withContainers)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (try)
@@ -44,6 +44,7 @@ import System.Environment (setEnv)
 
 import Ecluse.Core.Queue (MirrorQueue (receive), QueueMessage, Seconds (Seconds))
 import Ecluse.Core.Queue.Sqs (SqsConfig (..), SqsEndpoint (..), defaultSqsConfig, newSqsQueue)
+import Ecluse.Test.Containers (testContainerLabels)
 
 -- | The SQS gateway port @ministack@ serves on.
 ministackPort :: TC.Port
@@ -64,22 +65,30 @@ withMinistack :: (Container -> IO ()) -> IO ()
 withMinistack body = do
     setEnv "AWS_ACCESS_KEY_ID" "test"
     setEnv "AWS_SECRET_ACCESS_KEY" "test"
-    withContainers ministack body
+    labels <- testContainerLabels "integration"
+    withContainers (ministack labels) body
 
-ministack :: TC.TestContainer Container
-ministack =
+-- The reaping labels ('testContainerLabels') are threaded in rather than baked into
+-- the image so the container carries this worktree's scope; 'withContainers' already
+-- tears the container down on a normal exit, but the label lets `task test-clean` reap
+-- it after a hard kill. See "Ecluse.Test.Containers".
+ministack :: [(Text, Text)] -> TC.TestContainer Container
+ministack labels =
     TC.run $
         TC.containerRequest (fromDockerfile ministackDockerfile)
             & TC.setExpose [ministackPort]
             & TC.setWaitingFor (TC.waitUntilTimeout 120 (TC.waitUntilMappedPortReachable ministackPort))
             & TC.setRm True
+            & withLabels labels
 
 -- ministack (pinned by digest; tag 1.3-full) with an ASCII description label
--- (see 'withMinistack' for why).
+-- (see 'withMinistack' for why) and the coarse test marker so a stale build image
+-- is prunable by `task test-clean-all`.
 ministackDockerfile :: Text
 ministackDockerfile =
     "FROM ministackorg/ministack@sha256:5164592def36af01b8ac76364028e27c5ecd8f1494c8a53d5fcd811cc7dfb594\n\
-    \LABEL description=\"Local AWS Service Emulator\"\n"
+    \LABEL description=\"Local AWS Service Emulator\"\n\
+    \LABEL com.ecluse.test=integration\n"
 
 {- | The SQS endpoint override pointing @amazonka@ at the running @ministack@
 container with throwaway credentials. ministack ignores credentials, so any

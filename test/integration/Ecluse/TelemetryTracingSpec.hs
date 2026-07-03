@@ -29,7 +29,7 @@ import OpenTelemetry.Trace (
  )
 import TestContainers (Container, containerAddress)
 import TestContainers qualified as TC
-import TestContainers.Docker (fromDockerfile)
+import TestContainers.Docker (fromDockerfile, withLabels)
 import TestContainers.Hspec (withContainers)
 import UnliftIO.Concurrent (threadDelay)
 
@@ -53,6 +53,7 @@ import Ecluse.Telemetry (
  )
 import Ecluse.Telemetry.Correlation (ddContextNow, ddIdentity)
 import Ecluse.Telemetry.Resolve (resolveTelemetry)
+import Ecluse.Test.Containers (testContainerLabels)
 
 {- | The integration tier for tracing: drive a request through an in-process Écluse
 into a real OTLP __Collector__ container (no Datadog SaaS) and assert the spans are
@@ -227,6 +228,7 @@ collectorDockerfile =
     "FROM "
         <> collectorImage
         <> "\nCMD [\"--config\", \"env:OTELCOL_CONFIG\"]\n"
+        <> "LABEL com.ecluse.test=integration\n"
 
 {- The whole collector configuration as a single-line (flow-style) YAML document,
 passed through the @env:@ config provider so no shell, file, or bind mount is needed
@@ -245,7 +247,8 @@ until its OTLP port accepts connections before the body runs.
 withCollector :: (Collector -> IO ()) -> IO ()
 withCollector action = do
     logsRef <- newIORef []
-    withContainers (collectorContainer logsRef) $ \container -> do
+    labels <- testContainerLabels "integration"
+    withContainers (collectorContainer labels logsRef) $ \container -> do
         let (host, mappedPort) = containerAddress container collectorPort
         action
             Collector
@@ -253,8 +256,8 @@ withCollector action = do
                 , collectorLogs = logsRef
                 }
 
-collectorContainer :: IORef [ByteString] -> TC.TestContainer Container
-collectorContainer logsRef =
+collectorContainer :: [(Text, Text)] -> IORef [ByteString] -> TC.TestContainer Container
+collectorContainer labels logsRef =
     TC.run $
         TC.containerRequest (fromDockerfile collectorDockerfile)
             & TC.setEnv [("OTELCOL_CONFIG", collectorConfig)]
@@ -262,6 +265,7 @@ collectorContainer logsRef =
             & TC.withFollowLogs (accumulateLogs logsRef)
             & TC.setWaitingFor (TC.waitUntilTimeout 120 (TC.waitUntilMappedPortReachable collectorPort))
             & TC.setRm True
+            & withLabels labels
 
 -- Accumulate each emitted collector log line into the shared buffer (newest first).
 accumulateLogs :: IORef [ByteString] -> TC.LogConsumer

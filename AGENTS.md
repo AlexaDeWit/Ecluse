@@ -89,6 +89,14 @@ docs/  architecture and design documents
   `task gate`, but not a quick check (a full `-Werror` build of every component that runs 10+ minutes
   on a cold checkout or under CPU contention). CI remains the authoritative gate. **Always run `task format` before `task check` to auto-fix code styling.** Never ignore a failing `task check` exit code; fix the issue before opening a PR. **Never assume a fix worked without re-running the verification command locally and observing a 0 exit code.** Run `task sast` before pushing. Web-based agents without Nix access must
   not skip local verification; instead, use `scripts/setup-jules.sh` to bootstrap the environment.
+- The integration and e2e suites (`task test-integration`, `task test-e2e`) start Docker
+  containers. Those targets reap **this worktree's own** containers before and after each run, but
+  a hard kill (SIGKILL, an OOM, a timed-out command) can still leave containers behind, and they
+  pile up fast across repeated runs. If you interrupt or kill a suite, run **`task test-clean`**
+  (scoped to your worktree by the `com.ecluse.test.scope` label, so it is safe to run while other
+  agents or worktrees have suites running) and confirm none are left with
+  `docker ps --filter label=com.ecluse.test`. `task test-clean-all` removes *every* worktree's
+  test containers at once, so only reach for it when you know no other suite is running.
 - Automation scripts are Bash in `scripts/`, with `#!/usr/bin/env bash` and
   `set -euo pipefail`; keep workflow `run:` blocks trivial and scripts shellcheck-clean. A new
   Python or Node build-time dependency needs an explicit justification.
