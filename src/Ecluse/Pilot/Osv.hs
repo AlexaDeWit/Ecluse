@@ -10,9 +10,17 @@ module Ecluse.Pilot.Osv (
     OsvDatabaseSpecific (..),
     ExtractedOsv (..),
     extractFromAdvisory,
+    osvExportUrl,
 ) where
 
 import Data.Aeson (FromJSON (..), withObject, (.:), (.:?))
+
+{- | The canonical osv.dev export for an ecosystem: a zip archive of every
+advisory currently published for it.
+-}
+osvExportUrl :: Text -> String
+osvExportUrl ecosystem =
+    "https://osv-vulnerabilities.storage.googleapis.com/" <> toString ecosystem <> "/all.zip"
 
 -- | Exact model of what osv.dev makes available
 data OsvAdvisory = OsvAdvisory

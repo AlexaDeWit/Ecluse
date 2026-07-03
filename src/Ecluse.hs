@@ -106,4 +106,5 @@ run = do
         case cmd of
             RunProxy -> runProxy bootEnv
             RunPilot -> runPilot bootEnv
+            RunPilotCompile opts -> void (runPilotCompile (beLogEnv bootEnv) (beTelemetry bootEnv) (beConfig bootEnv) opts)
             RunDredger -> runDredger bootEnv

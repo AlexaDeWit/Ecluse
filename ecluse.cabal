@@ -566,6 +566,7 @@ test-suite ecluse-unit
     , sqlite-simple     ^>=0.4
     , directory         ^>=1.3
     , filepath          ^>=1.4 || ^>=1.5
+    , temporary         ^>=1.3
 
 -- Integration tests: exercise the real request path against in-process servers
 -- (and, where they land, AWS-backed code against a ministack container via
