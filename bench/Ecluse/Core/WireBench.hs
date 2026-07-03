@@ -15,15 +15,17 @@ module Ecluse.Core.WireBench (
 ) where
 
 import Data.Aeson (eitherDecodeStrict)
+import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Ecluse.Bench.Corpus (CorpusEntry (cePackage), LoadedEntry, entryName)
-import Ecluse.Core.Package (PackageInfo, PackageName, infoVersions, pkgDependencies)
+import Ecluse.Core.Package (PackageInfo, PackageName, artHashes, infoVersions, pkgArtifacts)
 import Ecluse.Core.Registry (ParseError, RegistryResponse (RegistryResponse))
 import Ecluse.Core.Registry.Npm.Project (parsePackageInfo)
 import Ecluse.Core.Registry.Npm.Wire (
+    Dist (distIntegrity),
     Packument (pkmtVersions),
-    VersionManifest (vmDependencies, vmVersion),
+    VersionManifest (vmDist, vmVersion),
  )
 import Test.Tasty.Bench (Benchmark, bench, bgroup, whnf)
 
@@ -50,13 +52,17 @@ decodeDepth raw = case eitherDecodeStrict raw :: Either String Packument of
 projectDepth :: (ByteString, PackageName) -> Int
 projectDepth (raw, name) = infoDepthE (parsePackageInfo name (RegistryResponse raw))
 
--- | Force every manifest by folding a deep field across all versions.
+{- | Force every manifest by folding a deep field (the integrity digest --
+dependencies are no longer modelled) across all versions.
+-}
 manifestDepth :: Map.Map Text VersionManifest -> Int
-manifestDepth = Map.foldr (\m acc -> T.length (vmVersion m) + Map.size (vmDependencies m) + acc) 0
+manifestDepth = Map.foldr (\m acc -> T.length (vmVersion m) + maybe 0 T.length (distIntegrity (vmDist m)) + acc) 0
 
 infoDepthE :: Either ParseError PackageInfo -> Int
 infoDepthE = either (const (-1)) infoDepth
 
--- | Force every projected version by folding across the version map.
+{- | Force every projected version by folding a deep field (the artifact
+digests) across the version map.
+-}
 infoDepth :: PackageInfo -> Int
-infoDepth info = Map.foldr (\pd acc -> length (pkgDependencies pd) + acc) 0 (infoVersions info)
+infoDepth info = Map.foldr (\pd acc -> length (artHashes (NE.head (pkgArtifacts pd))) + acc) 0 (infoVersions info)

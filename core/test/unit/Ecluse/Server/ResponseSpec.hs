@@ -80,8 +80,6 @@ pkg scope ageDays code =
         , pkgArtifacts = sampleArtifact :| []
         , pkgLicenses = ["MIT"]
         , pkgPublisher = Nothing
-        , pkgMaintainers = []
-        , pkgDependencies = []
         }
 
 spec :: Spec

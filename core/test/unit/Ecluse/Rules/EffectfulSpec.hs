@@ -63,8 +63,6 @@ pkg mScope ageDays =
         , pkgArtifacts = sampleArtifact :| []
         , pkgLicenses = ["MIT"]
         , pkgPublisher = Nothing
-        , pkgMaintainers = []
-        , pkgDependencies = []
         }
 
 -- | A config with no retries, so a test never waits on a backoff.

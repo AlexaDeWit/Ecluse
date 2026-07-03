@@ -101,6 +101,4 @@ sampleDetails name version =
         , pkgArtifacts = sampleArtifact :| []
         , pkgLicenses = []
         , pkgPublisher = Nothing
-        , pkgMaintainers = []
-        , pkgDependencies = []
         }

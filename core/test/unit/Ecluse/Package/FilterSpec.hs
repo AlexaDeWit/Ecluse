@@ -80,8 +80,6 @@ detailsAt rawVer ageDays hasInstall =
         , pkgArtifacts = inertArtifact :| []
         , pkgLicenses = ["MIT"]
         , pkgPublisher = Nothing
-        , pkgMaintainers = []
-        , pkgDependencies = []
         }
 
 inertArtifact :: Artifact

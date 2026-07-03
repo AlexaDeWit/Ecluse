@@ -209,17 +209,6 @@ versionManifestSpec = describe "VersionManifest" $ do
                 "{\"name\":\"x\",\"version\":\"1.0.0\",\"dist\":{\"tarball\":\"https://e.test/x.tgz\"},\"deprecated\":\"gone\"}"
         vmDeprecated vm `shouldBe` Just "gone"
 
-    it "captures runtime dependencies as raw ranges" $ do
-        vm <- decodeFixture @VersionManifest "request.manifest.json"
-        Map.lookup "form-data" (vmDependencies vm) `shouldBe` Just "~2.3.2"
-
-    it "captures dev, peer, and optional dependency maps separately" $ do
-        -- Each dependency class lands in its own map, as the raw ranges sent.
-        vm <- decodeFixture @VersionManifest "webpack-cli.manifest.json"
-        Map.lookup "typescript" (vmDevDependencies vm) `shouldBe` Just "^5.0.2"
-        Map.lookup "webpack" (vmPeerDependencies vm) `shouldBe` Just "5.x.x"
-        Map.lookup "fsevents" (vmOptionalDependencies vm) `shouldBe` Just "~2.3.2"
-
     it "decodes the same manifest bytes to equal whole records" $ do
         -- Compare two decodes of the same bytes as whole records: a determinism
         -- check that exercises the derived Eq over every field, not one selector.
@@ -400,13 +389,6 @@ lenientScalarSpec = describe "lenient string-or-object scalars" $ do
             personName p `shouldBe` "Sindre"
             personEmail p `shouldBe` Just "s@example.com"
             personUrl p `shouldBe` Just "https://sindresorhus.com"
-        it "accepts a maintainers list mixing object and string forms (request)" $ do
-            vm <- decodeFixture @VersionManifest "request.manifest.json"
-            vmMaintainers vm
-                `shouldBe` [ Person "mikeal" (Just "mikeal.rogers@gmail.com") Nothing
-                           , Person "simov <simeonvelichkov@gmail.com>" Nothing Nothing
-                           ]
-
     describe "Repository" $ do
         it "accepts a bare shorthand string" $
             decodesTo @Repository

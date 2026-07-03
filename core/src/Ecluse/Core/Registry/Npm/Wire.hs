@@ -329,21 +329,15 @@ data VersionManifest = VersionManifest
     source for deriving install-script presence from the full form.
     -}
     , vmLicense :: Maybe License
-    -- ^ The declared license, if any (string or legacy object; see 'License').
-    , vmMaintainers :: [Person]
-    {- ^ The package's maintainers as carried on this manifest; empty when
-    absent.
+    {- ^ The declared license, if any (string or legacy object; see 'License').
+
+    The manifest's dependency maps and maintainer list are __deliberately not
+    parsed__: no rule or serve path consults them, the raw document relays them
+    to the client untouched, and a heavy packument carries thousands of
+    per-version entries of pure parse cost (architect ruling, 2026-07-02 --
+    including that a malformed entry there may degrade rather than deny). Restore
+    them from history if a dependency-reading rule ever lands.
     -}
-    , vmDependencies :: Map Text Text
-    {- ^ Runtime dependencies (name to semver __range__), empty when absent. The
-    ranges are never resolved server-side.
-    -}
-    , vmDevDependencies :: Map Text Text
-    -- ^ Development dependencies, empty when absent.
-    , vmPeerDependencies :: Map Text Text
-    -- ^ Peer dependencies, empty when absent.
-    , vmOptionalDependencies :: Map Text Text
-    -- ^ Optional dependencies, empty when absent.
     }
     deriving stock (Eq, Show)
 
@@ -357,11 +351,6 @@ instance FromJSON VersionManifest where
             <*> o .:? "hasInstallScript"
             <*> o .:? "scripts" .!= mempty
             <*> o .:? "license"
-            <*> o .:? "maintainers" .!= []
-            <*> o .:? "dependencies" .!= mempty
-            <*> o .:? "devDependencies" .!= mempty
-            <*> o .:? "peerDependencies" .!= mempty
-            <*> o .:? "optionalDependencies" .!= mempty
 
 {- Decode the @deprecated@ field leniently (see the module header's "string-or-boolean
 @deprecated@ flag"): a string is the deprecation message, the boolean @true@ a

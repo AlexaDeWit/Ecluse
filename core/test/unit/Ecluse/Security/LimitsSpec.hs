@@ -62,8 +62,6 @@ details name version =
         , pkgArtifacts = sampleArtifact :| []
         , pkgLicenses = ["MIT"]
         , pkgPublisher = Nothing
-        , pkgMaintainers = []
-        , pkgDependencies = []
         }
 
 {- | Drive 'boundedRead' purely: a 'State'-monad chunk producer that pops one

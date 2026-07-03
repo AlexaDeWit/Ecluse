@@ -415,9 +415,8 @@ inside an inner loop defeats the purpose, so reach for `Eq`/`Ord` on the value
 instead. If a value is *ever* sliced, parsed, pattern-matched, or rewritten after
 construction (a URL rewritten at serve, an SRI digest parsed, a version range),
 keep it `Text`, the conversion churn is not worth it and the value is not
-equality-only. `Scope`, `PackageName`'s `pkgCanonical`/`pkgDisplay`, and
-`Dependency`'s `depName` are `ShortText`; `Hash.hashValue`, `Artifact.artUrl`, and
-`Dependency.depConstraint` stay `Text`.
+equality-only. `Scope` and `PackageName`'s `pkgCanonical`/`pkgDisplay` are `ShortText`;
+`Hash.hashValue` and `Artifact.artUrl` stay `Text`.
 
 ---
 
