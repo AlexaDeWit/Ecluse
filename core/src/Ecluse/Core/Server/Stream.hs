@@ -126,17 +126,13 @@ streamUpstreamWhen manager request accept relay respond =
             -- A 304 carries no body: relay it bodiless rather than pumping (the
             -- upstream body reader is never read), the pass-through conditional-GET
             -- not-modified relay.
-            let (status, headers) = relay upstreamStatus (responseHeaders upstream)
-             in Just <$> respond (responseLBS status headers "")
+            Just <$> respond (responseLBS status headers "")
         | otherwise =
-            let (status, headers) = relay upstreamStatus (responseHeaders upstream)
-             in Just
-                    <$> respond
-                        ( responseStream status headers $ \write flush ->
-                            pumpBody (brRead (HTTP.responseBody upstream)) write flush
-                        )
+            Just <$> respond (responseStream status headers pump)
       where
         upstreamStatus = responseStatus upstream
+        (status, headers) = relay upstreamStatus (responseHeaders upstream)
+        pump = pumpBody (brRead (HTTP.responseBody upstream))
 
 {- | Probe an upstream __without pumping a body__ -- the bodiless relay a @HEAD@
 takes, so a client cannot force the proxy to open the upstream artifact connection
