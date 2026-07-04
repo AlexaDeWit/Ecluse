@@ -18,7 +18,7 @@ import System.FilePath ((</>))
 import System.IO.Error (catchIOError)
 import UnliftIO.Exception (bracket)
 
-import Ecluse.Osv.Schema (MetaKey (..), osvDbFileName, osvSchemaEpoch, renderMetaKey)
+import Ecluse.Core.Osv.Schema (MetaKey (..), osvDbFileName, osvSchemaEpoch, renderMetaKey)
 import Ecluse.Pilot.Osv (ExtractedOsv (..))
 import Ecluse.Pilot.Osv.Retry (defaultOsvRetryPolicy, withOsvRetry)
 import Ecluse.Pilot.Osv.Stream (streamOsvUrl)
@@ -26,7 +26,7 @@ import Ecluse.Telemetry (Telemetry)
 
 {- | Compile an ecosystem's OSV advisory export into the SQLite artifact and
 return its path. The artifact's name, epoch stamp, and @meta@ table follow the
-contract in "Ecluse.Osv.Schema".
+contract in "Ecluse.Core.Osv.Schema".
 -}
 compileOsvToSqlite :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => Telemetry -> FilePath -> Text -> String -> m FilePath
 compileOsvToSqlite telemetry outDir ecosystem urlStr = do

@@ -18,7 +18,7 @@ import System.FilePath (takeFileName)
 import System.IO.Error (catchIOError)
 import Test.Hspec (Spec, describe, it, shouldBe, shouldSatisfy)
 
-import Ecluse.Osv.Schema (osvSchemaEpoch)
+import Ecluse.Core.Osv.Schema (osvSchemaEpoch)
 import Ecluse.Pilot.Osv.Compile (compileOsvToSqlite)
 import Ecluse.Telemetry (telemetryDisabled)
 import Ecluse.Test.Stub (stubBaseUrl, withStub)
