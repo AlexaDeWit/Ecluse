@@ -3,20 +3,46 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Écluse: supply-chain resilience proxy</title>
-    <meta name="description" content="Écluse: a supply-chain resilience proxy for package registries." />
+    <title>Écluse: supply-chain policy proxy for package registries</title>
+    <meta name="description" content="Écluse is an open-source supply-chain policy proxy that controls which packages can reach your builds." />
+    <!-- Canonical links identify the preferred URL; they load no resource, so SRI is inapplicable. -->
+    <!-- nosemgrep: html.security.audit.missing-integrity.missing-integrity -->
+    <link rel="canonical" href="https://ecluse-proxy.com/" />
     <link rel="icon" href="favicon-32.png" sizes="32x32" />
     <meta property="og:type" content="website" />
-    <meta property="og:url" content="https://alexadewit.github.io/Ecluse/" />
+    <meta property="og:url" content="https://ecluse-proxy.com/" />
     <meta property="og:site_name" content="Écluse" />
-    <meta property="og:title" content="Écluse: supply-chain resilience proxy" />
-    <meta property="og:description" content="A supply-chain resilience proxy for package registries, the controlled passage every dependency clears before it reaches your build." />
-    <meta property="og:image" content="https://alexadewit.github.io/Ecluse/social-preview.png" />
+    <meta property="og:title" content="Écluse: supply-chain policy proxy for package registries" />
+    <meta property="og:description" content="An open-source policy proxy that controls which packages can reach your builds." />
+    <meta property="og:image" content="https://ecluse-proxy.com/social-preview.png" />
     <meta property="og:image:width" content="1280" />
     <meta property="og:image:height" content="640" />
     <meta property="og:image:alt" content="Écluse: a canal-lock section with a barge of shipping containers waiting in the chamber." />
     <meta name="twitter:card" content="summary_large_image" />
     <link rel="stylesheet" href="style.css" />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "WebSite",
+            "@id": "https://ecluse-proxy.com/#website",
+            "url": "https://ecluse-proxy.com/",
+            "name": "Écluse",
+            "description": "An open-source supply-chain policy proxy for package registries."
+          },
+          {
+            "@type": "SoftwareSourceCode",
+            "@id": "https://ecluse-proxy.com/#software",
+            "name": "Écluse",
+            "description": "An open-source supply-chain policy proxy for package registries.",
+            "codeRepository": "https://github.com/AlexaDeWit/Ecluse",
+            "license": "https://github.com/AlexaDeWit/Ecluse/blob/main/LICENSE",
+            "programmingLanguage": "Haskell"
+          }
+        ]
+      }
+    </script>
   </head>
   <body>
     <header class="site-header">
@@ -34,38 +60,44 @@
         <img class="hero-art" src="lock-illustration.svg" alt="A draughtsman's section of a canal lock: a barge of stacked shipping containers waits in the low chamber below the closed gate." />
         <h1>Écluse</h1>
         <p class="lead">
-          A supply-chain resilience proxy for package registries, the controlled
-          passage every dependency clears before it reaches your build.
+          An open-source supply-chain policy proxy for package registries: the
+          controlled passage every dependency clears before it reaches your build.
         </p>
+        <div class="hero-actions">
+          <a class="primary-action" href="motivation.html">Why Écluse?</a>
+          <a href="https://github.com/AlexaDeWit/Ecluse">View on GitHub</a>
+        </div>
       </section>
       <p class="disclosure-note">
         I leaned on an LLM heavily to build this, during bootstrapping, behind a documented
         process. <a href="ai-disclosure.html">Here's how, and how to verify it</a>.
       </p>
-      <div class="cards">
+      <h2 class="path-heading">What brought you here?</h2>
+      <p class="path-intro">Start with the path that matches what you need. Each one leads from the short answer to the relevant detail.</p>
+      <div class="cards paths">
         <a class="card" href="motivation.html">
-          <h3>Why Écluse?</h3>
-          <p>The problem, the resilience-not-detection bet, and the design that follows.</p>
+          <h3>Decide if it fits</h3>
+          <p>Start with the problem and the policy-proxy bet, then compare the alternatives honestly.</p>
         </a>
         <a class="card" href="usage.html">
-          <h3>Operating Écluse</h3>
-          <p>Deploy it, connect your clients, and lock down network egress.</p>
+          <h3>Deploy and operate</h3>
+          <p>Configure Écluse, connect npm, and lock down the deployment around it.</p>
         </a>
-        <a class="card" href="alternatives.html">
-          <h3>Alternatives</h3>
-          <p>Other tools in this space, and when they might suit you better.</p>
+        <a class="card" href="https://github.com/AlexaDeWit/Ecluse/blob/main/docs/architecture.md">
+          <h3>Understand the design</h3>
+          <p>Use the architecture map to follow one concern down to its rationale.</p>
         </a>
-        <a class="card" href="api/index.html">
-          <h3>API reference</h3>
-          <p>The library Haddock, auto-published from <code>main</code>.</p>
+        <a class="card" href="https://github.com/AlexaDeWit/Ecluse/blob/main/docs/getting-started.md">
+          <h3>Contribute</h3>
+          <p>Enter the pinned development environment and take a change through the test gates.</p>
         </a>
-        <a class="card" href="threat-model.html">
-          <h3>Threat Modelling</h3>
-          <p>The STRIDE register, rendered from the model on every build.</p>
+        <a class="card" href="https://github.com/AlexaDeWit/Ecluse/blob/main/SECURITY.md">
+          <h3>Assess security</h3>
+          <p>Review the security contract, invariants, and generated threat model.</p>
         </a>
-        <a class="card" href="https://github.com/AlexaDeWit/Ecluse">
-          <h3>Source repository</h3>
-          <p>The code, the architecture docs, and the roadmap on GitHub.</p>
+        <a class="card" href="ai-disclosure.html">
+          <h3>Verify the provenance</h3>
+          <p>See how AI was used, then verify the released image instead of trusting it.</p>
         </a>
       </div>
     </main>

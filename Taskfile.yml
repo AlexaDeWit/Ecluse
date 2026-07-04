@@ -433,20 +433,21 @@ tasks:
       - cp docs/branding/logo.svg docs/branding/favicon-32.png docs/branding/lock-illustration.svg docs/social-preview.png _site/
       - sh -c 'mkdir -p _site/vendor && cp "$MERMAID_JS" _site/vendor/mermaid.min.js && cp "$REDOC_JS" _site/vendor/redoc.standalone.js'
       - task: site:pandoc
+      - task: site:check
 
   site:pandoc:
     internal: true
     deps:
       - task: site:pandoc-page
-        vars: { SRC: "MOTIVATION.md", OUT: "motivation.html", TITLE: "Why Écluse?" }
+        vars: { SRC: "MOTIVATION.md", OUT: "motivation.html", TITLE: "Why Écluse?", DESCRIPTION: "Why package registries need a policy enforcement point, and the design bet behind Écluse." }
       - task: site:pandoc-page
-        vars: { SRC: "ALTERNATIVES.md", OUT: "alternatives.html", TITLE: "Alternatives" }
+        vars: { SRC: "ALTERNATIVES.md", OUT: "alternatives.html", TITLE: "Alternatives", DESCRIPTION: "Compare Écluse with registry hosts, repository managers, and package-security tools." }
       - task: site:pandoc-page
-        vars: { SRC: "USAGE.md", OUT: "usage.html", TITLE: "Operator Manual", EXTRA_FLAGS: "--lua-filter web/embed-config.lua" }
+        vars: { SRC: "USAGE.md", OUT: "usage.html", TITLE: "Operator Manual", DESCRIPTION: "Deploy, configure, and operate Écluse safely as a package-registry policy proxy.", EXTRA_FLAGS: "--lua-filter web/embed-config.lua" }
       - task: site:pandoc-page
-        vars: { SRC: "AI-DISCLOSURE.md", OUT: "ai-disclosure.html", TITLE: "Built with AI" }
+        vars: { SRC: "AI-DISCLOSURE.md", OUT: "ai-disclosure.html", TITLE: "Built with AI", DESCRIPTION: "How AI contributed to Écluse, what humans verified, and how to assess the result." }
       - task: site:pandoc-page
-        vars: { SRC: "web/threat-model.md", OUT: "threat-model.html", TITLE: "Threat Model", EXTRA_FLAGS: "--lua-filter web/threat-register.lua" }
+        vars: { SRC: "web/threat-model.md", OUT: "threat-model.html", TITLE: "Threat Model", DESCRIPTION: "The generated STRIDE threat register and deployment assumptions for Écluse.", EXTRA_FLAGS: "--lua-filter web/threat-register.lua" }
 
   site:pandoc-page:
     internal: true
@@ -457,7 +458,12 @@ tasks:
     generates:
       - '_site/{{.OUT}}'
     cmds:
-      - pandoc '{{.SRC}}' -o '_site/{{.OUT}}' {{.PANDOC_FLAGS}} {{if .EXTRA_FLAGS}}{{.EXTRA_FLAGS}}{{end}} -M title="{{.TITLE}}"
+      - pandoc '{{.SRC}}' -o '_site/{{.OUT}}' {{.PANDOC_FLAGS}} {{if .EXTRA_FLAGS}}{{.EXTRA_FLAGS}}{{end}} -M title="{{.TITLE}}" -M description="{{.DESCRIPTION}}" -M canonical-url="https://ecluse-proxy.com/{{.OUT}}"
+
+  site:check:
+    internal: true
+    cmds:
+      - bash scripts/check-site-metadata.sh _site
 
   nix-build:
     desc: Build the release artifact via Nix (hermetic)

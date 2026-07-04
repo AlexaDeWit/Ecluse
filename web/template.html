@@ -4,18 +4,32 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>$title$ | Écluse</title>
-    <meta name="description" content="$title$. Écluse, a supply-chain resilience proxy for package registries." />
+    <meta name="description" content="$description$" />
+    <!-- Canonical links identify the preferred URL; they load no resource, so SRI is inapplicable. -->
+    <!-- nosemgrep: html.security.audit.missing-integrity.missing-integrity -->
+    <link rel="canonical" href="$canonical-url$" />
     <link rel="icon" href="favicon-32.png" sizes="32x32" />
     <meta property="og:type" content="article" />
     <meta property="og:site_name" content="Écluse" />
+    <meta property="og:url" content="$canonical-url$" />
     <meta property="og:title" content="$title$ | Écluse" />
-    <meta property="og:description" content="$title$. Écluse, a supply-chain resilience proxy for package registries." />
-    <meta property="og:image" content="https://alexadewit.github.io/Ecluse/social-preview.png" />
+    <meta property="og:description" content="$description$" />
+    <meta property="og:image" content="https://ecluse-proxy.com/social-preview.png" />
     <meta property="og:image:width" content="1280" />
     <meta property="og:image:height" content="640" />
     <meta property="og:image:alt" content="Écluse: a canal-lock section with a barge of shipping containers waiting in the chamber." />
     <meta name="twitter:card" content="summary_large_image" />
     <link rel="stylesheet" href="style.css" />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebPage",
+        "url": "$canonical-url$",
+        "name": "$title$ | Écluse",
+        "description": "$description$",
+        "isPartOf": { "@id": "https://ecluse-proxy.com/#website" }
+      }
+    </script>
 $if(highlighting-css)$
     <style>$highlighting-css$</style>
 $endif$

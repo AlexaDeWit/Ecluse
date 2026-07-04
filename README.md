@@ -22,7 +22,7 @@ and how to verify it.
 > expect breaking changes before `v0.1.0`. [`USAGE.md`](USAGE.md) is the deployment
 > contract.
 
-[Haddock API docs](https://alexadewit.github.io/Ecluse/api/) auto-publish from `main`.
+[Haddock API docs](https://ecluse-proxy.com/api/) auto-publish from `main`.
 
 ## Overview
 
@@ -37,7 +37,7 @@ and RubyGems on the roadmap.
 [`docs/architecture.md`](docs/architecture.md) has the full design: the four-role registry
 model, the rules engine, the mirror queue, and the configuration reference. The threat model
 (OWASP Threat Dragon, STRIDE) is generated into a readable
-[register](https://alexadewit.github.io/Ecluse/threat-model.html) from
+[register](https://ecluse-proxy.com/threat-model.html) from
 [`threat-modelling/ecluse.json`](threat-modelling/ecluse.json).
 
 ## Using Écluse

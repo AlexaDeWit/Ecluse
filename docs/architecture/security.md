@@ -9,7 +9,7 @@ outbound-request and input-validation guard primitives, enforced at the points b
 
 > The full STRIDE threat register lives in the OWASP Threat Dragon model
 > ([`threat-modelling/ecluse.json`](../../threat-modelling/ecluse.json)), published
-> readably at [Threat model](https://alexadewit.github.io/Ecluse/threat-model.html). This
+> readably at [Threat model](https://ecluse-proxy.com/threat-model.html). This
 > document is the *why* behind the guards; the deployment assumptions it rests on are in
 > [Trust assumptions & credential posture](#trust-assumptions--credential-posture).
 
@@ -18,7 +18,7 @@ outbound-request and input-validation guard primitives, enforced at the points b
 These guards implement the register's mitigations for SSRF / unintended fetch targets and
 client-controlled artifact source (register threat #5) and resource-amplification DoS via
 pathological upstream payloads (register threat #2). The threat statements and
-dispositions live in the [register](https://alexadewit.github.io/Ecluse/threat-model.html),
+dispositions live in the [register](https://ecluse-proxy.com/threat-model.html),
 not here.
 
 <!--
@@ -282,7 +282,7 @@ edge Écluse checks today; an external layer (API gateway, mTLS service mesh, `N
 is defence-in-depth but cannot substitute for it, since Écluse can only verify its own edge.
 Pure passthrough (no static token) carries no such floor: the publisher's forwarded token is
 the authority, and the read path is untouched. The threat is catalogued as register
-[threat #3](https://alexadewit.github.io/Ecluse/threat-model.html).
+[threat #3](https://ecluse-proxy.com/threat-model.html).
 
 ### The guard-name ≡ write-name ≡ body-name invariant
 
@@ -326,10 +326,10 @@ per-platform runbook is the operator's, in the operator manual:
 ## Trust assumptions & credential posture
 
 The guards above constrain Écluse's own requests; this section records the deployment
-assumptions the [threat model](https://alexadewit.github.io/Ecluse/threat-model.html) rests
+assumptions the [threat model](https://ecluse-proxy.com/threat-model.html) rests
 on, and the consequences of the canonical posture (per-caller passthrough credentials, the
 three-registry topology, CodeArtifact over VPC endpoints). The threats and dispositions are
-in the [register](https://alexadewit.github.io/Ecluse/threat-model.html); this is the
+in the [register](https://ecluse-proxy.com/threat-model.html); this is the
 assumptions framing.
 
 **Edge access is an operator concern** (register threat #3). `ECLUSE_AUTH_TOKEN` is off by
