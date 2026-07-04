@@ -73,6 +73,9 @@ initSchema conn = do
         \  PRIMARY KEY (package_name, cve_id, introduced_version, fixed_version)\
         \)"
     execute_ conn "CREATE INDEX idx_package_name ON package_vulnerability_ranges(package_name)"
+    -- The reader's remediation probe is an exact (name, fixed) equality; this
+    -- index makes it one B-tree traversal. Additive, so epoch-neutral.
+    execute_ conn "CREATE INDEX idx_package_fixed ON package_vulnerability_ranges(package_name, fixed_version)"
     execute_
         conn
         "CREATE TABLE meta (\
