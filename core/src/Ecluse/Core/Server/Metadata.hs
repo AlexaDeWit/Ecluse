@@ -113,27 +113,10 @@ newMetadataClient ::
     MetadataClient
 newMetadataClient metrics upstream caching logFailure logInvalid logFetch rawFetch rawFetchVersion =
     MetadataClient
-        { fetchFullManifest = resolveFull
+        { fetchFullManifest = foldManifestCarrier . resolveEntry
         , fetchVersionMetadata = resolveVersionHybrid
         }
   where
-    resolveFull :: PackageName -> IO (Either MetadataError Manifest)
-    resolveFull name = do
-        -- A leader's parse\/policy failure is raised as the carrier so the cache stores
-        -- nothing and re-raises to followers; here it is folded back to a 'Left'. A
-        -- transport fault is a different type, so it is not caught and propagates to the
-        -- serve path's bracket, exactly as before.
-        outcome <- try (resolveEntry name)
-        pure $ case outcome of
-            Right entry ->
-                Right
-                    Manifest
-                        { manifestInfo = entryInfo entry
-                        , manifestRaw = entryRaw entry
-                        , manifestDigest = entryDigest entry
-                        }
-            Left (ManifestFetchFailed err) -> Left err
-
     resolveEntry :: PackageName -> IO CacheEntry
     resolveEntry name = case caching of
         Uncached -> manifestLeader name
@@ -157,7 +140,7 @@ newMetadataClient metrics upstream caching logFailure logInvalid logFetch rawFet
     -- read-only, then a cold selective fetch -- or, uncached, the raw selective fetch.
     resolveVersionHybrid :: PackageName -> Version -> IO (Either MetadataError (Maybe PackageDetails))
     resolveVersionHybrid name version = case caching of
-        Uncached -> runVersion (versionLeader name version)
+        Uncached -> foldVersionCarrier (versionLeader name version)
         Cached cache source -> do
             -- (1) The single-version cache: a positive snapshot or a cached determined
             -- absence both short-circuit.
@@ -172,21 +155,7 @@ newMetadataClient metrics upstream caching logFailure logInvalid logFetch rawFet
                     case warm of
                         Just entry -> pure (Right (selectVersion version (entryInfo entry)))
                         -- (3) Cold: lead the selective fetch through the version cache.
-                        Nothing -> runVersion (resolveVersion metrics cache source name version (versionLeader name version))
-
-    selectVersion :: Version -> PackageInfo -> Maybe PackageDetails
-    selectVersion version info = Map.lookup (renderVersion version) (infoVersions info)
-
-    -- Fold a single-version leader run's carrier back to a 'Left', mirroring 'resolveFull':
-    -- a leader's parse\/policy failure is raised through the cache (which stores nothing and
-    -- re-raises to followers) and recovered here; a transport fault is a different type and
-    -- propagates to the serve path's bracket.
-    runVersion :: IO (Maybe PackageDetails) -> IO (Either MetadataError (Maybe PackageDetails))
-    runVersion action = do
-        outcome <- try action
-        pure $ case outcome of
-            Right details -> Right details
-            Left (VersionFetchFailed err) -> Left err
+                        Nothing -> foldVersionCarrier (resolveVersion metrics cache source name version (versionLeader name version))
 
     -- The single-version single-flight leader action: the real selective fetch, run only on
     -- a cold miss, metered and (on failure) logged once before the carrier is raised.
@@ -216,6 +185,10 @@ newNpmMetadataClient ::
 newNpmMetadataClient tracing metrics upstream caching logFailure logInvalid logFetch config =
     newMetadataClient metrics upstream caching logFailure logInvalid logFetch (fetchNpmManifest tracing config) (fetchNpmVersion tracing config)
 
+-- Select one version's details out of a parsed packument, by its rendered form.
+selectVersion :: Version -> PackageInfo -> Maybe PackageDetails
+selectVersion version info = Map.lookup (renderVersion version) (infoVersions info)
+
 {- The in-band failure carrier for a full-manifest leader fetch: a 'MetadataError' raised
 so the shared metadata cache caches nothing on failure and re-raises it to coalesced
 followers, then converted back to a 'Left' at the resolve boundary. Internal -- the
@@ -224,6 +197,23 @@ newtype ManifestFetchFailed = ManifestFetchFailed MetadataError
     deriving stock (Show)
 
 instance Exception ManifestFetchFailed
+
+{- Fold a full-manifest resolve run's carrier back to a 'Left': a leader's parse\/policy
+failure is raised as the carrier so the cache stores nothing and re-raises to followers,
+and is recovered here. A transport fault is a different type, so it is not caught and
+propagates to the serve path's bracket, exactly as before. -}
+foldManifestCarrier :: IO CacheEntry -> IO (Either MetadataError Manifest)
+foldManifestCarrier resolve = do
+    outcome <- try resolve
+    pure $ case outcome of
+        Right entry ->
+            Right
+                Manifest
+                    { manifestInfo = entryInfo entry
+                    , manifestRaw = entryRaw entry
+                    , manifestDigest = entryDigest entry
+                    }
+        Left (ManifestFetchFailed err) -> Left err
 
 {- The single-version analogue of 'ManifestFetchFailed': the carrier a single-version
 leader raises so the version cache stores nothing on failure and re-raises to coalesced
@@ -234,6 +224,17 @@ newtype VersionFetchFailed = VersionFetchFailed MetadataError
     deriving stock (Show)
 
 instance Exception VersionFetchFailed
+
+{- Fold a single-version resolve run's carrier back to a 'Left', mirroring
+'foldManifestCarrier': a leader's parse\/policy failure is raised through the cache (which
+stores nothing and re-raises to followers) and recovered here; a transport fault is a
+different type and propagates to the serve path's bracket. -}
+foldVersionCarrier :: IO (Maybe PackageDetails) -> IO (Either MetadataError (Maybe PackageDetails))
+foldVersionCarrier resolve = do
+    outcome <- try resolve
+    pure $ case outcome of
+        Right details -> Right details
+        Left (VersionFetchFailed err) -> Left err
 
 {- Record one upstream metadata fetch around the leader action: its latency on a
 successful resolve, or the bounded error cause otherwise, before re-raising so the

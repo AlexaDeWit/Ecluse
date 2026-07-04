@@ -119,6 +119,31 @@ unlimitedServeAdmission = UnlimitedServeAdmission
 -- waiting room, or a refusal (the room was full).
 data Gate = Admitted | Queued | Refused
 
+-- The door transaction: decide a 'Gate' in one STM step.
+doorDecision :: BoundedAdmission -> STM Gate
+doorDecision ba = do
+    available <- readTVar (baSlots ba)
+    waiting <- readTVar (baWaiting ba)
+    -- A slot is taken directly only when no one is waiting: a newcomer
+    -- never jumps a non-empty waiting room.
+    if available > 0 && waiting == 0
+        then writeTVar (baSlots ba) (available - 1) $> Admitted
+        else
+            if waiting >= baWaitingRoom ba
+                then pure Refused
+                else writeTVar (baWaiting ba) (waiting + 1) $> Queued
+
+-- Take a slot the moment one is free, or report expiry -- one transaction, so
+-- a timeout can never race a committed acquire into a leaked slot.
+acquireOrExpire :: BoundedAdmission -> TVar Bool -> STM Bool
+acquireOrExpire ba deadline = do
+    available <- readTVar (baSlots ba)
+    if available > 0
+        then writeTVar (baSlots ba) (available - 1) $> True
+        else do
+            expired <- readTVar deadline
+            if expired then pure False else retry
+
 {- | Run an action within the admission bound. 'Nothing' means the request was
 refused -- the waiting room was full, or no slot freed within the wait budget -- and
 the caller should shed it.
@@ -130,17 +155,7 @@ withServeAdmission :: (MonadUnliftIO m) => MetricsPort -> ServeAdmission -> m a 
 withServeAdmission _ UnlimitedServeAdmission action = Just <$> action
 withServeAdmission metrics (BoundedServeAdmission ba) action =
     UE.mask $ \restore -> do
-        gate <- atomically $ do
-            available <- readTVar (baSlots ba)
-            waiting <- readTVar (baWaiting ba)
-            -- A slot is taken directly only when no one is waiting: a newcomer
-            -- never jumps a non-empty waiting room.
-            if available > 0 && waiting == 0
-                then writeTVar (baSlots ba) (available - 1) $> Admitted
-                else
-                    if waiting >= baWaitingRoom ba
-                        then pure Refused
-                        else writeTVar (baWaiting ba) (waiting + 1) $> Queued
+        gate <- atomically (doorDecision ba)
         case gate of
             Refused -> pure Nothing
             Admitted -> admitted restore
@@ -152,23 +167,12 @@ withServeAdmission metrics (BoundedServeAdmission ba) action =
                 -- masked, so the slot reaches the protected run below. The room
                 -- place is surrendered on every path.
                 acquired <-
-                    atomically (acquireOrExpire deadline)
+                    atomically (acquireOrExpire ba deadline)
                         `UE.finally` atomically (modifyTVar' (baWaiting ba) (subtract 1))
                 if acquired
                     then liftIO (mpServeAdmissionQueued metrics) >> admitted restore
                     else pure Nothing
   where
-    -- Take a slot the moment one is free, or report expiry -- one transaction, so
-    -- a timeout can never race a committed acquire into a leaked slot.
-    acquireOrExpire :: TVar Bool -> STM Bool
-    acquireOrExpire deadline = do
-        available <- readTVar (baSlots ba)
-        if available > 0
-            then writeTVar (baSlots ba) (available - 1) $> True
-            else do
-                expired <- readTVar deadline
-                if expired then pure False else retry
-
     admitted restore =
         Just <$> (restore (liftIO (mpServeAdmissionInFlight metrics 1) >> action) `UE.finally` release)
 

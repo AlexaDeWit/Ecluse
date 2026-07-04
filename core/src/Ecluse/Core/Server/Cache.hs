@@ -571,7 +571,7 @@ resolveSingleFlight afterClaim recordRequest recordInsert sf key fetch = mask $ 
     -- One atomic decision point under the enclosing 'mask': a 'Hit' or 'Follow' claims
     -- nothing (its wait runs under @restore@, interruptible); a 'Lead' installs the marker
     -- and hands the run to 'guardInFlight' with no interruptible point between.
-    decision <- atomically (decide nowT)
+    decision <- atomically (decideSingleFlight sf key nowT)
     case decision of
         Hit weighted -> do
             recordRequest Metric.Hit
@@ -609,28 +609,6 @@ resolveSingleFlight afterClaim recordRequest recordInsert sf key fetch = mask $ 
             recordInsert occupancy
             pure entry
   where
-    decide nowT = do
-        hit <- Cache.lookupSTM False key (sfStore sf) nowT
-        case hit of
-            Just weighted -> pure (Hit weighted)
-            Nothing -> do
-                inFlight <- readTVar (sfInFlight sf)
-                case Map.lookup key inFlight of
-                    Just marker -> pure (Follow marker)
-                    Nothing -> do
-                        marker <- newEmptyTMVar
-                        writeTVar (sfInFlight sf) (Map.insert key marker inFlight)
-                        pure (Lead marker)
-
-    -- The orphan hand-off: a failure before the marker was filled. Fill it with the error
-    -- so blocked followers unblock rather than parking forever; 'guardInFlight' frees the
-    -- slot separately. Fills only when empty, so a failure after a successful publish never
-    -- clobbers the result.
-    orphan marker err =
-        atomically $ do
-            unfilled <- isEmptyTMVar marker
-            when unfilled (putTMVar marker (Left err))
-
     deregister :: STM ()
     deregister = do
         inFlight <- readTVar (sfInFlight sf)
@@ -728,6 +706,33 @@ data Decision v
     = Hit (Weighted v)
     | Follow (TMVar (Either SomeException v))
     | Lead (TMVar (Either SomeException v))
+
+-- The one atomic resolve decision for a key: a fresh, unexpired hit wins; else follow the
+-- key's in-flight fetch; else install an in-flight marker and lead. One STM transaction,
+-- run inside 'resolveSingleFlight''s mask.
+decideSingleFlight :: (Hashable k, Ord k) => SingleFlight k v -> k -> TimeSpec -> STM (Decision v)
+decideSingleFlight sf key nowT = do
+    hit <- Cache.lookupSTM False key (sfStore sf) nowT
+    case hit of
+        Just weighted -> pure (Hit weighted)
+        Nothing -> do
+            inFlight <- readTVar (sfInFlight sf)
+            case Map.lookup key inFlight of
+                Just marker -> pure (Follow marker)
+                Nothing -> do
+                    marker <- newEmptyTMVar
+                    writeTVar (sfInFlight sf) (Map.insert key marker inFlight)
+                    pure (Lead marker)
+
+-- The orphan hand-off: a failure before the marker was filled. Fill it with the error
+-- so blocked followers unblock rather than parking forever; 'guardInFlight' frees the
+-- slot separately. Fills only when empty, so a failure after a successful publish never
+-- clobbers the result.
+orphan :: TMVar (Either SomeException v) -> SomeException -> IO ()
+orphan marker err =
+    atomically $ do
+        unfilled <- isEmptyTMVar marker
+        when unfilled (putTMVar marker (Left err))
 
 -- A store's occupancy after a leader's insert: the held entry count and their summed
 -- resident weight, the values the occupancy and residency gauges report.
