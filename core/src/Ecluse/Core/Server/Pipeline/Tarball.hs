@@ -645,8 +645,8 @@ once at the composition root into the 'Ecluse.Core.Security.TarballHostGate' car
 request; only the dynamic public @dist.tarball@ host is parsed at the call site.
 
 The literal internal-range block is __origin-aware__: an
-'Ecluse.Core.Security.UntrustedOrigin' (the public path) is gated against it (subject to
-the empty opt-in here, the composition root's secure default), while an
+'Ecluse.Core.Security.UntrustedOrigin' (the public path) is gated against the fixed
+range set plus the operator-configured @additionalBlockedRanges@, while an
 'Ecluse.Core.Security.TrustedOrigin' (the operator-configured private upstream) is exempt,
 since a private registry may legitimately live on an internal address (security.md
 invariant 3). The allowlist and same-host clauses still gate the trusted origin
@@ -657,7 +657,7 @@ tarballHostHonoured origin deps =
         origin
         (pdTarballHostPolicy deps)
         (thgAllowlist (pdTarballHostGate deps))
-        (pdAllowedInternalHosts deps)
+        (pdAdditionalBlockedRanges deps)
 
 {- Select the artifact a request's filename names from a version's distribution
 files. npm has exactly one artifact per version, so the match is the single file; a

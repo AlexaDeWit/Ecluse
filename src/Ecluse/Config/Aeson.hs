@@ -8,6 +8,7 @@ import Data.Aeson (FromJSON (..), Value (..), withObject, withText, (.!=), (.:),
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Types (Parser)
+import Data.IP (IPRange)
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime)
@@ -20,6 +21,7 @@ import Ecluse.Core.Credential (Secret, mkSecret)
 import Ecluse.Core.Ecosystem (Ecosystem, parseEcosystem)
 import Ecluse.Core.Package (Scope, mkScope)
 import Ecluse.Core.Package.Integrity (parseMinIntegrity, parseMinTrustedIntegrity)
+import Ecluse.Core.Security (parseBlockedRange)
 import Ecluse.Log (parseLogFormat)
 import Ecluse.Telemetry (parseTelemetrySwitch)
 
@@ -63,7 +65,7 @@ instance FromJSON MountConfig where
 
 instance FromJSON AppConfig where
     parseJSON = withObject "AppConfig" $ \o -> do
-        rejectUnknownKeys "document" ["port", "mounts", "queueBackend", "queueUrl", "queueMemoryMaxDepth", "awsRegion", "awsEndpointUrlSqs", "awsEndpointUrl", "awsAccessKeyId", "awsSecretAccessKey", "googleProject", "authToken", "helpMessage", "cveSyncInterval", "shutdownDrainTimeout", "cores", "maxHeapBytes", "serveMaxInFlight", "publicConnectionsPerHost", "privateConnectionsPerHost", "cacheTtl", "cacheMaxEntries", "cacheMaxBytes", "maxResponseBytes", "maxVersionCount", "maxNestingDepth", "logFormat", "telemetry", "publicUrl", "minPublicIntegrity", "minTrustedIntegrity", "rules", "osvDataDir", "osvExportBaseUrl", "vulnerabilityDatabaseBucket"] o
+        rejectUnknownKeys "document" ["port", "mounts", "queueBackend", "queueUrl", "queueMemoryMaxDepth", "awsRegion", "awsEndpointUrlSqs", "awsEndpointUrl", "awsAccessKeyId", "awsSecretAccessKey", "googleProject", "authToken", "helpMessage", "cveSyncInterval", "shutdownDrainTimeout", "cores", "maxHeapBytes", "serveMaxInFlight", "publicConnectionsPerHost", "privateConnectionsPerHost", "cacheTtl", "cacheMaxEntries", "cacheMaxBytes", "maxResponseBytes", "maxVersionCount", "maxNestingDepth", "logFormat", "telemetry", "publicUrl", "minPublicIntegrity", "minTrustedIntegrity", "additionalBlockedRanges", "rules", "osvDataDir", "osvExportBaseUrl", "vulnerabilityDatabaseBucket"] o
         AppConfig
             <$> o .: "port"
             <*> (o .:? "mounts" .!= mempty >>= parseMounts)
@@ -94,6 +96,7 @@ instance FromJSON AppConfig where
             <*> (o .:? "publicUrl" >>= traverse parseUrl)
             <*> (o .: "minPublicIntegrity" >>= parseEnum parseMinIntegrity "minPublicIntegrity")
             <*> (o .: "minTrustedIntegrity" >>= parseEnum parseMinTrustedIntegrity "minTrustedIntegrity")
+            <*> (o .:? "additionalBlockedRanges" .!= String "" >>= parseAdditionalBlockedRanges)
             <*> (o .:? "osvDataDir" .!= "data/osv")
             <*> (o .:? "osvExportBaseUrl" .!= "https://osv-vulnerabilities.storage.googleapis.com")
             <*> o .:? "vulnerabilityDatabaseBucket"
@@ -115,6 +118,18 @@ instance FromJSON AppConfig where
 
         parseSecret :: Value -> Parser Secret
         parseSecret = withText "Secret" (pure . mkSecret)
+
+        parseAdditionalBlockedRanges :: Value -> Parser [IPRange]
+        parseAdditionalBlockedRanges = withText "IPRange list" $ \t ->
+            if T.null (T.strip t)
+                then pure []
+                else traverse parseEntry (T.splitOn "," t)
+          where
+            parseEntry entry =
+                let trimmed = T.strip entry
+                 in case parseBlockedRange trimmed of
+                        Just range -> pure range
+                        Nothing -> fail ("invalid CIDR range in additionalBlockedRanges: " <> T.unpack trimmed)
 
         parseSeconds :: Value -> Parser NominalDiffTime
         parseSeconds (String t) = case readMaybe (T.unpack t) :: Maybe Integer of

@@ -18,7 +18,6 @@ import Crypto.Hash (Digest, SHA512, hash)
 import Data.Aeson (Value, encode, object, (.=))
 import Data.ByteArray.Encoding (Base (Base64), convertToBase)
 import Data.ByteString.Lazy qualified as LBS
-import Data.Set qualified as Set
 import Data.Time (UTCTime (UTCTime), fromGregorian, nominalDay)
 import Katip (Environment (Environment), Namespace (Namespace), initLogEnv)
 import Network.HTTP.Client (defaultManagerSettings, newManager)
@@ -35,7 +34,7 @@ import Ecluse.Core.Registry.Npm.Route qualified as Npm
 import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan), atDefaultPrecedence)
-import Ecluse.Core.Security (TarballHostPolicy (SameHostAsPackument), defaultLimits, lowerCaseHosts, tarballHostGate)
+import Ecluse.Core.Security (TarballHostPolicy (SameHostAsPackument), defaultLimits, tarballHostGate)
 import Ecluse.Core.Server.Admission (ServeAdmission, newServeAdmission, newServeAdmissionTuned, unlimitedServeAdmission, withServeAdmission)
 import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Core.Server.Context (
@@ -146,7 +145,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
             admission <- newServeAdmission 1
             rt <- mkRuntimeWith admission metricsPort
             deps <- depsFor 1
-            let privateDeps = deps{pdPrivateBaseUrl = "http://127.0.0.1:" <> show port}
+            let privateDeps = deps{pdPrivateBaseUrl = "http://localhost:" <> show port}
             held <-
                 withServeAdmission (srMetrics rt) admission $
                     captureServe
@@ -198,22 +197,23 @@ mountWith deps =
 
 {- | Serve dependencies pointing the public origin at the in-process upstream on
 @publicPort@ and the private origin at a closed port (so the trusted leg always degrades
-and the merge serves the public contribution). @127.0.0.1@ is opted in to the
-internal-range block so the loopback tarball host is honoured on the artifact leg.
+and the merge serves the public contribution). The loopback stubs are addressed by the
+@localhost@ DNS name rather than a bare IP literal, so the internal-range block (which
+only recognises a literal) never fires on the artifact leg -- no opt-in is needed.
 -}
 depsFor :: Int -> IO PackumentDeps
 depsFor publicPort = do
     prepared <- prepare allowPolicy
     pure
         PackumentDeps
-            { pdPrivateBaseUrl = "http://127.0.0.1:1"
-            , pdPublicBaseUrl = "http://127.0.0.1:" <> show publicPort
+            { pdPrivateBaseUrl = "http://localhost:1"
+            , pdPublicBaseUrl = "http://localhost:" <> show publicPort
             , pdMountBaseUrl = "http://proxy.test"
             , pdMirrorTarget = "http://mirror.test"
             , pdRules = prepared
             , pdTarballHostPolicy = SameHostAsPackument
-            , pdAllowedInternalHosts = lowerCaseHosts (Set.singleton "127.0.0.1")
-            , pdTarballHostGate = tarballHostGate "http://127.0.0.1:1" ("http://127.0.0.1:" <> show publicPort) "http://mirror.test"
+            , pdAdditionalBlockedRanges = []
+            , pdTarballHostGate = tarballHostGate "http://localhost:1" ("http://localhost:" <> show publicPort) "http://mirror.test"
             , pdLimits = defaultLimits
             , pdInboundToken = Nothing
             , pdNow = pure fixedNow
@@ -252,7 +252,7 @@ upstreamApp req respond =
             respond (responseLBS status200 [(hContentType, "application/octet-stream")] (LBS.fromStrict artifactBytes))
         _ -> respond (responseLBS status404 [] "")
   where
-    host = maybe "127.0.0.1" snd (find ((== hHost) . fst) (requestHeaders req))
+    host = maybe "localhost" snd (find ((== hHost) . fst) (requestHeaders req))
 
 -- | The artifact bytes the upstream serves and the packument's @integrity@ commits to.
 artifactBytes :: ByteString

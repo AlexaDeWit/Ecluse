@@ -21,7 +21,7 @@ module Ecluse.Core.Security.Host (
     isBlockedTarget,
     isBlockedIP,
     parseIpLiteral,
-    hostOptedIn,
+    parseBlockedRange,
     hostAddress,
     splitHostPort,
 
@@ -92,8 +92,7 @@ isAllowedUpstreamHost :: LoweredHostSet -> Text -> Bool
 isAllowedUpstreamHost (LoweredHostSet allowed) host =
     not (T.null host) && canonicalHostKey host `Set.member` allowed
 
-{- | Whether @host@ is an internal address the proxy must not fetch, /unless/ it
-is explicitly opted in.
+{- | Whether @host@ is an internal address the proxy must not fetch.
 
 A proxy sits in a privileged network position, so an attacker who can steer a
 fetch (see the module header) aims it at addresses only the proxy can reach: the
@@ -111,37 +110,23 @@ against:
 * __CGNAT shared__ @100.64.0.0\/10@ (RFC 6598) -- carrier-grade NAT space some
   cloud fabrics route internally;
 * __IPv6 unique-local__ @fc00::\/7@ (RFC 4193) -- the private-network IPv6 analogue,
-  which contains the AWS IMDSv6 metadata endpoint @fd00:ec2::254@.
+  which contains the AWS IMDSv6 metadata endpoint @fd00:ec2::254@;
+* every range in @additionalRanges@, the operator-configured extension of this
+  fixed set (@ECLUSE_ADDITIONAL_BLOCKED_RANGES@) -- a deployment's own internal
+  space this module cannot know about in advance.
 
-A host in @allowedInternal@ is __never__ blocked (matched case-insensitively, as
-DNS and the host allowlist are) -- the deliberate opt-in for a private upstream that
-genuinely lives on an internal address. As a 'LoweredHostSet' it is already
-lower-cased, so only the incoming @host@ is folded for the comparison. A @host@
-that is not an IP literal (a DNS name) is __not__ blocked here: name-based targets
-are constrained by the 'isAllowedUpstreamHost' allowlist instead, and
-post-resolution IP filtering belongs to the resolving fetch layer, not this pure
-check. Both guards apply -- an allowlisted host that resolves to an internal literal
-is still caught when its address is tested here.
+A @host@ that is not an IP literal (a DNS name) is __not__ blocked here:
+name-based targets are constrained by the 'isAllowedUpstreamHost' allowlist
+instead, and post-resolution IP filtering belongs to the resolving fetch layer,
+not this pure check. Both guards apply -- an allowlisted host that resolves to an
+internal literal is still caught when its address is tested here.
 -}
-isBlockedTarget :: LoweredHostSet -> Text -> Bool
-isBlockedTarget allowedInternal host =
-    not (hostOptedIn allowedInternal host)
-        && maybe False (isBlockedIP . ipAddrToIP) (parseIpLiteral host)
+isBlockedTarget :: [IPRange] -> Text -> Bool
+isBlockedTarget additionalRanges host =
+    maybe False (isBlockedIP additionalRanges . ipAddrToIP) (parseIpLiteral host)
 
-{- | Whether @host@ is opted in to the internal-range block -- the deliberate
-exemption for a private upstream that genuinely lives on an internal address.
-
-The opt-in half of 'isBlockedTarget': the deliberate exemption for a host that
-genuinely lives on an internal address. The match folds case (as DNS and the host
-allowlist do) and, for an IP-literal, collapses equivalent spellings to one canonical
-key (see 'canonicalHostKey'): the @allowedInternal@ set was built with that same key, so
-an opt-in matches a literal address whichever representation either uses.
--}
-hostOptedIn :: LoweredHostSet -> Text -> Bool
-hostOptedIn (LoweredHostSet allowedInternal) host =
-    canonicalHostKey host `Set.member` allowedInternal
-
-{- | Whether an 'IP' falls in a blocked internal range.
+{- | Whether an 'IP' falls in a blocked internal range: the fixed 'blockedRanges'
+set together with the caller-supplied @additionalRanges@.
 
 The single source of record for the internal-range decision, used by the literal
 block ('isBlockedTarget') on the @dist.tarball@ host gate. An
@@ -150,8 +135,8 @@ and tested against the IPv4 ranges: a mapped internal literal (e.g.
 @::ffff:169.254.169.254@) is a recognised SSRF smuggling form, so it must be
 caught by the IPv4 block rather than slip through as an unrelated IPv6 address.
 -}
-isBlockedIP :: IP -> Bool
-isBlockedIP ip = any matches blockedRanges
+isBlockedIP :: [IPRange] -> IP -> Bool
+isBlockedIP additionalRanges ip = any matches (blockedRanges <> additionalRanges)
   where
     decoded = decodeMappedV4 ip
     matches = \case
@@ -168,7 +153,8 @@ IPv6 unique-local blocks. Declared once and consulted by 'isBlockedIP' alone, so
 the blocked set is a single cross-cutting invariant. @0.0.0.0\/8@ is blocked
 because @0.0.0.0@ reaches a loopback-bound service on Linux; @169.254.0.0\/16@
 contains the @169.254.169.254@ cloud-metadata endpoint; @fc00::\/7@ contains the
-AWS IMDSv6 endpoint @fd00:ec2::254@.
+AWS IMDSv6 endpoint @fd00:ec2::254@. An operator cannot narrow this fixed set --
+only extend it, via the @additionalRanges@ 'isBlockedIP' also consults.
 -}
 blockedRanges :: [IPRange]
 blockedRanges =
@@ -184,6 +170,22 @@ blockedRanges =
     , "fe80::/10" -- IPv6 link-local
     , "fc00::/7" -- IPv6 unique-local (incl. AWS IMDSv6 fd00:ec2::254)
     ]
+
+{- | Parse one operator-configured @ECLUSE_ADDITIONAL_BLOCKED_RANGES@ entry (a
+single CIDR, e.g. @"203.0.113.0\/24"@ or @"2001:db8::\/32"@) into an 'IPRange', or
+'Nothing' for anything malformed.
+
+A __total__ wrapper over @iproute@'s own 'Read' instance for 'IPRange': that
+instance's underlying parser (@parseIPRange@) already fails by returning no
+parse rather than calling 'error', so 'readMaybe' over it is safe -- unlike the
+partial 'IsString' instance ('blockedRanges' relies on for its own compile-time
+literals, where a malformed literal would be a build-time error, never runtime
+input). This is the only way the config decoder is meant to turn operator text
+into an 'IPRange': a malformed entry must fail closed at boot, never be silently
+dropped or accepted as an unblocked range.
+-}
+parseBlockedRange :: Text -> Maybe IPRange
+parseBlockedRange = readMaybe . toString
 
 {- Convert a recognised literal to an @iproute@ 'IP' for the membership test.
 The four IPv4 octets become an 'IPv4', and the eight 16-bit groups an 'IPv6'. The
@@ -204,11 +206,11 @@ address collapse to one key: compressed versus expanded IPv6
 Anything that is not a literal (a DNS name) is merely case-folded, since hostnames are
 case-insensitive.
 
-This is the single canonicaliser feeding __both__ sides of the internal-range
-opt-in: 'lowerCaseHosts' builds the set with it, and 'hostOptedIn' folds the
-queried host with it, so an operator's opt-in matches a literal address whichever
-representation either uses. Pointing the opt-in key and the guard's rendered key at one
-@show@ is what guarantees they are identical; a second, separate canonicaliser could drift.
+This is the single canonicaliser feeding the host allowlist: 'lowerCaseHosts' builds
+the configured set with it, and 'isAllowedUpstreamHost' folds the queried host with
+it, so a configured entry matches a literal address whichever representation either
+uses. Pointing both sides at one @show@ is what guarantees they render identically;
+a second, separate canonicaliser could drift.
 -}
 canonicalHostKey :: Text -> Text
 canonicalHostKey host = case parseIpLiteral host of
@@ -502,9 +504,9 @@ fail-safe:
 * the @tarballHost@ must be on the host allowlist (@allowed@), as every outbound
   target is: a @dist.tarball@ host off the allowlist is refused regardless of
   policy;
-* it must not be an internal-address literal (subject to the per-host @allowedInternal@
-  opt-in), the cheap pure defence-in-depth, but a 'TrustedOrigin' is __exempt__ from this
-  clause (see 'Origin'); and
+* it must not be an internal-address literal (the fixed range set plus the
+  operator-configured @additionalBlockedRanges@), the cheap pure defence-in-depth,
+  but a 'TrustedOrigin' is __exempt__ from this clause (see 'Origin'); and
 * under 'SameHostAsPackument' (the secure default) it must additionally __equal__
   the @packumentHost@ (the host that served the metadata), so a tarball on a
   /different/ host is refused even when that host is allowlisted. Under
@@ -527,14 +529,16 @@ tarballHostAllowed ::
     TarballHostPolicy ->
     -- | The host allowlist (the same one every outbound fetch is gated by).
     LoweredHostSet ->
-    -- | The hosts deliberately opted in to the internal-range block (untrusted origin).
-    LoweredHostSet ->
+    {- | The operator-configured ranges extending the fixed internal-range block
+    (untrusted origin).
+    -}
+    [IPRange] ->
     -- | The bare host that served the packument.
     Text ->
     -- | The bare host of the candidate @dist.tarball@.
     Text ->
     Bool
-tarballHostAllowed origin policy allowed allowedInternal packumentHost tarballHost =
+tarballHostAllowed origin policy allowed additionalBlockedRanges packumentHost tarballHost =
     isAllowedUpstreamHost allowed tarballHost
         && internalRangeOk
         && case policy of
@@ -542,11 +546,12 @@ tarballHostAllowed origin policy allowed allowedInternal packumentHost tarballHo
             AnyAllowlistedHost -> True
   where
     -- The literal internal-range block is origin-aware: the trusted private origin is
-    -- exempt, the untrusted origin is gated subject to the per-host opt-in.
+    -- exempt, the untrusted origin is gated against the fixed set plus the operator's
+    -- additional ranges.
     internalRangeOk :: Bool
     internalRangeOk = case origin of
         TrustedOrigin -> True
-        UntrustedOrigin -> not (isBlockedTarget allowedInternal tarballHost)
+        UntrustedOrigin -> not (isBlockedTarget additionalBlockedRanges tarballHost)
 
 {- | The mount-constant inputs to the per-request 'tarballHostAllowed' gate, extracted
 __once__ from a mount's three configured upstream URLs so the serve path parses no URL

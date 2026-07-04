@@ -109,14 +109,22 @@ responsibility**: the deployment must also fence egress at the platform layer
 the `169.254.169.254` metadata endpoint). See
 [Network egress is a shared responsibility](security.md#network-egress-is-a-shared-responsibility).
 
-The one application-level knob, following Écluse's **secure-defaults /
-configurable-overrides** principle, *the consumer decides their threat tolerance*. 
-See the `ECLUSE_MOUNTS__*__RESPECT_UPSTREAM_TARBALL_HOST` setting in the [Operator Manual](../../USAGE.md#environment-variables) for how to relax this constraint.
+Two application-level knobs, following Écluse's **secure-defaults /
+configurable-overrides** principle, let *the consumer decide their threat tolerance* in
+opposite directions. See the `ECLUSE_MOUNTS__*__RESPECT_UPSTREAM_TARBALL_HOST` and
+`ECLUSE_ADDITIONAL_BLOCKED_RANGES` settings in the [Operator
+Manual](../../USAGE.md#environment-variables) for how to relax or tighten these
+constraints.
 
-The override never escapes the host allowlist or the internal-range block: it
-relaxes *which allowlisted host* may serve a tarball, not whether the allowlist
+`RESPECT_UPSTREAM_TARBALL_HOST` never escapes the host allowlist or the internal-range
+block: it relaxes *which allowlisted host* may serve a tarball, not whether the allowlist
 applies. The default keeps the tightest reading of
 [invariant 2](security.md#invariants).
+
+`ADDITIONAL_BLOCKED_RANGES` runs the other way: it extends invariant 3's fixed
+internal-range set with operator-supplied CIDRs the module cannot know about in
+advance (a deployment's own internal space), applied identically across every mount.
+It only ever *widens* the block; there is no corresponding knob to narrow it.
 
 ### Response bounds
 

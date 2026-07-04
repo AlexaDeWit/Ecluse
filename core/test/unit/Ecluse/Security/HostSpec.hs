@@ -1,5 +1,6 @@
 module Ecluse.Security.HostSpec (spec) where
 
+import Data.IP (IPRange)
 import Data.Set qualified as Set
 
 import Data.Text qualified as T
@@ -19,6 +20,7 @@ import Ecluse.Core.Security (
     isBlockedTarget,
     isDecimal,
     lowerCaseHosts,
+    parseBlockedRange,
     parseIpLiteral,
     splitHostPort,
     tarballHostAllowed,
@@ -48,6 +50,7 @@ spec = do
     tarballHostPolicySpec
     lowerCaseHostsSpec
     propertiesSpec
+    parseBlockedRangeSpec
     isDecimalSpec
     parseIpLiteralSpec
 
@@ -87,7 +90,7 @@ hostAllowlistSpec = describe "isAllowedUpstreamHost" $ do
 
 internalRangeSpec :: Spec
 internalRangeSpec = describe "isBlockedTarget" $ do
-    let noOptIn = lowerCaseHosts Set.empty
+    let noOptIn = []
 
     describe "blocks internal IPv4 ranges" $ do
         it "blocks the cloud instance-metadata address 169.254.169.254" $
@@ -229,28 +232,21 @@ internalRangeSpec = describe "isBlockedTarget" $ do
         it "does not block TEST-NET-2 198.51.100.0/24" $
             isBlockedTarget noOptIn "198.51.100.1" `shouldBe` False
 
-    describe "explicit per-host opt-in" $ do
-        it "permits a deliberately-internal upstream that is opted in" $
-            isBlockedTarget (lowerCaseHosts (Set.singleton "10.0.0.5")) "10.0.0.5" `shouldBe` False
-        it "still blocks an internal address that is not the opted-in one" $
-            isBlockedTarget (lowerCaseHosts (Set.singleton "10.0.0.5")) "10.0.0.6" `shouldBe` True
-        it "honours an opt-in written in a different case (matched case-insensitively)" $
-            -- 'lowerCaseHosts' normalises the opt-in set, so 'FE80::1' opts in
-            -- 'fe80::1' rather than over-blocking it on a case mismatch.
-            isBlockedTarget (lowerCaseHosts (Set.singleton "FE80::1")) "fe80::1" `shouldBe` False
-        it "honours an IPv6 opt-in written in its expanded form against the compressed literal" $
-            -- The opt-in is canonicalised to the same form a literal renders to, so
-            -- the expanded '0:0:0:0:0:0:0:1' opts in the compressed '::1' rather than
-            -- missing it on a textual mismatch.
-            isBlockedTarget (lowerCaseHosts (Set.singleton "0:0:0:0:0:0:0:1")) "::1" `shouldBe` False
-        it "honours an IPv6 opt-in written in its compressed form against the expanded literal" $
-            -- The reverse direction: a compressed opt-in matches an expanded query,
-            -- since both are canonicalised before comparison.
-            isBlockedTarget (lowerCaseHosts (Set.singleton "::1")) "0:0:0:0:0:0:0:1" `shouldBe` False
-        it "does not over-opt-in: a different IPv6 address than the canonical opt-in is still blocked" $
-            isBlockedTarget (lowerCaseHosts (Set.singleton "0:0:0:0:0:0:0:1")) "fe80::1" `shouldBe` True
-        it "leaves an IPv4 opt-in unaffected by canonicalisation" $
-            isBlockedTarget (lowerCaseHosts (Set.singleton "10.0.0.5")) "10.0.0.5" `shouldBe` False
+    describe "operator-configured additional blocked ranges" $ do
+        let testNet3 = ["203.0.113.0/24"] :: [IPRange]
+        it "blocks a host matched by an additional range not in the fixed set" $
+            isBlockedTarget testNet3 "203.0.113.5" `shouldBe` True
+        it "leaves a host outside every additional range unblocked" $ do
+            isBlockedTarget testNet3 "8.8.8.8" `shouldBe` False
+            isBlockedTarget testNet3 "203.0.114.1" `shouldBe` False
+        it "unions the additional ranges with the fixed set rather than replacing it" $
+            -- A fixed-range address (10/8) is still blocked when an unrelated additional
+            -- range is configured: additional ranges only ever widen the block.
+            isBlockedTarget testNet3 "10.1.2.3" `shouldBe` True
+        it "blocks an IPv6 host matched by an additional range" $
+            isBlockedTarget ["2001:db8::/32"] "2001:db8::1" `shouldBe` True
+        it "does not block a DNS name even when it lexically resembles a blocked range" $
+            isBlockedTarget testNet3 "203.0.113.example.com" `shouldBe` False
 
     describe "coerces an IPv4 octet as inet_aton does (leading-zero octal, 0x hex)" $ do
         -- The literal block reads each octet in the base a libc resolver would, so it
@@ -306,7 +302,7 @@ classificationCorpusSpec =
             it (renderCase host expected) $
                 isBlockedTarget noOptIn host `shouldBe` expected
   where
-    noOptIn = lowerCaseHosts Set.empty
+    noOptIn = []
     renderCase host expected =
         toString $
             (if expected then "blocks " else "permits ")
@@ -418,7 +414,7 @@ hostAddressSpec = describe "hostAddress" $ do
     it "composes with the SSRF guards to catch a metadata URL" $
         -- The realistic call shape: extract, then test both guards.
         let h = hostAddress "http://169.254.169.254/latest/meta-data/"
-         in (isBlockedTarget (lowerCaseHosts Set.empty) h, isAllowedUpstreamHost upstreams h)
+         in (isBlockedTarget [] h, isAllowedUpstreamHost upstreams h)
                 `shouldBe` (True, False)
 
 -- The bracket-aware @host[:port]@ split shared by 'hostAddress' and the SQS
@@ -460,7 +456,7 @@ neither half can be silently weakened.
 -}
 ssrfGateSpec :: Spec
 ssrfGateSpec = describe "composed SSRF gate (allowlist AND not-blocked)" $ do
-    let noOptIn = lowerCaseHosts Set.empty
+    let noOptIn = []
         passesGate h = isAllowedUpstreamHost upstreams h && not (isBlockedTarget noOptIn h)
 
     it "admits a configured public upstream" $
@@ -491,7 +487,7 @@ since under-blocking on the untrusted origin is a vulnerability.
 -}
 tarballHostPolicySpec :: Spec
 tarballHostPolicySpec = describe "tarballHostAllowed" $ do
-    let noOptIn = lowerCaseHosts Set.empty
+    let noOptIn = []
         -- Two allowlisted upstreams: the packument source and a separate CDN.
         allow = lowerCaseHosts (Set.fromList ["registry.npmjs.org", "cdn.npmjs.org"])
         -- The untrusted public origin: the internal-range block applies (the existing
@@ -538,13 +534,10 @@ tarballHostPolicySpec = describe "tarballHostAllowed" $ do
             let allowInternal = lowerCaseHosts (Set.singleton "10.0.0.5")
              in tarballHostAllowed UntrustedOrigin AnyAllowlistedHost allowInternal noOptIn "registry.npmjs.org" "10.0.0.5"
                     `shouldBe` False
-        it "honours an explicit internal opt-in for a deliberately-internal host" $
-            -- With the host opted in to the internal block, an allowlisted internal
-            -- tarball host is permitted under the relaxed policy.
+        it "still blocks a host matched only by an operator-configured additional range" $
             let allowInternal = lowerCaseHosts (Set.singleton "10.0.0.5")
-                optIn = lowerCaseHosts (Set.singleton "10.0.0.5")
-             in tarballHostAllowed UntrustedOrigin AnyAllowlistedHost allowInternal optIn "registry.npmjs.org" "10.0.0.5"
-                    `shouldBe` True
+             in tarballHostAllowed UntrustedOrigin AnyAllowlistedHost allowInternal ["10.0.0.5/32"] "registry.npmjs.org" "10.0.0.5"
+                    `shouldBe` False
 
     describe "the trusted private origin is exempt from the internal-range block" $ do
         -- The trusted origin mirrors the connection layer's unguarded manager
@@ -569,8 +562,7 @@ tarballHostPolicySpec = describe "tarballHostAllowed" $ do
             -- origin's tarball must still equal its packument host, so a different
             -- (allowlisted, internal) host is refused.
             let bothAllowed = lowerCaseHosts (Set.fromList ["10.0.0.5", "10.0.0.6"])
-                bothInternal = lowerCaseHosts (Set.fromList ["10.0.0.5", "10.0.0.6"])
-             in tarballHostAllowed TrustedOrigin SameHostAsPackument bothAllowed bothInternal "10.0.0.5" "10.0.0.6"
+             in tarballHostAllowed TrustedOrigin SameHostAsPackument bothAllowed noOptIn "10.0.0.5" "10.0.0.6"
                     `shouldBe` False
 
 lowerCaseHostsSpec :: Spec
@@ -589,20 +581,36 @@ lowerCaseHostsSpec = describe "lowerCaseHosts" $ do
 
 propertiesSpec :: Spec
 propertiesSpec = describe "properties" $ do
-    it "isBlockedTarget blocks an internal host unless it is opted in" $
+    it "isBlockedTarget blocks an internal host, or one matched by an additional range" $
         hedgehog $ do
             -- Generate addresses across the blocked ranges plus public ones, and a
-            -- random opt-in set, then check the invariant directly.
+            -- random set of operator-configured additional ranges (each a /32 or /128
+            -- naming one generated host). A random extra set almost never collides
+            -- with the host by chance, so the host's own range is deliberately
+            -- included half the time; the invariant is then checked directly.
             host <- forAll genMaybeInternalHost
-            optIn <- forAll (Gen.set (Range.linear 0 3) genMaybeInternalHost)
+            extra <- forAll (Gen.set (Range.linear 0 3) genMaybeInternalHost)
+            includeHost <- forAll Gen.bool
+            let hostRange = singleHostRange host
+                additionalRanges =
+                    mapMaybe singleHostRange (Set.toList extra)
+                        <> maybeToList (guard includeHost *> hostRange)
+                matchedByExtra = maybe False (`elem` additionalRanges) hostRange
             H.cover 5 "internal host" (looksInternal host)
-            H.cover 5 "public host" (not (looksInternal host))
-            -- The generated hosts are already lowercase, so 'lowerCaseHosts' leaves
-            -- them unchanged and the raw set is a faithful membership oracle.
-            let blocked = isBlockedTarget (lowerCaseHosts optIn) host
-            if host `Set.member` optIn
-                then blocked === False -- opt-in always wins
-                else blocked === looksInternal host
+            H.cover 5 "public host, unmatched" (not (looksInternal host) && not matchedByExtra)
+            H.cover 2 "public host matched by an additional range" (not (looksInternal host) && matchedByExtra)
+            isBlockedTarget additionalRanges host === (looksInternal host || matchedByExtra)
+
+{- | An operator-configured single-host range naming exactly @host@ (a @\/32@ for an
+IPv4 literal, a @\/128@ for IPv6), or 'Nothing' for a DNS name (which cannot be
+expressed as a CIDR range). Used to turn 'genMaybeInternalHost's generated set into
+plausible @additionalBlockedRanges@ that sometimes, but not always, name the
+property's own @host@.
+-}
+singleHostRange :: Text -> Maybe IPRange
+singleHostRange h
+    | T.any (== ':') h = parseBlockedRange (h <> "/128")
+    | otherwise = parseBlockedRange (h <> "/32")
 
 {- | Whether a generated host string is one this module's ranges treat as
 internal -- restated independently of the implementation so the property is not a
@@ -686,3 +694,27 @@ parseIpLiteralSpec = describe "parseIpLiteral" $ do
     it "returns Nothing for malformed IPv6" $ do
         void (parseIpLiteral "fe80::1ffff") `shouldBe` Nothing
         void (parseIpLiteral "1::2::3") `shouldBe` Nothing
+
+{- | 'parseBlockedRange' is the total decoder the config layer relies on for
+@ECLUSE_ADDITIONAL_BLOCKED_RANGES@: a malformed entry must yield 'Nothing' (so the
+decoder can fail the boot closed) rather than throwing, unlike the module's own
+compile-time 'IPRange' literals.
+-}
+parseBlockedRangeSpec :: Spec
+parseBlockedRangeSpec = describe "parseBlockedRange" $ do
+    it "parses a valid IPv4 CIDR range" $
+        parseBlockedRange "203.0.113.0/24" `shouldBe` Just "203.0.113.0/24"
+    it "parses a valid IPv6 CIDR range" $
+        parseBlockedRange "2001:db8::/32" `shouldBe` Just "2001:db8::/32"
+    it "parses a single-host /32" $
+        parseBlockedRange "10.0.0.5/32" `shouldBe` Just "10.0.0.5/32"
+    it "treats a bare IP with no mask as an implicit single-host /32 (iproute's own reading)" $
+        parseBlockedRange "203.0.113.0" `shouldBe` Just "203.0.113.0/32"
+    it "returns Nothing for a DNS name" $
+        parseBlockedRange "example.com/24" `shouldBe` Nothing
+    it "returns Nothing for an out-of-range mask length" $
+        parseBlockedRange "203.0.113.0/33" `shouldBe` Nothing
+    it "returns Nothing for garbage input" $
+        parseBlockedRange "not-a-range" `shouldBe` Nothing
+    it "returns Nothing for the empty string" $
+        parseBlockedRange "" `shouldBe` Nothing

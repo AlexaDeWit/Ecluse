@@ -25,6 +25,7 @@ module Ecluse.Config.Types (
     renderConfigError,
 ) where
 
+import Data.IP (IPRange)
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime)
 
@@ -158,6 +159,7 @@ data AppConfig = AppConfig
     , cfgPublicUrl :: Maybe Url
     , cfgMinPublicIntegrity :: MinIntegrity
     , cfgMinTrustedIntegrity :: MinTrustedIntegrity
+    , cfgAdditionalBlockedRanges :: [IPRange]
     , cfgOsvDataDir :: FilePath
     , cfgOsvExportBaseUrl :: Text
     , cfgVulnerabilityDatabaseBucket :: Maybe Text

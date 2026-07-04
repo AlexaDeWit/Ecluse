@@ -97,6 +97,25 @@ spec = describe "decodeDocument" $ do
         loadConfig [("ECLUSE_PRIVATE_CONNECTIONS_PER_HOST", "0")] Nothing
             `shouldSatisfy` decodeErrorMentions "privateConnectionsPerHost must be a positive integer"
 
+    it "leaves additionalBlockedRanges empty by default" $
+        case loadConfig [] Nothing of
+            Left e -> expectationFailure ("unexpected decode error: " <> show e)
+            Right doc -> cfgAdditionalBlockedRanges (configApp doc) `shouldBe` []
+
+    it "parses a comma-separated additionalBlockedRanges from the environment layer" $
+        case loadConfig [("ECLUSE_ADDITIONAL_BLOCKED_RANGES", "203.0.113.0/24,2001:db8::/32")] Nothing of
+            Left e -> expectationFailure ("unexpected decode error: " <> show e)
+            Right doc -> cfgAdditionalBlockedRanges (configApp doc) `shouldBe` ["203.0.113.0/24", "2001:db8::/32"]
+
+    it "trims whitespace around each additionalBlockedRanges entry" $
+        case loadConfig [("ECLUSE_ADDITIONAL_BLOCKED_RANGES", " 203.0.113.0/24 , 2001:db8::/32 ")] Nothing of
+            Left e -> expectationFailure ("unexpected decode error: " <> show e)
+            Right doc -> cfgAdditionalBlockedRanges (configApp doc) `shouldBe` ["203.0.113.0/24", "2001:db8::/32"]
+
+    it "rejects a malformed entry in additionalBlockedRanges, naming it (fails closed at boot)" $
+        loadConfig [("ECLUSE_ADDITIONAL_BLOCKED_RANGES", "not-a-range")] Nothing
+            `shouldSatisfy` decodeErrorMentions "invalid CIDR range"
+
 singleMountDoc :: ByteString
 singleMountDoc =
     "{\"queueBackend\":\"sqs\",\"mounts\":{\"npm\":{\

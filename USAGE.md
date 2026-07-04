@@ -172,6 +172,7 @@ operator reference. **Keep the two in sync** when either changes.
 | `ECLUSE_GOOGLE_PROJECT` | Depends | GCP backends only | Project for Pub/Sub and Artifact Registry (credentials via ADC). |
 | `ECLUSE_AUTH_TOKEN` | No |  | If set, clients must present this token (`Bearer` / `_authToken`). Omit for network-secured deployments. |
 | `ECLUSE_MOUNTS__NPM__RESPECT_UPSTREAM_TARBALL_HOST` | No | `false` | Secure default. When `false`, a tarball is fetched only from the **same allowlisted upstream that served the packument**; set `true` only for a registry that serves tarballs from a separate CDN/files host (widens the fetch surface to any allowlisted host). See [Securing network egress](#securing-network-egress-required). |
+| `ECLUSE_ADDITIONAL_BLOCKED_RANGES` | No |  | Comma-separated list of CIDR ranges (e.g. `10.99.0.0/16,fd12::/8`) an operator adds to the fixed internal-address block, applied identically across every mount. Extends the block only, never narrows it; a malformed entry **fails closed at boot**. See [Securing network egress](#securing-network-egress-required). |
 | `ECLUSE_HELP_MESSAGE` | No |  | String appended to every denial message (e.g. a support channel). |
 | `ECLUSE_LOG_FORMAT` | No | `json` | Log shape: `json` (one JSON object per line, for log collectors) or `console` (human-readable). |
 | `ECLUSE_TELEMETRY` | No | `off` | OpenTelemetry master switch. With it `off`, no telemetry is emitted. When `on`, the SDK reads the standard `OTEL_*` variables. |
@@ -276,7 +277,11 @@ itself, with an **origin-aware trust model**:
   `fd00:ec2::254`) **re-applied to every resolved IP** at connection time (so an
   allowlisted name that resolves to an internal address is refused, a DNS-rebinding
   backstop), a **disallow-by-default `dist.tarball` host policy** (below), and
-  **response-size bounds**.
+  **response-size bounds**. The fixed range set is a **starting point, not a ceiling**:
+  an operator whose own network has additional internal space this list cannot know about
+  in advance extends it with `ECLUSE_ADDITIONAL_BLOCKED_RANGES` (comma-separated CIDRs,
+  applied to every mount alike). It only ever **widens** the block; there is no
+  corresponding way to narrow it.
 - **The trusted private origin**, your operator-configured `ECLUSE_MOUNTS__NPM__PRIVATE_UPSTREAM`, is
   deliberately _not_ subject to the internal-address block: a private registry
   legitimately lives on your internal network, so Écluse has to be able to reach it.

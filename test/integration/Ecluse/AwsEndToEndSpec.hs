@@ -6,7 +6,6 @@ import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteArray.Encoding (Base (Base16, Base64), convertToBase)
 import Data.ByteString qualified as BS
-import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), fromGregorian, nominalDay)
 import Katip (Environment (Environment), LogEnv, Namespace (Namespace), initLogEnv)
@@ -35,7 +34,7 @@ import Ecluse.Core.Registry.Npm.Route qualified as Npm
 import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan), atDefaultPrecedence)
-import Ecluse.Core.Security (LoweredHostSet, TarballHostPolicy (SameHostAsPackument), defaultLimits, lowerCaseHosts, tarballHostGate)
+import Ecluse.Core.Security (TarballHostPolicy (SameHostAsPackument), defaultLimits, tarballHostGate)
 import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Core.Server.Metadata (newNpmMetadataClient)
@@ -185,7 +184,7 @@ mountBinding privateUrl publicUrl mirrorUrl = do
                 , pdMirrorTarget = mirrorUrl
                 , pdRules = prepared
                 , pdTarballHostPolicy = SameHostAsPackument
-                , pdAllowedInternalHosts = loopbackOptIn
+                , pdAdditionalBlockedRanges = []
                 , pdTarballHostGate = tarballHostGate privateUrl publicUrl mirrorUrl
                 , pdLimits = defaultLimits
                 , pdInboundToken = Nothing
@@ -283,7 +282,7 @@ versionObject version file port =
         , "version" .= version
         , "dist"
             .= object
-                [ "tarball" .= ("http://127.0.0.1:" <> port <> "/left-pad/-/" <> file)
+                [ "tarball" .= ("http://localhost:" <> port <> "/left-pad/-/" <> file)
                 , "integrity" .= sha512Integrity
                 , "shasum" .= sha1Shasum
                 ]
@@ -297,14 +296,12 @@ fixedNow = UTCTime (fromGregorian 2026 6 1) 0
 admitOldEnough :: [PrecededRule]
 admitOldEnough = [atDefaultPrecedence (AllowIfOlderThan (7 * nominalDay))]
 
--- Loopback is an internal address, so it is opted into both the guarded manager's
--- resolved-IP recheck and the deps' tarball-host gate to let the in-process fetches land.
-loopbackOptIn :: LoweredHostSet
-loopbackOptIn = lowerCaseHosts (Set.fromList ["127.0.0.1", "::1"])
-
--- A loopback base URL for a testWithApplication-hosted stub on the given port.
+-- A loopback base URL for a testWithApplication-hosted stub on the given port, addressed
+-- by the "localhost" DNS name rather than a bare IP literal: the internal-range block
+-- only recognises a literal, never a name, so this in-process stub never needs an
+-- operator-style opt-in to let the fetch land.
 loopbackUrl :: Int -> Text
-loopbackUrl port = "http://127.0.0.1:" <> show port
+loopbackUrl port = "http://localhost:" <> show port
 
 -- The port a stub was reached on, from the request's @Host@ header, so a served
 -- packument can name its own @dist.tarball@ at the same port.

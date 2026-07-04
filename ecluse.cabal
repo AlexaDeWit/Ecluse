@@ -491,6 +491,7 @@ test-suite ecluse-core-unit
     , hspec-hedgehog    ^>=0.3
     , http-client       ^>=0.7
     , http-types        ^>=0.12
+    , iproute           ^>=1.7
     , katip             ^>=0.8.8
     , memory            ^>=0.18
     , network           ^>=3.2
@@ -579,6 +580,7 @@ test-suite ecluse-unit
     , insert-ordered-containers  ^>=0.2
     , openapi3          ^>=3.2
     , http-types        ^>=0.12
+    , iproute           ^>=1.7
     , hs-opentelemetry-api  ^>=1.0
     , hs-opentelemetry-exporter-in-memory  ^>=1.0
     , hs-opentelemetry-instrumentation-http-client  ^>=1.0
@@ -649,6 +651,7 @@ test-suite ecluse-integration
     , http-types       ^>=0.12
     , hs-opentelemetry-api  ^>=1.0
     , hs-opentelemetry-sdk  ^>=1.0
+    , iproute          ^>=1.7
     , katip            ^>=0.8.8
     , memory           ^>=0.18
     , microlens        ^>=0.4.13
@@ -692,6 +695,7 @@ test-suite ecluse-residency
     , hspec             ^>=2.11
     , http-client      ^>=0.7
     , http-types       ^>=0.12
+    , iproute          ^>=1.7
     , katip            ^>=0.8.8
     , memory           ^>=0.18
     , text             ^>=2.1
@@ -865,6 +869,7 @@ executable bench-load
     , http-client      ^>=0.7
     , http-client-tls  ^>=0.3.6
     , http-types       ^>=0.12
+    , iproute          ^>=1.7
     , katip            ^>=0.8.8
     , memory           ^>=0.18
     , text             ^>=2.1

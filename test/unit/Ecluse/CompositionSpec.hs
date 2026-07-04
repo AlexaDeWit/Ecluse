@@ -607,6 +607,25 @@ composeBindingsSpec = describe "planMounts / composeBindings (config-driven serv
                 Nothing -> expectationFailure "expected packument deps wired"
             other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
 
+    it "defaults additionalBlockedRanges to empty onto every mount's deps" $ do
+        _ <- expectEnv staticEnvVars
+        planFrom staticEnvVars Nothing >>= \case
+            Right [binding] -> case bindingPackumentDeps binding of
+                Just deps -> pdAdditionalBlockedRanges deps `shouldBe` []
+                Nothing -> expectationFailure "expected packument deps wired"
+            other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
+
+    it "threads the operator's global additionalBlockedRanges onto every mount's deps" $ do
+        -- Global (not per-mount): which internal ranges exist on an operator's own
+        -- network is a deployment-wide fact, so one list applies to every mount alike.
+        let testEnvVars = ("ECLUSE_ADDITIONAL_BLOCKED_RANGES", "203.0.113.0/24") : staticEnvVars
+        _ <- expectEnv testEnvVars
+        planFrom testEnvVars Nothing >>= \case
+            Right [binding] -> case bindingPackumentDeps binding of
+                Just deps -> pdAdditionalBlockedRanges deps `shouldBe` ["203.0.113.0/24"]
+                Nothing -> expectationFailure "expected packument deps wired"
+            other -> expectationFailure ("expected one binding, got " <> show (fmap length other))
+
     it "defaults the response-bound budget to the secure defaults" $ do
         -- With no PROXY_MAX_* set, the deps carry Ecluse.Core.Security.defaultLimits -- the
         -- secure-default body/version/nesting ceilings (security.md invariant 4).

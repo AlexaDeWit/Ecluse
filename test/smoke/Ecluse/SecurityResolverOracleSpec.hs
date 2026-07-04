@@ -2,7 +2,6 @@ module Ecluse.SecurityResolverOracleSpec (spec) where
 
 import Control.Exception (IOException, try)
 import Data.IP (IP, fromSockAddr)
-import Data.Set qualified as Set
 import Data.Text qualified as T
 import Hedgehog (Gen)
 import Hedgehog qualified as H
@@ -20,7 +19,7 @@ import Numeric (showHex, showOct)
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog, modifyMaxSuccess)
 
-import Ecluse.Core.Security (LoweredHostSet, isBlockedIP, isBlockedTarget, lowerCaseHosts, parseIpLiteral)
+import Ecluse.Core.Security (isBlockedIP, isBlockedTarget, parseIpLiteral)
 
 {- | Smoke tier: a /generative, live/ differential between the SSRF literal
 recogniser's IPv4 octet coercion and the __real__ libc resolver. The hand-rolled
@@ -35,9 +34,10 @@ internal ranges so blocked cases actually occur, with an occasional malformed oc
 (invalid-octal @08@, overflowing @0400@\/@256@\/@0x100@). For each spelling it
 resolves numerically (@AI_NUMERICHOST@ -- local, no DNS) and asserts:
 
-  * the resolver accepts it as address @a@ ⟹ @'isBlockedTarget' noOptIn spelling ==
-    'isBlockedIP' a@ (our literal-layer block decision agrees with how the resolver
-    classifies the address it would actually dial); and
+  * the resolver accepts it as address @a@ ⟹ @'isBlockedTarget' [] spelling ==
+    'isBlockedIP' [] a@ (our literal-layer block decision agrees with how the resolver
+    classifies the address it would actually dial, with no operator-configured
+    additional ranges in play); and
   * the resolver rejects it ⟹ @'parseIpLiteral' spelling == 'Nothing'@ (we never
     claim a literal the resolver will not accept).
 
@@ -75,12 +75,12 @@ generativeOracleSpec =
                     let mip = resolved >>= ipOf
                     H.annotateShow mip
                     -- Non-vacuity: every meaningful class must occur across the run.
-                    H.cover 2 "blocked (resolves to an internal address)" (maybe False isBlockedIP mip)
-                    H.cover 2 "not blocked (resolves to a public address)" (maybe False (not . isBlockedIP) mip)
+                    H.cover 2 "blocked (resolves to an internal address)" (maybe False (isBlockedIP []) mip)
+                    H.cover 2 "not blocked (resolves to a public address)" (maybe False (not . isBlockedIP []) mip)
                     H.cover 2 "resolver-rejected (malformed spelling)" (isNothing mip)
                     case mip of
                         -- The resolver accepted it: our verdict must match the resolved address.
-                        Just a -> isBlockedTarget noOptIn spelling H.=== isBlockedIP a
+                        Just a -> isBlockedTarget [] spelling H.=== isBlockedIP [] a
                         -- The resolver rejected it: we must not claim a literal either.
                         Nothing -> H.assert (isNothing (parseIpLiteral spelling))
 
@@ -185,7 +185,3 @@ resolveNumeric host = do
 -- | The @iproute@ 'IP' of a resolved socket address (always 'Just' for an AF_INET result).
 ipOf :: SockAddr -> Maybe IP
 ipOf = fmap fst . fromSockAddr
-
--- | No deliberately-internal host is opted in: the strictest configuration.
-noOptIn :: LoweredHostSet
-noOptIn = lowerCaseHosts Set.empty

@@ -114,7 +114,7 @@ import Ecluse.Core.Registry.Npm.Request qualified as NpmRequest
 import Ecluse.Core.Wire (renderWire)
 
 import Ecluse.Core.Rules (prepare)
-import Ecluse.Core.Security (Limits (Limits, maxBodyBytes, maxNestingDepth, maxVersionCount), TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), hostAddress, lowerCaseHosts, splitHostPort, tarballHostGate)
+import Ecluse.Core.Security (Limits (Limits, maxBodyBytes, maxNestingDepth, maxVersionCount), TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), hostAddress, splitHostPort, tarballHostGate)
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Cache (CacheConfig (..))
 import Ecluse.Core.Server.Context (MountBinding, PackumentDeps (..), PublishDeps (..))
@@ -728,10 +728,10 @@ composeBindings resolveAdapter clock providers config = do
                 , pdMirrorTarget = registryUrlText (mtUrl (regMirrorTarget regs))
                 , pdRules = prepared
                 , pdTarballHostPolicy = tarballHostPolicy mount
-                , -- The internal-range opt-in for an honoured tarball host is empty: the
-                  -- composition root's secure default for the pure literal-block
-                  -- defence-in-depth on the dist.tarball host gate.
-                  pdAllowedInternalHosts = lowerCaseHosts mempty
+                , -- The operator-configured ranges extending the fixed internal-range block on
+                  -- the dist.tarball host gate; the same list applies to every mount, since which
+                  -- internal ranges exist on an operator's network is a deployment-wide fact.
+                  pdAdditionalBlockedRanges = cfgAdditionalBlockedRanges (configApp config)
                 , -- The tarball-host gate's mount-constant inputs (allowlist + private and
                   -- public hosts), extracted once here so the hot artifact path parses no
                   -- URL and rebuilds no host set per request.
