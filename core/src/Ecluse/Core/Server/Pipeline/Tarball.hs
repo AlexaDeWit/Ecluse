@@ -510,19 +510,22 @@ streamPublicArtifact ::
     Artifact ->
     (Response -> IO ResponseReceived) ->
     IO ResponseReceived
-streamPublicArtifact mode rt renderer deps validators name version artifact respond =
-    if tarballHostHonoured UntrustedOrigin deps (thgPublicHost (pdTarballHostGate deps)) (hostAddress (artUrl artifact))
-        then case withValidators validators . withMethod mode <$> pdBuildArtifactRequestByUrl deps (pdLimits deps) (srPublicManager rt) (pdPublicBaseUrl deps) Nothing (artUrl artifact) of
-            Right req ->
-                relayUpstreamWhen mode (srPublicManager rt) req (const True) relayArtifact respond >>= \case
-                    Just received -> do
-                        -- Mirroring is demand-driven on the GET path only: a HEAD serves
-                        -- no bytes, so there is nothing to back-fill.
-                        enqueueOnFull mode (enqueueMirror rt deps name version artifact)
-                        pure received
-                    Nothing -> respond (artifactError renderer deps (artifactStatus upstreamUnavailable) upstreamUnavailable)
-            Left _ -> respond internalArtifactError
-        else respond crossHostRefused
+streamPublicArtifact mode rt renderer deps validators name version artifact respond
+    | not hostHonoured = respond crossHostRefused
+    | otherwise = case publicRequest of
+        Left _ -> respond internalArtifactError
+        Right req ->
+            relayUpstreamWhen mode (srPublicManager rt) req (const True) relayArtifact respond >>= \case
+                Just received -> do
+                    -- Mirroring is demand-driven on the GET path only: a HEAD serves
+                    -- no bytes, so there is nothing to back-fill.
+                    enqueueOnFull mode (enqueueMirror rt deps name version artifact)
+                    pure received
+                Nothing -> respond (artifactError renderer deps (artifactStatus upstreamUnavailable) upstreamUnavailable)
+  where
+    hostHonoured = tarballHostHonoured UntrustedOrigin deps (thgPublicHost (pdTarballHostGate deps)) (hostAddress (artUrl artifact))
+
+    publicRequest = withValidators validators . withMethod mode <$> pdBuildArtifactRequestByUrl deps (pdLimits deps) (srPublicManager rt) (pdPublicBaseUrl deps) Nothing (artUrl artifact)
 
 {- Tag an upstream artifact request with the serve mode's method: a 'ServeFull' fetch
 keeps the request's default @GET@, a 'ServeHead' probe is marked @HEAD@ so the upstream
@@ -593,33 +596,37 @@ serve) is not enqueued, since there would be no digest to verify against. -}
 enqueueMirror :: ServeRuntime -> PackumentDeps -> PackageName -> Version -> Artifact -> IO ()
 enqueueMirror rt deps name version artifact =
     whenJust (nonEmpty (artHashes artifact)) $ \hashes ->
-        void . spanMirrorEnqueue (srTracing rt) name version (artUrl artifact) enqueueErrorDetail $ \traceContext -> do
-            enqueued <-
-                tryAny . enqueue (srQueue rt) $
-                    MirrorJob
-                        { jobPackage = name
-                        , jobVersion = version
-                        , jobArtifactUrl = artUrl artifact
-                        , jobMirrorTarget = pdMirrorTarget deps
-                        , jobArtifact =
-                            MirrorArtifact
-                                { maFilename = artFilename artifact
-                                , maHashes = hashes
-                                , maSize = artSize artifact
-                                }
-                        , -- The enqueueing span's trace context, captured by the span
-                          -- bracket, so the worker's per-job span links back across the hop.
-                          jobTraceContext = traceContext
-                        }
-            -- Best-effort: the hand-off outcome is counted but never propagated, so
-            -- a refused hand-off records a failure rather than failing or delaying
-            -- the serve. (Drops and backend delivery failures behind the buffered
-            -- hand-off are counted by the composition root's buffer callbacks.)
-            either (const (mpMirrorEnqueueFailure (srMetrics rt))) (const (mpMirrorEnqueued (srMetrics rt))) enqueued
-            -- Hand the outcome back so the span bracket can mark a swallowed failure
-            -- errored on the producer span (the metric counts it; the span explains it).
-            pure enqueued
+        void . spanMirrorEnqueue (srTracing rt) name version (artUrl artifact) enqueueErrorDetail $
+            enqueueJob hashes
   where
+    enqueueJob hashes traceContext = do
+        enqueued <- tryAny (enqueue (srQueue rt) (mirrorJob hashes traceContext))
+        -- Best-effort: the hand-off outcome is counted but never propagated, so
+        -- a refused hand-off records a failure rather than failing or delaying
+        -- the serve. (Drops and backend delivery failures behind the buffered
+        -- hand-off are counted by the composition root's buffer callbacks.)
+        either (const (mpMirrorEnqueueFailure (srMetrics rt))) (const (mpMirrorEnqueued (srMetrics rt))) enqueued
+        -- Hand the outcome back so the span bracket can mark a swallowed failure
+        -- errored on the producer span (the metric counts it; the span explains it).
+        pure enqueued
+
+    mirrorJob hashes traceContext =
+        MirrorJob
+            { jobPackage = name
+            , jobVersion = version
+            , jobArtifactUrl = artUrl artifact
+            , jobMirrorTarget = pdMirrorTarget deps
+            , jobArtifact =
+                MirrorArtifact
+                    { maFilename = artFilename artifact
+                    , maHashes = hashes
+                    , maSize = artSize artifact
+                    }
+            , -- The enqueueing span's trace context, captured by the span
+              -- bracket, so the worker's per-job span links back across the hop.
+              jobTraceContext = traceContext
+            }
+
     -- Project the swallowed enqueue outcome onto the producer span's status: a failure
     -- records the cause (so a trace explains why the mirror was not enqueued), a success
     -- leaves the status unset.
