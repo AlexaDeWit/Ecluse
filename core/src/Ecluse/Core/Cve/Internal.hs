@@ -81,21 +81,36 @@ openHardenedConnection eco dbFile = do
         Right () -> pure (Right conn)
 
 acceptArtifact :: Ecosystem -> Connection -> IO (Either CveDbRejected ())
-acceptArtifact eco conn = do
+acceptArtifact eco conn = runExceptT $ do
+    ExceptT (checkEpochStamp conn)
+    ExceptT (checkRangesTable conn)
+    ExceptT (checkMetaEcosystem eco conn)
+
+checkEpochStamp :: Connection -> IO (Either CveDbRejected ())
+checkEpochStamp conn = do
     stamped <- query_ conn "PRAGMA user_version" :: IO [Only Int]
-    case map fromOnly stamped of
-        [epoch] | epoch == osvSchemaEpoch -> do
-            kinds <- query_ conn "SELECT type FROM sqlite_master WHERE name = 'package_vulnerability_ranges'" :: IO [Only Text]
-            if map fromOnly kinds /= ["table"]
-                then pure (Left CveDbRangesNotATable)
-                else do
-                    named <- query conn "SELECT value FROM meta WHERE key = ?" (Only (renderMetaKey MetaEcosystem)) :: IO [Only Text]
-                    let found = fromOnly <$> listToMaybe named
-                    if found == Just (ecosystemName eco)
-                        then pure (Right ())
-                        else pure (Left (CveDbEcosystemMismatch found))
-        [epoch] -> pure (Left (CveDbWrongEpoch epoch))
-        _ -> pure (Left (CveDbWrongEpoch 0))
+    pure $ case map fromOnly stamped of
+        [epoch]
+            | epoch == osvSchemaEpoch -> Right ()
+            | otherwise -> Left (CveDbWrongEpoch epoch)
+        _ -> Left (CveDbWrongEpoch 0)
+
+checkRangesTable :: Connection -> IO (Either CveDbRejected ())
+checkRangesTable conn = do
+    kinds <- query_ conn "SELECT type FROM sqlite_master WHERE name = 'package_vulnerability_ranges'" :: IO [Only Text]
+    pure $
+        if map fromOnly kinds /= ["table"]
+            then Left CveDbRangesNotATable
+            else Right ()
+
+checkMetaEcosystem :: Ecosystem -> Connection -> IO (Either CveDbRejected ())
+checkMetaEcosystem eco conn = do
+    named <- query conn "SELECT value FROM meta WHERE key = ?" (Only (renderMetaKey MetaEcosystem)) :: IO [Only Text]
+    let found = fromOnly <$> listToMaybe named
+    pure $
+        if found == Just (ecosystemName eco)
+            then Right ()
+            else Left (CveDbEcosystemMismatch found)
 
 {- | Does any advisory for this package name this exact version string as a
 fixed bound? One indexed probe (@package_name, fixed_version@); deliberately

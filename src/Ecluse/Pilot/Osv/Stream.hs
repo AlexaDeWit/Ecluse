@@ -57,13 +57,14 @@ processZipEntries =
             fileBytes <- collectFile
             case decodeStrict fileBytes :: Maybe OsvAdvisory of
                 Just adv -> yieldMany (extractFromAdvisory adv)
-                Nothing -> do
-                    let zipNameTxt = case zipEntryName entry of
-                            Left txt -> txt
-                            Right bs -> decodeUtf8With lenientDecode bs
-                    lift $ logFM WarningS (ls ("Failed to parse OSV advisory JSON from entry: " <> zipNameTxt))
+                Nothing -> lift $ logFM WarningS (ls ("Failed to parse OSV advisory JSON from entry: " <> zipEntryNameText entry))
             processZipEntries
         Just (Right _) -> processZipEntries
+
+zipEntryNameText :: ZipEntry -> Text
+zipEntryNameText entry = case zipEntryName entry of
+    Left txt -> txt
+    Right bs -> decodeUtf8With lenientDecode bs
 
 collectFile :: (Monad m) => ConduitT (Either ZipEntry ByteString) o m ByteString
 collectFile = go []

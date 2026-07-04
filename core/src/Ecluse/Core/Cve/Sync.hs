@@ -137,34 +137,38 @@ syncStep env lastSeen =
         Nothing -> pure SyncAbsent
         Just remote
             | Just remote == lastSeen -> pure SyncUnchanged
-            | otherwise -> do
-                let temp = syncDbPath env <> ".tmp"
-                fetched <- fetchDownload (syncFetch env) temp `onException` discardTemp temp
-                opened <- openCveDb (syncEcosystem env) temp `onException` discardTemp temp
-                case opened of
-                    Left rejection -> do
-                        discardTemp temp
-                        pure (SyncRejected fetched rejection)
-                    Right db -> mask $ \restore -> do
-                        -- The verified connection follows the inode through the
-                        -- rename; the canonical name now holds the newest
-                        -- accepted artifact and the temp name is gone. Up to
-                        -- here this side still owns the connection, so a
-                        -- failure closes it and discards the download.
-                        restore (renameFile temp (syncDbPath env))
-                            `onException` (cveDbClose db >> discardTemp temp)
-                        -- 'swapIn' publishes atomically before it retires the
-                        -- displaced generation, and owns the connection from
-                        -- entry: a failure or cancellation while the displaced
-                        -- generation drains must never close the newly live
-                        -- database, so no cleanup wraps it. The mask pins the
-                        -- ownership handoff; the drain wait inside stays
-                        -- interruptible.
-                        swapIn (syncSlot env) db
-                        pure (SyncSwapped fetched (cveDbMeta db))
-  where
-    -- Best-effort: the temp may already be renamed away or never created.
-    discardTemp temp = removeFile temp `catchAny` const pass
+            | otherwise -> syncNewArtifact env
+
+syncNewArtifact :: SyncEnv -> IO SyncOutcome
+syncNewArtifact env = do
+    let temp = syncDbPath env <> ".tmp"
+    fetched <- fetchDownload (syncFetch env) temp `onException` discardTemp temp
+    opened <- openCveDb (syncEcosystem env) temp `onException` discardTemp temp
+    case opened of
+        Left rejection -> do
+            discardTemp temp
+            pure (SyncRejected fetched rejection)
+        Right db -> publishVerified env temp fetched db
+
+publishVerified :: SyncEnv -> FilePath -> DbEtag -> CveDb -> IO SyncOutcome
+publishVerified env temp fetched db = mask $ \restore -> do
+    -- The verified connection follows the inode through the rename; the
+    -- canonical name now holds the newest accepted artifact and the temp name
+    -- is gone. Up to here this side still owns the connection, so a failure
+    -- closes it and discards the download.
+    restore (renameFile temp (syncDbPath env))
+        `onException` (cveDbClose db >> discardTemp temp)
+    -- 'swapIn' publishes atomically before it retires the displaced
+    -- generation, and owns the connection from entry: a failure or
+    -- cancellation while the displaced generation drains must never close the
+    -- newly live database, so no cleanup wraps it. The mask pins the
+    -- ownership handoff; the drain wait inside stays interruptible.
+    swapIn (syncSlot env) db
+    pure (SyncSwapped fetched (cveDbMeta db))
+
+-- Best-effort: the temp may already be renamed away or never created.
+discardTemp :: FilePath -> IO ()
+discardTemp temp = removeFile temp `catchAny` const pass
 
 {- | The task's timing: the boot burst's backoff delays and the steady poll
 interval, both in microseconds. The composition root ships 'bootBackoffDelays'
@@ -206,7 +210,7 @@ runCveSync env schedule notifyFirstSync = do
     eco = show (syncEcosystem env) :: Text
 
     burst lastSeen delays = do
-        (settled, seen') <- attempt lastSeen
+        (settled, seen') <- supervisedStep env eco notifyFirstSync lastSeen
         case (settled, delays) of
             (True, _) -> pure seen'
             (False, []) -> do
@@ -218,31 +222,32 @@ runCveSync env schedule notifyFirstSync = do
 
     poll lastSeen = do
         threadDelay (schedPollDelay schedule)
-        (_, seen') <- attempt lastSeen
+        (_, seen') <- supervisedStep env eco notifyFirstSync lastSeen
         poll seen'
 
-    -- One supervised step: (the burst may stop, the ETag now last seen).
-    attempt lastSeen =
-        tryAny (liftIO (syncStep env lastSeen)) >>= \case
-            Left err -> do
-                logFM ErrorS (ls ("cve-sync[" <> eco <> "]: sync attempt failed: " <> show err))
-                pure (False, lastSeen)
-            Right (SyncSwapped etag meta) -> do
-                logFM InfoS (ls ("cve-sync[" <> eco <> "]: advisory database swapped in: etag=" <> show etag <> " meta=" <> show meta))
-                liftIO notifyFirstSync
-                pure (True, Just etag)
-            Right SyncUnchanged -> do
-                logFM DebugS (ls ("cve-sync[" <> eco <> "]: advisory database unchanged"))
-                pure (True, lastSeen)
-            Right SyncAbsent -> do
-                logFM DebugS (ls ("cve-sync[" <> eco <> "]: no advisory database published yet"))
-                pure (False, lastSeen)
-            Right (SyncRejected etag rejection) -> do
-                logFM ErrorS (ls ("cve-sync[" <> eco <> "]: downloaded artifact refused (keeping last good): " <> show rejection))
-                -- Remembered so the same bad artifact is not re-downloaded
-                -- every poll; a fixed re-publish carries a new ETag. The burst
-                -- stops: retrying identical bytes cannot end differently.
-                pure (True, Just etag)
+-- One supervised step: (the burst may stop, the ETag now last seen).
+supervisedStep :: (MonadUnliftIO m, KatipContext m) => SyncEnv -> Text -> IO () -> Maybe DbEtag -> m (Bool, Maybe DbEtag)
+supervisedStep env eco notifyFirstSync lastSeen =
+    tryAny (liftIO (syncStep env lastSeen)) >>= \case
+        Left err -> do
+            logFM ErrorS (ls ("cve-sync[" <> eco <> "]: sync attempt failed: " <> show err))
+            pure (False, lastSeen)
+        Right (SyncSwapped etag meta) -> do
+            logFM InfoS (ls ("cve-sync[" <> eco <> "]: advisory database swapped in: etag=" <> show etag <> " meta=" <> show meta))
+            liftIO notifyFirstSync
+            pure (True, Just etag)
+        Right SyncUnchanged -> do
+            logFM DebugS (ls ("cve-sync[" <> eco <> "]: advisory database unchanged"))
+            pure (True, lastSeen)
+        Right SyncAbsent -> do
+            logFM DebugS (ls ("cve-sync[" <> eco <> "]: no advisory database published yet"))
+            pure (False, lastSeen)
+        Right (SyncRejected etag rejection) -> do
+            logFM ErrorS (ls ("cve-sync[" <> eco <> "]: downloaded artifact refused (keeping last good): " <> show rejection))
+            -- Remembered so the same bad artifact is not re-downloaded
+            -- every poll; a fixed re-publish carries a new ETag. The burst
+            -- stops: retrying identical bytes cannot end differently.
+            pure (True, Just etag)
 
 {- | The real transport: S3 @HEAD@ for the ETag, bounded streaming @GET@ for
 the bytes, against one bucket and key. A @404@ on @HEAD@ is the honest
@@ -252,28 +257,35 @@ for the sync task's supervision to log.
 s3CveFetch :: AWS.Env -> Text -> Text -> Int -> CveFetch
 s3CveFetch awsEnv bucket key maxBytes =
     CveFetch
-        { fetchHeadEtag =
-            runResourceT (AWS.sendEither awsEnv (S3.newHeadObject (S3.BucketName bucket) (S3.ObjectKey key))) >>= \case
-                Right resp -> pure (dbEtag <$> resp ^. S3L.headObjectResponse_eTag)
-                Left err
-                    | isNotFound err -> pure Nothing
-                    | otherwise -> throwIO err
-        , fetchDownload = \dest -> runResourceT $ do
-            resp <- AWS.send awsEnv (S3.newGetObject (S3.BucketName bucket) (S3.ObjectKey key))
-            -- The declared length fails fast; the streaming cap is the
-            -- enforcement (a declared length is not a guarantee).
-            for_ (resp ^. S3L.getObjectResponse_contentLength) $ \len ->
-                when (len > fromIntegral maxBytes) (throwIO (OsvDbTooLarge maxBytes))
-            AWS.sinkBody (resp ^. S3L.getObjectResponse_body) (cappedAt maxBytes .| C.sinkFile dest)
-            maybe (throwIO OsvDbNoEtag) (pure . dbEtag) (resp ^. S3L.getObjectResponse_eTag)
+        { fetchHeadEtag = s3HeadEtag awsEnv bucket key
+        , fetchDownload = s3Download awsEnv bucket key maxBytes
         }
-  where
-    dbEtag :: S3.ETag -> DbEtag
-    dbEtag (S3.ETag bytes) = DbEtag (decodeUtf8 bytes)
 
-    isNotFound = \case
-        AWS.ServiceError se -> statusCode (se ^. AWS.serviceError_status) == 404
-        _ -> False
+s3HeadEtag :: AWS.Env -> Text -> Text -> IO (Maybe DbEtag)
+s3HeadEtag awsEnv bucket key =
+    runResourceT (AWS.sendEither awsEnv (S3.newHeadObject (S3.BucketName bucket) (S3.ObjectKey key))) >>= \case
+        Right resp -> pure (dbEtag <$> resp ^. S3L.headObjectResponse_eTag)
+        Left err
+            | isNotFound err -> pure Nothing
+            | otherwise -> throwIO err
+
+s3Download :: AWS.Env -> Text -> Text -> Int -> FilePath -> IO DbEtag
+s3Download awsEnv bucket key maxBytes dest = runResourceT $ do
+    resp <- AWS.send awsEnv (S3.newGetObject (S3.BucketName bucket) (S3.ObjectKey key))
+    -- The declared length fails fast; the streaming cap is the
+    -- enforcement (a declared length is not a guarantee).
+    for_ (resp ^. S3L.getObjectResponse_contentLength) $ \len ->
+        when (len > fromIntegral maxBytes) (throwIO (OsvDbTooLarge maxBytes))
+    AWS.sinkBody (resp ^. S3L.getObjectResponse_body) (cappedAt maxBytes .| C.sinkFile dest)
+    maybe (throwIO OsvDbNoEtag) (pure . dbEtag) (resp ^. S3L.getObjectResponse_eTag)
+
+dbEtag :: S3.ETag -> DbEtag
+dbEtag (S3.ETag bytes) = DbEtag (decodeUtf8 bytes)
+
+isNotFound :: AWS.Error -> Bool
+isNotFound = \case
+    AWS.ServiceError se -> statusCode (se ^. AWS.serviceError_status) == 404
+    _ -> False
 
 {- | A pass-through conduit that refuses to stream past the byte cap
 ('OsvDbTooLarge'): the enforcement behind 's3CveFetch''s bounded download,

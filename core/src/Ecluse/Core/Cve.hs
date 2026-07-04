@@ -49,7 +49,7 @@ import Ecluse.Core.Cve.Internal (AdvisoryRange (..), CveDbRejected (..), advisor
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Version (compareVersions, mkVersion)
 
-import Database.SQLite.Simple (close)
+import Database.SQLite.Simple (Connection, close)
 
 {- | Advisory questions about one ecosystem's artifact -- the read-only view a
 consumer (a rule evaluation) is handed. It deliberately cannot release the
@@ -95,9 +95,8 @@ provenance row), and then too the connection is already closed: an exception
 never leaks it.
 -}
 openCveDb :: Ecosystem -> FilePath -> IO (Either CveDbRejected CveDb)
-openCveDb eco dbFile = do
-    opened <- openHardenedConnection eco dbFile
-    case opened of
+openCveDb eco dbFile =
+    openHardenedConnection eco dbFile >>= \case
         Left rejection -> pure (Left rejection)
         Right conn -> do
             -- Until the handle is handed over, this side owns the connection:
@@ -105,17 +104,19 @@ openCveDb eco dbFile = do
             -- can still fail to decode here, and that failure must close the
             -- connection rather than leak it.
             meta <- provenanceQuery conn `onException` close conn
-            pure $
-                Right
-                    CveDb
-                        { cveDbLookup =
-                            CveLookup
-                                { cveRemediationProbe = probeQuery conn
-                                , cveAdvisoriesFor = advisoriesQuery conn
-                                }
-                        , cveDbClose = close conn
-                        , cveDbMeta = meta
-                        }
+            pure (Right (mkCveDb conn meta))
+
+mkCveDb :: Connection -> [(Text, Text)] -> CveDb
+mkCveDb conn meta =
+    CveDb
+        { cveDbLookup =
+            CveLookup
+                { cveRemediationProbe = probeQuery conn
+                , cveAdvisoriesFor = advisoriesQuery conn
+                }
+        , cveDbClose = close conn
+        , cveDbMeta = meta
+        }
 
 {- | Bracket a lexically-scoped use of an artifact: open, hand the consumer
 view to the action, and close on any exit. A rejected artifact short-circuits
