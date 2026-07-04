@@ -261,7 +261,7 @@ serveWithDeps ::
     (Response -> IO ResponseReceived) ->
     Handler ResponseReceived
 serveWithDeps mode renderer deps name request respond
-    | not (edgeAuthorised deps request) = liftIO (respond (edgeUnauthorised renderer))
+    | not (edgeTokenMatches (pdInboundToken deps) clientToken) = liftIO (respond (edgeUnauthorised renderer))
     | otherwise = do
         rt <- asks ctxRuntime
         withServeAdmission (srMetrics rt) (srAdmission rt) (serveAdmitted rt) >>= \case
@@ -270,11 +270,14 @@ serveWithDeps mode renderer deps name request respond
                 mpServeDecision (srMetrics rt) Metric.Unavailable
                 respond (serveOverloaded renderer)
   where
+    -- The client's bearer, scanned out of the headers once: the edge gate compares
+    -- it and the private-origin fetch forwards it.
+    clientToken = forwardedToken request
+
     serveAdmitted rt = do
         logFM InfoS (ls ("serving packument request for " <> renderPackageName name))
         let metrics = srMetrics rt
         evalCtx <- liftIO (EvalContext <$> pdNow deps)
-        let clientToken = forwardedToken request
         (privResult, pubResult) <-
             concurrently
                 (fetchPrivateOrigin deps rt clientToken name)

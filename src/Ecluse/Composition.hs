@@ -69,6 +69,8 @@ module Ecluse.Composition (
     resolveServeAdmission,
     resolvePrivateConnections,
     openFileSoftLimit,
+    mirrorEnqueueBufferDepth,
+    mirrorEnqueueReportInterval,
 
     -- * Internals exported for testing
     parseCodeArtifactHost,
@@ -216,6 +218,23 @@ privateConnectionsFloor = 64
 
 privateConnectionsCap :: Int
 privateConnectionsCap = 4096
+
+{- | The depth of the producer-side hand-off buffer the composition root wraps in
+front of the mirror queue ('Ecluse.Core.Queue.newEnqueueBuffer'). Sized to absorb a
+cold @npm ci@'s enqueue burst (a lockfile fan-out enqueues one job per public-served
+tarball) while bounding memory; a job dropped at the cap is re-enqueued on the next
+demand for its artifact, so overflow costs a deferred mirror, never correctness.
+-}
+mirrorEnqueueBufferDepth :: Int
+mirrorEnqueueBufferDepth = 1024
+
+{- | How many enqueue-buffer drops or delivery failures pass between warning-log
+reports at the composition root (the first is always reported, then every multiple
+of this). The buffer's callbacks fire per event so the failure counter stays exact,
+while a sustained flood logs one line per this many events rather than one per job.
+-}
+mirrorEnqueueReportInterval :: Int
+mirrorEnqueueReportInterval = 100
 
 {- | The process soft file-descriptor limit (@RLIMIT_NOFILE@), the datapoint
 'resolvePrivateConnections' sizes the private pool against. An __infinite__ or

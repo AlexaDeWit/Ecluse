@@ -7,8 +7,7 @@ for integrity floor enforcement).
 -}
 module Ecluse.Core.Server.Pipeline.Shared (
     recognisedButUnserved,
-    edgeAuthorised,
-    edgeTokenAuthorised,
+    edgeTokenMatches,
     edgeUnauthorised,
     serveOverloaded,
     forwardedToken,
@@ -27,7 +26,6 @@ import Network.HTTP.Types (HeaderName, ResponseHeaders, Status, hAuthorization, 
 import Network.Wai (Request, Response, requestHeaders, responseHeaders, responseLBS, responseStatus)
 
 import Ecluse.Core.Credential (Secret, mkSecret)
-import Ecluse.Core.Server.Context (PackumentDeps (pdInboundToken))
 import Ecluse.Core.Server.Response (
     MountRenderer,
     RejectReason (BelowIntegrityFloor, MissingIntegrity),
@@ -44,24 +42,22 @@ recognisedButUnserved :: MountRenderer -> Response
 recognisedButUnserved renderer =
     renderedResponse status501 [] (renderError renderer Nothing "this route is recognised but not yet served by this proxy")
 
-{- Whether the request carries the configured inbound token. With no token
-configured the edge is open; with one configured the request's bearer
-@Authorization@ must match it exactly. Deny-by-default: a missing or mismatched
-token is rejected. The token match is constant-time: 'Secret' equality compares
-over the full UTF-8 bytes without a content-dependent early out, so this gate
-does not leak the configured token's prefix length through timing. -}
-edgeAuthorised :: PackumentDeps -> Request -> Bool
-edgeAuthorised deps = edgeTokenAuthorised (pdInboundToken deps)
+{- | The shared edge gate against a configured inbound token: with none configured the
+edge is open; with one configured the request's forwarded bearer must match it exactly.
+Deny-by-default: a missing or mismatched bearer is rejected. The match is constant-time:
+'Secret' equality compares over the full UTF-8 bytes without a content-dependent early
+out, so this gate does not leak the configured token's prefix length through timing.
 
-{- The shared edge gate against a configured inbound token: with none configured the
-edge is open; with one configured the request's bearer must match it exactly
-(deny-by-default, constant-time over the full 'Secret' bytes). The packument, tarball,
-and publish paths all apply the same gate, so it is factored here rather than
-duplicated per route. -}
-edgeTokenAuthorised :: Maybe Secret -> Request -> Bool
-edgeTokenAuthorised expected request = case expected of
+The packument, tarball, and publish paths all apply the same gate, so it is factored
+here rather than duplicated per route. It takes the __already-extracted__ bearer
+('forwardedToken') rather than the request, so a handler that also forwards the
+credential upstream scans the headers for it once and reuses the one extraction for
+both.
+-}
+edgeTokenMatches :: Maybe Secret -> Maybe Secret -> Bool
+edgeTokenMatches expected forwarded = case expected of
     Nothing -> True
-    Just want -> forwardedToken request == Just want
+    Just want -> forwarded == Just want
 
 -- A @401@ for a request that failed edge authentication, before any upstream
 -- fetch; the body is shaped by the mount's renderer.

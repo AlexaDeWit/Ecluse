@@ -89,7 +89,7 @@ import GHC.Conc (getNumCapabilities)
 import Katip (katipAddNamespace)
 import Network.HTTP.Client (Manager, newManager)
 import Network.HTTP.Client.TLS (tlsManagerSettings)
-import UnliftIO (concurrently_, throwIO)
+import UnliftIO (concurrently_, race_, throwIO)
 
 import Ecluse.Boot
 import Ecluse.Composition (
@@ -108,6 +108,7 @@ import Ecluse.Config (
 import Ecluse.Core.Credential (AuthToken (..), currentToken)
 import Ecluse.Core.Credential.Refresh (CredentialReporters (CredentialReporters, crBreakerReporter, crRefreshReporter))
 import Ecluse.Core.Ecosystem (Ecosystem (Npm), parseEcosystem, prefixFor)
+import Ecluse.Core.Queue (newEnqueueBuffer)
 import Ecluse.Core.Registry (
     ParseError (..),
     RegistryClient (..),
@@ -130,6 +131,7 @@ import Ecluse.Telemetry.Correlation (ddPayloadNow)
 import Ecluse.Telemetry.Instruments (metricsPortOf)
 import Ecluse.Telemetry.Reporters (
     deferredBreakerReporter,
+    deferredMirrorEnqueueFailure,
     deferredRefreshReporter,
     installMetrics,
     newDeferredMetrics,
@@ -205,10 +207,31 @@ runProxy bootEnv = do
     -- how their policy will resolve (highest precedence first, then name).
     logRuleBootOrder logEnv bindings
     -- The config-selected mirror queue, built once here (the single constructor
-    -- call) from the validated plan and captured in Env: the durable AWS SQS backend,
-    -- or the bounded in-memory backend -- which first emits a loud boot warning (it is
+    -- call) from the validated plan: the durable AWS SQS backend, or the bounded
+    -- in-memory backend -- which first emits a loud boot warning (it is
     -- non-durable / best-effort) and logs each rate-limited cap-overflow drop.
-    queue <- buildMirrorQueue logEnv queuePlan
+    backendQueue <- buildMirrorQueue logEnv queuePlan
+    -- Decouple the serve path from the backend's own enqueue latency: what Env
+    -- captures is the buffered hand-off (an STM write), and the drain loop below --
+    -- raced against the services -- delivers to the backend (an SQS round trip on
+    -- that backend) off the request path, where it would otherwise hold the served
+    -- connection's turn. Drops and delivery failures are logged rate-limited and
+    -- each counts an enqueue failure; both are safe, since a lost job is re-enqueued
+    -- on the next demand for its artifact.
+    (queue, drainEnqueueBuffer) <-
+        newEnqueueBuffer
+            Composition.mirrorEnqueueBufferDepth
+            ( \drops -> do
+                when (enqueueReportWorthy drops) $
+                    logBootWarning logEnv ("mirror enqueue buffer full: " <> show drops <> " job(s) dropped so far; each is re-enqueued on the next demand for its artifact")
+                deferredMirrorEnqueueFailure deferredMetrics
+            )
+            ( \failures detail -> do
+                when (enqueueReportWorthy failures) $
+                    logBootWarning logEnv ("mirror enqueue delivery failed (" <> show failures <> " so far): " <> detail)
+                deferredMirrorEnqueueFailure deferredMetrics
+            )
+            backendQueue
     metadataCache <- newMetadataCache (Composition.cacheConfigFor env)
     heartbeat <- newWorkerHeartbeat
 
@@ -239,7 +262,20 @@ runProxy bootEnv = do
         -- the rest of the run. They are the no-op-meter instruments when telemetry
         -- is off, so this is inert in that posture.
         installMetrics deferredMetrics (envMetrics builtEnv)
-        runServices serverConfig (workerPoliciesFor builtEnv bindings) builtEnv
+        -- The enqueue-buffer drain loop never returns, so it is raced against the
+        -- services: when they finish (shutdown), the race cancels it, and any
+        -- still-buffered jobs are dropped -- the queue's safe loss (re-enqueued on
+        -- the next demand), so the drain never holds up shutdown.
+        race_
+            (runServices serverConfig (workerPoliciesFor builtEnv bindings) builtEnv)
+            drainEnqueueBuffer
+
+{- Report-worthy event counts for the enqueue-buffer warnings: the first, then every
+'Composition.mirrorEnqueueReportInterval'-th, mirroring the bounded memory queue's
+rate-limited drop reporting. The metric alongside counts every event; only the log
+line is rate-limited. -}
+enqueueReportWorthy :: Int -> Bool
+enqueueReportWorthy n = n == 1 || n `mod` Composition.mirrorEnqueueReportInterval == 0
 
 {- Run the server and the mirror worker concurrently over one composition-root
 'Env', the shape the single-process program uses. The two are independent (each

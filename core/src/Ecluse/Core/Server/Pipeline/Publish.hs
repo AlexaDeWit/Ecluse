@@ -65,7 +65,7 @@ publishWithDeps ::
     (Response -> IO ResponseReceived) ->
     Handler ResponseReceived
 publishWithDeps renderer deps name request respond
-    | not (edgeTokenAuthorised (pubInboundToken deps) request) =
+    | not (edgeTokenMatches (pubInboundToken deps) clientToken) =
         liftIO (respond (edgeUnauthorised renderer))
     | not (inPublishScope (pubScopes deps) name) =
         liftIO (respond (outOfScope renderer deps name))
@@ -88,8 +88,12 @@ publishWithDeps renderer deps name request respond
             -- @RequestBodyBS@, so materialise it strict here. The body is already bounded by
             -- the client→proxy request-size cap.
             Nothing -> do
-                outcome <- tryAny (liftIO (pubRelayPublish deps (pubLimits deps) (srPrivateManager rt) (pubTargetUrl deps) (forwardedToken request <|> pubStaticToken deps) name (LBS.toStrict body)))
+                outcome <- tryAny (liftIO (pubRelayPublish deps (pubLimits deps) (srPrivateManager rt) (pubTargetUrl deps) (clientToken <|> pubStaticToken deps) name (LBS.toStrict body)))
                 liftIO (respond (renderRelay renderer deps outcome))
+  where
+    -- The publisher's bearer, scanned out of the headers once: the edge gate
+    -- compares it and the relay forwards it (falling back to the static token).
+    clientToken = forwardedToken request
 
 {- Whether a package name falls within the configured publish-scope allow-list -- the
 anti-shadowing guard. A __scoped__ name is admitted iff its scope is one of the

@@ -87,9 +87,13 @@ data MetricsPort = MetricsPort
     (@ecluse.metadata_cache.assembled.resident_bytes@).
     -}
     , mpMirrorEnqueued :: IO ()
-    -- ^ Record one mirror job enqueued (@ecluse.mirror.enqueued@).
+    {- ^ Record one mirror job accepted for enqueue (@ecluse.mirror.enqueued@) -- the
+    serve path's hand-off to the enqueue buffer, not the backend write.
+    -}
     , mpMirrorEnqueueFailure :: IO ()
-    -- ^ Record one mirror enqueue failure (@ecluse.mirror.enqueue.failures@).
+    {- ^ Record one mirror enqueue failure (@ecluse.mirror.enqueue.failures@) -- a
+    refused hand-off or a failed backend delivery.
+    -}
     }
 
 {- | The mirror worker's metric-recording port -- the worker analogue of 'MetricsPort',

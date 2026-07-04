@@ -121,14 +121,22 @@ serveArtifact mgr upstreamReq respond =
     respond $ responseStream status200 (relayHeaders up) $ \write flush -> do
       let pump = do
             chunk <- brRead (responseBody up)
-            unless (BS.null chunk) (write (byteString chunk) >> flush >> pump)
-      pump                                          -- closed only after Warp returns
+            unless (BS.null chunk) (write (byteString chunk) >> pump)
+      first <- brRead (responseBody up)
+      unless (BS.null first) $ do
+        write (byteString first)
+        flush                                       -- first byte out promptly
+        pump                                        -- closed only after Warp returns
 ```
 
 The upstream connection lives for exactly the duration of the streamed body and
-is closed only when Warp returns `ResponseReceived`. `write` blocks on the socket
-send buffer, so we pull from upstream only as fast as the client drains,**constant memory regardless of artifact size**, with backpressure for free. No
-`ResourceT`, no conduit on the hot path.
+is closed only when Warp returns `ResponseReceived`. `write` fills Warp's bounded
+output buffer and blocks on the socket send when it spills, so we pull from
+upstream only as fast as the client drains,**constant memory regardless of artifact size**, with backpressure for free. Only
+the first chunk is explicitly flushed (prompt first byte); later chunks coalesce
+in the output buffer, so the relay pays fewer socket sends than upstream chunks,
+and Warp flushes the tail at stream end. No `ResourceT`, no conduit on the hot
+path.
 
 **Integrity on the serve path.** The proxy streams artifacts through without
 hashing them, relying on the client's own integrity check, the packument's

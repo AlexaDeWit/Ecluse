@@ -258,14 +258,13 @@ serveTarballWithDeps ::
     (Response -> IO ResponseReceived) ->
     Handler ResponseReceived
 serveTarballWithDeps mode renderer deps name version (Filename file) request respond
-    | not (edgeAuthorised deps request) = liftIO (respond (edgeUnauthorised renderer))
+    | not (edgeTokenMatches (pdInboundToken deps) clientToken) = liftIO (respond (edgeUnauthorised renderer))
     | otherwise = do
         rt <- asks ctxRuntime
-        let clientToken = forwardedToken request
-            -- The client's conditional validators, relayed onto the upstream
-            -- artifact request on both legs so upstream can answer a 304 for a
-            -- pass-through body we serve unchanged (the conditional-GET contract).
-            validators = forwardValidators (requestHeaders request)
+        -- The client's conditional validators, relayed onto the upstream
+        -- artifact request on both legs so upstream can answer a 304 for a
+        -- pass-through body we serve unchanged (the conditional-GET contract).
+        let validators = forwardValidators (requestHeaders request)
         privateHit <- streamPrivateArtifact mode rt deps clientToken validators name file respond
         case privateHit of
             Just received -> do
@@ -275,6 +274,10 @@ serveTarballWithDeps mode renderer deps name version (Filename file) request res
                 liftIO (mpServeDecision (srMetrics rt) Metric.Admit)
                 pure received
             Nothing -> servePublicArtifact mode rt renderer deps validators name version file respond
+  where
+    -- The client's bearer, scanned out of the headers once: the edge gate compares
+    -- it and the private leg forwards it.
+    clientToken = forwardedToken request
 
 {- Stream the artifact from the __trusted__ private upstream as a __conventional stable
 read__: build the tarball request at @{pdPrivateBaseUrl}\/{pkg}\/-\/{file}@ by the
@@ -573,9 +576,12 @@ enqueueOnFull mode act = case mode of
 
 {- Enqueue a demand-driven mirror job for an admitted artifact, __best-effort__: it
 runs after the client response is begun and any failure is swallowed, so a queue
-outage never fails or delays the serve. The job names the artifact's authoritative
-URL (the same location the public fetch targeted) and the mount's mirror target; it
-carries no credential (the worker mints its own).
+outage never fails or delays the serve. The 'enqueue' it calls is the composition
+root's buffered hand-off ('Ecluse.Core.Queue.newEnqueueBuffer'), so even a slow
+backend's own producer latency (the SQS round trip) stays off the request path
+rather than holding the served connection's turn. The job names the artifact's
+authoritative URL (the same location the public fetch targeted) and the mount's
+mirror target; it carries no credential (the worker mints its own).
 
 It also captures the __serve-time-admitted__ integrity digests, filename, and
 declared size on the job, so the worker verifies the fetched bytes against exactly
@@ -605,8 +611,10 @@ enqueueMirror rt deps name version artifact =
                           -- bracket, so the worker's per-job span links back across the hop.
                           jobTraceContext = traceContext
                         }
-            -- Best-effort: the enqueue outcome is counted but never propagated, so a
-            -- queue outage records a failure rather than failing or delaying the serve.
+            -- Best-effort: the hand-off outcome is counted but never propagated, so
+            -- a refused hand-off records a failure rather than failing or delaying
+            -- the serve. (Drops and backend delivery failures behind the buffered
+            -- hand-off are counted by the composition root's buffer callbacks.)
             either (const (mpMirrorEnqueueFailure (srMetrics rt))) (const (mpMirrorEnqueued (srMetrics rt))) enqueued
             -- Hand the outcome back so the span bracket can mark a swallowed failure
             -- errored on the producer span (the metric counts it; the span explains it).
