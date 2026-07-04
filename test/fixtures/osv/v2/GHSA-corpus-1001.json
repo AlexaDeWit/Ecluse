@@ -1,0 +1,17 @@
+{
+  "id": "GHSA-corpus-1001",
+  "aliases": ["CVE-2026-11001"],
+  "summary": "Fixture: the V2 delta. corpus-clean has no advisory in CorpusV1, so a V1-to-V2 swap flips its rule outcome.",
+  "database_specific": { "severity": "HIGH" },
+  "affected": [
+    {
+      "package": { "name": "corpus-clean", "ecosystem": "npm" },
+      "ranges": [
+        {
+          "type": "SEMVER",
+          "events": [{ "introduced": "0" }]
+        }
+      ]
+    }
+  ]
+}

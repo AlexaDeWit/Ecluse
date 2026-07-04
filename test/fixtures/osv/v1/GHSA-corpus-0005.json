@@ -1,0 +1,17 @@
+{
+  "id": "GHSA-corpus-0005",
+  "aliases": ["CVE-2026-10005"],
+  "summary": "Fixture: a scoped package name.",
+  "database_specific": { "severity": "LOW" },
+  "affected": [
+    {
+      "package": { "name": "@corpus/scoped", "ecosystem": "npm" },
+      "ranges": [
+        {
+          "type": "SEMVER",
+          "events": [{ "introduced": "0" }, { "fixed": "3.0.0" }]
+        }
+      ]
+    }
+  ]
+}

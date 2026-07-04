@@ -1,0 +1,3 @@
+{
+  "deliberately": "not an OSV advisory: the pipeline must log a warning and drop this entry without contributing rows or halting the compile"
+}

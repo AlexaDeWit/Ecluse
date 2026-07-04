@@ -1,0 +1,17 @@
+{
+  "id": "GHSA-corpus-0001",
+  "aliases": ["CVE-2026-10001"],
+  "summary": "Fixture: the canonical vulnerable-then-fixed range.",
+  "database_specific": { "severity": "HIGH" },
+  "affected": [
+    {
+      "package": { "name": "corpus-vuln", "ecosystem": "npm" },
+      "ranges": [
+        {
+          "type": "SEMVER",
+          "events": [{ "introduced": "0" }, { "fixed": "1.2.0" }]
+        }
+      ]
+    }
+  ]
+}
