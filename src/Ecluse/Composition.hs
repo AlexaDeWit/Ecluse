@@ -1,5 +1,3 @@
-{- HLINT ignore "Avoid restricted function" -}
-
 {- | The composition-root wiring: turn a validated 'Config' and the
 process-global credential providers into the served 'MountBinding's, failing fast
 and __aggregated__ on any boot problem.
@@ -430,11 +428,13 @@ resolveCodeArtifactConfig eco app mcfg =
                     }
         (errs, _) -> Left errs
   where
+    -- An unset mirror target falls back to the private upstream (the fold the
+    -- Haddock above describes); with neither set the parse yields 'Nothing', so
+    -- a still-unresolved input is reported as its missing explicit key.
     parsed :: Maybe (Text, Text, Text)
-    parsed = parseCodeArtifactHost (hostAddress mirrorTargetUrl)
-
-    mirrorTargetUrl :: Text
-    mirrorTargetUrl = maybe (registryUrlText (fromMaybe (error "no pUpstream") (mntPrivateUpstream mcfg))) registryUrlText (mntMirrorTarget mcfg)
+    parsed =
+        parseCodeArtifactHost . hostAddress . registryUrlText
+            =<< (mntMirrorTarget mcfg <|> mntPrivateUpstream mcfg)
 
     resolve :: Text -> [Maybe Text] -> Either BootError Text
     resolve key candidates =
