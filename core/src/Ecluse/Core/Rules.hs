@@ -90,6 +90,7 @@ import Ecluse.Core.Breaker (
     reportBreakerChange,
  )
 import Ecluse.Core.Cve (AdvisoryRange (..), CveLookup (..), insideAffectedRange)
+import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Package
 import Ecluse.Core.Rules.Types
 import Ecluse.Core.Version (renderVersion)
@@ -182,31 +183,41 @@ evalRule _ _ (AllowByIdentity ident) pd =
 evalRule deps _ AllowIfRemediatesCve pd =
     rdWithCveLookup deps $ \case
         Nothing -> pure (NoDecision "no advisory database is loaded")
-        Just cve -> do
-            fixes <- cveRemediationProbe cve name version
-            if not fixes
-                then pure (NoDecision "no advisory names this version as its fix")
-                else do
-                    -- The probe hit, so the version is some advisory's exact fixed
-                    -- bound; fetch the package's ranges once to name what it fixes
-                    -- and to guard the lane: a version still inside *any* advisory's
-                    -- affected range (an unfixed one included) must not fast-track.
-                    ranges <- cveAdvisoriesFor cve name
-                    let remediated = ordNub [arCveId ar | ar <- ranges, arFixed ar == Just version]
-                        stillOpen = ordNub [arCveId ar | ar <- ranges, insideAffectedRange eco version ar]
-                    pure $ case (remediated, stillOpen) of
-                        (_, _ : _) ->
-                            NoDecision
-                                ("fixes " <> T.intercalate ", " remediated <> " but is still affected by " <> T.intercalate ", " stillOpen)
-                        ([], []) ->
-                            -- Unreachable under one acquisition (the probe and the
-                            -- fetch see the same artifact), kept total.
-                            NoDecision "no advisory names this version as its fix"
-                        (ids, []) -> Allow ("remediates " <> T.intercalate ", " ids)
+        Just cve -> remediationVerdict cve pd
+
+-- The CVE rule's verdict against a loaded advisory database.
+remediationVerdict :: CveLookup -> PackageDetails -> IO RuleResult
+remediationVerdict cve pd = do
+    fixes <- cveRemediationProbe cve name version
+    if not fixes
+        then pure (NoDecision "no advisory names this version as its fix")
+        else do
+            -- The probe hit, so the version is some advisory's exact fixed
+            -- bound; fetch the package's ranges once to name what it fixes
+            -- and to guard the lane.
+            ranges <- cveAdvisoriesFor cve name
+            pure (classifyRanges (pkgEcosystem (pkgName pd)) version ranges)
   where
-    eco = pkgEcosystem (pkgName pd)
     name = renderPackageName (pkgName pd)
     version = renderVersion (pkgVersion pd)
+
+-- Classify the fetched ranges: a version still inside *any* advisory's affected
+-- range (an unfixed one included) must not fast-track; otherwise credit the
+-- advisories that name this version as their exact fixed bound.
+classifyRanges :: Ecosystem -> Text -> [AdvisoryRange] -> RuleResult
+classifyRanges eco version ranges =
+    case (remediated, stillOpen) of
+        (_, _ : _) ->
+            NoDecision
+                ("fixes " <> T.intercalate ", " remediated <> " but is still affected by " <> T.intercalate ", " stillOpen)
+        ([], []) ->
+            -- Unreachable under one acquisition (the probe and the
+            -- fetch see the same artifact), kept total.
+            NoDecision "no advisory names this version as its fix"
+        (ids, []) -> Allow ("remediates " <> T.intercalate ", " ids)
+  where
+    remediated = ordNub [arCveId ar | ar <- ranges, arFixed ar == Just version]
+    stillOpen = ordNub [arCveId ar | ar <- ranges, insideAffectedRange eco version ar]
 
 -- The one identity test the by-identity twins share: the exact rendered package
 -- name, or the exact package@version.
@@ -285,18 +296,7 @@ prepare deps = traverse (prepareRule deps)
 -- breaker) to the effectful CVE rule; the pure rules run directly.
 prepareRule :: RuleDeps -> PrecededRule -> IO PreparedRule
 prepareRule deps (PrecededRule prec rule) = do
-    resilience <- case rule of
-        AllowIfRemediatesCve -> do
-            breaker <- newBreaker
-            pure $
-                Just
-                    Resilience
-                        { resConfig = defaultEffectfulConfig
-                        , resAlignment = FailNoDecision
-                        , resBreaker = breaker
-                        , resBreakerReporter = rdBreakerReporter deps
-                        }
-        _ -> pure Nothing
+    resilience <- resilienceFor deps rule
     pure
         PreparedRule
             { prepName = ruleName rule
@@ -304,6 +304,22 @@ prepareRule deps (PrecededRule prec rule) = do
             , prepResilience = resilience
             , prepEval = \ctx -> evalRule deps ctx rule
             }
+
+-- The resilience a rule needs: the effectful CVE rule carries the fail-open
+-- policy (allocating its per-source breaker); the pure rules carry none.
+resilienceFor :: RuleDeps -> Rule -> IO (Maybe Resilience)
+resilienceFor deps = \case
+    AllowIfRemediatesCve -> do
+        breaker <- newBreaker
+        pure $
+            Just
+                Resilience
+                    { resConfig = defaultEffectfulConfig
+                    , resAlignment = FailNoDecision
+                    , resBreaker = breaker
+                    , resBreakerReporter = rdBreakerReporter deps
+                    }
+    _ -> pure Nothing
 
 {- | Arrange a rule set into the single total order evaluation walks: __highest
 precedence first, then rule name ascending__ as the deterministic tiebreak. A pure
@@ -371,30 +387,32 @@ evalRules ctx rules pd = step (bootOrder rules) []
             -- keeps the "no mooted IO" guarantee -- a later direct rule is evaluated, and
             -- may decide, before any resilient rule beyond it is launched.
             let (block, rest) = span (isJust . prepResilience) (r : rs)
-             in evalBlock block >>= \case
+             in evalBlock ctx pd block >>= \case
                     Left d -> pure d
                     Right blockReasons -> step rest (reverse blockReasons <> reasons)
 
-    -- Launch a contiguous resilient block concurrently, then await in boot order:
-    -- 'Left' the earliest decisive winner (with every strictly-later evaluation
-    -- cancelled), or 'Right' the block's non-decisive reasons in boot order. 'bracket'
-    -- guarantees every launched evaluation is cancelled on any exit.
-    evalBlock :: [PreparedRule] -> IO (Either Decision [Reason])
-    evalBlock block =
-        bracket
-            (traverse (\r -> async (runEffectfulRule ctx r pd)) block)
-            (traverse_ uninterruptibleCancel)
-            (\asyncs -> awaitInOrder (zip block asyncs) [])
+-- Launch a contiguous resilient block concurrently, then await in boot order:
+-- 'Left' the earliest decisive winner (with every strictly-later evaluation
+-- cancelled), or 'Right' the block's non-decisive reasons in boot order. 'bracket'
+-- guarantees every launched evaluation is cancelled on any exit.
+evalBlock :: EvalContext -> PackageDetails -> [PreparedRule] -> IO (Either Decision [Reason])
+evalBlock ctx pd block =
+    bracket
+        (traverse (\r -> async (runEffectfulRule ctx r pd)) block)
+        (traverse_ uninterruptibleCancel)
+        (\asyncs -> awaitInOrder (zip block asyncs) [])
 
-    awaitInOrder :: [(PreparedRule, Async RuleResult)] -> [Reason] -> IO (Either Decision [Reason])
-    awaitInOrder [] reasons = pure (Right (reverse reasons))
-    awaitInOrder ((r, a) : rest) reasons = do
-        res <- wait a
-        case decisive (prepName r) res of
-            Just d -> do
-                traverse_ (cancel . snd) rest
-                pure (Left d)
-            Nothing -> awaitInOrder rest (reasonOf res : reasons)
+-- Await a launched block's evaluations in boot order; a decisive winner cancels
+-- every strictly-later one.
+awaitInOrder :: [(PreparedRule, Async RuleResult)] -> [Reason] -> IO (Either Decision [Reason])
+awaitInOrder [] reasons = pure (Right (reverse reasons))
+awaitInOrder ((r, a) : rest) reasons = do
+    res <- wait a
+    case decisive (prepName r) res of
+        Just d -> do
+            traverse_ (cancel . snd) rest
+            pure (Left d)
+        Nothing -> awaitInOrder rest (reasonOf res : reasons)
 
 -- Map a rule result to the 'Decision' it credits if decisive, or 'Nothing' if it is a
 -- no-op (the only runtime classification -- there is no comparison of competing
@@ -440,13 +458,19 @@ runEffectfulRule ctx rule pd = case prepResilience rule of
                 pure (exhausted res (prepName rule) (transientCause (resConfig res)) "the rule source circuit breaker is open")
             else do
                 result <- attemptWithRetry res (prepEval rule ctx) pd
-                case result of
-                    Right outcome -> do
-                        commitBreaker res recordSuccess
-                        pure outcome
-                    Left transience -> do
-                        commitBreaker res (tripOnFailure (resConfig res) now)
-                        pure (exhausted res (prepName rule) transience "the rule could not be evaluated")
+                settleOutcome res (prepName rule) now result
+
+{- Settle a finished retry run against the breaker: a clean verdict resets the
+breaker and is returned; an exhausted run advances the breaker and resolves to
+the rule's aligned 'Unavailable'. -}
+settleOutcome :: Resilience -> Text -> UTCTime -> Either Transience RuleResult -> IO RuleResult
+settleOutcome res name now = \case
+    Right outcome -> do
+        commitBreaker res recordSuccess
+        pure outcome
+    Left transience -> do
+        commitBreaker res (tripOnFailure (resConfig res) now)
+        pure (exhausted res name transience "the rule could not be evaluated")
 
 {- Attempt the rule's IO under the per-attempt timeout, retrying with backoff until
 the retry budget is spent. 'Right' a clean verdict on success; 'Left' the 'Transience'

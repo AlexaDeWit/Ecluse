@@ -149,21 +149,24 @@ selectLatest chosen survivors = case nonEmpty survivors of
     Nothing -> Nothing
     Just survivors1
         | Just v <- chosen, survives v -> Just v
-        | otherwise -> Just (repoint survivors1)
+        | otherwise -> Just (repointLatest survivors1)
   where
     survives v = any ((== unVersion v) . unVersion) survivors
 
-    repoint :: NonEmpty Version -> Version
-    repoint ne =
-        let keyed = [(v, k) | v <- toList ne, Just k <- [versionKey v]]
-            stable = [vk | vk@(_, k) <- keyed, isStable k]
-         in case nonEmpty stable of
-                Just s -> fst (maxByKey s)
-                Nothing -> case nonEmpty keyed of
-                    Just ks -> fst (maxByKey ks)
-                    -- No parseable survivor: deterministic, present fallback.
-                    Nothing -> NE.head (NE.sortWith unVersion ne)
-
+-- The repoint arm of 'selectLatest' (its Haddock documents the resolution
+-- order): the maximum stable survivor, else the maximum parseable survivor,
+-- else the lexicographically-smallest raw text.
+repointLatest :: NonEmpty Version -> Version
+repointLatest survivors =
+    let keyed = [(v, k) | v <- toList survivors, Just k <- [versionKey v]]
+        stable = [vk | vk@(_, k) <- keyed, isStable k]
+     in case nonEmpty stable of
+            Just s -> fst (maxByKey s)
+            Nothing -> case nonEmpty keyed of
+                Just ks -> fst (maxByKey ks)
+                -- No parseable survivor: deterministic, present fallback.
+                Nothing -> NE.head (NE.sortWith unVersion survivors)
+  where
     -- Greatest by canonical key; total because every element carries a key.
     maxByKey :: NonEmpty (Version, VersionKey) -> (Version, VersionKey)
     maxByKey = maximumBy (comparing snd)
