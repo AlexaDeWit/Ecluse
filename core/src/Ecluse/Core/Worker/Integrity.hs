@@ -65,55 +65,55 @@ Right (IntegrityMismatch "the SHA1 digest did not match the fetched bytes")
 verifyIntegrity :: NonEmpty Hash -> ByteString -> IntegrityResult
 verifyIntegrity hashes bytes =
     let strongest = maximumBy (comparing authority) hashes
-     in case matchStrongest strongest of
+     in case matchesDigest (toLazy bytes) strongest of
             Nothing ->
                 -- Fail closed: the strongest present digest is in an algorithm we
                 -- cannot recompute, so we cannot prove the bytes -- never drop to a
                 -- weaker digest an attacker could forge.
                 IntegrityMismatch
                     ( "the strongest admitted digest ("
-                        <> describe strongest
+                        <> describeDigest strongest
                         <> ") is in an algorithm the worker cannot verify"
                     )
             Just True -> IntegrityVerified
             Just False ->
-                IntegrityMismatch ("the " <> describe strongest <> " digest did not match the fetched bytes")
-  where
-    lazyBytes = toLazy bytes
+                IntegrityMismatch ("the " <> describeDigest strongest <> " digest did not match the fetched bytes")
 
-    -- Algorithm authority, strongest first, so 'maximumBy' selects the digest a match
-    -- must be proven against. It reuses the shared 'integrityStrength' ranking so the
-    -- tamper gate and the serve-admission floor agree on which algorithms are strong.
-    -- An SRI is ranked by the algorithm it asserts ('assertedAlg' -- npm's @sha512-…@
-    -- ranks as 'SHA512'); an SRI whose inner alg is unrecognised asserts nothing and ranks
-    -- at the SHA-256 floor tier (above the legacy SHA-1/MD5). It therefore WINS the
-    -- 'maximumBy' and, unresolvable, the gate fails closed in 'matchStrongest' rather than
-    -- downgrading to a weaker computable digest an attacker who also controls it could
-    -- forge; it stays below a computable sha512, so a real sha512, when co-present, is
-    -- still preferred and verified.
-    authority :: Hash -> Strength
-    authority = maybe (integrityStrength SHA256) integrityStrength . assertedAlg
+-- Algorithm authority, strongest first, so 'maximumBy' selects the digest a match
+-- must be proven against. It reuses the shared 'integrityStrength' ranking so the
+-- tamper gate and the serve-admission floor agree on which algorithms are strong.
+-- An SRI is ranked by the algorithm it asserts ('assertedAlg' -- npm's @sha512-…@
+-- ranks as 'SHA512'); an SRI whose inner alg is unrecognised asserts nothing and ranks
+-- at the SHA-256 floor tier (above the legacy SHA-1/MD5). It therefore WINS the
+-- 'maximumBy' and, unresolvable, the gate fails closed in 'matchesDigest' rather than
+-- downgrading to a weaker computable digest an attacker who also controls it could
+-- forge; it stays below a computable sha512, so a real sha512, when co-present, is
+-- still preferred and verified.
+authority :: Hash -> Strength
+authority = maybe (integrityStrength SHA256) integrityStrength . assertedAlg
 
-    -- Whether the fetched bytes match the chosen digest: resolve its algorithm
-    -- ('assertedAlg', 'Nothing' for an unresolvable SRI), recompute the bytes in that
-    -- algorithm ('computeDigest', 'Nothing' for one the worker will not verify against),
-    -- and compare in the digest's own wire encoding. A hex tag compares case-insensitively
-    -- (hex is); an SRI's base64 body compares case-sensitively (base64 is; folding its case
-    -- would admit a digest that matches the bytes only after a case change). Either 'Nothing'
-    -- is the fail-closed case above.
-    matchStrongest :: Hash -> Maybe Bool
-    matchStrongest h = do
-        alg <- assertedAlg h
-        digestOf <- computeDigest alg
-        let digest = digestOf lazyBytes
-        pure $ case hashAlg h of
-            SRI -> base64 digest == sriBody (hashValue h)
-            _ -> hexLower digest == T.toLower (hashValue h)
+-- Whether the fetched bytes match the chosen digest: resolve its algorithm
+-- ('assertedAlg', 'Nothing' for an unresolvable SRI), recompute the bytes in that
+-- algorithm ('computeDigest', 'Nothing' for one the worker will not verify against),
+-- and compare in the digest's own wire encoding. A hex tag compares case-insensitively
+-- (hex is); an SRI's base64 body compares case-sensitively (base64 is; folding its case
+-- would admit a digest that matches the bytes only after a case change). Either 'Nothing'
+-- is the fail-closed case in 'verifyIntegrity'.
+matchesDigest :: LByteString -> Hash -> Maybe Bool
+matchesDigest lazyBytes h = do
+    alg <- assertedAlg h
+    digestOf <- computeDigest alg
+    let digest = digestOf lazyBytes
+    pure $ case hashAlg h of
+        SRI -> base64 digest == sriBody (hashValue h)
+        _ -> hexLower digest == T.toLower (hashValue h)
 
-    describe :: Hash -> Text
-    describe h = case hashAlg h of
-        SRI -> "SRI " <> sriPrefix (hashValue h)
-        alg -> show alg
+-- Name a digest for the mismatch detail: the SRI prefix for an SRI, the
+-- algorithm otherwise.
+describeDigest :: Hash -> Text
+describeDigest h = case hashAlg h of
+    SRI -> "SRI " <> sriPrefix (hashValue h)
+    alg -> show alg
 
 -- The lower-cased hex encoding of raw digest bytes (matching npm's hex shasum form).
 hexLower :: ByteString -> Text

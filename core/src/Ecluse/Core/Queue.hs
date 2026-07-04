@@ -290,85 +290,85 @@ newInMemoryQueue = do
             { enqueue = modifyState . enqueueJob
             , receive = atomically $ do
                 qs <- readTVar stateVar
-                let (messages, qs') = deliver qs
+                let (messages, qs') = deliverAll qs
                 writeTVar stateVar qs'
                 pure messages
             , ack = modifyState . ackJob
             , extendVisibility = \handle _seconds -> modifyState (holdJob handle)
             }
+
+-- Append a job to the back of the visible queue (FIFO). O(1) amortised.
+enqueueJob :: MirrorJob -> QueueState -> QueueState
+enqueueJob job qs = qs{qsVisible = qsVisible qs <> Seq.singleton job}
+
+-- Drop an acked in-flight job; a handle that is unknown (already acked, never
+-- issued, or not one of ours) is a harmless no-op.
+ackJob :: ReceiptHandle -> QueueState -> QueueState
+ackJob handle qs =
+    case receiptKey handle of
+        Just key -> qs{qsInFlight = Map.delete key (qsInFlight qs)}
+        Nothing -> qs
+
+-- Hold an in-flight job past the next reclaim pass. Unknown handle: no-op.
+holdJob :: ReceiptHandle -> QueueState -> QueueState
+holdJob handle qs =
+    case receiptKey handle of
+        Just key ->
+            qs{qsInFlight = Map.adjust (\f -> f{inFlightHeld = True}) key (qsInFlight qs)}
+        Nothing -> qs
+
+-- Recover the numeric counter a handle was minted from (the inverse of the
+-- 'show' in 'assignReceipts'); 'Nothing' for a handle this queue never issued.
+receiptKey :: ReceiptHandle -> Maybe Word64
+receiptKey = readMaybe . toString . unReceiptHandle
+
+{- A single receive over the in-memory queue state. First reclaim any un-held
+in-flight jobs (their visibility window has lapsed) back to the front of the
+visible queue, and clear the held flag on the rest so they are reclaimed next
+time unless held again. Then deliver every visible job: assign each a fresh
+receipt, move it in-flight, and return it as a 'QueueMessage'. -}
+deliverAll :: QueueState -> ([QueueMessage], QueueState)
+deliverAll qs =
+    let (reclaimed, stillHeld) = reclaim (Map.toList (qsInFlight qs))
+        toDeliver = Seq.fromList reclaimed <> qsVisible qs
+        (messages, nextReceipt, delivered) =
+            assignReceipts (qsNextReceipt qs) (toList toDeliver)
+     in ( messages
+        , QueueState
+            { qsNextReceipt = nextReceipt
+            , qsVisible = Seq.empty
+            , qsInFlight = Map.fromList stillHeld <> delivered
+            }
+        )
+
+{- Partition in-flight entries into (jobs reclaimed to visible, entries that
+stay in flight). A held entry stays in flight but has its hold cleared, so a
+later un-held receive reclaims it. -}
+reclaim ::
+    [(Word64, InFlight)] ->
+    ([MirrorJob], [(Word64, InFlight)])
+reclaim = foldr step ([], [])
   where
-    -- Append a job to the back of the visible queue (FIFO). O(1) amortised.
-    enqueueJob :: MirrorJob -> QueueState -> QueueState
-    enqueueJob job qs = qs{qsVisible = qsVisible qs <> Seq.singleton job}
+    step (key, f) (jobs, held)
+        | inFlightHeld f = (jobs, (key, f{inFlightHeld = False}) : held)
+        | otherwise = (inFlightJob f : jobs, held)
 
-    -- Drop an acked in-flight job; a handle that is unknown (already acked, never
-    -- issued, or not one of ours) is a harmless no-op.
-    ackJob :: ReceiptHandle -> QueueState -> QueueState
-    ackJob handle qs =
-        case receiptKey handle of
-            Just key -> qs{qsInFlight = Map.delete key (qsInFlight qs)}
-            Nothing -> qs
-
-    -- Hold an in-flight job past the next reclaim pass. Unknown handle: no-op.
-    holdJob :: ReceiptHandle -> QueueState -> QueueState
-    holdJob handle qs =
-        case receiptKey handle of
-            Just key ->
-                qs{qsInFlight = Map.adjust (\f -> f{inFlightHeld = True}) key (qsInFlight qs)}
-            Nothing -> qs
-
-    -- Recover the numeric counter a handle was minted from (the inverse of the
-    -- 'show' in 'assignReceipts'); 'Nothing' for a handle this queue never issued.
-    receiptKey :: ReceiptHandle -> Maybe Word64
-    receiptKey = readMaybe . toString . unReceiptHandle
-
-    {- A single receive. First reclaim any un-held in-flight jobs (their
-    visibility window has lapsed) back to the front of the visible queue, and
-    clear the held flag on the rest so they are reclaimed next time unless held
-    again. Then deliver every visible job: assign each a fresh receipt, move it
-    in-flight, and return it as a 'QueueMessage'. -}
-    deliver :: QueueState -> ([QueueMessage], QueueState)
-    deliver qs =
-        let (reclaimed, stillHeld) = reclaim (Map.toList (qsInFlight qs))
-            toDeliver = Seq.fromList reclaimed <> qsVisible qs
-            (messages, nextReceipt, delivered) =
-                assignReceipts (qsNextReceipt qs) (toList toDeliver)
-         in ( messages
-            , QueueState
-                { qsNextReceipt = nextReceipt
-                , qsVisible = Seq.empty
-                , qsInFlight = Map.fromList stillHeld <> delivered
-                }
-            )
-
-    {- Partition in-flight entries into (jobs reclaimed to visible, entries that
-    stay in flight). A held entry stays in flight but has its hold cleared, so a
-    later un-held receive reclaims it. -}
-    reclaim ::
-        [(Word64, InFlight)] ->
-        ([MirrorJob], [(Word64, InFlight)])
-    reclaim = foldr step ([], [])
-      where
-        step (key, f) (jobs, held)
-            | inFlightHeld f = (jobs, (key, f{inFlightHeld = False}) : held)
-            | otherwise = (inFlightJob f : jobs, held)
-
-    {- Give each job a fresh receipt, threading the monotonic counter. Returns
-    the messages, the next free counter value, and the new in-flight entries. The
-    in-flight map is keyed by the numeric counter; the 'ReceiptHandle' the message
-    carries is that counter rendered as text. -}
-    assignReceipts ::
-        Word64 ->
-        [MirrorJob] ->
-        ([QueueMessage], Word64, Map Word64 InFlight)
-    assignReceipts next [] = ([], next, mempty)
-    assignReceipts next (job : rest) =
-        let message = QueueMessage{msgJob = job, msgReceipt = mkReceiptHandle (show next)}
-            (messages, next', inFlight) = assignReceipts (next + 1) rest
-         in ( message : messages
-            , next'
-            , Map.insert next (InFlight{inFlightJob = job, inFlightHeld = False}) inFlight
-            )
+{- Give each job a fresh receipt, threading the monotonic counter. Returns
+the messages, the next free counter value, and the new in-flight entries. The
+in-flight map is keyed by the numeric counter; the 'ReceiptHandle' the message
+carries is that counter rendered as text. -}
+assignReceipts ::
+    Word64 ->
+    [MirrorJob] ->
+    ([QueueMessage], Word64, Map Word64 InFlight)
+assignReceipts next [] = ([], next, mempty)
+assignReceipts next (job : rest) =
+    let message = QueueMessage{msgJob = job, msgReceipt = mkReceiptHandle (show next)}
+        (messages, next', inFlight) = assignReceipts (next + 1) rest
+     in ( message : messages
+        , next'
+        , Map.insert next (InFlight{inFlightJob = job, inFlightHeld = False}) inFlight
+        )
 
 {- | What the bounded in-memory backend needs: its depth cap and its idle-poll
 window. A record (like 'Ecluse.Core.Queue.Sqs.SqsConfig') so each knob is named rather
@@ -473,17 +473,8 @@ newBoundedInMemoryQueue cfg onDrop = do
     pure
         MirrorQueue
             { enqueue = \job -> do
-                report <- atomically $ do
-                    full <- isFullTBQueue queue
-                    if full
-                        then do
-                            -- Drop-newest: at the cap, reject this enqueue rather than
-                            -- grow memory. Safe -- the job is re-enqueued on next demand.
-                            n <- (+ 1) <$> readTVar dropCount
-                            writeTVar dropCount n
-                            pure (if shouldReport n then Just n else Nothing)
-                        else writeTBQueue queue job $> Nothing
-                whenJust report onDrop
+                dropped <- atomically (writeOrDrop queue dropCount job)
+                whenJust dropped (\n -> when (shouldReportDrop n) (onDrop n))
             , -- A bounded long-poll: wait up to the poll window for a batch, else return
               -- [] so the worker's heartbeat keeps advancing on an idle queue. The
               -- timeout aborts the blocked STM transaction, so no job is consumed.
@@ -493,11 +484,11 @@ newBoundedInMemoryQueue cfg onDrop = do
               ack = const pass
             , extendVisibility = \_ _ -> pass
             }
-  where
-    -- Report the first drop, then every interval-th, so the first shed is always
-    -- visible while a sustained flood is rate-limited.
-    shouldReport :: Int -> Bool
-    shouldReport n = n == 1 || n `mod` memoryQueueDropReportInterval == 0
+
+-- Report the first drop, then every interval-th, so the first shed is always
+-- visible while a sustained flood is rate-limited.
+shouldReportDrop :: Int -> Bool
+shouldReportDrop n = n == 1 || n `mod` memoryQueueDropReportInterval == 0
 
 {- Take a bounded batch within one STM transaction: block (retry) until at least one
 job is available, then drain up to 'memoryQueueBatchSize' total without blocking. The
@@ -524,6 +515,25 @@ receiveBatch queue nextReceipt = do
         n <- readTVar nextReceipt
         writeTVar nextReceipt (n + 1)
         pure QueueMessage{msgJob = job, msgReceipt = mkReceiptHandle (show n)}
+
+{- Hand a job to a bounded queue within the caller's transaction: write it when
+there is room, or drop it at the cap (drop-newest) and return the incremented
+running drop total for the caller's report policy. Dropping rather than blocking
+keeps the producer non-blocking, and the loss is safe: a dropped job is
+re-enqueued on the next demand for its artifact. -}
+writeOrDrop :: TBQueue MirrorJob -> TVar Int -> MirrorJob -> STM (Maybe Int)
+writeOrDrop queue dropCount job = do
+    full <- isFullTBQueue queue
+    if full
+        then Just <$> bumpCount dropCount
+        else writeTBQueue queue job $> Nothing
+
+-- Increment a running counter and return the new total.
+bumpCount :: TVar Int -> STM Int
+bumpCount counter = do
+    n <- (+ 1) <$> readTVar counter
+    writeTVar counter n
+    pure n
 
 {- | Wrap a bounded __producer-side hand-off buffer__ in front of a queue, so the
 serve path's 'enqueue' is an in-process STM write (microseconds) no matter how slow
@@ -574,26 +584,23 @@ newEnqueueBuffer depth onDrop onDeliveryFailure backend = do
     buffer <- newTBQueueIO (fromIntegral (max 1 depth))
     dropCount <- newTVarIO (0 :: Int)
     failureCount <- newTVarIO (0 :: Int)
-    let handOff job = do
-            dropped <- atomically $ do
-                full <- isFullTBQueue buffer
-                if full
-                    then do
-                        -- Drop-newest: at the cap, reject this hand-off rather than
-                        -- block the serve path. Safe -- re-enqueued on next demand.
-                        n <- (+ 1) <$> readTVar dropCount
-                        writeTVar dropCount n
-                        pure (Just n)
-                    else writeTBQueue buffer job $> Nothing
+    let
+        -- Unlike the bounded backend, every hand-off drop reports (metric-grade);
+        -- the caller owns any log rate-limiting.
+        handOff job = do
+            dropped <- atomically (writeOrDrop buffer dropCount job)
             whenJust dropped onDrop
-        deliver = do
-            job <- atomically (readTBQueue buffer)
-            tryAny (enqueue backend job) >>= \case
-                Left failure -> do
-                    n <- atomically $ do
-                        n <- (+ 1) <$> readTVar failureCount
-                        writeTVar failureCount n
-                        pure n
-                    onDeliveryFailure n (toText (displayException failure))
-                Right () -> pass
-    pure (backend{enqueue = handOff}, forever deliver)
+    pure (backend{enqueue = handOff}, forever (deliverNext buffer failureCount onDeliveryFailure backend))
+
+{- Deliver the next buffered job to the backend's own 'enqueue', blocking until
+one is buffered. A backend failure invokes the failure callback with the running
+failure total and the failure's detail; the failed job is not redelivered here
+(the safe loss 'newEnqueueBuffer' documents). -}
+deliverNext :: TBQueue MirrorJob -> TVar Int -> (Int -> Text -> IO ()) -> MirrorQueue -> IO ()
+deliverNext buffer failureCount onDeliveryFailure backend = do
+    job <- atomically (readTBQueue buffer)
+    tryAny (enqueue backend job) >>= \case
+        Left failure -> do
+            n <- atomically (bumpCount failureCount)
+            onDeliveryFailure n (toText (displayException failure))
+        Right () -> pass
