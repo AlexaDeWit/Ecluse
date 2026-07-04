@@ -70,11 +70,29 @@ parsePep440 raw = do
         noV = fromMaybe lowered (T.stripPrefix "v" lowered)
         (mainPart, localRaw) = T.breakOn "+" noV
     guard (T.all isMainChar mainPart)
+    (epoch, afterEpoch) <- parseEpoch mainPart
+    (release, suffix) <- parseRelease afterEpoch
+    suffixParts <- parsePep440Suffix suffix
+    localToks <- parseLocal localRaw
+    pure (assembleKey epoch release suffixParts localToks)
+  where
+    isMainChar c = isAsciiAlphaNum c || c == '.' || c == '!' || c == '-' || c == '_'
+
+-- Split an optional @epoch!@ prefix off the main part: the epoch (0 when
+-- absent) and the remainder.
+parseEpoch :: Text -> Maybe (Integer, Text)
+parseEpoch mainPart = do
     let (epochText, afterEpoch) = case T.breakOn "!" mainPart of
             (e, rest)
                 | T.null rest -> ("", mainPart)
                 | otherwise -> (e, T.drop 1 rest)
     epoch <- if T.null epochText then pure 0 else parseNumSeg epochText
+    pure (epoch, afterEpoch)
+
+-- Consume the leading dotted-numeric release: its segments (at least one) and
+-- the unconsumed suffix.
+parseRelease :: Text -> Maybe ([Integer], Text)
+parseRelease afterEpoch = do
     let (releaseText, suffix) = T.span (\c -> isDigit c || c == '.') afterEpoch
         -- 'releaseText' greedily grabs the dot that separates the release from a
         -- suffix ("1.0.dev1" → "1.0." → ["1","0",""]), so drop *one* trailing
@@ -84,45 +102,54 @@ parsePep440 raw = do
     guard (not (any T.null relSegs))
     release <- traverse parseNumSeg relSegs
     guard (not (null release))
-    (mPre, mPost, mDev) <- parsePep440Suffix suffix
-    localToks <- parseLocal localRaw
-    let pre = case mPre of
-            Just (stage, n) -> (1, stage, n)
-            Nothing
-                | isJust mDev && isNothing mPost -> (0, 0, 0)
-                | otherwise -> (2, 0, 0)
-        post = case mPost of
-            Nothing -> (0, 0)
-            Just n -> (1, n)
-        dev = case mDev of
-            Nothing -> (1, 0)
-            Just n -> (0, n)
-    pure
-        Pep440Key
-            { p440Epoch = epoch
-            , p440Release = stripTrailingZeros release
-            , p440Pre = pre
-            , p440Post = post
-            , p440Dev = dev
-            , p440Local = localToks
-            }
+    pure (release, suffix)
   where
-    isMainChar c = isAsciiAlphaNum c || c == '.' || c == '!' || c == '-' || c == '_'
     -- Drop at most one trailing empty segment (the release/suffix separator dot).
     -- Only the final segment is dropped, so a doubled trailing blank ("1.0..dev1")
     -- leaves an empty segment behind for the 'any T.null' guard above to reject.
     dropTrailingEmpty segs = case unsnoc segs of
         Just (initSegs, lastSeg) | T.null lastSeg -> initSegs
         _ -> segs
-    stripTrailingZeros = dropWhileEnd (== 0)
-    parseLocal lr
-        | T.null lr = Just []
-        | otherwise =
-            let segs = T.split (`elem` ['.', '-', '_']) (T.drop 1 lr)
-             in if all (\s -> not (T.null s) && T.all isAsciiAlphaNum s) segs
-                    then Just (map localTok segs)
-                    else Nothing
+
+-- Parse the local segment (still carrying its leading @+@) into ordering
+-- tokens; empty input means no local segment.
+parseLocal :: Text -> Maybe [VToken]
+parseLocal lr
+    | T.null lr = Just []
+    | otherwise =
+        let segs = T.split (`elem` ['.', '-', '_']) (T.drop 1 lr)
+         in if all (\s -> not (T.null s) && T.all isAsciiAlphaNum s) segs
+                then Just (map localTok segs)
+                else Nothing
+  where
     localTok s = if T.all isDigit s then VNum (numOr0 s) else VStr s
+
+-- Assemble the canonical key: strip the release's trailing zeros and band the
+-- suffix parts into the rank tuples documented on 'Pep440Key'.
+assembleKey ::
+    Integer -> [Integer] -> (Maybe (Int, Integer), Maybe Integer, Maybe Integer) -> [VToken] -> Pep440Key
+assembleKey epoch release (mPre, mPost, mDev) localToks =
+    Pep440Key
+        { p440Epoch = epoch
+        , p440Release = stripTrailingZeros release
+        , p440Pre = pre
+        , p440Post = post
+        , p440Dev = dev
+        , p440Local = localToks
+        }
+  where
+    pre = case mPre of
+        Just (stage, n) -> (1, stage, n)
+        Nothing
+            | isJust mDev && isNothing mPost -> (0, 0, 0)
+            | otherwise -> (2, 0, 0)
+    post = case mPost of
+        Nothing -> (0, 0)
+        Just n -> (1, n)
+    dev = case mDev of
+        Nothing -> (1, 0)
+        Just n -> (0, n)
+    stripTrailingZeros = dropWhileEnd (== 0)
 
 {- | Consume a PEP 440 suffix into its prerelease\/post\/dev parts (each absent
 or present), failing if any text is left unconsumed (so trailing garbage is
