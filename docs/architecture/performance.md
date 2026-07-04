@@ -270,7 +270,7 @@ residency, GC stats, and allocations per request.
 | `cache-evicts-large` | the **same** uniform large working set, **TTL > 0**, cache bound **< working set** | **cache eviction under large datasets**: continual eviction + re-derivation, throughput/latency under churn, the alloc/request of re-deriving each evicted large packument, residency bounded by the bound |
 | `tarball-hot-path` | `GET /npm/{pkg}/-/{file}.tgz` answered by the **private conventional read** (the pull-through hits) and streamed through | **the steady-state workhorse by design**: once the mirror warms, the private hit serves the vast majority of tarball traffic (see [registry-model → traffic shape](registry-model.md#traffic-shape-over-time-the-v-and-why-the-public-leg-is-transient)). At the shared concurrency its throughput is client-bound (connections × RTT), so read it for health, not for the proxy's limit |
 | `tarball-onboarding` | the same tarball `GET` with the private pull-through **missing everything** (404 after the injected latency) and the public leg serving: single-version gate → public stream → mirror enqueue | **the onboarding fail-over regime**: what a new project drives until the worker promotes its packages; per-request floor is two sequential upstream round trips plus the stream |
-| `tarball-ceiling` | the private-hit relay at **8× the shared concurrency** against a **2 ms** stub latency (this scenario overrides the probed RTT) | **the proxy's own streaming knee**: relay pump, connection handling, and syscall pressure, with the client's connections × RTT ceiling pushed out of the way; throughput × the worker-artifact payload approximates the relay's byte rate |
+| `tarball-ceiling` | the private-hit relay at **4× the shared concurrency** (about 400 streams at the default base, the relay's measured saturation sweet spot) against a **2 ms** stub latency (this scenario overrides the probed RTT) | **the proxy's own streaming knee**: relay pump, connection handling, and syscall pressure, with the client's connections × RTT ceiling pushed out of the way; throughput × the worker-artifact payload approximates the relay's byte rate |
 | `worker-mirroring` | the mirror worker's `fetch → verify → publish → ack` loop, driven **in-process** (no HTTP surface); the mirror-presence probe answers **absent**, so every job measures the full pipeline, never the dedup short-circuit | the mirror hot path: an artifact fetch, an integrity recompute-and-verify, and a publish |
 
 #### The serve mix: a real-world corpus, large-emphasis
@@ -421,11 +421,11 @@ runner-sane defaults:
 
 | Knob | Environment variable | Default |
 |---|---|---|
-| concurrency (loaded pass) | `BENCH_LOAD_CONCURRENCY` | 50 |
+| concurrency (loaded pass) | `BENCH_LOAD_CONCURRENCY` | 100 |
 | duration (seconds) | `BENCH_LOAD_DURATION_SECONDS` | 30 |
 | injected upstream latency (ms) | `BENCH_LOAD_UPSTREAM_LATENCY_MS` | 5 |
 | probe the live public RTT | `BENCH_LOAD_PROBE_RTT` | on |
-| worker artifact size (bytes) | `BENCH_LOAD_PAYLOAD_BYTES` | 262144 |
+| worker and tarball artifact size (bytes) | `BENCH_LOAD_PAYLOAD_BYTES` | 363520 (about the median popular-package tarball) |
 | cache-eviction bound (entries) | `BENCH_LOAD_CACHE_MAX_ENTRIES` | 3 |
 | cache-eviction working set | `BENCH_LOAD_WORKING_SET` | 64 (capped to the corpus) |
 | metadata admission capacity | `BENCH_LOAD_SERVE_MAX_IN_FLIGHT` | computed from the capability count, as in production (set a number to pin it) |
