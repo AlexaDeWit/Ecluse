@@ -13,7 +13,6 @@ import Data.ByteArray.Encoding (Base (Base64), convertToBase)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.CaseInsensitive qualified as CI
-import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Time (UTCTime (UTCTime), addUTCTime, fromGregorian, nominalDay)
 import Data.Time.Format.ISO8601 (iso8601Show)
@@ -53,7 +52,7 @@ import Ecluse.Core.Rules.Types (
     Rule (AllowIfOlderThan, DenyInstallTimeExecution),
     atDefaultPrecedence,
  )
-import Ecluse.Core.Security (TarballHostPolicy (SameHostAsPackument), defaultLimits, lowerCaseHosts, tarballHostGate)
+import Ecluse.Core.Security (TarballHostPolicy (SameHostAsPackument), defaultLimits, tarballHostGate)
 import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Core.Server.Metadata (newNpmMetadataClient)
@@ -211,7 +210,7 @@ selfBaseUrl :: Request -> Text
 selfBaseUrl req =
     case find ((== hHost) . fst) (requestHeaders req) of
         Just (_, hostPort) -> "http://" <> decodeUtf8 hostPort
-        Nothing -> "http://127.0.0.1"
+        Nothing -> "http://localhost"
 
 {- | A version object whose @dist.tarball@ points at the given base URL's
 conventional tarball slot (@{base}\/thing\/-\/thing-{v}.tgz@), with a distinct
@@ -595,13 +594,14 @@ newTestEnvWithQueue queue manager = do
 {- | The packument-serve dependencies pointing at two in-process upstream ports,
 with the given inbound edge token (usually 'Nothing').
 
-The in-process upstream doubles bind loopback, so @127.0.0.1@ is opted in to the
-internal-range block for the __public__ leg's honoured-tarball gate -- the unit-test
-analogue of an operator deliberately opting an internal /public/ host in. The
-__private__ leg needs no opt-in: it gates as the trusted origin, exempt from the literal
-internal-range block on the `dist.tarball` host gate; a test empties this set to assert
-that exemption directly. The default tarball-host policy is the secure 'SameHostAsPackument';
-a test overrides it where it exercises the cross-host relaxation.
+The in-process upstream doubles bind loopback under the @localhost@ hostname (never
+the bare @127.0.0.1@ literal): the internal-range block only recognises an IP
+/literal/, never a DNS name, so a hostname-addressed loopback double never trips it
+-- no per-host opt-in is needed for the __public__ leg's honoured-tarball gate. The
+__private__ leg needs no such dodge either: it gates as the trusted origin, exempt
+from the literal internal-range block on the `dist.tarball` host gate regardless of
+how its host is spelled. The default tarball-host policy is the secure
+'SameHostAsPackument'; a test overrides it where it exercises the cross-host relaxation.
 -}
 deps :: Int -> Int -> Maybe Text -> IO PackumentDeps
 deps privatePort publicPort inbound = do
@@ -614,7 +614,7 @@ deps privatePort publicPort inbound = do
             , pdMirrorTarget = "https://mirror.test"
             , pdRules = prepared
             , pdTarballHostPolicy = SameHostAsPackument
-            , pdAllowedInternalHosts = lowerCaseHosts (Set.singleton "127.0.0.1")
+            , pdAdditionalBlockedRanges = []
             , pdTarballHostGate = tarballHostGate (localhost privatePort) (localhost publicPort) "https://mirror.test"
             , pdLimits = defaultLimits
             , pdInboundToken = mkSecret <$> inbound
@@ -639,7 +639,7 @@ depsWith effectful privatePort publicPort = do
     pure base{pdRules = prepared <> effectful}
 
 localhost :: Int -> Text
-localhost port = "http://127.0.0.1:" <> show port
+localhost port = "http://localhost:" <> show port
 
 {- | Re-derive the precomputed tarball-host gate from a deps value's (possibly
 overridden) upstream URLs, so a test that record-updates @pdPrivateBaseUrl@,
@@ -925,9 +925,13 @@ admittingPublic v = packument [(v, plainVersion v)] v [(v, publishedDaysAgo 30)]
 
 {- | A path-aware public double whose packument names its @dist.tarball@ on a
 __different host__ (@crossHost@) than the one the packument was served on, while
-still serving the tarball bytes itself. @crossHost@ that resolves to this server (a
-loopback alias like @localhost@) lets a cross-host admit actually fetch through; the
-host text drives the tarball-host policy decision regardless.
+still serving the tarball bytes itself. A @crossHost@ that resolves to this server
+lets a cross-host admit actually fetch through; the host text drives the
+tarball-host policy decision regardless. The fixtures' own upstreams live on
+@localhost@, so the conventional cross alias is a @*.localhost@ subdomain
+(@cross.localhost@): RFC 6761 reserves the whole @.localhost@ domain for loopback,
+and systemd-resolved (dev machines and CI runners alike) resolves any subdomain of
+it to @127.0.0.1@ without an /etc/hosts entry.
 -}
 crossHostPublicUpstream :: Text -> Text -> LByteString -> IO Upstream
 crossHostPublicUpstream crossHost version tarballBody = do

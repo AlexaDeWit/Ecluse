@@ -83,6 +83,11 @@ here.
    may legitimately live on an internal address; see
    [Why `dist.tarball` is honoured](#why-disttarball-is-honoured-and-what-bounds-it)
    and [Network egress is a shared responsibility](#network-egress-is-a-shared-responsibility)).
+   The fixed range set is a starting point, not a ceiling: an operator can extend it with
+   `ECLUSE_ADDITIONAL_BLOCKED_RANGES` (comma-separated CIDRs, applied to every mount
+   alike, fails closed at boot on a malformed entry) for internal space the module
+   cannot know about in advance. It only ever **widens** the block; there is no
+   corresponding knob to narrow it.
 4. **Parsed upstream responses are bounded**, maximum body size, version count,
    and JSON nesting depth, and **fail closed** past any bound: an oversized or
    pathological document is refused, never partially served. The bounds are
@@ -477,5 +482,7 @@ guards follow that principle, and it is made concrete for the tarball path:
   its security note are in
   [Configuration → Outbound egress safety](configuration.md#outbound-egress-safety).
 
-The internal-range opt-in (invariant 3) is the same shape: internal addresses are
-blocked unless a specific private upstream is deliberately opted in.
+The internal-range block (invariant 3) runs the opposite direction: there is no knob
+to narrow it (a literal internal address is always refused on an untrusted origin,
+the trusted private origin's exemption aside), only `ECLUSE_ADDITIONAL_BLOCKED_RANGES`
+to widen it with CIDRs the fixed set cannot know about in advance.

@@ -2,11 +2,11 @@ module Ecluse.Server.Pipeline.TarballSpec (spec) where
 
 import Control.Exception (try)
 import Data.Aeson (object, (.=))
-import Data.Set qualified as Set
+import Data.Text qualified as T
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (mkPackageName)
 import Ecluse.Core.Queue (newInMemoryQueue)
-import Ecluse.Core.Security (TarballHostPolicy (AnyAllowlistedHost), lowerCaseHosts)
+import Ecluse.Core.Security (TarballHostPolicy (AnyAllowlistedHost))
 import Ecluse.Core.Server.Context (PackumentDeps (..))
 import Ecluse.Core.Version (mkVersion)
 import Ecluse.Server.Pipeline.TestSupport
@@ -239,7 +239,7 @@ tarballSpec = describe "artifact (tarball) path" $ do
 
     it "refuses a cross-host public dist.tarball under the SameHostAsPackument default (403, no fetch)" $ do
         privateUp <- privateArtifactMiss
-        publicUp <- crossHostPublicUpstream "localhost" "1.0.0" publicTarballBytes
+        publicUp <- crossHostPublicUpstream "cross.localhost" "1.0.0" publicTarballBytes
         withProxyEnv privateUp publicUp Nothing $ \app env -> do
             resp <- getTarball "1.0.0" Nothing app
             status resp `shouldBe` 403
@@ -249,9 +249,9 @@ tarballSpec = describe "artifact (tarball) path" $ do
 
     it "serves a cross-host public dist.tarball under AnyAllowlistedHost when the host is allowlisted" $ do
         privateUp <- privateArtifactMiss
-        publicUp <- crossHostPublicUpstream "localhost" "1.0.0" publicTarballBytes
+        publicUp <- crossHostPublicUpstream "cross.localhost" "1.0.0" publicTarballBytes
         queue <- newInMemoryQueue
-        let relax d = d{pdTarballHostPolicy = AnyAllowlistedHost, pdMirrorTarget = "http://localhost:9"}
+        let relax d = d{pdTarballHostPolicy = AnyAllowlistedHost, pdMirrorTarget = "http://cross.localhost:9"}
         withProxyEnvQueueDeps queue privateUp publicUp Nothing relax $ \app _env _port -> do
             resp <- getTarball "1.0.0" Nothing app
             status resp `shouldBe` 200
@@ -259,7 +259,7 @@ tarballSpec = describe "artifact (tarball) path" $ do
 
     it "refuses a cross-host public dist.tarball under AnyAllowlistedHost when the host is off the allowlist" $ do
         privateUp <- privateArtifactMiss
-        publicUp <- crossHostPublicUpstream "localhost" "1.0.0" publicTarballBytes
+        publicUp <- crossHostPublicUpstream "cross.localhost" "1.0.0" publicTarballBytes
         queue <- newInMemoryQueue
         let relax d = d{pdTarballHostPolicy = AnyAllowlistedHost}
         withProxyEnvQueueDeps queue privateUp publicUp Nothing relax $ \app _env _port -> do
@@ -292,7 +292,7 @@ tarballSpec = describe "artifact (tarball) path" $ do
             simpleBody resp `shouldBe` publicTarballBytes
 
     it "reads the same-host conventional URL, ignoring the private packument's declared dist.tarball" $ do
-        privateUp <- crossHostPublicUpstream "localhost" "1.0.0" privateTarballBytes
+        privateUp <- crossHostPublicUpstream "cross.localhost" "1.0.0" privateTarballBytes
         publicUp <- artifactUpstream "1.0.0" publicTarballBytes
         withProxyEnv privateUp publicUp Nothing $ \app _env -> do
             resp <- getTarball "1.0.0" Nothing app
@@ -300,12 +300,12 @@ tarballSpec = describe "artifact (tarball) path" $ do
             simpleBody resp `shouldBe` privateTarballBytes
             seenAuth publicUp `shouldReturn` []
 
-    it "serves a same-host private dist.tarball on an internal-IP private origin with no opt-in (trusted-origin exempt)" $ do
+    it "serves a same-host private dist.tarball on an internal-IP private origin (trusted-origin exempt from the internal-range block)" $ do
         privateUp <- privateArtifactHit "1.0.0" privateTarballBytes
         publicUp <- artifactUpstream "1.0.0" publicTarballBytes
-        let noOptIn d = d{pdAllowedInternalHosts = lowerCaseHosts Set.empty}
+        let internalIpPrivate d = d{pdPrivateBaseUrl = T.replace "localhost" "127.0.0.1" (pdPrivateBaseUrl d)}
         queue <- newInMemoryQueue
-        withProxyEnvQueueDeps queue privateUp publicUp Nothing noOptIn $ \app _env _port -> do
+        withProxyEnvQueueDeps queue privateUp publicUp Nothing internalIpPrivate $ \app _env _port -> do
             resp <- getTarball "1.0.0" (Just "client-token") app
             status resp `shouldBe` 200
             simpleBody resp `shouldBe` privateTarballBytes

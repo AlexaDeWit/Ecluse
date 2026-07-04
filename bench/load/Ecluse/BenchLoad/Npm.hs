@@ -67,10 +67,11 @@ cached-public hit is its faithful realisation of the issue's cheap, no-public-fe
 
 == Hermeticity
 
-All upstreams are in-process @warp@ stubs on loopback; the proxy and the worker fetch
-them over plain (no-TLS, unguarded) managers with @127.0.0.1@ opted into the
-internal-range allowance, exactly as the integration suite does -- so the harness opens no
-external socket and needs no Docker.
+All upstreams are in-process @warp@ stubs on loopback, addressed by the @localhost@ DNS
+name rather than a bare IP literal (the internal-range block only recognises a literal,
+never a name, so no opt-in is needed to let the fetch land); the proxy and the worker
+fetch them over plain (no-TLS) managers, exactly as the integration suite does -- so the
+harness opens no external socket and needs no Docker.
 -}
 module Ecluse.BenchLoad.Npm (
     npmFixture,
@@ -84,7 +85,6 @@ import Data.ByteArray.Encoding (Base (Base16, Base64), convertToBase)
 import Data.ByteString.Lazy qualified as LBS
 import Data.List qualified as List
 import Data.Map.Strict qualified as Map
-import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, UTCTime (UTCTime), addUTCTime, fromGregorian, nominalDay)
 import Data.Time.Format.ISO8601 (iso8601Show)
@@ -128,7 +128,7 @@ import Ecluse.Core.Registry.Npm.Route qualified as Npm
 import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan), atDefaultPrecedence)
-import Ecluse.Core.Security (TarballHostPolicy (SameHostAsPackument), defaultLimits, lowerCaseHosts, tarballHostGate)
+import Ecluse.Core.Security (TarballHostPolicy (SameHostAsPackument), defaultLimits, tarballHostGate)
 import Ecluse.Core.Server.Admission (newServeAdmission)
 import Ecluse.Core.Server.Cache (CacheConfig (cacheMaxEntries, cacheTtl), defaultCacheConfig, newMetadataCache)
 import Ecluse.Core.Server.Context (PackumentDeps (..))
@@ -434,10 +434,10 @@ tarballMix proxyPort =
 workingSet :: LoadKnobs -> [CorpusPackage]
 workingSet knobs = take (max 1 (lkWorkingSet knobs)) serveCorpus
 
--- The packument-serve dependencies for the npm mount, addressing the two stub ports.
--- 127.0.0.1 is opted into the internal-range allowance for the public leg's honoured
--- tarball gate (the in-process analogue of an operator opting an internal public host
--- in), exactly as the integration suite does.
+-- The packument-serve dependencies for the npm mount, addressing the two stub ports by
+-- the @localhost@ DNS name rather than a bare IP literal, so the public leg's honoured
+-- tarball gate never trips the internal-range block (which only recognises a literal) --
+-- exactly as the integration suite does.
 npmDeps :: Int -> Int -> IO PackumentDeps
 npmDeps privatePort publicPort = do
     prepared <- prepare benchPolicy
@@ -449,7 +449,7 @@ npmDeps privatePort publicPort = do
             , pdMirrorTarget = "https://mirror.bench"
             , pdRules = prepared
             , pdTarballHostPolicy = SameHostAsPackument
-            , pdAllowedInternalHosts = lowerCaseHosts (Set.singleton "127.0.0.1")
+            , pdAdditionalBlockedRanges = []
             , pdTarballHostGate = tarballHostGate (localhost privatePort) (localhost publicPort) "https://mirror.bench"
             , pdLimits = defaultLimits
             , pdInboundToken = Nothing
@@ -713,7 +713,7 @@ onboardingPublicStub latency bytes request respond = do
 -- actually fetched from (the port is not knowable before warp binds).
 selfAuthority :: Request -> Text
 selfAuthority request =
-    "http://" <> maybe "127.0.0.1" decodeUtf8 (List.lookup hHost (requestHeaders request))
+    "http://" <> maybe "localhost" decodeUtf8 (List.lookup hHost (requestHeaders request))
 
 -- A minimal admissible packument: one old version, self-hosted conventional
 -- tarball, floor-meeting digests -- enough for the single-version gate to admit and
@@ -836,7 +836,7 @@ packageName :: PackageName
 packageName = mkPackageName Npm Nothing packageText
 
 localhost :: Int -> Text
-localhost port = "http://127.0.0.1:" <> show port
+localhost port = "http://localhost:" <> show port
 
 -- A fixed wall clock, so the age-based admission is deterministic across runs.
 benchNow :: UTCTime

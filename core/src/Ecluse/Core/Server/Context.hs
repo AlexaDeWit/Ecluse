@@ -43,6 +43,7 @@ module Ecluse.Core.Server.Context (
 ) where
 
 import Data.Aeson (Value)
+import Data.IP (IPRange)
 import Data.Time (UTCTime)
 import Katip (Katip, KatipContext, LogEnv, SimpleLogPayload)
 import Katip.Monadic (KatipContextT, runKatipContextT)
@@ -57,7 +58,7 @@ import Ecluse.Core.Queue (MirrorQueue)
 import Ecluse.Core.Registry (PublishRelayResponse, UrlFormationError)
 import Ecluse.Core.Registry.Metadata (MetadataClient, MetadataError)
 import Ecluse.Core.Rules (PreparedRule)
-import Ecluse.Core.Security (Limits, LoweredHostSet, TarballHostGate, TarballHostPolicy)
+import Ecluse.Core.Security (Limits, TarballHostGate, TarballHostPolicy)
 import Ecluse.Core.Server.Admission (ServeAdmission)
 import Ecluse.Core.Server.Cache (MetadataCache)
 import Ecluse.Core.Server.Metadata (ManifestCaching)
@@ -153,11 +154,11 @@ data PackumentDeps = PackumentDeps
     host allowlist; relaxed to 'Ecluse.Core.Security.AnyAllowlistedHost' by
     @ECLUSE_RESPECT_UPSTREAM_TARBALL_HOST@).
     -}
-    , pdAllowedInternalHosts :: LoweredHostSet
-    {- ^ The hosts deliberately opted in to the literal internal-range block when gating
-    an honoured artifact location ('Ecluse.Core.Security.tarballHostAllowed'), the cheap
-    pure defence-in-depth that complements the host allowlist. Empty by default, the
-    secure reading.
+    , pdAdditionalBlockedRanges :: [IPRange]
+    {- ^ The operator-configured ranges (@ECLUSE_ADDITIONAL_BLOCKED_RANGES@) extending the
+    fixed literal internal-range block when gating an honoured artifact location
+    ('Ecluse.Core.Security.tarballHostAllowed'), the cheap pure defence-in-depth that
+    complements the host allowlist. Empty by default.
     -}
     , pdTarballHostGate :: TarballHostGate
     {- ^ The mount-constant inputs to the per-request tarball-host gate
