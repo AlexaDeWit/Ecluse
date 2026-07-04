@@ -10,9 +10,24 @@ module Ecluse.Pilot.Osv (
     OsvDatabaseSpecific (..),
     ExtractedOsv (..),
     extractFromAdvisory,
+    osvExportUrl,
 ) where
 
 import Data.Aeson (FromJSON (..), withObject, (.:), (.:?))
+import Data.Text qualified as T
+
+{- | An ecosystem's advisory export under an OSV-layout base URL
+(@\<base\>\/\<ecosystem\>\/all.zip@): a zip archive of every advisory currently
+published for the ecosystem. The base comes from configuration
+(@osvExportBaseUrl@), so a moved or mirrored upstream never needs a new
+binary; a trailing slash on the base is tolerated.
+
+>>> osvExportUrl "https://osv-vulnerabilities.storage.googleapis.com/" "npm"
+"https://osv-vulnerabilities.storage.googleapis.com/npm/all.zip"
+-}
+osvExportUrl :: Text -> Text -> String
+osvExportUrl baseUrl ecosystem =
+    toString (T.dropWhileEnd (== '/') baseUrl) <> "/" <> toString ecosystem <> "/all.zip"
 
 -- | Exact model of what osv.dev makes available
 data OsvAdvisory = OsvAdvisory

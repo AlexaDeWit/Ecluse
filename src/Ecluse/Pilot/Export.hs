@@ -17,6 +17,7 @@ import Katip (KatipContext, Severity (..), logFM, ls)
 
 import Ecluse.Composition (parseEndpointUrl)
 import Ecluse.Config (AppConfig (..), Config (..))
+import Ecluse.Pilot.Osv (osvExportUrl)
 import Ecluse.Pilot.Osv.Compile (compileOsvToSqlite)
 import Ecluse.Telemetry (Telemetry)
 
@@ -40,7 +41,7 @@ runExportLoop telemetry config = do
 exportNpm :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => Telemetry -> AppConfig -> Text -> m ()
 exportNpm telemetry appCfg bucketName = do
     logFM InfoS "Starting npm OSV database compilation"
-    dbPath <- compileOsvToSqlite telemetry (cfgOsvDataDir appCfg) "npm" "https://osv-vulnerabilities.storage.googleapis.com/npm/all.zip"
+    dbPath <- compileOsvToSqlite telemetry (cfgOsvDataDir appCfg) "npm" (osvExportUrl (cfgOsvExportBaseUrl appCfg) "npm")
     exportToS3 appCfg bucketName dbPath
 
 exportToS3 :: (MonadResource m, MonadThrow m, KatipContext m) => AppConfig -> Text -> FilePath -> m ()
