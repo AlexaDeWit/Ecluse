@@ -101,6 +101,26 @@ The balance, in one line:
 - ❌ Write a paragraph where a sentence (or a `>>>` example) works.
 - ❌ Add ceremony like `-- | The constructor.` that says nothing.
 
+### A high-level reading aid earns its place
+
+The bans above target a *mirror* of the steps the body already shows, not every
+sentence about structure. On a genuinely complex function, one line naming its phases
+("resolves in two phases: candidate selection, then policy evaluation"), or stating an
+observable guarantee ("evaluates in parallel, but the result is as-if sequential by
+boot order"), orients a reader in a way the types cannot, so it stays. Don't let the
+"❌ Narrate the implementation" line above strip a good signpost.
+
+**The drift test tells them apart.** If someone refactored the internals without
+changing the contract, would this sentence become false? If yes, and it describes
+internals rather than a guarantee, it is a restatement: cut it, or lift it to the
+contract. If it would stay true (a guarantee, an invariant, a phase-level shape), keep
+it.
+
+**Restating a sibling's behaviour across a boundary is the same failure.** Don't
+re-describe a stable module's policy in a caller's comment: re-explaining a circuit
+breaker's open/half-open rules where you only call its `admit` function is the trap.
+State your local contract and point at the owning definition; two copies drift.
+
 ---
 
 ## 4. Comment syntax
