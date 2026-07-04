@@ -1,0 +1,17 @@
+{
+  "id": "GHSA-corpus-0002",
+  "aliases": ["CVE-2026-10002"],
+  "summary": "Fixture: an open-ended range with no fix published.",
+  "database_specific": { "severity": "CRITICAL" },
+  "affected": [
+    {
+      "package": { "name": "corpus-unfixed", "ecosystem": "npm" },
+      "ranges": [
+        {
+          "type": "SEMVER",
+          "events": [{ "introduced": "1.0.0" }]
+        }
+      ]
+    }
+  ]
+}

@@ -36,6 +36,8 @@ extra-source-files:
   bench/corpus/pins.json
   core/test/unit/fixtures/npm/*.json
   core/test/unit/fixtures/version-ordering.txt
+  test/fixtures/osv/v1/*.json
+  test/fixtures/osv/v2/*.json
   test/unit/fixtures/osv/*.zip
 
 source-repository head
@@ -359,6 +361,7 @@ library ecluse-test-support
   hs-source-dirs:  test/support
   exposed-modules:
     Ecluse.Test.Containers
+    Ecluse.Test.Osv
     Ecluse.Test.Package
     Ecluse.Test.Port
     Ecluse.Test.RegistryCapture
@@ -372,15 +375,40 @@ library ecluse-test-support
     , aeson             ^>=2.2
     , bytestring        ^>=0.12
     , case-insensitive  ^>=1.2
+    , conduit           ^>=1.3
     , containers        ^>=0.7
+    , filepath          ^>=1.4 || ^>=1.5
     , hedgehog          ^>=1.5
     , hspec             ^>=2.11
     , http-client       ^>=0.7
     , http-types        ^>=0.12
+    , sqlite-simple     ^>=0.4
     , text              ^>=2.1
     , time              ^>=1.12
     , wai               ^>=3.2
     , warp              ^>=3.4
+    , zip-stream        ^>=0.2
+
+-- App-tier test helpers that need the `ecluse` application library itself
+-- (compiling OSV fixtures through Pilot's real pipeline). Kept apart from
+-- ecluse-test-support so the ecluse-core-unit partition below holds: core-tier
+-- suites depend on ecluse-test-support only and still cannot reach the app
+-- library.
+library ecluse-test-support-app
+  import:          shared
+  hs-source-dirs:  test/support-app
+  exposed-modules:
+    Ecluse.Test.OsvDb
+
+  build-depends:
+    , conduit     ^>=1.3
+    , ecluse
+    , ecluse:ecluse-test-support
+    , exceptions  ^>=0.10
+    , http-types  ^>=0.12
+    , katip       ^>=0.8.8
+    , primitive   ^>=0.9.1
+    , temporary   ^>=1.3
 
 -- Core unit tests: cover every Ecluse.Core.* module. Pure, fast, deterministic. Gating.
 -- MUST NOT list the `ecluse` app library in build-depends: its absence is the partition
@@ -511,6 +539,7 @@ test-suite ecluse-unit
     Ecluse.RuntimeSpec
     Ecluse.ServerSpec
     Ecluse.TelemetrySpec
+    Ecluse.Test.OsvSpec
     Ecluse.Telemetry.CorrelationSpec
     Ecluse.Telemetry.InstrumentsSpec
     Ecluse.Telemetry.ReportersSpec
@@ -528,6 +557,7 @@ test-suite ecluse-unit
     , ecluse:ecluse-core
     , ecluse:ecluse-manifest
     , ecluse:ecluse-test-support
+    , ecluse:ecluse-test-support-app
     , aeson             ^>=2.2
     , autodocodec       ^>=0.5
     , bytestring        ^>=0.12

@@ -111,6 +111,27 @@ install/fetch/lockfile behaviour, so the resilience scenarios are unaffected. Th
 oracles (`test/oracles`) need no such guard: their `node_modules` is materialised by Nix from
 the lockfile (`importNpmLock`), a pure materialisation that runs no npm CLI and no scripts.
 
+## OSV advisory fixtures
+
+Advisory-shaped test data has one source of truth: the committed OSV JSON files under
+`test/fixtures/osv/` (`v1/`, plus the `v2/` delta). Everything a suite consumes is derived
+from them at test time; an `osv.db` is **never** committed as a binary, so a fixture cannot
+drift from the artifact contract (`Ecluse.Core.Osv.Schema`).
+
+- `Ecluse.Test.Osv` (`ecluse-test-support`) assembles the osv.dev-shaped zip in memory
+  (`osvCorpusZip`) and hand-builds *hostile* artifacts (a wrong schema epoch, a view
+  shadowing the ranges table), the tampered files the real compiler must never be able to
+  produce, for the reader's rejection tests.
+- `Ecluse.Test.OsvDb` (`ecluse-test-support-app`) compiles the corpus into a real artifact
+  through Pilot's actual pipeline (`withFixtureOsvDb`). It lives in a separate internal
+  library because it needs the `ecluse` application library, and the `ecluse-core-unit`
+  partition forbids that dependency: core-tier suites test rule evaluation against a pure
+  fake lookup, and app-tier suites exercise the real artifact.
+- The corpus is versioned: `CorpusV2` adds an advisory for a package `CorpusV1` leaves
+  clean, so shadow-swap tests can observe both an ETag change and a rule-outcome flip.
+- `Ecluse.Test.OsvSpec` pins each version's compiled rows exactly; editing the corpus means
+  updating the pin in the same PR, deliberately.
+
 ## Tests and Docker
 
 The integration (`ecluse-integration`) and end-to-end (`ecluse-e2e`) tiers are the only ones

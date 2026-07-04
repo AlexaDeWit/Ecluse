@@ -1,0 +1,134 @@
+{- | The shared OSV advisory fixture corpus and the artifacts derived from it.
+
+The committed JSON advisories under @test\/fixtures\/osv\/@ are the single
+source of truth for advisory-shaped test data. Everything a suite consumes is
+derived from them at test time: 'osvCorpusZip' assembles the osv.dev-shaped
+export archive in memory, and the app-tier helper (@Ecluse.Test.OsvDb@ in
+@ecluse-test-support-app@) compiles that archive into a real @osv.db@ through
+the same pipeline Pilot runs. Deriving instead of committing binaries means a
+fixture can never drift from the artifact contract ("Ecluse.Core.Osv.Schema").
+
+The corpus is versioned: 'CorpusV2' is 'CorpusV1' plus an advisory for a
+package V1 leaves clean, so a V1-to-V2 shadow-swap flips an observable rule
+outcome as well as the artifact's ETag.
+
+The hostile builders are the deliberate exception to "the real compiler is
+the only writer": they model tampered artifacts the compiler must never be
+able to produce, for the reader's rejection tests.
+-}
+module Ecluse.Test.Osv (
+    -- * The corpus
+    CorpusVersion (..),
+    osvCorpusFiles,
+    osvCorpusZip,
+
+    -- * Hostile artifacts
+    mkDbWithWrongEpoch,
+    mkDbWithViewShadowingRanges,
+) where
+
+import Codec.Archive.Zip.Conduit.Zip (ZipData (..), ZipEntry (..), defaultZipOptions, zipStream)
+import Conduit (runConduit, sinkLazy, yieldMany, (.|))
+import Data.Time (LocalTime (..), fromGregorian, midnight)
+import Database.SQLite.Simple (Connection, execute_, withConnection)
+import System.FilePath (takeFileName, (</>))
+
+import Ecluse.Core.Osv.Schema (osvSchemaEpoch)
+
+data CorpusVersion = CorpusV1 | CorpusV2
+    deriving stock (Bounded, Enum, Eq, Show)
+
+corpusRoot :: FilePath
+corpusRoot = "test/fixtures/osv"
+
+-- Explicit lists, not a directory listing: the corpus is pinned by name, so a
+-- stray file cannot silently join the fixture set.
+corpusV1Files :: [FilePath]
+corpusV1Files =
+    [ "v1/GHSA-corpus-0001.json"
+    , "v1/GHSA-corpus-0002.json"
+    , "v1/GHSA-corpus-0003.json"
+    , "v1/GHSA-corpus-0004.json"
+    , "v1/GHSA-corpus-0005.json"
+    , "v1/malformed-deliberate.json"
+    ]
+
+corpusV2ExtraFiles :: [FilePath]
+corpusV2ExtraFiles = ["v2/GHSA-corpus-1001.json"]
+
+-- | A corpus version's advisory files, as (zip-entry name, bytes).
+osvCorpusFiles :: CorpusVersion -> IO [(FilePath, LByteString)]
+osvCorpusFiles v = traverse readEntry (files v)
+  where
+    files CorpusV1 = corpusV1Files
+    files CorpusV2 = corpusV1Files <> corpusV2ExtraFiles
+    readEntry rel = do
+        bytes <- readFileLBS (corpusRoot </> rel)
+        pure (takeFileName rel, bytes)
+
+{- | Assemble the osv.dev-shaped export (a flat zip of advisory JSON files)
+for a corpus version, in memory. The entry timestamp is fixed so the archive
+is deterministic.
+-}
+osvCorpusZip :: CorpusVersion -> IO LByteString
+osvCorpusZip v = do
+    entries <- osvCorpusFiles v
+    runConduit $
+        yieldMany (map toZipEntry entries)
+            .| void (zipStream defaultZipOptions)
+            .| sinkLazy
+  where
+    toZipEntry (name, bytes) =
+        ( ZipEntry
+            { zipEntryName = Left (toText name)
+            , zipEntryTime = corpusTimestamp
+            , zipEntrySize = Nothing
+            , zipEntryExternalAttributes = Nothing
+            }
+        , ZipDataByteString bytes
+        )
+
+corpusTimestamp :: LocalTime
+corpusTimestamp = LocalTime (fromGregorian 2026 1 1) midnight
+
+{- | A structurally plausible artifact stamped with a different table-schema
+epoch. A reader must reject it on the 'osvSchemaEpoch' check alone, before
+trusting anything else about the file, so the interior shape is deliberately
+minimal.
+-}
+mkDbWithWrongEpoch :: FilePath -> IO ()
+mkDbWithWrongEpoch path = withConnection path $ \conn -> do
+    execute_
+        conn
+        "CREATE TABLE package_vulnerability_ranges (\
+        \  package_name TEXT NOT NULL,\
+        \  cve_id TEXT NOT NULL,\
+        \  introduced_version TEXT,\
+        \  fixed_version TEXT,\
+        \  severity TEXT\
+        \)"
+    setEpoch conn (osvSchemaEpoch + 1)
+
+{- | An artifact with the right epoch whose ranges relation is a __view__:
+schema-borne SQL that a hardened reader (read-only,
+@PRAGMA trusted_schema = OFF@) must refuse to evaluate on the file's terms.
+-}
+mkDbWithViewShadowingRanges :: FilePath -> IO ()
+mkDbWithViewShadowingRanges path = withConnection path $ \conn -> do
+    execute_
+        conn
+        "CREATE TABLE raw_rows (\
+        \  package_name TEXT,\
+        \  cve_id TEXT,\
+        \  introduced_version TEXT,\
+        \  fixed_version TEXT,\
+        \  severity TEXT\
+        \)"
+    execute_
+        conn
+        "CREATE VIEW package_vulnerability_ranges AS \
+        \SELECT package_name, cve_id, introduced_version, fixed_version, severity FROM raw_rows"
+    setEpoch conn osvSchemaEpoch
+
+setEpoch :: Connection -> Int -> IO ()
+setEpoch conn epoch = execute_ conn (fromString ("PRAGMA user_version = " <> show epoch))

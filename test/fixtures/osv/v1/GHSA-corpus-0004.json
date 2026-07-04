@@ -1,0 +1,17 @@
+{
+  "id": "GHSA-corpus-0004",
+  "aliases": ["CVE-2026-10004"],
+  "summary": "Fixture: a second advisory against corpus-vuln.",
+  "database_specific": { "severity": "MODERATE" },
+  "affected": [
+    {
+      "package": { "name": "corpus-vuln", "ecosystem": "npm" },
+      "ranges": [
+        {
+          "type": "SEMVER",
+          "events": [{ "introduced": "2.0.0" }, { "fixed": "2.5.0" }]
+        }
+      ]
+    }
+  ]
+}
