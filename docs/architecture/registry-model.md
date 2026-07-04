@@ -378,6 +378,22 @@ scanning and policy per provenance, and clean post-disclosure scoping. Managed
 registries (CodeArtifact, Artifact Registry, …) provide exactly this aggregation
 primitive; Écluse is designed to lean on it.
 
+#### Traffic shape over time: the V, and why the public leg is transient
+
+The topology above is a **V**: Écluse fans a read to the public origin and to the
+private pull-through, and the pull-through itself unions the mirror store and the
+first-party store. The dynamic consequence is the design intent, and it is easy to
+miss reading the wiring alone: because every admitted public tarball is back-filled
+into the mirror by the worker, and the mirror feeds the private read path, **the
+private conventional read comes to serve nearly all tarball traffic once a fleet has
+warmed**. The public tarball leg is a **transient, per-artifact fail-over**, the
+onboarding ramp a new project (or a new package or version) transits exactly until
+the worker promotes it, after which that artifact never takes the public leg again.
+At steady state, private hits should be the vast majority of tarball serves, and the
+public leg's throughput matters for **onboarding experience**, not for steady-state
+capacity. Optimisations must respect this ordering: trading private-hit (hot-path)
+work to speed the public fail-over is a regression against the design.
+
 Composing at the registry level is the recommended way to get that separation, but it is
 **not the only one**: Écluse's own merge gives the same *correctness* to operators who
 cannot compose at the registry level, and collapsing the roles onto a single store

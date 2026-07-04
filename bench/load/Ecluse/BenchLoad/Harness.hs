@@ -231,6 +231,14 @@ data Scenario = Scenario
     -- ^ A stable, argument-safe identifier (the driver passes it to the child process).
     , scenarioDescription :: Text
     -- ^ A one-line description of the traffic shape, for the rendered report.
+    , scenarioConcurrencyScale :: Int
+    {- ^ Multiplier applied to the shared 'lkConcurrency' for this scenario alone.
+    @1@ for every ordinary scenario; a ceiling-probe scenario raises it so the load
+    generator stops being the binding constraint (a streaming path at the default
+    concurrency is bounded by client connections x RTT, not by the proxy). The
+    scenario's description must state the factor, since the operating-point line
+    prints the shared base.
+    -}
     , scenarioBoot :: forall a. LoadKnobs -> (Driver -> IO a) -> IO a
     -- ^ Bracket the ecosystem-specific setup\/teardown and yield the 'Driver'.
     }
@@ -274,6 +282,11 @@ what that allocation figure does and does not include.
 data ScenarioReport = ScenarioReport
     { srName :: Text
     , srDescription :: Text
+    , srConcurrency :: Int
+    {- ^ The connections the generator actually held open for this scenario -- the
+    shared base times the scenario's 'scenarioConcurrencyScale', recorded so a scaled
+    scenario (the ceiling probe) cannot be misread against the base operating point.
+    -}
     , srRequests :: Int
     -- ^ Requests (or jobs) the proxy actually processed over the measured window.
     , srThroughput :: Double
@@ -328,7 +341,10 @@ runScenario knobs scenario = do
     rtsOn <- getRTSStatsEnabled
     unless rtsOn $
         benchFail "bench-load needs the RTS stats (build with -with-rtsopts=-T); getRTSStatsEnabled is False"
-    scenarioBoot scenario knobs (measure knobs scenario)
+    -- The scenario's concurrency scale is applied to the shared base here, once, so
+    -- the boot, the warm-up, and the measured drive all see the scenario's own level.
+    let scaled = knobs{lkConcurrency = lkConcurrency knobs * max 1 (scenarioConcurrencyScale scenario)}
+    scenarioBoot scenario scaled (measure scaled scenario)
 
 -- Apply the load over a booted fixture and assemble the report. A short warm-up runs
 -- first (JIT, connection pool, and the metadata cache settle, so the measured window is
@@ -355,6 +371,7 @@ measure knobs scenario driver = do
     pure
         ScenarioReport
             { srName = scenarioName scenario
+            , srConcurrency = lkConcurrency knobs
             , srDescription = scenarioDescription scenario
             , srRequests = requests
             , srThroughput = throughput
@@ -484,34 +501,31 @@ renderReports knobs capabilities ecosystem reports =
     T.unlines $
         [ "## Load test -- throughput & latency over " <> ecosystemName ecosystem
         , ""
-        , "Inform-only: the figures are reported for a human to read and trend, never compared to a threshold. Throughput and latency are runner-dependent and read coarsely; allocations per request is the machine-independent signal. The in-process residency and GC stats are per scenario (each runs in its own process)."
+        , "_Inform-only: figures are read and trended by a human, never compared to a threshold. Allocations per request is the machine-independent signal. Reading notes are at the end of the report._"
         , ""
-        , "Caveat on the numbers: allocations / request is measured over the whole bench process, which for the HTTP scenarios also runs the two in-process stub upstreams and the proxy (only oha, a subprocess, is excluded), so it folds in the stubs' own per-request allocations -- a consistent over-count, fine for trending, but NOT a pure proxy per-request cost and NOT directly comparable to the work-per-request micro-benches' pure per-call allocations. Peak residency is a process high-water mark that also spans the warm-up; the allocation and GC figures are before/after deltas over the measured window only."
+        , "**Operating point**"
         , ""
-        , "Operating point: "
-            <> show (lkConcurrency knobs)
-            <> " concurrent · "
-            <> show (lkDurationSeconds knobs)
-            <> "s · "
-            <> fmt1 (fromIntegral (lkUpstreamLatencyMicros knobs) / 1_000)
-            <> " ms injected upstream latency · packument scenarios serve the real-world corpus · cache-eviction bound "
-            <> show (lkCacheMaxEntries knobs)
-            <> " entries over a working set of up to "
-            <> show (lkWorkingSet knobs)
-            <> " · admission "
-            <> show admissionCapacity
-            <> " ("
-            <> admissionOrigin
-            <> "; private pool follows admission) · public connections per host "
-            <> show (lkPublicConnectionsPerHost knobs)
-            <> " · "
-            <> show capabilities
-            <> " GHC capabilities (scenario children pinned to the driver's count) · ~"
-            <> fmtKiB (lkPayloadBytes knobs)
-            <> " worker artifact."
+        , "| knob | value |"
+        , "| --- | --- |"
+        , opRow "load" (show (lkConcurrency knobs) <> " connections x " <> show (lkDurationSeconds knobs) <> " s (a scenario may scale its own connections; see the at-a-glance table)")
+        , opRow "injected upstream latency" (fmt1 (fromIntegral (lkUpstreamLatencyMicros knobs) / 1_000) <> " ms")
+        , opRow "admission" (show admissionCapacity <> " (" <> admissionOrigin <> ")")
+        , opRow "private pool" privatePoolNote
+        , opRow "public connections per host" (show (lkPublicConnectionsPerHost knobs))
+        , opRow "GHC capabilities" (show capabilities <> " (scenario children pinned to the driver's count)")
+        , opRow "packument corpus" "real-world captures (the packument scenarios serve the corpus)"
+        , opRow "cache-eviction bound" (show (lkCacheMaxEntries knobs) <> " entries over a working set of up to " <> show (lkWorkingSet knobs))
+        , opRow "worker artifact" ("~" <> fmtKiB (lkPayloadBytes knobs))
         , ""
+        , "### At a glance"
+        , ""
+        , "| scenario | connections | req/s | success | p50 | p99 | alloc/req | peak residency |"
+        , "| --- | --: | --: | --: | --: | --: | --: | --: |"
         ]
+            <> map glanceRow reports
+            <> [""]
             <> concatMap renderScenario reports
+            <> readingNotes
   where
     -- Resolved through the same function as the composition root, so the reported
     -- admission is the admission the fixture actually ran with.
@@ -520,14 +534,58 @@ renderReports knobs capabilities ecosystem reports =
         Just _ -> "explicit"
         Nothing -> "computed from " <> show capabilities <> " capabilities, as in production"
 
+    -- The private pool no longer follows admission (it is fd-derived since the
+    -- composition split them); name its origin so the line cannot mislead.
+    privatePoolNote = case lkPrivateConnectionsPerHost knobs of
+        Just n -> show n <> " (explicit)"
+        Nothing -> "computed from the fd limit, as in production"
+
+    opRow :: Text -> Text -> Text
+    opRow k v = "| " <> k <> " | " <> v <> " |"
+
+    -- One at-a-glance row per scenario, linked to its section (the header anchor is
+    -- the scenario name; every name is already a kebab-case slug).
+    glanceRow :: ScenarioReport -> Text
+    glanceRow r =
+        "| ["
+            <> srName r
+            <> "](#"
+            <> srName r
+            <> ") | "
+            <> show (srConcurrency r)
+            <> " | "
+            <> fmt1 (srThroughput r)
+            <> " | "
+            <> fmt1 (srSuccessRate r * 100)
+            <> "% | "
+            <> maybe "n/a" (\v -> fmt2 v <> " ms") (srP50Ms r)
+            <> " | "
+            <> maybe "n/a" (\v -> fmt2 v <> " ms") (srP99Ms r)
+            <> " | "
+            <> fmtKiB (round (srAllocPerReqBytes r))
+            <> " | "
+            <> fmtMiB (srPeakResidencyBytes r)
+            <> " |"
+
+    -- The reading notes formerly front-loaded as two dense paragraphs, now a short
+    -- closing section so the numbers lead.
+    readingNotes :: [Text]
+    readingNotes =
+        [ "### Reading the numbers"
+        , ""
+        , "- **Inform-only.** Throughput and latency are runner-dependent and read coarsely; nothing here gates."
+        , "- **Allocations / request is the machine-independent signal**, measured over the whole bench process: the HTTP scenarios also run their in-process stub upstreams (only oha, a subprocess, is excluded), so it is a consistent over-count -- right for trending, not a pure proxy per-request cost, and not comparable to the work-per-request micro-benches."
+        , "- **Peak residency is a process high-water mark** spanning the warm-up as well as the measured window; the allocation and GC figures are before/after deltas over the measured window only."
+        , "- **Each scenario runs in its own process**, so residency and GC figures are per scenario."
+        ]
+
 renderScenario :: ScenarioReport -> [Text]
 renderScenario r =
     [ "### " <> srName r
     , ""
-    , srDescription r
-    , ""
     , "| metric | value |"
     , "| --- | --- |"
+    , row "connections held open" (show (srConcurrency r))
     , row "throughput" (fmt1 (srThroughput r) <> " req/s")
     , row "requests" (show (srRequests r) <> " (" <> fmt1 (srSuccessRate r * 100) <> "% success)")
     , row "latency p50 / p90 / p99 / p99.9" (msCell (srP50Ms r) <> " / " <> msCell (srP90Ms r) <> " / " <> msCell (srP99Ms r) <> " / " <> msCell (srP999Ms r))
@@ -537,6 +595,8 @@ renderScenario r =
     , row "GCs (total / major)" (show (srGcs r) <> " / " <> show (srMajorGcs r))
     , row "GC wall / mean pause" (fmt1 (srGcWallMs r) <> " ms / " <> maybe "n/a" (\p -> fmt2 p <> " ms") (srMeanPauseMs r))
     , row "distribution" (srNote r)
+    , ""
+    , "> " <> srDescription r
     , ""
     ]
   where
