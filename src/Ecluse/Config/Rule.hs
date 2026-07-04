@@ -73,35 +73,35 @@ data RuleEntry = RuleEntry
 resolvePolicy :: RulePolicy -> RulePatch -> Either [PolicyError] RulePolicy
 resolvePolicy (RulePolicy base) (RulePatch patch) =
     validationToEither $
-        RulePolicy . foldl' apply base
-            <$> traverse (eitherToValidation . resolveEntry) (Map.toList patch)
-  where
-    apply :: Map Text PrecededRule -> (Text, Maybe PrecededRule) -> Map Text PrecededRule
-    apply acc (name, Nothing) = Map.delete name acc
-    apply acc (name, Just pr) = Map.insert name pr acc
+        RulePolicy . foldl' applyResolvedEntry base
+            <$> traverse (eitherToValidation . resolveEntry base) (Map.toList patch)
 
-    resolveEntry :: (Text, RuleEntry) -> Either [PolicyError] (Text, Maybe PrecededRule)
-    resolveEntry (name, entry)
-        | entryEnabled entry == Just False =
-            if Map.member name base
-                then Right (name, Nothing)
-                else Left [SuppressUnknownRule name]
-        | otherwise =
-            case Map.lookup name base of
-                Just existing -> (name,) . Just <$> patchExisting name entry existing
-                Nothing -> (name,) . Just <$> addNew name entry
+applyResolvedEntry :: Map Text PrecededRule -> (Text, Maybe PrecededRule) -> Map Text PrecededRule
+applyResolvedEntry acc (name, Nothing) = Map.delete name acc
+applyResolvedEntry acc (name, Just pr) = Map.insert name pr acc
 
-    patchExisting :: Text -> RuleEntry -> PrecededRule -> Either [PolicyError] PrecededRule
-    patchExisting name entry (PrecededRule prec rule) = do
-        rule' <- patchRuleValue name entry rule
-        pure (PrecededRule (fromMaybe prec (entryPrecedence entry)) rule')
+resolveEntry :: Map Text PrecededRule -> (Text, RuleEntry) -> Either [PolicyError] (Text, Maybe PrecededRule)
+resolveEntry base (name, entry)
+    | entryEnabled entry == Just False =
+        if Map.member name base
+            then Right (name, Nothing)
+            else Left [SuppressUnknownRule name]
+    | otherwise =
+        case Map.lookup name base of
+            Just existing -> (name,) . Just <$> patchExistingRule name entry existing
+            Nothing -> (name,) . Just <$> addNewRule name entry
 
-    addNew :: Text -> RuleEntry -> Either [PolicyError] PrecededRule
-    addNew name entry = case entryType entry of
-        Nothing -> Left [MissingRuleType name]
-        Just ty -> do
-            rule <- buildRule name ty entry
-            pure (PrecededRule (fromMaybe (defaultPrecedence rule) (entryPrecedence entry)) rule)
+patchExistingRule :: Text -> RuleEntry -> PrecededRule -> Either [PolicyError] PrecededRule
+patchExistingRule name entry (PrecededRule prec rule) = do
+    rule' <- patchRuleValue name entry rule
+    pure (PrecededRule (fromMaybe prec (entryPrecedence entry)) rule')
+
+addNewRule :: Text -> RuleEntry -> Either [PolicyError] PrecededRule
+addNewRule name entry = case entryType entry of
+    Nothing -> Left [MissingRuleType name]
+    Just ty -> do
+        rule <- buildRule name ty entry
+        pure (PrecededRule (fromMaybe (defaultPrecedence rule) (entryPrecedence entry)) rule)
 
 buildRule :: Text -> Text -> RuleEntry -> Either [PolicyError] Rule
 buildRule name ty entry = case ty of
