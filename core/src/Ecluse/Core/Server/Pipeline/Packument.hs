@@ -288,34 +288,26 @@ serveWithDeps mode renderer deps name request respond
         case packumentPlan sources of
             Just plan -> do
                 liftIO (mpServeDecision metrics Metric.Admit)
-                -- The validator is derived from the serve's inputs, so the conditional
-                -- request is answered BEFORE any assembly: a 304 costs the fetches and
-                -- the plan, never the document rebuild, encode, or an output hash.
-                let etag = packumentETag (pdMountBaseUrl deps) name (map fingerprintPiece sources)
-                case evaluateETag (requestHeaders request) etag of
-                    NotModified matched -> do
-                        logFM DebugS (ls ("packument unchanged for " <> renderPackageName name <> " (304, unassembled)"))
-                        liftIO (respond (notModifiedResponse matched))
-                    Modified fresh -> do
-                        logFM DebugS (ls ("serving packument for " <> renderPackageName name))
-                        -- The validator is a content address over every serve input, so
-                        -- the assembled, encoded document is memoised under it: a recurring
-                        -- triple (public entry, private content, plan) serves the stored
-                        -- bytes with no assembly or encode, and concurrent identical
-                        -- renders coalesce onto one leader. A changed input is a changed
-                        -- key, so the store cannot serve stale bytes; a different private
-                        -- view is a different key, so it cannot cross a client boundary.
-                        bytes <-
-                            liftIO $
-                                resolveAssembled (srMetrics rt) (srMetadataCache rt) (renderETag fresh) $
-                                    pure $!
-                                        LBS.toStrict (Aeson.encode (servedValue (renderServedBody deps sources plan)))
-                        liftIO (respond (packumentResponse mode fresh bytes))
+                answerConditional rt sources plan
             Nothing -> do
                 let decisions = collectDecisions privResult pubResult (privateExclusions <> publicExclusions)
                 liftIO (mpServeDecision metrics (packumentServeDecision decisions))
                 liftIO (recordDenials metrics decisions)
                 liftIO (respond (noSurvivors renderer deps decisions))
+
+    -- The validator is derived from the serve's inputs, so the conditional
+    -- request is answered BEFORE any assembly: a 304 costs the fetches and
+    -- the plan, never the document rebuild, encode, or an output hash.
+    answerConditional rt sources plan = do
+        let etag = packumentETag (pdMountBaseUrl deps) name (map fingerprintPiece sources)
+        case evaluateETag (requestHeaders request) etag of
+            NotModified matched -> do
+                logFM DebugS (ls ("packument unchanged for " <> renderPackageName name <> " (304, unassembled)"))
+                liftIO (respond (notModifiedResponse matched))
+            Modified fresh -> do
+                logFM DebugS (ls ("serving packument for " <> renderPackageName name))
+                bytes <- liftIO (servedBytes rt deps sources plan fresh)
+                liftIO (respond (packumentResponse mode fresh bytes))
 
 -- A recognised-but-unserved packument route: a @501@ in the mount's surface, for a
 -- mount whose packument-serve dependencies are not wired. The decision to serve or
@@ -546,43 +538,43 @@ logInvalidEntries name baseUrl entries =
             <> sl "droppedVersionManifests" (countOf InvalidVersionManifest)
             <> sl "droppedDistTags" (countOf InvalidDistTag)
             <> sl "droppedPublishTimes" (countOf InvalidPublishTime)
-            <> sl "droppedEntries" (map renderDrop (take maxRenderedDrops entries))
+            <> sl "droppedEntries" (map renderDroppedEntry (take maxRenderedDrops entries))
 
     countOf :: InvalidEntryKind -> Int
     countOf kind = foldl' (\acc e -> if invalidKind e == kind then acc + 1 else acc) 0 entries
-
-    -- One dropped entry rendered for the operator: its kind, key, reason, and the raw
-    -- value the upstream sent (truncated), so the actual offending bytes are visible.
-    renderDrop :: InvalidEntry -> Text
-    renderDrop e =
-        renderKind (invalidKind e)
-            <> " "
-            <> invalidKey e
-            <> " = "
-            <> truncated (invalidValue e)
-            <> " ("
-            <> invalidReason e
-            <> ")"
-
-    renderKind :: InvalidEntryKind -> Text
-    renderKind = \case
-        InvalidVersionManifest -> "version-manifest"
-        InvalidDistTag -> "dist-tag"
-        InvalidPublishTime -> "publish-time"
-
-    -- The raw value as compact JSON, truncated to 'maxRenderedValueChars' (only that many
-    -- characters are ever forced, so a huge value never balloons the log line).
-    truncated :: Value -> Text
-    truncated v =
-        let rendered = TL.toStrict (TL.take (fromIntegral maxRenderedValueChars + 1) (encodeToLazyText v))
-         in if T.length rendered > maxRenderedValueChars
-                then T.take maxRenderedValueChars rendered <> "…"
-                else rendered
 
     message :: Text
     message =
         "dropped " <> show (length entries) <> " malformed entr" <> plural <> " from an upstream packument (the rest is served)"
     plural = if length entries == 1 then "y" else "ies"
+
+-- One dropped entry rendered for the operator: its kind, key, reason, and the raw
+-- value the upstream sent (truncated), so the actual offending bytes are visible.
+renderDroppedEntry :: InvalidEntry -> Text
+renderDroppedEntry e =
+    renderInvalidKind (invalidKind e)
+        <> " "
+        <> invalidKey e
+        <> " = "
+        <> truncatedValue (invalidValue e)
+        <> " ("
+        <> invalidReason e
+        <> ")"
+
+renderInvalidKind :: InvalidEntryKind -> Text
+renderInvalidKind = \case
+    InvalidVersionManifest -> "version-manifest"
+    InvalidDistTag -> "dist-tag"
+    InvalidPublishTime -> "publish-time"
+
+-- The raw value as compact JSON, truncated to 'maxRenderedValueChars' (only that many
+-- characters are ever forced, so a huge value never balloons the log line).
+truncatedValue :: Value -> Text
+truncatedValue v =
+    let rendered = TL.toStrict (TL.take (fromIntegral maxRenderedValueChars + 1) (encodeToLazyText v))
+     in if T.length rendered > maxRenderedValueChars
+            then T.take maxRenderedValueChars rendered <> "…"
+            else rendered
 
 -- How many dropped entries the drop-tracking log renders in full, and how many characters
 -- of each raw value, so an unbounded flood of malformed entries (or one huge value) cannot
@@ -747,6 +739,18 @@ packumentETag mountBaseUrl name sources =
     provenanceTag = \case
         TrustedSource -> "t\0"
         GatedSource -> "g\0"
+
+-- The validator is a content address over every serve input, so the assembled,
+-- encoded document is memoised under it: a recurring triple (public entry,
+-- private content, plan) serves the stored bytes with no assembly or encode, and
+-- concurrent identical renders coalesce onto one leader. A changed input is a
+-- changed key, so the store cannot serve stale bytes; a different private view is
+-- a different key, so it cannot cross a client boundary.
+servedBytes :: ServeRuntime -> PackumentDeps -> [Contribution] -> MergePlan -> ETag -> IO ByteString
+servedBytes rt deps sources plan etag =
+    resolveAssembled (srMetrics rt) (srMetadataCache rt) (renderETag etag) $
+        pure $!
+            LBS.toStrict (Aeson.encode (servedValue (renderServedBody deps sources plan)))
 
 {- Assemble the served packument by replaying the 'MergePlan' onto the sources' raw
 @Value@s.
