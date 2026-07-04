@@ -385,56 +385,64 @@ its eight 16-bit groups. Enough to recognise the @::1@, @fe80::\/10@, and
 @::ffff:0:0\/96@ addresses we block; rejects anything malformed.
 -}
 parseIPv6 :: Text -> Maybe IpAddr
-parseIPv6 host =
-    case T.splitOn "::" host of
-        [single] -> exactly8 =<< groupsOf single
-        [before, after] -> do
-            hd <- groupsOf before
-            tl <- groupsOf after
-            -- "::" stands for at least one all-zero group, so the explicit groups
-            -- on either side must total at most 7 (leaving room to fill to 8).
-            let present = length hd + length tl
-            if present <= 7
-                then Just (IpV6 (hd <> replicate (8 - present) 0 <> tl))
-                else Nothing
-        _ -> Nothing -- more than one "::" is illegal
+parseIPv6 host = case T.splitOn "::" host of
+    [single] -> exactlyEightGroups =<< parseV6Side single
+    [before, after] -> do
+        hd <- parseV6Side before
+        tl <- parseV6Side after
+        expandCompressedV6 hd tl
+    _ -> Nothing -- more than one "::" is illegal
+
+{- The colon-separated groups of one side of the @::@; "" → no groups. The final
+token may be a dotted-quad IPv4 (RFC 4291 §2.2.3, e.g. the @169.254.169.254@ in
+@::ffff:169.254.169.254@), which expands to its two 16-bit groups so an
+IPv4-mapped literal in its canonical dotted form is decoded rather than
+mistaken for a name. Only the last token may be dotted; an interior dotted
+token fails 'parseV6Group' (no hex '.') and the whole parse is rejected.
+-}
+parseV6Side :: Text -> Maybe [Word16]
+parseV6Side t
+    | T.null t = Just []
+    | otherwise = parseV6Tokens (T.splitOn ":" t)
+
+parseV6Tokens :: [Text] -> Maybe [Word16]
+parseV6Tokens [] = Just []
+parseV6Tokens [tok]
+    | T.any (== '.') tok = parseEmbeddedV4 tok
+    | otherwise = (: []) <$> parseV6Group tok
+parseV6Tokens (tok : rest) = (:) <$> parseV6Group tok <*> parseV6Tokens rest
+
+-- A trailing dotted-quad IPv4 as its two 16-bit groups (high pair, low pair).
+parseEmbeddedV4 :: Text -> Maybe [Word16]
+parseEmbeddedV4 t = case parseIPv4 octetDecimal t of
+    Just (IpV4 a b c d) -> Just [pair a b, pair c d]
+    _ -> Nothing
   where
-    -- The colon-separated groups of one side; "" → no groups. The final token
-    -- may be a dotted-quad IPv4 (RFC 4291 §2.2.3, e.g. the @169.254.169.254@ in
-    -- @::ffff:169.254.169.254@), which expands to its two 16-bit groups so an
-    -- IPv4-mapped literal in its canonical dotted form is decoded rather than
-    -- mistaken for a name. Only the last token may be dotted; an interior dotted
-    -- token fails 'group16' (no hex '.') and the whole parse is rejected.
-    groupsOf :: Text -> Maybe [Word16]
-    groupsOf t
-        | T.null t = Just []
-        | otherwise = groups (T.splitOn ":" t)
+    pair hi lo = fromIntegral hi * 256 + fromIntegral lo
 
-    groups :: [Text] -> Maybe [Word16]
-    groups [] = Just []
-    groups [tok]
-        | T.any (== '.') tok = embeddedV4 tok
-        | otherwise = (: []) <$> group16 tok
-    groups (tok : rest) = (:) <$> group16 tok <*> groups rest
+{- A group is a non-empty all-hex run that fits in 16 bits. The hex check
+keeps 'readMaybe' from accepting signs, so a parsed value is >= 0.
+-}
+parseV6Group :: Text -> Maybe Word16
+parseV6Group t = do
+    n <- if isHex t then readMaybe ("0x" <> toString t) else Nothing :: Maybe Integer
+    if n <= 0xFFFF then Just (fromInteger n) else Nothing
 
-    -- A trailing dotted-quad IPv4 as its two 16-bit groups (high pair, low pair).
-    embeddedV4 :: Text -> Maybe [Word16]
-    embeddedV4 t = case parseIPv4 octetDecimal t of
-        Just (IpV4 a b c d) -> Just [pair a b, pair c d]
-        _ -> Nothing
-      where
-        pair hi lo = fromIntegral hi * 256 + fromIntegral lo
+{- Fill the compressed form's zero run: "::" stands for at least one all-zero
+group, so the explicit groups on either side must total at most 7 (leaving room
+to fill to 8).
+-}
+expandCompressedV6 :: [Word16] -> [Word16] -> Maybe IpAddr
+expandCompressedV6 hd tl =
+    let present = length hd + length tl
+     in if present <= 7
+            then Just (IpV6 (hd <> replicate (8 - present) 0 <> tl))
+            else Nothing
 
-    -- A group is a non-empty all-hex run that fits in 16 bits. The hex check
-    -- keeps 'readMaybe' from accepting signs, so a parsed value is >= 0.
-    group16 :: Text -> Maybe Word16
-    group16 t = do
-        n <- if isHex t then readMaybe ("0x" <> toString t) else Nothing :: Maybe Integer
-        if n <= 0xFFFF then Just (fromInteger n) else Nothing
-
-    exactly8 :: [Word16] -> Maybe IpAddr
-    exactly8 gs@[_, _, _, _, _, _, _, _] = Just (IpV6 gs)
-    exactly8 _ = Nothing
+-- Exactly the full eight-group form; anything else is malformed.
+exactlyEightGroups :: [Word16] -> Maybe IpAddr
+exactlyEightGroups gs@[_, _, _, _, _, _, _, _] = Just (IpV6 gs)
+exactlyEightGroups _ = Nothing
 
 -- Whether @t@ is a non-empty run of decimal digits (no sign or whitespace).
 isDecimal :: Text -> Bool
