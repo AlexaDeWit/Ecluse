@@ -356,6 +356,7 @@ tasks:
       - lint-workflows
       - lint-scripts
       - test-scripts
+      - site-stub
 
   check:
     desc: Fast pre-push checks
@@ -429,10 +430,32 @@ tasks:
     deps:
       - docs-site
     cmds:
+      - task: site:assemble
+      - task: site:check
+
+  # The pandoc-and-static half of `site`, shared with `site-stub` so the PR gate
+  # assembles exactly what the Pages deploy assembles.
+  site:assemble:
+    internal: true
+    cmds:
       - cp -R web/static/. _site/
       - cp docs/branding/logo.svg docs/branding/favicon-32.png docs/branding/lock-illustration.svg docs/social-preview.png _site/
       - sh -c 'mkdir -p _site/vendor && cp "$MERMAID_JS" _site/vendor/mermaid.min.js && cp "$REDOC_JS" _site/vendor/redoc.standalone.js'
       - task: site:pandoc
+
+  # PR-tier site gate: everything the link and metadata checks cover lives in
+  # web/, the Markdown sources, and the sitemap, none of which needs Haddock or
+  # the OpenAPI generator. Stub the two generated API artefacts (the hub pages
+  # are real; the checkers exempt the Haddock tree interiors, which docs-site
+  # gates itself) and run the same site:check the Pages deploy runs on main.
+  site-stub:
+    desc: Assemble the pandoc site over stubbed API artefacts and run the site checks
+    cmds:
+      - rm -rf _site && mkdir -p _site/api/openapi && touch _site/.nojekyll
+      - cp web/api-index.html _site/api/index.html
+      - cp web/redoc.html _site/api/openapi/index.html
+      - printf '{}' > _site/api/openapi.json
+      - task: site:assemble
       - task: site:check
 
   site:pandoc:
