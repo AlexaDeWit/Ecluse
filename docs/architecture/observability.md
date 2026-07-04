@@ -126,7 +126,8 @@ the serve path (`Ecluse.Core.Server.Pipeline`), the metadata cache
 (`Ecluse.Core.Server.Cache`), and the mirror worker (`Ecluse.Core.Worker`). Two signals
 are defined but not yet wired: the circuit-breaker state gauge and the credential
 refresh/ttl signals, whose sources sit off the composition root, so emitting them is a
-boot-sequencing follow-up. The advisory-sync metrics are deferred with the CVE subsystem.
+boot-sequencing follow-up. The advisory-sync metrics are likewise defined but not yet
+emitted.
 
 **Transport.** Metrics export over OTLP push (the same pipeline as traces) to a
 node-local collector or the Datadog Agent's OTLP receiver, which auto-maps OTLP to the

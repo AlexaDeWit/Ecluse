@@ -52,7 +52,7 @@ not here.
    every data-plane request, `Ecluse.Core.Registry.Npm.withToken`), so an allowlisted
    upstream cannot `302` a fetch off-allowlist: the only host dialled is the one the
    allowlist admitted. See [Registry Model](registry-model.md#registry-abstraction) and
-   [URL rewriting](hosting.md#the-load-bearing-requirement-url-rewriting).
+   [URL rewriting](web-layer.md#web-layer).
 3. **Registry egress is https-only by construction, and certificate validation is the
    endpoint-authentication boundary.** Every outbound registry URL, the public and private
    base URLs, every `dist.tarball` target, and any redirect target, is built through a
@@ -159,7 +159,7 @@ function of name + version) but breaks the registries Écluse fronts. The artifa
 location is authoritative, server-chosen data, not a derivable fact:
 
 - **Tarballs often live on a different host or path than metadata.** Public PyPI serves
-  files from a [separate host](hosting.md#the-load-bearing-requirement-url-rewriting); npm
+  files from a [separate host](web-layer.md#web-layer); npm
   third-party registries (CodeArtifact, Artifactory, GitHub Packages) return `dist.tarball`
   on a distinct CDN, often with server-generated paths or short-lived signed query strings
   that cannot be reconstructed.
@@ -316,29 +316,12 @@ trusted private origin (invariant 3), never on a public-upstream-derived target,
 cannot steer it at `169.254.169.254` or `fd00:ec2::254`. Meanwhile Écluse needs the metadata
 endpoint to mint its instance-role credentials (`AWS.newEnv AWS.discover` builds amazonka's
 own HTTP client, separate from the data-plane manager, so minting reaches IMDS regardless).
-The platform controls below protect the data targets and must not cut the proxy off from
-metadata or its private upstream's internal range. Recommended, in rough order of impact:
-
-- **Harden the instance-metadata endpoint, do not block it.** Require IMDSv2 and set the
-  hop limit to 1 (AWS `httpPutResponseHopLimit: 1`), stopping a neighbour or forwarded
-  request from reaching metadata through extra hops while keeping the proxy's own minting
-  working. Denying egress to `169.254.169.254` outright would break minting and is not
-  recommended, the SSRF risk is already closed at the behaviour level.
-- **Restrict egress with a default-deny network policy** scoped to the data targets.
-  - **AWS**, security-group egress rules / network ACLs allowing only the upstream
-    registry CIDRs, the mirror target, and the metadata endpoint the instance role
-    needs.
-  - **GCP**, VPC firewall egress rules and, where applicable, VPC Service Controls.
-  - **Kubernetes**, a default-deny `NetworkPolicy` with an explicit egress
-    allowlist (and a CNI that enforces it); allow the private upstream's internal
-    range.
-  - **Service mesh (Istio/Linkerd)**, set the sidecar outbound policy to
-    `REGISTRY_ONLY`, declare each upstream as an explicit `ServiceEntry`, and
-    constrain it with a `Sidecar` egress listener and egress `AuthorizationPolicy`.
-- **Run the proxy with no ambient cloud credentials it does not need.** Écluse holds a
-  mirror-write credential and, under `service`, a private-upstream read credential; scope
-  the instance role to exactly those (see
-  [Configuration](configuration.md#outbound-registry-credentials)).
+So the platform controls must protect the data targets without cutting the proxy off from
+metadata or its private upstream's internal range: harden IMDSv2 rather than block it,
+default-deny egress scoped to the upstreams and mirror target, and grant the instance role
+only the mirror-write and (under `service`) private-read credentials it uses. The concrete
+per-platform runbook is the operator's, in the operator manual:
+[Securing network egress](../../USAGE.md#securing-network-egress-required).
 
 ## Trust assumptions & credential posture
 

@@ -51,7 +51,7 @@ control/data-plane split, streaming, and middleware, in [Web Layer](web-layer.md
 **The effect model: `IO` handles, `App` orchestration.** `App = ReaderT Env IO` (with
 `unliftio`) is the orchestration monad; the server, worker, and request handlers read
 `Env` through it, handlers over a per-request `RequestCtx { ctxEnv, ctxMount }` pairing
-`Env` with the matched mount's [`MountBinding`](hosting.md#mounts), built once at dispatch
+`Env` with the matched mount's [`MountBinding`](web-layer.md#web-layer), built once at dispatch
 so per-mount deps (registry set, rules, renderer, derived prefix) are read from context
 rather than re-threaded. Shared mutable state (credential refresh, circuit-breaker,
 in-flight sets) lives as `TVar`/`IORef` in `Env`, not a `StateT` layer, which would lose
