@@ -34,37 +34,37 @@ Values that parse as valid JSON (like numbers or booleans) are decoded;
 otherwise they remain as Strings.
 -}
 buildEnvAst :: [(String, String)] -> Value
-buildEnvAst env = foldl' deepMerge (Object KeyMap.empty) (map mkValue ecluseVars)
+buildEnvAst env =
+    foldl' deepMerge (Object KeyMap.empty) (map envVarValue configVars)
   where
-    ecluseVars =
-        [ (k, v)
-        | (key, v) <- env
-        , let kText = T.pack key
-        , let kMaybe = case T.stripPrefix "ECLUSE_" kText of
-                Just k -> Just k
-                Nothing -> if any (`T.isPrefixOf` kText) exemptedPrefixes then Just kText else Nothing
-        , Just k <- [kMaybe]
-        ]
+    configVars = [(key, v) | (name, v) <- env, Just key <- [configEnvKey (T.pack name)]]
 
-    exemptedPrefixes = ["AWS_"]
+configEnvKey :: Text -> Maybe Text
+configEnvKey name = case T.stripPrefix "ECLUSE_" name of
+    Just stripped -> Just stripped
+    Nothing
+        | any (`T.isPrefixOf` name) exemptedPrefixes -> Just name
+        | otherwise -> Nothing
 
-    mkValue :: (Text, String) -> Value
-    mkValue (k, v) =
-        let parts = map toCamelCase (T.splitOn "__" k)
-            val = parseEnvValue (T.pack v)
-         in nest parts val
+exemptedPrefixes :: [Text]
+exemptedPrefixes = ["AWS_"]
 
-    toCamelCase :: Text -> Key.Key
-    toCamelCase t =
-        let words' = filter (not . T.null) (T.splitOn "_" t)
-         in Key.fromText $ case words' of
-                [] -> ""
-                (w : ws) -> T.toLower w <> T.concat (map T.toTitle ws)
+envVarValue :: (Text, String) -> Value
+envVarValue (key, value) =
+    nest (map toCamelCase (T.splitOn "__" key)) (parseEnvValue (T.pack value))
 
-    nest :: [Key.Key] -> Value -> Value
-    nest [] v = v
-    nest (p : ps) v = Object $ KeyMap.singleton p (nest ps v)
+toCamelCase :: Text -> Key.Key
+toCamelCase t =
+    let words' = filter (not . T.null) (T.splitOn "_" t)
+     in Key.fromText $ case words' of
+            [] -> ""
+            (w : ws) -> T.toLower w <> T.concat (map T.toTitle ws)
 
-    parseEnvValue txt = case eitherDecodeStrict (encodeUtf8 txt) of
-        Right v -> v
-        Left _ -> String txt
+nest :: [Key.Key] -> Value -> Value
+nest [] v = v
+nest (p : ps) v = Object $ KeyMap.singleton p (nest ps v)
+
+parseEnvValue :: Text -> Value
+parseEnvValue txt = case eitherDecodeStrict (encodeUtf8 txt) of
+    Right v -> v
+    Left _ -> String txt

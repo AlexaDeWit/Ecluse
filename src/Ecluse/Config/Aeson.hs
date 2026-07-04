@@ -26,139 +26,201 @@ import Ecluse.Log (parseLogFormat)
 import Ecluse.Telemetry (parseTelemetrySwitch)
 
 instance FromJSON MountConfig where
-    parseJSON = withObject "MountConfig" $ \o -> do
-        rejectUnknownKeys "mount" ["privateUpstream", "publicUpstream", "mirrorTarget", "mirrorTargetToken", "credentialProvider", "respectUpstreamTarballHost", "mirrorCodeArtifactDomain", "mirrorCodeArtifactDomainOwner", "mirrorCodeArtifactRegion", "mirrorCodeArtifactTokenDuration", "publicationTarget", "publicationTargetToken", "publishScopes", "rules"] o
-        MountConfig
-            <$> (o .:? "privateUpstream" >>= traverse parseRegistryUrl)
-            <*> (o .: "publicUpstream" >>= parseRegistryUrl)
-            <*> (o .:? "mirrorTarget" >>= traverse parseRegistryUrl)
-            <*> (o .:? "mirrorTargetToken" >>= traverse parseSecret)
-            <*> (o .: "credentialProvider" >>= parseEnum parseCredentialBackend "credentialProvider")
-            <*> o .: "respectUpstreamTarballHost"
-            <*> o .:? "mirrorCodeArtifactDomain"
-            <*> (o .:? "mirrorCodeArtifactDomainOwner" >>= traverse parseTextOrNumber)
-            <*> o .:? "mirrorCodeArtifactRegion"
-            <*> (o .:? "mirrorCodeArtifactTokenDuration" >>= traverse parseDuration)
-            <*> (o .:? "publicationTarget" >>= traverse parseRegistryUrl)
-            <*> (o .:? "publicationTargetToken" >>= traverse parseSecret)
-            <*> (o .:? "publishScopes" .!= String "" >>= parseScopes)
-            <*> o .:? "rules" .!= RulePatch Map.empty
-      where
-        parseDuration :: Value -> Parser Natural
-        parseDuration (String t) = case readMaybe (T.unpack t) :: Maybe Natural of
-            Just n -> pure n
-            Nothing -> fail ("invalid duration: " <> T.unpack t)
-        parseDuration v = parseJSON v
+    parseJSON = withObject "MountConfig" mountConfigParser
 
-        parseTextOrNumber :: Value -> Parser Text
-        parseTextOrNumber (String t) = pure t
-        parseTextOrNumber v = T.pack . show <$> (parseJSON v :: Parser Integer)
+mountConfigParser :: KeyMap.KeyMap Value -> Parser MountConfig
+mountConfigParser o = do
+    rejectUnknownKeys "mount" acceptedMountKeys o
+    MountConfig
+        <$> (o .:? "privateUpstream" >>= traverse parseRegistryUrl)
+        <*> (o .: "publicUpstream" >>= parseRegistryUrl)
+        <*> (o .:? "mirrorTarget" >>= traverse parseRegistryUrl)
+        <*> (o .:? "mirrorTargetToken" >>= traverse parseSecret)
+        <*> (o .: "credentialProvider" >>= parseEnum parseCredentialBackend "credentialProvider")
+        <*> o .: "respectUpstreamTarballHost"
+        <*> o .:? "mirrorCodeArtifactDomain"
+        <*> (o .:? "mirrorCodeArtifactDomainOwner" >>= traverse parseTextOrNumber)
+        <*> o .:? "mirrorCodeArtifactRegion"
+        <*> (o .:? "mirrorCodeArtifactTokenDuration" >>= traverse parseDuration)
+        <*> (o .:? "publicationTarget" >>= traverse parseRegistryUrl)
+        <*> (o .:? "publicationTargetToken" >>= traverse parseSecret)
+        <*> (o .:? "publishScopes" .!= String "" >>= parseScopes)
+        <*> o .:? "rules" .!= RulePatch Map.empty
 
-        parseSecret :: Value -> Parser Secret
-        parseSecret = withText "Secret" (pure . mkSecret)
+acceptedMountKeys :: [Key.Key]
+acceptedMountKeys =
+    [ "privateUpstream"
+    , "publicUpstream"
+    , "mirrorTarget"
+    , "mirrorTargetToken"
+    , "credentialProvider"
+    , "respectUpstreamTarballHost"
+    , "mirrorCodeArtifactDomain"
+    , "mirrorCodeArtifactDomainOwner"
+    , "mirrorCodeArtifactRegion"
+    , "mirrorCodeArtifactTokenDuration"
+    , "publicationTarget"
+    , "publicationTargetToken"
+    , "publishScopes"
+    , "rules"
+    ]
 
-        parseScopes :: Value -> Parser [Scope]
-        parseScopes = withText "Scopes" $ \t ->
-            if T.null (T.strip t)
-                then pure []
-                else pure (map (mkScope . T.strip) (T.splitOn "," t))
+parseDuration :: Value -> Parser Natural
+parseDuration (String t) = case readMaybe (T.unpack t) :: Maybe Natural of
+    Just n -> pure n
+    Nothing -> fail ("invalid duration: " <> T.unpack t)
+parseDuration v = parseJSON v
+
+parseTextOrNumber :: Value -> Parser Text
+parseTextOrNumber (String t) = pure t
+parseTextOrNumber v = T.pack . show <$> (parseJSON v :: Parser Integer)
+
+parseScopes :: Value -> Parser [Scope]
+parseScopes = withText "Scopes" $ \t ->
+    if T.null (T.strip t)
+        then pure []
+        else pure (map (mkScope . T.strip) (T.splitOn "," t))
 
 instance FromJSON AppConfig where
-    parseJSON = withObject "AppConfig" $ \o -> do
-        rejectUnknownKeys "document" ["port", "mounts", "queueBackend", "queueUrl", "queueMemoryMaxDepth", "awsRegion", "awsEndpointUrlSqs", "awsEndpointUrl", "awsAccessKeyId", "awsSecretAccessKey", "googleProject", "authToken", "helpMessage", "cveSyncInterval", "shutdownDrainTimeout", "cores", "maxHeapBytes", "serveMaxInFlight", "publicConnectionsPerHost", "privateConnectionsPerHost", "cacheTtl", "cacheMaxEntries", "cacheMaxBytes", "maxResponseBytes", "maxVersionCount", "maxNestingDepth", "logFormat", "telemetry", "publicUrl", "minPublicIntegrity", "minTrustedIntegrity", "additionalBlockedRanges", "rules", "osvDataDir", "osvExportBaseUrl", "vulnerabilityDatabaseBucket", "cveDbPollInterval", "maxOsvDbBytes"] o
-        AppConfig
-            <$> o .: "port"
-            <*> (o .:? "mounts" .!= mempty >>= parseMounts)
-            <*> (o .: "queueBackend" >>= parseEnum parseQueueBackend "queueBackend")
-            <*> (o .:? "queueUrl" >>= traverse parseUrl)
-            <*> o .: "queueMemoryMaxDepth"
-            <*> o .:? "awsRegion"
-            <*> o .:? "awsEndpointUrlSqs"
-            <*> o .:? "awsEndpointUrl"
-            <*> o .:? "googleProject"
-            <*> (o .:? "authToken" >>= traverse parseSecret)
-            <*> o .:? "helpMessage"
-            <*> (o .: "cveSyncInterval" >>= parseSeconds)
-            <*> o .: "shutdownDrainTimeout"
-            <*> (o .:? "cores" >>= traverse (parsePositiveInt "cores"))
-            <*> (o .:? "maxHeapBytes" >>= traverse (parsePositiveInt "maxHeapBytes"))
-            <*> (o .:? "serveMaxInFlight" >>= traverse (parsePositiveInt "serveMaxInFlight"))
-            <*> (o .:? "publicConnectionsPerHost" >>= traverse (parsePositiveInt "publicConnectionsPerHost"))
-            <*> (o .:? "privateConnectionsPerHost" >>= traverse (parsePositiveInt "privateConnectionsPerHost"))
-            <*> (o .: "cacheTtl" >>= parseSeconds)
-            <*> o .: "cacheMaxEntries"
-            <*> o .: "cacheMaxBytes"
-            <*> o .: "maxResponseBytes"
-            <*> o .: "maxVersionCount"
-            <*> o .: "maxNestingDepth"
-            <*> (o .: "logFormat" >>= parseEnum parseLogFormat "logFormat")
-            <*> (o .: "telemetry" >>= parseEnum parseTelemetrySwitch "telemetry")
-            <*> (o .:? "publicUrl" >>= traverse parseUrl)
-            <*> (o .: "minPublicIntegrity" >>= parseEnum parseMinIntegrity "minPublicIntegrity")
-            <*> (o .: "minTrustedIntegrity" >>= parseEnum parseMinTrustedIntegrity "minTrustedIntegrity")
-            <*> (o .:? "additionalBlockedRanges" .!= String "" >>= parseAdditionalBlockedRanges)
-            <*> (o .:? "osvDataDir" .!= "data/osv")
-            <*> (o .:? "osvExportBaseUrl" .!= "https://osv-vulnerabilities.storage.googleapis.com")
-            <*> o .:? "vulnerabilityDatabaseBucket"
-            <*> (o .: "cveDbPollInterval" >>= parseDelaySeconds "cveDbPollInterval")
-            <*> (o .: "maxOsvDbBytes" >>= parsePositiveInt "maxOsvDbBytes")
-      where
-        parseMounts :: KeyMap.KeyMap Value -> Parser (Map.Map Ecosystem MountConfig)
-        parseMounts km = do
-            pairs <-
-                traverse
-                    ( \(k, v) -> do
-                        eco <- case parseEcosystem (Key.toText k) of
-                            Just e -> pure e
-                            Nothing -> fail ("Invalid ecosystem: " <> T.unpack (Key.toText k))
-                        mcfg <- parseJSON v
-                        pure (eco, mcfg)
-                    )
-                    (KeyMap.toList km)
-            let mounts = Map.fromList pairs
-            pure (Map.filter (isJust . mntPrivateUpstream) mounts)
+    parseJSON = withObject "AppConfig" appConfigParser
 
-        parseSecret :: Value -> Parser Secret
-        parseSecret = withText "Secret" (pure . mkSecret)
+appConfigParser :: KeyMap.KeyMap Value -> Parser AppConfig
+appConfigParser o = do
+    rejectUnknownKeys "document" acceptedDocumentKeys o
+    AppConfig
+        <$> o .: "port"
+        <*> (o .:? "mounts" .!= mempty >>= parseMounts)
+        <*> (o .: "queueBackend" >>= parseEnum parseQueueBackend "queueBackend")
+        <*> (o .:? "queueUrl" >>= traverse parseUrl)
+        <*> o .: "queueMemoryMaxDepth"
+        <*> o .:? "awsRegion"
+        <*> o .:? "awsEndpointUrlSqs"
+        <*> o .:? "awsEndpointUrl"
+        <*> o .:? "googleProject"
+        <*> (o .:? "authToken" >>= traverse parseSecret)
+        <*> o .:? "helpMessage"
+        <*> (o .: "cveSyncInterval" >>= parseSeconds)
+        <*> o .: "shutdownDrainTimeout"
+        <*> (o .:? "cores" >>= traverse (parsePositiveInt "cores"))
+        <*> (o .:? "maxHeapBytes" >>= traverse (parsePositiveInt "maxHeapBytes"))
+        <*> (o .:? "serveMaxInFlight" >>= traverse (parsePositiveInt "serveMaxInFlight"))
+        <*> (o .:? "publicConnectionsPerHost" >>= traverse (parsePositiveInt "publicConnectionsPerHost"))
+        <*> (o .:? "privateConnectionsPerHost" >>= traverse (parsePositiveInt "privateConnectionsPerHost"))
+        <*> (o .: "cacheTtl" >>= parseSeconds)
+        <*> o .: "cacheMaxEntries"
+        <*> o .: "cacheMaxBytes"
+        <*> o .: "maxResponseBytes"
+        <*> o .: "maxVersionCount"
+        <*> o .: "maxNestingDepth"
+        <*> (o .: "logFormat" >>= parseEnum parseLogFormat "logFormat")
+        <*> (o .: "telemetry" >>= parseEnum parseTelemetrySwitch "telemetry")
+        <*> (o .:? "publicUrl" >>= traverse parseUrl)
+        <*> (o .: "minPublicIntegrity" >>= parseEnum parseMinIntegrity "minPublicIntegrity")
+        <*> (o .: "minTrustedIntegrity" >>= parseEnum parseMinTrustedIntegrity "minTrustedIntegrity")
+        <*> (o .:? "additionalBlockedRanges" .!= String "" >>= parseAdditionalBlockedRanges)
+        <*> (o .:? "osvDataDir" .!= "data/osv")
+        <*> (o .:? "osvExportBaseUrl" .!= "https://osv-vulnerabilities.storage.googleapis.com")
+        <*> o .:? "vulnerabilityDatabaseBucket"
+        <*> (o .: "cveDbPollInterval" >>= parseDelaySeconds "cveDbPollInterval")
+        <*> (o .: "maxOsvDbBytes" >>= parsePositiveInt "maxOsvDbBytes")
 
-        parseAdditionalBlockedRanges :: Value -> Parser [IPRange]
-        parseAdditionalBlockedRanges = withText "IPRange list" $ \t ->
-            if T.null (T.strip t)
-                then pure []
-                else traverse parseEntry (T.splitOn "," t)
-          where
-            parseEntry entry =
-                let trimmed = T.strip entry
-                 in case parseBlockedRange trimmed of
-                        Just range -> pure range
-                        Nothing -> fail ("invalid CIDR range in additionalBlockedRanges: " <> T.unpack trimmed)
+acceptedDocumentKeys :: [Key.Key]
+acceptedDocumentKeys =
+    [ "port"
+    , "mounts"
+    , "queueBackend"
+    , "queueUrl"
+    , "queueMemoryMaxDepth"
+    , "awsRegion"
+    , "awsEndpointUrlSqs"
+    , "awsEndpointUrl"
+    , "awsAccessKeyId"
+    , "awsSecretAccessKey"
+    , "googleProject"
+    , "authToken"
+    , "helpMessage"
+    , "cveSyncInterval"
+    , "shutdownDrainTimeout"
+    , "cores"
+    , "maxHeapBytes"
+    , "serveMaxInFlight"
+    , "publicConnectionsPerHost"
+    , "privateConnectionsPerHost"
+    , "cacheTtl"
+    , "cacheMaxEntries"
+    , "cacheMaxBytes"
+    , "maxResponseBytes"
+    , "maxVersionCount"
+    , "maxNestingDepth"
+    , "logFormat"
+    , "telemetry"
+    , "publicUrl"
+    , "minPublicIntegrity"
+    , "minTrustedIntegrity"
+    , "additionalBlockedRanges"
+    , "rules"
+    , "osvDataDir"
+    , "osvExportBaseUrl"
+    , "vulnerabilityDatabaseBucket"
+    , "cveDbPollInterval"
+    , "maxOsvDbBytes"
+    ]
 
-        parseSeconds :: Value -> Parser NominalDiffTime
-        parseSeconds (String t) = case readMaybe (T.unpack t) :: Maybe Integer of
-            Just n | n >= 0 -> pure (fromInteger n)
-            _ -> fail ("expected a non-negative integer count of seconds, got " <> show t)
-        parseSeconds (Number n) =
-            let val = truncate n :: Integer
-             in if val >= 0 then pure (fromInteger val) else fail "expected a non-negative integer count of seconds"
-        parseSeconds _ = fail "expected a String or Number for Seconds"
+parseMounts :: KeyMap.KeyMap Value -> Parser (Map.Map Ecosystem MountConfig)
+parseMounts km = do
+    mounts <- Map.fromList <$> traverse parseMountEntry (KeyMap.toList km)
+    pure (Map.filter (isJust . mntPrivateUpstream) mounts)
 
-        parsePositiveInt :: String -> Int -> Parser Int
-        parsePositiveInt field value
-            | value > 0 = pure value
-            | otherwise = fail (field <> " must be a positive integer")
+parseMountEntry :: (Key.Key, Value) -> Parser (Ecosystem, MountConfig)
+parseMountEntry (k, v) = do
+    eco <- case parseEcosystem (Key.toText k) of
+        Just e -> pure e
+        Nothing -> fail ("Invalid ecosystem: " <> T.unpack (Key.toText k))
+    mcfg <- parseJSON v
+    pure (eco, mcfg)
 
-        {- A recurring delay: positive (zero would spin the poll without
-        yielding) and bounded so its microsecond conversion fits 'Int'
-        rather than wrapping into an invalid negative delay.
-        -}
-        parseDelaySeconds :: String -> Value -> Parser NominalDiffTime
-        parseDelaySeconds field v = do
-            secs <- parseSeconds v
-            let n = truncate secs :: Integer
-                maxDelay = toInteger (maxBound :: Int) `div` 1_000_000
-            if n >= 1 && n <= maxDelay
-                then pure secs
-                else fail (field <> " must be a positive integer count of seconds, at most " <> show maxDelay)
+parseSecret :: Value -> Parser Secret
+parseSecret = withText "Secret" (pure . mkSecret)
+
+parseAdditionalBlockedRanges :: Value -> Parser [IPRange]
+parseAdditionalBlockedRanges = withText "IPRange list" $ \t ->
+    if T.null (T.strip t)
+        then pure []
+        else traverse parseBlockedRangeEntry (T.splitOn "," t)
+
+parseBlockedRangeEntry :: Text -> Parser IPRange
+parseBlockedRangeEntry entry =
+    let trimmed = T.strip entry
+     in case parseBlockedRange trimmed of
+            Just range -> pure range
+            Nothing -> fail ("invalid CIDR range in additionalBlockedRanges: " <> T.unpack trimmed)
+
+parseSeconds :: Value -> Parser NominalDiffTime
+parseSeconds (String t) = case readMaybe (T.unpack t) :: Maybe Integer of
+    Just n | n >= 0 -> pure (fromInteger n)
+    _ -> fail ("expected a non-negative integer count of seconds, got " <> show t)
+parseSeconds (Number n) =
+    let val = truncate n :: Integer
+     in if val >= 0 then pure (fromInteger val) else fail "expected a non-negative integer count of seconds"
+parseSeconds _ = fail "expected a String or Number for Seconds"
+
+parsePositiveInt :: String -> Int -> Parser Int
+parsePositiveInt field value
+    | value > 0 = pure value
+    | otherwise = fail (field <> " must be a positive integer")
+
+{- A recurring delay: positive (zero would spin the poll without
+yielding) and bounded so its microsecond conversion fits 'Int'
+rather than wrapping into an invalid negative delay.
+-}
+parseDelaySeconds :: String -> Value -> Parser NominalDiffTime
+parseDelaySeconds field v = do
+    secs <- parseSeconds v
+    let n = truncate secs :: Integer
+        maxDelay = toInteger (maxBound :: Int) `div` 1_000_000
+    if n >= 1 && n <= maxDelay
+        then pure secs
+        else fail (field <> " must be a positive integer count of seconds, at most " <> show maxDelay)
 
 instance FromJSON RulePatch where
     parseJSON = withObject "rules" $ \o ->

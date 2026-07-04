@@ -47,65 +47,78 @@ defaultPolicy :: RulePolicy
 defaultPolicy =
     let defaultBytes = $(embedFile "config/default.yaml")
      in case decodeEither' defaultBytes of
-            Right ast -> case parseEither (withObject "Config" (\obj -> obj .:? "rules" .!= RulePatch Map.empty)) ast of
+            Right ast -> case parseRulesPatch ast of
                 Right globalRules -> either (error . show) id (resolvePolicy emptyPolicy globalRules)
                 Left e -> error ("Invalid default policy JSON: " <> T.pack e)
             Left e -> error ("Invalid default policy YAML: " <> show e)
 
 loadConfig :: [(String, String)] -> Maybe ByteString -> Either [ConfigError] Config
 loadConfig envVars mBytes = do
-    let envAst = buildEnvAst envVars
-
-    let defaultBytes = $(embedFile "config/default.yaml")
-
-    defaultAst <- case decodeEither' defaultBytes of
-        Right ast -> Right ast
-        Left err -> Left [ParseError ("config/default.yaml is invalid YAML: " <> T.pack (show err))]
-
-    docAst <- case mBytes of
-        Nothing -> Right (Object mempty)
-        Just bytes -> case decodeEither' bytes of
-            Right ast -> Right ast
-            Left err -> Left [ParseError ("/etc/ecluse/config.yaml is invalid YAML: " <> T.pack (show err))]
-
-    let overridesAst = deepMerge docAst envAst
+    defaultAst <- parseDefaultAst
+    docAst <- parseDocumentAst mBytes
+    let overridesAst = deepMerge docAst (buildEnvAst envVars)
     let merged = deepMerge defaultAst overridesAst
+    appConfig <- parseAppConfig merged
+    globalPolicy <- resolveGlobalPolicy overridesAst
+    mounts <- resolveMounts globalPolicy appConfig
+    Right (Config appConfig mounts)
 
-    appConfig <- case fromJSON merged of
-        Success e -> Right e
-        Error err -> Left [ParseError ("Configuration parse error: " <> T.pack err)]
+parseDefaultAst :: Either [ConfigError] Value
+parseDefaultAst = case decodeEither' $(embedFile "config/default.yaml") of
+    Right ast -> Right ast
+    Left err -> Left [ParseError ("config/default.yaml is invalid YAML: " <> T.pack (show err))]
 
-    globalRulePatch <- case parseEither (withObject "Config" (\obj -> obj .:? "rules" .!= RulePatch Map.empty)) overridesAst of
+parseDocumentAst :: Maybe ByteString -> Either [ConfigError] Value
+parseDocumentAst = \case
+    Nothing -> Right (Object mempty)
+    Just bytes -> case decodeEither' bytes of
+        Right ast -> Right ast
+        Left err -> Left [ParseError ("/etc/ecluse/config.yaml is invalid YAML: " <> T.pack (show err))]
+
+parseAppConfig :: Value -> Either [ConfigError] AppConfig
+parseAppConfig merged = case fromJSON merged of
+    Success appConfig -> Right appConfig
+    Error err -> Left [ParseError ("Configuration parse error: " <> T.pack err)]
+
+parseRulesPatch :: Value -> Either String RulePatch
+parseRulesPatch = parseEither (withObject "Config" (\obj -> obj .:? "rules" .!= RulePatch Map.empty))
+
+resolveGlobalPolicy :: Value -> Either [ConfigError] RulePolicy
+resolveGlobalPolicy overridesAst = do
+    globalRulePatch <- case parseRulesPatch overridesAst of
         Right r -> Right r
         Left err -> Left [ParseError ("Rules parse error: " <> T.pack err)]
+    first (pure . PolicyErrors) (resolvePolicy defaultPolicy globalRulePatch)
 
-    globalPolicy <- first (pure . PolicyErrors) (resolvePolicy defaultPolicy globalRulePatch)
-
-    mountsList <- traverse (\(eco, mcfg) -> either (Left . pure . PolicyErrors) Right (resolveMount globalPolicy eco mcfg appConfig)) (Map.toList (cfgMounts appConfig))
-    let mountsMap = Map.fromList (map (\m -> (mountEcosystem m, m)) mountsList)
-
-    Right (Config appConfig mountsMap)
+resolveMounts :: RulePolicy -> AppConfig -> Either [ConfigError] MountMap
+resolveMounts globalPolicy appConfig =
+    Map.traverseWithKey resolveOne (cfgMounts appConfig)
   where
-    {- HLINT ignore resolveMount "Avoid restricted function" -}
-    resolveMount :: RulePolicy -> Ecosystem -> MountConfig -> AppConfig -> Either [PolicyError] Mount
-    resolveMount globalPolicy eco mcfg app = do
-        policy <- resolvePolicy globalPolicy (mntAdditionalRules mcfg)
-        Right $
-            Mount
-                { mountEcosystem = eco
-                , mountRegistries =
-                    MountRegistries
-                        { regPrivateUpstream = fromMaybe (error "privateUpstream filtered out") (mntPrivateUpstream mcfg)
-                        , regPublicUpstream = mntPublicUpstream mcfg
-                        , regMirrorTarget =
-                            MirrorTarget
-                                { mtUrl = fromMaybe (fromMaybe (error "privateUpstream filtered out") (mntPrivateUpstream mcfg)) (mntMirrorTarget mcfg)
-                                , mtCredential = mntCredentialProvider mcfg
-                                , mtQueue = cfgQueueBackend app
-                                }
-                        }
-                , mountPolicy = rulesOf policy
-                }
+    resolveOne eco mcfg =
+        first (pure . PolicyErrors) (resolveMount globalPolicy eco mcfg appConfig)
+
+{- HLINT ignore resolveMount "Avoid restricted function" -}
+resolveMount :: RulePolicy -> Ecosystem -> MountConfig -> AppConfig -> Either [PolicyError] Mount
+resolveMount globalPolicy eco mcfg app = do
+    policy <- resolvePolicy globalPolicy (mntAdditionalRules mcfg)
+    Right $
+        Mount
+            { mountEcosystem = eco
+            , mountRegistries =
+                MountRegistries
+                    { regPrivateUpstream = privateUpstream
+                    , regPublicUpstream = mntPublicUpstream mcfg
+                    , regMirrorTarget =
+                        MirrorTarget
+                            { mtUrl = fromMaybe privateUpstream (mntMirrorTarget mcfg)
+                            , mtCredential = mntCredentialProvider mcfg
+                            , mtQueue = cfgQueueBackend app
+                            }
+                    }
+            , mountPolicy = rulesOf policy
+            }
+  where
+    privateUpstream = fromMaybe (error "privateUpstream filtered out") (mntPrivateUpstream mcfg)
 
 rulesOf :: RulePolicy -> [PrecededRule]
 rulesOf = Map.elems . policyRules
