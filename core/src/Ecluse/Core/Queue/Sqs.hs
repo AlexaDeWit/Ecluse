@@ -280,30 +280,34 @@ unknown ecosystem, an empty hash list, malformed JSON).
 decodeJob :: Text -> Either Text MirrorJob
 decodeJob body =
     first toText (eitherDecodeStrict' (encodeUtf8 body))
-        >>= first toText . parseEither parser
+        >>= first toText . parseEither parseMirrorJob
+
+-- Parse the top-level job object 'encodeJob' writes, delegating the nested
+-- carriers to 'parseArtifact' and 'parseTraceContext'.
+parseMirrorJob :: Aeson.Value -> Parser MirrorJob
+parseMirrorJob = withObject "MirrorJob" $ \o -> do
+    ecoName <- o .: "ecosystem"
+    eco <- maybe (fail (unknownEcosystem ecoName)) pure (parseEcosystem ecoName)
+    scope <- o .:? "scope"
+    rawName <- o .: "name"
+    rawVersion <- o .: "version"
+    artifactUrl <- o .: "artifactUrl"
+    mirrorTarget <- o .: "mirrorTarget"
+    artifact <- o .: "artifact" >>= parseArtifact
+    -- The trace-context carrier is optional: a job from an older producer (or one
+    -- enqueued with tracing off) carries no "traceContext", which decodes to
+    -- 'Nothing' and simply yields no span link in the worker.
+    traceContext <- o .:? "traceContext" >>= traverse parseTraceContext
+    pure
+        MirrorJob
+            { jobPackage = mkPackageName eco (mkScope <$> scope) rawName
+            , jobVersion = mkVersion eco rawVersion
+            , jobArtifactUrl = artifactUrl
+            , jobMirrorTarget = mirrorTarget
+            , jobArtifact = artifact
+            , jobTraceContext = traceContext
+            }
   where
-    parser = withObject "MirrorJob" $ \o -> do
-        ecoName <- o .: "ecosystem"
-        eco <- maybe (fail (unknownEcosystem ecoName)) pure (parseEcosystem ecoName)
-        scope <- o .:? "scope"
-        rawName <- o .: "name"
-        rawVersion <- o .: "version"
-        artifactUrl <- o .: "artifactUrl"
-        mirrorTarget <- o .: "mirrorTarget"
-        artifact <- o .: "artifact" >>= parseArtifact
-        -- The trace-context carrier is optional: a job from an older producer (or one
-        -- enqueued with tracing off) carries no "traceContext", which decodes to
-        -- 'Nothing' and simply yields no span link in the worker.
-        traceContext <- o .:? "traceContext" >>= traverse parseTraceContext
-        pure
-            MirrorJob
-                { jobPackage = mkPackageName eco (mkScope <$> scope) rawName
-                , jobVersion = mkVersion eco rawVersion
-                , jobArtifactUrl = artifactUrl
-                , jobMirrorTarget = mirrorTarget
-                , jobArtifact = artifact
-                , jobTraceContext = traceContext
-                }
     unknownEcosystem n = "unknown ecosystem " <> show (n :: Text)
 
 -- Parse the optional trace-context carrier back into a 'RemoteSpanContext': the W3C
@@ -326,17 +330,19 @@ parseArtifact = withObject "MirrorArtifact" $ \o -> do
         Nothing -> fail "MirrorArtifact carries no integrity digest"
         Just hashes ->
             pure MirrorArtifact{maFilename = filename, maHashes = hashes, maSize = size}
+
+-- Parse one algorithm-tagged digest from the artifact descriptor's hash list.
+parseHash :: Aeson.Value -> Parser Hash
+parseHash = withObject "Hash" $ \h -> do
+    algName <- h .: "alg"
+    alg <- maybe (fail (unknownAlg algName)) pure (parseHashAlg algName)
+    value <- h .: "value"
+    -- The queue is a trust boundary: validate the digest on decode through the same
+    -- 'mkHash' the serve path uses, so the worker can never ingest a malformed digest
+    -- to verify the fetched bytes against. A malformed value fails the decode (the job
+    -- is left un-acked and redelivers, ultimately to the dead-letter queue).
+    either (fail . toString) pure (mkHash alg value)
   where
-    parseHash :: Aeson.Value -> Parser Hash
-    parseHash = withObject "Hash" $ \h -> do
-        algName <- h .: "alg"
-        alg <- maybe (fail (unknownAlg algName)) pure (parseHashAlg algName)
-        value <- h .: "value"
-        -- The queue is a trust boundary: validate the digest on decode through the same
-        -- 'mkHash' the serve path uses, so the worker can never ingest a malformed digest
-        -- to verify the fetched bytes against. A malformed value fails the decode (the job
-        -- is left un-acked and redelivers, ultimately to the dead-letter queue).
-        either (fail . toString) pure (mkHash alg value)
     unknownAlg n = "unknown hash algorithm " <> show (n :: Text)
 
 -- Decode a wire algorithm name back to its 'HashAlg' -- the inverse of 'renderHashAlg'
