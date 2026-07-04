@@ -1,4 +1,4 @@
-# Architecture Diagrams
+# Architecture diagrams
 
 > Part of the [Écluse architecture overview](../architecture.md).
 

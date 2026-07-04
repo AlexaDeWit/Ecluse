@@ -33,7 +33,8 @@ discarded measurement, not a branch.
 Choosing OpenTelemetry is precisely what keeps Datadog optional: OTLP is a
 vendor-neutral wire protocol, so one set of instrumentation feeds any backend and
 the choice of vendor collapses to an endpoint. (It also happens to be the only
-realistic route for Haskell, there is no first-party Datadog tracing library,but the neutrality is the point, not a consolation.) We build on
+realistic route for Haskell, there is no first-party Datadog tracing library, but
+the neutrality is the point.) We build on
 [`hs-opentelemetry`](https://github.com/iand675/hs-opentelemetry) **1.0** (May
 2026), which, after years of "coming soon", now ships **metrics and logs
 alongside tracing**, with OTLP export *and* a built-in scrapable Prometheus
@@ -48,7 +49,7 @@ composition root:
 | `hs-opentelemetry-instrumentation-http-client` | Child spans + context propagation on the **data plane** (`http-client`), the upstream fetches that *are* the proxy's work (see [Control plane vs. data plane](web-layer.md#control-plane-vs-data-plane)). |
 | `hs-opentelemetry-exporter-otlp` | OTLP export for **traces and metrics**, **HTTP/protobuf by default**; gRPC is behind a cabal flag (pulls in `grapesy`) and we do not need it. |
 | the library's **Prometheus exporter** | Optional pull alternative, a scrapable `/metrics` endpoint for Prometheus/Grafana stacks. |
-| the **GHC runtime-metrics** instrumentation (new in 1.0) | GC pauses, heap live/allocated, GC pauses directly drive an inline proxy's tail latency. |
+| the **GHC runtime-metrics** instrumentation (new in 1.0) | GC pauses and heap live/allocated; GC pauses drive an inline proxy's tail latency directly. |
 | `hs-opentelemetry-propagator-datadog` | **Optional, Datadog-only.** Reads/writes Datadog's `x-datadog-*` trace headers so traces join up with services already running `dd-trace`. Every other backend uses the default W3C TraceContext propagator. |
 
 Only the last row is vendor-specific, and it is optional; everything above it is
@@ -73,10 +74,11 @@ hand because they carry the decisions an operator cares about:
   `ecluse.mirror.enqueue.failures` counter).
 - **mirror worker job**, the async probe→re-evaluate→fetch→verify→publish consumer span. It carries an
   OpenTelemetry **span link** to the enqueue (producer) span, re-established from the
-  W3C trace context the job carries, so the asynchronous hop is navigable in a trace,  a true cross-async link, not merely a `package@version` correlation. Batch-robust: a
-  worker poll may mix jobs from many originating requests, so each job links to its own
-  producer rather than parenting under an arbitrary one. A job enqueued with tracing off
-  carries no context and its span simply bears no link.
+  W3C trace context the job carries, so the asynchronous hop is navigable in a
+  trace, a true cross-async link rather than a `package@version` correlation.
+  Batch-safe: a worker poll may mix jobs from many originating requests, so each
+  job links to its own producer rather than parenting under an arbitrary one. A
+  job enqueued with tracing off carries no context and its span simply bears no link.
 - **advisory sync**, one span per [advisory-dataset sync](rules-engine.md#cve-subsystem)
   run.
 
@@ -187,9 +189,9 @@ An inline proxy sees thousands of distinct packages, so the failure mode is a
 
 ## Logs
 
-Logs stay structured JSON via `katip`, shipped on the existing log pipeline,**not** routed over OTLP (1.0 *can* do OTLP logs, but logs already have a working
-home and re-plumbing buys nothing). They are stitched to traces by **trace-ID
-injection**.
+Logs stay structured JSON via `katip`, shipped on the existing log pipeline, **not**
+routed over OTLP (1.0 *can* do OTLP logs, but logs already have a working home and
+re-plumbing buys nothing). They are stitched to traces by **trace-ID injection**.
 
 The production format is **one compact JSON object per line to stdout** (JSONL):
 the whole line *is* the JSON, no pretty-printing, no level/timestamp prefix
@@ -210,7 +212,8 @@ The format is switchable: **`ECLUSE_LOG_FORMAT=json`** (the JSONL above, the
 in-container default) or **`console`** (human-readable, for the dev ecosystem).
 
 > **Correlation gotcha (implementation).** `dd.trace_id`/`dd.span_id` must be in
-> the **id format Datadog expects** for the OTLP-ingested traces to line up,> historically the low-64-bits-as-decimal, full 128-bit hex where enabled. Verify
+> the **id format Datadog expects** for the OTLP-ingested traces to line up,
+> historically the low-64-bits-as-decimal, full 128-bit hex where enabled. Verify
 > against the Agent's trace-id handling; it is the one fiddly correlation detail.
 
 **As built.** The `dd` object lives in `Ecluse.Log` (free of any OpenTelemetry
@@ -225,7 +228,7 @@ entry (`runWorkerM`, the service identity, no span is active at the worker entry
 **every line carries `dd`**; the trace/span ids are present only when a span is in scope,
 and absent (never all-zero) otherwise.
 
-## Datadog deployment (Operator)
+## Datadog deployment (operator)
 
 Deployment is via the **Datadog Operator**, a `DatadogAgent` custom resource
 (`datadoghq.com/v2alpha1`) that manages the node Agent. There is **no UDS/hostPath
@@ -254,8 +257,8 @@ and logs are scraped from stdout.
    The probabilistic sampler needs Agent **v7.70+**; the error sampler is already
    on, the rare sampler optional.
 
-2. **Point Écluse at the node-local Agent** using the Downward API for the host IP
-  , one OTLP endpoint for both traces and metrics:
+2. **Point Écluse at the node-local Agent** using the Downward API for the host IP,
+   one OTLP endpoint for both traces and metrics:
 
    ```yaml
    env:
@@ -336,10 +339,10 @@ failure still degrades off the request path.
 
 ## Verifying it, smoke-test plan
 
-The goal is *full confidence that a span and a metric emitted by Écluse actually
-arrive*, not just that the code compiles. It layers onto the existing three-tier
+The goal is *full confidence that a span and a metric Écluse emits actually
+arrive*, beyond a passing compile. It layers onto the existing three-tier
 [testing strategy](../testing.md), proving each concern at the cheapest
-tier that can. Tiers 1–2 are **backend-agnostic** (they prove the OTLP path any
+tier that can. Tiers 1-2 are **backend-agnostic** (they prove the OTLP path any
 consumer relies on); the live Datadog check is the Datadog target carrying its own
 weight, not a baseline requirement:
 
@@ -368,5 +371,5 @@ weight, not a baseline requirement:
    until that trace/metric appears (or time out). Runs against a sandbox org,
    guarded by repository secrets, never on the PR gate.
 
-The split keeps the gate fast and hermetic (tiers 1–2 need no network and no
+The split keeps the gate fast and hermetic (tiers 1-2 need no network and no
 Datadog account) while still giving a real, periodic end-to-end signal (tier 3).

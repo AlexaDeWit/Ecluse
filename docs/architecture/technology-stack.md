@@ -1,4 +1,4 @@
-# Technology Stack
+# Technology stack
 
 > Part of the [Écluse architecture overview](../architecture.md).
 
@@ -11,7 +11,7 @@
 | HTTP client | `http-client` + `http-client-tls` | The data plane: streams artifacts and fetches metadata, including the CodeArtifact / Artifact Registry npm endpoints. Kept off `amazonka`'s `ResourceT` streaming path; see [Web Layer](web-layer.md#web-layer). |
 | JSON | `aeson` | Metadata parsing (lenient **inbound** wire decoding), rule config, queue payloads, denial bodies. |
 | API manifest / schemas | `autodocodec` + `openapi3` | The [capability manifest](api-surface.md) and config JSON Schema: **owned** types (error envelope, synthesised packument, config) derive their `aeson` codec **and** the OpenAPI / JSON-Schema from one `autodocodec` codec, no drift; `openapi3` assembles the document. Inbound npm wire decoding stays lenient `aeson`. |
-| Cloud, AWS | `amazonka` | Split packages: `amazonka-sqs` (mirror queue), `amazonka-codeartifact` (registry token), `amazonka-sts` (workload identity). Mature and comprehensive. |
+| Cloud, AWS | `amazonka` | Split packages: `amazonka-sqs` (mirror queue), `amazonka-codeartifact` (registry token), `amazonka-sts` (workload identity). Mature and broad. |
 | Cloud, GCP | `gogol` *or* a hand-rolled REST client (TBD) | Pub/Sub mirror queue + Artifact Registry token. GCP's Haskell story is weaker than AWS's, so the choice is gated on a spike; see [Cloud Backends](cloud-backends.md#cloud-backends). |
 | Logging | `katip` | Structured, contextual JSON logging. Denials are an audit trail, package/version/rule context attaches to every event. |
 | Config | `envparse` | Applicative env-var parser; aggregates all missing/invalid vars into one error rather than failing on the first. |
@@ -25,7 +25,7 @@
 | Dev environment | Nix flakes + `direnv` | Fully reproducible; all tooling from `nix develop`. |
 | Build | Cabal | Natural Nix pairing; `flake.lock` provides reproducibility. |
 
-## Key Decisions
+## Key decisions
 
 **`relude` as the implicit prelude.** Rather than `NoImplicitPrelude` plus a manual
 `import Relude` in every module, it is wired through cabal mixins in the shared

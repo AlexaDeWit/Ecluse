@@ -1,4 +1,4 @@
-# Release & Supply-Chain Operations
+# Release and supply-chain operations
 
 > Part of the [Écluse architecture overview](../architecture.md).
 
@@ -8,7 +8,7 @@ contributor-facing summary and the `task` targets live in
 detail behind them. The consumer-side verify recipe is in the
 [README](../../README.md#verifying-the-image).
 
-## Releases & container image
+## Releases and container image
 
 Écluse ships as a lean OCI image built **by Nix**
 (`dockerTools.buildLayeredImage`, see [`flake.nix`](../../flake.nix)), not a
@@ -131,11 +131,17 @@ its own.
 Consumers verify by digest with `gh attestation verify`; the recipe lives in the
 [README](../../README.md#verifying-the-image).
 
-**Authentication (GitHub Container Registry).** Écluse is published with **zero long-lived static credentials**. We publish exclusively to GitHub Container Registry (GHCR) using the ephemeral, repository-scoped `GITHUB_TOKEN`:
+**Authentication (GitHub Container Registry).** Écluse is published with **zero
+long-lived static credentials**, exclusively to GitHub Container Registry (GHCR)
+using the ephemeral, repository-scoped `GITHUB_TOKEN`:
 
-- The workflow authenticates via `github.actor` and `secrets.GITHUB_TOKEN` (requiring the `packages: write` permission).
-- The credential exists only for the duration of the job, and its blast radius is natively constrained to this specific repository.
-- Docker Hub is retained only as an empty namespace placeholder to prevent typo-squatting, though we may add it as a mirror in the future if Docker Hub implements native OIDC support for GitHub Actions.
+- The workflow authenticates via `github.actor` and `secrets.GITHUB_TOKEN`
+  (requiring the `packages: write` permission).
+- The credential exists only for the duration of the job, and its blast radius is
+  natively constrained to this specific repository.
+- Docker Hub is retained only as an empty namespace placeholder to prevent
+  typo-squatting; it may be added as a mirror later if Docker Hub implements native
+  OIDC support for GitHub Actions.
 - Each image carries **keyless provenance + SBOM attestations** via GitHub OIDC
   (`id-token: write` + `attestations: write`), immutable OCI referrers + the
   Rekor log, no stored key, giving verifiable provenance and contents that
@@ -146,7 +152,7 @@ Consumers verify by digest with `gh attestation verify`; the recipe lives in the
 > `vX.Y.Z` tag (or a `workflow_dispatch`) runs the full build → push → attest
 > chain, gated by the environment's required reviewer.
 
-## Vulnerability scanning & dependency freshness
+## Vulnerability scanning and dependency freshness
 
 Two arms keep the image's dependency closure honest over time, **detection** and
 **freshness**.
@@ -155,7 +161,7 @@ Two arms keep the image's dependency closure honest over time, **detection** and
 the application closure into `sbom/`, runs `grype` against it, and saves the
 severity-rated, low-noise findings in `grype.json` (plus a table). `task
 scan-vulnix` is a secondary [vulnix](https://github.com/flyingcircusio/vulnix)
-cross-check, more comprehensive and Nix-patch-aware, but un-graded, so *not* the
+cross-check, broader and Nix-patch-aware, but un-graded, so *not* the
 authority. (A naive closure scan with distro-advisory matchers reports ~1000
 mostly-irrelevant CVEs, ancient or Debian/Ubuntu advisories that don't apply to
 a Nix build; grype-over-SBOM is the curated view.) Both scanners come from the
@@ -185,11 +191,12 @@ Renovate PR.
 database) are exported to [OSV.dev](https://osv.dev), and Renovate raises a fix-PR when an advisory
 affects one of our cabal deps. It must be the OSV-based opt-in: the default
 platform `vulnerabilityAlerts` (the GitHub Advisory Database) has no Hackage
-ecosystem, so the OSV flag is what brings HSEC coverage. To ensure this covers the **full resolved install plan**
-(both direct and transitive dependencies), our [`renovate.json5`](../../.github/renovate.json5) configuration uses a custom
-regex manager to parse the `cabal.project.freeze` file exactly. GHC-boot libraries (`base`, `process`, etc.) are 
-intentionally ignored by Renovate since they move with the compiler, but they are covered by `grype`'s scan of the 
-final runtime closure.
+ecosystem, so the OSV flag is what brings HSEC coverage. To cover the **full
+resolved install plan** (both direct and transitive dependencies), the
+[`renovate.json5`](../../.github/renovate.json5) configuration uses a custom regex
+manager to parse the `cabal.project.freeze` file exactly. GHC-boot libraries
+(`base`, `process`, etc.) are ignored by Renovate since they move with the
+compiler, but `grype`'s scan of the final runtime closure covers them.
 
 ## Posture scoring, OpenSSF Scorecard
 
@@ -199,5 +206,5 @@ repository's supply-chain posture, branch protection, pinned dependencies,
 signed/attested releases, SAST, token permissions, and dangerous workflow
 patterns, uploads findings to the Security tab (code scanning), and publishes a
 public score that backs the README badge. It is **report-only**: it never gates a
-PR. For a tool whose purpose is supply-chain resilience, this is dogfooding, the
-same hygiene we proxy for, measured on ourselves.
+PR. For a supply-chain policy proxy, this is dogfooding: the same hygiene it
+proxies for, measured on itself.

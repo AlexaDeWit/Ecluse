@@ -1,8 +1,8 @@
-# Cloud Backends & Mirroring
+# Cloud backends and mirroring
 
 > Part of the [Écluse architecture overview](../architecture.md).
 
-## Mirror Queue
+## Mirror queue
 
 Mirroring is **demand-driven**: when a client pulls an *artifact* whose version
 passes the rules (the tarball path on a private-upstream miss), the proxy:
@@ -57,17 +57,38 @@ in the private upstream. Subsequent requests for the same package during this
 window will fall through to the public upstream again and re-run rules; this is
 acceptable; the rules are deterministic for a given package version.
 
-### Process model: The Unified Multicall Binary
+### Process model: the unified multicall binary
 
-Écluse ships as a **single, unified executable** (the "BusyBox" or "multicall" pattern). Instead of building separate binaries for the proxy server, the OSV ingestion pipeline (`pilot`), and the registry cleanup worker (`dredger`), `app/Main.hs` acts as a CLI router that runs different sub-systems based on the invocation command (e.g., `ecluse serve`, `ecluse pilot`, `ecluse dredger`). 
+Écluse ships as a **single, unified executable** (the "BusyBox" or "multicall"
+pattern). Instead of building separate binaries for the proxy server, the OSV
+ingestion pipeline (`pilot`), and the registry cleanup worker (`dredger`),
+`app/Main.hs` acts as a CLI router that runs a sub-system per invocation command
+(`ecluse serve`, `ecluse pilot`, `ecluse dredger`).
 
 This pattern is a deliberate architectural and security decision:
-1. **Config & Rule Synchronization:** Because `pilot`, `dredger`, and `serve` are the same binary parsing the same configuration file, they share the exact same runtime state (the same `Env` and config models). A manual package revocation rule (`DenyByIdentity`) configured in `ecluse.yaml` is guaranteed to be respected by Dredger (to purge it) and the Proxy (to block it). There is zero chance of drift.
-2. **First-party Scope Protection:** By sharing the configuration, Dredger is inherently aware of the `ECLUSE_MOUNTS__NPM__PUBLISH_SCOPES` (internal first-party scopes) that the Proxy routes to the Publication Target. Dredger automatically and unconditionally excludes these scopes from its purge routines, preventing catastrophic data loss of first-party packages.
-3. **Collapsed Registry Mitigation:** If an operator misconfigures the system by collapsing the Mirror Target and the Publication Target onto a single shared registry, Dredger will detect this and explicitly refuse to boot. This hard failure prevents Dredger from treating first-party packages (that might fall outside the explicit `ECLUSE_MOUNTS__NPM__PUBLISH_SCOPES`) as stale public ones and deleting them.
-4. **Deployment Simplicity:** The operator deploys the same versioned Docker image for all three components, simply changing the container command and the IAM role.
 
-**Security Boundaries:** The security model relies on the orchestrator (Kubernetes or AWS ECS). The roles (e.g., `s3:GetObject` for Proxy vs `s3:PutObject` for Pilot) and network egress bounds (e.g., zero ingress for Dredger) are applied per-container. Even though the proxy *contains* the Pilot code, it has neither the IAM permissions nor the CLI invocation to execute it.
+1. **Config and rule synchronisation.** Because `pilot`, `dredger`, and `serve`
+   are the same binary parsing the same configuration file, they share the exact
+   same runtime state (the same `Env` and config models). A manual package
+   revocation rule (`DenyByIdentity`) configured in `ecluse.yaml` is respected by
+   the dredger (to purge it) and the proxy (to block it), so the two never drift.
+2. **First-party scope protection.** By sharing the configuration, the dredger is
+   aware of the `ECLUSE_MOUNTS__NPM__PUBLISH_SCOPES` (internal first-party scopes)
+   the proxy routes to the publication target. The dredger unconditionally excludes
+   those scopes from its purge routines, so it never deletes first-party packages.
+3. **Collapsed-registry mitigation.** If an operator collapses the mirror target
+   and the publication target onto a single shared registry, the dredger detects
+   this and refuses to boot. That hard failure keeps the dredger from treating
+   first-party packages (which might fall outside the explicit
+   `ECLUSE_MOUNTS__NPM__PUBLISH_SCOPES`) as stale public ones and deleting them.
+4. **Deployment simplicity.** The operator deploys the same versioned Docker image
+   for all three components, changing only the container command and the IAM role.
+
+**Security boundaries.** The security model relies on the orchestrator (Kubernetes
+or AWS ECS). The roles (`s3:GetObject` for the proxy vs `s3:PutObject` for the
+pilot) and network-egress bounds (zero ingress for the dredger) are applied
+per-container. Even though the proxy *contains* the pilot code, it has neither the
+IAM permissions nor the CLI invocation to run it.
 
 At launch, the **mirror worker** runs in the `ecluse serve` process as a supervised concurrent thread (`async` / `unliftio`), not a separate service: worker load is front-loaded, a cold mirror back-fills heavily for the first few days, then settles to a modest steady state, so an extra deployable is not yet worth it. The worker carries its **own health/liveness surface** (a consume-loop heartbeat / last-successful-poll), distinct from the server's HTTP readiness.
 
@@ -79,7 +100,7 @@ request serve path does **not** share it: each packument upstream builds its own
 client over the shared HTTP manager (two upstreams, per-origin credentials), so the
 handle is **publish-side only**.
 
-## Cloud Backends
+## Cloud backends
 
 Écluse couples to a cloud provider in exactly **two handles**, both records of
 functions (the Handle pattern; see [Handles](#handles-records-of-functions)) so that
@@ -147,7 +168,7 @@ how the bearer token is obtained and refreshed, so they sit behind the
 protocol/data plane (`http-client`) is identical across them (see
 [Web Layer](web-layer.md#web-layer)).
 
-### Credential Provider
+### Credential provider
 
 Outbound auth (proxy → registry) is its own handle, separate from
 [`RegistryClient`](registry-model.md#registry-abstraction). A `CredentialProvider`
@@ -263,7 +284,7 @@ The provider is chosen by [configuration](configuration.md#configuration).
 
 ### Haskell client maturity, a design risk to retire early
 
-This is the one place GCP is **not** a free addition. `amazonka` is comprehensive
+This is the one place GCP is **not** a free addition. `amazonka` is broad
 and well-maintained; the GCP side is weaker, and the design names that risk
 rather than assuming it away:
 

@@ -1,4 +1,4 @@
-# Performance & Benchmarking
+# Performance and benchmarking
 
 > Part of the [Écluse architecture overview](../architecture.md).
 
@@ -29,12 +29,13 @@ flowchart LR
   evaluator (rule evaluation is `IO`), so those benches measure that `IO` action, but
   it is still the per-request computation, not a kernel scheduler or a socket. It is the
   layer where an accidentally-quadratic fold or a doubled allocation is caught.
-- **Load benchmarks.** The whole system under concurrent load,  request rate, latency tails, GC pause behaviour, memory under sustained traffic. A load
-  generator ([`oha`](https://github.com/hatoo/oha)) drives the real composed server, so
-  this measures system behaviour, saturation and the latency tail, rather than a pure
-  function's cost. Allocations per request (work-per-request micro-benches) are the *leading indicator* of the
-  p99 load benchmarks measures: GC pauses are tail latency for an inline proxy, so the two tiers
-  are complementary, not redundant.
+- **Load benchmarks.** The whole system under concurrent load: request rate, latency
+  tails, GC pause behaviour, memory under sustained traffic. A load generator
+  ([`oha`](https://github.com/hatoo/oha)) drives the real composed server, so this
+  measures system behaviour, saturation and the latency tail, rather than a pure
+  function's cost. Allocations per request (from the work-per-request micro-benches)
+  are the *leading indicator* of the p99 the load benchmarks measure: GC pauses are
+  tail latency for an inline proxy, so the two tiers are complementary.
 
 The next sections cover work-per-request micro-benches; the [final section](#load-benchmarks)
 covers load benchmarks.
@@ -229,8 +230,9 @@ cache, so they are **deliberately excluded**; the corpus leans large.
 
 ## Load benchmarks
 
-The load benchmarks tier is the *host-sensitive* counterpart to the work-per-request micro-benches' deterministic work-per-request
-figures: it boots the **real composed server** (`Ecluse.Server.application`) on `warp`
+The load benchmarks tier is the *host-sensitive* counterpart to the work-per-request
+micro-benches' deterministic figures: it boots the **real composed server**
+(`Ecluse.Server.application`) on `warp`
 and drives it under concurrent load, so it answers "does the proxy keep up with traffic?",
 throughput, the latency tail, GC pause behaviour, residency under sustained load. It is
 a separate `bench-load` **executable** (not a `tasty-bench` component), because it opens

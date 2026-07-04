@@ -1,4 +1,4 @@
-# Security: Outbound-Request & Input-Validation Invariants
+# Security: outbound-request and input-validation invariants
 
 > Part of the [Ã‰cluse architecture overview](../architecture.md).
 
@@ -68,7 +68,12 @@ here.
    endpoint, public **or** private, **fails closed at boot** with an actionable error
    naming the offending URL. 
    
-   The data-plane manager uses a standard validating TLS manager. This ensures the certificate presented by the dialled host is checked against the system trust store for the requested name. An attacker who steers a name to an internal or rebound address cannot make that address present a CA-trusted certificate for the host. Therefore, the credential-exfiltration and resolve-to-internal SSRF class is closed **by certificate validation**, rather than relying on a resolved-IP recheck. 
+   The data-plane manager is a standard validating TLS manager, so the certificate
+   the dialled host presents is checked against the system trust store for the
+   requested name. An attacker who steers a name to an internal or rebound address
+   cannot make that address present a CA-trusted certificate for the host, so the
+   credential-exfiltration and resolve-to-internal SSRF class is closed **by
+   certificate validation** rather than a resolved-IP recheck.
    
    (An operator whose private
    registry uses an internal CA extends the container image with their own cert chain; the
@@ -375,7 +380,7 @@ SSRF cannot steer it at `169.254.169.254` or `fd00:ec2::254`. At the same time Ã
 the guarded data-plane manager, so credential minting reaches IMDS regardless of the
 data-plane guard). The platform controls below therefore protect the **data targets**
 and add defence-in-depth; they must **not** cut the proxy off from metadata or from
-its private upstream's internal range. Recommended, in rough order of leverage:
+its private upstream's internal range. Recommended, in rough order of impact:
 
 - **Harden the instance-metadata endpoint, do not block it.** Require IMDSv2 and set
   the hop limit to 1 (AWS `httpPutResponseHopLimit: 1`): this stops a neighbour or a

@@ -1,4 +1,4 @@
-# Multi-Ecosystem Hosting
+# Multi-ecosystem hosting
 
 > Part of the [Écluse architecture overview](../architecture.md).
 
