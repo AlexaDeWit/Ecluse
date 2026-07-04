@@ -1,21 +1,18 @@
 # The npm registry protocol
 
-A reverse-engineering reference for the npm registry HTTP API, focused on the
-read path Écluse must proxy: **package metadata** (the *packument*) and
-**package details** (the per-version *manifest*), plus the version-resolution
-and authentication behaviours that surround them.
+Reverse-engineering reference for the npm registry HTTP API, focused on the read
+path Écluse proxies: the *packument* (package metadata), the per-version
+*manifest* (package details), and the version-resolution and auth behaviours
+around them. The goal is a JSON type model (see [Type model](#11-type-model)) that
+lets Écluse act as both an npm client (fetching upstream) and an npm server
+(answering a real `npm` CLI).
 
-The objective is a faithful JSON type model (see [Type model](#11-type-model)) that
-lets Écluse act as both an npm **client** (fetching from upstreams) and an npm
-**server** (answering a real `npm` CLI).
-
-> **Provenance.** Live examples were captured on **2026-06-21** against
+> **Provenance.** Live examples captured 2026-06-21 against
 > `https://registry.npmjs.org` with `curl`/`jq` (see
-> [Reproducing the probes](#13-reproducing-the-probes)). Normative claims are
-> backed by the npm registry docs ([npm/registry](https://github.com/npm/registry)),
-> quoted inline. The public registry is fronted by Cloudflare and has drifted
-> from the published spec in places; where they differ, both are noted and the
-> **observed** behaviour wins for implementation.
+> [Reproducing the probes](#13-reproducing-the-probes)); normative claims cite the
+> [npm/registry](https://github.com/npm/registry) docs inline. The registry sits
+> behind Cloudflare and has drifted from the spec; where they differ, observed
+> behaviour wins.
 
 ---
 
@@ -40,22 +37,20 @@ lets Écluse act as both an npm **client** (fetching from upstreams) and an npm
 
 ## 1. Mental model
 
-The npm registry is, historically, a **CouchDB** database exposed over HTTP.
-That heritage leaks through the protocol everywhere (`_id`, `_rev`,
-`org.couchdb.user:`, the publish document shape), so it pays to keep in mind:
+The npm registry is historically a CouchDB database over HTTP; the heritage
+leaks everywhere (`_id`, `_rev`, `org.couchdb.user:`, the publish document
+shape).
 
-- A **package** is one CouchDB document, addressed by name at `/{name}`. That
-  document, the **packument** ("package document"), embeds *every* published
-  version's manifest under a `versions` map, plus package-level metadata and a
-  `time` map of publish timestamps.
-- A **version manifest** (what we call *package details*) is the per-version
-  object: essentially the package's `package.json` at publish time, plus a few
-  registry-injected fields (`dist`, `_npmUser`, …).
-- A **tarball** is the actual artifact, served from a separate, immutable URL.
+- A **package** is one CouchDB document at `/{name}`: the **packument**, which
+  embeds every version's manifest under a `versions` map plus a `time` map of
+  publish timestamps.
+- A **version manifest** (package details) is the per-version object: the
+  package's `package.json` at publish time plus registry-injected fields
+  (`dist`, `_npmUser`, …).
+- A **tarball** is the artifact, served from a separate immutable URL.
 - **Resolution is the client's job.** The registry stores discrete versions and
-  named tags; it does **not** understand semver ranges. `npm install lodash`
-  works because the *client* downloads the packument and picks a version. This
-  is the single most important fact for a proxy; see §8.
+  named tags, not semver ranges. `npm install lodash` works because the client
+  downloads the packument and picks. This is the key fact for a proxy (§8).
 
 Three request shapes cover ~all of install traffic:
 
@@ -71,13 +66,11 @@ Three request shapes cover ~all of install traffic:
 
 ### Base URL & scheme
 
-- Default public registry: `https://registry.npmjs.org`. Always HTTPS; the
-  public endpoint negotiates HTTP/2.
-- A registry is identified solely by a base URL. Clients map an **unscoped**
-  package to the `registry` config and a **scoped** package to an optional
-  `@scope:registry` override, both are just base URLs the same protocol is
-  spoken against. This is what lets Écluse insert itself: point `registry` at
-  the proxy.
+- Default public registry: `https://registry.npmjs.org`. Always HTTPS, HTTP/2.
+- A registry is just a base URL. Clients route an unscoped package via the
+  `registry` config and a scoped package via an optional `@scope:registry`
+  override, both the same protocol against different base URLs. Écluse inserts
+  itself by pointing `registry` at the proxy.
 
 ### Package-name encoding
 
@@ -86,15 +79,12 @@ Three request shapes cover ~all of install traffic:
 | `is-odd` (unscoped) | `/is-odd` |
 | `@babel/code-frame` (scoped) | `/@babel%2Fcode-frame`, the `/` is percent-encoded |
 
-The canonical npm client percent-encodes the scope separator (`%2F`). The
-public registry tolerates the raw form (`/@babel/code-frame` → `200`) too, but a
-server implementation **must** accept the `%2F` form and should accept both. The
-leading `@` is **not** encoded.
-
-> Implementation note: depending on the client and the server's routing, the
-> scope separator may arrive **already percent-decoded**, so
-> `["@babel/code-frame"]` and `["@babel", "code-frame"]` are both possible;
-> normalise early.
+The npm client percent-encodes the scope separator (`%2F`); the registry
+tolerates the raw form (`/@babel/code-frame` → `200`) too. A server must accept
+`%2F` and should accept both; the leading `@` is never encoded. Depending on
+client and routing the separator may arrive already decoded, so both
+`["@babel/code-frame"]` and `["@babel", "code-frame"]` are possible: normalise
+early.
 
 ### Content negotiation
 
@@ -105,26 +95,19 @@ Metadata comes in **two formats**, selected by the `Accept` header:
 | _absent_ or `application/json` | `application/json` | **full** packument |
 | `application/vnd.npm.install-v1+json` | `application/vnd.npm.install-v1+json` | **abbreviated** packument |
 
-> "If you provide no Accept header, the full document is returned. To request an
-> _abbreviated_ document with only the fields required to support installation,
-> set the `Accept` header … to `application/vnd.npm.install-v1+json`."
->, [package-metadata.md](https://github.com/npm/registry/blob/main/docs/responses/package-metadata.md)
-
-The real `npm` CLI sends a quality-weighted header:
+The real `npm` CLI sends a weighted header:
 
 ```
 Accept: application/vnd.npm.install-v1+json; q=1.0, application/json; q=0.8, */*
 ```
 
-Responses carry `Vary: accept-encoding, accept`, so caches key on both. A proxy
-that caches **must** preserve this `Vary` (the full and abbreviated bodies are
-different documents at the same URL).
+Responses carry `Vary: accept-encoding, accept`. A caching proxy **must**
+preserve it: full and abbreviated are different documents at the same URL.
 
 ### Compression
 
-`Accept-Encoding: gzip` is honoured (`Content-Encoding: gzip`). Packuments for
-popular packages are large (megabytes); always request gzip on the upstream
-fetch.
+`Accept-Encoding: gzip` is honoured. Packuments run to megabytes; always request
+gzip upstream.
 
 ### Caching & conditional requests
 
@@ -135,20 +118,15 @@ fetch.
 | `Cache-Control` | `public, max-age=300` (metadata) | metadata is cacheable ~5 min |
 | `Cache-Control` | `public, immutable, max-age=31557600` (tarballs) | tarballs never change |
 
-Conditional revalidation works: replaying the `ETag` as
-`If-None-Match: "…"` returns **`304 Not Modified`** with no body. This is the
-cheap freshness check a proxy should use against upstreams, and should *offer*
-to its own clients.
-
-Tarballs are **immutable** (a published `name@version` artifact never changes,
-and that's the integrity guarantee), so they can be cached forever; metadata
-cannot.
+Replaying the `ETag` as `If-None-Match` returns `304` with no body: the cheap
+freshness check to use upstream and to offer downstream. Tarballs are immutable
+(a published `name@version` never changes, the integrity guarantee) and cache
+forever; metadata does not.
 
 ### Errors
 
 Errors are JSON. The documented [Error object](https://github.com/npm/registry/blob/main/docs/user/authentication.md#error)
-is `{ message?, error?, ok: false }`, and "Clients should check for `message`,
-then `error`." Observed shapes:
+is `{ message?, error?, ok: false }`; check `message`, then `error`. Observed:
 
 | Situation | Status | Body |
 |-----------|--------|------|
@@ -158,9 +136,8 @@ then `error`." Observed shapes:
 | Unauthenticated protected route | `401` | `{"error":"Unauthorized"}` / `{}` |
 | Wrong method | `405` | `{"code":"MethodNotAllowedError","message":"GET is not allowed"}` |
 
-Note the inconsistency: the per-version 404 is a bare JSON string, not an
-object. A lenient decoder must tolerate "JSON value that isn't the success
-shape" rather than assuming `{error}`.
+Note the per-version 404 is a bare JSON string, not an object: a lenient decoder
+must tolerate any non-success JSON value, not assume `{error}`.
 
 ---
 
@@ -202,8 +179,8 @@ shape" rather than assuming `{error}`.
 
 ## 4. Package metadata, the packument (full)
 
-`GET /{pkg}` with `Accept: application/json` (or no `Accept`). One document
-describing the package and **all** its versions.
+`GET /{pkg}` with `Accept: application/json` (or none). One document covering
+the package and all its versions.
 
 ### Top-level fields
 
@@ -229,18 +206,16 @@ describing the package and **all** its versions.
 | `users` | object`<user, bool>` | Stars. |
 | `_attachments` | object | Tarball attachments, **only** populated on the publish document; the GET response shows `{}` or omits it. Do **not** rely on it for reads. |
 
-Package-level fields like `description`/`author`/`license` are **hoisted from
-the `latest` version** for convenience; the authoritative per-version copy lives
-in each manifest. A parser should treat top-level copies as a hint and prefer
-the manifest.
+Package-level `description`/`author`/`license` are hoisted from the `latest`
+version; the authoritative copy is per-manifest. Treat top-level copies as a
+hint.
 
 ### Why a proxy mostly avoids the full form
 
-The full packument carries `readme`, every historical manifest with `scripts`,
-`gitHead`, `_npmOperationalInternal`, etc. For a popular package this is
-megabytes. The **abbreviated** form (§5) carries everything install needs at a
-fraction of the size, prefer it for the proxy's metadata fetch, and only fall to
-full when a field you need is full-only (notably `time`, see §8).
+The full form carries `readme` and every historical manifest (`scripts`,
+`gitHead`, `_npmOperationalInternal`), megabytes for a popular package. The
+abbreviated form (§5) has everything install needs at a fraction of the size:
+prefer it, and fall to full only for a full-only field (notably `time`, §8).
 
 ### Real example (trimmed, `is-odd`)
 
@@ -267,7 +242,7 @@ full when a field you need is full-only (notably `time`, see §8).
 ## 5. Abbreviated packument
 
 `GET /{pkg}` with `Accept: application/vnd.npm.install-v1+json`. The
-install-optimised view, and the one the proxy should treat as primary.
+install-optimised view and the proxy's primary fetch.
 
 ### Top-level fields (only four)
 
@@ -278,31 +253,23 @@ install-optimised view, and the one the proxy should treat as primary.
 | `dist-tags` | object`<tag,version>` | As in full. |
 | `versions` | object`<version, `[abbreviated manifest](#abbreviated-version-object)`>` | |
 
-> Top-level abbreviated fields are exactly `name`, `modified`, `dist-tags`,
-> `versions`, confirmed live and in the spec.
-
 ### Abbreviated version object
 
-Per the spec, **required**: `name`, `version`, `dist`. **Optional, present only
-when relevant**:
+Required: `name`, `version`, `dist`. Optional when relevant: `deprecated`,
+`dependencies`, `optionalDependencies`, `devDependencies`, `bundleDependencies`,
+`peerDependencies`, `peerDependenciesMeta`, `acceptDependencies`, `bin`,
+`directories`, `engines`, `_hasShrinkwrap`, **`hasInstallScript`**, `funding`,
+`cpu`, `os`.
 
-`deprecated`, `dependencies`, `optionalDependencies`, `devDependencies`,
-`bundleDependencies`, `peerDependencies`, `peerDependenciesMeta`,
-`acceptDependencies`, `bin`, `directories`, `engines`, `_hasShrinkwrap`,
-**`hasInstallScript`**, `funding`, `cpu`, `os`.
+Two are decisive for install-time policy:
 
-Two of these are decisive for install-time policy and deserve emphasis:
-
-- **`hasInstallScript: true`**, present in the **abbreviated** form when the
-  version declares `preinstall`/`install`/`postinstall` scripts. This is the
-  single cleanest signal for an install-time code-execution policy.
-  ⚠️ **It does not exist in the full manifest**, there you must derive it
-  yourself from the `scripts` object (see §6). *Captured live:* `core-js@3.49.0`
-  abbreviated → `"hasInstallScript": true`; the same version's full manifest has
-  **no** `hasInstallScript` key, only `scripts.postinstall`.
-- **`deprecated: "<message>"`**, a string deprecation notice, absent when not
-  deprecated. *Captured live:* `request@2.88.2` →
-  `"deprecated": "request has been deprecated, see …"`.
+- **`hasInstallScript: true`** when the version declares
+  `preinstall`/`install`/`postinstall`, the cleanest code-execution signal.
+  ⚠️ It is absent from the full manifest; derive it from `scripts` there (§6).
+  Live: `core-js@3.49.0` abbreviated has `hasInstallScript: true`; its full
+  manifest has only `scripts.postinstall`.
+- **`deprecated: "<message>"`**, absent when not deprecated. Live:
+  `request@2.88.2` → `"request has been deprecated, see …"`.
 
 ### Real example (`is-odd@3.0.1`, abbreviated)
 
@@ -335,16 +302,14 @@ Two of these are decisive for install-time policy and deserve emphasis:
 
 ## 6. Package details, the version manifest
 
-The per-version object is the **version manifest** (what §1 called *package
-details*), the snapshot a policy evaluates. It is available two ways:
+The version manifest is the snapshot a policy evaluates. Two ways to get it:
 
-1. **Embedded**: `packument.versions["1.2.3"]` (one round trip for everything).
-2. **Standalone**: `GET /{pkg}/{version}` or `GET /{pkg}/{dist-tag}` →
-   `Content-Type: application/json`. Returns the **full** manifest (not the
-   abbreviated one), even though it is a single version.
+1. **Embedded**: `packument.versions["1.2.3"]`, one round trip.
+2. **Standalone**: `GET /{pkg}/{version}` or `GET /{pkg}/{dist-tag}` → the
+   **full** manifest (not abbreviated), even for a single version.
 
-A manifest is essentially the package's published `package.json`, plus
-registry-injected fields. Fields divide into three groups:
+It is the published `package.json` plus registry-injected fields, in three
+groups:
 
 ### (a) Author-supplied (from `package.json`)
 
@@ -353,8 +318,7 @@ registry-injected fields. Fields divide into three groups:
 `directories`, `scripts`, `engines`, `dependencies`, `devDependencies`,
 `peerDependencies`, `peerDependenciesMeta`, `optionalDependencies`,
 `bundleDependencies`, `funding`, `cpu`, `os`, `type`, `exports`, `gitHead`, …
-(arbitrary extra keys appear too; e.g. `is-odd` ships a `verb` tool-config
-block; a decoder must ignore unknown keys).
+(arbitrary extra keys appear; ignore unknown ones).
 
 ### (b) Registry-injected (recognisable by the `_` prefix)
 
@@ -369,34 +333,29 @@ block; a decoder must ignore unknown keys).
 
 ### (c) `dist`, the artifact descriptor
 
-Always present; the gateway to the bytes and the integrity guarantee. Its own
-section follows (§7).
+Always present: the bytes and the integrity guarantee (§7).
 
 ### Deriving install-script presence from the full form
 
-Because the full manifest has **no** `hasInstallScript`, derive it:
+The full manifest has no `hasInstallScript`; derive it:
 
 ```
 hasInstallScript  ≡  scripts has any of {preinstall, install, postinstall}
 ```
 
-*Captured live:* `core-js@3.49.0` full manifest →
-`"scripts": { "postinstall": "node -e \"…\"" }`, no `hasInstallScript` key.
-Prefer the abbreviated `hasInstallScript`; fall back to this derivation when
-only the full form is available.
+Prefer the abbreviated field; fall back to this when only the full form is
+available.
 
 ### Resolving by tag
 
-`GET /{pkg}/latest` returns the manifest the `latest` dist-tag points at
-(`is-odd/latest` → `3.0.1`). Any dist-tag name works in the version slot; a
-semver **range** does not (§8).
+`GET /{pkg}/latest` returns the manifest `latest` points at. Any dist-tag works
+in the version slot; a semver range does not (§8).
 
 ---
 
 ## 7. The `dist` object
 
-The security-critical sub-object. Every version manifest (full and abbreviated)
-carries it.
+The security-critical sub-object, on every manifest (full and abbreviated).
 
 | Field | Type | Since | Meaning |
 |-------|------|-------|---------|
@@ -410,30 +369,23 @@ carries it.
 
 ### Integrity & the tarball URL
 
-- The `tarball` URL points back at the registry host. **A proxy that rewrites
-  `registry` to its own URL should consider rewriting `dist.tarball`** so
-  clients fetch artifacts through the proxy too, otherwise the client resolves
-  metadata via Écluse but pulls bytes straight from `registry.npmjs.org`,
-  bypassing the gate. (Whether to rewrite is a policy decision; note it.)
-- `integrity`/`shasum` are what a downloaded tarball is verified against. The
-  client **fails the install** if the bytes don't match, so any mirror/rewrite
-  must preserve the exact artifact.
-- Tarball path convention: `/{pkg}/-/{basename}-{version}.tgz`. For scoped
-  packages the basename drops the scope:
-  `@babel/code-frame` → `/@babel/code-frame/-/code-frame-7.0.0.tgz`.
+- The `tarball` URL points at the registry host. If a proxy rewrites `registry`
+  to its own URL it should rewrite `dist.tarball` too, or clients resolve
+  metadata via Écluse but pull bytes straight from `registry.npmjs.org`,
+  bypassing the gate. Whether to rewrite is a policy call.
+- The client fails the install if the bytes don't match `integrity`/`shasum`, so
+  any mirror or rewrite must preserve the exact artifact.
+- Path: `/{pkg}/-/{basename}-{version}.tgz`; scoped names drop the scope from the
+  basename (`@babel/code-frame` → `/@babel/code-frame/-/code-frame-7.0.0.tgz`).
 
 ---
 
 ## 8. Version & availability resolution
 
-> This section answers the explicit requirement: *"proxy requests that try to
-> fetch version and availability information, like when someone tries to
-> install a new package without specifying its version."*
-
 ### The core fact: the registry does not resolve ranges
 
-The registry resolves only **exact versions** and **dist-tag names**. Semver
-ranges are a **client-side** computation. Captured live:
+The registry resolves only exact versions and dist-tag names; semver ranges are
+client-side. Live:
 
 | `GET /is-odd/{spec}` | Status | Body |
 |----------------------|--------|------|
@@ -443,55 +395,41 @@ ranges are a **client-side** computation. Captured live:
 | `~3.0.0` (range) | `404` | `"version not found: ~3.0.0"` |
 | `3.x` (range) | `404` | `"version not found: 3.x"` |
 
-So there is **no endpoint** that takes `lodash@^4` and hands back a version.
+No endpoint takes `lodash@^4` and returns a version.
 
 ### What `npm install <pkg>` actually does
 
-When a user runs `npm install lodash` (no version) or `npm install lodash@^4`:
+`npm install lodash` or `npm install lodash@^4`:
 
-1. **Fetch the packument**, `GET /lodash` with the abbreviated `Accept`. One
-   request returns *all* versions, the `dist-tags`, and each version's `dist`
-   and dependency ranges.
-2. **Resolve locally**, the client computes the target version from the
-   `versions` keys and `dist-tags`:
-   - bare `npm install lodash` → the `latest` **dist-tag**.
+1. **Fetch the packument**, `GET /lodash` (abbreviated): all versions,
+   `dist-tags`, and each version's `dist` and dependency ranges in one request.
+2. **Resolve locally** from `versions` keys and `dist-tags`:
+   - bare `lodash` → the `latest` dist-tag.
    - `lodash@^4.17.0` → `semver.maxSatisfying(Object.keys(versions), "^4.17.0")`.
    - `lodash@next` → the `next` dist-tag.
-   - `lodash@4.17.21` → that key directly (404-equivalent if absent).
-3. **Recurse**, read the resolved version's `dependencies` (ranges), and repeat
-   1-2 for each, building the dependency graph. (This is what makes `npm
-   install` fan out into many packument GETs.)
-4. **Fetch tarballs**, `GET dist.tarball` for each resolved version, verify
-   `integrity`, unpack.
+   - `lodash@4.17.21` → that key directly.
+3. **Recurse** into the resolved version's `dependencies` and repeat, which is
+   why `npm install` fans out into many packument GETs.
+4. **Fetch tarballs**, verify `integrity`, unpack.
 
-**Availability** of a version is therefore "is this key present in `versions`
-(and reachable via a tag)?" There is no separate availability API, presence in
-the packument *is* availability.
+Availability is therefore "is this key in `versions` and reachable via a tag?"
+Presence in the packument is availability; there is no separate API.
 
 ### Consequences for a proxy (both directions)
 
-- **As a client**, fetching version/availability info = fetch the (abbreviated)
-  packument and read `versions` + `dist-tags`. Don't try to ask the upstream to
-  resolve a range; resolve it yourself (or just forward the whole packument).
-- **As a server**, to let a client resolve, the proxy must return a **coherent
-  packument**: `versions` containing every offered version's manifest, a
-  `dist-tags.latest` that points at a key actually present, and matching `time`
-  entries (clients/tools read `time` for age and "last published"). An empty or
-  inconsistent `dist-tags`/`versions` breaks resolution.
-- **Policy shapes availability.** A per-version policy decides what to serve. To
-  *hide* a denied version, drop its key from `versions` (and `time`, and never
-  let it be `latest`); to *block at fetch*, keep it listed but deny the
-  tarball/manifest request with a 403. Dropping from the packument is the cleaner
-  client experience (the version simply "doesn't exist" to
-  `semver.maxSatisfying`); blocking the tarball yields a hard install error
-  mid-resolution. A deny-by-default policy makes the served packument, in
-  effect, a **filtered projection** of the upstream one.
-- **`time` is full-only.** Age-based policy (e.g. "allow only versions published
-  before a date") needs the publish timestamp, which is in the full packument's
-  `time` map (and the standalone manifest is timeless). The abbreviated form
-  gives only top-level `modified`. So the metadata pipeline needs the full
-  packument (or to retain `time` when projecting) to know *when* a version was
-  published.
+- **As a client**, read `versions` + `dist-tags` from the abbreviated packument;
+  resolve ranges yourself, never ask the upstream to.
+- **As a server**, return a coherent packument: every offered version's manifest
+  in `versions`, a `dist-tags.latest` pointing at a present key, and matching
+  `time` entries. Inconsistent `dist-tags`/`versions` breaks resolution.
+- **Policy shapes availability.** To hide a denied version, drop its key from
+  `versions` and `time` (and never make it `latest`); the version simply
+  "doesn't exist" to `semver.maxSatisfying`. To block at fetch, keep it listed
+  and 403 the tarball, a hard mid-resolution error. Deny-by-default makes the
+  served packument a **filtered projection** of the upstream.
+- **`time` is full-only.** Age-based policy needs the publish timestamp from the
+  full packument's `time` map; the abbreviated form gives only top-level
+  `modified`. Fetch full, or retain `time` when projecting.
 
 ### Adjacent discovery endpoints
 
@@ -500,21 +438,18 @@ the packument *is* availability.
 - **search**: `GET /-/v1/search?text={q}&size={n}&from={k}` → `{ objects[],
   total, time }`, each object `{ package{name,version,description,date,links,
   publisher,maintainers,…}, score{final,detail{quality,popularity,maintenance}},
-  searchScore, flags, downloads, dependents }`. Discovery, not install; Écluse
-  can pass it through largely untouched.
+  searchScore, flags, downloads, dependents }`. Discovery, not install; pass
+  through untouched.
 
 ---
 
 ## 9. Authentication (in theory)
 
-No token is available, so this section is grounded in the official
+No token available, so this cites the official
 [authentication doc](https://github.com/npm/registry/blob/main/docs/user/authentication.md)
-(quoted) plus the unauthenticated responses we *could* observe.
+plus the unauthenticated responses we could observe.
 
 ### How credentials travel
-
-> "Authentication can be provided in `Basic` or `Bearer` form. … One time passes
-> may be provided using the `npm-otp` header."
 
 | Scheme | Header | Form |
 |--------|--------|------|
@@ -522,45 +457,37 @@ No token is available, so this section is grounded in the official
 | Basic | `Authorization: Basic <base64(user:pass)>` | Legacy username/password. |
 | 2FA one-time pass | `npm-otp: <code>` | Six-digit TOTP (30 s window) **or** a recovery code, sent *alongside* Basic/Bearer. |
 
-In `.npmrc`, the bearer token is stored against a **"nerf dart"**, the
-registry URL minus scheme, so credentials are scoped per registry:
+In `.npmrc` the bearer token is keyed by "nerf dart", the registry URL minus
+scheme, so credentials are per-registry:
 
 ```ini
 //registry.npmjs.org/:_authToken=npm_xxxxxxxx
 @myscope:registry=https://registry.npmjs.org
 ```
 
-The CLI turns `//host/:_authToken=…` into `Authorization: Bearer …` on requests
-to that host. (`_auth` = base64 user:pass for Basic; `username`/`_password`
-also exist; see `npm-registry-fetch` options `token`, `_authToken`,
-`username`, `password`/`_password`, `otp`, `forceAuth`, `alwaysAuth`.)
+The CLI turns `//host/:_authToken=…` into `Authorization: Bearer …` for that
+host. (`_auth` is base64 user:pass for Basic; see `npm-registry-fetch` options
+`token`, `_authToken`, `username`, `password`, `otp`, `forceAuth`, `alwaysAuth`.)
 
 ### 2FA modes
 
-> Two modes: **`auth-only`** (only password-bearing requests need an OTP, login,
-> token create, any Basic request) and **`auth-and-writes`** (all `PUT`/`POST`/
-> `DELETE` need an OTP, *except* starring and non-`latest` dist-tag changes).
-
-A 2FA-required request without a valid `npm-otp` is rejected with `401`; the CLI
-then prompts and retries with the header (`npm-registry-fetch`'s `otpPrompt`).
+Two modes: `auth-only` (only password-bearing requests need an OTP) and
+`auth-and-writes` (all `PUT`/`POST`/`DELETE` need one, except starring and
+non-`latest` dist-tag changes). Without a valid `npm-otp` a 2FA request gets
+`401`; the CLI prompts and retries.
 
 ### Login flows
 
 **Legacy (CouchDB), `PUT /-/user/org.couchdb.user:{user}`**, no prior auth:
+body `{ name, password, readonly?, cidr_whitelist? }`; `201` →
+`{ token, ok: true, id, rev }` (`id`/`rev` vestigial); `401` on bad credentials
+or missing `npm-otp`.
 
-- Request body (Login Request): `{ name, password, readonly?, cidr_whitelist? }`.
-- `201` → **Login Response** `{ token, ok: true, id, rev }` (the `id`/`rev` are
-  "vestigial … should be ignored"). `token` is the bearer token.
-- `401` on bad credentials. If the user has 2FA, a valid `npm-otp` is required.
-
-**Web (modern default, `auth-type=web`), `POST /-/v1/login`**: the CLI posts,
-and a web-capable registry replies with `{ loginUrl, doneUrl }`; the CLI opens
-`loginUrl` in a browser and polls `doneUrl` until it returns the token. If the
-registry doesn't support it, the CLI falls back to the legacy flow.
-*Observed:* an anonymous `POST /-/v1/login` to the public registry is gated
-(`401 {"error":"You must be logged in to publish packages."}`), so the handshake
-can't be completed without a real browser session, documented behaviour, not
-reproducible here.
+**Web (modern default), `POST /-/v1/login`**: the registry replies
+`{ loginUrl, doneUrl }`; the CLI opens `loginUrl` and polls `doneUrl` for the
+token, falling back to legacy if unsupported. Anonymous `POST /-/v1/login`
+against public is gated (`401 "You must be logged in to publish packages."`), so
+the handshake needs a browser session.
 
 ### Tokens (lifecycle)
 
@@ -570,46 +497,37 @@ reproducible here.
 | `POST` | `/-/npm/v1/tokens` | Create; body `{ password, readonly?, cidr_whitelist? }` → `Token`. |
 | `DELETE` | `/-/npm/v1/tokens/token/{hash}` | Revoke (cache eviction lags **~1 hour**). |
 
-`Token` object: `{ token, key, cidr_whitelist, created, updated, readonly }`. A
-`readonly` token authenticates only non-destructive methods (`GET`/`HEAD`),
-exactly the shape a *read-through proxy* like Écluse wants when calling a
-private upstream.
-
-*Observed unauthenticated:* `GET /-/whoami` → `401 {"error":"Unauthorized"}`;
-`GET /-/npm/v1/tokens` → `401`; a bogus `Authorization: Bearer …` → `401 {}`.
+`Token`: `{ token, key, cidr_whitelist, created, updated, readonly }`. A
+`readonly` token authenticates only `GET`/`HEAD`, exactly what a read-through
+proxy wants for a private upstream. Unauthenticated: `GET /-/whoami` → `401`,
+`GET /-/npm/v1/tokens` → `401`, bogus bearer → `401 {}`.
 
 ### Implications for a proxy
 
-- **Client side.** A proxy holds upstream credentials and attaches
-  `Authorization: Bearer …` on the private-upstream and mirror requests. For
-  **CodeArtifact**, the bearer token is a short-lived AWS-issued token refreshed
-  via the SDK, same wire shape, different issuer.
-- **Server side.** A proxy may require its own client auth (presented as
-  `Bearer`/`_authToken` and validated at the edge before proxying), but it does
-  **not** need to implement the login/token-lifecycle endpoints to be a
-  functional install server, those are publish-time concerns.
-- Forward `npm-otp` and `Authorization` transparently if the proxy ever carries
-  write traffic; a read-only proxy can ignore 2FA entirely.
+- **Client side.** The proxy attaches `Authorization: Bearer …` on
+  private-upstream and mirror requests. For CodeArtifact it's a short-lived
+  AWS-issued token, same wire shape, different issuer.
+- **Server side.** The proxy may gate its own clients (`Bearer`/`_authToken` at
+  the edge) but need not implement login/token-lifecycle endpoints to serve
+  installs; those are publish-time.
+- Forward `npm-otp` and `Authorization` only if the proxy carries writes; a
+  read-only proxy ignores 2FA.
 
 ---
 
 ## 10. Write path (for completeness)
 
-Not on the proxy's critical path (Écluse delegates storage; mirror writes are a
-separate concern), but documented so "act as an npm server" is complete.
+Off the proxy's critical path (Écluse delegates storage), here for completeness.
 
-- **Publish**, `PUT /{pkg}` with a body that is itself a packument:
+- **Publish**, `PUT /{pkg}` with a packument body:
   `{ _id, name, "dist-tags", versions: { "<v>": <manifest> }, _attachments: {
-  "<pkg>-<v>.tgz": { content_type: "application/octet-stream", data:
-  "<base64 tarball>", length } } }`. Conflicts (re-publishing an existing
-  version) return `409`. *Observed:* an unauthenticated `PUT` to a non-existent
-  package returns `404` (the registry obscures rather than `401`s).
-- **dist-tags**, `PUT`/`DELETE /-/package/{pkg}/dist-tags/{tag}` to move/remove
-  named tags (`npm dist-tag add/rm`).
-- **deprecate**, no dedicated endpoint; `npm deprecate` re-publishes the
-  packument with `deprecated: "<msg>"` set on the targeted versions (which is
-  why `deprecated` surfaces in the abbreviated manifest, §5).
-- **unpublish**, CouchDB-style `DELETE` against the package/revision.
+  "<pkg>-<v>.tgz": { content_type, data: "<base64 tarball>", length } } }`.
+  Re-publishing a version → `409`. Unauthenticated `PUT` to a missing package →
+  `404` (obscured, not `401`).
+- **dist-tags**, `PUT`/`DELETE /-/package/{pkg}/dist-tags/{tag}`.
+- **deprecate**, no endpoint; `npm deprecate` re-publishes with `deprecated` set,
+  which is why it surfaces in the abbreviated manifest (§5).
+- **unpublish**, CouchDB-style `DELETE` on package/revision.
 
 ---
 
@@ -762,8 +680,7 @@ A checklist that turns this protocol into proxy obligations.
 
 ## 13. Reproducing the probes
 
-All captures on 2026-06-21 against `https://registry.npmjs.org`. Representative
-commands (full set in the session that produced this doc):
+All captures 2026-06-21 against `https://registry.npmjs.org`.
 
 ```bash
 # Full packument + headers
