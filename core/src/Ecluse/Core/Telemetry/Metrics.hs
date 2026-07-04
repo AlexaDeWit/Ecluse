@@ -345,55 +345,55 @@ labelKey = \case
 -- | Project a 'Label' to its @(key, value)@ wire pair.
 renderLabel :: Label -> (Text, Text)
 renderLabel label = (labelKeyName (labelKey label), labelValue label)
-  where
-    labelValue :: Label -> Text
-    labelValue = \case
-        LDecision d -> case d of
-            Admit -> "admit"
-            Deny -> "deny"
-            Unavailable -> "unavailable"
-        LReasonClass r -> case r of
-            ReasonPolicy -> "policy"
-            ReasonMissingIntegrity -> "missing_integrity"
-            ReasonUnavailable -> "unavailable"
-            ReasonLimit -> "limit"
-        LRule name -> name
-        LEcosystem eco -> ecosystemName eco
-        LMount eco -> ecosystemName eco
-        LUpstream u -> case u of
-            Private -> "private"
-            Public -> "public"
-        LStatusClass s -> case s of
-            Status2xx -> "2xx"
-            Status3xx -> "3xx"
-            Status4xx -> "4xx"
-            Status5xx -> "5xx"
-            StatusOther -> "other"
-        LCacheResult c -> case c of
-            Hit -> "hit"
-            Miss -> "miss"
-        LMirrorResult m -> case m of
-            Published -> "published"
-            Failed -> "failed"
-        LCredentialResult c -> case c of
-            Refreshed -> "refreshed"
-            RefreshFailed -> "failed"
-        LProvider p -> case p of
-            CodeArtifact -> "codeartifact"
-            Static -> "static"
-            Adc -> "adc"
-        LCause c -> case c of
-            Timeout -> "timeout"
-            Connection -> "connection"
-            Decode -> "decode"
-            UpstreamStatus -> "upstream_status"
-            OtherCause -> "other"
-        LBreakerSource b -> case b of
-            EffectfulRule -> "effectful_rule"
-            CredentialMint -> "credential_mint"
-        LTier t -> case t of
-            Structural -> "structural"
-            Effectful -> "effectful"
+
+labelValue :: Label -> Text
+labelValue = \case
+    LDecision d -> case d of
+        Admit -> "admit"
+        Deny -> "deny"
+        Unavailable -> "unavailable"
+    LReasonClass r -> case r of
+        ReasonPolicy -> "policy"
+        ReasonMissingIntegrity -> "missing_integrity"
+        ReasonUnavailable -> "unavailable"
+        ReasonLimit -> "limit"
+    LRule name -> name
+    LEcosystem eco -> ecosystemName eco
+    LMount eco -> ecosystemName eco
+    LUpstream u -> case u of
+        Private -> "private"
+        Public -> "public"
+    LStatusClass s -> case s of
+        Status2xx -> "2xx"
+        Status3xx -> "3xx"
+        Status4xx -> "4xx"
+        Status5xx -> "5xx"
+        StatusOther -> "other"
+    LCacheResult c -> case c of
+        Hit -> "hit"
+        Miss -> "miss"
+    LMirrorResult m -> case m of
+        Published -> "published"
+        Failed -> "failed"
+    LCredentialResult c -> case c of
+        Refreshed -> "refreshed"
+        RefreshFailed -> "failed"
+    LProvider p -> case p of
+        CodeArtifact -> "codeartifact"
+        Static -> "static"
+        Adc -> "adc"
+    LCause c -> case c of
+        Timeout -> "timeout"
+        Connection -> "connection"
+        Decode -> "decode"
+        UpstreamStatus -> "upstream_status"
+        OtherCause -> "other"
+    LBreakerSource b -> case b of
+        EffectfulRule -> "effectful_rule"
+        CredentialMint -> "credential_mint"
+    LTier t -> case t of
+        Structural -> "structural"
+        Effectful -> "effectful"
 
 {- | Classify an HTTP status code into its bounded 'StatusClass', so a status never
 becomes a per-code label.
