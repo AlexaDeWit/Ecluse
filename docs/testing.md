@@ -41,7 +41,7 @@ ecluse-integration` (or `task test-integration`).
 
 S54's bounded-memory streaming gate: streams a 1 MiB and a 100 MiB artifact through the
 tarball relay (both the trusted private-hit leg and the gated public leg) and asserts peak
-live bytes are **invariant in artifact size** within a fixed margin — the correctness
+live bytes are **invariant in artifact size** within a fixed margin, the correctness
 counterpart to the load bench's inform-only residency trend. It is its own suite, not an
 `ecluse-integration` spec, because the measurement demands process isolation (live-bytes
 sampling must not share a heap with hundreds of other examples) and the RTS statistics flag
@@ -140,14 +140,14 @@ collector), e2e through the raw `docker` harness (`test/e2e/Ecluse/E2E/Harness/D
 the proxy image plus its nginx/Verdaccio/ministack data plane). Both stamp every container
 they create with two labels:
 
-- `com.ecluse.test` = `integration` | `e2e` — marks it as an Écluse test container; and
+- `com.ecluse.test` = `integration` | `e2e`, marking it as an Écluse test container; and
 - `com.ecluse.test.scope` = a **per-worktree** id (from `ECLUSE_TEST_SCOPE`, set by the
   `task test-*` targets from `scripts/test-containers.sh scope`).
 
 Under a normal exit both harnesses tear their own containers down (a `bracket` in the e2e
 harness, `withContainers` in the integration tier), and the `docker run`s carry `--rm` so a
-container that crashes on its own is removed too. The gap is a **hard kill** — SIGKILL, an
-OOM, or an agent/CI harness killing a timed-out command — which runs no cleanup and leaves
+container that crashes on its own is removed too. The gap is a **hard kill** (SIGKILL, an
+OOM, or an agent/CI harness killing a timed-out command), which runs no cleanup and leaves
 the whole topology behind. Repeated across a battery of runs that is how a machine ends up
 with hundreds of orphaned containers.
 
@@ -155,7 +155,7 @@ Two reaping commands close that gap, both driven by `scripts/test-containers.sh`
 
 - **`task test-clean`** removes only **this worktree's** test containers, networks (and, in
   `--all` mode, build images), keyed on the `com.ecluse.test.scope` label. Because it is
-  scoped it is safe to run while other agents or worktrees have suites running — it cannot
+  scoped it is safe to run while other agents or worktrees have suites running; it cannot
   touch theirs. `task test-integration` and `task test-e2e` run this scoped reap automatically
   before the suite (sweeping this worktree's strays from a previous killed run) and again on
   exit.
@@ -173,7 +173,7 @@ Two things about the split are easy to get backwards, so I'll state them plainly
 
 - **The integration tier is not "the tier for thorough tests."** What sends a test to
   integration is a collaborator that can only be a *real* (emulated) service, a cloud queue,
-  a token mint, not how comprehensive the test is. A cross-component test that needs no live
+  a token mint, not how broad the test is. A cross-component test that needs no live
   external is a **unit** test even when it wires the whole pipeline together: the proxy
   request-lifecycle (fetch → parse → rules → mirror) runs against an in-process WAI stub and
   lives in `ecluse-unit`. Determinism and breadth are orthogonal to the tier: put a test

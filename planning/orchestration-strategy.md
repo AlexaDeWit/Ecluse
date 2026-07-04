@@ -105,7 +105,7 @@ Either way the fix lands as a distinct, separately-reviewable commit.
 
 **One git worktree per agent**, each on its own branch, is a hard rule: it keeps
 parallel slices from colliding on a shared tree and contains each agent's blast
-radius. Concurrency is capped (**2–3 slices in flight**) so evaluation quality
+radius. Concurrency is capped (**2-3 slices in flight**) so evaluation quality
 does not degrade. After every merge, the team lead rebases the dependent
 worktrees onto the new base and re-runs their gate, so integration drift surfaces
 immediately rather than at PR time. Slices that genuinely cannot be split become
@@ -121,7 +121,7 @@ store, so only this project's own modules cost anything. Two reasons one-worktre
 agent is a **hard** rule and not just a speed-up: HLS keys its `hiedb` (a SQLite DB)
 by *workspace path*, so multiple agents in one shared checkout contend on a single
 database and can stall each other, a separate directory per agent gives each its own
-DB; and with 2–3 worktrees in flight, **stagger** the creations so parallel cold
+DB; and with 2-3 worktrees in flight, **stagger** the creations so parallel cold
 typechecks don't thrash the CPU. After a post-merge rebase, re-run `task build` to
 re-warm incrementally.
 
@@ -237,10 +237,10 @@ A dedicated agent audits the integrated tree (fresh context, read-and-verify) fo
   **Material design changes are escalated to the architect** (they may reshape
   later slices), not silently rewritten into the docs.
 
-The audit produces a **categorized findings report**; the team lead triages it:
+The audit produces a **categorised findings report**; the team lead triages it:
 
 - **Safe, in-scope, behaviour-preserving fixes** (rename, dedupe, Haddock, a
-  localized conversion, slice/architecture doc reconciliation) land together as
+  localised conversion, slice/architecture doc reconciliation) land together as
   one reviewed, gated `refactor` / `docs` PR, the same BUILD → EVALUATE → GATE
   loop.
 - **Design-level or far-reaching findings** are **escalated to the architect** as
@@ -270,7 +270,7 @@ issue tracker's milestone sequence.
 
 CI **is** the gate; local verification is for _fast feedback_, not a pre-push
 ceremony. Every CI job just calls `task`, and CI runs the tiers **in parallel** on
-its own runners, so reproducing the slow, parallelizable ones (Docker
+its own runners, so reproducing the slow, parallelisable ones (Docker
 integration, the hermetic `nix-check`, Haddock) serially on one contended host is
 wasted work CI does anyway, and the team lead reproducing the whole gate before
 pushing is **running it twice**.
@@ -283,9 +283,9 @@ task check
 
 `task check` is the project's fast pre-push target, build, unit tests, doctest,
 fourmolu/hlint, Semgrep, `cabal check`, and workflow-lint: **the gate minus its
-Docker integration and Haddock tiers**, the slow parallelizable ones CI runs for
+Docker integration and Haddock tiers**, the slow parallelisable ones CI runs for
 you. The one hard stop within it is **Semgrep clean** (zero findings, no new ignores
-without the architect's approval). Then **push early, let CI parallelize the rest,
+without the architect's approval). Then **push early, let CI parallelise the rest,
 and watch the real run to green** (`gh pr checks --watch`).
 
 Reproduce a tier locally **only to debug a red**, map the red CI job back to its
@@ -378,7 +378,7 @@ reruns; worktree / rebase conflicts; anything answerable from the existing specs
 Escalations arrive **decision-ready**:
 
 > **Decision needed** (one sentence, phrased as a question) · **Context / what was
-> tried** · **Options** (2–3, with a recommendation marked) · **Blast radius**
+> tried** · **Options** (2-3, with a recommendation marked) · **Blast radius**
 > (this PR only, or blocking dependents?) + urgency.
 
 ## Guardrails (always on)
@@ -411,7 +411,7 @@ Escalations arrive **decision-ready**:
   message. They are **parked** (a short-lived `design-queue.md` under `planning/`, spun
   up when decisions accumulate and removed once drained into `docs/` + issues) and
   brought **one at a time**, lead-with-a-recommendation; the rest wait their turn. This
-  complements *escalate, don't guess*. Surface proactively, but serialized, not in
+  complements *escalate, don't guess*. Surface proactively, but serialised, not in
   a flood.
 - **Reference work by identifiers the architect can see.** When surfacing or
   escalating, name a piece of work by what is visible to the architect, its PR or issue number (`#168`), or a short descriptive title, never an

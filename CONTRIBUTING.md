@@ -59,7 +59,7 @@ commands are:
   toolchain, not the daemon). With no daemon it fails with a clear message pointing at the fast
   path.
 - **`task coverage-unit` (≡ `task coverage SUITE=ecluse-unit`): the fast, Docker-free loop.**
-  Codecov treats them seamlessly (it merges all tiers). You do not need to run `task coverage`
+  Codecov treats them uniformly (it merges all tiers). You do not need to run `task coverage`
   for a quick local number; reach for bare `task coverage` for the honest, Codecov-matching one.
 - **`task coverage SUITE=<tier>`: one tier's report.** The per-flag form CI uses: each tier
   (`ecluse-unit`, `ecluse-integration`) writes its own `coverage/<tier>.json`, uploaded under

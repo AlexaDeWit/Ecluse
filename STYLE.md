@@ -74,7 +74,7 @@ Concretely:
   the bad case, make it opaque and expose a smart constructor that returns
   `Maybe`/`Either` of the refined type (§6). A constructor that can reject input
   returns `Either Err T`, never `Bool`; `mkScope`/`mkVersion` are the
-  total/normalizing form of the same pattern.
+  total/normalising form of the same pattern.
 - **Distrust `m ()` and `Bool`-returning "checks".** If a function's job is to
   assert something, have it *return the evidence* (the refined value) so call
   sites cannot skip it. "Let your datatypes inform your code, not the other way
@@ -208,7 +208,7 @@ weakening the committed flags.
 
 ---
 
-## 4. Module organization, namespacing, and exports
+## 4. Module organisation, namespacing, and exports
 
 This section is the durable how-to for *structuring* modules. The *current*
 concrete module list is the module index of the published Haddock (and the root
@@ -216,7 +216,7 @@ concrete module list is the module index of the published Haddock (and the root
 project-specific layout patterns. The principles below are what decide where new
 code goes.
 
-### 4.1 Organize by concept, favouring smaller modules
+### 4.1 Organise by concept, favouring smaller modules
 
 Group each area's types **and** the functions that operate on them into well-scoped,
 single-purpose modules. Historically, this guide recommended "vertical" grouping
@@ -234,7 +234,7 @@ hyper-focused modules are easier to digest, test, and safely change.
 
 - Each area of the system gets its own namespace, `Ecluse.Core.<Area>` in the
   capability core (`Rules`, `Registry`, `Queue`, `Security`, …) and `Ecluse.<Area>`
-  in the application shell (`Config`, `Env`, `Log`, …). Organize by *feature* (what
+  in the application shell (`Config`, `Env`, `Log`, …). Organise by *feature* (what
   the code is about), not by *layer* (type vs class vs handler).
 - GHC requires the module name to match the file path, PascalCase and
   hierarchical: `Ecluse.Core.Rules.Types` ⇄ `core/src/Ecluse/Core/Rules/Types.hs`. The
@@ -471,7 +471,7 @@ the middle out.
 **Rule 9.2, Prefer pure and total.** Keep the core logic (the rules engine,
 parsers, rendering) pure; push `IO` to the edges (`app/Main.hs`, the server and
 worker layers). Annotate a purity/totality guarantee **only where it is
-surprising or load-bearing**—such as a boundary parser a reader would expect to throw, or a totality that carries domain meaning (`mkVersion` never dropping a version; `evalRule` never crashing the gate on hostile metadata). Do **not** tag `-- … Pure and total.` reflexively: in a module whose header already says it is pure, or on a signature with no `IO` and a total return type, the tag only restates the header and the type ([`HADDOCK.md`](HADDOCK.md) §3). The effect style for the parts that *are* effectful is `ReaderT Env IO` (architecture doc); handlers take `Env` and run in plain `IO`.
+surprising or load-bearing**, such as a boundary parser a reader would expect to throw, or a totality that carries domain meaning (`mkVersion` never dropping a version; `evalRule` never crashing the gate on hostile metadata). Do **not** tag `-- … Pure and total.` reflexively: in a module whose header already says it is pure, or on a signature with no `IO` and a total return type, the tag only restates the header and the type ([`HADDOCK.md`](HADDOCK.md) §3). The effect style for the parts that *are* effectful is `ReaderT Env IO` (architecture doc); handlers take `Env` and run in plain `IO`.
 
 **Rule 9.3, Use local `where` helpers** to name sub-steps and keep the main
 equation readable. Top-level bindings always have a signature; `where`-helpers
@@ -528,7 +528,7 @@ enclose it.
 
 ## 10. Totality, no partial functions
 
-A resilience proxy must not crash on hostile input, so **partial functions are
+A policy proxy must not crash on hostile input, so **partial functions are
 banned** (enforced by `.hlint.yaml`; most are already hidden by relude). Do not
 reach for `head`, `tail`, `fromJust`, `read`, `(!!)`, `error`, `undefined`, or
 `unsafePerformIO`.
@@ -599,7 +599,7 @@ Rules for the escape hatch:
 
 ## 11. Errors: values in the core, typed exceptions at the edge
 
-A resilience proxy spends most of its effort deciding how to *respond* when
+A policy proxy spends most of its effort deciding how to *respond* when
 something upstream goes wrong, so how an error is represented is a design
 decision, not an afterthought. The rule has two halves: what shape an error
 takes, and what monad it lives in.
@@ -707,7 +707,7 @@ three-tier strategy are in `CONTRIBUTING.md`; this is style.)
   in assertions: `isAllow`, `approvedBy`, `deniedBy`.
 - **Express invariants as `hedgehog` properties**, grouped under
   `describe "properties"`, using `forAll` generators and `(===)`. An invariant
-  that must hold for *every* input, not just the handful an example covers,  belongs here (e.g. an order-independence or round-trip law).
+  that must hold for *every* input, not just the handful an example covers, belongs here (e.g. an order-independence or round-trip law).
 - Comment a non-obvious case with the reasoning it encodes.
 - **Share cross-suite helpers through `ecluse-test-support`**: a helper or fixture
   that more than one suite needs lives in the internal `ecluse-test-support`
