@@ -323,20 +323,23 @@ tarballOnboardingScenario =
         }
 
 {- | The streaming-ceiling probe: the same private-hit relay as 'tarballScenario', but
-driven at __eight times the shared concurrency__ against a __2 ms__ stub latency, so
+driven at __four times the shared concurrency__ against a __2 ms__ stub latency, so
 the binding constraint is the proxy's own relay (scheduler, pump, pool, syscalls)
 rather than the load generator's connections x RTT. The ordinary tarball scenario is
 client-bound by construction (its throughput ~ concurrency / RTT says nothing about
-the proxy's limit); this one exists to chase the knee. Read it with its own operating
-point in mind -- the shared operating-point line prints the unscaled base.
+the proxy's limit); this one exists to chase the knee. At the default base
+concurrency the scale lands on ~400 concurrent streams, the relay's measured
+saturation sweet spot: past it, added concurrency measured as pure backlog and
+eroding success, not throughput. Read it with its own operating point in mind -- the
+shared operating-point line prints the unscaled base.
 -}
 tarballCeilingScenario :: Scenario
 tarballCeilingScenario =
     Scenario
         { scenarioName = "tarball-ceiling"
-        , scenarioConcurrencyScale = 8
+        , scenarioConcurrencyScale = 4
         , scenarioDescription =
-            "Streaming-ceiling probe on the private-hit relay: 8x the shared concurrency, 2 ms stub latency (overriding the probed RTT for this scenario alone), same conventional private read as tarball-hot-path. Chases the proxy's own streaming knee -- relay pump, connection handling, syscall pressure -- instead of the client's connections x RTT ceiling. Throughput here x the worker-artifact payload size approximates the relay's byte rate."
+            "Streaming-ceiling probe on the private-hit relay: 4x the shared concurrency, 2 ms stub latency (overriding the probed RTT for this scenario alone), same conventional private read as tarball-hot-path. Chases the proxy's own streaming knee -- relay pump, connection handling, syscall pressure -- instead of the client's connections x RTT ceiling. Throughput here x the worker-artifact payload size approximates the relay's byte rate."
         , scenarioBoot = \knobs k ->
             withNpmProxy knobs{lkUpstreamLatencyMicros = 2_000} longCacheTtl (cacheMaxEntries defaultCacheConfig) tarballMix (k . DriveHttpUrls)
         }

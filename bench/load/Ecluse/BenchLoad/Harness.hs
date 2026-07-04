@@ -91,8 +91,8 @@ duration) and the shape of the upstream it applies it to (injected per-upstream 
 and the artifact payload size). The latency and payload are consumed by a scenario's
 ecosystem-specific setup ('scenarioBoot'); the concurrency and duration are consumed by
 the harness when it drives the load. The npm packument scenarios derive their payloads
-from the real-world corpus (see "Ecluse.BenchLoad.Npm"), so 'lkPayloadBytes' sizes only
-the worker scenario's synthetic artifact.
+from the real-world corpus (see "Ecluse.BenchLoad.Npm"); 'lkPayloadBytes' sizes the
+worker and tarball scenarios' synthetic artifacts.
 
 The defaults model a realistic operating point; override them through the environment
 ('loadKnobsFromEnv') to probe a different one. Absolutes are runner-dependent and noisy
@@ -107,9 +107,9 @@ data LoadKnobs = LoadKnobs
     , lkUpstreamLatencyMicros :: Int
     -- ^ Latency a stub upstream injects before responding, modelling a real network hop.
     , lkPayloadBytes :: Int
-    {- ^ Approximate size of the worker scenario's synthetic artifact. The packument
-    scenarios serve the real-world corpus, so their payloads come from the captures, not
-    from this knob.
+    {- ^ Approximate size of the worker and tarball scenarios' synthetic artifacts. The
+    packument scenarios serve the real-world corpus, so their payloads come from the
+    captures, not from this knob.
     -}
     , lkCacheMaxEntries :: Int
     {- ^ Metadata-cache entry bound for the cache-eviction scenario. Set below the working
@@ -140,21 +140,24 @@ data LoadKnobs = LoadKnobs
     }
     deriving stock (Eq, Show)
 
-{- | The default operating point: 50 concurrent clients for 30 seconds against an
+{- | The default operating point: 100 concurrent clients for 30 seconds against an
 upstream with a 5 ms injected latency. The packument scenarios serve the real-world
-corpus (their payloads come from the captures); the ~256 KiB payload sizes the worker
-scenario's synthetic artifact. The cache-eviction scenario bounds the cache at 3 entries
-against the whole-corpus working set (default 64, capped to the corpus), so it evicts.
-Sane for a shared runner: enough load to saturate the proxy without a load the generator
-itself cannot sustain.
+corpus (their payloads come from the captures); the ~355 KiB payload -- about the median
+tarball of a popular-package mix, between the sub-30 KiB utilities that dominate request
+counts and the multi-MiB toolchain artifacts that dominate bytes -- sizes the worker and
+tarball scenarios' synthetic artifacts. The concurrency loads the tarball paths
+meaningfully under a realistic round trip (and puts the ceiling scenario's scaled 400
+connections on the relay's measured knee) while staying within what a shared runner's
+generator sustains. The cache-eviction scenario bounds the cache at 3 entries against
+the whole-corpus working set (default 64, capped to the corpus), so it evicts.
 -}
 defaultLoadKnobs :: LoadKnobs
 defaultLoadKnobs =
     LoadKnobs
-        { lkConcurrency = 50
+        { lkConcurrency = 100
         , lkDurationSeconds = 30
         , lkUpstreamLatencyMicros = 5_000
-        , lkPayloadBytes = 256 * 1024
+        , lkPayloadBytes = 355 * 1024
         , lkCacheMaxEntries = 3
         , lkWorkingSet = 64
         , lkServeMaxInFlight = Nothing
