@@ -311,11 +311,17 @@ initializeObservedMeterProvider sink = do
             let resources = materializeResources (mergeResources envResources builtInResources)
             (provider, env) <- createMeterProvider resources defaultSdkMeterProviderOptions
             readerHandle <- forkPeriodicMetricReader env exporter readerOptions
-            let provider' =
-                    provider
-                        { meterProviderShutdown = \timeout -> do
-                            stopPeriodicMetricReader readerHandle
-                            meterProviderShutdown provider timeout
-                        }
+            let provider' = stopReaderOnShutdown readerHandle provider
             setGlobalMeterProvider provider'
             pure provider'
+
+{- Wrap a meter provider so its shutdown stops the periodic metric reader before the
+provider's own shutdown, as the mirrored SDK init does; part of the same version-pin
+re-diff surface as 'initializeObservedMeterProvider'. -}
+stopReaderOnShutdown :: PeriodicMetricReaderHandle -> MeterProvider -> MeterProvider
+stopReaderOnShutdown readerHandle provider =
+    provider
+        { meterProviderShutdown = \timeout -> do
+            stopPeriodicMetricReader readerHandle
+            meterProviderShutdown provider timeout
+        }

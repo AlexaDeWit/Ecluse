@@ -209,25 +209,26 @@ otelEnvironmentOverrides environment =
     [ ("OTEL_SERVICE_NAME", toString (rtServiceName resolved))
     , ("OTEL_EXPORTER_OTLP_ENDPOINT", toString (teUrl (rtEndpoint resolved)))
     , ("OTEL_EXPORTER_OTLP_PROTOCOL", "http/protobuf")
-    , ("OTEL_RESOURCE_ATTRIBUTES", toString (renderResourceAttributes mergedAttrs))
+    , ("OTEL_RESOURCE_ATTRIBUTES", toString (renderResourceAttributes (mergedResourceAttributes resolved environment)))
     ]
   where
     resolved :: ResolvedTelemetry
     resolved = resolveTelemetry environment
 
+mergedResourceAttributes :: ResolvedTelemetry -> [(String, String)] -> Map Text Text
+mergedResourceAttributes resolved environment =
+    -- Left-biased union: a resolved attribute must win over an inherited
+    -- OTEL_RESOURCE_ATTRIBUTES value of the same key, so the resolved map sits on the
+    -- LEFT of (<>) ('Map.union' is left-biased). Reversing the operands would let a
+    -- stale operator-set value silently override the resolution.
+    resolvedAttrs <> existing
+  where
     existing :: Map Text Text
     existing =
         maybe
             Map.empty
             parseResourceAttributes
             (nonBlank . toText =<< lookup "OTEL_RESOURCE_ATTRIBUTES" environment)
-
-    -- Left-biased union: a resolved attribute must win over an inherited
-    -- OTEL_RESOURCE_ATTRIBUTES value of the same key, so the resolved map sits on the
-    -- LEFT of (<>) ('Map.union' is left-biased). Reversing the operands would let a
-    -- stale operator-set value silently override the resolution.
-    mergedAttrs :: Map Text Text
-    mergedAttrs = resolvedAttrs <> existing
 
     resolvedAttrs :: Map Text Text
     resolvedAttrs =

@@ -170,22 +170,22 @@ newMetrics telemetry = do
         <*> histogram meter MirrorPublishDuration "mirror publish latency"
         <*> counter meter CredentialRefresh "{refresh}" "credential refreshes by result and provider"
         <*> gauge meter CredentialTokenTtlSeconds "remaining outbound-token lifetime by provider"
-  where
-    counter :: Meter -> MetricName -> Text -> Text -> IO (Counter Int64)
-    counter meter name unit description =
-        meterCreateCounterInt64 meter (metricName name) (Just unit) (Just description) defaultAdvisoryParameters
 
-    histogram :: Meter -> MetricName -> Text -> IO Histogram
-    histogram meter name description =
-        meterCreateHistogram meter (metricName name) (Just "s") (Just description) defaultAdvisoryParameters
+counter :: Meter -> MetricName -> Text -> Text -> IO (Counter Int64)
+counter meter name unit description =
+    meterCreateCounterInt64 meter (metricName name) (Just unit) (Just description) defaultAdvisoryParameters
 
-    upDownCounter :: Meter -> MetricName -> Text -> Text -> IO (UpDownCounter Int64)
-    upDownCounter meter name unit description =
-        meterCreateUpDownCounterInt64 meter (metricName name) (Just unit) (Just description) defaultAdvisoryParameters
+histogram :: Meter -> MetricName -> Text -> IO Histogram
+histogram meter name description =
+    meterCreateHistogram meter (metricName name) (Just "s") (Just description) defaultAdvisoryParameters
 
-    gauge :: Meter -> MetricName -> Text -> IO (Gauge Int64)
-    gauge meter name description =
-        meterCreateGaugeInt64 meter (metricName name) Nothing (Just description) defaultAdvisoryParameters
+upDownCounter :: Meter -> MetricName -> Text -> Text -> IO (UpDownCounter Int64)
+upDownCounter meter name unit description =
+    meterCreateUpDownCounterInt64 meter (metricName name) (Just unit) (Just description) defaultAdvisoryParameters
+
+gauge :: Meter -> MetricName -> Text -> IO (Gauge Int64)
+gauge meter name description =
+    meterCreateGaugeInt64 meter (metricName name) Nothing (Just description) defaultAdvisoryParameters
 
 -- The instrumentation scope the instruments are created under: this service's name,
 -- so the metrics are attributed to Écluse (the same scope the hand-added spans use).
