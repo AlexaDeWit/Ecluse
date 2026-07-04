@@ -184,7 +184,7 @@ projectNpmVersion limits name version body = do
     -- The self-reported name is the validation authority (anti-shadowing), checked before
     -- the version-count backstop -- the same order 'projectNpmManifest' validates the name
     -- before bounding the count.
-    reported <- validateName (svName selected)
+    reported <- validateReportedName (svName selected)
     when (reported /= name) (Left (MetadataNameMismatch (renderPackageName reported)))
     when
         (svVersionCount selected > maxVersionCount limits)
@@ -193,29 +193,29 @@ projectNpmVersion limits name version body = do
     -- 'mkVersion' over the requested version's rendered key matches the whole-document path,
     -- which keys 'projectVersions' by that same string and so projects the version under it.
     pure (svVersion selected >>= projectVersionEntry name (mkVersion Npm (renderVersion version)) publishedAt)
-  where
-    -- The document's self-reported name, validated as the whole-document decode does: an
-    -- absent name defaults to the empty string and so fails 'projectName' (undecodable), a
-    -- present non-string fails the @Text@ decode (undecodable), and a well-formed name is
-    -- the 'PackageName' the request is matched against.
-    validateName :: Maybe Value -> Either MetadataError PackageName
-    validateName = \case
-        Nothing -> Left MetadataUndecodable
-        Just nameValue -> case parseMaybe parseJSON nameValue of
-            Nothing -> Left MetadataUndecodable
-            Just raw -> first (const MetadataUndecodable) (projectName raw)
 
-    -- The requested version's publish stamp, folded leniently to match the whole-document
-    -- path: absent is no stamp ('Nothing'), and a present-but-un-decodable stamp is also
-    -- 'Nothing' (the version has no known publish time) rather than a document failure:
-    -- the full path drops a malformed @time@ entry per-entry, so the requested version it
-    -- would project there carries no time, and the selective projection must agree. (A
-    -- structurally-malformed-JSON stamp is still a 'SelectiveUndecodable' from the walk, as
-    -- it is an 'eitherDecodeStrict' failure on the full path.)
-    parsePublishTime :: Maybe Value -> Either MetadataError (Maybe UTCTime)
-    parsePublishTime = \case
-        Nothing -> Right Nothing
-        Just timeValue -> Right (parseMaybe parseJSON timeValue)
+-- The document's self-reported name, validated as the whole-document decode does: an
+-- absent name defaults to the empty string and so fails 'projectName' (undecodable), a
+-- present non-string fails the @Text@ decode (undecodable), and a well-formed name is
+-- the 'PackageName' the request is matched against.
+validateReportedName :: Maybe Value -> Either MetadataError PackageName
+validateReportedName = \case
+    Nothing -> Left MetadataUndecodable
+    Just nameValue -> case parseMaybe parseJSON nameValue of
+        Nothing -> Left MetadataUndecodable
+        Just raw -> first (const MetadataUndecodable) (projectName raw)
+
+-- The requested version's publish stamp, folded leniently to match the whole-document
+-- path: absent is no stamp ('Nothing'), and a present-but-un-decodable stamp is also
+-- 'Nothing' (the version has no known publish time) rather than a document failure:
+-- the full path drops a malformed @time@ entry per-entry, so the requested version it
+-- would project there carries no time, and the selective projection must agree. (A
+-- structurally-malformed-JSON stamp is still a 'SelectiveUndecodable' from the walk, as
+-- it is an 'eitherDecodeStrict' failure on the full path.)
+parsePublishTime :: Maybe Value -> Either MetadataError (Maybe UTCTime)
+parsePublishTime = \case
+    Nothing -> Right Nothing
+    Just timeValue -> Right (parseMaybe parseJSON timeValue)
 
 -- Map a selective-decode refusal onto the 'MetadataError' the whole-document path raises
 -- for the same cause: malformed\/non-object bytes are 'MetadataUndecodable', a depth breach

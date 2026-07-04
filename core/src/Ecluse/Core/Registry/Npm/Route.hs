@@ -1,5 +1,5 @@
 -- TupleSections: local convenience for pairing a parsed name with its trailing
--- segments in 'takePackage' ((,rest) / (,more)); see STYLE.md §2.
+-- segments in 'takeScoped' ((,rest) / (,more)); see STYLE.md §2.
 {-# LANGUAGE TupleSections #-}
 
 {- | The npm path grammar: the request router that maps an npm-native request
@@ -120,10 +120,8 @@ classifyPackage segments =
         _ -> Unsupported
 
 {- Peel the leading package unit off a path, returning its 'PackageName' and
-the remaining segments. Handles both wire encodings of a scoped name:
-
-\* one decoded segment, @\@scope\/pkg@ -- split on the first @\'\/\'@;
-\* two segments, @\@scope@ then @pkg@ -- consume both.
+the remaining segments. A leading segment beginning with @\'\@\'@ is a scoped
+name, peeled by 'takeScoped' (which handles both wire encodings).
 
 Returns 'Nothing' (so the caller denies it) for anything without a usable
 package: an empty path, or a name with an __unsafe component__ -- a scope or base
@@ -137,29 +135,38 @@ are rejected rather than passed downstream into an interpolated upstream URL.
 takePackage :: [Text] -> Maybe (PackageName, [Text])
 takePackage [] = Nothing
 takePackage (seg : rest)
-    | "@" <- T.take 1 seg =
-        case T.breakOn "/" (T.drop 1 seg) of
-            -- One decoded segment "@scope/pkg": scope before the '/', base after.
-            -- 'scopedName' may reject it, propagating 'Nothing' through (,rest).
-            (scope, base)
-                | not (T.null base) ->
-                    (,rest) <$> scopedName scope (T.drop 1 base)
-            -- Bare scope "@scope": the package name is the next segment.
-            _ -> case rest of
-                (base : more) -> (,more) <$> scopedName (T.drop 1 seg) base
-                _ -> Nothing
+    | "@" <- T.take 1 seg = takeScoped seg rest
     | isSafeComponent seg = Just (mkPackageName Npm Nothing seg, rest)
     | otherwise = Nothing
-  where
-    -- A scoped name is usable only when both halves are safe components. The
-    -- leading '@' is already stripped from both arguments, so a degenerate or
-    -- hostile name ('@/pkg', '@scope/', '@scope/a/b', '@../pkg') is rejected here
-    -- rather than passed to the no-op 'mkScope'/'mkPackageName'.
-    scopedName :: Text -> Text -> Maybe PackageName
-    scopedName scope base
-        | isSafeComponent scope && isSafeComponent base =
-            Just (mkPackageName Npm (Just (mkScope scope)) base)
-        | otherwise = Nothing
+
+{- Peel a scoped package unit -- the leading @\@…@ segment -- handling both wire
+encodings of a scoped name:
+
+\* one decoded segment, @\@scope\/pkg@ -- split on the first @\'\/\'@;
+\* two segments, @\@scope@ then @pkg@ -- consume both.
+-}
+takeScoped :: Text -> [Text] -> Maybe (PackageName, [Text])
+takeScoped seg rest =
+    case T.breakOn "/" (T.drop 1 seg) of
+        -- One decoded segment "@scope/pkg": scope before the '/', base after.
+        -- 'scopedName' may reject it, propagating 'Nothing' through (,rest).
+        (scope, base)
+            | not (T.null base) ->
+                (,rest) <$> scopedName scope (T.drop 1 base)
+        -- Bare scope "@scope": the package name is the next segment.
+        _ -> case rest of
+            (base : more) -> (,more) <$> scopedName (T.drop 1 seg) base
+            _ -> Nothing
+
+-- A scoped name is usable only when both halves are safe components. The
+-- leading '@' is already stripped from both arguments, so a degenerate or
+-- hostile name ('@/pkg', '@scope/', '@scope/a/b', '@../pkg') is rejected here
+-- rather than passed to the no-op 'mkScope'/'mkPackageName'.
+scopedName :: Text -> Text -> Maybe PackageName
+scopedName scope base
+    | isSafeComponent scope && isSafeComponent base =
+        Just (mkPackageName Npm (Just (mkScope scope)) base)
+    | otherwise = Nothing
 
 {- Parse an npm tarball-slot @file@ into a 'Tarball' coordinate for @name@, or
 deny it. The npm convention is @{unscoped-name}-{version}.tgz@, so the file must:

@@ -147,11 +147,9 @@ walkTop childBudget target = go
             "time" -> withRecord childBudget valueToks $ \timeRec -> do
                 (found, _count, cont) <- findInRecord (childBudget - 1) target timeRec
                 go acc{svTime = found} cont
-            "name" -> case toEitherValue valueToks of
-                Left _ -> Left SelectiveUndecodable
-                Right (nameValue, cont)
-                    | withinNestingBudget childBudget nameValue -> go acc{svName = Just nameValue} cont
-                    | otherwise -> Left SelectiveTooDeeplyNested
+            "name" -> do
+                (nameValue, cont) <- materialiseWithinBudget childBudget valueToks
+                go acc{svName = Just nameValue} cont
             _ -> skipValue childBudget valueToks >>= go acc
 
 {- Find one key in a record, materialising __only__ that key's value (a 'Value', the last
@@ -168,12 +166,21 @@ findInRecord childBudget target = go Nothing 0
         TkRecordEnd cont -> Right (found, count, cont)
         TkRecordErr _ -> Left SelectiveUndecodable
         TkPair key valueToks
-            | Key.toText key == target -> case toEitherValue valueToks of
-                Left _ -> Left SelectiveUndecodable
-                Right (value, cont)
-                    | withinNestingBudget childBudget value -> go (Just value) (count + 1) cont
-                    | otherwise -> Left SelectiveTooDeeplyNested
+            | Key.toText key == target -> do
+                (value, cont) <- materialiseWithinBudget childBudget valueToks
+                go (Just value) (count + 1) cont
             | otherwise -> skipValue childBudget valueToks >>= go found (count + 1)
+
+{- Materialise one value from its tokens -- the same 'Value' decode the whole-document
+path uses -- bounded at @budget@: malformed tokens are 'SelectiveUndecodable', a value
+past the depth budget is 'SelectiveTooDeeplyNested'. The single materialisation point of
+the walk, so every built 'Value' passes the same depth gate. -}
+materialiseWithinBudget :: Int -> Tokens k String -> Either SelectiveError (Value, k)
+materialiseWithinBudget budget toks = case toEitherValue toks of
+    Left _ -> Left SelectiveUndecodable
+    Right (value, cont)
+        | withinNestingBudget budget value -> Right (value, cont)
+        | otherwise -> Left SelectiveTooDeeplyNested
 
 {- Run @k@ on a record token, refusing a non-record (the @versions@\/@time@ value must be
 an object, exactly as the whole-document decode reads each as a @Map@) and refusing the
