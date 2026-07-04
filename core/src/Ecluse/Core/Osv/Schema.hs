@@ -12,7 +12,7 @@ wrote a file and whoever reads it. The epoch expresses exactly that contract:
 it moves only when the shape of the data breaks, so the key stays findable
 and the stamp stays checkable across releases of either side.
 -}
-module Ecluse.Osv.Schema (
+module Ecluse.Core.Osv.Schema (
     -- * The table-schema epoch
     osvSchemaEpoch,
     osvDbFileName,

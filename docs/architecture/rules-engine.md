@@ -275,7 +275,7 @@ The object key is **stable per ecosystem** and embeds the artifact's
 ecosystem's failed compilation never holds back another's refresh, and a Pilot
 restart loses at most one ecosystem's work. The stable key is what makes ETag
 polling work. The epoch is a hand-bumped constant shared by the Pilot writer
-and the proxy reader (`Ecluse.Osv.Schema`). The artifact is immutable and
+and the proxy reader (`Ecluse.Core.Osv.Schema`). The artifact is immutable and
 rebuilt from scratch on every compilation, so there are no migrations, only a
 read-compatibility contract, and the epoch is that contract's version.
 

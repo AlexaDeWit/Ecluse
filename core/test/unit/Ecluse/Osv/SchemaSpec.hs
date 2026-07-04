@@ -2,7 +2,7 @@ module Ecluse.Osv.SchemaSpec (spec) where
 
 import Test.Hspec (Spec, describe, it, shouldBe)
 
-import Ecluse.Osv.Schema (MetaKey, osvDbFileName, renderMetaKey)
+import Ecluse.Core.Osv.Schema (MetaKey, osvDbFileName, renderMetaKey)
 
 spec :: Spec
 spec = do

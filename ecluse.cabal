@@ -100,6 +100,7 @@ library ecluse-core
     Ecluse.Core.Credential.Refresh.Internal
     Ecluse.Core.Ecosystem
     Ecluse.Core.InFlight
+    Ecluse.Core.Osv.Schema
     Ecluse.Core.Package
     Ecluse.Core.Package.Filter
     Ecluse.Core.Package.Integrity
@@ -216,7 +217,6 @@ library
     Ecluse
     Ecluse.Boot
     Ecluse.Proxy
-    Ecluse.Osv.Schema
     Ecluse.Pilot
     Ecluse.Pilot.Export
     Ecluse.Pilot.Osv
@@ -401,6 +401,7 @@ test-suite ecluse-core-unit
     Ecluse.Package.FilterSpec
     Ecluse.Package.IntegritySpec
     Ecluse.Package.MergeSpec
+    Ecluse.Osv.SchemaSpec
     Ecluse.PackageSpec
     Ecluse.QueueSpec
     Ecluse.Queue.SqsSpec
@@ -502,7 +503,6 @@ test-suite ecluse-unit
     Ecluse.LogSpec
     Ecluse.Core.Security.HostSpec
     Ecluse.ManifestSpec
-    Ecluse.Osv.SchemaSpec
     Ecluse.PilotSpec
     Ecluse.Pilot.OsvSpec
     Ecluse.Pilot.Osv.CompileSpec
