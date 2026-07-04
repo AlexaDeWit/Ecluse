@@ -1,6 +1,6 @@
 # Governance
 
-Écluse is, right now, **entirely the project of a single maintainer**, me,
+Écluse is, right now, entirely the project of a single maintainer, me,
 [Alexandra de Wit (@AlexaDeWit)](https://github.com/AlexaDeWit). So governance is
 deliberately simple: a **benevolent-dictator (BDFL) model**. This document records how
 decisions actually get made today and how that can change. It's not an aspirational structure
@@ -34,7 +34,7 @@ path to a healthier bus factor.
 
 ## Continuity
 
-Écluse is **MIT-licensed**: if I become unavailable, anyone may fork and continue the project
+Écluse is MIT-licensed: if I become unavailable, anyone may fork and continue the project
 without permission. Reducing the project's reliance on one person (adding a co-maintainer and
 distributing access to the repository, the release pipeline, and the signing keys) is an
 explicit goal as the project matures.
