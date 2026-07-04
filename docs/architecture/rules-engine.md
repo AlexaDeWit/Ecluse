@@ -224,10 +224,11 @@ The remaining planned additions are the **effectful** deny direction
 native `extensions` (see [above](#rules-engine)).
 
 Which rules ship **enabled by default** is a policy choice documented with the
-[default policy](configuration.md#the-default-policy): at launch only the pure
-`AllowIfOlderThan` quarantine is on; `AllowIfRemediatesCve` joins the default
-once the advisory sync ships (until then it can only abstain); the
-install-script and CVE *denies* stay available but opt-in.
+[default policy](configuration.md#the-default-policy): the pure
+`AllowIfOlderThan` quarantine and the `AllowIfRemediatesCve` fast lane (which
+abstains until an advisory database is synced, so without one only the
+quarantine governs); the install-script and CVE *denies* stay available but
+opt-in.
 
 ## CVE Subsystem
 
@@ -281,7 +282,29 @@ comparison counting as affected, so the lane only ever opens on evidence.
 
 Rather than fetching and parsing raw JSON advisory dumps on the proxy (which would introduce heavy GC pressure and memory spikes), Écluse uses a **decoupled ingestion pipeline (Écluse Pilot)**. Pilot is a standalone background service that pulls **OSV's per-ecosystem advisory exports**, processes them, and compiles them into a highly optimised, read-only SQLite database (`osv.db`). It pushes this database to a private S3/GCS bucket.
 
-The Écluse proxy runs a supervised in-process polling thread that periodically checks the S3 bucket for ETag changes. When a new `osv.db` is published, the proxy downloads it and performs an **atomic shadow-swap** of the active database connection. The footprint is minimal: the proxy merely queries the local SQLite file on disk.
+The Écluse proxy runs one supervised sync task per configured mount ecosystem
+(`Ecluse.Core.Cve.Sync`), each polling the bucket's stable per-ecosystem key for
+ETag changes -- independent tasks, so one ecosystem's missing artifact never
+holds back another's. At boot each task attempts an eager first fetch, retried
+with incremental backoff and eventually allowed to fail, so a healthy
+deployment is rules-engine complete within seconds while a broken bucket never
+wedges startup; the steady poll (`cveDbPollInterval`, deliberately more
+frequent than Pilot's compile interval so their rates do not compound into
+double the advisory age) takes over from there.
+
+When a new `osv.db` is detected it is downloaded to a temp file (byte-bounded
+by `maxOsvDbBytes`), verified by the same acceptance that guards every open
+(the epoch stamp, the table shape, the ecosystem), renamed atomically onto the
+canonical per-ecosystem path, and **shadow-swapped** into the read path
+(`Ecluse.Core.Cve.Slot`): rule evaluations borrow the current generation
+through a bracketed read, the swap waits for the displaced generation's
+readers to drain, and the drained close releases the old artifact's last inode
+reference -- the connection that verified is the connection that serves, and
+pruning is the kernel's reclamation, never a delete that could mistime. A
+refused artifact is discarded and its ETag remembered; the last-good
+generation keeps serving. The proxy's readiness signal waits for each
+configured ecosystem's first sync (a one-way flip), while the listener serves
+throughout: an absent database only ever abstains into deny-by-default.
 
 #### The artifact contract
 

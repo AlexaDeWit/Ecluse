@@ -84,10 +84,14 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (getCurrentTime)
 import GHC.Conc (getNumCapabilities)
-import Katip (katipAddNamespace)
+import Katip (SimpleLogPayload, katipAddNamespace, runKatipContextT)
 import Network.HTTP.Client (Manager, newManager)
 import Network.HTTP.Client.TLS (tlsManagerSettings)
+import System.Directory (createDirectoryIfMissing, listDirectory, removeFile)
+import System.FilePath (isExtensionOf, (</>))
 import UnliftIO (concurrently_, race_, throwIO)
+import UnliftIO.Async (mapConcurrently_)
+import UnliftIO.Exception (catchAny)
 
 import Ecluse.Boot
 import Ecluse.Composition (
@@ -101,11 +105,14 @@ import Ecluse.Composition (
  )
 import Ecluse.Composition qualified as Composition
 import Ecluse.Config (
-    AppConfig (cfgPort, cfgPrivateConnectionsPerHost, cfgPublicConnectionsPerHost, cfgServeMaxInFlight, cfgShutdownDrainTimeout),
+    AppConfig (cfgCveDbPollInterval, cfgMaxOsvDbBytes, cfgMounts, cfgOsvDataDir, cfgPort, cfgPrivateConnectionsPerHost, cfgPublicConnectionsPerHost, cfgServeMaxInFlight, cfgShutdownDrainTimeout, cfgVulnerabilityDatabaseBucket),
  )
 import Ecluse.Core.Credential (AuthToken (..), currentToken)
 import Ecluse.Core.Credential.Refresh (CredentialReporters (CredentialReporters, crBreakerReporter, crRefreshReporter))
-import Ecluse.Core.Ecosystem (Ecosystem (Npm), parseEcosystem, prefixFor)
+import Ecluse.Core.Cve.Slot (CveSlot, newCveSlot, withSlotLookup)
+import Ecluse.Core.Cve.Sync (SyncEnv (..), SyncSchedule (SyncSchedule, schedBootBackoff, schedPollDelay), bootBackoffDelays, runCveSync, s3CveFetch)
+import Ecluse.Core.Ecosystem (Ecosystem (Npm), ecosystemName, parseEcosystem, prefixFor)
+import Ecluse.Core.Osv.Schema (osvDbFileName)
 import Ecluse.Core.Queue (newEnqueueBuffer)
 import Ecluse.Core.Registry (
     ParseError (..),
@@ -124,7 +131,8 @@ import Ecluse.Core.Server.Metadata (ManifestCaching (Cached), newNpmMetadataClie
 import Ecluse.Core.Telemetry.Metrics (BreakerSource (CredentialMint, EffectfulRule), Provider (CodeArtifact), Upstream (Public))
 import Ecluse.Core.Worker (WorkerPolicies, WorkerPolicy (..), runWorkerM, workerLoop)
 import Ecluse.Env (Env, envDdContext, envLogEnv, envManager, envMetadataCache, envMetrics, envTelemetry, newWorkerHeartbeat, withEnvWithAdmission, workerRuntimeOf)
-import Ecluse.Server (MountBinding (..), ServerConfig (scDrainTimeout, scPort), ShutdownDrainTimeout (ShutdownDrainTimeout), mkServerConfig)
+import Ecluse.Pilot.Export (buildS3Env)
+import Ecluse.Server (MountBinding (..), ServerConfig (scCheckReady, scDrainTimeout, scPort), ShutdownDrainTimeout (ShutdownDrainTimeout), mkServerConfig)
 import Ecluse.Server qualified as Server
 import Ecluse.Telemetry.Correlation (ddPayloadNow)
 import Ecluse.Telemetry.Instruments (metricsPortOf)
@@ -174,15 +182,19 @@ runProxy bootEnv = do
     -- the static token, or the CodeArtifact mint (whose inputs are validated and which
     -- mints once eagerly, so a misconfiguration fails loudly here at boot).
     providers <- initCredentialProviders credentialReporters env >>= orExit (T.unlines . map renderBootError)
-    -- The rules' boot-bound capabilities. No CVE sync task exists yet, so no
-    -- advisory database is ever loaded and AllowIfRemediatesCve abstains; the sync
-    -- slice replaces the acquisition with its swap slot's bracketed read.
-    let ruleDeps =
+    -- The advisory-database sync plan: with a bucket configured, every configured
+    -- mount ecosystem gets its own slot (the shadow-swap read side), its own
+    -- supervised sync task, and its own one-way first-sync readiness flag --
+    -- independent per ecosystem, so one ecosystem's missing artifact never holds
+    -- back another's. Without a bucket the map is empty: rules abstain and
+    -- readiness is ungated.
+    cveSyncPlan <- planCveSync env
+    let ruleDepsFor eco =
             RuleDeps
-                { rdWithCveLookup = \use -> use Nothing
+                { rdWithCveLookup = maybe (\use -> use Nothing) (withSlotLookup . csSlot) (Map.lookup eco cveSyncPlan)
                 , rdBreakerReporter = deferredBreakerReporter deferredMetrics EffectfulRule
                 }
-    bindings <- planMounts mountBindingFor getCurrentTime ruleDeps providers config >>= orExit (T.unlines . map renderBootError)
+    bindings <- planMounts mountBindingFor getCurrentTime ruleDepsFor providers config >>= orExit (T.unlines . map renderBootError)
     publishTargets <- orExit (T.unlines . map renderBootError) (planPublishTargets providers config)
     -- Select the mirror-queue backend from config (the GCP arm is a fail-loud
     -- "not built" boot error, never a silent fall-through); the resulting plan is
@@ -215,6 +227,9 @@ runProxy bootEnv = do
             (mkServerConfig bindings)
                 { scPort = cfgPort env
                 , scDrainTimeout = ShutdownDrainTimeout (cfgShutdownDrainTimeout env)
+                , -- Ready once every configured ecosystem's advisory database has
+                  -- first-synced (one-way flips; vacuously ready with no bucket).
+                  scCheckReady = allM (readTVarIO . csReady) (Map.elems cveSyncPlan)
                 }
     -- Log each mount's resolved rule boot order so an operator sees at start-up exactly
     -- how their policy will resolve (highest precedence first, then name).
@@ -275,13 +290,26 @@ runProxy bootEnv = do
         -- the rest of the run. They are the no-op-meter instruments when telemetry
         -- is off, so this is inert in that posture.
         installMetrics deferredMetrics (envMetrics builtEnv)
-        -- The enqueue-buffer drain loop never returns, so it is raced against the
-        -- services: when they finish (shutdown), the race cancels it, and any
-        -- still-buffered jobs are dropped -- the queue's safe loss (re-enqueued on
-        -- the next demand), so the drain never holds up shutdown.
+        -- The enqueue-buffer drain loop and the advisory sync tasks never return,
+        -- so they are raced against the services: when the services finish
+        -- (shutdown), the race cancels them. A dropped buffered job is the queue's
+        -- safe loss (re-enqueued on the next demand), and a cancelled sync simply
+        -- resumes from the remote artifact on next boot, so neither holds up
+        -- shutdown. Each sync task runs its boot burst immediately, so a healthy
+        -- deployment is rules-engine complete within seconds of boot.
+        let syncSchedule =
+                SyncSchedule
+                    { schedBootBackoff = bootBackoffDelays
+                    , schedPollDelay = round (cfgCveDbPollInterval env) * 1_000_000
+                    }
+            syncTasks =
+                [ runKatipContextT (envLogEnv builtEnv) (mempty :: SimpleLogPayload) "cve-sync" $
+                    runCveSync (csEnv handle) syncSchedule (atomically (writeTVar (csReady handle) True))
+                | handle <- Map.elems cveSyncPlan
+                ]
         race_
             (runServices serverConfig (workerPoliciesFor builtEnv bindings) builtEnv)
-            drainEnqueueBuffer
+            (concurrently_ drainEnqueueBuffer (mapConcurrently_ id syncTasks))
 
 {- Report-worthy event counts for the enqueue-buffer warnings: the first, then every
 'Composition.mirrorEnqueueReportInterval'-th, mirroring the bounded memory queue's
@@ -289,6 +317,55 @@ rate-limited drop reporting. The metric alongside counts every event; only the l
 line is rate-limited. -}
 enqueueReportWorthy :: Int -> Bool
 enqueueReportWorthy n = n == 1 || n `mod` Composition.mirrorEnqueueReportInterval == 0
+
+{- One configured ecosystem's advisory-sync wiring: the slot its mount's rules
+borrow through, the one-way first-sync readiness flag, and the sync task's
+environment. -}
+data CveSyncHandle = CveSyncHandle
+    { csSlot :: CveSlot
+    , csReady :: TVar Bool
+    , csEnv :: SyncEnv
+    }
+
+{- Build the advisory-sync plan from config: nothing without a configured
+vulnerability-database bucket; otherwise one 'CveSyncHandle' per configured
+mount ecosystem, each against its own stable per-ecosystem object key and
+canonical on-disk path under the OSV data dir. Prepares the data dir (created
+if missing; stray @.tmp@ downloads from an interrupted run swept) so the sync
+tasks start clean. Note the readiness consequence: an operator who mounts an
+ecosystem Pilot does not compile has declared an artifact that never arrives,
+and the pod honestly never reports ready. -}
+planCveSync :: AppConfig -> IO (Map.Map Ecosystem CveSyncHandle)
+planCveSync appCfg = case cfgVulnerabilityDatabaseBucket appCfg of
+    Nothing -> pure Map.empty
+    Just bucket -> do
+        let dataDir = cfgOsvDataDir appCfg
+        createDirectoryIfMissing True dataDir
+        sweepStaleTemps dataDir
+        awsEnv <- buildS3Env appCfg
+        fmap Map.fromList . forM (Map.keys (cfgMounts appCfg)) $ \eco -> do
+            slot <- newCveSlot
+            ready <- newTVarIO False
+            let key = osvDbFileName (ecosystemName eco)
+                syncEnv =
+                    SyncEnv
+                        { syncFetch = s3CveFetch awsEnv bucket (toText key) (cfgMaxOsvDbBytes appCfg)
+                        , syncEcosystem = eco
+                        , syncDbPath = dataDir </> key
+                        , syncSlot = slot
+                        }
+            pure (eco, CveSyncHandle{csSlot = slot, csReady = ready, csEnv = syncEnv})
+
+-- Sweep stray in-progress downloads an interrupted run left beside the
+-- canonical artifacts (relevant to in-pod container restarts, where an
+-- emptyDir survives). Best-effort: an unreadable dir is a fresh start.
+sweepStaleTemps :: FilePath -> IO ()
+sweepStaleTemps dataDir =
+    ( do
+        entries <- listDirectory dataDir
+        forM_ [e | e <- entries, "tmp" `isExtensionOf` e] (\e -> removeFile (dataDir </> e) `catchAny` const pass)
+    )
+        `catchAny` const pass
 
 {- Run the server and the mirror worker concurrently over one composition-root
 'Env', the shape the single-process program uses. The two are independent (each

@@ -24,26 +24,35 @@ spec :: Spec
 spec = describe "rulePolicySpec" $ do
     describe "resolveJson" $ do
         it "overrides a default rule's precedence" $
-            resolveJson "{\"rules\":{\"min-age\":{\"precedence\":150}}}"
-                `shouldBe` Right [PrecededRule 150 (AllowIfOlderThan (7 * 86400))]
+            resolveJson "{\"rules\":{\"min-age\":{\"precedence\":175}}}"
+                `shouldBe` Right
+                    [ PrecededRule defaultAllowIfRemediatesCvePrecedence AllowIfRemediatesCve
+                    , PrecededRule 175 (AllowIfOlderThan (7 * 86400))
+                    ]
 
         it "adds a new rule that carries a full type at its type's default precedence" $
             resolveJson "{\"rules\":{\"deny-scripts\":{\"type\":\"DenyInstallTimeExecution\"}}}"
                 `shouldBe` Right
                     [ PrecededRule defaultAllowIfOlderThanPrecedence (AllowIfOlderThan (7 * 86400))
+                    , PrecededRule defaultAllowIfRemediatesCvePrecedence AllowIfRemediatesCve
                     , PrecededRule defaultDenyInstallTimeExecutionPrecedence DenyInstallTimeExecution
                     ]
 
         it "adds a new rule with an explicit precedence" $
-            resolveJson "{\"rules\":{\"deny-scripts\":{\"type\":\"DenyInstallTimeExecution\",\"precedence\":250}}}"
+            resolveJson "{\"rules\":{\"deny-scripts\":{\"type\":\"DenyInstallTimeExecution\",\"precedence\":275}}}"
                 `shouldBe` Right
                     [ PrecededRule defaultAllowIfOlderThanPrecedence (AllowIfOlderThan (7 * 86400))
-                    , PrecededRule 250 DenyInstallTimeExecution
+                    , PrecededRule defaultAllowIfRemediatesCvePrecedence AllowIfRemediatesCve
+                    , PrecededRule 275 DenyInstallTimeExecution
                     ]
 
         it "suppresses a default rule with enabled:false" $
             resolveJson "{\"rules\":{\"min-age\":{\"enabled\":false}}}"
-                `shouldBe` Right []
+                `shouldBe` Right [PrecededRule defaultAllowIfRemediatesCvePrecedence AllowIfRemediatesCve]
+
+        it "suppresses the default remediation fast lane with enabled:false" $
+            resolveJson "{\"rules\":{\"remediation-fast-track\":{\"enabled\":false}}}"
+                `shouldBe` Right [PrecededRule defaultAllowIfOlderThanPrecedence (AllowIfOlderThan (7 * 86400))]
 
         it "adds an AllowScope rule from a scope field" $
             resolveJson "{\"rules\":{\"trusted\":{\"type\":\"AllowScope\",\"scope\":\"myorg\"}}}"
@@ -57,7 +66,10 @@ spec = describe "rulePolicySpec" $ do
 
         it "accepts a restated type on a patch that matches the default's kind" $
             resolveJson "{\"rules\":{\"min-age\":{\"type\":\"AllowIfOlderThan\",\"ageSeconds\":100}}}"
-                `shouldBe` Right [PrecededRule defaultAllowIfOlderThanPrecedence (AllowIfOlderThan 100)]
+                `shouldBe` Right
+                    [ PrecededRule defaultAllowIfOlderThanPrecedence (AllowIfOlderThan 100)
+                    , PrecededRule defaultAllowIfRemediatesCvePrecedence AllowIfRemediatesCve
+                    ]
 
         it "rejects a restated type on a patch that changes the default's kind" $
             resolveJson "{\"rules\":{\"min-age\":{\"type\":\"DenyInstallTimeExecution\"}}}"

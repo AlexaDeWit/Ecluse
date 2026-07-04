@@ -45,7 +45,7 @@ module Ecluse.Core.Cve (
 
 import UnliftIO.Exception (finally)
 
-import Ecluse.Core.Cve.Internal (AdvisoryRange (..), CveDbRejected (..), advisoriesQuery, openHardenedConnection, probeQuery)
+import Ecluse.Core.Cve.Internal (AdvisoryRange (..), CveDbRejected (..), advisoriesQuery, openHardenedConnection, probeQuery, provenanceQuery)
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Version (compareVersions, mkVersion)
 
@@ -80,6 +80,12 @@ data CveDb = CveDb
     {- ^ Release the artifact's connection. Owner-only; the artifact must no
     longer be read through this handle's view afterwards.
     -}
+    , cveDbMeta :: [(Text, Text)]
+    {- ^ The artifact's @meta@ provenance rows (Pilot version, ecosystem, build
+    timestamp, source URL, row count), snapshotted at open, key-sorted. The
+    audit surface that ties this handle's decisions to the exact database that
+    produced them.
+    -}
     }
 
 {- | Open an @osv.db@ artifact and build the owning handle over it, or reject
@@ -88,18 +94,21 @@ the artifact ('CveDbRejected') with its connection already closed.
 openCveDb :: Ecosystem -> FilePath -> IO (Either CveDbRejected CveDb)
 openCveDb eco dbFile = do
     opened <- openHardenedConnection eco dbFile
-    pure $ case opened of
-        Left rejection -> Left rejection
-        Right conn ->
-            Right
-                CveDb
-                    { cveDbLookup =
-                        CveLookup
-                            { cveRemediationProbe = probeQuery conn
-                            , cveAdvisoriesFor = advisoriesQuery conn
-                            }
-                    , cveDbClose = close conn
-                    }
+    case opened of
+        Left rejection -> pure (Left rejection)
+        Right conn -> do
+            meta <- provenanceQuery conn
+            pure $
+                Right
+                    CveDb
+                        { cveDbLookup =
+                            CveLookup
+                                { cveRemediationProbe = probeQuery conn
+                                , cveAdvisoriesFor = advisoriesQuery conn
+                                }
+                        , cveDbClose = close conn
+                        , cveDbMeta = meta
+                        }
 
 {- | Bracket a lexically-scoped use of an artifact: open, hand the consumer
 view to the action, and close on any exit. A rejected artifact short-circuits

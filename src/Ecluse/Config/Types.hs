@@ -163,6 +163,8 @@ data AppConfig = AppConfig
     , cfgOsvDataDir :: FilePath
     , cfgOsvExportBaseUrl :: Text
     , cfgVulnerabilityDatabaseBucket :: Maybe Text
+    , cfgCveDbPollInterval :: NominalDiffTime
+    , cfgMaxOsvDbBytes :: Int
     }
     deriving stock (Eq, Show)
 

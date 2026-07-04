@@ -594,14 +594,16 @@ all surface from one call.
 
 The ecosystem-to-adapter resolver, the wall-clock source, and the rules' boot-bound
 capabilities are injected (the composition root supplies @mountBindingFor@,
-'Data.Time.getCurrentTime', and its 'RuleDeps'), so this validation opens no socket.
+'Data.Time.getCurrentTime', and each ecosystem's 'RuleDeps' -- per ecosystem, because
+a mount's rules must borrow /their/ ecosystem's advisory database, never a
+neighbour's), so this validation opens no socket.
 It is 'IO' only because 'composeBindings' 'prepare's each mount's rules (allocating
 per-rule engine state once at boot).
 -}
 planMounts ::
     (Ecosystem -> Maybe PackumentDeps -> Maybe PublishDeps -> Maybe MountBinding) ->
     IO UTCTime ->
-    RuleDeps ->
+    (Ecosystem -> RuleDeps) ->
     CredentialProviders ->
     Config ->
     IO (Either [BootError] [MountBinding])
@@ -616,11 +618,11 @@ served rather than the @501@ stub). Errors aggregate across every mount.
 composeBindings ::
     (Ecosystem -> Maybe PackumentDeps -> Maybe PublishDeps -> Maybe MountBinding) ->
     IO UTCTime ->
-    RuleDeps ->
+    (Ecosystem -> RuleDeps) ->
     CredentialProviders ->
     Config ->
     IO (Either [BootError] [MountBinding])
-composeBindings resolveAdapter clock ruleDeps providers config = do
+composeBindings resolveAdapter clock ruleDepsFor providers config = do
     let pubDepsMapE = sequence $ Map.mapWithKey (\eco mcfg -> publishDepsFor eco (configApp config) mcfg limits helpMessage) (cfgMounts (configApp config))
     let (pubErrs, pubDepsMap) = case pubDepsMapE of
             Left errs -> (errs, Map.empty)
@@ -720,7 +722,7 @@ composeBindings resolveAdapter clock ruleDeps providers config = do
         -- Prepare the resolved policy into the engine's runtime rules, closing the
         -- injected 'RuleDeps' into them; an effectful rule (AllowIfRemediatesCve)
         -- gets its resilience policy and breaker allocated here, once per mount.
-        prepared <- prepare ruleDeps (mountPolicy mount)
+        prepared <- prepare (ruleDepsFor (mountEcosystem mount)) (mountPolicy mount)
         let regs = mountRegistries mount
         pure
             PackumentDeps
