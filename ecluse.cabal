@@ -100,6 +100,8 @@ library ecluse-core
     Ecluse.Core.Credential.CodeArtifact
     Ecluse.Core.Credential.Refresh
     Ecluse.Core.Credential.Refresh.Internal
+    Ecluse.Core.Cve
+    Ecluse.Core.Cve.Internal
     Ecluse.Core.Ecosystem
     Ecluse.Core.InFlight
     Ecluse.Core.Osv.Schema
@@ -187,6 +189,7 @@ library ecluse-core
     , clock                 ^>=0.8
     , containers            ^>=0.7
     , crypton               ^>=1.0
+    , sqlite-simple         ^>=0.4
     , http-client           ^>=0.7
     , http-client-tls       ^>=0.3.6
     , http-types            ^>=0.12
@@ -361,6 +364,7 @@ library ecluse-test-support
   hs-source-dirs:  test/support
   exposed-modules:
     Ecluse.Test.Containers
+    Ecluse.Test.Cve
     Ecluse.Test.Osv
     Ecluse.Test.Package
     Ecluse.Test.Port
@@ -427,6 +431,7 @@ test-suite ecluse-core-unit
     Ecluse.CredentialSpec
     Ecluse.Credential.CodeArtifactSpec
     Ecluse.Credential.Refresh.InternalSpec
+    Ecluse.CveSpec
     Ecluse.InFlightSpec
     Ecluse.Package.FilterSpec
     Ecluse.Package.IntegritySpec
@@ -532,6 +537,7 @@ test-suite ecluse-unit
     Ecluse.DredgerSpec
     Ecluse.EnvSpec
     Ecluse.LogSpec
+    Ecluse.Core.CveSpec
     Ecluse.Core.Security.HostSpec
     Ecluse.ManifestSpec
     Ecluse.PilotSpec

@@ -55,6 +55,7 @@ spec = describe "SQLite OSV Compilation" $ do
         rows <- query_ conn "SELECT package_name, cve_id, fixed_version, severity FROM package_vulnerability_ranges" :: IO [(Text, Text, Maybe Text, Maybe Text)]
         stamped <- query_ conn "PRAGMA user_version" :: IO [Only Int]
         metaRows <- query_ conn "SELECT key, value FROM meta" :: IO [(Text, Text)]
+        indexes <- query_ conn "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'package_vulnerability_ranges' AND name LIKE 'idx_%' ORDER BY name" :: IO [Only Text]
         close conn
         catchIOError (removeFile dbFile) (const $ pure ())
 
@@ -64,6 +65,9 @@ spec = describe "SQLite OSV Compilation" $ do
         takeFileName dbFile `shouldBe` "npm-osv-schema1.db"
         rows `shouldBe` [("hono", "GHSA-2234-fmw7-43wr", Just "4.6.5", Just "MODERATE")]
         map fromOnly stamped `shouldBe` [osvSchemaEpoch]
+        -- The reader's lookups ride these: by-package fetch and the exact
+        -- (name, fixed) remediation probe.
+        map fromOnly indexes `shouldBe` ["idx_package_fixed", "idx_package_name"]
 
         let meta = Map.fromList metaRows
         Map.keys meta `shouldBe` ["built_at", "ecosystem", "pilot_version", "row_count", "source_url"]

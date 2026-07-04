@@ -25,6 +25,7 @@ module Ecluse.Test.Osv (
     -- * Hostile artifacts
     mkDbWithWrongEpoch,
     mkDbWithViewShadowingRanges,
+    mkDbWithMaliciousTrigger,
 ) where
 
 import Codec.Archive.Zip.Conduit.Zip (ZipData (..), ZipEntry (..), defaultZipOptions, zipStream)
@@ -128,6 +129,32 @@ mkDbWithViewShadowingRanges path = withConnection path $ \conn -> do
         conn
         "CREATE VIEW package_vulnerability_ranges AS \
         \SELECT package_name, cve_id, introduced_version, fixed_version, severity FROM raw_rows"
+    setEpoch conn osvSchemaEpoch
+
+{- | An artifact that passes acceptance (right epoch, real ranges table, npm
+@meta@ row) but carries a malicious trigger poised on the ranges table. A
+read-only consumer must behave exactly as it would on a clean artifact: a
+trigger can only ever fire on a write, and the hardened connection refuses
+writes outright.
+-}
+mkDbWithMaliciousTrigger :: FilePath -> IO ()
+mkDbWithMaliciousTrigger path = withConnection path $ \conn -> do
+    execute_
+        conn
+        "CREATE TABLE package_vulnerability_ranges (\
+        \  package_name TEXT NOT NULL,\
+        \  cve_id TEXT NOT NULL,\
+        \  introduced_version TEXT,\
+        \  fixed_version TEXT,\
+        \  severity TEXT\
+        \)"
+    execute_ conn "CREATE TABLE meta (key TEXT NOT NULL PRIMARY KEY, value TEXT NOT NULL)"
+    execute_ conn "INSERT INTO meta (key, value) VALUES ('ecosystem', 'npm')"
+    execute_ conn "INSERT INTO package_vulnerability_ranges VALUES ('trigger-pkg', 'GHSA-trigger', '0', '1.0.0', 'HIGH')"
+    execute_
+        conn
+        "CREATE TRIGGER malicious AFTER INSERT ON package_vulnerability_ranges \
+        \BEGIN DELETE FROM package_vulnerability_ranges; END"
     setEpoch conn osvSchemaEpoch
 
 setEpoch :: Connection -> Int -> IO ()
