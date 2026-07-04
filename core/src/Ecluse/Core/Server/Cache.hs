@@ -1,75 +1,73 @@
 {- | The short-TTL, size-bounded metadata cache shared by the serve paths.
 
 Resolving a package re-fetches its upstream packument, parses it, and evaluates
-the rules. To avoid repeating the fetch+parse, the result -- a coherent pair of the
-parsed __packument metadata__ ('PackageInfo') and the __raw document__ it was decoded
-from ('CacheEntry') -- is held here in a short-TTL, size-bounded, STM-backed cache
-(the @cache@ library backs the TTL store). Both serve paths share it: a packument
-request and the tarball-gating fetch that follows reuse one fetch+parse, and
-concurrent resolutions of a popular package __collapse to one upstream call__
-(single-flight).
+the rules. To avoid repeating the fetch and parse, the result (a coherent pair of
+the parsed __packument metadata__, 'PackageInfo', and the __raw document__ it was
+decoded from, 'CacheEntry') is held here in a short-TTL, size-bounded, STM-backed
+cache (the @cache@ library backs the TTL store). Both serve paths share it: a
+packument request and the tarball-gating fetch that follows reuse one fetch and
+parse, and concurrent resolutions of a popular package __collapse to one upstream
+call__ (single-flight).
 
 == Per-source key
 
-A packument is fetched from __two distinct upstreams__ -- a private origin and a public
-origin -- whose documents differ for the same package, so one entry cannot represent
-both. The key is therefore @(source, package)@: the source is the upstream's base
-URL, which distinguishes any cached origin without naming a credential, so distinct
-upstreams never cross-contaminate and the key never blurs the trust split.
+A packument is fetched from two distinct upstreams, a private origin and a public
+origin, whose documents differ for the same package, so one entry cannot represent
+both. The key is @(source, package)@: the source is the upstream's base URL, which
+distinguishes any cached origin without naming a credential, so distinct upstreams
+never cross-contaminate and the key never blurs the trust split.
 
 == Credential-free; sharing is the caller's policy
 
-This cache is __strategy-neutral__: its key carries __no credential dimension__ (it
-is @(source, package)@) and its value is a canonical document, so it stores nothing
-derived from a caller's credential. Whether a given origin is /handed/ to it -- and so
-shared across clients -- is the serve path's decision, not the cache's.
+The key carries __no credential dimension__ and the value is a canonical document,
+so the cache stores nothing derived from a caller's credential. Whether a given
+origin is handed to it, and so shared across clients, is the serve path's decision.
 
-Under the default @passthrough@ access strategy only the __anonymous public origin__ is
-cached: the trusted private upstream is the __per-client authority__ -- it re-authorises
-each client's request with that client's own forwarded credential -- so the serve path
-fetches it per request and never hands it to this cache. Were a private entry cached
-under @passthrough@, the credential-free key would let one client's entry serve another
-client's private document within the TTL, bypassing the upstream's authorisation. The
-public origin is anonymous (no client credential), so one shared entry serves every client
-without crossing any trust boundary. Other strategies make a shared private entry safe
-by authorising each serve before it is returned (see
-@docs\/architecture\/access-model.md@ → "Caching"); that gate lives on the serve path,
-never in this credential-free store.
+Under the default @passthrough@ access strategy only the anonymous public origin is
+cached. The trusted private upstream is the per-client authority: it re-authorises
+each request with that client's own forwarded credential, so the serve path fetches
+it per request and never hands it here. Were a private entry cached under
+@passthrough@, the credential-free key would let one client's entry serve another
+client's private document within the TTL, bypassing the upstream's authorisation.
+The public origin is anonymous, so one shared entry serves every client without
+crossing a trust boundary. Other strategies make a shared private entry safe by
+authorising each serve before it is returned (see
+@docs\/architecture\/access-model.md@ → "Caching"); that gate lives on the serve
+path, never in this store.
 
 == Coherent pair
 
-An entry holds the parsed 'PackageInfo' __and__ the raw 'Value' it was decoded from,
-so a hit returns a typed view and the exact bytes that produced it -- never a
-mismatched pair. The packument serve path needs both: it decides over the typed view
-but serves the raw document edited in place, and the two must describe the same fetch.
+An entry holds the parsed 'PackageInfo' __and__ the raw 'Value' it was decoded
+from, so a hit returns a typed view and the exact bytes that produced it. The
+packument serve path needs both: it decides over the typed view but serves the raw
+document edited in place, and the two must describe the same fetch.
 
 What is cached is the __metadata, not the verdict__. The rules are re-evaluated on
 the cached metadata each request, so time-sensitive rules
 ('Ecluse.Core.Rules.Types.AllowIfOlderThan') and the separately-synced advisory
-tier stay correct -- only each upstream's fetch+parse is memoised, never a
-decision. The TTL is short and brief staleness is benign and even aligned with the
-resilience posture: a brand-new publish need not appear instantly (see
-@docs\/architecture\/web-layer.md@ → "Metadata cache").
+tier stay correct; only each upstream's fetch and parse is memoised. The TTL is
+short, and brief staleness is benign: a brand-new publish need not appear instantly
+(see @docs\/architecture\/web-layer.md@ → "Metadata cache").
 
 Two properties the @cache@ library does not provide on its own are layered here:
 
-* __Resident-byte budget with recency-aware eviction.__ @cache@ expires by TTL but bounds
-  neither entry count nor memory. Each entry is wrapped with an estimate of its resident
-  footprint (a heavy packument, parsed plus raw, costs many times its wire size) and a
-  last-access stamp bumped on every hit. An insert first purges expired entries, then evicts
-  the __least-recently-used__ entries until the incoming entry fits within both a
-  resident-byte budget ('cacheMaxBytes') and an entry count ('cacheMaxEntries'). Evicting by
-  recency keeps a re-accessed hot head resident under pressure while shedding the one-shot
-  tail; the byte budget bounds memory more faithfully than a count alone. The incoming entry
-  is always admitted (the per-entry ceiling is the upstream body cap, not this budget).
+* __Resident-byte budget with recency-aware eviction.__ @cache@ expires by TTL but
+  bounds neither entry count nor memory. Each entry is wrapped with an estimate of
+  its resident footprint (a heavy packument, parsed plus raw, costs many times its
+  wire size) and a last-access stamp bumped on every hit. An insert first purges
+  expired entries, then evicts the __least-recently-used__ entries until the incoming
+  entry fits within both a resident-byte budget ('cacheMaxBytes') and an entry count
+  ('cacheMaxEntries'). Recency keeps a re-accessed hot head resident under pressure
+  while shedding the one-shot tail; the byte budget bounds memory more faithfully
+  than a count alone. The incoming entry is always admitted (the per-entry ceiling is
+  the upstream body cap, not this budget).
 
 * __Single-flight.__ @cache@'s own @fetchWithCache@ is lookup-then-fetch in plain
   'IO', so two concurrent misses would both fetch. 'resolveMetadata' instead
-  installs an in-flight marker atomically, so the first miss fetches while
-  concurrent misses wait on its result -- collapsing a thundering herd to one
-  upstream call. The leader inserts the result into the store __before__ removing
-  its in-flight marker, so a caller arriving in the instant the fetch returns still
-  finds either the store entry or the marker (never a gap) and never re-leads a
+  installs an in-flight marker atomically, so the first miss fetches while concurrent
+  misses wait on its result. The leader inserts the result into the store __before__
+  removing its in-flight marker, so a caller arriving the instant the fetch returns
+  still finds either the store entry or the marker (never a gap) and never re-leads a
   redundant fetch.
 
 == Two coherent stores: the full packument and one version
@@ -81,38 +79,36 @@ machinery, 'SingleFlight', is shared between them):
     @(source, package)@, holding the 'CacheEntry' described above; and
 
   * a __single-version__ store ('resolveVersion' \/ 'cachedVersion'), keyed by
-    @(source, package, version)__, holding just one version's
+    @(source, package, version)@, holding just one version's
     'Ecluse.Core.Package.PackageDetails' (or its determined absence, a cached
-    'Nothing') -- the cold tarball gate's selectively-parsed result.
+    'Nothing'): the cold tarball gate's selectively-parsed result.
 
-They are __isolated on writes__: a single-version resolution caches under its own key and
-__never writes back__ to the full-packument store, so a cold tarball gate cannot
-materialise a whole packument into the shared full cache (the residency the single-version
-path exists to avoid). The serve path's single-version read consults the warm
-full-packument store __read-only__ first (a packument @GET@ followed by its tarball gate
-still collapses to one upstream call), and only falls back to leading its own
-selective fetch into the version store when the full entry is cold -- so the version store
-holds entries for versions whose packument was never fetched in full, sized to the same
-short TTL and budget. Both stores enforce the resident-byte budget, and each reports its own
-residency gauge: the full-packument store under @ecluse.metadata_cache.resident_bytes@ and
-the single-version store under @ecluse.metadata_cache.version.resident_bytes@. The
-hit\/miss counter and the entry-count occupancy gauge stay about the full-packument store.
+They are __isolated on writes__: a single-version resolution caches under its own
+key and __never writes back__ to the full-packument store, so a cold tarball gate
+cannot materialise a whole packument into the shared full cache. The serve path's
+single-version read consults the warm full-packument store __read-only__ first (a
+packument @GET@ followed by its tarball gate still collapses to one upstream call),
+and only falls back to leading its own selective fetch into the version store when
+the full entry is cold. Both stores enforce the resident-byte budget, and each
+reports its own residency gauge: the full-packument store under
+@ecluse.metadata_cache.resident_bytes@ and the single-version store under
+@ecluse.metadata_cache.version.resident_bytes@. The hit\/miss counter and the
+entry-count occupancy gauge stay about the full-packument store.
 
 A third store memoises the __assembled representation__ ('resolveAssembled'): the
 encoded merged document, keyed by its derived validator
 ('Ecluse.Core.Server.Pipeline.Packument.packumentETag'). The key is a fingerprint of
-every input the document is a function of -- the origin bodies (private included, by
-content digest), the survivor sets, the mount base -- which makes the store
+every input the document is a function of (the origin bodies, private included by
+content digest; the survivor sets; the mount base), which makes the store
 __content-addressed__: an entry can never be served stale, because changed inputs
-produce a different key and simply miss. Staleness governance is therefore not the
-TTL's job here (it only trims dead entries early); the resident-byte budget is the
-real bound. Cross-client safety follows from the same property: a lookup key includes
-the digest of the private document __this request's own authorised fetch returned__,
-so a client can only ever hit an entry whose bytes its own inputs would deterministically
-re-produce -- the transform is shared, never the authorisation and never another
-client's view (the private-origin caching prohibition is about credential-blind
-keying, which a content key is not). Residency gauge:
-@ecluse.metadata_cache.assembled.resident_bytes@.
+produce a different key and simply miss. The resident-byte budget is the real bound
+here, not the TTL, which only trims dead entries early. Cross-client safety follows
+from the same property: a lookup key includes the digest of the private document
+__this request's own authorised fetch returned__, so a client can only hit an entry
+whose bytes its own inputs would deterministically re-produce. The transform is
+shared, never the authorisation and never another client's view (the private-origin
+caching prohibition is about credential-blind keying, which a content key is not).
+Residency gauge: @ecluse.metadata_cache.assembled.resident_bytes@.
 -}
 module Ecluse.Core.Server.Cache (
     -- * Configuration
@@ -183,7 +179,7 @@ and the resident-byte budget it keeps the held entries under before it evicts.
 data CacheConfig = CacheConfig
     { cacheTtl :: NominalDiffTime
     {- ^ How long a cached 'CacheEntry' is served before it is re-fetched. Short
-    by design -- brief staleness is benign, and conditional-GET revalidates.
+    by design: brief staleness is benign, and conditional-GET revalidates.
     -}
     , cacheMaxEntries :: Int
     {- ^ The maximum number of distinct @(source, package)@ entries held; an insert
@@ -212,7 +208,7 @@ defaultCacheConfig =
         , cacheMaxBytes = 256 * 1024 * 1024
         }
 
-{- | Which upstream a cached packument was fetched from -- the dimension that
+{- | Which upstream a cached packument was fetched from: the dimension that
 partitions the cache by source so distinct upstreams never share an entry.
 
 The discriminator is the upstream's __base URL__: an upstream is addressed at a
@@ -228,7 +224,7 @@ newtype Source = Source Text
 
 {- | A coherent cache entry: the parsed 'PackageInfo' paired with the raw 'Value' it
 was decoded from. A hit returns both, so a caller gets a typed view to decide over
-and the exact bytes that produced it -- the packument serve path edits the raw 'Value'
+and the exact bytes that produced it: the packument serve path edits the raw 'Value'
 in place and must keep its typed decision coherent with those bytes.
 -}
 data CacheEntry = CacheEntry
@@ -300,7 +296,7 @@ assembledEntryOverheadBytes = 256
 {- | The key a 'CacheEntry' is cached under: the upstream 'Source' paired with the
 package's identity, rendered to a stable 'Text'. The package identity is distinct
 from a display name so two encodings of the same scoped package share one entry, and
-the source dimension keeps distinct upstreams apart -- equality and ordering match
+the source dimension keeps distinct upstreams apart; equality and ordering match
 @(Source, PackageName)@ identity (the @cache@ library needs a 'Hashable' key, which
 the opaque 'PackageName' does not expose, so the identity is projected to this key
 here rather than via an orphan instance).
@@ -400,7 +396,7 @@ newSingleFlight cfg weigh = do
             }
 
 {- | The metadata-cache handle: the three single-flight stores (the full-packument
-cache, the single-version cache, and the assembled-representation store). Opaque --
+cache, the single-version cache, and the assembled-representation store). Opaque:
 built with 'newMetadataCache' and reached only through the accessors. Lives in the
 composition root (one per process), so every request shares the same caches and their
 connection-collapsing.
@@ -410,13 +406,13 @@ data MetadataCache = MetadataCache
     -- ^ The full-packument store, keyed by @(source, package)@.
     , mcVersion :: SingleFlight VersionKey (Maybe PackageDetails)
     {- ^ The single-version store, keyed by @(source, package, version)@, holding one
-    version's 'PackageDetails' (or its determined absence) -- written only by the
+    version's 'PackageDetails' (or its determined absence), written only by the
     single-version path, never the full path.
     -}
     , mcAssembled :: SingleFlight Text ByteString
     {- ^ The assembled-representation store: the encoded served document, keyed by its
     derived validator's rendered form (a content address over every serve input; see
-    the module header) -- written and read only by the packument serve tail.
+    the module header), written and read only by the packument serve tail.
     -}
     }
 
@@ -455,7 +451,7 @@ The 'Source' partitions the cache: distinct upstreams of the same package resolv
 under distinct keys and never cross-contaminate. The fetch action supplies the origin's
 own credential, so reading through one source never blurs another's trust posture.
 Under the default @passthrough@ strategy only the anonymous public origin is resolved
-here -- the trusted private origin is the per-client authority and is fetched per request,
+here: the trusted private origin is the per-client authority and is fetched per request,
 never cached, so a shared entry can never serve one client another's private document.
 
 The result is always re-decided by the caller's rules on each request -- only the
@@ -495,7 +491,7 @@ exactly as 'resolveMetadata' does for the full packument. The cached value is th
 metadata is cached as 'Nothing' (a negative entry) and re-served without a re-fetch within
 the TTL.
 
-This writes to the single-version store only -- never the full-packument store -- so a cold
+This writes to the single-version store only, never the full-packument store, so a cold
 tarball gate's selective parse cannot materialise a whole packument into the shared full
 cache. Unlike 'resolveMetadata', the single-version store records no hit\/miss counter; a
 leader's insert does refresh the single-version residency gauge
@@ -706,7 +702,7 @@ touch :: SingleFlight k v -> Weighted v -> IO ()
 touch sf weighted = nextStamp sf >>= writeIORef (wStamp weighted)
 
 {- | Look up a package's cached full-packument entry for one 'Source' without fetching on a
-miss -- the cache's read-only view, for inspection and tests. A 'Nothing' is a miss or an
+miss: the cache's read-only view, for inspection and tests. A 'Nothing' is a miss or an
 expired entry; this never triggers a fetch and never collapses (use 'resolveMetadata' for
 the serve path).
 -}
@@ -714,7 +710,7 @@ cachedMetadata :: MetadataCache -> Source -> PackageName -> IO (Maybe CacheEntry
 cachedMetadata cache source name = fmap wValue <$> Cache.lookup (sfStore (mcFull cache)) (cacheKey source name)
 
 {- | Look up a single-version cached entry for one @(source, package, version)@ without
-fetching on a miss -- the version store's read-only view (the hybrid serve path's negative\/
+fetching on a miss: the version store's read-only view (the hybrid serve path's negative\/
 positive lookup before it leads a selective fetch). The outer 'Maybe' is the cache hit\/miss
 (an expired or absent entry is 'Nothing'); the inner @'Maybe' 'PackageDetails'@ is the
 cached result (a version determined absent is a cached @'Just' 'Nothing'@).

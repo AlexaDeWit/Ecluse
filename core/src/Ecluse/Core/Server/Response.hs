@@ -154,8 +154,8 @@ data RejectReason
     deriving stock (Eq, Show)
 
 {- | The name of the rule that decided a refusal, carried for the audit trail and
-the denial body. A 'newtype' over the 'Ecluse.Core.Rules.ruleName' text so a rule
-identity is not just any string.
+the denial body. A 'newtype' over the 'Ecluse.Core.Rules.ruleName' text, so a rule
+identity carries a distinct type rather than a bare 'Text'.
 -}
 newtype RuleName = RuleName Text
     deriving stock (Eq, Ord, Show)

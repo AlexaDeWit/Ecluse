@@ -147,7 +147,7 @@ renderTelemetrySwitch = renderWire
 {- | The telemetry handle held in the composition root: either the off-by-default
 no-op or the enabled providers. Spans and metric instruments are derived from the
 providers it carries; the disabled case carries none, so a layer that reaches for a
-provider finds nothing to emit through -- telemetry is genuinely inert, not merely
+provider finds nothing to emit through -- telemetry is inert, not merely
 unsampled.
 -}
 data Telemetry

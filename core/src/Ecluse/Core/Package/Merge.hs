@@ -120,7 +120,7 @@ alone is /not/ enough: it identifies a source only while there is exactly one
 input per provenance (the npm topology today -- one trusted, one gated). The
 input index stays unambiguous even when several inputs share a provenance (e.g. an
 aggregating private upstream plus a first-party source, both 'TrustedSource'),
-which keeps the plan robust for the multi-source case without a new type. The
+which keeps the plan correct for the multi-source case without a new type. The
 caller pairs each 'SourceId' back to the raw @Value@ it passed at that position.
 -}
 type SourceId = Int

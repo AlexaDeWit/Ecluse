@@ -1,26 +1,24 @@
-{- | Écluse -- a supply-chain resilience proxy for package registries.
+{- | Écluse: a supply-chain policy proxy for package registries.
 
-Écluse (package @ecluse@) is a lightweight proxy that sits between consumers
-(developers, CI) and a package registry, applying a configurable __resilience__
-policy before any dependency reaches a build -- without taking on the cost of
-hosting packages itself. The name is French for a canal lock: a chamber whose
-gates never open at once. That is the posture -- not a wall that blocks, but a
-controlled passage every dependency is held in and cleared through before it is
-admitted to a build.
+Écluse (package @ecluse@) sits between consumers (developers, CI) and a package
+registry, applying a configurable resilience policy before any dependency reaches
+a build, without hosting packages itself. The name is French for a canal lock: a
+chamber whose gates never open at once. Every dependency is held and cleared
+through that controlled passage before it is admitted to a build.
 
 The goal is __resilience, not malware detection__: shrink the blast radius of a
-bad publish -- a hijacked maintainer account, a race-to-publish, a typosquat --
-rather than promise to recognise malice. And Écluse is __not a registry__:
-storage is delegated to whatever backend the operator runs (e.g. AWS
-CodeArtifact, GCP Artifact Registry), and Écluse only governs what may be fetched
-from, and mirrored to, those backends. npm is the first ecosystem; the domain
-model is deliberately ecosystem-agnostic so that PyPI and RubyGems can follow.
+bad publish (a hijacked maintainer account, a race-to-publish, a typosquat)
+rather than promise to recognise malice. Écluse is __not a registry__: storage is
+delegated to whatever backend the operator runs (AWS CodeArtifact, GCP Artifact
+Registry), and Écluse only governs what may be fetched from, and mirrored to,
+those backends. npm is the first ecosystem; the domain model is ecosystem-agnostic
+so PyPI and RubyGems can follow.
 
 == How a request is cleared
 
-Écluse speaks a registry's native protocol across three read-path registries --
-the client's, a /private upstream/ of already-vetted packages, and the /public/
-registry -- and the two request shapes use them differently:
+Écluse speaks a registry's native protocol across three read-path registries (the
+client's, a /private upstream/ of already-vetted packages, and the /public/
+registry), and the two request shapes use them differently:
 
 * A __tarball__ request is gated for that one version: a private-upstream hit is
   streamed unfiltered (already vetted); on a miss, the proxy fetches the
@@ -32,34 +30,34 @@ registry -- and the two request shapes use them differently:
   (private wins a version collision, an integrity divergence is flagged as a
   supply-chain signal, and @latest@ is repointed to the newest survivor).
 
-Two properties run through both shapes: the rules engine is __deny by default__
--- a version is admitted only if some rule allows it and none denies it -- and
+Two properties run through both shapes: the rules engine is __deny by default__ (a
+version is admitted only if some rule allows it and none denies it), and
 __mirroring is demand-driven__, so only versions actually pulled are mirrored,
-and never on the request's critical path.
+never on the request's critical path.
 
 == How the code is organised
 
 Écluse is a __functional core with effects at the edges__: the policy and
 protocol logic is pure and trivially testable, and @IO@ is confined to a thin
-shell. Swappable backends sit behind /handles/ -- records of functions chosen at a
-single composition root -- so a new cloud or a new ecosystem is an added
+shell. Swappable backends sit behind /handles/ (records of functions chosen at a
+single composition root), so a new cloud or a new ecosystem is an added
 implementation behind an existing handle, not a structural change.
 
 The library's vocabulary, roughly from the pure core outward:
 
-* __Domain model__ -- "Ecluse.Core.Package" (the ecosystem-agnostic package vocabulary
+* __Domain model__: "Ecluse.Core.Package" (the ecosystem-agnostic package vocabulary
   the rules reason over), "Ecluse.Core.Version" (version identity and per-ecosystem
   ordering), and "Ecluse.Core.Ecosystem" (the ecosystem tag the rest dispatches on).
-* __Policy__ -- "Ecluse.Core.Rules" (deny-by-default evaluation) over the rule types
+* __Policy__: "Ecluse.Core.Rules" (deny-by-default evaluation) over the rule types
   in "Ecluse.Core.Rules.Types".
-* __Protocol boundary__ -- "Ecluse.Core.Registry" (the registry-protocol handle),
+* __Protocol boundary__: "Ecluse.Core.Registry" (the registry-protocol handle),
   "Ecluse.Core.Registry.Npm.Wire" and "Ecluse.Core.Registry.Npm.Project" (the lenient npm
   wire decoders and their projection onto the domain model),
   "Ecluse.Core.Registry.Npm.Route" (the npm path grammar), and "Ecluse.Core.Server.Route"
   (the shared serve-action 'Route' set and the injected route classifier).
-* __Cloud handles__ -- "Ecluse.Core.Credential" (minting the mirror-target write token)
+* __Cloud handles__: "Ecluse.Core.Credential" (minting the mirror-target write token)
   and "Ecluse.Core.Queue" (the durable mirror-job hand-off to the worker).
-* __Mirror worker__ -- "Ecluse.Core.Worker" (the supervised consume loop that fetches,
+* __Mirror worker__: "Ecluse.Core.Worker" (the supervised consume loop that fetches,
   verifies against the job's integrity digest, and publishes an approved artifact).
 
 'run' is the entry point the @ecluse@ executable invokes (see "Main"). It lives
@@ -114,29 +112,30 @@ import Ecluse.Server (MountBinding (bindingPackumentDeps, bindingPrefix))
 import Ecluse.Telemetry (Telemetry, TelemetrySwitch (TelemetryOff, TelemetryOn), withTelemetry)
 import Ecluse.Telemetry.Resolve (prepareTelemetry)
 
-{- | Start Écluse: the entry point the @ecluse@ executable runs (see "Main").
-
-It assembles the composition root from configuration: it parses the environment
-layer and the optional config document, __validates everything and fails fast at
-boot__ on any problem (a malformed env, an unresolved rule policy, a configured
-mount with no adapter, a credential reference that does not resolve, or a
-mirror-queue backend that is not built in this binary), aggregating the failures so
-a single run reports them all. On success it builds the handles -- the shared HTTP
-@Manager@, the config-selected mirror queue, the metadata cache, the logger, the
-process-global credential provider, and the telemetry substrate (off unless
-@ECLUSE_TELEMETRY@ enables it) -- into an 'Env', derives the served mount bindings,
-then runs the
-server and the mirror worker __concurrently__ over that single 'Env' ('runServer'
-and 'runWorker'). Bracketing the 'Env' (and the telemetry providers) for the
-lifetime of both means their shared resources are torn down along every exit path.
+{- | The boot context assembled once at start-up and handed to each subcommand: the
+validated configuration, the process logger, and the telemetry handle. 'withBootEnv'
+builds it, and the @ecluse@ entry point (see "Ecluse") dispatches the selected
+subcommand over it. The heavier serve- and worker-side handles (the HTTP managers,
+the mirror queue, the metadata cache) are built later, per subcommand (see
+"Ecluse.Proxy").
 -}
 data BootEnv = BootEnv
     { beConfig :: AppConfig
+    -- ^ The application-level configuration slice the subcommands read.
     , beLogEnv :: LogEnv
+    -- ^ The process structured-logging environment.
     , beTelemetry :: Telemetry
+    -- ^ The telemetry handle, inert unless @ECLUSE_TELEMETRY@ enabled it.
     , beConfigFull :: Config
+    {- ^ The whole loaded configuration document, for subcommands that need more than
+    'beConfig' (the serve path's mount and rule wiring, for one).
+    -}
     }
 
+{- | Assemble the 'BootEnv' and run @action@ within it: load and validate the
+configuration (failing fast on any error), apply the runtime posture, build the
+logger, and bracket the telemetry substrate for the action's lifetime.
+-}
 withBootEnv :: (BootEnv -> IO ()) -> IO ()
 withBootEnv action = do
     envVars <- getEnvironment
