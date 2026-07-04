@@ -102,6 +102,8 @@ library ecluse-core
     Ecluse.Core.Credential.Refresh.Internal
     Ecluse.Core.Cve
     Ecluse.Core.Cve.Internal
+    Ecluse.Core.Cve.Slot
+    Ecluse.Core.Cve.Sync
     Ecluse.Core.Ecosystem
     Ecluse.Core.InFlight
     Ecluse.Core.Osv.Schema
@@ -188,6 +190,9 @@ library ecluse-core
     , cache                 ^>=0.1.3
     , clock                 ^>=0.8
     , containers            ^>=0.7
+    , conduit               ^>=1.3
+    , directory             ^>=1.3
+    , filepath              ^>=1.4 || ^>=1.5
     , crypton               ^>=1.0
     , sqlite-simple         ^>=0.4
     , http-client           ^>=0.7
@@ -431,6 +436,8 @@ test-suite ecluse-core-unit
     Ecluse.CredentialSpec
     Ecluse.Credential.CodeArtifactSpec
     Ecluse.Credential.Refresh.InternalSpec
+    Ecluse.Cve.SlotSpec
+    Ecluse.Cve.SyncSpec
     Ecluse.CveSpec
     Ecluse.InFlightSpec
     Ecluse.Package.FilterSpec
@@ -502,6 +509,11 @@ test-suite ecluse-core-unit
     , network           ^>=3.2
     , retry             ^>=0.9
     , scientific        ^>=0.3
+    , stm               ^>=2.5
+    , conduit           ^>=1.3
+    , directory         ^>=1.3
+    , filepath          ^>=1.4 || ^>=1.5
+    , temporary         ^>=1.3
     , text              ^>=2.1
     , text-short        ^>=0.1.6
     , time              ^>=1.12
@@ -623,6 +635,7 @@ test-suite ecluse-integration
   hs-source-dirs:     test/integration
   other-modules:
     Ecluse.AwsEndToEndSpec
+    Ecluse.CveSyncSpec
     Ecluse.Integration.Ministack
     Ecluse.MirrorQueueSpec
     Ecluse.Security.EgressOriginSpec
@@ -649,9 +662,12 @@ test-suite ecluse-integration
     , case-insensitive  ^>=1.2
     , containers       ^>=0.7
     , crypton          ^>=1.0
+    , conduit          ^>=1.3
+    , filepath         ^>=1.4 || ^>=1.5
     , ecluse
     , ecluse:ecluse-core
     , ecluse:ecluse-test-support
+    , ecluse:ecluse-test-support-app
     , hspec            ^>=2.11
     , http-client      ^>=0.7
     , http-types       ^>=0.12

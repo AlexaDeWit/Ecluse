@@ -133,6 +133,15 @@ data ServerConfig = ServerConfig
     {- ^ How long the graceful drain waits for in-flight requests and in-progress
     artifact streams to finish before the process exits ('defaultShutdownDrainTimeout').
     -}
+    , scCheckReady :: IO Bool
+    {- ^ An additional readiness gate the composition root installs, ANDed with
+    the drain check by @\/readyz@. Today it is the advisory database's
+    first-sync signal: a one-way flip per configured ecosystem, so readiness
+    never flaps on it, and @'pure' True@ (the 'mkServerConfig' default) when no
+    advisory bucket is configured. The listener serves regardless, since an
+    absent advisory database only ever abstains into deny-by-default; this
+    gates what a load balancer routes, not whether the process answers.
+    -}
     }
 
 {- | Build a 'ServerConfig' over the given mount bindings, taking the default
@@ -151,6 +160,7 @@ mkServerConfig mounts =
         , scSizeLimit = defaultRequestSizeLimit
         , scDrain = neverDraining
         , scDrainTimeout = defaultShutdownDrainTimeout
+        , scCheckReady = pure True
         }
 
 -- | The conventional npm proxy listen port (4873), the 'mkServerConfig' default.
@@ -336,7 +346,7 @@ dispatch :: ServerConfig -> Env -> Application
 dispatch cfg env request respond =
     case matchMount (requestMethod request) (scMounts cfg) (pathInfo request) of
         Just (binding, classified) -> serve env binding classified request respond
-        Nothing -> probeApplication (scDrain cfg) (heartbeatHealthyNow (envWorkerHeartbeat env)) request respond
+        Nothing -> probeApplication (scDrain cfg) (scCheckReady cfg) (heartbeatHealthyNow (envWorkerHeartbeat env)) request respond
 
 {- Serve a classified route under its matched mount. Dispatch builds the
 per-request 'RequestCtx' once -- the request runtime ('serveRuntimeOf') paired with the
@@ -466,15 +476,15 @@ notFound :: Response
 notFound =
     responseLBS status404 [(hContentType, "text/plain; charset=utf-8")] "Not Found\n"
 
-probeApplication :: DrainSignal -> IO Bool -> Application
-probeApplication drain checkLiveness request respond =
+probeApplication :: DrainSignal -> IO Bool -> IO Bool -> Application
+probeApplication drain checkReady checkLiveness request respond =
     case pathInfo request of
         ["livez"] -> do
             alive <- checkLiveness
             if alive
                 then respond (jsonResponse status200 "{\"status\":\"live\"}")
                 else respond (jsonResponse status503 "{\"status\":\"liveness check failed\"}")
-        ["readyz"] -> readiness drain >>= respond
+        ["readyz"] -> readiness drain checkReady >>= respond
         _ -> respond notFound
 
 {- Readiness (@\/readyz@): @200@ when config is loaded and the listener is serving,
@@ -487,12 +497,19 @@ The drain flip is the load-balancer signal of a graceful rollover: while the
 'DrainSignal' is raised, readiness fails so an upstream LB or service mesh stops
 routing __new__ traffic here, while in-flight requests finish (see
 @docs\/architecture\/hosting.md@ → "Graceful rollover").
+
+The additional check is the composition root's startup gate ('scCheckReady'):
+a one-way flip (today, the advisory database's first sync), so it cannot flap
+a pod out of rotation once ready.
 -}
-readiness :: DrainSignal -> IO Response
-readiness drain =
-    isDraining drain <&> \case
-        True -> jsonResponse status503 "{\"status\":\"draining\"}"
-        False -> jsonResponse status200 "{\"status\":\"ready\"}"
+readiness :: DrainSignal -> IO Bool -> IO Response
+readiness drain checkReady =
+    isDraining drain >>= \case
+        True -> pure (jsonResponse status503 "{\"status\":\"draining\"}")
+        False ->
+            checkReady <&> \case
+                False -> jsonResponse status503 "{\"status\":\"awaiting startup readiness\"}"
+                True -> jsonResponse status200 "{\"status\":\"ready\"}"
 
 -- A JSON response with the given status and body, tagged @application\/json@.
 jsonResponse :: Status -> LByteString -> Response

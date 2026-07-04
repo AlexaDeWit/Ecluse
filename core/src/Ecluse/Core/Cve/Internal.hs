@@ -12,6 +12,7 @@ module Ecluse.Core.Cve.Internal (
     openHardenedConnection,
     probeQuery,
     advisoriesQuery,
+    provenanceQuery,
 ) where
 
 import Database.SQLite.Simple (Connection, Only (..), close, execute_, open, query, query_)
@@ -118,3 +119,10 @@ advisoriesQuery conn name = do
             , arFixed = fixed
             , arSeverity = severity
             }
+
+{- | The artifact's @meta@ provenance rows, key-sorted for a deterministic
+snapshot. An artifact with no @meta@ table would have failed acceptance, so
+this only ever runs on an accepted connection.
+-}
+provenanceQuery :: Connection -> IO [(Text, Text)]
+provenanceQuery conn = query_ conn "SELECT key, value FROM meta ORDER BY key"

@@ -92,9 +92,11 @@ detail.
    reachable from inside the cluster is a common vulnerability. See [Connecting your
    clients](#connecting-your-clients).
 5. **Fence egress, keep metadata reachable.** Default-deny outbound, allowing only your
-   upstreams, the mirror target, and the metadata endpoint; reach CodeArtifact over **VPC
-   endpoints**; require **IMDSv2 with hop limit 1**. Do **not** block the metadata endpoint
-   , Écluse needs it to mint credentials. See [Securing network
+   upstreams, the mirror target, the advisory bucket when
+   `ECLUSE_VULNERABILITY_DATABASE_BUCKET` is configured (the proxy needs `s3:GetObject` on
+   it to sync `osv.db`), and the metadata endpoint; reach CodeArtifact and S3 over **VPC
+   endpoints**; require **IMDSv2 with hop limit 1**. Do **not** block the metadata
+   endpoint; Écluse needs it to mint credentials. See [Securing network
    egress](#securing-network-egress-required).
 6. **Make the proxy unbypassable.** Deny your CI runners (and, where practical,
    workstations) outbound access to the public registries so the only route to a package is
@@ -177,7 +179,10 @@ operator reference. **Keep the two in sync** when either changes.
 | `ECLUSE_LOG_FORMAT` | No | `json` | Log shape: `json` (one JSON object per line, for log collectors) or `console` (human-readable). |
 | `ECLUSE_TELEMETRY` | No | `off` | OpenTelemetry master switch. With it `off`, no telemetry is emitted. When `on`, the SDK reads the standard `OTEL_*` variables. |
 | `ECLUSE_CVE_SYNC_INTERVAL` | Depends | Pilot only, default `3600` | How often the Écluse Pilot singleton refreshes the OSV database from upstream. |
-| `ECLUSE_OSV_DATA_DIR` | No | `data/osv` | Directory path for the Pilot OSV advisory database. |
+| `ECLUSE_VULNERABILITY_DATABASE_BUCKET` | No |  | The object-store bucket carrying the compiled `osv.db` advisory artifacts. Pilot uploads to it; the proxy polls it and shadow-swaps fresh artifacts into the rules engine. Unset, the proxy runs no advisory sync and `AllowIfRemediatesCve` abstains. |
+| `ECLUSE_CVE_DB_POLL_INTERVAL` | No | `60` | Proxy only: how often each configured ecosystem's sync task polls the bucket for a fresh advisory database (a cheap conditional `HEAD`). Deliberately independent of, and more frequent than, Pilot's `ECLUSE_CVE_SYNC_INTERVAL`: matching them would nearly double the worst-case advisory age. Positive integer. |
+| `ECLUSE_MAX_OSV_DB_BYTES` | No | `536870912` | Proxy only: refuse to download an advisory database larger than this many bytes (default 512 MiB). The declared length fails fast and the streaming download enforces the cap. |
+| `ECLUSE_OSV_DATA_DIR` | No | `data/osv` | Directory for the OSV advisory databases: where Pilot compiles them, and where the proxy lands its synced per-ecosystem artifacts. During a swap, actual disk use briefly exceeds what `ls` or `du` show: the superseded file is unlinked while its last readers finish, and the kernel frees the space when the drained connection closes. |
 | `ECLUSE_OSV_EXPORT_BASE_URL` | No | `https://osv-vulnerabilities.storage.googleapis.com` | Base URL of the per-ecosystem OSV advisory exports Pilot compiles from (`<base>/<ecosystem>/all.zip`). Override it if the upstream moves or you mirror the exports. |
 | `ECLUSE_SHUTDOWN_DRAIN_TIMEOUT` | No | `30` | Seconds the graceful shutdown waits for in-flight requests and in-progress artifact streams to finish before the process exits. Positive integer. |
 | `ECLUSE_CORES` | No | derived | Cores (GHC capabilities) the process claims. Unset ⇒ derived from the container's cgroup CPU quota (floored, at least 1, clamped to the visible processors); with no cgroup limit either, the runtime's own detection stands. Give the container **whole cores**; see the runtime sizing note. The boot log prints the decision and its provenance. Positive integer. See [Operating Écluse → Runtime sizing](#operating-écluse). |
@@ -375,13 +380,14 @@ biased toward resilience rather than blanket bans:
 - **`min-age`**: admit public versions older than a quarantine window (7 days by default),
   the core defence against race-to-publish typosquatting and dependency confusion. **On at
   launch.**
-- **`AllowIfRemediatesCve`**: admit a release that a synced advisory names as its **exact
-  fixed version** immediately, ahead of the quarantine, provided no other advisory still
-  affects it. **Available, opt-in**; it abstains until an advisory database has been
-  synced, and joins the default policy when the advisory sync ships. The probe is a
-  deliberate exact match on the advisory's `fixed` version: a fix published under any
-  other version string simply waits out the quarantine, and `AllowByIdentity` is the
-  explicit workaround.
+- **`AllowIfRemediatesCve`** (`remediation-fast-track`): admit a release that a synced
+  advisory names as its **exact fixed version** immediately, ahead of the quarantine,
+  provided no other advisory still affects it. **On at launch**; it abstains until an
+  advisory database has been synced (set `ECLUSE_VULNERABILITY_DATABASE_BUCKET` and run
+  Pilot), so without one only the quarantine governs. The probe is a deliberate exact
+  match on the advisory's `fixed` version: a fix published under any other version
+  string simply waits out the quarantine, and `AllowByIdentity` is the explicit
+  workaround.
 - **`AllowByIdentity`**: the allow twin of the revocation rule: admit a specific package
   or `package@version` past the quarantine (for example a security fix the fast lane's
   exact-match probe cannot see), at the top of the allow band yet still below every deny.
@@ -437,7 +443,13 @@ serve such a source, point it at the **private** (trusted) upstream slot, not th
 - **Health probes.** `GET /livez` reports process liveness (a stalled mirror worker fails
   it); `GET /readyz` reports that config is loaded and the listener is serving. Readiness is
   deliberately lenient about public-upstream reachability so a transient upstream blip
-  doesn't pull a healthy pod from rotation. The npm liveness probe `GET /-/ping` is answered
+  doesn't pull a healthy pod from rotation. With an advisory bucket configured, readiness
+  additionally waits for every configured ecosystem's first advisory sync. That flip is
+  one-way per ecosystem, so readiness never flaps on it. The listener serves throughout,
+  since an absent advisory database only ever abstains into deny-by-default; the gate
+  governs what a load balancer routes, not whether the process answers. One consequence:
+  mounting an ecosystem whose artifact Pilot never publishes declares a sync that never
+  arrives, and the pod never reports ready. The npm liveness probe `GET /-/ping` is answered
   locally with `200 {}`. **Pilot and Dredger** export identical `/livez` and `/readyz` probes on the same `ECLUSE_PORT`, allowing unified readiness checks across all container roles.
 - **Logs.** Structured, one JSON object per line by default (`ECLUSE_LOG_FORMAT=json`) for
   stdout log-collector autodiscovery, or `console` for local development. Bearer tokens are

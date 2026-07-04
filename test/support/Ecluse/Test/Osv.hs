@@ -26,12 +26,14 @@ module Ecluse.Test.Osv (
     mkDbWithWrongEpoch,
     mkDbWithViewShadowingRanges,
     mkDbWithMaliciousTrigger,
+    mkDbWithMalformedProvenance,
+    mkMinimalValidDb,
 ) where
 
 import Codec.Archive.Zip.Conduit.Zip (ZipData (..), ZipEntry (..), defaultZipOptions, zipStream)
 import Conduit (runConduit, sinkLazy, yieldMany, (.|))
 import Data.Time (LocalTime (..), fromGregorian, midnight)
-import Database.SQLite.Simple (Connection, execute_, withConnection)
+import Database.SQLite.Simple (Connection, Only (Only), execute, execute_, withConnection)
 import System.FilePath (takeFileName, (</>))
 
 import Ecluse.Core.Osv.Schema (osvSchemaEpoch)
@@ -155,6 +157,54 @@ mkDbWithMaliciousTrigger path = withConnection path $ \conn -> do
         conn
         "CREATE TRIGGER malicious AFTER INSERT ON package_vulnerability_ranges \
         \BEGIN DELETE FROM package_vulnerability_ranges; END"
+    setEpoch conn osvSchemaEpoch
+
+{- | An artifact acceptance passes (right epoch, real ranges table, npm @meta@
+row) whose @meta@ holds one extra row with a BLOB value. SQLite's TEXT
+affinity stores a blob verbatim, so the row survives the schema's @NOT NULL
+TEXT@ declaration yet defeats a @(Text, Text)@ decode of the provenance rows,
+after acceptance (which decodes only the ecosystem row) has already
+succeeded. Handle construction must fail without leaking the accepted
+connection.
+-}
+mkDbWithMalformedProvenance :: FilePath -> IO ()
+mkDbWithMalformedProvenance path = withConnection path $ \conn -> do
+    execute_
+        conn
+        "CREATE TABLE package_vulnerability_ranges (\
+        \  package_name TEXT NOT NULL,\
+        \  cve_id TEXT NOT NULL,\
+        \  introduced_version TEXT,\
+        \  fixed_version TEXT,\
+        \  severity TEXT\
+        \)"
+    execute_ conn "CREATE TABLE meta (key TEXT NOT NULL PRIMARY KEY, value TEXT NOT NULL)"
+    execute_ conn "INSERT INTO meta (key, value) VALUES ('ecosystem', 'npm')"
+    execute_ conn "INSERT INTO meta (key, value) VALUES ('zz-opaque', X'DEADBEEF')"
+    setEpoch conn osvSchemaEpoch
+
+{- | A minimal artifact 'Ecluse.Core.Cve.openCveDb' accepts: the ranges table,
+an npm @meta@ row, the current epoch stamp, and one advisory row whose package
+name is the given tag with @1.0.0@ as its exact fixed bound, so sync and slot
+tests can tell generations apart by which package answers the remediation
+probe. The corpus-compiled fixtures stay the schema's conformance authority;
+this builder exists for mechanics tests below the app tier.
+-}
+mkMinimalValidDb :: FilePath -> Text -> IO ()
+mkMinimalValidDb path pkg = withConnection path $ \conn -> do
+    execute_
+        conn
+        "CREATE TABLE package_vulnerability_ranges (\
+        \  package_name TEXT NOT NULL,\
+        \  cve_id TEXT NOT NULL,\
+        \  introduced_version TEXT,\
+        \  fixed_version TEXT,\
+        \  severity TEXT\
+        \)"
+    execute_ conn "CREATE TABLE meta (key TEXT NOT NULL PRIMARY KEY, value TEXT NOT NULL)"
+    execute_ conn "INSERT INTO meta (key, value) VALUES ('ecosystem', 'npm')"
+    execute conn "INSERT INTO meta (key, value) VALUES ('source_url', ?)" (Only pkg)
+    execute conn "INSERT INTO package_vulnerability_ranges VALUES (?, 'GHSA-minimal', '0', '1.0.0', 'HIGH')" (Only pkg)
     setEpoch conn osvSchemaEpoch
 
 setEpoch :: Connection -> Int -> IO ()

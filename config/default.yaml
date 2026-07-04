@@ -3,6 +3,12 @@ port: 8080
 queueBackend: sqs # default to sqs for production, switch to memory for local dev if desired
 queueMemoryMaxDepth: 50000
 cveSyncInterval: 3600
+# How often the proxy polls object storage for a fresh advisory database (a cheap
+# ETag HEAD). Deliberately independent of, and much more frequent than, Pilot's
+# cveSyncInterval: matching them would nearly double the worst-case advisory age.
+cveDbPollInterval: 60
+# Refuse to download an advisory database larger than this many bytes (512 MiB).
+maxOsvDbBytes: 536870912
 shutdownDrainTimeout: 30
 # serveMaxInFlight is deliberately NOT pinned here: omitted, it is computed at boot
 # from the resolved capability count (max(8, 4 x capabilities); see
@@ -48,3 +54,10 @@ rules:
     type: AllowIfOlderThan
     precedence: 100
     ageSeconds: 604800
+  # The remediation fast lane: a version a synced advisory names as its exact fix
+  # is admitted ahead of the min-age quarantine. With no advisory database
+  # configured (no vulnerabilityDatabaseBucket) it abstains and only the
+  # quarantine governs.
+  remediation-fast-track:
+    type: AllowIfRemediatesCve
+    precedence: 150

@@ -51,6 +51,30 @@ spec = describe "decodeDocument" $ do
                 -- the private pool.
                 cfgPublicConnectionsPerHost (configApp doc) `shouldBe` Nothing
 
+    it "rejects a zero cveDbPollInterval (a zero delay would spin the poll)" $
+        loadConfig [] (Just "{\"cveDbPollInterval\":0}")
+            `shouldSatisfy` decodeErrorMentions "cveDbPollInterval"
+
+    it "rejects a zero cveDbPollInterval given through the environment" $
+        loadConfig [("ECLUSE_CVE_DB_POLL_INTERVAL", "0")] Nothing
+            `shouldSatisfy` decodeErrorMentions "cveDbPollInterval"
+
+    it "rejects a cveDbPollInterval whose microsecond conversion would overflow Int" $
+        loadConfig [] (Just "{\"cveDbPollInterval\":9223372036855}")
+            `shouldSatisfy` decodeErrorMentions "cveDbPollInterval"
+
+    it "rejects a non-positive maxOsvDbBytes" $
+        loadConfig [] (Just "{\"maxOsvDbBytes\":0}")
+            `shouldSatisfy` decodeErrorMentions "maxOsvDbBytes"
+
+    it "loads the shipped advisory-sync defaults (poll interval, byte cap, no bucket)" $
+        case loadConfig [] Nothing of
+            Left e -> expectationFailure ("unexpected decode error: " <> show e)
+            Right doc -> do
+                cfgCveDbPollInterval (configApp doc) `shouldBe` 60
+                cfgMaxOsvDbBytes (configApp doc) `shouldBe` 536870912
+                cfgVulnerabilityDatabaseBucket (configApp doc) `shouldBe` Nothing
+
     it "leaves the runtime posture unset when cores and maxHeapBytes are omitted" $ do
         case loadConfig [] Nothing of
             Left e -> expectationFailure ("unexpected decode error: " <> show e)

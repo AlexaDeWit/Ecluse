@@ -22,14 +22,14 @@ import Ecluse.Log (moduleField)
 import Ecluse.Pilot.Export (exportToS3, runExportLoop)
 import Ecluse.Pilot.Osv (osvExportUrl)
 import Ecluse.Pilot.Osv.Compile (compileOsvToSqlite)
-import Ecluse.Server (ServerConfig (scDrain, scPort), mkServerConfig, probeApplication, runWarp, serverMiddleware)
+import Ecluse.Server (ServerConfig (scCheckReady, scDrain, scPort), mkServerConfig, probeApplication, runWarp, serverMiddleware)
 import Ecluse.Telemetry (Telemetry)
 
 {- | The WAI application for the Pilot worker mode.
 It exposes liveness and readiness probes.
 -}
 pilotApplication :: ServerConfig -> IO Application
-pilotApplication cfg = pure (serverMiddleware cfg (probeApplication (scDrain cfg) (pure True)))
+pilotApplication cfg = pure (serverMiddleware cfg (probeApplication (scDrain cfg) (scCheckReady cfg) (pure True)))
 
 {- | The entry point for the Pilot worker mode.
 Pilot runs as a standalone HTTP server that only exposes liveness and readiness

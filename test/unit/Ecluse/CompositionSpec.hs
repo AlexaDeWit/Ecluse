@@ -162,7 +162,7 @@ planFrom envVars mDocBytes = do
         Right cfg -> do
             initCredentialProviders noCredentialReporters (configApp cfg) >>= \case
                 Left pErrs -> pure (Left pErrs)
-                Right providers -> planMounts mountBindingFor (pure fixedNow) inertRuleDeps providers cfg
+                Right providers -> planMounts mountBindingFor (pure fixedNow) (const inertRuleDeps) providers cfg
 
 credentialProvidersSpec :: Spec
 credentialProvidersSpec = describe "initCredentialProviders" $ do
@@ -580,7 +580,7 @@ composeBindingsSpec = describe "planMounts / composeBindings (config-driven serv
         env <- expectEnv (("ECLUSE_AUTH_TOKEN", "edge-secret") : ("ECLUSE_HELP_MESSAGE", "ask #platform") : staticEnvVars)
         providers <- expectProviders env
         config <- expectConfig (("ECLUSE_AUTH_TOKEN", "edge-secret") : ("ECLUSE_HELP_MESSAGE", "ask #platform") : staticEnvVars) Nothing
-        composeBindings mountBindingFor (pure fixedNow) inertRuleDeps providers config >>= \case
+        composeBindings mountBindingFor (pure fixedNow) (const inertRuleDeps) providers config >>= \case
             Right [binding] -> case bindingPackumentDeps binding of
                 Just deps -> do
                     fmap unSecret (pdInboundToken deps) `shouldBe` Just "edge-secret"
@@ -701,7 +701,7 @@ composeBindingsSpec = describe "planMounts / composeBindings (config-driven serv
         env <- expectEnv staticEnvVars
         providers <- expectProviders env
         config <- expectConfig staticEnvVars Nothing
-        composeBindings mountBindingFor (pure fixedNow) inertRuleDeps providers config >>= \case
+        composeBindings mountBindingFor (pure fixedNow) (const inertRuleDeps) providers config >>= \case
             Right bindings -> map bindingPrefix bindings `shouldBe` ["npm" :| []]
             Left errs -> expectationFailure ("unexpected boot errors: " <> show errs)
 
