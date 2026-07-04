@@ -18,5 +18,19 @@
   "search.exclude": {
     "**/bench/corpus": true,
     "**/core/test/unit/fixtures": true
+  },
+  "files.watcherExclude": {
+    ".git/objects/**": true,
+    ".git/subtree-cache/**": true,
+    ".hg/store/**": true,
+    "*/.git/objects/**": true,
+    "*/.git/subtree-cache/**": true,
+    ".agents/worktrees/**": true,
+    "_site/**": true,
+    ".task/**": true,
+    "coverage/**": true,
+    "dist-newstyle/**": true,
+    "dist-coverage/**": true,
+    "sbom/**": true
   }
 }
