@@ -1,13 +1,11 @@
-# Architecture Diagrams
+# Architecture diagrams
 
 > Part of the [Écluse architecture overview](../architecture.md).
 
-A visual companion to the prose specifications under [`architecture/`](.). Like
-the rest of these documents, the diagrams describe the **target design** (the
-specification being implemented), not necessarily the current state of the code.
-Each section links to the document that specifies it in full.
-
-All diagrams are [Mermaid](https://mermaid.js.org/), which GitHub renders inline.
+A visual companion to the prose specifications under [`architecture/`](.); each section
+links to the document that specifies it in full. Like the other architecture documents,
+these describe the target design, not necessarily the current code. Diagrams are
+[Mermaid](https://mermaid.js.org/), rendered inline by GitHub.
 
 ## Contents
 
@@ -24,13 +22,12 @@ All diagrams are [Mermaid](https://mermaid.js.org/), which GitHub renders inline
 
 ## 1. System overview
 
-A single Écluse binary runs the HTTP server and an in-process mirror worker over a
-shared, handle-based `Env`. The **data plane** (metadata + artifact bytes) is
-`http-client`; the **control plane** (queue, token mint) sits behind the
+A single Écluse binary runs the HTTP server and an in-process mirror worker over a shared,
+handle-based `Env`. The data plane (metadata + artifact bytes) is `http-client`; the
+control plane (queue, token mint) sits behind the
 [`MirrorQueue`](cloud-backends.md#queue-abstraction) and
-[`CredentialProvider`](cloud-backends.md#credential-provider) handles. Solid edges
-are request-path / synchronous; dotted edges are best-effort / asynchronous. See
-[Registry Model](registry-model.md) and [Cloud Backends](cloud-backends.md).
+[`CredentialProvider`](cloud-backends.md#credential-provider) handles. Solid edges are
+synchronous request-path; dotted are best-effort / asynchronous.
 
 ```mermaid
 flowchart LR
@@ -76,14 +73,13 @@ flowchart LR
 
 ## 2. Packument (metadata) request
 
-Resolving a package **merges** the upstreams rather than short-circuiting: the
-private and public upstreams are fetched in parallel; public versions are gated by
-the rules and private versions are trusted, and the two are merged into one
-document (private wins on collision; integrity divergence is flagged). This is what
+Resolving a package merges the upstreams rather than short-circuiting: private and public
+are fetched in parallel, public versions gated by the rules and private trusted, then
+merged into one document (private wins on collision; integrity divergence flagged). This
 keeps not-yet-mirrored public versions visible so demand-driven mirroring can fire.
-Metadata requests **filter but never mirror**. See
-[Registry Model → Packument merge](registry-model.md#packument-merge-across-upstreams)
-and [Rules Engine → Applying verdicts to a packument](rules-engine.md#applying-verdicts-to-a-packument).
+Metadata requests filter but never mirror. See
+[Packument merge](registry-model.md#packument-merge-across-upstreams) and
+[Applying verdicts to a packument](rules-engine.md#applying-verdicts-to-a-packument).
 
 ```mermaid
 sequenceDiagram
@@ -120,12 +116,11 @@ sequenceDiagram
 
 ## 3. Tarball (artifact) request
 
-A tarball is gated for that one version. A private hit is streamed unfiltered; a
-private miss fetches the version's metadata, runs the rules, and on acceptance
-streams from public **and** enqueues a demand-driven mirror job, non-blocking, so
-the client is served immediately. See
-[Web Layer → Streaming](web-layer.md#streaming-and-resource-lifetime) and
-[Cloud Backends → Mirror Queue](cloud-backends.md#mirror-queue).
+A tarball is gated for that one version. A private hit is streamed unfiltered; a private
+miss fetches the version's metadata, runs the rules, and on acceptance streams from public
+and enqueues a demand-driven mirror job, non-blocking, so the client is served immediately.
+See [Streaming](web-layer.md#streaming-and-resource-lifetime) and
+[Mirror Queue](cloud-backends.md#mirror-queue).
 
 ```mermaid
 sequenceDiagram
@@ -160,11 +155,10 @@ sequenceDiagram
 
 ## 4. Mirror worker
 
-The worker consumes the queue, fetches each accepted artifact from the public
-upstream, **verifies its bytes against the version's integrity hash**, and
-publishes to the mirror target via the credential handle. Retry is "don't ack";
-at-least-once delivery is safe because publishing is idempotent. See
-[Cloud Backends → Mirror Queue](cloud-backends.md#mirror-queue).
+The worker consumes the queue, fetches each accepted artifact from the public upstream,
+verifies its bytes against the version's integrity hash, and publishes to the mirror target
+via the credential handle. Retry is "don't ack"; at-least-once delivery is safe because
+publishing is idempotent. See [Mirror Queue](cloud-backends.md#mirror-queue).
 
 ```mermaid
 sequenceDiagram
@@ -203,14 +197,13 @@ sequenceDiagram
 
 ## 5. Rules-engine decision flow
 
-Each version is evaluated against the rule set. There is **one engine** over a
-single **boot-ordered list** (highest precedence first, then rule name): evaluation
-walks it and takes the **first decisive result** (allow, deny, or a fail-closed
-unavailability), so effectful IO runs only up to that result, and MAY run
-speculatively in parallel while staying as-if sequential by boot order. If no rule
-is decisive, the package is denied by default. At equal precedence the name decides,
-not a deny-over-allow priority. A fail-closed unavailable that wins becomes
-`Undecidable`; a fail-open one is a no-op. See [Rules Engine](rules-engine.md).
+Each version is evaluated against the rule set. One engine walks a single boot-ordered list
+(highest precedence first, then rule name) and takes the first decisive result (allow,
+deny, or a fail-closed unavailability), so effectful IO runs only up to that result and may
+run speculatively in parallel while staying as-if sequential. If no rule is decisive, the
+package is denied by default. At equal precedence the name decides, not deny-over-allow. A
+fail-closed unavailable that wins becomes `Undecidable`; a fail-open one is a no-op. See
+[Rules Engine](rules-engine.md).
 
 ```mermaid
 flowchart TD
@@ -232,13 +225,12 @@ flowchart TD
 
 ## 6. Credential token lifecycle
 
-A `CredentialProvider` refreshes a registry token off its own `expiresAt`,
-proactively and single-flight, so the request hot path never blocks on a mint in
-the common case. Under the default `passthrough` strategy credentials are
-**mirror-write only**, so even a fully failed refresh never touches the client serve
-path, only the mirror publish; under `service` a read credential sits on the serve
-path, so its failure does degrade serving. See
-[Cloud Backends → Credential Provider](cloud-backends.md#credential-provider).
+A `CredentialProvider` refreshes a registry token off its own `expiresAt`, proactively and
+single-flight, so the hot path never blocks on a mint in the common case. Under the default
+`passthrough` strategy credentials are mirror-write only, so even a failed refresh touches
+only the mirror publish, not the serve path; under `service` a read credential sits on the
+serve path, so its failure degrades serving. See
+[Credential Provider](cloud-backends.md#credential-provider).
 
 ```mermaid
 stateDiagram-v2
@@ -261,14 +253,13 @@ stateDiagram-v2
 
 ## 7. Credential authority across the four registry roles
 
-The diagram shows the default **`passthrough`** strategy. The invariant that holds
-under **every** strategy is narrower: the client's credential is **never** sent to
-the public upstream. Whether it reaches the private upstream is strategy-specific,it does under `passthrough`; under `service` Écluse reads with
-its own credential instead. The fourth role, the **publication target**, receives the
-client's *forwarded* publish credential (the write symmetric of the private read); the
-public upstream still never sees the client's token. See
+The diagram shows the default `passthrough` strategy. The invariant under every strategy is
+narrower: the client's credential is never sent to the public upstream. Whether it reaches
+the private upstream is strategy-specific: it does under `passthrough`; under `service`
+Écluse reads with its own credential. The publication target receives the client's
+forwarded publish credential (the write symmetric of the private read). See
 [Access & Credential Model](access-model.md) and
-[Registry Model → Credential flow and authority](registry-model.md#credential-flow-and-authority).
+[Credential flow and authority](registry-model.md#credential-flow-and-authority).
 
 ```mermaid
 flowchart LR
@@ -291,14 +282,13 @@ flowchart LR
 
 ## 8. First-party publish path
 
-A client's `npm publish` (`PUT /{pkg}`) is mediated like any other request rather than
-pushed out-of-band. It is gated by the operator's **publish-scope allow-list** (the
-anti-shadowing guard, which rejects before any upstream write) and relayed to the
-**publication target** with the publisher's **own forwarded credential**, the write
-counterpart to the private read, and distinct from the mirror target (which the worker
-writes with Écluse's own token). The path is opt-in: with no `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET`,
-`PUT /{pkg}` is a `405`. Published packages are read back through the private upstream. See
-[Registry Model → Publishing first-party packages](registry-model.md#publishing-first-party-packages-the-publication-target).
+A client's `npm publish` (`PUT /{pkg}`) is mediated like any other request. It is gated by
+the operator's publish-scope allow-list (the anti-shadowing guard, rejecting before any
+upstream write) and relayed to the publication target with the publisher's own forwarded
+credential, distinct from the mirror target (which the worker writes with Écluse's own
+token). It is opt-in: with no `ECLUSE_MOUNTS__NPM__PUBLICATION_TARGET`, `PUT /{pkg}` is a
+`405`. Published packages are read back through the private upstream. See
+[Publishing first-party packages](registry-model.md#publishing-first-party-packages-the-publication-target).
 
 ```mermaid
 sequenceDiagram

@@ -1,4 +1,4 @@
-# Technology Stack
+# Technology stack
 
 > Part of the [Écluse architecture overview](../architecture.md).
 
@@ -11,7 +11,7 @@
 | HTTP client | `http-client` + `http-client-tls` | The data plane: streams artifacts and fetches metadata, including the CodeArtifact / Artifact Registry npm endpoints. Kept off `amazonka`'s `ResourceT` streaming path; see [Web Layer](web-layer.md#web-layer). |
 | JSON | `aeson` | Metadata parsing (lenient **inbound** wire decoding), rule config, queue payloads, denial bodies. |
 | API manifest / schemas | `autodocodec` + `openapi3` | The [capability manifest](api-surface.md) and config JSON Schema: **owned** types (error envelope, synthesised packument, config) derive their `aeson` codec **and** the OpenAPI / JSON-Schema from one `autodocodec` codec, no drift; `openapi3` assembles the document. Inbound npm wire decoding stays lenient `aeson`. |
-| Cloud, AWS | `amazonka` | Split packages: `amazonka-sqs` (mirror queue), `amazonka-codeartifact` (registry token), `amazonka-sts` (workload identity). Mature and comprehensive. |
+| Cloud, AWS | `amazonka` | Split packages: `amazonka-sqs` (mirror queue), `amazonka-codeartifact` (registry token), `amazonka-sts` (workload identity). Mature and broad. |
 | Cloud, GCP | `gogol` *or* a hand-rolled REST client (TBD) | Pub/Sub mirror queue + Artifact Registry token. GCP's Haskell story is weaker than AWS's, so the choice is gated on a spike; see [Cloud Backends](cloud-backends.md#cloud-backends). |
 | Logging | `katip` | Structured, contextual JSON logging. Denials are an audit trail, package/version/rule context attaches to every event. |
 | Config | `envparse` | Applicative env-var parser; aggregates all missing/invalid vars into one error rather than failing on the first. |
@@ -25,7 +25,7 @@
 | Dev environment | Nix flakes + `direnv` | Fully reproducible; all tooling from `nix develop`. |
 | Build | Cabal | Natural Nix pairing; `flake.lock` provides reproducibility. |
 
-## Key Decisions
+## Key decisions
 
 **`relude` as the implicit prelude.** Rather than `NoImplicitPrelude` plus a manual
 `import Relude` in every module, it is wired through cabal mixins in the shared
@@ -38,40 +38,33 @@ mixins:
   , relude (Relude as Prelude)
 ```
 
-Note: this rules out `-Wunused-packages`. GHC cannot attribute prelude usage
-through the mixin rename, so it reports `base` and `relude` as unused in every
-component, a false positive. The flag is therefore omitted; reach for `weeder`
-if dependency-hygiene checking is wanted later.
+This rules out `-Wunused-packages`: GHC cannot attribute prelude usage through the mixin
+rename, so it reports `base` and `relude` as unused in every component. The flag is
+omitted; reach for `weeder` if dependency-hygiene checking is wanted later.
 
-**Raw WAI, not a web framework.** A proxy is a passthrough over an irregular URL
-surface (URL-encoded slashes, reserved meta-routes), and memory-bounded artifact
-streaming needs direct control over the response body's lifetime. Both point away
-from servant/Scotty/Yesod and toward a raw `Application`. The full rationale, routing, the control/data-plane split, streaming, and the middleware stance, is
-in [Web Layer](web-layer.md#web-layer).
+**Raw WAI, not a web framework.** A proxy is a passthrough over an irregular URL surface
+(URL-encoded slashes, reserved meta-routes), and memory-bounded artifact streaming needs
+direct control over the response body's lifetime. Both point away from
+servant/Scotty/Yesod toward a raw `Application`. Full rationale, routing, the
+control/data-plane split, streaming, and middleware, in [Web Layer](web-layer.md#web-layer).
 
-**The effect model: `IO` handles, `App` orchestration.** `App = ReaderT Env IO`
-(with `unliftio`) is the orchestration monad; the server and worker read `Env`
-through it, and **request handlers run in the reader too**, over a per-request
-`RequestCtx { ctxEnv, ctxMount }` pairing `Env` with the matched mount's
-[`MountBinding`](hosting.md#mounts), built once at dispatch so the per-mount deps
-(registry set, rules, renderer, derived prefix) are read from context rather than
-re-threaded through the pipeline (see [Web Layer](web-layer.md#web-layer)). Shared
-mutable state (credential refresh, circuit-breaker, in-flight sets) lives as
-`TVar`/`IORef` **in `Env`** under that single reader, **not a `StateT` layer**,
-which would lose state across `forkIO`/`async` and give no shared state. The handle records:
-`RegistryClient`, `MirrorQueue`, `CredentialProvider`, return **`IO`, not
-`App`**: each adapter closes over its own backend state and never imports the
-core's `Env`/`App`, so backends stay decoupled (no import cycle, and no recursive
-reference from `Env` holding handles whose methods would need `Env`). App-level code
-calls a handle through a single `liftIO`. `Env` is the composition-root record
-holding the handles plus the shared HTTP manager, caches, and logger.
+**The effect model: `IO` handles, `App` orchestration.** `App = ReaderT Env IO` (with
+`unliftio`) is the orchestration monad; the server, worker, and request handlers read
+`Env` through it, handlers over a per-request `RequestCtx { ctxEnv, ctxMount }` pairing
+`Env` with the matched mount's [`MountBinding`](web-layer.md#web-layer), built once at dispatch
+so per-mount deps (registry set, rules, renderer, derived prefix) are read from context
+rather than re-threaded. Shared mutable state (credential refresh, circuit-breaker,
+in-flight sets) lives as `TVar`/`IORef` in `Env`, not a `StateT` layer, which would lose
+state across `forkIO`/`async`. The handle records `RegistryClient`, `MirrorQueue`,
+`CredentialProvider` return `IO`, not `App`: each adapter closes over its own backend state
+and never imports the core's `Env`/`App`, so backends stay decoupled (no import cycle).
+App-level code calls a handle through a single `liftIO`. `Env` is the composition-root
+record holding the handles plus the shared HTTP manager, caches, and logger.
 
-**Capability manifest, not a client contract.** Écluse speaks registry protocols,
-not a bespoke API, so its OpenAPI document is a *capability manifest*, generated
-from the closed `Route` enumeration × the configured mounts. Owned / synthesised
-responses (the error envelope and the merged-and-filtered packument) are modelled
-**code-first via `autodocodec`** so the schema cannot drift from the wire format;
-opaque pass-through bodies (tarballs) are linked out rather than re-specified; and
-unsupported routes (`Search`) are documented as `501`. Full rationale, schema
-strategy, and node-free CI rendering in
-[API Surface & Capability Manifest](api-surface.md).
+**Capability manifest, not a client contract.** Écluse speaks registry protocols, not a
+bespoke API, so its OpenAPI document is a capability manifest, generated from the closed
+`Route` enumeration × the configured mounts. Owned / synthesised responses (the error
+envelope, the merged-and-filtered packument) are modelled code-first via `autodocodec` so
+the schema cannot drift from the wire format; opaque pass-through bodies (tarballs) are
+linked out; and unsupported routes (`Search`) are documented as `501`. Full rationale and
+schema strategy in [API Surface & Capability Manifest](api-surface.md).
