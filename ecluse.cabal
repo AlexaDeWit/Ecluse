@@ -387,8 +387,10 @@ library ecluse-test-support
 -- enforcement — an app spec accidentally placed here fails to compile.
 test-suite ecluse-core-unit
   import:             shared
-  -- hspec-discover generates a Main without an export list.
-  ghc-options:        -Wno-missing-export-lists
+  -- hspec-discover generates a Main without an export list. -threaded is required
+  -- by the admission wait (GHC.Conc.registerDelay aborts under the non-threaded
+  -- RTS); the served process always runs threaded, so the suite matches it.
+  ghc-options:        -Wno-missing-export-lists -threaded
   type:               exitcode-stdio-1.0
   main-is:            Spec.hs
   hs-source-dirs:     core/test/unit
@@ -427,6 +429,7 @@ test-suite ecluse-core-unit
     Ecluse.Server.MetadataSpec
     Ecluse.Server.Pipeline.InternalSpec
     Ecluse.Server.Pipeline.PackumentSpec
+    Ecluse.Server.AdmissionSpec
     Ecluse.Server.PipelineSpec
     Ecluse.Server.ResponseSpec
     Ecluse.Server.RouteSpec

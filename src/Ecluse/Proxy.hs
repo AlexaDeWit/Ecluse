@@ -198,6 +198,13 @@ runProxy bootEnv = do
     fdLimit <- Composition.openFileSoftLimit
     let (privateConnections, privateConnectionsLine) = Composition.resolvePrivateConnections (cfgPrivateConnectionsPerHost env) fdLimit
     logBootInfo logEnv privateConnectionsLine
+    -- The public pool: an explicit override, else computed from the same
+    -- file-descriptor datapoint at half the private share. The onboarding
+    -- fail-over's artifact streams and the worker's back-fill fetches ride this
+    -- manager without coalescing, so its retention must cover that transient
+    -- fan-out, not only the admission-bounded metadata misses.
+    let (publicConnections, publicConnectionsLine) = Composition.resolvePublicConnections (cfgPublicConnectionsPerHost env) fdLimit
+    logBootInfo logEnv publicConnectionsLine
     let serverConfig =
             (mkServerConfig bindings)
                 { scPort = cfgPort env
@@ -249,7 +256,7 @@ runProxy bootEnv = do
     -- providers; with it off the instrumentation step is the identity.
     publicSettings <- instrumentDataPlaneManagerSettings telemetry tlsManagerSettings
     privateSettings <- instrumentDataPlaneManagerSettings telemetry tlsManagerSettings
-    manager <- newManager (connectionPoolSettings (cfgPublicConnectionsPerHost env) publicSettings)
+    manager <- newManager (connectionPoolSettings publicConnections publicSettings)
     privateManager <- newManager (connectionPoolSettings privateConnections privateSettings)
     -- The mirror worker's publish-side registry client, resolved per ecosystem from
     -- the configured mirror target and its write credential. It writes to the

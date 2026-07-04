@@ -86,9 +86,10 @@ context.
 -}
 data ServeRuntime = ServeRuntime
     { srAdmission :: ServeAdmission
-    {- ^ The process-wide non-queuing bound around metadata materialisation. A
-    private tarball hit and the artifact streaming pump stay outside it; packument
-    work and a tarball miss's public metadata gate acquire a slot.
+    {- ^ The process-wide brief-wait bound around metadata materialisation
+    ("Ecluse.Core.Server.Admission"). A private tarball hit and the artifact
+    streaming pump stay outside it; packument work and a tarball miss's public
+    metadata gate acquire a slot, waiting briefly for one under load.
     -}
     , srPublicManager :: Manager
     {- ^ The validating-TLS data-plane manager for the __untrusted__ public-upstream

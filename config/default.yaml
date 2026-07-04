@@ -13,7 +13,6 @@ shutdownDrainTimeout: 30
 # Ecluse.Composition.resolvePrivateConnections), sized for the un-admitted private-hit
 # streaming fan-out rather than the admission capacity. Set
 # ECLUSE_PRIVATE_CONNECTIONS_PER_HOST only to override it.
-publicConnectionsPerHost: 10
 cacheTtl: 60
 cacheMaxEntries: 1024
 cacheMaxBytes: 268435456

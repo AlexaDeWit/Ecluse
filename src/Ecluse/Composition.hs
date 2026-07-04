@@ -68,6 +68,7 @@ module Ecluse.Composition (
     connectionPoolSettings,
     resolveServeAdmission,
     resolvePrivateConnections,
+    resolvePublicConnections,
     openFileSoftLimit,
     mirrorEnqueueBufferDepth,
     mirrorEnqueueReportInterval,
@@ -218,6 +219,53 @@ privateConnectionsFloor = 64
 
 privateConnectionsCap :: Int
 privateConnectionsCap = 4096
+
+{- | The effective public-upstream connection-pool size and its boot-log line: the
+explicit @publicConnectionsPerHost@ when configured, else __computed from the process
+file-descriptor limit__ -- @clamp 32 1024 (nofile \/ 8)@.
+
+The public pool's metadata demand is small by construction (same-key misses are
+single-flight-coalesced and bounded by admission), but the pool is __not__
+metadata-only: the onboarding fail-over's artifact streams and the mirror worker's
+back-fill fetches ride the same manager, and neither coalesces. During a cold fleet's
+onboarding burst the concurrent public streams track the inbound fan-out, and
+'Network.HTTP.Client.managerConnCount' is a keep-alive __retention__ cap, not a
+concurrency cap: overflow opens throwaway connections, each paying a TLS handshake to
+the public origin per request. So the pool is sized like the private one, from the
+file-descriptor budget, at __half the private share__ (an eighth of @nofile@, from the
+three quarters the private sizing reserves for everything else): the public leg is
+transient by the traffic model -- the worker retires it artifact by artifact -- so it
+earns retention for the burst, not the steady state. Sizing up is safe for the same
+reason as the private pool: it never opens more sockets than the concurrency already
+demands, only retains more for reuse.
+
+The returned line carries the decision's provenance for the standard boot log.
+-}
+resolvePublicConnections :: Maybe Int -> Int -> (Int, Text)
+resolvePublicConnections explicit fdLimit = case explicit of
+    Just n -> (n, "runtime: public connection pool " <> show n <> " (from config)")
+    Nothing ->
+        let computed = clampPublicConnections (fdLimit `div` publicConnectionsFdShare)
+         in (computed, "runtime: public connection pool " <> show computed <> " (computed from file-descriptor limit " <> show fdLimit <> ")")
+
+-- Clamp a computed public-pool size into its sane band, for the same reasons as
+-- 'clampPrivateConnections': a floor so a small limit still reuses connections
+-- across an onboarding burst, a cap so an enormous limit does not retain an absurd
+-- idle cache to one public origin.
+clampPublicConnections :: Int -> Int
+clampPublicConnections = max publicConnectionsFloor . min publicConnectionsCap
+
+-- The public pool takes an eighth of the file-descriptor budget: half the private
+-- share, because the public leg is the transient onboarding ramp rather than the
+-- steady-state workhorse, drawn from the reserve the private sizing leaves.
+publicConnectionsFdShare :: Int
+publicConnectionsFdShare = 8
+
+publicConnectionsFloor :: Int
+publicConnectionsFloor = 32
+
+publicConnectionsCap :: Int
+publicConnectionsCap = 1024
 
 {- | The depth of the producer-side hand-off buffer the composition root wraps in
 front of the mirror queue ('Ecluse.Core.Queue.newEnqueueBuffer'). Sized to absorb a

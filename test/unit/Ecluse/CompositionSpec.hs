@@ -28,6 +28,7 @@ import Ecluse.Composition (
     renderBootError,
     resolveCodeArtifactConfig,
     resolvePrivateConnections,
+    resolvePublicConnections,
     resolveServeAdmission,
  )
 import Ecluse.Config (
@@ -494,6 +495,28 @@ connectionPoolSpec = do
         it "names the decision's provenance in the boot line" $ do
             snd (resolvePrivateConnections Nothing 1024) `shouldSatisfy` T.isInfixOf "computed from file-descriptor limit 1024"
             snd (resolvePrivateConnections (Just 512) 1024) `shouldSatisfy` T.isInfixOf "from config"
+
+    describe "resolvePublicConnections" $ do
+        it "computes an eighth of the file-descriptor limit within the sane band" $ do
+            -- Half the private pool's share: the public leg is the transient
+            -- onboarding ramp, not the steady-state workhorse.
+            fst (resolvePublicConnections Nothing 1024) `shouldBe` 128
+            fst (resolvePublicConnections Nothing 4096) `shouldBe` 512
+
+        it "floors a tiny file-descriptor limit and caps an enormous one" $ do
+            -- A small limit floors at 32 so a constrained pod still reuses
+            -- connections across an onboarding burst.
+            fst (resolvePublicConnections Nothing 128) `shouldBe` 32
+            -- An enormous limit caps at 1024 rather than retaining an absurd idle
+            -- cache to one public origin.
+            fst (resolvePublicConnections Nothing 65536) `shouldBe` 1024
+
+        it "lets an explicit config value win over the computation" $
+            fst (resolvePublicConnections (Just 10) 65536) `shouldBe` 10
+
+        it "names the decision's provenance in the boot line" $ do
+            snd (resolvePublicConnections Nothing 1024) `shouldSatisfy` T.isInfixOf "computed from file-descriptor limit 1024"
+            snd (resolvePublicConnections (Just 10) 1024) `shouldSatisfy` T.isInfixOf "from config"
 
     describe "connectionPoolSettings" $
         it "sets the configured per-host connection bound" $

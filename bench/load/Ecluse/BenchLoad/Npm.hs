@@ -100,7 +100,7 @@ import Network.Wai.Handler.Warp (testWithApplication)
 
 import Ecluse.BenchLoad.Error (benchFail)
 import Ecluse.BenchLoad.Harness (Driver (DriveHttpHeaders, DriveHttpUrls, DriveInProcess), LoadKnobs (..), Scenario (..), UpstreamFixture (..))
-import Ecluse.Composition (connectionPoolSettings, openFileSoftLimit, resolvePrivateConnections, resolveServeAdmission)
+import Ecluse.Composition (connectionPoolSettings, openFileSoftLimit, resolvePrivateConnections, resolvePublicConnections, resolveServeAdmission)
 
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package (Hash, HashAlg (SHA1, SRI), PackageName, mkPackageName)
@@ -384,9 +384,10 @@ withProxyOverStubs knobs ttl maxEntries privateApp publicApp mkMix body = do
     fdLimit <- openFileSoftLimit
     let admissionCapacity = fst (resolveServeAdmission (lkServeMaxInFlight knobs) capabilities)
         privateConnections = fst (resolvePrivateConnections (lkPrivateConnectionsPerHost knobs) fdLimit)
+        publicConnections = fst (resolvePublicConnections (lkPublicConnectionsPerHost knobs) fdLimit)
     testWithApplication (pure privateApp) $ \privatePort ->
         testWithApplication (pure publicApp) $ \publicPort -> do
-            publicManager <- newManager (connectionPoolSettings (lkPublicConnectionsPerHost knobs) defaultManagerSettings)
+            publicManager <- newManager (connectionPoolSettings publicConnections defaultManagerSettings)
             -- The private pool is sized independently of the admission capacity,
             -- through the same function the composition root uses, since a trusted
             -- tarball hit streams outside admission (see resolvePrivateConnections).
