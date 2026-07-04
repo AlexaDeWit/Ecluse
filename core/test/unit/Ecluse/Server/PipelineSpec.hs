@@ -32,7 +32,7 @@ import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
 import Ecluse.Core.Registry.Npm.Request (artifactRequestByFile, artifactRequestByUrl)
 import Ecluse.Core.Registry.Npm.Route qualified as Npm
 import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
-import Ecluse.Core.Rules (prepare)
+import Ecluse.Core.Rules (inertRuleDeps, prepare)
 import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan), atDefaultPrecedence)
 import Ecluse.Core.Security (TarballHostPolicy (SameHostAsPackument), defaultLimits, tarballHostGate)
 import Ecluse.Core.Server.Admission (ServeAdmission, newServeAdmission, newServeAdmissionTuned, unlimitedServeAdmission, withServeAdmission)
@@ -203,7 +203,7 @@ only recognises a literal) never fires on the artifact leg -- no opt-in is neede
 -}
 depsFor :: Int -> IO PackumentDeps
 depsFor publicPort = do
-    prepared <- prepare allowPolicy
+    prepared <- prepare inertRuleDeps allowPolicy
     pure
         PackumentDeps
             { pdPrivateBaseUrl = "http://localhost:1"

@@ -117,12 +117,13 @@ import Ecluse.Core.Registry.Metadata (fetchVersionDetails)
 import Ecluse.Core.Registry.Npm (NpmClientConfig (NpmClientConfig, npmBaseUrl, npmLimits, npmManager, npmToken), newNpmPublishClient)
 import Ecluse.Core.Registry.Npm.Route qualified as Npm
 import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
+import Ecluse.Core.Rules (RuleDeps (..))
 import Ecluse.Core.Security (defaultLimits)
 import Ecluse.Core.Server.Admission (newServeAdmission)
 import Ecluse.Core.Server.Cache (Source (Source), newMetadataCache)
 import Ecluse.Core.Server.Context (PackumentDeps, PublishDeps, pdLimits, pdNow, pdPublicBaseUrl, pdRules)
 import Ecluse.Core.Server.Metadata (ManifestCaching (Cached), newNpmMetadataClient)
-import Ecluse.Core.Telemetry.Metrics (BreakerSource (CredentialMint), Provider (CodeArtifact), Upstream (Public))
+import Ecluse.Core.Telemetry.Metrics (BreakerSource (CredentialMint, EffectfulRule), Provider (CodeArtifact), Upstream (Public))
 import Ecluse.Core.Worker (WorkerPolicies, WorkerPolicy (..), runWorkerM, workerLoop)
 import Ecluse.Env (Env, envDdContext, envLogEnv, envManager, envMetadataCache, envMetrics, envTelemetry, newWorkerHeartbeat, withEnvWithAdmission, workerRuntimeOf)
 import Ecluse.Server (MountBinding (..), ServerConfig (scDrainTimeout, scPort), ShutdownDrainTimeout (ShutdownDrainTimeout), mkServerConfig)
@@ -176,7 +177,15 @@ runProxy bootEnv = do
     -- the static token, or the CodeArtifact mint (whose inputs are validated and which
     -- mints once eagerly, so a misconfiguration fails loudly here at boot).
     providers <- initCredentialProviders credentialReporters env >>= orExit (T.unlines . map renderBootError)
-    bindings <- planMounts mountBindingFor getCurrentTime providers config >>= orExit (T.unlines . map renderBootError)
+    -- The rules' boot-bound capabilities. No CVE sync task exists yet, so no
+    -- advisory database is ever loaded and AllowIfRemediatesCve abstains; the sync
+    -- slice replaces the acquisition with its swap slot's bracketed read.
+    let ruleDeps =
+            RuleDeps
+                { rdWithCveLookup = \use -> use Nothing
+                , rdBreakerReporter = deferredBreakerReporter deferredMetrics EffectfulRule
+                }
+    bindings <- planMounts mountBindingFor getCurrentTime ruleDeps providers config >>= orExit (T.unlines . map renderBootError)
     publishTargets <- orExit (T.unlines . map renderBootError) (planPublishTargets providers config)
     -- Select the mirror-queue backend from config (the GCP arm is a fail-loud
     -- "not built" boot error, never a silent fall-through); the resulting plan is

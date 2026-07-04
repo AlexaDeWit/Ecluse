@@ -19,7 +19,9 @@ module Ecluse.Core.Rules.Types (
     defaultPrecedence,
     atDefaultPrecedence,
     defaultAllowIfOlderThanPrecedence,
+    defaultAllowIfRemediatesCvePrecedence,
     defaultAllowScopePrecedence,
+    defaultAllowByIdentityPrecedence,
     defaultDenyInstallTimeExecutionPrecedence,
     defaultDenyByIdentityPrecedence,
 
@@ -39,8 +41,10 @@ import Data.Time (NominalDiffTime, UTCTime)
 import Ecluse.Core.Package (Scope)
 
 {- | The closed, evaluation-agnostic vocabulary of __built-in__ rules an operator
-selects and refines in config. A built-in rule reasons only over the
-'Ecluse.Core.Package.PackageDetails' an adapter already fetched.
+selects and refines in config. Most built-in rules reason only over the
+'Ecluse.Core.Package.PackageDetails' an adapter already fetched; 'AllowIfRemediatesCve'
+additionally consults the local advisory database through the boot-bound
+'Ecluse.Core.Rules.RuleDeps'.
 
 This is __data, not the engine's runtime representation__: a small, inspectable,
 @Eq@\/@Show@ enum so config can parse, patch (override a rule's parameters), and name
@@ -51,7 +55,7 @@ its evaluation returns.
 
 It is also the __security boundary__ on what config can express: untrusted config only
 ever yields closed 'Rule' data, never arbitrary computation. A rule whose evaluation
-performs IO (a future advisory\/CVE lookup) is added here as a plain constructor that
+performs IO ('AllowIfRemediatesCve') is a plain constructor here that
 'Ecluse.Core.Rules.evalRule' dispatches on; arbitrary evaluation closures are a
 code-layer capability, never reachable from config.
 -}
@@ -72,6 +76,22 @@ data Rule
       precedence (above AllowScope) as a post-mirror revocation mechanism.
       -}
       DenyByIdentity Text
+    | {- | Allow a specific package or package\@version by exact identity -- the
+      allow twin of 'DenyByIdentity' and the operator's explicit escape hatch, e.g.
+      for a security fix published under a version string the remediation fast
+      lane's exact-match probe cannot see. Top of the allow band, still under every
+      deny default.
+      -}
+      AllowByIdentity Text
+    | {- | Fast-track a version a synced advisory names as its __exact fix__, so a
+      security patch is admitted immediately rather than waiting out the
+      publish-age quarantine. The one effectful built-in: it consults the local
+      advisory database ('Ecluse.Core.Cve.CveLookup') through the boot-bound
+      'Ecluse.Core.Rules.RuleDeps', and abstains when no database is loaded, when
+      the version is not an exact fixed bound, or when the version still sits
+      inside another advisory's affected range.
+      -}
+      AllowIfRemediatesCve
     deriving stock (Eq, Show)
 
 {- | A stable, human-facing name for a rule -- its identity, derived from the data: the
@@ -83,6 +103,8 @@ ruleName = \case
     AllowIfOlderThan{} -> "AllowIfOlderThan"
     DenyInstallTimeExecution -> "DenyInstallTimeExecution"
     DenyByIdentity{} -> "DenyByIdentity"
+    AllowByIdentity{} -> "AllowByIdentity"
+    AllowIfRemediatesCve -> "AllowIfRemediatesCve"
 
 {- | A 'Rule' paired with the integer precedence at which it competes (higher
 wins). This is config's resolved-policy element; "Ecluse.Core.Rules" prepares it into
@@ -108,17 +130,20 @@ data PrecededRule = PrecededRule
 explicit precedence for a rule.
 
 __Every deny type defaults strictly above every allow type__, so "any deny
-overrides any allow" holds out of the box. The three rule types occupy two
-bands: the allow band (@AllowIfOlderThan@ <
-'defaultAllowScopePrecedence'), then the deny band
-('defaultDenyInstallTimeExecutionPrecedence') strictly above both. An operator may
+overrides any allow" holds out of the box. The rule types occupy two bands: the
+allow band, ordered by how explicit the operator's statement is
+(@AllowIfOlderThan@ < @AllowIfRemediatesCve@ < @AllowScope@ < @AllowByIdentity@),
+then the deny band ('defaultDenyInstallTimeExecutionPrecedence',
+'defaultDenyByIdentityPrecedence') strictly above all of it. An operator may
 still elevate a /specific/ allow above a /specific/ deny by giving it a higher
 explicit precedence -- the per-type defaults set only the out-of-the-box ordering.
 -}
 defaultPrecedence :: Rule -> Int
 defaultPrecedence = \case
     AllowIfOlderThan{} -> defaultAllowIfOlderThanPrecedence
+    AllowIfRemediatesCve -> defaultAllowIfRemediatesCvePrecedence
     AllowScope{} -> defaultAllowScopePrecedence
+    AllowByIdentity{} -> defaultAllowByIdentityPrecedence
     DenyInstallTimeExecution -> defaultDenyInstallTimeExecutionPrecedence
     DenyByIdentity{} -> defaultDenyByIdentityPrecedence
 
@@ -132,12 +157,29 @@ quarantine that yields to an explicit allow-list and to every deny.
 defaultAllowIfOlderThanPrecedence :: Int
 defaultAllowIfOlderThanPrecedence = 100
 
+{- | Default precedence of 'AllowIfRemediatesCve': above the passive age
+quarantine, which is the point of the fast lane -- a security fix is admitted
+immediately instead of waiting out @min-age@ -- but below 'AllowScope', so a
+scoped package an operator already trusts never pays the advisory probe and the
+more explicit rule keeps the audit credit.
+-}
+defaultAllowIfRemediatesCvePrecedence :: Int
+defaultAllowIfRemediatesCvePrecedence = 150
+
 {- | Default precedence of 'AllowScope': above the passive age quarantine -- an
 explicit allow-list of a trusted internal scope is a stronger statement than the
 time gate -- but still below every deny.
 -}
 defaultAllowScopePrecedence :: Int
 defaultAllowScopePrecedence = 200
+
+{- | Default precedence of 'AllowByIdentity': the top of the allow band -- an
+exact identity is the most explicit allow an operator can state -- yet still
+strictly below every deny default, so revocation and the install-script deny
+keep the last word.
+-}
+defaultAllowByIdentityPrecedence :: Int
+defaultAllowByIdentityPrecedence = 250
 
 {- | Default precedence of 'DenyInstallTimeExecution': the deny band, strictly above
 every allow default, so a matching deny overrides any allow out of the box.

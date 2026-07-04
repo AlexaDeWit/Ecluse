@@ -367,15 +367,25 @@ search open), though workstations are usually a softer control than CI.
 ## Rule policy
 
 Écluse evaluates a **named map of rules** over a built-in **default policy**,
-**deny-by-default**: a package is admitted only if a rule takes an allow position, and at
-equal precedence deny wins. The shipped default is deliberately small and biased toward
-resilience rather than blanket bans:
+**deny-by-default**: a package is admitted only if a rule takes an allow position, and
+every deny type defaults to a higher precedence than every allow type, so a matching
+deny overrides any allow out of the box. The shipped default is deliberately small and
+biased toward resilience rather than blanket bans:
 
 - **`min-age`**: admit public versions older than a quarantine window (7 days by default),
   the core defence against race-to-publish typosquatting and dependency confusion. **On at
   launch.**
-- **`remediation-fast-track`**: admit a release that fixes a known CVE immediately, ahead of
-  the quarantine. **On once the CVE tier lands.**
+- **`AllowIfRemediatesCve`**: admit a release that a synced advisory names as its **exact
+  fixed version** immediately, ahead of the quarantine, provided no other advisory still
+  affects it. **Available, opt-in**; it abstains until an advisory database has been
+  synced, and joins the default policy when the advisory sync ships. The probe is a
+  deliberate exact match on the advisory's `fixed` version: a fix published under any
+  other version string simply waits out the quarantine, and `AllowByIdentity` is the
+  explicit workaround.
+- **`AllowByIdentity`**: the allow twin of the revocation rule: admit a specific package
+  or `package@version` past the quarantine (for example a security fix the fast lane's
+  exact-match probe cannot see), at the top of the allow band yet still below every deny.
+  **Available.**
 - **`revoke`**: a hard-deny (`DenyByIdentity`) rule to deny a specific package or `package@version`, at a precedence above the scope allow-list. **Available.**
 
 You override values, add rules (e.g. opt into `DenyInstallTimeExecution`), or suppress a
@@ -386,7 +396,9 @@ default by name in the configuration document:
   "rules": {
     "min-age": { "ageSeconds": 1209600 },
     "deny-scripts": { "type": "DenyInstallTimeExecution", "precedence": 200 },
-    "revoke-bad": { "type": "DenyByIdentity", "identity": "bad-package" }
+    "revoke-bad": { "type": "DenyByIdentity", "identity": "bad-package" },
+    "cve-fast-lane": { "type": "AllowIfRemediatesCve" },
+    "pin-fix": { "type": "AllowByIdentity", "identity": "left-pad@1.3.0" }
   }
 }
 ```

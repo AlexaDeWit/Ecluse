@@ -20,5 +20,4 @@ fakeCveLookup rows =
         { cveRemediationProbe = \name version ->
             pure (any (\(n, ar) -> n == name && arFixed ar == Just version) rows)
         , cveAdvisoriesFor = \name -> pure [ar | (n, ar) <- rows, n == name]
-        , cveClose = pass
         }

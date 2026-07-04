@@ -4,9 +4,8 @@ import Database.SQLite.Simple (SQLError, close, execute_)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import Test.Hspec (Spec, describe, it, shouldBe, shouldReturn, shouldThrow)
-import UnliftIO.Exception (bracket)
 
-import Ecluse.Core.Cve (AdvisoryRange (..), CveDbRejected (..), CveLookup (..), openCveDb)
+import Ecluse.Core.Cve (AdvisoryRange (..), CveDb (..), CveDbRejected (..), CveLookup (..), openCveDb, withCveDb)
 import Ecluse.Core.Cve.Internal (openHardenedConnection)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Osv.Schema (osvSchemaEpoch)
@@ -61,11 +60,8 @@ withFakeLookup use = use (fakeCveLookup corpusRows)
 withRealLookup :: (CveLookup -> IO ()) -> IO ()
 withRealLookup use =
     withFixtureOsvDb CorpusV1 $ \dbFile ->
-        bracket (openOrFail dbFile) cveClose use
-  where
-    openOrFail dbFile =
-        openCveDb Npm dbFile >>= \case
-            Right l -> pure l
+        withCveDb Npm dbFile use >>= \case
+            Right () -> pass
             Left rejection -> fail ("fixture artifact unexpectedly rejected: " <> show rejection)
 
 spec :: Spec
@@ -90,15 +86,22 @@ spec = do
         it "rejects an artifact compiled for a different ecosystem" $
             withFixtureOsvDb CorpusV1 (openCveDb PyPI >=> rejectionShouldBe (CveDbEcosystemMismatch (Just "npm")))
 
+        it "withCveDb short-circuits a rejection without running the action" $
+            withSystemTempDirectory "ecluse-cve-hostile" $ \dir -> do
+                let path = dir </> "wrong-epoch.db"
+                mkDbWithWrongEpoch path
+                ran <- newIORef False
+                result <- withCveDb Npm path (\_ -> writeIORef ran True)
+                result `shouldBe` Left (CveDbWrongEpoch (osvSchemaEpoch + 1))
+                readIORef ran `shouldReturn` False
+
         it "ignores a malicious trigger: reads behave as on a clean artifact" $
             withSystemTempDirectory "ecluse-cve-hostile" $ \dir -> do
                 let path = dir </> "trigger.db"
                 mkDbWithMaliciousTrigger path
-                openCveDb Npm path >>= \case
+                withCveDb Npm path (\l -> cveRemediationProbe l "trigger-pkg" "1.0.0" `shouldReturn` True) >>= \case
                     Left rejection -> fail ("trigger artifact unexpectedly rejected: " <> show rejection)
-                    Right l -> do
-                        cveRemediationProbe l "trigger-pkg" "1.0.0" `shouldReturn` True
-                        cveClose l
+                    Right () -> pass
 
     describe "the hardened connection" $ do
         it "refuses writes outright, so no trigger can ever fire through it" $
@@ -111,11 +114,11 @@ spec = do
                         write `shouldThrow` \(_ :: SQLError) -> True
                         close conn
 
--- A rejection assertion that also releases the handle if acceptance
+-- A rejection assertion that also releases the resource if acceptance
 -- unexpectedly succeeded, so a failing test never leaks the connection.
-rejectionShouldBe :: CveDbRejected -> Either CveDbRejected CveLookup -> IO ()
+rejectionShouldBe :: CveDbRejected -> Either CveDbRejected CveDb -> IO ()
 rejectionShouldBe expected = \case
     Left rejection -> rejection `shouldBe` expected
-    Right l -> do
-        cveClose l
+    Right db -> do
+        cveDbClose db
         fail ("expected rejection " <> show expected <> " but the artifact was accepted")

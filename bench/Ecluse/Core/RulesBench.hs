@@ -25,7 +25,7 @@ import Ecluse.Bench.Corpus (
  )
 import Ecluse.Bench.Fit (notWorseThanLinearIO)
 import Ecluse.Core.Package (PackageInfo, infoVersions)
-import Ecluse.Core.Rules (evalRules, prepare)
+import Ecluse.Core.Rules (evalRules, inertRuleDeps, prepare)
 import Ecluse.Core.Rules.Types (
     Decision (Admitted, Blocked, BlockedByDefault, Undecidable),
  )
@@ -52,7 +52,7 @@ response performs.
 -}
 rulesDepth :: PackageInfo -> IO Int
 rulesDepth info = do
-    prepared <- prepare benchRules
+    prepared <- prepare inertRuleDeps benchRules
     sum <$> traverse (fmap decisionCode . evalRules benchEvalContext prepared) (Map.elems (infoVersions info))
 
 -- | A distinct code per decision arm, forcing the engine's verdict to a constructor.

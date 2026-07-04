@@ -213,18 +213,21 @@ filtered body rather than relaying upstream's (see
 | Rule | Type | Description |
 |------|------|-------------|
 | `AllowIfOlderThan ageSeconds` | Pure | Allows a package version if it was published more than `ageSeconds` seconds ago. Default: 604800 (7 days). Guards against typosquatting and dependency confusion attacks where attackers race to publish before detection. |
+| `AllowIfRemediatesCve` | Effectful | Allows a version a synced advisory names as its exact fixed version, provided no advisory still affects it: the [remediation fast lane](#allowifremediatescve-remediation-fast-track) past the quarantine. Abstains when it cannot confirm a remediation (including before a first advisory sync). |
 | `AllowScope scope` | Pure | Unconditionally allows all packages under a given npm scope (e.g. `@myorg`). Use for internal scopes that bypass public-registry rules. |
+| `AllowByIdentity identity` | Pure | Allows a specific package or `package@version` by exact identity: the allow twin of `DenyByIdentity` and the explicit operator lane for a fix the exact-match probe cannot see. Top of the allow band, still below every deny. |
 | `DenyInstallTimeExecution` | Pure | Denies any version flagged with an install-time code-execution signal (npm's `hasInstallScript`, a RubyGems native extension, a PyPI sdist), a common arbitrary-code-execution vector. Yields no decision otherwise. As a deny rule it overrides any allow at its higher default precedence. |
+| `DenyByIdentity identity` | Pure | A hard deny for a specific package or `package@version`, at the top precedence: the post-mirror revocation mechanism. |
 
-Further rules are added as later phases, the **effectful** CVE rules
-[`DenyIfCVE` and `AllowIfRemediatesCve`](#cve-subsystem), and effectful per-version
-checks like RubyGems native `extensions` (see [above](#rules-engine)).
+The remaining planned additions are the **effectful** deny direction
+[`DenyIfCVE`](#cve-subsystem) and effectful per-version checks like RubyGems
+native `extensions` (see [above](#rules-engine)).
 
 Which rules ship **enabled by default** is a policy choice documented with the
 [default policy](configuration.md#the-default-policy): at launch only the pure
 `AllowIfOlderThan` quarantine is on; `AllowIfRemediatesCve` joins the default
-when the CVE rules land; the install-script and CVE *denies* stay available but
-opt-in.
+once the advisory sync ships (until then it can only abstain); the
+install-script and CVE *denies* stay available but opt-in.
 
 ## CVE Subsystem
 
@@ -232,8 +235,13 @@ Effectful rules read the **same synced advisory data in two directions**: a
 **deny** direction, `DenyIfCVE` blocks a version that *is* affected by a known
 advisory, and an **allow** direction, `AllowIfRemediatesCve` *fast-tracks* a
 version that **fixes** one. Rather than call an advisory API per evaluation, Écluse
-**syncs a local copy of the dataset and queries it in memory**: the `CVELookup`
-handle reads a local index, never the network, on the hot path.
+**syncs a local copy of the dataset and queries it locally**: the `CveLookup`
+handle (`Ecluse.Core.Cve`) reads the synced `osv.db` SQLite artifact on local
+disk, never the network, on the hot path. The handle reaches the rules through
+the engine's boot-bound capability record (`RuleDeps`, closed into the prepared
+rules by `prepare`), and access is acquisition-bracketed per evaluation, so the
+[shadow-swap](#local-polling-decoupled-ingestion) can retire a superseded
+artifact the moment no evaluation still reads it.
 
 ### `AllowIfRemediatesCve`, remediation fast-track
 
@@ -241,25 +249,33 @@ A publish-age quarantine (`AllowIfOlderThan`) has one perverse failure mode:
 left alone it would also hold back the **security patch** that fixes an in-the-wild
 vulnerability, delaying remediation by exactly the window meant to catch
 typosquats. `AllowIfRemediatesCve` removes that tension. For version *V* of package
-*P* it consults `CVELookup` and takes a position:
+*P* it consults `CveLookup` and takes a position:
 
-- **`Allow`** when an advisory affects an **earlier** version of *P* and *V* falls
-  **outside** that advisory's affected range, i.e. *V* is the fix. The reason
-  names the remediated advisory IDs (audit trail).
+- **`Allow`** when an advisory for *P* names *V* as its **exact fixed version**
+  and no advisory's affected range still contains *V* (an unfixed advisory
+  included), i.e. *V* is a fix and is not itself vulnerable. The reason names
+  the remediated advisory IDs (audit trail).
 - **`NoDecision`** otherwise, and a **fail-open** (`FailNoDecision`) `Unavailable`
-  **when the lookup itself fails.** This is the deliberate inverse of `DenyIfCVE`'s
-  failure mode: a deny that cannot confirm *safety* fails **closed**
+  **when the lookup itself fails** (or no advisory database is loaded yet). This
+  is the deliberate inverse of `DenyIfCVE`'s failure mode: a deny that cannot
+  confirm *safety* fails **closed**
   (`FailDeny` → `Undecidable`, [below](#effectful-rule-failure)), but an allow that
   cannot confirm a *remediation* fails **open**, it simply does not fire, so the
   version falls back to the normal quarantine path rather than being admitted on an
   unverified claim. A CVE-source outage thus costs security patches their fast lane
   (they wait out `min-age`) but never admits anything it could not vouch for.
 
-It is ranked **above** the quarantine allow so the fix is admitted **immediately**.
-Both this rule and `DenyIfCVE` are decided locally against the synced advisory
-ranges using the same per-ecosystem ordering as
-[`compareVersions`](domain-model.md), the allow direction just asks "is *V* past
-the fix boundary?" instead of "is *V* inside the affected range?".
+It is ranked **above** the quarantine allow so the fix is admitted **immediately**,
+and below the scope allow-list, so an already-trusted scope never pays the probe.
+The fix test is a deliberate **exact string match** on the advisory's canonical
+`fixed` version, one traversal of the artifact's `(package_name, fixed_version)`
+index: a fix published under any other version string misses the lane and waits
+out the quarantine, with `AllowByIdentity` as the operator's explicit workaround.
+The not-itself-vulnerable guard, and the deny direction's "is *V* inside the
+affected range?", are decided in Haskell against the fetched advisory ranges
+using the same per-ecosystem ordering as [`compareVersions`](domain-model.md)
+(SQLite's text collation cannot order versions), with every unprovable
+comparison counting as affected, so the lane only ever opens on evidence.
 
 ### Local polling, decoupled ingestion
 

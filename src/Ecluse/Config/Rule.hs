@@ -21,6 +21,7 @@ import Ecluse.Core.Rules.Types (
     PrecededRule (..),
     Rule (..),
     defaultPrecedence,
+    ruleName,
  )
 
 newtype RulePolicy = RulePolicy
@@ -115,6 +116,10 @@ buildRule name ty entry = case ty of
     "DenyByIdentity" -> case entryIdentity entry of
         Just ident -> Right (DenyByIdentity ident)
         Nothing -> Left [MalformedRule name "\"DenyByIdentity\" requires \"identity\""]
+    "AllowByIdentity" -> case entryIdentity entry of
+        Just ident -> Right (AllowByIdentity ident)
+        Nothing -> Left [MalformedRule name "\"AllowByIdentity\" requires \"identity\""]
+    "AllowIfRemediatesCve" -> Right AllowIfRemediatesCve
     "DenyInstallTimeExecution" -> Right DenyInstallTimeExecution
     _ -> Left [UnknownRuleType name ty]
 
@@ -129,22 +134,24 @@ patchRuleValue name entry rule = do
             Nothing -> Right (AllowIfOlderThan d)
         AllowScope s -> Right (AllowScope (maybe s mkScope (entryScope entry)))
         DenyByIdentity i -> Right (DenyByIdentity (fromMaybe i (entryIdentity entry)))
+        AllowByIdentity i -> Right (AllowByIdentity (fromMaybe i (entryIdentity entry)))
+        AllowIfRemediatesCve -> Right AllowIfRemediatesCve
         DenyInstallTimeExecution -> Right DenyInstallTimeExecution
 
 checkRestatedType :: Text -> RuleEntry -> Rule -> Either [PolicyError] ()
 checkRestatedType name entry rule = case entryType entry of
     Nothing -> Right ()
     Just ty
-        | ty == ruleTypeName rule -> Right ()
+        | ty == ruleName rule -> Right ()
         | ty `elem` knownRuleTypes -> Left [MalformedRule name ("\"type\" " <> quote ty <> " does not match the default rule it patches")]
         | otherwise -> Left [UnknownRuleType name ty]
 
-ruleTypeName :: Rule -> Text
-ruleTypeName = \case
-    AllowScope{} -> "AllowScope"
-    AllowIfOlderThan{} -> "AllowIfOlderThan"
-    DenyInstallTimeExecution -> "DenyInstallTimeExecution"
-    DenyByIdentity{} -> "DenyByIdentity"
-
 knownRuleTypes :: [Text]
-knownRuleTypes = ["AllowScope", "AllowIfOlderThan", "DenyInstallTimeExecution", "DenyByIdentity"]
+knownRuleTypes =
+    [ "AllowScope"
+    , "AllowIfOlderThan"
+    , "AllowByIdentity"
+    , "AllowIfRemediatesCve"
+    , "DenyInstallTimeExecution"
+    , "DenyByIdentity"
+    ]

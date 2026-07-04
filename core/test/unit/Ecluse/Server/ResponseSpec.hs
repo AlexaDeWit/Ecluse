@@ -15,7 +15,7 @@ import Ecluse.Core.Package (
     mkPackageName,
     mkScope,
  )
-import Ecluse.Core.Rules (evalRules, prepare)
+import Ecluse.Core.Rules (evalRules, inertRuleDeps, prepare)
 import Ecluse.Core.Rules.Types (
     Decision (Admitted, Blocked, Undecidable),
     EvalContext (EvalContext),
@@ -49,7 +49,7 @@ now = UTCTime (fromGregorian 2026 6 20) 0
 
 -- | Decide a built-in policy through the one engine ('prepare' then 'evalRules') at 'now'.
 decideAt :: [PrecededRule] -> PackageDetails -> IO Decision
-decideAt prs pd = prepare prs >>= \prepared -> evalRules (EvalContext now) prepared pd
+decideAt prs pd = prepare inertRuleDeps prs >>= \prepared -> evalRules (EvalContext now) prepared pd
 
 -- | A single inert artifact; the response model does not inspect artifacts.
 sampleArtifact :: Artifact

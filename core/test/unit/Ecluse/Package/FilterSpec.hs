@@ -23,6 +23,7 @@ import Ecluse.Core.Package (
     mkPackageName,
  )
 import Ecluse.Core.Package.Filter (FilterPlan (..), filterPlan)
+import Ecluse.Core.Rules (inertRuleDeps)
 import Ecluse.Core.Rules.Types (
     Decision (Admitted),
     EvalContext (EvalContext),
@@ -111,16 +112,16 @@ survivorSpec :: Spec
 survivorSpec = describe "fpSurvivors" $ do
     it "keeps only the approved versions, dropping a too-young one" $ do
         -- 1.0.0 is 30 days old (approved); 2.0.0 is 1 day old (denied by the age gate).
-        plan <- filterPlan ctx policy (infoOf (Just "2.0.0") [("1.0.0", 30, False), ("2.0.0", 1, False)])
+        plan <- filterPlan inertRuleDeps ctx policy (infoOf (Just "2.0.0") [("1.0.0", 30, False), ("2.0.0", 1, False)])
         fpSurvivors plan `shouldBe` Set.singleton "1.0.0"
 
     it "drops a version that declares an install script even when old enough" $ do
         -- Both old enough, but 2.0.0 runs an install script → denied by the deny rule.
-        plan <- filterPlan ctx policy (infoOf (Just "1.0.0") [("1.0.0", 30, False), ("2.0.0", 30, True)])
+        plan <- filterPlan inertRuleDeps ctx policy (infoOf (Just "1.0.0") [("1.0.0", 30, False), ("2.0.0", 30, True)])
         fpSurvivors plan `shouldBe` Set.singleton "1.0.0"
 
     it "is empty when nothing is approved" $ do
-        plan <- filterPlan ctx policy (infoOf (Just "2.0.0") [("1.0.0", 1, False), ("2.0.0", 1, False)])
+        plan <- filterPlan inertRuleDeps ctx policy (infoOf (Just "2.0.0") [("1.0.0", 1, False), ("2.0.0", 1, False)])
         fpSurvivors plan `shouldBe` Set.empty
 
 latestSpec :: Spec
@@ -128,12 +129,12 @@ latestSpec = describe "fpLatest" $ do
     it "keeps a surviving upstream latest rather than promoting a higher survivor" $ do
         -- Upstream latest is 1.0.0; both survive. Keep-unless-denied: 1.0.0 stays,
         -- never promoted to the higher 2.0.0.
-        plan <- filterPlan ctx policy (infoOf (Just "1.0.0") [("1.0.0", 30, False), ("2.0.0", 30, False)])
+        plan <- filterPlan inertRuleDeps ctx policy (infoOf (Just "1.0.0") [("1.0.0", 30, False), ("2.0.0", 30, False)])
         latestRaw plan `shouldBe` Just "1.0.0"
 
     it "repoints latest down to a surviving version when the chosen latest is denied" $ do
         -- Upstream latest aims at the denied 2.0.0; repoint to the surviving 1.0.0.
-        plan <- filterPlan ctx policy (infoOf (Just "2.0.0") [("1.0.0", 30, False), ("2.0.0", 1, False)])
+        plan <- filterPlan inertRuleDeps ctx policy (infoOf (Just "2.0.0") [("1.0.0", 30, False), ("2.0.0", 1, False)])
         latestRaw plan `shouldBe` Just "1.0.0"
 
     it "prefers the highest stable survivor when repointing over a prerelease" $ do
@@ -141,23 +142,24 @@ latestSpec = describe "fpLatest" $ do
         -- prerelease 2.0.0-rc.1. Stable-preferring repoint chooses 1.0.0.
         plan <-
             filterPlan
+                inertRuleDeps
                 ctx
                 policy
                 (infoOf (Just "3.0.0") [("1.0.0", 30, False), ("2.0.0-rc.1", 30, False), ("3.0.0", 1, False)])
         latestRaw plan `shouldBe` Just "1.0.0"
 
     it "is Nothing when nothing survives" $ do
-        plan <- filterPlan ctx policy (infoOf (Just "1.0.0") [("1.0.0", 1, False)])
+        plan <- filterPlan inertRuleDeps ctx policy (infoOf (Just "1.0.0") [("1.0.0", 1, False)])
         fpLatest plan `shouldBe` Nothing
 
 decisionsSpec :: Spec
 decisionsSpec = describe "fpDecisions" $ do
     it "carries one decision per version (survivors and denials alike)" $ do
-        plan <- filterPlan ctx policy (infoOf (Just "2.0.0") [("1.0.0", 30, False), ("2.0.0", 1, False)])
+        plan <- filterPlan inertRuleDeps ctx policy (infoOf (Just "2.0.0") [("1.0.0", 30, False), ("2.0.0", 1, False)])
         length (fpDecisions plan) `shouldBe` 2
 
     it "is all-non-approved when nothing survives" $ do
-        plan <- filterPlan ctx policy (infoOf (Just "1.0.0") [("1.0.0", 1, False), ("2.0.0", 1, True)])
+        plan <- filterPlan inertRuleDeps ctx policy (infoOf (Just "1.0.0") [("1.0.0", 1, False), ("2.0.0", 1, True)])
         length (fpDecisions plan) `shouldBe` 2
         any isApproved (fpDecisions plan) `shouldBe` False
 
@@ -166,13 +168,13 @@ propertiesSpec = describe "properties" $ do
     it "survivors are exactly the approved version keys" $
         hedgehog $ do
             spec' <- forAll genSpec
-            plan <- liftIO (filterPlan ctx policy (toInfo spec'))
+            plan <- liftIO (filterPlan inertRuleDeps ctx policy (toInfo spec'))
             fpSurvivors plan === approvedKeys spec'
 
     it "decisions number one per version, all non-approved when no survivor" $
         hedgehog $ do
             spec' <- forAll genSpec
-            plan <- liftIO (filterPlan ctx policy (toInfo spec'))
+            plan <- liftIO (filterPlan inertRuleDeps ctx policy (toInfo spec'))
             length (fpDecisions plan) === length (specVersions spec')
             when (Set.null (fpSurvivors plan)) $
                 assert (not (any isApproved (fpDecisions plan)))
@@ -180,7 +182,7 @@ propertiesSpec = describe "properties" $ do
     it "latest, when present, is always a surviving version" $
         hedgehog $ do
             spec' <- forAll genSpec
-            plan <- liftIO (filterPlan ctx policy (toInfo spec'))
+            plan <- liftIO (filterPlan inertRuleDeps ctx policy (toInfo spec'))
             case fpLatest plan of
                 Nothing -> assert (Set.null (fpSurvivors plan))
                 Just v -> assert (unVersion v `Set.member` fpSurvivors plan)
@@ -188,7 +190,7 @@ propertiesSpec = describe "properties" $ do
     it "a surviving upstream latest is kept, never promoted to a higher survivor" $
         hedgehog $ do
             spec' <- forAll genSpec
-            plan <- liftIO (filterPlan ctx policy (toInfo spec'))
+            plan <- liftIO (filterPlan inertRuleDeps ctx policy (toInfo spec'))
             -- When the upstream-chosen latest itself survives, keep-unless-denied
             -- holds it in place regardless of any higher survivor.
             case specLatest spec' of
@@ -200,7 +202,7 @@ propertiesSpec = describe "properties" $ do
     it "a repointed latest is the highest stable survivor when any survivor is stable" $
         hedgehog $ do
             spec' <- forAll genSpec
-            plan <- liftIO (filterPlan ctx policy (toInfo spec'))
+            plan <- liftIO (filterPlan inertRuleDeps ctx policy (toInfo spec'))
             let survivors = fpSurvivors plan
                 -- Repoint only happens when the chosen latest did not survive.
                 chosenSurvived = maybe False (`Set.member` survivors) (specLatest spec')

@@ -14,7 +14,9 @@ import Ecluse.Core.Package (mkScope)
 import Ecluse.Core.Rules.Types (
     PrecededRule (..),
     Rule (..),
+    defaultAllowByIdentityPrecedence,
     defaultAllowIfOlderThanPrecedence,
+    defaultAllowIfRemediatesCvePrecedence,
     defaultDenyInstallTimeExecutionPrecedence,
  )
 
@@ -77,6 +79,22 @@ spec = describe "rulePolicySpec" $ do
             resolveJson "{\"rules\":{\"young\":{\"type\":\"AllowIfOlderThan\"}}}"
                 `shouldBe` Left [MalformedRule "young" "\"AllowIfOlderThan\" requires \"ageSeconds\""]
 
+        it "adds an AllowIfRemediatesCve rule at its type's default precedence" $
+            resolveJson "{\"rules\":{\"cve-fast-lane\":{\"type\":\"AllowIfRemediatesCve\"}}}"
+                `shouldSatisfy` either
+                    (const False)
+                    (elem (PrecededRule defaultAllowIfRemediatesCvePrecedence AllowIfRemediatesCve))
+
+        it "adds an AllowByIdentity rule from an identity field" $
+            resolveJson "{\"rules\":{\"pinned-fix\":{\"type\":\"AllowByIdentity\",\"identity\":\"left-pad@1.3.0\"}}}"
+                `shouldSatisfy` either
+                    (const False)
+                    (elem (PrecededRule defaultAllowByIdentityPrecedence (AllowByIdentity "left-pad@1.3.0")))
+
+        it "rejects adding an AllowByIdentity without identity" $
+            resolveJson "{\"rules\":{\"pinned-fix\":{\"type\":\"AllowByIdentity\"}}}"
+                `shouldBe` Left [MalformedRule "pinned-fix" "\"AllowByIdentity\" requires \"identity\""]
+
     describe "merging over a multi-rule shared policy" $ do
         it "overrides an AllowScope default's scope and precedence" $
             resolveJsonOver mixedBase "{\"rules\":{\"trusted\":{\"scope\":\"other\",\"precedence\":205}}}"
@@ -118,9 +136,9 @@ spec = describe "rulePolicySpec" $ do
                     , [UnknownRuleType "deny-scripts" "DenyInstallTimeExecutio"]
                     )
                 ,
-                    ( "the effectful AllowIfRemediatesCve type (unknown here, not a crash)"
-                    , "{\"rules\":{\"cve\":{\"type\":\"AllowIfRemediatesCve\"}}}"
-                    , [UnknownRuleType "cve" "AllowIfRemediatesCve"]
+                    ( "the deferred DenyIfCVE type (unknown until it ships, not a crash)"
+                    , "{\"rules\":{\"cve\":{\"type\":\"DenyIfCVE\"}}}"
+                    , [UnknownRuleType "cve" "DenyIfCVE"]
                     )
                 ,
                     ( "a new name missing its type"

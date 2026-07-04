@@ -111,7 +111,7 @@ pureAt prec rule =
         { prepName = ruleName rule
         , prepPrecedence = prec
         , prepResilience = Nothing
-        , prepEval = (`evalRule` rule)
+        , prepEval = \evalCtx -> evalRule inertRuleDeps evalCtx rule
         }
 
 -- | A capturing breaker reporter appending each reported state to its log (oldest first).

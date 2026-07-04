@@ -9,8 +9,12 @@ import Hedgehog.Range qualified as Range
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
 
+import UnliftIO.Exception (throwString)
+
+import Ecluse.Core.Cve (AdvisoryRange (..))
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Package
+import Ecluse.Test.Cve (fakeCveLookup)
 import Ecluse.Test.Package (sampleDetails)
 
 import Ecluse.Core.Rules
@@ -67,11 +71,29 @@ withInstallScripts pd = pd{pkgInstallCode = RunsCodeOnInstall "postinstall hook"
 at :: Int -> Rule -> PrecededRule
 at = PrecededRule
 
-{- | Decide a built-in policy through the one engine ('prepare' then 'evalRules'), in
-'IO'. The pure vocabulary now has no pure entry point, so the tests run in 'IO'.
+{- | Decide a policy through the one engine ('prepare' then 'evalRules') under the
+given capabilities.
 -}
+decideWith :: RuleDeps -> [PrecededRule] -> PackageDetails -> IO Decision
+decideWith deps prs pd = prepare deps prs >>= \prepared -> evalRules ctx prepared pd
+
+-- | 'decideWith' for the pure built-ins, which consult no capability.
 decide :: [PrecededRule] -> PackageDetails -> IO Decision
-decide prs pd = prepare prs >>= \prepared -> evalRules ctx prepared pd
+decide = decideWith inertRuleDeps
+
+-- | Rule capabilities whose advisory database is the given fake's rows.
+depsWith :: [(Text, AdvisoryRange)] -> RuleDeps
+depsWith rows =
+    RuleDeps
+        { rdWithCveLookup = \use -> use (Just (fakeCveLookup rows))
+        , rdBreakerReporter = noBreakerReporter
+        }
+
+{- | One advisory naming @thing\@1.0.0@ (the version 'pkg' builds) as its exact
+fixed bound, with no other advisory leaving the package affected.
+-}
+fixRows :: [(Text, AdvisoryRange)]
+fixRows = [("thing", AdvisoryRange "GHSA-fixed-0001" (Just "HIGH") (Just "0") (Just "1.0.0"))]
 
 genScope :: Gen Text
 genScope = Gen.text (Range.linear 1 12) Gen.alpha
@@ -109,38 +131,78 @@ spec :: Spec
 spec = do
     describe "evalRule" $ do
         it "AllowScope allows a matching scope" $
-            evalRule ctx (AllowScope (mkScope "myorg")) (pkg (Just "myorg") 0)
+            evalRule inertRuleDeps ctx (AllowScope (mkScope "myorg")) (pkg (Just "myorg") 0)
                 >>= (`shouldSatisfy` isAllow)
         it "AllowScope yields no decision on a non-matching scope" $
-            evalRule ctx (AllowScope (mkScope "myorg")) (pkg (Just "other") 0)
+            evalRule inertRuleDeps ctx (AllowScope (mkScope "myorg")) (pkg (Just "other") 0)
                 >>= (`shouldSatisfy` isNoDecision)
         it "AllowScope yields no decision on an unscoped package" $
-            evalRule ctx (AllowScope (mkScope "myorg")) (pkg Nothing 0)
+            evalRule inertRuleDeps ctx (AllowScope (mkScope "myorg")) (pkg Nothing 0)
                 >>= (`shouldSatisfy` isNoDecision)
         it "AllowIfOlderThan allows a version older than the threshold" $
-            evalRule ctx (AllowIfOlderThan (7 * nominalDay)) (pkg Nothing 30)
+            evalRule inertRuleDeps ctx (AllowIfOlderThan (7 * nominalDay)) (pkg Nothing 30)
                 >>= (`shouldSatisfy` isAllow)
         it "AllowIfOlderThan yields no decision on a too-young version" $
-            evalRule ctx (AllowIfOlderThan (7 * nominalDay)) (pkg Nothing 1)
+            evalRule inertRuleDeps ctx (AllowIfOlderThan (7 * nominalDay)) (pkg Nothing 1)
                 >>= (`shouldSatisfy` isNoDecision)
         it "DenyInstallTimeExecution denies a package that runs install scripts" $
-            evalRule ctx DenyInstallTimeExecution (withInstallScripts (pkg Nothing 99))
+            evalRule inertRuleDeps ctx DenyInstallTimeExecution (withInstallScripts (pkg Nothing 99))
                 >>= (`shouldSatisfy` isDeny)
         it "DenyInstallTimeExecution yields no decision when there are no install scripts" $
-            evalRule ctx DenyInstallTimeExecution (pkg Nothing 99)
+            evalRule inertRuleDeps ctx DenyInstallTimeExecution (pkg Nothing 99)
                 >>= (`shouldSatisfy` isNoDecision)
         it "DenyByIdentity matches a package name exactly" $
-            evalRule ctx (DenyByIdentity "thing") (pkg Nothing 0)
+            evalRule inertRuleDeps ctx (DenyByIdentity "thing") (pkg Nothing 0)
                 >>= (`shouldSatisfy` isDeny)
         it "DenyByIdentity matches a package@version exactly" $
-            evalRule ctx (DenyByIdentity "thing@1.0.0") (pkg Nothing 0)
+            evalRule inertRuleDeps ctx (DenyByIdentity "thing@1.0.0") (pkg Nothing 0)
                 >>= (`shouldSatisfy` isDeny)
         it "DenyByIdentity matches a scoped package name exactly" $
-            evalRule ctx (DenyByIdentity "@myorg/thing") (pkg (Just "myorg") 0)
+            evalRule inertRuleDeps ctx (DenyByIdentity "@myorg/thing") (pkg (Just "myorg") 0)
                 >>= (`shouldSatisfy` isDeny)
         it "DenyByIdentity yields no decision on a non-match" $
-            evalRule ctx (DenyByIdentity "other") (pkg Nothing 0)
+            evalRule inertRuleDeps ctx (DenyByIdentity "other") (pkg Nothing 0)
                 >>= (`shouldSatisfy` isNoDecision)
+        it "AllowByIdentity matches a package name exactly" $
+            evalRule inertRuleDeps ctx (AllowByIdentity "thing") (pkg Nothing 0)
+                >>= (`shouldSatisfy` isAllow)
+        it "AllowByIdentity matches a package@version exactly" $
+            evalRule inertRuleDeps ctx (AllowByIdentity "thing@1.0.0") (pkg Nothing 0)
+                >>= (`shouldSatisfy` isAllow)
+        it "AllowByIdentity yields no decision on a non-match" $
+            evalRule inertRuleDeps ctx (AllowByIdentity "other") (pkg Nothing 0)
+                >>= (`shouldSatisfy` isNoDecision)
+
+    describe "evalRule (AllowIfRemediatesCve)" $ do
+        it "allows a version an advisory names as its exact fix, crediting the advisory" $
+            evalRule (depsWith fixRows) ctx AllowIfRemediatesCve (pkg Nothing 0)
+                >>= (`shouldBe` Allow "remediates GHSA-fixed-0001")
+        it "names every advisory the version fixes in the reason" $ do
+            let rows =
+                    [ ("thing", AdvisoryRange "GHSA-fixed-0001" (Just "HIGH") (Just "0") (Just "1.0.0"))
+                    , ("thing", AdvisoryRange "GHSA-fixed-0002" (Just "LOW") (Just "0.2.0") (Just "1.0.0"))
+                    ]
+            evalRule (depsWith rows) ctx AllowIfRemediatesCve (pkg Nothing 0)
+                >>= (`shouldBe` Allow "remediates GHSA-fixed-0001, GHSA-fixed-0002")
+        it "matches the OSV wire form of a scoped name" $ do
+            let rows = [("@myorg/thing", AdvisoryRange "GHSA-fixed-0003" Nothing (Just "0") (Just "1.0.0"))]
+            evalRule (depsWith rows) ctx AllowIfRemediatesCve (pkg (Just "myorg") 0)
+                >>= (`shouldBe` Allow "remediates GHSA-fixed-0003")
+        it "abstains when no advisory names the version as a fix (exact match only)" $ do
+            -- 1.0.0 sits past this advisory's 0.9.0 fix, but the fast lane is a
+            -- deliberate exact-fix probe: being merely unaffected earns nothing.
+            let rows = [("thing", AdvisoryRange "GHSA-fixed-0001" (Just "HIGH") (Just "0") (Just "0.9.0"))]
+            evalRule (depsWith rows) ctx AllowIfRemediatesCve (pkg Nothing 0)
+                >>= (`shouldBe` NoDecision "no advisory names this version as its fix")
+        it "abstains when the version still sits inside another advisory's affected range" $ do
+            let rows =
+                    fixRows
+                        <> [("thing", AdvisoryRange "GHSA-open-0002" (Just "CRITICAL") (Just "0.5.0") Nothing)]
+            evalRule (depsWith rows) ctx AllowIfRemediatesCve (pkg Nothing 0)
+                >>= (`shouldBe` NoDecision "fixes GHSA-fixed-0001 but is still affected by GHSA-open-0002")
+        it "abstains when no advisory database is loaded" $
+            evalRule inertRuleDeps ctx AllowIfRemediatesCve (pkg Nothing 0)
+                >>= (`shouldBe` NoDecision "no advisory database is loaded")
 
     describe "PrecededRule" $ do
         it "exposes the precedence and rule it was built with" $ do
@@ -153,13 +215,43 @@ spec = do
                 `shouldBe` ("PrecededRule {rulePrecedence = 250, prRule = DenyInstallTimeExecution}" :: String)
 
     describe "defaultPrecedence" $ do
-        it "ranks every deny default strictly above every allow default" $
+        it "ranks every deny default strictly above every allow default" $ do
             -- The out-of-the-box invariant: a matching deny overrides any allow.
+            let allows = [AllowScope (mkScope "x"), AllowIfOlderThan 0, AllowByIdentity "x", AllowIfRemediatesCve]
             defaultPrecedence DenyInstallTimeExecution
-                `shouldSatisfy` (\d -> d > defaultPrecedence (AllowScope (mkScope "x")) && d > defaultPrecedence (AllowIfOlderThan 0))
+                `shouldSatisfy` (\d -> all ((d >) . defaultPrecedence) allows)
+        it "orders the allow band by explicitness: quarantine < fast lane < scope < identity" $
+            ( defaultAllowIfOlderThanPrecedence
+            , defaultAllowIfRemediatesCvePrecedence
+            , defaultAllowScopePrecedence
+            , defaultAllowByIdentityPrecedence
+            )
+                `shouldSatisfy` (\(q, f, s, i) -> q < f && f < s && s < i)
         it "atDefaultPrecedence pairs a rule with its type default" $
             atDefaultPrecedence DenyInstallTimeExecution
                 `shouldBe` PrecededRule defaultDenyInstallTimeExecutionPrecedence DenyInstallTimeExecution
+
+    describe "prepare" $ do
+        it "attaches the fail-open resilience (and its breaker) to AllowIfRemediatesCve" $
+            -- The one thing a reviewer must check on the remediation lane: an
+            -- uncomputable lookup abstains (FailNoDecision) and never admits or 503s.
+            prepare inertRuleDeps [atDefaultPrecedence AllowIfRemediatesCve] >>= \case
+                [r] -> fmap resAlignment (prepResilience r) `shouldBe` Just FailNoDecision
+                other -> expectationFailure ("expected one prepared rule, got " <> show (length other))
+        it "prepares every pure built-in to run directly, with no resilience" $ do
+            rules <-
+                prepare
+                    inertRuleDeps
+                    ( map
+                        atDefaultPrecedence
+                        [ AllowScope (mkScope "myorg")
+                        , AllowIfOlderThan (7 * nominalDay)
+                        , AllowByIdentity "thing"
+                        , DenyInstallTimeExecution
+                        , DenyByIdentity "thing"
+                        ]
+                    )
+            map (isJust . prepResilience) rules `shouldBe` replicate 5 False
 
     describe "bootOrder" $ do
         it "orders highest precedence first, then rule name ascending" $ do
@@ -167,6 +259,7 @@ spec = do
             -- descending, then name as the deterministic tiebreak.
             rules <-
                 prepare
+                    inertRuleDeps
                     [ at 100 (AllowIfOlderThan (7 * nominalDay))
                     , at 300 DenyInstallTimeExecution
                     , at 200 (AllowScope (mkScope "myorg"))
@@ -176,6 +269,7 @@ spec = do
         it "breaks an equal-precedence tie by name ascending" $ do
             rules <-
                 prepare
+                    inertRuleDeps
                     [ at 200 (AllowScope (mkScope "myorg"))
                     , at 200 (AllowIfOlderThan (7 * nominalDay))
                     ]
@@ -186,6 +280,7 @@ spec = do
         it "emits one line per rule, in boot order, with each precedence" $ do
             rules <-
                 prepare
+                    inertRuleDeps
                     [ at 100 (AllowIfOlderThan (7 * nominalDay))
                     , at 300 DenyInstallTimeExecution
                     ]
@@ -194,7 +289,7 @@ spec = do
                            , "rule 2: AllowIfOlderThan (precedence 100)"
                            ]
         it "is empty for an empty rule set" $
-            prepare [] >>= \rules -> renderBootOrder rules `shouldBe` []
+            prepare inertRuleDeps [] >>= \rules -> renderBootOrder rules `shouldBe` []
 
     describe "evalRules" $ do
         it "denies by default with no rules" $
@@ -252,6 +347,31 @@ spec = do
                 p = pkg (Just "myorg") 0
             decide rs p >>= \d -> blockedBy d `shouldBe` Just "DenyByIdentity"
             decide (reverse rs) p >>= \d -> blockedBy d `shouldBe` Just "DenyByIdentity"
+        it "the remediation fast lane admits a young fix ahead of the quarantine" $
+            -- The whole point of the rule: a security patch too young for min-age is
+            -- admitted immediately because an advisory names it as the exact fix.
+            decideWith
+                (depsWith fixRows)
+                (map atDefaultPrecedence [AllowIfOlderThan (7 * nominalDay), AllowIfRemediatesCve])
+                (pkg Nothing 0)
+                >>= \d -> admittedBy d `shouldBe` Just "AllowIfRemediatesCve"
+        it "a failing advisory lookup abstains: the quarantine still governs, and nothing turns Undecidable" $ do
+            -- The deliberate failure asymmetry (the inverse of a deny direction): an
+            -- unconfirmable remediation costs the fix its fast lane, never
+            -- availability and never an admission.
+            let broken =
+                    RuleDeps
+                        { rdWithCveLookup = \_ -> throwString "advisory database exploded"
+                        , rdBreakerReporter = noBreakerReporter
+                        }
+                policy = map atDefaultPrecedence [AllowIfOlderThan (7 * nominalDay), AllowIfRemediatesCve]
+            -- An old enough version still rides the ordinary allow.
+            decideWith broken policy (pkg Nothing 30)
+                >>= \d -> admittedBy d `shouldBe` Just "AllowIfOlderThan"
+            -- A young version is denied by default -- not fail-closed 'Undecidable'.
+            decideWith broken policy (pkg Nothing 1) >>= \case
+                BlockedByDefault _ -> pass
+                other -> expectationFailure ("expected BlockedByDefault, got " <> show other)
         it "denies by default when every rule is non-decisive, collecting each reason in boot order" $
             -- The audit trail carries each non-decisive rule's actual reason, in
             -- boot order (highest precedence first): AllowScope (200) then
