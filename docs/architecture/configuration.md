@@ -278,7 +278,18 @@ a stricter policy on npm than on PyPI).
 - a `"<name>": { "enabled": false }` entry **suppresses** the named default rule.
 
 Each rule may set an integer `precedence` (higher wins); omit it to use the rule
-type's default. At boot the rules are arranged **once** into a single total order,**highest precedence first, then rule name ascending**, and evaluation walks that
+type's default:
+
+| `type` | Default precedence | Required field |
+|---|---|---|
+| `AllowIfOlderThan` | 100 | `ageSeconds` |
+| `AllowIfRemediatesCve` | 150 | -- |
+| `AllowScope` | 200 | `scope` |
+| `AllowByIdentity` | 250 | `identity` |
+| `DenyInstallTimeExecution` | 300 | -- |
+| `DenyByIdentity` | 400 | `identity` |
+
+At boot the rules are arranged **once** into a single total order,**highest precedence first, then rule name ascending**, and evaluation walks that
 order and takes the **first decisive result** (an allow, a deny, or a fail-closed
 unavailability); if no rule is decisive, the package is denied by default. At
 **equal explicit precedence** the tie is resolved by **rule name**, *not* by a
@@ -297,7 +308,7 @@ blanket bans**, a floor to extend, not a wall:
 | Default rule (name) | Rule | Status | Why |
 |---|---|---|---|
 | `min-age` | `AllowIfOlderThan` (7 days) | **On at launch** | Admit public versions that have survived a quarantine window, the core defence against race-to-publish typosquatting and dependency confusion. |
-| `remediation-fast-track` | `AllowIfRemediatesCve` | **On once the [CVE rules](rules-engine.md#cve-subsystem) land** | Ranked **above** `min-age` so a release that fixes a known CVE is admitted **immediately**, a quarantine must never delay a security patch (see [Rules Engine](rules-engine.md#allowifremediatescve--remediation-fast-track)). |
+| `remediation-fast-track` | `AllowIfRemediatesCve` | **Joins the default once the [advisory sync](rules-engine.md#cve-subsystem) ships** (available to opt into today; without a synced database it abstains) | Ranked **above** `min-age` so a release that fixes a known CVE is admitted **immediately**, a quarantine must never delay a security patch (see [Rules Engine](rules-engine.md#allowifremediatescve--remediation-fast-track)). |
 
 Deliberately **not** in the default: `DenyInstallTimeExecution` (plenty of legitimate
 packages ship install scripts, a blanket ban is too blunt for a default) and

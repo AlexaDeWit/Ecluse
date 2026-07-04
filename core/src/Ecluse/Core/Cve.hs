@@ -10,16 +10,28 @@ canonical version string, so exact-fix matching is plain string equality and
 rides the @(package_name, fixed_version)@ index in one traversal. A fix
 published under a non-canonical version string misses the probe and simply
 waits out the ordinary quarantine; the operator workaround is an explicit
-allow-by-identity rule.
+'Ecluse.Core.Rules.Types.AllowByIdentity' rule.
 
 An artifact is accepted or rejected at 'openCveDb' (epoch stamp, table shape,
 ecosystem), with rejection as a value: the caller keeps its last known-good
 handle and alarms. See "Ecluse.Core.Cve.Internal" for the hardening detail.
+
+__Ownership is split at the type level__: 'openCveDb' yields a 'CveDb', the
+owning resource whose holder alone may 'cveDbClose'; consumers are handed only
+its 'CveLookup' view, so nothing evaluating rules can release a shared
+connection. A lexically-scoped use (a test, a one-shot check) brackets with
+'withCveDb'; a dynamically-scoped owner (the background sync's shadow-swap,
+which retires an artifact only when no evaluation still reads it) holds the
+'CveDb' and closes explicitly.
 -}
 module Ecluse.Core.Cve (
-    -- * The handle
-    CveLookup (..),
+    -- * The owning resource
+    CveDb (..),
     openCveDb,
+    withCveDb,
+
+    -- * The consumer view
+    CveLookup (..),
 
     -- * What a lookup returns
     AdvisoryRange (..),
@@ -31,13 +43,17 @@ module Ecluse.Core.Cve (
     insideAffectedRange,
 ) where
 
+import UnliftIO.Exception (finally)
+
 import Ecluse.Core.Cve.Internal (AdvisoryRange (..), CveDbRejected (..), advisoriesQuery, openHardenedConnection, probeQuery)
 import Ecluse.Core.Ecosystem (Ecosystem)
 import Ecluse.Core.Version (compareVersions, mkVersion)
 
 import Database.SQLite.Simple (close)
 
-{- | Advisory questions about one ecosystem's artifact.
+{- | Advisory questions about one ecosystem's artifact -- the read-only view a
+consumer (a rule evaluation) is handed. It deliberately cannot release the
+underlying connection; that is the owning 'CveDb''s capability.
 
 Names and versions are the artifact's own vocabulary: the OSV wire package
 name (scope inline, e.g. @\@scope\/name@) and verbatim version text. Callers
@@ -52,25 +68,48 @@ data CveLookup = CveLookup
     {- ^ Every advisory range recorded against a package name; rule predicates
     interpret them.
     -}
-    , cveClose :: IO ()
-    -- ^ Release the artifact's connection. The handle must not be used after.
     }
 
-{- | Open an @osv.db@ artifact and build the handle over it, or reject the
-artifact ('CveDbRejected') with its connection already closed.
+{- | One opened artifact: the consumer view plus the owner's close. Whoever
+holds this owns the connection's lifetime; hand consumers 'cveDbLookup' only.
 -}
-openCveDb :: Ecosystem -> FilePath -> IO (Either CveDbRejected CveLookup)
+data CveDb = CveDb
+    { cveDbLookup :: CveLookup
+    -- ^ The view consumers query through.
+    , cveDbClose :: IO ()
+    {- ^ Release the artifact's connection. Owner-only; the artifact must no
+    longer be read through this handle's view afterwards.
+    -}
+    }
+
+{- | Open an @osv.db@ artifact and build the owning handle over it, or reject
+the artifact ('CveDbRejected') with its connection already closed.
+-}
+openCveDb :: Ecosystem -> FilePath -> IO (Either CveDbRejected CveDb)
 openCveDb eco dbFile = do
     opened <- openHardenedConnection eco dbFile
     pure $ case opened of
         Left rejection -> Left rejection
         Right conn ->
             Right
-                CveLookup
-                    { cveRemediationProbe = probeQuery conn
-                    , cveAdvisoriesFor = advisoriesQuery conn
-                    , cveClose = close conn
+                CveDb
+                    { cveDbLookup =
+                        CveLookup
+                            { cveRemediationProbe = probeQuery conn
+                            , cveAdvisoriesFor = advisoriesQuery conn
+                            }
+                    , cveDbClose = close conn
                     }
+
+{- | Bracket a lexically-scoped use of an artifact: open, hand the consumer
+view to the action, and close on any exit. A rejected artifact short-circuits
+('Left') without running the action; its connection is already closed.
+-}
+withCveDb :: Ecosystem -> FilePath -> (CveLookup -> IO a) -> IO (Either CveDbRejected a)
+withCveDb eco dbFile use =
+    openCveDb eco dbFile >>= \case
+        Left rejection -> pure (Left rejection)
+        Right db -> Right <$> (use (cveDbLookup db) `finally` cveDbClose db)
 
 {- | Is this version inside the advisory range's affected interval,
 @introduced <= v < fixed@, under the ecosystem's version ordering?

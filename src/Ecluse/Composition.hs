@@ -113,7 +113,7 @@ import Ecluse.Core.Registry.Npm.Project qualified as NpmProject
 import Ecluse.Core.Registry.Npm.Request qualified as NpmRequest
 import Ecluse.Core.Wire (renderWire)
 
-import Ecluse.Core.Rules (prepare)
+import Ecluse.Core.Rules (RuleDeps, prepare)
 import Ecluse.Core.Security (Limits (Limits, maxBodyBytes, maxNestingDepth, maxVersionCount), TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), hostAddress, splitHostPort, tarballHostGate)
 import Ecluse.Core.Security.Egress (registryUrlText)
 import Ecluse.Core.Server.Cache (CacheConfig (..))
@@ -592,14 +592,16 @@ runs 'loadConfig' (whose policy errors become 'PolicyBootError's) and then
 'composeBindings', so policy, missing-adapter, and unresolved-credential failures
 all surface from one call.
 
-The ecosystem-to-adapter resolver and the wall-clock source are injected (the
-composition root supplies @mountBindingFor@ and 'Data.Time.getCurrentTime'), so
-this validation opens no socket. It is 'IO' only because 'composeBindings' 'prepare's
-each mount's rules (allocating per-rule engine state once at boot).
+The ecosystem-to-adapter resolver, the wall-clock source, and the rules' boot-bound
+capabilities are injected (the composition root supplies @mountBindingFor@,
+'Data.Time.getCurrentTime', and its 'RuleDeps'), so this validation opens no socket.
+It is 'IO' only because 'composeBindings' 'prepare's each mount's rules (allocating
+per-rule engine state once at boot).
 -}
 planMounts ::
     (Ecosystem -> Maybe PackumentDeps -> Maybe PublishDeps -> Maybe MountBinding) ->
     IO UTCTime ->
+    RuleDeps ->
     CredentialProviders ->
     Config ->
     IO (Either [BootError] [MountBinding])
@@ -614,10 +616,11 @@ served rather than the @501@ stub). Errors aggregate across every mount.
 composeBindings ::
     (Ecosystem -> Maybe PackumentDeps -> Maybe PublishDeps -> Maybe MountBinding) ->
     IO UTCTime ->
+    RuleDeps ->
     CredentialProviders ->
     Config ->
     IO (Either [BootError] [MountBinding])
-composeBindings resolveAdapter clock providers config = do
+composeBindings resolveAdapter clock ruleDeps providers config = do
     let pubDepsMapE = sequence $ Map.mapWithKey (\eco mcfg -> publishDepsFor eco (configApp config) mcfg limits helpMessage) (cfgMounts (configApp config))
     let (pubErrs, pubDepsMap) = case pubDepsMapE of
             Left errs -> (errs, Map.empty)
@@ -714,11 +717,10 @@ composeBindings resolveAdapter clock providers config = do
     @docs\/architecture\/hosting.md@ → "URL rewriting"). -}
     packumentDepsFor :: Mount -> IO PackumentDeps
     packumentDepsFor mount = do
-        -- Prepare the resolved policy into the engine's runtime rules. No effectful rule
-        -- type is wired into the policy model yet, so every rule here is built-in and
-        -- 'prepare' allocates no breaker; an effectful rule would carry a resilience
-        -- policy (and its breaker, allocated here once).
-        prepared <- prepare (mountPolicy mount)
+        -- Prepare the resolved policy into the engine's runtime rules, closing the
+        -- injected 'RuleDeps' into them; an effectful rule (AllowIfRemediatesCve)
+        -- gets its resilience policy and breaker allocated here, once per mount.
+        prepared <- prepare ruleDeps (mountPolicy mount)
         let regs = mountRegistries mount
         pure
             PackumentDeps

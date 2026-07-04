@@ -53,6 +53,7 @@ import Ecluse.Core.Package.Integrity (
  )
 import Ecluse.Core.Queue (defaultMemoryQueueConfig)
 import Ecluse.Core.Queue.Sqs (SqsConfig (sqsEndpoint, sqsQueueUrl, sqsRegion), SqsEndpoint (endpointHost, endpointPort, endpointSecure))
+import Ecluse.Core.Rules (inertRuleDeps)
 import Ecluse.Core.Security (Limits (maxBodyBytes, maxNestingDepth, maxVersionCount), TarballHostPolicy (AnyAllowlistedHost, SameHostAsPackument), defaultLimits)
 import Ecluse.Core.Server.Cache (CacheConfig (cacheMaxBytes, cacheMaxEntries, cacheTtl))
 import Ecluse.Core.Server.Context (
@@ -161,7 +162,7 @@ planFrom envVars mDocBytes = do
         Right cfg -> do
             initCredentialProviders noCredentialReporters (configApp cfg) >>= \case
                 Left pErrs -> pure (Left pErrs)
-                Right providers -> planMounts mountBindingFor (pure fixedNow) providers cfg
+                Right providers -> planMounts mountBindingFor (pure fixedNow) inertRuleDeps providers cfg
 
 credentialProvidersSpec :: Spec
 credentialProvidersSpec = describe "initCredentialProviders" $ do
@@ -579,7 +580,7 @@ composeBindingsSpec = describe "planMounts / composeBindings (config-driven serv
         env <- expectEnv (("ECLUSE_AUTH_TOKEN", "edge-secret") : ("ECLUSE_HELP_MESSAGE", "ask #platform") : staticEnvVars)
         providers <- expectProviders env
         config <- expectConfig (("ECLUSE_AUTH_TOKEN", "edge-secret") : ("ECLUSE_HELP_MESSAGE", "ask #platform") : staticEnvVars) Nothing
-        composeBindings mountBindingFor (pure fixedNow) providers config >>= \case
+        composeBindings mountBindingFor (pure fixedNow) inertRuleDeps providers config >>= \case
             Right [binding] -> case bindingPackumentDeps binding of
                 Just deps -> do
                     fmap unSecret (pdInboundToken deps) `shouldBe` Just "edge-secret"
@@ -700,7 +701,7 @@ composeBindingsSpec = describe "planMounts / composeBindings (config-driven serv
         env <- expectEnv staticEnvVars
         providers <- expectProviders env
         config <- expectConfig staticEnvVars Nothing
-        composeBindings mountBindingFor (pure fixedNow) providers config >>= \case
+        composeBindings mountBindingFor (pure fixedNow) inertRuleDeps providers config >>= \case
             Right bindings -> map bindingPrefix bindings `shouldBe` ["npm" :| []]
             Left errs -> expectationFailure ("unexpected boot errors: " <> show errs)
 

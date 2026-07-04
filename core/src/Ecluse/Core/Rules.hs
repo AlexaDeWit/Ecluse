@@ -12,14 +12,15 @@ the package is 'BlockedByDefault'.
 
 __A rule is evaluation-agnostic data; how it is evaluated is a separate concern.__ The
 closed built-in vocabulary ('Ecluse.Core.Rules.Types.Rule') says /what/ a rule is;
-'evalRule' is the single dispatch that says /how/ each built-in rule decides. The
-engine's runtime structure is the 'PreparedRule': it pairs a rule's boot-order
-identity (precedence and name) with the raw per-version evaluator and an optional
-'Resilience' policy. 'prepare' builds one per configured rule; the built-in rules are
-pure, so they carry no 'Resilience' and run directly, while an effectful rule would
-carry a 'Resilience' (a per-attempt timeout, bounded retry with backoff, and a
-per-source 'Ecluse.Core.Breaker.Breaker') applied by the harness 'runEffectfulRule'.
-The order /is/ the tiebreak: there is no runtime comparison of results.
+'evalRule' is the single dispatch that says /how/ each built-in rule decides, closing
+over the boot-bound capabilities in 'RuleDeps'. The engine's runtime structure is the
+'PreparedRule': it pairs a rule's boot-order identity (precedence and name) with the
+raw per-version evaluator and an optional 'Resilience' policy. 'prepare' builds one
+per configured rule; the pure built-ins carry no 'Resilience' and run directly, while
+the effectful 'AllowIfRemediatesCve' carries a 'Resilience' (a per-attempt timeout,
+bounded retry with backoff, and a per-source 'Ecluse.Core.Breaker.Breaker') applied by
+the harness 'runEffectfulRule'. The order /is/ the tiebreak: there is no runtime
+comparison of results.
 
 The evaluator on a 'PreparedRule' is __not__ reachable from config: 'prepare' only
 ever binds 'evalRule' over closed 'Rule' data, so untrusted config can express only
@@ -35,6 +36,10 @@ launched. Evaluation is 'IO'-typed (a rule's evaluator may do IO), so there is n
 entry point. The rule data types live in "Ecluse.Core.Rules.Types".
 -}
 module Ecluse.Core.Rules (
+    -- * The boot-bound rule capabilities
+    RuleDeps (..),
+    inertRuleDeps,
+
     -- * The built-in rule dispatch
     evalRule,
 
@@ -84,29 +89,61 @@ import Ecluse.Core.Breaker (
     recordSuccess,
     reportBreakerChange,
  )
+import Ecluse.Core.Cve (AdvisoryRange (..), CveLookup (..), insideAffectedRange)
 import Ecluse.Core.Package
 import Ecluse.Core.Rules.Types
 import Ecluse.Core.Version (renderVersion)
 
-{- | Evaluate a single built-in rule against a single package version -- the one place
-"how a rule decides" lives. The dispatch over the closed 'Rule' data: each built-in
-constructor reasons over the 'PackageDetails' alone and 'pure's its result, never
-yielding 'Unavailable'. A future effectful rule (e.g. a CVE lookup) would be a new
-'Rule' constructor whose arm reads its dependency from the 'EvalContext' and does IO.
+{- | The boot-bound capabilities a rule's evaluation may consult, injected once at
+the composition root and closed into the prepared rules by 'prepare'. This is the
+capability counterpart of 'EvalContext': the context carries per-evaluation ambient
+__data__ (the clock instant), while these are process-lifetime __capabilities__.
 
-'IO'-typed so the dispatch is uniform across pure and (future) effectful rules. Total
-over the built-ins -- a malformed rule or package yields a result, never an exception,
-so hostile metadata cannot crash the gate.
+'rdWithCveLookup' is acquisition-bracketed rather than a bare read so its provider
+can pin the advisory database generation for exactly one rule evaluation: the
+background sync's atomic shadow-swap closes and prunes a superseded artifact only
+once no evaluation still holds it. 'Nothing' means no advisory database is loaded
+(none configured, or the first sync has not landed); the CVE rule abstains.
 -}
-evalRule :: EvalContext -> Rule -> PackageDetails -> IO RuleResult
-evalRule _ (AllowScope scope) pd =
+data RuleDeps = RuleDeps
+    { rdWithCveLookup :: forall a. (Maybe CveLookup -> IO a) -> IO a
+    -- ^ Bracketed access to the current advisory database view, if one is loaded.
+    , rdBreakerReporter :: BreakerReporter
+    {- ^ The observer effectful rules report their breaker transitions to
+    (@ecluse.rule.breaker.state@); 'noBreakerReporter' when unobserved.
+    -}
+    }
+
+{- | Rule capabilities with no advisory database and no breaker observer: the
+composition value before a CVE sync is configured, and the pure tests' default.
+-}
+inertRuleDeps :: RuleDeps
+inertRuleDeps =
+    RuleDeps
+        { rdWithCveLookup = \use -> use Nothing
+        , rdBreakerReporter = noBreakerReporter
+        }
+
+{- | Evaluate a single built-in rule against a single package version -- the one place
+"how a rule decides" lives. The dispatch over the closed 'Rule' data: the pure
+constructors reason over the 'PackageDetails' alone and 'pure' their result, never
+yielding 'Unavailable'; 'AllowIfRemediatesCve' reads the advisory database through
+the boot-bound 'RuleDeps' and does IO, relying on its 'Resilience' harness (attached
+by 'prepare') to resolve a failing lookup to a fail-open 'Unavailable'.
+
+'IO'-typed so the dispatch is uniform across the pure and effectful arms. The pure
+arms are total -- a malformed rule or package yields a result, never an exception, so
+hostile metadata cannot crash the gate.
+-}
+evalRule :: RuleDeps -> EvalContext -> Rule -> PackageDetails -> IO RuleResult
+evalRule _ _ (AllowScope scope) pd =
     pure $ case pkgNamespace (pkgName pd) of
         Just s
             | s == scope ->
                 Allow ("scope " <> renderScope scope <> " is allow-listed")
         _ ->
             NoDecision ("scope is not the allow-listed " <> renderScope scope)
-evalRule ctx (AllowIfOlderThan minAge) pd =
+evalRule _ ctx (AllowIfOlderThan minAge) pd =
     pure $ case pkgPublishedAt pd of
         Nothing -> NoDecision "publish time is unknown"
         Just publishedAt ->
@@ -127,18 +164,57 @@ evalRule ctx (AllowIfOlderThan minAge) pd =
                                 <> " ago, minimum age is "
                                 <> renderDuration minAge
                             )
-evalRule _ DenyInstallTimeExecution pd =
+evalRule _ _ DenyInstallTimeExecution pd =
     pure $ case pkgInstallCode pd of
         RunsCodeOnInstall how -> Deny ("runs code on install: " <> how)
         NoCodeOnInstall -> NoDecision "no install-time code execution"
         CodeExecUnknown -> NoDecision "install-time code execution not yet determined"
-evalRule _ (DenyByIdentity ident) pd =
+evalRule _ _ (DenyByIdentity ident) pd =
     pure $
-        let pkgStr = renderPackageName (pkgName pd)
-            pkgAtVer = pkgStr <> "@" <> renderVersion (pkgVersion pd)
-         in if ident == pkgStr || ident == pkgAtVer
-                then Deny ("identity " <> ident <> " is revoked by operator")
-                else NoDecision ("identity is not the revoked " <> ident)
+        if matchesIdentity ident pd
+            then Deny ("identity " <> ident <> " is revoked by operator")
+            else NoDecision ("identity is not the revoked " <> ident)
+evalRule _ _ (AllowByIdentity ident) pd =
+    pure $
+        if matchesIdentity ident pd
+            then Allow ("identity " <> ident <> " is allow-listed by operator")
+            else NoDecision ("identity is not the allow-listed " <> ident)
+evalRule deps _ AllowIfRemediatesCve pd =
+    rdWithCveLookup deps $ \case
+        Nothing -> pure (NoDecision "no advisory database is loaded")
+        Just cve -> do
+            fixes <- cveRemediationProbe cve name version
+            if not fixes
+                then pure (NoDecision "no advisory names this version as its fix")
+                else do
+                    -- The probe hit, so the version is some advisory's exact fixed
+                    -- bound; fetch the package's ranges once to name what it fixes
+                    -- and to guard the lane: a version still inside *any* advisory's
+                    -- affected range (an unfixed one included) must not fast-track.
+                    ranges <- cveAdvisoriesFor cve name
+                    let remediated = ordNub [arCveId ar | ar <- ranges, arFixed ar == Just version]
+                        stillOpen = ordNub [arCveId ar | ar <- ranges, insideAffectedRange eco version ar]
+                    pure $ case (remediated, stillOpen) of
+                        (_, _ : _) ->
+                            NoDecision
+                                ("fixes " <> T.intercalate ", " remediated <> " but is still affected by " <> T.intercalate ", " stillOpen)
+                        ([], []) ->
+                            -- Unreachable under one acquisition (the probe and the
+                            -- fetch see the same artifact), kept total.
+                            NoDecision "no advisory names this version as its fix"
+                        (ids, []) -> Allow ("remediates " <> T.intercalate ", " ids)
+  where
+    eco = pkgEcosystem (pkgName pd)
+    name = renderPackageName (pkgName pd)
+    version = renderVersion (pkgVersion pd)
+
+-- The one identity test the by-identity twins share: the exact rendered package
+-- name, or the exact package@version.
+matchesIdentity :: Text -> PackageDetails -> Bool
+matchesIdentity ident pd =
+    let pkgStr = renderPackageName (pkgName pd)
+        pkgAtVer = pkgStr <> "@" <> renderVersion (pkgVersion pd)
+     in ident == pkgStr || ident == pkgAtVer
 
 {- | A rule prepared for the engine to evaluate: its boot-order identity (precedence
 and name), an optional 'Resilience' policy, and the raw per-version evaluator the
@@ -192,29 +268,41 @@ data Resilience = Resilience
     }
 
 {- | Prepare a resolved policy ('PrecededRule's) into the engine's runtime rules: each
-rule's name comes from its data ('ruleName'), its evaluator from 'evalRule', and its
-'Resilience' from whether the rule needs one. The built-in vocabulary is pure, so
-every rule prepared today carries no 'Resilience' (@'prepResilience' = 'Nothing'@) and
-runs directly.
+rule's name comes from its data ('ruleName'), its evaluator from 'evalRule' closed
+over the boot-bound 'RuleDeps', and its 'Resilience' from whether the rule needs one.
+The pure built-ins carry no 'Resilience' (@'prepResilience' = 'Nothing'@) and run
+directly; 'AllowIfRemediatesCve' is prepared with a __fail-open__ 'Resilience'
+('FailNoDecision'), so a lookup that fails or hangs abstains -- the version falls back
+to the ordinary quarantine -- and never admits on an unconfirmable claim.
 
 'IO'-typed because preparing a resilient rule allocates its per-source breaker
-('newBreaker') -- once, at the composition root, shared across evaluations. No built-in
-rule needs one yet, so 'prepare' does no IO today; the signature is where breaker
-allocation lands when the first effectful rule arrives.
+('newBreaker') -- once, at the composition root, shared across evaluations.
 -}
-prepare :: [PrecededRule] -> IO [PreparedRule]
-prepare = traverse prepareRule
+prepare :: RuleDeps -> [PrecededRule] -> IO [PreparedRule]
+prepare deps = traverse (prepareRule deps)
 
--- Prepare one configured rule. The built-in rules are pure, so this attaches no
--- 'Resilience' and no breaker; an effectful rule would allocate its breaker here.
-prepareRule :: PrecededRule -> IO PreparedRule
-prepareRule (PrecededRule prec rule) =
+-- Prepare one configured rule: attach the fail-open 'Resilience' (allocating its
+-- breaker) to the effectful CVE rule; the pure rules run directly.
+prepareRule :: RuleDeps -> PrecededRule -> IO PreparedRule
+prepareRule deps (PrecededRule prec rule) = do
+    resilience <- case rule of
+        AllowIfRemediatesCve -> do
+            breaker <- newBreaker
+            pure $
+                Just
+                    Resilience
+                        { resConfig = defaultEffectfulConfig
+                        , resAlignment = FailNoDecision
+                        , resBreaker = breaker
+                        , resBreakerReporter = rdBreakerReporter deps
+                        }
+        _ -> pure Nothing
     pure
         PreparedRule
             { prepName = ruleName rule
             , prepPrecedence = prec
-            , prepResilience = Nothing
-            , prepEval = (`evalRule` rule)
+            , prepResilience = resilience
+            , prepEval = \ctx -> evalRule deps ctx rule
             }
 
 {- | Arrange a rule set into the single total order evaluation walks: __highest

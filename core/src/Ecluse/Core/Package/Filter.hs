@@ -49,7 +49,7 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 
 import Ecluse.Core.Package (PackageInfo (infoDistTags, infoVersions), pkgVersion)
-import Ecluse.Core.Rules (evalRules, prepare)
+import Ecluse.Core.Rules (RuleDeps, evalRules, prepare)
 import Ecluse.Core.Rules.Types (Decision (Admitted), EvalContext, PrecededRule)
 import Ecluse.Core.Version (Version, renderVersion, selectLatest, unVersion)
 
@@ -92,9 +92,9 @@ repointed downward to the highest stable survivor. The decisions are returned fo
 __every__ version in key order, so the adapter has each denial's reason when
 nothing survives.
 -}
-filterPlan :: EvalContext -> [PrecededRule] -> PackageInfo -> IO FilterPlan
-filterPlan ctx rules info = do
-    prepared <- prepare rules
+filterPlan :: RuleDeps -> EvalContext -> [PrecededRule] -> PackageInfo -> IO FilterPlan
+filterPlan deps ctx rules info = do
+    prepared <- prepare deps rules
     decisions <- traverse (evalRules ctx prepared) (infoVersions info)
     pure (filterPlanFromDecisions decisions info)
 

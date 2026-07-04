@@ -27,6 +27,7 @@ import Ecluse.Core.Registry.Npm.Filter (
     rewriteTarballUrls,
  )
 import Ecluse.Core.Registry.Npm.Project (parsePackageInfo)
+import Ecluse.Core.Rules (inertRuleDeps)
 import Ecluse.Core.Rules.Types (
     Decision (Admitted),
     EvalContext (EvalContext),
@@ -729,7 +730,7 @@ rewrite is fused into the assembly, so the result already carries mount-based UR
 -}
 applyTo :: EvalContext -> [PrecededRule] -> PackageInfo -> Value -> IO AssembleResult
 applyTo c rules info value = do
-    plan <- filterPlan c rules info
+    plan <- filterPlan inertRuleDeps c rules info
     pure $
         if Set.null (fpSurvivors plan)
             then NoSurvivors (fpDecisions plan)

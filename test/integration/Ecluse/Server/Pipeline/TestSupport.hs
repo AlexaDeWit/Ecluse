@@ -46,7 +46,7 @@ import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
 import Ecluse.Core.Registry.Npm.Request (artifactRequestByFile, artifactRequestByUrl)
 import Ecluse.Core.Registry.Npm.Route qualified as Npm
 import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
-import Ecluse.Core.Rules (PreparedRule, prepare)
+import Ecluse.Core.Rules (PreparedRule, inertRuleDeps, prepare)
 import Ecluse.Core.Rules.Types (
     PrecededRule,
     Rule (AllowIfOlderThan, DenyInstallTimeExecution),
@@ -605,7 +605,7 @@ how its host is spelled. The default tarball-host policy is the secure
 -}
 deps :: Int -> Int -> Maybe Text -> IO PackumentDeps
 deps privatePort publicPort inbound = do
-    prepared <- prepare policy
+    prepared <- prepare inertRuleDeps policy
     pure
         PackumentDeps
             { pdPrivateBaseUrl = localhost privatePort
@@ -635,7 +635,7 @@ through the unified engine.
 depsWith :: [PreparedRule] -> Int -> Int -> IO PackumentDeps
 depsWith effectful privatePort publicPort = do
     base <- deps privatePort publicPort Nothing
-    prepared <- prepare policy
+    prepared <- prepare inertRuleDeps policy
     pure base{pdRules = prepared <> effectful}
 
 localhost :: Int -> Text

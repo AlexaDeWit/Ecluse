@@ -42,6 +42,7 @@ import Ecluse.Core.Rules (
     PreparedRule (..),
     Resilience (Resilience),
     defaultEffectfulConfig,
+    inertRuleDeps,
     newBreaker,
     noBreakerReporter,
     prepare,
@@ -149,7 +150,7 @@ spec = do
         it "is the structural tier for an empty rule set" $
             evalTier ([] :: [PreparedRule]) `shouldBe` Metric.Structural
         it "is the structural tier for a purely-pure rule set" $ do
-            rules <- prepare [atDefaultPrecedence (AllowIfOlderThan 0)]
+            rules <- prepare inertRuleDeps [atDefaultPrecedence (AllowIfOlderThan 0)]
             evalTier rules `shouldBe` Metric.Structural
         it "is the effectful tier when any rule carries a resilience policy" $ do
             breaker <- newBreaker

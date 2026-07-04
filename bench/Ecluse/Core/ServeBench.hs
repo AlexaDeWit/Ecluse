@@ -37,6 +37,7 @@ import Ecluse.Core.Package (PackageInfo)
 import Ecluse.Core.Package.Filter (filterPlan, fpSurvivors, restrictToSurvivors)
 import Ecluse.Core.Package.Merge (MergePlan (mpSurvivors), Provenance (GatedSource), mergePackuments)
 import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
+import Ecluse.Core.Rules (inertRuleDeps)
 import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan), atDefaultPrecedence)
 import Test.Tasty.Bench (Benchmark, bench, bgroup, whnfAppIO)
 
@@ -67,7 +68,7 @@ from the inputs -- so the measured tail is plan, merge, assemble, encode.)
 -}
 serveDepth :: (Value, PackageInfo) -> IO Int
 serveDepth (value, info) = do
-    plan <- filterPlan benchEvalContext serveRules info
+    plan <- filterPlan inertRuleDeps benchEvalContext serveRules info
     pure $ case mergePackuments [(GatedSource, restrictToSurvivors (fpSurvivors plan) info)] of
         Just merged
             | not (Map.null (mpSurvivors merged)) ->

@@ -126,7 +126,7 @@ import Ecluse.Core.Registry.Npm.Filter (assembleMergedPackument)
 import Ecluse.Core.Registry.Npm.Request (artifactRequestByFile, artifactRequestByUrl)
 import Ecluse.Core.Registry.Npm.Route qualified as Npm
 import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
-import Ecluse.Core.Rules (prepare)
+import Ecluse.Core.Rules (inertRuleDeps, prepare)
 import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan), atDefaultPrecedence)
 import Ecluse.Core.Security (TarballHostPolicy (SameHostAsPackument), defaultLimits, tarballHostGate)
 import Ecluse.Core.Server.Admission (newServeAdmission)
@@ -440,7 +440,7 @@ workingSet knobs = take (max 1 (lkWorkingSet knobs)) serveCorpus
 -- exactly as the integration suite does.
 npmDeps :: Int -> Int -> IO PackumentDeps
 npmDeps privatePort publicPort = do
-    prepared <- prepare benchPolicy
+    prepared <- prepare inertRuleDeps benchPolicy
     pure
         PackumentDeps
             { pdPrivateBaseUrl = localhost privatePort
