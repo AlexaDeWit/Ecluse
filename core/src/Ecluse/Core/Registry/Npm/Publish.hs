@@ -98,33 +98,45 @@ npmPublishDocument name version filename integrity shasum tarball =
             [ "_id" .= rendered
             , "name" .= rendered
             , "dist-tags" .= object ["latest" .= versionText]
-            , "versions"
-                .= object
-                    [ Key.fromText versionText
-                        .= object
-                            [ "name" .= rendered
-                            , "version" .= versionText
-                            , "dist"
-                                .= object
-                                    ( ["tarball" .= filename]
-                                        <> maybe [] (\i -> ["integrity" .= i]) integrity
-                                        <> maybe [] (\s -> ["shasum" .= s]) shasum
-                                    )
-                            ]
-                    ]
-            , "_attachments"
-                .= object
-                    [ Key.fromText filename
-                        .= object
-                            [ "content_type" .= ("application/octet-stream" :: Text)
-                            , "data" .= encodedTarball
-                            , "length" .= BS.length tarball
-                            ]
-                    ]
+            , "versions" .= object [Key.fromText versionText .= manifest]
+            , "_attachments" .= object [Key.fromText filename .= attachmentObject tarball]
             ]
   where
     versionText = renderVersion version
     rendered = renderPackageName name
+    manifest = versionManifestObject rendered versionText (distObject filename integrity shasum)
+
+-- The one-version manifest under @versions.{version}@: the package name, the
+-- version, and its @dist@ descriptor.
+versionManifestObject :: Text -> Text -> Aeson.Value -> Aeson.Value
+versionManifestObject rendered versionText dist =
+    object
+        [ "name" .= rendered
+        , "version" .= versionText
+        , "dist" .= dist
+        ]
+
+-- The manifest's @dist@ descriptor: the tarball filename plus whichever of the
+-- caller's verified digests are known (an absent digest is omitted, never
+-- fabricated).
+distObject :: Text -> Maybe Text -> Maybe Text -> Aeson.Value
+distObject filename integrity shasum =
+    object
+        ( ["tarball" .= filename]
+            <> maybe [] (\i -> ["integrity" .= i]) integrity
+            <> maybe [] (\s -> ["shasum" .= s]) shasum
+        )
+
+-- The @_attachments@ entry for the tarball, with the @length@ taken from the
+-- actual byte count.
+attachmentObject :: ByteString -> Aeson.Value
+attachmentObject tarball =
+    object
+        [ "content_type" .= ("application/octet-stream" :: Text)
+        , "data" .= encodedTarball
+        , "length" .= BS.length tarball
+        ]
+  where
     -- The npm attachment carries the raw tarball bytes, standard-base64-encoded.
     encodedTarball :: Text
     encodedTarball = decodeUtf8 (convertToBase Base64 tarball :: ByteString)

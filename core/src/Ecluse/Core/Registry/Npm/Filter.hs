@@ -229,11 +229,6 @@ assembleMergedPackument mountBase bySource plan base =
     versionsBySource :: Map SourceId (KeyMap Value)
     versionsBySource = Map.mapMaybe versionsObjectOf bySource
 
-    versionsObjectOf :: Value -> Maybe (KeyMap Value)
-    versionsObjectOf = \case
-        Object o | Just (Object vs) <- KeyMap.lookup "versions" o -> Just vs
-        _ -> Nothing
-
     versionObjectFrom :: SourceId -> Text -> Maybe Value
     versionObjectFrom sid version =
         Map.lookup sid versionsBySource >>= KeyMap.lookup (Key.fromText version)
@@ -272,6 +267,12 @@ assembleMergedPackument mountBase bySource plan base =
                 , Just value <- [KeyMap.lookup k timeObject]
                 ]
         _ -> mempty
+
+-- A source document's raw @versions@ object, when the document carries one.
+versionsObjectOf :: Value -> Maybe (KeyMap Value)
+versionsObjectOf = \case
+    Object o | Just (Object vs) <- KeyMap.lookup "versions" o -> Just vs
+    _ -> Nothing
 
 -- The non-version keys an npm @time@ object carries that must be relayed unchanged.
 timeBookkeepingKeys :: [Text]

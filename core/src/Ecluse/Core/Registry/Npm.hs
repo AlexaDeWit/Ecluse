@@ -286,15 +286,19 @@ relayPublishDocument config name document =
     case publishRequest (npmBaseUrl config) (npmToken config) name document of
         Left urlErr -> pure (Left urlErr)
         Right request ->
-            withResponse request (npmManager config) $ \response -> do
-                RegistryResponse body <- readBoundedBody (npmLimits config) (responseBody response)
-                pure
-                    ( Right
-                        PublishRelayResponse
-                            { relayStatus = statusCode (responseStatus response)
-                            , relayBody = LBS.fromStrict body
-                            }
-                    )
+            withResponse request (npmManager config) $
+                fmap Right . readRelayResponse (npmLimits config)
+
+{- Buffer the publication target's response to a relayed publish: the body read
+bounded against the budget, paired with the status the target answered. -}
+readRelayResponse :: Limits -> Response BodyReader -> IO PublishRelayResponse
+readRelayResponse limits response = do
+    RegistryResponse body <- readBoundedBody limits (responseBody response)
+    pure
+        PublishRelayResponse
+            { relayStatus = statusCode (responseStatus response)
+            , relayBody = LBS.fromStrict body
+            }
 
 {- Run a request-building 'Either' from a __read__ path, raising its
 'UrlFormationError' as the typed exception it is (no stringly @stringException@).
