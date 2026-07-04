@@ -157,7 +157,7 @@ data RegistryClient = RegistryClient
     -- ^ Fetch the artifact bytes for one version.
     , publishArtifact :: PackageName -> Version -> MirrorArtifact -> ByteString -> IO (Either PublishFault ())
     {- ^ Publish one version's artifact to the registry, given its metadata
-    ('MirrorArtifact' — filename, integrity hashes, declared size) and the raw
+    ('MirrorArtifact': filename, integrity hashes, declared size) and the raw
     tarball bytes. The adapter is responsible for assembling the
     ecosystem-specific publish document from these inputs. Idempotent at the
     protocol level (versions are immutable), so a redelivered mirror job's

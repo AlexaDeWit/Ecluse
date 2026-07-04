@@ -135,7 +135,7 @@ allow band, ordered by how explicit the operator's statement is
 (@AllowIfOlderThan@ < @AllowIfRemediatesCve@ < @AllowScope@ < @AllowByIdentity@),
 then the deny band ('defaultDenyInstallTimeExecutionPrecedence',
 'defaultDenyByIdentityPrecedence') strictly above all of it. An operator may
-still elevate a /specific/ allow above a /specific/ deny by giving it a higher
+still raise a /specific/ allow above a /specific/ deny by giving it a higher
 explicit precedence -- the per-type defaults set only the out-of-the-box ordering.
 -}
 defaultPrecedence :: Rule -> Int

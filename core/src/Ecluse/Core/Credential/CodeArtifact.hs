@@ -66,7 +66,7 @@ data CodeArtifactConfig = CodeArtifactConfig
     the calling account ('Nothing' to default to the caller's account).
     -}
     , caDurationSeconds :: Maybe Natural
-    {- ^ Requested token lifetime in seconds (@900@–@43200@, i.e. 15 min–12 h);
+    {- ^ Requested token lifetime in seconds (@900@-@43200@, i.e. 15 min to 12 h);
     'Nothing' lets CodeArtifact default it (it ties the token to the caller's
     role-credential expiry). The refresh policy adapts to whatever expiry the
     minted token actually carries, so this is only a preference.
