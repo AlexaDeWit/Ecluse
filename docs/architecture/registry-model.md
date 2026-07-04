@@ -45,7 +45,7 @@ public upstream.
 The private upstream is the per-client authority for who may read what, so its metadata is read
 per request and never entered into the shared cache: a credential-blind cache key would let one
 client warm a private entry a differently-authorised client then gets as a hit (the cross-client
-disclosure hazard, [threat #9](https://ecluse-proxy.com/threat-model.html)). Only the
+disclosure hazard, [threat #9](https://ecluse-proxy.com/threat-model.html#threat-9)). Only the
 anonymous public (gated) origin is cached. See
 [access model → why Écluse never caches the private origin](access-model.md#why-écluse-never-caches-the-private-origin)
 for the full argument.
@@ -143,7 +143,7 @@ order-independent; only the positional labels track input order.
 - **Collision → private wins; divergence is a signal.** On a shared version key the private copy
   wins. But if the public copy contradicts the private one on a shared integrity algorithm (one
   both carry, whose digests disagree), that is the supply-chain tampering Écluse exists to catch
-  ([threat #11](https://ecluse-proxy.com/threat-model.html)): detected, logged, and
+  ([threat #11](https://ecluse-proxy.com/threat-model.html#threat-11)): detected, logged, and
   metered (and may fail-closed on that version), never silently reconciled. The algorithm compared
   is the one each digest asserts (an SRI is resolved to its embedded algorithm, not bucketed under
   an opaque `SRI` tag), so the same algorithm as hex or SRI is cross-checked together. An asymmetric
@@ -272,7 +272,7 @@ Registry-level composition is the recommended way to get that separation but not
 Écluse's own merge gives the same correctness to operators who cannot compose at the registry level,
 and collapsing the roles onto one store remains supported as the degenerate floor (it trades away
 auditability and defence-in-depth, not the perimeter; register
-[threat #10](https://ecluse-proxy.com/threat-model.html)).
+[threat #10](https://ecluse-proxy.com/threat-model.html#threat-10)).
 
 #### The one rule of registry composition: Écluse is the only path from public
 
@@ -285,7 +285,7 @@ ungated public packages reach clients behind Écluse's gate rather than through 
 configuration that silently nullifies the protection. Écluse cannot detect this from the outside
 (the private upstream is trusted by construction, its wiring invisible to the proxy), so keeping the
 internal registry disconnected from public is an operator-architecture invariant (register
-[threat #15](https://ecluse-proxy.com/threat-model.html)).
+[threat #15](https://ecluse-proxy.com/threat-model.html#threat-15)).
 
 ## Registry abstraction
 

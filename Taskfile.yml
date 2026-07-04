@@ -448,6 +448,10 @@ tasks:
         vars: { SRC: "AI-DISCLOSURE.md", OUT: "ai-disclosure.html", TITLE: "Built with AI", DESCRIPTION: "How AI contributed to Écluse, what humans verified, and how to assess the result." }
       - task: site:pandoc-page
         vars: { SRC: "web/threat-model.md", OUT: "threat-model.html", TITLE: "Threat Model", DESCRIPTION: "The generated STRIDE threat register and deployment assumptions for Écluse.", EXTRA_FLAGS: "--lua-filter web/threat-register.lua" }
+      - task: site:pandoc-page
+        vars: { SRC: "SECURITY.md", OUT: "security.html", TITLE: "Security Policy", DESCRIPTION: "How to report a vulnerability in Écluse, and where the threat model and security invariants live." }
+      - task: site:pandoc-page
+        vars: { SRC: "docs/architecture.md", OUT: "architecture.html", TITLE: "Architecture", DESCRIPTION: "How Écluse is designed: the request lifecycle, the codebase decomposition, and the map of concern documents.", EXTRA_FLAGS: "-M link-base=docs" }
 
   site:pandoc-page:
     internal: true
@@ -455,6 +459,8 @@ tasks:
       - '{{.SRC}}'
       - web/template.html
       - web/static/style.css
+      - web/links.lua
+      - web/mermaid.lua
     generates:
       - '_site/{{.OUT}}'
     cmds:
@@ -464,6 +470,7 @@ tasks:
     internal: true
     cmds:
       - bash scripts/check-site-metadata.sh _site
+      - bash scripts/check-site-links.sh _site
 
   nix-build:
     desc: Build the release artifact via Nix (hermetic)

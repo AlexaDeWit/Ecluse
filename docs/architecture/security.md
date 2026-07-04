@@ -282,7 +282,7 @@ edge Écluse checks today; an external layer (API gateway, mTLS service mesh, `N
 is defence-in-depth but cannot substitute for it, since Écluse can only verify its own edge.
 Pure passthrough (no static token) carries no such floor: the publisher's forwarded token is
 the authority, and the read path is untouched. The threat is catalogued as register
-[threat #3](https://ecluse-proxy.com/threat-model.html).
+[threat #3](https://ecluse-proxy.com/threat-model.html#threat-3).
 
 ### The guard-name ≡ write-name ≡ body-name invariant
 
