@@ -61,14 +61,12 @@ exportToS3 appCfg bucketName dbPath = do
 buildS3Env :: AppConfig -> IO AWS.Env
 buildS3Env appCfg = do
     env <- AWS.newEnv AWS.discover
-    return $ case cfgAwsEndpointUrl appCfg of
-        Just url -> case parseEndpointUrl url of
-            Just (secure, host, port) ->
-                AWS.configureService
-                    ( (AWS.setEndpoint secure (encodeUtf8 host) port S3.defaultService)
-                        { AWS.s3AddressingStyle = AWS.S3AddressingStylePath
-                        }
-                    )
-                    env
-            Nothing -> env
+    pure $ case cfgAwsEndpointUrl appCfg >>= parseEndpointUrl of
+        Just endpoint -> AWS.configureService (customS3Endpoint endpoint) env
         Nothing -> env
+
+customS3Endpoint :: (Bool, Text, Int) -> AWS.Service
+customS3Endpoint (secure, host, port) =
+    (AWS.setEndpoint secure (encodeUtf8 host) port S3.defaultService)
+        { AWS.s3AddressingStyle = AWS.S3AddressingStylePath
+        }
