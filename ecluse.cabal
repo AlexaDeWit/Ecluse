@@ -216,6 +216,7 @@ library
     Ecluse
     Ecluse.Boot
     Ecluse.Proxy
+    Ecluse.Osv.Schema
     Ecluse.Pilot
     Ecluse.Pilot.Export
     Ecluse.Pilot.Osv
@@ -501,6 +502,7 @@ test-suite ecluse-unit
     Ecluse.LogSpec
     Ecluse.Core.Security.HostSpec
     Ecluse.ManifestSpec
+    Ecluse.Osv.SchemaSpec
     Ecluse.PilotSpec
     Ecluse.Pilot.OsvSpec
     Ecluse.Pilot.Osv.CompileSpec
@@ -514,7 +516,9 @@ test-suite ecluse-unit
     Ecluse.Telemetry.ReportersSpec
     Ecluse.Telemetry.ResolveSpec
     Ecluse.Telemetry.TracingSpec
+    Paths_ecluse
 
+  autogen-modules:    Paths_ecluse
   build-tool-depends: hspec-discover:hspec-discover ^>=2.11
   build-depends:
     , ecluse
