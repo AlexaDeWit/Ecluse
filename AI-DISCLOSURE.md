@@ -1,14 +1,5 @@
 # Built with AI, and how to verify it
 
-> **The short version.** I built most of Écluse's *implementation* leaning hard on an LLM,
-> during this bootstrapping phase, behind a documented process and a strict CI gate. The
-> *design* is mine: the three-registry origin model, the deny-by-default rules, the security
-> invariants. I spent months on it. I'm not cutting a release until I've audited the whole
-> thing myself. And you don't have to take my word for any of it: the build is reproducible
-> and attested, and the parts that matter for safety are enforced by the type system and
-> pinned by tests. **Verify it instead of trusting it.** I'm putting this out pre-launch on
-> purpose, because I want the design torn apart while it's still cheap to change.
-
 Écluse is a supply-chain *security* tool, and I built a lot of it leaning on an LLM harder
 than I ever have in my career. If that combination makes you nervous, good. It should. So
 here's the honest version of what it means: what's mine, what the AI did, and why you don't
@@ -54,7 +45,7 @@ The process is built so that "the AI wrote it" can't quietly turn into "nobody c
   invariants baked into the *types* (deny-by-default; you literally can't represent a mount at the
   root) throw out a whole category of confident-but-wrong AI output before anyone reads it.
 - **"It works" doesn't count. Tests do.** Every acceptance criterion has a deterministic test
-  behind it; the rules engine's deny-precedence is **property-tested** with Hedgehog; changed
+  behind it; the rules engine's deny-precedence is property-tested with Hedgehog; changed
   lines have to clear 85% coverage; Semgrep, lint, and a hermetic Nix build all have to pass.
   Details in [`docs/testing.md`](docs/testing.md).
 
@@ -62,7 +53,7 @@ The process is built so that "the AI wrote it" can't quietly turn into "nobody c
 
 I'm not cutting any of this as a release until I've been through the whole codebase closely, line
 by line, the way you go through code you're about to hand someone else to run. Écluse is
-**pre-launch on purpose.** It isn't something to put in front of a build yet, and I'm not asking
+pre-launch on purpose. It isn't something to put in front of a build yet, and I'm not asking
 anyone to run an AI-written security tool in production. The "understand and explain every line"
 bar that [`CONTRIBUTING.md`](CONTRIBUTING.md) sets for contributors is the bar for *release*; that
 audit is how the code gets there before anyone leans on it.
@@ -72,9 +63,9 @@ audit is how the code gets there before anyone leans on it.
 This is the part that actually matters for a security tool. You don't have to trust me, the
 process, or the model:
 
-- The image is **bit-for-bit reproducible.** Build it yourself from pinned source and diff it
+- The image is bit-for-bit reproducible. Build it yourself from pinned source and diff it
   against what's published.
-- Every release ships **keyless SLSA provenance and an SBOM**, recorded in a public transparency
+- Every release ships keyless SLSA provenance and an SBOM, recorded in a public transparency
   log.
 - The code is small, typed, and tested, and the security-critical behaviour is right there in the
   types and the property tests. Go read the deny-by-default property, go read the egress guards.
