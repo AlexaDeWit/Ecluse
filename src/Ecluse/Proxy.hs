@@ -85,6 +85,7 @@ module Ecluse.Proxy (
     cveSyncScheduleFor,
 ) where
 
+import Amazonka qualified as AWS
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (getCurrentTime)
@@ -119,7 +120,7 @@ import Ecluse.Core.Cve.Slot (CveSlot, newCveSlot, withSlotLookup)
 import Ecluse.Core.Cve.Sync (SyncEnv (..), SyncSchedule (SyncSchedule, schedBootBackoff, schedPollDelay), bootBackoffDelays, runCveSync, s3CveFetch)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm), ecosystemName, parseEcosystem, prefixFor)
 import Ecluse.Core.Osv.Schema (osvDbFileName)
-import Ecluse.Core.Queue (newEnqueueBuffer)
+import Ecluse.Core.Queue (MirrorQueue, newEnqueueBuffer)
 import Ecluse.Core.Registry (
     ParseError (..),
     RegistryClient (..),
@@ -243,23 +244,9 @@ runProxy bootEnv = do
     -- captures is the buffered hand-off (an STM write), and the drain loop below --
     -- raced against the services -- delivers to the backend (an SQS round trip on
     -- that backend) off the request path, where it would otherwise hold the served
-    -- connection's turn. Drops and delivery failures are logged rate-limited and
-    -- each counts an enqueue failure; both are safe, since a lost job is re-enqueued
-    -- on the next demand for its artifact.
+    -- connection's turn.
     (queue, drainEnqueueBuffer) <-
-        newEnqueueBuffer
-            Composition.mirrorEnqueueBufferDepth
-            ( \drops -> do
-                when (enqueueReportWorthy drops) $
-                    logBootWarning logEnv ("mirror enqueue buffer full: " <> show drops <> " job(s) dropped so far; each is re-enqueued on the next demand for its artifact")
-                deferredMirrorEnqueueFailure deferredMetrics
-            )
-            ( \failures detail -> do
-                when (enqueueReportWorthy failures) $
-                    logBootWarning logEnv ("mirror enqueue delivery failed (" <> show failures <> " so far): " <> detail)
-                deferredMirrorEnqueueFailure deferredMetrics
-            )
-            backendQueue
+        bufferedMirrorHandOff (logBootWarning logEnv) (deferredMirrorEnqueueFailure deferredMetrics) backendQueue
     metadataCache <- newMetadataCache (Composition.cacheConfigFor env)
     heartbeat <- newWorkerHeartbeat
 
@@ -297,15 +284,29 @@ runProxy bootEnv = do
         -- resumes from the remote artifact on next boot, so neither holds up
         -- shutdown. Each sync task runs its boot burst immediately, so a healthy
         -- deployment is rules-engine complete within seconds of boot.
-        let syncSchedule = cveSyncScheduleFor env
-            syncTasks =
-                [ runKatipContextT (envLogEnv builtEnv) (mempty :: SimpleLogPayload) "cve-sync" $
-                    runCveSync (csEnv handle) syncSchedule (atomically (writeTVar (csReady handle) True))
-                | handle <- Map.elems cveSyncPlan
-                ]
+        let syncTasks = cveSyncTasks builtEnv (cveSyncScheduleFor env) cveSyncPlan
         race_
             (runServices serverConfig (workerPoliciesFor builtEnv bindings) builtEnv)
             (concurrently_ drainEnqueueBuffer (mapConcurrently_ id syncTasks))
+
+{- The buffered hand-off in front of the mirror queue's backend. Drops and delivery
+failures are logged rate-limited ('enqueueReportWorthy') and each counts an enqueue
+failure; both are safe, since a lost job is re-enqueued on the next demand for its
+artifact. -}
+bufferedMirrorHandOff :: (Text -> IO ()) -> IO () -> MirrorQueue -> IO (MirrorQueue, IO ())
+bufferedMirrorHandOff warn countEnqueueFailure =
+    newEnqueueBuffer
+        Composition.mirrorEnqueueBufferDepth
+        ( \drops -> do
+            when (enqueueReportWorthy drops) $
+                warn ("mirror enqueue buffer full: " <> show drops <> " job(s) dropped so far; each is re-enqueued on the next demand for its artifact")
+            countEnqueueFailure
+        )
+        ( \failures detail -> do
+            when (enqueueReportWorthy failures) $
+                warn ("mirror enqueue delivery failed (" <> show failures <> " so far): " <> detail)
+            countEnqueueFailure
+        )
 
 {- Report-worthy event counts for the enqueue-buffer warnings: the first, then every
 'Composition.mirrorEnqueueReportInterval'-th, mirroring the bounded memory queue's
@@ -313,6 +314,16 @@ rate-limited drop reporting. The metric alongside counts every event; only the l
 line is rate-limited. -}
 enqueueReportWorthy :: Int -> Bool
 enqueueReportWorthy n = n == 1 || n `mod` Composition.mirrorEnqueueReportInterval == 0
+
+-- One advisory sync task per configured ecosystem: each runs under the boot log's
+-- "cve-sync" namespace and flips its ecosystem's one-way readiness flag once its
+-- first sync lands.
+cveSyncTasks :: Env -> SyncSchedule -> Map.Map Ecosystem CveSyncHandle -> [IO ()]
+cveSyncTasks builtEnv schedule plan =
+    [ runKatipContextT (envLogEnv builtEnv) (mempty :: SimpleLogPayload) "cve-sync" $
+        runCveSync (csEnv handle) schedule (atomically (writeTVar (csReady handle) True))
+    | handle <- Map.elems plan
+    ]
 
 {- | The rules' boot-bound capabilities for one mount ecosystem: the CVE
 lookup borrows through that ecosystem's own slot when the sync plan carries
@@ -371,18 +382,24 @@ planCveSync appCfg = case cfgVulnerabilityDatabaseBucket appCfg of
         createDirectoryIfMissing True dataDir
         sweepStaleTemps dataDir
         awsEnv <- buildS3Env appCfg
-        fmap Map.fromList . forM (Map.keys (cfgMounts appCfg)) $ \eco -> do
-            slot <- newCveSlot
-            ready <- newTVarIO False
-            let key = osvDbFileName (ecosystemName eco)
-                syncEnv =
-                    SyncEnv
-                        { syncFetch = s3CveFetch awsEnv bucket (toText key) (cfgMaxOsvDbBytes appCfg)
-                        , syncEcosystem = eco
-                        , syncDbPath = dataDir </> key
-                        , syncSlot = slot
-                        }
-            pure (eco, CveSyncHandle{csSlot = slot, csReady = ready, csEnv = syncEnv})
+        Map.fromList <$> traverse (cveSyncHandleFor appCfg awsEnv bucket) (Map.keys (cfgMounts appCfg))
+
+-- One ecosystem's sync wiring: a fresh slot and readiness flag, and the sync
+-- environment against the ecosystem's stable object key and canonical on-disk
+-- path under the OSV data dir.
+cveSyncHandleFor :: AppConfig -> AWS.Env -> Text -> Ecosystem -> IO (Ecosystem, CveSyncHandle)
+cveSyncHandleFor appCfg awsEnv bucket eco = do
+    slot <- newCveSlot
+    ready <- newTVarIO False
+    let key = osvDbFileName (ecosystemName eco)
+        syncEnv =
+            SyncEnv
+                { syncFetch = s3CveFetch awsEnv bucket (toText key) (cfgMaxOsvDbBytes appCfg)
+                , syncEcosystem = eco
+                , syncDbPath = cfgOsvDataDir appCfg </> key
+                , syncSlot = slot
+                }
+    pure (eco, CveSyncHandle{csSlot = slot, csReady = ready, csEnv = syncEnv})
 
 -- Sweep stray in-progress downloads an interrupted run left beside the
 -- canonical artifacts (relevant to in-pod container restarts, where an
