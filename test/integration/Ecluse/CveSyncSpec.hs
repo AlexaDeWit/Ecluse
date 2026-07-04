@@ -3,7 +3,7 @@ booted proxy (the ratified acceptance criterion on the sync slice):
 
 1. __Control__: the bucket is empty, so the young security fix is denied
    (@403@), and the audit body carries both the fast lane's abstain reason
-   (no advisory database is loaded) and the quarantine's -- proof the CVE rule
+   (no advisory database is loaded) and the quarantine's: proof the CVE rule
    ran, abstained for the stated cause, and the ordinary policy governed.
 2. The @osv.db@ compiled by __Pilot's real pipeline__ over the shared advisory
    corpus is uploaded to the ministack S3 bucket; the running sync task's next
@@ -43,7 +43,7 @@ import Network.Wai.Test qualified as WaiTest
 import Ecluse.Config (Config (configApp), loadConfig)
 import Ecluse.Core.Breaker (noBreakerReporter)
 import Ecluse.Core.Cve.Slot (newCveSlot, withSlotLookup)
-import Ecluse.Core.Cve.Sync (SyncEnv (..), SyncSchedule (..), runCveSync, s3CveFetch)
+import Ecluse.Core.Cve.Sync (CveFetch (fetchDownload), OsvDbFetchFault (OsvDbTooLarge), SyncEnv (..), SyncSchedule (..), runCveSync, s3CveFetch)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Package.Integrity (defaultMinIntegrity, defaultMinTrustedIntegrity)
 import Ecluse.Core.Queue (newInMemoryQueue)
@@ -124,6 +124,13 @@ spec =
                                 -- served document carries the fixed version.
                                 served <- awaitAdmitted app "/npm/corpus-vuln"
                                 (decodeUtf8 (simpleBody served) :: Text) `shouldSatisfy` T.isInfixOf "\"1.2.0\""
+
+                                -- The byte cap against the real S3 leg: a fetch whose
+                                -- cap the published artifact's declared length
+                                -- oversteps fails fast, before any bytes sink.
+                                let cappedFetch = s3CveFetch awsEnv bucket "npm-osv-schema1.db" 16
+                                fetchDownload cappedFetch (dataDir <> "/capped.db.tmp")
+                                    `shouldThrow` (== OsvDbTooLarge 16)
   where
     withSystemTempDir = withSystemTempDirectory "ecluse-cve-sync-spec"
 
@@ -207,8 +214,8 @@ proxyApp ruleDeps privateUrl publicUrl = do
                 }
     pure (application (mkServerConfig [binding]) env)
 
-{- The public upstream: a single-version packument for @corpus-vuln\@1.2.0@ -- the
-exact fixed version the corpus's GHSA-corpus-0001 names -- published one day
+{- The public upstream: a single-version packument for @corpus-vuln\@1.2.0@,
+the exact fixed version the corpus's GHSA-corpus-0001 names, published one day
 before the fixed clock, so the quarantine alone always denies it and only the
 fast lane can admit it.
 -}
@@ -219,7 +226,7 @@ withPublicUpstream k = testWithApplication (pure app) (k . loopbackUrl)
     app _req respond = respond (responseLBS status200 [] (encode packument))
 
 {- The private upstream: it resolves (the pull-through store knows the package)
-but holds no versions yet, so the public leg -- and therefore the rules -- decide
+but holds no versions yet, so the public leg, and therefore the rules, decide
 every version. A private 404 would instead classify as needed-but-unavailable
 and turn a total public denial into a retryable 503; resolving keeps the
 no-survivors outcome on the policy arm (403), which is the phase-1 control this

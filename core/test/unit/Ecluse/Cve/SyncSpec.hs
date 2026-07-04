@@ -1,11 +1,13 @@
 module Ecluse.Cve.SyncSpec (spec) where
 
+import Conduit (runConduit, yieldMany, (.|))
+import Data.Conduit.Combinators qualified as C
 import Katip (Environment (Environment), KatipContextT, Namespace (Namespace), SimpleLogPayload, initLogEnv, runKatipContextT)
 import System.Directory (doesFileExist)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
-import Test.Hspec (Spec, describe, expectationFailure, it, shouldBe, shouldReturn, shouldSatisfy)
-import UnliftIO.Async (withAsync)
+import Test.Hspec (Spec, anyException, describe, expectationFailure, it, shouldBe, shouldReturn, shouldSatisfy, shouldThrow)
+import UnliftIO.Async (async, cancel, waitCatch, withAsync)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Exception (throwString)
 
@@ -14,15 +16,17 @@ import Ecluse.Core.Cve.Slot (CveSlot, newCveSlot, withSlotLookup)
 import Ecluse.Core.Cve.Sync (
     CveFetch (..),
     DbEtag (..),
+    OsvDbFetchFault (OsvDbTooLarge),
     SyncEnv (..),
     SyncOutcome (..),
     SyncSchedule (..),
+    cappedAt,
     runCveSync,
     syncStep,
  )
 import Ecluse.Core.Ecosystem (Ecosystem (Npm))
 import Ecluse.Core.Osv.Schema (osvSchemaEpoch)
-import Ecluse.Test.Osv (mkDbWithWrongEpoch, mkMinimalValidDb)
+import Ecluse.Test.Osv (mkDbWithMalformedProvenance, mkDbWithWrongEpoch, mkMinimalValidDb)
 
 -- | An env over a fresh slot and a temp data dir, handed to each case.
 withSyncEnv :: (FilePath -> CveSlot -> (CveFetch -> SyncEnv) -> IO a) -> IO a
@@ -127,6 +131,47 @@ spec = do
                 probesFor slot "pkg-a" `shouldReturn` Just True
                 doesFileExist (syncDbPath badEnv <> ".tmp") `shouldReturn` False
 
+        it "a download that fails mid-stream discards the partial temp file" $
+            withSyncEnv $ \_ _ envWith -> do
+                let fetch =
+                        CveFetch
+                            { fetchHeadEtag = pure (Just (DbEtag "e1"))
+                            , fetchDownload = \dest -> do
+                                writeFileBS dest "partial bytes"
+                                throwString "connection reset mid-stream"
+                            }
+                    env = envWith fetch
+                syncStep env Nothing `shouldThrow` anyException
+                doesFileExist (syncDbPath env <> ".tmp") `shouldReturn` False
+
+        it "a malformed provenance row propagates, discards the temp, and keeps the last-good generation" $
+            withSyncEnv $ \_ slot envWith -> do
+                void (syncStep (envWith (fetchServing (Just "e1") (`mkMinimalValidDb` "pkg-a"))) Nothing)
+                let env = envWith (fetchServing (Just "e2") mkDbWithMalformedProvenance)
+                syncStep env (Just (DbEtag "e1")) `shouldThrow` anyException
+                doesFileExist (syncDbPath env <> ".tmp") `shouldReturn` False
+                probesFor slot "pkg-a" `shouldReturn` Just True
+
+        it "a swapper cancelled while draining never closes the newly published generation" $
+            withSyncEnv $ \_ slot envWith -> do
+                void (syncStep (envWith (fetchServing (Just "e1") (`mkMinimalValidDb` "pkg-a"))) Nothing)
+                insideReader <- newEmptyMVar
+                releaseReader <- newEmptyMVar
+                pinned <- async $ withSlotLookup slot $ \_ -> do
+                    putMVar insideReader ()
+                    takeMVar releaseReader
+                takeMVar insideReader
+                -- The swap publishes the new generation, then parks draining
+                -- the displaced one, whose reader is still pinned inside.
+                swapper <- async (void (syncStep (envWith (fetchServing (Just "e2") (`mkMinimalValidDb` "pkg-b"))) (Just (DbEtag "e1"))))
+                awaitServing slot "pkg-b"
+                cancel swapper
+                putMVar releaseReader ()
+                void (waitCatch pinned)
+                -- The cancellation interrupted the drain wait, never the
+                -- published generation: the slot must still answer.
+                probesFor slot "pkg-b" `shouldReturn` Just True
+
     describe "runCveSync" $ do
         it "the boot burst retries through transport faults until the artifact lands" $
             withSyncEnv $ \_ slot envWith -> do
@@ -166,3 +211,32 @@ spec = do
                     probesFor slot "pkg-a" `shouldReturn` Nothing
                     atomically (writeTVar published True)
                     awaitServing slot "pkg-a"
+
+        it "the boot burst concedes on a rejected artifact and its remembered ETag stops re-downloads" $
+            withSyncEnv $ \_ slot envWith -> do
+                downloads <- newIORef (0 :: Int)
+                let fetch =
+                        CveFetch
+                            { fetchHeadEtag = pure (Just (DbEtag "bad"))
+                            , fetchDownload = \dest -> do
+                                modifyIORef' downloads (+ 1)
+                                mkDbWithWrongEpoch dest
+                                pure (DbEtag "bad")
+                            }
+                    schedule = SyncSchedule{schedBootBackoff = replicate 5 10_000, schedPollDelay = 20_000}
+                withAsync (runQuiet (runCveSync (envWith fetch) schedule pass)) $ \_ -> do
+                    threadDelay 200_000
+                    -- One download despite the burst budget and several polls:
+                    -- identical bytes cannot verify differently, so the
+                    -- remembered ETag reads as unchanged until a re-publish.
+                    readIORef downloads `shouldReturn` 1
+                    probesFor slot "pkg" `shouldReturn` Nothing
+
+    describe "cappedAt" $ do
+        it "passes a stream that ends exactly at the cap through unchanged" $ do
+            out <- runConduit (yieldMany (["ab", "cd"] :: [ByteString]) .| cappedAt 4 .| C.sinkList)
+            mconcat out `shouldBe` ("abcd" :: ByteString)
+
+        it "throws OsvDbTooLarge the moment the stream oversteps the cap" $
+            runConduit (yieldMany (["ab", "cde"] :: [ByteString]) .| cappedAt 4 .| C.sinkList)
+                `shouldThrow` (== OsvDbTooLarge 4)

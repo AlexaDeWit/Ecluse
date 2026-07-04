@@ -1,16 +1,19 @@
 module Ecluse.Core.CveSpec (spec) where
 
+import Data.List (isSuffixOf)
 import Database.SQLite.Simple (SQLError, close, execute_)
+import System.Directory (getSymbolicLinkTarget, listDirectory)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
-import Test.Hspec (Spec, describe, it, shouldBe, shouldReturn, shouldThrow)
+import Test.Hspec (Spec, anyException, describe, it, shouldBe, shouldReturn, shouldSatisfy, shouldThrow)
+import UnliftIO.Exception (catchAny)
 
 import Ecluse.Core.Cve (AdvisoryRange (..), CveDb (..), CveDbRejected (..), CveLookup (..), openCveDb, withCveDb)
 import Ecluse.Core.Cve.Internal (openHardenedConnection)
 import Ecluse.Core.Ecosystem (Ecosystem (Npm, PyPI))
 import Ecluse.Core.Osv.Schema (osvSchemaEpoch)
 import Ecluse.Test.Cve (fakeCveLookup)
-import Ecluse.Test.Osv (CorpusVersion (CorpusV1), mkDbWithMaliciousTrigger, mkDbWithViewShadowingRanges, mkDbWithWrongEpoch)
+import Ecluse.Test.Osv (CorpusVersion (CorpusV1), mkDbWithMalformedProvenance, mkDbWithMaliciousTrigger, mkDbWithViewShadowingRanges, mkDbWithWrongEpoch)
 import Ecluse.Test.OsvDb (withFixtureOsvDb)
 
 -- CorpusV1's rows, in the fake's vocabulary. Kept in lockstep with the corpus
@@ -95,6 +98,16 @@ spec = do
                 result `shouldBe` Left (CveDbWrongEpoch (osvSchemaEpoch + 1))
                 readIORef ran `shouldReturn` False
 
+        it "closes the connection when a malformed provenance row fails handle construction" $
+            withSystemTempDirectory "ecluse-cve-hostile" $ \dir -> do
+                let path = dir </> "malformed-meta.db"
+                mkDbWithMalformedProvenance path
+                openCveDb Npm path `shouldThrow` anyException
+                -- The failed construction must not leak its accepted
+                -- connection: no descriptor may still reference the artifact.
+                held <- openFdTargets
+                held `shouldSatisfy` not . any (path `isSuffixOf`)
+
         it "ignores a malicious trigger: reads behave as on a clean artifact" $
             withSystemTempDirectory "ecluse-cve-hostile" $ \dir -> do
                 let path = dir </> "trigger.db"
@@ -113,6 +126,19 @@ spec = do
                         let write = execute_ conn "INSERT INTO meta (key, value) VALUES ('tampered', '1')"
                         write `shouldThrow` \(_ :: SQLError) -> True
                         close conn
+
+-- Every path this process holds an open descriptor to (Linux's /proc table;
+-- empty elsewhere, degrading the leak assertion to the throw alone).
+openFdTargets :: IO [FilePath]
+openFdTargets =
+    ( do
+        fds <- listDirectory "/proc/self/fd"
+        catMaybes
+            <$> forM
+                fds
+                (\fd -> (Just <$> getSymbolicLinkTarget ("/proc/self/fd" </> fd)) `catchAny` const (pure Nothing))
+    )
+        `catchAny` const (pure [])
 
 -- A rejection assertion that also releases the resource if acceptance
 -- unexpectedly succeeded, so a failing test never leaks the connection.

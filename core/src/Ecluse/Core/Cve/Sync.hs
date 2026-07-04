@@ -1,23 +1,23 @@
 {- | The advisory database's sync mechanics: detect a new @osv.db@ artifact in
 object storage, download it bounded, verify it, and shadow-swap it into the
-read path -- one ecosystem per task, driven by the configured mounts.
+read path, one ecosystem per task, driven by the configured mounts.
 
 The write side of "Ecluse.Core.Cve.Slot": 'syncStep' performs exactly one
 detect-download-verify-swap cycle over an injected 'CveFetch' (so unit tests
 drive it without a network), and 'runCveSync' schedules those steps: an eager
 __boot burst__ (an immediate attempt, retried with incremental backoff, that is
 eventually allowed to fail so a broken bucket never wedges startup) followed by
-the steady ETag poll. The proxy is thus rules-engine complete as early as the
-artifact can be had, and serves deny-by-default-safely before then.
+the steady ETag poll. The proxy is rules-engine complete as early as the
+artifact can be had; before then it serves deny-by-default.
 
 The swap's file discipline: the download lands in a temp file beside the
-canonical per-ecosystem path; 'Ecluse.Core.Cve.openCveDb' verifies the temp
-file (epoch stamp, table shape, ecosystem) -- this is the artifact contract's
-verify-before-swap -- and __the connection that verified is the connection that
-serves__: the accepted temp file is renamed atomically onto the canonical name
-(the open connection follows the inode; there is no reopen and so no
-verify-to-serve gap) and that same 'CveDb' is swapped in. The displaced
-generation drains and closes inside 'Ecluse.Core.Cve.Slot.swapIn', releasing
+canonical per-ecosystem path, and 'Ecluse.Core.Cve.openCveDb' verifies the
+temp file (epoch stamp, table shape, ecosystem), the artifact contract's
+verify-before-swap. __The connection that verified is the connection that
+serves__: the accepted temp file is renamed atomically onto the canonical
+name, the open connection follows the inode through the rename, and that same
+'CveDb' is swapped in; there is no reopen and so no verify-to-serve gap. The
+displaced generation drains and closes inside 'Ecluse.Core.Cve.Slot.swapIn', releasing
 the old inode's last reference; reclamation is the kernel's, never a delete
 this code could mistime. A rejected artifact is deleted, its ETag remembered
 (re-downloading a known-bad object every poll buys nothing), and the last-good
@@ -29,6 +29,7 @@ module Ecluse.Core.Cve.Sync (
     DbEtag (..),
     OsvDbFetchFault (..),
     s3CveFetch,
+    cappedAt,
 
     -- * One sync cycle
     SyncEnv (..),
@@ -49,7 +50,7 @@ import Network.HTTP.Types.Status (statusCode)
 import System.Directory (removeFile, renameFile)
 import UnliftIO (MonadUnliftIO, tryAny)
 import UnliftIO.Concurrent (threadDelay)
-import UnliftIO.Exception (catchAny, onException, throwIO)
+import UnliftIO.Exception (catchAny, mask, onException, throwIO)
 
 import Amazonka qualified as AWS
 import Amazonka.S3 qualified as S3
@@ -79,9 +80,9 @@ data CveFetch = CveFetch
     -}
     , fetchDownload :: FilePath -> IO DbEtag
     {- ^ Download the artifact to the given path (byte-bounded) and return the
-    ETag of the bytes actually fetched -- the download's own, so a publish
-    racing the poll is recorded truthfully. Throws on transport faults and on
-    'OsvDbFetchFault'.
+    ETag of the bytes actually fetched, the download's own rather than an
+    earlier @HEAD@'s, so a publish racing the poll is recorded truthfully.
+    Throws on transport faults and on 'OsvDbFetchFault'.
     -}
     }
 
@@ -144,16 +145,23 @@ syncStep env lastSeen =
                     Left rejection -> do
                         discardTemp temp
                         pure (SyncRejected fetched rejection)
-                    Right db ->
-                        ( do
-                            -- The verified connection follows the inode through the
-                            -- rename; the canonical name now holds the newest
-                            -- accepted artifact and the temp name is gone.
-                            renameFile temp (syncDbPath env)
-                            swapIn (syncSlot env) db
-                            pure (SyncSwapped fetched (cveDbMeta db))
-                        )
+                    Right db -> mask $ \restore -> do
+                        -- The verified connection follows the inode through the
+                        -- rename; the canonical name now holds the newest
+                        -- accepted artifact and the temp name is gone. Up to
+                        -- here this side still owns the connection, so a
+                        -- failure closes it and discards the download.
+                        restore (renameFile temp (syncDbPath env))
                             `onException` (cveDbClose db >> discardTemp temp)
+                        -- 'swapIn' publishes atomically before it retires the
+                        -- displaced generation, and owns the connection from
+                        -- entry: a failure or cancellation while the displaced
+                        -- generation drains must never close the newly live
+                        -- database, so no cleanup wraps it. The mask pins the
+                        -- ownership handoff; the drain wait inside stays
+                        -- interruptible.
+                        swapIn (syncSlot env) db
+                        pure (SyncSwapped fetched (cveDbMeta db))
   where
     -- Best-effort: the temp may already be renamed away or never created.
     discardTemp temp = removeFile temp `catchAny` const pass
@@ -182,8 +190,9 @@ The __boot burst__ attempts a sync immediately and retries per the schedule's
 backoff until an artifact is live, so a healthy deployment is
 rules-engine complete within seconds of boot. It concedes early on a
 __rejected__ artifact (retrying the same bytes cannot end differently) and
-gives up after the schedule with a warning -- the proxy serves regardless (an
-empty slot only ever abstains into deny-by-default), and the poll keeps trying.
+gives up after the schedule with a warning. The proxy serves regardless, since
+an empty slot only ever abstains into deny-by-default, and the poll keeps
+trying.
 
 Every iteration is supervised: a transport fault is caught and logged, never
 fatal to the task. @notifyFirstSync@ runs after each successful swap (its
@@ -266,7 +275,10 @@ s3CveFetch awsEnv bucket key maxBytes =
         AWS.ServiceError se -> statusCode (se ^. AWS.serviceError_status) == 404
         _ -> False
 
--- A pass-through conduit that refuses to stream past the byte cap.
+{- | A pass-through conduit that refuses to stream past the byte cap
+('OsvDbTooLarge'): the enforcement behind 's3CveFetch''s bounded download,
+where the declared content length is only the fast-fail.
+-}
 cappedAt :: (MonadIO m) => Int -> ConduitT ByteString ByteString m ()
 cappedAt maxBytes = go 0
   where

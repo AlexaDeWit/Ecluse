@@ -78,6 +78,11 @@ module Ecluse.Proxy (
     npmServerConfig,
     mountBindingFor,
     unconfiguredRegistry,
+    planCveSync,
+    CveSyncHandle (..),
+    cveRuleDepsFor,
+    cveSyncReady,
+    cveSyncScheduleFor,
 ) where
 
 import Data.Map.Strict qualified as Map
@@ -107,6 +112,7 @@ import Ecluse.Composition qualified as Composition
 import Ecluse.Config (
     AppConfig (cfgCveDbPollInterval, cfgMaxOsvDbBytes, cfgMounts, cfgOsvDataDir, cfgPort, cfgPrivateConnectionsPerHost, cfgPublicConnectionsPerHost, cfgServeMaxInFlight, cfgShutdownDrainTimeout, cfgVulnerabilityDatabaseBucket),
  )
+import Ecluse.Core.Breaker (BreakerReporter)
 import Ecluse.Core.Credential (AuthToken (..), currentToken)
 import Ecluse.Core.Credential.Refresh (CredentialReporters (CredentialReporters, crBreakerReporter, crRefreshReporter))
 import Ecluse.Core.Cve.Slot (CveSlot, newCveSlot, withSlotLookup)
@@ -184,16 +190,12 @@ runProxy bootEnv = do
     providers <- initCredentialProviders credentialReporters env >>= orExit (T.unlines . map renderBootError)
     -- The advisory-database sync plan: with a bucket configured, every configured
     -- mount ecosystem gets its own slot (the shadow-swap read side), its own
-    -- supervised sync task, and its own one-way first-sync readiness flag --
-    -- independent per ecosystem, so one ecosystem's missing artifact never holds
-    -- back another's. Without a bucket the map is empty: rules abstain and
+    -- supervised sync task, and its own one-way first-sync readiness flag, each
+    -- independent so one ecosystem's missing artifact never holds back
+    -- another's. Without a bucket the map is empty: rules abstain and
     -- readiness is ungated.
     cveSyncPlan <- planCveSync env
-    let ruleDepsFor eco =
-            RuleDeps
-                { rdWithCveLookup = maybe (\use -> use Nothing) (withSlotLookup . csSlot) (Map.lookup eco cveSyncPlan)
-                , rdBreakerReporter = deferredBreakerReporter deferredMetrics EffectfulRule
-                }
+    let ruleDepsFor = cveRuleDepsFor cveSyncPlan (deferredBreakerReporter deferredMetrics EffectfulRule)
     bindings <- planMounts mountBindingFor getCurrentTime ruleDepsFor providers config >>= orExit (T.unlines . map renderBootError)
     publishTargets <- orExit (T.unlines . map renderBootError) (planPublishTargets providers config)
     -- Select the mirror-queue backend from config (the GCP arm is a fail-loud
@@ -227,9 +229,7 @@ runProxy bootEnv = do
             (mkServerConfig bindings)
                 { scPort = cfgPort env
                 , scDrainTimeout = ShutdownDrainTimeout (cfgShutdownDrainTimeout env)
-                , -- Ready once every configured ecosystem's advisory database has
-                  -- first-synced (one-way flips; vacuously ready with no bucket).
-                  scCheckReady = allM (readTVarIO . csReady) (Map.elems cveSyncPlan)
+                , scCheckReady = cveSyncReady cveSyncPlan
                 }
     -- Log each mount's resolved rule boot order so an operator sees at start-up exactly
     -- how their policy will resolve (highest precedence first, then name).
@@ -297,11 +297,7 @@ runProxy bootEnv = do
         -- resumes from the remote artifact on next boot, so neither holds up
         -- shutdown. Each sync task runs its boot burst immediately, so a healthy
         -- deployment is rules-engine complete within seconds of boot.
-        let syncSchedule =
-                SyncSchedule
-                    { schedBootBackoff = bootBackoffDelays
-                    , schedPollDelay = round (cfgCveDbPollInterval env) * 1_000_000
-                    }
+        let syncSchedule = cveSyncScheduleFor env
             syncTasks =
                 [ runKatipContextT (envLogEnv builtEnv) (mempty :: SimpleLogPayload) "cve-sync" $
                     runCveSync (csEnv handle) syncSchedule (atomically (writeTVar (csReady handle) True))
@@ -318,23 +314,55 @@ line is rate-limited. -}
 enqueueReportWorthy :: Int -> Bool
 enqueueReportWorthy n = n == 1 || n `mod` Composition.mirrorEnqueueReportInterval == 0
 
-{- One configured ecosystem's advisory-sync wiring: the slot its mount's rules
-borrow through, the one-way first-sync readiness flag, and the sync task's
-environment. -}
+{- | The rules' boot-bound capabilities for one mount ecosystem: the CVE
+lookup borrows through that ecosystem's own slot when the sync plan carries
+one, and abstains otherwise, so a mount's rules can never read a neighbouring
+ecosystem's advisory database.
+-}
+cveRuleDepsFor :: Map.Map Ecosystem CveSyncHandle -> BreakerReporter -> Ecosystem -> RuleDeps
+cveRuleDepsFor plan reporter eco =
+    RuleDeps
+        { rdWithCveLookup = maybe (\use -> use Nothing) (withSlotLookup . csSlot) (Map.lookup eco plan)
+        , rdBreakerReporter = reporter
+        }
+
+{- | The readiness gate over the sync plan: ready once every configured
+ecosystem's advisory database has first-synced. The flags flip one way, so
+readiness never flaps on this; an empty plan (no bucket) is vacuously ready.
+-}
+cveSyncReady :: Map.Map Ecosystem CveSyncHandle -> IO Bool
+cveSyncReady plan = allM (readTVarIO . csReady) (Map.elems plan)
+
+{- | The sync tasks' timing: the shipped boot burst over the configured poll
+interval. The microsecond conversion cannot wrap: the config decoder bounds
+the interval to @[1, maxBound div 1_000_000]@ seconds.
+-}
+cveSyncScheduleFor :: AppConfig -> SyncSchedule
+cveSyncScheduleFor env =
+    SyncSchedule
+        { schedBootBackoff = bootBackoffDelays
+        , schedPollDelay = round (cfgCveDbPollInterval env) * 1_000_000
+        }
+
+-- | One configured ecosystem's advisory-sync wiring.
 data CveSyncHandle = CveSyncHandle
     { csSlot :: CveSlot
+    -- ^ The slot this ecosystem's mount rules borrow through.
     , csReady :: TVar Bool
+    -- ^ The one-way first-sync readiness flag.
     , csEnv :: SyncEnv
+    -- ^ The sync task's environment.
     }
 
-{- Build the advisory-sync plan from config: nothing without a configured
+{- | Build the advisory-sync plan from config: nothing without a configured
 vulnerability-database bucket; otherwise one 'CveSyncHandle' per configured
 mount ecosystem, each against its own stable per-ecosystem object key and
 canonical on-disk path under the OSV data dir. Prepares the data dir (created
 if missing; stray @.tmp@ downloads from an interrupted run swept) so the sync
 tasks start clean. Note the readiness consequence: an operator who mounts an
 ecosystem Pilot does not compile has declared an artifact that never arrives,
-and the pod honestly never reports ready. -}
+and the pod honestly never reports ready.
+-}
 planCveSync :: AppConfig -> IO (Map.Map Ecosystem CveSyncHandle)
 planCveSync appCfg = case cfgVulnerabilityDatabaseBucket appCfg of
     Nothing -> pure Map.empty

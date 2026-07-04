@@ -43,7 +43,7 @@ module Ecluse.Core.Cve (
     insideAffectedRange,
 ) where
 
-import UnliftIO.Exception (finally)
+import UnliftIO.Exception (finally, onException)
 
 import Ecluse.Core.Cve.Internal (AdvisoryRange (..), CveDbRejected (..), advisoriesQuery, openHardenedConnection, probeQuery, provenanceQuery)
 import Ecluse.Core.Ecosystem (Ecosystem)
@@ -89,7 +89,10 @@ data CveDb = CveDb
     }
 
 {- | Open an @osv.db@ artifact and build the owning handle over it, or reject
-the artifact ('CveDbRejected') with its connection already closed.
+the artifact ('CveDbRejected') with its connection already closed. Throws on
+faults below the acceptance contract (an unreadable file, a malformed
+provenance row), and then too the connection is already closed: an exception
+never leaks it.
 -}
 openCveDb :: Ecosystem -> FilePath -> IO (Either CveDbRejected CveDb)
 openCveDb eco dbFile = do
@@ -97,7 +100,11 @@ openCveDb eco dbFile = do
     case opened of
         Left rejection -> pure (Left rejection)
         Right conn -> do
-            meta <- provenanceQuery conn
+            -- Until the handle is handed over, this side owns the connection:
+            -- acceptance decodes only the ecosystem row, so a further meta row
+            -- can still fail to decode here, and that failure must close the
+            -- connection rather than leak it.
+            meta <- provenanceQuery conn `onException` close conn
             pure $
                 Right
                     CveDb

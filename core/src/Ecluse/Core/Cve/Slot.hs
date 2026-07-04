@@ -9,11 +9,11 @@ newly-verified generation with 'swapIn', which waits for the displaced
 generation's readers to drain and then closes it. Closing is also the
 reclamation: the sync task has already renamed the new artifact over the old
 one's only file name, so the drained close releases the old inode's last
-reference and the kernel frees the storage -- pruning is a property the OS
+reference and the kernel frees the storage. Pruning is a property the OS
 enforces, never a delete this code could mistime.
 
-An empty slot (no generation installed yet -- before the first successful sync)
-hands readers 'Nothing'; the CVE rule abstains and the ordinary policy governs.
+Before the first successful sync the slot is empty and hands readers
+'Nothing'; the CVE rule abstains and the ordinary policy governs.
 -}
 module Ecluse.Core.Cve.Slot (
     CveSlot,
@@ -23,7 +23,7 @@ module Ecluse.Core.Cve.Slot (
 ) where
 
 import Control.Concurrent.STM (check)
-import UnliftIO.Exception (bracket)
+import UnliftIO.Exception (bracket, catchAny)
 
 import Ecluse.Core.Cve (CveDb (..), CveLookup)
 
@@ -56,10 +56,18 @@ withSlotLookup (CveSlot cell) use = bracket acquire release (use . fmap (cveDbLo
 
 {- | Install a newly-verified generation and retire the one it displaces:
 publish the new 'CveDb' to readers atomically, wait for the displaced
-generation's readers to drain to zero, then close it (releasing the old
-artifact's last inode reference -- see the module header). Blocks only the
+generation's readers to drain to zero, then close it, releasing the old
+artifact's last inode reference (see the module header). Blocks only the
 caller (the sync task), and only for as long as the longest in-flight
 evaluation, which the rule's resilience timeout already bounds.
+
+__The slot owns the new database from the moment this is entered__:
+publication is the first effect and is atomic, so no failure mode of this
+call leaves the new generation both unpublished and unclosed, and no caller
+cleanup may close it. A close failure on the displaced generation is
+swallowed (the swap already succeeded; the stale connection is the only
+casualty), while cancellation during the drain wait propagates, leaving the
+new generation live and the displaced one unclosed until process exit.
 
 Safe under a single swapper (the one sync task per slot); with several, each
 call retires exactly the generation it displaced.
@@ -73,4 +81,4 @@ swapIn (CveSlot cell) newDb = do
         pure old
     for_ displaced $ \g -> do
         atomically (readTVar (genReaders g) >>= check . (== 0))
-        cveDbClose (genDb g)
+        cveDbClose (genDb g) `catchAny` const pass

@@ -138,9 +138,9 @@ data ServerConfig = ServerConfig
     the drain check by @\/readyz@. Today it is the advisory database's
     first-sync signal: a one-way flip per configured ecosystem, so readiness
     never flaps on it, and @'pure' True@ (the 'mkServerConfig' default) when no
-    advisory bucket is configured. The listener serves regardless -- an absent
-    advisory database only ever abstains into deny-by-default -- so this gates
-    only what a load balancer routes, never what the process can answer.
+    advisory bucket is configured. The listener serves regardless, since an
+    absent advisory database only ever abstains into deny-by-default; this
+    gates what a load balancer routes, not whether the process answers.
     -}
     }
 

@@ -100,7 +100,7 @@ instance FromJSON AppConfig where
             <*> (o .:? "osvDataDir" .!= "data/osv")
             <*> (o .:? "osvExportBaseUrl" .!= "https://osv-vulnerabilities.storage.googleapis.com")
             <*> o .:? "vulnerabilityDatabaseBucket"
-            <*> (o .: "cveDbPollInterval" >>= parseSeconds)
+            <*> (o .: "cveDbPollInterval" >>= parseDelaySeconds "cveDbPollInterval")
             <*> (o .: "maxOsvDbBytes" >>= parsePositiveInt "maxOsvDbBytes")
       where
         parseMounts :: KeyMap.KeyMap Value -> Parser (Map.Map Ecosystem MountConfig)
@@ -146,6 +146,19 @@ instance FromJSON AppConfig where
         parsePositiveInt field value
             | value > 0 = pure value
             | otherwise = fail (field <> " must be a positive integer")
+
+        {- A recurring delay: positive (zero would spin the poll without
+        yielding) and bounded so its microsecond conversion fits 'Int'
+        rather than wrapping into an invalid negative delay.
+        -}
+        parseDelaySeconds :: String -> Value -> Parser NominalDiffTime
+        parseDelaySeconds field v = do
+            secs <- parseSeconds v
+            let n = truncate secs :: Integer
+                maxDelay = toInteger (maxBound :: Int) `div` 1_000_000
+            if n >= 1 && n <= maxDelay
+                then pure secs
+                else fail (field <> " must be a positive integer count of seconds, at most " <> show maxDelay)
 
 instance FromJSON RulePatch where
     parseJSON = withObject "rules" $ \o ->

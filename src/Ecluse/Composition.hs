@@ -594,9 +594,9 @@ all surface from one call.
 
 The ecosystem-to-adapter resolver, the wall-clock source, and the rules' boot-bound
 capabilities are injected (the composition root supplies @mountBindingFor@,
-'Data.Time.getCurrentTime', and each ecosystem's 'RuleDeps' -- per ecosystem, because
-a mount's rules must borrow /their/ ecosystem's advisory database, never a
-neighbour's), so this validation opens no socket.
+'Data.Time.getCurrentTime', and each ecosystem's 'RuleDeps'), so this validation
+opens no socket. The capabilities are per ecosystem because a mount's rules must
+borrow /their/ ecosystem's advisory database, never a neighbour's.
 It is 'IO' only because 'composeBindings' 'prepare's each mount's rules (allocating
 per-rule engine state once at boot).
 -}
