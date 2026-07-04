@@ -36,6 +36,7 @@
     "**/node_modules/**",
     "**/bower_components/**",
     "bench/corpus/**",
+    "test/oracles/package.json",
   ],
 
   // Haskell security-advisory (HSEC) alerting — the detection arm for our cabal
