@@ -292,7 +292,7 @@ renderDuration :: NominalDiffTime -> Text
 
 ## 10. Explain the *why*, especially the security rationale
 
-Écluse is a supply-chain resilience tool. A comment that explains the **threat a
+Écluse is a supply-chain policy proxy. A comment that explains the **threat a
 rule defends against** (as `AllowIfOlderThan` does in §6) is worth far more
 than one describing the mechanics. This is the single most valuable thing a
 Haddock comment here can carry, because it is exactly what a type signature, a

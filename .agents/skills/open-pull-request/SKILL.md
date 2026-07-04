@@ -4,7 +4,7 @@ description: >-
   Prepare a commit + pull request for Écluse the way this repo gates them: GPG-signed,
   DCO-signed-off (as the author, NOT the AI), Conventional-Commit, AI-disclosed, opened
   as a draft, and with a PR body that follows the template AND explains the change in
-  plain terms. Invoke before you commit and open (or finalize) a PR, it encodes the
+  plain terms. Invoke before you commit and open (or finalise) a PR, it encodes the
   exact rules agents most often miss, so the churn (DCO red, missing trailers, a
   review-time "explain it simply" round-trip) does not happen.
 ---
@@ -71,7 +71,7 @@ Skeleton:
 <Lead with one or two plain sentences, what this change means for someone outside this
  subsystem, the human point before the mechanism. Then a few short, signposted beats:
  bold a lead-in, or use `###` sub-headings for a larger change. Use the beats that fit;
- not every PR has all three. Keep each to 1–3 sentences.>
+ not every PR has all three. Keep each to 1-3 sentences.>
 
 **The situation / the risk.** <What was wrong, missing, or risky, concretely, for a
 security or behaviour change, who could do what, under what conditions.>
@@ -96,7 +96,7 @@ clause. An analogy is welcome where it genuinely illuminates. No internal slice/
 Write the section the way you would **explain the change aloud to a sharp colleague on
 another team**, the "explain it like I'm 5" the architect asks for at review time. Give
 it a throughline (what was going on → what changed → what we chose not to do, and why),
-not a flat summary and not a diff walk-through. **Make it scan:** short paragraphs (2–4
+not a flat summary and not a diff walk-through. **Make it scan:** short paragraphs (2-4
 sentences), a bold lead-in or `###` sub-heading per beat, a tight bullet list when you
 are enumerating cases, never one dense block. Lead with the human point; reach for an
 analogy where it genuinely illuminates. It answers "what does this mean and why should I
