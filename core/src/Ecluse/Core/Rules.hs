@@ -507,8 +507,7 @@ transientCause cfg = WillResolve (ecRetryAfter cfg)
 
 {- The breaker admission gate: defer the decision to 'Ecluse.Core.Breaker.admit' and
 commit the breaker state it returns, reporting any change (a half-open recovery probe).
-While open and cooling down it denies; once the cooldown elapses it moves to half-open
-and admits a single probe; a closed or half-open breaker always admits. -}
+See 'Ecluse.Core.Breaker.admit' for the admission policy. -}
 admitProbe :: Resilience -> UTCTime -> IO Bool
 admitProbe res now = do
     (permitted, old, new) <- atomically $ do

@@ -112,29 +112,30 @@ import Ecluse.Server (MountBinding (bindingPackumentDeps, bindingPrefix))
 import Ecluse.Telemetry (Telemetry, TelemetrySwitch (TelemetryOff, TelemetryOn), withTelemetry)
 import Ecluse.Telemetry.Resolve (prepareTelemetry)
 
-{- | Start Écluse: the entry point the @ecluse@ executable runs (see "Main").
-
-It assembles the composition root from configuration: it parses the environment
-layer and the optional config document, __validates everything and fails fast at
-boot__ on any problem (a malformed env, an unresolved rule policy, a configured
-mount with no adapter, a credential reference that does not resolve, or a
-mirror-queue backend that is not built in this binary), aggregating the failures so
-a single run reports them all. On success it builds the handles -- the shared HTTP
-@Manager@, the config-selected mirror queue, the metadata cache, the logger, the
-process-global credential provider, and the telemetry substrate (off unless
-@ECLUSE_TELEMETRY@ enables it) -- into an 'Env', derives the served mount bindings,
-then runs the
-server and the mirror worker __concurrently__ over that single 'Env' ('runServer'
-and 'runWorker'). Bracketing the 'Env' (and the telemetry providers) for the
-lifetime of both means their shared resources are torn down along every exit path.
+{- | The boot context assembled once at start-up and handed to each subcommand: the
+validated configuration, the process logger, and the telemetry handle. 'withBootEnv'
+builds it, and the @ecluse@ entry point (see "Ecluse") dispatches the selected
+subcommand over it. The heavier serve- and worker-side handles (the HTTP managers,
+the mirror queue, the metadata cache) are built later, per subcommand (see
+"Ecluse.Proxy").
 -}
 data BootEnv = BootEnv
     { beConfig :: AppConfig
+    -- ^ The application-level configuration slice the subcommands read.
     , beLogEnv :: LogEnv
+    -- ^ The process structured-logging environment.
     , beTelemetry :: Telemetry
+    -- ^ The telemetry handle, inert unless @ECLUSE_TELEMETRY@ enabled it.
     , beConfigFull :: Config
+    {- ^ The whole loaded configuration document, for subcommands that need more than
+    'beConfig' (the serve path's mount and rule wiring, for one).
+    -}
     }
 
+{- | Assemble the 'BootEnv' and run @action@ within it: load and validate the
+configuration (failing fast on any error), apply the runtime posture, build the
+logger, and bracket the telemetry substrate for the action's lifetime.
+-}
 withBootEnv :: (BootEnv -> IO ()) -> IO ()
 withBootEnv action = do
     envVars <- getEnvironment

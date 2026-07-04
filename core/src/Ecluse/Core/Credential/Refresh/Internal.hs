@@ -371,10 +371,9 @@ releaseSingleFlight stateVar =
     atomically (modifyTVar' stateVar (\st -> st{csRefreshing = False}))
 
 {- | The circuit-breaker admission gate, shared by the background and synchronous
-mint paths. Defers the decision to 'Ecluse.Core.Breaker.admit' and commits the breaker
-state it returns: while open and cooling down it denies (fast-fail); once the
-cooldown elapses it moves to half-open and admits a single probe; a closed or
-half-open breaker always admits.
+mint paths: defer the decision to 'Ecluse.Core.Breaker.admit' and commit the breaker
+state it returns. An open breaker fast-fails the mint without touching the network;
+see 'Ecluse.Core.Breaker.admit' for the admission policy.
 -}
 admitMint :: TVar CacheState -> UTCTime -> STM Bool
 admitMint stateVar now = (\(permitted, _, _) -> permitted) <$> admitMintTxn stateVar now
