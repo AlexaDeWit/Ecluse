@@ -33,6 +33,15 @@ instance KatipContext TestM where
 
 spec :: Spec
 spec = describe "Osv parsing and streaming" $ do
+    describe "osvExportUrl" $ do
+        it "derives the per-ecosystem export under the base URL" $
+            osvExportUrl "https://osv-vulnerabilities.storage.googleapis.com" "npm"
+                `shouldBe` "https://osv-vulnerabilities.storage.googleapis.com/npm/all.zip"
+
+        it "tolerates a trailing slash on the base URL" $
+            osvExportUrl "https://mirror.example.com/osv/" "npm"
+                `shouldBe` "https://mirror.example.com/osv/npm/all.zip"
+
     it "decodes a sample OSV advisory and extracts remediation boundaries" $ do
         fileBytes <- BS.readFile "test/unit/fixtures/osv/sample.json"
         let res = eitherDecodeStrict fileBytes :: Either String OsvAdvisory

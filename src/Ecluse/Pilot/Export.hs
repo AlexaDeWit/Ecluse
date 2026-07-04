@@ -41,7 +41,7 @@ runExportLoop telemetry config = do
 exportNpm :: (MonadResource m, MonadMask m, MonadUnliftIO m, KatipContext m) => Telemetry -> AppConfig -> Text -> m ()
 exportNpm telemetry appCfg bucketName = do
     logFM InfoS "Starting npm OSV database compilation"
-    dbPath <- compileOsvToSqlite telemetry (cfgOsvDataDir appCfg) "npm" (osvExportUrl "npm")
+    dbPath <- compileOsvToSqlite telemetry (cfgOsvDataDir appCfg) "npm" (osvExportUrl (cfgOsvExportBaseUrl appCfg) "npm")
     exportToS3 appCfg bucketName dbPath
 
 exportToS3 :: (MonadResource m, MonadThrow m, KatipContext m) => AppConfig -> Text -> FilePath -> m ()

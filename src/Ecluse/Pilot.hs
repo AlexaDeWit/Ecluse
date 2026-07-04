@@ -17,7 +17,7 @@ import UnliftIO.Async (concurrently_)
 import UnliftIO.Exception (throwIO)
 
 import Ecluse.Boot (BootEnv (..))
-import Ecluse.Config (AppConfig (cfgPort, cfgVulnerabilityDatabaseBucket))
+import Ecluse.Config (AppConfig (cfgOsvExportBaseUrl, cfgPort, cfgVulnerabilityDatabaseBucket))
 import Ecluse.Log (moduleField)
 import Ecluse.Pilot.Export (exportToS3, runExportLoop)
 import Ecluse.Pilot.Osv (osvExportUrl)
@@ -53,8 +53,8 @@ to compile, where to fetch it from, and where the artifact lands.
 data PilotCompileOptions = PilotCompileOptions
     { pcoEcosystem :: Text
     , pcoSource :: Maybe String
-    {- ^ Overrides the export URL; 'Nothing' selects the canonical osv.dev
-    export for the ecosystem ('osvExportUrl').
+    {- ^ Overrides the export URL; 'Nothing' selects the configured export
+    base for the ecosystem ('osvExportUrl' under @osvExportBaseUrl@).
     -}
     , pcoOutDir :: FilePath
     , pcoUpload :: Bool
@@ -87,7 +87,7 @@ the command safe to script and to schedule.
 -}
 runPilotCompile :: LogEnv -> Telemetry -> AppConfig -> PilotCompileOptions -> IO FilePath
 runPilotCompile logEnv telemetry appCfg opts = do
-    let url = fromMaybe (osvExportUrl (pcoEcosystem opts)) (pcoSource opts)
+    let url = fromMaybe (osvExportUrl (cfgOsvExportBaseUrl appCfg) (pcoEcosystem opts)) (pcoSource opts)
     runKatipContextT logEnv (moduleField "Ecluse.Pilot") mempty $
         runResourceT $ do
             dbFile <- compileOsvToSqlite telemetry (pcoOutDir opts) (pcoEcosystem opts) url

@@ -25,6 +25,10 @@ telemetry: "off"
 minPublicIntegrity: sha256
 minTrustedIntegrity: sha256
 osvDataDir: "data/osv"
+# Base URL of the per-ecosystem OSV advisory exports Pilot compiles from
+# (<base>/<ecosystem>/all.zip). Override it if the upstream moves or you mirror it;
+# a new URL must never require a new Ecluse binary.
+osvExportBaseUrl: "https://osv-vulnerabilities.storage.googleapis.com"
 
 mounts:
   npm:

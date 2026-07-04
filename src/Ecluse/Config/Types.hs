@@ -159,6 +159,7 @@ data AppConfig = AppConfig
     , cfgMinPublicIntegrity :: MinIntegrity
     , cfgMinTrustedIntegrity :: MinTrustedIntegrity
     , cfgOsvDataDir :: FilePath
+    , cfgOsvExportBaseUrl :: Text
     , cfgVulnerabilityDatabaseBucket :: Maybe Text
     }
     deriving stock (Eq, Show)
