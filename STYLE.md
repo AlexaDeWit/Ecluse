@@ -468,6 +468,18 @@ match on.
 one large function. If a function needs a paragraph to explain its middle, split
 the middle out.
 
+Three tripwires demand a second look, never an automatic split: a body past
+roughly 25 lines, nesting past three levels, or a `where` block that outweighs
+the equation it serves. At a tripwire, ask *why* the function is long.
+Essential length is fine: an exhaustive per-constructor dispatch (§9.4) or a
+flat, linear sequence of steps runs long because the domain has that many cases
+or steps, and splitting it only scatters what belongs together. Incidental
+length is the target: a body that interleaves concerns (validating, deciding,
+rendering, performing effects) is long because structure is missing, so name
+the concerns and split along them. The reader's test for the result: the parent
+reads as a short sequence of named steps, and each step is comprehensible on
+its own.
+
 **Rule 9.2, Prefer pure and total.** Keep the core logic (the rules engine,
 parsers, rendering) pure; push `IO` to the edges (`app/Main.hs`, the server and
 worker layers). Annotate a purity/totality guarantee **only where it is
@@ -496,6 +508,12 @@ renderDuration d =
     plural n unit = show n <> " " <> unit <> (if n == 1 then "" else "s")
 ```
 
+A `where` helper earns its place by borrowing the parent's context and staying
+small: a few lines each, and the block as a whole smaller than the equation it
+supports. A helper that grows past roughly ten lines, nests its own control
+flow, or reads as a step with standalone meaning has outgrown the block; lift
+it (§9.5).
+
 **Rule 9.4, Dispatch on a sum type with `LambdaCase`** when the argument is
 only there to be matched:
 
@@ -523,6 +541,28 @@ local bindings for that. A pure formatter such as a log-line builder, which touc
 only its arguments, belongs at the top level, where a test can pin its output
 directly rather than reaching it through the effectful caller that happened to
 enclose it.
+
+Lift a *capturing* helper too when it has outgrown the block (§9.3): pass the
+values it captured as explicit parameters and keep it unexported. Two limits
+guard the trade. First, the parameter list must travel light, roughly four or
+fewer; a helper that needs more context than that reads worse lifted than
+nested, so restructure the parent instead (often by bundling the step's inputs
+in a small purpose-built record). Second, the lift must not change what the
+program computes: pass the *computed value*, never repeat the expression that
+computed it (a `where` binding used in two places is computed once; duplicating
+its expression at two call sites recomputes it, which can change space or even
+termination), and leave the parent's effect order exactly as it was. An
+instance method body is a function like any other: past a few lines, delegate
+to a named top-level function.
+
+**Rule 9.6, Extraction pays rent.** An extraction is justified when the new
+name and signature let the reader *skip the body*: the parent becomes a
+sequence of steps a reader can trust without chasing them. If the only honest
+name for the piece needs an "and", the boundary is wrong; find a different
+split. If the piece is single-use glue that only makes sense beside its caller,
+leave it inline: a scatter of tiny functions the reader must chase to
+reassemble the picture is *less* readable than the nesting it replaced, and
+§9.1's tripwires find candidates, not quotas.
 
 ---
 
