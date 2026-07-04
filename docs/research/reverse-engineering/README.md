@@ -1,16 +1,18 @@
-# Reverse-Engineering Research
+# Reverse-engineering research
 
-Protocol references for the package ecosystems Écluse proxies. Each document
-reverse-engineers a registry's **wire protocol**, the HTTP surface, the JSON
-shapes, the resolution and auth behaviours, to the level of detail needed to
-implement *both halves* of the proxy:
+Protocol references for the package registries Écluse proxies or is built to
+add. The core is ecosystem-agnostic: npm is wired first, and these notes are
+the research behind the ecosystems on the roadmap. Each document
+reverse-engineers a registry's wire protocol: the HTTP surface, the JSON
+shapes, and the resolution and auth behaviours, to the level of detail needed
+to implement both halves of the proxy:
 
 - **Client behaviour**, fetching metadata and artifacts from upstream
   registries the way each ecosystem's installer does.
 - **Server behaviour**, answering an npm/pip/gem client well enough that the
   client believes it is talking to a real registry.
 
-Each document also gives a precise **type model of the wire format** (see its
+Each document also gives a precise type model of the wire format (see its
 "Type model" section), so a request can be decoded and re-encoded faithfully in
 either direction.
 
@@ -27,8 +29,8 @@ either direction.
 Each document is grounded two ways, and says which claim came from which:
 
 1. **Live probes** against the public registry (`curl` + `jq`), captured with a
-   date. These are reproducible, the exact commands are kept in each
-   document's "Reproducing the probes" appendix.
+   date. These are reproducible; the exact commands live in each document's
+   "Reproducing the probes" appendix.
 2. **Official documentation**, quoted and linked, for behaviour we cannot or
    should not exercise anonymously (publish, token lifecycle, 2FA).
 

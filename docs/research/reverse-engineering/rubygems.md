@@ -1,4 +1,4 @@
-# The RubyGems Registry Protocol (Ruby / gem / Bundler)
+# The RubyGems registry protocol (Ruby / gem / Bundler)
 
 A reverse-engineering reference for the Ruby package registry, the third in the
 series after [`npm.md`](npm.md) and [`pypi.md`](pypi.md). Same goal: a faithful
@@ -78,7 +78,7 @@ And one finding that dominates the security design:
 | Files per version | one `.tgz` | many (sdist + wheels) | many (one per **platform**) |
 | Integrity | `dist.integrity` (SRI) | `hashes.sha256` | `checksum` (SHA256 of `.gem`) in `/info` |
 | "current" pointer | `dist-tags.latest` | none (client computes) | none; `/latest.json` or JSON `version` |
-| Name identity | case-sensitive, scopes | normalized (PEP 503) | **verbatim** (no normalization step) |
+| Name identity | case-sensitive, scopes | normalised (PEP 503) | **verbatim** (no normalisation step) |
 | Dependency spec | semver range | PEP 508 | `Gem::Requirement` (`~>`, `&`-joined) |
 | Version grammar | semver | PEP 440 | `Gem::Version` (e.g. `1.0.0.beta1`) |
 | "don't use" marker | `deprecated` (advisory) | `yanked` (file kept) | `yanked` (**file removed**, line in `/versions`) |
@@ -106,7 +106,7 @@ Three request shapes cover ~all install traffic:
 
 ### Gem-name identity
 
-Gem names are used **verbatim**, there is no PEP 503-style normalization step.
+Gem names are used **verbatim**, there is no PEP 503-style normalisation step.
 The Compact Index `/names` file is the authoritative set of exact names. (Names
 are conventionally lowercase with `-`/`_`, but the registry does not fold case or
 punctuation for you; treat the name as opaque and exact.)
@@ -208,7 +208,7 @@ runtime}`), `metadata` (free-form hash), `downloads`, `version_downloads`,
 `dependencies` here is `{ "runtime": [{name, requirements}], "development":
 [{name, requirements}] }`, the **runtime** list is what matters for resolution.
 
-The `metadata` hash is gem-author-supplied and can include resilience-relevant
+The `metadata` hash is gem-author-supplied and can include policy-relevant
 keys, notably **`rubygems_mfa_required`** (was this gem published under
 mandatory MFA?), plus `source_code_uri`, `funding_uri`, `changelog_uri`. (Seen
 live on `sinatra`: `metadata.rubygems_mfa_required`.)
@@ -469,7 +469,8 @@ exact pins. So in RubyGems a yank is closer to a soft-delete than PyPI's
 
 ### Consequences for a proxy (both directions)
 
-- **As a client**, fetch availability via the Compact Index (incrementally,  honour `Range`/`ETag`), read deps/checksums from `/info`, resolve
+- **As a client**, fetch availability via the Compact Index (incrementally,
+  honouring `Range`/`ETag`), read deps/checksums from `/info`, resolve
   `Gem::Requirement` locally. **For an install-script policy, additionally fetch
   the gemspec** (`/quick/...gemspec.rz` or the `.gem`'s `metadata.gz`), the one
   signal the index withholds.
@@ -577,7 +578,7 @@ materially from the npm wire model.
 ### Shared scalars
 
 ```
-GemName        = string   -- verbatim, no normalization (≠ PyPI)
+GemName        = string   -- verbatim, no normalisation (≠ PyPI)
 GemVersion     = string   -- Gem::Version, e.g. "3.1.22", "1.0.0.beta1"; opaque
 Platform       = string   -- "ruby" | "java" | "x86_64-linux" | …
 GemRequirement = string   -- Gem::Requirement, e.g. "~> 3.0", "< 4&>= 3.0.0"
@@ -648,9 +649,10 @@ GemJsonVersion  = GemJsonLatest-shaped, one version -- GET /api/v2/rubygems/{n}/
 > surfaced versus npm, (a) a version owns **N** artifacts (`Dist` → list, keyed
 > by platform); (b) the publish timestamp is per-file/per-version (here right
 > inside `/info`, no separate time map); (c) the install-risk signal is
-> ecosystem-specific (`hasInstallScript` / `packagetype==sdist` / `extensions`)
->, and adds a fourth: that signal may live **outside the metadata API**, so a
-> resolver needs a path to *fetch* per-version detail, not just read it.
+> ecosystem-specific (`hasInstallScript` / `packagetype==sdist` / `extensions`),
+> and adds a fourth: that signal may live **outside the metadata API**, so a
+> resolver needs a way to *fetch* per-version detail rather than read it from a
+> field.
 
 ---
 

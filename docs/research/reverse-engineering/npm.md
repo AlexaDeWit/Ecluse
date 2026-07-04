@@ -1,4 +1,4 @@
-# The npm Registry Protocol
+# The npm registry protocol
 
 A reverse-engineering reference for the npm registry HTTP API, focused on the
 read path Écluse must proxy: **package metadata** (the *packument*) and
@@ -93,9 +93,10 @@ leading `@` is **not** encoded.
 
 > Implementation note: depending on the client and the server's routing, the
 > scope separator may arrive **already percent-decoded**, so
-> `["@babel/code-frame"]` and `["@babel", "code-frame"]` are both possible,> normalise early.
+> `["@babel/code-frame"]` and `["@babel", "code-frame"]` are both possible;
+> normalise early.
 
-### Content negotiation (the key lever)
+### Content negotiation
 
 Metadata comes in **two formats**, selected by the `Accept` header:
 
@@ -139,7 +140,9 @@ Conditional revalidation works: replaying the `ETag` as
 cheap freshness check a proxy should use against upstreams, and should *offer*
 to its own clients.
 
-Tarballs are **immutable** (a published `name@version` artifact never changes,that's the integrity guarantee), so they can be cached forever; metadata cannot.
+Tarballs are **immutable** (a published `name@version` artifact never changes,
+and that's the integrity guarantee), so they can be cached forever; metadata
+cannot.
 
 ### Errors
 
@@ -456,7 +459,7 @@ When a user runs `npm install lodash` (no version) or `npm install lodash@^4`:
    - `lodash@next` → the `next` dist-tag.
    - `lodash@4.17.21` → that key directly (404-equivalent if absent).
 3. **Recurse**, read the resolved version's `dependencies` (ranges), and repeat
-   1–2 for each, building the dependency graph. (This is what makes `npm
+   1-2 for each, building the dependency graph. (This is what makes `npm
    install` fan out into many packument GETs.)
 4. **Fetch tarballs**, `GET dist.tarball` for each resolved version, verify
    `integrity`, unpack.
@@ -568,7 +571,8 @@ reproducible here.
 | `DELETE` | `/-/npm/v1/tokens/token/{hash}` | Revoke (cache eviction lags **~1 hour**). |
 
 `Token` object: `{ token, key, cidr_whitelist, created, updated, readonly }`. A
-`readonly` token authenticates only non-destructive methods (`GET`/`HEAD`),exactly the shape a *read-through proxy* like Écluse wants when calling a
+`readonly` token authenticates only non-destructive methods (`GET`/`HEAD`),
+exactly the shape a *read-through proxy* like Écluse wants when calling a
 private upstream.
 
 *Observed unauthenticated:* `GET /-/whoami` → `401 {"error":"Unauthorized"}`;
@@ -585,7 +589,7 @@ private upstream.
   **not** need to implement the login/token-lifecycle endpoints to be a
   functional install server, those are publish-time concerns.
 - Forward `npm-otp` and `Authorization` transparently if the proxy ever carries
-  write traffic; a read-only resilience gateway can ignore 2FA entirely.
+  write traffic; a read-only proxy can ignore 2FA entirely.
 
 ---
 
@@ -716,7 +720,8 @@ Token           = { token: string, key: string, cidr_whitelist: [string]|null,
 - `dist-tags` MUST contain a `latest` that is a key of `versions`.
 - `time` MUST have a timestamp for every key in `versions`, plus
   `created`/`modified`.
-- Preserve `dist.integrity`/`dist.shasum` **byte-for-byte** from the source,  clients verify against them.
+- Preserve `dist.integrity`/`dist.shasum` **byte-for-byte** from the source;
+  clients verify against them.
 - Honour `Accept`: emit `application/vnd.npm.install-v1+json` (abbreviated
   subset) when requested, `application/json` (full) otherwise; set `Vary:
   accept, accept-encoding`.

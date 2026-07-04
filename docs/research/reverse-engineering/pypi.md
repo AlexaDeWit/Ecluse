@@ -1,4 +1,4 @@
-# The PyPI Registry Protocol (Python / pip)
+# The PyPI registry protocol (Python / pip)
 
 A reverse-engineering reference for the Python package registry, the companion to
 [`npm.md`](npm.md). Same goal: a faithful JSON type model (see
@@ -49,19 +49,20 @@ A reverse-engineering reference for the Python package registry, the companion t
 ## 1. Mental model & npm correspondence
 
 PyPI is **not** a document store like npm's CouchDB. It is fundamentally a
-**file index**: a project is a normalized name pointing at a flat list of
+**file index**: a project is a normalised name pointing at a flat list of
 **distribution files**, and a "version" is just the set of files that share a
 release number. Two consequences dominate the design:
 
 - **A version has *many* files, not one tarball.** Each release offers at most
   one **sdist** (`*.tar.gz`, a source distribution) and *zero or more*
   **wheels** (`*.whl`, pre-built, one per Python-version × platform combination).
-  Captured live: `markupsafe 3.0.3` ships **89 files** for the single version,  one sdist plus 88 platform/Python-tagged wheels. npm's single `dist.tarball`
+  Captured live: `markupsafe 3.0.3` ships **89 files** for the single version:
+  one sdist plus 88 platform/Python-tagged wheels. npm's single `dist.tarball`
   has no equivalent; the npm `Dist` becomes a **list** here.
 - **Resolution is the client's job** (as in npm). The index returns every file;
   `pip` parses versions (PEP 440), filters by Python compatibility, wheel tags,
-  and yank status, then picks. PyPI resolves *no* version specifiers server-side
- ; see §8.
+  and yank status, then picks. PyPI resolves *no* version specifiers
+  server-side; see §8.
 
 ### npm ↔ PyPI correspondence
 
@@ -76,7 +77,7 @@ release number. Two consequences dominate the design:
 | The artifact | one `.tgz` per version | **N** `.whl` + one `.tar.gz` per version |
 | Integrity | `dist.integrity` (SRI), `shasum` | `hashes.sha256` (+ `md5`, `blake2b`) |
 | "Current" pointer | `dist-tags.latest` (server-set) | **none on the wire**, client computes; `info.version` (JSON API) is latest |
-| Name identity | case-sensitive, scopes (`@s/n`) | **normalized** (PEP 503): lowercase, `[-_.]+`→`-` |
+| Name identity | case-sensitive, scopes (`@s/n`) | **normalised** (PEP 503): lowercase, `[-_.]+`→`-` |
 | Dependency spec | semver range string | PEP 508 string (markers, extras) |
 | Version grammar | semver | PEP 440 |
 | "Don't use this" marker | `deprecated` (advisory) | `yanked` (PEP 592, removed from resolution) |
@@ -104,18 +105,18 @@ Three request shapes cover ~all install traffic:
   the gate.
 - Always HTTPS; the public endpoints negotiate HTTP/2.
 
-### Project-name normalization (PEP 503)
+### Project-name normalisation (PEP 503)
 
 > "The project is matched case-insensitively with the `_`, `-` and `.`
 > characters considered equal.", docs.pypi.org / PEP 503
 
-The normalization function is:
+The normalisation function is:
 
 ```python
 re.sub(r"[-_.]+", "-", name).lower()
 ```
 
-The registry **301-redirects** non-canonical names to the normalized path.
+The registry **301-redirects** non-canonical names to the normalised path.
 Captured live:
 
 | Request | → |
@@ -124,8 +125,8 @@ Captured live:
 | `GET /simple/zope.interface/` | `301` → `/simple/zope-interface/` |
 | `GET /simple/typing_extensions/` | `301` → `/simple/typing-extensions/` |
 
-A server implementation **must** normalize and redirect; a client **must**
-normalize before requesting (and follow the redirect).
+A server implementation **must** normalise and redirect; a client **must**
+normalise before requesting (and follow the redirect).
 
 ### Content negotiation (Simple API)
 
@@ -324,7 +325,7 @@ file. `data-yanked` (PEP 592), when present, marks a yanked file.
 |-------|------|-----------|-------|
 | `meta.api-version` | string | 691 | e.g. `"1.4"`. |
 | `meta._last-serial` | number | (Warehouse) | == `X-PyPI-Last-Serial`. |
-| `name` | string | 691 | Normalized project name. |
+| `name` | string | 691 | Normalised project name. |
 | `versions` | string[] | 700 | All version strings present (PEP 700 addition). |
 | `files[].filename` | string | 691 | The distribution filename (encodes tags, §7). |
 | `files[].url` | string | 691 | Absolute, on `files.pythonhosted.org`. |
@@ -336,8 +337,8 @@ file. `data-yanked` (PEP 592), when present, marks a yanked file.
 | `files[].upload-time` | ISO-8601 | 700 | The **publish timestamp** (the age signal). |
 | `files[].yanked` | bool \| string | 592 | `true` or a reason string. |
 
-This is the richer, modern surface, prefer JSON, fall back to HTML only for
-ancient mirrors.
+This is the richer, modern surface; prefer JSON, and fall back to HTML only
+for ancient mirrors.
 
 ---
 
@@ -484,7 +485,7 @@ server-provided "current", and the installer doesn't rely on it.
 
 ### What `pip install requests` actually does
 
-1. **Normalize** the name (PEP 503) and `GET /simple/requests/` (JSON preferred).
+1. **Normalise** the name (PEP 503) and `GET /simple/requests/` (JSON preferred).
 2. **Enumerate** candidate files from `files[]` / `versions[]`.
 3. **Filter** each candidate:
    - **PEP 440** version parse + match against the requirement specifier (bare
@@ -498,7 +499,8 @@ server-provided "current", and the installer doesn't rely on it.
    - **pre-releases** excluded by default (PEP 440) unless `--pre` or pinned.
 4. **Pick** the highest remaining version; choose the best-matching wheel (or
    sdist).
-5. **Resolve transitive deps** by reading each candidate's core metadata,   cheaply via the **`.metadata`** companion (§6), else by downloading.
+5. **Resolve transitive deps** by reading each candidate's core metadata,
+   cheaply via the **`.metadata`** companion (§6), else by downloading.
 6. **Download** from `files.pythonhosted.org`, verify `sha256`, install.
 
 So **availability of a version = "a usable, non-yanked file for it exists in the
@@ -513,7 +515,7 @@ index"**, there is no separate availability API; presence in the Simple index
   `.metadata` rather than downloading wheels.
 - **As a server**, to let `pip` resolve, the proxy must serve a **coherent Simple
   index**: every offered file with a correct `sha256`, `requires-python`, and
-  `yanked` flag, plus `versions` (PEP 700). Names **must** be normalized and
+  `yanked` flag, plus `versions` (PEP 700). Names **must** be normalised and
   non-canonical requests 301-redirected.
 - **Policy shapes availability.** A per-file/version policy decides what to
   serve. To *hide* a denied release, **omit its files** from the served index
@@ -617,7 +619,7 @@ differs materially from the npm wire model.
 ### Shared scalars
 
 ```
-NormalizedName  = string   -- PEP 503 normalized (lowercase, [-_.]+ → -)  ⚠️ npm has Scope+base instead
+NormalizedName  = string   -- PEP 503 normalised (lowercase, [-_.]+ → -)  ⚠️ npm has Scope+base instead
 Pep440Version   = string   -- exact, e.g. "2.34.2"; opaque, never resolved server-side
 Pep440Specifier = string   -- a requirement, e.g. ">=2,<4"; never resolved server-side
 Pep508Req       = string   -- full dependency: name + specifier + extras + marker
@@ -701,7 +703,7 @@ Vulnerability = {               -- OSV, inline in the JSON API
 
 > **Cross-ecosystem note.** The main shape differences from npm: (a) a version
 > owns **N** artifacts here, not one (`Dist` → `[File]`); (b) names are PEP 503
-> *normalized* rather than scoped; (c) the publish timestamp is per-file here
+> *normalised* rather than scoped; (c) the publish timestamp is per-file here
 > vs. the packument `time` map in npm; and (d) the install-time-execution signal
 > is `packagetype == sdist` rather than npm's `hasInstallScript`.
 
@@ -713,7 +715,7 @@ Vulnerability = {               -- OSV, inline in the JSON API
 
 - [ ] `GET /simple/{p}/` honouring `Accept` → PEP 503 HTML **and** PEP 691 JSON,
       correct `Content-Type`.
-- [ ] **Normalize** project names and **301-redirect** non-canonical requests.
+- [ ] **Normalise** project names and **301-redirect** non-canonical requests.
 - [ ] Coherent `files`/`versions` so the client can run PEP 440 + tag selection
       locally: correct `sha256`, `requires-python`, `yanked`, `size`,
       `upload-time` per file (§8).
@@ -727,7 +729,7 @@ Vulnerability = {               -- OSV, inline in the JSON API
 
 ### To be a correct Python **client** (fetch from upstreams)
 
-- [ ] Normalize names (PEP 503); request Simple **JSON** + `Accept-Encoding: gzip`;
+- [ ] Normalise names (PEP 503); request Simple **JSON** + `Accept-Encoding: gzip`;
       set a descriptive `User-Agent`.
 - [ ] Resolve PEP 440 specifiers, wheel tags (PEP 425), `requires-python`, and
       **exclude yanked** (PEP 592), all **locally**; never expect upstream to.
@@ -758,7 +760,7 @@ jq '{meta, n_versions:(.versions|length), last_file:(.files[-1])}' s.json
 # Registry resolves NO specifiers / unknown version → 404
 curl -s -o /dev/null -w "%{http_code}\n" https://pypi.org/pypi/requests/0.0.0/json          # 404
 
-# PEP 503 name normalization → 301 redirect
+# PEP 503 name normalisation → 301 redirect
 for n in Flask zope.interface typing_extensions; do
   curl -s -o /dev/null -w "$n -> %{http_code} %{redirect_url}\n" "https://pypi.org/simple/$n/"
 done
@@ -780,7 +782,7 @@ curl -s https://pypi.org/pypi/markupsafe/json | jq '{version:.info.version, n_fi
 
 - PyPI API overview / JSON / Index / Upload docs:
   <https://docs.pypi.org/api/>
-- PEP 503, Simple Repository API (HTML, normalization):
+- PEP 503, Simple Repository API (HTML, normalisation):
   <https://peps.python.org/pep-0503/>
 - PEP 691, JSON Simple API: <https://peps.python.org/pep-0691/>
 - PEP 700, Additional fields for the JSON Simple API (`versions`, `size`,
