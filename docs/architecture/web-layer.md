@@ -235,26 +235,35 @@ trust boundary and is cached freely.
 ## Serve admission and upstream pools
 
 The packument path and a tarball miss's public-metadata gate share one
-process-wide, non-queuing admission bound. At most
-`ECLUSE_SERVE_MAX_IN_FLIGHT` metadata materialisations may run at once; excess
-work receives the mount's error shape as `503 Service Unavailable` with
-`Retry-After: 1`. Refusal is immediate, so overload cannot turn into an
-application backlog whose resident parse structures and latency grow with client
-concurrency. Health probes and cheap local routes bypass admission. A trusted
-private tarball hit also bypasses it: the artifact stream is already
-constant-memory, and holding a metadata slot for a slow download would let clients
-starve packument traffic without protecting any parse structure.
+process-wide, brief-wait admission bound. At most
+`ECLUSE_SERVE_MAX_IN_FLIGHT` metadata materialisations may run at once; work
+finding the cap busy waits briefly for a slot in a waiting room bounded at the
+capacity, with a wait budget equal to the shed path's `Retry-After: 1` hint, and a
+newcomer never jumps a non-empty room. Only a request that finds the room full or
+waits out its budget receives the mount's error shape as `503 Service Unavailable`
+with `Retry-After: 1`. The bound therefore still holds by construction: resident
+parse structures never exceed the cap, waiting memory never exceeds one blocked
+green thread per room place, and worst-case added latency is the budget, while a
+burst that merely brushes the cap degrades into short queueing delay instead of a
+refusal the client immediately retries (instant shedding is self-amplifying: the
+refusal work itself competes for the cores the admitted work needs). Health probes
+and cheap local routes bypass admission. A trusted private tarball hit also
+bypasses it: the artifact stream is already constant-memory, and holding a
+metadata slot for a slow download would let clients starve packument traffic
+without protecting any parse structure.
 
 The public and private `http-client` managers have independently configurable
-per-host pools. Public same-key misses are single-flight-coalesced, so the public
-pool keeps the library's conservative per-host default. The private pool is sized
-on a different basis: a trusted tarball hit **streams outside admission**, so the
-pool's demand is the inbound hit fan-out rather than the admission capacity, and it
-defaults to a share of the process file-descriptor limit (the pool's real physical
-ceiling, since each pooled connection is one descriptor) rather than following
-`ECLUSE_SERVE_MAX_IN_FLIGHT`. A larger pool never opens more sockets than the
-concurrency already demands; it only governs how many are kept for reuse rather
-than re-handshaked.
+per-host pools, both defaulting to a share of the process file-descriptor limit
+(the pools' real physical ceiling, since each pooled connection is one descriptor)
+rather than following `ECLUSE_SERVE_MAX_IN_FLIGHT`. The private pool takes the
+larger share: a trusted tarball hit **streams outside admission**, so its demand is
+the steady-state inbound hit fan-out rather than the admission capacity. The public
+pool takes half that share: its metadata misses are single-flight-coalesced and
+admission-bounded, but the onboarding fail-over's artifact streams and the mirror
+worker's back-fill fetches ride the same manager without coalescing, so its
+retention must cover that transient burst. A larger pool never opens more sockets
+than the concurrency already demands; it only governs how many are kept for reuse
+rather than re-handshaked.
 
 ## Error model
 

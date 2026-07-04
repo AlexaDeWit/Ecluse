@@ -36,7 +36,7 @@ import Ecluse.Core.Registry.Npm.Serve (npmRenderer)
 import Ecluse.Core.Rules (prepare)
 import Ecluse.Core.Rules.Types (PrecededRule, Rule (AllowIfOlderThan), atDefaultPrecedence)
 import Ecluse.Core.Security (TarballHostPolicy (SameHostAsPackument), defaultLimits, lowerCaseHosts, tarballHostGate)
-import Ecluse.Core.Server.Admission (ServeAdmission, newServeAdmission, unlimitedServeAdmission, withServeAdmission)
+import Ecluse.Core.Server.Admission (ServeAdmission, newServeAdmission, newServeAdmissionTuned, unlimitedServeAdmission, withServeAdmission)
 import Ecluse.Core.Server.Cache (defaultCacheConfig, newMetadataCache)
 import Ecluse.Core.Server.Context (
     Handler,
@@ -101,9 +101,12 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
             statusCode (responseStatus resp) `shouldBe` 200
             decisions >>= (`shouldBe` [Admit])
 
-    it "sheds packument work immediately when metadata admission is full" $ do
+    it "sheds packument work when metadata admission refuses" $ do
         (metricsPort, _decisions) <- recordingMetricsPort
-        admission <- newServeAdmission 1
+        -- A tuned handle with no waiting room, so the saturated attempt is refused
+        -- outright: these pipeline tests own the rendering of a refusal (503 +
+        -- Retry-After), not the wait semantics (AdmissionSpec owns those).
+        admission <- newServeAdmissionTuned 1 0 0
         rt <- mkRuntimeWith admission metricsPort
         deps <- depsFor 1
         held <- withServeAdmission (srMetrics rt) admission (captureServe rt (mountWith (Just deps)) (servePackument leftpad defaultRequest))
@@ -114,7 +117,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
     it "releases metadata admission after an admitted operation completes" $
         testWithApplication (pure upstreamApp) $ \port -> do
             (metricsPort, _decisions) <- recordingMetricsPort
-            admission <- newServeAdmission 1
+            admission <- newServeAdmissionTuned 1 0 0
             rt <- mkRuntimeWith admission metricsPort
             deps <- depsFor port
             saturated <- withServeAdmission (srMetrics rt) admission (captureServe rt (mountWith (Just deps)) (servePackument leftpad defaultRequest))
@@ -124,7 +127,7 @@ spec = describe "Ecluse.Core.Server.Pipeline (core handlers over a ServeRuntime)
 
     it "sheds a tarball miss when its public metadata gate cannot acquire admission" $ do
         (metricsPort, _decisions) <- recordingMetricsPort
-        admission <- newServeAdmission 1
+        admission <- newServeAdmissionTuned 1 0 0
         rt <- mkRuntimeWith admission metricsPort
         deps <- depsFor 1
         held <-

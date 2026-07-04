@@ -65,9 +65,11 @@ edgeUnauthorised :: MountRenderer -> Response
 edgeUnauthorised renderer =
     renderedResponse status401 [] (renderError renderer Nothing "authentication required")
 
-{- | A non-queuing admission refusal. The body follows the matched mount's error
-surface and the retry hint is deliberately short: capacity, unlike a policy
-denial, can clear as soon as one in-flight metadata operation completes.
+{- | An admission refusal: the request found the waiting room full, or waited out
+its slot budget ("Ecluse.Core.Server.Admission"). The body follows the matched
+mount's error surface and the retry hint is deliberately short: capacity, unlike a
+policy denial, can clear as soon as one in-flight metadata operation completes,
+and a budget-expiry refusal has already waited one such interval in-process.
 -}
 serveOverloaded :: MountRenderer -> Response
 serveOverloaded renderer =

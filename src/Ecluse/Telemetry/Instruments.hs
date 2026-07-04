@@ -38,6 +38,7 @@ module Ecluse.Telemetry.Instruments (
     -- * Serve decision
     recordServeDecision,
     recordServeAdmissionInFlight,
+    recordServeAdmissionQueued,
 
     -- * Rule gate
     recordRuleDenial,
@@ -115,6 +116,7 @@ wiring is layered on as the subsystems that own them are built.
 data Metrics = Metrics
     { mServeDecision :: Counter Int64
     , mServeAdmissionInFlight :: UpDownCounter Int64
+    , mServeAdmissionQueued :: Counter Int64
     , mRuleDenials :: Counter Int64
     , mRuleEvalDuration :: Histogram
     , mRuleEffectfulFailures :: Counter Int64
@@ -150,6 +152,7 @@ newMetrics telemetry = do
     Metrics
         <$> counter meter ServeDecision "{decision}" "serve decisions by admit/deny/unavailable"
         <*> upDownCounter meter ServeAdmissionInFlight "{request}" "in-flight metadata parses"
+        <*> counter meter ServeAdmissionQueued "{request}" "admissions that waited for a slot"
         <*> counter meter RuleDenials "{denial}" "rule denials by rule and reason class"
         <*> histogram meter RuleEvalDuration "rule-evaluation latency by tier"
         <*> counter meter RuleEffectfulFailures "{failure}" "effectful-rule failures by cause"
@@ -203,6 +206,7 @@ metricsPortOf m =
     MetricsPort
         { mpServeDecision = recordServeDecision m
         , mpServeAdmissionInFlight = recordServeAdmissionInFlight m
+        , mpServeAdmissionQueued = recordServeAdmissionQueued m
         , mpRuleDenial = recordRuleDenial m
         , mpRuleEvalDuration = recordRuleEvalDuration m
         , mpRuleEffectfulFailure = recordRuleEffectfulFailure m
@@ -239,6 +243,11 @@ recordServeDecision m decision =
 recordServeAdmissionInFlight :: (MonadIO m) => Metrics -> Int -> m ()
 recordServeAdmissionInFlight m delta =
     addDelta (mServeAdmissionInFlight m) (fromIntegral delta) []
+
+-- | Record one admission that waited for a slot before proceeding (@ecluse.serve.admission.queued@).
+recordServeAdmissionQueued :: (MonadIO m) => Metrics -> m ()
+recordServeAdmissionQueued m =
+    addOne (mServeAdmissionQueued m) []
 
 {- | Record one rule denial (@ecluse.rule.denials@) by reason class and, for a policy
 denial, the deciding rule. A non-policy refusal (a missing-integrity or upstream cause)

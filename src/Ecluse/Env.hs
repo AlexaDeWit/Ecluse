@@ -71,8 +71,9 @@ header for the no-SDK and sole-composition-root invariants it upholds.
 -}
 data Env = Env
     { envServeAdmission :: ServeAdmission
-    {- ^ The process-wide non-queuing bound for metadata-bearing serve work. It is
-    projected into every request runtime, so all mounts share one aggregate cap.
+    {- ^ The process-wide brief-wait bound for metadata-bearing serve work
+    ("Ecluse.Core.Server.Admission"). It is projected into every request runtime,
+    so all mounts share one aggregate cap and one waiting room.
     -}
     , envRegistry :: RegistryClient
     {- ^ The registry-protocol handle the mirror __worker__ publishes approved

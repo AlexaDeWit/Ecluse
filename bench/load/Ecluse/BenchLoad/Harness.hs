@@ -127,8 +127,12 @@ data LoadKnobs = LoadKnobs
     capability count via 'resolveServeAdmission', exactly as the composition root
     does -- so an unknobbed run measures what an operator gets by default.
     -}
-    , lkPublicConnectionsPerHost :: Int
-    -- ^ Public-upstream per-host connection-pool capacity.
+    , lkPublicConnectionsPerHost :: Maybe Int
+    {- ^ Public-upstream per-host connection-pool capacity: an explicit override, or
+    'Nothing' to resolve the shipped computed default from the process file-descriptor
+    limit via 'resolvePublicConnections'\/'openFileSoftLimit', exactly as the
+    composition root does.
+    -}
     , lkPrivateConnectionsPerHost :: Maybe Int
     {- ^ Private-upstream per-host connection-pool capacity: an explicit override, or
     'Nothing' to resolve the shipped computed default from the process file-descriptor
@@ -161,7 +165,7 @@ defaultLoadKnobs =
         , lkCacheMaxEntries = 3
         , lkWorkingSet = 64
         , lkServeMaxInFlight = Nothing
-        , lkPublicConnectionsPerHost = 10
+        , lkPublicConnectionsPerHost = Nothing
         , lkPrivateConnectionsPerHost = Nothing
         }
 
@@ -190,7 +194,7 @@ loadKnobsFromEnv = do
     cacheMax <- readEnvInt "BENCH_LOAD_CACHE_MAX_ENTRIES" (lkCacheMaxEntries defaultLoadKnobs)
     workingSetSize <- readEnvInt "BENCH_LOAD_WORKING_SET" (lkWorkingSet defaultLoadKnobs)
     serveMaxInFlight <- (>>= readMaybe) <$> lookupEnv "BENCH_LOAD_SERVE_MAX_IN_FLIGHT"
-    publicConnections <- readEnvInt "BENCH_LOAD_PUBLIC_CONNECTIONS_PER_HOST" (lkPublicConnectionsPerHost defaultLoadKnobs)
+    publicConnections <- (>>= readMaybe) <$> lookupEnv "BENCH_LOAD_PUBLIC_CONNECTIONS_PER_HOST"
     privateConnections <- (>>= readMaybe) <$> lookupEnv "BENCH_LOAD_PRIVATE_CONNECTIONS_PER_HOST"
     pure
         LoadKnobs
@@ -201,7 +205,7 @@ loadKnobsFromEnv = do
             , lkCacheMaxEntries = max 1 cacheMax
             , lkWorkingSet = max 1 workingSetSize
             , lkServeMaxInFlight = max 1 <$> serveMaxInFlight
-            , lkPublicConnectionsPerHost = max 1 publicConnections
+            , lkPublicConnectionsPerHost = max 1 <$> publicConnections
             , lkPrivateConnectionsPerHost = max 1 <$> privateConnections
             }
   where
@@ -514,7 +518,7 @@ renderReports knobs capabilities ecosystem reports =
         , opRow "injected upstream latency" (fmt1 (fromIntegral (lkUpstreamLatencyMicros knobs) / 1_000) <> " ms")
         , opRow "admission" (show admissionCapacity <> " (" <> admissionOrigin <> ")")
         , opRow "private pool" privatePoolNote
-        , opRow "public connections per host" (show (lkPublicConnectionsPerHost knobs))
+        , opRow "public pool" publicPoolNote
         , opRow "GHC capabilities" (show capabilities <> " (scenario children pinned to the driver's count)")
         , opRow "packument corpus" "real-world captures (the packument scenarios serve the corpus)"
         , opRow "cache-eviction bound" (show (lkCacheMaxEntries knobs) <> " entries over a working set of up to " <> show (lkWorkingSet knobs))
@@ -540,6 +544,12 @@ renderReports knobs capabilities ecosystem reports =
     -- The private pool no longer follows admission (it is fd-derived since the
     -- composition split them); name its origin so the line cannot mislead.
     privatePoolNote = case lkPrivateConnectionsPerHost knobs of
+        Just n -> show n <> " (explicit)"
+        Nothing -> "computed from the fd limit, as in production"
+
+    -- The public pool is fd-derived too (half the private share); name its origin
+    -- the same way.
+    publicPoolNote = case lkPublicConnectionsPerHost knobs of
         Just n -> show n <> " (explicit)"
         Nothing -> "computed from the fd limit, as in production"
 

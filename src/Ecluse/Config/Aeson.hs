@@ -81,7 +81,7 @@ instance FromJSON AppConfig where
             <*> (o .:? "cores" >>= traverse (parsePositiveInt "cores"))
             <*> (o .:? "maxHeapBytes" >>= traverse (parsePositiveInt "maxHeapBytes"))
             <*> (o .:? "serveMaxInFlight" >>= traverse (parsePositiveInt "serveMaxInFlight"))
-            <*> (o .: "publicConnectionsPerHost" >>= parsePositiveInt "publicConnectionsPerHost")
+            <*> (o .:? "publicConnectionsPerHost" >>= traverse (parsePositiveInt "publicConnectionsPerHost"))
             <*> (o .:? "privateConnectionsPerHost" >>= traverse (parsePositiveInt "privateConnectionsPerHost"))
             <*> (o .: "cacheTtl" >>= parseSeconds)
             <*> o .: "cacheMaxEntries"

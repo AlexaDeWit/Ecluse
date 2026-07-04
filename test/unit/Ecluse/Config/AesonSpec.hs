@@ -46,7 +46,10 @@ spec = describe "decodeDocument" $ do
                 -- serveMaxInFlight is unset by default: the effective capacity is
                 -- computed at boot from the resolved capability count (issue #634).
                 cfgServeMaxInFlight (configApp doc) `shouldBe` Nothing
-                cfgPublicConnectionsPerHost (configApp doc) `shouldBe` 10
+                -- publicConnectionsPerHost is unset by default too: the effective
+                -- pool is computed at boot from the file-descriptor limit, like
+                -- the private pool.
+                cfgPublicConnectionsPerHost (configApp doc) `shouldBe` Nothing
 
     it "leaves the runtime posture unset when cores and maxHeapBytes are omitted" $ do
         case loadConfig [] Nothing of
