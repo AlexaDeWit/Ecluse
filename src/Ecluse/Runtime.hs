@@ -214,9 +214,9 @@ the plan is applied.
 -}
 renderRuntimePosture :: RuntimePlan -> RtsPosture -> [Text]
 renderRuntimePosture plan rts =
-    [ "runtime: capabilities " <> show (fst (planCapabilities plan)) <> provenance (snd (planCapabilities plan))
+    [ "runtime: capabilities " <> show (fst (planCapabilities plan)) <> renderProvenance (snd (planCapabilities plan))
     , case planMaxHeapBytes plan of
-        (Just bytes, prov) -> "runtime: max heap " <> renderMiB bytes <> provenance prov
+        (Just bytes, prov) -> "runtime: max heap " <> renderMiB bytes <> renderProvenance prov
         (Nothing, _) -> "runtime: max heap unbounded (the container memory limit is the only backstop; set maxHeapBytes or -M for a graceful ceiling)"
     , "runtime: allocation area "
         <> renderMiB (rpAllocAreaBytes rts)
@@ -224,21 +224,23 @@ renderRuntimePosture plan rts =
         <> maybe "" (\c -> ", nursery chunks " <> renderMiB c) (rpNurseryChunkBytes rts)
         <> " (RTS; tune with GHCRTS, see USAGE.md)"
     ]
-  where
-    provenance = \case
-        FromConfig -> " (from config)"
-        FromCgroup -> " (derived from the cgroup limit)"
-        FromRts -> " (as the RTS resolved it)"
 
-    renderMiB :: Int -> Text
-    renderMiB bytes =
-        let mib = fromIntegral bytes / (1024 * 1024) :: Double
-         in if fromIntegral (round mib :: Int) == mib
-                then show (round mib :: Int) <> " MiB"
-                else toText (showRounded mib) <> " MiB"
+renderProvenance :: Provenance -> Text
+renderProvenance = \case
+    FromConfig -> " (from config)"
+    FromCgroup -> " (derived from the cgroup limit)"
+    FromRts -> " (as the RTS resolved it)"
 
-    showRounded :: Double -> String
-    showRounded x = show (fromIntegral (round (x * 10) :: Int) / 10 :: Double)
+-- A byte count in MiB: whole when exact, else to one decimal place.
+renderMiB :: Int -> Text
+renderMiB bytes =
+    let mib = fromIntegral bytes / (1024 * 1024) :: Double
+     in if fromIntegral (round mib :: Int) == mib
+            then show (round mib :: Int) <> " MiB"
+            else toText (showRounded mib) <> " MiB"
+
+showRounded :: Double -> String
+showRounded x = show (fromIntegral (round (x * 10) :: Int) / 10 :: Double)
 
 {- | Parse a cgroup-v2 @cpu.max@ body: @\"<quota> <period>\"@ yields the granted
 cores (quota over period); the @\"max ...\"@ sentinel (no quota) yields 'Nothing'.
@@ -290,35 +292,44 @@ applyRuntimePosture logInfo logWarning cfgCores cfgMaxHeap = do
     case flags of
         [] -> logPosture plan rts
         _ | alreadyApplied -> do
-            logWarning
-                ( "runtime: the resolved plan still requires "
-                    <> T.intercalate " " flags
-                    <> " after re-launch; an operator GHCRTS may be overriding the configuration, or the RTS rejected a flag. Continuing with the live posture."
-                )
+            warnStillDivergent logWarning flags
             logPosture plan rts
         [capsOnly]
             | "-N" `T.isPrefixOf` capsOnly -> do
                 setNumCapabilities (fst (planCapabilities plan))
                 logPosture plan rts{rpCapabilities = fst (planCapabilities plan)}
-        _ ->
-            -- Tuning must never take the service down: a failed exec (essentially
-            -- unreachable -- the path is /proc/self/exe -- but not guaranteed) is
-            -- degraded to a warning and an unenforced posture, never an abort. The
-            -- exec itself never returns on success, so reaching the continuation
-            -- at all means it failed.
-            tryIO (reexecWith logInfo flags) >>= \case
-                Left err -> do
-                    logWarning
-                        ( "runtime: re-launching to apply "
-                            <> T.intercalate " " flags
-                            <> " failed ("
-                            <> show err
-                            <> "); continuing with the live posture, unenforced."
-                        )
-                    logPosture plan rts
-                Right () -> logPosture plan rts
+        _ -> do
+            reexecOrWarn logInfo logWarning flags
+            logPosture plan rts
   where
     logPosture plan rts = traverse_ logInfo (renderRuntimePosture plan rts)
+
+-- The already-re-launched process found its plan still unapplied: warn and
+-- continue with the live posture.
+warnStillDivergent :: (Text -> IO ()) -> [Text] -> IO ()
+warnStillDivergent logWarning flags =
+    logWarning
+        ( "runtime: the resolved plan still requires "
+            <> T.intercalate " " flags
+            <> " after re-launch; an operator GHCRTS may be overriding the configuration, or the RTS rejected a flag. Continuing with the live posture."
+        )
+
+{- Tuning must never take the service down: a failed exec (essentially
+unreachable -- the path is /proc/self/exe -- but not guaranteed) is degraded to a
+warning and an unenforced posture, never an abort. The exec itself never returns
+on success, so reaching the continuation at all means it failed. -}
+reexecOrWarn :: (Text -> IO ()) -> (Text -> IO ()) -> [Text] -> IO ()
+reexecOrWarn logInfo logWarning flags =
+    tryIO (reexecWith logInfo flags) >>= \case
+        Left err ->
+            logWarning
+                ( "runtime: re-launching to apply "
+                    <> T.intercalate " " flags
+                    <> " failed ("
+                    <> show err
+                    <> "); continuing with the live posture, unenforced."
+                )
+        Right () -> pass
 
 -- The live RTS posture, converted from the flag fields' 4 KiB blocks to bytes.
 currentRtsPosture :: IO RtsPosture
