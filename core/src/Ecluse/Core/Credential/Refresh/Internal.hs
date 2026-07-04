@@ -339,21 +339,19 @@ mintSynchronously :: RefreshConfig -> TVar CacheState -> IO AuthToken
 mintSynchronously cfg stateVar = do
     now <- rcClock cfg
     permitted <- gatedMint cfg stateVar now
-    if not permitted
-        then throwIO BreakerOpen
-        else do
-            result <- try (rcMint cfg)
-            now' <- rcClock cfg
-            case result of
-                Right token | tokenValid now' token -> do
-                    recordMintSuccess cfg stateVar now' token
-                    pure token
-                Right _ -> do
-                    recordMintFailure cfg stateVar now'
-                    throwIO MintedTokenAlreadyExpired
-                Left (e :: SomeException) -> do
-                    recordMintFailure cfg stateVar now'
-                    throwIO e
+    unless permitted (throwIO BreakerOpen)
+    result <- try (rcMint cfg)
+    now' <- rcClock cfg
+    case result of
+        Right token | tokenValid now' token -> do
+            recordMintSuccess cfg stateVar now' token
+            pure token
+        Right _ -> do
+            recordMintFailure cfg stateVar now'
+            throwIO MintedTokenAlreadyExpired
+        Left (e :: SomeException) -> do
+            recordMintFailure cfg stateVar now'
+            throwIO e
 
 {- | Release the single-flight flag. It is run as the release of the 'guardInFlight'
 that 'serve' installs in the __same masked scope__ that claimed the flag -- directly

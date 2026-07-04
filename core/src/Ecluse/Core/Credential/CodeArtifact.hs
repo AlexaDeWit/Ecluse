@@ -102,7 +102,7 @@ providerForEnv :: CredentialReporters -> AWS.Env -> CodeArtifactConfig -> IO Cre
 providerForEnv reporters env cfg =
     refreshingProvider
         defaultRefreshConfig
-            { rcMint = mint (regioned env)
+            { rcMint = mintToken (regioned env) (tokenRequest cfg)
             , rcClock = getCurrentTime
             , rcBreakerReporter = crBreakerReporter reporters
             , rcRefreshReporter = crRefreshReporter reporters
@@ -111,24 +111,25 @@ providerForEnv reporters env cfg =
     regioned :: AWS.Env -> AWS.Env
     regioned e = e{AWS.region = AWS.Region' (caRegion cfg)}
 
-    request :: CA.GetAuthorizationToken
-    request =
-        setOptional CA.getAuthorizationToken_domainOwner (caDomainOwner cfg)
-            . setOptional CA.getAuthorizationToken_durationSeconds (caDurationSeconds cfg)
-            $ CA.newGetAuthorizationToken (caDomain cfg)
+-- The GetAuthorizationToken request the configuration describes.
+tokenRequest :: CodeArtifactConfig -> CA.GetAuthorizationToken
+tokenRequest cfg =
+    setOptional CA.getAuthorizationToken_domainOwner (caDomainOwner cfg)
+        . setOptional CA.getAuthorizationToken_durationSeconds (caDurationSeconds cfg)
+        $ CA.newGetAuthorizationToken (caDomain cfg)
 
-    -- One mint: call GetAuthorizationToken and lift the response into an AuthToken.
-    mint :: AWS.Env -> IO AuthToken
-    mint e = do
-        response <- runResourceT (AWS.send e request)
-        secret <- case response ^. CA.getAuthorizationTokenResponse_authorizationToken of
-            Just token -> pure (mkSecret token)
-            Nothing -> throwIO AuthorizationTokenMissing
-        pure
-            AuthToken
-                { authSecret = secret
-                , authExpiresAt = response ^. CA.getAuthorizationTokenResponse_expiration
-                }
+-- One mint: call GetAuthorizationToken and lift the response into an AuthToken.
+mintToken :: AWS.Env -> CA.GetAuthorizationToken -> IO AuthToken
+mintToken env request = do
+    response <- runResourceT (AWS.send env request)
+    secret <- case response ^. CA.getAuthorizationTokenResponse_authorizationToken of
+        Just token -> pure (mkSecret token)
+        Nothing -> throwIO AuthorizationTokenMissing
+    pure
+        AuthToken
+            { authSecret = secret
+            , authExpiresAt = response ^. CA.getAuthorizationTokenResponse_expiration
+            }
 
 {- | Set an optional request field only when present, leaving the @amazonka@
 default ('Nothing') in place otherwise.
