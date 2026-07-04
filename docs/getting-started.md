@@ -114,7 +114,7 @@ project-specific pattern.
   selection across call sites. See
   [Cloud Backends → Handles](architecture/cloud-backends.md#handles-records-of-functions).
 
-For the current module list, read the [published Haddock](https://alexadewit.github.io/Ecluse/api/)
+For the current module list, read the [published Haddock](https://ecluse-proxy.com/api/)
 module index and the root [`Ecluse`](../src/Ecluse.hs) module's "How the code is organised"
 synopsis. Both live with the code, so this guide doesn't duplicate the list.
 

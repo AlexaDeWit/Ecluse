@@ -61,7 +61,7 @@ Before running a published image, verify its provenance and SBOM attestations: t
 ## The Golden Path
 
 This is the recommended, most resilient way to run Écluse, and the posture the
-[threat model](https://alexadewit.github.io/Ecluse/threat-model.html) treats as canonical. Aim
+[threat model](https://ecluse-proxy.com/threat-model.html) treats as canonical. Aim
 for it unless you have a specific reason to diverge; each step links to its detail.
 
 1. **Run three registries, not one.** Give the three internal roles distinct backends: a
@@ -105,7 +105,7 @@ for it unless you have a specific reason to diverge; each step links to its deta
    before deploying (see [Verifying the image](README.md#verifying-the-image)).
 
 The _why_ behind each choice, and the residual risks this posture accepts, is in the
-[threat model](https://alexadewit.github.io/Ecluse/threat-model.html) and
+[threat model](https://ecluse-proxy.com/threat-model.html) and
 [Security invariants](docs/architecture/security.md#trust-assumptions--credential-posture).
 
 ## Deviating from the Golden Path
@@ -118,7 +118,7 @@ The _why_ behind each choice, and the residual risks this posture accepts, is in
   public-derived packages share one store, so you lose provenance separation, per-provenance
   scanning, and clean post-incident scoping. **Écluse Dredger refuses to boot** if
   `MIRROR_TARGET` equals `PUBLICATION_TARGET`, since automated pruning on a shared store risks
-  first-party data loss. (Register [threat #10](https://alexadewit.github.io/Ecluse/threat-model.html)
+  first-party data loss. (Register [threat #10](https://ecluse-proxy.com/threat-model.html)
   and #16.)
 - **Pointing the private upstream at a registry that itself draws from public** (say a CodeArtifact
   repo with the stock `npm-store` upstream to npmjs). This is the **dangerous one**, and Écluse
@@ -126,7 +126,7 @@ The _why_ behind each choice, and the residual risks this posture accepts, is in
   gate instead of through it, nullifying the rules, integrity floor, and freshness quarantine.
   Aggregate **trusted stores only** into the private upstream (your first-party store plus Écluse's
   mirror), and let the gated mirror be the only way public content enters. (Register
-  [threat #15](https://alexadewit.github.io/Ecluse/threat-model.html).)
+  [threat #15](https://ecluse-proxy.com/threat-model.html).)
 
 The other deviations self-announce: an open edge (`ECLUSE_AUTH_TOKEN` unset) leans on your network
 boundary, a static publish credential fails closed at boot without that edge, and a `static`
@@ -503,7 +503,7 @@ The internal design, for when you need the _why_:
 - [Architecture overview](docs/architecture.md)
 - [Configuration & Authentication](docs/architecture/configuration.md)
 - [Security invariants & network egress](docs/architecture/security.md)
-- [Threat model](https://alexadewit.github.io/Ecluse/threat-model.html), the STRIDE register, generated from the OWASP Threat Dragon model ([`threat-modelling/ecluse.json`](threat-modelling/ecluse.json))
+- [Threat model](https://ecluse-proxy.com/threat-model.html), the STRIDE register, generated from the OWASP Threat Dragon model ([`threat-modelling/ecluse.json`](threat-modelling/ecluse.json))
 - [Rules engine](docs/architecture/rules-engine.md)
 - [Multi-ecosystem hosting & URL rewriting](docs/architecture/web-layer.md#web-layer)
 - [Release & supply-chain operations](docs/architecture/release-supply-chain.md)

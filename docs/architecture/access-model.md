@@ -30,7 +30,7 @@ match the upstream's, or it over-grants; or an edge that becomes the sole author
 
 Écluse declines the trade. The private origin is read **per request** and **never entered
 into the shared cache**, so the cross-client disclosure hazard
-([threat #9](https://alexadewit.github.io/Ecluse/threat-model.html)) is unrepresentable by
+([threat #9](https://ecluse-proxy.com/threat-model.html)) is unrepresentable by
 construction rather than fenced off by a probe. Only the anonymous **public-gated** origin
 is cached, one shared document with no per-caller authority to preserve. Reintroducing a
 shared private cache later would be a deliberate design change that must first re-establish
@@ -113,7 +113,7 @@ modes:
 
 1. **Open**, no app-level check; access is gated at the network layer (VPC, mesh).
    Appropriate on a closed network; the assumption it rests on is
-   [threat #3](https://alexadewit.github.io/Ecluse/threat-model.html).
+   [threat #3](https://ecluse-proxy.com/threat-model.html).
 2. **Static token**, `ECLUSE_AUTH_TOKEN`; the caller presents it as `Bearer` / `_authToken`.
    Standard npm tooling supports it directly.
 3. **Trusted edge identity**, a fronting proxy / cloud IAP / service mesh asserts a verified

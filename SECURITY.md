@@ -16,7 +16,7 @@ commit or version. Expect an initial acknowledgement within a few business days;
 updated as I investigate and prepare a fix.
 
 Known risks and their dispositions live in the
-[threat model](https://alexadewit.github.io/Ecluse/threat-model.html); check it before reporting a
+[threat model](https://ecluse-proxy.com/threat-model.html); check it before reporting a
 risk that's already recorded and accepted.
 
 Do not submit AI-generated reports you haven't verified. An unreproduced AI report consumes scarce
