@@ -24,6 +24,7 @@ module Ecluse.Telemetry.Reporters (
     -- * Reporters over the deferred handle
     deferredBreakerReporter,
     deferredRefreshReporter,
+    deferredMirrorEnqueueFailure,
 
     -- * Breaker-state projection
     breakerStateOf,
@@ -43,6 +44,7 @@ import Ecluse.Telemetry.Instruments (
     recordBreakerState,
     recordCredentialRefresh,
     recordCredentialTokenTtl,
+    recordMirrorEnqueueFailure,
  )
 
 {- | A 'Metrics' handle that may not exist yet: empty until the telemetry substrate has
@@ -92,6 +94,16 @@ deferredRefreshReporter deferred provider =
         withDeferredMetrics deferred $ \metrics -> do
             recordCredentialRefresh metrics provider result
             whenJust mTtlSeconds (recordCredentialTokenTtl metrics provider)
+
+{- | An action recording one mirror enqueue failure to @ecluse.mirror.enqueue.failures@,
+through the deferred handle (inert until it is installed). The composition root hangs
+it on the enqueue buffer's drop and delivery-failure callbacks
+('Ecluse.Core.Queue.newEnqueueBuffer'), which are wired before the instruments exist
+but cannot fire until the server is serving -- well after 'installMetrics'.
+-}
+deferredMirrorEnqueueFailure :: DeferredMetrics -> IO ()
+deferredMirrorEnqueueFailure deferred =
+    withDeferredMetrics deferred recordMirrorEnqueueFailure
 
 {- | Project the breaker's runtime state ("Ecluse.Core.Breaker") onto the bounded gauge value
 the catalogue records ("Ecluse.Core.Telemetry.Metrics"). The consecutive-failure tally a

@@ -1,5 +1,7 @@
 module Ecluse.QueueSpec (spec) where
 
+import Control.Exception (ErrorCall (ErrorCall))
+import Data.Text qualified as T
 import Hedgehog (
     Callback (Ensure, Require, Update),
     Command (Command),
@@ -18,6 +20,8 @@ import Hedgehog.Range qualified as Range
 import System.Timeout (timeout)
 import Test.Hspec
 import Test.Hspec.Hedgehog (hedgehog)
+import UnliftIO (throwIO, withAsync)
+import UnliftIO.Concurrent (threadDelay)
 
 import Ecluse.Core.Ecosystem (Ecosystem (..))
 import Ecluse.Core.Package (HashAlg (SHA1), mkPackageName)
@@ -221,6 +225,49 @@ spec = do
             enqueue q sampleJob -- fills the single slot; nothing receives it
             traverse_ (enqueue q) (replicate memoryQueueDropReportInterval sampleJob)
             readIORef drops `shouldReturn` [1, memoryQueueDropReportInterval]
+
+    describe "newEnqueueBuffer" $ do
+        it "delivers handed-off jobs to the backend in order" $ do
+            delivered <- newIORef []
+            (q, drainLoop) <- newEnqueueBuffer 8 (const pass) (\_ _ -> pass) (recordingBackend delivered)
+            withAsync drainLoop $ \_ -> do
+                traverse_ (enqueue q) [sampleJob, otherJob, thirdJob]
+                awaitUntil ((== (3 :: Int)) . length <$> readIORef delivered)
+            readIORef delivered `shouldReturn` [sampleJob, otherJob, thirdJob]
+
+        it "drops the newest hand-off at the cap, reporting every drop's running total" $ do
+            -- The drain loop is deliberately not running, so the buffer stays full
+            -- once its depth is reached and every further hand-off is a drop. The
+            -- callback fires per drop (metric-grade); rate-limiting is the caller's.
+            delivered <- newIORef []
+            drops <- newIORef []
+            (q, _drainLoop) <- newEnqueueBuffer 2 (\n -> modifyIORef' drops (<> [n])) (\_ _ -> pass) (recordingBackend delivered)
+            traverse_ (enqueue q) [sampleJob, otherJob, thirdJob, thirdJob]
+            readIORef drops `shouldReturn` [1, 2]
+            readIORef delivered `shouldReturn` [] -- nothing drained, nothing delivered
+        it "keeps draining past a backend failure, reporting its total and detail" $ do
+            delivered <- newIORef []
+            failures <- newIORef []
+            failFirst <- newIORef True
+            let flaky job = do
+                    failNow <- atomicModifyIORef' failFirst (False,)
+                    if failNow
+                        then throwIO (ErrorCall "backend unavailable")
+                        else modifyIORef' delivered (<> [job])
+            (q, drainLoop) <-
+                newEnqueueBuffer
+                    8
+                    (const pass)
+                    (\n detail -> modifyIORef' failures (<> [(n, detail)]))
+                    (recordingBackend delivered){enqueue = flaky}
+            withAsync drainLoop $ \_ -> do
+                traverse_ (enqueue q) [sampleJob, otherJob]
+                awaitUntil ((== (1 :: Int)) . length <$> readIORef delivered)
+            -- GHC 9.10 appends a HasCallStack backtrace to a rendered exception;
+            -- the stable part of the detail is its first line.
+            recorded <- readIORef failures
+            map (second (T.takeWhile (/= '\n'))) recorded `shouldBe` [(1, "backend unavailable")]
+            readIORef delivered `shouldReturn` [otherJob] -- the loop survived the failure
   where
     -- A bounded in-memory queue at the given cap, paired with an 'IORef' that records
     -- (in order) the running drop totals its drop callback was invoked with -- so a
@@ -233,6 +280,27 @@ spec = do
         let cfg = MemoryQueueConfig{memQueueMaxDepth = cap, memQueuePollWaitMicros = 50_000}
         q <- newBoundedInMemoryQueue cfg (\n -> modifyIORef' drops (<> [n]))
         pure (q, drops)
+
+    -- A backend stub whose 'enqueue' appends to the given ref, so a test can
+    -- observe exactly what the buffer's drain loop delivered and in what order.
+    -- The consumer fields are inert (the buffer passes them through untouched).
+    recordingBackend :: IORef [MirrorJob] -> MirrorQueue
+    recordingBackend delivered =
+        MirrorQueue
+            { enqueue = \job -> modifyIORef' delivered (<> [job])
+            , receive = pure []
+            , ack = const pass
+            , extendVisibility = \_ _ -> pass
+            }
+
+    -- Poll (1ms cadence) until the condition holds, bounded at 2s so a broken
+    -- drain loop fails the test loudly rather than hanging the suite.
+    awaitUntil :: IO Bool -> IO ()
+    awaitUntil cond = do
+        outcome <- timeout 2_000_000 wait
+        outcome `shouldBe` Just ()
+      where
+        wait = unlessM cond (threadDelay 1_000 *> wait)
 
     -- Receive repeatedly, acking everything, until the queue is empty; returns
     -- the jobs in the order they were delivered. Total: it stops as soon as a

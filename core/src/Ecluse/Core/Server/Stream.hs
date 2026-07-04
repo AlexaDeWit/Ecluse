@@ -11,11 +11,14 @@ Raw WAI avoids it by construction: 'Network.Wai.Application' is
 continuation-passing, so the upstream connection is acquired with @withResponse@
 __bracketed around the @respond@ call itself__. The connection then lives for
 exactly the duration of the streamed body and is closed only when Warp returns
-@ResponseReceived@. 'pumpBody' pulls one chunk from upstream, writes it, and
-blocks on the socket send buffer before pulling the next -- so the proxy reads from
-upstream only as fast as the client drains, giving __constant memory regardless of
-artifact size__ with backpressure for free. No @ResourceT@, no conduit on the hot
-path (see @docs\/architecture\/web-layer.md@ → "Streaming and resource lifetime").
+@ResponseReceived@. 'pumpBody' pulls one chunk from upstream, writes it through
+the sink's bounded output buffer -- blocking on the socket send whenever it
+spills -- before pulling the next, so the proxy reads from upstream only as fast
+as the client drains, giving __constant memory regardless of artifact size__ with
+backpressure for free. Only the first chunk is explicitly flushed (prompt first
+byte); the rest coalesce in the output buffer, so the relay pays fewer socket
+sends than upstream chunks. No @ResourceT@, no conduit on the hot path (see
+@docs\/architecture\/web-layer.md@ → "Streaming and resource lifetime").
 
 This is the serve path; it __streams, never buffers__. The whole-artifact-in-memory
 'Ecluse.Core.Registry.fetchArtifact' is the separate mirroring concern, not this.
@@ -180,24 +183,36 @@ probeUpstreamWhen manager request accept relay respond =
 
 {- | Pump a chunked body from a reader to a WAI stream sink with constant memory.
 
-Each pull reads one chunk; a non-empty chunk is written and flushed before the
-next is pulled, so at most one chunk is ever resident. An empty chunk is the
-@http-client@ 'BodyReader' end-of-body terminator -- the pump stops on it and never
-writes it. Because @write@ blocks on the socket send buffer, the loop pulls from
-upstream only as fast as the client consumes: backpressure, and bounded memory
-independent of body size.
+Each pull reads one chunk and writes it before the next is pulled, so at most one
+chunk (plus the sink's fixed output buffer) is ever resident. An empty chunk is
+the @http-client@ 'BodyReader' end-of-body terminator -- the pump stops on it and
+never writes it. Because @write@ fills the sink's bounded output buffer and blocks
+on the socket send whenever it spills, the loop pulls from upstream only as fast
+as the client consumes: backpressure, and bounded memory independent of body size.
+
+Only the __first__ chunk is explicitly flushed, so the response's status, headers,
+and opening bytes reach the client promptly (time to first byte) even when
+upstream trickles. Later chunks are deliberately __not__ flushed per chunk: at
+relay byte rates a per-chunk flush degenerates into a socket send per upstream
+read, and letting the sink coalesce writes into its buffer raises the streaming
+ceiling. The sink flushes whatever remains when the stream ends (Warp's
+stream-close contract), so the tail is never stranded.
 
 Taking the reader and sink as plain actions (not a @http-client@ response or a WAI
 @Response@) keeps the pump's memory and backpressure behaviour testable in process
 against an instrumented source and sink, with no socket.
 -}
 pumpBody :: BodyReader -> (Builder -> IO ()) -> IO () -> IO ()
-pumpBody readChunk write flush = loop
+pumpBody readChunk write flush = do
+    opening <- readChunk
+    unless (BS.null opening) $ do
+        write (byteString opening)
+        flush
+        rest
   where
-    loop :: IO ()
-    loop = do
+    rest :: IO ()
+    rest = do
         chunk <- readChunk
         unless (BS.null chunk) $ do
             write (byteString chunk)
-            flush
-            loop
+            rest

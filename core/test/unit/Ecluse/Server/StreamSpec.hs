@@ -100,6 +100,21 @@ spec = do
             out <- newIORef (0 :: Int)
             pumpBody (srcNext src) (const (modifyIORef' out (+ 1))) (pure ())
             readIORef out `shouldReturn` 0
+        it "flushes the first chunk only, coalescing the rest in the sink's buffer" $ do
+            -- One explicit flush pushes the status, headers, and opening bytes out
+            -- promptly (time to first byte); flushing every chunk would instead pay
+            -- a socket send per upstream read at relay byte rates. The sink sends as
+            -- its output buffer fills and flushes the tail at stream end, so later
+            -- chunks need no explicit flush to arrive.
+            src <- newSource ["alpha", "beta", "gamma"]
+            flushes <- newIORef (0 :: Int)
+            pumpBody (srcNext src) (const (pure ())) (modifyIORef' flushes (+ 1))
+            readIORef flushes `shouldReturn` 1
+        it "does not flush an empty body" $ do
+            src <- newSource []
+            flushes <- newIORef (0 :: Int)
+            pumpBody (srcNext src) (const (pure ())) (modifyIORef' flushes (+ 1))
+            readIORef flushes `shouldReturn` 0
 
     describe "streamUpstream -- end to end over an in-process upstream" $
         it "relays a large body through with the upstream status" $ do

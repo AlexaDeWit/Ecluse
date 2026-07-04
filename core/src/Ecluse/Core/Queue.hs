@@ -47,6 +47,11 @@ in-memory implementations:
   selected by @ECLUSE_QUEUE_BACKEND=memory@. See its own Haddock for why it is
   correctness-safe (a dropped job is re-enqueued on the next demand) and why it
   deliberately does __not__ redeliver.
+
+It also provides 'newEnqueueBuffer', a __bounded producer-side hand-off buffer__
+wrapped in front of either backend so the serve path's 'enqueue' completes in
+microseconds while a composition-root drain loop delivers to the (possibly slow)
+backend off the request path.
 -}
 module Ecluse.Core.Queue (
     -- * Queue handle
@@ -75,12 +80,16 @@ module Ecluse.Core.Queue (
     newBoundedInMemoryQueue,
     memoryQueueBatchSize,
     memoryQueueDropReportInterval,
+
+    -- * Buffered producer hand-off
+    newEnqueueBuffer,
 ) where
 
 import Control.Concurrent.STM.TBQueue (TBQueue, isFullTBQueue, newTBQueueIO, readTBQueue, tryReadTBQueue, writeTBQueue)
 import Data.Map.Strict qualified as Map
 import Data.Sequence qualified as Seq
 import System.Timeout (timeout)
+import UnliftIO.Exception (tryAny)
 
 import Ecluse.Core.Package (Hash, PackageName)
 import Ecluse.Core.Version (Version)
@@ -515,3 +524,76 @@ receiveBatch queue nextReceipt = do
         n <- readTVar nextReceipt
         writeTVar nextReceipt (n + 1)
         pure QueueMessage{msgJob = job, msgReceipt = mkReceiptHandle (show n)}
+
+{- | Wrap a bounded __producer-side hand-off buffer__ in front of a queue, so the
+serve path's 'enqueue' is an in-process STM write (microseconds) no matter how slow
+the backend's own producer call is.
+
+The motivating case is the SQS backend: its 'enqueue' is an HTTP round trip
+(@SendMessage@), and the serve path runs the mirror enqueue after the response body
+has been sent but before the handler returns -- so on a keep-alive connection those
+milliseconds hold the connection's turn and tax the next request on it. Buffered,
+the handler hands the job off and returns; the returned __drain loop__ -- which the
+composition root runs alongside the server -- delivers buffered jobs to the backend
+at the backend's own pace. The consumer fields ('receive', 'ack',
+'extendVisibility') pass through untouched.
+
+Loss stays safe, so the buffer keeps the handle's best-effort producer contract
+(mirroring is demand-driven: a lost job is re-enqueued on the next demand for its
+artifact -- the same argument 'newBoundedInMemoryQueue' makes):
+
+* __Drop-newest on overflow.__ A hand-off finding the buffer full drops the job and
+  invokes @onDrop@ with the running drop total. The callback fires on __every__
+  drop (metric-grade); the caller owns any log rate-limiting.
+* __A backend failure inside the drain loop__ invokes @onDeliveryFailure@ with the
+  running failure total and the failure's detail, and the loop moves on to the next
+  job; the failed job is not redelivered here.
+* __Cancellation loses the buffer.__ The drain loop never returns, so the
+  composition root races it against the services; shutdown cancels it and any
+  still-buffered jobs are dropped -- the same safe loss.
+
+The wrapped 'enqueue' never throws.
+-}
+newEnqueueBuffer ::
+    {- | Buffer depth: how many undelivered jobs the hand-off retains before
+    dropping the newest.
+    -}
+    Int ->
+    -- | Invoked on every hand-off drop, with the running drop total.
+    (Int -> IO ()) ->
+    {- | Invoked on every backend delivery failure, with the running failure total
+    and the failure's detail.
+    -}
+    (Int -> Text -> IO ()) ->
+    -- | The backend whose 'enqueue' is being decoupled from its callers.
+    MirrorQueue ->
+    IO (MirrorQueue, IO ())
+newEnqueueBuffer depth onDrop onDeliveryFailure backend = do
+    -- A capacity of at least one, so a degenerate depth can never make the
+    -- hand-off an always-full drop (the same guard the bounded backend applies).
+    buffer <- newTBQueueIO (fromIntegral (max 1 depth))
+    dropCount <- newTVarIO (0 :: Int)
+    failureCount <- newTVarIO (0 :: Int)
+    let handOff job = do
+            dropped <- atomically $ do
+                full <- isFullTBQueue buffer
+                if full
+                    then do
+                        -- Drop-newest: at the cap, reject this hand-off rather than
+                        -- block the serve path. Safe -- re-enqueued on next demand.
+                        n <- (+ 1) <$> readTVar dropCount
+                        writeTVar dropCount n
+                        pure (Just n)
+                    else writeTBQueue buffer job $> Nothing
+            whenJust dropped onDrop
+        deliver = do
+            job <- atomically (readTBQueue buffer)
+            tryAny (enqueue backend job) >>= \case
+                Left failure -> do
+                    n <- atomically $ do
+                        n <- (+ 1) <$> readTVar failureCount
+                        writeTVar failureCount n
+                        pure n
+                    onDeliveryFailure n (toText (displayException failure))
+                Right () -> pass
+    pure (backend{enqueue = handOff}, forever deliver)
