@@ -258,14 +258,23 @@ the same fail-safe the guards apply to it.
 -}
 hostAddress :: Text -> Text
 hostAddress raw =
-    let afterScheme = afterLast "://" raw
+    let afterScheme = afterFirst "://" raw
         authority = T.takeWhile (`notElem` ['/', '?', '#']) afterScheme
         afterUserinfo = afterLast "@" authority
      in T.toLower (maybe "" fst (splitHostPort afterUserinfo))
   where
-    -- The text after @needle@'s last occurrence, or all of @hay@ if absent.
-    -- ('T.breakOnEnd' yields @(hay, "")@ when the needle is absent -- its prefix
-    -- is non-empty exactly when the needle was found, since it includes it.)
+    -- The text after @needle@'s __first__ occurrence, or all of @hay@ if absent.
+    -- The scheme separator is matched at its first occurrence so the extracted
+    -- authority is the one http-client actually dials, not a later "://" inside a
+    -- path or query: a crafted dist.tarball like
+    -- "https://169.254.169.254/x?u=https://ok.example" must gate on 169.254.169.254
+    -- (the host connected to), never on the host after the last "://".
+    afterFirst :: Text -> Text -> Text
+    afterFirst needle hay = fromMaybe hay (T.stripPrefix needle (snd (T.breakOn needle hay)))
+
+    -- The text after @needle@'s last occurrence, or all of @hay@ if absent. Used for
+    -- the userinfo "@" boundary, where the last "@" in the authority separates
+    -- userinfo from host (matching URL parsers).
     afterLast :: Text -> Text -> Text
     afterLast needle hay =
         let (pre, post) = T.breakOnEnd needle hay
