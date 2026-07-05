@@ -859,7 +859,6 @@ refusingRegistry :: RegistryClient
 refusingRegistry =
     RegistryClient
         { fetchMetadata = const (refuse "fetchMetadata")
-        , fetchArtifact = \_ _ -> refuse "fetchArtifact"
         , publishArtifact = \_ _ _ _ -> refuse "publishArtifact"
         , parsePackageInfo = \_ _ -> Left (ParseError "unused")
         , parseVersionDetails = \_ _ -> Left (ParseError "unused")

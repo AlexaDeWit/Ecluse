@@ -27,7 +27,6 @@ fakeRegistry :: RegistryClient
 fakeRegistry =
     RegistryClient
         { fetchMetadata = const unused
-        , fetchArtifact = \_ _ -> unused
         , publishArtifact = \_ _ _ _ -> unused
         , parsePackageInfo = \_ _ -> Left parseStub
         , parseVersionDetails = \_ _ -> Left parseStub
@@ -199,7 +198,6 @@ spec = do
             -- effectful op throws, so a misconfiguration fails fast instead of
             -- serving phantom data or reporting a publish that never happened.
             shouldRefuse (fetchMetadata unconfiguredRegistry pkg)
-            shouldRefuse (fetchArtifact unconfiguredRegistry pkg ver)
             {- HLINT ignore "Avoid restricted function" -}
             shouldRefuse (publishArtifact unconfiguredRegistry pkg ver (error "publishArtifact should not evaluate the artifact in this test") "bytes")
 

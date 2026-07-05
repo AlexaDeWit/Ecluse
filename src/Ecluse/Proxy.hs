@@ -595,7 +595,6 @@ unconfiguredRegistry :: RegistryClient
 unconfiguredRegistry =
     RegistryClient
         { fetchMetadata = const refuse
-        , fetchArtifact = \_ _ -> refuse
         , publishArtifact = \_ _ _ _ -> refuse
         , parsePackageInfo = \_ _ -> Left notConfigured
         , parseVersionDetails = \_ _ -> Left notConfigured

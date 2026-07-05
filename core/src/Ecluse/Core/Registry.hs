@@ -51,9 +51,9 @@ import Ecluse.Core.Queue (MirrorArtifact)
 import Ecluse.Core.Version (Version)
 
 {- | A raw response fetched from a registry -- the unparsed bytes of a metadata
-document or an artifact, as returned by 'fetchMetadata' \/ 'fetchArtifact'. It is
-kept opaque-of-bytes here so the protocol\/data plane (fetch) is separate from
-parsing: a @parse*@ field turns a 'RegistryResponse' into a domain type.
+document, as returned by 'fetchMetadata'. It is kept opaque-of-bytes here so the
+protocol\/data plane (fetch) is separate from parsing: a @parse*@ field turns a
+'RegistryResponse' into a domain type.
 -}
 newtype RegistryResponse = RegistryResponse
     { responseBody :: ByteString
@@ -152,8 +152,6 @@ from the core); the @parse*@ fields are pure. See the module header.
 data RegistryClient = RegistryClient
     { fetchMetadata :: PackageName -> IO RegistryResponse
     -- ^ Fetch a package's metadata document (its packument) from the registry.
-    , fetchArtifact :: PackageName -> Version -> IO RegistryResponse
-    -- ^ Fetch the artifact bytes for one version.
     , publishArtifact :: PackageName -> Version -> MirrorArtifact -> ByteString -> IO (Either PublishFault ())
     {- ^ Publish one version's artifact to the registry, given its metadata
     ('MirrorArtifact': filename, integrity hashes, declared size) and the raw
