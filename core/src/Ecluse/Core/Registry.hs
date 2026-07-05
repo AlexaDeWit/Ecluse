@@ -91,9 +91,8 @@ already-parsed 'Ecluse.Core.Package.PackageName'.
 This is a __protocol-independent__ fault shared by every request an adapter
 builds -- metadata fetch, artifact fetch, and publish alike -- so a read-path
 failure is reported as what it is rather than borrowing the write-path's
-'PublishError'. It is distinct from "Ecluse.Core.Security"'s @UrlError@: that is the
-pure SSRF\/identifier guard (which also rejects unsafe name components), whereas
-this is the effectful adapter's report that the configured base URL is unusable.
+'PublishError'. It reports that the configured base URL is empty or the URL the
+adapter formed could not be parsed.
 -}
 data UrlFormationError
     = -- | The configured base URL is empty, so no request URL can be formed.

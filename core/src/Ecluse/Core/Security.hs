@@ -12,12 +12,6 @@ steered or exhausted by hostile input. It defends three boundaries:
   position can otherwise reach. Together they are the SSRF gate: a target must be
   both on the allowlist /and/ not an internal address.
 
-* __How an upstream URL is derived.__ 'upstreamUrlFor' builds an artifact\/metadata
-  URL from a configured base URL and an __already-parsed__ 'PackageName', never
-  from raw client path segments, re-checking each name component with the router's
-  own safety rule so traversal, encoded slashes, or an absolute URL cannot change
-  the target.
-
 * __How much an upstream may cost.__ A 'Limits' budget plus 'boundedRead' (abort a
   streamed body past 'maxBodyBytes') and 'checkVersionCount' \/ 'checkNestingDepth'
   (reject an oversized or deeply-nested parsed document) bound algorithmic-complexity
@@ -35,10 +29,8 @@ model these guards answer is recorded there too.
 -}
 module Ecluse.Core.Security (
     module Ecluse.Core.Security.Host,
-    module Ecluse.Core.Security.Url,
     module Ecluse.Core.Security.Limits,
 ) where
 
 import Ecluse.Core.Security.Host
 import Ecluse.Core.Security.Limits
-import Ecluse.Core.Security.Url
