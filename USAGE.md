@@ -173,7 +173,7 @@ rationale behind each setting are in
 | `ECLUSE_HELP_MESSAGE` | No |  | String appended to every denial message (e.g. a support channel). |
 | `ECLUSE_LOG_FORMAT` | No | `json` | Log shape: `json` (one JSON object per line, for log collectors) or `console` (human-readable). |
 | `ECLUSE_TELEMETRY` | No | `off` | OpenTelemetry master switch. With it `off`, no telemetry is emitted. When `on`, the SDK reads the standard `OTEL_*` variables. |
-| `ECLUSE_CVE_SYNC_INTERVAL` | Depends | Pilot only, default `3600` | How often the Écluse Pilot singleton refreshes the OSV database from upstream. |
+| `ECLUSE_CVE_SYNC_INTERVAL` | Depends | Pilot only, default `3600` | How often the Écluse Pilot singleton refreshes the OSV database from upstream. Positive integer. |
 | `ECLUSE_VULNERABILITY_DATABASE_BUCKET` | No |  | The object-store bucket carrying the compiled `osv.db` advisory artifacts. Pilot uploads to it; the proxy polls it and shadow-swaps fresh artifacts into the rules engine. Unset, the proxy runs no advisory sync and `AllowIfRemediatesCve` abstains. |
 | `ECLUSE_CVE_DB_POLL_INTERVAL` | No | `60` | Proxy only: how often each configured ecosystem's sync task polls the bucket for a fresh advisory database (a cheap conditional `HEAD`). Deliberately independent of, and more frequent than, Pilot's `ECLUSE_CVE_SYNC_INTERVAL`: matching them would nearly double the worst-case advisory age. Positive integer. |
 | `ECLUSE_MAX_OSV_DB_BYTES` | No | `536870912` | Proxy only: refuse to download an advisory database larger than this many bytes (default 512 MiB). The declared length fails fast and the streaming download enforces the cap. |

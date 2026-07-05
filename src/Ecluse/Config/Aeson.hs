@@ -99,7 +99,7 @@ appConfigParser o = do
         <*> o .:? "googleProject"
         <*> (o .:? "authToken" >>= traverse parseSecret)
         <*> o .:? "helpMessage"
-        <*> (o .: "cveSyncInterval" >>= parseSeconds)
+        <*> (o .: "cveSyncInterval" >>= parseDelaySeconds "cveSyncInterval")
         <*> o .: "shutdownDrainTimeout"
         <*> (o .:? "cores" >>= traverse (parsePositiveInt "cores"))
         <*> (o .:? "maxHeapBytes" >>= traverse (parsePositiveInt "maxHeapBytes"))
