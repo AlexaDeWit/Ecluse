@@ -20,7 +20,6 @@ local pages = {
   ["MOTIVATION.md"]        = "motivation.html",
   ["ALTERNATIVES.md"]      = "alternatives.html",
   ["USAGE.md"]             = "usage.html",
-  ["AI-DISCLOSURE.md"]     = "ai-disclosure.html",
   ["SECURITY.md"]          = "security.html",
   ["docs/architecture.md"] = "architecture.html",
 }

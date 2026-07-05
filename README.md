@@ -12,8 +12,9 @@ controlled passage every dependency clears before it reaches your build.
 
 Start with [Why Écluse? (`MOTIVATION.md`)](MOTIVATION.md) for the problem and the design
 reasoning, and [`ALTERNATIVES.md`](ALTERNATIVES.md) for other tools in this space.
-[`AI-DISCLOSURE.md`](AI-DISCLOSURE.md) covers how much of the implementation is LLM-written
-and how to verify it.
+[Verifying the image](#verifying-the-image) covers how to verify a release's build
+provenance (its keyless provenance and SBOM attestations, and the bit-for-bit
+reproducible rebuild) rather than trusting it.
 
 > **Status: pre-launch, no GA release yet.** The npm packument, tarball, and publish paths
 > run today, and an AWS-backed deployment (SQS mirror queue, demand-driven worker, writing

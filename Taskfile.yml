@@ -475,8 +475,6 @@ tasks:
       - task: site:pandoc-page
         vars: { SRC: "USAGE.md", OUT: "usage.html", TITLE: "Operator Manual", DESCRIPTION: "Deploy, configure, and operate Écluse safely as a package-registry policy proxy.", EXTRA_FLAGS: "--lua-filter web/embed-config.lua" }
       - task: site:pandoc-page
-        vars: { SRC: "AI-DISCLOSURE.md", OUT: "ai-disclosure.html", TITLE: "Built with AI", DESCRIPTION: "How AI contributed to Écluse, what humans verified, and how to assess the result." }
-      - task: site:pandoc-page
         vars: { SRC: "web/threat-model.md", OUT: "threat-model.html", TITLE: "Threat Model", DESCRIPTION: "The generated STRIDE threat register and deployment assumptions for Écluse.", EXTRA_FLAGS: "--lua-filter web/threat-register.lua" }
       - task: site:pandoc-page
         vars: { SRC: "SECURITY.md", OUT: "security.html", TITLE: "Security Policy", DESCRIPTION: "How to report a vulnerability in Écluse, and where the threat model and security invariants live." }
