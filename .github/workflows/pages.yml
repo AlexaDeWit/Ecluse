@@ -1,14 +1,23 @@
 name: Docs
 
-# Publish the project site to GitHub Pages so it always tracks the code on main:
-# the home page at the root and the library's Haddock API docs under /api. Runs on
-# every push to main and on demand. This is a separate lifecycle from the PR `gate`
-# in ci.yml — a docs-deploy failure must never block a merge — and, like every
-# workflow here, each action is pinned to a full commit SHA (Dependabot keeps them
-# current).
+# Publish the project site to GitHub Pages so it tracks the code on main: the home
+# page at the root and the library's Haddock API docs under /api. Runs nightly and
+# on demand (see the schedule below), not on every push. This is a separate lifecycle
+# from the PR `gate` in ci.yml (a docs-deploy failure must never block a merge), and,
+# like every workflow here, each action is pinned to a full commit SHA (Dependabot
+# keeps them current).
 on:
-  push:
-    branches: [main]
+  # Nightly rebuild so the site tracks main without deploying on every push: main
+  # moves fast and most pushes touch no site content, and each redundant deploy is a
+  # fresh chance to hit the Pages backend's intermittent "try again later" or its
+  # ~10-builds/hour soft limit. 07:17 UTC is roughly 03:17 in America/Montreal; the
+  # off-the-hour minute dodges the top-of-hour cron congestion GitHub warns about.
+  # Scheduled runs always execute against the latest main commit, so this publishes
+  # current main.
+  schedule:
+    - cron: "17 7 * * *"
+  # On demand, to expedite a publish (say, right after a threat-model or doc change)
+  # rather than waiting for the nightly run.
   workflow_dispatch:
 
 # Serialise Pages deploys: only one runs at a time, and the `pages` group collapses
@@ -38,7 +47,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
+      url: ${{ steps.deploy.outputs.page_url || steps.deploy_retry.outputs.page_url }}
     env:
       # Pin the cabal store to a deterministic, cacheable location (as in ci.yml).
       # Unlike the gate jobs, Pages does NOT restore build-test's pristine cabal
@@ -143,6 +152,18 @@ jobs:
         with:
           path: _site
 
+      # The Pages backend intermittently fails an individual deployment with
+      # "Deployment failed, try again later" even with no cancellation, no incident,
+      # and well under the hourly limit; GitHub's own guidance for it is to re-run.
+      # continue-on-error lets the job try once more rather than going red on a
+      # transient flake. deploy-pages re-fetches the same uploaded artifact and
+      # registers a fresh deployment, so the retry is a clean second attempt.
       - name: Deploy to GitHub Pages
         id: deploy
+        continue-on-error: true
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0
+
+      - name: Deploy to GitHub Pages (retry once on a transient backend failure)
+        if: steps.deploy.outcome == 'failure'
+        id: deploy_retry
         uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0
