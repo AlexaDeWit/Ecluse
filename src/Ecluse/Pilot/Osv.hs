@@ -173,7 +173,7 @@ stored artifact holds a single comparable form and the reader needs no parsing.
 OSV carries severity as a CVSS /vector string/, not a number, so the score is
 computed from it with the "Security.CVSS" library (the highest, when several
 vectors parse). When no vector parses, the source database's qualitative label
-('dbsSeverity') is mapped to its band ceiling ('ghsaSeverityCeiling'). 'Nothing'
+('dbsSeverity') is mapped to its band ceiling (@ghsaSeverityCeiling@). 'Nothing'
 when the advisory offers neither.
 -}
 advisorySeverity :: OsvAdvisory -> Maybe Double
@@ -241,8 +241,8 @@ data Segment = Segment (Maybe Text) (Maybe Text) (Maybe Text)
 -- range's event list, plus one point segment per exactly-enumerated version.
 affectedSegments :: OsvAffected -> [Segment]
 affectedSegments aff =
-    concatMap (extractRange . rangeEvents) (fromMaybe [] (affectedRanges aff))
-        <> map exactVersion (fromMaybe [] (affectedVersions aff))
+    maybe [] (concatMap (extractRange . rangeEvents)) (affectedRanges aff)
+        <> maybe [] (map exactVersion) (affectedVersions aff)
   where
     exactVersion v = Segment (Just v) Nothing (Just v)
 

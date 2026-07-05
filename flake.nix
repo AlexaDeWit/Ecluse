@@ -37,7 +37,7 @@
           cvss = pkgs.haskell.lib.dontCheck (hself.callHackageDirect {
             pkg = "cvss";
             ver = "0.3.0.0";
-            sha256 = "sha256-8d87DDxPbwHmhiorfKGPS0LCq4qUJjF8nUxJf+rvvvg=";
+            sha256 = "sha256-fRdZv2yVIAgBz9R36+V69GHc5h91/4lPXU4RU5Q2Q4Q=";
           } { });
           hs-opentelemetry-api-types =
             hself.callHackageDirect {
