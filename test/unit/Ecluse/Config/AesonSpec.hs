@@ -63,6 +63,18 @@ spec = describe "decodeDocument" $ do
         loadConfig [] (Just "{\"cveDbPollInterval\":9223372036855}")
             `shouldSatisfy` decodeErrorMentions "cveDbPollInterval"
 
+    it "rejects a zero cveSyncInterval (a zero delay would spin the export loop)" $
+        loadConfig [] (Just "{\"cveSyncInterval\":0}")
+            `shouldSatisfy` decodeErrorMentions "cveSyncInterval"
+
+    it "rejects a zero cveSyncInterval given through the environment" $
+        loadConfig [("ECLUSE_CVE_SYNC_INTERVAL", "0")] Nothing
+            `shouldSatisfy` decodeErrorMentions "cveSyncInterval"
+
+    it "rejects a cveSyncInterval whose microsecond conversion would overflow Int" $
+        loadConfig [] (Just "{\"cveSyncInterval\":9223372036855}")
+            `shouldSatisfy` decodeErrorMentions "cveSyncInterval"
+
     it "rejects a non-positive maxOsvDbBytes" $
         loadConfig [] (Just "{\"maxOsvDbBytes\":0}")
             `shouldSatisfy` decodeErrorMentions "maxOsvDbBytes"
