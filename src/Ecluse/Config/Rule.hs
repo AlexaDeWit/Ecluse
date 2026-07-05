@@ -14,6 +14,7 @@ module Ecluse.Config.Rule (
 ) where
 
 import Data.Map.Strict qualified as Map
+import Data.Time (NominalDiffTime)
 import Validation (eitherToValidation, validationToEither)
 
 import Ecluse.Core.Package (mkScope)
@@ -109,24 +110,39 @@ addNewRule name entry = case entryType entry of
 
 buildRule :: Text -> Text -> RuleEntry -> Either [PolicyError] Rule
 buildRule name ty entry = case ty of
-    "AllowIfOlderThan" -> case entryAgeSeconds entry of
-        Just secs
-            | secs >= 0 -> Right (AllowIfOlderThan (fromInteger secs))
-            | otherwise -> Left [MalformedRule name "\"ageSeconds\" must be non-negative"]
-        Nothing -> Left [MalformedRule name "\"AllowIfOlderThan\" requires \"ageSeconds\""]
-    "AllowScope" -> case entryScope entry of
-        Just scope -> Right (AllowScope (mkScope scope))
-        Nothing -> Left [MalformedRule name "\"AllowScope\" requires \"scope\""]
-    "DenyByIdentity" -> case entryIdentity entry of
-        Just ident -> Right (DenyByIdentity ident)
-        Nothing -> Left [MalformedRule name "\"DenyByIdentity\" requires \"identity\""]
-    "AllowByIdentity" -> case entryIdentity entry of
-        Just ident -> Right (AllowByIdentity ident)
-        Nothing -> Left [MalformedRule name "\"AllowByIdentity\" requires \"identity\""]
+    "AllowIfOlderThan" ->
+        AllowIfOlderThan
+            <$> requireField name "AllowIfOlderThan" "ageSeconds" (validateAgeSeconds name) (entryAgeSeconds entry)
+    "AllowScope" ->
+        AllowScope . mkScope <$> requireField name "AllowScope" "scope" Right (entryScope entry)
+    "DenyByIdentity" ->
+        DenyByIdentity <$> requireField name "DenyByIdentity" "identity" Right (entryIdentity entry)
+    "AllowByIdentity" ->
+        AllowByIdentity <$> requireField name "AllowByIdentity" "identity" Right (entryIdentity entry)
     "AllowIfRemediatesCve" -> Right AllowIfRemediatesCve
     "DenyIfCve" -> DenyIfCve <$> buildDenyIfCveParams name entry
     "DenyInstallTimeExecution" -> Right DenyInstallTimeExecution
     _ -> Left [UnknownRuleType name ty]
+
+{- | Extract a rule type's required field, running @validate@ on it, or report the
+type is missing it (@"<ruleType>" requires "<field>"@). Unifies the required-field
+decode across every builder that has one.
+-}
+requireField :: Text -> Text -> Text -> (a -> Either [PolicyError] b) -> Maybe a -> Either [PolicyError] b
+requireField name ruleType field =
+    maybe (Left [MalformedRule name (quote ruleType <> " requires " <> quote field)])
+
+-- Validate a publish-age threshold: a non-negative number of seconds.
+validateAgeSeconds :: Text -> Integer -> Either [PolicyError] NominalDiffTime
+validateAgeSeconds name secs
+    | secs >= 0 = Right (fromInteger secs)
+    | otherwise = Left [MalformedRule name "\"ageSeconds\" must be non-negative"]
+
+-- Validate a CVSS severity threshold: a base score in the range [0, 10].
+validateMinSeverity :: Text -> Double -> Either [PolicyError] Double
+validateMinSeverity name s
+    | s >= 0 && s <= 10 = Right s
+    | otherwise = Left [MalformedRule name "\"minSeverity\" must be a CVSS score between 0 and 10"]
 
 {- | Decode 'DenyIfCve''s parameters. @minSeverity@ (a CVSS base score, 0 to 10)
 is required, so an operator states the threshold consciously. @onUnavailable@ is
@@ -134,14 +150,10 @@ optional and defaults to @deny@ (fail-closed): a package the advisory database
 cannot vet is refused rather than admitted.
 -}
 buildDenyIfCveParams :: Text -> RuleEntry -> Either [PolicyError] DenyIfCveParams
-buildDenyIfCveParams name entry = do
-    severity <- case entryMinSeverity entry of
-        Just s
-            | s >= 0 && s <= 10 -> Right s
-            | otherwise -> Left [MalformedRule name "\"minSeverity\" must be a CVSS score between 0 and 10"]
-        Nothing -> Left [MalformedRule name "\"DenyIfCve\" requires \"minSeverity\" (a CVSS score, 0 to 10)"]
-    alignment <- parseOnUnavailable name (entryOnUnavailable entry)
-    Right (DenyIfCveParams severity alignment)
+buildDenyIfCveParams name entry =
+    DenyIfCveParams
+        <$> requireField name "DenyIfCve" "minSeverity" (validateMinSeverity name) (entryMinSeverity entry)
+        <*> parseOnUnavailable name (entryOnUnavailable entry)
 
 -- Decode the @onUnavailable@ policy: how the rule resolves when the advisory
 -- database cannot answer. Absent defaults to fail-closed.
@@ -156,23 +168,17 @@ patchRuleValue :: Text -> RuleEntry -> Rule -> Either [PolicyError] Rule
 patchRuleValue name entry rule = do
     () <- checkRestatedType name entry rule
     case rule of
-        AllowIfOlderThan d -> case entryAgeSeconds entry of
-            Just secs
-                | secs >= 0 -> Right (AllowIfOlderThan (fromInteger secs))
-                | otherwise -> Left [MalformedRule name "\"ageSeconds\" must be non-negative"]
-            Nothing -> Right (AllowIfOlderThan d)
+        AllowIfOlderThan d ->
+            AllowIfOlderThan <$> maybe (Right d) (validateAgeSeconds name) (entryAgeSeconds entry)
         AllowScope s -> Right (AllowScope (maybe s mkScope (entryScope entry)))
         DenyByIdentity i -> Right (DenyByIdentity (fromMaybe i (entryIdentity entry)))
         AllowByIdentity i -> Right (AllowByIdentity (fromMaybe i (entryIdentity entry)))
         AllowIfRemediatesCve -> Right AllowIfRemediatesCve
-        DenyIfCve params -> do
-            severity <- case entryMinSeverity entry of
-                Just s
-                    | s >= 0 && s <= 10 -> Right s
-                    | otherwise -> Left [MalformedRule name "\"minSeverity\" must be a CVSS score between 0 and 10"]
-                Nothing -> Right (dicMinSeverity params)
-            alignment <- maybe (Right (dicOnUnavailable params)) (parseOnUnavailable name . Just) (entryOnUnavailable entry)
-            Right (DenyIfCve (DenyIfCveParams severity alignment))
+        DenyIfCve params ->
+            fmap DenyIfCve $
+                DenyIfCveParams
+                    <$> maybe (Right (dicMinSeverity params)) (validateMinSeverity name) (entryMinSeverity entry)
+                    <*> maybe (Right (dicOnUnavailable params)) (parseOnUnavailable name . Just) (entryOnUnavailable entry)
         DenyInstallTimeExecution -> Right DenyInstallTimeExecution
 
 checkRestatedType :: Text -> RuleEntry -> Rule -> Either [PolicyError] ()
