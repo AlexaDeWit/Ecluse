@@ -278,7 +278,14 @@ tasks:
       - exclude: 'sbom/**'
       - exclude: '*.json'
     cmds:
-      - semgrep scan --config auto --severity ERROR --severity WARNING --sarif-output=semgrep.sarif --error .
+      # missing-integrity is excluded by repo-owner disposition (PR #694): SRI
+      # applies to fetched subresources, and this site has none that are
+      # externally hosted. The only absolute-URL <link> tags are rel="canonical"
+      # (pure metadata, no fetch), and all runtime assets (Mermaid, Redoc, CSS)
+      # are vendored same-origin and hash-pinned through the flake. Excluding
+      # the rule here, rather than per-tag nosemgrep comments, also keeps the
+      # findings out of the SARIF upload, so code scanning stays quiet too.
+      - semgrep scan --config auto --severity ERROR --severity WARNING --exclude-rule html.security.audit.missing-integrity.missing-integrity --sarif-output=semgrep.sarif --error .
 
   cabal-check:
     desc: Validate the .cabal package metadata
