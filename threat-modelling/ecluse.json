@@ -1554,12 +1554,12 @@
                 },
                 {
                   "number": 13,
-                  "status": "Open",
+                  "status": "Mitigated",
                   "severity": "Medium",
                   "title": "Malicious mirrored version persists and is served as trusted (no automatic post-ingestion revocation)",
                   "type": "Tampering",
                   "description": "\u00c9cluse mirrors approved public versions into Registry B and, by design, resists upstream yanks so a benign yank does not break installs. The flip side: a version later found malicious persists in B and is served as trusted (the merge serves the private origin unfiltered by the rules), with no automatic removal \u2014 neither an upstream yank nor a rules change reaches an already-mirrored artifact.",
-                  "mitigation": "The freshness quarantine (`AllowIfOlderThan`) is the primary defence \u2014 it delays serving a new version until advisories have had time to surface, so most malicious versions are denied at admission before they are ever mirrored; this threat is the residual for a version found bad after it cleared the quarantine and was mirrored. Detection is delegated (operator scanning of Registry B, plus upstream advisories and security-holding signals, decide what to revoke). Enforcement is layered across the version's lifecycle: a hard deny-by-identity rule (roadmapped, #470) halts re-admission on the serve path and re-mirroring at the worker ingest re-check (#414) \u2014 the immediate, surgical stop that also breaks the re-mirror treadmill; an automated reaper (the \u00c9cluse Dredger, #478 \u2014 a separate zero-ingress service sharing the core rules engine) continually prunes already-mirrored versions matching advisory or age conditions, automating recovery once an alert is public; and the operator can purge a version from Registry B directly (rules never run on trusted content, so a purge \u2014 manual or by the reaper \u2014 is what removes the already-mirrored copy). Ordered deny-then-purge so demand does not re-mirror during the purge; purge alone is a treadmill while the version is still live upstream. The typical pattern is the inverse \u2014 an upstream yank or security-hold removes or changes the bytes first, after which re-mirroring cannot reproduce them and a purge clears the stale copy. Irreducible residual: a malicious version with no public advisory cannot be reaped (there is nothing to detect on) \u2014 the bound the freshness quarantine exists to provide.",
+                  "mitigation": "The freshness quarantine (`AllowIfOlderThan`) is the primary defence \u2014 it delays serving a new version until advisories have had time to surface, so most malicious versions are denied at admission before they are ever mirrored; this threat is the residual for a version found bad after it cleared the quarantine and was mirrored. Detection is delegated (operator scanning of Registry B, plus upstream advisories and security-holding signals, decide what to revoke). Enforcement is layered across the version's lifecycle: the hard deny-by-identity rule (DenyByIdentity, shipped via #499, closing #470) halts re-admission on the serve path and re-mirroring at the worker ingest re-check (#414, shipped) \u2014 the immediate, surgical stop that also breaks the re-mirror treadmill; an automated reaper (the \u00c9cluse Dredger, #478 \u2014 a separate zero-ingress service sharing the core rules engine) continually prunes already-mirrored versions matching advisory or age conditions, automating recovery once an alert is public; and the operator can purge a version from Registry B directly (rules never run on trusted content, so a purge \u2014 manual or by the reaper \u2014 is what removes the already-mirrored copy). Ordered deny-then-purge so demand does not re-mirror during the purge; purge alone is a treadmill while the version is still live upstream. The typical pattern is the inverse \u2014 an upstream yank or security-hold removes or changes the bytes first, after which re-mirroring cannot reproduce them and a purge clears the stale copy. Irreducible residual: a malicious version with no public advisory cannot be reaped (there is nothing to detect on) \u2014 the bound the freshness quarantine exists to provide.",
                   "modelType": "STRIDE",
                   "id": "0ec10e5e-0000-4000-8000-00000000010d"
                 }
@@ -2645,7 +2645,7 @@
                 },
                 {
                   "number": 17,
-                  "status": "Open",
+                  "status": "Mitigated",
                   "severity": "High",
                   "title": "Pilot container-role privilege escalation",
                   "type": "Elevation of privilege",
@@ -2672,7 +2672,7 @@
                   "title": "Pathological OSV Payload (DoS)",
                   "type": "Denial of service",
                   "description": "OSV.dev or a compromised upstream could serve an overly large, deeply nested, or malformed JSON file, consuming excessive CPU/memory and crashing the Pilot.",
-                  "mitigation": "Awaiting implementation. Pilot needs to bound HTTP response sizes and parse streams iteratively rather than strictly into memory.",
+                  "mitigation": "Partially implemented: Pilot parses the advisory archive as a stream in constant memory rather than loading it whole, and a non-2xx upstream response fails fast under bounded, jittered retry instead of being fed to the parser. Residual (tracked at #571): bound the HTTP response size and defend the decompression path against pathological archives.",
                   "modelType": "STRIDE",
                   "id": "3735906e-a06a-4e0f-ba45-894ba5400ce8"
                 }
