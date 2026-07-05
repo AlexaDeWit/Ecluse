@@ -30,6 +30,15 @@
         # the other 1.0 packages here, never the 0.x ones still in the base set.
         # See docs/architecture/observability.md → "OpenTelemetry as the substrate".
         otelOverlay = hself: _hsuper: {
+          # cvss 0.3 adds CVSS v4 parsing (and fixes v2 scoring); nixpkgs pins
+          # 0.2.0.1, which rejects the v4 vectors roughly a third of the scored npm
+          # OSV advisories carry. dontCheck skips its tasty test suite (not ours to
+          # gate) so it does not drag test-only version bounds into the closure.
+          cvss = pkgs.haskell.lib.dontCheck (hself.callHackageDirect {
+            pkg = "cvss";
+            ver = "0.3.0.0";
+            sha256 = "sha256-fRdZv2yVIAgBz9R36+V69GHc5h91/4lPXU4RU5Q2Q4Q=";
+          } { });
           hs-opentelemetry-api-types =
             hself.callHackageDirect {
               pkg = "hs-opentelemetry-api-types";

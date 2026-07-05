@@ -69,8 +69,9 @@ initSchema conn = do
         \  cve_id TEXT NOT NULL,\
         \  introduced_version TEXT,\
         \  fixed_version TEXT,\
-        \  severity TEXT,\
-        \  PRIMARY KEY (package_name, cve_id, introduced_version, fixed_version)\
+        \  last_affected_version TEXT,\
+        \  severity REAL,\
+        \  PRIMARY KEY (package_name, cve_id, introduced_version, fixed_version, last_affected_version)\
         \)"
     execute_ conn "CREATE INDEX idx_package_name ON package_vulnerability_ranges(package_name)"
     -- The reader's remediation probe is an exact (name, fixed) equality; this
@@ -108,7 +109,7 @@ sinkSqlite conn = awaitForever $ \batch ->
         withTransaction conn $
             executeMany
                 conn
-                "INSERT OR IGNORE INTO package_vulnerability_ranges (package_name, cve_id, introduced_version, fixed_version, severity) VALUES (?, ?, ?, ?, ?)"
+                "INSERT OR IGNORE INTO package_vulnerability_ranges (package_name, cve_id, introduced_version, fixed_version, last_affected_version, severity) VALUES (?, ?, ?, ?, ?, ?)"
                 (map osvToRow batch)
   where
-    osvToRow osv = (extPackage osv, extCveId osv, extIntroduced osv, extFixed osv, extSeverity osv)
+    osvToRow osv = (extPackage osv, extCveId osv, extIntroduced osv, extFixed osv, extLastAffected osv, extSeverity osv)

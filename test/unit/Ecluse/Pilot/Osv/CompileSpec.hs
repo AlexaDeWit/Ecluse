@@ -52,7 +52,7 @@ spec = describe "SQLite OSV Compilation" $ do
 
         -- Verify the sqlite db
         conn <- open dbFile
-        rows <- query_ conn "SELECT package_name, cve_id, fixed_version, severity FROM package_vulnerability_ranges" :: IO [(Text, Text, Maybe Text, Maybe Text)]
+        rows <- query_ conn "SELECT package_name, cve_id, fixed_version, severity FROM package_vulnerability_ranges" :: IO [(Text, Text, Maybe Text, Maybe Double)]
         stamped <- query_ conn "PRAGMA user_version" :: IO [Only Int]
         metaRows <- query_ conn "SELECT key, value FROM meta" :: IO [(Text, Text)]
         indexes <- query_ conn "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'package_vulnerability_ranges' AND name LIKE 'idx_%' ORDER BY name" :: IO [Only Text]
@@ -62,8 +62,10 @@ spec = describe "SQLite OSV Compilation" $ do
         -- The file-name literal and the meta keys below pin the artifact's wire
         -- contract, the forms a reader depends on, not the constants that
         -- produced them.
-        takeFileName dbFile `shouldBe` "npm-osv-schema1.db"
-        rows `shouldBe` [("hono", "GHSA-2234-fmw7-43wr", Just "4.6.5", Just "MODERATE")]
+        takeFileName dbFile `shouldBe` "npm-osv-schema2.db"
+        -- The sample carries a CVSS 3.1 vector (5.9); the computed base score is
+        -- stored, in preference to the "MODERATE" label.
+        rows `shouldBe` [("hono", "GHSA-2234-fmw7-43wr", Just "4.6.5", Just 5.9)]
         map fromOnly stamped `shouldBe` [osvSchemaEpoch]
         -- The reader's lookups ride these: by-package fetch and the exact
         -- (name, fixed) remediation probe.

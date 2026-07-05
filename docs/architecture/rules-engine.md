@@ -143,9 +143,10 @@ filtered body rather than relaying upstream's (see [Web Layer](web-layer.md#web-
 | `AllowByIdentity identity` | Pure | Allows a specific package or `package@version` by exact identity: the allow twin of `DenyByIdentity` and the explicit operator lane for a fix the exact-match probe cannot see. Top of the allow band, still below every deny. |
 | `DenyInstallTimeExecution` | Pure | Denies any version flagged with an install-time code-execution signal (npm's `hasInstallScript`, a RubyGems native extension, a PyPI sdist), a common arbitrary-code-execution vector. Yields no decision otherwise. As a deny rule it overrides any allow at its higher default precedence. |
 | `DenyByIdentity identity` | Pure | A hard deny for a specific package or `package@version`, at the top precedence: the post-mirror revocation mechanism. |
+| `DenyIfCve params` | Effectful | Opt-in. Denies a version a synced advisory records as affected at or above a CVSS `minSeverity`; an unscored advisory (the npm malware feed carries no score) counts as above every threshold, so it blocks malware too. Ranked below `AllowByIdentity`, so an identity pin overrides it; its `onUnavailable` alignment fails closed by default. See the [deny direction](#denyifcve-the-deny-direction). |
 
-The remaining planned additions are the effectful deny direction [`DenyIfCVE`](#cve-subsystem) and
-effectful per-version checks like RubyGems native `extensions`. Which rules ship enabled by default
+The remaining planned additions are effectful per-version checks like RubyGems native `extensions`.
+Which rules ship enabled by default
 is documented with the [default policy](configuration.md#the-default-policy): the pure
 `AllowIfOlderThan` quarantine (`min-age`) and the `AllowIfRemediatesCve` fast lane, which abstains
 when no advisory database is configured so only the quarantine governs. Every other rule above is off
@@ -155,9 +156,13 @@ by default and opts in by name.
 
 The advisory subsystem queries a synced local copy rather than calling an advisory API per
 evaluation: the `CveLookup` handle (`Ecluse.Core.Cve`) reads the synced `osv.db` SQLite artifact on
-local disk, never the network, on the hot path. The shipped `AllowIfRemediatesCve` reads it in the
-allow direction, fast-tracking a version a synced advisory names as its fix; the planned `DenyIfCVE`
-will read the same data in the deny direction, blocking a version an advisory affects. `CveLookup`
+local disk, never the network, on the hot path. `AllowIfRemediatesCve` reads it in the allow
+direction, fast-tracking a version a synced advisory names as its fix; `DenyIfCve` reads the same
+data in the deny direction, blocking a version an advisory affects at or above a severity threshold.
+The artifact models an advisory's affected set faithfully: range bounds (an inclusive `introduced`,
+and an exclusive `fixed` or an inclusive `last_affected` upper bound), exactly-enumerated versions as
+points, and a numeric CVSS base score per advisory (computed from its vector at ingest, or its
+qualitative label mapped to a band ceiling). `CveLookup`
 reaches the rules through the engine's boot-bound capability record (`RuleDeps`, closed into the
 prepared rules by `prepare`), and access is acquisition-bracketed per evaluation, so the
 [shadow-swap](#local-polling-decoupled-ingestion) can retire a superseded artifact the moment no
@@ -188,6 +193,32 @@ not-itself-vulnerable guard, and the deny direction's "is *V* inside the affecte
 decided in Haskell against the fetched ranges using the same per-ecosystem ordering as
 [`compareVersions`](domain-model.md) (SQLite's text collation cannot order versions), with every
 unprovable comparison counting as affected, so the lane only opens on evidence.
+
+### `DenyIfCve`, the deny direction
+
+`DenyIfCve` reads the same `CveLookup` in the opposite direction: it blocks version *V* of package
+*P* when an advisory affects *V* at or above a configured CVSS `minSeverity`. It is **opt-in** and,
+against the npm feed, does two jobs at once. Roughly 2% of that feed is CVSS-scored CVEs, which the
+threshold filters; the other ~96% is the malware feed (`MAL-*` advisories that carry no score and
+name the bad version exactly). An unscored advisory is treated as **above every threshold**, so
+malware is always denied while `minSeverity` governs the scored CVEs, i.e. severity that cannot be
+shown to be low does not slip the gate.
+
+- **`Deny`** when some advisory affects *V* (by the same range/point membership the allow direction
+  uses) and clears the severity threshold. The reason names the deciding advisories.
+- **`NoDecision`** when no affecting advisory clears the threshold.
+- **`Unavailable`** when the advisory database cannot answer, aligned by the rule's `onUnavailable`:
+  **`FailDeny`** (the default) is decisive, so a version that cannot be vetted is refused
+  (`Undecidable`, a retryable 503); **`FailNoDecision`** skips the rule, logging loudly, for an
+  operator who puts availability above the gate. This is the deliberate inverse of
+  `AllowIfRemediatesCve`, which fails open, an allow that cannot confirm safety must not admit, a
+  deny that cannot confirm safety must not admit either.
+
+It is ranked just **below** `AllowByIdentity` (precedence 225 against 250): an operator's explicit
+identity pin overrides an advisory deny, a graceful escape hatch for a false positive or an accepted
+risk, while an unpinned affected version is still denied ahead of the passive quarantine and scope
+allow-lists. Because enabling it on a cold mirror can deny historical versions an existing build
+depends on, it ships off; operators warm the mirror first (see USAGE → *Onboarding DenyIfCve*).
 
 ### Local polling, decoupled ingestion
 

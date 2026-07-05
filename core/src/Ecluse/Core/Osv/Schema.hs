@@ -35,9 +35,15 @@ The epoch names the published artifact ('osvDbFileName') and is stamped into
 it as SQLite's @user_version@; a reader must reject an artifact whose stamp
 does not match its own compiled-in epoch and keep its last known-good
 database.
+
+Epoch 2 widened the affected-set model: the ranges table gained a
+@last_affected_version@ column (an inclusive upper bound, distinct from the
+exclusive @fixed_version@), exact enumerated versions are stored as points, and
+@severity@ became a numeric @REAL@ CVSS base score. A reader compiled for epoch 2
+requires those columns, so an epoch-1 artifact is rejected rather than read.
 -}
 osvSchemaEpoch :: Int
-osvSchemaEpoch = 1
+osvSchemaEpoch = 2
 
 {- | The artifact's file name, and object-storage key, for an ecosystem.
 
@@ -46,7 +52,7 @@ and embeds only the epoch, so the key changes exactly when a reader could no
 longer use the file.
 
 >>> osvDbFileName "npm"
-"npm-osv-schema1.db"
+"npm-osv-schema2.db"
 -}
 osvDbFileName :: Text -> FilePath
 osvDbFileName ecosystem =

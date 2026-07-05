@@ -10,7 +10,7 @@ spec = do
         -- The literal pins the published object key: a change here is a change
         -- to the writer/reader contract and must be a conscious epoch bump.
         it "names the artifact by ecosystem and schema epoch" $
-            osvDbFileName "npm" `shouldBe` "npm-osv-schema1.db"
+            osvDbFileName "npm" `shouldBe` "npm-osv-schema2.db"
 
     describe "renderMetaKey" $ do
         it "renders every meta key to a distinct stored form" $ do

@@ -41,6 +41,7 @@ module Ecluse.Core.Cve (
 
     -- * Pure range matching
     insideAffectedRange,
+    severityAtLeast,
 ) where
 
 import UnliftIO.Exception (finally, onException)
@@ -128,19 +129,20 @@ withCveDb eco dbFile use =
         Left rejection -> pure (Left rejection)
         Right db -> Right <$> (use (cveDbLookup db) `finally` cveDbClose db)
 
-{- | Is this version inside the advisory range's affected interval,
-@introduced <= v < fixed@, under the ecosystem's version ordering?
+{- | Is this version inside the advisory segment's affected interval, under the
+ecosystem's version ordering? The interval is @introduced <= v@ bounded above by
+either @v < fixed@ (exclusive) or @v <= last_affected@ (inclusive), whichever the
+segment carries, or unbounded when it carries neither. A point segment
+(@introduced == last_affected@) is affected only at that exact version.
 
-__Fail-closed for the allow direction.__ This predicate guards the
-remediation fast lane (a fixed version must not fast-track while it sits
-inside another advisory's affected range), so every unprovable comparison,
-an unparseable bound, an unparseable version, counts as __inside__: trust is
-only ever granted on evidence. A future deny-direction consumer wants the
-same polarity for its own reason (cannot prove safe, assume affected), but
-must not reuse this documentation's rationale blindly if its needs diverge.
+__Fail-closed.__ Both the remediation fast lane (a fix must not fast-track while
+it sits inside another advisory's affected range) and the deny gate (an
+unvettable version must not be admitted) want the same polarity, so every
+unprovable comparison, an unparseable bound or version, counts as __inside__:
+trust is only ever granted on evidence.
 -}
 insideAffectedRange :: Ecosystem -> Text -> AdvisoryRange -> Bool
-insideAffectedRange eco versionText ar = atOrAboveIntroduced && belowFixed
+insideAffectedRange eco versionText ar = atOrAboveIntroduced && withinUpperBound
   where
     v = mkVersion eco versionText
 
@@ -152,10 +154,29 @@ insideAffectedRange eco versionText ar = atOrAboveIntroduced && belowFixed
             Just _ -> True
             Nothing -> True
 
-    belowFixed = case arFixed ar of
-        -- No fix known: the range never ends.
-        Nothing -> True
-        Just f -> case compareVersions v (mkVersion eco f) of
+    withinUpperBound = case (arFixed ar, arLastAffected ar) of
+        -- A fix is an exclusive upper bound: affected while v < fixed.
+        (Just f, _) -> case compareVersions v (mkVersion eco f) of
             Just LT -> True
             Just _ -> False
             Nothing -> True
+        -- last_affected is an inclusive upper bound: affected while v <= it.
+        (Nothing, Just la) -> case compareVersions v (mkVersion eco la) of
+            Just GT -> False
+            Just _ -> True
+            Nothing -> True
+        -- No upper bound: the range never ends.
+        (Nothing, Nothing) -> True
+
+{- | Does this advisory segment's severity meet or exceed the threshold (a CVSS
+base score, 0 to 10)? 'arSeverity' is the artifact's normalised numeric score
+(Pilot reduces a CVSS vector or a qualitative label to a number at ingest), or
+absent.
+
+__Fail-closed for the deny direction.__ The threshold gates a deny, so a severity
+that cannot be shown to fall below it counts as meeting it: an unscored advisory
+('Nothing' -- most of the npm malware feed) returns 'True'. Only a score strictly
+below the threshold returns 'False'.
+-}
+severityAtLeast :: Double -> Maybe Double -> Bool
+severityAtLeast threshold = maybe True (>= threshold)

@@ -19,14 +19,17 @@ import Ecluse.Test.OsvDb (withFixtureOsvDb)
 -- CorpusV1's rows, in the fake's vocabulary. Kept in lockstep with the corpus
 -- pins in Ecluse.Test.OsvSpec: the conformance cases below run against both
 -- this fake and the real artifact compiled from the same corpus.
+-- Severities are the CVSS band ceilings the writer maps the fixtures' GHSA labels
+-- to (LOW 3.9, MODERATE 6.9, HIGH 8.9, CRITICAL 10.0); these fixtures carry no
+-- last_affected bound, so it is Nothing throughout.
 corpusRows :: [(Text, AdvisoryRange)]
 corpusRows =
-    [ ("@corpus/scoped", AdvisoryRange "GHSA-corpus-0005" (Just "LOW") (Just "0") (Just "3.0.0"))
-    , ("corpus-multi", AdvisoryRange "GHSA-corpus-0003" Nothing (Just "0") (Just "1.0.0"))
-    , ("corpus-multi", AdvisoryRange "GHSA-corpus-0003" Nothing (Just "1.5.0") (Just "2.0.0"))
-    , ("corpus-unfixed", AdvisoryRange "GHSA-corpus-0002" (Just "CRITICAL") (Just "1.0.0") Nothing)
-    , ("corpus-vuln", AdvisoryRange "GHSA-corpus-0001" (Just "HIGH") (Just "0") (Just "1.2.0"))
-    , ("corpus-vuln", AdvisoryRange "GHSA-corpus-0004" (Just "MODERATE") (Just "2.0.0") (Just "2.5.0"))
+    [ ("@corpus/scoped", AdvisoryRange "GHSA-corpus-0005" (Just 3.9) (Just "0") (Just "3.0.0") Nothing)
+    , ("corpus-multi", AdvisoryRange "GHSA-corpus-0003" Nothing (Just "0") (Just "1.0.0") Nothing)
+    , ("corpus-multi", AdvisoryRange "GHSA-corpus-0003" Nothing (Just "1.5.0") (Just "2.0.0") Nothing)
+    , ("corpus-unfixed", AdvisoryRange "GHSA-corpus-0002" (Just 10.0) (Just "1.0.0") Nothing Nothing)
+    , ("corpus-vuln", AdvisoryRange "GHSA-corpus-0001" (Just 8.9) (Just "0") (Just "1.2.0") Nothing)
+    , ("corpus-vuln", AdvisoryRange "GHSA-corpus-0004" (Just 6.9) (Just "2.0.0") (Just "2.5.0") Nothing)
     ]
 
 -- The behavioural contract, written once and run against every 'CveLookup'
@@ -50,8 +53,8 @@ lookupContract withLookup = do
         withLookup $ \l -> do
             ranges <- cveAdvisoriesFor l "corpus-vuln"
             sortOn arCveId ranges
-                `shouldBe` [ AdvisoryRange "GHSA-corpus-0001" (Just "HIGH") (Just "0") (Just "1.2.0")
-                           , AdvisoryRange "GHSA-corpus-0004" (Just "MODERATE") (Just "2.0.0") (Just "2.5.0")
+                `shouldBe` [ AdvisoryRange "GHSA-corpus-0001" (Just 8.9) (Just "0") (Just "1.2.0") Nothing
+                           , AdvisoryRange "GHSA-corpus-0004" (Just 6.9) (Just "2.0.0") (Just "2.5.0") Nothing
                            ]
 
     it "returns nothing for a package with no advisories" $

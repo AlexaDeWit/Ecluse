@@ -63,6 +63,14 @@ blockedBy :: Decision -> Maybe Text
 blockedBy (Blocked name _) = Just name
 blockedBy _ = Nothing
 
+isUndecidable :: Decision -> Bool
+isUndecidable (Undecidable _ _) = True
+isUndecidable _ = False
+
+isBlockedByDefault :: Decision -> Bool
+isBlockedByDefault (BlockedByDefault _) = True
+isBlockedByDefault _ = False
+
 -- | Mark the version as running code on install, for the deny-rule tests.
 withInstallScripts :: PackageDetails -> PackageDetails
 withInstallScripts pd = pd{pkgInstallCode = RunsCodeOnInstall "postinstall hook"}
@@ -93,7 +101,7 @@ depsWith rows =
 fixed bound, with no other advisory leaving the package affected.
 -}
 fixRows :: [(Text, AdvisoryRange)]
-fixRows = [("thing", AdvisoryRange "GHSA-fixed-0001" (Just "HIGH") (Just "0") (Just "1.0.0"))]
+fixRows = [("thing", AdvisoryRange "GHSA-fixed-0001" Nothing (Just "0") (Just "1.0.0") Nothing)]
 
 genScope :: Gen Text
 genScope = Gen.text (Range.linear 1 12) Gen.alpha
@@ -179,30 +187,55 @@ spec = do
                 >>= (`shouldBe` Allow "remediates GHSA-fixed-0001")
         it "names every advisory the version fixes in the reason" $ do
             let rows =
-                    [ ("thing", AdvisoryRange "GHSA-fixed-0001" (Just "HIGH") (Just "0") (Just "1.0.0"))
-                    , ("thing", AdvisoryRange "GHSA-fixed-0002" (Just "LOW") (Just "0.2.0") (Just "1.0.0"))
+                    [ ("thing", AdvisoryRange "GHSA-fixed-0001" Nothing (Just "0") (Just "1.0.0") Nothing)
+                    , ("thing", AdvisoryRange "GHSA-fixed-0002" Nothing (Just "0.2.0") (Just "1.0.0") Nothing)
                     ]
             evalRule (depsWith rows) ctx AllowIfRemediatesCve (pkg Nothing 0)
                 >>= (`shouldBe` Allow "remediates GHSA-fixed-0001, GHSA-fixed-0002")
         it "matches the OSV wire form of a scoped name" $ do
-            let rows = [("@myorg/thing", AdvisoryRange "GHSA-fixed-0003" Nothing (Just "0") (Just "1.0.0"))]
+            let rows = [("@myorg/thing", AdvisoryRange "GHSA-fixed-0003" Nothing (Just "0") (Just "1.0.0") Nothing)]
             evalRule (depsWith rows) ctx AllowIfRemediatesCve (pkg (Just "myorg") 0)
                 >>= (`shouldBe` Allow "remediates GHSA-fixed-0003")
         it "abstains when no advisory names the version as a fix (exact match only)" $ do
             -- 1.0.0 sits past this advisory's 0.9.0 fix, but the fast lane is a
             -- deliberate exact-fix probe: being merely unaffected earns nothing.
-            let rows = [("thing", AdvisoryRange "GHSA-fixed-0001" (Just "HIGH") (Just "0") (Just "0.9.0"))]
+            let rows = [("thing", AdvisoryRange "GHSA-fixed-0001" Nothing (Just "0") (Just "0.9.0") Nothing)]
             evalRule (depsWith rows) ctx AllowIfRemediatesCve (pkg Nothing 0)
                 >>= (`shouldBe` NoDecision "no advisory names this version as its fix")
         it "abstains when the version still sits inside another advisory's affected range" $ do
             let rows =
                     fixRows
-                        <> [("thing", AdvisoryRange "GHSA-open-0002" (Just "CRITICAL") (Just "0.5.0") Nothing)]
+                        <> [("thing", AdvisoryRange "GHSA-open-0002" Nothing (Just "0.5.0") Nothing Nothing)]
             evalRule (depsWith rows) ctx AllowIfRemediatesCve (pkg Nothing 0)
                 >>= (`shouldBe` NoDecision "fixes GHSA-fixed-0001 but is still affected by GHSA-open-0002")
         it "abstains when no advisory database is loaded" $
             evalRule inertRuleDeps ctx AllowIfRemediatesCve (pkg Nothing 0)
                 >>= (`shouldBe` NoDecision "no advisory database is loaded")
+
+    describe "evalRule (DenyIfCve)" $ do
+        -- 'pkg' builds thing@1.0.0; an advisory covering [0, 2.0.0) affects it.
+        let affecting sev = [("thing", AdvisoryRange "GHSA-affect-0001" sev (Just "0") (Just "2.0.0") Nothing)]
+            denyAt s = DenyIfCve (DenyIfCveParams s FailDeny)
+        it "denies an affected version whose advisory meets the threshold, naming it" $
+            evalRule (depsWith (affecting (Just 9.8))) ctx (denyAt 8.0) (pkg Nothing 0)
+                >>= (`shouldBe` Deny "affected by GHSA-affect-0001 (CVSS >= 8.0)")
+        it "abstains when the affecting advisory is below the threshold" $
+            evalRule (depsWith (affecting (Just 5.0))) ctx (denyAt 8.0) (pkg Nothing 0)
+                >>= (`shouldSatisfy` isNoDecision)
+        it "denies an unscored advisory (fail-closed: npm malware carries no score)" $
+            evalRule (depsWith (affecting Nothing)) ctx (denyAt 8.0) (pkg Nothing 0)
+                >>= (`shouldSatisfy` isDeny)
+        it "abstains when the version sits outside the affected range" $ do
+            -- 1.0.0 is past this advisory's exclusive 1.0.0 fix, so unaffected.
+            let rows = [("thing", AdvisoryRange "GHSA-affect-0002" (Just 9.9) (Just "0") (Just "1.0.0") Nothing)]
+            evalRule (depsWith rows) ctx (denyAt 8.0) (pkg Nothing 0)
+                >>= (`shouldSatisfy` isNoDecision)
+        it "fails closed (Undecidable) when no advisory database is loaded" $
+            decideWith inertRuleDeps [atDefaultPrecedence (denyAt 8.0)] (pkg Nothing 0)
+                >>= (`shouldSatisfy` isUndecidable)
+        it "fails open (skips) when configured onUnavailable=skip and no database is loaded" $
+            decideWith inertRuleDeps [atDefaultPrecedence (DenyIfCve (DenyIfCveParams 8.0 FailNoDecision))] (pkg Nothing 0)
+                >>= (`shouldSatisfy` isBlockedByDefault)
 
     describe "PrecededRule" $ do
         it "exposes the precedence and rule it was built with" $ do

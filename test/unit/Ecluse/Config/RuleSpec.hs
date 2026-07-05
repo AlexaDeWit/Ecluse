@@ -12,11 +12,14 @@ import Ecluse.Config (defaultPolicy)
 import Ecluse.Config.Rule
 import Ecluse.Core.Package (mkScope)
 import Ecluse.Core.Rules.Types (
+    DenyIfCveParams (..),
+    FailureAlignment (..),
     PrecededRule (..),
     Rule (..),
     defaultAllowByIdentityPrecedence,
     defaultAllowIfOlderThanPrecedence,
     defaultAllowIfRemediatesCvePrecedence,
+    defaultDenyIfCvePrecedence,
     defaultDenyInstallTimeExecutionPrecedence,
  )
 
@@ -107,6 +110,47 @@ spec = describe "rulePolicySpec" $ do
             resolveJson "{\"rules\":{\"pinned-fix\":{\"type\":\"AllowByIdentity\"}}}"
                 `shouldBe` Left [MalformedRule "pinned-fix" "\"AllowByIdentity\" requires \"identity\""]
 
+    describe "DenyIfCve (add, patch, and validation)" $ do
+        it "adds a DenyIfCve from a minSeverity, defaulting onUnavailable to fail-closed" $
+            resolveJson "{\"rules\":{\"deny-cve\":{\"type\":\"DenyIfCve\",\"minSeverity\":8}}}"
+                `shouldSatisfy` hasRuleAtPrec defaultDenyIfCvePrecedence (DenyIfCve (DenyIfCveParams 8 FailDeny))
+
+        it "reads onUnavailable:skip as fail-open" $
+            resolveJson "{\"rules\":{\"deny-cve\":{\"type\":\"DenyIfCve\",\"minSeverity\":5.5,\"onUnavailable\":\"skip\"}}}"
+                `shouldSatisfy` hasRuleAtPrec defaultDenyIfCvePrecedence (DenyIfCve (DenyIfCveParams 5.5 FailNoDecision))
+
+        it "reads onUnavailable:deny as fail-closed" $
+            resolveJson "{\"rules\":{\"deny-cve\":{\"type\":\"DenyIfCve\",\"minSeverity\":8,\"onUnavailable\":\"deny\"}}}"
+                `shouldSatisfy` hasRuleAtPrec defaultDenyIfCvePrecedence (DenyIfCve (DenyIfCveParams 8 FailDeny))
+
+        it "rejects a DenyIfCve add missing its minSeverity" $
+            resolveJson "{\"rules\":{\"deny-cve\":{\"type\":\"DenyIfCve\"}}}"
+                `shouldBe` Left [MalformedRule "deny-cve" "\"DenyIfCve\" requires \"minSeverity\""]
+
+        it "rejects a minSeverity above the CVSS range" $
+            resolveJson "{\"rules\":{\"deny-cve\":{\"type\":\"DenyIfCve\",\"minSeverity\":11}}}"
+                `shouldBe` Left [MalformedRule "deny-cve" "\"minSeverity\" must be a CVSS score between 0 and 10"]
+
+        it "rejects a negative minSeverity" $
+            resolveJson "{\"rules\":{\"deny-cve\":{\"type\":\"DenyIfCve\",\"minSeverity\":-1}}}"
+                `shouldBe` Left [MalformedRule "deny-cve" "\"minSeverity\" must be a CVSS score between 0 and 10"]
+
+        it "rejects an unknown onUnavailable value" $
+            resolveJson "{\"rules\":{\"deny-cve\":{\"type\":\"DenyIfCve\",\"minSeverity\":8,\"onUnavailable\":\"maybe\"}}}"
+                `shouldBe` Left [MalformedRule "deny-cve" "\"onUnavailable\" must be \"deny\" or \"skip\", not \"maybe\""]
+
+        it "patches an existing DenyIfCve's minSeverity, keeping its alignment" $
+            resolveJsonOver cveBase "{\"rules\":{\"deny-cve\":{\"minSeverity\":9}}}"
+                `shouldSatisfy` hasRuleAtPrec defaultDenyIfCvePrecedence (DenyIfCve (DenyIfCveParams 9 FailDeny))
+
+        it "patches an existing DenyIfCve's alignment, keeping its minSeverity" $
+            resolveJsonOver cveBase "{\"rules\":{\"deny-cve\":{\"onUnavailable\":\"skip\"}}}"
+                `shouldSatisfy` hasRuleAtPrec defaultDenyIfCvePrecedence (DenyIfCve (DenyIfCveParams 5 FailNoDecision))
+
+        it "validates minSeverity on the patch path too, not only on add" $
+            resolveJsonOver cveBase "{\"rules\":{\"deny-cve\":{\"minSeverity\":50}}}"
+                `shouldBe` Left [MalformedRule "deny-cve" "\"minSeverity\" must be a CVSS score between 0 and 10"]
+
     describe "merging over a multi-rule shared policy" $ do
         it "overrides an AllowScope default's scope and precedence" $
             resolveJsonOver mixedBase "{\"rules\":{\"trusted\":{\"scope\":\"other\",\"precedence\":205}}}"
@@ -148,7 +192,7 @@ spec = describe "rulePolicySpec" $ do
                     , [UnknownRuleType "deny-scripts" "DenyInstallTimeExecutio"]
                     )
                 ,
-                    ( "the deferred DenyIfCVE type (unknown until it ships, not a crash)"
+                    ( "a mis-cased rule type (DenyIfCVE is not the shipped DenyIfCve)"
                     , "{\"rules\":{\"cve\":{\"type\":\"DenyIfCVE\"}}}"
                     , [UnknownRuleType "cve" "DenyIfCVE"]
                     )
@@ -201,6 +245,12 @@ mixedBase =
             , ("deny-scripts", PrecededRule 300 DenyInstallTimeExecution)
             ]
         )
+
+-- | A base policy carrying a DenyIfCve rule, for exercising the patch path.
+cveBase :: RulePolicy
+cveBase =
+    RulePolicy
+        (Map.fromList [("deny-cve", PrecededRule defaultDenyIfCvePrecedence (DenyIfCve (DenyIfCveParams 5 FailDeny)))])
 
 containsAllowScope :: Either [PolicyError] [PrecededRule] -> Bool
 containsAllowScope (Right rs) = any isAllowScope rs

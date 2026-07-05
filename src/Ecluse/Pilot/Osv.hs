@@ -8,13 +8,16 @@ module Ecluse.Pilot.Osv (
     OsvRange (..),
     OsvEvent (..),
     OsvDatabaseSpecific (..),
+    OsvSeverityEntry (..),
     ExtractedOsv (..),
+    advisorySeverity,
     extractFromAdvisory,
     osvExportUrl,
 ) where
 
 import Data.Aeson (FromJSON (..), withObject, (.:), (.:?))
 import Data.Text qualified as T
+import Security.CVSS (cvssScore, parseCVSS)
 
 {- | An ecosystem's advisory export under an OSV-layout base URL
 (@\<base\>\/\<ecosystem\>\/all.zip@): a zip archive of every advisory currently
@@ -33,6 +36,7 @@ osvExportUrl baseUrl ecosystem =
 data OsvAdvisory = OsvAdvisory
     { osvId :: Text
     , osvAffected :: Maybe [OsvAffected]
+    , osvSeverity :: Maybe [OsvSeverityEntry]
     , osvDatabaseSpecific :: Maybe OsvDatabaseSpecific
     }
     deriving stock (Show, Eq, Generic)
@@ -42,7 +46,25 @@ instance FromJSON OsvAdvisory where
         OsvAdvisory
             <$> v .: "id"
             <*> v .:? "affected"
+            <*> v .:? "severity"
             <*> v .:? "database_specific"
+
+{- | One entry of an advisory's @severity@ array: a scoring-system tag (for
+example @CVSS_V3@) and its value. For the CVSS systems the value is the
+/vector string/, not a number; the numeric base score is computed from it
+('advisorySeverity').
+-}
+data OsvSeverityEntry = OsvSeverityEntry
+    { sevType :: Text
+    , sevScore :: Text
+    }
+    deriving stock (Show, Eq, Generic)
+
+instance FromJSON OsvSeverityEntry where
+    parseJSON = withObject "OsvSeverityEntry" $ \v ->
+        OsvSeverityEntry
+            <$> v .: "type"
+            <*> v .: "score"
 
 -- | The subset of an advisory's @database_specific@ block the pipeline consumes.
 newtype OsvDatabaseSpecific = OsvDatabaseSpecific
@@ -61,6 +83,11 @@ instance FromJSON OsvDatabaseSpecific where
 data OsvAffected = OsvAffected
     { affectedPackage :: OsvPackage
     , affectedRanges :: Maybe [OsvRange]
+    , affectedVersions :: Maybe [Text]
+    {- ^ Exact affected versions enumerated outside any range. A real and common
+    OSV shape (much of the npm malware feed names the single bad version here
+    with no @ranges@ at all); each is an affected point in its own right.
+    -}
     }
     deriving stock (Show, Eq, Generic)
 
@@ -69,6 +96,7 @@ instance FromJSON OsvAffected where
         OsvAffected
             <$> v .: "package"
             <*> v .:? "ranges"
+            <*> v .:? "versions"
 
 data OsvPackage = OsvPackage
     { packageName :: Text
@@ -94,9 +122,17 @@ instance FromJSON OsvRange where
             <$> v .: "type"
             <*> v .: "events"
 
+{- | One event in a range's ordered event list. An event carries exactly one
+bound: @introduced@ opens the affected interval (inclusive), @fixed@ closes it
+below the fix (exclusive), and @last_affected@ closes it at an inclusive upper
+bound. The two upper bounds are genuinely different -- @fixed 2.0@ excludes
+@2.0@, @last_affected 2.0@ includes it -- so they are decoded and carried
+separately.
+-}
 data OsvEvent = OsvEvent
     { eventIntroduced :: Maybe Text
     , eventFixed :: Maybe Text
+    , eventLastAffected :: Maybe Text
     }
     deriving stock (Show, Eq, Generic)
 
@@ -105,9 +141,16 @@ instance FromJSON OsvEvent where
         OsvEvent
             <$> v .:? "introduced"
             <*> v .:? "fixed"
+            <*> v .:? "last_affected"
 
-{- | The necessary subset of data requested by the goal:
-package names, ecosystem identifiers, cve_id, and remediation boundaries.
+{- | One affected segment of one package, flattened for storage: the advisory
+identity and severity carried alongside the interval bounds. Each 'ExtractedOsv'
+becomes a row of the artifact's ranges table.
+
+The bounds mirror OSV's own model: 'extIntroduced' is the inclusive lower bound
+('Nothing' == from the beginning); the upper bound is @'extFixed'@ (exclusive) or
+@'extLastAffected'@ (inclusive) or neither (open-ended). An exact enumerated
+version becomes a point segment (@introduced == last_affected == v@).
 -}
 data ExtractedOsv = ExtractedOsv
     { extPackage :: Text
@@ -115,19 +158,67 @@ data ExtractedOsv = ExtractedOsv
     , extCveId :: Text
     , extIntroduced :: Maybe Text
     , extFixed :: Maybe Text
-    , extSeverity :: Maybe Text
-    {- ^ The advisory-level severity label, carried onto each of the advisory's
-    ranges; 'Nothing' when the source database supplies none.
+    , extLastAffected :: Maybe Text
+    , extSeverity :: Maybe Double
+    {- ^ The advisory's CVSS base score (0 to 10), carried onto each of its
+    segments; 'Nothing' when the advisory is unscored (much of the npm malware
+    feed). See 'advisorySeverity'.
     -}
     }
     deriving stock (Show, Eq)
 
+{- | The advisory's CVSS base score, normalised to a number at ingest so the
+stored artifact holds a single comparable form and the reader needs no parsing.
+
+OSV carries severity as a CVSS /vector string/, not a number, so the score is
+computed from it with the "Security.CVSS" library (the highest, when several
+vectors parse). When no vector parses, the source database's qualitative label
+('dbsSeverity') is mapped to its band ceiling (@ghsaSeverityCeiling@). 'Nothing'
+when the advisory offers neither.
+-}
+advisorySeverity :: OsvAdvisory -> Maybe Double
+advisorySeverity adv = vectorScore <|> labelScore
+  where
+    vectorScore = case mapMaybe (parseVectorScore . sevScore) (fromMaybe [] (osvSeverity adv)) of
+        [] -> Nothing
+        (s : ss) -> Just (foldl' max s ss)
+    labelScore = ghsaSeverityCeiling =<< (dbsSeverity =<< osvDatabaseSpecific adv)
+
+-- The CVSS base score of a vector string via the library, or 'Nothing' if it does
+-- not parse (a CVSS version this build's parser rejects).
+parseVectorScore :: Text -> Maybe Double
+parseVectorScore = either (const Nothing) (Just . oneDecimal . snd . cvssScore) . parseCVSS
+
+-- CVSS base scores are defined to one decimal place; round the library's 'Float' to
+-- that precision in 'Double' space, so the stored value is the canonical one-decimal
+-- 'Double' (exact to compare) rather than a Float-to-Double widening artefact.
+oneDecimal :: Float -> Double
+oneDecimal f = fromIntegral (round (realToFrac f * 10 :: Double) :: Integer) / 10
+
+-- GitHub's qualitative severity label mapped to the ceiling of its CVSS v3 band --
+-- the highest score it could denote, so a coarse label is never under-counted past
+-- a downstream deny threshold. GHSA labels are GitHub's own taxonomy (note
+-- @MODERATE@, where CVSS says @Medium@), which the CVSS library does not parse, so
+-- this small bridge is the irreducible remainder. 'Nothing' for an unknown label.
+ghsaSeverityCeiling :: Text -> Maybe Double
+ghsaSeverityCeiling label = case T.toUpper (T.strip label) of
+    "NONE" -> Just 0.0
+    "LOW" -> Just 3.9
+    "MODERATE" -> Just 6.9
+    "MEDIUM" -> Just 6.9
+    "HIGH" -> Just 8.9
+    "CRITICAL" -> Just 10.0
+    _ -> Nothing
+
+{- | Flatten an advisory into one 'ExtractedOsv' per affected segment: every
+range segment of every affected package, plus each exactly-enumerated version as
+a point. An advisory with neither ranges nor versions yields nothing.
+-}
 extractFromAdvisory :: OsvAdvisory -> [ExtractedOsv]
 extractFromAdvisory adv = do
     aff <- fromMaybe [] (osvAffected adv)
     let pkg = affectedPackage aff
-    rng <- fromMaybe [] (affectedRanges aff)
-    (intro, fixed) <- extractBounds (rangeEvents rng)
+    Segment intro fixed lastAffected <- affectedSegments aff
     pure $
         ExtractedOsv
             { extPackage = packageName pkg
@@ -135,15 +226,41 @@ extractFromAdvisory adv = do
             , extCveId = osvId adv
             , extIntroduced = intro
             , extFixed = fixed
-            , extSeverity = dbsSeverity =<< osvDatabaseSpecific adv
+            , extLastAffected = lastAffected
+            , extSeverity = severity
             }
-
-extractBounds :: [OsvEvent] -> [(Maybe Text, Maybe Text)]
-extractBounds = go Nothing
   where
-    go (Just i) [] = [(Just i, Nothing)]
+    -- Shared across every segment the advisory yields: the score is a property of
+    -- the advisory, not of a segment.
+    severity = advisorySeverity adv
+
+-- | One affected interval: an inclusive lower bound and at most one upper bound.
+data Segment = Segment (Maybe Text) (Maybe Text) (Maybe Text)
+
+-- The affected segments of one package entry: the segments carved from each
+-- range's event list, plus one point segment per exactly-enumerated version.
+affectedSegments :: OsvAffected -> [Segment]
+affectedSegments aff =
+    maybe [] (concatMap (extractRange . rangeEvents)) (affectedRanges aff)
+        <> maybe [] (map exactVersion) (affectedVersions aff)
+  where
+    exactVersion v = Segment (Just v) Nothing (Just v)
+
+{- | Carve a range's ordered events into affected segments. An @introduced@ opens
+a segment; a @fixed@ or @last_affected@ closes it; an @introduced@ that arrives
+with one already open closes the open one as unbounded first. A segment still open
+at the end is unbounded above.
+-}
+extractRange :: [OsvEvent] -> [Segment]
+extractRange = go Nothing
+  where
     go Nothing [] = []
+    go (Just i) [] = [Segment (Just i) Nothing Nothing]
     go current (e : es)
-        | Just i <- eventIntroduced e = go (Just i) es
-        | Just f <- eventFixed e = (current, Just f) : go Nothing es
+        | Just i <- eventIntroduced e =
+            case current of
+                Just prev -> Segment (Just prev) Nothing Nothing : go (Just i) es
+                Nothing -> go (Just i) es
+        | Just f <- eventFixed e = Segment current (Just f) Nothing : go Nothing es
+        | Just la <- eventLastAffected e = Segment current Nothing (Just la) : go Nothing es
         | otherwise = go current es

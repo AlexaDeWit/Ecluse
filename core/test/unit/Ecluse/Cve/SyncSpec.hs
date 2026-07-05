@@ -37,7 +37,7 @@ withSyncEnv use =
                 SyncEnv
                     { syncFetch = fetch
                     , syncEcosystem = Npm
-                    , syncDbPath = dir </> "npm-osv-schema1.db"
+                    , syncDbPath = dir </> "npm-osv-schema2.db"
                     , syncSlot = slot
                     }
         use dir slot envWith
