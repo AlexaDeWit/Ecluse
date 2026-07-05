@@ -11,15 +11,19 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# Only the most recent main commit's site matters, so cancel an in-progress
-# publish when a newer push lands rather than letting the now-superseded build run
-# to completion (wasted CI). The `pages` group already collapses queued runs to the
-# latest; cancel-in-progress drops the in-flight one too. Pages publishes
-# atomically, so a cancelled run simply leaves the prior deployment live until the
-# next one completes — there is no half-applied state.
+# Serialise Pages deploys: only one runs at a time, and the `pages` group collapses
+# any runs queued behind the in-flight one down to the latest, so a burst of merges
+# still publishes once. cancel-in-progress is deliberately false. A deploy that has
+# reached its final step has already registered a deployment with the Pages backend;
+# cancelling it mid-flight can leave that deployment wedged, and the backend then
+# rejects the next push with "Deployment failed, try again later" until it clears.
+# Letting the in-flight production deploy finish avoids that (this matches GitHub's
+# own Pages starter workflow). Pages publishes atomically, so a superseded build
+# simply leaves the prior deployment live until the newer one completes; there is no
+# half-applied state, and at most one extra build's worth of CI is spent.
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 # Least privilege: read the repo, write the Pages artifact + deployment, and mint
 # the OIDC token the deploy step exchanges with the Pages service.
